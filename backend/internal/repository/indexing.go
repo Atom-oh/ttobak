@@ -15,12 +15,16 @@ import (
 )
 
 var ErrInvalidIndexCursor = errors.New("invalid index scan cursor")
+var ErrInvalidIndexResource = errors.New("invalid index source identity")
 
 func indexKey(pk, sk string) map[string]types.AttributeValue {
 	return map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: pk}, "SK": &types.AttributeValueMemberS{Value: sk}}
 }
 
 func (r *DynamoDBRepository) GetIndexSource(ctx context.Context, key model.IndexResource) (*model.IndexRecord, error) {
+	if !key.Valid() || key.IsKnowledgeSource() {
+		return nil, ErrInvalidIndexResource
+	}
 	out, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{TableName: aws.String(r.tableName), Key: indexKey(key.PK, key.SK), ConsistentRead: aws.Bool(true)})
 	if err != nil {
 		return nil, err
@@ -42,6 +46,9 @@ func (r *DynamoDBRepository) GetIndexSource(ctx context.Context, key model.Index
 }
 
 func (r *DynamoDBRepository) GetIndexJob(ctx context.Context, key model.IndexResource) (*model.IndexJob, error) {
+	if !key.Valid() {
+		return nil, ErrInvalidIndexResource
+	}
 	out, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{TableName: aws.String(r.tableName), Key: indexKey(model.IndexJobsPK, key.Hash()), ConsistentRead: aws.Bool(true)})
 	if err != nil {
 		return nil, err
@@ -57,6 +64,9 @@ func (r *DynamoDBRepository) GetIndexJob(ctx context.Context, key model.IndexRes
 }
 
 func (r *DynamoDBRepository) RequestIndexResource(ctx context.Context, key model.IndexResource, revision string, now int64) error {
+	if !key.Valid() {
+		return ErrInvalidIndexResource
+	}
 	for attempt := 0; attempt < 5; attempt++ {
 		prior, err := r.GetIndexJob(ctx, key)
 		if err != nil {
@@ -114,6 +124,9 @@ func indexVersion(version int64) expression.ConditionBuilder {
 }
 
 func (r *DynamoDBRepository) SaveIndexJob(ctx context.Context, prior, next *model.IndexJob, source *model.IndexRecord, checkSource bool, now int64) error {
+	if !next.Resource.Valid() || prior.Resource != next.Resource || (checkSource && next.Resource.IsKnowledgeSource()) {
+		return ErrInvalidIndexResource
+	}
 	condition := indexVersion(prior.Version)
 	if prior.RunID != "" {
 		condition = condition.And(expression.Name("runId").Equal(expression.Value(prior.RunID)))

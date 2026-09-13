@@ -18,12 +18,13 @@ import (
 )
 
 type IndexSnapshot struct {
-	Record    *model.IndexRecord
-	Revision  string
-	Outcome   string
-	ErrorCode string
-	Objects   []IndexObject
-	Parts     []IndexPart
+	Record          *model.IndexRecord
+	Revision        string
+	Outcome         string
+	ErrorCode       string
+	Objects         []IndexObject
+	Parts           []IndexPart
+	KnowledgeBucket string
 }
 
 type IndexSourceRepository interface {
@@ -318,6 +319,9 @@ func (s *IndexSourceReader) ReadSource(ctx context.Context, key model.IndexResou
 }
 
 func indexMetadata(key model.IndexResource, snapshot *IndexSnapshot, run string) ([]byte, error) {
+	if key.IsKnowledgeSource() {
+		return knowledgeMetadata(key, snapshot, run)
+	}
 	bindings, err := json.Marshal(snapshot.Objects)
 	if err != nil {
 		return nil, err

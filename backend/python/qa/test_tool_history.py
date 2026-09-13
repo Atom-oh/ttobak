@@ -164,9 +164,14 @@ class TestToolHistory(unittest.TestCase):
         self.assertEqual(calls, ['create'])
         with self.assertRaises(ValueError):
             ToolHistory('reader', {'start_research': create})
-        for result in ({'error': 'failed'}, {'researchId': 'r', 'summary': 'PRIVATE_SOURCE_TEXT'}):
+        for result in ({'error': 'failed'}, {'researchId': ''}, {'researchId': 'r', 'error': 'failed'}):
             with self.assertRaises(ValueError):
                 history.research_receipt(provenance.new_source_state(), {'topic': 'test'}, result)
+        untracked = provenance.new_source_state()
+        self.assertEqual(history.research_receipt(
+            untracked, {'topic': 'test'}, {'researchId': 'r', 'summary': 'PRIVATE_SOURCE_TEXT'}), {'researchId': 'r'})
+        self.assertFalse(untracked['replayable'])
+        self.assertEqual(untracked['dependencies'], [])
 
     def test_canonical_hash_is_typed_order_sensitive_and_sdk_stable(self):
         from tool_history import fingerprint
@@ -240,11 +245,52 @@ class TestToolHistory(unittest.TestCase):
 
     def test_untracked_read_or_creation_call_cannot_reuse_assistant_history(self):
         from tool_history import ToolHistory
-        for name, arguments in [('list_meetings', {}), ('start_research', {'topic': 'test'})]:
+        for name, arguments in [('list_meetings', {}), ('start_research', {'topic': 'test'}),
+                                ('get_meeting_detail', {'meeting_id': 'm1'}),
+                                ('search_transcript', {'query': 'private'}),
+                                ('search_knowledge_base', {'query': 'private'}),
+                                ('search_web', {'query': 'public'}), ('future_tool', {})]:
             saved = session(provenance.new_source_state(), conversation('PRIVATE', name, arguments))
-            self.assertEqual(provenance.restore_messages(
-                saved, provenance.new_source_state(), lambda _: True,
-                tool_history=ToolHistory('reader', {})), [])
+            with self.subTest(name=name):
+                self.assertEqual(provenance.restore_messages(
+                    saved, provenance.new_source_state(), lambda _: True,
+                    tool_history=ToolHistory('reader', {})), [])
+
+    def test_explicit_source_tools_still_require_current_dependencies(self):
+        state = provenance.new_source_state()
+        messages = conversation('PRIVATE', 'get_meeting_detail', {'meeting_id': 'm1'})
+        options = {'source_covered_tools': {'get_meeting_detail'}}
+        self.assertEqual(provenance.restore_messages(
+            session(state, messages), provenance.new_source_state(), lambda _: True, **options), [])
+        provenance.remember_source(state, {'sourcePK': 'USER#reader', 'sourceSK': 'MEETING#m1',
+                                           'sourceRevision': 'c' * 64})
+        saved = session(state, messages)
+        checked = []
+        def current(dep):
+            checked.append(dep)
+            return True
+        self.assertEqual(provenance.restore_messages(
+            saved, provenance.new_source_state(), current, **options), messages)
+        self.assertEqual(checked, state['dependencies'])
+        self.assertEqual(provenance.restore_messages(
+            saved, provenance.new_source_state(), lambda _: False, **options), [])
+
+    def test_public_tool_policy_cannot_bypass_read_receipt_or_source_checks(self):
+        state = provenance.new_source_state()
+        messages = conversation('Public weather', 'search_web', {'query': 'weather'})
+        options = {'public_tools': {'search_web'}}
+        self.assertEqual(provenance.restore_messages(
+            session(state, messages), provenance.new_source_state(), lambda _: False, **options), messages)
+        for name in ('list_meetings', 'start_research'):
+            arguments = {'topic': 'test'} if name == 'start_research' else {}
+            for policy in ('public_tools', 'source_covered_tools'):
+                self.assertEqual(provenance.restore_messages(
+                    session(state, conversation('PRIVATE', name, arguments)),
+                    provenance.new_source_state(), lambda _: True, **{policy: {name}}), [])
+        provenance.remember_source(state, {'sourcePK': 'USER#reader', 'sourceSK': 'DOC#d',
+                                           'sourceRevision': 'b' * 64})
+        self.assertEqual(provenance.restore_messages(
+            session(state, messages), provenance.new_source_state(), lambda _: False, **options), [])
 
     def test_account_access_revoke_and_read_failure_discard_prior_brief(self):
         from tool_history import CompleteRead, ToolHistory
@@ -330,3 +376,56 @@ class TestToolHistory(unittest.TestCase):
         self.assertEqual(receipt['researchId'], 'new-id')
         self.assertFalse(state['replayable'])
         self.assertEqual(state['toolHistoryCoverage'][0]['reason'], 'DEPENDENCY_LIMIT')
+
+    def test_real_creation_long_topic_and_invalid_mode_cannot_become_tool_error(self):
+        from tool_history import ToolHistory
+        import test_handler
+        import tools
+        handler = test_handler.handler
+        for topic, mode in [('  한' + '국' * 2000 + '  ', 'quick'), ('Synthetic', 'invalid-mode')]:
+            with self.subTest(mode=mode):
+                history = ToolHistory('reader', {})
+                state = provenance.new_source_state()
+                database = mock.Mock()
+                def create(user, topic, mode):
+                    result = handler.create_research_from_chat(user, topic, mode)
+                    history.research_receipt(state, {'topic': topic, 'mode': mode}, result)
+                    return result
+                with mock.patch.object(handler.boto3, 'client', return_value=database), \
+                        mock.patch.object(handler, 'RESEARCH_SFN_ARN', ''), \
+                        mock.patch('secrets.token_hex', return_value='a' * 32) as identifier:
+                    arguments = {'topic': topic, 'mode': mode}
+                    text, _ = tools.execute_tool('start_research', arguments, {
+                        'user_id': 'reader', 'create_research': create,
+                    })
+                    self.assertNotIn('Tool error', text)
+                    self.assertIn('a' * 32, text)
+                    receipt = state['dependencies'][0]['researchReceipt']
+                    item = database.transact_write_items.call_args.kwargs['TransactItems'][0]['Put']['Item']
+                    self.assertEqual(receipt['topic'], item['topic']['S'])
+                    self.assertEqual(receipt['mode'], item['mode']['S'])
+                    saved = session(state, conversation(text, 'start_research', arguments))
+                    for _ in range(3):
+                        self.assertTrue(provenance.restore_messages(
+                            saved, provenance.new_source_state(), lambda _: False, tool_history=history))
+                    self.assertEqual(database.transact_write_items.call_count, 1)
+                    identifier.assert_called_once_with(16)
+
+    def test_successful_creation_survives_unrecordable_receipt(self):
+        from tool_history import ToolHistory
+        history = ToolHistory('reader', {})
+        for args in ({'topic': None}, {'topic': 'Synthetic', 'futureField': True}):
+            with self.subTest(args=args):
+                state = provenance.new_source_state()
+                receipt = history.research_receipt(state, args, {'researchId': 'created'})
+                self.assertEqual(receipt['researchId'], 'created')
+                self.assertFalse(state['replayable'])
+                self.assertEqual(state['dependencies'], [])
+                self.assertEqual(provenance.restore_messages(
+                    session(state, conversation('created', 'start_research', args)),
+                    provenance.new_source_state(), lambda _: True, tool_history=history), [])
+        state = provenance.new_source_state()
+        history.research_receipt(state, {'topic': 'Original'}, {'researchId': 'created'})
+        receipt = history.research_receipt(state, {'topic': 'Conflict'}, {'researchId': 'created'})
+        self.assertEqual(receipt['researchId'], 'created')
+        self.assertFalse(state['replayable'])

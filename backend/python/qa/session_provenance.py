@@ -118,7 +118,8 @@ def validate_sources(state, is_current, *, tool_history=None):
         raise RuntimeError('Source access or content changed; retry with current content.')
 
 
-def restore_messages(item, state, is_current, *, tool_history=None):
+def restore_messages(item, state, is_current, *, tool_history=None,
+                     source_covered_tools=(), public_tools=()):
     """All-or-nothing replay: never keep paraphrases after removing stale tools."""
     try:
         raw = item.get('messages')
@@ -130,7 +131,8 @@ def restore_messages(item, state, is_current, *, tool_history=None):
                        or type(msg.get('content')) is not list for msg in messages)):
             return []
         dependencies = item.get('sourceDependencies')
-        if not _valid_dependencies(dependencies) or not covers_tool_calls(messages, dependencies):
+        if not _valid_dependencies(dependencies) or not covers_tool_calls(
+                messages, dependencies, source_covered_tools=source_covered_tools, public_tools=public_tools):
             return []
         if not restore_sources(item, state, is_current, tool_history=tool_history):
             return []

@@ -221,9 +221,29 @@ def _public_view(name, value):
     return result
 
 
-def covers_tool_calls(messages, dependencies):
+def _research_input(arguments):
+    """Match create_research_from_chat's effective topic and mode."""
+    if type(arguments) is not dict or set(arguments) - {'topic', 'mode'}:
+        raise ValueError('Invalid research receipt input')
+    topic = arguments.get('topic')
+    if type(topic) is not str:
+        raise ValueError('Research topic must be text')
+    topic = _string(topic.strip()[:500], 2000, required=True)
+    mode = arguments.get('mode', 'standard')
+    if mode not in ('quick', 'standard', 'deep'):
+        mode = 'standard'
+    return {'topic': topic, 'mode': mode}
+
+
+def covers_tool_calls(messages, dependencies, *, source_covered_tools=(), public_tools=()):
     """A replayable flag cannot substitute for a tracked read/creation receipt."""
     try:
+        for names in (source_covered_tools, public_tools):
+            if (type(names) not in (tuple, list, set, frozenset)
+                    or any(type(name) is not str for name in names)):
+                return False
+        if set(source_covered_tools) & set(public_tools):
+            return False
         for message in messages:
             for block in message['content']:
                 if type(block) is not dict:
@@ -239,13 +259,17 @@ def covers_tool_calls(messages, dependencies):
                     if not any(dep.get('readOnlyTool') == name and dep['toolInput'] == arguments for dep in dependencies):
                         return False
                 elif name == 'start_research':
-                    if type(arguments) is not dict or set(arguments) - {'topic', 'mode'}:
-                        return False
+                    arguments = _research_input(arguments)
                     if not any('researchReceipt' in dep
-                               and dep['researchReceipt']['topic'] == arguments.get('topic')
-                               and dep['researchReceipt']['mode'] == arguments.get('mode', 'standard')
+                               and dep['researchReceipt']['topic'] == arguments['topic']
+                               and dep['researchReceipt']['mode'] == arguments['mode']
                                for dep in dependencies):
                         return False
+                elif name in source_covered_tools:
+                    if not any(not is_tool_dependency(dep) for dep in dependencies):
+                        return False
+                elif name not in public_tools:
+                    return False
         return True
     except (ValueError, TypeError, KeyError):
         return False
@@ -351,27 +375,30 @@ class ToolHistory:
 
     def research_receipt(self, state, arguments, result):
         from session_provenance import remember_source
+        # Establish success before any optional bookkeeping. Never request a retry
+        # of a completed creation merely because its receipt cannot be retained.
         try:
-            if type(arguments) is not dict or set(arguments) - {'topic', 'mode'}:
-                raise ValueError('Invalid research receipt input')
-            if type(result) is not dict or set(result) != {'researchId'}:
+            if type(result) is not dict or 'error' in result:
                 raise ValueError('Only a successful creation ID can become a receipt')
-            receipt = {'topic': _string(arguments.get('topic'), 4000, required=True),
-                       'mode': arguments.get('mode', 'standard'), 'researchId': _user(result['researchId'])}
+            receipt = {'researchId': _user(result.get('researchId'))}
+        except ValueError:
+            state['replayable'] = False
+            raise
+        try:
+            if set(result) != {'researchId'}:
+                raise ValueError('Unexpected creation result fields')
+            receipt.update(_research_input(arguments))
             dependency = {'researchReceipt': receipt, 'userId': self.user_id,
                           'sourceRevision': fingerprint(['research-receipt-v1', self.user_id, receipt])}
             if not valid_tool_dependency(dependency):
                 raise ValueError('Invalid research receipt')
-            try:
-                self._capacity(state, tool_dependency_key(dependency))
-            except HistoryLimit:
-                self._untracked(state, 'start_research', 'DEPENDENCY_LIMIT')
-                return dict(receipt)
+            self._capacity(state, tool_dependency_key(dependency))
             remember_source(state, dependency)
-            return dict(receipt)
+        except HistoryLimit:
+            self._untracked(state, 'start_research', 'DEPENDENCY_LIMIT')
         except Exception:
-            state['replayable'] = False
-            raise
+            self._untracked(state, 'start_research', 'RECEIPT_UNAVAILABLE')
+        return dict(receipt)
 
     def is_current(self, dependency):
         if not valid_tool_dependency(dependency) or dependency['userId'] != self.user_id:

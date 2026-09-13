@@ -1430,7 +1430,8 @@ class TestWebSearchRateLimit(unittest.TestCase):
 def load_tests(loader, tests, pattern):
     for module in ('test_document_context', 'test_source_contract', 'test_attachment_context',
                    'test_retrieval_helpers', 'test_source_access', 'test_legacy_text',
-                   'test_indexed_sources', 'test_manual_kb', 'test_shared_kb', 'test_tool_history'):
+                   'test_indexed_sources', 'test_manual_kb', 'test_shared_kb',
+                   'test_tool_history', 'test_account_reads'):
         tests.addTests(loader.loadTestsFromName(module))
     return tests
 
