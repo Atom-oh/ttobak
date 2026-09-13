@@ -242,6 +242,23 @@ class TestHistoryDetailContinuity(_SourceFixture, _QAConversationFixture, unitte
         self.assertIsNone(history_details.safe_detail(
             dict(detail, uri='s3://knowledge/meetings/other/m.md'), dep, 'knowledge', 'assets'))
 
+    def test_legacy_text_match_flag_is_preserved_for_fresh_history_deduplication(self):
+        from session_provenance import collect_detail
+        dep = {'legacyURI': 's3://knowledge/shared/synthetic.md', 'sourceRevision': 'a' * 64}
+        fresh = {'uri': dep['legacyURI'], 'resourceKind': 'legacyText', 'title': 'synthetic',
+                 'sourceRevision': dep['sourceRevision'], 'contentSource': 'current_legacy_text',
+                 'partial': False, 'matchedIndexedText': True}
+        payload = history_details.pack([fresh], [dep], 'knowledge', 'assets')
+        restored = history_details.restore([dep], payload, 'knowledge', 'assets')
+        collect_detail(restored, fresh)
+        self.assertEqual(restored, [fresh])
+
+    def test_identity_filename_truncation_is_explicit(self):
+        dep = {'manualKey': 'kb/reader/' + 'a' * 300 + '.pdf', 'sourceRevision': 'a' * 64}
+        detail = history_details.identity_detail(dep, 'knowledge')
+        self.assertEqual(len(detail['title']), 256)
+        self.assertIs(detail.get('titleTruncated'), True)
+
     def test_private_and_shared_binary_details_bind_original_key_revision_and_scope(self):
         for shared in (False, True):
             key = 'shared/test/file.docx' if shared else 'kb/reader/file.pdf'

@@ -60,6 +60,10 @@ export function qaSources(sources: string[] = [], details: QASourceDetail[] = []
       label: title && !internalKey.test(title) ? title : kind,
       href: href ?? external?.href, external: !!external, kind,
       caveats: [
+        ...(detail.provenanceScope === 'validated_history' ? ['이전 대화의 근거'] : []),
+        ...(detail.provenanceScope === 'legacy_identity' ? ['이전 대화의 출처 · 상세 근거 없음'] : []),
+        ...(detail.provenanceScope === 'history_receipt' ? ['이전 대화의 생성 기록'] : []),
+        ...(detail.provenanceScope === 'legacy_identity_unavailable' ? ['이전 대화의 출처 표시 제한'] : []),
         ...(detail.usingPreviousResult ? ['이전 추출 결과'] : []),
         ...(detail.partial ? ['부분 근거'] : []),
         ...(detail.filePending ? ['파일 처리 대기'] : []),

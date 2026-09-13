@@ -304,6 +304,7 @@ export interface QASourceDetail {
   sourceRevision?: string;
   uri?: string;
   contentSource?: string;
+  provenanceScope?: 'validated_history' | 'legacy_identity' | 'history_receipt' | 'legacy_identity_unavailable';
   meetingId?: string;
   attachmentId?: string;
   filePending?: boolean;

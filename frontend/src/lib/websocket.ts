@@ -22,6 +22,7 @@ export interface WebSocketMessage {
   usedDocs?: boolean;
   toolsUsed?: string[];
   error?: string;
+  code?: string;
   sourceBatchId?: string;
   sourceBatchIndex?: number;
   sourceBatchCount?: number;
@@ -100,7 +101,12 @@ export class RealtimeWebSocket {
         try {
           const msg = JSON.parse(event.data) as WebSocketMessage;
           const complete = this.sourceFrames.accept(msg);
-          if (complete) this.onMessage(complete);
+          if (complete) {
+            // The failed server request may still emit frames. Isolate it
+            // before consumers unlock the input for another question.
+            if (complete.code === 'SOURCE_FRAMES_INVALID') this.disconnect();
+            this.onMessage(complete);
+          }
         } catch {
           // Ignore unparseable messages
         }
@@ -187,7 +193,10 @@ export class RealtimeWebSocket {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    this.ws?.close();
+    if (this.ws) {
+      this.ws.onmessage = null;
+      this.ws.close();
+    }
     this.ws = null;
   }
 
