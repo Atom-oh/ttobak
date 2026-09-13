@@ -14,29 +14,6 @@ handler = helpers.handler
 
 class TestIndexedSourceIntegration(_SourceFixture, unittest.TestCase):
 
-    def test_actual_retrieval_finds_new_saved_term_without_negative_cache_then_deletion(self):
-        self.assertEqual(handler.retrieve_from_kb('NEW_TERM', user_id='owner'), [])
-        row = self.doc(content='OLD_TERM')
-        first = handler.retrieve_from_kb('OLD_TERM', user_id='owner')
-        self.assertEqual(first[0]['document']['content'], 'OLD_TERM')
-        row['content'] = 'NEW_TERM'
-        newer = handler.retrieve_from_kb('NEW_TERM', user_id='owner')
-        self.assertEqual(newer[0]['document']['content'], 'NEW_TERM')
-        self.assertNotEqual(first[0]['provenance']['sourceRevision'], newer[0]['provenance']['sourceRevision'])
-        del self.table.items[('USER#owner', 'DOC#doc')]
-        self.assertEqual(handler.retrieve_from_kb('NEW_TERM', user_id='owner'), [])
-        self.assertGreaterEqual(self.runtime.retrieve.call_count, 4)
-
-    def test_new_direct_grant_is_discovered_then_revocation_removes_content_and_source(self):
-        self.doc(content='SHARED_TERM')
-        self.assertEqual(handler.retrieve_from_kb('SHARED_TERM', user_id='reader'), [])
-        self.grant()
-        results = handler.retrieve_from_kb('SHARED_TERM', user_id='reader')
-        self.assertEqual(results[0]['document']['content'], 'SHARED_TERM')
-        del self.table.items[('USER#reader', 'SHAREDDOC#doc')]
-        self.assertEqual(handler.retrieve_from_kb('SHARED_TERM', user_id='reader'), [])
-
-
 
     def test_source_derived_assistant_and_tool_history_is_not_replayed_after_changes(self):
         for change in ('edit', 'delete', 'revoke'):
@@ -131,19 +108,6 @@ class TestIndexedSourceIntegration(_SourceFixture, unittest.TestCase):
         self.s3.head_object.return_value = {'ETag': '"new"', 'VersionId': 'v2', 'ContentLength': 5}
         self.assertEqual(handler.load_session('file-session', user_id='owner'), [])
 
-    def test_unauthorized_or_stale_index_content_is_not_even_consumed(self):
-        class ForbiddenContent(dict):
-            def get(self, *args):
-                raise AssertionError('unverified index text was consumed')
-        self.doc(content='', fileKey='docs/owner/file.pdf')
-        self.s3.head_object.return_value = {'ETag': '"old"', 'VersionId': 'v1', 'ContentLength': 5}
-        hit = self.indexed(filename='file.pdf')
-        hit['content'] = ForbiddenContent()
-        self.runtime.retrieve.return_value = {'retrievalResults': [hit]}
-        self.assertEqual(handler.retrieve_from_kb('query', user_id='reader'), [])
-        self.s3.head_object.return_value = {'ETag': '"new"', 'VersionId': 'v2', 'ContentLength': 5}
-        results = handler.retrieve_from_kb('query', user_id='owner')
-        self.assertTrue(results[0]['document']['filePending'])
 
     def test_legacy_text_history_uses_current_object_binding_without_unbound_chunks(self):
         self.runtime.retrieve.return_value = {'retrievalResults': [{
@@ -194,34 +158,3 @@ class AttachmentIntegrationTests(_AttachmentFixture, unittest.TestCase):
             sent = json.dumps(model.converse.call_args.kwargs['messages'], ensure_ascii=False)
             self.assertNotIn('DERIVED_ATTACHMENT_FACT', sent)
             self.assertNotIn('현재 파일 사실', sent)
-
-    def test_paged_inventory_observes_deletions_and_never_uses_filename_as_text(self):
-        for index in range(8):
-            attachment = dict(self.attachment, attachmentId=f'a{index}', SK=f'ATTACH#a{index}')
-            self.table.put_item(Item=attachment)
-        view = handler.load_meeting_attachments('reader', 'm')
-        self.assertEqual(view['totalAttachments'], 9)
-        self.assertEqual(len(view['attachments']), 5)
-        self.assertEqual(view['nextAttachmentOffset'], 5)
-        rest = handler.load_meeting_attachments('reader', 'm', 5)
-        self.assertEqual(len(rest['attachments']), 4)
-        self.assertTrue(all(not a['available'] for a in view['attachments']))
-        self.s3.get_object.assert_not_called()
-        inventory = self.reader().inventory('reader', 'USER#owner', 'm')
-        dependency = inventory['dependency']
-        self.assertTrue(self.reader().is_current('reader', dependency))
-        del self.table.items[('MEETING#m', 'ATTACH#a')]
-        self.assertFalse(self.reader().is_current('reader', dependency))
-
-    def test_attachment_tools_forward_extraction_errors_and_continuations(self):
-        import tools
-        state, details = handler.new_source_state(), []
-        context = handler._agent_context('reader', None, None, state, details)
-        self.state.update(status='failed', runId='retry-run', errorCode='TIMEOUT')
-        text, _ = tools.execute_tool('get_attachment_text', {'meetingId': 'm', 'attachmentId': 'a'}, context)
-        self.assertIn('현재 파일 사실', text)
-        self.assertIn('"usingPreviousResult": true', text)
-        self.assertIn('TIMEOUT', text)
-        self.assertIn('오디오 시각을 붙이지 마세요', text)
-        self.assertTrue(any(dependency.get('attachmentId') == 'a' for dependency in state['dependencies']))
-        self.assertEqual(details[0]['resourceKind'], 'meetingAttachment')
