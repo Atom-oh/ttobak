@@ -1,9 +1,8 @@
 # Current-source QA rollout
 
-Code checked: 2026-09-13. Source readers, strict account callbacks and history
-helpers are implemented but not imported by the active `qa/handler.py`.
-The configured index worker runs `manual-only` with its schedule enabled;
-canonical delivery and strict QA activation remain later stages.
+For handler registration, configured index mode and deployment acceptance status,
+see [SOURCE_CONTRACT.md](../../backend/python/qa/SOURCE_CONTRACT.md).
+This runbook defines the deployment gates.
 
 Keep the existing transcript guard throughout: it validates the configured
 bucket, authorized meeting ID and allowed field before S3 access. Editable
@@ -40,8 +39,8 @@ reads and verify current byte bindings.
    Verify private/shared current-byte snapshots and synthetic recall before
    strict cutover. Private `kb/{owner}/` remains owner-only; `shared/**` is
    authenticated-global, never a destination for private uploads.
-4. Wire and deploy the complete strict QA consumer in REST and streaming
-   paths. Include source tools, explicit public `sourceDetails` fields,
+4. Verify the complete strict QA consumer is wired into REST and streaming
+   paths before deployment. Include source tools, explicit public `sourceDetails` fields,
    source dependencies, strict read callbacks and history validation before
    replay, subsequent model rounds and final output. A pending-only binary
    consumer does not preserve existing file answerability.

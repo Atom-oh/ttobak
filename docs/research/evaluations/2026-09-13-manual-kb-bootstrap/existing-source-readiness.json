@@ -1,0 +1,33 @@
+{
+  "checkedAt": "2026-09-13T01:24:41.748557+00:00",
+  "sourceInventory": {
+    "complete": true,
+    "kbPages": 1,
+    "sharedPages": 3,
+    "jobPages": 1,
+    "currentBinarySources": 6,
+    "supportedPDFSources": 4,
+    "unsupportedPPTXSources": 2
+  },
+  "currentSourceBindingsVerified": 4,
+  "providerDocumentsIndexed": 4,
+  "indexedJobs": [
+    "20100eff7322f82d85fb97aae5fb0aa55bd692b6b1e08affda1e62dacd2183a1",
+    "78a783a03ed3ac0a5243cfbb5f64dc456d4e4837937caa72f727727ea51528c2",
+    "c987562caaee143613db93eb574f7f412117d08b69ac0c088a4c83be7e6ce6d7",
+    "d207d23997858b7c0b8cf8d87d75286cf81afdf8f2df5adf18502d0d42abf256"
+  ],
+  "unsupportedJobs": [
+    {
+      "jobHash": "0060e951b6287e9d88855347a0d38605c7214b09fa91e35badb88c1c4c951eef",
+      "state": "FAILED",
+      "errorCode": "UNSUPPORTED_FILE"
+    },
+    {
+      "jobHash": "36e634cfee4fc9d1eb050f6d2ac8a7351b4a47431baeaf8d4c50fedf0ac5e7de",
+      "state": "FAILED",
+      "errorCode": "UNSUPPORTED_FILE"
+    }
+  ],
+  "scope": "Original object HEADs, immutable metadata sidecars, current job state and exact provider document statuses only. Customer bodies were not read or used as fixtures. No semantic/model quality claim."
+}

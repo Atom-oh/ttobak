@@ -1,0 +1,66 @@
+{
+  "runId": "acc-5136a0a6ff5f4977b657",
+  "scope": "IAM-only private/shared bootstrap, no public QA or authorizer proof",
+  "config": {
+    "account": "180294183052",
+    "region": "ap-northeast-2",
+    "table": "ttobak-main",
+    "kbBucket": "ttobak-kb-180294183052",
+    "knowledgeBaseId": "BJJLVLFTOR",
+    "dataSourceId": "3AVMMT3RF3",
+    "worker": "ttobak-kb",
+    "mode": "manual-only"
+  },
+  "cases": {
+    "private": {
+      "name": "private",
+      "kind": "manualKbDocument",
+      "pk": "USER#acc-5136a0a6ff5f4977b657-owner",
+      "sk": "KBFILE#262dfbbae6d5e9dc3287b9f81a56a7536cf4ce2f7dfd6868c23cfb042472ad60",
+      "resourceId": "262dfbbae6d5e9dc3287b9f81a56a7536cf4ce2f7dfd6868c23cfb042472ad60",
+      "jobHash": "c49695945bfe9e63331a40affb4346c78cd24df74af0c78af25d9898ea8998e2",
+      "sourceKey": "kb/acc-5136a0a6ff5f4977b657-owner/acc-5136a0a6ff5f4977b657-private.pdf",
+      "snapshotPrefix": "manual-kb/v1/acc-5136a0a6ff5f4977b657-owner/262dfbbae6d5e9dc3287b9f81a56a7536cf4ce2f7dfd6868c23cfb042472ad60/",
+      "markerV1": "ACCEPT_5136a0a6ff5f4977b657_PRIVATE_BLUEFOX",
+      "markerV2": "ACCEPT_5136a0a6ff5f4977b657_PRIVATE_GREENOTTER"
+    },
+    "shared": {
+      "name": "shared",
+      "kind": "sharedKbDocument",
+      "pk": "KB#SHARED",
+      "sk": "KBFILE#723c71cae4e9701925287ca8631f46ae5995c3b76e0dac92c4cd3e0f7eb8a4b8",
+      "resourceId": "723c71cae4e9701925287ca8631f46ae5995c3b76e0dac92c4cd3e0f7eb8a4b8",
+      "jobHash": "75f6d08cd044416958472ae98adb7ceed2dc0f62423ef08e0ed7376a67b9245e",
+      "sourceKey": "shared/acceptance/acc-5136a0a6ff5f4977b657/shared.docx",
+      "snapshotPrefix": "shared-kb/v1/723c71cae4e9701925287ca8631f46ae5995c3b76e0dac92c4cd3e0f7eb8a4b8/",
+      "markerV1": "ACCEPT_5136a0a6ff5f4977b657_SHARED_BLUEFOX",
+      "markerV2": "ACCEPT_5136a0a6ff5f4977b657_SHARED_GREENOTTER"
+    }
+  },
+  "files": {
+    "private-v1.pdf": {
+      "bytes": 618,
+      "sha256": "8f5067f1c521b514bcd75e4a695b6cd558c4644b84b81546dc13f7f9603e09c1",
+      "marker": "ACCEPT_5136a0a6ff5f4977b657_PRIVATE_BLUEFOX"
+    },
+    "private-v2.pdf": {
+      "bytes": 621,
+      "sha256": "30605d3f7a7d9a6f9384cef99b0a5042269827deea3316e9153494abe03e5c25",
+      "marker": "ACCEPT_5136a0a6ff5f4977b657_PRIVATE_GREENOTTER"
+    },
+    "shared-v1.docx": {
+      "bytes": 1132,
+      "sha256": "28431e0cab6d8315c57658251070cbf47419fb624a81b767650c5d92c67d4068",
+      "marker": "ACCEPT_5136a0a6ff5f4977b657_SHARED_BLUEFOX"
+    },
+    "shared-v2.docx": {
+      "bytes": 1135,
+      "sha256": "e87c11aaa8c628fdf4d1589b9fd69e62398b029c1389459ba555d4e434f92ed3",
+      "marker": "ACCEPT_5136a0a6ff5f4977b657_SHARED_GREENOTTER"
+    }
+  },
+  "configurationOrigin": {
+    "preparedManifestSHA256": "03371994d402070234259def759678d0576160370f14abb2d75fbe9417ac2851",
+    "note": "Configuration extracted from the immutable pre-run manifest; execution outcomes are recorded separately."
+  }
+}

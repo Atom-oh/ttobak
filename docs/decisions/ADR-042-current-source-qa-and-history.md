@@ -1,9 +1,8 @@
 # ADR-042: Current-source QA and conversation history
 
-- Status: Accepted. Source readers, session provenance and read-only history
-  helpers are implemented; the active QA handler does not yet wire them.
-- Code checked: 2026-09-13. Migration, runtime integration and deployed
-  acceptance are separate milestones.
+- Status: Accepted.
+- Handler registration and deployment acceptance status:
+  [SOURCE_CONTRACT.md](../../backend/python/qa/SOURCE_CONTRACT.md).
 
 ## Context and decision
 

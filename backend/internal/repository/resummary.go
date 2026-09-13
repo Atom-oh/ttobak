@@ -196,6 +196,7 @@ func summaryWriteError(err error) error {
 	}
 	return err
 }
+
 func noSummaryRetries(options *dynamodb.Options) {
 	options.Retryer = aws.NopRetryer{}
 	options.RetryMaxAttempts = 1
@@ -346,9 +347,7 @@ func (r *DynamoDBRepository) CompleteResummary(ctx context.Context, snapshot *mo
 	}
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}, noSummaryRetries)
 	resultErr = summaryWriteError(err)
-	if resultErr != nil && !errors.Is(resultErr, ErrConditionFailed) {
-		safeCleanup = false
-	}
+	safeCleanup = summaryWriteRejected(err)
 	return resultErr
 }
 

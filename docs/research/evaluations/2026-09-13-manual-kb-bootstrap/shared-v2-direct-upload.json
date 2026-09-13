@@ -1,0 +1,10 @@
+{
+  "case": "shared",
+  "status": 200,
+  "etag": "\"5cd4ce4bacacb55bc0459f3bd319fa0a\"",
+  "versionId": "bNLaFILF_bdlWz7MceDyoNeH6S_GZPzw",
+  "requestId": "G2N6S9014BMD50AE",
+  "bytes": 1135,
+  "fixtureSHA256": "e87c11aaa8c628fdf4d1589b9fd69e62398b029c1389459ba555d4e434f92ed3",
+  "contentType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+}

@@ -417,24 +417,27 @@ runtime-configured WebSocket endpoint. There is no current start/audio/stop
 server-side transcription stream or separate connections table in this handler.
 Live transcription runs in the browser using AWS Transcribe Streaming.
 
-The active QA handler uses a Converse tool loop and current authorized meeting
-data. Tools include
-KB/AWS docs/web/transcript search, meeting detail/list, account operations and
-research initiation; `qa/tools.py` is the exact roster. KB meeting hits are discovery
-candidates: current access and current notes/content are rechecked, including on
-cache hits. Revoked/deleted sources and citations are removed. New text may not
-be discoverable until KB export/ingestion catches up; current reads are not reindexing.
+**Legacy behavior before current-source cutover:** the QA handler uses a Converse
+tool loop and current authorized meeting data. KB meeting hits are candidates;
+access and saved notes/content are reread, including on cache hits. New terms
+may wait for export/ingestion. This paragraph is not the current-source contract.
+Both transports send bounded, separate untrusted transcript and saved-note
+excerpts. Follow `get_meeting_detail`'s next offset, not an excerpt-relative
+position; transcript read failures return errors rather than silently losing context.
 
-Live/HTTP meeting contexts send separate bounded untrusted excerpts for transcript
-and saved notes with coverage metadata. get_meeting_detail exposes continuation
-information; follow its next offset, not an excerpt-relative index. Transcript
-read failures return an error rather than silently losing context.
+### Current-source consumer contract
 
-The broader current-source QA, document/attachment tools and history policy are
-**staged foundations**: `qa/handler.py` does not import SourceAccess, source_tools,
-ToolHistory or account_reads. The contracts below describe that integration,
-not active REST/WebSocket behavior. Binary snapshot bootstrap and synthetic recall
-verification precede strict runtime cutover.
+Helper installation alone does not activate this consumer contract. The
+[source contract](../backend/python/qa/SOURCE_CONTRACT.md) states whether the
+reviewed handler registers it. That status does not certify deployment; the
+[manual bootstrap evidence](research/evaluations/2026-09-13-manual-kb-bootstrap/README.md)
+records IAM producer/provider checks only. Public QA acceptance remains separate.
+
+Live/HTTP requests pass current client input separately from saved notes. Live
+input receipts bind user and meeting; growing, rolling and corrected windows
+retain conversation while the latest input takes priority. They do not attest
+saved-source bytes. Every recorded server source still requires current access
+and revision; changes or revocation invalidate the complete derived history.
 
 - Fresh source discovery revalidates canonical access, exact source revision and
   S3 bindings. Saved-text keyword matches supplement index lag; legacy meeting
@@ -453,11 +456,17 @@ verification precede strict runtime cutover.
   fingerprints for supported read-only tools. Strict callbacks consume all pages,
   recheck exact membership/canonical references and attest complete reads.
   Changed, denied, failed or untracked dependencies invalidate the entire history,
-  including assistant paraphrases; revalidate before later rounds and final output.
+  including assistant paraphrases; recorded dependencies must be checked before
+  each model round and final output.
 - `start_research` records a creation receipt only after one successful mutation.
   Never replay creation to validate history. Tracking overflow preserves the
   current result while marking history nonreplayable with explicit coverage.
-  Unverifiable legacy sessions reset at cutover.
+  Unverifiable legacy sessions reset at cutover. Successful empty KB searches
+  are reexecuted for the current user; new matches or failed reads invalidate
+  their proofs. Failed/skipped private reads never become empty successes.
+- `toolHistoryCoverage` is normally `[]`; `{tool, complete:false, reason}` reports
+  `DEPENDENCY_LIMIT`, `RESULT_LIMIT` or `RECEIPT_UNAVAILABLE`. Capacity exhaustion
+  keeps the current read-time-authorized result but prevents history replay.
 
 Exact source fields, visibility, limits and integration APIs:
 [source contract](../backend/python/qa/SOURCE_CONTRACT.md),
@@ -523,8 +532,10 @@ Text: `{analysis,current,source,format,scope,complete,warningCount,units,nextCur
 Units carry exact Unicode offsets and parser locations. pageSize is 1–6000,
 response ≤14,000 bytes (`AttachmentTextPageLimit`) including newline, ≤50 units. Current auth/source/run/ETag
 is revalidated; stale cursors conflict. Errors: 400 query, 403/404 access/source,
-409 `CONFLICT` for stale source/cursor or `TEXT_UNAVAILABLE` for missing verified text,
-500 storage failures. A page with `current:false` is retained historical evidence.
+409 `CONFLICT` for stale source/cursor, 409 `TEXT_UNAVAILABLE` for unavailable
+verified result text (including S3 HEAD/GET failures), and 422 `UNSUPPORTED_FORMAT`
+for unsupported input. Other metadata/internal failures return 500. A page with
+`current:false` is retained historical evidence.
 
 Source conflicts preserve text and mark fresh-generation retry; unrelated metadata
 changes do not invalidate generation. No source/model text appears in errors.
@@ -539,6 +550,8 @@ Deployment prerequisites and runtime acceptance are recorded in
 | POST | `/api/meetings/{meetingId}/resummary` | Owner/edit; empty body or `{}`; `202` with status |
 
 Response: `{status, runId?, errorCode?, leaseUntil?, updatedAt?, resultHash?}`.
+Both routes reject query strings with 400. POST accepts no caller source fields
+and caps its body at 1 KiB.
 Status is `unknown`, `queued`, `running`, `succeeded`, or `failed`; lease is epoch
 milliseconds and updatedAt is RFC3339. An active run is reused. Expired work is
 persisted as `failed/INTERRUPTED`. A successful resultHash is the SHA-256 of the
@@ -550,15 +563,21 @@ verified document extraction. It does not rerun STT or refinement and does not
 import linked-meeting context. Unavailable documents are omitted with notices
 when trusted notes/transcript remain. If no other source exists, pending/failed/
 missing document text returns `409 SOURCE_NOT_READY`; active transcription returns `409 MEETING_BUSY`;
-absent source returns `409 NO_SUMMARY_SOURCE`. Source conflicts return 409,
-source/output limits 413, and publish failures 503. Raw source/model text is
+absent source returns `409 NO_SUMMARY_SOURCE`. Synchronous source/capture limits
+return 413 and publish failures return 503. After a 202, source conflicts and
+output limits are reported through failed status; oversized output uses
+`OUTPUT_TOO_LARGE`. Raw source/model text is
 never included in error responses.
 
 State is separate at `MEETING#id / ANALYSIS#summary`. The worker revalidates the
 requester's edit grant, source fields, attachment inventory and object ETags.
 Summary/coverage and success are published atomically under source/run/lease
 conditions. Concurrent human changes reject the generated result. Failure keeps
-the previous summary. Inputs are limited to 20 attachments and 8 MiB per loaded
+the previous summary. Publication uses one SDK attempt; condition/validation
+rejections and canceled transactions clean up only newly created transcript
+spills. Other database failures retain spills because publication may be
+ambiguous; cleanup errors remain visible.
+Inputs are limited to 20 attachments and 8 MiB per loaded
 transcript field; document evidence is fairly excerpted within 64 KiB total.
 Unprovided/partial evidence is explicitly marked.
 
@@ -567,6 +586,7 @@ Delivery requires host infrastructure to route
 to the existing summarize Lambda. The API uses its existing default-bus PutEvents
 grant. Deploy that rule before enabling this action.
 
-The frontend polls metadata while pending and explicitly loads completed content
-through `/api/meetings/{id}/reading?kind=meeting&section=summary`, checking page
-continuity, current run and resultHash. It never replaces an unsaved editor draft.
+The separate frontend change is staged until these APIs are deployed. Its contract
+polls metadata while pending and loads completed content through
+`/api/meetings/{id}/reading?kind=meeting&section=summary`, checking page continuity,
+current run and resultHash without replacing an unsaved editor draft.

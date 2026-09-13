@@ -4,9 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -15,72 +13,12 @@ import (
 )
 
 func TestResummarySpillsAreImmutableAndRetainedAfterAmbiguousCommit(t *testing.T) {
-	for _, outcome := range []string{"success", "condition", "ambiguous"} {
-		t.Run(outcome, func(t *testing.T) {
-			puts, deletes, transactions := 0, 0, 0
-			key := ""
-			repo := summarySDKRepo(func(req *http.Request) (*http.Response, error) {
-				if strings.HasSuffix(req.Header.Get("X-Amz-Target"), ".TransactWriteItems") {
-					transactions++
-					var body map[string]any
-					json.NewDecoder(req.Body).Decode(&body)
-					update := body["TransactItems"].([]any)[0].(map[string]any)["Update"].(map[string]any)
-					raw, _ := json.Marshal(update["ExpressionAttributeValues"])
-					if !strings.Contains(string(raw), "s3://bucket/"+strings.TrimPrefix(key, "/bucket/")) {
-						t.Fatal("immutable ref not atomically published")
-					}
-					switch outcome {
-					case "condition":
-						return summaryHTTPResponse(400, `{"__type":"TransactionCanceledException","CancellationReasons":[{"Code":"ConditionalCheckFailed"},{"Code":"None"}]}`, nil), nil
-					case "ambiguous":
-						return summaryHTTPResponse(500, `{"__type":"InternalServerError","message":"ambiguous"}`, nil), nil
-					default:
-						return summaryHTTPResponse(200, `{}`, nil), nil
-					}
-				}
-				switch req.Method {
-				case "PUT":
-					puts++
-					key = req.URL.Path
-					if !regexp.MustCompile(`^/bucket/transcripts/meeting/transcriptA\.[a-f0-9]{32}\.txt$`).MatchString(key) {
-						t.Fatalf("mutable spill: %s", key)
-					}
-					body, _ := io.ReadAll(req.Body)
-					if len(body) != 290*1024 {
-						t.Fatal("spill content changed")
-					}
-				case "DELETE":
-					deletes++
-					if req.URL.Path != key {
-						t.Fatal("deleted an existing referenced object")
-					}
-				default:
-					t.Fatalf("unexpected request %s", req.Method)
-				}
-				return summaryHTTPResponse(200, "", http.Header{}), nil
-			})
-			text := strings.Repeat("x", 290*1024)
-			now := time.Now().UTC()
-			snapshot := &model.SummarySnapshot{Meeting: &model.Meeting{UserID: "owner", MeetingID: "meeting"},
-				Stored: map[string]interface{}{"content": "old", "transcriptA": text},
-				Checks: []model.SummaryCheck{{PK: "USER#owner", SK: "MEETING#meeting", Exists: true, Fields: map[string]model.SummaryValue{"content": {Present: true, Value: "old"}, "transcriptA": {Present: true, Value: text}}}}}
-			state := &model.ResummaryState{RunID: "run", Status: "running", OwnerID: "owner", RequestedBy: "owner", SourceHash: "source", LeaseUntil: now.Add(time.Minute).UnixMilli()}
-			err := repo.CompleteResummary(context.Background(), snapshot, state, strings.Repeat("n", 60*1024), "coverage", "hash", now)
-			if (err == nil) != (outcome == "success") {
-				t.Fatal(err)
-			}
-			if outcome == "condition" && !errors.Is(err, ErrConditionFailed) {
-				t.Fatal(err)
-			}
-			if puts != 1 || transactions != 1 || deletes != map[string]int{"success": 0, "condition": 1, "ambiguous": 0}[outcome] {
-				t.Fatalf("puts=%d tx=%d deletes=%d", puts, transactions, deletes)
-			}
-			if snapshot.Stored["transcriptA"] != text {
-				t.Fatal("snapshot mutated")
-			}
-		})
-	}
+	exerciseSummarySpillOutcomes(t, func(repo *DynamoDBRepository, snapshot *model.SummarySnapshot, now time.Time) error {
+		state := &model.ResummaryState{RunID: "run", Status: "running", OwnerID: "owner", RequestedBy: "owner", SourceHash: "source", LeaseUntil: now.Add(time.Minute).UnixMilli()}
+		return repo.CompleteResummary(context.Background(), snapshot, state, strings.Repeat("n", 60*1024), "coverage", "hash", now)
+	})
 }
+
 func TestResummaryTranscriptUsesExactRefIfMatchAndChecksCurrentETag(t *testing.T) {
 	heads, gets := 0, 0
 	repo := summarySDKRepo(func(req *http.Request) (*http.Response, error) {

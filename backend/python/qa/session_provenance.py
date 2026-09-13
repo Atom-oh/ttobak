@@ -5,8 +5,9 @@ import json
 from source_revision import HEX_REVISION, IDENTIFIER, resource_identity
 from manual_kb import shared_source_key
 from tool_history import (
-    MAX_TOOL_DEPENDENCIES, is_tool_dependency, valid_tool_dependency, tool_dependency_key, covers_tool_calls,
+    MAX_TOOL_DEPENDENCIES, HistoryLimit, is_tool_dependency, valid_tool_dependency, tool_dependency_key, covers_tool_calls,
 )
+from request_history import MAX_EMPTY_SEARCHES, is_request_dependency, valid_request_dependency, request_key, mark_untracked
 
 MAX_SESSION_DEPENDENCIES = 128
 MAX_HISTORY_BYTES = 384 * 1024
@@ -21,6 +22,8 @@ def valid_dependency(dependency):
         return False
     if is_tool_dependency(dependency):
         return valid_tool_dependency(dependency)
+    if is_request_dependency(dependency):
+        return valid_request_dependency(dependency)
     try:
         revision = dependency.get('sourceRevision')
         if not isinstance(revision, str) or HEX_REVISION.fullmatch(revision) is None:
@@ -47,6 +50,8 @@ def valid_dependency(dependency):
 def _dependency_key(dependency):
     if is_tool_dependency(dependency):
         return tool_dependency_key(dependency)
+    if is_request_dependency(dependency):
+        return request_key(dependency)
     if 'legacyURI' in dependency:
         return ('legacy', dependency['legacyURI'])
     if 'manualKey' in dependency:
@@ -65,11 +70,16 @@ def remember_source(state, dependency):
             if saved != dependency:
                 raise RuntimeError('Source changed during this answer; retry with current content.')
             return
+    if 'emptySearch' in dependency and (
+            sum('emptySearch' in dep for dep in state['dependencies']) >= MAX_EMPTY_SEARCHES
+            or len(state['dependencies']) >= MAX_SESSION_DEPENDENCIES):
+        mark_untracked(state, 'search_knowledge_base', 'DEPENDENCY_LIMIT')
+        return False
     if (len(state['dependencies']) >= MAX_SESSION_DEPENDENCIES
             or is_tool_dependency(dependency) and
             sum(is_tool_dependency(dep) for dep in state['dependencies']) >= MAX_TOOL_DEPENDENCIES):
         state['replayable'] = False
-        raise ValueError('Source history dependency budget exceeded')
+        raise HistoryLimit('Source history dependency budget exceeded')
     state['dependencies'].append(dict(dependency))
 
 
@@ -82,6 +92,7 @@ def _current(dependency, is_current, tool_history):
 def _valid_dependencies(dependencies):
     return (type(dependencies) is list and len(dependencies) <= MAX_SESSION_DEPENDENCIES
             and sum(is_tool_dependency(dep) for dep in dependencies) <= MAX_TOOL_DEPENDENCIES
+            and sum(isinstance(dep, dict) and 'emptySearch' in dep for dep in dependencies) <= MAX_EMPTY_SEARCHES
             and all(valid_dependency(dep) for dep in dependencies))
 
 
@@ -100,7 +111,8 @@ def restore_sources(item, state, is_current, *, tool_history=None):
             return False
         candidate = {'dependencies': list(state['dependencies']), 'replayable': state['replayable']}
         for dependency in dependencies:
-            remember_source(candidate, dependency)
+            if remember_source(candidate, dependency) is False:
+                return False
     except Exception:
         return False
     state['dependencies'] = candidate['dependencies']

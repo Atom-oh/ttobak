@@ -282,5 +282,15 @@ class TestTransportFixture(_QAConversationFixture, _SourceFixture, unittest.Test
             with self.subTest(transport=transport):
                 self.table.items.pop(('SESSION#reader#chat-readonly', 'MESSAGES'), None)
                 model = self.replies(transport, 'list_meetings', {})
-                self.ask(transport, 'list meetings')
+                self.prepend_tool(model, transport, 'list_meetings', {})
+                self.ask(transport, 'list meetings', context='CURRENT_CLIENT_INPUT')
                 self.assertIn('SYNTHETIC_CURRENT_TITLE', json.dumps(model.call_args.kwargs['messages']))
+                self.assertIn('CURRENT_CLIENT_INPUT', json.dumps(model.call_args.kwargs['system']))
+                results = [block for message in model.call_args.kwargs['messages']
+                           for block in message['content'] if 'toolResult' in block]
+                self.assertEqual(len(results), 2)
+                before = model.call_count
+                denied = self.send(transport, 'unknown meeting', meeting_id='missing')
+                self.assertEqual(denied.get('statusCode') if transport == 'rest' else denied.get('status'),
+                                 404 if transport == 'rest' else 'error')
+                self.assertEqual(model.call_count, before)
