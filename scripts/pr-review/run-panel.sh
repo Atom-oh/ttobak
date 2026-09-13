@@ -105,6 +105,10 @@ try_panel() {
     fi
     [ "$a" -lt "$RETRIES" ] && echo "[retry $a/$RETRIES] $(basename "$slot" .md)" >&2
   done
+  # record_result counts non-empty slots, so failed final attempts must leave none.
+  if [ "$rc" -ne 0 ]; then
+    : > "$slot"
+  fi
 }
 
 # Kiro 셀은 어떤 툴도 부여받지 않는다(`--agent pr-review-notools`, `tools: []`) — 이전

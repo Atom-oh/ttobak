@@ -134,6 +134,37 @@ EOF2
     HEALTHY_FLAGS=$(find "$T_STUB/work" -maxdepth 1 -name '*.flag' | wc -l | tr -d ' ')
     assert_eq "healthy run leaves no flags" "0" "$HEALTHY_FLAGS"
 
+    # Partial stdout from an unsuccessful final attempt is not a review.
+    for FAILED_PROVIDER in codex kiro-cli; do
+        cp "$T_STUB/$FAILED_PROVIDER" "$T_STUB/$FAILED_PROVIDER.healthy"
+        for FAILED_RC in 1 124; do
+            cat > "$T_STUB/$FAILED_PROVIDER" <<EOF2
+#!/bin/bash
+cat >/dev/null
+echo "partial review"
+exit $FAILED_RC
+EOF2
+            if [ "$FAILED_PROVIDER" = kiro-cli ]; then
+                wrap_kiro_stub
+            fi
+            PANEL_OUT=$(PATH="$T_STUB:$PATH" PANEL_TIMEOUT=30 PANEL_RETRIES=3 \
+                bash "$PANEL" "$T_STUB/diff.txt" "$T_STUB/lenses" "$T_STUB/work" 2>&1 || true)
+            if [ "$FAILED_PROVIDER" = codex ]; then
+                FAILED_SLOT_BYTES=$(wc -c < "$T_STUB/work/slot/codex-L2.md" | tr -d ' ')
+                EXPECTED_RESPONSES='Panel responded \(2 / 3 cells\)'
+            else
+                FAILED_SLOT_BYTES=$(cat "$T_STUB"/work/slot/kiro-*.md | wc -c | tr -d ' ')
+                EXPECTED_RESPONSES='Panel responded \(1 / 3 cells\)'
+            fi
+            assert_eq "$FAILED_PROVIDER exit $FAILED_RC discards final partial output" "0" "$FAILED_SLOT_BYTES"
+            assert_grep_match "$FAILED_PROVIDER exit $FAILED_RC is excluded from review coverage" \
+                "$EXPECTED_RESPONSES" "$PANEL_OUT"
+            assert_grep_match "$FAILED_PROVIDER exit $FAILED_RC exhausts bounded retries" \
+                '\[retry 2/3\]' "$PANEL_OUT"
+        done
+        mv "$T_STUB/$FAILED_PROVIDER.healthy" "$T_STUB/$FAILED_PROVIDER"
+    done
+
     # Codex는 입력 diff를 stderr에도 출력한다. Kiro 오류 문자열을 인용하는 정상 리뷰가
     # Kiro 에이전트 폴백으로 폐기되면 안 된다(claude-code-usage-dashboard 저장소 PR #33의 실제 Codex 4셀 로그에서 재현).
     cat > "$T_STUB/codex" <<'EOF2'

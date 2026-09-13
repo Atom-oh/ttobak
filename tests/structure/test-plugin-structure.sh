@@ -36,9 +36,9 @@ assert_file_exists ".claude/agents/code-reviewer.yml" "Code reviewer agent exist
 assert_file_exists ".claude/agents/security-auditor.yml" "Security auditor agent exists"
 
 # CLAUDE.md content checks
-assert_contains "CLAUDE.md" "Auto-Sync Rules" "CLAUDE.md has Auto-Sync Rules section"
-assert_contains "CLAUDE.md" "Build Commands" "CLAUDE.md has Build Commands section"
-assert_contains "CLAUDE.md" "Architecture" "CLAUDE.md has Architecture section"
+assert_contains "CLAUDE.md" "^## Documentation maintenance" "CLAUDE.md has documentation maintenance section"
+assert_contains "CLAUDE.md" "^## Verification commands" "CLAUDE.md has verification commands section"
+assert_contains "CLAUDE.md" "^## Application boundaries" "CLAUDE.md has application boundaries section"
 
 # Backend build files
 assert_dir_exists "backend/cmd/api" "Backend api cmd exists"

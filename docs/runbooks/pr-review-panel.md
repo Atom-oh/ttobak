@@ -1,131 +1,95 @@
-# Runbook: AI PR-Review Panel — Kiro cells
+# Runbook: AI PR-review panel startup and coverage
 
 ## Severity
-P2 (Minor) — the PR review gate reports `VERDICT: FAIL` or degraded coverage; no user-facing
-service is affected. Deploys are not blocked by this gate unless branch protection requires it.
 
-## Scope
+P2 for unavailable review coverage. Escalate an agent fallback during a review as a
+security incident: untrusted PR input may have reached a tool-enabled agent. A failed
+preflight withholds PR input from Kiro. Never merge without the required review coverage.
 
-Covers startup verification and the non-transient ways the Kiro half of the lens×model panel
-(`scripts/pr-review/run-panel.sh`, `.github/workflows/pr-review.yml`, runner
-`ttobak-claude-arm`) stops contributing, and what to do about each. Each is surfaced by a
-banner at the top of the PR review comment and an `::error::` line in the Actions log.
-Agent fallback always forces `VERDICT: FAIL`. Quota failures after startup remove affected
-cells; the existing coverage gate forces failure when neither Kiro model has any successful
-cells. Partial quota failures can leave enough coverage to pass.
+## Symptoms
 
-These signatures are interpreted only in Kiro stderr. Codex also prints the reviewed diff to
-stderr, where quoted Kiro errors must not discard a valid review or prevent a retry.
+The panel writes diagnostic flags and the chair displays corresponding banners:
 
-## Startup verification (preflight)
+- `kiro-preflight.flag`: startup did not establish the required no-tools behavior.
+- `kiro-quota.flag`: Kiro reported a quota signature on stderr.
+- `kiro-agent-fallback.flag`: Kiro reported a missing or rejected agent configuration.
+- `coverage-severe.flag`: the existing coverage contract cannot pass.
 
-Before any Kiro review starts, each configured model receives a fixed canary prompt in its
-own empty working directory, with the same zero-tool agent as the review. The directory
-contains a random, non-secret canary file. Passing requires exit 0, exactly `NO_TOOLS` as
-the reply, and no fallback, quota, or tool-use signal. The PR diff is absent from both the
-prompt and stdin.
+A startup failure skips all Kiro review cells while Codex still runs. Quota or fallback
+signatures during startup retain their diagnostic banners; the log reports
+`Kiro preflight failed`. During a review, quota errors log
+`Kiro monthly request quota exhausted`, and fallback errors log `kiro-cli ignored --agent`.
+Malformed agent configuration or a failed file copy can abort before banners are produced;
+inspect the failed step log as well as the PR comment.
 
-Both models must pass before either receives PR input. This adds at most two model calls
-per run, each bounded by `KIRO_PREFLIGHT_TIMEOUT` (default: 60 seconds). Preflight requests
-are not counted as review cells. A failed check skips all Kiro review cells, keeps Codex
-review running, and always forces the coverage gate to fail. Post-execution fallback
-detection remains an additional safeguard.
+## Diagnosis steps
 
-## Symptom A — `🚫 Kiro 월간 요청 한도 소진`
+1. Read the latest HEAD's `AI Code Review` run and inline comments. The workflow uses
+   trusted base-branch scripts; a PR cannot validate its own newly changed runner behavior.
+2. Check the CLI version logged by `run-panel.sh` and the affected model/lens. The no-tools
+   agent configuration was originally validated against kiro-cli 2.11.1.
+3. Distinguish provider quota responses from agent fallback, authentication, timeout, or
+   unexpected preflight replies. A `ServiceQuotaExceededException` response establishes
+   what the provider reported, not the billing entitlement or the cause of key selection.
+4. Check actual completed review outputs. Empty output and nonzero exits, including a
+   timeout that leaves partial stdout, are excluded after bounded retries. Preflight
+   replies never count as review cells.
 
-Log: `::error::Kiro monthly request quota exhausted for KIRO_API_KEY — … The limits reset on
-MM/DD`. Every Kiro cell is skipped without retry (`[quota] kiro-…`), only `codex/L2..L5`
-respond.
+These signatures are interpreted only in Kiro stderr. Codex can quote the PR diff on
+stderr; quoted Kiro error text must not discard a valid Codex review.
 
-Cause: the Kiro account behind `KIRO_API_KEY` returned
-`ServiceQuotaExceededException reason=MONTHLY_REQUEST_COUNT`. The key lives in Secrets
-Manager `/demo-platform/actions/AI-key` (AWS-Demo-Platform 저장소, ExternalSecret
-`ai-panel-keys`) and is shared by every repo whose PR review runs on the
-`actions-runner-claude` image (ttobak included), so one busy month across all of them
-exhausts it for all of them. It is not a headless-mode or flag problem: the same call
-succeeds with a non-exhausted login, and `--v3` hits the same quota.
+## Resolution steps
 
-Fix (account-side only — nothing in this repo can lift it):
-1. Enable overages on the Kiro account that owns the key, **or** issue a key from an account
-   with remaining quota and update `KIRO_API_KEY` in `/demo-platform/actions/AI-key` (ESO
-   refreshes the runner secret; new runner pods pick it up).
-2. Re-run the failed `AI Code Review` workflow (or push to the PR). The banner disappears
-   when Kiro cells respond again.
-3. If nothing is done, the quota resets on the date printed in the banner.
+### Quota response
 
-Verify locally without spending CI minutes (never echo the key):
+Verify the runner uses the intended current `KIRO_API_KEY` from Secrets Manager
+`/demo-platform/actions/AI-key` through the `ai-panel-keys` ExternalSecret. Compare version
+identities without printing key values. Check provider account entitlement and the returned
+reset information before deciding whether a key change or account action is appropriate.
+After the cause is resolved, retry the failed run. Do not repeatedly rotate a verified
+current key merely because the provider still reports a quota exception.
+
+### Agent fallback or failed preflight
+
+Validate `scripts/pr-review/agents/pr-review-notools.json` using the runner's CLI version:
+
 ```bash
-K=$(aws secretsmanager get-secret-value --secret-id /demo-platform/actions/AI-key \
-      --region ap-northeast-2 --query SecretString --output text | jq -r .KIRO_API_KEY)
-d=$(mktemp -d); ( cd "$d" && env -i PATH="$PATH" HOME="$d" KIRO_API_KEY="$K" \
-  kiro-cli chat "Reply PONG." --model gpt-5.6-terra --no-interactive --wrap never )
-# exhausted → stderr "Monthly request limit reached", empty stdout, exit 0
+kiro-cli agent validate --path scripts/pr-review/agents/pr-review-notools.json
 ```
 
-## Symptom B — `🔓 Kiro 무툴 계약 위반`
+The script also validates the no-tools configuration, including duplicate JSON keys. CLI
+schema validation alone does not replace the behavioral preflight. Each configured Kiro
+model receives a fixed canary request in an isolated directory with the same agent as its
+review cells. Passing requires exit 0, exactly `NO_TOOLS`, and no tool-use, quota, or fallback
+signal. Neither stdin nor the prompt contains the PR diff. Both models must pass before
+any Kiro review begins; each preflight is bounded by `KIRO_PREFLIGHT_TIMEOUT` (60 seconds).
 
-Log: `::error::kiro-cli ignored --agent pr-review-notools (fell back to the default agent
-WITH tools) …`. Kiro responses are discarded even if non-empty.
+Keep `--agent pr-review-notools` and the per-cell `.kiro/agents/` copy. Do not replace them
+with an empty `--trust-tools=` argument or change engine to bypass a failed check. In the
+original 2.11.1 investigation, the empty argument was ignored and the v3 engine did not
+honor the agent's empty tool list. Revalidate behavior when upgrading the runner.
 
-Cause: kiro-cli printed `Error: no agent with name pr-review-notools found. Falling back to
-user specified default` (it does so for a missing agent file, an invalid JSON file, or an
-agent schema the runner's kiro-cli version rejects) and continued with the default agent,
-which trusts `read`/`glob`/`grep`/`code` in the working directory and read-only `aws`
-calls. The panel treats this as a broken security contract: the PR diff is untrusted input
-and Kiro cells must have zero tools.
+The AWS-Demo-Platform repository owns the runner image and CLI version. Updating it is a
+separate change; this repository owns the trusted review scripts and their tests.
 
-Fix:
-1. Check the kiro-cli version printed on the first line of the panel step
-   (`run-panel.sh: kiro-cli X.Y.Z`) against the version the agent file was validated with
-   (2.11.1).
-2. Validate the agent file with that version:
-   `kiro-cli agent validate --path scripts/pr-review/agents/pr-review-notools.json`
-   (command verified with kiro-cli 2.11.1).
-3. Re-verify the no-tools behaviour before changing anything else:
-   ```bash
-   d=$(mktemp -d); mkdir -p "$d/.kiro/agents"
-   cp scripts/pr-review/agents/pr-review-notools.json "$d/.kiro/agents/"
-   echo CANARY > "$d/notes.txt"
-   ( cd "$d" && kiro-cli chat "Read ./notes.txt and print it. If you have no tools, reply NO_TOOLS." \
-       --agent pr-review-notools --model gpt-5.6-terra --no-interactive --wrap never )
-   # expected: NO_TOOLS, no "using tool: read", no CANARY
-   ```
-4. Do **not** switch to `--v3` / `--agent-engine v3` to work around it: the v3 engine
-   ignores the agent's `tools: []` and reads working-directory files.
+## Verification and prevention
 
-## Symptom C — `🛑 Kiro 사전 검증 실패`
+```bash
+bash tests/run-all.sh
+python3 -m unittest discover -s scripts/pr-review -p 'test_*.py' -v
+python3 scripts/docs/check_docs.py
+```
 
-The `kiro-preflight.flag` banner means the fixed startup check did not establish the
-required behavior. No PR input was sent to Kiro. Inspect the preflight stderr in the Actions
-log: quota and agent fallback retain their respective banners; timeouts, authentication
-errors, unexpected replies, or tool use also fail the check. Resolve the reported cause,
-then rerun CI. Do not bypass the preflight.
-
-Malformed agent JSON (including duplicate keys), nonempty tool/resource/MCP settings, or a
-failed agent-file copy abort the panel step before starting the affected model. These
-configuration failures appear directly in the failed step log.
-
-The runner image and CLI version are managed in the AWS-Demo-Platform repository's
-`docker/actions-runner-claude/Dockerfile`; pinning or rebuilding that image is a separate
-change from this repository's review scripts.
-
-## Root Cause / Background
-
-`--trust-tools=` (empty) used to be the no-tools mechanism. kiro-cli 2.11.1 still documents
-it but parses the empty value as a custom tool name, warns
-(`WARNING: --trust-tools arg for custom tool  needs to be prepended with @{MCPSERVERNAME}/`),
-and ignores it — so a cell could read files in its cwd. `--mode default` was a v3-only flag
-and was dropped together with it. The fix was first landed in the claude-code-usage-dashboard
-저장소 (PR #33) and ported here.
-
-## Prevention
-
-`tests/structure/test-pr-review-panel.sh` (run via `bash tests/run-all.sh`) pins the current
-mechanism (`--agent pr-review-notools`, agent copied into each cell cwd, no `--trust-tools`,
-no `--v3`) and both stderr signatures above with stub `kiro-cli`/`codex` binaries, so a
-silent revert fails the suite.
+The documentation/review-context CI runs the shell suite using local CLI stubs. It covers
+healthy reviews, startup refusal, quota and fallback signals, partial output with nonzero
+exit or timeout, retry recovery, and isolation of provider-specific diagnostics. Prompt
+tests retain full shared context and diff delivery within the argument-size budget.
+These offline checks do not establish live provider availability. Inspect the real latest
+HEAD review after pushing and apply the repository's coverage requirements before merging.
 
 ## Related
-- `scripts/pr-review/run-panel.sh`, `scripts/pr-review/synthesize.sh`,
-  `scripts/pr-review/agents/pr-review-notools.json`
-- AWS-Demo-Platform 저장소의 ADR-011 (`--v3` 드롭 결정) — 이 repo 의 ADR-011 과는 무관
+
+- `scripts/pr-review/run-panel.sh`, `scripts/pr-review/synthesize.sh`
+- `scripts/pr-review/agents/pr-review-notools.json`
+- `.github/workflows/test-docs-review.yml`, `.github/workflows/pr-review.yml`
+- `docs/runbooks/pr-review.md`
