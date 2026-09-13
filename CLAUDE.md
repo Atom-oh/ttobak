@@ -220,8 +220,8 @@ ScreenCaptureKit. Report that limit instead of claiming a Mac build passed.
   current-user strict CompleteRead callbacks, fingerprints the rendered view, and
   discards the whole derived history on invalid dependencies. Oversized valid reads
   remain visible but nonreplayable; creation receipts never replay a mutation.
-  The current handler does not yet register these helpers. Consumer wiring must
-  preserve both transport paths and this history contract.
+  The prepared handler registers these checks in both transports. Preserve
+  this history contract when changing the wiring.
   Code readiness and deployed acceptance are separate gates (ADR-042; QA contracts).
 - **Bounded meeting/MCP reads:** the authenticated reading endpoint uses
   metadata-only authorization for notes and binds continuation to source revision,

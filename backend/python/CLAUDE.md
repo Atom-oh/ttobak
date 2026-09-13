@@ -28,10 +28,10 @@ role, and SANDBOX networking.
 
 ## Current-source QA foundations
 
-`qa/handler.py` still uses the legacy runtime: SourceAccess, source_tools,
-ToolHistory and account_reads are not imported. New readers/tests and IAM do not
-establish active REST/WebSocket integration. Snapshot bootstrap and synthetic
-recall verification must precede strict runtime cutover.
+`qa/handler.py` registers current-source readers, source tools and history
+checks in both transports. This describes repository wiring, not a deployed
+consumer acceptance claim. Follow the rollout gates and producer evidence
+before deployment; verify public QA separately afterward.
 
 - Authorize current canonical identities before S3 reads; pin ETag/version/size
   and exact source revision. Legacy and immutable transcript references must match
