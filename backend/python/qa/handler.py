@@ -1717,60 +1717,74 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
         round_text = ''
         client_gone = False
 
-        for ev in stream_resp.get('stream', []):
-            if 'messageStart' in ev:
-                continue
-            if 'contentBlockStart' in ev:
-                start = ev['contentBlockStart'].get('start', {})
-                if 'toolUse' in start:
-                    current_block = {
-                        'toolUse': {
-                            'toolUseId': start['toolUse']['toolUseId'],
-                            'name': start['toolUse']['name'],
-                            'input': '',
+        model_stream = stream_resp.get('stream', [])
+        try:
+            for ev in model_stream:
+                if 'messageStart' in ev:
+                    continue
+                if 'contentBlockStart' in ev:
+                    start = ev['contentBlockStart'].get('start', {})
+                    if 'toolUse' in start:
+                        current_block = {
+                            'toolUse': {
+                                'toolUseId': start['toolUse']['toolUseId'],
+                                'name': start['toolUse']['name'],
+                                'input': '',
+                            }
                         }
-                    }
-                else:
-                    current_block = {'text': ''}
-                continue
-            if 'contentBlockDelta' in ev:
-                delta = ev['contentBlockDelta'].get('delta', {})
-                # ConverseStream emits contentBlockStart for tools, not normal
-                # text. Initialize text on its first delta, including "".
-                if 'text' in delta and current_block is None:
-                    current_block = {'text': ''}
-                if 'text' in delta and current_block is not None and 'text' in current_block:
-                    current_block['text'] += delta['text']
-                    round_text += delta['text']
-                    if not _post_ws(apigw, connection_id, {
-                        'type': 'answer_delta',
-                        'sessionId': session_id,
-                        'text': delta['text'],
-                    }):
-                        client_gone = True
-                elif 'toolUse' in delta and current_block is not None and 'toolUse' in current_block:
-                    current_block['toolUse']['input'] += delta['toolUse'].get('input', '')
-                continue
-            if 'contentBlockStop' in ev:
-                if current_block is not None:
-                    if 'toolUse' in current_block:
-                        raw_input = current_block['toolUse']['input']
-                        try:
-                            current_block['toolUse']['input'] = json.loads(raw_input) if raw_input else {}
-                        except json.JSONDecodeError:
-                            logger.warning("Tool input JSON parse failed; input omitted")
-                            current_block['toolUse']['input'] = {}
-                    # Empty transport text prefixes are not valid Converse
-                    # message content and must not poison the next tool round.
-                    if 'toolUse' in current_block or current_block.get('text', '').strip():
-                        assembled_content.append(current_block)
-                    current_block = None
-                continue
-            if 'messageStop' in ev:
-                stop_reason = ev['messageStop'].get('stopReason')
-                continue
-            if 'metadata' in ev:
-                continue
+                    else:
+                        current_block = {'text': ''}
+                    continue
+                if 'contentBlockDelta' in ev:
+                    delta = ev['contentBlockDelta'].get('delta', {})
+                    # ConverseStream emits contentBlockStart for tools, not normal
+                    # text. Initialize text on its first delta, including "".
+                    if 'text' in delta and current_block is None:
+                        current_block = {'text': ''}
+                    if 'text' in delta and current_block is not None and 'text' in current_block:
+                        current_block['text'] += delta['text']
+                        round_text += delta['text']
+                        if not _post_ws(apigw, connection_id, {
+                            'type': 'answer_delta',
+                            'sessionId': session_id,
+                            'text': delta['text'],
+                        }):
+                            client_gone = True
+                    elif 'toolUse' in delta and current_block is not None and 'toolUse' in current_block:
+                        current_block['toolUse']['input'] += delta['toolUse'].get('input', '')
+                    continue
+                if 'contentBlockStop' in ev:
+                    if current_block is not None:
+                        if 'toolUse' in current_block:
+                            raw_input = current_block['toolUse']['input']
+                            try:
+                                current_block['toolUse']['input'] = json.loads(raw_input) if raw_input else {}
+                            except json.JSONDecodeError:
+                                logger.warning("Tool input JSON parse failed; input omitted")
+                                current_block['toolUse']['input'] = {}
+                        # Empty transport text prefixes are not valid Converse
+                        # message content and must not poison the next tool round.
+                        if 'toolUse' in current_block or current_block.get('text', '').strip():
+                            assembled_content.append(current_block)
+                        current_block = None
+                    continue
+                if 'messageStop' in ev:
+                    stop_reason = ev['messageStop'].get('stopReason')
+                    continue
+                if 'metadata' in ev:
+                    continue
+        except (ModelStreamError, SourceValidationError, WebSocketDeliveryError):
+            raise
+        except Exception as error:
+            logger.warning("Bedrock stream iteration failed (%s)", type(error).__name__)
+            fail_stream('MODEL_STREAM_UNAVAILABLE')
+        finally:
+            close_stream = getattr(model_stream, 'close', None)
+            if callable(close_stream):
+                try:
+                    close_stream()
+                except Exception as error:
+                    logger.warning("Bedrock stream close failed (%s)", type(error).__name__)
 
         if stop_reason not in ('end_turn', 'stop_sequence', 'tool_use') or current_block is not None:
             fail_stream('MODEL_STREAM_INCOMPLETE')
