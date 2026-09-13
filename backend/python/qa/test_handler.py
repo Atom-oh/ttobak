@@ -26,6 +26,7 @@ from unittest import mock
 # Set env vars BEFORE importing handler (it reads env at import time)
 os.environ.setdefault('TABLE_NAME', 'test-table')
 os.environ.setdefault('KB_ID', 'test-kb')
+os.environ.setdefault('KB_BUCKET_NAME', 'synthetic')
 os.environ.setdefault('BEDROCK_MODEL_ID', 'test-model')
 os.environ.setdefault('AWS_DEFAULT_REGION', 'us-east-1')
 
@@ -165,7 +166,7 @@ class TestMeetingRetrieval(unittest.TestCase):
         self.assertIn('stored summary', text)
         self.assertIn(meeting_id, [m['meetingId'] for m in handler.list_meetings_for_user('reader')])
         handler.retrieve_from_kb(f'find {meeting_id}', user_id='reader')
-        config = self.runtime.retrieve.call_args.kwargs['retrievalConfiguration']
+        config = [call.kwargs['retrievalConfiguration'] for call in self.runtime.retrieve.call_args_list]
         self.assertIn(f'/owner/{meeting_id}', json.dumps(config))
         self.assertTrue(all(kwargs.get('ConsistentRead') for key, kwargs in self.table.reads
                             if not key[0].startswith('CACHE#KB#')))
@@ -175,8 +176,9 @@ class TestMeetingRetrieval(unittest.TestCase):
         self.assertIsNone(text)
         self.assertEqual(err['status'], 404)
         self.assertNotIn(meeting_id, [m['meetingId'] for m in handler.list_meetings_for_user('reader')])
+        self.runtime.retrieve.reset_mock()
         handler.retrieve_from_kb(f'find {meeting_id}', user_id='reader')
-        config = self.runtime.retrieve.call_args.kwargs['retrievalConfiguration']
+        config = [call.kwargs['retrievalConfiguration'] for call in self.runtime.retrieve.call_args_list]
         self.assertNotIn(f'/owner/{meeting_id}', json.dumps(config))
 
     def test_saved_notes_are_available_to_detail_and_context_search(self):
@@ -214,13 +216,14 @@ class TestMeetingRetrieval(unittest.TestCase):
         self.meeting(owner='reader', selectedTranscript='B',
                      transcriptB='s3://synthetic/transcripts/m1/transcriptB.txt')
         body = io.BytesIO(b'corrected spilled transcript')
-        with mock.patch.object(handler.s3_client, 'get_object', return_value={'Body': body}) as get:
+        with mock.patch.object(handler.s3_client, 'head_object', return_value={'ETag': '"e1"', 'ContentLength': len(body.getvalue())}), \
+                mock.patch.object(handler.s3_client, 'get_object', return_value={'Body': body, 'ETag': '"e1"'}) as get:
             text, err = handler.load_meeting_context('reader', 'm1')
         self.assertIsNone(err)
         self.assertIn('corrected spilled transcript', text)
         self.assertNotIn('transcript A', text)
         self.assertTrue(body.closed)
-        get.assert_called_once_with(Bucket='synthetic', Key='transcripts/m1/transcriptB.txt')
+        get.assert_called_once_with(Bucket='synthetic', Key='transcripts/m1/transcriptB.txt', IfMatch='"e1"')
 
     def test_unreadable_selected_transcript_reports_failure(self):
         self.meeting(owner='reader', selectedTranscript='B', transcriptB='s3://synthetic/missing')
@@ -404,12 +407,21 @@ class TestMeetingRetrieval(unittest.TestCase):
         self.meeting(published=False)
         self.share()
         handler.retrieve_from_kb('private answer', user_id='reader')
-        config = self.runtime.retrieve.call_args.kwargs['retrievalConfiguration']
-        filters = config['vectorSearchConfiguration']['filter']['orAll']
+        filters = [call.kwargs['retrievalConfiguration']['vectorSearchConfiguration']['filter']
+                   for call in self.runtime.retrieve.call_args_list]
         private_uri = 's3://synthetic/meetings/owner/m10.md'
         granted_uri = 's3://synthetic/meetings/owner/m1.md'
-        self.assertFalse(any(f['stringContains']['value'] in private_uri for f in filters))
-        self.assertTrue(any(f['stringContains']['value'] in granted_uri for f in filters))
+        def matches(condition, uri):
+            if 'orAll' in condition:
+                return any(matches(child, uri) for child in condition['orAll'])
+            if 'andAll' in condition:
+                return all(matches(child, uri) for child in condition['andAll'])
+            operator, value = next(iter(condition.items()))
+            if value['key'] != 'x-amz-bedrock-kb-source-uri':
+                return False
+            return uri.startswith(value['value']) if operator == 'startsWith' else uri == value['value']
+        self.assertFalse(any(matches(f, private_uri) for f in filters))
+        self.assertTrue(any(matches(f, granted_uri) for f in filters))
 
     def model_stub(self):
         patcher = mock.patch.object(handler, 'bedrock_runtime')
@@ -516,16 +528,17 @@ class TestMeetingRetrieval(unittest.TestCase):
         first = handler.retrieve_from_kb('saved correction', user_id='reader')
         self.assertEqual(len(first), 1)
         self.assertEqual(first[0]['meeting']['notes'], 'old note')
-        cache = next(v for (pk, _), v in self.table.items.items() if pk.startswith('CACHE#KB#'))
-        self.assertTrue(all(set(c) == {'uri', 'score'} for c in json.loads(cache['results'])))
+        self.assertFalse(any(pk.startswith('CACHE#KB#') for pk, _ in self.table.items))
+        first_calls = self.runtime.retrieve.call_count
         row.update(notes='corrected note', content='corrected content', updatedAt='revision-2')
         second = handler.retrieve_from_kb('saved correction', user_id='reader')
         self.assertEqual(second[0]['meeting']['notes'], 'corrected note')
         self.assertEqual(second[0]['meeting']['content'], 'corrected content')
         self.assertEqual(second[0]['meeting']['updatedAt'], 'revision-2')
-        self.assertEqual(self.runtime.retrieve.call_count, 1)
+        self.assertGreater(self.runtime.retrieve.call_count, first_calls)
         reads = [r for r in self.table.reads if r[0] == ('USER#reader', 'MEETING#m1')]
-        self.assertEqual(len(reads), 2, 'one canonical read per identity per response')
+        self.assertTrue(any('ProjectionExpression' in options for _, options in reads))
+        self.assertTrue(any('ProjectionExpression' not in options for _, options in reads))
         self.assertTrue(all(options['ConsistentRead'] for _, options in reads))
 
     def test_legacy_cached_snapshot_is_ignored_even_when_current_fields_are_empty(self):
@@ -540,7 +553,7 @@ class TestMeetingRetrieval(unittest.TestCase):
         self.assertEqual(results[0]['meeting']['notes'], '')
         self.assertEqual(results[0]['meeting']['content'], '')
         self.assertNotIn('LEGACY_PRIVATE_TEXT', json.dumps(results))
-        self.runtime.retrieve.assert_not_called()
+        self.runtime.retrieve.assert_called()
 
     def test_deleted_or_revoked_hits_remove_text_and_citations(self):
         import tools
@@ -589,6 +602,7 @@ class TestMeetingRetrieval(unittest.TestCase):
         self.assertIn('Tool error:', failed)
         self.assertEqual(sources, [])
         self.assertNotIn(query, failed + '\n'.join(logs.output))
+        failed_calls = self.runtime.retrieve.call_count
         # A failure must not poison the cache with a fabricated empty success.
         self.runtime.retrieve.side_effect = None
         self.runtime.retrieve.return_value = {'retrievalResults': []}
@@ -596,14 +610,18 @@ class TestMeetingRetrieval(unittest.TestCase):
         self.assertNotIn('Tool error:', empty)
         self.assertIn('관련 문서를 찾지 못했습니다', empty)
         self.assertEqual(sources, [])
-        self.assertEqual(self.runtime.retrieve.call_count, 2)
+        self.assertGreater(self.runtime.retrieve.call_count, failed_calls)
 
     def test_cache_hit_rechecks_grant_after_cache_lookup(self):
         self.meeting(published=False)
         self.share()
         self.runtime.retrieve.return_value = {
             'retrievalResults': [self.kb_hit('s3://synthetic/meetings/owner/m1.md')]}
-        self.assertEqual(len(handler.retrieve_from_kb('race', user_id='reader')), 1)
+        first = handler.retrieve_from_kb('race', user_id='reader')
+        self.assertEqual(len(first), 1)
+        handler._kb_cache_put('race', 5, first, 'reader',
+                              handler._shared_access_signature([{'ownerId': 'owner', 'meetingId': 'm1'}]))
+        starts = self.runtime.retrieve.call_count
         original = handler._kb_cache_get
 
         def revoke_after_cache_lookup(*args):
@@ -614,7 +632,7 @@ class TestMeetingRetrieval(unittest.TestCase):
 
         with mock.patch.object(handler, '_kb_cache_get', side_effect=revoke_after_cache_lookup):
             self.assertEqual(handler.retrieve_from_kb('race', user_id='reader'), [])
-        self.assertEqual(self.runtime.retrieve.call_count, 1)
+        self.assertGreater(self.runtime.retrieve.call_count, starts)
 
     def test_current_kb_excerpts_preserve_notes_after_800_and_report_coverage(self):
         import tools
@@ -636,7 +654,7 @@ class TestMeetingRetrieval(unittest.TestCase):
         self.assertIn('get_meeting_detail', text)
         self.assertIn('Index relevance', text)
 
-    def test_noncanonical_meeting_like_uris_stay_ordinary_documents(self):
+    def test_only_scoped_legacy_text_is_hydrated_and_malformed_uris_are_rejected(self):
         import tools
         uris = [
             's3://synthetic/kb/reader/upload.md',
@@ -646,24 +664,31 @@ class TestMeetingRetrieval(unittest.TestCase):
             's3://synthetic/meetings/../m1.md',
         ]
         self.runtime.retrieve.return_value = {'retrievalResults': [self.kb_hit(u, 'ordinary text') for u in uris]}
-        first = handler.retrieve_from_kb('ordinary', user_id='reader')
-        second = handler.retrieve_from_kb('ordinary', user_id='reader')
+        with mock.patch.object(handler, 's3_client') as s3:
+            s3.head_object.return_value = {'ETag': '"e1"', 'ContentLength': len(b'current text')}
+            s3.get_object.side_effect = lambda **kw: {'ETag': '"e1"', 'Body': io.BytesIO(b'current text')}
+            first = handler.retrieve_from_kb('ordinary', user_id='reader')
+            second = handler.retrieve_from_kb('ordinary', user_id='reader')
         self.assertEqual(first, second)
-        self.assertEqual(first, [{'uri': u, 'score': 0.9, 'text': 'ordinary text'} for u in uris])
-        self.assertEqual(tools.format_kb_results(first[:1]), f'[Score: 0.90] {uris[0]}\nordinary text')
+        self.assertEqual([r['uri'] for r in first], uris[:2])
+        self.assertTrue(all(r['text'] == 'current text' for r in first))
+        self.assertNotIn('ordinary text', tools.format_kb_results(first))
         self.assertFalse(any(key[1].startswith('MEETING#') for key, _ in self.table.reads))
 
 
 def _stored(messages):
     """DynamoDB get_item response holding the given conversation history."""
     return {'Item': {'PK': 'SESSION#u1#s1', 'SK': 'MESSAGES',
+                     'sourceProvenanceVersion': 1, 'sourceDependencies': [], 'sourceReplayable': True,
                      'messages': json.dumps(messages, ensure_ascii=False)}}
 
 
 class TestTranscriptReadGuard(unittest.TestCase):
     def read_meeting(self, **fields):
-        item = {'meetingId': 'm1', **fields}
-        with mock.patch.object(handler.table, 'get_item', return_value={'Item': item}):
+        item = {'PK': 'USER#reader', 'SK': 'MEETING#m1', 'meetingId': 'm1', 'userId': 'reader', **fields}
+        with mock.patch.object(handler.table, 'get_item', return_value={'Item': item}), \
+                mock.patch.object(handler.table, 'query', return_value={'Items': []}), \
+                mock.patch.object(handler, '_list_shared_meetings', return_value=[]):
             return handler.load_meeting_context('reader', 'm1')
 
     def test_editable_summary_is_never_an_s3_read_instruction(self):
@@ -697,11 +722,12 @@ class TestTranscriptReadGuard(unittest.TestCase):
     def test_exact_authorized_transcript_ref_is_read_and_closed(self):
         body = io.BytesIO('내 회의 원문'.encode())
         with mock.patch.object(handler, 'BUCKET_NAME', 'synthetic'), mock.patch.object(handler, 's3_client') as s3:
-            s3.get_object.return_value = {'Body': body}
+            s3.head_object.return_value = {'ETag': '"e1"', 'ContentLength': len(body.getvalue())}
+            s3.get_object.return_value = {'Body': body, 'ETag': '"e1"'}
             text, err = self.read_meeting(transcriptA='s3://synthetic/transcripts/m1/transcriptA.txt')
         self.assertIsNone(err)
         self.assertIn('내 회의 원문', text)
-        s3.get_object.assert_called_once_with(Bucket='synthetic', Key='transcripts/m1/transcriptA.txt')
+        s3.get_object.assert_called_once_with(Bucket='synthetic', Key='transcripts/m1/transcriptA.txt', IfMatch='"e1"')
         self.assertTrue(body.closed)
 
     def test_missing_bucket_configuration_fails_closed(self):
@@ -715,7 +741,7 @@ class TestTranscriptReadGuard(unittest.TestCase):
         with mock.patch.object(handler, 'BUCKET_NAME', 'synthetic'), mock.patch.object(handler, 's3_client') as s3:
             text, err = self.read_meeting(meetingId='other', transcriptA='s3://synthetic/transcripts/other/transcriptA.txt')
         self.assertIsNone(text)
-        self.assertEqual(err['status'], 500)
+        self.assertEqual(err['status'], 404)
         s3.get_object.assert_not_called()
 
     def test_storage_validation_is_pure_and_rejects_invalid_identifiers_and_fields(self):
@@ -758,11 +784,12 @@ class TestTranscriptReadGuard(unittest.TestCase):
             key = f'transcripts/m1/{field}.0123456789abcdef0123456789abcdef.txt'
             body = io.BytesIO(b'VERSIONED_TRANSCRIPT')
             with self.subTest(field=field), mock.patch.object(handler, 'BUCKET_NAME', 'synthetic'), mock.patch.object(handler, 's3_client') as s3:
-                s3.get_object.return_value = {'Body': body}
+                s3.head_object.return_value = {'ETag': '"e1"', 'ContentLength': len(body.getvalue())}
+                s3.get_object.return_value = {'Body': body, 'ETag': '"e1"'}
                 text, err = self.read_meeting(**{field: f's3://synthetic/{key}', 'selectedTranscript': field[-1]})
                 self.assertIsNone(err)
                 self.assertIn('VERSIONED_TRANSCRIPT', text)
-                s3.get_object.assert_called_once_with(Bucket='synthetic', Key=key)
+                s3.get_object.assert_called_once_with(Bucket='synthetic', Key=key, IfMatch='"e1"')
                 self.assertTrue(body.closed)
 
     def test_malformed_versioned_refs_fail_before_s3(self):
@@ -799,17 +826,18 @@ class TestTranscriptReadGuard(unittest.TestCase):
         with mock.patch.object(handler, 'BUCKET_NAME', 'synthetic'), mock.patch.object(handler, 's3_client') as s3:
             text, err = self.read_meeting(meetingId='other', transcriptA='s3://synthetic/transcripts/other/transcriptA.0123456789abcdef0123456789abcdef.txt')
         self.assertIsNone(text)
-        self.assertEqual(err['status'], 500)
+        self.assertEqual(err['status'], 404)
         s3.get_object.assert_not_called()
 
     def test_versioned_read_failure_does_not_fall_back_to_legacy(self):
         key = 'transcripts/m1/transcriptA.0123456789abcdef0123456789abcdef.txt'
         with mock.patch.object(handler, 'BUCKET_NAME', 'synthetic'), mock.patch.object(handler, 's3_client') as s3:
+            s3.head_object.return_value = {'ETag': '"e1"', 'ContentLength': 4}
             s3.get_object.side_effect = RuntimeError('synthetic S3 failure')
             text, err = self.read_meeting(transcriptA=f's3://synthetic/{key}')
         self.assertIsNone(text)
         self.assertEqual(err['status'], 500)
-        s3.get_object.assert_called_once_with(Bucket='synthetic', Key=key)
+        s3.get_object.assert_called_once_with(Bucket='synthetic', Key=key, IfMatch='"e1"')
 
 
 class TestLoadSessionTrimsTrailingUser(unittest.TestCase):
@@ -863,7 +891,7 @@ class TestLoadSessionTrimsTrailingUser(unittest.TestCase):
             {'role': 'user', 'content': [{'text': 'q1'}]},
             {'role': 'assistant', 'content': [{'text': 'a1'}]},
             {'role': 'user', 'content': [{'text': 'q2'}]},
-            {'role': 'assistant', 'content': [{'toolUse': {'toolUseId': 't1', 'name': 'x', 'input': {}}}]},
+            {'role': 'assistant', 'content': [{'toolUse': {'toolUseId': 't1', 'name': 'search_web', 'input': {}}}]},
             {'role': 'user', 'content': [{'toolResult': {'toolUseId': 't1', 'content': [{'text': 'r'}]}}]},
         ])
         result = handler.load_session('s1', user_id='u1')
@@ -878,7 +906,7 @@ class TestLoadSessionTrimsTrailingUser(unittest.TestCase):
             {'role': 'user', 'content': [{'text': 'q1'}]},
             {'role': 'assistant', 'content': [{'text': 'a1'}]},
             {'role': 'user', 'content': [{'text': 'q2'}]},
-            {'role': 'assistant', 'content': [{'toolUse': {'toolUseId': 't1', 'name': 'x', 'input': {}}}]},
+            {'role': 'assistant', 'content': [{'toolUse': {'toolUseId': 't1', 'name': 'search_web', 'input': {}}}]},
         ])
         result = handler.load_session('s1', user_id='u1')
         self.assertEqual(len(result), 2)
@@ -890,7 +918,7 @@ class TestLoadSessionTrimsTrailingUser(unittest.TestCase):
         # trailing toolUse is dangling.
         history = [
             {'role': 'user', 'content': [{'text': 'q1'}]},
-            {'role': 'assistant', 'content': [{'toolUse': {'toolUseId': 't1', 'name': 'x', 'input': {}}}]},
+            {'role': 'assistant', 'content': [{'toolUse': {'toolUseId': 't1', 'name': 'search_web', 'input': {}}}]},
             {'role': 'user', 'content': [{'toolResult': {'toolUseId': 't1', 'content': [{'text': 'r'}]}}]},
             {'role': 'assistant', 'content': [{'text': 'final answer'}]},
         ]
@@ -1016,9 +1044,10 @@ def make_get_item(share_origin='', member_exists=True, shared_to_account=True, a
             item = {'ownerId': 'owner-1', 'origin': share_origin}
             return {'Item': item}
         if sk.startswith('MEETING#'):
-            return {'Item': {'accountId': account_id, 'sharedToAccount': shared_to_account}}
+            return {'Item': {'PK': Key['PK'], 'SK': sk, 'meetingId': sk[8:], 'userId': Key['PK'][5:],
+                             'accountId': account_id, 'sharedToAccount': shared_to_account}}
         if sk.startswith('MEMBER#'):
-            return {'Item': {'role': 'TAM'}} if member_exists else {}
+            return {'Item': {'role': 'TAM', 'accountId': account_id, 'userId': sk[7:]}} if member_exists else {}
         return {}
     return get_item
 
@@ -1112,7 +1141,7 @@ class TestListSharedMeetings(unittest.TestCase):
         is_still_member['value'] = False
         result = handler._list_shared_meetings('member-1')
         self.assertEqual(result, [])
-        self.assertEqual(mock_table.query.call_count, 1, "raw share-list cache should still be warm -- no re-query needed")
+        self.assertEqual(mock_table.query.call_count, 2, "discovery must refresh even within the former cache TTL")
 
     @mock.patch.object(handler, 'table')
     def test_raw_share_list_cache_expires_and_requeries(self, mock_table):
@@ -1123,11 +1152,11 @@ class TestListSharedMeetings(unittest.TestCase):
         handler._list_shared_meetings('reader-1')
         self.assertEqual(mock_table.query.call_count, 1)
         handler._list_shared_meetings('reader-1')
-        self.assertEqual(mock_table.query.call_count, 1, "second call within TTL should hit the raw cache, not re-query")
+        self.assertEqual(mock_table.query.call_count, 2, "new grants must be discoverable without waiting for TTL")
 
         handler._shared_meetings_cache_expiry['reader-1'] = time.time() - 1
         handler._list_shared_meetings('reader-1')
-        self.assertEqual(mock_table.query.call_count, 2, "expired cache should trigger a fresh query")
+        self.assertEqual(mock_table.query.call_count, 3, "every request queries fresh identities")
 
 
 class TestKBCacheAccessSignature(unittest.TestCase):
@@ -1138,49 +1167,28 @@ class TestKBCacheAccessSignature(unittest.TestCase):
     @mock.patch.object(handler, 'bedrock_agent_runtime')
     @mock.patch.object(handler, 'table')
     def test_kb_cache_miss_when_access_changed_since_cached(self, mock_table, mock_bedrock):
-        # First call: user has access to m-1, result gets cached under that
-        # access signature.
-        mock_table.query.return_value = {'Items': [{'meetingId': 'm-1', 'ownerId': 'owner-1'}]}
-        mock_table.get_item.side_effect = make_get_item(share_origin='')
+        current = RetrievalTable()
+        current.put_item(Item={'PK': 'USER#owner-1', 'SK': 'MEETING#m-1', 'meetingId': 'm-1',
+                               'userId': 'owner-1', 'content': 'current text'})
+        current.put_item(Item={'PK': 'USER#reader-1', 'SK': 'SHARED#m-1',
+                               'ownerId': 'owner-1', 'meetingId': 'm-1'})
+        mock_table.query.side_effect = current.query
+        mock_table.get_item.side_effect = current.get_item
+        mock_table.put_item.side_effect = current.put_item
         mock_bedrock.retrieve.return_value = {'retrievalResults': [
-            {'score': 0.9, 'content': {'text': 'secret transcript excerpt'}, 'location': {'s3Location': {'uri': 's3://x'}}}
+            {'score': 0.9, 'content': {'text': 'stale indexed text'},
+             'location': {'s3Location': {'uri': 's3://synthetic/meetings/owner-1/m-1.md'}}}
         ]}
-
-        # Disable the real DynamoDB-backed KB cache reads/writes by making
-        # get_item/put_item behave like an empty cache initially.
-        cache_store = {}
-
-        def get_item(Key, **kwargs):
-            pk = Key['PK']
-            if pk.startswith('CACHE#KB#'):
-                item = cache_store.get(pk)
-                return {'Item': item} if item else {}
-            return make_get_item(share_origin='')(Key, **kwargs)
-
-        def put_item(Item):
-            cache_store[Item['PK']] = Item
-
-        mock_table.get_item.side_effect = get_item
-        mock_table.put_item.side_effect = put_item
-
         results1 = handler.retrieve_from_kb('what was discussed', user_id='reader-1')
         self.assertEqual(len(results1), 1)
-        self.assertEqual(mock_bedrock.retrieve.call_count, 1)
-
-        # Second call, same question/user, access UNCHANGED -- must hit the
-        # KB cache (no second Bedrock call).
+        first_calls = mock_bedrock.retrieve.call_count
         results2 = handler.retrieve_from_kb('what was discussed', user_id='reader-1')
         self.assertEqual(results2, results1)
-        self.assertEqual(mock_bedrock.retrieve.call_count, 1, "unchanged access should still hit the KB cache")
-
-        # Access revoked (the share is gone) -- even though the KB cache
-        # entry is still within TTL, the access signature no longer matches,
-        # so it must NOT be served; Bedrock must be called again (and the
-        # live filter now grants nothing).
-        handler._shared_meetings_cache_expiry.clear()  # force the raw list to re-query too
-        mock_table.query.return_value = {'Items': []}
+        self.assertGreater(mock_bedrock.retrieve.call_count, first_calls,
+                           "unchanged access cannot hide newly indexed terms")
+        del current.items[('USER#reader-1', 'SHARED#m-1')]
         results3 = handler.retrieve_from_kb('what was discussed', user_id='reader-1')
-        self.assertEqual(mock_bedrock.retrieve.call_count, 2, "revoked access must bypass the stale KB cache entry")
+        self.assertEqual(results3, [])
 
 
 class TestParseDetectedQuestions(unittest.TestCase):
@@ -1420,11 +1428,11 @@ class TestWebSearchRateLimit(unittest.TestCase):
 
 
 def load_tests(loader, tests, pattern):
-    # Keep the canonical CI/local command covering the independent readers.
     for module in ('test_document_context', 'test_source_contract', 'test_attachment_context',
                    'test_retrieval_helpers', 'test_source_access', 'test_legacy_text',
-                   'test_tool_history', 'test_account_reads', 'test_binary_consumer_contract',
-                   'test_request_history', 'test_tool_context'):
+                   'test_indexed_sources', 'test_manual_kb', 'test_shared_kb',
+                   'test_tool_history', 'test_account_reads', 'test_runtime_tool_history',
+                   'test_binary_consumer_contract', 'test_request_history', 'test_tool_context'):
         tests.addTests(loader.loadTestsFromName(module))
     return tests
 

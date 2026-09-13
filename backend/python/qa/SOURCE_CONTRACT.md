@@ -1,8 +1,8 @@
 # Current-source QA reader contract
 
-Code checked: 2026-09-13. The current handler does not register these helpers.
-CDK schedules `manual-only` snapshots; consumer registration and deployed
-acceptance remain separate gates. Follow
+Code checked: 2026-09-13. The prepared handler registers these helpers in both
+transports. Public consumer deployment and acceptance are pending. CDK schedules
+`manual-only` snapshots; that configuration does not prove consumer deployment. Follow
 [the rollout](../../../docs/runbooks/qa-current-source-rollout.md) before cutover.
 
 ## Reader responsibilities
@@ -116,3 +116,6 @@ AWS/model calls; public REST/streaming acceptance remains separate.
 
 [Manual bootstrap evidence](../../../docs/research/evaluations/2026-09-13-manual-kb-bootstrap/README.md)
 records producer checks, not public QA deployment or model quality.
+
+Source checks are point-in-time; model generation and stream delivery are not
+atomic with later source changes. Client live input is not saved-source proof.

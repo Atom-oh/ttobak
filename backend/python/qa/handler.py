@@ -12,6 +12,20 @@ from aws_docs import search_aws_docs
 from prompts import get_system_prompt, DETECT_QUESTIONS_PROMPT
 from tools import TOOL_DEFINITIONS, execute_tool
 from transcript_storage import resolve_transcript
+from source_context import SourceReader
+from source_access import SourceAccess
+from account_reads import StrictAccountReader
+from tool_history import CompleteRead, ToolHistory
+from tool_context import (
+    build_tool_context, track_tool_history as _track_tool_history, CLIENT_LIVE_NOTE,
+    SOURCE_HISTORY_TOOLS as SOURCE_TOOL_NAMES, PUBLIC_HISTORY_TOOLS as PUBLIC_TOOL_NAMES,
+)
+from source_revision import legacy_meeting_identity
+from attachment_context import AttachmentReader
+from indexed_retrieval import hydrate_candidates
+from session_provenance import (
+    new_source_state, restore_messages, validate_sources,
+)
 from web_search import redact_tool_input_for_log
 
 logger = logging.getLogger()
@@ -24,19 +38,11 @@ BEDROCK_MODEL_ID = os.environ.get('BEDROCK_MODEL_ID', 'global.anthropic.claude-s
 DETECT_MODEL_ID = os.environ.get('DETECT_MODEL_ID', 'qwen.qwen3-32b-v1:0')
 
 MAX_TOOL_ROUNDS = int(os.environ.get('MAX_TOOL_ROUNDS', '3'))
-# NOTE: retrieve_from_kb (below) always computes a live access signature via
-# _list_shared_meetings BEFORE consulting this cache, and _kb_cache_get
-# rejects a hit whose stored signature doesn't match the live one -- so a
-# removed member re-asking a cached question does NOT get a stale answer,
-# even within this TTL. The cache only saves the Bedrock retrieve() call
-# for a caller whose access is unchanged.
+# Only old cached meeting identities are read for migration compatibility.
+# Every request still queries the provider; cached text and empty results never
+# replace discovery or current-source hydration. No new cache entries are written.
 KB_CACHE_TTL_SECONDS = int(os.environ.get('KB_CACHE_TTL_SECONDS', '600'))
-# Bounds how long _list_shared_meetings_raw's Query results (the immutable
-# meetingId/ownerId identity of each share -- NOT any authorization
-# decision) are cached. Every authorization-relevant fact (share existence,
-# origin, the meeting's sharedToAccount, live membership) is re-checked on
-# every _list_shared_meetings call, uncached, so a removed member's very
-# next QA request sees the revocation immediately regardless of this TTL.
+# Retained legacy cache knobs/state are deliberately ignored by live discovery.
 SHARED_MEETINGS_CACHE_TTL_SECONDS = int(os.environ.get('SHARED_MEETINGS_CACHE_TTL_SECONDS', '300'))
 
 # AWS clients
@@ -46,9 +52,42 @@ s3_client = boto3.client('s3')
 dynamodb = boto3.resource('dynamodb')
 table = dynamodb.Table(TABLE_NAME)
 BUCKET_NAME = os.environ.get('BUCKET_NAME', '')
+KB_BUCKET_NAME = os.environ.get('KB_BUCKET_NAME', '')
 ORIGIN_VERIFY_SECRET = os.environ.get('ORIGIN_VERIFY_SECRET', '')
 RESEARCH_SFN_ARN = os.environ.get('RESEARCH_SFN_ARN', '')
 DAILY_RESEARCH_LIMIT = 5
+
+
+def _tool_history(user_id):
+    accounts = StrictAccountReader(table)
+    return ToolHistory(user_id, {
+        'list_meetings': lambda uid, **kw: CompleteRead(list_meetings_for_user(uid, **kw)),
+        'list_accounts': accounts.list_accounts,
+        'get_account_insights': accounts.get_account_insights,
+        'get_account_brief': accounts.get_account_brief,
+    })
+
+
+def _source_reader():
+    return SourceReader(table, s3_client, BUCKET_NAME, KB_BUCKET_NAME, _has_meeting_access)
+
+
+def _attachment_reader():
+    return AttachmentReader(_source_reader(), _query_all)
+
+
+def _source_access():
+    return SourceAccess(
+        _source_reader(), _attachment_reader(), _list_shared_meetings,
+        query_all=_query_all, provider=bedrock_agent_runtime, kb_id=KB_ID,
+        cached_meetings=lambda query, count, user, shared: _kb_cache_get(
+            query, count, user, _shared_access_signature(shared)) or [],
+    )
+
+
+def _source_is_current(user_id, dependency, source_state=None):
+    return _source_access()._source_is_current(
+        user_id, dependency, request_meeting_id=(source_state or {}).get('requestMeetingId'))
 
 
 def check_research_limit(user_id):
@@ -336,50 +375,13 @@ def _shared_access_signature(shared_meetings):
 
 def _canonical_meeting_uri(uri):
     """Only the exact exporter key is a meeting, never an upload substring."""
-    if not isinstance(uri, str):
-        return None
-    match = re.fullmatch(
-        r's3://[a-z0-9][a-z0-9.-]*/meetings/([A-Za-z0-9_-]+)/([A-Za-z0-9_-]+)\.md', uri,
-    )
-    return match.groups() if match else None
+    identity = legacy_meeting_identity(uri, KB_BUCKET_NAME)
+    return (identity['sourcePK'][5:], identity['resourceId']) if identity else None
 
 
 def _refresh_kb_meetings(candidates, user_id):
-    """Resolve index candidates against current records, including on cache hits.
-
-    No index/cached meeting text survives this boundary. Missing or revoked
-    records disappear; read failures abort visibly instead of returning stale
-    or silently incomplete data. This refresh cannot discover unindexed terms.
-    """
-    results, seen = [], set()
-    for candidate in candidates:
-        identity = _canonical_meeting_uri(candidate.get('uri'))
-        if identity is None:
-            results.append(candidate)
-            continue
-        if identity in seen:
-            continue
-        seen.add(identity)
-        owner_id, meeting_id = identity
-        try:
-            item = table.get_item(
-                Key={'PK': f'USER#{owner_id}', 'SK': f'MEETING#{meeting_id}'},
-                ProjectionExpression='meetingId, userId, accountId, sharedToAccount, #n, #c, updatedAt',
-                ExpressionAttributeNames={'#n': 'notes', '#c': 'content'},
-                ConsistentRead=True,
-            ).get('Item')
-            if not item or item.get('meetingId') != meeting_id or item.get('userId') != owner_id:
-                continue
-            if not _has_meeting_access(user_id, owner_id, meeting_id, item):
-                continue
-        except Exception as exc:
-            raise RuntimeError('Current meeting retrieval failed; cached meeting text was not used.') from exc
-        results.append({
-            'uri': candidate['uri'], 'score': candidate.get('score', 0),
-            'meeting': {'meetingId': meeting_id, 'updatedAt': item.get('updatedAt'),
-                        'notes': item.get('notes') or '', 'content': item.get('content') or ''},
-        })
-    return results
+    """Compatibility entry point; cached text always crosses the current reader."""
+    return hydrate_candidates(_source_reader(), user_id, '', candidates, {}, len(candidates))
 
 
 def _kb_cache_get(question, number_of_results, user_id=None, access_signature=None):
@@ -441,26 +443,12 @@ def _is_account_member(account_id, user_id):
         Key={'PK': f'ACCOUNT#{account_id}', 'SK': f'MEMBER#{user_id}'},
         ConsistentRead=True,
     )
-    return bool(result.get('Item'))
+    member = result.get('Item') or {}
+    return member.get('accountId') == account_id and member.get('userId') == user_id
 
 
 def _list_shared_meetings_raw(user_id):
-    """Query DynamoDB for the SET of meetings shared with this user --
-    cached for SHARED_MEETINGS_CACHE_TTL_SECONDS, but ONLY the immutable
-    identity of each share (meetingId, ownerId).
-
-    Returns list of {'meetingId', 'ownerId'}. This only saves the DynamoDB
-    Query that enumerates which Share rows exist; it deliberately does NOT
-    cache origin/accountId/sharedToAccount -- those are mutable authorization
-    inputs (a row can be deleted and recreated with a different origin; a
-    meeting's sharedToAccount can flip) and caching them let a stale
-    authorization decision survive within the TTL even though
-    _is_account_member itself was checked fresh. _list_shared_meetings
-    (below) re-fetches all of those live for every call.
-    """
-    now = time.time()
-    if _shared_meetings_cache_expiry.get(user_id, 0) > now:
-        return _shared_meetings_cache[user_id]
+    """Discover shares on every request so newly granted identities are visible."""
     from boto3.dynamodb.conditions import Key
     rows = _query_all(
         KeyConditionExpression=Key('PK').eq(f'USER#{user_id}') & Key('SK').begins_with('SHARED#'),
@@ -472,8 +460,6 @@ def _list_shared_meetings_raw(user_id):
         for item in rows
         if item.get('meetingId') and item.get('ownerId')
     ]
-    _shared_meetings_cache[user_id] = items
-    _shared_meetings_cache_expiry[user_id] = now + SHARED_MEETINGS_CACHE_TTL_SECONDS
     return items
 
 
@@ -634,84 +620,23 @@ def list_meetings_for_user(user_id, date_from=None, date_to=None, tag=None, keyw
 
 
 def retrieve_from_kb(question, number_of_results=5, user_id=None):
-    """Retrieve KB candidates, then refresh current meeting data.
-
-    There is no disabled-KB empty-success mode: on a cache miss, invalid or
-    unconfigured KB_ID and service failures surface as tool errors. The
-    existing KB_ID default and cache lookup behavior are unchanged.
-    """
-    if not user_id:
-        raise ValueError('Authenticated user is required for KB retrieval')
-    capped = min(number_of_results, 10)
-
-    # Computed unconditionally (not just on a cache miss) -- this call IS the
-    # live membership/access check. Skipping it on a would-be cache hit is
-    # exactly the bypass this signature exists to close: a cached result
-    # built from an access set that has since changed (a meeting revoked)
-    # must not be served just because the question/params match.
-    shared = _list_shared_meetings(user_id)
-    access_signature = _shared_access_signature(shared)
-
-    cached = _kb_cache_get(question, capped, user_id, access_signature)
-    if cached is not None:
-        logger.info("KB cache hit: n=%d", capped)
-        return _refresh_kb_meetings(cached, user_id)
-
-    try:
-        retrieval_config = {
-            'vectorSearchConfiguration': {
-                'numberOfResults': capped,
-            }
-        }
-        # Filter: user's personal KB + user's meeting docs + shared crawler docs + shared meetings
-        if user_id:
-            filters = [
-                {'stringContains': {'key': 'x-amz-bedrock-kb-source-uri', 'value': f'kb/{user_id}/'}},
-                {'stringContains': {'key': 'x-amz-bedrock-kb-source-uri', 'value': f'meetings/{user_id}/'}},
-                {'stringContains': {'key': 'x-amz-bedrock-kb-source-uri', 'value': 'shared/'}},
-            ]
-            # Include documents from meetings shared with this user
-            for s in shared:
-                filters.append({
-                    'stringContains': {
-                        'key': 'x-amz-bedrock-kb-source-uri',
-                        'value': f"meetings/{s['ownerId']}/{s['meetingId']}.md",
-                    }
-                })
-            retrieval_config['vectorSearchConfiguration']['filter'] = {'orAll': filters}
-        resp = bedrock_agent_runtime.retrieve(
-            knowledgeBaseId=KB_ID,
-            retrievalQuery={'text': question},
-            retrievalConfiguration=retrieval_config
-        )
-        results = []
-        for item in resp.get('retrievalResults', []):
-            score = item.get('score', 0)
-            if score >= 0.5:
-                text = item.get('content', {}).get('text', '')
-                uri = item.get('location', {}).get('s3Location', {}).get('uri', '')
-                if text or _canonical_meeting_uri(uri):
-                    results.append({'text': text, 'uri': uri, 'score': score})
-        _kb_cache_put(question, capped, results, user_id, access_signature)
-    except Exception as e:
-        # SDK exception messages can echo the query. Do not log or chain them.
-        logger.warning('KB retrieve failed (%s)', type(e).__name__)
-        raise RuntimeError('Knowledge Base retrieval failed; search results are unavailable.') from None
-    # Canonical read failures likewise reach the tool error path.
-    return _refresh_kb_meetings(results, user_id)
+    return _source_access().retrieve_from_kb(question, number_of_results, user_id)
 
 
-def load_session(session_id, user_id=None):
+def load_session(session_id, user_id=None, source_state=None):
     """Load conversation history from DynamoDB."""
     if not session_id:
         return []
     # Scope session key to user to prevent cross-user session access
     pk = f"SESSION#{user_id}#{session_id}" if user_id else f"SESSION#{session_id}"
     try:
-        result = table.get_item(Key={"PK": pk, "SK": "MESSAGES"})
+        result = table.get_item(Key={"PK": pk, "SK": "MESSAGES"}, ConsistentRead=True)
         item = result.get("Item")
         if item:
-            messages = json.loads(item.get("messages", "[]"))
+            state = source_state if source_state is not None else new_source_state()
+            messages = restore_messages(
+                item, state, lambda dep: _source_is_current(user_id, dep, state), tool_history=_tool_history(user_id),
+                source_covered_tools=SOURCE_TOOL_NAMES, public_tools=PUBLIC_TOOL_NAMES)
             # A failed/aborted round can persist history ending in a user-role
             # message, OR in an assistant message still holding an unresolved
             # toolUse block (MAX_TOOL_ROUNDS exhaustion leaves the round's
@@ -740,7 +665,7 @@ def load_session(session_id, user_id=None):
         return []
 
 
-def save_session(session_id, messages, user_id=None):
+def save_session(session_id, messages, user_id=None, source_state=None):
     """Save conversation history to DynamoDB with 7-day TTL."""
     if not session_id:
         return
@@ -750,6 +675,9 @@ def save_session(session_id, messages, user_id=None):
             "PK": pk,
             "SK": "MESSAGES",
             "messages": json.dumps(messages, ensure_ascii=False),
+            "sourceProvenanceVersion": 1,
+            "sourceDependencies": (source_state or {}).get('dependencies', []),
+            "sourceReplayable": (source_state or {}).get('replayable', False),
             "TTL": int(time.time()) + 604800,  # 7 days
         })
     except Exception as e:
@@ -802,10 +730,14 @@ def _query_all(**kwargs):
     items = []
     while True:
         resp = table.query(**kwargs)
+        if not isinstance(resp, dict) or not isinstance(resp.get('Items', []), list):
+            raise RuntimeError('Invalid source listing response')
         items.extend(resp.get('Items', []))
         lek = resp.get('LastEvaluatedKey')
         if not lek:
             break
+        if not isinstance(lek, dict) or lek == kwargs.get('ExclusiveStartKey'):
+            raise RuntimeError('Source listing did not advance')
         kwargs['ExclusiveStartKey'] = lek
     return items
 
@@ -825,6 +757,8 @@ def _user_account_metas(user_id):
     for m in members:
         acc_id = m.get('accountId')
         if not acc_id:
+            continue
+        if not _is_account_member(acc_id, user_id):
             continue
         try:
             meta = table.get_item(Key={'PK': f'ACCOUNT#{acc_id}', 'SK': 'META'}).get('Item')
@@ -1008,27 +942,31 @@ def _qa_search_context(transcript, meeting_notes):
     return '\n\n'.join(parts)
 
 
-def agentic_converse(messages, transcript=None, session_id=None, user_id=None, meeting_notes=None, meeting_id=None):
+def _agent_context(user_id, transcript, meeting_notes, source_state, source_details):
+    return build_tool_context(
+        user_id, _qa_search_context(transcript, meeting_notes), source_state, source_details,
+        source_access=_source_access(), history=_tool_history(user_id),
+        create_research=create_research_from_chat, check_research_limit=check_research_limit,
+        check_web_search_limit=check_web_search_limit)
+
+
+def agentic_converse(messages, transcript=None, session_id=None, user_id=None, meeting_notes=None, meeting_id=None,
+                     source_state=None, source_details=None):
     """Agentic tool-use loop: model decides what tools to call."""
-    context = {
-        "transcript": _qa_search_context(transcript, meeting_notes),
-        "retrieve_from_kb": lambda q, n=5: retrieve_from_kb(q, n, user_id=user_id),
-        "list_meetings": list_meetings_for_user,
-        "load_meeting_context": load_meeting_context,
-        "create_research": lambda uid, topic, mode: create_research_from_chat(uid, topic, mode),
-        "check_research_limit": check_research_limit,
-        "check_web_search_limit": check_web_search_limit,
-        "list_accounts": list_accounts_for_user,
-        "get_account_insights": get_account_insights_for_chat,
-        "get_account_brief": get_account_brief_for_chat,
-        "user_id": user_id,
-    }
+    source_state = source_state if source_state is not None else new_source_state()
+    source_details = source_details if source_details is not None else []
+    context = _agent_context(user_id, transcript, meeting_notes, source_state, source_details)
     tools_used = []
     sources = []
 
     system_messages = _qa_system_messages(transcript, meeting_notes, meeting_id)
+    if source_state.get('clientInputReceived'):
+        system_messages.append({'text': CLIENT_LIVE_NOTE})
+    if source_state.get('attachmentContext'):
+        system_messages.append({'text': _attachment_prompt(source_state['attachmentContext'])})
 
     for _ in range(MAX_TOOL_ROUNDS):
+        validate_sources(source_state, lambda dep: _source_is_current(user_id, dep, source_state), tool_history=context['tool_history'])
         try:
             resp = bedrock_runtime.converse(
                 modelId=BEDROCK_MODEL_ID,
@@ -1058,6 +996,7 @@ def agentic_converse(messages, transcript=None, session_id=None, user_id=None, m
                     # web_search.py's own logs. Other tools' inputs are
                     # meeting/account identifiers and stay loggable.
                     logger.info(f"Tool call: {tool['name']} input={json.dumps(redact_tool_input_for_log(tool['name'], tool['input']), ensure_ascii=False)}")
+                    context['sourceReadRecorded'] = False
                     try:
                         result, result_sources = execute_tool(
                             tool["name"], tool["input"], context
@@ -1067,6 +1006,7 @@ def agentic_converse(messages, transcript=None, session_id=None, user_id=None, m
                         result = f"도구 실행 중 오류가 발생했습니다: {tool['name']}"
                         result_sources = []
                     tools_used.append(tool["name"])
+                    _track_tool_history(source_state, tool['name'], context)
                     sources.extend(result_sources)
 
                     tool_results.append({
@@ -1081,12 +1021,12 @@ def agentic_converse(messages, transcript=None, session_id=None, user_id=None, m
     answer = extract_text_answer(output_message)
 
     # Save conversation
-    save_session(session_id, messages, user_id=user_id)
+    save_session(session_id, messages, user_id=user_id, source_state=source_state)
 
     # Deduplicate sources
     seen = set()
     unique_sources = []
-    for s in sources:
+    for s in sources + [detail.get('uri') for detail in source_details]:
         if s and s not in seen:
             seen.add(s)
             unique_sources.append(s)
@@ -1106,11 +1046,13 @@ def extract_text_answer(message):
 def handle_ask(question, context=None, meeting_id=None, session_id=None, user_id=None):
     """Handle POST /api/qa/ask — agentic Q&A with tool-use loop."""
     try:
-        context, meeting_notes, err = _request_meeting_context(user_id, meeting_id, context)
+        source_state, source_details = new_source_state(), []
+        context, meeting_notes, err = _request_meeting_context(
+            user_id, meeting_id, context, source_state=source_state, source_details=source_details)
         if err:
             return response(err['status'], {'error': {'code': err['code'], 'message': err['message']}})
         # Load existing conversation or start new
-        messages = load_session(session_id, user_id=user_id)
+        messages = load_session(session_id, user_id=user_id, source_state=source_state)
 
         # User message is just the question — context is in system prompt
         messages.append({"role": "user", "content": [{"text": question}]})
@@ -1122,11 +1064,14 @@ def handle_ask(question, context=None, meeting_id=None, session_id=None, user_id
             user_id=user_id,
             meeting_notes=meeting_notes,
             meeting_id=meeting_id,
+            source_state=source_state, source_details=source_details,
         )
 
         return response(200, {
             'answer': answer,
             'sources': sources,
+            'sourceDetails': source_details,
+            'toolHistoryCoverage': source_state.get('toolHistoryCoverage', []),
             'usedKB': 'search_knowledge_base' in tools_used,
             'usedDocs': 'search_aws_docs' in tools_used,
             'toolsUsed': list(set(tools_used)),
@@ -1136,83 +1081,33 @@ def handle_ask(question, context=None, meeting_id=None, session_id=None, user_id
         return response(500, {'error': {'code': 'INTERNAL_ERROR', 'message': 'Failed to generate answer'}})
 
 
-def _load_meeting_record(user_id, meeting_id):
-    """Load one canonical, freshly authorized meeting, without formatting it."""
-    if not user_id:
-        return None, {'code': 'UNAUTHORIZED', 'message': 'Authentication required', 'status': 401}
-    try:
-        result = table.get_item(
-            Key={'PK': f'USER#{user_id}', 'SK': f'MEETING#{meeting_id}'},
-            ConsistentRead=True,
-        )
-        item = result.get('Item')
-        # Shared meeting: look up ownerId from the share record
-        if not item:
-            for s in _list_shared_meetings(user_id):
-                if s['meetingId'] == meeting_id:
-                    result = table.get_item(
-                        Key={'PK': f"USER#{s['ownerId']}", 'SK': f'MEETING#{meeting_id}'},
-                        ConsistentRead=True,
-                    )
-                    candidate = result.get('Item')
-                    if _has_meeting_access(user_id, s['ownerId'], meeting_id, candidate):
-                        item = candidate
-                    break
-        if not item:
-            return None, {'code': 'NOT_FOUND', 'message': 'Meeting not found', 'status': 404}
-        return item, None
-    except Exception as e:
-        logger.error(f'Failed to fetch meeting: {e}')
-        return None, {'code': 'INTERNAL_ERROR', 'message': 'Failed to fetch meeting', 'status': 500}
+def load_meeting_context(user_id, meeting_id, *, source_state=None, source_details=None):
+    return _source_access().load_meeting_context(user_id, meeting_id, source_state=source_state, source_details=source_details)
 
 
-def _meeting_context_text(item, meeting_id, include_notes=True):
-    parts = []
-    if item.get('title'):
-        parts.append(f"제목: {item['title']}")
-    # Notes are literal text, never S3 read instructions supplied by the writer.
-    if include_notes and item.get('notes'):
-        parts.append(f"## 사용자 메모\n{item['notes']}")
-    if item.get('content'):
-        # Editable Markdown never spills to S3. Only transcript fields carry
-        # repository-owned storage references; a note is never a read command.
-        parts.append(f"## 저장된 요약\n{item['content']}")
-    selected = 'transcriptB' if item.get('selectedTranscript') == 'B' else 'transcriptA'
-    fallback = 'transcriptA' if selected == 'transcriptB' else 'transcriptB'
-    field = selected if (item.get(selected) or '').strip() else fallback
-    transcript = item.get(field)
-    if transcript and transcript.strip():
-        parts.append(f"## 트랜스크립트\n{resolve_s3_ref(transcript, meeting_id, field)}")
-    return '\n\n'.join(parts)
+def _request_meeting_context(user_id, meeting_id, supplied_context=None, *, source_state=None, source_details=None):
+    result = _source_access()._request_meeting_context(user_id, meeting_id, supplied_context, source_state=source_state, source_details=source_details)
+    if source_state is not None:
+        source_state['requestContextTracked'] = bool(
+            not result[2] and source_state['dependencies'] and source_state['replayable']
+            and (meeting_id or source_state.get('clientInputReceived', False)))
+    return result
 
 
-def load_meeting_context(user_id, meeting_id):
-    """Full saved meeting text for detail/continuation tools, or an explicit error."""
-    item, err = _load_meeting_record(user_id, meeting_id)
-    if err:
-        return None, err
-    try:
-        return _meeting_context_text(item, meeting_id), None
-    except Exception as exc:
-        logger.warning("Failed to resolve meeting context: %s", exc)
-        return None, {'code': 'INTERNAL_ERROR', 'message': 'Failed to fetch meeting', 'status': 500}
+def load_document_context(user_id, source_pk, document_id, *, source_state=None, source_details=None):
+    return _source_access().load_document_context(user_id, source_pk, document_id, source_state=source_state, source_details=source_details)
 
 
-def _request_meeting_context(user_id, meeting_id, supplied_context=None):
-    """Keep server-saved notes separate from supplied live or selected stored text."""
-    if not user_id:
-        return None, None, {'code': 'UNAUTHORIZED', 'message': 'Authentication required', 'status': 401}
-    if not meeting_id:
-        return supplied_context, None, None
-    item, err = _load_meeting_record(user_id, meeting_id)
-    if err:
-        return None, None, err
-    try:
-        text = supplied_context or _meeting_context_text(item, meeting_id, include_notes=False)
-        return text, item.get('notes', ''), None
-    except Exception as exc:
-        logger.warning("Failed to resolve meeting context: %s", exc)
-        return None, None, {'code': 'INTERNAL_ERROR', 'message': 'Failed to fetch meeting', 'status': 500}
+def _attachment_prompt(attachments):
+    return _source_access()._attachment_prompt(attachments)
+
+
+def load_meeting_attachments(user_id, meeting_id, offset=0, *, source_state=None, source_details=None):
+    return _source_access().load_meeting_attachments(user_id, meeting_id, offset, source_state=source_state, source_details=source_details)
+
+
+def load_attachment_text(user_id, meeting_id, attachment_id, unit_offset=0, text_offset=0, expected_revision=None, *, source_state=None, source_details=None):
+    return _source_access().load_attachment_text(user_id, meeting_id, attachment_id, unit_offset, text_offset, expected_revision, source_state=source_state, source_details=source_details)
 
 
 def handle_meeting_ask(question, meeting_id, user_id, session_id=None):
@@ -1220,12 +1115,14 @@ def handle_meeting_ask(question, meeting_id, user_id, session_id=None):
     if not user_id:
         return response(401, {'error': {'code': 'UNAUTHORIZED', 'message': 'Authentication required'}})
 
-    transcript, meeting_notes, err = _request_meeting_context(user_id, meeting_id)
+    source_state, source_details = new_source_state(), []
+    transcript, meeting_notes, err = _request_meeting_context(
+        user_id, meeting_id, source_state=source_state, source_details=source_details)
     if err:
         return response(err['status'], {'error': {'code': err['code'], 'message': err['message']}})
 
     try:
-        messages = load_session(session_id, user_id=user_id)
+        messages = load_session(session_id, user_id=user_id, source_state=source_state)
 
         user_content = f"[미팅 '{meeting_id}'의 트랜스크립트가 있습니다. search_transcript 도구로 검색할 수 있습니다.]\n\n{question}"
         messages.append({"role": "user", "content": [{"text": user_content}]})
@@ -1237,11 +1134,14 @@ def handle_meeting_ask(question, meeting_id, user_id, session_id=None):
             user_id=user_id,
             meeting_notes=meeting_notes,
             meeting_id=meeting_id,
+            source_state=source_state, source_details=source_details,
         )
 
         return response(200, {
             'answer': answer,
             'sources': sources,
+            'sourceDetails': source_details,
+            'toolHistoryCoverage': source_state.get('toolHistoryCoverage', []),
             'usedKB': 'search_knowledge_base' in tools_used,
             'usedDocs': 'search_aws_docs' in tools_used,
             'toolsUsed': list(set(tools_used)),
@@ -1410,13 +1310,15 @@ def handle_ask_stream(event):
         return {'status': 'gone'}
 
     try:
-        transcript, meeting_notes, err = _request_meeting_context(user_id, event.get('meetingId'), transcript)
+        source_state, source_details = new_source_state(), []
+        transcript, meeting_notes, err = _request_meeting_context(
+            user_id, event.get('meetingId'), transcript, source_state=source_state, source_details=source_details)
         if err:
             _post_ws(apigw, connection_id, {
                 'type': 'answer_error', 'sessionId': session_id, 'error': err['message'],
             })
             return {'status': 'error'}
-        messages = load_session(session_id, user_id=user_id)
+        messages = load_session(session_id, user_id=user_id, source_state=source_state)
         user_content = question
         if transcript:
             user_content = f"[현재 미팅 트랜스크립트가 있습니다. search_transcript 도구로 검색할 수 있습니다.]\n\n{question}"
@@ -1431,6 +1333,7 @@ def handle_ask_stream(event):
             connection_id=connection_id,
             meeting_notes=meeting_notes,
             meeting_id=event.get('meetingId'),
+            source_state=source_state, source_details=source_details,
         )
 
         _post_ws(apigw, connection_id, {
@@ -1438,6 +1341,8 @@ def handle_ask_stream(event):
             'sessionId': session_id,
             'answer': answer,
             'sources': sources,
+            'sourceDetails': source_details,
+            'toolHistoryCoverage': source_state.get('toolHistoryCoverage', []),
             'toolsUsed': list(set(tools_used)),
             'usedKB': 'search_knowledge_base' in tools_used,
             'usedDocs': 'search_aws_docs' in tools_used,
@@ -1486,28 +1391,24 @@ def _execute_tool_with_heartbeat(tool_name, tool_input, context, apigw, connecti
     return result, result_sources, client_gone[0]
 
 
-def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, connection_id, meeting_notes=None, meeting_id=None):
+def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, connection_id, meeting_notes=None, meeting_id=None,
+                            source_state=None, source_details=None):
     """Agentic tool-use loop using ConverseStream. Streams text deltas to the WebSocket."""
-    context = {
-        "transcript": _qa_search_context(transcript, meeting_notes),
-        "retrieve_from_kb": lambda q, n=5: retrieve_from_kb(q, n, user_id=user_id),
-        "list_meetings": list_meetings_for_user,
-        "load_meeting_context": load_meeting_context,
-        "create_research": lambda uid, topic, mode: create_research_from_chat(uid, topic, mode),
-        "check_research_limit": check_research_limit,
-        "check_web_search_limit": check_web_search_limit,
-        "list_accounts": list_accounts_for_user,
-        "get_account_insights": get_account_insights_for_chat,
-        "get_account_brief": get_account_brief_for_chat,
-        "user_id": user_id,
-    }
+    source_state = source_state if source_state is not None else new_source_state()
+    source_details = source_details if source_details is not None else []
+    context = _agent_context(user_id, transcript, meeting_notes, source_state, source_details)
     tools_used = []
     sources = []
     final_answer_parts = []
 
     system_messages = _qa_system_messages(transcript, meeting_notes, meeting_id)
+    if source_state.get('clientInputReceived'):
+        system_messages.append({'text': CLIENT_LIVE_NOTE})
+    if source_state.get('attachmentContext'):
+        system_messages.append({'text': _attachment_prompt(source_state['attachmentContext'])})
 
     for _ in range(MAX_TOOL_ROUNDS):
+        validate_sources(source_state, lambda dep: _source_is_current(user_id, dep, source_state), tool_history=context['tool_history'])
         try:
             stream_resp = bedrock_runtime.converse_stream(
                 modelId=BEDROCK_MODEL_ID,
@@ -1568,7 +1469,7 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
                         try:
                             current_block['toolUse']['input'] = json.loads(raw_input) if raw_input else {}
                         except json.JSONDecodeError:
-                            logger.warning(f"Tool input JSON parse failed: {raw_input!r}")
+                            logger.warning("Tool input JSON parse failed; input omitted")
                             current_block['toolUse']['input'] = {}
                     assembled_content.append(current_block)
                     current_block = None
@@ -1599,6 +1500,7 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
                     continue
                 tool = block['toolUse']
                 logger.info(f"Tool call (stream): {tool['name']}")
+                context['sourceReadRecorded'] = False
                 # Tool execution (KB retrieve, research kickoff, etc.) sends
                 # no answer_delta, so the client's stall watchdog would
                 # otherwise go un-rearmed and time out a perfectly healthy
@@ -1621,6 +1523,7 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
                     result = f"도구 실행 중 오류가 발생했습니다: {tool['name']}"
                     result_sources = []
                 tools_used.append(tool['name'])
+                _track_tool_history(source_state, tool['name'], context)
                 sources.extend(result_sources)
                 tool_results.append({
                     'toolResult': {
@@ -1638,11 +1541,11 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
                 # on a socket nothing is listening on.
                 break
 
-    save_session(session_id, messages, user_id=user_id)
+    save_session(session_id, messages, user_id=user_id, source_state=source_state)
 
     seen = set()
     unique_sources = []
-    for s in sources:
+    for s in sources + [detail.get('uri') for detail in source_details]:
         if s and s not in seen:
             seen.add(s)
             unique_sources.append(s)
