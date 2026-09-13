@@ -56,24 +56,38 @@ export function AISummaryCard({ content, summary, transcriptA, onSave, onDirtyCh
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const latestHTML = useRef('');
   const savedHTML = useRef('');
+  const savesInFlight = useRef(0);
+  const failedSave = useRef(false);
   const [dirty, setDirty] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const markDirty = useCallback((value: boolean) => { setDirty(value); onDirtyChange?.(value); }, [onDirtyChange]);
+  const handleContentApplied = useCallback((html: string) => {
+    latestHTML.current = html;
+    savedHTML.current = html;
+    failedSave.current = false;
+    setSaveError(null);
+    setSavedAt(null);
+    markDirty(false);
+  }, [markDirty]);
 
   const handleAutoSave = useCallback(async (html: string) => {
     if (!onSave) return;
+    savesInFlight.current++;
+    failedSave.current = false;
+    markDirty(true);
     setSaving(true);
     setSaveError(null);
     try {
       await onSave(normalizeMarkdown(turndown.turndown(html)));
       savedHTML.current = html;
-      markDirty(latestHTML.current !== html);
       setSavedAt(new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }));
     } catch (error) {
-      markDirty(true);
+      failedSave.current = true;
       setSaveError(error instanceof Error ? error.message : '요약을 저장하지 못했습니다.');
     } finally {
-      setSaving(false);
+      savesInFlight.current--;
+      setSaving(savesInFlight.current > 0);
+      markDirty(failedSave.current || savesInFlight.current > 0 || latestHTML.current !== savedHTML.current);
     }
   }, [onSave, markDirty]);
 
@@ -112,7 +126,12 @@ export function AISummaryCard({ content, summary, transcriptA, onSave, onDirtyCh
         <MeetingEditor
           content={marked.parse(rawText, { async: false }) as string}
           readOnly={interactionLocked}
-          onChange={(html) => { latestHTML.current = html; markDirty(html !== savedHTML.current); }}
+          preserveDraft={dirty || saving}
+          onContentApplied={handleContentApplied}
+          onChange={(html) => {
+            latestHTML.current = html;
+            markDirty(failedSave.current || savesInFlight.current > 0 || html !== savedHTML.current);
+          }}
           onAutoSave={handleAutoSave}
           autoSaveDelay={3000}
         />

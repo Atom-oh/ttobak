@@ -292,6 +292,7 @@ function MeetingDetailContent() {
   const { isAuthenticated, isLoading: authLoading } = useAuth();
   const [meeting, setMeeting] = useState<MeetingDetail | null>(null);
   const [summarySave, setSummarySave] = useState<{ revision: number; hasContent: boolean } | null>(null);
+  const summaryRevisionRef = useRef(0);
   const [indexRevision, setIndexRevision] = useState(0);
   const [summaryDirty, setSummaryDirty] = useState(false);
   const [titleDirty, setTitleDirty] = useState(false);
@@ -324,6 +325,7 @@ function MeetingDetailContent() {
   );
   const applyResummary = useCallback((content: string) => {
     if (isResummaryDirty()) return;
+    summaryRevisionRef.current++;
     setMeeting((current) => current?.meetingId === meetingId ? { ...current, content, summary: undefined } : current);
     setSummarySave((current) => ({ revision: (current?.revision ?? 0) + 1, hasContent: !!content.trim() }));
     setIndexRevision((value) => value + 1);
@@ -520,11 +522,13 @@ function MeetingDetailContent() {
               onSave={async (speakerMap) => {
                 await meetingsApi.updateSpeakers(meeting.meetingId, speakerMap);
                 setIndexRevision((value) => value + 1);
+                const summaryRevision = summaryRevisionRef.current;
                 const refreshed = await meetingsApi.get(meeting.meetingId);
                 setMeeting((current) => current?.meetingId === meeting.meetingId ? {
                   ...current, ...(refreshed as MeetingDetail),
                   // The user may have started editing while either request was pending.
-                  ...(dirtyRef.current.summary ? { content: current.content, summary: current.summary } : {}),
+                  ...(dirtyRef.current.summary || summaryRevision !== summaryRevisionRef.current
+                    ? { content: current.content, summary: current.summary } : {}),
                   ...(dirtyRef.current.transcript ? {
                     transcriptA: current.transcriptA,
                     transcriptB: current.transcriptB,
@@ -539,10 +543,12 @@ function MeetingDetailContent() {
               audioPartCount={meeting.audioPartCount}
               onRediarize={async (speakerCount) => {
                 await meetingsApi.rediarize(meeting.meetingId, speakerCount);
+                const summaryRevision = summaryRevisionRef.current;
                 const refreshed = await meetingsApi.get(meeting.meetingId);
                 setMeeting((current) => current?.meetingId === meeting.meetingId ? {
                   ...current, ...(refreshed as MeetingDetail),
-                  ...(dirtyRef.current.summary ? { content: current.content, summary: current.summary } : {}),
+                  ...(dirtyRef.current.summary || summaryRevision !== summaryRevisionRef.current
+                    ? { content: current.content, summary: current.summary } : {}),
                   ...(dirtyRef.current.transcript ? {
                     transcriptA: current.transcriptA,
                     transcriptB: current.transcriptB,
@@ -579,8 +585,10 @@ function MeetingDetailContent() {
                   interactionLocked={resummary.action === 'load'}
                   onSave={canEdit ? async (content) => {
                     await meetingsApi.update(meeting.meetingId, { content });
-                    // An acknowledged autosave must not replace newer text still
-                    // being typed in the editor. Notify analysis separately.
+                    // Publish the saved snapshot; AISummaryCard keeps newer typing local.
+                    summaryRevisionRef.current++;
+                    setMeeting((current) => current?.meetingId === meeting.meetingId
+                      ? { ...current, content, summary: undefined } : current);
                     setSummarySave((current) => ({ revision: (current?.revision ?? 0) + 1, hasContent: !!content.trim() }));
                     setIndexRevision((value) => value + 1);
                   } : undefined}
@@ -703,10 +711,15 @@ function MeetingDetailContent() {
                   meetingId={meeting.meetingId}
                   onAttachmentsChanged={async () => {
                     try {
+                      const summaryRevision = summaryRevisionRef.current;
                       const data = await meetingsApi.get(meeting.meetingId);
                       const attachments = normalizeAttachments(data.attachments);
                       setMeeting((current) => current?.meetingId === meeting.meetingId
-                        ? { ...current, attachments } : current);
+                        ? {
+                          ...current, attachments,
+                          ...(!dirtyRef.current.summary && summaryRevision === summaryRevisionRef.current
+                            ? { content: (data as MeetingDetail).content, summary: (data as MeetingDetail).summary } : {}),
+                        } : current);
                     } catch (err) {
                       console.error('Failed to refresh meeting:', err);
                       throw new Error('첨부 목록을 새로 불러오지 못했습니다. 파일 창을 닫고 페이지를 다시 확인해 주세요.');
