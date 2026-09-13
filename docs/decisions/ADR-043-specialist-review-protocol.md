@@ -24,3 +24,10 @@ unconditional chair call. Existing security, source-custody, context, ownership
 and budget decisions remain in force.
 See [the module contract](../../scripts/pr-review/README.md) for current interfaces
 and offline checks. Model access and production execution require separate evidence.
+
+A scope containing only files excluded by the existing, base-approved project
+input policy may complete as NOT_APPLICABLE with a PASS gate result. The trusted
+collector must account for every path and record the policy hash; the report
+identifies excluded paths and claims no model review. Any reviewable source,
+unknown exclusion, source omission or failed collector remains blocking. New
+exclusions require their own reviewed policy change.
