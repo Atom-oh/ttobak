@@ -77,8 +77,8 @@ model. Browsers also use authenticated Cognito/Transcribe SDK calls and signed S
 PUTs. Native finished audio uploads stream directly from disk in Rust; live PCM
 crosses IPC for captions. The public-document route is the single intentional
 unauthenticated application GET and still validates a revocable share token.
-Extraction's event target and worker exist, but API producers/consumers remain
-staged. The KB schedule is enabled in the app's manual-only configuration;
+Extraction's event target/worker, API producers and summary consumer are wired;
+QA/UI activation remains separate. The KB schedule is enabled in the app's manual-only configuration;
 the dotted canonical stream is created only in all mode. These are repository
 capabilities and configuration, not assertions about deployed activation.
 
@@ -126,8 +126,8 @@ Attachment extraction supports bounded native text from PDF/PPTX/DOCX/Markdown.
 Canonical ATTACH#/ATTEXT# identities, run/lease and ETag checks bind immutable
 result JSON. Partial/failed attempts remain distinct from retained previous
 results; document locations never imply audio times. Go queue/read services,
-the isolated Python worker and QA reader helpers exist; API upload/retry wiring
-and summary/QA integration remain staged.
+the isolated Python worker and QA reader helpers exist. Upload/retry/status/text
+routes and verified DOCUMENT summary input are wired; QA activation is separate.
 
 Canonical indexing can project saved meetings and personal/account documents
 into immutable canonical/v1/ objects, using current source revisions and pinned

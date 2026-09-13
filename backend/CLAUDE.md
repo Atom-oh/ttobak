@@ -35,9 +35,10 @@ permissions must be inspected before alleging an authorization bypass.
   note-only evidence cannot generate transcript anchors or invented agreements.
 - Attachment queue/status/read services bind canonical ATTACH#/ATTEXT# rows,
   owner/uploader, run/lease and original ETag to immutable extraction results.
-  Attempt status differs from retained-result completeness. The API does not yet
-  instantiate these services or register attachment-text/resummary routes;
-  upload/summary integration remains staged.
+  Attempt status differs from retained-result completeness. Upload completion and
+  attachment text/status/retry routes instantiate these services; the summary
+  provider consumes verified DOCUMENT text. Saved re-summary routes are a separate
+  dependent change. Code wiring does not establish deployed acceptance.
 - Canonical index workers reread identities, bind source/S3 revisions and coalesce
   full S3 sync. Do not equate job acceptance/partial status with indexed documents.
   The app currently enables manual-only scheduling; all-mode canonical delivery

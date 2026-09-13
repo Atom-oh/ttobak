@@ -1,10 +1,30 @@
 # Meeting document / summary rollout
 
-Host controls merge/deploy. Order: verified worker (`34717614426`) → batch
-foundation → document wiring → saved-summary consumer/rule → API → UI.
-Worker acceptance does not prove integrated API/summary/QA behavior.
-Use CLAUDE.md build commands with the host's Go path; deploy only
-`TtobakGatewayStack --exclusively`. No IAM/env change here; never `--all`.
+Host controls merge/deploy; merging deploys production. Worker `34717614426` is
+verified; public API/EventBridge/summary/QA acceptance remains separate.
+
+The guarded-summary foundation must precede attachment API/summary wiring.
+Its source guards and tests must remain present in the integrated release. The host verified worker deployment `34717614426`
+SUCCESS: synthetic 626-byte native PDF → 752-byte JSON, page 1 and exact ETag/identity,
+distinct owner/uploader, succeeded/complete/lease zero, duplicate ignored. Three
+synthetic rows and two exact S3 versions were removed and absence rechecked.
+This proves worker/IAM behavior, not API/EventBridge/summary/QA end-to-end behavior.
+
+Order: batch foundation → attachment wiring → saved-summary storage/consumer/rule
+→ its API → frontend. DOCUMENT collection requires provider injection.
+This wiring injects that provider into API/summarize. Saved-summary state and its
+source/state deletion transaction ship together in the following release.
+Build both changed bootstraps from the repository root using canonical commands:
+
+```bash
+(cd backend && GOOS=linux GOARCH=arm64 /usr/local/go/bin/go build -tags lambda.norpc -o cmd/api/bootstrap ./cmd/api)
+(cd backend && GOOS=linux GOARCH=arm64 /usr/local/go/bin/go build -tags lambda.norpc -o cmd/summarize/bootstrap ./cmd/summarize)
+(cd infra && npx cdk deploy TtobakGatewayStack --exclusively)
+```
+
+Deployment remains host-controlled; never use `--all`. The existing API default-bus
+PutEvents and summarize table/bucket grants cover this wiring; no IAM/env change is
+required by the attachment API patch.
 
 Batch recovery regenerates fresh inputs without STT. Durable retry maximum is 2;
 Lambda currently also defaults to two async retries. Failed reads/runs release
@@ -30,3 +50,5 @@ Inspect Lambda Errors and DynamoDB conflict codes; the UI sees `status=error`.
 Rollback: revert/redeploy, preserving readers/workers and ambiguous spills.
 Bounds: 8 MiB/source, 1 MiB snapshot, 300 KiB row, 22 objects, 100 checks.
 [ADR-040](../decisions/ADR-040-guarded-summary-publication.md).
+
+DOCUMENT input also caps 20 documents, 50 units and 16/64 KiB per-document/total.

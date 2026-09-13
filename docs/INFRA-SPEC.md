@@ -165,9 +165,9 @@ conditions. These prefix/table grants span users, so canonical checks remain
 essential. Logs retain 30 days; event delivery retries three times within five
 minutes to a seven-day encrypted DLQ, with Lambda async retries disabled.
 
-Deploy/verify the worker before upload/retry producers, then consumers. The current
-API does not wire its queue/read services, and summary/QA integration remains
-staged; creating this construct does not backfill attachments. See
+Deploy/verify the worker before the wired API upload/retry producers and summary
+consumer. API status/text routes expose validated results; QA/UI activation remains
+separate. Creating this construct does not backfill attachments. See
 [worker contract](../backend/python/document-extract/LAMBDA.md) and ADR-039.
 
 ## Whisper and research
