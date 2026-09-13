@@ -186,6 +186,21 @@ class TestHistoryDetailContinuity(_SourceFixture, _QAConversationFixture, unitte
         self.assertEqual(history_details.restore([dep], '[{"uri":"\\ud800"}]', 'knowledge', 'assets')[0]
                          ['provenanceScope'], 'legacy_identity')
 
+    def test_attachment_inventory_receipt_does_not_become_a_content_citation(self):
+        meeting = {'sourcePK': 'USER#owner', 'sourceSK': 'MEETING#m',
+                   'sourceRevision': 'a' * 64}
+        inventory = dict(meeting, attachmentId='*', sourceRevision='b' * 64)
+        attachment = dict(meeting, attachmentId='a', sourceRevision='c' * 64)
+        dependencies = [meeting, inventory, attachment]
+        restored = history_details.restore(dependencies, None, 'knowledge', 'assets')
+        self.assertEqual([item['resourceKind'] for item in restored],
+                         ['meeting', 'meetingAttachment'])
+        self.assertEqual([item['resourceId'] for item in restored], ['m', 'a'])
+        self.assertFalse(any('/attachments/*' in item.get('uri', '') for item in restored))
+        # Inventory remains a validation dependency, including for empty lists.
+        self.assertEqual(dependencies[1], inventory)
+        self.assertEqual(history_details.restore([inventory], '[]', 'knowledge', 'assets'), [])
+
     def test_private_and_shared_binary_details_bind_original_key_revision_and_scope(self):
         for shared in (False, True):
             key = 'shared/test/file.docx' if shared else 'kb/reader/file.pdf'

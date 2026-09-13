@@ -36,6 +36,9 @@ def binding(user_id, session_id, messages, dependencies, payload):
 
 
 def identity_detail(dependency, kb_bucket):
+    if dependency.get('attachmentId') == '*':
+        # An inventory detects added/removed files, but contains no cited body.
+        return None
     revision = dependency.get('sourceRevision')
     detail = {'sourceRevision': revision, 'contentSource': 'validated_history_identity',
               'provenanceScope': 'legacy_identity'}
@@ -58,8 +61,7 @@ def identity_detail(dependency, kb_bucket):
         detail['uri'] = 'ttobak://source/' + identity['resourceHash']
         if dependency.get('attachmentId'):
             attachment_id = dependency['attachmentId']
-            detail.update(resourceKind='meetingAttachmentInventory' if attachment_id == '*' else 'meetingAttachment',
-                          resourceId=identity['resourceId'] if attachment_id == '*' else attachment_id,
+            detail.update(resourceKind='meetingAttachment', resourceId=attachment_id,
                           meetingId=identity['resourceId'], attachmentId=attachment_id)
             detail['uri'] += '/attachments/' + attachment_id
     else:
