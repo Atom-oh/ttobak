@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useCallback, useSyncExternalStore } from 'react';
 import { qaApi } from '@/lib/api';
 import { RealtimeWebSocket, type WebSocketMessage } from '@/lib/websocket';
+import { getRuntimeConfig, runtimeWebSocketUrl } from '@/lib/runtimeConfig';
 import {
   claimedProactiveQuestions,
   proactiveAttemptCounts,
@@ -50,8 +51,6 @@ const suggestedQuestions = [
   '핵심 키워드 정리해줘',
 ];
 
-const WS_URL = process.env.NEXT_PUBLIC_WEBSOCKET_URL || '';
-
 // Cross-instance proactive-search state (claim set, batch/in-flight guards,
 // opt-in store) lives in lib/proactiveSearch.ts — both panel instances (the
 // desktop aside and the mobile bottom sheet) stay mounted simultaneously
@@ -70,6 +69,7 @@ function truncateToUtf8ByteLimit(text: string | undefined, maxBytes: number): st
 }
 
 export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsChange, serverDetectedQuestions, proactiveBatch, onAskedQuestion, onSaveToNotes }: LiveQAPanelProps) {
+  const [wsUrl, setWsUrl] = useState('');
   const [question, setQuestion] = useState('');
   const [qaHistory, setQaHistory] = useState<QAEntry[]>([]);
   const [isAsking, setIsAsking] = useState(false);
@@ -81,6 +81,11 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
   const [askedQuestions, setAskedQuestions] = useState<string[]>([]);
   const wsRef = useRef<RealtimeWebSocket | null>(null);
   const activeEntryIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    getRuntimeConfig().then(cfg => { if (active) setWsUrl(runtimeWebSocketUrl(cfg.wsUrl)); });
+    return () => { active = false; };
+  }, []);
   // Proactive-search opt-in, synchronized across panel instances via the
   // module-level store (see proactiveSearchStore's comment). Server snapshot
   // is false so the static export renders the safe default.
@@ -310,20 +315,23 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
   }, [armWatchdog, clearWatchdog, meetingId, rollbackProactiveClaim, recordProactiveAsked]);
 
   const ensureWebSocket = useCallback(async (): Promise<RealtimeWebSocket | null> => {
-    if (!WS_URL) return null;
+    if (!wsUrl) return null;
     if (wsRef.current?.isConnected) return wsRef.current;
 
-    const ws = new RealtimeWebSocket(WS_URL, handleStreamMessage, () => {
-      wsRef.current = null;
+    const ws = new RealtimeWebSocket(wsUrl, handleStreamMessage, () => {
+      if (wsRef.current === ws) wsRef.current = null;
     });
+    wsRef.current = ws;
     try {
       await ws.connect();
-      wsRef.current = ws;
+      if (wsRef.current !== ws) { ws.disconnect(); return null; }
       return ws;
     } catch {
+      if (wsRef.current === ws) wsRef.current = null;
+      ws.disconnect();
       return null;
     }
-  }, [handleStreamMessage]);
+  }, [wsUrl, handleStreamMessage]);
 
   // Cleanup WebSocket + watchdog on unmount. Pending proactive claims are
   // rolled back too: the mobile sheet unmounts on close (conditional

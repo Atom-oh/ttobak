@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { qaApi, chatApi } from '@/lib/api';
-import { getRuntimeConfig } from '@/lib/runtimeConfig';
+import { getRuntimeConfig, runtimeWebSocketUrl } from '@/lib/runtimeConfig';
 import { RealtimeWebSocket, type WebSocketMessage } from '@/lib/websocket';
 import { QAChatMessage } from '@/components/qa';
 import type { ChatSession } from '@/types/meeting';
@@ -32,7 +32,7 @@ const suggestedQuestions = [
 export function ChatClient() {
   const router = useRouter();
   const { user, isLoading, isAuthenticated } = useAuth();
-  const [wsUrl, setWsUrl] = useState(process.env.NEXT_PUBLIC_WEBSOCKET_URL || '');
+  const [wsUrl, setWsUrl] = useState('');
 
   const [question, setQuestion] = useState('');
   const [chatHistory, setChatHistory] = useState<ChatEntry[]>([]);
@@ -63,7 +63,9 @@ export function ChatClient() {
   const sessionsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    getRuntimeConfig().then(cfg => { if (cfg.wsUrl) setWsUrl(cfg.wsUrl); });
+    let active = true;
+    getRuntimeConfig().then(cfg => { if (active) setWsUrl(runtimeWebSocketUrl(cfg.wsUrl)); });
+    return () => { active = false; };
   }, []);
 
   // Auth guard
@@ -159,13 +161,16 @@ export function ChatClient() {
     if (wsRef.current?.isConnected) return wsRef.current;
 
     const ws = new RealtimeWebSocket(wsUrl, handleStreamMessage, () => {
-      wsRef.current = null;
+      if (wsRef.current === ws) wsRef.current = null;
     });
+    wsRef.current = ws;
     try {
       await ws.connect();
-      wsRef.current = ws;
+      if (wsRef.current !== ws) { ws.disconnect(); return null; }
       return ws;
     } catch {
+      if (wsRef.current === ws) wsRef.current = null;
+      ws.disconnect();
       return null;
     }
   }, [wsUrl, handleStreamMessage]);

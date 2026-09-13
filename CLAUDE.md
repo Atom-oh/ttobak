@@ -200,6 +200,11 @@ ScreenCaptureKit. Report that limit instead of claiming a Mac build passed.
   staged cutover, not implied by merged helper PRs. Never flip to `all` before
   deployed snapshot/provider verification and strict-consumer readiness (ADR-038).
   Status APIs/UI and conditional job/retry state exist independently of activation.
+- **WebSocket QA:** runtime `wsUrl: "/ws"` resolves against the current site.
+  CloudFront rewrites it to the existing production WS stage and injects an
+  origin proof. `$connect` requires that proof and a verified Cognito JWT;
+  ws-authorizer reads the proof from Secrets Manager using only an ARN in env.
+  Never expose the proof in public config or restore a direct-origin URL fallback.
 - **Batch summaries ([ADR-040](docs/decisions/ADR-040-guarded-summary-publication.md)):**
   CAS pins source presence/bytes and human text. Fresh runs reset the two-retry
   budget when `!pending || status != summarizing`; resumed runs never reset it.
@@ -258,10 +263,10 @@ ScreenCaptureKit. Report that limit instead of claiming a Mac build passed.
 No new public application origins: route application HTTP traffic through
 CloudFront; no public ALB/NLB, `AuthType: NONE` Lambda URL, public S3 bucket, or
 Route53 record pointing directly to compute. Keep S3 Block Public Access and OAC.
-Authenticated AWS SDK calls (Cognito/Transcribe), existing signed S3 uploads, and
-the authenticated WebSocket transport are existing service integrations, not
-permission to add public application routes. Do not generalize the public-doc
-exception.
+Authenticated AWS SDK calls (Cognito/Transcribe), existing signed S3 uploads and
+IAM-signed server callbacks are service integrations, not permission to add public
+application routes. Browser WebSocket ingress also uses CloudFront; its origin
+requires proof plus JWT on connection. Do not generalize the public-doc exception.
 
 Cognito self-signup must remain disabled. AdminCreateUser is the entry gate;
 the pre-signup domain allowlist is supplemental. The exact approved

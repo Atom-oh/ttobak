@@ -1,6 +1,7 @@
 'use client';
 
 import { getIdToken } from './auth';
+import { runtimeWebSocketUrl } from './runtimeConfig';
 
 export interface WebSocketMessage {
   type:
@@ -50,9 +51,11 @@ export class RealtimeWebSocket {
   }
 
   async connect(): Promise<void> {
+    const endpoint = runtimeWebSocketUrl(this.url);
+    if (!endpoint) throw new Error('WebSocket endpoint unavailable');
     const token = getIdToken();
     if (!token) throw new Error('No auth token');
-    const wsUrl = `${this.url}?token=${encodeURIComponent(token)}`;
+    const wsUrl = `${endpoint}?token=${encodeURIComponent(token)}`;
 
     return new Promise((resolve, reject) => {
       this.ws = new WebSocket(wsUrl);
