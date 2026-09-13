@@ -73,7 +73,8 @@ match the actual loaded origin; do not add speculative origins.
 ## Leftovers and power
 
 Startup adopts regular WAV files under allowed_dir(), rejects symlinks, and purges
-files older than 48 hours at startup (not continuously). Both recorded_paths and
+files whose known age is at least 48 hours at startup (not continuously).
+Unreadable/future modification times may be adopted. Both recorded_paths and
 adopted_paths are needed. The UI lists only adopted leftovers and requires per-file
 confirmation naming the cross-account caveat. Files are scoped to a macOS user,
 not the Cognito user who recorded them; account binding remains an accepted gap.

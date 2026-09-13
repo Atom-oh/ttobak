@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 17fb66bac737 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 137b1240c366 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
 # TTOBAK review context
 
 Shared by Codex, Kiro, and the CI review panel. Extracted from the
@@ -265,7 +265,7 @@ exposure:
 |---|---|
 | Meeting file integration is staged | Parser/worker and attachment result state exist (ADR-039); current API producers and summary/QA integration remain staged. AudioUploader KB copy and recording-page manual copy do not establish summary grounding. |
 | convert-doc reads cross-tenant `docs/*` and `docs-pdf/*` | ADR-022; docs-pdf read/write supports conditional source-bound preview replacement. Isolated subnet, no NAT, child strips AWS_*; per-trigger key scoping remains an improvement. |
-| Mac leftover WAV adoption is per macOS user, not Cognito account | ADR-024; regular files, 48-hour retention, per-file confirmation naming the caveat. Account binding remains absent. |
+| Mac leftover WAV adoption is per macOS user, not Cognito account | ADR-024; regular files, best-effort cleanup of known ages at least 48h (unknown/future mtimes may survive), per-file confirmation naming the caveat. Account binding remains absent. |
 | Manual QA search can send model-composed meeting-derived queries externally | ADR-028; prompt constraints and hashed logs do not eliminate egress. |
 | Sign-out/disable/delete does not immediately revoke locally verified issued JWTs | ADR-032; refresh revocation is different from access/ID token expiry. |
 | User deletion preserves old profile/data | ADR-032; removes email GSI keys; refresh-token use does not update lastLoginAt. |

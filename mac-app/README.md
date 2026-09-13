@@ -29,7 +29,9 @@ Wait for upload completion before closing the lid. Idle-sleep prevention does no
 block explicit/lid-close sleep. Upload failures retain the WAV for retry; delete
 only after the application's upload-complete step succeeds.
 
-Startup can recover regular WAVs up to 48 hours old. These leftovers belong to the
+Startup recovers regular WAVs and best-effort removes files with a known age of
+at least 48 hours. Unreadable/future timestamps may still be adopted; this is not
+a hard retention cutoff. These leftovers belong to the
 macOS user directory, not a specific TTOBAK login. Confirm the file before uploading
 or deleting it on a shared Mac. Force Quit may leave only the last flushed audio;
 graceful exit has a separate finalization path.

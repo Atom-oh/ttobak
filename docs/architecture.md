@@ -66,7 +66,7 @@ flowchart TB
   Index --> DB
   Index --> Bedrock
   DB -.->|Canonical stream only in all mode| Index
-  Crawl --> Assets
+  Crawl --> Knowledge
   QA --> DB
   QA --> Bedrock
   QA --> Search

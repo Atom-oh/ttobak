@@ -32,10 +32,24 @@ key-only or one-package revert; see ADR-035.
 
 ## Frontend
 
-Build with `npm run build` in `frontend/`. The workflow preserves `config.json`,
-which CDK generates separately, and re-uploads all HTML to avoid stale chunk
-references after asset deletion. It then invalidates CloudFront. Retain all three
-steps; a bare `aws s3 sync --delete` breaks runtime auth configuration.
+Build with `npm run build` in `frontend/`. The current workflow preserves the
+CDK-generated `config.json` during S3 sync and invalidates CloudFront. It does not
+perform an unconditional HTML copy or set no-cache metadata: forced HTML refresh
+remains a release requirement and a workflow gap, not implemented CI behavior.
+A bare sync without the config exclusion breaks runtime auth configuration.
+
+For an authorized manual release, insert the following after sync and before
+invalidation, with TTOBAK_SITE_BUCKET set to the verified target bucket:
+
+```bash
+aws s3 cp frontend/out/ "s3://${TTOBAK_SITE_BUCKET:?set the verified site bucket}/" \
+  --recursive --exclude "*" --include "*.html" \
+  --content-type "text/html; charset=utf-8" --cache-control "no-cache"
+```
+
+This forces HTML to reference the uploaded chunks even when sync would skip an
+equal-size file. Preserve config.json and use the target distribution's
+invalidation; do not infer that running the unchanged workflow adds this step.
 
 Verify `/config.json`, current HTML and the JS/CSS chunks referenced by that HTML
 through CloudFront. A successful upload alone does not prove the site is usable.

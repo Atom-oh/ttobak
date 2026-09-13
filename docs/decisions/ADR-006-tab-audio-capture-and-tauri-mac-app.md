@@ -47,8 +47,9 @@ Preserve ADR-024's exact S3-host pin, path containment, recorder-lock/FFI separa
 RAII start reservation, and bounded upload waits. These are current constraints,
 not optional elements of the original sketch.
 
-Crash leftovers are adopted at startup only when within the 48-hour retention
-window, with per-file confirmation. They are scoped to the macOS user's directory,
+Startup best-effort deletes leftovers whose known age is at least 48 hours;
+unreadable/future modification times may still be adopted. This is not a hard
+retention cutoff or continuous sweep. Upload/delete requires per-file confirmation. They are scoped to the macOS user's directory,
 **not** the Cognito account: a subsequent SPA login can access another login's
 leftover. That is an accepted residual risk, not fixed by the confirmation dialog.
 Ad-hoc `codesign --deep` is existing distribution debt; the Tauri CSP setting must
