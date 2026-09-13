@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 3bc6128c13fa · generated-at: 2026-09-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 3bc6128c13fa · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
 # TTOBAK review context
 
 Shared by Codex, Kiro, and the CI review panel. Extracted from the
@@ -304,10 +304,12 @@ Existing IaC discrepancies (public AOSS declaration, optional origin-verificatio
 configuration, and retention/encryption gaps) are documented in INFRA-SPEC.md;
 they are not blanket approved exceptions or proof the live deployment complies.
 
-## Current PR review
+## Specialist PR review
 
-One applicable specialist responsibility per model; see `docs/pr-review-specialists.md`.
-Codex and Claude cover the complete change boundary across model families.
-Kiro handles AWS and operational roles selected by trusted routing. Missing,
-failed or truncated required coverage blocks. Only complete uncontested reports
-skip model-based chair synthesis. Earlier matrix/dropout rules are superseded.
+CI enables `ROLE_REVIEW=1`: one applicable responsibility per model instead of
+repeating every lens. See [the current review contract](docs/pr-review-specialists.md).
+Codex and Claude retain full change-boundary checks from independent model families;
+Kiro covers AWS and operational responsibilities when applicable. Trusted routing
+owns NOT_APPLICABLE. Failed or incomplete required output is never a clean review.
+The chair adjudicates substantive candidates; it cannot waive coverage failures.
+This section supersedes earlier matrix-count and permissive dropout descriptions.
