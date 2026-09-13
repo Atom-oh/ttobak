@@ -565,6 +565,9 @@ func generateSummary(ctx context.Context, meeting *model.Meeting, priorContext s
 
 	content, err := bedrockService.SummarizeTranscript(ctx, meetingID, userID, priorContext)
 	if err != nil {
+		if meeting.SummaryRetryPending {
+			return err // The owning retry claim decides pending versus terminal.
+		}
 		if errors.Is(err, service.ErrSummaryConflict) {
 			log.Printf("Summary source conflict for meeting %s; retry pending", meetingID)
 			return err // Lambda redelivery claims the marker and generates afresh.

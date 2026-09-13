@@ -10,9 +10,12 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
+	"github.com/ttobak/backend/internal/service"
 )
 
 type retryHTTP func(*http.Request) (*http.Response, error)
@@ -20,18 +23,25 @@ type retryHTTP func(*http.Request) (*http.Response, error)
 func (f retryHTTP) Do(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestSummaryRetryHandlerRecovery(t *testing.T) {
-	for _, changed := range []bool{false, true} {
-		t.Run(map[bool]string{false: "status-write-failure", true: "status-changed"}[changed], func(t *testing.T) {
+	for _, mode := range []string{"status", "changed", "model", "source", "marker"} {
+		t.Run(mode, func(t *testing.T) {
+			changed := mode == "changed"
 			current := model.Meeting{UserID: "owner", MeetingID: "m", Status: model.StatusError,
-				SummaryRetryAttempts: 2, SummaryConflictCode: "RETRY_EXHAUSTED", Notes: "보존할 메모"}
-			writes, claim := 0, ""
+				SummaryRetryAttempts: 2, SummaryConflictCode: "RETRY_EXHAUSTED", Notes: "보존할 메모", TranscriptA: "발언 근거"}
+			if mode == "source" {
+				current.TranscriptA = "s3://bucket/transcripts/m/transcriptA.txt"
+			}
+			writes, models, claim := 0, 0, ""
 			httpClient := retryHTTP(func(req *http.Request) (*http.Response, error) {
 				code, body := 200, `{}`
 				var wire struct {
 					UpdateExpression, ConditionExpression string
 					ExpressionAttributeValues             map[string]struct{ S, N string }
 				}
-				raw, _ := io.ReadAll(req.Body)
+				var raw []byte
+				if req.Body != nil {
+					raw, _ = io.ReadAll(req.Body)
+				}
 				json.Unmarshal(raw, &wire)
 				update := wire.UpdateExpression
 				switch req.Header.Get("X-Amz-Target") {
@@ -41,13 +51,17 @@ func TestSummaryRetryHandlerRecovery(t *testing.T) {
 					}
 					item := map[string]any{"summaryRetryPending": map[string]bool{"BOOL": current.SummaryRetryPending},
 						"summaryRetryAttempts": map[string]string{"N": fmt.Sprint(current.SummaryRetryAttempts)}}
-					for k, v := range map[string]string{"userId": "owner", "meetingId": "m", "status": current.Status, "notes": current.Notes, "summarizeRetryClaimedAt": claim} {
+					for k, v := range map[string]string{"PK": "USER#owner", "SK": "MEETING#m", "userId": "owner", "meetingId": "m", "status": current.Status, "notes": current.Notes, "transcriptA": current.TranscriptA, "summarizeRetryClaimedAt": claim} {
 						if v != "" {
 							item[k] = map[string]string{"S": v}
 						}
 					}
 					data, _ := json.Marshal(map[string]any{"Item": item})
 					body = string(data)
+				case "DynamoDB_20120810.Query":
+					body = `{"Items":[]}`
+				case "DynamoDB_20120810.TransactWriteItems":
+					code, body = 400, `{"__type":"TransactionCanceledException","CancellationReasons":[{"Code":"ConditionalCheckFailed"}]}`
 				case "DynamoDB_20120810.UpdateItem":
 					writes++
 					switch {
@@ -66,33 +80,57 @@ func TestSummaryRetryHandlerRecovery(t *testing.T) {
 							t.Fatal("cleanup is not bound to its claim")
 						}
 						terminal := strings.Contains(string(raw), "RETRY_EXHAUSTED")
-						if terminal && current.SummaryRetryAttempts < 2 || changed && strings.Contains(update, "SET") {
+						if mode == "marker" && strings.Contains(update, "SET") && !strings.Contains(string(raw), "summaryRetryAttempts") {
+							code, body = 500, `{"__type":"InternalServerError"}`
+							break
+						}
+						if terminal && current.SummaryRetryAttempts < 2 || changed && !strings.Contains(wire.ConditionExpression, "<>") {
 							code, body = 400, `{"__type":"ConditionalCheckFailedException"}`
 							break
 						}
-						if changed && (!strings.HasPrefix(update, "REMOVE ") || !strings.Contains(wire.ConditionExpression, "<>")) {
-							t.Fatal("cleanup changed the new status")
-						}
 						claim = ""
+						if changed {
+							current.SummaryRetryPending = false
+						}
 						if terminal {
 							current.Status, current.SummaryRetryPending = model.StatusError, false
 							current.SummaryConflictCode = "RETRY_EXHAUSTED"
 						}
-					default: // Actual generateSummary's initial status write fails.
+					default:
 						if strings.Contains(string(raw), "summaryRetryAttempts") {
 							t.Fatal("resumed generation reset its finite budget")
 						}
-						code, body = 500, `{"__type":"InternalServerError","message":"synthetic status write failure"}`
+						if mode == "status" {
+							code, body = 500, `{"__type":"InternalServerError"}`
+						}
+						if strings.Contains(string(raw), `"S":"error"`) {
+							current.Status = model.StatusError
+						}
 					}
 				default:
-					t.Fatal("recovery attempted STT/model/other storage work")
+					if req.Method == "HEAD" {
+						code, body = 500, `<Error><Code>InternalError</Code></Error>`
+					} else if req.Method == "POST" {
+						models++
+						if mode == "marker" {
+							body = `{"content":[{"type":"text","text":"새 요약"}],"stop_reason":"end_turn"}`
+						} else {
+							code, body = 500, `{"message":"synthetic model failure"}`
+						}
+					} else {
+						t.Fatal("unexpected source request")
+					}
 				}
 				return &http.Response{StatusCode: code, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body))}, nil
 			})
 			oldRepo, oldS3, oldModel := repo, s3Client, bedrockService
-			s3Client, bedrockService = nil, nil // Unexpected STT/model work cannot reach AWS.
-			repo = repository.NewDynamoDBRepository(dynamodb.NewFromConfig(aws.Config{Region: "ap-northeast-2",
-				Credentials: aws.AnonymousCredentials{}, HTTPClient: httpClient, Retryer: func() aws.Retryer { return aws.NopRetryer{} }}), "table")
+			cfg := aws.Config{Region: "ap-northeast-2", HTTPClient: httpClient, Retryer: func() aws.Retryer { return aws.NopRetryer{} },
+				Credentials: aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) {
+					return aws.Credentials{AccessKeyID: "fixture", SecretAccessKey: "fixture"}, nil
+				})}
+			s3Client = s3.NewFromConfig(cfg)
+			repo = repository.NewDynamoDBRepositoryWithS3(dynamodb.NewFromConfig(cfg), "table", s3Client, "bucket")
+			bedrockService = service.NewBedrockService(bedrockruntime.NewFromConfig(cfg), s3Client, repo)
 			t.Cleanup(func() { repo, s3Client, bedrockService = oldRepo, oldS3, oldModel })
 			event := json.RawMessage(`{"source":"ttobak.transcribe","detail-type":"AllPartsTranscribed","detail":{"meetingId":"m","userId":"owner","partCount":1}}`)
 			if err := Handler(context.Background(), event); err != nil || writes != 0 {
@@ -107,11 +145,20 @@ func TestSummaryRetryHandlerRecovery(t *testing.T) {
 					t.Fatalf("claim/budget/source lost: %+v %v", current, err)
 				}
 				if changed {
+					if current.SummaryRetryPending {
+						t.Fatal("changed lifecycle retained retry marker")
+					}
 					break
+				}
+				if n == 1 && (current.Status != model.StatusSummarizing || !current.SummaryRetryPending) {
+					t.Fatal("remaining retry was lost")
 				}
 			}
 			if !changed && (current.Status != model.StatusError || current.SummaryRetryPending || current.SummaryConflictCode != "RETRY_EXHAUSTED") {
 				t.Fatal("final failure did not terminate")
+			}
+			if (mode == "model" || mode == "marker") && models != 2 {
+				t.Fatal("retry did not regenerate")
 			}
 		})
 	}

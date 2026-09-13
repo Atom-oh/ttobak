@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/ttobak/backend/internal/model"
-	"github.com/ttobak/backend/internal/service"
 )
 
 type summaryRetryStore interface {
@@ -43,7 +42,7 @@ func resumeSummaryRetry(ctx context.Context, meeting *model.Meeting, store summa
 		return release(nil)
 	}
 	err = run(ctx, current, buildLinkedMeetingContext(ctx, current))
-	if err != nil && !errors.Is(err, service.ErrSummaryConflict) {
+	if err != nil {
 		return release(err)
 	}
 	return true, err
