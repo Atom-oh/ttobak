@@ -1,87 +1,52 @@
-# Incident Response Runbook
+# Incident response
 
-## Severity Levels
+Use current resource IDs/configuration and a specific time window. This runbook is
+an investigation sequence, not authorization to deploy, reset state or alter IAM.
+Do not paste credentials or meeting content into public issues/review logs.
 
-| Level | Description | Response Time | Examples |
-|-------|------------|---------------|----------|
-| P1 | Service down | 15 min | CloudFront 5xx, API Gateway 500, DynamoDB throttle |
-| P2 | Feature broken | 1 hour | STT pipeline stuck, Summarize fails, Auth errors |
-| P3 | Degraded | 4 hours | Slow responses, partial crawler failure, Spot interruption |
+## Triage
 
-## Initial Triage
+1. Record failing operation, user-visible error, timestamp, request/meeting ID,
+   affected revision and scope. Separate capture, upload, transcription, note
+   generation, authentication and retrieval failures.
+2. Inspect relevant Lambda logs and metrics. Missing datapoints are not zero errors;
+   sum the intended interval instead of selecting an arbitrary first datapoint.
+3. For frontend failures, fetch runtime config.json and inspect HTML/chunk responses
+   through CloudFront. For auth, distinguish expiry/refresh/configuration errors
+   from missing server validation.
+4. For asynchronous work, trace the input object/event, orchestrator task, output
+   object and final conditional write. Use actual task/stack descriptions rather
+   than old resource names from historical reports.
 
-```bash
-# 1. Check CloudFront distribution status
-aws cloudfront get-distribution --id E3IFMH57E9UTB5 --query 'Distribution.Status'
-
-# 2. Check API Lambda errors (last 30min)
-aws logs filter-log-events --log-group-name /aws/lambda/ttobak-api \
-  --filter-pattern "ERROR" --start-time $(date -d '30 min ago' +%s000) \
-  --region ap-northeast-2 --query 'events[*].message' --output text | head -20
-
-# 3. Check all Lambda invocation errors
-for fn in ttobak-api ttobak-transcribe ttobak-summarize ttobak-process-image ttobak-kb ttobak-qa; do
-  ERRORS=$(aws cloudwatch get-metric-statistics --namespace AWS/Lambda \
-    --metric-name Errors --dimensions Name=FunctionName,Value=$fn \
-    --start-time $(date -u -d '1 hour ago' +%FT%TZ) --end-time $(date -u +%FT%TZ) \
-    --period 300 --statistics Sum --region ap-northeast-2 \
-    --query 'Datapoints[0].Sum' --output text 2>/dev/null)
-  echo "$fn: ${ERRORS:-0} errors"
-done
-
-# 4. DynamoDB throttling
-aws cloudwatch get-metric-statistics --namespace AWS/DynamoDB \
-  --metric-name ThrottledRequests --dimensions Name=TableName,Value=ttobak-main \
-  --start-time $(date -u -d '1 hour ago' +%FT%TZ) --end-time $(date -u +%FT%TZ) \
-  --period 300 --statistics Sum --region ap-northeast-2
-```
-
-## Common Issues
-
-### "Both UserPoolId and ClientId are required"
-**Cause**: Frontend `config.json` missing from S3 or stale browser cache.
-```bash
-# Check config.json
-curl -s https://ttobak.atomai.click/config.json
-
-# If missing, deploy infra (FrontendStack BucketDeployment creates it)
-gh workflow run deploy-infra.yml
-
-# Force CloudFront invalidation
-aws cloudfront create-invalidation --distribution-id E3IFMH57E9UTB5 --paths "/*"
-```
-
-### Lambda cold start timeouts
-```bash
-# Check recent duration
-aws logs filter-log-events --log-group-name /aws/lambda/ttobak-api \
-  --filter-pattern "REPORT" --start-time $(date -d '30 min ago' +%s000) \
-  --region ap-northeast-2 | grep -o "Duration: [0-9.]* ms" | sort -t: -k2 -rn | head -5
-```
-
-### CDK deploy "Cannot delete ChangeSet"
-```bash
-# List and delete stuck changesets
-aws cloudformation list-change-sets --stack-name <STACK_NAME> --region ap-northeast-2
-aws cloudformation delete-change-set --change-set-name <NAME> --stack-name <STACK_NAME> --region ap-northeast-2
-```
-
-### ECS Whisper task not starting (Spot capacity)
-See [STT Pipeline Troubleshooting](stt-pipeline-troubleshooting.md).
-
-## Rollback
+Read-only examples for the configured application region:
 
 ```bash
-# Frontend: restore previous S3 version
-aws s3 sync s3://ttobak-site-180294183052-ap-northeast-2/ /tmp/current-site/ --delete
-# Then deploy previous commit
-
-# CDK: rollback specific stack
-aws cloudformation rollback-stack --stack-name <STACK_NAME> --region ap-northeast-2
-
-# Lambda: revert to previous version (if aliased)
-aws lambda update-alias --function-name ttobak-api --name live --function-version <PREV_VERSION> --region ap-northeast-2
+aws logs tail /aws/lambda/ttobak-api --since 30m --region ap-northeast-2
+aws logs tail /aws/lambda/ttobak-transcribe --since 30m --region ap-northeast-2
+aws logs tail /aws/lambda/ttobak-summarize --since 30m --region ap-northeast-2
+aws cloudformation describe-stack-events --stack-name TtobakGatewayStack --region ap-northeast-2
 ```
 
-## Contacts
-- Primary: Junseok Oh (ojs0106@gmail.com)
+Logs can contain application content; inspect them privately and redact excerpts.
+The historical priority targets were 15 minutes for outages, one hour for broken
+features and four hours for degradation; they are triage goals, not an on-call SLA.
+
+## Recovery selection
+
+- Missing config.json: restore through the authorized FrontendStack/deployment
+  path. Do not run a full infra deployment by reflex.
+- Stale HTML/chunks: preserve runtime config, force HTML refresh and invalidate
+  CloudFront as the deployment workflow does.
+- STT/Spot failure: follow [STT troubleshooting](stt-pipeline-troubleshooting.md).
+- Failed CloudFormation operation: inspect events/change sets and state first.
+  Do not blindly delete change sets or invoke rollback on an unrelated stack.
+- Bad release: redeploy the last working artifact with its safety prerequisites;
+  do not assume a Lambda live alias exists for every function.
+
+Never reset meeting status with an unconditional DynamoDB write; it can violate
+current ownership/retry/multipart invariants. Never use generic all-stack deployment
+or implicit dependencies. See [deployment](deployment.md), and preserve the QA
+storage guard during rollback as described in [its rollout record](qa-transcript-read-rollout.md).
+
+Record root cause, actual change/revision, verification and unresolved limits.
+Historical documentation or a successful merge is not proof of recovery.
