@@ -258,9 +258,21 @@ def main():
 
 def codex_response(raw, final_path):
     """Validate all events, then read the CLI-designated final reply unchanged."""
+    overflow, final_error, output = False, None, ""
     try:
         output_bytes(raw)
     except Invalid:
+        overflow = True
+    try:
+        if final_path.is_symlink() or not final_path.is_file():
+            raise OSError()
+        output = text_file(final_path, MAX_OUTPUT_BYTES)
+    except Invalid as exc:
+        overflow = overflow or str(exc) == "output_byte_limit"
+        final_error = str(exc)
+    except OSError:
+        final_error = "Codex final reply file is missing or invalid."
+    if overflow:
         return "", "output_byte_limit", False
     started = completed = failed = False
     has_message = False
@@ -324,17 +336,12 @@ def codex_response(raw, final_path):
                     # Progress items are not the final response. Codex owns
                     # final-message selection; never search for parsable JSON.
                     has_message = True
+    if final_error:
+        diagnostics.append(final_error)
     if failed or not completed or not has_message:
         diagnostics.append("Codex event stream did not complete with agent output.")
         return "", "\n".join(diagnostics), False
-    try:
-        if final_path.is_symlink() or not final_path.is_file():
-            raise OSError("Final reply is not a regular file")
-        output = text_file(final_path, MAX_OUTPUT_BYTES)
-    except Invalid as exc:
-        return "", str(exc), False
-    except (OSError, UnicodeError):
-        diagnostics.append("Codex final reply file is missing or invalid.")
+    if final_error:
         return "", "\n".join(diagnostics), False
     return output, "\n".join(diagnostics), True
 

@@ -14,6 +14,7 @@ import tempfile
 import unittest
 
 import role_review
+import run_role
 from run_role import scrub as scrub_raw
 
 
@@ -613,6 +614,41 @@ class RoleReviewTests(unittest.TestCase):
         self.assertNotIn("SYNTHETIC_PRIVATE_BODY", clean)
         colored = ["-----BEGIN PRI\x1b[31mVATE KEY-----", "SYNTHETIC_PRIVATE_BODY", "-----END PRIVATE KEY-----"]
         self.assertNotIn("SYNTHETIC_PRIVATE_BODY", json.dumps(role_review.scrub(colored)))
+
+    def test_concatenated_pem_literals_are_redacted_before_fragments(self):
+        begin, body, end = "-----BEGIN PRIVATE KEY-----", "SYNTHETIC_PRIVATE_BODY", "-----END PRIVATE KEY-----"
+        complete = 'const pem = ' + " + ".join(json.dumps(s) for s in (begin, body, end)) + "; KEEP_AFTER"
+        split = ("-----BEGIN ", "PRIVATE KEY-----", body, "-----END ", "PRIVATE KEY-----")
+        cases = [complete, json.dumps(complete), complete.replace('"', r'\"'),
+                 'const pem = ' + " + ".join(json.dumps(s) for s in split) + "; KEEP_AFTER",
+                 'const pem = ' + " + ".join(repr(s) for s in split) + "; KEEP_AFTER",
+                 {"nested": [complete, [begin, body, end, "KEEP_AFTER"]]}]
+        for index, evidence in enumerate(cases):
+            with self.subTest(shape=index):
+                self.work = self.root / f"concat-pem-{index}"
+                self.assert_private_evidence_redacted(evidence, body, "KEEP_AFTER")
+        long_split = ["-----BEGIN ", "PRIVATE KEY-----", *([body] * 5000), "-----END ", "PRIVATE KEY-----"]
+        self.assertNotIn(body, self.bounded_scrub(" + ".join(json.dumps(s) for s in long_split) + "; KEEP_AFTER"))
+
+    def test_raw_generated_alias_keeps_values_but_user_credential_fields_stay_masked(self):
+        self.prepare()
+        token = "ghp_" + "A" * 36
+        value = {token: "KEEP_ASSOCIATED_VALUE", "user_token": "SYNTHETIC_USER_SECRET",
+                 "[REDACTED-GH-TOKEN]/password": "SYNTHETIC_PATH_SECRET"}
+        response = self.response("claude-self", findings=[{
+            "severity": "MINOR", "path": FRONTEND, "condition": "On raw alias generation",
+            "evidence": json.dumps(value),
+        }])
+        with mock_patch.object(run_role, "execute", return_value=(0, json.dumps(response), "")):
+            run_role.run(self.work, "claude-self")
+        self.record("codex")
+        self.cli("aggregate", "--work", self.work)
+        for name in ("slot/claude-self-result.json", "role-summary.json", "deterministic-review.md"):
+            published = (self.work / name).read_text()
+            self.assertIn("KEEP_ASSOCIATED_VALUE", published)
+            self.assertNotIn(token, published)
+            self.assertNotIn("SYNTHETIC_USER_SECRET", published)
+            self.assertNotIn("SYNTHETIC_PATH_SECRET", published)
 
     def test_structured_key_and_diff_formats_have_bounded_processing(self):
         for separator in (".", ":", "-", "_"):

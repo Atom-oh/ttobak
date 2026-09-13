@@ -19,6 +19,8 @@ event stream and the regular final-message file retain the output byte limits.
 JSONL records split only at literal LF bytes; Unicode separators inside JSON
 strings remain payload. Terminal executor and final-file overflow are handled
 before transport parsing or diagnostic concatenation and cannot trigger retry.
+The event stream and final-file byte bounds are checked independently before
+rejecting malformed/incomplete events; bad framing cannot hide final-file overflow.
 
 The collector accepts only committed base context hooks/adapters with matching
 bytes. An exclusions-only result requires explicit `--allow-exclusions-only`
@@ -67,6 +69,11 @@ paths, and masks the entire associated value. PEM markers span array elements:
 the complete marked credential is redacted through END (or array end), retaining
 ordinary strings and context outside the key. Original elements still consume
 the shared byte budget before replacement.
+Complete PEM spans are masked before quoted fragments are processed. Adjacent
+quoted string literals joined with `+` are decoded and combined without execution
+before credential matching, preserving split PEM markers and outside context.
+Only exact scrubber marker names are treated as placeholders when classifying
+object keys; ordinary credential fields and credential paths remain sensitive.
 
 Untrusted stdout and stderr are limited separately to 1 MiB of UTF-8 after
 process capture, before parsing or scrubbing; this is not a streaming capture
