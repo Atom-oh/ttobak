@@ -156,10 +156,15 @@ class _QAConversationFixture:
                     'toolUse': {'input': json.dumps(arguments)}}
             else:
                 start, delta = {}, content[0]
-            streams.append({'stream': [
-                {'contentBlockStart': {'start': start}}, {'contentBlockDelta': {'delta': delta}},
-                {'contentBlockStop': {}}, {'messageStop': {'stopReason': 'tool_use' if i == 0 else 'end_turn'}},
-            ]})
+            events = [{'messageStart': {'role': 'assistant'}}]
+            if i == 0:
+                events.append({'contentBlockStart': {'contentBlockIndex': 0, 'start': start}})
+            events.extend([
+                {'contentBlockDelta': {'contentBlockIndex': 0, 'delta': delta}},
+                {'contentBlockStop': {'contentBlockIndex': 0}},
+                {'messageStop': {'stopReason': 'tool_use' if i == 0 else 'end_turn'}},
+            ])
+            streams.append({'stream': events})
         self.model.converse_stream.side_effect = streams
         return self.model.converse_stream
 
@@ -169,10 +174,16 @@ class _QAConversationFixture:
         if transport == 'rest':
             replies[0]['output']['message']['content'].insert(0, {'toolUse': first})
         else:
-            replies[0]['stream'][:0] = [
-                {'contentBlockStart': {'start': {'toolUse': {k: first[k] for k in ('toolUseId', 'name')}}}},
-                {'contentBlockDelta': {'delta': {'toolUse': {'input': json.dumps(arguments)}}}},
-                {'contentBlockStop': {}},
+            for event in replies[0]['stream']:
+                for name in ('contentBlockStart', 'contentBlockDelta', 'contentBlockStop'):
+                    if name in event:
+                        event[name]['contentBlockIndex'] += 1
+            replies[0]['stream'][1:1] = [
+                {'contentBlockStart': {'contentBlockIndex': 0, 'start': {
+                    'toolUse': {k: first[k] for k in ('toolUseId', 'name')}}}},
+                {'contentBlockDelta': {'contentBlockIndex': 0, 'delta': {
+                    'toolUse': {'input': json.dumps(arguments)}}}},
+                {'contentBlockStop': {'contentBlockIndex': 0}},
             ]
         model.side_effect = replies
 
