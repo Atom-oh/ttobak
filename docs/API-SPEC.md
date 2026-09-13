@@ -53,6 +53,87 @@ Saved notes are user input, distinct from generated content. Stuck transcription
 or summarization is reconciled after 60 minutes; summarize retry eligibility is a
 separate 20-minute conditional claim, not a retry scheduler.
 
+Conditional transcript/speaker edits publish new immutable
+`transcripts/{meetingId}/{field}.{32-lowercase-hex}.txt` references only with a
+matching database update. Conflicts return 409; ambiguous database failures retain
+new objects because the write may have committed. Existing referenced objects
+remain intact. Go and QA readers accept strictly validated legacy and versioned
+keys; deploy compatible readers before writers (ADR-037).
+
+### Bounded meeting reading
+
+`GET /api/meetings/{meetingId}/reading` rechecks owner/direct-share/current-account
+access on every page and returns `Cache-Control: no-store`.
+
+| Query | Contract |
+|---|---|
+| kind | `meeting` (default) or `transcript` |
+| pageSize | Integer 1–8000 Unicode code points; default 4000 |
+| cursor | Opaque continuation, at most 2048 characters |
+| section | Meeting only: `notes` (default), `summary`, `actionItems` |
+| source | Transcript only: `selected` (default), `A`, `B` |
+| startTime, endTime | Transcript only; both finite seconds, `0 <= startTime < endTime` |
+
+Unknown/repeated keys and incompatible options return 400 before storage reads.
+Keep meeting/kind/section or source/time range unchanged across continuations;
+pageSize may change. The inner JSON response is at most **14,000 bytes including
+the trailing newline**, with at most 50 transcript chunks. This bounds transport,
+not the memory required to load and validate the selected source.
+
+Meeting pages return exact `notes`, `content`, or `actionItemsJson`, identifying
+metadata, `availableCodePoints`, `revision`, `readingHints`, and `page`. Join all
+actionItemsJson pages before parsing; a page may end inside a JSON string.
+Normalized legacy IDs/completion flags and stored extension fields survive the
+full section. `actionItems` is only a bounded preview: inspect
+`actionItemsPreview.available/complete/totalItems/metadataTruncated` and
+`actionItemsAnalysis`, never infer successful extraction from an empty preview.
+Metadata truncation is explicit; extension-only changes invalidate continuation.
+
+Transcript pages return source/selection/provenance, exact `chunks[].text`, and
+zero-based code-point offsets with exclusive ends. Only segments verified against
+the effective selected text receive original speaker/timing metadata. Unselected
+or unmatched variants use raw text without borrowed timestamps. A selected empty
+variant may fall back to the other available variant; explicit A/B never does.
+Time windows select whole verified segments overlapping `[startTime,endTime)`;
+partial chunks retain `timingScope: whole_segment`, not inferred word times.
+
+`page` reports unit, start/end offsets, whole-source totalCodePoints, requested-span
+matchingCodePoints, complete and nextCursor. Consume all preceding pages before
+claiming completeness; time-window completeness covers only that window. Cursors
+bind current content and provenance. A source change returns 409 `STALE_CURSOR`
+and requires restarting; malformed cursors return 400 `INVALID_CURSOR`.
+Other 400 codes include `INVALID_ARGUMENT`, `NO_TRANSCRIPT`, and
+`TIME_RANGE_UNAVAILABLE`; denied/missing meetings return 403/404 and read failures
+500 `READING_UNAVAILABLE`. Failures never fall back to cached text.
+
+Notes/summary/action-item reads use metadata views without S3 transcript hydration.
+Transcript reads hydrate only the chosen field and eligible segment candidates
+after authorization. Storage references are never returned. Source:
+`handler/meeting_reading.go`, `service/meeting_reading*.go`; MCP usage:
+[adapter README](../mcp-server/README.md).
+
+### Action item analysis
+
+GET `.../action-items` permits meeting readers; POST `.../action-items/retry` and
+PUT `.../action-items/{itemId}` require owner/edit access. GET/PUT return
+`{actionItems, analysis}` with 200; retry returns that shape with 202 and requires
+a done meeting with a nonblank saved summary. PUT requires explicit
+`{"completed":true}` or `{"completed":false}`.
+
+Analysis is `unknown|queued|running|succeeded|failed`. Only succeeded plus an
+empty array means no tasks. Missing legacy metadata is unknown; expired leases
+become failed/`INTERRUPTED`. Detail/reading status failures show
+unknown/`STATUS_UNAVAILABLE`; changed successful source shows failed/`SOURCE_CHANGED`.
+Errors use fixed codes, never raw model responses.
+
+The separate `MEETING#{id}/ANALYSIS#actionItems` row binds run, source and lease.
+Retry uses `ttobak.analysis` / `ActionItemsRequested`; the summarize worker also
+uses this service inline. Result and success commit together only if run, saved
+summary and prior items still match. Failures retain prior items; unchanged tasks
+keep IDs and human completion. Metadata reads avoid transcript hydration and
+there is no transcript fallback when the summary is missing. Conflicts return
+409, denied writes 403 and missing meetings/items 404.
+
 ### Accounts and projects
 
 Account creation creates owner membership atomically. Optional parentAccountId
@@ -80,7 +161,11 @@ Document shares use SHAREDDOC#/DOCSHARE_TO#, not meeting SHARED# keys. Deleting 
 owner document can leave share rows; list reads skip missing targets.
 
 PPT/PPTX uploads trigger convert-doc and produce a docs-pdf/ sidecar. previewUrl
-points to the PDF while downloadUrl always points to the original. Public tokens
+points to the PDF while downloadUrl always points to the original. The converter
+records the actual GET's source ETag/version, rechecks the original, and replaces
+the observed preview conditionally. The preview URL path still checks existence;
+canonical indexing/QA readers additionally validate the source binding. Legacy
+unbound previews require regeneration. Public tokens
 are conditionally minted and validated against the document's own PublicShareToken
 on every read; revocation removes that grant. See ADR-022/027/029.
 
@@ -94,11 +179,22 @@ pendingShareExpiresAt; QA history's uppercase TTL field is not swept.
 The server validates category, ownership and traversal. Checkpoint filenames
 recording_progress.webm/m4a/ogg intentionally overwrite a stable audio key; other
 uploads receive unique names. Upload completion emits the appropriate custom
-event. Meeting file attachments are currently not content-extracted for summaries.
-AudioUploader automatically attempts KB promotion for documents; the recording
-page also offers manual copy. Copy/async ingestion does not guarantee parser
-support or summary grounding. Images and PPT/PPTX document previews have distinct
-processing paths.
+event. The bounded PDF/PPTX/DOCX/Markdown extractor and its asynchronous worker
+now exist, with Go queue/status/read services and QA reader foundations. The current
+API does not instantiate AttachmentTextService or register its routes;
+upload/summary integration is still staged, so current notes use file names/links.
+AudioUploader attempts KB promotion; the recording page also offers manual copy.
+Neither copying nor preview conversion proves summary grounding.
+
+The worker accepts `ttobak.upload` / `DocumentUploadCompleted` only for canonical
+ATTACH#/ATTEXT# identities and a queued run. Owner and uploader may differ; event
+key alone is not authority. Pinned bounded reads produce immutable
+`files/{uploader}/{meetingId}/text/{attachmentId}/{runId}.json`. Parent/attachment,
+run, lease and ETag checks guard publication. Failed attempts retain earlier
+results; attempt status and retained-result completeness are separate. Locations
+are document pages/slides/paragraphs/cells/lines, never audio timestamps.
+See the [worker contract](../backend/python/document-extract/LAMBDA.md) and
+[parser scope](../backend/python/document-extract/README.md).
 
 Recover uses a saved progress object. Rediarize accepts supported single-part
 Whisper meetings and a speaker-count hint. Use their handler/service contracts,
@@ -125,6 +221,44 @@ revokes refresh tokens but issued locally validated JWTs survive until expiry.
 PostAuthentication records lastLoginAt separately from PROFILE and fails open;
 refresh-token authentication does not update it. New accounts use admin invites
 and NEW_PASSWORD_REQUIRED, never self-signup. The domain allowlist is supplemental.
+`isApprovedAdminInvite` exempts only `demo@atomai.click` (case-insensitive) on
+`PreSignUp_AdminCreateUser`; it grants neither a domain-wide exception nor group
+membership. RESEND trigger behavior remains unverified.
+
+### Index status and automatic indexing rollout
+
+Authenticated GET index-status routes cover meetings, personal/shared documents,
+and account documents. Current access is checked before foreign source reads.
+Responses expose only `{state,errorCode?,updatedAt?}` with `no-store`; states are
+`UNTRACKED`, `PENDING`, `PREPARING`, `WAITING_SYNC`, `WAITING_SOURCE`, `INDEXED`,
+`FAILED`, `DELETED`. Unavailable configuration/reads return 503 `INDEX_UNAVAILABLE`,
+never successful indexing. UNTRACKED is not proof that no legacy vector exists.
+
+The canonical worker can index current USER#/MEETING#, USER#/DOC#, and
+ACCOUNT#/DOC# sources into immutable `canonical/v1/` projections. Revisions bind
+present fields and exact S3 ETag/version/size/preview provenance. Notifications
+are identities to reread, not source snapshots. Full S3 ingestion is coalesced;
+job acceptance is not success. Per-document status, projection inventory and fresh
+source/conditional checks determine completion. There is no direct ingestion.
+
+The checked-in app selects `INDEXING_MODE=manual-only` **with its one-minute
+schedule enabled**; canonical stream delivery and permissions require `all`.
+This is configuration, not deployed-state evidence. Manual-only bootstraps
+private `kb/{owner}/...` and authenticated-global `shared/**` originals into
+`manual-kb/v1/` and `shared-kb/v1/` snapshots without altering originals or
+canonical/legacy meeting exports. Private/shared visibility must remain distinct.
+PDF/DOC/DOCX/XLS/XLSX snapshot support differs from attachment extraction;
+PPT/PPTX, empty or over-50-MiB originals have explicit failure states.
+
+Rollout: deploy the mode-aware worker with delivery off; verify restricted
+manual-only IAM/configuration, then enable its schedule; verify snapshots and
+synthetic recall; deploy/verify strict current-source QA; finally enable all-mode
+canonical delivery. Durable mode rejects an all-to-manual-only downgrade; restore
+all after a mistaken downgrade. Legacy QA rollback after canonical cleanup needs
+re-export. Existing `/api/kb/*` routes remain in the API Lambda; `cmd/kb` accepts
+stream/schedule/tick envelopes, not API proxy requests. Follow the
+[bootstrap runbook](runbooks/knowledge-index-bootstrap.md) and
+[source/provider contract](../backend/internal/service/INDEX_SOURCE_CONTRACT.md).
 
 ## Go route inventory
 
@@ -154,11 +288,13 @@ All rows below come from `backend/cmd/api/main.go`.
 | POST | `/api/accounts/{accountId}/documents` | `accountHandler.PutDocument` |
 | GET | `/api/accounts/{accountId}/documents` | `accountHandler.ListDocuments` |
 | GET | `/api/accounts/{accountId}/documents/{docId}` | `accountHandler.GetDocument` |
+| GET | `/api/accounts/{accountId}/documents/{docId}/index-status` | `indexStatusHandler.AccountDocument` |
 | PUT | `/api/accounts/{accountId}/documents/{docId}` | `accountHandler.UpdateDocument` |
 | DELETE | `/api/accounts/{accountId}/documents/{docId}` | `accountHandler.DeleteDocument` |
 | POST | `/api/documents` | `documentHandler.PutDocument` |
 | GET | `/api/documents` | `documentHandler.ListDocuments` |
 | GET | `/api/documents/{docId}` | `documentHandler.GetDocument` |
+| GET | `/api/documents/{docId}/index-status` | `indexStatusHandler.PersonalDocument` |
 | PUT | `/api/documents/{docId}` | `documentHandler.UpdateDocument` |
 | DELETE | `/api/documents/{docId}` | `documentHandler.DeleteDocument` |
 | POST | `/api/documents/{docId}/share-account` | `documentHandler.ShareToAccount` |
@@ -173,6 +309,11 @@ All rows below come from `backend/cmd/api/main.go`.
 | GET | `/api/meetings` | `meetingHandler.ListMeetings` |
 | POST | `/api/meetings` | `meetingHandler.CreateMeeting` |
 | GET | `/api/meetings/{meetingId}` | `meetingHandler.GetMeeting` |
+| GET | `/api/meetings/{meetingId}/reading` | `readingHandler.Get` |
+| GET | `/api/meetings/{meetingId}/action-items` | `actionItemsHandler.Get` |
+| GET | `/api/meetings/{meetingId}/index-status` | `indexStatusHandler.Meeting` |
+| POST | `/api/meetings/{meetingId}/action-items/retry` | `actionItemsHandler.Retry` |
+| PUT | `/api/meetings/{meetingId}/action-items/{itemId}` | `actionItemsHandler.SetCompleted` |
 | PUT | `/api/meetings/{meetingId}` | `meetingHandler.UpdateMeeting` |
 | DELETE | `/api/meetings/{meetingId}` | `meetingHandler.DeleteMeeting` |
 | GET | `/api/meetings/{meetingId}/audio` | `meetingHandler.GetAudioURL` |
@@ -271,7 +412,8 @@ runtime-configured WebSocket endpoint. There is no current start/audio/stop
 server-side transcription stream or separate connections table in this handler.
 Live transcription runs in the browser using AWS Transcribe Streaming.
 
-QA uses a Converse tool loop and current authorized meeting data. Tools include
+The active QA handler uses a Converse tool loop and current authorized meeting
+data. Tools include
 KB/AWS docs/web/transcript search, meeting detail/list, account operations and
 research initiation; `qa/tools.py` is the exact roster. KB meeting hits are discovery
 candidates: current access and current notes/content are rechecked, including on
@@ -282,6 +424,41 @@ Live/HTTP meeting contexts send separate bounded untrusted excerpts for transcri
 and saved notes with coverage metadata. get_meeting_detail exposes continuation
 information; follow its next offset, not an excerpt-relative index. Transcript
 read failures return an error rather than silently losing context.
+
+The broader current-source QA, document/attachment tools and history policy are
+**staged foundations**: `qa/handler.py` does not import SourceAccess, source_tools,
+ToolHistory or account_reads. The contracts below describe that integration,
+not active REST/WebSocket behavior. Binary snapshot bootstrap and synthetic recall
+verification precede strict runtime cutover.
+
+- Fresh source discovery revalidates canonical access, exact source revision and
+  S3 bindings. Saved-text keyword matches supplement index lag; legacy meeting
+  exports provide identities only. Cached text/misses cannot replace fresh reads,
+  and the strict runtime must write no new result cache.
+- Private/manual and authenticated-shared binary evidence requires matching
+  immutable snapshots; old unbound chunks cannot be relabeled as current. Legacy
+  text is read from current scoped bytes; continuations bind its revision.
+  Source failures are errors, and unavailable binaries expose pending/failed state.
+- Add optional `sourceDetails` while retaining `answer`, `sources`, `usedKB`,
+  `usedDocs`, and `toolsUsed`. Explicit public fields describe identity, title,
+  revision, evidence origin, partial/file-pending/migration status, and attachment
+  attempt/result/location. Do not forward arbitrary provider metadata or invent
+  audio timestamps for document positions.
+- Replay requires current access/revisions for every source plus matching
+  fingerprints for supported read-only tools. Strict callbacks consume all pages,
+  recheck exact membership/canonical references and attest complete reads.
+  Changed, denied, failed or untracked dependencies invalidate the entire history,
+  including assistant paraphrases; revalidate before later rounds and final output.
+- `start_research` records a creation receipt only after one successful mutation.
+  Never replay creation to validate history. Tracking overflow preserves the
+  current result while marking history nonreplayable with explicit coverage.
+  Unverifiable legacy sessions reset at cutover.
+
+Exact source fields, visibility, limits and integration APIs:
+[source contract](../backend/python/qa/SOURCE_CONTRACT.md),
+[tool history](../backend/python/qa/TOOL_HISTORY_CONTRACT.md),
+[account reads](../backend/python/qa/ACCOUNT_READS_CONTRACT.md), and
+[rollout](runbooks/qa-current-source-rollout.md).
 
 Manual and opt-in proactive QA may send model-composed queries to the external
 web-search provider through the us-east-1 Gateway. The UI toggle only gates the

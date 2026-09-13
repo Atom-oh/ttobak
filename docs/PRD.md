@@ -9,17 +9,17 @@ historical proposals and goals. It is not a deployment/compliance certificate.
 
 | Area | Current scope | Evidence |
 |---|---|---|
-| Identity | Admin-created Cognito users, password login/challenge/reset, token refresh, admin user management | auth components, auth-stack, user_admin service |
+| Identity | Admin-created Cognito users, password login/challenge/reset, token refresh, admin management; one reviewed demo-invite exception | auth components, auth-stack, pre-signup policy, user_admin service |
 | Recording | Browser microphone/tab capture; macOS native system audio; pause/resume, waveform, upload/recovery | RecordButton, recording hooks, mac-app |
 | Live assistance | AWS Transcribe Streaming captions, guarded Web Speech fallback, Translate, live summary and Q&A | sttManager, live hooks, QA Lambda |
 | Batch transcription | Configured Whisper GPU Spot, acoustic diarization, multipart audio, AWS Transcribe fallback | transcribe/summarize commands, backend/whisper |
-| Notes | Selected A/B transcript, source freshness, saved notes, generated content and action items, editing | meeting service, summarize, meeting UI |
+| Notes | Selected A/B transcript, saved notes, generated content, guarded edits, action analysis/retry and persistent completion | meeting/action-analysis services, summarize, meeting UI |
 | Images | Classification, diagram/text/table extraction and comparison | process-image, attachment UI |
 | Collaboration | Personal/direct/team meeting access; account hierarchy and filters; projects with linked accounts | account/project/meeting services |
-| Documents | Personal documents, account copies, read-only email shares, slide PDF preview, revocable public links | document handler, account service, convert-doc |
+| Documents | Personal documents, account copies, read-only email shares, source-bound slide PDF previews, public links and index status | document/index-status handlers, account service, convert-doc |
 | Knowledge/research | KB ingestion/search, crawled news, current authorized meeting reads, research chat | crawler/research/QA artifacts |
 | Simulator | User-confirmed requirements/options executed in Code Interpreter with charts/report | sim service and Python worker |
-| Integrations | Notion/Markdown/Obsidian export paths and authenticated local MCP adapter | export/settings handlers, mcp-server |
+| Integrations | Notion/Markdown/Obsidian export paths and authenticated MCP with bounded notes/transcript reading | export/settings/reading handlers, mcp-server |
 
 Self-signup and social-login mockup buttons are not requirements. Password reset is
 implemented. Nova Sonic A/B and server-side audio WebSocket designs are historical;
@@ -35,16 +35,37 @@ WebSocket currently streams QA, while live Transcribe runs in the browser.
   and are read-only. Public document links are a separate token-based exception.
 - Preserve recording even when mobile live captions fail. Uploads recover from
   stalls without imposing a fixed total transfer timeout.
+- Saved notes can correct or supplement the transcript but are not proof of
+  spoken agreement. Keep evidence attribution; never invent note-only timestamps.
+  Empty action items mean no tasks only after successful analysis.
+- The demo invite exception applies only to `demo@atomai.click` on the admin
+  pre-signup trigger; it grants no role or domain-wide access. Self-signup stays off.
 - Existing accepted privacy/security limitations are recorded in CLAUDE.md and ADRs;
   they are not a claim of complete compliance or new blanket exemptions.
 
-## Remaining limitations and historical goals
+## Implemented foundations awaiting integration
 
-Meeting file attachments (PPTX/PDF/DOCX/MD in the meeting file category) do not get
-full content extraction for summaries. AudioUploader automatically attempts KB
-promotion for uploaded documents; recording-page attachments also offer manual
-copy. Async ingestion and parser support are separate, and slide preview
-conversion is not equivalent to summary grounding.
+Bounded PDF/PPTX/DOCX/Markdown extraction, immutable result storage, Go queue/read
+services and a private asynchronous worker exist. API upload/retry and summary/QA
+integration remain staged; current summary prompts still see file names/links.
+Extraction covers native text, with explicit partial/unsupported states and no
+OCR. AudioUploader's KB promotion/manual copy and slide preview conversion are
+separate paths.
+
+The canonical index worker and status APIs exist for current meetings and
+personal/account documents. The app currently enables the **manual-only** schedule
+to prepare immutable private/shared KB snapshots; full canonical delivery is not
+enabled. Snapshot verification and strict QA deployment precede all-mode activation.
+
+Current-source QA, structured provenance, strict account reads and tool-history
+revalidation are implemented helper foundations. The active QA handler does not
+wire them yet; frontend source-details support remains compatible with legacy
+responses. Fresh source reads, binary compatibility and safe follow-up continuity
+must be verified through public endpoints before claiming cutover. See the
+[source contract](../backend/python/qa/SOURCE_CONTRACT.md) and
+[bootstrap runbook](runbooks/knowledge-index-bootstrap.md).
+
+## Remaining limitations and historical goals
 
 The current export handler's `pdf` branch is a text-download placeholder; do not
 claim a generated PDF merely because the frontend button is labeled PDF. Document

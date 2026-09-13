@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: dc9167da85e9 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 17fb66bac737 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
 # TTOBAK review context
 
 Shared by Codex, Kiro, and the CI review panel. Extracted from the
@@ -34,7 +34,7 @@ canonical CLAUDE.md; delivery procedures and historical records are omitted.
 | API | Go 1.25, ARM64 Lambda, chi | `backend/go.mod`, `backend/cmd/api/main.go` |
 | Go functions | Eight zip entry points: api, transcribe, summarize, process-image, kb, research-worker, websocket, ws-authorizer | `backend/cmd/`, `infra/lib/gateway-stack.ts` |
 | Document conversion | Separate Go container with LibreOffice; not a zip | `backend/cmd/convert-doc/` |
-| Python | QA, crawler, simulator Lambda artifacts; separate research-agent container | `backend/python/`, each requirements/Dockerfile |
+| Python | QA, crawler, simulator and document-extraction Lambdas; separate research-agent container | `backend/python/`, each requirements/Dockerfile |
 | Batch STT | GPU Spot ECS; production faster-whisper and separate benchmark engines | `backend/whisper/`, `infra/lib/whisper-stack.ts` |
 | Desktop | Tauri 2/Rust, macOS ScreenCaptureKit | `mac-app/src-tauri/` |
 | Infra | CDK TypeScript, eleven stacks | `infra/bin/infra.ts`, `infra/lib/` |
@@ -63,6 +63,8 @@ framework: lint and production build are its required checks.
 # Install boto3<2 in the active Python environment for crawler/research SigV4 tests.
 (cd backend/python/crawler && python3 -m unittest test_crawlers -v)
 (cd backend/python/research-agent && python3 -m unittest test_tools -v)
+# Install document-extract/requirements-lambda.txt in its test environment first.
+(cd backend/python/document-extract && python3 -m unittest test_extract test_worker test_handler -v)
 (cd backend/python/qa && python3 -m unittest test_handler -v)
 (cd backend/python/sim && python3 -m unittest test_handler -v)
 (cd backend/whisper && python3 -m unittest test_transcribe test_whisper_common test_transcribe_whisperx test_transcribe_fw_p4 test_run_engine test_dockerfile_entrypoint -v)
@@ -70,6 +72,7 @@ framework: lint and production build are its required checks.
 (cd mcp-server && npm test)
 (cd mac-app/src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test)
 python3 scripts/docs/check_docs.py
+python3 -m unittest discover -s scripts/docs -p 'test_*.py' -v
 python3 -m unittest discover -s scripts/pr-review -p 'test_*.py' -v
 bash scripts/pr-review/chair-timeout-policy-check.sh
 ```
@@ -102,6 +105,14 @@ ScreenCaptureKit. Report that limit instead of claiming a Mac build passed.
   `transcripts/{meetingId}/{field}.txt`; a combined approximately 300KB inline
   budget spills largest-first. `resolveTranscripts` rehydrates reads; partial
   updates guard sibling sizes and retry condition failures.
+- Conditional transcript writers (`UpdateMeetingFieldsIfMatch`) use immutable
+  `{field}.{32-lowercase-hex}.txt` spill keys, publish refs only after CAS, and never
+  mutate the caller's fields map. Definitive rejection cleans up only new objects;
+  ambiguous responses retain them and cleanup failures surface. Disable SDK retries
+  for new-spill writes. Reader-compatible code must be deployed before writers.
+  Go/Python readers accept exact legacy or immutable keys for the configured bucket,
+  authorized lookup meeting and allowed field, rejecting encoded/traversal suffixes
+  (ADR-037). Unconditional writers retain their separate fixed-key behavior.
 - Item budgets use UTF-8 bytes; `inlineFieldSize.utf16Units` is used only for the
   empirically observed DynamoDB String `size()` condition behavior. This is a
   recorded runtime observation, not an AWS-documented unit contract; see
@@ -126,6 +137,12 @@ ScreenCaptureKit. Report that limit instead of claiming a Mac build passed.
   Selected A/B transcript edits must not be overwritten by stale segment text;
   inspect the current note/source-freshness guards in meeting service and
   summarize code. Saved notes are independent user input.
+- **Action items:** a separate `ANALYSIS#actionItems` row tracks run/source hash
+  and numeric lease. Owner/editor retry uses `ActionItemsRequested`; result and
+  success publish atomically only if run, summary and previous items match. Failures
+  preserve prior items; validated successful `[]` alone means no tasks. Preserve
+  task IDs/human completion and conditional checkbox updates; absent legacy metadata
+  is unknown, expired leases are interrupted failures.
 - **Whisper:** keep production ASR pins consistent with `verify_pins.py`.
   Diarization uses pyannote 4.x/community-1 (ADR-035). The bundle key is owned by
   the image, not CDK, to avoid independent deploy races. WhisperX's dispatcher
@@ -172,6 +189,33 @@ ScreenCaptureKit. Report that limit instead of claiming a Mac build passed.
   proactive QA can search externally; the UI opt-in only gates proactive search.
   `check_web_search_limit` runs before the gateway call (default 30/hour, 0 off);
   it fails open on DynamoDB errors and is an abuse brake, not an access boundary.
+- **Indexing and extraction rollout:** current app configuration is `manual-only`
+  with the KB schedule enabled: bootstrap immutable private/shared binary snapshots
+  first. Full canonical stream indexing and strict current-source QA are still a
+  staged cutover, not implied by merged helper PRs. Never flip to `all` before
+  deployed snapshot/provider verification and strict-consumer readiness (ADR-038).
+  Status APIs/UI and conditional job/retry state exist independently of activation.
+- **Document extraction:** the bounded parser/private async worker and ATTACH#/ATTEXT#
+  state exist (ADR-039). Consumers accept only authorized immutable result identity
+  with the current source ETag; extraction JSON does not claim a source version ID.
+  Partial/retained text is explicit. Worker
+  existence does not prove producer/summary/QA integration active. Preview PDFs bind
+  exact source ETag/version and conditionally replace the observed preview; legacy
+  previews need regeneration before canonical use (ADR-022).
+- **Current-source QA foundation:** helpers verify present authorization/revisions
+  before bytes and replay, including immutable manual/shared snapshots and bounded
+  legacy text. Metadata and cached vectors never grant access. ToolHistory uses
+  current-user strict CompleteRead callbacks, fingerprints the rendered view, and
+  discards the whole derived history on invalid dependencies. Oversized valid reads
+  remain visible but nonreplayable; creation receipts never replay a mutation.
+  These readers/history helpers are not registered in the current handler yet.
+  Preserve REST/streaming parity when wiring them (ADR-042; QA contract docs).
+- **Bounded meeting/MCP reads:** the authenticated reading endpoint uses
+  metadata-only authorization for notes and binds continuation to source revision,
+  selection and access. API JSON is capped at 14,000 encoded bytes. MCP forwards
+  opaque server pages, defaults meeting reads to notes, and separately caps original
+  HTTP bytes and serialized tool results at 32,000; never fall back to full-meeting
+  reads or truncate a page while inventing continuation.
 - **Simulator:** transcript is used for extraction only. Only allowlisted numeric
   requirements/options JSON enters codegen; option names/descriptions remain
   user text. Security rests on the interpreter's empty IAM role plus SANDBOX
@@ -200,7 +244,9 @@ permission to add public application routes. Do not generalize the public-doc
 exception.
 
 Cognito self-signup must remain disabled. AdminCreateUser is the entry gate;
-the pre-signup domain allowlist is supplemental. Whether RESEND invokes that
+the pre-signup domain allowlist is supplemental. The exact approved
+`demo@atomai.click` address is exempt only on PreSignUp_AdminCreateUser, with no
+group grant or domain-wide exception. Keep the index.mjs/policy.mjs asset together. Whether RESEND invokes that
 trigger is unverified; do not claim protection from it. Verify JWT signatures,
 issuer, and expiry; validate server-side identifier/key ownership and reject
 traversal. Never grant owner through member role updates.
@@ -217,14 +263,14 @@ exposure:
 
 | Existing behavior / accepted risk | Evidence and review boundary |
 |---|---|
-| Meeting `file` attachments are not content-extracted | `upload.go`, `process-image/main.go`; filenames only in notes. AudioUploader auto-copies documents to KB; the recording page also offers manual copy. Async ingestion/parser support is separate. `updateAttachmentByKey` itself is implemented. |
-| convert-doc reads cross-tenant `docs/*` | ADR-022; isolated subnet, no NAT, child process strips `AWS_*`; key scoping and macro/remote-content restrictions remain improvements. |
+| Meeting file integration is staged | Parser/worker and attachment result state exist (ADR-039); current API producers and summary/QA integration remain staged. AudioUploader KB copy and recording-page manual copy do not establish summary grounding. |
+| convert-doc reads cross-tenant `docs/*` and `docs-pdf/*` | ADR-022; docs-pdf read/write supports conditional source-bound preview replacement. Isolated subnet, no NAT, child strips AWS_*; per-trigger key scoping remains an improvement. |
 | Mac leftover WAV adoption is per macOS user, not Cognito account | ADR-024; regular files, 48-hour retention, per-file confirmation naming the caveat. Account binding remains absent. |
 | Manual QA search can send model-composed meeting-derived queries externally | ADR-028; prompt constraints and hashed logs do not eliminate egress. |
 | Sign-out/disable/delete does not immediately revoke locally verified issued JWTs | ADR-032; refresh revocation is different from access/ID token expiry. |
 | User deletion preserves old profile/data | ADR-032; removes email GSI keys; refresh-token use does not update lastLoginAt. |
 | Some QA rows use an unswept `TTL` field | `storage-stack.ts`, `qa/handler.py`; enabling a sweep would be a separate data-retention change. |
-| Fixed-key transcript spill precedes conditional item update | `storeTranscript`; accepted for current unconditional/converging writers, re-evaluate before an IfMatch writer. |
+| Fixed-key spill remains for unconditional/converging writers | IfMatch writes use immutable keys and separate cleanup/ambiguity handling (ADR-037); do not generalize the legacy window to that path. |
 | Hardcoded ACM/domain/KB/role IDs and exact Mac upload host | Existing deployment debt; inspect configuration before calling a declared/imported resource missing. |
 | Mac ad-hoc signing uses `codesign --deep`; remote window CSP is not the Tauri config CSP | ADR-024; real Developer ID notarization needs explicit nested signing. |
 | Whisper uses 200GiB root storage and short stopped-task cleanup | ADR-009/035, WhisperStack; deliberate response to disk exhaustion on reused Spot hosts. |

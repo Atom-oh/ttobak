@@ -86,8 +86,8 @@ export class AuthStack extends cdk.Stack {
       // The pre-signup domain allowlist below is not a substitute for this
       // setting -- though note Cognito fires the Pre Sign-Up trigger for
       // AdminCreateUser too (triggerSource: PreSignUp_AdminCreateUser) and the
-      // Lambda doesn't branch on triggerSource, so it's a live constraint on
-      // the invite flow as well, not dead code behind this closed path.
+      // domain policy remains a live invite constraint. The reviewed demo
+      // identity exception applies only to PreSignUp_AdminCreateUser.
       selfSignUpEnabled: false,
       signInAliases: {
         email: true,

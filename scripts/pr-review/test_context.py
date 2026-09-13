@@ -93,7 +93,7 @@ class ReviewContextTests(unittest.TestCase):
         self.assertEqual(len((work / "responded.txt").read_text().splitlines()), 12)
         return [path.read_text() for path in captured]
 
-    def test_isolated_kiro_receives_context_and_diff_without_tools(self):
+    def test_isolated_kiro_receives_context_and_diff_without_file_reads(self):
         captured = self.capture_panel(
             "diff --git a/test.go b/test.go\n+// unique-diff-evidence\n"
         )

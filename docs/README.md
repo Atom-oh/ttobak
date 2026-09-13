@@ -3,6 +3,11 @@
 Repository documentation is English-only. Read the smallest relevant current
 reference; do not preload the historical archive into a PR review.
 
+Verbatim generated note-quality outputs are archived evaluation data. Keep their
+original bytes and hashes; only explanatory prose is translated. The documentation
+check pins those four named artifacts by SHA-256, while checking all authored
+Markdown for English language and historical/current status.
+
 ## Current references
 
 | Reference | Purpose | Verify against |

@@ -1,9 +1,11 @@
 import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as lambdaSources from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as eventsTargets from 'aws-cdk-lib/aws-events-targets';
@@ -14,6 +16,7 @@ import * as apigatewayv2Integrations from 'aws-cdk-lib/aws-apigatewayv2-integrat
 import * as apigatewayv2Authorizers from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
 import { Construct } from 'constructs';
 import { WHISPER_CLUSTER_NAME, WHISPER_TASK_FAMILY, WHISPER_CONTAINER_NAME } from './whisper-stack';
+import { DocumentExtraction } from './document-extraction';
 
 export const RESEARCH_SFN_NAME = 'ttobak-research-workflow';
 
@@ -35,6 +38,8 @@ export interface GatewayStackProps extends cdk.StackProps {
   kmsKeyId?: string;
   knowledgeBaseId?: string;
   dataSourceId?: string;
+  indexingMode?: 'manual-only' | 'all';
+  indexScheduleEnabled?: boolean;
   agentCoreRuntimeArn?: string;
   researchWorkerRole?: iam.IRole;
   convertDocRole?: iam.IRole;
@@ -43,6 +48,8 @@ export interface GatewayStackProps extends cdk.StackProps {
   // (ec2.Vpc.fromLookup, not a stack this one depends on). Optional so
   // unit tests that omit convertDocRole don't need a VPC context lookup.
   vpcId?: string;
+  /** Enable only after the bounded parser and its state protocol are packaged. */
+  enableDocumentExtraction?: boolean;
   /** @deprecated Keep cross-stack reference alive for RealtimeStack */
   legacyRole?: iam.IRole;
   originVerifySecret?: string;
@@ -246,16 +253,92 @@ export class GatewayStack extends cdk.Stack {
       architecture: lambda.Architecture.ARM_64,
       handler: 'bootstrap',
       code: lambda.Code.fromAsset('../backend/cmd/kb'),
-      role: props.kbRole as iam.Role,
+      // Explicit stream/DLQ policy below avoids both an upstream stack cycle
+      // and CDK's unconditioned ListStreams wildcard grant.
+      role: iam.Role.fromRoleArn(this, 'KbRuntimeRole', props.kbRole.roleArn, { mutable: false }),
       environment: {
         TABLE_NAME: props.table.tableName,
         BUCKET_NAME: props.bucket.bucketName,
         KB_BUCKET_NAME: props.kbBucket?.bucketName || '',
+        KB_ID: props.knowledgeBaseId || '',
+        DATA_SOURCE_ID: props.dataSourceId || '',
+        INDEXING_MODE: props.indexingMode || 'manual-only',
         AWS_REGION_NAME: cdk.Aws.REGION,
       },
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
+      timeout: cdk.Duration.minutes(12),
+      memorySize: 1024,
     });
+
+    const indexDlq = new sqs.Queue(this, 'CanonicalIndexDlq', {
+      queueName: 'ttobak-kb-index-dlq',
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      enforceSSL: true,
+      retentionPeriod: cdk.Duration.days(7),
+    });
+    const indexDeliveryPolicy = new iam.Policy(this, 'CanonicalIndexDeliveryPolicy', {
+      roles: [props.kbRole],
+      statements: [
+        new iam.PolicyStatement({
+          actions: ['sqs:SendMessage', 'sqs:GetQueueUrl', 'sqs:GetQueueAttributes'],
+          resources: [indexDlq.queueArn],
+        }),
+      ],
+    });
+    this.kbFunction.node.addDependency(indexDeliveryPolicy);
+    if (props.indexingMode === 'all') {
+      if (!props.table.tableStreamArn) {
+        throw new Error('Canonical indexing requires the table stream');
+      }
+      indexDeliveryPolicy.addStatements(
+        new iam.PolicyStatement({
+          actions: ['dynamodb:DescribeStream', 'dynamodb:GetRecords', 'dynamodb:GetShardIterator'],
+          resources: [props.table.tableStreamArn],
+        }),
+        new iam.PolicyStatement({
+          actions: ['dynamodb:ListStreams'],
+          resources: ['*'],
+          conditions: { StringEquals: { 'aws:RequestedRegion': this.region } },
+        }),
+      );
+      this.kbFunction.addEventSource(new lambdaSources.DynamoEventSource(props.table, {
+        startingPosition: lambda.StartingPosition.LATEST,
+        enabled: true,
+        batchSize: 20,
+        bisectBatchOnError: true,
+        reportBatchItemFailures: true,
+        retryAttempts: 3,
+        maxRecordAge: cdk.Duration.hours(23),
+        onFailure: new lambdaSources.SqsDlq(indexDlq),
+        filters: [
+          lambda.FilterCriteria.filter({
+            eventName: ['INSERT', 'MODIFY', 'REMOVE'],
+            dynamodb: { Keys: {
+              PK: { S: [{ prefix: 'USER#' }] },
+              SK: { S: [{ prefix: 'MEETING#' }, { prefix: 'DOC#' }] },
+            } },
+          }),
+          lambda.FilterCriteria.filter({
+            eventName: ['INSERT', 'MODIFY', 'REMOVE'],
+            dynamodb: { Keys: {
+              PK: { S: [{ prefix: 'ACCOUNT#' }] },
+              SK: { S: [{ prefix: 'DOC#' }] },
+            } },
+          }),
+        ],
+      }));
+    }
+    const indexTick = new events.Rule(this, 'CanonicalIndexTick', {
+      ruleName: 'ttobak-kb-index-tick',
+      description: 'Reconcile knowledge snapshots in the configured rollout mode',
+      schedule: events.Schedule.rate(cdk.Duration.minutes(1)),
+      enabled: props.indexScheduleEnabled ?? false,
+    });
+    indexTick.addTarget(new eventsTargets.LambdaFunction(this.kbFunction, {
+      event: events.RuleTargetInput.fromObject({ action: 'tick' }),
+      retryAttempts: 2,
+      maxEventAge: cdk.Duration.minutes(5),
+      deadLetterQueue: indexDlq,
+    }));
 
     // Q&A Lambda function (Python runtime for flexible prompt engineering)
     this.qaFunction = new lambda.Function(this, 'QAFunction', {
@@ -268,6 +351,7 @@ export class GatewayStack extends cdk.Stack {
       environment: {
         TABLE_NAME: props.table.tableName,
         BUCKET_NAME: props.bucket.bucketName,
+        KB_BUCKET_NAME: props.kbBucket?.bucketName || '',
         KB_ID: props.knowledgeBaseId || '',
         BEDROCK_MODEL_ID: 'global.anthropic.claude-sonnet-5',
         DETECT_MODEL_ID: 'qwen.qwen3-32b-v1:0',
@@ -481,6 +565,23 @@ export class GatewayStack extends cdk.Stack {
     });
     imageUploadRule.addTarget(new eventsTargets.LambdaFunction(this.processImageFunction));
 
+    if (props.enableDocumentExtraction) {
+      if (!props.vpcId) {
+        throw new Error('Document extraction requires a VPC with isolated subnets');
+      }
+      const extractionVpc = ec2.Vpc.fromLookup(this, 'DocumentExtractionVpc', { vpcId: props.vpcId });
+      const s3Prefix = ec2.PrefixList.fromLookup(this, 'DocumentS3Prefix', {
+        prefixListName: `com.amazonaws.${this.region}.s3`,
+      });
+      const dynamoPrefix = ec2.PrefixList.fromLookup(this, 'DocumentDynamoPrefix', {
+        prefixListName: `com.amazonaws.${this.region}.dynamodb`,
+      });
+      new DocumentExtraction(this, 'DocumentExtraction', {
+        bucket: props.bucket, table: props.table, vpc: extractionVpc,
+        s3PrefixListId: s3Prefix.prefixListId, dynamoPrefixListId: dynamoPrefix.prefixListId,
+      });
+    }
+
     // EventBridge rule for transcript uploads -> Summarize Lambda
     const transcriptUploadRule = new events.Rule(this, 'TranscriptUploadRule', {
       ruleName: 'ttobak-transcript-upload',
@@ -510,6 +611,28 @@ export class GatewayStack extends cdk.Stack {
       },
     });
     allPartsTranscribedRule.addTarget(new eventsTargets.LambdaFunction(this.summarizeFunction));
+
+    // Action-item retries use the existing worker with their original event detail.
+    const actionItemsDlq = new sqs.Queue(this, 'ActionItemsDlq', {
+      queueName: 'ttobak-action-items-dlq',
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      retentionPeriod: cdk.Duration.days(7),
+      redriveAllowPolicy: { redrivePermission: sqs.RedrivePermission.DENY_ALL },
+    });
+    const actionItemsRequestedRule = new events.Rule(this, 'ActionItemsRequestedRule', {
+      ruleName: 'ttobak-action-items-requested',
+      description: 'Retry action-item extraction for the requested meeting analysis run',
+      eventPattern: {
+        source: ['ttobak.analysis'],
+        detailType: ['ActionItemsRequested'],
+      },
+    });
+    // CDK scopes both Lambda invocation and DLQ SendMessage to this rule ARN.
+    actionItemsRequestedRule.addTarget(new eventsTargets.LambdaFunction(this.summarizeFunction, {
+      maxEventAge: cdk.Duration.minutes(5),
+      retryAttempts: 3,
+      deadLetterQueue: actionItemsDlq,
+    }));
 
     // Convert Doc Lambda (container image w/ LibreOffice) + EventBridge rule
     // for PPTX/PPT slide uploads -> PDF sidecar conversion. Optional (like

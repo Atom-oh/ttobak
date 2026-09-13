@@ -286,6 +286,7 @@ function MeetingDetailContent() {
   const router = useRouter();
   const { isAuthenticated, isLoading: authLoading } = useAuth();
   const [meeting, setMeeting] = useState<MeetingDetail | null>(null);
+  const [summarySave, setSummarySave] = useState<{ revision: number; hasContent: boolean } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [showUploader, setShowUploader] = useState(false);
   const [showAudioUploader, setShowAudioUploader] = useState(false);
@@ -391,16 +392,6 @@ function MeetingDetailContent() {
     return () => clearInterval(interval);
   }, [meeting?.meetingId, meeting?.status, pollTimedOut]);
 
-  const handleActionItemToggle = (itemId: string) => {
-    if (!meeting) return;
-    setMeeting({
-      ...meeting,
-      actionItems: meeting.actionItems?.map((item) =>
-        item.id === itemId ? { ...item, completed: !item.completed } : item
-      ),
-    });
-  };
-
   const handleShare = (user: SharedUser) => {
     if (!meeting) return;
     setMeeting({
@@ -440,6 +431,7 @@ function MeetingDetailContent() {
 
   const usingTranscriptB = Boolean(meeting.transcriptB?.trim() && (meeting.selectedTranscript === 'B' || !meeting.transcriptA?.trim()));
   const displayedTranscript = usingTranscriptB ? meeting.transcriptB : (meeting.transcriptA?.trim() ? meeting.transcriptA : undefined);
+  const canEdit = meeting.permission === 'edit' || (!meeting.isShared && meeting.permission !== 'read');
 
   return (
     <AppLayout activePath="/">
@@ -520,9 +512,12 @@ function MeetingDetailContent() {
                   content={resolveTranscriptLinks(resolveAttachmentUrls(meeting.content || '', meeting.attachments))}
                   summary={resolveTranscriptLinks(meeting.summary || '')}
                   transcriptA={meeting.transcriptA}
-                  onSave={async (html) => {
-                    await meetingsApi.update(meeting.meetingId, { content: html });
-                  }}
+                  onSave={canEdit ? async (content) => {
+                    await meetingsApi.update(meeting.meetingId, { content });
+                    // An acknowledged autosave must not replace newer text still
+                    // being typed in the editor. Notify analysis separately.
+                    setSummarySave((current) => ({ revision: (current?.revision ?? 0) + 1, hasContent: !!content.trim() }));
+                  } : undefined}
                 />
               </div>
               <div
@@ -531,8 +526,15 @@ function MeetingDetailContent() {
               />
               <div className="flex-1 min-w-0">
                 <ActionItemsCard
+                  key={meeting.meetingId}
+                  meetingId={meeting.meetingId}
+                  meetingStatus={meeting.status}
                   items={meeting.actionItems}
-                  onToggle={handleActionItemToggle}
+                  analysis={meeting.actionItemsAnalysis}
+                  canEdit={canEdit}
+                  savedSummary={meeting.content ?? ''}
+                  sourceRevision={summarySave?.revision ?? 0}
+                  hasSavedSummary={summarySave?.hasContent ?? !!meeting.content?.trim()}
                 />
               </div>
             </div>
@@ -730,8 +732,9 @@ function MeetingDetailContent() {
 }
 
 export default function MeetingDetailPage() {
+  const pathname = usePathname();
   return (
-    <MeetingErrorBoundary>
+    <MeetingErrorBoundary key={pathname}>
       <MeetingDetailContent />
     </MeetingErrorBoundary>
   );

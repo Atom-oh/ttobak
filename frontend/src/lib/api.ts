@@ -10,6 +10,13 @@ interface FetchOptions extends RequestInit {
   skipAuth?: boolean;
 }
 
+export class ApiError extends Error {
+  constructor(public readonly status: number, public readonly code: string, message: string) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
 function isTokenExpired(token: string): boolean {
   try {
     const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
@@ -70,7 +77,7 @@ export async function apiFetch<T>(
     const freshToken = await refreshTokenOnce();
     if (!freshToken) {
       triggerAuthFailure();
-      throw new Error('Authentication required');
+      throw new ApiError(401, 'UNAUTHORIZED', 'Authentication required');
     }
     response = await fetch(url, {
       ...rest,
@@ -78,13 +85,13 @@ export async function apiFetch<T>(
     });
     if (response.status === 401) {
       triggerAuthFailure();
-      throw new Error('Authentication required');
+      throw new ApiError(401, 'UNAUTHORIZED', 'Authentication required');
     }
   }
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({ error: { code: 'UNKNOWN', message: 'Request failed' } }));
-    throw new Error(errorData.error?.message || `HTTP ${response.status}`);
+    throw new ApiError(response.status, errorData?.error?.code || 'UNKNOWN', errorData?.error?.message || `HTTP ${response.status}`);
   }
 
   if (response.status === 204 || response.headers.get('content-length') === '0') {
@@ -144,7 +151,17 @@ export const meetingsApi = {
     );
   },
 
-  get: (id: string) => api.get<import('@/types/meeting').Meeting>(`/api/meetings/${id}`),
+  get: (id: string, options?: { signal?: AbortSignal }) => api.get<import('@/types/meeting').Meeting>(`/api/meetings/${id}`, options),
+
+  getResummary: (id: string, options?: { signal?: AbortSignal }) =>
+    api.get<import('@/types/meeting').ResummaryStatus>(`/api/meetings/${encodeURIComponent(id)}/resummary`, options),
+  requestResummary: (id: string, options?: { signal?: AbortSignal }) =>
+    api.post<import('@/types/meeting').ResummaryStatus>(`/api/meetings/${encodeURIComponent(id)}/resummary`, undefined, options),
+  readSummary: (id: string, cursor?: string, options?: { signal?: AbortSignal }) => {
+    const query = new URLSearchParams({ kind: 'meeting', section: 'summary', pageSize: '8000' });
+    if (cursor) query.set('cursor', cursor);
+    return api.get<import('@/types/meeting').SummaryReadingPage>(`/api/meetings/${encodeURIComponent(id)}/reading?${query}`, options);
+  },
 
   create: (data: { title: string; date?: string; participants?: string[]; sttProvider?: 'transcribe' | 'nova-sonic'; status?: string }) =>
     api.post<import('@/types/meeting').Meeting>('/api/meetings', data),
@@ -154,6 +171,17 @@ export const meetingsApi = {
 
   rediarize: (meetingId: string, speakerCount: number) =>
     api.post<{ meetingId: string; status: string }>(`/api/meetings/${meetingId}/rediarize`, { speakerCount }),
+
+  getActionItems: (meetingId: string, options?: { signal?: AbortSignal }) =>
+    api.get<import('@/types/meeting').ActionItemsResponse>(`/api/meetings/${meetingId}/action-items`, options),
+
+  retryActionItems: (meetingId: string, options?: { signal?: AbortSignal }) =>
+    api.post<import('@/types/meeting').ActionItemsResponse>(`/api/meetings/${meetingId}/action-items/retry`, {}, options),
+
+  setActionItemCompleted: (meetingId: string, itemId: string, completed: boolean, options?: { signal?: AbortSignal }) =>
+    api.put<import('@/types/meeting').ActionItemsResponse>(
+      `/api/meetings/${meetingId}/action-items/${encodeURIComponent(itemId)}`, { completed }, options,
+    ),
 
   // ADR-033 cost/sizing simulator
   extractSimRequirements: (meetingId: string) =>
@@ -202,6 +230,35 @@ export const meetingsApi = {
     ),
 };
 
+function attachmentTextPath(meetingId: string, attachmentId: string) {
+  return `/api/meetings/${encodeURIComponent(meetingId)}/attachments/${encodeURIComponent(attachmentId)}/text`;
+}
+
+export const attachmentTextApi = {
+  status: (meetingId: string, attachmentId: string, options?: { signal?: AbortSignal }) =>
+    api.get<import('@/types/meeting').AttachmentTextStatus>(`${attachmentTextPath(meetingId, attachmentId)}/status`, options),
+  retry: (meetingId: string, attachmentId: string, options?: { signal?: AbortSignal }) =>
+    api.post<import('@/types/meeting').AttachmentTextStatus>(`${attachmentTextPath(meetingId, attachmentId)}/retry`, undefined, options),
+  read: (meetingId: string, attachmentId: string, cursor?: string, options?: { signal?: AbortSignal }) => {
+    const query = new URLSearchParams({ pageSize: '3000' });
+    if (cursor) query.set('cursor', cursor);
+    return api.get<import('@/types/meeting').AttachmentTextPage>(`${attachmentTextPath(meetingId, attachmentId)}?${query}`, options);
+  },
+};
+
+export function indexStatusPath(target: import('@/types/meeting').IndexStatusTarget) {
+  switch (target.kind) {
+    case 'meeting': return `/api/meetings/${encodeURIComponent(target.meetingId)}/index-status`;
+    case 'document': return `/api/documents/${encodeURIComponent(target.docId)}/index-status`;
+    case 'accountDocument': return `/api/accounts/${encodeURIComponent(target.accountId)}/documents/${encodeURIComponent(target.docId)}/index-status`;
+  }
+}
+
+export const indexStatusApi = {
+  get: (target: import('@/types/meeting').IndexStatusTarget, options?: { signal?: AbortSignal }) =>
+    api.get<import('@/types/meeting').IndexStatusResponse>(indexStatusPath(target), options),
+};
+
 // Presigned URL for uploads
 export const uploadsApi = {
   getPresignedUrl: (data: { fileName: string; fileType: string; category: 'audio' | 'image' | 'file' | 'doc'; meetingId?: string; partIndex?: number; totalParts?: number }) =>
@@ -237,6 +294,7 @@ export const kbApi = {
 interface QAResponse {
   answer: string;
   sources?: string[];
+  sourceDetails?: import('@/types/meeting').QASourceDetail[];
   usedKB?: boolean;
   usedDocs?: boolean;
   toolsUsed?: string[];

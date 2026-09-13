@@ -619,8 +619,8 @@ func TestPickTranscriptToSpill(t *testing.T) {
 }
 
 func TestValidateTranscriptRef(t *testing.T) {
-	// The ref must match the ONE key storeTranscript writes for this
-	// meeting+field. Anything else — another meeting's transcript in the
+	// The ref must match an allowed key for this meeting+field.
+	// Anything else — another meeting's transcript in the
 	// same bucket included — is a cross-tenant read primitive when combined
 	// with the user-settable TranscriptA passthrough and the api Lambda's
 	// bucket-wide grant, and must be rejected.

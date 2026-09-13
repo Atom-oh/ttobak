@@ -37,6 +37,11 @@ writes a separate USER#/LOGIN item for lastLoginAt, with a short abort timeout,
 try/catch, no reserved concurrency and a DISABLED switch. It must fail open; it is
 not called on refresh-token reauthentication. Both are Node assets, not Go binaries.
 
+Pre-signup packages its sibling `policy.mjs` too. Its sole address exception is
+`demo@atomai.click` on `PreSignUp_AdminCreateUser` (case-insensitive email match);
+other addresses still follow the domain policy. It grants no group membership
+and does not enable self-signup.
+
 EdgeAuth validates viewer JWTs for application API requests. GatewayStack uses a
 Cognito HTTP JWT authorizer plus Go/Python integrations: Go chi payload **1.0**,
 Python QA payload **2.0**. The literal public-doc GET registration deliberately has
@@ -81,6 +86,12 @@ docs/ and docs-pdf/. New categories must extend that allowlist; transcript spill
 objects are not public media. Signed GETs use CloudFront with an S3 fallback when
 signing material is unavailable; signed upload PUTs still target S3 directly.
 
+Conditional transcript writers use immutable `{field}.{32-lowercase-hex}.txt`
+keys under the authorized meeting's transcripts/ prefix; legacy fixed keys remain
+readable. Bucket versioning is not what makes those new keys immutable. Failed
+definite conditional writes clean only new spills; ambiguous writes retain them.
+Deploy Go/QA reader compatibility before writers (ADR-037).
+
 Whisper benchmark objects under bench-transcripts/ have current and noncurrent
 version expiry; a delete marker is not immediate physical deletion of all versions.
 Inspect exact lifecycle values in StorageStack when changing retention. The
@@ -96,11 +107,12 @@ for a separate ttobak-connections table described an obsolete design.
 | transcribe | Go ARM64 zip | 5m | 512MB |
 | summarize | Go ARM64 zip | 15m | 512MB |
 | process-image | Go ARM64 zip | 2m | 1024MB |
-| kb | Go ARM64 zip | 30s | 256MB |
+| kb | Go ARM64 zip | 12m | 1024MB |
 | ws-authorizer | Go ARM64 zip | 10s | 128MB |
 | websocket | Go ARM64 zip | 29s | 256MB |
 | qa | Python 3.12 ARM64 | 60s | 512MB |
 | sim | Python 3.12 ARM64 | 15m | 1024MB |
+| document-extract | Python 3.12 ARM64, bundled pinned dependencies | 90s | 1536MB |
 | convert-doc | Go/LibreOffice ARM64 container | 5m | 3008MB |
 
 Model/environment selection belongs to each function, not one repo-wide model.
@@ -114,14 +126,49 @@ use Haiku. QA detection and Translate are separate service/model choices.
 | S3 Object Created, transcripts/ | summarize |
 | Custom AllPartsTranscribed | summarize |
 | Custom ImageUploadCompleted | process-image |
+| Custom ActionItemsRequested, ttobak.analysis | summarize, action analysis only |
+| Custom DocumentUploadCompleted, ttobak.upload | document-extract, queued canonical runs only |
 | S3 Object Created, docs/ slide suffix filter | convert-doc |
+| One-minute ttobak-kb-index-tick | kb; enabled in the current app, manual-only |
+| Canonical DynamoDB stream records | kb; mapping/grants created only in all mode |
 | Scheduled warming event | API alias |
 | API simulator invoke | sim, asynchronous |
 
 The image rule is not a raw images/ prefix trigger, so simulator chart writes do
 not invoke process-image. convert-doc produces a docs-pdf/ sidecar and has docs/*
-read plus docs-pdf/* write permissions in isolated subnets; cross-tenant read and
-parser risk remain documented (ADR-022).
+read plus docs-pdf/* read/write permissions in isolated subnets. Source GET
+ETag/version metadata and conditional preview replacement bind converted bytes.
+Canonical readers validate that binding; the preview URL still checks existence.
+Cross-tenant original/preview reads and parser risk remain (ADR-022).
+
+ActionItemsRequested delivery has three retries within five minutes and an
+SSE-SQS DLQ with seven-day retention. The exact rule ARN scopes Lambda invoke and
+queue SendMessage. The existing summarize worker processes owner/meeting/run IDs
+without rerunning transcription/summary. Analysis state and five-minute leases
+live in `MEETING#{id}/ANALYSIS#actionItems`; expired work becomes retryable failure.
+The DLQ covers delivery, not downstream model failures.
+
+### Attachment extraction
+
+The app enables the DocumentExtraction construct. Its worker validates current
+MEETING#/ATTACH#/ATTEXT# identities, run/lease and original ETag before publishing
+immutable results under `files/{uploader}/{meetingId}/text/{attachmentId}/{runId}.json`.
+Input/output bounds are 20 MiB/1 MiB. Native-text PDF, PPTX, DOCX and Markdown
+extraction has explicit partial/unsupported states and no OCR/model/network fetch.
+Parser subprocess environment/resource restrictions supplement deployment isolation.
+
+The worker uses PRIVATE_ISOLATED subnets and existing S3/DynamoDB endpoints. Its
+security group permits only HTTPS to those managed prefix lists, with no ingress.
+IAM permits files/* reads, result-prefix PUTs and DynamoDB
+GetItem/UpdateItem/ConditionCheckItem; regional ENI wildcards have RequestedRegion
+conditions. These prefix/table grants span users, so canonical checks remain
+essential. Logs retain 30 days; event delivery retries three times within five
+minutes to a seven-day encrypted DLQ, with Lambda async retries disabled.
+
+Deploy/verify the worker before upload/retry producers, then consumers. The current
+API does not wire its queue/read services, and summary/QA integration remains
+staged; creating this construct does not backfill attachments. See
+[worker contract](../backend/python/document-extract/LAMBDA.md) and ADR-039.
 
 ## Whisper and research
 
@@ -149,6 +196,48 @@ networking. Generated option text is untrusted; its prompt/import checks are not
 the security boundary. Verify role/network configuration when modifying execution.
 
 ## Knowledge and declared gaps
+
+The app currently sets `knowledgeIndexingMode='manual-only'` and
+`knowledgeIndexScheduleEnabled=true`; the reusable construct's schedule default
+is false. This enables the scheduled bootstrap in the synthesized configuration,
+not evidence of a deployed producer. Canonical stream mapping/read permissions
+remain absent until explicit `all` mode.
+
+`cmd/kb` requires TABLE_NAME, assets BUCKET_NAME, KB_BUCKET_NAME, KB_ID,
+DATA_SOURCE_ID and INDEXING_MODE. IDs must be ten alphanumeric characters; mode
+must be manual-only or all, validated before AWS clients initialize. It accepts
+DynamoDB Records or schedule/tick/sync envelopes; `/api/kb/*` stays in the API
+Lambda. No OpenSearch or model inference permission belongs to this worker.
+
+Manual-only creates immutable `manual-kb/v1/` and `shared-kb/v1/` snapshots from
+private kb/* and authenticated-global shared/* originals. Originals are read-only;
+canonical sources/jobs and legacy meeting exports remain untouched. DynamoDB
+writes are restricted to KBINDEX#JOBS/KBINDEX#CONTROL through LeadingKeys plus a
+non-null condition. All mode adds canonical source reads, canonical/v1/ projection
+access and legacy meetings/ cleanup; it never grants writes to source rows.
+
+Full S3 ingestion is coalesced through durable run/lease/revision conditions.
+Unknown provider outcomes freeze mutations; crashes can retain the 20-minute
+coordinator lease. GetKnowledgeBaseDocuments is KB-scoped, matches exact URIs and
+requires initial data-source sync; partial/missing replies are not document success.
+No direct ingestion is used. The external data source must include all snapshot
+prefixes and support provenance filtering.
+
+Activation order is worker with delivery off, restricted manual-only configuration,
+explicit schedule enablement, snapshot/recall verification, strict QA deployment,
+then all-mode canonical delivery. The checked-in enabled schedule makes rollout
+preparation a deployment concern. Durable mode rejects downgrades; restore all
+after a mistaken downgrade. Old-QA rollback after canonical cleanup needs reviewed
+legacy re-export. Follow the [bootstrap runbook](runbooks/knowledge-index-bootstrap.md)
+and [source contract](../backend/internal/service/INDEX_SOURCE_CONTRACT.md).
+
+QA now receives separate assets and KB bucket names. AiStack grants read/version
+access to assets transcripts/*, docs/*, docs-pdf/*, files/* and KB kb/*, shared/*,
+plus account-conditioned listing to distinguish absence from denied reads. It adds
+no object writes/deletes. SourceAccess/ToolHistory/strict account helpers remain
+unwired in handler.py; these grants do not activate them. Legacy cache variables
+remain injected. Strict QA cutover must follow binary snapshot verification and
+the [current-source rollout](runbooks/qa-current-source-rollout.md).
 
 KnowledgeStack retains externally provisioned KB/data-source IDs and AOSS-related
 resources while a KB teardown remains staged and intentionally undeployed. Its

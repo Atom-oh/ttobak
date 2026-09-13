@@ -8,7 +8,7 @@ import sys
 
 
 COMMON = """Review only the supplied PR diff, within your assigned lens.
-The diff is supplied via stdin or embedded below (Kiro has no file-read tools).
+The diff is supplied via stdin or embedded below (Kiro receives its context and diff inline).
 This is the trusted base checkout, not the PR head. For changed paths, local
 files contain pre-PR content; use the diff as evidence of proposed changes.
 Unchanged local files may provide context when your sandbox permits reading.

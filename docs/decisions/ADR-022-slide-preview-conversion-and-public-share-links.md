@@ -1,30 +1,83 @@
 # ADR-022: Slide conversion and public document links
 
-- Status: Accepted; supersedes ADR-020's PPTX-download-only decision. [ADR-027](ADR-027-cloudfront-signed-media-urls.md) supersedes raw-S3 download delivery and direct-PDF preview assumptions.
-- Original decision date: Not recorded.
-- Code checked: 2026-09-13; infrastructure statements describe configuration, not verified deployment.
+- Status: Accepted; supersedes ADR-020's download-only PPTX decision.
+  [ADR-027](ADR-027-cloudfront-signed-media-urls.md) supersedes raw-S3 download
+  delivery and direct-PDF preview assumptions.
+- Original decision date: Not recorded. Source-binding amendment: 2026-09-12.
+- Code checked: 2026-09-13; configuration does not prove deployment.
 
-## Original decision and rationale
+## Decision and rationale
 
-Add asynchronous PPT/PPTX-to-PDF conversion so uploaded decks can be previewed without PDF.js. Add bearer-token public links for file-backed personal documents. Account sharing creates independent copies; [ADR-029](ADR-029-per-user-document-sharing-by-reference.md) later adds a separate per-user reference-sharing path.
+Convert PPT/PPTX asynchronously with LibreOffice and reuse the native PDF
+viewer. File-backed personal documents may have bearer-token public links.
+Account sharing creates independent copies; [ADR-029](ADR-029-per-user-document-sharing-by-reference.md)
+adds a separate read-only reference-sharing path.
 
-## Current behavior and security invariants
+`convert-doc` is an ARM64 container-image Lambda, triggered by S3 creation
+events for `docs/*.ppt`/`docs/*.pptx`. It writes
+`docs-pdf/{original suffix}.pdf` without changing DynamoDB. Reads discover
+the sidecar with HEAD; downloads retain the original file.
 
-- `convert-doc` is an ARM64 container-image Lambda with LibreOffice, triggered by S3 Object Created events matching `docs/*.ppt`/`docs/*.pptx`. It writes `docs-pdf/{original suffix}.pdf` with PDF content type, without modifying DynamoDB. Reads discover sidecars with `HeadObject`; `downloadUrl` remains the original and `previewUrl` is the conversion.
-- Its S3 grants are `docs/*` read and `docs-pdf/*` write, not the API role's bucket-wide grant. The subprocess strips `AWS_*` variables and has a conversion timeout. Neither measure is an RCE containment boundary by itself.
-- When `vpcId` is supplied, CDK selects `PRIVATE_ISOLATED` subnets and creates an outbound-allowed security group. It relies on an existing S3 endpoint. Verify actual routes/endpoints and effective IAM separately; neither the subnet label nor CDK proves that S3 is the only reachable service. Isolation is required by this decision, even though the constructor can omit VPC configuration.
-- **The sole approved route without both JWT gates is `GET /api/public/docs/{token}`.** CloudFront's `/api/public/*` behavior precedes `/api/*`, omits edge JWT validation, permits GET/HEAD, and disables caching. API Gateway's no-authorizer route is scoped to that literal GET route. Origin verification still applies. This exception does not authorize another unauthenticated route or a public AWS origin.
-- Public tokens are 128 random bits. `ResolvePublicShare` requires an existing pointer, a file-backed document, and equality with the document's current `PublicShareToken`. Mint uses conditional writes; losing concurrent mints clean up their pointers and reread. Revoke conditionally clears the observed token before pointer cleanup, preserving newer tokens.
-- The handler redirects with `Cache-Control: no-store` to a five-minute URL, preferring the converted sidecar for PPT/PPTX. Unavailable conversion returns 404. ADR-027 chooses CloudFront signing when configured, with its documented S3 fallback.
+## Source-bound publication
 
-## Accepted residual risks and tradeoffs
+The converter observes the destination before conversion, records `source-etag`
+and optional `source-version-id` from the actual source GET, and rechecks that
+source before publishing. Destination `If-Match`/`If-None-Match` prevents a late
+converter from replacing a preview changed since its initial observation.
+Conditional or ambiguous PUT failures propagate to the Lambda retry flow;
+the writer disables SDK PUT retries and never deletes the prior preview.
 
-Conversion adds image size, cold-start cost, and asynchronous preview delay. LibreOffice parses untrusted input; stripping the child's environment does not prevent a same-UID compromise from reaching parent credentials. The cross-user `docs/*` read grant remains a concrete residual risk. Per-event-key credentials and explicit macro/linked-content restrictions are unimplemented follow-ups.
+Source HEAD and destination PUT are not atomic; ETags alone do not detect
+metadata-only changes. `GeneratePreviewPDFURL` still checks existence only.
+Canonical index/source readers must verify the source binding and reject stale
+or unbound previews. Legacy previews require conversion, not new metadata
+attached to old bytes. Exhausted retries can leave a missing or stale preview;
+re-upload can request conversion again.
 
-Public URLs issued before revocation can remain usable for five minutes. Token entropy resists guessing; it is **not rate limiting**, and no dedicated public-link limiter is established here. The historical duplicate-S3-endpoint deployment failure explains reusing the endpoint, but its continued presence is unverified.
+## Security boundaries
+
+- IAM permits `docs/*` reads and `docs-pdf/*` reads/writes. Preview reads support
+  the initial HEAD and extend the accepted cross-tenant read exposure.
+- The child strips `AWS_*` variables and has a timeout. Same-UID RCE can still
+  reach parent credentials; these measures are not a sandbox.
+- With `vpcId`, CDK selects isolated subnets and an outbound-allowed security
+  group, relying on an existing S3 endpoint. Verify routes, endpoints and
+  effective IAM. Isolation remains required even though the constructor can
+  omit VPC configuration; CDK does not prove the live network boundary.
+- **The sole approved application route without both JWT gates is
+  `GET /api/public/docs/{token}`.** CloudFront's preceding `/api/public/*`
+  behavior allows GET/HEAD without edge JWT validation or caching. API
+  Gateway's unauthenticated exception is only that literal GET route.
+  Origin verification and handler token validation remain required.
+- Public tokens contain 128 random bits. Resolution requires the pointer,
+  a file-backed document and its matching current `PublicShareToken`.
+  Conditional mint/revoke preserves concurrent replacements; losing mints
+  clean up their pointers and reread the winner.
+- The handler redirects with `Cache-Control: no-store` to a five-minute URL,
+  preferring the converted PPT/PPTX sidecar; absent conversion returns 404.
+  ADR-027 governs CloudFront signing and the S3 fallback.
+
+## Consequences and remaining risks
+
+Conversion adds image size, cold starts and preview delay. Cross-user
+`docs/*` and `docs-pdf/*` reads remain possible after a parser compromise.
+Per-event-key credentials and explicit macro/remote-content restrictions
+remain follow-ups. Reusing the S3 endpoint avoids the historical duplicate
+prefix-list route failure; its live presence still needs verification.
+
+Already-issued URLs can survive revocation for five minutes. Token entropy
+resists guessing; it supplies no rate limit. This exception authorizes neither
+another unauthenticated route nor a public application origin.
 
 ## Evidence
 
-- [Converter](../../backend/cmd/convert-doc/main.go), [image](../../backend/cmd/convert-doc/Dockerfile), [hardening tests](../../backend/internal/convertdoc/convertdoc_test.go).
-- [Share lifecycle](../../backend/internal/service/account.go), [conditional persistence](../../backend/internal/repository/account.go), [public handler](../../backend/internal/handler/document.go), [lifecycle tests](../../backend/internal/service/account_test.go).
-- [IAM](../../infra/lib/ai-stack.ts), [Lambda/routes](../../infra/lib/gateway-stack.ts), [CloudFront behaviors](../../infra/lib/frontend-stack.ts).
+- [Converter](../../backend/cmd/convert-doc/main.go),
+  [publication contract](../../backend/internal/convertdoc/storage.go),
+  [storage tests](../../backend/internal/convertdoc/storage_test.go).
+- [Preview URLs](../../backend/internal/service/upload.go),
+  [canonical source reader](../../backend/internal/service/index_source.go).
+- [Share service](../../backend/internal/service/account.go),
+  [persistence](../../backend/internal/repository/account.go),
+  [public handler](../../backend/internal/handler/document.go).
+- [IAM](../../infra/lib/ai-stack.ts), [Lambda/routes](../../infra/lib/gateway-stack.ts),
+  [CloudFront](../../infra/lib/frontend-stack.ts).

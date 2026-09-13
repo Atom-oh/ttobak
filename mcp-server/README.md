@@ -46,8 +46,10 @@ export, projects and links.
   account space. Directly shared documents can be read, but only owners revise them.
 - put_document creates a new ID. update_document preserves the ID and omitted body;
   include required title/metadata fields according to its schema.
-- Document Hub Markdown is not automatically indexed by the QA KB. Read documents
-  directly for their current contents; KB upload/ingestion is a different path.
+- Read Document Hub content directly for current text. Canonical automatic indexing
+  is implemented but gated behind snapshot verification and strict QA cutover;
+  the app currently enables only manual-only snapshot scheduling. A saved document
+  or index-status route does not establish active canonical indexing.
 - For account hierarchy filters, list accessible accounts and explicitly include
   selected group/descendant IDs in accountIds. Preserve the same filter/cursor
   selection across pages; hierarchy does not grant access.
@@ -56,6 +58,60 @@ export, projects and links.
   can add another member to an assignable non-owner role (ADR-034).
 - HTTP failures are tool errors, not success with error-shaped JSON. Streaming
   decoding must preserve UTF-8 across byte boundaries.
+
+## Bounded meeting and transcript reads
+
+`ttobak_get_meeting({"meetingId":"id"})` now returns saved **notes** first.
+Use `section:"summary"` for generated content and `section:"actionItems"` for
+full action-item JSON. It no longer returns full A/B transcripts, speakerMap,
+attachments or shares. The original tool name/meetingId input remain valid.
+
+Both reading tools use only authenticated
+`GET /api/meetings/{meetingId}/reading`. Deploy that API before this adapter.
+Missing routes, authorization failures or read errors are tool errors, with no
+fallback to full detail or cached text. The backend owns source selection,
+Unicode pagination, segment validation and opaque cursors; the adapter does not
+reslice server pages.
+
+```json
+{"meetingId":"id","section":"summary","pageSize":4000}
+```
+
+Meeting pages contain exact notes/content/actionItemsJson and bounded metadata,
+action preview and analysis status. Inspect actionItemsPreview's
+available/complete/totalItems/metadataTruncated fields. Absent legacy analysis
+is unknown, never inferred successful from `[]`. Join **all** actionItemsJson
+pages before parsing; each page may end within a JSON string. Full pages preserve
+extension fields and completion state omitted from previews.
+
+Use `ttobak_read_transcript` for selected or explicit A/B text:
+
+```json
+{"meetingId":"id","source":"selected","pageSize":4000,"startTime":60,"endTime":120}
+```
+
+- source defaults to selected; explicit A/B never borrows the selected variant's
+  speaker/timing metadata. Optional startTime/endTime must both be finite seconds
+  with `0 <= startTime < endTime`.
+- Join chunks[].text in order and follow page.nextCursor unchanged with the same
+  meeting/section or source/time range. Read every preceding page before treating
+  complete=true and nextCursor=null as a complete read of that requested scope.
+- Offsets are zero-based Unicode code points with exclusive ends, not UTF-16
+  indices or byte offsets. pageSize is 1–8000, default 4000.
+- Verified time ranges select whole segments overlapping the interval. A partial
+  chunk retains the original segment's whole-segment times; never infer word
+  boundaries. Without verified segments, raw text is available but a time-window
+  request returns TIME_RANGE_UNAVAILABLE.
+- The API caps JSON at 14,000 bytes including its newline and 50 transcript chunks,
+  so pages can be shorter than requested. The adapter aborts HTTP bodies above
+  32,000 bytes before buffering/JSON parsing and separately caps the wrapped MCP
+  result at 32,000 bytes.
+- Treat revision/cursor as opaque. Every continuation rechecks access and source
+  revision; STALE_CURSOR requires restarting without the cursor.
+
+Notes-only reads avoid transcript hydration on the server; transcript reads still
+load the chosen source to validate/page it. See the
+[API contract](../docs/API-SPEC.md#bounded-meeting-reading) for response/error details.
 
 ## Public bundle provenance
 
@@ -67,6 +123,13 @@ After source changes, build/bundle and copy it from the repository root:
 cp mcp-server/dist/ttobak-mcp.mjs frontend/public/mcp/ttobak-mcp.mjs
 diff mcp-server/dist/ttobak-mcp.mjs frontend/public/mcp/ttobak-mcp.mjs
 ```
+
+`npm test` builds modules, runs protocol regressions, and builds the bundle twice
+to check reproducibility and the same bounded-reading behavior in the standalone
+artifact. Fixtures exercise real HTTP/auth code and oversized-response aborts;
+Go tests own source verification, Unicode pagination and cursor validity.
+`npm run test:bundle` runs bundle checks alone. Tests do not copy the public
+artifact; CI's byte comparison verifies the committed copy.
 
 For connection failures, first verify the executable path, target configuration,
 OAuth callback/scopes and current user login. Do not solve authorization failures

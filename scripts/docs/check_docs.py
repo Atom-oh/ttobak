@@ -2,6 +2,7 @@
 """Check English documentation, generated context and source-backed inventories."""
 
 from pathlib import Path
+import hashlib
 import re
 import subprocess
 import sys
@@ -10,8 +11,33 @@ from urllib.parse import unquote
 from sync_review_context import BRIDGE, ROOT, render
 
 
-def main() -> int:
+# Verbatim model output is immutable test evidence, not authored English prose.
+# Pin only these archived notes; README and every other Markdown file remain
+# subject to the language/history checks. Changing a note must never look like
+# translating documentation while silently falsifying the recorded evaluation.
+RAW_EVIDENCE = {
+    "docs/research/evaluations/2026-09-12-note-quality/notes-are-not-spoken-evidence.md":
+        "b29fa7a414eb000eef2f228890d6ad2d7a2d5a6e48bab315ec92f0a0ed535403",
+    "docs/research/evaluations/2026-09-12-note-quality/owners-and-deadlines.md":
+        "5feb3c0ded2ed2e77b9a0b781b4b7bd634c391aed1dba1ffec3a2ab0912f6e92",
+    "docs/research/evaluations/2026-09-12-note-quality/proposal-is-not-decision.md":
+        "970b65f053dd8980ed50c9bbd1b77553fb7b27dc47c175a5aad1ea060f4b18e1",
+    "docs/research/evaluations/2026-09-12-note-quality/selected-source-numbers-negation.md":
+        "746865422fe48825617d2d82d08f4242716055351abd8b438fb83ff52c462ece",
+}
+
+
+def validate_evidence(root: Path) -> list[str]:
     errors = []
+    for relative, digest in RAW_EVIDENCE.items():
+        path = root / relative
+        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+            errors.append(f"{relative}: archived model evidence is missing or modified")
+    return errors
+
+
+def main() -> int:
+    errors = validate_evidence(ROOT)
     names = subprocess.check_output(
         ["git", "ls-files", "--cached", "--others", "--exclude-standard", "--", "*.md"],
         cwd=ROOT, text=True,
@@ -20,6 +46,8 @@ def main() -> int:
     for path in paths:
         text = path.read_text()
         relative = path.relative_to(ROOT)
+        if str(relative) in RAW_EVIDENCE:
+            continue
         if re.search("[가-힣ㄱ-ㅎㅏ-ㅣ]", text):
             errors.append(f"{relative}: non-English Korean text remains")
         # Code samples may contain illustrative links, not repository references.
@@ -59,7 +87,8 @@ def main() -> int:
     if errors:
         print("\n".join(errors), file=sys.stderr)
         return 1
-    print(f"Documentation checks passed: {len(paths)} Markdown files, "
+    print(f"Documentation checks passed: {len(paths)} Markdown files "
+          f"({len(RAW_EVIDENCE)} immutable evidence files), "
           f"{len(routes)} Go routes, {len(expected.encode())}-byte review context.")
     return 0
 

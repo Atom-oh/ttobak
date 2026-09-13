@@ -799,7 +799,8 @@ func (r *DynamoDBRepository) CreateDocShare(ctx context.Context, docID, ownerID,
 
 func (r *DynamoDBRepository) GetDocShare(ctx context.Context, sharedToID, docID string) (*model.Share, error) {
 	out, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
-		TableName: aws.String(r.tableName),
+		TableName:      aws.String(r.tableName),
+		ConsistentRead: aws.Bool(true),
 		Key: map[string]types.AttributeValue{
 			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + sharedToID},
 			"SK": &types.AttributeValueMemberS{Value: model.PrefixDocShare + docID},

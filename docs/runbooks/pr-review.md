@@ -9,9 +9,17 @@ checks proposed review scripts and documentation.
 
 `CLAUDE.md` is canonical. `scripts/docs/sync_review_context.py` publishes selected
 review sections into `AGENTS.md` with a source hash; local Kiro steering references
-that file. CI Kiro cells have isolated HOME/cwd and no trusted file tools, so
+that file. CI Kiro cells have isolated HOME/cwd and request no trusted tools, so
 `scripts/pr-review/build-prompts.py` embeds AGENTS.md in every lens prompt. Steering
 alone cannot supply that context inside the isolated CI directory.
+
+Tool trust and tool availability are different controls. The current invocation
+uses `--trust-tools=`; local stub tests check the requested flags, not the actual
+runner's capability list. Open PR #193 records a separate zero-tool-agent and
+fallback-detection fix. Do not claim that the empty trust flag proves no tools
+exist. This context-delivery change does not grant file reads or depend on them;
+verify the selected runner/agent before claiming a zero-tool security boundary.
+Kiro's custom-agent documentation defines availability through the `tools` list.
 
 The builder rejects missing, stale or oversized context. Keep the extract below
 24,000 bytes to leave room for Kiro's inline diff and lens instructions. Do not
@@ -72,10 +80,11 @@ or no-merge instruction overrides that authorization.
 ```bash
 python3 scripts/docs/sync_review_context.py
 python3 scripts/docs/check_docs.py
+python3 -m unittest discover -s scripts/docs -p 'test_*.py' -v
 python3 -m unittest discover -s scripts/pr-review -p 'test_*.py' -v
 bash scripts/pr-review/chair-timeout-policy-check.sh
 for script in scripts/pr-review/*.sh; do bash -n "$script"; done
 ```
 
-The tests capture prompts using fake CLIs, proving context/diff delivery and trust
-flags without submitting data to providers. A live review remains separate.
+The tests capture prompts using fake CLIs, proving context/diff delivery and requested
+invocation flags without submitting data to providers. A live review remains separate.

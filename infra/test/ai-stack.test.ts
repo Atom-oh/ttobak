@@ -7,7 +7,7 @@ import { AiStack } from '../lib/ai-stack';
 describe('AiStack', () => {
   let template: Template;
 
-  beforeAll(() => {
+  function buildTemplate(indexingMode: 'manual-only' | 'all' = 'manual-only'): Template {
     const app = new cdk.App();
 
     const mockStack = new cdk.Stack(app, 'MockStack');
@@ -27,9 +27,14 @@ describe('AiStack', () => {
       researchAgentExecutionRoleArn:
         'arn:aws:iam::111111111111:role/test-research-role',
       knowledgeBaseId: 'test-kb-id',
+      indexingMode,
     });
 
-    template = Template.fromStack(stack);
+    return Template.fromStack(stack);
+  }
+
+  beforeAll(() => {
+    template = buildTemplate();
   });
 
   test('qa role InvokeGateway grant is scoped to the Web Search Gateway ARN', () => {
@@ -50,20 +55,128 @@ describe('AiStack', () => {
     });
   });
 
-  test('qa can read only transcript objects, without bucket listing or writes', () => {
+  test('manual bootstrap can publish snapshots without changing originals or meeting projections', () => {
+    const statements = Object.values(template.findResources('AWS::IAM::Policy'))
+      .filter((policy) => JSON.stringify(policy.Properties.Roles).includes('TtobakKbRole'))
+      .flatMap((policy) => policy.Properties.PolicyDocument.Statement);
+    const bySid = (sid: string) => statements.find((entry) => entry.Sid === sid);
+    expect(bySid('CanonicalIndexState')).toBeDefined();
+    expect(bySid('CanonicalIndexState').Action).toEqual([
+      'dynamodb:GetItem', 'dynamodb:Query', 'dynamodb:UpdateItem', 'dynamodb:ConditionCheckItem',
+    ]);
+    expect(bySid('CanonicalIndexState').Condition).toEqual({
+      'ForAllValues:StringEquals': { 'dynamodb:LeadingKeys': ['KBINDEX#JOBS', 'KBINDEX#CONTROL'] },
+      Null: { 'dynamodb:LeadingKeys': 'false' },
+    });
+    for (const sid of ['WriteCanonicalIndexProjections', 'RemoveObsoleteIndexProjections']) {
+      const statement = bySid(sid);
+      expect(statement).toBeDefined();
+      expect(statement.Resource).toHaveLength(2);
+      const resources = JSON.stringify(statement.Resource);
+      expect(resources).toContain('/manual-kb/v1/*');
+      expect(resources).toContain('/shared-kb/v1/*');
+      expect(resources).not.toContain('/meetings/*');
+      expect(resources).not.toContain('/canonical/v1/*');
+      expect(resources).not.toContain('"/kb/*"');
+      expect(resources).not.toContain('"/shared/*"');
+    }
+    expect(bySid('ReadCanonicalIndexSources')).toBeUndefined();
+    expect(bySid('ReadCanonicalIndexRecords')).toBeUndefined();
+    expect(bySid('InspectCanonicalSourceExistence')).toBeUndefined();
+    expect(bySid('ReadLegacyKnowledgeSources').Action).toEqual(['s3:GetObject', 's3:GetObjectVersion']);
+    expect(bySid('SynchronizeCanonicalIndex').Action).toEqual([
+      'bedrock:StartIngestionJob', 'bedrock:GetIngestionJob', 'bedrock:ListIngestionJobs',
+      'bedrock:GetKnowledgeBaseDocuments',
+    ]);
+    expect(JSON.stringify(bySid('SynchronizeCanonicalIndex').Resource)).toContain('knowledge-base/test-kb-id');
+    for (const statement of statements) {
+      expect([statement.Resource].flat()).not.toContain('*');
+      expect([statement.Action].flat()).not.toContain('aoss:APIAccessAll');
+    }
+  });
+
+  test('explicit full mode adds only canonical source and projection permissions', () => {
+    const all = buildTemplate('all');
+    const statements = Object.values(all.findResources('AWS::IAM::Policy'))
+      .filter((policy) => JSON.stringify(policy.Properties.Roles).includes('TtobakKbRole'))
+      .flatMap((policy) => policy.Properties.PolicyDocument.Statement);
+    const bySid = (sid: string) => statements.find((entry) => entry.Sid === sid);
+    expect(bySid('ReadCanonicalIndexRecords').Action).toEqual([
+      'dynamodb:GetItem', 'dynamodb:Scan', 'dynamodb:ConditionCheckItem',
+    ]);
+    expect(bySid('ReadCanonicalIndexRecords').Condition).toBeUndefined();
+    expect(bySid('CanonicalIndexState').Action).toContain('dynamodb:UpdateItem');
+    for (const entry of statements.filter((statement) =>
+      [statement.Action].flat().includes('dynamodb:UpdateItem'))) {
+      expect(entry.Condition).toEqual({
+        'ForAllValues:StringEquals': { 'dynamodb:LeadingKeys': ['KBINDEX#JOBS', 'KBINDEX#CONTROL'] },
+        Null: { 'dynamodb:LeadingKeys': 'false' },
+      });
+    }
+    const reads = JSON.stringify(bySid('ReadCanonicalIndexSources').Resource);
+    for (const prefix of ['transcripts', 'docs', 'docs-pdf']) {
+      expect(reads).toContain(`/${prefix}/*`);
+    }
+    expect(reads).not.toContain('/audio/*');
+    const writes = JSON.stringify(bySid('WriteCanonicalIndexProjections').Resource);
+    expect(writes).toContain('/canonical/v1/*');
+    const deletes = JSON.stringify(bySid('RemoveObsoleteIndexProjections').Resource);
+    expect(deletes).toContain('/canonical/v1/*');
+    expect(deletes).toContain('/meetings/*');
+    expect(deletes).not.toContain('"/kb/*"');
+    expect(deletes).not.toContain('"/shared/*"');
+  });
+
+  test('converter can inspect preview generations with object access limited to document prefixes', () => {
+    const statements = Object.values(template.findResources('AWS::IAM::Policy'))
+      .filter((policy) => JSON.stringify(policy.Properties.Roles).includes('TtobakConvertDocRole'))
+      .flatMap((policy) => policy.Properties.PolicyDocument.Statement);
+    const reads = statements.filter((statement) =>
+      [statement.Action].flat().some((action: string) => action.startsWith('s3:GetObject')));
+    expect(JSON.stringify(reads.map((statement) => statement.Resource))).toContain('/docs-pdf/*');
+    expect(JSON.stringify(reads.map((statement) => statement.Resource))).toContain('/docs/*');
+    for (const statement of statements.filter((entry) =>
+      [entry.Action].flat().some((action: string) => action.startsWith('s3:')))) {
+      for (const resource of [statement.Resource].flat()) {
+        expect(resource).not.toBe('*');
+        const serialized = JSON.stringify(resource);
+        if (serialized.includes('/*')) {
+          expect(serialized).toMatch(/\/docs(?:-pdf)?\/\*/);
+          expect(serialized).not.toMatch(/\/(audio|images|files|transcripts)\/\*/);
+        }
+      }
+    }
+  });
+
+  test('qa reads current source prefixes and versions without object writes or deletes', () => {
     const policies = Object.values(template.findResources('AWS::IAM::Policy'));
     const statements = policies
       .filter((policy) => JSON.stringify(policy.Properties.Roles).includes('TtobakQaRole'))
       .flatMap((policy) => policy.Properties.PolicyDocument.Statement);
     const s3Statements = statements.filter((statement) =>
       [statement.Action].flat().some((action: string) => action.startsWith('s3:')));
-    expect(s3Statements).toHaveLength(1);
-    expect(s3Statements[0]).toEqual({
-      Sid: 'ReadMeetingTranscripts',
-      Effect: 'Allow',
-      Action: 's3:GetObject',
-      Resource: { 'Fn::Join': ['', [expect.any(Object), '/transcripts/*']] },
-    });
+    expect(s3Statements).toHaveLength(4);
+    const reads = s3Statements.filter((entry) => [entry.Action].flat().includes('s3:GetObject'));
+    expect(reads).toHaveLength(3);
+    for (const entry of reads) {
+      expect([entry.Action].flat()).toEqual(['s3:GetObject', 's3:GetObjectVersion']);
+      expect([entry.Resource].flat()).not.toContain('*');
+    }
+    const resources = JSON.stringify(reads.map((entry) => entry.Resource));
+    for (const prefix of ['transcripts', 'docs', 'docs-pdf', 'files', 'kb', 'shared']) {
+      expect(resources).toContain(`/${prefix}/*`);
+    }
+    expect(resources).not.toContain('/audio/*');
+    expect(resources).not.toContain('/images/*');
+    const list = s3Statements.find((entry) => [entry.Action].flat().includes('s3:ListBucket'));
+    expect(list.Action).toBe('s3:ListBucket');
+    expect(list.Resource).toHaveLength(2);
+    expect(list.Condition.StringEquals['aws:ResourceAccount']).toEqual({ Ref: 'AWS::AccountId' });
+    for (const entry of s3Statements) {
+      for (const action of [entry.Action].flat()) {
+        expect(['s3:GetObject', 's3:GetObjectVersion', 's3:ListBucket']).toContain(action);
+      }
+    }
   });
 
   test('api role CognitoAdminUserManagement grant includes the admin user-management actions, scoped to the pool ARN', () => {

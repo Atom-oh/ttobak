@@ -1,0 +1,188 @@
+{
+  "mode": "grade",
+  "modelId": "global.anthropic.claude-opus-5",
+  "region": "us-west-2",
+  "commit": "350cf4738948bbf8dd316159c0116acd6b96a654",
+  "corpusSha256": "b788bace8302862ffdab4e03ba119b62fa468309542112c7655383e3360ddc7a",
+  "createdAt": "2026-09-12T17:44:19.625927227Z",
+  "passed": true,
+  "cases": [
+    {
+      "id": "selected-source-numbers-negation",
+      "invoked": true,
+      "completed": true,
+      "passed": true,
+      "inputTokens": 1972,
+      "outputTokens": 1049,
+      "findings": [
+        {
+          "id": "nonempty",
+          "passed": true
+        },
+        {
+          "id": "anchor-integrity",
+          "passed": true,
+          "detail": "Require existing verified segment IDs; this does not prove every claim's semantic citation alignment."
+        },
+        {
+          "id": "current-budget",
+          "passed": true
+        },
+        {
+          "id": "latency-unit",
+          "passed": true
+        },
+        {
+          "id": "cpu-unit",
+          "passed": true
+        },
+        {
+          "id": "negation",
+          "passed": true
+        },
+        {
+          "id": "no-inferred-followup",
+          "passed": true
+        }
+      ],
+      "evidence": {
+        "transport": "aws-sdk",
+        "modelId": "global.anthropic.claude-opus-5",
+        "region": "us-west-2",
+        "requestSha256": "901f02952c334797ff207ada097197da339340a0462038c0e7c077b1de88ec67",
+        "responseSha256": "9f2113d7a78e1280cb13a2acff722dac6221f408c46faf770f8944fdb7ac69d7",
+        "observedAt": "2026-09-12T17:38:05.337520051Z"
+      }
+    },
+    {
+      "id": "proposal-is-not-decision",
+      "invoked": true,
+      "completed": true,
+      "passed": true,
+      "inputTokens": 1993,
+      "outputTokens": 836,
+      "findings": [
+        {
+          "id": "nonempty",
+          "passed": true
+        },
+        {
+          "id": "anchor-integrity",
+          "passed": true,
+          "detail": "Require existing verified segment IDs; this does not prove every claim's semantic citation alignment."
+        },
+        {
+          "id": "rolling-decided",
+          "passed": true
+        },
+        {
+          "id": "proposal-labelled",
+          "passed": true
+        },
+        {
+          "id": "proposal-not-final",
+          "passed": true
+        },
+        {
+          "id": "no-invented-task",
+          "passed": true
+        }
+      ],
+      "evidence": {
+        "transport": "aws-sdk",
+        "modelId": "global.anthropic.claude-opus-5",
+        "region": "us-west-2",
+        "requestSha256": "d7bcf58f0b29a6ce48ad7eaaa338dee6753440ecdaeaa7ef6a6e18db2cf82c91",
+        "responseSha256": "b781683393d1a9f7fb2eadd8f2d24b93e4f4bd07812a69f1a095feef7ee72b2a",
+        "observedAt": "2026-09-12T17:38:16.726511061Z"
+      }
+    },
+    {
+      "id": "owners-and-deadlines",
+      "invoked": true,
+      "completed": true,
+      "passed": true,
+      "inputTokens": 1957,
+      "outputTokens": 946,
+      "findings": [
+        {
+          "id": "nonempty",
+          "passed": true
+        },
+        {
+          "id": "anchor-integrity",
+          "passed": true,
+          "detail": "Require existing verified segment IDs; this does not prove every claim's semantic citation alignment."
+        },
+        {
+          "id": "assigned-owner",
+          "passed": true
+        },
+        {
+          "id": "explicit-deadline",
+          "passed": true
+        },
+        {
+          "id": "unassigned-preserved",
+          "passed": true
+        },
+        {
+          "id": "no-owner-inference",
+          "passed": true
+        }
+      ],
+      "evidence": {
+        "transport": "aws-sdk",
+        "modelId": "global.anthropic.claude-opus-5",
+        "region": "us-west-2",
+        "requestSha256": "38048065dc2854a857c07d9f0999b6265c78a098c8c85063730d3f6d756fff17",
+        "responseSha256": "b2de8dfa994f277bb0b9845a7fab567bc6a65b1981f1ebd3a5a3a25435e3731c",
+        "observedAt": "2026-09-12T17:38:29.222966127Z"
+      }
+    },
+    {
+      "id": "notes-are-not-spoken-evidence",
+      "invoked": true,
+      "completed": true,
+      "passed": true,
+      "inputTokens": 2413,
+      "outputTokens": 684,
+      "findings": [
+        {
+          "id": "nonempty",
+          "passed": true
+        },
+        {
+          "id": "anchor-integrity",
+          "passed": true,
+          "detail": "Require existing verified segment IDs; this does not prove every claim's semantic citation alignment."
+        },
+        {
+          "id": "memo-value-preserved",
+          "passed": true
+        },
+        {
+          "id": "memo-labelled",
+          "passed": true
+        },
+        {
+          "id": "no-invented-attendee",
+          "passed": true
+        },
+        {
+          "id": "no-audio-evidence-for-memo",
+          "passed": true
+        }
+      ],
+      "evidence": {
+        "transport": "aws-sdk",
+        "modelId": "global.anthropic.claude-opus-5",
+        "region": "us-west-2",
+        "requestSha256": "b540a7e73f63daecd9766ed3ce998b314c26b10e618e35092cad4c7099369b86",
+        "responseSha256": "cbfb7e331337964c8a37c444e15982905cae1c0668927420ae4c5cf8b26d7ad9",
+        "observedAt": "2026-09-12T17:38:38.97528474Z"
+      }
+    }
+  ],
+  "limitation": "Small synthetic regression corpus; patterns do not establish general accuracy or complete semantic citation alignment. Inspect every generated note."
+}
