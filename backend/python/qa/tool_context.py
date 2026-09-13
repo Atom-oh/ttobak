@@ -22,6 +22,8 @@ def build_tool_context(user_id, text, source_state, source_details, *, source_ac
         current = new_source_state()
         try:
             value = callback(*args, source_state=current, source_details=source_details)
+            if source_state.get('_delivery') is not None:
+                context['deliveryReadRecorded'] = source_state['_delivery'].read_sources(current)
             recorded = True
             for dependency in current['dependencies']:
                 try:
@@ -41,11 +43,15 @@ def build_tool_context(user_id, text, source_state, source_details, *, source_ac
             return value
         except Exception:
             source_state['replayable'] = False
+            if source_state.get('_delivery') is not None:
+                source_state['_delivery'].reject()
             raise
 
     def bound_read(tool_name, callback, uid, *args):
         if uid != user_id:
             source_state['replayable'] = False
+            if source_state.get('_delivery') is not None:
+                source_state['_delivery'].reject()
             raise ValueError('Source caller differs from current user')
         return read_source(tool_name, callback, uid, *args)
 
@@ -119,3 +125,10 @@ def track_tool_history(source_state, tool_name, context):
         covered = tool_name in tracked
     if not covered:
         source_state['replayable'] = False
+    delivery = source_state.get('_delivery')
+    if delivery is not None:
+        if tool_name in SOURCE_HISTORY_TOOLS and tool_name != 'search_transcript':
+            if not context.get('deliveryReadRecorded', False):
+                delivery.reject()
+        elif not covered:
+            delivery.reject()
