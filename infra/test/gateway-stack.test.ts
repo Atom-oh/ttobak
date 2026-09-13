@@ -9,6 +9,11 @@ import { GatewayStack } from '../lib/gateway-stack';
 describe('GatewayStack', () => {
   let template: Template;
 
+  function indexMappings(value: Template) {
+    return Object.values(value.findResources('AWS::Lambda::EventSourceMapping'))
+      .filter(resource => JSON.stringify(resource.Properties.FunctionName).includes('KbFunction'));
+  }
+
   function buildTemplate(indexingMode: 'manual-only' | 'all' = 'manual-only', scheduleEnabled = false): Template {
     const app = new cdk.App({
       context: {
@@ -114,6 +119,46 @@ describe('GatewayStack', () => {
     });
   });
 
+  test('async QA has a private bounded queue, one-record claims, and same-stack permissions', () => {
+    template.hasResourceProperties('AWS::SQS::Queue', {
+      QueueName: 'ttobak-qa-jobs',
+      SqsManagedSseEnabled: true,
+      VisibilityTimeout: 1800,
+      MessageRetentionPeriod: 86400,
+    });
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'ttobak-qa',
+      Timeout: 300,
+      Environment: { Variables: Match.objectLike({
+        QA_JOBS_QUEUE_URL: Match.anyValue(), QA_JOBS_QUEUE_ARN: Match.anyValue(),
+      }) },
+    });
+    const mapping = Object.entries(template.findResources('AWS::Lambda::EventSourceMapping'))
+      .find(([id]) => id.startsWith('QAJobsMapping'));
+    expect(mapping).toBeDefined();
+    expect(mapping![1].Properties).toEqual(expect.objectContaining({
+      BatchSize: 1, FunctionResponseTypes: ['ReportBatchItemFailures'],
+      ScalingConfig: { MaximumConcurrency: 2 },
+    }));
+    const policy = Object.entries(template.findResources('AWS::IAM::Policy'))
+      .find(([id]) => id.startsWith('QAJobsDeliveryPolicy'));
+    expect(policy).toBeDefined();
+    expect(policy![1].Properties.PolicyDocument.Statement).toEqual([expect.objectContaining({
+      Effect: 'Allow',
+      Action: expect.arrayContaining(['sqs:SendMessage', 'sqs:ReceiveMessage', 'sqs:DeleteMessage']),
+    })]);
+    expect(policy![1].Properties.PolicyDocument.Statement[0].Resource).toBeDefined();
+    expect(JSON.stringify(policy![1].Properties.PolicyDocument)).not.toContain('"Resource":"*"');
+  });
+
+  test('both async QA routes keep JWT authentication', () => {
+    for (const route of ['POST /api/qa/jobs', 'GET /api/qa/jobs/{jobId}']) {
+      template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+        RouteKey: route, AuthorizationType: 'JWT', AuthorizerId: Match.anyValue(),
+      });
+    }
+  });
+
   test('bootstrap is configured manual-only without a schedule or canonical stream reads', () => {
     template.hasResourceProperties('AWS::Lambda::Function', {
       FunctionName: 'ttobak-kb',
@@ -123,7 +168,7 @@ describe('GatewayStack', () => {
         INDEXING_MODE: 'manual-only', KB_ID: 'test-kb-id', DATA_SOURCE_ID: 'test-ds-id',
       }) },
     });
-    const mappings = Object.values(template.findResources('AWS::Lambda::EventSourceMapping'));
+    const mappings = indexMappings(template);
     expect(mappings).toHaveLength(0);
     const rules = Object.entries(template.findResources('AWS::Events::Rule'))
       .filter(([id]) => id.startsWith('CanonicalIndexTick'));
@@ -148,7 +193,7 @@ describe('GatewayStack', () => {
     const rules = Object.entries(scheduled.findResources('AWS::Events::Rule'))
       .filter(([id]) => id.startsWith('CanonicalIndexTick'));
     expect(rules[0][1].Properties.State).toBe('ENABLED');
-    expect(Object.values(scheduled.findResources('AWS::Lambda::EventSourceMapping'))).toHaveLength(0);
+    expect(indexMappings(scheduled)).toHaveLength(0);
   });
 
   test('full mode explicitly enables canonical notifications and uses the same worker', () => {
@@ -157,7 +202,7 @@ describe('GatewayStack', () => {
       FunctionName: 'ttobak-kb',
       Environment: { Variables: Match.objectLike({ INDEXING_MODE: 'all' }) },
     });
-    const mappings = Object.values(all.findResources('AWS::Lambda::EventSourceMapping'));
+    const mappings = indexMappings(all);
     expect(mappings).toHaveLength(1);
     expect(mappings[0].Properties.Enabled).toBe(true);
     expect(mappings[0].Properties).toEqual(expect.objectContaining({

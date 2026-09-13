@@ -7,6 +7,8 @@ import logging
 import threading
 import time
 import boto3
+from botocore.config import Config
+from async_jobs import QAJobs, JobError, JobDeadline, deadline as job_deadline, API_SECONDS, RUN_SECONDS, INPUT_LIMIT
 
 from aws_docs import search_aws_docs
 from prompts import get_system_prompt, DETECT_QUESTIONS_PROMPT
@@ -56,6 +58,120 @@ KB_BUCKET_NAME = os.environ.get('KB_BUCKET_NAME', '')
 ORIGIN_VERIFY_SECRET = os.environ.get('ORIGIN_VERIFY_SECRET', '')
 RESEARCH_SFN_ARN = os.environ.get('RESEARCH_SFN_ARN', '')
 DAILY_RESEARCH_LIMIT = 5
+QA_JOBS_QUEUE_URL = os.environ.get('QA_JOBS_QUEUE_URL', '')
+QA_JOBS_QUEUE_ARN = os.environ.get('QA_JOBS_QUEUE_ARN', '')
+_ASYNC_JOBS = None
+_ASYNC_MODEL = None
+
+
+def _job_service():
+    global _ASYNC_JOBS
+    if not QA_JOBS_QUEUE_URL:
+        raise JobError('QA_ASYNC_UNAVAILABLE', 'Asynchronous QA is not configured.')
+    if _ASYNC_JOBS is None:
+        config = Config(connect_timeout=2, read_timeout=3, retries={'total_max_attempts': 1})
+        job_table = boto3.resource('dynamodb', config=config).Table(TABLE_NAME)
+        _ASYNC_JOBS = QAJobs(job_table, boto3.client('sqs', config=config), QA_JOBS_QUEUE_URL)
+    return _ASYNC_JOBS
+
+
+def _execute_job_request(user_id, request, state):
+    global _ASYNC_MODEL
+    if _ASYNC_MODEL is None:
+        _ASYNC_MODEL = boto3.client('bedrock-runtime', config=Config(
+            connect_timeout=3, read_timeout=RUN_SECONDS, retries={'total_max_attempts': 1}))
+    if request['mode'] == 'meeting':
+        result = handle_meeting_ask(request['question'], request['meetingId'], user_id,
+                                   request['sessionId'], source_state=state, model_client=_ASYNC_MODEL)
+    else:
+        result = handle_ask(request['question'], request['context'], request['meetingId'],
+                            request['sessionId'], user_id, source_state=state, model_client=_ASYNC_MODEL)
+    payload = json.loads(result['body'])
+    if result['statusCode'] != 200:
+        error = payload.get('error', {})
+        safe = {
+            'SOURCE_CHANGED': 'Source access or content changed. Check this job before submitting again.',
+            'SOURCE_UNAVAILABLE': 'Current sources could not be verified.',
+            'FORBIDDEN': 'Access denied.', 'NOT_FOUND': 'Requested source not found.',
+        }
+        code = error.get('code')
+        raise JobError(code if code in safe else 'QA_EXECUTION_FAILED',
+                       safe.get(code, 'QA execution failed; actions may have completed. Do not automatically resubmit.'))
+    return payload
+
+
+def _remaining_seconds(context, fallback):
+    return context.get_remaining_time_in_millis() / 1000 - 2 if context is not None else fallback
+
+
+def _handle_job_http(event, context):
+    # Only the JWT authorizer's verified identity owns jobs. Request bodies and
+    # a decoded-but-unverified Authorization header cannot select a partition.
+    user_id = event.get('requestContext', {}).get('authorizer', {}).get('jwt', {}).get('claims', {}).get('sub')
+    if type(user_id) is not str or not user_id:
+        return response(401, {'error': {'code': 'UNAUTHORIZED', 'message': 'Authentication required'}})
+    method = event.get('requestContext', {}).get('http', {}).get('method')
+    path = event.get('rawPath', '')
+    try:
+        with job_deadline(min(API_SECONDS, _remaining_seconds(context, API_SECONDS))):
+            if event.get('rawQueryString'):
+                raise JobError('INVALID_JOB_REQUEST', 'QA jobs do not accept query parameters.', 400)
+            jobs = _job_service()
+            if method == 'POST' and path == '/api/qa/jobs':
+                raw = event.get('body') or '{}'
+                if event.get('isBase64Encoded'):
+                    raw = base64.b64decode(raw, validate=True).decode('utf-8')
+                if len(raw.encode()) > INPUT_LIMIT:
+                    raise JobError('QA_PAYLOAD_TOO_LARGE', 'QA request exceeds the asynchronous input limit.', 413)
+                result = response(202, jobs.submit(user_id, json.loads(raw)))
+            elif method == 'GET' and path.startswith('/api/qa/jobs/'):
+                result = response(200, jobs.poll(user_id, path[len('/api/qa/jobs/'):], _validate_answer_sources))
+            else:
+                raise JobError('INVALID_JOB_REQUEST', 'Method not allowed.', 405)
+    except (JobError, SourceValidationError) as error:
+        result = response(error.status, {'error': {'code': error.code, 'message': error.message}})
+    except JobDeadline:
+        result = response(503, {'error': {'code': 'QA_STATUS_UNAVAILABLE',
+            'message': 'QA status could not be verified in time. Continue checking the same job.'}})
+    except (ValueError, TypeError, UnicodeError):
+        result = response(400, {'error': {'code': 'INVALID_JOB_REQUEST', 'message': 'Invalid QA job request.'}})
+    except Exception as error:
+        logger.warning('QA job request failed (%s)', type(error).__name__)
+        result = response(503, {'error': {'code': 'QA_STATUS_UNAVAILABLE',
+            'message': 'QA status is temporarily unavailable. Continue checking the same job.'}})
+    result['headers']['Cache-Control'] = 'no-store'
+    return result
+
+
+def _handle_job_event(event, context):
+    records = event.get('Records')
+    if type(records) is not list or len(records) != 1:
+        raise ValueError('QA queue requires one record per invocation')
+    failures = []
+    for record in records:
+        if (not QA_JOBS_QUEUE_ARN or record.get('eventSource') != 'aws:sqs'
+                or record.get('eventSourceARN') != QA_JOBS_QUEUE_ARN):
+            logger.warning('Rejected QA event source')
+            continue
+        try:
+            raw = record.get('body', '')
+            if type(raw) is not str or len(raw.encode()) > 2048:
+                raise ValueError('Invalid work pointer')
+            pointer = json.loads(raw)
+            if (type(pointer) is not dict or set(pointer) != {'version', 'userId', 'jobId'}
+                    or type(pointer['version']) is not int or pointer['version'] != 1):
+                raise ValueError('Invalid work pointer')
+        except (ValueError, TypeError):
+            logger.warning('Rejected malformed QA work pointer')
+            continue
+        try:
+            _job_service().work(pointer['userId'], pointer['jobId'], _execute_job_request,
+                                _validate_answer_sources,
+                                remaining_seconds=_remaining_seconds(context, RUN_SECONDS + 10))
+        except Exception as error:
+            logger.warning('QA work item could not be settled (%s)', type(error).__name__)
+            failures.append({'itemIdentifier': record['messageId']})
+    return {'batchItemFailures': failures}
 
 
 def _tool_history(user_id):
@@ -282,6 +398,8 @@ def lambda_handler(event, context):
     Also handles async streaming invocations from the WebSocket Lambda
     (event shape: {"streamMode": "ask_live", "connectionId", "endpoint", ...}).
     """
+    if 'Records' in event and not event.get('requestContext'):
+        return _handle_job_event(event, context)
     if event.get('streamMode') == 'ask_live':
         return handle_ask_stream(event)
 
@@ -294,6 +412,8 @@ def lambda_handler(event, context):
     http_method = event.get('requestContext', {}).get('http', {}).get('method', '')
     path = event.get('rawPath', '')
 
+    if path == '/api/qa/jobs' or path.startswith('/api/qa/jobs/'):
+        return _handle_job_http(event, context)
     if http_method != 'POST':
         return response(405, {'error': {'code': 'BAD_REQUEST', 'message': 'Method not allowed'}})
 
@@ -956,7 +1076,7 @@ def _validate_answer_sources(user_id, source_state, history=None):
 
 
 def agentic_converse(messages, transcript=None, session_id=None, user_id=None, meeting_notes=None, meeting_id=None,
-                     source_state=None, source_details=None):
+                     source_state=None, source_details=None, model_client=None):
     """Agentic tool-use loop: model decides what tools to call."""
     source_state = source_state if source_state is not None else new_source_state()
     source_details = source_details if source_details is not None else []
@@ -973,7 +1093,7 @@ def agentic_converse(messages, transcript=None, session_id=None, user_id=None, m
     for _ in range(MAX_TOOL_ROUNDS):
         validate_sources(source_state, lambda dep: _source_is_current(user_id, dep, source_state), tool_history=context['tool_history'])
         try:
-            resp = bedrock_runtime.converse(
+            resp = (model_client if model_client is not None else bedrock_runtime).converse(
                 modelId=BEDROCK_MODEL_ID,
                 system=system_messages,
                 messages=messages,
@@ -982,6 +1102,8 @@ def agentic_converse(messages, transcript=None, session_id=None, user_id=None, m
             )
         except Exception as e:
             logger.error(f"Bedrock converse failed: {e}", exc_info=True)
+            if model_client is not None:
+                raise
             return "죄송합니다. AI 응답 생성 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.", [], []
 
         output_message = resp["output"]["message"]
@@ -1047,10 +1169,12 @@ def extract_text_answer(message):
     return "\n".join(parts) if parts else ""
 
 
-def handle_ask(question, context=None, meeting_id=None, session_id=None, user_id=None):
+def handle_ask(question, context=None, meeting_id=None, session_id=None, user_id=None, *,
+               source_state=None, model_client=None):
     """Handle POST /api/qa/ask — agentic Q&A with tool-use loop."""
     try:
-        source_state, source_details = new_source_state(), []
+        source_state = source_state if source_state is not None else new_source_state()
+        source_details = []
         context, meeting_notes, err = _request_meeting_context(
             user_id, meeting_id, context, source_state=source_state, source_details=source_details)
         if err:
@@ -1069,6 +1193,7 @@ def handle_ask(question, context=None, meeting_id=None, session_id=None, user_id
             meeting_notes=meeting_notes,
             meeting_id=meeting_id,
             source_state=source_state, source_details=source_details,
+            model_client=model_client,
         )
 
         _validate_answer_sources(user_id, source_state)
@@ -1117,12 +1242,13 @@ def load_attachment_text(user_id, meeting_id, attachment_id, unit_offset=0, text
     return _source_access().load_attachment_text(user_id, meeting_id, attachment_id, unit_offset, text_offset, expected_revision, source_state=source_state, source_details=source_details)
 
 
-def handle_meeting_ask(question, meeting_id, user_id, session_id=None):
+def handle_meeting_ask(question, meeting_id, user_id, session_id=None, *, source_state=None, model_client=None):
     """Handle POST /api/qa/meeting/{meetingId} — meeting-context agentic Q&A."""
     if not user_id:
         return response(401, {'error': {'code': 'UNAUTHORIZED', 'message': 'Authentication required'}})
 
-    source_state, source_details = new_source_state(), []
+    source_state = source_state if source_state is not None else new_source_state()
+    source_details = []
     transcript, meeting_notes, err = _request_meeting_context(
         user_id, meeting_id, source_state=source_state, source_details=source_details)
     if err:
@@ -1142,6 +1268,7 @@ def handle_meeting_ask(question, meeting_id, user_id, session_id=None):
             meeting_notes=meeting_notes,
             meeting_id=meeting_id,
             source_state=source_state, source_details=source_details,
+            model_client=model_client,
         )
 
         _validate_answer_sources(user_id, source_state)

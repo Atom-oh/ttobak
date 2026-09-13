@@ -340,6 +340,22 @@ export class GatewayStack extends cdk.Stack {
       deadLetterQueue: indexDlq,
     }));
 
+    // Durable pointers only; questions/results remain in user-bound DynamoDB rows.
+    const qaJobsDlq = new sqs.Queue(this, 'QAJobsDLQ', {
+      queueName: 'ttobak-qa-jobs-dlq',
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      enforceSSL: true,
+      retentionPeriod: cdk.Duration.days(1),
+    });
+    const qaJobsQueue = new sqs.Queue(this, 'QAJobsQueue', {
+      queueName: 'ttobak-qa-jobs',
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      enforceSSL: true,
+      retentionPeriod: cdk.Duration.days(1),
+      visibilityTimeout: cdk.Duration.minutes(30),
+      deadLetterQueue: { queue: qaJobsDlq, maxReceiveCount: 3 },
+    });
+
     // Q&A Lambda function (Python runtime for flexible prompt engineering)
     this.qaFunction = new lambda.Function(this, 'QAFunction', {
       functionName: 'ttobak-qa',
@@ -359,6 +375,8 @@ export class GatewayStack extends cdk.Stack {
         KB_CACHE_TTL_SECONDS: '600',
         SHARED_MEETINGS_CACHE_TTL_SECONDS: '300',
         ORIGIN_VERIFY_SECRET: props.originVerifySecret || '',
+        QA_JOBS_QUEUE_URL: qaJobsQueue.queueUrl,
+        QA_JOBS_QUEUE_ARN: qaJobsQueue.queueArn,
         // search_web tool: us-east-1 AgentCore Web Search Gateway, called
         // cross-region with SigV4. Empty URL → the tool stays advertised but
         // every call returns a "web search not configured" failure reason to
@@ -369,7 +387,7 @@ export class GatewayStack extends cdk.Stack {
         // follow-up). '0' disables the check.
         WEB_SEARCH_HOURLY_LIMIT: '30',
       },
-      timeout: cdk.Duration.seconds(60),
+      timeout: cdk.Duration.minutes(5),
       memorySize: 512,
     });
 
@@ -379,6 +397,25 @@ export class GatewayStack extends cdk.Stack {
     // default 2 async retries would replay a failed/timed-out run minutes later,
     // delivering stale duplicate answer deltas to an already-finished WS session.
     this.qaFunction.configureAsyncInvoke({ retryAttempts: 0 });
+
+    // Keep queue references in GatewayStack's policy instead of adding a
+    // Gateway -> Ai -> Gateway cross-stack cycle through qaRole's default policy.
+    const qaJobsPolicy = new iam.Policy(this, 'QAJobsDeliveryPolicy', {
+      statements: [new iam.PolicyStatement({
+        actions: ['sqs:SendMessage', 'sqs:ReceiveMessage', 'sqs:DeleteMessage',
+          'sqs:ChangeMessageVisibility', 'sqs:GetQueueAttributes'],
+        resources: [qaJobsQueue.queueArn],
+      })],
+    });
+    qaJobsPolicy.attachToRole(props.qaRole);
+    const qaJobsMapping = new lambda.EventSourceMapping(this, 'QAJobsMapping', {
+      target: this.qaFunction,
+      eventSourceArn: qaJobsQueue.queueArn,
+      batchSize: 1,
+      maxConcurrency: 2,
+      reportBatchItemFailures: true,
+    });
+    qaJobsMapping.node.addDependency(qaJobsPolicy);
 
     // Cost/sizing simulator worker (ADR-033) — invoked async by the api
     // Lambda (InvocationType=Event) once a run is recorded as "queued".
@@ -459,6 +496,18 @@ export class GatewayStack extends cdk.Stack {
     );
 
     // Q&A routes → Python Lambda (specific paths override {proxy+})
+    this.httpApi.addRoutes({
+      path: '/api/qa/jobs',
+      methods: [apigatewayv2.HttpMethod.POST],
+      integration: qaIntegration,
+      authorizer: jwtAuthorizer,
+    });
+    this.httpApi.addRoutes({
+      path: '/api/qa/jobs/{jobId}',
+      methods: [apigatewayv2.HttpMethod.GET],
+      integration: qaIntegration,
+      authorizer: jwtAuthorizer,
+    });
     this.httpApi.addRoutes({
       path: '/api/qa/ask',
       methods: [apigatewayv2.HttpMethod.POST],

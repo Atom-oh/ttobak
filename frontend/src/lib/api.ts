@@ -8,6 +8,8 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
 interface FetchOptions extends RequestInit {
   skipAuth?: boolean;
+  /** Bind a long-lived QA operation to the identity that submitted it. */
+  expectedUserId?: string;
 }
 
 export class ApiError extends Error {
@@ -24,6 +26,21 @@ function isTokenExpired(token: string): boolean {
     return payload.exp * 1000 < Date.now() + 60_000;
   } catch {
     return true;
+  }
+}
+
+function tokenUserId(token: string | null): string | null {
+  try {
+    const payload = JSON.parse(atob((token || '').split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+    return typeof payload.sub === 'string' ? payload.sub : null;
+  } catch {
+    return null;
+  }
+}
+
+function assertRequestUser(expectedUserId: string, token = getIdToken()) {
+  if (tokenUserId(token) !== expectedUserId) {
+    throw new ApiError(401, 'AUTH_CHANGED', 'Authentication changed while waiting for QA.');
   }
 }
 
@@ -59,7 +76,7 @@ export async function apiFetch<T>(
   endpoint: string,
   options: FetchOptions = {}
 ): Promise<T> {
-  const { skipAuth = false, headers = {}, ...rest } = options;
+  const { skipAuth = false, expectedUserId, headers = {}, ...rest } = options;
 
   const authHeaders = skipAuth ? {} : await getAuthHeaders();
 
@@ -69,6 +86,7 @@ export async function apiFetch<T>(
     ...authHeaders,
     ...headers,
   };
+  if (expectedUserId) assertRequestUser(expectedUserId, authHeaders.Authorization?.slice(7) || null);
 
   let response = await fetch(url, { ...rest, headers: mergedHeaders });
 
@@ -79,6 +97,7 @@ export async function apiFetch<T>(
       triggerAuthFailure();
       throw new ApiError(401, 'UNAUTHORIZED', 'Authentication required');
     }
+    if (expectedUserId) assertRequestUser(expectedUserId, freshToken);
     response = await fetch(url, {
       ...rest,
       headers: { ...mergedHeaders, Authorization: `Bearer ${freshToken}` },
@@ -95,6 +114,7 @@ export async function apiFetch<T>(
   }
 
   if (response.status === 204 || response.headers.get('content-length') === '0') {
+    if (expectedUserId) assertRequestUser(expectedUserId);
     return undefined as T;
   }
 
@@ -103,7 +123,9 @@ export async function apiFetch<T>(
     throw new Error(`Unexpected response type: ${contentType || 'unknown'}`);
   }
 
-  return response.json();
+  const value = await response.json();
+  if (expectedUserId) assertRequestUser(expectedUserId);
+  return value;
 }
 
 export const api = {
@@ -298,20 +320,112 @@ interface QAResponse {
   usedKB?: boolean;
   usedDocs?: boolean;
   toolsUsed?: string[];
+  toolHistoryCoverage?: { tool: string; complete: false; reason: string }[];
+}
+
+interface QAJob {
+  jobId: string;
+  status: 'queued' | 'running' | 'succeeded' | 'failed';
+  pollAfterMs?: number;
+  result?: QAResponse;
+  error?: { code: string; message: string };
+}
+
+export class QAJobError extends ApiError {
+  constructor(status: number, code: string, message: string, public readonly jobId: string) {
+    super(status, code, message);
+    this.name = 'QAJobError';
+  }
+}
+
+const QA_POLL_DEADLINE_MS = 660_000;
+
+function retryableQAError(error: unknown): boolean {
+  return !(error instanceof ApiError)
+    || error.status >= 500 || [404, 408, 429].includes(error.status);
+}
+
+async function askQA(request: {
+  mode: 'ask' | 'meeting'; question: string; context?: string; sessionId?: string; meetingId?: string;
+}): Promise<QAResponse> {
+  const auth = await getAuthHeaders();
+  const userId = tokenUserId(auth.Authorization?.slice(7) || null);
+  if (!userId) throw new ApiError(401, 'UNAUTHORIZED', 'Authentication required');
+  const jobId = `${Date.now()}-${crypto.randomUUID().replace(/-/g, '')}`;
+  const body = JSON.stringify({ ...request, requestId: jobId });
+  const end = Date.now() + QA_POLL_DEADLINE_MS;
+  const pause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+  const fetchJob = async (method: 'GET' | 'POST'): Promise<QAJob> => {
+    assertRequestUser(userId);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), Math.min(20_000, Math.max(1, end - Date.now())));
+    try {
+      const value = await apiFetch<QAJob>(
+        method === 'POST' ? '/api/qa/jobs' : `/api/qa/jobs/${encodeURIComponent(jobId)}`,
+        { method, body: method === 'POST' ? body : undefined, cache: 'no-store',
+          signal: controller.signal, expectedUserId: userId }
+      );
+      if (value?.jobId !== jobId || !['queued', 'running', 'succeeded', 'failed'].includes(value.status)) {
+        throw new QAJobError(502, 'QA_JOB_PROTOCOL_ERROR', 'Invalid QA job response.', jobId);
+      }
+      return value;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  const failure = (error: unknown): QAJobError => error instanceof QAJobError ? error : new QAJobError(
+    error instanceof ApiError ? error.status : 503,
+    error instanceof ApiError ? error.code : 'QA_OUTCOME_UNKNOWN',
+    error instanceof Error ? error.message : 'QA status is unavailable.',
+    jobId
+  );
+  let job: QAJob | undefined;
+  let polled = false;
+  // Only this new idempotent endpoint is retried, with the exact same body/ID.
+  // Never fall back to the legacy synchronous route or mint a new ID on failure.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      job = await fetchJob('POST');
+      break;
+    } catch (error) {
+      if (error instanceof QAJobError || !retryableQAError(error)) throw failure(error);
+      if (attempt === 0) await pause(750);
+    }
+  }
+  while (Date.now() < end) {
+    assertRequestUser(userId);
+    if (job?.status === 'succeeded') {
+      // Submission only returns a ticket. Results come from an authenticated,
+      // source-revalidated GET even when the initial ticket says succeeded.
+      if (polled && job.result) {
+        if (typeof job.result.answer !== 'string') {
+          throw new QAJobError(502, 'QA_JOB_PROTOCOL_ERROR', 'Invalid QA result.', jobId);
+        }
+        return job.result;
+      }
+    } else if (job?.status === 'failed') {
+      throw new QAJobError(409, job.error?.code || 'QA_EXECUTION_FAILED',
+        job.error?.message || 'QA failed; check this job before submitting again.', jobId);
+    }
+    await pause(Math.min(5000, Math.max(1000, job?.pollAfterMs || 1000)));
+    try {
+      job = await fetchJob('GET');
+      polled = true;
+    } catch (error) {
+      if (error instanceof QAJobError || !retryableQAError(error)) throw failure(error);
+      job = undefined;
+    }
+  }
+  throw new QAJobError(504, 'QA_OUTCOME_UNKNOWN',
+    `QA did not complete within the waiting window. Check job ${jobId}; do not automatically resubmit.`, jobId);
 }
 
 export const qaApi = {
   ask: (question: string, context?: string, sessionId?: string, meetingId?: string) =>
-    api.post<QAResponse>(
-      '/api/qa/ask',
-      { question, context, sessionId, meetingId }
-    ),
+    askQA({ mode: 'ask', question, context, sessionId, meetingId }),
 
   askMeeting: (meetingId: string, question: string, sessionId?: string) =>
-    api.post<QAResponse>(
-      `/api/qa/meeting/${meetingId}`,
-      { question, sessionId }
-    ),
+    askQA({ mode: 'meeting', question, sessionId, meetingId }),
 
   detectQuestions: (transcript: string, previousQuestions?: string[], summary?: string) =>
     api.post<{ questions: string[]; proactive?: string[] }>(
