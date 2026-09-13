@@ -1,0 +1,84 @@
+{
+  "source": {
+    "bucket": "ttobak-kb-180294183052",
+    "key": "kb/acc-5136a0a6ff5f4977b657-owner/acc-5136a0a6ff5f4977b657-private.pdf",
+    "etag": "\"dcf1273c3a43029d91907c878e6bd1d4\"",
+    "versionId": "XHke4qDAgbFe8qt90QY4WKBilzJMZhY6",
+    "size": 621,
+    "metadata": {
+      "acceptance-run-id": "acc-5136a0a6ff5f4977b657"
+    }
+  },
+  "expectedSource": {
+    "etag": "\"dcf1273c3a43029d91907c878e6bd1d4\"",
+    "versionId": "XHke4qDAgbFe8qt90QY4WKBilzJMZhY6",
+    "fixtureSHA256": "30605d3f7a7d9a6f9384cef99b0a5042269827deea3316e9153494abe03e5c25",
+    "intermediateVersionForCleanup": "Sf1PboArrLHDo19EDcer4XLwhjAOO2BZ"
+  },
+  "job": {
+    "resource": {
+      "pk": "USER#acc-5136a0a6ff5f4977b657-owner",
+      "sk": "KBFILE#262dfbbae6d5e9dc3287b9f81a56a7536cf4ce2f7dfd6868c23cfb042472ad60",
+      "kind": "manualKbDocument",
+      "sourceKey": "kb/acc-5136a0a6ff5f4977b657-owner/acc-5136a0a6ff5f4977b657-private.pdf",
+      "id": "262dfbbae6d5e9dc3287b9f81a56a7536cf4ce2f7dfd6868c23cfb042472ad60"
+    },
+    "state": "INDEXED",
+    "revision": "9614b9f9120e828abac6ce50b0ab0051d74286d9bca4194a17f559f6b857cb67",
+    "desiredRevision": "9614b9f9120e828abac6ce50b0ab0051d74286d9bca4194a17f559f6b857cb67",
+    "runId": "abc1486d-c28e-4351-9790-6299cc603483",
+    "keys": [
+      "manual-kb/v1/acc-5136a0a6ff5f4977b657-owner/262dfbbae6d5e9dc3287b9f81a56a7536cf4ce2f7dfd6868c23cfb042472ad60/9614b9f9120e828abac6ce50b0ab0051d74286d9bca4194a17f559f6b857cb67/abc1486d-c28e-4351-9790-6299cc603483/document.pdf",
+      "manual-kb/v1/acc-5136a0a6ff5f4977b657-owner/262dfbbae6d5e9dc3287b9f81a56a7536cf4ce2f7dfd6868c23cfb042472ad60/9614b9f9120e828abac6ce50b0ab0051d74286d9bca4194a17f559f6b857cb67/abc1486d-c28e-4351-9790-6299cc603483/document.pdf.metadata.json"
+    ],
+    "syncId": "BTJ7ENTG16",
+    "version": 12,
+    "failureCount": 0,
+    "errorCode": ""
+  },
+  "inventory": [
+    "manual-kb/v1/acc-5136a0a6ff5f4977b657-owner/262dfbbae6d5e9dc3287b9f81a56a7536cf4ce2f7dfd6868c23cfb042472ad60/9614b9f9120e828abac6ce50b0ab0051d74286d9bca4194a17f559f6b857cb67/abc1486d-c28e-4351-9790-6299cc603483/document.pdf",
+    "manual-kb/v1/acc-5136a0a6ff5f4977b657-owner/262dfbbae6d5e9dc3287b9f81a56a7536cf4ce2f7dfd6868c23cfb042472ad60/9614b9f9120e828abac6ce50b0ab0051d74286d9bca4194a17f559f6b857cb67/abc1486d-c28e-4351-9790-6299cc603483/document.pdf.metadata.json"
+  ],
+  "documentStatuses": {
+    "s3://ttobak-kb-180294183052/manual-kb/v1/acc-5136a0a6ff5f4977b657-owner/262dfbbae6d5e9dc3287b9f81a56a7536cf4ce2f7dfd6868c23cfb042472ad60/9614b9f9120e828abac6ce50b0ab0051d74286d9bca4194a17f559f6b857cb67/abc1486d-c28e-4351-9790-6299cc603483/document.pdf": "INDEXED"
+  },
+  "removedDocumentStatuses": {
+    "s3://ttobak-kb-180294183052/manual-kb/v1/acc-5136a0a6ff5f4977b657-owner/262dfbbae6d5e9dc3287b9f81a56a7536cf4ce2f7dfd6868c23cfb042472ad60/dc3f6711e2fe78269451043a4b3c1bf64e821f27608e301465c807be65d468b4/55b34767-b820-4a3b-a8bc-0a1f96e8b7d7/document.pdf": "NOT_FOUND"
+  },
+  "ingestion": {
+    "id": "BTJ7ENTG16",
+    "status": "COMPLETE",
+    "startedAt": "2026-09-13T00:57:59.531591+00:00",
+    "updatedAt": "2026-09-13T00:58:07.632313+00:00",
+    "statistics": {
+      "numberOfDocumentsScanned": 2040,
+      "numberOfMetadataDocumentsScanned": 670,
+      "numberOfNewDocumentsIndexed": 1,
+      "numberOfModifiedDocumentsIndexed": 0,
+      "numberOfDocumentsDeleted": 1,
+      "numberOfDocumentsFailed": 2
+    }
+  },
+  "retrieval": [
+    {
+      "uri": "s3://ttobak-kb-180294183052/manual-kb/v1/acc-5136a0a6ff5f4977b657-owner/262dfbbae6d5e9dc3287b9f81a56a7536cf4ce2f7dfd6868c23cfb042472ad60/9614b9f9120e828abac6ce50b0ab0051d74286d9bca4194a17f559f6b857cb67/abc1486d-c28e-4351-9790-6299cc603483/document.pdf",
+      "metadata": {
+        "indexSchema": "manual-kb-v1",
+        "resourceKind": "manualKbDocument",
+        "resourceId": "262dfbbae6d5e9dc3287b9f81a56a7536cf4ce2f7dfd6868c23cfb042472ad60",
+        "sourceRevision": "9614b9f9120e828abac6ce50b0ab0051d74286d9bca4194a17f559f6b857cb67",
+        "indexRunId": "abc1486d-c28e-4351-9790-6299cc603483",
+        "sourceBucket": "ttobak-kb-180294183052",
+        "sourceKey": "kb/acc-5136a0a6ff5f4977b657-owner/acc-5136a0a6ff5f4977b657-private.pdf",
+        "sourceETag": "\"dcf1273c3a43029d91907c878e6bd1d4\"",
+        "sourceVersionId": "XHke4qDAgbFe8qt90QY4WKBilzJMZhY6",
+        "sourceSize": 621.0,
+        "ownerId": "acc-5136a0a6ff5f4977b657-owner"
+      },
+      "text": "ACCEPT_5136a0a6ff5f4977b657_PRIVATE_GREENOTTER",
+      "score": 1.0
+    }
+  ],
+  "evidenceOrigin": "Actual AWS strong job/current source/inventory reads and per-document status+scoped Retrieve; V1 identifier explicitly returned NOT_FOUND."
+}

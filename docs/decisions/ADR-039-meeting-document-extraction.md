@@ -3,8 +3,8 @@
 - Status: Accepted, 2026-09-12.
 - Code checked: 2026-09-13. Parser, Lambda parent, infrastructure and Go/QA
   state/read foundations exist; `enableDocumentExtraction=true` is configured.
-  Upload/API, summary, active QA and UI integration remain separate from these
-  foundations and from deployed acceptance.
+  Upload/API routes and verified DOCUMENT summary input are wired. Active QA/UI
+  cutover and deployed acceptance remain separate.
 
 ## Context and decision
 
@@ -59,8 +59,9 @@ without checking references.
 ## Consequences and evidence
 
 Extraction adds asynchronous delay, partial/failure/retry states and retained
-objects. The active summary builder still lists document filenames until its
-consumer integration changes; the old claim that no parser exists is obsolete.
+objects. The summary provider supplies validated current document text with
+location and coverage notices; filenames alone are not document grounding.
+Unsupported/unavailable input remains explicit.
 
 - [Parser scope and limits](../../backend/python/document-extract/README.md),
   [Lambda contract](../../backend/python/document-extract/LAMBDA.md).
