@@ -16,7 +16,7 @@ import sys
 import tempfile
 import time
 
-from role_review import diagnostic_failure
+from role_review import diagnostic_failure, issue_request, MAX_REQUEST_BYTES
 
 
 DIRECTORY = Path(__file__).resolve().parent
@@ -134,6 +134,7 @@ def run(work, tag):
     output = ""
     error = ""
     code = 1
+    nonce, framed_prompt, payload = issue_request(work, tag)
     with tempfile.TemporaryDirectory(prefix=f"{tag}-", dir=runtime) as temporary:
         cwd = Path(temporary)
         if tag.startswith("kiro-"):
@@ -147,8 +148,8 @@ def run(work, tag):
                 )
                 code = code or 1
             else:
-                instruction = prompt + "\n\nUNTRUSTED DIFF DATA:\n" + diff
-                if len(instruction.encode()) >= 131072:
+                instruction = framed_prompt + "\n" + payload
+                if len(instruction.encode()) >= MAX_REQUEST_BYTES:
                     code, error = 1, "Complete Kiro input exceeds argument limit."
                 else:
                     command = [
@@ -156,6 +157,8 @@ def run(work, tag):
                         "--agent", "inline-review", "--no-interactive", "--wrap", "never",
                     ]
                     for _ in range(attempts):
+                        nonce, framed_prompt, payload = issue_request(work, tag)
+                        command[2] = framed_prompt + "\n" + payload
                         code, output, error = execute(
                             command, cwd, kiro_environment(cwd, environment), "", timeout
                         )
@@ -181,7 +184,14 @@ def run(work, tag):
             else:
                 raise ValueError("Unknown specialist")
             for _ in range(attempts):
-                code, output, error = execute(command, cwd, environment, diff, timeout)
+                nonce, framed_prompt, payload = issue_request(work, tag)
+                if tag == "codex":
+                    command[-1] = "-"
+                    delivered = framed_prompt + "\n" + payload
+                else:
+                    command[2] = framed_prompt
+                    delivered = payload
+                code, output, error = execute(command, cwd, environment, delivered, timeout)
                 if diagnostic_failure(error):
                     code = code or 1
                     break
@@ -196,6 +206,7 @@ def run(work, tag):
         sys.executable, str(DIRECTORY / "role_review.py"), "record",
         "--work", str(work), "--tag", tag, "--output", str(output_path),
         "--stderr", str(error_path), "--exit-code", str(code),
+        "--nonce", nonce,
     ])
     if result.returncode not in (0, 2):
         raise RuntimeError("Specialist result recording failed")
