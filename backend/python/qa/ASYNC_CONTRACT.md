@@ -44,6 +44,32 @@ further creation. Never automatically resubmit uncertain work under a new ID.
 Async model responses require a nonblank completed answer. Truncation or tool
 budget exhaustion returns `QA_MODEL_INCOMPLETE`; completed, validated tool
 receipts remain in history with an interruption notice instead of an empty success.
+
+QA Converse and ConverseStream share the fixed
+`completion_diagnostics.QA_OUTPUT_TOKENS=8192` ceiling per model call. Async
+execution delegates to the same Converse path; the separate question detector
+keeps its own 512-token budget. Existing WS/async completion rejection, source
+checks, tool-round limits, deadlines and no-automatic-continuation behavior remain.
+The larger ceiling can increase latency/cost and still hit completion or encoded
+response-size limits. It does not fix the legacy synchronous HTTP timeout,
+change legacy response behavior, or activate async UI.
+
+Completion failures emit one `QA completion diagnostic` JSON record per failed
+model round, bounded to 1024 bytes by its fixed schema. It contains a closed
+failure/stop category, round and configured ceiling, message-stop/metadata
+presence, bounded event/block/text-character/tool counts, open-block type and
+allowlisted integer token usage. Unknown stop values become `other`; missing or
+invalid usage is null. Queries, source/content text, raw events, identifiers,
+arbitrary metadata and exception payloads never enter this record.
+
+The 2026-09-13 WS incident logged `MODEL_STREAM_INCOMPLETE`. The host observed a
+4096 maximum in a minute-level output-token metric spanning four samples, not
+an individual stop reason. Budget exhaustion is therefore a strong inference,
+not proven cause; open blocks, missing stop events and invalid tool completion
+remain distinguishable alternatives. A host-run synthetic probe accepted 8192
+and returned `end_turn` with four output tokens. This proves parameter acceptance
+only, not real-meeting completion or semantic quality.
+
 `JobDeadline` uses a separate two-second cleanup window. The loop checkpoints
 only returned, tracked tool-use/result pairs with at most 128 KiB of history,
 dependency/detail metadata and delivery proof combined. It omits pending calls
