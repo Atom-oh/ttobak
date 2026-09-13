@@ -36,8 +36,8 @@ allowlisted fields. UTF-8 sizing follows [AWS guidance](https://docs.aws.amazon.
 with 21 bytes reserved per integer. Each row enforces one-hour expiry through
 active `pendingShareExpiresAt`. Bound artifacts precede conditional success;
 lost acknowledgements never regenerate answers. Oversize fails without truncation.
-The existing AWS-owned KMS table default is unchanged; active TTL is added only
-for these job rows, not claimed for legacy conversation rows.
+The checked-in table's AWS-owned KMS default is unchanged; active TTL is added
+only for these job rows, not claimed for legacy conversation rows.
 
 Delivery captures reads before history limits: up to 512 dependencies/128 KiB,
 and 4-MiB/65,536-node read-only fingerprints of effective public results. Existing

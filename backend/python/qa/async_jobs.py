@@ -334,7 +334,11 @@ class QAJobs:
             self._update(identity(user_id, job_id), changes,
                          Attr('status').eq('QUEUED') & Attr('deadlineAt').gt(now))
         except self.table.meta.client.exceptions.ConditionalCheckFailedException:
-            return
+            # An SDK retry can report a failed condition after this invocation's
+            # first write committed. Continue only for this exact execution ID.
+            confirmed = self._owned(user_id, job_id)
+            if confirmed.get('status') != 'RUNNING' or confirmed.get('runId') != run_id:
+                return
         except Exception:
             confirmed = self._owned(user_id, job_id)
             if confirmed.get('status') != 'RUNNING' or confirmed.get('runId') != run_id:
