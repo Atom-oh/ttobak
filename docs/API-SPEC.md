@@ -416,11 +416,15 @@ Live transcription runs in the browser using AWS Transcribe Streaming.
 tool loop and current authorized meeting data. KB meeting hits are candidates;
 access and saved notes/content are reread, including on cache hits. New terms
 may wait for export/ingestion. This paragraph is not the current-source contract.
+Both transports send bounded, separate untrusted transcript and saved-note
+excerpts. Follow `get_meeting_detail`'s next offset, not an excerpt-relative
+position; transcript read failures return errors rather than silently losing context.
 
 ### Current-source consumer contract
 
-The gated QA wiring connects current-source readers and history checks to both
-Converse transports. This contract does not certify deployment; the
+The current handler does not yet register the current-source readers or history
+helpers. The contract below applies to the pending PR221 consumer, not current
+transport behavior. It does not certify deployment; the
 [manual bootstrap evidence](research/evaluations/2026-09-13-manual-kb-bootstrap/README.md)
 records IAM producer/provider checks only. Public QA acceptance remains separate.
 
@@ -447,7 +451,8 @@ and revision; changes or revocation invalidate the complete derived history.
   fingerprints for supported read-only tools. Strict callbacks consume all pages,
   recheck exact membership/canonical references and attest complete reads.
   Changed, denied, failed or untracked dependencies invalidate the entire history,
-  including assistant paraphrases; recorded dependencies are checked before each model round.
+  including assistant paraphrases; recorded dependencies must be checked before
+  each model round and final output.
 - `start_research` records a creation receipt only after one successful mutation.
   Never replay creation to validate history. Tracking overflow preserves the
   current result while marking history nonreplayable with explicit coverage.

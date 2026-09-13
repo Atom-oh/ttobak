@@ -1,7 +1,8 @@
 # Current-source QA reader contract
 
-These modules define current-source reader and history interfaces. Consumer
-registration and deployed acceptance are separate gates; follow
+Code checked: 2026-09-13. The current handler does not register these helpers.
+CDK schedules `manual-only` snapshots; consumer registration and deployed
+acceptance remain separate gates. Follow
 [the rollout](../../../docs/runbooks/qa-current-source-rollout.md) before cutover.
 
 ## Reader responsibilities
