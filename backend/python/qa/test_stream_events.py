@@ -84,7 +84,28 @@ class TestRealStreamEvents(unittest.TestCase):
             self.assertIn('이전 도구 실행 결과', history[-1]['content'][0]['text'])
             self.assertTrue(all(message['content'] for message in history))
             create.assert_called_once()
+        self.assertIs(self.frames()[-1].get('sessionContinuable'), True)
+        self.assertEqual(self.frames()[-1]['code'], 'MODEL_STREAM_EMPTY')
         self.assertFalse(any(frame['type'] == 'answer_complete' for frame in self.frames()))
+
+    def test_unconfirmed_receipt_write_never_claims_session_can_continue(self):
+        first = {'stream': [
+            {'contentBlockStart': {'start': {'toolUse': {'toolUseId': 'r', 'name': 'start_research'}}}},
+            {'contentBlockDelta': {'delta': {'toolUse': {'input': '{"topic":"synthetic"}'}}}},
+            {'contentBlockStop': {}},
+            {'messageStop': {'stopReason': 'tool_use'}},
+        ]}
+        self.model.converse_stream.side_effect = [first, text_stream('')]
+        put = self.table.put_item
+        def reject_messages(**kwargs):
+            if kwargs['Item']['SK'] == 'MESSAGES':
+                raise TimeoutError('synthetic unconfirmed write')
+            return put(**kwargs)
+        with mock.patch.object(handler, 'check_research_limit', return_value=True), \
+                mock.patch.object(handler, 'create_research_from_chat', return_value={'researchId': 'e' * 32}), \
+                mock.patch.object(self.table, 'put_item', side_effect=reject_messages):
+            self.assertEqual(handler.handle_ask_stream(self.event)['status'], 'model_failed')
+        self.assertIs(self.frames()[-1].get('sessionContinuable'), False)
 
     def test_stream_request_failure_is_explicit_without_saving_an_empty_answer(self):
         self.model.converse_stream.side_effect = RuntimeError('synthetic unavailable stream')
