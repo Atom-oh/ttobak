@@ -4,7 +4,6 @@
 CLI:
   prepare --diff RAW --context CONTEXT --head SHA --base SHA --work WORK
           [--context-cap BYTES] [--paths JSON_FILE] [--provenance JSON_FILE]
-          [--allow-exclusions-only --policy TRUSTED_BASE_JSON_FILE]
   issue --work WORK --tag TAG
   record --work WORK --tag TAG --output FILE --stderr FILE --exit-code RC --nonce NONCE
   aggregate --work WORK
@@ -22,6 +21,7 @@ not proof of model honesty or of the provider's actual executed weights.
 import argparse
 import ast
 from contextlib import contextmanager
+import fcntl
 import hashlib
 import json
 import os
@@ -37,6 +37,7 @@ MAX_DIFF_BYTES = 95000
 MAX_DIFF_LINES = 3000
 MAX_CONTEXT_BYTES = 24000
 MAX_REQUEST_BYTES = 131072
+MAX_OUTPUT_BYTES = 1024 * 1024
 ROLES = {
     "codex": ("implementation", "OpenAI", "global.openai.gpt-6-astra",
               "Implementation correctness, concurrency and tests"),
@@ -79,10 +80,11 @@ FAILURE_CODES = {
     "invalid_findings", "invalid_finding", "invalid_uncertainties",
     "invalid_json_wrapper", "empty_response", "model_selection_diagnostic",
     "model_fallback_diagnostic", "quota_diagnostic", "agent_preflight_diagnostic",
-    "duplicate_record", "invalid_invocation_nonce", "invalid_issued_request",
+    "duplicate_record", "output_byte_limit", "invalid_invocation_nonce", "invalid_issued_request",
+    "scrub_nesting_limit",
 }
 TERMINAL_CODES = {"model_selection_diagnostic", "model_fallback_diagnostic",
-                  "quota_diagnostic", "agent_preflight_diagnostic"}
+                  "quota_diagnostic", "agent_preflight_diagnostic", "output_byte_limit", "scrub_nesting_limit"}
 
 
 class Invalid(Exception):
@@ -132,8 +134,14 @@ def write_json(path, value):
     write(path, canonical(value) + "\n")
 
 
-def text_file(path):
+def text_file(path, max_bytes=None):
     try:
+        if max_bytes is not None:
+            with Path(path).open("rb") as source:
+                raw = source.read(max_bytes + 1)
+            if len(raw) > max_bytes:
+                raise Invalid("output_byte_limit")
+            return raw.decode("utf-8")
         return Path(path).read_text(encoding="utf-8")
     except (OSError, UnicodeError):
         raise Invalid("input_unavailable_or_not_utf8") from None
@@ -389,21 +397,6 @@ def excluded_only(provenance, policy_hash):
     )
 
 
-def policy_bytes(file):
-    """The caller selects trusted BASE policy; this library anchors its bytes."""
-    try:
-        path = Path(file)
-        if path.is_symlink() or not path.is_file():
-            raise Invalid("invalid_exclusions_policy")
-        raw = path.read_bytes()
-        policy = strict_json(raw.decode("utf-8"))
-        if not isinstance(policy, dict) or policy.get("schema_version") != 1:
-            raise Invalid("invalid_exclusions_policy")
-        return raw
-    except (OSError, UnicodeError, TypeError, Invalid):
-        raise Invalid("invalid_exclusions_policy") from None
-
-
 def prepare(args):
     work = Path(args.work)
     failures = []
@@ -563,23 +556,25 @@ def load_plan(work):
 
 
 @contextmanager
-def slot_operation(work, tag):
+def role_lock(work, tag):
     if tag not in ROLES:
-        raise Invalid("inactive_role")
-    lock = Path(work) / "slot" / f".{tag}-operation-lock"
-    lock.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        lock.mkdir()
-    except FileExistsError:
-        raise Invalid("record_in_flight") from None
-    try:
-        yield
-    finally:
-        lock.rmdir()
+        raise Invalid("invalid_role")
+    slot = Path(work) / "slot"
+    slot.mkdir(parents=True, exist_ok=True)
+    # Keep one inode for all issuers/recorders; never unlink this lock file.
+    with (slot / f"{tag}.operation-lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise Invalid("role_busy") from None
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
 
 
 def issue_request(work, tag):
-    with slot_operation(work, tag):
+    with role_lock(work, tag):
         return _issue_request(work, tag)
 
 
@@ -589,13 +584,26 @@ def _issue_request(work, tag):
     role = plan["roles"][tag]
     if not plan["input_complete"] or not role["required"]:
         raise Invalid("inactive_or_incomplete_request")
+    nonce = secrets.token_hex(16)
+    prompt_text = (work / "roles" / f"{tag}.txt").read_bytes().decode("utf-8")
+    diff_text = (work / "roles" / f"{tag}.diff").read_bytes().decode("utf-8")
+    instruction, payload = frame_request(prompt_text, diff_text, nonce)
+    receipt = {
+        "schema_version": 1, "tag": tag, "head_sha": plan["head_sha"],
+        "base_sha": plan["base_sha"], "plan_digest": plan["plan_digest"],
+        "prepared_request_digest": role["request_digest"], "invocation_nonce": nonce,
+        "request_digest": invocation_digest(role["request_digest"], nonce),
+        "prompt_sha256": digest(instruction.encode()), "input_sha256": digest(payload.encode()),
+    }
     previous = work / "slot" / f"{tag}-result.json"
+    if not previous.exists() and (work / "slot" / f"{tag}.record-claim").exists():
+        raise Invalid("record_incomplete")
     if previous.exists():
-        prior = strict_json(text_file(previous))
-        if not isinstance(prior, dict) or prior.get("valid") is True:
-            raise Invalid("valid_result_reissue")
+        prior = strict_json(text_file(previous, MAX_OUTPUT_BYTES + 4096))
+        if not isinstance(prior, dict) or prior.get("valid") is not False:
+            raise Invalid("result_already_recorded")
         history_file = work / "slot" / f"{tag}-attempts.json"
-        history = strict_json(text_file(history_file)) if history_file.exists() else []
+        history = strict_json(text_file(history_file, MAX_OUTPUT_BYTES)) if history_file.exists() else []
         if not isinstance(history, list) or len(history) >= 32:
             raise Invalid("attempt_history_limit")
         history.append(prior)
@@ -603,37 +611,30 @@ def _issue_request(work, tag):
         terminal = TERMINAL_CODES.intersection(prior.get("failure_codes", []))
         if terminal:
             write(work / "slot" / f"role-{tag}-terminal.flag", "\n".join(sorted(terminal)) + "\n")
-    nonce = secrets.token_hex(16)
-    instruction, payload, receipt = request_receipt(work, plan, tag, nonce)
     remove(previous)
     remove(work / "slot" / f"{tag}.record-claim")
-    remove(work / "slot" / f"{tag}-duplicate.flag")
     write(work / "requests" / f"{tag}.prompt", instruction)
     write(work / "requests" / f"{tag}.input", payload)
     write_json(work / "slot" / f"{tag}-request.json", receipt)
     return nonce, instruction, payload
 
 
-def request_receipt(work, plan, tag, nonce):
-    role = plan["roles"][tag]
-    instruction, payload = frame_request(
-        (work / "roles" / f"{tag}.txt").read_bytes().decode("utf-8"),
-        (work / "roles" / f"{tag}.diff").read_bytes().decode("utf-8"), nonce,
-    )
-    return instruction, payload, {
-        "schema_version": 1, "tag": tag, "head_sha": plan["head_sha"],
-        "base_sha": plan["base_sha"], "plan_digest": plan["plan_digest"],
-        "prepared_request_digest": role["request_digest"], "invocation_nonce": nonce,
-        "request_digest": invocation_digest(role["request_digest"], nonce),
-        "prompt_sha256": digest(instruction.encode()), "input_sha256": digest(payload.encode()),
-    }
-
-
 def issued_request(work, plan, tag):
     try:
         receipt = strict_json(text_file(work / "slot" / f"{tag}-request.json"))
+        role = plan["roles"][tag]
         nonce = receipt["invocation_nonce"]
-        _, _, expected = request_receipt(work, plan, tag, nonce)
+        instruction, payload = frame_request(
+            (work / "roles" / f"{tag}.txt").read_bytes().decode("utf-8"),
+            (work / "roles" / f"{tag}.diff").read_bytes().decode("utf-8"), nonce,
+        )
+        expected = {
+            "schema_version": 1, "tag": tag, "head_sha": plan["head_sha"],
+            "base_sha": plan["base_sha"], "plan_digest": plan["plan_digest"],
+            "prepared_request_digest": role["request_digest"], "invocation_nonce": nonce,
+            "request_digest": invocation_digest(role["request_digest"], nonce),
+            "prompt_sha256": digest(instruction.encode()), "input_sha256": digest(payload.encode()),
+        }
         if receipt != expected:
             raise Invalid("invalid_issued_request")
         return receipt
@@ -695,6 +696,8 @@ def parse_response(text):
 
 def diagnostic_failure(stderr):
     """Match diagnostic forms, not general words in echoed code or prompts."""
+    if stderr.strip() == "output_byte_limit":
+        return "output_byte_limit"
     for raw in stderr.splitlines():
         line = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", raw).strip()
         if line.startswith(("+", "-", ">", "|", "```", "diff --git", "@@")):
@@ -722,65 +725,203 @@ def diagnostic_failure(stderr):
     return None
 
 
-SENSITIVE_KEY = re.compile(
-    r"(?i:(?<![A-Za-z0-9])[A-Za-z0-9_.:-]*(?:password|passwd|pwd|dsn|api[_-]?key|"
-    r"secret|token|credential|passphrase|private[_-]?key|cookie|authorization|"
-    r"connection[_-]?string|origin[_-]?verify|AccessKeyId|access[_-]?key[_-]?id)[A-Za-z0-9_.:-]*)"
+def output_bytes(text):
+    if len(text) > MAX_OUTPUT_BYTES:
+        raise Invalid("output_byte_limit")
+    size = len(text.encode("utf-8"))
+    if size > MAX_OUTPUT_BYTES:
+        raise Invalid("output_byte_limit")
+    return size
+
+
+CREDENTIAL_WORD = (
+    r"(?:password|passwd|pwd|dsn|api[_-]?key|secret|token|credential|passphrase|"
+    r"private[_-]?key|cookie|authorization|connection[_-]?string|origin[_-]?verify|"
+    r"AccessKeyId|access[_-]?key[_-]?id)"
 )
+SENSITIVE_KEY = re.compile(
+    r"(?i:(?=[A-Za-z0-9_.:-]*" + CREDENTIAL_WORD + r")[A-Za-z0-9_.:-]+)\Z"
+)
+PEM_MARKER = re.compile(r"-----(BEGIN|END) [A-Z ]*PRIVATE KEY-----")
+PEM_VALUE = r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)"
+REDACTION_MARKERS = {
+    "[REDACTED]", "[REDACTED-AWS-KEY]", "[REDACTED-GH-TOKEN]", "[REDACTED-SLACK-TOKEN]",
+    "[REDACTED-API-KEY]", "[REDACTED-GOOGLE-KEY]", "[REDACTED-JWT]",
+    "[REDACTED-PRIVATE-KEY]", "[REDACTED-UNTERMINATED-PEM-BLOCK]",
+}
 
 
-def scrub(value):
-    """Scrub decoded strings too: raw-JSON sanitizers miss escaped credentials."""
-    if isinstance(value, list):
-        return [scrub(x) for x in value]
-    if isinstance(value, dict):
-        fields = {str(k).lower(): v for k, v in value.items()}
-        sensitive_values = {v for k, v in (("name", "value"), ("headername", "headervalue"))
-                            if isinstance(fields.get(k), str) and SENSITIVE_KEY.fullmatch(fields[k])}
-        return {k: "[REDACTED]" if isinstance(k, str) and (
-            SENSITIVE_KEY.fullmatch(k) or k.lower() in sensitive_values
-        ) else scrub(v) for k, v in value.items()}
-    if not isinstance(value, str):
-        return value
+def sensitive_key(value):
+    return isinstance(value, str) and value not in REDACTION_MARKERS and any(
+        SENSITIVE_KEY.fullmatch(part.group())
+        for part in re.finditer(r"[A-Za-z0-9_.:-]+", value)
+    )
+
+
+def strip_controls(value):
     value = re.sub(r"(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]", "", value)
     value = re.sub(r"(?:\x1b[\]PX^_]|\x9d|\x90|\x98|\x9e|\x9f).*?(?:\x07|\x9c|\x1b\\|$)", "", value, flags=re.S)
     value = re.sub(r"\x1b[ -/]*[0-~]", "", value)
-    value = "".join(c for c in value if c in "\n\r\t" or unicodedata.category(c) not in ("Cc", "Cf", "Zl", "Zp"))
+    return "".join(c for c in value if c in "\n\r\t" or unicodedata.category(c) not in ("Cc", "Cf", "Zl", "Zp"))
+
+
+def quoted_literal(value, start):
+    quote, index = value[start], start + 1
+    while index < len(value) and value[index] != quote:
+        index += 2 if value[index] == "\\" else 1
+    if index >= len(value):
+        return len(value), None
+    end = index + 1
     try:
-        decoded = strict_json(value)
-        if isinstance(decoded, (dict, list)):
-            return canonical(scrub(decoded))
-    except Invalid:
-        pass
-    def quoted(match):
+        decoded = strict_json(value[start:end]) if quote == '"' else ast.literal_eval(value[start:end])
+    except (Invalid, ValueError, SyntaxError):
+        return end, None
+    return end, decoded if isinstance(decoded, str) else None
+
+
+def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
+    """Scrub decoded strings too: raw-JSON sanitizers miss escaped credentials."""
+    if _depth > 32:
+        raise Invalid("scrub_nesting_limit")
+    if _remaining is None:
+        _remaining = [MAX_OUTPUT_BYTES]
+    if isinstance(value, list):
+        result, in_pem = [], False
+        for item in value:
+            clean = scrub(item, _remaining, _depth + 1, _charge)
+            if isinstance(item, str):
+                text = strip_controls(item)
+                pieces, position = (["[REDACTED]"] if in_pem else []), 0
+                for marker in PEM_MARKER.finditer(text):
+                    if marker[1] == "BEGIN" and not in_pem:
+                        pieces.extend((text[position:marker.start()], "[REDACTED]"))
+                        in_pem = True
+                    elif marker[1] == "END" and in_pem:
+                        position, in_pem = marker.end(), False
+                if pieces:
+                    if not in_pem:
+                        pieces.append(text[position:])
+                    clean = scrub("".join(pieces), _remaining, _depth + 1, False)
+            elif in_pem:
+                clean = "[REDACTED]"
+            result.append(clean)
+        return result
+    if isinstance(value, dict):
+        sensitive_values = {
+            field for name, field in (("name", "value"), ("headername", "headervalue"))
+            if any(isinstance(k, str) and k.lower() == name and isinstance(v, str)
+                   and sensitive_key(v) for k, v in value.items())
+        }
+        result, reserved, suffix = {}, set(value), 1
+        for key, item in value.items():
+            clean_key = scrub(key, _remaining, _depth + 1, False, False) if isinstance(key, str) else key
+            if clean_key != key and (clean_key in reserved or clean_key in result):
+                while f"[REDACTED-KEY-{suffix}]" in reserved or f"[REDACTED-KEY-{suffix}]" in result:
+                    suffix += 1
+                clean_key = f"[REDACTED-KEY-{suffix}]"
+                suffix += 1
+            hidden = isinstance(key, str) and (
+                sensitive_key(key) or key.lower() in sensitive_values
+            )
+            clean_item = scrub(item, _remaining, _depth + 1, _charge)
+            result[clean_key] = "[REDACTED]" if hidden else clean_item
+        return result
+    if not isinstance(value, str):
+        return value
+    size = output_bytes(value)
+    if _charge:
+        _remaining[0] -= size
+    if _remaining[0] < 0:
+        raise Invalid("output_byte_limit")
+    value = strip_controls(value)
+    # Mask complete raw spans before decoding can separate their boundary markers.
+    value = re.sub(PEM_VALUE, "[REDACTED]", value, flags=re.S)
+    if _structured:
         try:
-            return canonical(scrub(strict_json(match.group())))
+            decoded = strict_json(value)
         except Invalid:
-            return match.group()
-    # Decode nested JSON strings/escaped keys before applying key/value patterns.
-    value = re.sub(r'"(?:\\.|[^"\\])*"', quoted, value)
-    identifier = SENSITIVE_KEY.pattern
-    quote = r"""\\*["']"""
-    key = identifier + rf"(?:{quote})?\s*[:=]\s*"
+            decoded = None
+        if isinstance(decoded, (dict, list, str)):
+            clean = scrub(decoded, _remaining, _depth + 1, False)
+            return value if clean == decoded else canonical(clean)
+        if '\\"' in value:
+            try:
+                decoded = strict_json('"' + value + '"')
+            except Invalid:
+                decoded = None
+            if isinstance(decoded, str) and decoded != value:
+                clean = scrub(decoded, _remaining, _depth + 1, False)
+                return value if clean == decoded else clean
+        # Scan quoted fragments once; an unterminated fragment consumes the tail.
+        pieces, start, index = [], 0, 0
+        while index < len(value):
+            if value[index] not in "\"'" or (
+                value[index] == "'" and index and value[index - 1].isalnum()
+            ):
+                index += 1
+                continue
+            opening = index
+            index, decoded = quoted_literal(value, opening)
+            if decoded is None:
+                continue
+            literals = [decoded]
+            while index < len(value):
+                next_start = index
+                while next_start < len(value) and value[next_start] in " \t":
+                    next_start += 1
+                if next_start >= len(value) or value[next_start] != "+":
+                    break
+                next_start += 1
+                while next_start < len(value) and value[next_start] in " \t":
+                    next_start += 1
+                if next_start >= len(value) or value[next_start] not in "\"'":
+                    break
+                end, following = quoted_literal(value, next_start)
+                if following is None:
+                    break
+                literals.append(following)
+                index = end
+            decoded = "".join(literals)
+            clean = scrub(decoded, _remaining, _depth + 1, False)
+            replacement = value[opening:index] if clean == decoded else canonical(clean)
+            pieces.extend((value[start:opening], replacement))
+            start = index
+        if pieces:
+            value = "".join(pieces) + value[start:]
+    identifier = (
+        r"(?i:(?<![A-Za-z0-9_.-])(?=[A-Za-z0-9_.-]*" + CREDENTIAL_WORD
+        + r")[A-Za-z0-9_.-]+)"
+    )
+    key = identifier + r"""["']?\s*[:=]\s*"""
+    quoted_value = r"""(?:"(?:\\.|[^"\\])*(?:"|\\?\Z)|'(?:\\.|[^'\\])*(?:'|\\?\Z))"""
+    line_break = r"(?:\r\n?|\n)"
+    # Check indentation/blankness without consuming it twice. Every iteration
+    # consumes either a nonempty body or a line break, including bare CR.
+    block_line = r"(?=[+-]?[ \t\r\n])[^\r\n]*(?:" + line_break + r"|\Z)"
     patterns = (
-        r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)",
+        PEM_VALUE,
         r"\b(?:AKIA|ASIA|ABIA|ACCA)[A-Z0-9]{16}\b",
         r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b",
         r"\bsk-[A-Za-z0-9_-]{16,}",
         r"\bxox[abprs]-[A-Za-z0-9-]{10,}",
         r"\bAIza[0-9A-Za-z_-]{30,}",
-        r"\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+",
+        r"(?<![A-Za-z0-9_-])(?=[A-Za-z0-9_-]*\beyJ)"
+        r"[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+",
         r"(?i:\bBearer\s+)[A-Za-z0-9_.~+/-]+=*",
         r"""(?i:\bAuthorization)["']?\s*:\s*["']?(?i:Basic|Bearer)\s+[A-Za-z0-9+/=_.~-]+""",
-        r"""[A-Za-z][A-Za-z0-9+.-]*://[^/\s:@"']*:[^@\s/"']+@""",
+        r"""(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]*://[^/\s:@"']*:[^@\s/"']+@""",
         r"""https://hooks\.slack\.com/services/[^\s"'<>]+""",
-        r"""(?im)^[ \t]*[+-]?[ \t]*(?:set-)?cookie["']?[ \t]*:[^\r\n]*""",
+        r"""(?im)^[ \t]*(?:[+-][ \t]*)?(?:set-)?cookie["']?[ \t]*:[^\r\n]*""",
         r"""(?i:\bx-origin-verify)["']?\s*:\s*["']?[^\s"',;}\]]+""",
-        key + r"[|>][-+]?[ \t]*\r?\n(?:[+-]?[ \t]+[^\r\n]*(?:\r?\n|\Z))+",
-        rf"(?i:\b(?:header)?name)(?:{quote})?\s*[:=]\s*(?:{quote})?" + identifier
-        + rf"(?:{quote})?[\s,]*[+-]?[ \t]*(?:{quote})?(?i:(?:header)?value)(?:{quote})?\s*[:=]\s*"
-        + rf"(?:(?P<named>{quote}).*?(?P=named)|[^\s,}}\]]+)",
-        key + rf"(?P<quote>{quote}).*?(?P=quote)",
+        key + r"[|>][-+]?[ \t]*" + line_break + r"(?:" + block_line + r")+",
+        # YAML name/value pairs consume the complete value line, including commas.
+        r"""(?i:\b(?:header)?name)["']?[ \t]*[:=][ \t]*["']?""" + identifier
+        + r"""["']?[ \t]*""" + line_break
+        + r"""[ \t]*(?:[+-][ \t]*)?["']?(?i:(?:header)?value)["']?[ \t]*[:=][^\r\n]*""",
+        r"""(?i:\b(?:header)?name)["']?\s*[:=]\s*["']?""" + identifier
+        + r"""["']?\s*(?:,\s*)?(?:[+-][ \t]*)?["']?(?i:(?:header)?value)["']?\s*[:=]\s*"""
+        + r"(?:" + quoted_value + r"|[^\s,}\]]+)",
+        key + quoted_value,
         key + r"""[^\s"',;}\]]+""",
     )
     for pattern in patterns:
@@ -792,19 +933,17 @@ def record(args):
     if args.tag not in ROLES:
         return 2
     try:
-        with slot_operation(args.work, args.tag):
+        with role_lock(args.work, args.tag):
             return _record(args)
     except Invalid as exc:
-        if str(exc) != "record_in_flight":
+        if str(exc) != "role_busy":
             raise
-        write(Path(args.work) / "slot" / f"{args.tag}-duplicate.flag", "record_in_flight\n")
+        write(Path(args.work) / "slot" / f"{args.tag}-duplicate.flag", "concurrent_record\n")
         return 2
 
 
 def _record(args):
     work = Path(args.work)
-    if args.tag not in ROLES:
-        return 2
     slot = work / "slot"
     slot.mkdir(parents=True, exist_ok=True)
     result_path = slot / f"{args.tag}-result.json"
@@ -836,17 +975,27 @@ def _record(args):
             raise Invalid("inactive_role")
         if args.exit_code != 0:
             result["failure_codes"].append("cli_nonzero_exit")
-        stderr = text_file(args.stderr)
-        failure = diagnostic_failure(stderr)
-        if failure:
-            result["failure_codes"].append(failure)
+        streams = {}
+        for name, path in (("stdout", args.output), ("stderr", args.stderr)):
+            try:
+                streams[name] = text_file(path, MAX_OUTPUT_BYTES)
+            except Invalid as exc:
+                if str(exc) not in result["failure_codes"]:
+                    result["failure_codes"].append(str(exc))
+        if "stderr" in streams:
+            failure = diagnostic_failure(streams["stderr"])
+            if failure and failure not in result["failure_codes"]:
+                result["failure_codes"].append(failure)
         if result["failure_codes"]:
             raise Invalid(result["failure_codes"][0])
-        response = parse_response(text_file(args.output))
+        response = parse_response(streams["stdout"])
         validate_response(response, plan, args.tag)
         response = scrub(response)
         validate_response(response, plan, args.tag)
-        result.update(valid=True, response=response, response_digest=digest(response))
+        complete = dict(result, valid=True, response=response, response_digest=digest(response))
+        if len((canonical(complete) + "\n").encode()) > MAX_OUTPUT_BYTES + 4096:
+            raise Invalid("output_byte_limit")
+        result = complete
     except Invalid as exc:
         if str(exc) not in result["failure_codes"]:
             result["failure_codes"].append(str(exc))
@@ -884,7 +1033,7 @@ def aggregate(args):
                 continue
             seen.add(tag)
             try:
-                result = strict_json(text_file(file))
+                result = strict_json(text_file(file, MAX_OUTPUT_BYTES + 4096))
                 role = plan["roles"][tag]
                 receipt = issued_request(work, plan, tag)
                 if not isinstance(result, dict):
@@ -924,7 +1073,7 @@ def aggregate(args):
         path = work / "slot" / f"{tag}-attempts.json"
         if path.exists():
             try:
-                attempts = strict_json(text_file(path))
+                attempts = strict_json(text_file(path, MAX_OUTPUT_BYTES))
                 if not isinstance(attempts, list) or len(attempts) > 32:
                     raise Invalid("invalid_attempt_history")
                 history[tag] = scrub(attempts)
@@ -1029,6 +1178,21 @@ def main(argv=None):
         print("role-review: local input/output validation failed", file=sys.stderr)
         return 2
 
+
+
+def policy_bytes(file):
+    """The caller selects trusted BASE policy; this library anchors its bytes."""
+    try:
+        path = Path(file)
+        if path.is_symlink() or not path.is_file():
+            raise Invalid("invalid_exclusions_policy")
+        raw = path.read_bytes()
+        policy = strict_json(raw.decode("utf-8"))
+        if not isinstance(policy, dict) or policy.get("schema_version") != 1:
+            raise Invalid("invalid_exclusions_policy")
+        return raw
+    except (OSError, UnicodeError, TypeError, Invalid):
+        raise Invalid("invalid_exclusions_policy") from None
 
 if __name__ == "__main__":
     sys.exit(main())
