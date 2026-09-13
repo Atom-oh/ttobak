@@ -1,224 +1,57 @@
-# TTOBAK Insights UX Redesign — Design Spec
+# Insights Reading and Navigation Redesign
 
-**Date:** 2026-04-25
-**Status:** Approved
-**Figma:** https://www.figma.com/design/f3DqT7x6kK6994MeUjMwuX
+> Historical design record. Original date: 2026-04-25. Original status: Approved.
+> Visual specifications and component sketches below are design intent, not a frozen UI.
 
-## Overview
+## Goal and design choices
 
-Upgrade the Insights page from "메모장 느낌" to Obsidian-grade reading experience. Desktop-first. Primary consumers: Deep Research reports (5000-20000 words) and Tech articles.
+Make long research reports and technical articles readable, primarily on desktop,
+without migrating stored Markdown. The design chose reusable React Markdown
+components over MDX, Shiki over Prism for highlighting/theme support, standard
+Obsidian callouts, and IntersectionObserver-based TOC tracking rather than continuous
+scroll handlers. Mobile would use a simpler full-width reading layout.
 
-## 1. View Modes (Card + Table Toggle)
+## Proposed surfaces
 
-### Card View (default)
-- 2-column grid layout for desktop (1-column mobile)
-- Each card: title, source, date, tags, 3-line summary, KB badge, Read button
-- Tag chips filterable, sort dropdown (newest/oldest/title)
+- Card and compact sortable-table views with tags, source/date metadata, pagination,
+  and a persisted view preference.
+- Headings with anchors and visual hierarchy; responsive tables and blockquotes;
+  callouts for summaries, warnings, tips, danger, and information.
+- Lazy code highlighting with language labels/copy, and lazy Mermaid diagrams with
+  a readable failure fallback. Architecture, network, flow, and state diagrams
+  were intended outputs, not trusted executable content.
+- Article headers with type/mode, sources, reading metadata, original-source links,
+  and copy/download Markdown with frontmatter. Notion publishing was deferred.
+- A sticky desktop TOC; mobile would omit it initially. Original cyan colors, exact
+  dimensions, component counts, and bundle estimates were mockup choices rather
+  than current design-token requirements.
 
-### Table View
-- Obsidian Dataview style: sortable columns (Title, Source, Date, Tags, KB)
-- Row click → article detail
-- Compact rows with tag pills
-- Bottom: "Showing 1-10 of N documents" + pagination
+## Research section navigation
 
-### Toggle
-- Right-aligned icon buttons: `Card | Table`
-- Persisted in localStorage
+The proposed `save_report` path split h2 sections into separate S3 objects while
+retaining a full report. Section metadata identified title, slug, order, key, and
+word count. A section list, section detail, previous/next controls, and full-report
+view would let readers explore long reports without losing navigation. Section
+links are distinct from separately executed child research jobs.
 
-## 2. Rich Markdown Rendering (Core Feature)
+## Constraints and validation intent
 
-Replace inline Tailwind `<ReactMarkdown>` with dedicated component system.
+Retain Markdown sanitization, safe links, responsive overflow, and usable plain
+fallbacks. Validate long tables/code, headings, callouts, copy/export, section links,
+and light/dark reading. Deferred loading reduces initial work but does not remove
+loading failures or ongoing plugin maintenance. No exact library size or export
+compatibility was proven by the mockups.
 
-### Component Structure
+## Current evidence
 
-```
-frontend/src/components/markdown/
-  MarkdownRenderer.tsx   — ReactMarkdown wrapper + custom component mapping
-  Heading.tsx            — h1-h6: left cyan accent bar + anchor link
-  Callout.tsx            — Obsidian-style admonition boxes
-  CodeBlock.tsx          — Shiki syntax highlighting + copy + lang label
-  DataTable.tsx          — Responsive: horizontal scroll + striped + sticky header
-  BlockQuote.tsx         — Left bar + translucent bg + italic
-  TOCSidebar.tsx         — Right sticky: auto-extract headings + scroll highlight
-```
+[ADR-010](../../decisions/ADR-010-insights-obsidian-style-markdown-rendering.md) records
+the decision. The [markdown components](../../../frontend/src/components/markdown)
+use dynamic imports, sanitized Markdown, and explicit Mermaid strict mode.
+[save_report](../../../backend/python/research-agent/tools.py) writes h2 sections;
+[ResearchDetailClient](../../../frontend/src/app/insights/research/[researchId]/ResearchDetailClient.tsx)
+renders them. Current colors and spacing come from
+[globals.css](../../../frontend/src/app/globals.css), not this historical mockup.
 
-### Heading Component
-- h2: 4px left cyan bar + bold 22px + hover anchor icon (🔗)
-- h3: semi-bold 18px, no bar
-- h4-h6: medium weight, decreasing size
-- All headings: auto-generated `id` for anchor linking
-
-### Callout Component
-Parses `> [!type] title` syntax (Obsidian-compatible).
-
-| Type | Color | Icon | Use Case |
-|------|-------|------|----------|
-| `[!summary]` | Cyan (#00E5FF) | 💡 | Executive Summary |
-| `[!warning]` | Amber (#EA9619) | ⚠️ | Cautions, limitations |
-| `[!tip]` | Green (#4DC290) | ✅ | AWS recommendations |
-| `[!danger]` | Red (#EF4444) | 🚫 | Security risks |
-| `[!info]` | Blue (#3B82F6) | ℹ️ | Background info |
-
-Structure: 4px left accent bar + tinted background (4% opacity) + icon + title + body.
-
-### CodeBlock Component
-- **Shiki** for syntax highlighting (lazy loaded via `next/dynamic`)
-- Theme: `github-dark-default`
-- Languages: bash, python, json, yaml, terraform, typescript, go
-- Top bar: language label (left) + Copy button (right)
-- Dark background (#0a0a0f) with border
-
-### DataTable Component
-- Wrapper with horizontal scroll on overflow
-- Header: sticky, 4% white bg
-- Rows: alternating subtle stripe, 1px separator
-- Cells: proper padding, left-aligned
-- First column: medium weight (row identifier)
-
-### MermaidBlock Component
-Renders ` ```mermaid ` fenced code blocks as SVG diagrams.
-
-- **Library**: `mermaid` (lazy loaded via `next/dynamic`)
-- **Theme**: dark mode compatible (`theme: 'dark'` when `.dark` class present)
-- **Supported types**: graph, flowchart, sequenceDiagram, classDiagram, stateDiagram
-- **Fallback**: if rendering fails, show raw code block with Shiki
-- **Copy**: "Copy Mermaid" button for pasting into other tools
-- **Size**: auto-width, max-height 600px with scroll
-- **Integration**: `CodeBlock` checks `language === 'mermaid'` and delegates to `MermaidBlock`
-
-The Research Agent generates Mermaid diagrams for:
-- Network topology (VPC, Direct Connect, VPN)
-- Architecture diagrams (microservices, event-driven)
-- Data flow (pipeline stages)
-- Decision trees (process flows)
-
-### BlockQuote Component
-- 3px left bar (cyan 40% opacity)
-- Background: cyan 3% opacity
-- Text: italic, muted color
-- Attribution line after `—` in smaller text
-
-### TOCSidebar Component
-- **Desktop only**: 264px right sticky panel
-- Title: "ON THIS PAGE" (uppercase, tracked)
-- Extracts h2 (level 0) and h3 (level 1)
-- Active section: 2px cyan left indicator + cyan text + semi-bold
-- Inactive: muted gray, regular weight
-- Click: smooth scroll to section
-- IntersectionObserver for auto-tracking
-- **Mobile**: hidden (optional floating TOC button later)
-
-## 3. Article Detail Page Layout
-
-```
-Desktop (1440px):
-├── Sidebar (256px) — existing nav
-├── Content (920px, max-width 800px centered)
-│   ├── Back button
-│   ├── Header: badges, title, meta, tags, original link
-│   └── Markdown content (MarkdownRenderer)
-└── TOC (264px) — sticky right panel
-
-Mobile (<768px):
-├── Mobile header with back button
-└── Full-width content (no TOC)
-```
-
-### Header Card
-- Type badge (News amber / Tech blue / Research purple)
-- Mode badge (Quick green / Standard blue / Deep purple) — research only
-- Title: bold 26-28px
-- Meta: source count, word count, date, reading time
-- Tags: clickable pills
-- Original link: "🔗 View Original Article"
-
-## 4. Export Feature
-
-### Export Button (article header area)
-- **Copy as Markdown** — clipboard with Obsidian-compatible frontmatter
-- **Download .md** — file download with frontmatter
-- Future: **Send to Notion** (Notion API integration)
-
-### Obsidian-Compatible Frontmatter
-```yaml
----
-title: "Article Title"
-date: 2026-04-25
-tags: [금융, 보안, 클라우드, AWS]
-source: ttobak-research
-type: research | news | tech
-url: https://original-source.com
----
-```
-
-Ensures drag-and-drop into Obsidian vault works immediately.
-
-## 5. Dependencies
-
-| Package | Purpose | Size | Loading |
-|---------|---------|------|---------|
-| `shiki` | Syntax highlighting | ~2MB | Lazy (next/dynamic) |
-| `mermaid` | Diagram rendering | ~1.5MB | Lazy (next/dynamic) |
-| `react-markdown` | Markdown parsing | Existing | Eager |
-| `remark-gfm` | GFM tables/checkboxes | Existing | Eager |
-| `rehype-raw` | HTML in markdown | Existing | Eager |
-| `rehype-sanitize` | XSS prevention | Existing | Eager |
-
-## 6. Files to Create/Modify
-
-### New Files
-- `frontend/src/components/markdown/MarkdownRenderer.tsx`
-- `frontend/src/components/markdown/Heading.tsx`
-- `frontend/src/components/markdown/Callout.tsx`
-- `frontend/src/components/markdown/CodeBlock.tsx`
-- `frontend/src/components/markdown/DataTable.tsx`
-- `frontend/src/components/markdown/BlockQuote.tsx`
-- `frontend/src/components/markdown/MermaidBlock.tsx`
-- `frontend/src/components/markdown/TOCSidebar.tsx`
-- `frontend/src/components/InsightsTableView.tsx`
-
-### Modified Files
-- `frontend/src/components/InsightsList.tsx` — add view toggle + table view
-- `frontend/src/app/insights/[sourceId]/[docHash]/InsightDetailClient.tsx` — replace markdown rendering + add TOC + export
-- `frontend/src/app/insights/research/[researchId]/ResearchDetailClient.tsx` — same markdown upgrade
-
-## 7. Section Navigation (Deep Research)
-
-Deep Research reports (5,000-20,000 words) are split into navigable sections for Notion-like reading experience.
-
-### Data Model
-- `save_report` tool splits full markdown by `## ` headings
-- Each section saved as separate S3 file: `shared/research/{id}/{slug}.md`
-- Full report also saved: `shared/research/{id}.md` (for export)
-- DynamoDB `sections` attribute: `[{index, title, slug, s3Key, wordCount}, ...]`
-
-### Section List View (Research Detail)
-- Default view shows **section list** (not full report)
-- Each section: card with title, word count, first 2 lines preview
-- Click → section detail view
-- "View Full Report" button at top for full markdown view
-
-### Section Detail View
-- URL: `/insights/research/{id}?section={slug}`
-- Back to section list: breadcrumb `Research > {topic} > {section}`
-- Previous / Next navigation buttons at bottom
-- TOCSidebar shows h3 within the section
-
-### Section Links
-- Agent generates `[섹션제목](#slug)` links within the report
-- Frontend resolves to `?section={slug}` navigation
-- Cross-section references work as internal links
-
-### API Changes
-- `GET /api/research/{id}` returns `sections` metadata (no content)
-- `GET /api/research/{id}/sections/{slug}` returns section content from S3
-- Full content still available via existing `content` field
-
-## 8. Design Decisions
-
-- **Obsidian callout syntax** (`> [!type]`) chosen over custom markers for future Obsidian export compatibility
-- **Shiki over Prism.js** — better theme support, WASM-based, no CSS theme files needed
-- **TOC via IntersectionObserver** — no scroll event listener, better performance
-- **No MDX** — existing S3 markdown content stays as-is, zero migration cost
-- **Desktop-first** — long research reports are primarily read on desktop; mobile gets simplified layout
-- **Export frontmatter** — YAML format compatible with both Obsidian and common static site generators
+The original Figma reference was design `f3DqT7x6kK6994MeUjMwuX`; it is not evidence
+of current source behavior. Current references: [documentation map](../../README.md)
+and [UI reference](../../DESIGN-SPEC.md).

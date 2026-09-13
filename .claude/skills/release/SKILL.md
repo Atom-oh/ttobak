@@ -1,25 +1,20 @@
-# Release Skill
+---
+name: release
+description: Validate and deliver an authorized TTOBAK release using the project's current PR and deployment runbooks.
+---
 
-## Trigger
-When user requests a deployment or release.
+# Release
 
-## Steps
-1. Run pre-flight checks:
-   - `cd backend && /usr/local/go/bin/go build ./...`
-   - `cd frontend && npm run build`
-   - `cd infra && npx cdk synth`
-2. Build all Lambda binaries:
-   ```bash
-   cd backend && for dir in cmd/api cmd/transcribe cmd/summarize cmd/process-image cmd/kb; do
-     GOOS=linux GOARCH=arm64 /usr/local/go/bin/go build -tags lambda.norpc -o $dir/bootstrap ./$dir
-   done
-   ```
-3. Deploy infrastructure: `cd infra && npx cdk deploy --all --require-approval never`
-4. Deploy frontend: `aws s3 sync frontend/out/ s3://ttobak-site-180294183052-ap-northeast-2/ --delete`
-5. Invalidate CloudFront: `aws cloudfront create-invalidation --distribution-id E3BPV9VFNI1H2S --paths "/*"`
-6. Verify deployment by checking API Gateway endpoint health
+Use the root validation commands, `docs/runbooks/pr-review.md`, and
+`docs/runbooks/deployment.md`. Do not substitute a build for required tests.
 
-## Constraints
-- Always confirm with user before deploying to production
-- Never deploy with failing builds
-- CDK stack order: Auth+Storage → AI → Knowledge → EdgeAuth → Gateway → Frontend
+For assigned PR delivery, finish current-HEAD review/fixes and merge under the
+user's standing conditions. Deployment is a separate authorized operation: build
+all changed artifacts, inspect the target/revision and deploy only selected
+stacks with `--exclusively` in the app's dependency order. Never use `--all` or
+apply KnowledgeStack's staged teardown as a side effect.
+
+Preserve frontend config.json, force HTML refresh, invalidate the actual target
+CloudFront distribution and verify through CloudFront. Report actual deployed
+state; do not use an old distribution ID or direct Gateway health as proof.
+Honor existing session authorization and do not invent another confirmation loop.

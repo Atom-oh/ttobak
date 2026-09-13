@@ -36,7 +36,7 @@ npm run lint      # ESLint
   - `useLiveSummary` — Polls /api/meetings/{id}/summary during recording
   - `usePostRecording` — Post-recording status polling and finalization
   - `useAudioDevices` — Enumerate and select mic devices
-  - `useTheme` — Reads `<html>`'s `.dark` class and tracks changes via `MutationObserver` (the sidebar's theme toggle only flips the class + writes `localStorage`, it emits no event); any component that needs to know light-vs-dark in JS (mermaid, shiki) should use this instead of reading `document.documentElement.classList` directly
+  - `useTheme` — Reads `<html>`'s `.dark` class and tracks changes via `MutationObserver` (the shared toggle writes the root class and `localStorage`; the observer also tracks changes from other contexts); any component that needs to know light-vs-dark in JS (mermaid, shiki) should use this instead of reading `document.documentElement.classList` directly
 - `src/types/` — TypeScript type definitions (`meeting.ts`)
 
 ## Conventions
@@ -46,13 +46,13 @@ npm run lint      # ESLint
 - API calls: `lib/api.ts` apiFetch with Bearer token; error shape `{ error: { code, message } }`
 - Styling: Tailwind v4 with `@custom-variant dark` (class-based, not media query); design tokens in `globals.css`; Material Symbols Outlined icons
 - Dark mode: `.dark` class on `<html>` toggled via localStorage `theme` key; `@custom-variant dark (&:where(.dark, .dark *))` in globals.css makes all `dark:` utilities respond to the class. JS that needs to know the theme (not just apply `dark:` classes) uses `useTheme` — which also now owns writing the toggle (class + localStorage) — rather than reading/writing the class directly; the hook's own implementation and `layout.tsx`'s inline pre-hydration bootstrap script are the only exceptions, by necessity
-- Primary colors: light `#3211d4`, dark `#8b85f7` (violet) -- one unified indigo/violet brand, no separate neon palette (see root CLAUDE.md's Design System section for the full token table)
+- Primary colors: light `#3211d4`, dark `#8b85f7` (violet) -- one unified indigo/violet brand, no separate neon palette (see `docs/DESIGN-SPEC.md` and `globals.css` for tokens)
 - Responsive: mobile (`<768px`) bottom nav; desktop (`>=1024px`) sidebar `w-64`
 
 ## Gotchas
 
 - **Tailwind v4 dark mode**: Must use `@custom-variant dark` in globals.css — without it, `dark:` utilities only respond to OS `prefers-color-scheme`, not the `.dark` class toggle
-- **SPA fallback**: CloudFront 404→`/index.html` enables client-side routing for dynamic routes like `/meeting/[id]`
+- **SPA routing**: FrontendStack's CloudFront Function maps known static/dynamic pages; update `knownPages` for new routes. The 404 fallback alone is not the full router
 - **AWS SDK in browser**: `@aws-sdk/client-transcribe-streaming` runs in the browser; Cognito identity pool provides temporary credentials via `@aws-sdk/credential-providers`
 - **Recording cleanup**: `RecordButton` must call `audioContextRef.current.close()` and `stream.getTracks().forEach(t => t.stop())` on stop to prevent mic lock
 - **Audio uploads use a progress-stall watchdog, never a fixed total timeout**: `lib/upload.ts`'s `putWithProgress` (and `mac-app/src-tauri/src/upload.rs`'s Rust-side equivalent for the Tauri desktop app) abort only after 60s with *zero progress* — a large recording on a slow-but-healthy connection must be allowed to keep going. A fixed total-request timeout here previously made large files impossible to upload regardless of connection quality (ADR-024).

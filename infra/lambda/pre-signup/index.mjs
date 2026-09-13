@@ -1,4 +1,5 @@
 import { DynamoDBClient, GetItemCommand } from '@aws-sdk/client-dynamodb';
+import { isApprovedAdminInvite } from './policy.mjs';
 
 const ddb = new DynamoDBClient({});
 const TABLE_NAME = process.env.TABLE_NAME || 'ttobak-main';
@@ -12,6 +13,10 @@ export const handler = async (event) => {
   const domain = email.split('@')[1]?.toLowerCase();
   if (!domain) {
     throw new Error('유효하지 않은 이메일 형식입니다');
+  }
+
+  if (isApprovedAdminInvite(event)) {
+    return event;
   }
 
   const result = await ddb.send(new GetItemCommand({

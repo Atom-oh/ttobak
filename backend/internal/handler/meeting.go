@@ -25,10 +25,14 @@ type MeetingHandler struct {
 	// simService is optional (see SetSimService) so GetMeeting can attach
 	// the meeting's SimRun (ADR-033) without every existing NewMeetingHandler
 	// call site needing to change.
-	simService         *service.SimService
-	actionItemsService *service.ActionItemsAnalysisService
+	simService            *service.SimService
+	actionItemsService    *service.ActionItemsAnalysisService
+	attachmentTextService *service.AttachmentTextService
 }
 
+func (h *MeetingHandler) SetAttachmentTextService(s *service.AttachmentTextService) {
+	h.attachmentTextService = s
+}
 func (h *MeetingHandler) SetActionItemsService(s *service.ActionItemsAnalysisService) {
 	h.actionItemsService = s
 }
@@ -266,6 +270,21 @@ func (h *MeetingHandler) GetMeeting(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Generate presigned download URLs for image attachments
+	for i := range result.Attachments {
+		att := &result.Attachments[i]
+		if att.Type != model.AttachTypeDocument {
+			continue
+		}
+		att.TextExtraction = &model.AttachmentTextStatus{Status: model.AttachmentTextUnknown}
+		if h.attachmentTextService != nil {
+			status, statusErr := h.attachmentTextService.GetStatus(ctx, userID, meetingID, att.AttachmentID)
+			if statusErr != nil {
+				att.TextExtraction.ErrorCode = "STATUS_UNAVAILABLE"
+			} else {
+				att.TextExtraction = status
+			}
+		}
+	}
 	if h.uploadService != nil {
 		for i := range result.Attachments {
 			att := &result.Attachments[i]

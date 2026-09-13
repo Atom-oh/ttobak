@@ -41,6 +41,8 @@ AgentCore Runtime was first provisioned) — `deploy-research-agent.yml` only
 *consumes* it (`--role-arn` on `update-agent-runtime`); it does not create
 it, and neither does any other CI pipeline. `TtobakAiStack` imports the
 role by ARN to attach the Gateway-invoke policy, so it must already exist
-before `cdk deploy TtobakAiStack` — `deploy-infra.yml` runs an `aws iam
+before `cdk deploy TtobakAiStack --exclusively` — `deploy-infra.yml` runs an `aws iam
 get-role` preflight before that deploy to fail fast if it's missing. See
-root `CLAUDE.md`'s Known Issues for the full SP1 deploy sequence.
+`docs/runbooks/deployment.md` for current deployment constraints. The separate
+`TtobakResearchAgentStack` declares legacy Bedrock Agent resources; it does not
+make this container a CDK-managed AgentCore Runtime.
