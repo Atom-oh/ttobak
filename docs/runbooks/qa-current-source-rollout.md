@@ -26,7 +26,8 @@ retry state (`current=false` while running). On 2026-09-13,
 runtime: live input and saved notes remained distinct, and corrected latest-only
 input suppressed the old value while preserving its label and valid saved-source
 provenance. The named preactivation public checks are now complete. Canonical
-post-activation acceptance remains pending; async UI activation has not occurred.
+post-activation acceptance remains pending. Async UI opt-in is prepared below;
+deployed browser activation has not been proven.
 
 Keep the earlier timeout, missing-provenance, empty-answer and initial private-V2
 failure records. Corrected passes belong to their own recorded lineages; a
@@ -40,6 +41,49 @@ a single cause.
 Keep the existing transcript guard throughout: it validates the configured
 bucket, authorized meeting ID and allowed field before S3 access. Editable
 summary content remains literal text. See [the guard rollout](qa-transcript-read-rollout.md).
+
+## Async UI opt-in — 2026-09-13
+
+The app now selects `qaAsyncJobsEnabled=true`; FrontendStack's reusable default
+remains false. This is a runtime config change after backend acceptance, not
+evidence that the new browser path has already been deployed or exercised.
+
+The host verified backend source
+`f3325ce0e53c9540fcbda412415d43fc9b2ae7f4`, deployment `34764591127`.
+The separate final live lineage ran three WS and three async turns with full
+source/marker assertions and completed operator semantic review. Earlier
+notes/manual/revocation results retain their original dated provenance.
+This qualification does **not** claim the file-backed canonical document
+V1/V2/delete lifecycle or real-browser async activation is complete.
+
+Operator evidence is retained under the private `ttobak-improvements` cache.
+These are historical proof hashes, not freshness claims for a future deployment:
+
+| Evidence | SHA-256 |
+|---|---|
+| `qa-deployment-f3325ce0e53c-verified.json` | `fdd9bddc7822d2ee6f6c43d09942797e48e8d917281c6a11c223c80b3a129c6d` |
+| `ws-deployment-f3325ce0e53c-verified.json` | `8135ae1c07092bb6e80396fcdd50743b34164086d4773e5b23a2931b13e1b9ae` |
+| `qa_async_delivery_f3325ce0e53c_final.json` | `066a8435bc9eacfddf887ae7b251b4d2be9ce39bddaa6e678732256c53c26c3c` |
+| `qa_final_live_8bb138a10eba4673/qa_semantic_review.completed.json` | `193c9d5747e89bc0e3d79d1b78b2c8bcfa51df73485946d7ee7ebf8842b9cbe7` |
+
+The delivery proof records authenticated POST/GET job routes, an enabled SQS
+mapping and an Active/Successful worker. The semantic report binds all six
+answers and assesses the request timeline, counts, current-source separation
+and correction attribution. Keep previous failed/UNKNOWN attempts intact.
+
+After latest-head review and deployment, the host must perform a fresh browser
+check with an existing authorized user. Reload into a fresh app context, confirm
+public `config.json` has boolean `qaAsyncJobs:true`, and verify a meeting QA/REST
+flow uses POST `/api/qa/jobs` followed by same-job authenticated GET polling and a
+rendered terminal result. Record pending/error behavior and source attribution;
+confirm there is no legacy sync fallback after job submission. A Chat session
+using `/ws` alone does not establish the REST async UI path.
+
+ConfigDeployment retains no-cache metadata, `prune:false` and invalidation of
+`/config.json`. Use the normal reviewed deployment procedure, with changed
+stacks selected explicitly; local verification targets
+`cdk synth TtobakFrontendStack --exclusively`. Do not write live config manually,
+deploy KnowledgeStack, or interpret synth/tests as browser acceptance.
 
 ## Configured prerequisites
 

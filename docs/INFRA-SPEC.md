@@ -137,9 +137,11 @@ QA REST jobs use `ttobak-qa-jobs`: SQS-managed encryption, TLS, 1800s visibility
 one-day retention/DLQ, batch one, concurrency two, partial batch failures.
 GatewayStack owns scoped queue permissions and JWT submit/poll routes, injecting
 `QA_JOBS_QUEUE_URL`/`QA_JOBS_QUEUE_ARN`. Job rows enforce one-hour
-`pendingShareExpiresAt` expiry. Frontend runtime `qaAsyncJobs` defaults off through
-`qaAsyncJobsEnabled=false`; preparation can deploy before activation. Enable it
-only after backend acceptance; see the [async contract](../backend/python/qa/ASYNC_CONTRACT.md).
+`pendingShareExpiresAt` expiry. FrontendStack's omitted/false
+`qaAsyncJobsEnabled` still emits false. The app now explicitly opts in with true
+after recorded backend acceptance; browser activation proof remains pending.
+See the [activation evidence and remaining checks](runbooks/qa-current-source-rollout.md#async-ui-opt-in--2026-09-13)
+and [async contract](../backend/python/qa/ASYNC_CONTRACT.md).
 
 | Trigger | Target |
 |---|---|
