@@ -95,6 +95,9 @@ again for a new review.
 Codex uses structured transport events plus its CLI-designated final-output file.
 Tool output and progress text are not review results. Recovered transport notices
 remain visible; terminal provider errors still block.
+JSONL records split only at literal LF bytes; Unicode separators inside JSON
+strings remain payload. Terminal executor and final-file overflow are handled
+before transport parsing or diagnostic concatenation and cannot trigger retry.
 
 ## Synchronization and bounded publication
 
@@ -118,6 +121,9 @@ pattern families while retaining valid credential-redaction checks.
 YAML block matching checks indentation without consuming it separately from the
 line body. Blocks include blank lines and recognize LF, CRLF, bare CR and EOF;
 the environment name/value matcher shares the same line-ending rule.
+YAML name/value pairs redact the complete value line, including commas, spaces
+and quoted escapes, stopping before the next line. Inline pairs keep their
+separate matcher.
 Structured JSON and quoted JSON fragments are decoded before redaction. Sensitive
 fields and header name/value pairs are masked; credential-shaped object keys also
 pass through the token scrubber. Colliding redacted keys receive unique

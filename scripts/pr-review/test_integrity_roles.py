@@ -108,6 +108,42 @@ class IntegrityTests(unittest.TestCase):
                 self.assertFalse(result["valid"])
                 self.assertIn("quota_diagnostic", result["failure_codes"])
 
+    def assert_codex_overflow_stops_retry(self, final_file=False):
+        calls = 0
+        def reply(command, *unused):
+            nonlocal calls
+            calls += 1
+            if calls == 1 and not final_file:
+                return 1, "", "output_byte_limit"
+            response = self.response("codex")
+            destination = Path(command[command.index("--output-last-message") + 1])
+            destination.write_text("*" * (1024 * 1024 + 1) if calls == 1 else response)
+            events = "\n".join(json.dumps(event) for event in (
+                {"type": "turn.started"},
+                {"type": "item.completed", "item": {"type": "agent_message", "text": response}},
+                {"type": "turn.completed"},
+            ))
+            return 0, events, "Nonterminal CLI notice"
+        with patch.object(run_role, "execute", side_effect=reply):
+            run_role.run(self.work, "codex")
+        self.assertEqual(calls, 1)
+        result = json.loads((self.work / "slot/codex-result.json").read_text())
+        self.assertFalse(result["valid"])
+        self.assertIn("output_byte_limit", result["failure_codes"])
+        aggregate = subprocess.run(
+            [sys.executable, str(Path(run_role.__file__).with_name("role_review.py")),
+             "aggregate", "--work", str(self.work)], capture_output=True, text=True,
+        )
+        self.assertEqual(aggregate.returncode, 2)
+        summary = json.loads((self.work / "role-summary.json").read_text())
+        self.assertIn("output_byte_limit:codex", summary["failure_codes"])
+
+    def test_codex_executor_overflow_cannot_retry_to_clean_success(self):
+        self.assert_codex_overflow_stops_retry()
+
+    def test_codex_final_file_overflow_survives_other_diagnostics(self):
+        self.assert_codex_overflow_stops_retry(final_file=True)
+
     def test_chair_rejects_model_selection_failure_even_with_pass_footer(self):
         reply = (0, "Reviewed candidates.\nVERDICT: PASS\n",
                  "[warn] failed to set model: Method not found")

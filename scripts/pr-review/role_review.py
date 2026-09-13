@@ -844,6 +844,10 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
         r"""(?im)^[ \t]*(?:[+-][ \t]*)?(?:set-)?cookie["']?[ \t]*:[^\r\n]*""",
         r"""(?i:\bx-origin-verify)["']?\s*:\s*["']?[^\s"',;}\]]+""",
         key + r"[|>][-+]?[ \t]*" + line_break + r"(?:" + block_line + r")+",
+        # YAML name/value pairs consume the complete value line, including commas.
+        r"""(?i:\b(?:header)?name)["']?[ \t]*[:=][ \t]*["']?""" + identifier
+        + r"""["']?[ \t]*""" + line_break
+        + r"""[ \t]*(?:[+-][ \t]*)?["']?(?i:(?:header)?value)["']?[ \t]*[:=][^\r\n]*""",
         r"""(?i:\b(?:header)?name)["']?\s*[:=]\s*["']?""" + identifier
         + r"""["']?\s*(?:,\s*)?(?:[+-][ \t]*)?["']?(?i:(?:header)?value)["']?\s*[:=]\s*"""
         + r"""(?:(?P<named>["']).*?(?:(?P=named)|\Z)|[^\s,}\]]+)""",

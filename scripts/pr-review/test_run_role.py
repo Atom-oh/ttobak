@@ -168,6 +168,21 @@ class RoleExecutionTests(unittest.TestCase):
         self.assertEqual(self.runner.codex_response(raw, self.final_file),
                          ("", "output_byte_limit", False))
 
+    def test_codex_jsonl_unicode_separators_inside_strings_are_not_event_boundaries(self):
+        for separator in ("\u0085", "\u2028", "\u2029"):
+            with self.subTest(separator=repr(separator)):
+                final = json.dumps({"review": "complete" + separator + "answer"}, ensure_ascii=False)
+                self.final_file.write_text(final)
+                events = (
+                    {"type": "turn.started"},
+                    {"type": "item.completed", "item": {
+                        "type": "command_execution", "aggregated_output": "tool" + separator + "data"}},
+                    {"type": "item.completed", "item": {"type": "agent_message", "text": final}},
+                    {"type": "turn.completed"},
+                )
+                raw = "\n".join(json.dumps(event, ensure_ascii=False) for event in events) + "\n"
+                self.assertEqual(self.runner.codex_response(raw, self.final_file), (final, "", True))
+
 
 if __name__ == "__main__":
     unittest.main()
