@@ -1,6 +1,7 @@
 'use client';
 
 import { getIdToken } from './auth';
+import { QASourceFrames } from './qaSourceFrames';
 import { runtimeWebSocketUrl } from './runtimeConfig';
 
 export interface WebSocketMessage {
@@ -8,6 +9,7 @@ export interface WebSocketMessage {
     | 'answer_start'
     | 'answer_delta'
     | 'answer_complete'
+    | 'answer_sources'
     | 'answer_error'
     | 'tool_progress'
     | 'error';
@@ -20,6 +22,10 @@ export interface WebSocketMessage {
   usedDocs?: boolean;
   toolsUsed?: string[];
   error?: string;
+  code?: string;
+  sourceBatchId?: string;
+  sourceBatchIndex?: number;
+  sourceBatchCount?: number;
 }
 
 type MessageHandler = (msg: WebSocketMessage) => void;
@@ -39,6 +45,7 @@ export class RealtimeWebSocket {
   private reconnectAttempts = 0;
   private intentionalClose = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private sourceFrames = new QASourceFrames();
   private cancelConnect: (() => void) | null = null;
   private autoReconnect: boolean;
 
@@ -57,6 +64,7 @@ export class RealtimeWebSocket {
   }
 
   async connect(): Promise<void> {
+    this.sourceFrames.reset();
     const endpoint = runtimeWebSocketUrl(this.url);
     if (!endpoint) throw new Error('WebSocket endpoint unavailable');
     const token = getIdToken();
@@ -92,7 +100,13 @@ export class RealtimeWebSocket {
         if (this.ws !== socket || this.intentionalClose) return;
         try {
           const msg = JSON.parse(event.data) as WebSocketMessage;
-          this.onMessage(msg);
+          const complete = this.sourceFrames.accept(msg);
+          if (complete) {
+            // The failed server request may still emit frames. Isolate it
+            // before consumers unlock the input for another question.
+            if (complete.code === 'SOURCE_FRAMES_INVALID') this.disconnect();
+            this.onMessage(complete);
+          }
         } catch {
           // Ignore unparseable messages
         }
@@ -156,6 +170,7 @@ export class RealtimeWebSocket {
       context: ctx,
       meetingId,
       sessionId,
+      sourceFramesVersion: 1,
     });
   }
 
@@ -171,13 +186,17 @@ export class RealtimeWebSocket {
   }
 
   disconnect() {
+    this.sourceFrames.reset();
     this.intentionalClose = true;
     this.cancelConnect?.();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    this.ws?.close();
+    if (this.ws) {
+      this.ws.onmessage = null;
+      this.ws.close();
+    }
     this.ws = null;
   }
 
