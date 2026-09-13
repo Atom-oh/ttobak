@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { qaApi } from '@/lib/api';
 import type { QAEntry } from '@/types/meeting';
 import type { QuestionDraft, QAReferenceEvidence } from '@/lib/meetingReferences';
@@ -36,6 +36,7 @@ function MeetingQAPanel({ meetingId, questionDraft, onSaveToNotes }: QAPanelProp
   const inputRef = useRef<HTMLInputElement>(null);
   const activeRef = useRef(true);
   const askingRef = useRef(false);
+  const sessionIdRef = useRef<string | null>(null);
 
   // Consume each explicit reference action once. Never replace a typed draft.
   if (questionDraft && questionDraft.id !== draftId) {
@@ -48,11 +49,6 @@ function MeetingQAPanel({ meetingId, questionDraft, onSaveToNotes }: QAPanelProp
     activeRef.current = true;
     return () => { activeRef.current = false; };
   }, []);
-
-  const sessionId = useMemo(
-    () => `qa-${meetingId}-${Date.now()}`,
-    [meetingId]
-  );
 
   useEffect(() => {
     if (containerRef.current) {
@@ -79,6 +75,7 @@ function MeetingQAPanel({ meetingId, questionDraft, onSaveToNotes }: QAPanelProp
     setQaHistory((prev) => [...prev, newEntry]);
 
     try {
+      const sessionId = sessionIdRef.current ??= `qa-${meetingId}-${crypto.randomUUID()}`;
       const response = await qaApi.askMeeting(meetingId, q.trim(), sessionId);
       if (!activeRef.current) return;
       if (!response.answer?.trim()) throw new Error('답변이 비어 있습니다. 다시 시도해주세요.');
@@ -101,6 +98,9 @@ function MeetingQAPanel({ meetingId, questionDraft, onSaveToNotes }: QAPanelProp
       );
     } catch (err) {
       if (!activeRef.current) return;
+      // HTTP failure cannot prove the worker stopped. Isolate the next explicit
+      // turn from late writes without clearing the visible history or retrying.
+      sessionIdRef.current = null;
       setError(err instanceof Error ? err.message : 'Failed to get answer');
       setQuestion(current => current || q);
       setQaHistory((prev) =>

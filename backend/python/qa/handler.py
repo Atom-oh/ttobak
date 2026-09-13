@@ -9,6 +9,7 @@ import time
 import boto3
 from botocore.config import Config
 from async_jobs import QAJobs, JobError, JobDeadline, MutationGuard, deadline as job_deadline, API_SECONDS, RUN_SECONDS, INPUT_LIMIT
+from deadline_history import DeadlineHistory
 from delivery_proof import validate_delivery
 
 from aws_docs import search_aws_docs
@@ -1131,6 +1132,21 @@ def _validate_job_sources(user_id, proof):
 
 def agentic_converse(messages, transcript=None, session_id=None, user_id=None, meeting_notes=None, meeting_id=None,
                      source_state=None, source_details=None, model_client=None, mutation_guard=None):
+    checkpoint = DeadlineHistory()
+    try:
+        return _agentic_converse(
+            messages, transcript, session_id, user_id, meeting_notes, meeting_id,
+            source_state, source_details, model_client, mutation_guard, checkpoint)
+    except JobDeadline:
+        checkpoint.preserve(
+            lambda state: _validate_answer_sources(user_id, state),
+            lambda saved, state, details: save_session(
+                session_id, saved, user_id=user_id, source_state=state, source_details=details))
+        raise  # The job remains interrupted; cleanup never publishes a successful answer.
+
+
+def _agentic_converse(messages, transcript, session_id, user_id, meeting_notes, meeting_id,
+                      source_state, source_details, model_client, mutation_guard, checkpoint):
     """Agentic tool-use loop: model decides what tools to call."""
     source_state = source_state if source_state is not None else new_source_state()
     source_details = source_details if source_details is not None else []
@@ -1221,6 +1237,8 @@ def agentic_converse(messages, transcript=None, session_id=None, user_id=None, m
                             "content": [{"text": result}]
                         }
                     })
+                    if strict_completion:
+                        checkpoint.capture(messages, tool_results, source_state, source_details)
             messages.append({"role": "user", "content": tool_results})
 
     if strict_completion and not finished:

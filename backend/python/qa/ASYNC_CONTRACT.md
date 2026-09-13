@@ -31,6 +31,10 @@ uncertain completion. Accepted WS sends are also retained. No automatic resend.
 After a submitted HTTP failure, Live QA keeps the job ID/claim but gives the next
 manual turn a fresh, random session ID. A refresh failure can end polling before
 server work stops; isolating later history does not cancel or resubmit that job.
+Meeting QAPanel also discards its session reference on every HTTP/empty-answer
+error in sync and async modes. It keeps the visible conversation and draft; the
+next explicit turn starts a random session. Successful turns retain continuity.
+Meeting changes/unmounts discard the old panel and ignore its late responses.
 
 Exact-queue SQS pointers contain only version/user/job IDs. Conditional claims
 never take over RUNNING. Queued dispatch can recover through polling, with 10s
@@ -40,6 +44,20 @@ further creation. Never automatically resubmit uncertain work under a new ID.
 Async model responses require a nonblank completed answer. Truncation or tool
 budget exhaustion returns `QA_MODEL_INCOMPLETE`; completed, validated tool
 receipts remain in history with an interruption notice instead of an empty success.
+`JobDeadline` uses a separate two-second cleanup window. The loop checkpoints
+only returned, tracked tool-use/result pairs with at most 128 KiB of history,
+dependency/detail metadata and delivery proof combined. It omits pending calls
+and the current tool round's unconfirmed assistant text. Invalid/oversized new
+checkpoints leave the earlier valid checkpoint intact.
+
+Deadline cleanup revalidates current sources before one history-save attempt;
+only an acknowledged message write counts as saved. It never invokes a model,
+replays a mutation, marks an uncertain tool successful, or publishes a successful
+job. Source failure, cleanup timeout and unacknowledged writes cannot promise
+continuity. The original deadline still records `FAILED/QA_JOB_INTERRUPTED`.
+This is bounded best-effort recovery, not a transaction with tool execution:
+a hard process termination or deadline before checkpoint capture can still lose
+a receipt. Clients must not automatically resubmit uncertain work.
 
 Separate `USER#{user}` items hold `QA_JOB#{id}` input (256 KiB), `QA_RESULT#{id}`
 answer (320 KiB), and `QA_PROOF#{id}` proof (128 KiB). Complete items include all
