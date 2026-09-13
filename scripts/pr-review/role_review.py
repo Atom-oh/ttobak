@@ -834,6 +834,8 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
     if _remaining[0] < 0:
         raise Invalid("output_byte_limit")
     value = strip_controls(value)
+    # Mask complete raw spans before decoding can separate their boundary markers.
+    value = re.sub(PEM_VALUE, "[REDACTED]", value, flags=re.S)
     if _structured:
         try:
             decoded = strict_json(value)
@@ -850,8 +852,6 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
             if isinstance(decoded, str) and decoded != value:
                 clean = scrub(decoded, _remaining, _depth + 1, False)
                 return value if clean == decoded else clean
-        # Keep complete PEM spans intact before individual quoted fragments are scrubbed.
-        value = re.sub(PEM_VALUE, "[REDACTED]", value, flags=re.S)
         # Scan quoted fragments once; an unterminated fragment consumes the tail.
         pieces, start, index = [], 0, 0
         while index < len(value):

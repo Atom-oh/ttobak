@@ -138,7 +138,8 @@ paths, and masks the entire associated value. PEM markers span array elements:
 the complete marked credential is redacted through END (or array end), retaining
 ordinary strings and context outside the key. Original elements still consume
 the shared byte budget before replacement.
-Complete PEM spans are masked before quoted fragments are processed. Adjacent
+Complete PEM spans are masked immediately after control stripping, before any
+structured JSON or quoted-fragment decoding at every string level. Adjacent
 quoted string literals joined with `+` are decoded and combined without execution
 on the same line before credential matching, preserving split PEM markers and
 outside context. If decoded content needs no redaction, the original spelling,
