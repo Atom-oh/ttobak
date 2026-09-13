@@ -11,11 +11,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/smithy-go"
 	"github.com/ttobak/backend/internal/model"
 )
 
 func TestResummarySpillsAreImmutableAndRetainedAfterAmbiguousCommit(t *testing.T) {
-	for _, outcome := range []string{"success", "condition", "ambiguous"} {
+	for _, outcome := range []string{"success", "condition", "ambiguous", "cleanup"} {
 		t.Run(outcome, func(t *testing.T) {
 			puts, deletes, transactions := 0, 0, 0
 			key := ""
@@ -30,7 +31,7 @@ func TestResummarySpillsAreImmutableAndRetainedAfterAmbiguousCommit(t *testing.T
 						t.Fatal("immutable ref not atomically published")
 					}
 					switch outcome {
-					case "condition":
+					case "condition", "cleanup":
 						return summaryHTTPResponse(400, `{"__type":"TransactionCanceledException","CancellationReasons":[{"Code":"ConditionalCheckFailed"},{"Code":"None"}]}`, nil), nil
 					case "ambiguous":
 						return summaryHTTPResponse(500, `{"__type":"InternalServerError","message":"ambiguous"}`, nil), nil
@@ -54,6 +55,9 @@ func TestResummarySpillsAreImmutableAndRetainedAfterAmbiguousCommit(t *testing.T
 					if req.URL.Path != key {
 						t.Fatal("deleted an existing referenced object")
 					}
+					if outcome == "cleanup" {
+						return summaryHTTPResponse(403, `<Error><Code>AccessDenied</Code></Error>`, nil), nil
+					}
 				default:
 					t.Fatalf("unexpected request %s", req.Method)
 				}
@@ -69,10 +73,16 @@ func TestResummarySpillsAreImmutableAndRetainedAfterAmbiguousCommit(t *testing.T
 			if (err == nil) != (outcome == "success") {
 				t.Fatal(err)
 			}
-			if outcome == "condition" && !errors.Is(err, ErrConditionFailed) {
+			if (outcome == "condition" || outcome == "cleanup") && !errors.Is(err, ErrConditionFailed) {
 				t.Fatal(err)
 			}
-			if puts != 1 || transactions != 1 || deletes != map[string]int{"success": 0, "condition": 1, "ambiguous": 0}[outcome] {
+			if outcome == "cleanup" {
+				var apiErr smithy.APIError
+				if !errors.As(err, &apiErr) || apiErr.ErrorCode() != "AccessDenied" {
+					t.Fatal("SDK cleanup failure was lost", err)
+				}
+			}
+			if puts != 1 || transactions != 1 || deletes != map[string]int{"success": 0, "condition": 1, "ambiguous": 0, "cleanup": 1}[outcome] {
 				t.Fatalf("puts=%d tx=%d deletes=%d", puts, transactions, deletes)
 			}
 			if snapshot.Stored["transcriptA"] != text {

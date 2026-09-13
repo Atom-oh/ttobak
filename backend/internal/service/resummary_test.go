@@ -246,7 +246,12 @@ func TestResummaryPublishLeaseAndProviderFailures(t *testing.T) {
 			case "old event":
 				event.RunID = "obsolete"
 			}
-			if err := s.Process(context.Background(), event); err != nil {
+			err = s.Process(context.Background(), event)
+			if kind == "write" {
+				if !errors.Is(err, r.completeError) {
+					t.Fatal(err)
+				}
+			} else if err != nil {
 				t.Fatal(err)
 			}
 			if r.meetings[meetingKey("owner", "meeting")].Content != "old summary" || r.completes != 0 {
@@ -280,6 +285,38 @@ func TestResummaryStatusExpiryAndBusySource(t *testing.T) {
 	status, err = s.Get(context.Background(), "owner", "meeting")
 	if err != nil || status.Status != "failed" || status.ErrorCode != "INTERRUPTED" {
 		t.Fatal(status, err)
+	}
+}
+
+func TestResummaryCompletionFailuresRemainObservable(t *testing.T) {
+	cleanupErr := errors.New("spill cleanup failed")
+	stateErr := errors.New("failure state write failed")
+	for _, completion := range []error{errors.New("commit failed"), errors.Join(repository.ErrConditionFailed, cleanupErr)} {
+		for _, failState := range []bool{false, true} {
+			s, r, calls := newResummaryFixture(t)
+			requested, err := s.Request(context.Background(), "owner", "meeting")
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.completeError = completion
+			if failState {
+				r.failError = stateErr
+			}
+			event := model.SummaryRequested{MeetingID: "meeting", RunID: requested.RunID}
+			err = s.Process(context.Background(), event)
+			if !errors.Is(err, completion) || failState && !errors.Is(err, stateErr) {
+				t.Fatalf("persistence/cleanup failure swallowed: %v", err)
+			}
+			if r.meetings[meetingKey("owner", "meeting")].Content != "old summary" || *calls != 1 {
+				t.Fatal("failed publication changed content")
+			}
+			if !failState && r.state.Status != model.AnalysisFailed {
+				t.Fatal("failure status was not saved")
+			}
+			if err := s.Process(context.Background(), event); err != nil || *calls != 1 {
+				t.Fatal("redelivery regenerated failed work", err)
+			}
+		}
 	}
 }
 

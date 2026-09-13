@@ -443,7 +443,7 @@ func (s *ResummaryService) Process(ctx context.Context, event model.SummaryReque
 		if errors.Is(err, repository.ErrSummaryLimit) {
 			code = "OUTPUT_TOO_LARGE"
 		}
-		return failed(code)
+		return errors.Join(err, failed(code))
 	}
 	return nil
 }
