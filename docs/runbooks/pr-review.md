@@ -1,5 +1,11 @@
 # PR review operations
 
+> Current protocol (2026-09-13): CI uses `ROLE_REVIEW=1`; see
+> [specialist review](../pr-review-specialists.md). Earlier matrix counts, dropout floors and
+> unconditional-chair descriptions below are legacy behavior. CLI incident
+> evidence and safety constraints remain applicable within their recorded scope.
+
+
 ## Context and trust
 
 `.github/workflows/pr-review.yml` uses `pull_request_target` and checks out trusted

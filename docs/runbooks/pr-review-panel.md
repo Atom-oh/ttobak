@@ -1,5 +1,11 @@
 # Runbook: AI PR-review panel startup and coverage
 
+> Current protocol (2026-09-13): CI uses `ROLE_REVIEW=1`; see
+> [specialist review](../pr-review-specialists.md). Earlier matrix counts, dropout floors and
+> unconditional-chair descriptions below are legacy behavior. CLI incident
+> evidence and safety constraints remain applicable within their recorded scope.
+
+
 ## Severity
 
 P2 for unavailable review coverage. Escalate an agent fallback during a review as a
