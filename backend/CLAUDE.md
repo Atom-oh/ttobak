@@ -1,18 +1,23 @@
-# Backend Module
+# Go backend
 
-Go Lambda functions for the TTOBAK API. ARM64 cross-compiled, deployed via CDK.
+Follow the root guide. `cmd/` has eight zip Lambda entry points, a separate
+`convert-doc` container, and maintenance commands; do not treat every directory
+as a zip deployment. GatewayStack defines artifact packaging.
 
-## Structure
-- `cmd/` — 5 Lambda entry points (api, transcribe, summarize, process-image, kb)
-- `internal/handler/` — HTTP handlers (chi router pattern)
-- `internal/service/` — Business logic layer
-- `internal/repository/` — DynamoDB data access
-- `internal/model/` — Request/response types, DynamoDB key schemas
-- `internal/middleware/` — JWT auth, CORS, recovery
-- `python/qa/` — Python Lambda for Bedrock RAG Q&A
+HTTP handlers call services, which call repositories. Model files define keys
+and request/response contracts. Use Go's DynamoDB expression builder, conditional
+updates for shared fields, transactions for relation sets/reverse refs, pagination,
+and sentinel errors checked through `errors.Is`.
 
-## Conventions
-- Error handling: Use `service.ErrForbidden`, `service.ErrNotFound` sentinel errors
-- Handlers check `errors.Is(err, service.ErrForbidden)` for typed responses
-- All DynamoDB operations use expression builder, not raw strings
-- Build: `GOOS=linux GOARCH=arm64 /usr/local/go/bin/go build -tags lambda.norpc`
+Go chi integration requires API Gateway payload 1.0. Python QA is separate and uses
+2.0. Existing OriginVerify, verified JWT parsing, ownership checks and service
+permissions must be inspected before alleging an authorization bypass.
+
+```bash
+/usr/local/go/bin/go test ./... -count=1
+/usr/local/go/bin/go vet ./...
+GOOS=linux GOARCH=arm64 /usr/local/go/bin/go build -tags lambda.norpc -o cmd/api/bootstrap ./cmd/api
+```
+
+Use stdlib testing and mock repositories. Tests in `cmd/summarize` and
+`cmd/transcribe` are required; `./internal/...` alone is incomplete.

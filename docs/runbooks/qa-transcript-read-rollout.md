@@ -1,32 +1,27 @@
-# Q&A transcript read rollout
+# QA transcript-read rollout and rollback
 
-The old QA code interprets arbitrary `s3://` strings in editable summary content
-as storage reads. It currently lacks assets-bucket read permissions. Granting
-`transcripts/*` access before replacing that code would introduce a cross-meeting
-read window.
+Historical rollout sequence for the source-validation and permission changes around
+PR #191. The current source includes a guarded transcript resolver; deployment
+must still be verified independently. The old implementation interpreted arbitrary
+s3:// strings in editable summary content, so granting broad-enough reads before
+replacing that code would have created a cross-meeting disclosure window.
 
-1. Deploy the guard release first: `transcript_storage.resolve_transcript`
-   validates the exact configured bucket, authorized meeting ID and field key.
-   Summary content is literal Markdown. GatewayStack supplies `BUCKET_NAME`.
-   This release does **not** add S3 permissions and preserves the existing
-   degraded-read behavior while permissions are absent.
-2. Confirm the guard release's `Deploy Infrastructure` run succeeded, including
-   `TtobakGatewayStack --exclusively`, before merging the permission follow-up.
-   Check the deployed QA function is the guard release, not an older artifact.
-3. The follow-up may then add only `s3:GetObject` for the assets bucket's
-   `transcripts/*` objects on `TtobakQaRole`, and surface unreadable transcripts
-   as explicit Q&A failures. No bucket listing or write permission is required.
-4. After the grant, rollback targets must retain the guard. To roll back to code
-   predating it, remove the S3 read grant first.
+1. Deploy the guard first. `transcript_storage.resolve_transcript` validates the
+   configured bucket, authorized meeting ID and field key. Summary content remains
+   literal Markdown. GatewayStack supplies BUCKET_NAME.
+2. Verify the running QA artifact contains the guard after the GatewayStack deploy.
+   A merge or source diff is insufficient deployment evidence.
+3. Only then apply the narrow s3:GetObject grant for transcripts/* on TtobakQaRole
+   and surface unreadable transcripts as explicit QA failures. No list/write grant
+   is needed. The role is owned by AiStack; QA code/env by GatewayStack.
+4. Rollbacks after that grant must retain the guard. Remove the read grant first
+   before ever rolling code back to the unguarded implementation.
 
-Use the repository CI deployment sequence; never `cdk deploy --all`.
-For the permission follow-up, the guarded Lambda is already live before
-AiStack applies the new permission, so the usual AiStack → GatewayStack order
-and a GatewayStack rollback remain safe.
+Use individual --exclusively stack deployments, never --all. Once the guard is
+verified deployed, the normal AiStack-before-GatewayStack sequence is safe for
+this permission addition. Do not assume that precondition for another environment.
 
-The role belongs to AiStack; QA code and environment belong to GatewayStack.
-After the successful guard deployment, a deployment identity can record the
-running artifact without printing secret environment variables:
+Record the running artifact without printing secret environment values:
 
 ```bash
 aws lambda get-function-configuration \
@@ -34,6 +29,5 @@ aws lambda get-function-configuration \
   --query '{CodeSha256:CodeSha256,State:State,LastUpdateStatus:LastUpdateStatus,LastModified:LastModified,Bucket:Environment.Variables.BUCKET_NAME}'
 ```
 
-Require `Active` / `Successful` and the expected assets bucket. Correlate the
-artifact with the successful guard deployment; any later replacement must also
-retain the guard. Do not infer deployed code merely from a merged PR.
+Require Active/Successful and the expected bucket, and correlate CodeSha256 with
+the reviewed guard deployment. An unrelated later replacement must retain the guard.

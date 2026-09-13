@@ -1,27 +1,30 @@
-# Python Lambdas Module
+# Python artifacts
 
-Python Lambda functions for specialized AI workloads.
+Follow the root guide. Each artifact owns its dependency manifest and deploy path;
+do not apply one runtime/library convention to every Python directory.
 
-## Structure
-- `qa/` — Bedrock RAG Q&A Lambda (Converse API + KB Retrieve, WebSocket streaming, `search_web` via the us-east-1 AgentCore Web Search Gateway — SigV4 plumbing in `web_search.py`, kept in sync with `crawler/news_crawler.py` and `research-agent/tools.py`)
-- `crawler/` — Step Functions pipeline: orchestrator, news-crawler, tech-crawler, ingest-trigger
-- `research-agent/` — AgentCore Runtime container (FastAPI + Strands Agents)
-- `research-tools/` — Tool Lambdas for Bedrock Agent (save-report, fetch-page)
-- `sim/` — Cost/sizing simulator worker (`ttobak-sim`, ADR-033): fetches AWS Price List data, drives an AgentCore Code Interpreter session (SANDBOX network, empty execution role) through a Sonnet codegen/execute/repair loop, writes chart PNGs + report + generated code to S3. Invoked async by the Go `api` Lambda; never receives the meeting transcript.
+| Directory | Role |
+|---|---|
+| `qa/` | Lambda Q&A/tool loop, detection, WebSocket delivery; HTTP payload 2.0 |
+| `crawler/` | Step Functions crawler stages and ingestion |
+| `research-agent/` | ARM64 AgentCore Runtime container, FastAPI/Strands |
+| `research-tools/` | Legacy Bedrock Agent tool handlers; check callers before changing |
+| `sim/` | Async worker for codegen and Code Interpreter execution |
 
-## Conventions
-- Runtime: Python 3.12 (Lambda managed runtime)
-- Dependencies: `requirements.txt` per Lambda, stdlib + boto3 preferred
-- No external HTTP libraries — use `urllib.request` for crawling
-- Bedrock calls use `converse()` API (not `invoke_model()`)
-- HTML parsing via stdlib `HTMLParser` (no BeautifulSoup dependency)
-- Crawler filters: block paywalled URLs, require 100+ chars body text
+The research container exposes `/invocations` and `/ping` on port 8080; background
+research keeps health responsive. Its Dockerfile owns its Python version. Do not
+replace its FastAPI bootstrap based on an SDK recommendation without verifying
+startup/health behavior. Managed Lambda runtimes are configured in CDK.
 
-## AgentCore Research Agent (Container)
-- **Pattern**: FastAPI + uvicorn (official AWS docs pattern, NOT bedrock-agentcore SDK)
-- **Base image**: `ghcr.io/astral-sh/uv:python3.11-bookworm-slim` (ARM64)
-- **Contract**: POST `/invocations` + GET `/ping` on port 8080
-- **DO NOT use** `bedrock-agentcore>=1.6` SDK in containers — it boots a full Starlette ASGI stack that exceeds the 30s health check timeout
-- **Build**: CICD pushes to main → self-hosted runner builds ARM64 natively (no cross-compile)
-- **Deploy**: ECR push → `update-agent-runtime` with containerConfiguration
-- **Long tasks**: Research runs in background thread; `/ping` returns `HealthyBusy` to keep session alive
+SigV4/MCP web-search plumbing is intentionally duplicated in crawler, research,
+and QA because they deploy separately. Keep fixes consistent. QA hash-redacts
+queries and enforces its per-user hourly abuse limit before gateway calls, with
+the accepted fail-open behavior documented in ADR-028.
+
+Simulator codegen receives validated requirements/options, never the raw meeting
+transcript. Preserve matching simRunId writes, the interpreter's empty execution
+role, and SANDBOX networking.
+
+Use the root unittest commands; crawler/research tests require `boto3<2`. No global
+ban on `invoke_model`, HTTP libraries, or SDK packages is implied: inspect each
+artifact's actual calls and requirements.

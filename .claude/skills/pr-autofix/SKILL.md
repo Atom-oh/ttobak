@@ -1,81 +1,27 @@
 ---
 name: pr-autofix
-description: After creating a PR, poll for AI review comments and auto-fix issues (max 3 iterations)
+description: Resolve current-HEAD AI PR findings, rerun required checks, and merge when the user's authorized conditions hold.
 ---
 
-# PR Auto-Fix Skill
+# PR review completion
 
-After you create a PR (via `gh pr create`), automatically wait for the AI Code Review CI to complete, then read review feedback and fix issues. Repeat up to 3 times until the review passes.
+Follow `docs/runbooks/pr-review.md` and the root project's delivery policy.
 
-## When to use
+1. Identify the PR, current full HEAD SHA, target branch, and predecessor PRs.
+2. Read paginated issue comments, inline comments and review records. The current
+   marker is `<!-- multi-ai-pr-review -->`. Match the comment's commit SHA to HEAD;
+   timestamps and earlier-commit reviews are insufficient.
+3. Verify Critical/Major findings against the proposed code. Fix actual issues,
+   run relevant tests, commit/push, and await the new HEAD's completed review.
+4. Missing/failed review or insufficient required coverage is unfinished work.
+   Retry recoverable failures and surface concrete external blockers. Do not
+   disable checks, weaken criteria, or stop merely at an arbitrary iteration count.
+5. Minor/Info alone does not block completion. When current-HEAD review is complete,
+   no Critical/Major issue remains, and required CI/protection is satisfied, recheck
+   HEAD and integration path and merge under the user's standing authorization.
+6. Report fixes, verification, PR URL and merge outcome. Honor later review-only or
+   no-merge instructions. Do not send external messages without authorization.
 
-Invoke this skill immediately after creating a PR. It replaces the manual cycle of:
-1. Push → wait for CI review → read comments → fix → push again
-
-## Flow
-
-```
-PR created → poll for review comment → FAIL? → read issues → fix code → commit & push → repeat
-                                      → PASS? → done
-                                      → 3 iterations? → stop, notify user
-```
-
-## Steps
-
-### 1. Identify the PR
-
-Get the PR number from the most recent `gh pr create` output, or from the current branch:
-
-```bash
-PR_NUMBER=$(gh pr list --head "$(git branch --show-current)" --json number --jq '.[0].number')
-```
-
-### 2. Poll for AI review comment
-
-The AI Code Review workflow (`pr-review.yml`) posts a comment containing `<!-- bedrock-pr-review -->`. Poll until it appears or is updated (check the `updated_at` timestamp is after the last push).
-
-```bash
-gh api "repos/{owner}/{repo}/issues/${PR_NUMBER}/comments" \
-  --jq '.[] | select(.body | contains("<!-- bedrock-pr-review -->"))'
-```
-
-Poll every 60 seconds. If no review comment appears within 10 minutes, stop and inform the user.
-
-### 3. Check verdict
-
-Extract the verdict from the review comment body:
-- Contains `**Status: PASSED**` → done, inform user
-- Contains `**Status: BLOCKED**` → proceed to fix
-
-### 4. Fix issues (if BLOCKED)
-
-Read the review comment and the current diff. Fix ONLY the issues mentioned:
-- Focus on **CRITICAL** and **MAJOR** issues first
-- Fix **MINOR** issues if trivial
-- Do NOT refactor beyond what the review asks
-- Do NOT modify CI/CD workflow files (.github/workflows/*)
-- Verify the fix compiles (Go build, frontend build as needed)
-
-### 5. Commit and push
-
-```bash
-git add <changed-files>
-git commit -m "fix: address AI review feedback (iteration N/3)
-
-Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>"
-git push
-```
-
-### 6. Repeat or stop
-
-- If iteration < 3: go back to step 2 (poll for new review)
-- If iteration == 3 and still BLOCKED: stop and tell the user that manual review is needed
-- Track iteration count by counting commits with message prefix `fix: address AI review feedback`
-
-## Important constraints
-
-- **Max 3 iterations** — after 3 failed attempts, stop unconditionally
-- **Never modify workflow files** — the review CI itself must not be changed during autofix
-- **Scope discipline** — only fix what the review mentions, nothing else
-- **Build verification** — always verify the code compiles before committing
-- **Polling patience** — CI takes 2-5 minutes; poll at 60s intervals, not faster
+Poll at reasonable intervals and respect the workflow's actual timeout; the
+60-minute job cannot be classified failed merely because ten minutes elapsed.
+Workflow defects may be fixed when in scope, but never by bypassing required gates.
