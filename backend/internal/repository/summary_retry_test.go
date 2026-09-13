@@ -59,3 +59,21 @@ func TestSummaryCheckLimitIsNotSourceConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestSummaryRetryBusyDoesNotAcknowledgeOrSpendAttempts(t *testing.T) {
+	for _, state := range []string{"summarizing", "done"} {
+		writes, reads := 0, 0
+		repo := summarySDKRepo(func(req *http.Request) (*http.Response, error) {
+			if strings.HasSuffix(req.Header.Get("X-Amz-Target"), ".GetItem") {
+				reads++
+				return summaryHTTPResponse(200, `{"Item":{"userId":{"S":"owner"},"meetingId":{"S":"m"},"status":{"S":"`+state+`"},"summaryRetryPending":{"BOOL":true},"summaryRetryAttempts":{"N":"1"},"transcriptA":{"S":"s3://bucket/transcripts/m/transcriptA.txt"}}}`, nil), nil
+			}
+			writes++
+			return summaryHTTPResponse(400, `{"__type":"ConditionalCheckFailedException"}`, nil), nil
+		})
+		claim, err := repo.ClaimSummaryRetry(context.Background(), "owner", "m")
+		if claim != "" || writes != 2 || reads != 1 || (state == "summarizing") != errors.Is(err, ErrSummaryRetryBusy) {
+			t.Fatalf("claim=%q writes=%d reads=%d error=%v", claim, writes, reads, err)
+		}
+	}
+}

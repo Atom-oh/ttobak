@@ -1,7 +1,9 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: e0d500f699a8 · generated-at: 2026-09-12 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: e9d8004c5e3b · generated-at: 2026-09-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 > You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
 
 # TTOBAK (또박) — Reviewer Context
+
+Summary CAS (ADR-040) pins source presence/bytes and human text. Two fresh retries; busy/errors return and release owned claims. Exhaustion is error; no output rebinding.
 
 Korean AI meeting assistant for AWS Solutions Architects: record → real-time STT (AWS Transcribe Streaming in browser) → batch STT (Whisper ECS GPU Spot) → Bedrock Claude summary → Notion-style editor. Plus an Account-centric Insight Substrate (shared customer accounts + typed insights + bidirectional MCP back-data) and a personal Document Hub (notes/blog/slides, wikilinks, account sharing, PDF preview, public share links).
 
