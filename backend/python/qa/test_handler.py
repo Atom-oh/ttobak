@@ -1431,7 +1431,8 @@ def load_tests(loader, tests, pattern):
     for module in ('test_document_context', 'test_source_contract', 'test_attachment_context',
                    'test_retrieval_helpers', 'test_source_access', 'test_legacy_text',
                    'test_indexed_sources', 'test_manual_kb', 'test_shared_kb',
-                   'test_tool_history', 'test_account_reads', 'test_runtime_tool_history'):
+                   'test_tool_history', 'test_account_reads', 'test_runtime_tool_history',
+                   'test_binary_consumer_contract'):
         tests.addTests(loader.loadTestsFromName(module))
     return tests
 

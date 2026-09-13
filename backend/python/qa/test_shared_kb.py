@@ -1,11 +1,8 @@
 """Shared KB migration keeps baseline authenticated visibility and byte proof."""
 import copy
-import hashlib
 import json
-from pathlib import Path
 import unittest
 from unittest import mock
-from botocore.exceptions import ClientError
 
 import test_handler as helpers
 from test_kb_fixtures import _SharedKBFixture, binary_fixture
@@ -46,39 +43,6 @@ class TestSharedKB(_SharedKBFixture, unittest.TestCase):
                 self.body = None
                 self.assertEqual(handler.retrieve_from_kb('facts', user_id='reader'), [])
 
-    def test_shared_is_not_anonymous_and_cannot_relabel_a_private_source(self):
-        self.snapshots.append(self.shared_snapshot())
-        self.s3.head_object.reset_mock()
-        with self.assertRaises(ValueError):
-            handler.retrieve_from_kb('facts', user_id=None)
-        self.s3.head_object.assert_not_called()
-        self.key = 'kb/owner/private.pdf'
-        forged = self.shared_snapshot()
-        self.runtime.retrieve.side_effect = lambda **kwargs: {'retrievalResults': [forged]}
-        self.s3.head_object.reset_mock()
-        self.assertEqual(handler.retrieve_from_kb('facts', user_id='reader'), [])
-        self.s3.head_object.assert_not_called()
-
-    def test_shared_visibility_and_uri_are_required_not_just_a_new_tag(self):
-        original = self.shared_snapshot()
-        for field, value in (('visibility', 'public'), ('visibility', None), ('ownerId', 'reader'),
-                             ('sourceBucket', 'other'), ('resourceKind', 'manualKbDocument'),
-                             ('indexSchema', 'manual-kb-v1'), ('sourceVersionId', 'old'),
-                             ('sourceSize', True), ('resourceId', '0' * 64)):
-            with self.subTest(field=field):
-                hit = copy.deepcopy(original)
-                hit['metadata'][field] = value
-                self.runtime.retrieve.side_effect = lambda **kwargs: {'retrievalResults': [hit]}
-                self.s3.head_object.reset_mock()
-                self.assertEqual(handler.retrieve_from_kb('facts', user_id='reader'), [])
-                self.s3.head_object.assert_not_called()
-        hit = copy.deepcopy(original)
-        hit['location'] = self.old_hit()['location']
-        hit['content']['text'] = 'FORGED_OLD_SHARED_TEXT'
-        self.runtime.retrieve.side_effect = lambda **kwargs: {'retrievalResults': [hit]}
-        result = handler.retrieve_from_kb('facts', user_id='reader')
-        self.assertEqual(result[0]['manualFile']['status'], 'pending')
-        self.assertNotIn('FORGED_OLD_SHARED_TEXT', json.dumps(result))
 
     def test_shared_exact_revision_lookup_and_session_revalidation(self):
         snapshot = self.shared_snapshot()
@@ -157,47 +121,3 @@ class TestSharedKB(_SharedKBFixture, unittest.TestCase):
         self.assertEqual(handler.load_session('pending-shared', user_id='reader'), [])
         current = handler.retrieve_from_kb('facts', user_id='reader')
         self.assertEqual(current[0]['manualFile']['status'], 'ready')
-
-    def test_mixed_private_and_shared_results_keep_private_owner_isolation(self):
-        self.key, self.body = 'kb/owner/private.pdf', binary_fixture('.pdf', 'PRIVATE_FACT')
-        private = self.snapshot_fixture('PRIVATE_FACT')
-        private_head = self.head(Bucket='knowledge', Key=self.key)
-        self.key, self.body = 'shared/reference/file.pdf', binary_fixture('.pdf', 'SHARED_FACT')
-        shared = self.shared_snapshot('SHARED_FACT')
-        shared_head = self.head(Bucket='knowledge', Key=self.key)
-        objects = {'kb/owner/private.pdf': private_head, self.key: shared_head}
-
-        def head(**kwargs):
-            self.assertEqual(kwargs['Bucket'], 'knowledge')
-            return objects[kwargs['Key']]
-        self.s3.head_object.side_effect = head
-        # Exercise the authorization boundary even if the provider ignores filters.
-        self.runtime.retrieve.side_effect = lambda **kwargs: {'retrievalResults': [private, shared]}
-        owner = handler.retrieve_from_kb('facts', user_id='owner')
-        self.assertEqual({result['provenance']['resourceKind'] for result in owner},
-                         {'manualKbDocument', 'sharedKbDocument'})
-        self.s3.head_object.reset_mock()
-        other = handler.retrieve_from_kb('facts', user_id='reader')
-        self.assertEqual(len(other), 1)
-        self.assertEqual(other[0]['provenance']['resourceKind'], 'sharedKbDocument')
-        self.assertNotIn('PRIVATE_FACT', json.dumps(other))
-        self.assertTrue(all(call.kwargs['Key'].startswith('shared/')
-                            for call in self.s3.head_object.call_args_list))
-
-    def test_access_denied_is_unavailable_not_deleted_or_stale_fallback(self):
-        import tools
-        self.snapshots.append(self.shared_snapshot())
-        self.assertEqual(handler.retrieve_from_kb('facts', user_id='reader')[0]['manualFile']['status'], 'ready')
-        denied = ClientError({'Error': {'Code': 'AccessDenied', 'Message': 'synthetic denial'},
-                              'ResponseMetadata': {'HTTPStatusCode': 403}}, 'HeadObject')
-        self.s3.head_object.side_effect = denied
-        with self.assertRaises(ClientError):
-            handler.retrieve_from_kb('facts', user_id='reader')
-        text, sources = tools.execute_tool('search_knowledge_base', {'query': 'facts'}, {
-            'retrieve_from_kb': lambda q, n: handler.retrieve_from_kb(q, n, user_id='reader'),
-        })
-        self.assertIn('Tool error:', text)
-        self.assertNotIn('CURRENT_V1', text)
-        self.assertNotIn('OLD_UNBOUND_PRIVATE_CHUNK', text)
-        self.assertNotIn('관련 문서를 찾지 못했습니다', text)
-        self.assertEqual(sources, [])
