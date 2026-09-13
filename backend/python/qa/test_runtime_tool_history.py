@@ -1,10 +1,13 @@
 """QA tool continuity through both transports; no live services."""
 import json
+import time
 import unittest
 from unittest import mock
 
 import test_handler
 import test_account_reads as fixtures
+from async_jobs import QAJobs
+from test_async_jobs import JobTable
 from test_tool_history import conversation
 from test_kb_fixtures import _QAConversationFixture
 
@@ -154,6 +157,65 @@ class TestRuntimeToolHistory(_QAConversationFixture, unittest.TestCase):
                     self.assertIn('client_live', system)
                     self.assertIn('SAVED_NOTE', system)
                     self.assertNotIn('SERVER_TRANSCRIPT', system)
+
+    def test_latest_only_live_policy_reaches_each_transport_without_losing_conversation_label(self):
+        # This checks real model requests, not a stub's ability to obey the prompt.
+        # Runtime acceptance must still reject old values anywhere in real answers.
+        for transport in ('rest', 'stream', 'async'):
+            with self.subTest(transport=transport):
+                self.table.items.clear()
+                self.account()
+                self.meeting(transcriptA='SERVER_TRANSCRIPT', notes='CURRENT_SAVED_NOTE')
+                model = self.replies('rest' if transport == 'async' else transport,
+                                     'search_transcript', {'keywords': 'LIVE_DRAFT_LOCAL'})
+                model.reset_mock()
+                replies = list(model.side_effect)
+                for index, answer in enumerate((
+                        'LABEL_LOCAL LIVE_DRAFT_LOCAL',
+                        'LABEL_LOCAL LIVE_DRAFT_LOCAL',
+                        'LABEL_LOCAL LIVE_CORRECTED_LOCAL'), 1):
+                    if transport == 'stream':
+                        next(event['contentBlockDelta'] for event in replies[index]['stream']
+                             if 'contentBlockDelta' in event)['delta']['text'] = answer
+                    else:
+                        replies[index]['output']['message']['content'] = [{'text': answer}]
+                model.side_effect = replies
+                jobs = QAJobs(JobTable(), mock.Mock(), 'https://sqs.invalid/q')
+                questions = (
+                    'Remember conversation label LABEL_LOCAL. Read this live draft.',
+                    'Repeat the conversation label and current draft.',
+                    'Use the latest corrected client draft. Repeat the conversation label from my FIRST '
+                    'question and current saved source codes with provenance. '
+                    'Give only the current draft code; omit old drafts.',
+                )
+                contexts = ('LIVE_DRAFT_LOCAL', 'LIVE_DRAFT_LOCAL grew', 'LIVE_CORRECTED_LOCAL')
+                for turn, (question, context) in enumerate(zip(questions, contexts), 1):
+                    if transport == 'async':
+                        jid = str(int(time.time() * 1000)) + '-' + f'{turn:032x}'
+                        jobs.submit('reader', {'requestId': jid, 'mode': 'ask', 'question': question,
+                                              'context': context, 'meetingId': 'm', 'sessionId': 'chat-readonly'})
+                        with mock.patch.object(handler, '_ASYNC_MODEL', self.model):
+                            jobs.work('reader', jid, handler._execute_job_request, handler._validate_job_sources)
+                        result = jobs.poll('reader', jid, handler._validate_job_sources)
+                        self.assertEqual(result['status'], 'succeeded', result)
+                    else:
+                        self.ask(transport, question, meeting_id='m', context=context)
+                request = model.call_args.kwargs
+                system = '\n'.join(block['text'] for block in request['system'])
+                dialogue = json.dumps(request['messages'])
+                self.assertIn('LIVE_CORRECTED_LOCAL', system)
+                self.assertIn('CURRENT_SAVED_NOTE', system)
+                self.assertNotIn('LIVE_DRAFT_LOCAL', system)
+                # Keep real prior dialogue/labels. Erasing it would mask the
+                # observed narration failure and break follow-up continuity.
+                self.assertIn('LABEL_LOCAL', dialogue)
+                self.assertIn('LIVE_DRAFT_LOCAL', dialogue)
+                self.assertIn('Give only the current draft code; omit old drafts.', dialogue)
+                self.assertIn('When the user asks for only current/latest values or to omit old drafts', system)
+                self.assertIn('Do not repeat superseded raw values anywhere in the answer', system)
+                self.assertIn('including correction narratives, quotes, comparisons', system)
+                self.assertIn('Preserve requested conversation labels', system)
+                self.assertEqual(model.call_count, 4)  # One tool round, then three replies; no repair model call.
 
     def test_live_input_never_preserves_changed_or_revoked_server_data(self):
         for transport in ('rest', 'stream'):
