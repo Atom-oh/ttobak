@@ -17,7 +17,7 @@ const app = new cdk.App();
 const knowledgeIndexingMode: 'manual-only' | 'all' = 'all';
 const knowledgeIndexScheduleEnabled = true;
 // Separate activation change only after deployed QA jobs pass acceptance.
-const qaAsyncJobsEnabled = false;
+const qaAsyncJobsEnabled = true;
 
 // Environment configuration (ap-northeast-2 recommended for Korean users)
 const env = {

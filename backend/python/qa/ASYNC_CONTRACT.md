@@ -1,9 +1,12 @@
 # Asynchronous REST QA
 
-Prepare backend and frontend with `qaAsyncJobsEnabled=false`; runtime config
-`qaAsyncJobs` must be exactly true to select jobs. Missing/false config uses sync
-before any job is submitted. Enable in a separate activation change only after
-deployed routes, queue/IAM and a current-source job result are verified.
+FrontendStack remains opt-in: omitted/false `qaAsyncJobsEnabled` emits false.
+The app explicitly selects true after the recorded
+[backend acceptance](../../../docs/runbooks/qa-current-source-rollout.md#async-ui-opt-in--2026-09-13).
+Runtime `qaAsyncJobs` must be exactly true to select jobs; missing/false config
+uses sync before any job is submitted. Browser activation proof is still pending.
+Initial installations must verify deployed routes, queue/IAM and current-source
+job results before enabling the app opt-in.
 GatewayStack explicitly deploys the QA consumer before the Go API's private-link
 capability; stack ordering alone does not order sibling Lambda updates.
 Reload clients after activation; no fallback occurs after submission.
