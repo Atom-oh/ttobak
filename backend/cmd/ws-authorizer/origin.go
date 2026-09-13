@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"crypto/subtle"
-	"errors"
 	"strings"
 	"sync"
 	"time"
@@ -32,39 +31,51 @@ func newOriginVerifier(arn string, client secretValueClient) *originVerifier {
 	return &originVerifier{secretARN: arn, client: client, now: time.Now}
 }
 
-func (v *originVerifier) verify(ctx context.Context, event events.APIGatewayCustomAuthorizerRequestTypeRequest) bool {
+func (v *originVerifier) verify(ctx context.Context, event events.APIGatewayCustomAuthorizerRequestTypeRequest) originResult {
 	if v == nil || v.secretARN == "" || v.client == nil {
-		return false
+		return originResult{reason: originUnconfigured}
 	}
-	header, ok := originHeader(event)
-	if !ok || len(header) != 64 {
-		return false
+	header, reason := originHeader(event)
+	if reason != originAccepted {
+		return originResult{reason: reason}
 	}
-	expected, err := v.secret(ctx)
-	return err == nil && subtle.ConstantTimeCompare([]byte(header), []byte(expected)) == 1
+	if len(header) != 64 {
+		return originResult{reason: originHeaderMalformed}
+	}
+	expected, category := v.secret(ctx)
+	if category != secretErrorNone {
+		return originResult{reason: originSecretUnavailable, category: category}
+	}
+	if subtle.ConstantTimeCompare([]byte(header), []byte(expected)) != 1 {
+		return originResult{reason: originMismatch}
+	}
+	return originResult{reason: originAccepted}
 }
 
-func (v *originVerifier) secret(ctx context.Context) (string, error) {
+func (v *originVerifier) secret(ctx context.Context) (string, secretErrorCategory) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return "", classifySecretError(err)
 	}
 	if v.value != "" && v.now().Before(v.expires) {
-		return v.value, nil
+		return v.value, secretErrorNone
 	}
 	bounded, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	out, err := v.client.GetSecretValue(bounded, &secretsmanager.GetSecretValueInput{
 		SecretId: aws.String(v.secretARN),
 	}, func(options *secretsmanager.Options) { options.Retryer = aws.NopRetryer{} })
-	if err != nil || out == nil || out.SecretString == nil || !validOriginSecret(*out.SecretString) {
+	if err != nil {
+		return "", classifySecretError(err)
+	}
+	if out == nil || out.SecretString == nil || !validOriginSecret(*out.SecretString) {
 		// Never reuse an expired secret or expose a service response in an auth log.
-		return "", errors.New("origin secret unavailable")
+		return "", secretErrorInvalidSecret
 	}
 	v.value = *out.SecretString
 	v.expires = v.now().Add(time.Minute)
-	return v.value, nil
+	return v.value, secretErrorNone
 }
 
 func validOriginSecret(value string) bool {
@@ -79,12 +90,12 @@ func validOriginSecret(value string) bool {
 	return true
 }
 
-func originHeader(event events.APIGatewayCustomAuthorizerRequestTypeRequest) (string, bool) {
+func originHeader(event events.APIGatewayCustomAuthorizerRequestTypeRequest) (string, originReason) {
 	value, found := "", false
 	for name, header := range event.Headers {
 		if strings.EqualFold(name, originHeaderName) {
 			if found {
-				return "", false
+				return "", originHeaderDuplicate
 			}
 			value, found = header, true
 		}
@@ -92,11 +103,20 @@ func originHeader(event events.APIGatewayCustomAuthorizerRequestTypeRequest) (st
 	multiFound := false
 	for name, headers := range event.MultiValueHeaders {
 		if strings.EqualFold(name, originHeaderName) {
-			if multiFound || len(headers) != 1 || (found && headers[0] != value) {
-				return "", false
+			if multiFound || len(headers) > 1 {
+				return "", originHeaderDuplicate
+			}
+			if len(headers) == 0 {
+				return "", originHeaderMalformed
+			}
+			if found && headers[0] != value {
+				return "", originHeaderConflict
 			}
 			value, found, multiFound = headers[0], true, true
 		}
 	}
-	return value, found && value != ""
+	if !found {
+		return "", originHeaderMissing
+	}
+	return value, originAccepted
 }

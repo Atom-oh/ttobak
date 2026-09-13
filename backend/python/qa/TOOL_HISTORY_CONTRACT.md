@@ -94,6 +94,23 @@ adapter/state in REST and streaming, revalidating before subsequent model
 rounds, after long tool reads and before final output. Other mutable/untracked
 tools remain nonreplayable.
 
+## Latest-only live answers
+
+The `client_live` system instruction treats the latest supplied live context as
+the current draft, distinct from verified saved-source bytes. When the question
+asks for only current values or explicitly omits old drafts, superseded raw
+values must not appear anywhere in the answer, including correction narratives,
+quotes, comparisons or explanations of the previous answer. A generic correction
+acknowledgement can avoid quoting discarded values.
+
+Keep requested conversation labels and other unaffected references. This policy
+does not discard valid conversation history or weaken saved-source authorization
+and revision checks. Users explicitly asking for a historical comparison can
+still receive one. The same instruction reaches sync REST, async jobs and WS.
+Offline request-contract tests prove that wiring and continuity; they do not
+prove model compliance. Preserve observed failures and require separate runtime
+acceptance without weakening the old-value omission assertion.
+
 ## Creation receipts
 
 After the real `start_research` succeeds once, call

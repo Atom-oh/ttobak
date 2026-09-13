@@ -22,12 +22,15 @@ specific connect ARN, not all API stages.
 `AuthorizerResultTtlInSeconds` applies only to HTTP API Lambda authorizers, not
 WebSocket authorizers; do not add an unsupported result-cache setting here.
 
-Chat bounds the handshake to 10 seconds and each answer to 65 seconds, preserves
+Chat bounds the handshake to 10 seconds, WS answers to 330 seconds for the shared
+300-second QA Lambda, and REST to 690 seconds for async polling. It preserves
 partial text with a failure notice, and releases input on timeout/error/close.
 It does not automatically replay QA over WebSocket or REST after a send attempt.
 Unknown requests get a fresh conversation session; old socket/REST completions
 cannot update a newer request or a new chat. Chat sockets are closed at terminal
-completion; Live QA retains its existing reconnect/watchdog behavior.
+completion; Live QA retains its idle watchdog but does not automatically retry
+submitted proactive requests. Runtime job activation follows the
+[async contract](../../backend/python/qa/ASYNC_CONTRACT.md).
 
 Local development uses REST by default: the environment fallback has no `wsUrl`
 and this repository does not provision a local `/ws` proxy. The URL validator's
@@ -39,6 +42,14 @@ execute-api fallback is introduced. Existing legacy HTTP origin configuration an
 pre-existing broad management permissions are not claimed fixed by this change.
 
 ## Ordered rollout
+
+If production temporarily holds `wsUrl: ""`, preserve that configuration during
+preparation, using config-preserving frontend asset deployment only.
+FrontendStack's ConfigDeployment writes `/ws`; do not deploy that configuration
+while the hold is required. The designated
+operator restores only `wsUrl: "/ws"` after the reviewed stream recovery is
+verified deployed, preserving other fields such as `qaAsyncJobs`. Invalidate and
+read back config before WS acceptance. Do not activate async jobs during the hold.
 
 1. Run Go tests/vet, the ws-authorizer race tests, frontend lint/build, infra tests
    and offline synth. Build the changed bootstrap with Linux/ARM64 and
@@ -60,6 +71,45 @@ The explicit race command is:
 ```bash
 (cd backend && /usr/local/go/bin/go test -race ./cmd/ws-authorizer -count=1)
 ```
+
+## Diagnose an origin rejection
+
+The authorizer logs one fixed line, for example:
+`ws-authorizer: origin verification rejected reason=secret_unavailable category=transport`.
+It contains no header/token values, secret ARN, request URL or SDK error text.
+Success remains unlogged. Correlate the line with the enclosing Lambda
+START/REPORT request ID and log stream.
+
+| Reason | Meaning |
+|---|---|
+| `unconfigured` | Verifier configuration/client is missing. |
+| `header_missing` | No origin header was supplied. |
+| `header_malformed` | Empty/wrong-length value or an empty multi-value header. |
+| `header_duplicate` | Duplicate case-insensitive names or multiple values. |
+| `header_conflict` | Single-value and multi-value representations disagree. |
+| `secret_unavailable` | A current valid secret could not be obtained. Inspect `category`. |
+| `mismatch` | A well-shaped header differs from the valid cached/fetched secret. |
+
+`category` is `none` outside secret failures. Secret failures use only
+`canceled`, `deadline`, `transport`, `access_denied`, `not_found`, `throttled`,
+`service_error`, `decryption_failed`, `invalid_request`, `credentials`,
+`invalid_secret`, `aws_other` or `other`. Known AWS codes map to these categories;
+unknown codes/messages are never copied into logs. `transport` identifies a typed
+request-send/network error, not a proven network root cause. `invalid_secret`
+covers absent or malformed SDK secret output.
+
+Record deployed bootstrap hash, request time/ID, reason/category and duration.
+Compare point-in-time distribution/secret metadata and stack update timestamps;
+configuration equality does not prove which header reached a failed request.
+Use narrowly scoped CloudTrail metadata to investigate secret reads. A missing
+event does not prove no attempted read. Do not enable token-bearing request
+tracing, print private configuration, or replay an uncertain QA request.
+
+These diagnostics do not establish or fix the cause of earlier generic origin
+rejections. After reviewed deployment, an explicitly authorized new connect-only
+check can collect them without sending QA/model work. Keep the existing
+three-second read bound, one attempt per refresh, 60-second cache, constant-time
+comparison and denial on expired-cache refresh failure.
 
 ## Real acceptance after deployment
 

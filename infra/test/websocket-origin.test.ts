@@ -70,9 +70,29 @@ describe('CloudFront WebSocket origin boundary', () => {
 
   test('runtime config advertises only the same-site WS path and no origin proof', () => {
     expect(runtimeConfig.wsUrl).toBe('/ws');
-    expect(Object.keys(runtimeConfig).sort()).toEqual(['cognito', 'wsUrl']);
+    expect(Object.keys(runtimeConfig).sort()).toEqual(['cognito', 'qaAsyncJobs', 'wsUrl']);
     expect(JSON.stringify(runtimeConfig)).not.toContain('execute-api');
     expect(JSON.stringify(runtimeConfig)).not.toContain('secretsmanager');
+  });
+
+  test('QA jobs stay off in deployed config until explicit backend-verified activation', () => {
+    expect(runtimeConfig.qaAsyncJobs).toBe(false);
+  });
+
+  test('direct Assistant navigation serves its exported page and preserves RSC assets', () => {
+    const distribution = Object.values(frontend.findResources('AWS::CloudFront::Distribution'))[0];
+    const behavior = distribution.Properties.DistributionConfig.DefaultCacheBehavior;
+    const association = behavior.FunctionAssociations.find(
+      (value: { EventType: string }) => value.EventType === 'viewer-request',
+    );
+    const code = frontend.toJSON().Resources[association.FunctionARN['Fn::GetAtt'][0]].Properties.FunctionCode;
+    const handler = runInNewContext(`${code}; handler;`);
+    const querystring = { source: { value: 'meeting' } };
+    expect(handler({ request: { uri: '/chat', querystring } })).toEqual({
+      uri: '/chat.html', querystring,
+    });
+    expect(handler({ request: { uri: '/chat/__next.chat.__PAGE__.txt' } }).uri)
+      .toBe('/chat/__next.chat.__PAGE__.txt');
   });
 
   test('/ws is uncached, HTTPS-only and forwards negotiation headers without viewer Host', () => {

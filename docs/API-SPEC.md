@@ -495,9 +495,16 @@ All rows below come from `backend/cmd/api/main.go`.
 |---|---|---|
 | HTTP POST | `/api/qa/ask` | Agentic general Q&A |
 | HTTP POST | `/api/qa/meeting/{meetingId}` | Authorized meeting-context Q&A |
+| HTTP POST | `/api/qa/jobs` | User-bound idempotent asynchronous QA submission (202) |
+| HTTP GET | `/api/qa/jobs/{jobId}` | Current-source-validated job status/result |
 | HTTP POST | `/api/qa/detect-questions` | Suggested/proactive question detection |
 | WebSocket | `$connect`, `$disconnect`, `$default` | Go websocket Lambda |
 | WebSocket message | `ask_live` | Async invocation of Python QA, streamed replies |
+
+The frontend selects jobs only when runtime `qaAsyncJobs` is exactly true;
+the default remains synchronous and preserves `QAResponse`. Job activation is a
+separate change after backend acceptance. The [async contract](../backend/python/qa/ASYNC_CONTRACT.md)
+defines identity, proof/byte/deadline limits and unknown-outcome reconciliation.
 
 WebSocket clients resolve runtime `wsUrl: "/ws"` against the current CloudFront
 site and use `wss://` in production. No direct execute-api fallback is accepted.
@@ -537,7 +544,8 @@ and revision; changes or revocation invalidate the complete derived history.
 - Fresh source discovery revalidates canonical access, exact source revision and
   S3 bindings. Saved-text keyword matches supplement index lag; legacy meeting
   exports provide identities only. Cached text/misses cannot replace fresh reads,
-  and the strict runtime must write no new result cache.
+  without introducing a reusable query-result cache. Separately scoped async jobs
+  retain bounded results and revalidate their proof on every result read.
 - Private/manual and authenticated-shared binary evidence requires matching
   immutable snapshots; old unbound chunks cannot be relabeled as current. Legacy
   text is read from current scoped bytes; continuations bind its revision.
@@ -573,15 +581,17 @@ and revision; changes or revocation invalidate the complete derived history.
   Clients request this protocol with `sourceFramesVersion:1` on `ask_live`.
   Without that opt-in, oversized responses retain the existing size error.
 - WebSocket `ask_live` reports model stream failures regardless of the
-  `sourceFramesVersion` opt-in. Empty or incomplete model streams report `MODEL_STREAM_EMPTY`,
-  `MODEL_STREAM_INCOMPLETE` or `MODEL_STREAM_UNAVAILABLE`; exhausting the tool
+  `sourceFramesVersion` opt-in. Empty or incomplete model streams report
+  `MODEL_STREAM_EMPTY` or `MODEL_STREAM_INCOMPLETE`. Request/iteration failures
+  report `MODEL_STREAM_UNAVAILABLE`; exhausting the tool
   round budget reports `MODEL_TOOL_ROUND_LIMIT`. These are failed responses,
   not successful empty answers or automatic retries. Source-validated completed
   tool rounds can be retained with an explicit interruption note for the next
   conversation turn, including when stream iteration raises.
   The error frame's `sessionContinuable` boolean states whether the client can
-  retain the conversation after closing the socket. A needed but unconfirmed
-  history write sets it false. This signal does not authorize automatic retries.
+  retain the conversation after closing the socket. A missing session ID or a
+  needed but unconfirmed history write sets it false. This signal does not
+  authorize automatic retries.
   See the source contract's completion limits and non-atomic streaming caveat.
 - `start_research` records a creation receipt only after one successful mutation.
   Never replay creation to validate history. Tracking overflow preserves the

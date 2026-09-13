@@ -25,8 +25,8 @@ func handler(ctx context.Context, event events.APIGatewayCustomAuthorizerRequest
 		return denyResponse(event.MethodArn), nil
 	}
 
-	if !cloudFrontOrigin.verify(ctx, event) {
-		log.Println("ws-authorizer: origin verification rejected")
+	if result := cloudFrontOrigin.verify(ctx, event); !result.allowed() {
+		log.Printf("ws-authorizer: origin verification rejected reason=%s category=%s", result.reason, result.category)
 		return denyResponse(event.MethodArn), nil
 	}
 
