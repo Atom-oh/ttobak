@@ -687,9 +687,9 @@ def load_session(session_id, user_id=None, source_state=None, source_details=Non
 
 
 def save_session(session_id, messages, user_id=None, source_state=None, source_details=None):
-    """Save conversation history to DynamoDB with 7-day TTL."""
+    """Save history and return whether the message write was acknowledged."""
     if not session_id:
-        return
+        return False
     pk = f"SESSION#{user_id}#{session_id}" if user_id else f"SESSION#{session_id}"
     serialized = json.dumps(messages, ensure_ascii=False)
     if source_details is not None:
@@ -703,6 +703,7 @@ def save_session(session_id, messages, user_id=None, source_state=None, source_d
                                      'pendingShareExpiresAt': int(time.time()) + 604800})
         except Exception:
             logger.warning('History detail metadata could not be stored; validated identity fallback remains available')
+    messages_saved = False
     try:
         table.put_item(Item={
             "PK": pk,
@@ -713,6 +714,7 @@ def save_session(session_id, messages, user_id=None, source_state=None, source_d
             "sourceReplayable": (source_state or {}).get('replayable', False),
             "TTL": int(time.time()) + 604800,  # 7 days
         })
+        messages_saved = True
     except Exception as e:
         logger.warning(f"Failed to save session {session_id}: {e}")
 
@@ -750,6 +752,7 @@ def save_session(session_id, messages, user_id=None, source_state=None, source_d
             })
         except Exception as e:
             logger.warning(f"Failed to save chat session metadata {session_id}: {e}")
+    return messages_saved
 
 
 # ── Account-aware chat tools ───────────────────────────────────────────────
@@ -1306,6 +1309,13 @@ class WebSocketDeliveryError(RuntimeError):
         self.code = code
 
 
+class ModelStreamError(RuntimeError):
+    def __init__(self, code, session_continuable=False):
+        super().__init__(code)
+        self.code = code
+        self.session_continuable = session_continuable
+
+
 def _post_ws(apigw, connection_id, payload):
     """Return False for Gone; terminal/rejected payloads require explicit failure."""
     data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
@@ -1342,11 +1352,12 @@ def _post_ws_completion(apigw, connection_id, payload, source_frames_version=0):
     return True
 
 
-def _stream_error(apigw, connection_id, session_id, code, message, status='error'):
+def _stream_error(apigw, connection_id, session_id, code, message, status='error', *, session_continuable=None):
+    payload = {'type': 'answer_error', 'sessionId': session_id, 'code': code, 'error': message}
+    if session_continuable is not None:
+        payload['sessionContinuable'] = session_continuable is True
     try:
-        if not _post_ws(apigw, connection_id, {
-            'type': 'answer_error', 'sessionId': session_id, 'code': code, 'error': message,
-        }):
+        if not _post_ws(apigw, connection_id, payload):
             return {'status': 'gone'}
     except WebSocketDeliveryError:
         # A failed error notification must not recurse, retry the model, or
@@ -1427,6 +1438,11 @@ def handle_ask_stream(event):
             return {'status': 'gone'}
     except SourceValidationError as error:
         return _stream_error(apigw, connection_id, session_id, error.code, error.message)
+    except ModelStreamError as error:
+        logger.warning("Model stream did not complete (%s)", error.code)
+        return _stream_error(apigw, connection_id, session_id, error.code,
+                             '모델 응답이 완료되지 않았습니다. 이미 실행된 작업이 있는지 확인해 주세요.', 'model_failed',
+                             session_continuable=error.session_continuable)
     except WebSocketDeliveryError as error:
         logger.warning("WebSocket answer delivery failed (%s)", error.code)
         message = ('The complete answer exceeds WebSocket delivery limits. Ask a narrower question.'
@@ -1487,12 +1503,30 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
     tools_used = []
     sources = []
     final_answer_parts = []
+    finished = False
+    client_gone = False
 
     system_messages = _qa_system_messages(transcript, meeting_notes, meeting_id)
     if source_state.get('clientInputReceived'):
         system_messages.append({'text': CLIENT_LIVE_NOTE})
     if source_state.get('attachmentContext'):
         system_messages.append({'text': _attachment_prompt(source_state['attachmentContext'])})
+
+    def fail_stream(code):
+        # Retain completed tool receipts, but never append an empty/partial model
+        # message. The explicit interruption note closes the paired tool round
+        # so load_session does not rewind and forget a completed mutation.
+        session_continuable = bool(session_id)
+        if (messages and messages[-1].get('role') == 'user'
+                and any('toolResult' in block for block in messages[-1].get('content', []))):
+            _validate_answer_sources(user_id, source_state, context['tool_history'])
+            messages.append({'role': 'assistant', 'content': [{
+                'text': '응답이 중단되었습니다. 이전 도구 실행 결과를 확인한 후 계속하세요.',
+            }]})
+            session_continuable = save_session(
+                session_id, messages, user_id=user_id, source_state=source_state,
+                source_details=source_details) is True
+        raise ModelStreamError(code, session_continuable) from None
 
     for _ in range(MAX_TOOL_ROUNDS):
         validate_sources(source_state, lambda dep: _source_is_current(user_id, dep, source_state), tool_history=context['tool_history'])
@@ -1505,13 +1539,8 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
                 inferenceConfig={"maxTokens": 4096},
             )
         except Exception as e:
-            logger.error(f"Bedrock converse_stream failed: {e}", exc_info=True)
-            _post_ws(apigw, connection_id, {
-                'type': 'answer_delta',
-                'sessionId': session_id,
-                'text': '\n(응답 생성 중 오류)',
-            })
-            break
+            logger.warning("Bedrock stream request failed (%s)", type(e).__name__)
+            fail_stream('MODEL_STREAM_UNAVAILABLE')
 
         assembled_content = []
         current_block = None
@@ -1519,56 +1548,83 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
         round_text = ''
         client_gone = False
 
-        for ev in stream_resp.get('stream', []):
-            if 'messageStart' in ev:
-                continue
-            if 'contentBlockStart' in ev:
-                start = ev['contentBlockStart'].get('start', {})
-                if 'toolUse' in start:
-                    current_block = {
-                        'toolUse': {
-                            'toolUseId': start['toolUse']['toolUseId'],
-                            'name': start['toolUse']['name'],
-                            'input': '',
+        model_stream = stream_resp.get('stream', [])
+        try:
+            for ev in model_stream:
+                if 'messageStart' in ev:
+                    continue
+                if 'contentBlockStart' in ev:
+                    start = ev['contentBlockStart'].get('start', {})
+                    if 'toolUse' in start:
+                        current_block = {
+                            'toolUse': {
+                                'toolUseId': start['toolUse']['toolUseId'],
+                                'name': start['toolUse']['name'],
+                                'input': '',
+                            }
                         }
-                    }
-                else:
-                    current_block = {'text': ''}
-                continue
-            if 'contentBlockDelta' in ev:
-                delta = ev['contentBlockDelta'].get('delta', {})
-                if 'text' in delta and current_block is not None and 'text' in current_block:
-                    current_block['text'] += delta['text']
-                    round_text += delta['text']
-                    if not _post_ws(apigw, connection_id, {
-                        'type': 'answer_delta',
-                        'sessionId': session_id,
-                        'text': delta['text'],
-                    }):
-                        client_gone = True
-                elif 'toolUse' in delta and current_block is not None and 'toolUse' in current_block:
-                    current_block['toolUse']['input'] += delta['toolUse'].get('input', '')
-                continue
-            if 'contentBlockStop' in ev:
-                if current_block is not None:
-                    if 'toolUse' in current_block:
-                        raw_input = current_block['toolUse']['input']
-                        try:
-                            current_block['toolUse']['input'] = json.loads(raw_input) if raw_input else {}
-                        except json.JSONDecodeError:
-                            logger.warning("Tool input JSON parse failed; input omitted")
-                            current_block['toolUse']['input'] = {}
-                    assembled_content.append(current_block)
-                    current_block = None
-                continue
-            if 'messageStop' in ev:
-                stop_reason = ev['messageStop'].get('stopReason')
-                continue
-            if 'metadata' in ev:
-                continue
+                    else:
+                        current_block = {'text': ''}
+                    continue
+                if 'contentBlockDelta' in ev:
+                    delta = ev['contentBlockDelta'].get('delta', {})
+                    # ConverseStream emits contentBlockStart for tools, not normal
+                    # text. Initialize text on its first delta, including "".
+                    if 'text' in delta and current_block is None:
+                        current_block = {'text': ''}
+                    if 'text' in delta and current_block is not None and 'text' in current_block:
+                        current_block['text'] += delta['text']
+                        round_text += delta['text']
+                        if not _post_ws(apigw, connection_id, {
+                            'type': 'answer_delta',
+                            'sessionId': session_id,
+                            'text': delta['text'],
+                        }):
+                            client_gone = True
+                    elif 'toolUse' in delta and current_block is not None and 'toolUse' in current_block:
+                        current_block['toolUse']['input'] += delta['toolUse'].get('input', '')
+                    continue
+                if 'contentBlockStop' in ev:
+                    if current_block is not None:
+                        if 'toolUse' in current_block:
+                            raw_input = current_block['toolUse']['input']
+                            try:
+                                current_block['toolUse']['input'] = json.loads(raw_input) if raw_input else {}
+                            except json.JSONDecodeError:
+                                logger.warning("Tool input JSON parse failed; input omitted")
+                                current_block['toolUse']['input'] = {}
+                        # Empty transport text prefixes are not valid Converse
+                        # message content and must not poison the next tool round.
+                        if 'toolUse' in current_block or current_block.get('text', '').strip():
+                            assembled_content.append(current_block)
+                        current_block = None
+                    continue
+                if 'messageStop' in ev:
+                    stop_reason = ev['messageStop'].get('stopReason')
+                    continue
+                if 'metadata' in ev:
+                    continue
+        except (ModelStreamError, SourceValidationError, WebSocketDeliveryError):
+            raise
+        except Exception as error:
+            logger.warning("Bedrock stream iteration failed (%s)", type(error).__name__)
+            fail_stream('MODEL_STREAM_UNAVAILABLE')
+        finally:
+            close_stream = getattr(model_stream, 'close', None)
+            if callable(close_stream):
+                try:
+                    close_stream()
+                except Exception as error:
+                    logger.warning("Bedrock stream close failed (%s)", type(error).__name__)
 
+        if stop_reason not in ('end_turn', 'stop_sequence', 'tool_use') or current_block is not None:
+            fail_stream('MODEL_STREAM_INCOMPLETE')
+        if stop_reason in ('end_turn', 'stop_sequence') and not round_text.strip():
+            fail_stream('MODEL_STREAM_EMPTY')
+        if stop_reason == 'tool_use' and not any('toolUse' in block for block in assembled_content):
+            fail_stream('MODEL_STREAM_INCOMPLETE')
         messages.append({"role": "assistant", "content": assembled_content})
-        if round_text:
+        if round_text.strip():
             final_answer_parts.append(round_text)
 
         if client_gone:
@@ -1577,7 +1633,8 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
             # role-consistent.
             break
 
-        if stop_reason == 'end_turn' or stop_reason is None:
+        if stop_reason in ('end_turn', 'stop_sequence'):
+            finished = True
             break
 
         if stop_reason == 'tool_use':
@@ -1630,6 +1687,8 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
                 # on a socket nothing is listening on.
                 break
 
+    if not finished and not client_gone:
+        fail_stream('MODEL_TOOL_ROUND_LIMIT')
     _validate_answer_sources(user_id, source_state, context['tool_history'])
     save_session(session_id, messages, user_id=user_id, source_state=source_state, source_details=source_details)
 

@@ -26,6 +26,14 @@ export interface WebSocketMessage {
   sourceBatchId?: string;
   sourceBatchIndex?: number;
   sourceBatchCount?: number;
+  sessionContinuable?: boolean;
+}
+
+export function isTerminalModelError(message: WebSocketMessage): boolean {
+  return message.type === 'answer_error' && (
+    message.code === 'MODEL_STREAM_EMPTY' || message.code === 'MODEL_STREAM_INCOMPLETE'
+    || message.code === 'MODEL_STREAM_UNAVAILABLE' || message.code === 'MODEL_TOOL_ROUND_LIMIT'
+  );
 }
 
 type MessageHandler = (msg: WebSocketMessage) => void;

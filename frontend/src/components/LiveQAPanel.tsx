@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback, useSyncExternalStore } from 'react';
 import { qaApi } from '@/lib/api';
-import { RealtimeWebSocket, type WebSocketMessage } from '@/lib/websocket';
+import { RealtimeWebSocket, isTerminalModelError, type WebSocketMessage } from '@/lib/websocket';
 import { getRuntimeConfig, runtimeWebSocketUrl } from '@/lib/runtimeConfig';
 import {
   claimedProactiveQuestions,
@@ -310,7 +310,22 @@ function MeetingLiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
         break;
       case 'answer_error':
         clearWatchdog();
-        rollbackProactiveClaim(entryId);
+        if (isTerminalModelError(msg)) {
+          // A terminal model failure can follow completed tools. Keep its
+          // proactive claim, release the flight, and let the user decide.
+          const claimed = proactiveClaimByEntryRef.current.get(entryId);
+          if (claimed) {
+            proactiveClaimByEntryRef.current.delete(entryId);
+            completeProactiveAsk(claimed);
+          }
+          wsRef.current?.disconnect();
+          wsRef.current = null;
+          if (msg.sessionContinuable !== true) {
+            setSessionId(`qa-${meetingId || 'live'}-${Date.now()}`);
+          }
+        } else {
+          rollbackProactiveClaim(entryId);
+        }
         finishDraft(false);
         setError(msg.error || '답변 생성 중 오류가 발생했습니다.');
         setQaHistory(prev =>
