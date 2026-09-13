@@ -54,6 +54,7 @@ jobs:
         run: |
           test ! -L /tmp/pr-review
           rm -rf -- /tmp/pr-review
+          rm -f -- /tmp/review.md /tmp/review-clean.md /tmp/comment.md
           mkdir -p /tmp/pr-review
 
       - name: Verify CLIs present (runner image)
@@ -109,6 +110,7 @@ jobs:
           fi
 
       - name: Run specialists and conditionally adjudicate findings
+        id: review
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
@@ -122,10 +124,11 @@ jobs:
           echo "panel_responded=$(tr '\n' ' ' < /tmp/pr-review/responded.txt 2>/dev/null)" >> "$GITHUB_ENV"
 
       - name: Preserve specialist scope and execution evidence
+        id: evidence
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-          name: specialist-review-${{ github.event.pull_request.head.sha }}
+          name: specialist-review-${{ github.event.pull_request.head.sha }}-${{ github.run_attempt }}
           path: |
             /tmp/pr-review/slot/*-result.json
             /tmp/pr-review/slot/*-request.json
@@ -138,36 +141,65 @@ jobs:
 
       - name: Check for blocking issues
         id: gate
+        if: ${{ !cancelled() }}
+        env:
+          REVIEW_OUTCOME: ${{ steps.review.outcome }}
+          EVIDENCE_OUTCOME: ${{ steps.evidence.outcome }}
+          ARTIFACT_ID: ${{ steps.evidence.outputs.artifact-id }}
         run: |
-          if grep -q "^VERDICT: FAIL$" /tmp/review.md; then
-            echo "result=fail" >> "$GITHUB_OUTPUT"
-          elif grep -q "^VERDICT: PASS$" /tmp/review.md; then
-            echo "result=pass" >> "$GITHUB_OUTPUT"
-          else
-            echo "result=fail" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          result=fail
+          reason=invalid_review
+          if [ "$REVIEW_OUTCOME" != success ]; then
+            reason=review_execution_failed
+          elif [ "$EVIDENCE_OUTCOME" != success ] || [[ ! "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]; then
+            reason=evidence_unavailable
+          elif [ "${chair_failed:-0}" = 1 ]; then
+            reason=review_incomplete
+          elif [ -s /tmp/review.md ] && [ "$(grep -c '^VERDICT:' /tmp/review.md)" = 1 ] &&
+               [ "$(awk 'NF{n++} END{print n+0}' /tmp/review.md)" -gt 1 ]; then
+            case "$(awk 'NF{last=$0} END{print last}' /tmp/review.md)" in
+              "VERDICT: PASS") result=pass; reason=complete ;;
+              "VERDICT: FAIL") reason=blocking_review ;;
+            esac
           fi
+          {
+            echo "result=$result"
+            echo "reason=$reason"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Post review comment (upsert)
+        if: ${{ !cancelled() }}
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
           GATE_RESULT: ${{ steps.gate.outputs.result }}
+          GATE_REASON: ${{ steps.gate.outputs.reason }}
+          GATE_OUTCOME: ${{ steps.gate.outcome }}
+          REVIEW_OUTCOME: ${{ steps.review.outcome }}
+          EVIDENCE_OUTCOME: ${{ steps.evidence.outcome }}
         run: |
+          set -euo pipefail
           CURRENT_HEAD="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.head.sha')"
           if [ "$CURRENT_HEAD" != "$HEAD_SHA" ]; then
             echo "::error::PR head changed; this review belongs to an older commit"
             exit 1
           fi
           MARKER="<!-- multi-ai-pr-review -->"
-          if [ "$GATE_RESULT" = "fail" ] && [ "${chair_failed:-0}" = "1" ]; then
-            STATUS_BADGE="**Status: BLOCKED** — required review execution or coverage failed"
-          elif [ "$GATE_RESULT" = "fail" ]; then
-            STATUS_BADGE="**Status: BLOCKED** — CRITICAL/MAJOR issues must be resolved before merge"
-          else
+          STATUS_BADGE="**Status: BLOCKED** — required review execution, evidence or coverage is incomplete"
+          if [ "$GATE_OUTCOME" = success ] && [ "$GATE_RESULT" = pass ] && [ "$GATE_REASON" = complete ]; then
             STATUS_BADGE="**Status: PASSED** — No blocking issues found"
+          elif [ "$GATE_OUTCOME" = success ] && [ "$GATE_REASON" = blocking_review ]; then
+            STATUS_BADGE="**Status: BLOCKED** — CRITICAL/MAJOR issues must be resolved before merge"
           fi
-          sed '$ { /^VERDICT:/d }' /tmp/review.md > /tmp/review-clean.md
+          # Operational failures must not reuse a partial or stale PASS report.
+          if [ "$GATE_OUTCOME" = success ] && { [ "$GATE_REASON" = complete ] || [ "$GATE_REASON" = blocking_review ]; }; then
+            sed '/^VERDICT:/d' /tmp/review.md > /tmp/review-clean.md
+          else
+            echo "No complete review with successfully archived evidence is available. This run cannot authorize merge." > /tmp/review-clean.md
+          fi
+
           {
             echo "$MARKER"
             echo "## AI Code Review — specialists"
@@ -177,6 +209,8 @@ jobs:
             [ "${panel_truncated:-0}" = "1" ] && echo "_⚠️ diff truncated to first 3000 lines — review is partial._"
             echo ""
             echo "$STATUS_BADGE"
+            echo "Review execution: ${REVIEW_OUTCOME:-missing} · Evidence upload: ${EVIDENCE_OUTCOME:-missing} · Gate: ${GATE_OUTCOME:-missing} (${GATE_REASON:-missing})"
+            echo "Workflow run: ${{ github.run_id }} · attempt: ${{ github.run_attempt }}"
             echo ""
             cat /tmp/review-clean.md
             echo ""
@@ -193,7 +227,7 @@ jobs:
           fi
 
       - name: Fail if CRITICAL or MAJOR
-        if: steps.gate.outputs.result == 'fail'
+        if: ${{ !cancelled() && (steps.gate.outcome != 'success' || steps.gate.outputs.result != 'pass') }}
         run: |
           echo "AI Review failed"
           exit 1

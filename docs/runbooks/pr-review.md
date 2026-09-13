@@ -63,6 +63,18 @@ The posted issue-comment marker is `<!-- multi-ai-pr-review -->`, not the retire
 against the PR's `headRefOid`; an updated timestamp alone is insufficient. Also
 read inline review comments and review records, following API pagination.
 
+For specialist reruns, inspect `specialist-review-<HEAD>-<run_attempt>` and the
+comment's run/attempt and execution/evidence/gate outcomes. Each attempt keeps
+its own artifact; do not overwrite or substitute an older attempt's evidence.
+The [failure-publication contract](../pr-review-specialists.md#failure-publication-and-reruns)
+requires BLOCKED after review or artifact failure. Cancellation skips publication;
+runner/API failure may leave the previous comment visible, so always check the
+latest run as well as its HEAD. To exercise publication locally without providers:
+
+```bash
+python3 -m unittest discover -s scripts/pr-review -p 'test_workflow_publication.py' -v
+```
+
 ```bash
 gh pr view <PR> --json headRefOid,baseRefName,headRefName,statusCheckRollup,mergeStateStatus,reviews
 gh api --paginate repos/<OWNER>/<REPO>/issues/<PR>/comments

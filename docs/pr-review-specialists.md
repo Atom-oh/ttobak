@@ -63,6 +63,28 @@ Kiro startup checks. Adjudication adds one chair call; retries and fallback add
 calls only when needed. This reduces duplicate requests, but is not a measured
 wall-clock speedup. Per-role timing artifacts support before/after measurement.
 
+## Failure publication and reruns
+
+Evidence uploads use `specialist-review-<HEAD>-<run_attempt>` without overwrite,
+so rerunning the same workflow preserves earlier attempts. GitHub documents
+[immutable v4 artifacts](https://github.com/actions/upload-artifact/tree/v4#not-uploading-to-the-same-artifact)
+and an incrementing `github.run_attempt` for reruns.
+
+The workflow gate and comment run after failures with `!cancelled()`. PASS requires
+successful specialist/synthesis execution, successful evidence upload with an
+artifact ID, no failed-coverage signal, and exactly one terminal PASS verdict.
+Missing/skipped execution, missing evidence, upload failure or invalid output
+produces BLOCKED with explicit execution/evidence/gate outcomes. Partial or stale
+PASS text is not republished on these paths. The final job gate fails closed even
+if the gate step itself fails.
+
+Publication still verifies the current PR HEAD and uses the existing authorized
+same-repository, trusted-base workflow. Cancellation does not post a replacement
+comment. Runner loss, job startup failure or unavailable GitHub APIs can prevent
+publication; a previous comment never substitutes for the current attempt's
+required checks. Offline publication tests execute the workflow shell with local
+GitHub responses, including failure, cancellation and HEAD-change cases.
+
 ## Maintenance and release
 
 Run `python3 -m unittest discover -s scripts/pr-review -p 'test_*role*.py' -v`
