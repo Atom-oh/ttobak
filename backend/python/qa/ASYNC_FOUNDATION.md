@@ -1,9 +1,10 @@
-# Inactive asynchronous QA helpers
+# Asynchronous QA foundation
 
-This foundation registers no HTTP route, queue consumer or AWS resource and does
-not change the frontend transport. The existing handler never creates a delivery
-collector; conditional hooks in tool helpers remain inactive for normal requests.
-Runtime wiring, deployment, capability activation and public acceptance are separate.
+The helpers alone register no route, queue consumer or AWS resource. This revision
+wires them into async job execution; frontend job activation still defaults off.
+See [the runtime contract](ASYNC_CONTRACT.md) for registration, activation and
+deployment requirements. Calls without a delivery collector retain the existing
+history behavior.
 
 `QAJobs` supplies user-bound idempotent creation, one execution claim, bounded
 request/result/proof rows, active one-hour TTL and safe uncertain-write handling.
@@ -31,6 +32,6 @@ An attachment lookup/read failure marks delivery proof invalid independently of
 history-capacity limits. Later valid reads or capacity overflow cannot clear it.
 These source-access hooks are inert when no delivery collector is supplied.
 
-`test_handler` loads the standalone store/proof suites. Tests use synthetic table,
-model and network responses plus actual boto3 serialization. Active HTTP/worker
-integration tests stay with the subsequent runtime patch, not this foundation.
+`test_handler` loads the store/proof suites and the active HTTP/worker
+integration tests from `test_async_runtime`. Tests use synthetic table, model
+and network responses plus actual boto3 serialization.

@@ -9,6 +9,8 @@ export interface RuntimeConfig {
   };
   /** Same-site /ws endpoint; never a direct API Gateway address or credential. */
   wsUrl?: string;
+  /** Enable only after deployed job routes/worker pass acceptance. Missing is off. */
+  qaAsyncJobs?: boolean;
 }
 
 let cached: Promise<RuntimeConfig> | null = null;
