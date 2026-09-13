@@ -1,0 +1,21 @@
+{
+  "deployment": 34726840270,
+  "commit": "aeb46efa80bb64ae2388dd3db1adaebf4aaf8e7e",
+  "deploymentStatus": "SUCCESS",
+  "functionState": "Active",
+  "lastUpdateStatus": "Successful",
+  "codeSha256": "rSOx94jDvyI7kZvyW+5FtprDvT4lYJ/nAC6rqCbUHmw=",
+  "lastModified": "2026-09-13T00:10:23Z",
+  "mode": "manual-only",
+  "schedule": "ENABLED",
+  "mappings": [],
+  "gatewayStack": "UPDATE_COMPLETE",
+  "kbId": "BJJLVLFTOR",
+  "dataSourceId": "3AVMMT3RF3",
+  "workerPriorObservedControl": {
+    "mode": "manual-only",
+    "phase": "IDLE",
+    "version": 9,
+    "errorCode": ""
+  }
+}

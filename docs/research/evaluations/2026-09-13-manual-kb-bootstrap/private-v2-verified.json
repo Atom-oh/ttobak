@@ -1,0 +1,9 @@
+{
+  "case": "private",
+  "generation": 2,
+  "revision": "9614b9f9120e828abac6ce50b0ab0051d74286d9bca4194a17f559f6b857cb67",
+  "uri": "s3://ttobak-kb-180294183052/manual-kb/v1/acc-5136a0a6ff5f4977b657-owner/262dfbbae6d5e9dc3287b9f81a56a7536cf4ce2f7dfd6868c23cfb042472ad60/9614b9f9120e828abac6ce50b0ab0051d74286d9bca4194a17f559f6b857cb67/abc1486d-c28e-4351-9790-6299cc603483/document.pdf",
+  "actualRetrieval": true,
+  "scope": "IAM worker/provider; no public QA proof",
+  "priorSnapshotRemoved": "s3://ttobak-kb-180294183052/manual-kb/v1/acc-5136a0a6ff5f4977b657-owner/262dfbbae6d5e9dc3287b9f81a56a7536cf4ce2f7dfd6868c23cfb042472ad60/dc3f6711e2fe78269451043a4b3c1bf64e821f27608e301465c807be65d468b4/55b34767-b820-4a3b-a8bc-0a1f96e8b7d7/document.pdf"
+}
