@@ -12,6 +12,9 @@ import sys
 import tempfile
 import unittest
 
+import role_review
+from run_role import scrub as scrub_raw
+
 
 ENGINE = Path(__file__).with_name("role_review.py")
 HEAD = "a" * 40
@@ -367,6 +370,100 @@ class RoleReviewTests(unittest.TestCase):
                 self.record("claude-self")
                 self.cli("aggregate", "--work", self.work)
                 self.assertNotIn(secret, (self.work / "deterministic-review.md").read_text())
+
+    def test_unterminated_quoted_credentials_are_redacted_after_both_scrubbers(self):
+        secret = "SYNTHETIC_UNTERMINATED_CREDENTIAL"
+        for quote in ('"', "'"):
+            with self.subTest(quote=quote):
+                evidence = "password=" + quote + secret
+                self.assertNotIn(secret, role_review.scrub(evidence))
+                self.assertNotIn(secret, role_review.scrub(scrub_raw(evidence)))
+
+    def test_unterminated_quoted_credentials_cannot_reach_published_results(self):
+        secret = "SYNTHETIC_UNTERMINATED_CREDENTIAL"
+        for index, quote in enumerate(('"', "'")):
+            with self.subTest(quote=quote):
+                self.work = self.root / f"unterminated-quote-{index}"
+                self.prepare()
+                response = self.response("codex", findings=[{
+                    "severity": "MINOR", "path": FRONTEND, "condition": "On diagnostic output",
+                    "evidence": "password=" + quote + secret,
+                }])
+                result = self.record("codex", raw=scrub_raw(json.dumps(response)))
+                self.assertTrue(result["valid"])
+                self.record("claude-self")
+                self.cli("aggregate", "--work", self.work)
+                for name in ("slot/codex-result.json", "role-summary.json", "deterministic-review.md"):
+                    self.assertNotIn(secret, (self.work / name).read_text())
+
+    def test_validated_results_cannot_be_reissued_to_discard_candidates(self):
+        major = {"severity": "MAJOR", "path": FRONTEND,
+                 "condition": "On update", "evidence": "The changed write loses source data."}
+        for index, changes in enumerate(({"findings": [major]},
+                                         {"uncertainties": ["The source guard needs verification."]},
+                                         {})):
+            with self.subTest(changes=changes):
+                self.work = self.root / f"validated-reissue-{index}"
+                self.prepare()
+                before = self.finish({"codex": self.response("codex", **changes)})
+                files = ("slot/codex-result.json", "slot/codex-request.json")
+                saved = {name: (self.work / name).read_bytes() for name in files}
+                self.cli("issue", "--work", self.work, "--tag", "codex", expected=2)
+                self.assertEqual(saved, {name: (self.work / name).read_bytes() for name in files})
+                self.assertFalse((self.work / "slot/codex-attempts.json").exists())
+                self.cli("aggregate", "--work", self.work)
+                after = self.read("role-summary.json")
+                self.assertEqual(after["mode"], before["mode"])
+                self.assertEqual(after["findings"], before["findings"])
+                self.assertEqual(after["uncertainties"], before["uncertainties"])
+
+    def test_cross_process_reissue_cannot_clear_an_active_record_claim(self):
+        self.prepare()
+        self.record("claude-self")
+        nonce, _, _ = role_review.issue_request(self.work, "codex")
+        receipt = (self.work / "slot/codex-request.json").read_bytes()
+        output, stderr = self.root / "pending.json", self.root / "pending.stderr"
+        output.write_text(json.dumps(self.response("codex")))
+        stderr.write_text("[warn] failed to set model")
+        result_path = self.work / "slot/codex-result.json"
+        entered, release = threading.Event(), threading.Event()
+        original = role_review.write_json
+
+        def held_write(path, value):
+            if path == result_path:
+                entered.set()
+                if not release.wait(10):
+                    raise AssertionError("record race did not release the pending writer")
+            return original(path, value)
+
+        args = SimpleNamespace(work=self.work, tag="codex", output=output,
+                               stderr=stderr, nonce=nonce, exit_code=1)
+        with mock_patch.object(role_review, "write_json", side_effect=held_write):
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                pending = pool.submit(role_review.record, args)
+                try:
+                    self.assertTrue(entered.wait(5))
+                    self.cli("issue", "--work", self.work, "--tag", "codex", expected=2)
+                    self.assertEqual((self.work / "slot/codex-request.json").read_bytes(), receipt)
+                    self.assertTrue((self.work / "slot/codex.record-claim").exists())
+                finally:
+                    release.set()
+                self.assertEqual(pending.result(timeout=5), 2)
+        self.cli("issue", "--work", self.work, "--tag", "codex")
+        self.record("codex")
+        self.assert_blocked()
+        self.assertIn("model_selection_diagnostic",
+                      self.read("slot/codex-attempts.json")[0]["failure_codes"])
+
+    def test_abandoned_record_claim_cannot_be_cleared_by_reissue(self):
+        self.prepare()
+        self.cli("issue", "--work", self.work, "--tag", "codex")
+        receipt = (self.work / "slot/codex-request.json").read_bytes()
+        (self.work / "slot/codex.record-claim").touch()
+        self.cli("issue", "--work", self.work, "--tag", "codex", expected=2)
+        self.assertEqual((self.work / "slot/codex-request.json").read_bytes(), receipt)
+        self.assertTrue((self.work / "slot/codex.record-claim").exists())
+        self.assert_blocked()
 
     def test_charset_escapes_cannot_split_recoverable_credentials(self):
         for index, escape in enumerate(("\x1b(B", "\x1b)0", "\x1b#8", "\x1b%G")):

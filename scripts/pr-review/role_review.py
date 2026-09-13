@@ -20,6 +20,8 @@ not proof of model honesty or of the provider's actual executed weights.
 
 import argparse
 import ast
+from contextlib import contextmanager
+import fcntl
 import hashlib
 import json
 import os
@@ -520,7 +522,30 @@ def load_plan(work):
     return plan
 
 
+@contextmanager
+def role_lock(work, tag):
+    if tag not in ROLES:
+        raise Invalid("invalid_role")
+    slot = Path(work) / "slot"
+    slot.mkdir(parents=True, exist_ok=True)
+    # Keep one inode for all issuers/recorders; never unlink this lock file.
+    with (slot / f"{tag}.operation-lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise Invalid("role_busy") from None
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
 def issue_request(work, tag):
+    with role_lock(work, tag):
+        return _issue_request(work, tag)
+
+
+def _issue_request(work, tag):
     work = Path(work)
     plan = load_plan(work)
     role = plan["roles"][tag]
@@ -538,8 +563,12 @@ def issue_request(work, tag):
         "prompt_sha256": digest(instruction.encode()), "input_sha256": digest(payload.encode()),
     }
     previous = work / "slot" / f"{tag}-result.json"
+    if not previous.exists() and (work / "slot" / f"{tag}.record-claim").exists():
+        raise Invalid("record_incomplete")
     if previous.exists():
         prior = strict_json(text_file(previous))
+        if not isinstance(prior, dict) or prior.get("valid") is not False:
+            raise Invalid("result_already_recorded")
         history_file = work / "slot" / f"{tag}-attempts.json"
         history = strict_json(text_file(history_file)) if history_file.exists() else []
         if not isinstance(history, list) or len(history) >= 32:
@@ -551,7 +580,6 @@ def issue_request(work, tag):
             write(work / "slot" / f"role-{tag}-terminal.flag", "\n".join(sorted(terminal)) + "\n")
     remove(previous)
     remove(work / "slot" / f"{tag}.record-claim")
-    remove(work / "slot" / f"{tag}-duplicate.flag")
     write(work / "requests" / f"{tag}.prompt", instruction)
     write(work / "requests" / f"{tag}.input", payload)
     write_json(work / "slot" / f"{tag}-request.json", receipt)
@@ -694,7 +722,7 @@ def scrub(value):
         r"""(?i:\bx-origin-verify)["']?\s*:\s*["']?[^\s"',;}\]]+""",
         key + r"[|>][-+]?[ \t]*\r?\n(?:[ \t]+[^\r\n]*(?:\r?\n|\Z))+",
         r"""(?i:\bname)\s*:\s*["']?""" + identifier + r"""["']?[ \t]*\r?\n[ \t]*(?i:value)\s*:[^\r\n]*""",
-        key + r"""(?P<quote>["']).*?(?P=quote)""",
+        key + r"""(?P<quote>["']).*?(?:(?P=quote)|\Z)""",
         key + r"""[^\s"',;}\]]+""",
     )
     for pattern in patterns:
@@ -703,9 +731,20 @@ def scrub(value):
 
 
 def record(args):
-    work = Path(args.work)
     if args.tag not in ROLES:
         return 2
+    try:
+        with role_lock(args.work, args.tag):
+            return _record(args)
+    except Invalid as exc:
+        if str(exc) != "role_busy":
+            raise
+        write(Path(args.work) / "slot" / f"{args.tag}-duplicate.flag", "concurrent_record\n")
+        return 2
+
+
+def _record(args):
+    work = Path(args.work)
     slot = work / "slot"
     slot.mkdir(parents=True, exist_ok=True)
     result_path = slot / f"{args.tag}-result.json"
