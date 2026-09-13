@@ -35,6 +35,18 @@ def shared_source_key(key):
             and not any(ord(char) < 32 or ord(char) == 127 or char == '\\' for char in key))
 
 
+def selected_source_keys(user_id, keys):
+    """Original binary keys only; selection never grants access to another owner."""
+    if (type(keys) is not list or not 1 <= len(keys) <= 5
+            or any(type(key) is not str for key in keys)):
+        raise ValueError('Select one to five original binary source keys')
+    if (not _authenticated(user_id) or sum(len(key.encode('utf-8')) for key in keys) > 4096
+            or any(not (owned_manual_key(key, user_id) or shared_source_key(key))
+                   or PurePosixPath(key).suffix.lower() not in BINARY_EXTENSIONS for key in keys)):
+        raise ValueError('Invalid or unauthorized binary source selection')
+    return sorted(set(keys))
+
+
 def _authenticated(user_id):
     return isinstance(user_id, str) and IDENTIFIER.fullmatch(user_id) is not None
 
