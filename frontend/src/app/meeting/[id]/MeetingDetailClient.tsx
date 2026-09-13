@@ -580,6 +580,8 @@ function MeetingDetailContent() {
                 <AISummaryCard
                   content={resolveTranscriptLinks(resolveAttachmentUrls(meeting.content || '', meeting.attachments))}
                   summary={resolveTranscriptLinks(meeting.summary || '')}
+                  canonicalContent={meeting.content || meeting.summary || ''}
+                  resolveCitation={(source) => resolveTranscriptLinks(resolveAttachmentUrls(source, meeting.attachments))}
                   transcriptA={meeting.transcriptA}
                   onDirtyChange={onSummaryDirtyChange}
                   interactionLocked={resummary.action === 'load'}

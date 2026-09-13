@@ -6,6 +6,23 @@ import { Extension } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import Image from '@tiptap/extension-image';
 import Suggestion from '@tiptap/suggestion';
+import { meetingCitationAttributes } from '@/lib/meetingCitations';
+
+// Meeting-only provenance attributes; URL protocol rules remain unchanged.
+const meetingCitations = Extension.create({
+  name: 'meetingCitations',
+  addGlobalAttributes() {
+    return [{
+      types: ['link', 'image'],
+      attributes: Object.fromEntries(meetingCitationAttributes.map((name) => [name, {
+        default: null,
+        parseHTML: (element: HTMLElement) => element.getAttribute(name),
+        renderHTML: (attributes: Record<string, unknown>) =>
+          typeof attributes[name] === 'string' ? { [name]: attributes[name] } : {},
+      }])),
+    }];
+  },
+});
 
 // Triggered by "[[" -- suggests existing document titles for a wikilink.
 // getTitles lives on the extension's own `options` (a plain mutable object,
@@ -136,6 +153,7 @@ interface MeetingEditorProps {
   /** Keep local typing while the parent receives saved snapshots. */
   preserveDraft?: boolean;
   onContentApplied?: (content: string) => void;
+  preserveMeetingCitations?: boolean;
   /** Enables "[[" wikilink autocomplete, suggesting from this title list. */
   wikilinkTitles?: string[];
 }
@@ -148,6 +166,7 @@ export function MeetingEditor({
   readOnly = false,
   preserveDraft = false,
   onContentApplied,
+  preserveMeetingCitations = false,
   wikilinkTitles,
 }: MeetingEditorProps) {
   const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -178,8 +197,9 @@ export function MeetingEditor({
         allowBase64: true,
       }),
     ];
-    return hasWikilinks ? [...base, createWikilinkExtension()] : base;
-  }, [hasWikilinks]);
+    const configured = preserveMeetingCitations ? [...base, meetingCitations] : base;
+    return hasWikilinks ? [...configured, createWikilinkExtension()] : configured;
+  }, [hasWikilinks, preserveMeetingCitations]);
 
   const editor = useEditor({
     immediatelyRender: false,
