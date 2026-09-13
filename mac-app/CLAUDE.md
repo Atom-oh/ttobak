@@ -85,10 +85,30 @@ retry data; cleanup releases protection before deletion, while release_recording
 allows navigation/reset without deleting the WAV. Each upload attempt also owns an
 RAII assertion, including startup-adopted files. Invalid paths do not clear state.
 
-Protection covers idle system sleep, not lid-close, explicit sleep or low battery;
-display sleep is allowed. Validate pmset assertions during recording, pending upload,
-recovered upload and cleanup on real macOS. Late callbacks after page unmount must
-release their own pending protection without corrupting another recording.
+`PowerAssertion` (idle-sleep only, held for the whole recording) covers idle system
+sleep, not lid-close, explicit sleep or low battery; display sleep is allowed — this
+is the accurate, existing scope statement (Apple QA1340) and stays true regardless
+of the guard below.
+
+`LidCloseGuard` (`PreventSystemSleep`) is IOKit's AC-power-only assertion type for
+blocking lid-close sleep during a short, bounded operation — Apple's own guidance is
+to never hold it for a whole open-ended recording, so it is scoped to exactly
+`stop_recording`'s `stop_and_finalize` window (bounded by this command's own
+lifetime, `STOP_CAPTURE_TIMEOUT` — NOT by the unbounded background finalize task if
+that timeout is hit, see `lib.rs`) and `upload_recording`'s transfer window (bounded
+by stalled progress, not total duration — a slow-but-progressing upload legitimately
+holds it longer). Its actual effect on a real lid-close, and whether it does anything
+at all on battery power, is UNVERIFIED — confirm with `pmset -g assertions` plus a
+physical lid-close test on both AC and battery on real macOS before treating this as
+a guarantee; if that test shows no effect (e.g. on battery), this doc needs
+correcting, not the code. Closing the lid mid-meeting still suspends capture as
+before, unaffected by this guard — only the finish-and-upload tail right after "end
+meeting" is in scope for it at all. Validate `PowerAssertion` during recording,
+pending upload, recovered upload and cleanup (its existing scope); validate
+`LidCloseGuard` only during the finalize and transfer windows specifically — its
+absence outside those two is correct, not a defect. Late callbacks after page
+unmount must release their own pending protection without corrupting another
+recording.
 
 Tauri config CSP does not protect the remote SPA response; use the served policy.
 Auth and tokens remain in the SPA. Source pointers: src-tauri/src/lib.rs, audio.rs,
