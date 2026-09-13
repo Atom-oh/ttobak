@@ -136,16 +136,19 @@ Attachment extraction supports bounded native text from PDF/PPTX/DOCX/Markdown.
 Canonical ATTACH#/ATTEXT# identities, run/lease and ETag checks bind immutable
 result JSON. Partial/failed attempts remain distinct from retained previous
 results; document locations never imply audio times. Go queue/read services,
-the isolated Python worker and QA reader helpers exist. Upload/retry/status/text
-routes and verified DOCUMENT summary input are wired; QA activation is separate.
+the isolated Python worker and QA readers exist. Upload/retry/status/text routes,
+verified DOCUMENT summary input and authenticated QA consumption are wired.
 
 Canonical indexing can project saved meetings and personal/account documents
 into immutable canonical/v1/ objects, using current source revisions and pinned
 binary/preview bindings. The activation configuration selects all-mode delivery;
 the earlier manual-only bootstrap produces private and authenticated-shared
 snapshots under manual-kb/v1/ and shared-kb/v1/. Full S3 sync, per-document status
-and fresh conditional source checks establish success. Originals and
-canonical/legacy meeting exports remain unchanged in bootstrap mode.
+and fresh conditional source checks establish success. Bootstrap preserves
+originals and canonical/legacy meeting exports. The all-mode index worker preserves
+originals, stages canonical projections and removes obsolete legacy exports during
+projection/lifecycle cleanup. Provider confirmation follows ingestion and
+per-document checks.
 
 Strict current-source QA and tool-history helpers are registered by the active
 handler in REST and streaming paths. Their contract requires fresh authorized

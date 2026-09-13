@@ -43,24 +43,25 @@ WebSocket currently streams QA, while live Transcribe runs in the browser.
 - Existing accepted privacy/security limitations are recorded in CLAUDE.md and ADRs;
   they are not a claim of complete compliance or new blanket exemptions.
 
-## Implemented foundations awaiting integration
+## Implemented capabilities and activation boundaries
 
 Bounded PDF/PPTX/DOCX/Markdown extraction, immutable result storage, Go queue/read
-services and a private asynchronous worker exist. API upload/retry and summary/QA
-integration remain staged; current summary prompts still see file names/links.
+services and a private asynchronous worker exist. API upload/retry/status/text,
+verified DOCUMENT summary input and current-source QA readers are wired.
 Extraction covers native text, with explicit partial/unsupported states and no
 OCR. AudioUploader's KB promotion/manual copy and slide preview conversion are
 separate paths.
 
 The canonical index worker and status APIs exist for current meetings and
-personal/account documents. The app currently enables the **manual-only** schedule
-to prepare immutable private/shared KB snapshots; full canonical delivery is not
-enabled. Snapshot verification and strict QA deployment precede all-mode activation.
+personal/account documents. This activation configuration selects `all` and keeps
+the schedule enabled. The preceding manual-only stage prepares immutable
+private/shared KB snapshots. Snapshot/provider and public-consumer qualification
+precede activation; canonical backfill and lifecycle acceptance follow deployment.
 
 Current-source QA, structured provenance, strict account reads and tool-history
-revalidation are implemented helper foundations. The active QA handler does not
-wire them yet; frontend source-details support remains compatible with legacy
-responses. Fresh source reads, binary compatibility and safe follow-up continuity
+revalidation are registered in the active QA handler. Frontend source details
+remain compatible with legacy responses. Fresh source reads, binary compatibility
+and safe follow-up continuity
 must be verified through public endpoints before claiming cutover. See the
 [source contract](../backend/python/qa/SOURCE_CONTRACT.md) and
 [bootstrap runbook](runbooks/knowledge-index-bootstrap.md).
