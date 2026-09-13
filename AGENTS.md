@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 851eb4990189 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 544961631eb6 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
 # TTOBAK review context
 
 Shared by Codex, Kiro, and the CI review panel. Extracted from the
@@ -197,6 +197,13 @@ ScreenCaptureKit. Report that limit instead of claiming a Mac build passed.
   staged cutover, not implied by merged helper PRs. Never flip to `all` before
   deployed snapshot/provider verification and strict-consumer readiness (ADR-038).
   Status APIs/UI and conditional job/retry state exist independently of activation.
+- **Batch summaries ([ADR-040](docs/decisions/ADR-040-guarded-summary-publication.md)):**
+  CAS pins source presence/bytes and human text. Fresh runs reset the two-retry
+  budget when `!pending || status != summarizing`; resumed runs never reset it.
+  Busy errors retain delivery; run errors release owned claims, ending at
+  `error/RETRY_EXHAUSTED`. Never rebind old output. See
+  [recovery](docs/runbooks/meeting-document-release.md). Meeting files still supply
+  filenames only; default KB parsing requires PPT/PPTX conversion.
 - **Document extraction:** the bounded parser/private async worker and ATTACH#/ATTEXT#
   state exist (ADR-039). Consumers accept only authorized immutable result identity
   with the current source ETag; extraction JSON does not claim a source version ID.
