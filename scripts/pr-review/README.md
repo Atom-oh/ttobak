@@ -81,7 +81,7 @@ Limits: 95,000 diff bytes (UTF-8), 3,000 lines, 24,000 context bytes, <128 KiB
 request; projects may lower them. Oversize blocks. No chunk coordinator or
 combining partial PASS results; preserve custody/budgets.
 
-Run `python3 -m unittest discover -s scripts/pr-review -p 'test_*role*.py'`.
+Run `python3 -m unittest discover -s scripts/pr-review -p 'test_*.py'`.
 Offline CI: `.github/workflows/pr-review-roles-tests.yml`. Also verify
 executor/adapter, limit and exact-HEAD publication tests; offline success proves
 no live provider execution.
