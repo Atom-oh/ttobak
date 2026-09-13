@@ -93,6 +93,26 @@ class TestRealStreamEvents(unittest.TestCase):
         self.assertEqual(self.frames()[-1]['type'], 'answer_error')
         self.assertNotIn(('SESSION#reader#stream-fixture', 'MESSAGES'), self.table.items)
 
+    def test_empty_text_prefix_before_tool_does_not_poison_the_next_model_request(self):
+        first = {'stream': [
+            {'messageStart': {'role': 'assistant'}},
+            {'contentBlockDelta': {'contentBlockIndex': 0, 'delta': {'text': ''}}},
+            {'contentBlockStop': {'contentBlockIndex': 0}},
+            {'contentBlockStart': {'contentBlockIndex': 1, 'start': {
+                'toolUse': {'toolUseId': 'r', 'name': 'start_research'}}}},
+            {'contentBlockDelta': {'contentBlockIndex': 1, 'delta': {
+                'toolUse': {'input': '{"topic":"synthetic"}'}}}},
+            {'contentBlockStop': {'contentBlockIndex': 1}},
+            {'messageStop': {'stopReason': 'tool_use'}},
+        ]}
+        self.model.converse_stream.side_effect = [first, text_stream('Created the synthetic request.')]
+        with mock.patch.object(handler, 'check_research_limit', return_value=True), \
+                mock.patch.object(handler, 'create_research_from_chat', return_value={'researchId': 'c' * 32}):
+            self.assertEqual(handler.handle_ask_stream(self.event), {'status': 'ok'})
+        messages = self.model.converse_stream.call_args.kwargs['messages']
+        self.assertTrue(all(block['text'].strip() for message in messages
+                            for block in message['content'] if 'text' in block))
+
     def test_exhausted_tool_budget_is_not_reported_as_a_completed_answer(self):
         first = {'stream': [
             {'contentBlockStart': {'start': {'toolUse': {'toolUseId': 'r', 'name': 'start_research'}}}},
