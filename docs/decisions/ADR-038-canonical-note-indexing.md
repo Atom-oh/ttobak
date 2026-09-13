@@ -4,8 +4,9 @@
 
 ### Status
 
-Accepted — 2026-09-12. Deployment configuration enables the schedule and canonical
-stream in `all` mode. This activation requires verified manual snapshots and a
+Accepted — 2026-09-12. Activation amendment prepared — 2026-09-13.
+Deployment configuration retains the schedule enabled by PR225 and adds the
+canonical stream in `all` mode. This activation requires verified manual snapshots and a
 deployed current-source QA consumer before merge/deployment; see the
 [bootstrap runbook](../runbooks/knowledge-index-bootstrap.md).
 
@@ -41,9 +42,10 @@ requires re-export; stopping the worker does not restore deleted exports.
 
 ### 상태
 
-승인 — 2026-09-12. 배포 설정은 `all` 모드의 스케줄과 canonical stream을
-활성화합니다. 활성화 PR의 머지·배포 전 기존 문서 snapshot 검증과
-current-source QA 배포가 완료되어야 합니다. 절차는
+승인 — 2026-09-12. 활성화 개정안 준비 — 2026-09-13.
+배포 설정은 PR225에서 활성화한 스케줄을 유지하고 `all` 모드의
+canonical stream을 추가합니다. 활성화 PR의 머지·배포 전 기존 문서
+snapshot 검증과 current-source QA consumer 배포가 완료되어야 합니다. 절차는
 [bootstrap runbook](../runbooks/knowledge-index-bootstrap.md)을 따릅니다.
 
 ### 배경과 대안

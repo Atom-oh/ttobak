@@ -1,15 +1,17 @@
 # Knowledge index bootstrap and activation
 
-The worker was introduced with scheduled execution disabled, then enabled for
-manual snapshot bootstrap in PR225. The canonical activation configuration uses
+The worker was introduced with scheduled execution disabled, then configured for
+manual snapshot bootstrap in [PR225](https://github.com/Atom-oh/ttobak/pull/225).
+The canonical activation configuration uses
 `all` mode with the schedule enabled. Hold that activation PR until step 3's
 deployed private/shared acceptance and step 4's current-source QA deployment
 and verification are complete. A draft configuration is not deployment evidence.
 
 `knowledgeIndexingMode` in `infra/bin/infra.ts` is the single deployment choice
-passed to AiStack and GatewayStack. It starts as `manual-only`.
-`knowledgeIndexScheduleEnabled` starts as `false`; changing it requires a
-separate reviewed activation once the mode-aware worker is deployed.
+passed to AiStack and GatewayStack. Its initial value was `manual-only`, with
+`knowledgeIndexScheduleEnabled=false`. The activation configuration is
+`knowledgeIndexingMode=all` and `knowledgeIndexScheduleEnabled=true`.
+These are CDK deployment constants, not runtime application settings.
 
 ## Manual snapshot bootstrap
 
@@ -86,3 +88,12 @@ preserving original files and the existing QA path. After `all` has run, an
 environment downgrade is not a legacy-source restore. Preserve the guarded
 current-source consumer or perform an explicit reviewed legacy re-export;
 never serve stale unbound chunks as an availability fallback.
+
+To pause processing after canonical activation, keep `INDEXING_MODE=all`, set
+`knowledgeIndexScheduleEnabled=false`, and set `enabled: false` on the canonical
+`DynamoEventSource` in `gateway-stack.ts` in a reviewed change. Deploy
+`TtobakGatewayStack --exclusively` and verify both the rule and mapping are
+disabled. Disabling only the tick leaves stream deliveries active. Existing
+invocations may still finish; preserve their coordinator state and published
+snapshots. Re-enable both delivery paths through a reviewed change after the
+incident is resolved. Do not downgrade the worker or rewrite its control record.
