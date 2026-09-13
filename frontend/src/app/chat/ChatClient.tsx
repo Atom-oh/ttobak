@@ -28,6 +28,8 @@ const suggestedQuestions = [
   '최근 공유받은 미팅 정리해줘',
   'EKS 관련 논의 요약해줘',
 ];
+// The QA Lambda has a 60-second budget; leave bounded transport grace.
+const ANSWER_TIMEOUT_MS = 65_000;
 
 export function ChatClient() {
   const router = useRouter();
@@ -58,9 +60,42 @@ export function ChatClient() {
 
   const wsRef = useRef<RealtimeWebSocket | null>(null);
   const activeEntryIdRef = useRef<string | null>(null);
+  const streamingEntryIdRef = useRef<string | null>(null);
+  const answerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const aliveRef = useRef(true);
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const sessionsRef = useRef<HTMLDivElement>(null);
+  const finishRequest = useCallback((entryId: string): boolean => {
+    if (activeEntryIdRef.current !== entryId) return false;
+    activeEntryIdRef.current = null;
+    streamingEntryIdRef.current = null;
+    if (answerTimerRef.current) clearTimeout(answerTimerRef.current);
+    answerTimerRef.current = null;
+    const ws = wsRef.current;
+    wsRef.current = null;
+    ws?.disconnect();
+    return true;
+  }, []);
+  const failRequest = useCallback((entryId: string, message: string) => {
+    if (!aliveRef.current || !finishRequest(entryId)) return;
+    setChatHistory(prev => prev.map(entry => entry.id === entryId ? {
+      ...entry,
+      answer: entry.answer ? `${entry.answer}\n\n${message}` : message,
+      isStreaming: false,
+    } : entry));
+    setError(message);
+    setIsAsking(false);
+    // The server may still finish the old request. Never reuse its session.
+    setSessionId(`chat-${crypto.randomUUID()}`);
+    inputRef.current?.focus();
+  }, [finishRequest]);
+  const startAnswerDeadline = useCallback((entryId: string) => {
+    if (answerTimerRef.current) clearTimeout(answerTimerRef.current);
+    answerTimerRef.current = setTimeout(() => {
+      failRequest(entryId, '답변이 제한 시간 안에 완료되지 않았습니다. 다시 질문해 주세요.');
+    }, ANSWER_TIMEOUT_MS);
+  }, [failRequest]);
 
   useEffect(() => {
     let active = true;
@@ -107,7 +142,7 @@ export function ChatClient() {
 
   const handleStreamMessage = useCallback((msg: WebSocketMessage) => {
     const entryId = activeEntryIdRef.current;
-    if (!entryId) return;
+    if (!aliveRef.current || !entryId || streamingEntryIdRef.current !== entryId) return;
 
     switch (msg.type) {
       case 'answer_delta':
@@ -118,6 +153,7 @@ export function ChatClient() {
         );
         break;
       case 'answer_complete':
+        if (!finishRequest(entryId)) return;
         setChatHistory(prev =>
           prev.map(e =>
             e.id === entryId
@@ -135,34 +171,30 @@ export function ChatClient() {
           )
         );
         setIsAsking(false);
-        activeEntryIdRef.current = null;
         inputRef.current?.focus();
         break;
       case 'answer_error':
-        setChatHistory(prev =>
-          prev.map(e =>
-            e.id === entryId
-              ? { ...e, answer: msg.error || '답변 생성 중 오류가 발생했습니다.', isStreaming: false }
-              : e
-          )
-        );
-        setIsAsking(false);
-        activeEntryIdRef.current = null;
-        inputRef.current?.focus();
-        break;
       case 'error':
-        setError(msg.error || 'WebSocket error');
+        failRequest(entryId, msg.error || '답변 생성 중 오류가 발생했습니다. 다시 질문해 주세요.');
         break;
     }
-  }, []);
+  }, [failRequest, finishRequest]);
 
   const ensureWebSocket = useCallback(async (): Promise<RealtimeWebSocket | null> => {
     if (!wsUrl) return null;
     if (wsRef.current?.isConnected) return wsRef.current;
 
-    const ws = new RealtimeWebSocket(wsUrl, handleStreamMessage, () => {
-      if (wsRef.current === ws) wsRef.current = null;
-    });
+    const ws = new RealtimeWebSocket(wsUrl, msg => {
+      if (wsRef.current === ws) handleStreamMessage(msg);
+    }, () => {
+      if (wsRef.current !== ws) return;
+      const entryId = streamingEntryIdRef.current;
+      if (entryId) {
+        failRequest(entryId, '연결이 끊어져 답변이 완료되지 않았습니다. 다시 질문해 주세요.');
+      } else {
+        wsRef.current = null;
+      }
+    }, undefined, { autoReconnect: false });
     wsRef.current = ws;
     try {
       await ws.connect();
@@ -173,23 +205,26 @@ export function ChatClient() {
       ws.disconnect();
       return null;
     }
-  }, [wsUrl, handleStreamMessage]);
+  }, [wsUrl, handleStreamMessage, failRequest]);
 
   // Cleanup WebSocket on unmount
   useEffect(() => {
+    aliveRef.current = true;
     return () => {
-      wsRef.current?.disconnect();
+      aliveRef.current = false;
+      const entryId = activeEntryIdRef.current;
+      if (entryId) finishRequest(entryId);
     };
-  }, []);
+  }, [finishRequest]);
 
   const handleAsk = async (q: string) => {
-    if (!q.trim() || isAsking || !sessionId) return;
+    if (!q.trim() || activeEntryIdRef.current || !sessionId || !aliveRef.current) return;
 
     setQuestion('');
     setError(null);
     setIsAsking(true);
 
-    const entryId = Date.now().toString();
+    const entryId = crypto.randomUUID();
     const newEntry: ChatEntry = {
       id: entryId,
       question: q.trim(),
@@ -201,15 +236,22 @@ export function ChatClient() {
 
     // Try WebSocket streaming first
     const ws = await ensureWebSocket();
+    if (!aliveRef.current || activeEntryIdRef.current !== entryId) return;
     if (ws) {
-      ws.askLive(q.trim(), undefined, undefined, sessionId);
+      streamingEntryIdRef.current = entryId;
+      startAnswerDeadline(entryId);
+      if (!ws.askLive(q.trim(), undefined, undefined, sessionId)) {
+        failRequest(entryId, '질문을 전송하지 못했습니다. 다시 질문해 주세요.');
+      }
       return;
     }
 
     // Fallback to HTTP sync
+    startAnswerDeadline(entryId);
     try {
       setChatHistory(prev => prev.map(e => e.id === entryId ? { ...e, isStreaming: false } : e));
       const response = await qaApi.ask(q.trim(), undefined, sessionId);
+      if (!aliveRef.current || activeEntryIdRef.current !== entryId) return;
       setChatHistory(prev =>
         prev.map(entry =>
           entry.id === entryId
@@ -226,25 +268,23 @@ export function ChatClient() {
         )
       );
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to get answer');
-      setChatHistory(prev =>
-        prev.map(entry =>
-          entry.id === entryId
-            ? { ...entry, answer: '답변을 가져오지 못했습니다. 다시 시도해주세요.' }
-            : entry
-        )
-      );
+      if (!aliveRef.current || activeEntryIdRef.current !== entryId) return;
+      failRequest(entryId, err instanceof Error ? err.message : '답변을 가져오지 못했습니다. 다시 시도해주세요.');
     } finally {
-      setIsAsking(false);
-      activeEntryIdRef.current = null;
-      inputRef.current?.focus();
+      if (aliveRef.current && finishRequest(entryId)) {
+        setIsAsking(false);
+        inputRef.current?.focus();
+      }
     }
   };
 
   const handleNewChat = () => {
+    const entryId = activeEntryIdRef.current;
+    if (entryId) finishRequest(entryId);
     setChatHistory([]);
     setError(null);
-    setSessionId(`chat-${user?.userId || 'anon'}-${Date.now()}`);
+    setIsAsking(false);
+    setSessionId(`chat-${crypto.randomUUID()}`);
     inputRef.current?.focus();
   };
 

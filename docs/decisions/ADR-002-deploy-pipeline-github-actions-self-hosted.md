@@ -34,9 +34,9 @@ it forces that refresh even when ordinary resources have no diff.
 Frontend sync preserves `/config.json` with `--exclude "config.json"` because CDK
 owns runtime Cognito configuration. Go zip artifacts target Linux ARM64;
 `convert-doc` is a separate container build. The infra workflow explicitly builds
-six Go entry points; it does not build the implemented `websocket` and
-`ws-authorizer` entry points. That artifact-loop discrepancy remains visible;
-it does not mean WebSockets are unimplemented or establish live deployment state.
+all eight Go zip entry points, including `websocket` and `ws-authorizer`.
+The test and local build loops use the same target set. This packaging coverage
+does not establish live deployment state.
 
 ## Alternatives, consequences, and risks
 

@@ -19,6 +19,19 @@ characters. Secret reads have a three-second deadline and a 60-second cache;
 missing configuration, malformed/duplicate headers and refresh errors fail closed.
 The JWT decision is not cached by this helper. The returned policy covers the
 specific connect ARN, not all API stages.
+`AuthorizerResultTtlInSeconds` applies only to HTTP API Lambda authorizers, not
+WebSocket authorizers; do not add an unsupported result-cache setting here.
+
+Chat bounds the handshake to 10 seconds and each answer to 65 seconds, preserves
+partial text with a failure notice, and releases input on timeout/error/close.
+It does not automatically replay QA over WebSocket or REST after a send attempt.
+Unknown requests get a fresh conversation session; old socket/REST completions
+cannot update a newer request or a new chat. Chat sockets are closed at terminal
+completion; Live QA retains its existing reconnect/watchdog behavior.
+
+Local development uses REST by default: the environment fallback has no `wsUrl`
+and this repository does not provision a local `/ws` proxy. The URL validator's
+loopback support only applies when a developer explicitly supplies both.
 
 The websocket and QA workers retain their existing IAM-signed callback path.
 No connections table, new unauthenticated application route or direct browser
@@ -42,6 +55,12 @@ pre-existing broad management permissions are not claimed fixed by this change.
 5. Refresh the browser before acceptance. An already-open page can retain its old
    cached runtime config and continue using REST.
 
+The explicit race command is:
+
+```bash
+(cd backend && /usr/local/go/bin/go test -race ./cmd/ws-authorizer -count=1)
+```
+
 ## Real acceptance after deployment
 
 - Use the existing authenticated synthetic/demo browser session. Through the
@@ -54,6 +73,11 @@ pre-existing broad management permissions are not claimed fixed by this change.
   URLs containing tokens or copy proofs into shell history.
 - Record deployed source/bootstrap hashes, distribution state, positive/negative
   connection outcomes and completion evidence. Unit mocks/synth are not live proof.
+- Check the distribution's standard logging, every behavior's real-time binding,
+  and paginated CloudWatch delivery sources for standard logging v2. The current
+  stack declares none. Before enabling query-bearing logging, provide reviewed
+  exclusion/redaction of the `token` query value; do not disable existing audit
+  logging merely because a review speculates that it is enabled.
 
 ## Coordinated secret rotation
 
@@ -79,3 +103,4 @@ Relevant primary documentation:
 - [CloudFront WebSockets](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/distribution-working-with.websockets.html)
 - [CloudFront custom origin headers](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/add-origin-custom-headers.html)
 - [Secrets Manager dynamic references](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/dynamic-references-secretsmanager.html)
+- [API Gateway v2 Authorizer properties](https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-apigatewayv2-authorizer.html)

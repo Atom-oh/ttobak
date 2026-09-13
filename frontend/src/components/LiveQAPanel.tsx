@@ -426,7 +426,10 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
         setError('질문이 너무 깁니다 — 내용을 줄여서 다시 시도해주세요.');
         return;
       }
-      ws.askLive(q.trim(), wsContext, meetingId, sessionId);
+      if (!ws.askLive(q.trim(), wsContext, meetingId, sessionId)) {
+        handleStreamMessage({ type: 'error', error: '질문을 전송하지 못했습니다. 다시 시도해주세요.' });
+        return;
+      }
       armWatchdog();
       return;
     }
@@ -469,7 +472,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
   }, [
     isAsking, onAskedQuestion, onDetectedQuestionsChange, ensureWebSocket,
     transcriptContext, meetingId, sessionId, armWatchdog,
-    rollbackProactiveClaim, recordProactiveAsked,
+    rollbackProactiveClaim, recordProactiveAsked, handleStreamMessage,
   ]);
 
   const handleSubmit = (e: React.FormEvent) => {

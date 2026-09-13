@@ -78,11 +78,15 @@ describe('CloudFront WebSocket origin boundary', () => {
   test('/ws is uncached, HTTPS-only and forwards negotiation headers without viewer Host', () => {
     const distribution = Object.values(frontend.findResources('AWS::CloudFront::Distribution'))[0];
     const config = distribution.Properties.DistributionConfig;
+    // Query-token auth needs a separate logging/redaction review before enabling
+    // standard or real-time request logs on this path.
+    expect(config.Logging).toBeUndefined();
     const behavior = config.CacheBehaviors.find((value: { PathPattern: string }) => value.PathPattern === '/ws');
     expect(behavior).toBeDefined();
     expect(behavior.ViewerProtocolPolicy).toBe('https-only');
     expect(behavior.CachePolicyId).toBe(cloudfront.CachePolicy.CACHING_DISABLED.cachePolicyId);
     expect(behavior.OriginRequestPolicyId).toBe(cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER.originRequestPolicyId);
+    expect(behavior.RealtimeLogConfigArn).toBeUndefined();
     const origin = config.Origins.find((value: { Id: string }) => value.Id === behavior.TargetOriginId);
     expect(origin.DomainName).toBe('ws-api.execute-api.ap-northeast-2.amazonaws.com');
     expect(origin.CustomOriginConfig.OriginProtocolPolicy).toBe('https-only');

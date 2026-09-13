@@ -264,8 +264,9 @@ FrontendStack owns the static bucket, CloudFront SPA router, runtime config,
 signing key setup and media behavior. Dynamic routes are mapped by knownPages;
 404 fallback alone is not the complete routing mechanism. config.json is deployed
 separately from next build. Both Chat and Live QA use its relative `wsUrl: "/ws"`;
-the client accepts only the same-site WS path, with loopback-only HTTP development
-support. Invalid/missing config retains REST fallback.
+the client accepts only the same-site WS path. Local development defaults to REST;
+loopback WS validation needs an explicitly supplied config and local proxy.
+Invalid/missing config retains REST fallback.
 
 The StorageStack OAC custom resource reads the distribution ID and tightens the
 bucket policy. Its changing Timestamp deliberately forces re-invocation. The infra
