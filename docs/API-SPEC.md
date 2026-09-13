@@ -412,24 +412,28 @@ runtime-configured WebSocket endpoint. There is no current start/audio/stop
 server-side transcription stream or separate connections table in this handler.
 Live transcription runs in the browser using AWS Transcribe Streaming.
 
-The repository QA handler wires current-source readers and history checks into
-both Converse transports. Deployment is a separate, gated step; the
-[rollout](runbooks/qa-current-source-rollout.md) records prerequisites and evidence.
-`qa/tools.py` is the tool roster. Meeting/document/attachment reads expose bounded
-continuation with source-relative provenance. Transcript read failures remain
-explicit errors.
+**Legacy behavior before current-source cutover:** the QA handler uses a Converse
+tool loop and current authorized meeting data. KB meeting hits are candidates;
+access and saved notes/content are reread, including on cache hits. New terms
+may wait for export/ingestion. This paragraph is not the current-source contract.
 
-Live requests carry the latest client transcript window separately from saved
-notes. Client-input receipts bind the authenticated user and meeting; growing,
-rolling or corrected windows preserve conversation, with the latest input taking
-priority. These receipts do not attest saved-source bytes. Every recorded server
-source still requires current access and revision; edits, deletion or revocation
-invalidate the entire derived history.
+### Current-source consumer contract
+
+The gated QA wiring connects current-source readers and history checks to both
+Converse transports. This contract does not certify deployment; the
+[manual bootstrap evidence](research/evaluations/2026-09-13-manual-kb-bootstrap/README.md)
+records IAM producer/provider checks only. Public QA acceptance remains separate.
+
+Live/HTTP requests pass current client input separately from saved notes. Live
+input receipts bind user and meeting; growing, rolling and corrected windows
+retain conversation while the latest input takes priority. They do not attest
+saved-source bytes. Every recorded server source still requires current access
+and revision; changes or revocation invalidate the complete derived history.
 
 - Fresh source discovery revalidates canonical access, exact source revision and
   S3 bindings. Saved-text keyword matches supplement index lag; legacy meeting
   exports provide identities only. Cached text/misses cannot replace fresh reads,
-  and the runtime writes no new result cache.
+  and the strict runtime must write no new result cache.
 - Private/manual and authenticated-shared binary evidence requires matching
   immutable snapshots; old unbound chunks cannot be relabeled as current. Legacy
   text is read from current scoped bytes; continuations bind its revision.
@@ -449,10 +453,10 @@ invalidate the entire derived history.
   current result while marking history nonreplayable with explicit coverage.
   Unverifiable legacy sessions reset at cutover. Successful empty KB searches
   are reexecuted for the current user; new matches or failed reads invalidate
-  their proofs. Failed/skipped private reads do not become empty successes.
+  their proofs. Failed/skipped private reads never become empty successes.
 - `toolHistoryCoverage` is normally `[]`; `{tool, complete:false, reason}` reports
-  `DEPENDENCY_LIMIT`, `RESULT_LIMIT` or `RECEIPT_UNAVAILABLE`. Overflow retains
-  the current read-time-authorized result but prevents history replay.
+  `DEPENDENCY_LIMIT`, `RESULT_LIMIT` or `RECEIPT_UNAVAILABLE`. Capacity exhaustion
+  keeps the current read-time-authorized result but prevents history replay.
 
 Exact source fields, visibility, limits and integration APIs:
 [source contract](../backend/python/qa/SOURCE_CONTRACT.md),

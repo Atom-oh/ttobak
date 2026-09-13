@@ -213,8 +213,8 @@ ScreenCaptureKit. Report that limit instead of claiming a Mac build passed.
   current-user strict CompleteRead callbacks, fingerprints the rendered view, and
   discards the whole derived history on invalid dependencies. Oversized valid reads
   remain visible but nonreplayable; creation receipts never replay a mutation.
-  The prepared handler wires these checks into both transports; deployed cutover
-  and acceptance remain separate gates (ADR-042; QA contract docs).
+  Consumer wiring must preserve both transport paths and this history contract.
+  Code readiness and deployed acceptance are separate gates (ADR-042; QA contracts).
 - **Bounded meeting/MCP reads:** the authenticated reading endpoint uses
   metadata-only authorization for notes and binds continuation to source revision,
   selection and access. API JSON is capped at 14,000 encoded bytes. MCP forwards
