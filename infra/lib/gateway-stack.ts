@@ -17,6 +17,7 @@ import * as apigatewayv2Authorizers from 'aws-cdk-lib/aws-apigatewayv2-authorize
 import { Construct } from 'constructs';
 import { WHISPER_CLUSTER_NAME, WHISPER_TASK_FAMILY, WHISPER_CONTAINER_NAME } from './whisper-stack';
 import { DocumentExtraction } from './document-extraction';
+import { WebSocketOriginVerification, WEBSOCKET_ORIGIN_HEADER, WEBSOCKET_STAGE } from './websocket-origin';
 
 export const RESEARCH_SFN_NAME = 'ttobak-research-workflow';
 
@@ -71,6 +72,8 @@ export class GatewayStack extends cdk.Stack {
   public readonly simFunction: lambda.Function;
   public readonly websocketApi: apigatewayv2.WebSocketApi;
   public readonly websocketFunction: lambda.Function;
+  public readonly websocketOrigin: WebSocketOriginVerification;
+  public readonly websocketApiUrl: string;
   public convertDocFunction?: lambda.DockerImageFunction;
   constructor(scope: Construct, id: string, props: GatewayStackProps) {
     super(scope, id, props);
@@ -634,6 +637,26 @@ export class GatewayStack extends cdk.Stack {
       deadLetterQueue: actionItemsDlq,
     }));
 
+    const savedSummaryDlq = new sqs.Queue(this, 'SavedSummaryDlq', {
+      queueName: 'ttobak-saved-summary-dlq',
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      retentionPeriod: cdk.Duration.days(7),
+      redriveAllowPolicy: { redrivePermission: sqs.RedrivePermission.DENY_ALL },
+    });
+    const savedSummaryRule = new events.Rule(this, 'SavedSummaryRequestedRule', {
+      ruleName: 'ttobak-saved-summary-requested',
+      description: 'Summarize the current saved meeting sources without retranscription',
+      eventPattern: { source: ['ttobak.analysis'], detailType: ['SummaryRequested'] },
+    });
+    savedSummaryRule.addTarget(new eventsTargets.LambdaFunction(this.summarizeFunction, {
+      maxEventAge: cdk.Duration.minutes(5),
+      retryAttempts: 3,
+      deadLetterQueue: savedSummaryDlq,
+    }));
+    // Install the consumer, rule and invocation permission before API code
+    // can acknowledge a newly published request during this stack update.
+    this.apiFunction.node.addDependency(this.summarizeFunction, savedSummaryRule);
+
     // Convert Doc Lambda (container image w/ LibreOffice) + EventBridge rule
     // for PPTX/PPT slide uploads -> PDF sidecar conversion. Optional (like
     // researchWorkerRole above) so unit tests that omit convertDocRole don't
@@ -705,6 +728,8 @@ export class GatewayStack extends cdk.Stack {
 
     // ==================== WebSocket API (Live QA Streaming) ====================
 
+    this.websocketOrigin = new WebSocketOriginVerification(this, 'WebSocketOrigin', props.wsAuthorizerRole);
+
     // WebSocket authorizer Lambda (validates Cognito JWT on $connect)
     const wsAuthorizerFunction = new lambda.Function(this, 'WsAuthorizerFunction', {
       functionName: 'ttobak-ws-authorizer',
@@ -716,10 +741,12 @@ export class GatewayStack extends cdk.Stack {
       environment: {
         COGNITO_USER_POOL_ID: props.userPool.userPoolId,
         COGNITO_REGION: cdk.Aws.REGION,
+        WS_ORIGIN_SECRET_ARN: this.websocketOrigin.secret.secretArn,
       },
       timeout: cdk.Duration.seconds(10),
       memorySize: 128,
     });
+    wsAuthorizerFunction.node.addDependency(this.websocketOrigin.readPolicy);
 
     // WebSocket handler Lambda (routes messages, async-invokes QA)
     this.websocketFunction = new lambda.Function(this, 'WebsocketFunction', {
@@ -742,7 +769,7 @@ export class GatewayStack extends cdk.Stack {
       'WsAuthorizer',
       wsAuthorizerFunction,
       {
-        identitySource: ['route.request.querystring.token'],
+        identitySource: ['route.request.querystring.token', `route.request.header.${WEBSOCKET_ORIGIN_HEADER}`],
       }
     );
 
@@ -773,9 +800,10 @@ export class GatewayStack extends cdk.Stack {
 
     const wsStage = new apigatewayv2.WebSocketStage(this, 'WsProductionStage', {
       webSocketApi: this.websocketApi,
-      stageName: 'production',
+      stageName: WEBSOCKET_STAGE,
       autoDeploy: true,
     });
+    this.websocketApiUrl = wsStage.url;
 
     // Keep legacy role cross-stack reference alive (used by RealtimeStack)
     if (props.legacyRole) {
@@ -803,6 +831,7 @@ export class GatewayStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'WebsocketApiUrl', {
       value: wsStage.url,
       exportName: 'TtobakWebsocketApiUrl',
+      description: 'Protected origin endpoint; browsers use the CloudFront /ws runtime path.',
     });
 
   }

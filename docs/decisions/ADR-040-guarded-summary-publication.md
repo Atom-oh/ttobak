@@ -12,7 +12,9 @@ are not source conflicts. Final S3 HEAD and DynamoDB cannot be atomic.
 Preserve valid claims, markdown and file links; distinguish omitted/excerpted
 input from rejected citations. Reject incomplete or insubstantial output.
 Binding I/O fails the attempt; changed attachment evidence is omitted with notice.
-Batch guards and verified document collection are wired; saved-summary APIs follow.
+Batch guards, verified document collection and saved-source summary APIs are wired.
+Saved-summary runs recheck current edit grants and publish source/run/lease state
+with content atomically; source and run deletion share one transaction.
 Retain ambiguous spills (ADR-037). These guarantees cost extra reads/conflicts.
 
 [Release/recovery](../runbooks/meeting-document-release.md)

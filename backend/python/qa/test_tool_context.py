@@ -8,7 +8,7 @@ from test_source_contract import _SourceFixture
 from source_access import SourceAccess
 from attachment_context import AttachmentReader
 from source_tools import execute_source_tool
-from session_provenance import new_source_state, validate_sources, restore_sources
+from session_provenance import new_source_state, validate_sources, restore_sources, remember_source
 from request_history import remember_empty_search
 from tool_history import ToolHistory
 import tools
@@ -114,3 +114,31 @@ class TestToolContext(_SourceFixture, unittest.TestCase):
         }, current, lambda dep: True))
         self.assertEqual(current['dependencies'], before)
         self.assertTrue(current['replayable'])
+
+    def test_full_canonical_budget_keeps_current_valid_result_with_coverage(self):
+        state = new_source_state()
+        for index in range(128):
+            key = f'DOC#old-{index}'
+            self.table.put_item(Item={
+                'PK': 'USER#reader', 'SK': key, 'docId': f'old-{index}',
+                'sourceUserId': 'reader', 'entityType': 'USER_DOC',
+                'title': 'Old document', 'content': 'old text',
+            })
+            snapshot = self.source_reader.read('reader', 'USER#reader', key)
+            remember_source(state, {'sourcePK': 'USER#reader', 'sourceSK': key,
+                                    'sourceRevision': snapshot['revision']})
+        self.doc(content='FRESH_129')
+        self.grant()
+        context = self.context(state)
+        results = context['retrieve_from_kb']('FRESH_129')
+        self.module().track_tool_history(state, 'search_knowledge_base', context)
+        self.assertEqual(results[0]['document']['content'], 'FRESH_129')
+        self.assertEqual(len(state['dependencies']), 128)
+        self.assertFalse(state['replayable'])
+        self.assertEqual(state['toolHistoryCoverage'], [
+            {'tool': 'search_knowledge_base', 'complete': False, 'reason': 'DEPENDENCY_LIMIT'}])
+        validate_sources(state, lambda dep: self.access._source_is_current('reader', dep))
+        # Capacity handling must not hide a changed revision for an existing key.
+        self.table.items[('USER#reader', 'DOC#old-0')]['content'] = 'CHANGED_EXISTING_SOURCE'
+        with self.assertRaisesRegex(RuntimeError, 'Source changed'):
+            context['retrieve_from_kb']('CHANGED_EXISTING_SOURCE')

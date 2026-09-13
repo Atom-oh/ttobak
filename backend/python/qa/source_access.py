@@ -3,7 +3,10 @@ import json
 import logging
 
 from source_revision import legacy_text_key, legacy_text_revision, legacy_meeting_identity, resource_identity, IDENTIFIER
-from manual_kb import current_source as current_manual_source, current_shared_source
+from manual_kb import (
+    current_source as current_manual_source, current_shared_source,
+    selected_source_keys, hydrate_manual_candidates,
+)
 from session_provenance import remember_source, collect_detail, new_source_state
 from indexed_retrieval import discover_sources, discovery_filters, hydrate_candidates
 from legacy_text import legacy_page
@@ -65,6 +68,8 @@ class SourceAccess:
                 remember_source(source_state, dependency)
             if not overview['replayable']:
                 source_state['replayable'] = False
+                if source_state.get('_delivery') is not None:
+                    source_state['_delivery'].reject()
         if source_details is not None:
             for detail in overview['sourceDetails']:
                 collect_detail(source_details, detail)
@@ -88,6 +93,8 @@ class SourceAccess:
         except Exception:
             if source_state is not None:
                 source_state['replayable'] = False
+                if source_state.get('_delivery') is not None:
+                    source_state['_delivery'].reject()
             return {'attachments': [], 'errorCode': 'ATTACHMENT_CONTEXT_UNAVAILABLE'}
 
     def _meeting_snapshot(self, user_id, meeting_id):
@@ -227,7 +234,7 @@ class SourceAccess:
         return {key: value for key, value in page.items() if key != 'dependency'}
 
 
-    def retrieve_from_kb(self, question, number_of_results=5, user_id=None):
+    def retrieve_from_kb(self, question, number_of_results=5, user_id=None, source_keys=None):
         """Fresh semantic discovery plus current saved-text matches, with live authority."""
         if not isinstance(user_id, str) or not IDENTIFIER.fullmatch(user_id):
             raise ValueError('Authenticated user is required for KB retrieval')
@@ -239,11 +246,11 @@ class SourceAccess:
             raise ValueError('Invalid Knowledge Base query')
         capped = min(number_of_results, 10)
         reader = self.reader
-        shared = self.shared_meetings(user_id)
-        identities, accounts = discover_sources(reader, user_id, self.query_all, shared)
-        candidates = []
+        selected = selected_source_keys(user_id, source_keys) if source_keys is not None else None
+        if selected and len(selected) > capped:
+            raise ValueError('Result limit must cover every selected source')
 
-        def retrieve_group(source_filter):
+        def retrieve_group(source_filter, exact=False):
             try:
                 resp = self.provider.retrieve(
                     knowledgeBaseId=self.kb_id, retrievalQuery={'text': question},
@@ -254,7 +261,7 @@ class SourceAccess:
                 group = []
                 for item in resp.get('retrievalResults', []):
                     score = item.get('score', 0)
-                    if score >= 0.5:
+                    if exact or score >= 0.5:
                         group.append({
                             'uri': item.get('location', {}).get('s3Location', {}).get('uri', ''),
                             'score': score, 'metadata': item.get('metadata', {}),
@@ -266,6 +273,16 @@ class SourceAccess:
                 logger.warning('KB retrieve failed (%s)', type(e).__name__)
                 raise RuntimeError('Knowledge Base retrieval failed; search results are unavailable.') from None
 
+        if selected is not None:
+            # These are identity hints, never indexed content. The hydrator HEADs
+            # each authorized original and queries its exact current revision.
+            candidates = [{'uri': f's3://{reader.kb_bucket}/{key}', 'score': 0}
+                          for key in selected]
+            return hydrate_manual_candidates(reader, user_id, candidates,
+                                               lookup=lambda source_filter: retrieve_group(source_filter, exact=True))
+        shared = self.shared_meetings(user_id)
+        identities, accounts = discover_sources(reader, user_id, self.query_all, shared)
+        candidates = []
         for source_filter in discovery_filters(user_id, self.reader.kb_bucket, identities, accounts, shared):
             candidates.extend(retrieve_group(source_filter))
         # Old cached meeting identities can supplement discovery, but never replace

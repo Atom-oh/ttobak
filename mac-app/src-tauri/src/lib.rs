@@ -351,6 +351,23 @@ async fn stop_recording(state: State<'_, RecorderState>) -> Result<StopResponse,
         // OTHER one's path as done — see `RecorderState::finalizing`'s doc
         // comment.
         let finalizing = Arc::clone(&state.finalizing);
+        // Blocks lid-close sleep for this bounded finalize window only (see
+        // power.rs) — closing the lid the instant "end meeting" is clicked
+        // used to be able to suspend the process mid stop_and_finalize with
+        // no error surfaced. Deliberately NOT moved into the spawned
+        // closure: `stop_capture` is not cancelled by `STOP_CAPTURE_TIMEOUT`
+        // and can keep running in the background indefinitely (see the
+        // `Err(_elapsed)` arm below) — holding the guard until THAT
+        // background task finishes would mean a genuinely wedged
+        // ScreenCaptureKit stop blocks lid-close sleep until the process
+        // exits, which is exactly the open-ended hold this guard type must
+        // never have (see power.rs's module doc). Keeping it a plain local
+        // here instead bounds its lifetime to this command's own
+        // execution — it drops (via normal early-return/end-of-scope) at
+        // `STOP_CAPTURE_TIMEOUT` at the latest, same as the finalize
+        // tracking (`state.finalizing`) already does; the flush checkpoint
+        // already makes the WAV valid up to that point regardless.
+        let _lid_guard = power::LidCloseGuard::acquire("TTOBAK finishing recording");
         let stop_task = tauri::async_runtime::spawn_blocking(move || {
             let result = backend.stop_and_finalize();
             finalizing.lock().remove(&finalize_path);

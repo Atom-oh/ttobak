@@ -98,11 +98,14 @@ var (
 
 // meetingRepo defines the repository methods used by MeetingService.
 type meetingRepo interface {
-	CreateMeeting(ctx context.Context, userID, title string, date time.Time, participants []string, sttProvider string) (*model.Meeting, error)
+	CreateMeeting(ctx context.Context, userID, title string, date time.Time, participants []string, sttProvider string, preparation ...model.MeetingPreparation) (*model.Meeting, error)
 	GetMeeting(ctx context.Context, userID, meetingID string) (*model.Meeting, error)
 	GetMeetingByID(ctx context.Context, meetingID string) (*model.Meeting, error)
 	UpdateMeetingFields(ctx context.Context, userID, meetingID string, fields map[string]interface{}) error
 	UpdateMeetingFieldsIfMatch(ctx context.Context, userID, meetingID string, expected, fields map[string]interface{}) error
+	UpdateMeetingNotesIfMatch(ctx context.Context, userID, meetingID, expectedNotes, notes string) error
+	UpdateMeetingNotesWithRevision(ctx context.Context, userID, meetingID, expectedNotes, notes string, expectedRevision *string) (string, error)
+	UpdateMeetingFieldsWithNotesRevision(ctx context.Context, userID, meetingID string, fields map[string]interface{}) (string, error)
 	DeleteMeeting(ctx context.Context, userID, meetingID string) error
 	GetShare(ctx context.Context, sharedToID, meetingID string) (*model.Share, error)
 	ListAttachments(ctx context.Context, meetingID string) ([]model.Attachment, error)
@@ -192,11 +195,29 @@ func NewMeetingServiceForTest(repo MeetingRepo) *MeetingService {
 type MeetingRepo = meetingRepo
 
 // CreateMeeting creates a new meeting
-func (s *MeetingService) CreateMeeting(ctx context.Context, userID, title string, date time.Time, participants []string, sttProvider string) (*model.Meeting, error) {
+func (s *MeetingService) CreateMeeting(ctx context.Context, userID, title string, date time.Time, participants []string, sttProvider string, preparation ...model.MeetingPreparation) (*model.Meeting, error) {
 	if title == "" {
 		return nil, fmt.Errorf("title is required")
 	}
-	return s.repo.CreateMeeting(ctx, userID, title, date, participants, sttProvider)
+	if len(preparation) > 1 {
+		return nil, fmt.Errorf("%w: only one preparation is allowed", ErrInvalidInput)
+	}
+	if len(preparation) == 1 {
+		p := preparation[0]
+		if err := validateMeetingNotes(p.Notes); err != nil {
+			return nil, err
+		}
+		if p.AccountID != "" {
+			member, err := s.repo.GetMember(ctx, p.AccountID, userID)
+			if err != nil {
+				return nil, err
+			}
+			if member == nil {
+				return nil, ErrForbidden
+			}
+		}
+	}
+	return s.repo.CreateMeeting(ctx, userID, title, date, participants, sttProvider, preparation...)
 }
 
 // shareAccessRepo is the minimal persistence seam resolveSharedAccess needs --
@@ -576,39 +597,52 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 	// shared viewer has no use for it and no business seeing which external
 	// page the owner's summary lives on (same reasoning as Shares above).
 	notionPageID := ""
+	var projectIDs []string
 	if permission == "owner" {
 		notionPageID = meeting.NotionPageID
+		projectIDs = meeting.ProjectIDs
 	}
+	fieldInsights, insightsError, insightsTruncated := meetingFieldInsights(meeting.Insights)
 
 	return &model.MeetingDetailResponse{
-		MeetingID:          meeting.MeetingID,
-		UserID:             meeting.UserID,
-		Title:              meeting.Title,
-		Date:               meeting.Date.Format(time.RFC3339),
-		Status:             meeting.Status,
-		Participants:       meeting.Participants,
-		Content:            meeting.Content,
-		Notes:              meeting.Notes,
-		LiveSummary:        meeting.LiveSummary,
-		TranscriptA:        meeting.TranscriptA,
-		TranscriptB:        meeting.TranscriptB,
-		SelectedTranscript: strPtr(variant),
-		AudioKey:           meeting.AudioKey,
-		AudioKeys:          meeting.AudioKeys,
-		AudioPartCount:     meeting.AudioPartCount,
-		AudioPartsReady:    meeting.AudioPartsReady,
-		Tags:               meeting.Tags,
-		ActionItems:        toRawJSON(meeting.ActionItems),
-		SpeakerMap:         meeting.SpeakerMap,
-		SttProvider:        meeting.SttProvider,
-		LinkedMeetingIDs:   meeting.LinkedMeetingIDs,
-		NotionPageID:       notionPageID,
-		Permission:         permission,
-		Transcription:      transcription,
-		Attachments:        attachmentResponses,
-		Shares:             shareResponses,
-		CreatedAt:          meeting.CreatedAt.Format(time.RFC3339),
-		UpdatedAt:          meeting.UpdatedAt.Format(time.RFC3339),
+		SupportsNotesComparison:    true,
+		SupportsPrivateAccountLink: true,
+		MeetingID:                  meeting.MeetingID,
+		UserID:                     meeting.UserID,
+		AccountID:                  meeting.AccountID,
+		SharedToAccount:            meeting.SharedToAccount,
+		ProjectIDs:                 projectIDs,
+		Title:                      meeting.Title,
+		Date:                       meeting.Date.Format(time.RFC3339),
+		Status:                     meeting.Status,
+		Participants:               meeting.Participants,
+		Content:                    meeting.Content,
+		Notes:                      meeting.Notes,
+		NotesRevision:              meeting.NotesRevision,
+		LiveSummary:                meeting.LiveSummary,
+		TranscriptA:                meeting.TranscriptA,
+		TranscriptB:                meeting.TranscriptB,
+		SelectedTranscript:         strPtr(variant),
+		AudioKey:                   meeting.AudioKey,
+		AudioKeys:                  meeting.AudioKeys,
+		AudioPartCount:             meeting.AudioPartCount,
+		AudioPartsReady:            meeting.AudioPartsReady,
+		Tags:                       meeting.Tags,
+		ActionItems:                toRawJSON(meeting.ActionItems),
+		SpeakerMap:                 meeting.SpeakerMap,
+		SttProvider:                meeting.SttProvider,
+		LinkedMeetingIDs:           meeting.LinkedMeetingIDs,
+		NotionPageID:               notionPageID,
+		Permission:                 permission,
+		Transcription:              transcription,
+		Attachments:                attachmentResponses,
+		Shares:                     shareResponses,
+		CreatedAt:                  meeting.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:                  meeting.UpdatedAt.Format(time.RFC3339),
+		FieldInsights:              fieldInsights,
+		FieldInsightsFreshness:     "unknown",
+		FieldInsightsError:         insightsError,
+		FieldInsightsTruncated:     insightsTruncated,
 	}, nil
 }
 
@@ -627,6 +661,27 @@ func (s *MeetingService) UpdateMeeting(ctx context.Context, userID, meetingID st
 	}
 	if permission != "owner" && permission != model.PermissionEdit {
 		return nil, ErrForbidden
+	}
+
+	if req.ExpectedNotes != nil || req.ExpectedNotesRevision != nil {
+		if req.Notes == nil || req.ExpectedNotes == nil || req.Title != "" || req.Content != "" || req.LiveSummary != nil ||
+			req.TranscriptA != "" || req.SelectedTranscript != "" || req.Participants != nil || req.Status != "" {
+			return nil, fmt.Errorf("%w: expectedNotes requires a notes-only update", ErrInvalidInput)
+		}
+		if err := validateMeetingNotes(*req.Notes); err != nil {
+			return nil, err
+		}
+		if err := validateMeetingNotes(*req.ExpectedNotes); err != nil {
+			return nil, err
+		}
+		if req.ExpectedNotesRevision != nil && len(*req.ExpectedNotesRevision) > 128 {
+			return nil, fmt.Errorf("%w: expectedNotesRevision exceeds 128 bytes", ErrInvalidInput)
+		}
+		revision, err := s.repo.UpdateMeetingNotesWithRevision(ctx, meeting.UserID, meeting.MeetingID, *req.ExpectedNotes, *req.Notes, req.ExpectedNotesRevision)
+		if err != nil {
+			return nil, err
+		}
+		return &model.MeetingUpdateResponse{MeetingID: meeting.MeetingID, UpdatedAt: time.Now().UTC().Format(time.RFC3339), NotesRevision: revision}, nil
 	}
 
 	fields := map[string]interface{}{}
@@ -682,8 +737,15 @@ func (s *MeetingService) UpdateMeeting(ctx context.Context, userID, meetingID st
 	}
 
 	updatedAt := time.Now().UTC()
+	notesRevision := meeting.NotesRevision
 	if len(fields) > 0 {
-		if err := s.repo.UpdateMeetingFields(ctx, meeting.UserID, meeting.MeetingID, fields); err != nil {
+		var err error
+		if req.Notes != nil {
+			notesRevision, err = s.repo.UpdateMeetingFieldsWithNotesRevision(ctx, meeting.UserID, meeting.MeetingID, fields)
+		} else {
+			err = s.repo.UpdateMeetingFields(ctx, meeting.UserID, meeting.MeetingID, fields)
+		}
+		if err != nil {
 			return nil, err
 		}
 	} else {
@@ -691,8 +753,9 @@ func (s *MeetingService) UpdateMeeting(ctx context.Context, userID, meetingID st
 	}
 
 	return &model.MeetingUpdateResponse{
-		MeetingID: meeting.MeetingID,
-		UpdatedAt: updatedAt.Format(time.RFC3339),
+		MeetingID:     meeting.MeetingID,
+		UpdatedAt:     updatedAt.Format(time.RFC3339),
+		NotesRevision: notesRevision,
 	}, nil
 }
 
@@ -1348,6 +1411,7 @@ func (s *MeetingService) UpdateMeetingContent(ctx context.Context, meetingID, co
 
 // LinkMeetingToAccount classifies a meeting under an account (no sharing).
 // Only the meeting owner who is a member of the account may do this.
+// Clear prior team publication in the same write; direct shares are independent.
 func (s *MeetingService) LinkMeetingToAccount(ctx context.Context, ownerID, meetingID, accountID string) error {
 	meeting, err := s.repo.GetMeeting(ctx, ownerID, meetingID)
 	if err != nil {
@@ -1366,7 +1430,9 @@ func (s *MeetingService) LinkMeetingToAccount(ctx context.Context, ownerID, meet
 	if member == nil {
 		return ErrForbidden
 	}
-	return s.repo.UpdateMeetingFields(ctx, ownerID, meetingID, map[string]interface{}{"accountId": accountID})
+	return s.repo.UpdateMeetingFields(ctx, ownerID, meetingID, map[string]interface{}{
+		"accountId": accountID, "sharedToAccount": false,
+	})
 }
 
 // ShareMeetingToAccount publishes a meeting to an account team: sets

@@ -4,6 +4,7 @@ export interface Meeting {
   meetingId: string;
   userId: string;
   accountId?: string;
+  projectIds?: string[];
   title: string;
   description?: string;
   date: string;
@@ -254,6 +255,12 @@ export interface User {
 
 // Extended meeting detail from API
 export interface MeetingDetail extends Meeting {
+  supportsNotesComparison?: boolean;
+  notesRevision?: string;
+  supportsPrivateAccountLink?: boolean;
+  fieldInsights?: MeetingFieldInsight[];
+  fieldInsightsError?: string;
+  fieldInsightsTruncated?: boolean;
   actionItemsAnalysis?: ActionItemsAnalysis;
   content?: string;
   notes?: string;
@@ -272,6 +279,18 @@ export interface MeetingDetail extends Meeting {
   sharedBy?: string | null;
   permission?: 'read' | 'edit' | null;
   sharedToAccount?: boolean;
+}
+
+/** Stored extraction, without a current-summary freshness guarantee. */
+export interface MeetingFieldInsight {
+  id: string;
+  type: string;
+  text: string;
+  evidence?: string;
+  implication?: string;
+  nextAction?: string;
+  tsMarker?: string;
+  entities?: string[];
 }
 
 export interface KBFile {
@@ -304,6 +323,7 @@ export interface QASourceDetail {
   sourceRevision?: string;
   uri?: string;
   contentSource?: string;
+  provenanceScope?: 'validated_history' | 'legacy_identity' | 'history_receipt' | 'legacy_identity_unavailable';
   meetingId?: string;
   attachmentId?: string;
   filePending?: boolean;

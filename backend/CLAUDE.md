@@ -15,6 +15,10 @@ permissions must be inspected before alleging an authorization bypass.
 
 ## Current contracts
 
+- WebSocket `$connect` requires the CloudFront origin proof and verified JWT.
+  `WS_ORIGIN_SECRET_ARN` identifies a Secrets Manager value; no secret material is
+  in Lambda env. Missing config/proof, duplicate headers, lookup errors and expired
+  cache refresh failures deny access. The secret cache never caches JWT decisions.
 - `UpdateMeetingFieldsIfMatch` copies input fields and spills to immutable
   `{field}.{32-lowercase-hex}.txt` keys. Conditional publication never overwrites
   referenced objects. Disable SDK retries when new spills make commit ambiguity
@@ -33,12 +37,33 @@ permissions must be inspected before alleging an authorization bypass.
   fallback. Do not infer successful analysis from an empty array.
 - Saved notes are untrusted reference input, separately attributed from speech;
   note-only evidence cannot generate transcript anchors or invented agreements.
+- Initial meeting preparation uses optional `MeetingPreparation` on create:
+  validate notes (32,000 code points) and account membership before the first
+  PutItem. Acknowledge persisted request context with `preparationApplied`; keep
+  the recording lifecycle and private account classification unchanged.
+- Private account linking atomically sets `accountId` and clears
+  `sharedToAccount`, including reclassification of a team-shared meeting.
+  Preserve notes and independent direct shares; team publication stays explicit.
+- Notes-only `expectedNotes` updates use `UpdateMeetingNotesIfMatch`: require the
+  meeting to exist, match notes exactly (absent also matches expected empty),
+  and return 409 CONFLICT on a failed comparison. Optional `expectedNotesRevision`
+  also matches the version atomically (empty matches absent legacy versions).
+  Every notes write, including legacy and same-text writes, creates a fresh
+  server-owned UUID `notesRevision`; clients cannot assign it. Create/detail/update
+  and bounded notes reads expose the version. Notes cursors bind it as well as
+  text, and `supportsNotesComparison` means revision-capable comparison.
+  Generic field CAS stays exact.
+- Meeting detail exposes account classification and bounded `fieldInsights`;
+  project IDs are owner-only. Evidence remains meeting-authorized, freshness is
+  unknown, and malformed/truncated insight projections are explicit. KB file
+  listing follows all S3 pages and propagates failures instead of partial success.
 - Attachment queue/status/read services bind canonical ATTACH#/ATTEXT# rows,
   owner/uploader, run/lease and original ETag to immutable extraction results.
   Attempt status differs from retained-result completeness. Upload completion and
   attachment text/status/retry routes instantiate these services; the summary
-  provider consumes verified DOCUMENT text. Saved re-summary routes are a separate
-  dependent change. Code wiring does not establish deployed acceptance.
+  provider consumes verified DOCUMENT text. Saved re-summary GET/POST routes use
+  run/source/lease CAS and current edit grants; failures retain previous content.
+  Code wiring does not establish deployed acceptance.
 - Canonical index workers reread identities, bind source/S3 revisions and coalesce
   full S3 sync. Do not equate job acceptance/partial status with indexed documents.
   The app currently enables manual-only scheduling; all-mode canonical delivery

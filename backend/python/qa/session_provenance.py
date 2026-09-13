@@ -5,12 +5,28 @@ import json
 from source_revision import HEX_REVISION, IDENTIFIER, resource_identity
 from manual_kb import shared_source_key
 from tool_history import (
-    MAX_TOOL_DEPENDENCIES, is_tool_dependency, valid_tool_dependency, tool_dependency_key, covers_tool_calls,
+    MAX_TOOL_DEPENDENCIES, HistoryLimit, is_tool_dependency, valid_tool_dependency, tool_dependency_key, covers_tool_calls,
 )
 from request_history import MAX_EMPTY_SEARCHES, is_request_dependency, valid_request_dependency, request_key, mark_untracked
 
 MAX_SESSION_DEPENDENCIES = 128
 MAX_HISTORY_BYTES = 384 * 1024
+MAX_PUBLIC_TITLE_CHARS = 256
+
+
+class SourceValidationError(RuntimeError):
+    code = 'SOURCE_CHANGED'
+    status = 409
+    message = 'Source access or content changed or is no longer verifiable. Ask again with current sources.'
+
+    def __init__(self):
+        super().__init__(self.message)
+
+
+class SourceUnavailable(SourceValidationError):
+    code = 'SOURCE_UNAVAILABLE'
+    status = 503
+    message = 'Current sources could not be verified. Try again later.'
 
 
 def new_source_state():
@@ -79,7 +95,7 @@ def remember_source(state, dependency):
             or is_tool_dependency(dependency) and
             sum(is_tool_dependency(dep) for dep in state['dependencies']) >= MAX_TOOL_DEPENDENCIES):
         state['replayable'] = False
-        raise ValueError('Source history dependency budget exceeded')
+        raise HistoryLimit('Source history dependency budget exceeded')
     state['dependencies'].append(dict(dependency))
 
 
@@ -124,10 +140,11 @@ def validate_sources(state, is_current, *, tool_history=None):
         valid = (_valid_dependencies(state['dependencies'])
                  and all(_current(dep, is_current, tool_history) for dep in state['dependencies']))
     except Exception:
-        valid = False
+        state['replayable'] = False
+        raise SourceUnavailable() from None
     if not valid:
         state['replayable'] = False
-        raise RuntimeError('Source access or content changed; retry with current content.')
+        raise SourceValidationError()
 
 
 def restore_messages(item, state, is_current, *, tool_history=None,
@@ -154,5 +171,17 @@ def restore_messages(item, state, is_current, *, tool_history=None,
 
 
 def collect_detail(details, detail):
-    if detail and detail not in details:
-        details.append(dict(detail))
+    if not detail:
+        return
+    public = dict(detail)
+    title = public.get('title')
+    if isinstance(title, str) and len(title) > MAX_PUBLIC_TITLE_CHARS:
+        public['title'] = title[:MAX_PUBLIC_TITLE_CHARS]
+        public['titleTruncated'] = True
+    evidence = {key: value for key, value in public.items() if key != 'provenanceScope'}
+    for index, previous in enumerate(details):
+        if {key: value for key, value in previous.items() if key != 'provenanceScope'} == evidence:
+            if 'provenanceScope' not in public:
+                details[index] = public
+            return
+    details.append(public)

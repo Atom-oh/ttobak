@@ -1,6 +1,8 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { useAuth } from '@/components/auth/AuthProvider';
 import { kbApi } from '@/lib/api';
 import type { KBFile } from '@/types/meeting';
 
@@ -33,6 +35,11 @@ function getFileIcon(fileType?: string): string {
 }
 
 export function KBFileList() {
+  const params = useSearchParams();
+  const { user } = useAuth();
+  const requestedFile = params.get('fileId') || '';
+  const requestedOwner = params.get('ownerId') || '';
+  const foreignReference = !!requestedOwner && requestedOwner !== user?.userId;
   const [files, setFiles] = useState<KBFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
@@ -56,6 +63,11 @@ export function KBFileList() {
   useEffect(() => {
     fetchFiles();
   }, [fetchFiles]);
+  useEffect(() => {
+    if (!loading && requestedFile && !foreignReference) {
+      document.getElementById(`kb-file-${encodeURIComponent(requestedFile)}`)?.scrollIntoView({ block: 'center' });
+    }
+  }, [loading, requestedFile, foreignReference, files]);
 
   const handleUpload = async (selectedFiles: FileList | null) => {
     if (!selectedFiles || selectedFiles.length === 0) return;
@@ -133,6 +145,17 @@ export function KBFileList() {
 
   return (
     <div className="space-y-6">
+      {requestedFile && (
+        <div role="status" className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm text-slate-700 dark:text-text-secondary">
+          {foreignReference
+            ? '다른 사용자의 개인 KB 출처입니다. 현재 계정의 파일을 그 출처로 대신 사용하지 않습니다. 자료 소유자에게 공유를 요청하세요.'
+            : loading ? '연결된 지식 자료를 확인하고 있습니다.'
+              : files.some((file) => file.fileId === requestedFile)
+                ? `연결된 지식 자료: ${files.find((file) => file.fileId === requestedFile)?.fileName}`
+                : '연결된 파일이 현재 개인 KB 목록에 없습니다. 삭제되었거나 접근 가능한 자료인지 확인해 주세요.'}
+          <a className="ml-2 font-semibold text-primary underline" href="/kb">내 KB 목록 보기</a>
+        </div>
+      )}
       {/* Upload Area */}
       <div
         className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors ${
@@ -218,7 +241,8 @@ export function KBFileList() {
       ) : (
         <div className="bg-white rounded-xl border border-slate-200 divide-y divide-slate-200 dark:glass-panel dark:divide-white/5">
           {files.map((file) => (
-            <div key={file.fileId} className="flex items-center justify-between py-3 px-4 dark:hover:bg-white/5 transition-colors">
+            <div key={file.fileId} id={`kb-file-${encodeURIComponent(file.fileId)}`}
+              className={`flex items-center justify-between py-3 px-4 dark:hover:bg-white/5 transition-colors ${!foreignReference && requestedFile === file.fileId ? 'bg-primary/10 ring-1 ring-inset ring-primary/30' : ''}`}>
               <div className="flex items-center gap-3 min-w-0">
                 <span className="material-symbols-outlined text-slate-400 dark:text-text-muted">
                   {getFileIcon(file.fileType)}

@@ -44,6 +44,10 @@ npm run lint      # ESLint
 - Static export: `output: 'export'` in production only; dev uses normal SSR
 - Auth: Cognito SDK in `lib/auth.ts`, JWT in localStorage, auto-refresh on 401
 - API calls: `lib/api.ts` apiFetch with Bearer token; error shape `{ error: { code, message } }`
+- Chat and Live QA read runtime `wsUrl: "/ws"` and resolve it against the current
+  site. `runtimeWebSocketUrl` rejects other hosts, paths and configured credentials.
+  Do not restore the build-time direct WebSocket URL fallback. Failed initial
+  connections are disconnected before REST fallback.
 - Styling: Tailwind v4 with `@custom-variant dark` (class-based, not media query); design tokens in `globals.css`; Material Symbols Outlined icons
 - Dark mode: `.dark` class on `<html>` toggled via localStorage `theme` key; `@custom-variant dark (&:where(.dark, .dark *))` in globals.css makes all `dark:` utilities respond to the class. JS that needs to know the theme (not just apply `dark:` classes) uses `useTheme` — which also now owns writing the toggle (class + localStorage) — rather than reading/writing the class directly; the hook's own implementation and `layout.tsx`'s inline pre-hydration bootstrap script are the only exceptions, by necessity
 - Primary colors: light `#3211d4`, dark `#8b85f7` (violet) -- one unified indigo/violet brand, no separate neon palette (see `docs/DESIGN-SPEC.md` and `globals.css` for tokens)

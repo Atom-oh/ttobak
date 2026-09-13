@@ -2,17 +2,20 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"os"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	"github.com/ttobak/backend/internal/middleware"
 )
 
 var (
 	cognitoUserPoolID = os.Getenv("COGNITO_USER_POOL_ID")
+	verifyToken       = middleware.ParseVerifiedJWT
+	cloudFrontOrigin  *originVerifier
 )
 
 func handler(ctx context.Context, event events.APIGatewayCustomAuthorizerRequestTypeRequest) (events.APIGatewayCustomAuthorizerResponse, error) {
@@ -22,14 +25,19 @@ func handler(ctx context.Context, event events.APIGatewayCustomAuthorizerRequest
 		return denyResponse(event.MethodArn), nil
 	}
 
+	if !cloudFrontOrigin.verify(ctx, event) {
+		log.Println("ws-authorizer: origin verification rejected")
+		return denyResponse(event.MethodArn), nil
+	}
+
 	if cognitoUserPoolID == "" {
 		log.Println("ws-authorizer: COGNITO_USER_POOL_ID not set")
 		return denyResponse(event.MethodArn), nil
 	}
 
-	claims, err := middleware.ParseVerifiedJWT(token)
+	claims, err := verifyToken(token)
 	if err != nil {
-		log.Printf("ws-authorizer: JWT verification failed: %v", err)
+		log.Println("ws-authorizer: JWT verification failed")
 		return denyResponse(event.MethodArn), nil
 	}
 
@@ -50,7 +58,7 @@ func allowResponse(principalID, methodArn string) events.APIGatewayCustomAuthori
 				{
 					Action:   []string{"execute-api:Invoke"},
 					Effect:   "Allow",
-					Resource: []string{buildResourceArn(methodArn)},
+					Resource: []string{methodArn},
 				},
 			},
 		},
@@ -69,49 +77,18 @@ func denyResponse(methodArn string) events.APIGatewayCustomAuthorizerResponse {
 				{
 					Action:   []string{"execute-api:Invoke"},
 					Effect:   "Deny",
-					Resource: []string{buildResourceArn(methodArn)},
+					Resource: []string{methodArn},
 				},
 			},
 		},
 	}
 }
 
-// buildResourceArn converts a specific method ARN to a wildcard that covers all routes/stages.
-// Input format:  arn:aws:execute-api:region:account:api-id/stage/method/resource
-// Output format: arn:aws:execute-api:region:account:api-id/*
-func buildResourceArn(methodArn string) string {
-	// Allow all routes on this API once authenticated at $connect
-	parts := splitN(methodArn, ":", 6)
-	if len(parts) < 6 {
-		return methodArn
-	}
-	apiParts := splitN(parts[5], "/", 2)
-	return fmt.Sprintf("%s:%s:%s:%s:%s:%s/*", parts[0], parts[1], parts[2], parts[3], parts[4], apiParts[0])
-}
-
-func splitN(s, sep string, n int) []string {
-	result := make([]string, 0, n)
-	for i := 0; i < n-1; i++ {
-		idx := indexOf(s, sep)
-		if idx < 0 {
-			break
-		}
-		result = append(result, s[:idx])
-		s = s[idx+len(sep):]
-	}
-	result = append(result, s)
-	return result
-}
-
-func indexOf(s, substr string) int {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return i
-		}
-	}
-	return -1
-}
-
 func main() {
+	cfg, err := config.LoadDefaultConfig(context.Background())
+	if err != nil {
+		log.Fatal("ws-authorizer: AWS configuration unavailable")
+	}
+	cloudFrontOrigin = newOriginVerifier(os.Getenv("WS_ORIGIN_SECRET_ARN"), secretsmanager.NewFromConfig(cfg))
 	lambda.Start(handler)
 }

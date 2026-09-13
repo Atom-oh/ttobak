@@ -180,6 +180,16 @@ func (m *mockHandlerAccountRepo) GetShare(_ context.Context, sharedToID, meeting
 	cp := *sh
 	return &cp, nil
 }
+
+func (m *mockHandlerAccountRepo) GetMeetingPublication(_ context.Context, ownerID, meetingID string) (*model.Meeting, error) {
+	meeting := m.meetings[meetingID]
+	if meeting == nil || meeting.UserID != ownerID {
+		return nil, nil
+	}
+	cp := *meeting
+	return &cp, nil
+}
+
 func (m *mockHandlerAccountRepo) DeleteShareIfAccountOrigin(_ context.Context, accountID, sharedToID, meetingID string) error {
 	if err, ok := m.shareOpErr[meetingID]; ok {
 		return err

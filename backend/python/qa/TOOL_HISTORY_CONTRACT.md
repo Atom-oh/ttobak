@@ -1,9 +1,9 @@
 # Read-only tool history contract
 
-Code checked: 2026-09-13. `tool_history.py` and `session_provenance.py` are
-implemented but not wired into the active handler. Their use requires the
-current-source policy in [ADR-042](../../../docs/decisions/ADR-042-current-source-qa-and-history.md)
-and the staged [strict account callbacks](ACCOUNT_READS_CONTRACT.md).
+For handler registration and deployment acceptance status, see
+[SOURCE_CONTRACT.md](SOURCE_CONTRACT.md). Use the current-source policy in
+[ADR-042](../../../docs/decisions/ADR-042-current-source-qa-and-history.md)
+and [strict account callbacks](ACCOUNT_READS_CONTRACT.md).
 
 ## Host integration
 
