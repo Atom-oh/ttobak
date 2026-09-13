@@ -615,6 +615,35 @@ class RoleReviewTests(unittest.TestCase):
         colored = ["-----BEGIN PRI\x1b[31mVATE KEY-----", "SYNTHETIC_PRIVATE_BODY", "-----END PRIVATE KEY-----"]
         self.assertNotIn("SYNTHETIC_PRIVATE_BODY", json.dumps(role_review.scrub(colored)))
 
+    def test_pem_record_arrays_are_masked_before_json_and_quote_decoding(self):
+        records = [{"line": "KEEP_BEFORE"}, {"line": "-----BEGIN PRIVATE KEY-----"},
+                   {"line": "SYNTHETIC_PRIVATE_BODY"}, {"line": "-----END PRIVATE KEY-----"},
+                   {"line": "KEEP_AFTER"}]
+        serialized = json.dumps(records)
+        cases = [serialized, json.dumps({"nested": records, "public": "KEEP_AFTER"}),
+                 json.dumps(serialized), json.dumps({"nested": serialized}),
+                 "Quoted: " + json.dumps(serialized)]
+        for index, evidence in enumerate(cases):
+            with self.subTest(shape=index):
+                clean = role_review.scrub(evidence)
+                self.assertNotIn("SYNTHETIC_PRIVATE_BODY", clean)
+                self.assertIn("KEEP_AFTER", clean)
+                if index < 4:
+                    json.loads(clean)
+                self.work = self.root / f"pem-record-array-{index}"
+                self.prepare()
+                response = self.response("codex", findings=[{
+                    "severity": "MINOR", "path": FRONTEND, "condition": "On structured PEM evidence",
+                    "evidence": evidence,
+                }])
+                self.record("codex", raw=scrub_raw(json.dumps(response)))
+                self.record("claude-self")
+                self.cli("aggregate", "--work", self.work)
+                for name in ("slot/codex-result.json", "role-summary.json", "deterministic-review.md"):
+                    published = (self.work / name).read_text()
+                    self.assertNotIn("SYNTHETIC_PRIVATE_BODY", published)
+                    self.assertIn("KEEP_AFTER", published)
+
     def test_concatenated_pem_literals_are_redacted_before_fragments(self):
         begin, body, end = "-----BEGIN PRIVATE KEY-----", "SYNTHETIC_PRIVATE_BODY", "-----END PRIVATE KEY-----"
         complete = 'const pem = ' + " + ".join(json.dumps(s) for s in (begin, body, end)) + "; KEEP_AFTER"
