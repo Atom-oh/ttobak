@@ -7,6 +7,7 @@ on:
       - '.claude/agents/**'
       - 'scripts/docs/**'
       - 'scripts/pr-review/**'
+      - 'tests/**'
       - 'backend/cmd/api/main.go'
       - '.github/workflows/pr-review.yml'
       - '.github/workflows/test-docs-review.yml'
@@ -17,6 +18,7 @@ on:
       - '.claude/agents/**'
       - 'scripts/docs/**'
       - 'scripts/pr-review/**'
+      - 'tests/**'
       - 'backend/cmd/api/main.go'
       - '.github/workflows/pr-review.yml'
       - '.github/workflows/test-docs-review.yml'
@@ -45,6 +47,8 @@ jobs:
           python3 -m unittest discover -s scripts/docs -p 'test_*.py' -v
       - name: Exercise review prompts without external AI calls
         run: python3 -m unittest discover -s scripts/pr-review -p 'test_*.py' -v
+      - name: Exercise review panel with local CLI stubs
+        run: bash tests/run-all.sh
       - name: Validate review shell scripts and timeout policy
         run: |
           for script in scripts/pr-review/*.sh; do bash -n "$script"; done
