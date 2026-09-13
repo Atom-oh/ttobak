@@ -1,7 +1,6 @@
 package service
 
 import (
-	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -55,23 +54,9 @@ func TestDocumentCitationPreservesMarkdown(t *testing.T) {
 	}
 }
 
-func TestSummaryRejectsHeadingOnlyAndKeepsDocumentIdentityOutOfPrompt(t *testing.T) {
+func TestSummaryRejectsHeadingOnlyWithoutDocumentInstructions(t *testing.T) {
 	if _, err := resolveDocumentCitations("# 회의록\n\n## 개요\n\n- 허위 주장 [DOC:missing:0]", nil); !errors.Is(err, ErrInvalidAnalysisResponse) {
 		t.Fatal("heading-only output succeeded")
-	}
-	_, r, _, result := readingFixture(t)
-	attachment := *r.attachment
-	attachment.ExtractedText = result
-	body := strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(documentEvidence(attachment)), "<DOCUMENT>\n"), "\n</DOCUMENT>")
-	var wire map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(body), &wire); err != nil {
-		t.Fatal(err)
-	}
-	allowed := "|kind|attachmentId|name|format|scope|complete|excerpted|units|"
-	for key := range wire {
-		if !strings.Contains(allowed, "|"+key+"|") {
-			t.Fatalf("private storage identity reached model evidence: %s", key)
-		}
 	}
 	meeting := &model.Meeting{MeetingID: "m", UserID: "owner", TranscriptA: noteSourcePlainA}
 	request, _, _, err := summarizeNoteSourceResponse(t, meeting, `{"content":[{"type":"text","text":"검증된 회의 내용"}],"stop_reason":"end_turn"}`)

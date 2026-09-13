@@ -13,6 +13,8 @@ import (
 
 const MaxSummaryRetries = 2
 
+var ErrSummaryRetryBusy = errors.New("summary retry claim is active")
+
 func (r *DynamoDBRepository) summaryRetryUpdate(ctx context.Context, owner, id string, update expression.UpdateBuilder, condition expression.ConditionBuilder) error {
 	op, err := analysisUpdate(r.tableName, meetingKey(owner, id), update, condition)
 	if err != nil {
@@ -37,7 +39,14 @@ func (r *DynamoDBRepository) ClaimSummaryRetry(ctx context.Context, owner, id st
 		Set(expression.Name("updatedAt"), expression.Value(claim)).Add(expression.Name("summaryRetryAttempts"), expression.Value(1))
 	err := r.summaryRetryUpdate(ctx, owner, id, update, condition)
 	if errors.Is(err, ErrConditionFailed) {
-		return "", r.ExpireSummaryRetry(ctx, owner, id)
+		if err := r.ExpireSummaryRetry(ctx, owner, id); err != nil {
+			return "", err
+		}
+		current, err := r.MetadataView().GetMeeting(ctx, owner, id)
+		if err == nil && current != nil && current.Status == model.StatusSummarizing && current.SummaryRetryPending {
+			return "", ErrSummaryRetryBusy
+		}
+		return "", err
 	}
 	if err != nil {
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
@@ -90,7 +99,9 @@ func (r *DynamoDBRepository) ReleaseSummaryRetryClaim(ctx context.Context, owner
 	}
 	// A different lifecycle state may retain our claim; leave that state intact.
 	condition := owned.And(expression.AttributeNotExists(expression.Name("status")).Or(expression.Name("status").NotEqual(expression.Value(model.StatusSummarizing))))
-	err := r.summaryRetryUpdate(ctx, owner, id, expression.Remove(expression.Name("summarizeRetryClaimedAt")), condition)
+	update := expression.Remove(expression.Name("summarizeRetryClaimedAt")).
+		Set(expression.Name("summaryRetryPending"), expression.Value(false))
+	err := r.summaryRetryUpdate(ctx, owner, id, update, condition)
 	if errors.Is(err, ErrConditionFailed) {
 		return nil // a different claim or deletion owns the row
 	}

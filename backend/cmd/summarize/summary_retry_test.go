@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ttobak/backend/internal/model"
+	"github.com/ttobak/backend/internal/repository"
 )
 
 type retryStoreFixture struct {
@@ -13,6 +14,7 @@ type retryStoreFixture struct {
 	claimed             bool
 	claims, reads       int
 	readErr, releaseErr error
+	claimErr            error
 	released            string
 	releaseContextErr   error
 }
@@ -22,7 +24,19 @@ func (s *retryStoreFixture) ClaimSummaryRetry(context.Context, string, string) (
 	if s.claimed {
 		return "owned-claim", nil
 	}
-	return "", nil
+	return "", s.claimErr
+}
+
+func TestSummaryRetryBusyKeepsRedelivery(t *testing.T) {
+	store := &retryStoreFixture{claimErr: repository.ErrSummaryRetryBusy}
+	handled, err := resumeSummaryRetry(context.Background(), &model.Meeting{UserID: "owner", MeetingID: "m",
+		Status: model.StatusSummarizing, SummaryRetryPending: true}, store, func(context.Context, *model.Meeting, string) error {
+		t.Fatal("busy claim reached generation")
+		return nil
+	})
+	if !handled || !errors.Is(err, repository.ErrSummaryRetryBusy) || store.reads != 0 || store.released != "" {
+		t.Fatal(handled, err, store)
+	}
 }
 func (s *retryStoreFixture) ReleaseSummaryRetryClaim(ctx context.Context, _, _ string, claim string) error {
 	s.released = claim
