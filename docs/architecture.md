@@ -133,7 +133,9 @@ Phase 2(2026-09-03, ADR-035)부터 프로덕션 화자분리는 pyannote 4.x com
 
 인증된 `/api/meetings/{id}/reading` 조회는 응답 직렬화 전에 요청한 구간으로 제한합니다. 메모·권한·액션 상태 조회에는 전사문을 읽지 않는 metadata view를 사용하며, 전사문 조회는 인가 후 선택한 원문과 후보 구간만 읽습니다. 각 페이지에서 현재 권한과 내용 revision을 확인합니다([API 계약](API-SPEC.md)).
 
-문서 파서와 후속 워커의 격리·실패·배포 조건은 [ADR-039](decisions/ADR-039-meeting-document-extraction.md)에 기록했습니다. 현재 파서만 구현되며 자동 처리 연결은 후속 단계입니다.
+문서 추출 워커는 검증된 첨부 실행을 비동기로 처리합니다. 파서·네트워크·원본 검증 경계와 단계별 활성화는 [ADR-039](decisions/ADR-039-meeting-document-extraction.md)에 기록했습니다.
+
+기존 KB 바이너리는 `manual-kb/v1/`(소유자 전용)·`shared-kb/v1/`(인증된 공유) snapshot으로 준비합니다. `INDEXING_MODE=manual-only`는 원본·회의 export를 보존하며 전체 S3 동기화만 사용합니다. Snapshot 검증과 strict QA runtime 배포 후 `all`로 전환해 canonical 색인을 켭니다([ADR-038 bootstrap 확장](decisions/ADR-038-canonical-note-indexing.md)).
 
 ### 아키텍처 결정 기록 (ADR)
 
@@ -174,7 +176,9 @@ Phase 2(2026-09-03, ADR-035)부터 프로덕션 화자분리는 pyannote 4.x com
 - [ADR-035: pyannote 4 화자분리와 ASR 의존성 고정](decisions/ADR-035-diarization-pyannote4-community1-asr-pins.md) (승인됨)
 - [ADR-036: 어카운트 계층과 미팅 필터](decisions/ADR-036-account-hierarchy-and-meeting-filters.md) (승인됨)
 - [ADR-037: 조건부 전사문 수정을 위한 불변 spill](decisions/ADR-037-immutable-spills-for-conditional-transcript-writes.md) (승인됨)
+- [ADR-038: 원본 기반 노트 색인](decisions/ADR-038-canonical-note-indexing.md) (승인됨, 자동 실행 전 통합 단계)
 - [ADR-039: 회의 문서 텍스트 추출](decisions/ADR-039-meeting-document-extraction.md) (승인됨)
+- [ADR-042: 현재 원본 Q&A와 대화 이력](decisions/ADR-042-current-source-qa-and-history.md) (승인됨, 런타임 연결 준비 중)
 
 ### 운영
 
@@ -257,7 +261,9 @@ Store action extraction state in a separate analysis row. Route authorized edito
 
 Authenticated `/api/meetings/{id}/reading` bounds the requested section before response serialization. Notes, authorization and action-state reads use metadata views without transcript hydration; transcript reads load only the chosen text and candidate segments after authorization. Recheck current access and content revision on every page ([API contract](API-SPEC.md)).
 
-Parser isolation, failure policy and planned worker rollout are recorded in [ADR-039](decisions/ADR-039-meeting-document-extraction.md). Only the parser is implemented in this slice.
+The asynchronous document worker consumes validated attachment runs. Parser, network, source checks and staged activation are documented in [ADR-039](decisions/ADR-039-meeting-document-extraction.md).
+
+Existing KB binaries bootstrap into owner-isolated `manual-kb/v1/` and authenticated-shared `shared-kb/v1/` snapshots. `INDEXING_MODE=manual-only` preserves originals and meeting exports while using full S3 sync. Enable all-mode/canonical indexing only after snapshot verification and strict QA runtime deployment ([ADR-038 extension](decisions/ADR-038-canonical-note-indexing.md)).
 
 ### Architecture Decision Records (ADR)
 
@@ -298,7 +304,9 @@ Parser isolation, failure policy and planned worker rollout are recorded in [ADR
 - [ADR-035: Diarization with pyannote 4 and pinned ASR dependencies](decisions/ADR-035-diarization-pyannote4-community1-asr-pins.md) (Accepted)
 - [ADR-036: Account Hierarchy and Meeting Filters](decisions/ADR-036-account-hierarchy-and-meeting-filters.md) (Accepted)
 - [ADR-037: Immutable Spills for Conditional Transcript Writes](decisions/ADR-037-immutable-spills-for-conditional-transcript-writes.md) (Accepted)
+- [ADR-038: Canonical Note Indexing](decisions/ADR-038-canonical-note-indexing.md) (Accepted, activation pending)
 - [ADR-039: Meeting Document Text Extraction](decisions/ADR-039-meeting-document-extraction.md) (Accepted)
+- [ADR-042: Current-source Q&A and History](decisions/ADR-042-current-source-qa-and-history.md) (Accepted, runtime integration staged)
 
 ### Operations
 

@@ -13,6 +13,9 @@ import { WhisperStack } from '../lib/whisper-stack';
 import { WebSearchGatewayStack } from '../lib/web-search-gateway-stack';
 
 const app = new cdk.App();
+// Prepare existing KB snapshots before the current-source QA cutover.
+const knowledgeIndexingMode: 'manual-only' | 'all' = 'manual-only';
+const knowledgeIndexScheduleEnabled = true;
 
 // Environment configuration (ap-northeast-2 recommended for Korean users)
 const env = {
@@ -75,6 +78,7 @@ const aiStack = new AiStack(app, 'TtobakAiStack', {
   webSearchGatewayArn: webSearchGatewayStack.gateway.gatewayArn,
   researchAgentExecutionRoleArn,
   knowledgeBaseId: knowledgeStack.knowledgeBaseId,
+  indexingMode: knowledgeIndexingMode,
 });
 aiStack.addDependency(storageStack);
 aiStack.addDependency(knowledgeStack);
@@ -116,6 +120,8 @@ const gatewayStack = new GatewayStack(app, 'TtobakGatewayStack', {
   table: storageStack.table,
   kbBucket: knowledgeStack.kbBucket,
   knowledgeBaseId: knowledgeStack.knowledgeBaseId,
+  indexingMode: knowledgeIndexingMode,
+  indexScheduleEnabled: knowledgeIndexScheduleEnabled,
   dataSourceId: knowledgeStack.dataSourceId,
   websocketRole: aiStack.websocketRole,
   wsAuthorizerRole: aiStack.wsAuthorizerRole,
@@ -125,6 +131,7 @@ const gatewayStack = new GatewayStack(app, 'TtobakGatewayStack', {
   agentCoreRuntimeArn,
   researchWorkerRole: aiStack.researchWorkerRole,
   convertDocRole: aiStack.convertDocRole,
+  enableDocumentExtraction: true,
   simRole: aiStack.simRole,
   simCodeInterpreterId: aiStack.simCodeInterpreter.codeInterpreterId,
   // Same pre-existing VPC WhisperStack uses (ec2.Vpc.fromLookup) --

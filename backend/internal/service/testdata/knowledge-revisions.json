@@ -1,0 +1,32 @@
+[
+  {
+    "sourceBucket": "knowledge",
+    "sourceKey": "kb/owner/123_notes.pdf",
+    "sourceETag": "\"etag-v1\"",
+    "sourceVersionId": "",
+    "sourceSize": 123,
+    "resourceId": "229c6ceb61becda20b8c3ebbb141aa84a198a37b7c077997e7f6121180127a59",
+    "sourceRevision": "51de9ab32fdc34b46e3072398bbb0938a31c421ba0a560b590e6aba90c23490c",
+    "indexSchema": "manual-kb-v1"
+  },
+  {
+    "sourceBucket": "knowledge",
+    "sourceKey": "kb/owner/456_설계안.docx",
+    "sourceETag": "\"etag-v2\"",
+    "sourceVersionId": "opaque+/=",
+    "sourceSize": 4567,
+    "resourceId": "1fee4e59a2be99262b12e8bfe5b1e6ef73677c824c47ae62f1b2e488256ebe75",
+    "sourceRevision": "ca5abc4a4e173156ed551474f3733dadfb625c50844a92dc452da76abb7b0440",
+    "indexSchema": "manual-kb-v1"
+  },
+  {
+    "indexSchema": "shared-kb-v1",
+    "sourceBucket": "knowledge",
+    "sourceKey": "shared/reference/설계.docx",
+    "sourceETag": "\"shared-etag\"",
+    "sourceVersionId": "opaque+/=",
+    "sourceSize": 321,
+    "resourceId": "3f152abfd9a20408d9730b560ba70cda0a27ddac0aba639f813a51c4db11e9e6",
+    "sourceRevision": "479a56ebe83e11b7bc0856f2f6e3d759621f75fa85df8ffcb7c4491ca32d33d0"
+  }
+]

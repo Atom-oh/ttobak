@@ -60,6 +60,7 @@ export function QAPanel({ meetingId }: QAPanelProps) {
                 ...entry,
                 answer: response.answer,
                 sources: response.sources,
+                sourceDetails: response.sourceDetails,
                 usedKB: response.usedKB,
                 usedDocs: response.usedDocs,
                 toolsUsed: response.toolsUsed,
@@ -113,6 +114,7 @@ export function QAPanel({ meetingId }: QAPanelProps) {
               question={entry.question}
               answer={entry.answer}
               sources={entry.sources}
+              sourceDetails={entry.sourceDetails}
               usedKB={entry.usedKB}
               usedDocs={entry.usedDocs}
               toolsUsed={entry.toolsUsed}

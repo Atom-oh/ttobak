@@ -14,6 +14,7 @@ export interface WebSocketMessage {
   sessionId?: string;
   answer?: string;
   sources?: string[];
+  sourceDetails?: import('@/types/meeting').QASourceDetail[];
   usedKB?: boolean;
   usedDocs?: boolean;
   toolsUsed?: string[];

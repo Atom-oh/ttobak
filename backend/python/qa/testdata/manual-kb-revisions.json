@@ -1,0 +1,20 @@
+[
+  {
+    "sourceBucket": "knowledge",
+    "sourceKey": "kb/owner/123_notes.pdf",
+    "sourceETag": "\"etag-v1\"",
+    "sourceVersionId": "",
+    "sourceSize": 123,
+    "resourceId": "229c6ceb61becda20b8c3ebbb141aa84a198a37b7c077997e7f6121180127a59",
+    "sourceRevision": "51de9ab32fdc34b46e3072398bbb0938a31c421ba0a560b590e6aba90c23490c"
+  },
+  {
+    "sourceBucket": "knowledge",
+    "sourceKey": "kb/owner/456_설계안.docx",
+    "sourceETag": "\"etag-v2\"",
+    "sourceVersionId": "opaque+/=",
+    "sourceSize": 4567,
+    "resourceId": "1fee4e59a2be99262b12e8bfe5b1e6ef73677c824c47ae62f1b2e488256ebe75",
+    "sourceRevision": "ca5abc4a4e173156ed551474f3733dadfb625c50844a92dc452da76abb7b0440"
+  }
+]

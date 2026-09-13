@@ -113,6 +113,38 @@ class SafetyTests(unittest.TestCase):
         self.assertEqual(result["units"][0]["location"]["slide"], 1)
         self.assertNotIn("contact@example", str(result))
 
+    def test_chart_workbook_is_ignored_without_discarding_slide_text(self):
+        chart_ns = "http://schemas.openxmlformats.org/drawingml/2006/chart"
+        parts = pptx_parts()
+        parts["ppt/charts/chart1.xml"] = f'<c:chartSpace xmlns:c="{chart_ns}"><c:chart/></c:chartSpace>'
+        parts["ppt/charts/_rels/chart1.xml.rels"] = f'<Relationships xmlns="{REL}"><Relationship Id="data" Type="{R}/package" Target="../embeddings/data.xlsx"/></Relationships>'
+        # The embedded bytes are never parsed, fetched or emitted.
+        parts["ppt/embeddings/data.xlsx"] = b"UNREAD-WORKBOOK-CONTENT"
+        result = extract_bytes(archive(parts), "pptx")
+        self.assertEqual(result["status"], "partial", result)
+        self.assertEqual([u["text"] for u in result["units"]], ["먼저 슬라이드😀", "나중 슬라이드"])
+        self.assertIn("EMBEDDED_WORKBOOK_NOT_EXTRACTED", str(result["warnings"]))
+        self.assertNotIn("UNREAD-WORKBOOK-CONTENT", str(result))
+        parts["ppt/charts/_rels/chart1.xml.rels"] = parts["ppt/charts/_rels/chart1.xml.rels"].replace(
+            f'Type="{R}/package"', f'Type="{R}/oleObject"')
+        self.failed(archive(parts), "pptx")
+
+    def test_docx_tracked_move_and_hyphens_preserve_current_text(self):
+        parts = docx_parts()
+        parts["word/document.xml"] = f'''<w:document xmlns:w="{W}"><w:body><w:p>
+        <w:moveFrom><w:r><w:t>old text</w:t></w:r></w:moveFrom>
+        <w:moveTo><w:r><w:t>us</w:t><w:noBreakHyphen/><w:t>east</w:t><w:softHyphen/><w:t>1</w:t></w:r></w:moveTo>
+        </w:p></w:body></w:document>'''
+        result = extract_bytes(archive(parts), "docx")
+        self.assertEqual(result["units"][0]["text"], "us‑east­1", result)
+
+    def test_both_xml_false_spellings_mark_hidden_slides(self):
+        for value in ["0", "false"]:
+            parts = pptx_parts()
+            parts["ppt/slides/slide10.xml"] = parts["ppt/slides/slide10.xml"].replace("<p:sld ", f'<p:sld show="{value}" ')
+            result = extract_bytes(archive(parts), "pptx")
+            self.assertTrue(result["units"][0]["location"]["hidden"], result)
+
     def test_entities_even_in_unreferenced_uppercase_xml(self):
         for declaration in ['<!ENTITY x "boom">', '<!ENTITY x SYSTEM "file:///etc/passwd">']:
             parts = docx_parts()
