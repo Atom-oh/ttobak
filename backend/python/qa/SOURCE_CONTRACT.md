@@ -18,6 +18,7 @@ record deployed consumer acceptance separately.
 | `source_context.py` | Fresh metadata authorization before bounded S3 reads pinned to ETag/version. |
 | `attachment_context.py` | Authorize ATTACH/ATTEXT; verify immutable result identity, original ETag, limits and continuation. Partial/retained results stay explicit, without audio timestamps. |
 | `indexed_retrieval.py` | Enumerate authorized identities, use current saved text, and require canonical revision/S3 bindings for binary excerpts. Legacy meeting exports supply identities only. |
+| `canonical_selection.py` | Resolve exact canonical resource IDs through current authorized discovery, filter provider candidates to the selected revision, and retain file-byte validation. IDs do not grant access. |
 | `manual_kb.py` | Validate private/shared binary snapshots and current originals; unbound old chunks are not evidence. Missing snapshots are pending; read errors propagate. |
 | `source_access.py` | Compose injected readers/callbacks into source contexts/search with dependencies; create no AWS clients. |
 | `source_tools.py` | Define/format document, attachment and legacy-text tools for authenticated consumers. |
