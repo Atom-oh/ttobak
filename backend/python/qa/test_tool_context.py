@@ -138,3 +138,7 @@ class TestToolContext(_SourceFixture, unittest.TestCase):
         self.assertEqual(state['toolHistoryCoverage'], [
             {'tool': 'search_knowledge_base', 'complete': False, 'reason': 'DEPENDENCY_LIMIT'}])
         validate_sources(state, lambda dep: self.access._source_is_current('reader', dep))
+        # Capacity handling must not hide a changed revision for an existing key.
+        self.table.items[('USER#reader', 'DOC#old-0')]['content'] = 'CHANGED_EXISTING_SOURCE'
+        with self.assertRaisesRegex(RuntimeError, 'Source changed'):
+            context['retrieve_from_kb']('CHANGED_EXISTING_SOURCE')
