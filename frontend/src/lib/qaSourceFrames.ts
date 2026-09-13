@@ -22,6 +22,7 @@ export class QASourceFrames {
     return {
       type: 'answer_error',
       sessionId,
+      code: 'SOURCE_FRAMES_INVALID',
       error: '출처 정보를 모두 수신하지 못했습니다. 답변이 완료되지 않았습니다.',
     };
   }

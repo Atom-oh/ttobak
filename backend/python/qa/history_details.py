@@ -13,9 +13,9 @@ FIELDS = frozenset((
     'uri', 'resourceKind', 'resourceId', 'sourcePK', 'sourceSK', 'sourceRevision',
     'title', 'titleTruncated', 'contentSource', 'sourceBucket', 'sourceKey', 'ownerId',
     'visibility', 'partial', 'filePending', 'migrationStatus', 'meetingId', 'attachmentId',
-    'locations', 'attempt', 'result', 'usingPreviousResult',
+    'locations', 'attempt', 'result', 'usingPreviousResult', 'matchedIndexedText',
 ))
-BOOL_FIELDS = frozenset(('titleTruncated', 'partial', 'filePending', 'usingPreviousResult'))
+BOOL_FIELDS = frozenset(('titleTruncated', 'partial', 'filePending', 'usingPreviousResult', 'matchedIndexedText'))
 NESTED_FIELDS = frozenset(('locations', 'attempt', 'result'))
 
 
@@ -48,6 +48,8 @@ def identity_detail(dependency, kb_bucket):
         detail.update(resourceKind='sharedKbDocument' if shared else 'manualKbDocument',
                       resourceId=hashlib.sha256(key.encode()).hexdigest(),
                       uri='s3://' + kb_bucket + '/' + key, title=key.rsplit('/', 1)[-1][:256])
+        if len(key.rsplit('/', 1)[-1]) > 256:
+            detail['titleTruncated'] = True
     elif 'legacyURI' in dependency:
         detail.update(resourceKind='legacyText', uri=dependency['legacyURI'])
     elif 'readOnlyTool' in dependency:

@@ -181,7 +181,9 @@ are allowed. All frames are built and size-checked before the first write.
 The frontend `QASourceFrames` assembler validates sequence, session, batch/count
 and aggregate size, and exposes the answer only with the complete original arrays.
 Missing, duplicate, mixed-session or oversized attribution produces an explicit
-error. This is application framing, not silent source truncation; direct
+error and closes that socket before the UI can submit another question, detaching
+its message callback so late frames cannot fail the next request.
+This is application framing, not silent source truncation; direct
 WebSocket clients opt in with `sourceFramesVersion:1` on `ask_live`; the Go
 relay forwards only that supported version. Older or unknown-version clients
 retain the existing explicit size error instead of receiving incomplete arrays.
