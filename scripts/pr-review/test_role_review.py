@@ -556,6 +556,64 @@ class RoleReviewTests(unittest.TestCase):
                     for item in value.values():
                         self.assertIn(item, published)
 
+    def assert_private_evidence_redacted(self, evidence, marker, context):
+        self.prepare()
+        text = evidence if isinstance(evidence, str) else json.dumps(evidence)
+        self.record("codex", self.response("codex", findings=[{
+            "severity": "MINOR", "path": FRONTEND,
+            "condition": "When diagnostics contain credentials", "evidence": text,
+        }]))
+        self.record("claude-self")
+        self.cli("aggregate", "--work", self.work)
+        for name in ("slot/codex-result.json", "role-summary.json", "deterministic-review.md"):
+            published = (self.work / name).read_text()
+            self.assertNotIn(marker, published)
+            self.assertIn(context, published)
+
+    def test_structured_path_credentials_keep_whole_value_redaction(self):
+        for index, key in enumerate(("database/password", r"database\password", "/config/database/api_key")):
+            value = {key: "SYNTHETIC_PRIVATE_PATH", "public": "KEEP_CONTEXT"}
+            for shape, evidence in enumerate((
+                    value, {"nested": [value]}, json.dumps(value),
+                    "Quoted: " + json.dumps(json.dumps(value)))):
+                with self.subTest(key=key, shape=shape):
+                    self.work = self.root / f"path-value-{index}-{shape}"
+                    self.assert_private_evidence_redacted(evidence, "SYNTHETIC_PRIVATE_PATH", "KEEP_CONTEXT")
+        long_key = "segment/" * 10000 + "password"
+        self.assertNotIn("SYNTHETIC_PRIVATE_PATH", self.bounded_scrub(
+            json.dumps({long_key: "SYNTHETIC_PRIVATE_PATH"}),
+        ))
+
+    def test_pem_line_arrays_redact_whole_keys_and_preserve_ordinary_strings(self):
+        for index, kind in enumerate(("", "RSA ", "EC ", "OPENSSH ")):
+            lines = ["KEEP_BEFORE", f"-----BEGIN {kind}PRIVATE KEY-----",
+                     "SYNTHETIC_PRIVATE_BODY", f"-----END {kind}PRIVATE KEY-----", "KEEP_AFTER"]
+            for shape, evidence in enumerate((lines, {"nested": lines}, json.dumps(lines),
+                                              "Quoted: " + json.dumps(json.dumps(lines)))):
+                with self.subTest(kind=kind, shape=shape):
+                    self.work = self.root / f"pem-array-{index}-{shape}"
+                    self.assert_private_evidence_redacted(evidence, "SYNTHETIC_PRIVATE_BODY", "KEEP_AFTER")
+            clean = role_review.scrub(lines)
+            self.assertEqual(len(clean), len(lines))
+            self.assertEqual(clean[0], "KEEP_BEFORE")
+            self.assertEqual(clean[-1], "KEEP_AFTER")
+        ordinary = ["KEEP_ONE", "KEEP_TWO", "a line without credential markers"]
+        self.assertEqual(role_review.scrub(ordinary), ordinary)
+        partial = ["KEEP_BEFORE", "-----BEGIN PRIVATE KEY-----", "SYNTHETIC_PRIVATE_BODY"]
+        self.assertNotIn("SYNTHETIC_PRIVATE_BODY", json.dumps(role_review.scrub(partial)))
+        inline = ["KEEP_BEFORE -----BEGIN PRIVATE KEY-----", "SYNTHETIC_PRIVATE_BODY",
+                  "-----END PRIVATE KEY----- KEEP_AFTER"]
+        self.assertIn("KEEP_AFTER", json.dumps(role_review.scrub(inline)))
+        self.assertNotIn("SYNTHETIC_PRIVATE_BODY", json.dumps(role_review.scrub(inline)))
+        repeated = ["KEEP_BEFORE -----BEGIN PRIVATE KEY-----x-----END PRIVATE KEY----- "
+                    "KEEP_MIDDLE -----BEGIN RSA PRIVATE KEY-----", "SYNTHETIC_PRIVATE_BODY",
+                    "-----END RSA PRIVATE KEY----- KEEP_AFTER"]
+        clean = json.dumps(role_review.scrub(repeated))
+        self.assertIn("KEEP_MIDDLE", clean)
+        self.assertNotIn("SYNTHETIC_PRIVATE_BODY", clean)
+        colored = ["-----BEGIN PRI\x1b[31mVATE KEY-----", "SYNTHETIC_PRIVATE_BODY", "-----END PRIVATE KEY-----"]
+        self.assertNotIn("SYNTHETIC_PRIVATE_BODY", json.dumps(role_review.scrub(colored)))
+
     def test_structured_key_and_diff_formats_have_bounded_processing(self):
         for separator in (".", ":", "-", "_"):
             with self.subTest(separator=separator):

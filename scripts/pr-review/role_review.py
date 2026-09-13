@@ -742,6 +742,21 @@ CREDENTIAL_WORD = (
 SENSITIVE_KEY = re.compile(
     r"(?i:(?=[A-Za-z0-9_.:-]*" + CREDENTIAL_WORD + r")[A-Za-z0-9_.:-]+)\Z"
 )
+PEM_MARKER = re.compile(r"-----(BEGIN|END) [A-Z ]*PRIVATE KEY-----")
+
+
+def sensitive_key(value):
+    return isinstance(value, str) and any(
+        SENSITIVE_KEY.fullmatch(part.group())
+        for part in re.finditer(r"[A-Za-z0-9_.:-]+", value)
+    )
+
+
+def strip_controls(value):
+    value = re.sub(r"(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]", "", value)
+    value = re.sub(r"(?:\x1b[\]PX^_]|\x9d|\x90|\x98|\x9e|\x9f).*?(?:\x07|\x9c|\x1b\\|$)", "", value, flags=re.S)
+    value = re.sub(r"\x1b[ -/]*[0-~]", "", value)
+    return "".join(c for c in value if c in "\n\r\t" or unicodedata.category(c) not in ("Cc", "Cf", "Zl", "Zp"))
 
 
 def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
@@ -751,12 +766,31 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
     if _remaining is None:
         _remaining = [MAX_OUTPUT_BYTES]
     if isinstance(value, list):
-        return [scrub(x, _remaining, _depth + 1, _charge) for x in value]
+        result, in_pem = [], False
+        for item in value:
+            clean = scrub(item, _remaining, _depth + 1, _charge)
+            if isinstance(item, str):
+                text = strip_controls(item)
+                pieces, position = (["[REDACTED]"] if in_pem else []), 0
+                for marker in PEM_MARKER.finditer(text):
+                    if marker[1] == "BEGIN" and not in_pem:
+                        pieces.extend((text[position:marker.start()], "[REDACTED]"))
+                        in_pem = True
+                    elif marker[1] == "END" and in_pem:
+                        position, in_pem = marker.end(), False
+                if pieces:
+                    if not in_pem:
+                        pieces.append(text[position:])
+                    clean = scrub("".join(pieces), _remaining, _depth + 1, False)
+            elif in_pem:
+                clean = "[REDACTED]"
+            result.append(clean)
+        return result
     if isinstance(value, dict):
         sensitive_values = {
             field for name, field in (("name", "value"), ("headername", "headervalue"))
             if any(isinstance(k, str) and k.lower() == name and isinstance(v, str)
-                   and SENSITIVE_KEY.fullmatch(v) for k, v in value.items())
+                   and sensitive_key(v) for k, v in value.items())
         }
         result, reserved, suffix = {}, set(value), 1
         for key, item in value.items():
@@ -767,7 +801,7 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
                 clean_key = f"[REDACTED-KEY-{suffix}]"
                 suffix += 1
             hidden = isinstance(key, str) and (
-                SENSITIVE_KEY.fullmatch(key) or key.lower() in sensitive_values
+                sensitive_key(key) or key.lower() in sensitive_values
             )
             clean_item = scrub(item, _remaining, _depth + 1, _charge)
             result[clean_key] = "[REDACTED]" if hidden else clean_item
@@ -779,10 +813,7 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
         _remaining[0] -= size
     if _remaining[0] < 0:
         raise Invalid("output_byte_limit")
-    value = re.sub(r"(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]", "", value)
-    value = re.sub(r"(?:\x1b[\]PX^_]|\x9d|\x90|\x98|\x9e|\x9f).*?(?:\x07|\x9c|\x1b\\|$)", "", value, flags=re.S)
-    value = re.sub(r"\x1b[ -/]*[0-~]", "", value)
-    value = "".join(c for c in value if c in "\n\r\t" or unicodedata.category(c) not in ("Cc", "Cf", "Zl", "Zp"))
+    value = strip_controls(value)
     if _structured:
         try:
             decoded = strict_json(value)
