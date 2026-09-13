@@ -22,6 +22,7 @@ Markdown for English language and historical/current status.
 | [Onboarding](onboarding.md) | Local setup | Dependency manifests and project guide |
 | [PR review runbook](runbooks/pr-review.md) | Context delivery, evidence, latest-HEAD merge gate | Review scripts and workflow |
 | [Deployment runbook](runbooks/deployment.md) | Build/deploy/rollback constraints | Deployment workflows |
+| [WebSocket runtime](runbooks/websocket-runtime.md) | CloudFront ingress, secret rotation, real acceptance | Frontend/Gateway stacks and ws-authorizer |
 
 ## Decisions and history
 

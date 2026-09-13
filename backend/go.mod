@@ -23,6 +23,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/kms v1.50.3
 	github.com/aws/aws-sdk-go-v2/service/lambda v1.89.0
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.96.3
+	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.44.0
 	github.com/aws/aws-sdk-go-v2/service/sfn v1.40.11
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.73.0
 	github.com/aws/aws-sdk-go-v2/service/transcribe v1.54.2
