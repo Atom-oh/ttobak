@@ -222,8 +222,9 @@ ScreenCaptureKit. Report that limit instead of claiming a Mac build passed.
   current-user strict CompleteRead callbacks, fingerprints the rendered view, and
   discards the whole derived history on invalid dependencies. Oversized valid reads
   remain visible but nonreplayable; creation receipts never replay a mutation.
-  These readers/history helpers are not registered in the current handler yet.
-  Preserve REST/streaming parity when wiring them (ADR-042; QA contract docs).
+  Registration status lives in `qa/SOURCE_CONTRACT.md` and must match handler
+  imports. Helper installation alone does not wire either transport.
+  Code readiness and deployed acceptance are separate gates (ADR-042; QA contracts).
 - **Bounded meeting/MCP reads:** the authenticated reading endpoint uses
   metadata-only authorization for notes and binds continuation to source revision,
   selection and access. API JSON is capped at 14,000 encoded bytes. MCP forwards
