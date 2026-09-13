@@ -28,6 +28,8 @@ type IndexRepository interface {
 const indexLease = 20 * time.Minute // Longer than a Lambda invocation, including its final network operations.
 const indexBatchSize = 4
 const indexMemberAttempts = 3
+const indexSourceScanLimit = 100
+const indexJobPageLimit = 4
 
 type IndexingService struct {
 	repo         IndexRepository
@@ -337,12 +339,18 @@ func (s *IndexingService) deferChangingSource(ctx context.Context, key model.Ind
 }
 
 func (s *IndexingService) reconcile(ctx context.Context, control *model.IndexControl) ([]model.IndexMember, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if s.mode == IndexModeAll {
-		keys, cursor, err := s.repo.ScanIndexSources(ctx, control.SourceCursor, 25)
+		keys, cursor, err := s.repo.ScanIndexSources(ctx, control.SourceCursor, indexSourceScanLimit)
 		if err != nil {
 			return nil, err
 		}
 		for _, key := range keys {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			revision := ""
 			if source, e := s.ReadSource(ctx, key, false); e == nil {
 				revision = source.Revision
@@ -382,61 +390,81 @@ func (s *IndexingService) reconcile(ctx context.Context, control *model.IndexCon
 	if err := s.reconcileKnowledge(ctx, control); err != nil {
 		return nil, err
 	}
-	// Never advance past eligible jobs that did not fit this generation.
-	// Reading at most a batch preserves rotation even when early jobs fail forever.
-	jobs, cursor, err := s.repo.ListIndexJobs(ctx, control.JobCursor, indexBatchSize)
-	if err != nil {
-		return nil, err
-	}
+	// Skip bounded pages of unchanged/cooling-down jobs without growing the
+	// ingestion batch. Every returned job must fit if it turns out to be eligible.
 	batch := []model.IndexMember{}
-	for _, job := range jobs {
-		if !s.indexesResource(job.Resource) {
-			continue
+	jobCursor := control.JobCursor
+	for page := 0; page < indexJobPageLimit && len(batch) < indexBatchSize; page++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
-		// Known jobs also detect deleted sources and same-key S3 byte replacements.
-		source, readErr := s.ReadSource(ctx, job.Resource, false)
-		changed := readErr != nil || source.Revision != job.Revision
-		unavailable := readErr != nil && !permanentIndexSourceError(readErr)
-		if unavailable {
-			changed = false
+		remaining := indexBatchSize - len(batch)
+		jobs, cursor, err := s.repo.ListIndexJobs(ctx, jobCursor, int32(remaining))
+		if err != nil {
+			return nil, err
 		}
-		extra := false
-		if !changed && (job.State == model.IndexIndexed || job.State == model.IndexDeleted || job.State == model.IndexWaitingSource) {
-			complete, e := s.inventoryMatches(ctx, job.Resource, job.Keys)
-			if e != nil {
-				unavailable = true
-			} else {
-				changed, extra = !complete, !complete
-			}
+		if len(jobs) > remaining {
+			return nil, fmt.Errorf("%w: job page exceeded requested capacity", ErrIndexInvalid)
 		}
-		if changed && job.State != model.IndexPreparing && job.State != model.IndexWaitingSync {
-			revision := ""
-			if readErr == nil && !extra {
-				revision = source.Revision
-			}
-			if err := s.repo.RequestIndexResource(ctx, job.Resource, revision, s.now().UnixMilli()); err != nil {
+		for _, job := range jobs {
+			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
-			// Request may deliberately keep a failed job in its cooldown.
-			// Use its actual state, including any concurrent stream update.
-			current, err := s.repo.GetIndexJob(ctx, job.Resource)
-			if err != nil {
-				return nil, err
-			}
-			if current == nil {
+			if !s.indexesResource(job.Resource) {
 				continue
 			}
-			job = *current
+			// Known jobs also detect deleted sources and same-key S3 byte replacements.
+			source, readErr := s.ReadSource(ctx, job.Resource, false)
+			changed := readErr != nil || source.Revision != job.Revision
+			unavailable := readErr != nil && !permanentIndexSourceError(readErr)
+			if unavailable {
+				changed = false
+			}
+			extra := false
+			if !changed && (job.State == model.IndexIndexed || job.State == model.IndexDeleted || job.State == model.IndexWaitingSource) {
+				complete, e := s.inventoryMatches(ctx, job.Resource, job.Keys)
+				if e != nil {
+					unavailable = true
+				} else {
+					changed, extra = !complete, !complete
+				}
+			}
+			if changed && job.State != model.IndexPreparing && job.State != model.IndexWaitingSync {
+				revision := ""
+				if readErr == nil && !extra {
+					revision = source.Revision
+				}
+				if err := s.repo.RequestIndexResource(ctx, job.Resource, revision, s.now().UnixMilli()); err != nil {
+					return nil, err
+				}
+				// Request may deliberately keep a failed job in its cooldown.
+				// Use its actual state, including any concurrent stream update.
+				current, err := s.repo.GetIndexJob(ctx, job.Resource)
+				if err != nil {
+					return nil, err
+				}
+				if current == nil {
+					continue
+				}
+				job = *current
+			}
+			eligible := job.State == model.IndexPending || job.State == model.IndexWaitingSync ||
+				(job.State == model.IndexFailed && job.RetryAfter <= s.now().UnixMilli()) ||
+				(job.State == model.IndexPreparing && job.LeaseUntil <= s.now().UnixMilli()) ||
+				(unavailable && (job.State == model.IndexIndexed || job.State == model.IndexDeleted || job.State == model.IndexWaitingSource))
+			if eligible {
+				batch = append(batch, model.IndexMember{Resource: job.Resource})
+			}
 		}
-		eligible := job.State == model.IndexPending || job.State == model.IndexWaitingSync ||
-			(job.State == model.IndexFailed && job.RetryAfter <= s.now().UnixMilli()) ||
-			(job.State == model.IndexPreparing && job.LeaseUntil <= s.now().UnixMilli()) ||
-			(unavailable && (job.State == model.IndexIndexed || job.State == model.IndexDeleted || job.State == model.IndexWaitingSource))
-		if eligible && len(batch) < indexBatchSize {
-			batch = append(batch, model.IndexMember{Resource: job.Resource})
+		jobCursor = cursor
+		if cursor == "" {
+			break // Resume from the beginning on a later tick, not this walk.
 		}
 	}
-	control.JobCursor = cursor
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	control.JobCursor = jobCursor
 	return batch, nil
 }
 
