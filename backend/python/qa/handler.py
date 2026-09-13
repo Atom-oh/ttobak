@@ -15,12 +15,16 @@ from transcript_storage import resolve_transcript
 from source_context import SourceReader
 from source_access import SourceAccess
 from account_reads import StrictAccountReader
-from tool_history import CompleteRead, ToolHistory, READONLY_TOOLS
+from tool_history import CompleteRead, ToolHistory
+from tool_context import (
+    build_tool_context, track_tool_history as _track_tool_history,
+    SOURCE_HISTORY_TOOLS as SOURCE_TOOL_NAMES, PUBLIC_HISTORY_TOOLS as PUBLIC_TOOL_NAMES,
+)
 from source_revision import legacy_meeting_identity
 from attachment_context import AttachmentReader
 from indexed_retrieval import hydrate_candidates
 from session_provenance import (
-    new_source_state, remember_source, restore_messages, validate_sources, collect_detail,
+    new_source_state, restore_messages, validate_sources,
 )
 from web_search import redact_tool_input_for_log
 
@@ -52,11 +56,6 @@ KB_BUCKET_NAME = os.environ.get('KB_BUCKET_NAME', '')
 ORIGIN_VERIFY_SECRET = os.environ.get('ORIGIN_VERIFY_SECRET', '')
 RESEARCH_SFN_ARN = os.environ.get('RESEARCH_SFN_ARN', '')
 DAILY_RESEARCH_LIMIT = 5
-SOURCE_TOOL_NAMES = frozenset((
-    'search_knowledge_base', 'get_meeting_detail', 'get_document_detail',
-    'get_meeting_attachments', 'get_attachment_text', 'search_transcript', 'get_legacy_text_detail',
-))
-PUBLIC_TOOL_NAMES = frozenset(('search_web', 'search_aws_docs', 'get_aws_recommendation'))
 
 
 def _tool_history(user_id):
@@ -86,8 +85,9 @@ def _source_access():
     )
 
 
-def _source_is_current(user_id, dependency):
-    return _source_access()._source_is_current(user_id, dependency)
+def _source_is_current(user_id, dependency, source_state=None):
+    return _source_access()._source_is_current(
+        user_id, dependency, request_meeting_id=(source_state or {}).get('requestMeetingId'))
 
 
 def check_research_limit(user_id):
@@ -635,7 +635,7 @@ def load_session(session_id, user_id=None, source_state=None):
         if item:
             state = source_state if source_state is not None else new_source_state()
             messages = restore_messages(
-                item, state, lambda dep: _source_is_current(user_id, dep), tool_history=_tool_history(user_id),
+                item, state, lambda dep: _source_is_current(user_id, dep, state), tool_history=_tool_history(user_id),
                 source_covered_tools=SOURCE_TOOL_NAMES, public_tools=PUBLIC_TOOL_NAMES)
             # A failed/aborted round can persist history ending in a user-role
             # message, OR in an assistant message still holding an unresolved
@@ -898,7 +898,7 @@ def _account_research(acc_id):
     return out
 
 
-def _qa_system_messages(transcript, meeting_notes=None, meeting_id=None):
+def _qa_system_messages(transcript, meeting_notes=None, meeting_id=None, *, client_input=False):
     """Bound prompt excerpts without silently dropping independently saved notes."""
     messages = [{"text": get_system_prompt()}]
     for source, text, limit, tail in (
@@ -916,6 +916,9 @@ def _qa_system_messages(transcript, meeting_notes=None, meeting_id=None):
             'totalCharacters': len(text), 'includedCharacters': len(excerpt),
             'startCharacter': start, 'truncated': len(excerpt) < len(text),
         }
+        if source == 'meeting_context' and client_input:
+            snapshot['inputOrigin'] = 'client_live'
+            snapshot['contextPriority'] = 'Use this request input over earlier live context when corrected.'
         continuation = 'search_transcript로 전체 제공 컨텍스트를 검색하세요.'
         if meeting_id:
             snapshot['meetingId'] = meeting_id
@@ -943,81 +946,11 @@ def _qa_search_context(transcript, meeting_notes):
 
 
 def _agent_context(user_id, transcript, meeting_notes, source_state, source_details):
-    history = _tool_history(user_id)
-    context = {}
-
-    def read_source(callback, *args):
-        current = new_source_state()
-        try:
-            value = callback(*args, source_state=current, source_details=source_details)
-            for dependency in current['dependencies']:
-                remember_source(source_state, dependency)
-            if current['dependencies'] and current['replayable']:
-                context['sourceReadRecorded'] = True
-            else:
-                source_state['replayable'] = False
-            return value
-        except Exception:
-            source_state['replayable'] = False
-            raise
-
-    def create_research(uid, topic, mode):
-        if uid != user_id:
-            raise ValueError('Research caller differs from current user')
-        created = create_research_from_chat(uid, topic, mode)
-        if not created.get('error'):
-            history.research_receipt(source_state, {'topic': topic, 'mode': mode}, created)
-        return created
-
-    def retrieve(query, count=5, *, source_state, source_details):
-        results = retrieve_from_kb(query, count, user_id=user_id)
-        for result in results:
-            if result.get('dependency'):
-                remember_source(source_state, result['dependency'])
-            else:
-                source_state['replayable'] = False
-            for dependency in result.get('additionalDependencies', []):
-                remember_source(source_state, dependency)
-            if result.get('volatile'):
-                source_state['replayable'] = False
-            detail = dict(result.get('provenance') or {})
-            if detail.get('resourceKind') == 'legacyText':
-                detail['partial'] = detail.get('partial', False) or len(result.get('text', '')) > 2400
-            collect_detail(source_details, detail)
-            for detail in result.get('additionalSourceDetails', []):
-                collect_detail(source_details, detail)
-        return results
-
-    context.update({
-        "transcript": _qa_search_context(transcript, meeting_notes),
-        "retrieve_from_kb": lambda query, count=5: read_source(retrieve, query, count),
-        **history.callbacks(source_state),
-        "tool_history": history,
-        "load_meeting_context": lambda uid, mid: read_source(load_meeting_context, uid, mid),
-        "load_document_context": lambda uid, pk, did: read_source(load_document_context, uid, pk, did),
-        "load_legacy_text": lambda uid, uri, offset=0, revision=None: read_source(
-            _source_access().load_legacy_text, uid, uri, offset, revision),
-        "load_meeting_attachments": lambda uid, mid, offset=0: read_source(load_meeting_attachments, uid, mid, offset),
-        "load_attachment_text": lambda uid, mid, aid, unit=0, text=0, revision=None: read_source(
-            load_attachment_text, uid, mid, aid, unit, text, revision),
-        "create_research": create_research,
-        "check_research_limit": check_research_limit,
-        "check_web_search_limit": check_web_search_limit,
-        "user_id": user_id,
-    })
-    return context
-
-
-def _track_tool_history(source_state, tool_name, context):
-    tracked_or_public = SOURCE_TOOL_NAMES | PUBLIC_TOOL_NAMES | READONLY_TOOLS | {'start_research'}
-    if tool_name == 'search_transcript':
-        covered = source_state.get('requestContextTracked', False)
-    elif tool_name in SOURCE_TOOL_NAMES:
-        covered = context.get('sourceReadRecorded', False)
-    else:
-        covered = tool_name in tracked_or_public
-    if not covered:
-        source_state['replayable'] = False
+    return build_tool_context(
+        user_id, _qa_search_context(transcript, meeting_notes), source_state, source_details,
+        source_access=_source_access(), history=_tool_history(user_id),
+        create_research=create_research_from_chat, check_research_limit=check_research_limit,
+        check_web_search_limit=check_web_search_limit)
 
 
 def agentic_converse(messages, transcript=None, session_id=None, user_id=None, meeting_notes=None, meeting_id=None,
@@ -1029,12 +962,13 @@ def agentic_converse(messages, transcript=None, session_id=None, user_id=None, m
     tools_used = []
     sources = []
 
-    system_messages = _qa_system_messages(transcript, meeting_notes, meeting_id)
+    system_messages = _qa_system_messages(
+        transcript, meeting_notes, meeting_id, client_input=source_state.get('clientInputReceived', False))
     if source_state.get('attachmentContext'):
         system_messages.append({'text': _attachment_prompt(source_state['attachmentContext'])})
 
     for _ in range(MAX_TOOL_ROUNDS):
-        validate_sources(source_state, lambda dep: _source_is_current(user_id, dep), tool_history=context['tool_history'])
+        validate_sources(source_state, lambda dep: _source_is_current(user_id, dep, source_state), tool_history=context['tool_history'])
         try:
             resp = bedrock_runtime.converse(
                 modelId=BEDROCK_MODEL_ID,
@@ -1157,7 +1091,8 @@ def _request_meeting_context(user_id, meeting_id, supplied_context=None, *, sour
     result = _source_access()._request_meeting_context(user_id, meeting_id, supplied_context, source_state=source_state, source_details=source_details)
     if source_state is not None:
         source_state['requestContextTracked'] = bool(
-            meeting_id and not supplied_context and not result[2] and source_state['dependencies'] and source_state['replayable'])
+            not result[2] and source_state['dependencies'] and source_state['replayable']
+            and (meeting_id or source_state.get('clientInputReceived', False)))
     return result
 
 
@@ -1468,12 +1403,13 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
     sources = []
     final_answer_parts = []
 
-    system_messages = _qa_system_messages(transcript, meeting_notes, meeting_id)
+    system_messages = _qa_system_messages(
+        transcript, meeting_notes, meeting_id, client_input=source_state.get('clientInputReceived', False))
     if source_state.get('attachmentContext'):
         system_messages.append({'text': _attachment_prompt(source_state['attachmentContext'])})
 
     for _ in range(MAX_TOOL_ROUNDS):
-        validate_sources(source_state, lambda dep: _source_is_current(user_id, dep), tool_history=context['tool_history'])
+        validate_sources(source_state, lambda dep: _source_is_current(user_id, dep, source_state), tool_history=context['tool_history'])
         try:
             stream_resp = bedrock_runtime.converse_stream(
                 modelId=BEDROCK_MODEL_ID,

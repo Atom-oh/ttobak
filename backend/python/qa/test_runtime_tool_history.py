@@ -104,7 +104,7 @@ class TestRuntimeToolHistory(_QAConversationFixture, unittest.TestCase):
 
     def test_prior_source_cannot_cover_empty_failed_or_skipped_private_read(self):
         cases = [
-            ('search_knowledge_base', {'query': 'empty'}, [], False),
+            ('search_knowledge_base', {'query': 'empty'}, [], True),
             ('search_knowledge_base', {'query': 'failure'}, RuntimeError('unavailable'), False),
             ('get_document_detail', {'offset': -1}, [], False),
             ('get_meeting_detail', {'meetingId': 'missing'}, [], False),
@@ -130,11 +130,80 @@ class TestRuntimeToolHistory(_QAConversationFixture, unittest.TestCase):
                                 {'contentBlockStop': {}},
                             ]
                         model.side_effect = replies
-                    with mock.patch.object(handler, 'retrieve_from_kb',
+                    with mock.patch.object(handler.bedrock_agent_runtime, 'retrieve',
                                            side_effect=result if isinstance(result, Exception) else None,
-                                           return_value=result):
+                                           return_value={'retrievalResults': []}):
                         self.ask(transport, 'read source', meeting_id='m')
                     stored = self.table.items[('SESSION#reader#chat-readonly', 'MESSAGES')]
                     self.assertTrue(stored['sourceDependencies'], 'test needs an earlier unrelated source')
                     self.assertEqual(stored['sourceReplayable'], replayable)
                     self.assertEqual(bool(handler.load_session('chat-readonly', user_id='reader')), replayable)
+
+    def test_live_windows_preserve_both_transports_and_use_latest_growing_or_corrected_input(self):
+        initial = '가' * 8000 + ' LIVE_FIRST'
+        windows = (initial + ' LATEST_GROW', 'LATEST_CORRECTED', '나' * 8000 + ' LATEST_ROLL')
+        for transport in ('rest', 'stream'):
+            for latest in windows:
+                with self.subTest(transport=transport, latest=latest[-20:]):
+                    self.table.items.clear()
+                    self.account()
+                    self.meeting(transcriptA='SERVER_TRANSCRIPT', notes='SAVED_NOTE')
+                    model = self.replies(transport, 'search_transcript', {'keywords': 'LIVE_FIRST'})
+                    self.ask(transport, 'live question', meeting_id='m', context=initial)
+                    stored = self.table.items[('SESSION#reader#chat-readonly', 'MESSAGES')]
+                    self.assertTrue(stored['sourceReplayable'])
+                    self.ask(transport, 'follow up', meeting_id='m', context=latest)
+                    self.assertIn('PRIVATE_CHOICE', json.dumps(model.call_args.kwargs['messages']))
+                    system = json.dumps(model.call_args.kwargs['system'], ensure_ascii=False)
+                    self.assertIn(latest[-100:], system)
+                    self.assertIn('client_live', system)
+                    self.assertIn('SAVED_NOTE', system)
+                    self.assertNotIn('SERVER_TRANSCRIPT', system)
+
+    def test_live_input_never_preserves_changed_or_revoked_server_data(self):
+        for transport in ('rest', 'stream'):
+            for change in ('notes', 'revoke', 'delete'):
+                with self.subTest(transport=transport, change=change):
+                    self.table.items.clear()
+                    self.account()
+                    self.meeting(transcriptA='SERVER_TRANSCRIPT', notes='OLD_SERVER_NOTE')
+                    model = self.replies(transport, 'search_transcript', {'keywords': 'live'})
+                    self.ask(transport, 'first', meeting_id='m', context='live first input')
+                    if change == 'notes':
+                        self.table.items[('USER#owner', 'MEETING#m')]['notes'] = 'NEW_SERVER_NOTE'
+                        self.ask(transport, 'second', meeting_id='m', context='live corrected input')
+                        self.assertNotIn('PRIVATE_CHOICE', json.dumps(model.call_args.kwargs['messages']))
+                        self.assertIn('NEW_SERVER_NOTE', json.dumps(model.call_args.kwargs['system']))
+                    else:
+                        key = ('ACCOUNT#a', 'MEMBER#reader') if change == 'revoke' else ('USER#owner', 'MEETING#m')
+                        del self.table.items[key]
+                        before = model.call_count
+                        if transport == 'rest':
+                            response = handler.handle_ask('second', context='live next', meeting_id='m',
+                                                          user_id='reader', session_id='chat-readonly')
+                            self.assertEqual(response['statusCode'], 404)
+                        else:
+                            response = handler.handle_ask_stream({
+                                'question': 'second', 'context': 'live next', 'meetingId': 'm',
+                                'userId': 'reader', 'sessionId': 'chat-readonly',
+                                'connectionId': 'c', 'endpoint': 'https://synthetic.invalid'})
+                            self.assertEqual(response['status'], 'error')
+                        self.assertEqual(model.call_count, before)
+
+    def test_empty_kb_success_preserves_live_followup_and_requeries(self):
+        for transport in ('rest', 'stream'):
+            with self.subTest(transport=transport):
+                self.table.items.clear()
+                self.account()
+                self.meeting(transcriptA='SERVER_TRANSCRIPT')
+                model = self.replies(transport, 'search_knowledge_base', {'query': 'NO_MATCH'})
+                with mock.patch.object(handler.bedrock_agent_runtime, 'retrieve',
+                                       return_value={'retrievalResults': []}) as provider:
+                    self.ask(transport, 'first', meeting_id='m', context='live first')
+                    first_calls = provider.call_count
+                    self.ask(transport, 'follow up', meeting_id='m', context='live next')
+                    self.assertGreater(provider.call_count, first_calls)
+                    self.assertIn('PRIVATE_CHOICE', json.dumps(model.call_args.kwargs['messages']))
+                stored = self.table.items[('SESSION#reader#chat-readonly', 'MESSAGES')]
+                self.assertTrue(stored['sourceReplayable'])
+                self.assertTrue(any('emptySearch' in dep for dep in stored['sourceDependencies']))

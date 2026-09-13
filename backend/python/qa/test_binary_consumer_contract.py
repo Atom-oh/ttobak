@@ -282,5 +282,6 @@ class TestTransportFixture(_QAConversationFixture, _SourceFixture, unittest.Test
             with self.subTest(transport=transport):
                 self.table.items.pop(('SESSION#reader#chat-readonly', 'MESSAGES'), None)
                 model = self.replies(transport, 'list_meetings', {})
-                self.ask(transport, 'list meetings')
+                self.ask(transport, 'list meetings', context='CURRENT_CLIENT_INPUT')
                 self.assertIn('SYNTHETIC_CURRENT_TITLE', json.dumps(model.call_args.kwargs['messages']))
+                self.assertIn('CURRENT_CLIENT_INPUT', json.dumps(model.call_args.kwargs['system']))

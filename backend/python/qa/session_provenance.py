@@ -7,6 +7,7 @@ from manual_kb import shared_source_key
 from tool_history import (
     MAX_TOOL_DEPENDENCIES, is_tool_dependency, valid_tool_dependency, tool_dependency_key, covers_tool_calls,
 )
+from request_history import MAX_EMPTY_SEARCHES, is_request_dependency, valid_request_dependency, request_key
 
 MAX_SESSION_DEPENDENCIES = 128
 MAX_HISTORY_BYTES = 384 * 1024
@@ -21,6 +22,8 @@ def valid_dependency(dependency):
         return False
     if is_tool_dependency(dependency):
         return valid_tool_dependency(dependency)
+    if is_request_dependency(dependency):
+        return valid_request_dependency(dependency)
     try:
         revision = dependency.get('sourceRevision')
         if not isinstance(revision, str) or HEX_REVISION.fullmatch(revision) is None:
@@ -47,6 +50,8 @@ def valid_dependency(dependency):
 def _dependency_key(dependency):
     if is_tool_dependency(dependency):
         return tool_dependency_key(dependency)
+    if is_request_dependency(dependency):
+        return request_key(dependency)
     if 'legacyURI' in dependency:
         return ('legacy', dependency['legacyURI'])
     if 'manualKey' in dependency:
@@ -82,6 +87,7 @@ def _current(dependency, is_current, tool_history):
 def _valid_dependencies(dependencies):
     return (type(dependencies) is list and len(dependencies) <= MAX_SESSION_DEPENDENCIES
             and sum(is_tool_dependency(dep) for dep in dependencies) <= MAX_TOOL_DEPENDENCIES
+            and sum(isinstance(dep, dict) and 'emptySearch' in dep for dep in dependencies) <= MAX_EMPTY_SEARCHES
             and all(valid_dependency(dep) for dep in dependencies))
 
 

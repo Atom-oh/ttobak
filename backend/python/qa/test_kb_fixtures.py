@@ -163,14 +163,16 @@ class _QAConversationFixture:
         self.model.converse_stream.side_effect = streams
         return self.model.converse_stream
 
-    def ask(self, transport, question, meeting_id=None):
+    def ask(self, transport, question, meeting_id=None, context=None):
         if transport == 'rest':
-            result = handler.handle_ask(question, user_id='reader', session_id='chat-readonly', meeting_id=meeting_id)
+            result = handler.handle_ask(question, user_id='reader', session_id='chat-readonly',
+                                       meeting_id=meeting_id, context=context)
             self.assertEqual(result['statusCode'], 200, result)
         else:
             result = handler.handle_ask_stream({
                 'question': question, 'userId': 'reader', 'sessionId': 'chat-readonly',
                 'meetingId': meeting_id,
+                'context': context,
                 'connectionId': 'c', 'endpoint': 'https://synthetic.invalid',
             })
             self.assertEqual(result['status'], 'ok', result)
