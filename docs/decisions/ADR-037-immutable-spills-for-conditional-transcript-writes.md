@@ -21,8 +21,9 @@ because the write may have committed. Older committed objects also remain
 available to in-flight readers.
 
 Summary publication also cleans new spills after a validation rejection or
-canceled transaction, preserving the original service error. This relies on its
-single SDK attempt. In-progress transactions and unknown/server failures retain
+canceled transaction. Condition failures use `ErrConditionFailed`; other service
+errors retain their identity. This relies on its single SDK attempt.
+In-progress transactions and unknown/server failures retain
 possibly published references; cleanup failures remain visible.
 
 ## Reader and retention contract
@@ -45,3 +46,4 @@ It does not remove the fixed-key limitation from unconditional writers.
 - [SDK response tests](../../backend/internal/repository/transcript_conditional_spill_test.go)
   and [reference tests](../../backend/internal/repository/transcript_refs_test.go).
 - [Reader rollout and rollback](../runbooks/qa-transcript-read-rollout.md).
+- [Guarded summary publication](ADR-040-guarded-summary-publication.md).
