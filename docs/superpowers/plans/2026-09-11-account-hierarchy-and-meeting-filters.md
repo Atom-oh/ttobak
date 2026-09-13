@@ -1,156 +1,24 @@
-# Account Hierarchy and Meeting Filters Implementation Plan
+# Historical implementation record: Account hierarchy and meeting filters
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+- Original plan date: 2026-09-11; recorded planning base `97b2cf1`.
+- Historical proposal, not an execution checklist or current review mandate. Source pointers checked 2026-09-13; PR #183 and root reviewer-context work were separately scoped.
 
-**Goal:** Persist account parent relationships and support hierarchical, multi-account checkbox filtering of meetings.
+## Scope and rationale
 
-**Architecture:** Optional parent IDs extend the existing account META records. A
-dedicated hierarchy service/repository path validates and conditionally updates
-ancestry. Meeting filters accept normalized explicit account-ID sets across all
-existing listing streams. The frontend builds one reusable visible-account tree
-for account navigation, parent pickers, and checkbox selection.
+Organize existing accounts as a visible tree and support checkbox selection across related accounts without inheriting authorization or seeding production company data. The backend and UI were separated into account-parent persistence, multi-account pagination, and reusable tree controls.
 
-**Tech Stack:** Go Lambda, DynamoDB AWS SDK v2 expression builder, Next.js 16,
-TypeScript, Tailwind v4.
+Parent creation/moves required appropriate ownership and immediate-parent membership. Optional parent metadata preserved old root records; explicit empty parent detached. Strongly consistent ancestor observations, partial transactional updates, and conditions on all observed links prevented opposing moves from committing a cycle. Validation was bounded to 64 ancestors and three conflict attempts.
 
-**Spec:** `docs/superpowers/specs/2026-09-11-account-hierarchy-and-meeting-filters.md`
+Meeting `accountIds` represented a normalized OR selection of at most 100 explicit IDs across owned, direct-shared, and team discovery streams. Legacy `accountId` remained valid; mixed/repeated parameter forms were invalid. New cursors bound user, tab, and selection without making cursor content an authorization grant. Sparse-page continuation and first-login discovery hints were part of the intended contract.
 
-## Global Constraints
+The frontend expanded selected groups into visible descendant IDs, with searchable checkboxes, mixed states, removable chips, and cancellation/reset on filter changes. Missing parents displayed children as roots; group detail tabs remained account-scoped.
 
-- No inferred access inheritance and no production seed/migration writes.
-- Preserve legacy root accounts and legacy `accountId` consumers.
-- Maximum 100 distinct filter IDs; bound ancestry validation to 64 nodes.
-- Atomic ancestor checks and partial parent updates; no whole-item replacement.
-- Use `/usr/local/go/bin/go`; stdlib tests; frontend lint/build only.
-- Worktree: `/home/atomoh/ttobak/.worktrees/account-hierarchy`.
-- Base: `origin/main` at `97b2cf1`. PR #183 and root `AGENTS.md` changes are separate.
-- Parent checkboxes select accessible descendants; selection is expanded by the
-  frontend before sending explicit IDs to the API.
+## Risks, validation, and result record
 
-### Task 1: Account parent persistence and management
+Intended tests covered cycle/access/revocation races, legacy roots, malformed and bounded filters, cursor context, deduplication, sparse pages, and shared-access freshness. Go tests/vet/ARM64 build and integrated frontend lint/static build were planned. All task boxes were unchecked; no executed results or merge were recorded. The old worktree/base information is provenance, not a current branch instruction.
 
-**Files:** `backend/internal/model/account.go`,
-`backend/internal/service/account.go`, new
-`backend/internal/service/account_hierarchy.go` and tests, new
-`backend/internal/repository/account_hierarchy.go` and tests,
-`backend/internal/handler/account.go` and hierarchy tests,
-`backend/cmd/api/main.go`.
+## Current references
 
-**Interfaces:**
+[ADR-036](../../decisions/ADR-036-account-hierarchy-and-meeting-filters.md), [hierarchy service](../../../backend/internal/service/account_hierarchy.go), [transaction tests](../../../backend/internal/repository/account_hierarchy_test.go), [filter service](../../../backend/internal/service/meeting_filter.go), [filter tests](../../../backend/internal/service/meeting_filter_test.go), [tree helpers](../../../frontend/src/lib/accountTree.ts), [picker](../../../frontend/src/components/AccountTreePicker.tsx).
 
-```go
-// Add to Account, CreateAccountRequest, AccountResponse, AccountSummary.
-ParentAccountID string // JSON/DynamoDB: parentAccountId,omitempty
-
-type UpdateAccountParentRequest struct {
-    ParentAccountID *string `json:"parentAccountId"` // required; "" explicitly detaches
-}
-
-// HTTP success payload:
-// {"accountId":"child","parentAccountId":"parent"}
-// PUT /api/accounts/{accountId}/parent is authenticated like existing routes.
-```
-
-- [ ] Add failing tests for owner-only moves, parent membership, missing parent,
-  self/cycle rejection, detaching, legacy fields, and opposing concurrent moves.
-- [ ] Add optional parent fields and a focused hierarchy persistence interface
-  so unrelated account/document mocks need not implement new capabilities.
-- [ ] Implement fresh ancestry reads and a transaction with child creation or
-  partial update, parent membership check, and conditions on all ancestor links.
-  Keep puts conditional; map conditional conflicts to a sentinel and retry
-  from fresh reads at most three times.
-- [ ] Expose create-with-parent and parent-update behavior in the service,
-  responses, handler, and existing authenticated account routes.
-- [ ] Verify focused service/repository/handler tests and format touched Go.
-
-### Task 2: Multi-account meeting queries and cursor integrity
-
-**Files:** `backend/internal/handler/meeting.go`,
-`backend/internal/service/meeting.go`,
-`backend/internal/service/meeting_team_list.go`,
-`backend/internal/repository/dynamodb.go`, focused matching tests and new
-filter helper files within these packages.
-
-**Interfaces:**
-
-```text
-GET /api/meetings?accountIds=account-a,account-b&tab=all
-GET /api/meetings?accountId=account-a                 # remains supported
-GET /api/meetings?accountId=a&accountIds=b            # 400
-```
-
-```go
-// Extend repository.ListMeetingsParams:
-AccountIDs []string
-// Keep AccountID for existing callers/tests.
-```
-
-- [ ] Add failing tests for two selected accounts and one excluded account in
-  owned, direct-share, and inherited-team streams.
-- [ ] Add parser/normalizer tests: empty selection, duplicate/reordered IDs,
-  malformed IDs, limit, ambiguous legacy/new parameters, cursor context mismatch.
-- [ ] Implement the OR expression for owned queries and canonical membership
-  checks for direct/team shared results. Preserve date ordering, bounded
-  pagination work, deduplication, and first-login team discovery hints.
-- [ ] Bind every new multi-account cursor to user/tab/normalized IDs. Keep
-  legacy API behavior and tests compatible without trusting opaque cursor data.
-- [ ] Verify focused tests and format touched Go.
-
-### Task 3: Shared tree UI, parent editor, and checkbox filter
-
-**Files:** `frontend/src/types/meeting.ts`, `frontend/src/lib/api.ts`,
-`frontend/src/lib/accountTree.ts`, `frontend/src/components/AccountTreePicker.tsx`,
-`frontend/src/components/AccountsClient.tsx`,
-`frontend/src/components/AccountDetailClient.tsx`,
-`frontend/src/components/MeetingList.tsx`, `frontend/src/app/page.tsx`.
-
-**Interfaces:**
-
-```ts
-// Add to Account and AccountSummary:
-parentAccountId?: string;
-
-// Add parentAccountId to accountApi.create's input.
-accountApi.updateParent(id, { parentAccountId: string });
-
-// Add to meetingsApi.list's input:
-accountIds?: string[];
-// Serialize as accountIds.join(','); preserve accountId for legacy consumers.
-```
-
-- [ ] Build a cycle-safe visible forest sorted by Korean name, with missing
-  parents promoted to roots. Reuse it for navigation and selectors.
-- [ ] Render expandable account rows. Add parent selection on create and an
-  owner-only parent editor on detail with errors and refresh after save.
-- [ ] Replace the meeting single-select with searchable hierarchical checkboxes,
-  partial group state, removable chips, and clear all. Group selection expands
-  into explicit IDs; cap the resulting selection at 100 with a clear message.
-- [ ] Wire selected IDs through HomePage and API, reset/cancel pagination when
-  filters change, and preserve URL text search, tabs, and tags.
-- [ ] Run ESLint on changed files. Coordinator runs one integrated static build.
-
-### Task 4: Integration, documentation, review and PR
-
-**Files:** `docs/API-SPEC.md`, `docs/DESIGN-SPEC.md`,
-`docs/decisions/ADR-036-account-hierarchy-and-meeting-filters.md`.
-
-- [ ] Review each task's diff against the spec; resolve cross-package contracts
-  and run its relevant checks before accepting it.
-- [ ] Document parent management, unchanged permissions, tree UI, and filter
-  cursor behavior in the existing specs and ADR.
-- [ ] Run:
-
-```bash
-cd backend
-/usr/local/go/bin/go test ./...
-/usr/local/go/bin/go vet ./...
-GOOS=linux GOARCH=arm64 /usr/local/go/bin/go build -tags lambda.norpc -o /tmp/ttobak-account-hierarchy-api ./cmd/api
-cd ../frontend
-npm run build
-npm run lint
-```
-
-- [ ] Complete an independent whole-branch review, commit/push the feature,
-  create its PR against main, and follow current-head AI review/CI. Never
-  treat missing Kiro responses as successful review coverage; report the
-  known quota block if it persists.
+Backend and UI code exist, but that does not prove deployment. Current responses retain parent identifiers even when the tree cannot display a parent's name. [ADR-034](../../decisions/ADR-034-account-member-permission-democratization.md) governs member changes independently; hierarchy does not broaden those permissions.

@@ -1,82 +1,39 @@
-# TTOBAK Onboarding Guide
+# Developer onboarding
 
-## Prerequisites
+Read [CLAUDE.md](../CLAUDE.md) and the [documentation map](README.md) first.
+Use Go 1.25, a supported Node runtime (CI uses Node 24 for infra), Python 3.12 for
+Lambda tests, AWS CLI v2 for authorized cloud operations, and Docker for container
+builds. Mac recording needs macOS/Rust/Tauri native dependencies.
 
-- **Go 1.24+**: Located at `/usr/local/go/bin/go`
-- **Node.js 20+**: For frontend and CDK
-- **AWS CLI v2**: Configured with `ap-northeast-2` region
-- **AWS CDK**: `npm install -g aws-cdk`
-- **Git**: With SSH key configured for the repository
-
-## Quick Start
+From the repository root:
 
 ```bash
-# Clone repository
-git clone <repo-url> ttobak && cd ttobak
-
-# Backend: Build all Lambda binaries
-cd backend && for dir in cmd/api cmd/transcribe cmd/summarize cmd/process-image cmd/kb; do
-  GOOS=linux GOARCH=arm64 /usr/local/go/bin/go build -tags lambda.norpc -o $dir/bootstrap ./$dir
-done && cd ..
-
-# Frontend: Install and build
-cd frontend && npm install && npm run build && cd ..
-
-# Infra: Install and synth
-cd infra && npm install && npx cdk synth && cd ..
+(cd frontend && npm ci)
+(cd infra && npm ci)
+(cd mcp-server && npm ci)
+(cd backend && /usr/local/go/bin/go mod download)
+python3 -m venv /tmp/ttobak-doc-dev-venv
+/tmp/ttobak-doc-dev-venv/bin/pip install 'boto3<2'
+(cd frontend && npm run dev)
 ```
 
-## Project Structure
+The frontend reads `/config.json` at runtime. Use environment-appropriate Cognito
+configuration; an administrator must invite the account. `NEW_PASSWORD_REQUIRED`
+completes first login; password reset is separate from signup.
 
-```
-ttobak/
-├── backend/           # Go Lambda functions
-│   ├── cmd/           # 5 entry points (api, transcribe, summarize, process-image, kb)
-│   ├── internal/      # Shared code (handler, service, repository, model, middleware)
-│   └── python/qa/     # Python QA Lambda (Bedrock RAG)
-├── frontend/          # Next.js 16 static SPA
-│   └── src/
-│       ├── app/       # Pages (record, meeting/[id], kb, settings)
-│       ├── components/ # React components
-│       └── lib/       # API client, auth, STT, upload
-├── infra/             # AWS CDK TypeScript
-│   └── lib/           # 7 stacks
-├── docs/              # PRD, API spec, infra spec, design spec
-└── CLAUDE.md          # Claude Code guidance
-```
+Run relevant checks from the project guide. Go `./...` includes command-package
+tests. Frontend has lint/build only. Infra has real Jest assertions, not placeholder
+tests. Linux-only Rust checks do not validate ScreenCaptureKit.
 
-## Key Concepts
+Add HTTP routes in `backend/cmd/api/main.go`, handlers in `internal/handler`,
+business rules in services, and persistence in repositories. Go API payload is
+1.0; Python QA payload is 2.0. Update the API reference when changing contracts.
+New frontend routes also require the CloudFront router's `knownPages` entry.
 
-### Single-Table DynamoDB
-All entities (meetings, users, attachments, shares) live in `ttobak-main` table. See `backend/internal/model/meeting.go` for key schema and GSI definitions.
+The batch pipeline uses Whisper and configured AWS Transcribe fallback. Historical
+Nova Sonic experiments are not the current A/B provider architecture. Verify the
+selected A/B transcript and segment freshness behavior in meeting service before
+changing note generation.
 
-### Event-Driven Pipeline
-Audio upload triggers a chain: S3 → EventBridge → Transcribe Lambda → S3 → EventBridge → Summarize Lambda → DynamoDB. Each step is independent and idempotent.
-
-### A/B STT Testing
-The `sttProvider` field in meeting records controls which STT engine the transcribe Lambda uses. Both AWS Transcribe and Nova Sonic results are stored as `transcriptA`/`transcriptB`.
-
-## Common Tasks
-
-### Add a new API endpoint
-1. Add handler in `backend/internal/handler/`
-2. Register route in `backend/cmd/api/main.go`
-3. Update `docs/API-SPEC.md`
-
-### Add a new CDK stack
-1. Create stack in `infra/lib/`
-2. Register in `infra/bin/infra.ts` with correct dependencies
-3. Update `docs/INFRA-SPEC.md`
-
-### Deploy a single Lambda
-```bash
-cd backend && GOOS=linux GOARCH=arm64 /usr/local/go/bin/go build -tags lambda.norpc -o cmd/api/bootstrap ./cmd/api
-cd infra && npx cdk deploy TtobakGatewayStack
-```
-
-## Important Gotchas
-
-See CLAUDE.md "Important Gotchas" section for the full list. Key ones:
-- Use `/usr/local/go/bin/go` not `go`
-- API Gateway payload must be v1.0
-- CDK cross-stack: use `Fn.split`/`Fn.select`, not JS string methods
+Use [deployment](runbooks/deployment.md) for cloud changes. Never run a generic
+all-stack deployment or assume local code is already deployed.

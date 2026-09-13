@@ -1,5 +1,11 @@
 # MCP bounded meeting reading adapter
 
+Historical planning/acceptance record from 2026-09-12. Checklist statements below
+record the original slice, not current deployment or instructions to restart it.
+For current activation, follow [ADR-038](../../decisions/ADR-038-canonical-note-indexing.md),
+[ADR-039](../../decisions/ADR-039-meeting-document-extraction.md),
+and [ADR-042](../../decisions/ADR-042-current-source-qa-and-history.md), where relevant.
+
 Goal: let external agents read saved notes first and continue long transcripts
 without fetching an oversized full meeting through buffered Lambda responses.
 

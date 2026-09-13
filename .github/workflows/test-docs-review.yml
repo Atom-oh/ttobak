@@ -1,0 +1,51 @@
+name: Test Docs and Review Context
+
+on:
+  pull_request:
+    paths:
+      - '**/*.md'
+      - '.claude/agents/**'
+      - 'scripts/docs/**'
+      - 'scripts/pr-review/**'
+      - 'backend/cmd/api/main.go'
+      - '.github/workflows/pr-review.yml'
+      - '.github/workflows/test-docs-review.yml'
+  push:
+    branches: [main]
+    paths:
+      - '**/*.md'
+      - '.claude/agents/**'
+      - 'scripts/docs/**'
+      - 'scripts/pr-review/**'
+      - 'backend/cmd/api/main.go'
+      - '.github/workflows/pr-review.yml'
+      - '.github/workflows/test-docs-review.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  docs-review:
+    # PR-head scripts run on a hosted runner without ambient AWS credentials.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: docs-review-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Validate documentation and generated context
+        run: |
+          python3 scripts/docs/check_docs.py
+          python3 -m unittest discover -s scripts/docs -p 'test_*.py' -v
+      - name: Exercise review prompts without external AI calls
+        run: python3 -m unittest discover -s scripts/pr-review -p 'test_*.py' -v
+      - name: Validate review shell scripts and timeout policy
+        run: |
+          for script in scripts/pr-review/*.sh; do bash -n "$script"; done
+          bash scripts/pr-review/chair-timeout-policy-check.sh

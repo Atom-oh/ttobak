@@ -1,93 +1,59 @@
-# ADR-038: Canonical Note Indexing
+# ADR-038: Canonical note indexing
 
-## English
+- Status: Accepted, including the private/shared bootstrap extension, 2026-09-12.
+- Activation amendment prepared: 2026-09-13. `infra/bin/infra.ts` selects `all`
+  with its one-minute schedule retained. Merge/deployment remains gated on
+  completed manual snapshot acceptance and deployed, verified current-source QA.
+  This is a configuration change, not evidence that activation has deployed.
 
-### Status
+## Context and decision
 
-Accepted — 2026-09-12. Activation amendment prepared — 2026-09-13.
-Deployment configuration retains the schedule enabled by PR225 and adds the
-canonical stream in `all` mode. This activation requires verified manual snapshots and a
-deployed current-source QA consumer before merge/deployment; see the
-[bootstrap runbook](../runbooks/knowledge-index-bootstrap.md).
+Manual meeting exports miss edits and deletion. Direct ingestion would create
+a second writer beside the existing S3 sync. Use the same S3 data source,
+immutable projections and a coordinator that coalesces full syncs.
 
-### Context and options
+Canonical sources are meetings and personal/account documents. Durable jobs
+bind saved fields and source object ETags/versions to a revision and lease.
+Completion requires successful ingestion, exact document status, immutable
+projection inventory and fresh source checks. Paginated reconciliation
+recovers missed events and deletion; changing or failed sources back off
+without holding other jobs.
 
-Manual exports miss edits/deletion. Direct ingestion would add a second writer
-beside existing S3 synchronizations. Retain the S3 data source and coalesce full
-syncs instead.
+Private `kb/{owner}/{filename}` and authenticated-shared `shared/**` originals
+also receive immutable `manual-kb/v1/` and `shared-kb/v1/` snapshots, without
+inventing canonical document rows. Preserve owner isolation and authenticated
+sharing. Metadata alone cannot prove that old binary chunks match current bytes.
 
-### Decision
+## Activation order
 
-Use canonical meetings and personal/account documents, durable revision/lease
-jobs, immutable projections and coalesced full sync. Bind exact saved fields and
-S3 object versions; require successful ingestion plus current-source checks.
-Recover missed events/deletion with paginated reconciliation. Isolate changing
-sources and back off failures without holding other jobs.
+1. Prepare the mode-aware worker with delivery off, then explicitly enable
+   `manual-only` snapshot production with its restricted permissions.
+   The schedule was enabled separately before the all-mode activation.
+2. Verify immutable private/shared snapshots and current-byte recall while
+   retaining originals and legacy meeting exports.
+3. Deploy and verify the complete strict QA consumer, including source
+   permissions, snapshot checks and conversation-history revalidation.
+4. Enable `all` with canonical permissions, stream delivery and reconciliation.
+   Existing manual batches finish under their original ingestion token.
 
-### Consequences
+Mode is durable: `all → manual-only` and a manual-only start over a canonical
+batch are rejected. Restore `all` after an accidental downgrade; never edit
+coordinator state or invoke ad-hoc global ticks to bypass the guard.
 
-Search has eventual consistency, request cost and cleanup overhead. Retrieval
-must authorize current records and reject stale bindings despite stored success.
+## Consequences
 
-Deploy/verify canonical QA first, configure the worker second, enable delivery
-last. Old QA filters recognize only legacy `meetings/{owner}/` URIs. Cleanup
-removes those exports, so reversing the order loses recall. Rollback to old QA
-requires re-export; stopping the worker does not restore deleted exports.
+Search is eventually consistent and adds request/cleanup cost. An indexed
+status never replaces current authorization or source checks. Old QA recognizes
+legacy `meetings/{owner}/` exports; retiring them before strict QA loses recall.
+After retirement, old-QA rollback requires explicit re-export. Stopping the
+worker does not restore deleted exports or justify serving stale chunks.
 
-### References
+## Evidence
 
-[Exact schema, revision vectors and rollout](../superpowers/plans/2026-09-12-automatic-note-indexing-backend.md)
-
-## 한국어
-
-### 상태
-
-승인 — 2026-09-12. 활성화 개정안 준비 — 2026-09-13.
-배포 설정은 PR225에서 활성화한 스케줄을 유지하고 `all` 모드의
-canonical stream을 추가합니다. 활성화 PR의 머지·배포 전 기존 문서
-snapshot 검증과 current-source QA consumer 배포가 완료되어야 합니다. 절차는
-[bootstrap runbook](../runbooks/knowledge-index-bootstrap.md)을 따릅니다.
-
-### 배경과 대안
-
-수동 내보내기는 수정·삭제를 놓칩니다. 기존 S3 동기화와 별도로 직접 색인을
-추가하지 않고 같은 데이터 소스의 전체 동기화 요청을 묶습니다.
-
-### 결정
-
-회의·개인·어카운트 문서를 원본으로, 버전·임대·불변 객체와 동기화 세대를
-영속화합니다. 접수만으로 완료 처리하지 않고 현재 원본을 다시 확인합니다.
-변경 중인 원본은 분리하고 실패는 재시도 간격을 늘립니다.
-
-### 결과
-
-검색 반영에는 지연과 요청 비용이 있으며 불변 객체 정리가 필요합니다. 검색은
-현재 권한과 파일 버전을 재검증해야 합니다. 새 검색을 먼저 검증·배포한 뒤
-워커 설정과 자동 실행을 적용합니다. 기존 QA는 `meetings/{owner}/`만 검색하므로
-레거시 삭제를 먼저 하면 검색이 끊깁니다. 기존 QA로 롤백하려면 재내보내기가
-필요하며 워커 중지만으로 복원되지 않습니다.
-
-### 참고
-
-[스키마·검증 벡터·배포 순서](../superpowers/plans/2026-09-12-automatic-note-indexing-backend.md)
-
-## Bootstrap extension / 추가 결정 — 2026-09-12
-
-Accepted. Extend the preceding canonical-only activation order to preserve existing
-binary recall: deploy the worker with delivery off; require
-`INDEXING_MODE=manual-only|all`; explicitly enable manual-only snapshot production;
-verify snapshots/recall; deploy and verify strict QA runtime; then enable all-mode
-and canonical delivery. Private `manual-kb/v1/` snapshots preserve owner isolation;
-`shared-kb/v1/` preserves authenticated sharing. Originals and meeting exports stay
-untouched during bootstrap. Use the same full S3 sync, never direct ingestion.
-Mode is durable and downgrade is rejected. Restore all after a mistaken downgrade;
-old-QA rollback after canonical retirement still needs re-export.
-
-승인. 기존 바이너리 검색을 유지하도록 배포 순서를 확장합니다. 비활성 워커 배포
-→ manual-only snapshot 생성 명시적 활성화·검증 → 이미 존재하는 reader의 strict QA
-runtime 연결·검증 → all-mode/canonical 활성화 순서입니다. 원본과 기존 회의 export를
-bootstrap 동안 보존하며 개인 소유자 격리와 인증된 공유 범위를 유지합니다.
-모드는 영속화하고 역전환을 거부합니다. 잘못 내린 env는 all로 복원해야 하며
-구 QA 롤백은 레거시 재내보내기가 필요합니다.
-
-[Migration contract / 상세 계약](../../backend/cmd/kb/KNOWLEDGE_MIGRATION.md)
+- [Worker](../../backend/cmd/kb/main.go),
+  [coordinator](../../backend/internal/service/indexing.go),
+  [mode guard](../../backend/internal/service/index_rollout.go).
+- [Source/provider contract](../../backend/internal/service/INDEX_SOURCE_CONTRACT.md),
+  [migration contract](../../backend/cmd/kb/KNOWLEDGE_MIGRATION.md).
+- [Bootstrap runbook](../runbooks/knowledge-index-bootstrap.md),
+  [QA rollout](../runbooks/qa-current-source-rollout.md).
