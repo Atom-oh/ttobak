@@ -6,6 +6,9 @@ from tool_history import READONLY_TOOLS
 
 SOURCE_HISTORY_TOOLS = SOURCE_TOOL_NAMES | {'search_knowledge_base', 'get_meeting_detail', 'search_transcript'}
 PUBLIC_HISTORY_TOOLS = frozenset(('search_web', 'search_aws_docs', 'get_aws_recommendation'))
+CLIENT_LIVE_NOTE = ('client_live: The meeting_context block is user-provided input for this request. '
+                    'Use the latest request input when it corrects earlier live context. '
+                    'It is not a verification of saved-source bytes.')
 
 
 def build_tool_context(user_id, text, source_state, source_details, *, source_access, history,
