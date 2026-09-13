@@ -3,19 +3,29 @@
 //!
 //! `PowerAssertion` (`PreventUserIdleSystemSleep`) does not prevent lid-close,
 //! Apple-menu, or low-battery sleep — keep the recording checkpoints and
-//! startup recovery paths for those. `LidCloseGuard` (`PreventSystemSleep`)
-//! DOES block lid-close sleep, but Apple documents it should only be held for
-//! a short, bounded operation (their own example: burning a disc) — never for
-//! the length of an open-ended recording, which can run for hours. It is only
-//! acquired around the two already-bounded windows where a closed lid right
-//! after "end meeting" used to lose the recording outright: `stop_recording`'s
-//! `stop_and_finalize` (bounded by `STOP_CAPTURE_TIMEOUT`, or however long the
-//! background finalize backstop takes if that timeout is hit) and
-//! `upload_recording`'s actual transfer (bounded by `STALL_TIMEOUT` +
-//! `RESPONSE_DEADLINE_AFTER_FULL_SEND`). The live recording itself stays
-//! idle-sleep-only protected, same as before — closing the lid mid-meeting is
-//! still expected to suspend capture; only the finish-and-upload tail is
-//! guarded against it now.
+//! startup recovery paths for those. `LidCloseGuard` (`PreventSystemSleep`) is
+//! IOKit's own AC-power-only assertion for blocking lid-close sleep during a
+//! short, bounded operation (Apple's own example: burning a disc) — never for
+//! the length of an open-ended recording, which can run for hours; its actual
+//! effect on lid-close has NOT been validated against real macOS
+//! (`pmset -g assertions` + a physical lid-close test on both AC and battery)
+//! from this change alone. It is acquired around two windows that are each
+//! bounded by a DIFFERENT thing, not both by wall-clock time:
+//! `stop_recording`'s `stop_and_finalize` is bounded by this command's own
+//! lifetime (`STOP_CAPTURE_TIMEOUT`) — deliberately NOT by whatever the
+//! spawned background finalize task ends up taking if that timeout is hit,
+//! since that background task's completion time is unbounded and holding a
+//! lid-close-blocking assertion until then would defeat the whole point of
+//! this guard type (see `lib.rs`'s `stop_recording` for exactly how that's
+//! kept bounded); `upload_recording`'s transfer is bounded by progress, not
+//! total duration (`STALL_TIMEOUT` + `RESPONSE_DEADLINE_AFTER_FULL_SEND`
+//! only abort a STALLED transfer — a slow-but-still-progressing one holds
+//! this for as long as it takes, matching the project's existing
+//! stall-not-duration upload-timeout invariant, not a fixed bound). The live
+//! recording itself stays idle-sleep-only protected, same as before —
+//! closing the lid mid-meeting is still expected to suspend capture; only the
+//! finish-and-upload tail right after "end meeting" is additionally guarded
+//! against a lid close now, and only on AC power, best-effort.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -71,9 +81,11 @@ mod macos {
 
     /// Shared by both assertion types below — only the IOKit assertion-type
     /// string differs between them. Best effort: a power-management failure
-    /// must not reject a recording, so this returns `None` rather than an
-    /// error on any non-zero `IOReturn`.
-    fn acquire(assertion_type: &str, reason: &str) -> Option<u32> {
+    /// must not reject a recording, so callers turn `Err` into `None` — but
+    /// the `IOReturn` code itself is still returned (not collapsed away)
+    /// so callers can log it: on this macOS-only, no-CI module, that code
+    /// is the only diagnostic available when acquisition fails.
+    fn acquire(assertion_type: &str, reason: &str) -> Result<u32, i32> {
         let assertion_type = CFString::new(assertion_type);
         let assertion_name = CFString::new(reason);
         let mut id = 0;
@@ -87,7 +99,11 @@ mod macos {
                 &mut id,
             )
         };
-        (result == 0).then_some(id)
+        if result == 0 {
+            Ok(id)
+        } else {
+            Err(result)
+        }
     }
 
     fn release(id: u32) -> i32 {
@@ -106,12 +122,12 @@ mod macos {
         /// Safe to hold for the length of an open-ended recording.
         pub(crate) fn acquire(reason: &str) -> Option<Self> {
             match acquire("PreventUserIdleSystemSleep", reason) {
-                Some(id) => {
+                Ok(id) => {
                     log::info!("idle-sleep assertion acquired: {reason}");
                     Some(Self { id })
                 }
-                None => {
-                    log::warn!("idle-sleep assertion unavailable: {reason}");
+                Err(result) => {
+                    log::warn!("idle-sleep assertion unavailable (IOReturn {result}): {reason}");
                     None
                 }
             }
@@ -137,12 +153,12 @@ mod macos {
     impl LidCloseGuard {
         pub(crate) fn acquire(reason: &str) -> Option<Self> {
             match acquire("PreventSystemSleep", reason) {
-                Some(id) => {
+                Ok(id) => {
                     log::info!("lid-close guard acquired: {reason}");
                     Some(Self { id })
                 }
-                None => {
-                    log::warn!("lid-close guard unavailable: {reason}");
+                Err(result) => {
+                    log::warn!("lid-close guard unavailable (IOReturn {result}): {reason}");
                     None
                 }
             }
