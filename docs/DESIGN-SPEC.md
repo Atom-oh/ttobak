@@ -155,6 +155,9 @@ STT. Loading a completed summary verifies paginated text against its run/hash
 and preserves unsaved edits. Polling is bounded and stale route responses are
 ignored. Meeting search status refreshes after successful saves and never marks
 unsaved text as indexed.
+Speaker-save and re-diarization refreshes check the latest editor dirty state before
+applying responses, preserving in-progress summary/transcript text and its selected
+A/B source while accepting server updates for clean editors.
 
 Deploy attachment, saved-summary and index-status APIs before this UI.
 

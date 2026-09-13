@@ -523,8 +523,16 @@ function MeetingDetailContent() {
                 const refreshed = await meetingsApi.get(meeting.meetingId);
                 setMeeting((current) => current?.meetingId === meeting.meetingId ? {
                   ...current, ...(refreshed as MeetingDetail),
-                  content: summaryDirty ? current.content : (refreshed as MeetingDetail).content,
-                  attachments: normalizeAttachments(refreshed.attachments),
+                  // The user may have started editing while either request was pending.
+                  ...(dirtyRef.current.summary ? { content: current.content, summary: current.summary } : {}),
+                  ...(dirtyRef.current.transcript ? {
+                    transcriptA: current.transcriptA,
+                    transcriptB: current.transcriptB,
+                    transcription: current.transcription,
+                    selectedTranscript: current.selectedTranscript,
+                  } : {}),
+                  // Refreshed download URLs also change the summary editor's HTML.
+                  attachments: dirtyRef.current.summary ? current.attachments : normalizeAttachments(refreshed.attachments),
                 } : current);
               }}
               sttProvider={meeting.sttProvider}
@@ -534,8 +542,14 @@ function MeetingDetailContent() {
                 const refreshed = await meetingsApi.get(meeting.meetingId);
                 setMeeting((current) => current?.meetingId === meeting.meetingId ? {
                   ...current, ...(refreshed as MeetingDetail),
-                  content: summaryDirty ? current.content : (refreshed as MeetingDetail).content,
-                  attachments: normalizeAttachments(refreshed.attachments),
+                  ...(dirtyRef.current.summary ? { content: current.content, summary: current.summary } : {}),
+                  ...(dirtyRef.current.transcript ? {
+                    transcriptA: current.transcriptA,
+                    transcriptB: current.transcriptB,
+                    transcription: current.transcription,
+                    selectedTranscript: current.selectedTranscript,
+                  } : {}),
+                  attachments: dirtyRef.current.summary ? current.attachments : normalizeAttachments(refreshed.attachments),
                 } : current);
               }}
             />
