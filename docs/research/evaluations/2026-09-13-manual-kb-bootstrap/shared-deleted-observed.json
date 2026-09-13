@@ -1,0 +1,37 @@
+{
+  "sourceMissing": true,
+  "sourceErrorCode": "404",
+  "job": {
+    "state": "DELETED",
+    "resource": {
+      "pk": "KB#SHARED",
+      "sk": "KBFILE#723c71cae4e9701925287ca8631f46ae5995c3b76e0dac92c4cd3e0f7eb8a4b8",
+      "kind": "sharedKbDocument",
+      "sourceKey": "shared/acceptance/acc-5136a0a6ff5f4977b657/shared.docx",
+      "id": "723c71cae4e9701925287ca8631f46ae5995c3b76e0dac92c4cd3e0f7eb8a4b8"
+    },
+    "revision": "cc8e0fefa8136a519d400a66c9a425d39fc7a204ff4754cdc7405df2997601b5",
+    "desiredRevision": "cc8e0fefa8136a519d400a66c9a425d39fc7a204ff4754cdc7405df2997601b5",
+    "runId": "521c2cfe-0d41-4538-9a8d-3487c86e0d4a",
+    "syncId": "UQQAWXDUMZ",
+    "version": 18,
+    "keys": [],
+    "pendingKeys": null,
+    "removedKeys": null,
+    "errorCode": ""
+  },
+  "inventory": [],
+  "retrieval": [],
+  "previousSnapshotURIs": [
+    "s3://ttobak-kb-180294183052/shared-kb/v1/723c71cae4e9701925287ca8631f46ae5995c3b76e0dac92c4cd3e0f7eb8a4b8/dd7577c8858e70a22a638d94969429477ff08a4c486b6b3a9a17c697072f2d7c/c24f3818-e9f0-4b3b-bf50-dcf90e90d6ed/document.docx",
+    "s3://ttobak-kb-180294183052/shared-kb/v1/723c71cae4e9701925287ca8631f46ae5995c3b76e0dac92c4cd3e0f7eb8a4b8/41659348acd3bf46fb029294d79a07054ff2c8b7c6758d0f3abd4d170761e7d9/0dbc7305-bec2-4f22-88ed-dfdafe4c8634/document.docx"
+  ],
+  "documentStatuses": {
+    "s3://ttobak-kb-180294183052/shared-kb/v1/723c71cae4e9701925287ca8631f46ae5995c3b76e0dac92c4cd3e0f7eb8a4b8/dd7577c8858e70a22a638d94969429477ff08a4c486b6b3a9a17c697072f2d7c/c24f3818-e9f0-4b3b-bf50-dcf90e90d6ed/document.docx": "NOT_FOUND",
+    "s3://ttobak-kb-180294183052/shared-kb/v1/723c71cae4e9701925287ca8631f46ae5995c3b76e0dac92c4cd3e0f7eb8a4b8/41659348acd3bf46fb029294d79a07054ff2c8b7c6758d0f3abd4d170761e7d9/0dbc7305-bec2-4f22-88ed-dfdafe4c8634/document.docx": "NOT_FOUND"
+  },
+  "originalDocumentStatuses": {
+    "s3://ttobak-kb-180294183052/shared/acceptance/acc-5136a0a6ff5f4977b657/shared.docx": "NOT_FOUND"
+  },
+  "evidenceOrigin": "Actual strong job read; exact HeadObject 404 (not AccessDenied); empty scoped inventory; all requested provider identifiers NOT_FOUND; resourceId OR exact-original-URI filtered Retrieve empty."
+}

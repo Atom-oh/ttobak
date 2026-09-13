@@ -1,0 +1,84 @@
+{
+  "source": {
+    "bucket": "ttobak-kb-180294183052",
+    "key": "shared/acceptance/acc-5136a0a6ff5f4977b657/shared.docx",
+    "etag": "\"5cd4ce4bacacb55bc0459f3bd319fa0a\"",
+    "versionId": "Wn6HEWSX_Y4SmCyKi41HUxi8UtvDxN2g",
+    "size": 1135,
+    "metadata": {
+      "acceptance-run-id": "acc-5136a0a6ff5f4977b657"
+    }
+  },
+  "expectedSource": {
+    "etag": "\"5cd4ce4bacacb55bc0459f3bd319fa0a\"",
+    "versionId": "Wn6HEWSX_Y4SmCyKi41HUxi8UtvDxN2g",
+    "fixtureSHA256": "e87c11aaa8c628fdf4d1589b9fd69e62398b029c1389459ba555d4e434f92ed3",
+    "intermediateVersionForCleanup": "bNLaFILF_bdlWz7MceDyoNeH6S_GZPzw"
+  },
+  "job": {
+    "resource": {
+      "pk": "KB#SHARED",
+      "sk": "KBFILE#723c71cae4e9701925287ca8631f46ae5995c3b76e0dac92c4cd3e0f7eb8a4b8",
+      "kind": "sharedKbDocument",
+      "sourceKey": "shared/acceptance/acc-5136a0a6ff5f4977b657/shared.docx",
+      "id": "723c71cae4e9701925287ca8631f46ae5995c3b76e0dac92c4cd3e0f7eb8a4b8"
+    },
+    "state": "INDEXED",
+    "revision": "41659348acd3bf46fb029294d79a07054ff2c8b7c6758d0f3abd4d170761e7d9",
+    "desiredRevision": "41659348acd3bf46fb029294d79a07054ff2c8b7c6758d0f3abd4d170761e7d9",
+    "runId": "0dbc7305-bec2-4f22-88ed-dfdafe4c8634",
+    "keys": [
+      "shared-kb/v1/723c71cae4e9701925287ca8631f46ae5995c3b76e0dac92c4cd3e0f7eb8a4b8/41659348acd3bf46fb029294d79a07054ff2c8b7c6758d0f3abd4d170761e7d9/0dbc7305-bec2-4f22-88ed-dfdafe4c8634/document.docx",
+      "shared-kb/v1/723c71cae4e9701925287ca8631f46ae5995c3b76e0dac92c4cd3e0f7eb8a4b8/41659348acd3bf46fb029294d79a07054ff2c8b7c6758d0f3abd4d170761e7d9/0dbc7305-bec2-4f22-88ed-dfdafe4c8634/document.docx.metadata.json"
+    ],
+    "syncId": "D5RPD8WOXW",
+    "version": 12,
+    "failureCount": 0,
+    "errorCode": ""
+  },
+  "inventory": [
+    "shared-kb/v1/723c71cae4e9701925287ca8631f46ae5995c3b76e0dac92c4cd3e0f7eb8a4b8/41659348acd3bf46fb029294d79a07054ff2c8b7c6758d0f3abd4d170761e7d9/0dbc7305-bec2-4f22-88ed-dfdafe4c8634/document.docx",
+    "shared-kb/v1/723c71cae4e9701925287ca8631f46ae5995c3b76e0dac92c4cd3e0f7eb8a4b8/41659348acd3bf46fb029294d79a07054ff2c8b7c6758d0f3abd4d170761e7d9/0dbc7305-bec2-4f22-88ed-dfdafe4c8634/document.docx.metadata.json"
+  ],
+  "documentStatuses": {
+    "s3://ttobak-kb-180294183052/shared-kb/v1/723c71cae4e9701925287ca8631f46ae5995c3b76e0dac92c4cd3e0f7eb8a4b8/41659348acd3bf46fb029294d79a07054ff2c8b7c6758d0f3abd4d170761e7d9/0dbc7305-bec2-4f22-88ed-dfdafe4c8634/document.docx": "INDEXED"
+  },
+  "removedDocumentStatuses": {
+    "s3://ttobak-kb-180294183052/shared-kb/v1/723c71cae4e9701925287ca8631f46ae5995c3b76e0dac92c4cd3e0f7eb8a4b8/dd7577c8858e70a22a638d94969429477ff08a4c486b6b3a9a17c697072f2d7c/c24f3818-e9f0-4b3b-bf50-dcf90e90d6ed/document.docx": "NOT_FOUND"
+  },
+  "ingestion": {
+    "id": "D5RPD8WOXW",
+    "status": "COMPLETE",
+    "startedAt": "2026-09-13T00:55:59.436049+00:00",
+    "updatedAt": "2026-09-13T00:56:09.673869+00:00",
+    "statistics": {
+      "numberOfDocumentsScanned": 2040,
+      "numberOfMetadataDocumentsScanned": 670,
+      "numberOfNewDocumentsIndexed": 1,
+      "numberOfModifiedDocumentsIndexed": 2,
+      "numberOfDocumentsDeleted": 1,
+      "numberOfDocumentsFailed": 2
+    }
+  },
+  "retrieval": [
+    {
+      "uri": "s3://ttobak-kb-180294183052/shared-kb/v1/723c71cae4e9701925287ca8631f46ae5995c3b76e0dac92c4cd3e0f7eb8a4b8/41659348acd3bf46fb029294d79a07054ff2c8b7c6758d0f3abd4d170761e7d9/0dbc7305-bec2-4f22-88ed-dfdafe4c8634/document.docx",
+      "metadata": {
+        "indexSchema": "shared-kb-v1",
+        "resourceKind": "sharedKbDocument",
+        "resourceId": "723c71cae4e9701925287ca8631f46ae5995c3b76e0dac92c4cd3e0f7eb8a4b8",
+        "sourceRevision": "41659348acd3bf46fb029294d79a07054ff2c8b7c6758d0f3abd4d170761e7d9",
+        "indexRunId": "0dbc7305-bec2-4f22-88ed-dfdafe4c8634",
+        "sourceBucket": "ttobak-kb-180294183052",
+        "sourceKey": "shared/acceptance/acc-5136a0a6ff5f4977b657/shared.docx",
+        "sourceETag": "\"5cd4ce4bacacb55bc0459f3bd319fa0a\"",
+        "sourceVersionId": "Wn6HEWSX_Y4SmCyKi41HUxi8UtvDxN2g",
+        "sourceSize": 1135.0,
+        "visibility": "authenticated-shared"
+      },
+      "text": "ACCEPT_5136a0a6ff5f4977b657_SHARED_GREENOTTER",
+      "score": 1.0
+    }
+  ],
+  "evidenceOrigin": "Actual AWS strong job/current source/inventory reads and per-document status+scoped Retrieve; V1 identifier explicitly returned NOT_FOUND."
+}

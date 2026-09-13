@@ -1,0 +1,35 @@
+{
+  "runId": "acc-5136a0a6ff5f4977b657",
+  "completedAt": "2026-09-13T01:19:24.920045+00:00",
+  "dataVersionsDeleted": 17,
+  "deleteMarkersDeleted": 10,
+  "order": "All data versions deleted, fresh all-scope read verified zero data versions, then markers removed.",
+  "finalInventory": [
+    {
+      "prefix": "kb/acc-5136a0a6ff5f4977b657-owner/acc-5136a0a6ff5f4977b657-private.pdf",
+      "dataVersions": 0,
+      "deleteMarkers": 0
+    },
+    {
+      "prefix": "manual-kb/v1/acc-5136a0a6ff5f4977b657-owner/262dfbbae6d5e9dc3287b9f81a56a7536cf4ce2f7dfd6868c23cfb042472ad60/",
+      "dataVersions": 0,
+      "deleteMarkers": 0
+    },
+    {
+      "prefix": "shared/acceptance/acc-5136a0a6ff5f4977b657/shared.docx",
+      "dataVersions": 0,
+      "deleteMarkers": 0
+    },
+    {
+      "prefix": "shared-kb/v1/723c71cae4e9701925287ca8631f46ae5995c3b76e0dac92c4cd3e0f7eb8a4b8/",
+      "dataVersions": 0,
+      "deleteMarkers": 0
+    }
+  ],
+  "jobTombstonesRetained": [
+    "c49695945bfe9e63331a40affb4346c78cd24df74af0c78af25d9898ea8998e2",
+    "75f6d08cd044416958472ae98adb7ceed2dc0f62423ef08e0ed7376a67b9245e"
+  ],
+  "demoAccount": "retained; unrelated to this synthetic run",
+  "source": "Actual AWS ListObjectVersions/DeleteObjects and final ListObjectVersions for all four exact scopes"
+}
