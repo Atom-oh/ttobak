@@ -161,6 +161,8 @@ func init() {
 	attachmentTextHandler := handler.NewAttachmentTextHandler(attachmentTextService)
 	meetingHandler.SetAttachmentTextService(attachmentTextService)
 	bedrockService.SetAttachmentTextService(attachmentTextService)
+	resummaryService := service.NewResummaryService(metadata, service.NewMeetingService(metadata), nil, nil, service.ResummaryPublisher(ebClient))
+	resummaryHandler := handler.NewResummaryHandler(resummaryService)
 	lambdaClient := lambdasdk.NewFromConfig(cfg)
 	simFunctionName := os.Getenv("SIM_FUNCTION_NAME")
 	if simFunctionName == "" {
@@ -246,6 +248,8 @@ func init() {
 		r.Get("/api/meetings/{meetingId}", meetingHandler.GetMeeting)
 		r.Get("/api/meetings/{meetingId}/reading", readingHandler.Get)
 		r.Get("/api/meetings/{meetingId}/action-items", actionItemsHandler.Get)
+		r.Get("/api/meetings/{meetingId}/resummary", resummaryHandler.Get)
+		r.Post("/api/meetings/{meetingId}/resummary", resummaryHandler.Request)
 		r.Get("/api/meetings/{meetingId}/attachments/{attachmentId}/text/status", attachmentTextHandler.Status)
 		r.Post("/api/meetings/{meetingId}/attachments/{attachmentId}/text/retry", attachmentTextHandler.Retry)
 		r.Get("/api/meetings/{meetingId}/attachments/{attachmentId}/text", attachmentTextHandler.Read)

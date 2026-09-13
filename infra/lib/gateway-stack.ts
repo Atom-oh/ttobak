@@ -634,6 +634,26 @@ export class GatewayStack extends cdk.Stack {
       deadLetterQueue: actionItemsDlq,
     }));
 
+    const savedSummaryDlq = new sqs.Queue(this, 'SavedSummaryDlq', {
+      queueName: 'ttobak-saved-summary-dlq',
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      retentionPeriod: cdk.Duration.days(7),
+      redriveAllowPolicy: { redrivePermission: sqs.RedrivePermission.DENY_ALL },
+    });
+    const savedSummaryRule = new events.Rule(this, 'SavedSummaryRequestedRule', {
+      ruleName: 'ttobak-saved-summary-requested',
+      description: 'Summarize the current saved meeting sources without retranscription',
+      eventPattern: { source: ['ttobak.analysis'], detailType: ['SummaryRequested'] },
+    });
+    savedSummaryRule.addTarget(new eventsTargets.LambdaFunction(this.summarizeFunction, {
+      maxEventAge: cdk.Duration.minutes(5),
+      retryAttempts: 3,
+      deadLetterQueue: savedSummaryDlq,
+    }));
+    // Install the consumer, rule and invocation permission before API code
+    // can acknowledge a newly published request during this stack update.
+    this.apiFunction.node.addDependency(this.summarizeFunction, savedSummaryRule);
+
     // Convert Doc Lambda (container image w/ LibreOffice) + EventBridge rule
     // for PPTX/PPT slide uploads -> PDF sidecar conversion. Optional (like
     // researchWorkerRole above) so unit tests that omit convertDocRole don't

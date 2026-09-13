@@ -37,8 +37,9 @@ permissions must be inspected before alleging an authorization bypass.
   owner/uploader, run/lease and original ETag to immutable extraction results.
   Attempt status differs from retained-result completeness. Upload completion and
   attachment text/status/retry routes instantiate these services; the summary
-  provider consumes verified DOCUMENT text. Saved re-summary routes are a separate
-  dependent change. Code wiring does not establish deployed acceptance.
+  provider consumes verified DOCUMENT text. Saved re-summary GET/POST routes use
+  run/source/lease CAS and current edit grants; failures retain previous content.
+  Code wiring does not establish deployed acceptance.
 - Canonical index workers reread identities, bind source/S3 revisions and coalesce
   full S3 sync. Do not equate job acceptance/partial status with indexed documents.
   The app currently enables manual-only scheduling; all-mode canonical delivery

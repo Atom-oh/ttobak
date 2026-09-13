@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 893ab83c4b60 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 0988a069e693 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
 # TTOBAK review context
 
 Shared by Codex, Kiro, and the CI review panel. Extracted from the
@@ -204,6 +204,11 @@ ScreenCaptureKit. Report that limit instead of claiming a Mac build passed.
   `error/RETRY_EXHAUSTED`. Never rebind old output. See
   [recovery](docs/runbooks/meeting-document-release.md). Verified DOCUMENT text is
   separate from transcript evidence; default KB parsing still requires PPT/PPTX conversion.
+- **Saved-source summaries:** reader status and owner/editor POST `/resummary` use
+  `ANALYSIS#summary` run/source/lease CAS. Revalidate edit grants and source bytes
+  before atomic content/coverage/success publication; never rerun STT or overwrite
+  concurrent human edits. Failures retain prior content. Meeting and summary state
+  deletion share the first transaction. Consumers/rule/permission precede API update.
 - **Document extraction:** the bounded parser/private async worker and ATTACH#/ATTEXT#
   state exist (ADR-039). Consumers accept only authorized immutable result identity
   with the current source ETag; extraction JSON does not claim a source version ID.

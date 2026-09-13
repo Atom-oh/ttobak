@@ -87,4 +87,7 @@ func TestDeleteMeetingCascadesTextStatesAcrossBatchesAndPages(t *testing.T) {
 	if !deleted["ATTEXT#late"] || sweep != 2 {
 		t.Fatalf("late/orphan state survived: %v pages=%d", deleted["ATTEXT#late"], sweep)
 	}
+	if !deleted["ANALYSIS#summary"] {
+		t.Fatal("saved re-summary state survived meeting deletion")
+	}
 }

@@ -12,9 +12,11 @@ This proves worker/IAM behavior, not API/EventBridge/summary/QA end-to-end behav
 
 Order: batch foundation → attachment wiring → saved-summary storage/consumer/rule
 → its API → frontend. DOCUMENT collection requires provider injection.
-This wiring injects that provider into API/summarize. Saved-summary state and its
-source/state deletion transaction ship together in the following release.
-Build both changed bootstraps from the repository root using canonical commands:
+The API update depends on the SummaryRequested consumer, rule and invocation
+permission. State deletion ships with orchestration: four leading singleton
+deletes keep source/state in the first transaction and preserve attachment/share
+pairs across 100-item boundaries. Build both changed bootstraps from the repository
+root using canonical commands:
 
 ```bash
 (cd backend && GOOS=linux GOARCH=arm64 /usr/local/go/bin/go build -tags lambda.norpc -o cmd/api/bootstrap ./cmd/api)
@@ -22,9 +24,9 @@ Build both changed bootstraps from the repository root using canonical commands:
 (cd infra && npx cdk deploy TtobakGatewayStack --exclusively)
 ```
 
-Deployment remains host-controlled; never use `--all`. The existing API default-bus
-PutEvents and summarize table/bucket grants cover this wiring; no IAM/env change is
-required by the attachment API patch.
+Deployment remains host-controlled; never use `--all`. Existing API default-bus
+PutEvents and summarize table/bucket grants cover the data path; the saved-summary
+rule adds only scoped invocation and DLQ permissions.
 
 Batch recovery regenerates fresh inputs without STT. Durable retry maximum is 2;
 Lambda currently also defaults to two async retries. Failed reads/runs release
@@ -32,7 +34,8 @@ owned claims; the final failure becomes `error/RETRY_EXHAUSTED`. Expired final
 claims finalize on detail read/redelivery. Cleanup failures remain errors.
 
 **Terminal replay alone is a no-op** (`error` fails the status whitelist).
-Until the saved-summary API deploys, an operator must start a NEW recovery:
+After this API deploys, owners/editors can POST `/api/meetings/{id}/resummary`
+to recover from saved sources. Before deployment, an operator must start a NEW recovery:
 
 1. Strongly read `USER#owner / MEETING#id`, resolve the failure, verify saved
    sources and confirm no active invocation/claim.
