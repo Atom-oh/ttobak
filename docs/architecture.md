@@ -173,3 +173,4 @@ and unswept QA TTL fields are documented discrepancies, not claims of compliance
 - [Documentation and ADR navigation](README.md)
 - [Deployment](runbooks/deployment.md), [STT recovery](runbooks/stt-pipeline-troubleshooting.md)
 - [PR review](runbooks/pr-review.md)
+- [Batch summary CAS/retries](decisions/ADR-040-guarded-summary-publication.md)
