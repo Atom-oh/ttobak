@@ -60,13 +60,14 @@ class TestRuntimeToolHistory(unittest.TestCase):
         self.model.converse_stream.side_effect = streams
         return self.model.converse_stream
 
-    def ask(self, transport, question):
+    def ask(self, transport, question, meeting_id=None):
         if transport == 'rest':
-            result = handler.handle_ask(question, user_id='reader', session_id='chat-readonly')
+            result = handler.handle_ask(question, user_id='reader', session_id='chat-readonly', meeting_id=meeting_id)
             self.assertEqual(result['statusCode'], 200, result)
         else:
             result = handler.handle_ask_stream({
                 'question': question, 'userId': 'reader', 'sessionId': 'chat-readonly',
+                'meetingId': meeting_id,
                 'connectionId': 'c', 'endpoint': 'https://synthetic.invalid',
             })
             self.assertEqual(result['status'], 'ok', result)
@@ -144,3 +145,40 @@ class TestRuntimeToolHistory(unittest.TestCase):
                 'messages': json.dumps(conversation('PRIVATE', tool, {})),
             })
             self.assertEqual(handler.load_session('untracked', user_id='reader'), [])
+
+    def test_prior_source_cannot_cover_empty_failed_or_skipped_private_read(self):
+        cases = [
+            ('search_knowledge_base', {'query': 'empty'}, [], False),
+            ('search_knowledge_base', {'query': 'failure'}, RuntimeError('unavailable'), False),
+            ('get_document_detail', {'offset': -1}, [], False),
+            ('get_meeting_detail', {'meetingId': 'missing'}, [], False),
+            ('get_meeting_detail', {'meetingId': 'm'}, [], True),
+        ]
+        for transport in ('rest', 'stream'):
+            for name, arguments, result, replayable in cases:
+                with self.subTest(transport=transport, tool=name, arguments=arguments):
+                    self.table.items.clear()
+                    self.account()
+                    self.meeting(transcriptA='CURRENT_BODY')
+                    model = self.replies(transport, name, arguments)
+                    if name == 'get_document_detail':
+                        # A valid earlier tool call must not cover the skipped callback.
+                        replies = list(model.side_effect)
+                        first = {'toolUseId': 'first', 'name': 'get_meeting_detail', 'input': {'meetingId': 'm'}}
+                        if transport == 'rest':
+                            replies[0]['output']['message']['content'].insert(0, {'toolUse': first})
+                        else:
+                            replies[0]['stream'][:0] = [
+                                {'contentBlockStart': {'start': {'toolUse': {k: first[k] for k in ('toolUseId', 'name')}}}},
+                                {'contentBlockDelta': {'delta': {'toolUse': {'input': '{"meetingId":"m"}'}}}},
+                                {'contentBlockStop': {}},
+                            ]
+                        model.side_effect = replies
+                    with mock.patch.object(handler, 'retrieve_from_kb',
+                                           side_effect=result if isinstance(result, Exception) else None,
+                                           return_value=result):
+                        self.ask(transport, 'read source', meeting_id='m')
+                    stored = self.table.items[('SESSION#reader#chat-readonly', 'MESSAGES')]
+                    self.assertTrue(stored['sourceDependencies'], 'test needs an earlier unrelated source')
+                    self.assertEqual(stored['sourceReplayable'], replayable)
+                    self.assertEqual(bool(handler.load_session('chat-readonly', user_id='reader')), replayable)

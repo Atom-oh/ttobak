@@ -31,6 +31,9 @@ retrieval, document tools and source-bound conversation history.
   results through current-user callbacks. Explicit source/public tool policies
   deny unknown names. Changed/revoked reads discard the whole old conversation;
   research creation retains only a normalized receipt and is never replayed.
+  Each private callback collects its own dependencies; empty, failed or skipped
+  reads cannot reuse an unrelated earlier source as coverage. Transcript search
+  requires the current request's tracked meeting context.
   `toolHistoryCoverage` in HTTP/WS completion reports untracked history budgets
   without hiding valid current results.
 - `source_access.py` composes these readers into current-source search and

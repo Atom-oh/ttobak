@@ -944,6 +944,22 @@ def _qa_search_context(transcript, meeting_notes):
 
 def _agent_context(user_id, transcript, meeting_notes, source_state, source_details):
     history = _tool_history(user_id)
+    context = {}
+
+    def read_source(callback, *args):
+        current = new_source_state()
+        try:
+            value = callback(*args, source_state=current, source_details=source_details)
+            for dependency in current['dependencies']:
+                remember_source(source_state, dependency)
+            if current['dependencies'] and current['replayable']:
+                context['sourceReadRecorded'] = True
+            else:
+                source_state['replayable'] = False
+            return value
+        except Exception:
+            source_state['replayable'] = False
+            raise
 
     def create_research(uid, topic, mode):
         if uid != user_id:
@@ -953,11 +969,13 @@ def _agent_context(user_id, transcript, meeting_notes, source_state, source_deta
             history.research_receipt(source_state, {'topic': topic, 'mode': mode}, created)
         return created
 
-    def retrieve(query, count=5):
+    def retrieve(query, count=5, *, source_state, source_details):
         results = retrieve_from_kb(query, count, user_id=user_id)
         for result in results:
             if result.get('dependency'):
                 remember_source(source_state, result['dependency'])
+            else:
+                source_state['replayable'] = False
             for dependency in result.get('additionalDependencies', []):
                 remember_source(source_state, dependency)
             if result.get('volatile'):
@@ -970,31 +988,35 @@ def _agent_context(user_id, transcript, meeting_notes, source_state, source_deta
                 collect_detail(source_details, detail)
         return results
 
-    return {
+    context.update({
         "transcript": _qa_search_context(transcript, meeting_notes),
-        "retrieve_from_kb": retrieve,
+        "retrieve_from_kb": lambda query, count=5: read_source(retrieve, query, count),
         **history.callbacks(source_state),
         "tool_history": history,
-        "load_meeting_context": lambda uid, mid: load_meeting_context(
-            uid, mid, source_state=source_state, source_details=source_details),
-        "load_document_context": lambda uid, pk, did: load_document_context(
-            uid, pk, did, source_state=source_state, source_details=source_details),
-        "load_legacy_text": lambda uid, uri, offset=0, revision=None: _source_access().load_legacy_text(
-            uid, uri, offset, revision, source_state=source_state, source_details=source_details),
-        "load_meeting_attachments": lambda uid, mid, offset=0: load_meeting_attachments(
-            uid, mid, offset, source_state=source_state, source_details=source_details),
-        "load_attachment_text": lambda uid, mid, aid, unit=0, text=0, revision=None: load_attachment_text(
-            uid, mid, aid, unit, text, revision, source_state=source_state, source_details=source_details),
+        "load_meeting_context": lambda uid, mid: read_source(load_meeting_context, uid, mid),
+        "load_document_context": lambda uid, pk, did: read_source(load_document_context, uid, pk, did),
+        "load_legacy_text": lambda uid, uri, offset=0, revision=None: read_source(
+            _source_access().load_legacy_text, uid, uri, offset, revision),
+        "load_meeting_attachments": lambda uid, mid, offset=0: read_source(load_meeting_attachments, uid, mid, offset),
+        "load_attachment_text": lambda uid, mid, aid, unit=0, text=0, revision=None: read_source(
+            load_attachment_text, uid, mid, aid, unit, text, revision),
         "create_research": create_research,
         "check_research_limit": check_research_limit,
         "check_web_search_limit": check_web_search_limit,
         "user_id": user_id,
-    }
+    })
+    return context
 
 
-def _track_tool_history(source_state, tool_name):
+def _track_tool_history(source_state, tool_name, context):
     tracked_or_public = SOURCE_TOOL_NAMES | PUBLIC_TOOL_NAMES | READONLY_TOOLS | {'start_research'}
-    if tool_name not in tracked_or_public:
+    if tool_name == 'search_transcript':
+        covered = source_state.get('requestContextTracked', False)
+    elif tool_name in SOURCE_TOOL_NAMES:
+        covered = context.get('sourceReadRecorded', False)
+    else:
+        covered = tool_name in tracked_or_public
+    if not covered:
         source_state['replayable'] = False
 
 
@@ -1042,6 +1064,7 @@ def agentic_converse(messages, transcript=None, session_id=None, user_id=None, m
                     # web_search.py's own logs. Other tools' inputs are
                     # meeting/account identifiers and stay loggable.
                     logger.info(f"Tool call: {tool['name']} input={json.dumps(redact_tool_input_for_log(tool['name'], tool['input']), ensure_ascii=False)}")
+                    context['sourceReadRecorded'] = False
                     try:
                         result, result_sources = execute_tool(
                             tool["name"], tool["input"], context
@@ -1051,7 +1074,7 @@ def agentic_converse(messages, transcript=None, session_id=None, user_id=None, m
                         result = f"도구 실행 중 오류가 발생했습니다: {tool['name']}"
                         result_sources = []
                     tools_used.append(tool["name"])
-                    _track_tool_history(source_state, tool['name'])
+                    _track_tool_history(source_state, tool['name'], context)
                     sources.extend(result_sources)
 
                     tool_results.append({
@@ -1131,7 +1154,11 @@ def load_meeting_context(user_id, meeting_id, *, source_state=None, source_detai
 
 
 def _request_meeting_context(user_id, meeting_id, supplied_context=None, *, source_state=None, source_details=None):
-    return _source_access()._request_meeting_context(user_id, meeting_id, supplied_context, source_state=source_state, source_details=source_details)
+    result = _source_access()._request_meeting_context(user_id, meeting_id, supplied_context, source_state=source_state, source_details=source_details)
+    if source_state is not None:
+        source_state['requestContextTracked'] = bool(
+            meeting_id and not supplied_context and not result[2] and source_state['dependencies'] and source_state['replayable'])
+    return result
 
 
 def load_document_context(user_id, source_pk, document_id, *, source_state=None, source_details=None):
@@ -1538,6 +1565,7 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
                     continue
                 tool = block['toolUse']
                 logger.info(f"Tool call (stream): {tool['name']}")
+                context['sourceReadRecorded'] = False
                 # Tool execution (KB retrieve, research kickoff, etc.) sends
                 # no answer_delta, so the client's stall watchdog would
                 # otherwise go un-rearmed and time out a perfectly healthy
@@ -1560,7 +1588,7 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
                     result = f"도구 실행 중 오류가 발생했습니다: {tool['name']}"
                     result_sources = []
                 tools_used.append(tool['name'])
-                _track_tool_history(source_state, tool['name'])
+                _track_tool_history(source_state, tool['name'], context)
                 sources.extend(result_sources)
                 tool_results.append({
                     'toolResult': {
