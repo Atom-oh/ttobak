@@ -11,6 +11,22 @@ from request_history import MAX_EMPTY_SEARCHES, is_request_dependency, valid_req
 
 MAX_SESSION_DEPENDENCIES = 128
 MAX_HISTORY_BYTES = 384 * 1024
+MAX_PUBLIC_TITLE_CHARS = 256
+
+
+class SourceValidationError(RuntimeError):
+    code = 'SOURCE_CHANGED'
+    status = 409
+    message = 'Source access or content changed or is no longer verifiable. Ask again with current sources.'
+
+    def __init__(self):
+        super().__init__(self.message)
+
+
+class SourceUnavailable(SourceValidationError):
+    code = 'SOURCE_UNAVAILABLE'
+    status = 503
+    message = 'Current sources could not be verified. Try again later.'
 
 
 def new_source_state():
@@ -124,10 +140,11 @@ def validate_sources(state, is_current, *, tool_history=None):
         valid = (_valid_dependencies(state['dependencies'])
                  and all(_current(dep, is_current, tool_history) for dep in state['dependencies']))
     except Exception:
-        valid = False
+        state['replayable'] = False
+        raise SourceUnavailable() from None
     if not valid:
         state['replayable'] = False
-        raise RuntimeError('Source access or content changed; retry with current content.')
+        raise SourceValidationError()
 
 
 def restore_messages(item, state, is_current, *, tool_history=None,
@@ -154,5 +171,12 @@ def restore_messages(item, state, is_current, *, tool_history=None,
 
 
 def collect_detail(details, detail):
-    if detail and detail not in details:
-        details.append(dict(detail))
+    if not detail:
+        return
+    public = dict(detail)
+    title = public.get('title')
+    if isinstance(title, str) and len(title) > MAX_PUBLIC_TITLE_CHARS:
+        public['title'] = title[:MAX_PUBLIC_TITLE_CHARS]
+        public['titleTruncated'] = True
+    if public not in details:
+        details.append(public)

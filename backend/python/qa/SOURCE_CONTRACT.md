@@ -119,3 +119,35 @@ records producer checks, not public QA deployment or model quality.
 
 Source checks are point-in-time; model generation and stream delivery are not
 atomic with later source changes. Client live input is not saved-source proof.
+
+## Completion and delivery
+
+Both tool loops validate tracked sources after the final model call and before
+session persistence. REST handlers and the WebSocket completion path validate
+again before final publication. Rejected current-source proof returns HTTP 409
+`SOURCE_CHANGED`; an exception during validation returns HTTP 503
+`SOURCE_UNAVAILABLE`. WebSocket errors carry the same safe code in `answer_error`.
+These checks do not recall deltas already streamed or make storage/delivery atomic.
+
+Public source titles are presentation-limited to 256 Unicode characters, at most
+1024 UTF-8 bytes, with `titleTruncated:true` when shortened. Source identity,
+revision, source content and result arrays are retained. Free-text tool-input
+logging hashes `uri` as well as search/topic/name fields.
+
+Each JSON `PostToConnection` payload uses a conservative 30,000-byte application
+budget. AWS documents a [32-KB frame quota and 128-KB message quota](https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-execution-service-websocket-limits-table.html);
+messages above the frame quota require fragmentation, including `@connections`.
+The [SDK operation](https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/apigatewaymanagementapi/client/post_to_connection.html)
+takes bytes and a connection ID and exposes `PayloadTooLargeException`; it does
+not expose a frame-fragmentation option. This consumer expects one complete JSON
+message, so the application does not split its completion into a new protocol.
+
+Oversized completions retain their source arrays and produce a small
+`answer_error` with `RESPONSE_TOO_LARGE`, never a truncated successful result.
+SDK payload rejection takes the same path. Other terminal delivery failures use
+`DELIVERY_FAILED`; the async handler returns `delivery_failed` and logs a safe code.
+An error-notification failure is not retried recursively or reported as `ok`.
+Confirmed Gone returns `gone`; if the error cannot reach a disconnected or
+unavailable client, that client may still time out. Ordinary transient delta or
+heartbeat failures retain the existing best-effort behavior; completion must
+actually be accepted by the Management API before the handler returns `ok`.

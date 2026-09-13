@@ -449,13 +449,19 @@ and revision; changes or revocation invalidate the complete derived history.
   `usedDocs`, and `toolsUsed`. Explicit public fields describe identity, title,
   revision, evidence origin, partial/file-pending/migration status, and attachment
   attempt/result/location. Do not forward arbitrary provider metadata or invent
-  audio timestamps for document positions.
+  audio timestamps for document positions. Public titles have a presentation bound
+  and expose `titleTruncated:true` when shortened; source arrays remain complete.
 - Replay requires current access/revisions for every source plus matching
   fingerprints for supported read-only tools. Strict callbacks consume all pages,
   recheck exact membership/canonical references and attest complete reads.
   Changed, denied, failed or untracked dependencies invalidate the entire history,
   including assistant paraphrases; recorded dependencies must be checked before
   each model round and final output.
+- Final validation runs before persistence and again before publication. HTTP
+  source failures use `SOURCE_CHANGED` (409) or `SOURCE_UNAVAILABLE` (503);
+  WebSocket failures use `answer_error`. Oversized/rejected completions report
+  `RESPONSE_TOO_LARGE` or `DELIVERY_FAILED`, not a shortened successful result.
+  See the source contract's completion limits and non-atomic streaming caveat.
 - `start_research` records a creation receipt only after one successful mutation.
   Never replay creation to validate history. Tracking overflow preserves the
   current result while marking history nonreplayable with explicit coverage.
