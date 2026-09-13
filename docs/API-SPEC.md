@@ -422,8 +422,9 @@ position; transcript read failures return errors rather than silently losing con
 
 ### Current-source consumer contract
 
-The repository handler registers current-source readers and history helpers in
-both transports. This contract describes that wiring, not verified deployment; the
+Helper installation alone does not activate this consumer contract. The
+[source contract](../backend/python/qa/SOURCE_CONTRACT.md) states whether the
+reviewed handler registers it. That status does not certify deployment; the
 [manual bootstrap evidence](research/evaluations/2026-09-13-manual-kb-bootstrap/README.md)
 records IAM producer/provider checks only. Public QA acceptance remains separate.
 
@@ -461,8 +462,6 @@ and revision; changes or revocation invalidate the complete derived history.
 - `toolHistoryCoverage` is normally `[]`; `{tool, complete:false, reason}` reports
   `DEPENDENCY_LIMIT`, `RESULT_LIMIT` or `RECEIPT_UNAVAILABLE`. Capacity exhaustion
   keeps the current read-time-authorized result but prevents history replay.
-  Checks are point-in-time; they do not make model generation or stream delivery
-  atomic with later source changes.
 
 Exact source fields, visibility, limits and integration APIs:
 [source contract](../backend/python/qa/SOURCE_CONTRACT.md),

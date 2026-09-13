@@ -116,3 +116,6 @@ AWS/model calls; public REST/streaming acceptance remains separate.
 
 [Manual bootstrap evidence](../../../docs/research/evaluations/2026-09-13-manual-kb-bootstrap/README.md)
 records producer checks, not public QA deployment or model quality.
+
+Source checks are point-in-time; model generation and stream delivery are not
+atomic with later source changes. Client live input is not saved-source proof.

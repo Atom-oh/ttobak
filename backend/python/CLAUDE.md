@@ -28,10 +28,10 @@ role, and SANDBOX networking.
 
 ## Current-source QA foundations
 
-`qa/handler.py` registers current-source readers, source tools and history
-checks in both transports. This describes repository wiring, not a deployed
-consumer acceptance claim. Follow the rollout gates and producer evidence
-before deployment; verify public QA separately afterward.
+See [the source contract](qa/SOURCE_CONTRACT.md) for registration status at the
+reviewed revision. Helper installation and IAM alone do not wire the handler.
+Snapshot bootstrap and synthetic recall verification precede strict cutover;
+repository code is not evidence of deployed consumer acceptance.
 
 - Authorize current canonical identities before S3 reads; pin ETag/version/size
   and exact source revision. Legacy and immutable transcript references must match
