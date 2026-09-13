@@ -99,6 +99,46 @@ Before changing delivery, strongly read `KBINDEX#CONTROL / STATE`, including
 PK/SK, and record its mode/batch alongside the Lambda code hash and configuration.
 Do not edit coordinator records or invoke ad-hoc global ticks to bypass guards.
 
+## Bounded background reconciliation
+
+Reconciliation runs only when the coordinator is IDLE and no provider ingestion
+is busy. In all mode, each successful reconcile scans up to 100 evaluated table
+items for canonical source keys. DynamoDB applies the filter after its read
+limit; the one-MiB scan-page read limit can end a page sooner. This is not a guarantee of
+100 discovered sources.
+
+The job walk reads at most four pages, requesting at most the remaining capacity
+of the unchanged four-member ingestion batch on each page. For example, finding
+two eligible jobs in the first page makes the next query limit two. Unchanged,
+cooling-down or currently leased jobs do not consume batch capacity. Every
+returned job is checked before advancing the cursor. The walk stops at a full
+batch or end-of-query and does not wrap within that reconcile. The new job cursor
+and batch are published only after the bounded walk succeeds. An error or context
+failure leaves durable cursors unchanged; already queued source notifications
+can safely coalesce when the page is revisited.
+
+For the reported approximately 2,850-item table, the old limit 25 required at
+least 114 reconcile opportunities for a source sweep; limit 100 lowers that
+nominal bound to 29. Approximately 107 jobs still require at least 27 four-item
+query pages. When all pages are full and ineligible, four pages per reconcile
+can cover those pages in seven opportunities instead of 27. Eligible work
+reduces the remaining query capacity and can start provider work that delays
+further reconciliation.
+
+These are page-count lower bounds, not latency guarantees. The one-minute
+schedule does not imply one reconcile per minute: active batches, external
+syncs, leases, retries, large items and the existing ten-minute worker context
+can all increase elapsed time. Newly streamed writes may be enqueued before an
+older source is found by the sweep.
+
+The tradeoff is up to fourfold source evaluation per reconcile and up to sixteen
+known-job source/inventory checks rather than four. Total work across a clean
+sweep is similar but occurs in larger bursts. Ingestion batch size, concurrency,
+the twenty-minute lease, provider freeze, conditional writes and current-source
+validation are unchanged. Observe scheduled cursor progress, worker duration,
+read throttling and eligible-job progress after the reviewed worker deployment;
+do not force ticks or reset control rows to accelerate acceptance.
+
 ## Deployment and acceptance
 
 1. For initial preparation, deploy the mode-aware worker with delivery off,
