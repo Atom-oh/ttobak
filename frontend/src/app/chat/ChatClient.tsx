@@ -6,7 +6,7 @@ import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { qaApi, chatApi, QA_POLL_DEADLINE_MS } from '@/lib/api';
 import { getRuntimeConfig, runtimeWebSocketUrl } from '@/lib/runtimeConfig';
-import { RealtimeWebSocket, type WebSocketMessage } from '@/lib/websocket';
+import { RealtimeWebSocket, isTerminalModelError, type WebSocketMessage } from '@/lib/websocket';
 import { QAChatMessage } from '@/components/qa';
 import type { ChatSession } from '@/types/meeting';
 
@@ -77,7 +77,7 @@ export function ChatClient() {
     ws?.disconnect();
     return true;
   }, []);
-  const failRequest = useCallback((entryId: string, message: string) => {
+  const failRequest = useCallback((entryId: string, message: string, preserveSession = false) => {
     if (!aliveRef.current || !finishRequest(entryId)) return;
     setChatHistory(prev => prev.map(entry => entry.id === entryId ? {
       ...entry,
@@ -86,8 +86,9 @@ export function ChatClient() {
     } : entry));
     setError(message);
     setIsAsking(false);
-    // The server may still finish the old request. Never reuse its session.
-    setSessionId(`chat-${crypto.randomUUID()}`);
+    // Keep acknowledged terminal model history; unknown work still gets a new
+    // session so a delayed server write cannot overwrite the next request.
+    if (!preserveSession) setSessionId(`chat-${crypto.randomUUID()}`);
     inputRef.current?.focus();
   }, [finishRequest]);
   const startAnswerDeadline = useCallback((entryId: string, timeout = ANSWER_TIMEOUT_MS) => {
@@ -174,6 +175,9 @@ export function ChatClient() {
         inputRef.current?.focus();
         break;
       case 'answer_error':
+        failRequest(entryId, msg.error || '답변 생성 중 오류가 발생했습니다.',
+          isTerminalModelError(msg) && msg.sessionContinuable === true);
+        break;
       case 'error':
         failRequest(entryId, msg.error || '답변 생성 중 오류가 발생했습니다. 다시 질문해 주세요.');
         break;

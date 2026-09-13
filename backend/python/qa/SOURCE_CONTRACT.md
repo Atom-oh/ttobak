@@ -172,6 +172,14 @@ while consuming the model stream, which is closed on success or failure.
 No model/tool retry is performed automatically. These changes apply to WebSocket
 `ask_live`; the non-streaming Converse loop is unchanged. If current-source
 validation fails, private tool context is not saved.
+Terminal model errors include `sessionContinuable`: true when no new message
+write was needed or the completed-tool history write was acknowledged, false
+when that write was unconfirmed. Clients close the failed socket in either case.
+Chat keeps the session only for recognized model-error codes with a literal true
+flag, preserving prior dialogue and execution receipts. Unknown failures,
+timeouts and disconnects still isolate a new session. Live QA retains a proactive
+question's claim on terminal model failure rather than automatically repeating
+potentially completed work; it does not mark the failed answer successful.
 
 Both tool loops validate tracked sources after the final model call and before
 session persistence. REST handlers and the WebSocket completion path validate

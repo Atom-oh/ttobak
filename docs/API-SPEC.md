@@ -499,6 +499,9 @@ and revision; changes or revocation invalidate the complete derived history.
   not successful empty answers or automatic retries. Source-validated completed
   tool rounds can be retained with an explicit interruption note for the next
   conversation turn, including when stream iteration raises.
+  The error frame's `sessionContinuable` boolean states whether the client can
+  retain the conversation after closing the socket. A needed but unconfirmed
+  history write sets it false. This signal does not authorize automatic retries.
   See the source contract's completion limits and non-atomic streaming caveat.
 - `start_research` records a creation receipt only after one successful mutation.
   Never replay creation to validate history. Tracking overflow preserves the

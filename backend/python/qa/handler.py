@@ -815,9 +815,9 @@ def load_session(session_id, user_id=None, source_state=None, source_details=Non
 
 
 def save_session(session_id, messages, user_id=None, source_state=None, source_details=None):
-    """Save conversation history to DynamoDB with 7-day TTL."""
+    """Save history and return whether the message write was acknowledged."""
     if not session_id:
-        return
+        return False
     pk = f"SESSION#{user_id}#{session_id}" if user_id else f"SESSION#{session_id}"
     serialized = json.dumps(messages, ensure_ascii=False)
     if source_details is not None:
@@ -831,6 +831,7 @@ def save_session(session_id, messages, user_id=None, source_state=None, source_d
                                      'pendingShareExpiresAt': int(time.time()) + 604800})
         except Exception:
             logger.warning('History detail metadata could not be stored; validated identity fallback remains available')
+    messages_saved = False
     try:
         table.put_item(Item={
             "PK": pk,
@@ -841,6 +842,7 @@ def save_session(session_id, messages, user_id=None, source_state=None, source_d
             "sourceReplayable": (source_state or {}).get('replayable', False),
             "TTL": int(time.time()) + 604800,  # 7 days
         })
+        messages_saved = True
     except Exception as e:
         logger.warning(f"Failed to save session {session_id}: {e}")
 
@@ -878,6 +880,7 @@ def save_session(session_id, messages, user_id=None, source_state=None, source_d
             })
         except Exception as e:
             logger.warning(f"Failed to save chat session metadata {session_id}: {e}")
+    return messages_saved
 
 
 # ── Account-aware chat tools ───────────────────────────────────────────────
@@ -1484,9 +1487,10 @@ class WebSocketDeliveryError(RuntimeError):
 
 
 class ModelStreamError(RuntimeError):
-    def __init__(self, code):
+    def __init__(self, code, session_continuable=False):
         super().__init__(code)
         self.code = code
+        self.session_continuable = session_continuable
 
 
 def _post_ws(apigw, connection_id, payload):
@@ -1525,11 +1529,12 @@ def _post_ws_completion(apigw, connection_id, payload, source_frames_version=0):
     return True
 
 
-def _stream_error(apigw, connection_id, session_id, code, message, status='error'):
+def _stream_error(apigw, connection_id, session_id, code, message, status='error', *, session_continuable=None):
+    payload = {'type': 'answer_error', 'sessionId': session_id, 'code': code, 'error': message}
+    if session_continuable is not None:
+        payload['sessionContinuable'] = session_continuable is True
     try:
-        if not _post_ws(apigw, connection_id, {
-            'type': 'answer_error', 'sessionId': session_id, 'code': code, 'error': message,
-        }):
+        if not _post_ws(apigw, connection_id, payload):
             return {'status': 'gone'}
     except WebSocketDeliveryError:
         # A failed error notification must not recurse, retry the model, or
@@ -1613,7 +1618,8 @@ def handle_ask_stream(event):
     except ModelStreamError as error:
         logger.warning("Model stream did not complete (%s)", error.code)
         return _stream_error(apigw, connection_id, session_id, error.code,
-                             '모델 응답이 완료되지 않았습니다. 이미 실행된 작업이 있는지 확인해 주세요.', 'model_failed')
+                             '모델 응답이 완료되지 않았습니다. 이미 실행된 작업이 있는지 확인해 주세요.', 'model_failed',
+                             session_continuable=error.session_continuable)
     except WebSocketDeliveryError as error:
         logger.warning("WebSocket answer delivery failed (%s)", error.code)
         message = ('The complete answer exceeds WebSocket delivery limits. Ask a narrower question.'
@@ -1687,15 +1693,17 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
         # Retain completed tool receipts, but never append an empty/partial model
         # message. The explicit interruption note closes the paired tool round
         # so load_session does not rewind and forget a completed mutation.
+        session_continuable = bool(session_id)
         if (messages and messages[-1].get('role') == 'user'
                 and any('toolResult' in block for block in messages[-1].get('content', []))):
             _validate_answer_sources(user_id, source_state, context['tool_history'])
             messages.append({'role': 'assistant', 'content': [{
                 'text': '응답이 중단되었습니다. 이전 도구 실행 결과를 확인한 후 계속하세요.',
             }]})
-            save_session(session_id, messages, user_id=user_id, source_state=source_state,
-                         source_details=source_details)
-        raise ModelStreamError(code)
+            session_continuable = save_session(
+                session_id, messages, user_id=user_id, source_state=source_state,
+                source_details=source_details) is True
+        raise ModelStreamError(code, session_continuable) from None
 
     for _ in range(MAX_TOOL_ROUNDS):
         validate_sources(source_state, lambda dep: _source_is_current(user_id, dep, source_state), tool_history=context['tool_history'])
