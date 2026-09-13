@@ -1,0 +1,51 @@
+[
+  {
+    "name": "unicode-null-meeting",
+    "pk": "USER#owner", "sk": "MEETING#m", "kind": "meeting", "id": "m",
+    "outcome": "INDEXED",
+    "fields": {
+      "meetingId": "m", "userId": "owner", "title": "회의 😀", "content": null,
+      "notes": "미승인\n문서만 확인", "selectedTranscript": "B",
+      "transcriptB": "s3://assets/transcripts/m/transcriptB.txt"
+    },
+    "objects": [
+      {"key": "transcripts/m/transcriptB.txt", "etag": "\"etag-1\"", "versionId": "opaque+/=", "size": 42}
+    ],
+    "revision": "9f4107f0d29bdef0c90e010d9cdc962aa9abac72236e7309ef206cb3b22d374e",
+    "resourceHash": "16850ffe1afcfe13837abd4fe5063d5f94987b3ca6db500731e439ecb6cee190"
+  },
+  {
+    "name": "account-preview-binding",
+    "pk": "ACCOUNT#team", "sk": "DOC#d", "kind": "accountDocument", "id": "d",
+    "outcome": "INDEXED",
+    "fields": {
+      "docId": "d", "accountId": "team", "title": "슬라이드",
+      "fileKey": "docs/owner/slides.pptx", "updatedAt": "same-time"
+    },
+    "objects": [
+      {"key": "docs/owner/slides.pptx", "etag": "\"original\"", "versionId": "v1", "size": 100},
+      {
+        "key": "docs-pdf/owner/slides.pptx.pdf", "etag": "\"preview\"", "versionId": "pdf1", "size": 50,
+        "metadata": {"source-etag": "original", "source-version-id": "v1"}
+      }
+    ],
+    "revision": "bb1cdde92bde329ed985684c86c681b204382a68331b36985206c96d13b66a08",
+    "resourceHash": "124a12f65dd4ad6e9b2855127061dc779a6f6753951fa33ab14e63748a8879a2"
+  },
+  {
+    "name": "missing-personal-file",
+    "pk": "USER#owner", "sk": "DOC#d", "kind": "personalDocument", "id": "d",
+    "outcome": "WAITING_SOURCE",
+    "fields": {"docId": "d", "content": "", "fileKey": "docs/owner/missing.pdf"},
+    "objects": [{"key": "docs/owner/missing.pdf", "etag": "", "size": 0, "missing": true}],
+    "revision": "b42ab42c76c3038c3cc8042e1093e8d770cdbf3c0992ef2e867db67ca0b812d0",
+    "resourceHash": "bd97d1db328d6b27cb3971ef144d38057c25037eb20ab85f64d2cd13a203d3ab"
+  },
+  {
+    "name": "deleted-meeting",
+    "pk": "USER#owner", "sk": "MEETING#m", "kind": "meeting", "id": "m",
+    "outcome": "DELETED", "fields": {}, "objects": [],
+    "revision": "2cfbf6f48276e6aeacfa851af17b99048cde02ad5d45d1aed8613d9679b77664",
+    "resourceHash": "16850ffe1afcfe13837abd4fe5063d5f94987b3ca6db500731e439ecb6cee190"
+  }
+]

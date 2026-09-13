@@ -1,60 +1,63 @@
-# STT Pipeline Troubleshooting Runbook
+# STT troubleshooting
 
-## Symptoms
+Trace the actual meeting's audio keys, provider, status and last update before
+retrying. Use authenticated application reads; avoid placing raw transcript/audio
+in public diagnostics. The source of truth is transcribe/summarize commands,
+service/upload.go and WhisperStack, not old live-ECS plans.
 
-### Meeting stuck in "transcribing" status
-1. Check transcribe Lambda logs:
-   ```bash
-   aws logs tail /aws/lambda/ttobak-transcribe --since 30m --region ap-northeast-2
-   ```
-2. If `sttProvider=whisper`, check ECS task status:
-   ```bash
-   aws ecs list-tasks --cluster ttobak-whisper --region ap-northeast-2
-   aws ecs describe-tasks --cluster ttobak-whisper --tasks <TASK_ARN> --region ap-northeast-2
-   ```
-3. If ECS task failed, check CloudWatch logs:
-   ```bash
-   aws logs tail /ecs/whisper --since 1h --region ap-northeast-2
-   ```
-4. Auto-expiry: GetMeeting handler marks stuck status as `error` after 60 minutes (ADR-031).
+## Transcribing
 
-### ECS task not starting (zero-scale cold start)
-1. Check ASG desired capacity:
-   ```bash
-   aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names ttobak-whisper-asg --region ap-northeast-2 --query 'AutoScalingGroups[0].{Min:MinSize,Max:MaxSize,Desired:DesiredCapacity}'
-   ```
-2. Check Capacity Provider:
-   ```bash
-   aws ecs describe-capacity-providers --capacity-providers ttobak-whisper-spot --region ap-northeast-2
-   ```
-3. Check for Spot capacity issues:
-   ```bash
-   aws ec2 describe-spot-instance-requests --filters "Name=state,Values=open,active" --region ap-northeast-2
-   ```
-
-### Transcribe output not triggering summarize
-1. Verify transcript was uploaded to S3:
-   ```bash
-   aws s3 ls s3://ttobak-assets-<ACCOUNT>/transcripts/<MEETING_ID>.json --region ap-northeast-2
-   ```
-2. Check EventBridge rule:
-   ```bash
-   aws events describe-rule --name ttobak-transcript-upload --region ap-northeast-2
-   ```
-
-## Recovery
-
-### Force retry a meeting
 ```bash
-aws events put-events --entries '[{"Source":"aws.s3","DetailType":"Object Created","Detail":"{\"bucket\":{\"name\":\"ttobak-assets-<ACCOUNT>\"},\"object\":{\"key\":\"audio/<USER_ID>/<MEETING_ID>/<FILENAME>\"}}"}]' --region ap-northeast-2
+aws logs tail /aws/lambda/ttobak-transcribe --since 30m --region ap-northeast-2
+aws ecs list-tasks --cluster ttobak-whisper --region ap-northeast-2
+aws ecs describe-tasks --cluster ttobak-whisper --tasks <TASK_ARN> --region ap-northeast-2
 ```
 
-### Reset meeting status
+For a stopped task, inspect stoppedReason, container exit reason and the log
+configuration in its task definition. Resolve the log group/stream from that
+configuration rather than assuming `/ecs/whisper`. Determine whether failure was
+Spot capacity, image/bundle loading, disk, model compatibility or output writing.
+
+For zero-scale startup, inspect the current ASG and capacity provider:
+
 ```bash
-aws dynamodb update-item --table-name ttobak-main \
-  --key '{"PK":{"S":"USER#<USER_ID>"},"SK":{"S":"MEETING#<MEETING_ID>"}}' \
-  --update-expression "SET #s = :s" \
-  --expression-attribute-names '{"#s":"status"}' \
-  --expression-attribute-values '{":s":{"S":"uploaded"}}' \
-  --region ap-northeast-2
+aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names ttobak-whisper-asg --region ap-northeast-2
+aws ecs describe-capacity-providers --capacity-providers ttobak-whisper-spot --region ap-northeast-2
 ```
+
+Use ASG scaling activities and actual subnet availability for capacity failures.
+Do not force a historic AZ list. Reused hosts require disk headroom and shortened
+stopped-task cleanup; do not remove those settings as arbitrary overprovisioning.
+
+## Summarizing
+
+Check the expected transcripts/ output and matching EventBridge rule, then
+summarize logs. Multipart meetings have a separate all-parts completion path.
+ImageUploadCompleted is unrelated; DynamoDB stream enablement is not the current
+summarize trigger.
+
+```bash
+aws events describe-rule --name ttobak-transcript-upload --region ap-northeast-2
+aws logs tail /aws/lambda/ttobak-summarize --since 30m --region ap-northeast-2
+```
+
+The Lambda budget is 15 minutes. Retry eligibility after 20 minutes uses an atomic
+claim; it does not schedule another delivery. GetMeeting reconciles stuck status
+after 60 minutes. These thresholds solve different problems; do not shorten one
+based on a stale runbook or rewrite rows unconditionally.
+
+## Authorized recovery
+
+Use the application Recover action for a saved recording_progress object, or
+Rediarize for supported single-part Whisper meetings and a corrected speaker bound.
+For an operator-approved full rebatch, inspect the maintenance script and preview
+one target first:
+
+```bash
+python3 scripts/whisper-rebatch.py <MEETING_ID>
+```
+
+The script defaults to dry run. `--run` actually starts ECS work; `--num-speakers`
+requires a single meeting ID. Check its present selection/write behavior before
+executing. Do not fabricate an event with reserved `aws.s3` source via PutEvents or
+blindly reset DynamoDB state. Preserve coherent ASR/pyannote image pins (ADR-035).

@@ -105,6 +105,13 @@ func init() {
 	}
 	kbService := service.NewKBService(s3Client, bedrockAgentClient, kbBucketName, kbID, kbDataSourceID)
 	kbService.SetAssetsBucketName(bucketName)
+	var indexStatusEngine *service.IndexingService
+	if provider, err := service.NewIndexAWSProvider(s3Client, bedrockAgentClient, bucketName, kbBucketName, kbID, kbDataSourceID); err == nil {
+		indexStatusEngine = service.NewIndexingService(repo.MetadataView(), provider, provider, bucketName)
+	} else {
+		log.Printf("warn: search status reader is not configured")
+	}
+	indexStatusHandler := handler.NewIndexStatusHandler(service.NewIndexStatusService(repo, indexStatusEngine))
 	notionService := service.NewNotionService()
 	translateService := service.NewTranslateService(translateClient)
 	// Initialize handlers
@@ -212,6 +219,7 @@ func init() {
 		r.Post("/api/accounts/{accountId}/documents", accountHandler.PutDocument)
 		r.Get("/api/accounts/{accountId}/documents", accountHandler.ListDocuments)
 		r.Get("/api/accounts/{accountId}/documents/{docId}", accountHandler.GetDocument)
+		r.Get("/api/accounts/{accountId}/documents/{docId}/index-status", indexStatusHandler.AccountDocument)
 		r.Put("/api/accounts/{accountId}/documents/{docId}", accountHandler.UpdateDocument)
 		r.Delete("/api/accounts/{accountId}/documents/{docId}", accountHandler.DeleteDocument)
 
@@ -219,6 +227,7 @@ func init() {
 		r.Post("/api/documents", documentHandler.PutDocument)
 		r.Get("/api/documents", documentHandler.ListDocuments)
 		r.Get("/api/documents/{docId}", documentHandler.GetDocument)
+		r.Get("/api/documents/{docId}/index-status", indexStatusHandler.PersonalDocument)
 		r.Put("/api/documents/{docId}", documentHandler.UpdateDocument)
 		r.Delete("/api/documents/{docId}", documentHandler.DeleteDocument)
 		r.Post("/api/documents/{docId}/share-account", documentHandler.ShareToAccount)
@@ -240,6 +249,7 @@ func init() {
 		r.Get("/api/meetings/{meetingId}/attachments/{attachmentId}/text/status", attachmentTextHandler.Status)
 		r.Post("/api/meetings/{meetingId}/attachments/{attachmentId}/text/retry", attachmentTextHandler.Retry)
 		r.Get("/api/meetings/{meetingId}/attachments/{attachmentId}/text", attachmentTextHandler.Read)
+		r.Get("/api/meetings/{meetingId}/index-status", indexStatusHandler.Meeting)
 		r.Post("/api/meetings/{meetingId}/action-items/retry", actionItemsHandler.Retry)
 		r.Put("/api/meetings/{meetingId}/action-items/{itemId}", actionItemsHandler.SetCompleted)
 		r.Put("/api/meetings/{meetingId}", meetingHandler.UpdateMeeting)

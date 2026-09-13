@@ -1,5 +1,11 @@
 # Canonical indexing foundation
 
+Historical planning/acceptance record from 2026-09-12. Checklist statements below
+record the original slice, not current deployment or instructions to restart it.
+For current activation, follow [ADR-038](../../decisions/ADR-038-canonical-note-indexing.md),
+[ADR-039](../../decisions/ADR-039-meeting-document-extraction.md),
+and [ADR-042](../../decisions/ADR-042-current-source-qa-and-history.md), where relevant.
+
 This first slice supplies canonical resource identities, durable job/coordinator
 records and the S3/Bedrock provider. It does not enable an indexing worker or
 change retrieval.

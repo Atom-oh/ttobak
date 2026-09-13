@@ -1,5 +1,11 @@
 # Preview source binding
 
+Historical planning/acceptance record from 2026-09-12. Checklist statements below
+record the original slice, not current deployment or instructions to restart it.
+For current activation, follow [ADR-038](../../decisions/ADR-038-canonical-note-indexing.md),
+[ADR-039](../../decisions/ADR-039-meeting-document-extraction.md),
+and [ADR-042](../../decisions/ADR-042-current-source-qa-and-history.md), where relevant.
+
 Automatic document indexing must distinguish the current slide upload from an
 older PDF preview at the same sidecar key. The converter now records the exact
 GET response ETag and optional S3 version ID as `source-etag` and

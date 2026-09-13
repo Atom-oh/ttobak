@@ -3,7 +3,8 @@
 Host controls merge/deploy; merging deploys production. Worker `34717614426` is
 verified; public API/EventBridge/summary/QA acceptance remains separate.
 
-**Hard prerequisite: merge #209 before #213.** Shared source guards and their tests
+**Hard prerequisite: merge #209 before #213.** PR213 is reviewed as a Draft
+against the 209 branch; retarget it to main only after #209 merges. Shared source guards and their tests
 must be present before this API/document-provider wiring; do not deploy the producer
 from a branch that lacks them. The host verified worker deployment `34717614426`
 SUCCESS: synthetic 626-byte native PDF → 752-byte JSON, page 1 and exact ETag/identity,

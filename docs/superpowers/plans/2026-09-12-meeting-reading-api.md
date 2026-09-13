@@ -1,5 +1,11 @@
 # Bounded meeting reading API
 
+Historical planning/acceptance record from 2026-09-12. Checklist statements below
+record the original slice, not current deployment or instructions to restart it.
+For current activation, follow [ADR-038](../../decisions/ADR-038-canonical-note-indexing.md),
+[ADR-039](../../decisions/ADR-039-meeting-document-extraction.md),
+and [ADR-042](../../decisions/ADR-042-current-source-qa-and-history.md), where relevant.
+
 **Goal:** Make long meetings readable before the buffered Lambda response limit,
 including notes-only reads that perform no transcript S3 hydration.
 
@@ -38,16 +44,16 @@ Recheck ownership/sharing/account membership on every continuation.
 
 ## Implementation and validation
 
-- [x] Add repository metadata view, service pagination and authenticated handler.
-- [x] Wire the route into the existing API; no new public route or IAM grant.
-- [x] Test original oversized meeting: 4 MiB A + 3 MiB B with tiny notes.
-- [x] Prove notes-only requests make zero S3 calls and API Gateway v1 responses remain bounded.
-- [x] Test long Korean/emoji reconstruction, segment windows, unchanged and stale cursors.
-- [x] Test unauthorized/revoked shares, wrong source and malformed/repeated options.
-- [x] Preserve complete action JSON and distinguish unknown/failed/empty success.
-- [x] Run Go tests/vet/ARM64 build; document the API contract.
-- [ ] Point MCP tools at this endpoint, bound HTTP reading responses, and remove production client-side paging.
-- [ ] Test actual MCP protocol routing/continuations/errors and standalone bundle parity.
+- Recorded at the time: Add repository metadata view, service pagination and authenticated handler.
+- Recorded at the time: Wire the route into the existing API; no new public route or IAM grant.
+- Recorded at the time: Test original oversized meeting: 4 MiB A + 3 MiB B with tiny notes.
+- Recorded at the time: Prove notes-only requests make zero S3 calls and API Gateway v1 responses remain bounded.
+- Recorded at the time: Test long Korean/emoji reconstruction, segment windows, unchanged and stale cursors.
+- Recorded at the time: Test unauthorized/revoked shares, wrong source and malformed/repeated options.
+- Recorded at the time: Preserve complete action JSON and distinguish unknown/failed/empty success.
+- Recorded at the time: Run Go tests/vet/ARM64 build; document the API contract.
+- Not verified by this record: Point MCP tools at this endpoint, bound HTTP reading responses, and remove production client-side paging.
+- Not verified by this record: Test actual MCP protocol routing/continuations/errors and standalone bundle parity.
 
 Publish the API after the action-analysis prerequisites have merged, then publish
 the MCP adapter. Latest-head AI review, CI and deployment evidence remain required.

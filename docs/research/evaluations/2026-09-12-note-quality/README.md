@@ -1,6 +1,6 @@
 # Real note quality evaluation — 2026-09-12
 
-Four synthetic meetings passed all 25 corpus checks using the production
+Historical evaluation evidence. Four synthetic meetings passed all 25 corpus checks using the production
 `SummarizeTranscript` request and completion-processing paths. Every generated
 note was also read in full. This is regression evidence for these cases, not an
 estimate of general meeting accuracy.
@@ -15,10 +15,10 @@ not proof that the deployed binary already matched the checked-out prompt.
 
 | Case | Checks | Manual inspection | Input / output tokens |
 | --- | --- | --- | --- |
-| Selected B, numbers and negation | 7/7 | Preserved 120만원, 30ms, CPU 30% and unapproved deployment; did not create a follow-up task | 1,972 / 1,049 |
+| Selected B, numbers and negation | 7/7 | Preserved KRW 1,200,000, 30ms, CPU 30% and unapproved deployment; did not create a follow-up task | 1,972 / 1,049 |
 | Proposal versus decision | 6/6 | Rolling deployment remained decided; blue-green remained a proposal; no tasks were invented | 1,993 / 836 |
-| Owners and deadlines | 6/6 | Preserved 민수 and 2026-09-18; backup verification kept its unknown owner and deadline | 1,957 / 946 |
-| Notes versus spoken evidence | 6/6 | Labeled 53만원 and 서연 as user notes, separately from spoken facts; did not invent attendance or attach an audio citation to the memo amount | 2,413 / 684 |
+| Owners and deadlines | 6/6 | Preserved Minsu and 2026-09-18; backup verification kept its unknown owner and deadline | 1,957 / 946 |
+| Notes versus spoken evidence | 6/6 | Labeled KRW 530,000 and Seoyeon as user notes, separately from spoken facts; did not invent attendance or attach an audio citation to the memo amount | 2,413 / 684 |
 
 Total provider usage: **8,335 input / 3,515 output tokens**. The exploratory
 single-case probe reported elsewhere is separate from this run.
@@ -27,7 +27,10 @@ single-case probe reported elsewhere is separate from this run.
 
 `live-report.json` is the unmodified workflow report. Each case's `.request.json`,
 `.response.json`, `.evidence.json` and `.md` preserve the exact request, provider
-response, call metadata and rendered note. All eight request/response SHA-256
+response, call metadata and rendered note. The four generated Korean notes are
+immutable evaluation data, not English prose documentation: do not translate
+them or change their evidence. The documentation check pins their byte hashes;
+this README provides the English interpretation. All eight request/response SHA-256
 hashes were checked against their evidence records after download.
 
 During review, the second case's action criterion was found to reject invented

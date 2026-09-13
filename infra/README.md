@@ -1,20 +1,14 @@
-# TTOBAK Infrastructure (CDK TypeScript)
+# TTOBAK infrastructure
 
-The `cdk.json` file tells the CDK Toolkit how to execute your app.
+Eleven CDK stacks, defined and connected in `bin/infra.ts`.
 
-## Useful commands
+```bash
+npm ci
+npx cdk synth
+npm test
+```
 
-* `npm run build`   compile typescript to js
-* `npm run watch`   watch for changes and compile
-* `npm run test`    perform the jest unit tests
-* `npx cdk diff`    compare deployed stack with current state
-* `npx cdk synth`   emits the synthesized CloudFormation template
-
-## Deploying
-
-**Never `npx cdk deploy` (or `--all`) bare.** Deploy one stack at a time
-with `--exclusively`, e.g. `npx cdk deploy TtobakGatewayStack --exclusively`
-— see root `CLAUDE.md`'s Known Issues for why (a bare/`--all` deploy pulls
-in `TtobakKnowledgeStack`'s dependency closure, applying a deliberately
-undeployed Bedrock KB teardown) and for the full stack list and deploy
-order.
+Read [module guidance](CLAUDE.md) and [infrastructure reference](../docs/INFRA-SPEC.md).
+Deploy only explicitly selected changed stacks with `--exclusively`; never use
+`--all` or implicit dependencies. KnowledgeStack has a staged, undeployed teardown.
+Deployment is separate from synthesis and needs an authorized target environment.
