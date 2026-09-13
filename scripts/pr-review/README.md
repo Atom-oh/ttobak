@@ -13,6 +13,20 @@ requires its matching nonce, validates the response and scrubs decoded output.
 `aggregate` revalidates request/result digests and complete required coverage.
 Use `COMMAND --help` for CLI arguments. `run_role.py` handles bounded execution;
 `synthesize_roles.py` sends only substantive candidates to the chair.
+Codex uses JSONL turn events and its designated final-message file; progress
+messages are never concatenated or searched for a parsable review. Both the
+event stream and the regular final-message file retain the output byte limits.
+JSONL records split only at literal LF bytes; Unicode separators inside JSON
+strings remain payload. Terminal executor and final-file overflow are handled
+before transport parsing or diagnostic concatenation and cannot trigger retry.
+The event stream and final-file byte bounds are checked independently before
+rejecting malformed/incomplete events; bad framing cannot hide final-file overflow.
+
+The collector accepts only committed base context hooks/adapters with matching
+bytes. An exclusions-only result requires explicit `--allow-exclusions-only`
+and the exact trusted `--policy` bytes. The plan anchors that policy hash, and
+aggregation rechecks the anchor and reports excluded paths. These collector
+features do not activate the specialist protocol in the legacy CI workflow.
 
 Validated results are final for that preparation, including clean results,
 findings and uncertainties. Reissuing them fails without replacing the receipt
@@ -40,6 +54,31 @@ pattern families while retaining valid credential-redaction checks.
 YAML block matching checks indentation without consuming it separately from the
 line body. Blocks include blank lines and recognize LF, CRLF, bare CR and EOF;
 the environment name/value matcher shares the same line-ending rule.
+YAML name/value pairs redact the complete value line, including commas, spaces
+and quoted escapes, stopping before the next line. Inline pairs keep their
+separate matcher.
+Structured JSON and quoted JSON fragments are decoded before redaction. Sensitive
+fields and header name/value pairs are masked; credential-shaped object keys also
+pass through the token scrubber. Colliding redacted keys receive unique
+`[REDACTED-KEY-N]` aliases, preserving every value and ordinary schema key.
+Quoted fragments are scanned once; recursive decoding is limited to 32 levels.
+The decoded value budget is shared without charging encoded text again for each
+decoding layer. Limits and final publication checks remain blocking.
+Credential-key classification scans name segments once, including slash/backslash
+paths, and masks the entire associated value. PEM markers span array elements:
+the complete marked credential is redacted through END (or array end), retaining
+ordinary strings and context outside the key. Original elements still consume
+the shared byte budget before replacement.
+Complete PEM spans are masked immediately after control stripping, before any
+structured JSON or quoted-fragment decoding at every string level. Adjacent
+quoted string literals joined with `+` are decoded and combined without execution
+on the same line before credential matching, preserving split PEM markers and
+outside context. If decoded content needs no redaction, the original spelling,
+quote style, JSON formatting and concatenation expression remain unchanged.
+Quoted credential values consume escapes as indivisible pairs, so embedded
+quotes cannot terminate masking early. Concatenation never crosses diff lines.
+Only exact scrubber marker names are treated as placeholders when classifying
+object keys; ordinary credential fields and credential paths remain sensitive.
 
 Untrusted stdout and stderr are limited separately to 1 MiB of UTF-8 after
 process capture, before parsing or scrubbing; this is not a streaming capture

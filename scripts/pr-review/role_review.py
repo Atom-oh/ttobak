@@ -80,10 +80,11 @@ FAILURE_CODES = {
     "invalid_findings", "invalid_finding", "invalid_uncertainties",
     "invalid_json_wrapper", "empty_response", "model_selection_diagnostic",
     "model_fallback_diagnostic", "quota_diagnostic", "agent_preflight_diagnostic",
-    "duplicate_record", "output_byte_limit",
+    "duplicate_record", "output_byte_limit", "invalid_invocation_nonce", "invalid_issued_request",
+    "scrub_nesting_limit",
 }
 TERMINAL_CODES = {"model_selection_diagnostic", "model_fallback_diagnostic",
-                  "quota_diagnostic", "agent_preflight_diagnostic", "output_byte_limit"}
+                  "quota_diagnostic", "agent_preflight_diagnostic", "output_byte_limit", "scrub_nesting_limit"}
 
 
 class Invalid(Exception):
@@ -376,7 +377,7 @@ def invocation_digest(prepared_digest, nonce):
     return digest({"prepared_request_digest": prepared_digest, "invocation_nonce": nonce})
 
 
-def excluded_only(provenance):
+def excluded_only(provenance, policy_hash):
     if not isinstance(provenance, dict):
         return False
     paths = provenance.get("scope_paths")
@@ -391,6 +392,7 @@ def excluded_only(provenance):
         provenance.get("scope_exception") == "configured_exclusions_only"
         and isinstance(provenance.get("input_policy_sha256"), str)
         and re.fullmatch(r"[0-9a-f]{64}", provenance["input_policy_sha256"]) is not None
+        and provenance["input_policy_sha256"] == policy_hash
         and paths == provenance.get("excluded_paths")
     )
 
@@ -418,19 +420,6 @@ def prepare(args):
         failures.append("diff_line_limit")
     if not context.strip() or len(context.encode()) > args.context_cap:
         failures.append("context_size")
-    try:
-        manifest = strict_json(text_file(args.paths)) if args.paths else None
-        scope = strict_json(text_file(args.provenance)) if args.provenance else {}
-        metadata_only = scope.get("path_only", []) if isinstance(scope, dict) else []
-        if not isinstance(metadata_only, list) or any(not isinstance(x, str) for x in metadata_only):
-            raise Invalid("invalid_input_provenance")
-        empty_scope = not raw and manifest == [] and excluded_only(scope)
-        paths = [] if empty_scope else diff_paths(diff, manifest, metadata_only)
-    except Invalid as exc:
-        paths = []
-        failures.append(str(exc))
-    if re.search(r"^(?:Binary files .* differ|GIT binary patch)$", diff, re.M):
-        failures.append("binary_content_not_reviewable")
     provenance = {}
     if args.provenance:
         try:
@@ -441,19 +430,50 @@ def prepare(args):
                     or provenance.get("diff_sha256") != digest(raw)):
                 raise Invalid("invalid_input_provenance")
             declared = provenance.get("input_failures", [])
-            if not isinstance(declared, list) or any(not isinstance(x, str) for x in declared):
+            if not isinstance(declared, list) or any(
+                not isinstance(x, str) or not re.fullmatch(r"[a-z][a-z0-9_:.-]{0,63}", x)
+                for x in declared
+            ):
                 raise Invalid("invalid_input_provenance")
             failures.extend(declared)
         except Invalid:
+            provenance = {}
             failures.append("invalid_input_provenance")
+    material, policy_hash = None, None
+    try:
+        manifest = strict_json(text_file(args.paths)) if args.paths else None
+        metadata_only = provenance.get("path_only", [])
+        if not isinstance(metadata_only, list) or any(not isinstance(x, str) for x in metadata_only):
+            raise Invalid("invalid_input_provenance")
+        if (args.allow_exclusions_only or args.policy
+                or provenance.get("scope_exception") == "configured_exclusions_only"):
+            if not args.allow_exclusions_only or not args.policy:
+                raise Invalid("exclusions_policy_not_opted_in")
+            candidate = policy_bytes(args.policy)
+            if raw or manifest != [] or not excluded_only(provenance, digest(candidate)):
+                raise Invalid("invalid_exclusions_policy")
+            material, policy_hash = candidate, digest(candidate)
+        paths = [] if policy_hash else diff_paths(diff, manifest, metadata_only)
+    except Invalid as exc:
+        paths = []
+        failures.append(str(exc))
+    anchor = work / "exclusions-policy.json"
+    if material is not None:
+        write(anchor, material)
+    else:
+        remove(anchor)
+    if re.search(r"^(?:Binary files .* differ|GIT binary patch)$", diff, re.M):
+        failures.append("binary_content_not_reviewable")
+    provenance = scrub(provenance)
     plan = {
         "schema_version": 1, "head_sha": args.head, "base_sha": args.base,
         "diff_sha256": digest(raw), "context_sha256": digest(context.encode()),
         "diff_bytes": len(raw), "diff_lines": lines, "context_cap": args.context_cap,
         "paths": paths, "roles": {}, "provenance": provenance,
+        "exclusions_policy_sha256": policy_hash,
     }
     routes = routing(paths, diff)
-    if not raw and not paths and excluded_only(provenance):
+    if policy_hash:
         routes = {tag: (False, "approved_exclusions_only") for tag in ROLES}
     for tag, (slug, family, model, description) in ROLES.items():
         required, reason = routes[tag]
@@ -505,6 +525,12 @@ def load_plan(work):
     try:
         if set(plan["roles"]) != set(ROLES) or not isinstance(plan["paths"], list):
             raise Invalid("invalid_plan_roles")
+        policy_hash = plan.get("exclusions_policy_sha256")
+        if policy_hash is not None and (
+            digest(policy_bytes(work / "exclusions-policy.json")) != policy_hash
+            or not excluded_only(plan.get("provenance"), policy_hash)
+        ):
+            raise Invalid("invalid_exclusions_policy")
         for tag, (slug, family, model, _) in ROLES.items():
             role = plan["roles"][tag]
             if (role["role"], role["family"], role["model"]) != (slug, family, model):
@@ -513,7 +539,7 @@ def load_plan(work):
                 raise Invalid("invalid_plan_requirement")
             if (tag in ("codex", "claude-self") and not role["required"]
                     and not (plan["paths"] == [] and plan["diff_bytes"] == 0
-                             and excluded_only(plan.get("provenance")))):
+                             and excluded_only(plan.get("provenance"), policy_hash))):
                 raise Invalid("missing_independent_role")
             if role["paths"] != (plan["paths"] if role["required"] else []):
                 raise Invalid("invalid_plan_scope")
@@ -687,11 +713,12 @@ def diagnostic_failure(stderr):
         if re.search(r"^failed to set model\b|^(?:invalid|unknown|unsupported)\s+model\b|"
                      r"^model\s+.{0,100}\s+(?:not found|not available|unsupported)\b", body, re.I):
             return "model_selection_diagnostic"
-        if re.search(r"^no agent with name\b.*\bfound\b", body, re.I):
+        if re.search(r"^no agent with name\b.*\bfound\b|^Json supplied at .* is invalid\b", body, re.I):
             return "agent_preflight_diagnostic"
         if re.search(r"^(?:falling back|using (?:a )?fallback|fallback model)\b", body, re.I):
             return "model_fallback_diagnostic"
-        if re.search(r"^(?:quota exceeded|rate limit exceeded|insufficient credits|"
+        if re.search(r"^(?:MONTHLY_REQUEST_COUNT|UsageLimitReachedError|"
+                     r"quota exceeded|rate limit exceeded|insufficient credits|"
                      r"monthly request limit (?:reached|exceeded)|"
                      r"usage limit (?:reached|exceeded)|billing hard limit reached)\b", body, re.I):
             return "quota_diagnostic"
@@ -707,35 +734,172 @@ def output_bytes(text):
     return size
 
 
-def scrub(value, _remaining=None):
-    """Scrub decoded strings too: raw-JSON sanitizers miss escaped credentials."""
-    if _remaining is None:
-        _remaining = [MAX_OUTPUT_BYTES]
-    if isinstance(value, list):
-        return [scrub(x, _remaining) for x in value]
-    if isinstance(value, dict):
-        return {k: scrub(v, _remaining) for k, v in value.items()}
-    if not isinstance(value, str):
-        return value
-    _remaining[0] -= output_bytes(value)
-    if _remaining[0] < 0:
-        raise Invalid("output_byte_limit")
+CREDENTIAL_WORD = (
+    r"(?:password|passwd|pwd|dsn|api[_-]?key|secret|token|credential|passphrase|"
+    r"private[_-]?key|cookie|authorization|connection[_-]?string|origin[_-]?verify|"
+    r"AccessKeyId|access[_-]?key[_-]?id)"
+)
+SENSITIVE_KEY = re.compile(
+    r"(?i:(?=[A-Za-z0-9_.:-]*" + CREDENTIAL_WORD + r")[A-Za-z0-9_.:-]+)\Z"
+)
+PEM_MARKER = re.compile(r"-----(BEGIN|END) [A-Z ]*PRIVATE KEY-----")
+PEM_VALUE = r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)"
+REDACTION_MARKERS = {
+    "[REDACTED]", "[REDACTED-AWS-KEY]", "[REDACTED-GH-TOKEN]", "[REDACTED-SLACK-TOKEN]",
+    "[REDACTED-API-KEY]", "[REDACTED-GOOGLE-KEY]", "[REDACTED-JWT]",
+    "[REDACTED-PRIVATE-KEY]", "[REDACTED-UNTERMINATED-PEM-BLOCK]",
+}
+
+
+def sensitive_key(value):
+    return isinstance(value, str) and value not in REDACTION_MARKERS and any(
+        SENSITIVE_KEY.fullmatch(part.group())
+        for part in re.finditer(r"[A-Za-z0-9_.:-]+", value)
+    )
+
+
+def strip_controls(value):
     value = re.sub(r"(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]", "", value)
     value = re.sub(r"(?:\x1b[\]PX^_]|\x9d|\x90|\x98|\x9e|\x9f).*?(?:\x07|\x9c|\x1b\\|$)", "", value, flags=re.S)
     value = re.sub(r"\x1b[ -/]*[0-~]", "", value)
-    value = "".join(c for c in value if c in "\n\r\t" or unicodedata.category(c) not in ("Cc", "Cf", "Zl", "Zp"))
+    return "".join(c for c in value if c in "\n\r\t" or unicodedata.category(c) not in ("Cc", "Cf", "Zl", "Zp"))
+
+
+def quoted_literal(value, start):
+    quote, index = value[start], start + 1
+    while index < len(value) and value[index] != quote:
+        index += 2 if value[index] == "\\" else 1
+    if index >= len(value):
+        return len(value), None
+    end = index + 1
+    try:
+        decoded = strict_json(value[start:end]) if quote == '"' else ast.literal_eval(value[start:end])
+    except (Invalid, ValueError, SyntaxError):
+        return end, None
+    return end, decoded if isinstance(decoded, str) else None
+
+
+def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
+    """Scrub decoded strings too: raw-JSON sanitizers miss escaped credentials."""
+    if _depth > 32:
+        raise Invalid("scrub_nesting_limit")
+    if _remaining is None:
+        _remaining = [MAX_OUTPUT_BYTES]
+    if isinstance(value, list):
+        result, in_pem = [], False
+        for item in value:
+            clean = scrub(item, _remaining, _depth + 1, _charge)
+            if isinstance(item, str):
+                text = strip_controls(item)
+                pieces, position = (["[REDACTED]"] if in_pem else []), 0
+                for marker in PEM_MARKER.finditer(text):
+                    if marker[1] == "BEGIN" and not in_pem:
+                        pieces.extend((text[position:marker.start()], "[REDACTED]"))
+                        in_pem = True
+                    elif marker[1] == "END" and in_pem:
+                        position, in_pem = marker.end(), False
+                if pieces:
+                    if not in_pem:
+                        pieces.append(text[position:])
+                    clean = scrub("".join(pieces), _remaining, _depth + 1, False)
+            elif in_pem:
+                clean = "[REDACTED]"
+            result.append(clean)
+        return result
+    if isinstance(value, dict):
+        sensitive_values = {
+            field for name, field in (("name", "value"), ("headername", "headervalue"))
+            if any(isinstance(k, str) and k.lower() == name and isinstance(v, str)
+                   and sensitive_key(v) for k, v in value.items())
+        }
+        result, reserved, suffix = {}, set(value), 1
+        for key, item in value.items():
+            clean_key = scrub(key, _remaining, _depth + 1, False, False) if isinstance(key, str) else key
+            if clean_key != key and (clean_key in reserved or clean_key in result):
+                while f"[REDACTED-KEY-{suffix}]" in reserved or f"[REDACTED-KEY-{suffix}]" in result:
+                    suffix += 1
+                clean_key = f"[REDACTED-KEY-{suffix}]"
+                suffix += 1
+            hidden = isinstance(key, str) and (
+                sensitive_key(key) or key.lower() in sensitive_values
+            )
+            clean_item = scrub(item, _remaining, _depth + 1, _charge)
+            result[clean_key] = "[REDACTED]" if hidden else clean_item
+        return result
+    if not isinstance(value, str):
+        return value
+    size = output_bytes(value)
+    if _charge:
+        _remaining[0] -= size
+    if _remaining[0] < 0:
+        raise Invalid("output_byte_limit")
+    value = strip_controls(value)
+    # Mask complete raw spans before decoding can separate their boundary markers.
+    value = re.sub(PEM_VALUE, "[REDACTED]", value, flags=re.S)
+    if _structured:
+        try:
+            decoded = strict_json(value)
+        except Invalid:
+            decoded = None
+        if isinstance(decoded, (dict, list, str)):
+            clean = scrub(decoded, _remaining, _depth + 1, False)
+            return value if clean == decoded else canonical(clean)
+        if '\\"' in value:
+            try:
+                decoded = strict_json('"' + value + '"')
+            except Invalid:
+                decoded = None
+            if isinstance(decoded, str) and decoded != value:
+                clean = scrub(decoded, _remaining, _depth + 1, False)
+                return value if clean == decoded else clean
+        # Scan quoted fragments once; an unterminated fragment consumes the tail.
+        pieces, start, index = [], 0, 0
+        while index < len(value):
+            if value[index] not in "\"'" or (
+                value[index] == "'" and index and value[index - 1].isalnum()
+            ):
+                index += 1
+                continue
+            opening = index
+            index, decoded = quoted_literal(value, opening)
+            if decoded is None:
+                continue
+            literals = [decoded]
+            while index < len(value):
+                next_start = index
+                while next_start < len(value) and value[next_start] in " \t":
+                    next_start += 1
+                if next_start >= len(value) or value[next_start] != "+":
+                    break
+                next_start += 1
+                while next_start < len(value) and value[next_start] in " \t":
+                    next_start += 1
+                if next_start >= len(value) or value[next_start] not in "\"'":
+                    break
+                end, following = quoted_literal(value, next_start)
+                if following is None:
+                    break
+                literals.append(following)
+                index = end
+            decoded = "".join(literals)
+            clean = scrub(decoded, _remaining, _depth + 1, False)
+            replacement = value[opening:index] if clean == decoded else canonical(clean)
+            pieces.extend((value[start:opening], replacement))
+            start = index
+        if pieces:
+            value = "".join(pieces) + value[start:]
     identifier = (
-        r"(?i:(?<![A-Za-z0-9_-])(?=[A-Za-z0-9_-]*(?:password|passwd|api[_-]?key|"
-        r"secret|token|credential|passphrase|private[_-]?key|cookie|AccessKeyId|access[_-]?key[_-]?id))"
-        r"[A-Za-z0-9_-]+)"
+        r"(?i:(?<![A-Za-z0-9_.-])(?=[A-Za-z0-9_.-]*" + CREDENTIAL_WORD
+        + r")[A-Za-z0-9_.-]+)"
     )
     key = identifier + r"""["']?\s*[:=]\s*"""
+    quoted_value = r"""(?:"(?:\\.|[^"\\])*(?:"|\\?\Z)|'(?:\\.|[^'\\])*(?:'|\\?\Z))"""
     line_break = r"(?:\r\n?|\n)"
     # Check indentation/blankness without consuming it twice. Every iteration
     # consumes either a nonempty body or a line break, including bare CR.
-    block_line = r"(?=[ \t\r\n])[^\r\n]*(?:" + line_break + r"|\Z)"
+    block_line = r"(?=[+-]?[ \t\r\n])[^\r\n]*(?:" + line_break + r"|\Z)"
     patterns = (
-        r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)",
+        PEM_VALUE,
         r"\b(?:AKIA|ASIA|ABIA|ACCA)[A-Z0-9]{16}\b",
         r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b",
         r"\bsk-[A-Za-z0-9_-]{16,}",
@@ -747,12 +911,17 @@ def scrub(value, _remaining=None):
         r"""(?i:\bAuthorization)["']?\s*:\s*["']?(?i:Basic|Bearer)\s+[A-Za-z0-9+/=_.~-]+""",
         r"""(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]*://[^/\s:@"']*:[^@\s/"']+@""",
         r"""https://hooks\.slack\.com/services/[^\s"'<>]+""",
-        r"""(?im)^[ \t]*(?:set-)?cookie["']?[ \t]*:[^\r\n]*""",
+        r"""(?im)^[ \t]*(?:[+-][ \t]*)?(?:set-)?cookie["']?[ \t]*:[^\r\n]*""",
         r"""(?i:\bx-origin-verify)["']?\s*:\s*["']?[^\s"',;}\]]+""",
         key + r"[|>][-+]?[ \t]*" + line_break + r"(?:" + block_line + r")+",
-        r"""(?i:\bname)\s*:\s*["']?""" + identifier + r"""["']?[ \t]*"""
-        + line_break + r"""[ \t]*(?i:value)\s*:[^\r\n]*""",
-        key + r"""(?P<quote>["']).*?(?:(?P=quote)|\Z)""",
+        # YAML name/value pairs consume the complete value line, including commas.
+        r"""(?i:\b(?:header)?name)["']?[ \t]*[:=][ \t]*["']?""" + identifier
+        + r"""["']?[ \t]*""" + line_break
+        + r"""[ \t]*(?:[+-][ \t]*)?["']?(?i:(?:header)?value)["']?[ \t]*[:=][^\r\n]*""",
+        r"""(?i:\b(?:header)?name)["']?\s*[:=]\s*["']?""" + identifier
+        + r"""["']?\s*(?:,\s*)?(?:[+-][ \t]*)?["']?(?i:(?:header)?value)["']?\s*[:=]\s*"""
+        + r"(?:" + quoted_value + r"|[^\s,}\]]+)",
+        key + quoted_value,
         key + r"""[^\s"',;}\]]+""",
     )
     for pattern in patterns:
@@ -943,6 +1112,12 @@ def aggregate(args):
             lines.append(f"| {tag} | {role['role']} | {str(role['required']).lower()} | "
                          f"{role['status']} | {role['reason']} |")
         lines.append("")
+        provenance = summary["provenance"]
+        if provenance.get("excluded_paths"):
+            lines += ["Excluded paths: " + canonical(provenance["excluded_paths"]),
+                      "Input policy SHA-256: " + canonical(provenance.get("input_policy_sha256")), ""]
+        if provenance.get("path_only"):
+            lines += ["Content withheld by collector policy: " + canonical(provenance["path_only"]), ""]
         if failures:
             lines += ["Review blocked: required input or response validation failed.", "",
                       "Failure codes:"] + [f"- `{code}`" for code in sorted(set(failures))]
@@ -953,7 +1128,7 @@ def aggregate(args):
                 lines.append("- " + text)
             if not findings:
                 lines.append("NOT_APPLICABLE: trusted project policy excludes all changed files; no model review was performed."
-                             if plan and excluded_only(plan.get("provenance")) else
+                             if plan and not any(r["required"] for r in plan["roles"].values()) else
                              "No findings reported by all required validated role responses.")
         lines += ["", "VERDICT: FAIL" if mode == "blocked" else "VERDICT: PASS", ""]
         write(work / "deterministic-review.md", "\n".join(lines))
@@ -975,6 +1150,9 @@ def main(argv=None):
         prep.add_argument("--" + name, required=True)
     prep.add_argument("--context-cap", type=context_cap, default=MAX_CONTEXT_BYTES)
     prep.add_argument("--paths", help="JSON array of complete repository-relative changed paths")
+    prep.add_argument("--allow-exclusions-only", action="store_true",
+                      help="Opt into no-model PASS for the trusted collector's exclusions-only scope")
+    prep.add_argument("--policy", help="Trusted BASE policy JSON file; exact bytes must match provenance")
     prep.add_argument("--provenance", help=(
         "JSON object with head_sha, base_sha and raw diff_sha256; optional "
         "input_failures and approved metadata-only deletion path_only arrays"))
@@ -1000,6 +1178,21 @@ def main(argv=None):
         print("role-review: local input/output validation failed", file=sys.stderr)
         return 2
 
+
+
+def policy_bytes(file):
+    """The caller selects trusted BASE policy; this library anchors its bytes."""
+    try:
+        path = Path(file)
+        if path.is_symlink() or not path.is_file():
+            raise Invalid("invalid_exclusions_policy")
+        raw = path.read_bytes()
+        policy = strict_json(raw.decode("utf-8"))
+        if not isinstance(policy, dict) or policy.get("schema_version") != 1:
+            raise Invalid("invalid_exclusions_policy")
+        return raw
+    except (OSError, UnicodeError, TypeError, Invalid):
+        raise Invalid("invalid_exclusions_policy") from None
 
 if __name__ == "__main__":
     sys.exit(main())

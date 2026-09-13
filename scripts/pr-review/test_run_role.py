@@ -25,6 +25,8 @@ class RoleExecutionTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        self.final_file = self.root / "final.txt"
+        self.final_file.write_text("{}\n")
 
     def executable(self, text):
         path = self.root / "fake-cli"
@@ -102,6 +104,96 @@ class RoleExecutionTests(unittest.TestCase):
         )
         self.assertTrue(ok, error)
         self.assertEqual(code, 0)
+
+    def test_codex_transport_requires_a_complete_unambiguous_event_stream(self):
+        message = {"type": "item.completed", "item": {
+            "id": "reply", "type": "agent_message", "text": '{"review":"exact"}',
+        }}
+        start = {"type": "turn.started"}
+        done = {"type": "turn.completed", "usage": {
+            "input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1,
+        }}
+        self.assertTrue(hasattr(self.runner, "codex_response"))
+        for events in ([start, message], [start, done],
+                       [start, message, {"type": "turn.failed", "error": {"message": "failed"}}],
+                       [start, message, done, message],
+                       [start, message, start, done], [start, message, done, "invalid"]):
+            with self.subTest(events=events):
+                raw = "\n".join(json.dumps(event) for event in events)
+                output, error, valid = self.runner.codex_response(raw, self.final_file)
+                self.assertFalse(valid)
+                self.assertEqual(output, "")
+
+    def test_codex_transport_uses_cli_final_file_without_concatenating_progress(self):
+        self.assertTrue(hasattr(self.runner, "codex_response"))
+        raw = "\n".join(json.dumps(event) for event in [
+            {"type": "turn.started"},
+            {"type": "item.completed", "item": {
+                "id": "first", "type": "agent_message", "text": '{"first":true}\n'}},
+            {"type": "item.completed", "item": {
+                "id": "second", "type": "agent_message", "text": '{"second":true}\n'}},
+            {"type": "turn.completed", "usage": {
+                "input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1}},
+        ])
+        self.final_file.write_text('{"second":true}\n')
+        output, error, valid = self.runner.codex_response(raw, self.final_file)
+        self.assertTrue(valid, error)
+        self.assertEqual(output, '{"second":true}\n')
+        self.assertEqual(error, "")
+
+    def test_codex_recovered_error_is_forwarded_without_invalidating_completed_turn(self):
+        raw = "\n".join(json.dumps(event) for event in [
+            {"type": "turn.started"},
+            {"type": "error", "message": "Reconnecting... stream disconnected before completion"},
+            {"type": "item.completed", "item": {
+                "id": "reply", "type": "agent_message", "text": '{"review":"complete"}'}},
+            {"type": "turn.completed", "usage": {
+                "input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1}},
+        ])
+        self.final_file.write_text('{"review":"complete"}\n')
+        output, error, valid = self.runner.codex_response(raw, self.final_file)
+        self.assertTrue(valid, error)
+        self.assertEqual(output, '{"review":"complete"}\n')
+        self.assertIn("Reconnecting", error)
+
+    def test_codex_transport_and_final_file_keep_output_bounds(self):
+        output, error, valid = self.runner.codex_response("*" * (1024 * 1024 + 1), self.final_file)
+        self.assertEqual((output, error, valid), ("", "output_byte_limit", False))
+        raw = "\n".join(json.dumps(event) for event in (
+            {"type": "turn.started"},
+            {"type": "item.completed", "item": {"type": "agent_message", "text": "reply"}},
+            {"type": "turn.completed"},
+        ))
+        self.final_file.write_text("*" * (1024 * 1024 + 1))
+        self.assertEqual(self.runner.codex_response(raw, self.final_file),
+                         ("", "output_byte_limit", False))
+
+    def test_codex_jsonl_unicode_separators_inside_strings_are_not_event_boundaries(self):
+        for separator in ("\u0085", "\u2028", "\u2029"):
+            with self.subTest(separator=repr(separator)):
+                final = json.dumps({"review": "complete" + separator + "answer"}, ensure_ascii=False)
+                self.final_file.write_text(final)
+                events = (
+                    {"type": "turn.started"},
+                    {"type": "item.completed", "item": {
+                        "type": "command_execution", "aggregated_output": "tool" + separator + "data"}},
+                    {"type": "item.completed", "item": {"type": "agent_message", "text": final}},
+                    {"type": "turn.completed"},
+                )
+                raw = "\n".join(json.dumps(event, ensure_ascii=False) for event in events) + "\n"
+                self.assertEqual(self.runner.codex_response(raw, self.final_file), (final, "", True))
+
+    def test_bad_codex_stream_cannot_hide_final_file_overflow(self):
+        self.final_file.write_text("*" * (1024 * 1024 + 1))
+        for raw in ("malformed", '{"type":"turn.started"}', "", "*" * (1024 * 1024 + 1)):
+            with self.subTest(stream=raw[:32]):
+                self.assertEqual(self.runner.codex_response(raw, self.final_file),
+                                 ("", "output_byte_limit", False))
+        self.final_file.write_text("*" * (1024 * 1024))
+        output, error, valid = self.runner.codex_response('{"type":"turn.started"}', self.final_file)
+        self.assertFalse(valid)
+        self.assertEqual(output, "")
+        self.assertNotIn("output_byte_limit", error)
 
 
 if __name__ == "__main__":

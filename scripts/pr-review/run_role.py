@@ -16,7 +16,7 @@ import sys
 import tempfile
 import time
 
-from role_review import diagnostic_failure, issue_request, Invalid, MAX_REQUEST_BYTES, output_bytes
+from role_review import diagnostic_failure, issue_request, Invalid, MAX_REQUEST_BYTES, MAX_OUTPUT_BYTES, output_bytes, text_file
 
 
 DIRECTORY = Path(__file__).resolve().parent
@@ -169,7 +169,7 @@ def run(work, tag):
                         code, output, error = execute(
                             command, cwd, kiro_environment(cwd, environment), "", timeout
                         )
-                        if FAILURE.search(error) or diagnostic_failure(error) == "output_byte_limit":
+                        if FAILURE.search(error) or diagnostic_failure(error):
                             code = code or 1
                             break
                         if code == 0 and output.strip():
@@ -179,7 +179,8 @@ def run(work, tag):
             if tag == "codex":
                 command = [
                     "codex", "exec", "--model", role["model"],
-                    "-s", "read-only", "--skip-git-repo-check", prompt,
+                    "-s", "read-only", "--skip-git-repo-check", "--json",
+                    "--output-last-message", "", prompt,
                 ]
                 # Keep the trusted base checkout and its configured Bedrock provider.
                 cwd = Path.cwd()
@@ -193,12 +194,34 @@ def run(work, tag):
             for _ in range(attempts):
                 nonce, framed_prompt, payload = issue_request(work, tag)
                 if tag == "codex":
+                    # The role's mode-0700 temporary directory is independent
+                    # of the trusted base cwd. Each attempt gets a fresh file.
+                    final_output = Path(temporary) / f"codex-final-{nonce}.txt"
+                    final_output.unlink(missing_ok=True)
+                    command[-2] = str(final_output)
                     command[-1] = "-"
                     delivered = framed_prompt + "\n" + payload
                 else:
                     command[2] = framed_prompt
                     delivered = payload
                 code, output, error = execute(command, cwd, environment, delivered, timeout)
+                if diagnostic_failure(error):
+                    code = code or 1
+                    break
+                if tag == "codex":
+                    output, event_error, complete = codex_response(output, final_output)
+                    if diagnostic_failure(event_error) == "output_byte_limit":
+                        code, output, error = code or 1, "", "output_byte_limit"
+                        break
+                    if event_error:
+                        error = error + ("\n" if error else "") + event_error
+                    if not complete:
+                        code = code or 1
+                    try:
+                        output_bytes(output)
+                        output_bytes(error)
+                    except Invalid:
+                        code, output, error = code or 1, "", "output_byte_limit"
                 if diagnostic_failure(error):
                     code = code or 1
                     break
@@ -231,6 +254,96 @@ def main():
     arguments = parser.parse_args()
     run(arguments.work.resolve(), arguments.tag)
 
+
+
+def codex_response(raw, final_path):
+    """Validate all events, then read the CLI-designated final reply unchanged."""
+    overflow, final_error, output = False, None, ""
+    try:
+        output_bytes(raw)
+    except Invalid:
+        overflow = True
+    try:
+        if final_path.is_symlink() or not final_path.is_file():
+            raise OSError()
+        output = text_file(final_path, MAX_OUTPUT_BYTES)
+    except Invalid as exc:
+        overflow = overflow or str(exc) == "output_byte_limit"
+        final_error = str(exc)
+    except OSError:
+        final_error = "Codex final reply file is missing or invalid."
+    if overflow:
+        return "", "output_byte_limit", False
+    started = completed = failed = False
+    has_message = False
+    diagnostics = []
+    def diagnostic(text):
+        line = " ".join(text.splitlines())
+        if line.lower().startswith("model rerouted:"):
+            line = "Falling back to another model: " + line
+        diagnostics.append(line)
+
+    lines = raw.split("\n")
+    if lines[-1] == "":
+        lines.pop()
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except ValueError:
+            failed = True
+            continue
+        if not isinstance(event, dict) or not isinstance(event.get("type"), str):
+            failed = True
+            continue
+        kind = event["type"]
+        if completed:
+            failed = True
+        if kind in ("error", "turn.failed"):
+            # Native "error" includes in-turn reconnect notices. A completed
+            # turn may recover; the caller still rejects terminal diagnostics.
+            if kind == "turn.failed":
+                failed = True
+            error = event.get("error", event)
+            text = error.get("message") if isinstance(error, dict) else None
+            if isinstance(text, str):
+                diagnostic(text)
+            else:
+                failed = True
+            continue
+        if kind == "turn.started":
+            if started:
+                failed = True
+            started = True
+        elif kind == "turn.completed":
+            if not started:
+                failed = True
+            completed = True
+        elif kind == "item.completed":
+            item = event.get("item")
+            if not started or not isinstance(item, dict):
+                failed = True
+            elif item.get("type") == "error":
+                text = item.get("message")
+                if isinstance(text, str):
+                    diagnostic(text)
+                else:
+                    failed = True
+            elif item.get("type") == "agent_message":
+                text = item.get("text")
+                if not isinstance(text, str):
+                    failed = True
+                else:
+                    # Progress items are not the final response. Codex owns
+                    # final-message selection; never search for parsable JSON.
+                    has_message = True
+    if final_error:
+        diagnostics.append(final_error)
+    if failed or not completed or not has_message:
+        diagnostics.append("Codex event stream did not complete with agent output.")
+        return "", "\n".join(diagnostics), False
+    if final_error:
+        return "", "\n".join(diagnostics), False
+    return output, "\n".join(diagnostics), True
 
 if __name__ == "__main__":
     main()
