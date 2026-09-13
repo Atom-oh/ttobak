@@ -57,3 +57,7 @@ worker does not restore deleted exports or justify serving stale chunks.
   [migration contract](../../backend/cmd/kb/KNOWLEDGE_MIGRATION.md).
 - [Bootstrap runbook](../runbooks/knowledge-index-bootstrap.md),
   [QA rollout](../runbooks/qa-current-source-rollout.md).
+- [Deployed manual producer acceptance](../research/evaluations/2026-09-13-manual-kb-bootstrap/README.md):
+  synthetic private/shared replacement, retrieval and deletion, including cleanup.
+  This establishes the producer prerequisite only; it does not prove QA or
+  canonical activation.

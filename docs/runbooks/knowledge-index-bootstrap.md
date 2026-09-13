@@ -7,6 +7,14 @@ current-source QA deployment/verification in step 4 are complete. Record their
 actual deployment and acceptance references before merging. Source configuration
 does not prove that a deployment has occurred.
 
+The manual producer prerequisite has a completed
+[2026-09-13 acceptance archive](../research/evaluations/2026-09-13-manual-kb-bootstrap/README.md):
+private PDF and shared DOCX creation, replacement, current-byte retrieval,
+deletion and fixture-version cleanup were observed against the deployed worker.
+This archive does not establish authenticated Q&A or canonical-source acceptance.
+The separate current-source QA deployment and runtime checks remain required
+before this activation can merge.
+
 ## Bootstrap boundary
 
 The worker requires `TABLE_NAME`, `BUCKET_NAME`, `KB_BUCKET_NAME`, `KB_ID`,
