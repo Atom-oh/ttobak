@@ -20,9 +20,14 @@ UTF-8 window, whereas the HTTP fallback can contain the full current transcript.
 
 `current_input.request_user_message` adds separate server-generated metadata to
 each user turn in sync REST, WebSocket and async execution. It records current
-client-input presence, meeting scope, context kind, character count and digest,
-without another raw-text copy or new logging. The system excerpt is rebuilt for
-the latest request; stored receipts describe only their own user turn. A changed
+client-input presence, meeting scope, context kind and an opaque comparison digest,
+without another raw-text copy or new logging. New receipts use schema version 2
+and omit character counts. Persisted version 1 receipts remain readable, including
+their validated legacy count field, without resetting or rewriting conversation
+history. Guidance prohibits unsolicited hash/accounting narration and invented
+input-size comparisons: changed digests do not establish equal or different lengths.
+The system excerpt is rebuilt for the latest request; stored receipts describe
+only their own user turn. A changed
 digest can mean growth, a rolling window or a correction, not that an earlier
 assistant answer was wrong. Unchanged input is explicit. Older sessions retain
 their valid dialogue with `prior_unrecorded`; the helper never rewrites earlier

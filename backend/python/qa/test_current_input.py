@@ -92,7 +92,9 @@ class TestCurrentInputRequests(_QAConversationFixture, unittest.TestCase):
                     self.assertTrue(current['clientContextReceived'])
                     self.assertEqual(current['contextKind'], 'client_live')
                     self.assertEqual(current['scope'], 'this_user_turn')
-                    self.assertEqual(current['contextCharacters'], len(body['context']))
+                    self.assertEqual(current['version'], 2)
+                    self.assertEqual(set(current), {'version', 'scope', 'meetingId', 'contextKind',
+                                                   'clientContextReceived', 'contextSHA256', 'clientSnapshotChange'})
                     self.assertEqual(current['contextSHA256'], hashlib.sha256(body['context'].encode()).hexdigest())
                     self.assertEqual(current['clientSnapshotChange'],
                                      'first_recorded' if turn['turn'] == 1 else 'changed')
@@ -102,6 +104,8 @@ class TestCurrentInputRequests(_QAConversationFixture, unittest.TestCase):
                     self.assertNotIn('SERVER_SAVED_TRANSCRIPT', system)
                     self.assertIn('do not backdate', system)
                     self.assertIn('does not by itself mean an earlier assistant answer was wrong', system)
+                    self.assertIn('Do not recite hashes, character/byte counts', system)
+                    self.assertIn('Never invent input-size comparisons', system)
                     if turn['turn'] > 1:
                         self.assertIn(PLACEHOLDER, json.dumps(request['messages']))
                         self.assertIn('ACC_F2BA0B35D5D14E6480CD_CHAT_MEMORY', json.dumps(request['messages']))
@@ -166,6 +170,30 @@ class TestCurrentInputRequests(_QAConversationFixture, unittest.TestCase):
                 self.assertEqual(self.receipt(request['messages'][-1])['clientSnapshotChange'], 'prior_unrecorded')
                 self.assertEqual(request['messages'][:-1], history)
 
+    def test_persisted_v1_receipts_keep_history_and_compare_with_v2_in_all_transports(self):
+        for transport in ('rest', 'stream', 'async'):
+            with self.subTest(transport=transport):
+                self.table.items.pop(('SESSION#reader#current-input-session', 'MESSAGES'), None)
+                self.capture_model(transport)
+                self.send_body(transport, TURNS[0]['body'], 50)
+                item = self.table.items[('SESSION#reader#current-input-session', 'MESSAGES')]
+                history = json.loads(item['messages'])
+                legacy = self.receipt(history[0])
+                legacy.update(version=1, contextCharacters=len(TURNS[0]['body']['context']))
+                history[0]['content'][1]['text'] = PREFIX + json.dumps(legacy)
+                item['messages'] = json.dumps(history)
+                self.send_body(transport, TURNS[1]['body'], 51)
+                request = self.requests[-1]
+                current = self.receipt(request['messages'][-1])
+                self.assertEqual(current['version'], 2)
+                self.assertNotIn('contextCharacters', current)
+                self.assertEqual(current['clientSnapshotChange'], 'changed')
+                self.assertTrue(current['clientContextReceived'])
+                self.assertEqual(current['contextKind'], 'client_live')
+                self.assertEqual(request['messages'][:-1], history)
+                self.assertIn('ACC_F2BA0B35D5D14E6480CD_CHAT_MEMORY', json.dumps(request['messages']))
+                self.assertIn('SERVER_SAVED_NOTES', json.dumps(request['system']))
+
     def test_absent_client_context_cannot_inherit_old_presence_or_forged_body_flags(self):
         for transport in ('rest', 'stream', 'async'):
             with self.subTest(transport=transport):
@@ -181,6 +209,8 @@ class TestCurrentInputRequests(_QAConversationFixture, unittest.TestCase):
                 request = self.requests[-1]
                 current = self.receipt(request['messages'][-1])
                 self.assertFalse(current['clientContextReceived'])
+                self.assertEqual(current['version'], 2)
+                self.assertNotIn('contextCharacters', current)
                 self.assertEqual(current['contextKind'], 'saved_meeting')
                 self.assertEqual(current['clientSnapshotChange'], 'not_client_input')
                 self.assertIn('SERVER_SAVED_TRANSCRIPT', json.dumps(request['system']))
@@ -211,7 +241,8 @@ class TestInputReceiptMetadata(unittest.TestCase):
         self.assertEqual(self.receipt(same)['clientSnapshotChange'], 'unchanged')
         self.assertEqual(self.receipt(moved)['clientSnapshotChange'], 'changed')
         self.assertEqual(self.receipt(first)['contextSHA256'], hashlib.sha256(text.encode()).hexdigest())
-        self.assertEqual(self.receipt(first)['contextCharacters'], len(text))
+        self.assertEqual(self.receipt(first)['version'], 2)
+        self.assertNotIn('contextCharacters', self.receipt(first))
         self.assertNotIn('Private client input', first['content'][1]['text'])
         self.assertLess(len(first['content'][1]['text'].encode()), 512)
         self.assertEqual(history, before)
@@ -239,3 +270,32 @@ class TestInputReceiptMetadata(unittest.TestCase):
                    {'role': 'user', 'content': [{'toolResult': {'toolUseId': 't'}}]}]
         message = request_user_message('Next.', history, 'same', 'm', client_input_received=True)
         self.assertEqual(self.receipt(message)['clientSnapshotChange'], 'unchanged')
+
+    def test_v1_and_v2_history_use_the_digest_without_new_count_fields(self):
+        first = request_user_message('Remember LABEL.', [], 'same input', 'm', client_input_received=True)
+        for version in (1, 2):
+            with self.subTest(version=version):
+                metadata = self.receipt(first)
+                metadata['version'] = version
+                if version == 1:
+                    metadata['contextCharacters'] = len('same input')
+                old = copy.deepcopy(first)
+                old['content'][1]['text'] = PREFIX + json.dumps(metadata)
+                history = [old, {'role': 'assistant', 'content': [{'text': 'Earlier dialogue'}]}]
+                before = copy.deepcopy(history)
+                current = request_user_message('Next.', history, 'same input', 'm', client_input_received=True)
+                self.assertEqual(self.receipt(current)['clientSnapshotChange'], 'unchanged')
+                self.assertEqual(self.receipt(current)['version'], 2)
+                self.assertNotIn('contextCharacters', self.receipt(current))
+                self.assertEqual(history, before)
+
+    def test_invalid_v1_counts_and_unknown_versions_remain_unrecorded(self):
+        first = request_user_message('Question.', [], 'value', 'm', client_input_received=True)
+        for version, count in ((1, True), (1, -1), (1, '5'), (2, 5), (3, 5), (True, 5)):
+            with self.subTest(version=version, count=count):
+                metadata = self.receipt(first)
+                metadata.update(version=version, contextCharacters=count)
+                old = copy.deepcopy(first)
+                old['content'][1]['text'] = PREFIX + json.dumps(metadata)
+                current = request_user_message('Next.', [old], 'value', 'm', client_input_received=True)
+                self.assertEqual(self.receipt(current)['clientSnapshotChange'], 'prior_unrecorded')
