@@ -1,10 +1,5 @@
-# Build and Deploy
+# Deploy
 
-Build all artifacts and deploy to AWS. Requires explicit user confirmation.
-
-## Steps
-1. Pre-flight: build all Go binaries, frontend, and CDK synth
-2. Confirm with user before proceeding
-3. Deploy CDK stacks in dependency order
-4. Deploy frontend to S3 + CloudFront invalidation
-5. Verify API health check
+Use `.claude/skills/deploy/SKILL.md` and `docs/runbooks/deployment.md` for the
+authorized artifact and environment. Validate before deploying; never deploy all
+CDK stacks or implicit dependencies. Do not send unrequested notifications.

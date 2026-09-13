@@ -1,5 +1,11 @@
 # Current search status
 
+Historical planning/acceptance record from 2026-09-12. Checklist statements below
+record the original slice, not current deployment or instructions to restart it.
+For current activation, follow [ADR-038](../../decisions/ADR-038-canonical-note-indexing.md),
+[ADR-039](../../decisions/ADR-039-meeting-document-extraction.md),
+and [ADR-042](../../decisions/ADR-042-current-source-qa-and-history.md), where relevant.
+
 Readers need to distinguish queued, running, waiting-for-file, indexed and failed
 work. Add authenticated status routes for meetings, personal/shared documents
 and account documents. Use current owner/direct-share/exact account membership

@@ -31,6 +31,10 @@ Empty-search tracking is bounded to eight dependencies and 4096 UTF-8 bytes per
 query; the normal 128-dependency session budget also applies. Bookkeeping limits
 set `replayable=False` and `toolHistoryCoverage`, retaining the current result.
 The replay validator enforces the empty-search budget before provider calls.
+The cumulative merge enforces the same budget across separate tool calls:
+the ninth distinct empty result remains available, retains eight proofs, and
+marks history nonreplayable with `DEPENDENCY_LIMIT`. Restore never partially
+merges a history whose combined proofs exceed the budget.
 
 `build_tool_context(..., source_access=..., history=..., create_research=...,
 check_research_limit=..., check_web_search_limit=...)` holds the existing shared

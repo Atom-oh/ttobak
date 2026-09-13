@@ -17,7 +17,7 @@ from source_access import SourceAccess
 from account_reads import StrictAccountReader
 from tool_history import CompleteRead, ToolHistory
 from tool_context import (
-    build_tool_context, track_tool_history as _track_tool_history,
+    build_tool_context, track_tool_history as _track_tool_history, CLIENT_LIVE_NOTE,
     SOURCE_HISTORY_TOOLS as SOURCE_TOOL_NAMES, PUBLIC_HISTORY_TOOLS as PUBLIC_TOOL_NAMES,
 )
 from source_revision import legacy_meeting_identity
@@ -898,7 +898,7 @@ def _account_research(acc_id):
     return out
 
 
-def _qa_system_messages(transcript, meeting_notes=None, meeting_id=None, *, client_input=False):
+def _qa_system_messages(transcript, meeting_notes=None, meeting_id=None):
     """Bound prompt excerpts without silently dropping independently saved notes."""
     messages = [{"text": get_system_prompt()}]
     for source, text, limit, tail in (
@@ -916,9 +916,6 @@ def _qa_system_messages(transcript, meeting_notes=None, meeting_id=None, *, clie
             'totalCharacters': len(text), 'includedCharacters': len(excerpt),
             'startCharacter': start, 'truncated': len(excerpt) < len(text),
         }
-        if source == 'meeting_context' and client_input:
-            snapshot['inputOrigin'] = 'client_live'
-            snapshot['contextPriority'] = 'Use this request input over earlier live context when corrected.'
         continuation = 'search_transcript로 전체 제공 컨텍스트를 검색하세요.'
         if meeting_id:
             snapshot['meetingId'] = meeting_id
@@ -962,8 +959,9 @@ def agentic_converse(messages, transcript=None, session_id=None, user_id=None, m
     tools_used = []
     sources = []
 
-    system_messages = _qa_system_messages(
-        transcript, meeting_notes, meeting_id, client_input=source_state.get('clientInputReceived', False))
+    system_messages = _qa_system_messages(transcript, meeting_notes, meeting_id)
+    if source_state.get('clientInputReceived'):
+        system_messages.append({'text': CLIENT_LIVE_NOTE})
     if source_state.get('attachmentContext'):
         system_messages.append({'text': _attachment_prompt(source_state['attachmentContext'])})
 
@@ -1403,8 +1401,9 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
     sources = []
     final_answer_parts = []
 
-    system_messages = _qa_system_messages(
-        transcript, meeting_notes, meeting_id, client_input=source_state.get('clientInputReceived', False))
+    system_messages = _qa_system_messages(transcript, meeting_notes, meeting_id)
+    if source_state.get('clientInputReceived'):
+        system_messages.append({'text': CLIENT_LIVE_NOTE})
     if source_state.get('attachmentContext'):
         system_messages.append({'text': _attachment_prompt(source_state['attachmentContext'])})
 

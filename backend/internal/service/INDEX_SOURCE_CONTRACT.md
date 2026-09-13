@@ -1,5 +1,9 @@
 # Index source and provider read contracts
 
+Code checked: 2026-09-13. These readers and the worker are implemented.
+CDK enables scheduled `manual-only` snapshots; canonical delivery requires
+`all`. The QA foundations are not yet wired into the active handler.
+
 `IndexSourceReader` takes only `GetIndexSource`, `Head`, and pinned `Read`
 interfaces. It reads canonical USER#/MEETING#, USER#/DOC#, and ACCOUNT#/DOC#
 resources. It cannot mutate source records, publish projections, or start jobs.
@@ -24,7 +28,7 @@ Neither this reader nor that status method calls direct ingestion.
 The deployment role needs `bedrock:GetKnowledgeBaseDocuments` on the configured
 knowledge-base ARN in addition to existing ingestion-job permissions. S3 data
 sources must have completed their initial sync before document-status reads work.
-This prerequisite does not activate a worker, stream, schedule, or IAM grant.
+These read prerequisites alone do not establish worker activation or deployment.
 Lifecycle callers must still check immutable projection inventory and fresh source
 revision/CAS after observing provider status.
 
@@ -54,13 +58,9 @@ and `manual_kb.py`. The standalone foundations must be wired into the strict
 runtime only after snapshot bootstrap. [ADR-038](../../../docs/decisions/ADR-038-canonical-note-indexing.md)
 defines the manual-only → snapshot verification → strict QA → all-mode rollout.
 
-Official AWS contracts:
-
-- https://docs.aws.amazon.com/bedrock/latest/userguide/kb-direct-ingestion-view.html
-- https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_GetKnowledgeBaseDocuments.html
-- https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_KnowledgeBaseDocumentDetail.html
-- https://docs.aws.amazon.com/bedrock/latest/userguide/kb-direct-ingestion.html
-
-The last document distinguishes status reads from direct writes and forbids
-concurrent `IngestKnowledgeBaseDocuments` / `StartIngestionJob`. The worker
-continues to use full S3 sync only.
+Implementation and verification: `index_source.go`, `index_provider.go`,
+`index_knowledge_source.go`, `index_knowledge_provider.go` and their adjacent
+tests. `testdata/index-revisions.json` and `knowledge-revisions.json` pin the
+shared framing contract. Status reads use `GetKnowledgeBaseDocuments`;
+ingestion continues through full S3 sync with `StartIngestionJob`, never
+concurrent direct `IngestKnowledgeBaseDocuments` writes.

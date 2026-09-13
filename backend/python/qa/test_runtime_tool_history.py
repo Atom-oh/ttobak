@@ -119,17 +119,7 @@ class TestRuntimeToolHistory(_QAConversationFixture, unittest.TestCase):
                     model = self.replies(transport, name, arguments)
                     if name == 'get_document_detail':
                         # A valid earlier tool call must not cover the skipped callback.
-                        replies = list(model.side_effect)
-                        first = {'toolUseId': 'first', 'name': 'get_meeting_detail', 'input': {'meetingId': 'm'}}
-                        if transport == 'rest':
-                            replies[0]['output']['message']['content'].insert(0, {'toolUse': first})
-                        else:
-                            replies[0]['stream'][:0] = [
-                                {'contentBlockStart': {'start': {'toolUse': {k: first[k] for k in ('toolUseId', 'name')}}}},
-                                {'contentBlockDelta': {'delta': {'toolUse': {'input': '{"meetingId":"m"}'}}}},
-                                {'contentBlockStop': {}},
-                            ]
-                        model.side_effect = replies
+                        self.prepend_tool(model, transport, 'get_meeting_detail', {'meetingId': 'm'})
                     with mock.patch.object(handler.bedrock_agent_runtime, 'retrieve',
                                            side_effect=result if isinstance(result, Exception) else None,
                                            return_value={'retrievalResults': []}):
@@ -162,7 +152,7 @@ class TestRuntimeToolHistory(_QAConversationFixture, unittest.TestCase):
 
     def test_live_input_never_preserves_changed_or_revoked_server_data(self):
         for transport in ('rest', 'stream'):
-            for change in ('notes', 'revoke', 'delete'):
+            for change in ('notes', 'revoke', 'delete', 'scope'):
                 with self.subTest(transport=transport, change=change):
                     self.table.items.clear()
                     self.account()
@@ -174,20 +164,17 @@ class TestRuntimeToolHistory(_QAConversationFixture, unittest.TestCase):
                         self.ask(transport, 'second', meeting_id='m', context='live corrected input')
                         self.assertNotIn('PRIVATE_CHOICE', json.dumps(model.call_args.kwargs['messages']))
                         self.assertIn('NEW_SERVER_NOTE', json.dumps(model.call_args.kwargs['system']))
+                    elif change == 'scope':
+                        self.meeting('other', transcriptA='OTHER_TRANSCRIPT')
+                        self.ask(transport, 'second', meeting_id='other', context='other live input')
+                        self.assertNotIn('PRIVATE_CHOICE', json.dumps(model.call_args.kwargs['messages']))
                     else:
                         key = ('ACCOUNT#a', 'MEMBER#reader') if change == 'revoke' else ('USER#owner', 'MEETING#m')
                         del self.table.items[key]
                         before = model.call_count
-                        if transport == 'rest':
-                            response = handler.handle_ask('second', context='live next', meeting_id='m',
-                                                          user_id='reader', session_id='chat-readonly')
-                            self.assertEqual(response['statusCode'], 404)
-                        else:
-                            response = handler.handle_ask_stream({
-                                'question': 'second', 'context': 'live next', 'meetingId': 'm',
-                                'userId': 'reader', 'sessionId': 'chat-readonly',
-                                'connectionId': 'c', 'endpoint': 'https://synthetic.invalid'})
-                            self.assertEqual(response['status'], 'error')
+                        response = self.send(transport, 'second', meeting_id='m', context='live next')
+                        self.assertEqual(response.get('statusCode') if transport == 'rest' else response.get('status'),
+                                         404 if transport == 'rest' else 'error')
                         self.assertEqual(model.call_count, before)
 
     def test_empty_kb_success_preserves_live_followup_and_requeries(self):

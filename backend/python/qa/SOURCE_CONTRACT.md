@@ -1,138 +1,113 @@
-# Current-source reader foundation
+# Current-source QA reader contract
 
-The REST and WebSocket QA handlers use these modules for current-source reads,
-retrieval, document tools and source-bound conversation history.
+The prepared REST/WebSocket handler uses these current-source readers and history
+checks. Code readiness is not deployed acceptance; follow
+[the rollout](../../../docs/runbooks/qa-current-source-rollout.md) before cutover.
 
-- `document_context.py` authorizes personal/direct-share/exact account document
-  reads before retaining source contents.
-- `source_revision.py` pins canonical identity and hashes the exact present
-  fields plus S3 bindings. Missing and null remain distinct; test vectors match
-  the Go worker when its fixture is present.
-- `source_context.py` performs fresh metadata authorization before S3, validates
-  source identities, and bounds reads pinned to ETag/version.
-- `attachment_context.py` reads authorized `ATTACH#`/`ATTEXT#` records and verifies
-  immutable result identity, original ETag, byte limits and continuation.
-  Partial/retained results remain explicit and never get audio timestamps.
-- `indexed_retrieval.py` discovers all authorized identity pages, consumes
-  current saved text, and accepts indexed file excerpts only with the current
-  canonical revision and S3 bindings. Legacy meeting exports supply identities,
-  never meeting text. Saved keyword matches cover ingestion delay.
-- `manual_kb.py` verifies private `manual-kb-v1` and authenticated-shared
-  `shared-kb-v1` snapshots. Original `kb/{owner}/...` and `shared/**` binary
-  chunks need a new immutable copy; adding current metadata to an old URI is
-  insufficient. Missing snapshots return explicit pending status. Source
-  read failures propagate instead of returning empty success.
-- `session_provenance.py` keeps source dependencies beside model messages.
-  Restore requires current authorization/revisions for every dependency and
-  an explicit replayable marker. Both integer version 1 before persistence and
-  Decimal version 1 after a boto3 resource read are accepted; booleans, floats,
-  strings, unknown versions and untracked histories are rejected.
-- `tool_history.py`/`account_reads.py` provide current readonly continuity.
-  [Contract](TOOL_HISTORY_CONTRACT.md): per-call source proof, whole-history
-  invalidation, creation receipts without replay, and explicit tracking limits.
-- `source_access.py` composes these readers into current-source search and
-  meeting/document/attachment contexts, with source dependencies attached.
-  Its constructor receives readers and callbacks; it creates no AWS clients.
-- `source_tools.py` defines and formats document, attachment and legacy-text tools.
-  Both authenticated tool loops register these definitions and preserve the
-  existing tool-error boundary.
+## Reader responsibilities
 
-The existing handler-suite command also loads these contract suites:
+| Module | Contract |
+|---|---|
+| `document_context.py` | Authorize personal, direct-share and exact account documents before retaining contents. |
+| `source_revision.py` | Bind canonical identity, exact present fields and S3 metadata; missing/null/empty stay distinct. Go/QA fixtures pin revisions. |
+| `source_context.py` | Fresh metadata authorization before bounded S3 reads pinned to ETag/version. |
+| `attachment_context.py` | Authorize ATTACH/ATTEXT; verify immutable result identity, original ETag, limits and continuation. Partial/retained results stay explicit, without audio timestamps. |
+| `indexed_retrieval.py` | Enumerate authorized identities, use current saved text, and require canonical revision/S3 bindings for binary excerpts. Legacy meeting exports supply identities only. |
+| `manual_kb.py` | Validate private/shared binary snapshots and current originals; unbound old chunks are not evidence. Missing snapshots are pending; read errors propagate. |
+| `source_access.py` | Compose injected readers/callbacks into source contexts/search with dependencies; create no AWS clients. |
+| `source_tools.py` | Define/format document, attachment and legacy-text tools for both transports. |
+| `session_provenance.py` | Recheck every dependency before replay; require an explicit replayable marker and known provenance version. |
 
-```bash
-python3 -m unittest test_handler -v
-```
+The runtime preserves the authenticated tool/error boundary and exposes only
+allowlisted public source fields. `BUCKET_NAME`, `KB_BUCKET_NAME`
+and source-read permissions must match the worker. Private sources remain
+owner-only; `shared/` is authenticated-global, not a private tenant partition.
+Never move private uploads there. Snapshot availability cannot replace current
+authorization, and a pending-only consumer cannot replace existing binary recall.
 
-Tests use synthetic table/S3 responses, including the real boto3 attribute
-serializer/deserializer, without live AWS/model calls. The helper tests are
-loaded by the same command together with the REST/WebSocket integration tests.
+## Candidate selection and current legacy text
 
-The runtime requires the separately deployed source-read IAM and
-`KB_BUCKET_NAME`. Public details are constructed from explicit source fields.
-Private/shared binary snapshots must be produced before adopting
-the strict consumer; pending-only migration is not a substitute for existing
-file answerability. Documented snapshot support is PDF, DOC, DOCX, XLS and XLSX.
-PPT/PPTX remain visible with an unsupported-file state until a supported
-conversion path exists. Producer deployment, actual recall and session
-revalidation through the public endpoints remain separate acceptance work.
+Duplicate canonical/manual identities keep their highest provider score.
+Verified/current text precedes metadata-only pending results. With a limit of
+at least two, reserve one slot for a saved-body match when available, retaining
+up to `limit - 1` semantic text results; remaining slots may hold more saved
+matches. Limit one preserves available semantic body evidence. A title-only
+match never displaces body evidence.
 
-## Candidate selection and legacy text
+Saved fallback matches have score zero. They require all of the first 20
+whitespace-separated, case-folded query terms across saved title/notes/content/
+action items; the reserved body slot excludes title. This literal fallback
+covers some ingestion delay, not general natural-language recall.
 
-Duplicate canonical/manual identities retain their highest provider score.
-Verified or current text precedes metadata-only pending results. For limits
-of two or more, literal saved body matches reserve at least one result slot
-while retaining up to `limit - 1` semantic text results; remaining slots can
-hold additional saved matches. A limit of one preserves an available semantic
-body result. The reserved candidate must match all query terms in
-notes/content/action items, excluding the title. A title-only match, including
-one with unrelated nonempty content, never displaces available body evidence.
-These fallback matches have score zero, not fabricated provider confidence.
-They require all of the first 20 whitespace-separated, case-folded query terms
-to occur in the saved title/notes/content/action items; this is not a Korean
-natural-language recall guarantee. The semantic index remains necessary.
+Legacy `.md`, `.txt`, `.html` and `.csv` under `kb/{caller}/` or authenticated
+`shared/` are read from current scoped objects. Meeting exports never use this
+path. Reads cap source size at 50 MiB, verify ETag/version before and after,
+and retain at most 6,000 characters with partial coverage explicit.
 
-Legacy text under `kb/{caller}/` or authenticated-global `shared/`, with
-`.md`, `.txt`, `.html` or `.csv` suffix, is read from the current scoped object.
-Meeting exports never enter that path. Reads verify ETag/version before and
-after consumption; results retain at most 6,000 characters and indicate
-partial coverage. Source reads are capped at 50 MiB. `shared/` is an existing
-authenticated-global namespace for shared ingestion, not a tenant-private
-partition; a producer must never move private uploads there.
+Provider excerpts are usable only when their exact text occurs in current
+bytes; duplicate URI hits are checked by descending relevance. Otherwise use
+a current literal-query excerpt with the mismatch explicit. `coverage` gives
+source-relative offsets and total length, retaining matches beyond the file's
+introduction. Search formatting caps the excerpt at 2,400 characters and
+recomputes coverage/provenance from what the model actually receives.
 
-Legacy search excerpts are selected from current bytes. A provider chunk is
-used only if its exact text occurs in the current source; duplicate URI hits
-are considered in descending relevance order. Otherwise an excerpt around a
-literal query term in current text is used, with the mismatch explicit.
-`coverage` reports source-relative character offsets and total length, so a
-matching paragraph after the file's introduction is not replaced by its head.
-The model-facing search formatter caps the selected excerpt at 2,400
-characters and recomputes both its coverage and provenance partial flag from
-that rendered range. The larger reader window is not a claim that the model
-received the whole source.
+`get_legacy_text_detail(uri, offset=0, sourceRevision?)` returns up to 6,000
+current characters. Continuations require the prior revision; changes require
+restart. `nextOffset` exists only when text remains, and an offset above zero
+is partial even on the final page. The tool never reads binary or
+foreign-private files.
 
-`get_legacy_text_detail(uri, offset=0, sourceRevision?)` reads up to 6,000 current
-characters from an authorized legacy text object. Continuations require the
-previous source revision and restart after an object change. `nextOffset`
-exists only when later text remains; a page beginning after offset zero is
-still partial even on the final page. The tool is added to the public model
-loop only by the later QA wiring release. It never reads binary files or
-foreign private `kb/{owner}/` objects.
+## Immutable binary snapshots
 
-## Binary snapshot producer contract
-
-Private original keys are flat `kb/{owner}/{filename}` keys. Shared original
-keys may be nested below `shared/`. Binary snapshots use lowercase original
-extensions:
+Supported original formats are PDF, DOC, DOCX, XLS and XLSX. PPT/PPTX have an
+explicit unsupported state until a suitable conversion path exists. Private
+original keys are flat `kb/{owner}/{filename}`; shared keys may nest beneath
+`shared/`. Snapshots use lowercase extensions:
 
 - `manual-kb/v1/{owner}/{resourceId}/{revision}/{run}/document{ext}`
 - `shared-kb/v1/{resourceId}/{revision}/{run}/document{ext}`
 
 `resourceId` is SHA-256 of the exact UTF-8 original key. `revision` hashes
-UTF-8 byte-length-prefixed values in this order: schema, source bucket, source
-key, exact ETag, version ID (empty if absent), decimal source size.
-`testdata/knowledge-revisions.json` and `manual-kb-revisions.json` contain
-producer vectors. A run is the UUID checked by `source_revision.RUN_ID`.
+byte-length-prefixed UTF-8 values in order: schema, bucket, key, exact ETag,
+version ID (empty if absent), decimal source size. `run` matches the UUID
+validator `source_revision.RUN_ID`. Fixtures are
+`testdata/knowledge-revisions.json` and `manual-kb-revisions.json`.
 
-Required metadata is `indexSchema`, `resourceKind`, `resourceId`,
-`sourceRevision`, `indexRunId`, `sourceBucket`, `sourceKey`, `sourceETag`,
-`sourceVersionId`, and numeric `sourceSize`. Private snapshots also require
-`ownerId`; shared snapshots require `visibility: authenticated-shared` and
-forbid `ownerId`. URI, metadata and the current original must agree.
+Required metadata: `indexSchema`, `resourceKind`, `resourceId`, `sourceRevision`,
+`indexRunId`, `sourceBucket`, `sourceKey`, `sourceETag`, `sourceVersionId` and
+numeric `sourceSize`. Private schema/kind are `manual-kb-v1`/`manualKbDocument`
+with `ownerId`; shared uses `shared-kb-v1`/`sharedKbDocument` with
+`visibility=authenticated-shared` and forbids `ownerId`. URI, metadata and
+current original must agree. Adding fresh metadata to old chunks is insufficient.
 
-File states are `pending`, `ready`, `empty`, and `failed`. Pending means
-`VERIFIED_SNAPSHOT_UNAVAILABLE`; empty means `EMPTY_FILE`; failures include
-`UNSUPPORTED_FILE` (PPT/PPTX) and `SOURCE_TOO_LARGE` (over 50 MiB). A ready
-excerpt is still partial, limited to 6,000 characters before tool formatting.
-Old unbound binary chunks are not evidence.
+File states are `pending` (`VERIFIED_SNAPSHOT_UNAVAILABLE`), `ready`, `empty`
+(`EMPTY_FILE`) and `failed`, including `UNSUPPORTED_FILE` or
+`SOURCE_TOO_LARGE` above 50 MiB. Ready excerpts are still partial and capped at
+6,000 characters before tool formatting.
 
-The S3 data source must include `canonical/v1/`, `manual-kb/v1/` and
-`shared-kb/v1/`; its current whole-bucket configuration already does.
-Sidecar metadata must be filterable for `sourcePK`, `sourceSK`, `indexSchema`,
-`ownerId`, `visibility`, `resourceId` and `sourceRevision`.
+Verify the external S3 data source includes `canonical/v1/`, `manual-kb/v1/`
+and `shared-kb/v1/`. Metadata must support filters on `sourcePK`, `sourceSK`,
+`indexSchema`, `ownerId`, `visibility`, `resourceId` and `sourceRevision`.
+Checked-in configuration is not proof of the live source or successful ingestion.
 
-Session dependencies use canonical PK/SK with a source revision, `legacyURI`,
-`manualKey`, or `sharedKey`; attachment dependencies additionally bind an
-attachment ID (`*` means the separately hashed inventory). Every form is
-revalidated against its current authorization and source before replay.
-Saved-text results without an index object use
-`ttobak://source/{resourceHash}` as their identity URI.
+## Session proof and verification
+
+Dependencies identify canonical PK/SK plus revision, `legacyURI`, `manualKey`
+or `sharedKey`. Attachments additionally bind an ID; `*` denotes the separately
+hashed inventory. Revalidate each source and authorization before replay and
+subsequent model use. Saved-text results without index objects use
+`ttobak://source/{resourceHash}`.
+
+Provenance version 1 accepts exact integer/SDK Decimal representations, rejecting
+bools, floats, strings, unknown versions and untracked histories. Changed or
+unavailable dependencies invalidate the entire history, including assistant
+paraphrases. Read-tool proof and mutation receipts follow
+[TOOL_HISTORY_CONTRACT.md](TOOL_HISTORY_CONTRACT.md). User/meeting-bound live input
+and reexecuted empty searches follow [REQUEST_HISTORY_CONTRACT.md](REQUEST_HISTORY_CONTRACT.md).
+Both transports pass the current meeting scope, reset per-call source coverage,
+and use the latest client input. Capacity limits keep valid current results,
+report `toolHistoryCoverage`, and prevent replay of untracked results.
+
+From this directory, `python3 -m unittest test_handler -v` loads these suites.
+Tests use synthetic table/S3 responses and real boto3 serialization without live
+AWS/model calls; public REST/streaming acceptance remains separate.

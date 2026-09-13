@@ -1,11 +1,7 @@
-# Run All Tests
+# Validate
 
-Execute the full test suite across all project modules.
-
-## Steps
-1. Backend Go tests: `cd backend && /usr/local/go/bin/go test ./...`
-2. Frontend lint: `cd frontend && npm run lint`
-3. Frontend build (type check): `cd frontend && npm run build`
-4. CDK tests: `cd infra && npm test`
-5. Report pass/fail summary for each module
-6. If any failures, show detailed error output
+Use the exact commands in root `CLAUDE.md`. Go tests include `./...`; frontend
+requires lint/build; infra requires synth/Jest; Python suites are per artifact;
+MCP uses its Node tests. Native Mac validation requires macOS. For docs/review
+changes run the documentation and review-context checks. Report commands actually
+run and any unavailable platform coverage.
