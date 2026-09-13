@@ -137,6 +137,11 @@ validated_history` means attribution from still-valid conversation evidence,
 not a new retrieval or a claim that every listed source supports the new answer.
 No mutation or model call is replayed for attribution.
 
+Explicit chat deletion removes the chat-list metadata, `MESSAGES` and
+`SOURCE_DETAILS` in one DynamoDB transaction. Missing companion rows are harmless
+for older sessions. This does not cancel an already-running QA invocation or add
+a session tombstone; existing in-flight work can still finish afterward.
+
 Older valid sessions and missing, expired, mismatched, unavailable or oversized
 metadata retain their validated conversation. Details fall back to safe dependency
 identities with `provenanceScope: legacy_identity`, without inventing excerpts,
