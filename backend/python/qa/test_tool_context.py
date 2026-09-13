@@ -8,7 +8,8 @@ from test_source_contract import _SourceFixture
 from source_access import SourceAccess
 from attachment_context import AttachmentReader
 from source_tools import execute_source_tool
-from session_provenance import new_source_state
+from session_provenance import new_source_state, validate_sources, restore_sources
+from request_history import remember_empty_search
 from tool_history import ToolHistory
 import tools
 
@@ -24,6 +25,7 @@ class TestToolContext(_SourceFixture, unittest.TestCase):
             self.source_reader, AttachmentReader(self.source_reader, helpers.handler._query_all),
             helpers.handler._list_shared_meetings, query_all=helpers.handler._query_all,
             provider=self.runtime, kb_id='test-kb')
+        self.access = access
         return self.module().build_tool_context(
             'reader', 'live text', state, [], source_access=access, history=ToolHistory('reader', {}),
             create_research=create or (lambda *args: {'researchId': 'created'}),
@@ -82,3 +84,33 @@ class TestToolContext(_SourceFixture, unittest.TestCase):
         with self.assertRaises(ValueError):
             context['create_research']('owner', 'topic', 'quick')
         self.assertEqual(create.call_count, 1)
+
+    def test_ninth_empty_tool_search_keeps_result_and_eight_cumulative_proofs(self):
+        state = new_source_state()
+        context = self.context(state)
+        for index in range(9):
+            context['sourceReadRecorded'] = False
+            text, sources = tools.execute_tool('search_knowledge_base', {'query': f'query {index}'}, context)
+            self.module().track_tool_history(state, 'search_knowledge_base', context)
+            self.assertNotIn('Tool error', text)
+            self.assertEqual(sources, [])
+            self.assertEqual(len(state['dependencies']), min(index + 1, 8))
+            validate_sources(state, lambda dep: self.access._source_is_current('reader', dep))
+        self.assertFalse(state['replayable'])
+        self.assertNotIn('query 8', [dep['emptySearch']['query'] for dep in state['dependencies']])
+        self.assertEqual(state['toolHistoryCoverage'], [
+            {'tool': 'search_knowledge_base', 'complete': False, 'reason': 'DEPENDENCY_LIMIT'}])
+
+    def test_restore_does_not_partially_merge_over_budget_empty_proofs(self):
+        saved = new_source_state()
+        for index in range(8):
+            remember_empty_search(saved, 'reader', f'old {index}', 5)
+        current = new_source_state()
+        remember_empty_search(current, 'reader', 'current', 5)
+        before = list(current['dependencies'])
+        self.assertFalse(restore_sources({
+            'sourceProvenanceVersion': 1, 'sourceReplayable': True,
+            'sourceDependencies': saved['dependencies'],
+        }, current, lambda dep: True))
+        self.assertEqual(current['dependencies'], before)
+        self.assertTrue(current['replayable'])

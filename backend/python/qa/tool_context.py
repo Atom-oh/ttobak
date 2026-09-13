@@ -21,9 +21,11 @@ def build_tool_context(user_id, text, source_state, source_details, *, source_ac
         current = new_source_state()
         try:
             value = callback(*args, source_state=current, source_details=source_details)
+            recorded = True
             for dependency in current['dependencies']:
-                remember_source(source_state, dependency)
-            if current['dependencies'] and current['replayable']:
+                if remember_source(source_state, dependency) is False:
+                    recorded = False
+            if recorded and current['dependencies'] and current['replayable']:
                 context['sourceReadRecorded'] = True
             else:
                 source_state['replayable'] = False

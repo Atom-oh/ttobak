@@ -7,7 +7,7 @@ from manual_kb import shared_source_key
 from tool_history import (
     MAX_TOOL_DEPENDENCIES, is_tool_dependency, valid_tool_dependency, tool_dependency_key, covers_tool_calls,
 )
-from request_history import MAX_EMPTY_SEARCHES, is_request_dependency, valid_request_dependency, request_key
+from request_history import MAX_EMPTY_SEARCHES, is_request_dependency, valid_request_dependency, request_key, mark_untracked
 
 MAX_SESSION_DEPENDENCIES = 128
 MAX_HISTORY_BYTES = 384 * 1024
@@ -70,6 +70,11 @@ def remember_source(state, dependency):
             if saved != dependency:
                 raise RuntimeError('Source changed during this answer; retry with current content.')
             return
+    if 'emptySearch' in dependency and (
+            sum('emptySearch' in dep for dep in state['dependencies']) >= MAX_EMPTY_SEARCHES
+            or len(state['dependencies']) >= MAX_SESSION_DEPENDENCIES):
+        mark_untracked(state, 'search_knowledge_base', 'DEPENDENCY_LIMIT')
+        return False
     if (len(state['dependencies']) >= MAX_SESSION_DEPENDENCIES
             or is_tool_dependency(dependency) and
             sum(is_tool_dependency(dep) for dep in state['dependencies']) >= MAX_TOOL_DEPENDENCIES):
@@ -106,7 +111,8 @@ def restore_sources(item, state, is_current, *, tool_history=None):
             return False
         candidate = {'dependencies': list(state['dependencies']), 'replayable': state['replayable']}
         for dependency in dependencies:
-            remember_source(candidate, dependency)
+            if remember_source(candidate, dependency) is False:
+                return False
     except Exception:
         return False
     state['dependencies'] = candidate['dependencies']

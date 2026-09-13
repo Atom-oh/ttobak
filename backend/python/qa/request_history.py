@@ -82,7 +82,7 @@ def request_is_current(user_id, dependency, search, request_meeting_id=None):
     return type(results) is list and not results
 
 
-def _untracked(state, tool, reason):
+def mark_untracked(state, tool, reason):
     state['replayable'] = False
     entry = {'tool': tool, 'complete': False, 'reason': reason}
     coverage = state.setdefault('toolHistoryCoverage', [])
@@ -97,10 +97,9 @@ def _remember(state, dependency, tool):
     if not known and (len(state['dependencies']) >= MAX_SESSION_DEPENDENCIES
                       or 'emptySearch' in dependency and
                       sum('emptySearch' in dep for dep in state['dependencies']) >= MAX_EMPTY_SEARCHES):
-        _untracked(state, tool, 'DEPENDENCY_LIMIT')
+        mark_untracked(state, tool, 'DEPENDENCY_LIMIT')
         return False
-    remember_source(state, dependency)
-    return True
+    return remember_source(state, dependency) is not False
 
 
 def remember_client_input(state, user_id, meeting_id, text):
@@ -115,7 +114,7 @@ def remember_client_input(state, user_id, meeting_id, text):
         state['clientInputReceived'] = True
         return _remember(state, _dependency('clientInput', value), 'search_transcript')
     except (TypeError, ValueError, UnicodeError):
-        _untracked(state, 'search_transcript', 'RECEIPT_UNAVAILABLE')
+        mark_untracked(state, 'search_transcript', 'RECEIPT_UNAVAILABLE')
         return False
 
 
@@ -125,5 +124,5 @@ def remember_empty_search(state, user_id, query, count):
         return _remember(state, _dependency('emptySearch', _search(user_id, query, count)),
                          'search_knowledge_base')
     except (TypeError, ValueError, UnicodeError):
-        _untracked(state, 'search_knowledge_base', 'RECEIPT_UNAVAILABLE')
+        mark_untracked(state, 'search_knowledge_base', 'RECEIPT_UNAVAILABLE')
         return False
