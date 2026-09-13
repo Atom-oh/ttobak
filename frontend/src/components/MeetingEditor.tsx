@@ -172,6 +172,7 @@ export function MeetingEditor({
   }, [hasWikilinks]);
 
   const editor = useEditor({
+    immediatelyRender: false,
     extensions,
     content,
     editable: !readOnly,
@@ -201,7 +202,7 @@ export function MeetingEditor({
   // Update content when prop changes
   useEffect(() => {
     if (editor && content !== editor.getHTML()) {
-      editor.commands.setContent(content);
+      editor.commands.setContent(content, { emitUpdate: false });
     }
   }, [content, editor]);
 
