@@ -237,6 +237,7 @@ class RoleReviewTests(unittest.TestCase):
             ('originSecret="origin-private-value"', "origin-private-value"),
             ('mcpToken="mcp-private-value"', "mcp-private-value"),
             ("x-origin-verify: origin-header-private", "origin-header-private"),
+            ("prefix-eyJ" + "A" * 20 + "." + "B" * 20 + "." + "C" * 20, "C" * 20),
         ]
         for index, (text, secret) in enumerate(cases):
             with self.subTest(kind=text.split("=", 1)[0][:24]):
@@ -401,6 +402,72 @@ class RoleReviewTests(unittest.TestCase):
                 self.assertIn(run, scrubbed)
                 self.assertNotIn("SYNTHETIC_BEFORE", scrubbed)
                 self.assertNotIn("SYNTHETIC_AFTER", scrubbed)
+
+    def bounded_scrub(self, text):
+        try:
+            result = subprocess.run(
+                [sys.executable, "-c",
+                 "import json,sys; from role_review import scrub; print(json.dumps(scrub(json.load(sys.stdin))))"],
+                cwd=ENGINE.parent, input=json.dumps(text), capture_output=True, text=True, timeout=3,
+            )
+        except subprocess.TimeoutExpired:
+            self.fail("Scrubbing the bounded adversarial input exceeded three seconds")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)
+
+    def test_long_scheme_candidates_do_not_rescan_suffixes(self):
+        noise = "x" * 200000
+        text = ('password="SYNTHETIC_BEFORE" ' + noise
+                + ' mongodb+srv://user:SYNTHETIC_AFTER@database.local/path')
+        scrubbed = self.bounded_scrub(text)
+        self.assertIn(noise, scrubbed)
+        self.assertNotIn("SYNTHETIC_BEFORE", scrubbed)
+        self.assertNotIn("SYNTHETIC_AFTER", scrubbed)
+
+    def test_repeated_credential_keywords_use_one_identifier_consumption(self):
+        for word in ("token", "password", "secret"):
+            for delimiter in ("", ": SYNTHETIC_NAMED_CREDENTIAL"):
+                with self.subTest(word=word, delimiter=bool(delimiter)):
+                    identifier = "prefix_" + word * 4000 + "_suffix"
+                    text = ("password=SYNTHETIC_BEFORE " + identifier + delimiter
+                            + " api_key=SYNTHETIC_AFTER")
+                    scrubbed = self.bounded_scrub(text)
+                    if not delimiter:
+                        self.assertIn(identifier, scrubbed)
+                    self.assertNotIn("SYNTHETIC_NAMED_CREDENTIAL", scrubbed)
+                    self.assertNotIn("SYNTHETIC_BEFORE", scrubbed)
+                    self.assertNotIn("SYNTHETIC_AFTER", scrubbed)
+
+    def test_other_scrub_patterns_have_bounded_adversarial_runs(self):
+        cases = {
+            "jwt-prefixes": "eyJ-" * 50000,
+            "pem-prefix": "-----BEGIN " + "PRIVATE KEY " * 4000,
+            "scheme-punctuation": "scheme" + "+.-" * 30000,
+            "authorization-space": "Authorization" + " " * 50000,
+            "yaml-space": "password: |" + " " * 50000,
+            "environment-name": "name: " + "TOKEN_" * 8000,
+            "cookie-space": " " * 50000 + "cookie",
+            "bearer": "Bearer " + "a" * 50000,
+            "github-token": "github_pat_" + "a" * 50000,
+            "api-token": "sk-" + "a" * 50000,
+            "slack-token": "xoxb-" + "a-" * 25000,
+            "google-key": "AIza" + "a" * 50000,
+            "aws-key-prefix": "AKIA" + "A" * 50000,
+            "jwt-body": "eyJ" + "a" * 50000 + ".body.signature",
+            "slack-hook": "https://hooks.slack.com/services/" + "a" * 50000,
+            "origin-header": "x-origin-verify: " + "a" * 50000,
+            "ansi-parameters": "\x1b[" + ";" * 50000 + "m",
+            "control-string": "\x1b]" + "a" * 50000 + "\x07",
+        }
+        for name, payload in cases.items():
+            with self.subTest(pattern=name):
+                scrubbed = self.bounded_scrub(
+                    "password=SYNTHETIC_BEFORE " + payload + " api_key=SYNTHETIC_AFTER",
+                )
+                self.assertNotIn("SYNTHETIC_BEFORE", scrubbed)
+                self.assertNotIn("SYNTHETIC_AFTER", scrubbed)
+                if name == "jwt-prefixes":
+                    self.assertIn(payload, scrubbed)
 
     def test_decoded_output_budget_counts_string_values_in_utf8_bytes(self):
         limit = 1024 * 1024

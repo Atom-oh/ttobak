@@ -725,8 +725,9 @@ def scrub(value, _remaining=None):
     value = re.sub(r"\x1b[ -/]*[0-~]", "", value)
     value = "".join(c for c in value if c in "\n\r\t" or unicodedata.category(c) not in ("Cc", "Cf", "Zl", "Zp"))
     identifier = (
-        r"(?i:(?<![A-Za-z0-9_-])[A-Za-z0-9_-]*(?:password|passwd|api[_-]?key|"
-        r"secret|token|credential|passphrase|private[_-]?key|cookie|AccessKeyId|access[_-]?key[_-]?id)[A-Za-z0-9_-]*)"
+        r"(?i:(?<![A-Za-z0-9_-])(?=[A-Za-z0-9_-]*(?:password|passwd|api[_-]?key|"
+        r"secret|token|credential|passphrase|private[_-]?key|cookie|AccessKeyId|access[_-]?key[_-]?id))"
+        r"[A-Za-z0-9_-]+)"
     )
     key = identifier + r"""["']?\s*[:=]\s*"""
     patterns = (
@@ -736,10 +737,11 @@ def scrub(value, _remaining=None):
         r"\bsk-[A-Za-z0-9_-]{16,}",
         r"\bxox[abprs]-[A-Za-z0-9-]{10,}",
         r"\bAIza[0-9A-Za-z_-]{30,}",
-        r"\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+",
+        r"(?<![A-Za-z0-9_-])(?=[A-Za-z0-9_-]*\beyJ)"
+        r"[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+",
         r"(?i:\bBearer\s+)[A-Za-z0-9_.~+/-]+=*",
         r"""(?i:\bAuthorization)["']?\s*:\s*["']?(?i:Basic|Bearer)\s+[A-Za-z0-9+/=_.~-]+""",
-        r"""[A-Za-z][A-Za-z0-9+.-]*://[^/\s:@"']*:[^@\s/"']+@""",
+        r"""(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]*://[^/\s:@"']*:[^@\s/"']+@""",
         r"""https://hooks\.slack\.com/services/[^\s"'<>]+""",
         r"""(?im)^[ \t]*(?:set-)?cookie["']?[ \t]*:[^\r\n]*""",
         r"""(?i:\bx-origin-verify)["']?\s*:\s*["']?[^\s"',;}\]]+""",

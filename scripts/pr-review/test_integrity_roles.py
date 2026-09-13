@@ -51,12 +51,12 @@ class IntegrityTests(unittest.TestCase):
             "findings": [], "uncertainties": [],
         })
 
-    def chair(self, responses):
+    def chair(self, responses, scrubber=None):
         (self.work / "chair-mode.txt").write_text("review\n")
         (self.work / "role-summary.json").write_text('{"findings":[]}\n')
         (self.work / "project-context.md").write_text("Trusted context.\n")
         with patch.object(synthesize_roles, "execute", side_effect=responses) as execute:
-            with patch.object(synthesize_roles, "scrub", side_effect=lambda value: value):
+            with patch.object(synthesize_roles, "scrub", side_effect=scrubber or (lambda value: value)):
                 synthesize_roles.synthesize(self.work, self.work / "review.md")
         return execute, (self.work / "review.md").read_text()
 
@@ -92,6 +92,16 @@ class IntegrityTests(unittest.TestCase):
         self.assertEqual(execute.call_count, 1)
         self.assertTrue(text.endswith("VERDICT: FAIL\n"))
         self.assertNotIn("***", text)
+
+    def test_raw_scrubber_newline_overflow_writes_failed_chair_status(self):
+        suffix = "\nVERDICT: PASS"
+        reply = (0, "*" * (1024 * 1024 - len(suffix)) + suffix, "")
+        environment_file = self.root / "github-env"
+        with patch.dict(os.environ, {"GITHUB_ENV": str(environment_file)}):
+            execute, text = self.chair([reply], scrubber=run_role.scrub)
+        self.assertEqual(execute.call_count, 1)
+        self.assertTrue(text.endswith("VERDICT: FAIL\n"))
+        self.assertIn("chair_failed=1", environment_file.read_text())
 
     def test_explicit_clean_fallback_can_resolve_selection_failure(self):
         execute, text = self.chair([

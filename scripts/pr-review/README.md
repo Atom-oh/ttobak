@@ -31,8 +31,12 @@ The raw-output scrubber and decoded-string scrubber are separate stages.
 Unterminated quoted credentials are redacted through the end of the decoded
 string. Sanitization is defense in depth, not proof that arbitrary content
 contains no secrets. Request digests attest byte binding, not model honesty.
-The credential matcher enters underscore/hyphen identifiers only at their start,
-preserving affixed key names without rescanning each separator suffix.
+The credential matcher checks keyword membership before consuming the complete
+identifier, preserving affixed keys without retrying every keyword/suffix pair.
+URI schemes and JWT headers start at whole-token boundaries; JWT header membership
+is checked separately from consumption. Bounded subprocess tests cover long
+alphabetic runs, repeated keywords/prefixes, separators, and the other scrubber
+pattern families while retaining valid credential-redaction checks.
 
 Untrusted stdout and stderr are limited separately to 1 MiB of UTF-8 after
 process capture, before parsing or scrubbing; this is not a streaming capture
@@ -40,7 +44,8 @@ memory limit. Direct result-file reads use the same bound. Decoded string values
 share a 1 MiB sanitization budget, and attempt-history reads are bounded too.
 Stored result envelopes allow an additional 4 KiB for host metadata.
 Oversize produces the static `output_byte_limit` failure and stays blocking on
-reissue. Chair overflow produces FAIL without fallback. No review is truncated
+reissue. Chair overflow, including growth during sanitization, produces FAIL and
+failed-chair status without fallback. No review is truncated
 or counted as valid partial coverage.
 
 Limits remain 95,000 diff bytes, 3,000 diff lines, 24,000 context bytes and a
