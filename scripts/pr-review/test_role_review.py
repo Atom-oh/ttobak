@@ -650,6 +650,58 @@ class RoleReviewTests(unittest.TestCase):
             self.assertNotIn("SYNTHETIC_USER_SECRET", published)
             self.assertNotIn("SYNTHETIC_PATH_SECRET", published)
 
+    def test_mixed_quoted_credentials_are_fully_redacted_after_raw_scrubbing(self):
+        values = [
+            """password = 'a"SYNTHETIC_PRIVATE_SUFFIX'""",
+            '''password = "a'SYNTHETIC_PRIVATE_SUFFIX"''',
+            r'''password = "a\"SYNTHETIC_PRIVATE_SUFFIX"''',
+            r"""password = 'a\'SYNTHETIC_PRIVATE_SUFFIX'""",
+            r'''password = "a\\SYNTHETIC_PRIVATE_SUFFIX"''',
+            r'''name="DB_PASSWORD", value="a\"SYNTHETIC_PRIVATE_SUFFIX"''',
+        ]
+        for index, evidence in enumerate(values):
+            with self.subTest(case=index):
+                self.work = self.root / f"mixed-quote-{index}"
+                self.prepare()
+                response = self.response("codex", findings=[{
+                    "severity": "MINOR", "path": FRONTEND, "condition": "When credentials are quoted",
+                    "evidence": evidence + "\nKEEP_CONTEXT",
+                }])
+                self.record("codex", raw=scrub_raw(json.dumps(response)))
+                self.record("claude-self")
+                self.cli("aggregate", "--work", self.work)
+                for name in ("slot/codex-result.json", "role-summary.json", "deterministic-review.md"):
+                    published = (self.work / name).read_text()
+                    self.assertNotIn("SYNTHETIC_PRIVATE_SUFFIX", published)
+                    self.assertIn("KEEP_CONTEXT", published)
+        long_value = 'password = "' + (r'a\"' * 20000) + 'SYNTHETIC_PRIVATE_SUFFIX"\nKEEP_CONTEXT'
+        clean = self.bounded_scrub(long_value)
+        self.assertNotIn("SYNTHETIC_PRIVATE_SUFFIX", clean)
+        self.assertIn("KEEP_CONTEXT", clean)
+
+    def test_nonsecret_quotes_paths_and_diff_boundaries_remain_exact(self):
+        cases = ["docs/'release notes'.md", '- "old"\n+ "new"',
+                 '- "old"\r\n+ "new"', '"old" + "new"', "'old' + 'new'",
+                 r'docs/\"release notes\".md', '{ "safe" : [ "old", "new" ] }']
+        for value in cases:
+            with self.subTest(value=value):
+                self.assertEqual(role_review.scrub(value), value)
+        path = "docs/'release notes'.md"
+        self.prepare(patch(path))
+        summary = self.finish()
+        self.assertEqual(summary["mode"], "deterministic")
+        for result in (self.work / "slot").glob("*-result.json"):
+            self.assertEqual(json.loads(result.read_text())["response"]["reviewed_paths"], [path])
+
+    def test_nonsecret_diff_evidence_is_published_without_literal_joining(self):
+        self.prepare()
+        evidence = """- "old"\n+ "new"\nKeep docs/'release notes'.md unchanged."""
+        response = self.response("codex", findings=[{
+            "severity": "MINOR", "path": FRONTEND, "condition": "On the changed lines", "evidence": evidence,
+        }])
+        summary = self.finish({"codex": response})
+        self.assertEqual(summary["findings"][0]["evidence"], evidence)
+
     def test_structured_key_and_diff_formats_have_bounded_processing(self):
         for separator in (".", ":", "-", "_"):
             with self.subTest(separator=separator):

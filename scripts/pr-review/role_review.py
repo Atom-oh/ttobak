@@ -840,14 +840,16 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
         except Invalid:
             decoded = None
         if isinstance(decoded, (dict, list, str)):
-            return canonical(scrub(decoded, _remaining, _depth + 1, False))
+            clean = scrub(decoded, _remaining, _depth + 1, False)
+            return value if clean == decoded else canonical(clean)
         if '\\"' in value:
             try:
                 decoded = strict_json('"' + value + '"')
             except Invalid:
                 decoded = None
             if isinstance(decoded, str) and decoded != value:
-                return scrub(decoded, _remaining, _depth + 1, False)
+                clean = scrub(decoded, _remaining, _depth + 1, False)
+                return value if clean == decoded else clean
         # Keep complete PEM spans intact before individual quoted fragments are scrubbed.
         value = re.sub(PEM_VALUE, "[REDACTED]", value, flags=re.S)
         # Scan quoted fragments once; an unterminated fragment consumes the tail.
@@ -865,12 +867,12 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
             literals = [decoded]
             while index < len(value):
                 next_start = index
-                while next_start < len(value) and value[next_start].isspace():
+                while next_start < len(value) and value[next_start] in " \t":
                     next_start += 1
                 if next_start >= len(value) or value[next_start] != "+":
                     break
                 next_start += 1
-                while next_start < len(value) and value[next_start].isspace():
+                while next_start < len(value) and value[next_start] in " \t":
                     next_start += 1
                 if next_start >= len(value) or value[next_start] not in "\"'":
                     break
@@ -880,7 +882,9 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
                 literals.append(following)
                 index = end
             decoded = "".join(literals)
-            pieces.extend((value[start:opening], canonical(scrub(decoded, _remaining, _depth + 1, False))))
+            clean = scrub(decoded, _remaining, _depth + 1, False)
+            replacement = value[opening:index] if clean == decoded else canonical(clean)
+            pieces.extend((value[start:opening], replacement))
             start = index
         if pieces:
             value = "".join(pieces) + value[start:]
@@ -889,6 +893,7 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
         + r")[A-Za-z0-9_.-]+)"
     )
     key = identifier + r"""["']?\s*[:=]\s*"""
+    quoted_value = r"""(?:"(?:\\.|[^"\\])*(?:"|\\?\Z)|'(?:\\.|[^'\\])*(?:'|\\?\Z))"""
     line_break = r"(?:\r\n?|\n)"
     # Check indentation/blankness without consuming it twice. Every iteration
     # consumes either a nonempty body or a line break, including bare CR.
@@ -915,8 +920,8 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
         + r"""[ \t]*(?:[+-][ \t]*)?["']?(?i:(?:header)?value)["']?[ \t]*[:=][^\r\n]*""",
         r"""(?i:\b(?:header)?name)["']?\s*[:=]\s*["']?""" + identifier
         + r"""["']?\s*(?:,\s*)?(?:[+-][ \t]*)?["']?(?i:(?:header)?value)["']?\s*[:=]\s*"""
-        + r"""(?:(?P<named>["']).*?(?:(?P=named)|\Z)|[^\s,}\]]+)""",
-        key + r"""(?P<quote>["']).*?(?:(?P=quote)|\Z)""",
+        + r"(?:" + quoted_value + r"|[^\s,}\]]+)",
+        key + quoted_value,
         key + r"""[^\s"',;}\]]+""",
     )
     for pattern in patterns:
