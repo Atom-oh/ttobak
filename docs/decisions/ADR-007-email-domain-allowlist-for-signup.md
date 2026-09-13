@@ -17,13 +17,20 @@ Superseded in practice by company security policy (self sign-up is forbidden)
 > created only by an admin via `AdminCreateUser` (the invite flow). The Pre Sign-Up
 > allowlist Lambda described here still runs, though: Cognito invokes the Pre Sign-Up
 > trigger for `AdminCreateUser` too (`triggerSource: PreSignUp_AdminCreateUser`), and
-> `infra/lambda/pre-signup/index.mjs` does not branch on `triggerSource` — so an
-> admin-invited user's email domain is checked against the same allowlist as a
+> `infra/lambda/pre-signup/index.mjs` checks an admin-invited user's email domain
+> against the same allowlist as a
 > (now-closed) self sign-up would have been. This is usually harmless (an admin
 > inviting someone presumably already intends them to join), but it means the
 > allowlist is NOT purely inert defense-in-depth on a closed path — a stale or
 > misconfigured domain list can block a legitimate admin invite. Treat it as a live
 > constraint on `InviteUser`, not just a backstop for a disabled signup flow.
+
+**2026-09-13 amendment:** The explicitly requested demonstration identity
+`demo@atomai.click` may be created through `PreSignUp_AdminCreateUser` despite
+the domain allowlist. This exact-address exception grants no group membership;
+it does not apply to other addresses, self sign-up or federation. Removing the
+exception requires a reviewed code change and does not disable an existing user.
+No password is stored in this policy.
 
 ## Context
 
@@ -133,13 +140,19 @@ PUT  /api/settings/allowed-domains (auth)   -> { domains: string[] }
 > `AdminCreateUser`(초대 플로우)로만 생성합니다. 다만 이 문서의 Pre Sign-Up
 > allowlist Lambda는 지금도 실행됩니다 — Cognito는 `AdminCreateUser`에도 Pre
 > Sign-Up 트리거를 호출하며(`triggerSource: PreSignUp_AdminCreateUser`),
-> `infra/lambda/pre-signup/index.mjs`는 `triggerSource`를 구분하지 않습니다.
-> 즉 관리자가 초대한 사용자의 이메일 도메인도 (이제 닫힌) 셀프 회원가입과 동일한
+> `infra/lambda/pre-signup/index.mjs`에서 관리자가 초대한 사용자의 이메일
+> 도메인도 (이제 닫힌) 셀프 회원가입과 동일한
 > allowlist 검사를 통과해야 합니다. 대부분은 문제가 되지 않지만(관리자가 초대한
 > 사람은 이미 가입 의도가 확인된 사람이므로), 이 allowlist가 순수히 비활성화된
 > 경로의 defense-in-depth만은 아니라는 뜻입니다 — 오래되었거나 잘못 설정된 도메인
 > 목록이 정당한 관리자 초대를 막을 수 있습니다. `InviteUser`에 실제로 작동하는
 > 제약으로 취급하고, 닫힌 가입 플로우의 백스톱으로만 여기지 마십시오.
+
+**2026-09-13 개정:** 명시적으로 요청된 데모 계정 `demo@atomai.click`만
+`PreSignUp_AdminCreateUser` 경로에서 도메인 제한의 예외로 허용합니다.
+그룹 권한을 부여하지 않으며 다른 주소·셀프 회원가입·외부 인증에는 적용하지
+않습니다. 예외 제거는 코드 리뷰를 거치며, 이미 생성된 사용자를 비활성화하지
+않습니다. 비밀번호는 이 정책에 저장하지 않습니다.
 
 ## 배경
 
