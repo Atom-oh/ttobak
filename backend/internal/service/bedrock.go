@@ -734,6 +734,9 @@ func (s *BedrockService) SummarizeTranscript(ctx context.Context, meetingID, use
 			continue
 		}
 		if err := s.repo.BindSummaryAttachment(ctx, snapshot, att); err != nil {
+			if !errors.Is(err, repository.ErrConditionFailed) {
+				return "", err
+			}
 			att.SummaryOmitted, att.ExtractedText, att.ExtractedRevision = true, nil, ""
 		}
 	}

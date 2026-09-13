@@ -52,10 +52,14 @@ func summaryAttachmentSnapshot(content string, attachments []model.Attachment) s
 func summaryAttachmentNotice(attachments []model.Attachment) string {
 	var notes []string
 	for _, att := range attachments {
+		name := sanitizeMarkdownText(att.FileName)
+		if att.SummaryOmitted && att.Type != model.AttachTypeDocument {
+			notes = append(notes, fmt.Sprintf("- %s: 변경된 첨부 근거를 제외했습니다.", name))
+			continue
+		}
 		if att.Type != model.AttachTypeDocument || att.Status != model.AttachStatusDone {
 			continue
 		}
-		name := sanitizeMarkdownText(att.FileName)
 		switch {
 		case att.SummaryOmitted:
 			notes = append(notes, fmt.Sprintf("- %s: 검증할 수 없는 문서 근거를 제외했습니다. 추출 상태 또는 인용을 확인한 뒤 다시 요약하세요.", name))
@@ -72,7 +76,7 @@ func summaryAttachmentNotice(attachments []model.Attachment) string {
 	if len(notes) == 0 {
 		return ""
 	}
-	return "\n\n### 문서 근거 범위\n" + strings.Join(notes, "\n")
+	return "\n\n### 첨부 근거 범위\n" + strings.Join(notes, "\n")
 }
 
 // Resolve only model-selected unit indexes that exist in supplied document

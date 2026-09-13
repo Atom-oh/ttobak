@@ -3,9 +3,7 @@ package service
 import (
 	"context"
 	"errors"
-	"io"
 	"net/http"
-	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -14,6 +12,15 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/ttobak/backend/internal/repository"
 )
+
+func summaryTestService(client noteSourceHTTPClient) *BedrockService {
+	cfg := aws.Config{Region: "ap-northeast-2", HTTPClient: client, Retryer: func() aws.Retryer { return aws.NopRetryer{} },
+		Credentials: aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) {
+			return aws.Credentials{AccessKeyID: "fixture", SecretAccessKey: "fixture"}, nil
+		})}
+	storage := s3.NewFromConfig(cfg)
+	return NewBedrockService(bedrockruntime.NewFromConfig(cfg), storage, repository.NewDynamoDBRepositoryWithS3(dynamodb.NewFromConfig(cfg), "table", storage, "bucket"))
+}
 
 func TestSummarySegmentReadFailuresNeverBecomeSuccessfulAbsence(t *testing.T) {
 	for _, test := range [][2]int{{500, 0}, {412, 0}, {500, 2}, {500, 3}} {
@@ -34,13 +41,13 @@ func TestSummarySegmentReadFailuresNeverBecomeSuccessfulAbsence(t *testing.T) {
 				if req.Method == "HEAD" {
 					heads++
 					if heads == failHead {
-						return &http.Response{StatusCode: code, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(""))}, nil
+						return indexHTTPResponse(code, "", nil), nil
 					}
-					return &http.Response{StatusCode: 200, Header: http.Header{"Etag": {`"v1"`}, "Content-Length": {"6"}}, Body: io.NopCloser(strings.NewReader(""))}, nil
+					return indexHTTPResponse(200, "", map[string]string{"ETag": `"v1"`, "Content-Length": "6"}), nil
 				}
 				if req.Method == "GET" {
 					if failHead > 0 {
-						return &http.Response{StatusCode: 200, Header: http.Header{"Etag": {`"v1"`}}, Body: io.NopCloser(strings.NewReader("한글"))}, nil
+						return indexHTTPResponse(200, "한글", map[string]string{"ETag": `"v1"`}), nil
 					}
 					status = code
 					body = `<Error><Code>InternalError</Code></Error>`
@@ -52,14 +59,9 @@ func TestSummarySegmentReadFailuresNeverBecomeSuccessfulAbsence(t *testing.T) {
 					body = `{"content":[{"type":"text","text":"조용히 시각을 잃은 요약"}],"stop_reason":"end_turn"}`
 				}
 			}
-			return &http.Response{StatusCode: status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body))}, nil
+			return indexHTTPResponse(status, body, nil), nil
 		})
-		cfg := aws.Config{Region: "ap-northeast-2", HTTPClient: client, Retryer: func() aws.Retryer { return aws.NopRetryer{} },
-			Credentials: aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) {
-				return aws.Credentials{AccessKeyID: "fixture", SecretAccessKey: "fixture"}, nil
-			})}
-		storage := s3.NewFromConfig(cfg)
-		svc := NewBedrockService(bedrockruntime.NewFromConfig(cfg), storage, repository.NewDynamoDBRepositoryWithS3(dynamodb.NewFromConfig(cfg), "table", storage, "bucket"))
+		svc := summaryTestService(client)
 		_, err := svc.SummarizeTranscript(context.Background(), "m", "owner", "")
 		wantModels := 0
 		if failHead == 3 {
