@@ -108,6 +108,15 @@ capabilities and configuration, not assertions about deployed activation.
    an empty interpreter role plus SANDBOX networking and receives validated
    requirements/options, not the raw transcript.
 
+The SA workflow connects private preparation documents, initial meeting notes,
+authorized reference catalogues, and private follow-up snapshots through existing
+APIs. Reference selection never searches or publishes automatically; copied notes
+are visible to meeting readers. Recording and detail editors compare note text
+and server revisions; audio retry is independent of an acknowledged note save.
+Account classification and team publication remain separate. Account meeting and
+insight projections recheck current canonical publication with strong metadata
+reads before returning stored excerpts. See [workflow](features/sa-meeting-workflow.md).
+
 ## New processing and reading contracts
 
 Action-item analysis has its own MEETING#/ANALYSIS#actionItems state. The summary

@@ -191,9 +191,17 @@ func (h *MeetingHandler) CreateMeeting(w http.ResponseWriter, r *http.Request) {
 		h.meetingService.EnsureProfileAndMaterializePendingShares(ctx, userID, email, name, middleware.GetEmailVerified(ctx))
 	}
 
-	meeting, err := h.meetingService.CreateMeeting(ctx, userID, req.Title, date, req.Participants, req.SttProvider)
+	meeting, err := h.meetingService.CreateMeeting(ctx, userID, req.Title, date, req.Participants, req.SttProvider,
+		model.MeetingPreparation{Notes: req.Notes, AccountID: req.AccountID})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		switch {
+		case errors.Is(err, service.ErrInvalidInput):
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, err.Error())
+		case errors.Is(err, service.ErrForbidden):
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Account membership required")
+		default:
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		}
 		return
 	}
 
@@ -221,13 +229,19 @@ func (h *MeetingHandler) CreateMeeting(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := map[string]interface{}{
-		"meetingId":    meeting.MeetingID,
-		"title":        meeting.Title,
-		"date":         meeting.Date.Format(time.RFC3339),
-		"status":       meeting.Status,
-		"participants": meeting.Participants,
-		"content":      meeting.Content,
-		"createdAt":    meeting.CreatedAt.Format(time.RFC3339),
+		"supportsNotesComparison":    true,
+		"supportsPrivateAccountLink": true,
+		"notesRevision":              meeting.NotesRevision,
+		"meetingId":                  meeting.MeetingID,
+		"title":                      meeting.Title,
+		"date":                       meeting.Date.Format(time.RFC3339),
+		"status":                     meeting.Status,
+		"participants":               meeting.Participants,
+		"content":                    meeting.Content,
+		"createdAt":                  meeting.CreatedAt.Format(time.RFC3339),
+	}
+	if (req.Notes != "" || req.AccountID != "") && meeting.Notes == req.Notes && meeting.AccountID == req.AccountID {
+		response["preparationApplied"] = true
 	}
 
 	writeJSON(w, http.StatusCreated, response)
@@ -386,6 +400,10 @@ func (h *MeetingHandler) UpdateMeeting(w http.ResponseWriter, r *http.Request) {
 		}
 		if errors.Is(err, service.ErrInvalidInput) {
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, err.Error())
+			return
+		}
+		if errors.Is(err, repository.ErrConditionFailed) {
+			writeError(w, http.StatusConflict, model.ErrCodeConflict, "Meeting changed; reload before saving")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())

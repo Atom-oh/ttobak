@@ -131,6 +131,8 @@ Model/environment selection belongs to each function, not one repo-wide model.
 QA/simulator; Go refinement uses its Sonnet configuration and lightweight Go tasks
 use Haiku. QA detection and Translate are separate service/model choices.
 
+The Go API explicitly depends on the QA Lambda so private relinking cannot deploy
+before the consumer's canonical publication checks.
 QA REST jobs use `ttobak-qa-jobs`: SQS-managed encryption, TLS, 1800s visibility,
 one-day retention/DLQ, batch one, concurrency two, partial batch failures.
 GatewayStack owns scoped queue permissions and JWT submit/poll routes, injecting

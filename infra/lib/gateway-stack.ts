@@ -704,7 +704,8 @@ export class GatewayStack extends cdk.Stack {
     }));
     // Install the consumer, rule and invocation permission before API code
     // can acknowledge a newly published request during this stack update.
-    this.apiFunction.node.addDependency(this.summarizeFunction, savedSummaryRule);
+    // Private relinking must not precede QA's canonical publication reader.
+    this.apiFunction.node.addDependency(this.summarizeFunction, savedSummaryRule, this.qaFunction);
 
     // Convert Doc Lambda (container image w/ LibreOffice) + EventBridge rule
     // for PPTX/PPT slide uploads -> PDF sidecar conversion. Optional (like

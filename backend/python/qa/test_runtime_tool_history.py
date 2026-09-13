@@ -45,7 +45,10 @@ class TestRuntimeToolHistory(_QAConversationFixture, unittest.TestCase):
     def test_readonly_followup_survives_then_edit_revoke_or_failure_clears_everything(self):
         for transport in ('rest', 'stream'):
             for name in ('list_meetings', 'list_accounts', 'get_account_insights', 'get_account_brief'):
-                for change in ('edit', 'revoke', 'read_failure'):
+                changes = ('edit', 'revoke', 'read_failure')
+                if name in ('get_account_insights', 'get_account_brief'):
+                    changes += ('unpublish',)
+                for change in changes:
                     with self.subTest(transport=transport, tool=name, change=change):
                         self.table.items.clear()
                         self.table.fail_query = False
@@ -63,10 +66,12 @@ class TestRuntimeToolHistory(_QAConversationFixture, unittest.TestCase):
                             del self.table.items[('ACCOUNT#a', 'MEMBER#reader')]
                         elif change == 'read_failure':
                             self.table.fail_query = True
+                        elif change == 'unpublish':
+                            self.table.items[('USER#owner', 'MEETING#m')]['sharedToAccount'] = False
                         else:
                             key, field = (('USER#owner', 'MEETING#m'), 'title') if name == 'list_meetings' else (
                                 (('ACCOUNT#a', 'META'), 'name') if name == 'list_accounts' else
-                                (('ACCOUNT#a', 'INSIGHT#2026-09-12#i'), 'text'))
+                                (('ACCOUNT#a', 'INSIGHT#2026-09-12T12:00:00Z#m#0'), 'text'))
                             self.table.items[key][field] = 'EDITED'
                         self.ask(transport, 'continue')
                         sent = json.dumps(model.call_args.kwargs['messages'])

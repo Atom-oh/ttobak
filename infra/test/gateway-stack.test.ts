@@ -111,6 +111,15 @@ describe('GatewayStack', () => {
     });
   });
 
+  test('QA publication reader is deployed before API private-link capability', () => {
+    const functions = template.findResources('AWS::Lambda::Function');
+    const [qaId] = Object.entries(functions)
+      .find(([, resource]) => resource.Properties.FunctionName === 'ttobak-qa')!;
+    const api = Object.values(functions)
+      .find(resource => resource.Properties.FunctionName === 'ttobak-api')!;
+    expect(api.DependsOn).toContain(qaId);
+  });
+
   test('QA Lambda uses Python 3.12', () => {
     template.hasResourceProperties('AWS::Lambda::Function', {
       FunctionName: 'ttobak-qa',

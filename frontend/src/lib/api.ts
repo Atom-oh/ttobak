@@ -174,7 +174,7 @@ export const meetingsApi = {
     );
   },
 
-  get: (id: string, options?: { signal?: AbortSignal }) => api.get<import('@/types/meeting').Meeting>(`/api/meetings/${id}`, options),
+  get: (id: string, options?: { signal?: AbortSignal }) => api.get<import('@/types/meeting').MeetingDetail>(`/api/meetings/${id}`, options),
 
   getResummary: (id: string, options?: { signal?: AbortSignal }) =>
     api.get<import('@/types/meeting').ResummaryStatus>(`/api/meetings/${encodeURIComponent(id)}/resummary`, options),
@@ -185,9 +185,16 @@ export const meetingsApi = {
     if (cursor) query.set('cursor', cursor);
     return api.get<import('@/types/meeting').SummaryReadingPage>(`/api/meetings/${encodeURIComponent(id)}/reading?${query}`, options);
   },
+  readNotes: (id: string, cursor?: string, options?: { signal?: AbortSignal }) => {
+    const query = new URLSearchParams({ kind: 'meeting', section: 'notes', pageSize: '8000' });
+    if (cursor) query.set('cursor', cursor);
+    return api.get<Omit<import('@/types/meeting').SummaryReadingPage, 'source' | 'content'> & { source: 'notes'; notes: string; notesRevision?: string }>(
+      `/api/meetings/${encodeURIComponent(id)}/reading?${query}`, options,
+    );
+  },
 
-  create: (data: { title: string; date?: string; participants?: string[]; sttProvider?: 'transcribe' | 'nova-sonic'; status?: string }) =>
-    api.post<import('@/types/meeting').Meeting>('/api/meetings', data),
+  create: (data: { title: string; date?: string; participants?: string[]; sttProvider?: 'transcribe' | 'nova-sonic'; status?: string; notes?: string; accountId?: string }) =>
+    api.post<import('@/types/meeting').Meeting & { preparationApplied?: boolean; supportsNotesComparison?: boolean; supportsPrivateAccountLink?: boolean; notesRevision?: string }>('/api/meetings', data),
 
   recover: (meetingId: string) =>
     api.post<{ meetingId: string; status: string }>(`/api/meetings/${meetingId}/recover`, {}),
@@ -215,8 +222,8 @@ export const meetingsApi = {
     data: { requirements: import('@/types/meeting').SimRequirement[]; options: import('@/types/meeting').SimOption[] }
   ) => api.post<import('@/types/meeting').SimRun>(`/api/meetings/${meetingId}/sim`, data),
 
-  update: (id: string, data: { title?: string; content?: string; notes?: string; liveSummary?: string; transcriptA?: string; selectedTranscript?: 'A' | 'B'; participants?: string[]; status?: string }, options?: { signal?: AbortSignal }) =>
-    api.put<{ meetingId: string; updatedAt: string }>(`/api/meetings/${id}`, data, options),
+  update: (id: string, data: { title?: string; content?: string; notes?: string; expectedNotes?: string; expectedNotesRevision?: string; liveSummary?: string; transcriptA?: string; selectedTranscript?: 'A' | 'B'; participants?: string[]; status?: string }, options?: { signal?: AbortSignal }) =>
+    api.put<{ meetingId: string; updatedAt: string; notesRevision?: string }>(`/api/meetings/${id}`, data, options),
 
   delete: (id: string) => api.delete(`/api/meetings/${id}`),
 

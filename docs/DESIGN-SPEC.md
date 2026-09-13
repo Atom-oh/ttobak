@@ -171,3 +171,39 @@ Run frontend lint/build for code changes and targeted browser checks for affecte
 interactions. Check light/dark, mobile/desktop, keyboard access, loading/empty/error,
 permission differences and recovery paths where applicable. No frontend unit-test
 framework exists. Documentation changes alone do not require a frontend rebuild.
+
+## SA preparation, references and follow-up
+
+The recording setup accepts a customer and a preparation memo. Users may save a
+private prep document and reload a prep/note/reference document before capture.
+Starting capture carries initial notes and private account classification into
+meeting creation. Reference selection never shares a meeting or sends a question
+automatically. Uploaded audio follows the same preparation path.
+
+The reference panel exposes personal KB, personal/shared documents, authorized
+prior meetings, customer insights/research/documents, and previously crawled news.
+It loads one catalogue at a time, shows bounded excerpts and partial/error states,
+and discards stale responses after an account change. Selecting a source prepares
+a question; it does not limit the existing QA tool scope. Explicit note insertion
+keeps source links and evidence caveats. Personal KB links carry owner identity;
+another viewer's same filename must not be presented as the original source.
+
+Meeting detail has a notes editor, stored field insights and follow-up controls.
+Notes compare both text and a server-issued revision on explicit save. A conflict preserves the draft;
+refreshing the comparison baseline is a separate user action. Background refresh
+must not silently advance a dirty editor's baseline. Dirty notes block re-summary.
+Delayed detail responses cannot roll back acknowledged notes or association
+changes. Editing and private relinking require server capability flags during
+mixed-version rollout. Recording notes share a comparison writer across autosave,
+finalization and upload retry. After an uncertain write, even reverting to the
+previous text requires a version-changing save to fence late requests. Final
+submission locks before the autosave flush. Failed or oversized notes remain
+editable with the captured audio retained.
+Legacy insight extraction has unknown freshness and is labeled accordingly.
+
+Completed QA answers can be added with structured citations; pending/error output
+cannot be saved as evidence. Added text is a draft until its destination saves.
+Follow-up documents are private snapshots built from bounded saved note/summary
+reads and current action items. Creating a document does not publish it to a team.
+Project linking and account sharing remain explicit operations with server-side
+permissions. Owner-only association controls are hidden from shared viewers.

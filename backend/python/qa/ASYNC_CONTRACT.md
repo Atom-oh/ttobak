@@ -4,6 +4,8 @@ Prepare backend and frontend with `qaAsyncJobsEnabled=false`; runtime config
 `qaAsyncJobs` must be exactly true to select jobs. Missing/false config uses sync
 before any job is submitted. Enable in a separate activation change only after
 deployed routes, queue/IAM and a current-source job result are verified.
+GatewayStack explicitly deploys the QA consumer before the Go API's private-link
+capability; stack ordering alone does not order sibling Lambda updates.
 Reload clients after activation; no fallback occurs after submission.
 Frontend wrappers still return `QAResponse`.
 
@@ -26,6 +28,9 @@ They stay claimed through network failure/unmount and later batches because a
 failed request does not prove the backend received nothing. Assigned job IDs are
 retained and shown on errors. Claims reset on a new recording/auth scope, not on
 uncertain completion. Accepted WS sends are also retained. No automatic resend.
+After a submitted HTTP failure, Live QA keeps the job ID/claim but gives the next
+manual turn a fresh, random session ID. A refresh failure can end polling before
+server work stops; isolating later history does not cancel or resubmit that job.
 
 Exact-queue SQS pointers contain only version/user/job IDs. Conditional claims
 never take over RUNNING. Queued dispatch can recover through polling, with 10s

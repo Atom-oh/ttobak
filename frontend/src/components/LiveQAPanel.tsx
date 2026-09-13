@@ -17,6 +17,7 @@ import {
   type ProactiveBatch,
 } from '@/lib/proactiveSearch';
 import { QAChatMessage, QASuggestedQuestions, QAEmptyState } from '@/components/qa';
+import type { QuestionDraft, QAReferenceEvidence } from '@/lib/meetingReferences';
 
 interface LiveQAPanelProps {
   transcriptContext?: string;
@@ -26,8 +27,9 @@ interface LiveQAPanelProps {
   /** One detection round's search-answerable questions, generation-tagged — the panel auto-fires at most one per generation */
   proactiveBatch?: ProactiveBatch;
   onAskedQuestion?: (question: string) => void;
+  questionDraft?: QuestionDraft;
   /** Save a Q&A entry into the meeting notes */
-  onSaveToNotes?: (question: string, answer: string) => void;
+  onSaveToNotes?: (question: string, answer: string, evidence?: QAReferenceEvidence) => void;
 }
 
 interface QAEntry {
@@ -35,6 +37,7 @@ interface QAEntry {
   question: string;
   jobId?: string;
   answer: string;
+  status: 'pending' | 'complete' | 'error';
   sources?: string[];
   sourceDetails?: import('@/types/meeting').QASourceDetail[];
   usedKB?: boolean;
@@ -70,19 +73,45 @@ function truncateToUtf8ByteLimit(text: string | undefined, maxBytes: number): st
   return new TextDecoder().decode(bytes.slice(start));
 }
 
-export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsChange, serverDetectedQuestions, proactiveBatch, onAskedQuestion, onSaveToNotes }: LiveQAPanelProps) {
+export function LiveQAPanel(props: LiveQAPanelProps) {
+  return <MeetingLiveQAPanel key={props.meetingId || 'live'} {...props} />;
+}
+
+function newLiveSessionId(meetingId?: string): string {
+  return `qa-${meetingId || 'live'}-${crypto.randomUUID()}`;
+}
+
+function MeetingLiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsChange, serverDetectedQuestions, proactiveBatch, onAskedQuestion, onSaveToNotes, questionDraft }: LiveQAPanelProps) {
   const [wsUrl, setWsUrl] = useState('');
   const [question, setQuestion] = useState('');
   const [qaHistory, setQaHistory] = useState<QAEntry[]>([]);
   const [isAsking, setIsAsking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedEntryIds, setSavedEntryIds] = useState<Set<string>>(new Set());
+  const [draftId, setDraftId] = useState<number>();
+  const [pendingDraft, setPendingDraft] = useState<QuestionDraft | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const [detectedQuestions, setDetectedQuestions] = useState<string[]>([]);
   const [askedQuestions, setAskedQuestions] = useState<string[]>([]);
   const wsRef = useRef<RealtimeWebSocket | null>(null);
   const activeEntryIdRef = useRef<string | null>(null);
+  const activeRef = useRef(true);
+  const submittedQuestionRef = useRef<{ text: string; proactive: boolean } | null>(null);
+
+  if (questionDraft && questionDraft.id !== draftId) {
+    setDraftId(questionDraft.id);
+    if (!question.trim()) setQuestion(questionDraft.text);
+    else setPendingDraft(questionDraft);
+  }
+
+  const finishDraft = useCallback((success: boolean) => {
+    const submitted = submittedQuestionRef.current;
+    if (!submitted || submitted.proactive) return;
+    setQuestion(current => success
+      ? (current.trim() === submitted.text.trim() ? '' : current)
+      : (current || submitted.text));
+  }, []);
   useEffect(() => {
     let active = true;
     getRuntimeConfig().then(cfg => { if (active) setWsUrl(runtimeWebSocketUrl(cfg.wsUrl)); });
@@ -128,10 +157,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
   // spinning forever on a stalled stream.
   const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const [sessionId, setSessionId] = useState(() => `qa-${meetingId || 'live'}-${Date.now()}`);
-  useEffect(() => {
-    setSessionId(`qa-${meetingId || 'live'}-${Date.now()}`);
-  }, [meetingId]);
+  const [sessionId, setSessionId] = useState(() => newLiveSessionId(meetingId));
 
   const clearWatchdog = useCallback(() => {
     if (watchdogRef.current) {
@@ -157,11 +183,14 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
                   ? e.answer + '\n\n> ⚠️ 응답 시간 초과 — 답변이 여기서 잘렸을 수 있습니다.'
                   : '응답 시간 초과 — 다시 시도해주세요.',
                 isStreaming: false,
+                status: 'error',
               }
             : e
         )
       );
       rollbackProactiveClaim(entryId);
+      finishDraft(false);
+      setError('응답 시간 초과 — 질문을 유지했습니다. 다시 시도해주세요.');
       setIsAsking(false);
       activeEntryIdRef.current = null;
       inputRef.current?.focus();
@@ -178,9 +207,9 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
       // session item, so the zombie's late save can't race/clobber it.
       // Conversation continuity for the timed-out thread is deliberately
       // sacrificed — correctness over context.
-      setSessionId(`qa-${meetingId || 'live'}-${Date.now()}`);
+      setSessionId(newLiveSessionId(meetingId));
     }, 60_000);
-  }, [clearWatchdog, meetingId, rollbackProactiveClaim]);
+  }, [clearWatchdog, meetingId, rollbackProactiveClaim, finishDraft]);
 
   useEffect(() => {
     if (containerRef.current) {
@@ -206,7 +235,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
   const followUpFetchedRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     const target = qaHistory.find(
-      (e) => !e.isStreaming && e.answer && !followUpFetchedRef.current.has(e.id),
+      (e) => e.status === 'complete' && e.answer && !followUpFetchedRef.current.has(e.id),
     );
     if (!target) return;
     followUpFetchedRef.current.add(target.id);
@@ -216,6 +245,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     const context = `질문: ${target.question}\n답변: ${target.answer}`.slice(0, 2000);
     qaApi.detectQuestions(context, askedQuestions)
       .then((res) => {
+        if (!activeRef.current) return;
         if (res.questions.length > 0) {
           setQaHistory((prev) =>
             prev.map((e) =>
@@ -228,8 +258,12 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
   }, [qaHistory, askedQuestions]);
 
   const handleStreamMessage = useCallback((msg: WebSocketMessage) => {
+    if (!activeRef.current) return;
     const entryId = activeEntryIdRef.current;
     if (!entryId) return;
+    if (msg.type === 'answer_complete' && !msg.answer?.trim()) {
+      msg = { type: 'answer_error', error: '답변이 비어 있습니다. 다시 시도해주세요.' };
+    }
 
     switch (msg.type) {
       case 'answer_delta':
@@ -252,18 +286,20 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
         // Success — the claim sticks; record the proactive question as asked
         // (deferred from ask time, see recordProactiveAsked).
         recordProactiveAsked(entryId);
+        finishDraft(true);
         setQaHistory(prev =>
           prev.map(e =>
             e.id === entryId
               ? {
                   ...e,
-                  answer: msg.answer || e.answer,
+                  answer: msg.answer!,
                   sources: msg.sources,
                   sourceDetails: msg.sourceDetails,
                   usedKB: msg.usedKB,
                   usedDocs: msg.usedDocs,
                   toolsUsed: msg.toolsUsed,
                   isStreaming: false,
+                  status: 'complete',
                 }
               : e
           )
@@ -285,15 +321,17 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
           wsRef.current?.disconnect();
           wsRef.current = null;
           if (msg.sessionContinuable !== true) {
-            setSessionId(`qa-${meetingId || 'live'}-${Date.now()}`);
+            setSessionId(newLiveSessionId(meetingId));
           }
         } else {
           rollbackProactiveClaim(entryId);
         }
+        finishDraft(false);
+        setError(msg.error || '답변 생성 중 오류가 발생했습니다.');
         setQaHistory(prev =>
           prev.map(e =>
             e.id === entryId
-              ? { ...e, answer: msg.error || '답변 생성 중 오류가 발생했습니다.', isStreaming: false }
+              ? { ...e, answer: msg.error || '답변 생성 중 오류가 발생했습니다.', isStreaming: false, status: 'error' }
               : e
           )
         );
@@ -307,9 +345,10 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
         // banner appears on top of this error.
         clearWatchdog();
         rollbackProactiveClaim(entryId);
+        finishDraft(false);
         setError(msg.error || 'WebSocket error');
         setQaHistory(prev =>
-          prev.map(e => (e.id === entryId ? { ...e, isStreaming: false } : e))
+          prev.map(e => (e.id === entryId ? { ...e, answer: e.answer || '질문을 전송하지 못했습니다.', isStreaming: false, status: 'error' } : e))
         );
         setIsAsking(false);
         activeEntryIdRef.current = null;
@@ -320,10 +359,10 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
         // disconnect+rotate, same tradeoff (continuity for correctness).
         wsRef.current?.disconnect();
         wsRef.current = null;
-        setSessionId(`qa-${meetingId || 'live'}-${Date.now()}`);
+        setSessionId(newLiveSessionId(meetingId));
         break;
     }
-  }, [armWatchdog, clearWatchdog, meetingId, rollbackProactiveClaim, recordProactiveAsked]);
+  }, [armWatchdog, clearWatchdog, meetingId, rollbackProactiveClaim, recordProactiveAsked, finishDraft]);
 
   const ensureWebSocket = useCallback(async (): Promise<RealtimeWebSocket | null> => {
     if (!wsUrl) return null;
@@ -347,9 +386,13 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
   // Cleanup releases this panel's flight; submitted requests remain claimed because
   // the server may still complete them after the panel disappears.
   useEffect(() => {
+    activeRef.current = true;
     const pendingClaims = proactiveClaimByEntryRef.current;
     return () => {
+      activeRef.current = false;
+      activeEntryIdRef.current = null;
       wsRef.current?.disconnect();
+      wsRef.current = null;
       if (watchdogRef.current) clearTimeout(watchdogRef.current);
       activeEntryIdRef.current = null;
       pendingClaims.forEach((claim) => {
@@ -363,9 +406,8 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
   }, []);
 
   const handleAsk = useCallback(async (q: string, opts?: { proactive?: boolean }) => {
-    if (!q.trim() || isAsking) return;
+    if (!q.trim() || isAsking || activeEntryIdRef.current) return;
 
-    setQuestion('');
     if (!opts?.proactive) {
       // Manual asks are recorded immediately; proactive answers are recorded on
       // success, leaving pre-submission failures eligible for bounded recovery.
@@ -380,16 +422,18 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     setError(null);
     setIsAsking(true);
 
-    const entryId = Date.now().toString();
+    const entryId = crypto.randomUUID();
     const newEntry: QAEntry = {
       id: entryId,
       question: q.trim(),
       answer: '',
+      status: 'pending',
       isStreaming: true,
       isProactive: opts?.proactive,
     };
     setQaHistory((prev) => [...prev, newEntry]);
     activeEntryIdRef.current = entryId;
+    submittedQuestionRef.current = { text: q, proactive: !!opts?.proactive };
 
     // Claim the proactive question SYNCHRONOUSLY (before the first await) so
     // a sibling panel instance's effect running in the same flush sees it as
@@ -401,6 +445,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
 
     // Try WebSocket streaming first
     const ws = await ensureWebSocket();
+    if (!activeRef.current || activeEntryIdRef.current !== entryId) return;
     if (ws) {
       // API Gateway WebSocket has a 32KB per-frame limit (separate from, and
       // much smaller than, the 128KB message limit) that the browser can't
@@ -427,6 +472,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
         // silently at the gateway's 32KB frame limit and burn a 60s
         // watchdog wait; reject up front instead.
         rollbackProactiveClaim(entryId);
+        finishDraft(false);
         setQaHistory(prev => prev.filter(e => e.id !== entryId));
         activeEntryIdRef.current = null;
         setIsAsking(false);
@@ -446,11 +492,11 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     let assignedJobId: string | undefined;
     let submitted = false;
     try {
-      if (activeEntryIdRef.current !== entryId) return;
+      if (!activeRef.current || activeEntryIdRef.current !== entryId) return;
       setQaHistory(prev => prev.map(e => e.id === entryId ? { ...e, isStreaming: false } : e));
       const response = await qaApi.ask(q.trim(), transcriptContext, sessionId, meetingId, (jobId) => {
         const claim = proactiveClaimByEntryRef.current.get(entryId);
-        if (activeEntryIdRef.current !== entryId || (claim && claim.epoch !== proactiveGuard.epoch)) {
+        if (!activeRef.current || activeEntryIdRef.current !== entryId || (claim && claim.epoch !== proactiveGuard.epoch)) {
           throw new ApiError(499, 'QA_CANCELLED', 'QA request cancelled before submission');
         }
         assignedJobId = jobId;
@@ -458,7 +504,10 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
         if (claim) retainProactiveSubmission(claim.question, jobId);
         setQaHistory(prev => prev.map(e => e.id === entryId ? { ...e, jobId } : e));
       });
+      if (!activeRef.current || activeEntryIdRef.current !== entryId) return;
+      if (!response.answer?.trim()) throw new Error('답변이 비어 있습니다. 다시 시도해주세요.');
       recordProactiveAsked(entryId);
+      finishDraft(true);
       setQaHistory((prev) =>
         prev.map((entry) =>
           entry.id === entryId
@@ -470,33 +519,44 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
                 usedKB: response.usedKB,
                 usedDocs: response.usedDocs,
                 toolsUsed: response.toolsUsed,
+                isStreaming: false,
+                status: 'complete',
               }
             : entry
         )
       );
     } catch (err) {
+      if (!activeRef.current || activeEntryIdRef.current !== entryId) return;
       rollbackProactiveClaim(entryId);
+      finishDraft(false);
       const jobId = err instanceof QAJobError ? err.jobId : assignedJobId;
+      if (submitted || jobId) {
+        // Polling/auth failure does not stop server work. A later manual turn
+        // must not share a history key with that still-running request.
+        setSessionId(newLiveSessionId(meetingId));
+      }
       const message = submitted || jobId
-        ? `답변을 가져오지 못했습니다. 자동으로 재전송하지 않습니다.${jobId ? ` 요청 ID: ${jobId}` : ''}`
+        ? `답변을 가져오지 못했습니다. 자동으로 재전송하지 않습니다. 다음 질문은 새 대화로 시작합니다.${jobId ? ` 요청 ID: ${jobId}` : ''}`
         : '답변을 가져오지 못했습니다. 다시 시도해주세요.';
       setError(submitted || jobId ? message : err instanceof Error ? err.message : 'Failed to get answer');
       setQaHistory((prev) =>
         prev.map((entry) =>
           entry.id === entryId
-            ? { ...entry, answer: message, jobId }
+            ? { ...entry, answer: message, jobId, isStreaming: false, status: 'error' }
             : entry
         )
       );
     } finally {
-      setIsAsking(false);
-      activeEntryIdRef.current = null;
-      inputRef.current?.focus();
+      if (activeRef.current && activeEntryIdRef.current === entryId) {
+        setIsAsking(false);
+        activeEntryIdRef.current = null;
+        inputRef.current?.focus();
+      }
     }
   }, [
     isAsking, onAskedQuestion, onDetectedQuestionsChange, ensureWebSocket,
     transcriptContext, meetingId, sessionId, armWatchdog,
-    rollbackProactiveClaim, recordProactiveAsked, handleStreamMessage,
+    rollbackProactiveClaim, recordProactiveAsked, handleStreamMessage, finishDraft,
   ]);
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -620,10 +680,16 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
               isStreaming={entry.isStreaming}
               isProactive={entry.isProactive}
               onSaveToNotes={
-                onSaveToNotes
+                onSaveToNotes && entry.status === 'complete'
                   ? () => {
-                      onSaveToNotes(entry.question, entry.answer);
-                      setSavedEntryIds((prev) => new Set(prev).add(entry.id));
+                      try {
+                        onSaveToNotes(entry.question, entry.answer, {
+                          sources: entry.sources, sourceDetails: entry.sourceDetails,
+                        });
+                        setSavedEntryIds((prev) => new Set(prev).add(entry.id));
+                      } catch (error) {
+                        setError(error instanceof Error ? error.message : '메모에 추가하지 못했습니다.');
+                      }
                     }
                   : undefined
               }
@@ -657,6 +723,17 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
 
       {/* Input */}
       <form onSubmit={handleSubmit} className="p-4 border-t border-slate-100 dark:border-slate-800">
+        {pendingDraft && (
+          <div className="mb-2 text-xs text-slate-500">
+            작성 중인 질문을 유지했습니다.
+            <button type="button" className="ml-2 text-primary underline" disabled={isAsking} onClick={() => {
+              setQuestion(current => `${current.trimEnd()}\n${pendingDraft.text}`.trim());
+              setPendingDraft(null);
+              inputRef.current?.focus();
+            }}>참조 질문 덧붙이기</button>
+            <button type="button" className="ml-2 underline" onClick={() => setPendingDraft(null)}>닫기</button>
+          </div>
+        )}
         <div className="flex items-center gap-2">
           <input
             ref={inputRef}

@@ -44,7 +44,9 @@ pre-existing broad management permissions are not claimed fixed by this change.
 ## Ordered rollout
 
 If production temporarily holds `wsUrl: ""`, preserve that configuration during
-preparation, including config-preserving frontend deployment. The designated
+preparation, using config-preserving frontend asset deployment only.
+FrontendStack's ConfigDeployment writes `/ws`; do not deploy that configuration
+while the hold is required. The designated
 operator restores only `wsUrl: "/ws"` after the reviewed stream recovery is
 verified deployed, preserving other fields such as `qaAsyncJobs`. Invalidate and
 read back config before WS acceptance. Do not activate async jobs during the hold.

@@ -12,6 +12,8 @@ type CreateMeetingRequest struct {
 	Participants     []string `json:"participants,omitempty"`
 	SttProvider      string   `json:"sttProvider,omitempty"` // "transcribe" or "nova-sonic"
 	LinkedMeetingIDs []string `json:"linkedMeetingIds,omitempty"`
+	Notes            string   `json:"notes,omitempty"`
+	AccountID        string   `json:"accountId,omitempty"`
 }
 
 // MaxLiveSummaryRunes caps the client-settable liveSummary field, both at
@@ -28,6 +30,13 @@ type UpdateMeetingRequest struct {
 	// pointer to "", clears notes) -- a plain string can't represent
 	// "clear the notes" since Go's zero value for string is already "".
 	Notes *string `json:"notes,omitempty"`
+	// ExpectedNotes opts into notes-only compare-and-set. Empty matches either
+	// absent legacy notes or an explicitly empty value; omission preserves the
+	// existing update behavior.
+	ExpectedNotes *string `json:"expectedNotes,omitempty"`
+	// ExpectedNotesRevision additionally fences delayed/same-text writes.
+	// Requires Notes and ExpectedNotes; empty also matches an absent legacy revision.
+	ExpectedNotesRevision *string `json:"expectedNotesRevision,omitempty"`
 	// LiveSummary is a pointer for the same omit-vs-explicit-empty semantics
 	// as Notes: nil preserves the stored value, non-nil "" clears it.
 	// Capped at MaxLiveSummaryRunes on write (service.UpdateMeeting) and
@@ -129,37 +138,47 @@ type MeetingListItem struct {
 
 // MeetingDetailResponse represents a meeting in detail view
 type MeetingDetailResponse struct {
-	MeetingID          string               `json:"meetingId"`
-	UserID             string               `json:"userId"`
-	Title              string               `json:"title"`
-	Date               string               `json:"date"`
-	Status             string               `json:"status"`
-	Participants       []string             `json:"participants,omitempty"`
-	Content            string               `json:"content,omitempty"`
-	Notes              string               `json:"notes,omitempty"`
-	LiveSummary        string               `json:"liveSummary,omitempty"`
-	TranscriptA        string               `json:"transcriptA,omitempty"`
-	TranscriptB        string               `json:"transcriptB,omitempty"`
-	SelectedTranscript *string              `json:"selectedTranscript,omitempty"` // "A" | "B" | null
-	AudioKey           string               `json:"audioKey,omitempty"`
-	AudioKeys          []string             `json:"audioKeys,omitempty"`
-	AudioPartCount     int                  `json:"audioPartCount,omitempty"`
-	AudioPartsReady    int                  `json:"audioPartsReady,omitempty"`
-	Transcription      json.RawMessage      `json:"transcription,omitempty"`
-	Tags               []string             `json:"tags,omitempty"`
-	ActionItems        json.RawMessage      `json:"actionItems,omitempty"`
-	SpeakerMap         map[string]string    `json:"speakerMap,omitempty"`
-	SttProvider        string               `json:"sttProvider,omitempty"`
-	LinkedMeetingIDs   []string             `json:"linkedMeetingIds,omitempty"`
-	NotionPageID       string               `json:"notionPageId,omitempty"`
-	Permission         string               `json:"permission"` // "owner", "read", or "edit"
-	Attachments        []AttachmentResponse `json:"attachments,omitempty"`
-	Shares             []ShareResponse      `json:"shares,omitempty"` // Only visible to owner
-	SimRun             *SimRunResponse      `json:"simRun,omitempty"` // ADR-033 cost/sizing simulator, singleton per meeting
-	CreatedAt          string               `json:"createdAt"`
-	UpdatedAt          string               `json:"updatedAt"`
+	SupportsNotesComparison    bool                 `json:"supportsNotesComparison"`
+	SupportsPrivateAccountLink bool                 `json:"supportsPrivateAccountLink"`
+	MeetingID                  string               `json:"meetingId"`
+	UserID                     string               `json:"userId"`
+	AccountID                  string               `json:"accountId,omitempty"`
+	SharedToAccount            bool                 `json:"sharedToAccount"`
+	ProjectIDs                 []string             `json:"projectIds,omitempty"` // Owner only.
+	Title                      string               `json:"title"`
+	Date                       string               `json:"date"`
+	Status                     string               `json:"status"`
+	Participants               []string             `json:"participants,omitempty"`
+	Content                    string               `json:"content,omitempty"`
+	Notes                      string               `json:"notes,omitempty"`
+	NotesRevision              string               `json:"notesRevision"`
+	LiveSummary                string               `json:"liveSummary,omitempty"`
+	TranscriptA                string               `json:"transcriptA,omitempty"`
+	TranscriptB                string               `json:"transcriptB,omitempty"`
+	SelectedTranscript         *string              `json:"selectedTranscript,omitempty"` // "A" | "B" | null
+	AudioKey                   string               `json:"audioKey,omitempty"`
+	AudioKeys                  []string             `json:"audioKeys,omitempty"`
+	AudioPartCount             int                  `json:"audioPartCount,omitempty"`
+	AudioPartsReady            int                  `json:"audioPartsReady,omitempty"`
+	Transcription              json.RawMessage      `json:"transcription,omitempty"`
+	Tags                       []string             `json:"tags,omitempty"`
+	ActionItems                json.RawMessage      `json:"actionItems,omitempty"`
+	SpeakerMap                 map[string]string    `json:"speakerMap,omitempty"`
+	SttProvider                string               `json:"sttProvider,omitempty"`
+	LinkedMeetingIDs           []string             `json:"linkedMeetingIds,omitempty"`
+	NotionPageID               string               `json:"notionPageId,omitempty"`
+	Permission                 string               `json:"permission"` // "owner", "read", or "edit"
+	Attachments                []AttachmentResponse `json:"attachments,omitempty"`
+	Shares                     []ShareResponse      `json:"shares,omitempty"` // Only visible to owner
+	SimRun                     *SimRunResponse      `json:"simRun,omitempty"` // ADR-033 cost/sizing simulator, singleton per meeting
+	CreatedAt                  string               `json:"createdAt"`
+	UpdatedAt                  string               `json:"updatedAt"`
 
-	ActionItemsAnalysis *ActionItemsAnalysis `json:"actionItemsAnalysis,omitempty"`
+	ActionItemsAnalysis    *ActionItemsAnalysis `json:"actionItemsAnalysis,omitempty"`
+	FieldInsights          []MeetingInsight     `json:"fieldInsights"`
+	FieldInsightsFreshness string               `json:"fieldInsightsFreshness"` // "unknown"; legacy extraction has no source binding.
+	FieldInsightsError     string               `json:"fieldInsightsError,omitempty"`
+	FieldInsightsTruncated bool                 `json:"fieldInsightsTruncated,omitempty"`
 }
 
 // SimChartResponse is one generated chart with its presigned CloudFront URL,
@@ -265,8 +284,9 @@ type HealthResponse struct {
 
 // MeetingUpdateResponse represents the response for updating a meeting
 type MeetingUpdateResponse struct {
-	MeetingID string `json:"meetingId"`
-	UpdatedAt string `json:"updatedAt"`
+	MeetingID     string `json:"meetingId"`
+	UpdatedAt     string `json:"updatedAt"`
+	NotesRevision string `json:"notesRevision"`
 }
 
 // LinkMeetingsRequest represents the request body for linking follow-up meetings
@@ -565,6 +585,7 @@ func ToMeetingDetailResponse(m *Meeting, attachments []AttachmentResponse, share
 		Participants:       m.Participants,
 		Content:            m.Content,
 		Notes:              m.Notes,
+		NotesRevision:      m.NotesRevision,
 		LiveSummary:        m.LiveSummary,
 		TranscriptA:        m.TranscriptA,
 		TranscriptB:        m.TranscriptB,
