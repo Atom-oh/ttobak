@@ -72,6 +72,9 @@ func init() {
 
 	repo = repository.NewDynamoDBRepositoryWithS3(dynamoClient, tableName, s3Client, bucketName)
 	bedrockService = service.NewBedrockService(bedrockClient, s3Client, repo)
+	metadata := repo.MetadataView()
+	attachmentTextService := service.NewAttachmentTextService(metadata, service.NewMeetingService(metadata), s3Client, bucketName, nil)
+	bedrockService.SetAttachmentTextService(attachmentTextService)
 	actionItemsService = service.NewMetadataActionItemsAnalysisService(repo, bedrockService, nil)
 
 	// KB export service — gracefully skips if not configured
