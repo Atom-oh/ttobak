@@ -102,7 +102,9 @@ class IntegrityTests(unittest.TestCase):
                                       return_value=(0, self.response(tag), "")) as execute:
                         run_role.run(self.work, tag)
                 delivered = execute.call_args.args[3] if tag == "codex" else execute.call_args.args[0][2]
-                self.assertTrue(delivered.encode().endswith(self.raw.encode()))
+                self.assertIn(self.raw.encode(), delivered.encode())
+                self.assertIn("BEGIN DIFF ", delivered)
+                self.assertIn("END DIFF ", delivered)
                 self.assertEqual((self.work / "roles" / f"{tag}.diff").read_bytes(), self.raw.encode())
 
     def test_chair_receives_the_same_raw_diff_bytes(self):

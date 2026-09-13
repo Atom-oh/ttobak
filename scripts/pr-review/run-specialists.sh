@@ -5,7 +5,7 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 WORK="${3:?Expected diff, lenses directory and work directory}"
 . "$DIR/lib.sh"
 ensure_slots "$WORK"
-python3 "$DIR/prepare_roles.py" --work "$WORK"
+python3 "$DIR/prepare_roles.py" --work "$WORK" --prepared-diff "$1"
 pids=()
 for tag in codex kiro-fable kiro-sol claude-self; do
   python3 "$DIR/run_role.py" --work "$WORK" --tag "$tag" &
