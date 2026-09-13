@@ -1,6 +1,7 @@
 """Synthetic binary source and immutable-snapshot fixtures shared by QA tests."""
 import hashlib
 import io
+import json
 from pathlib import Path
 from unittest import mock
 import zipfile
@@ -121,3 +122,56 @@ class _SharedKBFixture(_KBFixture):
                          'sourceKey': self.key, 'sourceETag': obj['ETag'],
                          'sourceVersionId': self.version, 'sourceSize': len(self.body)},
         }
+
+
+class _QAConversationFixture:
+    """Synthetic Converse replies and the real REST/WebSocket entrypoints."""
+
+    def set_up_transport(self, table):
+        self.table = table
+        for patch in (mock.patch.object(handler, 'table', self.table),
+                      mock.patch('socket.socket', side_effect=AssertionError('live network forbidden')),
+                      mock.patch.object(handler, '_apigw_client'),
+                      mock.patch.object(handler, '_post_ws', return_value=True)):
+            patch.start()
+            self.addCleanup(patch.stop)
+        patch = mock.patch.object(handler, 'bedrock_runtime')
+        self.model = patch.start()
+        self.addCleanup(patch.stop)
+
+    def replies(self, transport, name, arguments):
+        tool = {'toolUseId': 'tool1', 'name': name, 'input': arguments}
+        messages = [[{'toolUse': tool}], [{'text': 'PRIVATE_CHOICE'}],
+                    [{'text': 'stable followup'}], [{'text': 'fresh answer'}]]
+        if transport == 'rest':
+            self.model.converse.side_effect = [
+                {'stopReason': 'tool_use' if i == 0 else 'end_turn',
+                 'output': {'message': {'role': 'assistant', 'content': content}}}
+                for i, content in enumerate(messages)]
+            return self.model.converse
+        streams = []
+        for i, content in enumerate(messages):
+            if i == 0:
+                start, delta = {'toolUse': {k: tool[k] for k in ('toolUseId', 'name')}}, {
+                    'toolUse': {'input': json.dumps(arguments)}}
+            else:
+                start, delta = {}, content[0]
+            streams.append({'stream': [
+                {'contentBlockStart': {'start': start}}, {'contentBlockDelta': {'delta': delta}},
+                {'contentBlockStop': {}}, {'messageStop': {'stopReason': 'tool_use' if i == 0 else 'end_turn'}},
+            ]})
+        self.model.converse_stream.side_effect = streams
+        return self.model.converse_stream
+
+    def ask(self, transport, question, meeting_id=None):
+        if transport == 'rest':
+            result = handler.handle_ask(question, user_id='reader', session_id='chat-readonly', meeting_id=meeting_id)
+            self.assertEqual(result['statusCode'], 200, result)
+        else:
+            result = handler.handle_ask_stream({
+                'question': question, 'userId': 'reader', 'sessionId': 'chat-readonly',
+                'meetingId': meeting_id,
+                'connectionId': 'c', 'endpoint': 'https://synthetic.invalid',
+            })
+            self.assertEqual(result['status'], 'ok', result)
+        return result
