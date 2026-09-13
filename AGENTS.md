@@ -3,8 +3,6 @@
 
 # TTOBAK (또박) — Reviewer Context
 
-Summary: ADR-040. Batch guards/retries are active; DOCUMENT input needs caller injection. Never reuse old output after source edits.
-
 Korean AI meeting assistant for AWS Solutions Architects: record → real-time STT (AWS Transcribe Streaming in browser) → batch STT (Whisper ECS GPU Spot) → Bedrock Claude summary → Notion-style editor. Plus an Account-centric Insight Substrate (shared customer accounts + typed insights + bidirectional MCP back-data) and a personal Document Hub (notes/blog/slides, wikilinks, account sharing, PDF preview, public share links).
 
 ## Stack / Runtime
