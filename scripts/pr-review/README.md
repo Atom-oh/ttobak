@@ -71,7 +71,11 @@ ordinary strings and context outside the key. Original elements still consume
 the shared byte budget before replacement.
 Complete PEM spans are masked before quoted fragments are processed. Adjacent
 quoted string literals joined with `+` are decoded and combined without execution
-before credential matching, preserving split PEM markers and outside context.
+on the same line before credential matching, preserving split PEM markers and
+outside context. If decoded content needs no redaction, the original spelling,
+quote style, JSON formatting and concatenation expression remain unchanged.
+Quoted credential values consume escapes as indivisible pairs, so embedded
+quotes cannot terminate masking early. Concatenation never crosses diff lines.
 Only exact scrubber marker names are treated as placeholders when classifying
 object keys; ordinary credential fields and credential paths remain sensitive.
 
