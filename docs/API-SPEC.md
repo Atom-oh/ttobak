@@ -1516,6 +1516,10 @@ File positions use PDF pages, slides, paragraphs/cells or lines, never meeting
 audio timestamps. Field presence depends on the source kind. Public details
 are constructed explicitly; arbitrary provider metadata is not forwarded.
 
+HTTP answers and WebSocket `answer_complete` include `toolHistoryCoverage`
+(`[]` normally): `{tool, complete:false, reason}` reports tracking limits or
+unavailable receipts while preserving the current answer.
+
 The current-source runtime performs fresh provider discovery and source
 validation. Old cached meeting identities may supplement discovery, but
 cached text or cached misses cannot replace it and no new result cache is

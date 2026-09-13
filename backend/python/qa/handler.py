@@ -14,11 +14,13 @@ from tools import TOOL_DEFINITIONS, execute_tool
 from transcript_storage import resolve_transcript
 from source_context import SourceReader
 from source_access import SourceAccess
+from account_reads import StrictAccountReader
+from tool_history import CompleteRead, ToolHistory, READONLY_TOOLS
 from source_revision import legacy_meeting_identity, resource_identity, IDENTIFIER
 from attachment_context import AttachmentReader
 from indexed_retrieval import discover_sources, discovery_filters, hydrate_candidates
 from session_provenance import (
-    new_source_state, remember_source, restore_sources, validate_sources, collect_detail,
+    new_source_state, remember_source, restore_messages, validate_sources, collect_detail,
 )
 from web_search import redact_tool_input_for_log
 
@@ -50,6 +52,21 @@ KB_BUCKET_NAME = os.environ.get('KB_BUCKET_NAME', '')
 ORIGIN_VERIFY_SECRET = os.environ.get('ORIGIN_VERIFY_SECRET', '')
 RESEARCH_SFN_ARN = os.environ.get('RESEARCH_SFN_ARN', '')
 DAILY_RESEARCH_LIMIT = 5
+SOURCE_TOOL_NAMES = frozenset((
+    'search_knowledge_base', 'get_meeting_detail', 'get_document_detail',
+    'get_meeting_attachments', 'get_attachment_text', 'search_transcript', 'get_legacy_text_detail',
+))
+PUBLIC_TOOL_NAMES = frozenset(('search_web', 'search_aws_docs', 'get_aws_recommendation'))
+
+
+def _tool_history(user_id):
+    accounts = StrictAccountReader(table)
+    return ToolHistory(user_id, {
+        'list_meetings': lambda uid, **kw: CompleteRead(list_meetings_for_user(uid, **kw)),
+        'list_accounts': accounts.list_accounts,
+        'get_account_insights': accounts.get_account_insights,
+        'get_account_brief': accounts.get_account_brief,
+    })
 
 
 def _source_reader():
@@ -617,9 +634,9 @@ def load_session(session_id, user_id=None, source_state=None):
         item = result.get("Item")
         if item:
             state = source_state if source_state is not None else new_source_state()
-            if not restore_sources(item, state, lambda dep: _source_is_current(user_id, dep)):
-                return []
-            messages = json.loads(item.get("messages", "[]"))
+            messages = restore_messages(
+                item, state, lambda dep: _source_is_current(user_id, dep), tool_history=_tool_history(user_id),
+                source_covered_tools=SOURCE_TOOL_NAMES, public_tools=PUBLIC_TOOL_NAMES)
             # A failed/aborted round can persist history ending in a user-role
             # message, OR in an assistant message still holding an unresolved
             # toolUse block (MAX_TOOL_ROUNDS exhaustion leaves the round's
@@ -926,6 +943,16 @@ def _qa_search_context(transcript, meeting_notes):
 
 
 def _agent_context(user_id, transcript, meeting_notes, source_state, source_details):
+    history = _tool_history(user_id)
+
+    def create_research(uid, topic, mode):
+        if uid != user_id:
+            raise ValueError('Research caller differs from current user')
+        created = create_research_from_chat(uid, topic, mode)
+        if not created.get('error'):
+            history.research_receipt(source_state, {'topic': topic, 'mode': mode}, created)
+        return created
+
     def retrieve(query, count=5):
         results = retrieve_from_kb(query, count, user_id=user_id)
         for result in results:
@@ -946,7 +973,8 @@ def _agent_context(user_id, transcript, meeting_notes, source_state, source_deta
     return {
         "transcript": _qa_search_context(transcript, meeting_notes),
         "retrieve_from_kb": retrieve,
-        "list_meetings": list_meetings_for_user,
+        **history.callbacks(source_state),
+        "tool_history": history,
         "load_meeting_context": lambda uid, mid: load_meeting_context(
             uid, mid, source_state=source_state, source_details=source_details),
         "load_document_context": lambda uid, pk, did: load_document_context(
@@ -957,25 +985,15 @@ def _agent_context(user_id, transcript, meeting_notes, source_state, source_deta
             uid, mid, offset, source_state=source_state, source_details=source_details),
         "load_attachment_text": lambda uid, mid, aid, unit=0, text=0, revision=None: load_attachment_text(
             uid, mid, aid, unit, text, revision, source_state=source_state, source_details=source_details),
-        "create_research": lambda uid, topic, mode: create_research_from_chat(uid, topic, mode),
+        "create_research": create_research,
         "check_research_limit": check_research_limit,
         "check_web_search_limit": check_web_search_limit,
-        "list_accounts": list_accounts_for_user,
-        "get_account_insights": get_account_insights_for_chat,
-        "get_account_brief": get_account_brief_for_chat,
         "user_id": user_id,
     }
 
 
 def _track_tool_history(source_state, tool_name):
-    # These tools currently return mutable source data without a complete
-    # canonical revision set. Their answer may be used now, but not replayed.
-    tracked_or_public = {
-        'search_knowledge_base', 'get_meeting_detail', 'get_document_detail',
-        'get_meeting_attachments', 'get_attachment_text', 'search_transcript',
-        'search_web', 'search_aws_docs', 'get_aws_recommendation',
-        'get_legacy_text_detail',
-    }
+    tracked_or_public = SOURCE_TOOL_NAMES | PUBLIC_TOOL_NAMES | READONLY_TOOLS | {'start_research'}
     if tool_name not in tracked_or_public:
         source_state['replayable'] = False
 
@@ -994,7 +1012,7 @@ def agentic_converse(messages, transcript=None, session_id=None, user_id=None, m
         system_messages.append({'text': _attachment_prompt(source_state['attachmentContext'])})
 
     for _ in range(MAX_TOOL_ROUNDS):
-        validate_sources(source_state, lambda dep: _source_is_current(user_id, dep))
+        validate_sources(source_state, lambda dep: _source_is_current(user_id, dep), tool_history=context['tool_history'])
         try:
             resp = bedrock_runtime.converse(
                 modelId=BEDROCK_MODEL_ID,
@@ -1098,6 +1116,7 @@ def handle_ask(question, context=None, meeting_id=None, session_id=None, user_id
             'answer': answer,
             'sources': sources,
             'sourceDetails': source_details,
+            'toolHistoryCoverage': source_state.get('toolHistoryCoverage', []),
             'usedKB': 'search_knowledge_base' in tools_used,
             'usedDocs': 'search_aws_docs' in tools_used,
             'toolsUsed': list(set(tools_used)),
@@ -1162,6 +1181,7 @@ def handle_meeting_ask(question, meeting_id, user_id, session_id=None):
             'answer': answer,
             'sources': sources,
             'sourceDetails': source_details,
+            'toolHistoryCoverage': source_state.get('toolHistoryCoverage', []),
             'usedKB': 'search_knowledge_base' in tools_used,
             'usedDocs': 'search_aws_docs' in tools_used,
             'toolsUsed': list(set(tools_used)),
@@ -1362,6 +1382,7 @@ def handle_ask_stream(event):
             'answer': answer,
             'sources': sources,
             'sourceDetails': source_details,
+            'toolHistoryCoverage': source_state.get('toolHistoryCoverage', []),
             'toolsUsed': list(set(tools_used)),
             'usedKB': 'search_knowledge_base' in tools_used,
             'usedDocs': 'search_aws_docs' in tools_used,
@@ -1425,7 +1446,7 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
         system_messages.append({'text': _attachment_prompt(source_state['attachmentContext'])})
 
     for _ in range(MAX_TOOL_ROUNDS):
-        validate_sources(source_state, lambda dep: _source_is_current(user_id, dep))
+        validate_sources(source_state, lambda dep: _source_is_current(user_id, dep), tool_history=context['tool_history'])
         try:
             stream_resp = bedrock_runtime.converse_stream(
                 modelId=BEDROCK_MODEL_ID,

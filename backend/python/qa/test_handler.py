@@ -891,7 +891,7 @@ class TestLoadSessionTrimsTrailingUser(unittest.TestCase):
             {'role': 'user', 'content': [{'text': 'q1'}]},
             {'role': 'assistant', 'content': [{'text': 'a1'}]},
             {'role': 'user', 'content': [{'text': 'q2'}]},
-            {'role': 'assistant', 'content': [{'toolUse': {'toolUseId': 't1', 'name': 'x', 'input': {}}}]},
+            {'role': 'assistant', 'content': [{'toolUse': {'toolUseId': 't1', 'name': 'search_web', 'input': {}}}]},
             {'role': 'user', 'content': [{'toolResult': {'toolUseId': 't1', 'content': [{'text': 'r'}]}}]},
         ])
         result = handler.load_session('s1', user_id='u1')
@@ -906,7 +906,7 @@ class TestLoadSessionTrimsTrailingUser(unittest.TestCase):
             {'role': 'user', 'content': [{'text': 'q1'}]},
             {'role': 'assistant', 'content': [{'text': 'a1'}]},
             {'role': 'user', 'content': [{'text': 'q2'}]},
-            {'role': 'assistant', 'content': [{'toolUse': {'toolUseId': 't1', 'name': 'x', 'input': {}}}]},
+            {'role': 'assistant', 'content': [{'toolUse': {'toolUseId': 't1', 'name': 'search_web', 'input': {}}}]},
         ])
         result = handler.load_session('s1', user_id='u1')
         self.assertEqual(len(result), 2)
@@ -918,7 +918,7 @@ class TestLoadSessionTrimsTrailingUser(unittest.TestCase):
         # trailing toolUse is dangling.
         history = [
             {'role': 'user', 'content': [{'text': 'q1'}]},
-            {'role': 'assistant', 'content': [{'toolUse': {'toolUseId': 't1', 'name': 'x', 'input': {}}}]},
+            {'role': 'assistant', 'content': [{'toolUse': {'toolUseId': 't1', 'name': 'search_web', 'input': {}}}]},
             {'role': 'user', 'content': [{'toolResult': {'toolUseId': 't1', 'content': [{'text': 'r'}]}}]},
             {'role': 'assistant', 'content': [{'text': 'final answer'}]},
         ]
@@ -1431,7 +1431,7 @@ def load_tests(loader, tests, pattern):
     for module in ('test_document_context', 'test_source_contract', 'test_attachment_context',
                    'test_retrieval_helpers', 'test_source_access', 'test_legacy_text',
                    'test_indexed_sources', 'test_manual_kb', 'test_shared_kb',
-                   'test_tool_history', 'test_account_reads'):
+                   'test_tool_history', 'test_account_reads', 'test_runtime_tool_history'):
         tests.addTests(loader.loadTestsFromName(module))
     return tests
 
