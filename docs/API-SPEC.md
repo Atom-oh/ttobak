@@ -573,7 +573,11 @@ State is separate at `MEETING#id / ANALYSIS#summary`. The worker revalidates the
 requester's edit grant, source fields, attachment inventory and object ETags.
 Summary/coverage and success are published atomically under source/run/lease
 conditions. Concurrent human changes reject the generated result. Failure keeps
-the previous summary. Inputs are limited to 20 attachments and 8 MiB per loaded
+the previous summary. Publication uses one SDK attempt; condition/validation
+rejections and canceled transactions clean up only newly created transcript
+spills. Other database failures retain spills because publication may be
+ambiguous; cleanup errors remain visible.
+Inputs are limited to 20 attachments and 8 MiB per loaded
 transcript field; document evidence is fairly excerpted within 64 KiB total.
 Unprovided/partial evidence is explicitly marked.
 
