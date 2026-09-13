@@ -1,4 +1,4 @@
-"""Actual REST/WebSocket tool continuity with synthetic storage and model replies."""
+"""QA tool continuity through both transports; no live services."""
 import json
 import unittest
 from unittest import mock
@@ -6,6 +6,7 @@ from unittest import mock
 import test_handler
 import test_account_reads as fixtures
 from test_tool_history import conversation
+from test_kb_fixtures import _QAConversationFixture
 
 handler = test_handler.handler
 
@@ -19,59 +20,14 @@ class RuntimeTable(fixtures.AccountTable):
             raise AssertionError('Reserved projection name is not aliased')
 
 
-class TestRuntimeToolHistory(unittest.TestCase):
+class TestRuntimeToolHistory(_QAConversationFixture, unittest.TestCase):
     account = fixtures.TestStrictAccountReads.account
     insight = fixtures.TestStrictAccountReads.insight
     meeting = fixtures.TestStrictAccountReads.meeting
 
     def setUp(self):
-        self.table = RuntimeTable()
-        for patch in (mock.patch.object(handler, 'table', self.table),
-                      mock.patch('socket.socket', side_effect=AssertionError('live network forbidden')),
-                      mock.patch.object(handler, '_apigw_client'),
-                      mock.patch.object(handler, '_post_ws', return_value=True)):
-            patch.start()
-            self.addCleanup(patch.stop)
-        patch = mock.patch.object(handler, 'bedrock_runtime')
-        self.model = patch.start()
-        self.addCleanup(patch.stop)
+        self.set_up_transport(RuntimeTable())
 
-    def replies(self, transport, name, arguments):
-        tool = {'toolUseId': 'tool1', 'name': name, 'input': arguments}
-        messages = [[{'toolUse': tool}], [{'text': 'PRIVATE_CHOICE'}],
-                    [{'text': 'stable followup'}], [{'text': 'fresh answer'}]]
-        if transport == 'rest':
-            self.model.converse.side_effect = [
-                {'stopReason': 'tool_use' if i == 0 else 'end_turn',
-                 'output': {'message': {'role': 'assistant', 'content': content}}}
-                for i, content in enumerate(messages)]
-            return self.model.converse
-        streams = []
-        for i, content in enumerate(messages):
-            if i == 0:
-                start, delta = {'toolUse': {k: tool[k] for k in ('toolUseId', 'name')}}, {
-                    'toolUse': {'input': json.dumps(arguments)}}
-            else:
-                start, delta = {}, content[0]
-            streams.append({'stream': [
-                {'contentBlockStart': {'start': start}}, {'contentBlockDelta': {'delta': delta}},
-                {'contentBlockStop': {}}, {'messageStop': {'stopReason': 'tool_use' if i == 0 else 'end_turn'}},
-            ]})
-        self.model.converse_stream.side_effect = streams
-        return self.model.converse_stream
-
-    def ask(self, transport, question, meeting_id=None):
-        if transport == 'rest':
-            result = handler.handle_ask(question, user_id='reader', session_id='chat-readonly', meeting_id=meeting_id)
-            self.assertEqual(result['statusCode'], 200, result)
-        else:
-            result = handler.handle_ask_stream({
-                'question': question, 'userId': 'reader', 'sessionId': 'chat-readonly',
-                'meetingId': meeting_id,
-                'connectionId': 'c', 'endpoint': 'https://synthetic.invalid',
-            })
-            self.assertEqual(result['status'], 'ok', result)
-        return result
 
     def test_history_budget_reports_coverage_without_losing_current_answer(self):
         self.account()

@@ -16,9 +16,9 @@ from source_context import SourceReader
 from source_access import SourceAccess
 from account_reads import StrictAccountReader
 from tool_history import CompleteRead, ToolHistory, READONLY_TOOLS
-from source_revision import legacy_meeting_identity, resource_identity, IDENTIFIER
+from source_revision import legacy_meeting_identity
 from attachment_context import AttachmentReader
-from indexed_retrieval import discover_sources, discovery_filters, hydrate_candidates
+from indexed_retrieval import hydrate_candidates
 from session_provenance import (
     new_source_state, remember_source, restore_messages, validate_sources, collect_detail,
 )

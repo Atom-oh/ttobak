@@ -27,15 +27,9 @@ retrieval, document tools and source-bound conversation history.
   an explicit replayable marker. Both integer version 1 before persistence and
   Decimal version 1 after a boto3 resource read are accepted; booleans, floats,
   strings, unknown versions and untracked histories are rejected.
-- `tool_history.py` and `account_reads.py` retain stable readonly list/account
-  results through current-user callbacks. Explicit source/public tool policies
-  deny unknown names. Changed/revoked reads discard the whole old conversation;
-  research creation retains only a normalized receipt and is never replayed.
-  Each private callback collects its own dependencies; empty, failed or skipped
-  reads cannot reuse an unrelated earlier source as coverage. Transcript search
-  requires the current request's tracked meeting context.
-  `toolHistoryCoverage` in HTTP/WS completion reports untracked history budgets
-  without hiding valid current results.
+- `tool_history.py`/`account_reads.py` provide current readonly continuity.
+  [Contract](TOOL_HISTORY_CONTRACT.md): per-call source proof, whole-history
+  invalidation, creation receipts without replay, and explicit tracking limits.
 - `source_access.py` composes these readers into current-source search and
   meeting/document/attachment contexts, with source dependencies attached.
   Its constructor receives readers and callbacks; it creates no AWS clients.
