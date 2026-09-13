@@ -101,6 +101,7 @@ def _execute_job_request(user_id, request, state):
         safe = {
             'SOURCE_CHANGED': 'Source access or content changed. Check this job before submitting again.',
             'SOURCE_UNAVAILABLE': 'Current sources could not be verified.',
+            'QA_MODEL_INCOMPLETE': 'QA did not complete. Check previous tool results before retrying.',
             'FORBIDDEN': 'Access denied.', 'NOT_FOUND': 'Requested source not found.',
         }
         code = error.get('code')
@@ -1138,6 +1139,19 @@ def agentic_converse(messages, transcript=None, session_id=None, user_id=None, m
         context['create_research'] = lambda uid, topic, mode: mutation_guard.call(create, uid, topic, mode)
     tools_used = []
     sources = []
+    strict_completion = model_client is not None
+    finished = False
+
+    def fail_answer():
+        if (messages and messages[-1].get('role') == 'user'
+                and any('toolResult' in block for block in messages[-1].get('content', []))):
+            _validate_answer_sources(user_id, source_state, context['tool_history'])
+            messages.append({'role': 'assistant', 'content': [{
+                'text': '응답이 중단되었습니다. 이전 도구 실행 결과를 확인한 후 계속하세요.',
+            }]})
+            save_session(session_id, messages, user_id=user_id, source_state=source_state,
+                         source_details=source_details)
+        raise JobError('QA_MODEL_INCOMPLETE', 'QA did not complete. Check previous tool results before retrying.', 502)
 
     system_messages = _qa_system_messages(transcript, meeting_notes, meeting_id)
     if source_state.get('clientInputReceived'):
@@ -1158,14 +1172,22 @@ def agentic_converse(messages, transcript=None, session_id=None, user_id=None, m
         except Exception as e:
             logger.error(f"Bedrock converse failed: {e}", exc_info=True)
             if model_client is not None:
-                raise
+                fail_answer()
             return "죄송합니다. AI 응답 생성 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.", [], []
 
         output_message = resp["output"]["message"]
-        messages.append(output_message)
         stop_reason = resp["stopReason"]
+        if strict_completion:
+            output_message = dict(output_message, content=[
+                block for block in output_message['content'] if 'text' not in block or block['text'].strip()])
+            if (stop_reason not in ('end_turn', 'stop_sequence', 'tool_use')
+                    or stop_reason == 'tool_use' and not any('toolUse' in block for block in output_message['content'])
+                    or stop_reason != 'tool_use' and not extract_text_answer(output_message).strip()):
+                fail_answer()
+        messages.append(output_message)
 
-        if stop_reason == "end_turn":
+        if stop_reason == "end_turn" or strict_completion and stop_reason == 'stop_sequence':
+            finished = True
             break
 
         if stop_reason == "tool_use":
@@ -1198,6 +1220,8 @@ def agentic_converse(messages, transcript=None, session_id=None, user_id=None, m
                     })
             messages.append({"role": "user", "content": tool_results})
 
+    if strict_completion and not finished:
+        fail_answer()
     # Extract final text answer
     answer = extract_text_answer(output_message)
 
@@ -1263,7 +1287,7 @@ def handle_ask(question, context=None, meeting_id=None, session_id=None, user_id
             'usedDocs': 'search_aws_docs' in tools_used,
             'toolsUsed': list(set(tools_used)),
         })
-    except SourceValidationError as error:
+    except (SourceValidationError, JobError) as error:
         return response(error.status, {'error': {'code': error.code, 'message': error.message}})
     except Exception as e:
         logger.error(f'handle_ask failed: {e}', exc_info=True)
@@ -1340,7 +1364,7 @@ def handle_meeting_ask(question, meeting_id, user_id, session_id=None, *,
             'usedDocs': 'search_aws_docs' in tools_used,
             'toolsUsed': list(set(tools_used)),
         })
-    except SourceValidationError as error:
+    except (SourceValidationError, JobError) as error:
         return response(error.status, {'error': {'code': error.code, 'message': error.message}})
     except Exception as e:
         logger.error(f'handle_meeting_ask failed: {e}', exc_info=True)

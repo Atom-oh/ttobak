@@ -28,6 +28,9 @@ never take over RUNNING. Queued dispatch can recover through polling, with 10s
 cooldown. Limits: work 240s, total 600s, Lambda 300s, HTTP 15s. Model SDK retries
 are disabled. Confirmed research receipts are reused; ambiguous creation blocks
 further creation. Never automatically resubmit uncertain work under a new ID.
+Async model responses require a nonblank completed answer. Truncation or tool
+budget exhaustion returns `QA_MODEL_INCOMPLETE`; completed, validated tool
+receipts remain in history with an interruption notice instead of an empty success.
 
 Separate `USER#{user}` items hold `QA_JOB#{id}` input (256 KiB), `QA_RESULT#{id}`
 answer (320 KiB), and `QA_PROOF#{id}` proof (128 KiB). Complete items include all

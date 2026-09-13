@@ -15,6 +15,56 @@ handler = test_handler.handler
 
 
 class TestAsyncRuntime(_JobFixture, unittest.TestCase):
+    def test_nonstream_exhaustion_or_model_failure_keeps_completed_receipt_without_success(self):
+        tool = {'stopReason': 'tool_use', 'output': {'message': {'role': 'assistant', 'content': [
+            {'text': ''},
+            {'toolUse': {'toolUseId': 'one', 'name': 'start_research',
+                         'input': {'topic': 'synthetic', 'mode': 'standard'}}},
+        ]}}}
+        for mode in ('budget', 'model-failure'):
+            with self.subTest(mode=mode):
+                self.setUp()
+                self.jobs.submit('reader', self.body)
+                model = mock.Mock()
+                model.converse.side_effect = [tool, RuntimeError('synthetic model failure')]
+                with mock.patch.object(handler, 'table', test_handler.RetrievalTable()), \
+                        mock.patch.object(handler, '_ASYNC_MODEL', model), \
+                        mock.patch.object(handler, 'MAX_TOOL_ROUNDS', 1 if mode == 'budget' else 5), \
+                        mock.patch.object(handler, '_request_meeting_context', return_value=(None, None, None)), \
+                        mock.patch.object(handler, 'check_research_limit', return_value=True), \
+                        mock.patch.object(handler, 'create_research_from_chat', return_value={'researchId': 'b' * 32}) as create:
+                    self.jobs.work('reader', self.job_id, handler._execute_job_request, handler._validate_job_sources)
+                    result = self.jobs.poll('reader', self.job_id, handler._validate_job_sources)
+                    self.assertEqual(result['status'], 'failed', result)
+                    self.assertEqual(result['error']['code'], 'QA_MODEL_INCOMPLETE')
+                    self.assertNotIn('result', result)
+                    history = handler.load_session(self.body['sessionId'], user_id='reader')
+                    self.assertIn('b' * 32, json.dumps(history))
+                    self.assertIn('이전 도구 실행 결과', history[-1]['content'][0]['text'])
+                    self.assertTrue(all('text' not in block or block['text'].strip()
+                                        for message in history for block in message['content']))
+                    self.jobs.work('reader', self.job_id, handler._execute_job_request, handler._validate_job_sources)
+                    create.assert_called_once()
+                    self.assertEqual(model.converse.call_count, 1 if mode == 'budget' else 2)
+
+    def test_empty_truncated_or_invalid_nonstream_completion_never_publishes(self):
+        for stop, text in (('end_turn', ''), ('max_tokens', 'partial'), ('tool_use', 'no tool')):
+            with self.subTest(stop=stop):
+                self.setUp()
+                self.jobs.submit('reader', self.body)
+                model = mock.Mock()
+                model.converse.return_value = {'stopReason': stop, 'output': {
+                    'message': {'role': 'assistant', 'content': [{'text': text}]}}}
+                with mock.patch.object(handler, 'table', test_handler.RetrievalTable()), \
+                        mock.patch.object(handler, '_ASYNC_MODEL', model), \
+                        mock.patch.object(handler, '_request_meeting_context', return_value=(None, None, None)):
+                    self.jobs.work('reader', self.job_id, handler._execute_job_request, handler._validate_job_sources)
+                result = self.jobs.poll('reader', self.job_id, self.validate)
+                self.assertEqual(result['status'], 'failed', result)
+                self.assertEqual(result['error']['code'], 'QA_MODEL_INCOMPLETE')
+                self.assertNotIn('result', result)
+                model.converse.assert_called_once()
+
     def test_authenticated_async_routes_preserve_sync_contract_and_reject_body_identity(self):
         with mock.patch.object(handler, '_job_service', return_value=self.jobs, create=True):
             result = handler.lambda_handler(self.event('POST', '/api/qa/jobs', self.body), None)
