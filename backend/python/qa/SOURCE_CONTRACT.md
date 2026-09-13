@@ -159,6 +159,15 @@ preserving valid dialogue. Existing final transport limits still apply.
 
 ## Completion and delivery
 
+ConverseStream text is accumulated from its first `contentBlockDelta`; text does
+not require `contentBlockStart`, which the [AWS event contract](https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html)
+uses for tools. Empty, unterminated, token-truncated or tool-budget-exhausted
+responses emit an explicit `MODEL_STREAM_*` / `MODEL_TOOL_ROUND_LIMIT` error and
+cannot produce a successful completion. Completed, source-validated tool rounds
+are retained with an explicit interruption note on these failures, so an empty
+model message cannot erase a completed creation receipt. No model/tool retry is
+performed automatically.
+
 Both tool loops validate tracked sources after the final model call and before
 session persistence. REST handlers and the WebSocket completion path validate
 again before final publication. Rejected current-source proof returns HTTP 409

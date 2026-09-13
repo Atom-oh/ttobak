@@ -1306,6 +1306,12 @@ class WebSocketDeliveryError(RuntimeError):
         self.code = code
 
 
+class ModelStreamError(RuntimeError):
+    def __init__(self, code):
+        super().__init__(code)
+        self.code = code
+
+
 def _post_ws(apigw, connection_id, payload):
     """Return False for Gone; terminal/rejected payloads require explicit failure."""
     data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
@@ -1427,6 +1433,10 @@ def handle_ask_stream(event):
             return {'status': 'gone'}
     except SourceValidationError as error:
         return _stream_error(apigw, connection_id, session_id, error.code, error.message)
+    except ModelStreamError as error:
+        logger.warning("Model stream did not complete (%s)", error.code)
+        return _stream_error(apigw, connection_id, session_id, error.code,
+                             '모델 응답이 완료되지 않았습니다. 이미 실행된 작업이 있는지 확인해 주세요.', 'model_failed')
     except WebSocketDeliveryError as error:
         logger.warning("WebSocket answer delivery failed (%s)", error.code)
         message = ('The complete answer exceeds WebSocket delivery limits. Ask a narrower question.'
@@ -1487,12 +1497,28 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
     tools_used = []
     sources = []
     final_answer_parts = []
+    finished = False
+    client_gone = False
 
     system_messages = _qa_system_messages(transcript, meeting_notes, meeting_id)
     if source_state.get('clientInputReceived'):
         system_messages.append({'text': CLIENT_LIVE_NOTE})
     if source_state.get('attachmentContext'):
         system_messages.append({'text': _attachment_prompt(source_state['attachmentContext'])})
+
+    def fail_stream(code):
+        # Retain completed tool receipts, but never append an empty/partial model
+        # message. The explicit interruption note closes the paired tool round
+        # so load_session does not rewind and forget a completed mutation.
+        if (messages and messages[-1].get('role') == 'user'
+                and any('toolResult' in block for block in messages[-1].get('content', []))):
+            _validate_answer_sources(user_id, source_state, context['tool_history'])
+            messages.append({'role': 'assistant', 'content': [{
+                'text': '응답이 중단되었습니다. 이전 도구 실행 결과를 확인한 후 계속하세요.',
+            }]})
+            save_session(session_id, messages, user_id=user_id, source_state=source_state,
+                         source_details=source_details)
+        raise ModelStreamError(code)
 
     for _ in range(MAX_TOOL_ROUNDS):
         validate_sources(source_state, lambda dep: _source_is_current(user_id, dep, source_state), tool_history=context['tool_history'])
@@ -1505,13 +1531,8 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
                 inferenceConfig={"maxTokens": 4096},
             )
         except Exception as e:
-            logger.error(f"Bedrock converse_stream failed: {e}", exc_info=True)
-            _post_ws(apigw, connection_id, {
-                'type': 'answer_delta',
-                'sessionId': session_id,
-                'text': '\n(응답 생성 중 오류)',
-            })
-            break
+            logger.warning("Bedrock stream request failed (%s)", type(e).__name__)
+            fail_stream('MODEL_STREAM_UNAVAILABLE')
 
         assembled_content = []
         current_block = None
@@ -1537,6 +1558,10 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
                 continue
             if 'contentBlockDelta' in ev:
                 delta = ev['contentBlockDelta'].get('delta', {})
+                # ConverseStream emits contentBlockStart for tools, not normal
+                # text. Initialize text on its first delta, including "".
+                if 'text' in delta and current_block is None:
+                    current_block = {'text': ''}
                 if 'text' in delta and current_block is not None and 'text' in current_block:
                     current_block['text'] += delta['text']
                     round_text += delta['text']
@@ -1567,6 +1592,12 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
             if 'metadata' in ev:
                 continue
 
+        if stop_reason not in ('end_turn', 'stop_sequence', 'tool_use') or current_block is not None:
+            fail_stream('MODEL_STREAM_INCOMPLETE')
+        if stop_reason in ('end_turn', 'stop_sequence') and not round_text.strip():
+            fail_stream('MODEL_STREAM_EMPTY')
+        if stop_reason == 'tool_use' and not any('toolUse' in block for block in assembled_content):
+            fail_stream('MODEL_STREAM_INCOMPLETE')
         messages.append({"role": "assistant", "content": assembled_content})
         if round_text:
             final_answer_parts.append(round_text)
@@ -1577,7 +1608,8 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
             # role-consistent.
             break
 
-        if stop_reason == 'end_turn' or stop_reason is None:
+        if stop_reason in ('end_turn', 'stop_sequence'):
+            finished = True
             break
 
         if stop_reason == 'tool_use':
@@ -1630,6 +1662,8 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
                 # on a socket nothing is listening on.
                 break
 
+    if not finished and not client_gone:
+        fail_stream('MODEL_TOOL_ROUND_LIMIT')
     _validate_answer_sources(user_id, source_state, context['tool_history'])
     save_session(session_id, messages, user_id=user_id, source_state=source_state, source_details=source_details)
 
