@@ -265,6 +265,32 @@ class TestAsyncJobs(_JobFixture, unittest.TestCase):
         self.assertEqual(len(json.loads(proof['payload'])['dependencies']), 500)
         self.assertEqual(len(result['result']['answer']), (RESULT_LIMIT - 2048) // 4)
 
+    def test_work_collects_capacity_overflow_and_late_direct_dependencies_without_executor_seeding(self):
+        from delivery_proof import validate_delivery
+        from tool_history import ToolHistory, CompleteRead
+        reader = mock.Mock(return_value=CompleteRead([{'meetingId': 'm', 'title': 'Current'}]))
+        history = ToolHistory('reader', {'list_meetings': reader})
+        direct = {'sourcePK': 'USER#reader', 'sourceSK': 'DOC#direct', 'sourceRevision': 'b' * 64}
+        def execute(user, request, state):
+            for index in range(17):
+                history.read(state, 'list_meetings', {'keyword': str(index)})
+            self.assertFalse(state['replayable'])
+            state['dependencies'].append(direct)  # Another trusted reader's final dependency.
+            return {'answer': 'current valid answer', 'sources': ['synthetic://direct']}
+        def validate(user, proof):
+            self.assertEqual(len(proof['dependencies']), 18)
+            self.assertIn(direct, proof['dependencies'])
+            validate_delivery(proof, lambda dep: True, history)
+        self.jobs.submit('reader', self.body)
+        self.jobs.work('reader', self.job_id, execute, validate)
+        result = self.jobs.poll('reader', self.job_id, validate)
+        self.assertEqual(result['status'], 'succeeded', result)
+        self.assertEqual(result['result']['answer'], 'current valid answer')
+        self.table.reads.clear()
+        with self.assertRaises(SourceValidationError):
+            self.jobs.poll('reader', self.job_id, lambda user, proof: validate_delivery(proof, lambda dep: False, history))
+        self.assertFalse(any(sk.startswith('QA_RESULT#') for _, sk in self.table.reads))
+
 
     def test_item_boundary_counts_names_utf8_and_metadata_before_any_write(self):
         from async_jobs import DDB_ITEM_LIMIT, item_size, bounded_item
@@ -328,6 +354,7 @@ class TestAsyncJobs(_JobFixture, unittest.TestCase):
         guard = MutationGuard()
         create = mock.Mock(return_value={'researchId': 'a' * 32})
         first = guard.call(create, 'reader', ' topic ', 'invalid')
+        create.assert_called_once_with('reader', 'topic', 'standard')
         self.assertEqual(guard.call(create, 'reader', 'topic', 'standard'), first)
         self.assertEqual(create.call_count, 1)
         guard.call(create, 'reader', 'a separate explicit research task', 'standard')

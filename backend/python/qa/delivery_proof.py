@@ -31,9 +31,13 @@ class DeliveryProof:
         self.invalid = False
         self.overflow = False
         self.changed = False
+        self.capacity_limited = False
 
     def reject(self):
         self.invalid = True
+
+    def history_limited(self):
+        self.capacity_limited = True
 
     def source(self, dependency):
         try:
@@ -56,7 +60,7 @@ class DeliveryProof:
         # Called after successful history restoration, never for a discarded
         # candidate history. Initial source failures are not capacity overflow.
         self.initialized = True
-        if state.get('replayable') is not True:
+        if state.get('replayable') is not True and not self.capacity_limited:
             self.reject()
         for dependency in state.get('dependencies', []):
             self.source(dependency)
@@ -84,6 +88,10 @@ class DeliveryProof:
     def finish(self, state):
         if not self.initialized:
             self.seed(state)
+        for dependency in state.get('dependencies', []):
+            self.source(dependency)
+        if state.get('replayable') is not True and not self.capacity_limited:
+            self.reject()
         if self.changed:
             raise SourceValidationError()
         if self.invalid or self.overflow:

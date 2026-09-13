@@ -33,6 +33,8 @@ def build_tool_context(user_id, text, source_state, source_details, *, source_ac
                     accepted = False
                 if accepted is False:
                     recorded = False
+                    if source_state.get('_delivery') is not None:
+                        source_state['_delivery'].history_limited()
             if recorded and current['dependencies'] and current['replayable']:
                 context['sourceReadRecorded'] = True
             else:

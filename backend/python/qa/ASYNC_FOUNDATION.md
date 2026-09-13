@@ -17,8 +17,11 @@ current source callbacks/strict read-only fingerprints, never replaying a mutati
 Typed fingerprint defaults preserve existing history behavior. No job can publish
 a result without the runtime supplying these checks.
 
-The table already uses default AWS-owned KMS encryption. These helpers add active
-TTL to their own rows; they do not migrate key ownership or add customer-key controls.
+The checked-in table configuration leaves the AWS-owned KMS default, consistent
+with the host's live `DescribeTable` receipt (ACTIVE, absent SSEDescription).
+[AWS documents KMS encryption for all table data](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/EncryptionAtRest.html).
+These helpers add active TTL only to their own rows; they do not migrate key
+ownership, add customer-key controls, or fix legacy conversation TTL retention.
 UTF-8 item bounds include names, payloads and metadata, with reserved control space;
 see [AWS item-size guidance](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/CapacityUnitCalculations.html).
 
