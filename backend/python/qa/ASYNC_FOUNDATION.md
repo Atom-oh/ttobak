@@ -32,6 +32,6 @@ An attachment lookup/read failure marks delivery proof invalid independently of
 history-capacity limits. Later valid reads or capacity overflow cannot clear it.
 These source-access hooks are inert when no delivery collector is supplied.
 
-`test_handler` loads the store/proof suites and all five active HTTP/worker
+`test_handler` loads the store/proof suites and the active HTTP/worker
 integration tests from `test_async_runtime`. Tests use synthetic table, model
 and network responses plus actual boto3 serialization.
