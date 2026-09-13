@@ -521,8 +521,10 @@ Text: `{analysis,current,source,format,scope,complete,warningCount,units,nextCur
 Units carry exact Unicode offsets and parser locations. pageSize is 1–6000,
 response ≤14,000 bytes (`AttachmentTextPageLimit`) including newline, ≤50 units. Current auth/source/run/ETag
 is revalidated; stale cursors conflict. Errors: 400 query, 403/404 access/source,
-409 `CONFLICT` for stale source/cursor or `TEXT_UNAVAILABLE` for missing verified text,
-500 storage failures. A page with `current:false` is retained historical evidence.
+409 `CONFLICT` for stale source/cursor, 409 `TEXT_UNAVAILABLE` for unavailable
+verified result text (including S3 HEAD/GET failures), and 422 `UNSUPPORTED_FORMAT`
+for unsupported input. Other metadata/internal failures return 500. A page with
+`current:false` is retained historical evidence.
 
 Source conflicts preserve text and mark fresh-generation retry; unrelated metadata
 changes do not invalidate generation. No source/model text appears in errors.

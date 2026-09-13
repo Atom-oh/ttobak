@@ -3,10 +3,8 @@
 Host controls merge/deploy; merging deploys production. Worker `34717614426` is
 verified; public API/EventBridge/summary/QA acceptance remains separate.
 
-**Hard prerequisite: merge #209 before #213.** PR213 is reviewed as a Draft
-against the 209 branch; retarget it to main only after #209 merges. Shared source guards and their tests
-must be present before this API/document-provider wiring; do not deploy the producer
-from a branch that lacks them. The host verified worker deployment `34717614426`
+The guarded-summary foundation must precede attachment API/summary wiring.
+Its source guards and tests must remain present in the integrated release. The host verified worker deployment `34717614426`
 SUCCESS: synthetic 626-byte native PDF → 752-byte JSON, page 1 and exact ETag/identity,
 distinct owner/uploader, succeeded/complete/lease zero, duplicate ignored. Three
 synthetic rows and two exact S3 versions were removed and absence rechecked.
@@ -16,9 +14,17 @@ Order: batch foundation → attachment wiring → saved-summary storage/consumer
 → its API → frontend. DOCUMENT collection requires provider injection.
 This wiring injects that provider into API/summarize. Saved-summary state and its
 source/state deletion transaction ship together in the following release.
-Build changed bootstraps from backend using `/home/atomoh/go-sdk/go/bin/go` with
-`GOOS=linux GOARCH=arm64`, then `cd ../infra` and
-`npx cdk deploy TtobakGatewayStack --exclusively`. Never `--all`.
+Build both changed bootstraps from the repository root using canonical commands:
+
+```bash
+(cd backend && GOOS=linux GOARCH=arm64 /usr/local/go/bin/go build -tags lambda.norpc -o cmd/api/bootstrap ./cmd/api)
+(cd backend && GOOS=linux GOARCH=arm64 /usr/local/go/bin/go build -tags lambda.norpc -o cmd/summarize/bootstrap ./cmd/summarize)
+(cd infra && npx cdk deploy TtobakGatewayStack --exclusively)
+```
+
+Deployment remains host-controlled; never use `--all`. The existing API default-bus
+PutEvents and summarize table/bucket grants cover this wiring; no IAM/env change is
+required by the attachment API patch.
 
 Batch recovery regenerates fresh inputs without STT. Durable retry maximum is 2;
 Lambda currently also defaults to two async retries. Failed reads/runs release
