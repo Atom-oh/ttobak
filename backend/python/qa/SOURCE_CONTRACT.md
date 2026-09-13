@@ -1,9 +1,11 @@
 # Current-source QA reader contract
 
-Code checked: 2026-09-13. The prepared handler registers these helpers in both
-transports. Public consumer deployment and acceptance are pending. CDK schedules
-`manual-only` snapshots; that configuration does not prove consumer deployment. Follow
-[the rollout](../../../docs/runbooks/qa-current-source-rollout.md) before cutover.
+Code checked: 2026-09-13. The handler registers these helpers in both transports.
+Package deployment and public consumer acceptance are separate checks. This
+activation revision selects canonical `all` delivery but remains held until the
+[rollout](../../../docs/runbooks/qa-current-source-rollout.md) acceptance gate is
+met. See the bootstrap runbook's dated readiness record; configuration or package
+verification alone does not establish successful answers and current provenance.
 
 ## Reader responsibilities
 

@@ -4,6 +4,12 @@ For handler registration, configured index mode and deployment acceptance status
 see [SOURCE_CONTRACT.md](../../backend/python/qa/SOURCE_CONTRACT.md).
 This runbook defines the deployment gates.
 
+The deployed package at `8959419e1fee826c5debad91aad1a05b42b95866` and restored
+public WS connection have been verified. Complete answer/history acceptance is
+still separate; see the [dated readiness checkpoint](knowledge-index-bootstrap.md#readiness-checkpoint--2026-09-13).
+Do not describe older prerequisite PRs as unmerged or convert connection success
+into a successful QA case.
+
 Keep the existing transcript guard throughout: it validates the configured
 bucket, authorized meeting ID and allowed field before S3 access. Editable
 summary content remains literal text. See [the guard rollout](qa-transcript-read-rollout.md).
@@ -44,13 +50,20 @@ reads and verify current byte bindings.
    source dependencies, strict read callbacks and history validation before
    replay, subsequent model rounds and final output. A pending-only binary
    consumer does not preserve existing file answerability.
-5. Verify current notes/documents; overwrite and new-term discovery; deletion
-   and grant revocation; retained/partial attachment results; current legacy
+5. Before canonical activation, verify current-source behavior available under
+   manual-only: private/shared snapshots, notes and authorized document reads,
+   replacement/deletion and grant revocation; retained/partial attachment results; current legacy
    excerpts and revision-bound continuation; provider/read failures; stable
    list follow-ups and whole-history reset on changed/inaccessible evidence.
-   Mutation receipts must never replay creation.
+   Verify both REST and streaming. The planned reliable REST path is PR242's
+   authenticated async jobs; validate backend delivery/public results with
+   `qaAsyncJobs=false` before separate UI activation. Mutation receipts must never
+   replay creation, and an uncertain request must not acquire a new execution ID.
 6. Only after strict runtime acceptance enable `all`, canonical streams and
-   backfill/legacy-export retirement. Reconciliation remains scheduled.
+   backfill/legacy-export retirement. Then verify canonical new-term discovery
+   after edits, original/projection deletion and file-backed DocHub behavior.
+   Reconciliation remains scheduled; these canonical index tests cannot be
+   required to pass while canonical production is still disabled.
 
 Record deployed versions and synthetic results for each stage. Merge, unit
 checks and IAM preparation do not establish runtime acceptance, extraction

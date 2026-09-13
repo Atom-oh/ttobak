@@ -12,8 +12,44 @@ The manual producer prerequisite has a completed
 private PDF and shared DOCX creation, replacement, current-byte retrieval,
 deletion and fixture-version cleanup were observed against the deployed worker.
 This archive does not establish authenticated Q&A or canonical-source acceptance.
-The separate current-source QA deployment and runtime checks remain required
-before this activation can merge.
+The current consumer package has also been deployed, but its remaining runtime
+acceptance must finish before this activation can merge.
+
+## Readiness checkpoint — 2026-09-13
+
+| Gate | Recorded evidence | State |
+|---|---|---|
+| Manual producer snapshots/recall/replacement/deletion | Linked acceptance archive, including exact fixture-version cleanup | Complete |
+| Current QA package deployment | Commit `8959419e1fee826c5debad91aad1a05b42b95866`; infrastructure run `34752539144` and frontend run `34752539147` succeeded; 24 QA runtime files verified against source | Complete for that deployment |
+| Public WS restoration | Public `/ws` and authenticated connection verified; operator receipt `ws-restore-connect-8959419-system-python.json` | Transport readiness only |
+| Current-source public answers/history | Earlier notes REST timed out, a manual follow-up lost provenance, and WS returned an empty answer. New post-fix acceptance is separate from those preserved failures | Incomplete |
+| Canonical `all` activation and CRUD/backfill | This draft selects the future deployment configuration | Not deployed by this record |
+
+The QA package receipt is `qa-deployment-8959419e1fee-verified.json`.
+These operator-held records identify the observation; they are not invented
+canonical acceptance results. Refresh exact package/transport evidence for the
+deployment actually used by acceptance. Do not relabel older build receipts.
+
+The planned REST acceptance path is the asynchronous job API in PR242:
+verify its deployed JWT routes, queue mapping and worker, then perform public
+job acceptance while `qaAsyncJobs=false`. UI activation is a separate later
+change. PR242 is not an indexing code dependency, but its transport addresses
+the known long synchronous REST delivery failure. An equivalent successful
+bounded REST proof may satisfy the consumer gate; WS-only results cannot waive
+the REST portion.
+
+Before merge, use existing manual-only fixtures to verify private/shared
+retrieval, complete source details, same-session follow-ups, source replacement/
+deletion and grant revocation. Verify notes/attachments and current live-input
+handling through the deployed consumer. Coordinate both transports' V1 checks
+before changing shared fixtures to V2 or deleting them. Keep unknown/failed
+attempts and use explicitly separate repair lineages.
+
+Canonical vector backfill and file-backed DocHub create/edit/delete require
+`all`; they are post-activation checks in step 6, not circular pre-merge gates.
+The existing meeting, personal-note and account-note fixtures predate stream
+activation and must be found by reconciliation. A current-text fallback alone
+does not establish index synchronization.
 
 ## Bootstrap boundary
 
@@ -52,16 +88,20 @@ Do not edit coordinator records or invoke ad-hoc global ticks to bypass guards.
    Require current immutable snapshots to reach `INDEXED`, preserve original
    files/meeting exports and verify actual recall. Confirm the external S3
    data source includes snapshot prefixes and supports the required metadata.
-4. Deploy the complete strict QA runtime with source-read permissions and both
-   bucket variables. Verify private/shared snapshots, current authorization,
-   revision changes and whole-history invalidation. Follow the
-   [QA rollout](qa-current-source-rollout.md); helpers alone are insufficient.
+4. Verify the complete deployed strict QA runtime, source-read permissions and
+   both bucket variables against the intended reviewed commit. Complete current
+   private/shared answer/provenance, authorization, revision and whole-history
+   acceptance in REST and streaming, using the readiness path above. Follow the
+   [QA rollout](qa-current-source-rollout.md); package readiness alone is insufficient.
 5. Enable `all` in a reviewed activation, adding canonical source reads,
    condition checks, stream grants and the mapping together. Manual batches
    retain their ingestion token and finish before canonical backfill.
    Job/control partitions remain the only DynamoDB write targets.
-6. Verify canonical create/edit/delete/revoke, reconciliation and DLQ/failure
-   handling. Provider failure must not appear as empty successful search.
+6. Verify canonical meeting/personal/account create/edit/delete/revoke,
+   reconciliation, new-term recall and DLQ/failure handling. Include file-backed
+   personal/account DocHub fixtures with byte-bound source/projection proofs.
+   Require exact current provider INDEXED/NOT_FOUND observations; provider
+   failure must not appear as empty successful search.
 
 Full mode permits `canonical/v1/*` writes/deletes and retirement of legacy
 `meetings/*` exports. Its existing-table stream mapping starts at LATEST,
