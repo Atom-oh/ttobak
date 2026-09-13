@@ -186,7 +186,7 @@ Both triggers are plain `lambda.Function` (`NODEJS_22_X`, `ARM_64`, `Code.fromAs
 - Permissions: Bedrock InvokeModelWithBidirectionalStream (Nova Sonic), Bedrock InvokeModel (Claude translation), DynamoDB read/write, API Gateway ManageConnections
 
 #### KB Lambda
-- Trigger: one-minute scheduled tick (disabled until explicit activation),
+- Trigger: one-minute scheduled tick (enabled by the application configuration),
   1024 MiB / 720s. The canonical DynamoDB mapping and stream-read grants are
   absent during `manual-only` bootstrap and created only in `all`
   mode. Existing `/api/kb/*` HTTP routes remain in the API Lambda.

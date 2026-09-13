@@ -1,8 +1,10 @@
 # Knowledge index bootstrap and activation
 
-This preparation deploys with scheduled execution disabled. Enable it only
-after the canonical coordinator and the private/shared migration worker,
-including its required `INDEXING_MODE` validation, are merged and built.
+The worker was introduced with scheduled execution disabled, then enabled for
+manual snapshot bootstrap in PR225. The canonical activation configuration uses
+`all` mode with the schedule enabled. Hold that activation PR until step 3's
+deployed private/shared acceptance and step 4's current-source QA deployment
+and verification are complete. A draft configuration is not deployment evidence.
 
 `knowledgeIndexingMode` in `infra/bin/infra.ts` is the single deployment choice
 passed to AiStack and GatewayStack. It starts as `manual-only`.

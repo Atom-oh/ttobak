@@ -4,7 +4,10 @@
 
 ### Status
 
-Accepted — 2026-09-12. Worker code is staged; automatic triggers remain disabled.
+Accepted — 2026-09-12. Deployment configuration enables the schedule and canonical
+stream in `all` mode. This activation requires verified manual snapshots and a
+deployed current-source QA consumer before merge/deployment; see the
+[bootstrap runbook](../runbooks/knowledge-index-bootstrap.md).
 
 ### Context and options
 
@@ -38,7 +41,10 @@ requires re-export; stopping the worker does not restore deleted exports.
 
 ### 상태
 
-승인 — 2026-09-12. 워커 코드는 준비 단계이며 자동 실행은 아직 비활성입니다.
+승인 — 2026-09-12. 배포 설정은 `all` 모드의 스케줄과 canonical stream을
+활성화합니다. 활성화 PR의 머지·배포 전 기존 문서 snapshot 검증과
+current-source QA 배포가 완료되어야 합니다. 절차는
+[bootstrap runbook](../runbooks/knowledge-index-bootstrap.md)을 따릅니다.
 
 ### 배경과 대안
 
