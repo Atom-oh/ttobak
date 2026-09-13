@@ -460,7 +460,10 @@ class TestMeetingRetrieval(unittest.TestCase):
                 self.assertIn(marker, system)
                 self.assertIn('"meetingId": "m1"', system)
                 self.assertIn('get_meeting_detail(offset=0)', system)
-                self.assertIn('"truncated": true', system)
+                model_text = system + '\n' + '\n'.join(
+                    block.get('text', '') for message in api.call_args.kwargs['messages']
+                    for block in message['content'])
+                self.assertIn('"truncated": true', model_text)
                 self.assertIn('"source": "saved_user_notes"', system)
 
     def test_long_notes_have_explicit_coverage_and_reachable_detail_suffix(self):
