@@ -5,6 +5,13 @@ workflow and legacy `run-panel.sh` / `synthesize.sh` dispatch remain unchanged;
 specialist activation is a separate change. The workflow is the authority for
 which protocol actually runs.
 
+The inactive specialist entrypoint now uses a trusted parent startup barrier:
+every active Kiro model is probed once before any Kiro review receives the diff.
+A failed probe blocks all active Kiro roles while Codex/Claude still run; inactive
+roles are not probed. Reviews use fresh no-tools directories. The in-memory
+decision binds the plan, model roster and agent configuration and is rechecked
+against each issued request; no environment or stored receipt bypasses it.
+
 ## Requests and results
 
 `role_review.py prepare` validates a complete immutable diff/context and creates

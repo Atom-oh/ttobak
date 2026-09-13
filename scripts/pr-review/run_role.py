@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+from collections import namedtuple
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
@@ -16,7 +18,7 @@ import sys
 import tempfile
 import time
 
-from role_review import diagnostic_failure, issue_request, Invalid, MAX_REQUEST_BYTES, MAX_OUTPUT_BYTES, output_bytes, text_file
+from role_review import diagnostic_failure, issue_request, issued_request, load_plan, digest, Invalid, MAX_REQUEST_BYTES, MAX_OUTPUT_BYTES, output_bytes, text_file
 
 
 DIRECTORY = Path(__file__).resolve().parent
@@ -95,6 +97,46 @@ def preflight(binary, model, cwd, environment, timeout):
     return code == 0 and reply == "NO_TOOLS" and not FAILURE.search(error), code, error
 
 
+KiroStartup = namedtuple("KiroStartup", "plan_digest agent_digest binary checks")
+
+
+def kiro_models(plan):
+    return tuple((tag, role["model"]) for tag, role in sorted(plan["roles"].items())
+                 if tag.startswith("kiro-") and role["required"])
+
+
+def prepare_kiro_startup(work):
+    plan = load_plan(work)
+    binary = shutil.which("kiro-cli") or "kiro-cli"
+    agent_digest = digest(AGENT)
+    checks = []
+    if plan["input_complete"] and kiro_models(plan):
+        runtime = work / "runtime"
+        runtime.mkdir(parents=True, exist_ok=True)
+        timeout = bounded_setting("KIRO_PREFLIGHT_TIMEOUT", 60, 120)
+        for tag, model in kiro_models(plan):
+            with tempfile.TemporaryDirectory(prefix=f"{tag}-probe-", dir=runtime) as temporary:
+                ok, code, error = preflight(binary, model, Path(temporary), dict(os.environ), timeout)
+            checks.append((tag, model, bool(ok and code == 0 and not diagnostic_failure(error)), code, error))
+    return KiroStartup(plan["plan_digest"], agent_digest, binary, tuple(checks))
+
+
+def verify_kiro_startup(startup, work, plan, tag, nonce):
+    # Only the trusted parent passes this in-memory object; no environment/file bypass.
+    if (not isinstance(startup, KiroStartup)
+            or startup.plan_digest != plan["plan_digest"]
+            or startup.agent_digest != digest(AGENT)
+            or tuple((row[0], row[1]) for row in startup.checks) != kiro_models(plan)
+            or tag not in dict(kiro_models(plan))):
+        raise Invalid("invalid_kiro_startup")
+    current = load_plan(work)
+    if current["plan_digest"] != startup.plan_digest:
+        raise Invalid("stale_kiro_startup")
+    receipt = issued_request(work, current, tag)
+    if receipt["invocation_nonce"] != nonce:
+        raise Invalid("stale_kiro_startup")
+
+
 def bounded_setting(name, default, maximum):
     value = int(os.environ.get(name, default))
     if not 0 < value <= maximum:
@@ -115,8 +157,8 @@ def scrub(text):
     return process.stdout
 
 
-def run(work, tag):
-    plan = json.loads((work / "role-plan.json").read_text())
+def run(work, tag, kiro_startup=None):
+    plan = load_plan(work)
     role = plan["roles"][tag]
     if not plan["input_complete"]:
         print(f"{tag}: input incomplete; no provider call")
@@ -130,7 +172,6 @@ def run(work, tag):
     runtime.mkdir(exist_ok=True)
     attempts = bounded_setting("PANEL_RETRIES", 2, 3)
     timeout = bounded_setting("PANEL_TIMEOUT", 300, 900)
-    preflight_timeout = bounded_setting("KIRO_PREFLIGHT_TIMEOUT", 60, 120)
     prompt = (work / "roles" / f"{tag}.txt").read_bytes().decode("utf-8")
     diff = (work / "roles" / f"{tag}.diff").read_bytes().decode("utf-8")
     start = time.monotonic()
@@ -145,26 +186,29 @@ def run(work, tag):
     with tempfile.TemporaryDirectory(prefix=f"{tag}-", dir=runtime) as temporary:
         cwd = Path(temporary)
         if tag.startswith("kiro-"):
-            binary = shutil.which("kiro-cli") or "kiro-cli"
-            ok, code, error = preflight(
-                binary, role["model"], cwd, environment, preflight_timeout
-            )
-            if not ok:
+            startup = kiro_startup if kiro_startup is not None else prepare_kiro_startup(work)
+            verify_kiro_startup(startup, work, plan, tag, nonce)
+            failed = [row for row in startup.checks if not row[2]]
+            if failed:
+                _, _, _, code, error = failed[0]
+                error = error or "Kiro shared startup barrier failed."
                 (slot / f"kiro-preflight-{tag}.flag").write_text(
                     "Kiro startup safety check failed; PR input withheld.\n"
                 )
                 code = code or 1
             else:
+                install_agent(cwd)
                 instruction = framed_prompt + "\n" + payload
                 if len(instruction.encode()) >= MAX_REQUEST_BYTES:
                     code, error = 1, "Complete Kiro input exceeds argument limit."
                 else:
                     command = [
-                        binary, "chat", instruction, "--model", role["model"],
+                        startup.binary, "chat", instruction, "--model", role["model"],
                         "--agent", "inline-review", "--no-interactive", "--wrap", "never",
                     ]
                     for _ in range(attempts):
                         nonce, framed_prompt, payload = issue_request(work, tag)
+                        verify_kiro_startup(startup, work, plan, tag, nonce)
                         command[2] = framed_prompt + "\n" + payload
                         code, output, error = execute(
                             command, cwd, kiro_environment(cwd, environment), "", timeout
@@ -247,12 +291,37 @@ def run(work, tag):
     print(f"{tag}: finished in {time.monotonic() - start:.1f}s (exit {code})")
 
 
+def run_all(work):
+    plan = load_plan(work)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        pending = {pool.submit(run, work, tag): tag for tag, role in plan["roles"].items()
+                   if role["required"] and not tag.startswith("kiro-")}
+        try:
+            startup = prepare_kiro_startup(work)
+        except Exception:
+            (work / "slot" / "kiro-preflight.flag").write_text("Kiro startup did not complete.\n")
+        else:
+            for tag, _ in kiro_models(plan):
+                pending[pool.submit(run, work, tag, startup)] = tag
+        for future, tag in pending.items():
+            try:
+                future.result()
+            except Exception:
+                (work / "slot" / f"{tag}-execution.flag").write_text("Role execution failed.\n")
+                print(f"{tag}: execution failed; required coverage blocked")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work", required=True, type=Path)
-    parser.add_argument("--tag", required=True)
+    target = parser.add_mutually_exclusive_group(required=True)
+    target.add_argument("--tag")
+    target.add_argument("--all", action="store_true")
     arguments = parser.parse_args()
-    run(arguments.work.resolve(), arguments.tag)
+    if arguments.all:
+        run_all(arguments.work.resolve())
+    else:
+        run(arguments.work.resolve(), arguments.tag)
 
 
 
