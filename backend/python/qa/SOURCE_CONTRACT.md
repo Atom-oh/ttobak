@@ -1,8 +1,8 @@
 # Current-source QA reader contract
 
 Code checked: 2026-09-13. The prepared handler registers these helpers in both
-transports. CDK schedules `manual-only` snapshots; deployed consumer acceptance
-remains separate from code readiness. Follow
+transports. Public consumer deployment and acceptance are pending. CDK schedules
+`manual-only` snapshots; that configuration does not prove consumer deployment. Follow
 [the rollout](../../../docs/runbooks/qa-current-source-rollout.md) before cutover.
 
 ## Reader responsibilities
