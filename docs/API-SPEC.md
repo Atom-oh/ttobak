@@ -484,10 +484,13 @@ and revision; changes or revocation invalidate the complete derived history.
   Small responses retain the existing one-frame shape.
   Clients request this protocol with `sourceFramesVersion:1` on `ask_live`.
   Without that opt-in, oversized responses retain the existing size error.
-  Empty or incomplete model streams report `MODEL_STREAM_EMPTY`,
+- WebSocket `ask_live` reports model stream failures regardless of the
+  `sourceFramesVersion` opt-in. Empty or incomplete model streams report `MODEL_STREAM_EMPTY`,
   `MODEL_STREAM_INCOMPLETE` or `MODEL_STREAM_UNAVAILABLE`; exhausting the tool
   round budget reports `MODEL_TOOL_ROUND_LIMIT`. These are failed responses,
-  not successful empty answers or automatic retries.
+  not successful empty answers or automatic retries. Source-validated completed
+  tool rounds can be retained with an explicit interruption note for the next
+  conversation turn, including when stream iteration raises.
   See the source contract's completion limits and non-atomic streaming caveat.
 - `start_research` records a creation receipt only after one successful mutation.
   Never replay creation to validate history. Tracking overflow preserves the

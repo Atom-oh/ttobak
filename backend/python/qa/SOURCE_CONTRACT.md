@@ -159,14 +159,17 @@ preserving valid dialogue. Existing final transport limits still apply.
 
 ## Completion and delivery
 
-ConverseStream text is accumulated from its first `contentBlockDelta`; text does
+The streaming loop accumulates ConverseStream text from its first `contentBlockDelta`; text does
 not require `contentBlockStart`, which the [AWS event contract](https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html)
 uses for tools. Empty, unterminated, token-truncated or tool-budget-exhausted
 responses emit an explicit `MODEL_STREAM_*` / `MODEL_TOOL_ROUND_LIMIT` error and
 cannot produce a successful completion. Completed, source-validated tool rounds
 are retained with an explicit interruption note on these failures, so an empty
-model message cannot erase a completed creation receipt. No model/tool retry is
-performed automatically.
+model message cannot erase a completed creation receipt. This includes exceptions
+while consuming the model stream, which is closed on success or failure.
+No model/tool retry is performed automatically. These changes apply to WebSocket
+`ask_live`; the non-streaming Converse loop is unchanged. If current-source
+validation fails, private tool context is not saved.
 
 Both tool loops validate tracked sources after the final model call and before
 session persistence. REST handlers and the WebSocket completion path validate

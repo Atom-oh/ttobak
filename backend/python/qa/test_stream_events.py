@@ -93,6 +93,37 @@ class TestRealStreamEvents(unittest.TestCase):
         self.assertEqual(self.frames()[-1]['type'], 'answer_error')
         self.assertNotIn(('SESSION#reader#stream-fixture', 'MESSAGES'), self.table.items)
 
+    def test_iterator_failure_after_mutation_preserves_receipt_and_closes_stream(self):
+        first = {'stream': [
+            {'contentBlockStart': {'start': {'toolUse': {'toolUseId': 'r', 'name': 'start_research'}}}},
+            {'contentBlockDelta': {'delta': {'toolUse': {'input': '{"topic":"synthetic"}'}}}},
+            {'contentBlockStop': {}},
+            {'messageStop': {'stopReason': 'tool_use'}},
+        ]}
+        class InterruptedStream:
+            closed = False
+            def __iter__(self):
+                yield {'messageStart': {'role': 'assistant'}}
+                yield {'contentBlockDelta': {'contentBlockIndex': 0, 'delta': {'text': 'PARTIAL_UNSAVED'}}}
+                raise RuntimeError('synthetic upstream detail must stay private')
+            def close(self):
+                self.closed = True
+        stream = InterruptedStream()
+        self.model.converse_stream.side_effect = [first, {'stream': stream}]
+        with mock.patch.object(handler, 'check_research_limit', return_value=True), \
+                mock.patch.object(handler, 'create_research_from_chat',
+                                  return_value={'researchId': 'd' * 32}) as create:
+            result = handler.handle_ask_stream(self.event)
+            self.assertEqual(result, {'status': 'model_failed', 'code': 'MODEL_STREAM_UNAVAILABLE'})
+            create.assert_called_once()
+            history = handler.load_session('stream-fixture', user_id='reader')
+            self.assertIn('d' * 32, json.dumps(history))
+            self.assertNotIn('PARTIAL_UNSAVED', json.dumps(history))
+        self.assertTrue(stream.closed)
+        self.assertEqual(self.frames()[-1]['type'], 'answer_error')
+        self.assertNotIn('upstream detail', self.frames()[-1]['error'])
+        self.assertFalse(any(frame['type'] == 'answer_complete' for frame in self.frames()))
+
     def test_empty_text_prefix_before_tool_does_not_poison_the_next_model_request(self):
         first = {'stream': [
             {'messageStart': {'role': 'assistant'}},
