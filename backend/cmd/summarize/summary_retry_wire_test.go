@@ -3,13 +3,13 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -23,10 +23,11 @@ type retryHTTP func(*http.Request) (*http.Response, error)
 func (f retryHTTP) Do(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestSummaryRetryHandlerRecovery(t *testing.T) {
-	for _, mode := range []string{"status", "changed", "model", "source", "marker"} {
+	for _, mode := range []string{"status", "changed", "model", "source", "marker", "fresh", "fresh-clean"} {
 		t.Run(mode, func(t *testing.T) {
 			changed := mode == "changed"
-			current := model.Meeting{UserID: "owner", MeetingID: "m", Status: model.StatusError,
+			fresh := strings.HasPrefix(mode, "fresh")
+			current := model.Meeting{PK: "USER#owner", SK: "MEETING#m", UserID: "owner", MeetingID: "m", Status: model.StatusError,
 				SummaryRetryAttempts: 2, SummaryConflictCode: "RETRY_EXHAUSTED", Notes: "보존할 메모", TranscriptA: "발언 근거"}
 			if mode == "source" {
 				current.TranscriptA = "s3://bucket/transcripts/m/transcriptA.txt"
@@ -49,15 +50,11 @@ func TestSummaryRetryHandlerRecovery(t *testing.T) {
 					if changed && claim != "" {
 						current.Status = model.StatusDone
 					}
-					item := map[string]any{"summaryRetryPending": map[string]bool{"BOOL": current.SummaryRetryPending},
-						"summaryRetryAttempts": map[string]string{"N": fmt.Sprint(current.SummaryRetryAttempts)}}
-					for k, v := range map[string]string{"PK": "USER#owner", "SK": "MEETING#m", "userId": "owner", "meetingId": "m", "status": current.Status, "notes": current.Notes, "transcriptA": current.TranscriptA, "summarizeRetryClaimedAt": claim} {
-						if v != "" {
-							item[k] = map[string]string{"S": v}
-						}
-					}
-					data, _ := json.Marshal(map[string]any{"Item": item})
-					body = string(data)
+					current.SummarizeRetryClaimedAt = claim
+					item, _ := attributevalue.MarshalMap(current)
+					item["summaryRetryAttempts"], _ = attributevalue.Marshal(current.SummaryRetryAttempts)
+					data, _ := attributevalue.MarshalMapJSON(item)
+					body = `{"Item":` + string(data) + `}`
 				case "DynamoDB_20120810.Query":
 					body = `{"Items":[]}`
 				case "DynamoDB_20120810.TransactWriteItems":
@@ -76,8 +73,10 @@ func TestSummaryRetryHandlerRecovery(t *testing.T) {
 						}
 						current.SummaryRetryAttempts++
 					case strings.Contains(update, "REMOVE"):
-						if !strings.Contains(string(raw), claim) {
-							t.Fatal("cleanup is not bound to its claim")
+						isMarker := strings.Contains(update, "SET") && !strings.Contains(string(raw), "summaryRetryAttempts") && !strings.Contains(wire.ConditionExpression, "<>")
+						if !isMarker && (claim == "" || !strings.Contains(string(raw), claim)) {
+							code, body = 400, `{"__type":"ConditionalCheckFailedException"}`
+							break
 						}
 						terminal := strings.Contains(string(raw), "RETRY_EXHAUSTED")
 						if mode == "marker" && strings.Contains(update, "SET") && !strings.Contains(string(raw), "summaryRetryAttempts") {
@@ -95,13 +94,20 @@ func TestSummaryRetryHandlerRecovery(t *testing.T) {
 						if terminal {
 							current.Status, current.SummaryRetryPending = model.StatusError, false
 							current.SummaryConflictCode = "RETRY_EXHAUSTED"
+						} else if !changed {
+							current.SummaryRetryPending = true
 						}
 					default:
 						if strings.Contains(string(raw), "summaryRetryAttempts") {
-							t.Fatal("resumed generation reset its finite budget")
+							if !fresh || current.Status != model.StatusTranscribing || !strings.Contains(string(raw), `"N":"0"`) {
+								t.Fatal("resumed generation reset its finite budget")
+							}
+							current.SummaryRetryAttempts, current.SummaryRetryPending, current.SummaryConflictCode = 0, false, ""
 						}
 						if mode == "status" {
 							code, body = 500, `{"__type":"InternalServerError"}`
+						} else {
+							current.Status = model.StatusSummarizing
 						}
 						if strings.Contains(string(raw), `"S":"error"`) {
 							current.Status = model.StatusError
@@ -112,7 +118,7 @@ func TestSummaryRetryHandlerRecovery(t *testing.T) {
 						code, body = 500, `<Error><Code>InternalError</Code></Error>`
 					} else if req.Method == "POST" {
 						models++
-						if mode == "marker" {
+						if mode == "marker" || fresh {
 							body = `{"content":[{"type":"text","text":"새 요약"}],"stop_reason":"end_turn"}`
 						} else {
 							code, body = 500, `{"message":"synthetic model failure"}`
@@ -136,9 +142,16 @@ func TestSummaryRetryHandlerRecovery(t *testing.T) {
 			if err := Handler(context.Background(), event); err != nil || writes != 0 {
 				t.Fatal("terminal event replay must be a no-op", err)
 			}
-			// Operator reset starts a new recovery budget.
-			current.Status, current.SummaryRetryPending, current.SummaryRetryAttempts = model.StatusSummarizing, true, 0
-			current.SummaryConflictCode = "SOURCE_CHANGED"
+			if fresh {
+				current.Status, current.SummaryRetryPending = model.StatusTranscribing, mode == "fresh"
+				if err := generateSummary(context.Background(), &current, ""); err == nil || !current.SummaryRetryPending || current.SummaryRetryAttempts != 0 {
+					t.Fatal("new single-file/rediarize run retained exhausted budget", err, current)
+				}
+			} else {
+				// Operator reset starts a new recovery budget.
+				current.Status, current.SummaryRetryPending, current.SummaryRetryAttempts = model.StatusSummarizing, true, 0
+				current.SummaryConflictCode = "SOURCE_CHANGED"
+			}
 			for n := 1; n <= 2; n++ {
 				err := Handler(context.Background(), event)
 				if !changed && err == nil || changed && err != nil || claim != "" || current.SummaryRetryAttempts != n || current.Notes != "보존할 메모" {
@@ -159,6 +172,13 @@ func TestSummaryRetryHandlerRecovery(t *testing.T) {
 			}
 			if (mode == "model" || mode == "marker") && models != 2 {
 				t.Fatal("retry did not regenerate")
+			}
+			if fresh && models != 3 {
+				t.Fatal("new run did not receive two fresh retries")
+			}
+			before := models
+			if err := Handler(context.Background(), event); err != nil || models != before {
+				t.Fatal("terminal delivery started an unbounded retry", err)
 			}
 		})
 	}
