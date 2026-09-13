@@ -1,0 +1,174 @@
+{
+  "schema_version": 1,
+  "record_type": "historical_qualification_supplement",
+  "evidence_date": "2026-09-13",
+  "latest_configuration_observed_at": "2026-09-13T13:40:56.633732+00:00",
+  "supplements": {
+    "artifact": "results.json",
+    "sha256": "18b4776c855a98f366fed72116e0e841c9d85b815a5e99c95c0e471b53d42c4b",
+    "original_unchanged": true
+  },
+  "receipts": [
+    {
+      "scope": "closed_run",
+      "artifact": "final-cleanup.json",
+      "sha256": "3c0362a694236a0da8f6cfecba5ee57e7e2ec8c46fbebab59d5958c56002a7d4",
+      "status": "PASS",
+      "validation_users_deleted": 2,
+      "dynamodb_delete_requests": 43,
+      "cloud_verified": true,
+      "remaining_scoped_user_meeting_session_rows": 0,
+      "remaining_attachment_versions": 0,
+      "local_credentials_removed": true,
+      "global_cleanup_completion_claimed": false
+    },
+    {
+      "scope": "closed_run",
+      "artifact": "attachment-last-status.json",
+      "sha256": "2a133e361caa02d118923cbb2b9b37815b966dc1d14d9318e9831428181b209b",
+      "status": "EXPECTED_LIMIT_REJECTION",
+      "fixture": "oversized Markdown",
+      "extraction_status": "failed",
+      "error_code": "LIMIT_EXCEEDED",
+      "has_result": false,
+      "partial_extraction_proven": false,
+      "cleanup_receipt": "final-cleanup.json"
+    },
+    {
+      "scope": "current_run",
+      "artifact": "ttobak-qa-latest-deployed-code-check.json",
+      "sha256": "4b4f3fa0bc32ac110bb00e369525606938b0855e2713c0e9e0300e879f74ee86",
+      "status": "PASS",
+      "observed_at": "2026-09-13T13:05:10.142245+00:00",
+      "reviewed_commit": "921c2b3e0e0b5c97ab684a2adfe9a1691bcfbe2a",
+      "runtime_sources_match": true,
+      "runtime_python_files_matched": 25,
+      "state": "Active",
+      "last_update_status": "Successful",
+      "timeout_seconds": 300,
+      "qa_async_jobs_ui_enabled": false
+    },
+    {
+      "scope": "current_run",
+      "artifact": "attachment-pdf-results.json",
+      "sha256": "36a377bc7c374015401c51fee7fd1912f30d793a68e3e6dabd232ca34ae637e2",
+      "status": "PASS",
+      "actual_upload_extraction_status": "partial",
+      "has_result": true,
+      "complete": false,
+      "bounded_read_continuation": true,
+      "foreign_read_http_status": 404,
+      "qa_partial_coverage_explicit": true,
+      "retry_observation": {
+        "current": false,
+        "attempt_status": "running",
+        "retained_result_observed": true,
+        "completion_claimed": false
+      }
+    },
+    {
+      "scope": "current_run",
+      "artifact": "qa-attachment-pdf-partial.json",
+      "sha256": "5a5fabe697064201593a5e8994a39d9bf8aa67b9a095b0b982f2a584df33c102",
+      "status": "OBSERVED",
+      "terminal": "answer_complete",
+      "attachment_resource_kind": "meetingAttachment",
+      "resource_id_present": true,
+      "attachment_partial": true,
+      "checker_corrected_against_recorded_response": true,
+      "additional_qa_calls_for_checker_correction": 0
+    },
+    {
+      "scope": "current_run",
+      "artifact": "live-context-results.json",
+      "sha256": "a8c3f5e512f008a1ac5ae61b5aad1417d8bbb1cd38d715e7b426b84798188a18",
+      "status": "CHECK_FAILED",
+      "limitation": "Initial question referenced a nonexistent rollout-codename field and an age-labeled code.",
+      "later_case_changed_multiple_inputs": true,
+      "isolated_causation_established": false
+    },
+    {
+      "scope": "current_run",
+      "artifact": "qa-live-context-initial.json",
+      "sha256": "70f6ee639b84c3f6d627694142eccd3c8a03992032cba0ccc6af1740360f1c02",
+      "status": "OBSERVED_LIMITATION",
+      "terminal": "answer_complete",
+      "transport_completion_is_not_acceptance": true
+    },
+    {
+      "scope": "current_run",
+      "artifact": "live-context-neutral-results.json",
+      "sha256": "16ae2cedea9b7a7d9626717ef85b8a2a9aa62ed7507ef80b325fb1d12f7c9577",
+      "status": "PASS",
+      "current_live_input_and_saved_sources_distinct": true,
+      "retained_label_preserved": true,
+      "corrected_latest_code_only": true,
+      "old_values_absent": true,
+      "valid_saved_notes_provenance_retained": true,
+      "isolated_causation_established": false
+    },
+    {
+      "scope": "current_run",
+      "artifact": "qa-live-context-neutral-initial.json",
+      "sha256": "c4c1fbbb8bf7d5e6ca155ba0cf6c48bc81d8ffddebc8397fb581b42967e639ae",
+      "status": "OBSERVED",
+      "qualification_receipt": "live-context-neutral-results.json"
+    },
+    {
+      "scope": "current_run",
+      "artifact": "qa-live-context-neutral-corrected.json",
+      "sha256": "349681c27f8cce4655157026d3750794a5f75a1d6e61fd7e4f0eb40dbe1acc67",
+      "status": "OBSERVED",
+      "qualification_receipt": "live-context-neutral-results.json"
+    },
+    {
+      "scope": "current_run",
+      "artifact": "canonical-manifest.json",
+      "sha256": "e5a24107e8041bfcbc2558b5511eb4153937dca2fb405f5cca9909d71ef617eb",
+      "status": "PREPARED",
+      "genuine_api_case_count": 5,
+      "cases": ["meeting", "personalNote", "accountNote", "personalFile", "accountFile"],
+      "prepared_at": "2026-09-13T13:40:56.168Z",
+      "meeting_status": "completed",
+      "meeting_audio_uploaded": false,
+      "indexing_or_provider_acceptance_proven": false
+    },
+    {
+      "scope": "current_run",
+      "artifact": "ledger.json",
+      "sha256": "02f63d6e1e0f0dfd6d51d9d2cc610d004bcf60d2d8b152f11ffba456c66ffe16",
+      "status": "PREPARED",
+      "binding": "Private mutable ledger snapshot at supplement preparation; later updates change this hash.",
+      "canonical_preparation_state": "ready",
+      "started_at": "2026-09-13T13:40:36.311Z",
+      "finished_at": "2026-09-13T13:40:56.168Z",
+      "all_five_cases_created_before_activation": true,
+      "synthetic_account_created_before_activation": true,
+      "builder_sha256": "1b5eeaed5335629f99ba541d95f5ee2057454844649d8da0f55856995b352a3d"
+    },
+    {
+      "scope": "current_run",
+      "artifact": "preactivation-config.json",
+      "sha256": "ea0d677b69c94d1f2e43402b5fe30019b2cbda12bef637d60880d728f1b73d8a",
+      "status": "PASS",
+      "observed_at": "2026-09-13T13:40:56.633732+00:00",
+      "worker_mode": "manual-only",
+      "coordinator_control_mode": "manual-only",
+      "external_source_status": "AVAILABLE",
+      "inclusion_prefixes": []
+    }
+  ],
+  "operator_qualifications": {
+    "partial_pdf_fixture_locally_preflighted_through_parser": true,
+    "current_run_validation_users_active": 2,
+    "current_run_users_retained_for_post_activation": true
+  },
+  "gate_status": {
+    "closed_run_cleanup": "PASS",
+    "partial_attachment_and_neutral_live_context": "PASS",
+    "canonical_canary_preparation": "PASS",
+    "normal_release_ai_ci_and_canonical_activation_deployment": "PENDING",
+    "canonical_post_activation_acceptance": "PENDING",
+    "current_run_fixture_user_session_cleanup": "PENDING"
+  }
+}

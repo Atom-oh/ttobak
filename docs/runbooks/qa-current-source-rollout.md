@@ -4,11 +4,38 @@ For handler registration, configured index mode and deployment acceptance status
 see [SOURCE_CONTRACT.md](../../backend/python/qa/SOURCE_CONTRACT.md).
 This runbook defines the deployment gates.
 
-The deployed package at `8959419e1fee826c5debad91aad1a05b42b95866` and restored
-public WS connection have been verified. Complete answer/history acceptance is
-still separate; see the [dated readiness checkpoint](knowledge-index-bootstrap.md#readiness-checkpoint--2026-09-13).
-Do not describe older prerequisite PRs as unmerged or convert connection success
-into a successful QA case.
+The 13:05 UTC package check matched 25 runtime Python files to
+`921c2b3e0e0b5c97ab684a2adfe9a1691bcfbe2a` and reported Active/Successful state.
+Its receipt is `/tmp/ttobak-qa-latest-deployed-code-check.json`; the
+[readiness checkpoint](knowledge-index-bootstrap.md#readiness-checkpoint--2026-09-13)
+records the exact code hash and current qualification state.
+
+The completed [public QA evidence archive](../research/evaluations/2026-09-13-public-qa/README.md)
+records notes freshness/sharing, manual private/shared binaries, history
+invalidation, REST/WS behavior, provider deletion and old-version cleanup.
+Those dated results retain their original deployment provenance. The old run
+has since been fully closed, including users, scoped rows, assets versions and
+local credentials; its archived `final-cleanup.json` supplements the historical
+cleanup-pending entry.
+
+Additional qualification used the current run selected by
+`/tmp/ttobak-public-qa-validation-path.txt`. The real-PDF attachment case passed:
+partial coverage, page continuation, foreign 404, cited QA and explicit retained
+retry state (`current=false` while running). On 2026-09-13,
+`live-context-neutral-results.json` also passed against the verified `921c2b3`
+runtime: live input and saved notes remained distinct, and corrected latest-only
+input suppressed the old value while preserving its label and valid saved-source
+provenance. The named preactivation public checks are now complete. Canonical
+post-activation acceptance remains pending; async UI activation has not occurred.
+
+Keep the earlier timeout, missing-provenance, empty-answer and initial private-V2
+failure records. Corrected passes belong to their own recorded lineages; a
+connection or terminal frame alone does not establish successful QA.
+The new run's initial `live-context-results.json` remains a diagnostic failure:
+the question asked for a nonexistent rollout-codename field instead of the actual
+`Marker` field and used an age-labeled `LIVE_OLD` code. The corrected case uses
+the real field and neutral `DEPLOY` codes. These multiple changes do not establish
+a single cause.
 
 Keep the existing transcript guard throughout: it validates the configured
 bucket, authorized meeting ID and allowed field before S3 access. Editable
@@ -55,16 +82,27 @@ reads and verify current byte bindings.
    replacement/deletion and grant revocation; retained/partial attachment results; current legacy
    excerpts and revision-bound continuation; provider/read failures; stable
    list follow-ups and whole-history reset on changed/inaccessible evidence.
-   Verify both REST and streaming. The planned reliable REST path is PR242's
-   authenticated async jobs; validate backend delivery/public results with
-   `qaAsyncJobs=false` before separate UI activation. Mutation receipts must never
-   replay creation, and an uncertain request must not acquire a new execution ID.
+   Retain the linked archive and current run's completed qualification results.
+   Verify both REST and streaming through the deployed consumer, including
+   authenticated async jobs, with `qaAsyncJobs=false`
+   before separate UI activation. Mutation receipts must never replay creation,
+   and an uncertain request must not acquire a new execution ID.
 6. Only after strict runtime acceptance enable `all`, canonical streams and
    backfill/legacy-export retirement. Then verify canonical new-term discovery
    after edits, original/projection deletion and file-backed DocHub behavior.
    Reconciliation remains scheduled; these canonical index tests cannot be
    required to pass while canonical production is still disabled.
 
+Five genuine public-API canaries were prepared at 13:40 UTC in manual-only mode
+for later backfill: meeting, personal/account notes and file-backed
+personal/account documents. `canonical-manifest.json` records their identities.
+Preparation does not establish indexing; require source/projection bindings and
+provider outcomes after all-mode activation through normal reconciliation.
+
+The named qualification is complete; once normal current-HEAD review/CI checks
+pass, follow the existing authorized conditional merge and release workflow.
+Do not invoke ad-hoc global ticks or edit coordinator/index-job records to
+manufacture readiness.
 Record deployed versions and synthetic results for each stage. Merge, unit
 checks and IAM preparation do not establish runtime acceptance, extraction
 upload integration or attachment-aware re-summary.

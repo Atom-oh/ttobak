@@ -2,54 +2,77 @@
 
 Activation configuration checked: 2026-09-13. `infra/bin/infra.ts` selects
 `knowledgeIndexingMode='all'` and `knowledgeIndexScheduleEnabled=true`.
-Hold the activation PR until the manual snapshot acceptance in step 3 and
-current-source QA deployment/verification in step 4 are complete. Record their
-actual deployment and acceptance references before merging. Source configuration
-does not prove that a deployment has occurred.
+The named preactivation public checks below are complete as of 2026-09-13.
+Complete normal current-HEAD review/CI checks, then use the existing conditional
+merge and release workflow. Record actual deployment and acceptance references;
+source configuration does not prove that a deployment has occurred.
 
 The manual producer prerequisite has a completed
 [2026-09-13 acceptance archive](../research/evaluations/2026-09-13-manual-kb-bootstrap/README.md):
 private PDF and shared DOCX creation, replacement, current-byte retrieval,
 deletion and fixture-version cleanup were observed against the deployed worker.
-This archive does not establish authenticated Q&A or canonical-source acceptance.
-The current consumer package has also been deployed, but its remaining runtime
-acceptance must finish before this activation can merge.
+Authenticated notes, manual-binary retrieval, history invalidation, provider
+deletion and old-version cleanup are recorded separately in the completed
+[public QA evidence archive](../research/evaluations/2026-09-13-public-qa/README.md).
+Neither archive establishes canonical indexing acceptance. The additional
+attachment and live-input qualification has its own current-run status below.
 
 ## Readiness checkpoint — 2026-09-13
 
 | Gate | Recorded evidence | State |
 |---|---|---|
 | Manual producer snapshots/recall/replacement/deletion | Linked acceptance archive, including exact fixture-version cleanup | Complete |
-| Current QA package deployment | Commit `8959419e1fee826c5debad91aad1a05b42b95866`; infrastructure run `34752539144` and frontend run `34752539147` succeeded; 24 QA runtime files verified against source | Complete for that deployment |
-| Public WS restoration | Public `/ws` and authenticated connection verified; operator receipt `ws-restore-connect-8959419-system-python.json` | Transport readiness only |
-| Current-source public answers/history | Earlier notes REST timed out, a manual follow-up lost provenance, and WS returned an empty answer. New post-fix acceptance is separate from those preserved failures | Incomplete |
-| Canonical `all` activation and CRUD/backfill | This draft selects the future deployment configuration | Not deployed by this record |
+| Current QA package deployment | At 13:05 UTC, 25 runtime Python files matched `921c2b3e0e0b5c97ab684a2adfe9a1691bcfbe2a`; Active/Successful, Python 3.12, 300-second timeout | Verified package readiness |
+| Public notes/manual-binary/history and transport checks | Linked public QA archive: notes freshness and grant revocation, private/shared V1/V2, current attribution, REST/WS behavior and source-change rejection | PASS for the recorded scenarios |
+| Provider deletion and binary old-version cleanup | Linked public QA archive, with exact NOT_FOUND and version-cleanup receipts | Complete |
+| Additional PDF attachment qualification | Current-run `attachment-pdf-results.json`: real PDF partial coverage, page continuation, foreign 404, cited QA and retained retry result with `current=false` while running | PASS for the recorded attachment case |
+| Neutral live-input qualification | Current-run `live-context-neutral-results.json`: current live input and saved notes remain distinct; corrected latest-only input suppresses old values while preserving label and saved-source provenance | PASS for the recorded live case |
+| Named preactivation public qualification | Completed archive plus the current-run PDF attachment and neutral live-input cases, verified against the stated deployments | Complete as of 2026-09-13 |
+| Old validation-run closeout | Closed run `317daf7a9b4ee21344e4`, archived `final-cleanup.json`: users, scoped rows, assets versions and local credentials cleaned | Complete |
+| New canonical canary preparation | Five genuine public-API fixtures prepared at 13:40 UTC while indexing remained manual-only | Prepared; not evidence of indexing |
+| Canonical `all` activation and CRUD/backfill | Deployment follows completed qualification and normal release checks; canonical acceptance follows activation | Pending |
 
-The QA package receipt is `qa-deployment-8959419e1fee-verified.json`.
-These operator-held records identify the observation; they are not invented
-canonical acceptance results. Refresh exact package/transport evidence for the
-deployment actually used by acceptance. Do not relabel older build receipts.
+The current package receipt is
+`/tmp/ttobak-qa-latest-deployed-code-check.json`, observed at
+`2026-09-13T13:05:10.142245+00:00`, with code SHA-256
+`ohQu+FP7YTLbm0sjCRXsw2AzujzhAv/fg94xhQfwxhQ=`.
+This does not rebind older acceptance to the newer package. Preserve each
+receipt's actual deployment, timestamp and source hashes. Async UI activation
+has not occurred; `qaAsyncJobs` remains false.
 
-The planned REST acceptance path is the asynchronous job API in PR242:
-verify its deployed JWT routes, queue mapping and worker, then perform public
-job acceptance while `qaAsyncJobs=false`. UI activation is a separate later
-change. PR242 is not an indexing code dependency, but its transport addresses
-the known long synchronous REST delivery failure. An equivalent successful
-bounded REST proof may satisfy the consumer gate; WS-only results cannot waive
-the REST portion.
+Additional qualification used run `qa-validation-b39053f454239d733c70`, located
+through `/tmp/ttobak-public-qa-validation-path.txt`. Its attachment and neutral
+live-input cases passed on 2026-09-13 against the latest verified `921c2b3`
+runtime. The old run is archived through
+`/tmp/ttobak-public-qa-validation-closed-317daf7a9b4ee21344e4.txt`.
+Its earlier cleanup-pending entry is historical; the subsequent closeout receipt
+records completed cleanup. Do not reuse its deleted fixtures for backfill.
 
-Before merge, use existing manual-only fixtures to verify private/shared
-retrieval, complete source details, same-session follow-ups, source replacement/
-deletion and grant revocation. Verify notes/attachments and current live-input
-handling through the deployed consumer. Coordinate both transports' V1 checks
-before changing shared fixtures to V2 or deleting them. Keep unknown/failed
-attempts and use explicitly separate repair lineages.
+Historical failures remain evidence: earlier synchronous notes REST timeout,
+missing manual follow-up provenance, an empty WS answer and the initial
+private-V2 refusal. Preserve those records alongside the separately identified
+corrected passes; do not relabel or erase a failed lineage.
+
+The current run's initial `live-context-results.json` also remains a diagnostic
+failure. It asked for a nonexistent rollout-codename field while the fixture's
+actual field was `Marker`, and used an age-labeled `LIVE_OLD` code. The corrected
+`live-context-neutral-results.json` uses the real `Marker` field and neutral
+`DEPLOY` codes. Multiple inputs changed; these observations do not establish a
+single cause for the initial failure.
+
+The authenticated async job API is wired and its public results are covered in
+the archive; UI activation remains a separate change. Preserve both REST and WS
+qualification. For additional cases, coordinate both transports' V1 checks before
+overwriting or deleting shared fixtures, and keep unknown/failed attempts in
+separate lineages.
 
 Canonical vector backfill and file-backed DocHub create/edit/delete require
 `all`; they are post-activation checks in step 6, not circular pre-merge gates.
-The existing meeting, personal-note and account-note fixtures predate stream
-activation and must be found by reconciliation. A current-text fallback alone
-does not establish index synchronization.
+The five current-run canaries are a meeting, personal/account notes and
+file-backed personal/account documents, recorded in `canonical-manifest.json`.
+They predate stream activation and must be found by normal reconciliation after
+`all` is active. Their public-API creation and current-text fallback do not prove
+an indexed projection or successful provider ingestion.
 
 ## Bootstrap boundary
 
