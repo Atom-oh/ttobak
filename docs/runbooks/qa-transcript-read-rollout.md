@@ -1,32 +1,29 @@
-# Q&A transcript read rollout
+# QA transcript-read rollout and rollback
 
-The old QA code interprets arbitrary `s3://` strings in editable summary content
-as storage reads. It currently lacks assets-bucket read permissions. Granting
-`transcripts/*` access before replacing that code would introduce a cross-meeting
-read window.
+This records the guard-first rollout around PR #191 and the reader-before-writer
+sequence for PR #196/#195. Both reader formats and the conditional writer now
+exist in source; verify deployed consumers independently.
 
-1. Deploy the guard release first: `transcript_storage.resolve_transcript`
-   validates the exact configured bucket, authorized meeting ID and field key.
-   Summary content is literal Markdown. GatewayStack supplies `BUCKET_NAME`.
-   This release does **not** add S3 permissions and preserves the existing
-   degraded-read behavior while permissions are absent.
-2. Confirm the guard release's `Deploy Infrastructure` run succeeded, including
-   `TtobakGatewayStack --exclusively`, before merging the permission follow-up.
-   Check the deployed QA function is the guard release, not an older artifact.
-3. The follow-up may then add only `s3:GetObject` for the assets bucket's
-   `transcripts/*` objects on `TtobakQaRole`, and surface unreadable transcripts
-   as explicit Q&A failures. No bucket listing or write permission is required.
-4. After the grant, rollback targets must retain the guard. To roll back to code
-   predating it, remove the S3 read grant first.
+## Original guard and permissions
 
-Use the repository CI deployment sequence; never `cdk deploy --all`.
-For the permission follow-up, the guarded Lambda is already live before
-AiStack applies the new permission, so the usual AiStack → GatewayStack order
-and a GatewayStack rollback remain safe.
+The old QA code interpreted arbitrary `s3://` strings in editable summaries.
+Granting source access before replacing it created a cross-meeting disclosure
+window. Preserve this order in any environment:
 
-The role belongs to AiStack; QA code and environment belong to GatewayStack.
-After the successful guard deployment, a deployment identity can record the
-running artifact without printing secret environment variables:
+1. Deploy `transcript_storage.resolve_transcript`, validating configured bucket,
+   authorized meeting and field. Keep summary content literal; GatewayStack
+   supplies `BUCKET_NAME`. The original guard release added no S3 permission.
+2. Verify the running guarded artifact after GatewayStack deployment; merge or
+   source diff is insufficient evidence.
+3. Only then grant assets `transcripts/*` reads on the AiStack-owned QA role
+   and surface unreadable transcripts as explicit failures. That original
+   permission step needed no list/write grant. Later current-source reads have
+   separate prerequisites in [the current-source rollout](qa-current-source-rollout.md).
+4. Retain the guard on rollback, or remove the source-read grants first.
+
+Use individual `--exclusively` stack deployments, never `--all`. Once the guard
+is verified live, AiStack-before-GatewayStack is safe for the permission addition.
+Record only relevant nonsecret configuration:
 
 ```bash
 aws lambda get-function-configuration \
@@ -34,50 +31,35 @@ aws lambda get-function-configuration \
   --query '{CodeSha256:CodeSha256,State:State,LastUpdateStatus:LastUpdateStatus,LastModified:LastModified,Bucket:Environment.Variables.BUCKET_NAME}'
 ```
 
-Require `Active` / `Successful` and the expected assets bucket. Correlate the
-artifact with the successful guard deployment; any later replacement must also
-retain the guard. Do not infer deployed code merely from a merged PR.
+Require Active/Successful, the expected bucket and a hash correlated with the
+reviewed guard artifact. Every later replacement must retain the guard.
 
-## Versioned spill reader preparation (PR196 before PR195 writers)
+## Immutable spill compatibility
 
-Readers accept both `s3://{configuredBucket}/transcripts/{authorizedMeetingId}/{field}.txt`
-and `s3://{configuredBucket}/transcripts/{authorizedMeetingId}/{field}.{version}.txt`.
-`version` is exactly 32 lowercase hexadecimal characters (the later writer's UUID
-with hyphens removed). The only fields are `transcriptA`, `transcriptB`, and
-`transcriptSegments`. Meeting IDs retain the QA guard's ASCII alphanumeric-first,
-alphanumeric/underscore/hyphen format, with a maximum length of 128.
+Accepted references are exactly:
 
-Bucket, lookup-authorized meeting ID, and field must all match. Guards never
-normalize paths, decode percent escapes, strip query/fragment suffixes, or
-substitute a legacy object when a versioned object cannot be read. Existing
-failure policies remain: Go degrades invalid/missing refs, propagating other S3
-failures; QA reports unreadable transcript refs as errors.
+- `s3://{configuredBucket}/transcripts/{authorizedMeetingId}/{field}.txt`
+- `s3://{configuredBucket}/transcripts/{authorizedMeetingId}/{field}.{version}.txt`
 
-Reader inventory:
+`version` is 32 lowercase hexadecimal characters. Allowed fields are
+`transcriptA`, `transcriptB` and `transcriptSegments`. QA meeting IDs match
+`[A-Za-z0-9][A-Za-z0-9_-]{0,127}`. Bucket, authorized ID and field must match;
+never normalize paths, decode escapes, remove query/fragments or substitute a
+legacy object after a versioned read fails. Go degrades invalid/missing refs
+and propagates other S3 failures; QA reports unreadable refs as errors.
 
-- Go `repository.GetMeeting` and `GetMeetingByID` hydrate through
-  `resolveTranscripts`/`loadTranscript`. Deployed consumers are `ttobak-api`,
-  `ttobak-transcribe`, and `ttobak-summarize`; their service/export paths share
-  this validator.
-- Python `ttobak-qa` routes meeting-context reads through
-  `transcript_storage.resolve_transcript`, using the authorized lookup ID.
-- The summarize worker's raw S3 event reader and STT benchmark scripts consume
-  `transcripts/{meetingId}[_part_NNN].json`, not spill refs. Nested legacy and
-  versioned spill keys are rejected by the event reader; a regression covers
-  the new form.
-- The share-origin backfill constructs a repository without an S3 client and
-  only reads meeting access metadata. Process-image, research/report, and model
-  artifact readers do not hydrate transcript spill refs.
+Deploy compatible readers to `ttobak-api`, `ttobak-transcribe`,
+`ttobak-summarize` and `ttobak-qa` before a writer emits versioned references.
+Go service/export paths share repository `resolveTranscripts`/`loadTranscript`;
+QA uses the authorized lookup ID with `resolve_transcript`. Verify every
+artifact/version, not just the merge. Keep both formats on rollback while any
+versioned reference remains in DynamoDB.
 
-Rollout order:
+The summarize raw-event reader and STT benchmarks consume
+`transcripts/{meetingId}[_part_NNN].json`; nested spill keys are rejected by
+the event reader. The share-origin backfill has no S3 client and reads access
+metadata only. Image/research/model-artifact readers do not hydrate spills.
 
-1. Merge and deploy the reader release to all four Lambda consumers above.
-   Confirm each artifact/version and successful deployment; merging alone does
-   not establish compatibility. This release changes neither IAM nor producers.
-2. Only after those deployed readers are confirmed may the separate PR195
-   writer release start emitting immutable versioned refs. Reader preparation
-   alone does not fix fixed-key S3 overwrites before a rejected DynamoDB write.
-3. Retain both reader formats after enabling versioned writers. Never roll a
-   reader back to legacy-only code while versioned refs remain in DynamoDB.
-
-The conditional writer behavior and retained-object tradeoffs are recorded in [ADR-037](../decisions/ADR-037-immutable-spills-for-conditional-transcript-writes.md).
+Reader preparation alone did not fix fixed-key overwrites before a rejected
+conditional write. [ADR-037](../decisions/ADR-037-immutable-spills-for-conditional-transcript-writes.md)
+records the immutable writer and retained-object tradeoffs.

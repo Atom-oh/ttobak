@@ -1,6 +1,6 @@
 # Actual model probe: inferred follow-up task
 
-On 2026-09-12, the AWS MCP connector successfully invoked
+Historical probe: on 2026-09-12, the AWS MCP connector successfully invoked
 `bedrock-runtime.InvokeModel` in `us-west-2` with the deployed summarizer model,
 `global.anthropic.claude-opus-5`. The tool's `api_calls` record reported success.
 This was one exploratory synthetic case, not a completed corpus evaluation.
@@ -13,13 +13,14 @@ records were read or modified.
 
 The synthetic transcript stated only:
 
-- Monthly budget: 120만원.
-- Latency: 30밀리초; CPU usage: 30퍼센트.
+- Monthly budget: KRW 1,200,000.
+- Latency: 30 milliseconds; CPU usage: 30 percent.
 - This week's deployment was not approved.
 
-The model retained these facts, but added this action item without source support:
-
-> - [ ] 담당자 미정: 배포 미승인 사유 및 재상정 시점 확인 — 녹취록에 담당자·기한 언급 없음 (미정) [TS:20]
+The model retained these facts but invented a follow-up task. English paraphrase:
+check why deployment was not approved and when to resubmit, with unknown owner
+and deadline, citing TS:20. The original response was Korean; this description
+is not a verbatim provider response.
 
 This is an inferred recommendation presented as an agreed task. The initial
 numeric/negation rubric did not cover that omission; add an explicit no-task
