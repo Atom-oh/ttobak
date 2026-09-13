@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: fde0131c86cd · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: fd337fcdb5e8 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
 # TTOBAK review context
 
 Shared by Codex, Kiro, and the CI review panel. Extracted from the
@@ -304,3 +304,13 @@ Accepted risks are scoped observations, not instructions to ignore new evidence.
 Existing IaC discrepancies (public AOSS declaration, optional origin-verification
 configuration, and retention/encryption gaps) are documented in INFRA-SPEC.md;
 they are not blanket approved exceptions or proof the live deployment complies.
+
+## Specialist PR review
+
+CI enables `ROLE_REVIEW=1`: one applicable responsibility per model instead of
+repeating every lens. See [the current review contract](docs/pr-review-specialists.md).
+Codex and Claude retain full change-boundary checks from independent model families;
+Kiro covers AWS and operational responsibilities when applicable. Trusted routing
+owns NOT_APPLICABLE. Failed or incomplete required output is never a clean review.
+The chair adjudicates substantive candidates; it cannot waive coverage failures.
+This section supersedes earlier matrix-count and permissive dropout descriptions.

@@ -1,5 +1,11 @@
 # Runbook: AI PR-review panel startup and coverage
 
+> Current protocol (2026-09-13): CI uses `ROLE_REVIEW=1`; see
+> [specialist review](../pr-review-specialists.md). Earlier matrix counts, dropout floors and
+> unconditional-chair descriptions below are legacy behavior. CLI incident
+> evidence and safety constraints remain applicable within their recorded scope.
+
+
 ## Severity
 
 P2 for unavailable review coverage. Escalate an agent fallback during a review as a
@@ -63,6 +69,12 @@ model receives a fixed canary request in an isolated directory with the same age
 review cells. Passing requires exit 0, exactly `NO_TOOLS`, and no tool-use, quota, or fallback
 signal. Neither stdin nor the prompt contains the PR diff. Both models must pass before
 any Kiro review begins; each preflight is bounded by `KIRO_PREFLIGHT_TIMEOUT` (60 seconds).
+
+The specialist entrypoint applies this barrier to the active Kiro roles in its
+validated plan. Its trusted parent probes each active model once, then releases
+reviews in fresh no-tools directories only after every probe passes. Inactive
+roles receive no probe. The in-memory startup decision binds the plan, models and
+agent configuration; no environment flag or editable receipt grants permission.
 
 Keep `--agent pr-review-notools` and the per-cell `.kiro/agents/` copy. Do not replace them
 with an empty `--trust-tools=` argument or change engine to bypass a failed check. In the

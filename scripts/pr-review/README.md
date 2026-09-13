@@ -1,45 +1,116 @@
-# Inactive specialist runtime
+# Specialist review protocol
 
-This prerequisite hardens the optional specialist helpers. The checked-in CI
-workflow and legacy `run-panel.sh` / `synthesize.sh` dispatch remain unchanged;
-specialist activation is a separate change. The workflow is the authority for
-which protocol actually runs.
+CI selects `ROLE_REVIEW=1`. Trusted inputs feed specialist executors; validated
+results feed aggregation and, when needed, the chair. See
+[the project contract](../../docs/pr-review-specialists.md).
 
-The inactive specialist entrypoint now uses a trusted parent startup barrier:
-every active Kiro model is probed once before any Kiro review receives the diff.
-A failed probe blocks all active Kiro roles while Codex/Claude still run; inactive
-roles are not probed. Reviews use fresh no-tools directories. The in-memory
-decision binds the plan, model roster and agent configuration and is rechecked
-against each issued request; no environment or stored receipt bypasses it.
+| Tag | Requested model | Scope |
+| --- | --- | --- |
+| codex | `global.openai.gpt-6-astra` | Implementation/tests |
+| kiro-fable | `claude-opus-5` | AWS/IAM/network |
+| kiro-sol | `gpt-5.6-sol` | Deployment/contracts/recovery |
+| claude-self | `global.anthropic.claude-fable-5-1` | Auth/data/API/ADR |
 
-## Requests and results
+`kiro-fable` means Opus. `ROLES` governs specialists; legacy files govern legacy
+execution. Kiro/Bedrock IDs differ. English is requested, not validated; configured
+IDs do not attest model weights.
 
-`role_review.py prepare` validates a complete immutable diff/context and creates
-the role plan. `issue` persists a nonce-bound request before execution; `record`
-requires its matching nonce, validates the response and scrubs decoded output.
-`aggregate` revalidates request/result digests and complete required coverage.
-Use `COMMAND --help` for CLI arguments. `run_role.py` handles bounded execution;
-`synthesize_roles.py` sends only substantive candidates to the chair.
-Codex uses JSONL turn events and its designated final-message file; progress
-messages are never concatenated or searched for a parsable review. Both the
-event stream and the regular final-message file retain the output byte limits.
+## API and input
+
+`python3 scripts/pr-review/role_review.py COMMAND --help` lists flags.
+
+| Command | Contract |
+| --- | --- |
+| prepare | Diff/context, HEAD/base, work; optional paths/provenance → `role-plan.json`, `roles/TAG.txt/.diff`. |
+| issue | Work/tag → nonce, exact `requests/TAG.prompt/.input`, `slot/TAG-request.json`. Call before each attempt. |
+| record | Tag, output/stderr, exit code, issued nonce → validated, scrubbed `slot/TAG-result.json`. |
+| aggregate | Validate results/receipts → `role-summary.json`, `responded.txt`, `chair-mode.txt`, applicable report/flag. |
+
+The executor sends issued bytes; hashes bind inputs, not transport. Keep tool data
+out of diagnostics.
+
+`--paths`: UTF-8 JSON array of unique repository-relative paths matching the patch,
+e.g. `["src/api.ts"]`. Renames use destinations; the collector checks both sides.
+Omit only for authoritative, unambiguous patch paths.
+
+`--provenance`: JSON object. Required `head_sha`/`base_sha` equal the lowercase
+40-character CLI revisions; `diff_sha256` hashes exact raw diff bytes. Example:
+
+```json
+{"head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","base_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","diff_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}
+```
+
+Optional `input_failures` contains codes matching `[a-z][a-z0-9_:.-]{0,63}`; any code
+blocks. Invalid provenance is discarded and blocks; stored values are scrubbed.
+Optional `path_only: list[str]` identifies collector-approved metadata-only
+deletions. Verify eligibility before withholding bodies.
+
+## Coverage and lifecycle
+
+Codex/Claude are required for reviewable source; trusted routing may deactivate
+irrelevant Kiro roles. App Router React is conservative. Failed output is never
+N/A. Parsing misses whole omissions/some cut prefixes: verify Git scope/hashes.
+
+Exclusions-only NOT_APPLICABLE/PASS requires `--allow-exclusions-only --policy FILE`.
+The schema-1 policy bytes must match the 64-hex `input_policy_sha256`; the private
+`exclusions-policy.json` anchor is rechecked on aggregation. Require empty diff,
+`--paths` file containing `[]`, `scope_exception: configured_exclusions_only`, and
+identical nonempty unique safe `scope_paths`/`excluded_paths`. The trusted BASE
+collector must verify policy and all Git paths. Missing opt-in, accidental empty
+input or mismatch blocks. The report discloses exclusions/hash and no model review.
+New exclusions require policy review; project-specific rules remain.
+
+Start fresh work before collection. `prepare` clears owned results/receipts, claims,
+duplicate/terminal flags and histories; upstream flags remain. Issue/record exclude
+each other; interrupted operations require fresh work. Duplicate records retain
+the first result and block. Finish writers before aggregation. Reissue archives
+32 prior results in `slot/TAG-attempts.json`; model-selection/fallback/quota/preflight
+failures block until new preparation. Summaries retain history. All `*.flag` files
+block except root `coverage-severe.flag`. `failure_codes` is canonical; `failures` aliases it.
+
+The trusted specialist parent probes every active Kiro model once before releasing
+any Kiro review. If any required probe fails, all active Kiro roles remain blocked;
+Codex/Claude still run. Inactive Kiro roles are not probed. Each review starts in a
+fresh private directory with the same no-tools agent and no probe canary.
+The shared decision stays in parent memory, bound to the plan digest, model roster
+and agent configuration; each issued request is rechecked before delivery. There
+is no environment or stored-receipt bypass. Standalone Kiro execution also checks
+the complete active Kiro roster before sending input.
+
+Exit 2 means blocked. Aggregate exit 0: `deterministic` permits the report when no
+blocking candidate/uncertainty exists (Minor/Info remain); `review` needs a chair.
+Blocked input yields deterministic FAIL; the chair cannot waive coverage failures.
+
+Publish scrubbed reports/receipts/metadata only; never raw `roles/*.diff` or
+`requests/*.input/.prompt`.
+
+## Limits and checks
+
+Limits: 95,000 diff bytes (UTF-8), 3,000 lines, 24,000 context bytes, <128 KiB
+request; projects may lower them. Oversize blocks. No chunk coordinator or
+combining partial PASS results; preserve custody/budgets.
+
+Run `python3 -m unittest discover -s scripts/pr-review -p 'test_*.py'`.
+Offline CI: `.github/workflows/pr-review-roles-tests.yml`. Also verify
+executor/adapter, limit and exact-HEAD publication tests; offline success proves
+no live provider execution.
+
+Sol replaces this repository's legacy Terra slot in this workflow; application
+inference models remain unchanged.
+
+Valid results cannot be reissued. Failed retries retain diagnostics; prepare
+again for a new review.
+
+Codex uses structured transport events plus its CLI-designated final-output file.
+Tool output and progress text are not review results. Recovered transport notices
+remain visible; terminal provider errors still block.
 JSONL records split only at literal LF bytes; Unicode separators inside JSON
 strings remain payload. Terminal executor and final-file overflow are handled
 before transport parsing or diagnostic concatenation and cannot trigger retry.
 The event stream and final-file byte bounds are checked independently before
 rejecting malformed/incomplete events; bad framing cannot hide final-file overflow.
 
-The collector accepts only committed base context hooks/adapters with matching
-bytes. An exclusions-only result requires explicit `--allow-exclusions-only`
-and the exact trusted `--policy` bytes. The plan anchors that policy hash, and
-aggregation rechecks the anchor and reports excluded paths. These collector
-features do not activate the specialist protocol in the legacy CI workflow.
-
-Validated results are final for that preparation, including clean results,
-findings and uncertainties. Reissuing them fails without replacing the receipt
-or result. Failed results may be reissued within the executor's existing budget;
-their archived terminal diagnostics and duplicate-record flags remain blocking.
-The chair cannot waive missing/invalid coverage.
+## Synchronization and bounded publication
 
 Issuance and recording share a nonblocking POSIX advisory lock per role. A busy
 operation fails instead of clearing another writer's claim. Lock files retain
@@ -99,20 +170,3 @@ Oversize produces the static `output_byte_limit` failure and stays blocking on
 reissue. Chair overflow, including growth during sanitization, produces FAIL and
 failed-chair status without fallback. No review is truncated
 or counted as valid partial coverage.
-
-Limits remain 95,000 diff bytes, 3,000 diff lines, 24,000 context bytes and a
-complete request below 128 KiB. Trusted collectors own scope and provenance;
-callers cannot combine partial PASS reports into complete coverage.
-
-## Offline checks
-
-```bash
-python3 -m unittest discover -s scripts/pr-review -p 'test_*.py' -v
-bash tests/run-all.sh
-bash scripts/pr-review/chair-timeout-policy-check.sh
-python3 scripts/docs/check_docs.py
-python3 -m unittest discover -s scripts/docs -p 'test_*.py' -v
-```
-
-The tests use synthetic responses and provider stubs, including cross-process
-issue/record races. They make no live model calls.

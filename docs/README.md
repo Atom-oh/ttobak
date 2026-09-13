@@ -1,6 +1,6 @@
 # Documentation map
 
-Repository documentation is English-only. Read the smallest relevant current
+Repository documentation and AI review output are English-only. Read the smallest relevant current
 reference; do not preload the historical archive into a PR review.
 
 Verbatim generated note-quality outputs are archived evaluation data. Keep their
@@ -21,6 +21,7 @@ Markdown for English language and historical/current status.
 | [Product](PRD.md) | Implemented product scope and remaining work | API/frontend and accepted decisions |
 | [Onboarding](onboarding.md) | Local setup | Dependency manifests and project guide |
 | [PR review runbook](runbooks/pr-review.md) | Context delivery, evidence, latest-HEAD merge gate | Review scripts and workflow |
+| [Specialist review](pr-review-specialists.md) | Current role assignment, coverage and synthesis contract | Trusted workflow and review scripts |
 | [Deployment runbook](runbooks/deployment.md) | Build/deploy/rollback constraints | Deployment workflows |
 | [WebSocket runtime](runbooks/websocket-runtime.md) | CloudFront ingress, secret rotation, real acceptance | Frontend/Gateway stacks and ws-authorizer |
 

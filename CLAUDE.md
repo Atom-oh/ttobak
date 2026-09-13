@@ -353,3 +353,13 @@ After changing this file, run `python3 scripts/docs/sync_review_context.py`, the
 `python3 scripts/docs/check_docs.py`. The generated review extract intentionally
 omits delivery mechanics and documentation instructions. CI embeds that same
 extract for isolated Kiro cells; no reviewer needs the full historical archive.
+
+## Specialist PR review
+
+CI enables `ROLE_REVIEW=1`: one applicable responsibility per model instead of
+repeating every lens. See [the current review contract](docs/pr-review-specialists.md).
+Codex and Claude retain full change-boundary checks from independent model families;
+Kiro covers AWS and operational responsibilities when applicable. Trusted routing
+owns NOT_APPLICABLE. Failed or incomplete required output is never a clean review.
+The chair adjudicates substantive candidates; it cannot waive coverage failures.
+This section supersedes earlier matrix-count and permissive dropout descriptions.

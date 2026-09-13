@@ -14,6 +14,7 @@ SECTIONS = (
     "Application boundaries",
     "Feature invariants",
     "Security requirements and accepted limits",
+    "Specialist PR review",
 )
 BRIDGE = """---
 name: project-context

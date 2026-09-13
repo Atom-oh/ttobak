@@ -8,6 +8,13 @@ on:
   pull_request_target:
     types: [opened, synchronize]
 
+env:
+  GH_TOKEN: ${{ github.token }}
+  ROLE_REVIEW: "1"
+  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  BASE_SHA: ${{ github.event.pull_request.base.sha }}
+  GH_REPO: ${{ github.repository }}
+
 jobs:
   review:
     name: AI Code Review
@@ -35,10 +42,24 @@ jobs:
     steps:
       # Privileged event: check out the trusted base; treat the PR diff as data.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
 
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+
+      - name: Prepare fresh review workspace
+        id: workspace
+        run: |
+          set -euo pipefail
+          umask 077
+          test ! -L /tmp/pr-review
+          rm -rf -- /tmp/pr-review
+          rm -f -- /tmp/review.md /tmp/review-clean.md /tmp/comment.md
+          mkdir /tmp/pr-review
+          echo "identity=$(stat -c '%d:%i' /tmp/pr-review)" >> "$GITHUB_OUTPUT"
 
       - name: Verify CLIs present (runner image)
         run: |
@@ -92,7 +113,8 @@ jobs:
             echo "panel_truncated=1" >> "$GITHUB_ENV"
           fi
 
-      - name: Run panel + synthesize (lens×model matrix -> Claude chair)
+      - name: Run specialists and conditionally adjudicate findings
+        id: review
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
@@ -102,48 +124,184 @@ jobs:
           mkdir -p /tmp/pr-review
           bash scripts/pr-review/run-panel.sh /tmp/pr-diff-truncated.txt /tmp/pr-review/lenses /tmp/pr-review
           bash scripts/pr-review/synthesize.sh /tmp/pr-diff-truncated.txt /tmp/pr-review \
-            "$PR_NUMBER" "$PR_TITLE" /tmp/review.md
+            "$PR_NUMBER" "$PR_TITLE" /tmp/pr-review/review.md
           echo "panel_responded=$(tr '\n' ' ' < /tmp/pr-review/responded.txt 2>/dev/null)" >> "$GITHUB_ENV"
+
+      - name: Validate and stage specialist evidence
+        id: artifact_input
+        if: ${{ !cancelled() && steps.workspace.outcome == 'success' }}
+        env:
+          WORKSPACE_ID: ${{ steps.workspace.outputs.identity }}
+        run: |
+          python3 - <<'PY'
+          import contextlib
+          import os
+          from pathlib import Path
+          import shutil
+          import stat
+          import tempfile
+
+          tags = ("codex", "kiro-fable", "kiro-sol", "claude-self")
+          root_names = {"role-plan.json", "role-summary.json", "role-source.json", "review.md"}
+          slot_names = {f"{tag}-{kind}.json" for tag in tags for kind in ("result", "request", "timing")}
+          slot_names |= {name for tag in tags for name in (
+              f"{tag}-duplicate.flag", f"role-{tag}-terminal.flag", f"kiro-preflight-{tag}.flag")}
+          slot_names |= {"kiro-preflight.flag"} | {f"{tag}-execution.flag" for tag in tags}
+          directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+          stage = None
+          try:
+              with contextlib.ExitStack() as stack:
+                  def open_directory(name, parent=None):
+                      fd = os.open(name, directory_flags, dir_fd=parent)
+                      stack.callback(os.close, fd)
+                      return fd
+
+                  root = open_directory("/tmp/pr-review")
+                  info = os.fstat(root)
+                  if f"{info.st_dev}:{info.st_ino}" != os.environ["WORKSPACE_ID"]:
+                      raise ValueError("workspace identity changed")
+                  candidates = [(root, name, name) for name in sorted(root_names) if name in os.listdir(root)]
+                  if "slot" in os.listdir(root):
+                      slot = open_directory("slot", root)
+                      for name in sorted(os.listdir(slot)):
+                          if name.endswith(("-result.json", "-request.json", "-timing.json", ".flag")):
+                              if name not in slot_names:
+                                  raise ValueError("unexpected artifact name")
+                              candidates.append((slot, name, "slot/" + name))
+                  if not candidates:
+                      raise ValueError("no evidence")
+                  stage = Path(tempfile.mkdtemp(prefix="pr-review-evidence-", dir=os.environ["RUNNER_TEMP"]))
+                  for parent, name, relative in candidates:
+                      # Pin the directory FD and open without following links, including
+                      # replacements between listing and opening. NONBLOCK avoids FIFO hangs.
+                      fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+                      with os.fdopen(fd, "rb") as source:
+                          before = os.fstat(source.fileno())
+                          if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_uid != os.geteuid():
+                              raise ValueError("artifact is not an owned regular file")
+                          target = stage / relative
+                          target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                          with target.open("xb") as destination:
+                              shutil.copyfileobj(source, destination)
+                          after = os.fstat(source.fileno())
+                          if (before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+                              raise ValueError("artifact changed during copy")
+                  # Publish only private regular copies, never the mutable source tree.
+                  with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+                      output.write(f"path={stage}\n")
+          except (OSError, ValueError):
+              if stage is not None:
+                  shutil.rmtree(stage)
+              raise SystemExit("Unsafe or missing specialist evidence; upload withheld")
+          PY
+
+      - name: Preserve specialist scope and execution evidence
+        id: evidence
+        if: ${{ !cancelled() && steps.workspace.outcome == 'success' && steps.artifact_input.outcome == 'success' && steps.artifact_input.outputs.path != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: specialist-review-${{ github.event.pull_request.head.sha }}-${{ github.run_attempt }}
+          path: ${{ steps.artifact_input.outputs.path }}
+          if-no-files-found: error
 
       - name: Check for blocking issues
         id: gate
+        if: ${{ !cancelled() }}
+        env:
+          WORKSPACE_OUTCOME: ${{ steps.workspace.outcome }}
+          ARTIFACT_INPUT_OUTCOME: ${{ steps.artifact_input.outcome }}
+          REVIEW_OUTCOME: ${{ steps.review.outcome }}
+          EVIDENCE_OUTCOME: ${{ steps.evidence.outcome }}
+          ARTIFACT_ID: ${{ steps.evidence.outputs.artifact-id }}
+          REPORT: ${{ steps.artifact_input.outputs.path }}/review.md
         run: |
-          if grep -q "^VERDICT: FAIL$" /tmp/review.md; then
-            echo "result=fail" >> "$GITHUB_OUTPUT"
-          elif grep -q "^VERDICT: PASS$" /tmp/review.md; then
-            echo "result=pass" >> "$GITHUB_OUTPUT"
-          else
-            echo "result=fail" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          result=fail
+          reason=invalid_review
+          if [ "$WORKSPACE_OUTCOME" != success ]; then
+            reason=workspace_initialization_failed
+          elif [ "$ARTIFACT_INPUT_OUTCOME" != success ]; then
+            reason=unsafe_or_missing_evidence
+          elif [ "$REVIEW_OUTCOME" != success ]; then
+            reason=review_execution_failed
+          elif [ "$EVIDENCE_OUTCOME" != success ] || [[ ! "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]; then
+            reason=evidence_unavailable
+          elif [ "${chair_failed:-0}" = 1 ]; then
+            reason=review_incomplete
+          elif [ -s "$REPORT" ] && [ "$(grep -c '^VERDICT:' "$REPORT")" = 1 ] &&
+               [ "$(awk 'NF{n++} END{print n+0}' "$REPORT")" -gt 1 ]; then
+            case "$(awk 'NF{last=$0} END{print last}' "$REPORT")" in
+              "VERDICT: PASS") result=pass; reason=complete ;;
+              "VERDICT: FAIL") reason=blocking_review ;;
+            esac
           fi
+          {
+            echo "result=$result"
+            echo "reason=$reason"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Post review comment (upsert)
+        if: ${{ !cancelled() }}
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
           GATE_RESULT: ${{ steps.gate.outputs.result }}
+          GATE_REASON: ${{ steps.gate.outputs.reason }}
+          GATE_OUTCOME: ${{ steps.gate.outcome }}
+          WORKSPACE_OUTCOME: ${{ steps.workspace.outcome }}
+          ARTIFACT_INPUT_OUTCOME: ${{ steps.artifact_input.outcome }}
+          REVIEW_OUTCOME: ${{ steps.review.outcome }}
+          EVIDENCE_OUTCOME: ${{ steps.evidence.outcome }}
+          ARTIFACT_ID: ${{ steps.evidence.outputs.artifact-id }}
+          REPORT: ${{ steps.artifact_input.outputs.path }}/review.md
         run: |
-          MARKER="<!-- multi-ai-pr-review -->"
-          if [ "$GATE_RESULT" = "fail" ]; then
-            STATUS_BADGE="**Status: BLOCKED** — CRITICAL/MAJOR issues must be resolved before merge"
-          else
-            STATUS_BADGE="**Status: PASSED** — No blocking issues found"
+          set -euo pipefail
+          CURRENT_HEAD="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.head.sha')"
+          if [ "$CURRENT_HEAD" != "$HEAD_SHA" ]; then
+            echo "::error::PR head changed; this review belongs to an older commit"
+            exit 1
           fi
-          sed '$ { /^VERDICT:/d }' /tmp/review.md > /tmp/review-clean.md
+          MARKER="<!-- multi-ai-pr-review -->"
+          STATUS_BADGE="**Status: BLOCKED** — required review execution, evidence or coverage is incomplete"
+          if [ "$GATE_OUTCOME" = success ] && [ "$GATE_RESULT" = pass ] && [ "$GATE_REASON" = complete ]; then
+            STATUS_BADGE="**Status: PASSED** — No blocking issues found"
+          elif [ "$GATE_OUTCOME" = success ] && [ "$GATE_REASON" = blocking_review ]; then
+            STATUS_BADGE="**Status: BLOCKED** — CRITICAL/MAJOR issues must be resolved before merge"
+          fi
+          # Operational failures must not reuse a partial or stale PASS report.
+          if [ "$GATE_OUTCOME" = success ] && { [ "$GATE_REASON" = complete ] || [ "$GATE_REASON" = blocking_review ]; }; then
+            if [ "$(wc -c < "$REPORT")" -le 50000 ]; then
+              sed '/^VERDICT:/d' "$REPORT" > /tmp/review-clean.md
+            else
+              echo "Full report exceeds the comment budget; read review.md in the artifact below. Review coverage and verdict are unchanged." > /tmp/review-clean.md
+            fi
+          else
+            echo "No complete review with successfully archived evidence is available. This run cannot authorize merge." > /tmp/review-clean.md
+          fi
+
           {
             echo "$MARKER"
-            echo "## 🤖 AI Code Review (${chair_used:-Claude Fable 5} chair · lens×model matrix)"
+            echo "## AI Code Review — specialists"
+            echo "_Synthesis: ${chair_used:-pending}_"
             echo ""
             echo "_Panel: Claude(chair) · ${panel_responded:-solo}_"
             [ "${panel_truncated:-0}" = "1" ] && echo "_⚠️ diff truncated to first 3000 lines — review is partial._"
             echo ""
             echo "$STATUS_BADGE"
+            echo "Workspace initialization: ${WORKSPACE_OUTCOME:-missing} · Evidence validation: ${ARTIFACT_INPUT_OUTCOME:-missing}"
+            echo "Review execution: ${REVIEW_OUTCOME:-missing} · Evidence upload: ${EVIDENCE_OUTCOME:-missing} · Gate: ${GATE_OUTCOME:-missing} (${GATE_REASON:-missing})"
+            echo "Workflow run: ${{ github.run_id }} · attempt: ${{ github.run_attempt }}"
             echo ""
             cat /tmp/review-clean.md
+            if [ "$EVIDENCE_OUTCOME" = success ] && [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]; then
+              echo "[Full report and evidence](https://github.com/$REPO/actions/runs/${{ github.run_id }}/artifacts/$ARTIFACT_ID)"
+            fi
             echo ""
             echo "---"
             echo "_Triggered by commit \`${{ github.event.pull_request.head.sha }}\` · workflow: \`.github/workflows/pr-review.yml\`_"
           } > /tmp/comment.md
+          test "$(wc -c < /tmp/comment.md)" -lt 60000
           EXISTING=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
             --jq '.[] | select(.body | contains("<!-- multi-ai-pr-review -->")) | .id' 2>/dev/null | head -1)
           if [ -n "$EXISTING" ]; then
@@ -154,7 +312,7 @@ jobs:
           fi
 
       - name: Fail if CRITICAL or MAJOR
-        if: steps.gate.outputs.result == 'fail'
+        if: ${{ !cancelled() && (steps.gate.outcome != 'success' || steps.gate.outputs.result != 'pass') }}
         run: |
           echo "AI Review failed"
           exit 1
