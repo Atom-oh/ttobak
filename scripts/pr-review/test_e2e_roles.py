@@ -11,7 +11,7 @@ import unittest
 
 SOURCE = Path(__file__).resolve().parent
 FAKE = r'''#!/usr/bin/env python3
-import json,pathlib,sys
+import json,os,pathlib,sys
 root = pathlib.Path(ROOT)
 argv = sys.argv[1:]
 name = pathlib.Path(sys.argv[0]).name
@@ -20,9 +20,16 @@ if name == "gh":
     raise SystemExit(0)
 stdin = sys.stdin.read()
 with (root / "calls.jsonl").open("a") as stream:
-    stream.write(json.dumps({"name": name, "args": argv, "stdin": stdin}) + "\n")
+    agent = pathlib.Path(".kiro/agents/inline-review.json")
+    stream.write(json.dumps({"name": name, "args": argv, "stdin": stdin,
+                            "cwd": str(pathlib.Path.cwd()), "home": os.environ.get("HOME"),
+                            "agent": json.loads(agent.read_text()) if agent.exists() else None,
+                            "canary": pathlib.Path("preflight-canary.txt").exists()}) + "\n")
 if name == "kiro-cli" and argv[1].startswith("Kiro startup safety check."):
     assert stdin == ""
+    if (root / "failed-sol-probe").exists() and "gpt-5.6-sol" in argv:
+        print(pathlib.Path("preflight-canary.txt").read_text())
+        raise SystemExit(0)
     print("NO_TOOLS")
     raise SystemExit(0)
 if name == "claude" and argv[1].startswith("You chair"):
@@ -150,6 +157,43 @@ class EndToEndRoleTests(unittest.TestCase):
         calls = self.run_pipeline("infra/network.tf")
         self.assertEqual(len(calls), 6)
         self.assertEqual(sum(call["name"] == "kiro-cli" for call in calls), 4)
+        kiro = [call for call in calls if call["name"] == "kiro-cli"]
+        self.assertTrue(all(call["args"][1].startswith("Kiro startup safety check.") for call in kiro[:2]))
+        self.assertTrue(all(not call["args"][1].startswith("Kiro startup safety check.") for call in kiro[2:]))
+        self.assertEqual(len({call["cwd"] for call in kiro}), 4)
+        for index, call in enumerate(kiro):
+            self.assertEqual(call["home"], call["cwd"])
+            self.assertEqual(call["agent"]["tools"], [])
+            self.assertEqual(call["agent"]["mcpServers"], {})
+            self.assertEqual(call["canary"], index < 2)
+            if index < 2:
+                self.assertNotIn("BEGIN DIFF", call["args"][1])
+                self.assertNotIn("infra/network.tf", call["args"][1])
+        self.assertTrue((self.work / "review.md").read_text().endswith("VERDICT: PASS\n"))
+
+    def test_failed_second_kiro_probe_withholds_diff_from_both_roles(self):
+        (self.root / "failed-sol-probe").touch()
+        self.environment["KIRO_PREFLIGHT_PASSED"] = "1"  # An environment value cannot release the barrier.
+        calls = self.run_pipeline("infra/network.tf")
+        kiro = [call for call in calls if call["name"] == "kiro-cli"]
+        self.assertEqual(len(kiro), 2)
+        self.assertTrue(all(call["args"][1].startswith("Kiro startup safety check.") for call in kiro))
+        self.assertEqual({call["name"] for call in calls if call["name"] != "kiro-cli"}, {"codex", "claude"})
+        self.assertTrue((self.work / "review.md").read_text().endswith("VERDICT: FAIL\n"))
+        summary = json.loads((self.work / "role-summary.json").read_text())
+        self.assertEqual(summary["mode"], "blocked")
+        self.assertTrue(summary["roles"]["kiro-fable"]["required"])
+        self.assertTrue(summary["roles"]["kiro-sol"]["required"])
+
+    def test_only_active_kiro_role_is_probed_once(self):
+        calls = self.run_pipeline("frontend/styles/retry.css")
+        kiro = [call for call in calls if call["name"] == "kiro-cli"]
+        self.assertEqual(len(kiro), 2)
+        self.assertTrue(kiro[0]["args"][1].startswith("Kiro startup safety check."))
+        self.assertFalse(kiro[1]["args"][1].startswith("Kiro startup safety check."))
+        self.assertTrue(all("gpt-5.6-sol" in call["args"] for call in kiro))
+        self.assertNotEqual(kiro[0]["cwd"], kiro[1]["cwd"])
+        self.assertFalse(kiro[1]["canary"])
         self.assertTrue((self.work / "review.md").read_text().endswith("VERDICT: PASS\n"))
 
     def test_nonzero_output_blocks_without_chair_override(self):
