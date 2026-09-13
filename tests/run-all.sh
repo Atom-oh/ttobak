@@ -50,6 +50,73 @@ assert_contains() {
   fi
 }
 
+# assert_eq <label> <expected> <actual>
+assert_eq() {
+  TOTAL=$((TOTAL + 1))
+  if [ "$2" = "$3" ]; then
+    echo "ok $TOTAL - $1"
+    PASS=$((PASS + 1))
+  else
+    echo "not ok $TOTAL - $1 (expected '$2', got '$3')"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+# assert_grep_match <label> <ERE> <string> — string (not file) matched with grep -E
+assert_grep_match() {
+  TOTAL=$((TOTAL + 1))
+  if printf '%s\n' "$3" | grep -qE -- "$2"; then
+    echo "ok $TOTAL - $1"
+    PASS=$((PASS + 1))
+  else
+    echo "not ok $TOTAL - $1 (pattern '$2' not matched)"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+# assert_grep_no_match <label> <ERE> <string>
+assert_grep_no_match() {
+  TOTAL=$((TOTAL + 1))
+  if printf '%s\n' "$3" | grep -qE -- "$2"; then
+    echo "not ok $TOTAL - $1 (pattern '$2' unexpectedly matched)"
+    FAIL=$((FAIL + 1))
+  else
+    echo "ok $TOTAL - $1"
+    PASS=$((PASS + 1))
+  fi
+}
+
+# assert_bash_syntax <label> <file>
+assert_bash_syntax() {
+  TOTAL=$((TOTAL + 1))
+  if bash -n "$2" 2>/dev/null; then
+    echo "ok $TOTAL - $1"
+    PASS=$((PASS + 1))
+  else
+    echo "not ok $TOTAL - $1 (bash -n failed: $2)"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+# assert_json_valid <label> <file>
+assert_json_valid() {
+  TOTAL=$((TOTAL + 1))
+  if python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$2" 2>/dev/null; then
+    echo "ok $TOTAL - $1"
+    PASS=$((PASS + 1))
+  else
+    echo "not ok $TOTAL - $1 (invalid JSON: $2)"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+# skip <label> <reason> — TAP "ok ... # SKIP" directive (counts toward TOTAL/PASS, never FAIL)
+skip() {
+  TOTAL=$((TOTAL + 1))
+  PASS=$((PASS + 1))
+  echo "ok $TOTAL - $1 # SKIP $2"
+}
+
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_ROOT"
 

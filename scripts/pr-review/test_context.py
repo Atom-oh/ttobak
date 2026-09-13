@@ -68,9 +68,15 @@ class ReviewContextTests(unittest.TestCase):
         (binaries / "codex").write_text("#!/bin/sh\ncat >/dev/null\nprintf 'No findings\\n'\n")
         (binaries / "kiro-cli").write_text(
             "#!/usr/bin/env python3\n"
-            "import pathlib, sys\n"
-            "assert '--trust-tools=' in sys.argv\n"
+            "import json, pathlib, sys\n"
+            "if sys.argv[1:] == ['--version']:\n"
+            "    print('kiro-cli test'); sys.exit(0)\n"
+            "assert sys.argv[sys.argv.index('--agent') + 1] == 'pr-review-notools'\n"
+            "agent = json.loads(pathlib.Path('.kiro/agents/pr-review-notools.json').read_text())\n"
+            "assert agent['tools'] == []\n"
             "assert '--no-interactive' in sys.argv\n"
+            "if sys.argv[2].startswith('Kiro startup safety check.'):\n"
+            "    print('NO_TOOLS'); sys.exit(0)\n"
             "pathlib.Path('captured.txt').write_text(sys.argv[2])\n"
             "print('No findings')\n"
         )
