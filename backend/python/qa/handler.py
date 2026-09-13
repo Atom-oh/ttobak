@@ -10,6 +10,7 @@ import boto3
 from botocore.config import Config
 from async_jobs import QAJobs, JobError, JobDeadline, MutationGuard, deadline as job_deadline, API_SECONDS, RUN_SECONDS, INPUT_LIMIT
 from deadline_history import DeadlineHistory
+from current_input import GUIDANCE as CURRENT_INPUT_GUIDANCE, request_user_message
 from delivery_proof import validate_delivery
 
 from aws_docs import search_aws_docs
@@ -1065,7 +1066,7 @@ def _account_research(acc_id):
 
 def _qa_system_messages(transcript, meeting_notes=None, meeting_id=None):
     """Bound prompt excerpts without silently dropping independently saved notes."""
-    messages = [{"text": get_system_prompt()}]
+    messages = [{"text": get_system_prompt() + '\n\n' + CURRENT_INPUT_GUIDANCE}]
     for source, text, limit, tail in (
         ('meeting_context', transcript, 2000, True),
         ('saved_user_notes', meeting_notes, 4000, False),
@@ -1283,8 +1284,11 @@ def handle_ask(question, context=None, meeting_id=None, session_id=None, user_id
         # Load existing conversation or start new
         messages = load_session(session_id, user_id=user_id, source_state=source_state, source_details=source_details)
 
-        # User message is just the question — context is in system prompt
-        messages.append({"role": "user", "content": [{"text": question}]})
+        # Context bytes stay in the bounded system prompt; record which input
+        # accompanied this question so later turns cannot backdate a new draft.
+        messages.append(request_user_message(
+            question, messages, context, meeting_id,
+            client_input_received=source_state.get('clientInputReceived', False)))
 
         answer, tools_used, sources = agentic_converse(
             messages,
@@ -1361,7 +1365,9 @@ def handle_meeting_ask(question, meeting_id, user_id, session_id=None, *,
         messages = load_session(session_id, user_id=user_id, source_state=source_state, source_details=source_details)
 
         user_content = f"[미팅 '{meeting_id}'의 트랜스크립트가 있습니다. search_transcript 도구로 검색할 수 있습니다.]\n\n{question}"
-        messages.append({"role": "user", "content": [{"text": user_content}]})
+        messages.append(request_user_message(
+            user_content, messages, transcript, meeting_id,
+            client_input_received=source_state.get('clientInputReceived', False)))
 
         answer, tools_used, sources = agentic_converse(
             messages,
@@ -1604,7 +1610,9 @@ def handle_ask_stream(event):
         user_content = question
         if transcript:
             user_content = f"[현재 미팅 트랜스크립트가 있습니다. search_transcript 도구로 검색할 수 있습니다.]\n\n{question}"
-        messages.append({"role": "user", "content": [{"text": user_content}]})
+        messages.append(request_user_message(
+            user_content, messages, transcript, event.get('meetingId'),
+            client_input_received=source_state.get('clientInputReceived', False)))
 
         answer, tools_used, sources = agentic_converse_stream(
             messages,
