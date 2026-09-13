@@ -232,6 +232,16 @@ else:
         self.assertEqual(self.upload_candidates(), [])
         self.assertFalse(self.upload_ran)
 
+    def test_unknown_barrier_flag_cannot_extend_the_upload_allowlist(self):
+        work = self.prepare_artifacts()
+        for name in ("other-execution.flag", "kiro-preflight-extra.flag"):
+            with self.subTest(name=name):
+                path = work / "slot" / name
+                path.write_text("unowned failure\n")
+                self.assertEqual(self.upload_candidates(), [])
+                self.assertFalse(self.upload_ran)
+                path.unlink()
+
     def test_nonregular_artifact_is_rejected_without_blocking_read(self):
         work = self.prepare_artifacts()
         (work / "slot/codex-result.json").unlink()
@@ -273,6 +283,23 @@ else:
         self.assertEqual(sorted(uploaded), sorted([
             b'{"head_sha":"' + HEAD.encode() + b'"}\n',
             b'{"valid":false}\n', b"preflight_failed\n",
+        ]))
+
+    def test_known_barrier_failure_flags_are_preserved_as_regular_copies(self):
+        work = self.prepare_artifacts()
+        flags = (
+            "kiro-preflight.flag", "codex-execution.flag", "kiro-fable-execution.flag",
+            "kiro-sol-execution.flag", "claude-self-execution.flag",
+        )
+        for name in flags:
+            (work / "slot" / name).write_text(name + "\n")
+        uploaded = self.upload_candidates()
+        self.assertTrue(self.upload_ran)
+        self.assertEqual(sorted(uploaded), sorted([
+            b'{"head_sha":"' + HEAD.encode() + b'"}\n', b'{"valid":false}\n',
+            b"kiro-preflight.flag\n", b"codex-execution.flag\n",
+            b"kiro-fable-execution.flag\n", b"kiro-sol-execution.flag\n",
+            b"claude-self-execution.flag\n",
         ]))
 
     def test_upload_uses_regular_copies_after_source_changes(self):
