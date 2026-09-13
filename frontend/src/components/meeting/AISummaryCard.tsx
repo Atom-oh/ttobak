@@ -69,6 +69,8 @@ export function AISummaryCard({ content, summary, canonicalContent, resolveCitat
   const [dirty, setDirty] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const markDirty = useCallback((value: boolean) => { setDirty(value); onDirtyChange?.(value); }, [onDirtyChange]);
+  const isContentSaved = useCallback((html: string) =>
+    !saveInFlight.current && !failedSave.current && html === savedHTML.current, []);
   const handleContentApplied = useCallback((html: string) => {
     latestHTML.current = html;
     savedHTML.current = html;
@@ -153,6 +155,7 @@ export function AISummaryCard({ content, summary, canonicalContent, resolveCitat
           readOnly={interactionLocked}
           preserveDraft={dirty || saving}
           onContentApplied={handleContentApplied}
+          isContentSaved={isContentSaved}
           onChange={(html) => {
             latestHTML.current = html;
             if (pendingSave.current !== null) pendingSave.current = html;

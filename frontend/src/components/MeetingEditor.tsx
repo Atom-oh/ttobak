@@ -153,6 +153,8 @@ interface MeetingEditorProps {
   /** Keep local typing while the parent receives saved snapshots. */
   preserveDraft?: boolean;
   onContentApplied?: (content: string) => void;
+  /** A caller with queued saves can supply its actual acknowledgement state. */
+  isContentSaved?: (content: string) => boolean;
   preserveMeetingCitations?: boolean;
   /** Enables "[[" wikilink autocomplete, suggesting from this title list. */
   wikilinkTitles?: string[];
@@ -166,6 +168,7 @@ export function MeetingEditor({
   readOnly = false,
   preserveDraft = false,
   onContentApplied,
+  isContentSaved,
   preserveMeetingCitations = false,
   wikilinkTitles,
 }: MeetingEditorProps) {
@@ -213,7 +216,8 @@ export function MeetingEditor({
       onChange?.(html);
 
       // Auto-save with debounce
-      if (onAutoSave && !readOnly && html !== lastSavedContentRef.current) {
+      const alreadySaved = isContentSaved ? isContentSaved(html) : html === lastSavedContentRef.current;
+      if (onAutoSave && !readOnly && !alreadySaved) {
         autoSaveTimeoutRef.current = setTimeout(() => {
           autoSaveTimeoutRef.current = null;
           onAutoSave(html);
