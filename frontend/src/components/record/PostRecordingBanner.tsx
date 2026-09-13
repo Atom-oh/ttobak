@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { formatFileSize } from '@/lib/upload';
+import { codePointLength, MAX_MEETING_NOTES } from '@/lib/meetingReferences';
 
 export type PostRecordingStep = 'creating' | 'notes' | 'saving' | 'uploading' | 'redirecting' | 'error';
 
@@ -26,6 +27,11 @@ interface PostRecordingBannerProps {
   onNotesSkip?: () => void;
   /** Notes taken during the meeting — prefills the notes step */
   initialNotes?: string;
+  notesError?: string;
+  submitting?: boolean;
+  comparisonNotes?: string | null;
+  onEditNotes?: () => void;
+  onSkipAccountRetry?: () => void;
 }
 
 const STEP_LABELS: Record<string, string> = {
@@ -35,7 +41,7 @@ const STEP_LABELS: Record<string, string> = {
   redirecting: 'Opening meeting...',
 };
 
-export function PostRecordingBanner({ step, errorMessage, uploadProgress, onRetry, onDismiss, onNotesSubmit, onNotesSkip, initialNotes }: PostRecordingBannerProps) {
+export function PostRecordingBanner({ step, errorMessage, uploadProgress, onRetry, onDismiss, onNotesSubmit, onNotesSkip, initialNotes, notesError, submitting, comparisonNotes, onEditNotes, onSkipAccountRetry }: PostRecordingBannerProps) {
   const [notes, setNotes] = useState(initialNotes || '');
   const isError = step === 'error';
   const isNotes = step === 'notes';
@@ -52,24 +58,33 @@ export function PostRecordingBanner({ step, errorMessage, uploadProgress, onRetr
           </div>
           <textarea
             value={notes}
+            disabled={submitting}
             onChange={(e) => setNotes(e.target.value)}
             placeholder="회의 중 주요 내용을 간략히 적어주세요..."
             rows={6}
             className="w-full rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-slate-800/50 px-3 py-2 text-sm text-slate-900 dark:text-gray-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-primary/40 resize-none"
             autoFocus
           />
+          <p className="mt-1 text-xs text-slate-500">{codePointLength(notes).toLocaleString()} / {MAX_MEETING_NOTES.toLocaleString()}자</p>
+          {(notesError || errorMessage) && <p role="alert" className="mt-2 text-sm text-red-600 dark:text-red-300">{notesError || errorMessage}</p>}
+          {comparisonNotes !== undefined && comparisonNotes !== null && <details className="mt-2 text-xs text-slate-600 dark:text-slate-300" open>
+            <summary>현재 저장본 · 내 초안과 비교해 합쳐 주세요</summary>
+            <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap rounded bg-slate-50 p-2 dark:bg-black/20">{comparisonNotes || '(빈 메모)'}</pre>
+          </details>}
           <div className="flex justify-end gap-2 mt-3">
             <button
               onClick={() => onNotesSkip?.()}
+              disabled={submitting}
               className="px-4 py-1.5 rounded-lg text-xs font-medium text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
             >
               건너뛰기
             </button>
             <button
               onClick={() => onNotesSubmit?.(notes)}
+              disabled={submitting}
               className="px-4 py-1.5 rounded-lg text-xs font-medium bg-primary text-white hover:bg-primary/90 transition-colors"
             >
-              완료
+              {submitting ? '저장 중…' : '완료'}
             </button>
           </div>
         </div>
@@ -80,7 +95,7 @@ export function PostRecordingBanner({ step, errorMessage, uploadProgress, onRetr
   return (
     <div className="fixed top-[64px] left-0 right-0 z-40 mx-4 mt-2 animate-slide-up">
       <div
-        className={`rounded-xl shadow-lg px-4 py-3 flex items-center gap-3 ${
+        className={`rounded-xl shadow-lg px-4 py-3 flex flex-wrap items-center gap-3 ${
           isError
             ? 'bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800'
             : 'bg-white dark:bg-surface-lowest border border-slate-200 dark:border-white/10'
@@ -89,7 +104,7 @@ export function PostRecordingBanner({ step, errorMessage, uploadProgress, onRetr
         {isError ? (
           <>
             <span className="material-symbols-outlined text-red-500">error</span>
-            <p className="flex-1 text-sm text-red-700 dark:text-red-300 truncate">
+            <p className="min-w-0 basis-full text-sm text-red-700 dark:text-red-300 sm:flex-1">
               {errorMessage || 'An unexpected error occurred.'}
             </p>
             <button
@@ -98,6 +113,12 @@ export function PostRecordingBanner({ step, errorMessage, uploadProgress, onRetr
             >
               Try Again
             </button>
+            {onEditNotes && <button type="button" onClick={onEditNotes} className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-700 dark:border-red-700 dark:text-red-300">
+              메모 확인·다시 편집
+            </button>}
+            {onSkipAccountRetry && <button type="button" onClick={onSkipAccountRetry} className="rounded-lg border border-amber-300 px-3 py-1.5 text-xs font-medium text-amber-800 dark:text-amber-300">
+              고객 연결 재시도 생략
+            </button>}
             <button
               onClick={onDismiss}
               className="px-3 py-1.5 rounded-lg text-xs font-medium bg-primary text-white hover:bg-primary/90 transition-colors shrink-0"

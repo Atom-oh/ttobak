@@ -2,6 +2,13 @@ package model
 
 import "time"
 
+// MeetingPreparation is optional initial context, saved with the meeting's first
+// write. An account association classifies the meeting; it never shares it.
+type MeetingPreparation struct {
+	Notes     string
+	AccountID string
+}
+
 // Meeting represents a meeting record in DynamoDB
 // PK: USER#{userId}, SK: MEETING#{meetingId}
 type Meeting struct {
@@ -42,6 +49,7 @@ type Meeting struct {
 	ActionItems              string            `dynamodbav:"actionItems,omitempty"`              // JSON string of extracted action items
 	AttachmentSummarySources string            `dynamodbav:"attachmentSummarySources,omitempty"` // Content hash + document revisions used by saved summary
 	Notes                    string            `dynamodbav:"notes,omitempty"`                    // User-written meeting notes (post-recording)
+	NotesRevision            string            `dynamodbav:"notesRevision,omitempty"`            // Server-generated UUID; absent legacy revisions read as empty.
 	LiveSummary              string            `dynamodbav:"liveSummary,omitempty"`              // Real-time summary built during recording (markdown incl. mermaid)
 	SpeakerMap               map[string]string `dynamodbav:"speakerMap,omitempty"`               // spk_0 -> "김팀장" mapping
 	// DiarizationSpeakerHint overrides len(Participants) as pyannote's

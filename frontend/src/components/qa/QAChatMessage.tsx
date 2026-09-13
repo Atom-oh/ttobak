@@ -23,7 +23,7 @@ interface QAChatMessageProps {
   usedDocs?: boolean;
   toolsUsed?: string[];
   isStreaming?: boolean;
-  /** When provided, shows a "save to meeting notes" action on completed answers */
+  /** Adds a completed answer to the parent's notes draft; does not attest persistence. */
   onSaveToNotes?: () => void;
   isSavedToNotes?: boolean;
   /** AI-suggested follow-up questions for this answer */
@@ -150,6 +150,8 @@ export function QAChatMessage({ question, answer, sources, sourceDetails, usedKB
               {onSaveToNotes && !isStreaming && answer && (
                 <div className="mt-2 pt-2 border-t border-slate-100 dark:border-slate-700 flex justify-end">
                   <button
+                    type="button"
+                    aria-label={isSavedToNotes ? '메모에 추가됨' : '메모에 추가'}
                     onClick={onSaveToNotes}
                     disabled={isSavedToNotes}
                     className={`flex items-center gap-1 text-[11px] font-medium px-2 py-1 rounded-md transition-colors ${
@@ -158,10 +160,10 @@ export function QAChatMessage({ question, answer, sources, sourceDetails, usedKB
                         : 'text-slate-500 dark:text-text-muted hover:text-primary hover:bg-primary/5'
                     }`}
                   >
-                    <span className="material-symbols-outlined text-sm">
+                    <span aria-hidden="true" className="material-symbols-outlined text-sm">
                       {isSavedToNotes ? 'check_circle' : 'note_add'}
                     </span>
-                    {isSavedToNotes ? '노트에 저장됨' : '노트에 저장'}
+                    {isSavedToNotes ? '메모에 추가됨' : '메모에 추가'}
                   </button>
                 </div>
               )}

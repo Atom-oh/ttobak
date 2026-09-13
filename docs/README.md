@@ -24,6 +24,11 @@ Markdown for English language and historical/current status.
 | [Deployment runbook](runbooks/deployment.md) | Build/deploy/rollback constraints | Deployment workflows |
 | [WebSocket runtime](runbooks/websocket-runtime.md) | CloudFront ingress, secret rotation, real acceptance | Frontend/Gateway stacks and ws-authorizer |
 
+## Feature workflows
+
+- [SA meeting workflow](features/sa-meeting-workflow.md): preparation, source-aware
+  notes, customer/project connection, and private follow-up documents.
+
 ## Decisions and history
 
 `decisions/ADR-*.md` preserve decision dates, rationale, consequences, and explicit

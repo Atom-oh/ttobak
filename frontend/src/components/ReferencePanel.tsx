@@ -1,228 +1,168 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { accountApi } from '@/lib/api';
-import { INSIGHT_TYPES } from '@/types/meeting';
-import type { AccountInsight, AccountResearchRef, AccountSummary } from '@/types/meeting';
+import { useAuth } from '@/components/auth/AuthProvider';
+import type { AccountSummary } from '@/types/meeting';
+import type { MeetingReference } from '@/lib/meetingReferences';
+import {
+  MAX_REFERENCE_ITEMS, referenceCatalogs, useReferenceCatalog, type ReferenceCatalog,
+} from '@/components/reference/useReferenceCatalog';
 
 interface Props {
   accountId?: string;
-  /** Controlled picker mode: when accountId is empty and this is provided,
-   * the account <select> calls back here instead of using local state. The
-   * record page needs this -- it renders two ReferencePanel instances
-   * (desktop aside + mobile bottom sheet) that must share one selection,
-   * and the mobile sheet unmounts every time it's closed. Meeting detail
-   * doesn't need it: its aside never unmounts, so uncontrolled local state
-   * is enough there. */
   onAccountChange?: (accountId: string) => void;
-  /** Recent tail of the live transcript (record page only). When provided,
-   * items are scored against it and relevant ones float to the top. */
   transcriptTail?: string;
+  onAddReference?: (reference: MeetingReference) => void;
+  onPrepareQuestion?: (question: string) => void;
 }
 
-interface ScoredItem {
-  key: string;
-  kind: 'research' | 'insight';
-  title: string;
-  text?: string;
-  href?: string;
-  type?: string;
-  score: number;
-}
-
-// Tokenizes the tail of a live transcript for keyword matching. Korean-safe:
-// splits on punctuation/whitespace only, no stemming/NLP -- pure substring
-// matching in scoreItems below.
-// ponytail: substring scoring; upgrade to per-chunk KB semantic search if
-// precision on longer meetings ever matters.
-function tokenize(text: string): string[] {
-  const tokens = text
-    .slice(-600)
-    .split(/[\s.,!?~()[\]{}"'`:;·…]+/)
-    .map((t) => t.trim())
-    .filter((t) => t.length >= 2);
-  return Array.from(new Set(tokens)).slice(0, 50);
-}
-
-function scoreItem(tokens: string[], tail: string, title: string, text: string, entities: string[]): number {
-  if (tokens.length === 0) return 0;
-  let score = 0;
-  for (const e of entities) {
-    if (e.length >= 2 && tail.includes(e)) score += 2;
-  }
-  const haystack = `${title} ${text}`;
-  for (const t of tokens) {
-    if (haystack.includes(t)) score += 1;
-  }
-  return score;
-}
-
-export default function ReferencePanel({ accountId: propAccountId, onAccountChange, transcriptTail }: Props) {
+function AccountPicker({ value, onChange }: { value: string; onChange: (id: string) => void }) {
   const [accounts, setAccounts] = useState<AccountSummary[]>([]);
-  const [localAccountId, setLocalAccountId] = useState('');
-  const [insights, setInsights] = useState<AccountInsight[]>([]);
-  const [research, setResearch] = useState<AccountResearchRef[]>([]);
-  const [activeType, setActiveType] = useState('');
-  const [loading, setLoading] = useState(false);
-
-  const accountId = propAccountId || localAccountId;
-  const setPickedAccountId = onAccountChange || setLocalAccountId;
-
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
-    if (propAccountId) return; // meeting already linked -- no picker needed
-    accountApi.list().then((r) => setAccounts(r?.accounts ?? [])).catch(() => {});
-  }, [propAccountId]);
-
-  useEffect(() => {
-    if (!accountId) {
-      setInsights([]);
-      setResearch([]);
-      return;
-    }
-    setLoading(true);
-    Promise.all([accountApi.insights(accountId), accountApi.research(accountId)])
-      .then(([ins, res]) => {
-        setInsights(ins?.insights ?? []);
-        setResearch(res?.research ?? []);
-      })
-      .catch(() => {
-        setInsights([]);
-        setResearch([]);
-      })
-      .finally(() => setLoading(false));
-  }, [accountId]);
-
-  const tokens = useMemo(() => (transcriptTail ? tokenize(transcriptTail) : []), [transcriptTail]);
-
-  const scoredResearch = useMemo<ScoredItem[]>(() => {
-    return research.map((r) => ({
-      key: `research-${r.researchId}`,
-      kind: 'research' as const,
-      title: r.topic,
-      text: r.summary,
-      href: `/insights/research/${r.researchId}`,
-      score: tokens.length ? scoreItem(tokens, transcriptTail || '', r.topic, r.summary || '', []) : 0,
-    }));
-  }, [research, tokens, transcriptTail]);
-
-  const shownInsights = activeType ? insights.filter((i) => i.type === activeType) : insights;
-
-  const scoredInsights = useMemo<ScoredItem[]>(() => {
-    return shownInsights.map((ins, idx) => ({
-      key: `insight-${idx}`,
-      kind: 'insight' as const,
-      title: ins.type,
-      text: ins.text,
-      type: ins.type,
-      score: tokens.length ? scoreItem(tokens, transcriptTail || '', ins.type, ins.text, ins.entities || []) : 0,
-    }));
-  }, [shownInsights, tokens, transcriptTail]);
-
-  const sortedResearch = tokens.length
-    ? [...scoredResearch].sort((a, b) => b.score - a.score)
-    : scoredResearch;
-  const sortedInsights = tokens.length
-    ? [...scoredInsights].sort((a, b) => b.score - a.score)
-    : scoredInsights;
-
-  if (!accountId) {
-    return (
-      <div className="p-4">
-        <p className="text-sm text-slate-500 dark:text-text-muted mb-3">
-          참조할 어카운트를 선택하세요.
-        </p>
-        <select
-          value={accountId}
-          onChange={(e) => setPickedAccountId(e.target.value)}
-          className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest text-sm"
-        >
-          <option value="">어카운트 선택…</option>
-          {accounts.map((a) => (
-            <option key={a.accountId} value={a.accountId}>{a.name}</option>
-          ))}
+    let active = true;
+    accountApi.list().then(response => {
+      if (!active) return;
+      if (!Array.isArray(response?.accounts)) throw new Error('고객 목록 응답을 확인할 수 없습니다.');
+      setAccounts(response.accounts);
+      setLoading(false);
+    }).catch(error => {
+      if (!active) return;
+      setError(error instanceof Error ? error.message : '고객 목록을 불러오지 못했습니다.');
+      setLoading(false);
+    });
+    return () => { active = false; };
+  }, [attempt]);
+  return (
+    <div>
+      <label className="text-xs text-slate-500 dark:text-text-muted">
+        고객 범위
+        <select value={value} disabled={loading} onChange={event => onChange(event.target.value)}
+          className="mt-1 w-full rounded-lg border border-slate-200 bg-white p-2 text-sm dark:border-white/10 dark:bg-surface-lowest">
+          <option value="">{loading ? '고객 불러오는 중…' : '고객 미선택 · 내 자료'}</option>
+          {value && !accounts.some(account => account.accountId === value) && <option value={value}>선택한 고객</option>}
+          {accounts.map(account => <option key={account.accountId} value={account.accountId}>{account.name}</option>)}
         </select>
-      </div>
-    );
-  }
+      </label>
+      {error && <p role="alert" className="mt-1 text-xs text-red-600 dark:text-red-400">
+        {error}
+        <button type="button" className="ml-2 underline" disabled={loading} onClick={() => {
+          setError(''); setLoading(true); setAttempt(current => current + 1);
+        }}>고객 목록 재시도</button>
+      </p>}
+    </div>
+  );
+}
+
+function Catalog({ catalog, accountId, userId, transcriptTail, onAddReference, onPrepareQuestion }: Props & {
+  catalog: ReferenceCatalog; accountId: string; userId?: string;
+}) {
+  const { items, loading, loaded, error, next, limited, loadMore, retry } = useReferenceCatalog(catalog, accountId, userId);
+  const [search, setSearch] = useState('');
+  const [visibleCount, setVisibleCount] = useState(10);
+  const [added, setAdded] = useState<Set<string>>(new Set());
+  const [actionError, setActionError] = useState('');
+  const [actionMessage, setActionMessage] = useState('');
+  const results = useMemo(() => {
+    const query = search.trim().toLocaleLowerCase();
+    const tokens = [...new Set((transcriptTail || '').slice(-600).split(/[\s.,!?()[\]{}"'`:;·…]+/).filter(token => token.length >= 2))].slice(0, 50);
+    return items.filter(item => !query || `${item.title} ${item.excerpt || ''}`.toLocaleLowerCase().includes(query))
+      .map(item => ({ item, score: tokens.reduce((score, token) => score + Number(`${item.title} ${item.excerpt || ''}`.includes(token)), 0) }))
+      .sort((a, b) => b.score - a.score);
+  }, [items, search, transcriptTail]);
+
+  const act = (item: MeetingReference, action: 'add' | 'ask') => {
+    setActionError('');
+    try {
+      if (action === 'add' && onAddReference) {
+        onAddReference(item);
+        setAdded(previous => new Set(previous).add(item.id));
+        setActionMessage('참조를 메모에 추가했습니다. 저장 상태는 메모에서 확인하세요.');
+      } else if (action === 'ask' && onPrepareQuestion) {
+        onPrepareQuestion(`"${item.title}" 자료를 확인할 수 있다면 이 회의에 참고할 핵심 내용과 근거를 알려주세요.${item.href ? `\n참조: ${item.href}` : ''}`);
+        setActionMessage('Q&A에 질문을 준비했습니다. 확인 후 직접 전송하세요.');
+      }
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : '참조를 전달하지 못했습니다. 메모를 확인한 뒤 다시 시도해주세요.');
+    }
+  };
 
   return (
-    <div className="p-4 space-y-6">
-      {loading && (
-        <div className="flex justify-center py-4">
-          <div className="animate-spin rounded-full h-5 w-5 border-2 border-primary border-t-transparent" />
-        </div>
-      )}
-
-      {/* Linked research */}
-      {sortedResearch.length > 0 && (
-        <section>
-          <h4 className="text-xs font-semibold text-slate-500 dark:text-text-muted mb-2">리서치</h4>
-          <div className="space-y-2">
-            {sortedResearch.map((item) => (
-              <a
-                key={item.key}
-                href={item.href}
-                className={`block rounded-lg p-2.5 text-sm border transition-colors ${
-                  item.score > 0
-                    ? 'border-l-4 border-l-amber-400 border-slate-200 dark:border-white/10 bg-amber-50/50 dark:bg-amber-500/5'
-                    : 'border-slate-200 dark:border-white/10 hover:bg-slate-50 dark:hover:bg-white/5'
-                }`}
-              >
-                <div className="flex items-center gap-1.5 font-medium text-slate-900 dark:text-text-main">
-                  <span className="material-symbols-outlined text-primary text-base">neurology</span>
-                  {item.title}
-                </div>
-                {item.text && (
-                  <p className="text-xs text-slate-500 dark:text-text-muted mt-1 line-clamp-2">{item.text}</p>
-                )}
-              </a>
-            ))}
+    <div className="space-y-3">
+      <input aria-label="불러온 참조 자료 검색" value={search} onChange={event => {
+        setSearch(event.target.value); setVisibleCount(10);
+      }} placeholder="불러온 자료에서 검색"
+        className="w-full rounded-lg border border-slate-200 bg-transparent px-3 py-2 text-sm dark:border-white/10" />
+      <p className="text-[11px] text-slate-500 dark:text-text-muted">
+        {catalog === 'news' ? '이미 수집된 뉴스 목록입니다. 새 웹 검색을 실행하지 않습니다.' : '현재 읽을 수 있는 자료의 목록·요약입니다.'}
+        {' '}불러온 {items.length}개{search.trim() ? ` 중 ${results.length}개 일치` : ''}.
+      </p>
+      {error && <div role="alert" className="rounded-lg bg-red-50 p-2 text-xs text-red-700 dark:bg-red-900/20 dark:text-red-300">
+        {error} {loaded ? '이미 불러온 자료만 표시합니다.' : '목록을 확인하지 못했습니다.'}
+        <button type="button" onClick={retry} disabled={loading} className="ml-2 underline">이 목록 재시도</button>
+      </div>}
+      {actionError && <p role="alert" className="text-xs text-red-600">{actionError}</p>}
+      {actionMessage && <p role="status" className="text-xs text-slate-500">{actionMessage}</p>}
+      {results.slice(0, visibleCount).map(({ item, score }) => (
+        <div key={item.id} className={`rounded-lg border p-2.5 text-sm ${
+          score > 0
+            ? 'border-l-4 border-l-amber-400 border-slate-200 bg-amber-50/50 dark:border-white/10 dark:border-l-amber-400 dark:bg-amber-500/5'
+            : 'border-slate-200 dark:border-white/10'
+        }`}>
+          <div className="break-words font-medium text-slate-900 dark:text-text-main">
+            {item.href ? <Link href={item.href} className="hover:underline">{item.title}</Link> : item.title}
           </div>
-        </section>
-      )}
+          {item.excerpt && <p className="mt-1 whitespace-pre-wrap break-words text-xs text-slate-600 dark:text-text-secondary">{item.excerpt}</p>}
+          {item.caveats?.map(caveat => <p key={caveat} className="mt-1 text-[11px] text-slate-500 dark:text-text-muted">{caveat}</p>)}
+          {(onAddReference || onPrepareQuestion) && <div className="mt-2 flex flex-wrap gap-3 text-xs">
+            {onAddReference && <button type="button" disabled={added.has(item.id)} onClick={() => act(item, 'add')}
+              className="text-primary disabled:text-slate-400">{added.has(item.id) ? '메모에 추가됨' : '메모에 참조 추가'}</button>}
+            {onPrepareQuestion && <button type="button" onClick={() => act(item, 'ask')} className="text-primary">질문 준비</button>}
+          </div>}
+        </div>
+      ))}
+      {loading && <p role="status" className="text-xs text-slate-500">자료 불러오는 중…</p>}
+      {loaded && !loading && !error && results.length === 0 && <p className="text-xs text-slate-500">
+        {search.trim() ? '불러온 자료에서 일치하는 항목이 없습니다.' : '이 목록에 자료가 없습니다.'}
+      </p>}
+      {results.length > visibleCount && <button type="button" className="text-xs text-primary" onClick={() => setVisibleCount(count => count + 10)}>불러온 자료 더 보기</button>}
+      {next && <button type="button" className="block text-xs text-primary disabled:text-slate-400" disabled={loading || !!error} onClick={() => {
+        setVisibleCount(count => Math.min(count + 10, MAX_REFERENCE_ITEMS));
+        loadMore();
+      }}>다음 자료 10개 불러오기</button>}
+      {limited && <p className="text-xs text-amber-700 dark:text-amber-300">이 패널은 최대 {MAX_REFERENCE_ITEMS}개까지만 표시합니다. 전체 자료는 원래 목록에서 확인하세요.</p>}
+    </div>
+  );
+}
 
-      {/* Account insights */}
-      <section>
-        <div className="flex items-center justify-between mb-2">
-          <h4 className="text-xs font-semibold text-slate-500 dark:text-text-muted">인사이트</h4>
-        </div>
-        <div className="flex flex-wrap gap-1.5 mb-2">
-          <button
-            onClick={() => setActiveType('')}
-            className={`text-xs px-2.5 py-1 rounded-full border ${activeType === '' ? 'bg-primary text-white border-primary' : 'border-slate-200 dark:border-white/10 text-slate-600 dark:text-text-muted'}`}
-          >
-            전체
-          </button>
-          {INSIGHT_TYPES.map((t) => (
-            <button
-              key={t}
-              onClick={() => setActiveType(t)}
-              className={`text-xs px-2.5 py-1 rounded-full border ${activeType === t ? 'bg-primary text-white border-primary' : 'border-slate-200 dark:border-white/10 text-slate-600 dark:text-text-muted'}`}
-            >
-              {t}
-            </button>
-          ))}
-        </div>
-        {sortedInsights.length === 0 ? (
-          <p className="text-sm text-slate-400 dark:text-text-muted">인사이트가 없습니다.</p>
-        ) : (
-          <div className="space-y-2">
-            {sortedInsights.map((item) => (
-              <div
-                key={item.key}
-                className={`rounded-lg p-2.5 text-sm border ${
-                  item.score > 0
-                    ? 'border-l-4 border-l-amber-400 border-slate-200 dark:border-white/10 bg-amber-50/50 dark:bg-amber-500/5'
-                    : 'border-slate-200 dark:border-white/10'
-                }`}
-              >
-                <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-primary/10 text-primary">{item.type}</span>
-                <p className="text-sm text-slate-700 dark:text-text-secondary mt-1">{item.text}</p>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
+export default function ReferencePanel({ accountId: propAccountId, onAccountChange, transcriptTail, onAddReference, onPrepareQuestion }: Props) {
+  const { user } = useAuth();
+  const [localAccountId, setLocalAccountId] = useState('');
+  const [catalog, setCatalog] = useState<ReferenceCatalog>(() => propAccountId ? 'insight' : 'knowledge');
+  const accountId = propAccountId ?? localAccountId;
+  const needsAccount = referenceCatalogs.find(item => item.id === catalog)?.account;
+  return (
+    <div className="space-y-3 p-4">
+      {(propAccountId === undefined || onAccountChange) && <AccountPicker key={user?.userId || 'unknown'} value={accountId} onChange={onAccountChange || setLocalAccountId} />}
+      <label className="block text-xs text-slate-500 dark:text-text-muted">
+        자료 종류
+        <select value={catalog} onChange={event => setCatalog(event.target.value as ReferenceCatalog)}
+          className="mt-1 w-full rounded-lg border border-slate-200 bg-white p-2 text-sm dark:border-white/10 dark:bg-surface-lowest">
+          {referenceCatalogs.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
+        </select>
+      </label>
+      {(onAddReference || onPrepareQuestion) && <p className="text-[11px] text-slate-500 dark:text-text-muted">
+        참조 추가는 메모로의 복사입니다. 저장하면 회의 열람자가 볼 수 있습니다.
+        {' '}질문 준비는 자동 전송하거나 Q&A 검색 범위를 제한하지 않습니다.
+      </p>}
+      {needsAccount && !accountId
+        ? <p className="text-sm text-slate-500">고객 자료를 보려면 고객을 선택하세요.</p>
+        : <Catalog key={`${user?.userId || 'unknown'}:${accountId}:${catalog}`} catalog={catalog} accountId={accountId}
+          userId={user?.userId} transcriptTail={transcriptTail} onAddReference={onAddReference} onPrepareQuestion={onPrepareQuestion} />}
     </div>
   );
 }
