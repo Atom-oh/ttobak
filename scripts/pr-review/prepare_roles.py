@@ -12,8 +12,26 @@ import re
 import subprocess
 import sys
 
+from role_review import Invalid, strict_json
 
 DIRECTORY = Path(__file__).resolve().parent
+
+
+def project_policy(directory=None):
+    file = (directory or DIRECTORY) / "role-project.json"
+    if not file.exists():
+        return {}
+    if file.is_symlink():
+        raise ValueError("Project policy must be a regular trusted file")
+    try:
+        policy = strict_json(file.read_bytes().decode("utf-8"))
+    except Invalid as error:
+        raise ValueError("Invalid project policy") from error
+    if (not isinstance(policy, dict) or policy.get("schema_version") != 1
+            or policy.get("input_adapter") != "prepare_project_roles.py"
+            or not isinstance(policy.get("chair"), dict)):
+        raise ValueError("Invalid project policy or adapter")
+    return policy
 
 
 def command(*arguments):

@@ -16,7 +16,7 @@ import sys
 import tempfile
 import time
 
-from role_review import diagnostic_failure
+from role_review import diagnostic_failure, issue_request, Invalid, MAX_REQUEST_BYTES, output_bytes
 
 
 DIRECTORY = Path(__file__).resolve().parent
@@ -48,11 +48,17 @@ def execute(command, cwd, environment, input_text, timeout):
         return 127, "", "Review CLI unavailable."
     try:
         output, error = process.communicate(input_text, timeout=timeout)
-        return process.returncode, output, error
+        code = process.returncode
     except subprocess.TimeoutExpired:
         os.killpg(process.pid, signal.SIGKILL)
         output, error = process.communicate()
-        return 124, output, error + "\nReview CLI timed out."
+        code, error = 124, error + "\nReview CLI timed out."
+    try:
+        output_bytes(output)
+        output_bytes(error)
+    except Invalid:
+        return code or 1, "", "output_byte_limit"
+    return code, output, error
 
 
 def kiro_environment(cwd, source):
@@ -98,6 +104,7 @@ def bounded_setting(name, default, maximum):
 
 def scrub(text):
     """Reuse the repository's control and credential scrubbers before publication."""
+    output_bytes(text)
     process = subprocess.run(
         ["bash", "-c", 'source "$1"; source "$2"; strip_ansi | scrub_secrets',
          "review-scrub", str(DIRECTORY / "lib.sh"), str(DIRECTORY / "role-controls.sh")],
@@ -134,6 +141,7 @@ def run(work, tag):
     output = ""
     error = ""
     code = 1
+    nonce, framed_prompt, payload = issue_request(work, tag)
     with tempfile.TemporaryDirectory(prefix=f"{tag}-", dir=runtime) as temporary:
         cwd = Path(temporary)
         if tag.startswith("kiro-"):
@@ -147,8 +155,8 @@ def run(work, tag):
                 )
                 code = code or 1
             else:
-                instruction = prompt + "\n\nUNTRUSTED DIFF DATA:\n" + diff
-                if len(instruction.encode()) >= 131072:
+                instruction = framed_prompt + "\n" + payload
+                if len(instruction.encode()) >= MAX_REQUEST_BYTES:
                     code, error = 1, "Complete Kiro input exceeds argument limit."
                 else:
                     command = [
@@ -156,10 +164,12 @@ def run(work, tag):
                         "--agent", "inline-review", "--no-interactive", "--wrap", "never",
                     ]
                     for _ in range(attempts):
+                        nonce, framed_prompt, payload = issue_request(work, tag)
+                        command[2] = framed_prompt + "\n" + payload
                         code, output, error = execute(
                             command, cwd, kiro_environment(cwd, environment), "", timeout
                         )
-                        if FAILURE.search(error):
+                        if FAILURE.search(error) or diagnostic_failure(error) == "output_byte_limit":
                             code = code or 1
                             break
                         if code == 0 and output.strip():
@@ -181,7 +191,14 @@ def run(work, tag):
             else:
                 raise ValueError("Unknown specialist")
             for _ in range(attempts):
-                code, output, error = execute(command, cwd, environment, diff, timeout)
+                nonce, framed_prompt, payload = issue_request(work, tag)
+                if tag == "codex":
+                    command[-1] = "-"
+                    delivered = framed_prompt + "\n" + payload
+                else:
+                    command[2] = framed_prompt
+                    delivered = payload
+                code, output, error = execute(command, cwd, environment, delivered, timeout)
                 if diagnostic_failure(error):
                     code = code or 1
                     break
@@ -196,6 +213,7 @@ def run(work, tag):
         sys.executable, str(DIRECTORY / "role_review.py"), "record",
         "--work", str(work), "--tag", tag, "--output", str(output_path),
         "--stderr", str(error_path), "--exit-code", str(code),
+        "--nonce", nonce,
     ])
     if result.returncode not in (0, 2):
         raise RuntimeError("Specialist result recording failed")

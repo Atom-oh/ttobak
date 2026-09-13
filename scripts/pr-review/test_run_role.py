@@ -48,6 +48,18 @@ class RoleExecutionTests(unittest.TestCase):
         self.assertEqual(code, 124)
         self.assertIn("partial output", output)
 
+    def test_output_limits_preserve_large_stderr_and_reject_either_oversized_stream(self):
+        cli = self.executable("import sys\nprint('complete review')\nsys.stderr.write('*' * (225 * 1024))\n")
+        code, output, error = self.runner.execute([cli], self.root, os.environ.copy(), "", 3)
+        self.assertEqual((code, output.strip(), len(error)), (0, "complete review", 225 * 1024))
+        for stream in ("stdout", "stderr"):
+            with self.subTest(stream=stream):
+                cli = self.executable(f"import sys\nsys.{stream}.write('*' * (1024 * 1024 + 1))\n")
+                self.assertEqual(self.runner.execute([cli], self.root, os.environ.copy(), "", 3),
+                                 (1, "", "output_byte_limit"))
+        with self.assertRaisesRegex(self.runner.Invalid, "^output_byte_limit$"):
+            self.runner.scrub("*" * (1024 * 1024 + 1))
+
     def test_kiro_environment_contains_no_cloud_or_repository_credentials(self):
         source = {
             "PATH": "/usr/bin", "KIRO_API_KEY": "test-key",
