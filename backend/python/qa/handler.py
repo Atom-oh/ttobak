@@ -24,7 +24,7 @@ from source_revision import legacy_meeting_identity
 from attachment_context import AttachmentReader
 from indexed_retrieval import hydrate_candidates
 from session_provenance import (
-    new_source_state, restore_messages, validate_sources,
+    new_source_state, restore_messages, validate_sources, SourceValidationError,
 )
 from web_search import redact_tool_input_for_log
 
@@ -950,6 +950,11 @@ def _agent_context(user_id, transcript, meeting_notes, source_state, source_deta
         check_web_search_limit=check_web_search_limit)
 
 
+def _validate_answer_sources(user_id, source_state, history=None):
+    validate_sources(source_state, lambda dep: _source_is_current(user_id, dep, source_state),
+                     tool_history=history if history is not None else _tool_history(user_id))
+
+
 def agentic_converse(messages, transcript=None, session_id=None, user_id=None, meeting_notes=None, meeting_id=None,
                      source_state=None, source_details=None):
     """Agentic tool-use loop: model decides what tools to call."""
@@ -991,10 +996,8 @@ def agentic_converse(messages, transcript=None, session_id=None, user_id=None, m
             for block in output_message["content"]:
                 if "toolUse" in block:
                     tool = block["toolUse"]
-                    # search_web input carries a conversation-derived query —
-                    # redact it (hash+length) before logging, same policy as
-                    # web_search.py's own logs. Other tools' inputs are
-                    # meeting/account identifiers and stay loggable.
+                    # Hash free-text inputs, including source URIs with private
+                    # filenames. Opaque identifiers remain available for debugging.
                     logger.info(f"Tool call: {tool['name']} input={json.dumps(redact_tool_input_for_log(tool['name'], tool['input']), ensure_ascii=False)}")
                     context['sourceReadRecorded'] = False
                     try:
@@ -1021,6 +1024,7 @@ def agentic_converse(messages, transcript=None, session_id=None, user_id=None, m
     answer = extract_text_answer(output_message)
 
     # Save conversation
+    _validate_answer_sources(user_id, source_state, context['tool_history'])
     save_session(session_id, messages, user_id=user_id, source_state=source_state)
 
     # Deduplicate sources
@@ -1067,6 +1071,7 @@ def handle_ask(question, context=None, meeting_id=None, session_id=None, user_id
             source_state=source_state, source_details=source_details,
         )
 
+        _validate_answer_sources(user_id, source_state)
         return response(200, {
             'answer': answer,
             'sources': sources,
@@ -1076,6 +1081,8 @@ def handle_ask(question, context=None, meeting_id=None, session_id=None, user_id
             'usedDocs': 'search_aws_docs' in tools_used,
             'toolsUsed': list(set(tools_used)),
         })
+    except SourceValidationError as error:
+        return response(error.status, {'error': {'code': error.code, 'message': error.message}})
     except Exception as e:
         logger.error(f'handle_ask failed: {e}', exc_info=True)
         return response(500, {'error': {'code': 'INTERNAL_ERROR', 'message': 'Failed to generate answer'}})
@@ -1137,6 +1144,7 @@ def handle_meeting_ask(question, meeting_id, user_id, session_id=None):
             source_state=source_state, source_details=source_details,
         )
 
+        _validate_answer_sources(user_id, source_state)
         return response(200, {
             'answer': answer,
             'sources': sources,
@@ -1146,6 +1154,8 @@ def handle_meeting_ask(question, meeting_id, user_id, session_id=None):
             'usedDocs': 'search_aws_docs' in tools_used,
             'toolsUsed': list(set(tools_used)),
         })
+    except SourceValidationError as error:
+        return response(error.status, {'error': {'code': error.code, 'message': error.message}})
     except Exception as e:
         logger.error(f'handle_meeting_ask failed: {e}', exc_info=True)
         return response(500, {'error': {'code': 'INTERNAL_ERROR', 'message': 'Failed to generate answer'}})
@@ -1252,27 +1262,52 @@ def _apigw_client(endpoint):
     return boto3.client('apigatewaymanagementapi', endpoint_url=endpoint)
 
 
-def _post_ws(apigw, connection_id, payload):
-    """Post a JSON message to a WebSocket connection.
+# One JSON message per PostToConnection: conservatively fit the documented
+# 32-KB frame quota, distinct from the 128-KB fragmented-message quota.
+WS_FRAME_BUDGET_BYTES = 30_000
 
-    Returns False only when the connection is confirmed gone (GoneException)
-    -- callers treat False as "stop streaming, the client left". A transient
-    error (throttling, a flaky post) does NOT mean the client is gone, so it
-    must not be treated the same way or one blip silently truncates an
-    otherwise-healthy multi-round streamed answer.
-    """
+
+class WebSocketDeliveryError(RuntimeError):
+    def __init__(self, code):
+        super().__init__(code)
+        self.code = code
+
+
+def _post_ws(apigw, connection_id, payload):
+    """Return False for Gone; terminal/rejected payloads require explicit failure."""
+    data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
+    if len(data) > WS_FRAME_BUDGET_BYTES:
+        raise WebSocketDeliveryError('RESPONSE_TOO_LARGE')
     try:
         apigw.post_to_connection(
             ConnectionId=connection_id,
-            Data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
+            Data=data,
         )
         return True
     except apigw.exceptions.GoneException:
         logger.info(f"WebSocket {connection_id} is gone; aborting stream")
         return False
+    except apigw.exceptions.PayloadTooLargeException:
+        raise WebSocketDeliveryError('RESPONSE_TOO_LARGE') from None
     except Exception as e:
-        logger.warning(f"post_to_connection failed (treated as transient, not gone): {e}")
+        if payload.get('type') in ('answer_start', 'answer_complete', 'answer_error'):
+            raise WebSocketDeliveryError('DELIVERY_FAILED') from None
+        logger.warning("Nonterminal WebSocket delivery failed (%s)", type(e).__name__)
         return True
+
+
+def _stream_error(apigw, connection_id, session_id, code, message, status='error'):
+    try:
+        if not _post_ws(apigw, connection_id, {
+            'type': 'answer_error', 'sessionId': session_id, 'code': code, 'error': message,
+        }):
+            return {'status': 'gone'}
+    except WebSocketDeliveryError:
+        # A failed error notification must not recurse, retry the model, or
+        # return ok. The disconnected/unavailable client may still time out.
+        logger.warning("WebSocket error notification failed (%s)", code)
+        return {'status': 'delivery_failed', 'code': code}
+    return {'status': status, 'code': code}
 
 
 def handle_ask_stream(event):
@@ -1303,21 +1338,16 @@ def handle_ask_stream(event):
 
     apigw = _apigw_client(endpoint)
 
-    if not _post_ws(apigw, connection_id, {
-        'type': 'answer_start',
-        'sessionId': session_id,
-    }):
-        return {'status': 'gone'}
-
     try:
+        if not _post_ws(apigw, connection_id, {
+            'type': 'answer_start', 'sessionId': session_id,
+        }):
+            return {'status': 'gone'}
         source_state, source_details = new_source_state(), []
         transcript, meeting_notes, err = _request_meeting_context(
             user_id, event.get('meetingId'), transcript, source_state=source_state, source_details=source_details)
         if err:
-            _post_ws(apigw, connection_id, {
-                'type': 'answer_error', 'sessionId': session_id, 'error': err['message'],
-            })
-            return {'status': 'error'}
+            return _stream_error(apigw, connection_id, session_id, err['code'], err['message'])
         messages = load_session(session_id, user_id=user_id, source_state=source_state)
         user_content = question
         if transcript:
@@ -1336,7 +1366,8 @@ def handle_ask_stream(event):
             source_state=source_state, source_details=source_details,
         )
 
-        _post_ws(apigw, connection_id, {
+        _validate_answer_sources(user_id, source_state)
+        if not _post_ws(apigw, connection_id, {
             'type': 'answer_complete',
             'sessionId': session_id,
             'answer': answer,
@@ -1346,15 +1377,18 @@ def handle_ask_stream(event):
             'toolsUsed': list(set(tools_used)),
             'usedKB': 'search_knowledge_base' in tools_used,
             'usedDocs': 'search_aws_docs' in tools_used,
-        })
+        }):
+            return {'status': 'gone'}
+    except SourceValidationError as error:
+        return _stream_error(apigw, connection_id, session_id, error.code, error.message)
+    except WebSocketDeliveryError as error:
+        logger.warning("WebSocket answer delivery failed (%s)", error.code)
+        message = ('The complete answer exceeds WebSocket delivery limits. Ask a narrower question.'
+                   if error.code == 'RESPONSE_TOO_LARGE' else 'The answer could not be delivered completely.')
+        return _stream_error(apigw, connection_id, session_id, error.code, message, 'delivery_failed')
     except Exception as e:
         logger.error(f"handle_ask_stream failed: {e}", exc_info=True)
-        _post_ws(apigw, connection_id, {
-            'type': 'answer_error',
-            'sessionId': session_id,
-            'error': '답변 생성 중 오류가 발생했습니다.',
-        })
-        return {'status': 'error'}
+        return _stream_error(apigw, connection_id, session_id, 'INTERNAL_ERROR', '답변 생성 중 오류가 발생했습니다.')
 
     return {'status': 'ok'}
 
@@ -1373,11 +1407,16 @@ def _execute_tool_with_heartbeat(tool_name, tool_input, context, apigw, connecti
     """
     done = threading.Event()
     client_gone = [False]
+    delivery_error = [None]
 
     def _heartbeat_loop():
         while True:
-            if not _post_ws(apigw, connection_id, {'type': 'tool_progress', 'sessionId': session_id}):
-                client_gone[0] = True
+            try:
+                if not _post_ws(apigw, connection_id, {'type': 'tool_progress', 'sessionId': session_id}):
+                    client_gone[0] = True
+            except WebSocketDeliveryError as error:
+                delivery_error[0] = error
+                return
             if done.wait(interval):
                 return
 
@@ -1388,6 +1427,8 @@ def _execute_tool_with_heartbeat(tool_name, tool_input, context, apigw, connecti
     finally:
         done.set()
         heartbeat_thread.join()
+        if delivery_error[0] is not None:
+            raise delivery_error[0]
     return result, result_sources, client_gone[0]
 
 
@@ -1518,6 +1559,8 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
                     )
                     if tool_client_gone:
                         client_gone = True
+                except WebSocketDeliveryError:
+                    raise
                 except Exception as e:
                     logger.warning(f"Tool execution failed ({tool['name']}): {e}")
                     result = f"도구 실행 중 오류가 발생했습니다: {tool['name']}"
@@ -1541,6 +1584,7 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
                 # on a socket nothing is listening on.
                 break
 
+    _validate_answer_sources(user_id, source_state, context['tool_history'])
     save_session(session_id, messages, user_id=user_id, source_state=source_state)
 
     seen = set()

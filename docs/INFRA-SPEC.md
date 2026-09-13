@@ -234,9 +234,10 @@ and [source contract](../backend/internal/service/INDEX_SOURCE_CONTRACT.md).
 QA now receives separate assets and KB bucket names. AiStack grants read/version
 access to assets transcripts/*, docs/*, docs-pdf/*, files/* and KB kb/*, shared/*,
 plus account-conditioned listing to distinguish absence from denied reads. It adds
-no object writes/deletes. SourceAccess/ToolHistory/strict account helpers remain
-unwired in handler.py; these grants do not activate them. Legacy cache variables
-remain injected. Strict QA cutover must follow binary snapshot verification and
+no object writes/deletes. Handler registration and deployment acceptance status
+are tracked in the [QA source contract](../backend/python/qa/SOURCE_CONTRACT.md);
+IAM grants alone do not activate the consumer. Legacy cache variables remain
+injected. Strict QA cutover must follow binary snapshot verification and
 the [current-source rollout](runbooks/qa-current-source-rollout.md).
 
 KnowledgeStack retains externally provisioned KB/data-source IDs and AOSS-related
