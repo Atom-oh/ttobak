@@ -1,10 +1,8 @@
 # Current-source QA reader contract
 
-Code checked: 2026-09-13. These helpers are implemented and tested but are not
-wired into the active `handler.py`, tool loop, retrieval filters or sessions.
-CDK supplies source-read prerequisites and schedules `manual-only` snapshots;
-strict runtime activation still requires verified binary snapshots and deployed
-acceptance. See [the rollout](../../../docs/runbooks/qa-current-source-rollout.md).
+These modules define current-source reader and history interfaces. Consumer
+registration and deployed acceptance are separate gates; follow
+[the rollout](../../../docs/runbooks/qa-current-source-rollout.md) before cutover.
 
 ## Reader responsibilities
 
@@ -17,7 +15,7 @@ acceptance. See [the rollout](../../../docs/runbooks/qa-current-source-rollout.m
 | `indexed_retrieval.py` | Enumerate authorized identities, use current saved text, and require canonical revision/S3 bindings for binary excerpts. Legacy meeting exports supply identities only. |
 | `manual_kb.py` | Validate private/shared binary snapshots and current originals; unbound old chunks are not evidence. Missing snapshots are pending; read errors propagate. |
 | `source_access.py` | Compose injected readers/callbacks into source contexts/search with dependencies; create no AWS clients. |
-| `source_tools.py` | Define/format document, attachment and legacy-text tools; registration remains staged. |
+| `source_tools.py` | Define/format document, attachment and legacy-text tools for authenticated consumers. |
 | `session_provenance.py` | Recheck every dependency before replay; require an explicit replayable marker and known provenance version. |
 
 Runtime integration must preserve the authenticated tool/error boundary and
@@ -56,7 +54,7 @@ recomputes coverage/provenance from what the model actually receives.
 `get_legacy_text_detail(uri, offset=0, sourceRevision?)` returns up to 6,000
 current characters. Continuations require the prior revision; changes require
 restart. `nextOffset` exists only when text remains, and an offset above zero
-is partial even on the final page. The staged tool never reads binary or
+is partial even on the final page. The tool never reads binary or
 foreign-private files.
 
 ## Immutable binary snapshots
@@ -104,8 +102,16 @@ Provenance version 1 accepts exact integer/SDK Decimal representations, rejectin
 bools, floats, strings, unknown versions and untracked histories. Changed or
 unavailable dependencies invalidate the entire history, including assistant
 paraphrases. Read-tool proof and mutation receipts follow
-[TOOL_HISTORY_CONTRACT.md](TOOL_HISTORY_CONTRACT.md).
+[TOOL_HISTORY_CONTRACT.md](TOOL_HISTORY_CONTRACT.md). User/meeting-bound live input
+and reexecuted empty searches follow [REQUEST_HISTORY_CONTRACT.md](REQUEST_HISTORY_CONTRACT.md).
+Consumers must pass the current meeting scope, reset per-call coverage and use
+the latest client input. At cumulative capacity, `tool_context` retains the
+current read-time-authorized result, reports `DEPENDENCY_LIMIT`, and marks
+history nonreplayable; it does not claim atomic freshness after that read.
 
 From this directory, `python3 -m unittest test_handler -v` loads these suites.
 Tests use synthetic table/S3 responses and real boto3 serialization without live
 AWS/model calls; public REST/streaming acceptance remains separate.
+
+[Manual bootstrap evidence](../../../docs/research/evaluations/2026-09-13-manual-kb-bootstrap/README.md)
+records producer checks, not public QA deployment or model quality.

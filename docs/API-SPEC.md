@@ -412,24 +412,23 @@ runtime-configured WebSocket endpoint. There is no current start/audio/stop
 server-side transcription stream or separate connections table in this handler.
 Live transcription runs in the browser using AWS Transcribe Streaming.
 
-The active QA handler uses a Converse tool loop and current authorized meeting
-data. Tools include
-KB/AWS docs/web/transcript search, meeting detail/list, account operations and
-research initiation; `qa/tools.py` is the exact roster. KB meeting hits are discovery
-candidates: current access and current notes/content are rechecked, including on
-cache hits. Revoked/deleted sources and citations are removed. New text may not
-be discoverable until KB export/ingestion catches up; current reads are not reindexing.
+**Legacy behavior before current-source cutover:** the QA handler uses a Converse
+tool loop and current authorized meeting data. KB meeting hits are candidates;
+access and saved notes/content are reread, including on cache hits. New terms
+may wait for export/ingestion. This paragraph is not the current-source contract.
 
-Live/HTTP meeting contexts send separate bounded untrusted excerpts for transcript
-and saved notes with coverage metadata. get_meeting_detail exposes continuation
-information; follow its next offset, not an excerpt-relative index. Transcript
-read failures return an error rather than silently losing context.
+### Current-source consumer contract
 
-The broader current-source QA, document/attachment tools and history policy are
-**staged foundations**: `qa/handler.py` does not import SourceAccess, source_tools,
-ToolHistory or account_reads. The contracts below describe that integration,
-not active REST/WebSocket behavior. Binary snapshot bootstrap and synthetic recall
-verification precede strict runtime cutover.
+The gated QA wiring connects current-source readers and history checks to both
+Converse transports. This contract does not certify deployment; the
+[manual bootstrap evidence](research/evaluations/2026-09-13-manual-kb-bootstrap/README.md)
+records IAM producer/provider checks only. Public QA acceptance remains separate.
+
+Live/HTTP requests pass current client input separately from saved notes. Live
+input receipts bind user and meeting; growing, rolling and corrected windows
+retain conversation while the latest input takes priority. They do not attest
+saved-source bytes. Every recorded server source still requires current access
+and revision; changes or revocation invalidate the complete derived history.
 
 - Fresh source discovery revalidates canonical access, exact source revision and
   S3 bindings. Saved-text keyword matches supplement index lag; legacy meeting
@@ -448,11 +447,16 @@ verification precede strict runtime cutover.
   fingerprints for supported read-only tools. Strict callbacks consume all pages,
   recheck exact membership/canonical references and attest complete reads.
   Changed, denied, failed or untracked dependencies invalidate the entire history,
-  including assistant paraphrases; revalidate before later rounds and final output.
+  including assistant paraphrases; recorded dependencies are checked before each model round.
 - `start_research` records a creation receipt only after one successful mutation.
   Never replay creation to validate history. Tracking overflow preserves the
   current result while marking history nonreplayable with explicit coverage.
-  Unverifiable legacy sessions reset at cutover.
+  Unverifiable legacy sessions reset at cutover. Successful empty KB searches
+  are reexecuted for the current user; new matches or failed reads invalidate
+  their proofs. Failed/skipped private reads never become empty successes.
+- `toolHistoryCoverage` is normally `[]`; `{tool, complete:false, reason}` reports
+  `DEPENDENCY_LIMIT`, `RESULT_LIMIT` or `RECEIPT_UNAVAILABLE`. Capacity exhaustion
+  keeps the current read-time-authorized result but prevents history replay.
 
 Exact source fields, visibility, limits and integration APIs:
 [source contract](../backend/python/qa/SOURCE_CONTRACT.md),

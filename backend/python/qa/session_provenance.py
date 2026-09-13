@@ -5,7 +5,7 @@ import json
 from source_revision import HEX_REVISION, IDENTIFIER, resource_identity
 from manual_kb import shared_source_key
 from tool_history import (
-    MAX_TOOL_DEPENDENCIES, is_tool_dependency, valid_tool_dependency, tool_dependency_key, covers_tool_calls,
+    MAX_TOOL_DEPENDENCIES, HistoryLimit, is_tool_dependency, valid_tool_dependency, tool_dependency_key, covers_tool_calls,
 )
 from request_history import MAX_EMPTY_SEARCHES, is_request_dependency, valid_request_dependency, request_key, mark_untracked
 
@@ -79,7 +79,7 @@ def remember_source(state, dependency):
             or is_tool_dependency(dependency) and
             sum(is_tool_dependency(dep) for dep in state['dependencies']) >= MAX_TOOL_DEPENDENCIES):
         state['replayable'] = False
-        raise ValueError('Source history dependency budget exceeded')
+        raise HistoryLimit('Source history dependency budget exceeded')
     state['dependencies'].append(dict(dependency))
 
 
