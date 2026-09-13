@@ -289,6 +289,14 @@ pub async fn upload_recording(
     // This also protects an in-flight transfer if cleanup is concurrent.
     #[cfg(target_os = "macos")]
     let _upload_power = crate::power::PowerAssertion::acquire("TTOBAK recording upload");
+    // Also blocks lid-close sleep for this same bounded window (see
+    // power.rs) — the transfer is bounded by STALL_TIMEOUT +
+    // RESPONSE_DEADLINE_AFTER_FULL_SEND below, so this can never be held
+    // indefinitely. Closing the lid right after ending a meeting, while the
+    // recording is still uploading, used to be able to suspend the process
+    // mid-transfer with no error surfaced.
+    #[cfg(target_os = "macos")]
+    let _upload_lid_guard = crate::power::LidCloseGuard::acquire("TTOBAK recording upload");
 
     stream_file_to_url(
         &canonical,

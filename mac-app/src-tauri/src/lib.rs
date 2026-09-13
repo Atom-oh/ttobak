@@ -351,9 +351,18 @@ async fn stop_recording(state: State<'_, RecorderState>) -> Result<StopResponse,
         // OTHER one's path as done — see `RecorderState::finalizing`'s doc
         // comment.
         let finalizing = Arc::clone(&state.finalizing);
+        // Blocks lid-close sleep for this bounded finalize window only (see
+        // power.rs) — closing the lid the instant "end meeting" is clicked
+        // used to be able to suspend the process mid stop_and_finalize with
+        // no error surfaced. Moved into the closure so it's held for
+        // however long the task actually takes, including the
+        // background-after-timeout path below, and dropped the moment it
+        // finishes either way.
+        let lid_guard = power::LidCloseGuard::acquire("TTOBAK finishing recording");
         let stop_task = tauri::async_runtime::spawn_blocking(move || {
             let result = backend.stop_and_finalize();
             finalizing.lock().remove(&finalize_path);
+            drop(lid_guard);
             result
         });
 

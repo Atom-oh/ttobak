@@ -85,10 +85,18 @@ retry data; cleanup releases protection before deletion, while release_recording
 allows navigation/reset without deleting the WAV. Each upload attempt also owns an
 RAII assertion, including startup-adopted files. Invalid paths do not clear state.
 
-Protection covers idle system sleep, not lid-close, explicit sleep or low battery;
-display sleep is allowed. Validate pmset assertions during recording, pending upload,
-recovered upload and cleanup on real macOS. Late callbacks after page unmount must
-release their own pending protection without corrupting another recording.
+`PowerAssertion` (idle-sleep only, held for the whole recording) covers idle system
+sleep, not lid-close, explicit sleep or low battery; display sleep is allowed.
+`LidCloseGuard` (`PreventSystemSleep`) DOES block lid-close, but per Apple's own
+guidance is only ever held for a short, bounded operation, never a whole open-ended
+recording — it guards exactly `stop_recording`'s `stop_and_finalize` window and
+`upload_recording`'s transfer window, both already time-bounded, and nothing else.
+Closing the lid mid-meeting still suspends capture as before; only the
+finish-and-upload tail right after "end meeting" — the case users actually hit — is
+now protected against a lid close too. Validate both assertions with `pmset -g
+assertions` during recording, pending upload, recovered upload and cleanup on real
+macOS. Late callbacks after page unmount must release their own pending protection
+without corrupting another recording.
 
 Tauri config CSP does not protect the remote SPA response; use the served policy.
 Auth and tokens remain in the SPA. Source pointers: src-tauri/src/lib.rs, audio.rs,

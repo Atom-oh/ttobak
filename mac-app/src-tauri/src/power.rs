@@ -1,7 +1,21 @@
-//! Idle-sleep protection shared by recordings awaiting upload or discard.
+//! Idle-sleep protection shared by recordings awaiting upload or discard,
+//! plus a separate, deliberately narrow lid-close guard.
 //!
-//! This does not prevent lid-close, Apple-menu, or low-battery sleep. Keep
-//! the recording checkpoints and startup recovery paths for those cases.
+//! `PowerAssertion` (`PreventUserIdleSystemSleep`) does not prevent lid-close,
+//! Apple-menu, or low-battery sleep — keep the recording checkpoints and
+//! startup recovery paths for those. `LidCloseGuard` (`PreventSystemSleep`)
+//! DOES block lid-close sleep, but Apple documents it should only be held for
+//! a short, bounded operation (their own example: burning a disc) — never for
+//! the length of an open-ended recording, which can run for hours. It is only
+//! acquired around the two already-bounded windows where a closed lid right
+//! after "end meeting" used to lose the recording outright: `stop_recording`'s
+//! `stop_and_finalize` (bounded by `STOP_CAPTURE_TIMEOUT`, or however long the
+//! background finalize backstop takes if that timeout is hit) and
+//! `upload_recording`'s actual transfer (bounded by `STALL_TIMEOUT` +
+//! `RESPONSE_DEADLINE_AFTER_FULL_SEND`). The live recording itself stays
+//! idle-sleep-only protected, same as before — closing the lid mid-meeting is
+//! still expected to suspend capture; only the finish-and-upload tail is
+//! guarded against it now.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -37,7 +51,7 @@ impl<A> RecordingPower<A> {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) use macos::PowerAssertion;
+pub(crate) use macos::{LidCloseGuard, PowerAssertion};
 
 #[cfg(target_os = "macos")]
 mod macos {
@@ -55,44 +69,91 @@ mod macos {
         fn IOPMAssertionRelease(assertion_id: u32) -> i32;
     }
 
+    /// Shared by both assertion types below — only the IOKit assertion-type
+    /// string differs between them. Best effort: a power-management failure
+    /// must not reject a recording, so this returns `None` rather than an
+    /// error on any non-zero `IOReturn`.
+    fn acquire(assertion_type: &str, reason: &str) -> Option<u32> {
+        let assertion_type = CFString::new(assertion_type);
+        let assertion_name = CFString::new(reason);
+        let mut id = 0;
+        // SAFETY: both CFStrings remain alive for the synchronous call, and
+        // `id` is a valid output pointer. Level 255 is kIOPMAssertionLevelOn.
+        let result = unsafe {
+            IOPMAssertionCreateWithName(
+                assertion_type.as_concrete_TypeRef(),
+                255,
+                assertion_name.as_concrete_TypeRef(),
+                &mut id,
+            )
+        };
+        (result == 0).then_some(id)
+    }
+
+    fn release(id: u32) -> i32 {
+        // SAFETY: the caller uniquely owns a successfully acquired ID.
+        unsafe { IOPMAssertionRelease(id) }
+    }
+
     pub(crate) struct PowerAssertion {
         id: u32,
     }
 
     impl PowerAssertion {
-        /// Best effort: a power-management failure must not reject a recording.
-        /// Apple documents that this assertion only prevents idle sleep:
+        /// Apple documents that this assertion only prevents IDLE sleep, not
+        /// lid-close/Apple-menu/low-battery sleep:
         /// https://developer.apple.com/library/archive/qa/qa1340/_index.html
+        /// Safe to hold for the length of an open-ended recording.
         pub(crate) fn acquire(reason: &str) -> Option<Self> {
-            let assertion_type = CFString::new("PreventUserIdleSystemSleep");
-            let assertion_name = CFString::new(reason);
-            let mut id = 0;
-            // SAFETY: both CFStrings remain alive for the synchronous call,
-            // and `id` is a valid output pointer. Level 255 is kIOPMAssertionLevelOn.
-            let result = unsafe {
-                IOPMAssertionCreateWithName(
-                    assertion_type.as_concrete_TypeRef(),
-                    255,
-                    assertion_name.as_concrete_TypeRef(),
-                    &mut id,
-                )
-            };
-            if result == 0 {
-                log::info!("idle-sleep assertion acquired: {reason}");
-                Some(Self { id })
-            } else {
-                log::warn!("idle-sleep assertion unavailable (IOReturn {result})");
-                None
+            match acquire("PreventUserIdleSystemSleep", reason) {
+                Some(id) => {
+                    log::info!("idle-sleep assertion acquired: {reason}");
+                    Some(Self { id })
+                }
+                None => {
+                    log::warn!("idle-sleep assertion unavailable: {reason}");
+                    None
+                }
             }
         }
     }
 
     impl Drop for PowerAssertion {
         fn drop(&mut self) {
-            // SAFETY: this instance uniquely owns a successfully acquired ID.
-            let result = unsafe { IOPMAssertionRelease(self.id) };
+            let result = release(self.id);
             if result != 0 {
                 log::warn!("failed to release idle-sleep assertion (IOReturn {result})");
+            }
+        }
+    }
+
+    /// Blocks lid-close sleep too, unlike `PowerAssertion` — see this
+    /// module's doc comment for why it's only ever held for a short, bounded
+    /// operation (Apple's own guidance), never for a whole recording.
+    pub(crate) struct LidCloseGuard {
+        id: u32,
+    }
+
+    impl LidCloseGuard {
+        pub(crate) fn acquire(reason: &str) -> Option<Self> {
+            match acquire("PreventSystemSleep", reason) {
+                Some(id) => {
+                    log::info!("lid-close guard acquired: {reason}");
+                    Some(Self { id })
+                }
+                None => {
+                    log::warn!("lid-close guard unavailable: {reason}");
+                    None
+                }
+            }
+        }
+    }
+
+    impl Drop for LidCloseGuard {
+        fn drop(&mut self) {
+            let result = release(self.id);
+            if result != 0 {
+                log::warn!("failed to release lid-close guard (IOReturn {result})");
             }
         }
     }
