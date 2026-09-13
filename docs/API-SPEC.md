@@ -422,9 +422,9 @@ position; transcript read failures return errors rather than silently losing con
 
 ### Current-source consumer contract
 
-The current handler does not yet register the current-source readers or history
-helpers. The contract below applies to the pending PR221 consumer, not current
-transport behavior. It does not certify deployment; the
+Helper installation alone does not activate this consumer contract. The
+[source contract](../backend/python/qa/SOURCE_CONTRACT.md) states whether the
+reviewed handler registers it. That status does not certify deployment; the
 [manual bootstrap evidence](research/evaluations/2026-09-13-manual-kb-bootstrap/README.md)
 records IAM producer/provider checks only. Public QA acceptance remains separate.
 
