@@ -5,7 +5,7 @@ import unittest
 from botocore.exceptions import ClientError
 
 import test_handler as helpers
-from test_kb_fixtures import _KBFixture, _SharedKBFixture, binary_fixture
+from test_kb_fixtures import _KBFixture, _SharedKBFixture, _QAConversationFixture, binary_fixture
 from source_context import SourceReader
 from attachment_context import AttachmentReader
 from source_access import SourceAccess
@@ -268,3 +268,19 @@ class TestAttachmentConsumer(_Consumer, _AttachmentFixture, unittest.TestCase):
         self.assertIn('오디오 시각을 붙이지 마세요', text)
         self.assertTrue(any(dependency.get('attachmentId') == 'a' for dependency in state['dependencies']))
         self.assertEqual(details[0]['resourceKind'], 'meetingAttachment')
+
+
+class TestTransportFixture(_QAConversationFixture, _SourceFixture, unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        self.set_up_transport(self.table)
+
+    def test_current_handlers_execute_readonly_tool_for_both_transports(self):
+        self.table.put_item(Item={'PK': 'USER#reader', 'SK': 'MEETING#m', 'meetingId': 'm',
+                                 'userId': 'reader', 'title': 'SYNTHETIC_CURRENT_TITLE', 'createdAt': '2026-09-12'})
+        for transport in ('rest', 'stream'):
+            with self.subTest(transport=transport):
+                self.table.items.pop(('SESSION#reader#chat-readonly', 'MESSAGES'), None)
+                model = self.replies(transport, 'list_meetings', {})
+                self.ask(transport, 'list meetings')
+                self.assertIn('SYNTHETIC_CURRENT_TITLE', json.dumps(model.call_args.kwargs['messages']))
