@@ -138,10 +138,10 @@ validated canonical identities;
 internal storage/partition keys are not display titles or navigable source links.
 Document page/slide/paragraph positions are not meeting audio timestamps.
 
-Structured source rendering is ready, but the strict QA handler wiring remains
-staged. Attachment text and saved-summary routes are provided by the backend parents;
-the meeting controls are implemented here and require those APIs deployed first. See the
-[API contract](API-SPEC.md) and [QA source contract](../backend/python/qa/SOURCE_CONTRACT.md).
+Meeting controls require deployed attachment-text, saved re-summary and index-status
+APIs. Keep their frontend release dependent on that backend deployment. See the
+[API contract](API-SPEC.md) for routes and the
+[QA source contract](../backend/python/qa/SOURCE_CONTRACT.md) for wiring and acceptance status.
 
 ## Meeting attachment text and saved re-summary
 
@@ -158,9 +158,12 @@ unsaved text as indexed.
 Speaker-save and re-diarization refreshes check the latest editor dirty state before
 applying responses, preserving in-progress summary/transcript text and its selected
 A/B source while accepting server updates for clean editors.
+Summary saves run serially and coalesce queued edits to the latest draft.
+Failures retain that draft and expose retry. Editing preserves canonical
+attachment/transcript citation IDs; signed URLs and page anchors are display
+targets only. Ordinary links and literal citation text keep their identity.
 
 Deploy attachment, saved-summary and index-status APIs before this UI.
-
 
 ## Verification
 
