@@ -151,3 +151,25 @@ Confirmed Gone returns `gone`; if the error cannot reach a disconnected or
 unavailable client, that client may still time out. Ordinary transient delta or
 heartbeat failures retain the existing best-effort behavior; completion must
 actually be accepted by the Management API before the handler returns `ok`.
+
+## Named binary KB sources
+
+The model tool `search_knowledge_base` accepts optional `source_keys`: one to
+five exact original binary keys, at most 4096 UTF-8 bytes combined, under the
+current user's `kb/{userId}/` prefix or authenticated-global `shared/`.
+`numberOfResults` must cover the selected sources. Invalid, foreign, empty or
+malformed selections are rejected before source/provider reads.
+
+Selection is an identity lookup, not a semantic filename query. Each original
+is checked afresh, then only its exact resource/revision snapshot is retrieved.
+The ordinary semantic search threshold remains 0.5; it does not discard an
+explicitly selected, currently verified file because its name has a low score.
+Missing files yield scoped empty-search proof; unindexed/unsupported files
+retain explicit pending/failure metadata, never old unbound content. File text
+remains a partial excerpt. Legacy text files use `get_legacy_text_detail`.
+
+Empty-search receipts preserve and revalidate the same normalized selection.
+Existing unscoped receipts remain compatible; older readers reject the new
+scoped receipt shape rather than replaying it as a global search. Selection
+keys are redacted in tool-input logs. No public route, IAM grant or source
+visibility rule changes.

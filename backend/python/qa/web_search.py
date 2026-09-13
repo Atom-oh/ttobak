@@ -130,7 +130,7 @@ def _query_ref(query):
 # loggable for debugging. NOTE: this is a fixed blocklist of known free-text
 # keys (allow-by-default for unknown keys) — when adding a tool with a new
 # free-text input key, add the key here.
-_FREE_TEXT_INPUT_KEYS = frozenset({'query', 'keywords', 'keyword', 'useCase', 'topic', 'account', 'uri'})
+_FREE_TEXT_INPUT_KEYS = frozenset({'query', 'keywords', 'keyword', 'useCase', 'topic', 'account', 'uri', 'source_keys'})
 
 
 def redact_tool_input_for_log(tool_name, tool_input):

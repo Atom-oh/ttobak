@@ -6,6 +6,23 @@ import { Extension } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import Image from '@tiptap/extension-image';
 import Suggestion from '@tiptap/suggestion';
+import { meetingCitationAttributes } from '@/lib/meetingCitations';
+
+// Meeting-only provenance attributes; URL protocol rules remain unchanged.
+const meetingCitations = Extension.create({
+  name: 'meetingCitations',
+  addGlobalAttributes() {
+    return [{
+      types: ['link', 'image'],
+      attributes: Object.fromEntries(meetingCitationAttributes.map((name) => [name, {
+        default: null,
+        parseHTML: (element: HTMLElement) => element.getAttribute(name),
+        renderHTML: (attributes: Record<string, unknown>) =>
+          typeof attributes[name] === 'string' ? { [name]: attributes[name] } : {},
+      }])),
+    }];
+  },
+});
 
 // Triggered by "[[" -- suggests existing document titles for a wikilink.
 // getTitles lives on the extension's own `options` (a plain mutable object,
@@ -133,6 +150,12 @@ interface MeetingEditorProps {
   onAutoSave?: (content: string) => void;
   autoSaveDelay?: number;
   readOnly?: boolean;
+  /** Keep local typing while the parent receives saved snapshots. */
+  preserveDraft?: boolean;
+  onContentApplied?: (content: string) => void;
+  /** A caller with queued saves can supply its actual acknowledgement state. */
+  isContentSaved?: (content: string) => boolean;
+  preserveMeetingCitations?: boolean;
   /** Enables "[[" wikilink autocomplete, suggesting from this title list. */
   wikilinkTitles?: string[];
 }
@@ -143,10 +166,19 @@ export function MeetingEditor({
   onAutoSave,
   autoSaveDelay = 2000,
   readOnly = false,
+  preserveDraft = false,
+  onContentApplied,
+  isContentSaved,
+  preserveMeetingCitations = false,
   wikilinkTitles,
 }: MeetingEditorProps) {
   const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastSavedContentRef = useRef(content);
+  const appliedContentRef = useRef<string | null>(null);
+  const cancelAutoSave = useCallback(() => {
+    if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
+    autoSaveTimeoutRef.current = null;
+  }, []);
   const wikilinkTitlesRef = useRef<string[]>(wikilinkTitles ?? []);
   useEffect(() => {
     wikilinkTitlesRef.current = wikilinkTitles ?? [];
@@ -168,8 +200,9 @@ export function MeetingEditor({
         allowBase64: true,
       }),
     ];
-    return hasWikilinks ? [...base, createWikilinkExtension()] : base;
-  }, [hasWikilinks]);
+    const configured = preserveMeetingCitations ? [...base, meetingCitations] : base;
+    return hasWikilinks ? [...configured, createWikilinkExtension()] : configured;
+  }, [hasWikilinks, preserveMeetingCitations]);
 
   const editor = useEditor({
     immediatelyRender: false,
@@ -178,14 +211,15 @@ export function MeetingEditor({
     editable: !readOnly,
     onUpdate: ({ editor }) => {
       const html = editor.getHTML();
+      // Undoing to the saved value must also cancel the discarded draft.
+      cancelAutoSave();
       onChange?.(html);
 
       // Auto-save with debounce
-      if (onAutoSave && html !== lastSavedContentRef.current) {
-        if (autoSaveTimeoutRef.current) {
-          clearTimeout(autoSaveTimeoutRef.current);
-        }
+      const alreadySaved = isContentSaved ? isContentSaved(html) : html === lastSavedContentRef.current;
+      if (onAutoSave && !readOnly && !alreadySaved) {
         autoSaveTimeoutRef.current = setTimeout(() => {
+          autoSaveTimeoutRef.current = null;
           onAutoSave(html);
           lastSavedContentRef.current = html;
         }, autoSaveDelay);
@@ -201,10 +235,23 @@ export function MeetingEditor({
 
   // Update content when prop changes
   useEffect(() => {
-    if (editor && content !== editor.getHTML()) {
+    if (!editor || preserveDraft || appliedContentRef.current === content) return;
+    cancelAutoSave();
+    if (content !== editor.getHTML()) {
       editor.commands.setContent(content, { emitUpdate: false });
     }
-  }, [content, editor]);
+    appliedContentRef.current = content;
+    const html = editor.getHTML();
+    lastSavedContentRef.current = html;
+    onContentApplied?.(html);
+  }, [content, editor, preserveDraft, cancelAutoSave, onContentApplied]);
+
+  // useEditor preserves an existing instance's editable flag when options change.
+  useEffect(() => {
+    if (!editor) return;
+    editor.setEditable(!readOnly, false);
+    if (readOnly) cancelAutoSave();
+  }, [editor, readOnly, cancelAutoSave]);
 
   // Wire the wikilink extension's getTitles to always read the latest ref
   // value. Runs once per editor instance (not per wikilinkTitles change) --
@@ -216,13 +263,7 @@ export function MeetingEditor({
   }, [editor, hasWikilinks]);
 
   // Cleanup
-  useEffect(() => {
-    return () => {
-      if (autoSaveTimeoutRef.current) {
-        clearTimeout(autoSaveTimeoutRef.current);
-      }
-    };
-  }, []);
+  useEffect(() => cancelAutoSave, [cancelAutoSave]);
 
   const addImage = useCallback(() => {
     const url = prompt('Enter image URL');
