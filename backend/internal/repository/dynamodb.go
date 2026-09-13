@@ -3317,32 +3317,29 @@ func (r *DynamoDBRepository) ListChatSessions(ctx context.Context, userID string
 	return sessions, nil
 }
 
-// DeleteChatSession deletes both session metadata and session messages
+// DeleteChatSession deletes metadata, messages and companion source details atomically.
 func (r *DynamoDBRepository) DeleteChatSession(ctx context.Context, userID, sessionID string) error {
-	// Delete session metadata: PK=USER#{userID}, SK=CHAT_SESSION#{sessionID}
-	_, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
-		TableName: aws.String(r.tableName),
-		Key: map[string]types.AttributeValue{
-			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
-			"SK": &types.AttributeValueMemberS{Value: "CHAT_SESSION#" + sessionID},
-		},
+	sessionPK := "SESSION#" + userID + "#" + sessionID
+	var items []types.TransactWriteItem
+	for _, key := range [][2]string{
+		{model.PrefixUser + userID, "CHAT_SESSION#" + sessionID},
+		{sessionPK, "MESSAGES"},
+		{sessionPK, "SOURCE_DETAILS"},
+	} {
+		items = append(items, types.TransactWriteItem{Delete: &types.Delete{
+			TableName: aws.String(r.tableName),
+			Key: map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: key[0]},
+				"SK": &types.AttributeValueMemberS{Value: key[1]},
+			},
+		}})
+	}
+	_, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: items,
 	})
 	if err != nil {
-		return fmt.Errorf("failed to delete chat session metadata: %w", err)
+		return fmt.Errorf("failed to delete chat session: %w", err)
 	}
-
-	// Delete session messages: PK=SESSION#{userID}#{sessionID}, SK=MESSAGES
-	_, err = r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
-		TableName: aws.String(r.tableName),
-		Key: map[string]types.AttributeValue{
-			"PK": &types.AttributeValueMemberS{Value: "SESSION#" + userID + "#" + sessionID},
-			"SK": &types.AttributeValueMemberS{Value: "MESSAGES"},
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("failed to delete chat session messages: %w", err)
-	}
-
 	return nil
 }
 
