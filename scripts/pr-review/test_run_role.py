@@ -183,6 +183,18 @@ class RoleExecutionTests(unittest.TestCase):
                 raw = "\n".join(json.dumps(event, ensure_ascii=False) for event in events) + "\n"
                 self.assertEqual(self.runner.codex_response(raw, self.final_file), (final, "", True))
 
+    def test_bad_codex_stream_cannot_hide_final_file_overflow(self):
+        self.final_file.write_text("*" * (1024 * 1024 + 1))
+        for raw in ("malformed", '{"type":"turn.started"}', "", "*" * (1024 * 1024 + 1)):
+            with self.subTest(stream=raw[:32]):
+                self.assertEqual(self.runner.codex_response(raw, self.final_file),
+                                 ("", "output_byte_limit", False))
+        self.final_file.write_text("*" * (1024 * 1024))
+        output, error, valid = self.runner.codex_response('{"type":"turn.started"}', self.final_file)
+        self.assertFalse(valid)
+        self.assertEqual(output, "")
+        self.assertNotIn("output_byte_limit", error)
+
 
 if __name__ == "__main__":
     unittest.main()

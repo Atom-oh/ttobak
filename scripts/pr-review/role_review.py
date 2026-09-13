@@ -743,10 +743,16 @@ SENSITIVE_KEY = re.compile(
     r"(?i:(?=[A-Za-z0-9_.:-]*" + CREDENTIAL_WORD + r")[A-Za-z0-9_.:-]+)\Z"
 )
 PEM_MARKER = re.compile(r"-----(BEGIN|END) [A-Z ]*PRIVATE KEY-----")
+PEM_VALUE = r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)"
+REDACTION_MARKERS = {
+    "[REDACTED]", "[REDACTED-AWS-KEY]", "[REDACTED-GH-TOKEN]", "[REDACTED-SLACK-TOKEN]",
+    "[REDACTED-API-KEY]", "[REDACTED-GOOGLE-KEY]", "[REDACTED-JWT]",
+    "[REDACTED-PRIVATE-KEY]", "[REDACTED-UNTERMINATED-PEM-BLOCK]",
+}
 
 
 def sensitive_key(value):
-    return isinstance(value, str) and any(
+    return isinstance(value, str) and value not in REDACTION_MARKERS and any(
         SENSITIVE_KEY.fullmatch(part.group())
         for part in re.finditer(r"[A-Za-z0-9_.:-]+", value)
     )
@@ -757,6 +763,20 @@ def strip_controls(value):
     value = re.sub(r"(?:\x1b[\]PX^_]|\x9d|\x90|\x98|\x9e|\x9f).*?(?:\x07|\x9c|\x1b\\|$)", "", value, flags=re.S)
     value = re.sub(r"\x1b[ -/]*[0-~]", "", value)
     return "".join(c for c in value if c in "\n\r\t" or unicodedata.category(c) not in ("Cc", "Cf", "Zl", "Zp"))
+
+
+def quoted_literal(value, start):
+    quote, index = value[start], start + 1
+    while index < len(value) and value[index] != quote:
+        index += 2 if value[index] == "\\" else 1
+    if index >= len(value):
+        return len(value), None
+    end = index + 1
+    try:
+        decoded = strict_json(value[start:end]) if quote == '"' else ast.literal_eval(value[start:end])
+    except (Invalid, ValueError, SyntaxError):
+        return end, None
+    return end, decoded if isinstance(decoded, str) else None
 
 
 def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
@@ -828,24 +848,38 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
                 decoded = None
             if isinstance(decoded, str) and decoded != value:
                 return scrub(decoded, _remaining, _depth + 1, False)
+        # Keep complete PEM spans intact before individual quoted fragments are scrubbed.
+        value = re.sub(PEM_VALUE, "[REDACTED]", value, flags=re.S)
         # Scan quoted fragments once; an unterminated fragment consumes the tail.
         pieces, start, index = [], 0, 0
         while index < len(value):
-            if value[index] != '"':
+            if value[index] not in "\"'" or (
+                value[index] == "'" and index and value[index - 1].isalnum()
+            ):
                 index += 1
                 continue
             opening = index
-            index += 1
-            while index < len(value) and value[index] != '"':
-                index += 2 if value[index] == "\\" else 1
-            if index >= len(value):
-                break
-            index += 1
-            literal = value[opening:index]
-            try:
-                decoded = strict_json(literal)
-            except Invalid:
+            index, decoded = quoted_literal(value, opening)
+            if decoded is None:
                 continue
+            literals = [decoded]
+            while index < len(value):
+                next_start = index
+                while next_start < len(value) and value[next_start].isspace():
+                    next_start += 1
+                if next_start >= len(value) or value[next_start] != "+":
+                    break
+                next_start += 1
+                while next_start < len(value) and value[next_start].isspace():
+                    next_start += 1
+                if next_start >= len(value) or value[next_start] not in "\"'":
+                    break
+                end, following = quoted_literal(value, next_start)
+                if following is None:
+                    break
+                literals.append(following)
+                index = end
+            decoded = "".join(literals)
             pieces.extend((value[start:opening], canonical(scrub(decoded, _remaining, _depth + 1, False))))
             start = index
         if pieces:
@@ -860,7 +894,7 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
     # consumes either a nonempty body or a line break, including bare CR.
     block_line = r"(?=[+-]?[ \t\r\n])[^\r\n]*(?:" + line_break + r"|\Z)"
     patterns = (
-        r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)",
+        PEM_VALUE,
         r"\b(?:AKIA|ASIA|ABIA|ACCA)[A-Z0-9]{16}\b",
         r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b",
         r"\bsk-[A-Za-z0-9_-]{16,}",

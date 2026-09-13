@@ -108,7 +108,7 @@ class IntegrityTests(unittest.TestCase):
                 self.assertFalse(result["valid"])
                 self.assertIn("quota_diagnostic", result["failure_codes"])
 
-    def assert_codex_overflow_stops_retry(self, final_file=False):
+    def assert_codex_overflow_stops_retry(self, final_file=False, malformed_stream=False):
         calls = 0
         def reply(command, *unused):
             nonlocal calls
@@ -123,6 +123,8 @@ class IntegrityTests(unittest.TestCase):
                 {"type": "item.completed", "item": {"type": "agent_message", "text": response}},
                 {"type": "turn.completed"},
             ))
+            if calls == 1 and malformed_stream:
+                events = "not a JSONL event"
             return 0, events, "Nonterminal CLI notice"
         with patch.object(run_role, "execute", side_effect=reply):
             run_role.run(self.work, "codex")
@@ -143,6 +145,9 @@ class IntegrityTests(unittest.TestCase):
 
     def test_codex_final_file_overflow_survives_other_diagnostics(self):
         self.assert_codex_overflow_stops_retry(final_file=True)
+
+    def test_codex_final_overflow_survives_malformed_stream_without_retry(self):
+        self.assert_codex_overflow_stops_retry(final_file=True, malformed_stream=True)
 
     def test_chair_rejects_model_selection_failure_even_with_pass_footer(self):
         reply = (0, "Reviewed candidates.\nVERDICT: PASS\n",
