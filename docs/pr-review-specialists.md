@@ -70,6 +70,19 @@ so rerunning the same workflow preserves earlier attempts. GitHub documents
 [immutable v4 artifacts](https://github.com/actions/upload-artifact/tree/v4#not-uploading-to-the-same-artifact)
 and an incrementing `github.run_attempt` for reruns.
 
+Upload requires successful workspace initialization and evidence validation.
+Initialization creates a private fresh directory and records its device/inode;
+validation reopens that same directory without following links. Only the existing
+plan/source/summary and known specialist result/request/timing/flag names qualify.
+Directory/file symlinks, hardlinks, nonregular files and replacement workspaces
+withhold upload. The validator opens files relative to pinned directory descriptors
+with `O_NOFOLLOW`, copies regular files into a fresh private staging directory and
+rejects changes during copying. The action uploads only these copies, preserving
+the artifact layout without following later source-tree replacements. Raw diff,
+prompt and CLI output paths remain excluded. Safe partial diagnostics can still be
+archived after a failed review; failed initialization/validation posts BLOCKED
+without uploading the unsafe inputs.
+
 The workflow gate and comment run after failures with `!cancelled()`. PASS requires
 successful specialist/synthesis execution, successful evidence upload with an
 artifact ID, no failed-coverage signal, and exactly one terminal PASS verdict.

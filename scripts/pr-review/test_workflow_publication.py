@@ -1,5 +1,6 @@
 """Run the workflow's actual publication shell with offline GitHub responses."""
 
+import glob
 import os
 from pathlib import Path
 import re
@@ -45,7 +46,7 @@ def allowed(block, context, failed=False, cancelled=False):
     condition = condition.replace("!cancelled()", str(not cancelled))
     condition = re.sub(r"steps\.[\w.-]+", lambda m: repr(context.get(m[0], "")), condition)
     condition = condition.replace("&&", " and ").replace("||", " or ")
-    if not re.fullmatch(r"[\w\s'\"=!.()\-]+", condition):
+    if not re.fullmatch(r"[\w\s'\"=!.()/\-]+", condition):
         raise AssertionError(f"Unsupported workflow condition: {condition}")
     return bool(eval(condition, {"__builtins__": {}}, {}))
 
@@ -71,7 +72,9 @@ class PublicationTests(unittest.TestCase):
             "FAKE_HEAD": HEAD,
             "TEST_ROOT": str(self.root),
             "GITHUB_OUTPUT": str(self.root / "outputs"),
+            "RUNNER_TEMP": str(self.root / "runner-temp"),
         }
+        (self.root / "runner-temp").mkdir()
         fake = self.root / "gh"
         fake.write_text("""#!/usr/bin/env python3
 import os,pathlib,sys
@@ -105,15 +108,20 @@ else:
         )
 
     def publish(self, review="success", evidence="success", artifact="42",
-                report="Reviewed complete input.\nVERDICT: PASS\n", cancelled=False):
+                report="Reviewed complete input.\nVERDICT: PASS\n", cancelled=False,
+                workspace="success", artifact_input="success"):
         for name in ("outputs", "published", "review.md"):
             (self.root / name).unlink(missing_ok=True)
         self.context = {key: value for key, value in self.context.items()
                         if not key.startswith("steps.")}
         for name, outcome in (
+            ("Prepare fresh review workspace", workspace),
+            ("Validate and stage specialist evidence", artifact_input),
             ("Run specialists and conditionally adjudicate findings", review),
             ("Preserve specialist scope and execution evidence", evidence),
         ):
+            if name not in self.blocks:
+                continue
             step_id = scalar(self.blocks[name], "id")
             self.context[f"steps.{step_id}.outcome"] = outcome
             if name.startswith("Preserve"):
@@ -139,6 +147,145 @@ else:
             self.post_result = self.run_step("Post review comment (upsert)")
         path = self.root / "published"
         return path.read_text() if path.exists() else ""
+
+    def step_with_outputs(self, name):
+        (self.root / "outputs").unlink(missing_ok=True)
+        result = self.run_step(name)
+        step_id = scalar(self.blocks[name], "id")
+        self.context[f"steps.{step_id}.outcome"] = "success" if result.returncode == 0 else "failure"
+        if (self.root / "outputs").exists():
+            for line in (self.root / "outputs").read_text().splitlines():
+                key, value = line.split("=", 1)
+                self.context[f"steps.{step_id}.outputs.{key}"] = value
+        return result
+
+    def prepare_artifacts(self):
+        result = self.step_with_outputs("Prepare fresh review workspace")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        work = self.root / "pr-review"
+        (work / "slot").mkdir()
+        (work / "role-plan.json").write_text('{"head_sha":"' + HEAD + '"}\n')
+        (work / "slot/codex-result.json").write_text('{"valid":false}\n')
+        return work
+
+    def upload_candidates(self, before_upload=None):
+        # Run the actual validator shell, then resolve the action's actual path
+        # input as a file consumer. The sink deliberately follows links like the
+        # uploader; unsafe inputs must never reach it. No provider/network calls.
+        validation = self.blocks.get("Validate and stage specialist evidence")
+        if validation and allowed(validation, self.context, failed=True):
+            self.validation_result = self.step_with_outputs("Validate and stage specialist evidence")
+        if before_upload:
+            before_upload()
+        upload = self.blocks["Preserve specialist scope and execution evidence"]
+        self.upload_ran = allowed(upload, self.context, failed=True)
+        if not self.upload_ran:
+            return []
+        paths = scalar(upload, "path", indent=10)
+        if paths == "|":
+            paths = "\n".join(re.findall(r"^            (.+)$", upload, re.M))
+        paths = expand(paths.replace("/tmp/", str(self.root) + "/"), self.context)
+        files = []
+        for pattern in paths.splitlines():
+            for name in glob.glob(pattern):
+                path = Path(name)
+                candidates = path.rglob("*") if path.is_dir() else [path]
+                files.extend(item.read_bytes() for item in candidates if item.is_file())
+        return files
+
+    def test_rejected_workspace_symlink_never_reaches_upload(self):
+        foreign = self.root / "foreign"
+        (foreign / "slot").mkdir(parents=True)
+        secret = self.root / "credential"
+        secret.write_text("OFFLINE_SECRET_MUST_NOT_UPLOAD")
+        (foreign / "slot/leak-result.json").symlink_to(secret)
+        (self.root / "pr-review").symlink_to(foreign, target_is_directory=True)
+        result = self.step_with_outputs("Prepare fresh review workspace")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.upload_candidates(), [])
+        self.assertFalse(self.upload_ran)
+        self.assert_blocked(workspace="failure", artifact_input="skipped",
+                            review="skipped", evidence="skipped")
+
+    def test_nested_artifact_symlink_never_reaches_upload(self):
+        work = self.prepare_artifacts()
+        secret = self.root / "credential"
+        secret.write_text("OFFLINE_SECRET_MUST_NOT_UPLOAD")
+        (work / "slot/codex-result.json").unlink()
+        (work / "slot/codex-result.json").symlink_to(secret)
+        self.assertEqual(self.upload_candidates(), [])
+        self.assertFalse(self.upload_ran)
+        self.assert_blocked(artifact_input="failure", evidence="skipped")
+
+    def test_root_artifact_symlink_never_reaches_upload(self):
+        work = self.prepare_artifacts()
+        secret = self.root / "credential"
+        secret.write_text("OFFLINE_SECRET_MUST_NOT_UPLOAD")
+        (work / "role-plan.json").unlink()
+        (work / "role-plan.json").symlink_to(secret)
+        self.assertEqual(self.upload_candidates(), [])
+        self.assertFalse(self.upload_ran)
+
+    def test_unknown_artifact_name_cannot_extend_the_upload_allowlist(self):
+        work = self.prepare_artifacts()
+        (work / "slot/leak-result.json").write_text("unowned output")
+        self.assertEqual(self.upload_candidates(), [])
+        self.assertFalse(self.upload_ran)
+
+    def test_nonregular_artifact_is_rejected_without_blocking_read(self):
+        work = self.prepare_artifacts()
+        (work / "slot/codex-result.json").unlink()
+        os.mkfifo(work / "slot/codex-result.json")
+        self.assertEqual(self.upload_candidates(), [])
+        self.assertFalse(self.upload_ran)
+
+    def test_slot_directory_symlink_never_reaches_upload(self):
+        work = self.prepare_artifacts()
+        (work / "slot").rename(self.root / "foreign-slot")
+        (work / "slot").symlink_to(self.root / "foreign-slot", target_is_directory=True)
+        self.assertEqual(self.upload_candidates(), [])
+        self.assertFalse(self.upload_ran)
+
+    def test_replaced_workspace_cannot_supply_another_runs_evidence(self):
+        work = self.prepare_artifacts()
+        work.rename(self.root / "original-work")
+        (work / "slot").mkdir(parents=True)
+        (work / "slot/codex-result.json").write_text("foreign run")
+        self.assertEqual(self.upload_candidates(), [])
+        self.assertFalse(self.upload_ran)
+
+    def test_hardlinked_artifact_is_not_an_owned_output(self):
+        work = self.prepare_artifacts()
+        secret = self.root / "credential"
+        secret.write_text("OFFLINE_SECRET_MUST_NOT_UPLOAD")
+        (work / "slot/codex-result.json").unlink()
+        os.link(secret, work / "slot/codex-result.json")
+        self.assertEqual(self.upload_candidates(), [])
+        self.assertFalse(self.upload_ran)
+
+    def test_safe_failure_artifacts_are_preserved_without_raw_inputs(self):
+        work = self.prepare_artifacts()
+        (work / "slot/kiro-preflight-kiro-sol.flag").write_text("preflight_failed\n")
+        (work / "roles").mkdir()
+        (work / "roles/raw.diff").write_text("PRIVATE_DIFF_MUST_NOT_UPLOAD")
+        uploaded = self.upload_candidates()
+        self.assertTrue(self.upload_ran)
+        self.assertEqual(sorted(uploaded), sorted([
+            b'{"head_sha":"' + HEAD.encode() + b'"}\n',
+            b'{"valid":false}\n', b"preflight_failed\n",
+        ]))
+
+    def test_upload_uses_regular_copies_after_source_changes(self):
+        work = self.prepare_artifacts()
+        secret = self.root / "credential"
+        secret.write_text("OFFLINE_SECRET_MUST_NOT_UPLOAD")
+        def replace_source():
+            (work / "slot/codex-result.json").unlink()
+            (work / "slot/codex-result.json").symlink_to(secret)
+        uploaded = self.upload_candidates(before_upload=replace_source)
+        self.assertTrue(self.upload_ran)
+        self.assertIn(b'{"valid":false}\n', uploaded)
+        self.assertNotIn(secret.read_bytes(), uploaded)
 
     def assert_blocked(self, **kwargs):
         body = self.publish(**kwargs)
@@ -205,6 +352,10 @@ else:
     def test_failed_coverage_cannot_publish_pass(self):
         self.env["chair_failed"] = "1"
         self.assert_blocked()
+
+    def test_missing_initialization_or_validation_cannot_publish_pass(self):
+        self.assert_blocked(workspace="skipped")
+        self.assert_blocked(artifact_input="failure")
 
     def test_changed_head_never_posts(self):
         self.env["FAKE_HEAD"] = "b" * 40
