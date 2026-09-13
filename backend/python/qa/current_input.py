@@ -18,7 +18,10 @@ GUIDANCE = (
     'Do not invent a correction history when prior input was unrecorded. '
     'Receipts and digests attest input presence, not content truth or saved-source verification. '
     'Keep client input, validated saved sources, and conversation labels distinct. '
-    'Use receipts to interpret the request, without reciting bookkeeping unless asked.'
+    'Opaque digests are internal comparison bookkeeping; use clientSnapshotChange to interpret continuity. '
+    'Do not recite hashes, character/byte counts, receipt fields or accounting unless the user '
+    'specifically asks. Never invent input-size comparisons: a changed digest establishes '
+    'different snapshots, not equal, increased or decreased length.'
 )
 
 
@@ -42,14 +45,17 @@ def _previous_receipt(history):
             value = json.loads(text[len(PREFIX):])
         except (ValueError, TypeError, UnicodeError):
             return None
+        version = value.get('version') if type(value) is dict else None
         fields = {'version', 'scope', 'meetingId', 'contextKind', 'clientContextReceived',
-                  'contextCharacters', 'contextSHA256', 'clientSnapshotChange'}
+                  'contextSHA256', 'clientSnapshotChange'}
+        if version == 1:
+            fields.add('contextCharacters')
         if (type(value) is not dict or set(value) != fields or type(value['version']) is not int
-                or value['version'] != 1 or value['scope'] != 'this_user_turn'
+                or version not in (1, 2) or value['scope'] != 'this_user_turn'
                 or type(value['meetingId']) is not str or type(value['clientContextReceived']) is not bool
                 or value['contextKind'] not in ('client_live', 'saved_meeting', 'none')
                 or value['clientContextReceived'] != (value['contextKind'] == 'client_live')
-                or type(value['contextCharacters']) is not int or value['contextCharacters'] < 0
+                or (version == 1 and (type(value['contextCharacters']) is not int or value['contextCharacters'] < 0))
                 or type(value['contextSHA256']) is not str
                 or (value['contextSHA256'] != '' if value['contextKind'] == 'none'
                     else re.fullmatch(r'[0-9a-f]{64}', value['contextSHA256']) is None)):
@@ -74,9 +80,9 @@ def request_user_message(question, history, transcript=None, meeting_id=None, *,
         else:
             change = 'newly_supplied'
     receipt = {
-        'version': 1, 'scope': 'this_user_turn', 'meetingId': meeting_id or '',
+        'version': 2, 'scope': 'this_user_turn', 'meetingId': meeting_id or '',
         'contextKind': kind, 'clientContextReceived': received,
-        'contextCharacters': len(text), 'contextSHA256': digest, 'clientSnapshotChange': change,
+        'contextSHA256': digest, 'clientSnapshotChange': change,
     }
     return {'role': 'user', 'content': [
         {'text': question},
