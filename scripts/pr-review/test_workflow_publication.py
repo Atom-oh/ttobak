@@ -109,8 +109,11 @@ else:
 
     def publish(self, review="success", evidence="success", artifact="42",
                 report="Reviewed complete input.\nVERDICT: PASS\n", cancelled=False,
-                workspace="success", artifact_input="success"):
-        for name in ("outputs", "published", "review.md"):
+                workspace="success", artifact_input="success", staged=None):
+        report_dir = self.root / "report-copy"
+        report_dir.mkdir(exist_ok=True)
+        (report_dir / "review.md").unlink(missing_ok=True)
+        for name in ("outputs", "published"):
             (self.root / name).unlink(missing_ok=True)
         self.context = {key: value for key, value in self.context.items()
                         if not key.startswith("steps.")}
@@ -126,8 +129,9 @@ else:
             self.context[f"steps.{step_id}.outcome"] = outcome
             if name.startswith("Preserve"):
                 self.context[f"steps.{step_id}.outputs.artifact-id"] = artifact
+        self.context["steps.artifact_input.outputs.path"] = str(staged or report_dir)
         if report is not None:
-            (self.root / "review.md").write_text(report)
+            (report_dir / "review.md").write_text(report)
         failed = review != "success" or evidence != "success"
         gate = self.blocks["Check for blocking issues"]
         if allowed(gate, self.context, failed, cancelled):
@@ -340,6 +344,30 @@ else:
         self.assertIn("Reviewed complete input.", body)
         self.assertIn(HEAD, body)
 
+    def test_large_final_reports_keep_full_artifacts_and_bounded_comments(self):
+        for unit in ("MINOR: checked detail.\n", "검토한 내용🙂\n"):
+            for verdict, status in (("PASS", "PASSED"), ("FAIL", "BLOCKED")):
+                with self.subTest(unit=unit, verdict=verdict):
+                    work = self.prepare_artifacts()
+                    report = unit * 10000 + "VERDICT: " + verdict + "\n"
+                    (work / "review.md").write_text(report)
+                    uploaded = self.upload_candidates()
+                    stage = Path(self.context["steps.artifact_input.outputs.path"])
+                    body = self.publish(report=report, staged=stage)
+                    self.assertLess(len(body.encode()), 60000)
+                    self.assertIn("**Status: " + status + "**", body)
+                    self.assertIn(HEAD, body)
+                    self.assertIn("attempt: 1", body)
+                    self.assertIn("https://github.com/example/repo/actions/runs/1234/artifacts/42", body)
+                    self.assertIn("Full report", body)
+                    self.assertIn(report.encode(), uploaded)
+
+    def test_final_report_symlink_cannot_be_archived(self):
+        work = self.prepare_artifacts()
+        (work / "review.md").symlink_to(self.root / "gh")
+        self.assertEqual(self.upload_candidates(), [])
+        self.assertFalse(self.upload_ran)
+
     def test_synthesis_valid_trailing_blank_lines_keep_terminal_verdict(self):
         body = self.publish(report="Reviewed complete input.\nVERDICT: PASS\n\n")
         self.assertIn("**Status: PASSED**", body)
@@ -364,6 +392,7 @@ else:
 
     def test_successful_upload_without_artifact_receipt_is_blocked(self):
         self.assert_blocked(artifact="")
+        self.assert_blocked(staged=self.root / "missing-report")
 
     def test_missing_or_incomplete_verdict_is_blocked(self):
         for report in (None, "", "VERDICT: PASS\n", "VERDICT: PASS\nunfinished\n",

@@ -124,7 +124,7 @@ jobs:
           mkdir -p /tmp/pr-review
           bash scripts/pr-review/run-panel.sh /tmp/pr-diff-truncated.txt /tmp/pr-review/lenses /tmp/pr-review
           bash scripts/pr-review/synthesize.sh /tmp/pr-diff-truncated.txt /tmp/pr-review \
-            "$PR_NUMBER" "$PR_TITLE" /tmp/review.md
+            "$PR_NUMBER" "$PR_TITLE" /tmp/pr-review/review.md
           echo "panel_responded=$(tr '\n' ' ' < /tmp/pr-review/responded.txt 2>/dev/null)" >> "$GITHUB_ENV"
 
       - name: Validate and stage specialist evidence
@@ -142,7 +142,7 @@ jobs:
           import tempfile
 
           tags = ("codex", "kiro-fable", "kiro-sol", "claude-self")
-          root_names = {"role-plan.json", "role-summary.json", "role-source.json"}
+          root_names = {"role-plan.json", "role-summary.json", "role-source.json", "review.md"}
           slot_names = {f"{tag}-{kind}.json" for tag in tags for kind in ("result", "request", "timing")}
           slot_names |= {name for tag in tags for name in (
               f"{tag}-duplicate.flag", f"role-{tag}-terminal.flag", f"kiro-preflight-{tag}.flag")}
@@ -213,6 +213,7 @@ jobs:
           REVIEW_OUTCOME: ${{ steps.review.outcome }}
           EVIDENCE_OUTCOME: ${{ steps.evidence.outcome }}
           ARTIFACT_ID: ${{ steps.evidence.outputs.artifact-id }}
+          REPORT: ${{ steps.artifact_input.outputs.path }}/review.md
         run: |
           set -euo pipefail
           result=fail
@@ -227,9 +228,9 @@ jobs:
             reason=evidence_unavailable
           elif [ "${chair_failed:-0}" = 1 ]; then
             reason=review_incomplete
-          elif [ -s /tmp/review.md ] && [ "$(grep -c '^VERDICT:' /tmp/review.md)" = 1 ] &&
-               [ "$(awk 'NF{n++} END{print n+0}' /tmp/review.md)" -gt 1 ]; then
-            case "$(awk 'NF{last=$0} END{print last}' /tmp/review.md)" in
+          elif [ -s "$REPORT" ] && [ "$(grep -c '^VERDICT:' "$REPORT")" = 1 ] &&
+               [ "$(awk 'NF{n++} END{print n+0}' "$REPORT")" -gt 1 ]; then
+            case "$(awk 'NF{last=$0} END{print last}' "$REPORT")" in
               "VERDICT: PASS") result=pass; reason=complete ;;
               "VERDICT: FAIL") reason=blocking_review ;;
             esac
@@ -252,6 +253,8 @@ jobs:
           ARTIFACT_INPUT_OUTCOME: ${{ steps.artifact_input.outcome }}
           REVIEW_OUTCOME: ${{ steps.review.outcome }}
           EVIDENCE_OUTCOME: ${{ steps.evidence.outcome }}
+          ARTIFACT_ID: ${{ steps.evidence.outputs.artifact-id }}
+          REPORT: ${{ steps.artifact_input.outputs.path }}/review.md
         run: |
           set -euo pipefail
           CURRENT_HEAD="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.head.sha')"
@@ -268,7 +271,11 @@ jobs:
           fi
           # Operational failures must not reuse a partial or stale PASS report.
           if [ "$GATE_OUTCOME" = success ] && { [ "$GATE_REASON" = complete ] || [ "$GATE_REASON" = blocking_review ]; }; then
-            sed '/^VERDICT:/d' /tmp/review.md > /tmp/review-clean.md
+            if [ "$(wc -c < "$REPORT")" -le 50000 ]; then
+              sed '/^VERDICT:/d' "$REPORT" > /tmp/review-clean.md
+            else
+              echo "Full report exceeds the comment budget; read review.md in the artifact below. Review coverage and verdict are unchanged." > /tmp/review-clean.md
+            fi
           else
             echo "No complete review with successfully archived evidence is available. This run cannot authorize merge." > /tmp/review-clean.md
           fi
@@ -287,10 +294,14 @@ jobs:
             echo "Workflow run: ${{ github.run_id }} · attempt: ${{ github.run_attempt }}"
             echo ""
             cat /tmp/review-clean.md
+            if [ "$EVIDENCE_OUTCOME" = success ] && [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]; then
+              echo "[Full report and evidence](https://github.com/$REPO/actions/runs/${{ github.run_id }}/artifacts/$ARTIFACT_ID)"
+            fi
             echo ""
             echo "---"
             echo "_Triggered by commit \`${{ github.event.pull_request.head.sha }}\` · workflow: \`.github/workflows/pr-review.yml\`_"
           } > /tmp/comment.md
+          test "$(wc -c < /tmp/comment.md)" -lt 60000
           EXISTING=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
             --jq '.[] | select(.body | contains("<!-- multi-ai-pr-review -->")) | .id' 2>/dev/null | head -1)
           if [ -n "$EXISTING" ]; then

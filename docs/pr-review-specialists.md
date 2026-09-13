@@ -83,6 +83,11 @@ prompt and CLI output paths remain excluded. Safe partial diagnostics can still 
 archived after a failed review; failed initialization/validation posts BLOCKED
 without uploading the unsafe inputs.
 
+The full final `review.md` uses the same validated copies; the gate reads that
+archived report. Comments stay below 60,000 UTF-8 bytes, linking the complete
+artifact instead of inlining reports above 50,000 bytes. Only presentation is
+bounded: findings, review input, coverage and verdict are not truncated.
+
 The workflow gate and comment run after failures with `!cancelled()`. PASS requires
 successful specialist/synthesis execution, successful evidence upload with an
 artifact ID, no failed-coverage signal, and exactly one terminal PASS verdict.
