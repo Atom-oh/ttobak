@@ -23,6 +23,7 @@ record deployed consumer acceptance separately.
 | `source_tools.py` | Define/format document, attachment and legacy-text tools for authenticated consumers. |
 | `session_provenance.py` | Recheck every dependency before replay; require an explicit replayable marker and known provenance version. |
 | `delivery_proof.py` | Async REST captures complete reads beyond history limits, includes remaining executor dependencies, and revalidates before delivery. |
+| `current_input.py` | Bind prompt input-presence metadata to its user turn; preserve historical dialogue without treating client input as saved-source proof. |
 
 Runtime integration must preserve the authenticated tool/error boundary and
 expose only allowlisted public source fields. `BUCKET_NAME`, `KB_BUCKET_NAME`

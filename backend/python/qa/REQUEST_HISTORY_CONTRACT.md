@@ -18,6 +18,25 @@ must receive the latest request input and give it priority over earlier live
 input. This is necessary because LiveQAPanel's WebSocket context is a rolling
 UTF-8 window, whereas the HTTP fallback can contain the full current transcript.
 
+`current_input.request_user_message` adds separate server-generated metadata to
+each user turn in sync REST, WebSocket and async execution. It records current
+client-input presence, meeting scope, context kind, character count and digest,
+without another raw-text copy or new logging. The system excerpt is rebuilt for
+the latest request; stored receipts describe only their own user turn. A changed
+digest can mean growth, a rolling window or a correction, not that an earlier
+assistant answer was wrong. Unchanged input is explicit. Older sessions retain
+their valid dialogue with `prior_unrecorded`; the helper never rewrites earlier
+turns or interprets a receipt-shaped question as server metadata.
+
+These prompt receipts neither authorize retrieval nor replace the dependency
+receipts above. They are not saved-source verification. Missing current client
+input cannot inherit presence from an old receipt, and all saved-source/grant
+checks still apply. The input policy preserves conversation labels and prohibits
+backdating a current draft to earlier input. It does not rewrite model output.
+Local tests inspect real request construction using recorded synthetic payloads
+and placeholder model replies; semantic improvement requires separate real
+three-turn acceptance after reviewed deployment.
+
 Receipts restore only for the same authenticated user and meeting scope. An
 unscoped receipt requires an unscoped request. They never authorize a DynamoDB
 or S3 read. All independently recorded server-source dependencies remain
