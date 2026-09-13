@@ -120,6 +120,32 @@ records producer checks, not public QA deployment or model quality.
 Source checks are point-in-time; model generation and stream delivery are not
 atomic with later source changes. Client live input is not saved-source proof.
 
+### Follow-up source details
+
+Both transports retain server-produced provenance when a valid follow-up uses
+history without new tool calls. `history_details.py` stores only allowlisted
+metadata, never source bodies, in a separate `SESSION#{userId}#{sessionId}` /
+`SOURCE_DETAILS` row. Its SHA-256 binding covers the user, session, exact serialized
+messages, dependencies and detail payload. The existing message item does not
+grow. Metadata has a 64-KiB JSON budget and seven-day `pendingShareExpiresAt`
+retention, checked on read as well as using the table's active TTL attribute.
+
+Restore first revalidates all source/grant/read-tool dependencies, checks the
+binding and source identities, then revalidates before exposing history/details.
+Changed or revoked sources discard both. Returned `provenanceScope:
+validated_history` means attribution from still-valid conversation evidence,
+not a new retrieval or a claim that every listed source supports the new answer.
+No mutation or model call is replayed for attribution.
+
+Older valid sessions and missing, expired, mismatched, unavailable or oversized
+metadata retain their validated conversation. Details fall back to safe dependency
+identities with `provenanceScope: legacy_identity`, without inventing excerpts,
+page locations or current titles. This does not make untracked legacy history
+replayable. Attachment attempt/result/locations are typed and allowlisted; title
+limits also apply to restored metadata. A restored-detail budget of 320 KiB
+returns an explicit `legacy_identity_unavailable` / `DETAIL_LIMIT` marker if even
+identity attribution exceeds it. Existing final transport limits still apply.
+
 ## Completion and delivery
 
 Both tool loops validate tracked sources after the final model call and before

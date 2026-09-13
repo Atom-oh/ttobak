@@ -453,6 +453,12 @@ and revision; changes or revocation invalidate the complete derived history.
   attempt/result/location. Do not forward arbitrary provider metadata or invent
   audio timestamps for document positions. Public titles have a presentation bound
   and expose `titleTruncated:true` when shortened; source arrays remain complete.
+- No-tool follow-ups restore source attribution only after live dependency
+  validation. `provenanceScope: validated_history` identifies historical evidence,
+  not a new retrieval. Valid older sessions retain dialogue with explicit
+  `legacy_identity` references when detailed metadata is unavailable. Changed or
+  revoked dependencies clear both history and attribution. See the source
+  contract for metadata/identity bounds and incomplete-attribution markers.
 - Replay requires current access/revisions for every source plus matching
   fingerprints for supported read-only tools. Strict callbacks consume all pages,
   recheck exact membership/canonical references and attest complete reads.

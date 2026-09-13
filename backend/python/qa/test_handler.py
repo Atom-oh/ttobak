@@ -1433,7 +1433,7 @@ def load_tests(loader, tests, pattern):
                    'test_indexed_sources', 'test_manual_kb', 'test_shared_kb',
                    'test_tool_history', 'test_account_reads', 'test_runtime_tool_history',
                    'test_binary_consumer_contract', 'test_request_history', 'test_tool_context',
-                   'test_completion_safety', 'test_named_knowledge'):
+                   'test_completion_safety', 'test_named_knowledge', 'test_history_details'):
         tests.addTests(loader.loadTestsFromName(module))
     return tests
 

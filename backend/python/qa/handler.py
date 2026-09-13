@@ -27,6 +27,7 @@ from session_provenance import (
     new_source_state, restore_messages, validate_sources, SourceValidationError,
 )
 from web_search import redact_tool_input_for_log
+import history_details
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -623,7 +624,7 @@ def retrieve_from_kb(question, number_of_results=5, user_id=None):
     return _source_access().retrieve_from_kb(question, number_of_results, user_id)
 
 
-def load_session(session_id, user_id=None, source_state=None):
+def load_session(session_id, user_id=None, source_state=None, source_details=None):
     """Load conversation history from DynamoDB."""
     if not session_id:
         return []
@@ -658,6 +659,26 @@ def load_session(session_id, user_id=None, source_state=None):
                     messages.pop()
                     continue
                 break
+            if messages and source_details is not None:
+                payload = None
+                try:
+                    stored = table.get_item(Key={'PK': pk, 'SK': 'SOURCE_DETAILS'}, ConsistentRead=True).get('Item', {})
+                    candidate = stored.get('details')
+                    if (type(candidate) is str and len(candidate.encode()) <= history_details.MAX_SAVED_BYTES
+                            and int(stored.get('pendingShareExpiresAt', 0)) > int(time.time())
+                            and history_details.binding(user_id, session_id, item['messages'],
+                                item['sourceDependencies'], candidate) == stored.get('binding')):
+                        payload = candidate
+                except Exception:
+                    logger.warning('Stored history detail metadata is unavailable; using validated identities')
+                restored = history_details.restore(item['sourceDependencies'], payload, KB_BUCKET_NAME, BUCKET_NAME)
+                # Metadata failure does not discard valid dialogue. A source
+                # change while reading metadata still invalidates both.
+                validate_sources(state, lambda dep: _source_is_current(user_id, dep, state),
+                                 tool_history=_tool_history(user_id))
+                for detail in restored:
+                    if detail not in source_details:
+                        source_details.append(detail)
             return messages
         return []
     except Exception as e:
@@ -665,16 +686,28 @@ def load_session(session_id, user_id=None, source_state=None):
         return []
 
 
-def save_session(session_id, messages, user_id=None, source_state=None):
+def save_session(session_id, messages, user_id=None, source_state=None, source_details=None):
     """Save conversation history to DynamoDB with 7-day TTL."""
     if not session_id:
         return
     pk = f"SESSION#{user_id}#{session_id}" if user_id else f"SESSION#{session_id}"
+    serialized = json.dumps(messages, ensure_ascii=False)
+    if source_details is not None:
+        try:
+            payload = history_details.pack(source_details, (source_state or {}).get('dependencies', []),
+                                           KB_BUCKET_NAME, BUCKET_NAME)
+            if payload is not None:
+                marker = history_details.binding(user_id, session_id, serialized,
+                                                  (source_state or {}).get('dependencies', []), payload)
+                table.put_item(Item={'PK': pk, 'SK': 'SOURCE_DETAILS', 'details': payload, 'binding': marker,
+                                     'pendingShareExpiresAt': int(time.time()) + 604800})
+        except Exception:
+            logger.warning('History detail metadata could not be stored; validated identity fallback remains available')
     try:
         table.put_item(Item={
             "PK": pk,
             "SK": "MESSAGES",
-            "messages": json.dumps(messages, ensure_ascii=False),
+            "messages": serialized,
             "sourceProvenanceVersion": 1,
             "sourceDependencies": (source_state or {}).get('dependencies', []),
             "sourceReplayable": (source_state or {}).get('replayable', False),
@@ -1025,7 +1058,7 @@ def agentic_converse(messages, transcript=None, session_id=None, user_id=None, m
 
     # Save conversation
     _validate_answer_sources(user_id, source_state, context['tool_history'])
-    save_session(session_id, messages, user_id=user_id, source_state=source_state)
+    save_session(session_id, messages, user_id=user_id, source_state=source_state, source_details=source_details)
 
     # Deduplicate sources
     seen = set()
@@ -1056,7 +1089,7 @@ def handle_ask(question, context=None, meeting_id=None, session_id=None, user_id
         if err:
             return response(err['status'], {'error': {'code': err['code'], 'message': err['message']}})
         # Load existing conversation or start new
-        messages = load_session(session_id, user_id=user_id, source_state=source_state)
+        messages = load_session(session_id, user_id=user_id, source_state=source_state, source_details=source_details)
 
         # User message is just the question — context is in system prompt
         messages.append({"role": "user", "content": [{"text": question}]})
@@ -1129,7 +1162,7 @@ def handle_meeting_ask(question, meeting_id, user_id, session_id=None):
         return response(err['status'], {'error': {'code': err['code'], 'message': err['message']}})
 
     try:
-        messages = load_session(session_id, user_id=user_id, source_state=source_state)
+        messages = load_session(session_id, user_id=user_id, source_state=source_state, source_details=source_details)
 
         user_content = f"[미팅 '{meeting_id}'의 트랜스크립트가 있습니다. search_transcript 도구로 검색할 수 있습니다.]\n\n{question}"
         messages.append({"role": "user", "content": [{"text": user_content}]})
@@ -1348,7 +1381,7 @@ def handle_ask_stream(event):
             user_id, event.get('meetingId'), transcript, source_state=source_state, source_details=source_details)
         if err:
             return _stream_error(apigw, connection_id, session_id, err['code'], err['message'])
-        messages = load_session(session_id, user_id=user_id, source_state=source_state)
+        messages = load_session(session_id, user_id=user_id, source_state=source_state, source_details=source_details)
         user_content = question
         if transcript:
             user_content = f"[현재 미팅 트랜스크립트가 있습니다. search_transcript 도구로 검색할 수 있습니다.]\n\n{question}"
@@ -1585,7 +1618,7 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
                 break
 
     _validate_answer_sources(user_id, source_state, context['tool_history'])
-    save_session(session_id, messages, user_id=user_id, source_state=source_state)
+    save_session(session_id, messages, user_id=user_id, source_state=source_state, source_details=source_details)
 
     seen = set()
     unique_sources = []
