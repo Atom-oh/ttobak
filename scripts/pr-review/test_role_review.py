@@ -469,6 +469,50 @@ class RoleReviewTests(unittest.TestCase):
                 if name == "jwt-prefixes":
                     self.assertIn(payload, scrubbed)
 
+    def test_yaml_long_indentation_before_bare_cr_in_valid_review_is_bounded(self):
+        self.prepare()
+        evidence = ("api_key=SYNTHETIC_BEFORE\npassword: |\n" + " " * 50000
+                    + "\rX\n  SYNTHETIC_INSIDE\npassword: |\n  SYNTHETIC_BLOCK\n"
+                    "token=SYNTHETIC_AFTER")
+        # X ends the first block; use a separate credential key for subsequent block content.
+        evidence = evidence.replace("  SYNTHETIC_INSIDE", "  api_key=SYNTHETIC_INSIDE")
+        response = self.response("codex", checks=[{"path": FRONTEND, "evidence": evidence}])
+        scrubbed = self.bounded_scrub(response)
+        self.assertIn("X", scrubbed["checks"][0]["evidence"])
+        result = self.record("codex", response=response)
+        self.assertTrue(result["valid"])
+        for marker in ("SYNTHETIC_BEFORE", "SYNTHETIC_INSIDE", "SYNTHETIC_BLOCK", "SYNTHETIC_AFTER"):
+            self.assertNotIn(marker, json.dumps(scrubbed))
+            self.assertNotIn(marker, json.dumps(result))
+
+    def test_yaml_block_lines_blank_lines_and_endings_preserve_redaction(self):
+        for newline in ("\n", "\r\n", "\r"):
+            for indent in (" ", "\t"):
+                for style in ("|", "|-", "|+", ">", ">-", ">+"):
+                    with self.subTest(newline=repr(newline), indent=repr(indent), style=style):
+                        text = newline.join([
+                            "api_key=SYNTHETIC_BEFORE", "password: " + style,
+                            indent * 50000, "", indent + "SYNTHETIC_INSIDE",
+                            "", indent + "SYNTHETIC_SECOND",
+                            "public: SAFE_OUTSIDE", "token=SYNTHETIC_AFTER",
+                        ])
+                        scrubbed = self.bounded_scrub(text)
+                        self.assertIn("public: SAFE_OUTSIDE", scrubbed)
+                        for marker in ("BEFORE", "INSIDE", "SECOND", "AFTER"):
+                            self.assertFalse("SYNTHETIC_" + marker in scrubbed, "Block credential leaked")
+                        eof = "password: " + style + newline + indent * 50000 + "SYNTHETIC_EOF"
+                        self.assertNotIn("SYNTHETIC_EOF", self.bounded_scrub(eof))
+
+    def test_yaml_environment_values_support_all_line_endings(self):
+        for newline in ("\n", "\r\n", "\r"):
+            with self.subTest(newline=repr(newline)):
+                text = ("name: DATABASE_PASSWORD" + " " * 50000 + newline
+                        + "\t" * 50000 + "value: SYNTHETIC_ENVIRONMENT" + newline
+                        + "public: SAFE_OUTSIDE")
+                scrubbed = self.bounded_scrub(text)
+                self.assertFalse("SYNTHETIC_ENVIRONMENT" in scrubbed, "Environment credential leaked")
+                self.assertIn("public: SAFE_OUTSIDE", scrubbed)
+
     def test_decoded_output_budget_counts_string_values_in_utf8_bytes(self):
         limit = 1024 * 1024
         allowed = {"first": "*" * (limit // 2), "second": "*" * (limit // 2)}

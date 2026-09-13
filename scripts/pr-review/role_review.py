@@ -730,6 +730,10 @@ def scrub(value, _remaining=None):
         r"[A-Za-z0-9_-]+)"
     )
     key = identifier + r"""["']?\s*[:=]\s*"""
+    line_break = r"(?:\r\n?|\n)"
+    # Check indentation/blankness without consuming it twice. Every iteration
+    # consumes either a nonempty body or a line break, including bare CR.
+    block_line = r"(?=[ \t\r\n])[^\r\n]*(?:" + line_break + r"|\Z)"
     patterns = (
         r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)",
         r"\b(?:AKIA|ASIA|ABIA|ACCA)[A-Z0-9]{16}\b",
@@ -745,8 +749,9 @@ def scrub(value, _remaining=None):
         r"""https://hooks\.slack\.com/services/[^\s"'<>]+""",
         r"""(?im)^[ \t]*(?:set-)?cookie["']?[ \t]*:[^\r\n]*""",
         r"""(?i:\bx-origin-verify)["']?\s*:\s*["']?[^\s"',;}\]]+""",
-        key + r"[|>][-+]?[ \t]*\r?\n(?:[ \t]+[^\r\n]*(?:\r?\n|\Z))+",
-        r"""(?i:\bname)\s*:\s*["']?""" + identifier + r"""["']?[ \t]*\r?\n[ \t]*(?i:value)\s*:[^\r\n]*""",
+        key + r"[|>][-+]?[ \t]*" + line_break + r"(?:" + block_line + r")+",
+        r"""(?i:\bname)\s*:\s*["']?""" + identifier + r"""["']?[ \t]*"""
+        + line_break + r"""[ \t]*(?i:value)\s*:[^\r\n]*""",
         key + r"""(?P<quote>["']).*?(?:(?P=quote)|\Z)""",
         key + r"""[^\s"',;}\]]+""",
     )

@@ -37,6 +37,9 @@ URI schemes and JWT headers start at whole-token boundaries; JWT header membersh
 is checked separately from consumption. Bounded subprocess tests cover long
 alphabetic runs, repeated keywords/prefixes, separators, and the other scrubber
 pattern families while retaining valid credential-redaction checks.
+YAML block matching checks indentation without consuming it separately from the
+line body. Blocks include blank lines and recognize LF, CRLF, bare CR and EOF;
+the environment name/value matcher shares the same line-ending rule.
 
 Untrusted stdout and stderr are limited separately to 1 MiB of UTF-8 after
 process capture, before parsing or scrubbing; this is not a streaming capture
