@@ -23,18 +23,20 @@ class CompleteRead:
     value: object
 
 
-def _snapshot(value):
+def _snapshot(value, *, byte_limit=None, node_limit=None):
     """Typed framing preserves list order and bool/number/null distinctions."""
+    byte_limit = MAX_RESULT_BYTES if byte_limit is None else byte_limit
+    node_limit = MAX_NODES if node_limit is None else node_limit
     output, ancestors = bytearray(), set()
     nodes = 0
 
     def emit(data):
-        if len(output) + len(data) > MAX_RESULT_BYTES:
+        if len(output) + len(data) > byte_limit:
             raise HistoryLimit('Tool result exceeds history byte limit')
         output.extend(data)
 
     def text(value):
-        if len(value) > MAX_RESULT_BYTES:
+        if len(value) > byte_limit:
             raise HistoryLimit('Tool text exceeds history byte limit')
         data = value.encode('utf-8', errors='strict')
         emit(str(len(data)).encode() + b':' + data)
@@ -42,7 +44,7 @@ def _snapshot(value):
     def visit(item, depth):
         nonlocal nodes
         nodes += 1
-        if depth > MAX_DEPTH or nodes > MAX_NODES:
+        if depth > MAX_DEPTH or nodes > node_limit:
             raise HistoryLimit('Tool result exceeds history structure limit')
         if item is None:
             emit(b'n')
@@ -71,7 +73,7 @@ def _snapshot(value):
         elif type(item) in (dict, list):
             if id(item) in ancestors:
                 raise ValueError('Invalid tool result structure')
-            if len(item) > MAX_NODES:
+            if len(item) > node_limit:
                 raise HistoryLimit('Tool result exceeds history structure limit')
             ancestors.add(id(item))
             try:
@@ -97,8 +99,8 @@ def _snapshot(value):
     return copied, bytes(output)
 
 
-def fingerprint(value):
-    return hashlib.sha256(b'tool-history-v1\0' + _snapshot(value)[1]).hexdigest()
+def fingerprint(value, **limits):
+    return hashlib.sha256(b'tool-history-v1\0' + _snapshot(value, **limits)[1]).hexdigest()
 
 
 def _user(user_id):
@@ -156,7 +158,7 @@ def is_tool_dependency(dependency):
         'readOnlyTool' in dependency or 'researchReceipt' in dependency)
 
 
-def valid_tool_dependency(dependency):
+def valid_tool_dependency(dependency, **limits):
     try:
         if not isinstance(dependency, dict):
             return False
@@ -176,7 +178,7 @@ def valid_tool_dependency(dependency):
         if receipt['mode'] not in ('quick', 'standard', 'deep'):
             return False
         _user(receipt['researchId'])
-        return revision == fingerprint(['research-receipt-v1', dependency['userId'], receipt])
+        return revision == fingerprint(['research-receipt-v1', dependency['userId'], receipt], **limits)
     except (ValueError, TypeError, KeyError, UnicodeError):
         return False
 
@@ -288,6 +290,8 @@ class ToolHistory:
         def read(user_id, name, arguments):
             if user_id != self.user_id:
                 state['replayable'] = False
+                if state.get('_delivery') is not None:
+                    state['_delivery'].reject()
                 raise ValueError('Readonly callback user differs from current user')
             return self.read(state, name, arguments)
         return {
@@ -357,20 +361,28 @@ class ToolHistory:
             dependency = {'readOnlyTool': name, 'toolInput': arguments, 'userId': self.user_id,
                           'sourceRevision': '0' * 64}
             value = self._value(name, arguments)
+            if state.get('_delivery') is not None:
+                state['_delivery'].readonly(self.user_id, name, arguments, value)
             try:
                 self._capacity(state, tool_dependency_key(dependency))
             except HistoryLimit:
                 self._untracked(state, name, 'DEPENDENCY_LIMIT')
+                if state.get('_delivery') is not None:
+                    state['_delivery'].history_limited()
                 return value
             try:
                 dependency['sourceRevision'] = fingerprint(['readonly-tool-v1', self.user_id, name, arguments, value])
             except HistoryLimit:
                 self._untracked(state, name, 'RESULT_LIMIT')
+                if state.get('_delivery') is not None:
+                    state['_delivery'].history_limited()
                 return value
             remember_source(state, dependency)
             return value
         except Exception:
             state['replayable'] = False
+            if state.get('_delivery') is not None:
+                state['_delivery'].reject()
             raise
 
     def research_receipt(self, state, arguments, result):
@@ -392,16 +404,20 @@ class ToolHistory:
                           'sourceRevision': fingerprint(['research-receipt-v1', self.user_id, receipt])}
             if not valid_tool_dependency(dependency):
                 raise ValueError('Invalid research receipt')
+            if state.get('_delivery') is not None:
+                state['_delivery'].source(dependency)
             self._capacity(state, tool_dependency_key(dependency))
             remember_source(state, dependency)
         except HistoryLimit:
             self._untracked(state, 'start_research', 'DEPENDENCY_LIMIT')
+            if state.get('_delivery') is not None:
+                state['_delivery'].history_limited()
         except Exception:
             self._untracked(state, 'start_research', 'RECEIPT_UNAVAILABLE')
         return dict(receipt)
 
-    def is_current(self, dependency):
-        if not valid_tool_dependency(dependency) or dependency['userId'] != self.user_id:
+    def is_current(self, dependency, *, strict=False, **limits):
+        if not valid_tool_dependency(dependency, **limits) or dependency['userId'] != self.user_id:
             return False
         if 'researchReceipt' in dependency:
             return True  # Immutable creation receipt; never read mutable research or invoke creation.
@@ -409,8 +425,10 @@ class ToolHistory:
             name = dependency['readOnlyTool']
             arguments = normalize_input(name, dependency['toolInput'])
             value = self._value(name, arguments)
-            return dependency['sourceRevision'] == fingerprint(['readonly-tool-v1', self.user_id, name, arguments, value])
+            return dependency['sourceRevision'] == fingerprint(['readonly-tool-v1', self.user_id, name, arguments, value], **limits)
         except Exception:
+            if strict:
+                raise
             return False  # Read/auth errors invalidate the entire prior conversation.
 
 

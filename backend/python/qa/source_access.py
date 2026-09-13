@@ -68,6 +68,8 @@ class SourceAccess:
                 remember_source(source_state, dependency)
             if not overview['replayable']:
                 source_state['replayable'] = False
+                if source_state.get('_delivery') is not None:
+                    source_state['_delivery'].reject()
         if source_details is not None:
             for detail in overview['sourceDetails']:
                 collect_detail(source_details, detail)
@@ -91,6 +93,8 @@ class SourceAccess:
         except Exception:
             if source_state is not None:
                 source_state['replayable'] = False
+                if source_state.get('_delivery') is not None:
+                    source_state['_delivery'].reject()
             return {'attachments': [], 'errorCode': 'ATTACHMENT_CONTEXT_UNAVAILABLE'}
 
     def _meeting_snapshot(self, user_id, meeting_id):
