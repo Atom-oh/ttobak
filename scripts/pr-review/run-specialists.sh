@@ -1,20 +1,12 @@
 #!/usr/bin/env bash
-# One process per required role. Existing workflows retain their publication gate.
+# The trusted parent releases Kiro roles only after shared startup checks pass.
 set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"
 WORK="${3:?Expected diff, lenses directory and work directory}"
 . "$DIR/lib.sh"
 ensure_slots "$WORK"
 python3 "$DIR/prepare_roles.py" --work "$WORK" --prepared-diff "$1"
-pids=()
-for tag in codex kiro-fable kiro-sol claude-self; do
-  python3 "$DIR/run_role.py" --work "$WORK" --tag "$tag" &
-  pids+=("$!")
-done
-for pid in "${pids[@]}"; do
-  # Aggregation reports missing/failed roles and cannot award coverage for them.
-  wait "$pid" || true
-done
+python3 "$DIR/run_role.py" --work "$WORK" --all
 status=0
 python3 "$DIR/role_review.py" aggregate --work "$WORK" || status=$?
 # Exit 2 is a recorded coverage failure: let synthesis publish its FAIL report.

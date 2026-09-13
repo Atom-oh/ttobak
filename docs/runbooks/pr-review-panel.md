@@ -70,6 +70,12 @@ review cells. Passing requires exit 0, exactly `NO_TOOLS`, and no tool-use, quot
 signal. Neither stdin nor the prompt contains the PR diff. Both models must pass before
 any Kiro review begins; each preflight is bounded by `KIRO_PREFLIGHT_TIMEOUT` (60 seconds).
 
+The specialist entrypoint applies this barrier to the active Kiro roles in its
+validated plan. Its trusted parent probes each active model once, then releases
+reviews in fresh no-tools directories only after every probe passes. Inactive
+roles receive no probe. The in-memory startup decision binds the plan, models and
+agent configuration; no environment flag or editable receipt grants permission.
+
 Keep `--agent pr-review-notools` and the per-cell `.kiro/agents/` copy. Do not replace them
 with an empty `--trust-tools=` argument or change engine to bypass a failed check. In the
 original 2.11.1 investigation, the empty argument was ignored and the v3 engine did not

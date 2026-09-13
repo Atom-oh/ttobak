@@ -68,6 +68,15 @@ the first result and block. Finish writers before aggregation. Reissue archives
 failures block until new preparation. Summaries retain history. All `*.flag` files
 block except root `coverage-severe.flag`. `failure_codes` is canonical; `failures` aliases it.
 
+The trusted specialist parent probes every active Kiro model once before releasing
+any Kiro review. If any required probe fails, all active Kiro roles remain blocked;
+Codex/Claude still run. Inactive Kiro roles are not probed. Each review starts in a
+fresh private directory with the same no-tools agent and no probe canary.
+The shared decision stays in parent memory, bound to the plan digest, model roster
+and agent configuration; each issued request is rechecked before delivery. There
+is no environment or stored-receipt bypass. Standalone Kiro execution also checks
+the complete active Kiro roster before sending input.
+
 Exit 2 means blocked. Aggregate exit 0: `deterministic` permits the report when no
 blocking candidate/uncertainty exists (Minor/Info remain); `review` needs a chair.
 Blocked input yields deterministic FAIL; the chair cannot waive coverage failures.
