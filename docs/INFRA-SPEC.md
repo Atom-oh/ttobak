@@ -150,7 +150,7 @@ only after backend acceptance; see the [async contract](../backend/python/qa/ASY
 | Custom ActionItemsRequested, ttobak.analysis | summarize, action analysis only |
 | Custom DocumentUploadCompleted, ttobak.upload | document-extract, queued canonical runs only |
 | S3 Object Created, docs/ slide suffix filter | convert-doc |
-| One-minute ttobak-kb-index-tick | kb; enabled in the current app, manual-only |
+| One-minute ttobak-kb-index-tick | kb; enabled in the deployment configuration, all mode |
 | Canonical DynamoDB stream records | kb; mapping/grants created only in all mode |
 | Scheduled warming event | API alias |
 | SQS ttobak-qa-jobs, single-record mapping | qa; durable job execution, concurrency two |
@@ -219,11 +219,11 @@ the security boundary. Verify role/network configuration when modifying executio
 
 ## Knowledge and declared gaps
 
-The app currently sets `knowledgeIndexingMode='manual-only'` and
+The activation configuration sets `knowledgeIndexingMode='all'` and
 `knowledgeIndexScheduleEnabled=true`; the reusable construct's schedule default
-is false. This enables the scheduled bootstrap in the synthesized configuration,
-not evidence of a deployed producer. Canonical stream mapping/read permissions
-remain absent until explicit `all` mode.
+is false. This retains the schedule and adds canonical stream mapping/read
+permissions. Merge/deployment requires completed manual snapshot acceptance and
+deployed, verified current-source QA. Configuration is not deployment evidence.
 
 `cmd/kb` requires TABLE_NAME, assets BUCKET_NAME, KB_BUCKET_NAME, KB_ID,
 DATA_SOURCE_ID and INDEXING_MODE. IDs must be ten alphanumeric characters; mode

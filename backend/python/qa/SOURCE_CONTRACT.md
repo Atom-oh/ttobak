@@ -2,9 +2,12 @@
 
 The handler registers current-source readers for REST and WebSocket. Async job
 routes are also wired, while frontend job activation defaults off; see the
-[async contract](ASYNC_CONTRACT.md). Code and CDK configuration do not establish
-deployed acceptance. Follow [the rollout](../../../docs/runbooks/qa-current-source-rollout.md)
-and record deployment evidence separately.
+[async contract](ASYNC_CONTRACT.md). This activation revision selects canonical
+`all` delivery but remains held until the
+[rollout](../../../docs/runbooks/qa-current-source-rollout.md) acceptance gate is
+met. See the bootstrap runbook's dated readiness record. Configuration and package
+verification do not establish successful public answers or current provenance;
+record deployed consumer acceptance separately.
 
 ## Reader responsibilities
 

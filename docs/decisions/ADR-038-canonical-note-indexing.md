@@ -1,10 +1,12 @@
 # ADR-038: Canonical note indexing
 
 - Status: Accepted, including the private/shared bootstrap extension, 2026-09-12.
-- Code checked: 2026-09-13. `infra/bin/infra.ts` selects `manual-only` with its
-  one-minute schedule enabled. Canonical stream delivery requires `all`;
-  strict QA runtime wiring remains separate. These are source/configuration
-  observations, not deployed acceptance.
+- Activation amendment prepared: 2026-09-13. `infra/bin/infra.ts` selects `all`
+  with its one-minute schedule retained. Merge/deployment remains gated on
+  completed manual snapshot acceptance and deployed, verified current-source QA.
+  This is a configuration change, not evidence that activation has deployed.
+  The bootstrap runbook records completed producer/package prerequisites and the
+  still-open public consumer gate, including the planned PR242 async REST path.
 
 ## Context and decision
 
@@ -28,7 +30,7 @@ sharing. Metadata alone cannot prove that old binary chunks match current bytes.
 
 1. Prepare the mode-aware worker with delivery off, then explicitly enable
    `manual-only` snapshot production with its restricted permissions.
-   The checked-in configuration has reached this schedule-enablement stage.
+   The schedule was enabled separately before the all-mode activation.
 2. Verify immutable private/shared snapshots and current-byte recall while
    retaining originals and legacy meeting exports.
 3. Deploy and verify the complete strict QA consumer, including source
@@ -57,3 +59,7 @@ worker does not restore deleted exports or justify serving stale chunks.
   [migration contract](../../backend/cmd/kb/KNOWLEDGE_MIGRATION.md).
 - [Bootstrap runbook](../runbooks/knowledge-index-bootstrap.md),
   [QA rollout](../runbooks/qa-current-source-rollout.md).
+- [Deployed manual producer acceptance](../research/evaluations/2026-09-13-manual-kb-bootstrap/README.md):
+  synthetic private/shared replacement, retrieval and deletion, including cleanup.
+  This establishes the producer prerequisite only; it does not prove QA or
+  canonical activation.
