@@ -1,0 +1,273 @@
+{
+  "schema_version": 1,
+  "record_type": "historical_evidence_snapshot",
+  "evidence_date": "2026-09-13",
+  "prepared_at_utc": "2026-09-13T12:37:00.062134+00:00",
+  "pre_activation_gate": "PASS",
+  "deployment_observation": {
+    "artifact": "ttobak-pr242-deployed-code-check.json",
+    "sha256": "4421df3e1e4f889935c73e407840adc7ea2a9b5f3635a04931ba215358d468f1",
+    "observed_at": "2026-09-13T12:12:44.194284+00:00",
+    "reviewed_commit": "11bd828fbbc3f4d5d917962a121948dbcc75a261",
+    "runtime_sources_match": true,
+    "runtime_python_files_matched": 24,
+    "state": "Active",
+    "last_update_status": "Successful",
+    "timeout_seconds": 300,
+    "qa_async_jobs_ui_enabled": false
+  },
+  "passed_cases": [
+    {
+      "case": "notes_baseline",
+      "status": "PASS",
+      "artifact": "baseline-results.json",
+      "sha256": "0e2f3a7b0f67b6a4983aeb0e653763de63f6535193dc67efc721724ee6bbb01e"
+    },
+    {
+      "case": "notes_freshness_and_share_revocation",
+      "status": "PASS",
+      "artifact": "freshness-results.json",
+      "sha256": "21f35324d84dc23bfde1633e9d2546c86aba94c9d05b7f96cf226f4b3c8a203f"
+    },
+    {
+      "case": "websocket_negative_auth",
+      "status": "PASS",
+      "artifact": "ws-negative-results.json",
+      "sha256": "1d657bad20b906eba794a9522ecd08c562d4acbba203c4aee25c72fa6f6fec8a"
+    },
+    {
+      "case": "public_browser_sidebar_and_preparation",
+      "status": "PASS",
+      "artifact": "public-browser-results.json",
+      "sha256": "8afac74dee849821fabc26d3ed8358a99428d42d7b6156777b6a6ae48eac4e53"
+    },
+    {
+      "case": "private_pdf_v1",
+      "status": "PASS",
+      "artifact": "binary-private-v1-qa-results.json",
+      "sha256": "0f18faa1f2e9949f883d1f95786622b8e81069813f7d3e7e55c1ffa1d10ff683"
+    },
+    {
+      "case": "private_pdf_v2_corrected_registered_tool",
+      "status": "PASS",
+      "artifact": "binary-private-v2-registered-tool-qa-results.json",
+      "sha256": "10a8fcadf42d8ddf6d035dcc017264e76698704b163ef7f0c5a43b21b266aed8"
+    },
+    {
+      "case": "authenticated_shared_docx_v1",
+      "status": "PASS",
+      "artifact": "binary-shared-v1-qa-results.json",
+      "sha256": "bd295b0e2540d45a9ca9a0170e6b5a5819f07eecfa0639be6ef74c0323ffb702"
+    },
+    {
+      "case": "async_private_v2",
+      "status": "PASS",
+      "artifact": "async-private-v2-results.json",
+      "sha256": "c6f45bbf48c0a9eb741a474c36fadcb31c9321cb874d6e7a28e5b7fee3d593d1"
+    },
+    {
+      "case": "async_shared_v1",
+      "status": "PASS",
+      "artifact": "async-shared-v1-results.json",
+      "sha256": "997cf238f41d6e514179f8ab1e6cc3a467c7d702080f361ad2f18ed45533212c"
+    },
+    {
+      "case": "async_shared_v1_rejected_after_overwrite",
+      "status": "PASS",
+      "artifact": "async-shared-v1-overwritten-results.json",
+      "sha256": "ca82c8e411bc28c3b8a7f51f910e4946bc7ff270728d1dfda280a6c9f5825784",
+      "http_status": 409,
+      "error_code": "SOURCE_CHANGED",
+      "cached_answer_suppressed": true
+    },
+    {
+      "case": "authenticated_shared_docx_v2",
+      "status": "PASS",
+      "artifact": "binary-shared-v2-qa-results.json",
+      "sha256": "af308edbe252c46a8f11b44b5609caae26d39a61e4f7d1fe229cf68fbb87d424"
+    },
+    {
+      "case": "async_shared_v2",
+      "status": "PASS",
+      "artifact": "async-shared-v2-results.json",
+      "sha256": "23c638e355cd432d7fbec9be4197dad7d18c213c08317cf8eb251c91a54afd9b"
+    },
+    {
+      "case": "binary_original_deletion",
+      "status": "PASS",
+      "artifact": "binary-delete-receipts.json",
+      "sha256": "913c1d8fc8c1078fad18c83302e46653b3a51dd4fd17c65dcdcd7bfb0ae28377",
+      "methods": {
+        "private": "authenticated public owner API",
+        "shared": "conditional SDK deletion"
+      }
+    },
+    {
+      "case": "async_private_v2_rejected_after_deletion",
+      "status": "PASS",
+      "artifact": "async-private-v2-deleted-results.json",
+      "sha256": "a83aeef93344bc3820eea7cec79b5fdd1a5c6041748ed972b4b656fba8b501a5",
+      "http_status": 409,
+      "error_code": "SOURCE_CHANGED",
+      "cached_answer_suppressed": true
+    },
+    {
+      "case": "async_shared_v2_rejected_after_deletion",
+      "status": "PASS",
+      "artifact": "async-shared-v2-deleted-results.json",
+      "sha256": "0264df49749511043b8eb003f10542a9046a7955bf7638621188e8274d0a1a00",
+      "http_status": 409,
+      "error_code": "SOURCE_CHANGED",
+      "cached_answer_suppressed": true
+    },
+    {
+      "case": "deleted_binary_retained_history_rejection",
+      "status": "PASS",
+      "artifact": "binary-deleted-qa-results.json",
+      "sha256": "5cb9f0e91cf87b0d2f66727d81bab1382122e715299a81fc518b73357ef41fdd",
+      "cases": [
+        "private",
+        "shared"
+      ],
+      "deleted_markers_absent": true,
+      "deleted_revisions_not_attributed": true
+    },
+    {
+      "case": "scheduled_binary_provider_deletion",
+      "status": "PASS",
+      "artifact": "binary-deletion-observation.json",
+      "sha256": "1f6988c8425c8d3d49df1467be16437256260b74a40293b4b412e324edac9433"
+    },
+    {
+      "case": "binary_old_version_and_marker_cleanup",
+      "status": "PASS",
+      "artifact": "binary-version-cleanup.json",
+      "sha256": "ef189d12d1c349150f109367b08b3f8c85a2e56ac4883e134778068f2d2b8335"
+    },
+    {
+      "case": "public_chat_direct_navigation_and_reload",
+      "status": "PASS",
+      "artifact": "public-chat-route-results.json",
+      "sha256": "8538ab7e1caaef8f568438c7048310e3deb41e700d209871ee44e9bc0ea52bd7"
+    },
+    {
+      "case": "preactivation_source_and_index_modes",
+      "status": "PASS",
+      "artifact": "preactivation-config.json",
+      "sha256": "8473aff44a6b40bdd03f705556c0d3c49ab13da48763362bb9f8d39510afdd97"
+    }
+  ],
+  "initial_private_v2_attempt": {
+    "status": "OBSERVED_LIMITATION",
+    "outcome": "model refusal; no tool invocation",
+    "artifact": "qa-binary-private-owner-v2.json",
+    "sha256": "1524c078aff5bb9652598a8a3abb454ec33e32e4bafd666802f100c428a06c14",
+    "transport_terminal": "answer_complete",
+    "tools_used_count": 0,
+    "classification_basis": "operator status plus empty terminal toolsUsed and no tool_progress frames",
+    "harness_tool_name": "search_knowledge",
+    "registered_tool_name": "search_knowledge_base",
+    "later_pass_case": "private_pdf_v2_corrected_registered_tool",
+    "isolated_causation_established": false
+  },
+  "pending_cases": [
+    {
+      "case": "final_pr_reviews_and_normal_canonical_activation_deployment",
+      "status": "PENDING"
+    },
+    {
+      "case": "canonical_post_activation_acceptance",
+      "status": "PENDING"
+    },
+    {
+      "case": "final_validation_user_session_cleanup_after_post_activation",
+      "status": "PENDING"
+    }
+  ],
+  "later_procedures": [
+    "Complete normal release AI/CI gates, deploy all-mode, then verify canonical create/edit/delete/revoke and provider outcomes.",
+    "After post-activation checks, complete remaining canonical-fixture/session and validation-user cleanup with verification receipts."
+  ],
+  "operator_status_reference": {
+    "artifact": "ttobak-active-validation-status.md",
+    "sha256": "c311a7f3431ad9fa0768922eea29ee151323608e6a0ea3a7d54c02764482ec6c"
+  },
+  "public_consumer_scenarios": "PASS",
+  "reauthentication_observation": {
+    "source": "operator report",
+    "minute_utc": "2026-09-13T12:22",
+    "same_two_validation_users": true,
+    "group_grants": false
+  },
+  "pre_activation_gate_scope": "Passed consumer, provider and binary-fixture observations; canonical activation follows normal release AI/CI gates and deployment.",
+  "provider_deletion": "PASS",
+  "binary_fixture_cleanup": "PASS",
+  "canonical_activation": "PENDING",
+  "provider_deletion_observation": {
+    "observed_at": "2026-09-13T12:34:08.402548+00:00",
+    "cases": [
+      {
+        "case": "private",
+        "job_state": "DELETED",
+        "current_inventory_count": 0,
+        "provider_identifiers_checked": 3,
+        "provider_status": "NOT_FOUND"
+      },
+      {
+        "case": "shared",
+        "job_state": "DELETED",
+        "current_inventory_count": 0,
+        "provider_identifiers_checked": 3,
+        "provider_status": "NOT_FOUND"
+      }
+    ]
+  },
+  "binary_version_cleanup_receipts": [
+    {
+      "case": "private",
+      "scope": "original",
+      "dataVersionsRemoved": 2,
+      "deleteMarkersRemoved": 1,
+      "versionsRemain": false
+    },
+    {
+      "case": "private",
+      "scope": "snapshots",
+      "dataVersionsRemoved": 4,
+      "deleteMarkersRemoved": 4,
+      "versionsRemain": false
+    },
+    {
+      "case": "shared",
+      "scope": "original",
+      "dataVersionsRemoved": 2,
+      "deleteMarkersRemoved": 1,
+      "versionsRemain": false
+    },
+    {
+      "case": "shared",
+      "scope": "snapshots",
+      "dataVersionsRemoved": 4,
+      "deleteMarkersRemoved": 4,
+      "versionsRemain": false
+    }
+  ],
+  "public_chat_route_observation": {
+    "direct_navigation_http_status": 200,
+    "reload_http_status": 200,
+    "assistant_input_visible": true,
+    "qa_submitted": false
+  },
+  "preactivation_configuration": {
+    "observed_at": "2026-09-13T12:28:17.580015+00:00",
+    "external_s3_source_status": "AVAILABLE",
+    "inclusion_prefixes": [],
+    "required_prefixes_covered": [
+      "canonical/v1/",
+      "manual-kb/v1/",
+      "shared-kb/v1/"
+    ],
+    "index_worker_mode": "manual-only",
+    "index_coordinator_mode": "manual-only"
+  }
+}

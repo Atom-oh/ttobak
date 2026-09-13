@@ -329,9 +329,10 @@ are identities to reread, not source snapshots. Full S3 ingestion is coalesced;
 job acceptance is not success. Per-document status, projection inventory and fresh
 source/conditional checks determine completion. There is no direct ingestion.
 
-The checked-in app selects `INDEXING_MODE=manual-only` **with its one-minute
-schedule enabled**; canonical stream delivery and permissions require `all`.
-This is configuration, not deployed-state evidence. Manual-only bootstraps
+The activation configuration selects `INDEXING_MODE=all` with its one-minute
+schedule enabled, adding canonical stream delivery and permissions after the
+recorded consumer qualification. Configuration alone is not deployment evidence.
+The preceding manual-only stage bootstraps
 private `kb/{owner}/...` and authenticated-global `shared/**` originals into
 `manual-kb/v1/` and `shared-kb/v1/` snapshots without altering originals or
 canonical/legacy meeting exports. Private/shared visibility must remain distinct.
@@ -352,7 +353,7 @@ stream/schedule/tick envelopes, not API proxy requests. Follow the
 
 Method/path registration is authoritative; the handler column identifies the
 entry point for exact request validation, response types and service permissions.
-All rows below come from `backend/cmd/api/main.go`.
+The Go inventory in this section comes from `backend/cmd/api/main.go`.
 
 <!-- BEGIN GO ROUTES -->
 | Method | Path | Handler |
@@ -491,6 +492,10 @@ All rows below come from `backend/cmd/api/main.go`.
 
 ## Python QA and WebSocket
 
+HTTP QA routes are registered in `infra/lib/gateway-stack.ts` and handled by
+`backend/python/qa/handler.py`. `backend/cmd/websocket/main.go` handles the
+WebSocket connection and message routes.
+
 | Transport | Route/action | Implementation |
 |---|---|---|
 | HTTP POST | `/api/qa/ask` | Agentic general Q&A |
@@ -543,8 +548,8 @@ and revision; changes or revocation invalidate the complete derived history.
 
 - Fresh source discovery revalidates canonical access, exact source revision and
   S3 bindings. Saved-text keyword matches supplement index lag; legacy meeting
-  exports provide identities only. Cached text/misses cannot replace fresh reads,
-  without introducing a reusable query-result cache. Separately scoped async jobs
+  exports provide identities only. Cached text/misses cannot replace fresh reads.
+  Source discovery adds no reusable query-result cache. Separately scoped async jobs
   retain bounded results and revalidate their proof on every result read.
 - Private/manual and authenticated-shared binary evidence requires matching
   immutable snapshots; old unbound chunks cannot be relabeled as current. Legacy

@@ -285,7 +285,10 @@ class TestTransportFixture(_QAConversationFixture, _SourceFixture, unittest.Test
                 self.prepend_tool(model, transport, 'list_meetings', {})
                 self.ask(transport, 'list meetings', context='CURRENT_CLIENT_INPUT')
                 self.assertIn('SYNTHETIC_CURRENT_TITLE', json.dumps(model.call_args.kwargs['messages']))
-                self.assertIn('CURRENT_CLIENT_INPUT', json.dumps(model.call_args.kwargs['system']))
+                request = model.call_args.kwargs
+                live = json.loads(request['messages'][0]['content'][2]['text'].rsplit('\n', 1)[1])
+                self.assertEqual(live['text'], 'CURRENT_CLIENT_INPUT')
+                self.assertNotIn('CURRENT_CLIENT_INPUT', json.dumps(request['system']))
                 results = [block for message in model.call_args.kwargs['messages']
                            for block in message['content'] if 'toolResult' in block]
                 self.assertEqual(len(results), 2)

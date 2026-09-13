@@ -2,9 +2,12 @@
 
 The handler registers current-source readers for REST and WebSocket. Async job
 routes are also wired, while frontend job activation defaults off; see the
-[async contract](ASYNC_CONTRACT.md). Code and CDK configuration do not establish
-deployed acceptance. Follow [the rollout](../../../docs/runbooks/qa-current-source-rollout.md)
-and record deployment evidence separately.
+[async contract](ASYNC_CONTRACT.md). This activation revision selects canonical
+`all` delivery but remains held until the
+[rollout](../../../docs/runbooks/qa-current-source-rollout.md) acceptance gate is
+met. See the bootstrap runbook's dated readiness record. Configuration and package
+verification do not establish successful public answers or current provenance;
+record deployed consumer acceptance separately.
 
 ## Reader responsibilities
 
@@ -15,11 +18,13 @@ and record deployment evidence separately.
 | `source_context.py` | Fresh metadata authorization before bounded S3 reads pinned to ETag/version. |
 | `attachment_context.py` | Authorize ATTACH/ATTEXT; verify immutable result identity, original ETag, limits and continuation. Partial/retained results stay explicit, without audio timestamps. |
 | `indexed_retrieval.py` | Enumerate authorized identities, use current saved text, and require canonical revision/S3 bindings for binary excerpts. Legacy meeting exports supply identities only. |
+| `canonical_selection.py` | Resolve exact canonical resource IDs through current authorized discovery, filter provider candidates to the selected revision, and retain file-byte validation. IDs do not grant access. |
 | `manual_kb.py` | Validate private/shared binary snapshots and current originals; unbound old chunks are not evidence. Missing snapshots are pending; read errors propagate. |
 | `source_access.py` | Compose injected readers/callbacks into source contexts/search with dependencies; create no AWS clients. |
 | `source_tools.py` | Define/format document, attachment and legacy-text tools for authenticated consumers. |
 | `session_provenance.py` | Recheck every dependency before replay; require an explicit replayable marker and known provenance version. |
 | `delivery_proof.py` | Async REST captures complete reads beyond history limits, includes remaining executor dependencies, and revalidates before delivery. |
+| `current_input.py` | Bind prompt input-presence metadata to its user turn; preserve historical dialogue without treating client input as saved-source proof. |
 
 Runtime integration must preserve the authenticated tool/error boundary and
 expose only allowlisted public source fields. `BUCKET_NAME`, `KB_BUCKET_NAME`

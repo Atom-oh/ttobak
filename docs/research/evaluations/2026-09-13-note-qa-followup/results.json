@@ -1,0 +1,233 @@
+{
+  "schemaVersion": 1,
+  "recordType": "dated_synthetic_runtime_evidence",
+  "preparedAt": "2026-09-13T14:11:03.930611+00:00",
+  "deployment": {
+    "sourceCommit": "921c2b3e0e0b5c97ab684a2adfe9a1691bcfbe2a",
+    "run": 34757796645,
+    "runtimeFilesVerified": 25,
+    "asyncUiEnabled": false
+  },
+  "cases": [
+    {
+      "case": "saved_notes_and_five_attachments_ws",
+      "status": "PASS",
+      "turns": 2,
+      "sourceCount": 6,
+      "evidence": {
+        "artifact": "qa_ws_post245_1f134210c5064236/notes-ws-semantic-review.json",
+        "sha256": "b7210aec14a79776e41c0ff2268290cdb36d3fe6126514287369f24dcf14d303",
+        "bytes": 838,
+        "binding": "exact_file"
+      }
+    },
+    {
+      "case": "saved_notes_and_five_attachments_async",
+      "status": "FACTS_AND_PROVENANCE_PASS_WITH_WORDING_LIMITATION",
+      "turns": 2,
+      "sourceCount": 6,
+      "evidence": {
+        "artifact": "notes-async-semantic-review.json",
+        "sha256": "05f864b02b83765f7cba3fb30f1ee088d0f648f580a3c64d97f80e10fcfbf62a",
+        "bytes": 1017,
+        "binding": "exact_file"
+      }
+    },
+    {
+      "case": "manual_private_pdf_shared_docx_v1_both_transports",
+      "status": "PASS",
+      "turnsPerTransport": 2,
+      "evidence": {
+        "artifact": "manual-v1-semantic-review.json",
+        "sha256": "9aa251345b4d74b522da227580a37283be87f6398dadde78b595b3b8476fd771",
+        "bytes": 1218,
+        "binding": "exact_file"
+      }
+    },
+    {
+      "case": "manual_private_pdf_shared_docx_v2_async",
+      "status": "PASS",
+      "evidence": {
+        "artifact": "manual-v2-async-semantic-review.json",
+        "sha256": "0cf30a3128ed28d0b9ddf3d7efc5346b22766c8b80ef89821027ca51f8ac1444",
+        "bytes": 654,
+        "binding": "exact_file"
+      }
+    },
+    {
+      "case": "manual_private_pdf_shared_docx_v2_ws",
+      "status": "PASS_NEW_LINEAGE",
+      "evidence": {
+        "artifact": "qa_post249_repair_22b4d0d6f66449a9/manual-v2-ws-semantic-review.json",
+        "sha256": "5bdcbae196c04b557b7c34f6c54641b42e4f849334ffab11f95c65f582118012",
+        "bytes": 523,
+        "binding": "exact_file"
+      }
+    },
+    {
+      "case": "manual_original_and_provider_deletion",
+      "status": "PASS",
+      "evidence": {
+        "artifact": "qa_lifecycle_227/qa_deleted_settled_resumed.json",
+        "sha256": "1e63702625e2afa7d7c8aa765511f24c1d094f9934db05734b2899e93b077182",
+        "bytes": 6656,
+        "binding": "exact_file"
+      }
+    },
+    {
+      "case": "manual_deleted_same_session_both_transports",
+      "status": "PASS",
+      "oldVersionsOmitted": true,
+      "sourcesEmpty": true,
+      "evidence": {
+        "artifact": "manual-deleted-semantic-review.json",
+        "sha256": "874f7f9dc157c28648c15b861e003450a534eb0802dee72594f33c6fc8e21c2a",
+        "bytes": 685,
+        "binding": "exact_file"
+      }
+    },
+    {
+      "case": "received_document_revocation_async",
+      "status": "PASS",
+      "preparationTier": "IAM-prepared synthetic owner source and grants, real Demo consumer",
+      "evidence": {
+        "artifact": "qa_async_operations.jsonl",
+        "sha256": "b8cc2b40b5dde564b9dadb140b07656bb0ba9daf81f1a8b97f9192dd22dd5bbd",
+        "bytes": 36685,
+        "binding": "immutable_prefix"
+      }
+    },
+    {
+      "case": "received_document_revocation_ws",
+      "status": "PASS",
+      "preparationTier": "IAM-prepared synthetic owner source and grants, real Demo consumer",
+      "evidence": {
+        "artifact": "qa_ws_post245_1f134210c5064236/qa_ws_operations.jsonl",
+        "sha256": "c9c06929cd0c7f8814621665b34903604e73b7bb90b12cd0b8ad7252b1338b89",
+        "bytes": 48004,
+        "binding": "immutable_prefix"
+      }
+    },
+    {
+      "case": "manual_historical_versions_purged",
+      "status": "PASS",
+      "exactKeys": 10,
+      "dataVersions": 12,
+      "deleteMarkers": 10,
+      "evidence": {
+        "artifact": "qa_manual_version_cleanup_1e800e3ffca54e61/cleanup_applied_20260913.json",
+        "sha256": "541c38f1658973271cdf675bb783eafa0505010818bb11ecb6c5ee5b43f6745f",
+        "bytes": 137,
+        "binding": "exact_file"
+      }
+    }
+  ],
+  "liveInputNarration": {
+    "status": "SUPERSEDED_BY_SIX_TURN_SEMANTIC_PASS",
+    "pullRequest": 252,
+    "reviewedHead": "1381a27b53e0d8b3e2398be2f31270992c043250",
+    "mergeCommit": "9639b02207f9ca77599e0a5acbbd4b2a1750b858",
+    "failureEvidence": {
+      "artifact": "qa_post249_repair_22b4d0d6f66449a9/live-context-semantic-recovery-review.json",
+      "sha256": "3a6a025dcb83e1273c639a2691f14ec4aed568d11d972d31cca1806fad98d0cb",
+      "bytes": 1509,
+      "binding": "exact_file"
+    },
+    "finalAcceptance": {
+      "sourceCommit": "f3325ce0e53c9540fcbda412415d43fc9b2ae7f4",
+      "deploymentRun": 34764591127,
+      "runtimeFilesVerified": 27,
+      "turnsPerTransport": 3,
+      "transports": [
+        "websocket",
+        "async_rest"
+      ],
+      "status": "OPERATOR_SEMANTIC_REVIEW_ACCEPTED",
+      "evidence": {
+        "artifact": "qa_final_live_8bb138a10eba4673/qa_semantic_review.completed.json",
+        "sha256": "193c9d5747e89bc0e3d79d1b78b2c8bcfa51df73485946d7ee7ebf8842b9cbe7",
+        "bytes": 12668,
+        "binding": "exact_file"
+      },
+      "scope": "All six full answers and exact request timeline inspected. Current input presence, temporal attribution, label continuity, current-source provenance, omission of superseded values and count claims passed."
+    }
+  },
+  "limits": [
+    "Synthetic fixtures only; not a general model-quality percentage.",
+    "Direct async API acceptance does not activate the UI or fix legacy synchronous delivery.",
+    "Structured source URIs are exact; some answer prose abbreviates them.",
+    "Original failed/unknown lineages remain unchanged.",
+    "Manual files have exact historical-version purge evidence; this does not establish cleanup of other fixtures.",
+    "Canonical backfill/file-backed DocHub lifecycle acceptance, real-browser async acceptance and final fixture cleanup remain outstanding; current provider failures block dependent model checks."
+  ],
+  "updatedAt": "2026-09-13T16:22:25.852467+00:00",
+  "canonicalActivation": {
+    "pullRequest": 227,
+    "mergeCommit": "b14ae6b1b56e8c832ecf067d94655477f4a99533",
+    "deploymentRun": 34763136204,
+    "status": "DEPLOYED_ACTUAL_ALL_MODE_STREAM_AND_SCHEDULE_VERIFIED",
+    "lifecycleAcceptance": "IN_PROGRESS"
+  },
+  "canonicalFileFollowup": {
+    "selectorPullRequest": 258,
+    "reviewedHead": "6603a02f6499ded9696c235d08ab67a41393ceb4",
+    "deploymentCommit": "d5beaae665b698e9e0de6916e7c35deec3926b7f",
+    "deploymentRun": 34767310825,
+    "runtimeFilesVerified": 28,
+    "hostQATestsPerVersion": 372,
+    "pythonVersions": [
+      "3.9",
+      "3.12"
+    ],
+    "producer": "TWO_EXISTING_V1_PDFS_CURRENT_BYTES_AND_PROVIDER_INDEXED_VERIFIED",
+    "consumer": "NOT_PASSED",
+    "failures": [
+      {
+        "stage": "selected_document_repair",
+        "code": "ServiceUnavailableException",
+        "round": 1,
+        "responseEvents": 0,
+        "toolCalls": 0,
+        "evidence": {
+          "artifact": "qa_canonical_file_selector_repair_77341a8a0ccf4f67/qa_request_failure_metadata.json",
+          "sha256": "f8165670faa2e48198086d00befd089cf38eb4bc46b7860afa87919789d8e99a",
+          "bytes": 1359,
+          "binding": "exact_file"
+        }
+      },
+      {
+        "stage": "one_explicit_provider_recovery",
+        "code": "ServiceUnavailableException",
+        "round": 1,
+        "responseEvents": 0,
+        "toolCalls": 0,
+        "evidence": {
+          "artifact": "qa_canonical_file_provider_recovery_88d694d39f6c44fb8ce73ad03afccdd7/qa_failed_provider_diagnostic.json",
+          "sha256": "80d1fed155aca9e023750d65f1235c4cd252b653f2dd645ec3c1096c7d478aec",
+          "bytes": 757,
+          "binding": "exact_file"
+        }
+      }
+    ],
+    "noFurtherRecoveryLineage": true,
+    "sourceDocumentsRetained": true,
+    "v2AndDeletion": "NOT_STARTED"
+  },
+  "integrationFollowup": {
+    "boundedReconciliation": {
+      "pullRequest": 259,
+      "mergeCommit": "eb2e01f9ac72f522cc78f615eb273686e4dd32d4",
+      "sourceScanLimit": 100,
+      "jobPages": 4,
+      "batchSize": 4,
+      "deploymentAcceptance": "PENDING"
+    },
+    "asyncUiOptIn": {
+      "pullRequest": 260,
+      "mergeCommit": "7aa50ad23a84941ec0290fb87a4aa43fbc90b69a",
+      "infraTests": 82,
+      "deploymentAcceptance": "PENDING",
+      "realBrowserQA": "PENDING_PROVIDER_AVAILABILITY"
+    }
+  }
+}

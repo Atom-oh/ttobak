@@ -460,7 +460,10 @@ class TestMeetingRetrieval(unittest.TestCase):
                 self.assertIn(marker, system)
                 self.assertIn('"meetingId": "m1"', system)
                 self.assertIn('get_meeting_detail(offset=0)', system)
-                self.assertIn('"truncated": true', system)
+                model_text = system + '\n' + '\n'.join(
+                    block.get('text', '') for message in api.call_args.kwargs['messages']
+                    for block in message['content'])
+                self.assertIn('"truncated": true', model_text)
                 self.assertIn('"source": "saved_user_notes"', system)
 
     def test_long_notes_have_explicit_coverage_and_reachable_detail_suffix(self):
@@ -1435,7 +1438,8 @@ def load_tests(loader, tests, pattern):
                    'test_binary_consumer_contract', 'test_request_history', 'test_tool_context',
                    'test_completion_safety', 'test_named_knowledge', 'test_history_details',
                    'test_ws_source_frames', 'test_stream_events', 'test_async_jobs',
-                   'test_delivery_proof', 'test_async_runtime', 'test_deadline_history'):
+                   'test_delivery_proof', 'test_async_runtime', 'test_deadline_history', 'test_current_input',
+                   'test_output_budget', 'test_canonical_selection'):
         tests.addTests(loader.loadTestsFromName(module))
     return tests
 

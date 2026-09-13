@@ -4,9 +4,13 @@ Extends [ADR-038](../../../docs/decisions/ADR-038-canonical-note-indexing.md) us
 the existing full S3 sync coordinator; no direct ingestion or fabricated DOC#
 source rows. Original upload/list/delete behavior and visibility are preserved.
 
-Code checked: 2026-09-13. The worker is implemented and CDK selects `manual-only`
-with its schedule enabled. The strict QA helpers exist but are not wired into
-`qa/handler.py`; snapshot acceptance and canonical activation remain separate.
+Code checked: 2026-09-13. The worker is implemented and this activation
+configuration selects `all` with its schedule retained. `qa/handler.py` registers
+strict source readers in REST and streaming paths. Configuration and registration
+do not establish deployed acceptance; the
+[bootstrap runbook](../../../docs/runbooks/knowledge-index-bootstrap.md) and
+[QA rollout](../../../docs/runbooks/qa-current-source-rollout.md) record deployment
+readiness and the remaining public acceptance gates.
 
 ## Source and snapshot contract
 
@@ -16,8 +20,9 @@ snapshots use `manual-kb/v1/` and `shared-kb/v1/`, immutable conditional PUTs, a
 provenance sidecars. Exact paths, fields and revision framing are in the
 [Go contract](../../internal/service/INDEX_SOURCE_CONTRACT.md) and
 [existing QA reader contract](../../python/qa/SOURCE_CONTRACT.md).
-`manual_kb.py` supports both schemas; strict runtime activation must wait for
-verified snapshots. Adding metadata to old chunks is not current-byte proof.
+The registered `manual_kb.py` reader supports both schemas and requires verified
+snapshots for binary evidence. Adding metadata to old chunks is not current-byte
+proof.
 Vectors: `backend/internal/service/testdata/knowledge-revisions.json`.
 
 Each scheduled tick advances one bounded page per original prefix. Jobs retain
@@ -39,13 +44,14 @@ Required env: TABLE_NAME, BUCKET_NAME, KB_BUCKET_NAME, KB_ID, DATA_SOURCE_ID,
 Follow the [bootstrap runbook](../../../docs/runbooks/knowledge-index-bootstrap.md):
 
 1. Initially deploy with schedule/stream off: manual-only, bootstrap IAM and
-   1,024 MiB/12 minutes. Explicitly enable the schedule after verification;
-   the current CDK configuration requests this stage, without a stream mapping.
+   1,024 MiB/12 minutes. Explicitly enable the schedule after verification.
+   This bootstrap stage precedes the current all-mode activation configuration.
 2. Verify private/shared snapshots and deployed synthetic recall. Canonical
    sources/jobs and canonical/legacy meeting exports remain untouched.
-3. Deploy/verify strict QA runtime using the existing reader foundations.
-4. Enable all-mode and canonical permissions/delivery. No job edits or ad-hoc
-   global tick invocation substitute for this order.
+3. Deploy and verify the registered strict QA runtime, including public
+   answer/provenance/history acceptance in both transports.
+4. After those gates pass, deploy all-mode and canonical permissions/delivery.
+   No job edits or ad-hoc global tick invocation substitute for this order.
 
 Mode is durable: downgrade and manual-only resumption of a canonical batch fail
 before mutation. Restore `all` after mistaken downgrade; old-QA rollback after
@@ -57,7 +63,8 @@ permission; it does not grant original object deletion.
 Verify the out-of-band data source includes both snapshot prefixes, bucket
 versioning/encryption and runtime sizing. Originals and snapshots can coexist in
 that source; QA merges candidates and requires current bindings for binary facts.
-Tests are synthetic; deployed acceptance remains required before strict QA.
+Synthetic tests do not establish public QA acceptance or deployed canonical
+indexing.
 
 Implementation: `main.go`, `service/indexing.go`, `index_rollout.go`,
 `index_knowledge_source.go`, `index_knowledge_provider.go` and `index_provider.go`.

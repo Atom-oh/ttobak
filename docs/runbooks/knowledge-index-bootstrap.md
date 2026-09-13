@@ -1,10 +1,78 @@
 # Knowledge index bootstrap and activation
 
-Code checked: 2026-09-13. `infra/bin/infra.ts` selects
-`knowledgeIndexingMode='manual-only'` and `knowledgeIndexScheduleEnabled=true`.
-The worker and snapshot migration are implemented; canonical stream delivery
-requires `all`, and strict QA runtime wiring remains staged. Verify deployed
-code, mode, permissions and snapshot recall independently.
+Activation configuration checked: 2026-09-13. `infra/bin/infra.ts` selects
+`knowledgeIndexingMode='all'` and `knowledgeIndexScheduleEnabled=true`.
+The named preactivation public checks below are complete as of 2026-09-13.
+Complete normal current-HEAD review/CI checks, then use the existing conditional
+merge and release workflow. Record actual deployment and acceptance references;
+source configuration does not prove that a deployment has occurred.
+
+The manual producer prerequisite has a completed
+[2026-09-13 acceptance archive](../research/evaluations/2026-09-13-manual-kb-bootstrap/README.md):
+private PDF and shared DOCX creation, replacement, current-byte retrieval,
+deletion and fixture-version cleanup were observed against the deployed worker.
+Authenticated notes, manual-binary retrieval, history invalidation, provider
+deletion and old-version cleanup are recorded separately in the completed
+[public QA evidence archive](../research/evaluations/2026-09-13-public-qa/README.md).
+Neither archive establishes canonical indexing acceptance. The additional
+attachment and live-input qualification has its own current-run status below.
+
+## Readiness checkpoint — 2026-09-13
+
+| Gate | Recorded evidence | State |
+|---|---|---|
+| Manual producer snapshots/recall/replacement/deletion | Linked acceptance archive, including exact fixture-version cleanup | Complete |
+| Current QA package deployment | At 13:05 UTC, 25 runtime Python files matched `921c2b3e0e0b5c97ab684a2adfe9a1691bcfbe2a`; Active/Successful, Python 3.12, 300-second timeout | Verified package readiness |
+| Public notes/manual-binary/history and transport checks | Linked public QA archive: notes freshness and grant revocation, private/shared V1/V2, current attribution, REST/WS behavior and source-change rejection | PASS for the recorded scenarios |
+| Provider deletion and binary old-version cleanup | Linked public QA archive, with exact NOT_FOUND and version-cleanup receipts | Complete |
+| Additional PDF attachment qualification | Current-run `attachment-pdf-results.json`: real PDF partial coverage, page continuation, foreign 404, cited QA and retained retry result with `current=false` while running | PASS for the recorded attachment case |
+| Neutral live-input qualification | Current-run `live-context-neutral-results.json`: current live input and saved notes remain distinct; corrected latest-only input suppresses old values while preserving label and saved-source provenance | PASS for the recorded live case |
+| Named preactivation public qualification | Completed archive plus the current-run PDF attachment and neutral live-input cases, verified against the stated deployments | Complete as of 2026-09-13 |
+| Old validation-run closeout | Closed run `317daf7a9b4ee21344e4`, archived `final-cleanup.json`: users, scoped rows, assets versions and local credentials cleaned | Complete |
+| New canonical canary preparation | Five genuine public-API fixtures prepared at 13:40 UTC while indexing remained manual-only | Prepared; not evidence of indexing |
+| Canonical `all` activation and CRUD/backfill | Deployment follows completed qualification and normal release checks; canonical acceptance follows activation | Pending |
+
+The current package receipt is
+`/tmp/ttobak-qa-latest-deployed-code-check.json`, observed at
+`2026-09-13T13:05:10.142245+00:00`, with code SHA-256
+`ohQu+FP7YTLbm0sjCRXsw2AzujzhAv/fg94xhQfwxhQ=`.
+This does not rebind older acceptance to the newer package. Preserve each
+receipt's actual deployment, timestamp and source hashes. Async UI activation
+has not occurred; `qaAsyncJobs` remains false.
+
+Additional qualification used run `qa-validation-b39053f454239d733c70`, located
+through `/tmp/ttobak-public-qa-validation-path.txt`. Its attachment and neutral
+live-input cases passed on 2026-09-13 against the latest verified `921c2b3`
+runtime. The old run is archived through
+`/tmp/ttobak-public-qa-validation-closed-317daf7a9b4ee21344e4.txt`.
+Its earlier cleanup-pending entry is historical; the subsequent closeout receipt
+records completed cleanup. Do not reuse its deleted fixtures for backfill.
+
+Historical failures remain evidence: earlier synchronous notes REST timeout,
+missing manual follow-up provenance, an empty WS answer and the initial
+private-V2 refusal. Preserve those records alongside the separately identified
+corrected passes; do not relabel or erase a failed lineage.
+
+The current run's initial `live-context-results.json` also remains a diagnostic
+failure. It asked for a nonexistent rollout-codename field while the fixture's
+actual field was `Marker`, and used an age-labeled `LIVE_OLD` code. The corrected
+`live-context-neutral-results.json` uses the real `Marker` field and neutral
+`DEPLOY` codes. Multiple inputs changed; these observations do not establish a
+single cause for the initial failure.
+
+The authenticated async job API is wired and its public results are covered in
+the archive; UI activation remains a separate change. Preserve both REST and WS
+qualification. For additional cases, coordinate both transports' V1 checks before
+overwriting or deleting shared fixtures, and keep unknown/failed attempts in
+separate lineages.
+
+Canonical vector backfill and file-backed DocHub create/edit/delete require
+`all`; they are post-activation checks in step 6, not circular pre-merge gates.
+The five current-run canaries are a meeting, personal/account notes and
+file-backed personal/account documents, recorded in `canonical-manifest.json`.
+They predate stream activation and must be found by normal reconciliation after
+`all` is active. Their public-API creation and current-text fallback do not prove
+an indexed projection or successful provider ingestion.
 
 ## Bootstrap boundary
 
@@ -31,6 +99,46 @@ Before changing delivery, strongly read `KBINDEX#CONTROL / STATE`, including
 PK/SK, and record its mode/batch alongside the Lambda code hash and configuration.
 Do not edit coordinator records or invoke ad-hoc global ticks to bypass guards.
 
+## Bounded background reconciliation
+
+Reconciliation runs only when the coordinator is IDLE and no provider ingestion
+is busy. In all mode, each successful reconcile scans up to 100 evaluated table
+items for canonical source keys. DynamoDB applies the filter after its read
+limit; the one-MiB scan-page read limit can end a page sooner. This is not a guarantee of
+100 discovered sources.
+
+The job walk reads at most four pages, requesting at most the remaining capacity
+of the unchanged four-member ingestion batch on each page. For example, finding
+two eligible jobs in the first page makes the next query limit two. Unchanged,
+cooling-down or currently leased jobs do not consume batch capacity. Every
+returned job is checked before advancing the cursor. The walk stops at a full
+batch or end-of-query and does not wrap within that reconcile. The new job cursor
+and batch are published only after the bounded walk succeeds. An error or context
+failure leaves durable cursors unchanged; already queued source notifications
+can safely coalesce when the page is revisited.
+
+For the reported approximately 2,850-item table, the old limit 25 required at
+least 114 reconcile opportunities for a source sweep; limit 100 lowers that
+nominal bound to 29. Approximately 107 jobs still require at least 27 four-item
+query pages. When all pages are full and ineligible, four pages per reconcile
+can cover those pages in seven opportunities instead of 27. Eligible work
+reduces the remaining query capacity and can start provider work that delays
+further reconciliation.
+
+These are page-count lower bounds, not latency guarantees. The one-minute
+schedule does not imply one reconcile per minute: active batches, external
+syncs, leases, retries, large items and the existing ten-minute worker context
+can all increase elapsed time. Newly streamed writes may be enqueued before an
+older source is found by the sweep.
+
+The tradeoff is up to fourfold source evaluation per reconcile and up to sixteen
+known-job source/inventory checks rather than four. Total work across a clean
+sweep is similar but occurs in larger bursts. Ingestion batch size, concurrency,
+the twenty-minute lease, provider freeze, conditional writes and current-source
+validation are unchanged. Observe scheduled cursor progress, worker duration,
+read throttling and eligible-job progress after the reviewed worker deployment;
+do not force ticks or reset control rows to accelerate acceptance.
+
 ## Deployment and acceptance
 
 1. For initial preparation, deploy the mode-aware worker with delivery off,
@@ -38,21 +146,25 @@ Do not edit coordinator records or invoke ad-hoc global ticks to bypass guards.
    `TtobakGatewayStack --exclusively`. Never deploy KnowledgeStack or use `--all`.
 2. Verify `manual-only`, intended buckets/KB/source IDs, scoped IAM and absent
    canonical delivery before enabling the schedule in a reviewed activation.
-   The checked-in configuration already requests this schedule enablement.
+   Schedule enablement precedes the separate all-mode activation.
 3. Observe scheduled synthetic private/shared uploads, overwrite and deletion.
    Require current immutable snapshots to reach `INDEXED`, preserve original
    files/meeting exports and verify actual recall. Confirm the external S3
    data source includes snapshot prefixes and supports the required metadata.
-4. Deploy the complete strict QA runtime with source-read permissions and both
-   bucket variables. Verify private/shared snapshots, current authorization,
-   revision changes and whole-history invalidation. Follow the
-   [QA rollout](qa-current-source-rollout.md); helpers alone are insufficient.
+4. Verify the complete deployed strict QA runtime, source-read permissions and
+   both bucket variables against the intended reviewed commit. Complete current
+   private/shared answer/provenance, authorization, revision and whole-history
+   acceptance in REST and streaming, using the readiness path above. Follow the
+   [QA rollout](qa-current-source-rollout.md); package readiness alone is insufficient.
 5. Enable `all` in a reviewed activation, adding canonical source reads,
    condition checks, stream grants and the mapping together. Manual batches
    retain their ingestion token and finish before canonical backfill.
    Job/control partitions remain the only DynamoDB write targets.
-6. Verify canonical create/edit/delete/revoke, reconciliation and DLQ/failure
-   handling. Provider failure must not appear as empty successful search.
+6. Verify canonical meeting/personal/account create/edit/delete/revoke,
+   reconciliation, new-term recall and DLQ/failure handling. Include file-backed
+   personal/account DocHub fixtures with byte-bound source/projection proofs.
+   Require exact current provider INDEXED/NOT_FOUND observations; provider
+   failure must not appear as empty successful search.
 
 Full mode permits `canonical/v1/*` writes/deletes and retirement of legacy
 `meetings/*` exports. Its existing-table stream mapping starts at LATEST,
@@ -73,6 +185,13 @@ without retiring originals or legacy exports. After `all` has run, restoring
 Stopping only the schedule does not disable the canonical stream. Preserve the
 strict consumer, or perform a reviewed legacy re-export before old-QA rollback.
 Never use stale unbound chunks as an availability fallback.
+
+To pause after canonical activation, retain `INDEXING_MODE=all`, set
+`knowledgeIndexScheduleEnabled=false`, and set `enabled: false` on the canonical
+`DynamoEventSource` in `gateway-stack.ts` through a reviewed change. Deploy
+`TtobakGatewayStack --exclusively` and verify both rule and mapping are disabled.
+Existing invocations may finish; preserve coordinator state and snapshots.
+Re-enable both delivery paths through a reviewed change after resolution.
 
 See [migration details](../../backend/cmd/kb/KNOWLEDGE_MIGRATION.md) and
 [ADR-038](../decisions/ADR-038-canonical-note-indexing.md).

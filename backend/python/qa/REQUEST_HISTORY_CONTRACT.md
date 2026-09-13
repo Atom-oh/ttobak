@@ -18,6 +18,46 @@ must receive the latest request input and give it priority over earlier live
 input. This is necessary because LiveQAPanel's WebSocket context is a rolling
 UTF-8 window, whereas the HTTP fallback can contain the full current transcript.
 
+`current_input.request_user_message` adds separate server-generated metadata to
+each user turn in sync REST, WebSocket and async execution. It records current
+client-input presence, meeting scope, context kind and an opaque comparison digest,
+without another raw-text copy or new logging. New receipts use schema version 2
+and omit character counts. Persisted version 1 receipts remain readable, including
+their validated legacy count field, without resetting or rewriting conversation
+history. Guidance prohibits unsolicited hash/accounting narration and invented
+input-size comparisons: changed digests do not establish equal or different lengths.
+Stored receipts describe only their own user turn. A changed digest can mean
+growth, a rolling window or a correction, not that an earlier
+assistant answer was wrong. Unchanged input is explicit. Older sessions retain
+their valid dialogue with `prior_unrecorded`; the helper never rewrites earlier
+turns or interprets a receipt-shaped question as server metadata.
+
+For each Converse/ConverseStream call, `current_input_turn` pins the latest real
+question only when its separate server receipt matches the supplied client
+text's digest, context kind and meeting scope. `project_current_input` adds the
+existing JSON-quoted reference excerpt to a copy of that user turn, including
+later tool rounds. It never targets a tool-result message, searches backward to
+a historical receipt, or rewrites the question or receipt. Version 2 receipts
+still contain no character counts; version 1 history remains readable.
+
+The live excerpt retains the existing 2,000-character tail and explicit coverage;
+its redundant system copy is removed only when projection is valid. Saved-meeting
+transcript handling and the independent 4,000-character saved-note excerpt are
+unchanged. The input remains untrusted data, not an instruction or source grant.
+Only the model-call view contains this added block. Session, interruption and
+deadline-checkpoint writes receive the original message list. Model replies and
+acknowledged tool results retain their existing persistence rules; tools still
+search the full supplied context through the existing authorization paths.
+
+These prompt receipts neither authorize retrieval nor replace the dependency
+receipts above. They are not saved-source verification. Missing current client
+input cannot inherit presence from an old receipt, and all saved-source/grant
+checks still apply. The input policy preserves conversation labels and prohibits
+backdating a current draft to earlier input. It does not rewrite model output.
+Local tests inspect real request construction using recorded synthetic payloads
+and placeholder model replies; semantic improvement requires separate real
+three-turn acceptance after reviewed deployment.
+
 Receipts restore only for the same authenticated user and meeting scope. An
 unscoped receipt requires an unscoped request. They never authorize a DynamoDB
 or S3 read. All independently recorded server-source dependencies remain

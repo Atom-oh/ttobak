@@ -13,11 +13,11 @@ import { WhisperStack } from '../lib/whisper-stack';
 import { WebSearchGatewayStack } from '../lib/web-search-gateway-stack';
 
 const app = new cdk.App();
-// Prepare existing KB snapshots before the current-source QA cutover.
-const knowledgeIndexingMode: 'manual-only' | 'all' = 'manual-only';
+// Activate canonical sources after snapshot acceptance and current-source QA.
+const knowledgeIndexingMode: 'manual-only' | 'all' = 'all';
 const knowledgeIndexScheduleEnabled = true;
 // Separate activation change only after deployed QA jobs pass acceptance.
-const qaAsyncJobsEnabled = false;
+const qaAsyncJobsEnabled = true;
 
 // Environment configuration (ap-northeast-2 recommended for Korean users)
 const env = {

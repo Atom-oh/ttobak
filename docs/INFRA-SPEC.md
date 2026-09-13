@@ -137,9 +137,11 @@ QA REST jobs use `ttobak-qa-jobs`: SQS-managed encryption, TLS, 1800s visibility
 one-day retention/DLQ, batch one, concurrency two, partial batch failures.
 GatewayStack owns scoped queue permissions and JWT submit/poll routes, injecting
 `QA_JOBS_QUEUE_URL`/`QA_JOBS_QUEUE_ARN`. Job rows enforce one-hour
-`pendingShareExpiresAt` expiry. Frontend runtime `qaAsyncJobs` defaults off through
-`qaAsyncJobsEnabled=false`; preparation can deploy before activation. Enable it
-only after backend acceptance; see the [async contract](../backend/python/qa/ASYNC_CONTRACT.md).
+`pendingShareExpiresAt` expiry. FrontendStack's omitted/false
+`qaAsyncJobsEnabled` still emits false. The app now explicitly opts in with true
+after recorded backend acceptance; browser activation proof remains pending.
+See the [activation evidence and remaining checks](runbooks/qa-current-source-rollout.md#async-ui-opt-in--2026-09-13)
+and [async contract](../backend/python/qa/ASYNC_CONTRACT.md).
 
 | Trigger | Target |
 |---|---|
@@ -150,7 +152,7 @@ only after backend acceptance; see the [async contract](../backend/python/qa/ASY
 | Custom ActionItemsRequested, ttobak.analysis | summarize, action analysis only |
 | Custom DocumentUploadCompleted, ttobak.upload | document-extract, queued canonical runs only |
 | S3 Object Created, docs/ slide suffix filter | convert-doc |
-| One-minute ttobak-kb-index-tick | kb; enabled in the current app, manual-only |
+| One-minute ttobak-kb-index-tick | kb; configured enabled by the checked-in CDK app, all mode |
 | Canonical DynamoDB stream records | kb; mapping/grants created only in all mode |
 | Scheduled warming event | API alias |
 | SQS ttobak-qa-jobs, single-record mapping | qa; durable job execution, concurrency two |
@@ -219,11 +221,11 @@ the security boundary. Verify role/network configuration when modifying executio
 
 ## Knowledge and declared gaps
 
-The app currently sets `knowledgeIndexingMode='manual-only'` and
+The activation configuration sets `knowledgeIndexingMode='all'` and
 `knowledgeIndexScheduleEnabled=true`; the reusable construct's schedule default
-is false. This enables the scheduled bootstrap in the synthesized configuration,
-not evidence of a deployed producer. Canonical stream mapping/read permissions
-remain absent until explicit `all` mode.
+is false. This retains the schedule and adds canonical stream mapping/read
+permissions. Merge/deployment requires completed manual snapshot acceptance and
+deployed, verified current-source QA. Configuration is not deployment evidence.
 
 `cmd/kb` requires TABLE_NAME, assets BUCKET_NAME, KB_BUCKET_NAME, KB_ID,
 DATA_SOURCE_ID and INDEXING_MODE. IDs must be ten alphanumeric characters; mode

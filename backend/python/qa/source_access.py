@@ -11,6 +11,7 @@ from session_provenance import remember_source, collect_detail, new_source_state
 from indexed_retrieval import discover_sources, discovery_filters, hydrate_candidates
 from legacy_text import legacy_page
 from request_history import is_request_dependency, request_is_current, remember_client_input
+from canonical_selection import selected_resource_ids, retrieve_selected
 
 logger = logging.getLogger(__name__)
 
@@ -234,7 +235,7 @@ class SourceAccess:
         return {key: value for key, value in page.items() if key != 'dependency'}
 
 
-    def retrieve_from_kb(self, question, number_of_results=5, user_id=None, source_keys=None):
+    def retrieve_from_kb(self, question, number_of_results=5, user_id=None, source_keys=None, resource_ids=None):
         """Fresh semantic discovery plus current saved-text matches, with live authority."""
         if not isinstance(user_id, str) or not IDENTIFIER.fullmatch(user_id):
             raise ValueError('Authenticated user is required for KB retrieval')
@@ -246,6 +247,11 @@ class SourceAccess:
             raise ValueError('Invalid Knowledge Base query')
         capped = min(number_of_results, 10)
         reader = self.reader
+        if source_keys is not None and resource_ids is not None:
+            raise ValueError('Use either canonical resource IDs or original binary keys')
+        selected_ids = selected_resource_ids(resource_ids) if resource_ids is not None else None
+        if selected_ids is not None and len(selected_ids) > capped:
+            raise ValueError('Result limit must cover every selected source')
         selected = selected_source_keys(user_id, source_keys) if source_keys is not None else None
         if selected and len(selected) > capped:
             raise ValueError('Result limit must cover every selected source')
@@ -282,6 +288,12 @@ class SourceAccess:
                                                lookup=lambda source_filter: retrieve_group(source_filter, exact=True))
         shared = self.shared_meetings(user_id)
         identities, accounts = discover_sources(reader, user_id, self.query_all, shared)
+        if selected_ids is not None:
+            # Current authorization and revision-filtered hydration justify exact
+            # selection; the default semantic-search threshold remains unchanged.
+            # Do not expand a selected meeting into unselected attachment sources.
+            return retrieve_selected(reader, user_id, question, selected_ids, identities,
+                                     lambda source_filter: retrieve_group(source_filter, exact=True))
         candidates = []
         for source_filter in discovery_filters(user_id, self.reader.kb_bucket, identities, accounts, shared):
             candidates.extend(retrieve_group(source_filter))

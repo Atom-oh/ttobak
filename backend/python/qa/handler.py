@@ -10,6 +10,11 @@ import boto3
 from botocore.config import Config
 from async_jobs import QAJobs, JobError, JobDeadline, MutationGuard, deadline as job_deadline, API_SECONDS, RUN_SECONDS, INPUT_LIMIT
 from deadline_history import DeadlineHistory
+from completion_diagnostics import QA_OUTPUT_TOKENS, CompletionDiagnostics
+from current_input import (
+    GUIDANCE as CURRENT_INPUT_GUIDANCE, request_user_message,
+    current_input_turn, project_current_input,
+)
 from delivery_proof import validate_delivery
 
 from aws_docs import search_aws_docs
@@ -1065,7 +1070,7 @@ def _account_research(acc_id):
 
 def _qa_system_messages(transcript, meeting_notes=None, meeting_id=None):
     """Bound prompt excerpts without silently dropping independently saved notes."""
-    messages = [{"text": get_system_prompt()}]
+    messages = [{"text": get_system_prompt() + '\n\n' + CURRENT_INPUT_GUIDANCE}]
     for source, text, limit, tail in (
         ('meeting_context', transcript, 2000, True),
         ('saved_user_notes', meeting_notes, 4000, False),
@@ -1095,6 +1100,22 @@ def _qa_system_messages(transcript, meeting_notes=None, meeting_id=None):
             + json.dumps(snapshot, ensure_ascii=False)
         )})
     return messages
+
+
+def _qa_model_input(messages, transcript, meeting_notes, meeting_id, source_state):
+    """Move only verified current client input to an ephemeral user-turn view."""
+    system = _qa_system_messages(transcript, meeting_notes, meeting_id)
+    input_turn, input_excerpt = None, None
+    if source_state.get('clientInputReceived') is True:
+        input_turn = current_input_turn(messages, transcript, meeting_id)
+        if input_turn is not None:
+            # The existing builder owns the 2,000-character tail, coverage and
+            # JSON quoting. Keep saved notes and saved-meeting context unchanged.
+            input_excerpt = system.pop(1)
+        system.append({'text': CLIENT_LIVE_NOTE})
+    if source_state.get('attachmentContext'):
+        system.append({'text': _attachment_prompt(source_state['attachmentContext'])})
+    return system, input_turn, input_excerpt
 
 
 def _qa_search_context(transcript, meeting_notes):
@@ -1160,8 +1181,10 @@ def _agentic_converse(messages, transcript, session_id, user_id, meeting_notes, 
     sources = []
     strict_completion = model_client is not None
     finished = False
+    diagnostics = CompletionDiagnostics('converse', 0)
 
-    def fail_answer():
+    def fail_answer(reason='incomplete_response'):
+        diagnostics.emit(logger, reason)
         if (messages and messages[-1].get('role') == 'user'
                 and any('toolResult' in block for block in messages[-1].get('content', []))):
             _validate_answer_sources(user_id, source_state, context['tool_history'])
@@ -1172,28 +1195,28 @@ def _agentic_converse(messages, transcript, session_id, user_id, meeting_notes, 
                          source_details=source_details)
         raise JobError('QA_MODEL_INCOMPLETE', 'QA did not complete. Check previous tool results before retrying.', 502)
 
-    system_messages = _qa_system_messages(transcript, meeting_notes, meeting_id)
-    if source_state.get('clientInputReceived'):
-        system_messages.append({'text': CLIENT_LIVE_NOTE})
-    if source_state.get('attachmentContext'):
-        system_messages.append({'text': _attachment_prompt(source_state['attachmentContext'])})
+    system_messages, input_turn, input_excerpt = _qa_model_input(
+        messages, transcript, meeting_notes, meeting_id, source_state)
 
-    for _ in range(MAX_TOOL_ROUNDS):
+    for round_number in range(MAX_TOOL_ROUNDS):
+        diagnostics = CompletionDiagnostics('converse', round_number + 1)
         _validate_answer_sources(user_id, source_state, context['tool_history'])
         try:
             resp = (model_client if model_client is not None else bedrock_runtime).converse(
                 modelId=BEDROCK_MODEL_ID,
                 system=system_messages,
-                messages=messages,
+                messages=project_current_input(messages, input_turn, input_excerpt),
                 toolConfig={"tools": TOOL_DEFINITIONS},
-                inferenceConfig={"maxTokens": 4096},
+                inferenceConfig={"maxTokens": QA_OUTPUT_TOKENS},
             )
         except Exception as e:
-            logger.error(f"Bedrock converse failed: {e}", exc_info=True)
+            logger.warning("Bedrock converse request failed (%s)", type(e).__name__)
             if model_client is not None:
-                fail_answer()
+                fail_answer('request_failed')
+            diagnostics.emit(logger, 'request_failed')
             return "죄송합니다. AI 응답 생성 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.", [], []
 
+        diagnostics.response(resp)
         output_message = resp["output"]["message"]
         stop_reason = resp["stopReason"]
         if strict_completion:
@@ -1242,7 +1265,7 @@ def _agentic_converse(messages, transcript, session_id, user_id, meeting_notes, 
             messages.append({"role": "user", "content": tool_results})
 
     if strict_completion and not finished:
-        fail_answer()
+        fail_answer('tool_round_limit')
     # Extract final text answer
     answer = extract_text_answer(output_message)
 
@@ -1283,8 +1306,11 @@ def handle_ask(question, context=None, meeting_id=None, session_id=None, user_id
         # Load existing conversation or start new
         messages = load_session(session_id, user_id=user_id, source_state=source_state, source_details=source_details)
 
-        # User message is just the question — context is in system prompt
-        messages.append({"role": "user", "content": [{"text": question}]})
+        # Persist only the receipt. The model-call view adds a bounded current
+        # input excerpt without copying rolling transcript bytes into history.
+        messages.append(request_user_message(
+            question, messages, context, meeting_id,
+            client_input_received=source_state.get('clientInputReceived', False)))
 
         answer, tools_used, sources = agentic_converse(
             messages,
@@ -1361,7 +1387,9 @@ def handle_meeting_ask(question, meeting_id, user_id, session_id=None, *,
         messages = load_session(session_id, user_id=user_id, source_state=source_state, source_details=source_details)
 
         user_content = f"[미팅 '{meeting_id}'의 트랜스크립트가 있습니다. search_transcript 도구로 검색할 수 있습니다.]\n\n{question}"
-        messages.append({"role": "user", "content": [{"text": user_content}]})
+        messages.append(request_user_message(
+            user_content, messages, transcript, meeting_id,
+            client_input_received=source_state.get('clientInputReceived', False)))
 
         answer, tools_used, sources = agentic_converse(
             messages,
@@ -1604,7 +1632,9 @@ def handle_ask_stream(event):
         user_content = question
         if transcript:
             user_content = f"[현재 미팅 트랜스크립트가 있습니다. search_transcript 도구로 검색할 수 있습니다.]\n\n{question}"
-        messages.append({"role": "user", "content": [{"text": user_content}]})
+        messages.append(request_user_message(
+            user_content, messages, transcript, event.get('meetingId'),
+            client_input_received=source_state.get('clientInputReceived', False)))
 
         answer, tools_used, sources = agentic_converse_stream(
             messages,
@@ -1700,14 +1730,14 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
     final_answer_parts = []
     finished = False
     client_gone = False
+    diagnostics = CompletionDiagnostics('stream', 0)
+    assembled_content = []
 
-    system_messages = _qa_system_messages(transcript, meeting_notes, meeting_id)
-    if source_state.get('clientInputReceived'):
-        system_messages.append({'text': CLIENT_LIVE_NOTE})
-    if source_state.get('attachmentContext'):
-        system_messages.append({'text': _attachment_prompt(source_state['attachmentContext'])})
+    system_messages, input_turn, input_excerpt = _qa_model_input(
+        messages, transcript, meeting_notes, meeting_id, source_state)
 
-    def fail_stream(code):
+    def fail_stream(code, reason, open_block=None, content=None):
+        diagnostics.emit(logger, reason, open_block=open_block, content=content)
         # Retain completed tool receipts, but never append an empty/partial model
         # message. The explicit interruption note closes the paired tool round
         # so load_session does not rewind and forget a completed mutation.
@@ -1723,19 +1753,20 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
                 source_details=source_details) is True
         raise ModelStreamError(code, session_continuable) from None
 
-    for _ in range(MAX_TOOL_ROUNDS):
+    for round_number in range(MAX_TOOL_ROUNDS):
+        diagnostics = CompletionDiagnostics('stream', round_number + 1)
         validate_sources(source_state, lambda dep: _source_is_current(user_id, dep, source_state), tool_history=context['tool_history'])
         try:
             stream_resp = bedrock_runtime.converse_stream(
                 modelId=BEDROCK_MODEL_ID,
                 system=system_messages,
-                messages=messages,
+                messages=project_current_input(messages, input_turn, input_excerpt),
                 toolConfig={"tools": TOOL_DEFINITIONS},
-                inferenceConfig={"maxTokens": 4096},
+                inferenceConfig={"maxTokens": QA_OUTPUT_TOKENS},
             )
         except Exception as e:
             logger.warning("Bedrock stream request failed (%s)", type(e).__name__)
-            fail_stream('MODEL_STREAM_UNAVAILABLE')
+            fail_stream('MODEL_STREAM_UNAVAILABLE', 'request_failed')
 
         assembled_content = []
         current_block = None
@@ -1746,6 +1777,7 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
         model_stream = stream_resp.get('stream', [])
         try:
             for ev in model_stream:
+                diagnostics.event(ev)
                 if 'messageStart' in ev:
                     continue
                 if 'contentBlockStart' in ev:
@@ -1803,7 +1835,7 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
             raise
         except Exception as error:
             logger.warning("Bedrock stream iteration failed (%s)", type(error).__name__)
-            fail_stream('MODEL_STREAM_UNAVAILABLE')
+            fail_stream('MODEL_STREAM_UNAVAILABLE', 'iteration_failed', current_block, assembled_content)
         finally:
             close_stream = getattr(model_stream, 'close', None)
             if callable(close_stream):
@@ -1813,11 +1845,13 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
                     logger.warning("Bedrock stream close failed (%s)", type(error).__name__)
 
         if stop_reason not in ('end_turn', 'stop_sequence', 'tool_use') or current_block is not None:
-            fail_stream('MODEL_STREAM_INCOMPLETE')
+            reason = ('open_block' if current_block is not None else
+                      'missing_stop' if stop_reason is None else 'unsupported_stop')
+            fail_stream('MODEL_STREAM_INCOMPLETE', reason, current_block, assembled_content)
         if stop_reason in ('end_turn', 'stop_sequence') and not round_text.strip():
-            fail_stream('MODEL_STREAM_EMPTY')
+            fail_stream('MODEL_STREAM_EMPTY', 'empty_answer', current_block, assembled_content)
         if stop_reason == 'tool_use' and not any('toolUse' in block for block in assembled_content):
-            fail_stream('MODEL_STREAM_INCOMPLETE')
+            fail_stream('MODEL_STREAM_INCOMPLETE', 'tool_stop_without_tool', current_block, assembled_content)
         messages.append({"role": "assistant", "content": assembled_content})
         if round_text.strip():
             final_answer_parts.append(round_text)
@@ -1883,7 +1917,7 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
                 break
 
     if not finished and not client_gone:
-        fail_stream('MODEL_TOOL_ROUND_LIMIT')
+        fail_stream('MODEL_TOOL_ROUND_LIMIT', 'tool_round_limit', content=assembled_content)
     _validate_answer_sources(user_id, source_state, context['tool_history'])
     save_session(session_id, messages, user_id=user_id, source_state=source_state, source_details=source_details)
 

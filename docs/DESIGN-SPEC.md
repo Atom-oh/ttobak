@@ -128,8 +128,9 @@ DocDetailClient shows IndexStatus for personal/account documents. Unsaved change
 override any indexed badge. Pending status polls at five-second intervals for at
 most 12 checks, then offers explicit refresh; unavailable/failed status never means
 indexed. Deploy the index-status API before this UI. A status route or badge does
-not mean canonical indexing has been activated: the app still selects manual-only
-bootstrap.
+not prove deployed canonical indexing. This activation configuration selects
+`all` after consumer qualification; deployed backfill and lifecycle outcomes are
+verified separately.
 
 REST, WebSocket, chat and QA components preserve optional `sourceDetails`, with
 legacy `sources` fallback. Display human titles and caveats for partial evidence,
