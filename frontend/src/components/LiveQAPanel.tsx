@@ -99,7 +99,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
   const toggleProactiveSearch = useCallback(() => {
     proactiveSearchStore.set(!proactiveSearchStore.get());
   }, []);
-  // Pre-submission failures can retry; submitted requests keep their shared claim.
+  // Failures before reservation can retry; HTTP reserves before dispatch.
   const proactiveClaimByEntryRef = useRef<Map<string, { question: string; epoch: number }>>(new Map());
   const rollbackProactiveClaim = useCallback((entryId: string | null) => {
     if (!entryId) return;
@@ -107,7 +107,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     if (claimed) {
       proactiveClaimByEntryRef.current.delete(entryId);
       // Releases this question's flight. Its claim can be released only before
-      // submission; the consumed batch remains consumed in either case.
+      // reservation; the consumed batch remains consumed in either case.
       if (claimed.epoch === proactiveGuard.epoch) rollbackProactiveClaimState(claimed.question);
     }
   }, []);

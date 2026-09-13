@@ -13,15 +13,19 @@ context. IDs are `{13-digit-epoch-ms}-{32-lowercase-hex}`, initially within five
 minutes past/one minute future. User/ID binds normalized input: reuse returns
 the same ticket, different input returns 409. `GET /api/qa/jobs/{jobId}` returns
 status and successful `result` or failed `error`; foreign/missing=404, expired=410.
-Frontend keeps one ID through two submissions and 660s polling (20s/fetch),
-pinning the user through refresh. Reconcile with `QAJobError.jobId`;
+Frontend keeps one ID through at most two submissions and a 660-second polling
+window. Polling normally pauses one second; server hints are clamped to 1–5
+seconds. Each fetch has a 20-second abort limit. The user stays pinned through
+refresh. `QAJobError` exposes the ID in both its field and displayed message;
 reload does not resume polling.
 
 Chat bounds WS answers at 330s for the shared 300s Lambda and REST at 690s for
 the 660s API polling budget. Live QA retains its progress-rearmed idle watchdog.
-Submitted proactive questions stay claimed through failure/unmount and later
-batches; assigned job IDs are retained and shown on errors. Claims reset on a
-new recording/auth scope, not on uncertain completion. No automatic resend.
+HTTP proactive claims are reserved before dispatch, not after acknowledgement.
+They stay claimed through network failure/unmount and later batches because a
+failed request does not prove the backend received nothing. Assigned job IDs are
+retained and shown on errors. Claims reset on a new recording/auth scope, not on
+uncertain completion. Accepted WS sends are also retained. No automatic resend.
 
 Exact-queue SQS pointers contain only version/user/job IDs. Conditional claims
 never take over RUNNING. Queued dispatch can recover through polling, with 10s

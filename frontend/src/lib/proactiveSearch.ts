@@ -34,9 +34,9 @@ export interface ProactiveBatch {
  * resetProactiveClaims() is called on every recording start. (A
  * meetingId-based namespace would be unstable instead: the id appears
  * mid-recording when the draft meeting is created, and a key that flips
- * `live|q` → `{id}|q` re-fires the same question.) Pre-submission failures can
- * release a claim within MAX_PROACTIVE_ATTEMPTS. Submitted requests remain
- * claimed because a missing answer does not prove execution failed.
+ * `live|q` → `{id}|q` re-fires the same question.) Failures before reservation
+ * can release a claim within MAX_PROACTIVE_ATTEMPTS. HTTP reserves before
+ * dispatch; network failure cannot prove the backend received nothing.
  */
 export const claimedProactiveQuestions = new Set<string>();
 /** Assigned jobs can have side effects even without a delivered answer. */
@@ -85,7 +85,7 @@ export function registerProactiveAttempt(question: string): number {
 
 /**
  * Roll back one claimed question after its ask FAILED (WS stall/error, HTTP
- * failure, panel unmount mid-answer). Releases the claim only before submission
+ * failure, panel unmount mid-answer). Releases the claim only before reservation
  * and below MAX_PROACTIVE_ATTEMPTS; otherwise it stays claimed for the recording.
  * Releases the in-flight flag
  * only if this question owns it. The consumed-batch generation is

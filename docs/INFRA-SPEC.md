@@ -83,8 +83,9 @@ events. Key schemas are in Go model files and Python artifact implementations.
 | GSI3 | meetingId / entityType | Direct meeting entity lookup |
 | GSI4 | GSI4PK / GSI4SK (number) | Crawled-document type/date lookup |
 
-Table TTL is `pendingShareExpiresAt`, used by pending grants and QA web-search
-hourly counters. Application code enforces grant expiry synchronously. Existing
+Table TTL is `pendingShareExpiresAt`, used by pending grants, QA web-search
+hourly counters, QA source-detail metadata and async job input/result/proof rows.
+Grant, metadata and job reads also enforce their respective expiry. Existing
 QA conversation/cache/rate-limit rows with uppercase `TTL` are not swept by this
 setting. Do not claim every PII row has enforced retention, or switch TTL names
 without a separate data-retention review. StorageStack does not declare a customer
@@ -150,6 +151,7 @@ only after backend acceptance; see the [async contract](../backend/python/qa/ASY
 | One-minute ttobak-kb-index-tick | kb; enabled in the current app, manual-only |
 | Canonical DynamoDB stream records | kb; mapping/grants created only in all mode |
 | Scheduled warming event | API alias |
+| SQS ttobak-qa-jobs, single-record mapping | qa; durable job execution, concurrency two |
 | API simulator invoke | sim, asynchronous |
 
 The image rule is not a raw images/ prefix trigger, so simulator chart writes do

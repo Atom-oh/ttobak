@@ -334,7 +334,7 @@ interface QAJob {
 
 export class QAJobError extends ApiError {
   constructor(status: number, code: string, message: string, public readonly jobId: string) {
-    super(status, code, message);
+    super(status, code, message.includes(jobId) ? message : `${message} (QA job: ${jobId})`);
     this.name = 'QAJobError';
   }
 }
@@ -363,7 +363,7 @@ async function askQA(request: {
   }
   const jobId = `${Date.now()}-${crypto.randomUUID().replace(/-/g, '')}`;
   const body = JSON.stringify({ ...request, requestId: jobId });
-  onSubmit?.(jobId); // Before submission: a cancelled caller can still stop safely.
+  onSubmit?.(jobId); // Reserve before dispatch; delivery may remain unconfirmed.
   const end = Date.now() + QA_POLL_DEADLINE_MS;
   const pause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
   const fetchJob = async (method: 'GET' | 'POST'): Promise<QAJob> => {
@@ -404,7 +404,11 @@ async function askQA(request: {
     }
   }
   while (Date.now() < end) {
-    assertRequestUser(userId);
+    try {
+      assertRequestUser(userId);
+    } catch (error) {
+      throw failure(error);
+    }
     if (job?.status === 'succeeded') {
       // Submission only returns a ticket. Results come from an authenticated,
       // source-revalidated GET even when the initial ticket says succeeded.
