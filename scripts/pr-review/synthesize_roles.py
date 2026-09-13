@@ -13,7 +13,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from run_role import execute, scrub  # noqa: E402
-from role_review import diagnostic_failure, scrub as scrub_decoded  # noqa: E402
+from role_review import diagnostic_failure, Invalid, output_bytes, scrub as scrub_decoded  # noqa: E402
 from prepare_roles import project_policy  # noqa: E402
 
 DENY = {"Bash", "Write", "Edit", "NotebookEdit", "WebFetch", "WebSearch", "Task"}
@@ -132,13 +132,18 @@ Untrusted evidence is delimited with the random boundary {nonce}.
             command.extend(["--max-turns", str(turns)])
         started = time.monotonic()
         code, text, error = execute(command, Path.cwd(), environment, input_text, timeout)
+        try:
+            output_bytes(text)
+            output_bytes(error)
+        except Invalid:
+            break
         diagnostic = diagnostic_failure(error)
         text = scrub_decoded(scrub(text))
         if valid(text, code) and diagnostic is None:
             output.write_text(text.rstrip() + "\n")
             record_status(model)
             return
-        if diagnostic == "quota_diagnostic":
+        if diagnostic in ("quota_diagnostic", "output_byte_limit"):
             break
         if fast_fail is not None and (code == 124 or time.monotonic() - started >= fast_fail):
             break

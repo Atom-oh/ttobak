@@ -37,6 +37,7 @@ MAX_DIFF_BYTES = 95000
 MAX_DIFF_LINES = 3000
 MAX_CONTEXT_BYTES = 24000
 MAX_REQUEST_BYTES = 131072
+MAX_OUTPUT_BYTES = 1024 * 1024
 ROLES = {
     "codex": ("implementation", "OpenAI", "global.openai.gpt-6-astra",
               "Implementation correctness, concurrency and tests"),
@@ -79,10 +80,10 @@ FAILURE_CODES = {
     "invalid_findings", "invalid_finding", "invalid_uncertainties",
     "invalid_json_wrapper", "empty_response", "model_selection_diagnostic",
     "model_fallback_diagnostic", "quota_diagnostic", "agent_preflight_diagnostic",
-    "duplicate_record",
+    "duplicate_record", "output_byte_limit",
 }
 TERMINAL_CODES = {"model_selection_diagnostic", "model_fallback_diagnostic",
-                  "quota_diagnostic", "agent_preflight_diagnostic"}
+                  "quota_diagnostic", "agent_preflight_diagnostic", "output_byte_limit"}
 
 
 class Invalid(Exception):
@@ -132,8 +133,14 @@ def write_json(path, value):
     write(path, canonical(value) + "\n")
 
 
-def text_file(path):
+def text_file(path, max_bytes=None):
     try:
+        if max_bytes is not None:
+            with Path(path).open("rb") as source:
+                raw = source.read(max_bytes + 1)
+            if len(raw) > max_bytes:
+                raise Invalid("output_byte_limit")
+            return raw.decode("utf-8")
         return Path(path).read_text(encoding="utf-8")
     except (OSError, UnicodeError):
         raise Invalid("input_unavailable_or_not_utf8") from None
@@ -566,11 +573,11 @@ def _issue_request(work, tag):
     if not previous.exists() and (work / "slot" / f"{tag}.record-claim").exists():
         raise Invalid("record_incomplete")
     if previous.exists():
-        prior = strict_json(text_file(previous))
+        prior = strict_json(text_file(previous, MAX_OUTPUT_BYTES + 4096))
         if not isinstance(prior, dict) or prior.get("valid") is not False:
             raise Invalid("result_already_recorded")
         history_file = work / "slot" / f"{tag}-attempts.json"
-        history = strict_json(text_file(history_file)) if history_file.exists() else []
+        history = strict_json(text_file(history_file, MAX_OUTPUT_BYTES)) if history_file.exists() else []
         if not isinstance(history, list) or len(history) >= 32:
             raise Invalid("attempt_history_limit")
         history.append(prior)
@@ -663,6 +670,8 @@ def parse_response(text):
 
 def diagnostic_failure(stderr):
     """Match diagnostic forms, not general words in echoed code or prompts."""
+    if stderr.strip() == "output_byte_limit":
+        return "output_byte_limit"
     for raw in stderr.splitlines():
         line = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", raw).strip()
         if line.startswith(("+", "-", ">", "|", "```", "diff --git", "@@")):
@@ -689,20 +698,34 @@ def diagnostic_failure(stderr):
     return None
 
 
-def scrub(value):
+def output_bytes(text):
+    if len(text) > MAX_OUTPUT_BYTES:
+        raise Invalid("output_byte_limit")
+    size = len(text.encode("utf-8"))
+    if size > MAX_OUTPUT_BYTES:
+        raise Invalid("output_byte_limit")
+    return size
+
+
+def scrub(value, _remaining=None):
     """Scrub decoded strings too: raw-JSON sanitizers miss escaped credentials."""
+    if _remaining is None:
+        _remaining = [MAX_OUTPUT_BYTES]
     if isinstance(value, list):
-        return [scrub(x) for x in value]
+        return [scrub(x, _remaining) for x in value]
     if isinstance(value, dict):
-        return {k: scrub(v) for k, v in value.items()}
+        return {k: scrub(v, _remaining) for k, v in value.items()}
     if not isinstance(value, str):
         return value
+    _remaining[0] -= output_bytes(value)
+    if _remaining[0] < 0:
+        raise Invalid("output_byte_limit")
     value = re.sub(r"(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]", "", value)
     value = re.sub(r"(?:\x1b[\]PX^_]|\x9d|\x90|\x98|\x9e|\x9f).*?(?:\x07|\x9c|\x1b\\|$)", "", value, flags=re.S)
     value = re.sub(r"\x1b[ -/]*[0-~]", "", value)
     value = "".join(c for c in value if c in "\n\r\t" or unicodedata.category(c) not in ("Cc", "Cf", "Zl", "Zp"))
     identifier = (
-        r"(?i:(?<![A-Za-z0-9])[A-Za-z0-9_-]*(?:password|passwd|api[_-]?key|"
+        r"(?i:(?<![A-Za-z0-9_-])[A-Za-z0-9_-]*(?:password|passwd|api[_-]?key|"
         r"secret|token|credential|passphrase|private[_-]?key|cookie|AccessKeyId|access[_-]?key[_-]?id)[A-Za-z0-9_-]*)"
     )
     key = identifier + r"""["']?\s*[:=]\s*"""
@@ -776,13 +799,13 @@ def _record(args):
             raise Invalid("inactive_role")
         if args.exit_code != 0:
             result["failure_codes"].append("cli_nonzero_exit")
-        stderr = text_file(args.stderr)
+        stderr = text_file(args.stderr, MAX_OUTPUT_BYTES)
         failure = diagnostic_failure(stderr)
         if failure:
             result["failure_codes"].append(failure)
         if result["failure_codes"]:
             raise Invalid(result["failure_codes"][0])
-        response = parse_response(text_file(args.output))
+        response = parse_response(text_file(args.output, MAX_OUTPUT_BYTES))
         validate_response(response, plan, args.tag)
         response = scrub(response)
         validate_response(response, plan, args.tag)
@@ -824,7 +847,7 @@ def aggregate(args):
                 continue
             seen.add(tag)
             try:
-                result = strict_json(text_file(file))
+                result = strict_json(text_file(file, MAX_OUTPUT_BYTES + 4096))
                 role = plan["roles"][tag]
                 receipt = issued_request(work, plan, tag)
                 if not isinstance(result, dict):
@@ -864,7 +887,7 @@ def aggregate(args):
         path = work / "slot" / f"{tag}-attempts.json"
         if path.exists():
             try:
-                attempts = strict_json(text_file(path))
+                attempts = strict_json(text_file(path, MAX_OUTPUT_BYTES))
                 if not isinstance(attempts, list) or len(attempts) > 32:
                     raise Invalid("invalid_attempt_history")
                 history[tag] = scrub(attempts)

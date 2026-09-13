@@ -379,6 +379,68 @@ class RoleReviewTests(unittest.TestCase):
                 self.assertNotIn(secret, role_review.scrub(evidence))
                 self.assertNotIn(secret, role_review.scrub(scrub_raw(evidence)))
 
+    def test_separator_runs_scrub_within_a_bounded_subprocess(self):
+        code = (
+            "import json,sys; from role_review import scrub; "
+            "print(json.dumps(scrub(json.load(sys.stdin))))"
+        )
+        for separator in ("_", "-"):
+            with self.subTest(separator=separator):
+                run = separator * 8000
+                text = ("deployment_password_suffix=SYNTHETIC_BEFORE " + run
+                        + " provider-token-suffix=SYNTHETIC_AFTER")
+                try:
+                    result = subprocess.run(
+                        [sys.executable, "-c", code], cwd=ENGINE.parent,
+                        input=json.dumps(text), capture_output=True, text=True, timeout=3,
+                    )
+                except subprocess.TimeoutExpired:
+                    self.fail("Scrubbing one 8000-character separator run exceeded three seconds")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                scrubbed = json.loads(result.stdout)
+                self.assertIn(run, scrubbed)
+                self.assertNotIn("SYNTHETIC_BEFORE", scrubbed)
+                self.assertNotIn("SYNTHETIC_AFTER", scrubbed)
+
+    def test_decoded_output_budget_counts_string_values_in_utf8_bytes(self):
+        limit = 1024 * 1024
+        allowed = {"first": "*" * (limit // 2), "second": "*" * (limit // 2)}
+        self.assertEqual(role_review.scrub(allowed), allowed)
+        with self.assertRaisesRegex(role_review.Invalid, "^output_byte_limit$"):
+            role_review.scrub({"first": allowed["first"], "second": allowed["second"] + "*"})
+        with self.assertRaisesRegex(role_review.Invalid, "^output_byte_limit$"):
+            role_review.scrub("é" * (limit // 2 + 1))
+
+    def test_oversized_review_is_blocked_not_truncated_or_replaced_by_a_clean_retry(self):
+        self.prepare()
+        response = self.response("codex", checks=[{"path": FRONTEND, "evidence": "é" * 525000}])
+        raw = json.dumps(response, ensure_ascii=False)
+        self.assertLess(len(raw), 1024 * 1024)
+        self.assertGreater(len(raw.encode()), 1024 * 1024)
+        result = self.record("codex", raw=raw, expected=2)
+        self.assertIn("output_byte_limit", result["failure_codes"])
+        self.assertIsNone(result["response"])
+        self.record("claude-self")
+        self.assert_blocked()
+        self.cli("issue", "--work", self.work, "--tag", "codex")
+        self.record("codex")
+        self.assert_blocked()
+
+    def test_oversized_stderr_and_history_remain_blocking(self):
+        self.prepare()
+        result = self.record("codex", stderr="*" * (1024 * 1024 + 1), expected=2)
+        self.assertIn("output_byte_limit", result["failure_codes"])
+        self.assert_blocked()
+        self.work = self.root / "oversized-history"
+        self.prepare()
+        self.finish()
+        (self.work / "slot/codex-attempts.json").write_text(
+            json.dumps(["é" * 525000], ensure_ascii=False),
+        )
+        self.assert_blocked()
+        self.assertIn("invalid_attempt_history:codex", self.read("role-summary.json")["failures"])
+        self.assertNotIn("é", (self.work / "role-summary.json").read_text())
+
     def test_unterminated_quoted_credentials_cannot_reach_published_results(self):
         secret = "SYNTHETIC_UNTERMINATED_CREDENTIAL"
         for index, quote in enumerate(('"', "'")):
@@ -505,12 +567,12 @@ class RoleReviewTests(unittest.TestCase):
         entered, release = threading.Event(), threading.Event()
         original = engine.text_file
 
-        def hold_response(path):
+        def hold_response(path, *args):
             if Path(path) == output:
                 entered.set()
                 if not release.wait(10):
                     raise AssertionError("record race did not release the first writer")
-            return original(path)
+            return original(path, *args)
 
         with mock_patch.object(engine, "text_file", side_effect=hold_response):
             with ThreadPoolExecutor(max_workers=1) as pool:

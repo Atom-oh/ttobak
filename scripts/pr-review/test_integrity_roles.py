@@ -86,6 +86,13 @@ class IntegrityTests(unittest.TestCase):
         self.assertEqual(execute.call_count, 1)
         self.assertTrue(text.endswith("VERDICT: FAIL\n"))
 
+    def test_oversized_chair_output_cannot_pass_or_consume_fallback(self):
+        reply = (0, "*" * (1024 * 1024 + 1) + "\nVERDICT: PASS\n", "")
+        execute, text = self.chair([reply])
+        self.assertEqual(execute.call_count, 1)
+        self.assertTrue(text.endswith("VERDICT: FAIL\n"))
+        self.assertNotIn("***", text)
+
     def test_explicit_clean_fallback_can_resolve_selection_failure(self):
         execute, text = self.chair([
             (0, "Reviewed candidates.\nVERDICT: PASS\n", "[warn] failed to set model"),
