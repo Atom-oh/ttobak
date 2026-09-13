@@ -46,9 +46,58 @@ pending invitees do so only after verified materialization.
 
 Create/update request types live in `backend/internal/model/request.go`; entity
 fields live in `backend/internal/model/meeting.go`.
+`POST /api/meetings` optionally accepts `notes` (at most 32,000 Unicode code
+points) and `accountId`. Notes validation and current account membership checks
+precede meeting creation; both fields persist in the initial meeting write.
+The meeting still starts as `recording`, and classification does not share it.
+The create response includes `preparationApplied: true` only when nonempty
+requested preparation was saved. Create and detail responses advertise
+`supportsNotesComparison: true` and `supportsPrivateAccountLink: true`.
+`supportsNotesComparison` denotes revision-aware notes fencing, not merely text
+comparison. Create/detail responses include `notesRevision`: a server-generated
+UUID for new meetings and `""` for legacy rows that have no revision.
+During a mixed-version rollout, clients retain preparation locally and require
+these capabilities before retrying notes or private classification. Never send
+an unguarded preparation update to an older server. Capability flags describe
+supported semantics; the existing authorization checks still apply.
+
+`PUT /api/meetings/{meetingId}` optionally accepts `expectedNotes` alongside
+`notes` for a notes-only compare-and-set update. Both strings are limited to
+32,000 Unicode code points; `notes` must be present, and other mutation fields
+are rejected. Empty `expectedNotes` matches absent legacy notes or an explicitly
+empty string. Owner/edit authorization is unchanged. A failed database comparison
+returns HTTP 409 with `error.code: "CONFLICT"`; retain the local draft and reload.
+Omitting `expectedNotes` keeps the legacy update behavior.
+An optional `expectedNotesRevision` additionally matches the exact stored notes
+version in the same atomic condition. It requires both `notes` and `expectedNotes`,
+accepts at most 128 bytes, and empty matches absent or explicitly empty legacy
+revisions. A text or version mismatch returns 409. Every notes mutation, including
+legacy/unconditional writes and same-text fences, writes a fresh server-generated
+UUID in `notesRevision`; successful notes updates return that exact revision.
+Non-notes updates preserve the version and return the version observed during
+authorization. `notesRevision` is response-only: clients cannot assign it
+(unknown request fields are ignored). Clients recovering an uncertain request
+must fence even a same-text revert using both expected text and revision; equality
+of the text alone does not prove an older in-flight request cannot still commit.
+Recording autosave and final notes share one serialized comparison writer.
+Audio-upload retries do not resend acknowledged notes. An uncertain write is
+read back without silently adopting another editor's value; conflicts require
+explicit comparison. Size and save errors retain the editable draft and audio.
+
 GetMeeting resolves S3 transcript spills and returns the active note/transcript
 state, attachments and optional simRun. A/B selection and edited text must remain
 the source of truth: old timestamped segments cannot override the selected text.
+Detail also returns `accountId` when set, `sharedToAccount`, and owner-only
+`projectIds`. `fieldInsights` is an array of stored `MeetingInsight` objects,
+including evidence only inside this meeting-authorized response.
+`fieldInsightsFreshness` is always `"unknown"`: legacy extraction does not bind
+results to the current source. Malformed arrays or invalid entries surface
+`fieldInsightsError: "INVALID_INSIGHTS"`; usable entries can still be returned.
+The projection allows at most 50 items and 64 KiB of encoded array JSON. Text
+and evidence are capped at 2,000 code points each, implication/nextAction at
+1,000 each, ID at 128, timestamp marker at 64, and entities at 20 entries of 128
+code points each. Any size/count shortening sets `fieldInsightsTruncated: true`.
+These bounds cover the insight projection, not the entire legacy detail body.
 Saved notes are user input, distinct from generated content. Stuck transcription
 or summarization is reconciled after 60 minutes; summarize retry eligibility is a
 separate 20-minute conditional claim, not a retry scheduler.
@@ -60,7 +109,20 @@ new objects because the write may have committed. Existing referenced objects
 remain intact. Go and QA readers accept strictly validated legacy and versioned
 keys; deploy compatible readers before writers (ADR-037).
 
+`GET /api/kb/files` retains its `{files: [...]}` contract and follows all S3
+continuation pages under the caller's `kb/{userId}/` prefix. Any page failure
+fails the request rather than returning a silently incomplete successful list.
+This is storage pagination; the HTTP response remains a complete file list.
+
 ### Bounded meeting reading
+
+Bounded `section=notes` pages include the exact `notesRevision` (empty for legacy
+rows) from a strong metadata read without transcript S3 hydration. Their existing
+`revision` fingerprint and opaque cursor bind both the text and notes version, so
+even a same-text fence invalidates an older continuation with 409 `STALE_CURSOR`.
+Owner and shared-detail reads also use a strongly consistent canonical `GetItem`.
+Meeting-ID discovery projects only owner/meeting IDs from GSI3, then rereads the
+primary key; stale GSI text, revisions and publication flags are never authoritative.
 
 `GET /api/meetings/{meetingId}/reading` rechecks owner/direct-share/current-account
 access on every page and returns `Cache-Control: no-store`.
@@ -135,6 +197,24 @@ there is no transcript fallback when the summary is missing. Conflicts return
 409, denied writes 403 and missing meetings/items 404.
 
 ### Accounts and projects
+
+`POST /api/meetings/{meetingId}/account` is a private classification operation:
+the meeting owner must currently belong to the target account. One partial
+update sets `accountId` and `sharedToAccount: false` together, including when
+relinking an already team-shared meeting to the same or a different account.
+Notes and independent direct shares are preserved. Account-origin share rows
+remain subject to current meeting publication/membership checks; an explicit
+`POST /api/meetings/{meetingId}/share-account` is required to publish to a team.
+
+Account meeting lists and meeting-sourced insights revalidate the exact
+owner/meeting identity and current `accountId`/`sharedToAccount` using a strongly
+consistent, metadata-only primary-key read. They never authorize from an eventual
+GSI copy or hydrate transcript objects for this check. Missing/deleted, unpublished,
+repointed, or mismatched source/projection rows are omitted even when old account
+projection rows remain. Storage or decode failures fail the request rather than
+returning an empty or partial success. The account brief uses the same readers.
+Explicit account-owned `news` and `ingest` insight sources retain their member-only
+visibility; missing or unknown source types do not bypass meeting validation.
 
 Account creation creates owner membership atomically. Optional parentAccountId
 requires current membership in the parent. Parent updates require child ownership

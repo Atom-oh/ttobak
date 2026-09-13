@@ -438,25 +438,30 @@ func (r *DynamoDBRepository) resolveTranscripts(ctx context.Context, meetingID s
 }
 
 // CreateMeeting creates a new meeting record
-func (r *DynamoDBRepository) CreateMeeting(ctx context.Context, userID, title string, date time.Time, participants []string, sttProvider string) (*model.Meeting, error) {
+func (r *DynamoDBRepository) CreateMeeting(ctx context.Context, userID, title string, date time.Time, participants []string, sttProvider string, preparation ...model.MeetingPreparation) (*model.Meeting, error) {
 	meetingID := uuid.New().String()
 	now := time.Now().UTC()
 
 	meeting := &model.Meeting{
-		PK:           model.PrefixUser + userID,
-		SK:           model.PrefixMeeting + meetingID,
-		MeetingID:    meetingID,
-		UserID:       userID,
-		Title:        title,
-		Date:         date,
-		Participants: participants,
-		SttProvider:  sttProvider,
-		Status:       model.StatusRecording,
-		CreatedAt:    now,
-		UpdatedAt:    now,
-		GSI1PK:       model.PrefixUser + userID,
-		GSI1SK:       now.Format(time.RFC3339),
-		EntityType:   "MEETING",
+		PK:            model.PrefixUser + userID,
+		SK:            model.PrefixMeeting + meetingID,
+		MeetingID:     meetingID,
+		UserID:        userID,
+		Title:         title,
+		Date:          date,
+		Participants:  participants,
+		SttProvider:   sttProvider,
+		Status:        model.StatusRecording,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+		GSI1PK:        model.PrefixUser + userID,
+		GSI1SK:        now.Format(time.RFC3339),
+		EntityType:    "MEETING",
+		NotesRevision: uuid.NewString(),
+	}
+	if len(preparation) > 0 {
+		meeting.Notes = preparation[0].Notes
+		meeting.AccountID = preparation[0].AccountID
 	}
 
 	item, err := attributevalue.MarshalMap(meeting)
@@ -509,12 +514,13 @@ func (r *DynamoDBRepository) GetMeeting(ctx context.Context, userID, meetingID s
 	return &meeting, nil
 }
 
-// GetMeetingByID retrieves a meeting by meetingID using GSI3 (PK=meetingId, SK=entityType)
-// This is used for internal operations where we know the meetingID but not the owner
+// GetMeetingByID uses GSI3 only to discover the owner, then reads the canonical
+// row strongly. Neither notes/revisions nor publication can come from the GSI.
 func (r *DynamoDBRepository) GetMeetingByID(ctx context.Context, meetingID string) (*model.Meeting, error) {
 	keyEx := expression.Key("meetingId").Equal(expression.Value(meetingID)).
 		And(expression.Key("entityType").Equal(expression.Value("MEETING")))
-	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).Build()
+	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).
+		WithProjection(expression.NamesList(expression.Name("meetingId"), expression.Name("userId"))).Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to build expression: %w", err)
 	}
@@ -525,6 +531,7 @@ func (r *DynamoDBRepository) GetMeetingByID(ctx context.Context, meetingID strin
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
+		ProjectionExpression:      expr.Projection(),
 		Limit:                     aws.Int32(1),
 	})
 	if err != nil {
@@ -539,18 +546,10 @@ func (r *DynamoDBRepository) GetMeetingByID(ctx context.Context, meetingID strin
 	if err := attributevalue.UnmarshalMap(result.Items[0], &meeting); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal meeting: %w", err)
 	}
-	if r.skipTranscriptHydration {
-		// GSI3 discovers the owner; a current base-table read decides whether
-		// the meeting still exists and is still published to its account.
-		return r.GetMeeting(ctx, meeting.UserID, meetingID)
+	if meeting.UserID == "" || meeting.MeetingID != meetingID {
+		return nil, fmt.Errorf("meeting discovery identity does not match lookup")
 	}
-
-	// Resolve S3 transcript references
-	if err := r.resolveTranscripts(ctx, meetingID, &meeting); err != nil {
-		return nil, err
-	}
-
-	return &meeting, nil
+	return r.GetMeeting(ctx, meeting.UserID, meetingID)
 }
 
 // MeetingKey identifies a meeting by its owner and meeting ID (primary key).
@@ -629,6 +628,9 @@ func (r *DynamoDBRepository) UpdateMeeting(ctx context.Context, meeting *model.M
 	// Marshal a shallow storage copy instead; string-field swaps on the copy
 	// never touch the original, and the shared slices/maps are only read.
 	stored := *meeting
+	// Whole-item legacy writes also replace notes, even when their text did
+	// not change. Never reuse a caller's old revision for that replacement.
+	stored.NotesRevision = uuid.NewString()
 
 	// Store large transcripts in S3 if S3 client is available. A value that
 	// already carries an s3:// prefix is passed through ONLY if it is
@@ -739,6 +741,9 @@ func (r *DynamoDBRepository) UpdateMeeting(ctx context.Context, meeting *model.M
 		if action == putItemRetryActionRetry {
 			continue
 		}
+		if terminalErr == nil {
+			meeting.NotesRevision = stored.NotesRevision
+		}
 		return terminalErr
 	}
 }
@@ -833,7 +838,48 @@ func (r *DynamoDBRepository) getMeetingProjectIDs(ctx context.Context, ownerUser
 // condition inherent in the PutItem-based UpdateMeeting method.
 // Fields map keys must be DynamoDB attribute names (e.g., "status", "audioKey", "content").
 func (r *DynamoDBRepository) UpdateMeetingFields(ctx context.Context, userID, meetingID string, fields map[string]interface{}) error {
-	return r.updateMeetingFieldsWithCondition(ctx, userID, meetingID, expression.AttributeExists(expression.Name("PK")), fields, false)
+	return r.updateMeetingFieldsWithCondition(ctx, userID, meetingID, expression.AttributeExists(expression.Name("PK")), fields, false, nil)
+}
+
+// UpdateMeetingFieldsWithNotesRevision retains legacy partial-update semantics
+// while returning the exact revision generated for this invocation's notes write.
+func (r *DynamoDBRepository) UpdateMeetingFieldsWithNotesRevision(ctx context.Context, userID, meetingID string, fields map[string]interface{}) (string, error) {
+	var revision string
+	err := r.updateMeetingFieldsWithCondition(ctx, userID, meetingID, expression.AttributeExists(expression.Name("PK")), fields, false, &revision)
+	if err != nil {
+		return "", err
+	}
+	return revision, nil
+}
+
+// UpdateMeetingNotesIfMatch keeps legacy absent notes equivalent to empty only
+// for this notes-specific contract. The generic field CAS remains exact.
+func (r *DynamoDBRepository) UpdateMeetingNotesIfMatch(ctx context.Context, userID, meetingID, expectedNotes, notes string) error {
+	_, err := r.UpdateMeetingNotesWithRevision(ctx, userID, meetingID, expectedNotes, notes, nil)
+	return err
+}
+
+// UpdateMeetingNotesWithRevision optionally matches the notes version as well as
+// text. Every successful invocation writes a fresh version, including A -> A.
+func (r *DynamoDBRepository) UpdateMeetingNotesWithRevision(ctx context.Context, userID, meetingID, expectedNotes, notes string, expectedRevision *string) (string, error) {
+	match := expression.Name("notes").Equal(expression.Value(expectedNotes))
+	if expectedNotes == "" {
+		match = match.Or(expression.AttributeNotExists(expression.Name("notes")))
+	}
+	condition := expression.AttributeExists(expression.Name("PK")).And(match)
+	if expectedRevision != nil {
+		version := expression.Name("notesRevision").Equal(expression.Value(*expectedRevision))
+		if *expectedRevision == "" {
+			version = version.Or(expression.AttributeNotExists(expression.Name("notesRevision")))
+		}
+		condition = condition.And(version)
+	}
+	var revision string
+	err := r.updateMeetingFieldsWithCondition(ctx, userID, meetingID, condition, map[string]interface{}{"notes": notes}, false, &revision)
+	if err != nil {
+		return "", err
+	}
+	return revision, nil
 }
 
 // UpdateMeetingFieldsIfMatch is UpdateMeetingFields with an added condition
@@ -858,18 +904,31 @@ func (r *DynamoDBRepository) UpdateMeetingFieldsIfMatch(ctx context.Context, use
 	for k, v := range expected {
 		condition = condition.And(expression.Name(k).Equal(expression.Value(v)))
 	}
-	return r.updateMeetingFieldsWithCondition(ctx, userID, meetingID, condition, fields, true)
+	return r.updateMeetingFieldsWithCondition(ctx, userID, meetingID, condition, fields, true, nil)
 }
 
-func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Context, userID, meetingID string, condition expression.ConditionBuilder, fields map[string]interface{}, immutableSpills bool) (resultErr error) {
-	if immutableSpills {
-		// Failed spills may be deleted. Never leave their internal references
-		// in a caller's map that could be reused for a later retry.
+func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Context, userID, meetingID string, condition expression.ConditionBuilder, fields map[string]interface{}, immutableSpills bool, revisionOut *string) (resultErr error) {
+	if _, assigned := fields["notesRevision"]; assigned {
+		return fmt.Errorf("notesRevision is server-managed")
+	}
+	_, writesNotes := fields["notes"]
+	if immutableSpills || writesNotes {
+		// Do not leave internal spill refs or a generated revision in a
+		// caller's map that could be reused for a later retry.
 		copyFields := make(map[string]interface{}, len(fields))
 		for name, value := range fields {
 			copyFields[name] = value
 		}
 		fields = copyFields
+	}
+	if writesNotes {
+		revision := uuid.NewString()
+		fields["notesRevision"] = revision
+		defer func() {
+			if resultErr == nil && revisionOut != nil {
+				*revisionOut = revision
+			}
+		}()
 	}
 	var uploadedKeys []string
 	safeToDelete := true

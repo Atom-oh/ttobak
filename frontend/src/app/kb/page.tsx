@@ -1,11 +1,17 @@
 'use client';
 
+import { Suspense, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { KBFileList } from '@/components/KBFileList';
 
 export default function KnowledgeBasePage() {
   const { isLoading, isAuthenticated } = useAuth();
+  const router = useRouter();
+  useEffect(() => {
+    if (!isLoading && !isAuthenticated) router.replace('/');
+  }, [isLoading, isAuthenticated, router]);
 
   if (isLoading) {
     return (
@@ -16,10 +22,6 @@ export default function KnowledgeBasePage() {
   }
 
   if (!isAuthenticated) {
-    // Redirect to home for login
-    if (typeof window !== 'undefined') {
-      window.location.href = '/';
-    }
     return null;
   }
 
@@ -59,7 +61,7 @@ export default function KnowledgeBasePage() {
           </div>
 
           {/* File List Component */}
-          <KBFileList />
+          <Suspense fallback={<p className="text-sm text-slate-500">지식 자료를 불러오는 중…</p>}><KBFileList /></Suspense>
         </div>
       </div>
     </AppLayout>

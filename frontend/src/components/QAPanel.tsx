@@ -3,11 +3,16 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { qaApi } from '@/lib/api';
 import type { QAEntry } from '@/types/meeting';
+import type { QuestionDraft, QAReferenceEvidence } from '@/lib/meetingReferences';
 import { QAChatMessage, QASuggestedQuestions, QAEmptyState } from '@/components/qa';
 
 interface QAPanelProps {
   meetingId: string;
+  questionDraft?: QuestionDraft;
+  onSaveToNotes?: (question: string, answer: string, evidence?: QAReferenceEvidence) => void;
 }
+
+type AnswerEntry = QAEntry & { status: 'pending' | 'complete' | 'error' };
 
 const defaultSuggestions = [
   '주요 논의 사항은?',
@@ -15,13 +20,34 @@ const defaultSuggestions = [
   '참석자별 발언 요약',
 ];
 
-export function QAPanel({ meetingId }: QAPanelProps) {
+export function QAPanel(props: QAPanelProps) {
+  return <MeetingQAPanel key={props.meetingId} {...props} />;
+}
+
+function MeetingQAPanel({ meetingId, questionDraft, onSaveToNotes }: QAPanelProps) {
   const [question, setQuestion] = useState('');
-  const [qaHistory, setQaHistory] = useState<QAEntry[]>([]);
+  const [qaHistory, setQaHistory] = useState<AnswerEntry[]>([]);
   const [isAsking, setIsAsking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [savedEntryIds, setSavedEntryIds] = useState<Set<string>>(new Set());
+  const [draftId, setDraftId] = useState<number>();
+  const [pendingDraft, setPendingDraft] = useState<QuestionDraft | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const activeRef = useRef(true);
+  const askingRef = useRef(false);
+
+  // Consume each explicit reference action once. Never replace a typed draft.
+  if (questionDraft && questionDraft.id !== draftId) {
+    setDraftId(questionDraft.id);
+    if (!question.trim()) setQuestion(questionDraft.text);
+    else setPendingDraft(questionDraft);
+  }
+
+  useEffect(() => {
+    activeRef.current = true;
+    return () => { activeRef.current = false; };
+  }, []);
 
   const sessionId = useMemo(
     () => `qa-${meetingId}-${Date.now()}`,
@@ -35,24 +61,28 @@ export function QAPanel({ meetingId }: QAPanelProps) {
   }, [qaHistory]);
 
   const handleAsk = async (q: string) => {
-    if (!q.trim() || isAsking) return;
+    if (!q.trim() || askingRef.current) return;
+    askingRef.current = true;
 
-    setQuestion('');
     setError(null);
     setIsAsking(true);
 
     // Add question to history immediately
-    const entryId = Date.now().toString();
-    const newEntry: QAEntry = {
+    const entryId = crypto.randomUUID();
+    const newEntry: AnswerEntry = {
       id: entryId,
       question: q.trim(),
       answer: '',
       timestamp: new Date().toISOString(),
+      status: 'pending',
     };
     setQaHistory((prev) => [...prev, newEntry]);
 
     try {
       const response = await qaApi.askMeeting(meetingId, q.trim(), sessionId);
+      if (!activeRef.current) return;
+      if (!response.answer?.trim()) throw new Error('답변이 비어 있습니다. 다시 시도해주세요.');
+      setQuestion(current => current.trim() === q.trim() ? '' : current);
       setQaHistory((prev) =>
         prev.map((entry) =>
           entry.id === entryId
@@ -64,22 +94,28 @@ export function QAPanel({ meetingId }: QAPanelProps) {
                 usedKB: response.usedKB,
                 usedDocs: response.usedDocs,
                 toolsUsed: response.toolsUsed,
+                status: 'complete',
               }
             : entry
         )
       );
     } catch (err) {
+      if (!activeRef.current) return;
       setError(err instanceof Error ? err.message : 'Failed to get answer');
+      setQuestion(current => current || q);
       setQaHistory((prev) =>
         prev.map((entry) =>
           entry.id === entryId
-            ? { ...entry, answer: '죄송합니다. 답변을 생성하지 못했습니다. 다시 시도해주세요.' }
+            ? { ...entry, status: 'error', answer: '죄송합니다. 답변을 생성하지 못했습니다. 다시 시도해주세요.' }
             : entry
         )
       );
     } finally {
-      setIsAsking(false);
-      inputRef.current?.focus();
+      askingRef.current = false;
+      if (activeRef.current) {
+        setIsAsking(false);
+        inputRef.current?.focus();
+      }
     }
   };
 
@@ -118,6 +154,18 @@ export function QAPanel({ meetingId }: QAPanelProps) {
               usedKB={entry.usedKB}
               usedDocs={entry.usedDocs}
               toolsUsed={entry.toolsUsed}
+              isStreaming={entry.status === 'pending'}
+              onSaveToNotes={onSaveToNotes && entry.status === 'complete' ? () => {
+                try {
+                  onSaveToNotes(entry.question, entry.answer, {
+                    sources: entry.sources, sourceDetails: entry.sourceDetails,
+                  });
+                  setSavedEntryIds(prev => new Set(prev).add(entry.id));
+                } catch (error) {
+                  setError(error instanceof Error ? error.message : '메모에 추가하지 못했습니다.');
+                }
+              } : undefined}
+              isSavedToNotes={savedEntryIds.has(entry.id)}
             />
           ))
         )}
@@ -132,6 +180,17 @@ export function QAPanel({ meetingId }: QAPanelProps) {
 
       {/* Input */}
       <form onSubmit={handleSubmit} className="p-4 border-t border-slate-100 dark:border-slate-800">
+        {pendingDraft && (
+          <div className="mb-2 text-xs text-slate-500">
+            작성 중인 질문을 유지했습니다.
+            <button type="button" className="ml-2 text-primary underline" disabled={isAsking} onClick={() => {
+              setQuestion(current => `${current.trimEnd()}\n${pendingDraft.text}`.trim());
+              setPendingDraft(null);
+              inputRef.current?.focus();
+            }}>참조 질문 덧붙이기</button>
+            <button type="button" className="ml-2 underline" onClick={() => setPendingDraft(null)}>닫기</button>
+          </div>
+        )}
         <div className="flex items-center gap-2">
           <input
             ref={inputRef}

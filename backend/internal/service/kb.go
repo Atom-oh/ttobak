@@ -110,59 +110,62 @@ func (s *KBService) SyncKB(ctx context.Context, userID string) (*model.KBSyncRes
 func (s *KBService) ListFiles(ctx context.Context, userID string) (*model.KBFilesResponse, error) {
 	prefix := fmt.Sprintf("kb/%s/", userID)
 
-	result, err := s.s3Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+	pages := s3.NewListObjectsV2Paginator(s.s3Client, &s3.ListObjectsV2Input{
 		Bucket: aws.String(s.kbBucketName),
 		Prefix: aws.String(prefix),
 	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to list KB files: %w", err)
-	}
 
-	files := make([]model.KBFileResponse, 0, len(result.Contents))
-	for _, obj := range result.Contents {
-		if obj.Key == nil {
-			continue
+	files := make([]model.KBFileResponse, 0)
+	for pages.HasMorePages() {
+		result, err := pages.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list KB files: %w", err)
 		}
-		// Extract filename from key (remove prefix)
-		fileName := strings.TrimPrefix(*obj.Key, prefix)
-		if fileName == "" {
-			continue
+		for _, obj := range result.Contents {
+			if obj.Key == nil {
+				continue
+			}
+			// Extract filename from key (remove prefix)
+			fileName := strings.TrimPrefix(*obj.Key, prefix)
+			if fileName == "" {
+				continue
+			}
+
+			// Use the key as fileId (base64 or just the key)
+			fileID := filepath.Base(*obj.Key)
+
+			var size int64
+			if obj.Size != nil {
+				size = *obj.Size
+			}
+
+			var lastModified string
+			if obj.LastModified != nil {
+				lastModified = obj.LastModified.Format(time.RFC3339)
+			}
+
+			// Infer file type from extension
+			fileType := "application/octet-stream"
+			ext := strings.ToLower(filepath.Ext(fileName))
+			switch ext {
+			case ".pdf":
+				fileType = "application/pdf"
+			case ".md":
+				fileType = "text/markdown"
+			case ".ppt", ".pptx":
+				fileType = "application/vnd.ms-powerpoint"
+			case ".doc", ".docx":
+				fileType = "application/msword"
+			}
+
+			files = append(files, model.KBFileResponse{
+				FileID:       fileID,
+				FileName:     fileName,
+				FileType:     fileType,
+				Size:         size,
+				LastModified: lastModified,
+			})
 		}
-
-		// Use the key as fileId (base64 or just the key)
-		fileID := filepath.Base(*obj.Key)
-
-		var size int64
-		if obj.Size != nil {
-			size = *obj.Size
-		}
-
-		var lastModified string
-		if obj.LastModified != nil {
-			lastModified = obj.LastModified.Format(time.RFC3339)
-		}
-
-		// Infer file type from extension
-		fileType := "application/octet-stream"
-		ext := strings.ToLower(filepath.Ext(fileName))
-		switch ext {
-		case ".pdf":
-			fileType = "application/pdf"
-		case ".md":
-			fileType = "text/markdown"
-		case ".ppt", ".pptx":
-			fileType = "application/vnd.ms-powerpoint"
-		case ".doc", ".docx":
-			fileType = "application/msword"
-		}
-
-		files = append(files, model.KBFileResponse{
-			FileID:       fileID,
-			FileName:     fileName,
-			FileType:     fileType,
-			Size:         size,
-			LastModified: lastModified,
-		})
 	}
 
 	return &model.KBFilesResponse{Files: files}, nil
