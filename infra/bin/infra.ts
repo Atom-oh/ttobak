@@ -190,6 +190,8 @@ const frontendStack = new FrontendStack(app, 'TtobakFrontendStack', {
   crossRegionReferences: true,
   description: 'TTOBAK AI Meeting Assistant - Frontend (S3 + CloudFront)',
   httpApiUrl: gatewayStack.httpApi.apiEndpoint,
+  websocketApiUrl: gatewayStack.websocketApiUrl,
+  websocketOriginSecret: gatewayStack.websocketOrigin.secret,
   edgeFunctionVersion: edgeAuthStack.edgeFunction,
   originVerifySecret,
   cognitoRegion: env.region as string,

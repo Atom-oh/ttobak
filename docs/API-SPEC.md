@@ -411,11 +411,18 @@ All rows below come from `backend/cmd/api/main.go`.
 | WebSocket | `$connect`, `$disconnect`, `$default` | Go websocket Lambda |
 | WebSocket message | `ask_live` | Async invocation of Python QA, streamed replies |
 
-WebSocket is implemented. `$connect` uses the dedicated Go Lambda authorizer and
-query token; it is not a Cognito HTTP JWT-authorizer attachment. Clients use the
-runtime-configured WebSocket endpoint. There is no current start/audio/stop
+WebSocket clients resolve runtime `wsUrl: "/ws"` against the current CloudFront
+site and use `wss://` in production. No direct execute-api fallback is accepted.
+CloudFront forwards the query token, rewrites the path to the existing production
+stage, and injects a private origin proof. `$connect` requires that proof and a
+verified Cognito JWT through the dedicated Go Lambda authorizer; it is not a
+Cognito HTTP JWT-authorizer attachment. The public config contains no proof or
+secret ARN. Invalid/missing config or a failed initial connection uses the existing
+REST fallback. There is no current start/audio/stop
 server-side transcription stream or separate connections table in this handler.
 Live transcription runs in the browser using AWS Transcribe Streaming.
+See [WS deployment and acceptance](runbooks/websocket-runtime.md); synth and mock
+tests do not establish a live WebSocket connection.
 
 **Legacy behavior before current-source cutover:** the QA handler uses a Converse
 tool loop and current authorized meeting data. KB meeting hits are candidates;
