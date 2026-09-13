@@ -150,7 +150,7 @@ only after backend acceptance; see the [async contract](../backend/python/qa/ASY
 | Custom ActionItemsRequested, ttobak.analysis | summarize, action analysis only |
 | Custom DocumentUploadCompleted, ttobak.upload | document-extract, queued canonical runs only |
 | S3 Object Created, docs/ slide suffix filter | convert-doc |
-| One-minute ttobak-kb-index-tick | kb; enabled in the deployment configuration, all mode |
+| One-minute ttobak-kb-index-tick | kb; configured enabled by the checked-in CDK app, all mode |
 | Canonical DynamoDB stream records | kb; mapping/grants created only in all mode |
 | Scheduled warming event | API alias |
 | SQS ttobak-qa-jobs, single-record mapping | qa; durable job execution, concurrency two |

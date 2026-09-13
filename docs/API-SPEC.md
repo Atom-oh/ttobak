@@ -329,9 +329,10 @@ are identities to reread, not source snapshots. Full S3 ingestion is coalesced;
 job acceptance is not success. Per-document status, projection inventory and fresh
 source/conditional checks determine completion. There is no direct ingestion.
 
-The checked-in app selects `INDEXING_MODE=manual-only` **with its one-minute
-schedule enabled**; canonical stream delivery and permissions require `all`.
-This is configuration, not deployed-state evidence. Manual-only bootstraps
+The activation configuration selects `INDEXING_MODE=all` with its one-minute
+schedule enabled, adding canonical stream delivery and permissions after the
+recorded consumer qualification. Configuration alone is not deployment evidence.
+The preceding manual-only stage bootstraps
 private `kb/{owner}/...` and authenticated-global `shared/**` originals into
 `manual-kb/v1/` and `shared-kb/v1/` snapshots without altering originals or
 canonical/legacy meeting exports. Private/shared visibility must remain distinct.
