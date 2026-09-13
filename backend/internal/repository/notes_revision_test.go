@@ -56,7 +56,8 @@ func (w *notesRevisionWire) repository(t *testing.T) *DynamoDBRepository {
 		HTTPClient: meetingListHTTPClientFunc(func(req *http.Request) (*http.Response, error) {
 			var input notesRevisionRequest
 			if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
-				t.Fatal(err)
+				t.Error(err)
+				return nil, err
 			}
 			op := req.Header.Get("X-Amz-Target")
 			next, writesNotes := notesWireValue(input, input.UpdateExpression, "notes")
@@ -83,12 +84,16 @@ func (w *notesRevisionWire) repository(t *testing.T) *DynamoDBRepository {
 				body["Item"] = item
 			case "DynamoDB_20120810.UpdateItem":
 				if input.Key["PK"]["S"] != "USER#owner" || input.Key["SK"]["S"] != "MEETING#m" {
-					t.Fatal("notes write escaped its exact primary key")
+					err := errors.New("notes write escaped its exact primary key")
+					t.Error(err)
+					return nil, err
 				}
 				_, checksText := notesWireValue(input, input.ConditionExpression, "notes")
 				_, checksVersion := notesWireValue(input, input.ConditionExpression, "notesRevision")
 				if checksText && checksVersion && strings.Count(input.ConditionExpression, " AND ") != 2 {
-					t.Fatal("existence, text and version must be conjoined in the same condition")
+					err := errors.New("existence, text and version must be conjoined in the same condition")
+					t.Error(err)
+					return nil, err
 				}
 				for _, field := range []struct {
 					name, current string
@@ -125,7 +130,9 @@ func (w *notesRevisionWire) repository(t *testing.T) *DynamoDBRepository {
 				w.revision, _ = input.Item["notesRevision"]["S"].(string)
 				w.hasNotes, w.hasRevision = input.Item["notes"] != nil, input.Item["notesRevision"] != nil
 			default:
-				t.Fatalf("unexpected storage operation: %s", op)
+				err := errors.New("unexpected storage operation: " + op)
+				t.Error(err)
+				return nil, err
 			}
 			raw, _ := json.Marshal(body)
 			return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": {"application/x-amz-json-1.0"}},

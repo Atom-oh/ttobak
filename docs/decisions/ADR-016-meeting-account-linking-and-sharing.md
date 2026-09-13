@@ -4,6 +4,8 @@
   Membership permissions and hierarchy follow ADR-034 and ADR-036.
 - Decision date: Not recorded in the original ADR.
 - Implementation checked: 2026-09-13.
+- Amendment (2026-09-13): the SA workflow's private relink supersedes the former preservation
+  of team publication; see the current behavior below.
 
 ## Context and original decision
 
@@ -18,9 +20,10 @@ meeting owner to be an account member; ownership of the account is unnecessary.
 
 ## Current implementation
 
-- `LinkMeetingToAccount` sets `AccountID`; it does not create shares or clear an
-  existing `SharedToAccount` flag. A previously private meeting stays private,
-  but linking an already-published meeting is not an unshare operation.
+- `LinkMeetingToAccount` atomically sets `AccountID` and clears `SharedToAccount`
+  with a partial update. This revokes account publication even when relinking to
+  the same account. Independent direct shares remain valid; team publication
+  requires an explicit share operation.
 - Publication writes `AccountID` and `SharedToAccount`, then
   `ACCOUNT#{id}/MEETINGREF#{date}#{meetingId}`, insight material, and per-member
   shares. Each new account-origin grant uses `CreateShareIfMember` transactionally
@@ -54,12 +57,13 @@ claim that ref-first ordering made this impossible was incorrect. Later failures
 can leave incomplete fan-out, although live membership now provides read access
 without those rows. Retrying converges only for unchanged keys and input.
 
-Date/account changes can leave stale refs. `ListAccountMeetings` returns stored
-ref metadata; unlike the inherited meeting-list stream, it does not reload every
-canonical meeting before returning that metadata. Both link/share paths still
-call whole-record `UpdateMeeting`, leaving concurrent-field overwrite risk under
-the repository's partial/conditional-write policy. These are documented gaps,
-not exemptions from that policy or newly accepted security behavior.
+Date/account changes can leave stale refs. Go account lists and registered QA
+insight/brief readers revalidate canonical publication with strong metadata reads
+before exposing retained projections. Missing, unpublished, repointed or malformed
+source identities grant no access; unknown source types do not bypass this check.
+Stored ref titles can still lag current titles. Link/share paths use partial
+updates, preserving unrelated notes. Deploy the guarded QA reader before the API's
+private-relink capability; source readiness is not deployment evidence.
 
 ## Alternatives and consequences
 
@@ -80,4 +84,7 @@ Account-wide insight DTOs omit near-verbatim meeting `Evidence` by design.
 - [dynamodb.go](../../backend/internal/repository/dynamodb.go): conditional share writes.
 - [handler.py](../../backend/python/qa/handler.py),
   [test_handler.py](../../backend/python/qa/test_handler.py): live access/cache checks.
+- [account_reads.py](../../backend/python/qa/account_reads.py),
+  [test_account_reads.py](../../backend/python/qa/test_account_reads.py): current
+  publication checks in account insight, brief and history callbacks.
 - [backfill-share-origin](../../backend/cmd/backfill-share-origin): legacy remediation.

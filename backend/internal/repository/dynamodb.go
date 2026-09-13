@@ -472,7 +472,7 @@ func (r *DynamoDBRepository) CreateMeeting(ctx context.Context, userID, title st
 	_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName: aws.String(r.tableName),
 		Item:      item,
-	})
+	}, singleDynamoDBAttempt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to put meeting: %w", err)
 	}
@@ -736,7 +736,7 @@ func (r *DynamoDBRepository) UpdateMeeting(ctx context.Context, meeting *model.M
 			ConditionExpression:       condExpr.Condition(),
 			ExpressionAttributeNames:  condExpr.Names(),
 			ExpressionAttributeValues: condExpr.Values(),
-		})
+		}, singleDynamoDBAttempt)
 		action, terminalErr := classifyProjectIDsPutItemErr(err, attempt, maxProjectIDsAttempts)
 		if action == putItemRetryActionRetry {
 			continue
@@ -831,6 +831,13 @@ func (r *DynamoDBRepository) getMeetingProjectIDs(ctx context.Context, ownerUser
 		return nil, fmt.Errorf("unmarshal meeting projectIds: %w", err)
 	}
 	return projected.ProjectIDs, nil
+}
+
+func singleDynamoDBAttempt(o *dynamodb.Options) {
+	// A retry must not republish an observable notes revision or hide a
+	// committed spill behind a later condition rejection.
+	o.Retryer = aws.NopRetryer{}
+	o.RetryMaxAttempts = 1
 }
 
 // UpdateMeetingFields atomically updates only the specified fields on a meeting item
@@ -1071,14 +1078,12 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 		}
 
 		var options []func(*dynamodb.Options)
-		if len(uploadedKeys) > 0 {
+		_, writesNotes := fields["notes"]
+		if len(uploadedKeys) > 0 || writesNotes {
 			// An SDK retry could hide a committed write behind a later failed
-			// condition. One wire attempt makes a condition rejection definite;
-			// other errors remain ambiguous and retain the uploaded objects.
-			options = append(options, func(o *dynamodb.Options) {
-				o.Retryer = aws.NopRetryer{}
-				o.RetryMaxAttempts = 1
-			})
+			// condition or restore an older notes revision after a newer fence.
+			// Ambiguous failures require readback; never replay the old UUID.
+			options = append(options, singleDynamoDBAttempt)
 		}
 		_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 			TableName: aws.String(r.tableName),

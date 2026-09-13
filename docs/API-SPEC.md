@@ -74,6 +74,10 @@ accepts at most 128 bytes, and empty matches absent or explicitly empty legacy
 revisions. A text or version mismatch returns 409. Every notes mutation, including
 legacy/unconditional writes and same-text fences, writes a fresh server-generated
 UUID in `notesRevision`; successful notes updates return that exact revision.
+Meeting creation and every notes-changing write use one SDK wire attempt:
+automatic retries must not republish a previously observable revision after a
+newer fence. Ambiguous failures remain errors requiring readback. Unrelated
+partial updates retain their configured SDK retry policy.
 Non-notes updates preserve the version and return the version observed during
 authorization. `notesRevision` is response-only: clients cannot assign it
 (unknown request fields are ignored). Clients recovering an uncertain request
@@ -206,7 +210,8 @@ Notes and independent direct shares are preserved. Account-origin share rows
 remain subject to current meeting publication/membership checks; an explicit
 `POST /api/meetings/{meetingId}/share-account` is required to publish to a team.
 
-Account meeting lists and meeting-sourced insights revalidate the exact
+Account meeting lists and meeting-sourced insights, including the registered QA
+account insight/brief tools, revalidate the exact
 owner/meeting identity and current `accountId`/`sharedToAccount` using a strongly
 consistent, metadata-only primary-key read. They never authorize from an eventual
 GSI copy or hydrate transcript objects for this check. Missing/deleted, unpublished,
@@ -215,6 +220,9 @@ projection rows remain. Storage or decode failures fail the request rather than
 returning an empty or partial success. The account brief uses the same readers.
 Explicit account-owned `news` and `ingest` insight sources retain their member-only
 visibility; missing or unknown source types do not bypass meeting validation.
+Malformed legacy projection identities are omitted with a successful response,
+not treated as grants. Deploy the guarded QA consumers before enabling private
+relinking in the API; code checks alone do not establish live revocation.
 
 Account creation creates owner membership atomically. Optional parentAccountId
 requires current membership in the parent. Parent updates require child ownership
