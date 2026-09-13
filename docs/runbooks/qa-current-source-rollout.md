@@ -32,6 +32,10 @@ deployed browser activation has not been proven.
 Keep the earlier timeout, missing-provenance, empty-answer and initial private-V2
 failure records. Corrected passes belong to their own recorded lineages; a
 connection or terminal frame alone does not establish successful QA.
+The additional [note QA follow-up](../research/evaluations/2026-09-13-note-qa-followup/README.md)
+records a six-turn live-context semantic pass, exact manual-file version cleanup,
+and two later canonical-file first-call `ServiceUnavailableException` failures.
+Those later consumer checks remain failed; their V1 source/provider checks passed.
 The new run's initial `live-context-results.json` remains a diagnostic failure:
 the question asked for a nonexistent rollout-codename field instead of the actual
 `Marker` field and used an age-labeled `LIVE_OLD` code. The corrected case uses

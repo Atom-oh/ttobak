@@ -5,8 +5,9 @@
   with its one-minute schedule retained. Merge/deployment remains gated on
   completed manual snapshot acceptance and deployed, verified current-source QA.
   This is a configuration change, not evidence that activation has deployed.
-  The bootstrap runbook records completed producer/package prerequisites and the
-  still-open public consumer gate, including the planned PR242 async REST path.
+  The bootstrap runbook records the dated producer and public-consumer
+  qualification, including direct async REST acceptance with UI activation off.
+  Canonical backfill and lifecycle acceptance follow the reviewed activation.
 
 ## Context and decision
 
