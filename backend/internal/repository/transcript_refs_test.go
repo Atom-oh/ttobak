@@ -86,7 +86,7 @@ func (b *transcriptRefBody) Close() error { b.closed = true; return nil }
 // Use real SDK serialization/hydration with synthetic HTTP transports only.
 func transcriptRefReadFixture(t *testing.T, storedID, field, ref string, read func(*http.Request) *http.Response) *DynamoDBRepository {
 	t.Helper()
-	item := map[string]any{"meetingId": map[string]string{"S": storedID}, field: map[string]string{"S": ref}}
+	item := map[string]any{"meetingId": map[string]string{"S": storedID}, "userId": map[string]string{"S": "owner"}, field: map[string]string{"S": ref}}
 	db := dynamodb.New(dynamodb.Options{
 		Region: "us-east-1", Credentials: aws.AnonymousCredentials{}, RetryMaxAttempts: 1,
 		HTTPClient: meetingListHTTPClientFunc(func(req *http.Request) (*http.Response, error) {

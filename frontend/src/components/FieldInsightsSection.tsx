@@ -7,6 +7,8 @@ import { INSIGHT_TYPES } from '@/types/meeting';
 interface FieldInsightsSectionProps {
   insights: FieldInsight[];
   error?: string;
+  description?: string;
+  onAddToNotes?: (insight: FieldInsight) => void;
 }
 
 const insightMeta: Record<string, {
@@ -89,8 +91,9 @@ function formatMarker(marker?: string): string | null {
   return `${minutes}:${String(seconds % 60).padStart(2, '0')}`;
 }
 
-export function FieldInsightsSection({ insights, error }: FieldInsightsSectionProps) {
+export function FieldInsightsSection({ insights, error, description, onAddToNotes }: FieldInsightsSectionProps) {
   const [activeType, setActiveType] = useState('');
+  const [actionError, setActionError] = useState('');
   const counts = useMemo(
     () => insights.reduce<Record<string, number>>((result, insight) => {
       result[insight.type] = (result[insight.type] || 0) + 1;
@@ -114,7 +117,7 @@ export function FieldInsightsSection({ insights, error }: FieldInsightsSectionPr
             필드 인사이트
           </h3>
           <p className="mt-1 text-sm text-slate-500 dark:text-text-muted">
-            회의에서 확인된 신호와 후속 조치를 유형별로 정리했습니다.
+            {description || '회의에서 확인된 신호와 후속 조치를 유형별로 정리했습니다.'}
           </p>
         </div>
         {!error && insights.length > 0 && (
@@ -123,6 +126,7 @@ export function FieldInsightsSection({ insights, error }: FieldInsightsSectionPr
           </span>
         )}
       </div>
+      {actionError && <p role="alert" className="mb-3 text-sm text-red-600 dark:text-red-300">{actionError}</p>}
 
       {!error && insights.length > 0 && (
         <div className="-mx-1 mb-4 overflow-x-auto px-1 pb-1">
@@ -240,6 +244,9 @@ export function FieldInsightsSection({ insights, error }: FieldInsightsSectionPr
                 )}
 
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                  {onAddToNotes && <button type="button" className="text-xs font-semibold text-primary underline" onClick={() => {
+                    try { onAddToNotes(insight); setActionError(''); } catch (failure) { setActionError(failure instanceof Error ? failure.message : '메모에 추가하지 못했습니다.'); }
+                  }}>메모에 참고로 추가</button>}
                   <div className="flex flex-wrap gap-1.5">
                     {[...new Set(insight.entities || [])].map((entity) => (
                       <span

@@ -82,6 +82,7 @@ type accountRepo interface {
 	GetUserByEmail(ctx context.Context, email string) (*model.User, error)
 	ListMeetingRefsForAccount(ctx context.Context, accountID string) ([]model.MeetingRef, error)
 	GetMeetingByID(ctx context.Context, meetingID string) (*model.Meeting, error)
+	GetMeetingPublication(ctx context.Context, ownerID, meetingID string) (*model.Meeting, error)
 	GetShare(ctx context.Context, sharedToID, meetingID string) (*model.Share, error)
 	DeleteShareIfAccountOrigin(ctx context.Context, accountID, sharedToID, meetingID string) error
 	ListInsightsForAccount(ctx context.Context, accountID string) ([]model.AccountInsight, error)
@@ -683,7 +684,24 @@ func (s *AccountService) UpdateMemberRole(ctx context.Context, requesterUserID, 
 	return &model.AccountMemberDTO{UserID: target.UserID, Email: target.Email, Role: req.Role}, nil
 }
 
-// ListAccountMeetings returns the shared-meeting references for an account.
+// isMeetingPublishedToAccount revalidates each projection against a strong,
+// metadata-only read of its exact source key. A direct share never substitutes
+// for publication to this account, and missing source identity grants nothing.
+func (s *AccountService) isMeetingPublishedToAccount(ctx context.Context, accountID, ownerID, meetingID string) (bool, error) {
+	if ownerID == "" || meetingID == "" {
+		return false, nil
+	}
+	meeting, err := s.repo.GetMeetingPublication(ctx, ownerID, meetingID)
+	if err != nil {
+		return false, err
+	}
+	return meeting != nil &&
+		meeting.PK == model.PrefixUser+ownerID && meeting.SK == model.PrefixMeeting+meetingID &&
+		meeting.UserID == ownerID && meeting.MeetingID == meetingID && meeting.EntityType == "MEETING" &&
+		meeting.AccountID == accountID && meeting.SharedToAccount, nil
+}
+
+// ListAccountMeetings returns only still-published shared-meeting references.
 // Only members may read; non-members get ErrForbidden, missing account ErrNotFound.
 func (s *AccountService) ListAccountMeetings(ctx context.Context, userID, accountID string) ([]model.MeetingRefDTO, error) {
 	member, err := s.repo.GetMember(ctx, accountID, userID)
@@ -706,6 +724,18 @@ func (s *AccountService) ListAccountMeetings(ctx context.Context, userID, accoun
 	}
 	out := make([]model.MeetingRefDTO, 0, len(refs))
 	for _, r := range refs {
+		if r.AccountID != accountID || r.PK != model.PrefixAccount+accountID ||
+			r.EntityType != model.EntityTypeMeetingRef ||
+			r.SK != model.PrefixMeetingRef+r.Date.UTC().Format(time.RFC3339)+"#"+r.MeetingID {
+			continue
+		}
+		published, err := s.isMeetingPublishedToAccount(ctx, accountID, r.OwnerUserID, r.MeetingID)
+		if err != nil {
+			return nil, fmt.Errorf("check account meeting source: %w", err)
+		}
+		if !published {
+			continue
+		}
 		out = append(out, model.MeetingRefDTO{MeetingID: r.MeetingID, OwnerUserID: r.OwnerUserID, Title: r.Title, Date: r.Date})
 	}
 	return out, nil
@@ -746,6 +776,33 @@ func (s *AccountService) ListAccountInsights(ctx context.Context, userID, accoun
 			continue
 		}
 		if len(typeSet) > 0 && !typeSet[ins.Type] {
+			continue
+		}
+		if ins.AccountID != accountID || ins.PK != model.PrefixAccount+accountID ||
+			ins.EntityType != model.EntityTypeInsight || ins.SourceID == "" ||
+			!strings.HasPrefix(ins.SK, model.PrefixInsight) {
+			continue
+		}
+		switch ins.SourceType {
+		case "meeting":
+			// Bind the declared source to the stored projection key too, so
+			// mismatched rows cannot borrow another meeting's publication.
+			prefix := model.PrefixInsight + ins.OccurredAt.UTC().Format(time.RFC3339) + "#" + ins.SourceID + "#"
+			index, matches := strings.CutPrefix(ins.SK, prefix)
+			if !matches || index == "" || strings.Trim(index, "0123456789") != "" {
+				continue
+			}
+			published, err := s.isMeetingPublishedToAccount(ctx, accountID, ins.SourceUserID, ins.SourceID)
+			if err != nil {
+				return nil, fmt.Errorf("check account insight source: %w", err)
+			}
+			if !published {
+				continue
+			}
+		case "news", "ingest":
+			// These are explicit account-owned sources in AccountInsight's
+			// contract, independent of a meeting publication grant.
+		default:
 			continue
 		}
 		out = append(out, model.AccountInsightDTO{

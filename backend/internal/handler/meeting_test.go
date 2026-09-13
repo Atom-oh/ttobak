@@ -13,6 +13,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/ttobak/backend/internal/middleware"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
@@ -85,11 +86,15 @@ func (m *mockHandlerMeetingRepo) addMeeting(mtg *model.Meeting) {
 	m.meetingsByID[mtg.MeetingID] = mtg
 }
 
-func (m *mockHandlerMeetingRepo) CreateMeeting(_ context.Context, userID, title string, date time.Time, participants []string, sttProvider string) (*model.Meeting, error) {
+func (m *mockHandlerMeetingRepo) CreateMeeting(_ context.Context, userID, title string, date time.Time, participants []string, sttProvider string, preparation ...model.MeetingPreparation) (*model.Meeting, error) {
 	mtg := &model.Meeting{
 		MeetingID: "new-meeting-id", UserID: userID, Title: title, Date: date,
 		Participants: participants, SttProvider: sttProvider,
 		Status: model.StatusRecording, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+		NotesRevision: uuid.NewString(),
+	}
+	if len(preparation) > 0 {
+		mtg.Notes, mtg.AccountID = preparation[0].Notes, preparation[0].AccountID
 	}
 	m.addMeeting(mtg)
 	return mtg, nil
@@ -132,6 +137,7 @@ func (m *mockHandlerMeetingRepo) UpdateMeetingFields(_ context.Context, userID, 
 			cp.Content = v.(string)
 		case "notes":
 			cp.Notes = v.(string)
+			cp.NotesRevision = uuid.NewString()
 		case "transcriptA":
 			cp.TranscriptA = v.(string)
 		case "transcriptB":
@@ -181,6 +187,29 @@ func (m *mockHandlerMeetingRepo) UpdateMeetingFieldsIfMatch(ctx context.Context,
 		}
 	}
 	return m.UpdateMeetingFields(ctx, userID, meetingID, fields)
+}
+
+func (m *mockHandlerMeetingRepo) UpdateMeetingNotesIfMatch(ctx context.Context, userID, meetingID, expectedNotes, notes string) error {
+	_, err := m.UpdateMeetingNotesWithRevision(ctx, userID, meetingID, expectedNotes, notes, nil)
+	return err
+}
+
+func (m *mockHandlerMeetingRepo) UpdateMeetingNotesWithRevision(ctx context.Context, userID, meetingID, expectedNotes, notes string, expectedRevision *string) (string, error) {
+	if m.conditionalWriteErr != nil {
+		return "", m.conditionalWriteErr
+	}
+	meeting := m.meetings[hKey(userID, meetingID)]
+	if meeting == nil || meeting.Notes != expectedNotes || expectedRevision != nil && meeting.NotesRevision != *expectedRevision {
+		return "", repository.ErrConditionFailed
+	}
+	return m.UpdateMeetingFieldsWithNotesRevision(ctx, userID, meetingID, map[string]interface{}{"notes": notes})
+}
+
+func (m *mockHandlerMeetingRepo) UpdateMeetingFieldsWithNotesRevision(ctx context.Context, userID, meetingID string, fields map[string]interface{}) (string, error) {
+	if err := m.UpdateMeetingFields(ctx, userID, meetingID, fields); err != nil {
+		return "", err
+	}
+	return m.meetings[hKey(userID, meetingID)].NotesRevision, nil
 }
 
 func TestUpdateSpeakersConflict(t *testing.T) {

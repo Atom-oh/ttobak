@@ -201,6 +201,9 @@ func renderMeetingReading(m *model.Meeting, permission string, state *model.Acti
 		text, field = string(raw), "actionItemsJson"
 	}
 	revision := readingHash([]string{field, text})
+	if o.Section == "notes" {
+		revision = readingHash([]string{field, text, m.NotesRevision})
+	}
 	binding := readingHash([]interface{}{1, "meeting", m.MeetingID, o.Section, revision})
 	truncated := []string{}
 	base := readingObject{"meetingId": m.MeetingID, "source": o.Section, "revision": revision,
@@ -212,6 +215,9 @@ func renderMeetingReading(m *model.Meeting, permission string, state *model.Acti
 		"availableCodePoints": readingObject{"notes": utf8.RuneCountInString(m.Notes), "summary": utf8.RuneCountInString(m.Content)},
 		"readingHints": readingObject{"summary": "ttobak_get_meeting(section=summary)",
 			"actionItems": "ttobak_get_meeting(section=actionItems)", "transcript": "ttobak_read_transcript"},
+	}
+	if o.Section == "notes" {
+		base["notesRevision"] = m.NotesRevision
 	}
 	for _, list := range []struct {
 		name   string

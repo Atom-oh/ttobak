@@ -87,9 +87,15 @@ class TestStrictAccountReads(unittest.TestCase):
                                   'entityType': 'ACCOUNT_MEMBER'})
 
     def insight(self, identifier='i', account='a', **extra):
-        self.table.put_item(Item={'PK': 'ACCOUNT#' + account, 'SK': 'INSIGHT#2026-09-12#' + identifier,
+        occurred = extra.get('occurredAt', '2026-09-12T12:00:00Z')
+        source = extra.get('sourceId', 'm')
+        index = sum(pk == 'ACCOUNT#' + account and sk.startswith('INSIGHT#')
+                    for pk, sk in self.table.items)
+        self.table.put_item(Item={'PK': 'ACCOUNT#' + account,
+                                  'SK': f'INSIGHT#{occurred}#{source}#{index}',
+                                  'accountId': account, 'entityType': 'ACCOUNT_INSIGHT',
                                   'insightId': identifier, 'type': 'risk', 'text': 'PRIVATE ' + identifier,
-                                  'occurredAt': '2026-09-12T12:00:00Z',
+                                  'occurredAt': occurred, 'sourceId': source, 'sourceUserId': 'owner',
                                   'sourceType': 'meeting', 'entities': ['Entity'], **extra})
 
     def meeting(self, identifier='m', **extra):
@@ -98,6 +104,7 @@ class TestStrictAccountReads(unittest.TestCase):
                                   'title': 'STALE REF TITLE', 'date': 'OLD'})
         self.table.put_item(Item={'PK': 'USER#owner', 'SK': 'MEETING#' + identifier,
                                   'meetingId': identifier, 'userId': 'owner', 'accountId': 'a',
+                                  'entityType': 'MEETING',
                                   'sharedToAccount': True, 'title': 'CURRENT ' + identifier,
                                   'date': '2026-09-12', 'content': 'NEVER_READ_BODY',
                                   'transcriptA': 's3://foreign/NEVER_READ', **extra})
@@ -147,6 +154,7 @@ class TestStrictAccountReads(unittest.TestCase):
 
     def test_insights_filters_use_complete_strong_reads(self):
         self.account()
+        self.meeting()
         self.insight('one')
         self.insight('two')
         self.insight('earlier', occurredAt='2026-08-01T00:00:00Z')
@@ -159,7 +167,7 @@ class TestStrictAccountReads(unittest.TestCase):
 
     def test_brief_rehydrates_current_meetings_and_canonical_research(self):
         self.account()
-        self.insight()
+        self.insight(sourceId='m1')
         self.meeting('m1')
         self.meeting('m2', sharedToAccount=False)
         self.meeting('m3', accountId='different')
@@ -245,6 +253,7 @@ class TestStrictAccountReads(unittest.TestCase):
 
     def test_current_account_reader_and_history_preserve_then_revoke_followup(self):
         self.account()
+        self.meeting()
         self.insight()
         reader = self.reader()
         history = ToolHistory('reader', {'get_account_brief': reader.get_account_brief})
@@ -274,7 +283,7 @@ class TestStrictAccountReads(unittest.TestCase):
                 self.assertTrue(restore_messages(saved, new_source_state(), lambda _: False, tool_history=history))
                 key, field = {
                     'account': (('ACCOUNT#a', 'META'), 'industry'),
-                    'insight': (('ACCOUNT#a', 'INSIGHT#2026-09-12#i'), 'text'),
+                    'insight': (('ACCOUNT#a', 'INSIGHT#2026-09-12T12:00:00Z#m#0'), 'text'),
                     'meeting': (('USER#owner', 'MEETING#m'), 'title'),
                     'research': (('RESEARCH#r', 'CONFIG'), 'summary'),
                     'role': (('ACCOUNT#a', 'MEMBER#reader'), 'role'),
@@ -285,6 +294,7 @@ class TestStrictAccountReads(unittest.TestCase):
 
     def test_late_query_page_failure_cannot_attest_partial_insights(self):
         self.account()
+        self.meeting()
         self.insight('one')
         self.insight('two')
         read_page = self.table.query
@@ -295,6 +305,263 @@ class TestStrictAccountReads(unittest.TestCase):
         self.table.query = fail_later
         with self.assertRaisesRegex(RuntimeError, 'second page'):
             self.reader().get_account_insights('reader', 'Account')
+
+    def test_retained_meeting_insights_require_current_publication_before_body_reads(self):
+        changes = {
+            'unpublished': {'sharedToAccount': False},
+            'repointed': {'accountId': 'other'},
+            'deleted': None,
+            'wrong owner': {'userId': 'other'},
+            'wrong meeting': {'meetingId': 'other'},
+            'wrong entity': {'entityType': 'DOCUMENT'},
+            'missing entity': {'entityType': None},
+        }
+        for name, change in changes.items():
+            with self.subTest(change=name):
+                self.table = AccountTable()
+                self.account()
+                self.meeting()
+                self.insight('m_0')
+                source_key = ('USER#owner', 'MEETING#m')
+                if change is None:
+                    del self.table.items[source_key]
+                else:
+                    self.table.items[source_key].update(change)
+                # A direct share cannot replace publication to the account.
+                self.table.put_item(Item={'PK': 'USER#reader', 'SK': 'SHARED#m',
+                                          'ownerId': 'owner', 'permission': 'edit'})
+                reader = self.reader()
+                self.assertEqual(reader.get_account_insights('reader', 'Account').value['insights'], [])
+                brief = reader.get_account_brief('reader', 'Account').value
+                self.assertEqual(brief['insightsByType'], {})
+                self.assertEqual(brief['meetings'], [])
+                for query in self.table.queries:
+                    fields = set(query.get('ExpressionAttributeNames', {}).values())
+                    self.assertNotIn('text', fields)
+                    self.assertNotIn('entities', fields)
+                self.assertFalse(any(key[1].startswith('INSIGHT#') for key, _ in self.table.reads))
+                self.assertFalse(any(key[1].startswith('SHARED#') for key, _ in self.table.reads))
+
+    def test_insight_body_follows_strong_metadata_authorization_and_keeps_output(self):
+        self.account()
+        self.meeting()
+        self.insight('m_0')
+        result = self.reader().get_account_insights('reader', 'Account').value
+        self.assertEqual(result, {'accountId': 'a', 'account': 'Account', 'insights': [{
+            'insightId': 'm_0', 'type': 'risk', 'text': 'PRIVATE m_0',
+            'occurredAt': '2026-09-12T12:00:00Z', 'sourceType': 'meeting', 'entities': ['Entity'],
+        }]})
+        discovery = next(q for q in self.table.queries if not q.get('IndexName'))
+        fields = set(discovery['ExpressionAttributeNames'].values())
+        self.assertTrue({'PK', 'SK', 'accountId', 'entityType', 'sourceType',
+                         'sourceId', 'sourceUserId', 'occurredAt'} <= fields)
+        self.assertNotIn('text', fields)
+        self.assertNotIn('entities', fields)
+        source_key = ('USER#owner', 'MEETING#m')
+        body_key = ('ACCOUNT#a', 'INSIGHT#2026-09-12T12:00:00Z#m#0')
+        keys = [key for key, _ in self.table.reads]
+        self.assertLess(keys.index(source_key), keys.index(body_key))
+        self.assertIn(source_key, keys[keys.index(body_key) + 1:])
+        for key, args in self.table.reads:
+            self.assertTrue(args.get('ConsistentRead'))
+            fields = set(args['ExpressionAttributeNames'].values())
+            self.assertFalse({'content', 'transcriptA', 'transcriptB', 's3Key', 'evidence'} & fields)
+            if key == source_key:
+                self.assertEqual(fields, {'PK', 'SK', 'meetingId', 'userId', 'entityType',
+                                          'accountId', 'sharedToAccount'})
+
+    def test_mismatched_canonical_primary_key_cannot_load_insight_body(self):
+        for field, value in (('PK', 'USER#other'), ('SK', 'MEETING#other')):
+            with self.subTest(field=field):
+                self.table = AccountTable()
+                self.account()
+                self.meeting()
+                self.insight()
+                self.table.items[('USER#owner', 'MEETING#m')][field] = value
+                with self.assertRaises(ValueError):
+                    self.reader().get_account_insights('reader', 'Account')
+                self.assertFalse(any(key[1].startswith('INSIGHT#') for key, _ in self.table.reads))
+
+    def test_unusable_insight_projection_identities_are_omitted_before_body_reads(self):
+        changes = [
+            {'accountId': 'other'}, {'accountId': None}, {'entityType': 'OTHER'},
+            {'entityType': None}, {'sourceType': ''}, {'sourceType': 'unknown'},
+            {'sourceType': 'research'}, {'sourceUserId': ''}, {'sourceUserId': 'bad/owner'},
+            {'sourceId': ''}, {'sourceId': 'other'},
+            {'occurredAt': '2026-09-13T12:00:00Z'}, {'occurredAt': 'invalid'},
+        ]
+        for change in changes:
+            with self.subTest(change=change):
+                self.table = AccountTable()
+                self.account()
+                self.meeting()
+                self.insight()
+                key = ('ACCOUNT#a', 'INSIGHT#2026-09-12T12:00:00Z#m#0')
+                self.table.items[key].update(change)
+                self.assertEqual(self.reader().get_account_insights('reader', 'Account').value['insights'], [])
+                self.assertNotIn(key, [read_key for read_key, _ in self.table.reads])
+
+    def test_insight_metadata_and_body_type_errors_propagate(self):
+        changes = [
+            {'accountId': 1}, {'entityType': []}, {'sourceType': 1},
+            {'sourceId': {}}, {'sourceUserId': []}, {'occurredAt': 1},
+            {'insightId': []}, {'type': {}}, {'text': 1}, {'entities': 'not-a-list'},
+        ]
+        for change in changes:
+            with self.subTest(change=change):
+                self.table = AccountTable()
+                self.account()
+                self.meeting()
+                self.insight()
+                key = ('ACCOUNT#a', 'INSIGHT#2026-09-12T12:00:00Z#m#0')
+                self.table.items[key].update(change)
+                with self.assertRaises(ValueError):
+                    self.reader().get_account_insights('reader', 'Account')
+
+    def test_canonical_publication_type_errors_propagate_before_insight_body(self):
+        for change in ({'sharedToAccount': 'true'}, {'entityType': 1}, {'userId': []}):
+            with self.subTest(change=change):
+                self.table = AccountTable()
+                self.account()
+                self.meeting()
+                self.insight()
+                self.table.items[('USER#owner', 'MEETING#m')].update(change)
+                with self.assertRaises(ValueError):
+                    self.reader().get_account_insights('reader', 'Account')
+                self.assertFalse(any(key[1].startswith('INSIGHT#') for key, _ in self.table.reads))
+
+    def test_meeting_insight_key_binds_utc_seconds_and_ascii_index(self):
+        self.account()
+        self.meeting()
+        self.insight(occurredAt='2026-09-12T21:00:00.123456789+09:00',
+                     SK='INSIGHT#2026-09-12T12:00:00Z#m#0')
+        self.assertEqual(len(self.reader().get_account_insights('reader', 'Account').value['insights']), 1)
+        row = self.table.items.pop(('ACCOUNT#a', 'INSIGHT#2026-09-12T12:00:00Z#m#0'))
+        for suffix in ('', 'bad', '0#extra', '１'):
+            with self.subTest(suffix=suffix):
+                bad = dict(row, SK='INSIGHT#2026-09-12T12:00:00Z#m#' + suffix)
+                self.table.put_item(Item=bad)
+                self.assertEqual(self.reader().get_account_insights('reader', 'Account').value['insights'], [])
+                del self.table.items[(bad['PK'], bad['SK'])]
+
+    def test_explicit_account_owned_insights_need_account_identity_but_no_meeting(self):
+        for source_type in ('news', 'ingest'):
+            with self.subTest(source_type=source_type):
+                self.table = AccountTable()
+                self.account()
+                self.insight(sourceType=source_type, sourceId='feed-item', sourceUserId='')
+                reader = self.reader()
+                self.assertEqual(reader.get_account_insights('reader', 'Account').value['insights'][0]['text'], 'PRIVATE i')
+                self.assertEqual(reader.get_account_brief('reader', 'Account').value['insightsByType']['risk'][0]['sourceType'], source_type)
+                self.assertFalse(any(key[0].startswith('USER#') for key, _ in self.table.reads))
+                key = ('ACCOUNT#a', 'INSIGHT#2026-09-12T12:00:00Z#feed-item#0')
+                self.table.items[key]['accountId'] = 'other'
+                self.assertEqual(reader.get_account_insights('reader', 'Account').value['insights'], [])
+
+    def test_insight_source_change_between_discovery_and_body_never_attests(self):
+        for change in ({'sourceId': 'other'}, {'sourceUserId': 'other'}, {'sourceType': 'ingest'},
+                       {'accountId': 'other'}, {'entityType': 'OTHER'}, None):
+            with self.subTest(change=change):
+                self.table = AccountTable()
+                self.account()
+                self.meeting()
+                self.insight()
+                key = ('ACCOUNT#a', 'INSIGHT#2026-09-12T12:00:00Z#m#0')
+                def replace_source(read_key, args):
+                    if read_key == {'PK': 'USER#owner', 'SK': 'MEETING#m'}:
+                        self.table.after_read = None
+                        if change is None:
+                            self.table.items.pop(key)
+                        else:
+                            self.table.items[key].update(change)
+                self.table.after_read = replace_source
+                with self.assertRaises(ValueError):
+                    self.reader().get_account_insights('reader', 'Account')
+
+    def test_insight_publication_is_rechecked_without_a_meeting_ref(self):
+        for callback in ('get_account_insights', 'get_account_brief'):
+            with self.subTest(callback=callback):
+                self.table = AccountTable()
+                self.account()
+                self.meeting()
+                self.insight()
+                self.table.items.pop(('ACCOUNT#a', 'MEETINGREF#2026-01-01#m'))
+                def revoke_after_body(key, args):
+                    if key['SK'].startswith('INSIGHT#') and 'text' in args['ExpressionAttributeNames'].values():
+                        self.table.items[('USER#owner', 'MEETING#m')]['sharedToAccount'] = False
+                self.table.after_read = revoke_after_body
+                with self.assertRaises(PermissionError):
+                    getattr(self.reader(), callback)('reader', 'Account')
+
+    def test_brief_rechecks_insight_publication_after_research_aggregation(self):
+        self.account()
+        self.meeting()
+        self.insight()
+        self.research()
+        self.table.items.pop(('ACCOUNT#a', 'MEETINGREF#2026-01-01#m'))
+        def revoke_after_research(key, args):
+            if key == {'PK': 'RESEARCH#r', 'SK': 'CONFIG'} and 'summary' in args['ExpressionAttributeNames'].values():
+                self.table.items[('USER#owner', 'MEETING#m')]['accountId'] = 'other'
+        self.table.after_read = revoke_after_research
+        with self.assertRaises(PermissionError):
+            self.reader().get_account_brief('reader', 'Account')
+
+    def test_insight_authorization_and_body_read_failures_never_attest_partial_results(self):
+        for target in (('USER#owner', 'MEETING#m'),
+                       ('ACCOUNT#a', 'INSIGHT#2026-09-12T12:00:00Z#m#0'),
+                       ('ACCOUNT#a', 'INSIGHT#2026-09-12T12:00:00Z#m#1')):
+            for callback in ('get_account_insights', 'get_account_brief'):
+                with self.subTest(target=target, callback=callback):
+                    self.table = AccountTable()
+                    self.account()
+                    self.meeting()
+                    self.insight()
+                    self.insight('second')
+                    self.table.fail_key = target
+                    with self.assertRaises(RuntimeError):
+                        getattr(self.reader(), callback)('reader', 'Account')
+
+    def test_final_insight_publication_read_failure_aborts_attestation(self):
+        for callback in ('get_account_insights', 'get_account_brief'):
+            with self.subTest(callback=callback):
+                self.table = AccountTable()
+                self.account()
+                self.meeting()
+                self.insight()
+                self.table.items.pop(('ACCOUNT#a', 'MEETINGREF#2026-01-01#m'))
+                def fail_after_body(key, args):
+                    if key['SK'].startswith('INSIGHT#') and 'text' in args['ExpressionAttributeNames'].values():
+                        self.table.fail_key = ('USER#owner', 'MEETING#m')
+                self.table.after_read = fail_after_body
+                with self.assertRaises(RuntimeError):
+                    getattr(self.reader(), callback)('reader', 'Account')
+
+    def test_history_revalidates_insight_publication_without_meeting_refs(self):
+        for callback in ('get_account_insights', 'get_account_brief'):
+            for change in ('unpublish', 'repoint', 'delete', 'mismatch', 'read failure'):
+                with self.subTest(callback=callback, change=change):
+                    self.table = AccountTable()
+                    self.account()
+                    self.meeting()
+                    self.insight()
+                    self.table.items.pop(('ACCOUNT#a', 'MEETINGREF#2026-01-01#m'))
+                    reader = self.reader()
+                    history = ToolHistory('reader', {callback: getattr(reader, callback)})
+                    state = new_source_state()
+                    history.read(state, callback, {'account': 'Account'})
+                    saved = session(state, conversation('PRIVATE ANSWER', callback, {'account': 'Account'}))
+                    self.assertTrue(restore_messages(saved, new_source_state(), lambda _: False, tool_history=history))
+                    key = ('USER#owner', 'MEETING#m')
+                    if change == 'delete':
+                        del self.table.items[key]
+                    elif change == 'read failure':
+                        self.table.fail_key = key
+                    else:
+                        field, value = {'unpublish': ('sharedToAccount', False),
+                                        'repoint': ('accountId', 'other'),
+                                        'mismatch': ('entityType', 'OTHER')}[change]
+                        self.table.items[key][field] = value
+                    self.assertEqual(restore_messages(saved, new_source_state(), lambda _: False, tool_history=history), [])
 
     def test_ambiguous_account_and_invalid_inputs_do_not_read_account_children(self):
         self.account('a', 'Same')
