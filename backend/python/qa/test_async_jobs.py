@@ -79,7 +79,7 @@ class JobTable:
             self.after_write('update', self.items[key])
 
 
-class TestAsyncJobs(unittest.TestCase):
+class _JobFixture:
     def setUp(self):
         self.now = 1789272000
         self.table = JobTable()
@@ -89,6 +89,7 @@ class TestAsyncJobs(unittest.TestCase):
         self.body = {'requestId': self.job_id, 'question': 'synthetic', 'sessionId': 'chat-test'}
         self.calls = []
 
+
     def execute(self, user, request, state):
         self.calls.append((user, request))
         state['dependencies'] = [{'sourcePK': 'USER#owner', 'sourceSK': 'DOC#document',
@@ -97,10 +98,20 @@ class TestAsyncJobs(unittest.TestCase):
                 'sourceDetails': [{'resourceId': 'document'}], 'toolsUsed': ['start_research'],
                 'usedKB': False, 'usedDocs': False, 'toolHistoryCoverage': []}
 
+
     def validate(self, user, state):
         self.assertEqual(user, 'reader')
         self.assertIs(state['replayable'], True)
 
+
+    def event(self, method, path, body=None, user='reader'):
+        return {'rawPath': path, 'requestContext': {'http': {'method': method},
+                'authorizer': {'jwt': {'claims': {'sub': user}}}},
+                'body': json.dumps(body) if body is not None else ''}
+
+
+
+class TestAsyncJobs(_JobFixture, unittest.TestCase):
     def test_submit_is_user_bound_idempotent_and_conflicting_request_never_executes(self):
         first = self.jobs.submit('reader', self.body)
         self.assertEqual(first['status'], 'queued')
@@ -113,6 +124,7 @@ class TestAsyncJobs(unittest.TestCase):
             self.jobs.poll('other', self.job_id, self.validate)
         self.assertEqual(denied.exception.status, 404)
         self.assertEqual(self.calls, [])
+
 
     def test_uncertain_enqueue_is_repaired_only_while_queued_and_duplicate_events_do_not_repeat_actions(self):
         self.queue.send_message.side_effect = TimeoutError('private request body')
@@ -129,6 +141,7 @@ class TestAsyncJobs(unittest.TestCase):
         self.assertEqual(len(self.calls), 1)
         self.assertEqual(self.queue.send_message.call_count, 2)
 
+
     def test_concurrent_claim_loser_and_ambiguous_ack_cannot_reexecute(self):
         self.jobs.submit('reader', self.body)
         self.table.before_update = lambda: self.jobs.work('reader', self.job_id, self.execute, self.validate)
@@ -136,6 +149,7 @@ class TestAsyncJobs(unittest.TestCase):
         self.assertEqual(len(self.calls), 1)
         self.jobs.work('reader', self.job_id, self.execute, self.validate)
         self.assertEqual(len(self.calls), 1)
+
 
     def test_write_ack_loss_recovers_without_regenerating_answer(self):
         self.jobs.submit('reader', self.body)
@@ -149,6 +163,7 @@ class TestAsyncJobs(unittest.TestCase):
         self.assertEqual(len(self.calls), 1)
         self.assertEqual(self.jobs.poll('reader', self.job_id, self.validate)['status'], 'succeeded')
 
+
     def test_source_revocation_blocks_cached_body_read_and_never_replays_mutating_tools(self):
         self.jobs.submit('reader', self.body)
         self.jobs.work('reader', self.job_id, self.execute, self.validate)
@@ -157,6 +172,7 @@ class TestAsyncJobs(unittest.TestCase):
             self.jobs.poll('reader', self.job_id, lambda *args: (_ for _ in ()).throw(SourceValidationError()))
         self.assertFalse(any(sk.startswith('QA_RESULT#') for _, sk in self.table.reads))
         self.assertEqual(len(self.calls), 1)
+
 
     def test_source_change_during_cached_body_read_is_checked_again(self):
         self.jobs.submit('reader', self.body)
@@ -170,6 +186,7 @@ class TestAsyncJobs(unittest.TestCase):
             self.jobs.poll('reader', self.job_id, current)
         self.assertEqual(len(checked), 2)
         self.assertEqual(len(self.calls), 1)
+
 
     def test_untracked_proof_and_corrupt_cached_result_are_never_released(self):
         self.jobs.submit('reader', self.body)
@@ -190,6 +207,7 @@ class TestAsyncJobs(unittest.TestCase):
         with self.assertRaises(JobError):
             self.jobs.poll('reader', second, self.validate)
 
+
     def test_running_expiry_and_ttl_are_not_new_execution_opportunities(self):
         self.jobs.submit('reader', self.body)
         def interrupted(*args):
@@ -209,6 +227,7 @@ class TestAsyncJobs(unittest.TestCase):
             self.jobs.submit('reader', self.body)
         self.assertEqual(len(self.calls), 1)
 
+
     def test_payload_limits_fail_explicitly_without_truncating_source_results(self):
         self.jobs.submit('reader', self.body)
         def huge(user, request, state):
@@ -220,6 +239,7 @@ class TestAsyncJobs(unittest.TestCase):
         self.assertEqual(result['status'], 'failed')
         self.assertNotIn('result', result)
         self.assertEqual(result['error']['code'], 'QA_PAYLOAD_TOO_LARGE')
+
 
     def test_combined_input_result_and_proof_use_separate_bounded_complete_items(self):
         from async_jobs import INPUT_LIMIT, PROOF_LIMIT, DDB_ITEM_LIMIT, item_size
@@ -245,6 +265,33 @@ class TestAsyncJobs(unittest.TestCase):
         self.assertEqual(len(json.loads(proof['payload'])['dependencies']), 500)
         self.assertEqual(len(result['result']['answer']), (RESULT_LIMIT - 2048) // 4)
 
+    def test_work_collects_capacity_overflow_and_late_direct_dependencies_without_executor_seeding(self):
+        from delivery_proof import validate_delivery
+        from tool_history import ToolHistory, CompleteRead
+        reader = mock.Mock(return_value=CompleteRead([{'meetingId': 'm', 'title': 'Current'}]))
+        history = ToolHistory('reader', {'list_meetings': reader})
+        direct = {'sourcePK': 'USER#reader', 'sourceSK': 'DOC#direct', 'sourceRevision': 'b' * 64}
+        def execute(user, request, state):
+            for index in range(17):
+                history.read(state, 'list_meetings', {'keyword': str(index)})
+            self.assertFalse(state['replayable'])
+            state['dependencies'].append(direct)  # Another trusted reader's final dependency.
+            return {'answer': 'current valid answer', 'sources': ['synthetic://direct']}
+        def validate(user, proof):
+            self.assertEqual(len(proof['dependencies']), 18)
+            self.assertIn(direct, proof['dependencies'])
+            validate_delivery(proof, lambda dep: True, history)
+        self.jobs.submit('reader', self.body)
+        self.jobs.work('reader', self.job_id, execute, validate)
+        result = self.jobs.poll('reader', self.job_id, validate)
+        self.assertEqual(result['status'], 'succeeded', result)
+        self.assertEqual(result['result']['answer'], 'current valid answer')
+        self.table.reads.clear()
+        with self.assertRaises(SourceValidationError):
+            self.jobs.poll('reader', self.job_id, lambda user, proof: validate_delivery(proof, lambda dep: False, history))
+        self.assertFalse(any(sk.startswith('QA_RESULT#') for _, sk in self.table.reads))
+
+
     def test_item_boundary_counts_names_utf8_and_metadata_before_any_write(self):
         from async_jobs import DDB_ITEM_LIMIT, item_size, bounded_item
         item = {'PK': 'USER#reader', 'SK': 'QA_RESULT#' + self.job_id, 'payload': '',
@@ -263,6 +310,7 @@ class TestAsyncJobs(unittest.TestCase):
             self.jobs._artifact(job, 'RESULT', 'x' * DDB_ITEM_LIMIT)
         self.assertNotIn(('USER#reader', 'QA_RESULT#' + self.job_id), self.table.items)
 
+
     def test_control_updates_reserve_aggregate_space_and_bound_error_bytes(self):
         from async_jobs import CONTROL_RESERVE, CONTROL_STRING_LIMITS, item_size
         self.jobs.submit('reader', self.body)
@@ -277,6 +325,7 @@ class TestAsyncJobs(unittest.TestCase):
             self.jobs._update({'PK': 'USER#reader', 'SK': 'QA_JOB#' + self.job_id},
                               {'requestJson': 'cannot replace immutable request'}, None)
 
+
     def test_deadline_bypasses_catch_all_legacy_fallbacks(self):
         with self.assertRaises(JobDeadline):
             with deadline(0.01):
@@ -284,6 +333,7 @@ class TestAsyncJobs(unittest.TestCase):
                     time.sleep(0.05)
                 except Exception:
                     self.fail('deadline was swallowed')
+
 
     def test_mutating_tool_retry_after_ambiguous_outcome_never_calls_creation_again(self):
         for outcome in ({'error': 'uncertain'}, TimeoutError('uncertain')):
@@ -299,50 +349,17 @@ class TestAsyncJobs(unittest.TestCase):
                 self.assertIn('error', guard.call(create, 'reader', 'rephrased topic', 'deep'))
                 self.assertEqual(create.call_count, 1)
 
+
     def test_confirmed_creation_receipt_is_reused_without_repeating_mutation(self):
         guard = MutationGuard()
         create = mock.Mock(return_value={'researchId': 'a' * 32})
         first = guard.call(create, 'reader', ' topic ', 'invalid')
+        create.assert_called_once_with('reader', 'topic', 'standard')
         self.assertEqual(guard.call(create, 'reader', 'topic', 'standard'), first)
         self.assertEqual(create.call_count, 1)
         guard.call(create, 'reader', 'a separate explicit research task', 'standard')
         self.assertEqual(create.call_count, 2)
 
-    def event(self, method, path, body=None, user='reader'):
-        return {'rawPath': path, 'requestContext': {'http': {'method': method},
-                'authorizer': {'jwt': {'claims': {'sub': user}}}},
-                'body': json.dumps(body) if body is not None else ''}
-
-    def test_authenticated_async_routes_preserve_sync_contract_and_reject_body_identity(self):
-        with mock.patch.object(handler, '_job_service', return_value=self.jobs, create=True):
-            result = handler.lambda_handler(self.event('POST', '/api/qa/jobs', self.body), None)
-            self.assertEqual(result['statusCode'], 202)
-            self.assertEqual(json.loads(result['body'])['jobId'], self.job_id)
-            result = handler.lambda_handler(self.event('GET', '/api/qa/jobs/' + self.job_id, user='other'), None)
-            self.assertEqual(result['statusCode'], 404)
-            forged = self.event('POST', '/api/qa/jobs', dict(self.body, userId='victim'))
-            forged['requestContext']['authorizer'] = {}
-            self.assertEqual(handler.lambda_handler(forged, None)['statusCode'], 401)
-        with mock.patch.object(handler, 'extract_user_id', return_value='reader'), \
-                mock.patch.object(handler, 'handle_ask', return_value={'statusCode': 200, 'body': 'sync'}) as sync:
-            self.assertEqual(handler.lambda_handler(self.event('POST', '/api/qa/ask', {'question': 'old client'}), None)['body'], 'sync')
-            sync.assert_called_once()
-
-    def test_queue_event_uses_saved_request_and_rejects_other_queue(self):
-        self.jobs.submit('reader', self.body)
-        record = {'messageId': 'message', 'eventSource': 'aws:sqs', 'eventSourceARN': 'arn:expected',
-                  'body': json.dumps({'version': 1, 'userId': 'reader', 'jobId': self.job_id})}
-        with mock.patch.object(handler, '_job_service', return_value=self.jobs, create=True), \
-                mock.patch.object(handler, 'QA_JOBS_QUEUE_ARN', 'arn:expected', create=True), \
-                mock.patch.object(handler, '_execute_job_request', side_effect=self.execute, create=True), \
-                mock.patch.object(handler, '_validate_job_sources', side_effect=self.validate):
-            result = handler.lambda_handler({'Records': [record]}, None)
-            self.assertEqual(result, {'batchItemFailures': []})
-            handler.lambda_handler({'Records': [record]}, None)
-            self.assertEqual(len(self.calls), 1)
-            wrong = dict(record, eventSourceARN='arn:other')
-            handler.lambda_handler({'Records': [wrong]}, None)
-            self.assertEqual(len(self.calls), 1)
 
     def test_native_dynamodb_conditions_and_ttl_reach_the_sdk_wire(self):
         resource = Session(aws_access_key_id='synthetic', aws_secret_access_key='synthetic',
@@ -368,28 +385,7 @@ class TestAsyncJobs(unittest.TestCase):
         self.assertEqual(set(pointer), {'version', 'userId', 'jobId'})
         self.assertNotIn('synthetic', pointer.values())
 
-    def test_async_executor_keeps_the_actual_handler_model_and_source_path(self):
-        self.jobs.submit('reader', dict(self.body, meetingId='meeting', context='caller supplied context'))
-        model = mock.Mock()
-        model.converse.return_value = {'stopReason': 'end_turn',
-                                      'output': {'message': {'role': 'assistant', 'content': [{'text': 'whole answer'}]}}}
-        def load(user, mid, text=None, *, source_state, source_details):
-            self.assertEqual((user, mid, text), ('reader', 'meeting', 'caller supplied context'))
-            source_state['requestMeetingId'] = mid
-            source_state['dependencies'] = [{'sourcePK': 'USER#reader', 'sourceSK': 'MEETING#meeting',
-                                            'sourceRevision': 'a' * 64}]
-            return 'current execution-time transcript', 'current notes', None
-        with mock.patch.object(handler, '_ASYNC_MODEL', model), \
-                mock.patch.object(handler, '_request_meeting_context', side_effect=load), \
-                mock.patch.object(handler, 'load_session', return_value=[]), \
-                mock.patch.object(handler, 'save_session'), \
-                mock.patch.object(handler, '_source_is_current', return_value=True):
-            self.jobs.work('reader', self.job_id, handler._execute_job_request, self.validate)
-        self.assertEqual(model.converse.call_count, 1)
-        model_input = json.dumps(model.converse.call_args.kwargs)
-        self.assertIn('current execution-time transcript', model_input)
-        self.assertIn('current notes', model_input)
-        self.assertEqual(self.jobs.poll('reader', self.job_id, self.validate)['result']['answer'], 'whole answer')
+
 
 
 if __name__ == '__main__':

@@ -1,6 +1,7 @@
 'use client';
 
 import { getIdToken, refreshSession } from './auth';
+import { getRuntimeConfig } from './runtimeConfig';
 import { triggerAuthFailure } from '@/components/auth/AuthProvider';
 import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory, Research, ResearchDetail, DictionaryTerm, ChatMessage, Account, AccountSummary, AccountMember, AccountMeetingRef, AccountInsight, AccountDocument, PutDocumentRequest, AccountResearchRef, Project, ProjectSummary, ProjectMember, ProjectMeetingRef, ProjectResearchRef, ProjectInsight, ProjectBrief } from '@/types/meeting';
 
@@ -338,7 +339,7 @@ export class QAJobError extends ApiError {
   }
 }
 
-const QA_POLL_DEADLINE_MS = 660_000;
+export const QA_POLL_DEADLINE_MS = 660_000;
 
 function retryableQAError(error: unknown): boolean {
   return !(error instanceof ApiError)
@@ -347,12 +348,22 @@ function retryableQAError(error: unknown): boolean {
 
 async function askQA(request: {
   mode: 'ask' | 'meeting'; question: string; context?: string; sessionId?: string; meetingId?: string;
-}): Promise<QAResponse> {
+}, onSubmit?: (jobId?: string) => void): Promise<QAResponse> {
   const auth = await getAuthHeaders();
   const userId = tokenUserId(auth.Authorization?.slice(7) || null);
   if (!userId) throw new ApiError(401, 'UNAUTHORIZED', 'Authentication required');
+  const enabled = (await getRuntimeConfig()).qaAsyncJobs === true;
+  assertRequestUser(userId);
+  if (!enabled) {
+    const { mode, ...body } = request;
+    onSubmit?.();
+    return api.post<QAResponse>(
+      mode === 'meeting' ? `/api/qa/meeting/${encodeURIComponent(request.meetingId!)}` : '/api/qa/ask',
+      body, { expectedUserId: userId });
+  }
   const jobId = `${Date.now()}-${crypto.randomUUID().replace(/-/g, '')}`;
   const body = JSON.stringify({ ...request, requestId: jobId });
+  onSubmit?.(jobId); // Before submission: a cancelled caller can still stop safely.
   const end = Date.now() + QA_POLL_DEADLINE_MS;
   const pause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
   const fetchJob = async (method: 'GET' | 'POST'): Promise<QAJob> => {
@@ -421,8 +432,9 @@ async function askQA(request: {
 }
 
 export const qaApi = {
-  ask: (question: string, context?: string, sessionId?: string, meetingId?: string) =>
-    askQA({ mode: 'ask', question, context, sessionId, meetingId }),
+  ask: (question: string, context?: string, sessionId?: string, meetingId?: string,
+        onSubmit?: (jobId?: string) => void) =>
+    askQA({ mode: 'ask', question, context, sessionId, meetingId }, onSubmit),
 
   askMeeting: (meetingId: string, question: string, sessionId?: string) =>
     askQA({ mode: 'meeting', question, sessionId, meetingId }),

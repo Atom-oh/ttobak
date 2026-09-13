@@ -16,6 +16,8 @@ const app = new cdk.App();
 // Prepare existing KB snapshots before the current-source QA cutover.
 const knowledgeIndexingMode: 'manual-only' | 'all' = 'manual-only';
 const knowledgeIndexScheduleEnabled = true;
+// Separate activation change only after deployed QA jobs pass acceptance.
+const qaAsyncJobsEnabled = false;
 
 // Environment configuration (ap-northeast-2 recommended for Korean users)
 const env = {
@@ -192,6 +194,7 @@ const frontendStack = new FrontendStack(app, 'TtobakFrontendStack', {
   httpApiUrl: gatewayStack.httpApi.apiEndpoint,
   websocketApiUrl: gatewayStack.websocketApiUrl,
   websocketOriginSecret: gatewayStack.websocketOrigin.secret,
+  qaAsyncJobsEnabled,
   edgeFunctionVersion: edgeAuthStack.edgeFunction,
   originVerifySecret,
   cognitoRegion: env.region as string,

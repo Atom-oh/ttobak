@@ -367,11 +367,15 @@ class ToolHistory:
                 self._capacity(state, tool_dependency_key(dependency))
             except HistoryLimit:
                 self._untracked(state, name, 'DEPENDENCY_LIMIT')
+                if state.get('_delivery') is not None:
+                    state['_delivery'].history_limited()
                 return value
             try:
                 dependency['sourceRevision'] = fingerprint(['readonly-tool-v1', self.user_id, name, arguments, value])
             except HistoryLimit:
                 self._untracked(state, name, 'RESULT_LIMIT')
+                if state.get('_delivery') is not None:
+                    state['_delivery'].history_limited()
                 return value
             remember_source(state, dependency)
             return value
@@ -406,6 +410,8 @@ class ToolHistory:
             remember_source(state, dependency)
         except HistoryLimit:
             self._untracked(state, 'start_research', 'DEPENDENCY_LIMIT')
+            if state.get('_delivery') is not None:
+                state['_delivery'].history_limited()
         except Exception:
             self._untracked(state, 'start_research', 'RECEIPT_UNAVAILABLE')
         return dict(receipt)

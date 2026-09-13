@@ -1,7 +1,11 @@
 # Asynchronous REST QA
 
-Deploy the provenance prerequisite and backend before the frontend.
-Sync/WebSocket remain compatible; frontend wrappers still return `QAResponse`.
+Prepare backend and frontend with `qaAsyncJobsEnabled=false`; runtime config
+`qaAsyncJobs` must be exactly true to select jobs. Missing/false config uses sync
+before any job is submitted. Enable in a separate activation change only after
+deployed routes, queue/IAM and a current-source job result are verified.
+Reload clients after activation; no fallback occurs after submission.
+Frontend wrappers still return `QAResponse`.
 
 JWT-protected `POST /api/qa/jobs` accepts `requestId`, `mode` (`ask`/`meeting`),
 `question`, optional `context`, `meetingId`, `sessionId`. Meeting mode uses saved
@@ -12,6 +16,12 @@ status and successful `result` or failed `error`; foreign/missing=404, expired=4
 Frontend keeps one ID through two submissions and 660s polling (20s/fetch),
 pinning the user through refresh. Reconcile with `QAJobError.jobId`;
 reload does not resume polling.
+
+Chat bounds WS answers at 330s for the shared 300s Lambda and REST at 690s for
+the 660s API polling budget. Live QA retains its progress-rearmed idle watchdog.
+Submitted proactive questions stay claimed through failure/unmount and later
+batches; assigned job IDs are retained and shown on errors. Claims reset on a
+new recording/auth scope, not on uncertain completion. No automatic resend.
 
 Exact-queue SQS pointers contain only version/user/job IDs. Conditional claims
 never take over RUNNING. Queued dispatch can recover through polling, with 10s
@@ -26,6 +36,8 @@ allowlisted fields. UTF-8 sizing follows [AWS guidance](https://docs.aws.amazon.
 with 21 bytes reserved per integer. Each row enforces one-hour expiry through
 active `pendingShareExpiresAt`. Bound artifacts precede conditional success;
 lost acknowledgements never regenerate answers. Oversize fails without truncation.
+The existing AWS-owned KMS table default is unchanged; active TTL is added only
+for these job rows, not claimed for legacy conversation rows.
 
 Delivery captures reads before history limits: up to 512 dependencies/128 KiB,
 and 4-MiB/65,536-node read-only fingerprints of effective public results. Existing

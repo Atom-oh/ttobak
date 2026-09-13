@@ -1131,7 +1131,7 @@ def agentic_converse(messages, transcript=None, session_id=None, user_id=None, m
     source_state = source_state if source_state is not None else new_source_state()
     source_details = source_details if source_details is not None else []
     context = _agent_context(user_id, transcript, meeting_notes, source_state, source_details)
-    if source_state.get('_delivery') is not None:
+    if source_state.get('_delivery') is not None and not source_state['_delivery'].initialized:
         source_state['_delivery'].seed(source_state)
     if mutation_guard is not None:
         create = context['create_research']

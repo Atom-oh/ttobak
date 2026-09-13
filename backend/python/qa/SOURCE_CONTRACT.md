@@ -1,9 +1,10 @@
 # Current-source QA reader contract
 
-Code checked: 2026-09-13. The prepared handler registers these helpers in both
-transports. Public consumer deployment and acceptance are pending. CDK schedules
-`manual-only` snapshots; that configuration does not prove consumer deployment. Follow
-[the rollout](../../../docs/runbooks/qa-current-source-rollout.md) before cutover.
+The handler registers current-source readers for REST and WebSocket. Async job
+routes are also wired, while frontend job activation defaults off; see the
+[async contract](ASYNC_CONTRACT.md). Code and CDK configuration do not establish
+deployed acceptance. Follow [the rollout](../../../docs/runbooks/qa-current-source-rollout.md)
+and record deployment evidence separately.
 
 ## Reader responsibilities
 
@@ -18,6 +19,7 @@ transports. Public consumer deployment and acceptance are pending. CDK schedules
 | `source_access.py` | Compose injected readers/callbacks into source contexts/search with dependencies; create no AWS clients. |
 | `source_tools.py` | Define/format document, attachment and legacy-text tools for authenticated consumers. |
 | `session_provenance.py` | Recheck every dependency before replay; require an explicit replayable marker and known provenance version. |
+| `delivery_proof.py` | Async REST captures complete reads beyond history limits, includes remaining executor dependencies, and revalidates before delivery. |
 
 Runtime integration must preserve the authenticated tool/error boundary and
 expose only allowlisted public source fields. `BUCKET_NAME`, `KB_BUCKET_NAME`

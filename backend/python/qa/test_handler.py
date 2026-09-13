@@ -1434,7 +1434,7 @@ def load_tests(loader, tests, pattern):
                    'test_tool_history', 'test_account_reads', 'test_runtime_tool_history',
                    'test_binary_consumer_contract', 'test_request_history', 'test_tool_context',
                    'test_completion_safety', 'test_named_knowledge', 'test_history_details',
-                   'test_ws_source_frames', 'test_async_jobs', 'test_delivery_proof'):
+                   'test_ws_source_frames', 'test_async_jobs', 'test_delivery_proof', 'test_async_runtime'):
         tests.addTests(loader.loadTestsFromName(module))
     return tests
 

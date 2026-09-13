@@ -22,12 +22,15 @@ specific connect ARN, not all API stages.
 `AuthorizerResultTtlInSeconds` applies only to HTTP API Lambda authorizers, not
 WebSocket authorizers; do not add an unsupported result-cache setting here.
 
-Chat bounds the handshake to 10 seconds and each answer to 65 seconds, preserves
+Chat bounds the handshake to 10 seconds, WS answers to 330 seconds for the shared
+300-second QA Lambda, and REST to 690 seconds for async polling. It preserves
 partial text with a failure notice, and releases input on timeout/error/close.
 It does not automatically replay QA over WebSocket or REST after a send attempt.
 Unknown requests get a fresh conversation session; old socket/REST completions
 cannot update a newer request or a new chat. Chat sockets are closed at terminal
-completion; Live QA retains its existing reconnect/watchdog behavior.
+completion; Live QA retains its idle watchdog but does not automatically retry
+submitted proactive requests. Runtime job activation follows the
+[async contract](../../backend/python/qa/ASYNC_CONTRACT.md).
 
 Local development uses REST by default: the environment fallback has no `wsUrl`
 and this repository does not provision a local `/ws` proxy. The URL validator's

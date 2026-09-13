@@ -34,12 +34,20 @@ export interface ProactiveBatch {
  * resetProactiveClaims() is called on every recording start. (A
  * meetingId-based namespace would be unstable instead: the id appears
  * mid-recording when the draft meeting is created, and a key that flips
- * `live|q` → `{id}|q` re-fires the same question.) A claim is rolled back
- * (deleted) when its ask fails — a WS stall/error must not permanently
- * consume a question that never got an answer — but each rollback counts
- * against MAX_PROACTIVE_ATTEMPTS below.
+ * `live|q` → `{id}|q` re-fires the same question.) Pre-submission failures can
+ * release a claim within MAX_PROACTIVE_ATTEMPTS. Submitted requests remain
+ * claimed because a missing answer does not prove execution failed.
  */
 export const claimedProactiveQuestions = new Set<string>();
+/** Assigned jobs can have side effects even without a delivered answer. */
+export const proactiveJobIds = new Map<string, string>();
+const submittedProactiveQuestions = new Set<string>();
+
+export function retainProactiveSubmission(question: string, jobId?: string) {
+  if (jobId) proactiveJobIds.set(question, jobId);
+  submittedProactiveQuestions.add(question);
+  claimedProactiveQuestions.add(question);
+}
 
 /**
  * Fire attempts per question this recording session (successes and
@@ -58,6 +66,7 @@ export const MAX_PROACTIVE_ATTEMPTS = 2;
  * instance's unmount cleanup must not unlock a sibling instance's live ask.
  */
 export const proactiveGuard = {
+  epoch: 0,
   consumedBatchId: undefined as number | undefined,
   inFlightQuestion: undefined as string | undefined,
 };
@@ -76,16 +85,16 @@ export function registerProactiveAttempt(question: string): number {
 
 /**
  * Roll back one claimed question after its ask FAILED (WS stall/error, HTTP
- * failure, panel unmount mid-answer). Releases the claim — unless the
- * question has exhausted MAX_PROACTIVE_ATTEMPTS, in which case it stays
- * claimed for the rest of the recording — and releases the in-flight flag
+ * failure, panel unmount mid-answer). Releases the claim only before submission
+ * and below MAX_PROACTIVE_ATTEMPTS; otherwise it stays claimed for the recording.
+ * Releases the in-flight flag
  * only if this question owns it. The consumed-batch generation is
  * deliberately NOT touched: a retry becomes possible only when the next
  * detection round arrives with a new generation id, never by re-running
  * the effect against the same batch.
  */
 export function rollbackProactiveClaimState(question: string) {
-  if ((proactiveAttemptCounts.get(question) ?? 0) < MAX_PROACTIVE_ATTEMPTS) {
+  if (!submittedProactiveQuestions.has(question) && (proactiveAttemptCounts.get(question) ?? 0) < MAX_PROACTIVE_ATTEMPTS) {
     claimedProactiveQuestions.delete(question);
   }
   if (proactiveGuard.inFlightQuestion === question) {
@@ -108,6 +117,9 @@ export function completeProactiveAsk(question: string) {
  */
 export function resetProactiveClaims() {
   claimedProactiveQuestions.clear();
+  proactiveJobIds.clear();
+  submittedProactiveQuestions.clear();
+  proactiveGuard.epoch++;
   proactiveAttemptCounts.clear();
   proactiveGuard.consumedBatchId = undefined;
   proactiveGuard.inFlightQuestion = undefined;

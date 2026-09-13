@@ -17,10 +17,11 @@ from test_source_contract import _SourceFixture
 handler = test_handler.handler
 
 
-class TestDeliveryProof(_SourceFixture, _QAConversationFixture, unittest.TestCase):
+class _DeliveryFixture(_SourceFixture, _QAConversationFixture):
     def setUp(self):
         _SourceFixture.setUp(self)
         self.set_up_transport(self.table)
+
 
     def state(self):
         state = new_source_state()
@@ -28,43 +29,9 @@ class TestDeliveryProof(_SourceFixture, _QAConversationFixture, unittest.TestCas
         state['_delivery'].seed(state)
         return state
 
-    def test_worker_delivers_129th_current_source_and_poll_rechecks_it_before_body(self):
-        old = []
-        for index in range(128):
-            did = 'old-' + str(index)
-            self.table.put_item(Item={
-                'PK': 'USER#reader', 'SK': 'DOC#' + did, 'docId': did, 'entityType': 'USER_DOC',
-                'sourceUserId': 'reader', 'title': 'old', 'content': 'old text'})
-            snapshot = self.source_reader.read('reader', 'USER#reader', 'DOC#' + did)
-            old.append({'sourcePK': 'USER#reader', 'sourceSK': 'DOC#' + did,
-                        'sourceRevision': snapshot['revision']})
-        self.doc(content='CURRENT_129')
-        self.grant()
-        self.replies('rest', 'get_document_detail', {'sourcePK': 'USER#owner', 'docId': 'doc'})
-        def history(*args, source_state, **kwargs):
-            source_state['dependencies'] = old.copy()
-            return []
-        job_table = JobTable()
-        jobs = QAJobs(job_table, mock.Mock(), 'https://sqs.invalid/q')
-        jid = str(int(time.time() * 1000)) + '-' + 'a' * 32
-        jobs.submit('reader', {'requestId': jid, 'question': 'read', 'sessionId': 'chat-capacity'})
-        with mock.patch.object(handler, 'load_session', side_effect=history), \
-                mock.patch.object(handler, 'save_session') as saved, \
-                mock.patch.object(handler, '_ASYNC_MODEL', self.model):
-            jobs.work('reader', jid, handler._execute_job_request, handler._validate_job_sources)
-        result = jobs.poll('reader', jid, handler._validate_job_sources)
-        self.assertEqual(result['status'], 'succeeded', result)
-        self.assertEqual(result['result']['answer'], 'PRIVATE_CHOICE')
-        self.assertEqual(result['result']['sourceDetails'][0]['resourceId'], 'doc')
-        self.assertFalse(saved.call_args.kwargs['source_state']['replayable'])
-        proof = json.loads(job_table.items[('USER#reader', 'QA_PROOF#' + jid)]['payload'])
-        self.assertEqual(len(proof['dependencies']), 129)
-        del self.table.items[('USER#reader', 'SHAREDDOC#doc')]
-        job_table.reads.clear()
-        with self.assertRaises(SourceValidationError):
-            jobs.poll('reader', jid, handler._validate_job_sources)
-        self.assertFalse(any(sk.startswith('QA_RESULT#') for _, sk in job_table.reads))
 
+
+class TestDeliveryProof(_DeliveryFixture, unittest.TestCase):
     def test_ninth_successful_empty_search_is_deliverable_and_still_rechecked(self):
         state = self.state()
         context = handler._agent_context('reader', None, None, state, [])
@@ -78,10 +45,11 @@ class TestDeliveryProof(_SourceFixture, _QAConversationFixture, unittest.TestCas
         self.assertEqual(len(state['dependencies']), 8)
         proof = state['_delivery'].finish(state)
         self.assertEqual(len(proof['dependencies']), 9)
-        handler._validate_job_sources('reader', proof)
+        validate_delivery(proof, lambda dep: handler._source_is_current('reader', dep, proof), handler._tool_history('reader'))
         self.doc(pk='USER#reader', sourceUserId='reader', content='empty 8')
         with self.assertRaises(SourceValidationError):
-            handler._validate_job_sources('reader', proof)
+            validate_delivery(proof, lambda dep: handler._source_is_current('reader', dep, proof), handler._tool_history('reader'))
+
 
     def test_large_readonly_and_seventeenth_query_keep_current_results_with_separate_proof(self):
         state = self.state()
@@ -103,26 +71,6 @@ class TestDeliveryProof(_SourceFixture, _QAConversationFixture, unittest.TestCas
         with self.assertRaises(SourceUnavailable):
             validate_delivery(proof, lambda dep: True, history)
 
-    def test_uncovered_failed_and_changed_private_reads_cannot_pass_delivery(self):
-        self.doc()
-        self.grant()
-        for fault in ('skipped', 'failed', 'changed'):
-            with self.subTest(fault=fault):
-                state = self.state()
-                context = handler._agent_context('reader', None, None, state, [])
-                context['load_document_context']('reader', 'USER#owner', 'doc')
-                context['sourceReadRecorded'] = context['deliveryReadRecorded'] = False
-                if fault == 'failed':
-                    with mock.patch.object(handler.table, 'get_item', side_effect=RuntimeError('read unavailable')):
-                        handler.execute_tool('get_document_detail', {'sourcePK': 'USER#owner', 'docId': 'doc'}, context)
-                elif fault == 'changed':
-                    self.table.items[('USER#owner', 'DOC#doc')]['content'] = 'changed'
-                    handler.execute_tool('get_document_detail', {'sourcePK': 'USER#owner', 'docId': 'doc'}, context)
-                else:
-                    handler.execute_tool('get_document_detail', {'offset': -1}, context)
-                track_tool_history(state, 'get_document_detail', context)
-                with self.assertRaises(SourceValidationError):
-                    handler._validate_answer_sources('reader', state)
 
     def test_seventeenth_small_readonly_result_exceeds_only_history_dependency_budget(self):
         state = self.state()
@@ -136,6 +84,7 @@ class TestDeliveryProof(_SourceFixture, _QAConversationFixture, unittest.TestCas
         proof = state['_delivery'].finish(state)
         self.assertEqual(len(proof['dependencies']), 17)
         validate_delivery(proof, lambda dep: True, history)
+
 
     def test_confirmed_mutation_receipt_does_not_replay_creation_at_poll_validation(self):
         state = self.state()

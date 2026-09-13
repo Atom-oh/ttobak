@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
-import { qaApi, chatApi } from '@/lib/api';
+import { qaApi, chatApi, QA_POLL_DEADLINE_MS } from '@/lib/api';
 import { getRuntimeConfig, runtimeWebSocketUrl } from '@/lib/runtimeConfig';
 import { RealtimeWebSocket, type WebSocketMessage } from '@/lib/websocket';
 import { QAChatMessage } from '@/components/qa';
@@ -28,8 +28,8 @@ const suggestedQuestions = [
   '최근 공유받은 미팅 정리해줘',
   'EKS 관련 논의 요약해줘',
 ];
-// The QA Lambda has a 60-second budget; leave bounded transport grace.
-const ANSWER_TIMEOUT_MS = 65_000;
+// Shared QA Lambda: 300 seconds, plus bounded transport grace.
+const ANSWER_TIMEOUT_MS = 330_000;
 
 export function ChatClient() {
   const router = useRouter();
@@ -90,11 +90,11 @@ export function ChatClient() {
     setSessionId(`chat-${crypto.randomUUID()}`);
     inputRef.current?.focus();
   }, [finishRequest]);
-  const startAnswerDeadline = useCallback((entryId: string) => {
+  const startAnswerDeadline = useCallback((entryId: string, timeout = ANSWER_TIMEOUT_MS) => {
     if (answerTimerRef.current) clearTimeout(answerTimerRef.current);
     answerTimerRef.current = setTimeout(() => {
       failRequest(entryId, '답변이 제한 시간 안에 완료되지 않았습니다. 다시 질문해 주세요.');
-    }, ANSWER_TIMEOUT_MS);
+    }, timeout);
   }, [failRequest]);
 
   useEffect(() => {
@@ -246,8 +246,8 @@ export function ChatClient() {
       return;
     }
 
-    // Fallback to HTTP sync
-    startAnswerDeadline(entryId);
+    // REST uses the API wrapper's bounded sync/job selection.
+    startAnswerDeadline(entryId, QA_POLL_DEADLINE_MS + 30_000);
     try {
       setChatHistory(prev => prev.map(e => e.id === entryId ? { ...e, isStreaming: false } : e));
       const response = await qaApi.ask(q.trim(), undefined, sessionId);

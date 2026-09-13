@@ -413,9 +413,10 @@ All rows below come from `backend/cmd/api/main.go`.
 | WebSocket | `$connect`, `$disconnect`, `$default` | Go websocket Lambda |
 | WebSocket message | `ask_live` | Async invocation of Python QA, streamed replies |
 
-The frontend submits/polls jobs while retaining `QAResponse`; sync clients remain
-compatible. The [async contract](../backend/python/qa/ASYNC_CONTRACT.md) defines
-identity, proof/byte/deadline limits and unknown-outcome reconciliation.
+The frontend selects jobs only when runtime `qaAsyncJobs` is exactly true;
+the default remains synchronous and preserves `QAResponse`. Job activation is a
+separate change after backend acceptance. The [async contract](../backend/python/qa/ASYNC_CONTRACT.md)
+defines identity, proof/byte/deadline limits and unknown-outcome reconciliation.
 
 WebSocket clients resolve runtime `wsUrl: "/ws"` against the current CloudFront
 site and use `wss://` in production. No direct execute-api fallback is accepted.
@@ -455,7 +456,8 @@ and revision; changes or revocation invalidate the complete derived history.
 - Fresh source discovery revalidates canonical access, exact source revision and
   S3 bindings. Saved-text keyword matches supplement index lag; legacy meeting
   exports provide identities only. Cached text/misses cannot replace fresh reads,
-  and the strict runtime must write no new result cache.
+  without introducing a reusable query-result cache. Separately scoped async jobs
+  retain bounded results and revalidate their proof on every result read.
 - Private/manual and authenticated-shared binary evidence requires matching
   immutable snapshots; old unbound chunks cannot be relabeled as current. Legacy
   text is read from current scoped bytes; continuations bind its revision.

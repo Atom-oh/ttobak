@@ -22,6 +22,7 @@ export interface FrontendStackProps extends cdk.StackProps {
   userPoolId: string;
   userPoolClientId: string;
   identityPoolId: string;
+  qaAsyncJobsEnabled?: boolean;
 }
 
 export class FrontendStack extends cdk.Stack {
@@ -409,6 +410,7 @@ function handler(event) {
       sources: [
         s3deploy.Source.jsonData('config.json', {
           wsUrl: WEBSOCKET_PATH,
+          qaAsyncJobs: props.qaAsyncJobsEnabled === true,
           cognito: {
             region: props.cognitoRegion,
             userPoolId: props.userPoolId,

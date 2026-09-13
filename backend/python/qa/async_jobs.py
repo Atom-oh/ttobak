@@ -59,7 +59,7 @@ class MutationGuard:
         if self.uncertain:
             return {'error': 'A previous creation may have completed. No further creation was attempted.'}
         self.uncertain = True  # Set before the side effect, including callbacks that raise.
-        result = callback(user_id, topic, mode)
+        result = callback(user_id, normalized, mode)
         if (type(result) is dict and set(result) == {'researchId'}
                 and type(result['researchId']) is str and re.fullmatch(r'[0-9a-f]{32}', result['researchId'])):
             self.receipts[key] = dict(result)
@@ -349,6 +349,7 @@ class QAJobs:
                 if len(raw.encode()) > INPUT_LIMIT or digest(raw) != job['requestHash']:
                     raise JobError('QA_REQUEST_UNAVAILABLE', 'Stored QA request integrity failed.')
                 state = {'dependencies': [], 'replayable': True, '_delivery': DeliveryProof()}
+                state['_delivery'].seed(state)
                 result = execute(user_id, json.loads(raw), state)
                 proof = proof_data(state)
                 validate(user_id, proof)
