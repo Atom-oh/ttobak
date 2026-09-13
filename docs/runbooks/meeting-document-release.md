@@ -3,7 +3,8 @@
 Host controls merge/deploy; merging deploys production. Worker `34717614426` is
 verified; public API/EventBridge/summary/QA acceptance remains separate.
 
-**Hard prerequisite: merge #209 before #213.** Shared source guards and their tests
+**Hard prerequisite: merge #209 before #213.** PR213 is reviewed as a Draft
+against the 209 branch; retarget it to main only after #209 merges. Shared source guards and their tests
 must be present before this API/document-provider wiring; do not deploy the producer
 from a branch that lacks them. The host verified worker deployment `34717614426`
 SUCCESS: synthetic 626-byte native PDF → 752-byte JSON, page 1 and exact ETag/identity,
@@ -13,7 +14,8 @@ This proves worker/IAM behavior, not API/EventBridge/summary/QA end-to-end behav
 
 Order: batch foundation → attachment wiring → saved-summary storage/consumer/rule
 → its API → frontend. DOCUMENT collection requires provider injection.
-The saved-summary release follows #209 and #213. Its API update depends on the
+The saved-summary Draft targets the #213 branch and follows #209/#213. Retarget
+to main after those parents merge; recheck the same head before host integration. Its API update depends on the
 SummaryRequested consumer, rule and invocation permission. State deletion ships
 with orchestration: four leading singleton deletes keep source/state in the first
 transaction and preserve attachment/share pairs across 100-item boundaries.
@@ -27,7 +29,8 @@ owned claims; the final failure becomes `error/RETRY_EXHAUSTED`. Expired final
 claims finalize on detail read/redelivery. Cleanup failures remain errors.
 
 **Terminal replay alone is a no-op** (`error` fails the status whitelist).
-Until the saved-summary API deploys, an operator must start a NEW recovery:
+After this API deploys, owners/editors can POST `/api/meetings/{id}/resummary`
+to recover from saved sources. Before deployment, an operator must start a NEW recovery:
 
 1. Strongly read `USER#owner / MEETING#id`, resolve the failure, verify saved
    sources and confirm no active invocation/claim.

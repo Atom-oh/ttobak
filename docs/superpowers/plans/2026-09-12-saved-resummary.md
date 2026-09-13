@@ -1,3 +1,5 @@
+> Historical implementation plan. Current code and API/infra specifications govern.
+
 # Saved-note re-summary
 
 No existing route performs this operation: `/summarize` accepts caller-supplied

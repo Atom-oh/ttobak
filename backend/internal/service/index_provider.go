@@ -30,12 +30,13 @@ var (
 )
 
 type IndexObject struct {
-	Key       string            `json:"key"`
-	ETag      string            `json:"etag"`
-	VersionID string            `json:"versionId,omitempty"`
-	Size      int64             `json:"size"`
-	Metadata  map[string]string `json:"metadata,omitempty"`
-	Missing   bool              `json:"missing,omitempty"`
+	Key         string            `json:"key"`
+	ETag        string            `json:"etag"`
+	VersionID   string            `json:"versionId,omitempty"`
+	Size        int64             `json:"size"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
+	Missing     bool              `json:"missing,omitempty"`
+	ContentType string            `json:"-"`
 }
 type IndexPart struct {
 	Name, ContentType string
@@ -54,11 +55,16 @@ type IndexObjects interface {
 	Delete(context.Context, string) error
 	List(context.Context, string) ([]string, error)
 	LegacyPage(context.Context, string) ([]string, string, error)
+	KnowledgeBucket() string
+	HeadKnowledge(context.Context, string) (IndexObject, error)
+	ReadKnowledge(context.Context, IndexObject) ([]byte, error)
+	KnowledgePage(context.Context, string, string) ([]string, string, error)
 }
 type IndexIngestion interface {
 	Busy(context.Context) (bool, error)
 	Start(context.Context, string) (string, error)
 	Get(context.Context, string) (IndexProviderJob, error)
+	Documents(context.Context, []string) (map[string]string, error)
 }
 
 // IndexAWSProvider is pinned to the configured assets bucket, KB bucket and S3
@@ -95,21 +101,30 @@ func indexObjectError(err error) error {
 }
 
 func (p *IndexAWSProvider) Head(ctx context.Context, key string) (IndexObject, error) {
-	out, err := p.s3.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(p.assets), Key: aws.String(key)})
+	return p.headObject(ctx, p.assets, key)
+}
+
+func (p *IndexAWSProvider) headObject(ctx context.Context, bucket, key string) (IndexObject, error) {
+	out, err := p.s3.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(bucket), Key: aws.String(key)})
 	if err != nil {
 		return IndexObject{}, indexObjectError(err)
 	}
 	if out.ETag == nil || out.ContentLength == nil {
 		return IndexObject{}, ErrIndexInvalid
 	}
-	return IndexObject{Key: key, ETag: *out.ETag, VersionID: aws.ToString(out.VersionId), Size: *out.ContentLength, Metadata: out.Metadata}, nil
+	return IndexObject{Key: key, ETag: *out.ETag, VersionID: aws.ToString(out.VersionId), Size: *out.ContentLength,
+		Metadata: out.Metadata, ContentType: aws.ToString(out.ContentType)}, nil
 }
 
 func (p *IndexAWSProvider) Read(ctx context.Context, object IndexObject) ([]byte, error) {
+	return p.readObject(ctx, p.assets, object)
+}
+
+func (p *IndexAWSProvider) readObject(ctx context.Context, bucket string, object IndexObject) ([]byte, error) {
 	if object.ETag == "" || object.Size < 0 || object.Size > MaxIndexObjectBytes {
 		return nil, ErrIndexInvalid
 	}
-	input := &s3.GetObjectInput{Bucket: aws.String(p.assets), Key: aws.String(object.Key), IfMatch: aws.String(object.ETag)}
+	input := &s3.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String(object.Key), IfMatch: aws.String(object.ETag)}
 	if object.VersionID != "" {
 		input.VersionId = aws.String(object.VersionID)
 	}
@@ -119,6 +134,9 @@ func (p *IndexAWSProvider) Read(ctx context.Context, object IndexObject) ([]byte
 	}
 	defer out.Body.Close()
 	if aws.ToString(out.ETag) != object.ETag || (object.VersionID != "" && aws.ToString(out.VersionId) != object.VersionID) {
+		return nil, ErrIndexChanged
+	}
+	if object.ContentType != "" && aws.ToString(out.ContentType) != object.ContentType {
 		return nil, ErrIndexChanged
 	}
 	body, err := io.ReadAll(io.LimitReader(out.Body, object.Size+1))
@@ -132,6 +150,9 @@ func (p *IndexAWSProvider) Read(ctx context.Context, object IndexObject) ([]byte
 }
 
 func indexProjectionKey(key string) bool {
+	if model.KnowledgeProjectionKey(key) {
+		return true
+	}
 	if !strings.HasPrefix(key, model.IndexPrefix) && !strings.HasPrefix(key, "meetings/") {
 		return false
 	}
@@ -143,7 +164,7 @@ func indexProjectionKey(key string) bool {
 	return true
 }
 func (p *IndexAWSProvider) Put(ctx context.Context, key, contentType string, body []byte) error {
-	if !strings.HasPrefix(key, model.IndexPrefix) || !indexProjectionKey(key) {
+	if (!strings.HasPrefix(key, model.IndexPrefix) && !model.KnowledgeProjectionKey(key)) || !indexProjectionKey(key) {
 		return ErrIndexInvalid
 	}
 	_, err := p.s3.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(p.bucket), Key: aws.String(key), Body: bytes.NewReader(body),
@@ -162,7 +183,8 @@ func (p *IndexAWSProvider) Delete(ctx context.Context, key string) error {
 	return err
 }
 func (p *IndexAWSProvider) List(ctx context.Context, prefix string) ([]string, error) {
-	if !strings.HasPrefix(prefix, model.IndexPrefix) && !strings.HasPrefix(prefix, "meetings/") {
+	if !strings.HasPrefix(prefix, model.IndexPrefix) && !strings.HasPrefix(prefix, "meetings/") &&
+		!model.KnowledgeProjectionPrefix(prefix) {
 		return nil, ErrIndexInvalid
 	}
 	pages := s3.NewListObjectsV2Paginator(p.s3, &s3.ListObjectsV2Input{Bucket: aws.String(p.bucket), Prefix: aws.String(prefix)})
@@ -249,6 +271,63 @@ func (p *IndexAWSProvider) Get(ctx context.Context, id string) (IndexProviderJob
 	result := IndexProviderJob{ID: id, Status: string(job.Status), FailureReasons: job.FailureReasons}
 	if job.Statistics != nil {
 		result.Failed = job.Statistics.NumberOfDocumentsFailed
+	}
+	return result, nil
+}
+
+// Documents reads status only; it never invokes direct ingestion. S3 data
+// sources support this API after their initial full sync. Each immutable key is
+// bound to the configured bucket, KB and data source, including in the reply.
+func (p *IndexAWSProvider) Documents(ctx context.Context, keys []string) (map[string]string, error) {
+	identifiers := make([]bedrocktypes.DocumentIdentifier, 0, len(keys))
+	expected := map[string]string{}
+	for _, key := range keys {
+		_, original := model.KnowledgeIndexResource(key)
+		original = original && model.KnowledgeBinaryKey(key)
+		if (!indexProjectionKey(key) && !original) || strings.HasSuffix(key, ".metadata.json") {
+			return nil, ErrIndexInvalid
+		}
+		uri := "s3://" + p.bucket + "/" + key
+		if _, duplicate := expected[uri]; duplicate {
+			return nil, ErrIndexInvalid
+		}
+		expected[uri] = key
+		identifiers = append(identifiers, bedrocktypes.DocumentIdentifier{
+			DataSourceType: bedrocktypes.ContentDataSourceTypeS3,
+			S3:             &bedrocktypes.S3Location{Uri: aws.String(uri)},
+		})
+	}
+	result := map[string]string{}
+	for start := 0; start < len(identifiers); start += 10 {
+		batch := identifiers[start:min(start+10, len(identifiers))]
+		out, err := p.bedrock.GetKnowledgeBaseDocuments(ctx, &bedrockagent.GetKnowledgeBaseDocumentsInput{
+			KnowledgeBaseId: aws.String(p.kbID), DataSourceId: aws.String(p.dataSourceID), DocumentIdentifiers: batch,
+		})
+		if err != nil {
+			return nil, err
+		}
+		allowed := map[string]bool{}
+		for _, id := range batch {
+			allowed[aws.ToString(id.S3.Uri)] = true
+		}
+		for _, document := range out.DocumentDetails {
+			id := document.Identifier
+			if aws.ToString(document.KnowledgeBaseId) != p.kbID || aws.ToString(document.DataSourceId) != p.dataSourceID ||
+				id == nil || id.DataSourceType != bedrocktypes.ContentDataSourceTypeS3 || id.S3 == nil || id.Custom != nil {
+				return nil, ErrIndexInvalid
+			}
+			uri := aws.ToString(id.S3.Uri)
+			key, requested := expected[uri]
+			if !requested || !allowed[uri] || result[key] != "" || document.Status == "" {
+				return nil, ErrIndexInvalid
+			}
+			result[key] = string(document.Status)
+		}
+		for _, id := range batch {
+			if result[expected[aws.ToString(id.S3.Uri)]] == "" {
+				return nil, ErrIndexInvalid
+			}
+		}
 	}
 	return result, nil
 }

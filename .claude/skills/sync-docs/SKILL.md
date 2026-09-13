@@ -1,26 +1,22 @@
-# Sync Docs Skill
+---
+name: sync-docs
+description: Align concise English documentation and generated review context with the current code revision.
+---
 
-## Trigger
-When user runs `/sync-docs` or when significant code changes are detected.
+# Documentation sync
 
-## Steps
-1. Detect which source files changed: `git diff --name-only HEAD~5`
-2. Map changes to documentation:
-   - `backend/internal/handler/*` → `docs/API-SPEC.md`
-   - `infra/lib/*` → `docs/INFRA-SPEC.md`
-   - `frontend/src/components/*` → `docs/DESIGN-SPEC.md`
-   - Architecture changes → `docs/architecture.md`
-3. For each affected doc:
-   - Read current doc content
-   - Read changed source files
-   - Identify outdated sections
-   - Update with accurate information
-4. Quality score each doc (1-5): coverage, accuracy, freshness
-5. Report updated docs and their quality scores
+Read `docs/README.md` and the root guide. All project documentation, including
+ADRs/templates, is English-only; do not generate bilingual copies.
 
-## Quality Criteria
-- **5**: Fully aligned with code, all endpoints/components documented
-- **4**: Minor gaps, mostly current
-- **3**: Some sections outdated but structure intact
-- **2**: Significant drift from code
-- **1**: Severely outdated or missing critical sections
+1. Read changed code, manifests, tests and relevant current references.
+2. Update API, infra, UI or architecture facts in their owning document. Preserve
+   policy requirements and explicitly distinguish existing gaps from compliance.
+3. Keep plans, research, audits and benchmarks historical. Preserve useful
+   rationale/results and name superseding ADRs; remove obsolete copied code.
+4. Edit canonical `CLAUDE.md`, then run
+   `python3 scripts/docs/sync_review_context.py` when review guidance changes.
+   Do not independently edit generated `AGENTS.md` or duplicate per-model rules.
+5. Run `python3 scripts/docs/check_docs.py`. For prompt changes, also run the
+   review-context tests in `docs/runbooks/pr-review.md`.
+6. Report actual changes and verification. Do not invent deployment state,
+   compliance scores, test execution or live-model review results.

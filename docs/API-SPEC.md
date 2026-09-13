@@ -1,1980 +1,490 @@
-# TTOBAK - API Specification
+# API reference
 
-> Backend REST API detailed specification
+Current route/contract map, verified against `backend/cmd/api/main.go`, Go
+handlers/models/services, `backend/python/qa/handler.py`, and GatewayStack.
+This document describes repository code; it does not certify deployed behavior.
 
-## Base URL
+## Transport and authentication
 
-```
-Production: https://{cloudfront-domain}/api
-Local Dev:  http://localhost:8080/api
-```
+Use the CloudFront application domain with `/api`. The Go entry point is Lambda,
+not a standalone HTTP server listening on localhost:8080. The chi integration
+uses HTTP API payload 1.0; Python QA uses 2.0.
 
-## Authentication
+API Gateway uses a Cognito JWT authorizer for authenticated HTTP routes; edge and
+backend validation add their own checks. Go `RequireAdmin` checks verified token
+groups. `GET /api/public/docs/{token}` is the one explicit unauthenticated HTTP
+API registration: it validates the stored public bearer token. Health and
+allowed-domain handlers sit outside Go's Auth group, but that does not exempt
+them from the upstream API Gateway/CloudFront route policy. Do not infer external
+public access from a handler comment alone.
 
-Every API request requires a Cognito JWT.
+Downloads are signed CloudFront `/media/{s3Key}` URLs, usually valid for one hour;
+public-document downloads use five minutes. Signing-key read failure falls back
+to S3 GET presigns. PUT uploads continue to use signed S3 URLs.
 
-- Lambda@Edge verifies the JWT on the CloudFront Viewer Request
-- API Gateway HTTP API: Lambda invoked directly after Lambda@Edge passes
-- API Gateway WebSocket API: Cognito Authorizer verifies at `$connect`
-- The backend Lambda extracts `sub` (userId) from the request context
-- Direct frontend calls use `Authorization: Bearer {idToken}`
+## Contracts that require care
 
-## Download URL shape (ADR-027)
+### Meetings and pagination
 
-All download URLs the API returns (`downloadUrl`, `previewUrl`, `audioUrl`/`audioUrls[]`, attachment `url`, the public-share 302 Location) are CloudFront-signed URLs:
+`GET /api/meetings` accepts `tab=all|shared`, `limit`, opaque `cursor`, and optional
+comma-separated `accountIds` (at most 100 distinct IDs). Legacy `accountId` remains
+supported; supplying both forms, invalid IDs or a mismatched cursor returns 400.
+An empty selection is unfiltered. Preserve normalized selection/tab/caller across
+continuation requests; restart pagination when filters change.
 
-```
-https://{domain}/media/{s3Key}?Expires=...&Signature=...&Key-Pair-Id=...
-```
+The service lists owned, direct-shared and inherited account-team meetings. These
+streams retain their own ordering; there is no global chronological merge. A
+non-null nextCursor can accompany an empty page. Shared scanning is bounded to
+25 pages per request. Read-time checks validate current membership and canonical
+meeting account/sharedToAccount state; account classification/hierarchy alone
+never grants a private meeting. Direct share permissions take precedence.
 
-TTL semantics match the previous S3 presign scheme (1 hour default, 5 minutes for public shares). Uploads (`uploadUrl`, PUT) still use raw S3 presigned URLs. If the backend can't read the CloudFront signing key (local dev, etc.), it falls back to an S3 presigned GET URL.
+Clients expand selected visible account groups to accessible descendants and send
+the resulting IDs. The API filters explicit IDs, without inheriting parent access.
+Accounts added after team publication can discover existing shared meetings;
+pending invitees do so only after verified materialization.
 
-## Endpoints
+Create/update request types live in `backend/internal/model/request.go`; entity
+fields live in `backend/internal/model/meeting.go`.
+GetMeeting resolves S3 transcript spills and returns the active note/transcript
+state, attachments and optional simRun. A/B selection and edited text must remain
+the source of truth: old timestamped segments cannot override the selected text.
+Saved notes are user input, distinct from generated content. Stuck transcription
+or summarization is reconciled after 60 minutes; summarize retry eligibility is a
+separate 20-minute conditional claim, not a retry scheduler.
 
-### Health Check
+Conditional transcript/speaker edits publish new immutable
+`transcripts/{meetingId}/{field}.{32-lowercase-hex}.txt` references only with a
+matching database update. Conflicts return 409; ambiguous database failures retain
+new objects because the write may have committed. Existing referenced objects
+remain intact. Go and QA readers accept strictly validated legacy and versioned
+keys; deploy compatible readers before writers (ADR-037).
 
-```
-GET /api/health
-Response: 200 OK
-{
-  "status": "ok",
-  "timestamp": "2026-03-05T12:00:00Z"
-}
-```
+### Bounded meeting reading
 
----
-
-### Meetings
-
-#### List Meetings
-
-```
-GET /api/meetings?tab={all|shared}&accountIds={id1,id2}&cursor={lastKey}&limit={20}
-# Legacy single-account clients may still use accountId={accountId}.
-
-Response: 200 OK
-{
-  "meetings": [
-    {
-      "meetingId": "uuid",
-      "accountId": "account-uuid", // omitted when not linked to an account
-      "title": "Product Strategy Sync",
-      "date": "2026-03-05T10:00:00Z",
-      "status": "done",           // recording | transcribing | summarizing | done | error
-      "summary": "AI summary preview (first 200 chars)...",
-      "participants": ["Alice", "Bob"],
-      "tags": ["Internal"],
-      "sentiment": "positive",    // positive | neutral | negative, omitted until analyzed
-      "duration": 1830,           // total audio length in seconds, omitted when unknown
-      "isShared": false,          // true if this is a shared meeting
-      "sharedBy": null,           // owner email if shared
-      "permission": null,         // "read" | "edit" if shared
-      "createdAt": "2026-03-05T10:00:00Z",
-      "updatedAt": "2026-03-05T11:30:00Z"
-    }
-  ],
-  "nextCursor": "opaque-continuation-cursor or null"
-}
-```
-
-`accountIds` is an optional comma-separated OR filter over at most 100 distinct
-account IDs. Ordering and duplicates do not change the selection. Empty selection
-means no account filter. Malformed IDs, oversized selections, or supplying both
-`accountIds` and legacy `accountId` return `400 BAD_REQUEST`.
-
-The UI expands selected account groups into accessible descendant IDs before
-calling this endpoint; the API filters the explicit IDs and does not infer access
-from hierarchy. The filter applies to the caller's existing owned/shared
-meeting list by each meeting's canonical account ID; account membership alone does
-not grant access to otherwise private meetings. Shared meetings retain the usual
-read-time access checks. An unknown or inaccessible account with no readable
-meetings produces an empty list.
-
-Both `all` and `shared` also discover meetings published to the caller's current
-account teams. Members added after
-publication inherit read access and list visibility without a personal Share row
-or a manual re-share; queued invitees qualify after their verified first-login
-membership is materialized. Unfiltered requests retain newly joined account IDs
-as discovery hints through regular continuation pages; explicit account selections
-already supply those candidates directly. Both paths recheck current membership
-so GSI propagation does not hide a grant. Memberships and meeting references are paginated,
-then checked against live membership and each canonical meeting's `accountId` /
-`sharedToAccount`. Deleted, moved, and link-only meetings are excluded. Existing
-direct-share permissions take precedence. After owned meetings / individual
-shares are exhausted, inherited meetings fill any remaining page slots, then
-continue through an opaque team cursor. Reference reads are bounded to 25 pages
-per request and inherited items respect the page limit. Existing individual
-shares are excluded from the inherited stream. The team cursor is bound to the
-caller, tab, and account filter; every page re-checks membership. Invalid or
-mismatched team cursors return `400 BAD_REQUEST`.
-`sharedBy` is omitted for inherited access without an individual Share row.
-
-Owned meetings are filtered in the paginated DynamoDB query. Shared rows are
-resolved to meetings before filtering; empty shared pages are advanced up to a
-25-page work limit. A non-null `nextCursor` always means more data can be checked,
-even when this response has no matches. Multi-account continuation cursors bind
-the caller, tab, and normalized account-ID set across both regular and team
-streams. Keep that selection when loading the next page; restart without a
-cursor when it changes. A cursor from another caller, tab, or selection returns
-`400 BAD_REQUEST`. Legacy clients keep using `accountId`. New `all` pages traverse owned meetings,
-then direct shares, then inherited team references. Each stream retains its
-existing order; this is not a global chronological merge across streams.
-
-#### Create Meeting
-
-```
-POST /api/meetings
-Request:
-{
-  "title": "New Meeting",
-  "date": "2026-03-05T10:00:00Z",
-  "participants": ["Alice", "Bob"]
-}
-
-Response: 201 Created
-{
-  "meetingId": "uuid",
-  "title": "New Meeting",
-  "date": "2026-03-05T10:00:00Z",
-  "status": "recording",
-  "participants": ["Alice", "Bob"],
-  "content": "",
-  "createdAt": "2026-03-05T10:00:00Z"
-}
-```
-
-#### Get Meeting Detail
-
-```
-GET /api/meetings/{meetingId}
-
-Response: 200 OK
-{
-  "meetingId": "uuid",
-  "userId": "owner-uuid",
-  "title": "Product Strategy Sync",
-  "date": "2026-03-05T10:00:00Z",
-  "status": "done",
-  "participants": ["Alice", "Bob", "Charlie"],
-  "content": "# Meeting Notes\n\n## Agenda\n...",     // Markdown
-  "liveSummary": "## Live Summary\n...",              // Markdown incl. mermaid, built during recording (omitted if never saved)
-  "transcriptA": "Full text of Transcribe result...",
-  "transcriptB": "Full text of Nova 2 Sonic result...",
-  "selectedTranscript": "A",                    // "A" | "B" | null
-  "audioKey": "audio/user-uuid/meeting-uuid.webm",
-  "notionPageId": "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d", // owner only, omitted for shared users; set once exported to Notion, re-export updates this page in place
-  "permission": "owner",                        // "owner" | "read" | "edit"
-  "attachments": [
-    {
-      "attachmentId": "uuid",
-      "originalKey": "images/user-uuid/photo1.jpg",
-      "processedKey": "processed/user-uuid/photo1-mermaid.md",
-      "type": "diagram",                        // photo | screenshot | diagram | whiteboard
-      "status": "done",                         // uploaded | processing | done
-      "description": "System architecture diagram",
-      "processedContent": "```mermaid\ngraph TD\n...\n```"
-    }
-  ],
-  "shares": [                                   // Only visible to owner
-    {
-      "userId": "shared-user-uuid",
-      "email": "bob@example.com",
-      "permission": "read"
-    }
-  ],
-  "createdAt": "2026-03-05T10:00:00Z",
-  "updatedAt": "2026-03-05T11:30:00Z"
-}
-
-Error: 403 Forbidden (if not owner and not shared)
-Error: 404 Not Found
-```
-
-> `transcription` contains speaker segments only when they cover the complete
-> effective selected transcript (A or B). Detail `selectedTranscript` identifies
-> the available variant after resolving the stored preference; whitespace-only
-> variants are unavailable. Legacy Transcribe segments may omit sentence/clause
-> punctuation at word boundaries; verified segment text is reconstructed from
-> the current source, retaining its punctuation and the original segment IDs
-> and timestamps. Word changes, internal numeric/symbol differences, and partial
-> coverage fall back to raw text without segment anchors. Reconstruction is
-> read-only and does not rewrite stored transcripts.
-> When speaker renaming merges adjacent blocks into the same speaker, grouped
-> comparison permits redundant headers for that speaker at segment boundaries.
-> Different/unknown labels and bracketed body text are not removed.
-
-#### Bounded Meeting Reading
-
-`GET /api/meetings/{meetingId}/reading` uses the existing authenticated API and
-the same owner/direct-share/current-account-membership checks. Use this endpoint
-for long-meeting MCP reads instead of the unbounded detail response above.
-Every continuation rechecks access; responses use `Cache-Control: no-store`.
+`GET /api/meetings/{meetingId}/reading` rechecks owner/direct-share/current-account
+access on every page and returns `Cache-Control: no-store`.
 
 | Query | Contract |
-|-------|----------|
-| `kind` | `meeting` (default) or `transcript` |
-| `pageSize` | Integer 1–8000 Unicode code points; default 4000 |
-| `cursor` | Optional opaque continuation, at most 2048 characters |
-| `section` | Meeting kind only: `notes` (default), `summary`, or `actionItems` |
-| `source` | Transcript kind only: `selected` (default), `A`, or `B` |
-| `startTime`, `endTime` | Transcript kind only, supplied together; finite seconds with `0 <= startTime < endTime` |
-
-Unknown/repeated query keys, malformed scalar/cursor syntax, and incompatible
-options return 400 before storage reads. Cursor revision and offset validity
-are checked against the current authorized source. Reuse the same meeting/kind/section or source/time
-range when following a cursor. Page size may change between requests.
-
-The response is the inner JSON object used by the MCP reading tools, **not** an
-MCP `content` wrapper. Serialized JSON is at most **14,000 bytes, including its
-trailing newline**, leaving room for API Gateway v1 and MCP string envelopes.
-Pages may be shorter than requested to satisfy the byte budget or 50-chunk cap.
-
-Meeting kind returns the requested `notes`, `content` (summary), or
-`actionItemsJson` field with bounded identifying metadata, participants/tags,
-`availableCodePoints`, `revision`, `readingHints`, and `page`. Join all
-`actionItemsJson` pages before JSON parsing; individual pages can end inside a
-JSON string. Items use the same saved-item normalization as the action-items
-endpoint for legacy IDs/completion flags, while preserving all other stored
-properties, including nested extension objects and arrays. The preview flags
-omitted extension fields as `actionItems[N].otherFields`; the full JSON section
-retains them. Extension-only changes also invalidate its cursor.
-
-It also returns `actionItems` as a bounded preview, `actionItemsPreview`
-(`available`, `totalItems`, `complete`, `metadataTruncated`, `readWithSection`),
-and `actionItemsAnalysis` (`status`, optional `errorCode`, `runId`, `leaseUntil`).
-Absent legacy analysis is **unknown**, never inferred successful from `[]`.
-Status lookup failure is visible as unknown/`STATUS_UNAVAILABLE`; succeeded
-analysis against a changed summary is shown as failed/`SOURCE_CHANGED`.
-`actionItemsAnalysisTruncated` and `metadataTruncated` disclose shortened metadata.
-The preview may include fewer entries under the stricter API byte budget; full
-items remain available through their paged section.
-
-Transcript kind returns `source`, `selectedSource`, `requestedSource`,
-`revision`, `provenance`, `mode`, `timeRange`, `completenessScope`, `chunks`, and
-`page`. Each chunk preserves exact text and zero-based code-point
-`startOffset`/exclusive `endOffset`. Verified segments add original identity,
-speaker, times, `timingScope: "whole_segment"`, and `partial`; never infer
-word-level times for partial chunks. Unselected sources and unmatched/invalid
-segments return text pages without borrowed speaker/timing metadata.
-
-Time ranges select whole verified segments overlapping `[startTime,endTime)`.
-Offsets expose gaps between matches; completeness applies only to the requested
-range. All pages expose `page.unit: "unicode_code_points"`, start/end offsets,
-whole-source `totalCodePoints`, requested-span `matchingCodePoints`, `complete`,
-and `nextCursor` (null at the end). Only claim full reading after consuming all
-preceding pages. Cursors bind current source content and relevant provenance,
-not merely timestamps; changes require restarting.
-
-Notes/summary/action-item reads perform **no S3 transcript hydration**. Transcript
-reads hydrate the chosen field and, only for the effective selected source,
-candidate segments after authorization. A selected empty variant can fall back
-to the other available variant. Stored S3 references are never returned.
-The endpoint bounds transport output; it still loads the selected source into
-memory to verify and page it.
-
-Errors: 401 `UNAUTHORIZED`; 403 `FORBIDDEN` or 404 `NOT_FOUND` for denied/missing
-meetings; 400 `INVALID_ARGUMENT`, `INVALID_CURSOR`, `NO_TRANSCRIPT`, or
-`TIME_RANGE_UNAVAILABLE`; 409 `STALE_CURSOR`; 500 `READING_UNAVAILABLE` for
-storage/data failures. Authentication and storage failures never fall back to
-cached transcript text.
-
-#### Update Speaker Names
-
-`PUT /api/meetings/{meetingId}/speakers` accepts
-`{ "speakerMap": { "spk_0": "김담당" } }`. Existing meeting owner/edit permission
-is required. Success returns `200 { meetingId, updatedAt }`; denied/missing
-meetings return 403/404. A concurrent meeting edit returns 409 with a message
-asking the user to refresh and retry. The editor keeps the names entered and
-shows the failure instead of treating it as a successful save.
-
-The update matches the previously read version before replacing derived text.
-Large transcript fields are uploaded to unique versioned S3 keys, and their
-references change only when that conditional database write succeeds.
-
-#### Update Meeting
-
-```
-PUT /api/meetings/{meetingId}
-Request:
-{
-  "title": "Updated Title",                     // optional
-  "content": "# Updated markdown...",           // optional
-  "notes": "In-meeting notes...",               // optional, see semantics below
-  "liveSummary": "## Live Summary\n...",        // optional, same omit-vs-empty semantics as notes
-  "selectedTranscript": "B",                    // optional
-  "participants": ["Alice", "Bob", "David"],    // optional
-  "status": "done"                              // optional
-}
-
-Response: 200 OK
-{ "meetingId": "uuid", "updatedAt": "..." }
-
-Error: 403 Forbidden (shared users with "read" permission cannot edit)
-```
-
-> `content` must be **Markdown**, not HTML. The web editor (TipTap) edits in HTML but converts back to Markdown before saving, because the summary is consumed as Markdown downstream (Notion/Obsidian export). Exporters also normalize any stray HTML to Markdown as a safety net for legacy records.
-
-> `notes` and `liveSummary` are the only fields with omit-vs-explicit-empty semantics: omitting the key entirely leaves the stored value untouched, while sending an explicit `""` clears it. Every other field in this request follows the older "empty/omitted string means don't touch this field" convention (a plain `string`, not a pointer) — so e.g. sending `"title": ""` does NOT clear the title, it's treated the same as omitting it. `liveSummary` is the markdown (incl. mermaid) summary built incrementally during recording — the frontend sends it at save time (both the normal and retry update paths, when present), and the summarize pipeline feeds it into final-summary generation as prior context. Capped server-side at 32,000 characters (`400 BAD_REQUEST` beyond that).
-
-> Saved `notes` also have a 32,000-character limit and enter final summarization
-> as a separate user-authored source. Note-only statements must not be presented
-> as transcript evidence or receive transcript anchors. Legacy oversized notes
-> cause summary generation to fail explicitly rather than silently omit content.
-> Changing `transcriptA` preserves shared segment candidates, which may belong
-> to B or a concurrent producer. Every transcript consumer verifies candidates
-> against the selected current text before using them; stale words cannot
-> override an edit. Matching A or B segments retain their speaker view and
-> anchors, including Nova Sonic B-only meetings. Whitespace-only nonempty A
-> updates are rejected with `400 BAD_REQUEST`; an empty string remains a no-op.
-
-#### Action item analysis and completion
-
-All three routes require the existing meeting authorization. GET permits readers;
-retry and completion changes require owner/edit permission.
-
-| Method | Path | Result |
-| --- | --- | --- |
-| GET | `/api/meetings/{meetingId}/action-items` | `200 { actionItems: [], analysis: { status, runId?, errorCode?, leaseUntil? } }` |
-| POST | `/api/meetings/{meetingId}/action-items/retry` | `202` with the same shape; requires a `done` meeting and saved summary |
-| PUT | `/api/meetings/{meetingId}/action-items/{itemId}` | Explicit `{ "completed": false }` or `true`; returns the current items and analysis |
-
-Analysis status is `unknown`, `queued`, `running`, `succeeded`, or `failed`.
-Only `succeeded` with an empty array establishes that extraction found no tasks.
-Missing legacy metadata is `unknown`; expired pending runs become `failed` with
-`INTERRUPTED`. Fixed error codes also include `INVALID_OUTPUT`, `PROVIDER_FAILED`,
-`PUBLISH_FAILED`, `SOURCE_CHANGED`, and `PERSISTENCE_FAILED`; raw model responses
-are never returned as error messages. A conflict returns 409, denied writes 403,
-and missing meetings/items 404. The detail response also includes
-`actionItemsAnalysis`; a secondary status lookup failure is visibly represented
-as `unknown` / `STATUS_UNAVAILABLE` while preserving the meeting view.
-
-Retry preserves existing items until a complete valid result is committed.
-Unchanged tasks keep their IDs and completion state; new tasks start incomplete
-with new IDs. Concurrent summary or item changes reject stale generated output.
-Lifecycle polling, retry authorization, and the summarize worker's action
-analysis use metadata repository views: they do not hydrate transcript S3
-objects. Conditional writes remain unchanged. Both queueing and processing
-require a nonblank saved summary, so transcript storage references cannot become
-fallback model input when the summary is unavailable.
-
-#### Re-summary from saved sources
-
-| Method | Path | Result |
-| --- | --- | --- |
-| GET | `/api/meetings/{meetingId}/resummary` | Current meeting readers; small status response |
-| POST | `/api/meetings/{meetingId}/resummary` | Owner/edit; empty body or `{}`; `202` with status |
-
-Response: `{status, runId?, errorCode?, leaseUntil?, updatedAt?, resultHash?}`.
-Status is `unknown`, `queued`, `running`, `succeeded`, or `failed`; lease is epoch
-milliseconds and updatedAt is RFC3339. An active run is reused. Expired work is
-persisted as `failed/INTERRUPTED`. A successful resultHash is the SHA-256 of the
-saved summary text.
-
-This differs from POST `/summarize`, which is live, caller-text summarization.
-Re-summary reads saved notes/summary, the current selected transcript and
-verified document extraction. It does not rerun STT or refinement and does not
-import linked-meeting context. Unavailable documents are omitted with notices
-when trusted notes/transcript remain. If no other source exists, pending/failed/
-missing document text returns `409 SOURCE_NOT_READY`; active transcription returns `409 MEETING_BUSY`;
-absent source returns `409 NO_SUMMARY_SOURCE`. Source conflicts return 409,
-source/output limits 413, and publish failures 503. Raw source/model text is
-never included in error responses.
-
-State is separate at `MEETING#id / ANALYSIS#summary`. The worker revalidates the
-requester's edit grant, source fields, attachment inventory and object ETags.
-Summary/coverage and success are published atomically under source/run/lease
-conditions. Concurrent human changes reject the generated result. Failure keeps
-the previous summary. Inputs are limited to 20 attachments and 8 MiB per loaded
-transcript field; document evidence is fairly excerpted within 64 KiB total.
-Unprovided/partial evidence is explicitly marked.
-
-Delivery requires host infrastructure to route
-`source=ttobak.analysis, detail-type=SummaryRequested`, detail `{meetingId,runId}`,
-to the existing summarize Lambda. The API uses its existing default-bus PutEvents
-grant. Deploy that rule before enabling this action.
-
-The frontend polls metadata while pending and explicitly loads completed content
-through `/api/meetings/{id}/reading?kind=meeting&section=summary`, checking page
-continuity, current run and resultHash. It never replaces an unsaved editor draft.
-
-#### Delete Meeting
-
-```
-DELETE /api/meetings/{meetingId}
-
-Response: 204 No Content
-Error: 403 Forbidden (only owner can delete)
-```
-
----
-
-### Accounts
-
-An Account (customer or group) is a first-class entity shared by a team. Its
-creator automatically becomes the `owner` member; existing members can add
-members under ADR-034. Membership (role: owner/AM/TAM/SSA/SA/SA Manager/AM Manager —
-the assignable list is `model.AssignableRoles`) remains the access control
-mechanism. All endpoints require auth.
-
-Accounts have an optional `parentAccountId`, forming a hierarchy such as
-`토스 → 토스증권` or `하나금융그룹 → 하나은행`. Existing records without the field
-remain roots. Parent relationships are organization metadata: they do not grant
-membership or access to a parent/child's meetings, documents, research, or
-projects. Lists still contain only the caller's accounts. Clients can build the tree from
-these IDs and render an account whose parent is not visible as a root, without
-fetching that parent's name.
-
-#### List Accounts (my accounts)
-
-```
-GET /api/accounts
-
-Response: 200 OK
-{
-  "accounts": [
-    {
-      "accountId": "uuid",
-      "name": "Acme Bank",
-      "parentAccountId": "group-uuid", // optional; omitted for roots
-      "role": "owner"            // owner | AM | TAM | SSA | SA | SA Manager | AM Manager
-    }
-  ]
-}
-```
-
-Returns only accounts I'm a member of (GSI1 reverse lookup).
-
-#### Create Account
-
-```
-POST /api/accounts
-Request:
-{
-  "name": "Acme Bank",
-  "parentAccountId": "group-uuid", // optional; creator must belong to this parent
-  "aliases": ["Acme Financial"], // optional, tag-alias mapping
-  "domains": ["acmebank.com"],   // optional
-  "industry": "Finance"          // optional
-}
-
-Response: 201 Created
-{
-  "accountId": "uuid",
-  "name": "Acme Bank",
-  "parentAccountId": "group-uuid", // optional
-  "aliases": ["Acme Financial"],
-  "domains": ["acmebank.com"],
-  "industry": "Finance",
-  "ownerUserId": "owner-uuid",
-  "members": [
-    { "userId": "owner-uuid", "email": "owner@example.com", "role": "owner" }
-  ],
-  "createdAt": "2026-05-30T10:00:00Z"
-}
-
-Error: 400 Bad Request (empty name / invalid parent ID)
-```
-
-The creator automatically becomes an `owner` member. Creating under a parent
-validates that parent's existence and current membership. The account, owner
-membership, and checked parent ancestry are written atomically. Parent validation
-may additionally return `403`, `404`, or a retryable `409` conflict.
-
-#### Get Account Detail
-
-```
-GET /api/accounts/{accountId}
-
-Response: 200 OK
-{
-  "accountId": "uuid",
-  "name": "Acme Bank",
-  "parentAccountId": "group-uuid", // optional
-  "aliases": ["Acme Financial"],
-  "domains": ["acmebank.com"],
-  "industry": "Finance",
-  "ownerUserId": "owner-uuid",
-  "members": [
-    { "userId": "owner-uuid", "email": "owner@example.com", "role": "owner" },
-    { "userId": "tam-uuid", "email": "tam@example.com", "role": "TAM" }
-  ],
-  "createdAt": "2026-05-30T10:00:00Z"
-}
-
-Error: 403 Forbidden (not a member)
-Error: 404 Not Found (account doesn't exist)
-```
-
-#### Change Account Parent (owner only — ADR-036)
-
-```
-PUT /api/accounts/{accountId}/parent
-Request:
-{ "parentAccountId": "group-uuid" }
-
-Response: 200 OK
-{ "accountId": "uuid", "parentAccountId": "group-uuid" }
-
-# Detach into the root level:
-Request: { "parentAccountId": "" }
-Response: { "accountId": "uuid" }
-```
-
-The field is required; omitting it or supplying `null` is not a detach request.
-The caller must own the account being moved and belong to the new parent.
-Self-parenting, cycles, and ancestry walks exceeding 64 nodes are rejected.
-The service checks ancestor parent links in the same transaction as the partial
-parent update, so opposing concurrent moves cannot form a cycle. Conditional
-conflicts are retried from fresh reads before returning `409 CONFLICT`.
-No other account fields or memberships are replaced.
-
-Errors: `400 BAD_REQUEST` (invalid/missing input or invalid hierarchy),
-`403 FORBIDDEN` (not the child owner or not a member of the parent),
-`404 NOT_FOUND` (missing account/parent), `409 CONFLICT` (concurrent change).
-
-#### Add Member (any account member — ADR-034)
-
-```
-POST /api/accounts/{accountId}/members
-Request:
-{
-  "email": "tam@example.com",   // a registered OR invited-but-not-yet-logged-in user's email
-  "role": "TAM"                 // AM | TAM | SSA | SA | SA Manager | AM Manager (owner can't be assigned)
-}
-
-Response: 201 Created
-{
-  "userId": "tam-uuid",
-  "email": "tam@example.com",
-  "role": "TAM"
-}
-
-// If email belongs to a Cognito user who has been invited (admin-created)
-// but never completed a first login, the grant is queued instead of
-// rejected -- it materializes into a real membership on that email's next
-// ListMeetings/CreateMeeting call after logging in (see PendingShare in
-// backend/internal/model). The queued grant is not listed anywhere
-// (revoke by re-submitting the same email, below, not by finding it in a
-// list) and is un-claimable after a 30-day TTL enforced synchronously in
-// application code; DynamoDB's own table TTL sweep (scoped to a distinct
-// `pendingShareExpiresAt` attribute, not QA's `TTL`) later physically
-// reclaims rows nobody ever revoked or claimed -- see PendingShare's
-// doc comment.
-Response: 201 Created
-{
-  "email": "tam@example.com",
-  "role": "TAM",
-  "pending": true                 // userId omitted -- not yet known
-}
-
-Error: 403 Forbidden (not a member of this account -- owner status is not required, ADR-034)
-Error: 404 Not Found (email has never been invited at all)
-Error: 400 Bad Request (already a member, or invalid role)
-```
-
-> Since ADR-034, any existing member of the account may add another -- not just the owner. The role allowlist (`owner` excluded) is unchanged, so no member can grant owner-level standing this way.
-
-#### Revoke Pending Member Invite (owner only)
-
-```
-DELETE /api/accounts/{accountId}/members/pending?email={email}
-
-Cancels a queued PendingShare account invite before the target has ever
-logged in (no userId exists yet, so this can't go through DELETE
-.../members/{userId}). A DeleteItem on an already-gone/never-existed row
-that never resolves to a live member is a silent no-op -- "revoked" and
-"there was nothing to revoke" both return 204. If the row is gone because
-MaterializePendingShares won the race (the invitee logged in and claimed
-the grant first), this returns 409 instead of a silent success -- the
-caller would otherwise believe access was revoked while it's still live.
-
-Response: 204 No Content
-Error: 403 Forbidden (not the owner)
-Error: 400 Bad Request (missing email query parameter)
-Error: 409 Conflict (already claimed by materialize -- remove via Members instead)
-```
-
-#### Update Member Role (any account member — ADR-034)
-
-```
-PUT /api/accounts/{accountId}/members/{userId}
-Request:
-{
-  "role": "AM"                  // AM | TAM | SSA | SA | SA Manager | AM Manager (cannot change to owner)
-}
-
-Response: 200 OK
-{
-  "userId": "tam-uuid",
-  "email": "tam@example.com",
-  "role": "AM"
-}
-
-Error: 403 Forbidden (not a member of this account -- owner status is not required, ADR-034)
-Error: 404 Not Found (member doesn't exist)
-Error: 400 Bad Request (invalid role, or target is the owner)
-```
-
-> Since ADR-034, any existing member may change another member's role -- not just the owner. The owner's own role can never be changed via this path, and the role allowlist still excludes `owner`.
-
-#### Remove Member (owner only)
-
-```
-DELETE /api/accounts/{accountId}/members/{userId}[?force=true]
-
-Response: 204 No Content (membership deleted and Share cleanup for all meetings fully succeeded)
-Response: 200 OK (force=true; membership deleted, but Share cleanup failed for some meetings, or an ambiguous untagged Share was found)
-{
-  "removed": true,
-  "cleanupFailedForMeetings": ["meeting-id-1", "meeting-id-2"],
-  "ambiguousUntaggedMeetingIDs": ["meeting-id-3"]
-}
-
-Error: 403 Forbidden (not the owner)
-Error: 404 Not Found (member doesn't exist)
-Error: 400 Bad Request (owner can't be removed)
-Error: 400 Bad Request (called without force=true, and the target holds at least one Share on an account-linked meeting whose origin isn't tagged "account" — i.e. ambiguous. Membership is NOT deleted; retry with ?force=true, which returns the same body as the 200 case above)
-Error: 500 Internal Server Error (failed to list meetings to check for cleanup — membership is untouched, safe to retry)
-```
-
-> Unlike Add Member and Update Member Role (opened to any member, ADR-034), removal deliberately stays owner-only: it's destructive (revokes access, can cascade into meeting-share cleanup below) where a bad add/role-change is cheap to reverse.
->
-> Removing membership immediately blocks new access to meetings that have no per-user Share record. For meetings that do have a Share record, the same `RemoveMember` request does a best-effort cleanup across the account's meeting refs, but only reclaims Shares tagged `origin=="account"`. This isn't atomic with the membership delete, and doesn't touch direct Shares the owner granted separately.
->
-> **`force` parameter (fail-closed default)**: a Share whose `Origin != "account"` (effectively `Origin==""`) could be either an owner-granted direct grant or a legacy account-share predating the `Origin` field — the system can't tell which (see [ADR-023](decisions/ADR-023-share-origin-provenance-and-legacy-migration.md)). Without `force`, `RemoveMember` refuses the membership delete outright (400, membership untouched) the moment the target holds any such ambiguous Share — it does not fail-open by deleting membership first and reporting ambiguity after the fact. `?force=true` skips this precheck, deletes membership, leaves ambiguous Shares alone, and reports them in `ambiguousUntaggedMeetingIDs`. A lookup error during the precheck (including transient DynamoDB errors) returns 500 and leaves membership intact (safe to retry) — the precheck itself is a security gate, so tolerating transient errors here would reopen the gap it closes. This check only applies to meetings with `SharedToAccount == true`; link-only meetings (`AccountID` set, `SharedToAccount` false) are unaffected.
->
-> **Meeting-list lookup failure**: the `ListMeetingRefsForAccount` call used to determine cleanup targets runs *before* the membership delete — if it fails, membership stays intact and the caller gets 500, so the same request is safely retryable.
->
-> **A cleanup failure never leaves access behind**: per-meeting cleanup failures surface in the response's `cleanupFailedForMeetings`, but cleanup isn't the only access control. Every read path re-verifies current account membership live rather than trusting an `origin=="account"` Share row: meeting detail (`checkAccess`), meeting list (`ListMeetings`), KB Q&A (`KnowledgeService.Ask`, currently unused/unwired but kept consistent for future reuse), and the Python QA Lambda (`_list_shared_meetings`). The Python path caches only the immutable identifiers of which meetings are shared (`SHARED_MEETINGS_CACHE_TTL_SECONDS`, default 300s) — live membership/origin/`sharedToAccount` are re-checked on every call, so removal takes effect on the next QA request regardless of that TTL. The KB search cache (`KB_CACHE_TTL_SECONDS`, default 600s) stores an access signature alongside cached results and treats an access change as a cache miss. So a stale Share row alone can't restore access even if cleanup itself failed; `cleanupFailedForMeetings` is a useful signal for tidying stale rows, not a security requirement.
->
-> **Where this guarantee doesn't apply**: legacy shares predating the `Origin` field (`origin==""`) are indistinguishable from direct grants and are trusted unconditionally until backfilled via the CLI below.
->
-> **Known limitation & remediation**: Share records created by `share-account` before this fix has no origin tag and is treated as a direct grant, so `RemoveMember`'s cleanup can't auto-reclaim it. Since removal without `force` is now blocked in that case, silent lingering access is now confined to cases where the owner explicitly passes `force=true` — `ambiguousUntaggedMeetingIDs` in the response identifies affected meetings, though as a coarse signal (a meeting also appears there if the removed member holds a separate direct Share, regardless of whether a legacy account-share actually exists). `backend/cmd/backfill-share-origin` (operator-run per `--account-id`, dry-run by default, `--apply` to commit) retroactively tags such records with `origin=account` so they become subject to cleanup. This CLI can't distinguish an ambiguous candidate automatically (same meeting shared both via account and directly) — untrustworthy candidates must be excluded via `--exclude userId1:meetingId1,...` before `--apply`, or a direct grant risks being mistagged as account-origin and later auto-reclaimed. It enumerates by meeting rather than current membership, so it can also tag legacy shares for users already removed — running backfill before removing a member is still the friction-free path. One case it can never tag: a meeting later un-shared from this account or re-shared to another — that share is reported `ORPHANED` and left for the meeting owner to clean up manually via `RevokeShare`. Full design background: [ADR-023](decisions/ADR-023-share-origin-provenance-and-legacy-migration.md).
-
-#### List Account Meetings (shared meetings — members only)
-
-```
-GET /api/accounts/{accountId}/meetings
-
-Response: 200 OK
-{
-  "meetings": [
-    {
-      "meetingId": "uuid",
-      "ownerUserId": "owner-uuid",
-      "title": "ROSA Review",
-      "date": "2026-05-30T10:00:00Z"
-    }
-  ]
-}
-
-Error: 403 Forbidden (not a member)
-Error: 404 Not Found (account doesn't exist)
-```
-
-#### List Account Insights (raw insight material — members only)
-
-Returns the 8 insight types extracted from meetings and fanned out to the Account's partition. `from`/`to` are optional RFC3339 time-range filters; `types` is an optional comma-separated type filter — both applied client-side in the service layer (§6.3).
-
-8 insight types: `trend`, `need`, `competitive`, `risk`, `opportunity`, `tech`, `stakeholder`, `action`
-
-```
-GET /api/accounts/{accountId}/insights?from=<RFC3339>&to=<RFC3339>&types=risk,opportunity
-
-Response: 200 OK
-{
-  "insights": [
-    {
-      "type": "risk",
-      "text": "PoC schedule may slip by 2 months",
-      "implication": "Risk that PoC results won't be ready before Q3 renewal negotiation",
-      "nextAction": "TAM to confirm infra approval status this week",
-      "sourceType": "meeting",
-      "sourceId": "meeting-uuid",
-      "occurredAt": "2026-05-12T09:00:00Z",
-      "tsMarker": "[TS:120]",
-      "entities": ["PoC"]
-    }
-  ]
-}
-```
-
-`implication`/`nextAction` are optional fields, populated when `ExtractInsights` (Bedrock Haiku) generates structured reasoning alongside the insight — earlier versions only had `type`/`text`. `ExtractInsights` also generates `evidence` (a near-verbatim quote), but it is **deliberately excluded** from this fanned-out response, to avoid exposing raw quotes to account/project members without access to the source meeting (`BuildAccountInsights`, `meeting.go`). `evidence` is only exposed via the meeting's own `Insights` JSON, to users with meeting access. `Project.Insights` (`GET /api/projects/{projectId}/insights`, `GET /api/projects/{projectId}/brief`) shares the same schema (frontend type `FieldInsight`; backend `MeetingInsight`/`ProjectInsightDTO`) and the same fan-out policy.
-
-```
-Error: 400 Bad Request (invalid from/to — not RFC3339)
-Error: 403 Forbidden (not a member)
-Error: 404 Not Found (account doesn't exist)
-```
-
-#### Get Account Brief (bundled raw material — members only)
-
-Bundles one account's raw material (metadata + insights by type + shared meetings) into a single call — the "batch consumption" endpoint used by a local agent preparing SFDC/SIFT/2by2/Player Card material. Composes the existing `GetAccount`+`ListAccountMeetings`+`ListAccountInsights` in the service layer, inheriting the same member gate. `from`/`to`/`types` filters behave the same as the insights endpoint.
-
-```
-GET /api/accounts/{accountId}/brief?from=<RFC3339>&to=<RFC3339>&types=risk,opportunity
-
-Response: 200 OK
-{
-  "account": { "accountId": "acc-uuid", "name": "Acme Bank", "members": [ ... ], ... },
-  "insightsByType": {
-    "risk": [ { "type": "risk", "text": "...", "occurredAt": "2026-05-12T09:00:00Z", ... } ],
-    "opportunity": [ ... ]
-  },
-  "meetings": [ { "meetingId": "meeting-uuid", "title": "ROSA PoC", "ownerUserId": "...", "date": "2026-05-12T09:00:00Z" } ]
-}
-
-Error: 400 Bad Request (invalid from/to — not RFC3339)
-Error: 403 Forbidden (not a member)
-Error: 404 Not Found (account doesn't exist)
-```
-
-#### Update Research (rename display title)
-
-`Research.Title` is a user-editable display label, defaulting to `Topic` (the original research prompt) at creation. `Topic` itself is permanently immutable — the agent pipeline (research-worker, research-agent) acts on `Topic`, so a rename must never look like it changed what was researched. `AccountResearchRef`/`ProjectResearchRef` (denormalized link snapshots) still carry only `Topic`, not `Title` — a rename does not propagate to those.
-
-```
-PUT /api/research/{researchId}
-{ "title": "새 제목" }
-
-Response: 200 OK
-{ "researchId": "r-uuid" }
-
-Error: 400 Bad Request (title empty or longer than 200 chars)
-Error: 403 Forbidden (not the owner)
-Error: 404 Not Found (research doesn't exist)
-```
-
-#### List Account Research (linked research — members only)
-
-Read path for research tasks linked to an Account (`POST /api/research/{researchId}/accounts`, `DELETE /api/research/{researchId}/accounts/{accountId}` — the rest of research CRUD is existing functionality not yet documented here). On link, `accountIds` is updated with an atomic DynamoDB String Set `ADD`/`DELETE`, so concurrent link requests don't race. Reads re-verify each result's `accountIds` actually contains the target accountId (fail-closed) — a failed reverse-index cleanup after unlinking never leaks a stale entry into the list.
-
-```
-GET /api/accounts/{accountId}/research
-
-Response: 200 OK
-{ "research": [ { "researchId": "r-uuid", "topic": "...", "summary": "...", "status": "done", "ownerUserId": "...", "createdAt": "..." } ] }
-
-Error: 403 Forbidden (not a member)
-```
-
-#### Put Account Document (ingest a local document — members only)
-
-Stores a locally-authored document (email notes, calendar, prep notes, etc.) into an Account as inline markdown (≤300KB), so non-Obsidian teammates can read it in TTOBAK. A loop-guard rejects any TTOBAK-originated document (identified by `ttobak_id` frontmatter).
-
-`docType` is a free string (existing values like `"prep"`/`"reference"` and the Document Hub v2 UI's `"note"`/`"blog"`/`"slide"` all share this field; the server does no enum validation). Wikilinks in `markdown` (`[[Doc Name]]`, `[[Doc Name|Alias]]`, `[[Doc Name#Section]]`) are parsed on save into a normalized title list stored in `links` (data source for a future graph view). Slides (PPTX/PDF) pass `fileKey` instead of `markdown` (an S3 key from a presigned PUT, must be prefixed `docs/{my userId}/`) — this put call itself is the upload-complete record; there's no separate `/api/upload/complete` step.
-
-```
-POST /api/accounts/{accountId}/documents
-{ "title": "Email notes", "markdown": "# Prep\n\n[[Acme Bank]] meeting prep...", "docType": "prep", "path": "Accounts/Acme Bank/prep.md" }
-{ "title": "Slide Deck", "docType": "slide", "fileKey": "docs/user-uuid/1234567890_deck.pdf", "fileName": "deck.pdf", "mimeType": "application/pdf", "fileSize": 123456 }
-
-Response: 201 Created
-{ "docId": "doc-uuid", "title": "Email notes", "docType": "prep", "path": "Accounts/Acme Bank/prep.md", "links": ["Acme Bank"], "sourceUserId": "user-uuid", "createdAt": "2026-05-30T09:00:00Z", "updatedAt": "2026-05-30T09:00:00Z" }
-
-Error: 400 Bad Request (missing title, neither markdown nor fileKey, or markdown >300KB)
-Error: 400 Bad Request (TTOBAK-originated — loop guard)
-Error: 403 Forbidden (not a member, or fileKey doesn't have my userId prefix)
-Error: 404 Not Found (account doesn't exist)
-```
-
-#### List Account Documents (ingested documents — members only)
-
-```
-GET /api/accounts/{accountId}/documents?docType=prep
-
-Response: 200 OK
-{ "documents": [ { "docId": "doc-uuid", "title": "Email notes", "docType": "prep", "path": "...", "sourceUserId": "...", "createdAt": "2026-05-30T09:00:00Z", "updatedAt": "2026-05-30T09:00:00Z" } ] }
-```
-
-`links`/`fileName` appear only when non-empty (`omitempty`) — a document with no wikilinks or file omits the field entirely (not an empty array/`null`).
-
-```
-Error: 403 Forbidden (not a member)
-Error: 404 Not Found (account doesn't exist)
-```
-
-The list omits `content` (fetch the full body via Get).
-
-#### Get Account Document (full content — members only)
-
-```
-GET /api/accounts/{accountId}/documents/{docId}
-
-Response: 200 OK
-{ "docId": "doc-uuid", "title": "Email notes", "docType": "prep", "path": "...", "links": ["Acme Bank"], "sourceUserId": "...", "createdAt": "2026-05-30T09:00:00Z", "updatedAt": "2026-05-30T09:00:00Z", "content": "# Prep\n\n[[Acme Bank]] meeting prep..." }
-```
-
-A slide (a document with `fileName`) has empty `content` and a populated `downloadUrl` (the original file, 1h TTL). PPTX/PPT additionally gets `previewUrl` (PDF sidecar, present only once conversion finishes — ADR-022); `downloadUrl` always points at the original, never the sidecar. Both fields are omitted entirely when absent.
-
-```
-Error: 403 Forbidden (not a member)
-Error: 404 Not Found (document doesn't exist)
-```
-
-#### Update / Delete Account Document (members only)
-
-Update follows field-level "omit to preserve" semantics — `docId`/`sourceUserId`/`createdAt` are always preserved. `title` is required (rejected if empty); `docType`/`path` keep their existing value if omitted, or get replaced if sent. `markdown` uses `*string`: omitting the JSON key preserves the body, sending an explicit empty string clears it. Omitting both `markdown` and `fileKey` preserves whichever is currently set (no longer an error); sending both is rejected (a doc is note/blog OR slide, never both). A non-empty `markdown` re-runs link parsing and the loop guard; a changed non-empty `fileKey` re-verifies ownership (my userId prefix). Slide→note conversion: send only `markdown` (clears the file fields). Note→slide: send only `fileKey` (clears the body).
-
-```
-PUT /api/accounts/{accountId}/documents/{docId}
-{ "title": "Email notes v2", "markdown": "# Prep v2\n..." }
-
-Response: 200 OK
-{ "docId": "doc-uuid", "title": "Email notes v2", ... }
-
-DELETE /api/accounts/{accountId}/documents/{docId}
-Response: 204 No Content
-
-Error: 400 Bad Request (missing title, both markdown and fileKey set, markdown >300KB, or TTOBAK-originated)
-Error: 403 Forbidden (not a member, or fileKey doesn't have my userId prefix)
-Error: 404 Not Found (document doesn't exist)
-```
-
-#### Personal Documents (not account-scoped — owner only)
-
-Personal notes/blogs/slides for Document Hub v2. Stored under `PK: USER#{my userId}`, so ownership is inherent in the key and no account-membership check is needed. Request/response schemas match Account documents (just without the accountId path segment). Document Hub notes are not automatically indexed for `ttobak_ask`; `ttobak_list_documents` lists metadata and `ttobak_get_document` reads current contents directly.
-
-```
-POST   /api/documents                 { "title": "...", "markdown": "...", "docType": "note" }
-GET    /api/documents?docType=note    → { "documents": [ AccountDocumentDTO, ... ] }
-GET    /api/documents/{docId}         → AccountDocumentDetail
-PUT    /api/documents/{docId}         { "title": "...", "markdown": "..." }
-DELETE /api/documents/{docId}         → 204 No Content
-
-Error: 400 Bad Request / 404 Not Found — same semantics as the Account document endpoints above
-(no membership check, so no "not a member" 403; a foreign fileKey still gets 403 —
-the PK proves ownership, fileKey-prefix validation is a separate check)
-```
-
-#### Slide Upload (presigned URL for documents)
-
-The existing presigned upload endpoint (`POST /api/upload/presigned`) gained a `"doc"` category. `fileType` only allows `application/pdf` or PowerPoint MIME types (`application/vnd.openxmlformats-officedocument.presentationml.presentation`, `application/vnd.ms-powerpoint`). `meetingId` isn't needed (documents aren't tied to a meeting). The S3 key is `docs/{my userId}/{timestamp}_{fileName}`, passed straight through as `fileKey` to Put Document.
-
-```
-POST /api/upload/presigned
-{ "fileName": "deck.pdf", "fileType": "application/pdf", "category": "doc" }
-
-Response: 200 OK
-{ "uploadUrl": "https://...presigned-put-url...", "key": "docs/user-uuid/1234567890_deck.pdf", "expiresIn": 3600 }
-
-Error: 400 Bad Request (fileType is not pdf/PowerPoint MIME)
-```
-
-PUT the file directly to `uploadUrl`, then pass the response's `key` as `fileKey` to Put Document — there's no `/api/upload/complete` call.
-
-#### Slide Preview (PPTX → PDF conversion, ADR-022)
-
-A PPTX/PPT uploaded under the `docs/` prefix triggers a separate container Lambda (`cmd/convert-doc`) via an EventBridge S3 event, which generates a PDF sidecar with headless LibreOffice (deterministic key, no DynamoDB write — the document record may not exist yet). In Get Account/Personal Document responses, `downloadUrl` **always** points at the original file; for a PPTX/PPT, `previewUrl` (the PDF sidecar) is populated separately once conversion finishes — `downloadUrl` never switches to the sidecar. `previewUrl` is omitted while conversion is still in progress (poll and re-fetch). There's no separate public REST endpoint for this. This "`downloadUrl` is never the sidecar" rule is about **JSON field names** — the Public Share Link's `GET /api/public/docs/{token}` below is a 302 redirect rather than a field, and its redirect target deliberately goes to the sidecar when one exists (an unauthenticated visitor wants a preview, so unlike everywhere else, sidecar-if-present takes priority there, falling back to the original otherwise).
-
-#### Share Document to Account (personal document → team copy)
-
-Shares a personal document with an Account's team. Works for both slides and notes (no slide-only check in code — markdown documents copy their body as-is). A slide is **copied**, not referenced — an S3 `CopyObject` to a new key (`docs/{my userId}/{ms}_{randomId}_{fileName}`) backs a new `AccountDocumentDTO` (the original isn't overwritten, so later edits to it don't affect the shared copy). This looks like a different key layout from Slide Upload's `docs/{my userId}/{timestamp}_{fileName}`, but it's the same rule — upload uses `{timestamp}_{fileName}`, share-copy inserts a `generateID()` to avoid collisions (`{ms}_{randomId}_{fileName}`); both keep the `docs/{userId}/` prefix and preserve the filename.
-
-```
-POST /api/documents/{docId}/share-account
-{ "accountId": "acc-uuid" }
-
-Response: 201 Created
-{ "docId": "new-doc-uuid", "title": "Slide Deck", "docType": "slide", "fileName": "deck.pdf", ... }  (AccountDocumentDTO)
-
-Error: 400 Bad Request (missing accountId)
-Error: 403 Forbidden (not the document owner, or not a member of accountId)
-Error: 404 Not Found (document doesn't exist)
-```
-
-#### Share Document with a User (personal document → one person, by reference, read-only)
-
-Shares a personal document with exactly one other user by email. Unlike Share to Account (which copies the S3 object), this shares **by reference** — only one copy exists, the recipient always sees the owner's current edits, and revoking makes it disappear immediately. Always **read-only**: the repository hardcodes `permission` to `read` and the request body has no `permission` field at all (unlike meeting sharing). Only the owner can issue/revoke/list shares; a non-owner caller gets 404 rather than 403, since the document isn't in their partition (fail-closed, doesn't reveal whether the doc exists).
-
-On the recipient's side, `GET /api/documents` (list) and `GET /api/documents/{docId}` (detail) both include a `sharedBy` field (owner's email) — the frontend uses it as the read-only indicator (`ShareButton`'s `readOnly` prop). The recipient's detail response deliberately omits `publicShareToken` (issuing/revoking a public link is owner-only). If the owner deletes the document, share records aren't cascaded but are silently skipped on list.
-
-Internally these share records use dedicated DynamoDB prefixes (`SHAREDDOC#` / `DOCSHARE_TO#`, `EntityType=DOC_SHARE`) distinct from meeting/research sharing — reusing `SHARED#` would mix document shares into the shared-meetings list (which reads via `begins_with(SK, "SHARED#")`) and corrupt its pagination (ADR-029).
-
-```
-POST /api/documents/{docId}/share
-{ "email": "teammate@example.com" }
-
-Response: 201 Created
-{ "sharedWith": { "userId": "user-uuid", "email": "teammate@example.com", "permission": "read" } }
-
-GET /api/documents/{docId}/shares
-Response: 200 OK
-{ "shares": [ { "userId": "user-uuid", "email": "teammate@example.com", "permission": "read", "sharedAt": "..." } ] }
-
-DELETE /api/documents/{docId}/share/{userId}
-Response: 204 No Content
-
-Error: 400 Bad Request (missing email, or sharing with yourself)
-Error: 404 Not Found (document doesn't exist, caller isn't the owner — 404 instead of 403 to hide
-                       existence — or no user with that email)
-```
-
-#### Public Share Link (unauthenticated public link for a personal file document)
-
-Issues a 128-bit random token (`crypto/rand`) for unauthenticated access. Only allowed for documents with a `fileKey` (slides/PDFs — markdown notes are excluded). Only the authenticated owner can issue/revoke, but the link itself (`GET /api/public/docs/{token}`) is registered under the CloudFront `/api/public/*` behavior, skipping both the API Gateway JWT authorizer and the Lambda@Edge JWT check — unlike every other route under `/api/*`, which passes through both layers (see [ADR-022](decisions/ADR-022-slide-preview-conversion-and-public-share-links.md)). The handler never returns document content directly — it always 302-redirects to a signed GET URL (`https://{domain}/media/...`, ADR-027 — or the PDF sidecar if one exists). Issuing is atomic across concurrent requests (`SetPublicShareTokenIfAbsent` conditional write), so a double-click can't mint two tokens and orphan one.
-
-```
-POST /api/documents/{docId}/public-share
-Response: 200 OK
-{ "token": "8f2c...128-bit-random..." }
-
-DELETE /api/documents/{docId}/public-share
-Response: 204 No Content
-
-GET /api/public/docs/{token}   (no auth header)
-Response: 302 Found → Location: <signed GET URL, 5-minute TTL (https://{domain}/media/...)>
-
-Error: 400 Bad Request (target document has no fileKey — markdown notes can't be publicly shared)
-Error: 403 Forbidden (not the document owner — issue/revoke only)
-Error: 404 Not Found (document doesn't exist, or token revoked/expired)
-```
-
-This route's signed URL uses a 5-minute TTL (`PublicShareURLTTL`), shorter than the 1-hour default elsewhere — a deliberate shortening (ADR-022) to narrow the window a URL stays live after revocation. 5 minutes is still not zero, so revocation isn't instantly airtight — a known, accepted limitation.
-
-#### Export Vault (Obsidian markdown export)
-
-Renders the caller's own meetings and documents as Obsidian-friendly markdown (YAML frontmatter) and returns them as a file list; an MCP client writes each file into a local vault.
-
-- Meetings: `Accounts/{name}/` (account-shared) or `_Private/Meetings/` (private)
-- Documents with a markdown body (slides excluded): `Accounts/{name}/Docs/` (by account membership) or `_Private/Docs/` (personal). Frontmatter includes `doc_type`, `links`, `ttobak_id` (ADR-020) — re-ingestion applies the same loop guard as ADR-017.
-
-```
-GET /api/vault/export
-
-Response: 200 OK
-{ "files": [
-  { "path": "Accounts/Acme Bank/2026-05-12 ROSA Review.md", "markdown": "---\naccount: \"[[Acme Bank]]\"\n...\n---\n\n# ROSA Review\n..." },
-  { "path": "Accounts/Acme Bank/Docs/Meeting Prep.md", "markdown": "---\ndoc_type: note\nttobak_id: doc-uuid\n---\n\nPrep content..." }
-] }
-
-Error: 403 Forbidden
-```
-
-#### Link Meeting to Account (classification only — owner+member only)
-
-```
-POST /api/meetings/{meetingId}/account
-Request:
-{
-  "accountId": "acc-uuid"
-}
-
-Response: 200 OK
-{
-  "accountId": "acc-uuid"
-}
-
-Error: 403 Forbidden (not owner, or not a member of that account)
-Error: 404 Not Found (meeting doesn't exist)
-```
-
-#### Share Meeting to Account (team share — owner+member only)
-
-Shares a meeting with an Account's team: sets `accountId`+`sharedToAccount`, grants a `read` Share to every account member except the owner, and adds a MeetingRef to the Account partition.
-
-```
-POST /api/meetings/{meetingId}/share-account
-Request:
-{
-  "accountId": "acc-uuid"
-}
-
-Response: 200 OK
-{
-  "accountId": "acc-uuid",
-  "sharedWith": 2          // number of members granted read access (excluding owner)
-}
-
-Error: 403 Forbidden (not owner, or not a member of that account)
-Error: 404 Not Found (meeting doesn't exist)
-```
-
----
-
-### Projects
-
-A Project (SFDC Opportunity) is a first-class entity that groups meeting notes, research, and insights by sales opportunity. Unlike Account, it's a **many-to-many graph** — it can link to multiple accounts at once (e.g. a partner plus the end customer). It reuses the same graph-reference pattern as Research↔Account linking (string set + reverse-index item + fail-closed reverification) — see ADR-025 for the data model.
-
-**Access** is hybrid: project owner, a directly-invited member (`POST .../members`), or **a member of any linked Account**. Linking an Account to a project auto-extends viewing access to that Account's whole team (no separate invite needed). SFDC integration is metadata-only (`sfdcOpptyId`/`sfdcUrl`) — an external MCP client (SFDC MCP → `ttobak_create_project`) is responsible for the real SFDC data; there's no server-side SFDC API integration.
-
-#### List My Projects
-
-```
-GET /api/projects
-
-Response: 200 OK
-{ "projects": [ { "projectId": "uuid", "name": "...", "stage": "...", "sfdcOpptyId": "..." } ] }
-```
-
-Returns projects where I'm owner, a direct member, or a member of a linked Account (owner index + GSI1 member reverse-lookup + my Account memberships cross-referenced against each candidate — all three canonically reverified, mirroring `requireProjectAccess`'s hybrid access check). The same projects are also discoverable via `GET /api/accounts/{accountId}/projects` — the two are alternative discovery paths.
-
-#### Create Project
-
-```
-POST /api/projects
-Request:
-{
-  "name": "Acme Bank Cloud Migration",
-  "description": "...",          // optional
-  "sfdcOpptyId": "006XX...",      // optional
-  "sfdcUrl": "https://...",       // optional
-  "stage": "Negotiation"          // optional
-}
-
-Response: 201 Created
-{
-  "projectId": "uuid", "name": "...", "description": "...",
-  "sfdcOpptyId": "006XX...", "sfdcUrl": "https://...", "stage": "Negotiation",
-  "ownerUserId": "owner-uuid", "accountIds": [], "members": [],
-  "createdAt": "2026-07-21T00:00:00Z", "updatedAt": "2026-07-21T00:00:00Z"
-}
-
-Error: 400 Bad Request (empty name)
-```
-
-#### Get / Update / Delete Project
-
-```
-GET /api/projects/{projectId}
-PUT /api/projects/{projectId}      (owner only, same fields as Create)
-DELETE /api/projects/{projectId}   (owner only)
-
-Error: 403 Forbidden — GET: not owner/direct member/linked-Account member
-Error: 403 Forbidden — PUT/DELETE: not owner (direct/linked-Account membership doesn't count)
-Error: 404 Not Found
-Error: 400 Bad Request (DELETE: rejected while any account/meeting/research/member
-       relation still exists — all must be unlinked first, to avoid orphaned relations)
-```
-
-#### Members (owner only)
-
-```
-POST   /api/projects/{projectId}/members
-Request: { "email": "user@example.com" }
-Response: 201 Created — { "userId": "uuid", "email": "user@example.com" }
-Error: 400 Bad Request (already a member) · 404 Not Found (no user with that email)
-
-DELETE /api/projects/{projectId}/members/{userId}
-Response: 204 No Content
-```
-
-Unlike Account, membership has no role distinction — it's binary (owner, or member).
-
-#### Link / Unlink Account
-
-```
-POST   /api/projects/{projectId}/accounts        (owner only, must be a member of the target Account)
-Request: { "accountId": "uuid" }
-Response: 200 OK — { "accountIds": ["uuid", ...] }
-Error: 403 Forbidden (not owner, or not a member of the target Account)
-
-DELETE /api/projects/{projectId}/accounts/{accountId}   (owner only)
-Response: 204 No Content
-```
-
-Both link and unlink atomically update `Project.accountIds` (String Set) and the reverse index (`ACCOUNT#{accountId}/PROJECTREF#{projectId}`) via a single `TransactWriteItems` call (ADR-025). Unlinking only requires project ownership, not current membership in that Account — otherwise an owner removed from the Account could never unlink it.
-
-#### Link / Unlink Meeting, Research
-
-```
-POST   /api/projects/{projectId}/meetings          Request: { "meetingId": "uuid" }
-DELETE /api/projects/{projectId}/meetings/{meetingId}
-POST   /api/projects/{projectId}/research          Request: { "researchId": "uuid" }
-DELETE /api/projects/{projectId}/research/{researchId}
-
-Error: 404 Not Found — Link(POST) Meeting: target meeting isn't owned by the caller (looked up
-       only in the caller's own partition, so someone else's meeting is indistinguishable from
-       nonexistent) or the meeting/project doesn't exist
-Error: 403 Forbidden — Link(POST) Research: target research isn't owned by the caller
-       (research lookup itself isn't owner-gated, so ownership is checked explicitly)
-Error: 403 Forbidden — Link(POST), either case: passes the ownership check above but still lacks
-       project access (owner/direct member/linked-Account member)
-Error: 403 Forbidden — Unlink(DELETE): caller is neither the target's owner nor the project owner (see asymmetry below)
-Error: 404 Not Found (research/project doesn't exist)
-```
-
-`Meeting.projectIds`/`Research.projectIds` link the same way — String Set + atomic `TransactWriteItems`. **Linking** requires being the target meeting/research's owner, but **unlinking** only requires being that owner *or* the **project owner** — this asymmetry (ADR-025) prevents a deadlock where a member who linked something, then got removed via `RemoveMember`, could no longer unlink it (having lost project access), and the project owner couldn't either (not owning the meeting/research). This is independent of `SharedToAccount` (the account-sharing gate) — a meeting's title/insights, once linked to a project, are visible to everyone with project access regardless (ADR-025), a separate sharing channel that deliberately bypasses `SharedToAccount`.
-
-#### List Project Meetings / Research
-
-```
-GET /api/projects/{projectId}/meetings
-Response: 200 OK — { "meetings": [ { "meetingId", "ownerUserId", "title", "date" } ] }
-
-GET /api/projects/{projectId}/research
-Response: 200 OK — { "research": [ { "researchId", "topic", "summary", "status", "ownerUserId", "createdAt" } ] }
-
-Error: 403 Forbidden (no project access)
-```
-
-Both lists reverify each reverse-index candidate against the canonical `projectIds` set (fail-closed) — a stale ref left behind by a failure outside the link/unlink transaction (e.g. the underlying meeting deleted through some other path) never surfaces in results. Also deduplicated by `meetingId` (defends against ADR-025's mutable-Date reference SK issue).
-
-#### Get Project Insights
-
-```
-GET /api/projects/{projectId}/insights?from=RFC3339&to=RFC3339&types=risk,tech
-
-Response: 200 OK
-{ "insights": [ { "type": "risk", "text": "...", "sourceId": "meeting-uuid", "occurredAt": "...", "tsMarker": "[TS:120]", "entities": [] } ] }
-
-Error: 400 Bad Request (from/to not RFC3339, or invalid insight type)
-Error: 403 Forbidden (no project access)
-```
-
-**Aggregated at read time, never persisted** — parses linked meetings' `Insights` JSON on every call, so a re-summarized meeting's updated insights show up on the next fetch automatically (unlike Account insights, which snapshot at share time — there's no sync-drift possible here at all).
-
-#### Get Project Brief
-
-```
-GET /api/projects/{projectId}/brief?from=RFC3339&to=RFC3339&types=risk,tech
-
-Response: 200 OK
-{
-  "project": { ... ProjectResponse ... },
-  "insightsByType": { "risk": [...], "tech": [...] },
-  "meetings": [...],
-  "research": [...]
-}
-```
-
-A convenience endpoint bundling Get Project + List Meetings + List Research + Get Insights in one call.
-
-#### List Account's Projects
-
-```
-GET /api/accounts/{accountId}/projects   (members of that account only)
-
-Response: 200 OK
-{ "projects": [ { "projectId", "name", "stage", "sfdcOpptyId" } ] }
-```
-
-The Account-side read path for "projects linked to this account" (same pattern as Research's `GET /api/accounts/{accountId}/research`).
-
----
-
-### Sharing
-
-#### Share Meeting
-
-```
-POST /api/meetings/{meetingId}/share
-Request:
-{
-  "email": "bob@example.com",
-  "permission": "read"          // "read" | "edit"
-}
-
-Response: 200 OK
-{
-  "sharedWith": {
-    "userId": "uuid",
-    "email": "bob@example.com",
-    "permission": "read"
-  }
-}
-
-// email is invited (Cognito account exists) but has never logged in yet --
-// queued as a PendingShare instead of a real Share row; materializes on
-// that email's next ListMeetings/CreateMeeting call after logging in
-// (not listed anywhere -- revoke by re-submitting the same email, below,
-// not by finding it in a list -- and un-claimable after 30 days via a
-// synchronous application-code TTL check; DynamoDB's own table TTL sweep,
-// scoped to a distinct `pendingShareExpiresAt` attribute so it can't touch
-// QA's unrelated `TTL`-named rows, later physically reclaims rows nobody
-// ever revoked or claimed).
-Response: 200 OK
-{
-  "sharedWith": {
-    "email": "bob@example.com",
-    "permission": "read",
-    "pending": true                // userId omitted -- not yet known
-  }
-}
-
-Error: 403 Forbidden (only owner can share)
-Error: 404 User not found (email has never been invited at all)
-```
-
-#### Revoke Share
-
-```
-DELETE /api/meetings/{meetingId}/share/{userId}
-
-Response: 204 No Content
-Error: 403 Forbidden (only owner can revoke)
-```
-
-#### Revoke Pending Share Invite (owner only)
-
-```
-DELETE /api/meetings/{meetingId}/share/pending?email={email}
-
-Cancels a queued PendingShare meeting invite before the target has ever
-logged in (no userId exists yet, so this can't go through DELETE
-.../share/{userId}). A DeleteItem on an already-gone/never-existed row
-that never resolves to a live share is a silent no-op -- "revoked" and
-"there was nothing to revoke" both return 204. If the row is gone because
-MaterializePendingShares won the race (the invitee logged in and claimed
-the grant first), this returns 409 instead of a silent success -- the
-caller would otherwise believe access was revoked while it's still live.
-
-Response: 204 No Content
-Error: 403 Forbidden (not the owner)
-Error: 404 Not Found (meeting doesn't exist)
-Error: 400 Bad Request (missing email query parameter)
-Error: 409 Conflict (already claimed by materialize -- revoke direct access instead)
-```
-
-#### Search Users (for sharing)
-
-```
-GET /api/users/search?q={email-prefix}
-
-Response: 200 OK
-{
-  "users": [
-    {
-      "userId": "uuid",
-      "email": "bob@example.com",
-      "name": "Bob Kim"
-    }
-  ]
-}
-```
-
----
-
-### Upload
-
-#### Get Presigned URL
-
-```
-POST /api/upload/presigned
-Request:
-{
-  "fileName": "recording.webm",
-  "fileType": "audio/webm",         // audio/webm | audio/mp4 | audio/x-m4a | image/jpeg | image/png
-  "category": "audio"               // "audio" | "image"
-}
-
-Response: 200 OK
-{
-  "uploadUrl": "https://s3.amazonaws.com/bucket/...",
-  "key": "audio/user-uuid/meeting-uuid/recording.webm",
-  "expiresIn": 3600
-}
-```
-
-#### Notify Upload Complete
-
-```
-POST /api/upload/complete
-Request:
-{
-  "meetingId": "uuid",
-  "key": "audio/user-uuid/meeting-uuid/recording.webm",
-  "category": "audio"               // "audio" | "image"
-}
-
-Response: 200 OK
-{
-  "status": "processing"
-}
-```
-
----
-
-### Real-time Translation (REST)
-
-> Current implementation: real-time transcription/translation uses the Browser Speech API + REST calls, not WebSocket.
-
-#### Translate Text
-
-```
-POST /api/translate
-Request:
-{
-  "text": "Text to translate",
-  "sourceLang": "ko",
-  "targetLang": "en"
-}
-
-Response: 200 OK
-{
-  "translatedText": "Text to translate",
-  "sourceLang": "ko",
-  "targetLang": "en"
-}
-```
-
-#### Live Summary (called every ~200 words)
-
-```
-POST /api/summarize-live
-Request:
-{
-  "meetingId": "client-meeting-id",
-  "text": "Full transcript text so far...",
-  "previousSummary": "Previous summary (optional)"
-}
-
-Response: 200 OK
-{
-  "summary": "Summary so far..."
-}
-```
-
----
-
-### STT Results
-
-#### Select Transcript
-
-```
-PUT /api/meetings/{meetingId}/transcript
-Request:
-{
-  "selected": "A"                   // "A" | "B"
-}
-
-Response: 200 OK
-```
-
-#### Re-diarize (re-analyze with a corrected speaker count, ADR-019)
-
-When acoustic diarization (pyannote) detects fewer speakers than actually present, re-runs the same audio with a user-supplied speaker-count hint. Whisper-transcribed meetings only (AWS Transcribe fallback meetings have no acoustic diarization to redo), single-part audio only (v1 scope — multi-part would need per-part ECS re-trigger + resetting `AudioPartsReady`). Rather than calling ECS `RunTask` directly, it `CopyObject`s the existing audio to a new key (`audio/{userId}/{meetingId}/rediarize_{uuid}_...`), reusing the existing EventBridge S3 event → `ttobak-transcribe` pipeline — no new IAM permission needed on the `api` Lambda.
-
-```
-POST /api/meetings/{meetingId}/rediarize
-{ "speakerCount": 6 }                 // 2-20
-
-Response: 200 OK
-{ "meetingId": "uuid", "status": "transcribing" }
-
-Error: 400 Bad Request (speakerCount out of 2-20 range, non-whisper meeting, multi-part audio,
-                         no audio, or meeting already processing)
-Error: 403 Forbidden (not my meeting)
-Error: 404 Not Found (meeting doesn't exist)
-```
-
-On call, immediately clears the meeting's `speakerMap` (re-analysis re-numbers `spk_N` from scratch, so old name mappings are meaningless) and resets `status` to `transcribing`, storing the requested `speakerCount` in `Meeting.DiarizationSpeakerHint` — `cmd/transcribe/main.go` uses this as pyannote's `max_speakers` hint instead of `len(Participants)`. This hint is **sticky**: once set, it applies to future re-transcriptions too (instead of the registered participant count). Clearing `speakerMap` is a conditional write (`UpdateMeetingFieldsIfMatch`) gated on the freshly-read current `status` — a double call only lets one succeed, the other gets 400 (`meeting is already being processed`). A `CopyObject` failure (including ambiguous SDK errors) has no dedicated recovery — it's left to the existing 60-minute stuck-transcribing auto-expiry (`GetMeeting` handler), since a separate rollback write could race with the re-trigger pipeline's own state transition.
-
-#### Cost/sizing simulator (ADR-033, AgentCore Code Interpreter)
-
-Extracts quantitative requirements (users, TPS, data volume, SLO...) from a done meeting, lets the user confirm/correct them, then runs a real Python computation in AgentCore Code Interpreter comparing 2-3 architecture options (TCO, chart PNGs, markdown report). `SimRun` is a singleton per meeting (`SIMRUN` sort key) — a fresh extraction overwrites any prior draft/result; running is gated behind `PutSimRunIfNotRunning`'s conditional write (no two concurrent runs per meeting). The generated code never receives the meeting transcript — only the server-validated requirements/options JSON — so a transcript can influence extracted *values* but never the *code itself* (see ADR-033's trust-boundary section).
-
-```
-POST /api/meetings/{meetingId}/sim/extract
-
-Response: 200 OK
-{
-  "simRunId": "uuid", "status": "extracted",
-  "requirements": [
-    { "key": "monthlyActiveUsers", "label": "월간 활성 사용자", "value": "100000",
-      "required": true, "source": "extracted", "evidence": "transcript://seg-12" }
-  ],
-  "createdAt": "...", "updatedAt": "..."
-}
-
-Error: 400 Bad Request (meeting not done yet)
-Error: 403 Forbidden (not my meeting)
-Error: 404 Not Found (meeting doesn't exist)
-```
-
-```
-POST /api/meetings/{meetingId}/sim
-{
-  "requirements": [ { "key": "monthlyActiveUsers", "label": "...", "value": "100000",
-                       "required": true, "source": "user" } ],
-  "options": [ { "name": "서버리스", "description": "Lambda + API Gateway" },
-               { "name": "컨테이너", "description": "ECS Fargate" } ]   // 2-3 required
-}
-
-Response: 202 Accepted
-{ "simRunId": "uuid", "status": "queued", ... }
-
-Error: 400 Bad Request (unknown requirement key, value out of range/not in allowlist,
-                         missing required value, wrong option count 2-3, meeting not
-                         done, or a simulation is already running for this meeting)
-Error: 403 Forbidden (not my meeting)
-Error: 404 Not Found (meeting doesn't exist)
-```
-
-Every field is re-validated server-side against a fixed allowlist (`AllowedSimRequirementKeys`) regardless of what the confirm form submits — the form is a UX gate, not the trust boundary. Async hand-off to `ttobak-sim` (`InvocationType=Event`); the frontend polls `GET /api/meetings/{meetingId}` for `simRun.status` (see below), not a new WebSocket channel — this is a 1-3 minute job, not a token stream. A `queued`/`running` run older than 20 minutes is reported as `error` at read time (mirrors the existing 60-minute `isStuck` reconciliation for transcribing/summarizing meetings) without being persisted that way.
-
-`GetMeeting`'s response gains a `simRun` field (same shape as the extract response, plus `charts: [{key, url}]` with presigned CloudFront URLs, `reportMarkdown`, `codeKey`, `priceSnapshotAt`, `errorMessage` once `status` reaches `done`/`error`). Generated chart PNGs land under the existing `images/` prefix and the report/code/price-snapshot under `files/` (both already in the OAC allowlist — no new CloudFront behavior needed, see ADR-027's "Download URLs" note above and ADR-033).
-
----
-
-### WebSocket (API Gateway) — not implemented
-
-> **현재 상태**: 실시간 전사는 클라이언트에서 처리하며, 기본 엔진은 AWS Transcribe Streaming (`@aws-sdk/client-transcribe-streaming`, 브라우저→AWS 직결) — Browser Web Speech API (`BrowserSpeechRecognition`)는 Transcribe Streaming이 설정되지 않았거나 실패했을 때만 쓰이는 폴백이다. 모바일(iOS/iPadOS/Android)에서 마이크/탭 스트림으로 녹음 중일 때는 mic 트랙 충돌 위험 때문에 이 폴백이 막혀 있고(`SttManager.fallbackToWebSpeech`, ADR-030), 사용자가 데스크톱에서 명시적으로 Browser를 선택한 경우는 (모바일이 아니므로) 계속 지원된다. 번역/요약은 REST API 호출. WebSocket 기반 Nova Sonic 스트리밍은 v2 목표.
-
-WebSocket API for real-time transcription and translation.
-
-```
-Endpoint: wss://{apigw-domain}/realtime
-
-Connection: $connect with Authorization header (Cognito JWT)
-
-Client → Server Messages:
-
-1. Start Session
-{
-  "action": "start",
-  "meetingId": "uuid",
-  "language": "ko-KR",              // source language
-  "targetLangs": ["en-US", "ja-JP"] // optional translation targets
-}
-
-2. Audio Chunk
-{
-  "action": "audio",
-  "data": "base64-encoded-audio-chunk"
-}
-
-3. Stop Session
-{
-  "action": "stop"
-}
-
-Server → Client Messages:
-
-1. Transcript Result
-{
-  "type": "transcript",
-  "text": "Transcribed text",
-  "isFinal": true,                  // false for interim results
-  "timestamp": "2026-03-05T10:00:00Z",
-  "speaker": "Speaker 1"            // optional speaker diarization
-}
-
-2. Translation Result
-{
-  "type": "translation",
-  "text": "Translated text",
-  "targetLang": "en-US",
-  "timestamp": "2026-03-05T10:00:00Z"
-}
-
-3. Error
-{
-  "type": "error",
-  "code": "STREAMING_ERROR",
-  "message": "Nova Sonic connection failed"
-}
-```
-
----
-
-### Q&A (Knowledge Base RAG)
-
-#### Ask Question
-
-```
-POST /api/meetings/{meetingId}/ask
-Request:
-{
-  "question": "What deadline was decided in this meeting?",
-  "includeKB": true                 // true: also search the global KB, false: this meeting only
-}
-
-Response: 200 OK
-{
-  "answer": "The deadline was set for March 15.",
-  "sources": [
-    {
-      "type": "meeting",            // "meeting" | "kb"
-      "meetingId": "uuid",
-      "title": "Product Strategy Sync",
-      "excerpt": "...confirmed the deadline as March 15...",
-      "relevanceScore": 0.95
-    },
-    {
-      "type": "kb",
-      "fileId": "uuid",
-      "fileName": "project-timeline.pdf",
-      "excerpt": "...Phase 2 deadline: March 15...",
-      "relevanceScore": 0.82
-    }
-  ],
-  "questionId": "uuid"
-}
-```
-
-#### Agentic Q&A (Python QA Lambda)
-
-KB meeting hits are discovery candidates, not current note snapshots. For exact
-`meetings/{ownerId}/{meetingId}.md` sources, every response—including a cache
-hit—rechecks current access and reads current `notes` and `content` from
-DynamoDB. Deleted/revoked meetings and their citations are removed; retrieval
-failures are reported as tool errors. Meeting results include `updatedAt` and
-separate bounded excerpts with coverage markers; their index score is neither
-confidence nor freshness. Non-meeting KB documents keep their existing behavior.
-This does not reindex edited meetings: a newly added term can still fail to
-produce a candidate until the export/index is refreshed.
-
-`POST /api/qa/ask`, `POST /api/qa/meeting/{meetingId}`, WebSocket `ask_live` — a Bedrock Converse agentic loop. Available tools: `search_knowledge_base`, `search_aws_docs`, `search_transcript`, `get_aws_recommendation`, `search_web`, `list_meetings`, `get_meeting_detail`, `start_research`, and account tools. Streaming and HTTP requests with a `meetingId` load current authorized meeting data and saved notes. Both pass separate untrusted JSON excerpts: 2,000 characters from the live/selected transcript context and up to 4,000 from saved notes, with source-relative coverage metadata and the meeting ID. Empty sources are omitted. The HTTP live fallback preserves `meetingId` too. Conversation continuity: history per `sessionId` is stored in DynamoDB (7-day TTL), so follow-up questions in the same session carry prior Q&A context.
-
-**`search_web` data-transmission notice**: this tool makes a cross-region SigV4 call to the us-east-1 AgentCore Web Search Gateway, and the model-composed search query (up to 200 chars, which may include keywords derived from meeting conversation) **is sent to an external web search provider**. This happens **on the manual question path too**, not just proactive auto-fire — the opt-in toggle below only gates auto-fired questions. The manual path's mitigation is query-construction constraints in the system prompt/tool description (no customer/attendee names, internal codenames, or meeting figures — generalized keywords only), plus an injection guard that never treats transcript text as an instruction. Query text is never logged in plaintext — both `web_search.py`'s own logs and the agentic loop's tool-call log (`redact_tool_input_for_log`) keep only a hash + length. If `WEB_SEARCH_GATEWAY_URL` is unset, the tool stays exposed but calling it returns a "web search not configured" failure to the model (consumes one tool round, isn't fully disabled). A server-side per-user hourly rate limit applies (`WEB_SEARCH_HOURLY_LIMIT`, default 30/h; checked before the gateway call, so a capped call consumes no external quota and returns a distinct limit-reached message to the model). It is an abuse brake, not a security boundary: it fails open on DynamoDB errors, is a tumbling-hour window (a burst straddling the hour boundary can reach ~2× the limit), and applies to the qa Lambda's authenticated agentic paths only (crawler/research-agent are system-triggered and unmetered by design).
-
-Stored meeting detail uses the selected transcript, falling back only when that variant is absent. `get_meeting_detail(meetingId, offset)` returns up to 6,000 characters and tells the model how to continue. Its offset addresses the combined detail text, so start at zero and follow the tool-provided next offset; per-source excerpt positions are not detail offsets. Required transcript read/validation failures return an explicit error (HTTP 500), not a success with missing text. Unauthenticated requests return 401; inaccessible meetings return 404.
-
-#### Detect Questions (live question detection + proactive-search flag)
-
-```
-POST /api/qa/detect-questions
-Request:
-{
-  "transcript": "Recent conversation...",
-  "summary": "Current meeting summary (optional)",
-  "previousQuestions": ["Already-suggested question"]
-}
-
-Response: 200 OK
-{
-  "questions": ["When does EKS 1.31 support end?", "Which team will own the migration?"],
-  "proactive": ["When does EKS 1.31 support end?"]   // a subset of `questions` — ones a search can
-                                                      // fact-check immediately. The frontend
-                                                      // (LiveQAPanel) auto-fires one per batch to
-                                                      // surface an answer ahead of time.
-}
-```
-
-Proactive auto-fire is **opt-in, default off**: since a question derived from meeting conversation could reach external web search without explicit user action, it only fires for users who've enabled LiveQAPanel's "Proactive Search" toggle (localStorage `ttobak.proactiveSearchEnabled`). When off, `proactive` questions still show up, just as ordinary suggestion chips.
-
----
-
-### Knowledge Base
-
-#### Upload KB File (Get Presigned URL)
-
-```
-POST /api/kb/upload
-Request:
-{
-  "fileName": "project-spec.pdf",
-  "fileType": "application/pdf",    // pdf | md | pptx | docx
-  "fileSize": 1048576               // bytes
-}
-
-Response: 200 OK
-{
-  "uploadUrl": "https://s3.amazonaws.com/...",
-  "fileId": "uuid",
-  "key": "kb/{userId}/{fileId}/project-spec.pdf",
-  "expiresIn": 3600
-}
-```
-
-#### Sync KB Index
-
-```
-POST /api/kb/sync
-Request: (no body — always a full-data-source sync)
-
-Response: 200 OK
-{
-  "status": "started",
-  "jobId": "bedrock-ingestion-job-id",
-  "message": "Knowledge Base sync started"
-}
-
-// When the API Lambda lacks KB_ID/KB_DATASOURCE_ID (env not deployed):
-Response: 200 OK
-{
-  "status": "skipped",
-  "message": "Knowledge Base not configured"
-}
-```
-
-#### List KB Files
-
-```
-GET /api/kb/files?cursor={lastKey}&limit={20}
-
-Response: 200 OK
-{
-  "files": [
-    {
-      "fileId": "uuid",
-      "fileName": "project-spec.pdf",
-      "fileType": "application/pdf",
-      "fileSize": 1048576,
-      "status": "indexed",          // uploading | indexing | indexed | error
-      "createdAt": "2026-03-05T10:00:00Z",
-      "updatedAt": "2026-03-05T10:05:00Z"
-    }
-  ],
-  "nextCursor": "base64-encoded-lastEvaluatedKey or null"
-}
-```
-
-#### Delete KB File
-
-```
-DELETE /api/kb/files/{fileId}
-
-Response: 204 No Content
-```
-
----
-
-### Export
-
-#### Export Meeting
-
-```
-POST /api/meetings/{meetingId}/export
-Request:
-{
-  "format": "pdf"                   // "pdf" | "markdown" | "notion" | "obsidian"
-}
-
-Response (PDF/Markdown/Obsidian): 200 OK
-{
-  "url": "https://s3.presigned-url...",
-  "fileName": "meeting-2026-03-05.pdf",
-  "expiresIn": 3600
-}
-
-Response (Notion): 200 OK
-{
-  "notionPageId": "abc123",
-  "notionUrl": "https://notion.so/abc123"
-}
-
-Error: 400 Bad Request (if Notion API key not configured)
-{
-  "error": {
-    "code": "INTEGRATION_NOT_CONFIGURED",
-    "message": "Notion API key not configured. Please add it in Settings."
-  }
-}
-```
-
-#### Get Obsidian Export (Direct Download)
-
-```
-GET /api/meetings/{meetingId}/export/obsidian
-
-Response: 200 OK
-{
-  "filename": "Product-Strategy-Sync-2026-03-05.md",
-  "content": "---\ntitle: Product Strategy Sync\ndate: 2026-03-05\nparticipants:\n  - Alice\n  - Bob\ntags:\n  - internal\n  - strategy\nstatus: done\nrelated:\n  - \"[[Weekly Team Standup 2026-03-04]]\"\n  - \"[[Q1 Planning 2026-02-28]]\"\n---\n\n# Product Strategy Sync\n\n## Summary\n...\n\n## Action Items\n- [ ] Task 1\n- [ ] Task 2\n\n## Backlinks\n- [[Weekly Team Standup 2026-03-04]]\n- [[Q1 Planning 2026-02-28]]\n"
-}
-```
-
-**Obsidian Export Format:**
-- YAML frontmatter: title, date, participants, tags, status, related
-- `[[wikilinks]]` to other meetings by title for cross-referencing
-- Backlinks section at the end for building knowledge graph in Obsidian vaults
-
----
-
-### Integration Settings
-
-#### Get Integration Settings
-
-```
-GET /api/settings/integrations
-
-Response: 200 OK
-{
-  "notion": {
-    "configured": true,
-    "maskedKey": "ntn_****abcd",    // last 4 chars visible
-    "parentPageId": "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d"
-  }
-}
-```
-
-Note: an empty/absent `parentPageId` on a configured integration means the connection predates the parent-page requirement and must be re-saved with a `parentPage` before exports will work.
-
-#### Configure Notion Integration
-
-Notion internal integrations can no longer create pages at the workspace root — a parent page or database that has been shared with the integration is required.
-
-```
-PUT /api/settings/integrations/notion
-Request:
-{
-  "apiKey": "ntn_xxxxxxxxxxxx",
-  "parentPage": "https://www.notion.so/My-Page-1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d"
-}
-
-Response: 200 OK
-{
-  "configured": true,
-  "maskedKey": "ntn_****xxxx",
-  "parentPageId": "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d"
-}
-```
-
-**Errors:**
-- `400 BAD_REQUEST` — `apiKey` missing or invalid format
-- `400 BAD_REQUEST` — `"parentPage is required"` (missing)
-- `400 BAD_REQUEST` — `"Invalid Notion page URL or ID"` (unparseable `parentPage`)
-- `400 BAD_REQUEST` — `"Notion API key is invalid or has been revoked."` (`apiKey` itself rejected by Notion — 401)
-- `400 BAD_REQUEST` — `"Notion page not found or not shared with the integration. Share the page with your integration (··· → Connections) and try again."` (page not found, or not shared with the integration — Notion returns 404 for both cases)
-
-#### Remove Notion Integration
-
-```
-DELETE /api/settings/integrations/notion
-
-Response: 204 No Content
-```
-
-#### Invite User (admin-only)
-
-Creates a Cognito user with a system-generated temporary password. Cognito emails the invite directly using the custom `userInvitation` template in `infra/lib/auth-stack.ts` (Korean HTML: a login button to `https://${ttobak:domainName}`, the temporary password alone in its own box with no trailing punctuation, 7-day validity note) — no SES/templating on our side. The admin no longer needs to share the sign-in URL separately. The invitee's first sign-in returns a `NEW_PASSWORD_REQUIRED` challenge, handled client-side by `completeNewPassword()` in `frontend/src/lib/auth.ts`.
-
-Requires the caller's JWT `cognito:groups` claim to contain `admins` (enforced by `middleware.RequireAdmin`, backed by JWKS-verified signature checking in `middleware.ParseVerifiedJWT`).
-
-```
-POST /api/settings/invite-user
-Request:
-{
-  "email": "new.hire@amazon.com",
-  "name": "New Hire",       // optional
-  "admin": false             // optional, adds to "admins" group if true
-}
-
-Response: 201 Created
-{
-  "email": "new.hire@amazon.com",
-  "invited": true,
-  "addedToAdmins": false
-}
-```
-
-**Errors:**
-- `400 BAD_REQUEST` — email missing or invalid format
-- `403 FORBIDDEN` — caller is not in the `admins` group
-- `409 BAD_REQUEST` — a user with this email already exists
-
-**Partial success:** if `admin: true` but adding the user to the `admins` group fails after the account was already created and invited, the response is still `201 Created` with `addedToAdmins: false` rather than an error — the invite itself succeeded.
-
-#### Admin User Management (admin-only)
-
-Backs the Settings page's "사용자 관리" panel. All six routes require the caller's JWT `cognito:groups` claim to contain `admins` (same `middleware.RequireAdmin` gate as Invite User above). Implemented in `service.UserAdminService` (`backend/internal/service/user_admin.go`) behind a Cognito-SDK-shaped interface, so these operations are unit-tested without a live AWS account.
-
-```
-GET /api/settings/users
-
-Response: 200 OK
-{
-  "users": [
-    {
-      "userId": "04f86dfc-30b1-7059-896c-55801dacccda",  // Cognito Username == sub for this pool
-      "email": "admin@example.com",
-      "name": "Admin",
-      "status": "CONFIRMED",           // Cognito UserStatus
-      "enabled": true,
-      "isAdmin": true,
-      "createdAt": "2026-04-21T09:01:32Z",
-      "lastLoginAt": "2026-08-15T02:11:04Z",  // null if never recorded (see dormancy note below)
-      "dormant": false
-    }
-  ],
-  "lastLoginUnavailable": false,  // true if the DynamoDB last-login join failed; users are still returned
-  "truncated": false              // true if the pool exceeds the internal pagination safety cap (~1200 users)
-}
-```
-
-Last-login tracking is written by a Cognito `PostAuthentication` Lambda trigger (`infra/lambda/post-authentication`) to a dedicated `USER#{userId}/LOGIN` DynamoDB item (never onto `USER#{userId}/PROFILE`, to avoid ever creating a stub profile missing its email-search GSI keys). Dormancy has three states, not two — `lastLoginAt` absent is **not** the same as dormant:
-- `lastLoginAt` present and older than 90 days → `dormant: true`
-- `lastLoginAt` absent and `status: "FORCE_CHANGE_PASSWORD"` → still awaiting first login, not dormant
-- `lastLoginAt` absent and `status: "CONFIRMED"` → no record yet (e.g. pre-dates this feature, or last login was via a refresh token, which does not re-fire the trigger), not dormant
-
-```
-DELETE /api/settings/users/{userId}
-
-Response: 200 OK
-{ "userId": "...", "warning": "" }
-```
-Deletes the Cognito account only — DynamoDB data (meetings, documents) is preserved. Before deleting, the profile's `GSI2PK`/`GSI2SK` email-search keys are detached (not the whole item) so a later re-invite of the same email can't resolve back to the deleted user's dead ID. `AdminUserGlobalSignOut` runs **before** the delete (a deleted user can no longer be signed out) to close the window where an already-issued access/ID token would otherwise stay valid until it naturally expires.
-
-```
-PUT /api/settings/users/{userId}/enable
-PUT /api/settings/users/{userId}/disable
-
-Response: 200 OK
-{ "userId": "...", "warning": "" }
-```
-Toggles the Cognito `Enabled` flag. Disable also calls `AdminUserGlobalSignOut` immediately afterward, for the same already-issued-token reason as delete.
-
-```
-POST /api/settings/users/{userId}/resend-invite
-
-Response: 200 OK
-{ "userId": "..." }
-```
-Only valid when the target's Cognito status is `FORCE_CHANGE_PASSWORD` (never completed first login) — re-sends the invite email with a fresh temporary password (`AdminCreateUser` with `MessageAction=RESEND`). `400 BAD_REQUEST` otherwise.
-
-The route keeps the Cognito user ID (`sub`). The service uses that ID for `AdminGetUser`, then supplies the returned `email` as `AdminCreateUser.Username` and the email delivery attribute. This pool uses `UsernameAttributes=["email"]`, so sending a `sub` as the resend username is rejected by Cognito. The destination is resolved server-side; the request accepts no email override.
-
-```
-POST /api/settings/users/{userId}/reset-password
-
-Response: 200 OK
-{ "userId": "..." }
-```
-Only valid when the target's status is `CONFIRMED` — calls `AdminResetUserPassword`, which emails the user a reset code. The user completes the reset via the login screen's "비밀번호를 잊으셨나요?" flow (`ForgotPasswordForm.tsx`, using the previously-unwired `forgotPassword`/`confirmForgotPassword` in `lib/auth.ts`). Deliberately rejected with `400 BAD_REQUEST` for a `FORCE_CHANGE_PASSWORD` user — that state has no code-entry screen, so calling this on them would lock the account out instead of helping.
-
-**Guards on delete/disable:** both reject with `400 BAD_REQUEST` if the target is the caller's own account, or the sole remaining member of the `admins` group (`"마지막 관리자 계정은 삭제할 수 없습니다..."`-style Korean message, since the frontend only surfaces the error `message`, not a code). A same-instant concurrent removal by two admins can theoretically both pass this check (TOCTOU); the service re-checks after acting and returns a `warning` field (not an error, since the primary action already succeeded) if the group is found empty. Recovery in that case is `aws cognito-idp admin-add-user-to-group` from an operator shell.
-
-**Errors (all six routes):**
-- `400 BAD_REQUEST` — self-delete/disable, last-admin delete/disable, or wrong status for resend-invite/reset-password
-- `403 FORBIDDEN` — caller is not in the `admins` group
-- `404 NOT_FOUND` — target user does not exist
-- `500 INTERNAL_ERROR` — Cognito/DynamoDB failure
-
----
-
-## Insights (Crawler)
-
-Crawled news/tech documents (`CRAWLER#{sourceId}/DOC#{docHash}` items, distinct from the meeting-derived `ACCOUNT#{accountId}/INSIGHT#...` items under Accounts above). `GET /api/insights` lists/filters; `GET /api/insights/{sourceId}/{docHash}` returns full content.
-
-```
-DELETE /api/insights/{sourceId}/{docHash}
-
-Response: 204 No Content
-```
-
-Manually curates a single crawled **news** document — e.g. a search result the relevance gate (`backend/python/crawler/news_crawler.py`) let through anyway, or one ingested before the gate existed. Deletes the S3 KB markdown object first, then the DynamoDB metadata item (order matters — see below), trying both the `shared/news/` and `shared/aws-docs/` key shapes when no `S3Key` is stored, mirroring the read path in `GetDocumentDetail`. Tech docs (`type === 'tech'`, stored under the synthetic `__tech__` source, which has no `CONFIG`/owner row) are NOT deletable through this route — `GetSource` 404s for them, and the frontend hides the delete button accordingly for now.
-
-**Authorization:** caller must be the source's owner (`CrawlerSource.OwnerID`, the user who first created the source via `AddSource`) or an admin (`cognito:groups` contains `admins`) — NOT merely a subscriber. `AddSource` lets any authenticated user self-subscribe to an existing source with no invite/approval step, so gating on subscription alone would make this destructive route trivially self-grantable by anyone. A source created before this field existed has `OwnerID == ""` and stays denied to every non-admin explicitly (not merely by an accidental string mismatch), indefinitely — there is no automated backfill (see `scripts/insights-backfill-owner.py`, report-only, and ADR-026 for why); an admin can set `ownerId` by hand if the real creator is known out of band. An empty caller ID is also explicitly rejected (401) so it can never accidentally match an unbackfilled `OwnerID == ""`. This route does NOT inherit `GetDocumentContent`'s open-read posture (insights are shared substrate by design for reads; a mutating route is not). A successful delete is logged with `userID`/`sourceID`/`docHash` as an audit trail.
-
-**Delete order:** S3 object(s) are deleted before the DynamoDB row. If S3 delete fails, metadata is untouched and the request is safely retryable; deleting DynamoDB first would risk the opposite outcome — metadata gone, `GetDocument` returns nil on retry, and the S3 object + KB vector become permanently unreachable via any API path.
-
-**Errors:**
-- `400 BAD_REQUEST` — missing/invalid `sourceId` or `docHash`
-- `401 UNAUTHORIZED` — no authenticated caller
-- `403 FORBIDDEN` — caller is not the source's owner and not an admin
-- `404 NOT_FOUND` — source or document doesn't exist (includes every tech doc, and any source without a `CONFIG` row)
-- `500 INTERNAL_ERROR` — S3 or DynamoDB delete failed; per the ordering above, a failure here always means DynamoDB metadata is still intact and the request can be retried
-
-**KB vector caveat:** deleting the S3 object does not immediately evict it from the Bedrock Knowledge Base's vector index — that only reconciles on an ingestion job. `InsightsHandler.DeleteDocument` triggers one itself, best-effort, right after a successful delete (same `KBService.SyncKB` as `POST /api/kb/sync`) — a failure there is logged but does not turn the delete response into an error, so a deleted doc can still surface in Q&A RAG results until that job completes, or if it failed, until the next daily crawl/manual sync. `scripts/insights-rescore.py` (batch re-score + purge for existing docs ingested before the relevance gate) triggers one ingestion job itself after a purge run.
-
----
-
-## Error Response Format
-
-```json
-{
-  "error": {
-    "code": "UNAUTHORIZED",
-    "message": "Authentication required"
-  }
-}
-```
-
-| HTTP Status | Code | Description |
-|-------------|------|-------------|
-| 400 | BAD_REQUEST | Invalid request parameters |
-| 401 | UNAUTHORIZED | Authentication required |
-| 403 | FORBIDDEN | No permission (ownership/sharing) |
-| 404 | NOT_FOUND | Resource doesn't exist |
-| 500 | INTERNAL_ERROR | Internal server error |
-
----
-
-## Lambda Functions
-
-### 1. API Lambda (cmd/api)
-- **Trigger**: API Gateway HTTP API
-- **Role**: handles all REST API requests
-- **Routing**: Chi Router
-- **Env vars**: TABLE_NAME, BUCKET_NAME, COGNITO_USER_POOL_ID, KB_ID
-
-### 2. Transcribe Lambda (cmd/transcribe)
-- **Trigger**: S3 Event (audio/ prefix) via EventBridge
-- **Role**: kicks off the STT A/B pipeline (offline recordings)
-- **Steps**: (1) extract audio key from the S3 event → (2) call Transcribe StartTranscriptionJob (result A) → (3) call Nova 2 Sonic Bidirectional Streaming API (result B) → (4) store both results in DynamoDB → (5) update meeting status "transcribing" → "summarizing"
-- **Env vars**: TABLE_NAME, BUCKET_NAME, OUTPUT_BUCKET
-
-### 3. Summarize Lambda (cmd/summarize)
-- **Trigger**: EventBridge — S3 `Object Created` on the `transcripts/` prefix, and the custom `AllPartsTranscribed` event for multi-part audio (not a DynamoDB Stream — see INFRA-SPEC.md and ADR-031)
-- **Role**: summarizes the meeting via Bedrock Claude
-- **Steps**:
-  1. Refine/merge the original STT result; a recorded source-conflict retry skips STT/refinement.
-  2. Capture exact stored source presence, hydrate the effective selected transcript/segments, and prepare verified DOCUMENT evidence.
-  3. Generate from those inputs with strict model completion; only verified documents enable DOC instructions.
-  4. Reject unsupported document claim units while preserving valid sibling claims, markdown and transcript citations. Document failures produce omission notices.
-  5. Atomically publish against captured human text, source and supplied-attachment conditions. Genuine source conflicts discard output and allow bounded fresh generation; ordinary read errors and deterministic limits fail.
-  6. Retain uploaded-file links and trusted image/diagram content, then run the existing action/tag/insight follow-ups. `## 아키텍처 다이어그램` remains conditional on diagram evidence; attached image/document link sections remain available. See ADR-040.
-- **Env vars**: TABLE_NAME, BEDROCK_MODEL_ID
-
-### 4. Process Image Lambda (cmd/process-image)
-- **Trigger**: S3 Event (images/ prefix) via EventBridge
-- **Role**: image analysis + diagram regeneration
-- **Steps**: (1) download image from S3 → (2) classify via Bedrock Claude Vision (architecture/table/whiteboard/photo) → (3) per-category processing: architecture → Mermaid diagram code, table → markdown table, whiteboard → extracted/structured text, photo → description text → (4) store results in S3 (processed/) + DynamoDB
-- **Env vars**: TABLE_NAME, BUCKET_NAME, BEDROCK_MODEL_ID
-
-### 5. WebSocket Lambda (cmd/realtime)
-- **Trigger**: API Gateway WebSocket API ($connect, $disconnect, $default)
-- **Role**: real-time transcription + translation streaming
-- **Steps**: (1) $connect: verify Cognito JWT, store connection info in DynamoDB → (2) start: begin a Nova Sonic v2 streaming session → (3) audio: forward audio chunks to Nova Sonic → (4) receive Nova Sonic results → send transcript to client → (5) on translation request, real-time translate via Bedrock Claude → send translation → (6) stop/$disconnect: end session, save the full transcript
-- **Env vars**: TABLE_NAME, CONNECTIONS_TABLE_NAME, NOVA_SONIC_MODEL_ID, BEDROCK_MODEL_ID
-
-### 6. KB Lambda (cmd/kb)
-- **Trigger**: S3 Event (kb/ prefix) via EventBridge + API Gateway (sync requests)
-- **Role**: Knowledge Base file indexing
-- **Steps**: (1) download file from S3 (pdf/md/pptx/docx) → (2) add/update the document in the Bedrock Knowledge Base → (3) update the OpenSearch Serverless index → (4) store indexing status in DynamoDB
-- **Env vars**: TABLE_NAME, BUCKET_NAME, KB_ID, AOSS_ENDPOINT
-
-### 7. Lambda@Edge (cmd/edge-auth, us-east-1)
-- **Trigger**: CloudFront Viewer Request
-- **Role**: Cognito JWT verification
-- **Steps**: (1) extract JWT from the Authorization header → (2) verify signature via Cognito JWKS → (3) valid: pass the request through, add userId to a header → (4) invalid: 401 response or login redirect
-- **Env vars**: COGNITO_USER_POOL_ID, COGNITO_REGION (deployed to us-east-1)
-
-### 8. Convert-Doc Lambda (cmd/convert-doc, container image, ADR-022)
-
-The converter records `source-etag` and optional `source-version-id` from the actual source GET, rechecks the original, and publishes conditionally against the preview observed before conversion. The current preview URL path still checks sidecar existence; canonical indexing/retrieval must validate the binding before treating its content as current. Legacy unbound previews require regeneration. Preview conversion retains its existing disk/time budgets; the separate KB file-size limit does not restrict previews.
-- **Trigger**: S3 Event (docs/ prefix, .ppt/.pptx only) via EventBridge
-- **Role**: converts an uploaded PPTX/PPT to a PDF sidecar via headless LibreOffice (for in-browser preview, reusing the existing PDF `<iframe>` viewer)
-- **Steps**: (1) download the PPTX/PPT from S3 → (2) run `soffice --headless --convert-to pdf` (with `AWS_*` env vars stripped before exec, to prevent credential leakage while parsing untrusted input) → (3) upload the PDF to a deterministic sidecar key (no DynamoDB write)
-- **IAM**: scoped to `docs/*` read + `docs-pdf/*` read/write (HEAD for conditional replacement; narrower than other upload categories' bucket-wide `grantReadWrite`)
-- **Env vars**: BUCKET_NAME (calls `log.Fatal` immediately at cold start if unset)
-
----
-
-## DynamoDB Access Patterns
-
-| Access Pattern | Key Condition | Filter |
-|-----------|---------------|--------|
-| My meeting list | PK=USER#{userId}, SK begins_with MEETING# | entityType=MEETING |
-| My meetings by date | GSI1: PK=MEETING#{meetingId}, SK=USER#{userId} | - |
-| Meeting detail | PK=USER#{userId}, SK=MEETING#{meetingId} | - |
-| Shared-with-me list | PK=USER#{userId}, SK begins_with SHARED# | - |
-| Attachment list | PK=MEETING#{meetingId}, SK begins_with ATTACH# | - |
-| Share target list | GSI1: PK=MEETING#{meetingId}, SK begins_with SHARED# | - |
-| Search users by email | GSI2: PK begins_with EMAIL#{emailPrefix} | - |
-| User profile | PK=USER#{userId}, SK=PROFILE | - |
-
-### Share-check logic (on meeting-detail access)
-```
-1. Look up PK=USER#{userId}, SK=MEETING#{meetingId} → owner, OK
-2. On failure, look up PK=USER#{userId}, SK=SHARED#{meetingId} → shared, check permission
-3. Both fail → 403 Forbidden
-```
-
-
-## Internal Document Extraction Event (ADR-039)
-
-EventBridge source `ttobak.upload`, detail-type `DocumentUploadCompleted`, detail
-`{bucket,key,meetingId,ownerId,userId,attachmentId,runId}`. `userId` is the uploader;
-`ownerId` is the canonical meeting owner. The stored attachment/run authorize the
-source, not the event key. The worker accepts only an active queued run, produces
-immutable source-bound JSON and commits success/partial/failure conditionally.
-
-This internal event is published by upload completion and explicit text retry.
-API and summarize wiring are implemented here; frontend/QA activation and live
-end-to-end acceptance are separate rollout gates.
+|---|---|
+| kind | `meeting` (default) or `transcript` |
+| pageSize | Integer 1–8000 Unicode code points; default 4000 |
+| cursor | Opaque continuation, at most 2048 characters |
+| section | Meeting only: `notes` (default), `summary`, `actionItems` |
+| source | Transcript only: `selected` (default), `A`, `B` |
+| startTime, endTime | Transcript only; both finite seconds, `0 <= startTime < endTime` |
+
+Unknown/repeated keys and incompatible options return 400 before storage reads.
+Keep meeting/kind/section or source/time range unchanged across continuations;
+pageSize may change. The inner JSON response is at most **14,000 bytes including
+the trailing newline**, with at most 50 transcript chunks. This bounds transport,
+not the memory required to load and validate the selected source.
+
+Meeting pages return exact `notes`, `content`, or `actionItemsJson`, identifying
+metadata, `availableCodePoints`, `revision`, `readingHints`, and `page`. Join all
+actionItemsJson pages before parsing; a page may end inside a JSON string.
+Normalized legacy IDs/completion flags and stored extension fields survive the
+full section. `actionItems` is only a bounded preview: inspect
+`actionItemsPreview.available/complete/totalItems/metadataTruncated` and
+`actionItemsAnalysis`, never infer successful extraction from an empty preview.
+Metadata truncation is explicit; extension-only changes invalidate continuation.
+
+Transcript pages return source/selection/provenance, exact `chunks[].text`, and
+zero-based code-point offsets with exclusive ends. Only segments verified against
+the effective selected text receive original speaker/timing metadata. Unselected
+or unmatched variants use raw text without borrowed timestamps. A selected empty
+variant may fall back to the other available variant; explicit A/B never does.
+Time windows select whole verified segments overlapping `[startTime,endTime)`;
+partial chunks retain `timingScope: whole_segment`, not inferred word times.
+
+`page` reports unit, start/end offsets, whole-source totalCodePoints, requested-span
+matchingCodePoints, complete and nextCursor. Consume all preceding pages before
+claiming completeness; time-window completeness covers only that window. Cursors
+bind current content and provenance. A source change returns 409 `STALE_CURSOR`
+and requires restarting; malformed cursors return 400 `INVALID_CURSOR`.
+Other 400 codes include `INVALID_ARGUMENT`, `NO_TRANSCRIPT`, and
+`TIME_RANGE_UNAVAILABLE`; denied/missing meetings return 403/404 and read failures
+500 `READING_UNAVAILABLE`. Failures never fall back to cached text.
+
+Notes/summary/action-item reads use metadata views without S3 transcript hydration.
+Transcript reads hydrate only the chosen field and eligible segment candidates
+after authorization. Storage references are never returned. Source:
+`handler/meeting_reading.go`, `service/meeting_reading*.go`; MCP usage:
+[adapter README](../mcp-server/README.md).
+
+### Action item analysis
+
+GET `.../action-items` permits meeting readers; POST `.../action-items/retry` and
+PUT `.../action-items/{itemId}` require owner/edit access. GET/PUT return
+`{actionItems, analysis}` with 200; retry returns that shape with 202 and requires
+a done meeting with a nonblank saved summary. PUT requires explicit
+`{"completed":true}` or `{"completed":false}`.
+
+Analysis is `unknown|queued|running|succeeded|failed`. Only succeeded plus an
+empty array means no tasks. Missing legacy metadata is unknown; expired leases
+become failed/`INTERRUPTED`. Detail/reading status failures show
+unknown/`STATUS_UNAVAILABLE`; changed successful source shows failed/`SOURCE_CHANGED`.
+Errors use fixed codes, never raw model responses.
+
+The separate `MEETING#{id}/ANALYSIS#actionItems` row binds run, source and lease.
+Retry uses `ttobak.analysis` / `ActionItemsRequested`; the summarize worker also
+uses this service inline. Result and success commit together only if run, saved
+summary and prior items still match. Failures retain prior items; unchanged tasks
+keep IDs and human completion. Metadata reads avoid transcript hydration and
+there is no transcript fallback when the summary is missing. Conflicts return
+409, denied writes 403 and missing meetings/items 404.
+
+### Accounts and projects
+
+Account creation creates owner membership atomically. Optional parentAccountId
+requires current membership in the parent. Parent updates require child ownership
+and new-parent membership; the required field uses an empty string to detach,
+not omitted/null. Self/cyclic/deep ancestry (over 64 nodes) is rejected;
+transactional ancestry checks and retries protect concurrent moves. Conflicts
+return 409. Hierarchy is organization metadata, never authorization inheritance.
+
+Any current account member can add members or change assignable roles; `owner`
+is never assignable. Removal and pending-invite revocation remain owner-only
+(ADR-034). Project permissions are separate: owner/direct member/member of a
+linked account. The service list unions those access paths; project deletion
+rejects remaining relationships. Canonical sets and reverse references change in
+one transaction. See account/project handlers and services for each mutation gate.
+
+### Documents and shares
+
+Personal document writes and share mutations isolate the owner's partition; a
+non-owner cannot mutate the source. GetUserDocument first checks the caller's
+partition, then resolves an authorized read-only share through the owner's row.
+An inaccessible document returns 404. An account share creates an independent
+S3 copy; an email share references the original and is read-only.
+Document shares use SHAREDDOC#/DOCSHARE_TO#, not meeting SHARED# keys. Deleting an
+owner document can leave share rows; list reads skip missing targets.
+
+PPT/PPTX uploads trigger convert-doc and produce a docs-pdf/ sidecar. previewUrl
+points to the PDF while downloadUrl always points to the original. The converter
+records the actual GET's source ETag/version, rechecks the original, and replaces
+the observed preview conditionally. The preview URL path still checks existence;
+canonical indexing/QA readers additionally validate the source binding. Legacy
+unbound previews require regeneration. Public tokens
+are conditionally minted and validated against the document's own PublicShareToken
+on every read; revocation removes that grant. See ADR-022/027/029.
+
+Pending meeting/account invitations bind the invited Cognito sub, require verified
+email at materialization, and expire after 30 days. Revoking an already-materialized
+grant returns 409 rather than falsely reporting revocation. The table sweeps
+pendingShareExpiresAt; QA history's uppercase TTL field is not swept.
+
+### Upload and recovery
+
+The server validates category, ownership and traversal. Checkpoint filenames
+recording_progress.webm/m4a/ogg intentionally overwrite a stable audio key; other
+uploads receive unique names. Upload completion emits the appropriate custom
+event. The bounded PDF/PPTX/DOCX/Markdown extractor and its asynchronous worker
+now exist. The API wires AttachmentTextService into upload completion, status, retry
+and bounded text routes. Summarization receives only verified current DOCUMENT text;
+failed/unavailable documents produce coverage notices. QA reader activation is separate.
+AudioUploader attempts KB promotion; the recording page also offers manual copy.
+Neither copying nor preview conversion proves summary grounding.
+
+The worker accepts `ttobak.upload` / `DocumentUploadCompleted` only for canonical
+ATTACH#/ATTEXT# identities and a queued run. Owner and uploader may differ; event
+key alone is not authority. Pinned bounded reads produce immutable
+`files/{uploader}/{meetingId}/text/{attachmentId}/{runId}.json`. Parent/attachment,
+run, lease and ETag checks guard publication. Failed attempts retain earlier
+results; attempt status and retained-result completeness are separate. Locations
+are document pages/slides/paragraphs/cells/lines, never audio timestamps.
+See the [worker contract](../backend/python/document-extract/LAMBDA.md) and
+[parser scope](../backend/python/document-extract/README.md).
+
+Recover uses a saved progress object. Rediarize accepts supported single-part
+Whisper meetings and a speaker-count hint. Use their handler/service contracts,
+not a raw DynamoDB status reset or a fabricated AWS S3 event.
+
+### Simulator
+
+`POST .../sim/extract` extracts requirements for a done meeting. `POST .../sim`
+validates allowed keys/ranges and two or three architecture options, then returns
+202 with a queued simRun. The frontend polls GetMeeting; there is no simulator
+WebSocket stream. Concurrent runs are conditionally rejected. Stale queued/running
+runs are persisted to error by GetSimRun, not merely displayed as error.
+
+Only validated requirements/options enter codegen; option descriptions still
+influence the prompt. The interpreter's empty IAM role and SANDBOX network are the
+execution boundary. Worker updates require matching simRunId. Outputs stay under
+images/ and files/; details are in ADR-033 and service/sim.go.
+
+### Admin and settings
+
+Invite-user and the six user-management routes use RequireAdmin. Delete/disable
+protect self and last-admin targets, with a post-write race warning. Sign-out
+revokes refresh tokens but issued locally validated JWTs survive until expiry.
+PostAuthentication records lastLoginAt separately from PROFILE and fails open;
+refresh-token authentication does not update it. New accounts use admin invites
+and NEW_PASSWORD_REQUIRED, never self-signup. The domain allowlist is supplemental.
+`isApprovedAdminInvite` exempts only `demo@atomai.click` (case-insensitive) on
+`PreSignUp_AdminCreateUser`; it grants neither a domain-wide exception nor group
+membership. RESEND trigger behavior remains unverified.
+
+### Index status and automatic indexing rollout
+
+Authenticated GET index-status routes cover meetings, personal/shared documents,
+and account documents. Current access is checked before foreign source reads.
+Responses expose only `{state,errorCode?,updatedAt?}` with `no-store`; states are
+`UNTRACKED`, `PENDING`, `PREPARING`, `WAITING_SYNC`, `WAITING_SOURCE`, `INDEXED`,
+`FAILED`, `DELETED`. Unavailable configuration/reads return 503 `INDEX_UNAVAILABLE`,
+never successful indexing. UNTRACKED is not proof that no legacy vector exists.
+
+The canonical worker can index current USER#/MEETING#, USER#/DOC#, and
+ACCOUNT#/DOC# sources into immutable `canonical/v1/` projections. Revisions bind
+present fields and exact S3 ETag/version/size/preview provenance. Notifications
+are identities to reread, not source snapshots. Full S3 ingestion is coalesced;
+job acceptance is not success. Per-document status, projection inventory and fresh
+source/conditional checks determine completion. There is no direct ingestion.
+
+The checked-in app selects `INDEXING_MODE=manual-only` **with its one-minute
+schedule enabled**; canonical stream delivery and permissions require `all`.
+This is configuration, not deployed-state evidence. Manual-only bootstraps
+private `kb/{owner}/...` and authenticated-global `shared/**` originals into
+`manual-kb/v1/` and `shared-kb/v1/` snapshots without altering originals or
+canonical/legacy meeting exports. Private/shared visibility must remain distinct.
+PDF/DOC/DOCX/XLS/XLSX snapshot support differs from attachment extraction;
+PPT/PPTX, empty or over-50-MiB originals have explicit failure states.
+
+Rollout: deploy the mode-aware worker with delivery off; verify restricted
+manual-only IAM/configuration, then enable its schedule; verify snapshots and
+synthetic recall; deploy/verify strict current-source QA; finally enable all-mode
+canonical delivery. Durable mode rejects an all-to-manual-only downgrade; restore
+all after a mistaken downgrade. Legacy QA rollback after canonical cleanup needs
+re-export. Existing `/api/kb/*` routes remain in the API Lambda; `cmd/kb` accepts
+stream/schedule/tick envelopes, not API proxy requests. Follow the
+[bootstrap runbook](runbooks/knowledge-index-bootstrap.md) and
+[source/provider contract](../backend/internal/service/INDEX_SOURCE_CONTRACT.md).
+
+## Go route inventory
+
+Method/path registration is authoritative; the handler column identifies the
+entry point for exact request validation, response types and service permissions.
+All rows below come from `backend/cmd/api/main.go`.
+
+<!-- BEGIN GO ROUTES -->
+| Method | Path | Handler |
+|---|---|---|
+| GET | `/api/health` | `healthHandler.Health` |
+| GET | `/api/auth/allowed-domains` | `settingsHandler.GetAllowedDomains` |
+| GET | `/api/public/docs/{token}` | `documentHandler.PublicGetDoc` |
+| GET | `/api/accounts` | `accountHandler.ListAccounts` |
+| POST | `/api/accounts` | `accountHandler.CreateAccount` |
+| GET | `/api/accounts/{accountId}` | `accountHandler.GetAccount` |
+| PUT | `/api/accounts/{accountId}/parent` | `accountHandler.UpdateAccountParent` |
+| POST | `/api/accounts/{accountId}/members` | `accountHandler.AddMember` |
+| DELETE | `/api/accounts/{accountId}/members/pending` | `accountHandler.RevokePendingMember` |
+| PUT | `/api/accounts/{accountId}/members/{userId}` | `accountHandler.UpdateMemberRole` |
+| DELETE | `/api/accounts/{accountId}/members/{userId}` | `accountHandler.RemoveMember` |
+| GET | `/api/accounts/{accountId}/meetings` | `accountHandler.ListAccountMeetings` |
+| GET | `/api/accounts/{accountId}/insights` | `accountHandler.ListAccountInsights` |
+| GET | `/api/accounts/{accountId}/brief` | `accountHandler.GetAccountBrief` |
+| GET | `/api/accounts/{accountId}/research` | `researchHandler.ListAccountResearch` |
+| GET | `/api/accounts/{accountId}/projects` | `projectHandler.ListAccountProjects` |
+| POST | `/api/accounts/{accountId}/documents` | `accountHandler.PutDocument` |
+| GET | `/api/accounts/{accountId}/documents` | `accountHandler.ListDocuments` |
+| GET | `/api/accounts/{accountId}/documents/{docId}` | `accountHandler.GetDocument` |
+| GET | `/api/accounts/{accountId}/documents/{docId}/index-status` | `indexStatusHandler.AccountDocument` |
+| PUT | `/api/accounts/{accountId}/documents/{docId}` | `accountHandler.UpdateDocument` |
+| DELETE | `/api/accounts/{accountId}/documents/{docId}` | `accountHandler.DeleteDocument` |
+| POST | `/api/documents` | `documentHandler.PutDocument` |
+| GET | `/api/documents` | `documentHandler.ListDocuments` |
+| GET | `/api/documents/{docId}` | `documentHandler.GetDocument` |
+| GET | `/api/documents/{docId}/index-status` | `indexStatusHandler.PersonalDocument` |
+| PUT | `/api/documents/{docId}` | `documentHandler.UpdateDocument` |
+| DELETE | `/api/documents/{docId}` | `documentHandler.DeleteDocument` |
+| POST | `/api/documents/{docId}/share-account` | `documentHandler.ShareToAccount` |
+| POST | `/api/documents/{docId}/share` | `documentHandler.ShareWithUser` |
+| GET | `/api/documents/{docId}/shares` | `documentHandler.ListShares` |
+| DELETE | `/api/documents/{docId}/share/{userId}` | `documentHandler.RevokeShare` |
+| POST | `/api/documents/{docId}/public-share` | `documentHandler.CreatePublicShare` |
+| DELETE | `/api/documents/{docId}/public-share` | `documentHandler.RevokePublicShare` |
+| GET | `/api/vault/export` | `vaultHandler.ExportVault` |
+| POST | `/api/meetings/{meetingId}/account` | `meetingHandler.LinkToAccount` |
+| POST | `/api/meetings/{meetingId}/share-account` | `shareHandler.ShareToAccount` |
+| GET | `/api/meetings` | `meetingHandler.ListMeetings` |
+| POST | `/api/meetings` | `meetingHandler.CreateMeeting` |
+| GET | `/api/meetings/{meetingId}` | `meetingHandler.GetMeeting` |
+| GET | `/api/meetings/{meetingId}/reading` | `readingHandler.Get` |
+| GET | `/api/meetings/{meetingId}/action-items` | `actionItemsHandler.Get` |
+| GET | `/api/meetings/{meetingId}/resummary` | `resummaryHandler.Get` |
+| POST | `/api/meetings/{meetingId}/resummary` | `resummaryHandler.Request` |
+| GET | `/api/meetings/{meetingId}/attachments/{attachmentId}/text/status` | `attachmentTextHandler.Status` |
+| POST | `/api/meetings/{meetingId}/attachments/{attachmentId}/text/retry` | `attachmentTextHandler.Retry` |
+| GET | `/api/meetings/{meetingId}/attachments/{attachmentId}/text` | `attachmentTextHandler.Read` |
+| GET | `/api/meetings/{meetingId}/index-status` | `indexStatusHandler.Meeting` |
+| POST | `/api/meetings/{meetingId}/action-items/retry` | `actionItemsHandler.Retry` |
+| PUT | `/api/meetings/{meetingId}/action-items/{itemId}` | `actionItemsHandler.SetCompleted` |
+| PUT | `/api/meetings/{meetingId}` | `meetingHandler.UpdateMeeting` |
+| DELETE | `/api/meetings/{meetingId}` | `meetingHandler.DeleteMeeting` |
+| GET | `/api/meetings/{meetingId}/audio` | `meetingHandler.GetAudioURL` |
+| POST | `/api/meetings/{meetingId}/recover` | `meetingHandler.RecoverMeeting` |
+| POST | `/api/meetings/{meetingId}/rediarize` | `meetingHandler.RediarizeMeeting` |
+| POST | `/api/meetings/{meetingId}/sim/extract` | `simHandler.ExtractRequirements` |
+| POST | `/api/meetings/{meetingId}/sim` | `simHandler.CreateSimulation` |
+| PUT | `/api/meetings/{meetingId}/transcript` | `meetingHandler.SelectTranscript` |
+| PUT | `/api/meetings/{meetingId}/speakers` | `meetingHandler.UpdateSpeakers` |
+| POST | `/api/meetings/{meetingId}/link` | `meetingHandler.LinkMeetings` |
+| POST | `/api/meetings/{meetingId}/share` | `shareHandler.ShareMeeting` |
+| DELETE | `/api/meetings/{meetingId}/share/pending` | `shareHandler.RevokePendingShare` |
+| DELETE | `/api/meetings/{meetingId}/share/{userId}` | `shareHandler.RevokeShare` |
+| GET | `/api/users/search` | `shareHandler.SearchUsers` |
+| POST | `/api/upload/presigned` | `uploadHandler.GetPresignedURL` |
+| POST | `/api/upload/complete` | `uploadHandler.UploadComplete` |
+| POST | `/api/kb/upload` | `kbHandler.GetPresignedURL` |
+| POST | `/api/kb/sync` | `kbHandler.SyncKB` |
+| POST | `/api/kb/copy-attachment` | `kbHandler.CopyAttachment` |
+| GET | `/api/kb/files` | `kbHandler.ListFiles` |
+| DELETE | `/api/kb/files/{fileId}` | `kbHandler.DeleteFile` |
+| POST | `/api/meetings/{meetingId}/export` | `exportHandler.ExportMeeting` |
+| GET | `/api/meetings/{meetingId}/export/obsidian` | `exportHandler.ExportObsidian` |
+| GET | `/api/settings/integrations` | `settingsHandler.GetIntegrations` |
+| PUT | `/api/settings/integrations/notion` | `settingsHandler.SaveNotionKey` |
+| DELETE | `/api/settings/integrations/notion` | `settingsHandler.DeleteNotionKey` |
+| PUT | `/api/settings/allowed-domains` | `settingsHandler.SaveAllowedDomains` |
+| POST | `/api/settings/invite-user` | `settingsHandler.InviteUser` |
+| GET | `/api/settings/users` | `userAdminHandler.ListUsers` |
+| DELETE | `/api/settings/users/{userId}` | `userAdminHandler.DeleteUser` |
+| PUT | `/api/settings/users/{userId}/enable` | `userAdminHandler.EnableUser` |
+| PUT | `/api/settings/users/{userId}/disable` | `userAdminHandler.DisableUser` |
+| POST | `/api/settings/users/{userId}/resend-invite` | `userAdminHandler.ResendInvite` |
+| POST | `/api/settings/users/{userId}/reset-password` | `userAdminHandler.ResetPassword` |
+| GET | `/api/settings/dictionary` | `dictHandler.GetDictionary` |
+| PUT | `/api/settings/dictionary` | `dictHandler.UpdateDictionary` |
+| DELETE | `/api/settings/dictionary/term` | `dictHandler.DeleteTerm` |
+| POST | `/api/translate` | `translateHandler.Translate` |
+| POST | `/api/meetings/{meetingId}/summarize` | `summarizeLiveHandler.SummarizeLive` |
+| GET | `/api/crawler/sources` | `crawlerHandler.ListSources` |
+| POST | `/api/crawler/sources` | `crawlerHandler.AddSource` |
+| PUT | `/api/crawler/sources/{sourceId}` | `crawlerHandler.UpdateSource` |
+| DELETE | `/api/crawler/sources/{sourceId}` | `crawlerHandler.Unsubscribe` |
+| GET | `/api/crawler/sources/{sourceId}/history` | `crawlerHandler.GetHistory` |
+| GET | `/api/insights` | `insightsHandler.ListInsights` |
+| GET | `/api/insights/{sourceId}/{docHash}` | `insightsHandler.GetDocumentContent` |
+| DELETE | `/api/insights/{sourceId}/{docHash}` | `insightsHandler.DeleteDocument` |
+| POST | `/api/research` | `researchHandler.CreateResearch` |
+| GET | `/api/research` | `researchHandler.ListResearch` |
+| GET | `/api/research/{researchId}` | `researchHandler.GetResearchDetail` |
+| PUT | `/api/research/{researchId}` | `researchHandler.UpdateResearch` |
+| DELETE | `/api/research/{researchId}` | `researchHandler.DeleteResearch` |
+| POST | `/api/research/{researchId}/restore` | `researchHandler.RestoreResearch` |
+| POST | `/api/research/{researchId}/export` | `researchHandler.ExportResearch` |
+| POST | `/api/research/{researchId}/share` | `researchShareHandler.ShareResearch` |
+| DELETE | `/api/research/{researchId}/share/{userId}` | `researchShareHandler.RevokeResearchShare` |
+| POST | `/api/research/{researchId}/accounts` | `researchHandler.LinkAccount` |
+| DELETE | `/api/research/{researchId}/accounts/{accountId}` | `researchHandler.UnlinkAccount` |
+| POST | `/api/projects` | `projectHandler.CreateProject` |
+| GET | `/api/projects` | `projectHandler.ListMyProjects` |
+| GET | `/api/projects/{projectId}` | `projectHandler.GetProject` |
+| PUT | `/api/projects/{projectId}` | `projectHandler.UpdateProject` |
+| DELETE | `/api/projects/{projectId}` | `projectHandler.DeleteProject` |
+| POST | `/api/projects/{projectId}/members` | `projectHandler.AddMember` |
+| DELETE | `/api/projects/{projectId}/members/{userId}` | `projectHandler.RemoveMember` |
+| POST | `/api/projects/{projectId}/accounts` | `projectHandler.LinkAccount` |
+| DELETE | `/api/projects/{projectId}/accounts/{accountId}` | `projectHandler.UnlinkAccount` |
+| POST | `/api/projects/{projectId}/meetings` | `projectHandler.LinkMeeting` |
+| DELETE | `/api/projects/{projectId}/meetings/{meetingId}` | `projectHandler.UnlinkMeeting` |
+| POST | `/api/projects/{projectId}/research` | `projectHandler.LinkResearch` |
+| DELETE | `/api/projects/{projectId}/research/{researchId}` | `projectHandler.UnlinkResearch` |
+| GET | `/api/projects/{projectId}/meetings` | `projectHandler.ListProjectMeetings` |
+| GET | `/api/projects/{projectId}/research` | `projectHandler.ListProjectResearch` |
+| GET | `/api/projects/{projectId}/insights` | `projectHandler.GetProjectInsights` |
+| GET | `/api/projects/{projectId}/brief` | `projectHandler.GetProjectBrief` |
+| GET | `/api/research/{researchId}/chat` | `researchChatHandler.ListMessages` |
+| POST | `/api/research/{researchId}/chat` | `researchChatHandler.SendMessage` |
+| GET | `/api/research/{researchId}/subpages` | `researchChatHandler.ListSubPages` |
+| GET | `/api/chat/sessions` | `chatHandler.ListSessions` |
+| DELETE | `/api/chat/sessions/{sessionId}` | `chatHandler.DeleteSession` |
+<!-- END GO ROUTES -->
+
+## Python QA and WebSocket
+
+| Transport | Route/action | Implementation |
+|---|---|---|
+| HTTP POST | `/api/qa/ask` | Agentic general Q&A |
+| HTTP POST | `/api/qa/meeting/{meetingId}` | Authorized meeting-context Q&A |
+| HTTP POST | `/api/qa/detect-questions` | Suggested/proactive question detection |
+| WebSocket | `$connect`, `$disconnect`, `$default` | Go websocket Lambda |
+| WebSocket message | `ask_live` | Async invocation of Python QA, streamed replies |
+
+WebSocket is implemented. `$connect` uses the dedicated Go Lambda authorizer and
+query token; it is not a Cognito HTTP JWT-authorizer attachment. Clients use the
+runtime-configured WebSocket endpoint. There is no current start/audio/stop
+server-side transcription stream or separate connections table in this handler.
+Live transcription runs in the browser using AWS Transcribe Streaming.
+
+The active QA handler uses a Converse tool loop and current authorized meeting
+data. Tools include
+KB/AWS docs/web/transcript search, meeting detail/list, account operations and
+research initiation; `qa/tools.py` is the exact roster. KB meeting hits are discovery
+candidates: current access and current notes/content are rechecked, including on
+cache hits. Revoked/deleted sources and citations are removed. New text may not
+be discoverable until KB export/ingestion catches up; current reads are not reindexing.
+
+Live/HTTP meeting contexts send separate bounded untrusted excerpts for transcript
+and saved notes with coverage metadata. get_meeting_detail exposes continuation
+information; follow its next offset, not an excerpt-relative index. Transcript
+read failures return an error rather than silently losing context.
+
+The broader current-source QA, document/attachment tools and history policy are
+**staged foundations**: `qa/handler.py` does not import SourceAccess, source_tools,
+ToolHistory or account_reads. The contracts below describe that integration,
+not active REST/WebSocket behavior. Binary snapshot bootstrap and synthetic recall
+verification precede strict runtime cutover.
+
+- Fresh source discovery revalidates canonical access, exact source revision and
+  S3 bindings. Saved-text keyword matches supplement index lag; legacy meeting
+  exports provide identities only. Cached text/misses cannot replace fresh reads,
+  and the strict runtime must write no new result cache.
+- Private/manual and authenticated-shared binary evidence requires matching
+  immutable snapshots; old unbound chunks cannot be relabeled as current. Legacy
+  text is read from current scoped bytes; continuations bind its revision.
+  Source failures are errors, and unavailable binaries expose pending/failed state.
+- Add optional `sourceDetails` while retaining `answer`, `sources`, `usedKB`,
+  `usedDocs`, and `toolsUsed`. Explicit public fields describe identity, title,
+  revision, evidence origin, partial/file-pending/migration status, and attachment
+  attempt/result/location. Do not forward arbitrary provider metadata or invent
+  audio timestamps for document positions.
+- Replay requires current access/revisions for every source plus matching
+  fingerprints for supported read-only tools. Strict callbacks consume all pages,
+  recheck exact membership/canonical references and attest complete reads.
+  Changed, denied, failed or untracked dependencies invalidate the entire history,
+  including assistant paraphrases; revalidate before later rounds and final output.
+- `start_research` records a creation receipt only after one successful mutation.
+  Never replay creation to validate history. Tracking overflow preserves the
+  current result while marking history nonreplayable with explicit coverage.
+  Unverifiable legacy sessions reset at cutover.
+
+Exact source fields, visibility, limits and integration APIs:
+[source contract](../backend/python/qa/SOURCE_CONTRACT.md),
+[tool history](../backend/python/qa/TOOL_HISTORY_CONTRACT.md),
+[account reads](../backend/python/qa/ACCOUNT_READS_CONTRACT.md), and
+[rollout](runbooks/qa-current-source-rollout.md).
+
+Manual and opt-in proactive QA may send model-composed queries to the external
+web-search provider through the us-east-1 Gateway. The UI toggle only gates the
+proactive path. Query construction restrictions and hash-only logging mitigate,
+but do not eliminate, that egress. The per-user hourly limit runs before the call
+(default 30, 0 disables), deliberately fails open on storage errors, and does not
+meter crawler/research. Unconfigured web search returns a tool error. Session
+history has TTL attributes, but the current table TTL setting does not sweep them.
+
+## Errors and implementation references
+
+HTTP errors use `{ "error": { "code": "...", "message": "..." } }`. Common codes
+include BAD_REQUEST, FORBIDDEN, NOT_FOUND and CONFLICT; inspect each handler for
+its exact mapping. Services use sentinel errors and callers use errors.Is.
+
+- Request/response and key types: `backend/internal/model/`.
+- HTTP decoding/status mapping: `backend/internal/handler/`.
+- Authorization/business rules: `backend/internal/service/`.
+- Persistence, pagination, conditional writes: `backend/internal/repository/`.
+- Transport routing/authorizers/events: `infra/lib/gateway-stack.ts`.
+- Frontend client contracts: `frontend/src/lib/api.ts`.
 
 ## Meeting attachment text
 
@@ -2020,3 +530,43 @@ Source conflicts preserve text and mark fresh-generation retry; unrelated metada
 changes do not invalidate generation. No source/model text appears in errors.
 Deployment prerequisites and runtime acceptance are recorded in
 [the rollout runbook](runbooks/meeting-document-release.md).
+
+## Re-summary from saved sources
+
+| Method | Path | Result |
+| --- | --- | --- |
+| GET | `/api/meetings/{meetingId}/resummary` | Current meeting readers; small status response |
+| POST | `/api/meetings/{meetingId}/resummary` | Owner/edit; empty body or `{}`; `202` with status |
+
+Response: `{status, runId?, errorCode?, leaseUntil?, updatedAt?, resultHash?}`.
+Status is `unknown`, `queued`, `running`, `succeeded`, or `failed`; lease is epoch
+milliseconds and updatedAt is RFC3339. An active run is reused. Expired work is
+persisted as `failed/INTERRUPTED`. A successful resultHash is the SHA-256 of the
+saved summary text.
+
+This differs from POST `/summarize`, which is live, caller-text summarization.
+Re-summary reads saved notes/summary, the current selected transcript and
+verified document extraction. It does not rerun STT or refinement and does not
+import linked-meeting context. Unavailable documents are omitted with notices
+when trusted notes/transcript remain. If no other source exists, pending/failed/
+missing document text returns `409 SOURCE_NOT_READY`; active transcription returns `409 MEETING_BUSY`;
+absent source returns `409 NO_SUMMARY_SOURCE`. Source conflicts return 409,
+source/output limits 413, and publish failures 503. Raw source/model text is
+never included in error responses.
+
+State is separate at `MEETING#id / ANALYSIS#summary`. The worker revalidates the
+requester's edit grant, source fields, attachment inventory and object ETags.
+Summary/coverage and success are published atomically under source/run/lease
+conditions. Concurrent human changes reject the generated result. Failure keeps
+the previous summary. Inputs are limited to 20 attachments and 8 MiB per loaded
+transcript field; document evidence is fairly excerpted within 64 KiB total.
+Unprovided/partial evidence is explicitly marked.
+
+Delivery requires host infrastructure to route
+`source=ttobak.analysis, detail-type=SummaryRequested`, detail `{meetingId,runId}`,
+to the existing summarize Lambda. The API uses its existing default-bus PutEvents
+grant. Deploy that rule before enabling this action.
+
+The frontend polls metadata while pending and explicitly loads completed content
+through `/api/meetings/{id}/reading?kind=meeting&section=summary`, checking page
+continuity, current run and resultHash. It never replaces an unsaved editor draft.

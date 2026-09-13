@@ -1,54 +1,29 @@
 # ADR-036: Account hierarchy and multi-account meeting filters
 
-- Date: 2026-09-11
-- Status: Accepted
+- Status: Accepted; extends flat account organization and single-account filtering. ADR-034's member permissions and ADR-025's explicit Project-account links remain unchanged.
+- Decision date: 2026-09-11.
+- Code checked: 2026-09-13. Backend and UI exist in this checkout; deployment order/status is not established by source.
 
-## Context
+## Original decision and rationale
 
-A flat account list cannot represent groups with multiple affiliates. The
-meeting list's single-account selector also makes it difficult to view meetings
-for several related customer accounts together.
+Represent affiliates under user-managed account groups and view several accounts' meetings together without migrating records or creating inherited authorization. Retain the single-account API for existing clients. The original delivery plan put compatible backend APIs before the tree/checkbox UI; that remains rollout guidance, not an outstanding implementation stage.
 
-## Delivery stages
+## Current behavior and invariants
 
-The hierarchy and multi-account filter APIs are integrated before the tree and
-checkbox UI. Complete the backend deployment before rolling out the frontend
-so existing clients remain compatible during the transition.
+- Optional `parentAccountId` gives an account one parent; omitted/empty values represent roots. Hierarchy is organization metadata, not membership or content authorization. Group detail tabs remain scoped to that account.
+- Creating under a parent requires membership in the immediate parent. Reparenting requires both canonical child ownership and its owner-role membership, plus membership in the new immediate parent. Detaching needs no access to the old parent. Missing/null update fields are invalid; an explicitly empty string detaches.
+- Ancestor reads are strongly consistent and bounded to 64 nodes. A partial-write transaction checks the child's observed parent/owner, owner membership, proposed-parent membership, and each observed ancestor parent link, including the root. Opposing moves cannot commit against the same stale ancestry. Conflicts reread/retry up to three attempts, then return conflict; unrelated storage failures remain errors.
+- The tree is built only from caller-visible accounts. A visible child whose parent is absent/inaccessible is displayed as a root without showing the parent's name. Responses still carry `parentAccountId`; this is not a guarantee that the parent's identifier is hidden.
+- Parent selectors and meeting checkboxes share the tree model. A group checkbox expands to its visible subtree, with mixed states and removable chips. The client sends explicit IDs; the server does not recursively expand hierarchy or grant descendant access.
+- `accountIds` is a comma-separated OR selection, trimmed, deduplicated, sorted, and limited to 100 distinct IDs. Empty selection means all otherwise-authorized meetings. Supplying both `accountId` and `accountIds`, repeating either parameter, or using malformed IDs is rejected. Legacy `accountId` remains supported.
+- Multi-filter pagination covers owned, direct-shared, and account-team discovery streams. Continuations bind user, tab, and normalized selection; empty pages can still carry a continuation. Cursors are pagination state, **not signed grants**: canonical meeting links and current membership remain checked independently, including cursor-supplied discovery candidates.
 
-## Decision
+## Tradeoffs and limits
 
-Add optional `parentAccountId` metadata to existing account records. An account
-has one parent or is a root; records without the field remain valid roots.
-Owners can reparent their accounts into an account they belong to. Creation under
-a parent requires the same parent membership. Hierarchy does not alter existing
-membership or content authorization.
+No descendant or meeting rewrite is needed, but ancestry checks add bounded transactional work and conflicts. The UI can only select visible descendants, not hidden affiliates. The ancestry/filter limits are explicit validation limits, not arbitrary truncation. Backend-first rollout avoids older servers rejecting the new client request shape; verify actual deployment separately.
 
-Validate proposed parent chains with strongly consistent reads. Write the child
-parent field using a conditional partial transaction, including conditions on
-the observed ancestor parent links and the requester's parent membership.
-Concurrent opposing moves must not create a cycle. Bound ancestry reads to 64
-nodes, below the transaction item limit, and retry conflicts at most three times
-before returning a conflict.
+## Evidence
 
-Render the caller-visible accounts as an expandable tree. A missing or
-inaccessible parent is not disclosed; its visible child appears as a root.
-Use this same tree for parent pickers and meeting checkbox filters. Parent
-selection expands to accessible descendants, while partial group selections and
-removable chips make the effective selection visible.
-
-The meeting API accepts `accountIds`, a normalized OR selection of up to 100
-distinct explicit IDs. It preserves the existing single `accountId` contract,
-rejects ambiguous requests, filters all existing meeting access streams, and
-binds new continuation cursors to the user, tab, and selected-ID set.
-
-## Consequences
-
-- Existing accounts and integrations need no migration or permission changes.
-- Groups are user-managed organization metadata, not legal-company seed data.
-- The UI resolves visible subtrees; the API still authorizes meetings using
-  their existing owner/share/account rules, independently of hierarchy.
-- Reparenting does not rewrite descendants or meeting records. Ancestor
-  transaction conditions protect against cycles without a global hierarchy lock.
-- The ancestry-work and filter-size limits are explicit validation bounds.
-- Group detail's existing meeting/research/document tabs remain account-scoped;
-  cross-account meeting viewing is provided by the checkbox filter.
+- [Hierarchy service](../../backend/internal/service/account_hierarchy.go), [transactions](../../backend/internal/repository/account_hierarchy.go), [cycle/access tests](../../backend/internal/service/account_hierarchy_test.go), [transaction tests](../../backend/internal/repository/account_hierarchy_test.go).
+- [Filter service/cursors](../../backend/internal/service/meeting_filter.go), [normalization](../../backend/internal/repository/meeting_filter.go), [access/pagination tests](../../backend/internal/service/meeting_filter_test.go), [HTTP tests](../../backend/internal/handler/meeting_filter_test.go).
+- [Tree helpers](../../frontend/src/lib/accountTree.ts), [hierarchy UI](../../frontend/src/components/AccountHierarchyList.tsx), [parent editor](../../frontend/src/components/AccountParentEditor.tsx), [meeting picker](../../frontend/src/components/AccountTreePicker.tsx).

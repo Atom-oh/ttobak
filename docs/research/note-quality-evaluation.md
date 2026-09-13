@@ -1,5 +1,9 @@
 # Note quality evaluation
 
+Historical evaluation protocol introduced on 2026-09-12, retained for reproducible
+checks of the archived synthetic corpus. Run results are separate evidence; this
+guide does not claim a new live evaluation has occurred.
+
 The reference corpus uses four fictional meetings. It checks source selection,
 numbers/units, negation, decisions versus proposals, owners/deadlines and the
 distinction between personal notes and transcript evidence.

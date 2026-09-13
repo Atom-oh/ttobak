@@ -1,1138 +1,151 @@
-# TTOBAK - Design Specification
-
-> Design system extracted from design_sample/ HTML files.
-
-## 1. Design Tokens
-
-### 1.1 Colors
-
-One brand (indigo/violet) shared across light/dark — neon cyan/purple, glow, and glass blur have been removed (`frontend/src/app/globals.css`). `primary`/`accent`/`secondary`/`surface-*`/`text-*`/`border-subtle`/`error` define light values in `:root`; `.dark` overrides the same CSS var names, so utilities like `text-primary` auto-pick the violet value in dark mode with no `dark:` prefix (Tailwind v4 `@theme inline` lazy `var()` resolution). Exception: `background-light`/`background-dark` are two separate tokens switched via explicit `dark:bg-background-dark`.
-
-```css
-/* :root (light) */
---primary: #3211d4;
---primary-hover: #2a0eb3;
---accent: #7c3aed;
---secondary: #a78bfa;
---background-light: #f6f6f8;
---background-dark: #0b0b0f;
---surface-lowest: #ffffff;
---surface: #f8fafc;
---surface-container: #f1f5f9;
---surface-high: #e2e8f0;
---text-main: #0f172a;
---text-muted: #94a3b8;
---text-secondary: #64748b;
---border-subtle: #e2e8f0;
---error: #dc2626;
-
-/* .dark — overrides the same variable names (primary, accent, secondary, surface-*, text-*, border-subtle, error) */
---primary: #8b85f7;
---primary-hover: #a5a0f9;
---accent: #a78bfa;
---secondary: #c4b5fd;
---surface-lowest: #101014;
---surface: #131318;
---surface-container: #1c1c22;
---surface-high: #2a2a32;
---text-main: #e7e7ec;
---text-muted: #8a8f98;
---text-secondary: #b3b8c2;
---border-subtle: rgba(255, 255, 255, 0.08);
---error: #f87171;
-```
-
-Legacy classes (`glass-panel`, `glow-*`, `neon-text-*`, `active-pill`) are kept as no-ops (`box-shadow:none`/`text-shadow:none`) instead of being deleted, so existing usages don't break while the visual effect goes away.
-
-```css
-/* Semantic Colors */
---tag-internal: bg-primary/10 text-primary
---tag-design: bg-amber-100 text-amber-700
---tag-external: bg-green-100 text-green-700
---tag-engineering: bg-emerald-50 text-emerald-600
---tag-marketing: bg-amber-50 text-amber-600
---tag-strategy: bg-primary/10 text-primary
-
-/* Status */
---status-recording: bg-red-50 text-red-600 border-red-100
---status-live-dot: bg-red-600
-```
-
-### 1.2 Typography
-
-```css
-font-family: 'Inter', sans-serif;
-
-/* Heading hierarchy */
-.page-title: text-3xl font-extrabold tracking-tight  /* PC meeting list */
-.page-title-mobile: text-xl font-bold tracking-tight  /* Mobile header */
-.card-title: text-lg font-bold  /* PC card */
-.card-title-mobile: text-base font-bold leading-tight  /* Mobile card */
-.section-label: text-xs font-bold uppercase tracking-[0.2em]  /* Section headers */
-.section-label-wide: text-xs font-bold uppercase tracking-widest
-.body-text: text-sm text-slate-600 leading-relaxed
-.timestamp: text-xs text-slate-400
-.tag: text-[10px] font-bold uppercase tracking-widest
-.nav-label: text-[10px] font-bold uppercase tracking-wider  /* Mobile bottom nav */
-.sidebar-nav: text-sm font-medium  /* PC sidebar */
-```
-
-### 1.3 Spacing & Layout
-
-```css
-/* Mobile Container */
-.mobile-container: max-w-md mx-auto bg-white shadow-xl
-
-/* PC Layout */
-.pc-sidebar: w-64 border-r border-slate-200 bg-white
-.pc-main: flex-1 overflow-hidden
-.pc-header: h-16 border-b border-slate-200 bg-white/80 backdrop-blur-md
-.pc-content: p-8 max-w-7xl mx-auto
-
-/* Card Spacing */
-.card-padding: p-4 (mobile), p-6 (PC)
-.card-gap: space-y-4 (mobile), gap-6 (PC grid)
-.section-gap: mb-8
-```
-
-### 1.4 Border Radius
-
-```css
---radius-default: 0.25rem (rounded)
---radius-lg: 0.5rem (rounded-lg)
---radius-xl: 0.75rem (rounded-xl)
---radius-2xl: 1rem (rounded-2xl)
---radius-full: 9999px (rounded-full)
-
-/* Usage */
-.card: rounded-xl
-.button: rounded-lg
-.input: rounded-xl (mobile), rounded-lg (PC)
-.avatar: rounded-full
-.tag-badge: rounded-full (mobile), rounded (PC)
-.fab: rounded-full
-.sidebar-nav-item: rounded-lg
-```
-
-### 1.5 Shadows
-
-```css
-.card-shadow: shadow-sm
-.card-hover: hover:shadow-xl hover:shadow-primary/5
-.fab-shadow: shadow-lg
-.recording-button-shadow: shadow-lg shadow-primary/40
-.sidebar-button-shadow: shadow-lg shadow-primary/20
-.floating-player: shadow-xl
-```
-
-## 2. Component Specifications
-
-### 2.1 Mobile Bottom Navigation
-
-```html
-<!-- 4-5 items, fixed bottom, backdrop blur -->
-<nav class="fixed bottom-0 w-full bg-white/90 backdrop-blur-md
-            border-t border-slate-100 px-4 pb-6 pt-2 z-10">
-  <!-- Each item -->
-  <a class="flex flex-col items-center gap-1">
-    <span class="material-symbols-outlined">icon_name</span>
-    <span class="text-[10px] font-bold uppercase tracking-wider">Label</span>
-  </a>
-</nav>
-
-<!-- Active: text-primary, fill-1 on icon -->
-<!-- Inactive: text-slate-400 -->
-```
-
-Items: Home (home), Record (mic), Files (description), Profile (person)
-
-### 2.2 PC Sidebar
-
-```html
-<aside class="w-64 border-r border-slate-200 bg-white flex flex-col">
-  <!-- Logo/Workspace header -->
-  <div class="p-6 flex items-center gap-3">
-    <div class="w-8 h-8 bg-primary rounded-lg flex items-center justify-center text-white">
-      <span class="material-symbols-outlined">record_voice_over</span>
-    </div>
-    <div>
-      <h1 class="font-bold text-slate-900">TTOBAK</h1>
-      <p class="text-[10px] text-slate-500 font-medium uppercase tracking-wider">AI Meeting Assistant</p>
-    </div>
-  </div>
-
-  <!-- Nav items -->
-  <nav class="flex-1 px-4 space-y-1">
-    <!-- Active -->
-    <a class="flex items-center gap-3 px-3 py-2 rounded-lg bg-primary/10 text-primary font-semibold">
-      <span class="material-symbols-outlined">videocam</span>
-      <span class="text-sm">Meetings</span>
-    </a>
-    <!-- Inactive -->
-    <a class="flex items-center gap-3 px-3 py-2 rounded-lg text-slate-600 hover:bg-slate-50 font-medium">
-      <span class="material-symbols-outlined text-slate-400">icon</span>
-      <span class="text-sm">Label</span>
-    </a>
-  </nav>
-
-  <!-- Bottom: New Meeting button + user profile -->
-  <div class="p-4 border-t border-slate-100">
-    <button class="w-full bg-primary text-white py-2.5 rounded-lg font-bold text-sm
-                   shadow-lg shadow-primary/20 flex items-center justify-center gap-2">
-      <span class="material-symbols-outlined text-lg">add_circle</span>
-      New Meeting
-    </button>
-  </div>
-</aside>
-```
-
-Sidebar nav items: Meetings (videocam), Files (folder_open), Insights (analytics), Team (group), Settings (settings)
-
-### 2.3 Meeting Card (Mobile)
-
-```html
-<div class="bg-white border border-slate-100 p-4 rounded-xl shadow-sm
-            hover:border-primary/30 transition-all cursor-pointer">
-  <!-- Top: title + tag -->
-  <div class="flex justify-between items-start mb-2">
-    <h4 class="text-slate-900 font-bold text-base leading-tight">Title</h4>
-    <span class="text-[10px] font-bold bg-primary/10 text-primary px-2 py-0.5
-                 rounded-full uppercase">Tag</span>
-  </div>
-  <!-- Date -->
-  <div class="flex items-center gap-2 text-slate-400 text-xs mb-3">
-    <span class="material-symbols-outlined text-[14px]">calendar_today</span>
-    <span>Oct 24, 2023 · 10:00 AM</span>
-  </div>
-  <!-- Summary -->
-  <p class="text-slate-600 text-sm line-clamp-2 leading-relaxed">
-    AI Summary preview...
-  </p>
-  <!-- Participants -->
-  <div class="mt-4 flex -space-x-2">
-    <div class="size-6 rounded-full border-2 border-white bg-slate-200 overflow-hidden">
-      <img />
-    </div>
-    <div class="size-6 rounded-full border-2 border-white bg-slate-200
-                flex items-center justify-center text-[10px] font-bold text-slate-500">+3</div>
-  </div>
-</div>
-```
-
-### 2.4 Meeting Card (PC)
-
-```html
-<div class="bg-white border border-slate-200 rounded-xl p-6
-            hover:shadow-xl hover:shadow-primary/5 transition-all group cursor-pointer">
-  <!-- Top: tag + date -->
-  <div class="flex justify-between items-start mb-4">
-    <span class="text-[10px] font-bold uppercase tracking-widest text-primary
-                 bg-primary/10 px-2 py-0.5 rounded">Tag</span>
-    <span class="text-xs text-slate-400">Oct 12, 2023</span>
-  </div>
-  <!-- Title (hover effect) -->
-  <h3 class="text-lg font-bold mb-2 group-hover:text-primary transition-colors">Title</h3>
-  <!-- Summary -->
-  <p class="text-sm text-slate-600 line-clamp-3 mb-4 leading-relaxed">AI Summary...</p>
-  <!-- Tags -->
-  <div class="flex flex-wrap gap-2 mb-4">
-    <span class="text-xs px-2 py-1 bg-slate-100 rounded text-slate-600">#tag</span>
-  </div>
-  <!-- Footer: avatars + more -->
-  <div class="flex items-center justify-between pt-4 border-t border-slate-100">
-    <div class="flex -space-x-2">
-      <img class="w-7 h-7 rounded-full border-2 border-white" />
-    </div>
-    <button class="text-slate-400 hover:text-primary">
-      <span class="material-symbols-outlined text-xl">more_horiz</span>
-    </button>
-  </div>
-</div>
-```
-
-### 2.5 Recording Screen (Mobile)
-
-```
-Layout:
-  header: back button + title (input) + translation-language (select) + logout icon
-  main:
-    - circular timer (bg-primary/10 pulse, bg-primary/20, white circle with border-4 border-primary)
-    - waveform bars (w-1 bg-primary rounded-full, heights varying)
-    - "Recording in progress..." text
-    - controls: [pause] [stop (primary, large)] [camera]
-    - Recently Captured grid (3 columns)
-  bottom-nav: fixed
-```
-
-### 2.6 Recording Screen (PC)
-
-```
-Layout:
-  sidebar (w-64)
-  main:
-    header: nav + title + "RECORDING LIVE" badge + search + profile
-    content (flex):
-      center:
-        - Status Card (rounded-2xl shadow-sm border, p-8)
-          - timer: text-6xl font-black tracking-tighter
-          - waveform: gradient bars
-          - stats: Storage / Quality / Bitrate
-        - Captured Assets Grid (4 columns)
-      right-panel (w-80):
-        - Live Transcription
-        - Speaker entries with avatar initials + timestamp
-        - Export button
-```
-
-**Header search (desktop, `layout/DesktopHeader.tsx` → `HeaderSearch`)** — the top-right box is wired to the meeting list through the URL: on `/` each keystroke (150 ms debounce) rewrites `?q=` in place and `MeetingList` filters live (title · summary · tags, client-side over the loaded pages — there is no server search endpoint); on any other page, Enter navigates to `/?q=<query>`. URL → list is one-way (the mobile bar filters via local state only and never writes the URL; the two inputs never share a breakpoint); back/forward and shared links work through the URL; leaving `/` clears the box. The box ignores URL changes that merely echo its own push (`lastPushedRef`), so trimming and async navigation commits never rewind in-progress typing, and Enter is ignored while an IME composition is in progress. Both `HeaderSearch` and `MeetingList` use `useSearchParams` and sit inside `<Suspense>` boundaries (static-export requirement). The notification and help icons next to the box are still inert placeholders.
-
-### 2.6a Post-Recording Banner & System Audio Mode (current implementation, ADR-024)
-
-`components/record/PostRecordingBanner.tsx` — a fixed top toast shown while `usePostRecording`'s `step` is non-null (`creating` → `notes` → `saving` → `uploading` → `redirecting`, or `error`; `notes` pauses the flow for the notes-input dialog before save/upload resumes).
-
-```
-Uploading step:
-  spinner + "Uploading... N% (X MB / Y MB)" when `uploadProgress` is set
-  (both browser blob uploads and Tauri native file uploads report this)
-  else: plain "Uploading audio..." label
-  thin progress bar (bg-primary, width = percentage) underneath the label
-
-Error step:
-  red banner, error icon, message truncated to one line
-  [Try Again] — re-runs the upload from the retained pending payload
-  [Home] — clears state and navigates away (does NOT retry)
-```
-
-In Tauri desktop System Audio mode (`audioSource === 'system'`, `isTauri()`), both the pre-recording setup notice and the during-recording banner (purple, `speaker` icon) note that live captions are best-effort (fed by Rust-downsampled PCM over `native-pcm-chunk` into the same Transcribe Streaming pipeline mic/tab modes use — no Web Speech fallback here) and that transcription still happens automatically once the meeting ends. `isNativeRecording` (`app/record/page.tsx`) drives the during-recording banner/title/nav-lock independently of `session.isRecording`, since it must be true from the moment native capture starts, before the STT session resolves.
-
-Before that, the native start path runs a **preflight** check (`assertUploadRecordingAvailable`, `frontend/src/lib/tauri.ts`) that fails the start outright — an instant rejection, not a timed check — if the installed app predates the `upload_recording` command; the amber "speech error" banner shows an update prompt with no draft meeting created (see ADR-024, motivated by an incident where this version skew silently lost 83 minutes of System Audio recording).
-
-**Leftover recordings card (Tauri only, ADR-024 2026-09-02 follow-up)** — `components/record/LeftoverRecordingsCard.tsx`, rendered by `app/record/page.tsx` at the top of the idle config column (above the title input) only when `isTauri()` and `useLeftoverRecordings()` returned ≥1 item. Amber warning card (`border-amber-300/70 bg-amber-50`, dark `bg-amber-950/30`), `history` icon, header "이전 세션에서 남은 녹음 파일 N개", a caveat line stating the file may belong to a *different* user of this Mac and may only contain audio up to the last save checkpoint, a "나중에" dismiss (this page visit only — no persistence; files stay on disk and are re-offered next time), and one row per file (name, `formatFileSize`, `ko-KR` mtime) with [삭제] (red text) and [업로드] (`bg-primary`). Both actions first open a `window.confirm` that names the file, size, time, and the cross-account caveat — never a one-click upload. 업로드 then reuses the normal native path: draft meeting → `PostRecordingBanner` notes step → native upload → `cleanupRecording`. Buttons disable while an action is in flight (`busy`).
-
-Live captions default to AWS Transcribe Streaming on every platform
-(`app/record/page.tsx`'s `liveSttProvider` initial state) — Web Speech is
-primarily a fallback for when Transcribe Streaming isn't configured or
-fails, not a default. On desktop it's still a real, explicit choice via
-the `LiveSttSelector`'s "Browser" option (disabled only once a recording
-is in progress), and that choice is honored for the rest of the
-recording — `SttManager` tracks what the user actually asked for
-separately from what's currently running, so an available Transcribe
-config can't silently promote an explicit Web Speech choice out from
-under a pause/resume (`SttManager`'s `preferredProvider` vs.
-`activeProvider`).
-
-On mobile, iOS/iPadOS/Android specifically (`lib/device.ts`'s
-`hasMobileMicConflictRisk` — actual UA/touch-capability detection, not
-`isMobile()`'s narrow-viewport heuristic), that choice doesn't exist at
-all: the Web Speech fallback is disabled outright and the
-`LiveSttSelector`'s "Browser" option is disabled to match. Web Speech's
-own `SpeechRecognition` capture runs independent of the `MediaStream`
-`MediaRecorder` is recording from, and on these platforms it can end that
-mic track mid-recording with no other signal. Recording is never
-sacrificed for captions there: if Transcribe Streaming isn't configured or
-fails, captions become unavailable (amber "speech error" banner) rather
-than silently falling back to Web Speech, and the recording itself keeps
-going untouched (`lib/sttManager.ts`'s `fallbackToWebSpeech`). That "keeps
-going untouched" guarantee is about the captions-failure path specifically
--- it doesn't mean the mic track itself is somehow protected. If the mic
-track dies for an unrelated reason (screen lock, an incoming call, the OS
-reclaiming it), `RecordButton`'s `onended`/`onerror` handlers still end
-the recording (gracefully finalizing whatever was captured), exactly as
-on desktop. If a recording starts before the Transcribe config finishes
-loading, captions
-promote onto it automatically once it arrives (`SttManager.retryWithConfig`,
-deferred until after a pause/resume completes if one is in progress) — see
-ADR-030.
-
-Once uploading, native mode's `uploadRecordingWithRetry` (`lib/tauri.ts`)
-is network-aware: if the device goes offline mid-upload, it waits for the
-browser's `online` event rather than failing immediately, then re-presigns
-before every retry — a fresh presigned URL, not the one that may have
-expired during the wait (the backend's presigned PUT TTL is 1h,
-`backend/internal/service/upload.go`'s `GeneratePresignedUploadURL`). The
-offline-wait/retry-backoff cycle is bounded by a **cumulative** 45-minute
-wall-clock budget (not reset on every offline→online→offline cycle — a
-flapping connection still eventually gives up), and each re-entry into the
-wait backs off briefly instead of tight-looping the presign endpoint. This
-budget does not preempt a presign call or PUT already in flight — those
-run to completion (or to Rust's own stall watchdog) regardless. A
-non-network failure (bad URL, server error) instead gets a small bounded
-retry (2 retries beyond the first attempt, linear backoff).
-
-Both the offline wait and the flow it's part of are cancelled when the
-post-recording flow is reset (Home / new recording) or the component
-unmounts — via an `AbortController` (stops the in-progress wait, re-checked
-right after every presign call too, since that's its own multi-second
-await) AND a generation counter (`flowGenerationRef` in
-`usePostRecording.ts`, bumped by `reset()`/`createDraftMeeting()`/unmount).
-The counter is what actually gates the flow: abort alone can't retroactively
-cancel a PUT already past the wait, so without the counter a PUT that
-finishes successfully after the user walks away would still fire
-`notifyComplete`/`cleanupRecording`/redirect. Even with the counter, an
-abandoned PUT that reaches S3 still triggers the server-side
-transcribe/summarize pipeline (EventBridge on the `audio/` prefix doesn't
-know the SPA gave up) — the counter only stops this hook's own follow-on
-calls, not that pipeline; see ADR-024's Consequences for the tracked
-orphan-cleanup gap this leaves. The WAV itself is never at risk from the
-upload side either way — `cleanupRecording` only runs after the backend's
-upload-complete notification succeeds.
-
-### 2.7 Meeting Detail (Mobile)
-
-```
-Layout:
-  header: back button + "Meeting Report" + more
-  main (scrollable):
-    - Tag + Date
-    - Title: text-3xl font-bold
-    - Visual Comparison Workspace (dark bg, side-by-side images)
-    - AI Summary (bg-slate-50 border rounded-xl p-5)
-    - Action Items (checkbox list)
-    - Participants (avatar stack)
-    - Transcription (border-l-2 timeline)
-  bottom-nav: fixed with centered FAB
-```
-
-### 2.8 Meeting Detail (PC)
-
-```
-Layout:
-  sidebar (w-64, fixed)
-  main (ml-64, p-8, max-w-5xl mx-auto):
-    - Breadcrumbs
-    - Title: text-4xl font-black tracking-tight
-    - Date + Folder
-    - Participants stack
-    - Speaker name edits keep the entered names and show an inline error when saving fails, including a 409 concurrent-change response.
-    - AI Summary + Action Items row (drag-resizable, useResizablePanel):
-      - AI Summary (bg-white border rounded-xl p-6) — drag-resizable width 400-900px,
-        persisted to localStorage `ttobak:meetingSummaryWidth`
-      - w-2 divider (bg-slate-300 dark:bg-white/20, hover:bg-primary/60,
-        cursor-col-resize) — visual boundary and drag handle
-      - Action Items (bg-primary/5 border-primary/20 rounded-xl p-6, flex-1)
-      - side-by-side vs. stacked switches on measured row width (ResizeObserver),
-        not a viewport breakpoint — auto-stacks when the min width + reserve won't fit
-    - Attachments Gallery (4-column grid, hover overlay)
-    - Full Transcription (timestamp badges + speaker entries). Raw transcript
-      edits remain open with an inline error and the user's draft when saving
-      fails. Save success updates the displayed text; controls are disabled
-      during saving, and an empty replacement is rejected. Editing applies to
-      raw A without verified segments and is hidden for read-only viewers.
-      A selected/fallback B transcript is read-only and uses verified speaker
-      segments when available, otherwise raw text. Successful A saves refresh
-      the server-verified transcript view; a refresh failure is distinguished
-      from a failed save.
-    - Floating Audio Player (sticky bottom-6, rounded-full, backdrop-blur)
-  reference aside (right side, drag-resizable 280-640px, localStorage
-    `ttobak:meetingAsideWidth`) — same w-2 divider pattern
-```
-
-#### Action item recovery
-
-The meeting detail card distinguishes unverified legacy results, queued/running
-analysis, failed analysis, and successful results. Only successful empty results
-show “액션 아이템이 없습니다.” Pending/failed analysis retains the previous items.
-Editors can request analysis again after a summary is saved and processing is
-done; readers have no write controls. Completion checkboxes persist through the
-API and show save failures. Polling continues while analysis is pending even
-after the meeting itself is done; a bounded one-minute check covers the summary-to-analysis handoff even when
-the previous analysis was already terminal. A single timer covers handoff and
-pending analysis without duplicate polling. Failed status reads expose a manual refresh action.
-Changing meetings resets the card and cancels obsolete requests.
-
-### 2.9 LiveTranscript Component
-
-Displays streaming real-time transcription and translation results.
-
-```html
-<div class="bg-white border border-slate-200 rounded-xl p-4 h-[400px] overflow-y-auto">
-  <!-- Header -->
-  <div class="flex items-center justify-between mb-4 sticky top-0 bg-white pb-2 border-b">
-    <div class="flex items-center gap-2">
-      <span class="material-symbols-outlined text-primary">mic</span>
-      <span class="text-sm font-bold uppercase tracking-wider">Live Transcription</span>
-    </div>
-    <div class="flex items-center gap-1">
-      <span class="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>
-      <span class="text-xs text-slate-500">LIVE</span>
-    </div>
-  </div>
-
-  <!-- Transcript Entries -->
-  <div class="space-y-3">
-    <!-- Final transcript -->
-    <div class="flex gap-3">
-      <div class="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center
-                  text-xs font-bold text-primary shrink-0">S1</div>
-      <div>
-        <div class="flex items-center gap-2 mb-1">
-          <span class="text-xs font-semibold text-slate-700">Speaker 1</span>
-          <span class="text-[10px] text-slate-400">10:23:45</span>
-        </div>
-        <p class="text-sm text-slate-600">Transcribed text appears here.</p>
-        <!-- Translation (if enabled) -->
-        <p class="text-sm text-primary/80 mt-1 pl-2 border-l-2 border-primary/30">
-          The transcribed text appears here.
-        </p>
-      </div>
-    </div>
-
-    <!-- Interim transcript (typing indicator) -->
-    <div class="flex gap-3 opacity-60">
-      <div class="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center
-                  text-xs font-bold text-slate-400 shrink-0">S2</div>
-      <div>
-        <p class="text-sm text-slate-500">Currently speaking...</p>
-        <div class="flex gap-1 mt-1">
-          <span class="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce"></span>
-          <span class="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce [animation-delay:0.1s]"></span>
-          <span class="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce [animation-delay:0.2s]"></span>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-```
-
-### 2.10 QAPanel Component
-
-Panel for asking questions during a meeting and displaying KB RAG answers.
-
-```html
-<div class="bg-white border border-slate-200 rounded-xl overflow-hidden">
-  <!-- Header -->
-  <div class="bg-slate-50 px-4 py-3 border-b flex items-center gap-2">
-    <span class="material-symbols-outlined text-primary">question_answer</span>
-    <span class="text-sm font-bold">Meeting Q&A</span>
-  </div>
-
-  <!-- Q&A History -->
-  <div class="p-4 space-y-4 max-h-[300px] overflow-y-auto">
-    <!-- Question/Answer pair -->
-    <div class="space-y-2">
-      <!-- Question -->
-      <div class="flex gap-2">
-        <span class="material-symbols-outlined text-slate-400 text-lg">help</span>
-        <p class="text-sm font-medium text-slate-700">What deadline was decided in this meeting?</p>
-      </div>
-      <!-- Answer -->
-      <div class="ml-6 bg-primary/5 rounded-lg p-3">
-        <p class="text-sm text-slate-600">The deadline was set for March 15.</p>
-        <!-- Sources -->
-        <div class="mt-2 pt-2 border-t border-slate-200">
-          <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Sources</span>
-          <div class="mt-1 space-y-1">
-            <a class="flex items-center gap-1 text-xs text-primary hover:underline">
-              <span class="material-symbols-outlined text-[14px]">description</span>
-              Product Strategy Sync (this meeting)
-            </a>
-            <a class="flex items-center gap-1 text-xs text-primary hover:underline">
-              <span class="material-symbols-outlined text-[14px]">folder</span>
-              project-timeline.pdf
-            </a>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Input -->
-  <div class="p-4 border-t bg-slate-50">
-    <div class="flex gap-2">
-      <input type="text" placeholder="Ask a question about this meeting..."
-             class="flex-1 px-3 py-2 text-sm border border-slate-200 rounded-lg
-                    focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary" />
-      <button class="px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium
-                     hover:bg-primary/90 transition-colors">
-        <span class="material-symbols-outlined text-lg">send</span>
-      </button>
-    </div>
-    <label class="flex items-center gap-2 mt-2 text-xs text-slate-500">
-      <input type="checkbox" class="rounded text-primary focus:ring-primary" checked />
-      Include Knowledge Base in search
-    </label>
-  </div>
-</div>
-```
-
-**Proactive search** (`LiveQAPanel`, live recording panel only): a header toggle chip ("Proactive search ON/OFF", `travel_explore` icon, pill shape) — ON uses sky tones (`bg-sky-50 border-sky-300 text-sky-600`, dark `bg-sky-900/20 border-sky-700 text-sky-400`), OFF uses slate. **Default OFF**, since conversation-derived search terms go out to an external web search — opt-in with a tooltip disclosure, state persisted to localStorage `ttobak.proactiveSearchEnabled`. Auto-fired question bubbles are visually distinct from manual questions (sky background + border, `travel_explore` icon, "Proactive search · detected from conversation" caption). Answer tool badges add `search_web` → "Web Search" (sky) alongside the existing KB search (emerald)/AWS Docs (blue)/meeting-transcript search (violet)/AWS recommendation (amber) badges.
-
-### 2.11 KBFileList Component
-
-Component for uploading and managing Knowledge Base files.
-
-```html
-<div class="bg-white border border-slate-200 rounded-xl">
-  <!-- Header -->
-  <div class="px-6 py-4 border-b flex items-center justify-between">
-    <div class="flex items-center gap-2">
-      <span class="material-symbols-outlined text-primary">library_books</span>
-      <h3 class="font-bold">Knowledge Base</h3>
-    </div>
-    <span class="text-xs text-slate-400">12 files indexed</span>
-  </div>
-
-  <!-- Upload Area -->
-  <div class="p-4 border-b border-dashed border-slate-200 bg-slate-50/50">
-    <div class="border-2 border-dashed border-slate-300 rounded-lg p-6 text-center
-                hover:border-primary/50 hover:bg-primary/5 transition-colors cursor-pointer">
-      <span class="material-symbols-outlined text-3xl text-slate-400 mb-2">upload_file</span>
-      <p class="text-sm font-medium text-slate-600">Drop files here or click to upload</p>
-      <p class="text-xs text-slate-400 mt-1">PDF, Markdown, PPTX, DOCX (max 50MB)</p>
-    </div>
-  </div>
-
-  <!-- File List -->
-  <div class="divide-y divide-slate-100 max-h-[400px] overflow-y-auto">
-    <!-- File item -->
-    <div class="px-4 py-3 flex items-center justify-between hover:bg-slate-50 group">
-      <div class="flex items-center gap-3">
-        <div class="w-10 h-10 bg-red-50 rounded-lg flex items-center justify-center">
-          <span class="material-symbols-outlined text-red-500">picture_as_pdf</span>
-        </div>
-        <div>
-          <p class="text-sm font-medium text-slate-700">project-spec.pdf</p>
-          <div class="flex items-center gap-2 text-xs text-slate-400">
-            <span>1.2 MB</span>
-            <span>·</span>
-            <span>Indexed Mar 5, 2026</span>
-          </div>
-        </div>
-      </div>
-      <div class="flex items-center gap-2">
-        <span class="px-2 py-0.5 bg-green-100 text-green-700 text-[10px] font-bold rounded">
-          INDEXED
-        </span>
-        <button class="p-1 text-slate-400 hover:text-red-500 opacity-0 group-hover:opacity-100
-                       transition-opacity">
-          <span class="material-symbols-outlined text-lg">delete</span>
-        </button>
-      </div>
-    </div>
-
-    <!-- Indexing file -->
-    <div class="px-4 py-3 flex items-center justify-between bg-amber-50/50">
-      <div class="flex items-center gap-3">
-        <div class="w-10 h-10 bg-blue-50 rounded-lg flex items-center justify-center">
-          <span class="material-symbols-outlined text-blue-500">description</span>
-        </div>
-        <div>
-          <p class="text-sm font-medium text-slate-700">meeting-notes.md</p>
-          <div class="flex items-center gap-2 text-xs text-slate-400">
-            <span>256 KB</span>
-            <span>·</span>
-            <span>Uploading...</span>
-          </div>
-        </div>
-      </div>
-      <div class="flex items-center gap-2">
-        <span class="px-2 py-0.5 bg-amber-100 text-amber-700 text-[10px] font-bold rounded
-                     animate-pulse">
-          INDEXING
-        </span>
-      </div>
-    </div>
-  </div>
-</div>
-```
-
-### 2.12 ExportMenu Component
-
-Dropdown menu offering meeting export options.
-
-```html
-<div class="relative">
-  <!-- Trigger Button -->
-  <button class="flex items-center gap-2 px-4 py-2 bg-slate-100 hover:bg-slate-200
-                 rounded-lg text-sm font-medium text-slate-700 transition-colors">
-    <span class="material-symbols-outlined text-lg">file_download</span>
-    Export
-    <span class="material-symbols-outlined text-lg">expand_more</span>
-  </button>
-
-  <!-- Dropdown Menu -->
-  <div class="absolute right-0 mt-2 w-56 bg-white rounded-xl shadow-xl border border-slate-200
-              py-2 z-50">
-    <!-- PDF -->
-    <button class="w-full px-4 py-2 flex items-center gap-3 hover:bg-slate-50 text-left">
-      <span class="material-symbols-outlined text-red-500">picture_as_pdf</span>
-      <div>
-        <p class="text-sm font-medium text-slate-700">PDF</p>
-        <p class="text-xs text-slate-400">Formatted document</p>
-      </div>
-    </button>
-
-    <!-- Markdown -->
-    <button class="w-full px-4 py-2 flex items-center gap-3 hover:bg-slate-50 text-left">
-      <span class="material-symbols-outlined text-slate-600">code</span>
-      <div>
-        <p class="text-sm font-medium text-slate-700">Markdown</p>
-        <p class="text-xs text-slate-400">Plain text with formatting</p>
-      </div>
-    </button>
-
-    <div class="my-2 border-t border-slate-100"></div>
-
-    <!-- Notion -->
-    <button class="w-full px-4 py-2 flex items-center gap-3 hover:bg-slate-50 text-left">
-      <span class="material-symbols-outlined text-slate-800">note_alt</span>
-      <div>
-        <p class="text-sm font-medium text-slate-700">Notion</p>
-        <p class="text-xs text-slate-400">Create Notion page</p>
-      </div>
-      <!-- API key required indicator -->
-      <span class="ml-auto material-symbols-outlined text-amber-500 text-lg"
-            title="API key required">vpn_key</span>
-    </button>
-
-    <!-- Obsidian -->
-    <button class="w-full px-4 py-2 flex items-center gap-3 hover:bg-slate-50 text-left">
-      <span class="material-symbols-outlined text-purple-600">link</span>
-      <div>
-        <p class="text-sm font-medium text-slate-700">Obsidian</p>
-        <p class="text-xs text-slate-400">Markdown with [[wikilinks]]</p>
-      </div>
-    </button>
-  </div>
-</div>
-```
-
-### 2.13 IntegrationSettings Component
-
-UI for configuring external service API keys.
-
-```html
-<div class="bg-white border border-slate-200 rounded-xl">
-  <div class="px-6 py-4 border-b">
-    <h3 class="font-bold flex items-center gap-2">
-      <span class="material-symbols-outlined text-primary">extension</span>
-      Integrations
-    </h3>
-    <p class="text-sm text-slate-500 mt-1">Connect external services for export</p>
-  </div>
-
-  <div class="divide-y divide-slate-100">
-    <!-- Notion Integration -->
-    <div class="p-6">
-      <div class="flex items-center justify-between mb-4">
-        <div class="flex items-center gap-3">
-          <div class="w-10 h-10 bg-slate-900 rounded-lg flex items-center justify-center">
-            <span class="material-symbols-outlined text-white">note_alt</span>
-          </div>
-          <div>
-            <p class="font-medium text-slate-700">Notion</p>
-            <p class="text-xs text-slate-400">Export meetings to Notion pages</p>
-          </div>
-        </div>
-        <!-- Connected status -->
-        <span class="px-2 py-1 bg-green-100 text-green-700 text-xs font-bold rounded">
-          CONNECTED
-        </span>
-      </div>
-
-      <!-- API Key Input (masked) -->
-      <div class="space-y-2">
-        <label class="text-xs font-medium text-slate-500 uppercase tracking-wider">
-          API Key
-        </label>
-        <div class="flex gap-2">
-          <input type="password" value="ntn_****abcd" readonly
-                 class="flex-1 px-3 py-2 text-sm border border-slate-200 rounded-lg
-                        bg-slate-50 text-slate-500" />
-          <button class="px-4 py-2 text-sm font-medium text-slate-600 border border-slate-200
-                         rounded-lg hover:bg-slate-50 transition-colors">
-            Edit
-          </button>
-          <button class="px-4 py-2 text-sm font-medium text-red-600 border border-red-200
-                         rounded-lg hover:bg-red-50 transition-colors">
-            Remove
-          </button>
-        </div>
-        <p class="text-xs text-slate-400">Connected on Mar 5, 2026</p>
-      </div>
-    </div>
-
-    <!-- Obsidian (no API key needed) -->
-    <div class="p-6">
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-3">
-          <div class="w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center">
-            <span class="material-symbols-outlined text-purple-600">link</span>
-          </div>
-          <div>
-            <p class="font-medium text-slate-700">Obsidian</p>
-            <p class="text-xs text-slate-400">Download .md files with [[wikilinks]]</p>
-          </div>
-        </div>
-        <span class="text-xs text-slate-400">No API key required</span>
-      </div>
-    </div>
-
-    <!-- Not connected example -->
-    <div class="p-6 bg-slate-50/50">
-      <div class="flex items-center justify-between mb-4">
-        <div class="flex items-center gap-3">
-          <div class="w-10 h-10 bg-slate-200 rounded-lg flex items-center justify-center">
-            <span class="material-symbols-outlined text-slate-400">cloud</span>
-          </div>
-          <div>
-            <p class="font-medium text-slate-700">Other Service</p>
-            <p class="text-xs text-slate-400">Coming soon</p>
-          </div>
-        </div>
-        <span class="px-2 py-1 bg-slate-100 text-slate-500 text-xs font-bold rounded">
-          NOT CONNECTED
-        </span>
-      </div>
-
-      <div class="flex gap-2">
-        <input type="text" placeholder="Enter API key..."
-               class="flex-1 px-3 py-2 text-sm border border-slate-200 rounded-lg
-                      focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary" />
-        <button class="px-4 py-2 bg-primary text-white text-sm font-medium rounded-lg
-                       hover:bg-primary/90 transition-colors">
-          Connect
-        </button>
-      </div>
-    </div>
-  </div>
-</div>
-```
-
-### 2.14 Recording Mode Toggle
-
-Checkbox on the recording screen for switching between offline/online mode.
-
-```html
-<div class="bg-white border border-slate-200 rounded-xl p-4">
-  <div class="flex items-center justify-between">
-    <div class="flex items-center gap-3">
-      <span class="material-symbols-outlined text-primary">wifi</span>
-      <div>
-        <p class="text-sm font-medium text-slate-700">Real-time Mode</p>
-        <p class="text-xs text-slate-400">Stream audio for live transcription</p>
-      </div>
-    </div>
-    <label class="relative inline-flex items-center cursor-pointer">
-      <input type="checkbox" class="sr-only peer" checked />
-      <div class="w-11 h-6 bg-slate-200 peer-focus:ring-2 peer-focus:ring-primary/20 rounded-full
-                  peer peer-checked:after:translate-x-full peer-checked:after:border-white
-                  after:content-[''] after:absolute after:top-[2px] after:left-[2px]
-                  after:bg-white after:border-slate-300 after:border after:rounded-full
-                  after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
-    </label>
-  </div>
-
-  <!-- Offline mode info -->
-  <div class="mt-3 p-3 bg-slate-50 rounded-lg text-xs text-slate-500 hidden">
-    <span class="material-symbols-outlined text-sm align-middle mr-1">info</span>
-    Offline mode: Audio will be transcribed after upload completes.
-  </div>
-
-  <!-- Online mode info (shown when checked) -->
-  <div class="mt-3 p-3 bg-primary/5 rounded-lg text-xs text-primary">
-    <span class="material-symbols-outlined text-sm align-middle mr-1">bolt</span>
-    Real-time mode: See transcription as you speak.
-  </div>
-</div>
-```
-
-### 2.15 Translation Language Selector
-
-Checkbox group for selecting real-time translation target languages.
-
-```html
-<div class="bg-white border border-slate-200 rounded-xl p-4">
-  <div class="flex items-center gap-2 mb-3">
-    <span class="material-symbols-outlined text-primary">translate</span>
-    <span class="text-sm font-medium text-slate-700">Real-time Translation</span>
-  </div>
-
-  <div class="space-y-2">
-    <!-- Language options -->
-    <label class="flex items-center gap-3 p-2 rounded-lg hover:bg-slate-50 cursor-pointer">
-      <input type="checkbox" class="w-4 h-4 rounded text-primary focus:ring-primary" />
-      <span class="text-sm text-slate-600">Korean → English</span>
-    </label>
-
-    <label class="flex items-center gap-3 p-2 rounded-lg hover:bg-slate-50 cursor-pointer">
-      <input type="checkbox" class="w-4 h-4 rounded text-primary focus:ring-primary" checked />
-      <span class="text-sm text-slate-600">English → Korean</span>
-    </label>
-
-    <label class="flex items-center gap-3 p-2 rounded-lg hover:bg-slate-50 cursor-pointer">
-      <input type="checkbox" class="w-4 h-4 rounded text-primary focus:ring-primary" />
-      <span class="text-sm text-slate-600">Japanese → Korean</span>
-    </label>
-
-    <label class="flex items-center gap-3 p-2 rounded-lg hover:bg-slate-50 cursor-pointer">
-      <input type="checkbox" class="w-4 h-4 rounded text-primary focus:ring-primary" />
-      <span class="text-sm text-slate-600">Chinese → Korean</span>
-    </label>
-  </div>
-
-  <p class="mt-3 text-xs text-slate-400">
-    Select languages to translate in real-time during recording.
-  </p>
-</div>
-```
-
-### 2.16 Cost/Sizing Simulator Card (`SimCard`, ADR-033)
-
-Appears on the meeting detail page only once the meeting note itself is `done`. Five states driven by `SimRun.status`, one card, no separate page:
-
-- **idle** (no `SimRun` yet): one-line explainer + a single "시뮬레이션 실행" button (`query_stats` icon in the section header)
-- **extracted**: confirm/correct form — one row per extracted `SimRequirement` (label, required-marker, an editable value input, and a "녹취록에서 확인" link when `evidence` is present) + 2–3 architecture-option name/description input pairs. "실행" is disabled until every required requirement has a value and at least 2 options have a name — this is a UX convenience only, the server re-validates everything (ADR-033)
-- **queued / running**: spinner + "1~3분 소요, 다른 작업을 계속하셔도 됩니다" — no page-blocking modal, since this is a background job
-- **done**: an amber "추정치 — 검증 필요" banner with the price-snapshot timestamp, then the generated `report.md` rendered through the same `MarkdownRenderer` every other markdown surface uses, with `sim://chart_N` rewritten to each chart's presigned URL before render (same rewrite-before-render shape as `resolveAttachmentUrls`) — charts inherit `ZoomPanViewport` for free through `MermaidBlock`'s sibling markdown image handling
-- **error**: `errorMessage` + "다시 시도" (re-runs extraction)
-
-No dedicated color token — reuses the existing primary/amber/red palette (amber = "needs verification" banner, red = error text), consistent with the rest of the meeting detail page.
-
-### 2.17 Account Picker (select-based, with loading/error states)
-
-프로젝트 상세 페이지(`ProjectDetailClient.tsx`)의 "계정 연결" 컨트롤. 이전에는
-사용자가 직접 계정 UUID를 입력해야 하는 텍스트 입력창이었으나(선택할 방법이
-없어 실질적으로 사용 불가), `accountApi.list()`로 가져온 접근 가능한 전체
-계정 목록을 이름 기준(한국어 로케일)으로 정렬해 보여주는 `<select>`로 대체.
-이미 연결된 계정은 옵션에서 제외한다. 로딩/에러 상태를 명시적으로 분리해,
-목록을 가져오는 fetch가 실패한 경우와 "실제로 계정이 0개인 경우"를 사용자가
-구분할 수 있게 하고(실패 시 다시 시도 버튼 제공), fetch가 아직 완료되지 않은
-로딩 구간을 "선택 가능한 계정 없음"으로 잘못 표시하지 않는다. `AccountsClient`의
-계정 목록도 동일하게 이름 기준 정렬을 적용한다. UI 문자열은 이 앱의 나머지
-전체와 마찬가지로 한국어(원래 구현에 남아있던 영어 문자열은 이 변경으로 정리).
-
-```html
-<!-- Loading -->
-<p class="pt-2 text-sm text-slate-400 dark:text-text-muted">계정 목록을 불러오는 중…</p>
-
-<!-- Error -->
-<div class="flex items-center gap-2 pt-2 text-sm text-red-500">
-  <span>계정 목록을 불러오지 못했습니다.</span>
-  <button class="font-semibold hover:underline">다시 시도</button>
-</div>
-
-<!-- Loaded: select + submit, same input/button styling as other project forms -->
-<form class="flex gap-2 pt-2">
-  <select class="flex-1 min-w-0 px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest text-sm">
-    <option disabled>계정 선택…</option>
-    <option>Acme Corp</option>
-    <option>Globex</option>
-  </select>
-  <button class="px-3 py-2 rounded-lg bg-primary hover:bg-primary-hover text-white text-sm disabled:opacity-50">
-    연결
-  </button>
-</form>
-```
-
-### 2.18 Account Detail — Members Panel (`AccountDetailClient.tsx`, ADR-034)
-
-Account 상세 페이지의 Members 섹션. 로그인한 사용자와 각 행의 관계에 따라
-행마다 다른 컨트롤을 보여준다 — owner 여부가 아니라 "이 account의 멤버인지"가
-역할 select 노출의 기준이고(ADR-034: 추가/역할변경은 owner 전용에서 멤버
-전체로 개방), 삭제 버튼만 owner에게 한정된다. 세 가지 행 상태:
-
-- **owner 행**: 이름/이메일 뒤에 정적 `owner` pill만 표시, 컨트롤 없음 — owner
-  자신의 역할은 이 화면에서 절대 바뀌지 않는다.
-- **일반 멤버 행 (열람자가 이 account의 멤버일 때)**: 역할 `<select>`가 항상
-  노출(멤버라면 누구나 다른 멤버의 역할을 바꿀 수 있음). 삭제(❌) 아이콘
-  버튼은 열람자가 owner일 때만 같은 줄에 추가로 노출 — owner가 아니면 select만
-  보이고 삭제 버튼 자체가 렌더링되지 않는다(비활성화가 아니라 부재).
-- **일반 멤버 행 (열람자가 이 account의 멤버가 아닐 때)**: 정적 role pill만
-  표시 — 이 케이스는 사실상 발생하지 않는다(멤버가 아니면 `GetAccount` 자체가
-  403을 내므로 페이지에 도달할 수 없다는 뜻이지만, 컴포넌트 레벨에서도
-  fail-closed로 방어).
-
-멤버 추가 컨트롤(`MemberPicker` + 역할 select)도 같은 기준으로 노출된다 —
-owner 전용이 아니라 "열람자가 이 account의 멤버인가". 추가한 이메일이 아직
-로그인하지 않은 초대 상태(Cognito 계정은 있지만 첫 로그인 전)면 추가 직후
-amber 배너가 뜬다 — "OO님은 아직 초대를 수락하지 않았습니다. 로그인하면
-자동으로 계정에 추가됩니다." + "취소" 링크(해당 큐를 즉시 취소, 이 취소만은
-owner 전용 API를 호출한다). 이 배너는 `error` 배너(빨강)와 별도 상태로,
-실패가 아니라 "성공했지만 아직 확정되지 않음"이라는 정보성 메시지임을
-색으로도 구분한다.
-
-```html
-<!-- Pending-invite notice (amber, informational -- not an error) -->
-<div class="bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400 text-sm rounded-lg p-3 mb-4 flex items-center justify-between gap-3">
-  <span>tam@example.com님은 아직 초대를 수락하지 않았습니다. 로그인하면 자동으로 계정에 추가됩니다.</span>
-  <button class="shrink-0 font-semibold underline hover:no-underline">취소</button>
-</div>
-
-<!-- Member row: owner (no controls) -->
-<div class="flex items-center justify-between text-sm gap-2">
-  <span class="text-slate-700 dark:text-text-secondary truncate">owner@example.com</span>
-  <span class="text-xs font-semibold px-2 py-1 rounded-full bg-primary/10 text-primary shrink-0">owner</span>
-</div>
-
-<!-- Member row: viewer is a member -- role select always shown, remove button only if viewer is owner -->
-<div class="flex items-center justify-between text-sm gap-2">
-  <span class="text-slate-700 dark:text-text-secondary truncate">tam@example.com</span>
-  <div class="flex items-center gap-1 shrink-0">
-    <select class="text-xs px-2 py-1 rounded-full border border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest text-primary font-semibold">
-      <option>TAM</option>
-    </select>
-    <!-- present only when the viewer is the owner -->
-    <button class="text-slate-400 hover:text-red-500" title="Remove member">
-      <span class="material-symbols-outlined text-lg">close</span>
-    </button>
-  </div>
-</div>
-
-<!-- Add-member row: shown to any member, not just owner -->
-<div class="flex gap-2 pt-2">
-  <div class="flex-1"><!-- MemberPicker: search input --></div>
-  <select class="px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest text-sm h-fit">
-    <option>SSA</option>
-  </select>
-</div>
-```
-
-**참고**: Account 목록과 계층 편집은 §2.20에서 다룬다. 이 항목은 Members
-패널만 다루며, Project 페이지 전체의 문서화는 별도 후속 작업이다.
-
-### 2.19 Meeting List — Account Filter
-
-홈 미팅 목록(`page.tsx`, `MeetingList.tsx`)은 탭/정렬/태그 컨트롤 옆에
-**어카운트** 레이블의 다중 선택 체크박스 트리를 표시한다. 아무것도 선택하지
-않으면 **전체 어카운트**다. `accountApi.list()`의 접근 가능한 어카운트를
-상위/하위 관계와 한국어 이름 순으로 보여주며, 그룹을 접고 펼치거나 이름으로
-검색할 수 있다. 컨트롤과 선택 칩은 모바일에서 여러 줄로 감싼다.
-
-- 체크한 어카운트는 OR로 묶인 서버 필터(`GET /api/meetings?accountIds=…`)다.
-  그룹을 체크하면 접근 가능한 하위 어카운트까지 선택하며, 일부만 선택된
-  그룹에는 중간 선택 상태를 표시한다. 펼친 선택 ID는 최대 100개다.
-- 선택은 `토스증권 ×` 같은 해제 가능한 칩으로 표시한다. 완전히 선택된
-  하위 트리는 그룹 칩으로 묶을 수 있으며, 칩 해제는 그 칩이 나타내는
-  선택 범위를 해제한다. 일부 하위만 선택한 그룹의 직접 연결 미팅은
-  `(직접)` 표기로 전체 그룹 선택과 구분한다.
-- 전체 해제 시 `accountIds`를 생략한다. 기존 태그(OR), 검색, Recent의 최근
-  7일 필터는 받은 목록에 함께 적용한다. 탭과 선택 ID는 부모가 관리한다.
-- 어카운트를 바꾸면 목록과 커서를 초기화하고 첫 페이지를 다시 요청한다.
-  탭 전환/Load More에도 선택을 유지한다. Recent는 All Notes의 데이터를
-  사용하므로 Shared에서 Recent로 이동하면 `all` 데이터를 다시 요청한다.
-- 새 어카운트/탭 요청은 이전 요청을 취소하고 늦게 도착한 응답과 로딩 상태
-  갱신을 무시한다. Load More는 요청 중 비활성화하며, 페이지를 합칠 때
-  `meetingId`로 중복 공유 미팅을 제거한다.
-- **어카운트 해제**는 어카운트만 전체로 되돌린다. 태그/검색/정렬은 유지하며,
-  활성 태그는 새 목록에 해당 태그가 없어도 해제할 수 있도록 남긴다.
-  미팅을 불러오는 동안에도 필터 컨트롤은 계속 표시한다.
-- 어카운트 목록은 미팅과 독립적으로 불러온다. 로딩 문구, 실패 시 **다시
-  시도**, 성공했지만 목록이 없는 경우의 안내를 구분한다. 어카운트 조회가
-  실패해도 미팅 목록과 나머지 필터는 사용할 수 있다.
-- 표시할 미팅이 없어도 `nextCursor`가 남으면 **아직 표시할 미팅이 없습니다**
-  및 Load More 안내를 표시한다. 빈 공유 페이지를 최종 빈 결과로 취급하지
-  않는다. 커서가 없는 경우에만 조건에 맞는 미팅이 없다는 메시지와
-  어카운트/태그/검색어 각각의 해제 동작을 제공한다.
-- 미팅 조회 실패는 빈 결과 대신 오류와 재시도 버튼으로 표시한다. 추가
-  페이지 조회 실패 시 이미 받은 미팅과 커서는 유지한다.
-- `All Notes`와 `Shared`에는 현재 팀에 게시된 미팅도 포함된다.
-  공유 이후 합류한 팀원도 기존 팀 공유 미팅을 자동으로 볼 수 있으며,
-  선택한 어카운트/태그/검색 조건이 동일하게 적용된다. 단순히 어카운트에
-  연결한 비공개 미팅은 포함하지 않는다. 본인 미팅/개인별 공유 조회가 끝나면
-  남은 페이지 공간부터 팀 상속 미팅을 채우고, 이후에도 같은 Load More로
-  페이지 단위 조회를 이어간다.
-
-### 2.20 Accounts — Hierarchy and Parent Editor
-
-- 어카운트 목록은 `토스 → 토스증권·코어·비바리퍼블리카`,
-  `하나금융그룹 → 하나은행`처럼 들여쓰기와 펼침 버튼이 있는 트리로 표시한다.
-  각 행의 기존 역할 배지와 상세 페이지 링크를 유지한다.
-- 생성 폼에서 **상위 어카운트**를 선택할 수 있으며 기본값은 **없음**이다.
-  기존 어카운트는 자동 이동하지 않고 루트에 남는다.
-- 상세 페이지에는 계층 위치를 표시한다. 소유자는 상위 어카운트를
-  선택·변경하거나 **없음**으로 바꾸어 루트로 이동할 수 있다.
-- 부모 선택에는 자신과 이미 알려진 하위 어카운트를 제외한다. 서버가
-  소유권, 부모 멤버십, 순환 관계와 동시 변경을 다시 검증한다.
-- 부모가 접근 가능한 목록에 없으면 해당 노드를 사용자 트리의 루트로
-  보여주며 접근 불가 부모의 이름을 추가 조회하지 않는다.
-- 계층 이동으로 멤버나 콘텐츠 접근 권한이 자동 상속되지 않는다.
-  저장 중 중복 요청을 막고 실패를 표시하며, 성공 후 계층을 새로 읽는다.
-
-## 3. Interaction Patterns
-
-### 3.1 Hover States
-- Cards: `hover:border-primary/30` (mobile), `hover:shadow-xl hover:shadow-primary/5` (PC)
-- Card title: `group-hover:text-primary` (PC only)
-- Buttons: `hover:bg-primary/90`, `hover:scale-105`
-- Nav items: `hover:bg-slate-50` (sidebar), `hover:text-primary` (icons)
-- Image gallery: overlay with action buttons on hover
-
-### 3.2 Active/Selected States
-- Nav: `bg-primary/10 text-primary font-semibold` + `border-b-2 border-primary` (tabs)
-- Buttons: `active:scale-95`
-- Checkbox: `text-primary focus:ring-primary` (PC), `text-slate-900` (mobile)
-
-### 3.3 Transitions
-- `transition-colors` for color changes
-- `transition-all` for multi-property
-- `transition-transform` for scale
-- `transition-opacity` for fade
-
-### 3.4 Animations
-- Recording pulse: `animate-pulse` on outer ring
-- Recording waveform: varying height bars
-- Live transcription dots: `animate-bounce` with staggered delays
-- No other heavy animations
-
-### 3.5 Diagram Zoom/Pan (`ZoomPanViewport`, `DiagramLightbox`)
-- Plain wheel scroll always scrolls the page; only `Ctrl`/`⌘`+wheel zooms (0.25×–8×) — a diagram must never trap normal page scroll while reading a note
-- One-finger drag / pointer drag pans; two-finger pinch zooms (`touch-action: none` applied only once zoomed past 1× — the default scale still scrolls normally on touch)
-- Zoom controls (`zoom_in`/`zoom_out`/`fit_screen`/`fullscreen`) fade in on hover (desktop) or stay visible (touch, `group-focus-within`)
-- Fullscreen opens `DiagramLightbox`, reusing `AttachmentGallery`'s image-modal visual language (`fixed inset-0 z-50 bg-black/80 backdrop-blur-sm`, backdrop-click or `Esc` to close, top-right close button) rather than a new one
-- Applied to every mermaid diagram via `MermaidBlock` — since `MarkdownRenderer` is the single markdown surface, this covers meeting notes, live summary, docs, insights, and research uniformly
-- The markdown surface (`MermaidBlock`, `CodeBlock`/`InlineCode`, `DataTable`, `DiagramLightbox`) is theme-aware, not dark-only, split by whether JS needs to know the theme: `MermaidBlock` and `CodeBlock` (the two that pick a *value* per theme — mermaid's `themeVariables`, shiki's grammar theme name — not just a CSS class) read `useTheme()` (`src/hooks/useTheme.ts`, tracks `<html>`'s `.dark` class via `MutationObserver` since the sidebar's toggle emits no event) and re-render on theme change — mermaid re-initializes with a light/dark `themeVariables` pair mirroring `globals.css`'s tokens, shiki switches between `github-dark-default`/`github-light-default`. `InlineCode`, `DataTable`, and `DiagramLightbox` need no JS-side theme value at all — plain CSS `dark:` variants suffice — and use the same `border-slate-200 dark:border-white/[…]` pairing `MarkdownRenderer` already used elsewhere in this file
-
-## 4. Icon Mapping
-
-| Purpose | Material Symbol | Used In |
-|---------|----------------|-----------|
-| Home | home | Mobile bottom nav |
-| Meetings | videocam / video_camera_front | Sidebar |
-| Record | mic | Mobile bottom nav |
-| Files | description / folder_open | Navigation |
-| Settings | settings | Navigation |
-| Profile | person / account_circle | Navigation |
-| Search | search | Search bar |
-| Calendar | calendar_today / calendar_month | Date display |
-| Add | add / add_circle | FAB, new meeting |
-| Back | arrow_back | Mobile header |
-| More | more_horiz | Card menu |
-| AI | auto_awesome | AI Summary |
-| Check | check_circle | Action items |
-| Pause | pause | Recording controls |
-| Stop | stop | Recording controls |
-| Camera | add_a_photo | Capture during recording |
-| Transcribe | translate | Live transcription |
-| Attachment | attachment | Attached files |
-| Notes | notes | Transcript |
-| Play | play_arrow | Audio player |
-| Download | download | Export |
-| Notifications | notifications | Header |
-| Share | share | Share button |
-| Compare | compare | Image comparison |
-| Upload | upload_file | File upload |
-| Team | group | Sidebar |
-| Project (SFDC Oppty) | work | Sidebar (excluded from mobile bottom nav — limited to 4-5 items, §2.1) |
-| Insights | analytics / insights | Sidebar |
-| Translation | translate | Real-time translation |
-| Q&A | question_answer | Meeting Q&A |
-| Knowledge Base | library_books | KB management |
-| Export | file_download | Export menu |
-| API Key | vpn_key | Integration settings |
-| Obsidian | link | Obsidian export |
-| Extensions | extension | Integrations |
-| WiFi | wifi | Online mode |
-| Lightning | bolt | Real-time mode |
-| PDF | picture_as_pdf | PDF export |
-| Code | code | Markdown export |
-| Note | note_alt | Notion export |
-| Help | help | Q&A question |
-| Send | send | Q&A send button |
-| Delete | delete | Delete KB file |
-| Cloud | cloud | External service |
-| Zoom in | zoom_in | Diagram zoom/pan controls (`ZoomPanViewport`) |
-| Zoom out | zoom_out | Diagram zoom/pan controls |
-| Fit to screen | fit_screen | Diagram zoom/pan reset |
-| Fullscreen | fullscreen | Diagram lightbox (`DiagramLightbox`) |
-| Cost simulator | query_stats | Cost/sizing simulator card (`SimCard`, ADR-033) |
+# UI reference
+
+Describe implemented UI, not the historical HTML mockups. Source components and
+`frontend/src/app/globals.css` own exact markup/tokens; this guide keeps behavioral
+constraints and navigation without duplicating entire JSX examples.
+
+## Design system
+
+Tailwind 4 uses `@custom-variant dark` with the `.dark` class, not OS preference
+alone. CSS tokens share names across themes and are exposed through `@theme inline`.
+
+| Token | Light | Dark |
+|---|---|---|
+| primary | #3211d4 | #8b85f7 |
+| accent | #7c3aed | #a78bfa |
+| surface-lowest | #ffffff | #101014 |
+| surface | #f8fafc | #131318 |
+| surface-container | #f1f5f9 | #1c1c22 |
+| text-main | #0f172a | #e7e7ec |
+| text-secondary | #64748b | #b3b8c2 |
+
+Background-light/background-dark remain separate tokens. Material Symbols
+Outlined supply icons. Legacy glass/glow/neon class names remain compatibility
+hooks with flat/no-glow styling; their presence is not a request to restore neon.
+Typography and component dimensions come from CSS/layout components, not DESIGN.md.
+
+`useTheme` owns interactive theme toggling and watches the root class. Its fixed
+initial dark value matches static prerendering; mount-time synchronization is
+intentional hydration handling. `layout.tsx` applies the pre-hydration preference.
+Mermaid/Shiki consume JS theme values through the hook; keep Mermaid's explicit
+light/dark palettes aligned when changing CSS tokens. Purely styled components
+use CSS variants.
+
+## Screens and components
+
+| Area | Current responsibilities / code pointers |
+|---|---|
+| Authentication | auth/LoginForm, ForgotPasswordForm, AuthProvider: login, NEW_PASSWORD_REQUIRED, reset; no self-signup |
+| App layout | layout/Sidebar, MobileNav, DesktopHeader, AppLayout: responsive navigation, theme and active route |
+| Meeting list | MeetingList: owned/shared/team streams, search, account selection and opaque pagination |
+| Recording | RecordButton, app/record/page, useRecordingSession, usePostRecording, PostRecordingBanner |
+| Meeting detail | MeetingDetailClient, meeting/ components: note, actions, transcript, attachments, account/project links |
+| Markdown | MarkdownRenderer, MermaidBlock, CodeBlock, DataTable, DiagramLightbox |
+| Documents | Personal document hub, editor/preview, share dialogs and public document viewer |
+| Accounts | AccountsClient, AccountDetailClient: hierarchy, member management, meetings/research/documents |
+| Projects | Project views: explicit members, linked accounts/meetings/research and computed insights |
+| QA/research | LiveQAPanel and research views: suggestions, streaming, citations, follow-ups |
+| Simulator | SimCard: extract, confirm/edit, compare options, poll result |
+| Settings | Integration settings, dictionary/domain administration, admin user management |
+
+Resolve exact paths under `frontend/src/` rather than treating this table as an
+exhaustive file inventory. New static pages need the CloudFront knownPages mapping.
+
+## Recording and recovery
+
+Browser modes use microphone/tab MediaStreams; the macOS system-audio mode uses
+native recording and PCM events. Finished native WAVs remain on disk and upload
+through Rust. `usePostRecording` accepts a tagged native-path/browser-Blob payload.
+Never load a finished native recording into the WebView just to upload it.
+
+Capture/processing state and upload failures remain visible through the post-record
+banner; a failed upload must remain retryable. Progress timeouts measure 60 seconds
+without progress, not total file-transfer duration. Delete native temporary files
+only after upload-complete succeeds.
+
+Browser stop releases tracks and closes AudioContext. Mobile caption failure must
+not stop recording. Wake-lock/reconnect/watchdog mitigation is implemented, with
+manual gesture-backed recovery when automatic resume fails. Call resumeAudio and
+manualStallRecovery synchronously inside the gesture before awaiting anything.
+
+Crash-leftover native WAVs are not Cognito-scoped. Show the existing caveat and
+require per-file confirmation for upload/delete; retain the 48-hour cleanup policy.
+This confirmation is a mitigation, not an ownership binding (ADR-024).
+
+## Accounts, filters and sharing
+
+Render accessible accounts as a collapsible hierarchy. An inaccessible parent
+makes a visible child a display root; do not fetch the hidden parent's name.
+Creation can select a parent. Only the child owner sees the parent editor; server
+validation still enforces parent membership, cycles and concurrent ancestry changes.
+Exclude self/known descendants from the picker and show save errors.
+
+Meeting account selection supports multiple IDs. Expand selected visible groups
+client-side and retain normalized selection across pagination; reset cursor on
+change. Empty pages with nextCursor can still have later matches. Hierarchy and
+classification never grant access to private content (ADR-036).
+
+All current account members may add members/change assignable roles. Nobody can
+assign owner. Removal/pending-invite revocation stay owner-only (ADR-034). UI
+visibility is not the authorization boundary.
+
+Account document sharing creates a copy. Email sharing is a read-only reference,
+with no permission toggle. A public link is separately revocable. previewUrl is
+for converted PDF; downloadUrl remains the original file. Do not combine these
+flows into one ambiguous share model.
+
+## Reading and editing
+
+Saved notes and generated content are separate. Respect active A/B transcript
+selection and source freshness when editing/displaying diarized segments. Explain
+processing/error states instead of hiding them behind a permanent spinner.
+Speaker-name edits retain entered values and show inline save errors, including
+409 concurrent changes. Saved notes are reference input, not proof of spoken
+statements or agreed tasks; note-only evidence must not receive transcript links.
+
+The action-item card distinguishes unknown legacy state, queued/running analysis,
+failure and success. Only successful empty analysis means no tasks. Pending/failed
+analysis retains earlier items. Editors can retry for a done meeting with a saved
+summary and persist completion checkboxes; readers have no write controls.
+Failures remain visible. One timer covers the one-minute summary-to-analysis
+handoff and subsequent pending work even when the meeting is already done.
+Manual refresh recovers failed status reads; changing meetings cancels stale
+requests, and older polls cannot overwrite a completion save.
+
+Markdown surfaces sanitize rendered content and use consistent code/table/diagram
+components. Diagram wheel scrolling normally scrolls the page; Ctrl/Command-wheel
+zooms. Preserve touch scrolling at default scale, bounded zoom/pan and Escape/backdrop
+close behavior in the lightbox. Inspect ZoomPanViewport for exact gestures/limits.
+
+QA suggestions can trigger external search only under the existing manual or
+opt-in proactive flows; the proactive toggle does not disable search for manual
+questions. Show citation/source coverage and errors. Simulator execution begins
+only after user confirmation, with server-side validation and a polled status.
+
+## Search status and source details
+
+DocDetailClient shows IndexStatus for personal/account documents. Unsaved changes
+override any indexed badge. Pending status polls at five-second intervals for at
+most 12 checks, then offers explicit refresh; unavailable/failed status never means
+indexed. Deploy the index-status API before this UI. A status route or badge does
+not mean canonical indexing has been activated: the app still selects manual-only
+bootstrap.
+
+REST, WebSocket, chat and QA components preserve optional `sourceDetails`, with
+legacy `sources` fallback. Display human titles and caveats for partial evidence,
+pending files and retained previous results. Derive existing-app links only from
+validated canonical identities;
+internal storage/partition keys are not display titles or navigable source links.
+Document page/slide/paragraph positions are not meeting audio timestamps.
+
+Structured source rendering is ready, but the strict QA handler wiring remains
+staged. Additive attachment-text/resummary API types do not establish registered
+backend routes or shipped controls. See the
+[API contract](API-SPEC.md) and [QA source contract](../backend/python/qa/SOURCE_CONTRACT.md).
+
+## Verification
+
+Run frontend lint/build for code changes and targeted browser checks for affected
+interactions. Check light/dark, mobile/desktop, keyboard access, loading/empty/error,
+permission differences and recovery paths where applicable. No frontend unit-test
+framework exists. Documentation changes alone do not require a frontend rebuild.
