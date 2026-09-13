@@ -201,18 +201,11 @@ class IntegrityTests(unittest.TestCase):
     def test_stored_and_delivered_specialist_diff_bytes_match(self):
         for tag in ("codex", "kiro-fable"):
             with self.subTest(tag=tag):
-                def reply(command, *unused):
-                    response = self.response(tag)
-                    if tag == "codex":
-                        Path(command[command.index("--output-last-message") + 1]).write_text(response)
-                        response = "\n".join(json.dumps(event) for event in (
-                            {"type": "turn.started"},
-                            {"type": "item.completed", "item": {"type": "agent_message", "text": response}},
-                            {"type": "turn.completed"},
-                        ))
-                    return 0, response, ""
                 with patch.object(run_role, "preflight", return_value=(True, 0, "")):
-                    with patch.object(run_role, "execute", side_effect=reply) as execute:
+                    response = self.response(tag)
+                    invoke = (self.codex_execute([(0, self.codex_events(response), "", response)])
+                              if tag == "codex" else lambda *args: (0, response, ""))
+                    with patch.object(run_role, "execute", side_effect=invoke) as execute:
                         run_role.run(self.work, tag)
                 delivered = execute.call_args.args[3] if tag == "codex" else execute.call_args.args[0][2]
                 self.assertIn(self.raw.encode(), delivered.encode())
