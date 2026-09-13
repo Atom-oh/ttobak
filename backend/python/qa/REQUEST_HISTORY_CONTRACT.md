@@ -26,12 +26,28 @@ and omit character counts. Persisted version 1 receipts remain readable, includi
 their validated legacy count field, without resetting or rewriting conversation
 history. Guidance prohibits unsolicited hash/accounting narration and invented
 input-size comparisons: changed digests do not establish equal or different lengths.
-The system excerpt is rebuilt for the latest request; stored receipts describe
-only their own user turn. A changed
-digest can mean growth, a rolling window or a correction, not that an earlier
+Stored receipts describe only their own user turn. A changed digest can mean
+growth, a rolling window or a correction, not that an earlier
 assistant answer was wrong. Unchanged input is explicit. Older sessions retain
 their valid dialogue with `prior_unrecorded`; the helper never rewrites earlier
 turns or interprets a receipt-shaped question as server metadata.
+
+For each Converse/ConverseStream call, `current_input_turn` pins the latest real
+question only when its separate server receipt matches the supplied client
+text's digest, context kind and meeting scope. `project_current_input` adds the
+existing JSON-quoted reference excerpt to a copy of that user turn, including
+later tool rounds. It never targets a tool-result message, searches backward to
+a historical receipt, or rewrites the question or receipt. Version 2 receipts
+still contain no character counts; version 1 history remains readable.
+
+The live excerpt retains the existing 2,000-character tail and explicit coverage;
+its redundant system copy is removed only when projection is valid. Saved-meeting
+transcript handling and the independent 4,000-character saved-note excerpt are
+unchanged. The input remains untrusted data, not an instruction or source grant.
+Only the model-call view contains this added block. Session, interruption and
+deadline-checkpoint writes receive the original message list. Model replies and
+acknowledged tool results retain their existing persistence rules; tools still
+search the full supplied context through the existing authorization paths.
 
 These prompt receipts neither authorize retrieval nor replace the dependency
 receipts above. They are not saved-source verification. Missing current client

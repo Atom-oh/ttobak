@@ -152,8 +152,11 @@ class TestRuntimeToolHistory(_QAConversationFixture, unittest.TestCase):
                     self.assertTrue(stored['sourceReplayable'])
                     self.ask(transport, 'follow up', meeting_id='m', context=latest)
                     self.assertIn('PRIVATE_CHOICE', json.dumps(model.call_args.kwargs['messages']))
-                    system = json.dumps(model.call_args.kwargs['system'], ensure_ascii=False)
-                    self.assertIn(latest[-100:], system)
+                    request = model.call_args.kwargs
+                    system = json.dumps(request['system'], ensure_ascii=False)
+                    live = json.loads(request['messages'][-1]['content'][-1]['text'].rsplit('\n', 1)[1])
+                    self.assertEqual(live['text'], latest[-2000:])
+                    self.assertNotIn(latest[-100:], system)
                     self.assertIn('client_live', system)
                     self.assertIn('SAVED_NOTE', system)
                     self.assertNotIn('SERVER_TRANSCRIPT', system)
@@ -203,7 +206,9 @@ class TestRuntimeToolHistory(_QAConversationFixture, unittest.TestCase):
                 request = model.call_args.kwargs
                 system = '\n'.join(block['text'] for block in request['system'])
                 dialogue = json.dumps(request['messages'])
-                self.assertIn('LIVE_CORRECTED_LOCAL', system)
+                live = json.loads(request['messages'][-1]['content'][-1]['text'].rsplit('\n', 1)[1])
+                self.assertEqual(live['text'], 'LIVE_CORRECTED_LOCAL')
+                self.assertNotIn('LIVE_CORRECTED_LOCAL', system)
                 self.assertIn('CURRENT_SAVED_NOTE', system)
                 self.assertNotIn('LIVE_DRAFT_LOCAL', system)
                 # Keep real prior dialogue/labels. Erasing it would mask the

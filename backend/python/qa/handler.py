@@ -10,7 +10,10 @@ import boto3
 from botocore.config import Config
 from async_jobs import QAJobs, JobError, JobDeadline, MutationGuard, deadline as job_deadline, API_SECONDS, RUN_SECONDS, INPUT_LIMIT
 from deadline_history import DeadlineHistory
-from current_input import GUIDANCE as CURRENT_INPUT_GUIDANCE, request_user_message
+from current_input import (
+    GUIDANCE as CURRENT_INPUT_GUIDANCE, request_user_message,
+    current_input_turn, project_current_input,
+)
 from delivery_proof import validate_delivery
 
 from aws_docs import search_aws_docs
@@ -1098,6 +1101,22 @@ def _qa_system_messages(transcript, meeting_notes=None, meeting_id=None):
     return messages
 
 
+def _qa_model_input(messages, transcript, meeting_notes, meeting_id, source_state):
+    """Move only verified current client input to an ephemeral user-turn view."""
+    system = _qa_system_messages(transcript, meeting_notes, meeting_id)
+    input_turn, input_excerpt = None, None
+    if source_state.get('clientInputReceived') is True:
+        input_turn = current_input_turn(messages, transcript, meeting_id)
+        if input_turn is not None:
+            # The existing builder owns the 2,000-character tail, coverage and
+            # JSON quoting. Keep saved notes and saved-meeting context unchanged.
+            input_excerpt = system.pop(1)
+        system.append({'text': CLIENT_LIVE_NOTE})
+    if source_state.get('attachmentContext'):
+        system.append({'text': _attachment_prompt(source_state['attachmentContext'])})
+    return system, input_turn, input_excerpt
+
+
 def _qa_search_context(transcript, meeting_notes):
     """Tools search the full supplied text, not the bounded system excerpts."""
     parts = []
@@ -1173,11 +1192,8 @@ def _agentic_converse(messages, transcript, session_id, user_id, meeting_notes, 
                          source_details=source_details)
         raise JobError('QA_MODEL_INCOMPLETE', 'QA did not complete. Check previous tool results before retrying.', 502)
 
-    system_messages = _qa_system_messages(transcript, meeting_notes, meeting_id)
-    if source_state.get('clientInputReceived'):
-        system_messages.append({'text': CLIENT_LIVE_NOTE})
-    if source_state.get('attachmentContext'):
-        system_messages.append({'text': _attachment_prompt(source_state['attachmentContext'])})
+    system_messages, input_turn, input_excerpt = _qa_model_input(
+        messages, transcript, meeting_notes, meeting_id, source_state)
 
     for _ in range(MAX_TOOL_ROUNDS):
         _validate_answer_sources(user_id, source_state, context['tool_history'])
@@ -1185,7 +1201,7 @@ def _agentic_converse(messages, transcript, session_id, user_id, meeting_notes, 
             resp = (model_client if model_client is not None else bedrock_runtime).converse(
                 modelId=BEDROCK_MODEL_ID,
                 system=system_messages,
-                messages=messages,
+                messages=project_current_input(messages, input_turn, input_excerpt),
                 toolConfig={"tools": TOOL_DEFINITIONS},
                 inferenceConfig={"maxTokens": 4096},
             )
@@ -1284,8 +1300,8 @@ def handle_ask(question, context=None, meeting_id=None, session_id=None, user_id
         # Load existing conversation or start new
         messages = load_session(session_id, user_id=user_id, source_state=source_state, source_details=source_details)
 
-        # Context bytes stay in the bounded system prompt; record which input
-        # accompanied this question so later turns cannot backdate a new draft.
+        # Persist only the receipt. The model-call view adds a bounded current
+        # input excerpt without copying rolling transcript bytes into history.
         messages.append(request_user_message(
             question, messages, context, meeting_id,
             client_input_received=source_state.get('clientInputReceived', False)))
@@ -1709,11 +1725,8 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
     finished = False
     client_gone = False
 
-    system_messages = _qa_system_messages(transcript, meeting_notes, meeting_id)
-    if source_state.get('clientInputReceived'):
-        system_messages.append({'text': CLIENT_LIVE_NOTE})
-    if source_state.get('attachmentContext'):
-        system_messages.append({'text': _attachment_prompt(source_state['attachmentContext'])})
+    system_messages, input_turn, input_excerpt = _qa_model_input(
+        messages, transcript, meeting_notes, meeting_id, source_state)
 
     def fail_stream(code):
         # Retain completed tool receipts, but never append an empty/partial model
@@ -1737,7 +1750,7 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
             stream_resp = bedrock_runtime.converse_stream(
                 modelId=BEDROCK_MODEL_ID,
                 system=system_messages,
-                messages=messages,
+                messages=project_current_input(messages, input_turn, input_excerpt),
                 toolConfig={"tools": TOOL_DEFINITIONS},
                 inferenceConfig={"maxTokens": 4096},
             )
