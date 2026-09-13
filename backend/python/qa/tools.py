@@ -14,13 +14,16 @@ TOOL_DEFINITIONS = [
     {
         "toolSpec": {
             "name": "search_knowledge_base",
-            "description": "Search current authorized meetings, personal/account documents, and indexed files. Saved text is hydrated live; file excerpts require current source provenance. When the user names exact original binary KB keys, pass source_keys: filenames alone are not semantic content queries.",
+            "description": "Search current authorized meetings, personal/account documents, and indexed files. Use resource_ids for exact meeting or DocHub document IDs. Use source_keys only for original manual/shared binary KB keys, never for document IDs or canonical snapshot paths. Saved text is hydrated live; file excerpts require current source provenance.",
             "inputSchema": {
                 "json": {
                     "type": "object",
                     "properties": {
                         "query": {"type": "string", "description": "Search query"},
                         "numberOfResults": {"type": "integer", "description": "Number of results (1-10), at least the number of selected sources", "default": 5},
+                        "resource_ids": {"type": "array", "minItems": 1, "maxItems": 5,
+                                         "items": {"type": "string"},
+                                         "description": "Optional exact meeting or personal/account DocHub document IDs. Current access is checked before reading. Do not combine with source_keys. Use this for named file-backed documents; these IDs are not S3 keys."},
                         "source_keys": {"type": "array", "minItems": 1, "maxItems": 5,
                                         "items": {"type": "string"},
                                         "description": "Optional exact original binary keys under kb/<current-user>/ or shared/. Do not use snapshot keys or another user's private keys. Current authorized versions are read regardless of filename similarity; use get_legacy_text_detail for legacy text files."}
@@ -213,9 +216,15 @@ def execute_tool(tool_name, tool_input, context):
             )
             return format_web_results(results, error)
         elif tool_name == "search_knowledge_base":
+            if 'source_keys' in tool_input and 'resource_ids' in tool_input:
+                raise ValueError('Choose resource_ids or source_keys, not both')
             if 'source_keys' in tool_input and type(tool_input['source_keys']) is not list:
                 raise ValueError('source_keys must be a list of original binary keys')
+            if 'resource_ids' in tool_input and type(tool_input['resource_ids']) is not list:
+                raise ValueError('resource_ids must be a list of canonical IDs')
             selection = {'source_keys': tool_input['source_keys']} if 'source_keys' in tool_input else {}
+            if 'resource_ids' in tool_input:
+                selection['resource_ids'] = tool_input['resource_ids']
             results = context["retrieve_from_kb"](
                 tool_input["query"],
                 tool_input.get("numberOfResults", 5),
