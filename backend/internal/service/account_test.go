@@ -192,6 +192,15 @@ func (m *mockAccountRepo) GetMeetingByID(_ context.Context, meetingID string) (*
 	return &cp, nil
 }
 
+func (m *mockAccountRepo) GetMeetingPublication(_ context.Context, ownerID, meetingID string) (*model.Meeting, error) {
+	meeting := m.meetings[meetingID]
+	if meeting == nil || meeting.UserID != ownerID {
+		return nil, nil
+	}
+	cp := *meeting
+	return &cp, nil
+}
+
 func acctShareKey(sharedToID, meetingID string) string { return sharedToID + "|" + meetingID }
 
 func memberKey(accountID, userID string) string { return accountID + "|" + userID }
@@ -1399,9 +1408,7 @@ func TestListAccountMeetings_MemberOnly(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := newAccountServiceWithRepo(repo)
 	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
-	repo.meetingRefs[acc.AccountID] = []model.MeetingRef{
-		{AccountID: acc.AccountID, MeetingID: "m-1", OwnerUserID: "owner-1", Title: "ROSA"},
-	}
+	seedPublishedAccountMeeting(repo, acc.AccountID, time.Date(2026, 5, 12, 9, 0, 0, 0, time.UTC))
 
 	list, err := svc.ListAccountMeetings(context.Background(), "owner-1", acc.AccountID)
 	if err != nil {
@@ -1513,16 +1520,19 @@ func TestListAccountInsights_FilterByType(t *testing.T) {
 	svc := newAccountServiceWithRepo(repo)
 	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
 	d := time.Date(2026, 5, 12, 9, 0, 0, 0, time.UTC)
+	seedPublishedAccountMeeting(repo, acc.AccountID, d)
 	repo.insightsByAccount[acc.AccountID] = []model.AccountInsight{
-		{AccountID: acc.AccountID, Type: model.InsightRisk, Text: "지연", Evidence: "일정 미확정", Implication: "오픈 지연", NextAction: "일정 확정", OccurredAt: d, SourceID: "m-1", SourceType: "meeting"},
-		{AccountID: acc.AccountID, Type: model.InsightTech, Text: "EKS", OccurredAt: d, SourceID: "m-1", SourceType: "meeting"},
+		{PK: model.PrefixAccount + acc.AccountID, SK: "INSIGHT#2026-05-12T09:00:00Z#m-1#0", EntityType: model.EntityTypeInsight,
+			AccountID: acc.AccountID, Type: model.InsightRisk, Text: "지연", Evidence: "일정 미확정", Implication: "오픈 지연", NextAction: "일정 확정", OccurredAt: d, SourceID: "m-1", SourceUserID: "owner-1", SourceType: "meeting"},
+		{PK: model.PrefixAccount + acc.AccountID, SK: "INSIGHT#2026-05-12T09:00:00Z#m-1#1", EntityType: model.EntityTypeInsight,
+			AccountID: acc.AccountID, Type: model.InsightTech, Text: "EKS", OccurredAt: d, SourceID: "m-1", SourceUserID: "owner-1", SourceType: "meeting"},
 	}
 	got, err := svc.ListAccountInsights(context.Background(), "owner-1", acc.AccountID, time.Time{}, time.Time{}, []string{model.InsightRisk})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(got) != 1 || got[0].Type != model.InsightRisk {
-		t.Errorf("expected only risk, got %+v", got)
+		t.Fatalf("expected only risk, got %+v", got)
 	}
 	if got[0].Implication != "오픈 지연" || got[0].NextAction != "일정 확정" {
 		t.Errorf("structured fields were not mapped to DTO: %+v", got[0])
@@ -1536,8 +1546,10 @@ func TestListAccountInsights_FilterByPeriod(t *testing.T) {
 	svc := newAccountServiceWithRepo(repo)
 	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
 	repo.insightsByAccount[acc.AccountID] = []model.AccountInsight{
-		{AccountID: acc.AccountID, Type: model.InsightRisk, Text: "4월", OccurredAt: time.Date(2026, 4, 10, 0, 0, 0, 0, time.UTC)},
-		{AccountID: acc.AccountID, Type: model.InsightRisk, Text: "5월", OccurredAt: time.Date(2026, 5, 10, 0, 0, 0, 0, time.UTC)},
+		{PK: model.PrefixAccount + acc.AccountID, SK: "INSIGHT#april", EntityType: model.EntityTypeInsight,
+			SourceType: "ingest", SourceID: "april", AccountID: acc.AccountID, Type: model.InsightRisk, Text: "4월", OccurredAt: time.Date(2026, 4, 10, 0, 0, 0, 0, time.UTC)},
+		{PK: model.PrefixAccount + acc.AccountID, SK: "INSIGHT#may", EntityType: model.EntityTypeInsight,
+			SourceType: "ingest", SourceID: "may", AccountID: acc.AccountID, Type: model.InsightRisk, Text: "5월", OccurredAt: time.Date(2026, 5, 10, 0, 0, 0, 0, time.UTC)},
 	}
 	from := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
 	to := time.Date(2026, 5, 31, 23, 59, 59, 0, time.UTC)
@@ -1566,11 +1578,14 @@ func TestGetAccountBrief_Bundles(t *testing.T) {
 	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
 	d := time.Date(2026, 5, 12, 9, 0, 0, 0, time.UTC)
 	repo.insightsByAccount[acc.AccountID] = []model.AccountInsight{
-		{AccountID: acc.AccountID, Type: model.InsightRisk, Text: "지연", OccurredAt: d},
-		{AccountID: acc.AccountID, Type: model.InsightRisk, Text: "지연2", OccurredAt: d},
-		{AccountID: acc.AccountID, Type: model.InsightOpportunity, Text: "확대", OccurredAt: d},
+		{PK: model.PrefixAccount + acc.AccountID, SK: "INSIGHT#risk1", EntityType: model.EntityTypeInsight,
+			SourceType: "ingest", SourceID: "risk1", AccountID: acc.AccountID, Type: model.InsightRisk, Text: "지연", OccurredAt: d},
+		{PK: model.PrefixAccount + acc.AccountID, SK: "INSIGHT#risk2", EntityType: model.EntityTypeInsight,
+			SourceType: "ingest", SourceID: "risk2", AccountID: acc.AccountID, Type: model.InsightRisk, Text: "지연2", OccurredAt: d},
+		{PK: model.PrefixAccount + acc.AccountID, SK: "INSIGHT#opportunity", EntityType: model.EntityTypeInsight,
+			SourceType: "news", SourceID: "opportunity", AccountID: acc.AccountID, Type: model.InsightOpportunity, Text: "확대", OccurredAt: d},
 	}
-	repo.meetingRefs[acc.AccountID] = []model.MeetingRef{{AccountID: acc.AccountID, MeetingID: "m-1", Title: "ROSA"}}
+	seedPublishedAccountMeeting(repo, acc.AccountID, d)
 
 	brief, err := svc.GetAccountBrief(context.Background(), "owner-1", acc.AccountID, time.Time{}, time.Time{}, nil)
 	if err != nil {
@@ -1595,6 +1610,18 @@ func TestGetAccountBrief_NonMemberForbidden(t *testing.T) {
 	if !errors.Is(err, ErrForbidden) {
 		t.Errorf("expected ErrForbidden, got %v", err)
 	}
+}
+
+func seedPublishedAccountMeeting(repo *mockAccountRepo, accountID string, date time.Time) {
+	repo.meetings["m-1"] = &model.Meeting{
+		PK: "USER#owner-1", SK: "MEETING#m-1", EntityType: "MEETING",
+		UserID: "owner-1", MeetingID: "m-1", AccountID: accountID, SharedToAccount: true,
+	}
+	repo.meetingRefs[accountID] = []model.MeetingRef{{
+		PK: model.PrefixAccount + accountID, SK: model.PrefixMeetingRef + date.UTC().Format(time.RFC3339) + "#m-1",
+		EntityType: model.EntityTypeMeetingRef, AccountID: accountID, MeetingID: "m-1",
+		OwnerUserID: "owner-1", Title: "ROSA", Date: date,
+	}}
 }
 
 func TestPutDocument_MemberStores(t *testing.T) {

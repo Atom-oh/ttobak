@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -8,7 +8,14 @@ import { AudioPlayer } from '@/components/AudioPlayer';
 import { AudioUploader } from '@/components/AudioUploader';
 import { AttachmentGallery } from '@/components/AttachmentGallery';
 import { FileUploader } from '@/components/FileUploader';
+import { IndexStatus } from '@/components/IndexStatus';
+import { ResummaryControls } from '@/components/meeting/ResummaryControls';
+import { useResummary } from '@/hooks/useResummary';
 import { QAPanel } from '@/components/QAPanel';
+import { FieldInsightsSection } from '@/components/FieldInsightsSection';
+import { MeetingNotesEditor } from '@/components/meeting/MeetingNotesEditor';
+import { SAFollowUp } from '@/components/meeting/SAFollowUp';
+import { appendMeetingNotes, qaNoteMarkdown, referenceMarkdown, type MeetingReference, type QAReferenceEvidence, type QuestionDraft } from '@/lib/meetingReferences';
 import ReferenceTabs from '@/components/ReferenceTabs';
 import ReferencePanel from '@/components/ReferencePanel';
 import { MeetingHeader } from '@/components/meeting/MeetingHeader';
@@ -22,22 +29,24 @@ import AccountSection from '@/components/meeting/AccountSection';
 import { SimCard } from '@/components/meeting/SimCard';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { meetingsApi } from '@/lib/api';
-import type { Meeting, MeetingDetail, ActionItem, SharedUser } from '@/types/meeting';
+import type { MeetingDetail, ActionItem, SharedUser } from '@/types/meeting';
 
 /** Map backend attachment response to frontend Attachment type */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function normalizeAttachments(raw: any[]): import('@/types/meeting').Attachment[] | undefined {
+function normalizeAttachments(raw: unknown): import('@/types/meeting').Attachment[] | undefined {
   if (!Array.isArray(raw) || raw.length === 0) return undefined;
   return raw.map((att) => ({
     id: att.attachmentId || att.id || '',
     name: att.fileName || att.name || 'Untitled',
-    type: att.type === 'photo' || att.type === 'screenshot' ? 'image' as const : att.type,
+    type: ['photo', 'screenshot', 'diagram', 'whiteboard'].includes(att.type) ? 'image' as const
+      : att.type === 'audio_file' ? 'audio' as const : att.type,
     url: att.url || '',
     processedContent: att.processedContent,
     size: att.fileSize || att.size,
     mimeType: att.mimeType,
     status: att.status,
     createdAt: att.createdAt || '',
+    originalKey: att.originalKey,
+    textExtraction: att.textExtraction,
   }));
 }
 
@@ -284,8 +293,33 @@ function RecoveryBanner({ meetingId, onRecovered }: { meetingId: string; onRecov
 
 function MeetingDetailContent() {
   const router = useRouter();
-  const { isAuthenticated, isLoading: authLoading } = useAuth();
+  const { isAuthenticated, isLoading: authLoading, user } = useAuth();
   const [meeting, setMeeting] = useState<MeetingDetail | null>(null);
+  const [summarySave, setSummarySave] = useState<{ revision: number; hasContent: boolean } | null>(null);
+  const summaryRevisionRef = useRef(0);
+  const [indexRevision, setIndexRevision] = useState(0);
+  const [summaryDirty, setSummaryDirty] = useState(false);
+  const [titleDirty, setTitleDirty] = useState(false);
+  const [notesDirty, setNotesDirty] = useState(false);
+  const [notesDraft, setNotesDraft] = useState('');
+  const notesDraftRef = useRef('');
+  const savedNotesRef = useRef('');
+  const savedNotesRevisionRef = useRef<string | undefined>(undefined);
+  const notesUnconfirmedRef = useRef(false);
+  const notesDraftRevisionRef = useRef(0);
+  const notesSaveRevisionRef = useRef(0);
+  const relationRevisionRef = useRef(0);
+  const relationsRef = useRef<{ accountId?: string; sharedToAccount?: boolean; projectIds?: string[] }>({});
+  const [notesMessage, setNotesMessage] = useState('');
+  const [referenceTab, setReferenceTab] = useState<'qa' | 'ref'>('ref');
+  const [questionDraft, setQuestionDraft] = useState<QuestionDraft>();
+  const [transcriptDirty, setTranscriptDirty] = useState(false);
+  const dirtyRef = useRef({ summary: false, title: false, transcript: false, notes: false });
+  const onSummaryDirtyChange = useCallback((dirty: boolean) => { dirtyRef.current.summary = dirty; setSummaryDirty(dirty); }, []);
+  const onTitleDirtyChange = useCallback((dirty: boolean) => { dirtyRef.current.title = dirty; setTitleDirty(dirty); }, []);
+  const onTranscriptDirtyChange = useCallback((dirty: boolean) => { dirtyRef.current.transcript = dirty; setTranscriptDirty(dirty); }, []);
+  const isResummaryDirty = useCallback(() => Object.values(dirtyRef.current).some(Boolean), []);
+  const onIndexedContentSaved = useCallback(() => setIndexRevision((value) => value + 1), []);
   const [isLoading, setIsLoading] = useState(true);
   const [showUploader, setShowUploader] = useState(false);
   const [showAudioUploader, setShowAudioUploader] = useState(false);
@@ -306,6 +340,79 @@ function MeetingDetailContent() {
     () => pathname.split('/meeting/')[1]?.split('/')[0] || '',
     [pathname]
   );
+  const onNotesChange = useCallback((value: string) => {
+    notesDraftRevisionRef.current++;
+    notesDraftRef.current = value;
+    dirtyRef.current.notes = notesUnconfirmedRef.current || value !== savedNotesRef.current;
+    setNotesDirty(dirtyRef.current.notes);
+    setNotesDraft(value);
+  }, []);
+  const onNotesDirtyChange = useCallback((dirty: boolean, requiresConfirmation = false) => {
+    notesUnconfirmedRef.current = requiresConfirmation;
+    dirtyRef.current.notes = dirty || requiresConfirmation || notesDraftRef.current !== savedNotesRef.current;
+    setNotesDirty(dirtyRef.current.notes);
+  }, []);
+  const onNotesSaved = useCallback((value: string, revision: string) => {
+    notesSaveRevisionRef.current++;
+    setNotesMessage('');
+    savedNotesRef.current = value;
+    savedNotesRevisionRef.current = revision;
+    dirtyRef.current.notes = notesUnconfirmedRef.current || notesDraftRef.current !== value;
+    setNotesDirty(dirtyRef.current.notes);
+    setMeeting((current) => current?.meetingId === meetingId ? { ...current, notes: value, notesRevision: revision } : current);
+    setIndexRevision((value) => value + 1);
+  }, [meetingId]);
+  const applyNotesFromDetail = useCallback((detail: MeetingDetail, acknowledgedEpoch: number, draftEpoch: number) => {
+    if (!dirtyRef.current.notes && acknowledgedEpoch === notesSaveRevisionRef.current &&
+        draftEpoch === notesDraftRevisionRef.current) {
+      savedNotesRef.current = detail.notes || '';
+      savedNotesRevisionRef.current = detail.notesRevision;
+      notesDraftRef.current = detail.notes || '';
+      setNotesDraft(detail.notes || '');
+    } else {
+      // Never pair the acknowledged text with a version from a stale background read.
+      detail.notes = savedNotesRef.current;
+      detail.notesRevision = savedNotesRevisionRef.current;
+    }
+  }, []);
+  const appendNotes = useCallback((block: string) => {
+    const next = appendMeetingNotes(notesDraftRef.current, block);
+    onNotesChange(next);
+    setNotesMessage('참고 내용을 메모 초안에 추가했습니다. 메모 저장을 눌러 반영해 주세요.');
+    document.getElementById('meeting-notes')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [onNotesChange]);
+  const onAddReference = useCallback((reference: MeetingReference) => appendNotes(referenceMarkdown(reference)), [appendNotes]);
+  const onSaveQAToNotes = useCallback((question: string, answer: string, evidence?: QAReferenceEvidence) => {
+    appendNotes(qaNoteMarkdown(question, answer, evidence));
+  }, [appendNotes]);
+  const onPrepareQuestion = useCallback((text: string) => {
+    setQuestionDraft((current) => ({ id: (current?.id || 0) + 1, text })); setReferenceTab('qa');
+    document.getElementById('meeting-qa-mobile')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, []);
+  const onAccountChanged = useCallback((accountId: string, sharedToAccount: boolean) => {
+    relationRevisionRef.current++;
+    relationsRef.current = { ...relationsRef.current, accountId, sharedToAccount };
+    setMeeting((current) => current?.meetingId === meetingId ? { ...current, ...relationsRef.current } : current);
+  }, [meetingId]);
+  const onProjectsChanged = useCallback((projectIds: string[]) => {
+    relationRevisionRef.current++;
+    relationsRef.current = { ...relationsRef.current, projectIds };
+    setMeeting((current) => current?.meetingId === meetingId ? { ...current, ...relationsRef.current } : current);
+  }, [meetingId]);
+  const applyResummary = useCallback((content: string) => {
+    if (isResummaryDirty()) return;
+    summaryRevisionRef.current++;
+    setMeeting((current) => current?.meetingId === meetingId ? { ...current, content, summary: undefined } : current);
+    setSummarySave((current) => ({ revision: (current?.revision ?? 0) + 1, hasContent: !!content.trim() }));
+    setIndexRevision((value) => value + 1);
+  }, [meetingId, isResummaryDirty]);
+  const resummary = useResummary({
+    meetingId,
+    enabled: isAuthenticated && meeting?.meetingId === meetingId,
+    canEdit: !!meeting && (meeting.permission === 'edit' || (!meeting.isShared && meeting.permission !== 'read')),
+    isDirty: isResummaryDirty,
+    onLoaded: applyResummary,
+  });
 
   const hasAudio = meeting?.audioKey || (meeting?.audioKeys && meeting.audioKeys.length > 0);
   useEffect(() => {
@@ -319,10 +426,15 @@ function MeetingDetailContent() {
 
   useEffect(() => {
     if (!isAuthenticated || !meetingId) return;
+    const controller = new AbortController();
 
     const fetchMeeting = async () => {
       try {
-        const data = await meetingsApi.get(meetingId);
+        const notesEpoch = notesSaveRevisionRef.current;
+        const draftEpoch = notesDraftRevisionRef.current;
+        const relationRevision = relationRevisionRef.current;
+        const data = await meetingsApi.get(meetingId, { signal: controller.signal });
+        if (controller.signal.aborted) return;
         const detail = data as MeetingDetail;
         detail.actionItems = normalizeActionItems(detail.actionItems);
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -331,25 +443,35 @@ function MeetingDetailContent() {
         // read `sharedWith` -- without this, a fresh fetch always shows an empty
         // share list even though the share was persisted server-side.
         detail.sharedWith = detail.shares;
+        applyNotesFromDetail(detail, notesEpoch, draftEpoch);
+        if (relationRevision === relationRevisionRef.current) relationsRef.current = { accountId: detail.accountId, sharedToAccount: detail.sharedToAccount, projectIds: detail.projectIds };
+        else Object.assign(detail, relationsRef.current);
         setMeeting(detail);
       } catch (err) {
-        console.error('Failed to fetch meeting:', err);
+        if (!controller.signal.aborted) console.error('Failed to fetch meeting:', err);
       } finally {
-        setIsLoading(false);
+        if (!controller.signal.aborted) setIsLoading(false);
       }
     };
     fetchMeeting();
-  }, [isAuthenticated, meetingId]);
+    return () => controller.abort();
+  }, [isAuthenticated, meetingId, applyNotesFromDetail]);
 
   const refetchMeeting = async () => {
     if (!meetingId) return;
     try {
+      const notesEpoch = notesSaveRevisionRef.current;
+      const draftEpoch = notesDraftRevisionRef.current;
+      const relationRevision = relationRevisionRef.current;
       const data = await meetingsApi.get(meetingId);
       const detail = data as MeetingDetail;
       detail.actionItems = normalizeActionItems(detail.actionItems);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       detail.attachments = normalizeAttachments((data as any).attachments);
       detail.sharedWith = detail.shares;
+      applyNotesFromDetail(detail, notesEpoch, draftEpoch);
+      if (relationRevision === relationRevisionRef.current) relationsRef.current = { accountId: detail.accountId, sharedToAccount: detail.sharedToAccount, projectIds: detail.projectIds };
+      else Object.assign(detail, relationsRef.current);
       setMeeting(detail);
     } catch (err) {
       console.error('Failed to refetch meeting:', err);
@@ -360,9 +482,11 @@ function MeetingDetailContent() {
   const pollCountRef = useRef(0);
   const [pollTimedOut, setPollTimedOut] = useState(false);
   const MAX_POLLS = 60; // 60 * 5s = 5 minutes
+  const polledMeetingId = meeting?.meetingId;
+  const polledMeetingStatus = meeting?.status;
 
   useEffect(() => {
-    if (!meeting || !['transcribing', 'summarizing'].includes(meeting.status)) return;
+    if (!polledMeetingId || !polledMeetingStatus || !['transcribing', 'summarizing'].includes(polledMeetingStatus)) return;
     if (pollTimedOut) return;
 
     const interval = setInterval(async () => {
@@ -373,12 +497,18 @@ function MeetingDetailContent() {
         return;
       }
       try {
-        const data = await meetingsApi.get(meeting.meetingId);
+        const notesEpoch = notesSaveRevisionRef.current;
+        const draftEpoch = notesDraftRevisionRef.current;
+        const relationRevision = relationRevisionRef.current;
+        const data = await meetingsApi.get(polledMeetingId);
         const detail = data as MeetingDetail;
         detail.actionItems = normalizeActionItems(detail.actionItems);
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         detail.attachments = normalizeAttachments((data as any).attachments);
         detail.sharedWith = detail.shares;
+        applyNotesFromDetail(detail, notesEpoch, draftEpoch);
+        if (relationRevision === relationRevisionRef.current) relationsRef.current = { accountId: detail.accountId, sharedToAccount: detail.sharedToAccount, projectIds: detail.projectIds };
+        else Object.assign(detail, relationsRef.current);
         setMeeting(detail);
         if (data.status === 'done' || data.status === 'error') {
           clearInterval(interval);
@@ -389,17 +519,7 @@ function MeetingDetailContent() {
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [meeting?.meetingId, meeting?.status, pollTimedOut]);
-
-  const handleActionItemToggle = (itemId: string) => {
-    if (!meeting) return;
-    setMeeting({
-      ...meeting,
-      actionItems: meeting.actionItems?.map((item) =>
-        item.id === itemId ? { ...item, completed: !item.completed } : item
-      ),
-    });
-  };
+  }, [polledMeetingId, polledMeetingStatus, pollTimedOut, applyNotesFromDetail]);
 
   const handleShare = (user: SharedUser) => {
     if (!meeting) return;
@@ -438,6 +558,13 @@ function MeetingDetailContent() {
     );
   }
 
+  const usingTranscriptB = Boolean(meeting.transcriptB?.trim() && (meeting.selectedTranscript === 'B' || !meeting.transcriptA?.trim()));
+  const displayedTranscript = usingTranscriptB ? meeting.transcriptB : (meeting.transcriptA?.trim() ? meeting.transcriptA : undefined);
+  const canEdit = meeting.permission === 'edit' || (!meeting.isShared && meeting.permission !== 'read');
+  const canEditNotes = canEdit && meeting.supportsNotesComparison === true && typeof meeting.notesRevision === 'string';
+  const canManageAssociations = meeting.userId === user?.userId;
+  const canUpload = !meeting.isShared && meeting.permission !== 'read';
+
   return (
     <AppLayout activePath="/">
       {/* Mobile Header */}
@@ -459,16 +586,24 @@ function MeetingDetailContent() {
             meeting={meeting}
             onShare={handleShare}
             onUnshare={handleUnshare}
-            onTitleChange={async (newTitle) => {
-              setMeeting({ ...meeting, title: newTitle });
-              try {
-                await meetingsApi.update(meeting.meetingId, { title: newTitle });
-              } catch (err) {
-                console.error('Failed to update title:', err);
-                setMeeting(meeting);
-              }
-            }}
+            onTitleDirtyChange={onTitleDirtyChange}
+            onTitleChange={canEdit ? async (newTitle) => {
+              await meetingsApi.update(meeting.meetingId, { title: newTitle });
+              setMeeting((current) => current?.meetingId === meeting.meetingId ? { ...current, title: newTitle } : current);
+              setIndexRevision((value) => value + 1);
+            } : undefined}
             onLinkedMeetingsChange={(ids) => setMeeting({ ...meeting, linkedMeetingIds: ids })}
+          />
+          <IndexStatus target={{ kind: 'meeting', meetingId: meeting.meetingId }} savedRevision={indexRevision} dirty={summaryDirty || titleDirty || transcriptDirty || notesDirty} />
+          <ResummaryControls
+            status={resummary.status}
+            canRequest={canEdit && (meeting.status === 'done' || meeting.status === 'error')}
+            dirty={summaryDirty || titleDirty || transcriptDirty || notesDirty}
+            busy={!!resummary.action}
+            error={resummary.error}
+            onRequest={() => { void resummary.request(); }}
+            onRefresh={() => { void resummary.refresh(); }}
+            onLoad={() => { void resummary.load(); }}
           />
 
           {/* Recovery banner for crashed recordings */}
@@ -484,15 +619,42 @@ function MeetingDetailContent() {
               speakerMap={meeting.speakerMap}
               onSave={async (speakerMap) => {
                 await meetingsApi.updateSpeakers(meeting.meetingId, speakerMap);
+                setIndexRevision((value) => value + 1);
+                const summaryRevision = summaryRevisionRef.current;
                 const refreshed = await meetingsApi.get(meeting.meetingId);
-                setMeeting(refreshed as Meeting);
+                setMeeting((current) => current?.meetingId === meeting.meetingId ? {
+                  ...current, ...(refreshed as MeetingDetail),
+                  // The user may have started editing while either request was pending.
+                  ...(dirtyRef.current.summary || summaryRevision !== summaryRevisionRef.current
+                    ? { content: current.content, summary: current.summary } : {}),
+                  ...(dirtyRef.current.transcript ? {
+                    transcriptA: current.transcriptA,
+                    transcriptB: current.transcriptB,
+                    transcription: current.transcription,
+                    selectedTranscript: current.selectedTranscript,
+                  } : {}),
+                  // Refreshed download URLs also change the summary editor's HTML.
+                  attachments: dirtyRef.current.summary ? current.attachments : normalizeAttachments(refreshed.attachments),
+                } : current);
               }}
               sttProvider={meeting.sttProvider}
               audioPartCount={meeting.audioPartCount}
               onRediarize={async (speakerCount) => {
                 await meetingsApi.rediarize(meeting.meetingId, speakerCount);
+                const summaryRevision = summaryRevisionRef.current;
                 const refreshed = await meetingsApi.get(meeting.meetingId);
-                setMeeting(refreshed as Meeting);
+                setMeeting((current) => current?.meetingId === meeting.meetingId ? {
+                  ...current, ...(refreshed as MeetingDetail),
+                  ...(dirtyRef.current.summary || summaryRevision !== summaryRevisionRef.current
+                    ? { content: current.content, summary: current.summary } : {}),
+                  ...(dirtyRef.current.transcript ? {
+                    transcriptA: current.transcriptA,
+                    transcriptB: current.transcriptB,
+                    transcription: current.transcription,
+                    selectedTranscript: current.selectedTranscript,
+                  } : {}),
+                  attachments: dirtyRef.current.summary ? current.attachments : normalizeAttachments(refreshed.attachments),
+                } : current);
               }}
             />
           )}
@@ -508,7 +670,7 @@ function MeetingDetailContent() {
               resizable reference aside are already claiming, so any fixed
               cutoff overflows for some combination of those. */}
           {(meeting.status === 'done' || meeting.content || meeting.summary) ? (
-            <div ref={summaryRowRef} className={`flex ${summaryFits ? 'flex-row' : 'flex-col'} gap-8 mb-12`}>
+            <div id="meeting-summary" ref={summaryRowRef} className={`scroll-mt-20 flex ${summaryFits ? 'flex-row' : 'flex-col'} gap-8 mb-12`}>
               <div
                 className={summaryFits ? 'shrink-0' : 'w-full'}
                 style={summaryFits ? { width: summaryWidth } : undefined}
@@ -516,10 +678,20 @@ function MeetingDetailContent() {
                 <AISummaryCard
                   content={resolveTranscriptLinks(resolveAttachmentUrls(meeting.content || '', meeting.attachments))}
                   summary={resolveTranscriptLinks(meeting.summary || '')}
+                  canonicalContent={meeting.content || meeting.summary || ''}
+                  resolveCitation={(source) => resolveTranscriptLinks(resolveAttachmentUrls(source, meeting.attachments))}
                   transcriptA={meeting.transcriptA}
-                  onSave={async (html) => {
-                    await meetingsApi.update(meeting.meetingId, { content: html });
-                  }}
+                  onDirtyChange={onSummaryDirtyChange}
+                  interactionLocked={resummary.action === 'load'}
+                  onSave={canEdit ? async (content) => {
+                    await meetingsApi.update(meeting.meetingId, { content });
+                    // Publish the saved snapshot; AISummaryCard keeps newer typing local.
+                    summaryRevisionRef.current++;
+                    setMeeting((current) => current?.meetingId === meeting.meetingId
+                      ? { ...current, content, summary: undefined } : current);
+                    setSummarySave((current) => ({ revision: (current?.revision ?? 0) + 1, hasContent: !!content.trim() }));
+                    setIndexRevision((value) => value + 1);
+                  } : undefined}
                 />
               </div>
               <div
@@ -528,8 +700,16 @@ function MeetingDetailContent() {
               />
               <div className="flex-1 min-w-0">
                 <ActionItemsCard
+                  onSaved={onIndexedContentSaved}
+                  key={meeting.meetingId}
+                  meetingId={meeting.meetingId}
+                  meetingStatus={meeting.status}
                   items={meeting.actionItems}
-                  onToggle={handleActionItemToggle}
+                  analysis={meeting.actionItemsAnalysis}
+                  canEdit={canEdit}
+                  savedSummary={meeting.content ?? ''}
+                  sourceRevision={summarySave?.revision ?? 0}
+                  hasSavedSummary={summarySave?.hasContent ?? !!meeting.content?.trim()}
                 />
               </div>
             </div>
@@ -569,26 +749,33 @@ function MeetingDetailContent() {
               Account
             </h3>
             <AccountSection
+              key={meeting.meetingId}
+              canManage={canManageAssociations && meeting.supportsPrivateAccountLink === true}
+              onChanged={onAccountChanged}
               meetingId={meeting.meetingId}
               initialAccountId={meeting.accountId}
               initialShared={meeting.sharedToAccount}
             />
           </section>
 
-          {/* Meeting Notes */}
-          {meeting.notes && (
-            <section className="mb-12">
-              <h3 className="text-base font-bold flex items-center gap-2 mb-4 dark:font-headline dark:text-text-main">
-                <span className="material-symbols-outlined text-slate-400 dark:text-text-muted">edit_note</span>
-                미팅 노트
-              </h3>
-              <div className="bg-white dark:bg-surface-lowest glass-panel rounded-xl p-5 dark:border dark:border-white/10">
-                <p className="text-slate-700 dark:text-text-secondary dark:font-body leading-relaxed whitespace-pre-wrap text-sm">
-                  {meeting.notes}
-                </p>
-              </div>
-            </section>
-          )}
+          <MeetingNotesEditor key={`notes-${meeting.meetingId}`} meetingId={meeting.meetingId}
+            savedNotes={meeting.notes || ''} savedNotesRevision={meeting.notesRevision} value={notesDraft} onChange={onNotesChange}
+            onSaved={onNotesSaved} onDirtyChange={onNotesDirtyChange} canEdit={canEditNotes} unavailable={canEdit && !canEditNotes} />
+          {notesMessage && <p role="status" className="mb-5 text-xs text-primary">{notesMessage}</p>}
+          {(meeting.fieldInsights?.length || meeting.fieldInsightsError) ? (
+            <FieldInsightsSection
+              description="저장된 추출 결과입니다. 이후 수정한 메모·요약을 반영하지 않을 수 있으므로 근거를 검토하세요."
+              insights={(meeting.fieldInsights || []).map((insight) => ({ ...insight, sourceId: meeting.meetingId, sourceType: 'meeting', occurredAt: meeting.date }))}
+              error={meeting.fieldInsightsError}
+              onAddToNotes={canEditNotes ? (insight) => onAddReference({ id: `insight-${insight.sourceId}-${insight.type}-${insight.text}`, kind: 'insight', title: meeting.title,
+                href: `/meeting/${encodeURIComponent(meeting.meetingId)}`, excerpt: `${insight.text}${insight.implication ? `\n의미: ${insight.implication}` : ''}${insight.nextAction ? `\n검토할 후속: ${insight.nextAction}` : ''}`, caveats: ['이전 추출 결과 · 현재 원문과 대조 필요'] }) : undefined}
+            />
+          ) : <p className="mb-8 rounded-lg border border-dashed border-slate-200 p-4 text-sm text-slate-500 dark:border-white/10 dark:text-text-muted">표시할 필드 Insight가 없습니다. 참조 자료와 Q&A를 검토해 고객 신호·검증할 가설을 메모에 남겨 주세요.</p>}
+          {meeting.fieldInsightsTruncated && <p className="mb-4 text-xs text-amber-700 dark:text-amber-300">인사이트 일부만 표시합니다.</p>}
+          <SAFollowUp key={`followup-${meeting.meetingId}`} meeting={meeting} canManage={canManageAssociations}
+            hasUnsavedChanges={summaryDirty || titleDirty || transcriptDirty || notesDirty}
+            onProjectsChanged={onProjectsChanged}
+            onAddReference={canEditNotes ? onAddReference : undefined} />
 
           {/* Cost/sizing simulator (ADR-033) — only once the note itself is
               done; simRun has its own lifecycle independent of meeting.status
@@ -602,34 +789,47 @@ function MeetingDetailContent() {
           )}
 
           {/* Attachments Gallery */}
-          {meeting.attachments && meeting.attachments.length > 0 && (
+          {((meeting.attachments?.length ?? 0) > 0 || canUpload) && (
             <section className="mb-12">
               <AttachmentGallery
-                attachments={meeting.attachments}
-                onUploadClick={() => setShowUploader(true)}
+                key={meeting.meetingId}
+                meetingId={meeting.meetingId}
+                canEdit={canEdit}
+                summaryRevision={summarySave?.revision ?? 0}
+                attachments={meeting.attachments ?? []}
+                onUploadClick={canUpload ? () => setShowUploader(true) : undefined}
+                onResummarize={canEdit ? () => { void resummary.request(); document.getElementById('resummary-status')?.scrollIntoView({ block: 'center' }); } : undefined}
+                resummaryDisabled={resummary.pending || !!resummary.action || summaryDirty || titleDirty || transcriptDirty || notesDirty || (meeting.status !== 'done' && meeting.status !== 'error')}
               />
             </section>
           )}
 
           {/* Upload Modal */}
-          {showUploader && (
+          {showUploader && canUpload && (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-              <div className="bg-white dark:bg-surface-lowest glass-panel rounded-xl p-6 max-w-lg w-full dark:border dark:border-white/10">
+              <div className="max-h-[90dvh] overflow-y-auto bg-white dark:bg-surface-lowest glass-panel rounded-xl p-6 max-w-lg w-full dark:border dark:border-white/10">
                 <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-bold text-slate-900 dark:text-text-main dark:font-headline">Upload Files</h3>
-                  <button onClick={() => setShowUploader(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-text-muted">
+                  <h3 className="font-bold text-slate-900 dark:text-text-main dark:font-headline">파일 첨부</h3>
+                  <button type="button" aria-label="파일 첨부 닫기" onClick={() => setShowUploader(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-text-muted">
                     <span className="material-symbols-outlined">close</span>
                   </button>
                 </div>
                 <FileUploader
                   meetingId={meeting.meetingId}
-                  onUploadComplete={async (files) => {
-                    setShowUploader(false);
+                  onAttachmentsChanged={async () => {
                     try {
+                      const summaryRevision = summaryRevisionRef.current;
                       const data = await meetingsApi.get(meeting.meetingId);
-                      setMeeting(data as Meeting);
+                      const attachments = normalizeAttachments(data.attachments);
+                      setMeeting((current) => current?.meetingId === meeting.meetingId
+                        ? {
+                          ...current, attachments,
+                          ...(!dirtyRef.current.summary && summaryRevision === summaryRevisionRef.current
+                            ? { content: (data as MeetingDetail).content, summary: (data as MeetingDetail).summary } : {}),
+                        } : current);
                     } catch (err) {
                       console.error('Failed to refresh meeting:', err);
+                      throw new Error('첨부 목록을 새로 불러오지 못했습니다. 파일 창을 닫고 페이지를 다시 확인해 주세요.');
                     }
                   }}
                 />
@@ -638,23 +838,46 @@ function MeetingDetailContent() {
           )}
 
           {/* Full Transcription */}
-          {((meeting.transcription?.length ?? 0) > 0 || meeting.transcriptA) && (
+          {((meeting.transcription?.length ?? 0) > 0 || displayedTranscript) && (
             <TranscriptSection
+              onDirtyChange={onTranscriptDirtyChange}
               transcription={meeting.transcription || []}
-              rawTranscript={meeting.transcriptA}
-              onSaveRawTranscript={async (text) => {
+              rawTranscript={displayedTranscript}
+              onSaveRawTranscript={usingTranscriptB || meeting.permission === 'read' ? undefined : async (text) => {
                 await meetingsApi.update(meeting.meetingId, { transcriptA: text });
+                setIndexRevision((value) => value + 1);
+                setMeeting((current) => current?.meetingId === meeting.meetingId ? {
+                  ...current,
+                  transcriptA: text,
+                  transcription: text === current.transcriptA ? current.transcription : [],
+                } : current);
+                let refreshed: MeetingDetail;
+                try {
+                  refreshed = await meetingsApi.get(meeting.meetingId) as MeetingDetail;
+                } catch {
+                  throw new Error('원문은 저장했지만 최신 미팅을 불러오지 못했습니다. 새로고침해주세요.');
+                }
+                setMeeting((current) => current?.meetingId === meeting.meetingId ? {
+                  ...current,
+                  transcriptA: refreshed.transcriptA,
+                  transcriptB: refreshed.transcriptB,
+                  selectedTranscript: refreshed.selectedTranscript,
+                  transcription: refreshed.transcription || [],
+                  updatedAt: refreshed.updatedAt,
+                } : current);
               }}
             />
           )}
 
           {/* Inline Q&A - mobile only */}
-          <section className="lg:hidden border-t border-slate-200 dark:border-white/10 pt-8">
+          <section id="meeting-qa-mobile" className="lg:hidden border-t border-slate-200 dark:border-white/10 pt-8">
             <h2 className="text-lg font-bold flex items-center gap-2 text-slate-900 dark:text-text-main dark:font-headline mb-6">
               <span className="material-symbols-outlined">question_answer</span>
               Meeting Q&A
             </h2>
-            <QAPanel meetingId={meeting.meetingId} />
+            <div className="h-[32rem]"><ReferenceTabs activeTab={referenceTab} onTabChange={setReferenceTab}
+              qaPanel={<QAPanel meetingId={meeting.meetingId} questionDraft={questionDraft} onSaveToNotes={canEditNotes ? onSaveQAToNotes : undefined} />}
+              referencePanel={<ReferencePanel accountId={meeting.accountId} onAddReference={canEditNotes ? onAddReference : undefined} onPrepareQuestion={onPrepareQuestion} />} /></div>
           </section>
 
           {/* Audio Player / Uploader */}
@@ -697,9 +920,9 @@ function MeetingDetailContent() {
           className="hidden lg:flex dark:bg-surface-lowest/50 flex-col sticky top-0 h-screen"
           style={{ width: asideWidth }}
         >{/* width persisted via useResizablePanel, see hooks/useResizablePanel.ts */}
-          <ReferenceTabs
-            qaPanel={<QAPanel meetingId={meeting.meetingId} />}
-            referencePanel={<ReferencePanel accountId={meeting.accountId} />}
+          <ReferenceTabs activeTab={referenceTab} onTabChange={setReferenceTab}
+            qaPanel={<QAPanel meetingId={meeting.meetingId} questionDraft={questionDraft} onSaveToNotes={canEditNotes ? onSaveQAToNotes : undefined} />}
+            referencePanel={<ReferencePanel accountId={meeting.accountId} onAddReference={canEditNotes ? onAddReference : undefined} onPrepareQuestion={onPrepareQuestion} />}
           />
         </aside>
       </div>
@@ -708,8 +931,9 @@ function MeetingDetailContent() {
 }
 
 export default function MeetingDetailPage() {
+  const pathname = usePathname();
   return (
-    <MeetingErrorBoundary>
+    <MeetingErrorBoundary key={pathname}>
       <MeetingDetailContent />
     </MeetingErrorBoundary>
   );

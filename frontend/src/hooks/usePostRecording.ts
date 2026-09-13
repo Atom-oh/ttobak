@@ -2,7 +2,10 @@
 
 import { useState, useCallback, useRef, useEffect, type MutableRefObject } from 'react';
 import { useRouter } from 'next/navigation';
-import { meetingsApi, uploadsApi } from '@/lib/api';
+import { meetingAccountApi, meetingsApi, uploadsApi } from '@/lib/api';
+import { preparationNotes, codePointLength, MAX_MEETING_NOTES } from '@/lib/meetingReferences';
+import { RecordingNotes } from '@/lib/recordingNotes';
+import { readSavedMeetingNotes } from '@/lib/meetingNotes';
 import { putWithProgress, type UploadProgress } from '@/lib/upload';
 import { uploadRecordingWithRetry, onNativeUploadProgress, cleanupRecording, releaseRecordingPower, isCommandNotFound, VERSION_SKEW_MESSAGE } from '@/lib/tauri';
 import type { PostRecordingStep } from '@/components/record/PostRecordingBanner';
@@ -63,6 +66,8 @@ function releasePendingPower(pending: PendingAudio | null) {
 
 interface UsePostRecordingOptions {
   meetingTitle: string;
+  preparationContext?: string;
+  accountId?: string;
   /** Live summary built during recording (useLiveSummary's liveSummaryRef) — persisted at save time when non-empty */
   liveSummaryRef?: MutableRefObject<string>;
   /**
@@ -78,6 +83,8 @@ interface UsePostRecordingOptions {
 
 export function usePostRecording({
   meetingTitle,
+  preparationContext,
+  accountId,
   liveSummaryRef,
   flushPendingSummary,
 }: UsePostRecordingOptions) {
@@ -86,6 +93,25 @@ export function usePostRecording({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [serverMeetingId, setServerMeetingId] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
+  const [preparationError, setPreparationError] = useState<string | null>(null);
+  const [createdNotes, setCreatedNotes] = useState<{ meetingId: string; notes: string } | null>(null);
+  const [notesConflict, setNotesConflict] = useState<string | null>(null);
+  const [notesEditorVersion, setNotesEditorVersion] = useState(0);
+  const [hasPendingAudio, setHasPendingAudio] = useState(false);
+  const [pendingAccount, setPendingAccount] = useState<string | null>(null);
+  const pendingAccountRef = useRef<string | null>(null);
+  const [notesWriter] = useState(() => new RecordingNotes({
+    supportsComparison: async (id) => (await meetingsApi.get(id)).supportsNotesComparison === true,
+    write: (id, notes, expectedNotes, expectedNotesRevision, signal) => meetingsApi.update(id, { notes, expectedNotes, expectedNotesRevision }, { signal }),
+    read: readSavedMeetingNotes,
+  }));
+  const persistNotes = useCallback((id: string, notes: string) => notesWriter.persist(id, notes), [notesWriter]);
+  const setPendingAccountValue = useCallback((id: string | null) => {
+    pendingAccountRef.current = id; setPendingAccount(id);
+  }, []);
+  const preparationRef = useRef<{ notes: string; accountId?: string }>({ notes: '' });
+  const submittedNotesRef = useRef<string | undefined>(undefined);
+  const persistedMeetingIdRef = useRef<string | null>(null);
 
   const pendingAudioRef = useRef<PendingAudio | null>(null);
   const mountedRef = useRef(true);
@@ -125,8 +151,9 @@ export function usePostRecording({
       flowGenerationRef.current++;
       uploadAbortRef.current?.abort();
       releasePendingPower(pendingAudioRef.current);
+      notesWriter.reset();
     };
-  }, []);
+  }, [notesWriter]);
 
   /** Create a draft meeting at recording start for crash recovery */
   const createDraftMeeting = useCallback(async (): Promise<string | null> => {
@@ -137,27 +164,49 @@ export function usePostRecording({
     // same goes for the meeting id: if creation below fails, a lingering
     // previous id would route THIS recording's audio into the old meeting.
     setServerMeetingId(null);
+    persistedMeetingIdRef.current = null;
+    submittedNotesRef.current = undefined;
+    preparationRef.current = { notes: '' };
+    notesWriter.reset(); setCreatedNotes(null); setNotesConflict(null); setHasPendingAudio(false); setPendingAccountValue(null);
+    setPreparationError(null);
     releasePendingPower(pendingAudioRef.current);
     pendingAudioRef.current = null;
     putDoneRef.current = null;
     uploadAbortRef.current?.abort();
     uploadAbortRef.current = null;
     flowGenerationRef.current++;
+    const generation = flowGenerationRef.current;
     try {
+      const prepared = { notes: preparationNotes(preparationContext || ''), accountId: accountId || undefined };
+      preparationRef.current = prepared;
+      setPendingAccountValue(prepared.accountId || null);
       const result = await withTimeout(
         meetingsApi.create({
           title: meetingTitle || formatDefaultTitle(new Date()),
           status: 'recording',
+          ...prepared,
         }),
         15000, 'Create draft meeting',
       );
+      if (!mountedRef.current || flowGenerationRef.current !== generation) return null;
+      persistedMeetingIdRef.current = result.meetingId;
       setServerMeetingId(result.meetingId);
+      const acknowledged = result.preparationApplied ? prepared.notes : '';
+      notesWriter.initialize(result.meetingId, acknowledged, result.supportsNotesComparison === true, result.notesRevision || '');
+      setCreatedNotes({ meetingId: result.meetingId, notes: acknowledged });
+      if (result.preparationApplied) setPendingAccountValue(null);
+      // Never launch an untracked legacy preparation PUT. Recording autosave
+      // and finalization share the comparison-guarded writer instead.
+      if (!result.preparationApplied && (prepared.notes || prepared.accountId)) {
+        setPreparationError('준비 내용은 화면에 보관되어 있습니다. 메모와 고객 연결은 저장 단계에서 다시 확인합니다.');
+      }
       return result.meetingId;
     } catch (err) {
       console.error('Failed to create draft meeting:', err);
+      if (mountedRef.current && flowGenerationRef.current === generation) setPreparationError('미팅 생성에 실패했습니다. 녹음과 준비 내용은 유지되며 저장 단계에서 다시 시도합니다.');
       return null;
     }
-  }, [meetingTitle]);
+  }, [meetingTitle, preparationContext, accountId, notesWriter, setPendingAccountValue]);
 
   /** Resume the save+upload flow after notes step (or a retry). Safe to
    * call more than once for the same `payload` — if the PUT already
@@ -173,38 +222,43 @@ export function usePostRecording({
     try {
       await flushPendingSummary?.();
       if (!isCurrent()) return; // abandoned during the flush await above
-      let meetingId = serverMeetingId;
+      let meetingId = persistedMeetingIdRef.current || serverMeetingId;
 
-      if (meetingId) {
-        setStep('saving');
-        await withTimeout(
-          meetingsApi.update(meetingId, {
-            title: meetingTitle || formatDefaultTitle(new Date()),
-            status: 'transcribing',
-            ...(liveSummaryRef?.current ? { liveSummary: truncateLiveSummary(liveSummaryRef.current) } : {}),
-          }),
-          15000, 'Save transcript',
-        );
-      } else {
-        // Fallback: draft creation failed, create meeting now
+      if (!meetingId) {
         setStep('creating');
-        const result = await withTimeout(
-          meetingsApi.create({ title: meetingTitle || formatDefaultTitle(new Date()) }),
-          15000, 'Create meeting',
-        );
-        if (!isCurrent()) return; // abandoned while the meeting was being created
+        const notes = submittedNotesRef.current ?? preparationRef.current.notes;
+        if (codePointLength(notes) > MAX_MEETING_NOTES) throw new Error('메모를 줄여 다시 저장해 주세요.');
+        const result = await withTimeout(meetingsApi.create({
+          title: meetingTitle || formatDefaultTitle(new Date()), ...preparationRef.current, notes,
+        }), 15000, 'Create meeting');
+        if (!isCurrent()) return;
         meetingId = result.meetingId;
+        persistedMeetingIdRef.current = meetingId;
         setServerMeetingId(meetingId);
-
-        setStep('saving');
-        await withTimeout(
-          meetingsApi.update(meetingId, {
-            status: 'transcribing',
-            ...(liveSummaryRef?.current ? { liveSummary: truncateLiveSummary(liveSummaryRef.current) } : {}),
-          }),
-          15000, 'Save transcript',
-        );
+        const acknowledged = result.preparationApplied ? notes : '';
+        notesWriter.initialize(meetingId, acknowledged, result.supportsNotesComparison === true, result.notesRevision || '');
+        setCreatedNotes({ meetingId, notes: acknowledged });
+        setPendingAccountValue(result.preparationApplied ? null : preparationRef.current.accountId || null);
       }
+      if (!isCurrent()) return;
+      setStep('saving');
+      if (pendingAccountRef.current) {
+        const capabilities = await meetingsApi.get(meetingId);
+        if (!isCurrent()) return;
+        if (!capabilities.supportsPrivateAccountLink) throw new Error('고객 연결 기능을 업데이트 중입니다. 잠시 후 재시도하거나 고객 연결 재시도를 생략해 주세요.');
+        await withTimeout(meetingAccountApi.link(meetingId, pendingAccountRef.current), 15000, 'Link preparation account');
+        if (!isCurrent()) return;
+        setPendingAccountValue(null);
+      }
+      if (submittedNotesRef.current !== undefined) {
+        await persistNotes(meetingId, submittedNotesRef.current);
+        if (!isCurrent()) return;
+        setNotesConflict(null);
+      }
+      await withTimeout(meetingsApi.update(meetingId, {
+        title: meetingTitle || formatDefaultTitle(new Date()), status: 'transcribing',
+        ...(liveSummaryRef?.current ? { liveSummary: truncateLiveSummary(liveSummaryRef.current) } : {}),
+      }), 15000, 'Save transcript');
 
       if (!isCurrent()) return;
       setStep('uploading');
@@ -287,6 +341,7 @@ export function usePostRecording({
         });
       }
       pendingAudioRef.current = null;
+      setHasPendingAudio(false);
       putDoneRef.current = null;
       setUploadProgress(null);
 
@@ -296,6 +351,7 @@ export function usePostRecording({
       router.push(`/meeting/${meetingId}`);
     } catch (err) {
       if (!isCurrent()) return; // this flow was abandoned -- don't resurrect an error banner over whatever's current now
+      setNotesConflict(notesWriter.conflict(persistedMeetingIdRef.current || '') ?? null);
       console.error('Failed to process recording:', err);
       // Version skew: an older installed Mac app without the
       // upload_recording command (ADR-024) needs an update, not a retry.
@@ -320,12 +376,13 @@ export function usePostRecording({
       // what makes handleRetry (below) able to resume instead of losing
       // the recording.
     }
-  }, [meetingTitle, router, serverMeetingId, liveSummaryRef, flushPendingSummary]);
+  }, [meetingTitle, router, serverMeetingId, liveSummaryRef, flushPendingSummary, notesWriter, persistNotes, setPendingAccountValue]);
 
   /** Called when a browser-mode (mic/tab) recording blob is ready — pause
    * for notes input. */
   const handleBlobReady = useCallback(async (blob: Blob, mimeType: string) => {
     pendingAudioRef.current = { kind: 'blob', blob, mimeType };
+    setHasPendingAudio(true);
     putDoneRef.current = null;
     setStep('notes');
   }, []);
@@ -344,6 +401,7 @@ export function usePostRecording({
       return;
     }
     pendingAudioRef.current = pending;
+    setHasPendingAudio(true);
     putDoneRef.current = null;
     setStep('notes');
   }, []);
@@ -376,30 +434,42 @@ export function usePostRecording({
     if (!pending) return;
     if (uploadInFlightRef.current) return; // double-click while notes save runs
 
-    try {
-      // Save notes to meeting if we have a draft -- always send, even when
-      // empty, so the user clearing everything actually clears the stored
-      // notes (backend's Notes field is *string: omitted preserves, an
-      // explicit "" clears).
-      if (serverMeetingId) {
-        await withTimeout(
-          meetingsApi.update(serverMeetingId, { notes: notes.trim() }),
-          15000, 'Save meeting notes',
-        );
-      }
-    } catch (err) {
-      console.warn('Failed to save notes, continuing with upload:', err);
-    }
-
-    await runUploadFlow(pending);
-  }, [serverMeetingId, runUploadFlow]);
-
-  /** User skipped notes — resume upload immediately */
-  const handleNotesSkip = useCallback(async () => {
-    const pending = pendingAudioRef.current;
-    if (!pending) return;
+    // Keep the submitted draft through failures and serialize its save with
+    // the upload. A missing initial meeting ID must not lose final notes.
+    if (codePointLength(notes) > MAX_MEETING_NOTES) { setErrorMessage('메모는 32,000자까지 저장할 수 있습니다.'); setStep('notes'); return; }
+    submittedNotesRef.current = notes;
     await runUploadFlow(pending);
   }, [runUploadFlow]);
+
+  /** User skipped notes — resume upload immediately */
+  const handleNotesSkip = useCallback(async (notes?: string) => {
+    const pending = pendingAudioRef.current;
+    if (!pending || uploadInFlightRef.current) return;
+    if (notes !== undefined) {
+      if (codePointLength(notes) > MAX_MEETING_NOTES) { setErrorMessage('메모는 32,000자까지 저장할 수 있습니다.'); setStep('notes'); return; }
+      submittedNotesRef.current = notes;
+    }
+    await runUploadFlow(pending);
+  }, [runUploadFlow]);
+
+  const retainNotesError = useCallback((notes: string, error: unknown) => {
+    submittedNotesRef.current = notes;
+    setNotesConflict(notesWriter.conflict(persistedMeetingIdRef.current || '') ?? null);
+    setErrorMessage(error instanceof Error ? error.message : '메모 저장에 실패했습니다.');
+    setStep('error');
+  }, [notesWriter]);
+  const editNotes = useCallback(() => {
+    if (!pendingAudioRef.current) return;
+    notesWriter.adoptConflict(persistedMeetingIdRef.current || '');
+    setNotesEditorVersion((value) => value + 1);
+    setErrorMessage(null); setStep('notes');
+  }, [notesWriter]);
+  const skipAccountRetry = useCallback(() => {
+    if (!pendingAudioRef.current || uploadInFlightRef.current) return;
+    preparationRef.current.accountId = undefined;
+    setPendingAccountValue(null);
+    void runUploadFlow(pendingAudioRef.current);
+  }, [runUploadFlow, setPendingAccountValue]);
 
   /** Legacy callback for iOS native capture fallback */
   const handleRecordingComplete = useCallback(async () => {
@@ -429,6 +499,7 @@ export function usePostRecording({
       return;
     }
     setErrorMessage(null);
+    setPreparationError(null);
     void runUploadFlow(pending); // shared in-flight guard (see runUploadFlow)
   }, [runUploadFlow]);
 
@@ -449,6 +520,8 @@ export function usePostRecording({
   const reset = useCallback(() => {
     setStep(null);
     setErrorMessage(null);
+    setPreparationError(null);
+    setHasPendingAudio(false); notesWriter.reset(); setCreatedNotes(null); setNotesConflict(null); setPendingAccountValue(null);
     setUploadProgress(null);
     releasePendingPower(pendingAudioRef.current);
     pendingAudioRef.current = null;
@@ -465,13 +538,15 @@ export function usePostRecording({
     // block from resurrecting a banner for a recording the user just
     // dismissed.
     flowGenerationRef.current++;
-  }, []);
+  }, [notesWriter, setPendingAccountValue]);
 
   return {
     step,
     errorMessage,
     serverMeetingId,
     uploadProgress,
+    preparationError,
+    createdNotes, notesConflict, notesEditorVersion, hasPendingAudio, pendingAccount, persistNotes, retainNotesError, editNotes, skipAccountRetry,
     createDraftMeeting,
     handleBlobReady,
     handleNativeFileReady,

@@ -25,7 +25,16 @@ type MeetingHandler struct {
 	// simService is optional (see SetSimService) so GetMeeting can attach
 	// the meeting's SimRun (ADR-033) without every existing NewMeetingHandler
 	// call site needing to change.
-	simService *service.SimService
+	simService            *service.SimService
+	actionItemsService    *service.ActionItemsAnalysisService
+	attachmentTextService *service.AttachmentTextService
+}
+
+func (h *MeetingHandler) SetAttachmentTextService(s *service.AttachmentTextService) {
+	h.attachmentTextService = s
+}
+func (h *MeetingHandler) SetActionItemsService(s *service.ActionItemsAnalysisService) {
+	h.actionItemsService = s
 }
 
 // SetSimService injects the cost/sizing simulator service (ADR-033) so
@@ -182,9 +191,17 @@ func (h *MeetingHandler) CreateMeeting(w http.ResponseWriter, r *http.Request) {
 		h.meetingService.EnsureProfileAndMaterializePendingShares(ctx, userID, email, name, middleware.GetEmailVerified(ctx))
 	}
 
-	meeting, err := h.meetingService.CreateMeeting(ctx, userID, req.Title, date, req.Participants, req.SttProvider)
+	meeting, err := h.meetingService.CreateMeeting(ctx, userID, req.Title, date, req.Participants, req.SttProvider,
+		model.MeetingPreparation{Notes: req.Notes, AccountID: req.AccountID})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		switch {
+		case errors.Is(err, service.ErrInvalidInput):
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, err.Error())
+		case errors.Is(err, service.ErrForbidden):
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Account membership required")
+		default:
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		}
 		return
 	}
 
@@ -212,13 +229,19 @@ func (h *MeetingHandler) CreateMeeting(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := map[string]interface{}{
-		"meetingId":    meeting.MeetingID,
-		"title":        meeting.Title,
-		"date":         meeting.Date.Format(time.RFC3339),
-		"status":       meeting.Status,
-		"participants": meeting.Participants,
-		"content":      meeting.Content,
-		"createdAt":    meeting.CreatedAt.Format(time.RFC3339),
+		"supportsNotesComparison":    true,
+		"supportsPrivateAccountLink": true,
+		"notesRevision":              meeting.NotesRevision,
+		"meetingId":                  meeting.MeetingID,
+		"title":                      meeting.Title,
+		"date":                       meeting.Date.Format(time.RFC3339),
+		"status":                     meeting.Status,
+		"participants":               meeting.Participants,
+		"content":                    meeting.Content,
+		"createdAt":                  meeting.CreatedAt.Format(time.RFC3339),
+	}
+	if (req.Notes != "" || req.AccountID != "") && meeting.Notes == req.Notes && meeting.AccountID == req.AccountID {
+		response["preparationApplied"] = true
 	}
 
 	writeJSON(w, http.StatusCreated, response)
@@ -249,7 +272,33 @@ func (h *MeetingHandler) GetMeeting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.actionItemsService != nil {
+		analysis, analysisErr := h.actionItemsService.Get(ctx, userID, meetingID)
+		if analysisErr != nil {
+			log.Printf("Action item status lookup failed: %v", analysisErr)
+			result.ActionItemsAnalysis = &model.ActionItemsAnalysis{Status: model.AnalysisUnknown, ErrorCode: "STATUS_UNAVAILABLE"}
+		} else {
+			result.ActionItemsAnalysis = analysis.Analysis
+			result.ActionItems, _ = json.Marshal(analysis.ActionItems) // fixed string/bool struct
+		}
+	}
+
 	// Generate presigned download URLs for image attachments
+	for i := range result.Attachments {
+		att := &result.Attachments[i]
+		if att.Type != model.AttachTypeDocument {
+			continue
+		}
+		att.TextExtraction = &model.AttachmentTextStatus{Status: model.AttachmentTextUnknown}
+		if h.attachmentTextService != nil {
+			status, statusErr := h.attachmentTextService.GetStatus(ctx, userID, meetingID, att.AttachmentID)
+			if statusErr != nil {
+				att.TextExtraction.ErrorCode = "STATUS_UNAVAILABLE"
+			} else {
+				att.TextExtraction = status
+			}
+		}
+	}
 	if h.uploadService != nil {
 		for i := range result.Attachments {
 			att := &result.Attachments[i]
@@ -353,6 +402,10 @@ func (h *MeetingHandler) UpdateMeeting(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, err.Error())
 			return
 		}
+		if errors.Is(err, repository.ErrConditionFailed) {
+			writeError(w, http.StatusConflict, model.ErrCodeConflict, "Meeting changed; reload before saving")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
 		return
 	}
@@ -412,6 +465,10 @@ func (h *MeetingHandler) UpdateSpeakers(w http.ResponseWriter, r *http.Request) 
 
 	result, err := h.meetingService.UpdateSpeakers(ctx, userID, meetingID, &req)
 	if err != nil {
+		if errors.Is(err, repository.ErrConditionFailed) {
+			writeError(w, http.StatusConflict, model.ErrCodeConflict, "회의록이 변경되었습니다. 새로고침 후 다시 시도해 주세요.")
+			return
+		}
 		if errors.Is(err, service.ErrForbidden) {
 			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
 			return
@@ -420,7 +477,8 @@ func (h *MeetingHandler) UpdateSpeakers(w http.ResponseWriter, r *http.Request) 
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		log.Printf("UpdateSpeakers failed: %v", err)
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "화자 이름 저장 결과를 확인하지 못했습니다. 새로고침 후 확인해 주세요.")
 		return
 	}
 

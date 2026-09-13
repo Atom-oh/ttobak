@@ -19,6 +19,8 @@ import { RecordingConfig, LiveSttSelector } from '@/components/record/RecordingC
 import { PostRecordingBanner } from '@/components/record/PostRecordingBanner';
 import { LiveNotes, type NotesSaveStatus } from '@/components/record/LiveNotes';
 import { MeetingContextInput } from '@/components/record/MeetingContextInput';
+import { SAPreparation } from '@/components/record/SAPreparation';
+import { appendMeetingNotes, preparationNotes, qaNoteMarkdown, referenceMarkdown, type MeetingReference, type QAReferenceEvidence, type QuestionDraft, codePointLength, MAX_MEETING_NOTES } from '@/lib/meetingReferences';
 import { LeftoverRecordingsCard, formatLeftoverTime } from '@/components/record/LeftoverRecordingsCard';
 import { supportsTabAudioCapture, hasMobileMicConflictRisk } from '@/lib/device';
 import { isTauri, cleanupRecording, type TauriLeftoverRecording } from '@/lib/tauri';
@@ -27,8 +29,8 @@ import { useAudioDevices } from '@/hooks/useAudioDevices';
 import { useRecordingSession } from '@/hooks/useRecordingSession';
 import { useLiveSummary } from '@/hooks/useLiveSummary';
 import { usePostRecording } from '@/hooks/usePostRecording';
-import { uploadsApi, meetingsApi, kbApi } from '@/lib/api';
-import { uploadFile, uploadToS3, notifyUploadComplete, formatFileSize } from '@/lib/upload';
+import { uploadsApi, meetingsApi, meetingAccountApi, kbApi } from '@/lib/api';
+import { uploadToS3, notifyUploadComplete, formatFileSize } from '@/lib/upload';
 import type { LiveSttProvider } from '@/lib/sttManager';
 
 export default function RecordPage() {
@@ -108,7 +110,13 @@ function RecordPageInner() {
   const [detectedCount, setDetectedCount] = useState(0);
   // Hoisted so the desktop aside and mobile bottom sheet ReferencePanel
   // instances share one selection -- the mobile sheet unmounts on close.
-  const [referenceAccountId, setReferenceAccountId] = useState('');
+  const [referenceAccountId, setReferenceAccountId] = useState(() => searchParams.get('accountId') || '');
+  const [referenceTab, setReferenceTab] = useState<'qa' | 'ref'>('ref');
+  const [questionDraft, setQuestionDraft] = useState<QuestionDraft>();
+  const [sourceMessage, setSourceMessage] = useState('');
+  const [finalNotesError, setFinalNotesError] = useState('');
+  const [submittingFinalNotes, setSubmittingFinalNotes] = useState(false);
+  const finalNotesSubmissionRef = useRef(false);
 
   // In-meeting note-taking
   const [notes, setNotes] = useState('');
@@ -116,7 +124,10 @@ function RecordPageInner() {
   const lastSavedNotesRef = useRef('');
 
   // Meeting context (agenda / customer background) — fed to AI Q&A
-  const [contextText, setContextText] = useState('');
+  const [contextText, setContextText] = useState(() => {
+    const previous = searchParams.get('referenceMeetingId');
+    return previous ? referenceMarkdown({ id: previous, kind: 'meeting', title: '이전 미팅 원문', href: `/meeting/${encodeURIComponent(previous)}` }) : '';
+  });
 
   // Desktop transcript panel collapse state
   const [isTranscriptOpen, setIsTranscriptOpen] = useState(false);
@@ -149,11 +160,14 @@ function RecordPageInner() {
 
   const postRecording = usePostRecording({
     meetingTitle,
+    preparationContext: contextText,
+    accountId: referenceAccountId,
     liveSummaryRef: summary.liveSummaryRef,
     flushPendingSummary: summary.flushPendingSummary,
   });
 
   const clientMeetingId = postRecording.serverMeetingId || clientMeetingIdBase;
+  const persistRecordingNotes = postRecording.persistNotes;
 
   // Mac app only: temp WAVs the Rust side adopted at startup from a previous
   // run (crash / force quit). Surfaced here, not app-wide, because acting on
@@ -265,8 +279,11 @@ function RecordPageInner() {
   // now B's) lastSavedNotesRef/notesSaveStatus.
   const activeMeetingIdRef = useRef<string | null>(null);
   useEffect(() => {
-    activeMeetingIdRef.current = postRecording.serverMeetingId;
-  }, [postRecording.serverMeetingId]);
+    if (activeMeetingIdRef.current !== postRecording.serverMeetingId) {
+      activeMeetingIdRef.current = postRecording.serverMeetingId;
+      lastSavedNotesRef.current = postRecording.createdNotes?.meetingId === postRecording.serverMeetingId ? postRecording.createdNotes.notes : '';
+    }
+  }, [postRecording.serverMeetingId, postRecording.createdNotes]);
   // Mirrors the live `notes` state. The autosave effect's own gate
   // (`notes === lastSavedNotesRef.current`) only sees the ref as of WHEN
   // IT FIRES -- if the user reverts to an earlier already-saved value
@@ -290,15 +307,10 @@ function RecordPageInner() {
     setNotesSaveStatus('saving');
     const run = (async () => {
       let saveError: unknown = null;
-      // AbortController (not just withTimeout's Promise.race) so a timeout
-      // actually cancels the underlying request instead of just giving up
-      // on waiting for it -- a non-aborted, still-in-flight PUT that lands
-      // late could otherwise overwrite fresher notes with this stale value
-      // even though nothing else (status/audioKey) is at risk anymore.
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      // The shared writer serializes every notes path and compares saved
+      // contents. Cancelling a request alone is never treated as rollback.
       try {
-        await meetingsApi.update(meetingId, { notes: notesToSave }, { signal: controller.signal });
+        await persistRecordingNotes(meetingId, notesToSave);
         if (meetingId === activeMeetingIdRef.current) {
           lastSavedNotesRef.current = notesToSave;
           setNotesSaveStatus('saved');
@@ -317,7 +329,6 @@ function RecordPageInner() {
           setNotesSaveStatus('error');
         }
       } finally {
-        clearTimeout(timeoutId);
         notesSaveInFlightRef.current = false;
         const pending = pendingNotesRef.current;
         if (pending !== null) {
@@ -339,11 +350,11 @@ function RecordPageInner() {
     })();
     notesSaveSettledRef.current = run;
     return run;
-  }, []);
+  }, [persistRecordingNotes]);
 
   // Autosave in-meeting notes (debounced) to the draft meeting
   useEffect(() => {
-    if (!postRecording.serverMeetingId) return;
+    if (!postRecording.serverMeetingId || postRecording.step !== null) return;
     if (notes === lastSavedNotesRef.current) return;
     const meetingId = postRecording.serverMeetingId;
     notesDebounceTimerRef.current = setTimeout(() => {
@@ -359,7 +370,7 @@ function RecordPageInner() {
         notesDebounceTimerRef.current = null;
       }
     };
-  }, [notes, postRecording.serverMeetingId, saveNotes]);
+  }, [notes, postRecording.serverMeetingId, postRecording.step, saveNotes]);
 
   // Flushes the debounce timer and genuinely waits for any in-flight/queued
   // autosave to fully settle before the post-recording notes step's own
@@ -389,45 +400,55 @@ function RecordPageInner() {
   // between here and the banner's PUT), so handleNotesSubmit's request is
   // the only notes write left in flight from this point on.
   const handleFinalNotesSubmit = useCallback(async (finalNotes: string) => {
-    const meetingId = postRecording.serverMeetingId;
-    // The banner edits notes in its OWN local state (seeded from
-    // initialNotes={notes} but not synced back) -- finalNotes can
-    // legitimately differ from this page's notes/liveNotesRef. Without
-    // this sync, saveNotes' completion handler would see finalNotes !=
-    // liveNotesRef.current (still the pre-banner value) and "helpfully"
-    // re-queue the STALE pre-banner notes over the user's banner edit.
-    setNotes(finalNotes);
-    liveNotesRef.current = finalNotes;
-    if (meetingId) {
-      try {
-        await flushNotesQueue(meetingId, finalNotes);
-      } catch {
-        // saveNotes already reflects this via notesSaveStatus('error');
-        // surfacing it here too so the user isn't silently left thinking
-        // their notes made it to the server when the flush itself failed.
-        if (!window.confirm('노트 저장에 실패했습니다. 계속할까요?')) {
+    if (finalNotesSubmissionRef.current) return;
+    if (codePointLength(finalNotes) > MAX_MEETING_NOTES) { setFinalNotesError('메모는 32,000자까지 저장할 수 있습니다. 내용을 줄여 다시 완료해 주세요.'); return; }
+    finalNotesSubmissionRef.current = true;
+    setSubmittingFinalNotes(true);
+    try {
+      setFinalNotesError('');
+      const meetingId = postRecording.serverMeetingId;
+      // Keep the page's autosave draft in sync before flushing the banner edit.
+      setNotes(finalNotes);
+      liveNotesRef.current = finalNotes;
+      if (meetingId) {
+        try {
+          await flushNotesQueue(meetingId, finalNotes);
+        } catch (error) {
+          postRecording.retainNotesError(finalNotes, error);
           return;
         }
       }
+      await postRecording.handleNotesSubmit(finalNotes);
+    } finally {
+      finalNotesSubmissionRef.current = false;
+      setSubmittingFinalNotes(false);
     }
-    await postRecording.handleNotesSubmit(finalNotes);
   }, [flushNotesQueue, postRecording]);
 
   // Skip needs the same flush as submit -- it also resumes the upload flow
   // (which PUTs a status transition), so a lingering autosave landing
   // after that PUT would hit the same stale read-modify-write race.
   const handleFinalNotesSkip = useCallback(async () => {
-    const meetingId = postRecording.serverMeetingId;
-    if (meetingId) {
-      try {
-        await flushNotesQueue(meetingId, notes);
-      } catch {
-        if (!window.confirm('노트 저장에 실패했습니다. 계속할까요?')) {
+    if (finalNotesSubmissionRef.current) return;
+    if (codePointLength(notes) > MAX_MEETING_NOTES) { setFinalNotesError('저장할 메모가 너무 깁니다. 내용을 편집한 뒤 완료해 주세요.'); return; }
+    finalNotesSubmissionRef.current = true;
+    setSubmittingFinalNotes(true);
+    try {
+      setFinalNotesError('');
+      const meetingId = postRecording.serverMeetingId;
+      if (meetingId) {
+        try {
+          await flushNotesQueue(meetingId, notes);
+        } catch (error) {
+          postRecording.retainNotesError(notes, error);
           return;
         }
       }
+      await postRecording.handleNotesSkip(notes);
+    } finally {
+      finalNotesSubmissionRef.current = false;
+      setSubmittingFinalNotes(false);
     }
-    await postRecording.handleNotesSkip();
   }, [flushNotesQueue, postRecording, notes]);
 
   // Q&A context = user-provided meeting context + live transcript
@@ -435,11 +456,27 @@ function RecordPageInner() {
     ? `[미팅 배경 정보]\n${contextText.trim()}\n\n${session.transcriptContext || ''}`
     : session.transcriptContext;
 
-  // Append a Q&A entry to the meeting notes
-  const handleSaveQAToNotes = useCallback((question: string, answer: string) => {
-    setNotes((prev) =>
-      `${prev ? prev.trimEnd() + '\n\n' : ''}**Q. ${question}**\n\n${answer}\n`,
-    );
+  const appendReferenceNote = useCallback((block: string) => {
+    if (session.isRecording || isNativeRecordingRef.current) {
+      const next = appendMeetingNotes(liveNotesRef.current, block);
+      liveNotesRef.current = next;
+      setNotes(next);
+      setSourceMessage('참고 내용을 미팅 메모에 추가했습니다. 저장 상태를 확인해 주세요.');
+    } else {
+      const next = appendMeetingNotes(contextText, block);
+      preparationNotes(next);
+      setContextText(next);
+      setSourceMessage('사전 준비에 출처를 추가했습니다. 개인 준비 문서로 보관하거나 녹음을 시작하세요.');
+    }
+  }, [session.isRecording, contextText]);
+  const handleSaveQAToNotes = useCallback((question: string, answer: string, evidence?: QAReferenceEvidence) => {
+    appendReferenceNote(qaNoteMarkdown(question, answer, evidence));
+  }, [appendReferenceNote]);
+  const handleAddReference = useCallback((reference: MeetingReference) => appendReferenceNote(referenceMarkdown(reference)), [appendReferenceNote]);
+  const handlePrepareQuestion = useCallback((text: string) => {
+    setQuestionDraft((current) => ({ id: (current?.id || 0) + 1, text }));
+    setReferenceTab('qa');
+    setIsQAOpen(true);
   }, []);
 
   // Mic preview: create AudioContext + AnalyserNode when device changes (not recording)
@@ -512,8 +549,9 @@ function RecordPageInner() {
     // New recording session — the previous recording's auto-fired proactive
     // questions must not shadow identically-worded ones in this session.
     resetProactiveClaims();
-    setNotes('');
-    liveNotesRef.current = '';
+    const preparedNotes = preparationNotes(contextText);
+    setNotes(preparedNotes);
+    liveNotesRef.current = preparedNotes;
     lastSavedNotesRef.current = '';
     setNotesSaveStatus('idle');
     // Invalidate synchronously, not just via the postRecording.serverMeetingId
@@ -690,8 +728,20 @@ function RecordPageInner() {
     setUploadProgress('미팅 생성 중...');
     try {
       const title = meetingTitle || files[0].name.replace(/\.[^.]+$/, '');
-      const meeting = await meetingsApi.create({ title });
+      const meeting = await meetingsApi.create({ title, notes: preparationNotes(contextText), accountId: referenceAccountId || undefined });
       const meetingId = meeting.meetingId;
+      if (!meeting.preparationApplied) {
+        const initialNotes = preparationNotes(contextText);
+        const capabilities = await meetingsApi.get(meetingId);
+        if (initialNotes) {
+          if (!capabilities.supportsNotesComparison) throw new Error('준비 메모 저장 기능을 업데이트 중입니다. 잠시 후 다시 업로드해 주세요.');
+          if (capabilities.notes !== initialNotes) await meetingsApi.update(meetingId, { notes: initialNotes, expectedNotes: '', expectedNotesRevision: capabilities.notesRevision || '' });
+        }
+        if (referenceAccountId) {
+          if (!capabilities.supportsPrivateAccountLink) throw new Error('고객 연결 기능을 업데이트 중입니다. 잠시 후 다시 업로드해 주세요.');
+          await meetingAccountApi.link(meetingId, referenceAccountId);
+        }
+      }
 
       // Multiple audio files are uploaded as a multi-part set so the transcribe
       // pipeline transcribes each and merges them into ONE meeting (in upload
@@ -841,6 +891,8 @@ function RecordPageInner() {
         </div>
       )}
 
+      {sourceMessage && <p role="status" className="mx-6 mt-3 text-xs text-primary">{sourceMessage}</p>}
+      {postRecording.preparationError && <p role="alert" className="mx-6 mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-300">{postRecording.preparationError}</p>}
       {/* Main Content */}
       <div className="flex flex-1 min-h-0">
       <main className="flex-1 flex flex-col px-6 lg:px-8 pt-8 lg:pt-8 pb-32 lg:pb-8 overflow-y-auto">
@@ -995,9 +1047,17 @@ function RecordPageInner() {
               activeProvider={session.activeProvider}
               isRecording={session.isRecording}
             />
-            {/* Meeting context — optional, fed to AI Q&A during the meeting */}
-            <div className="w-full max-w-md mt-2">
-              <MeetingContextInput value={contextText} onChange={setContextText} optional rows={3} />
+            <div className="mt-3 w-full max-w-3xl">
+              <SAPreparation value={contextText} onChange={setContextText} title={meetingTitle} onTitleChange={setMeetingTitle}
+                accountId={referenceAccountId} onAccountChange={setReferenceAccountId}
+                initialDocumentId={searchParams.get('prepDocId') || undefined} disabled={meetingFlowBusy} />
+              <details className="mt-4 rounded-xl border border-slate-200 bg-white dark:border-white/10 dark:bg-surface-lowest">
+                <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-primary">고객 Insight·지식 자료로 준비하기</summary>
+                <div className="h-[30rem]"><ReferenceTabs activeTab={referenceTab} onTabChange={setReferenceTab}
+                  qaPanel={<LiveQAPanel transcriptContext={qaContext} questionDraft={questionDraft} onSaveToNotes={handleSaveQAToNotes} />}
+                  referencePanel={<ReferencePanel accountId={referenceAccountId} onAccountChange={setReferenceAccountId} transcriptTail={contextText}
+                    onAddReference={handleAddReference} onPrepareQuestion={handlePrepareQuestion} />} /></div>
+              </details>
             </div>
           </div>
         )}
@@ -1327,10 +1387,11 @@ function RecordPageInner() {
       {/* Desktop Side Panel: AI Q&A during recording */}
       {session.isRecording && (
         <aside className="hidden lg:flex w-96 shrink-0 border-l border-slate-200 dark:border-white/10 flex-col">
-          <ReferenceTabs
+          <ReferenceTabs activeTab={referenceTab} onTabChange={setReferenceTab}
             qaPanel={
               <LiveQAPanel
                 transcriptContext={qaContext}
+                questionDraft={questionDraft}
                 meetingId={postRecording.serverMeetingId || undefined}
                 onDetectedQuestionsChange={setDetectedCount}
                 serverDetectedQuestions={summary.detectedQuestions}
@@ -1344,6 +1405,8 @@ function RecordPageInner() {
                 accountId={referenceAccountId}
                 onAccountChange={setReferenceAccountId}
                 transcriptTail={session.transcriptContext}
+                onAddReference={handleAddReference}
+                onPrepareQuestion={handlePrepareQuestion}
               />
             }
           />
@@ -1353,7 +1416,12 @@ function RecordPageInner() {
 
       {/* Post-Recording Toast Banner */}
       {postRecording.step && (
-        <PostRecordingBanner
+        <PostRecordingBanner key={postRecording.notesEditorVersion}
+          submitting={submittingFinalNotes}
+          notesError={finalNotesError}
+          comparisonNotes={postRecording.notesConflict}
+          onEditNotes={postRecording.hasPendingAudio ? () => { setFinalNotesError(''); postRecording.editNotes(); } : undefined}
+          onSkipAccountRetry={postRecording.hasPendingAudio && postRecording.pendingAccount ? postRecording.skipAccountRetry : undefined}
           step={postRecording.step}
           errorMessage={postRecording.errorMessage}
           uploadProgress={postRecording.uploadProgress}
@@ -1389,10 +1457,11 @@ function RecordPageInner() {
               <div className="w-10 h-1 rounded-full bg-slate-300 dark:bg-slate-600" />
             </button>
             <div className="flex-1 min-h-0">
-              <ReferenceTabs
+              <ReferenceTabs activeTab={referenceTab} onTabChange={setReferenceTab}
                 qaPanel={
                   <LiveQAPanel
                     transcriptContext={qaContext}
+                questionDraft={questionDraft}
                     meetingId={postRecording.serverMeetingId || undefined}
                     onDetectedQuestionsChange={setDetectedCount}
                     serverDetectedQuestions={summary.detectedQuestions}
@@ -1406,6 +1475,8 @@ function RecordPageInner() {
                     accountId={referenceAccountId}
                     onAccountChange={setReferenceAccountId}
                     transcriptTail={session.transcriptContext}
+                onAddReference={handleAddReference}
+                onPrepareQuestion={handlePrepareQuestion}
                   />
                 }
               />

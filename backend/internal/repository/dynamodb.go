@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -50,7 +51,7 @@ const transcriptInlineBudget = 300 * 1024
 var transcriptFamilyFields = []string{"transcriptA", "transcriptB", "transcriptSegments"}
 
 // ErrInvalidTranscriptRef marks a transcript-family value that carries an
-// s3:// prefix but is not the one server-generated ref for its meeting and
+// s3:// prefix but is not a permitted storage ref for its meeting and
 // field. Sentinel (not an anonymous fmt.Errorf) per this codebase's typed
 // error-handling convention so handlers can map it to 400 instead of 500.
 var ErrInvalidTranscriptRef = errors.New("invalid transcript storage reference")
@@ -99,10 +100,11 @@ func pickTranscriptToSpill(inline map[string]int, fixedInline int) string {
 
 // DynamoDBRepository provides DynamoDB operations for the meeting assistant
 type DynamoDBRepository struct {
-	client     *dynamodb.Client
-	tableName  string
-	s3Client   *s3.Client
-	bucketName string
+	client                  *dynamodb.Client
+	tableName               string
+	s3Client                *s3.Client
+	bucketName              string
+	skipTranscriptHydration bool
 }
 
 // NewDynamoDBRepository creates a new DynamoDB repository
@@ -142,10 +144,9 @@ func (r *DynamoDBRepository) SetS3Client(s3Client *s3.Client, bucketName string)
 // Accepted because (a) transcript-family fields are only ever written via
 // the UNconditional UpdateMeetingFields path or UpdateMeeting, whose only
 // conditions (sibling size guard, projectIds guard) retry until the same
-// content lands — the write converges rather than being abandoned — and
-// (b) no IfMatch caller carries transcript fields today. If one ever does,
-// switch to versioned spill keys referenced only after the item write
-// commits.
+// content lands — the write converges rather than being abandoned.
+// Conditional snapshot writers MUST use storeConditionalTranscript instead:
+// a rejected snapshot is abandoned, not converged onto this fixed key.
 func (r *DynamoDBRepository) storeTranscript(ctx context.Context, meetingID, field, text string) (string, error) {
 	if text == "" {
 		return "", nil
@@ -171,18 +172,24 @@ func (r *DynamoDBRepository) storeTranscript(ctx context.Context, meetingID, fie
 	return fmt.Sprintf("s3://%s/%s", r.bucketName, key), nil
 }
 
-// validateTranscriptRef parses an s3:// transcript reference and enforces
-// the ONE exact key this repository ever writes for this meeting and field
-// (storeTranscript: s3://{ownBucket}/transcripts/{meetingId}/{field}.txt).
-// Binding to the meeting/field matters, not just bucket+prefix: a
-// user-settable transcript field (UpdateMeetingRequest.TranscriptA) is
-// passed through untouched when it already "looks stored", so a
-// prefix-only whitelist still lets an authenticated editor plant ANOTHER
-// meeting's transcript key on their own meeting and read a different
-// tenant's transcript through the api Lambda's bucket-wide grant. Exact
-// per-meeting key match closes that. Pure function so the security
-// branching is unit-testable without an S3 client.
+var transcriptRefMeetingID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
+var transcriptRefVersionSuffix = regexp.MustCompile(`^[0-9a-f]{32}\.txt$`)
+
+// validateTranscriptRef accepts the legacy {field}.txt key and the immutable
+// {field}.{32-lowercase-hex}.txt format. Unconditional writes retain legacy keys;
+// storeConditionalTranscript emits immutable keys for snapshot-based writes.
+// API writes reject client-supplied s3:// values; this storage guard also binds
+// persisted refs to their lookup's meeting/field. A matching format is not an
+// authorization grant. Keep this pure so malformed/cross-scope refs are testable.
 func validateTranscriptRef(ownBucket, meetingID, field, ref string) (bucket, key string, err error) {
+	if ownBucket == "" || !strings.HasPrefix(ref, "s3://") || !transcriptRefMeetingID.MatchString(meetingID) {
+		return "", "", fmt.Errorf("%w: invalid scheme or storage context", ErrInvalidTranscriptRef)
+	}
+	switch field {
+	case "transcriptA", "transcriptB", "transcriptSegments":
+	default:
+		return "", "", fmt.Errorf("%w: unsupported field", ErrInvalidTranscriptRef)
+	}
 	trimmed := strings.TrimPrefix(ref, "s3://")
 	parts := strings.SplitN(trimmed, "/", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
@@ -194,9 +201,12 @@ func validateTranscriptRef(ownBucket, meetingID, field, ref string) (bucket, key
 	if bucket != ownBucket {
 		return "", "", fmt.Errorf("%w: foreign bucket (meeting %s, field %s)", ErrInvalidTranscriptRef, meetingID, field)
 	}
-	expected := fmt.Sprintf("transcripts/%s/%s.txt", meetingID, field)
-	if key != expected {
-		return "", "", fmt.Errorf("%w: key does not match this meeting/field (meeting %s, field %s)", ErrInvalidTranscriptRef, meetingID, field)
+	base := fmt.Sprintf("transcripts/%s/%s", meetingID, field)
+	if key != base+".txt" {
+		suffix, matches := strings.CutPrefix(key, base+".")
+		if !matches || !transcriptRefVersionSuffix.MatchString(suffix) {
+			return "", "", fmt.Errorf("%w: key does not match this meeting/field (meeting %s, field %s)", ErrInvalidTranscriptRef, meetingID, field)
+		}
 	}
 	return bucket, key, nil
 }
@@ -343,8 +353,8 @@ func siblingSizeCondition(carried map[string]bool, storedSizes map[string]inline
 }
 
 // loadTranscript loads a transcript, fetching from S3 if it's an S3
-// reference. meetingID/field pin the ref to the one key storeTranscript
-// writes for this meeting — see validateTranscriptRef.
+// reference. meetingID/field pin the ref to the permitted legacy or versioned
+// keys for this meeting — see validateTranscriptRef.
 func (r *DynamoDBRepository) loadTranscript(ctx context.Context, meetingID, field, ref string) (string, error) {
 	if ref == "" {
 		return "", nil
@@ -383,8 +393,8 @@ func (r *DynamoDBRepository) loadTranscript(ctx context.Context, meetingID, fiel
 }
 
 // resolveTranscripts loads transcripts from S3 if they are S3 references
-func (r *DynamoDBRepository) resolveTranscripts(ctx context.Context, meeting *model.Meeting) error {
-	if meeting == nil {
+func (r *DynamoDBRepository) resolveTranscripts(ctx context.Context, meetingID string, meeting *model.Meeting) error {
+	if meeting == nil || r.skipTranscriptHydration {
 		return nil
 	}
 
@@ -410,7 +420,8 @@ func (r *DynamoDBRepository) resolveTranscripts(ctx context.Context, meeting *mo
 		if !strings.HasPrefix(*f.val, "s3://") {
 			continue
 		}
-		loaded, err := r.loadTranscript(ctx, meeting.MeetingID, f.name, *f.val)
+		// Bind to the lookup's authorized ID, never a different ID in stored metadata.
+		loaded, err := r.loadTranscript(ctx, meetingID, f.name, *f.val)
 		if err != nil {
 			var nsk *s3types.NoSuchKey
 			if errors.Is(err, ErrInvalidTranscriptRef) || errors.As(err, &nsk) {
@@ -427,25 +438,30 @@ func (r *DynamoDBRepository) resolveTranscripts(ctx context.Context, meeting *mo
 }
 
 // CreateMeeting creates a new meeting record
-func (r *DynamoDBRepository) CreateMeeting(ctx context.Context, userID, title string, date time.Time, participants []string, sttProvider string) (*model.Meeting, error) {
+func (r *DynamoDBRepository) CreateMeeting(ctx context.Context, userID, title string, date time.Time, participants []string, sttProvider string, preparation ...model.MeetingPreparation) (*model.Meeting, error) {
 	meetingID := uuid.New().String()
 	now := time.Now().UTC()
 
 	meeting := &model.Meeting{
-		PK:           model.PrefixUser + userID,
-		SK:           model.PrefixMeeting + meetingID,
-		MeetingID:    meetingID,
-		UserID:       userID,
-		Title:        title,
-		Date:         date,
-		Participants: participants,
-		SttProvider:  sttProvider,
-		Status:       model.StatusRecording,
-		CreatedAt:    now,
-		UpdatedAt:    now,
-		GSI1PK:       model.PrefixUser + userID,
-		GSI1SK:       now.Format(time.RFC3339),
-		EntityType:   "MEETING",
+		PK:            model.PrefixUser + userID,
+		SK:            model.PrefixMeeting + meetingID,
+		MeetingID:     meetingID,
+		UserID:        userID,
+		Title:         title,
+		Date:          date,
+		Participants:  participants,
+		SttProvider:   sttProvider,
+		Status:        model.StatusRecording,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+		GSI1PK:        model.PrefixUser + userID,
+		GSI1SK:        now.Format(time.RFC3339),
+		EntityType:    "MEETING",
+		NotesRevision: uuid.NewString(),
+	}
+	if len(preparation) > 0 {
+		meeting.Notes = preparation[0].Notes
+		meeting.AccountID = preparation[0].AccountID
 	}
 
 	item, err := attributevalue.MarshalMap(meeting)
@@ -456,7 +472,7 @@ func (r *DynamoDBRepository) CreateMeeting(ctx context.Context, userID, title st
 	_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName: aws.String(r.tableName),
 		Item:      item,
-	})
+	}, singleDynamoDBAttempt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to put meeting: %w", err)
 	}
@@ -486,21 +502,25 @@ func (r *DynamoDBRepository) GetMeeting(ctx context.Context, userID, meetingID s
 	if err := attributevalue.UnmarshalMap(result.Item, &meeting); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal meeting: %w", err)
 	}
+	if r.skipTranscriptHydration && (meeting.MeetingID != meetingID || meeting.UserID != userID) {
+		return nil, fmt.Errorf("meeting metadata identity does not match its primary key")
+	}
 
 	// Resolve S3 transcript references
-	if err := r.resolveTranscripts(ctx, &meeting); err != nil {
+	if err := r.resolveTranscripts(ctx, meetingID, &meeting); err != nil {
 		return nil, err
 	}
 
 	return &meeting, nil
 }
 
-// GetMeetingByID retrieves a meeting by meetingID using GSI3 (PK=meetingId, SK=entityType)
-// This is used for internal operations where we know the meetingID but not the owner
+// GetMeetingByID uses GSI3 only to discover the owner, then reads the canonical
+// row strongly. Neither notes/revisions nor publication can come from the GSI.
 func (r *DynamoDBRepository) GetMeetingByID(ctx context.Context, meetingID string) (*model.Meeting, error) {
 	keyEx := expression.Key("meetingId").Equal(expression.Value(meetingID)).
 		And(expression.Key("entityType").Equal(expression.Value("MEETING")))
-	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).Build()
+	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).
+		WithProjection(expression.NamesList(expression.Name("meetingId"), expression.Name("userId"))).Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to build expression: %w", err)
 	}
@@ -511,6 +531,7 @@ func (r *DynamoDBRepository) GetMeetingByID(ctx context.Context, meetingID strin
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
+		ProjectionExpression:      expr.Projection(),
 		Limit:                     aws.Int32(1),
 	})
 	if err != nil {
@@ -525,13 +546,10 @@ func (r *DynamoDBRepository) GetMeetingByID(ctx context.Context, meetingID strin
 	if err := attributevalue.UnmarshalMap(result.Items[0], &meeting); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal meeting: %w", err)
 	}
-
-	// Resolve S3 transcript references
-	if err := r.resolveTranscripts(ctx, &meeting); err != nil {
-		return nil, err
+	if meeting.UserID == "" || meeting.MeetingID != meetingID {
+		return nil, fmt.Errorf("meeting discovery identity does not match lookup")
 	}
-
-	return &meeting, nil
+	return r.GetMeeting(ctx, meeting.UserID, meetingID)
 }
 
 // MeetingKey identifies a meeting by its owner and meeting ID (primary key).
@@ -610,10 +628,13 @@ func (r *DynamoDBRepository) UpdateMeeting(ctx context.Context, meeting *model.M
 	// Marshal a shallow storage copy instead; string-field swaps on the copy
 	// never touch the original, and the shared slices/maps are only read.
 	stored := *meeting
+	// Whole-item legacy writes also replace notes, even when their text did
+	// not change. Never reuse a caller's old revision for that replacement.
+	stored.NotesRevision = uuid.NewString()
 
 	// Store large transcripts in S3 if S3 client is available. A value that
 	// already carries an s3:// prefix is passed through ONLY if it is
-	// exactly the server-generated ref for this meeting+field — a
+	// a permitted legacy or versioned ref for this meeting+field — a
 	// client-supplied s3:// string (TranscriptA is user-settable) must be
 	// rejected at write time too, or the stored item violates the "only
 	// server-generated refs are ever stored" invariant the read-side
@@ -715,10 +736,13 @@ func (r *DynamoDBRepository) UpdateMeeting(ctx context.Context, meeting *model.M
 			ConditionExpression:       condExpr.Condition(),
 			ExpressionAttributeNames:  condExpr.Names(),
 			ExpressionAttributeValues: condExpr.Values(),
-		})
+		}, singleDynamoDBAttempt)
 		action, terminalErr := classifyProjectIDsPutItemErr(err, attempt, maxProjectIDsAttempts)
 		if action == putItemRetryActionRetry {
 			continue
+		}
+		if terminalErr == nil {
+			meeting.NotesRevision = stored.NotesRevision
 		}
 		return terminalErr
 	}
@@ -809,12 +833,60 @@ func (r *DynamoDBRepository) getMeetingProjectIDs(ctx context.Context, ownerUser
 	return projected.ProjectIDs, nil
 }
 
+func singleDynamoDBAttempt(o *dynamodb.Options) {
+	// A retry must not republish an observable notes revision or hide a
+	// committed spill behind a later condition rejection.
+	o.Retryer = aws.NopRetryer{}
+	o.RetryMaxAttempts = 1
+}
+
 // UpdateMeetingFields atomically updates only the specified fields on a meeting item
 // using DynamoDB UpdateItem (SET expression). This avoids the read-modify-write race
 // condition inherent in the PutItem-based UpdateMeeting method.
 // Fields map keys must be DynamoDB attribute names (e.g., "status", "audioKey", "content").
 func (r *DynamoDBRepository) UpdateMeetingFields(ctx context.Context, userID, meetingID string, fields map[string]interface{}) error {
-	return r.updateMeetingFieldsWithCondition(ctx, userID, meetingID, expression.AttributeExists(expression.Name("PK")), fields)
+	return r.updateMeetingFieldsWithCondition(ctx, userID, meetingID, expression.AttributeExists(expression.Name("PK")), fields, false, nil)
+}
+
+// UpdateMeetingFieldsWithNotesRevision retains legacy partial-update semantics
+// while returning the exact revision generated for this invocation's notes write.
+func (r *DynamoDBRepository) UpdateMeetingFieldsWithNotesRevision(ctx context.Context, userID, meetingID string, fields map[string]interface{}) (string, error) {
+	var revision string
+	err := r.updateMeetingFieldsWithCondition(ctx, userID, meetingID, expression.AttributeExists(expression.Name("PK")), fields, false, &revision)
+	if err != nil {
+		return "", err
+	}
+	return revision, nil
+}
+
+// UpdateMeetingNotesIfMatch keeps legacy absent notes equivalent to empty only
+// for this notes-specific contract. The generic field CAS remains exact.
+func (r *DynamoDBRepository) UpdateMeetingNotesIfMatch(ctx context.Context, userID, meetingID, expectedNotes, notes string) error {
+	_, err := r.UpdateMeetingNotesWithRevision(ctx, userID, meetingID, expectedNotes, notes, nil)
+	return err
+}
+
+// UpdateMeetingNotesWithRevision optionally matches the notes version as well as
+// text. Every successful invocation writes a fresh version, including A -> A.
+func (r *DynamoDBRepository) UpdateMeetingNotesWithRevision(ctx context.Context, userID, meetingID, expectedNotes, notes string, expectedRevision *string) (string, error) {
+	match := expression.Name("notes").Equal(expression.Value(expectedNotes))
+	if expectedNotes == "" {
+		match = match.Or(expression.AttributeNotExists(expression.Name("notes")))
+	}
+	condition := expression.AttributeExists(expression.Name("PK")).And(match)
+	if expectedRevision != nil {
+		version := expression.Name("notesRevision").Equal(expression.Value(*expectedRevision))
+		if *expectedRevision == "" {
+			version = version.Or(expression.AttributeNotExists(expression.Name("notesRevision")))
+		}
+		condition = condition.And(version)
+	}
+	var revision string
+	err := r.updateMeetingFieldsWithCondition(ctx, userID, meetingID, condition, map[string]interface{}{"notes": notes}, false, &revision)
+	if err != nil {
+		return "", err
+	}
+	return revision, nil
 }
 
 // UpdateMeetingFieldsIfMatch is UpdateMeetingFields with an added condition
@@ -839,10 +911,42 @@ func (r *DynamoDBRepository) UpdateMeetingFieldsIfMatch(ctx context.Context, use
 	for k, v := range expected {
 		condition = condition.And(expression.Name(k).Equal(expression.Value(v)))
 	}
-	return r.updateMeetingFieldsWithCondition(ctx, userID, meetingID, condition, fields)
+	return r.updateMeetingFieldsWithCondition(ctx, userID, meetingID, condition, fields, true, nil)
 }
 
-func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Context, userID, meetingID string, condition expression.ConditionBuilder, fields map[string]interface{}) error {
+func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Context, userID, meetingID string, condition expression.ConditionBuilder, fields map[string]interface{}, immutableSpills bool, revisionOut *string) (resultErr error) {
+	if _, assigned := fields["notesRevision"]; assigned {
+		return fmt.Errorf("notesRevision is server-managed")
+	}
+	_, writesNotes := fields["notes"]
+	if immutableSpills || writesNotes {
+		// Do not leave internal spill refs or a generated revision in a
+		// caller's map that could be reused for a later retry.
+		copyFields := make(map[string]interface{}, len(fields))
+		for name, value := range fields {
+			copyFields[name] = value
+		}
+		fields = copyFields
+	}
+	if writesNotes {
+		revision := uuid.NewString()
+		fields["notesRevision"] = revision
+		defer func() {
+			if resultErr == nil && revisionOut != nil {
+				*revisionOut = revision
+			}
+		}()
+	}
+	var uploadedKeys []string
+	safeToDelete := true
+	defer func() {
+		if resultErr != nil && safeToDelete {
+			if err := r.deleteUncommittedTranscriptSpills(ctx, uploadedKeys); err != nil {
+				log.Printf("Transcript spill cleanup failed: %v", err)
+				resultErr = errors.Join(resultErr, err)
+			}
+		}
+	}()
 	// Handle S3 transcript overflow for large transcript fields.
 	// transcriptSegments is included since 2026-08-31: without it, a long
 	// recording's segments JSON + transcriptA in one UpdateItem exceeded
@@ -923,7 +1027,13 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 				if pick == "" {
 					break
 				}
-				ref, err := r.storeTranscript(ctx, meetingID, pick, fields[pick].(string))
+				var ref string
+				var err error
+				if immutableSpills {
+					ref, err = r.storeConditionalTranscript(ctx, meetingID, pick, fields[pick].(string), &uploadedKeys)
+				} else {
+					ref, err = r.storeTranscript(ctx, meetingID, pick, fields[pick].(string))
+				}
 				if err != nil {
 					return fmt.Errorf("failed to store %s: %w", pick, err)
 				}
@@ -967,6 +1077,14 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 			return fmt.Errorf("failed to build update expression: %w", err)
 		}
 
+		var options []func(*dynamodb.Options)
+		_, writesNotes := fields["notes"]
+		if len(uploadedKeys) > 0 || writesNotes {
+			// An SDK retry could hide a committed write behind a later failed
+			// condition or restore an older notes revision after a newer fence.
+			// Ambiguous failures require readback; never replay the old UUID.
+			options = append(options, singleDynamoDBAttempt)
+		}
 		_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 			TableName: aws.String(r.tableName),
 			Key: map[string]types.AttributeValue{
@@ -977,7 +1095,7 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 			ConditionExpression:       expr.Condition(),
 			ExpressionAttributeNames:  expr.Names(),
 			ExpressionAttributeValues: expr.Values(),
-		})
+		}, options...)
 		if err != nil {
 			var ccfe *types.ConditionalCheckFailedException
 			if errors.As(err, &ccfe) {
@@ -993,9 +1111,11 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 				}
 				return fmt.Errorf("%w: meeting %s condition not met", ErrConditionFailed, meetingID)
 			}
+			safeToDelete = false
 			return fmt.Errorf("failed to update meeting fields: %w", err)
 		}
 
+		safeToDelete = false
 		return nil
 	}
 }
@@ -1323,6 +1443,33 @@ func (r *DynamoDBRepository) DeleteMeeting(ctx context.Context, userID, meetingI
 		},
 	})
 
+	// Keep singleton analysis cleanup with the source deletion. Delayed workers
+	// cannot recreate the source or this state because all writes are conditional.
+	transactItems = append(transactItems, types.TransactWriteItem{
+		Delete: &types.Delete{TableName: aws.String(r.tableName), Key: actionAnalysisKey(meetingID)},
+	})
+
+	// 4. Sim run (ADR-033) -- unconditional delete; a Delete against a
+	// nonexistent key is a no-op, not an error, so this is safe whether or
+	// not a simulation was ever run for this meeting. Exactly +1 item
+	// regardless of how many times the meeting was re-simulated, because
+	// SimRun is a singleton (SK=SIMRUN), not a history.
+	transactItems = append(transactItems, types.TransactWriteItem{
+		Delete: &types.Delete{
+			TableName: aws.String(r.tableName),
+			Key: map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+				"SK": &types.AttributeValueMemberS{Value: model.PrefixSimRun},
+			},
+		},
+	})
+
+	// Keep source and summary in one transaction. Four leading singleton
+	// deletes preserve every attachment/share pair at 100-item boundaries.
+	transactItems = append(transactItems, types.TransactWriteItem{
+		Delete: &types.Delete{TableName: aws.String(r.tableName), Key: summaryKey(meetingID)},
+	})
+
 	// 2. Attachments
 	attachments, err := r.ListAttachments(ctx, meetingID)
 	if err != nil {
@@ -1337,6 +1484,9 @@ func (r *DynamoDBRepository) DeleteMeeting(ctx context.Context, userID, meetingI
 					"SK": &types.AttributeValueMemberS{Value: model.PrefixAttachment + att.AttachmentID},
 				},
 			},
+		})
+		transactItems = append(transactItems, types.TransactWriteItem{
+			Delete: &types.Delete{TableName: aws.String(r.tableName), Key: attachmentTextKey(meetingID, att.AttachmentID)},
 		})
 	}
 
@@ -1368,21 +1518,6 @@ func (r *DynamoDBRepository) DeleteMeeting(ctx context.Context, userID, meetingI
 		})
 	}
 
-	// 4. Sim run (ADR-033) -- unconditional delete; a Delete against a
-	// nonexistent key is a no-op, not an error, so this is safe whether or
-	// not a simulation was ever run for this meeting. Exactly +1 item
-	// regardless of how many times the meeting was re-simulated, because
-	// SimRun is a singleton (SK=SIMRUN), not a history.
-	transactItems = append(transactItems, types.TransactWriteItem{
-		Delete: &types.Delete{
-			TableName: aws.String(r.tableName),
-			Key: map[string]types.AttributeValue{
-				"PK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
-				"SK": &types.AttributeValueMemberS{Value: model.PrefixSimRun},
-			},
-		},
-	})
-
 	// Execute in batches of 100 (TransactWriteItems limit)
 	for i := 0; i < len(transactItems); i += 100 {
 		end := i + 100
@@ -1397,7 +1532,9 @@ func (r *DynamoDBRepository) DeleteMeeting(ctx context.Context, userID, meetingI
 		}
 	}
 
-	return nil
+	// The source is now gone, so conditional workers cannot create new states.
+	// Sweep rows whose attachments disappeared or were created after enumeration.
+	return r.deleteAttachmentTextStates(ctx, meetingID)
 }
 
 // ListMeetingsParams contains parameters for listing meetings
@@ -1702,19 +1839,24 @@ func (r *DynamoDBRepository) ListAttachments(ctx context.Context, meetingID stri
 		return nil, fmt.Errorf("failed to build expression: %w", err)
 	}
 
-	result, err := r.client.Query(ctx, &dynamodb.QueryInput{
+	pages := dynamodb.NewQueryPaginator(r.client, &dynamodb.QueryInput{
 		TableName:                 aws.String(r.tableName),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
+		ConsistentRead:            aws.Bool(true),
 	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to query attachments: %w", err)
-	}
-
 	var attachments []model.Attachment
-	if err := attributevalue.UnmarshalListOfMaps(result.Items, &attachments); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal attachments: %w", err)
+	for pages.HasMorePages() {
+		result, err := pages.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to query attachments: %w", err)
+		}
+		var page []model.Attachment
+		if err := attributevalue.UnmarshalListOfMaps(result.Items, &page); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal attachments: %w", err)
+		}
+		attachments = append(attachments, page...)
 	}
 
 	return attachments, nil
@@ -1740,11 +1882,13 @@ func (r *DynamoDBRepository) UpdateAttachment(ctx context.Context, attachment *m
 
 // DeleteAttachment deletes an attachment
 func (r *DynamoDBRepository) DeleteAttachment(ctx context.Context, meetingID, attachmentID string) error {
-	_, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
-		TableName: aws.String(r.tableName),
-		Key: map[string]types.AttributeValue{
-			"PK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
-			"SK": &types.AttributeValueMemberS{Value: model.PrefixAttachment + attachmentID},
+	_, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{Delete: &types.Delete{TableName: aws.String(r.tableName), Key: map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+				"SK": &types.AttributeValueMemberS{Value: model.PrefixAttachment + attachmentID},
+			}}},
+			{Delete: &types.Delete{TableName: aws.String(r.tableName), Key: attachmentTextKey(meetingID, attachmentID)}},
 		},
 	})
 	if err != nil {
@@ -1756,7 +1900,8 @@ func (r *DynamoDBRepository) DeleteAttachment(ctx context.Context, meetingID, at
 // GetAttachment retrieves an attachment by meetingID and attachmentID
 func (r *DynamoDBRepository) GetAttachment(ctx context.Context, meetingID, attachmentID string) (*model.Attachment, error) {
 	result, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
-		TableName: aws.String(r.tableName),
+		TableName:      aws.String(r.tableName),
+		ConsistentRead: aws.Bool(true),
 		Key: map[string]types.AttributeValue{
 			"PK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
 			"SK": &types.AttributeValueMemberS{Value: model.PrefixAttachment + attachmentID},
@@ -1766,7 +1911,7 @@ func (r *DynamoDBRepository) GetAttachment(ctx context.Context, meetingID, attac
 		return nil, fmt.Errorf("failed to get attachment: %w", err)
 	}
 
-	if result.Item == nil {
+	if len(result.Item) == 0 {
 		return nil, nil
 	}
 
@@ -1775,6 +1920,9 @@ func (r *DynamoDBRepository) GetAttachment(ctx context.Context, meetingID, attac
 		return nil, fmt.Errorf("failed to unmarshal attachment: %w", err)
 	}
 
+	if attachment.MeetingID != meetingID || attachment.AttachmentID != attachmentID {
+		return nil, fmt.Errorf("attachment identity does not match its primary key")
+	}
 	return &attachment, nil
 }
 
@@ -3174,32 +3322,29 @@ func (r *DynamoDBRepository) ListChatSessions(ctx context.Context, userID string
 	return sessions, nil
 }
 
-// DeleteChatSession deletes both session metadata and session messages
+// DeleteChatSession deletes metadata, messages and companion source details atomically.
 func (r *DynamoDBRepository) DeleteChatSession(ctx context.Context, userID, sessionID string) error {
-	// Delete session metadata: PK=USER#{userID}, SK=CHAT_SESSION#{sessionID}
-	_, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
-		TableName: aws.String(r.tableName),
-		Key: map[string]types.AttributeValue{
-			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
-			"SK": &types.AttributeValueMemberS{Value: "CHAT_SESSION#" + sessionID},
-		},
+	sessionPK := "SESSION#" + userID + "#" + sessionID
+	var items []types.TransactWriteItem
+	for _, key := range [][2]string{
+		{model.PrefixUser + userID, "CHAT_SESSION#" + sessionID},
+		{sessionPK, "MESSAGES"},
+		{sessionPK, "SOURCE_DETAILS"},
+	} {
+		items = append(items, types.TransactWriteItem{Delete: &types.Delete{
+			TableName: aws.String(r.tableName),
+			Key: map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: key[0]},
+				"SK": &types.AttributeValueMemberS{Value: key[1]},
+			},
+		}})
+	}
+	_, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: items,
 	})
 	if err != nil {
-		return fmt.Errorf("failed to delete chat session metadata: %w", err)
+		return fmt.Errorf("failed to delete chat session: %w", err)
 	}
-
-	// Delete session messages: PK=SESSION#{userID}#{sessionID}, SK=MESSAGES
-	_, err = r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
-		TableName: aws.String(r.tableName),
-		Key: map[string]types.AttributeValue{
-			"PK": &types.AttributeValueMemberS{Value: "SESSION#" + userID + "#" + sessionID},
-			"SK": &types.AttributeValueMemberS{Value: "MESSAGES"},
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("failed to delete chat session messages: %w", err)
-	}
-
 	return nil
 }
 

@@ -86,6 +86,40 @@ func (r *DynamoDBRepository) GetMember(ctx context.Context, accountID, userID st
 	return &member, nil
 }
 
+// GetMeetingPublication reads only the canonical identity and publication fields.
+// Account projections already carry the owner: never authorize from GSI3's
+// eventually consistent copy or hydrate transcript objects for this check.
+func (r *DynamoDBRepository) GetMeetingPublication(ctx context.Context, ownerID, meetingID string) (*model.Meeting, error) {
+	projection := expression.NamesList(expression.Name("PK"), expression.Name("SK"),
+		expression.Name("meetingId"), expression.Name("userId"), expression.Name("entityType"),
+		expression.Name("accountId"), expression.Name("sharedToAccount"))
+	expr, err := expression.NewBuilder().WithProjection(projection).Build()
+	if err != nil {
+		return nil, fmt.Errorf("build meeting publication projection: %w", err)
+	}
+	result, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName:      aws.String(r.tableName),
+		ConsistentRead: aws.Bool(true),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + ownerID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+		},
+		ProjectionExpression:     expr.Projection(),
+		ExpressionAttributeNames: expr.Names(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get meeting publication: %w", err)
+	}
+	if len(result.Item) == 0 {
+		return nil, nil
+	}
+	var meeting model.Meeting
+	if err := attributevalue.UnmarshalMap(result.Item, &meeting); err != nil {
+		return nil, fmt.Errorf("unmarshal meeting publication: %w", err)
+	}
+	return &meeting, nil
+}
+
 func (r *DynamoDBRepository) PutMember(ctx context.Context, member *model.AccountMember) error {
 	item, err := attributevalue.MarshalMap(member)
 	if err != nil {
@@ -799,7 +833,8 @@ func (r *DynamoDBRepository) CreateDocShare(ctx context.Context, docID, ownerID,
 
 func (r *DynamoDBRepository) GetDocShare(ctx context.Context, sharedToID, docID string) (*model.Share, error) {
 	out, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
-		TableName: aws.String(r.tableName),
+		TableName:      aws.String(r.tableName),
+		ConsistentRead: aws.Bool(true),
 		Key: map[string]types.AttributeValue{
 			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + sharedToID},
 			"SK": &types.AttributeValueMemberS{Value: model.PrefixDocShare + docID},

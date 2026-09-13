@@ -1,6 +1,7 @@
 import * as cdk from 'aws-cdk-lib';
 import { Template, Match } from 'aws-cdk-lib/assertions';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { FrontendStack } from '../lib/frontend-stack';
 
 describe('FrontendStack', () => {
@@ -24,6 +25,8 @@ describe('FrontendStack', () => {
 
     const stack = new FrontendStack(app, 'TestFrontendStack', {
       httpApiUrl: 'https://test-api-id.execute-api.ap-northeast-2.amazonaws.com',
+      websocketApiUrl: 'wss://test-ws-id.execute-api.ap-northeast-2.amazonaws.com/production',
+      websocketOriginSecret: new secretsmanager.Secret(mockStack, 'WebSocketOriginSecret'),
       edgeFunctionVersion: edgeFn.currentVersion,
       cognitoRegion: 'ap-northeast-2',
       userPoolId: 'ap-northeast-2_test',

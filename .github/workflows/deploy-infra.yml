@@ -3,7 +3,7 @@ name: Deploy Infrastructure
 on:
   push:
     branches: [main]
-    paths: ['infra/**', 'backend/cmd/**', 'backend/internal/**', 'backend/go.*', 'backend/python/qa/**', 'backend/python/crawler/**']
+    paths: ['infra/**', 'backend/cmd/**', 'backend/internal/**', 'backend/go.*', 'backend/python/qa/**', 'backend/python/crawler/**', 'backend/python/document-extract/**']
   workflow_dispatch:
 
 permissions:
@@ -63,7 +63,7 @@ jobs:
       - name: Build Go Lambda binaries
         working-directory: backend
         run: |
-          for dir in cmd/api cmd/transcribe cmd/summarize cmd/process-image cmd/kb cmd/research-worker; do
+          for dir in cmd/api cmd/transcribe cmd/summarize cmd/process-image cmd/kb cmd/research-worker cmd/websocket cmd/ws-authorizer; do
             GOOS=linux GOARCH=arm64 go build -tags lambda.norpc -o "$dir/bootstrap" "./$dir"
           done
 

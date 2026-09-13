@@ -2,6 +2,9 @@
 
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import Link from 'next/link';
+import { qaSources } from '@/lib/qaSources';
+import type { QASourceDetail } from '@/types/meeting';
 
 const TOOL_LABELS: Record<string, { label: string; color: string }> = {
   search_knowledge_base: { label: 'KB 검색', color: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' },
@@ -11,26 +14,16 @@ const TOOL_LABELS: Record<string, { label: string; color: string }> = {
   search_web: { label: '웹 검색', color: 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400' },
 };
 
-/** Hostname for display, or null when the string isn't a parseable URL —
- * source URLs come from web search results, and a malformed one (e.g. a bare
- * "https://") must render as plain text instead of crashing the panel. */
-function safeHostname(source: string): string | null {
-  try {
-    return new URL(source).hostname || null;
-  } catch {
-    return null;
-  }
-}
-
 interface QAChatMessageProps {
   question: string;
   answer: string;
   sources?: string[];
+  sourceDetails?: QASourceDetail[];
   usedKB?: boolean;
   usedDocs?: boolean;
   toolsUsed?: string[];
   isStreaming?: boolean;
-  /** When provided, shows a "save to meeting notes" action on completed answers */
+  /** Adds a completed answer to the parent's notes draft; does not attest persistence. */
   onSaveToNotes?: () => void;
   isSavedToNotes?: boolean;
   /** AI-suggested follow-up questions for this answer */
@@ -41,8 +34,9 @@ interface QAChatMessageProps {
   isProactive?: boolean;
 }
 
-export function QAChatMessage({ question, answer, sources, usedKB, usedDocs, toolsUsed, isStreaming, onSaveToNotes, isSavedToNotes, followUps, onAskFollowUp, followUpsDisabled, isProactive }: QAChatMessageProps) {
+export function QAChatMessage({ question, answer, sources, sourceDetails, usedKB, usedDocs, toolsUsed, isStreaming, onSaveToNotes, isSavedToNotes, followUps, onAskFollowUp, followUpsDisabled, isProactive }: QAChatMessageProps) {
   const isLoading = !answer && !isStreaming;
+  const displayedSources = qaSources(sources, sourceDetails);
 
   return (
     <div className="space-y-3 animate-fade-in">
@@ -132,33 +126,22 @@ export function QAChatMessage({ question, answer, sources, usedKB, usedDocs, too
               )}
 
               {/* Sources */}
-              {sources && sources.length > 0 && (
+              {displayedSources.length > 0 && (
                 <div className="mt-2.5 pt-2 border-t border-slate-100 dark:border-slate-700">
                   <p className="text-[10px] font-semibold text-slate-400 uppercase mb-1.5">
                     Sources
                   </p>
                   <div className="flex flex-wrap gap-1">
-                    {sources.map((source, idx) => {
-                      const hostname = source.startsWith('http') ? safeHostname(source) : null;
-                      return hostname ? (
-                        <a
-                          key={idx}
-                          href={source}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-[10px] px-1.5 py-0.5 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 rounded hover:underline"
-                        >
-                          {hostname}
-                        </a>
-                      ) : (
-                        <span
-                          key={idx}
-                          className="text-[10px] px-1.5 py-0.5 bg-slate-100 dark:bg-slate-700 rounded text-slate-600 dark:text-slate-300"
-                        >
-                          {source}
-                        </span>
-                      );
-                    })}
+                    {displayedSources.map((source, idx) => (
+                      <span key={idx} className="max-w-full break-words rounded bg-slate-100 px-2 py-1 text-[11px] text-slate-700 dark:bg-slate-700 dark:text-slate-200">
+                        {source.href ? source.external ? (
+                          <a href={source.href} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline dark:text-blue-300">{source.label}</a>
+                        ) : <Link href={source.href} className="text-blue-600 hover:underline dark:text-blue-300">{source.label}</Link>
+                          : source.label}
+                        {source.kind && <span className="ml-1 text-slate-500 dark:text-slate-400">· {source.kind}</span>}
+                        {source.caveats.map((caveat) => <span key={caveat} className="ml-1 text-amber-800 dark:text-amber-200">· {caveat}</span>)}
+                      </span>
+                    ))}
                   </div>
                 </div>
               )}
@@ -167,6 +150,8 @@ export function QAChatMessage({ question, answer, sources, usedKB, usedDocs, too
               {onSaveToNotes && !isStreaming && answer && (
                 <div className="mt-2 pt-2 border-t border-slate-100 dark:border-slate-700 flex justify-end">
                   <button
+                    type="button"
+                    aria-label={isSavedToNotes ? '메모에 추가됨' : '메모에 추가'}
                     onClick={onSaveToNotes}
                     disabled={isSavedToNotes}
                     className={`flex items-center gap-1 text-[11px] font-medium px-2 py-1 rounded-md transition-colors ${
@@ -175,10 +160,10 @@ export function QAChatMessage({ question, answer, sources, usedKB, usedDocs, too
                         : 'text-slate-500 dark:text-text-muted hover:text-primary hover:bg-primary/5'
                     }`}
                   >
-                    <span className="material-symbols-outlined text-sm">
+                    <span aria-hidden="true" className="material-symbols-outlined text-sm">
                       {isSavedToNotes ? 'check_circle' : 'note_add'}
                     </span>
-                    {isSavedToNotes ? '노트에 저장됨' : '노트에 저장'}
+                    {isSavedToNotes ? '메모에 추가됨' : '메모에 추가'}
                   </button>
                 </div>
               )}

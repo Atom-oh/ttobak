@@ -19,6 +19,10 @@ import (
 	"github.com/ttobak/backend/internal/speaker"
 )
 
+// Saved notes enter the final-summary prompt, with the same character budget
+// as liveSummary. Enforce this on both edits and summary reads.
+const maxMeetingNotesRunes = model.MaxLiveSummaryRunes
+
 // Auto-expiry thresholds for meetings stuck in an in-progress status with no
 // further updates. Recording is user-controlled and open-ended (a
 // legitimate meeting can run for hours), so it needs a much longer threshold
@@ -46,6 +50,13 @@ const (
 	// to actually fire before that happens.
 	summarizeRetryEligibleThreshold = 20 * time.Minute
 )
+
+func validateMeetingNotes(notes string) error {
+	if len([]rune(notes)) > maxMeetingNotesRunes {
+		return fmt.Errorf("%w: notes exceeds %d characters", ErrInvalidInput, maxMeetingNotesRunes)
+	}
+	return nil
+}
 
 // isStuck reports whether a meeting's status has been sitting unchanged past
 // its auto-expiry threshold.
@@ -87,11 +98,14 @@ var (
 
 // meetingRepo defines the repository methods used by MeetingService.
 type meetingRepo interface {
-	CreateMeeting(ctx context.Context, userID, title string, date time.Time, participants []string, sttProvider string) (*model.Meeting, error)
+	CreateMeeting(ctx context.Context, userID, title string, date time.Time, participants []string, sttProvider string, preparation ...model.MeetingPreparation) (*model.Meeting, error)
 	GetMeeting(ctx context.Context, userID, meetingID string) (*model.Meeting, error)
 	GetMeetingByID(ctx context.Context, meetingID string) (*model.Meeting, error)
-	UpdateMeeting(ctx context.Context, meeting *model.Meeting) error
 	UpdateMeetingFields(ctx context.Context, userID, meetingID string, fields map[string]interface{}) error
+	UpdateMeetingFieldsIfMatch(ctx context.Context, userID, meetingID string, expected, fields map[string]interface{}) error
+	UpdateMeetingNotesIfMatch(ctx context.Context, userID, meetingID, expectedNotes, notes string) error
+	UpdateMeetingNotesWithRevision(ctx context.Context, userID, meetingID, expectedNotes, notes string, expectedRevision *string) (string, error)
+	UpdateMeetingFieldsWithNotesRevision(ctx context.Context, userID, meetingID string, fields map[string]interface{}) (string, error)
 	DeleteMeeting(ctx context.Context, userID, meetingID string) error
 	GetShare(ctx context.Context, sharedToID, meetingID string) (*model.Share, error)
 	ListAttachments(ctx context.Context, meetingID string) ([]model.Attachment, error)
@@ -181,11 +195,29 @@ func NewMeetingServiceForTest(repo MeetingRepo) *MeetingService {
 type MeetingRepo = meetingRepo
 
 // CreateMeeting creates a new meeting
-func (s *MeetingService) CreateMeeting(ctx context.Context, userID, title string, date time.Time, participants []string, sttProvider string) (*model.Meeting, error) {
+func (s *MeetingService) CreateMeeting(ctx context.Context, userID, title string, date time.Time, participants []string, sttProvider string, preparation ...model.MeetingPreparation) (*model.Meeting, error) {
 	if title == "" {
 		return nil, fmt.Errorf("title is required")
 	}
-	return s.repo.CreateMeeting(ctx, userID, title, date, participants, sttProvider)
+	if len(preparation) > 1 {
+		return nil, fmt.Errorf("%w: only one preparation is allowed", ErrInvalidInput)
+	}
+	if len(preparation) == 1 {
+		p := preparation[0]
+		if err := validateMeetingNotes(p.Notes); err != nil {
+			return nil, err
+		}
+		if p.AccountID != "" {
+			member, err := s.repo.GetMember(ctx, p.AccountID, userID)
+			if err != nil {
+				return nil, err
+			}
+			if member == nil {
+				return nil, ErrForbidden
+			}
+		}
+	}
+	return s.repo.CreateMeeting(ctx, userID, title, date, participants, sttProvider, preparation...)
 }
 
 // shareAccessRepo is the minimal persistence seam resolveSharedAccess needs --
@@ -478,13 +510,47 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 		return nil, ErrNotFound
 	}
 
+	if meeting.SummaryRetryPending && meeting.SummaryRetryAttempts >= repository.MaxSummaryRetries {
+		claim, parseErr := time.Parse(time.RFC3339Nano, meeting.SummarizeRetryClaimedAt)
+		if meeting.SummarizeRetryClaimedAt == "" || parseErr == nil && time.Since(claim) > repository.SummarizeRetryClaimTTL {
+			if finisher, ok := s.repo.(interface {
+				ExpireSummaryRetry(context.Context, string, string) error
+			}); ok {
+				if err := finisher.ExpireSummaryRetry(ctx, meeting.UserID, meetingID); err != nil {
+					return nil, err
+				}
+				meeting, err = s.repo.GetMeeting(ctx, meeting.UserID, meetingID)
+				if err != nil {
+					return nil, err
+				}
+				if meeting == nil {
+					return nil, ErrNotFound
+				}
+			}
+		}
+	}
 	if isStuck(meeting.Status, meeting.UpdatedAt) {
-		meeting.Status = model.StatusError
-		s.repo.UpdateMeeting(ctx, meeting)
+		err = s.repo.UpdateMeetingFieldsIfMatch(ctx, meeting.UserID, meetingID,
+			map[string]interface{}{"status": meeting.Status, "updatedAt": meeting.UpdatedAt.Format(time.RFC3339Nano)},
+			map[string]interface{}{"status": model.StatusError})
+		if err != nil && !errors.Is(err, repository.ErrConditionFailed) {
+			return nil, fmt.Errorf("expire stuck meeting: %w", err)
+		}
+		// A worker may have made progress or deleted the meeting after our read.
+		meeting, err = s.repo.GetMeeting(ctx, meeting.UserID, meetingID)
+		if err != nil {
+			return nil, err
+		}
+		if meeting == nil {
+			return nil, ErrNotFound
+		}
 	}
 
 	// Get attachments
-	attachments, _ := s.repo.ListAttachments(ctx, meetingID)
+	attachments, err := s.repo.ListAttachments(ctx, meetingID)
+	if err != nil {
+		return nil, err
+	}
 	var attachmentResponses []model.AttachmentResponse
 	for _, att := range attachments {
 		attachmentResponses = append(attachmentResponses, model.AttachmentResponse{
@@ -514,49 +580,69 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 		}
 	}
 
-	// Parse transcript segments for speaker diarization
+	// The shared candidates may describe either variant or a previous edit.
+	// Only render those verified against the currently selected text.
+	transcript, variant := selectMeetingTranscript(meeting)
 	var transcription json.RawMessage
-	if meeting.TranscriptSegments != "" {
-		transcription = json.RawMessage(meeting.TranscriptSegments)
+	if segments := transcriptSegmentsForText(transcript, meeting.TranscriptSegments); len(segments) > 0 {
+		// Legacy Transcribe segments may have been reconstructed with current
+		// punctuation. Render that verified text while retaining IDs/timestamps.
+		transcription, err = json.Marshal(segments)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode transcript segments: %w", err)
+		}
 	}
 
 	// The owner's exported Notion page is private to their own export — a
 	// shared viewer has no use for it and no business seeing which external
 	// page the owner's summary lives on (same reasoning as Shares above).
 	notionPageID := ""
+	var projectIDs []string
 	if permission == "owner" {
 		notionPageID = meeting.NotionPageID
+		projectIDs = meeting.ProjectIDs
 	}
+	fieldInsights, insightsError, insightsTruncated := meetingFieldInsights(meeting.Insights)
 
 	return &model.MeetingDetailResponse{
-		MeetingID:          meeting.MeetingID,
-		UserID:             meeting.UserID,
-		Title:              meeting.Title,
-		Date:               meeting.Date.Format(time.RFC3339),
-		Status:             meeting.Status,
-		Participants:       meeting.Participants,
-		Content:            meeting.Content,
-		Notes:              meeting.Notes,
-		LiveSummary:        meeting.LiveSummary,
-		TranscriptA:        meeting.TranscriptA,
-		TranscriptB:        meeting.TranscriptB,
-		SelectedTranscript: strPtr(meeting.SelectedTranscript),
-		AudioKey:           meeting.AudioKey,
-		AudioKeys:          meeting.AudioKeys,
-		AudioPartCount:     meeting.AudioPartCount,
-		AudioPartsReady:    meeting.AudioPartsReady,
-		Tags:               meeting.Tags,
-		ActionItems:        toRawJSON(meeting.ActionItems),
-		SpeakerMap:         meeting.SpeakerMap,
-		SttProvider:        meeting.SttProvider,
-		LinkedMeetingIDs:   meeting.LinkedMeetingIDs,
-		NotionPageID:       notionPageID,
-		Permission:         permission,
-		Transcription:      transcription,
-		Attachments:        attachmentResponses,
-		Shares:             shareResponses,
-		CreatedAt:          meeting.CreatedAt.Format(time.RFC3339),
-		UpdatedAt:          meeting.UpdatedAt.Format(time.RFC3339),
+		SupportsNotesComparison:    true,
+		SupportsPrivateAccountLink: true,
+		MeetingID:                  meeting.MeetingID,
+		UserID:                     meeting.UserID,
+		AccountID:                  meeting.AccountID,
+		SharedToAccount:            meeting.SharedToAccount,
+		ProjectIDs:                 projectIDs,
+		Title:                      meeting.Title,
+		Date:                       meeting.Date.Format(time.RFC3339),
+		Status:                     meeting.Status,
+		Participants:               meeting.Participants,
+		Content:                    meeting.Content,
+		Notes:                      meeting.Notes,
+		NotesRevision:              meeting.NotesRevision,
+		LiveSummary:                meeting.LiveSummary,
+		TranscriptA:                meeting.TranscriptA,
+		TranscriptB:                meeting.TranscriptB,
+		SelectedTranscript:         strPtr(variant),
+		AudioKey:                   meeting.AudioKey,
+		AudioKeys:                  meeting.AudioKeys,
+		AudioPartCount:             meeting.AudioPartCount,
+		AudioPartsReady:            meeting.AudioPartsReady,
+		Tags:                       meeting.Tags,
+		ActionItems:                toRawJSON(meeting.ActionItems),
+		SpeakerMap:                 meeting.SpeakerMap,
+		SttProvider:                meeting.SttProvider,
+		LinkedMeetingIDs:           meeting.LinkedMeetingIDs,
+		NotionPageID:               notionPageID,
+		Permission:                 permission,
+		Transcription:              transcription,
+		Attachments:                attachmentResponses,
+		Shares:                     shareResponses,
+		CreatedAt:                  meeting.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:                  meeting.UpdatedAt.Format(time.RFC3339),
+		FieldInsights:              fieldInsights,
+		FieldInsightsFreshness:     "unknown",
+		FieldInsightsError:         insightsError,
+		FieldInsightsTruncated:     insightsTruncated,
 	}, nil
 }
 
@@ -577,6 +663,27 @@ func (s *MeetingService) UpdateMeeting(ctx context.Context, userID, meetingID st
 		return nil, ErrForbidden
 	}
 
+	if req.ExpectedNotes != nil || req.ExpectedNotesRevision != nil {
+		if req.Notes == nil || req.ExpectedNotes == nil || req.Title != "" || req.Content != "" || req.LiveSummary != nil ||
+			req.TranscriptA != "" || req.SelectedTranscript != "" || req.Participants != nil || req.Status != "" {
+			return nil, fmt.Errorf("%w: expectedNotes requires a notes-only update", ErrInvalidInput)
+		}
+		if err := validateMeetingNotes(*req.Notes); err != nil {
+			return nil, err
+		}
+		if err := validateMeetingNotes(*req.ExpectedNotes); err != nil {
+			return nil, err
+		}
+		if req.ExpectedNotesRevision != nil && len(*req.ExpectedNotesRevision) > 128 {
+			return nil, fmt.Errorf("%w: expectedNotesRevision exceeds 128 bytes", ErrInvalidInput)
+		}
+		revision, err := s.repo.UpdateMeetingNotesWithRevision(ctx, meeting.UserID, meeting.MeetingID, *req.ExpectedNotes, *req.Notes, req.ExpectedNotesRevision)
+		if err != nil {
+			return nil, err
+		}
+		return &model.MeetingUpdateResponse{MeetingID: meeting.MeetingID, UpdatedAt: time.Now().UTC().Format(time.RFC3339), NotesRevision: revision}, nil
+	}
+
 	fields := map[string]interface{}{}
 	if req.Title != "" {
 		fields["title"] = req.Title
@@ -585,6 +692,9 @@ func (s *MeetingService) UpdateMeeting(ctx context.Context, userID, meetingID st
 		fields["content"] = req.Content
 	}
 	if req.Notes != nil {
+		if err := validateMeetingNotes(*req.Notes); err != nil {
+			return nil, err
+		}
 		fields["notes"] = *req.Notes
 	}
 	if req.LiveSummary != nil {
@@ -598,6 +708,9 @@ func (s *MeetingService) UpdateMeeting(ctx context.Context, userID, meetingID st
 		fields["liveSummary"] = *req.LiveSummary
 	}
 	if req.TranscriptA != "" {
+		if strings.TrimSpace(req.TranscriptA) == "" {
+			return nil, fmt.Errorf("%w: transcriptA must contain non-whitespace text", ErrInvalidInput)
+		}
 		// s3:// values are repository-internal storage refs (large
 		// transcripts spill to S3 — see repository.validateTranscriptRef);
 		// legitimate client input is always the transcript TEXT. Accepting
@@ -606,7 +719,12 @@ func (s *MeetingService) UpdateMeeting(ctx context.Context, userID, meetingID st
 		if strings.HasPrefix(req.TranscriptA, "s3://") {
 			return nil, fmt.Errorf("%w: transcriptA must be transcript text, not a storage reference", ErrInvalidInput)
 		}
-		fields["transcriptA"] = req.TranscriptA
+		if req.TranscriptA != meeting.TranscriptA {
+			fields["transcriptA"] = req.TranscriptA
+			// Preserve shared candidate metadata: it may describe B, including
+			// a concurrent B producer. Every consumer verifies against the
+			// selected current text, so stale A words cannot override this edit.
+		}
 	}
 	if req.SelectedTranscript != "" {
 		fields["selectedTranscript"] = req.SelectedTranscript
@@ -619,8 +737,15 @@ func (s *MeetingService) UpdateMeeting(ctx context.Context, userID, meetingID st
 	}
 
 	updatedAt := time.Now().UTC()
+	notesRevision := meeting.NotesRevision
 	if len(fields) > 0 {
-		if err := s.repo.UpdateMeetingFields(ctx, meeting.UserID, meeting.MeetingID, fields); err != nil {
+		var err error
+		if req.Notes != nil {
+			notesRevision, err = s.repo.UpdateMeetingFieldsWithNotesRevision(ctx, meeting.UserID, meeting.MeetingID, fields)
+		} else {
+			err = s.repo.UpdateMeetingFields(ctx, meeting.UserID, meeting.MeetingID, fields)
+		}
+		if err != nil {
 			return nil, err
 		}
 	} else {
@@ -628,8 +753,9 @@ func (s *MeetingService) UpdateMeeting(ctx context.Context, userID, meetingID st
 	}
 
 	return &model.MeetingUpdateResponse{
-		MeetingID: meeting.MeetingID,
-		UpdatedAt: updatedAt.Format(time.RFC3339),
+		MeetingID:     meeting.MeetingID,
+		UpdatedAt:     updatedAt.Format(time.RFC3339),
+		NotesRevision: notesRevision,
 	}, nil
 }
 
@@ -667,13 +793,20 @@ func (s *MeetingService) UpdateSpeakers(ctx context.Context, userID, meetingID s
 	// Store the mapping for reference
 	meeting.SpeakerMap = req.SpeakerMap
 
-	if err := s.repo.UpdateMeeting(ctx, meeting); err != nil {
+	// Guard the original version: hydrated transcripts can differ from stored S3 refs.
+	updatedAt := time.Now().UTC()
+	if err := s.repo.UpdateMeetingFieldsIfMatch(ctx, meeting.UserID, meetingID,
+		map[string]interface{}{"updatedAt": meeting.UpdatedAt.Format(time.RFC3339Nano)},
+		map[string]interface{}{
+			"content": meeting.Content, "transcriptA": meeting.TranscriptA, "transcriptB": meeting.TranscriptB,
+			"transcriptSegments": meeting.TranscriptSegments, "actionItems": meeting.ActionItems, "speakerMap": meeting.SpeakerMap,
+		}); err != nil {
 		return nil, err
 	}
 
 	return &model.MeetingUpdateResponse{
 		MeetingID: meeting.MeetingID,
-		UpdatedAt: meeting.UpdatedAt.Format(time.RFC3339),
+		UpdatedAt: updatedAt.Format(time.RFC3339),
 	}, nil
 }
 
@@ -749,8 +882,7 @@ func (s *MeetingService) SelectTranscript(ctx context.Context, userID, meetingID
 		return ErrForbidden
 	}
 
-	meeting.SelectedTranscript = selected
-	return s.repo.UpdateMeeting(ctx, meeting)
+	return s.repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, map[string]interface{}{"selectedTranscript": selected})
 }
 
 // ShareMeetingByEmail shares a meeting with a user identified by email. The
@@ -1235,11 +1367,10 @@ func (s *MeetingService) UpdateMeetingStatus(ctx context.Context, meetingID, sta
 		return err
 	}
 	if meeting == nil {
-		return fmt.Errorf("meeting not found")
+		return ErrNotFound
 	}
 
-	meeting.Status = status
-	return s.repo.UpdateMeeting(ctx, meeting)
+	return s.repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, map[string]interface{}{"status": status})
 }
 
 // UpdateMeetingTranscript updates transcript fields (internal use)
@@ -1249,17 +1380,20 @@ func (s *MeetingService) UpdateMeetingTranscript(ctx context.Context, meetingID 
 		return err
 	}
 	if meeting == nil {
-		return fmt.Errorf("meeting not found")
+		return ErrNotFound
 	}
 
+	fields := map[string]interface{}{}
 	if transcriptA != "" {
-		meeting.TranscriptA = transcriptA
+		fields["transcriptA"] = transcriptA
 	}
 	if transcriptB != "" {
-		meeting.TranscriptB = transcriptB
+		fields["transcriptB"] = transcriptB
 	}
-
-	return s.repo.UpdateMeeting(ctx, meeting)
+	if len(fields) == 0 {
+		return nil
+	}
+	return s.repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, fields)
 }
 
 // UpdateMeetingContent updates the content/summary field (internal use)
@@ -1269,16 +1403,15 @@ func (s *MeetingService) UpdateMeetingContent(ctx context.Context, meetingID, co
 		return err
 	}
 	if meeting == nil {
-		return fmt.Errorf("meeting not found")
+		return ErrNotFound
 	}
 
-	meeting.Content = content
-	meeting.Status = model.StatusDone
-	return s.repo.UpdateMeeting(ctx, meeting)
+	return s.repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, map[string]interface{}{"content": content, "status": model.StatusDone})
 }
 
 // LinkMeetingToAccount classifies a meeting under an account (no sharing).
 // Only the meeting owner who is a member of the account may do this.
+// Clear prior team publication in the same write; direct shares are independent.
 func (s *MeetingService) LinkMeetingToAccount(ctx context.Context, ownerID, meetingID, accountID string) error {
 	meeting, err := s.repo.GetMeeting(ctx, ownerID, meetingID)
 	if err != nil {
@@ -1297,8 +1430,9 @@ func (s *MeetingService) LinkMeetingToAccount(ctx context.Context, ownerID, meet
 	if member == nil {
 		return ErrForbidden
 	}
-	meeting.AccountID = accountID
-	return s.repo.UpdateMeeting(ctx, meeting)
+	return s.repo.UpdateMeetingFields(ctx, ownerID, meetingID, map[string]interface{}{
+		"accountId": accountID, "sharedToAccount": false,
+	})
 }
 
 // ShareMeetingToAccount publishes a meeting to an account team: sets
@@ -1324,7 +1458,7 @@ func (s *MeetingService) ShareMeetingToAccount(ctx context.Context, ownerID, own
 	}
 
 	// This sequence is non-transactional, but every write is idempotent
-	// (UpdateMeeting and the MeetingRef PutItem target fixed keys; CreateShare
+	// (the meeting update and MeetingRef PutItem target fixed keys; CreateShare
 	// keys on the recipient), so a client retry converges. Single-item DynamoDB
 	// writes rarely fail; full atomicity via TransactWriteItems was considered
 	// but rejected because its 100-item limit would cap account team size.
@@ -1334,7 +1468,7 @@ func (s *MeetingService) ShareMeetingToAccount(ctx context.Context, ownerID, own
 	// leaving ListAccountMeetings permanently unable to surface it.
 	meeting.AccountID = accountID
 	meeting.SharedToAccount = true
-	if err := s.repo.UpdateMeeting(ctx, meeting); err != nil {
+	if err := s.repo.UpdateMeetingFields(ctx, ownerID, meetingID, map[string]interface{}{"accountId": accountID, "sharedToAccount": true}); err != nil {
 		return nil, err
 	}
 

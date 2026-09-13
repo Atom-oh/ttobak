@@ -1,81 +1,48 @@
 ---
 name: pr-autofix
-description: After creating a PR, poll for AI review comments and auto-fix issues (max 3 iterations)
+description: Resolve current-HEAD AI PR findings within the authorized scope, rerun required checks, and merge when the user's conditions hold.
 ---
 
-# PR Auto-Fix Skill
+# PR review completion
 
-After you create a PR (via `gh pr create`), automatically wait for the AI Code Review CI to complete, then read review feedback and fix issues. Repeat up to 3 times until the review passes.
+Follow `docs/runbooks/pr-review.md` and the root project's delivery policy.
+This procedure does not expand the user's authorization.
 
-## When to use
+1. Identify the PR, current full HEAD SHA, authorized change scope, target branch,
+   and predecessor PRs. Read paginated issue comments, inline comments and review
+   records. Match `<!-- multi-ai-pr-review -->` and its full commit SHA to HEAD;
+   timestamps and earlier-commit reviews are insufficient.
+2. Verify Critical/Major findings against the proposed code. Fix actual issues
+   within scope, run relevant tests, commit/push, and await the new HEAD's review.
+3. Use at most five corrective push/review rounds per autofix batch. At that
+   limit, end this batch and return to the coordinating agent for fresh root-cause
+   diagnosis and a concrete revised plan; do not repeat the same edits indefinitely.
+   The overall authorized task remains unfinished, not passed. A new batch needs
+   new diagnostic evidence, not a reset counter used to evade this bound.
+4. Missing/failed review or insufficient required coverage is unfinished work.
+   Retry recoverable execution failures only after identifying their cause.
+   Failed checks and unresolved Critical/Major findings always block merge.
+5. Minor/Info alone does not block completion. After current-HEAD review and
+   required CI/protection pass, recheck HEAD and the integration path and merge
+   under the user's standing authorization. Honor later review-only/no-merge scope.
+6. Report fixes, verification, PR URL and merge outcome. Do not send unrelated
+   external messages without authorization.
 
-Invoke this skill immediately after creating a PR. It replaces the manual cycle of:
-1. Push → wait for CI review → read comments → fix → push again
+## Workflow and gate boundary
 
-## Flow
+Generic requests to fix review feedback do **not** authorize changes under
+`.github/workflows/**` or `scripts/pr-review/**`, changes to branch protection,
+review criteria, reviewer coverage, credentials, or runner permissions. Do not
+edit those controls merely to make a failed review/check pass.
 
-```
-PR created → poll for review comment → FAIL? → read issues → fix code → commit & push → repeat
-                                      → PASS? → done
-                                      → 3 iterations? → stop, notify user
-```
+When the user's original task explicitly includes review/CI tooling, or the user
+has approved a concrete PR containing those changes, treat them as the authorized
+feature change: review the actual control diff independently, run its checks on
+the proposed HEAD, and retain every required gate. This skill supplies no additional
+permission to expand that scope. Already authorized tooling changes follow the
+same latest-HEAD merge conditions; do not invent a second approval requirement.
 
-## Steps
-
-### 1. Identify the PR
-
-Get the PR number from the most recent `gh pr create` output, or from the current branch:
-
-```bash
-PR_NUMBER=$(gh pr list --head "$(git branch --show-current)" --json number --jq '.[0].number')
-```
-
-### 2. Poll for AI review comment
-
-The AI Code Review workflow (`pr-review.yml`) posts a comment containing `<!-- bedrock-pr-review -->`. Poll until it appears or is updated (check the `updated_at` timestamp is after the last push).
-
-```bash
-gh api "repos/{owner}/{repo}/issues/${PR_NUMBER}/comments" \
-  --jq '.[] | select(.body | contains("<!-- bedrock-pr-review -->"))'
-```
-
-Poll every 60 seconds. If no review comment appears within 10 minutes, stop and inform the user.
-
-### 3. Check verdict
-
-Extract the verdict from the review comment body:
-- Contains `**Status: PASSED**` → done, inform user
-- Contains `**Status: BLOCKED**` → proceed to fix
-
-### 4. Fix issues (if BLOCKED)
-
-Read the review comment and the current diff. Fix ONLY the issues mentioned:
-- Focus on **CRITICAL** and **MAJOR** issues first
-- Fix **MINOR** issues if trivial
-- Do NOT refactor beyond what the review asks
-- Do NOT modify CI/CD workflow files (.github/workflows/*)
-- Verify the fix compiles (Go build, frontend build as needed)
-
-### 5. Commit and push
-
-```bash
-git add <changed-files>
-git commit -m "fix: address AI review feedback (iteration N/3)
-
-Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>"
-git push
-```
-
-### 6. Repeat or stop
-
-- If iteration < 3: go back to step 2 (poll for new review)
-- If iteration == 3 and still BLOCKED: stop and tell the user that manual review is needed
-- Track iteration count by counting commits with message prefix `fix: address AI review feedback`
-
-## Important constraints
-
-- **Max 3 iterations** — after 3 failed attempts, stop unconditionally
-- **Never modify workflow files** — the review CI itself must not be changed during autofix
-- **Scope discipline** — only fix what the review mentions, nothing else
-- **Build verification** — always verify the code compiles before committing
-- **Polling patience** — CI takes 2-5 minutes; poll at 60s intervals, not faster
+Poll at reasonable intervals and respect the actual workflow timeout. A
+60-minute job is not failed merely because ten minutes elapsed. A review failure
+cannot be resolved by disabling its workflow, suppressing a real finding, or
+reducing required coverage.

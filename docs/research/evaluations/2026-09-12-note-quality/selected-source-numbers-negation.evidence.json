@@ -1,0 +1,8 @@
+{
+  "transport": "aws-sdk",
+  "modelId": "global.anthropic.claude-opus-5",
+  "region": "us-west-2",
+  "requestSha256": "901f02952c334797ff207ada097197da339340a0462038c0e7c077b1de88ec67",
+  "responseSha256": "9f2113d7a78e1280cb13a2acff722dac6221f408c46faf770f8944fdb7ac69d7",
+  "observedAt": "2026-09-12T17:38:05.337520051Z"
+}

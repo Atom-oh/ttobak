@@ -108,20 +108,18 @@ func GenerateMeetingDocument(meeting *model.Meeting, attachments []model.Attachm
 		}
 	}
 
-	// Transcript (speaker-labeled segments preferred, fallback to raw text)
-	if meeting.TranscriptSegments != "" {
-		var segments []TranscriptSegment
-		if err := json.Unmarshal([]byte(meeting.TranscriptSegments), &segments); err == nil && len(segments) > 0 {
-			b.WriteString("## Transcript\n\n")
-			for _, seg := range segments {
-				minutes := int(seg.StartTime) / 60
-				seconds := int(seg.StartTime) % 60
-				b.WriteString(fmt.Sprintf("**%s** [%02d:%02d]: %s\n\n", seg.Speaker, minutes, seconds, seg.Text))
-			}
-		}
-	} else if meeting.TranscriptA != "" {
+	// Export verified segments for the chosen variant, or its current raw text.
+	transcript, _ := selectMeetingTranscript(meeting)
+	if segments := transcriptSegmentsForText(transcript, meeting.TranscriptSegments); len(segments) > 0 {
 		b.WriteString("## Transcript\n\n")
-		b.WriteString(meeting.TranscriptA)
+		for _, seg := range segments {
+			minutes := int(seg.StartTime) / 60
+			seconds := int(seg.StartTime) % 60
+			b.WriteString(fmt.Sprintf("**%s** [%02d:%02d]: %s\n\n", seg.Speaker, minutes, seconds, seg.Text))
+		}
+	} else if transcript != "" {
+		b.WriteString("## Transcript\n\n")
+		b.WriteString(transcript)
 		b.WriteString("\n\n")
 	}
 

@@ -2,6 +2,13 @@ package model
 
 import "time"
 
+// MeetingPreparation is optional initial context, saved with the meeting's first
+// write. An account association classifies the meeting; it never shares it.
+type MeetingPreparation struct {
+	Notes     string
+	AccountID string
+}
+
 // Meeting represents a meeting record in DynamoDB
 // PK: USER#{userId}, SK: MEETING#{meetingId}
 type Meeting struct {
@@ -33,13 +40,18 @@ type Meeting struct {
 	// UpdateMeeting (PutItem) write during reprocessing would silently drop
 	// the claim, letting a second concurrent redelivery re-claim and
 	// double-run Bedrock summarize + KB export.
-	SummarizeRetryClaimedAt string            `dynamodbav:"summarizeRetryClaimedAt,omitempty"`
-	SttProvider             string            `dynamodbav:"sttProvider,omitempty"`        // "transcribe" or "nova-sonic"
-	TranscriptSegments      string            `dynamodbav:"transcriptSegments,omitempty"` // JSON string of speaker-labeled segments
-	ActionItems             string            `dynamodbav:"actionItems,omitempty"`        // JSON string of extracted action items
-	Notes                   string            `dynamodbav:"notes,omitempty"`              // User-written meeting notes (post-recording)
-	LiveSummary             string            `dynamodbav:"liveSummary,omitempty"`        // Real-time summary built during recording (markdown incl. mermaid)
-	SpeakerMap              map[string]string `dynamodbav:"speakerMap,omitempty"`         // spk_0 -> "김팀장" mapping
+	SummarizeRetryClaimedAt  string            `dynamodbav:"summarizeRetryClaimedAt,omitempty"`
+	SummaryRetryPending      bool              `dynamodbav:"summaryRetryPending,omitempty"`
+	SummaryRetryAttempts     int               `dynamodbav:"summaryRetryAttempts,omitempty"`
+	SummaryConflictCode      string            `dynamodbav:"summaryConflictCode,omitempty"`
+	SttProvider              string            `dynamodbav:"sttProvider,omitempty"`              // "transcribe" or "nova-sonic"
+	TranscriptSegments       string            `dynamodbav:"transcriptSegments,omitempty"`       // JSON string of speaker-labeled segments
+	ActionItems              string            `dynamodbav:"actionItems,omitempty"`              // JSON string of extracted action items
+	AttachmentSummarySources string            `dynamodbav:"attachmentSummarySources,omitempty"` // Content hash + document revisions used by saved summary
+	Notes                    string            `dynamodbav:"notes,omitempty"`                    // User-written meeting notes (post-recording)
+	NotesRevision            string            `dynamodbav:"notesRevision,omitempty"`            // Server-generated UUID; absent legacy revisions read as empty.
+	LiveSummary              string            `dynamodbav:"liveSummary,omitempty"`              // Real-time summary built during recording (markdown incl. mermaid)
+	SpeakerMap               map[string]string `dynamodbav:"speakerMap,omitempty"`               // spk_0 -> "김팀장" mapping
 	// DiarizationSpeakerHint overrides len(Participants) as pyannote's
 	// max_speakers bound when re-diarizing a meeting on demand (see
 	// RediarizeMeeting) — set once a user-supplied headcount is known to be
@@ -69,22 +81,28 @@ type Meeting struct {
 // Attachment represents a file attachment for a meeting
 // PK: MEETING#{meetingId}, SK: ATTACH#{attachmentId}
 type Attachment struct {
-	PK               string    `dynamodbav:"PK"`
-	SK               string    `dynamodbav:"SK"`
-	AttachmentID     string    `dynamodbav:"attachmentId"`
-	MeetingID        string    `dynamodbav:"meetingId"`
-	UserID           string    `dynamodbav:"userId"`
-	OriginalKey      string    `dynamodbav:"originalKey"`
-	ProcessedKey     string    `dynamodbav:"processedKey,omitempty"`
-	Type             string    `dynamodbav:"type"`   // photo, screenshot, diagram, whiteboard
-	Status           string    `dynamodbav:"status"` // uploaded, processing, done
-	Description      string    `dynamodbav:"description,omitempty"`
-	ProcessedContent string    `dynamodbav:"processedContent,omitempty"` // Mermaid/markdown result
-	FileName         string    `dynamodbav:"fileName,omitempty"`
-	FileSize         int64     `dynamodbav:"fileSize,omitempty"`
-	MimeType         string    `dynamodbav:"mimeType,omitempty"`
-	CreatedAt        time.Time `dynamodbav:"createdAt"`
-	EntityType       string    `dynamodbav:"entityType"` // "ATTACHMENT"
+	ExtractedText     *AttachmentTextResult `dynamodbav:"-" json:"-"` // Verified in-memory summary evidence only.
+	ExtractedRevision string                `dynamodbav:"-" json:"-"`
+	SummaryExcerpted  bool                  `dynamodbav:"-" json:"-"`
+	SummaryOmitted    bool                  `dynamodbav:"-" json:"-"`
+	CitationRejected  bool                  `dynamodbav:"-" json:"-"`
+	SummaryTextState  *AttachmentTextState  `dynamodbav:"-" json:"-"`
+	PK                string                `dynamodbav:"PK"`
+	SK                string                `dynamodbav:"SK"`
+	AttachmentID      string                `dynamodbav:"attachmentId"`
+	MeetingID         string                `dynamodbav:"meetingId"`
+	UserID            string                `dynamodbav:"userId"`
+	OriginalKey       string                `dynamodbav:"originalKey"`
+	ProcessedKey      string                `dynamodbav:"processedKey,omitempty"`
+	Type              string                `dynamodbav:"type"`   // photo, screenshot, diagram, whiteboard
+	Status            string                `dynamodbav:"status"` // uploaded, processing, done
+	Description       string                `dynamodbav:"description,omitempty"`
+	ProcessedContent  string                `dynamodbav:"processedContent,omitempty"` // Mermaid/markdown result
+	FileName          string                `dynamodbav:"fileName,omitempty"`
+	FileSize          int64                 `dynamodbav:"fileSize,omitempty"`
+	MimeType          string                `dynamodbav:"mimeType,omitempty"`
+	CreatedAt         time.Time             `dynamodbav:"createdAt"`
+	EntityType        string                `dynamodbav:"entityType"` // "ATTACHMENT"
 }
 
 // Share represents a shared meeting access record

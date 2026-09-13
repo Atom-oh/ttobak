@@ -18,9 +18,9 @@ type UploadHandler struct {
 // no slide authoring, upload+viewer+download only (see docs/superpowers/specs
 // roadmap SP2).
 var docUploadMimeTypes = map[string]bool{
-	"application/pdf":                                                            true,
+	"application/pdf": true,
 	"application/vnd.openxmlformats-officedocument.presentationml.presentation": true,
-	"application/vnd.ms-powerpoint":                                              true,
+	"application/vnd.ms-powerpoint":                                             true,
 }
 
 // NewUploadHandler creates a new upload handler
@@ -103,7 +103,7 @@ func (h *UploadHandler) UploadComplete(w http.ResponseWriter, r *http.Request) {
 
 	err := h.uploadService.CompleteUpload(ctx, userID, &req)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		writeAttachmentError(w, err)
 		return
 	}
 

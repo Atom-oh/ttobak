@@ -72,5 +72,15 @@
         ]
       }
     ]
-  }
+  },
+  "cc-api-provider:account=180294183052:expectedMatchCount=exactly-one:propertiesToReturn.0=PrefixListId:propertyMatch.PrefixListName=com.amazonaws.ap-northeast-2.s3:region=ap-northeast-2:typeName=AWS$:$:EC2$:$:PrefixList": [
+    {
+      "PrefixListId": "pl-78a54011"
+    }
+  ],
+  "cc-api-provider:account=180294183052:expectedMatchCount=exactly-one:propertiesToReturn.0=PrefixListId:propertyMatch.PrefixListName=com.amazonaws.ap-northeast-2.dynamodb:region=ap-northeast-2:typeName=AWS$:$:EC2$:$:PrefixList": [
+    {
+      "PrefixListId": "pl-48a54021"
+    }
+  ]
 }

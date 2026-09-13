@@ -4,6 +4,7 @@ export interface Meeting {
   meetingId: string;
   userId: string;
   accountId?: string;
+  projectIds?: string[];
   title: string;
   description?: string;
   date: string;
@@ -84,6 +85,18 @@ export interface ActionItem {
   dueDate?: string;
 }
 
+export interface ActionItemsAnalysis {
+  status: 'unknown' | 'queued' | 'running' | 'failed' | 'succeeded';
+  runId?: string;
+  errorCode?: string;
+  leaseUntil?: number;
+}
+
+export interface ActionItemsResponse {
+  actionItems: ActionItem[];
+  analysis: ActionItemsAnalysis;
+}
+
 export interface TranscriptSegment {
   id: string;
   speaker: string;
@@ -108,6 +121,97 @@ export interface Attachment {
   status?: string;
   timestamp?: string;
   createdAt: string;
+  originalKey?: string;
+  textExtraction?: AttachmentTextStatus;
+}
+
+export interface AttachmentTextStatus {
+  status: 'unknown' | 'queued' | 'running' | 'succeeded' | 'partial' | 'failed';
+  runId?: string;
+  errorCode?: string;
+  leaseUntil?: number;
+  updatedAt?: string;
+  unitCount: number;
+  complete: boolean;
+  hasResult: boolean;
+  needsResummary: boolean;
+  summaryExcerpted: boolean;
+}
+
+export type IndexState = 'UNTRACKED' | 'PENDING' | 'PREPARING' | 'WAITING_SYNC' | 'WAITING_SOURCE' | 'INDEXED' | 'FAILED' | 'DELETED';
+export interface IndexStatusResponse {
+  state: IndexState;
+  errorCode?: string;
+  updatedAt?: string;
+}
+export interface ResummaryStatus {
+  status: 'unknown' | 'queued' | 'running' | 'succeeded' | 'failed';
+  runId?: string;
+  errorCode?: string;
+  leaseUntil?: number;
+  updatedAt?: string;
+  resultHash?: string;
+}
+export interface SummaryReadingPage {
+  meetingId: string;
+  source: 'summary';
+  revision: string;
+  content: string;
+  updatedAt?: string;
+  page: {
+    unit: 'unicode_code_points';
+    startOffset: number;
+    endOffset: number;
+    totalCodePoints: number;
+    complete: boolean;
+    nextCursor?: string | null;
+  };
+}
+export type IndexStatusTarget =
+  | { kind: 'meeting'; meetingId: string }
+  | { kind: 'document'; docId: string }
+  | { kind: 'accountDocument'; accountId: string; docId: string };
+
+export interface AttachmentTextLocation {
+  kind: 'page' | 'slide' | 'paragraph';
+  page?: number;
+  slide?: number;
+  paragraph?: number;
+  startLine?: number;
+  endLine?: number;
+  table?: number;
+  row?: number;
+  cell?: number;
+  part?: string;
+  hidden?: boolean;
+}
+
+export interface AttachmentTextPage {
+  analysis: AttachmentTextStatus;
+  current: boolean;
+  source: {
+    bucket: string;
+    key: string;
+    eTag: string;
+    meetingId: string;
+    ownerId: string;
+    uploaderId: string;
+    attachmentId: string;
+    runId: string;
+  };
+  format: 'pdf' | 'pptx' | 'docx' | 'md';
+  scope: 'embedded_pdf_text' | 'slide_body' | 'document_body' | 'markdown_source';
+  complete: boolean;
+  warningCount: number;
+  units: {
+    unitIndex: number;
+    startOffset: number;
+    endOffset: number;
+    text: string;
+    location: AttachmentTextLocation;
+  }[];
+  nextCursor?: string;
+  pageComplete: boolean;
 }
 
 export interface SharedUser {
@@ -151,6 +255,13 @@ export interface User {
 
 // Extended meeting detail from API
 export interface MeetingDetail extends Meeting {
+  supportsNotesComparison?: boolean;
+  notesRevision?: string;
+  supportsPrivateAccountLink?: boolean;
+  fieldInsights?: MeetingFieldInsight[];
+  fieldInsightsError?: string;
+  fieldInsightsTruncated?: boolean;
+  actionItemsAnalysis?: ActionItemsAnalysis;
   content?: string;
   notes?: string;
   /** Real-time summary built during recording (markdown incl. mermaid) */
@@ -170,6 +281,18 @@ export interface MeetingDetail extends Meeting {
   sharedToAccount?: boolean;
 }
 
+/** Stored extraction, without a current-summary freshness guarantee. */
+export interface MeetingFieldInsight {
+  id: string;
+  type: string;
+  text: string;
+  evidence?: string;
+  implication?: string;
+  nextAction?: string;
+  tsMarker?: string;
+  entities?: string[];
+}
+
 export interface KBFile {
   fileId: string;
   fileName: string;
@@ -183,10 +306,33 @@ export interface QAEntry {
   question: string;
   answer: string;
   sources?: string[];
+  sourceDetails?: QASourceDetail[];
   usedKB?: boolean;
   usedDocs?: boolean;
   toolsUsed?: string[];
   timestamp: string;
+}
+
+/** Canonical retrieval and attachment provenance; legacyText has no PK/SK. */
+export interface QASourceDetail {
+  resourceKind: string;
+  resourceId?: string;
+  sourcePK?: string;
+  sourceSK?: string;
+  title?: string;
+  sourceRevision?: string;
+  uri?: string;
+  contentSource?: string;
+  provenanceScope?: 'validated_history' | 'legacy_identity' | 'history_receipt' | 'legacy_identity_unavailable';
+  meetingId?: string;
+  attachmentId?: string;
+  filePending?: boolean;
+  usingPreviousResult?: boolean;
+  partial?: boolean;
+  locations?: AttachmentTextLocation[];
+  attempt?: { status?: string; runId?: string; errorCode?: string; [key: string]: unknown };
+  result?: { runId?: string; complete?: boolean; [key: string]: unknown };
+  [key: string]: unknown;
 }
 
 export interface IntegrationConfig {

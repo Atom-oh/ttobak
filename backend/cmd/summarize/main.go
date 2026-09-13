@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -29,12 +30,14 @@ import (
 )
 
 var (
-	bedrockService  *service.BedrockService
-	kbExportService *service.KBExportService
-	repo            *repository.DynamoDBRepository
-	s3Client        *s3.Client
-	ebClient        *eventbridge.Client
-	bucketName      string
+	bedrockService     *service.BedrockService
+	actionItemsService *service.ActionItemsAnalysisService
+	resummaryService   *service.ResummaryService
+	kbExportService    *service.KBExportService
+	repo               *repository.DynamoDBRepository
+	s3Client           *s3.Client
+	ebClient           *eventbridge.Client
+	bucketName         string
 )
 
 func init() {
@@ -70,6 +73,11 @@ func init() {
 
 	repo = repository.NewDynamoDBRepositoryWithS3(dynamoClient, tableName, s3Client, bucketName)
 	bedrockService = service.NewBedrockService(bedrockClient, s3Client, repo)
+	metadata := repo.MetadataView()
+	attachmentTextService := service.NewAttachmentTextService(metadata, service.NewMeetingService(metadata), s3Client, bucketName, nil)
+	bedrockService.SetAttachmentTextService(attachmentTextService)
+	resummaryService = service.NewResummaryService(metadata, service.NewMeetingService(metadata), bedrockService, attachmentTextService, nil)
+	actionItemsService = service.NewMetadataActionItemsAnalysisService(repo, bedrockService, nil)
 
 	// KB export service — gracefully skips if not configured
 	kbBucketName := os.Getenv("KB_BUCKET_NAME")
@@ -169,6 +177,26 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 		return fmt.Errorf("failed to unmarshal event envelope: %w", err)
 	}
 
+	if envelope.Source == "ttobak.analysis" && envelope.DetailType == "SummaryRequested" {
+		var event struct {
+			Detail model.SummaryRequested `json:"detail"`
+		}
+		if err := json.Unmarshal(raw, &event); err != nil {
+			return fmt.Errorf("decode summary request")
+		}
+		return resummaryService.Process(ctx, event.Detail)
+	}
+
+	if envelope.Source == "ttobak.analysis" && envelope.DetailType == "ActionItemsRequested" {
+		var event struct {
+			Detail model.ActionItemsRequested `json:"detail"`
+		}
+		if err := json.Unmarshal(raw, &event); err != nil {
+			return fmt.Errorf("decode action items event: %w", err)
+		}
+		return actionItemsService.Process(ctx, event.Detail)
+	}
+
 	// Custom event: all parts of a multi-file meeting have been transcribed
 	if envelope.Source == "ttobak.transcribe" && envelope.DetailType == "AllPartsTranscribed" {
 		var event model.AllPartsTranscribedEvent
@@ -216,8 +244,15 @@ func handleSingleTranscript(ctx context.Context, bucket, key string) error {
 	}
 
 	// Status guard: skip if already processed (prevents re-trigger after merged transcript write)
-	meeting, err := repo.GetMeetingByID(ctx, meetingID)
+	meeting, err := repo.MetadataView().GetMeetingByID(ctx, meetingID)
 	if err == nil && meeting != nil {
+		meeting, err = repo.MetadataView().GetMeeting(ctx, meeting.UserID, meetingID)
+		if err != nil || meeting == nil {
+			return err
+		}
+		if handled, retryErr := resumeSummaryRetry(ctx, meeting, repo.MetadataView(), generateSummary); handled {
+			return retryErr
+		}
 		// Whitelist guard — process when status is `transcribing`, or when
 		// it's `summarizing` but eligible for retry (a previous attempt
 		// refined/saved the transcript and then died mid-summarize, e.g. a
@@ -432,10 +467,13 @@ func handleAllPartsTranscribed(ctx context.Context, detail *model.AllPartsTransc
 
 	log.Printf("AllPartsTranscribed: merging %d parts for meeting %s", detail.PartCount, meetingID)
 
-	meeting, err := repo.GetMeeting(ctx, userID, meetingID)
+	meeting, err := repo.MetadataView().GetMeeting(ctx, userID, meetingID)
 	if err != nil || meeting == nil {
 		log.Printf("Failed to get meeting %s: %v", meetingID, err)
 		return nil
+	}
+	if handled, retryErr := resumeSummaryRetry(ctx, meeting, repo.MetadataView(), generateSummary); handled {
+		return retryErr
 	}
 
 	// Whitelist guard — process when the meeting is still `transcribing`,
@@ -488,9 +526,11 @@ func handleAllPartsTranscribed(ctx context.Context, detail *model.AllPartsTransc
 	// pipeline (refine + save + summarize) on top of the already-merged
 	// content. Errors here must abort so we don't write the archive
 	// under an inconsistent status.
-	if statusErr := repo.UpdateMeetingFields(ctx, userID, meetingID, map[string]interface{}{
-		"status": model.StatusSummarizing,
-	}); statusErr != nil {
+	statusFields := map[string]interface{}{"status": model.StatusSummarizing}
+	if !meeting.SummaryRetryPending || meeting.Status != model.StatusSummarizing {
+		statusFields["summaryRetryAttempts"], statusFields["summaryRetryPending"], statusFields["summaryConflictCode"] = 0, false, ""
+	}
+	if statusErr := repo.UpdateMeetingFields(ctx, userID, meetingID, statusFields); statusErr != nil {
 		log.Printf("Failed to set status=summarizing before archive for meeting %s: %v", meetingID, statusErr)
 		return fmt.Errorf("set summarizing status failed (retrying): %w", statusErr)
 	}
@@ -517,6 +557,7 @@ func handleAllPartsTranscribed(ctx context.Context, detail *model.AllPartsTransc
 
 // generateSummary runs the full Bedrock pipeline: summary, action items, tags, sentiment, KB export
 func generateSummary(ctx context.Context, meeting *model.Meeting, priorContext string) error {
+	retry := meeting.SummaryRetryPending && meeting.Status == model.StatusSummarizing
 	meetingID := meeting.MeetingID
 	userID := meeting.UserID
 
@@ -528,23 +569,24 @@ func generateSummary(ctx context.Context, meeting *model.Meeting, priorContext s
 	// must abort: otherwise the downstream summary save would overwrite the
 	// content while status is still `transcribing`, which the frontend gates
 	// off (loading spinner stays visible while content appears blank).
-	if statusErr := repo.UpdateMeetingFields(ctx, userID, meetingID, map[string]interface{}{
-		"status": model.StatusSummarizing,
-	}); statusErr != nil {
+	fields := map[string]interface{}{"status": model.StatusSummarizing}
+	if !retry {
+		fields["summaryRetryAttempts"], fields["summaryRetryPending"], fields["summaryConflictCode"] = 0, false, ""
+	}
+	if statusErr := repo.UpdateMeetingFields(ctx, userID, meetingID, fields); statusErr != nil {
 		log.Printf("Failed to set status=summarizing for meeting %s: %v", meetingID, statusErr)
 		return fmt.Errorf("set summarizing status failed (retrying): %w", statusErr)
 	}
 
-	// Fold the real-time summary built during recording into the prompt so the
-	// final summary integrates its detail and mermaid diagrams instead of
-	// regenerating a short template from the raw transcript alone. See
-	// service.FoldLiveSummary for the threat model and fence-escape hardening
-	// (kept in internal/service rather than here so its regression test runs
-	// under CI's `go test ./internal/...`, which cmd/ packages are outside of).
-	priorContext = service.FoldLiveSummary(priorContext, meeting.LiveSummary)
-
 	content, err := bedrockService.SummarizeTranscript(ctx, meetingID, userID, priorContext)
 	if err != nil {
+		if retry {
+			return err // The owning retry claim decides pending versus terminal.
+		}
+		if errors.Is(err, service.ErrSummaryConflict) {
+			log.Printf("Summary source conflict for meeting %s; retry pending", meetingID)
+			return err // Lambda redelivery claims the marker and generates afresh.
+		}
 		log.Printf("Failed to generate summary: %v", err)
 		repo.UpdateMeetingFields(ctx, userID, meetingID, map[string]interface{}{
 			"status": model.StatusError,
@@ -554,17 +596,8 @@ func generateSummary(ctx context.Context, meeting *model.Meeting, priorContext s
 
 	log.Printf("Generated content for meeting %s: %d characters", meetingID, len(content))
 
-	actionItems, err := bedrockService.ExtractActionItems(ctx, meetingID, userID)
-	if err != nil {
-		log.Printf("Failed to extract action items (non-fatal): %v", err)
-	} else {
-		if err := repo.UpdateMeetingFields(ctx, userID, meetingID, map[string]interface{}{
-			"actionItems": actionItems,
-		}); err != nil {
-			log.Printf("Failed to save action items: %v", err)
-		} else {
-			log.Printf("Extracted action items for meeting %s: %s", meetingID, actionItems)
-		}
+	if err := actionItemsService.RunInline(ctx, userID, meetingID); err != nil {
+		log.Printf("Action item analysis could not finish: %v", err)
 	}
 
 	tags, err := bedrockService.ExtractTags(ctx, meetingID, userID)

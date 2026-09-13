@@ -10,7 +10,7 @@ targets=("${@:-all}")
 build_backend() {
   echo "==> Building Go Lambda functions (ARM64)..."
   cd "$ROOT/backend"
-  for dir in cmd/api cmd/transcribe cmd/summarize cmd/process-image cmd/websocket cmd/kb; do
+  for dir in cmd/api cmd/transcribe cmd/summarize cmd/process-image cmd/kb cmd/research-worker cmd/websocket cmd/ws-authorizer; do
     echo "  - $dir"
     GOOS=linux GOARCH=arm64 /usr/local/go/bin/go build -tags lambda.norpc -o "$dir/bootstrap" "./$dir"
   done

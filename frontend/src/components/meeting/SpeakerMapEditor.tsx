@@ -45,6 +45,7 @@ export function SpeakerMapEditor({ transcription, content, speakerMap: existingS
   };
   const [mapping, setMapping] = useState<Record<string, string>>(initMapping);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [isOpen, setIsOpen] = useState(false);
   const [rediarizeCount, setRediarizeCount] = useState(speakers.length + 1);
   const [rediarizing, setRediarizing] = useState(false);
@@ -85,9 +86,12 @@ export function SpeakerMapEditor({ transcription, content, speakerMap: existingS
     }
     if (Object.keys(filtered).length === 0) return;
     setSaving(true);
+    setSaveError(null);
     try {
       await onSave(filtered);
       setIsOpen(false);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : '화자 이름을 저장하지 못했습니다. 다시 시도해 주세요.');
     } finally {
       setSaving(false);
     }
@@ -98,6 +102,7 @@ export function SpeakerMapEditor({ transcription, content, speakerMap: existingS
       ? 'bg-amber-50 dark:bg-[#1a1520] border border-amber-200 dark:border-amber-900/30'
       : 'bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10'
     }`}>
+      {saveError && <p role="alert" className="mb-3 text-sm text-red-600 dark:text-red-400">{saveError}</p>}
       <button
         onClick={() => setIsOpen(!isOpen)}
         className="flex items-center gap-2 w-full text-left"

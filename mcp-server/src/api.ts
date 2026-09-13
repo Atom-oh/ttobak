@@ -4,6 +4,7 @@ import { basename, extname, isAbsolute, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { URL } from 'node:url';
 import type { CognitoAuth } from './auth.js';
+import { MAX_READING_BYTES, type ReadingOptions } from './reading.js';
 
 // Extension -> MIME type, shared by both upload tools for inference only --
 // each tool advertises its own narrower format list (kb_upload: pdf/md/pptx/
@@ -125,23 +126,79 @@ export function mergeProjectUpdate(
   return merged;
 }
 
+function identifier(value: string, name: string): string {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(value)) {
+    throw new Error(`${name} must be a non-empty ID (letters, digits, "_" or "-", at most 128 characters).`);
+  }
+  return encodeURIComponent(value);
+}
+
+function documentsPath(accountId?: string): string {
+  return accountId === undefined
+    ? '/api/documents'
+    : `/api/accounts/${identifier(accountId, 'accountId')}/documents`;
+}
+
+export type DocumentInput = {
+  title: string;
+  markdown?: string;
+  docType?: string;
+  path?: string;
+};
+
+// HTTP success is mandatory even when the gateway returns JSON without the
+// application's usual {error:{code,message}} envelope.
+export function parseApiResponse(status: number, body: string): unknown {
+  if (status === 204) return {};
+  let parsed;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    throw new Error(`HTTP ${status}: invalid JSON response`);
+  }
+  if (status < 200 || status >= 300 || parsed?.error) {
+    const detail = parsed?.error;
+    throw new Error(
+      detail?.message
+        ? `HTTP ${status} ${detail.code || 'API_ERROR'}: ${detail.message}`
+        : `HTTP ${status}: TTOBAK request failed`,
+    );
+  }
+  return parsed;
+}
+
 export class TtobakApi {
   constructor(
     private auth: CognitoAuth,
     private baseUrl: string,
   ) {}
 
-  async listMeetings(opts?: { cursor?: string; limit?: number; tab?: string }) {
+  async listMeetings(opts?: { cursor?: string; limit?: number; tab?: string; accountIds?: string[] }) {
     const q = new URLSearchParams();
     if (opts?.cursor) q.set('cursor', opts.cursor);
     if (opts?.limit) q.set('limit', String(opts.limit));
     if (opts?.tab) q.set('tab', opts.tab);
+    if (opts?.accountIds !== undefined) {
+      if (!Array.isArray(opts.accountIds) || opts.accountIds.length === 0 || opts.accountIds.length > 100) {
+        throw new Error('accountIds must contain 1-100 account IDs. Omit it to list all accounts.');
+      }
+      opts.accountIds.forEach((id) => identifier(id, 'accountId'));
+      q.set('accountIds', [...new Set(opts.accountIds)].join(','));
+    }
     const qs = q.toString();
     return this.get(`/api/meetings${qs ? '?' + qs : ''}`);
   }
 
-  async getMeeting(meetingId: string) {
-    return this.get(`/api/meetings/${meetingId}`);
+  async readMeeting(options: ReadingOptions) {
+    const query = new URLSearchParams({ kind: options.kind, pageSize: String(options.pageSize) });
+    if (options.kind === 'meeting') query.set('section', options.section);
+    else query.set('source', options.source);
+    if (options.cursor !== undefined) query.set('cursor', options.cursor);
+    if (options.kind === 'transcript' && options.startTime !== undefined) {
+      query.set('startTime', String(options.startTime));
+      query.set('endTime', String(options.endTime));
+    }
+    return this.request('GET', `/api/meetings/${identifier(options.meetingId, 'meetingId')}/reading?${query}`, undefined, MAX_READING_BYTES);
   }
 
   async askQuestion(question: string, meetingId?: string, sessionId?: string) {
@@ -264,21 +321,25 @@ export class TtobakApi {
   }
 
   async putDocument(
-    accountId: string,
+    accountId: string | undefined,
     doc: { title: string; markdown: string; docType?: string; path?: string },
   ) {
-    return this.post(`/api/accounts/${accountId}/documents`, doc);
+    return this.post(documentsPath(accountId), doc);
   }
 
-  async listDocuments(accountId: string, docType?: string) {
+  async listDocuments(accountId?: string, docType?: string) {
     const q = new URLSearchParams();
     if (docType) q.set('docType', docType);
     const qs = q.toString();
-    return this.get(`/api/accounts/${accountId}/documents${qs ? '?' + qs : ''}`);
+    return this.get(`${documentsPath(accountId)}${qs ? '?' + qs : ''}`);
   }
 
-  async getDocument(accountId: string, docId: string) {
-    return this.get(`/api/accounts/${accountId}/documents/${docId}`);
+  async getDocument(accountId: string | undefined, docId: string) {
+    return this.get(`${documentsPath(accountId)}/${identifier(docId, 'docId')}`);
+  }
+
+  async updateDocument(accountId: string | undefined, docId: string, doc: DocumentInput) {
+    return this.put(`${documentsPath(accountId)}/${identifier(docId, 'docId')}`, doc);
   }
 
   /** Upload a local file into the global Knowledge Base. Ingestion doesn't
@@ -346,6 +407,7 @@ export class TtobakApi {
     aliases?: string[];
     domains?: string[];
     industry?: string;
+    parentAccountId?: string;
   }) {
     return this.post('/api/accounts', input);
   }
@@ -404,7 +466,7 @@ export class TtobakApi {
     });
   }
 
-  private async request(method: string, path: string, body?: unknown): Promise<unknown> {
+  private async request(method: string, path: string, body?: unknown, maxResponseBytes?: number): Promise<unknown> {
     const idToken = await this.auth.getIdToken();
     const url = new URL(path, this.baseUrl);
     const data = body ? JSON.stringify(body) : undefined;
@@ -413,8 +475,10 @@ export class TtobakApi {
       const req = httpsRequest(
         {
           hostname: url.hostname,
+          port: url.port || undefined,
           path: url.pathname + url.search,
           method,
+          timeout: 120_000,
           headers: {
             Authorization: `Bearer ${idToken}`,
             'Content-Type': 'application/json',
@@ -422,23 +486,47 @@ export class TtobakApi {
           },
         },
         (res) => {
-          let chunks = '';
-          res.on('data', (c) => (chunks += c));
+          // Count original wire bytes before buffering/decoding JSON. A string
+          // character count would undercount Korean/emoji and byte-split chunks.
+          const chunks: Buffer[] = [];
+          let received = 0, finished = false;
+          const fail = (error: Error) => {
+            if (finished) return;
+            finished = true;
+            chunks.length = 0;
+            reject(error);
+            res.destroy();
+            req.destroy();
+          };
+          const tooLarge = () => fail(new Error('READING_LIMIT: HTTP reading response exceeds 32000 bytes'));
+          res.on('error', fail);
+          res.on('aborted', () => fail(new Error('TTOBAK response was aborted')));
+          res.on('close', () => { if (!finished) fail(new Error('TTOBAK response ended before completion')); });
+          res.on('data', (chunk: Buffer) => {
+            if (finished) return;
+            if (maxResponseBytes !== undefined && received + chunk.length > maxResponseBytes) {
+              tooLarge();
+              return;
+            }
+            received += chunk.length;
+            chunks.push(chunk);
+          });
           res.on('end', () => {
-            if (res.statusCode === 204) return resolve({});
+            if (finished) return;
+            finished = true;
             try {
-              const parsed = JSON.parse(chunks);
-              if (parsed.error) {
-                reject(new Error(`${parsed.error.code}: ${parsed.error.message}`));
-              } else {
-                resolve(parsed);
-              }
-            } catch {
-              reject(new Error(`HTTP ${res.statusCode}: ${chunks.slice(0, 300)}`));
+              resolve(parseApiResponse(res.statusCode || 0, Buffer.concat(chunks, received).toString('utf8')));
+            } catch (error) {
+              reject(error);
             }
           });
+          const declaredLength = res.headers?.['content-length'];
+          if (maxResponseBytes !== undefined && declaredLength !== undefined && Number(declaredLength) > maxResponseBytes) {
+            tooLarge();
+          }
         },
       );
+      req.on('timeout', () => req.destroy(new Error('TTOBAK request timed out after 120s')));
       req.on('error', reject);
       if (data) req.write(data);
       req.end();

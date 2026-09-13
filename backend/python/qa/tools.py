@@ -1,6 +1,8 @@
 """Tool definitions and executor for Bedrock Converse API agentic loop."""
 
 import logging
+import json
+from source_tools import SOURCE_TOOL_DEFINITIONS, SOURCE_TOOL_NAMES, execute_source_tool, format_source_results
 import re
 
 from aws_docs import search_aws_docs, get_aws_recommendation
@@ -12,19 +14,23 @@ TOOL_DEFINITIONS = [
     {
         "toolSpec": {
             "name": "search_knowledge_base",
-            "description": "Search the Ttobak knowledge base for relevant documents about meetings, AWS, or uploaded files.",
+            "description": "Search current authorized meetings, personal/account documents, and indexed files. Saved text is hydrated live; file excerpts require current source provenance. When the user names exact original binary KB keys, pass source_keys: filenames alone are not semantic content queries.",
             "inputSchema": {
                 "json": {
                     "type": "object",
                     "properties": {
                         "query": {"type": "string", "description": "Search query"},
-                        "numberOfResults": {"type": "integer", "description": "Number of results (1-10)", "default": 5}
+                        "numberOfResults": {"type": "integer", "description": "Number of results (1-10), at least the number of selected sources", "default": 5},
+                        "source_keys": {"type": "array", "minItems": 1, "maxItems": 5,
+                                        "items": {"type": "string"},
+                                        "description": "Optional exact original binary keys under kb/<current-user>/ or shared/. Do not use snapshot keys or another user's private keys. Current authorized versions are read regardless of filename similarity; use get_legacy_text_detail for legacy text files."}
                     },
                     "required": ["query"]
                 }
             }
         }
     },
+    *SOURCE_TOOL_DEFINITIONS,
     {
         "toolSpec": {
             "name": "search_aws_docs",
@@ -44,7 +50,7 @@ TOOL_DEFINITIONS = [
     {
         "toolSpec": {
             "name": "search_transcript",
-            "description": "Search meeting transcript for specific topics or keywords. Use when the user asks about what was discussed.",
+            "description": "Search full supplied meeting context by keyword, including saved notes and the selected transcript when a meeting is loaded.",
             "inputSchema": {
                 "json": {
                     "type": "object",
@@ -74,7 +80,7 @@ TOOL_DEFINITIONS = [
     {
         "toolSpec": {
             "name": "list_meetings",
-            "description": "사용자의 미팅 목록을 검색합니다. 본인 미팅과 공유받은 미팅 모두 포함. 날짜, 태그, 키워드로 필터링 가능합니다.",
+            "description": "사용자의 미팅 목록을 검색합니다. 본인 미팅, 개별 공유, 현재 소속 고객사에 공개된 미팅을 포함합니다. 날짜, 태그, 제목 키워드로 필터링 가능합니다.",
             "inputSchema": {
                 "json": {
                     "type": "object",
@@ -92,12 +98,14 @@ TOOL_DEFINITIONS = [
     {
         "toolSpec": {
             "name": "get_meeting_detail",
-            "description": "특정 미팅의 상세 내용(AI 요약, 트랜스크립트)을 가져옵니다. list_meetings에서 얻은 meetingId를 사용하세요. 미팅 내용에 대해 질문받았을 때 반드시 이 도구를 사용하세요.",
+            "description": "list_meetings의 meetingId로 최신 사용자 메모·요약·선택된 트랜스크립트를 읽습니다. 메모나 정정 사항은 KB 결과만 믿지 말고 여기서 확인하세요. 긴 내용은 offset으로 계속 읽으세요.",
             "inputSchema": {
                 "json": {
                     "type": "object",
                     "properties": {
-                        "meetingId": {"type": "string", "description": "미팅 ID (list_meetings 결과에서 확인)"}
+                        "meetingId": {"type": "string", "description": "미팅 ID (list_meetings 결과에서 확인)"},
+                        "offset": {"type": "integer", "minimum": 0, "default": 0,
+                                   "description": "긴 메모/미팅의 다음 부분을 읽을 시작 문자 위치. 이전 결과의 offset 안내를 사용하세요."}
                     },
                     "required": ["meetingId"]
                 }
@@ -205,9 +213,13 @@ def execute_tool(tool_name, tool_input, context):
             )
             return format_web_results(results, error)
         elif tool_name == "search_knowledge_base":
+            if 'source_keys' in tool_input and type(tool_input['source_keys']) is not list:
+                raise ValueError('source_keys must be a list of original binary keys')
+            selection = {'source_keys': tool_input['source_keys']} if 'source_keys' in tool_input else {}
             results = context["retrieve_from_kb"](
                 tool_input["query"],
                 tool_input.get("numberOfResults", 5),
+                **selection,
             )
             sources = [r["uri"] for r in results if r.get("uri")]
             return format_kb_results(results), sources
@@ -251,10 +263,22 @@ def execute_tool(tool_name, tool_input, context):
                 return f"미팅 조회 실패: {err.get('message', 'unknown error')}", []
             if not content:
                 return "미팅 내용이 비어있습니다.", []
+            offset = tool_input.get('offset', 0)
+            if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+                return "offset은 0 이상의 정수여야 합니다.", []
+            if offset >= len(content):
+                return f"요청 범위가 미팅 내용 끝을 넘었습니다. 총 {len(content)}자입니다.", []
             max_len = 6000
-            if len(content) > max_len:
-                content = content[:max_len] + f"\n\n... (총 {len(content)}자 중 {max_len}자까지 표시)"
-            return content, []
+            end = min(offset + max_len, len(content))
+            excerpt = content[offset:end]
+            if offset or end < len(content):
+                excerpt += f"\n\n[일부 내용: 총 {len(content)}자 중 {offset}:{end} 표시."
+                if end < len(content):
+                    excerpt += f" 다음 부분은 get_meeting_detail에 같은 meetingId와 offset={end}을 전달하세요."
+                excerpt += " 전체 내용을 확인한 것으로 간주하지 마세요.]"
+            return excerpt, []
+        elif tool_name in SOURCE_TOOL_NAMES:
+            return execute_source_tool(tool_name, tool_input, context)
         elif tool_name == "start_research":
             user_id = context.get("user_id")
             if not user_id:
@@ -304,16 +328,7 @@ def execute_tool(tool_name, tool_input, context):
 
 
 def format_kb_results(results):
-    """Format KB retrieval results into a readable string."""
-    if not results:
-        return "Knowledge Base에서 관련 문서를 찾지 못했습니다."
-    lines = []
-    for r in results:
-        uri = r.get("uri", "")
-        text = r["text"][:800]
-        score = r.get("score", 0)
-        lines.append(f"[Score: {score:.2f}] {uri}\n{text}")
-    return "\n\n---\n\n".join(lines)
+    return format_source_results(results)
 
 
 def format_docs_results(results):

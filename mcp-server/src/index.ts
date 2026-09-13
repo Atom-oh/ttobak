@@ -6,6 +6,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { CognitoAuth } from './auth.js';
 import { TtobakApi } from './api.js';
+import { readingOptions, readingResult, readingError } from './reading.js';
 
 const COGNITO_DOMAIN = process.env.TTOBAK_COGNITO_DOMAIN || '';
 const CLIENT_ID = process.env.TTOBAK_CLIENT_ID || '';
@@ -43,31 +44,56 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'ttobak_list_meetings',
       description:
-        'List meetings with title, date, status, and participants. Supports pagination.',
+        'List meetings with title, date, status, and participants. Follow the returned cursor for remaining results. accountIds uses OR matching: to include a group, pass the group and all accessible descendant IDs from ttobak_list_accounts; parent selection alone does not expand descendants.',
       inputSchema: {
         type: 'object' as const,
         properties: {
           limit: { type: 'number', description: 'Max results (default 20)' },
           cursor: { type: 'string', description: 'Pagination cursor from previous response' },
           tab: { type: 'string', enum: ['all', 'shared'], description: 'all (default) or shared-with-me' },
+          accountIds: { type: 'array', minItems: 1, maxItems: 100, items: { type: 'string' }, description: 'Optional explicit account IDs. Omit for all accounts; retain the same IDs when paging.' },
         },
       },
     },
     {
       name: 'ttobak_get_meeting',
       description:
-        'Get full meeting detail: summary, transcript, action items, tags, participants, speaker map.',
+        'Read current saved notes first (default), or the generated summary with section=summary. Includes a bounded actionItems preview and actionItemsAnalysis; missing legacy analysis is unknown, never success. section=actionItems pages complete JSON in actionItemsJson. Follow page.nextCursor with the same section until complete. Notes are user corrections, not interchangeable with generated summaries. Use ttobak_read_transcript for transcripts.',
+      annotations: { readOnlyHint: true },
       inputSchema: {
         type: 'object' as const,
         properties: {
           meetingId: { type: 'string', description: 'Meeting ID' },
+          section: { type: 'string', enum: ['notes', 'summary', 'actionItems'], default: 'notes' },
+          cursor: { type: 'string', maxLength: 2048, description: 'Continuation for this meeting/section; restart if stale' },
+          pageSize: { type: 'integer', minimum: 1, maximum: 8000, default: 4000, description: 'Maximum Unicode code points; byte budget may shorten the page' },
         },
         required: ['meetingId'],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: 'ttobak_read_transcript',
+      description:
+        'Read bounded transcript pages after saved notes. Default source=selected uses current A/B selection and fallback. Every page rechecks access via the API. Follow page.nextCursor with the same source/time range until complete. Chunks preserve raw text and Unicode code-point offsets. Times/speakers appear only for segments fully matched to the selected text; segment times describe whole utterances even on partial chunks. Unselected sources are text-only. Time ranges select whole overlapping segments, not exact word-level cuts.',
+      annotations: { readOnlyHint: true },
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          meetingId: { type: 'string', description: 'Meeting ID' },
+          source: { type: 'string', enum: ['selected', 'A', 'B'], default: 'selected' },
+          cursor: { type: 'string', maxLength: 2048, description: 'Continuation bound to meeting/source/revision/range; stale cursors require restarting' },
+          pageSize: { type: 'integer', minimum: 1, maximum: 8000, default: 4000 },
+          startTime: { type: 'number', minimum: 0, description: 'Optional inclusive start in seconds; requires endTime and verified segments' },
+          endTime: { type: 'number', minimum: 0, description: 'Optional exclusive end in seconds, greater than startTime' },
+        },
+        required: ['meetingId'],
+        additionalProperties: false,
       },
     },
     {
       name: 'ttobak_list_accounts',
-      description: 'List customer accounts you belong to (id, name, your role). Entry point for account-scoped queries.',
+      description: 'List customer accounts you belong to (id, name, parentAccountId, your role). Build group/subsidiary trees using parentAccountId. Hierarchy does not grant access to other accounts.',
       inputSchema: { type: 'object' as const, properties: {} },
     },
     {
@@ -223,41 +249,60 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'ttobak_put_document',
-      description: 'Ingest a locally-authored document (email/calendar/prep notes) into an account so teammates can read it in TTOBAK. Rejects docs that originated from TTOBAK (loop guard).',
+      description: 'Create a new Markdown note in TTOBAK. Omit accountId to save privately in your Document Hub; set accountId only to share with that account team. Always creates a new docId: use ttobak_update_document for revisions. Rejects TTOBAK export markers (loop guard).',
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
       inputSchema: {
         type: 'object' as const,
         properties: {
-          accountId: { type: 'string', description: 'Account ID' },
+          accountId: { type: 'string', minLength: 1, description: 'Optional: explicit account sharing destination; omit for personal notes' },
           title: { type: 'string', description: 'Document title' },
           markdown: { type: 'string', description: 'Markdown content (<=300KB)' },
           docType: { type: 'string', description: 'Optional: prep | reference | ...' },
           path: { type: 'string', description: 'Optional: original vault path' },
         },
-        required: ['accountId', 'title', 'markdown'],
+        required: ['title', 'markdown'],
       },
     },
     {
       name: 'ttobak_list_documents',
-      description: 'List ingested documents for an account (docId, title, docType).',
+      description: 'List document metadata (docId, title, docType). Omit accountId for your personal Document Hub, including notes shared directly with you (sharedBy); set it for account documents. Use ttobak_get_document to read current contents. These notes are not automatically indexed in ttobak_ask.',
+      annotations: { readOnlyHint: true },
       inputSchema: {
         type: 'object' as const,
         properties: {
-          accountId: { type: 'string', description: 'Account ID' },
+          accountId: { type: 'string', minLength: 1, description: 'Optional account scope; omit for the personal Document Hub' },
           docType: { type: 'string', description: 'Optional docType filter' },
         },
-        required: ['accountId'],
       },
     },
     {
       name: 'ttobak_get_document',
-      description: 'Get an ingested document with full content.',
+      description: 'Read the current document content. Omit accountId for a personal or directly-shared document; use the same accountId as its listing for an account document. Shared personal documents are read-only. File documents return download/preview links; their file contents are not extracted.',
+      annotations: { readOnlyHint: true },
       inputSchema: {
         type: 'object' as const,
         properties: {
-          accountId: { type: 'string', description: 'Account ID' },
+          accountId: { type: 'string', minLength: 1, description: 'Optional account scope; omit for a personal or directly-shared document' },
           docId: { type: 'string', description: 'Document ID' },
         },
-        required: ['accountId', 'docId'],
+        required: ['docId'],
+      },
+    },
+    {
+      name: 'ttobak_update_document',
+      description: 'Revise an existing document without creating a duplicate. Read it first, retain its scope and resend its title. Omit markdown to keep the body; provide markdown to replace it ("" clears a text note). Personal documents shared by others are read-only. Updates do not automatically index the note in ttobak_ask.',
+      annotations: { readOnlyHint: false, destructiveHint: true },
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          accountId: { type: 'string', minLength: 1, description: 'Optional account scope; omit for your own personal document' },
+          docId: { type: 'string', minLength: 1, description: 'Existing document ID' },
+          title: { type: 'string', minLength: 1, description: 'Document title (required, even when unchanged)' },
+          markdown: { type: 'string', description: 'Optional replacement body (<=300KB); omit to preserve it' },
+          docType: { type: 'string', description: 'Optional type; omitted or empty preserves it' },
+          path: { type: 'string', description: 'Optional original vault path; omitted or empty preserves it' },
+        },
+        required: ['docId', 'title'],
       },
     },
     {
@@ -343,6 +388,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           aliases: { type: 'array', items: { type: 'string' }, description: 'Optional: alternate names' },
           domains: { type: 'array', items: { type: 'string' }, description: 'Optional: email domains' },
           industry: { type: 'string', description: 'Optional: industry' },
+          parentAccountId: { type: 'string', description: 'Optional parent group account ID; you must be a member of that account' },
         },
         required: ['name'],
       },
@@ -395,10 +441,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'ttobak_get_meeting': {
-        const { meetingId } = args as { meetingId: string };
-        if (!meetingId) return error('meetingId is required');
-        const result = await api.getMeeting(meetingId);
-        return text(JSON.stringify(result, null, 2));
+        const options = readingOptions(args, 'meeting');
+        return readingResult(await api.readMeeting(options), options);
+      }
+
+      case 'ttobak_read_transcript': {
+        const options = readingOptions(args, 'transcript');
+        return readingResult(await api.readMeeting(options), options);
       }
 
       case 'ttobak_list_accounts': {
@@ -527,27 +576,34 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'ttobak_put_document': {
         const { accountId, title, markdown, docType, path } = args as {
-          accountId: string; title: string; markdown: string; docType?: string; path?: string;
+          accountId?: string; title: string; markdown: string; docType?: string; path?: string;
         };
-        if (!accountId) return error('accountId is required');
-        if (!title) return error('title is required');
-        if (!markdown) return error('markdown is required');
+        if (typeof title !== 'string' || !title.trim()) return error('title is required');
+        if (typeof markdown !== 'string' || !markdown.trim()) return error('markdown is required');
         const result = await api.putDocument(accountId, { title, markdown, docType, path });
         return text(JSON.stringify(result, null, 2));
       }
 
       case 'ttobak_list_documents': {
-        const { accountId, docType } = args as { accountId: string; docType?: string };
-        if (!accountId) return error('accountId is required');
+        const { accountId, docType } = args as { accountId?: string; docType?: string };
         const result = await api.listDocuments(accountId, docType);
         return text(JSON.stringify(result, null, 2));
       }
 
       case 'ttobak_get_document': {
-        const { accountId, docId } = args as { accountId: string; docId: string };
-        if (!accountId) return error('accountId is required');
+        const { accountId, docId } = args as { accountId?: string; docId: string };
         if (!docId) return error('docId is required');
         const result = await api.getDocument(accountId, docId);
+        return text(JSON.stringify(result, null, 2));
+      }
+
+      case 'ttobak_update_document': {
+        const { accountId, docId, title, markdown, docType, path } = args as {
+          accountId?: string; docId: string; title: string; markdown?: string; docType?: string; path?: string;
+        };
+        if (typeof title !== 'string' || !title.trim()) return error('title is required');
+        if (markdown !== undefined && typeof markdown !== 'string') return error('markdown must be a string');
+        const result = await api.updateDocument(accountId, docId, { title, markdown, docType, path });
         return text(JSON.stringify(result, null, 2));
       }
 
@@ -611,11 +667,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'ttobak_create_account': {
-        const { name, aliases, domains, industry } = args as {
-          name: string; aliases?: string[]; domains?: string[]; industry?: string;
+        const { name, aliases, domains, industry, parentAccountId } = args as {
+          name: string; aliases?: string[]; domains?: string[]; industry?: string; parentAccountId?: string;
         };
         if (!name) return error('name is required');
-        const result = await api.createAccount({ name, aliases, domains, industry });
+        const result = await api.createAccount({ name, aliases, domains, industry, parentAccountId });
         return text(JSON.stringify(result, null, 2));
       }
 
@@ -638,6 +694,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
+    if (name === 'ttobak_get_meeting' || name === 'ttobak_read_transcript') return readingError(msg);
     return error(msg);
   }
 });

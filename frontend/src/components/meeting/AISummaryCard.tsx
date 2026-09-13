@@ -1,10 +1,11 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import { Marked } from 'marked';
 import TurndownService from 'turndown';
 import { MarkdownRenderer } from '@/components/markdown/MarkdownRenderer';
+import { bindMeetingCitations, restoreMeetingCitations } from '@/lib/meetingCitations';
 
 const MeetingEditor = dynamic(() => import('../MeetingEditor').then(m => ({ default: m.MeetingEditor })), {
   loading: () => <div className="animate-pulse bg-slate-100 dark:bg-slate-800 rounded-xl h-64" />,
@@ -43,26 +44,78 @@ function normalizeMarkdown(md: string): string {
 interface AISummaryCardProps {
   content?: string;
   summary?: string;
+  canonicalContent?: string;
+  resolveCitation?: (source: string) => string;
   transcriptA?: string;
   onSave?: (content: string) => Promise<void>;
+  onDirtyChange?: (dirty: boolean) => void;
+  interactionLocked?: boolean;
 }
 
-export function AISummaryCard({ content, summary, transcriptA, onSave }: AISummaryCardProps) {
+export function AISummaryCard({ content, summary, canonicalContent, resolveCitation, transcriptA, onSave, onDirtyChange, interactionLocked = false }: AISummaryCardProps) {
   const rawText = content || summary || '';
+  const renderEditorContent = () => bindMeetingCitations(
+    marked.parse(canonicalContent ?? rawText, { async: false }) as string,
+    resolveCitation ?? ((source) => source),
+  );
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
+  const latestHTML = useRef('');
+  const savedHTML = useRef('');
+  const saveInFlight = useRef(false);
+  const pendingSave = useRef<string | null>(null);
+  const failedSave = useRef(false);
+  const [dirty, setDirty] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const markDirty = useCallback((value: boolean) => { setDirty(value); onDirtyChange?.(value); }, [onDirtyChange]);
+  const isContentSaved = useCallback((html: string) =>
+    !saveInFlight.current && !failedSave.current && html === savedHTML.current, []);
+  const handleContentApplied = useCallback((html: string) => {
+    latestHTML.current = html;
+    savedHTML.current = html;
+    pendingSave.current = null;
+    failedSave.current = false;
+    setSaveError(null);
+    setSavedAt(null);
+    markDirty(false);
+  }, [markDirty]);
 
-  const handleAutoSave = useCallback(async (html: string) => {
+  const handleAutoSave = useCallback(async () => {
     if (!onSave) return;
-    setSaving(true);
-    try {
-      await onSave(normalizeMarkdown(turndown.turndown(html)));
-      setSavedAt(new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }));
-    } finally {
-      setSaving(false);
+    // One request owns the writer; later debounce events share one latest slot.
+    pendingSave.current = latestHTML.current;
+    if (saveInFlight.current) return;
+    if (!failedSave.current && pendingSave.current === savedHTML.current) {
+      pendingSave.current = null;
+      return;
     }
-  }, [onSave]);
+    saveInFlight.current = true;
+    failedSave.current = false;
+    markDirty(true);
+    setSaving(true);
+    setSaveError(null);
+    try {
+      while (pendingSave.current !== null) {
+        const html: string = pendingSave.current;
+        pendingSave.current = null;
+        await onSave(normalizeMarkdown(turndown.turndown(restoreMeetingCitations(html))));
+        savedHTML.current = html;
+        setSavedAt(new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }));
+        // An undo may have replaced the queued draft with the just-saved value.
+        if (pendingSave.current === html) pendingSave.current = null;
+      }
+    } catch (error) {
+      // Stop on failure. The editor retains the latest text for explicit retry.
+      pendingSave.current = null;
+      failedSave.current = true;
+      setSaveError(error instanceof Error ? error.message : '요약을 저장하지 못했습니다.');
+    } finally {
+      saveInFlight.current = false;
+      setSaving(false);
+      markDirty(failedSave.current || latestHTML.current !== savedHTML.current);
+    }
+  }, [onSave, markDirty]);
 
   return (
     <div className="bg-white dark:bg-surface-lowest glass-panel rounded-xl p-6 shadow-sm dark:border-l-4 dark:border-l-accent">
@@ -75,7 +128,11 @@ export function AISummaryCard({ content, summary, transcriptA, onSave }: AISumma
             {saving && <span className="text-xs text-slate-400 animate-pulse">Saving...</span>}
             {savedAt && !saving && <span className="text-xs text-slate-400">Saved {savedAt}</span>}
             <button
-              onClick={() => setEditing(!editing)}
+              onClick={() => {
+                if (!editing) { savedHTML.current = renderEditorContent(); latestHTML.current = savedHTML.current; }
+                setEditing(!editing);
+              }}
+              disabled={interactionLocked || (editing && (dirty || saving))}
               className={`p-1.5 rounded-lg transition-colors ${
                 editing
                   ? 'bg-primary/10 text-primary'
@@ -88,10 +145,22 @@ export function AISummaryCard({ content, summary, transcriptA, onSave }: AISumma
           </div>
         )}
       </div>
+      {saveError && <p role="alert" className="mb-3 text-sm text-red-600 dark:text-red-300">{saveError} <button type="button" disabled={saving} onClick={() => { void handleAutoSave(); }} className="underline">저장 다시 시도</button></p>}
+      {dirty && !saving && !saveError && <p className="mb-3 text-xs text-slate-500">변경 사항 저장 대기 중…</p>}
 
       {editing ? (
         <MeetingEditor
-          content={marked.parse(rawText, { async: false }) as string}
+          content={renderEditorContent()}
+          preserveMeetingCitations
+          readOnly={interactionLocked}
+          preserveDraft={dirty || saving}
+          onContentApplied={handleContentApplied}
+          isContentSaved={isContentSaved}
+          onChange={(html) => {
+            latestHTML.current = html;
+            if (pendingSave.current !== null) pendingSave.current = html;
+            markDirty(failedSave.current || saveInFlight.current || html !== savedHTML.current);
+          }}
           onAutoSave={handleAutoSave}
           autoSaveDelay={3000}
         />
