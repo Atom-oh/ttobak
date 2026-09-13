@@ -3,6 +3,12 @@
 For handler registration and deployment acceptance status, see
 [SOURCE_CONTRACT.md](SOURCE_CONTRACT.md).
 
+Named binary searches add an optional normalized `sourceKeys` list to the
+`emptySearch` value. Its fingerprint includes that selection, and replay checks
+the same keys, query, count and user. Unscoped receipts keep their original shape;
+older readers discard the extended shape safely. Selection validation and
+visibility rules are defined in `manual_kb.selected_source_keys`.
+
 `remember_client_input(state, user_id, meeting_id, text)` records an authenticated
 request-input receipt containing the user, meeting scope and text digest. It
 does not store another copy of the transcript and does not attest saved-source
