@@ -131,6 +131,11 @@ pass through the token scrubber. Colliding redacted keys receive unique
 Quoted fragments are scanned once; recursive decoding is limited to 32 levels.
 The decoded value budget is shared without charging encoded text again for each
 decoding layer. Limits and final publication checks remain blocking.
+Credential-key classification scans name segments once, including slash/backslash
+paths, and masks the entire associated value. PEM markers span array elements:
+the complete marked credential is redacted through END (or array end), retaining
+ordinary strings and context outside the key. Original elements still consume
+the shared byte budget before replacement.
 
 Untrusted stdout and stderr are limited separately to 1 MiB of UTF-8 after
 process capture, before parsing or scrubbing; this is not a streaming capture
