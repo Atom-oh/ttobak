@@ -1,18 +1,18 @@
-# Readonly tool history foundation
+# Read-only tool history contract
 
-This helper is inactive until the host wires the authenticated handler. It changes
-no handler, tool definitions, retrieval, IAM or AWS resources.
-[ADR-042](../../../docs/decisions/ADR-042-current-source-qa-and-history.md)
-documents the broader current-source QA policy.
+Code checked: 2026-09-13. `tool_history.py` and `session_provenance.py` are
+implemented but not wired into the active handler. Their use requires the
+current-source policy in [ADR-042](../../../docs/decisions/ADR-042-current-source-qa-and-history.md)
+and the staged [strict account callbacks](ACCOUNT_READS_CONTRACT.md).
 
-## Small integration API
+## Host integration
 
 ```python
 history = ToolHistory(current_user_id, {
     "list_meetings": strict_list_meetings,
-    "list_accounts": strict_list_accounts,
-    "get_account_insights": strict_account_insights,
-    "get_account_brief": strict_account_brief,
+    "list_accounts": accounts.list_accounts,
+    "get_account_insights": accounts.get_account_insights,
+    "get_account_brief": accounts.get_account_brief,
 })
 context.update(history.callbacks(source_state))
 messages = restore_messages(item, source_state, source_is_current,
@@ -22,139 +22,104 @@ messages = restore_messages(item, source_state, source_is_current,
 validate_sources(source_state, source_is_current, tool_history=history)
 ```
 
-Construct the tracker with the current authenticated request user, never a user
-from messages, tool input, or a saved dependency. `callbacks` preserves the existing
-four callback signatures and rejects a different user argument. Initial reads and
-revalidation use the same normalized arguments and strict callbacks. There is no
-generic execute-tool dispatch and no mutation callback can enter the registry.
+Use the authenticated request user, never a user from messages, tool input or
+saved dependencies. Callbacks reject a different user and use identical
+normalized inputs for initial/replay reads. Only the four named readers enter
+the registry; no generic dispatcher or mutation callback is accepted.
 
-Callbacks return `CompleteRead(value)` only after a complete, fresh authorized
-read. They must raise on failure; an empty successful result is allowed. Plain
-lists/dicts are deliberately rejected, so legacy helpers that silently turn read
-errors into empty/partial results cannot accidentally become trusted callbacks.
-This attestation is a wiring obligation, not an automatic authorization mechanism.
+Callbacks must return `CompleteRead(value)` after complete, fresh authorized
+reads and raise on failures. Empty success is valid; plain lists/dicts are
+rejected to avoid trusting permissive helpers. The wrapper attests a host
+obligation; it does not itself authorize data.
 
-The adapter calls:
-
-| Tool | Callback after current user positional argument |
+| Tool | Keyword arguments after current user |
 |---|---|
-| `list_meetings` | `date_from`, `date_to`, `tag`, `keyword`, `limit` kwargs |
-| `list_accounts` | no additional arguments |
-| `get_account_insights` | `account_query`, `date_from`, `date_to`, `types` kwargs |
-| `get_account_brief` | `account_query` kwarg |
+| `list_meetings` | `date_from`, `date_to`, `tag`, `keyword`, `limit` |
+| `list_accounts` | None |
+| `get_account_insights` | `account_query`, `date_from`, `date_to`, `types` |
+| `get_account_brief` | `account_query` |
 
-Meeting limit defaults to 20 and is bounded to 1–100. SDK `Decimal` integers are
-normalized before invoking readers; bool, float, fractional values and unknown
-fields are rejected. Inputs cannot supply another user ID or callback name.
+Meeting limit defaults to 20 and ranges from 1–100. Normalize integral SDK
+Decimal inputs; reject bools, floats, fractions, unknown fields and supplied
+user IDs/callback names. Initial and replay callbacks must enforce the same
+pagination, current direct/account permissions and deterministic ordering.
+Do not wrap the handler's permissive account helpers in `CompleteRead`: those
+can hide failures or consume stale GSI/ref fields. Use strict readers that
+propagate failures and recheck exact membership/canonical publication.
 
-## State and replay
+## Fingerprints and tracking limits
 
-`history.read(state, name, input)` returns the effective public view for the existing formatter
-and registers `{readOnlyTool, toolInput, userId, sourceRevision}`. The revision is
-a SHA-256 fingerprint of the typed tool/user/input/result envelope. Dependencies
-store bounded inputs and the hash, not result text.
+`history.read(state, name, input)` returns the formatter's effective public
+view and records `{readOnlyTool, toolInput, userId, sourceRevision}`. The SHA-256
+revision hashes a typed tool/user/input/result envelope; dependencies retain
+bounded inputs/hash, not result text. Include formatter-consumed and stable
+identity fields; research summary is limited to its visible first 200
+characters. Preserve all requested meeting rows, without silent truncation.
 
-Only formatter-consumed fields and stable identity fields enter this view. In
-particular, research summary is limited to the same first 200 characters that
-`format_account_brief` actually displays; hidden raw summaries are not hashed.
-Tests compare the original and projected formatter output. All 100 requested
-meeting rows remain available, including realistic large Korean titles/tags.
+Encoding preserves list order, sorts map keys, distinguishes null/missing and
+bool/number, and equates exact int/Decimal values across boto3 serialization.
+Do not coerce floats, stringify unsupported types or normalize Unicode.
 
-Canonical framing preserves list order (including what “first” refers to), sorts
-map keys, distinguishes null/missing and bool/number, and treats exact int/Decimal
-values equivalently across real boto3 serialization. No float coercion, repr/default
-stringification, Unicode normalization, or silent truncation is used.
+Track at most 16 tool/receipt dependencies and 128 total dependencies, with
+1 MiB typed encoding, 16,384 nodes and depth 12. Overflow preserves the full
+valid current result, sets `replayable=False` and reports `RESULT_LIMIT` or
+`DEPENDENCY_LIMIT` with `complete:false` in `toolHistoryCoverage`. Surface that
+history limitation; never hash a truncated result as complete or overwrite
+the nonreplayable flag. The host separately owns output limits, pagination and
+SDK timeouts. Each validation pass reads each saved dependency at most once;
+there is no warm result cache.
 
-At most 16 tool/receipt dependencies and 128 total dependencies are retained.
-Tracking is limited to 1 MiB of typed encoding, 16,384 nodes and depth 12.
-Bookkeeping overflow does not fail or erase a valid current result: the full
-effective public view is still returned, the turn becomes nonreplayable, and
-`state["toolHistoryCoverage"]` reports `RESULT_LIMIT` or `DEPENDENCY_LIMIT` with
-`complete: false`. Callers should surface that history-coverage limitation rather
-than claim no results. No truncated result is hashed as if complete. Callbacks
-and the model response path must separately enforce their SDK/output limits, pagination
-and timeouts. Each validation pass executes at most one read per saved dependency;
-there is no warm result cache that can hide changes.
+## Replay boundary
 
-`restore_messages` bounds stored JSON to 384 KiB/100 messages and denies unknown
-tool names by default. The host may pass explicit, disjoint `source_covered_tools`
-and `public_tools` name collections (both default empty). Only put a name in the
-former when its runtime callback records every source it exposes; these calls
-require source dependencies, and every dependency still passes the current-source
-checker. `get_meeting_detail`, `search_transcript`, `search_knowledge_base` and other
-private readers are **not** implicitly allowed. A source read with no dependencies
-cannot restore history. Only tools returning public information without private
-reads belong in `public_tools`; this is a host code policy, never stored/user input.
-Neither collection bypasses the four readonly fingerprint checks or the
-`start_research` receipt check. A public call also cannot bypass other saved source
-dependencies. It checks all source and tool
-dependencies before returning any messages. Changed order/content, revoked access,
-failed reads, absent callbacks or malformed state returns **the entire history as
-empty**. Never strip tool blocks while retaining derived assistant paragraphs.
-The existing handler's trailing-user/dangling-tool trim still runs after restore.
+`restore_messages` accepts at most 384 KiB/100 messages and denies unknown
+tools by default. Explicit `source_covered_tools` and `public_tools` are
+disjoint host-code policies, both empty by default:
 
-`restore_sources` and `validate_sources` accept the optional `tool_history`
-argument. The dependency budgets apply to source-only callers too. With tool dependencies
-and no current-user tracker, restoration fails closed. Keep all dependency metadata
-outside Converse message blocks. Revalidate before every subsequent model round,
-including after a long tool read; concurrent changes must not enter final output.
+- Source-covered callbacks must record every exposed source and have valid
+  dependencies. Private tools such as `get_meeting_detail`, `search_transcript`
+  and `search_knowledge_base` are never implicitly trusted.
+- Public tools may return only public information without private reads.
+  Their presence does not bypass other saved source dependencies.
 
-Use this adapter when enabling continuity for these four tracked readers.
-Other mutable/untracked tools remain nonreplayable. Failed reads or tracking overflow
-set `source_state["replayable"] = False`; do not override that flag afterward.
-Use the same adapter/state in REST and streaming paths.
+Neither set bypasses read-tool fingerprints or `start_research` receipt checks.
+Validate every source/tool dependency before returning any messages. Changed
+order/content, revoked access, failed reads, missing callbacks or malformed
+state discards the entire history, including assistant paraphrases. The host's
+trailing-user/dangling-tool trimming still runs after restore.
 
-## Creation receipt: no mutation replay
+`restore_sources`/`validate_sources` accept `tool_history`; source-only callers
+still have dependency budgets. Tool dependencies without a current-user tracker
+fail closed. Keep metadata outside Converse message blocks. Use the same
+adapter/state in REST and streaming, revalidating before subsequent model
+rounds, after long tool reads and before final output. Other mutable/untracked
+tools remain nonreplayable.
 
-After the actual `start_research` callback succeeds once:
+## Creation receipts
 
-```python
-created = create_research_from_chat(current_user_id, topic, mode)
-history.research_receipt(source_state, {"topic": topic, "mode": mode}, created)
-```
+After the real `start_research` succeeds once, call
+`history.research_receipt(source_state, {"topic": topic, "mode": mode}, created)`
+and return the original `created` result to the executor. The callback's
+confirmed success is exactly `{researchId}`. Normalize topic as
+`topic.strip()[:500]` and mode as `quick|standard|deep`, defaulting to `standard`;
+normalize saved tool input identically. Retain topic/mode/ID only, never
+mutable research content, summary or status.
 
-The current creation callback returns exactly `{researchId}` on success. Receipt
-topic/mode use the same normalization as that callback: `topic.strip()[:500]`;
-mode defaults/falls back to `standard` unless it is `quick`, `standard` or `deep`.
-The saved original tool input is normalized the same way when matching a receipt.
-The receipt contains only topic, mode and new ID; no mutable summary/status or private research contents.
-Once a valid success ID is known, receipt input/schema/hash/conflict failures
-never raise a tool error: return the known ID (with normalized topic/mode when
-available), mark the whole history nonreplayable, and record `RECEIPT_UNAVAILABLE`
-in `toolHistoryCoverage`. Capacity exhaustion uses `DEPENDENCY_LIMIT`. Keep and
-return `created` to the tool executor regardless of receipt coverage; never retry
-creation to repair history. An error result or absent/invalid ID is not confirmed
-success and is rejected. Unexpected extra result fields are never retained.
-Keep the existing creation authorization/rate limit in place. The helper never
-calls creation, either initially or during replay. A receipt is an immutable
-conversation event, not evidence that a research result currently exists, is
-complete, or remains accessible. That needs a separate authorized current read.
-Any source dependencies used to choose the topic remain alongside the receipt.
-If one becomes invalid, the whole history, including the receipt, is discarded.
+After a valid success ID is known, receipt schema/input/hash/conflict failure
+must not turn creation into a tool error: preserve the ID, mark history
+nonreplayable and report `RECEIPT_UNAVAILABLE` (`DEPENDENCY_LIMIT` on capacity
+exhaustion). Missing/invalid IDs or error results are not confirmed success;
+unexpected extra fields are never retained. Keep creation authorization and
+rate limits, and never retry creation to repair history.
 
-## Strict reader prerequisites for host wiring
+The helper never invokes a mutation, including during replay. A receipt proves
+a past conversation event, not present research existence, completion or access.
+Those facts need a fresh authorized read. Source dependencies used to choose
+the topic remain; invalidating one discards the whole history and receipt.
 
-Do **not** merely wrap the current permissive helpers in `CompleteRead`.
+## Verification
 
-- `_user_account_metas` currently catches membership-query failures and returns
-  empty results, skips failed META reads, and relies on membership GSI rows.
-  Enumerate every page, verify the exact current `ACCOUNT#/MEMBER#user` row with
-  strong reads before content, read current META, and propagate all failures.
-- `_account_insights` must query every page with current authorization and strong
-  base-table reads. Recheck membership after multi-read aggregation.
-- `get_account_brief_for_chat` currently substitutes empty insights/meetings when
-  reads fail and consumes denormalized MEETINGREF titles. Rehydrate each canonical
-  meeting, confirm current account publication/access, and use current fields.
-- `_account_research` currently catches failures and skips records. Propagate
-  failures and strongly reread canonical research/account linkage before including
-  its topic/summary/status. Preserve the existing trashed/unlinked exclusions.
-- Meeting list reads must retain current direct/account authorization and deterministic
-  ordering. A list failure cannot become an attested empty list.
-
-The initial and replay callbacks must enforce the same rules. Equal hashes from
-two stale/permissive reads are not authorization proof. These strict-reader changes
-and runtime wiring belong to the host; this PR does not edit those handlers.
-
-Validation uses the existing `python -m unittest test_handler -v` discovery path,
-the actual boto3 TypeSerializer/TypeDeserializer, synthetic current-user callbacks,
-and the unchanged tool executor. No AWS/model calls or new test framework.
+`python3 -m unittest test_handler -v` includes real boto3 serialization,
+synthetic current-user callbacks, formatter equivalence and the existing tool
+executor. No AWS/model calls or new framework are required. Equal fingerprints
+from stale/permissive reads are not authorization proof; full runtime
+acceptance remains a separate deployment gate.

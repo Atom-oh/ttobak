@@ -1,6 +1,13 @@
 # Canonical indexing contract
 
-No automatic trigger is enabled; invocation details are in API-SPEC §6.
+Historical planning/acceptance record from 2026-09-12. Checklist statements below
+record the original slice, not current deployment or instructions to restart it.
+For current activation, follow [ADR-038](../../decisions/ADR-038-canonical-note-indexing.md),
+[ADR-039](../../decisions/ADR-039-meeting-document-extraction.md),
+and [ADR-042](../../decisions/ADR-042-current-source-qa-and-history.md), where relevant.
+
+This planning slice had no automatic trigger. Current invocation details are in
+`docs/API-SPEC.md`; the later manual-only bootstrap schedule is a separate stage.
 Required env: `TABLE_NAME`, `BUCKET_NAME` (assets), `KB_BUCKET_NAME`, `KB_ID`,
 `DATA_SOURCE_ID`; the latter two are bare ten-character alphanumeric IDs.
 
@@ -74,8 +81,9 @@ and strict QA runtime have been verified.
    GetKnowledgeBaseDocuments on the configured knowledge base.
 3. Enable canonical-key stream delivery with partial-batch responses, bounded
    retries/DLQ and scheduled reconciliation only after manual snapshot bootstrap
-   and strict QA verification. The prepared CDK now configures 12 minutes/1024
-   MiB with its schedule disabled; verify that preparation is deployed first.
+   and strict QA verification. At this planning stage, prepared CDK configured 12 minutes/1024 MiB with
+   the schedule disabled. Later main enables the manual-only bootstrap schedule;
+   canonical/all-mode activation still requires the preceding gates.
 
 Legacy cleanup makes rollback to old QA require re-export (ADR-038).
 

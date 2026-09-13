@@ -1,17 +1,13 @@
-# Documentation Module
+# Documentation module
 
-Project documentation for TTOBAK.
+Follow the root project guide and [documentation map](README.md). Write concise
+English only, including templates and new ADRs. Do not generate bilingual copies.
 
-## Files
-- `PRD.md` — Product Requirements Document
-- `API-SPEC.md` — REST API endpoint specifications
-- `INFRA-SPEC.md` — Infrastructure and deployment specifications
-- `DESIGN-SPEC.md` — UI/UX design system and component specifications
-- `CODE-REVIEW.md` — Code review findings and audit trail
-- `architecture.md` — System architecture (bilingual KR/EN)
-- `onboarding.md` — Developer onboarding guide
-- `decisions/` — Architecture Decision Records (ADRs)
-- `runbooks/` — Operational runbooks for incident response
+Current references describe code/configuration at the reviewed revision. Historical
+plans, research, audits and benchmarks retain dates and explicit historical labels;
+they are not active implementation instructions. ADRs retain rationale and name
+superseding decisions. Prefer source paths/symbols to copied code or line numbers.
 
-## Auto-Sync
-Documentation should be updated when corresponding source files change. See CLAUDE.md Auto-Sync Rules.
+Update API, infra, UI and architecture references only where their source changes.
+Regenerate the root review extract after editing CLAUDE.md. Do not copy the entire
+document archive into AI prompts or claim CDK proves the current deployment.

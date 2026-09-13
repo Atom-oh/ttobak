@@ -1,191 +1,57 @@
-# Interactive Deep Research — Design Spec
+# Interactive Research Planning and Child Reports
 
-**Date:** 2026-04-25
-**Status:** Approved
+> Historical design record. Original date: 2026-04-25. Original status: Approved.
+> Proposed states, depth limits, and checklist items do not establish current behavior.
 
-## Overview
+## Goal and decision
 
-Transform Research from "1 question → 1 report" to an interactive, multi-turn conversational research experience with Notion-style sub-page hierarchy. Modeled after Claude Desktop deep research: topic input → Agent proposes structure + asks questions → user approves → Agent executes → user can request modifications and sub-pages via chat after completion.
+Replace one-question/one-report research with a persisted planning conversation:
+propose a structure, clarify scope, approve execution, then discuss the completed
+report or request a focused child report. Reuse DynamoDB, Step Functions, AgentCore,
+and REST polling rather than add research-specific WebSocket coordination.
 
-## Data Model
+## Proposed design
 
-### Research (extended)
-Existing fields preserved. New fields:
-- `parentId` (string) — parent researchId for sub-pages. Empty string for main research.
-- `structure` (string) — Agent-proposed report structure (markdown)
+Research gained `parentId` and a proposed `structure` field. Chat messages used
+`RESEARCH#{researchId}/MSG#{timestamp}#{msgId}` with role, content, action, optional
+metadata, and creation time. The planned transition was planning, approved, running,
+done, with error handling alongside it.
 
-### ChatMessage (new DynamoDB entity)
-```
-PK: RESEARCH#{researchId}
-SK: MSG#{timestamp}#{msgId}
+Agent modes separated planning, response, execution, and subpage work. Execution
+was intended to follow approved conversation context; a subpage would reference its
+parent report. A one-level hierarchy was proposed to avoid recursive page trees and
+an additional index. Chat routes would list/save messages and dispatch approval or
+child requests.
 
-Fields:
-  msgId: string (random hex)
-  role: "user" | "agent"
-  content: string
-  action?: "propose_structure" | "ask_question" | "approve" | "request_subpage"
-  metadata?: JSON string (suggestedTopics, proposedStructure, subpageId)
-  createdAt: string (ISO 8601)
-```
+Desktop combined a report area/page tree with a chat panel; mobile simplified the
+layout. Planning kept chat visible, running showed progress, and completed reports
+allowed follow-up questions. Proposed polling was three seconds for planning and
+ten seconds for execution. Message editing/deletion, collaborative research, deeper
+nesting, and live research streaming were excluded.
 
-### Research Status Flow
-```
-planning → (Agent questions / user answers) → approved → running → done
-                                                                    ↓
-                                                          chat: modify / request sub-page
-                                                                    ↓
-                                                          child Research (parentId linked)
-```
+## Tradeoffs and validation intent
 
-- `planning`: Agent proposing structure, asking questions. User input awaited.
-- `approved`: User approved structure. Waiting for execution.
-- `running`: Agent executing research (existing behavior).
-- `done`: Complete. Chat available for modifications and sub-page requests.
+Persisted chat survives reloads and lets users refine expensive work. Costs include
+polling latency, agent invocations, message retention, state synchronization, and
+ambiguity between a suggested plan and the input actually used by execution.
+Planned checks covered ownership, state transitions, chat persistence, child links,
+report navigation, and failure display; no checklist here is proof they passed.
 
-### Sub-page Relationship
-- Flat (1 level only): main research → sub-pages. No sub-sub-pages.
-- Query: filter `parentId = {researchId}` from user's research list.
-- No separate GSI needed (volume is small, tens of items max).
+## Current evidence and differences
 
-## API Design
+[ADR-011](../../decisions/ADR-011-interactive-deep-research.md) records current limits.
+[ResearchService](../../../backend/internal/service/research.go) conditionally moves
+`planning` directly to `running`; the UI still recognizes `approved` for compatibility.
+Child creation checks an owned completed parent but does not enforce a one-level
+maximum. [ResearchChat](../../../frontend/src/components/ResearchChat.tsx) also polls
+briefly after questions on a completed report.
 
-### Modified Endpoints
+The [agent](../../../backend/python/research-agent/agent.py) implements the four
+modes, but no immutable `approvedPlan` snapshot is passed to execution. The
+[later enrichment design](2026-08-07-knowledge-enrichment-pipeline-design.md) proposes
+that stronger contract. Research chat retention is not established by this record.
+Authenticated live-QA WebSockets elsewhere remain implemented and unrelated to the
+choice of research polling.
 
-```
-POST /api/research
-  Body: { topic, mode }
-  Change: creates with status "planning" (not "running")
-          triggers SFN with mode "plan"
-  Response: { researchId, status: "planning" }
-```
-
-### New Endpoints
-
-```
-GET /api/research/{researchId}/chat
-  → Chat message history (chronological)
-  Response: { messages: ChatMessage[] }
-
-POST /api/research/{researchId}/chat
-  Body: { content, action? }
-  Actions:
-    - (none): general chat message → triggers Agent respond
-    - "approve": approve structure → status becomes "approved" → triggers execution
-    - "request_subpage": { content: "topic for sub-page" } → creates child Research
-  Response: { messageId }
-
-GET /api/research/{researchId}/subpages
-  → List child research pages
-  Response: { subpages: Research[] }
-```
-
-### Agent Modes (AgentCore)
-
-**Plan mode** (`mode: "plan"`):
-1. Agent analyzes topic, proposes structure
-2. Saves ChatMessage (role: "agent", action: "propose_structure")
-3. Asks clarifying questions via ChatMessage
-4. Exits. Status remains "planning".
-
-**Respond mode** (`mode: "respond"`):
-1. Agent reads chat history from DynamoDB
-2. Responds to user's message (answer question, revise structure)
-3. Saves response as ChatMessage
-4. Exits. Status remains "planning".
-
-**Execute mode** (`mode: "execute"`):
-1. Standard research execution (existing behavior)
-2. Uses approved structure from chat history
-3. Saves report to S3, updates DynamoDB status to "done"
-
-**Sub-page mode** (`mode: "subpage"`):
-1. Receives parent researchId + sub-topic
-2. References parent report for context
-3. Executes focused research on sub-topic
-4. Saves as child Research with parentId
-
-## Frontend Design
-
-### Create Research Flow
-1. "New Research" → topic + mode input (existing modal)
-2. Submit → navigates to `/insights/research/{id}`
-3. Research detail page opens with chat panel (status: planning)
-
-### Layout (Desktop)
-```
-┌──────────┬─────────────────────────────┬──────────────┐
-│ Nav      │     Content Area            │  Chat Panel  │
-│ Sidebar  │                             │  (360px)     │
-│          │  [Page Tree] + [Content]    │              │
-│          │                             │  Messages    │
-│          │  planning: waiting          │  Input       │
-│          │  running: progress          │              │
-│          │  done: markdown + TOC       │              │
-└──────────┴─────────────────────────────┴──────────────┘
-```
-
-### Page Tree
-Shown in content area header when sub-pages exist:
-```
-📊 Main Report  ← current
-├── 📋 PoC Checklist
-├── 🟦 SageMaker Deep Dive
-└── + Add sub-page
-```
-Click switches content (state-based, no route change).
-
-### Chat Panel States
-| Status | Panel | Behavior |
-|--------|-------|----------|
-| planning | Open (required) | Agent messages + user input + "Approve" button |
-| approved | Open | "Research starting..." |
-| running | Open (collapsible) | Progress. Input disabled. |
-| done | Collapsed (expandable) | Post-completion chat for modifications/sub-pages |
-| error | Open | Error + retry |
-
-### Polling
-- 3-second poll for `planning` status (waiting for Agent messages)
-- 10-second poll for `running` status (existing)
-- No polling for `done`
-
-## Implementation Scope
-
-### Phase 1 (this spec)
-- Backend: Research model extension (parentId), ChatMessage entity, new API endpoints
-- Backend: research-worker Lambda modes (plan/respond/execute/subpage)
-- AgentCore: Agent prompt updates for plan/respond modes
-- Frontend: Chat panel component, page tree, modified create flow
-
-### Out of Scope
-- Real-time WebSocket streaming for chat (future optimization)
-- Sub-sub-pages (intentionally flat)
-- Chat message editing/deletion
-- Collaborative research (multi-user on same research)
-
-## Dependencies
-No new packages. Uses existing:
-- DynamoDB single-table design
-- Step Functions workflow
-- AgentCore container (FastAPI)
-- Frontend polling pattern (existing research status polling)
-
-## Files to Create/Modify
-
-### New Files
-- `backend/internal/model/chat.go` — ChatMessage model
-- `backend/internal/repository/chat.go` — ChatMessage CRUD
-- `backend/internal/service/chat.go` — Chat service (save, list, trigger agent)
-- `backend/internal/handler/chat_research.go` — Chat API handlers
-- `frontend/src/components/ResearchChat.tsx` — Chat panel component
-- `frontend/src/components/ResearchPageTree.tsx` — Page tree component
-
-### Modified Files
-- `backend/internal/model/meeting.go` — add parentId to Research
-- `backend/internal/model/request.go` — add chat request types
-- `backend/internal/service/research.go` — planning flow, sub-page creation
-- `backend/cmd/api/main.go` — register new routes
-- `backend/cmd/research-worker/main.go` — add mode routing (plan/respond/execute/subpage)
-- `backend/python/research-agent/agent.py` — plan/respond prompts
-- `frontend/src/app/insights/research/[researchId]/ResearchDetailClient.tsx` — integrate chat + page tree
-- `frontend/src/lib/api.ts` — add chat API methods
-- `frontend/src/types/meeting.ts` — add ChatMessage type
+Current references: [documentation map](../../README.md), [API](../../API-SPEC.md),
+and [architecture](../../architecture.md).
