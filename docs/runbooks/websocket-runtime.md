@@ -72,6 +72,45 @@ The explicit race command is:
 (cd backend && /usr/local/go/bin/go test -race ./cmd/ws-authorizer -count=1)
 ```
 
+## Diagnose an origin rejection
+
+The authorizer logs one fixed line, for example:
+`ws-authorizer: origin verification rejected reason=secret_unavailable category=transport`.
+It contains no header/token values, secret ARN, request URL or SDK error text.
+Success remains unlogged. Correlate the line with the enclosing Lambda
+START/REPORT request ID and log stream.
+
+| Reason | Meaning |
+|---|---|
+| `unconfigured` | Verifier configuration/client is missing. |
+| `header_missing` | No origin header was supplied. |
+| `header_malformed` | Empty/wrong-length value or an empty multi-value header. |
+| `header_duplicate` | Duplicate case-insensitive names or multiple values. |
+| `header_conflict` | Single-value and multi-value representations disagree. |
+| `secret_unavailable` | A current valid secret could not be obtained. Inspect `category`. |
+| `mismatch` | A well-shaped header differs from the valid cached/fetched secret. |
+
+`category` is `none` outside secret failures. Secret failures use only
+`canceled`, `deadline`, `transport`, `access_denied`, `not_found`, `throttled`,
+`service_error`, `decryption_failed`, `invalid_request`, `credentials`,
+`invalid_secret`, `aws_other` or `other`. Known AWS codes map to these categories;
+unknown codes/messages are never copied into logs. `transport` identifies a typed
+request-send/network error, not a proven network root cause. `invalid_secret`
+covers absent or malformed SDK secret output.
+
+Record deployed bootstrap hash, request time/ID, reason/category and duration.
+Compare point-in-time distribution/secret metadata and stack update timestamps;
+configuration equality does not prove which header reached a failed request.
+Use narrowly scoped CloudTrail metadata to investigate secret reads. A missing
+event does not prove no attempted read. Do not enable token-bearing request
+tracing, print private configuration, or replay an uncertain QA request.
+
+These diagnostics do not establish or fix the cause of earlier generic origin
+rejections. After reviewed deployment, an explicitly authorized new connect-only
+check can collect them without sending QA/model work. Keep the existing
+three-second read bound, one attempt per refresh, 60-second cache, constant-time
+comparison and denial on expired-cache refresh failure.
+
 ## Real acceptance after deployment
 
 - Use the existing authenticated synthetic/demo browser session. Through the

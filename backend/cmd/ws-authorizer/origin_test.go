@@ -140,7 +140,7 @@ func TestOriginHeaderCanonicalizationAndMismatch(t *testing.T) {
 			verifier := newSecretFixture(t, fixture)
 			event := proxyEvent(value)
 			event.Headers, event.MultiValueHeaders = test.headers, test.multi
-			if got := verifier.verify(context.Background(), event); got != test.allow {
+			if got := verifier.verify(context.Background(), event).allowed(); got != test.allow {
 				t.Fatalf("allowed=%v, want %v", got, test.allow)
 			}
 		})
@@ -152,18 +152,18 @@ func TestSecretCacheExpiresAndNeverUsesStaleValueOnFailure(t *testing.T) {
 	verifier := newSecretFixture(t, fixture)
 	now := time.Unix(1000, 0)
 	verifier.now = func() time.Time { return now }
-	if !verifier.verify(context.Background(), proxyEvent(fixture.value)) {
+	if !verifier.verify(context.Background(), proxyEvent(fixture.value)).allowed() {
 		t.Fatal("initial proof rejected")
 	}
 	old := fixture.value
 	fixture.value = strings.Repeat("b", 64)
 	now = now.Add(time.Minute + time.Second)
-	if verifier.verify(context.Background(), proxyEvent(old)) || !verifier.verify(context.Background(), proxyEvent(fixture.value)) {
+	if verifier.verify(context.Background(), proxyEvent(old)).allowed() || !verifier.verify(context.Background(), proxyEvent(fixture.value)).allowed() {
 		t.Fatal("expired proof was reused or new proof was rejected")
 	}
 	fixture.failure = true
 	now = now.Add(time.Minute + time.Second)
-	if verifier.verify(context.Background(), proxyEvent(fixture.value)) {
+	if verifier.verify(context.Background(), proxyEvent(fixture.value)).allowed() {
 		t.Fatal("expired cache bypassed a failed secret refresh")
 	}
 	if fixture.calls.Load() != 3 {
@@ -174,14 +174,14 @@ func TestSecretCacheExpiresAndNeverUsesStaleValueOnFailure(t *testing.T) {
 func TestSecretFailuresAndMissingConfigurationFailClosed(t *testing.T) {
 	for _, value := range []string{"", "short", strings.Repeat("a", 63) + "\n", strings.Repeat("a", 65)} {
 		fixture := &secretFixture{value: value}
-		if newSecretFixture(t, fixture).verify(context.Background(), proxyEvent(strings.Repeat("a", 64))) {
+		if newSecretFixture(t, fixture).verify(context.Background(), proxyEvent(strings.Repeat("a", 64))).allowed() {
 			t.Fatal("malformed secret accepted")
 		}
 	}
 	fixture := &secretFixture{value: strings.Repeat("a", 64)}
 	verifier := newSecretFixture(t, fixture)
 	verifier.secretARN = ""
-	if verifier.verify(context.Background(), proxyEvent(fixture.value)) || fixture.calls.Load() != 0 {
+	if verifier.verify(context.Background(), proxyEvent(fixture.value)).allowed() || fixture.calls.Load() != 0 {
 		t.Fatal("missing configuration used the secret service or failed open")
 	}
 }
@@ -194,7 +194,7 @@ func TestConcurrentConnectsShareOnlyTheSecretCache(t *testing.T) {
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
-			if !verifier.verify(context.Background(), proxyEvent(fixture.value)) {
+			if !verifier.verify(context.Background(), proxyEvent(fixture.value)).allowed() {
 				t.Error("valid concurrent proof rejected")
 			}
 		}()
@@ -220,7 +220,7 @@ func TestSecretReadRespectsCallerDeadline(t *testing.T) {
 	verifier := newOriginVerifier(testSecretARN, deadlineSecretClient{t})
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	if verifier.verify(ctx, proxyEvent(strings.Repeat("a", 64))) {
+	if verifier.verify(ctx, proxyEvent(strings.Repeat("a", 64))).allowed() {
 		t.Fatal("canceled secret lookup failed open")
 	}
 }
