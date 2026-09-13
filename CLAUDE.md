@@ -194,12 +194,12 @@ ScreenCaptureKit. Report that limit instead of claiming a Mac build passed.
   proactive QA can search externally; the UI opt-in only gates proactive search.
   `check_web_search_limit` runs before the gateway call (default 30/hour, 0 off);
   it fails open on DynamoDB errors and is an abuse brake, not an access boundary.
-- **Indexing and extraction rollout:** this activation revision selects `all`
-  while retaining the enabled KB schedule. Merge/deployment remains gated on
-  manual snapshot/provider verification and actual current-source QA acceptance
-  (ADR-038). A draft configuration, deployed package or successful WS connection
-  is not consumer acceptance. Use the bootstrap runbook's dated readiness record;
-  do not infer production activation from source configuration.
+- **Indexing and extraction rollout:** canonical `all` mode may be checked in
+  only after recorded manual snapshot/provider verification and actual
+  current-source QA acceptance (ADR-038). Keep the KB schedule enabled for
+  reconciliation. A draft configuration, deployed package or successful WS
+  connection is not consumer acceptance. Use the bootstrap runbook's dated
+  readiness record and verify the deployed mode independently.
   Status APIs/UI and conditional job/retry state exist independently of activation.
 - **WebSocket QA:** runtime `wsUrl: "/ws"` resolves against the current site.
   CloudFront rewrites it to the existing production WS stage and injects an
