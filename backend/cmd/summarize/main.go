@@ -557,6 +557,7 @@ func handleAllPartsTranscribed(ctx context.Context, detail *model.AllPartsTransc
 
 // generateSummary runs the full Bedrock pipeline: summary, action items, tags, sentiment, KB export
 func generateSummary(ctx context.Context, meeting *model.Meeting, priorContext string) error {
+	retry := meeting.SummaryRetryPending && meeting.Status == model.StatusSummarizing
 	meetingID := meeting.MeetingID
 	userID := meeting.UserID
 
@@ -568,16 +569,18 @@ func generateSummary(ctx context.Context, meeting *model.Meeting, priorContext s
 	// must abort: otherwise the downstream summary save would overwrite the
 	// content while status is still `transcribing`, which the frontend gates
 	// off (loading spinner stays visible while content appears blank).
-	if statusErr := repo.UpdateMeetingFields(ctx, userID, meetingID, map[string]interface{}{
-		"status": model.StatusSummarizing,
-	}); statusErr != nil {
+	fields := map[string]interface{}{"status": model.StatusSummarizing}
+	if !retry {
+		fields["summaryRetryAttempts"], fields["summaryRetryPending"], fields["summaryConflictCode"] = 0, false, ""
+	}
+	if statusErr := repo.UpdateMeetingFields(ctx, userID, meetingID, fields); statusErr != nil {
 		log.Printf("Failed to set status=summarizing for meeting %s: %v", meetingID, statusErr)
 		return fmt.Errorf("set summarizing status failed (retrying): %w", statusErr)
 	}
 
 	content, err := bedrockService.SummarizeTranscript(ctx, meetingID, userID, priorContext)
 	if err != nil {
-		if meeting.SummaryRetryPending {
+		if retry {
 			return err // The owning retry claim decides pending versus terminal.
 		}
 		if errors.Is(err, service.ErrSummaryConflict) {
