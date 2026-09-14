@@ -806,6 +806,8 @@ def _assignment_spans(value, key):
                     index += len(quote)
                     quote = None
                     continue
+            elif char == "\\" and index + 1 < len(value) and value[index + 1] not in "\r\n":
+                escaped = True
             elif (index == 0 or value[index - 1] in "\r\n") and fence_end.match(value, index):
                 break
             elif char in "\"'`":
@@ -861,6 +863,8 @@ def _assignment_spans(value, key):
                     index += len(quote)
                     quote = None
                     continue
+            elif char == "\\" and index + 1 < len(value) and value[index + 1] not in "\r\n":
+                escaped = True
             elif prefix in ("\"", "'", "`") and char == prefix and not stack:
                 break
             elif char in "\"'`":
@@ -868,6 +872,17 @@ def _assignment_spans(value, key):
                 quote = char * 3 if char != "`" and value.startswith(char * 3, index) else char
                 index += len(quote)
                 continue
+            elif not stack and value.startswith("/*", index):
+                previous = value[line_start:index].rstrip()
+                if continuation_pending or re.search(r"(?:\|\||\?\?|\bor|\\)$", previous):
+                    closing = value.find("*/", index + 2)
+                    if closing < 0:
+                        index = len(value)
+                        break
+                    index = line_start = next_content(closing + 2)
+                    continuation_pending = True
+                    continue
+                break
             elif (not stack and (index == match.end() or value[index - 1].isspace())
                   and (char == "#" or value.startswith("//", index))):
                 previous = value[line_start:index].rstrip()
@@ -1025,15 +1040,22 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
                     while literal < len(value) and value[literal].isspace():
                         literal += 1
                     if literal < len(value) and value[literal] in "\"'":
-                        clean_key = scrub(decoded, _remaining, _depth + 1, False, False)
-                        pieces.extend((value[start:opening], canonical(clean_key), value[index:literal]))
-                        start = opening = literal
-                        index, decoded = quoted_literal(value, literal)
-                        if decoded is None:
-                            pieces.append('"[REDACTED]"')
-                            start = index
-                            continue
-                        hidden_literal = True
+                        literal_end, literal_value = quoted_literal(value, literal)
+                        following = literal_end
+                        while following < len(value) and value[following].isspace():
+                            following += 1
+                        # An empty YAML entry can be followed by another quoted key.
+                        # Never consume that key as the preceding entry's value.
+                        if following >= len(value) or value[following] != ":":
+                            clean_key = scrub(decoded, _remaining, _depth + 1, False, False)
+                            pieces.extend((value[start:opening], canonical(clean_key), value[index:literal]))
+                            start = opening = literal
+                            index, decoded = literal_end, literal_value
+                            if decoded is None:
+                                pieces.append('"[REDACTED]"')
+                                start = index
+                                continue
+                            hidden_literal = True
             literals = [decoded]
             while index < len(value):
                 next_start = index
