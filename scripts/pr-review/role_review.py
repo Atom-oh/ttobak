@@ -31,7 +31,6 @@ import secrets
 import sys
 import tempfile
 import unicodedata
-import warnings
 
 
 MAX_DIFF_BYTES = 95000
@@ -781,72 +780,9 @@ def quoted_literal(value, start):
     return end, decoded if isinstance(decoded, str) else None
 
 
-def _scrub_parenthesized(value, key):
-    """Remove complete containers; an uncertain boundary consumes the remainder."""
-    opening = re.compile(key + r"\(")
-    line_end = re.compile(r"[ \t\r]*(?:\n|\Z)")
-    continuation = re.compile(
-        r"\s*(?:[" + re.escape("()[]{}.+-*/%&|^?\\<>=!,\"'`#@")
-        + r"]|(?:if|else|and|or|in|is|not|instanceof|as|satisfies)\b)"
-    )
-    closing = {"[": "]", "(": ")", "{": "}"}
-    pieces, cursor = [], 0
-    while match := opening.search(value, cursor):
-        pieces.extend((value[cursor:match.start()], "[REDACTED]"))
-        start, index = match.end() - 1, match.end()
-        stack, quote, escaped = [closing[value[start]]], None, False
-        # Each matched region is scanned once, including nested/quoted delimiters.
-        while index < len(value) and stack:
-            char = value[index]
-            if escaped:
-                escaped = False
-                index += 1
-            elif char == "\\":
-                escaped = True
-                index += 1
-            elif quote:
-                if value.startswith(quote, index):
-                    index += len(quote)
-                    quote = None
-                else:
-                    index += 1
-            elif char in "\"'":
-                quote = char * 3 if value.startswith(char * 3, index) else char
-                index += len(quote)
-            elif char in closing:
-                stack.append(closing[char])
-                index += 1
-            elif char in "])}":
-                if char != stack.pop():
-                    return "".join(pieces)
-                index += 1
-            else:
-                index += 1
-        if stack or quote or escaped:
-            return "".join(pieces)
-        try:
-            # Parse only, never evaluate. Malformed or unsupported syntax must
-            # not preserve an apparent verdict after a guessed closing bracket.
-            with warnings.catch_warnings():
-                warnings.simplefilter("error")
-                ast.parse(value[start:index], mode="eval")
-        except (SyntaxError, ValueError, RecursionError, Warning):
-            return "".join(pieces)
-        # A balanced prefix can still be followed by a conditional, call, index
-        # or concatenation. Do not guess where such a sensitive expression ends.
-        boundary = line_end.match(value, index)
-        if boundary is None or continuation.match(value, boundary.end()):
-            return "".join(pieces)
-        cursor = index
-    pieces.append(value[cursor:])
-    return "".join(pieces)
-
-
-def _scrub_fallback_values(value, key):
-    """Consume complete fallback values without losing quoted continuation lines."""
+def _scrub_assignment_values(value, key):
+    """Consume complete assignments before another matcher can remove delimiters."""
     operator = re.compile(r"\|\||\?\?|\bor\b")
-    if not operator.search(value):
-        return value
     opening = {"(": ")", "[": "]", "{": "}"}
     def next_content(index):
         while index < len(value) and value[index].isspace():
@@ -855,11 +791,6 @@ def _scrub_fallback_values(value, key):
     pieces, cursor = [], 0
     for match in re.finditer(key, value):
         if match.start() < cursor:
-            continue
-        newline = value.find("\n", match.end())
-        line_end = len(value) if newline < 0 else newline
-        following = next_content(line_end)
-        if not operator.search(value, match.end(), line_end) and not operator.match(value, following):
             continue
         index, quote, escaped, stack = match.end(), None, False, []
         line_start = index
@@ -878,22 +809,28 @@ def _scrub_fallback_values(value, key):
                 quote = char * 3 if char != "`" and value.startswith(char * 3, index) else char
                 index += len(quote)
                 continue
+            elif char in ";," and not stack:
+                break
             elif char in opening:
                 stack.append(opening[char])
             elif char in ")]}" and stack:
                 if char != stack.pop():
                     index = len(value)
                     break
-            elif char == "\n" and not stack:
+            # Preserve public tokens separated by whitespace unless a fallback
+            # operator or explicit continuation makes them part of this value.
+            elif char.isspace() and not stack:
                 previous = value[line_start:index].rstrip()
                 following = next_content(index)
                 if not (re.search(r"(?:\|\||\?\?|\bor|\\)$", previous) or operator.match(value, following)):
                     break
                 index = line_start = following
                 continue
-            if char == "\n":
+            if char in "\r\n":
                 line_start = index + 1
             index += 1
+        if index == match.end():
+            continue
         pieces.extend((value[cursor:match.start()], "[REDACTED]"))
         cursor = index
     pieces.append(value[cursor:])
@@ -1028,7 +965,6 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
         + r")[A-Za-z0-9_.-]+)"
     )
     key = identifier + r"""["']?\s*[:=]\s*"""
-    value = _scrub_parenthesized(value, key)
     quoted_value = r"""(?:"(?:\\.|[^"\\])*(?:"|\\?\Z)|'(?:\\.|[^'\\])*(?:'|\\?\Z))"""
     line_break = r"(?:\r\n?|\n)"
     # Check indentation/blankness without consuming it twice. Every iteration
@@ -1050,7 +986,6 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
         r"""(?im)^[ \t]*(?:[+-][ \t]*)?(?:set-)?cookie["']?[ \t]*:[^\r\n]*""",
         r"""(?i:\bx-origin-verify)["']?\s*:\s*["']?[^\s"',;}\]]+""",
         key + r"[|>][-+]?[ \t]*" + line_break + r"(?:" + block_line + r")+",
-        _scrub_fallback_values,
         # YAML name/value pairs consume the complete value line, including commas.
         r"""(?i:\b(?:header)?name)["']?[ \t]*[:=][ \t]*["']?""" + identifier
         + r"""["']?[ \t]*""" + line_break
@@ -1058,12 +993,13 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
         r"""(?i:\b(?:header)?name)["']?\s*[:=]\s*["']?""" + identifier
         + r"""["']?\s*(?:,\s*)?(?:[+-][ \t]*)?["']?(?i:(?:header)?value)["']?\s*[:=]\s*"""
         + r"(?:" + quoted_value + r"|[^\s,}\]]+)",
+        _scrub_assignment_values,
         key + quoted_value,
         key + r"""[^\s"',;}\]]+""",
     )
     for pattern in patterns:
-        if pattern is _scrub_fallback_values:
-            value = _scrub_fallback_values(value, key)
+        if pattern is _scrub_assignment_values:
+            value = _scrub_assignment_values(value, key)
         else:
             value = re.sub(pattern, "[REDACTED]", value, flags=re.S)
     return value
