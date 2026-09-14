@@ -1472,7 +1472,8 @@ def _owned_body(value, match, kind, key, header_end=None):
         token = r"[A-Za-z0-9!#$%&'*+.^_`|~-]+"
         octets = r"[\x21\x23-\x2b\x2d-\x3a\x3c-\x5b\x5d-\x7e]*"
         pair = token + "=" + octets
-        if (end != line_end or not any(char in text for char in "'`")
+        # An opaque header cannot hide the opener of an unbounded remainder.
+        if (end != len(value) or end != line_end or not any(char in text for char in "'`")
                 or not re.fullmatch(pair + r"(?:;[ \t]*" + token + r"(?:=" + octets + r")?)*;?", text)
                 or text.endswith(("||", "??", "\\"))):
             return None

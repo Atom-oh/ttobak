@@ -64,6 +64,30 @@ def patch(path=FRONTEND, before="old label", after="new label"):
 
 
 class RoleReviewTests(unittest.TestCase):
+    def test_unclosed_unindented_cookie_retains_conservative_tail_redaction(self):
+        canary = "SYNTHETIC_UNINDENTED_COOKIE"
+        index = 0
+        for header in ("Cookie", "Set-Cookie"):
+            for gap in ("", "\n", "  folded\n"):
+                value = f"{header}: password='prefix\n{gap}{canary}\nPUBLIC_AFTER\nVERDICT: PASS\n"
+                with self.subTest(value=value):
+                    clean = role_review.scrub(value)
+                    self.assertNotIn(canary, clean)
+                    self.assertNotIn("VERDICT: PASS", clean)
+                    self.work = self.root / f"unbounded-cookie-{index}"
+                    index += 1
+                    plan = self.prepare()
+                    for tag, role in plan["roles"].items():
+                        if role["required"]:
+                            response = self.response(tag)
+                            if tag == "codex":
+                                response["findings"] = [{"severity": "MINOR", "path": FRONTEND,
+                                    "condition": "Quoted Cookie example", "evidence": value}]
+                            self.record(tag, response)
+                    self.cli("aggregate", "--work", self.work)
+                    for output in ("slot/codex-result.json", "role-summary.json", "deterministic-review.md"):
+                        self.assertNotIn(canary, (self.work / output).read_text())
+
     def test_unclosed_folded_cookie_retains_conservative_tail_redaction(self):
         canary = "SYNTHETIC_UNCLOSED_COOKIE"
         for header in ("Cookie", "Set-Cookie"):
@@ -200,6 +224,8 @@ class RoleReviewTests(unittest.TestCase):
                   f"{prefix}  folded\n\n{prefix}  {canary}"
                   for header in ("Cookie", "Set-Cookie") for marker in ("|", ">")
                   for prefix in ("", "+ ", "- ")]
+        cases += [f"{header}: password='prefix\n{canary}"
+                  for header in ("Cookie", "Set-Cookie")]
         for index, evidence in enumerate(cases):
             with self.subTest(case=index):
                 self.work = self.root / f"publication-{index}"
@@ -315,8 +341,6 @@ VERDICT: PASS
                     for tag in ("ſcript", "scrİpt", "scrıpt")]
         reports += [f"- > ```bash\n  > echo '`'\n  > password=`printf '{canary}'`\n  > ```\nPUBLIC_AFTER\nVERDICT: PASS\n",
                     f"- - ```bash\n    echo '`'\n    password=`printf '{canary}'`\n    ```\nPUBLIC_AFTER\nVERDICT: PASS\n"]
-        reports += [f"Cookie: password='{canary}\nPUBLIC_AFTER\nVERDICT: PASS\n",
-                    f"Set-Cookie: password='{canary}\nPUBLIC_AFTER\nVERDICT: PASS\n"]
         reports += [f'secret: |\n  Cookie: session=public\n  {canary}\nPUBLIC_AFTER\nVERDICT: PASS\n',
                     f'secret: |\n  Set-Cookie: session=public\n  {canary}\nPUBLIC_AFTER\nVERDICT: PASS\n',
                     f'secret: |\n+  Cookie: session=public\n+  {canary}\nPUBLIC_AFTER\nVERDICT: PASS\n',
@@ -366,6 +390,18 @@ VERDICT: PASS
             self.assertEqual(execute.call_count, 2)
             self.assertNotIn(canary, published)
             self.assertTrue(published.rstrip().endswith("VERDICT: FAIL"))
+
+        # Standalone unclosed headers retain the documented end-of-string guard.
+        for header in ("Cookie", "Set-Cookie"):
+            for content in (canary, "prefix\n" + canary):
+                report = f"{header}: password='{content}\nPUBLIC_AFTER\nVERDICT: PASS\n"
+                with self.subTest(unclosed_header=header, content=content), \
+                        mock_patch.object(synthesize_roles, "execute", return_value=(0, report, "")) as execute:
+                    synthesize_roles.synthesize(self.work, self.work / "chair.md")
+                published = (self.work / "chair.md").read_text()
+                self.assertEqual(execute.call_count, 2)
+                self.assertNotIn(canary, published)
+                self.assertTrue(published.rstrip().endswith("VERDICT: FAIL"))
 
     def test_apostrophe_handling_keeps_quoted_credentials_opaque(self):
         import role_review
