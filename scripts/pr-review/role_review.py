@@ -31,6 +31,7 @@ import secrets
 import sys
 import tempfile
 import unicodedata
+import warnings
 
 
 MAX_DIFF_BYTES = 95000
@@ -752,9 +753,10 @@ REDACTION_MARKERS = {
 
 
 def sensitive_key(value):
-    return isinstance(value, str) and value not in REDACTION_MARKERS and any(
-        SENSITIVE_KEY.fullmatch(part.group())
-        for part in re.finditer(r"[A-Za-z0-9_.:-]+", value)
+    return isinstance(value, str) and value not in REDACTION_MARKERS and (
+        any(SENSITIVE_KEY.fullmatch(part.group())
+            for part in re.finditer(r"[A-Za-z0-9_.:-]+", value))
+        or SENSITIVE_KEY.fullmatch(re.sub(r"[^A-Za-z0-9]+", "_", value))
     )
 
 
@@ -777,6 +779,67 @@ def quoted_literal(value, start):
     except (Invalid, ValueError, SyntaxError):
         return end, None
     return end, decoded if isinstance(decoded, str) else None
+
+
+def _scrub_parenthesized(value, key):
+    """Remove complete containers; an uncertain boundary consumes the remainder."""
+    opening = re.compile(key + r"\(")
+    line_end = re.compile(r"[ \t\r]*(?:\n|\Z)")
+    continuation = re.compile(
+        r"\s*(?:[" + re.escape("()[]{}.+-*/%&|^?\\<>=!,\"'`#@")
+        + r"]|(?:if|else|and|or|in|is|not|instanceof|as|satisfies)\b)"
+    )
+    closing = {"[": "]", "(": ")", "{": "}"}
+    pieces, cursor = [], 0
+    while match := opening.search(value, cursor):
+        pieces.extend((value[cursor:match.start()], "[REDACTED]"))
+        start, index = match.end() - 1, match.end()
+        stack, quote, escaped = [closing[value[start]]], None, False
+        # Each matched region is scanned once, including nested/quoted delimiters.
+        while index < len(value) and stack:
+            char = value[index]
+            if escaped:
+                escaped = False
+                index += 1
+            elif char == "\\":
+                escaped = True
+                index += 1
+            elif quote:
+                if value.startswith(quote, index):
+                    index += len(quote)
+                    quote = None
+                else:
+                    index += 1
+            elif char in "\"'":
+                quote = char * 3 if value.startswith(char * 3, index) else char
+                index += len(quote)
+            elif char in closing:
+                stack.append(closing[char])
+                index += 1
+            elif char in "])}":
+                if char != stack.pop():
+                    return "".join(pieces)
+                index += 1
+            else:
+                index += 1
+        if stack or quote or escaped:
+            return "".join(pieces)
+        try:
+            # Parse only, never evaluate. Malformed or unsupported syntax must
+            # not preserve an apparent verdict after a guessed closing bracket.
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")
+                ast.parse(value[start:index], mode="eval")
+        except (SyntaxError, ValueError, RecursionError, Warning):
+            return "".join(pieces)
+        # A balanced prefix can still be followed by a conditional, call, index
+        # or concatenation. Do not guess where such a sensitive expression ends.
+        boundary = line_end.match(value, index)
+        if boundary is None or continuation.match(value, boundary.end()):
+            return "".join(pieces)
+        cursor = index
+    pieces.append(value[cursor:])
+    return "".join(pieces)
 
 
 def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
@@ -864,6 +927,20 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
             index, decoded = quoted_literal(value, opening)
             if decoded is None:
                 continue
+            # Reuse the bounded literal scanner for sensitive JSON keys in prose.
+            if sensitive_key(decoded):
+                colon = index
+                while colon < len(value) and value[colon].isspace():
+                    colon += 1
+                if colon < len(value) and value[colon] == ":":
+                    literal = colon + 1
+                    while literal < len(value) and value[literal].isspace():
+                        literal += 1
+                    if literal < len(value) and value[literal] in "\"'":
+                        index, _ = quoted_literal(value, literal)
+                        pieces.extend((value[start:literal], '"[REDACTED]"'))
+                        start = index
+                        continue
             literals = [decoded]
             while index < len(value):
                 next_start = index
@@ -893,6 +970,12 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
         + r")[A-Za-z0-9_.-]+)"
     )
     key = identifier + r"""["']?\s*[:=]\s*"""
+    value = _scrub_parenthesized(value, key)
+    # Consume each candidate line once; failed operator searches must not
+    # repeatedly backtrack through the assignment's remaining characters.
+    def fallback(match):
+        return "[REDACTED]" if re.search(r"\|\||\?\?|\bor\b", match.group()) else match.group()
+    value = re.sub(key + r"[^\r\n]*", fallback, value)
     quoted_value = r"""(?:"(?:\\.|[^"\\])*(?:"|\\?\Z)|'(?:\\.|[^'\\])*(?:'|\\?\Z))"""
     line_break = r"(?:\r\n?|\n)"
     # Check indentation/blankness without consuming it twice. Every iteration
