@@ -89,6 +89,8 @@ class RoleReviewTests(unittest.TestCase):
                   for key in ("paſſword", "apiKey")]
         cases += [f'password = previous {operator}// local fallback\n"{canary}"\nPUBLIC_AFTER'
                   for operator in ("||", "??")]
+        cases += ['Evidence: {"' + key + '": "\\q password=\'prefix", ' + canary + "'}"
+                  for key in ("password[0]", "api key (prod)")]
         for index, evidence in enumerate(cases):
             with self.subTest(case=index):
                 self.work = self.root / f"publication-{index}"
@@ -181,6 +183,13 @@ VERDICT: PASS
             f'```python\npassword = "{canary}\\"suffix"\n```\nPUBLIC_AFTER\nVERDICT: PASS\n',
         ]
         reports.append(f"password: str = 'password=\"{canary}'\nPUBLIC_AFTER\nVERDICT: PASS\n")
+        reports += [
+            "secret=customer's default\nPUBLIC_AFTER deployment retry is required\nIt isn't recoverable.\nVERDICT: PASS\n",
+            "secret=we're using the documented identity\nPUBLIC_AFTER is required\nIt isn't optional.\nVERDICT: PASS\n",
+        ]
+        reports += ["printf '%s\\n' '" + json.dumps(item) + "'\nPUBLIC_AFTER\nVERDICT: PASS\n"
+                    for item in ({"password": canary}, {"public": "x", "password": canary},
+                                 {"password": canary, "public": "x"}, [{"password": canary}])]
         for report in reports:
             with self.subTest(report=report):
                 output = self.work / "chair.md"
@@ -200,10 +209,32 @@ VERDICT: PASS
             clean = role_review.scrub("password=" + value + "\nPUBLIC_AFTER")
             self.assertNotIn(canary, clean)
             self.assertIn("PUBLIC_AFTER", clean)
+        for closer in ")]}":
+            clean = role_review.scrub("password=literal" + closer + canary + "\nPUBLIC_AFTER")
+            self.assertNotIn(canary, clean)
+            self.assertIn("PUBLIC_AFTER", clean)
+        fenced = "```bash\npassword=prefix'" + canary + "\nTAIL'\n```\nPUBLIC_AFTER"
+        clean = role_review.scrub(fenced)
+        self.assertNotIn(canary, clean)
+        self.assertNotIn("TAIL", clean)
+        self.assertIn("PUBLIC_AFTER", clean)
         for value in (f"'{canary}", f"(prefix'{canary}", f"os.getenv('NAME', '{canary}'"):
             clean = role_review.scrub("password=" + value + "\nVERDICT: PASS")
             self.assertNotIn(canary, clean)
             self.assertNotIn("VERDICT: PASS", clean)
+
+    def test_json_enclosing_boundaries_require_original_strict_json(self):
+        import role_review
+        text = 'echo \'{"items":[{"password":"x"}]}\''
+        expected = {index for index, char in enumerate(text) if char in "}]"}
+        self.assertEqual(role_review._json_enclosing_closers(text), expected)
+        for text in ('{"password":"x", "password":"y"}',
+                     '{"password":"\\q", "nested":{"public":"x"}}',
+                     '{"password":"x", "nested":{"public":"x"},}',
+                     '{"password":"x", "nested":{"public":"x"}',
+                     "{'password':'x'}"):
+            with self.subTest(text=text):
+                self.assertEqual(role_review._json_enclosing_closers(text), set())
 
     def test_container_key_literal_scan_handles_repeated_escaped_quotes(self):
         script = ("import json,sys; from role_review import _normalize_container_keys; "

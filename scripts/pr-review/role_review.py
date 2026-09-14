@@ -833,9 +833,10 @@ def _normalize_container_keys(value):
     return "".join(pieces)
 
 
-def _inline_code_spans(value):
+def _inline_code_spans(value, block_spans=None):
     spans, offset, fence = [], 0, None
     list_indents = []
+    fence_start = None
     for line in value.splitlines(keepends=True):
         leading = re.match(r"[ \t]*", line).group()
         indent = len(leading.expandtabs(4))
@@ -843,6 +844,8 @@ def _inline_code_spans(value):
             marker = re.match(r"[ \t]*(`{3,}|~{3,})(.*)", line)
             if (marker and indent <= fence[2] + 3 and marker[1][0] == fence[0]
                     and len(marker[1]) >= fence[1] and not marker[2].strip()):
+                if block_spans is not None:
+                    block_spans.append((fence_start, offset + len(line)))
                 fence = None
             offset += len(line)
             continue
@@ -861,6 +864,7 @@ def _inline_code_spans(value):
         marker = re.match(r" {0,3}(`{3,}|~{3,})(.*)", content)
         if marker and (marker[1][0] == "~" or "`" not in marker[2]):
             fence = (marker[1][0], len(marker[1]), list_indents[-1] if in_list else 0)
+            fence_start = offset
         elif indent < 4 or in_list:
             runs = list(re.finditer(r"`+", line))
             following, last = {}, {}
@@ -876,15 +880,61 @@ def _inline_code_spans(value):
                 else:
                     spans.append((offset + runs[index].end(), offset + runs[close].start()))
                     index = close + 1
+        elif block_spans is not None and line.strip():
+            block_spans.append((offset, offset + len(line)))
         offset += len(line)
+    if fence and block_spans is not None:
+        block_spans.append((fence_start, len(value)))
     return spans
 
 
-def _assignment_spans(value, key):
+def _json_enclosing_closers(value):
+    """Trust enclosing boundaries only inside complete strict-JSON objects."""
+    closers, cursor = set(), 0
+    for match in re.finditer(r"\{(?=\s*[\"'])", value):
+        if match.start() < cursor:
+            continue
+        index, stack, quote, escaped = match.start() + 1, ["}"], False, False
+        found = set()
+        while index < len(value) and stack:
+            char = value[index]
+            if escaped:
+                escaped = False
+            elif quote:
+                if char == "\\":
+                    escaped = True
+                elif char == '"':
+                    quote = False
+            elif char == '"':
+                quote = True
+            elif char in "{[":
+                stack.append("}" if char == "{" else "]")
+            elif char in "}]":
+                if char != stack[-1]:
+                    break
+                stack.pop()
+                found.add(index)
+            index += 1
+        cursor = max(index, match.end())
+        if not stack:
+            try:
+                strict_json(value[match.start():index])
+            except Invalid:
+                continue
+            closers.update(found)
+    return closers
+
+
+def _assignment_spans(value, key, json_closers=None):
     """Find assignments without changing another detector's input."""
+    if json_closers is None:
+        json_closers = _json_enclosing_closers(value)
     operator = re.compile(r"\|\||\?\?|\bor\b")
     tail_operator = re.compile(r"(?:\|\||\?\?|\bor|\\|(?:^|\s)[+*/%&|^?:<>=!-])$")
-    code_spans, code_index = _inline_code_spans(value), 0
+    block_spans, block_index = [], 0
+    code_spans, code_index = _inline_code_spans(value, block_spans), 0
+    prose_suffix = re.compile(r"'(?:s|t|re|ve|ll|d|m)\b", re.I)
+    bare_word = re.compile(r"[\w.@/-]+")
     line_break = re.compile(r"\r\n?|\n")
     opening = {"(": ")", "[": "]", "{": "}"}
     bracket_ends = {}
@@ -949,14 +999,21 @@ def _assignment_spans(value, key):
         return False
     last_apostrophe, last_double, quote_escape = -1, -1, False
     code_apostrophes, code_doubles, quote_span_index = {}, {}, 0
+    same_line_quote = set()
+    line_number, apostrophe_line = 0, -1
     for position, char in enumerate(value):
+        if char == "\n":
+            line_number += 1
         if quote_escape:
             quote_escape = False
         elif char == "\\":
             quote_escape = True
         elif char in "\"'":
             if char == "'":
+                if last_apostrophe >= 0 and apostrophe_line == line_number:
+                    same_line_quote.add(last_apostrophe)
                 last_apostrophe = position
+                apostrophe_line = line_number
             else:
                 last_double = position
             while quote_span_index < len(code_spans) and code_spans[quote_span_index][1] < position:
@@ -979,6 +1036,10 @@ def _assignment_spans(value, key):
                     else None)
         value_apostrophe = code_apostrophes.get(code_end, -1) if code_end is not None else last_apostrophe
         value_double = code_doubles.get(code_end, -1) if code_end is not None else last_double
+        while block_index < len(block_spans) and block_spans[block_index][1] <= match.start():
+            block_index += 1
+        in_code_block = (block_index < len(block_spans)
+                         and block_spans[block_index][0] <= match.start())
         index, quote, escaped, stack = match.end(), None, False, []
         key_name = match.group().rstrip()[:-1].rstrip()
         prefix = value[match.start() - 1] if match.start() else ""
@@ -988,6 +1049,9 @@ def _assignment_spans(value, key):
         if prefix in ("\"", "'") and index < len(value) and value[index] == prefix:
             index += 1
         value_start = index
+        word = bare_word.match(value, value_start)
+        word_end = word.end() if word else -1
+        literal_prefix = word.group().lower() if word else ""
         started_quoted = index < len(value) and value[index] in "\"'"
         closed_quote = False
         plain_scalar = False
@@ -1022,9 +1086,10 @@ def _assignment_spans(value, key):
             elif (char == '"' and started_quoted and closed_quote and index == value_double
                   and not stack and (value[index - 1].isalnum() or value[index - 1] in "_])")):
                 pass  # Retain the legacy scrubber's bounded quoted-scalar tail.
-            elif (char == "'" and colon_label and not stack and index > value_start
-                  and re.fullmatch(r"[\w.@/-]+", value[value_start:index])
-                  and value[value_start:index].lower() not in {"r", "u", "b", "f", "br", "rb", "fr", "rf"}):
+            elif (char == "'" and not stack and index == word_end
+                  and literal_prefix not in {"r", "u", "b", "f", "br", "rb", "fr", "rf"}
+                  and (colon_label or (not in_code_block and code_end is None
+                       and index not in same_line_quote and prose_suffix.match(value, index)))):
                 plain_scalar = True
             elif (char == "'" and index == value_apostrophe and index > value_start
                   and not stack and (value[index - 1].isalnum() or value[index - 1] in "_])")):
@@ -1057,6 +1122,8 @@ def _assignment_spans(value, key):
                     continue
                 break
             elif char in ";," and not stack:
+                break
+            elif char in "}]" and not stack and index in json_closers:
                 break
             elif char in opening:
                 # An unmatched bracket inside a bare dotenv/shell token is
@@ -1258,7 +1325,8 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
                             following += 1
                         # An empty YAML entry can be followed by another quoted key.
                         # Never consume that key as the preceding entry's value.
-                        if following >= len(value) or value[following] != ":":
+                        # Invalid literals retain their raw text for overlapping detectors.
+                        if literal_value is not None and (following >= len(value) or value[following] != ":"):
                             clean_key = scrub(decoded, _remaining, _depth + 1, False, False)
                             pieces.extend((value[start:opening], canonical(clean_key), value[index:literal]))
                             start = opening = literal
@@ -1335,7 +1403,7 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
     scan_value = _opaque_scan_view(value, bodies)
     for entry in patterns:
         if entry is _assignment_spans:
-            spans.extend(_assignment_spans(scan_value, key))
+            spans.extend(_assignment_spans(scan_value, key, _json_enclosing_closers(value)))
             continue
         pattern, kind = entry if isinstance(entry, tuple) else (entry, None)
         for match in re.finditer(pattern, scan_value, flags=re.S):
