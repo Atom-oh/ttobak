@@ -67,6 +67,14 @@ Browser stop releases tracks and closes AudioContext. Mobile caption failure mus
 not stop recording. Wake-lock/reconnect/watchdog mitigation is implemented, with
 manual gesture-backed recovery when automatic resume fails. Call resumeAudio and
 manualStallRecovery synchronously inside the gesture before awaiting anything.
+Browser network loss suspends live-caption transport without stopping MediaRecorder.
+For the Transcribe preference, an `online` event retries a recorded outage, including
+after desktop Web Speech fallback; pause defers recovery until resume. The warning
+clears on the first recovered transcript. An unexpected response-stream end is a
+recoverable caption error. Stopped sessions cannot reconnect after pending setup.
+When Transcribe configuration is unavailable, desktop recovery retains Web Speech;
+mobile still blocks its competing microphone capture. Leaving the recording route
+releases the caption manager and its network listeners.
 
 Crash-leftover native WAVs are not Cognito-scoped. Show the existing caveat and
 require per-file confirmation for upload/delete; retain the 48-hour cleanup policy.

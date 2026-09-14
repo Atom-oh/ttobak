@@ -52,6 +52,9 @@ export class TranscribeStreamingSession {
   private audioWorkletNode: AudioWorkletNode | null = null;
   private audioContext: AudioContext | null = null;
   private isActive = false;
+  // Sessions are replaced on reconnect. A stopped instance must never finish
+  // an outstanding worklet/SDK/auth await and open a second connection.
+  private stopped = false;
   private abortController: AbortController | null = null;
 
   // Queue for bridging PCM chunks (from either the AudioWorklet or an
@@ -86,6 +89,7 @@ export class TranscribeStreamingSession {
 
   /** Start from a browser MediaStream (mic/tab modes). */
   async start(stream: MediaStream): Promise<void> {
+    if (this.stopped) return;
     // No sampleRate override: pcm-processor.js downsamples from whatever
     // the worklet's global `sampleRate` actually is to 16kHz, so forcing
     // 48000 here is unnecessary -- and on iOS Safari it can make context
@@ -105,6 +109,7 @@ export class TranscribeStreamingSession {
     };
     this.audioContext.onstatechange = tryResumeAudioContext;
     await this.audioContext.audioWorklet.addModule('/pcm-processor.js');
+    if (this.stopped) return;
     const source = this.audioContext.createMediaStreamSource(stream);
     this.audioWorkletNode = new AudioWorkletNode(this.audioContext, 'pcm-processor');
     source.connect(this.audioWorkletNode);
@@ -168,6 +173,7 @@ export class TranscribeStreamingSession {
    * it directly for every chunk they receive.
    */
   pushChunk(chunk: Uint8Array): void {
+    if (this.stopped) return;
     this.lastChunkAt = Date.now();
     if (this.audioResolve) {
       const resolve = this.audioResolve;
@@ -179,6 +185,7 @@ export class TranscribeStreamingSession {
   }
 
   private async connectAndTranscribe(): Promise<void> {
+    if (this.stopped) return;
     // Reset the queue BEFORE any await: chunks produced while the SDK
     // import/credential exchange below is in flight (native PCM starts
     // flowing as soon as capture does) must be queued and sent, not wiped
@@ -193,12 +200,14 @@ export class TranscribeStreamingSession {
         import('@aws-sdk/client-transcribe-streaming'),
         import('@aws-sdk/credential-providers'),
       ]);
+    if (this.stopped) return;
 
     // Get fresh ID token for credential exchange
     let idToken = getIdToken();
     if (!idToken) {
       idToken = await refreshSession();
     }
+    if (this.stopped) return;
     if (!idToken) {
       this.config.onError('transcribe-auth-failed');
       return;
@@ -263,6 +272,7 @@ export class TranscribeStreamingSession {
       const response = await this.client.send(command, {
         abortSignal: this.abortController.signal,
       });
+      if (!this.isActive) return;
 
       if (!response.TranscriptResultStream) {
         this.config.onError('transcribe-no-stream');
@@ -281,6 +291,10 @@ export class TranscribeStreamingSession {
           }
         }
       }
+      // The SDK can finish the iterator on WebSocket close without throwing.
+      // PCM still flows locally, so the audio watchdog cannot detect this.
+      // Intentional stop/pause sets isActive=false and must not trigger retry.
+      if (this.isActive) this.config.onError('transcribe-stream-error');
     } catch (err) {
       if (this.isActive) {
         console.error('Transcribe Streaming error:', err);
@@ -290,6 +304,7 @@ export class TranscribeStreamingSession {
   }
 
   stop(): void {
+    this.stopped = true;
     this.isActive = false;
     this.audioDone = true;
 
