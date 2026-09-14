@@ -34,6 +34,8 @@ def cookie_continuation_examples(canary, include_unclosed=True):
             yield f'{header}: previous {operator} // fallback\n  "{canary}"'
             yield f'{header}: previous {operator} // don\'t expose this\n"{canary}"'
             yield f'{header}: previous {operator} # don\'t expose this\n  "{canary}"'
+            yield f'{header}: previous {operator} /* don\'t expose this */\n"{canary}"'
+            yield f'{header}: previous {operator} /* don\'t\n expose this */\n"{canary}"'
         yield f'{header}: password: |\n  {canary}'
         yield f'+ {header}: password: >\n+   {canary}'
         yield f'{header}: password="prefix\n  {canary}"'
@@ -41,6 +43,10 @@ def cookie_continuation_examples(canary, include_unclosed=True):
         if include_unclosed:
             yield f"{header}: password='prefix\n  {canary}"
             yield f"+ {header}: password='prefix\n+   {canary}"
+            for marker in ("|", ">"):
+                for prefix in ("", "+ ", "- "):
+                    yield (f"{prefix}secret: {marker}\n{prefix}  {header}: password='prefix\n"
+                           f"{prefix}  folded\n\n{prefix}  {canary}")
         for opening, closing in (("[", "]"), ("{", "}"), ("(", ")")):
             yield f'password: {opening}\n  {header}: {canary}{closing}'
             yield f'+ password: {opening}\n+   {header}: {canary}{closing}'
@@ -161,6 +167,10 @@ class RoleReviewTests(unittest.TestCase):
         # entire scalar. Report-level public tails are covered by the chair test.
         cases += [f"{prefix}{header}: password='prefix\n{prefix}  {canary}"
                   for header in ("Cookie", "Set-Cookie") for prefix in ("", "+ ")]
+        cases += [f"{prefix}secret: {marker}\n{prefix}  {header}: password='prefix\n"
+                  f"{prefix}  folded\n\n{prefix}  {canary}"
+                  for header in ("Cookie", "Set-Cookie") for marker in ("|", ">")
+                  for prefix in ("", "+ ", "- ")]
         for index, evidence in enumerate(cases):
             with self.subTest(case=index):
                 self.work = self.root / f"publication-{index}"

@@ -1465,7 +1465,7 @@ def _owned_body(value, match, kind, key, quote_ends=None):
                 or re.fullmatch(r"[|>][-+]?[ \t]*", value[start:line_end])):
             return None
         # A comment apostrophe is not the boundary of a fallback expression.
-        if (re.search(r"(?:\|\||\?\?|\bor|\\)[ \t]*(?:(?:#|//)[^\r\n]*)?$",
+        if (re.search(r"(?:\|\||\?\?|\bor|\\)[ \t]*(?:(?:#|//|/\*)[^\r\n]*)?$",
                       value[start:line_end])
                 or re.compile(r"\s*(?:[+-][ \t]*)?(?:\|\||\?\?|\bor\b)").match(value, line_end)):
             return None
@@ -1730,9 +1730,10 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
                 body = _owned_body(value, match, kind, key, quote_ends)
                 if body:
                     if kind == "header":
-                        # Preserve delimiters owned by an enclosing scalar/container.
+                        # Preserve enclosing delimiters and YAML/diff line structure.
                         bodies.extend((body[0] + part.start(), body[0] + part.end())
-                                      for part in re.finditer(r"[^\"'`(){}\[\]]+", value[body[0]:body[1]]))
+                                      for part in re.finditer(r"[^ \t\r\n\"'`(){}\[\]+-]+",
+                                                              value[body[0]:body[1]]))
                     else:
                         bodies.append(body)
         if kind:
