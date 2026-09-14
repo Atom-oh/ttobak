@@ -170,6 +170,49 @@ class TestDocumentRetrieval(_SourceFixture, unittest.TestCase):
                                provider=self.runtime, kb_id='test-kb')
         return current.retrieve_from_kb(question, **kwargs)
 
+    def test_verified_file_guidance_distinguishes_excerpts_from_saved_markdown(self):
+        for markdown in ('', 'SAVED_MARKDOWN'):
+            with self.subTest(markdown=bool(markdown)):
+                self.doc(content=markdown, fileKey='docs/owner/file.pdf')
+                self.s3.head_object.return_value = {'ETag': '"e1"', 'VersionId': 'v1', 'ContentLength': 10}
+                self.runtime.retrieve.return_value = {
+                    'retrievalResults': [self.indexed(filename='file.pdf', text='VERIFIED_FILE_CODE')],
+                }
+                results = self.retrieve('file code', user_id='owner')
+                self.assertEqual(results[0]['provenance']['contentSource'], 'verified_indexed_file')
+                before = copy.deepcopy(results)
+                formatted = format_source_results(results)
+                self.assertIn('get_document_detail은 저장된 Markdown만 읽습니다', formatted)
+                self.assertIn('바이너리 파일 전체를 읽는 기능이 없으므로', formatted)
+                self.assertIn('전체 파일을 읽는 방법으로 get_document_detail을 제안하지 마세요', formatted)
+                continuation = 'get_document_detail(sourcePK, docId, offset=0)로 이어 읽으세요'
+                self.assertEqual(continuation in formatted, bool(markdown))
+                snapshot = json.loads(formatted.splitlines()[-1])
+                self.assertEqual(snapshot['content']['text'], markdown)
+                self.assertEqual(snapshot['fileExcerpt'], {'text': 'VERIFIED_FILE_CODE', 'partial': True})
+                self.assertEqual(snapshot['provenance'], results[0]['provenance'])
+                self.assertEqual(results, before)
+
+    def test_saved_markdown_continuation_remains_available(self):
+        self.doc(content='SAVED_MARKDOWN ' + 'm' * 3000)
+        formatted = format_source_results(self.retrieve('SAVED_MARKDOWN', user_id='owner'))
+        self.assertIn('get_document_detail(sourcePK, docId, offset=0)로 이어 읽으세요', formatted)
+        self.assertNotIn('바이너리 파일 전체를 읽는 기능이 없으므로', formatted)
+        snapshot = json.loads(formatted.splitlines()[-1])
+        self.assertTrue(snapshot['content']['partial'])
+        self.assertEqual(len(snapshot['content']['text']), 2400)
+        self.assertNotIn('fileExcerpt', snapshot)
+
+    def test_pending_file_without_markdown_does_not_suggest_full_file_continuation(self):
+        result = {'uri': 'ttobak://source/doc', 'score': 0,
+                  'document': {'docId': 'doc', 'content': '', 'filePending': True},
+                  'provenance': {'filePending': True, 'contentSource': 'current_saved'}}
+        formatted = format_source_results([result])
+        self.assertIn('저장된 Markdown 본문이 없습니다', formatted)
+        self.assertIn('바이너리 파일 전체를 읽는 기능이 없으므로', formatted)
+        self.assertNotIn('get_document_detail(sourcePK, docId, offset=0)', formatted)
+        self.assertTrue(json.loads(formatted.splitlines()[-1])['filePending'])
+
     def test_account_file_replacement_by_another_member_keeps_creation_author(self):
         self.doc(pk='ACCOUNT#team', content='', sourceUserId='original-creator',
                  fileKey='docs/later-editor/replacement.pdf')
