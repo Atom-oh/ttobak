@@ -8,6 +8,7 @@ Next.js 16 static SPA deployed to S3/CloudFront.
 npm run dev       # local dev server (SSR, hot reload)
 npm run build     # static export to out/
 npm run lint      # ESLint
+node scripts/stt-recovery.test.mjs  # Caption recovery/lifecycle regression tests
 ```
 
 ## Structure

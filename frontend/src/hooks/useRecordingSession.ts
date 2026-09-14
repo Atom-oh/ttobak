@@ -55,9 +55,9 @@ const speechErrorMessages: Record<string, string> = {
   // attempt frequently succeeds on its own, this just stops the wait from
   // being completely silent.
   'transcribe-stream-reconnecting': '실시간 자막 연결이 불안정합니다. 자동으로 재연결을 시도합니다 — 바로 다시 연결하려면 아래 버튼을 누르세요.',
+  'transcribe-network-offline': '인터넷 연결이 끊겨 실시간 자막을 기다리고 있습니다. 음성 녹음은 계속되며, 인터넷이 연결되면 자막을 다시 연결합니다. 녹음 화면을 닫거나 새로고침하지 마세요.',
   // manualStallRecovery() returned false -- there is genuinely nothing to
-  // retry into right now (e.g. Transcribe Streaming was never configured
-  // for this session, or the session already stopped/paused). Replaces
+  // retry into right now (e.g. the session already stopped/paused). Replaces
   // the previous silent no-op so the button always gives real feedback.
   'live-caption-retry-unavailable': '지금은 자막 연결을 다시 시도할 수 없습니다. 녹음은 계속됩니다.',
 };
@@ -70,6 +70,8 @@ const speechErrorMessages: Record<string, string> = {
 // handleRestartStt/isSttPermanentlyFailed path).
 const RETRYABLE_LIVE_CAPTION_ERRORS = new Set([
   'transcribe-stream-reconnecting',
+  'transcribe-network-offline',
+  'network',
   'web-speech-mobile-unavailable',
   // manualStallRecovery() can return false transiently (e.g. the session
   // is currently paused) -- keeping this in the retryable set means a
@@ -117,6 +119,13 @@ export function useRecordingSession({
   const liveSttProviderRef = useRef(liveSttProvider);
   useEffect(() => { liveSttProviderRef.current = liveSttProvider; }, [liveSttProvider]);
 
+  // Route navigation can unmount without the record button's stop callback.
+  // Release network listeners and pending connections as well as live STT.
+  useEffect(() => () => {
+    sttManagerRef.current?.stop();
+    sttManagerRef.current = null;
+  }, []);
+
   // Load runtime Cognito config once (fetched from /config.json at startup)
   useEffect(() => {
     let cancelled = false;
@@ -133,6 +142,7 @@ export function useRecordingSession({
         } catch {
           // Dictionary not available — proceed without custom vocabulary
         }
+        if (cancelled) return;
         const config: TranscribeStreamingConfig = {
           region: cfg.cognito.region,
           identityPoolId: cfg.cognito.identityPoolId,
@@ -176,7 +186,7 @@ export function useRecordingSession({
   // Whether the CURRENT speechError is one manualStallRecovery can actually
   // fix -- gates the retry button separately from isSttPermanentlyFailed's
   // own (desktop-only) button.
-  const canRetryLiveCaptions = speechError !== null &&
+  const canRetryLiveCaptions = liveSttProvider === 'transcribe-streaming' && speechError !== null &&
     Object.entries(speechErrorMessages).some(
       ([code, message]) => message === speechError && RETRYABLE_LIVE_CAPTION_ERRORS.has(code),
     );
@@ -283,7 +293,9 @@ export function useRecordingSession({
       // to close.
       onReconnected: () => {
         setSpeechError((prev) =>
-          prev === speechErrorMessages['transcribe-stream-reconnecting'] ? null : prev,
+          Object.entries(speechErrorMessages).some(
+            ([code, message]) => prev === message && RETRYABLE_LIVE_CAPTION_ERRORS.has(code),
+          ) ? null : prev,
         );
       },
       onProviderChange: (provider) => {
