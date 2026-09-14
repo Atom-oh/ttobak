@@ -82,6 +82,9 @@ class RoleReviewTests(unittest.TestCase):
         cases.append(f'"api key":\n"password": "{canary}"')
         cases += [f'password = previous {operator} /* local fallback */ "{canary}"\nPUBLIC_AFTER'
                   for operator in ("||", "??")]
+        cases += ["Evidence: " + json.dumps({key: item})
+                  for key in ("/prod/db/password", "password[0]", "api key (prod)")
+                  for item in ({"note": canary}, [canary])]
         for index, evidence in enumerate(cases):
             with self.subTest(case=index):
                 self.work = self.root / f"publication-{index}"
@@ -149,6 +152,15 @@ VERDICT: PASS
         ]
         reports.append(f"```bash\npassword={canary}\\'suffix\n```\nPUBLIC_AFTER\nVERDICT: PASS\n")
         reports.append(f"```bash\npassword={canary}\\(suffix\n```\nPUBLIC_AFTER\nVERDICT: PASS\n")
+        reports += [
+            "The secret: user's identity is validated.\nPUBLIC_AFTER\nVERDICT: PASS\n",
+            "password: customer's default is documented.\nPUBLIC_AFTER\nVERDICT: PASS\n",
+            "secret: we're using the documented identity.\nPUBLIC_AFTER\nVERDICT: PASS\n",
+        ]
+        reports += [
+            f"password = (previous or\n  # don't replace this fallback\n  \"{canary}\")\nPUBLIC_AFTER\nVERDICT: PASS\n",
+            f"password = (previous ||\n  /* don't replace this fallback */\n  \"{canary}\")\nPUBLIC_AFTER\nVERDICT: PASS\n",
+        ]
         for report in reports:
             with self.subTest(report=report):
                 output = self.work / "chair.md"
@@ -160,6 +172,18 @@ VERDICT: PASS
                 self.assertNotIn(canary, published)
                 self.assertIn("PUBLIC_AFTER", published)
                 self.assertTrue(published.rstrip().endswith("VERDICT: PASS"))
+
+    def test_apostrophe_handling_keeps_quoted_credentials_opaque(self):
+        import role_review
+        canary = "SYNTHETIC_QUOTED_VALUE"
+        for value in (f"prefix'{canary} tail'", f"\"owner's {canary}\""):
+            clean = role_review.scrub("password=" + value + "\nPUBLIC_AFTER")
+            self.assertNotIn(canary, clean)
+            self.assertIn("PUBLIC_AFTER", clean)
+        for value in (f"'{canary}", f"(prefix'{canary}"):
+            clean = role_review.scrub("password=" + value + "\nVERDICT: PASS")
+            self.assertNotIn(canary, clean)
+            self.assertNotIn("VERDICT: PASS", clean)
 
     def test_ordinary_prose_scrub_has_bounded_runtime(self):
         prose = "The password is required and the token is optional. " * 80
