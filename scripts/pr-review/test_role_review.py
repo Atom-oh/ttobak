@@ -25,6 +25,22 @@ FRONTEND = "dashboard/frontend/components/Button.tsx"
 TAGS = ("codex", "kiro-fable", "kiro-sol", "claude-self")
 
 
+def cookie_continuation_examples(canary):
+    for header in ("Cookie", "Set-Cookie"):
+        for operator in ("||", "??", "or"):
+            yield f'{header}: previous {operator}\n  "{canary}"'
+        for operator in ("||", "??", "or"):
+            yield f'{header}: previous\n  {operator} "{canary}"'
+            yield f'{header}: previous {operator} // fallback\n  "{canary}"'
+        yield f'{header}: password: |\n  {canary}'
+        yield f'+ {header}: password: >\n+   {canary}'
+        yield f'{header}: password="prefix\n  {canary}"'
+        yield f'{header}: getValue(\n  "{canary}")'
+        for opening, closing in (("[", "]"), ("{", "}"), ("(", ")")):
+            yield f'password: {opening}\n  {header}: {canary}{closing}'
+            yield f'+ password: {opening}\n+   {header}: {canary}{closing}'
+
+
 def patch(path=FRONTEND, before="old label", after="new label"):
     return (
         f"diff --git a/{path} b/{path}\n"
@@ -34,6 +50,16 @@ def patch(path=FRONTEND, before="old label", after="new label"):
 
 
 class RoleReviewTests(unittest.TestCase):
+    def test_cookie_continuations_hide_values_without_losing_public_tail(self):
+        canary = "SYNTHETIC_COOKIE_CONTINUATION"
+        for evidence in cookie_continuation_examples(canary):
+            with self.subTest(evidence=evidence):
+                report = evidence + "\nPUBLIC_AFTER\nVERDICT: PASS\n"
+                clean = role_review.scrub(report)
+                self.assertNotIn(canary, clean)
+                self.assertIn("PUBLIC_AFTER", clean)
+                self.assertTrue(clean.rstrip().endswith("VERDICT: PASS"))
+
     def test_publication_redacts_expression_defaults_and_punctuated_keys(self):
         import run_role
         import synthesize_roles
@@ -117,6 +143,7 @@ class RoleReviewTests(unittest.TestCase):
                     f'Set-Cookie: "prefix\n  {canary}',
                     f'password: "prefix\n  Cookie: {canary}"',
                     f"password: 'prefix\n  Set-Cookie: {canary}'"]
+        cases += [evidence + "\nPUBLIC_AFTER" for evidence in cookie_continuation_examples(canary)]
         for index, evidence in enumerate(cases):
             with self.subTest(case=index):
                 self.work = self.root / f"publication-{index}"
@@ -251,6 +278,8 @@ VERDICT: PASS
                     f'Cookie: [\n  "{canary}"\n]\nPUBLIC_AFTER\nVERDICT: PASS\n',
                     f'password: "prefix\n  Cookie: {canary}"\nPUBLIC_AFTER\nVERDICT: PASS\n',
                     f"password: 'prefix\n  Set-Cookie: {canary}'\nPUBLIC_AFTER\nVERDICT: PASS\n"]
+        reports += [evidence + "\nPUBLIC_AFTER\nVERDICT: PASS\n"
+                    for evidence in cookie_continuation_examples(canary)]
         for report in reports:
             with self.subTest(report=report):
                 output = self.work / "chair.md"

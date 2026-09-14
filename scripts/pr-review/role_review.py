@@ -1447,6 +1447,20 @@ def _owned_body(value, match, kind, key):
         if (start == end or value[start] in "\"'`[{("
                 or re.fullmatch(r"[|>][-+]?[ \t]*", value[start:end])):
             return None
+        # Only an unclosed header quote needs opacity to avoid consuming the
+        # public tail. Leave complete/multiline expressions to existing detectors.
+        quotes = re.compile(r"[\"'`]")
+        literals = re.compile(r"\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`", re.S)
+        marker = quotes.search(value, start, end)
+        while marker is not None:
+            literal = literals.match(value, marker.start())
+            if literal is None:
+                break
+            if literal.end() > end:
+                return None
+            marker = quotes.search(value, literal.end(), end)
+        else:
+            return None
         prefix = re.match(r"[ \t]*[+-]?[ \t]*", match.group())
         return (match.start() + prefix.end(), end)  # Retain indentation and diff structure.
     if kind == "heredoc":
@@ -1688,9 +1702,9 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
                 body = _owned_body(value, match, kind, key)
                 if body:
                     if kind == "header":
-                        # Preserve delimiters owned by an enclosing quoted scalar.
+                        # Preserve delimiters owned by an enclosing scalar/container.
                         bodies.extend((body[0] + part.start(), body[0] + part.end())
-                                      for part in re.finditer(r"[^\"'`]+", value[body[0]:body[1]]))
+                                      for part in re.finditer(r"[^\"'`(){}\[\]]+", value[body[0]:body[1]]))
                     else:
                         bodies.append(body)
         if kind:
