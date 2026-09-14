@@ -81,6 +81,7 @@ def install_agent(cwd):
 
 
 def preflight(binary, model, cwd, environment, timeout):
+    # Keep model selection and the empty-agent guard on the validated Kiro v1 path.
     install_agent(cwd)
     (cwd / "preflight-canary.txt").write_text(secrets.token_hex(24) + "\n")
     prompt = (
@@ -90,7 +91,7 @@ def preflight(binary, model, cwd, environment, timeout):
     )
     code, output, error = execute(
         [binary, "chat", prompt, "--model", model, "--agent", "inline-review",
-         "--no-interactive", "--wrap", "never"],
+         "--no-interactive", "--wrap", "never", "--legacy-ui", "--agent-engine", "v1"],
         cwd, kiro_environment(cwd, environment), "", timeout,
     )
     reply = re.sub(r"(?m)^\s*> ?", "", ANSI.sub("", output)).strip()
@@ -205,6 +206,7 @@ def run(work, tag, kiro_startup=None):
                     command = [
                         startup.binary, "chat", instruction, "--model", role["model"],
                         "--agent", "inline-review", "--no-interactive", "--wrap", "never",
+                        "--legacy-ui", "--agent-engine", "v1",
                     ]
                     for _ in range(attempts):
                         nonce, framed_prompt, payload = issue_request(work, tag)
