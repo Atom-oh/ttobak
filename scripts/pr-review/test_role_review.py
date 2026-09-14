@@ -107,6 +107,11 @@ class RoleReviewTests(unittest.TestCase):
                   f'secret: >\n  Set-Cookie: session=public\n  {canary}',
                   f'secret: >\n+  Cookie: session=public\n+  {canary}',
                   f'secret: >\n+  Set-Cookie: session=public\n+  {canary}']
+        cases += [f'Cookie: |\n  {canary}',
+                    f'Set-Cookie: >\n  {canary}',
+                    f'Cookie: "prefix\n  {canary}"',
+                    f'+ Cookie: |\n+   {canary}',
+                    f'- Set-Cookie: "prefix\n-   {canary}"']
         for index, evidence in enumerate(cases):
             with self.subTest(case=index):
                 self.work = self.root / f"publication-{index}"
@@ -232,6 +237,11 @@ VERDICT: PASS
                     f'secret: >\n  Set-Cookie: session=public\n  {canary}\nPUBLIC_AFTER\nVERDICT: PASS\n',
                     f'secret: >\n+  Cookie: session=public\n+  {canary}\nPUBLIC_AFTER\nVERDICT: PASS\n',
                     f'secret: >\n+  Set-Cookie: session=public\n+  {canary}\nPUBLIC_AFTER\nVERDICT: PASS\n']
+        reports += [f'Cookie: |\n  {canary}\nPUBLIC_AFTER\nVERDICT: PASS\n',
+                    f'Set-Cookie: >\n  {canary}\nPUBLIC_AFTER\nVERDICT: PASS\n',
+                    f'Cookie: "prefix\n  {canary}"\nPUBLIC_AFTER\nVERDICT: PASS\n',
+                    f'+ Cookie: |\n+   {canary}\nPUBLIC_AFTER\nVERDICT: PASS\n',
+                    f'- Set-Cookie: "prefix\n-   {canary}"\nPUBLIC_AFTER\nVERDICT: PASS\n']
         for report in reports:
             with self.subTest(report=report):
                 output = self.work / "chair.md"
