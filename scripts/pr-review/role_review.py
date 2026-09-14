@@ -1439,6 +1439,8 @@ def _opaque_scan_view(value, bodies):
 
 def _owned_body(value, match, kind, key):
     end = match.end()
+    if kind == "header":
+        return match.span()  # The complete header line is already redacted.
     if kind == "heredoc":
         newline = value.find("\n", match.end("heredoc"), end)
         if newline < 0:
@@ -1648,7 +1650,7 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
         r"""(?i:\bAuthorization)["']?\s*:\s*["']?(?i:Basic|Bearer)\s+[A-Za-z0-9+/=_.~-]+""",
         r"""(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]*://[^/\s:@"']*:[^@\s/"']+@""",
         r"""https://hooks\.slack\.com/services/[^\s"'<>]+""",
-        r"""(?im)^[ \t]*(?:[+-][ \t]*)?(?:set-)?cookie["']?[ \t]*:[^\r\n]*""",
+        (r"""(?im)^[ \t]*(?:[+-][ \t]*)?(?:set-)?cookie["']?[ \t]*:[^\r\n]*""", 'header'),
         r"""(?i:\bx-origin-verify)["']?\s*:\s*["']?[^\s"',;}\]]+""",
         (key + r"[|>][-+]?[ \t]*" + line_break + r"(?:" + block_line + r")+", 'block'),
         (r"""(?i:\b(?:header)?name)["']?[ \t]*[:=][ \t]*["']?""" + identifier
