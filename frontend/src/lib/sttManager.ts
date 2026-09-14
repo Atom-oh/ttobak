@@ -101,6 +101,7 @@ export class SttManager {
   // overwrites the reconnecting banner with a different failure message
   // anyway, so a stale `true` here has nothing left to consume it.
   private awaitingReconnectConfirmation = false;
+  private networkRecoveryPending = false;
 
   // Translation state (shared across providers)
   private translateTimer: ReturnType<typeof setTimeout> | undefined;
@@ -111,6 +112,40 @@ export class SttManager {
     this.config = config;
   }
 
+  private clearPendingStallReconnect(): void {
+    if (!this.pendingStallReconnect) return;
+    document.removeEventListener('visibilitychange', this.pendingStallReconnect);
+    window.removeEventListener('pageshow', this.pendingStallReconnect);
+    window.removeEventListener('focus', this.pendingStallReconnect);
+    this.pendingStallReconnect = null;
+  }
+
+  private handleNetworkOffline = (): void => {
+    if (this.stopped || !this.stream || this.preferredProvider !== 'transcribe-streaming') return;
+    this.networkRecoveryPending = true;
+    this.clearPendingStallReconnect();
+    this.transcribeSession?.stop();
+    this.transcribeSession = null;
+    this.webSpeechClient?.stop();
+    this.webSpeechClient = null;
+    if (!this.paused) this.config.callbacks.onError('transcribe-network-offline');
+  };
+
+  private handleNetworkOnline = (): void => {
+    if (!this.networkRecoveryPending || this.stopped || this.paused) return;
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+    // Only a recorded outage earns a new retry, so repeated online events
+    // cannot replace a healthy connection. Keep the original MediaStream:
+    // MediaRecorder must continue capturing throughout the network change.
+    this.manualStallRecovery();
+  };
+
+  private confirmReconnection(): void {
+    if (!this.awaitingReconnectConfirmation) return;
+    this.awaitingReconnectConfirmation = false;
+    this.config.onReconnected?.();
+  }
+
   getActiveProvider(): LiveSttProvider {
     return this.activeProvider;
   }
@@ -119,8 +154,17 @@ export class SttManager {
     stream: MediaStream,
     preferredProvider: LiveSttProvider,
   ): Promise<void> {
+    if (this.stopped) return;
     this.stream = stream;
     this.preferredProvider = preferredProvider;
+    if (preferredProvider === 'transcribe-streaming' && typeof window !== 'undefined') {
+      window.addEventListener('offline', this.handleNetworkOffline);
+      window.addEventListener('online', this.handleNetworkOnline);
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+        this.handleNetworkOffline();
+        return;
+      }
+    }
 
     if (preferredProvider === 'transcribe-streaming' && this.config.transcribeStreamingConfig) {
       try {
@@ -199,22 +243,22 @@ export class SttManager {
    */
   // Returns whether a reconnect attempt was actually started, so the
   // caller can surface feedback instead of the button silently doing
-  // nothing on a dead end (no config, paused, stopped) -- see
+  // nothing on a paused/stopped session -- see
   // useRecordingSession's retryLiveCaptions.
   manualStallRecovery(): boolean {
     if (this.stopped || !this.stream) return false;
-    if (this.preferredProvider !== 'transcribe-streaming' || !this.config.transcribeStreamingConfig) return false;
+    if (this.preferredProvider !== 'transcribe-streaming') return false;
     // Paused: nothing to reconnect right now -- resume() already restarts
     // Transcribe Streaming fresh when the recording itself resumes, and
     // starting a session against a stream that isn't being recorded would
     // just leak it the same way retryWithConfig's own paused guard avoids.
     if (this.paused) return false;
-    if (this.pendingStallReconnect) {
-      document.removeEventListener('visibilitychange', this.pendingStallReconnect);
-      window.removeEventListener('pageshow', this.pendingStallReconnect);
-      window.removeEventListener('focus', this.pendingStallReconnect);
-      this.pendingStallReconnect = null;
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      this.handleNetworkOffline();
+      return true; // Recovery is queued for online; do not spend retries offline.
     }
+    this.clearPendingStallReconnect();
+    this.networkRecoveryPending = false;
     this.transcribeSession?.stop();
     this.transcribeSession = null;
     this.webSpeechClient?.stop();
@@ -231,6 +275,14 @@ export class SttManager {
     // clear it, not this call's optimistic activeProvider flip below
     // (which reflects a decision made now, not a connection proven now).
     this.awaitingReconnectConfirmation = true;
+    this.config.onReconnecting?.();
+    // Desktop can already be using Web Speech because optional Transcribe
+    // configuration never arrived. Restore that path too; the existing
+    // fallback guard still prohibits competing microphone capture on mobile.
+    if (!this.config.transcribeStreamingConfig) {
+      this.fallbackToWebSpeech(true);
+      return true;
+    }
     this.startTranscribeStreaming(this.stream).catch(() => this.fallbackToWebSpeech(true));
     this.activeProvider = 'transcribe-streaming';
     this.config.onProviderChange?.('transcribe-streaming');
@@ -318,6 +370,16 @@ export class SttManager {
   private lastDetectedLang = 'ko';
 
   private async startTranscribeStreaming(stream: MediaStream): Promise<void> {
+    if (this.stopped || this.paused) return;
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      this.handleNetworkOffline();
+      return;
+    }
+    if (this.networkRecoveryPending) {
+      this.awaitingReconnectConfirmation = true;
+      this.config.onReconnecting?.();
+      this.networkRecoveryPending = false;
+    }
     const tsConfig = this.config.transcribeStreamingConfig!;
 
     // Captured by this attempt's own callbacks below so they can tell
@@ -339,15 +401,8 @@ export class SttManager {
       vocabularyName: tsConfig.vocabularyName,
       onTranscript: (text, isFinal, detectedLang) => {
         if (this.transcribeSession !== session) return;
-        if (this.awaitingReconnectConfirmation) {
-          // This session receiving ANY transcript (even interim) is the
-          // real "we're back" signal -- unlike onReconnecting (fired the
-          // instant the retry is merely initiated) or the optimistic
-          // onProviderChange calls elsewhere, this proves the WebSocket
-          // actually opened and is receiving audio results.
-          this.awaitingReconnectConfirmation = false;
-          this.config.onReconnected?.();
-        }
+        // A transcript, including interim, proves transport recovery.
+        this.confirmReconnection();
         if (detectedLang) {
           this.lastDetectedLang = detectedLang.substring(0, 2);
         }
@@ -362,6 +417,10 @@ export class SttManager {
         if (this.transcribeSession !== session) return;
         session.stop();
         this.transcribeSession = null;
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+          this.handleNetworkOffline();
+          return;
+        }
         // A stall (AudioContext suspended -- screen lock, background) is
         // recoverable in a way other Transcribe errors aren't: the mic
         // track is still live, resume() may simply have lost the race
@@ -455,6 +514,10 @@ export class SttManager {
       console.error('Transcribe Streaming start failed:', err);
       session.stop();
       this.transcribeSession = null;
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+        this.handleNetworkOffline();
+        return;
+      }
       this.fallbackToWebSpeech(true);
     });
   }
@@ -493,12 +556,21 @@ export class SttManager {
   }
 
   private startWebSpeech(sourceLang: string): void {
-    this.webSpeechClient = new TranscribeFallbackClient(
-      this.config.callbacks,
+    const client = new TranscribeFallbackClient(
+      {
+        ...this.config.callbacks,
+        onTranscript: (text, isFinal) => {
+          // pause() still allows recognition's pending final onend flush.
+          if (this.stopped || this.webSpeechClient !== client) return;
+          this.confirmReconnection();
+          this.config.callbacks.onTranscript(text, isFinal);
+        },
+      },
       this.config.targetLang,
       this.config.translationEnabled,
     );
-    this.webSpeechClient.start(sourceLang);
+    this.webSpeechClient = client;
+    client.start(sourceLang);
   }
 
   private handleFinalTranslation(text: string): void {
@@ -561,6 +633,14 @@ export class SttManager {
   resume(): void {
     if (this.stopped) return;
     this.paused = false;
+    if (this.networkRecoveryPending) {
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+        this.handleNetworkOffline();
+      } else {
+        this.handleNetworkOnline();
+      }
+      return;
+    }
     // A config arrived while paused (see retryWithConfig, which persists
     // it but defers starting anything until now to avoid a duplicate
     // session) -- promote in the SAME single restart resume() already
@@ -598,12 +678,12 @@ export class SttManager {
 
   stop(): void {
     this.stopped = true;
-    if (this.pendingStallReconnect) {
-      document.removeEventListener('visibilitychange', this.pendingStallReconnect);
-      window.removeEventListener('pageshow', this.pendingStallReconnect);
-      window.removeEventListener('focus', this.pendingStallReconnect);
-      this.pendingStallReconnect = null;
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('offline', this.handleNetworkOffline);
+      window.removeEventListener('online', this.handleNetworkOnline);
     }
+    this.networkRecoveryPending = false;
+    this.clearPendingStallReconnect();
     this.transcribeSession?.stop();
     this.transcribeSession = null;
     this.webSpeechClient?.stop();
