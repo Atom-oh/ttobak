@@ -1424,6 +1424,10 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
             continue
         pattern, kind = entry if isinstance(entry, tuple) else (entry, None)
         for match in re.finditer(pattern, scan_value, flags=re.S):
+            if kind == "named" and match.group("owned_value").lstrip().startswith("<<"):
+                # An unresolved sensitive heredoc retains the legacy tail guard.
+                spans.append((match.start(), len(value)))
+                continue
             spans.append(match.span())
             if kind:
                 body = _owned_body(value, match, kind, key)

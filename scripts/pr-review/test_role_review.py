@@ -91,6 +91,8 @@ class RoleReviewTests(unittest.TestCase):
                   for operator in ("||", "??")]
         cases += ['Evidence: {"' + key + '": "\\q password=\'prefix", ' + canary + "'}"
                   for key in ("password[0]", "api key (prod)")]
+        cases += [prefix + '\"name\" = \"PASSWORD\"\n\"value\" = <<EOF\n' + canary + '\nEOF'
+                  for prefix in ("The secret: ", "The new secret: ")]
         for index, evidence in enumerate(cases):
             with self.subTest(case=index):
                 self.work = self.root / f"publication-{index}"
@@ -246,6 +248,16 @@ VERDICT: PASS
                                 text=True, capture_output=True, cwd=ENGINE.parent, timeout=3)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout), value)
+
+    def test_named_heredoc_keeps_legacy_tail_rejection(self):
+        import role_review
+        from run_role import scrub as scrub_raw
+        from synthesize_roles import valid
+        for prefix in ("The secret: ", "The new secret: "):
+            text = prefix + '\"name\" = \"PASSWORD\"\n\"value\" = <<EOF\nSYNTHETIC_HEREDOC_BODY\nEOF\nVERDICT: PASS\n'
+            clean = role_review.scrub(scrub_raw(text))
+            self.assertNotIn("SYNTHETIC_HEREDOC_BODY", clean)
+            self.assertFalse(valid(clean, 0))
 
     def test_commented_bracket_lookahead_has_bounded_runtime(self):
         script = "import json,sys; from role_review import scrub; print(json.dumps(scrub(json.load(sys.stdin))))"
