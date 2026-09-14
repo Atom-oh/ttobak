@@ -34,6 +34,321 @@ def patch(path=FRONTEND, before="old label", after="new label"):
 
 
 class RoleReviewTests(unittest.TestCase):
+    def test_publication_redacts_expression_defaults_and_punctuated_keys(self):
+        import run_role
+        import synthesize_roles
+
+        canary = "SYNTHETIC_ROLLOUT_CANARY"
+        cases = [f'password = settings.PASSWORD {operator} "{canary}"\nPUBLIC_AFTER'
+                 for operator in ("||", "??", "or")]
+        cases += [f'password = (old {operator}\n "{canary}")'
+                  for operator in ("||", "??", "or")]
+        cases += [f'password: "old {operator}\n{canary}"\nPUBLIC_AFTER'
+                  for operator in ("||", "??", "or")]
+        cases += [f'password = settings.PASSWORD{before}{operator}{after}"{canary}"\nPUBLIC_AFTER'
+                  for operator in ("||", "??", "or")
+                  for before, after in ((" ", "\n    "), ("\n    ", " "))]
+        cases += [
+            f'password = prior || "default"; api_key =\n"{canary}"; PUBLIC_AFTER',
+            f'password: "first\n{canary} token=value or last"\nPUBLIC_AFTER',
+            f'password = prior || "{canary}"; PUBLIC_AFTER',
+        ]
+        cases += [
+            f'The new secret: name="PASSWORD", value="{canary}"',
+            f"""curl -d "password="'{canary}'"&user=demo" https://example.invalid""",
+        ]
+        cases += [
+            f"password = prior  # don't use token='prefix,{canary}'",
+            f"password = prior  // don't use token='prefix,{canary}'",
+            f"password=https://example.invalid/#{canary}\nPUBLIC_AFTER",
+        ]
+        cases += [
+            f'password = previous ||\n  // local fallback\n  "{canary}"\nPUBLIC_AFTER',
+            f'password = previous || // local fallback\n  "{canary}"\nPUBLIC_AFTER',
+        ]
+        cases += [
+            f"The secret: don't use token='prefix,{canary}'\nPUBLIC_AFTER",
+            f"password = prior /* don't use token='prefix,{canary}' */\nPUBLIC_AFTER",
+        ]
+        cases.append(f"""curl -d "password="prefix,{canary}"&user=demo" https://example.invalid""")
+        cases += [prefix + json.dumps({key: canary}) + suffix
+                  for key in ("/prod/db/password", "password[0]", "api key (prod)")
+                  for prefix, suffix in (("", ""), ("Evidence: ", "\nPUBLIC_AFTER"))]
+        cases += [
+            f'Evidence: {{"password": "sk-" + "{canary}"}}',
+            f'Evidence: {{"password": "-----BEGIN " + "PRIVATE KEY-----\\n{canary}\\n-----END PRIVATE KEY-----"}}',
+            f'Evidence: {{"\\u0073k-{canary}/password": "public"}}',
+        ]
+        cases.append(f'"api key":\n"password": "{canary}"')
+        cases += [f'password = previous {operator} /* local fallback */ "{canary}"\nPUBLIC_AFTER'
+                  for operator in ("||", "??")]
+        cases += ["Evidence: " + json.dumps({key: item})
+                  for key in ("/prod/db/password", "password[0]", "api key (prod)")
+                  for item in ({"note": canary}, [canary])]
+        cases += [json.dumps({key: canary}, ensure_ascii=False)
+                  for key in ("paſſword", "apiKey")]
+        cases += [f'password = previous {operator}// local fallback\n"{canary}"\nPUBLIC_AFTER'
+                  for operator in ("||", "??")]
+        cases += ['Evidence: {"' + key + '": "\\q password=\'prefix", ' + canary + "'}"
+                  for key in ("password[0]", "api key (prod)")]
+        cases += [prefix + '\"name\" = \"PASSWORD\"\n\"value\" = <<EOF\n' + canary + '\nEOF'
+                  for prefix in ("The secret: ", "The new secret: ")]
+        cases += [f"```bash\ncat <<'EOF'\n> ```\nEOF\necho '`'\npassword=`printf '{canary}'`\n```",
+                  f"<pre>\necho '`'\npassword=`printf '{canary}'`\n</pre>"]
+        cases += [f"<script>\n</{tag}>\necho '`'\npassword=`printf '{canary}'`\n</script>"
+                  for tag in ("ſcript", "scrİpt", "scrıpt")]
+        cases += [f"- > ```bash\n  > echo '`'\n  > password=`printf '{canary}'`\n  > ```",
+                  f"- - ```bash\n    echo '`'\n    password=`printf '{canary}'`\n    ```"]
+        for index, evidence in enumerate(cases):
+            with self.subTest(case=index):
+                self.work = self.root / f"publication-{index}"
+                plan = self.prepare()
+                response = self.response("claude-self", findings=[{
+                    "severity": "MINOR", "path": FRONTEND,
+                    "condition": "When quoting a configuration example", "evidence": evidence,
+                }])
+                envelope = {"type": "result", "subtype": "success", "is_error": False,
+                            "structured_output": response}
+                with mock_patch.object(run_role, "execute", return_value=(0, json.dumps(envelope), "")):
+                    run_role.run(self.work, "claude-self")
+                result = self.read("slot/claude-self-result.json")
+                self.assertTrue(result["valid"], result["failure_codes"])
+                self.assertEqual(result["response"]["reviewed_paths"], [FRONTEND])
+                self.assertEqual(result["response"]["findings"][0]["path"], FRONTEND)
+                for tag, role in plan["roles"].items():
+                    if role["required"] and tag != "claude-self":
+                        self.record(tag)
+                self.cli("aggregate", "--work", self.work)
+                self.assertEqual(self.read("role-summary.json")["mode"], "deterministic")
+                with mock_patch.dict(synthesize_roles.os.environ, {"GITHUB_ENV": str(self.root / "test-env")}), \
+                        mock_patch.object(synthesize_roles, "execute",
+                                          side_effect=AssertionError("Unexpected chair call")):
+                    synthesize_roles.synthesize(self.work, self.work / "review.md")
+                for name in ("slot/claude-self-result.json", "role-summary.json",
+                             "deterministic-review.md", "review.md"):
+                    self.assertNotIn(canary, (self.work / name).read_text())
+                    if evidence.endswith("PUBLIC_AFTER"):
+                        self.assertIn("PUBLIC_AFTER", (self.work / name).read_text())
+                self.assertTrue((self.work / "review.md").read_text().rstrip().endswith("VERDICT: PASS"))
+
+
+    def test_chair_preserves_verdict_after_grouped_sensitive_examples(self):
+        import synthesize_roles
+
+        plan = self.prepare()
+        (self.work / "project-context.md").write_text(self.context.read_text())
+        for tag, role in plan["roles"].items():
+            if role["required"]:
+                response = self.response(tag)
+                if tag == "codex":
+                    response["findings"] = [{"severity": "MAJOR", "path": FRONTEND,
+                                             "condition": "Synthetic candidate", "evidence": "Check this branch."}]
+                self.record(tag, response)
+        self.cli("aggregate", "--work", self.work)
+        self.assertEqual(self.read("role-summary.json")["mode"], "review")
+        canary = "SYNTHETIC_CHAIR_PRIVATE_VALUE"
+        reports = [(f'Resolved synthetic candidate.\n\n```text\npassword = (previous {operator}\n'
+                    f'  "{canary}")\n```\n- PUBLIC_AFTER\n\nVERDICT: PASS\n')
+                   for operator in ("or", "||", "??")]
+        reports += [
+            f"password=\"{canary}\" isn't rotated\nPUBLIC_AFTER\nVERDICT: PASS\n",
+            f"Checked `password={canary}`; PUBLIC_AFTER\nVERDICT: PASS\n",
+            f"""curl -d "password="'{canary}'"&user=demo" https://example.invalid
+PUBLIC_AFTER
+VERDICT: PASS
+""",
+        ]
+        reports += [f"```dotenv\npassword=prefix{opening}{canary}\n```\nPUBLIC_AFTER\nVERDICT: PASS\n"
+                    for opening in ("[", "{")]
+        reports += [
+            f"curl -d 'password={canary}' https://example.invalid\nPUBLIC_AFTER\nVERDICT: PASS\n",
+            f"```dotenv\npassword=prefix[{canary}\n```\n[PUBLIC_AFTER](https://example.invalid)\nVERDICT: PASS\n",
+        ]
+        reports.append(f"```bash\npassword={canary}\\'suffix\n```\nPUBLIC_AFTER\nVERDICT: PASS\n")
+        reports.append(f"```bash\npassword={canary}\\(suffix\n```\nPUBLIC_AFTER\nVERDICT: PASS\n")
+        reports += [
+            "The secret: user's identity is validated.\nPUBLIC_AFTER\nVERDICT: PASS\n",
+            "password: customer's default is documented.\nPUBLIC_AFTER\nVERDICT: PASS\n",
+            "secret: we're using the documented identity.\nPUBLIC_AFTER\nVERDICT: PASS\n",
+        ]
+        reports += [
+            f"password = (previous or\n  # don't replace this fallback\n  \"{canary}\")\nPUBLIC_AFTER\nVERDICT: PASS\n",
+            f"password = (previous ||\n  /* don't replace this fallback */\n  \"{canary}\")\nPUBLIC_AFTER\nVERDICT: PASS\n",
+        ]
+        reports += [
+            f"Example: `password=prefix[{canary}` PUBLIC_AFTER\nVERDICT: PASS\n",
+            f"Example: `export password=prefix{{{canary}` PUBLIC_AFTER\nVERDICT: PASS\n",
+            f"Example: ``password=prefix[{canary}`` PUBLIC_AFTER\nVERDICT: PASS\n",
+        ]
+        reports += [
+            "secret: customer's default\nPUBLIC_AFTER deployment retry is required\nIt isn't recoverable.\nVERDICT: PASS\n",
+            f'secret: |\n  password="{canary}\nPUBLIC_AFTER\nVERDICT: PASS\n',
+            f"name: PASSWORD\nvalue: 'password=\"{canary}'\nPUBLIC_AFTER\nVERDICT: PASS\n",
+        ]
+        reports += [
+            f'- Outer item\n    - Checked `export password="{canary}"` here.\nPUBLIC_AFTER\nVERDICT: PASS\n',
+            f'```dotenv\npassword=prefix({canary}\n```\nPUBLIC_AFTER\nVERDICT: PASS\n',
+            f'```python\npassword = "{canary}\\"suffix"\n```\nPUBLIC_AFTER\nVERDICT: PASS\n',
+        ]
+        reports.append(f"password: str = 'password=\"{canary}'\nPUBLIC_AFTER\nVERDICT: PASS\n")
+        reports += [
+            "secret=customer's default\nPUBLIC_AFTER deployment retry is required\nIt isn't recoverable.\nVERDICT: PASS\n",
+            "secret=we're using the documented identity\nPUBLIC_AFTER is required\nIt isn't optional.\nVERDICT: PASS\n",
+        ]
+        reports += ["printf '%s\\n' '" + json.dumps(item) + "'\nPUBLIC_AFTER\nVERDICT: PASS\n"
+                    for item in ({"password": canary}, {"public": "x", "password": canary},
+                                 {"password": canary, "public": "x"}, [{"password": canary}])]
+        reports += [f"> ```dotenv\n> password=prefix{opening}{canary}\n> ```\nPUBLIC_AFTER\nVERDICT: PASS\n"
+                    for opening in ("[", "{")]
+        reports += [f"name: PASSWORD\nvalue: {quote}{canary}{quote}{suffix}\nPUBLIC_AFTER\nVERDICT: PASS\n"
+                    for quote in ('"', "'") for suffix in ("  ", " # note")]
+        reports += [f'1. Rule\n    Checked `export password="{canary}"` here.\nPUBLIC_AFTER\nVERDICT: PASS\n',
+                    f'Checked `export\npassword="{canary}"` here.\nPUBLIC_AFTER\nVERDICT: PASS\n',
+                    f'1. Rule\n    Checked `export\n    password="{canary}"` here.\nPUBLIC_AFTER\nVERDICT: PASS\n']
+        reports += ['Checked `password=`; empty values are rejected.\nPUBLIC_AFTER\nVERDICT: PASS\n',
+                    '```dotenv\npassword=\n```\nPUBLIC_AFTER\nVERDICT: PASS\n']
+        reports.append(f"password=\n```text\n{canary}\n```\nPUBLIC_AFTER\nVERDICT: PASS\n")
+        reports += [f"```bash\ncat <<'EOF'\n> ```\nEOF\necho '`'\npassword=`printf '{canary}'`\n```\nPUBLIC_AFTER\nVERDICT: PASS\n",
+                    f"<pre>\necho '`'\npassword=`printf '{canary}'`\n</pre>\nPUBLIC_AFTER\nVERDICT: PASS\n"]
+        reports += [f"<script>\n</{tag}>\necho '`'\npassword=`printf '{canary}'`\n</script>\nPUBLIC_AFTER\nVERDICT: PASS\n"
+                    for tag in ("ſcript", "scrİpt", "scrıpt")]
+        reports += [f"- > ```bash\n  > echo '`'\n  > password=`printf '{canary}'`\n  > ```\nPUBLIC_AFTER\nVERDICT: PASS\n",
+                    f"- - ```bash\n    echo '`'\n    password=`printf '{canary}'`\n    ```\nPUBLIC_AFTER\nVERDICT: PASS\n"]
+        for report in reports:
+            with self.subTest(report=report):
+                output = self.work / "chair.md"
+                with mock_patch.dict(synthesize_roles.os.environ, {"GITHUB_ENV": str(self.root / "test-env")}), \
+                        mock_patch.object(synthesize_roles, "execute", return_value=(0, report, "")) as execute:
+                    synthesize_roles.synthesize(self.work, output)
+                self.assertEqual(execute.call_count, 1)
+                published = output.read_text()
+                self.assertNotIn(canary, published)
+                self.assertIn("PUBLIC_AFTER", published)
+                self.assertTrue(published.rstrip().endswith("VERDICT: PASS"))
+
+    def test_apostrophe_handling_keeps_quoted_credentials_opaque(self):
+        import role_review
+        canary = "SYNTHETIC_QUOTED_VALUE"
+        for value in (f"prefix'{canary} tail'", f"\"owner's {canary}\"", f'"head"middle"{canary}\nTAIL"'):
+            clean = role_review.scrub("password=" + value + "\nPUBLIC_AFTER")
+            self.assertNotIn(canary, clean)
+            self.assertIn("PUBLIC_AFTER", clean)
+        for closer in ")]}":
+            clean = role_review.scrub("password=literal" + closer + canary + "\nPUBLIC_AFTER")
+            self.assertNotIn(canary, clean)
+            self.assertIn("PUBLIC_AFTER", clean)
+        fenced = "```bash\npassword=prefix'" + canary + "\nTAIL'\n```\nPUBLIC_AFTER"
+        clean = role_review.scrub(fenced)
+        self.assertNotIn(canary, clean)
+        self.assertNotIn("TAIL", clean)
+        self.assertIn("PUBLIC_AFTER", clean)
+        fenced = "```bash\npassword=owner's\n" + canary + "\n'\n```\nPUBLIC_AFTER"
+        clean = role_review.scrub(fenced)
+        self.assertNotIn(canary, clean)
+        self.assertIn("PUBLIC_AFTER", clean)
+        indented = "    password=owner's\n    " + canary + "\n    '\nPUBLIC_AFTER"
+        clean = role_review.scrub(indented)
+        self.assertNotIn(canary, clean)
+        self.assertIn("PUBLIC_AFTER", clean)
+        for value in (f"'{canary}", f"(prefix'{canary}", f"os.getenv('NAME', '{canary}'"):
+            clean = role_review.scrub("password=" + value + "\nVERDICT: PASS")
+            self.assertNotIn(canary, clean)
+            self.assertNotIn("VERDICT: PASS", clean)
+
+    def test_json_enclosing_boundaries_require_original_strict_json(self):
+        import role_review
+        text = 'echo \'{"items":[{"password":"x"}]}\''
+        expected = {index for index, char in enumerate(text) if char in "}]"}
+        self.assertEqual(role_review._json_enclosing_closers(text), expected)
+        for text in ('{"password":"x", "password":"y"}',
+                     '{"password":"\\q", "nested":{"public":"x"}}',
+                     '{"password":"x", "nested":{"public":"x"},}',
+                     '{"password":"x", "nested":{"public":"x"}',
+                     "{'password':'x'}"):
+            with self.subTest(text=text):
+                self.assertEqual(role_review._json_enclosing_closers(text), set())
+
+    def test_container_key_literal_scan_handles_repeated_escaped_quotes(self):
+        script = ("import json,sys; from role_review import _normalize_container_keys; "
+                  "value=json.load(sys.stdin); print(json.dumps(_normalize_container_keys(value)))")
+        value = "Ordinary text\n" + "\\\"" * 20000
+        result = subprocess.run([sys.executable, "-c", script], input=json.dumps(value),
+                                text=True, capture_output=True, cwd=ENGINE.parent, timeout=3)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), value)
+
+    def test_named_heredoc_keeps_legacy_tail_rejection(self):
+        import role_review
+        from run_role import scrub as scrub_raw
+        from synthesize_roles import valid
+        for prefix in ("The secret: ", "The new secret: "):
+            text = prefix + '\"name\" = \"PASSWORD\"\n\"value\" = <<EOF\nSYNTHETIC_HEREDOC_BODY\nEOF\nVERDICT: PASS\n'
+            clean = role_review.scrub(scrub_raw(text))
+            self.assertNotIn("SYNTHETIC_HEREDOC_BODY", clean)
+            self.assertFalse(valid(clean, 0))
+
+    def test_empty_assignment_does_not_skip_nonclosing_fences(self):
+        import role_review
+        canary = "SYNTHETIC_FENCE_VALUE"
+        examples = ["password=\n```dotenv\n" + canary + "\n```\nPUBLIC_AFTER",
+                    "````text\npassword=\n```\n" + canary + "\n````\nPUBLIC_AFTER",
+                    "~~~text\npassword=\n```\n" + canary + "\n~~~\nPUBLIC_AFTER"]
+        for text in examples:
+            with self.subTest(text=text):
+                self.assertNotIn(canary, role_review.scrub(text))
+
+    def test_commented_bracket_lookahead_has_bounded_runtime(self):
+        script = "import json,sys; from role_review import scrub; print(json.dumps(scrub(json.load(sys.stdin))))"
+        lines = [prefix + "password=prefix" + "[" * depth + suffix
+                 for prefix, suffix in (("# ", "\n"), ("// ", "\n"), ("/* ", " */\n"))
+                 for depth in (1, 2, 8)]
+        for line in lines:
+            with self.subTest(line=line):
+                text = line * 4096
+                result = subprocess.run([sys.executable, "-c", script], input=json.dumps(text),
+                                        text=True, capture_output=True, cwd=ENGINE.parent, timeout=3)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn("prefix", json.loads(result.stdout))
+
+        unique = "".join("# password=prefix" + "".join("{" if number & (1 << bit) else "["
+                         for bit in range(11)) + "\n" for number in range(2048))
+        # Bound this test child only; production/provider limits are unchanged.
+        limited = "import resource; resource.setrlimit(resource.RLIMIT_AS, (256 * 1024 * 1024,) * 2); " + script
+        result = subprocess.run([sys.executable, "-c", limited], input=json.dumps(unique),
+                                text=True, capture_output=True, cwd=ENGINE.parent, timeout=3)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("prefix", json.loads(result.stdout))
+
+    def test_thematic_break_near_match_has_bounded_runtime(self):
+        script = "import json,sys; from role_review import scrub; print(json.dumps(scrub(json.load(sys.stdin))))"
+        for marker in ("*", "_"):
+            with self.subTest(marker=marker):
+                text = marker * 3 + " " * 50000 + "X"
+                result = subprocess.run([sys.executable, "-c", script], input=json.dumps(text),
+                                        text=True, capture_output=True, cwd=ENGINE.parent, timeout=3)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout), text)
+
+    def test_ordinary_prose_scrub_has_bounded_runtime(self):
+        prose = "The password is required and the token is optional. " * 80
+        script = "import json,sys; from role_review import scrub; print(json.dumps(scrub(json.load(sys.stdin))))"
+        result = subprocess.run([sys.executable, "-c", script], input=json.dumps(prose),
+                                text=True, capture_output=True, cwd=ENGINE.parent, timeout=3)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), prose)
+        canary = "SYNTHETIC_ROLLOUT_CANARY"
+        repeated = "Evidence: " + json.dumps([{"password": canary}] * 300, separators=(",", ":"))
+        result = subprocess.run([sys.executable, "-c", script], input=json.dumps(repeated),
+                                text=True, capture_output=True, cwd=ENGINE.parent, timeout=3)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn(canary, json.loads(result.stdout))
+
+        unmatched = "password=bareprefix[\n" * 4096
+        result = subprocess.run([sys.executable, "-c", script], input=json.dumps(unmatched),
+                                text=True, capture_output=True, cwd=ENGINE.parent, timeout=3)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout).count("[REDACTED]"), 4096)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
