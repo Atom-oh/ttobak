@@ -114,6 +114,10 @@ review still passes the existing nonce, HEAD, role, path, coverage and publicati
 checks. Failed envelopes and nonzero exits cannot become successful reviews.
 Terminal envelope diagnostics are inspected even on nonzero exit and cannot be
 erased by a clean retry; ordinary nonzero transient failures retain bounded retries.
+Successful `.result` prose is not a diagnostic stream. Error result text and
+explicit `errors`/`warnings` retain diagnostic checks, as does stderr.
+Nonempty reported usage that excludes the requested model remains terminal even
+on failed envelopes; absent/empty usage on a transient failure proves no mismatch.
 The schema bytes count toward the existing complete-request limit.
 The Claude handoff escapes U+2028/U+2029 within JSON strings so the existing
 line-oriented parser preserves them; other text remains literal UTF-8.

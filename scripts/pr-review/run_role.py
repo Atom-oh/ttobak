@@ -272,7 +272,7 @@ def run(work, tag, kiro_startup=None):
                     except Invalid:
                         code, output, error = code or 1, "", "output_byte_limit"
                 else:
-                    review, envelope_error, complete = claude_response(output, role["model"])
+                    review, envelope_error, complete = claude_response(output, role["model"], code)
                     if envelope_error == "output_byte_limit":
                         code, output, error = code or 1, "", "output_byte_limit"
                         break
@@ -366,16 +366,27 @@ def claude_schema():
     })
 
 
-def claude_response(raw, expected_model=None):
+def claude_response(raw, expected_model=None, exit_code=0):
     """Only a successful CLI structured_output is eligible for review validation."""
     try:
         output_bytes(raw)
         envelope = strict_json(raw)
         if not isinstance(envelope, dict) or envelope.get("type") != "result":
             return "", "Claude structured-output envelope is missing or unsuccessful.", False
+        usage = envelope.get("modelUsage")
+        # Preserve reported mismatches before any generic failure can permit retry.
+        # Profile/model aliases are reported metadata, not proof of provider weights.
+        if expected_model and isinstance(usage, dict) and usage:
+            names = {expected_model, expected_model.removeprefix("global.anthropic.")}
+            if not names.intersection(usage):
+                return "", "Error: INVALID_MODEL_ID", False
         # These are outer CLI diagnostics; never scan the review's evidence as logs.
         messages = []
-        for field in ("result", "errors", "warnings"):
+        fields = ["errors", "warnings"]
+        if (exit_code != 0 or envelope.get("is_error") is not False
+                or envelope.get("subtype") != "success"):
+            fields.append("result")
+        for field in fields:
             value = envelope.get(field, [])
             if isinstance(value, str):
                 messages.append(value)
@@ -401,11 +412,7 @@ def claude_response(raw, expected_model=None):
                 or not isinstance(envelope.get("structured_output"), dict)):
             return "", "Claude structured-output envelope is missing or unsuccessful.", False
         if expected_model and "modelUsage" in envelope:
-            usage = envelope["modelUsage"]
-            # Bedrock's configured profile and its exact Anthropic model name are
-            # known representations, not a claim about actual provider weights.
-            names = {expected_model, expected_model.removeprefix("global.anthropic.")}
-            if not isinstance(usage, dict) or not names.intersection(usage):
+            if not isinstance(usage, dict) or not usage:
                 return "", "Error: INVALID_MODEL_ID", False
         output = canonical(envelope["structured_output"])
         # The existing text handoff splits Unicode lines before JSON parsing.

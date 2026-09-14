@@ -53,12 +53,22 @@ if tag == "claude-self":
         ("claude-quota-once", "Error: quota exceeded for this account"),
         ("claude-fallback-once", "Falling back to another model"),
         ("claude-transient-once", "Temporary connection reset"),
+        ("claude-wrong-model-once", "Temporary connection reset"),
+        ("claude-wrong-model-no-errors-once", "Temporary connection reset"),
+        ("claude-empty-usage-once", "Temporary connection reset"),
     ):
         emitted = root / (marker + "-emitted")
         if (root / marker).exists() and not emitted.exists():
             emitted.touch()
-            print(json.dumps({"type":"result", "subtype":"error_during_execution",
-                              "is_error":True, "errors":[diagnostic]}))
+            failed = {"type":"result", "subtype":"error_during_execution",
+                      "is_error":True, "errors":[diagnostic]}
+            if marker in ("claude-wrong-model-once", "claude-wrong-model-no-errors-once"):
+                failed["modelUsage"] = {"claude-other": {"inputTokens": 1}}
+                if marker == "claude-wrong-model-no-errors-once":
+                    failed.pop("errors")
+            elif marker == "claude-empty-usage-once":
+                failed["modelUsage"] = {}
+            print(json.dumps(failed))
             raise SystemExit(1)
     native = "--json-schema" in argv and argv[argv.index("--output-format") + 1] == "json"
     if (root / "claude-schema-required").exists():
@@ -79,6 +89,8 @@ if tag == "claude-self":
             envelope["result"] = body
         if (root / "claude-envelope-model-error").exists():
             envelope["warnings"] = ["[warn] failed to set model: Method not found"]
+        if (root / "claude-human-error-words").exists():
+            envelope["result"] = "quota exceeded\nFalling back to another model"
         body = json.dumps(envelope)
 if (root / "invalid-inner").exists() and tag == "codex":
     body = "Unrequested prose\n" + body
@@ -222,6 +234,12 @@ class EndToEndRoleTests(unittest.TestCase):
         self.assertFalse(result["valid"])
         self.assertIn("model_selection_diagnostic", result["failure_codes"])
 
+    def test_claude_successful_summary_can_quote_diagnostics_without_losing_coverage(self):
+        (self.root / "claude-human-error-words").touch()
+        calls = self.run_pipeline("frontend/components/Button.tsx")
+        self.assertEqual(len(calls), 2)
+        self.assertTrue((self.work / "review.md").read_text().endswith("VERDICT: PASS\n"))
+
     def assert_claude_terminal_envelope_stops_retry(self, marker, code):
         (self.root / marker).touch()
         self.environment["PANEL_RETRIES"] = "2"
@@ -239,6 +257,21 @@ class EndToEndRoleTests(unittest.TestCase):
     def test_nonzero_claude_fallback_envelope_cannot_be_erased_by_clean_retry(self):
         self.assert_claude_terminal_envelope_stops_retry(
             "claude-fallback-once", "model_fallback_diagnostic")
+
+    def test_nonzero_claude_model_mismatch_cannot_be_erased_by_clean_retry(self):
+        self.assert_claude_terminal_envelope_stops_retry(
+            "claude-wrong-model-once", "model_selection_diagnostic")
+
+    def test_nonzero_claude_failed_status_preserves_model_mismatch_without_errors_field(self):
+        self.assert_claude_terminal_envelope_stops_retry(
+            "claude-wrong-model-no-errors-once", "model_selection_diagnostic")
+
+    def test_nonzero_claude_transient_error_with_no_model_usage_can_still_retry(self):
+        (self.root / "claude-empty-usage-once").touch()
+        self.environment["PANEL_RETRIES"] = "2"
+        calls = self.run_pipeline("frontend/components/Button.tsx")
+        self.assertEqual(sum(call["name"] == "claude" for call in calls), 2)
+        self.assertTrue((self.work / "review.md").read_text().endswith("VERDICT: PASS\n"))
 
     def test_nonzero_claude_generic_transient_error_can_still_retry(self):
         (self.root / "claude-transient-once").touch()

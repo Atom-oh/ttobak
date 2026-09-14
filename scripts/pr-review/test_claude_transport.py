@@ -21,10 +21,10 @@ class ClaudeTransportTests(unittest.TestCase):
             "session_id": "synthetic-session", "usage": {"input_tokens": 1},
         }
 
-    def decode(self, value, expected_model=None):
+    def decode(self, value, expected_model=None, exit_code=0):
         self.assertTrue(callable(getattr(run_role, "claude_response", None)),
                         "Claude needs a strict structured-output transport adapter")
-        return (run_role.claude_response(value) if expected_model is None
+        return (run_role.claude_response(value, expected_model, exit_code) if exit_code
                 else run_role.claude_response(value, expected_model))
 
     def test_success_extracts_only_the_structured_review(self):
@@ -86,7 +86,7 @@ class ClaudeTransportTests(unittest.TestCase):
             ("Falling back to another model", "model_fallback_diagnostic"),
             ("quota exceeded", "quota_diagnostic"),
         ):
-            for field in ("result", "errors", "warnings"):
+            for field in ("errors", "warnings"):
                 with self.subTest(field=field, diagnostic=expected):
                     envelope = dict(self.envelope, **{
                         field: text if field == "result" else [text],
@@ -127,11 +127,46 @@ class ClaudeTransportTests(unittest.TestCase):
                 self.assertFalse(valid)
                 self.assertEqual(role_review.diagnostic_failure(error), expected)
 
+    def test_failed_envelope_retains_reported_model_mismatch(self):
+        envelope = {"type": "result", "subtype": "error_during_execution",
+                    "is_error": True, "errors": ["Temporary connection reset"],
+                    "modelUsage": {"claude-other": {"inputTokens": 1}}}
+        output, error, valid = self.decode(
+            json.dumps(envelope), "global.anthropic.claude-fable-5-1", exit_code=1)
+        self.assertEqual(output, "")
+        self.assertFalse(valid)
+        self.assertEqual(role_review.diagnostic_failure(error), "model_selection_diagnostic")
+        envelope["warnings"] = {"unsupported": "metadata"}
+        output, error, valid = self.decode(
+            json.dumps(envelope), "global.anthropic.claude-fable-5-1", exit_code=1)
+        self.assertEqual(output, "")
+        self.assertFalse(valid)
+        self.assertEqual(role_review.diagnostic_failure(error), "model_selection_diagnostic")
+
     def test_inner_review_can_discuss_errors_without_becoming_a_transport_diagnostic(self):
         self.response["checks"][0]["evidence"] = "quota exceeded\nFalling back to another model"
         output, error, valid = self.decode(json.dumps(self.envelope))
         self.assertTrue(valid, error)
         self.assertEqual(json.loads(output), self.response)
+
+    def test_successful_human_result_is_not_a_provider_diagnostic(self):
+        for text in ("quota exceeded", "Falling back to another model",
+                     "[warn] failed to set model: Method not found"):
+            with self.subTest(text=text):
+                envelope = dict(self.envelope, result=text)
+                output, error, valid = self.decode(json.dumps(envelope))
+                self.assertTrue(valid, error)
+                self.assertEqual(json.loads(output), self.response)
+
+    def test_result_text_is_diagnostic_for_nonzero_or_failed_envelopes(self):
+        for exit_code in (0, 1):
+            envelope = dict(self.envelope, result="quota exceeded")
+            if exit_code == 0:
+                envelope.update(is_error=True, subtype="error_during_execution")
+            output, error, valid = self.decode(json.dumps(envelope), exit_code=exit_code)
+            self.assertEqual(output, "")
+            self.assertFalse(valid)
+            self.assertEqual(role_review.diagnostic_failure(error), "quota_diagnostic")
 
     def test_unicode_separators_survive_the_existing_raw_and_json_handoff(self):
         evidence = "한국어 첫 줄" + chr(0x2028) + "둘째 줄" + chr(0x2029) + "끝"
