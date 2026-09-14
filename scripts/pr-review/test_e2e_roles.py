@@ -162,6 +162,8 @@ class EndToEndRoleTests(unittest.TestCase):
         self.assertTrue(all(not call["args"][1].startswith("Kiro startup safety check.") for call in kiro[2:]))
         self.assertEqual(len({call["cwd"] for call in kiro}), 4)
         for index, call in enumerate(kiro):
+            self.assertIn("--legacy-ui", call["args"])
+            self.assertEqual(call["args"][call["args"].index("--agent-engine") + 1], "v1")
             self.assertEqual(call["home"], call["cwd"])
             self.assertEqual(call["agent"]["tools"], [])
             self.assertEqual(call["agent"]["mcpServers"], {})
