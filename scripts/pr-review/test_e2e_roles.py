@@ -56,6 +56,11 @@ if tag == "claude-self":
         ("claude-wrong-model-once", "Temporary connection reset"),
         ("claude-wrong-model-no-errors-once", "Temporary connection reset"),
         ("claude-empty-usage-once", "Temporary connection reset"),
+        ("claude-invalid-warnings-once", "quota exceeded"),
+        ("claude-invalid-errors-once", "quota exceeded"),
+        ("claude-invalid-result-once", "quota exceeded"),
+        ("claude-mixed-errors-once", "quota exceeded"),
+        ("claude-invalid-transient-once", "Temporary connection reset"),
     ):
         emitted = root / (marker + "-emitted")
         if (root / marker).exists() and not emitted.exists():
@@ -68,6 +73,14 @@ if tag == "claude-self":
                     failed.pop("errors")
             elif marker == "claude-empty-usage-once":
                 failed["modelUsage"] = {}
+            elif marker in ("claude-invalid-warnings-once", "claude-invalid-transient-once"):
+                failed["warnings"] = None
+            elif marker == "claude-invalid-errors-once":
+                failed.update(errors={}, warnings=[diagnostic])
+            elif marker == "claude-invalid-result-once":
+                failed.update(errors={}, warnings=None, result=diagnostic)
+            elif marker == "claude-mixed-errors-once":
+                failed["errors"] = [None, diagnostic]
             print(json.dumps(failed))
             raise SystemExit(1)
     native = "--json-schema" in argv and argv[argv.index("--output-format") + 1] == "json"
@@ -265,6 +278,29 @@ class EndToEndRoleTests(unittest.TestCase):
     def test_nonzero_claude_failed_status_preserves_model_mismatch_without_errors_field(self):
         self.assert_claude_terminal_envelope_stops_retry(
             "claude-wrong-model-no-errors-once", "model_selection_diagnostic")
+
+    def test_terminal_error_with_null_warnings_stops_after_one_call(self):
+        self.assert_claude_terminal_envelope_stops_retry(
+            "claude-invalid-warnings-once", "quota_diagnostic")
+
+    def test_terminal_warning_with_invalid_errors_stops_after_one_call(self):
+        self.assert_claude_terminal_envelope_stops_retry(
+            "claude-invalid-errors-once", "quota_diagnostic")
+
+    def test_terminal_result_after_invalid_siblings_stops_after_one_call(self):
+        self.assert_claude_terminal_envelope_stops_retry(
+            "claude-invalid-result-once", "quota_diagnostic")
+
+    def test_terminal_message_inside_mixed_errors_stops_after_one_call(self):
+        self.assert_claude_terminal_envelope_stops_retry(
+            "claude-mixed-errors-once", "quota_diagnostic")
+
+    def test_invalid_metadata_without_terminal_evidence_retains_generic_retry(self):
+        (self.root / "claude-invalid-transient-once").touch()
+        self.environment["PANEL_RETRIES"] = "2"
+        calls = self.run_pipeline("frontend/components/Button.tsx")
+        self.assertEqual(sum(call["name"] == "claude" for call in calls), 2)
+        self.assertTrue((self.work / "review.md").read_text().endswith("VERDICT: PASS\n"))
 
     def test_nonzero_claude_transient_error_with_no_model_usage_can_still_retry(self):
         (self.root / "claude-empty-usage-once").touch()

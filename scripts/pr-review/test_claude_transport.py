@@ -1,5 +1,6 @@
 """Claude's CLI envelope is transport metadata, never a replacement review."""
 import json
+from itertools import permutations
 import unittest
 
 import role_review
@@ -142,6 +143,34 @@ class ClaudeTransportTests(unittest.TestCase):
         self.assertEqual(output, "")
         self.assertFalse(valid)
         self.assertEqual(role_review.diagnostic_failure(error), "model_selection_diagnostic")
+
+    def test_terminal_messages_survive_malformed_siblings_in_every_field_order(self):
+        diagnostics = (
+            ("quota exceeded", "quota_diagnostic"),
+            ("Falling back to another model", "model_fallback_diagnostic"),
+            ("[warn] failed to set model: Method not found", "model_selection_diagnostic"),
+        )
+        for terminal, malformed in permutations(("errors", "warnings", "result"), 2):
+            for bad in (None, {"unsupported": "metadata"}, [None]):
+                for message, expected in diagnostics:
+                    with self.subTest(terminal=terminal, malformed=malformed, bad=bad,
+                                      diagnostic=expected):
+                        envelope = {"type": "result", "subtype": "error_during_execution",
+                                    "is_error": True, terminal: [message], malformed: bad}
+                        output, error, valid = self.decode(json.dumps(envelope), exit_code=1)
+                        self.assertEqual(output, "")
+                        self.assertFalse(valid)
+                        self.assertEqual(role_review.diagnostic_failure(error), expected)
+
+    def test_terminal_string_inside_a_mixed_diagnostic_list_remains_terminal(self):
+        for values in ([None, "quota exceeded"], ["quota exceeded", {}]):
+            output, error, valid = self.decode(json.dumps({
+                "type": "result", "subtype": "error_during_execution",
+                "is_error": True, "errors": values,
+            }), exit_code=1)
+            self.assertEqual(output, "")
+            self.assertFalse(valid)
+            self.assertEqual(role_review.diagnostic_failure(error), "quota_diagnostic")
 
     def test_inner_review_can_discuss_errors_without_becoming_a_transport_diagnostic(self):
         self.response["checks"][0]["evidence"] = "quota exceeded\nFalling back to another model"

@@ -382,6 +382,7 @@ def claude_response(raw, expected_model=None, exit_code=0):
                 return "", "Error: INVALID_MODEL_ID", False
         # These are outer CLI diagnostics; never scan the review's evidence as logs.
         messages = []
+        invalid_metadata = False
         fields = ["errors", "warnings"]
         if (exit_code != 0 or envelope.get("is_error") is not False
                 or envelope.get("subtype") != "success"):
@@ -390,10 +391,11 @@ def claude_response(raw, expected_model=None, exit_code=0):
             value = envelope.get(field, [])
             if isinstance(value, str):
                 messages.append(value)
-            elif isinstance(value, list) and all(isinstance(item, str) for item in value):
-                messages.extend(value)
+            elif isinstance(value, list):
+                messages.extend(item for item in value if isinstance(item, str))
+                invalid_metadata |= any(not isinstance(item, str) for item in value)
             else:
-                return "", "Claude structured-output diagnostic metadata is invalid.", False
+                invalid_metadata = True
         failures = {
             "model_selection_diagnostic": "Error: INVALID_MODEL_ID",
             "model_fallback_diagnostic": "Falling back to another model",
@@ -405,6 +407,8 @@ def claude_response(raw, expected_model=None, exit_code=0):
             failure = diagnostic_failure(message)
             if failure:
                 return "", failures[failure], False
+        if invalid_metadata:
+            return "", "Claude structured-output diagnostic metadata is invalid.", False
         if envelope.get("errors"):
             return "", "Claude structured-output envelope reports errors.", False
         if (envelope.get("subtype") != "success"

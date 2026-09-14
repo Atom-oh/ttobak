@@ -116,6 +116,8 @@ Terminal envelope diagnostics are inspected even on nonzero exit and cannot be
 erased by a clean retry; ordinary nonzero transient failures retain bounded retries.
 Successful `.result` prose is not a diagnostic stream. Error result text and
 explicit `errors`/`warnings` retain diagnostic checks, as does stderr.
+Malformed sibling fields or list members do not hide recognized terminal messages;
+valid strings are scanned before returning a generic metadata error.
 Nonempty reported usage that excludes the requested model remains terminal even
 on failed envelopes; absent/empty usage on a transient failure proves no mismatch.
 The schema bytes count toward the existing complete-request limit.
