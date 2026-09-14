@@ -803,22 +803,54 @@ def _normalize_container_keys(value):
     return "".join(pieces)
 
 
+def _inline_code_spans(value):
+    spans, offset, fence = [], 0, None
+    for line in value.splitlines(keepends=True):
+        marker = re.match(r" {0,3}(`{3,}|~{3,})(.*)", line)
+        if fence:
+            if (marker and marker[1][0] == fence[0] and len(marker[1]) >= fence[1]
+                    and not marker[2].strip()):
+                fence = None
+        elif marker and (marker[1][0] == "~" or "`" not in marker[2]):
+            fence = (marker[1][0], len(marker[1]))
+        elif not line.startswith(("    ", "\t")):
+            runs = list(re.finditer(r"`+", line))
+            following, last = {}, {}
+            for index in range(len(runs) - 1, -1, -1):
+                width = len(runs[index].group())
+                following[index] = last.get(width)
+                last[width] = index
+            index = 0
+            while index < len(runs):
+                close = following[index]
+                if close is None:
+                    index += 1
+                else:
+                    spans.append((offset + runs[index].end(), offset + runs[close].start()))
+                    index = close + 1
+        offset += len(line)
+    return spans
+
+
 def _assignment_spans(value, key):
     """Find assignments without changing another detector's input."""
     operator = re.compile(r"\|\||\?\?|\bor\b")
+    tail_operator = re.compile(r"(?:\|\||\?\?|\bor|\\|(?:^|\s)[+*/%&|^?:<>=!-])$")
+    code_spans, code_index = _inline_code_spans(value), 0
     line_break = re.compile(r"\r\n?|\n")
     opening = {"(": ")", "[": "]", "{": "}"}
     bracket_ends = {}
     fence_end = re.compile(r"[ \t]*(?:`{3,}|~{3,})[ \t]*(?:\r?\n|\Z)")
 
-    def paired_bracket(start):
+    def paired_bracket(start, boundary):
         # Cache matching pairs from the same forward scan. An unrelated later
         # Markdown link cannot close a bracket inside this bare token.
-        if start in bracket_ends:
-            return bracket_ends[start] is not None
+        cache_key = (start, boundary)
+        if cache_key in bracket_ends:
+            return bracket_ends[cache_key] is not None
         pending = [(opening[value[start]], start)]
         index, quote, escaped = start + 1, None, False
-        while index < len(value):
+        while index < (len(value) if boundary is None else boundary):
             char = value[index]
             if escaped:
                 escaped = False
@@ -854,16 +886,17 @@ def _assignment_spans(value, key):
                 closing, position = pending.pop()
                 if char != closing:
                     return True  # Keep the main scanner's fail-closed behavior.
-                bracket_ends[position] = index
+                bracket_ends[(position, boundary)] = index
                 if not pending:
                     return True
             index += 1
         if quote or escaped:
             return True  # An unfinished string is not a bare literal boundary.
         for _, position in pending:
-            bracket_ends[position] = None
+            bracket_ends[(position, boundary)] = None
         return False
     last_apostrophe, quote_escape = -1, False
+    code_apostrophes, quote_span_index = {}, 0
     for position, char in enumerate(value):
         if quote_escape:
             quote_escape = False
@@ -871,6 +904,10 @@ def _assignment_spans(value, key):
             quote_escape = True
         elif char == "'":
             last_apostrophe = position
+            while quote_span_index < len(code_spans) and code_spans[quote_span_index][1] < position:
+                quote_span_index += 1
+            if quote_span_index < len(code_spans) and code_spans[quote_span_index][0] <= position:
+                code_apostrophes[code_spans[quote_span_index][1]] = position
     def next_content(index):
         while index < len(value) and value[index].isspace():
             index += 1
@@ -879,6 +916,12 @@ def _assignment_spans(value, key):
     for match in re.finditer(key, value):
         if match.start() < cursor:
             continue
+        while code_index < len(code_spans) and code_spans[code_index][1] < match.start():
+            code_index += 1
+        code_end = (code_spans[code_index][1]
+                    if code_index < len(code_spans) and code_spans[code_index][0] <= match.start()
+                    else None)
+        value_apostrophe = code_apostrophes.get(code_end, -1) if code_end is not None else last_apostrophe
         index, quote, escaped, stack = match.end(), None, False, []
         key_name = match.group().rstrip()[:-1].rstrip()
         prefix = value[match.start() - 1] if match.start() else ""
@@ -888,10 +931,20 @@ def _assignment_spans(value, key):
         if prefix in ("\"", "'") and index < len(value) and value[index] == prefix:
             index += 1
         value_start = index
+        plain_scalar = False
+        colon_label = match.group().rstrip().endswith(":")
         line_start = value_start
         continuation_pending = False
         while index < len(value):
             char = value[index]
+            if (index == code_end and index > value_start and not quote and not stack
+                    and not tail_operator.search(value[line_start:index].rstrip())):
+                break
+            if plain_scalar:
+                if char in "\r\n":
+                    break
+                index += 1
+                continue
             if escaped:
                 escaped = False
             elif quote:
@@ -903,9 +956,14 @@ def _assignment_spans(value, key):
                     continue
             elif char == "\\" and index + 1 < len(value) and value[index + 1] not in "\r\n":
                 escaped = True
-            elif prefix in ("\"", "'", "`") and char == prefix and not stack:
+            elif (prefix in ("\"", "'", "`") and char == prefix and not stack
+                  and (prefix != "`" or code_end is None)):
                 break
-            elif (char == "'" and index == last_apostrophe and index > value_start
+            elif (char == "'" and colon_label and not stack and index > value_start
+                  and re.fullmatch(r"[\w.@/-]+", value[value_start:index])
+                  and value[value_start:index].lower() not in {"r", "u", "b", "f", "br", "rb", "fr", "rf"}):
+                plain_scalar = True
+            elif (char == "'" and index == value_apostrophe and index > value_start
                   and not stack and (value[index - 1].isalnum() or value[index - 1] in "_])")):
                 pass  # An unpaired embedded apostrophe is prose, not a new string.
             elif char in "\"'`":
@@ -940,7 +998,7 @@ def _assignment_spans(value, key):
                 # An unmatched bracket inside a bare dotenv/shell token is
                 # literal punctuation. Initial containers and calls keep their
                 # existing fail-closed boundary handling.
-                if stack or index == value_start or char == "(" or paired_bracket(index):
+                if stack or index == value_start or char == "(" or paired_bracket(index, code_end):
                     stack.append(opening[char])
             elif char in ")]}" and stack:
                 if char != stack.pop():
@@ -983,6 +1041,55 @@ def _redact_spans(value, spans):
         cursor = end
     pieces.append(value[cursor:])
     return "".join(pieces)
+
+
+def _opaque_scan_view(value, bodies):
+    """Hide already-owned value bodies while retaining their boundary syntax."""
+    pieces, cursor = [], 0
+    for start, end in sorted(bodies):
+        if end <= cursor:
+            continue
+        start = max(start, cursor)
+        pieces.extend((value[cursor:start], re.sub(r"[^\r\n]", "X", value[start:end])))
+        cursor = end
+    pieces.append(value[cursor:])
+    return "".join(pieces)
+
+
+def _owned_body(value, match, kind, key):
+    end = match.end()
+    if kind == "heredoc":
+        newline = value.find("\n", match.end("heredoc"), end)
+        if newline < 0:
+            return None
+        start = newline + 1
+        footer = value.rfind("\n", start, end) + 1
+        if value[footer:end].strip(" \t\r").lstrip("+-").strip() == match["heredoc"]:
+            end = footer
+        return (start, end) if start < end else None
+    if kind == "named":
+        start, end = match.span("owned_value")
+        while start < end and value[start] in " \t":
+            start += 1
+    else:
+        prefix = re.compile(key).match(match.string, match.start())
+        start = prefix.end()
+    if start >= end:
+        return None
+    if kind == "block" or value[start] in "|>":
+        newline = value.find("\n", start, end)
+        return (newline + 1, end) if newline >= 0 and newline + 1 < end else None
+    marker_end = start
+    while marker_end < end and value[marker_end] == "\\":
+        marker_end += 1
+    if marker_end < end and value[marker_end] in "\"'":
+        quote = value[marker_end]
+        width = 3 if marker_end + 3 <= end and value.startswith(quote * 3, marker_end) else 1
+        marker_end += width
+        marker = value[start:marker_end]
+        body_end = end - len(marker) if end >= marker_end + len(marker) and value.endswith(marker, start, end) else end
+        return (marker_end, body_end) if marker_end < body_end else None
+    return (start, end)
 
 
 def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
@@ -1149,24 +1256,32 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
         r"""https://hooks\.slack\.com/services/[^\s"'<>]+""",
         r"""(?im)^[ \t]*(?:[+-][ \t]*)?(?:set-)?cookie["']?[ \t]*:[^\r\n]*""",
         r"""(?i:\bx-origin-verify)["']?\s*:\s*["']?[^\s"',;}\]]+""",
-        key + r"[|>][-+]?[ \t]*" + line_break + r"(?:" + block_line + r")+",
-        # YAML name/value pairs consume the complete value line, including commas.
-        r"""(?i:\b(?:header)?name)["']?[ \t]*[:=][ \t]*["']?""" + identifier
+        (key + r"[|>][-+]?[ \t]*" + line_break + r"(?:" + block_line + r")+", 'block'),
+        (r"""(?i:\b(?:header)?name)["']?[ \t]*[:=][ \t]*["']?""" + identifier
         + r"""["']?[ \t]*""" + line_break
-        + r"""[ \t]*(?:[+-][ \t]*)?["']?(?i:(?:header)?value)["']?[ \t]*[:=][^\r\n]*""",
-        r"""(?i:\b(?:header)?name)["']?\s*[:=]\s*["']?""" + identifier
+        + r"""[ \t]*(?:[+-][ \t]*)?["']?(?i:(?:header)?value)["']?[ \t]*[:=](?P<owned_value>[^\r\n]*)""", 'named'),
+        (r"""(?i:\b(?:header)?name)["']?\s*[:=]\s*["']?""" + identifier
         + r"""["']?\s*(?:,\s*)?(?:[+-][ \t]*)?["']?(?i:(?:header)?value)["']?\s*[:=]\s*"""
-        + r"(?:" + quoted_value + r"|[^\s,}\]]+)",
+        + r"(?P<owned_value>" + quoted_value + r"|[^\s,}\]]+)", 'named'),
+        (key + quoted_value, 'scalar'),
         _assignment_spans,
-        key + quoted_value,
         key + r"""[^\s"',;}\]]+""",
     )
-    spans = []
-    for pattern in patterns:
-        if pattern is _assignment_spans:
-            spans.extend(_assignment_spans(value, key))
-        else:
-            spans.extend(match.span() for match in re.finditer(pattern, value, flags=re.S))
+    spans, bodies = [], []
+    scan_value = _opaque_scan_view(value, bodies)
+    for entry in patterns:
+        if entry is _assignment_spans:
+            spans.extend(_assignment_spans(scan_value, key))
+            continue
+        pattern, kind = entry if isinstance(entry, tuple) else (entry, None)
+        for match in re.finditer(pattern, scan_value, flags=re.S):
+            spans.append(match.span())
+            if kind:
+                body = _owned_body(value, match, kind, key)
+                if body:
+                    bodies.append(body)
+        if kind:
+            scan_value = _opaque_scan_view(value, bodies)
     return _redact_spans(value, spans)
 
 

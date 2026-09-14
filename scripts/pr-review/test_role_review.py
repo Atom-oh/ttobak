@@ -161,6 +161,16 @@ VERDICT: PASS
             f"password = (previous or\n  # don't replace this fallback\n  \"{canary}\")\nPUBLIC_AFTER\nVERDICT: PASS\n",
             f"password = (previous ||\n  /* don't replace this fallback */\n  \"{canary}\")\nPUBLIC_AFTER\nVERDICT: PASS\n",
         ]
+        reports += [
+            f"Example: `password=prefix[{canary}` PUBLIC_AFTER\nVERDICT: PASS\n",
+            f"Example: `export password=prefix{{{canary}` PUBLIC_AFTER\nVERDICT: PASS\n",
+            f"Example: ``password=prefix[{canary}`` PUBLIC_AFTER\nVERDICT: PASS\n",
+        ]
+        reports += [
+            "secret: customer's default\nPUBLIC_AFTER deployment retry is required\nIt isn't recoverable.\nVERDICT: PASS\n",
+            f'secret: |\n  password="{canary}\nPUBLIC_AFTER\nVERDICT: PASS\n',
+            f"name: PASSWORD\nvalue: 'password=\"{canary}'\nPUBLIC_AFTER\nVERDICT: PASS\n",
+        ]
         for report in reports:
             with self.subTest(report=report):
                 output = self.work / "chair.md"
