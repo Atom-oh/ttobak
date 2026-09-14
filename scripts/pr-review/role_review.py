@@ -1440,7 +1440,8 @@ def _opaque_scan_view(value, bodies):
 def _owned_body(value, match, kind, key):
     end = match.end()
     if kind == "header":
-        return match.span()  # The complete header line is already redacted.
+        prefix = re.match(r"[ \t]*[+-]?[ \t]*", match.group())
+        return (match.start() + prefix.end(), end)  # Retain indentation and diff structure.
     if kind == "heredoc":
         newline = value.find("\n", match.end("heredoc"), end)
         if newline < 0:
