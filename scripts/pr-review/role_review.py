@@ -1444,10 +1444,8 @@ def _owned_body(value, match, kind, key):
         while start < end and value[start] in " \t":
             start += 1
         # Let existing YAML/quoted detectors see a header-owned multiline value.
-        if re.fullmatch(r"[|>][-+]?[ \t]*", value[start:end]):
-            return None
-        literal = re.compile(r"\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'", re.S).match(value, start)
-        if literal is not None and literal.end() > end:
+        if (start == end or value[start] in "\"'`[{("
+                or re.fullmatch(r"[|>][-+]?[ \t]*", value[start:end])):
             return None
         prefix = re.match(r"[ \t]*[+-]?[ \t]*", match.group())
         return (match.start() + prefix.end(), end)  # Retain indentation and diff structure.
@@ -1689,7 +1687,12 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
             if kind:
                 body = _owned_body(value, match, kind, key)
                 if body:
-                    bodies.append(body)
+                    if kind == "header":
+                        # Preserve delimiters owned by an enclosing quoted scalar.
+                        bodies.extend((body[0] + part.start(), body[0] + part.end())
+                                      for part in re.finditer(r"[^\"'`]+", value[body[0]:body[1]]))
+                    else:
+                        bodies.append(body)
         if kind:
             scan_value = _opaque_scan_view(value, bodies)
     return _redact_spans(value, spans)

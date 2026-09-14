@@ -112,6 +112,11 @@ class RoleReviewTests(unittest.TestCase):
                     f'Cookie: "prefix\n  {canary}"',
                     f'+ Cookie: |\n+   {canary}',
                     f'- Set-Cookie: "prefix\n-   {canary}"']
+        cases += [f'Cookie:\n  {canary}',
+                    f'Cookie: [\n  "{canary}"\n]',
+                    f'Set-Cookie: "prefix\n  {canary}',
+                    f'password: "prefix\n  Cookie: {canary}"',
+                    f"password: 'prefix\n  Set-Cookie: {canary}'"]
         for index, evidence in enumerate(cases):
             with self.subTest(case=index):
                 self.work = self.root / f"publication-{index}"
@@ -242,6 +247,10 @@ VERDICT: PASS
                     f'Cookie: "prefix\n  {canary}"\nPUBLIC_AFTER\nVERDICT: PASS\n',
                     f'+ Cookie: |\n+   {canary}\nPUBLIC_AFTER\nVERDICT: PASS\n',
                     f'- Set-Cookie: "prefix\n-   {canary}"\nPUBLIC_AFTER\nVERDICT: PASS\n']
+        reports += [f'Cookie:\n  {canary}\nPUBLIC_AFTER\nVERDICT: PASS\n',
+                    f'Cookie: [\n  "{canary}"\n]\nPUBLIC_AFTER\nVERDICT: PASS\n',
+                    f'password: "prefix\n  Cookie: {canary}"\nPUBLIC_AFTER\nVERDICT: PASS\n',
+                    f"password: 'prefix\n  Set-Cookie: {canary}'\nPUBLIC_AFTER\nVERDICT: PASS\n"]
         for report in reports:
             with self.subTest(report=report):
                 output = self.work / "chair.md"
@@ -253,6 +262,15 @@ VERDICT: PASS
                 self.assertNotIn(canary, published)
                 self.assertIn("PUBLIC_AFTER", published)
                 self.assertTrue(published.rstrip().endswith("VERDICT: PASS"))
+
+        # An unclosed multiline header must retain BASE's conservative rejection.
+        report = f'Set-Cookie: "prefix\n  {canary}\nPUBLIC_AFTER\nVERDICT: PASS\n'
+        with mock_patch.object(synthesize_roles, "execute", return_value=(0, report, "")) as execute:
+            synthesize_roles.synthesize(self.work, self.work / "chair.md")
+        published = (self.work / "chair.md").read_text()
+        self.assertEqual(execute.call_count, 2)
+        self.assertNotIn(canary, published)
+        self.assertTrue(published.rstrip().endswith("VERDICT: FAIL"))
 
     def test_apostrophe_handling_keeps_quoted_credentials_opaque(self):
         import role_review
