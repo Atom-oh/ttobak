@@ -834,19 +834,29 @@ def _normalize_container_keys(value):
 
 
 def _inline_code_spans(value, block_spans=None, closing_fences=None):
-    """Find code delimiters within prose paragraphs and list continuations."""
-    spans, pending, list_indents = [], [], []
-    offset, fence, paragraph, quote_depth = 0, None, False, 0
-    fence_start = None
+    """Find inline delimiters without interpreting literal raw-block contents."""
+    if block_spans is None and "`" not in value and (closing_fences is None or "~~~" not in value):
+        return []
+    spans, pending, lists = [], [], []
+    offset, block, paragraph, quote_depth = 0, None, False, 0
+    quote_marker = re.compile(r" {0,3}> ?")
+    fence_marker = re.compile(r" {0,3}(`{3,}|~{3,})(.*)")
+    heading_marker = re.compile(
+        r" {0,3}(?:#{1,6}(?: |$)|(?:(?:- *){3,}|(?:_ *){3,}|(?:\* *){3,})$)"
+    )
+    setext_marker = re.compile(r" {0,3}(?:-+|=+) *$")
+
+    def is_heading(line):
+        text = line.rstrip(" \r\n")
+        return heading_marker.match(text) or (paragraph and setext_marker.match(text))
 
     def flush():
         nonlocal paragraph, quote_depth
         following, last = {}, {}
         for index in range(len(pending) - 1, -1, -1):
             start, end = pending[index]
-            width = end - start
-            following[index] = last.get(width)
-            last[width] = index
+            following[index] = last.get(end - start)
+            last[end - start] = index
         index = 0
         while index < len(pending):
             start, end = pending[index]
@@ -862,67 +872,149 @@ def _inline_code_spans(value, block_spans=None, closing_fences=None):
         pending.clear()
         paragraph, quote_depth = False, 0
 
-    for line in value.splitlines(keepends=True):
-        quote = re.match(r" {0,3}(?:>[\t ]?)+", line)
-        depth = quote.group().count(">") if quote else 0
-        content_line = line[quote.end():] if quote else line
-        leading = re.match(r"[\t ]*", content_line).group()
-        indent = len(leading.expandtabs(4))
-        if fence:
-            marker = re.match(r"[\t ]*(`{3,}|~{3,})(.*)", content_line)
-            if (marker and indent <= fence[2] + 3 and marker[1][0] == fence[0]
-                    and len(marker[1]) >= fence[1] and not marker[2].strip()):
-                if block_spans is not None:
-                    block_spans.append((fence_start, offset + len(line)))
-                if closing_fences is not None:
-                    closing_fences.add(offset + (quote.end() if quote else 0) + marker.start(1))
-                fence = None
-            offset += len(line)
-            continue
-        if not content_line.strip():
+    def quotes(line, count=None):
+        position, depth = 0, 0
+        while count is None or depth < count:
+            match = quote_marker.match(line, position)
+            if not match:
+                break
+            position, depth = match.end(), depth + 1
+        if count is not None and depth != count:
+            return None
+        return line[position:], depth
+
+    def blank(line):
+        return not line.strip(" \r\n")
+
+    def html_start(line, complete):
+        text = line.rstrip("\r\n")
+        indent = len(text) - len(text.lstrip(" "))
+        if indent > 3:
+            return None
+        text = text[indent:]
+        if not text.startswith("<"):
+            return None
+        if re.match(r"<(?:pre|script|style|textarea)(?= |>|$)", text, re.I | re.ASCII):
+            return ("tags", None)
+        for start, end in (("<!--", "-->"), ("<?", "?>"), ("<![CDATA[", "]]>")):
+            if text.startswith(start):
+                return ("literal", end)
+        if re.match(r"<![A-Za-z]", text):
+            return ("literal", ">")
+        if re.match(
+            r"</?(?:address|article|aside|base|basefont|blockquote|body|caption|center|"
+            r"col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|"
+            r"footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|"
+            r"link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|"
+            r"section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?= |/?>|$)",
+            text, re.I | re.ASCII,
+        ):
+            return ("blank", None)
+        if complete and re.fullmatch(
+            r"(?:</[A-Za-z][A-Za-z0-9-]* *>|"
+            r"<(?!(?:pre|script|style|textarea)(?= |/?>|$))[A-Za-z][A-Za-z0-9-]*"
+            r"(?: +[A-Za-z_:][A-Za-z0-9_.:-]*"
+            r"(?: *= *(?:[^ \"'=<>`]+|'[^']*'|\"[^\"]*\"))?)* */?>) *",
+            text, re.I | re.ASCII,
+        ):
+            return ("blank", None)
+        return None
+
+    def html_ends(rule, line):
+        kind, end = rule
+        if kind == "blank":
+            return blank(line)
+        if kind == "tags":
+            return re.search(r"</(?:pre|script|style|textarea)>", line, re.I | re.ASCII) is not None
+        return end in line
+
+    for raw_line in value.splitlines(keepends=True):
+        line = raw_line.expandtabs(4)
+        if block is not None:
+            owned = quotes(line, block["quote"])
+            content = owned[0] if owned is not None else None
+            indent = len(content) - len(content.lstrip(" ")) if content is not None else 0
+            if content is not None and (blank(content) or indent >= block["indent"]):
+                if block["kind"] == "fence":
+                    marker = fence_marker.match(content[block["indent"]:])
+                    if (marker and marker[1][0] == block["char"]
+                            and len(marker[1]) >= block["width"] and not marker[2].strip(" \r\n")):
+                        if closing_fences is not None:
+                            closing_fences.add(offset + raw_line.index(marker[1]))
+                        if block_spans is not None:
+                            block_spans.append((block["start"], offset + len(raw_line)))
+                        block = None
+                elif html_ends(block["rule"], content):
+                    block = None
+                offset += len(raw_line)
+                continue
+            # Raw blocks cannot lazily continue outside their opening container.
+            if block_spans is not None and block["kind"] == "fence":
+                block_spans.append((block["start"], offset))
+            block = None
             flush()
-            offset += len(line)
+
+        content_line, depth = quotes(line)
+        indent = len(content_line) - len(content_line.lstrip(" "))
+        if blank(content_line):
+            flush()
+            offset += len(raw_line)
             continue
         if depth and depth != quote_depth:
             flush()
         if depth:
             quote_depth = depth
-        item = re.match(r"([\t ]*)(?:[-+*]|[0-9]{1,9}[.)])([\t ]+)", content_line)
-        if item or not paragraph:
-            while list_indents and indent < list_indents[-1]:
-                list_indents.pop()
-        in_list = bool(list_indents) and indent < list_indents[-1] + 4
-        content = content_line
-        if item and (indent < 4 or in_list):
+        item = re.match(r"( *)([-+*]|[0-9]{1,9}[.)])(?:( +)|(?=[\r\n]*$))", content_line)
+        raw_fence = fence_marker.match(content_line)
+        interrupt = (
+            (raw_fence and (raw_fence[1][0] == "~" or "`" not in raw_fence[2]))
+            or is_heading(content_line)
+            or html_start(content_line, False)
+        )
+        if item or not paragraph or interrupt:
+            while lists and (lists[-1][0] != depth or indent < lists[-1][1]):
+                lists.pop()
+        effective_depth = depth or (quote_depth if paragraph and not interrupt else 0)
+        in_list = bool(lists) and lists[-1][0] == effective_depth and indent < lists[-1][1] + 4
+        owner_indent = lists[-1][1] if in_list else 0
+        content = content_line[owner_indent:] if in_list and indent >= owner_indent else content_line
+        heading = is_heading(content)
+        if item and not heading and (indent < 4 or in_list):
             flush()
             quote_depth = depth
-            list_indents.append(len(item.group().expandtabs(4)))
+            # Five or more padding spaces leave four-space indented item content.
+            padding = len(item[3] or " ")
+            owner_indent = item.end(2) + (1 if padding > 4 else padding)
+            lists.append((depth, owner_indent))
             in_list = True
-            content = content_line[item.end():]
-        elif in_list:
-            content = content_line[len(leading):]
-        marker = re.match(r" {0,3}(`{3,}|~{3,})(.*)", content)
-        heading = re.match(r" {0,3}(?:#{1,6}(?:[\t ]|$)|(?:-+|=+|(?:_[\t ]*){3,}|(?:\*[\t ]*){3,})[\t ]*$)", content.rstrip())
+            content = content_line[owner_indent:]
+        marker = fence_marker.match(content)
+        heading = is_heading(content)
+        html = html_start(content, not paragraph)
         if marker and (marker[1][0] == "~" or "`" not in marker[2]):
             flush()
-            fence = (marker[1][0], len(marker[1]), list_indents[-1] if in_list else 0)
-            fence_start = offset
-        elif indent < 4 or in_list or paragraph:
+            block = {"kind": "fence", "quote": depth, "indent": owner_indent,
+                     "char": marker[1][0], "width": len(marker[1]), "start": offset}
+        elif html is not None:
+            flush()
+            if not html_ends(html, content):
+                block = {"kind": "html", "quote": depth, "indent": owner_indent, "rule": html}
+        elif len(content) - len(content.lstrip(" ")) < 4 or paragraph:
             if heading:
                 flush()
             pending.extend((offset + match.start(), offset + match.end())
-                           for match in re.finditer(r"`+", line))
+                           for match in re.finditer(r"`+", raw_line))
             paragraph = True
             if heading:
                 flush()
         else:
             flush()
             if block_spans is not None:
-                block_spans.append((offset, offset + len(line)))
-        offset += len(line)
+                block_spans.append((offset, offset + len(raw_line)))
+        offset += len(raw_line)
     flush()
-    if fence and block_spans is not None:
-        block_spans.append((fence_start, len(value)))
+    if block_spans is not None and block is not None and block["kind"] == "fence":
+        block_spans.append((block["start"], len(value)))
     return spans
 
 
