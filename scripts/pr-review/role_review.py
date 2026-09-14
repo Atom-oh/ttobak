@@ -834,14 +834,42 @@ def _normalize_container_keys(value):
 
 
 def _inline_code_spans(value, block_spans=None):
-    spans, offset, fence = [], 0, None
-    list_indents = []
+    """Find code delimiters within prose paragraphs and list continuations."""
+    spans, pending, list_indents = [], [], []
+    offset, fence, paragraph, quote_depth = 0, None, False, 0
     fence_start = None
+
+    def flush():
+        nonlocal paragraph, quote_depth
+        following, last = {}, {}
+        for index in range(len(pending) - 1, -1, -1):
+            start, end = pending[index]
+            width = end - start
+            following[index] = last.get(width)
+            last[width] = index
+        index = 0
+        while index < len(pending):
+            start, end = pending[index]
+            slash_start = start
+            while slash_start and value[slash_start - 1] == "\\":
+                slash_start -= 1
+            close = following[index]
+            if close is None or (start - slash_start) % 2:
+                index += 1
+            else:
+                spans.append((end, pending[close][0]))
+                index = close + 1
+        pending.clear()
+        paragraph, quote_depth = False, 0
+
     for line in value.splitlines(keepends=True):
-        leading = re.match(r"[ \t]*", line).group()
+        quote = re.match(r" {0,3}(?:>[\t ]?)+", line)
+        depth = quote.group().count(">") if quote else 0
+        content_line = line[quote.end():] if quote else line
+        leading = re.match(r"[\t ]*", content_line).group()
         indent = len(leading.expandtabs(4))
         if fence:
-            marker = re.match(r"[ \t]*(`{3,}|~{3,})(.*)", line)
+            marker = re.match(r"[\t ]*(`{3,}|~{3,})(.*)", content_line)
             if (marker and indent <= fence[2] + 3 and marker[1][0] == fence[0]
                     and len(marker[1]) >= fence[1] and not marker[2].strip()):
                 if block_spans is not None:
@@ -849,40 +877,48 @@ def _inline_code_spans(value, block_spans=None):
                 fence = None
             offset += len(line)
             continue
-        if line.strip():
+        if not content_line.strip():
+            flush()
+            offset += len(line)
+            continue
+        if depth and depth != quote_depth:
+            flush()
+        if depth:
+            quote_depth = depth
+        item = re.match(r"([\t ]*)(?:[-+*]|[0-9]{1,9}[.)])([\t ]+)", content_line)
+        if item or not paragraph:
             while list_indents and indent < list_indents[-1]:
                 list_indents.pop()
         in_list = bool(list_indents) and indent < list_indents[-1] + 4
-        item = re.match(r"([ \t]*)(?:[-+*]|[0-9]+[.)])([ \t]+)", line)
-        content = line
+        content = content_line
         if item and (indent < 4 or in_list):
+            flush()
+            quote_depth = depth
             list_indents.append(len(item.group().expandtabs(4)))
             in_list = True
-            content = line[item.end():]
+            content = content_line[item.end():]
         elif in_list:
-            content = line[len(leading):]
+            content = content_line[len(leading):]
         marker = re.match(r" {0,3}(`{3,}|~{3,})(.*)", content)
+        heading = re.match(r" {0,3}(?:#{1,6}(?:[\t ]|$)|(?:-+|=+|(?:_[\t ]*){3,}|(?:\*[\t ]*){3,})[\t ]*$)", content.rstrip())
         if marker and (marker[1][0] == "~" or "`" not in marker[2]):
+            flush()
             fence = (marker[1][0], len(marker[1]), list_indents[-1] if in_list else 0)
             fence_start = offset
-        elif indent < 4 or in_list:
-            runs = list(re.finditer(r"`+", line))
-            following, last = {}, {}
-            for index in range(len(runs) - 1, -1, -1):
-                width = len(runs[index].group())
-                following[index] = last.get(width)
-                last[width] = index
-            index = 0
-            while index < len(runs):
-                close = following[index]
-                if close is None:
-                    index += 1
-                else:
-                    spans.append((offset + runs[index].end(), offset + runs[close].start()))
-                    index = close + 1
-        elif block_spans is not None and line.strip():
-            block_spans.append((offset, offset + len(line)))
+        elif indent < 4 or in_list or paragraph:
+            if heading:
+                flush()
+            pending.extend((offset + match.start(), offset + match.end())
+                           for match in re.finditer(r"`+", line))
+            paragraph = True
+            if heading:
+                flush()
+        else:
+            flush()
+            if block_spans is not None:
+                block_spans.append((offset, offset + len(line)))
         offset += len(line)
+    flush()
     if fence and block_spans is not None:
         block_spans.append((fence_start, len(value)))
     return spans
@@ -938,6 +974,16 @@ def _assignment_spans(value, key, json_closers=None):
     line_break = re.compile(r"\r\n?|\n")
     opening = {"(": ")", "[": "]", "{": "}"}
     bracket_ends, comment_suffixes = {}, {}
+    stack_states, stack_parents = {}, [0]
+
+    def pushed(state, closer):
+        # Intern the complete closer stack; comment keys stay constant-size.
+        pair = (state, closer)
+        if pair not in stack_states:
+            stack_states[pair] = len(stack_parents)
+            stack_parents.append(state)
+        return stack_states[pair]
+
     fence_end = re.compile(r"[ \t]*(?:>[ \t]*)*(?:`{3,}|~{3,})[ \t]*(?:\r?\n|\Z)")
 
     def paired_bracket(start, boundary):
@@ -950,21 +996,25 @@ def _assignment_spans(value, key, json_closers=None):
 
         def finish(result):
             bracket_ends[cache_key] = 0 if result else None
+            if not result:
+                for _, position in pending:
+                    bracket_ends[(position, boundary)] = None
             for checkpoint in checkpoints:
                 comment_suffixes[checkpoint] = result
             return result
 
         pending = [(opening[value[start]], start)]
+        stack_state = pushed(0, opening[value[start]])
         index, quote, escaped = start + 1, None, False
         call_syntax = False
         while index < (len(value) if boundary is None else boundary):
             char = value[index]
-            if (not quote and not escaped and len(pending) == 1
+            if (not quote and not escaped and pending
                     and (value.startswith("/*", index) or (value[index - 1].isspace()
                          and (char == "#" or value.startswith("//", index))))):
                 # Identical suffix states recur for assignments inside comments.
                 # Reuse their outcome without treating comment contents as code.
-                checkpoint = (index, boundary, "", pending[0][0], call_syntax)
+                checkpoint = (index, boundary, "", stack_state, call_syntax)
                 if checkpoint in comment_suffixes:
                     return finish(comment_suffixes[checkpoint])
                 checkpoints.append(checkpoint)
@@ -1001,8 +1051,10 @@ def _assignment_spans(value, key, json_closers=None):
                 call_syntax = True
             elif char in opening:
                 pending.append((opening[char], index))
+                stack_state = pushed(stack_state, opening[char])
             elif char in ")]}":
                 closing, position = pending.pop()
+                stack_state = stack_parents[stack_state]
                 if char != closing:
                     return finish(True)  # Keep the main scanner's fail-closed behavior.
                 bracket_ends[(position, boundary)] = index
@@ -1011,8 +1063,6 @@ def _assignment_spans(value, key, json_closers=None):
             index += 1
         if quote or escaped or (value[start] == "(" and call_syntax):
             return finish(True)  # An unfinished string is not a bare literal boundary.
-        for _, position in pending:
-            bracket_ends[(position, boundary)] = None
         return finish(False)
     last_apostrophe, last_double, quote_escape = -1, -1, False
     code_apostrophes, code_doubles, quote_span_index = {}, {}, 0
@@ -1236,6 +1286,18 @@ def _owned_body(value, match, kind, key):
         marker_end += width
         marker = value[start:marker_end]
         body_end = end - len(marker) if end >= marker_end + len(marker) and value.endswith(marker, start, end) else end
+        if kind == "named" and marker_end == start + width:
+            closing_index = marker_end
+            while closing_index < end:
+                if value[closing_index] == "\\":
+                    closing_index += 2
+                elif value.startswith(quote * (2 * width), closing_index):
+                    closing_index += 2 * width
+                elif value.startswith(quote * width, closing_index):
+                    body_end = closing_index
+                    break
+                else:
+                    closing_index += 1
         return (marker_end, body_end) if marker_end < body_end else None
     return (start, end)
 
