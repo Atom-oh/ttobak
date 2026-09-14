@@ -199,6 +199,9 @@ VERDICT: PASS
         reports += [f'1. Rule\n    Checked `export password="{canary}"` here.\nPUBLIC_AFTER\nVERDICT: PASS\n',
                     f'Checked `export\npassword="{canary}"` here.\nPUBLIC_AFTER\nVERDICT: PASS\n',
                     f'1. Rule\n    Checked `export\n    password="{canary}"` here.\nPUBLIC_AFTER\nVERDICT: PASS\n']
+        reports += ['Checked `password=`; empty values are rejected.\nPUBLIC_AFTER\nVERDICT: PASS\n',
+                    '```dotenv\npassword=\n```\nPUBLIC_AFTER\nVERDICT: PASS\n']
+        reports.append(f"password=\n```text\n{canary}\n```\nPUBLIC_AFTER\nVERDICT: PASS\n")
         for report in reports:
             with self.subTest(report=report):
                 output = self.work / "chair.md"
@@ -268,6 +271,16 @@ VERDICT: PASS
             self.assertNotIn("SYNTHETIC_HEREDOC_BODY", clean)
             self.assertFalse(valid(clean, 0))
 
+    def test_empty_assignment_does_not_skip_nonclosing_fences(self):
+        import role_review
+        canary = "SYNTHETIC_FENCE_VALUE"
+        examples = ["password=\n```dotenv\n" + canary + "\n```\nPUBLIC_AFTER",
+                    "````text\npassword=\n```\n" + canary + "\n````\nPUBLIC_AFTER",
+                    "~~~text\npassword=\n```\n" + canary + "\n~~~\nPUBLIC_AFTER"]
+        for text in examples:
+            with self.subTest(text=text):
+                self.assertNotIn(canary, role_review.scrub(text))
+
     def test_commented_bracket_lookahead_has_bounded_runtime(self):
         script = "import json,sys; from role_review import scrub; print(json.dumps(scrub(json.load(sys.stdin))))"
         lines = [prefix + "password=prefix" + "[" * depth + suffix
@@ -280,6 +293,15 @@ VERDICT: PASS
                                         text=True, capture_output=True, cwd=ENGINE.parent, timeout=3)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertNotIn("prefix", json.loads(result.stdout))
+
+        unique = "".join("# password=prefix" + "".join("{" if number & (1 << bit) else "["
+                         for bit in range(11)) + "\n" for number in range(2048))
+        # Bound this test child only; production/provider limits are unchanged.
+        limited = "import resource; resource.setrlimit(resource.RLIMIT_AS, (256 * 1024 * 1024,) * 2); " + script
+        result = subprocess.run([sys.executable, "-c", limited], input=json.dumps(unique),
+                                text=True, capture_output=True, cwd=ENGINE.parent, timeout=3)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("prefix", json.loads(result.stdout))
 
     def test_ordinary_prose_scrub_has_bounded_runtime(self):
         prose = "The password is required and the token is optional. " * 80
