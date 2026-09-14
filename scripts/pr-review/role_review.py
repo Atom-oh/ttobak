@@ -1437,8 +1437,48 @@ def _opaque_scan_view(value, bodies):
     return "".join(pieces)
 
 
-def _owned_body(value, match, kind, key):
+def _folded_header_end(value, match):
+    """Include only nonblank lines indented deeper than the header."""
+    prefix = re.compile(r"[ \t]*(?:[+-][ \t]*)?")
+    line = re.compile(r"[^\r\n]*")
+    newline = re.compile(r"\r\n?|\n")
+
+    def indentation(start, end):
+        head = prefix.match(value, start, end)
+        whitespace = head.group().replace("+", "").replace("-", "")
+        return len(whitespace.expandtabs(8)), head.end()
+
+    depth, _ = indentation(match.start(), match.end())
     end = match.end()
+    while (separator := newline.match(value, end)) is not None:
+        following = line.match(value, separator.end())
+        next_depth, content = indentation(following.start(), following.end())
+        if content == following.end() or next_depth <= depth:
+            break
+        end = following.end()
+    return end
+
+
+def _owned_body(value, match, kind, key, header_end=None):
+    end = match.end() if header_end is None else header_end
+    if kind == "header":
+        line_end = match.end("header_line")
+        start = value.index(":", match.start(), end) + 1
+        while start < line_end and value[start] in " \t":
+            start += 1
+        # Apostrophes/backticks are literal in simple cookie pairs. Do not infer
+        # ownership for code expressions or multiline/incomplete scalar values.
+        text = value[start:line_end].rstrip(" \t")
+        token = r"[A-Za-z0-9!#$%&'*+.^_`|~-]+"
+        octets = r"[\x21\x23-\x2b\x2d-\x3a\x3c-\x5b\x5d-\x7e]*"
+        pair = token + "=" + octets
+        # An opaque header cannot hide the opener of an unbounded remainder.
+        if (end != len(value) or end != line_end or not any(char in text for char in "'`")
+                or not re.fullmatch(pair + r"(?:;[ \t]*" + token + r"(?:=" + octets + r")?)*;?", text)
+                or text.endswith(("||", "??", "\\"))):
+            return None
+        prefix = re.match(r"[ \t]*[+-]?[ \t]*", match.group())
+        return (match.start() + prefix.end(), end)  # Retain indentation and diff structure.
     if kind == "heredoc":
         newline = value.find("\n", match.end("heredoc"), end)
         if newline < 0:
@@ -1648,7 +1688,7 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
         r"""(?i:\bAuthorization)["']?\s*:\s*["']?(?i:Basic|Bearer)\s+[A-Za-z0-9+/=_.~-]+""",
         r"""(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]*://[^/\s:@"']*:[^@\s/"']+@""",
         r"""https://hooks\.slack\.com/services/[^\s"'<>]+""",
-        r"""(?im)^[ \t]*(?:[+-][ \t]*)?(?:set-)?cookie["']?[ \t]*:[^\r\n]*""",
+        (r"""(?im)^(?P<header_line>[ \t]*(?:[+-][ \t]*)?(?:set-)?cookie["']?[ \t]*:[^\r\n]*)""", 'header'),
         r"""(?i:\bx-origin-verify)["']?\s*:\s*["']?[^\s"',;}\]]+""",
         (key + r"[|>][-+]?[ \t]*" + line_break + r"(?:" + block_line + r")+", 'block'),
         (r"""(?i:\b(?:header)?name)["']?[ \t]*[:=][ \t]*["']?""" + identifier
@@ -1668,16 +1708,28 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
             spans.extend(_assignment_spans(scan_value, key, _json_enclosing_closers(value)))
             continue
         pattern, kind = entry if isinstance(entry, tuple) else (entry, None)
+        header_cursor = -1
         for match in re.finditer(pattern, scan_value, flags=re.S):
+            header_end = None
+            if kind == "header":
+                if match.start() < header_cursor:
+                    continue
+                header_end = header_cursor = _folded_header_end(value, match)
             if kind == "named" and match.group("owned_value").lstrip().startswith("<<"):
                 # An unresolved sensitive heredoc retains the legacy tail guard.
                 spans.append((match.start(), len(value)))
                 continue
-            spans.append(match.span())
+            spans.append((match.start(), header_end) if header_end is not None else match.span())
             if kind:
-                body = _owned_body(value, match, kind, key)
+                body = _owned_body(value, match, kind, key, header_end)
                 if body:
-                    bodies.append(body)
+                    if kind == "header":
+                        # Preserve enclosing delimiters and YAML/diff line structure.
+                        bodies.extend((body[0] + part.start(), body[0] + part.end())
+                                      for part in re.finditer(r"[^ \t\r\n\"'`(){}\[\]+-]+",
+                                                              value[body[0]:body[1]]))
+                    else:
+                        bodies.append(body)
         if kind:
             scan_value = _opaque_scan_view(value, bodies)
     return _redact_spans(value, spans)

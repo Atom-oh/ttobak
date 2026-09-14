@@ -25,6 +25,36 @@ FRONTEND = "dashboard/frontend/components/Button.tsx"
 TAGS = ("codex", "kiro-fable", "kiro-sol", "claude-self")
 
 
+def cookie_continuation_examples(canary, include_unclosed=True):
+    for header in ("Cookie", "Set-Cookie"):
+        for operator in ("||", "??", "or"):
+            yield f'{header}: previous {operator}\n  "{canary}"'
+        for operator in ("||", "??", "or"):
+            yield f'{header}: previous\n  {operator} "{canary}"'
+            yield f'{header}: previous {operator} // fallback\n  "{canary}"'
+            yield f'{header}: previous {operator} // don\'t expose this\n"{canary}"'
+            yield f'{header}: previous {operator} # don\'t expose this\n  "{canary}"'
+            yield f'{header}: previous {operator} /* don\'t expose this */\n"{canary}"'
+            yield f'{header}: previous {operator} /* don\'t\n expose this */\n"{canary}"'
+        yield f'{header}: password: |\n  {canary}'
+        yield f'+ {header}: password: >\n+   {canary}'
+        yield f'{header}: password="prefix\n  {canary}"'
+        yield f'{header}: getValue(\n  "{canary}")'
+        yield f'{header}: getValue("""owner\'s content""",\n\n  "{canary}")'
+        for marker in ("|", ">"):
+            yield f"{header}: secret: {marker}\n  owner's content\n\n  {canary}"
+        for comment in ("// don't change fallback", "/* don't change fallback */"):
+            yield f'{header}: getValue( {comment}\n\n"{canary}")'
+        if include_unclosed:
+            for marker in ("|", ">"):
+                for prefix in ("", "+ ", "- "):
+                    yield (f"{prefix}secret: {marker}\n{prefix}  {header}: password='prefix\n"
+                           f"{prefix}  folded\n\n{prefix}  {canary}")
+        for opening, closing in (("[", "]"), ("{", "}"), ("(", ")")):
+            yield f'password: {opening}\n  {header}: {canary}{closing}'
+            yield f'+ password: {opening}\n+   {header}: {canary}{closing}'
+
+
 def patch(path=FRONTEND, before="old label", after="new label"):
     return (
         f"diff --git a/{path} b/{path}\n"
@@ -34,6 +64,73 @@ def patch(path=FRONTEND, before="old label", after="new label"):
 
 
 class RoleReviewTests(unittest.TestCase):
+    def test_unclosed_unindented_cookie_retains_conservative_tail_redaction(self):
+        canary = "SYNTHETIC_UNINDENTED_COOKIE"
+        index = 0
+        for header in ("Cookie", "Set-Cookie"):
+            for gap in ("", "\n", "  folded\n"):
+                value = f"{header}: password='prefix\n{gap}{canary}\nPUBLIC_AFTER\nVERDICT: PASS\n"
+                with self.subTest(value=value):
+                    clean = role_review.scrub(value)
+                    self.assertNotIn(canary, clean)
+                    self.assertNotIn("VERDICT: PASS", clean)
+                    self.work = self.root / f"unbounded-cookie-{index}"
+                    index += 1
+                    plan = self.prepare()
+                    for tag, role in plan["roles"].items():
+                        if role["required"]:
+                            response = self.response(tag)
+                            if tag == "codex":
+                                response["findings"] = [{"severity": "MINOR", "path": FRONTEND,
+                                    "condition": "Quoted Cookie example", "evidence": value}]
+                            self.record(tag, response)
+                    self.cli("aggregate", "--work", self.work)
+                    for output in ("slot/codex-result.json", "role-summary.json", "deterministic-review.md"):
+                        self.assertNotIn(canary, (self.work / output).read_text())
+
+    def test_unclosed_folded_cookie_retains_conservative_tail_redaction(self):
+        canary = "SYNTHETIC_UNCLOSED_COOKIE"
+        for header in ("Cookie", "Set-Cookie"):
+            for gap in ("", "\n"):
+                value = f"{header}: password='prefix\n  first\n{gap}  {canary}\nPUBLIC_AFTER\n"
+                with self.subTest(value=value):
+                    self.assertNotIn(canary, role_review.scrub(value))
+                    self.assertNotIn("PUBLIC_AFTER", role_review.scrub(value))
+
+    def test_folded_cookie_does_not_consume_public_siblings_or_blank_separators(self):
+        canary = "SYNTHETIC_FOLDED_COOKIE"
+        for header in ("Cookie", "Set-Cookie"):
+            for prefix in ("", "+ ", "- "):
+                for boundary in ("", f"{prefix}   \n"):
+                    report = (f"{prefix}config:\n{prefix}  headers:\n"
+                              f"{prefix}    {header}: {canary}\n"
+                              f"{boundary}{prefix}    accept: application/json\n"
+                              f"{prefix}  retries: 2\n{prefix}  timeout: 30\n"
+                              f"{prefix}  ```\nPUBLIC_AFTER\nVERDICT: PASS\n")
+                    with self.subTest(report=report):
+                        clean = role_review.scrub(report)
+                        self.assertNotIn(canary, clean)
+                        for public in ("accept: application/json", "retries: 2", "timeout: 30", "```"):
+                            self.assertIn(public, clean)
+                        self.assertTrue(clean.rstrip().endswith("VERDICT: PASS"))
+
+    def test_many_escaped_cookie_quotes_have_bounded_runtime(self):
+        report = 'Cookie: value=\\"OPAQUE_COOKIE_VALUE\\"\n' * 4096
+        clean = self.bounded_scrub(report + "PUBLIC_AFTER\nVERDICT: PASS\n")
+        self.assertNotIn("OPAQUE_COOKIE_VALUE", clean)
+        self.assertIn("PUBLIC_AFTER", clean)
+        self.assertTrue(clean.rstrip().endswith("VERDICT: PASS"))
+
+    def test_cookie_continuations_hide_values_without_losing_public_tail(self):
+        canary = "SYNTHETIC_COOKIE_CONTINUATION"
+        for evidence in cookie_continuation_examples(canary):
+            with self.subTest(evidence=evidence):
+                report = evidence + "\nPUBLIC_AFTER\nVERDICT: PASS\n"
+                clean = role_review.scrub(report)
+                self.assertNotIn(canary, clean)
+                self.assertIn("PUBLIC_AFTER", clean)
+                self.assertTrue(clean.rstrip().endswith("VERDICT: PASS"))
+
     def test_publication_redacts_expression_defaults_and_punctuated_keys(self):
         import run_role
         import synthesize_roles
@@ -99,6 +196,36 @@ class RoleReviewTests(unittest.TestCase):
                   for tag in ("ſcript", "scrİpt", "scrıpt")]
         cases += [f"- > ```bash\n  > echo '`'\n  > password=`printf '{canary}'`\n  > ```",
                   f"- - ```bash\n    echo '`'\n    password=`printf '{canary}'`\n    ```"]
+        cases += [f'secret: |\n  Cookie: session=public\n  {canary}',
+                  f'secret: |\n  Set-Cookie: session=public\n  {canary}',
+                  f'secret: |\n+  Cookie: session=public\n+  {canary}',
+                  f'secret: |\n+  Set-Cookie: session=public\n+  {canary}',
+                  f'secret: >\n  Cookie: session=public\n  {canary}',
+                  f'secret: >\n  Set-Cookie: session=public\n  {canary}',
+                  f'secret: >\n+  Cookie: session=public\n+  {canary}',
+                  f'secret: >\n+  Set-Cookie: session=public\n+  {canary}']
+        cases += [f'Cookie: |\n  {canary}',
+                    f'Set-Cookie: >\n  {canary}',
+                    f'Cookie: "prefix\n  {canary}"',
+                    f'+ Cookie: |\n+   {canary}',
+                    f'- Set-Cookie: "prefix\n-   {canary}"']
+        cases += [f'Cookie:\n  {canary}',
+                    f'Cookie: [\n  "{canary}"\n]',
+                    f'Set-Cookie: "prefix\n  {canary}',
+                    f'password: "prefix\n  Cookie: {canary}"',
+                    f"password: 'prefix\n  Set-Cookie: {canary}'"]
+        cases += [evidence + "\nPUBLIC_AFTER"
+                  for evidence in cookie_continuation_examples(canary, include_unclosed=False)]
+        # The raw JSON scrubber conservatively removes an unclosed credential's
+        # entire scalar. Report-level public tails are covered by the chair test.
+        cases += [f"{prefix}{header}: password='prefix\n{prefix}  {canary}"
+                  for header in ("Cookie", "Set-Cookie") for prefix in ("", "+ ")]
+        cases += [f"{prefix}secret: {marker}\n{prefix}  {header}: password='prefix\n"
+                  f"{prefix}  folded\n\n{prefix}  {canary}"
+                  for header in ("Cookie", "Set-Cookie") for marker in ("|", ">")
+                  for prefix in ("", "+ ", "- ")]
+        cases += [f"{header}: password='prefix\n{canary}"
+                  for header in ("Cookie", "Set-Cookie")]
         for index, evidence in enumerate(cases):
             with self.subTest(case=index):
                 self.work = self.root / f"publication-{index}"
@@ -214,6 +341,25 @@ VERDICT: PASS
                     for tag in ("ſcript", "scrİpt", "scrıpt")]
         reports += [f"- > ```bash\n  > echo '`'\n  > password=`printf '{canary}'`\n  > ```\nPUBLIC_AFTER\nVERDICT: PASS\n",
                     f"- - ```bash\n    echo '`'\n    password=`printf '{canary}'`\n    ```\nPUBLIC_AFTER\nVERDICT: PASS\n"]
+        reports += [f'secret: |\n  Cookie: session=public\n  {canary}\nPUBLIC_AFTER\nVERDICT: PASS\n',
+                    f'secret: |\n  Set-Cookie: session=public\n  {canary}\nPUBLIC_AFTER\nVERDICT: PASS\n',
+                    f'secret: |\n+  Cookie: session=public\n+  {canary}\nPUBLIC_AFTER\nVERDICT: PASS\n',
+                    f'secret: |\n+  Set-Cookie: session=public\n+  {canary}\nPUBLIC_AFTER\nVERDICT: PASS\n',
+                    f'secret: >\n  Cookie: session=public\n  {canary}\nPUBLIC_AFTER\nVERDICT: PASS\n',
+                    f'secret: >\n  Set-Cookie: session=public\n  {canary}\nPUBLIC_AFTER\nVERDICT: PASS\n',
+                    f'secret: >\n+  Cookie: session=public\n+  {canary}\nPUBLIC_AFTER\nVERDICT: PASS\n',
+                    f'secret: >\n+  Set-Cookie: session=public\n+  {canary}\nPUBLIC_AFTER\nVERDICT: PASS\n']
+        reports += [f'Cookie: |\n  {canary}\nPUBLIC_AFTER\nVERDICT: PASS\n',
+                    f'Set-Cookie: >\n  {canary}\nPUBLIC_AFTER\nVERDICT: PASS\n',
+                    f'Cookie: "prefix\n  {canary}"\nPUBLIC_AFTER\nVERDICT: PASS\n',
+                    f'+ Cookie: |\n+   {canary}\nPUBLIC_AFTER\nVERDICT: PASS\n',
+                    f'- Set-Cookie: "prefix\n-   {canary}"\nPUBLIC_AFTER\nVERDICT: PASS\n']
+        reports += [f'Cookie:\n  {canary}\nPUBLIC_AFTER\nVERDICT: PASS\n',
+                    f'Cookie: [\n  "{canary}"\n]\nPUBLIC_AFTER\nVERDICT: PASS\n',
+                    f'password: "prefix\n  Cookie: {canary}"\nPUBLIC_AFTER\nVERDICT: PASS\n',
+                    f"password: 'prefix\n  Set-Cookie: {canary}'\nPUBLIC_AFTER\nVERDICT: PASS\n"]
+        reports += [evidence + "\nPUBLIC_AFTER\nVERDICT: PASS\n"
+                    for evidence in cookie_continuation_examples(canary)]
         for report in reports:
             with self.subTest(report=report):
                 output = self.work / "chair.md"
@@ -225,6 +371,37 @@ VERDICT: PASS
                 self.assertNotIn(canary, published)
                 self.assertIn("PUBLIC_AFTER", published)
                 self.assertTrue(published.rstrip().endswith("VERDICT: PASS"))
+
+        # An unclosed multiline header must retain BASE's conservative rejection.
+        report = f'Set-Cookie: "prefix\n  {canary}\nPUBLIC_AFTER\nVERDICT: PASS\n'
+        with mock_patch.object(synthesize_roles, "execute", return_value=(0, report, "")) as execute:
+            synthesize_roles.synthesize(self.work, self.work / "chair.md")
+        published = (self.work / "chair.md").read_text()
+        self.assertEqual(execute.call_count, 2)
+        self.assertNotIn(canary, published)
+        self.assertTrue(published.rstrip().endswith("VERDICT: FAIL"))
+
+        for header in ("Cookie", "Set-Cookie"):
+            report = f"{header}: password='prefix\n  first\n\n  {canary}\nPUBLIC_AFTER\nVERDICT: PASS\n"
+            with self.subTest(unclosed_folded=header), \
+                    mock_patch.object(synthesize_roles, "execute", return_value=(0, report, "")) as execute:
+                synthesize_roles.synthesize(self.work, self.work / "chair.md")
+            published = (self.work / "chair.md").read_text()
+            self.assertEqual(execute.call_count, 2)
+            self.assertNotIn(canary, published)
+            self.assertTrue(published.rstrip().endswith("VERDICT: FAIL"))
+
+        # Standalone unclosed headers retain the documented end-of-string guard.
+        for header in ("Cookie", "Set-Cookie"):
+            for content in (canary, "prefix\n" + canary):
+                report = f"{header}: password='{content}\nPUBLIC_AFTER\nVERDICT: PASS\n"
+                with self.subTest(unclosed_header=header, content=content), \
+                        mock_patch.object(synthesize_roles, "execute", return_value=(0, report, "")) as execute:
+                    synthesize_roles.synthesize(self.work, self.work / "chair.md")
+                published = (self.work / "chair.md").read_text()
+                self.assertEqual(execute.call_count, 2)
+                self.assertNotIn(canary, published)
+                self.assertTrue(published.rstrip().endswith("VERDICT: FAIL"))
 
     def test_apostrophe_handling_keeps_quoted_credentials_opaque(self):
         import role_review
