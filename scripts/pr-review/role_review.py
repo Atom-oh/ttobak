@@ -1437,22 +1437,6 @@ def _opaque_scan_view(value, bodies):
     return "".join(pieces)
 
 
-def _quote_ends(value):
-    """Index the next unescaped same-quote delimiter in one input pass."""
-    ends, previous, escaped = {}, {}, False
-    for index, char in enumerate(value):
-        if escaped:
-            escaped = False
-        elif char == "\\":
-            escaped = True
-        elif char in "\"'`":
-            if char in previous:
-                ends[previous[char]] = index + 1
-            ends[index] = None
-            previous[char] = index
-    return ends
-
-
 def _folded_header_end(value, match):
     """Include only nonblank lines indented deeper than the header."""
     prefix = re.compile(r"[ \t]*(?:[+-][ \t]*)?")
@@ -1475,39 +1459,22 @@ def _folded_header_end(value, match):
     return end
 
 
-def _owned_body(value, match, kind, key, quote_ends=None, header_end=None):
+def _owned_body(value, match, kind, key, header_end=None):
     end = match.end() if header_end is None else header_end
     if kind == "header":
         line_end = match.end("header_line")
         start = value.index(":", match.start(), end) + 1
         while start < line_end and value[start] in " \t":
             start += 1
-        # Let existing YAML/quoted detectors see a header-owned multiline value.
-        if (start == line_end or value[start] in "\"'`[{("
-                or re.fullmatch(r"[|>][-+]?[ \t]*", value[start:line_end])):
-            return None
-        # A comment apostrophe is not the boundary of a fallback expression.
-        if (re.search(r"(?:\|\||\?\?|\bor|\\)[ \t]*(?:(?:#|//|/\*)[^\r\n]*)?$",
-                      value[start:line_end])
-                or re.compile(r"\s*(?:[+-][ \t]*)?(?:\|\||\?\?|\bor\b)").match(value, line_end)):
-            return None
-        # Only an unclosed header quote needs opacity to avoid consuming the
-        # public tail. Leave complete/multiline expressions to existing detectors.
-        quotes = re.compile(r"""["'`]|(?<!\S)(?:#|//)|/\*""")
-        marker = quotes.search(value, start, end)
-        while marker is not None:
-            if marker.group() not in "\"'`":
-                return None
-            if marker.start() not in quote_ends:
-                marker = quotes.search(value, marker.end(), end)
-                continue
-            literal_end = quote_ends[marker.start()]
-            if literal_end is None:
-                break
-            if literal_end > end:
-                return None
-            marker = quotes.search(value, literal_end, end)
-        else:
+        # Apostrophes/backticks are literal in simple cookie pairs. Do not infer
+        # ownership for code expressions or multiline/incomplete scalar values.
+        text = value[start:line_end].rstrip(" \t")
+        token = r"[A-Za-z0-9!#$%&'*+.^_`|~-]+"
+        octets = r"[\x21\x23-\x2b\x2d-\x3a\x3c-\x5b\x5d-\x7e]*"
+        pair = token + "=" + octets
+        if (end != line_end or not any(char in text for char in "'`")
+                or not re.fullmatch(pair + r"(?:;[ \t]*" + token + r"(?:=" + octets + r")?)*;?", text)
+                or text.endswith(("||", "??", "\\"))):
             return None
         prefix = re.match(r"[ \t]*[+-]?[ \t]*", match.group())
         return (match.start() + prefix.end(), end)  # Retain indentation and diff structure.
@@ -1735,7 +1702,6 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
     )
     spans, bodies = [], []
     scan_value = _opaque_scan_view(value, bodies)
-    quote_ends = None
     for entry in patterns:
         if entry is _assignment_spans:
             spans.extend(_assignment_spans(scan_value, key, _json_enclosing_closers(value)))
@@ -1754,9 +1720,7 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
                 continue
             spans.append((match.start(), header_end) if header_end is not None else match.span())
             if kind:
-                if kind == "header" and quote_ends is None:
-                    quote_ends = _quote_ends(value)
-                body = _owned_body(value, match, kind, key, quote_ends, header_end)
+                body = _owned_body(value, match, kind, key, header_end)
                 if body:
                     if kind == "header":
                         # Preserve enclosing delimiters and YAML/diff line structure.

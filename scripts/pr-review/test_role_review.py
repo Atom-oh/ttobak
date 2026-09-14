@@ -40,11 +40,12 @@ def cookie_continuation_examples(canary, include_unclosed=True):
         yield f'+ {header}: password: >\n+   {canary}'
         yield f'{header}: password="prefix\n  {canary}"'
         yield f'{header}: getValue(\n  "{canary}")'
+        yield f'{header}: getValue("""owner\'s content""",\n\n  "{canary}")'
+        for marker in ("|", ">"):
+            yield f"{header}: secret: {marker}\n  owner's content\n\n  {canary}"
         for comment in ("// don't change fallback", "/* don't change fallback */"):
             yield f'{header}: getValue( {comment}\n\n"{canary}")'
         if include_unclosed:
-            yield f"{header}: password='prefix\n  {canary}"
-            yield f"+ {header}: password='prefix\n+   {canary}"
             for marker in ("|", ">"):
                 for prefix in ("", "+ ", "- "):
                     yield (f"{prefix}secret: {marker}\n{prefix}  {header}: password='prefix\n"
@@ -63,6 +64,15 @@ def patch(path=FRONTEND, before="old label", after="new label"):
 
 
 class RoleReviewTests(unittest.TestCase):
+    def test_unclosed_folded_cookie_retains_conservative_tail_redaction(self):
+        canary = "SYNTHETIC_UNCLOSED_COOKIE"
+        for header in ("Cookie", "Set-Cookie"):
+            for gap in ("", "\n"):
+                value = f"{header}: password='prefix\n  first\n{gap}  {canary}\nPUBLIC_AFTER\n"
+                with self.subTest(value=value):
+                    self.assertNotIn(canary, role_review.scrub(value))
+                    self.assertNotIn("PUBLIC_AFTER", role_review.scrub(value))
+
     def test_folded_cookie_does_not_consume_public_siblings_or_blank_separators(self):
         canary = "SYNTHETIC_FOLDED_COOKIE"
         for header in ("Cookie", "Set-Cookie"):
@@ -346,6 +356,16 @@ VERDICT: PASS
         self.assertEqual(execute.call_count, 2)
         self.assertNotIn(canary, published)
         self.assertTrue(published.rstrip().endswith("VERDICT: FAIL"))
+
+        for header in ("Cookie", "Set-Cookie"):
+            report = f"{header}: password='prefix\n  first\n\n  {canary}\nPUBLIC_AFTER\nVERDICT: PASS\n"
+            with self.subTest(unclosed_folded=header), \
+                    mock_patch.object(synthesize_roles, "execute", return_value=(0, report, "")) as execute:
+                synthesize_roles.synthesize(self.work, self.work / "chair.md")
+            published = (self.work / "chair.md").read_text()
+            self.assertEqual(execute.call_count, 2)
+            self.assertNotIn(canary, published)
+            self.assertTrue(published.rstrip().endswith("VERDICT: FAIL"))
 
     def test_apostrophe_handling_keeps_quoted_credentials_opaque(self):
         import role_review
