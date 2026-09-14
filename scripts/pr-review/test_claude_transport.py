@@ -223,10 +223,44 @@ class ClaudeTransportTests(unittest.TestCase):
         self.assertEqual(decoded, self.response)
         self.assertIn("한국어", output)
 
+    def test_c1_controls_in_separate_findings_cannot_erase_a_major(self):
+        self.response["findings"] = [
+            {"severity": "MAJOR", "path": "backend/example.py",
+             "condition": "Blocking regression", "evidence": "중요 근거" + chr(0x9D)},
+            {"severity": "INFO", "path": "backend/example.py",
+             "condition": "Context only", "evidence": chr(0x9C) + "추가 근거"},
+        ]
+        output, error, valid = self.decode(json.dumps(self.envelope))
+        self.assertTrue(valid, error)
+        decoded = role_review.parse_response(run_role.scrub(output))
+        role_review.validate_response(decoded, {
+            "head_sha": "a" * 40, "roles": {
+                "claude-self": {"role": "requirements", "paths": ["backend/example.py"]},
+            },
+        }, "claude-self")
+        self.assertEqual([finding["severity"] for finding in decoded["findings"]],
+                         ["MAJOR", "INFO"])
+        self.assertEqual(decoded, self.response)
+
+    def test_controls_in_individual_strings_stay_escaped_until_json_parsing(self):
+        controls = [*range(0x20), *range(0x7F, 0xA0), 0x2028, 0x2029]
+        self.response["checks"] = [
+            {"path": "backend/example.py", "evidence": "한국어" + chr(code) + "끝"}
+            for code in controls
+        ]
+        output, error, valid = self.decode(json.dumps(self.envelope))
+        self.assertTrue(valid, error)
+        self.assertIn("한국어", output)
+        for code in controls:
+            self.assertNotIn(chr(code), output)
+        decoded = role_review.parse_response(run_role.scrub(output))
+        self.assertEqual(decoded, self.response)
+
     def test_separator_escaping_keeps_the_final_output_byte_limit(self):
-        self.response["checks"][0]["evidence"] = chr(0x2028) * 200000
-        output, error, valid = self.decode(json.dumps(self.envelope, ensure_ascii=False))
-        self.assertEqual((output, error, valid), ("", "output_byte_limit", False))
+        for code in (0x2028, 0x9D):
+            self.response["checks"][0]["evidence"] = chr(code) * 200000
+            output, error, valid = self.decode(json.dumps(self.envelope, ensure_ascii=False))
+            self.assertEqual((output, error, valid), ("", "output_byte_limit", False))
 
     def test_inner_head_paths_and_coverage_still_require_existing_validation(self):
         plan = {"head_sha": "a" * 40, "roles": {

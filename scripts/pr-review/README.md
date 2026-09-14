@@ -122,8 +122,9 @@ Present non-dictionary `modelUsage` and nonempty usage excluding the requested
 model remain terminal even on failed envelopes. Missing usage or a well-formed
 empty dictionary on a transient failure proves no mismatch.
 The schema bytes count toward the existing complete-request limit.
-The Claude handoff escapes U+2028/U+2029 within JSON strings so the existing
-line-oriented parser preserves them; other text remains literal UTF-8.
+The Claude handoff keeps C0, DEL, C1 and U+2028/U+2029 escaped until JSON parsing,
+so raw control stripping cannot consume structure across strings or findings.
+Other text, including Korean, remains literal UTF-8; expansion stays byte-bounded.
 Codex JSONL records split only at literal LF bytes; Unicode separators inside JSON
 strings remain payload. Terminal executor and final-file overflow are handled
 before transport parsing or diagnostic concatenation and cannot trigger retry.
