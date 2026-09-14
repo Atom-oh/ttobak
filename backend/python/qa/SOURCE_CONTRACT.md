@@ -93,6 +93,11 @@ File states are `pending` (`VERIFIED_SNAPSHOT_UNAVAILABLE`), `ready`, `empty`
 `SOURCE_TOO_LARGE` above 50 MiB. Ready excerpts are still partial and capped at
 6,000 characters before tool formatting.
 
+Canonical document results distinguish file excerpts from saved Markdown.
+`get_document_detail` continues saved Markdown only; no available QA tool reads
+the entire original binary. File-only results omit Markdown continuation advice,
+and file results explicitly prohibit suggesting that tool for full-PDF reading.
+
 Verify the external S3 data source includes `canonical/v1/`, `manual-kb/v1/`
 and `shared-kb/v1/`. Metadata must support filters on `sourcePK`, `sourceSK`,
 `indexSchema`, `ownerId`, `visibility`, `resourceId` and `sourceRevision`.
