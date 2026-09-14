@@ -97,6 +97,8 @@ class RoleReviewTests(unittest.TestCase):
                   f"<pre>\necho '`'\npassword=`printf '{canary}'`\n</pre>"]
         cases += [f"<script>\n</{tag}>\necho '`'\npassword=`printf '{canary}'`\n</script>"
                   for tag in ("ſcript", "scrİpt", "scrıpt")]
+        cases += [f"- > ```bash\n  > echo '`'\n  > password=`printf '{canary}'`\n  > ```",
+                  f"- - ```bash\n    echo '`'\n    password=`printf '{canary}'`\n    ```"]
         for index, evidence in enumerate(cases):
             with self.subTest(case=index):
                 self.work = self.root / f"publication-{index}"
@@ -210,6 +212,8 @@ VERDICT: PASS
                     f"<pre>\necho '`'\npassword=`printf '{canary}'`\n</pre>\nPUBLIC_AFTER\nVERDICT: PASS\n"]
         reports += [f"<script>\n</{tag}>\necho '`'\npassword=`printf '{canary}'`\n</script>\nPUBLIC_AFTER\nVERDICT: PASS\n"
                     for tag in ("ſcript", "scrİpt", "scrıpt")]
+        reports += [f"- > ```bash\n  > echo '`'\n  > password=`printf '{canary}'`\n  > ```\nPUBLIC_AFTER\nVERDICT: PASS\n",
+                    f"- - ```bash\n    echo '`'\n    password=`printf '{canary}'`\n    ```\nPUBLIC_AFTER\nVERDICT: PASS\n"]
         for report in reports:
             with self.subTest(report=report):
                 output = self.work / "chair.md"

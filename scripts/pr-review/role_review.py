@@ -834,24 +834,23 @@ def _normalize_container_keys(value):
 
 
 def _inline_code_spans(value, block_spans=None, closing_fences=None):
-    """Find inline delimiters without interpreting literal raw-block contents."""
+    """Track ordered Markdown containers before interpreting inline delimiters."""
     if block_spans is None and "`" not in value and (closing_fences is None or "~~~" not in value):
         return []
-    spans, pending, lists = [], [], []
-    offset, block, paragraph, quote_depth = 0, None, False, 0
+    spans, pending = [], []
+    containers, next_quotes = (), (0,)
+    offset, block, paragraph = 0, None, False
     quote_marker = re.compile(r" {0,3}> ?")
     fence_marker = re.compile(r" {0,3}(`{3,}|~{3,})(.*)")
-    heading_marker = re.compile(
-        r" {0,3}(?:#{1,6}(?: |$)|(?:(?:- *){3,}|(?:_ *){3,}|(?:\* *){3,})$)"
-    )
+    list_marker = re.compile(r"( {0,3})([-+*]|[0-9]{1,9}[.)])(?= |$)")
+    atx_marker = re.compile(r" {0,3}#{1,6}(?: |$)")
     setext_marker = re.compile(r" {0,3}(?:-+|=+) *$")
-
-    def is_heading(line):
-        text = line.rstrip(" \r\n")
-        return heading_marker.match(text) or (paragraph and setext_marker.match(text))
+    theme_start = re.compile(r" {0,3}([-*_])")
+    theme_patterns = {char: re.compile(r" {0,3}(?:" + re.escape(char) + r" *){3,}")
+                      for char in "-*_"}
 
     def flush():
-        nonlocal paragraph, quote_depth
+        nonlocal paragraph
         following, last = {}, {}
         for index in range(len(pending) - 1, -1, -1):
             start, end = pending[index]
@@ -870,18 +869,7 @@ def _inline_code_spans(value, block_spans=None, closing_fences=None):
                 spans.append((end, pending[close][0]))
                 index = close + 1
         pending.clear()
-        paragraph, quote_depth = False, 0
-
-    def quotes(line, count=None):
-        position, depth = 0, 0
-        while count is None or depth < count:
-            match = quote_marker.match(line, position)
-            if not match:
-                break
-            position, depth = match.end(), depth + 1
-        if count is not None and depth != count:
-            return None
-        return line[position:], depth
+        paragraph = False
 
     def blank(line):
         return not line.strip(" \r\n")
@@ -928,77 +916,159 @@ def _inline_code_spans(value, block_spans=None, closing_fences=None):
             return re.search(r"</(?:pre|script|style|textarea)>", line, re.I | re.ASCII) is not None
         return end in line
 
+    def container_metadata(path):
+        nearest = len(path)
+        result = [nearest] * (nearest + 1)
+        for index in range(len(path) - 1, -1, -1):
+            if path[index][0] == "quote":
+                nearest = index
+            result[index] = nearest
+        return tuple(result)
+
+    def consume(path, metadata, line, end, tail):
+        position, index = 0, 0
+        while index < len(path):
+            if position >= tail:
+                # Blank content satisfies remaining list indentation, not quotes.
+                return metadata[index], position
+            node = path[index]
+            if node[0] == "quote":
+                match = quote_marker.match(line, position, end)
+                if not match:
+                    return index, position
+                position = match.end()
+            else:
+                width = node[1]
+                if not line.startswith(" " * width, position):
+                    return index, position
+                position += width
+            index += 1
+        return index, position
+
+    def item_at(line, position, end, tail):
+        match = list_marker.match(line, position, end)
+        if not match:
+            return None
+        after = match.end()
+        count = 0
+        while count < 5 and after + count < end and line[after + count] == " ":
+            count += 1
+        empty = after >= tail
+        padding = 1 if empty or count >= 5 else count
+        marker = match[2]
+        ordered = marker[0].isdigit()
+        style = ("ordered", marker[-1]) if ordered else ("bullet", marker)
+        node = ("list", after - position + padding, style)
+        return node, min(after + padding, end), empty, int(marker[:-1]) if ordered else None
+
+    def item_can_start(item, in_paragraph, sibling):
+        return (not in_paragraph or item[0][2] == sibling
+                or (not item[2] and (item[3] is None or item[3] == 1)))
+
+    def thematic(line, position, end, cache):
+        match = theme_start.match(line, position, end)
+        if not match:
+            return False
+        char = match[1]
+        if char not in cache:
+            last = end - 1
+            while last >= 0 and line[last] in (" ", char):
+                last -= 1
+            cache[char] = last
+        if cache[char] >= position:
+            return False
+        return theme_patterns[char].fullmatch(line, position, end) is not None
+
+    def is_heading(line, position, end, cache):
+        return (atx_marker.match(line, position, end)
+                or thematic(line, position, end, cache)
+                or (paragraph and setext_marker.match(line, position, end)))
+
+    def interrupts(line, position, end, tail, cache, sibling):
+        if quote_marker.match(line, position, end) or is_heading(line, position, end, cache):
+            return True
+        marker = fence_marker.match(line, position, end)
+        if marker and (marker[1][0] == "~" or "`" not in marker[2]):
+            return True
+        item = item_at(line, position, end, tail)
+        if item and item_can_start(item, paragraph, sibling):
+            return True
+        return html_start(line[position:end], False) is not None
+
     for raw_line in value.splitlines(keepends=True):
         line = raw_line.expandtabs(4)
+        end = len(line.rstrip("\r\n"))
+        tail = len(line[:end].rstrip(" "))
+        themes = {}
         if block is not None:
-            owned = quotes(line, block["quote"])
-            content = owned[0] if owned is not None else None
-            indent = len(content) - len(content.lstrip(" ")) if content is not None else 0
-            if content is not None and (blank(content) or indent >= block["indent"]):
+            matched, position = consume(block["path"], block["metadata"], line, end, tail)
+            if matched == len(block["path"]):
                 if block["kind"] == "fence":
-                    marker = fence_marker.match(content[block["indent"]:])
+                    marker = fence_marker.match(line, position, end)
                     if (marker and marker[1][0] == block["char"]
-                            and len(marker[1]) >= block["width"] and not marker[2].strip(" \r\n")):
+                            and len(marker[1]) >= block["width"] and not marker[2].strip(" ")):
                         if closing_fences is not None:
                             closing_fences.add(offset + raw_line.index(marker[1]))
+                            closing_fences.add(offset + len(raw_line) - len(raw_line.lstrip(" \t")))
                         if block_spans is not None:
                             block_spans.append((block["start"], offset + len(raw_line)))
                         block = None
-                elif html_ends(block["rule"], content):
+                elif html_ends(block["rule"], line[position:end]):
                     block = None
                 offset += len(raw_line)
                 continue
-            # Raw blocks cannot lazily continue outside their opening container.
             if block_spans is not None and block["kind"] == "fence":
                 block_spans.append((block["start"], offset))
             block = None
             flush()
 
-        content_line, depth = quotes(line)
-        indent = len(content_line) - len(content_line.lstrip(" "))
-        if blank(content_line):
+        matched, position = consume(containers, next_quotes, line, end, tail)
+        sibling = (containers[matched][2] if matched < len(containers)
+                   and containers[matched][0] == "list" else None)
+        if matched < len(containers):
+            lazy = paragraph and position < tail and not interrupts(
+                line, position, end, tail, themes, sibling)
+            if not lazy:
+                containers = containers[:matched]
+                next_quotes = container_metadata(containers)
+                flush()
+        added = None
+        while position < tail:
+            if is_heading(line, position, end, themes):
+                break
+            quote = quote_marker.match(line, position, end)
+            if quote:
+                node, following = ("quote",), quote.end()
+            else:
+                item = item_at(line, position, end, tail)
+                if not item or not item_can_start(item, paragraph, sibling):
+                    break
+                node, following = item[0], item[1]
+            if added is None:
+                added = list(containers)
+                flush()
+            added.append(node)
+            position, sibling = following, None
+        if added is not None:
+            containers = tuple(added)
+            next_quotes = container_metadata(containers)
+        if position >= tail:
             flush()
             offset += len(raw_line)
             continue
-        if depth and depth != quote_depth:
-            flush()
-        if depth:
-            quote_depth = depth
-        item = re.match(r"( *)([-+*]|[0-9]{1,9}[.)])(?:( +)|(?=[\r\n]*$))", content_line)
-        raw_fence = fence_marker.match(content_line)
-        interrupt = (
-            (raw_fence and (raw_fence[1][0] == "~" or "`" not in raw_fence[2]))
-            or is_heading(content_line)
-            or html_start(content_line, False)
-        )
-        if item or not paragraph or interrupt:
-            while lists and (lists[-1][0] != depth or indent < lists[-1][1]):
-                lists.pop()
-        effective_depth = depth or (quote_depth if paragraph and not interrupt else 0)
-        in_list = bool(lists) and lists[-1][0] == effective_depth and indent < lists[-1][1] + 4
-        owner_indent = lists[-1][1] if in_list else 0
-        content = content_line[owner_indent:] if in_list and indent >= owner_indent else content_line
-        heading = is_heading(content)
-        if item and not heading and (indent < 4 or in_list):
-            flush()
-            quote_depth = depth
-            # Five or more padding spaces leave four-space indented item content.
-            padding = len(item[3] or " ")
-            owner_indent = item.end(2) + (1 if padding > 4 else padding)
-            lists.append((depth, owner_indent))
-            in_list = True
-            content = content_line[owner_indent:]
-        marker = fence_marker.match(content)
-        heading = is_heading(content)
+
+        content = line[position:end]
+        marker = fence_marker.match(line, position, end)
+        heading = is_heading(line, position, end, themes)
         html = html_start(content, not paragraph)
         if marker and (marker[1][0] == "~" or "`" not in marker[2]):
             flush()
-            block = {"kind": "fence", "quote": depth, "indent": owner_indent,
+            block = {"kind": "fence", "path": containers, "metadata": next_quotes,
                      "char": marker[1][0], "width": len(marker[1]), "start": offset}
         elif html is not None:
             flush()
             if not html_ends(html, content):
-                block = {"kind": "html", "quote": depth, "indent": owner_indent, "rule": html}
+                block = {"kind": "html", "path": containers, "metadata": next_quotes, "rule": html}
         elif len(content) - len(content.lstrip(" ")) < 4 or paragraph:
             if heading:
                 flush()
