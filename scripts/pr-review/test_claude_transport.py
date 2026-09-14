@@ -144,6 +144,22 @@ class ClaudeTransportTests(unittest.TestCase):
         self.assertFalse(valid)
         self.assertEqual(role_review.diagnostic_failure(error), "model_selection_diagnostic")
 
+    def test_present_nondictionary_usage_is_terminal_on_failed_envelopes(self):
+        for usage in (None, [], ["claude-other"], "", "claude-other",
+                      False, True, 0, 1, 0.0, 1.5):
+            for errors in (None, ["Temporary connection reset"]):
+                with self.subTest(usage=usage, errors=errors):
+                    envelope = {"type": "result", "subtype": "error_during_execution",
+                                "is_error": True, "modelUsage": usage}
+                    if errors is not None:
+                        envelope["errors"] = errors
+                    output, error, valid = self.decode(
+                        json.dumps(envelope), "global.anthropic.claude-fable-5-1", exit_code=1)
+                    self.assertEqual(output, "")
+                    self.assertFalse(valid)
+                    self.assertEqual(role_review.diagnostic_failure(error),
+                                     "model_selection_diagnostic")
+
     def test_terminal_messages_survive_malformed_siblings_in_every_field_order(self):
         diagnostics = (
             ("quota exceeded", "quota_diagnostic"),

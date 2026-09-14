@@ -118,8 +118,9 @@ Successful `.result` prose is not a diagnostic stream. Error result text and
 explicit `errors`/`warnings` retain diagnostic checks, as does stderr.
 Malformed sibling fields or list members do not hide recognized terminal messages;
 valid strings are scanned before returning a generic metadata error.
-Nonempty reported usage that excludes the requested model remains terminal even
-on failed envelopes; absent/empty usage on a transient failure proves no mismatch.
+Present non-dictionary `modelUsage` and nonempty usage excluding the requested
+model remain terminal even on failed envelopes. Missing usage or a well-formed
+empty dictionary on a transient failure proves no mismatch.
 The schema bytes count toward the existing complete-request limit.
 The Claude handoff escapes U+2028/U+2029 within JSON strings so the existing
 line-oriented parser preserves them; other text remains literal UTF-8.

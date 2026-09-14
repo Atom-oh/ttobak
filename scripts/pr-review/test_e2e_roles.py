@@ -61,6 +61,11 @@ if tag == "claude-self":
         ("claude-invalid-result-once", "quota exceeded"),
         ("claude-mixed-errors-once", "quota exceeded"),
         ("claude-invalid-transient-once", "Temporary connection reset"),
+        ("claude-usage-list-once", "Temporary connection reset"),
+        ("claude-usage-string-once", "Temporary connection reset"),
+        ("claude-usage-null-once", "Temporary connection reset"),
+        ("claude-usage-bool-once", "Temporary connection reset"),
+        ("claude-usage-number-once", "Temporary connection reset"),
     ):
         emitted = root / (marker + "-emitted")
         if (root / marker).exists() and not emitted.exists():
@@ -81,6 +86,16 @@ if tag == "claude-self":
                 failed.update(errors={}, warnings=None, result=diagnostic)
             elif marker == "claude-mixed-errors-once":
                 failed["errors"] = [None, diagnostic]
+            elif marker == "claude-usage-list-once":
+                failed["modelUsage"] = ["claude-other"]
+            elif marker == "claude-usage-string-once":
+                failed["modelUsage"] = "claude-other"
+            elif marker == "claude-usage-null-once":
+                failed["modelUsage"] = None
+            elif marker == "claude-usage-bool-once":
+                failed["modelUsage"] = False
+            elif marker == "claude-usage-number-once":
+                failed["modelUsage"] = 0
             print(json.dumps(failed))
             raise SystemExit(1)
     native = "--json-schema" in argv and argv[argv.index("--output-format") + 1] == "json"
@@ -278,6 +293,26 @@ class EndToEndRoleTests(unittest.TestCase):
     def test_nonzero_claude_failed_status_preserves_model_mismatch_without_errors_field(self):
         self.assert_claude_terminal_envelope_stops_retry(
             "claude-wrong-model-no-errors-once", "model_selection_diagnostic")
+
+    def test_nonzero_claude_nonempty_usage_list_cannot_be_erased_by_clean_retry(self):
+        self.assert_claude_terminal_envelope_stops_retry(
+            "claude-usage-list-once", "model_selection_diagnostic")
+
+    def test_nonzero_claude_nonempty_usage_string_cannot_be_erased_by_clean_retry(self):
+        self.assert_claude_terminal_envelope_stops_retry(
+            "claude-usage-string-once", "model_selection_diagnostic")
+
+    def test_nonzero_claude_null_usage_cannot_be_erased_by_clean_retry(self):
+        self.assert_claude_terminal_envelope_stops_retry(
+            "claude-usage-null-once", "model_selection_diagnostic")
+
+    def test_nonzero_claude_boolean_usage_cannot_be_erased_by_clean_retry(self):
+        self.assert_claude_terminal_envelope_stops_retry(
+            "claude-usage-bool-once", "model_selection_diagnostic")
+
+    def test_nonzero_claude_numeric_usage_cannot_be_erased_by_clean_retry(self):
+        self.assert_claude_terminal_envelope_stops_retry(
+            "claude-usage-number-once", "model_selection_diagnostic")
 
     def test_terminal_error_with_null_warnings_stops_after_one_call(self):
         self.assert_claude_terminal_envelope_stops_retry(

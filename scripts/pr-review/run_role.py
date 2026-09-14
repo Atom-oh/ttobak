@@ -376,9 +376,11 @@ def claude_response(raw, expected_model=None, exit_code=0):
         usage = envelope.get("modelUsage")
         # Preserve reported mismatches before any generic failure can permit retry.
         # Profile/model aliases are reported metadata, not proof of provider weights.
-        if expected_model and isinstance(usage, dict) and usage:
+        if expected_model and "modelUsage" in envelope:
+            if not isinstance(usage, dict):
+                return "", "Error: INVALID_MODEL_ID", False
             names = {expected_model, expected_model.removeprefix("global.anthropic.")}
-            if not names.intersection(usage):
+            if usage and not names.intersection(usage):
                 return "", "Error: INVALID_MODEL_ID", False
         # These are outer CLI diagnostics; never scan the review's evidence as logs.
         messages = []
@@ -416,7 +418,7 @@ def claude_response(raw, expected_model=None, exit_code=0):
                 or not isinstance(envelope.get("structured_output"), dict)):
             return "", "Claude structured-output envelope is missing or unsuccessful.", False
         if expected_model and "modelUsage" in envelope:
-            if not isinstance(usage, dict) or not usage:
+            if not usage:
                 return "", "Error: INVALID_MODEL_ID", False
         output = canonical(envelope["structured_output"])
         # The existing text handoff splits Unicode lines before JSON parsing.
