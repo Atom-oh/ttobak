@@ -756,6 +756,7 @@ def sensitive_key(value):
         any(SENSITIVE_KEY.fullmatch(part.group())
             for part in re.finditer(r"[A-Za-z0-9_.:-]+", value))
         or SENSITIVE_KEY.fullmatch(re.sub(r"[^A-Za-z0-9]+", "_", value))
+        or SENSITIVE_KEY.fullmatch(value)
     )
 
 
@@ -780,40 +781,87 @@ def quoted_literal(value, start):
     return end, decoded if isinstance(decoded, str) else None
 
 
+def _json_literal_ranges(value):
+    """Visit each quoted JSON token once, never restarting at escaped quotes."""
+    index = 0
+    while index < len(value):
+        if value[index] == "\\":
+            index += 2
+            continue
+        if value[index] != '"':
+            index += 1
+            continue
+        start = index
+        index += 1
+        while index < len(value):
+            char = value[index]
+            if char == "\\":
+                newline = index + 1 < len(value) and value[index + 1] in "\r\n"
+                index += 2
+                if newline:
+                    break
+            elif char == '"':
+                index += 1
+                yield start, index
+                break
+            elif char in "\r\n":
+                index += 1
+                break
+            else:
+                index += 1
+
+
 def _normalize_container_keys(value):
     """Expose valid punctuated JSON keys to the existing container safeguards."""
-    literal = re.compile(r'"(?:\\.|[^"\\])*"')
     separator = re.compile(r"\s*:\s*(?=\{|\[)")
     pieces, cursor = [], 0
-    for match in literal.finditer(value):
+    for start, end in _json_literal_ranges(value):
         # Do not turn a prefixed/f-string token into a valid plain literal.
-        if match.start() and (value[match.start() - 1].isalnum() or value[match.start() - 1] == "_"):
+        if start and (value[start - 1].isalnum() or value[start - 1] == "_"):
             continue
-        if not separator.match(value, match.end()):
+        if not separator.match(value, end):
             continue
         try:
-            label = strict_json(match.group())
+            label = strict_json(value[start:end])
         except Invalid:
             continue
         if not sensitive_key(label) or SENSITIVE_KEY.fullmatch(label):
             continue
-        pieces.extend((value[cursor:match.start()], '"password"'))
-        cursor = match.end()
+        pieces.extend((value[cursor:start], '"password"'))
+        cursor = end
     pieces.append(value[cursor:])
     return "".join(pieces)
 
 
 def _inline_code_spans(value):
     spans, offset, fence = [], 0, None
+    list_indents = []
     for line in value.splitlines(keepends=True):
-        marker = re.match(r" {0,3}(`{3,}|~{3,})(.*)", line)
+        leading = re.match(r"[ \t]*", line).group()
+        indent = len(leading.expandtabs(4))
         if fence:
-            if (marker and marker[1][0] == fence[0] and len(marker[1]) >= fence[1]
-                    and not marker[2].strip()):
+            marker = re.match(r"[ \t]*(`{3,}|~{3,})(.*)", line)
+            if (marker and indent <= fence[2] + 3 and marker[1][0] == fence[0]
+                    and len(marker[1]) >= fence[1] and not marker[2].strip()):
                 fence = None
-        elif marker and (marker[1][0] == "~" or "`" not in marker[2]):
-            fence = (marker[1][0], len(marker[1]))
-        elif not line.startswith(("    ", "\t")):
+            offset += len(line)
+            continue
+        if line.strip():
+            while list_indents and indent < list_indents[-1]:
+                list_indents.pop()
+        in_list = bool(list_indents) and indent < list_indents[-1] + 4
+        item = re.match(r"([ \t]*)(?:[-+*]|[0-9]+[.)])([ \t]+)", line)
+        content = line
+        if item and (indent < 4 or in_list):
+            list_indents.append(len(item.group().expandtabs(4)))
+            in_list = True
+            content = line[item.end():]
+        elif in_list:
+            content = line[len(leading):]
+        marker = re.match(r" {0,3}(`{3,}|~{3,})(.*)", content)
+        if marker and (marker[1][0] == "~" or "`" not in marker[2]):
+            fence = (marker[1][0], len(marker[1]), list_indents[-1] if in_list else 0)
+        elif indent < 4 or in_list:
             runs = list(re.finditer(r"`+", line))
             following, last = {}, {}
             for index in range(len(runs) - 1, -1, -1):
@@ -850,6 +898,7 @@ def _assignment_spans(value, key):
             return bracket_ends[cache_key] is not None
         pending = [(opening[value[start]], start)]
         index, quote, escaped = start + 1, None, False
+        call_syntax = False
         while index < (len(value) if boundary is None else boundary):
             char = value[index]
             if escaped:
@@ -877,9 +926,12 @@ def _assignment_spans(value, key):
             elif (index == 0 or value[index - 1] in "\r\n") and fence_end.match(value, index):
                 break
             elif char in "\"'`":
+                call_syntax = True
                 quote = char * 3 if char != "`" and value.startswith(char * 3, index) else char
                 index += len(quote)
                 continue
+            elif char == ",":
+                call_syntax = True
             elif char in opening:
                 pending.append((opening[char], index))
             elif char in ")]}":
@@ -890,24 +942,28 @@ def _assignment_spans(value, key):
                 if not pending:
                     return True
             index += 1
-        if quote or escaped:
+        if quote or escaped or (value[start] == "(" and call_syntax):
             return True  # An unfinished string is not a bare literal boundary.
         for _, position in pending:
             bracket_ends[(position, boundary)] = None
         return False
-    last_apostrophe, quote_escape = -1, False
-    code_apostrophes, quote_span_index = {}, 0
+    last_apostrophe, last_double, quote_escape = -1, -1, False
+    code_apostrophes, code_doubles, quote_span_index = {}, {}, 0
     for position, char in enumerate(value):
         if quote_escape:
             quote_escape = False
         elif char == "\\":
             quote_escape = True
-        elif char == "'":
-            last_apostrophe = position
+        elif char in "\"'":
+            if char == "'":
+                last_apostrophe = position
+            else:
+                last_double = position
             while quote_span_index < len(code_spans) and code_spans[quote_span_index][1] < position:
                 quote_span_index += 1
             if quote_span_index < len(code_spans) and code_spans[quote_span_index][0] <= position:
-                code_apostrophes[code_spans[quote_span_index][1]] = position
+                mapping = code_apostrophes if char == "'" else code_doubles
+                mapping[code_spans[quote_span_index][1]] = position
     def next_content(index):
         while index < len(value) and value[index].isspace():
             index += 1
@@ -922,6 +978,7 @@ def _assignment_spans(value, key):
                     if code_index < len(code_spans) and code_spans[code_index][0] <= match.start()
                     else None)
         value_apostrophe = code_apostrophes.get(code_end, -1) if code_end is not None else last_apostrophe
+        value_double = code_doubles.get(code_end, -1) if code_end is not None else last_double
         index, quote, escaped, stack = match.end(), None, False, []
         key_name = match.group().rstrip()[:-1].rstrip()
         prefix = value[match.start() - 1] if match.start() else ""
@@ -931,6 +988,8 @@ def _assignment_spans(value, key):
         if prefix in ("\"", "'") and index < len(value) and value[index] == prefix:
             index += 1
         value_start = index
+        started_quoted = index < len(value) and value[index] in "\"'"
+        closed_quote = False
         plain_scalar = False
         colon_label = match.group().rstrip().endswith(":")
         line_start = value_start
@@ -953,12 +1012,16 @@ def _assignment_spans(value, key):
                 elif value.startswith(quote, index):
                     index += len(quote)
                     quote = None
+                    closed_quote = True
                     continue
             elif char == "\\" and index + 1 < len(value) and value[index + 1] not in "\r\n":
                 escaped = True
             elif (prefix in ("\"", "'", "`") and char == prefix and not stack
                   and (prefix != "`" or code_end is None)):
                 break
+            elif (char == '"' and started_quoted and closed_quote and index == value_double
+                  and not stack and (value[index - 1].isalnum() or value[index - 1] in "_])")):
+                pass  # Retain the legacy scrubber's bounded quoted-scalar tail.
             elif (char == "'" and colon_label and not stack and index > value_start
                   and re.fullmatch(r"[\w.@/-]+", value[value_start:index])
                   and value[value_start:index].lower() not in {"r", "u", "b", "f", "br", "rb", "fr", "rf"}):
@@ -982,8 +1045,9 @@ def _assignment_spans(value, key):
                     continuation_pending = True
                     continue
                 break
-            elif ((index == match.end() or value[index - 1].isspace())
-                  and (char == "#" or value.startswith("//", index))):
+            elif ((char == "#" or value.startswith("//", index))
+                  and (index == match.end() or value[index - 1].isspace()
+                       or re.search(r"(?:\|\||\?\?|\bor|\\)$", value[max(line_start, index - 3):index]))):
                 previous = value[line_start:index].rstrip()
                 if stack or continuation_pending or re.search(r"(?:\|\||\?\?|\bor|\\)$", previous):
                     newline = line_break.search(value, index)
@@ -998,7 +1062,7 @@ def _assignment_spans(value, key):
                 # An unmatched bracket inside a bare dotenv/shell token is
                 # literal punctuation. Initial containers and calls keep their
                 # existing fail-closed boundary handling.
-                if stack or index == value_start or char == "(" or paired_bracket(index, code_end):
+                if stack or index == value_start or paired_bracket(index, code_end):
                     stack.append(opening[char])
             elif char in ")]}" and stack:
                 if char != stack.pop():
@@ -1050,7 +1114,7 @@ def _opaque_scan_view(value, bodies):
         if end <= cursor:
             continue
         start = max(start, cursor)
-        pieces.extend((value[cursor:start], re.sub(r"[^\r\n]", "X", value[start:end])))
+        pieces.extend((value[cursor:start], re.sub(r"[^\r\n\\]", "X", value[start:end])))
         cursor = end
     pieces.append(value[cursor:])
     return "".join(pieces)

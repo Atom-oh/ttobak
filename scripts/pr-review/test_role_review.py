@@ -85,6 +85,10 @@ class RoleReviewTests(unittest.TestCase):
         cases += ["Evidence: " + json.dumps({key: item})
                   for key in ("/prod/db/password", "password[0]", "api key (prod)")
                   for item in ({"note": canary}, [canary])]
+        cases += [json.dumps({key: canary}, ensure_ascii=False)
+                  for key in ("paſſword", "apiKey")]
+        cases += [f'password = previous {operator}// local fallback\n"{canary}"\nPUBLIC_AFTER'
+                  for operator in ("||", "??")]
         for index, evidence in enumerate(cases):
             with self.subTest(case=index):
                 self.work = self.root / f"publication-{index}"
@@ -171,6 +175,12 @@ VERDICT: PASS
             f'secret: |\n  password="{canary}\nPUBLIC_AFTER\nVERDICT: PASS\n',
             f"name: PASSWORD\nvalue: 'password=\"{canary}'\nPUBLIC_AFTER\nVERDICT: PASS\n",
         ]
+        reports += [
+            f'- Outer item\n    - Checked `export password="{canary}"` here.\nPUBLIC_AFTER\nVERDICT: PASS\n',
+            f'```dotenv\npassword=prefix({canary}\n```\nPUBLIC_AFTER\nVERDICT: PASS\n',
+            f'```python\npassword = "{canary}\\"suffix"\n```\nPUBLIC_AFTER\nVERDICT: PASS\n',
+        ]
+        reports.append(f"password: str = 'password=\"{canary}'\nPUBLIC_AFTER\nVERDICT: PASS\n")
         for report in reports:
             with self.subTest(report=report):
                 output = self.work / "chair.md"
@@ -186,14 +196,23 @@ VERDICT: PASS
     def test_apostrophe_handling_keeps_quoted_credentials_opaque(self):
         import role_review
         canary = "SYNTHETIC_QUOTED_VALUE"
-        for value in (f"prefix'{canary} tail'", f"\"owner's {canary}\""):
+        for value in (f"prefix'{canary} tail'", f"\"owner's {canary}\"", f'"head"middle"{canary}\nTAIL"'):
             clean = role_review.scrub("password=" + value + "\nPUBLIC_AFTER")
             self.assertNotIn(canary, clean)
             self.assertIn("PUBLIC_AFTER", clean)
-        for value in (f"'{canary}", f"(prefix'{canary}"):
+        for value in (f"'{canary}", f"(prefix'{canary}", f"os.getenv('NAME', '{canary}'"):
             clean = role_review.scrub("password=" + value + "\nVERDICT: PASS")
             self.assertNotIn(canary, clean)
             self.assertNotIn("VERDICT: PASS", clean)
+
+    def test_container_key_literal_scan_handles_repeated_escaped_quotes(self):
+        script = ("import json,sys; from role_review import _normalize_container_keys; "
+                  "value=json.load(sys.stdin); print(json.dumps(_normalize_container_keys(value)))")
+        value = "Ordinary text\n" + "\\\"" * 20000
+        result = subprocess.run([sys.executable, "-c", script], input=json.dumps(value),
+                                text=True, capture_output=True, cwd=ENGINE.parent, timeout=3)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), value)
 
     def test_ordinary_prose_scrub_has_bounded_runtime(self):
         prose = "The password is required and the token is optional. " * 80
@@ -208,6 +227,12 @@ VERDICT: PASS
                                 text=True, capture_output=True, cwd=ENGINE.parent, timeout=3)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn(canary, json.loads(result.stdout))
+
+        unmatched = "password=bareprefix[\n" * 4096
+        result = subprocess.run([sys.executable, "-c", script], input=json.dumps(unmatched),
+                                text=True, capture_output=True, cwd=ENGINE.parent, timeout=3)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout).count("[REDACTED]"), 4096)
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
