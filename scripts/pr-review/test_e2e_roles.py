@@ -48,6 +48,27 @@ if (root / "major").exists() and tag == "codex":
     response["findings"] = [{"severity":"MAJOR","path":paths[0],"condition":"When the branch runs",
                             "evidence":"The changed return value loses state."}]
 body = json.dumps(response)
+if tag == "claude-self":
+    native = "--json-schema" in argv and argv[argv.index("--output-format") + 1] == "json"
+    if (root / "claude-schema-required").exists():
+        assert "--strict-mcp-config" in argv and argv[argv.index("--tools") + 1] == ""
+        if not native:
+            print("Completed a prose review without the required JSON transport.")
+            raise SystemExit(0)
+        schema = json.loads(argv[argv.index("--json-schema") + 1])
+        assert set(schema["required"]) == set(response)
+        assert schema["additionalProperties"] is False
+    if native:
+        envelope = {"type":"result", "subtype":"success", "is_error":False,
+                    "result":"Not the review", "structured_output":response}
+        if (root / "claude-envelope-error").exists():
+            envelope["is_error"] = True
+        if (root / "claude-missing-structured").exists():
+            envelope.pop("structured_output")
+            envelope["result"] = body
+        if (root / "claude-envelope-model-error").exists():
+            envelope["warnings"] = ["[warn] failed to set model: Method not found"]
+        body = json.dumps(envelope)
 if (root / "invalid-inner").exists() and tag == "codex":
     body = "Unrequested prose\n" + body
 if (root / "duplicate-final").exists() and tag == "codex":
@@ -79,6 +100,8 @@ else:
         print("Monthly request limit reached", file=sys.stderr)
     print(body)
 if (root / "failure").exists() and tag == "codex":
+    raise SystemExit(9)
+if (root / "claude-nonzero").exists() and tag == "claude-self":
     raise SystemExit(9)
 '''
 
@@ -152,6 +175,41 @@ class EndToEndRoleTests(unittest.TestCase):
         calls = self.run_pipeline("frontend/components/Button.tsx")
         self.assertEqual(sorted(call["name"] for call in calls), ["claude", "codex"])
         self.assertTrue((self.work / "review.md").read_text().endswith("VERDICT: PASS\n"))
+
+    def test_claude_native_schema_preserves_exact_issued_input_and_no_tools(self):
+        (self.root / "claude-schema-required").touch()
+        calls = self.run_pipeline("frontend/components/Button.tsx")
+        self.assertTrue((self.work / "review.md").read_text().endswith("VERDICT: PASS\n"))
+        call = next(call for call in calls if call["name"] == "claude")
+        self.assertEqual(call["args"][1], (self.work / "requests/claude-self.prompt").read_text())
+        self.assertEqual(call["stdin"], (self.work / "requests/claude-self.input").read_text())
+        self.assertEqual(len(calls), 2)
+
+    def test_claude_error_envelope_cannot_pass_even_with_a_valid_inner_review(self):
+        (self.root / "claude-envelope-error").touch()
+        calls = self.run_pipeline("frontend/components/Button.tsx")
+        self.assertEqual(len(calls), 2)
+        self.assertTrue((self.work / "review.md").read_text().endswith("VERDICT: FAIL\n"))
+
+    def test_claude_missing_structured_output_cannot_use_the_text_result(self):
+        (self.root / "claude-missing-structured").touch()
+        self.run_pipeline("frontend/components/Button.tsx")
+        self.assertTrue((self.work / "review.md").read_text().endswith("VERDICT: FAIL\n"))
+
+    def test_claude_nonzero_exit_with_structured_output_stays_blocked(self):
+        (self.root / "claude-nonzero").touch()
+        self.run_pipeline("frontend/components/Button.tsx")
+        result = json.loads((self.work / "slot/claude-self-result.json").read_text())
+        self.assertFalse(result["valid"])
+        self.assertIn("cli_nonzero_exit", result["failure_codes"])
+
+    def test_claude_envelope_model_warning_is_preserved_as_a_terminal_diagnostic(self):
+        (self.root / "claude-envelope-model-error").touch()
+        calls = self.run_pipeline("frontend/components/Button.tsx")
+        self.assertEqual(len(calls), 2)
+        result = json.loads((self.work / "slot/claude-self-result.json").read_text())
+        self.assertFalse(result["valid"])
+        self.assertIn("model_selection_diagnostic", result["failure_codes"])
 
     def test_aws_change_uses_four_reviews_and_two_safety_checks(self):
         calls = self.run_pipeline("infra/network.tf")

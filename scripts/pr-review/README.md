@@ -104,7 +104,16 @@ again for a new review.
 Codex uses structured transport events plus its CLI-designated final-output file.
 Tool output and progress text are not review results. Recovered transport notices
 remain visible; terminal provider errors still block.
-JSONL records split only at literal LF bytes; Unicode separators inside JSON
+Claude uses [`--output-format json --json-schema`](https://code.claude.com/docs/en/headless)
+and accepts only a successful result envelope containing an object in
+`structured_output`. There is no prose, fenced-JSON or `.result` fallback.
+Outer model-selection/fallback/quota diagnostics remain blocking; reported
+`modelUsage`, when present, must include the requested Bedrock profile or its
+exact Anthropic model name. This does not attest model weights. The extracted
+review still passes the existing nonce, HEAD, role, path, coverage and publication
+checks. Failed envelopes and nonzero exits cannot become successful reviews.
+The schema bytes count toward the existing complete-request limit.
+Codex JSONL records split only at literal LF bytes; Unicode separators inside JSON
 strings remain payload. Terminal executor and final-file overflow are handled
 before transport parsing or diagnostic concatenation and cannot trigger retry.
 The event stream and final-file byte bounds are checked independently before

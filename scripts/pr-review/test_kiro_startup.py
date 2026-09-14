@@ -35,7 +35,7 @@ class KiroStartupTests(unittest.TestCase):
             with patch.object(run_role, "execute") as execute:
                 run_role.run(self.work, "kiro-fable")
         self.assertEqual(probe.call_count, 2)
-        execute.assert_not_called()
+        self.assertEqual(execute.call_count, 0)
         self.assertTrue((self.work / "slot/kiro-preflight-kiro-fable.flag").exists())
         self.assertEqual(role_review.main(["aggregate", "--work", str(self.work)]), 2)
 
@@ -57,6 +57,16 @@ class KiroStartupTests(unittest.TestCase):
             with patch.dict(os.environ, {"KIRO_PREFLIGHT_PASSED": "1"}):
                 run_role.prepare_kiro_startup(self.work)
         probe.assert_not_called()
+
+    def test_claude_schema_counts_toward_the_complete_request_limit(self):
+        _, prompt, payload = role_review.issue_request(self.work, "claude-self")
+        old_request_size = len(prompt.encode()) + len(payload.encode())
+        with patch.object(run_role, "MAX_REQUEST_BYTES", old_request_size + 1):
+            with patch.object(run_role, "execute", return_value=(0, "", "")) as execute:
+                run_role.run(self.work, "claude-self")
+        self.assertEqual(execute.call_count, 0)
+        result = json.loads((self.work / "slot/claude-self-result.json").read_text())
+        self.assertFalse(result["valid"])
 
     def test_plan_change_after_issuance_blocks_delivery(self):
         with patch.object(run_role, "preflight", return_value=(True, 0, "")):
@@ -112,6 +122,9 @@ class KiroStartupTests(unittest.TestCase):
                     {"type": "item.completed", "item": {"type": "agent_message", "text": body}},
                     {"type": "turn.completed"},
                 ))
+            elif tag == "claude-self":
+                body = json.dumps({"type": "result", "subtype": "success", "is_error": False,
+                                   "structured_output": json.loads(body)})
             return 0, body, ""
 
         with patch.object(run_role, "execute", side_effect=execute):

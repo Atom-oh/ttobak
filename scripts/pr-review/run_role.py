@@ -18,7 +18,7 @@ import sys
 import tempfile
 import time
 
-from role_review import diagnostic_failure, issue_request, issued_request, load_plan, digest, Invalid, MAX_REQUEST_BYTES, MAX_OUTPUT_BYTES, output_bytes, text_file
+from role_review import diagnostic_failure, issue_request, issued_request, load_plan, digest, Invalid, MAX_REQUEST_BYTES, MAX_OUTPUT_BYTES, output_bytes, text_file, strict_json, canonical
 
 
 DIRECTORY = Path(__file__).resolve().parent
@@ -231,7 +231,8 @@ def run(work, tag, kiro_startup=None):
             elif tag == "claude-self":
                 command = [
                     "claude", "-p", prompt, "--model", role["model"],
-                    "--output-format", "text", "--strict-mcp-config", "--tools", "",
+                    "--output-format", "json", "--json-schema", canonical(claude_schema()),
+                    "--strict-mcp-config", "--tools", "",
                 ]
             else:
                 raise ValueError("Unknown specialist")
@@ -248,6 +249,10 @@ def run(work, tag, kiro_startup=None):
                 else:
                     command[2] = framed_prompt
                     delivered = payload
+                    schema = command[command.index("--json-schema") + 1]
+                    if len((framed_prompt + payload + schema).encode()) >= MAX_REQUEST_BYTES:
+                        code, output, error = 1, "", "Complete Claude request exceeds input limit."
+                        break
                 code, output, error = execute(command, cwd, environment, delivered, timeout)
                 if diagnostic_failure(error):
                     code = code or 1
@@ -266,6 +271,20 @@ def run(work, tag, kiro_startup=None):
                         output_bytes(error)
                     except Invalid:
                         code, output, error = code or 1, "", "output_byte_limit"
+                elif code == 0:
+                    output, envelope_error, complete = claude_response(output, role["model"])
+                    if envelope_error == "output_byte_limit":
+                        code, output, error = 1, "", "output_byte_limit"
+                        break
+                    if not complete:
+                        code = 1
+                        error += ("\n" if error else "") + envelope_error
+                        try:
+                            output_bytes(error)
+                        except Invalid:
+                            error = "output_byte_limit"
+                        # A completed invalid/error envelope is not retryable prose.
+                        break
                 if diagnostic_failure(error):
                     code = code or 1
                     break
@@ -323,6 +342,77 @@ def main():
     else:
         run(arguments.work.resolve(), arguments.tag)
 
+
+
+def claude_schema():
+    """Request structure; record still verifies exact identity and full coverage."""
+    text = {"type": "string", "minLength": 1}
+
+    def object_schema(properties):
+        return {"type": "object", "properties": properties,
+                "required": list(properties), "additionalProperties": False}
+
+    return object_schema({
+        "head_sha": text, "role": text, "scope_complete": {"type": "boolean"},
+        "reviewed_paths": {"type": "array", "items": text},
+        "checks": {"type": "array", "items": object_schema({"path": text, "evidence": text})},
+        "findings": {"type": "array", "items": object_schema({
+            "severity": {"type": "string", "enum": ["CRITICAL", "MAJOR", "MINOR", "INFO"]},
+            "path": text, "condition": text, "evidence": text,
+        })},
+        "uncertainties": {"type": "array", "items": text},
+    })
+
+
+def claude_response(raw, expected_model=None):
+    """Only a successful CLI structured_output is eligible for review validation."""
+    try:
+        output_bytes(raw)
+        envelope = strict_json(raw)
+        if (not isinstance(envelope, dict) or envelope.get("type") != "result"
+                or envelope.get("subtype") != "success"
+                or envelope.get("is_error") is not False
+                or not isinstance(envelope.get("structured_output"), dict)):
+            return "", "Claude structured-output envelope is missing or unsuccessful.", False
+        # These are outer CLI diagnostics; never scan the review's evidence as logs.
+        messages = []
+        for field in ("result", "errors", "warnings"):
+            value = envelope.get(field, [])
+            if isinstance(value, str):
+                messages.append(value)
+            elif isinstance(value, list) and all(isinstance(item, str) for item in value):
+                messages.extend(value)
+            else:
+                return "", "Claude structured-output diagnostic metadata is invalid.", False
+        failures = {
+            "model_selection_diagnostic": "Error: INVALID_MODEL_ID",
+            "model_fallback_diagnostic": "Falling back to another model",
+            "quota_diagnostic": "quota exceeded",
+            "agent_preflight_diagnostic": "no agent with name inline-review found",
+            "output_byte_limit": "output_byte_limit",
+        }
+        for message in messages:
+            failure = diagnostic_failure(message)
+            if failure:
+                return "", failures[failure], False
+        if envelope.get("errors"):
+            return "", "Claude structured-output envelope reports errors.", False
+        if expected_model and "modelUsage" in envelope:
+            usage = envelope["modelUsage"]
+            # Bedrock's configured profile and its exact Anthropic model name are
+            # known representations, not a claim about actual provider weights.
+            names = {expected_model, expected_model.removeprefix("global.anthropic.")}
+            if not isinstance(usage, dict) or not names.intersection(usage):
+                return "", "Error: INVALID_MODEL_ID", False
+        output = canonical(envelope["structured_output"])
+        output_bytes(output)
+    except Invalid as exc:
+        if str(exc) == "output_byte_limit":
+            return "", "output_byte_limit", False
+        return "", "Claude structured-output envelope is invalid JSON.", False
+    except (UnicodeError, RecursionError):
+        return "", "Claude structured-output envelope is invalid JSON.", False
+    return output, "", True
 
 
 def codex_response(raw, final_path):
