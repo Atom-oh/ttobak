@@ -408,6 +408,8 @@ def claude_response(raw, expected_model=None):
             if not isinstance(usage, dict) or not names.intersection(usage):
                 return "", "Error: INVALID_MODEL_ID", False
         output = canonical(envelope["structured_output"])
+        # The existing text handoff splits Unicode lines before JSON parsing.
+        output = output.replace(chr(0x2028), r"\u2028").replace(chr(0x2029), r"\u2029")
         output_bytes(output)
     except Invalid as exc:
         if str(exc) == "output_byte_limit":

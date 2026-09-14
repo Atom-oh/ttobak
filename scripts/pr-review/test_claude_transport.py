@@ -133,6 +133,21 @@ class ClaudeTransportTests(unittest.TestCase):
         self.assertTrue(valid, error)
         self.assertEqual(json.loads(output), self.response)
 
+    def test_unicode_separators_survive_the_existing_raw_and_json_handoff(self):
+        evidence = "한국어 첫 줄" + chr(0x2028) + "둘째 줄" + chr(0x2029) + "끝"
+        self.response["checks"][0]["evidence"] = evidence
+        output, error, valid = self.decode(json.dumps(self.envelope))
+        self.assertTrue(valid, error)
+        # Exercise the actual downstream handoff, including splitlines in parse_response.
+        decoded = role_review.parse_response(run_role.scrub(output))
+        self.assertEqual(decoded, self.response)
+        self.assertIn("한국어", output)
+
+    def test_separator_escaping_keeps_the_final_output_byte_limit(self):
+        self.response["checks"][0]["evidence"] = chr(0x2028) * 200000
+        output, error, valid = self.decode(json.dumps(self.envelope, ensure_ascii=False))
+        self.assertEqual((output, error, valid), ("", "output_byte_limit", False))
+
     def test_inner_head_paths_and_coverage_still_require_existing_validation(self):
         plan = {"head_sha": "a" * 40, "roles": {
             "claude-self": {"role": "requirements", "paths": ["backend/example.py"]},

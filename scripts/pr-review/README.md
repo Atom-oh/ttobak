@@ -115,6 +115,8 @@ checks. Failed envelopes and nonzero exits cannot become successful reviews.
 Terminal envelope diagnostics are inspected even on nonzero exit and cannot be
 erased by a clean retry; ordinary nonzero transient failures retain bounded retries.
 The schema bytes count toward the existing complete-request limit.
+The Claude handoff escapes U+2028/U+2029 within JSON strings so the existing
+line-oriented parser preserves them; other text remains literal UTF-8.
 Codex JSONL records split only at literal LF bytes; Unicode separators inside JSON
 strings remain payload. Terminal executor and final-file overflow are handled
 before transport parsing or diagnostic concatenation and cannot trigger retry.
