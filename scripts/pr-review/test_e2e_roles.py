@@ -49,6 +49,17 @@ if (root / "major").exists() and tag == "codex":
                             "evidence":"The changed return value loses state."}]
 body = json.dumps(response)
 if tag == "claude-self":
+    for marker, diagnostic in (
+        ("claude-quota-once", "Error: quota exceeded for this account"),
+        ("claude-fallback-once", "Falling back to another model"),
+        ("claude-transient-once", "Temporary connection reset"),
+    ):
+        emitted = root / (marker + "-emitted")
+        if (root / marker).exists() and not emitted.exists():
+            emitted.touch()
+            print(json.dumps({"type":"result", "subtype":"error_during_execution",
+                              "is_error":True, "errors":[diagnostic]}))
+            raise SystemExit(1)
     native = "--json-schema" in argv and argv[argv.index("--output-format") + 1] == "json"
     if (root / "claude-schema-required").exists():
         assert "--strict-mcp-config" in argv and argv[argv.index("--tools") + 1] == ""
@@ -210,6 +221,31 @@ class EndToEndRoleTests(unittest.TestCase):
         result = json.loads((self.work / "slot/claude-self-result.json").read_text())
         self.assertFalse(result["valid"])
         self.assertIn("model_selection_diagnostic", result["failure_codes"])
+
+    def assert_claude_terminal_envelope_stops_retry(self, marker, code):
+        (self.root / marker).touch()
+        self.environment["PANEL_RETRIES"] = "2"
+        calls = self.run_pipeline("frontend/components/Button.tsx")
+        self.assertEqual(sum(call["name"] == "claude" for call in calls), 1)
+        result = json.loads((self.work / "slot/claude-self-result.json").read_text())
+        self.assertFalse(result["valid"])
+        self.assertIn("cli_nonzero_exit", result["failure_codes"])
+        self.assertIn(code, result["failure_codes"])
+        self.assertTrue((self.work / "review.md").read_text().endswith("VERDICT: FAIL\n"))
+
+    def test_nonzero_claude_quota_envelope_cannot_be_erased_by_clean_retry(self):
+        self.assert_claude_terminal_envelope_stops_retry("claude-quota-once", "quota_diagnostic")
+
+    def test_nonzero_claude_fallback_envelope_cannot_be_erased_by_clean_retry(self):
+        self.assert_claude_terminal_envelope_stops_retry(
+            "claude-fallback-once", "model_fallback_diagnostic")
+
+    def test_nonzero_claude_generic_transient_error_can_still_retry(self):
+        (self.root / "claude-transient-once").touch()
+        self.environment["PANEL_RETRIES"] = "2"
+        calls = self.run_pipeline("frontend/components/Button.tsx")
+        self.assertEqual(sum(call["name"] == "claude" for call in calls), 2)
+        self.assertTrue((self.work / "review.md").read_text().endswith("VERDICT: PASS\n"))
 
     def test_aws_change_uses_four_reviews_and_two_safety_checks(self):
         calls = self.run_pipeline("infra/network.tf")

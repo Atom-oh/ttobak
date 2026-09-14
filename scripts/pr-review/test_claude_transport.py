@@ -113,6 +113,20 @@ class ClaudeTransportTests(unittest.TestCase):
             self.assertEqual(output, "")
             self.assertEqual(role_review.diagnostic_failure(error), "model_selection_diagnostic")
 
+    def test_failed_envelope_retains_terminal_diagnostics_without_structured_output(self):
+        for text, expected in (
+            ("Error: quota exceeded for this account", "quota_diagnostic"),
+            ("Falling back to another model", "model_fallback_diagnostic"),
+            ("[warn] failed to set model: Method not found", "model_selection_diagnostic"),
+        ):
+            with self.subTest(diagnostic=expected):
+                envelope = {"type": "result", "subtype": "error_during_execution",
+                            "is_error": True, "errors": [text]}
+                output, error, valid = self.decode(json.dumps(envelope))
+                self.assertEqual(output, "")
+                self.assertFalse(valid)
+                self.assertEqual(role_review.diagnostic_failure(error), expected)
+
     def test_inner_review_can_discuss_errors_without_becoming_a_transport_diagnostic(self):
         self.response["checks"][0]["evidence"] = "quota exceeded\nFalling back to another model"
         output, error, valid = self.decode(json.dumps(self.envelope))

@@ -112,6 +112,8 @@ Outer model-selection/fallback/quota diagnostics remain blocking; reported
 exact Anthropic model name. This does not attest model weights. The extracted
 review still passes the existing nonce, HEAD, role, path, coverage and publication
 checks. Failed envelopes and nonzero exits cannot become successful reviews.
+Terminal envelope diagnostics are inspected even on nonzero exit and cannot be
+erased by a clean retry; ordinary nonzero transient failures retain bounded retries.
 The schema bytes count toward the existing complete-request limit.
 Codex JSONL records split only at literal LF bytes; Unicode separators inside JSON
 strings remain payload. Terminal executor and final-file overflow are handled

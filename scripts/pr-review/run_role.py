@@ -271,20 +271,22 @@ def run(work, tag, kiro_startup=None):
                         output_bytes(error)
                     except Invalid:
                         code, output, error = code or 1, "", "output_byte_limit"
-                elif code == 0:
-                    output, envelope_error, complete = claude_response(output, role["model"])
+                else:
+                    review, envelope_error, complete = claude_response(output, role["model"])
                     if envelope_error == "output_byte_limit":
-                        code, output, error = 1, "", "output_byte_limit"
+                        code, output, error = code or 1, "", "output_byte_limit"
                         break
-                    if not complete:
-                        code = 1
+                    if diagnostic_failure(envelope_error) or (code == 0 and not complete):
+                        code, output = code or 1, ""
                         error += ("\n" if error else "") + envelope_error
                         try:
                             output_bytes(error)
                         except Invalid:
                             error = "output_byte_limit"
-                        # A completed invalid/error envelope is not retryable prose.
+                        # Terminal native diagnostics block even after nonzero exit.
                         break
+                    if code == 0:
+                        output = review
                 if diagnostic_failure(error):
                     code = code or 1
                     break
@@ -369,10 +371,7 @@ def claude_response(raw, expected_model=None):
     try:
         output_bytes(raw)
         envelope = strict_json(raw)
-        if (not isinstance(envelope, dict) or envelope.get("type") != "result"
-                or envelope.get("subtype") != "success"
-                or envelope.get("is_error") is not False
-                or not isinstance(envelope.get("structured_output"), dict)):
+        if not isinstance(envelope, dict) or envelope.get("type") != "result":
             return "", "Claude structured-output envelope is missing or unsuccessful.", False
         # These are outer CLI diagnostics; never scan the review's evidence as logs.
         messages = []
@@ -397,6 +396,10 @@ def claude_response(raw, expected_model=None):
                 return "", failures[failure], False
         if envelope.get("errors"):
             return "", "Claude structured-output envelope reports errors.", False
+        if (envelope.get("subtype") != "success"
+                or envelope.get("is_error") is not False
+                or not isinstance(envelope.get("structured_output"), dict)):
+            return "", "Claude structured-output envelope is missing or unsuccessful.", False
         if expected_model and "modelUsage" in envelope:
             usage = envelope["modelUsage"]
             # Bedrock's configured profile and its exact Anthropic model name are
