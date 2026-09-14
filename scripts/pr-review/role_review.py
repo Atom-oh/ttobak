@@ -785,7 +785,48 @@ def _assignment_spans(value, key):
     operator = re.compile(r"\|\||\?\?|\bor\b")
     line_break = re.compile(r"\r\n?|\n")
     opening = {"(": ")", "[": "]", "{": "}"}
-    last_closing = {char: value.rfind(char) for char in opening.values()}
+    bracket_ends = {}
+    fence_end = re.compile(r"[ \t]*(?:`{3,}|~{3,})[ \t]*(?:\r?\n|\Z)")
+
+    def paired_bracket(start):
+        # Cache matching pairs from the same forward scan. An unrelated later
+        # Markdown link cannot close a bracket inside this bare token.
+        if start in bracket_ends:
+            return bracket_ends[start] is not None
+        pending = [(opening[value[start]], start)]
+        index, quote, escaped = start + 1, None, False
+        while index < len(value):
+            char = value[index]
+            if escaped:
+                escaped = False
+            elif quote:
+                if char == "\\":
+                    escaped = True
+                elif value.startswith(quote, index):
+                    index += len(quote)
+                    quote = None
+                    continue
+            elif (index == 0 or value[index - 1] in "\r\n") and fence_end.match(value, index):
+                break
+            elif char in "\"'`":
+                quote = char * 3 if char != "`" and value.startswith(char * 3, index) else char
+                index += len(quote)
+                continue
+            elif char in opening:
+                pending.append((opening[char], index))
+            elif char in ")]}":
+                closing, position = pending.pop()
+                if char != closing:
+                    return True  # Keep the main scanner's fail-closed behavior.
+                bracket_ends[position] = index
+                if not pending:
+                    return True
+            index += 1
+        if quote or escaped:
+            return True  # An unfinished string is not a bare literal boundary.
+        for _, position in pending:
+            bracket_ends[position] = None
+        return False
     contraction = re.compile(r"(?i:(?:[a-z]+n't|it'[sd]))(?=\s|\Z)")
     def next_content(index):
         while index < len(value) and value[index].isspace():
@@ -820,7 +861,7 @@ def _assignment_spans(value, key):
                     index += len(quote)
                     quote = None
                     continue
-            elif prefix == "`" and char == "`" and not stack:
+            elif prefix in ("\"", "'", "`") and char == prefix and not stack:
                 break
             elif char in "\"'`":
                 continuation_pending = False
@@ -843,7 +884,7 @@ def _assignment_spans(value, key):
                 # An unmatched bracket inside a bare dotenv/shell token is
                 # literal punctuation. Initial containers and calls keep their
                 # existing fail-closed boundary handling.
-                if stack or index == value_start or char == "(" or last_closing[opening[char]] > index:
+                if stack or index == value_start or char == "(" or paired_bracket(index):
                     stack.append(opening[char])
             elif char in ")]}" and stack:
                 if char != stack.pop():
@@ -973,7 +1014,8 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
             index, decoded = quoted_literal(value, opening)
             if decoded is None:
                 continue
-            # Reuse the bounded literal scanner for sensitive JSON keys in prose.
+            hidden_literal = False
+            # Sensitive prose keys must retain the existing key/concatenation scrub.
             if sensitive_key(decoded):
                 colon = index
                 while colon < len(value) and value[colon].isspace():
@@ -983,10 +1025,15 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
                     while literal < len(value) and value[literal].isspace():
                         literal += 1
                     if literal < len(value) and value[literal] in "\"'":
-                        index, _ = quoted_literal(value, literal)
-                        pieces.extend((value[start:literal], '"[REDACTED]"'))
-                        start = index
-                        continue
+                        clean_key = scrub(decoded, _remaining, _depth + 1, False, False)
+                        pieces.extend((value[start:opening], canonical(clean_key), value[index:literal]))
+                        start = opening = literal
+                        index, decoded = quoted_literal(value, literal)
+                        if decoded is None:
+                            pieces.append('"[REDACTED]"')
+                            start = index
+                            continue
+                        hidden_literal = True
             literals = [decoded]
             while index < len(value):
                 next_start = index
@@ -1006,6 +1053,8 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
                 index = end
             decoded = "".join(literals)
             clean = scrub(decoded, _remaining, _depth + 1, False)
+            if hidden_literal:
+                clean = "[REDACTED]"
             replacement = value[opening:index] if clean == decoded else canonical(clean)
             pieces.extend((value[start:opening], replacement))
             start = index
