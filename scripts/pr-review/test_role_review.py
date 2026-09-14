@@ -190,6 +190,8 @@ VERDICT: PASS
         reports += ["printf '%s\\n' '" + json.dumps(item) + "'\nPUBLIC_AFTER\nVERDICT: PASS\n"
                     for item in ({"password": canary}, {"public": "x", "password": canary},
                                  {"password": canary, "public": "x"}, [{"password": canary}])]
+        reports += [f"> ```dotenv\n> password=prefix{opening}{canary}\n> ```\nPUBLIC_AFTER\nVERDICT: PASS\n"
+                    for opening in ("[", "{")]
         for report in reports:
             with self.subTest(report=report):
                 output = self.work / "chair.md"
@@ -244,6 +246,16 @@ VERDICT: PASS
                                 text=True, capture_output=True, cwd=ENGINE.parent, timeout=3)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout), value)
+
+    def test_commented_bracket_lookahead_has_bounded_runtime(self):
+        script = "import json,sys; from role_review import scrub; print(json.dumps(scrub(json.load(sys.stdin))))"
+        for line in ("# password=prefix[\n", "// password=prefix[\n", "/* password=prefix[ */\n"):
+            with self.subTest(line=line):
+                text = line * 4096
+                result = subprocess.run([sys.executable, "-c", script], input=json.dumps(text),
+                                        text=True, capture_output=True, cwd=ENGINE.parent, timeout=3)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn("prefix", json.loads(result.stdout))
 
     def test_ordinary_prose_scrub_has_bounded_runtime(self):
         prose = "The password is required and the token is optional. " * 80
