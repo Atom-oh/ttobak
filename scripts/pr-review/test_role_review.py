@@ -25,17 +25,22 @@ FRONTEND = "dashboard/frontend/components/Button.tsx"
 TAGS = ("codex", "kiro-fable", "kiro-sol", "claude-self")
 
 
-def cookie_continuation_examples(canary):
+def cookie_continuation_examples(canary, include_unclosed=True):
     for header in ("Cookie", "Set-Cookie"):
         for operator in ("||", "??", "or"):
             yield f'{header}: previous {operator}\n  "{canary}"'
         for operator in ("||", "??", "or"):
             yield f'{header}: previous\n  {operator} "{canary}"'
             yield f'{header}: previous {operator} // fallback\n  "{canary}"'
+            yield f'{header}: previous {operator} // don\'t expose this\n"{canary}"'
+            yield f'{header}: previous {operator} # don\'t expose this\n  "{canary}"'
         yield f'{header}: password: |\n  {canary}'
         yield f'+ {header}: password: >\n+   {canary}'
         yield f'{header}: password="prefix\n  {canary}"'
         yield f'{header}: getValue(\n  "{canary}")'
+        if include_unclosed:
+            yield f"{header}: password='prefix\n  {canary}"
+            yield f"+ {header}: password='prefix\n+   {canary}"
         for opening, closing in (("[", "]"), ("{", "}"), ("(", ")")):
             yield f'password: {opening}\n  {header}: {canary}{closing}'
             yield f'+ password: {opening}\n+   {header}: {canary}{closing}'
@@ -50,6 +55,13 @@ def patch(path=FRONTEND, before="old label", after="new label"):
 
 
 class RoleReviewTests(unittest.TestCase):
+    def test_many_escaped_cookie_quotes_have_bounded_runtime(self):
+        report = 'Cookie: value=\\"OPAQUE_COOKIE_VALUE\\"\n' * 4096
+        clean = self.bounded_scrub(report + "PUBLIC_AFTER\nVERDICT: PASS\n")
+        self.assertNotIn("OPAQUE_COOKIE_VALUE", clean)
+        self.assertIn("PUBLIC_AFTER", clean)
+        self.assertTrue(clean.rstrip().endswith("VERDICT: PASS"))
+
     def test_cookie_continuations_hide_values_without_losing_public_tail(self):
         canary = "SYNTHETIC_COOKIE_CONTINUATION"
         for evidence in cookie_continuation_examples(canary):
@@ -143,7 +155,12 @@ class RoleReviewTests(unittest.TestCase):
                     f'Set-Cookie: "prefix\n  {canary}',
                     f'password: "prefix\n  Cookie: {canary}"',
                     f"password: 'prefix\n  Set-Cookie: {canary}'"]
-        cases += [evidence + "\nPUBLIC_AFTER" for evidence in cookie_continuation_examples(canary)]
+        cases += [evidence + "\nPUBLIC_AFTER"
+                  for evidence in cookie_continuation_examples(canary, include_unclosed=False)]
+        # The raw JSON scrubber conservatively removes an unclosed credential's
+        # entire scalar. Report-level public tails are covered by the chair test.
+        cases += [f"{prefix}{header}: password='prefix\n{prefix}  {canary}"
+                  for header in ("Cookie", "Set-Cookie") for prefix in ("", "+ ")]
         for index, evidence in enumerate(cases):
             with self.subTest(case=index):
                 self.work = self.root / f"publication-{index}"

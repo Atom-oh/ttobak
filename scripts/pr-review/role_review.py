@@ -1437,28 +1437,52 @@ def _opaque_scan_view(value, bodies):
     return "".join(pieces)
 
 
-def _owned_body(value, match, kind, key):
+def _quote_ends(value):
+    """Index the next unescaped same-quote delimiter in one input pass."""
+    ends, previous, escaped = {}, {}, False
+    for index, char in enumerate(value):
+        if escaped:
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char in "\"'`":
+            if char in previous:
+                ends[previous[char]] = index + 1
+            ends[index] = None
+            previous[char] = index
+    return ends
+
+
+def _owned_body(value, match, kind, key, quote_ends=None):
     end = match.end()
     if kind == "header":
+        line_end = match.end("header_line")
         start = value.index(":", match.start(), end) + 1
-        while start < end and value[start] in " \t":
+        while start < line_end and value[start] in " \t":
             start += 1
         # Let existing YAML/quoted detectors see a header-owned multiline value.
-        if (start == end or value[start] in "\"'`[{("
-                or re.fullmatch(r"[|>][-+]?[ \t]*", value[start:end])):
+        if (start == line_end or value[start] in "\"'`[{("
+                or re.fullmatch(r"[|>][-+]?[ \t]*", value[start:line_end])):
+            return None
+        # A comment apostrophe is not the boundary of a fallback expression.
+        if (re.search(r"(?:\|\||\?\?|\bor|\\)[ \t]*(?:(?:#|//)[^\r\n]*)?$",
+                      value[start:line_end])
+                or re.compile(r"\s*(?:[+-][ \t]*)?(?:\|\||\?\?|\bor\b)").match(value, line_end)):
             return None
         # Only an unclosed header quote needs opacity to avoid consuming the
         # public tail. Leave complete/multiline expressions to existing detectors.
         quotes = re.compile(r"[\"'`]")
-        literals = re.compile(r"\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`", re.S)
         marker = quotes.search(value, start, end)
         while marker is not None:
-            literal = literals.match(value, marker.start())
-            if literal is None:
+            if marker.start() not in quote_ends:
+                marker = quotes.search(value, marker.end(), end)
+                continue
+            literal_end = quote_ends[marker.start()]
+            if literal_end is None:
                 break
-            if literal.end() > end:
+            if literal_end > end:
                 return None
-            marker = quotes.search(value, literal.end(), end)
+            marker = quotes.search(value, literal_end, end)
         else:
             return None
         prefix = re.match(r"[ \t]*[+-]?[ \t]*", match.group())
@@ -1672,7 +1696,8 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
         r"""(?i:\bAuthorization)["']?\s*:\s*["']?(?i:Basic|Bearer)\s+[A-Za-z0-9+/=_.~-]+""",
         r"""(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]*://[^/\s:@"']*:[^@\s/"']+@""",
         r"""https://hooks\.slack\.com/services/[^\s"'<>]+""",
-        (r"""(?im)^[ \t]*(?:[+-][ \t]*)?(?:set-)?cookie["']?[ \t]*:[^\r\n]*""", 'header'),
+        (r"""(?im)^(?P<header_line>[ \t]*(?:[+-][ \t]*)?(?:set-)?cookie["']?[ \t]*:[^\r\n]*)"""
+         + r"""(?:(?:\r\n?|\n)(?:[+-])?[ \t]+[^\r\n]*)*""", 'header'),
         r"""(?i:\bx-origin-verify)["']?\s*:\s*["']?[^\s"',;}\]]+""",
         (key + r"[|>][-+]?[ \t]*" + line_break + r"(?:" + block_line + r")+", 'block'),
         (r"""(?i:\b(?:header)?name)["']?[ \t]*[:=][ \t]*["']?""" + identifier
@@ -1687,6 +1712,7 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
     )
     spans, bodies = [], []
     scan_value = _opaque_scan_view(value, bodies)
+    quote_ends = None
     for entry in patterns:
         if entry is _assignment_spans:
             spans.extend(_assignment_spans(scan_value, key, _json_enclosing_closers(value)))
@@ -1699,7 +1725,9 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
                 continue
             spans.append(match.span())
             if kind:
-                body = _owned_body(value, match, kind, key)
+                if kind == "header" and quote_ends is None:
+                    quote_ends = _quote_ends(value)
+                body = _owned_body(value, match, kind, key, quote_ends)
                 if body:
                     if kind == "header":
                         # Preserve delimiters owned by an enclosing scalar/container.
