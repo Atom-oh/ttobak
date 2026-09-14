@@ -18,7 +18,7 @@ import sys
 import tempfile
 import time
 
-from role_review import diagnostic_failure, issue_request, issued_request, load_plan, digest, Invalid, MAX_REQUEST_BYTES, MAX_OUTPUT_BYTES, output_bytes, text_file
+from role_review import diagnostic_failure, issue_request, issued_request, load_plan, digest, Invalid, MAX_REQUEST_BYTES, MAX_OUTPUT_BYTES, output_bytes, text_file, strict_json, canonical
 
 
 DIRECTORY = Path(__file__).resolve().parent
@@ -81,6 +81,7 @@ def install_agent(cwd):
 
 
 def preflight(binary, model, cwd, environment, timeout):
+    # Keep model selection and the empty-agent guard on the validated Kiro v1 path.
     install_agent(cwd)
     (cwd / "preflight-canary.txt").write_text(secrets.token_hex(24) + "\n")
     prompt = (
@@ -90,7 +91,7 @@ def preflight(binary, model, cwd, environment, timeout):
     )
     code, output, error = execute(
         [binary, "chat", prompt, "--model", model, "--agent", "inline-review",
-         "--no-interactive", "--wrap", "never"],
+         "--no-interactive", "--wrap", "never", "--legacy-ui", "--agent-engine", "v1"],
         cwd, kiro_environment(cwd, environment), "", timeout,
     )
     reply = re.sub(r"(?m)^\s*> ?", "", ANSI.sub("", output)).strip()
@@ -205,6 +206,7 @@ def run(work, tag, kiro_startup=None):
                     command = [
                         startup.binary, "chat", instruction, "--model", role["model"],
                         "--agent", "inline-review", "--no-interactive", "--wrap", "never",
+                        "--legacy-ui", "--agent-engine", "v1",
                     ]
                     for _ in range(attempts):
                         nonce, framed_prompt, payload = issue_request(work, tag)
@@ -231,7 +233,8 @@ def run(work, tag, kiro_startup=None):
             elif tag == "claude-self":
                 command = [
                     "claude", "-p", prompt, "--model", role["model"],
-                    "--output-format", "text", "--strict-mcp-config", "--tools", "",
+                    "--output-format", "json", "--json-schema", canonical(claude_schema()),
+                    "--strict-mcp-config", "--tools", "",
                 ]
             else:
                 raise ValueError("Unknown specialist")
@@ -248,6 +251,10 @@ def run(work, tag, kiro_startup=None):
                 else:
                     command[2] = framed_prompt
                     delivered = payload
+                    schema = command[command.index("--json-schema") + 1]
+                    if len((framed_prompt + payload + schema).encode()) >= MAX_REQUEST_BYTES:
+                        code, output, error = 1, "", "Complete Claude request exceeds input limit."
+                        break
                 code, output, error = execute(command, cwd, environment, delivered, timeout)
                 if diagnostic_failure(error):
                     code = code or 1
@@ -266,6 +273,22 @@ def run(work, tag, kiro_startup=None):
                         output_bytes(error)
                     except Invalid:
                         code, output, error = code or 1, "", "output_byte_limit"
+                else:
+                    review, envelope_error, complete = claude_response(output, role["model"], code)
+                    if envelope_error == "output_byte_limit":
+                        code, output, error = code or 1, "", "output_byte_limit"
+                        break
+                    if diagnostic_failure(envelope_error) or (code == 0 and not complete):
+                        code, output = code or 1, ""
+                        error += ("\n" if error else "") + envelope_error
+                        try:
+                            output_bytes(error)
+                        except Invalid:
+                            error = "output_byte_limit"
+                        # Terminal native diagnostics block even after nonzero exit.
+                        break
+                    if code == 0:
+                        output = review
                 if diagnostic_failure(error):
                     code = code or 1
                     break
@@ -323,6 +346,94 @@ def main():
     else:
         run(arguments.work.resolve(), arguments.tag)
 
+
+
+def claude_schema():
+    """Request structure; record still verifies exact identity and full coverage."""
+    text = {"type": "string", "minLength": 1}
+
+    def object_schema(properties):
+        return {"type": "object", "properties": properties,
+                "required": list(properties), "additionalProperties": False}
+
+    return object_schema({
+        "head_sha": text, "role": text, "scope_complete": {"type": "boolean"},
+        "reviewed_paths": {"type": "array", "items": text},
+        "checks": {"type": "array", "items": object_schema({"path": text, "evidence": text})},
+        "findings": {"type": "array", "items": object_schema({
+            "severity": {"type": "string", "enum": ["CRITICAL", "MAJOR", "MINOR", "INFO"]},
+            "path": text, "condition": text, "evidence": text,
+        })},
+        "uncertainties": {"type": "array", "items": text},
+    })
+
+
+def claude_response(raw, expected_model=None, exit_code=0):
+    """Only a successful CLI structured_output is eligible for review validation."""
+    try:
+        output_bytes(raw)
+        envelope = strict_json(raw)
+        if not isinstance(envelope, dict) or envelope.get("type") != "result":
+            return "", "Claude structured-output envelope is missing or unsuccessful.", False
+        usage = envelope.get("modelUsage")
+        # Preserve reported mismatches before any generic failure can permit retry.
+        # Profile/model aliases are reported metadata, not proof of provider weights.
+        if expected_model and "modelUsage" in envelope:
+            if not isinstance(usage, dict):
+                return "", "Error: INVALID_MODEL_ID", False
+            names = {expected_model, expected_model.removeprefix("global.anthropic.")}
+            if usage and not names.intersection(usage):
+                return "", "Error: INVALID_MODEL_ID", False
+        # These are outer CLI diagnostics; never scan the review's evidence as logs.
+        messages = []
+        invalid_metadata = False
+        fields = ["errors", "warnings"]
+        if (exit_code != 0 or envelope.get("is_error") is not False
+                or envelope.get("subtype") != "success"):
+            fields.append("result")
+        for field in fields:
+            value = envelope.get(field, [])
+            if isinstance(value, str):
+                messages.append(value)
+            elif isinstance(value, list):
+                messages.extend(item for item in value if isinstance(item, str))
+                invalid_metadata |= any(not isinstance(item, str) for item in value)
+            else:
+                invalid_metadata = True
+        failures = {
+            "model_selection_diagnostic": "Error: INVALID_MODEL_ID",
+            "model_fallback_diagnostic": "Falling back to another model",
+            "quota_diagnostic": "quota exceeded",
+            "agent_preflight_diagnostic": "no agent with name inline-review found",
+            "output_byte_limit": "output_byte_limit",
+        }
+        for message in messages:
+            failure = diagnostic_failure(message)
+            if failure:
+                return "", failures[failure], False
+        if invalid_metadata:
+            return "", "Claude structured-output diagnostic metadata is invalid.", False
+        if envelope.get("errors"):
+            return "", "Claude structured-output envelope reports errors.", False
+        if (envelope.get("subtype") != "success"
+                or envelope.get("is_error") is not False
+                or not isinstance(envelope.get("structured_output"), dict)):
+            return "", "Claude structured-output envelope is missing or unsuccessful.", False
+        if expected_model and "modelUsage" in envelope:
+            if not usage:
+                return "", "Error: INVALID_MODEL_ID", False
+        output = canonical(envelope["structured_output"])
+        # Keep controls escaped until sanitization operates on individual strings.
+        controls = [*range(0x20), *range(0x7F, 0xA0), 0x2028, 0x2029]
+        output = output.translate({code: f"\\u{code:04x}" for code in controls})
+        output_bytes(output)
+    except Invalid as exc:
+        if str(exc) == "output_byte_limit":
+            return "", "output_byte_limit", False
+        return "", "Claude structured-output envelope is invalid JSON.", False
+    except (UnicodeError, RecursionError):
+        return "", "Claude structured-output envelope is invalid JSON.", False
+    return output, "", True
 
 
 def codex_response(raw, final_path):

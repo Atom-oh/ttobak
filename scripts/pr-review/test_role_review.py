@@ -668,7 +668,9 @@ class RoleReviewTests(unittest.TestCase):
             "severity": "MINOR", "path": FRONTEND, "condition": "On raw alias generation",
             "evidence": json.dumps(value),
         }])
-        with mock_patch.object(run_role, "execute", return_value=(0, json.dumps(response), "")):
+        envelope = {"type": "result", "subtype": "success", "is_error": False,
+                    "structured_output": response}
+        with mock_patch.object(run_role, "execute", return_value=(0, json.dumps(envelope), "")):
             run_role.run(self.work, "claude-self")
         self.record("codex")
         self.cli("aggregate", "--work", self.work)
