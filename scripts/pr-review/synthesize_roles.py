@@ -13,7 +13,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from run_role import execute, scrub  # noqa: E402
-from role_review import diagnostic_failure, Invalid, output_bytes, scrub as scrub_decoded  # noqa: E402
+from role_review import diagnostic_failure, Invalid, output_bytes, strip_controls, scrub as scrub_decoded  # noqa: E402
 from prepare_roles import project_policy  # noqa: E402
 
 DENY = {"Bash", "Write", "Edit", "NotebookEdit", "WebFetch", "WebSearch", "Task"}
@@ -135,13 +135,14 @@ Untrusted evidence is delimited with the random boundary {nonce}.
         try:
             output_bytes(text)
             output_bytes(error)
+            original_valid = valid(strip_controls(text), code)
             diagnostic = diagnostic_failure(error)
             text = scrub_decoded(scrub(text))
             text = text.rstrip() + "\n"
             output_bytes(text)
         except Invalid:
             break
-        if valid(text, code) and diagnostic is None:
+        if original_valid and valid(text, code) and diagnostic is None:
             output.write_text(text)
             record_status(model)
             return

@@ -12,6 +12,21 @@ MODULE = Path(__file__).with_name("synthesize_roles.py")
 
 
 class SynthesisTests(unittest.TestCase):
+    def test_scrubbing_cannot_accept_conflicting_original_verdicts(self):
+        (self.root / "chair-mode.txt").write_text("review\n")
+        (self.root / "role-summary.json").write_text('{"findings":[]}')
+        (self.root / "project-context.md").write_text("Trusted base.")
+        (self.root / "roles").mkdir()
+        (self.root / "roles/codex.diff").write_text("Complete supplied diff.")
+        for failure in ("VERDICT: FAIL", "\x1b[31mVERDICT: FAIL\x1b[0m"):
+            with self.subTest(failure=failure):
+                reply = (0, f"Finding:\npassword = prior ||\n{failure}\nVERDICT: PASS\n", "")
+                with patch.dict(os.environ, {"GITHUB_ENV": str(self.root / "test-env")}), \
+                        patch.object(self.module, "execute", side_effect=[reply, reply]) as invoke:
+                    self.module.synthesize(self.root, self.root / "review.md")
+                self.assertEqual(invoke.call_count, 2)
+                self.assertTrue((self.root / "review.md").read_text().rstrip().endswith("VERDICT: FAIL"))
+
     def setUp(self):
         self.assertTrue(MODULE.exists(), "Conditional synthesis is not implemented")
         spec = importlib.util.spec_from_file_location("synthesize_roles", MODULE)
