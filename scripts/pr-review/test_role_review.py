@@ -40,6 +40,8 @@ def cookie_continuation_examples(canary, include_unclosed=True):
         yield f'+ {header}: password: >\n+   {canary}'
         yield f'{header}: password="prefix\n  {canary}"'
         yield f'{header}: getValue(\n  "{canary}")'
+        for comment in ("// don't change fallback", "/* don't change fallback */"):
+            yield f'{header}: getValue( {comment}\n\n"{canary}")'
         if include_unclosed:
             yield f"{header}: password='prefix\n  {canary}"
             yield f"+ {header}: password='prefix\n+   {canary}"
@@ -61,6 +63,23 @@ def patch(path=FRONTEND, before="old label", after="new label"):
 
 
 class RoleReviewTests(unittest.TestCase):
+    def test_folded_cookie_does_not_consume_public_siblings_or_blank_separators(self):
+        canary = "SYNTHETIC_FOLDED_COOKIE"
+        for header in ("Cookie", "Set-Cookie"):
+            for prefix in ("", "+ ", "- "):
+                for boundary in ("", f"{prefix}   \n"):
+                    report = (f"{prefix}config:\n{prefix}  headers:\n"
+                              f"{prefix}    {header}: {canary}\n"
+                              f"{boundary}{prefix}    accept: application/json\n"
+                              f"{prefix}  retries: 2\n{prefix}  timeout: 30\n"
+                              f"{prefix}  ```\nPUBLIC_AFTER\nVERDICT: PASS\n")
+                    with self.subTest(report=report):
+                        clean = role_review.scrub(report)
+                        self.assertNotIn(canary, clean)
+                        for public in ("accept: application/json", "retries: 2", "timeout: 30", "```"):
+                            self.assertIn(public, clean)
+                        self.assertTrue(clean.rstrip().endswith("VERDICT: PASS"))
+
     def test_many_escaped_cookie_quotes_have_bounded_runtime(self):
         report = 'Cookie: value=\\"OPAQUE_COOKIE_VALUE\\"\n' * 4096
         clean = self.bounded_scrub(report + "PUBLIC_AFTER\nVERDICT: PASS\n")

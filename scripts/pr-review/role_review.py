@@ -1453,8 +1453,30 @@ def _quote_ends(value):
     return ends
 
 
-def _owned_body(value, match, kind, key, quote_ends=None):
+def _folded_header_end(value, match):
+    """Include only nonblank lines indented deeper than the header."""
+    prefix = re.compile(r"[ \t]*(?:[+-][ \t]*)?")
+    line = re.compile(r"[^\r\n]*")
+    newline = re.compile(r"\r\n?|\n")
+
+    def indentation(start, end):
+        head = prefix.match(value, start, end)
+        whitespace = head.group().replace("+", "").replace("-", "")
+        return len(whitespace.expandtabs(8)), head.end()
+
+    depth, _ = indentation(match.start(), match.end())
     end = match.end()
+    while (separator := newline.match(value, end)) is not None:
+        following = line.match(value, separator.end())
+        next_depth, content = indentation(following.start(), following.end())
+        if content == following.end() or next_depth <= depth:
+            break
+        end = following.end()
+    return end
+
+
+def _owned_body(value, match, kind, key, quote_ends=None, header_end=None):
+    end = match.end() if header_end is None else header_end
     if kind == "header":
         line_end = match.end("header_line")
         start = value.index(":", match.start(), end) + 1
@@ -1471,9 +1493,11 @@ def _owned_body(value, match, kind, key, quote_ends=None):
             return None
         # Only an unclosed header quote needs opacity to avoid consuming the
         # public tail. Leave complete/multiline expressions to existing detectors.
-        quotes = re.compile(r"[\"'`]")
+        quotes = re.compile(r"""["'`]|(?<!\S)(?:#|//)|/\*""")
         marker = quotes.search(value, start, end)
         while marker is not None:
+            if marker.group() not in "\"'`":
+                return None
             if marker.start() not in quote_ends:
                 marker = quotes.search(value, marker.end(), end)
                 continue
@@ -1696,8 +1720,7 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
         r"""(?i:\bAuthorization)["']?\s*:\s*["']?(?i:Basic|Bearer)\s+[A-Za-z0-9+/=_.~-]+""",
         r"""(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]*://[^/\s:@"']*:[^@\s/"']+@""",
         r"""https://hooks\.slack\.com/services/[^\s"'<>]+""",
-        (r"""(?im)^(?P<header_line>[ \t]*(?:[+-][ \t]*)?(?:set-)?cookie["']?[ \t]*:[^\r\n]*)"""
-         + r"""(?:(?:\r\n?|\n)(?:[+-])?[ \t]+[^\r\n]*)*""", 'header'),
+        (r"""(?im)^(?P<header_line>[ \t]*(?:[+-][ \t]*)?(?:set-)?cookie["']?[ \t]*:[^\r\n]*)""", 'header'),
         r"""(?i:\bx-origin-verify)["']?\s*:\s*["']?[^\s"',;}\]]+""",
         (key + r"[|>][-+]?[ \t]*" + line_break + r"(?:" + block_line + r")+", 'block'),
         (r"""(?i:\b(?:header)?name)["']?[ \t]*[:=][ \t]*["']?""" + identifier
@@ -1718,16 +1741,22 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
             spans.extend(_assignment_spans(scan_value, key, _json_enclosing_closers(value)))
             continue
         pattern, kind = entry if isinstance(entry, tuple) else (entry, None)
+        header_cursor = -1
         for match in re.finditer(pattern, scan_value, flags=re.S):
+            header_end = None
+            if kind == "header":
+                if match.start() < header_cursor:
+                    continue
+                header_end = header_cursor = _folded_header_end(value, match)
             if kind == "named" and match.group("owned_value").lstrip().startswith("<<"):
                 # An unresolved sensitive heredoc retains the legacy tail guard.
                 spans.append((match.start(), len(value)))
                 continue
-            spans.append(match.span())
+            spans.append((match.start(), header_end) if header_end is not None else match.span())
             if kind:
                 if kind == "header" and quote_ends is None:
                     quote_ends = _quote_ends(value)
-                body = _owned_body(value, match, kind, key, quote_ends)
+                body = _owned_body(value, match, kind, key, quote_ends, header_end)
                 if body:
                     if kind == "header":
                         # Preserve enclosing delimiters and YAML/diff line structure.
