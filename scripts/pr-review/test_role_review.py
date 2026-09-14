@@ -57,6 +57,15 @@ class RoleReviewTests(unittest.TestCase):
             f'The new secret: name="PASSWORD", value="{canary}"',
             f"""curl -d "password="'{canary}'"&user=demo" https://example.invalid""",
         ]
+        cases += [
+            f"password = prior  # don't use token='prefix,{canary}'",
+            f"password = prior  // don't use token='prefix,{canary}'",
+            f"password=https://example.invalid/#{canary}\nPUBLIC_AFTER",
+        ]
+        cases += [
+            f'password = previous ||\n  // local fallback\n  "{canary}"\nPUBLIC_AFTER',
+            f'password = previous || // local fallback\n  "{canary}"\nPUBLIC_AFTER',
+        ]
         cases += [prefix + json.dumps({key: canary}) + suffix
                   for key in ("/prod/db/password", "password[0]", "api key (prod)")
                   for prefix, suffix in (("", ""), ("Evidence: ", "\nPUBLIC_AFTER"))]
@@ -106,10 +115,19 @@ class RoleReviewTests(unittest.TestCase):
         self.cli("aggregate", "--work", self.work)
         self.assertEqual(self.read("role-summary.json")["mode"], "review")
         canary = "SYNTHETIC_CHAIR_PRIVATE_VALUE"
-        for operator in ("or", "||", "??"):
-            with self.subTest(operator=operator):
-                report = (f'Resolved synthetic candidate.\n\n```text\npassword = (previous {operator}\n'
-                          f'  "{canary}")\n```\n- PUBLIC_AFTER\n\nVERDICT: PASS\n')
+        reports = [(f'Resolved synthetic candidate.\n\n```text\npassword = (previous {operator}\n'
+                    f'  "{canary}")\n```\n- PUBLIC_AFTER\n\nVERDICT: PASS\n')
+                   for operator in ("or", "||", "??")]
+        reports += [
+            f"password=\"{canary}\" isn't rotated\nPUBLIC_AFTER\nVERDICT: PASS\n",
+            f"Checked `password={canary}`; PUBLIC_AFTER\nVERDICT: PASS\n",
+            f"""curl -d "password="'{canary}'"&user=demo" https://example.invalid
+PUBLIC_AFTER
+VERDICT: PASS
+""",
+        ]
+        for report in reports:
+            with self.subTest(report=report):
                 output = self.work / "chair.md"
                 with mock_patch.dict(synthesize_roles.os.environ, {"GITHUB_ENV": str(self.root / "test-env")}), \
                         mock_patch.object(synthesize_roles, "execute", return_value=(0, report, "")) as execute:
