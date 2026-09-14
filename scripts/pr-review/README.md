@@ -107,7 +107,8 @@ remain visible; terminal provider errors still block.
 Claude uses [`--output-format json --json-schema`](https://code.claude.com/docs/en/headless)
 and accepts only a successful result envelope containing an object in
 `structured_output`. There is no prose, fenced-JSON or `.result` fallback.
-Outer model-selection/fallback/quota diagnostics remain blocking; reported
+Model-selection/fallback/quota diagnostics in native `type=result` envelopes and
+stderr remain blocking; reported
 `modelUsage`, when present, must include the requested Bedrock profile or its
 exact Anthropic model name. This does not attest model weights. The extracted
 review still passes the existing nonce, HEAD, role, path, coverage and publication
@@ -116,6 +117,7 @@ Terminal envelope diagnostics are inspected even on nonzero exit and cannot be
 erased by a clean retry; ordinary nonzero transient failures retain bounded retries.
 Successful `.result` prose is not a diagnostic stream. Error result text and
 explicit `errors`/`warnings` retain diagnostic checks, as does stderr.
+These fields refer to native result envelopes, not arbitrary stdout formats.
 Malformed sibling fields or list members do not hide recognized terminal messages;
 valid strings are scanned before returning a generic metadata error.
 Present non-dictionary `modelUsage` and nonempty usage excluding the requested
@@ -125,6 +127,17 @@ The schema bytes count toward the existing complete-request limit.
 The Claude handoff keeps C0, DEL, C1 and U+2028/U+2029 escaped until JSON parsing,
 so raw control stripping cannot consume structure across strings or findings.
 Other text, including Korean, remains literal UTF-8; expansion stays byte-bounded.
+
+Nonzero stdout outside a native result envelope retains the existing generic
+retry policy; it is never accepted as a review. An offline subprocess comparison
+of base `c771295` and implementation `46651ed` used a nonzero failure followed by a
+valid response: plain terminal text, a terminal line before malformed JSON, and
+another JSON error object each took two calls and passed on **both** revisions.
+A terminal stderr control blocked after one call on both. A terminal diagnostic
+inside a native result envelope improved from two calls/pass on base to one
+call/blocked on the implementation. The raw-stdout classification gap is
+pre-existing, not a native-envelope guarantee or a waiver of required coverage.
+
 Codex JSONL records split only at literal LF bytes; Unicode separators inside JSON
 strings remain payload. Terminal executor and final-file overflow are handled
 before transport parsing or diagnostic concatenation and cannot trigger retry.
