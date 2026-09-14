@@ -180,8 +180,14 @@ class TestDocumentRetrieval(_SourceFixture, unittest.TestCase):
                 }
                 results = self.retrieve('file code', user_id='owner')
                 self.assertEqual(results[0]['provenance']['contentSource'], 'verified_indexed_file')
+                self.assertNotIn('filePending', results[0]['document'])
+                self.assertNotIn('filePending', results[0]['provenance'])
                 before = copy.deepcopy(results)
                 formatted = format_source_results(results)
+                self.assertNotIn('filePending', formatted)
+                self.assertNotIn('미확인', formatted)
+                self.assertIn('검증된 색인 발췌입니다', formatted)
+                self.assertIn('전체 파일을 읽은 것으로 간주하지 마세요', formatted)
                 self.assertIn('get_document_detail은 저장된 Markdown만 읽습니다', formatted)
                 self.assertIn('바이너리 파일 전체를 읽는 기능이 없으므로', formatted)
                 self.assertIn('전체 파일을 읽는 방법으로 get_document_detail을 제안하지 마세요', formatted)
@@ -197,6 +203,8 @@ class TestDocumentRetrieval(_SourceFixture, unittest.TestCase):
         self.doc(content='SAVED_MARKDOWN ' + 'm' * 3000)
         formatted = format_source_results(self.retrieve('SAVED_MARKDOWN', user_id='owner'))
         self.assertIn('get_document_detail(sourcePK, docId, offset=0)로 이어 읽으세요', formatted)
+        self.assertNotIn('filePending', formatted)
+        self.assertNotIn('검증된 색인 발췌입니다', formatted)
         self.assertNotIn('바이너리 파일 전체를 읽는 기능이 없으므로', formatted)
         snapshot = json.loads(formatted.splitlines()[-1])
         self.assertTrue(snapshot['content']['partial'])
@@ -210,8 +218,24 @@ class TestDocumentRetrieval(_SourceFixture, unittest.TestCase):
         formatted = format_source_results([result])
         self.assertIn('저장된 Markdown 본문이 없습니다', formatted)
         self.assertIn('바이너리 파일 전체를 읽는 기능이 없으므로', formatted)
+        self.assertIn('filePending=true는 현재 파일 본문 미확인입니다', formatted)
+        self.assertNotIn('검증된 색인 발췌입니다', formatted)
         self.assertNotIn('get_document_detail(sourcePK, docId, offset=0)', formatted)
         self.assertTrue(json.loads(formatted.splitlines()[-1])['filePending'])
+
+    def test_file_status_guidance_is_scoped_to_each_result(self):
+        verified = {'uri': 'ttobak://source/ready', 'text': 'VERIFIED_EXCERPT',
+                    'document': {'docId': 'ready', 'content': 'SAVED_MARKDOWN'},
+                    'provenance': {'contentSource': 'verified_indexed_file'}}
+        pending = {'uri': 'ttobak://source/pending',
+                   'document': {'docId': 'pending', 'content': '', 'filePending': True},
+                   'provenance': {'contentSource': 'current_saved', 'filePending': True}}
+        first, second = format_source_results([verified, pending]).split('\n\n---\n\n')
+        self.assertIn('검증된 색인 발췌입니다', first)
+        self.assertNotIn('filePending', first)
+        self.assertIn('get_document_detail(sourcePK, docId, offset=0)', first)
+        self.assertIn('filePending=true는 현재 파일 본문 미확인입니다', second)
+        self.assertNotIn('검증된 색인 발췌입니다', second)
 
     def test_account_file_replacement_by_another_member_keeps_creation_author(self):
         self.doc(pk='ACCOUNT#team', content='', sourceUserId='original-creator',
