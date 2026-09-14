@@ -3,6 +3,10 @@
 Historical delivery record begun on 2026-09-12. This follows the 2026-09-11 audit and covers the entire requested improvement
 set. Completing one PR does not complete the overall goal.
 
+The table and activation boundary below preserve the September 12 snapshot.
+See the [September 14 acceptance record](2026-09-14-ai-note-acceptance.md) for
+subsequent deployed observations, limitations and remaining work.
+
 | Item | Required resulting behavior | Completion evidence | Status |
 | --- | --- | --- | --- |
 | Extraction recovery | Failed action-item extraction is visibly different from successful `[]`; previous results survive failures; authorized users can retry and persist completion checks without stale writes | PR194–198; Go tests/vet, frontend lint/build, infra tests/synth; merged and deployed | Delivered |
