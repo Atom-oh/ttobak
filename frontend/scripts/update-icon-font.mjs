@@ -2,12 +2,11 @@ import { createHash } from 'node:crypto';
 import { readFile, readdir, writeFile, mkdir } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { gzipSync, gunzipSync } from 'node:zlib';
 import ts from 'typescript';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const assets = join(root, 'src/app/fonts');
-const codepointsPath = join(assets, 'material-symbols.codepoints.gz');
+const codepointsPath = join(assets, 'material-symbols.codepoints');
 const manifestPath = join(assets, 'material-symbols.json');
 const cssPath = join(assets, 'material-symbols.css');
 const licensePath = join(root, 'public/licenses/material-symbols.txt');
@@ -30,7 +29,7 @@ async function readSources(directory) {
 }
 
 function collectIcons(sources, codepoints) {
-  const catalog = new Map(codepoints.trim().split(/\r?\n/).map(line => line.split(/\s+/)));
+  const catalog = new Map(codepoints.trim().split(/\r?\n|\t/).map(entry => entry.split(/\s+/)));
   const icons = new Set();
   for (const { path, text } of sources) {
     if (path.endsWith('.css')) {
@@ -66,7 +65,7 @@ async function download(url) {
 
 async function check(sources) {
   const [codepoints, manifest, css, license] = await Promise.all([
-    readFile(codepointsPath).then(bytes => gunzipSync(bytes).toString('utf8')),
+    readFile(codepointsPath, 'utf8'),
     readFile(manifestPath, 'utf8').then(JSON.parse),
     readFile(cssPath, 'utf8'),
     readFile(licensePath),
@@ -87,7 +86,11 @@ async function check(sources) {
 }
 
 async function update(sources) {
-  const codepoints = (await download(`${upstream}variablefont/MaterialSymbolsOutlined%5BFILL,GRAD,opsz,wght%5D.codepoints`)).toString('utf8');
+  const originalCatalog = await download(`${upstream}variablefont/MaterialSymbolsOutlined%5BFILL,GRAD,opsz,wght%5D.codepoints`);
+  const entries = originalCatalog.toString('utf8').trim().split(/\r?\n/);
+  const rows = [];
+  for (let i = 0; i < entries.length; i += 4) rows.push(entries.slice(i, i + 4).join('\t'));
+  const codepoints = `${rows.join('\n')}\n`;
   const icons = collectIcons(sources, codepoints);
   const query = new URLSearchParams({ family, icon_names: icons.join(','), display: 'block' });
   const stylesheetUrl = `https://fonts.googleapis.com/css2?${query}`;
@@ -112,7 +115,21 @@ async function update(sources) {
 `;
   await mkdir(assets, { recursive: true });
   await mkdir(dirname(licensePath), { recursive: true });
-  await writeFile(codepointsPath, gzipSync(codepoints, { level: 9 }));
+  await writeFile(codepointsPath, codepoints);
+  await writeFile(join(assets, 'README.md'), `# Material Symbols source catalog
+
+This is the upstream Material Symbols Outlined icon-name/codepoint catalog,
+licensed under Apache-2.0. The license is served at \`/licenses/material-symbols.txt\`.
+
+Source: https://github.com/google/material-design-icons/blob/master/variablefont/MaterialSymbolsOutlined%5BFILL,GRAD,opsz,wght%5D.codepoints
+
+The ${entries.length} original records are grouped four per line, separated by tabs.
+Names and codepoints are unchanged; each record contains one name and one hex
+codepoint. This catalog is generator input, not a runtime download.
+
+Original upstream bytes SHA-256: \`${digest(originalCatalog)}\`.
+Checked-in catalog SHA-256: \`${digest(codepoints)}\`.
+`);
   await writeFile(licensePath, license);
   await writeFile(cssPath, css);
   await writeFile(manifestPath, `${JSON.stringify({ family, fontUrl, sha256: digest(font), catalogSha256: digest(codepoints), licenseSha256: digest(license), icons }, null, 2)}\n`);
