@@ -7,6 +7,7 @@ import { meetingsApi } from '@/lib/api';
 import type { AccountSummary, Meeting, MeetingListFilter } from '@/types/meeting';
 import { SkeletonCard } from '@/components/ui/Skeleton';
 import { AccountTreePicker } from '@/components/AccountTreePicker';
+import { MeetingSummaryPreview } from '@/components/meeting/MeetingSummaryPreview';
 
 interface MeetingListProps {
   meetings: Meeting[];
@@ -164,9 +165,7 @@ function MeetingCard({ meeting, onDelete }: { meeting: Meeting; onDelete?: (meet
         </div>
 
         {meeting.summary && (
-          <p className="text-slate-600 dark:text-text-secondary text-sm line-clamp-2 lg:line-clamp-3 leading-relaxed mb-4">
-            {meeting.summary}
-          </p>
+          <MeetingSummaryPreview content={meeting.summary} />
         )}
 
         {meeting.tags && meeting.tags.length > 1 && (
