@@ -33,6 +33,9 @@ export const metadata: Metadata = {
   title: 'TTOBAK - AI Meeting Assistant',
   description: 'Record, transcribe, and summarize your meetings with AI',
   manifest: '/manifest.json',
+  other: {
+    'material-symbols-license': '/licenses/material-symbols.txt',
+  },
   icons: {
     icon: [
       { url: '/favicon.ico', sizes: '48x48' },
@@ -68,10 +71,6 @@ export default function RootLayout({
           dangerouslySetInnerHTML={{
             __html: `(function(){var R=0;function reload(){if(R)return;R=1;window.location.reload()}window.addEventListener('error',function(e){if(e.message&&(/ChunkLoadError|Loading chunk|Failed to fetch dynamically imported module/.test(e.message)))reload()});window.addEventListener('unhandledrejection',function(e){var r=e.reason;if(r&&(r.name==='ChunkLoadError'||(/Loading chunk|dynamically imported module/.test(r.message||''))))reload()})})()`,
           }}
-        />
-        <link
-          href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap"
-          rel="stylesheet"
         />
       </head>
       <body className="font-sans antialiased bg-background-light dark:bg-background-dark text-slate-900 dark:text-slate-100">

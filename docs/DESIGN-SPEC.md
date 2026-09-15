@@ -23,6 +23,15 @@ Background-light/background-dark remain separate tokens. Material Symbols
 Outlined supply icons. Legacy glass/glow/neon class names remain compatibility
 hooks with flat/no-glow styling; their presence is not a request to restore neon.
 Typography and component dimensions come from CSS/layout components, not DESIGN.md.
+Material Symbols is bundled as a WOFF2 subset inside the app CSS, with fixed icon
+boxes, so names such as `record_voice_over` never flash while an external font
+loads. The subset preserves fill variants and optical sizes 20–24 at weight 400.
+After adding icons, run `npm run icons:update` in `frontend` to refresh the subset,
+upstream text catalog, manifest and public Apache-2.0 license. Production
+builds run `icons:check` offline to check source coverage and asset integrity.
+The scanner includes known icon names in source literals, including helpers and
+lookup tables; constructed names need explicit literals. The license ships at
+`/licenses/material-symbols.txt`.
 
 `useTheme` owns interactive theme toggling and watches the root class. Its fixed
 initial dark value matches static prerendering; mount-time synchronization is
