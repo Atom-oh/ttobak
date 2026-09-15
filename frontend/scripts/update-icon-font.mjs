@@ -1,0 +1,124 @@
+import { createHash } from 'node:crypto';
+import { readFile, readdir, writeFile, mkdir } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { gzipSync, gunzipSync } from 'node:zlib';
+import ts from 'typescript';
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const assets = join(root, 'src/app/fonts');
+const codepointsPath = join(assets, 'material-symbols.codepoints.gz');
+const manifestPath = join(assets, 'material-symbols.json');
+const cssPath = join(assets, 'material-symbols.css');
+const licensePath = join(root, 'public/licenses/material-symbols.txt');
+const upstream = 'https://raw.githubusercontent.com/google/material-design-icons/master/';
+const family = 'Material Symbols Outlined:opsz,wght,FILL,GRAD@20..24,400,0..1,0';
+const userAgent = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
+const digest = data => createHash('sha256').update(data).digest('hex');
+
+async function readSources(directory) {
+  const sources = [];
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      if (path !== assets) sources.push(...await readSources(path));
+    } else if (/\.(tsx?|css)$/.test(entry.name)) {
+      sources.push({ path, text: await readFile(path, 'utf8') });
+    }
+  }
+  return sources;
+}
+
+function collectIcons(sources, codepoints) {
+  const catalog = new Map(codepoints.trim().split(/\r?\n/).map(line => line.split(/\s+/)));
+  const icons = new Set();
+  for (const { path, text } of sources) {
+    if (path.endsWith('.css')) {
+      const escapes = new Set([...text.matchAll(/\\([a-fA-F0-9]{4,6})\b/g)].map(match => match[1].toLowerCase()));
+      for (const [name, codepoint] of catalog) {
+        if (escapes.has(codepoint)) icons.add(name);
+      }
+      continue;
+    }
+    const source = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true);
+    function visit(node) {
+      // Include literals in helpers/configuration too, so conditional icon names
+      // and shared lookup tables are covered without evaluating application code.
+      if (ts.isStringLiteralLike(node) || ts.isJsxText(node)) {
+        const value = node.text.trim();
+        if (catalog.has(value)) icons.add(value);
+      }
+      ts.forEachChild(node, visit);
+    }
+    visit(source);
+  }
+  return [...icons].sort();
+}
+
+async function download(url) {
+  const response = await fetch(url, {
+    headers: { 'User-Agent': userAgent },
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!response.ok) throw new Error(`Font asset download failed: HTTP ${response.status}`);
+  return Buffer.from(await response.arrayBuffer());
+}
+
+async function check(sources) {
+  const [codepoints, manifest, css, license] = await Promise.all([
+    readFile(codepointsPath).then(bytes => gunzipSync(bytes).toString('utf8')),
+    readFile(manifestPath, 'utf8').then(JSON.parse),
+    readFile(cssPath, 'utf8'),
+    readFile(licensePath),
+  ]);
+  if (digest(codepoints) !== manifest.catalogSha256) {
+    throw new Error('Bundled icon catalog does not match its manifest. Run npm run icons:update.');
+  }
+  const missing = collectIcons(sources, codepoints).filter(name => !manifest.icons.includes(name));
+  if (missing.length) throw new Error(`Missing bundled icons: ${missing.join(', ')}. Run npm run icons:update.`);
+  const encoded = css.match(/data:font\/woff2;base64,([A-Za-z0-9+/=]+)/)?.[1];
+  if (!encoded || digest(Buffer.from(encoded, 'base64')) !== manifest.sha256) {
+    throw new Error('Bundled icon font does not match its manifest. Run npm run icons:update.');
+  }
+  if (digest(license) !== manifest.licenseSha256) {
+    throw new Error('Public icon font license does not match its manifest. Run npm run icons:update.');
+  }
+  console.log(`Icon font verified: ${manifest.icons.length} symbols, no build-time download.`);
+}
+
+async function update(sources) {
+  const codepoints = (await download(`${upstream}variablefont/MaterialSymbolsOutlined%5BFILL,GRAD,opsz,wght%5D.codepoints`)).toString('utf8');
+  const icons = collectIcons(sources, codepoints);
+  const query = new URLSearchParams({ family, icon_names: icons.join(','), display: 'block' });
+  const stylesheetUrl = `https://fonts.googleapis.com/css2?${query}`;
+  const stylesheet = (await download(stylesheetUrl)).toString('utf8');
+  const fontUrl = stylesheet.match(/src:\s*url\((https:\/\/fonts\.gstatic\.com\/[^)]+)\)\s*format\(['"]woff2['"]\)/)?.[1];
+  if (!fontUrl) throw new Error('Google Fonts did not return a WOFF2 icon subset.');
+  const font = await download(fontUrl);
+  if (font.toString('ascii', 0, 4) !== 'wOF2' || font.length > 256 * 1024) {
+    throw new Error('Expected a WOFF2 icon subset smaller than 256 KiB.');
+  }
+  const license = await download(`${upstream}LICENSE`);
+  const css = `/*! Material Symbols (Google), subset generated by npm run icons:update.
+ * Apache-2.0: /licenses/material-symbols.txt */
+/* Embedded in the render-blocking CSS so icons never swap from visible ligature names. */
+@font-face {
+  font-family: 'Material Symbols Outlined';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url(data:font/woff2;base64,${font.toString('base64')}) format('woff2');
+}
+`;
+  await mkdir(assets, { recursive: true });
+  await mkdir(dirname(licensePath), { recursive: true });
+  await writeFile(codepointsPath, gzipSync(codepoints, { level: 9 }));
+  await writeFile(licensePath, license);
+  await writeFile(cssPath, css);
+  await writeFile(manifestPath, `${JSON.stringify({ family, fontUrl, sha256: digest(font), catalogSha256: digest(codepoints), licenseSha256: digest(license), icons }, null, 2)}\n`);
+  console.log(`Bundled ${icons.length} symbols in ${font.length} WOFF2 bytes.`);
+}
+
+const sources = await readSources(join(root, 'src'));
+if (process.argv.includes('--check')) await check(sources);
+else await update(sources);
