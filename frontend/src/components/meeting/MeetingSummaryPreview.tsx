@@ -5,7 +5,7 @@ import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
 function PreviewHeading({ children }: { children?: ReactNode }) {
-  return <p className="m-0 font-semibold text-slate-700 dark:text-text-main">{children}</p>;
+  return <span className="mr-1 font-semibold text-slate-700 dark:text-text-main">{children}</span>;
 }
 
 const components: Components = {
