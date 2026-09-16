@@ -1,8 +1,18 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
 const STORAGE_KEY = 'ttobak-mic-deviceId';
+
+async function readAudioDevices(mediaDevices: MediaDevices): Promise<MediaDeviceInfo[] | null> {
+  try {
+    const devices = await mediaDevices.enumerateDevices();
+    return devices.filter((device) => device.kind === 'audioinput');
+  } catch {
+    // Permission denied or unavailable; retain the last successful list.
+    return null;
+  }
+}
 
 export function useAudioDevices() {
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
@@ -10,25 +20,32 @@ export function useAudioDevices() {
     if (typeof window === 'undefined') return '';
     return localStorage.getItem(STORAGE_KEY) || '';
   });
-
-  const enumerate = useCallback(async () => {
-    if (typeof navigator === 'undefined' || !navigator.mediaDevices) return;
-    try {
-      const allDevices = await navigator.mediaDevices.enumerateDevices();
-      setDevices(allDevices.filter((d) => d.kind === 'audioinput'));
-    } catch {
-      // Permission denied or unavailable
-    }
-  }, []);
+  const refreshRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     if (typeof navigator === 'undefined' || !navigator.mediaDevices) return;
-    enumerate();
-    navigator.mediaDevices.addEventListener('devicechange', enumerate);
-    return () => {
-      navigator.mediaDevices.removeEventListener('devicechange', enumerate);
+    const mediaDevices = navigator.mediaDevices;
+    let active = true;
+    let requestId = 0;
+
+    const enumerate = () => {
+      const currentRequestId = ++requestId;
+      void readAudioDevices(mediaDevices).then((audioDevices) => {
+        if (active && currentRequestId === requestId && audioDevices !== null) {
+          setDevices(audioDevices);
+        }
+      });
     };
-  }, [enumerate]);
+
+    refreshRef.current = enumerate;
+    mediaDevices.addEventListener('devicechange', enumerate);
+    enumerate();
+    return () => {
+      active = false;
+      refreshRef.current = null;
+      mediaDevices.removeEventListener('devicechange', enumerate);
+    };
+  }, []);
 
   const selectDevice = useCallback((deviceId: string) => {
     setSelectedDeviceId(deviceId);
@@ -41,8 +58,8 @@ export function useAudioDevices() {
 
   // Re-enumerate after permission is granted (labels become available)
   const refreshDevices = useCallback(() => {
-    enumerate();
-  }, [enumerate]);
+    refreshRef.current?.();
+  }, []);
 
   return { devices, selectedDeviceId, selectDevice, refreshDevices };
 }

@@ -25,14 +25,28 @@ export function AudioPlayer({ audioUrl, audioUrls }: AudioPlayerProps) {
   // parts can be added later — most users will get a merged single file
   // from the summarize Lambda before they ever hit this UI.
   const effectiveUrl = audioUrl ?? audioUrls?.[0];
+  // Mute is a user preference; playback state belongs to each source.
+  const [volume, setVolume] = useState(1);
+
+  if (!effectiveUrl) return null;
+
+  return <SourceAudioPlayer key={effectiveUrl} audioUrl={effectiveUrl} volume={volume} onVolumeChange={setVolume} />;
+}
+
+function SourceAudioPlayer({ audioUrl, volume, onVolumeChange }: {
+  audioUrl: string;
+  volume: number;
+  onVolumeChange: (volume: number) => void;
+}) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [volume, setVolume] = useState(1);
   const [error, setError] = useState(false);
 
-  useEffect(() => { setError(false); }, [effectiveUrl]);
+  useEffect(() => {
+    if (audioRef.current) audioRef.current.volume = volume;
+  }, [volume]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -47,13 +61,16 @@ export function AudioPlayer({ audioUrl, audioUrls }: AudioPlayerProps) {
       audio.removeEventListener('timeupdate', onTime);
       audio.removeEventListener('loadedmetadata', onMeta);
       audio.removeEventListener('ended', onEnd);
+      audio.pause();
     };
-  }, [effectiveUrl]);
+  }, []);
 
   const togglePlay = useCallback(() => {
     const audio = audioRef.current;
     if (!audio) return;
-    if (isPlaying) { audio.pause(); } else { audio.play(); }
+    if (isPlaying) { audio.pause(); } else {
+      void audio.play().catch(() => setIsPlaying(false));
+    }
     setIsPlaying(!isPlaying);
   }, [isPlaying]);
 
@@ -71,13 +88,13 @@ export function AudioPlayer({ audioUrl, audioUrls }: AudioPlayerProps) {
     audio.currentTime = Math.max(0, Math.min(duration, audio.currentTime + seconds));
   }, [duration]);
 
-  if (!effectiveUrl || error) return null;
+  if (error) return null;
 
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
 
   return (
     <div className="sticky bottom-6 mt-12 w-full max-w-2xl mx-auto z-30 animate-slide-up">
-      <audio ref={audioRef} src={effectiveUrl} preload="metadata" onError={() => setError(true)} />
+      <audio ref={audioRef} src={audioUrl} preload="metadata" onError={() => setError(true)} />
       <div className="bg-white/80 dark:bg-background-dark/80 backdrop-blur-md border border-slate-200 dark:border-white/10 shadow-xl rounded-full px-6 py-3 flex items-center gap-4">
         {/* Play button */}
         <button onClick={togglePlay}
@@ -100,7 +117,7 @@ export function AudioPlayer({ audioUrl, audioUrls }: AudioPlayerProps) {
         <div className="flex items-center gap-3 text-slate-400 shrink-0">
           <button onClick={() => skip(-10)} aria-label="10초 뒤로" className="material-symbols-outlined hover:text-primary transition-colors text-xl">fast_rewind</button>
           <button onClick={() => skip(10)} aria-label="10초 앞으로" className="material-symbols-outlined hover:text-primary transition-colors text-xl">fast_forward</button>
-          <button onClick={() => { const v = volume > 0 ? 0 : 1; setVolume(v); if (audioRef.current) audioRef.current.volume = v; }}
+          <button onClick={() => { const v = volume > 0 ? 0 : 1; onVolumeChange(v); if (audioRef.current) audioRef.current.volume = v; }}
             aria-label={volume > 0 ? '음소거' : '음소거 해제'}
             className="material-symbols-outlined hover:text-primary transition-colors text-xl">
             {volume > 0 ? 'volume_up' : 'volume_off'}
