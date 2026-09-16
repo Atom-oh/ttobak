@@ -1,33 +1,6 @@
 import type { Metadata, Viewport } from 'next';
-import { Inter, Space_Grotesk, Outfit } from 'next/font/google';
 import './globals.css';
 import { AuthProvider } from '@/components/auth/AuthProvider';
-
-// display: 'optional' instead of 'swap' -- 'swap' guarantees a visible
-// font-swap flash once the webfont loads (fallback -> webfont mid-session,
-// the "font changes while loading" symptom). 'optional' gives the browser a
-// short window (~100ms) to use the webfont if already cached; if it's not
-// ready in time, that render keeps the fallback for the rest of the session
-// instead of swapping later. First visit may briefly show the fallback
-// font, but never flashes -- and next/font's static export self-hosts these
-// files, so repeat visits hit cache and paint the real font immediately.
-const inter = Inter({
-  subsets: ['latin'],
-  variable: '--font-inter',
-  display: 'optional',
-});
-
-const spaceGrotesk = Space_Grotesk({
-  subsets: ['latin'],
-  variable: '--font-headline',
-  display: 'optional',
-});
-
-const outfit = Outfit({
-  subsets: ['latin'],
-  variable: '--font-body',
-  display: 'optional',
-});
 
 export const metadata: Metadata = {
   title: 'TTOBAK - AI Meeting Assistant',
@@ -59,7 +32,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className={`${inter.variable} ${spaceGrotesk.variable} ${outfit.variable}`} suppressHydrationWarning>
+    <html lang="en" suppressHydrationWarning>
       <head>
         <script
           dangerouslySetInnerHTML={{

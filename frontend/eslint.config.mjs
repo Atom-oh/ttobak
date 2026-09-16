@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Generated Node download, including bundled dependencies. Its authored
+    // source and reproducible bundle are validated by mcp-server's test suite.
+    "public/mcp/ttobak-mcp.mjs",
   ]),
 ]);
 
