@@ -155,6 +155,26 @@ class ReviewFormatTests(unittest.TestCase):
                 self.assertIn("PUBLIC_AFTER", published)
                 self.assertTrue(published.endswith("VERDICT: PASS\n"))
 
+    def test_large_citation_list_scrubs_within_bounded_time(self):
+        # Repeated same-line citations used to rescan every preceding reference.
+        # Exercise real scrubbing in a child so a regression cannot hang the suite.
+        program = """
+import role_review
+text = "Checked " + "`src/token.ts:42`, " * 12000 + "PUBLIC_AFTER"
+assert len(text.encode()) < role_review.MAX_OUTPUT_BYTES
+clean = role_review.scrub(text)
+assert clean == "Checked " + "`src/[REDACTED]`, " * 12000 + "PUBLIC_AFTER"
+assert role_review.format_violation(clean, role_review.PROSE_SENSITIVE_KEY) is None
+"""
+        try:
+            result = subprocess.run(
+                [sys.executable, "-c", program], cwd=Path(__file__).parent,
+                capture_output=True, text=True, timeout=10,
+            )
+        except subprocess.TimeoutExpired:
+            self.fail("A bounded citation list exceeded the scrubbing deadline")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_unsupported_examples_in_each_prose_field(self):
         for text in (
             "Example: `password='synthetic'`.",

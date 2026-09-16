@@ -1545,21 +1545,13 @@ def _owned_body(value, match, kind, key, header_end=None):
     return (start, end)
 
 
-def _bare_reference_span(value, match):
+def _bare_reference_span(value, match, reference):
     """Keep a recognized reference's closing delimiter while masking its content."""
-    if "`" not in match.group():
-        return match.span()
-    start = value.rfind("\n", 0, match.start()) + 1
-    end = value.find("\n", match.start())
-    if end < 0:
-        end = len(value)
-    references = re.compile(r"(?<!`)(?P<ticks>`{1,2})(?P<reference>[^`\r\n]+)(?P=ticks)(?!`)")
-    for reference in references.finditer(value, start, end):
-        if (REVIEW_REFERENCE.fullmatch(reference["reference"])
-                and reference.start("reference") <= match.start() < reference.end("reference")
-                and reference.end("reference") < match.end()
-                and re.fullmatch(r"[`.,;:!?)]*", value[reference.end("reference"):match.end()])):
-            return match.start(), reference.end("reference")
+    if (reference is not None and "`" in match.group()
+            and reference.start("reference") <= match.start() < reference.end("reference")
+            and reference.end("reference") < match.end()
+            and re.fullmatch(r"[`.,;:!?)]*", value[reference.end("reference"):match.end()])):
+        return match.start(), reference.end("reference")
     return match.span()
 
 
@@ -1789,12 +1781,23 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
             continue
         pattern, kind = entry if isinstance(entry, tuple) else (entry, None)
         header_cursor = -1
+        if kind == "bare":
+            # Both streams are ordered: visit each citation once instead of
+            # rescanning the line for every sensitive-looking reference.
+            references = (
+                reference for reference in re.finditer(
+                    r"(?<!`)(?P<ticks>`{1,2})(?P<reference>[^`\r\n]+)(?P=ticks)(?!`)", value
+                ) if REVIEW_REFERENCE.fullmatch(reference["reference"])
+            )
+            reference = next(references, None)
         for match in re.finditer(pattern, scan_value, flags=re.S):
             if kind == "bare":
                 prefix = re.compile(key).match(scan_value, match.start())
                 if prefix.end() in closing_fences:
                     continue  # Empty RHS ended at an actual closing fence.
-                spans.append(_bare_reference_span(value, match))
+                while reference is not None and reference.end("reference") <= match.start():
+                    reference = next(references, None)
+                spans.append(_bare_reference_span(value, match, reference))
                 continue
             header_end = None
             if kind == "header":
