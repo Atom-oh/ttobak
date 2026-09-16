@@ -58,6 +58,15 @@ a deterministic summary. Other valid results require chair adjudication. A
 coverage failure receives a deterministic failure; a chair cannot waive it.
 Minor/Info findings remain in the report.
 
+Code/configuration examples belong in closed top-level fences at column one;
+inline backticks are limited to single-line symbol/path references. The
+[module contract](../scripts/pr-review/README.md) describes the bounded validator:
+it checks explicit markup and recognized sensitive assignments before and after
+masking, without classifying every unmarked phrase as source. Complete fenced JSON
+retains the existing decoding limits. A complete original blocking chair verdict
+survives a formatting failure as a static FAIL with details withheld; quota and
+output-limit failures keep precedence.
+
 With all four roles active, the ordinary path uses four review calls and two
 Kiro startup checks. Adjudication adds one chair call; retries and fallback add
 calls only when needed. This reduces duplicate requests, but is not a measured

@@ -84,6 +84,28 @@ Blocked input yields deterministic FAIL; the chair cannot waive coverage failure
 Publish scrubbed reports/receipts/metadata only; never raw `roles/*.diff` or
 `requests/*.input/.prompt`.
 
+## Review output format
+
+Reviewers put code/configuration examples in closed top-level fences, with both
+markers on their own lines at column one. Inline backticks are for single-line,
+whitespace-free symbol/path references; an empty `()` suffix is allowed. Use a
+longer outer fence around examples containing fences and use synthetic values.
+
+`review_format.py` checks prose before and after masking. Its bounded grammar
+recognizes explicit markup and sensitive assignments, including qualified keys
+and YAML tags/anchors; it does not identify every unmarked phrase as source code.
+Unsupported detected forms fail coverage with `unsupported_review_format`.
+Protocol metadata retains its existing validation. Deterministic findings use
+fenced canonical JSON so embedded examples cannot add verdict lines.
+
+Complete fenced JSON, including the decoder's existing escaped-container form,
+uses the same decoder before quoted-field scanning. Both decoding layers count
+toward the existing nesting limit and share the byte budget. Unchanged public JSON
+keeps its original spelling; malformed containers are not repaired. A complete original chair FAIL with invalid formatting returns a static
+FAIL with details withheld, without an approving fallback. Provider, quota and
+output-limit failures retain precedence. Existing privacy filtering remains
+required; this presentation contract is not a confidentiality guarantee.
+
 ## Limits and checks
 
 Limits: 95,000 diff bytes (UTF-8), 3,000 lines, 24,000 context bytes, <128 KiB

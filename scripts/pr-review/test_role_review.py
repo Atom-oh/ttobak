@@ -6,6 +6,7 @@ import threading
 from types import SimpleNamespace
 from unittest.mock import patch as mock_patch
 import json
+import re
 import hashlib
 from pathlib import Path
 import subprocess
@@ -63,6 +64,12 @@ def patch(path=FRONTEND, before="old label", after="new label"):
     )
 
 
+def fenced_example(text):
+    """Represent a source example without changing its bytes inside the fence."""
+    fence = "`" * (max([2] + [len(run) for run in re.findall(r"`+", text)]) + 1)
+    return fence + "text\n" + text + ("" if text.endswith("\n") else "\n") + fence
+
+
 class RoleReviewTests(unittest.TestCase):
     def test_unclosed_unindented_cookie_retains_conservative_tail_redaction(self):
         canary = "SYNTHETIC_UNINDENTED_COOKIE"
@@ -82,9 +89,12 @@ class RoleReviewTests(unittest.TestCase):
                             response = self.response(tag)
                             if tag == "codex":
                                 response["findings"] = [{"severity": "MINOR", "path": FRONTEND,
-                                    "condition": "Quoted Cookie example", "evidence": value}]
-                            self.record(tag, response)
-                    self.cli("aggregate", "--work", self.work)
+                                    "condition": "Quoted Cookie example", "evidence": fenced_example(value)}]
+                            result = self.record(tag, response, expected=2 if tag == "codex" else 0)
+                            if tag == "codex":
+                                self.assertEqual(result["failure_codes"], ["unsupported_review_format"])
+                                self.assertIsNone(result["response"])
+                    self.cli("aggregate", "--work", self.work, expected=2)
                     for output in ("slot/codex-result.json", "role-summary.json", "deterministic-review.md"):
                         self.assertNotIn(canary, (self.work / output).read_text())
 
@@ -228,25 +238,35 @@ class RoleReviewTests(unittest.TestCase):
                   for header in ("Cookie", "Set-Cookie")]
         for index, evidence in enumerate(cases):
             with self.subTest(case=index):
+                self.assertNotIn(canary, role_review.scrub(evidence))
                 self.work = self.root / f"publication-{index}"
                 plan = self.prepare()
                 response = self.response("claude-self", findings=[{
                     "severity": "MINOR", "path": FRONTEND,
-                    "condition": "When quoting a configuration example", "evidence": evidence,
+                    "condition": "When quoting a configuration example", "evidence": fenced_example(evidence),
                 }])
                 envelope = {"type": "result", "subtype": "success", "is_error": False,
                             "structured_output": response}
                 with mock_patch.object(run_role, "execute", return_value=(0, json.dumps(envelope), "")):
                     run_role.run(self.work, "claude-self")
                 result = self.read("slot/claude-self-result.json")
-                self.assertTrue(result["valid"], result["failure_codes"])
-                self.assertEqual(result["response"]["reviewed_paths"], [FRONTEND])
-                self.assertEqual(result["response"]["findings"][0]["path"], FRONTEND)
+                # The raw JSON stage conservatively consumes unresolved heredocs
+                # and unclosed header values, including folded YAML examples.
+                # A partial fenced example is a static coverage failure, never a PASS.
+                accepted = index not in {52, 53, 76} and not 151 <= index <= 168
+                self.assertEqual(result["valid"], accepted, result["failure_codes"])
+                if accepted:
+                    self.assertEqual(result["response"]["reviewed_paths"], [FRONTEND])
+                    self.assertEqual(result["response"]["findings"][0]["path"], FRONTEND)
+                else:
+                    self.assertEqual(result["failure_codes"], ["unsupported_review_format"])
+                    self.assertIsNone(result["response"])
                 for tag, role in plan["roles"].items():
                     if role["required"] and tag != "claude-self":
                         self.record(tag)
-                self.cli("aggregate", "--work", self.work)
-                self.assertEqual(self.read("role-summary.json")["mode"], "deterministic")
+                self.cli("aggregate", "--work", self.work, expected=0 if accepted else 2)
+                self.assertEqual(self.read("role-summary.json")["mode"],
+                                 "deterministic" if accepted else "blocked")
                 with mock_patch.dict(synthesize_roles.os.environ, {"GITHUB_ENV": str(self.root / "test-env")}), \
                         mock_patch.object(synthesize_roles, "execute",
                                           side_effect=AssertionError("Unexpected chair call")):
@@ -254,12 +274,13 @@ class RoleReviewTests(unittest.TestCase):
                 for name in ("slot/claude-self-result.json", "role-summary.json",
                              "deterministic-review.md", "review.md"):
                     self.assertNotIn(canary, (self.work / name).read_text())
-                    if evidence.endswith("PUBLIC_AFTER"):
+                    if accepted and evidence.endswith("PUBLIC_AFTER"):
                         self.assertIn("PUBLIC_AFTER", (self.work / name).read_text())
-                self.assertTrue((self.work / "review.md").read_text().rstrip().endswith("VERDICT: PASS"))
+                expected_verdict = "VERDICT: PASS" if accepted else "VERDICT: FAIL"
+                self.assertTrue((self.work / "review.md").read_text().rstrip().endswith(expected_verdict))
 
 
-    def test_chair_preserves_verdict_after_grouped_sensitive_examples(self):
+    def test_legacy_filters_preserve_verdict_after_grouped_sensitive_examples(self):
         import synthesize_roles
 
         plan = self.prepare()
@@ -362,12 +383,8 @@ VERDICT: PASS
                     for evidence in cookie_continuation_examples(canary)]
         for report in reports:
             with self.subTest(report=report):
-                output = self.work / "chair.md"
-                with mock_patch.dict(synthesize_roles.os.environ, {"GITHUB_ENV": str(self.root / "test-env")}), \
-                        mock_patch.object(synthesize_roles, "execute", return_value=(0, report, "")) as execute:
-                    synthesize_roles.synthesize(self.work, output)
-                self.assertEqual(execute.call_count, 1)
-                published = output.read_text()
+                published = synthesize_roles.scrub_decoded(synthesize_roles.scrub(report))
+                self.assertTrue(synthesize_roles.valid(published, 0))
                 self.assertNotIn(canary, published)
                 self.assertIn("PUBLIC_AFTER", published)
                 self.assertTrue(published.rstrip().endswith("VERDICT: PASS"))
@@ -737,8 +754,9 @@ VERDICT: PASS
             with self.subTest(kind=text.split("=", 1)[0][:24]):
                 self.work = self.root / f"decoded-pattern-{index}"
                 self.prepare()
+                self.assertNotIn(secret, role_review.scrub(text))
                 response = self.response("codex")
-                response["checks"][0]["evidence"] = text
+                response["checks"][0]["evidence"] = fenced_example(text)
                 escaped = json.dumps(response).replace(secret, "".join("\\u" + format(ord(char), "04x") for char in secret))
                 result = self.record("codex", raw=escaped)
                 self.assertNotIn(secret, json.dumps(result))
@@ -760,8 +778,13 @@ VERDICT: PASS
             with self.subTest(index=index):
                 self.work = self.root / f"secret-{index}"
                 self.prepare()
-                response = self.response("codex", checks=[{"path": FRONTEND, "evidence": credential}])
-                result = self.record("codex", raw=json.dumps(response, ensure_ascii=True))
+                self.assertNotIn(secret, role_review.scrub(credential))
+                response = self.response("codex", checks=[{"path": FRONTEND, "evidence": fenced_example(credential)}])
+                result = self.record("codex", raw=json.dumps(response, ensure_ascii=True),
+                                     expected=2 if index == 1 else 0)
+                if index == 1:  # Unterminated PEM still consumes the closing example fence.
+                    self.assertEqual(result["failure_codes"], ["unsupported_review_format"])
+                    self.assertIsNone(result["response"])
                 self.assertNotIn(secret, json.dumps(result))
 
     def test_truncated_patch_or_bare_header_cannot_claim_complete_input(self):
@@ -973,6 +996,7 @@ VERDICT: PASS
         response = self.response("codex", checks=[{"path": FRONTEND, "evidence": evidence}])
         scrubbed = self.bounded_scrub(response)
         self.assertIn("X", scrubbed["checks"][0]["evidence"])
+        response["checks"][0]["evidence"] = fenced_example(evidence)
         result = self.record("codex", response=response)
         self.assertTrue(result["valid"])
         for marker in ("SYNTHETIC_BEFORE", "SYNTHETIC_INSIDE", "SYNTHETIC_BLOCK", "SYNTHETIC_AFTER"):
@@ -1038,7 +1062,7 @@ VERDICT: PASS
                 text = evidence if isinstance(evidence, str) else json.dumps(evidence)
                 self.record("codex", self.response("codex", findings=[{
                     "severity": "MINOR", "path": FRONTEND,
-                    "condition": "When evidence contains JSON keys", "evidence": text,
+                    "condition": "When evidence contains JSON keys", "evidence": fenced_example(text),
                 }]))
                 self.record("claude-self")
                 self.cli("aggregate", "--work", self.work)
@@ -1052,9 +1076,10 @@ VERDICT: PASS
     def assert_private_evidence_redacted(self, evidence, marker, context):
         self.prepare()
         text = evidence if isinstance(evidence, str) else json.dumps(evidence)
+        self.assertNotIn(marker, role_review.scrub(text))
         self.record("codex", self.response("codex", findings=[{
             "severity": "MINOR", "path": FRONTEND,
-            "condition": "When diagnostics contain credentials", "evidence": text,
+            "condition": "When diagnostics contain credentials", "evidence": fenced_example(text),
         }]))
         self.record("claude-self")
         self.cli("aggregate", "--work", self.work)
@@ -1158,7 +1183,7 @@ VERDICT: PASS
                  "[REDACTED-GH-TOKEN]/password": "SYNTHETIC_PATH_SECRET"}
         response = self.response("claude-self", findings=[{
             "severity": "MINOR", "path": FRONTEND, "condition": "On raw alias generation",
-            "evidence": json.dumps(value),
+            "evidence": fenced_example(json.dumps(value)),
         }])
         envelope = {"type": "result", "subtype": "success", "is_error": False,
                     "structured_output": response}
@@ -1186,9 +1211,10 @@ VERDICT: PASS
             with self.subTest(case=index):
                 self.work = self.root / f"mixed-quote-{index}"
                 self.prepare()
+                self.assertNotIn("SYNTHETIC_PRIVATE_SUFFIX", role_review.scrub(evidence))
                 response = self.response("codex", findings=[{
                     "severity": "MINOR", "path": FRONTEND, "condition": "When credentials are quoted",
-                    "evidence": evidence + "\nKEEP_CONTEXT",
+                    "evidence": fenced_example(evidence) + "\nKEEP_CONTEXT",
                 }])
                 self.record("codex", raw=scrub_raw(json.dumps(response)))
                 self.record("claude-self")
@@ -1299,10 +1325,11 @@ VERDICT: PASS
                 self.work = self.root / f"record-expansion-{count}"
                 self.prepare()
                 response = self.response("codex", checks=[{
-                    "path": FRONTEND, "evidence": "token=x " * count,
+                    "path": FRONTEND, "evidence": fenced_example("token=x " * count),
                 }])
                 raw = json.dumps(response, separators=(",", ":"))
-                response["checks"][0]["evidence"] += "*" * (limit - 64 - len(raw.encode()))
+                padding = "*" * (limit - 64 - len(raw.encode()))
+                response["checks"][0]["evidence"] = fenced_example("token=x " * count + padding)
                 raw = json.dumps(response, separators=(",", ":"))
                 self.assertEqual(len(raw.encode()), limit - 64)
                 result = self.record("codex", raw=raw, expected=expected)
@@ -1337,12 +1364,14 @@ VERDICT: PASS
                 self.prepare()
                 response = self.response("codex", findings=[{
                     "severity": "MINOR", "path": FRONTEND, "condition": "On diagnostic output",
-                    "evidence": "password=" + quote + secret,
+                    "evidence": fenced_example("password=" + quote + secret),
                 }])
-                result = self.record("codex", raw=scrub_raw(json.dumps(response)))
-                self.assertTrue(result["valid"])
+                self.assertNotIn(secret, role_review.scrub("password=" + quote + secret))
+                result = self.record("codex", raw=scrub_raw(json.dumps(response)), expected=2)
+                self.assertEqual(result["failure_codes"], ["unsupported_review_format"])
+                self.assertIsNone(result["response"])
                 self.record("claude-self")
-                self.cli("aggregate", "--work", self.work)
+                self.cli("aggregate", "--work", self.work, expected=2)
                 for name in ("slot/codex-result.json", "role-summary.json", "deterministic-review.md"):
                     self.assertNotIn(secret, (self.work / name).read_text())
 
@@ -1435,7 +1464,7 @@ VERDICT: PASS
                 self.prepare()
                 secret = "SYNTHETIC_PRIVATE_SDK_VALUE"
                 evidence = json.dumps({key: secret})
-                response = self.response("codex", checks=[{"path": FRONTEND, "evidence": evidence}])
+                response = self.response("codex", checks=[{"path": FRONTEND, "evidence": fenced_example(evidence)}])
                 self.assertNotIn(secret, json.dumps(self.record("codex", response=response)))
                 self.record("claude-self")
                 self.cli("aggregate", "--work", self.work)
@@ -1821,7 +1850,7 @@ VERDICT: PASS
                 self.work = self.root / f"shapes-{index}"
                 self.prepare()
                 text = evidence if isinstance(evidence, str) else json.dumps(evidence)
-                response = self.response("codex", checks=[{"path": FRONTEND, "evidence": text}])
+                response = self.response("codex", checks=[{"path": FRONTEND, "evidence": fenced_example(text)}])
                 self.record("codex", response)
                 self.record("claude-self")
                 self.cli("aggregate", "--work", self.work)
@@ -1875,8 +1904,9 @@ VERDICT: PASS
             with self.subTest(kind=text.split("=", 1)[0][:24]):
                 self.work = self.root / f"decoded-pattern-{index}"
                 self.prepare()
+                self.assertNotIn(secret, role_review.scrub(text))
                 response = self.response("codex")
-                response["checks"][0]["evidence"] = text
+                response["checks"][0]["evidence"] = fenced_example(text)
                 escaped = json.dumps(response).replace(secret, "".join("\\u" + format(ord(char), "04x") for char in secret))
                 result = self.record("codex", raw=escaped)
                 self.assertNotIn(secret, json.dumps(result))
