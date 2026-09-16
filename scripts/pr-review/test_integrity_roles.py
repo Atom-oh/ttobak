@@ -108,6 +108,61 @@ class IntegrityTests(unittest.TestCase):
                 self.assertFalse(result["valid"])
                 self.assertIn("quota_diagnostic", result["failure_codes"])
 
+    def run_timed_claude(self, replies, timeout=10, attempts=2):
+        """Model CLI durations without sleeping; keep validation/publication real."""
+        elapsed, limits = [0.0], []
+        envelope = json.dumps({
+            "type": "result", "subtype": "success", "is_error": False,
+            "structured_output": json.loads(self.response("claude-self")),
+        })
+
+        def invoke(command, cwd, environment, payload, limit):
+            duration, code = replies[min(len(limits), len(replies) - 1)]
+            limits.append(limit)
+            elapsed[0] += min(duration, limit)
+            if duration > limit:
+                return 124, "", "Review CLI timed out."
+            return (0, envelope, "") if code == 0 else (code, "", "Transient failure.")
+
+        with patch.dict(os.environ, {"PANEL_TIMEOUT": str(timeout),
+                                     "PANEL_RETRIES": str(attempts)}), \
+                patch.object(run_role.time, "monotonic", side_effect=lambda: elapsed[0]), \
+                patch.object(run_role, "execute", side_effect=invoke):
+            run_role.run(self.work, "claude-self")
+        result = json.loads((self.work / "slot/claude-self-result.json").read_text())
+        return result, elapsed[0], limits
+
+    def test_claude_can_finish_within_its_total_budget(self):
+        result, elapsed, limits = self.run_timed_claude([(15, 0)])
+        self.assertTrue(result["valid"])
+        self.assertEqual(elapsed, 15)
+        self.assertEqual(len(limits), 1)
+
+    def test_claude_retry_cannot_replenish_spent_budget(self):
+        result, elapsed, limits = self.run_timed_claude([(15, 1), (8, 0)])
+        self.assertFalse(result["valid"])
+        self.assertIn("cli_nonzero_exit", result["failure_codes"])
+        self.assertEqual(elapsed, 20)
+        self.assertEqual(limits, [20, 5])
+
+    def test_claude_exhausted_budget_cannot_start_another_call(self):
+        result, elapsed, limits = self.run_timed_claude([(30, 0)])
+        self.assertFalse(result["valid"])
+        self.assertEqual(elapsed, 20)
+        self.assertEqual(len(limits), 1)
+
+    def test_claude_fast_transient_failure_keeps_its_retry(self):
+        result, elapsed, limits = self.run_timed_claude([(1, 1), (5, 0)])
+        self.assertTrue(result["valid"])
+        self.assertEqual(elapsed, 6)
+        self.assertEqual(len(limits), 2)
+
+    def test_claude_retains_the_existing_single_call_ceiling(self):
+        result, elapsed, limits = self.run_timed_claude([(1200, 0)], 900, 3)
+        self.assertFalse(result["valid"])
+        self.assertEqual(elapsed, 2700)
+        self.assertEqual(limits, [900, 900, 900])
+
     def assert_codex_overflow_stops_retry(self, final_file=False, malformed_stream=False):
         calls = 0
         def reply(command, *unused):
