@@ -23,6 +23,8 @@ Background-light/background-dark remain separate tokens. Material Symbols
 Outlined supply icons. Legacy glass/glow/neon class names remain compatibility
 hooks with flat/no-glow styling; their presence is not a request to restore neon.
 Typography and component dimensions come from CSS/layout components, not DESIGN.md.
+Body and headline utilities share an installed system font stack in both themes;
+their font choice must not depend on download timing or the browser font cache.
 Material Symbols is bundled as a WOFF2 subset inside the app CSS, with fixed icon
 boxes, so names such as `record_voice_over` never flash while an external font
 loads. The subset preserves fill variants and optical sizes 20–24 at weight 400.
@@ -189,6 +191,8 @@ Run frontend lint/build for code changes and targeted browser checks for affecte
 interactions. Check light/dark, mobile/desktop, keyboard access, loading/empty/error,
 permission differences and recovery paths where applicable. No frontend unit-test
 framework exists. Documentation changes alone do not require a frontend rebuild.
+The generated `public/mcp/ttobak-mcp.mjs` download is excluded from frontend lint;
+validate its authored Node source and bundle with `npm test` in `mcp-server`.
 
 ## SA preparation, references and follow-up
 

@@ -1,5 +1,7 @@
 'use client';
 
+import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { IntegrationSettings } from '@/components/IntegrationSettings';
@@ -11,6 +13,10 @@ import { UserManagement } from '@/components/UserManagement';
 
 export default function SettingsPage() {
   const { user, isLoading, isAuthenticated, isAdmin } = useAuth();
+  const router = useRouter();
+  useEffect(() => {
+    if (!isLoading && !isAuthenticated) router.replace('/');
+  }, [isLoading, isAuthenticated, router]);
 
   if (isLoading) {
     return (
@@ -21,10 +27,6 @@ export default function SettingsPage() {
   }
 
   if (!isAuthenticated) {
-    // Redirect to home for login
-    if (typeof window !== 'undefined') {
-      window.location.href = '/';
-    }
     return null;
   }
 

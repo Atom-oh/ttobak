@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useState } from 'react';
 
 interface MicSelectorProps {
   devices: MediaDeviceInfo[];
@@ -31,47 +31,47 @@ function getDeviceIcon(label: string): string {
 const SEGMENT_COUNT = 14;
 
 export function MicSelector({ devices, selectedDeviceId, onSelect, disabled, analyser }: MicSelectorProps) {
-  const [level, setLevel] = useState(0);
-  const animationRef = useRef<number | null>(null);
-  const dataArrayRef = useRef<Float32Array<ArrayBuffer> | null>(null);
-
-  const updateLevel = useCallback(() => {
-    if (!analyser) return;
-
-    if (!dataArrayRef.current || dataArrayRef.current.length !== analyser.fftSize) {
-      dataArrayRef.current = new Float32Array(analyser.fftSize);
-    }
-
-    analyser.getFloatTimeDomainData(dataArrayRef.current);
-
-    // RMS calculation
-    let sum = 0;
-    for (let i = 0; i < dataArrayRef.current.length; i++) {
-      sum += dataArrayRef.current[i] * dataArrayRef.current[i];
-    }
-    const rms = Math.sqrt(sum / dataArrayRef.current.length);
-
-    // Map RMS to 0-1 range (typical speech RMS is 0.01-0.3)
-    const normalized = Math.min(1, rms / 0.25);
-    setLevel(normalized);
-
-    animationRef.current = requestAnimationFrame(updateLevel);
-  }, [analyser]);
+  const [sample, setSample] = useState<{ analyser: AnalyserNode; level: number } | null>(null);
 
   useEffect(() => {
-    if (analyser) {
-      animationRef.current = requestAnimationFrame(updateLevel);
-    } else {
-      setLevel(0);
-    }
-    return () => {
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-        animationRef.current = null;
-      }
-    };
-  }, [analyser, updateLevel]);
+    if (!analyser) return;
 
+    const node = analyser;
+    let active = true;
+    let dataArray = new Float32Array(node.fftSize);
+
+    function updateLevel() {
+      if (!active) return;
+
+      if (dataArray.length !== node.fftSize) {
+        dataArray = new Float32Array(node.fftSize);
+      }
+      node.getFloatTimeDomainData(dataArray);
+
+      // RMS calculation
+      let sum = 0;
+      for (let i = 0; i < dataArray.length; i++) {
+        sum += dataArray[i] * dataArray[i];
+      }
+      const rms = Math.sqrt(sum / dataArray.length);
+
+      // Map RMS to 0-1 range (typical speech RMS is 0.01-0.3)
+      const level = Math.min(1, rms / 0.25);
+      setSample((previous) => previous?.analyser === node && previous.level === level
+        ? previous
+        : { analyser: node, level });
+
+      animationFrame = requestAnimationFrame(updateLevel);
+    }
+
+    let animationFrame = requestAnimationFrame(updateLevel);
+    return () => {
+      active = false;
+      cancelAnimationFrame(animationFrame);
+    };
+  }, [analyser]);
+
+  const level = analyser && sample?.analyser === analyser ? sample.level : 0;
   const activeSegments = Math.round(level * SEGMENT_COUNT);
 
   return (

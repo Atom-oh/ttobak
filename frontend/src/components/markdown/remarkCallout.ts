@@ -1,10 +1,11 @@
+import type { Root } from 'mdast';
 import { visit } from 'unist-util-visit';
 
 const CALLOUT_REGEX = /^\[!(summary|warning|tip|danger|info)\]\s*(.*)/i;
 
 export function remarkCallout() {
-  return (tree: any) => {
-    visit(tree, 'blockquote', (node: any) => {
+  return (tree: Root) => {
+    visit(tree, 'blockquote', (node) => {
       const firstChild = node.children?.[0];
       if (!firstChild || firstChild.type !== 'paragraph') return;
 

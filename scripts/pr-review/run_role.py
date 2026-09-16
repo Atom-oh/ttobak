@@ -22,6 +22,7 @@ from role_review import diagnostic_failure, issue_request, issued_request, load_
 
 
 DIRECTORY = Path(__file__).resolve().parent
+MAX_CALL_TIMEOUT = 900
 FAILURE = re.compile(
     r"Monthly request limit reached|MONTHLY_REQUEST_COUNT|UsageLimitReachedError|"
     r"ServiceQuotaExceededException|You have reached the limit for overages|"
@@ -172,7 +173,7 @@ def run(work, tag, kiro_startup=None):
     runtime = work / "runtime"
     runtime.mkdir(exist_ok=True)
     attempts = bounded_setting("PANEL_RETRIES", 2, 3)
-    timeout = bounded_setting("PANEL_TIMEOUT", 300, 900)
+    timeout = bounded_setting("PANEL_TIMEOUT", 300, MAX_CALL_TIMEOUT)
     prompt = (work / "roles" / f"{tag}.txt").read_bytes().decode("utf-8")
     diff = (work / "roles" / f"{tag}.diff").read_bytes().decode("utf-8")
     start = time.monotonic()
@@ -238,6 +239,9 @@ def run(work, tag, kiro_startup=None):
                 ]
             else:
                 raise ValueError("Unknown specialist")
+            # Claude's structured response may need more than one nominal slice.
+            # Share the existing total budget; retries cannot reset its deadline.
+            deadline = time.monotonic() + attempts * timeout if tag == "claude-self" else None
             for _ in range(attempts):
                 nonce, framed_prompt, payload = issue_request(work, tag)
                 if tag == "codex":
@@ -255,7 +259,14 @@ def run(work, tag, kiro_startup=None):
                     if len((framed_prompt + payload + schema).encode()) >= MAX_REQUEST_BYTES:
                         code, output, error = 1, "", "Complete Claude request exceeds input limit."
                         break
-                code, output, error = execute(command, cwd, environment, delivered, timeout)
+                call_timeout = timeout
+                if deadline is not None:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        code, output, error = 124, "", "Review CLI budget exhausted."
+                        break
+                    call_timeout = min(MAX_CALL_TIMEOUT, remaining)
+                code, output, error = execute(command, cwd, environment, delivered, call_timeout)
                 if diagnostic_failure(error):
                     code = code or 1
                     break

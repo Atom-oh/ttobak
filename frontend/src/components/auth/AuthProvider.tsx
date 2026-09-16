@@ -71,16 +71,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [user, isLoading, pathname, router]);
 
   useEffect(() => {
-    // Dev mode: skip Cognito auth when env var is set
-    if (process.env.NEXT_PUBLIC_DEV_AUTH === 'true') {
-      setUser({ userId: 'dev-user', email: 'dev@ttobak.io', name: 'Dev User', groups: ['admins'], isAdmin: true });
-      setIsLoading(false);
-      return;
-    }
-    getCurrentUser()
-      .then(setUser)
-      .catch(() => setUser(null))
-      .finally(() => setIsLoading(false));
+    let cancelled = false;
+    // Both bootstrap sources resolve asynchronously so SSR and hydration start
+    // in the same loading state, including when development auth is enabled.
+    const currentUser: Promise<AuthUser | null> = process.env.NEXT_PUBLIC_DEV_AUTH === 'true'
+      ? Promise.resolve({ userId: 'dev-user', email: 'dev@ttobak.io', name: 'Dev User', groups: ['admins'], isAdmin: true })
+      : getCurrentUser();
+    currentUser
+      .then((nextUser) => { if (!cancelled) setUser(nextUser); })
+      .catch(() => { if (!cancelled) setUser(null); })
+      .finally(() => { if (!cancelled) setIsLoading(false); });
+    return () => { cancelled = true; };
   }, []);
 
   const login = useCallback(async (email: string, password: string) => {

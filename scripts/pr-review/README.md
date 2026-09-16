@@ -123,6 +123,15 @@ inference models remain unchanged.
 Valid results cannot be reissued. Failed retries retain diagnostics; prepare
 again for a new review.
 
+Claude shares its existing `PANEL_TIMEOUT × PANEL_RETRIES` invocation-time budget across
+attempts instead of restarting a slow structured response at each nominal timeout.
+Each call is capped at 900 seconds; retries use only the remaining total time and
+still obey the configured attempt limit. The default remains 600 seconds total
+and at most two calls. Codex/Kiro keep their per-attempt limits. Terminal failures,
+incomplete responses and exhausted budgets still block required review coverage.
+A slow first call may consume the allowance without leaving a retry. Cleanup and
+publication can extend the process wall time beyond the invocation budget.
+
 Codex uses structured transport events plus its CLI-designated final-output file.
 Tool output and progress text are not review results. Recovered transport notices
 remain visible; terminal provider errors still block.
