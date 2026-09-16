@@ -1550,7 +1550,7 @@ def _bare_reference_span(value, match, reference):
     if (reference is not None and "`" in match.group()
             and reference.start("reference") <= match.start() < reference.end("reference")
             and reference.end("reference") < match.end()
-            and re.fullmatch(r"[`.,;:!?)]*", value[reference.end("reference"):match.end()])):
+            and re.fullmatch(r"[`*_~.,;:!?)]*", value[reference.end("reference"):match.end()])):
         return match.start(), reference.end("reference")
     return match.span()
 

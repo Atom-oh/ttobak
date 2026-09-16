@@ -119,6 +119,11 @@ class ReviewFormatTests(unittest.TestCase):
             "See `app/src/lib/chart-tokens.ts:42` for palette mapping.",
             "See `AWS::SecretsManager::Secret` for the resource type.",
             "See `web/lib/token.ts:42-45` for token validation.",
+            "See **`web/lib/token.ts:42`** for token validation.",
+            "See *`web/lib/token.ts:42`* for token validation.",
+            "See __``web/lib/token.ts:42``__ for token validation.",
+            "See _`web/lib/token.ts:42`_ for token validation.",
+            "See ~~`web/lib/token.ts:42`~~ for token validation.",
             "Authorization:\n```http\nGET /health HTTP/1.1\n```",
         )
 
