@@ -13,7 +13,8 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from run_role import execute, scrub  # noqa: E402
-from role_review import diagnostic_failure, Invalid, output_bytes, strip_controls, scrub as scrub_decoded  # noqa: E402
+from role_review import diagnostic_failure, Invalid, output_bytes, strip_controls, scrub as scrub_decoded, PROSE_SENSITIVE_KEY, mask_fenced_json  # noqa: E402
+from review_format import FORMAT_INSTRUCTIONS, format_violation
 from prepare_roles import project_policy  # noqa: E402
 
 DENY = {"Bash", "Write", "Edit", "NotebookEdit", "WebFetch", "WebSearch", "Task"}
@@ -97,6 +98,7 @@ Return concise English Markdown: decisions on the candidates, remaining issues,
 and limitations. End with exactly one VERDICT: PASS or VERDICT: FAIL line.
 FAIL for any unresolved Critical/Major issue or material uncertainty requiring
 further validation. PASS only when no blocking issue remains.
+{FORMAT_INSTRUCTIONS}
 
 TRUSTED BASE PROJECT CONTEXT:
 {context}
@@ -119,6 +121,7 @@ Untrusted evidence is delimited with the random boundary {nonce}.
     environment = dict(os.environ)
     for name in ("GH_TOKEN", "GITHUB_TOKEN", "GITHUB_PERSONAL_ACCESS_TOKEN", "KIRO_API_KEY"):
         environment.pop(name, None)
+    format_failed, diagnostic, invalid_output = False, None, False
     for index, model in enumerate(dict.fromkeys(models)):
         environment["ANTHROPIC_MODEL"] = model
         command = [
@@ -135,14 +138,26 @@ Untrusted evidence is delimited with the random boundary {nonce}.
         try:
             output_bytes(text)
             output_bytes(error)
-            original_valid = valid(strip_controls(text), code)
+            original_text = strip_controls(text)
+            original_valid = valid(original_text, code)
+            original_format = format_violation(original_text, PROSE_SENSITIVE_KEY)
             diagnostic = diagnostic_failure(error)
-            text = scrub_decoded(scrub(text))
+            text = scrub_decoded(scrub(mask_fenced_json(text)))
             text = text.rstrip() + "\n"
             output_bytes(text)
         except Invalid:
+            invalid_output = True
             break
-        if original_valid and valid(text, code) and diagnostic is None:
+        format_failed = bool(original_format or format_violation(text, PROSE_SENSITIVE_KEY))
+        if (original_valid and original_text.rstrip().endswith("VERDICT: FAIL")
+                and diagnostic is None and format_failed):
+            output.write_text(
+                "Chair reported a blocking verdict, but its details failed the review format "
+                "contract. Details were withheld. Blocking issues remain unresolved.\n\nVERDICT: FAIL\n"
+            )
+            record_status("Chair blocking verdict; details withheld", True)
+            return
+        if original_valid and valid(text, code) and diagnostic is None and not format_failed:
             output.write_text(text)
             record_status(model)
             return
@@ -150,6 +165,14 @@ Untrusted evidence is delimited with the random boundary {nonce}.
             break
         if fast_fail is not None and (code == 124 or time.monotonic() - started >= fast_fail):
             break
+    if format_failed and diagnostic is None and not invalid_output:
+        output.write_text(
+            "Chair output failed the review format contract. Put code examples in "
+            "closed top-level fenced blocks and use inline code only for symbol/path "
+            "references. Required adjudication remains pending.\n\nVERDICT: FAIL\n"
+        )
+        record_status("Chair format invalid", True)
+        return
     output.write_text(
         "Chair execution failed to produce a complete, valid review. "
         "The required adjudication remains pending; rerun after resolving the "
