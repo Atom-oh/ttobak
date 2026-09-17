@@ -4,7 +4,8 @@
   [ADR-019](ADR-019-acoustic-speaker-diarization-pyannote.md) and
   [ADR-035](ADR-035-diarization-pyannote4-community1-asr-pins.md).
 - Decision date: Not recorded; motivating benchmark dated 2026-04-23.
-- Implementation checked: 2026-09-13.
+- Capacity decision amended: 2026-09-17 (first active worker uses On-Demand).
+- Implementation checked: 2026-09-17.
 
 ## Context and decision
 
@@ -13,7 +14,7 @@ and Whisper large-v3 7.5/10. CPU Whisper was too slow; GPU inference made
 asynchronous final transcription practical. Those measurements and the original
 per-meeting prices were historical observations, not accuracy or cost guarantees.
 
-Choose ECS on EC2 GPU Spot capacity for batch Whisper, with browser Transcribe
+Choose ECS on EC2 GPU capacity for batch Whisper, with browser Transcribe
 Streaming retained for live captions. This avoids a request-serving load balancer
 and lets GPU capacity scale down between jobs. Managed Transcribe remains a
 fallback; the legacy `nova-sonic` path still invokes Transcribe in current code.
@@ -28,8 +29,10 @@ fallback; the legacy `nova-sonic` path still invokes Transcribe in current code.
   Participants supply a `max_speakers` upper bound, not an exact count.
 - Model weights are streamed/extracted from S3 at runtime. The original
   "weights baked into ECR" description is obsolete.
-- The imported VPC's private-egress subnets supply available AZs. The g5.xlarge
-  Spot ASG has minimum/desired capacity zero and maximum ten, encrypted 200 GiB
+- The imported VPC's private-egress subnets supply available AZs. The mixed
+  g4dn.xlarge/g4dn.2xlarge ASG uses one On-Demand base instance within desired
+  capacity, then price-capacity-optimized Spot with a $1.10 hourly ceiling.
+  It has minimum/desired capacity zero and maximum ten, encrypted 200 GiB
   gp3 root volumes, and three-minute stopped-task cleanup. Zero minimum capacity
   does not eliminate scale-in delay, storage, registry, or shared networking cost.
 - Transcript objects trigger summarization; multiple parts follow ADR-014.
@@ -59,6 +62,18 @@ allowlisting entrypoint is a critical security violation. It shares GPU capacity
 so benchmark jobs can also contend with production.
 
 ## Consequences and accepted risks
+
+On 2026-09-17, account 180294183052's private 2a/2b subnet pools could not launch
+the configured g5.xlarge: 2a lacked capacity and 2b did not offer the type.
+The task expired with `TaskFailedToStart: EMPTY CAPACITY PROVIDER`. Including
+that unsupported combination in a mixed Fleet request also failed. Both g4dn
+sizes were offered in both zones, but their Spot pools were exhausted too.
+The amended decision uses those supported types and On-Demand for the first
+active worker, preferring xlarge. This costs the normal On-Demand rate while
+active and does not guarantee capacity; idle desired capacity may still be zero.
+The larger size adds host memory/CPU, not GPU memory: both have a 16GB T4.
+Production and benchmark images must be validated on that GPU independently;
+template tests alone do not establish runtime compatibility.
 
 GPU batch inference improves the evaluated workload while retaining live captions.
 Costs include cold starts, large runtime dependencies, model staging, GPU AMI

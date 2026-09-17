@@ -197,16 +197,16 @@ separate. Creating this construct does not backfill attachments. See
 ## Whisper and research
 
 Whisper uses the imported VPC's actual private-with-egress subnets and a mixed
-g4dn.xlarge/g4dn.2xlarge mixed ASG (min/desired 0, max 10). Price-capacity-optimized
-allocation uses GPU types offered in both 2a and 2b. Do not include g5: 2b does
-not offer it, and that unsupported combination can reject a mixed Fleet request.
+g4dn.xlarge/g4dn.2xlarge ASG (min/desired 0, max 10). Price-capacity-optimized
+allocation uses GPU types observed in both 2a and 2b in account 180294183052 on
+2026-09-17. That account's 2b did not offer g5; including it rejected the mixed
+Fleet request. Recheck offerings before changing types or subnets (ADR-009).
 The first active instance uses On-Demand capacity, preferring the smaller type,
 so a Spot shortage cannot prevent all workers from starting. Additional instances
 use Spot with the existing $1.10 hourly ceiling. The On-Demand base applies only
 within desired capacity: idle capacity still scales to zero. On-Demand uses its
 normal instance rate, not the Spot price ceiling; capacity is still not guaranteed.
-Root disk is
-200GiB encrypted gp3, and ECS stopped-task cleanup is shortened to three minutes
+Root disk is 200GiB encrypted gp3, and ECS stopped-task cleanup is three minutes
 to avoid disk exhaustion when a host is reused. Host-network tasks request one GPU.
 These choices do not prove current instances or capacity availability.
 

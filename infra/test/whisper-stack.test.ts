@@ -23,7 +23,7 @@ function synth(): Template {
 }
 
 describe('WhisperStack whisperx benchmark additions', () => {
-  test('can provision a GPU when the g5 pool in 2a is exhausted', () => {
+  test('declares supported GPU pools and an On-Demand base without conflicting market options', () => {
     const template = synth();
     template.hasResourceProperties('AWS::AutoScaling::AutoScalingGroup', {
       LaunchTemplate: Match.absent(),
