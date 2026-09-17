@@ -31,6 +31,8 @@ export class WhisperStack extends cdk.Stack {
 
   constructor(scope: Construct, id: string, props: WhisperStackProps) {
     super(scope, id, props);
+    // Mixed instance policies require a launch template, including in test apps.
+    this.node.setContext('@aws-cdk/aws-autoscaling:generateLaunchTemplateInsteadOfLaunchConfig', true);
 
     const vpc = ec2.Vpc.fromLookup(this, 'WhisperVpc', { vpcId: props.vpcId });
 
@@ -102,9 +104,30 @@ export class WhisperStack extends cdk.Stack {
       minCapacity: 0,
       maxCapacity: 10,
       desiredCapacity: 0,
-      spotPrice: '1.10',
       newInstancesProtectedFromScaleIn: false,
     });
+
+    // Retain the generated launch template, instance role and ECS user data.
+    // A single g5 pool cannot start when 2a is exhausted: 2b has no g5 offering.
+    // Equal-size, one-GPU alternatives let managed scaling use both private AZs.
+    // Market options belong on the mixed policy, not on its launch template.
+    const cfnAsg = asg.node.defaultChild as autoscaling.CfnAutoScalingGroup;
+    cfnAsg.mixedInstancesPolicy = {
+      launchTemplate: {
+        launchTemplateSpecification: cfnAsg.launchTemplate!,
+        overrides: [
+          { instanceType: 'g5.xlarge' },
+          { instanceType: 'g4dn.xlarge' },
+        ],
+      },
+      instancesDistribution: {
+        onDemandBaseCapacity: 0,
+        onDemandPercentageAboveBaseCapacity: 0,
+        spotAllocationStrategy: 'price-capacity-optimized',
+        spotMaxPrice: '1.10',
+      },
+    };
+    cfnAsg.launchTemplate = undefined;
 
     // ECS Capacity Provider with managed scaling
     const capacityProvider = new ecs.AsgCapacityProvider(this, 'WhisperCapacityProvider', {
