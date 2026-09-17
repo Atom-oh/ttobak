@@ -75,6 +75,16 @@ The larger size adds host memory/CPU, not GPU memory: both have a 16GB T4.
 Production and benchmark images must be validated on that GPU independently;
 template tests alone do not establish runtime compatibility.
 
+Operational validation on 2026-09-17: the production image completed a full
+recording's float16 ASR and community-1 diarization on the On-Demand T4, published
+the transcript, and exited with code 0. Sampled GPU memory during diarization was
+about 6 GiB. This does not validate every benchmark engine or input size.
+The target region's On-Demand G/VT quota (`L-DB2E81BA`) was 768 vCPUs and the
+base instance successfully launched; recheck quota usage before another rollout.
+Launch-template versions 17 (before) and 19 (mixed policy) had identical user
+data. Neither contained `ECS_ENABLE_SPOT_INSTANCE_DRAINING`; this change did not
+remove that setting. Existing task interruption/recovery limitations remain.
+
 GPU batch inference improves the evaluated workload while retaining live captions.
 Costs include cold starts, large runtime dependencies, model staging, GPU AMI
 maintenance, and Spot capacity/interruption failures. User retry and existing
