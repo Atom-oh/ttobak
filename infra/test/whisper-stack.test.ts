@@ -23,6 +23,41 @@ function synth(): Template {
 }
 
 describe('WhisperStack whisperx benchmark additions', () => {
+  test('can provision a GPU when the g5 pool in 2a is exhausted', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::AutoScaling::AutoScalingGroup', {
+      LaunchTemplate: Match.absent(),
+      MinSize: '0',
+      MaxSize: '10',
+      MixedInstancesPolicy: {
+        LaunchTemplate: {
+          LaunchTemplateSpecification: {
+            LaunchTemplateId: Match.anyValue(),
+            Version: Match.anyValue(),
+          },
+          Overrides: [
+            { InstanceType: 'g5.xlarge' },
+            { InstanceType: 'g4dn.xlarge' },
+          ],
+        },
+        InstancesDistribution: {
+          OnDemandBaseCapacity: 0,
+          OnDemandPercentageAboveBaseCapacity: 0,
+          SpotAllocationStrategy: 'price-capacity-optimized',
+          SpotMaxPrice: '1.10',
+        },
+      },
+    });
+    // EC2 rejects mixed policies when their template also specifies Spot.
+    template.hasResourceProperties('AWS::EC2::LaunchTemplate', {
+      LaunchTemplateData: Match.objectLike({
+        InstanceMarketOptions: Match.absent(),
+        IamInstanceProfile: Match.anyValue(),
+        UserData: Match.anyValue(),
+      }),
+    });
+  });
+
   test('has a second ECR repo for the whisperx image', () => {
     const template = synth();
     template.resourceCountIs('AWS::ECR::Repository', 2);
