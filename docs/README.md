@@ -27,6 +27,9 @@ Markdown for English language and historical/current status.
 
 ## Feature workflows
 
+- [Public user guide](user-guide/README.md): Korean end-user instructions and
+  GitHub Pages publishing, explicitly requested by the user. This public HTML
+  guide is a scoped language exception; engineering references remain English.
 - [SA meeting workflow](features/sa-meeting-workflow.md): preparation, source-aware
   notes, customer/project connection, and private follow-up documents.
 
