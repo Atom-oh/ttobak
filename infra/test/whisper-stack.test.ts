@@ -36,8 +36,8 @@ describe('WhisperStack whisperx benchmark additions', () => {
             Version: Match.anyValue(),
           },
           Overrides: [
-            { InstanceType: 'g5.xlarge' },
             { InstanceType: 'g4dn.xlarge' },
+            { InstanceType: 'g4dn.2xlarge' },
           ],
         },
         InstancesDistribution: {
@@ -51,6 +51,7 @@ describe('WhisperStack whisperx benchmark additions', () => {
     // EC2 rejects mixed policies when their template also specifies Spot.
     template.hasResourceProperties('AWS::EC2::LaunchTemplate', {
       LaunchTemplateData: Match.objectLike({
+        InstanceType: 'g4dn.xlarge',
         InstanceMarketOptions: Match.absent(),
         IamInstanceProfile: Match.anyValue(),
         UserData: Match.anyValue(),

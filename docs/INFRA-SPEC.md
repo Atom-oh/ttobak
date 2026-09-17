@@ -197,8 +197,9 @@ separate. Creating this construct does not backfill attachments. See
 ## Whisper and research
 
 Whisper uses the imported VPC's actual private-with-egress subnets and a mixed
-g5.xlarge/g4dn.xlarge Spot ASG (min/desired 0, max 10). Price-capacity-optimized
-allocation can use g4dn in 2b when g5 in 2a is unavailable; 2b does not offer g5.
+g4dn.xlarge/g4dn.2xlarge Spot ASG (min/desired 0, max 10). Price-capacity-optimized
+allocation uses GPU types offered in both 2a and 2b. Do not include g5: 2b does
+not offer it, and that unsupported combination can reject a mixed Fleet request.
 The mixed policy retains the $1.10 hourly ceiling and zero On-Demand allocation.
 Root disk is
 200GiB encrypted gp3, and ECS stopped-task cleanup is shortened to three minutes

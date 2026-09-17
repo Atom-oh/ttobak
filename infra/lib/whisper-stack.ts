@@ -67,7 +67,7 @@ export class WhisperStack extends cdk.Stack {
       vpcSubnets: {
         subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
       },
-      instanceType: new ec2.InstanceType('g5.xlarge'),
+      instanceType: new ec2.InstanceType('g4dn.xlarge'),
       machineImage: ecs.EcsOptimizedImage.amazonLinux2(
         ecs.AmiHardwareType.GPU,
       ),
@@ -101,15 +101,16 @@ export class WhisperStack extends cdk.Stack {
 
     // Retain the generated launch template, instance role and ECS user data.
     // A single g5 pool cannot start when 2a is exhausted: 2b has no g5 offering.
-    // Equal-size, one-GPU alternatives let managed scaling use both private AZs.
+    // Both one-GPU alternatives are offered in both private AZs; an unsupported
+    // type/AZ combination can reject the entire EC2 Fleet request.
     // Market options belong on the mixed policy, not on its launch template.
     const cfnAsg = asg.node.defaultChild as autoscaling.CfnAutoScalingGroup;
     cfnAsg.mixedInstancesPolicy = {
       launchTemplate: {
         launchTemplateSpecification: cfnAsg.launchTemplate!,
         overrides: [
-          { instanceType: 'g5.xlarge' },
           { instanceType: 'g4dn.xlarge' },
+          { instanceType: 'g4dn.2xlarge' },
         ],
       },
       instancesDistribution: {
@@ -183,7 +184,7 @@ export class WhisperStack extends cdk.Stack {
     this.taskDefinition.addContainer('whisper', {
       containerName: WHISPER_CONTAINER_NAME,
       image: ecs.ContainerImage.fromEcrRepository(this.ecrRepository, 'latest'),
-      memoryLimitMiB: 12288, // 12GB (g5.xlarge has 16GB system RAM, reserve 4GB for OS/ECS agent)
+      memoryLimitMiB: 12288, // 12GB (smallest host has 16GB; reserve 4GB for OS/ECS agent)
       gpuCount: 1,
       environment: {
         BUCKET_NAME: props.bucket.bucketName,
