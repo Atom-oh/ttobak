@@ -25,6 +25,8 @@ reference archive. Enable GitHub Pages with the Actions build source. Main-branc
 changes to this directory or the workflow deploy automatically after merge;
 pull requests validate without deployment permissions. Manual deployment is
 restricted to main. No application API, credentials, or AWS deployment is used.
+Inside the serialized deployment job, a main-SHA check skips superseded builds
+and old manual reruns. Official actions are pinned to immutable commit SHAs.
 
 Verify content against these sources when updating:
 
