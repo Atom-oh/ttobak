@@ -10,6 +10,8 @@ from urllib.parse import urlsplit
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / 'docs/user-guide'
 ASSETS = ('index.html', 'style.css', 'guide.js')
+CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; "
+       "base-uri 'none'; form-action 'none'; connect-src 'none'")
 
 
 class GuideParser(HTMLParser):
@@ -18,11 +20,14 @@ class GuideParser(HTMLParser):
         self.ids = set()
         self.references = []
         self.lang = None
+        self.policies = []
 
     def handle_starttag(self, tag, attrs):
         values = dict(attrs)
         if tag == 'html':
             self.lang = values.get('lang')
+        if tag == 'meta' and values.get('http-equiv', '').lower() == 'content-security-policy':
+            self.policies.append(values.get('content'))
         if 'id' in values:
             identifier = values['id']
             if identifier in self.ids:
@@ -39,6 +44,8 @@ def build(destination):
     parser.close()
     if parser.lang != 'ko':
         raise ValueError('the public guide must declare Korean')
+    if parser.policies != [CSP]:
+        raise ValueError('the public guide must retain its local-only content security policy')
     for reference in parser.references:
         url = urlsplit(reference)
         if url.scheme or url.netloc:

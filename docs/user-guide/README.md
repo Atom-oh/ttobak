@@ -26,8 +26,13 @@ pushes deploy automatically after merge, including unrelated changes so that
 superseded builds always have a replacement run;
 pull requests validate without deployment permissions. Manual deployment is
 restricted to main. No application API, credentials, or AWS deployment is used.
-Inside the serialized deployment job, a main-SHA check skips superseded builds
-and old manual reruns. Official actions are pinned to immutable commit SHAs.
+The complete workflow uses GitHub's FIFO `queue: max` concurrency mode, so an
+older run cannot replace the newest pending run. A main-SHA check in the build
+job skips superseded builds and old manual reruns before the deployment job
+enters the Pages environment. Official actions are pinned to immutable commits.
+GitHub allows up to 100 waiting runs; after a queue overflow or failed build,
+dispatch a fresh workflow on main to publish the current guide.
+See GitHub's [workflow concurrency documentation](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
 
 Verify content against these sources when updating:
 
