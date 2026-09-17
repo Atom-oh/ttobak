@@ -3,10 +3,8 @@ name: Deploy User Guide
 on:
   push:
     branches: [main]
-    paths:
-      - 'docs/user-guide/**'
-      - 'scripts/docs/build_user_guide.py'
-      - '.github/workflows/deploy-user-guide.yml'
+    # Every new main SHA needs a replacement run, even for unrelated changes:
+    # the serialized deploy job deliberately skips any superseded SHA.
   pull_request:
     paths:
       - 'docs/user-guide/**'

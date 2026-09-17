@@ -22,7 +22,8 @@ save the complete guide as PDF. Search filters navigation, never printable conte
 The Pages workflow validates local assets and anchors, then copies only the three
 public site files into its artifact. It never publishes the repository's internal
 reference archive. Enable GitHub Pages with the Actions build source. Main-branch
-changes to this directory or the workflow deploy automatically after merge;
+pushes deploy automatically after merge, including unrelated changes so that
+superseded builds always have a replacement run;
 pull requests validate without deployment permissions. Manual deployment is
 restricted to main. No application API, credentials, or AWS deployment is used.
 Inside the serialized deployment job, a main-SHA check skips superseded builds
