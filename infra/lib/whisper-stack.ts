@@ -114,7 +114,10 @@ export class WhisperStack extends cdk.Stack {
         ],
       },
       instancesDistribution: {
-        onDemandBaseCapacity: 0,
+        // Keep the first active worker off Spot so a regional Spot shortage
+        // cannot strand every meeting. min/desired=0 still allows zero-scale.
+        onDemandBaseCapacity: 1,
+        onDemandAllocationStrategy: 'prioritized',
         onDemandPercentageAboveBaseCapacity: 0,
         spotAllocationStrategy: 'price-capacity-optimized',
         spotMaxPrice: '1.10',

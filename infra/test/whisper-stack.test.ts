@@ -41,7 +41,8 @@ describe('WhisperStack whisperx benchmark additions', () => {
           ],
         },
         InstancesDistribution: {
-          OnDemandBaseCapacity: 0,
+          OnDemandBaseCapacity: 1,
+          OnDemandAllocationStrategy: 'prioritized',
           OnDemandPercentageAboveBaseCapacity: 0,
           SpotAllocationStrategy: 'price-capacity-optimized',
           SpotMaxPrice: '1.10',
