@@ -70,12 +70,25 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
+      contents: read
       pages: write
       id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      # Failed-job reruns reuse build outputs. Revalidate on every deployment
+      # attempt; fail stale retries so they cannot record a successful deploy.
+      - name: Revalidate deployment revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          current_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+          if [ "$current_sha" != "$EXPECTED_SHA" ]; then
+            echo "::error::Superseded revision; dispatch a fresh run on main."
+            exit 1
+          fi
       - name: Deploy user guide to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5
