@@ -18,6 +18,10 @@ import (
 
 var ErrInvalidCursor = errors.New("invalid continuation cursor")
 
+func projectInvitationSubjectKey(projectID, userID string) map[string]types.AttributeValue {
+	return map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: model.PrefixProject + projectID}, "SK": &types.AttributeValueMemberS{Value: "INVITE_SUB#" + userID}}
+}
+
 func projectPendingReverseKey(p *model.PendingShare) map[string]types.AttributeValue {
 	return map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: model.PrefixProject + p.ProjectID}, "SK": &types.AttributeValueMemberS{Value: model.PrefixPendingProjectMember + p.Email}}
 }
@@ -46,6 +50,13 @@ func (r *DynamoDBRepository) PutPendingProjectShare(ctx context.Context, p *mode
 	if err != nil {
 		return err
 	}
+	subject := *p
+	subject.PK = model.PrefixProject + p.ProjectID
+	subject.SK = "INVITE_SUB#" + p.InvitedCognitoSub
+	subjectItem, err := attributevalue.MarshalMap(subject)
+	if err != nil {
+		return err
+	}
 	owner, err := expression.NewBuilder().WithCondition(expression.AttributeExists(expression.Name("PK")).And(expression.Name("ownerUserId").Equal(expression.Value(p.InvitedByUserID)))).Build()
 	if err != nil {
 		return err
@@ -59,6 +70,7 @@ func (r *DynamoDBRepository) PutPendingProjectShare(ctx context.Context, p *mode
 		{Put: &types.Put{TableName: aws.String(r.tableName), Item: item}},
 		{Put: &types.Put{TableName: aws.String(r.tableName), Item: reverseItem}},
 		{ConditionCheck: &types.ConditionCheck{TableName: aws.String(r.tableName), Key: map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: model.PrefixProject + p.ProjectID}, "SK": &types.AttributeValueMemberS{Value: model.PrefixProjectMember + p.InvitedCognitoSub}}, ConditionExpression: absent.Condition(), ExpressionAttributeNames: absent.Names()}},
+		{Put: &types.Put{TableName: aws.String(r.tableName), Item: subjectItem}},
 	}})
 	if err != nil {
 		return mapProjectTransactionCanceledError(err, p.ProjectID, "project", "queue project invitation")
@@ -87,7 +99,7 @@ func (r *DynamoDBRepository) projectPendingDeletes(p *model.PendingShare) ([]typ
 }
 
 // DeletePendingProjectShareIfMatch preserves a concurrent re-invitation. A lost
-// version race is a no-op, as with the account/meeting cleanup primitive.
+// version race returns ErrConditionFailed so a refreshed page is retried.
 func (r *DynamoDBRepository) DeletePendingProjectShareIfMatch(ctx context.Context, p *model.PendingShare) error {
 	items, err := r.projectPendingDeletes(p)
 	if err != nil {
@@ -96,9 +108,6 @@ func (r *DynamoDBRepository) DeletePendingProjectShareIfMatch(ctx context.Contex
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
 	if err != nil {
 		mapped := mapProjectTransactionCanceledError(err, p.ProjectID, "project", "clear project invitation")
-		if errors.Is(mapped, ErrConditionFailed) {
-			return nil
-		}
 		return mapped
 	}
 	return nil
@@ -140,16 +149,22 @@ func (r *DynamoDBRepository) MaterializePendingProjectGrant(ctx context.Context,
 		{ConditionCheck: &types.ConditionCheck{TableName: aws.String(r.tableName), Key: map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: model.PrefixProject + p.ProjectID}, "SK": &types.AttributeValueMemberS{Value: model.SKProjectConfig}}, ConditionExpression: owner.Condition(), ExpressionAttributeNames: owner.Names(), ExpressionAttributeValues: owner.Values()}},
 		{Put: &types.Put{TableName: aws.String(r.tableName), Item: item, ConditionExpression: absent.Condition(), ExpressionAttributeNames: absent.Names()}},
 	}
+	subject, err := expression.NewBuilder().WithCondition(expression.Name("createdAt").Equal(expression.Value(p.CreatedAt)).And(expression.Name("email").Equal(expression.Value(p.Email)))).Build()
+	if err != nil {
+		return false, err
+	}
 	items = append(items, deletes...)
+	items = append(items, types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{TableName: aws.String(r.tableName), Key: projectInvitationSubjectKey(p.ProjectID, userID), ConditionExpression: subject.Condition(), ExpressionAttributeNames: subject.Names(), ExpressionAttributeValues: subject.Values()}})
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
 	if err == nil {
 		return true, nil
 	}
 	// Authority gone or membership already exists: retire only this version so
 	// removing an independently granted member cannot later resurrect this grant.
-	ownerFailed, known := transactionItemFailed(err, 0, 4)
-	memberFailed, _ := transactionItemFailed(err, 1, 4)
-	if known && (ownerFailed || memberFailed) {
+	ownerFailed, known := transactionItemFailed(err, 0, len(items))
+	memberFailed, _ := transactionItemFailed(err, 1, len(items))
+	subjectFailed, _ := transactionItemFailed(err, 4, len(items))
+	if known && (ownerFailed || memberFailed || subjectFailed) {
 		if err := r.DeletePendingProjectShareIfMatch(ctx, p); err != nil {
 			return false, err
 		}
@@ -286,6 +301,7 @@ func (r *DynamoDBRepository) PutRegisteredProjectMember(ctx context.Context, own
 		{ConditionCheck: &types.ConditionCheck{TableName: aws.String(r.tableName), Key: map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: model.PrefixProject + projectID}, "SK": &types.AttributeValueMemberS{Value: model.SKProjectConfig}}, ConditionExpression: owner.Condition(), ExpressionAttributeNames: owner.Names(), ExpressionAttributeValues: owner.Values()}},
 		{Put: &types.Put{TableName: aws.String(r.tableName), Item: item, ConditionExpression: absent.Condition(), ExpressionAttributeNames: absent.Names()}},
 		{ConditionCheck: &types.ConditionCheck{TableName: aws.String(r.tableName), Key: pendingShareKey(email, model.PrefixPendingProject+projectID), ConditionExpression: absent.Condition(), ExpressionAttributeNames: absent.Names()}},
+		{Delete: &types.Delete{TableName: aws.String(r.tableName), Key: projectInvitationSubjectKey(projectID, userID)}},
 	}})
 	if err != nil {
 		return mapProjectTransactionCanceledError(err, projectID, "project", "add registered member")

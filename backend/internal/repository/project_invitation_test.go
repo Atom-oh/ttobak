@@ -7,14 +7,18 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/ttobak/backend/internal/model"
 )
 
@@ -41,7 +45,7 @@ func TestProjectInvitationQueuesBothRowsWithOwnerAndExistingMemberGuards(t *test
 			t.Fatal(target)
 		}
 		items := body["TransactItems"].([]any)
-		if len(items) != 4 {
+		if len(items) != 5 {
 			t.Fatalf("expected owner, canonical, reverse, absent-member checks: %d", len(items))
 		}
 		owner := items[0].(map[string]any)["ConditionCheck"].(map[string]any)
@@ -78,7 +82,7 @@ func TestProjectInvitationQueuesBothRowsWithOwnerAndExistingMemberGuards(t *test
 func TestProjectInvitationMaterializationBindsIdentityExpiryAndVersion(t *testing.T) {
 	r := projectInviteWire(t, func(_ string, body map[string]any) (int, string) {
 		items := body["TransactItems"].([]any)
-		if len(items) != 4 {
+		if len(items) != 5 {
 			t.Fatal("grant is not atomic with both queue rows")
 		}
 		canonical := items[2].(map[string]any)["Delete"].(map[string]any)
@@ -122,7 +126,7 @@ func TestProjectInvitationNewVersionRaceNeverCleansFreshGrant(t *testing.T) {
 	calls := 0
 	r := projectInviteWire(t, func(string, map[string]any) (int, string) {
 		calls++
-		return 400, `{"__type":"TransactionCanceledException","CancellationReasons":[{"Code":"None"},{"Code":"None"},{"Code":"ConditionalCheckFailed"},{"Code":"None"}]}`
+		return 400, `{"__type":"TransactionCanceledException","CancellationReasons":[{"Code":"None"},{"Code":"None"},{"Code":"ConditionalCheckFailed"},{"Code":"None"},{"Code":"None"}]}`
 	})
 	ok, err := r.MaterializePendingProjectGrant(context.Background(), inviteFixture(), "recipient", "user@example.com")
 	if err != nil || ok || calls != 1 {
@@ -137,7 +141,7 @@ func TestProjectInvitationDeletedProjectOrExistingMemberRetiresOnlyObservedVersi
 			r := projectInviteWire(t, func(_ string, body map[string]any) (int, string) {
 				calls++
 				if calls == 1 {
-					reasons := []map[string]string{{"Code": "None"}, {"Code": "None"}, {"Code": "None"}, {"Code": "None"}}
+					reasons := []map[string]string{{"Code": "None"}, {"Code": "None"}, {"Code": "None"}, {"Code": "None"}, {"Code": "None"}}
 					reasons[failed]["Code"] = "ConditionalCheckFailed"
 					b, _ := json.Marshal(map[string]any{"__type": "TransactionCanceledException", "CancellationReasons": reasons})
 					return 400, string(b)
@@ -269,16 +273,101 @@ func TestProjectUserQueueIsBoundedAndCursorCannotChooseAnotherUser(t *testing.T)
 func TestLegacyProjectAddCannotCoexistWithPendingGrant(t *testing.T) {
 	r := projectInviteWire(t, func(_ string, body map[string]any) (int, string) {
 		items := body["TransactItems"].([]any)
-		if len(items) != 3 {
+		if len(items) != 4 {
 			t.Fatal(len(items))
 		}
 		pending := items[2].(map[string]any)["ConditionCheck"].(map[string]any)
 		if !strings.Contains(pending["ConditionExpression"].(string), "attribute_not_exists") || pending["Key"].(map[string]any)["PK"].(map[string]any)["S"] != "PROJECT_INVITES#user@example.com" {
 			t.Fatal(pending)
 		}
-		return 400, `{"__type":"TransactionCanceledException","CancellationReasons":[{"Code":"None"},{"Code":"None"},{"Code":"ConditionalCheckFailed"}]}`
+		return 400, `{"__type":"TransactionCanceledException","CancellationReasons":[{"Code":"None"},{"Code":"None"},{"Code":"ConditionalCheckFailed"},{"Code":"None"}]}`
 	})
 	if err := r.PutRegisteredProjectMember(context.Background(), "owner", "project", "recipient", "user@example.com"); !errors.Is(err, ErrConditionFailed) {
 		t.Fatal(err)
+	}
+}
+
+func TestProjectMemberRemovalInvalidatesAllEmailInvitations(t *testing.T) {
+	r := projectInviteWire(t, func(_ string, body map[string]any) (int, string) {
+		items := body["TransactItems"].([]any)
+		if len(items) != 2 {
+			t.Fatal(items)
+		}
+		guard := items[1].(map[string]any)["Delete"].(map[string]any)["Key"].(map[string]any)
+		if guard["SK"].(map[string]any)["S"] != "INVITE_SUB#recipient" {
+			t.Fatal(guard)
+		}
+		return 200, "{}"
+	})
+	if err := r.DeleteProjectMember(context.Background(), "project", "recipient"); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestExpiredProjectCleanupReportsConcurrentRefresh(t *testing.T) {
+	r := projectInviteWire(t, func(string, map[string]any) (int, string) {
+		return 400, `{"__type":"TransactionCanceledException","CancellationReasons":[{"Code":"ConditionalCheckFailed"},{"Code":"None"}]}`
+	})
+	if err := r.DeletePendingProjectShareIfMatch(context.Background(), inviteFixture()); !errors.Is(err, ErrConditionFailed) {
+		t.Fatal(err)
+	}
+}
+
+func TestProjectInvitationSubjectIntegration(t *testing.T) {
+	table := os.Getenv("TTOBAK_PROJECT_INVITATION_TEST_TABLE")
+	if table == "" {
+		t.Skip("disposable integration table not requested")
+	}
+	if !regexp.MustCompile(`^ttobak-onboarding-regression-[a-f0-9]{12}$`).MatchString(table) {
+		t.Fatal("unsafe test table")
+	}
+	account := os.Getenv("TTOBAK_PROJECT_INVITATION_TEST_ACCOUNT")
+	if account == "" {
+		t.Fatal("expected account is required")
+	}
+	ctx := context.Background()
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion("ap-northeast-2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	who, err := sts.NewFromConfig(cfg).GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
+	if err != nil || aws.ToString(who.Account) != account {
+		t.Fatal("unexpected integration identity")
+	}
+	client := dynamodb.NewFromConfig(cfg)
+	repo := NewDynamoDBRepository(client, table)
+	_, err = client.PutItem(ctx, &dynamodb.PutItemInput{TableName: aws.String(table), Item: map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: "PROJECT#integration"}, "SK": &types.AttributeValueMemberS{Value: "CONFIG"}, "ownerUserId": &types.AttributeValueMemberS{Value: "owner"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invite := func(email string) *model.PendingShare {
+		p := &model.PendingShare{Kind: model.PendingShareKindProject, ProjectID: "integration", Email: email, InvitedByUserID: "owner", InvitedCognitoSub: "same-sub"}
+		if err := repo.PutPendingShare(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	old := invite("old@example.test")
+	newer := invite("new@example.test")
+	if ok, err := repo.MaterializePendingProjectGrant(ctx, newer, "same-sub", "new@example.test"); err != nil || !ok {
+		t.Fatalf("new grant failed: %v", err)
+	}
+	if err := repo.DeleteProjectMember(ctx, "integration", "same-sub"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.MaterializePendingProjectGrant(ctx, old, "same-sub", "old@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	member, err := repo.GetProjectMember(ctx, "integration", "same-sub")
+	if err != nil || member != nil {
+		t.Fatalf("old email restored removed access: %+v %v", member, err)
+	}
+	before := invite("refresh@example.test")
+	after := invite("refresh@example.test")
+	if err := repo.DeletePendingProjectShareIfMatch(ctx, before); !errors.Is(err, ErrConditionFailed) {
+		t.Fatalf("refresh conflict hidden: %v", err)
+	}
+	current, err := repo.GetPendingShare(ctx, after.Email, after.SK)
+	if err != nil || current == nil || !current.CreatedAt.Equal(after.CreatedAt) {
+		t.Fatal("refreshed invitation was removed")
 	}
 }

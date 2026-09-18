@@ -26,15 +26,10 @@ to S3 GET presigns. PUT uploads continue to use signed S3 URLs.
 
 ### Session bootstrap and project invitations
 
-Authenticated `POST /api/session/bootstrap` takes optional `{ projectCursor }`
-(maximum 1,024 body bytes); identity comes only from verified JWT claims. It
-returns `emailVerified`, `pendingGrants`, `retryPending`, `projectCursor`,
-`projectInvitationsEnabled` and at most 100 `joinedAccountIds`. Project work is
-limited to 25 canonical rows and five seconds per call. Failed pages retain their
-cursor. Profile initialization errors fail the request; invitation side effects
-surface retry state without blocking unrelated data. Unverified users cannot
-consume grants. The companion client initializes once and refreshes after later
-pages rather than interrupting an active recording.
+Core `POST /api/session/bootstrap` initializes the authenticated profile and
+account/meeting grants. It reports project capability disabled; bounded project
+pages are supplied by the companion guard/bootstrap change. Keep pending writers disabled until that
+consumer and the client are deployed and verified.
 
 Owner-only `POST /api/projects/{projectId}/members` accepts `{ email, allowPending? }`
 (maximum 2,048 body bytes; email 254 bytes). It resolves current Cognito identity:
@@ -52,7 +47,9 @@ Owner-only `GET /api/projects/{projectId}/members/pending?cursor=...` returns
 reverse rows and revalidates canonical grants; empty pages may have continuation.
 `DELETE /api/projects/{projectId}/members/pending` accepts `{ email }` and returns
 204 or 409 on a membership/version race. Already-joined users use member removal.
-Project user queues are isolated from old readers; transactional rows, TTL and
+A project/sub latest-invitation marker invalidates prior email-specific grants.
+Member removal and legacy direct addition retire that marker atomically. Project
+cleanup version conflicts remain retryable. User queues are isolated from old readers; transactional rows, TTL and
 the required incompatible-API rollback drain are specified in ADR-044.
 
 ### Meetings and pagination

@@ -14,14 +14,16 @@ or other values disable it. Legacy direct adds require no conflicting pending gr
 Canonical grants use `PROJECT_INVITES#{email}` / `PENDING_PROJECT#{projectId}` with
 `PROJECT#{projectId}` / `PENDING_MEMBER#{email}` reverse rows. Transactions recheck
 owner, recipient sub, expiry/version and existing membership when queueing,
-consuming or revoking. Refresh races must preserve the new grant. Lists validate
+consuming or revoking. Refresh races must preserve the new grant and remain retryable. A project/sub
+latest-intent marker prevents an old email invitation from restoring access after
+member removal; removal and legacy direct add retire that marker atomically. Lists validate
 reverse rows canonically. The separate user namespace protects project grants
 from older account/meeting readers. Existing queues and their identity guards stay
 unchanged. Grant expiry remains 30 days; temporary passwords remain seven days.
 Deleted-project queue rows can persist until cleanup/TTL under ADR-025's residual
 storage limit, but a missing/reassigned project cannot grant membership.
 
-Authenticated bootstrap initializes the profile and processes project pages of at
+The companion authenticated bootstrap initializes the profile and processes project pages of at
 most 25 rows under a five-second budget. Failed pages remain retryable. Identity
 comes from verified JWTs, not the body. Account discovery hints require canonical
 membership on reads. The companion client refreshes lists after later pages
