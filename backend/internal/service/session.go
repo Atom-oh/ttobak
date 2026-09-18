@@ -21,6 +21,7 @@ type SessionBootstrapResponse struct {
 }
 
 type projectBootstrapStore interface {
+	ProjectInvitationsAllowed(context.Context) (bool, error)
 	ListPendingProjectSharesForUser(context.Context, string, string) ([]model.PendingShare, string, error)
 	MaterializePendingProjectGrant(context.Context, *model.PendingShare, string, string) (bool, error)
 	DeletePendingProjectShareIfMatch(context.Context, *model.PendingShare) error
@@ -48,9 +49,24 @@ func (s *MeetingService) BootstrapSession(ctx context.Context, userID, email, na
 	for _, p := range pending {
 		if p.InvitedCognitoSub == userID && p.TTL > time.Now().Unix() {
 			result.PendingGrants++
+			if verified {
+				result.RetryPending = true
+			}
 		}
 	}
 	if store, ok := s.repo.(projectBootstrapStore); ok {
+		allowed, err := store.ProjectInvitationsAllowed(ctx)
+		if err != nil {
+			log.Printf("project invitation control unavailable: %v", err)
+			result.ProjectInvitationsEnabled = false
+			result.RetryPending = true
+			return result, nil
+		}
+		result.ProjectInvitationsEnabled = result.ProjectInvitationsEnabled && allowed
+		if !allowed {
+			result.ProjectCursor = ""
+			return result, nil
+		}
 		if err := s.bootstrapProjectInvitations(ctx, store, userID, email, verified, projectCursor, result); err != nil {
 			return nil, err
 		}
@@ -96,6 +112,10 @@ func (s *MeetingService) bootstrapProjectInvitations(ctx context.Context, store 
 		}
 		resolved, err := store.MaterializePendingProjectGrant(budget, p, userID, email)
 		if err != nil || !resolved {
+			if errors.Is(err, repository.ErrProjectInvitationsPaused) {
+				result.ProjectInvitationsEnabled = false
+				return nil
+			}
 			if err != nil {
 				log.Printf("session project invitation could not finish: %v", err)
 			}

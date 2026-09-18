@@ -50,9 +50,9 @@ production build, password-policy tests, and documentation checks. Deploy API fi
 and verify its code revision/new authenticated routes before frontend publication.
 Frontend deployment must preserve runtime config, set HTML no-cache and invalidate
 CloudFront. Incompatible API rollback requires the companion operator guard:
-pin the reviewed code hash/account, pause queued writers with a revision condition,
-wait out old Lambda requests, conditionally cancel canonical/reverse project
-invitations and verify an empty queue while the writer fence still holds. Existing
+pin the reviewed serving alias/code/account, pause the persistent database
+fence by revision, conditionally cancel canonical/reverse project invitations
+and verify an empty queue while that transactional fence still holds. Existing
 memberships remain unchanged. Never retain pending grants across an older API that
 can add/remove members without retiring them; cancelled grants need fresh invites.
 
@@ -62,3 +62,12 @@ email verification, disabled accounts, trusted bootstrap identity and forged
 account discovery hints. Mail tests use fakes; a passing unit test does not prove
 inbox delivery. Live recipient mail or identity changes require explicit operator
 scope and are not a side effect of deploying this implementation.
+
+The rollback fence is `CONTROL#PROJECT_INVITATIONS` / `STATE`, storing `enabled`
+and a revision. Queue transactions pin their observed revision; claims check the
+same control row. Pausing therefore also rejects delayed pre-pause transactions,
+without estimating old Lambda execution budgets. Neither code/alias deployments
+nor environment replacement resets the row. Resume is an explicit revision-guarded
+operator action requiring an empty queue and a reviewed compatible serving version.
+The infrastructure activation parameter defaults closed and salts the version
+description so `live` receives the intended environment on parameter changes.

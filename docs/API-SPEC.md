@@ -52,7 +52,9 @@ Owner-only `GET /api/projects/{projectId}/members/pending?cursor=...` returns
 reverse rows and revalidates canonical grants; empty pages may have continuation.
 `DELETE /api/projects/{projectId}/members/pending` accepts `{ email }` and returns
 204 or 409 on a membership/version race. Already-joined users use member removal.
-Project user queues are isolated from old readers; transactional rows, TTL and
+A durable control row also gates queue/claim transactions and bootstrap
+capabilities; a paused fence returns `INVITATIONS_PAUSED` and clears page
+continuation. Project user queues are isolated from old readers; transactional rows, TTL and
 the required incompatible-API rollback drain are specified in ADR-044.
 
 ### Meetings and pagination

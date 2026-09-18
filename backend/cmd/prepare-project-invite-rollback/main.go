@@ -7,7 +7,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -23,52 +22,81 @@ import (
 )
 
 type snapshot struct {
-	hash, revision string
-	paused, stable bool
-	timeout        time.Duration
+	hash, revision, version, arn string
+	configured, stable           bool
 }
 type operations struct {
-	current func(context.Context) (snapshot, error)
-	pause   func(context.Context, string) (snapshot, error)
-	wait    func(context.Context, time.Duration) error
-	scan    func(context.Context, map[string]dt.AttributeValue) ([]model.PendingShare, map[string]dt.AttributeValue, error)
-	remove  func(context.Context, *model.PendingShare) error
+	current  func(context.Context) (snapshot, error)
+	fence    func(context.Context) (repository.ProjectInvitationControl, error)
+	setFence func(context.Context, string, bool) (repository.ProjectInvitationControl, error)
+	scan     func(context.Context, map[string]dt.AttributeValue) ([]model.PendingShare, map[string]dt.AttributeValue, error)
+	remove   func(context.Context, *model.PendingShare) error
 }
 
-func samePaused(a, b snapshot) bool {
-	return b.stable && b.paused && a.hash == b.hash && a.revision == b.revision
+func sameServing(a, b snapshot) bool {
+	return b.stable && a.hash == b.hash && a.revision == b.revision && a.version == b.version && a.arn == b.arn
+}
+func validateServing(expected string, s snapshot) error {
+	if expected == "" || s.hash != expected || !s.stable {
+		return errors.New("reviewed serving API code or alias state does not match")
+	}
+	return nil
+}
+func scanEmpty(ctx context.Context, ops operations) error {
+	var cursor map[string]dt.AttributeValue
+	for {
+		rows, next, err := ops.scan(ctx, cursor)
+		if err != nil {
+			return err
+		}
+		if len(rows) > 0 {
+			return errors.New("pending invitations remain; do not resume or roll back")
+		}
+		if len(next) == 0 {
+			return nil
+		}
+		cursor = next
+	}
 }
 
-// Drain only after the reviewed compatible API has stopped accepting writers
-// and all requests from the old environment have exceeded their Lambda budget.
-func prepare(ctx context.Context, ops operations, expectedHash string, apply bool) (int, error) {
+// A persistent transactional fence covers every compatible writer/version,
+// including delayed transactions. No latest-only mutation or timeout guess is used.
+func prepare(ctx context.Context, ops operations, expected string, apply bool) (int, error) {
 	initial, err := ops.current(ctx)
 	if err != nil {
 		return 0, err
 	}
-	if expectedHash == "" || initial.hash != expectedHash || !initial.stable {
-		return 0, errors.New("reviewed API code hash or update state does not match")
+	if err := validateServing(expected, initial); err != nil {
+		return 0, err
 	}
-	observed := initial
+	var paused repository.ProjectInvitationControl
 	if apply {
-		observed, err = ops.pause(ctx, initial.revision)
+		prior, err := ops.fence(ctx)
 		if err != nil {
 			return 0, err
 		}
-		if observed.hash != expectedHash || !observed.paused || !observed.stable || observed.timeout <= 0 || observed.timeout > 15*time.Minute {
-			return 0, errors.New("compatible API was not paused")
-		}
-		if err := ops.wait(ctx, observed.timeout+5*time.Second); err != nil {
+		paused, err = ops.setFence(ctx, prior.Revision, false)
+		if err != nil {
 			return 0, err
+		}
+		if paused.Enabled || paused.Revision == "" {
+			return 0, errors.New("database writer fence was not established")
 		}
 	}
 	check := func() error {
-		current, err := ops.current(ctx)
+		live, err := ops.current(ctx)
 		if err != nil {
 			return err
 		}
-		if !samePaused(observed, current) {
-			return errors.New("API configuration changed during drain; stop rollback")
+		if !sameServing(initial, live) {
+			return errors.New("serving alias changed; stop rollback")
+		}
+		control, err := ops.fence(ctx)
+		if err != nil {
+			return err
+		}
+		if control.Enabled || control.Revision != paused.Revision {
+			return errors.New("database fence changed; stop rollback")
 		}
 		return nil
 	}
@@ -105,21 +133,8 @@ func prepare(ctx context.Context, ops operations, expectedHash string, apply boo
 		cursor = next
 	}
 	if apply {
-		// Conditional cleanup may preserve a concurrent refresh. Refuse readiness
-		// unless the entire canonical queue is empty and the writer fence still holds.
-		cursor = nil
-		for {
-			rows, next, err := ops.scan(ctx, cursor)
-			if err != nil {
-				return count, err
-			}
-			if len(rows) > 0 {
-				return count, errors.New("pending invitations remain; do not roll back API")
-			}
-			if len(next) == 0 {
-				break
-			}
-			cursor = next
+		if err := scanEmpty(ctx, ops); err != nil {
+			return count, err
 		}
 		if err := check(); err != nil {
 			return count, err
@@ -128,13 +143,63 @@ func prepare(ctx context.Context, ops operations, expectedHash string, apply boo
 	return count, nil
 }
 
+func resume(ctx context.Context, ops operations, expected string, apply bool) error {
+	initial, err := ops.current(ctx)
+	if err != nil {
+		return err
+	}
+	if err := validateServing(expected, initial); err != nil {
+		return err
+	}
+	if !initial.configured {
+		return errors.New("activate the reviewed API infrastructure switch before resuming")
+	}
+	control, err := ops.fence(ctx)
+	if err != nil {
+		return err
+	}
+	if control.Enabled || control.Revision == "" {
+		return errors.New("no paused database fence to resume")
+	}
+	if err := scanEmpty(ctx, ops); err != nil {
+		return err
+	}
+	live, err := ops.current(ctx)
+	if err != nil {
+		return err
+	}
+	if !sameServing(initial, live) {
+		return errors.New("serving alias changed before resume")
+	}
+	if apply {
+		_, err = ops.setFence(ctx, control.Revision, true)
+	}
+	return err
+}
+
+func servingSnapshot(alias *lambda.GetAliasOutput, cfg *lambda.GetFunctionConfigurationOutput, table string) (snapshot, error) {
+	if alias.RoutingConfig != nil && len(alias.RoutingConfig.AdditionalVersionWeights) > 0 {
+		return snapshot{}, errors.New("weighted alias routing is not supported by this guard")
+	}
+	version := aws.ToString(alias.FunctionVersion)
+	if version == "" || version == "$LATEST" || aws.ToString(cfg.Version) != version || aws.ToString(alias.AliasArn) == "" || aws.ToString(alias.RevisionId) == "" {
+		return snapshot{}, errors.New("published serving version was not resolved")
+	}
+	if cfg.Environment == nil || cfg.Environment.Error != nil || cfg.Environment.Variables["TABLE_NAME"] != table {
+		return snapshot{}, errors.New("serving API table/environment does not match")
+	}
+	return snapshot{hash: aws.ToString(cfg.CodeSha256), revision: aws.ToString(alias.RevisionId), version: version, arn: aws.ToString(alias.AliasArn), configured: cfg.Environment.Variables["PROJECT_INVITATIONS_ENABLED"] == "true", stable: cfg.State == lt.StateActive}, nil
+}
+
 func main() {
 	region := flag.String("region", "ap-northeast-2", "AWS region")
 	account := flag.String("expected-account", "", "required target AWS account")
-	hash := flag.String("expected-code-sha256", "", "required compatible API ZIP hash from the verified release")
+	hash := flag.String("expected-code-sha256", "", "required serving compatible API ZIP hash from the verified release")
 	function := flag.String("function", "ttobak-api", "API Lambda name")
-	table := flag.String("table", "ttobak-main", "DynamoDB table")
-	apply := flag.Bool("run", false, "pause writers and cancel queued invitations; default is read-only")
+	aliasName := flag.String("alias", "live", "actual serving alias; weighted routing is refused")
+	table := flag.String("table", "ttobak-main", "API table; must match the serving version environment")
+	apply := flag.Bool("run", false, "apply the pause/drain or resume; default is read-only")
+	resumeMode := flag.Bool("resume", false, "resume only an empty queue on the reviewed compatible API")
 	flag.Parse()
 	if *account == "" || *hash == "" {
 		fmt.Fprintln(os.Stderr, "expected-account and expected-code-sha256 are required")
@@ -151,56 +216,19 @@ func main() {
 	functions := lambda.NewFromConfig(cfg)
 	db := dynamodb.NewFromConfig(cfg)
 	repo := repository.NewDynamoDBRepository(db, *table)
-	read := func(ctx context.Context) (*lambda.GetFunctionConfigurationOutput, error) {
-		return functions.GetFunctionConfiguration(ctx, &lambda.GetFunctionConfigurationInput{FunctionName: function})
-	}
-	snap := func(c *lambda.GetFunctionConfigurationOutput) snapshot {
-		paused := c.Environment != nil && c.Environment.Variables["PROJECT_INVITATIONS_ENABLED"] == "false"
-		return snapshot{hash: aws.ToString(c.CodeSha256), revision: aws.ToString(c.RevisionId), paused: paused, stable: c.LastUpdateStatus == lt.LastUpdateStatusSuccessful, timeout: time.Duration(aws.ToInt32(c.Timeout)) * time.Second}
-	}
 	ops := operations{
 		current: func(ctx context.Context) (snapshot, error) {
-			c, err := read(ctx)
+			alias, err := functions.GetAlias(ctx, &lambda.GetAliasInput{FunctionName: function, Name: aliasName})
 			if err != nil {
 				return snapshot{}, err
 			}
-			return snap(c), nil
+			version, err := functions.GetFunctionConfiguration(ctx, &lambda.GetFunctionConfigurationInput{FunctionName: function, Qualifier: alias.FunctionVersion})
+			if err != nil {
+				return snapshot{}, err
+			}
+			return servingSnapshot(alias, version, *table)
 		},
-		pause: func(ctx context.Context, revision string) (snapshot, error) {
-			current, err := read(ctx)
-			if err != nil {
-				return snapshot{}, err
-			}
-			if aws.ToString(current.RevisionId) != revision {
-				return snapshot{}, errors.New("API revision changed before pause")
-			}
-			variables, err := pausedEnvironment(current)
-			if err != nil {
-				return snapshot{}, err
-			}
-			_, err = functions.UpdateFunctionConfiguration(ctx, &lambda.UpdateFunctionConfigurationInput{FunctionName: function, RevisionId: aws.String(revision), Environment: &lt.Environment{Variables: variables}})
-			if err != nil {
-				return snapshot{}, err
-			}
-			if err := lambda.NewFunctionUpdatedV2Waiter(functions).Wait(ctx, &lambda.GetFunctionInput{FunctionName: function}, 2*time.Minute); err != nil {
-				return snapshot{}, err
-			}
-			current, err = read(ctx)
-			if err != nil {
-				return snapshot{}, err
-			}
-			return snap(current), nil
-		},
-		wait: func(ctx context.Context, d time.Duration) error {
-			timer := time.NewTimer(d)
-			defer timer.Stop()
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-timer.C:
-				return nil
-			}
-		},
+		fence: repo.GetProjectInvitationControl, setFence: repo.SetProjectInvitationControl, remove: repo.DeletePendingProjectShareIfMatch,
 		scan: func(ctx context.Context, cursor map[string]dt.AttributeValue) ([]model.PendingShare, map[string]dt.AttributeValue, error) {
 			filter, err := expression.NewBuilder().WithFilter(expression.BeginsWith(expression.Name("PK"), model.PrefixProjectInvites)).Build()
 			if err != nil {
@@ -216,13 +244,17 @@ func main() {
 			}
 			return rows, out.LastEvaluatedKey, nil
 		},
-		remove: repo.DeletePendingProjectShareIfMatch,
+	}
+	if *resumeMode {
+		fatal(resume(ctx, ops, *hash, *apply))
+		fmt.Printf("resume validated apply=%t\n", *apply)
+		return
 	}
 	count, err := prepare(ctx, ops, *hash, *apply)
 	fatal(err)
-	fmt.Printf("project invitations observed=%d apply=%t; existing memberships were not deleted\n", count, *apply)
+	fmt.Printf("project invitations observed=%d apply=%t; existing memberships unchanged\n", count, *apply)
 	if *apply {
-		fmt.Println("Writer fence remains disabled. Legacy API rollback may now proceed; re-invite cancelled recipients after returning to the compatible API.")
+		fmt.Println("Database fence remains paused across deployments. Legacy API rollback may proceed; resume only after verified upgrade and fresh invitations.")
 	}
 }
 func fatal(err error) {
@@ -230,16 +262,4 @@ func fatal(err error) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-}
-
-func pausedEnvironment(current *lambda.GetFunctionConfigurationOutput) (map[string]string, error) {
-	if current.Environment == nil || current.Environment.Error != nil {
-		return nil, errors.New("cannot safely preserve API environment")
-	}
-	variables := make(map[string]string, len(current.Environment.Variables)+1)
-	for k, v := range current.Environment.Variables {
-		variables[k] = v
-	}
-	variables["PROJECT_INVITATIONS_ENABLED"] = "false"
-	return variables, nil
 }

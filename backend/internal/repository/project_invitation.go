@@ -13,8 +13,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/google/uuid"
 	"github.com/ttobak/backend/internal/model"
 )
+
+var ErrProjectInvitationsPaused = errors.New("project invitations paused")
 
 var ErrInvalidCursor = errors.New("invalid continuation cursor")
 
@@ -25,6 +28,17 @@ func projectPendingReverseKey(p *model.PendingShare) map[string]types.AttributeV
 // PutPendingProjectShare atomically binds the email queue and its owner-visible
 // reverse row, while checking that the inviter still owns the project.
 func (r *DynamoDBRepository) PutPendingProjectShare(ctx context.Context, p *model.PendingShare) error {
+	control, err := r.GetProjectInvitationControl(ctx)
+	if err != nil {
+		return err
+	}
+	if !control.Enabled {
+		return ErrProjectInvitationsPaused
+	}
+	fence, err := r.projectInvitationFence(&control.Revision)
+	if err != nil {
+		return err
+	}
 	p.Email = strings.ToLower(strings.TrimSpace(p.Email))
 	if p.ProjectID == "" || p.InvitedCognitoSub == "" || p.InvitedByUserID == "" || p.Email == "" {
 		return fmt.Errorf("invalid project invitation")
@@ -59,8 +73,12 @@ func (r *DynamoDBRepository) PutPendingProjectShare(ctx context.Context, p *mode
 		{Put: &types.Put{TableName: aws.String(r.tableName), Item: item}},
 		{Put: &types.Put{TableName: aws.String(r.tableName), Item: reverseItem}},
 		{ConditionCheck: &types.ConditionCheck{TableName: aws.String(r.tableName), Key: map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: model.PrefixProject + p.ProjectID}, "SK": &types.AttributeValueMemberS{Value: model.PrefixProjectMember + p.InvitedCognitoSub}}, ConditionExpression: absent.Condition(), ExpressionAttributeNames: absent.Names()}},
+		fence,
 	}})
 	if err != nil {
+		if failed, ok := transactionItemFailed(err, 4, 5); ok && failed {
+			return ErrProjectInvitationsPaused
+		}
 		return mapProjectTransactionCanceledError(err, p.ProjectID, "project", "queue project invitation")
 	}
 	return nil
@@ -141,14 +159,22 @@ func (r *DynamoDBRepository) MaterializePendingProjectGrant(ctx context.Context,
 		{Put: &types.Put{TableName: aws.String(r.tableName), Item: item, ConditionExpression: absent.Condition(), ExpressionAttributeNames: absent.Names()}},
 	}
 	items = append(items, deletes...)
+	fence, err := r.projectInvitationFence(nil)
+	if err != nil {
+		return false, err
+	}
+	items = append(items, fence)
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
 	if err == nil {
 		return true, nil
 	}
+	if failed, ok := transactionItemFailed(err, 4, 5); ok && failed {
+		return false, ErrProjectInvitationsPaused
+	}
 	// Authority gone or membership already exists: retire only this version so
 	// removing an independently granted member cannot later resurrect this grant.
-	ownerFailed, known := transactionItemFailed(err, 0, 4)
-	memberFailed, _ := transactionItemFailed(err, 1, 4)
+	ownerFailed, known := transactionItemFailed(err, 0, 5)
+	memberFailed, _ := transactionItemFailed(err, 1, 5)
 	if known && (ownerFailed || memberFailed) {
 		if err := r.DeletePendingProjectShareIfMatch(ctx, p); err != nil {
 			return false, err
@@ -291,4 +317,73 @@ func (r *DynamoDBRepository) PutRegisteredProjectMember(ctx context.Context, own
 		return mapProjectTransactionCanceledError(err, projectID, "project", "add registered member")
 	}
 	return nil
+}
+
+const projectInvitationControlPK = "CONTROL#PROJECT_INVITATIONS"
+
+type ProjectInvitationControl struct {
+	Enabled  bool
+	Revision string
+}
+
+func projectInvitationControlKey() map[string]types.AttributeValue {
+	return map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: projectInvitationControlPK}, "SK": &types.AttributeValueMemberS{Value: "STATE"}}
+}
+func (r *DynamoDBRepository) GetProjectInvitationControl(ctx context.Context) (ProjectInvitationControl, error) {
+	out, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{TableName: aws.String(r.tableName), Key: projectInvitationControlKey(), ConsistentRead: aws.Bool(true)})
+	if err != nil {
+		return ProjectInvitationControl{}, err
+	}
+	if len(out.Item) == 0 {
+		return ProjectInvitationControl{Enabled: true}, nil
+	}
+	enabled, ok := out.Item["enabled"].(*types.AttributeValueMemberBOOL)
+	revision, rok := out.Item["revision"].(*types.AttributeValueMemberS)
+	if !ok || !rok || revision.Value == "" {
+		return ProjectInvitationControl{}, errors.New("invalid project invitation control")
+	}
+	return ProjectInvitationControl{Enabled: enabled.Value, Revision: revision.Value}, nil
+}
+func (r *DynamoDBRepository) ProjectInvitationsAllowed(ctx context.Context) (bool, error) {
+	state, err := r.GetProjectInvitationControl(ctx)
+	return state.Enabled, err
+}
+
+// Only the operator tool changes this non-expiring control row. API writers read
+// it and include it in transactions; no web route can pause or resume it.
+func (r *DynamoDBRepository) SetProjectInvitationControl(ctx context.Context, expected string, enabled bool) (ProjectInvitationControl, error) {
+	next := ProjectInvitationControl{Enabled: enabled, Revision: uuid.NewString()}
+	condition := expression.AttributeNotExists(expression.Name("PK"))
+	if expected != "" {
+		condition = expression.Name("revision").Equal(expression.Value(expected))
+	}
+	update := expression.Set(expression.Name("enabled"), expression.Value(enabled)).Set(expression.Name("revision"), expression.Value(next.Revision)).Set(expression.Name("entityType"), expression.Value("PROJECT_INVITATION_CONTROL"))
+	expr, err := expression.NewBuilder().WithCondition(condition).WithUpdate(update).Build()
+	if err != nil {
+		return next, err
+	}
+	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{TableName: aws.String(r.tableName), Key: projectInvitationControlKey(), UpdateExpression: expr.Update(), ConditionExpression: expr.Condition(), ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values()})
+	var conflict *types.ConditionalCheckFailedException
+	if errors.As(err, &conflict) {
+		return next, ErrConditionFailed
+	}
+	return next, err
+}
+
+// Queue writes pin the epoch they observed, so a delayed request cannot publish
+// after a pause/resume cycle. Claims additionally bind the canonical grant version.
+func (r *DynamoDBRepository) projectInvitationFence(epoch *string) (types.TransactWriteItem, error) {
+	condition := expression.AttributeNotExists(expression.Name("PK")).Or(expression.Name("enabled").Equal(expression.Value(true)).And(expression.AttributeExists(expression.Name("revision"))))
+	if epoch != nil {
+		if *epoch == "" {
+			condition = expression.AttributeNotExists(expression.Name("PK"))
+		} else {
+			condition = expression.Name("enabled").Equal(expression.Value(true)).And(expression.Name("revision").Equal(expression.Value(*epoch)))
+		}
+	}
+	expr, err := expression.NewBuilder().WithCondition(condition).Build()
+	if err != nil {
+		return types.TransactWriteItem{}, err
+	}
+	return types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{TableName: aws.String(r.tableName), Key: projectInvitationControlKey(), ConditionExpression: expr.Condition(), ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values()}}, nil
 }

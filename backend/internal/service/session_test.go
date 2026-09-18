@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/ttobak/backend/internal/model"
+	"github.com/ttobak/backend/internal/repository"
 	"testing"
 	"time"
 )
@@ -16,6 +17,9 @@ type sessionProjectRepo struct {
 	profiles int
 }
 
+func (r *sessionProjectRepo) ProjectInvitationsAllowed(context.Context) (bool, error) {
+	return true, nil
+}
 func (r *sessionProjectRepo) GetOrCreateUser(_ context.Context, id, email, name string) (*model.User, bool, error) {
 	r.profiles++
 	return &model.User{UserID: id, Email: email}, true, nil
@@ -132,5 +136,40 @@ func TestProjectBootstrapProcessesOneBoundedPageAndReturnsContinuation(t *testin
 	result, err = s.BootstrapSession(context.Background(), "recipient", "user@example.com", "", true, "current-page")
 	if err != nil || !result.RetryPending || result.ProjectCursor != "current-page" {
 		t.Fatalf("failed page was skipped: result=%+v err=%v", result, err)
+	}
+}
+
+type pausedProjectSessionRepo struct{ *sessionProjectRepo }
+
+func (r *pausedProjectSessionRepo) ProjectInvitationsAllowed(context.Context) (bool, error) {
+	return false, nil
+}
+func TestPausedProjectControlKeepsProfileAvailableWithoutGranting(t *testing.T) {
+	r := &pausedProjectSessionRepo{sessionProjectRepo: &sessionProjectRepo{mockMeetingRepo: newMockMeetingRepo()}}
+	r.pendingShares = []*model.PendingShare{{Kind: model.PendingShareKindProject, Email: "user@example.com", InvitedCognitoSub: "recipient", TTL: time.Now().Add(time.Hour).Unix()}}
+	s := newMeetingServiceWithRepo(r)
+	result, err := s.BootstrapSession(context.Background(), "recipient", "user@example.com", "", true, "old-page")
+	if err != nil || result.ProjectInvitationsEnabled || result.ProjectCursor != "" || r.grants != 0 || r.profiles != 1 {
+		t.Fatalf("result=%+v err=%v grants=%d", result, err, r.grants)
+	}
+}
+
+type refreshedExpiryRepo struct{ *pagedProjectSessionRepo }
+
+func (r *refreshedExpiryRepo) DeletePendingProjectShareIfMatch(context.Context, *model.PendingShare) error {
+	return repository.ErrConditionFailed
+}
+func TestBootstrapRetriesRefreshedExpiryAndRemainingEligibleGrants(t *testing.T) {
+	base := &sessionProjectRepo{mockMeetingRepo: newMockMeetingRepo()}
+	r := &refreshedExpiryRepo{&pagedProjectSessionRepo{sessionProjectRepo: base, next: "next", listRows: []model.PendingShare{{Kind: model.PendingShareKindProject, TTL: 1}}}}
+	s := newMeetingServiceWithRepo(r)
+	result, err := s.BootstrapSession(context.Background(), "recipient", "user@example.com", "", true, "page")
+	if err != nil || !result.RetryPending || result.ProjectCursor != "page" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	base.pendingShares = []*model.PendingShare{{Kind: model.PendingShareKindAccount, Email: "user@example.com", InvitedCognitoSub: "recipient", TTL: time.Now().Add(time.Hour).Unix()}}
+	result, err = s.BootstrapSession(context.Background(), "recipient", "user@example.com", "", true, "")
+	if err != nil || !result.RetryPending || result.PendingGrants == 0 {
+		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }
