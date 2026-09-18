@@ -6,6 +6,8 @@ import { triggerAuthFailure } from '@/components/auth/AuthProvider';
 import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory, Research, ResearchDetail, DictionaryTerm, ChatMessage, Account, AccountSummary, AccountMember, AccountMeetingRef, AccountInsight, AccountDocument, PutDocumentRequest, AccountResearchRef, Project, ProjectSummary, ProjectMember, ProjectMeetingRef, ProjectResearchRef, ProjectInsight, ProjectBrief } from '@/types/meeting';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
+// Short-lived, identity-bound discovery hints; the server rechecks membership.
+let bootstrapAccountHints: { userId: string; ids: string[]; expires: number } | null = null;
 
 interface FetchOptions extends RequestInit {
   skipAuth?: boolean;
@@ -163,6 +165,7 @@ export const meetingsApi = {
   list: (params?: { tab?: 'all' | 'shared'; accountId?: string; accountIds?: string[]; cursor?: string; limit?: number }, options?: { signal?: AbortSignal }) => {
     const query = new URLSearchParams();
     if (params?.tab) query.set('tab', params.tab);
+    if (bootstrapAccountHints && bootstrapAccountHints.userId === tokenUserId(getIdToken()) && bootstrapAccountHints.expires > Date.now() && bootstrapAccountHints.ids.length) query.set('joinedAccountIds', bootstrapAccountHints.ids.join(','));
     if (params?.accountIds?.length) query.set('accountIds', [...new Set(params.accountIds)].sort().join(','));
     else if (params?.accountId) query.set('accountId', params.accountId);
     if (params?.cursor) query.set('cursor', params.cursor);
@@ -522,6 +525,7 @@ export const adminUsersApi = {
 };
 
 export interface AdminUserSummary {
+  emailVerified?: boolean;
   userId: string;
   email: string;
   name?: string;
@@ -715,6 +719,9 @@ export const accountApi = {
 };
 
 export const projectApi = {
+  pendingMembers: (id: string, cursor = '') => api.get<{ members: { email: string; expiresAt: number }[]; nextCursor?: string }>(`/api/projects/${encodeURIComponent(id)}/members/pending?cursor=${encodeURIComponent(cursor)}`),
+  revokePendingMember: (id: string, email: string) => api.delete<void>(`/api/projects/${encodeURIComponent(id)}/members/pending`, { body: JSON.stringify({ email }) }),
+
   list: () => api.get<{ projects: ProjectSummary[] }>('/api/projects'),
   get: (id: string) => api.get<Project>(`/api/projects/${encodeURIComponent(id)}`),
   create: (data: { name: string; description?: string; sfdcOpptyId?: string; sfdcUrl?: string; stage?: string }) =>
@@ -723,7 +730,7 @@ export const projectApi = {
     api.put<Project>(`/api/projects/${encodeURIComponent(id)}`, data),
   delete: (id: string) => api.delete<void>(`/api/projects/${encodeURIComponent(id)}`),
   addMember: (id: string, data: { email: string }) =>
-    api.post<ProjectMember>(`/api/projects/${encodeURIComponent(id)}/members`, data),
+    api.post<ProjectMember & { pending?: boolean; emailVerified?: boolean }>(`/api/projects/${encodeURIComponent(id)}/members`, data),
   removeMember: (id: string, userId: string) =>
     api.delete<void>(`/api/projects/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`),
   linkAccount: (id: string, accountId: string) =>
@@ -794,4 +801,13 @@ export const meetingAccountApi = {
   shareToAccount: (meetingId: string, accountId: string) =>
     api.post<{ accountId: string; sharedWith: number }>(
       `/api/meetings/${encodeURIComponent(meetingId)}/share-account`, { accountId }),
+};
+
+export const sessionApi = {
+  bootstrap: async (expectedUserId: string) => {
+    const result = await apiFetch<{ emailVerified: boolean; pendingGrants: number; retryPending?: boolean; joinedAccountIds?: string[] }>('/api/session/bootstrap', { method: 'POST', expectedUserId });
+    const previous = bootstrapAccountHints?.userId === expectedUserId && bootstrapAccountHints.expires > Date.now() ? bootstrapAccountHints.ids : [];
+    bootstrapAccountHints = { userId: expectedUserId, ids: [...new Set([...previous, ...(result.joinedAccountIds || [])])].slice(0, 100), expires: Date.now() + 60_000 };
+    return result;
+  },
 };

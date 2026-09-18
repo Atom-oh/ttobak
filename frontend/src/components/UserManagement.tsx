@@ -15,12 +15,21 @@ function StatusBadge({ user }: { user: AdminUserSummary }) {
       </span>
     );
   }
+  if (user.status === 'RESET_REQUIRED') {
+    return <span className="text-xs font-semibold rounded-full bg-amber-100 px-2 py-1 text-amber-800">비밀번호 재설정 필요</span>;
+  }
   if (user.status === 'FORCE_CHANGE_PASSWORD') {
     return (
       <span className="text-xs font-semibold px-2 py-1 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-500/10 dark:text-blue-400">
         초대 대기
       </span>
     );
+  }
+  if (user.emailVerified === false) {
+    return <span className="text-xs font-semibold rounded-full bg-amber-100 px-2 py-1 text-amber-800">이메일 인증 필요</span>;
+  }
+  if (user.status !== 'CONFIRMED') {
+    return <span className="text-xs font-semibold rounded-full bg-slate-100 px-2 py-1">{user.status}</span>;
   }
   if (user.dormant) {
     return (
@@ -110,7 +119,7 @@ export function UserManagement() {
     runAction(
       user.userId,
       () => adminUsersApi.resendInvite(user.userId),
-      `${user.email}에게 초대 이메일을 다시 보냈습니다.`
+      `${user.email}에게 초대 이메일 재발송을 요청했습니다. 수신되지 않으면 스팸함을 확인해주세요.`
     );
   };
 
@@ -119,7 +128,7 @@ export function UserManagement() {
     runAction(
       user.userId,
       () => adminUsersApi.resetPassword(user.userId),
-      `${user.email}에게 비밀번호 재설정 코드를 보냈습니다. 사용자는 로그인 화면의 "비밀번호를 잊으셨나요?"로 새 비밀번호를 설정할 수 있습니다.`
+      `${user.email}에게 비밀번호 재설정 코드 발송을 요청했습니다. 로그인 화면의 비밀번호 찾기에서 이메일을 입력한 뒤 이미 받은 인증 코드 입력을 선택하세요.`
     );
   };
 
@@ -195,7 +204,7 @@ export function UserManagement() {
                       </td>
                       <td className="px-4 py-3 text-right">
                         <div className="flex items-center justify-end gap-1">
-                          {user.status === 'FORCE_CHANGE_PASSWORD' ? (
+                          {user.enabled && user.status === 'FORCE_CHANGE_PASSWORD' ? (
                             <button
                               onClick={() => handleResendInvite(user)}
                               disabled={busy}
@@ -204,7 +213,7 @@ export function UserManagement() {
                             >
                               <span className="material-symbols-outlined text-lg">forward_to_inbox</span>
                             </button>
-                          ) : (
+                          ) : user.enabled && user.status === 'CONFIRMED' && user.emailVerified === true ? (
                             <button
                               onClick={() => handleResetPassword(user)}
                               disabled={busy}
@@ -213,6 +222,10 @@ export function UserManagement() {
                             >
                               <span className="material-symbols-outlined text-lg">lock_reset</span>
                             </button>
+                          ) : (
+                            <span className="max-w-48 text-xs text-slate-500 dark:text-text-muted">
+                              {!user.enabled ? '활성화 여부를 먼저 확인하세요' : user.status === 'RESET_REQUIRED' ? '비밀번호 찾기에서 받은 코드로 완료하거나 새 코드를 요청하세요' : user.emailVerified !== true ? '로그인 후 이메일 인증 또는 관리자 복구 절차가 필요합니다' : '로그인 상태를 확인하세요'}
+                            </span>
                           )}
                           {user.enabled ? (
                             <button

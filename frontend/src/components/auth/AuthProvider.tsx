@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { AuthUser, getCurrentUser, signIn, signOut, completeNewPassword, isNewPasswordRequired, NewPasswordRequiredResult, SignInResult } from '@/lib/auth';
+import { EmailVerificationPanel } from './EmailVerificationPanel';
 import { proactiveSearchStore, resetProactiveClaims, setProactiveSearchUser } from '@/lib/proactiveSearch';
 
 interface AuthContextType {
@@ -29,6 +30,13 @@ export function triggerAuthFailure() {
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [bootstrappedUserId, setBootstrappedUserId] = useState<string | null>(null);
+  const [bootstrapError, setBootstrapError] = useState('');
+  const [pendingGrants, setPendingGrants] = useState(0);
+  const [retryPending, setRetryPending] = useState(false);
+  const [bootstrapAttempt, setBootstrapAttempt] = useState(0);
+  const activeUserId = useRef<string | null>(null);
+  activeUserId.current = user?.userId ?? null;
   const router = useRouter();
   const pathname = usePathname();
   const wasAuthenticated = useRef(false);
@@ -84,6 +92,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => { cancelled = true; };
   }, []);
 
+  const bootstrapUserId = user?.userId;
+  const bootstrapEmailVerified = user?.emailVerified;
+  useEffect(() => {
+    let cancelled = false;
+    if (!bootstrapUserId) { setBootstrappedUserId(null); setBootstrapError(''); setPendingGrants(0); setRetryPending(false); return; }
+    if (process.env.NEXT_PUBLIC_DEV_AUTH === 'true') { setBootstrappedUserId(bootstrapUserId); return; }
+    const expectedUserId = bootstrapUserId;
+    setBootstrapError('');
+    import('@/lib/api').then(({ sessionApi }) => sessionApi.bootstrap(expectedUserId)).then(result => {
+      if (cancelled || activeUserId.current !== expectedUserId) return;
+      setPendingGrants(result.pendingGrants);
+      setRetryPending(Boolean(result.retryPending));
+      setBootstrappedUserId(expectedUserId);
+    }).catch(error => {
+      if (!cancelled && activeUserId.current === expectedUserId) setBootstrapError(error instanceof Error ? error.message : '계정 연결을 완료하지 못했습니다.');
+    });
+    return () => { cancelled = true; };
+  }, [bootstrapUserId, bootstrapEmailVerified, bootstrapAttempt]);
+
   const login = useCallback(async (email: string, password: string) => {
     const result = await signIn(email, password);
     if (!isNewPasswordRequired(result)) {
@@ -109,14 +136,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     <AuthContext.Provider
       value={{
         user,
-        isLoading,
-        isAuthenticated: !!user,
+        isLoading: isLoading || (!!user && bootstrappedUserId !== user.userId),
+        isAuthenticated: !!user && bootstrappedUserId === user.userId,
         isAdmin: !!user?.isAdmin,
         login,
         completeNewPassword: completeNewPasswordAction,
         logout,
       }}
     >
+      {user && bootstrapError && (
+        <div role="alert" className="relative z-50 bg-red-50 p-4 text-red-900">
+          <p>{bootstrapError}</p>
+          <button type="button" onClick={() => setBootstrapAttempt(value => value + 1)} className="underline">계정 연결 다시 시도</button>
+          <button type="button" onClick={logout} className="ml-4 underline">로그아웃</button>
+        </div>
+      )}
+      {user && !user.emailVerified && process.env.NEXT_PUBLIC_DEV_AUTH !== 'true' && (
+        <EmailVerificationPanel key={user.userId} userId={user.userId} email={user.email} onVerified={verified => {
+          if (activeUserId.current !== verified.userId) return;
+          setUser(verified); setBootstrapAttempt(value => value + 1);
+        }} />
+      )}
+      {user && user.emailVerified && (pendingGrants > 0 || retryPending) && (
+        <div role="status" className="relative z-50 bg-amber-50 p-3 text-sm text-amber-900">
+          일부 초대가 아직 처리 중입니다.
+          <button type="button" className="ml-2 underline" onClick={() => setBootstrapAttempt(value => value + 1)}>초대 연결 다시 시도</button>
+        </div>
+      )}
       {children}
     </AuthContext.Provider>
   );

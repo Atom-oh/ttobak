@@ -111,7 +111,7 @@ export default function AccountDetailClient() {
       // "Failed to add member" error banner -- fetchAll failing is a
       // separate, lower-priority problem than the invite itself failing.
       if (result?.pending) {
-        setPendingNotice(`${picked.email}님은 아직 초대를 수락하지 않았습니다. 로그인하면 자동으로 계정에 추가됩니다.`);
+        setPendingNotice(`${picked.email}님의 계정 추가를 예약했습니다. 로그인과 이메일 인증 후 자동으로 추가됩니다. 이 작업은 메일을 발송하지 않습니다. 초대 메일이 필요하면 설정의 사용자 관리에서 관리자가 재발송해야 합니다.`);
         setPendingNoticeEmail(picked.email);
       }
       await fetchAll();

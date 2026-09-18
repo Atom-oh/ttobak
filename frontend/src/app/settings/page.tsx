@@ -90,7 +90,7 @@ export default function SettingsPage() {
               gate only; the backend's middleware.RequireAdmin is what
               actually enforces access on every /api/settings/users* route. */}
           {isAdmin && (
-            <section className="lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">
+            <section id="user-management" className="scroll-mt-24 lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">
               <h3 className="section-header mb-4">사용자 관리</h3>
               <UserManagement />
             </section>

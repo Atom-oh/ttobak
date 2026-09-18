@@ -91,6 +91,31 @@ Crash-leftover native WAVs are not Cognito-scoped. Show the existing caveat and
 require per-file confirmation for upload/delete; retain the 48-hour cleanup policy.
 This confirmation is a mitigation, not an ownership binding (ADR-024).
 
+## Sign-in, invitations and recovery
+
+AuthProvider completes authenticated session bootstrap before releasing page API
+requests. Errors show retry/logout; account discovery hints remain identity-bound.
+Unverified signed-in users get explicit send-code and verify-code controls. A
+successful verification refreshes claims and retries pending membership grants.
+First-login and password-reset forms share the configured minimum-eight,
+lowercase-letter and digit policy. The reset form also supports entering an
+already-received code without requiring another email request. Never modify
+password text while normalizing email input.
+
+Project owners add existing users. An unregistered email gives admins an explicit
+"send invitation and add to project" action; non-admin owners are directed to an
+administrator. Mail creation and membership results are separate: if the mail
+request succeeds but adding fails, preserve that partial success and retry member
+addition without silently resending. Show pending members with paginated refresh
+and cancellation. Admins can follow the existing settings resend path. Email
+request acceptance is not inbox delivery.
+
+User management distinguishes invitation pending, reset required, unverified and
+disabled states. Do not offer an admin reset for RESET_REQUIRED, disabled or
+unverified users. Existing account/member and sharing notices explicitly say that
+queuing a grant does not send mail. The invitation template includes the login URL
+and temporary password; no temporary password or code is shown in app diagnostics.
+
 ## Accounts, filters and sharing
 
 Render accessible accounts as a collapsible hierarchy. An inaccessible parent

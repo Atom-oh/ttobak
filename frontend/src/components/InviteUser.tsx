@@ -29,7 +29,7 @@ export function InviteUser() {
         admin: makeAdmin,
       });
       setSuccess(
-        `${res.email} 님에게 초대 이메일을 보냈습니다. 임시 비밀번호가 포함되어 있습니다 — 로그인 주소는 별도로 안내해주세요.${
+        `${res.email} 님에게 초대 이메일 발송을 요청했습니다. 로그인 주소와 임시 비밀번호가 포함됩니다.${
           res.addedToAdmins ? ' (관리자 권한 부여됨)' : ''
         }`
       );
@@ -52,7 +52,7 @@ export function InviteUser() {
   return (
     <div className="dark:glass-panel dark:p-5 space-y-4">
       <p className="text-sm text-slate-600 dark:text-text-muted">
-        이메일 주소를 입력하면 해당 사용자에게 임시 비밀번호가 담긴 초대 메일이 발송됩니다 (로그인 주소는 포함되지 않으니 별도로 안내해주세요).
+        이메일 주소를 입력하면 해당 사용자에게 로그인 주소와 임시 비밀번호가 담긴 초대 메일 발송을 요청합니다.
         초대받은 사용자는 최초 로그인 시 새 비밀번호를 설정하게 됩니다.
       </p>
 
