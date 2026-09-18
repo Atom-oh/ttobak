@@ -56,7 +56,9 @@ func (s *MeetingService) BootstrapSession(ctx context.Context, userID, email, na
 		}
 	}
 	if store, ok := s.repo.(projectBootstrapStore); ok {
-		allowed, err := store.ProjectInvitationsAllowed(ctx)
+		budget, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		allowed, err := store.ProjectInvitationsAllowed(budget)
 		if err != nil {
 			log.Printf("project invitation control unavailable: %v", err)
 			result.ProjectInvitationsEnabled = false
@@ -68,7 +70,7 @@ func (s *MeetingService) BootstrapSession(ctx context.Context, userID, email, na
 			result.ProjectCursor = ""
 			return result, nil
 		}
-		if err := s.bootstrapProjectInvitations(ctx, store, userID, email, verified, projectCursor, result); err != nil {
+		if err := s.bootstrapProjectInvitations(budget, store, userID, email, verified, projectCursor, result); err != nil {
 			return nil, err
 		}
 	}
@@ -76,8 +78,7 @@ func (s *MeetingService) BootstrapSession(ctx context.Context, userID, email, na
 }
 
 func (s *MeetingService) bootstrapProjectInvitations(ctx context.Context, store projectBootstrapStore, userID, email string, verified bool, cursor string, result *SessionBootstrapResponse) error {
-	budget, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
+	budget := ctx
 	projects, next, err := store.ListPendingProjectSharesForUser(budget, email, cursor)
 	if errors.Is(err, repository.ErrInvalidCursor) {
 		return err
@@ -115,6 +116,7 @@ func (s *MeetingService) bootstrapProjectInvitations(ctx context.Context, store 
 		if err != nil || !resolved {
 			if errors.Is(err, repository.ErrProjectInvitationsPaused) {
 				result.ProjectInvitationsEnabled = false
+				result.ProjectCursor = ""
 				return nil
 			}
 			if err != nil {

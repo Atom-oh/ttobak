@@ -173,3 +173,29 @@ func TestBootstrapRetriesRefreshedExpiryAndRemainingEligibleGrants(t *testing.T)
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }
+
+type boundedControlRepo struct {
+	*sessionProjectRepo
+	deadline time.Time
+}
+
+func (r *boundedControlRepo) ProjectInvitationsAllowed(ctx context.Context) (bool, error) {
+	r.deadline, _ = ctx.Deadline()
+	return false, context.DeadlineExceeded
+}
+func TestProjectControlReadSharesBoundedBudget(t *testing.T) {
+	r := &boundedControlRepo{sessionProjectRepo: &sessionProjectRepo{mockMeetingRepo: newMockMeetingRepo()}}
+	started := time.Now()
+	result, err := newMeetingServiceWithRepo(r).BootstrapSession(context.Background(), "recipient", "user@example.com", "", true, "page")
+	if err != nil || !result.RetryPending || result.ProjectInvitationsEnabled || r.deadline.IsZero() || r.deadline.After(started.Add(5*time.Second+100*time.Millisecond)) || r.profiles != 1 {
+		t.Fatalf("result=%+v err=%v deadline=%v", result, err, r.deadline)
+	}
+}
+func TestPauseDuringMaterializationClearsContinuation(t *testing.T) {
+	r := &sessionProjectRepo{mockMeetingRepo: newMockMeetingRepo(), grantErr: repository.ErrProjectInvitationsPaused}
+	r.pendingShares = []*model.PendingShare{{Kind: model.PendingShareKindProject, Email: "user@example.com", InvitedCognitoSub: "recipient", TTL: time.Now().Add(time.Hour).Unix()}}
+	result, err := newMeetingServiceWithRepo(r).BootstrapSession(context.Background(), "recipient", "user@example.com", "", true, "page")
+	if err != nil || result.ProjectCursor != "" || result.ProjectInvitationsEnabled {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
