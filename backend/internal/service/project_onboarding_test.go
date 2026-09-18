@@ -21,6 +21,10 @@ type onboardingRepo struct {
 	revokeErr        error
 }
 
+func (r *onboardingRepo) PutRegisteredProjectMember(_ context.Context, owner, project, id, email string) error {
+	r.projectMembers[projectMemberKey(project, id)] = &model.ProjectMember{ProjectID: project, UserID: id, Email: email}
+	return nil
+}
 func (r *onboardingRepo) PutPendingShare(_ context.Context, p *model.PendingShare) error {
 	p.SK = model.PrefixPendingProject + p.ProjectID
 	p.CreatedAt = time.Now().UTC()
@@ -71,7 +75,7 @@ func onboardingService(t *testing.T, status ct.UserStatusType, verified bool) (*
 }
 func TestProjectAddMemberQueuesInvitedIdentityWithoutSendingMail(t *testing.T) {
 	s, r, c := onboardingService(t, ct.UserStatusTypeForceChangePassword, true)
-	got, err := s.AddMember(context.Background(), "owner", "project", &model.AddProjectMemberRequest{Email: " Invitee@Example.com "})
+	got, err := s.AddMember(context.Background(), "owner", "project", &model.AddProjectMemberRequest{AllowPending: true, Email: " Invitee@Example.com "})
 	if err != nil || !got.Pending || got.UserID != "" {
 		t.Fatalf("result=%+v err=%v", got, err)
 	}
@@ -84,7 +88,7 @@ func TestProjectAddMemberUnknownRequiresAdminInvitation(t *testing.T) {
 	c.adminGetUserFn = func(context.Context, *ci.AdminGetUserInput) (*ci.AdminGetUserOutput, error) {
 		return nil, &ct.UserNotFoundException{}
 	}
-	_, err := s.AddMember(context.Background(), "owner", "project", &model.AddProjectMemberRequest{Email: "invitee@example.com"})
+	_, err := s.AddMember(context.Background(), "owner", "project", &model.AddProjectMemberRequest{AllowPending: true, Email: "invitee@example.com"})
 	if !errors.Is(err, ErrInvitationRequired) || r.pending != nil || len(c.createUserCalls) != 0 {
 		t.Fatalf("unexpected unknown-user behavior: %v", err)
 	}
@@ -92,7 +96,7 @@ func TestProjectAddMemberUnknownRequiresAdminInvitation(t *testing.T) {
 func TestProjectAddMemberRecreatedEmailNeverGrantsOldProfile(t *testing.T) {
 	s, r, _ := onboardingService(t, ct.UserStatusTypeConfirmed, true)
 	r.users["invitee@example.com"] = &model.User{UserID: "deleted-sub"}
-	got, err := s.AddMember(context.Background(), "owner", "project", &model.AddProjectMemberRequest{Email: "invitee@example.com"})
+	got, err := s.AddMember(context.Background(), "owner", "project", &model.AddProjectMemberRequest{AllowPending: true, Email: "invitee@example.com"})
 	if err != nil || !got.Pending || r.pending.InvitedCognitoSub != "current-sub" || r.materializeCalls != 0 {
 		t.Fatalf("recreated identity result=%+v err=%v", got, err)
 	}
@@ -101,7 +105,7 @@ func TestProjectAddMemberRegisteredVerifiedUserIsIdempotent(t *testing.T) {
 	s, r, _ := onboardingService(t, ct.UserStatusTypeConfirmed, true)
 	r.users["invitee@example.com"] = &model.User{UserID: "current-sub"}
 	for i := 0; i < 2; i++ {
-		got, err := s.AddMember(context.Background(), "owner", "project", &model.AddProjectMemberRequest{Email: "invitee@example.com"})
+		got, err := s.AddMember(context.Background(), "owner", "project", &model.AddProjectMemberRequest{AllowPending: true, Email: "invitee@example.com"})
 		if err != nil || got.Pending || got.UserID != "current-sub" {
 			t.Fatalf("result=%+v err=%v", got, err)
 		}
@@ -117,7 +121,7 @@ func TestProjectAddMemberUnverifiedAndResetUsersRemainPending(t *testing.T) {
 	}{{ct.UserStatusTypeConfirmed, false}, {ct.UserStatusTypeResetRequired, true}} {
 		s, r, _ := onboardingService(t, test.status, test.verified)
 		r.users["invitee@example.com"] = &model.User{UserID: "current-sub"}
-		got, err := s.AddMember(context.Background(), "owner", "project", &model.AddProjectMemberRequest{Email: "invitee@example.com"})
+		got, err := s.AddMember(context.Background(), "owner", "project", &model.AddProjectMemberRequest{AllowPending: true, Email: "invitee@example.com"})
 		if err != nil || !got.Pending || r.materializeCalls != 0 {
 			t.Fatalf("result=%+v err=%v", got, err)
 		}
@@ -129,7 +133,7 @@ func TestProjectInvitationOwnerGuardPrecedesIdentityLookup(t *testing.T) {
 		t.Fatal("unauthorized identity lookup")
 		return nil, nil
 	}
-	_, err := s.AddMember(context.Background(), "outsider", "project", &model.AddProjectMemberRequest{Email: "invitee@example.com"})
+	_, err := s.AddMember(context.Background(), "outsider", "project", &model.AddProjectMemberRequest{AllowPending: true, Email: "invitee@example.com"})
 	if !errors.Is(err, ErrForbidden) || r.pending != nil {
 		t.Fatalf("err=%v", err)
 	}
@@ -145,21 +149,21 @@ func TestProjectInvitationRejectsDisabledRecipientAndLookupFailure(t *testing.T)
 	c.adminGetUserFn = func(context.Context, *ci.AdminGetUserInput) (*ci.AdminGetUserOutput, error) {
 		return &ci.AdminGetUserOutput{Enabled: false}, nil
 	}
-	_, err := s.AddMember(context.Background(), "owner", "project", &model.AddProjectMemberRequest{Email: "invitee@example.com"})
+	_, err := s.AddMember(context.Background(), "owner", "project", &model.AddProjectMemberRequest{AllowPending: true, Email: "invitee@example.com"})
 	if !errors.Is(err, ErrUserDisabled) || r.pending != nil {
 		t.Fatalf("err=%v", err)
 	}
 	c.adminGetUserFn = func(context.Context, *ci.AdminGetUserInput) (*ci.AdminGetUserOutput, error) {
 		return nil, errors.New("unavailable")
 	}
-	_, err = s.AddMember(context.Background(), "owner", "project", &model.AddProjectMemberRequest{Email: "invitee@example.com"})
+	_, err = s.AddMember(context.Background(), "owner", "project", &model.AddProjectMemberRequest{AllowPending: true, Email: "invitee@example.com"})
 	if err == nil || r.pending != nil {
 		t.Fatal("lookup failure must fail closed")
 	}
 }
 func TestProjectRevokeDetectsConcurrentMaterialization(t *testing.T) {
 	s, r, _ := onboardingService(t, ct.UserStatusTypeForceChangePassword, true)
-	_, err := s.AddMember(context.Background(), "owner", "project", &model.AddProjectMemberRequest{Email: "invitee@example.com"})
+	_, err := s.AddMember(context.Background(), "owner", "project", &model.AddProjectMemberRequest{AllowPending: true, Email: "invitee@example.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +177,7 @@ func TestProjectInvitationMaterializationFailureIsNotSuccess(t *testing.T) {
 	s, r, _ := onboardingService(t, ct.UserStatusTypeConfirmed, true)
 	r.users["invitee@example.com"] = &model.User{UserID: "current-sub"}
 	r.materializeErr = errors.New("temporary database failure")
-	_, err := s.AddMember(context.Background(), "owner", "project", &model.AddProjectMemberRequest{Email: "invitee@example.com"})
+	_, err := s.AddMember(context.Background(), "owner", "project", &model.AddProjectMemberRequest{AllowPending: true, Email: "invitee@example.com"})
 	if err == nil || r.pending == nil {
 		t.Fatal("surface failure while retaining retryable grant")
 	}
@@ -183,5 +187,26 @@ func TestNormalizeInvitationEmailRejectsDisplayNamesAndOversize(t *testing.T) {
 		if _, err := normalizeInvitationEmail(email); !errors.Is(err, ErrInvalidInput) {
 			t.Errorf("accepted %q", email)
 		}
+	}
+}
+
+func TestProjectInvitationRequiresPendingCapabilityAndHonorsWriterFence(t *testing.T) {
+	s, r, _ := onboardingService(t, ct.UserStatusTypeForceChangePassword, true)
+	_, err := s.AddMember(context.Background(), "owner", "project", &model.AddProjectMemberRequest{Email: "invitee@example.com"})
+	if !errors.Is(err, ErrClientUpgradeRequired) || r.pending != nil {
+		t.Fatalf("legacy request queued: %v", err)
+	}
+	t.Setenv("PROJECT_INVITATIONS_ENABLED", "false")
+	_, err = s.AddMember(context.Background(), "owner", "project", &model.AddProjectMemberRequest{AllowPending: true, Email: "invitee@example.com"})
+	if !errors.Is(err, ErrInvitationsPaused) || r.pending != nil {
+		t.Fatalf("writer fence failed: %v", err)
+	}
+}
+func TestLegacyClientCanAddRegisteredMemberWithoutQueuing(t *testing.T) {
+	s, r, _ := onboardingService(t, ct.UserStatusTypeConfirmed, true)
+	r.users["invitee@example.com"] = &model.User{UserID: "current-sub"}
+	got, err := s.AddMember(context.Background(), "owner", "project", &model.AddProjectMemberRequest{Email: "invitee@example.com"})
+	if err != nil || got.UserID != "current-sub" || got.Pending || r.pending != nil || r.materializeCalls != 0 {
+		t.Fatalf("got=%+v err=%v", got, err)
 	}
 }

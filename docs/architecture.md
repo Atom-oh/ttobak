@@ -96,8 +96,10 @@ inherited from a project invitation. See ADR-044 and API-SPEC for contracts.
 
 Deploy and verify the API with `/api/session/bootstrap` and project pending routes
 before publishing the new frontend. The new frontend requires bootstrap and will
-show retry on an older/missing API. For rollback, restore frontend first; project
-queues remain isolated from older readers until the compatible API returns.
+show retry on an older/missing API. For incompatible API rollback, first disable pending writers and drain/cancel
+project invitations with the companion `prepare-project-invite-rollback` guard.
+Do not retain a project grant across an API version that cannot retire it on
+membership changes. The guard must ship before the companion frontend is activated.
 Existing account/meeting queue behavior and the project deletion residual storage
 race described in ADR-025 remain: deleted projects cannot materialize grants and
 unconsumed project invitation rows expire through their existing TTL field.

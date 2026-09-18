@@ -17,7 +17,7 @@ type sessionProbe struct {
 	verified        bool
 }
 
-func (s *sessionProbe) BootstrapSession(_ context.Context, id, email, name string, verified bool) (*service.SessionBootstrapResponse, error) {
+func (s *sessionProbe) BootstrapSession(_ context.Context, id, email, name string, verified bool, cursor string) (*service.SessionBootstrapResponse, error) {
 	s.called = true
 	s.id = id
 	s.email = email
