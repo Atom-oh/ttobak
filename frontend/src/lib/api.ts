@@ -733,8 +733,8 @@ export const projectApi = {
   update: (id: string, data: { name: string; description?: string; sfdcOpptyId?: string; sfdcUrl?: string; stage?: string }) =>
     api.put<Project>(`/api/projects/${encodeURIComponent(id)}`, data),
   delete: (id: string) => api.delete<void>(`/api/projects/${encodeURIComponent(id)}`),
-  addMember: (id: string, data: { email: string }) =>
-    api.post<ProjectMember & { pending?: boolean; emailVerified?: boolean }>(`/api/projects/${encodeURIComponent(id)}/members`, { ...data, allowPending: true }),
+  addMember: (id: string, data: { email: string; allowPending?: boolean }) =>
+    api.post<ProjectMember & { pending?: boolean; emailVerified?: boolean }>(`/api/projects/${encodeURIComponent(id)}/members`, data),
   removeMember: (id: string, userId: string) =>
     api.delete<void>(`/api/projects/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`),
   linkAccount: (id: string, accountId: string) =>

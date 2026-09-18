@@ -86,6 +86,7 @@ export default function ProjectDetailClient() {
   const fetchGeneration = useRef(0);
   const fetchAll = useCallback(async () => {
     const myProjectId = projectId;
+    if (activeProjectIdRef.current !== myProjectId) return;
     const generation = ++fetchGeneration.current;
     if (!myProjectId || myProjectId === '_') {
       setLoading(false);
@@ -169,7 +170,7 @@ export default function ProjectDetailClient() {
   useEffect(() => { if (isAuthenticated) void fetchPending(); }, [isAuthenticated, fetchPending, membershipRevision]);
 
   const addMember = async (email: string) => {
-    const result = await projectApi.addMember(projectId, { email });
+    const result = await projectApi.addMember(projectId, { email, allowPending: onboardingAvailable });
     if (activeProjectIdRef.current !== projectId) return;
     setInviteCandidate(null); setInviteEmail('');
     setInviteNotice(result.pending
@@ -181,7 +182,7 @@ export default function ProjectDetailClient() {
   const handleInvite = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const email = inviteEmail.trim().toLowerCase();
-    if (!email || inviting || !onboardingAvailable) return;
+    if (!email || inviting) return;
     setInviting(true); setError(null); setInviteCandidate(null); setInviteNotice('');
     try { await addMember(email); }
     catch (error) {
@@ -371,7 +372,7 @@ export default function ProjectDetailClient() {
                     />
                     <button
                       type="submit"
-                      disabled={inviting || !onboardingAvailable}
+                      disabled={inviting}
                       className="px-3 py-2 rounded-lg bg-primary hover:bg-primary-hover text-white text-sm disabled:opacity-50"
                     >
                       {inviting ? '처리 중…' : '멤버 추가'}
