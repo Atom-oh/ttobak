@@ -113,3 +113,42 @@ func TestServingSnapshotRequiresActualVersionAndRejectsWeightedAlias(t *testing.
 		t.Fatal("wrong table accepted")
 	}
 }
+
+func TestResumeReconcilesLostWriteResponse(t *testing.T) {
+	for _, mode := range []string{"committed", "conflict", "unreadable"} {
+		t.Run(mode, func(t *testing.T) {
+			ops, _, control, removed, writes := fixtureOps(t)
+			control.Enabled = false
+			control.Revision = "paused"
+			*removed = true
+			original := ops.setFence
+			ops.setFence = func(ctx context.Context, revision string, enabled bool) (repository.ProjectInvitationControl, error) {
+				next, err := original(ctx, revision, enabled)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if mode == "conflict" {
+					control.Revision = "another-operator"
+				}
+				if mode == "unreadable" {
+					ops.fence = func(context.Context) (repository.ProjectInvitationControl, error) {
+						return repository.ProjectInvitationControl{}, errors.New("read failed")
+					}
+				}
+				return next, errors.New("response lost")
+			}
+			// Keep the fence closure dynamic to simulate readback becoming unavailable.
+			read := ops.fence
+			ops.fence = func(ctx context.Context) (repository.ProjectInvitationControl, error) {
+				if mode == "unreadable" && *writes > 0 {
+					return repository.ProjectInvitationControl{}, errors.New("read failed")
+				}
+				return read(ctx)
+			}
+			err := resume(context.Background(), ops, "reviewed", true)
+			if (err == nil) != (mode == "committed") || !control.Enabled || *writes != 1 {
+				t.Fatalf("mode=%s err=%v state=%+v writes=%d", mode, err, control, *writes)
+			}
+		})
+	}
+}

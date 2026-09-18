@@ -43,3 +43,12 @@ resume with `--resume`; adding `--run --resume` enables the database fence only 
 the canonical queue is empty and its revision still matches. Cancelled recipients
 need fresh owner invitations. No automatic reactivation or user verification
 changes are part of deployment.
+
+A control-write error is reconciled by a strongly consistent read of the exact
+attempted revision. A matching state proves that a lost response committed. If
+readback fails or a different revision is observed, the command reports the
+observed state or an unknown outcome; **do not assume the fence remains paused**.
+Inspect the control row and serving alias before proceeding. To roll back after
+an uncertain resume, run the compatible guard's pause/drain procedure again and
+require successful empty-queue verification. Never delete or blindly overwrite
+the control row to repair an uncertain operation.

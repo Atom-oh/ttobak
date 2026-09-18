@@ -75,7 +75,7 @@ func prepare(ctx context.Context, ops operations, expected string, apply bool) (
 		if err != nil {
 			return 0, err
 		}
-		paused, err = ops.setFence(ctx, prior.Revision, false)
+		paused, err = setFenceConfirmed(ctx, ops, prior.Revision, false)
 		if err != nil {
 			return 0, err
 		}
@@ -172,9 +172,27 @@ func resume(ctx context.Context, ops operations, expected string, apply bool) er
 		return errors.New("serving alias changed before resume")
 	}
 	if apply {
-		_, err = ops.setFence(ctx, control.Revision, true)
+		_, err = setFenceConfirmed(ctx, ops, control.Revision, true)
 	}
 	return err
+}
+
+// A conditional write may commit even if its response is lost. The repository
+// returns the attempted revision on error, allowing a strong read to prove that
+// exact transition without overwriting an intervening operator action.
+func setFenceConfirmed(ctx context.Context, ops operations, expected string, enabled bool) (repository.ProjectInvitationControl, error) {
+	next, err := ops.setFence(ctx, expected, enabled)
+	if err == nil {
+		return next, nil
+	}
+	observed, readErr := ops.fence(ctx)
+	if readErr != nil {
+		return next, fmt.Errorf("fence update outcome unknown; it may be enabled: write: %w; readback: %v; inspect the control row before any rollback", err, readErr)
+	}
+	if next.Revision != "" && next.Revision != expected && next.Enabled == enabled && observed == next {
+		return next, nil
+	}
+	return observed, fmt.Errorf("fence update not confirmed; observed enabled=%t revision=%q; revalidate before any rollback: %w", observed.Enabled, observed.Revision, err)
 }
 
 func servingSnapshot(alias *lambda.GetAliasOutput, cfg *lambda.GetFunctionConfigurationOutput, table string) (snapshot, error) {
