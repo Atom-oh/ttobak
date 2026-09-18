@@ -55,6 +55,10 @@ func (s *MeetingService) BootstrapSession(ctx context.Context, userID, email, na
 			}
 		}
 	}
+	if !result.ProjectInvitationsEnabled {
+		result.ProjectCursor = ""
+		return result, nil
+	}
 	if store, ok := s.repo.(projectBootstrapStore); ok {
 		budget, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
