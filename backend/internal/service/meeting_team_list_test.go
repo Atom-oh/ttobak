@@ -305,7 +305,7 @@ func TestListMeetings_NewInviteHintsSurviveRegularPagination(t *testing.T) {
 			return nil, nil
 		}
 	}
-	first, err := svc.ListMeetings(context.Background(), "new-member", "all", "", "", 1, joined...)
+	first, err := svc.ListMeetings(context.Background(), "new-member", "all", "", "", 1, append(joined, joined...)...)
 	if err != nil || first.NextCursor == nil {
 		t.Fatalf("first page: %+v error=%v", first, err)
 	}
