@@ -7,6 +7,7 @@ import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory, Research, Re
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 // Short-lived, identity-bound discovery hints; the server rechecks membership.
+let bootstrapProjectHints: { userId: string; ids: string[]; expires: number } | null = null;
 let bootstrapAccountHints: { userId: string; ids: string[]; expires: number } | null = null;
 
 interface FetchOptions extends RequestInit {
@@ -722,7 +723,10 @@ export const projectApi = {
   pendingMembers: (id: string, cursor = '') => api.get<{ members: { email: string; expiresAt: number }[]; nextCursor?: string }>(`/api/projects/${encodeURIComponent(id)}/members/pending?cursor=${encodeURIComponent(cursor)}`),
   revokePendingMember: (id: string, email: string) => api.delete<void>(`/api/projects/${encodeURIComponent(id)}/members/pending`, { body: JSON.stringify({ email }) }),
 
-  list: () => api.get<{ projects: ProjectSummary[] }>('/api/projects'),
+  list: () => {
+    const ids = bootstrapProjectHints?.userId === tokenUserId(getIdToken()) && bootstrapProjectHints.expires > Date.now() ? bootstrapProjectHints.ids : [];
+    return api.get<{ projects: ProjectSummary[] }>(`/api/projects${ids.length ? `?joinedProjectIds=${encodeURIComponent(ids.join(','))}` : ''}`);
+  },
   get: (id: string) => api.get<Project>(`/api/projects/${encodeURIComponent(id)}`),
   create: (data: { name: string; description?: string; sfdcOpptyId?: string; sfdcUrl?: string; stage?: string }) =>
     api.post<Project>('/api/projects', data),
@@ -730,7 +734,7 @@ export const projectApi = {
     api.put<Project>(`/api/projects/${encodeURIComponent(id)}`, data),
   delete: (id: string) => api.delete<void>(`/api/projects/${encodeURIComponent(id)}`),
   addMember: (id: string, data: { email: string }) =>
-    api.post<ProjectMember & { pending?: boolean; emailVerified?: boolean }>(`/api/projects/${encodeURIComponent(id)}/members`, data),
+    api.post<ProjectMember & { pending?: boolean; emailVerified?: boolean }>(`/api/projects/${encodeURIComponent(id)}/members`, { ...data, allowPending: true }),
   removeMember: (id: string, userId: string) =>
     api.delete<void>(`/api/projects/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`),
   linkAccount: (id: string, accountId: string) =>
@@ -803,9 +807,33 @@ export const meetingAccountApi = {
       `/api/meetings/${encodeURIComponent(meetingId)}/share-account`, { accountId }),
 };
 
+export interface SessionBootstrapResult {
+  emailVerified: boolean;
+  pendingGrants: number;
+  retryPending?: boolean;
+  projectCursor?: string;
+  projectInvitationsEnabled?: boolean;
+  joinedAccountIds?: string[];
+  joinedProjectIds?: string[];
+  legacyBootstrap?: boolean;
+}
 export const sessionApi = {
-  bootstrap: async (expectedUserId: string) => {
-    const result = await apiFetch<{ emailVerified: boolean; pendingGrants: number; retryPending?: boolean; joinedAccountIds?: string[] }>('/api/session/bootstrap', { method: 'POST', expectedUserId });
+  bootstrap: async (expectedUserId: string, projectCursor = ''): Promise<SessionBootstrapResult> => {
+    let result: SessionBootstrapResult;
+    try {
+      result = await apiFetch<SessionBootstrapResult>('/api/session/bootstrap', { method: 'POST', body: JSON.stringify({ projectCursor }), expectedUserId });
+    } catch (error) {
+      if (!(error instanceof ApiError) || error.status !== 404) throw error;
+      // Only an absent new route may use the older authenticated initializer.
+      // This still creates the caller's PROFILE; it never bypasses auth/errors.
+      await apiFetch('/api/meetings?limit=1', { expectedUserId });
+      result = { emailVerified: false, pendingGrants: 0, legacyBootstrap: true, projectInvitationsEnabled: false };
+    }
+    if (typeof result.emailVerified !== 'boolean' || !Number.isSafeInteger(result.pendingGrants) || result.pendingGrants < 0 ||
+        (result.projectCursor !== undefined && (typeof result.projectCursor !== 'string' || result.projectCursor.length > 512))) throw new Error('계정 연결 응답을 확인하지 못했습니다. 다시 시도해주세요.');
+    const projectIds = Array.isArray(result.joinedProjectIds) ? result.joinedProjectIds.filter(id => typeof id === 'string') : [];
+    const previousProjects = bootstrapProjectHints?.userId === expectedUserId && bootstrapProjectHints.expires > Date.now() ? bootstrapProjectHints.ids : [];
+    bootstrapProjectHints = { userId: expectedUserId, ids: [...new Set([...previousProjects, ...projectIds])].slice(0, 100), expires: Date.now() + 60_000 };
     const previous = bootstrapAccountHints?.userId === expectedUserId && bootstrapAccountHints.expires > Date.now() ? bootstrapAccountHints.ids : [];
     bootstrapAccountHints = { userId: expectedUserId, ids: [...new Set([...previous, ...(result.joinedAccountIds || [])])].slice(0, 100), expires: Date.now() + 60_000 };
     return result;

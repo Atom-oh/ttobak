@@ -93,8 +93,15 @@ This confirmation is a mitigation, not an ownership binding (ADR-024).
 
 ## Sign-in, invitations and recovery
 
-AuthProvider completes authenticated session bootstrap before releasing page API
-requests. Errors show retry/logout; account discovery hints remain identity-bound.
+AuthProvider completes initial profile bootstrap before mounting page content.
+Transient failures get three bounded backoff attempts and explicit retry/logout.
+Only a missing bootstrap route may fall back to the older authenticated meeting
+initializer; new project invitations stay disabled until server capabilities are
+available. Subsequent grant pages and verification refresh do not unmount active
+recordings/forms: membership revisions refresh affected lists after success.
+Project/account discovery hints remain identity-bound and are authorized on the
+server. Automatic continuation is bounded to three passes per interaction, then
+an explicit continue/retry control remains available.
 Unverified signed-in users get explicit send-code and verify-code controls. A
 successful verification refreshes claims and retries pending membership grants.
 First-login and password-reset forms share the configured minimum-eight,
@@ -110,8 +117,8 @@ addition without silently resending. Show pending members with paginated refresh
 and cancellation. Admins can follow the existing settings resend path. Email
 request acceptance is not inbox delivery.
 
-User management distinguishes invitation pending, reset required, unverified and
-disabled states. Do not offer an admin reset for RESET_REQUIRED, disabled or
+User management distinguishes invitation pending, reset required, unverified,
+unknown-schema and disabled states. Unknown readiness provides a refresh control. Do not offer an admin reset for RESET_REQUIRED, disabled or
 unverified users. Existing account/member and sharing notices explicitly say that
 queuing a grant does not send mail. The invitation template includes the login URL
 and temporary password; no temporary password or code is shown in app diagnostics.

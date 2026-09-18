@@ -121,11 +121,11 @@ func (r *pagedProjectSessionRepo) ListPendingProjectSharesForUser(ctx context.Co
 func TestProjectBootstrapProcessesOneBoundedPageAndReturnsContinuation(t *testing.T) {
 	r := &pagedProjectSessionRepo{sessionProjectRepo: &sessionProjectRepo{mockMeetingRepo: newMockMeetingRepo()}, next: "next-page"}
 	for i := 0; i < 25; i++ {
-		r.listRows = append(r.listRows, model.PendingShare{Kind: model.PendingShareKindProject, InvitedCognitoSub: "recipient", Email: "user@example.com", TTL: time.Now().Add(time.Hour).Unix()})
+		r.listRows = append(r.listRows, model.PendingShare{Kind: model.PendingShareKindProject, ProjectID: "00000000-0000-4000-8000-000000000001", InvitedCognitoSub: "recipient", Email: "user@example.com", TTL: time.Now().Add(time.Hour).Unix()})
 	}
 	s := newMeetingServiceWithRepo(r)
 	result, err := s.BootstrapSession(context.Background(), "recipient", "user@example.com", "", true, "current-page")
-	if err != nil || result.ProjectCursor != "next-page" || r.seen != "current-page" || r.grants != 25 || r.deadline.IsZero() || time.Until(r.deadline) > 5*time.Second {
+	if err != nil || result.ProjectCursor != "next-page" || r.seen != "current-page" || r.grants != 25 || len(result.JoinedProjectIDs) != 25 || r.deadline.IsZero() || time.Until(r.deadline) > 5*time.Second {
 		t.Fatalf("result=%+v err=%v grants=%d deadline=%v", result, err, r.grants, r.deadline)
 	}
 	r.grantErr = errors.New("temporarily unavailable")

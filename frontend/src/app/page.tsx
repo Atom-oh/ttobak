@@ -87,7 +87,7 @@ function AuthScreen() {
 }
 
 export default function HomePage() {
-  const { user, isLoading, isAuthenticated } = useAuth();
+  const { user, isLoading, isAuthenticated, membershipRevision } = useAuth();
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [isFetching, setIsFetching] = useState(true);
   const [activeTab, setActiveTab] = useState<MeetingListFilter['tab']>('all');
@@ -146,7 +146,7 @@ export default function HomePage() {
     if (!isAuthenticated) return;
     void fetchMeetings();
     return () => requestRef.current?.abort();
-  }, [isAuthenticated, userId, fetchMeetings]);
+  }, [isAuthenticated, userId, fetchMeetings, membershipRevision]);
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -169,7 +169,7 @@ export default function HomePage() {
     };
     void fetchAccounts();
     return () => { ignore = true; };
-  }, [isAuthenticated, userId, accountRetry]);
+  }, [isAuthenticated, userId, accountRetry, membershipRevision]);
 
   const resetMeetings = () => {
     // Invalidate synchronously, before the next filter effect starts.

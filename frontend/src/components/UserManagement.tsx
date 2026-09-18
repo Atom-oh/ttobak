@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
+import { useAuth } from '@/components/auth/AuthProvider';
 import { adminUsersApi, type AdminUserSummary } from '@/lib/api';
 
 // Dormancy is server-computed (see backend AdminUserSummary.dormant) — a
@@ -24,6 +25,9 @@ function StatusBadge({ user }: { user: AdminUserSummary }) {
         초대 대기
       </span>
     );
+  }
+  if (user.emailVerified === undefined && user.status === 'CONFIRMED') {
+    return <span className="text-xs font-semibold rounded-full bg-slate-100 px-2 py-1">인증 상태 조회 필요</span>;
   }
   if (user.emailVerified === false) {
     return <span className="text-xs font-semibold rounded-full bg-amber-100 px-2 py-1 text-amber-800">이메일 인증 필요</span>;
@@ -53,6 +57,8 @@ function formatDate(value: string | null): string {
 }
 
 export function UserManagement() {
+  const { membershipRevision } = useAuth();
+  const requestGeneration = useRef(0);
   const [users, setUsers] = useState<AdminUserSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -64,12 +70,14 @@ export function UserManagement() {
   const [actingOn, setActingOn] = useState<string | null>(null);
 
   const fetchUsers = useCallback(async () => {
+    const generation = ++requestGeneration.current;
     try {
       const data = await adminUsersApi.list();
+      if (generation !== requestGeneration.current) return;
       setUsers(data.users || []);
       setLastLoginUnavailable(Boolean(data.lastLoginUnavailable));
     } catch (err) {
-      setError(err instanceof Error ? err.message : '사용자 목록을 불러오지 못했습니다');
+      if (generation === requestGeneration.current) setError(err instanceof Error ? err.message : '사용자 목록을 불러오지 못했습니다');
     }
   }, []);
 
@@ -78,7 +86,7 @@ export function UserManagement() {
       await fetchUsers();
       setLoading(false);
     })();
-  }, [fetchUsers]);
+  }, [fetchUsers, membershipRevision]);
 
   const runAction = async (
     userId: string,
@@ -161,6 +169,12 @@ export function UserManagement() {
           <p className="text-amber-700 dark:text-amber-400 text-sm">{warning}</p>
         </div>
       )}
+      {users.some(user => user.emailVerified === undefined) && (
+        <div role="status" className="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+          서버가 이메일 인증 상태를 제공하지 않아 비밀번호 재설정 가능 여부를 확인할 수 없습니다.
+          <button type="button" onClick={fetchUsers} className="ml-2 underline">사용자 상태 다시 조회</button>
+        </div>
+      )}
       {lastLoginUnavailable && (
         <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-3">
           <p className="text-amber-700 dark:text-amber-400 text-sm">
@@ -224,7 +238,7 @@ export function UserManagement() {
                             </button>
                           ) : (
                             <span className="max-w-48 text-xs text-slate-500 dark:text-text-muted">
-                              {!user.enabled ? '활성화 여부를 먼저 확인하세요' : user.status === 'RESET_REQUIRED' ? '비밀번호 찾기에서 받은 코드로 완료하거나 새 코드를 요청하세요' : user.emailVerified !== true ? '로그인 후 이메일 인증 또는 관리자 복구 절차가 필요합니다' : '로그인 상태를 확인하세요'}
+                              {!user.enabled ? '활성화 여부를 먼저 확인하세요' : user.status === 'RESET_REQUIRED' ? '비밀번호 찾기에서 받은 코드로 완료하거나 새 코드를 요청하세요' : user.emailVerified === undefined ? '서버의 인증 상태 정보를 먼저 새로 조회하세요' : user.emailVerified === false ? '로그인 후 이메일 인증 또는 관리자 복구 절차가 필요합니다' : '로그인 상태를 확인하세요'}
                             </span>
                           )}
                           {user.enabled ? (

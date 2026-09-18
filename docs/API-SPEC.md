@@ -29,7 +29,9 @@ to S3 GET presigns. PUT uploads continue to use signed S3 URLs.
 Authenticated `POST /api/session/bootstrap` takes optional `{ projectCursor }`
 (maximum 1,024 body bytes); identity comes only from verified JWT claims. It
 returns `emailVerified`, `pendingGrants`, `retryPending`, `projectCursor`,
-`projectInvitationsEnabled` and at most 100 `joinedAccountIds`. Project work is
+`projectInvitationsEnabled`, up to 100 `joinedAccountIds`, and the current
+page's `joinedProjectIds`. `GET /api/projects?joinedProjectIds=...` accepts up to
+100 UUID hints; each requires canonical project access and never grants access. Project work is
 limited to 25 canonical rows and five seconds per call. Failed pages retain their
 cursor. Profile initialization errors fail the request; invitation side effects
 surface retry state without blocking unrelated data. Unverified users cannot
@@ -54,6 +56,14 @@ reverse rows and revalidates canonical grants; empty pages may have continuation
 204 or 409 on a membership/version race. Already-joined users use member removal.
 Project user queues are isolated from old readers; transactional rows, TTL and
 the required incompatible-API rollback drain are specified in ADR-044.
+
+Admin user summaries include `emailVerified`. Password reset requires an enabled,
+CONFIRMED user with verified email; missing verification returns 409
+`EMAIL_VERIFICATION_REQUIRED`. Disabled mail actions return 409 `USER_DISABLED`.
+An existing RESET_REQUIRED user completes or requests a code through the Cognito
+self-service flow rather than invoking the CONFIRMED-only admin reset again.
+Authenticated email verification uses Cognito SDK operations and refreshes JWT
+claims before bootstrap is retried; the app never silently sets verification.
 
 ### Meetings and pagination
 

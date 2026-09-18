@@ -18,7 +18,7 @@ import type {
 export default function ProjectDetailClient() {
   const pathname = usePathname();
   const projectId = decodeURIComponent(pathname.split('/').filter(Boolean).pop() || '');
-  const { user, isLoading, isAuthenticated, isAdmin } = useAuth();
+  const { user, isLoading, isAuthenticated, isAdmin, membershipRevision, onboardingAvailable } = useAuth();
 
   const [project, setProject] = useState<Project | null>(null);
   const [meetings, setMeetings] = useState<ProjectMeetingRef[]>([]);
@@ -36,6 +36,7 @@ export default function ProjectDetailClient() {
   const [pendingCursor, setPendingCursor] = useState('');
   const [pendingError, setPendingError] = useState('');
   const [pendingLoading, setPendingLoading] = useState(false);
+  const pendingGeneration = useRef(0);
   const [inviting, setInviting] = useState(false);
   const [accountId, setAccountId] = useState('');
   const [linkingAccount, setLinkingAccount] = useState(false);
@@ -82,13 +83,15 @@ export default function ProjectDetailClient() {
     setError(null);
   }, [projectId]);
 
+  const fetchGeneration = useRef(0);
   const fetchAll = useCallback(async () => {
     const myProjectId = projectId;
+    const generation = ++fetchGeneration.current;
     if (!myProjectId || myProjectId === '_') {
       setLoading(false);
       return;
     }
-    if (activeProjectIdRef.current !== myProjectId) return; // superseded before this call even started
+    if ((activeProjectIdRef.current !== myProjectId || generation !== fetchGeneration.current)) return; // superseded before this call even started
     setLoading(true);
     setError(null);
     try {
@@ -103,14 +106,14 @@ export default function ProjectDetailClient() {
       // when a mutation handler re-runs fetchAll and this fetch transiently
       // fails).
       const proj = await projectApi.get(myProjectId);
-      if (activeProjectIdRef.current !== myProjectId) return; // superseded by a later navigation
+      if ((activeProjectIdRef.current !== myProjectId || generation !== fetchGeneration.current)) return; // superseded by a later navigation
       setProject(proj);
       const [mtg, res, ins] = await Promise.allSettled([
         projectApi.meetings(myProjectId),
         projectApi.research(myProjectId),
         projectApi.insights(myProjectId),
       ]);
-      if (activeProjectIdRef.current !== myProjectId) return; // superseded by a later navigation
+      if ((activeProjectIdRef.current !== myProjectId || generation !== fetchGeneration.current)) return; // superseded by a later navigation
       setMeetingsError(mtg.status === 'rejected');
       if (mtg.status === 'fulfilled') setMeetings(mtg.value.meetings ?? []);
       setResearchError(res.status === 'rejected');
@@ -118,16 +121,16 @@ export default function ProjectDetailClient() {
       setInsightsError(ins.status === 'rejected');
       if (ins.status === 'fulfilled') setInsights(ins.value.insights ?? []);
     } catch (err) {
-      if (activeProjectIdRef.current !== myProjectId) return; // superseded by a later navigation
+      if ((activeProjectIdRef.current !== myProjectId || generation !== fetchGeneration.current)) return; // superseded by a later navigation
       setError(err instanceof Error ? err.message : 'Failed to load project');
     } finally {
-      if (activeProjectIdRef.current === myProjectId) setLoading(false);
+      if ((activeProjectIdRef.current === myProjectId && generation === fetchGeneration.current)) setLoading(false);
     }
   }, [projectId]);
 
   useEffect(() => {
     if (isAuthenticated) fetchAll();
-  }, [isAuthenticated, fetchAll]);
+  }, [isAuthenticated, fetchAll, membershipRevision]);
 
   // User-scoped, not project-scoped -- unlike fetchAll, this doesn't need to
   // re-run on projectId change or guard against a stale-navigation race.
@@ -153,16 +156,17 @@ export default function ProjectDetailClient() {
 
   const fetchPending = useCallback(async (cursor = '') => {
     if (project?.ownerUserId !== user?.userId || activeProjectIdRef.current !== projectId) return;
+    const generation = ++pendingGeneration.current;
     setPendingLoading(true); setPendingError('');
     try {
       const page = await projectApi.pendingMembers(projectId, cursor);
-      if (activeProjectIdRef.current !== projectId) return;
+      if (activeProjectIdRef.current !== projectId || generation !== pendingGeneration.current) return;
       setPendingMembers(page.members); setPendingCursor(page.nextCursor || '');
     } catch (error) {
-      if (activeProjectIdRef.current === projectId) setPendingError(error instanceof Error ? error.message : '대기 중인 초대를 불러오지 못했습니다.');
-    } finally { if (activeProjectIdRef.current === projectId) setPendingLoading(false); }
+      if (activeProjectIdRef.current === projectId && generation === pendingGeneration.current) setPendingError(error instanceof Error ? error.message : '대기 중인 초대를 불러오지 못했습니다.');
+    } finally { if (activeProjectIdRef.current === projectId && generation === pendingGeneration.current) setPendingLoading(false); }
   }, [projectId, project?.ownerUserId, user?.userId]);
-  useEffect(() => { if (isAuthenticated) void fetchPending(); }, [isAuthenticated, fetchPending]);
+  useEffect(() => { if (isAuthenticated) void fetchPending(); }, [isAuthenticated, fetchPending, membershipRevision]);
 
   const addMember = async (email: string) => {
     const result = await projectApi.addMember(projectId, { email });
@@ -177,7 +181,7 @@ export default function ProjectDetailClient() {
   const handleInvite = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const email = inviteEmail.trim().toLowerCase();
-    if (!email || inviting) return;
+    if (!email || inviting || !onboardingAvailable) return;
     setInviting(true); setError(null); setInviteCandidate(null); setInviteNotice('');
     try { await addMember(email); }
     catch (error) {
@@ -190,7 +194,7 @@ export default function ProjectDetailClient() {
   };
   const inviteNewUser = async () => {
     const email = inviteCandidate;
-    if (!email || !isAdmin || inviting) return;
+    if (!email || !isAdmin || inviting || !onboardingAvailable) return;
     setInviting(true); setError(null);
     let mailRequested = false;
     try {
@@ -340,8 +344,9 @@ export default function ProjectDetailClient() {
                 ))}
                 {isOwner && (
                   <div className="space-y-2 text-sm">
+                    {!onboardingAvailable && <p role="status">초대 기능의 서버 연결을 기다리고 있습니다. 상단에서 연결을 다시 시도할 수 있습니다.</p>}
                     {inviteNotice && <p role="status" className="text-slate-600 dark:text-text-secondary">{inviteNotice}</p>}
-                    {inviteCandidate && isAdmin && <button type="button" disabled={inviting} onClick={inviteNewUser} className="rounded bg-primary px-3 py-2 text-white disabled:opacity-50">초대 메일 발송 후 프로젝트 추가</button>}
+                    {inviteCandidate && isAdmin && <button type="button" disabled={inviting || !onboardingAvailable} onClick={inviteNewUser} className="rounded bg-primary px-3 py-2 text-white disabled:opacity-50">초대 메일 발송 후 프로젝트 추가</button>}
                     {pendingError && <p role="alert" className="text-red-600">{pendingError}</p>}
                     {pendingMembers.map(member => <div key={member.email} className="flex flex-wrap items-center justify-between gap-2 rounded border p-2">
                       <span>{member.email} · 가입 대기</span>
@@ -366,7 +371,7 @@ export default function ProjectDetailClient() {
                     />
                     <button
                       type="submit"
-                      disabled={inviting}
+                      disabled={inviting || !onboardingAvailable}
                       className="px-3 py-2 rounded-lg bg-primary hover:bg-primary-hover text-white text-sm disabled:opacity-50"
                     >
                       {inviting ? '처리 중…' : '멤버 추가'}

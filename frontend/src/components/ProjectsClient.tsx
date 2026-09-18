@@ -1,15 +1,18 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
+import { useAuth } from '@/components/auth/AuthProvider';
 import { projectApi } from '@/lib/api';
 import type { ProjectSummary } from '@/types/meeting';
 
 export default function ProjectsClient() {
   const router = useRouter();
+  const { isAuthenticated, membershipRevision } = useAuth();
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const requestGeneration = useRef(0);
   const [error, setError] = useState<string | null>(null);
 
   const [showForm, setShowForm] = useState(false);
@@ -19,22 +22,26 @@ export default function ProjectsClient() {
   const [stage, setStage] = useState('');
   const [creating, setCreating] = useState(false);
 
+  const invalidateRequests = useCallback(() => { requestGeneration.current++; }, []);
+
   const fetchProjects = useCallback(async () => {
+    const generation = ++requestGeneration.current;
     setLoading(true);
     setError(null);
     try {
       const res = await projectApi.list();
-      setProjects(res?.projects ?? []);
+      if (generation === requestGeneration.current) setProjects(res?.projects ?? []);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load projects');
+      if (generation === requestGeneration.current) setError(err instanceof Error ? err.message : 'Failed to load projects');
     } finally {
-      setLoading(false);
+      if (generation === requestGeneration.current) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    fetchProjects();
-  }, [fetchProjects]);
+    if (isAuthenticated) void fetchProjects();
+    return invalidateRequests;
+  }, [fetchProjects, isAuthenticated, membershipRevision, invalidateRequests]);
 
   const handleCreate = async (e: FormEvent) => {
     e.preventDefault();

@@ -118,7 +118,15 @@ func (h *ProjectHandler) CreateProject(w http.ResponseWriter, r *http.Request) {
 
 func (h *ProjectHandler) ListMyProjects(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	projects, err := h.projectService.ListMyProjects(ctx, middleware.GetUserID(ctx))
+	var hints []string
+	if raw := r.URL.Query().Get("joinedProjectIds"); raw != "" {
+		if len(raw) > 4000 {
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid project discovery hints")
+			return
+		}
+		hints = strings.Split(raw, ",")
+	}
+	projects, err := h.projectService.ListMyProjects(ctx, middleware.GetUserID(ctx), hints...)
 	if err != nil {
 		writeProjectError(w, err, "Access denied")
 		return
