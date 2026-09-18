@@ -40,7 +40,7 @@ func (s *MeetingService) BootstrapSession(ctx context.Context, userID, email, na
 	if len(joined) > 100 {
 		joined = joined[:100]
 	}
-	result := &SessionBootstrapResponse{EmailVerified: verified, JoinedAccountIDs: joined, ProjectCursor: projectCursor, ProjectInvitationsEnabled: os.Getenv("PROJECT_INVITATIONS_ENABLED") != "false"}
+	result := &SessionBootstrapResponse{EmailVerified: verified, JoinedAccountIDs: joined, ProjectCursor: projectCursor, ProjectInvitationsEnabled: os.Getenv("PROJECT_INVITATIONS_ENABLED") == "true"}
 	pending, err := s.repo.ListPendingShares(ctx, email)
 	if err != nil {
 		log.Printf("session pending-grant read failed: %v", err)

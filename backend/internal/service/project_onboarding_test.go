@@ -61,6 +61,7 @@ func (r *onboardingRepo) RevokePendingProjectShare(context.Context, *model.Pendi
 
 func onboardingService(t *testing.T, status ct.UserStatusType, verified bool) (*ProjectService, *onboardingRepo, *fakeCognitoAdminAPI) {
 	t.Helper()
+	t.Setenv("PROJECT_INVITATIONS_ENABLED", "true")
 	r := &onboardingRepo{mockProjectRepo: newMockProjectRepo()}
 	r.projects["project"] = &model.Project{ProjectID: "project", OwnerUserID: "owner"}
 	c := &fakeCognitoAdminAPI{adminGetUserFn: func(_ context.Context, in *ci.AdminGetUserInput) (*ci.AdminGetUserOutput, error) {
@@ -196,10 +197,12 @@ func TestProjectInvitationRequiresPendingCapabilityAndHonorsWriterFence(t *testi
 	if !errors.Is(err, ErrClientUpgradeRequired) || r.pending != nil {
 		t.Fatalf("legacy request queued: %v", err)
 	}
-	t.Setenv("PROJECT_INVITATIONS_ENABLED", "false")
-	_, err = s.AddMember(context.Background(), "owner", "project", &model.AddProjectMemberRequest{AllowPending: true, Email: "invitee@example.com"})
-	if !errors.Is(err, ErrInvitationsPaused) || r.pending != nil {
-		t.Fatalf("writer fence failed: %v", err)
+	for _, value := range []string{"false", "", "TRUE", "invalid"} {
+		t.Setenv("PROJECT_INVITATIONS_ENABLED", value)
+		_, err = s.AddMember(context.Background(), "owner", "project", &model.AddProjectMemberRequest{AllowPending: true, Email: "invitee@example.com"})
+		if !errors.Is(err, ErrInvitationsPaused) || r.pending != nil {
+			t.Fatalf("writer fence failed for %q: %v", value, err)
+		}
 	}
 }
 func TestLegacyClientCanAddRegisteredMemberWithoutQueuing(t *testing.T) {

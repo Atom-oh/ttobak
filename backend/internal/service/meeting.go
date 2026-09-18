@@ -347,7 +347,15 @@ func (s *MeetingService) ListMeetings(ctx context.Context, userID, tab, cursor, 
 			return s.listTeamSharedMeetings(ctx, userID, tab, accountID, limit, cursor, nil)
 		}
 		cursor = continuation.RegularCursor
-		joinedAccountIDs = append(joinedAccountIDs, continuation.Accounts...)
+		combined := append(append([]string(nil), joinedAccountIDs...), continuation.Accounts...)
+		joinedAccountIDs = nil
+		seen := make(map[string]bool, len(combined))
+		for _, id := range combined {
+			if id != "" && !seen[id] {
+				seen[id] = true
+				joinedAccountIDs = append(joinedAccountIDs, id)
+			}
+		}
 	}
 	// Share rows do not contain accountId. Resolve their canonical meetings
 	// and advance empty filtered pages here; owned-meeting filtering happens
