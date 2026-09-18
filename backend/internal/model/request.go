@@ -326,15 +326,16 @@ type InviteUserResponse struct {
 // service.UserAdminService.listAdminUserIDs' doc comment for the evidence
 // and why it could stop holding.
 type AdminUserSummary struct {
-	UserID      string     `json:"userId"`
-	Email       string     `json:"email"`
-	Name        string     `json:"name,omitempty"`
-	Status      string     `json:"status"` // Cognito UserStatus (e.g. CONFIRMED, FORCE_CHANGE_PASSWORD)
-	Enabled     bool       `json:"enabled"`
-	IsAdmin     bool       `json:"isAdmin"`
-	CreatedAt   time.Time  `json:"createdAt"`
-	LastLoginAt *time.Time `json:"lastLoginAt"` // nil = no login recorded yet (not necessarily dormant -- see Dormant)
-	Dormant     bool       `json:"dormant"`     // true only when LastLoginAt is set and older than the dormancy threshold
+	EmailVerified bool       `json:"emailVerified"`
+	UserID        string     `json:"userId"`
+	Email         string     `json:"email"`
+	Name          string     `json:"name,omitempty"`
+	Status        string     `json:"status"` // Cognito UserStatus (e.g. CONFIRMED, FORCE_CHANGE_PASSWORD)
+	Enabled       bool       `json:"enabled"`
+	IsAdmin       bool       `json:"isAdmin"`
+	CreatedAt     time.Time  `json:"createdAt"`
+	LastLoginAt   *time.Time `json:"lastLoginAt"` // nil = no login recorded yet (not necessarily dormant -- see Dormant)
+	Dormant       bool       `json:"dormant"`     // true only when LastLoginAt is set and older than the dormancy threshold
 }
 
 // AdminUserListResponse represents the response for the admin user list

@@ -80,6 +80,7 @@ func init() {
 	// invited-check (see AccountService.SetCognitoAdminAPI).
 	accountService.SetCognitoAdminAPI(cognitoClient, cognitoPoolID)
 	projectService := service.NewProjectService(repo)
+	projectService.SetCognitoAdminAPI(cognitoClient, cognitoPoolID)
 	vaultService := service.NewVaultService(repo)
 	uploadService := service.NewUploadService(s3Client, repo, bucketName, ebClient)
 	// Same-domain CloudFront-signed download URLs (ADR-027). Tried once at
@@ -175,6 +176,7 @@ func init() {
 	readingHandler := handler.NewMeetingReadingHandler(service.NewMeetingReadingService(repo, actionItemsService))
 	actionItemsHandler := handler.NewActionItemsHandler(actionItemsService)
 	meetingHandler.SetActionItemsService(actionItemsService)
+	sessionHandler := handler.NewSessionHandler(meetingService)
 	// Setup router
 	r := chi.NewRouter()
 
@@ -203,6 +205,7 @@ func init() {
 	// Authenticated routes
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.Auth)
+		r.Post("/api/session/bootstrap", sessionHandler.Bootstrap)
 
 		// Account routes
 		r.Get("/api/accounts", accountHandler.ListAccounts)
@@ -371,6 +374,8 @@ func init() {
 		r.Put("/api/projects/{projectId}", projectHandler.UpdateProject)
 		r.Delete("/api/projects/{projectId}", projectHandler.DeleteProject)
 		r.Post("/api/projects/{projectId}/members", projectHandler.AddMember)
+		r.Get("/api/projects/{projectId}/members/pending", projectHandler.ListPendingMembers)
+		r.Delete("/api/projects/{projectId}/members/pending", projectHandler.RevokePendingMember)
 		r.Delete("/api/projects/{projectId}/members/{userId}", projectHandler.RemoveMember)
 		r.Post("/api/projects/{projectId}/accounts", projectHandler.LinkAccount)
 		r.Delete("/api/projects/{projectId}/accounts/{accountId}", projectHandler.UnlinkAccount)

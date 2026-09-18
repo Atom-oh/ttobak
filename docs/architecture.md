@@ -83,6 +83,25 @@ enabled schedule and selects `all`, which adds the dotted canonical stream.
 These are repository capabilities and configuration, not assertions about
 deployed activation or completed public acceptance.
 
+## Identity onboarding
+
+Cognito identity, the app PROFILE and resource membership are separate states.
+The authenticated session bootstrap coordinates profile creation and eligible
+pending grants without relying on a meeting-page visit. Project invitations have
+a separate user queue plus a project reverse row, keeping older API readers from
+consuming unknown grant kinds. Transactions bind project ownership, invitation
+version/expiry and recipient sub before publishing membership. JWT email
+verification remains required; account roles and global admin rights are never
+inherited from a project invitation. See ADR-044 and API-SPEC for contracts.
+
+Deploy and verify the API with `/api/session/bootstrap` and project pending routes
+before publishing the new frontend. The new frontend requires bootstrap and will
+show retry on an older/missing API. For rollback, restore frontend first; project
+queues remain isolated from older readers until the compatible API returns.
+Existing account/meeting queue behavior and the project deletion residual storage
+race described in ADR-025 remain: deleted projects cannot materialize grants and
+unconsumed project invitation rows expire through their existing TTL field.
+
 ## Data paths
 
 1. Capture microphone/tab/native system audio. Live captions use browser Transcribe

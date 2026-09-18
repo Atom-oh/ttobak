@@ -1218,6 +1218,14 @@ func (s *MeetingService) MaterializePendingShares(ctx context.Context, userID, e
 // alone doesn't distinguish a permanently dead grant from a transient race.
 func (s *MeetingService) materializeOne(ctx context.Context, userID, email string, p *model.PendingShare) (bool, error) {
 	switch p.Kind {
+	case model.PendingShareKindProject:
+		store, ok := s.repo.(interface {
+			MaterializePendingProjectGrant(context.Context, *model.PendingShare, string, string) (bool, error)
+		})
+		if !ok {
+			return false, fmt.Errorf("project invitation store unavailable")
+		}
+		return store.MaterializePendingProjectGrant(ctx, p, userID, email)
 	case model.PendingShareKindAccount:
 		return s.repo.MaterializePendingAccountGrant(ctx, p, userID, email)
 	case model.PendingShareKindMeeting:

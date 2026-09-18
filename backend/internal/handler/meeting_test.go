@@ -570,3 +570,13 @@ func TestErrorResponseFormat(t *testing.T) {
 		t.Error("error response missing message field")
 	}
 }
+
+func TestMeetingListRejectsInvalidBootstrapDiscoveryHints(t *testing.T) {
+	h, _ := newStubMeetingHandler()
+	req := withUserCtx(httptest.NewRequest(http.MethodGet, "/api/meetings?joinedAccountIds=../private", nil), "caller")
+	w := httptest.NewRecorder()
+	h.ListMeetings(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}

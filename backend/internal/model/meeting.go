@@ -357,14 +357,16 @@ const (
 // so the grant becomes visible on sign-in with no separate "pending
 // invites" step -- subject to the emailVerified/InvitedCognitoSub checks
 // materializeOne applies at that point.
-// PK: PENDING_SHARE#{email}, SK: PENDING_ACCOUNT#{accountId} | PENDING_MEETING#{meetingId}
+// Account/meeting PK: PENDING_SHARE#{email}; project PK: PROJECT_INVITES#{email}.
+// SK: PENDING_ACCOUNT#{accountId} | PENDING_MEETING#{meetingId} | PENDING_PROJECT#{projectId}.
 type PendingShare struct {
 	PK              string `dynamodbav:"PK"`
 	SK              string `dynamodbav:"SK"`
 	Email           string `dynamodbav:"email"`
-	Kind            string `dynamodbav:"kind"` // "account" | "meeting"
+	Kind            string `dynamodbav:"kind"` // "account" | "meeting" | "project"
 	AccountID       string `dynamodbav:"accountId,omitempty"`
 	MeetingID       string `dynamodbav:"meetingId,omitempty"`
+	ProjectID       string `dynamodbav:"projectId,omitempty"`
 	Role            string `dynamodbav:"role,omitempty"`       // set when Kind=="account"
 	Permission      string `dynamodbav:"permission,omitempty"` // set when Kind=="meeting"
 	InvitedByUserID string `dynamodbav:"invitedByUserId"`
@@ -421,6 +423,7 @@ const PendingShareTTL = 30 * 24 * time.Hour
 const (
 	PendingShareKindAccount = "account"
 	PendingShareKindMeeting = "meeting"
+	PendingShareKindProject = "project"
 
 	EntityTypePendingShare = "PENDING_SHARE"
 )

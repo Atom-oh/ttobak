@@ -24,6 +24,45 @@ to S3 GET presigns. PUT uploads continue to use signed S3 URLs.
 
 ## Contracts that require care
 
+### Session bootstrap and project invitations
+
+`POST /api/session/bootstrap` is authenticated and takes no identity from its
+body (at most 1,024 bytes). It initializes the caller's app profile and consumes
+eligible account/meeting/project invitations. Response fields are `emailVerified`,
+`pendingGrants`, optional `retryPending` for failed invitation side effects, and up to 100 `joinedAccountIds` for immediate meeting discovery.
+Profile initialization failures are retryable; invitation failures surface a
+retry notice without blocking unrelated app access. The frontend waits for profile initialization before page
+requests and offers retry rather than silently skipping it. Unverified callers
+may initialize a profile but never consume an invitation.
+
+`POST /api/projects/{projectId}/members` is owner-only, accepts `{ email }` (at most
+2,048 request bytes; email at most 254 bytes), and resolves the current Cognito
+identity. Unknown users return 409 `INVITATION_REQUIRED`, disabled users return
+409 `USER_DISABLED`. Identity creation/mail remains a separate admin-only
+`POST /api/settings/invite-user` action. Registered verified users are added
+idempotently; other existing identities return `{ userId: "", email, pending: true,
+emailVerified }` and a sub-bound pending grant. A stale PROFILE cannot grant a
+recreated email's old identity access.
+
+Owner-only `GET /api/projects/{projectId}/members/pending?cursor=...` returns
+`{ members: [{ email, expiresAt }], nextCursor? }`, at most 25 reverse rows scanned
+per page. Empty pages can have continuation; every listed grant is canonically
+revalidated. `DELETE /api/projects/{projectId}/members/pending` accepts `{ email }`
+and returns 204, or 409 if membership/version changed. Remove an already-joined
+member through the existing member-removal route instead of claiming cancellation.
+Project queues use `PROJECT_INVITES#{email}` / `PENDING_PROJECT#{projectId}` plus
+`PROJECT#{projectId}` / `PENDING_MEMBER#{email}` reverse rows. Both expire with
+`pendingShareExpiresAt` and are written/consumed/revoked transactionally. Older
+API readers do not see the project queue during rolling deployment.
+
+Admin user summaries include `emailVerified`. Password reset requires an enabled,
+CONFIRMED user with verified email; missing verification returns 409
+`EMAIL_VERIFICATION_REQUIRED`. Disabled mail actions return 409 `USER_DISABLED`.
+An existing RESET_REQUIRED user completes or requests a code through the Cognito
+self-service flow rather than invoking the CONFIRMED-only admin reset again.
+Authenticated email verification uses Cognito SDK operations and refreshes JWT
+claims before bootstrap is retried; the app never silently sets verification.
+
 ### Meetings and pagination
 
 `GET /api/meetings` accepts `tab=all|shared`, `limit`, opaque `cursor`, and optional
@@ -31,6 +70,11 @@ comma-separated `accountIds` (at most 100 distinct IDs). Legacy `accountId` rema
 supported; supplying both forms, invalid IDs or a mismatched cursor returns 400.
 An empty selection is unfiltered. Preserve normalized selection/tab/caller across
 continuation requests; restart pagination when filters change.
+
+`joinedAccountIds` accepts at most 100 normalized discovery hints from bootstrap.
+These are not filters or grants: current canonical membership is rechecked before
+any team content is returned. The browser retains hints for 60 seconds, bound to
+the current token's user ID, to bridge reverse-index propagation.
 
 The service lists owned, direct-shared and inherited account-team meetings. These
 streams retain their own ordering; there is no global chronological merge. A
@@ -361,6 +405,7 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | GET | `/api/health` | `healthHandler.Health` |
 | GET | `/api/auth/allowed-domains` | `settingsHandler.GetAllowedDomains` |
 | GET | `/api/public/docs/{token}` | `documentHandler.PublicGetDoc` |
+| POST | `/api/session/bootstrap` | `sessionHandler.Bootstrap` |
 | GET | `/api/accounts` | `accountHandler.ListAccounts` |
 | POST | `/api/accounts` | `accountHandler.CreateAccount` |
 | GET | `/api/accounts/{accountId}` | `accountHandler.GetAccount` |
@@ -472,6 +517,8 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | PUT | `/api/projects/{projectId}` | `projectHandler.UpdateProject` |
 | DELETE | `/api/projects/{projectId}` | `projectHandler.DeleteProject` |
 | POST | `/api/projects/{projectId}/members` | `projectHandler.AddMember` |
+| GET | `/api/projects/{projectId}/members/pending` | `projectHandler.ListPendingMembers` |
+| DELETE | `/api/projects/{projectId}/members/pending` | `projectHandler.RevokePendingMember` |
 | DELETE | `/api/projects/{projectId}/members/{userId}` | `projectHandler.RemoveMember` |
 | POST | `/api/projects/{projectId}/accounts` | `projectHandler.LinkAccount` |
 | DELETE | `/api/projects/{projectId}/accounts/{accountId}` | `projectHandler.UnlinkAccount` |

@@ -1,0 +1,247 @@
+package repository
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/ttobak/backend/internal/model"
+)
+
+func projectInviteWire(t *testing.T, fn func(string, map[string]any) (int, string)) *DynamoDBRepository {
+	t.Helper()
+	client := dynamodb.New(dynamodb.Options{Region: "ap-northeast-2", Credentials: aws.AnonymousCredentials{}, RetryMaxAttempts: 1, HTTPClient: meetingListHTTPClientFunc(func(req *http.Request) (*http.Response, error) {
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		status, text := fn(req.Header.Get("X-Amz-Target"), body)
+		return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": {"application/x-amz-json-1.0"}}, Body: io.NopCloser(strings.NewReader(text))}, nil
+	})})
+	return NewDynamoDBRepository(client, "test")
+}
+func inviteFixture() *model.PendingShare {
+	return &model.PendingShare{PK: "PROJECT_INVITES#user@example.com", SK: "PENDING_PROJECT#project", Kind: model.PendingShareKindProject, ProjectID: "project", Email: "user@example.com", InvitedByUserID: "owner", InvitedCognitoSub: "recipient", CreatedAt: time.Now().UTC(), TTL: time.Now().Add(time.Hour).Unix()}
+}
+func TestProjectInvitationQueuesBothRowsWithOwnerAndExistingMemberGuards(t *testing.T) {
+	calls := 0
+	r := projectInviteWire(t, func(target string, body map[string]any) (int, string) {
+		calls++
+		if !strings.HasSuffix(target, ".TransactWriteItems") {
+			t.Fatal(target)
+		}
+		items := body["TransactItems"].([]any)
+		if len(items) != 4 {
+			t.Fatalf("expected owner, canonical, reverse, absent-member checks: %d", len(items))
+		}
+		owner := items[0].(map[string]any)["ConditionCheck"].(map[string]any)
+		if condition := analysisCondition(t, owner); !strings.Contains(condition, "ownerUserId") || !strings.Contains(condition, "owner") || !strings.Contains(condition, "attribute_exists") {
+			t.Fatal(condition)
+		}
+		canonical := items[1].(map[string]any)["Put"].(map[string]any)["Item"].(map[string]any)
+		reverse := items[2].(map[string]any)["Put"].(map[string]any)["Item"].(map[string]any)
+		if canonical["PK"].(map[string]any)["S"] != "PROJECT_INVITES#user@example.com" || reverse["PK"].(map[string]any)["S"] != "PROJECT#project" {
+			t.Fatal("wrong partitions")
+		}
+		for _, field := range []string{"createdAt", "pendingShareExpiresAt", "invitedCognitoSub"} {
+			a, _ := json.Marshal(canonical[field])
+			b, _ := json.Marshal(reverse[field])
+			if string(a) != string(b) {
+				t.Fatalf("mismatched %s", field)
+			}
+		}
+		member := items[3].(map[string]any)["ConditionCheck"].(map[string]any)
+		if !strings.Contains(member["ConditionExpression"].(string), "attribute_not_exists") || member["Key"].(map[string]any)["SK"].(map[string]any)["S"] != "MEMBER#recipient" {
+			t.Fatal("pending grant could resurrect an existing member")
+		}
+		return 200, "{}"
+	})
+	p := inviteFixture()
+	p.Email = " User@Example.com "
+	if err := r.PutPendingShare(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatal(calls)
+	}
+}
+func TestProjectInvitationMaterializationBindsIdentityExpiryAndVersion(t *testing.T) {
+	r := projectInviteWire(t, func(_ string, body map[string]any) (int, string) {
+		items := body["TransactItems"].([]any)
+		if len(items) != 4 {
+			t.Fatal("grant is not atomic with both queue rows")
+		}
+		canonical := items[2].(map[string]any)["Delete"].(map[string]any)
+		condition := analysisCondition(t, canonical)
+		for _, field := range []string{"createdAt", "invitedCognitoSub", "recipient", "pendingShareExpiresAt", "invitedByUserId", "owner", "projectId", "project"} {
+			if !strings.Contains(condition, field) {
+				t.Fatalf("missing %s: %s", field, condition)
+			}
+		}
+		reverse := items[3].(map[string]any)["Delete"].(map[string]any)
+		if c := analysisCondition(t, reverse); !strings.Contains(c, "createdAt") || !strings.Contains(c, "invitedCognitoSub") {
+			t.Fatal(c)
+		}
+		return 200, "{}"
+	})
+	if ok, err := r.MaterializePendingProjectGrant(context.Background(), inviteFixture(), "recipient", "user@example.com"); err != nil || !ok {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+}
+func TestProjectInvitationInvalidIdentityNeverWrites(t *testing.T) {
+	r := projectInviteWire(t, func(string, map[string]any) (int, string) {
+		t.Fatal("invalid invitation reached database")
+		return 200, "{}"
+	})
+	for _, test := range []struct {
+		name, id, email string
+		expired         bool
+	}{{"different sub", "recreated", "user@example.com", false}, {"different email", "recipient", "other@example.com", false}, {"expired", "recipient", "user@example.com", true}} {
+		t.Run(test.name, func(t *testing.T) {
+			p := inviteFixture()
+			if test.expired {
+				p.TTL = time.Now().Add(-time.Second).Unix()
+			}
+			if ok, err := r.MaterializePendingProjectGrant(context.Background(), p, test.id, test.email); err != nil || ok {
+				t.Fatalf("ok=%v err=%v", ok, err)
+			}
+		})
+	}
+}
+func TestProjectInvitationNewVersionRaceNeverCleansFreshGrant(t *testing.T) {
+	calls := 0
+	r := projectInviteWire(t, func(string, map[string]any) (int, string) {
+		calls++
+		return 400, `{"__type":"TransactionCanceledException","CancellationReasons":[{"Code":"None"},{"Code":"None"},{"Code":"ConditionalCheckFailed"},{"Code":"None"}]}`
+	})
+	ok, err := r.MaterializePendingProjectGrant(context.Background(), inviteFixture(), "recipient", "user@example.com")
+	if err != nil || ok || calls != 1 {
+		t.Fatalf("must leave refreshed grant, ok=%v err=%v calls=%d", ok, err, calls)
+	}
+}
+func TestProjectInvitationDeletedProjectOrExistingMemberRetiresOnlyObservedVersion(t *testing.T) {
+	for _, failed := range []int{0, 1} {
+		t.Run(string(rune('0'+failed)), func(t *testing.T) {
+			calls := 0
+			p := inviteFixture()
+			r := projectInviteWire(t, func(_ string, body map[string]any) (int, string) {
+				calls++
+				if calls == 1 {
+					reasons := []map[string]string{{"Code": "None"}, {"Code": "None"}, {"Code": "None"}, {"Code": "None"}}
+					reasons[failed]["Code"] = "ConditionalCheckFailed"
+					b, _ := json.Marshal(map[string]any{"__type": "TransactionCanceledException", "CancellationReasons": reasons})
+					return 400, string(b)
+				}
+				items := body["TransactItems"].([]any)
+				if len(items) != 2 {
+					t.Fatal("cleanup must remove both rows")
+				}
+				for _, item := range items {
+					deletion := item.(map[string]any)["Delete"].(map[string]any)
+					timestamp, identity := false, false
+					for _, value := range deletion["ExpressionAttributeValues"].(map[string]any) {
+						text, _ := value.(map[string]any)["S"].(string)
+						timestamp = timestamp || text == p.CreatedAt.Format(time.RFC3339Nano)
+						identity = identity || text == "recipient"
+					}
+					if !timestamp || !identity || deletion["ConditionExpression"] == "" {
+						t.Fatal("unversioned cleanup", deletion)
+					}
+				}
+				return 200, "{}"
+			})
+			if ok, err := r.MaterializePendingProjectGrant(context.Background(), p, "recipient", "user@example.com"); err != nil || !ok || calls != 2 {
+				t.Fatalf("ok=%v err=%v calls=%d", ok, err, calls)
+			}
+		})
+	}
+}
+func TestProjectInvitationRevokeChecksOwnerAtomically(t *testing.T) {
+	r := projectInviteWire(t, func(_ string, body map[string]any) (int, string) {
+		items := body["TransactItems"].([]any)
+		if len(items) != 3 {
+			t.Fatal(len(items))
+		}
+		if c := analysisCondition(t, items[0].(map[string]any)["ConditionCheck"].(map[string]any)); !strings.Contains(c, "ownerUserId") || !strings.Contains(c, "owner") {
+			t.Fatal(c)
+		}
+		return 400, `{"__type":"TransactionCanceledException","CancellationReasons":[{"Code":"ConditionalCheckFailed"},{"Code":"None"},{"Code":"None"}]}`
+	})
+	if err := r.RevokePendingProjectShare(context.Background(), inviteFixture(), "owner"); !errors.Is(err, ErrConditionFailed) {
+		t.Fatalf("err=%v", err)
+	}
+}
+func TestProjectPendingListRevalidatesCanonicalVersionAndKeepsCursor(t *testing.T) {
+	for _, fresh := range []bool{false, true} {
+		t.Run(map[bool]string{false: "stale reverse", true: "current"}[fresh], func(t *testing.T) {
+			p := inviteFixture()
+			reverse := *p
+			reverse.PK = "PROJECT#project"
+			reverse.SK = "PENDING_MEMBER#user@example.com"
+			r := projectInviteWire(t, func(target string, body map[string]any) (int, string) {
+				if strings.HasSuffix(target, ".Query") {
+					if body["Limit"] != float64(25) || body["ConsistentRead"] != true {
+						t.Fatal("unbounded or stale page")
+					}
+					item, _ := attributevalue.MarshalMap(reverse)
+					out, _ := json.Marshal(map[string]any{"Items": []any{avMapForProjectTest(t, item)}, "LastEvaluatedKey": map[string]any{"PK": map[string]string{"S": "PROJECT#project"}, "SK": map[string]string{"S": "PENDING_MEMBER#user@example.com"}}})
+					return 200, string(out)
+				}
+				if !fresh {
+					p.CreatedAt = p.CreatedAt.Add(time.Second)
+				}
+				item, _ := attributevalue.MarshalMap(p)
+				out, _ := json.Marshal(map[string]any{"Item": avMapForProjectTest(t, item)})
+				return 200, string(out)
+			})
+			members, next, err := r.ListPendingProjectShares(context.Background(), "project", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := 0
+			if fresh {
+				want = 1
+			}
+			if len(members) != want || next == "" {
+				t.Fatalf("members=%d next=%q", len(members), next)
+			}
+		})
+	}
+}
+
+func avMapForProjectTest(t *testing.T, values map[string]types.AttributeValue) map[string]any {
+	t.Helper()
+	out := map[string]any{}
+	for key, v := range values {
+		switch a := v.(type) {
+		case *types.AttributeValueMemberS:
+			out[key] = map[string]string{"S": a.Value}
+		case *types.AttributeValueMemberN:
+			out[key] = map[string]string{"N": a.Value}
+		default:
+			t.Fatalf("unexpected fixture type %T", v)
+		}
+	}
+	return out
+}
+func TestProjectPendingInvalidCursorDoesNotReadOtherPartitions(t *testing.T) {
+	r := projectInviteWire(t, func(string, map[string]any) (int, string) {
+		t.Fatal("invalid cursor queried database")
+		return 200, "{}"
+	})
+	for _, cursor := range []string{"!", base64.RawURLEncoding.EncodeToString([]byte("MEMBER#private")), strings.Repeat("x", 513)} {
+		if _, _, err := r.ListPendingProjectShares(context.Background(), "project", cursor); !errors.Is(err, ErrInvalidCursor) {
+			t.Fatalf("err=%v", err)
+		}
+	}
+}

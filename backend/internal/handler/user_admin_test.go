@@ -57,9 +57,11 @@ func (s *stubCognitoAdminAPI) ListUsersInGroup(_ context.Context, _ *cognitoidp.
 
 func (s *stubCognitoAdminAPI) AdminGetUser(_ context.Context, _ *cognitoidp.AdminGetUserInput, _ ...func(*cognitoidp.Options)) (*cognitoidp.AdminGetUserOutput, error) {
 	return &cognitoidp.AdminGetUserOutput{
+		Enabled:    true,
 		UserStatus: s.getUserStatus,
 		UserAttributes: []cognitoidptypes.AttributeType{
 			{Name: aws.String("email"), Value: aws.String("invitee@example.com")},
+			{Name: aws.String("email_verified"), Value: aws.String("true")},
 		},
 	}, nil
 }
