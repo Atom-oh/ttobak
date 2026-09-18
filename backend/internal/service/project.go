@@ -370,7 +370,7 @@ func (s *ProjectService) AddMember(ctx context.Context, requesterUserID, project
 	if err != nil {
 		return nil, err
 	}
-	return s.addOnboardingMember(ctx, requesterUserID, projectID, email)
+	return s.addOnboardingMember(ctx, requesterUserID, projectID, email, req.AllowPending)
 }
 
 // RemoveMember revokes a direct membership (owner only). Without this, a

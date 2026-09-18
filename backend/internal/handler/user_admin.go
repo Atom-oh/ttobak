@@ -130,10 +130,6 @@ func (h *UserAdminHandler) handleActionError(w http.ResponseWriter, op, targetID
 		return false
 	}
 	switch {
-	case errors.Is(err, service.ErrEmailVerificationRequired):
-		writeError(w, http.StatusConflict, "EMAIL_VERIFICATION_REQUIRED", "이메일 인증이 필요합니다. 로그인 후 이메일을 인증하거나 관리자 복구 절차를 진행하세요.")
-	case errors.Is(err, service.ErrUserDisabled):
-		writeError(w, http.StatusConflict, "USER_DISABLED", "비활성 사용자입니다. 활성화 여부를 먼저 확인하세요.")
 	case errors.Is(err, service.ErrCannotModifySelf),
 		errors.Is(err, service.ErrLastAdmin),
 		errors.Is(err, service.ErrInvalidStatusForAction):

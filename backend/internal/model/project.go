@@ -148,7 +148,8 @@ type ProjectMemberDTO struct {
 }
 
 type AddProjectMemberRequest struct {
-	Email string `json:"email"`
+	AllowPending bool   `json:"allowPending,omitempty"`
+	Email        string `json:"email"`
 }
 
 type LinkProjectAccountRequest struct {

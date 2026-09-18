@@ -35,6 +35,10 @@ func projectIDFromRequest(w http.ResponseWriter, r *http.Request) (string, bool)
 
 func writeProjectError(w http.ResponseWriter, err error, forbiddenMessage string) {
 	switch {
+	case errors.Is(err, service.ErrClientUpgradeRequired):
+		writeError(w, http.StatusConflict, "CLIENT_UPGRADE_REQUIRED", "화면을 새로고침한 뒤 가입 대기 초대를 다시 요청하세요")
+	case errors.Is(err, service.ErrInvitationsPaused):
+		writeError(w, http.StatusServiceUnavailable, "INVITATIONS_PAUSED", "프로젝트 초대가 일시 중지됐습니다. 잠시 후 다시 시도해주세요")
 	case errors.Is(err, service.ErrInvitationRequired):
 		writeError(w, http.StatusConflict, "INVITATION_REQUIRED", "먼저 관리자가 사용자 초대 메일을 보내야 합니다")
 	case errors.Is(err, service.ErrUserDisabled):

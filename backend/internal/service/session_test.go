@@ -38,11 +38,12 @@ func (r *sessionProjectRepo) ListPendingShares(ctx context.Context, email string
 	}
 	return result, err
 }
-func (r *sessionProjectRepo) ListPendingProjectSharesForUser(ctx context.Context, email string) ([]model.PendingShare, error) {
+func (r *sessionProjectRepo) ListPendingProjectSharesForUser(ctx context.Context, email, cursor string) ([]model.PendingShare, string, error) {
 	if r.listErr != nil {
-		return nil, r.listErr
+		return nil, "", r.listErr
 	}
-	return r.mockMeetingRepo.ListPendingShares(ctx, email)
+	rows, err := r.mockMeetingRepo.ListPendingShares(ctx, email)
+	return rows, "", err
 }
 func (r *sessionProjectRepo) DeletePendingProjectShareIfMatch(ctx context.Context, p *model.PendingShare) error {
 	return r.mockMeetingRepo.DeletePendingShareIfVersionMatches(ctx, p.Email, p)
@@ -58,7 +59,7 @@ func TestBootstrapSessionAppliesProjectInviteOnlyToVerifiedBoundIdentity(t *test
 			r.pendingShares = []*model.PendingShare{{Kind: model.PendingShareKindProject, ProjectID: "project", SK: model.PrefixPendingProject + "project", Email: "user@example.com", InvitedCognitoSub: test.sub, TTL: time.Now().Add(time.Hour).Unix()}}
 			s := newMeetingServiceWithRepo(r)
 			for i := 0; i < 2; i++ {
-				result, err := s.BootstrapSession(context.Background(), "recipient", "user@example.com", "", test.verified)
+				result, err := s.BootstrapSession(context.Background(), "recipient", "user@example.com", "", test.verified, "")
 				if err != nil || result.EmailVerified != test.verified {
 					t.Fatalf("result=%+v err=%v", result, err)
 				}
@@ -73,7 +74,7 @@ func TestBootstrapSessionAppliesProjectInviteOnlyToVerifiedBoundIdentity(t *test
 func TestBootstrapPreservesFreshAccountDiscoveryWithoutGrantingFromHints(t *testing.T) {
 	repo, svc := publishedTeamMeeting(t)
 	repo.pendingShares = append(repo.pendingShares, &model.PendingShare{Email: "new@example.com", Kind: model.PendingShareKindAccount, AccountID: "acc-a", Role: model.RoleSA, InvitedByUserID: "owner", InvitedCognitoSub: "new-member", TTL: time.Now().Add(time.Hour).Unix(), SK: model.PrefixPendingAccount + "acc-a"})
-	result, err := svc.BootstrapSession(context.Background(), "new-member", "new@example.com", "", true)
+	result, err := svc.BootstrapSession(context.Background(), "new-member", "new@example.com", "", true, "")
 	if err != nil || len(result.JoinedAccountIDs) != 1 {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -98,9 +99,38 @@ func TestBootstrapInvitationFailureIsVisibleWithoutBlockingExistingProfile(t *te
 		}
 		r.pendingShares = []*model.PendingShare{{Kind: model.PendingShareKindProject, ProjectID: "project", SK: model.PrefixPendingProject + "project", Email: "user@example.com", InvitedCognitoSub: "recipient", TTL: time.Now().Add(time.Hour).Unix()}}
 		s := newMeetingServiceWithRepo(r)
-		response, err := s.BootstrapSession(context.Background(), "recipient", "user@example.com", "", true)
+		response, err := s.BootstrapSession(context.Background(), "recipient", "user@example.com", "", true, "")
 		if err != nil || !response.RetryPending || r.profiles != 1 {
 			t.Fatalf("response=%+v err=%v", response, err)
 		}
+	}
+}
+
+type pagedProjectSessionRepo struct {
+	*sessionProjectRepo
+	next, seen string
+	deadline   time.Time
+	listRows   []model.PendingShare
+}
+
+func (r *pagedProjectSessionRepo) ListPendingProjectSharesForUser(ctx context.Context, email, cursor string) ([]model.PendingShare, string, error) {
+	r.seen = cursor
+	r.deadline, _ = ctx.Deadline()
+	return r.listRows, r.next, nil
+}
+func TestProjectBootstrapProcessesOneBoundedPageAndReturnsContinuation(t *testing.T) {
+	r := &pagedProjectSessionRepo{sessionProjectRepo: &sessionProjectRepo{mockMeetingRepo: newMockMeetingRepo()}, next: "next-page"}
+	for i := 0; i < 25; i++ {
+		r.listRows = append(r.listRows, model.PendingShare{Kind: model.PendingShareKindProject, InvitedCognitoSub: "recipient", Email: "user@example.com", TTL: time.Now().Add(time.Hour).Unix()})
+	}
+	s := newMeetingServiceWithRepo(r)
+	result, err := s.BootstrapSession(context.Background(), "recipient", "user@example.com", "", true, "current-page")
+	if err != nil || result.ProjectCursor != "next-page" || r.seen != "current-page" || r.grants != 25 || r.deadline.IsZero() || time.Until(r.deadline) > 5*time.Second {
+		t.Fatalf("result=%+v err=%v grants=%d deadline=%v", result, err, r.grants, r.deadline)
+	}
+	r.grantErr = errors.New("temporarily unavailable")
+	result, err = s.BootstrapSession(context.Background(), "recipient", "user@example.com", "", true, "current-page")
+	if err != nil || !result.RetryPending || result.ProjectCursor != "current-page" {
+		t.Fatalf("failed page was skipped: result=%+v err=%v", result, err)
 	}
 }

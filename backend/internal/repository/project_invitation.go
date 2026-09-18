@@ -234,18 +234,61 @@ func (r *DynamoDBRepository) RevokePendingProjectShare(ctx context.Context, p *m
 // A separate user queue keeps in-flight older API readers from deleting an
 // unknown project kind during a rolling deployment. Only the new bootstrap
 // consumes these rows; account/meeting queues retain their existing namespace.
-func (r *DynamoDBRepository) ListPendingProjectSharesForUser(ctx context.Context, email string) ([]model.PendingShare, error) {
-	expr, err := expression.NewBuilder().WithKeyCondition(expression.Key("PK").Equal(expression.Value(model.PrefixProjectInvites + strings.ToLower(email)))).Build()
+func (r *DynamoDBRepository) ListPendingProjectSharesForUser(ctx context.Context, email, cursor string) ([]model.PendingShare, string, error) {
+	key := expression.Key("PK").Equal(expression.Value(model.PrefixProjectInvites + strings.ToLower(email))).And(expression.Key("SK").BeginsWith(model.PrefixPendingProject))
+	expr, err := expression.NewBuilder().WithKeyCondition(key).Build()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	items, err := r.queryAllPages(ctx, &dynamodb.QueryInput{TableName: aws.String(r.tableName), KeyConditionExpression: expr.KeyCondition(), ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(), ConsistentRead: aws.Bool(true)})
+	in := &dynamodb.QueryInput{TableName: aws.String(r.tableName), KeyConditionExpression: expr.KeyCondition(), ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(), ConsistentRead: aws.Bool(true), Limit: aws.Int32(25)}
+	if cursor != "" {
+		if len(cursor) > 512 {
+			return nil, "", ErrInvalidCursor
+		}
+		raw, err := base64.RawURLEncoding.DecodeString(cursor)
+		if err != nil || len(raw) > 300 || len(raw) <= len(model.PrefixPendingProject) || !strings.HasPrefix(string(raw), model.PrefixPendingProject) {
+			return nil, "", ErrInvalidCursor
+		}
+		in.ExclusiveStartKey = map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: model.PrefixProjectInvites + strings.ToLower(email)}, "SK": &types.AttributeValueMemberS{Value: string(raw)}}
+	}
+	out, err := r.client.Query(ctx, in)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	var result []model.PendingShare
-	if err := attributevalue.UnmarshalListOfMaps(items, &result); err != nil {
-		return nil, err
+	if err := attributevalue.UnmarshalListOfMaps(out.Items, &result); err != nil {
+		return nil, "", err
 	}
-	return result, nil
+	next := ""
+	if key, ok := out.LastEvaluatedKey["SK"].(*types.AttributeValueMemberS); ok {
+		next = base64.RawURLEncoding.EncodeToString([]byte(key.Value))
+	}
+	return result, next, nil
+}
+
+// Legacy clients may add an already-registered user, but may not accidentally
+// publish a membership alongside a pending grant they cannot consume.
+func (r *DynamoDBRepository) PutRegisteredProjectMember(ctx context.Context, ownerID, projectID, userID, email string) error {
+	member := model.ProjectMember{PK: model.PrefixProject + projectID, SK: model.PrefixProjectMember + userID, ProjectID: projectID, UserID: userID, Email: email, AddedAt: time.Now().UTC(), GSI1PK: model.PrefixUser + userID, GSI1SK: model.PrefixProject + projectID, EntityType: model.EntityTypeProjectMember}
+	item, err := attributevalue.MarshalMap(member)
+	if err != nil {
+		return err
+	}
+	owner, err := expression.NewBuilder().WithCondition(expression.AttributeExists(expression.Name("PK")).And(expression.Name("ownerUserId").Equal(expression.Value(ownerID)))).Build()
+	if err != nil {
+		return err
+	}
+	absent, err := expression.NewBuilder().WithCondition(expression.AttributeNotExists(expression.Name("PK"))).Build()
+	if err != nil {
+		return err
+	}
+	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: []types.TransactWriteItem{
+		{ConditionCheck: &types.ConditionCheck{TableName: aws.String(r.tableName), Key: map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: model.PrefixProject + projectID}, "SK": &types.AttributeValueMemberS{Value: model.SKProjectConfig}}, ConditionExpression: owner.Condition(), ExpressionAttributeNames: owner.Names(), ExpressionAttributeValues: owner.Values()}},
+		{Put: &types.Put{TableName: aws.String(r.tableName), Item: item, ConditionExpression: absent.Condition(), ExpressionAttributeNames: absent.Names()}},
+		{ConditionCheck: &types.ConditionCheck{TableName: aws.String(r.tableName), Key: pendingShareKey(email, model.PrefixPendingProject+projectID), ConditionExpression: absent.Condition(), ExpressionAttributeNames: absent.Names()}},
+	}})
+	if err != nil {
+		return mapProjectTransactionCanceledError(err, projectID, "project", "add registered member")
+	}
+	return nil
 }

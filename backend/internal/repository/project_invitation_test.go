@@ -245,3 +245,40 @@ func TestProjectPendingInvalidCursorDoesNotReadOtherPartitions(t *testing.T) {
 		}
 	}
 }
+
+func TestProjectUserQueueIsBoundedAndCursorCannotChooseAnotherUser(t *testing.T) {
+	cursor := base64.RawURLEncoding.EncodeToString([]byte("PENDING_PROJECT#earlier"))
+	r := projectInviteWire(t, func(target string, body map[string]any) (int, string) {
+		if !strings.HasSuffix(target, ".Query") || body["Limit"] != float64(25) || body["ConsistentRead"] != true {
+			t.Fatal("unbounded canonical query")
+		}
+		key := body["ExclusiveStartKey"].(map[string]any)
+		if key["PK"].(map[string]any)["S"] != "PROJECT_INVITES#user@example.com" || key["SK"].(map[string]any)["S"] != "PENDING_PROJECT#earlier" {
+			t.Fatal(key)
+		}
+		return 200, `{"Items":[],"LastEvaluatedKey":{"PK":{"S":"PROJECT_INVITES#user@example.com"},"SK":{"S":"PENDING_PROJECT#later"}}}`
+	})
+	rows, next, err := r.ListPendingProjectSharesForUser(context.Background(), "user@example.com", cursor)
+	if err != nil || len(rows) != 0 || next == "" {
+		t.Fatalf("rows=%v next=%q err=%v", rows, next, err)
+	}
+	if _, _, err := r.ListPendingProjectSharesForUser(context.Background(), "user@example.com", base64.RawURLEncoding.EncodeToString([]byte("OTHER#user"))); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatal(err)
+	}
+}
+func TestLegacyProjectAddCannotCoexistWithPendingGrant(t *testing.T) {
+	r := projectInviteWire(t, func(_ string, body map[string]any) (int, string) {
+		items := body["TransactItems"].([]any)
+		if len(items) != 3 {
+			t.Fatal(len(items))
+		}
+		pending := items[2].(map[string]any)["ConditionCheck"].(map[string]any)
+		if !strings.Contains(pending["ConditionExpression"].(string), "attribute_not_exists") || pending["Key"].(map[string]any)["PK"].(map[string]any)["S"] != "PROJECT_INVITES#user@example.com" {
+			t.Fatal(pending)
+		}
+		return 400, `{"__type":"TransactionCanceledException","CancellationReasons":[{"Code":"None"},{"Code":"None"},{"Code":"ConditionalCheckFailed"}]}`
+	})
+	if err := r.PutRegisteredProjectMember(context.Background(), "owner", "project", "recipient", "user@example.com"); !errors.Is(err, ErrConditionFailed) {
+		t.Fatal(err)
+	}
+}
