@@ -53,6 +53,7 @@ func (r *sessionProjectRepo) DeletePendingProjectShareIfMatch(ctx context.Contex
 	return r.mockMeetingRepo.DeletePendingShareIfVersionMatches(ctx, p.Email, p)
 }
 func TestBootstrapSessionAppliesProjectInviteOnlyToVerifiedBoundIdentity(t *testing.T) {
+	t.Setenv("PROJECT_INVITATIONS_ENABLED", "true")
 	for _, test := range []struct {
 		name, sub string
 		verified  bool
@@ -76,6 +77,7 @@ func TestBootstrapSessionAppliesProjectInviteOnlyToVerifiedBoundIdentity(t *test
 }
 
 func TestBootstrapPreservesFreshAccountDiscoveryWithoutGrantingFromHints(t *testing.T) {
+	t.Setenv("PROJECT_INVITATIONS_ENABLED", "true")
 	repo, svc := publishedTeamMeeting(t)
 	repo.pendingShares = append(repo.pendingShares, &model.PendingShare{Email: "new@example.com", Kind: model.PendingShareKindAccount, AccountID: "acc-a", Role: model.RoleSA, InvitedByUserID: "owner", InvitedCognitoSub: "new-member", TTL: time.Now().Add(time.Hour).Unix(), SK: model.PrefixPendingAccount + "acc-a"})
 	result, err := svc.BootstrapSession(context.Background(), "new-member", "new@example.com", "", true, "")
@@ -94,6 +96,7 @@ func TestBootstrapPreservesFreshAccountDiscoveryWithoutGrantingFromHints(t *test
 }
 
 func TestBootstrapInvitationFailureIsVisibleWithoutBlockingExistingProfile(t *testing.T) {
+	t.Setenv("PROJECT_INVITATIONS_ENABLED", "true")
 	for _, failedRead := range []bool{false, true} {
 		r := &sessionProjectRepo{mockMeetingRepo: newMockMeetingRepo()}
 		if failedRead {
@@ -123,6 +126,7 @@ func (r *pagedProjectSessionRepo) ListPendingProjectSharesForUser(ctx context.Co
 	return r.listRows, r.next, nil
 }
 func TestProjectBootstrapProcessesOneBoundedPageAndReturnsContinuation(t *testing.T) {
+	t.Setenv("PROJECT_INVITATIONS_ENABLED", "true")
 	r := &pagedProjectSessionRepo{sessionProjectRepo: &sessionProjectRepo{mockMeetingRepo: newMockMeetingRepo()}, next: "next-page"}
 	for i := 0; i < 25; i++ {
 		r.listRows = append(r.listRows, model.PendingShare{Kind: model.PendingShareKindProject, InvitedCognitoSub: "recipient", Email: "user@example.com", TTL: time.Now().Add(time.Hour).Unix()})
@@ -145,6 +149,7 @@ func (r *pausedProjectSessionRepo) ProjectInvitationsAllowed(context.Context) (b
 	return false, nil
 }
 func TestPausedProjectControlKeepsProfileAvailableWithoutGranting(t *testing.T) {
+	t.Setenv("PROJECT_INVITATIONS_ENABLED", "true")
 	r := &pausedProjectSessionRepo{sessionProjectRepo: &sessionProjectRepo{mockMeetingRepo: newMockMeetingRepo()}}
 	r.pendingShares = []*model.PendingShare{{Kind: model.PendingShareKindProject, Email: "user@example.com", InvitedCognitoSub: "recipient", TTL: time.Now().Add(time.Hour).Unix()}}
 	s := newMeetingServiceWithRepo(r)
@@ -160,6 +165,7 @@ func (r *refreshedExpiryRepo) DeletePendingProjectShareIfMatch(context.Context, 
 	return repository.ErrConditionFailed
 }
 func TestBootstrapRetriesRefreshedExpiryAndRemainingEligibleGrants(t *testing.T) {
+	t.Setenv("PROJECT_INVITATIONS_ENABLED", "true")
 	base := &sessionProjectRepo{mockMeetingRepo: newMockMeetingRepo()}
 	r := &refreshedExpiryRepo{&pagedProjectSessionRepo{sessionProjectRepo: base, next: "next", listRows: []model.PendingShare{{Kind: model.PendingShareKindProject, TTL: 1}}}}
 	s := newMeetingServiceWithRepo(r)
@@ -184,6 +190,7 @@ func (r *boundedControlRepo) ProjectInvitationsAllowed(ctx context.Context) (boo
 	return false, context.DeadlineExceeded
 }
 func TestProjectControlReadSharesBoundedBudget(t *testing.T) {
+	t.Setenv("PROJECT_INVITATIONS_ENABLED", "true")
 	r := &boundedControlRepo{sessionProjectRepo: &sessionProjectRepo{mockMeetingRepo: newMockMeetingRepo()}}
 	started := time.Now()
 	result, err := newMeetingServiceWithRepo(r).BootstrapSession(context.Background(), "recipient", "user@example.com", "", true, "page")
@@ -192,10 +199,29 @@ func TestProjectControlReadSharesBoundedBudget(t *testing.T) {
 	}
 }
 func TestPauseDuringMaterializationClearsContinuation(t *testing.T) {
+	t.Setenv("PROJECT_INVITATIONS_ENABLED", "true")
 	r := &sessionProjectRepo{mockMeetingRepo: newMockMeetingRepo(), grantErr: repository.ErrProjectInvitationsPaused}
 	r.pendingShares = []*model.PendingShare{{Kind: model.PendingShareKindProject, Email: "user@example.com", InvitedCognitoSub: "recipient", TTL: time.Now().Add(time.Hour).Unix()}}
 	result, err := newMeetingServiceWithRepo(r).BootstrapSession(context.Background(), "recipient", "user@example.com", "", true, "page")
 	if err != nil || result.ProjectCursor != "" || result.ProjectInvitationsEnabled {
 		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
+func TestDisabledActivationNeverConsumesProjectGrants(t *testing.T) {
+	for _, flag := range []string{"", "false", "true"} {
+		t.Run("flag="+flag, func(t *testing.T) {
+			t.Setenv("PROJECT_INVITATIONS_ENABLED", flag)
+			r := &sessionProjectRepo{mockMeetingRepo: newMockMeetingRepo()}
+			r.pendingShares = []*model.PendingShare{{Kind: model.PendingShareKindProject, Email: "user@example.com", InvitedCognitoSub: "recipient", TTL: time.Now().Add(time.Hour).Unix()}}
+			result, err := newMeetingServiceWithRepo(r).BootstrapSession(context.Background(), "recipient", "user@example.com", "", true, "old-page")
+			want := 0
+			if flag == "true" {
+				want = 1
+			}
+			if err != nil || r.grants != want || result.ProjectInvitationsEnabled != (flag == "true") || (flag != "true" && result.ProjectCursor != "") || r.profiles != 1 {
+				t.Fatalf("flag=%q result=%+v err=%v grants=%d", flag, result, err, r.grants)
+			}
+		})
 	}
 }
