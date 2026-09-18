@@ -309,11 +309,11 @@ func TestListMeetings_NewInviteHintsSurviveRegularPagination(t *testing.T) {
 	if err != nil || first.NextCursor == nil {
 		t.Fatalf("first page: %+v error=%v", first, err)
 	}
-	second, err := svc.ListMeetings(context.Background(), "new-member", "all", *first.NextCursor, "", 1)
+	second, err := svc.ListMeetings(context.Background(), "new-member", "all", *first.NextCursor, "", 1, joined...)
 	if err != nil || second.NextCursor == nil {
 		t.Fatalf("second page: %+v error=%v", second, err)
 	}
-	third, err := svc.ListMeetings(context.Background(), "new-member", "all", *second.NextCursor, "", 1)
+	third, err := svc.ListMeetings(context.Background(), "new-member", "all", *second.NextCursor, "", 1, joined...)
 	if err != nil {
 		t.Fatal(err)
 	}

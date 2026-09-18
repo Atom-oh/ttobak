@@ -121,7 +121,7 @@ func (s *ProjectService) addOnboardingMember(ctx context.Context, ownerID, proje
 		}
 		return &model.ProjectMemberDTO{UserID: recipient.Sub, Email: email, EmailVerified: true}, nil
 	}
-	if os.Getenv("PROJECT_INVITATIONS_ENABLED") == "false" {
+	if os.Getenv("PROJECT_INVITATIONS_ENABLED") != "true" {
 		return nil, ErrInvitationsPaused
 	}
 

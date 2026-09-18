@@ -42,8 +42,8 @@ unknown users return 409 `INVITATION_REQUIRED`, disabled users 409 `USER_DISABLE
 User creation/mail remains the separate admin-only settings invitation action.
 Legacy clients can atomically add a registered verified user only if no pending
 grant exists. Queueing requires `allowPending: true`; unsupported clients get
-409 `CLIENT_UPGRADE_REQUIRED`. `PROJECT_INVITATIONS_ENABLED=false` fences queued
-writes with 503 `INVITATIONS_PAUSED`. A queued response has `pending: true`, email,
+409 `CLIENT_UPGRADE_REQUIRED`. Queued writes require `PROJECT_INVITATIONS_ENABLED=true`; absent/other values fail closed
+with 503 `INVITATIONS_PAUSED`. A queued response has `pending: true`, email,
 verification state and empty userId. A recreated identity never receives the old
 profile's user ID. Registered-member addition is idempotent.
 
