@@ -312,3 +312,18 @@ dependencies so the producer cannot update ahead of delivery setup. The document
 worker from #208 must still be physically deployed before document upload
 producers. See [release order](runbooks/meeting-document-release.md); this code
 does not claim that deployment has happened.
+
+## Project invitation activation
+
+GatewayStack declares `ProjectInvitationsEnabled` with allowed values `false` and
+`true`, defaulting to `false`. It supplies the API environment and its published
+version description. Description is a create-only Lambda Version property, so a
+parameter-only change publishes a matching immutable version for the `live` alias.
+Enable only after the compatible API, rollback guard and clients are verified.
+
+A separate non-expiring DynamoDB control row fences pending project queue and
+grant transactions. It contains configuration/revision data, not credentials or
+meeting content. IaC deployments must not remove/reset this row. The operator
+rollback guard verifies the actual unweighted `live` alias and API table, pauses
+this transactional fence, cancels queued grants and requires an empty queue before
+resume. Environment updates or Lambda timeout changes cannot lift that fence.
