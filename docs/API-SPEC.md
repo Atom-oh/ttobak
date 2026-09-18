@@ -26,15 +26,11 @@ to S3 GET presigns. PUT uploads continue to use signed S3 URLs.
 
 ### Session bootstrap and project invitations
 
-Authenticated `POST /api/session/bootstrap` takes optional `{ projectCursor }`
-(maximum 1,024 body bytes); identity comes only from verified JWT claims. It
-returns `emailVerified`, `pendingGrants`, `retryPending`, `projectCursor`,
-`projectInvitationsEnabled` and at most 100 `joinedAccountIds`. Project work is
-limited to 25 canonical rows and five seconds per call. Failed pages retain their
-cursor. Profile initialization errors fail the request; invitation side effects
-surface retry state without blocking unrelated data. Unverified users cannot
-consume grants. The companion client initializes once and refreshes after later
-pages rather than interrupting an active recording.
+`POST /api/session/bootstrap` initializes the authenticated profile and account/meeting grants,
+then processes at most 25 project invitations under a five-second budget. It returns
+`projectCursor`, `retryPending`, `pendingGrants`, `emailVerified`, `joinedAccountIds`
+and `projectInvitationsEnabled`. Failed pages retain continuation for retry.
+Keep queued writers disabled until the consumer and client are deployed and verified.
 
 Owner-only `POST /api/projects/{projectId}/members` accepts `{ email, allowPending? }`
 (maximum 2,048 body bytes; email 254 bytes). It resolves current Cognito identity:
@@ -42,8 +38,8 @@ unknown users return 409 `INVITATION_REQUIRED`, disabled users 409 `USER_DISABLE
 User creation/mail remains the separate admin-only settings invitation action.
 Legacy clients can atomically add a registered verified user only if no pending
 grant exists. Queueing requires `allowPending: true`; unsupported clients get
-409 `CLIENT_UPGRADE_REQUIRED`. `PROJECT_INVITATIONS_ENABLED=false` fences queued
-writes with 503 `INVITATIONS_PAUSED`. A queued response has `pending: true`, email,
+409 `CLIENT_UPGRADE_REQUIRED`. Queued writes require `PROJECT_INVITATIONS_ENABLED=true`; absent/other values fail closed
+with 503 `INVITATIONS_PAUSED`. A queued response has `pending: true`, email,
 verification state and empty userId. A recreated identity never receives the old
 profile's user ID. Registered-member addition is idempotent.
 
@@ -52,7 +48,9 @@ Owner-only `GET /api/projects/{projectId}/members/pending?cursor=...` returns
 reverse rows and revalidates canonical grants; empty pages may have continuation.
 `DELETE /api/projects/{projectId}/members/pending` accepts `{ email }` and returns
 204 or 409 on a membership/version race. Already-joined users use member removal.
-A durable control row also gates queue/claim transactions and bootstrap
+A project/sub latest-invitation marker invalidates prior email-specific grants.
+Member removal and legacy direct addition retire it atomically; cleanup conflicts
+remain retryable. A durable control row also gates queue/claim transactions and bootstrap
 capabilities; a paused fence returns `INVITATIONS_PAUSED` and clears page
 continuation. Project user queues are isolated from old readers; transactional rows, TTL and
 the required incompatible-API rollback drain are specified in ADR-044.

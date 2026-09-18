@@ -113,14 +113,12 @@ func (r *DynamoDBRepository) PutProjectMember(ctx context.Context, member *model
 // access revocation -- without this, a member added via AddMember could
 // never be removed short of deleting the whole project.
 func (r *DynamoDBRepository) DeleteProjectMember(ctx context.Context, projectID, userID string) error {
-	if _, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
-		TableName: aws.String(r.tableName),
-		Key: map[string]types.AttributeValue{
-			"PK": &types.AttributeValueMemberS{Value: model.PrefixProject + projectID},
-			"SK": &types.AttributeValueMemberS{Value: model.PrefixProjectMember + userID},
-		},
-	}); err != nil {
-		return fmt.Errorf("delete project member: %w", err)
+	_, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: []types.TransactWriteItem{
+		{Delete: &types.Delete{TableName: aws.String(r.tableName), Key: map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: model.PrefixProject + projectID}, "SK": &types.AttributeValueMemberS{Value: model.PrefixProjectMember + userID}}}},
+		{Delete: &types.Delete{TableName: aws.String(r.tableName), Key: projectInvitationSubjectKey(projectID, userID)}},
+	}})
+	if err != nil {
+		return fmt.Errorf("revoke project member: %w", err)
 	}
 	return nil
 }

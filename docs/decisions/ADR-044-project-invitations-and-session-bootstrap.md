@@ -1,43 +1,36 @@
 # ADR-044: Project invitations and authenticated session bootstrap
 
-- Status: Accepted implementation; deployment requires the rollout checks below.
+- Status: Accepted implementation; activation requires the rollout below.
 - Date: 2026-09-18.
-- Extends ADR-025 project membership and ADR-032 user administration. Existing
-  account/meeting pending-grant identity and revocation constraints are retained.
+- Extends ADR-025 project membership and ADR-032 user administration.
 
 ## Decision
 
-Project AddMember resolves the current Cognito identity instead of treating a
-missing app profile as an unknown user. Pending production requires an explicit pending-capable client request, and
-`PROJECT_INVITATIONS_ENABLED=false` fences new queued writes. Legacy clients may
-add a registered user only with an atomic pending-absence check. New account creation and email sending
-remain separate, explicit administrator actions. A project owner cannot create
-users or assign global/account roles merely by adding a project member.
+Resolve current Cognito identity before adding a project member. Identity creation
+and mail remain explicit admin actions; project ownership grants neither. Queueing
+requires a pending-capable client and `PROJECT_INVITATIONS_ENABLED=true`; absence
+or other values disable it. Legacy direct adds require no conflicting pending grant.
 
-Use a canonical `PROJECT_INVITES#{email}` / `PENDING_PROJECT#{projectId}` row and a
-`PROJECT#{projectId}` / `PENDING_MEMBER#{email}` reverse row. Queue writes atomically
-check current project ownership and absence of an existing member. Consumption
-checks current project ownership, exact recipient sub, invitation version and
-expiry; it writes membership and deletes both invitation rows in one transaction.
-A concurrent refresh/revoke must never be overwritten using an older snapshot.
-Existing membership or lost inviter authority retires only the observed version.
-Owner-visible listing is paginated and validates reverse rows against canonical
-rows. Cancellation detects materialization/version races and returns conflict.
+Canonical grants use `PROJECT_INVITES#{email}` / `PENDING_PROJECT#{projectId}` with
+`PROJECT#{projectId}` / `PENDING_MEMBER#{email}` reverse rows. Transactions recheck
+owner, recipient sub, expiry/version and existing membership when queueing,
+consuming or revoking. Refresh races must preserve the new grant and remain retryable. A project/sub
+latest-intent marker prevents an old email invitation from restoring access after
+member removal; removal and legacy direct add retire that marker atomically. Lists validate
+reverse rows canonically. The separate user namespace protects project grants
+from older account/meeting readers. Existing queues and their identity guards stay
+unchanged. Grant expiry remains 30 days; temporary passwords remain seven days.
+Deleted-project queue rows can persist until cleanup/TTL under ADR-025's residual
+storage limit, but a missing/reassigned project cannot grant membership.
 
-The separate user namespace is intentional: in-flight older APIs must not delete
-an unknown project invitation kind during rollout. Existing account/meeting queues
-retain their names. All invitation rows use the existing configured TTL field;
-30-day grant expiry is independent of the seven-day temporary-password validity.
-Project deletion may leave inaccessible queue rows until cleanup/TTL, consistent
-with ADR-025's accepted deleted-project residual storage race; consumption always
-requires the project to exist with the same authorized inviter.
+The companion authenticated bootstrap initializes the profile and processes project pages of at
+most 25 rows under a five-second budget. Failed pages remain retryable. Identity
+comes from verified JWTs, not the body. Account discovery hints require canonical
+membership on reads. The companion client refreshes lists after later pages
+without interrupting recordings, and adds verified-email/password-recovery UI.
+Never bulk-mark legacy addresses verified or reset users silently.
 
-Each project bootstrap page is limited to 25 canonical rows and five seconds,
-with a caller-scoped continuation cursor and retry state. Bootstrap initializes
-the caller profile; companion clients refresh lists after subsequent grant pages. Identity comes from verified JWT claims,
-never the request body. Bootstrap returns bounded fresh account discovery hints;
-meeting listing treats them as hints only and revalidates canonical membership,
-preserving immediate team-meeting discovery through reverse-index propagation.
+## Rollout and rollback
 
 The companion recovery/client release adds authenticated email verification,
 reset-code entry and state-specific admin controls. It must refresh verified JWT
