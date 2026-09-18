@@ -26,42 +26,34 @@ to S3 GET presigns. PUT uploads continue to use signed S3 URLs.
 
 ### Session bootstrap and project invitations
 
-`POST /api/session/bootstrap` is authenticated and takes no identity from its
-body (at most 1,024 bytes). It initializes the caller's app profile and consumes
-eligible account/meeting/project invitations. Response fields are `emailVerified`,
-`pendingGrants`, optional `retryPending` for failed invitation side effects, and up to 100 `joinedAccountIds` for immediate meeting discovery.
-Profile initialization failures are retryable; invitation failures surface a
-retry notice without blocking unrelated app access. The frontend waits for profile initialization before page
-requests and offers retry rather than silently skipping it. Unverified callers
-may initialize a profile but never consume an invitation.
+Authenticated `POST /api/session/bootstrap` takes optional `{ projectCursor }`
+(maximum 1,024 body bytes); identity comes only from verified JWT claims. It
+returns `emailVerified`, `pendingGrants`, `retryPending`, `projectCursor`,
+`projectInvitationsEnabled` and at most 100 `joinedAccountIds`. Project work is
+limited to 25 canonical rows and five seconds per call. Failed pages retain their
+cursor. Profile initialization errors fail the request; invitation side effects
+surface retry state without blocking unrelated data. Unverified users cannot
+consume grants. The companion client initializes once and refreshes after later
+pages rather than interrupting an active recording.
 
-`POST /api/projects/{projectId}/members` is owner-only, accepts `{ email }` (at most
-2,048 request bytes; email at most 254 bytes), and resolves the current Cognito
-identity. Unknown users return 409 `INVITATION_REQUIRED`, disabled users return
-409 `USER_DISABLED`. Identity creation/mail remains a separate admin-only
-`POST /api/settings/invite-user` action. Registered verified users are added
-idempotently; other existing identities return `{ userId: "", email, pending: true,
-emailVerified }` and a sub-bound pending grant. A stale PROFILE cannot grant a
-recreated email's old identity access.
+Owner-only `POST /api/projects/{projectId}/members` accepts `{ email, allowPending? }`
+(maximum 2,048 body bytes; email 254 bytes). It resolves current Cognito identity:
+unknown users return 409 `INVITATION_REQUIRED`, disabled users 409 `USER_DISABLED`.
+User creation/mail remains the separate admin-only settings invitation action.
+Legacy clients can atomically add a registered verified user only if no pending
+grant exists. Queueing requires `allowPending: true`; unsupported clients get
+409 `CLIENT_UPGRADE_REQUIRED`. `PROJECT_INVITATIONS_ENABLED=false` fences queued
+writes with 503 `INVITATIONS_PAUSED`. A queued response has `pending: true`, email,
+verification state and empty userId. A recreated identity never receives the old
+profile's user ID. Registered-member addition is idempotent.
 
 Owner-only `GET /api/projects/{projectId}/members/pending?cursor=...` returns
-`{ members: [{ email, expiresAt }], nextCursor? }`, at most 25 reverse rows scanned
-per page. Empty pages can have continuation; every listed grant is canonically
-revalidated. `DELETE /api/projects/{projectId}/members/pending` accepts `{ email }`
-and returns 204, or 409 if membership/version changed. Remove an already-joined
-member through the existing member-removal route instead of claiming cancellation.
-Project queues use `PROJECT_INVITES#{email}` / `PENDING_PROJECT#{projectId}` plus
-`PROJECT#{projectId}` / `PENDING_MEMBER#{email}` reverse rows. Both expire with
-`pendingShareExpiresAt` and are written/consumed/revoked transactionally. Older
-API readers do not see the project queue during rolling deployment.
-
-Admin user summaries include `emailVerified`. Password reset requires an enabled,
-CONFIRMED user with verified email; missing verification returns 409
-`EMAIL_VERIFICATION_REQUIRED`. Disabled mail actions return 409 `USER_DISABLED`.
-An existing RESET_REQUIRED user completes or requests a code through the Cognito
-self-service flow rather than invoking the CONFIRMED-only admin reset again.
-Authenticated email verification uses Cognito SDK operations and refreshes JWT
-claims before bootstrap is retried; the app never silently sets verification.
+`{ members: [{ email, expiresAt }], nextCursor? }`. Each page scans at most 25
+reverse rows and revalidates canonical grants; empty pages may have continuation.
+`DELETE /api/projects/{projectId}/members/pending` accepts `{ email }` and returns
+204 or 409 on a membership/version race. Already-joined users use member removal.
+Project user queues are isolated from old readers; transactional rows, TTL and
+the required incompatible-API rollback drain are specified in ADR-044.
 
 ### Meetings and pagination
 

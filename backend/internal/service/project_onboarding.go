@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/mail"
+	"os"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -14,11 +15,15 @@ import (
 	"github.com/ttobak/backend/internal/repository"
 )
 
+var ErrClientUpgradeRequired = errors.New("pending-capable client required")
+var ErrInvitationsPaused = errors.New("project invitations paused")
+
 var ErrInvitationRequired = errors.New("administrator invitation required")
 var ErrUserDisabled = errors.New("user disabled")
 var ErrEmailVerificationRequired = errors.New("email verification required")
 
 type projectInvitationStore interface {
+	PutRegisteredProjectMember(context.Context, string, string, string, string) error
 	PutPendingShare(context.Context, *model.PendingShare) error
 	GetPendingShare(context.Context, string, string) (*model.PendingShare, error)
 	ListPendingProjectShares(context.Context, string, string) ([]model.PendingShare, string, error)
@@ -81,7 +86,7 @@ func (s *ProjectService) SetCognitoAdminAPI(client cognitoAdminAPI, poolID strin
 	s.cognitoPoolID = poolID
 }
 
-func (s *ProjectService) addOnboardingMember(ctx context.Context, ownerID, projectID, email string) (*model.ProjectMemberDTO, error) {
+func (s *ProjectService) addOnboardingMember(ctx context.Context, ownerID, projectID, email string, allowPending bool) (*model.ProjectMemberDTO, error) {
 	store, ok := s.repo.(projectInvitationStore)
 	if !ok {
 		return nil, fmt.Errorf("project invitation store unavailable")
@@ -107,6 +112,19 @@ func (s *ProjectService) addOnboardingMember(ctx context.Context, ownerID, proje
 	// An email index left behind by a deleted/recreated identity cannot grant its
 	// old user ID access. The pending grant binds only the current Cognito sub.
 	registered := profile != nil && profile.UserID == recipient.Sub
+	if !allowPending {
+		if !registered || !recipient.Verified || recipient.Status != ct.UserStatusTypeConfirmed {
+			return nil, ErrClientUpgradeRequired
+		}
+		if err := store.PutRegisteredProjectMember(ctx, ownerID, projectID, recipient.Sub, email); err != nil {
+			return nil, err
+		}
+		return &model.ProjectMemberDTO{UserID: recipient.Sub, Email: email, EmailVerified: true}, nil
+	}
+	if os.Getenv("PROJECT_INVITATIONS_ENABLED") == "false" {
+		return nil, ErrInvitationsPaused
+	}
+
 	pending := &model.PendingShare{Kind: model.PendingShareKindProject, ProjectID: projectID, Email: email, InvitedByUserID: ownerID, InvitedCognitoSub: recipient.Sub}
 	if err := store.PutPendingShare(ctx, pending); err != nil {
 		return nil, err

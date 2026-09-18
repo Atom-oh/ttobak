@@ -284,13 +284,10 @@ func (s *UserAdminService) ListUsers(ctx context.Context) (*model.AdminUserListR
 	for _, u := range users {
 		userID := aws.ToString(u.Username)
 		var email, name string
-		var emailVerified bool
 		for _, attr := range u.Attributes {
 			switch aws.ToString(attr.Name) {
 			case "email":
 				email = aws.ToString(attr.Value)
-			case "email_verified":
-				emailVerified = aws.ToString(attr.Value) == "true"
 			case "name":
 				name = aws.ToString(attr.Value)
 			}
@@ -302,15 +299,14 @@ func (s *UserAdminService) ListUsers(ctx context.Context) (*model.AdminUserListR
 		}
 
 		summaries = append(summaries, model.AdminUserSummary{
-			EmailVerified: emailVerified,
-			UserID:        userID,
-			Email:         email,
-			Name:          name,
-			Status:        string(u.UserStatus),
-			Enabled:       u.Enabled,
-			IsAdmin:       adminSet[userID],
-			CreatedAt:     aws.ToTime(u.UserCreateDate),
-			LastLoginAt:   lastLoginAt,
+			UserID:      userID,
+			Email:       email,
+			Name:        name,
+			Status:      string(u.UserStatus),
+			Enabled:     u.Enabled,
+			IsAdmin:     adminSet[userID],
+			CreatedAt:   aws.ToTime(u.UserCreateDate),
+			LastLoginAt: lastLoginAt,
 			// Missing lastLoginAt must never count as dormant -- on day one
 			// after this feature ships, every existing user has no record
 			// yet, and "missing implies dormant" would paint the whole panel
@@ -443,9 +439,6 @@ func (s *UserAdminService) ResendInvite(ctx context.Context, targetUserID string
 	if current.UserStatus != cognitoidptypes.UserStatusTypeForceChangePassword {
 		return ErrInvalidStatusForAction
 	}
-	if !current.Enabled {
-		return ErrUserDisabled
-	}
 
 	// This pool uses UsernameAttributes=["email"]. AdminGetUser accepts a
 	// sub, but AdminCreateUser (including RESEND) requires an email address.
@@ -496,18 +489,6 @@ func (s *UserAdminService) ForceResetPassword(ctx context.Context, targetUserID 
 	}
 	if current.UserStatus != cognitoidptypes.UserStatusTypeConfirmed {
 		return ErrInvalidStatusForAction
-	}
-	if !current.Enabled {
-		return ErrUserDisabled
-	}
-	verifiedEmail := false
-	for _, a := range current.UserAttributes {
-		if aws.ToString(a.Name) == "email_verified" && aws.ToString(a.Value) == "true" {
-			verifiedEmail = true
-		}
-	}
-	if !verifiedEmail {
-		return ErrEmailVerificationRequired
 	}
 
 	if _, err := s.cognito.AdminResetUserPassword(ctx, &cognitoidp.AdminResetUserPasswordInput{
