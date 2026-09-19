@@ -11,7 +11,7 @@ import unittest
 
 SOURCE = Path(__file__).resolve().parent
 FAKE = r'''#!/usr/bin/env python3
-import json,os,pathlib,sys
+import json,os,pathlib,sys,time
 root = pathlib.Path(ROOT)
 argv = sys.argv[1:]
 name = pathlib.Path(sys.argv[0]).name
@@ -48,6 +48,8 @@ if (root / "major").exists() and tag == "codex":
     response["findings"] = [{"severity":"MAJOR","path":paths[0],"condition":"When the branch runs",
                             "evidence":"The changed return value loses state."}]
 if tag == "kiro-fable":
+    if (root / "kiro-review-delay").exists():
+        time.sleep(float((root / "kiro-review-delay").read_text()))
     stdout_error = root / "kiro-stdout-error"
     stdout_emitted = root / "kiro-stdout-error-emitted"
     if stdout_error.exists() and not stdout_emitted.exists():
@@ -194,6 +196,30 @@ if (root / "claude-nonzero").exists() and tag == "claude-self":
 
 
 class EndToEndRoleTests(unittest.TestCase):
+    def test_kiro_long_response_uses_the_existing_total_budget(self):
+        (self.root / "kiro-review-delay").write_text("2.4")
+        self.environment.update(PANEL_TIMEOUT="2", PANEL_RETRIES="2")
+        calls = self.kiro_review_calls(self.run_pipeline("infra/lib/stack.ts"))
+        self.assertEqual(len(calls), 1)
+        self.assertTrue((self.work / "review.md").read_text().endswith("VERDICT: PASS\n"))
+
+    def test_kiro_exhausted_total_budget_cannot_start_another_call(self):
+        (self.root / "kiro-review-delay").write_text("5")
+        self.environment.update(PANEL_TIMEOUT="2", PANEL_RETRIES="2")
+        calls = self.kiro_review_calls(self.run_pipeline("infra/lib/stack.ts"))
+        self.assertEqual(len(calls), 1)
+        result = json.loads((self.work / "slot/kiro-fable-result.json").read_text())
+        self.assertFalse(result["valid"])
+        self.assertIn("cli_nonzero_exit", result["failure_codes"])
+
+    def test_kiro_syntax_retry_cannot_reset_the_total_budget(self):
+        (self.root / "kiro-review-delay").write_text("2.4")
+        (self.root / "kiro-malformed-once").touch()
+        self.environment.update(PANEL_TIMEOUT="2", PANEL_RETRIES="2")
+        calls = self.kiro_review_calls(self.run_pipeline("infra/lib/stack.ts"))
+        self.assertEqual(len(calls), 2)
+        self.assertTrue((self.work / "review.md").read_text().endswith("VERDICT: FAIL\n"))
+
     def assert_kiro_stdout_terminal(self, message, failure):
         (self.root / "kiro-stdout-error").write_text(message)
         self.environment["PANEL_RETRIES"] = "2"
