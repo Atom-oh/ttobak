@@ -49,6 +49,18 @@ func projectInviteWire(t *testing.T, fn func(string, map[string]any) (int, strin
 func inviteFixture() *model.PendingShare {
 	return &model.PendingShare{PK: "PROJECT_INVITES#user@example.com", SK: "PENDING_PROJECT#project", Kind: model.PendingShareKindProject, ProjectID: "project", Email: "user@example.com", InvitedByUserID: "owner", InvitedCognitoSub: "recipient", CreatedAt: time.Now().UTC(), TTL: time.Now().Add(time.Hour).Unix()}
 }
+
+func projectCancellation(count int, failed ...int) string {
+	reasons := make([]map[string]string, count)
+	for index := range reasons {
+		reasons[index] = map[string]string{"Code": "None"}
+	}
+	for _, index := range failed {
+		reasons[index]["Code"] = "ConditionalCheckFailed"
+	}
+	payload, _ := json.Marshal(map[string]any{"__type": "TransactionCanceledException", "CancellationReasons": reasons})
+	return string(payload)
+}
 func TestProjectInvitationQueuesBothRowsWithOwnerAndExistingMemberGuards(t *testing.T) {
 	calls := 0
 	r := projectInviteWire(t, func(target string, body map[string]any) (int, string) {
@@ -138,7 +150,7 @@ func TestProjectInvitationNewVersionRaceNeverCleansFreshGrant(t *testing.T) {
 	calls := 0
 	r := projectInviteWire(t, func(string, map[string]any) (int, string) {
 		calls++
-		return 400, `{"__type":"TransactionCanceledException","CancellationReasons":[{"Code":"None"},{"Code":"None"},{"Code":"ConditionalCheckFailed"},{"Code":"None"},{"Code":"None"},{"Code":"None"}]}`
+		return 400, projectCancellation(6, 2)
 	})
 	ok, err := r.MaterializePendingProjectGrant(context.Background(), inviteFixture(), "recipient", "user@example.com")
 	if err != nil || ok || calls != 1 {
@@ -153,10 +165,7 @@ func TestProjectInvitationDeletedProjectOrExistingMemberRetiresOnlyObservedVersi
 			r := projectInviteWire(t, func(_ string, body map[string]any) (int, string) {
 				calls++
 				if calls == 1 {
-					reasons := []map[string]string{{"Code": "None"}, {"Code": "None"}, {"Code": "None"}, {"Code": "None"}, {"Code": "None"}, {"Code": "None"}}
-					reasons[failed]["Code"] = "ConditionalCheckFailed"
-					b, _ := json.Marshal(map[string]any{"__type": "TransactionCanceledException", "CancellationReasons": reasons})
-					return 400, string(b)
+					return 400, projectCancellation(6, failed)
 				}
 				items := body["TransactItems"].([]any)
 				if len(items) != 2 {
@@ -183,18 +192,24 @@ func TestProjectInvitationDeletedProjectOrExistingMemberRetiresOnlyObservedVersi
 	}
 }
 func TestProjectInvitationRevokeChecksOwnerAtomically(t *testing.T) {
-	r := projectInviteWire(t, func(_ string, body map[string]any) (int, string) {
-		items := body["TransactItems"].([]any)
-		if len(items) != 3 {
-			t.Fatal(len(items))
+	for _, failed := range []int{0, 3} {
+		store := projectInviteWire(t, func(_ string, body map[string]any) (int, string) {
+			items := body["TransactItems"].([]any)
+			if len(items) != 4 {
+				t.Fatalf("revocation lacks an atomic membership guard: %d", len(items))
+			}
+			owner := analysisCondition(t, items[0].(map[string]any)["ConditionCheck"].(map[string]any))
+			member := items[3].(map[string]any)["ConditionCheck"].(map[string]any)
+			if !strings.Contains(owner, "ownerUserId") || !strings.Contains(owner, "owner") ||
+				!strings.Contains(member["ConditionExpression"].(string), "attribute_not_exists") ||
+				member["Key"].(map[string]any)["SK"].(map[string]any)["S"] != "MEMBER#recipient" {
+				t.Fatal("revocation could hide an existing grant")
+			}
+			return 400, projectCancellation(4, failed)
+		})
+		if err := store.RevokePendingProjectShare(context.Background(), inviteFixture(), "owner"); !errors.Is(err, ErrConditionFailed) {
+			t.Fatalf("err=%v", err)
 		}
-		if c := analysisCondition(t, items[0].(map[string]any)["ConditionCheck"].(map[string]any)); !strings.Contains(c, "ownerUserId") || !strings.Contains(c, "owner") {
-			t.Fatal(c)
-		}
-		return 400, `{"__type":"TransactionCanceledException","CancellationReasons":[{"Code":"ConditionalCheckFailed"},{"Code":"None"},{"Code":"None"}]}`
-	})
-	if err := r.RevokePendingProjectShare(context.Background(), inviteFixture(), "owner"); !errors.Is(err, ErrConditionFailed) {
-		t.Fatalf("err=%v", err)
 	}
 }
 func TestProjectPendingListRevalidatesCanonicalVersionAndKeepsCursor(t *testing.T) {
@@ -292,7 +307,7 @@ func TestLegacyProjectAddCannotCoexistWithPendingGrant(t *testing.T) {
 		if !strings.Contains(pending["ConditionExpression"].(string), "attribute_not_exists") || pending["Key"].(map[string]any)["PK"].(map[string]any)["S"] != "PROJECT_INVITES#user@example.com" {
 			t.Fatal(pending)
 		}
-		return 400, `{"__type":"TransactionCanceledException","CancellationReasons":[{"Code":"None"},{"Code":"None"},{"Code":"ConditionalCheckFailed"},{"Code":"None"}]}`
+		return 400, projectCancellation(4, 2)
 	})
 	if err := r.PutRegisteredProjectMember(context.Background(), "owner", "project", "recipient", "user@example.com"); !errors.Is(err, ErrConditionFailed) {
 		t.Fatal(err)
@@ -360,7 +375,7 @@ func TestProjectMemberRemovalInvalidatesAllEmailInvitations(t *testing.T) {
 }
 func TestExpiredProjectCleanupReportsConcurrentRefresh(t *testing.T) {
 	r := projectInviteWire(t, func(string, map[string]any) (int, string) {
-		return 400, `{"__type":"TransactionCanceledException","CancellationReasons":[{"Code":"ConditionalCheckFailed"},{"Code":"None"}]}`
+		return 400, projectCancellation(2, 0)
 	})
 	if err := r.DeletePendingProjectShareIfMatch(context.Background(), inviteFixture()); !errors.Is(err, ErrConditionFailed) {
 		t.Fatal(err)
@@ -405,6 +420,9 @@ func TestProjectInvitationSubjectIntegration(t *testing.T) {
 	newer := invite("new@example.test")
 	if ok, err := repo.MaterializePendingProjectGrant(ctx, newer, "same-sub", "new@example.test"); err != nil || !ok {
 		t.Fatalf("new grant failed: %v", err)
+	}
+	if err := repo.RevokePendingProjectShare(ctx, old, "owner"); !errors.Is(err, ErrConditionFailed) {
+		t.Fatalf("stale email revocation hid an existing member: %v", err)
 	}
 	if err := repo.DeleteProjectMember(ctx, "integration", "same-sub"); err != nil {
 		t.Fatal(err)

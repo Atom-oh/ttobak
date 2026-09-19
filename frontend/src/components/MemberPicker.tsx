@@ -97,7 +97,7 @@ export function MemberPicker({ excludeUserIds, onPick, placeholder = 'Search by 
                   className="w-full flex items-center gap-2 px-3 py-2 text-left border-t border-slate-100 dark:border-white/5 hover:bg-slate-50 dark:hover:bg-white/5"
                 >
                   <span className="material-symbols-outlined text-primary text-lg">mail</span>
-                  <p className="text-sm text-slate-700 dark:text-text-secondary truncate">이 이메일로 초대: {query.trim()}</p>
+                  <p className="text-sm text-slate-700 dark:text-text-secondary truncate">이 이메일로 멤버 추가: {query.trim()}</p>
                 </button>
               )}
             </>
@@ -118,7 +118,7 @@ export function MemberPicker({ excludeUserIds, onPick, placeholder = 'Search by 
               className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-slate-50 dark:hover:bg-white/5"
             >
               <span className="material-symbols-outlined text-primary text-lg">mail</span>
-              <p className="text-sm text-slate-700 dark:text-text-secondary truncate">이 이메일로 초대: {query.trim()}</p>
+              <p className="text-sm text-slate-700 dark:text-text-secondary truncate">이 이메일로 멤버 추가: {query.trim()}</p>
             </button>
           ) : (
             <div className="p-3 text-center text-slate-400 dark:text-text-muted text-sm">No users found</div>

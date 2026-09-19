@@ -43,6 +43,22 @@ class SynthesisTests(unittest.TestCase):
             self.module.synthesize(self.root, self.root / "review.md")
         self.assertTrue((self.root / "review.md").read_text().endswith("VERDICT: PASS\n"))
 
+    def test_chair_receives_plain_prose_guidance_without_relaxing_format_gate(self):
+        (self.root / "chair-mode.txt").write_text("review\n")
+        (self.root / "role-summary.json").write_text('{"findings":[]}')
+        (self.root / "project-context.md").write_text("Trusted base.")
+        (self.root / "roles").mkdir()
+        (self.root / "roles/codex.diff").write_text("Complete supplied diff.")
+        invalid = (0, 'Adds `id="user-management"`.\nVERDICT: PASS\n', "")
+        with patch.dict(os.environ, {"GITHUB_ENV": str(self.root / "test-env")}), \
+                patch.object(self.module, "execute", side_effect=[invalid, invalid]) as invoke:
+            self.module.synthesize(self.root, self.root / "review.md")
+        for call in invoke.call_args_list:
+            prompt = call.args[0][2]
+            self.assertIn("Prefer plain English prose", prompt)
+            self.assertIn("never wrap those fragments in inline backticks", prompt)
+        self.assertTrue((self.root / "review.md").read_text().endswith("VERDICT: FAIL\n"))
+
     def test_incomplete_review_cannot_be_waived_by_chair(self):
         (self.root / "chair-mode.txt").write_text("blocked\n")
         (self.root / "deterministic-review.md").write_text("Missing required role.\nVERDICT: FAIL\n")
