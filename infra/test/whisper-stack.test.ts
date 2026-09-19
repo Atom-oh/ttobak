@@ -23,6 +23,43 @@ function synth(): Template {
 }
 
 describe('WhisperStack whisperx benchmark additions', () => {
+  test('declares supported GPU pools and an On-Demand base without conflicting market options', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::AutoScaling::AutoScalingGroup', {
+      LaunchTemplate: Match.absent(),
+      MinSize: '0',
+      MaxSize: '10',
+      MixedInstancesPolicy: {
+        LaunchTemplate: {
+          LaunchTemplateSpecification: {
+            LaunchTemplateId: Match.anyValue(),
+            Version: Match.anyValue(),
+          },
+          Overrides: [
+            { InstanceType: 'g4dn.xlarge' },
+            { InstanceType: 'g4dn.2xlarge' },
+          ],
+        },
+        InstancesDistribution: {
+          OnDemandBaseCapacity: 1,
+          OnDemandAllocationStrategy: 'prioritized',
+          OnDemandPercentageAboveBaseCapacity: 0,
+          SpotAllocationStrategy: 'price-capacity-optimized',
+          SpotMaxPrice: '1.10',
+        },
+      },
+    });
+    // EC2 rejects mixed policies when their template also specifies Spot.
+    template.hasResourceProperties('AWS::EC2::LaunchTemplate', {
+      LaunchTemplateData: Match.objectLike({
+        InstanceType: 'g4dn.xlarge',
+        InstanceMarketOptions: Match.absent(),
+        IamInstanceProfile: Match.anyValue(),
+        UserData: Match.anyValue(),
+      }),
+    });
+  });
+
   test('has a second ECR repo for the whisperx image', () => {
     const template = synth();
     template.resourceCountIs('AWS::ECR::Repository', 2);
