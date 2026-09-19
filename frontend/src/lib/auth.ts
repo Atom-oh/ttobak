@@ -322,5 +322,7 @@ export async function confirmEmailVerification(expectedUserId: string, code: str
   if (!token) throw new Error('이메일 인증은 완료됐습니다. 다시 로그인해주세요.');
   const current = await getCurrentUser();
   if (!current) throw new Error('다시 로그인해주세요.');
+  if (current.userId !== expectedUserId) throw new Error('로그인 계정이 변경됐습니다. 다시 로그인해주세요.');
+  if (current.emailVerified !== true) throw new Error('이메일 인증은 완료됐습니다. 계정 정보 갱신을 위해 다시 로그인해주세요.');
   return current;
 }

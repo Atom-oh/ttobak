@@ -100,10 +100,17 @@ initializer; new project invitations stay disabled until server capabilities are
 available. Subsequent grant pages and verification refresh do not unmount active
 recordings/forms: membership revisions refresh affected lists after success.
 Project/account discovery hints remain identity-bound and are authorized on the
-server. Automatic continuation is bounded to three passes per interaction, then
+server. Project UUID hints persist across reloads in the current browser tab,
+remain capped at 100, and do not expire while index discovery catches up. Storage
+failure falls back to in-memory hints without blocking initialization. Account
+hints retain their existing short lifetime. Automatic continuation is bounded
+to three passes per interaction, then
 an explicit continue/retry control remains available.
 Unverified signed-in users get explicit send-code and verify-code controls. A
 successful verification refreshes claims and retries pending membership grants.
+If refreshed claims still show an unverified address, the UI reports that email
+verification completed but sign-in is required to refresh claims. A different
+current user cannot complete the original user's verification flow.
 First-login and password-reset forms share the configured minimum-eight,
 lowercase-letter and digit policy. The reset form also supports entering an
 already-received code without requiring another email request. Never modify
@@ -122,6 +129,9 @@ unknown-schema and disabled states. Unknown readiness provides a refresh control
 unverified users. Existing account/member and sharing notices explicitly say that
 queuing a grant does not send mail. The invitation template includes the login URL
 and temporary password; no temporary password or code is shown in app diagnostics.
+An unverified user who cannot sign in uses the
+[operator recovery procedure](runbooks/unverified-account-recovery.md);
+the application never silently verifies the address or changes credentials.
 
 ## Accounts, filters and sharing
 

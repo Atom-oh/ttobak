@@ -6,9 +6,43 @@ import { triggerAuthFailure } from '@/components/auth/AuthProvider';
 import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory, Research, ResearchDetail, DictionaryTerm, ChatMessage, Account, AccountSummary, AccountMember, AccountMeetingRef, AccountInsight, AccountDocument, PutDocumentRequest, AccountResearchRef, Project, ProjectSummary, ProjectMember, ProjectMeetingRef, ProjectResearchRef, ProjectInsight, ProjectBrief } from '@/types/meeting';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
-// Short-lived, identity-bound discovery hints; the server rechecks membership.
-let bootstrapProjectHints: { userId: string; ids: string[]; expires: number } | null = null;
+const PROJECT_HINTS_KEY = 'ttobak:project-invitation-hints';
+let bootstrapProjectHints: { userId: string; ids: string[] } | null = null;
 let bootstrapAccountHints: { userId: string; ids: string[]; expires: number } | null = null;
+
+function projectHintIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 100).filter((id): id is string =>
+    typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id));
+}
+
+function projectDiscoveryHints(userId: string | null): string[] {
+  if (!userId) return [];
+  if (bootstrapProjectHints?.userId === userId) return bootstrapProjectHints.ids;
+  try {
+    const raw = typeof window === 'undefined' ? null : window.sessionStorage.getItem(PROJECT_HINTS_KEY);
+    if (!raw || raw.length > 8192) return [];
+    const stored = JSON.parse(raw);
+    if (!stored || stored.userId !== userId) return [];
+    const ids = projectHintIds(stored.ids);
+    bootstrapProjectHints = { userId, ids };
+    return ids;
+  } catch {
+    return [];
+  }
+}
+
+function rememberProjectHints(userId: string, value: unknown): void {
+  const ids = [...new Set([...projectHintIds(value), ...projectDiscoveryHints(userId)])].slice(0, 100);
+  bootstrapProjectHints = { userId, ids };
+  try {
+    if (typeof window !== 'undefined') {
+      window.sessionStorage.setItem(PROJECT_HINTS_KEY, JSON.stringify(bootstrapProjectHints));
+    }
+  } catch {
+    return;
+  }
+}
 
 interface FetchOptions extends RequestInit {
   skipAuth?: boolean;
@@ -166,7 +200,7 @@ export const meetingsApi = {
   list: (params?: { tab?: 'all' | 'shared'; accountId?: string; accountIds?: string[]; cursor?: string; limit?: number }, options?: { signal?: AbortSignal }) => {
     const query = new URLSearchParams();
     if (params?.tab) query.set('tab', params.tab);
-    if (bootstrapAccountHints && bootstrapAccountHints.userId === tokenUserId(getIdToken()) && bootstrapAccountHints.expires > Date.now() && bootstrapAccountHints.ids.length) query.set('joinedAccountIds', bootstrapAccountHints.ids.join(','));
+    if (!params?.cursor && bootstrapAccountHints && bootstrapAccountHints.userId === tokenUserId(getIdToken()) && bootstrapAccountHints.expires > Date.now() && bootstrapAccountHints.ids.length) query.set('joinedAccountIds', bootstrapAccountHints.ids.join(','));
     if (params?.accountIds?.length) query.set('accountIds', [...new Set(params.accountIds)].sort().join(','));
     else if (params?.accountId) query.set('accountId', params.accountId);
     if (params?.cursor) query.set('cursor', params.cursor);
@@ -724,7 +758,7 @@ export const projectApi = {
   revokePendingMember: (id: string, email: string) => api.delete<void>(`/api/projects/${encodeURIComponent(id)}/members/pending`, { body: JSON.stringify({ email }) }),
 
   list: () => {
-    const ids = bootstrapProjectHints?.userId === tokenUserId(getIdToken()) && bootstrapProjectHints.expires > Date.now() ? bootstrapProjectHints.ids : [];
+    const ids = projectDiscoveryHints(tokenUserId(getIdToken()));
     return api.get<{ projects: ProjectSummary[] }>(`/api/projects${ids.length ? `?joinedProjectIds=${encodeURIComponent(ids.join(','))}` : ''}`);
   },
   get: (id: string) => api.get<Project>(`/api/projects/${encodeURIComponent(id)}`),
@@ -831,9 +865,7 @@ export const sessionApi = {
     }
     if (typeof result.emailVerified !== 'boolean' || !Number.isSafeInteger(result.pendingGrants) || result.pendingGrants < 0 ||
         (result.projectCursor !== undefined && (typeof result.projectCursor !== 'string' || result.projectCursor.length > 512))) throw new Error('계정 연결 응답을 확인하지 못했습니다. 다시 시도해주세요.');
-    const projectIds = Array.isArray(result.joinedProjectIds) ? result.joinedProjectIds.filter(id => typeof id === 'string') : [];
-    const previousProjects = bootstrapProjectHints?.userId === expectedUserId && bootstrapProjectHints.expires > Date.now() ? bootstrapProjectHints.ids : [];
-    bootstrapProjectHints = { userId: expectedUserId, ids: [...new Set([...previousProjects, ...projectIds])].slice(0, 100), expires: Date.now() + 60_000 };
+    rememberProjectHints(expectedUserId, result.joinedProjectIds);
     const previous = bootstrapAccountHints?.userId === expectedUserId && bootstrapAccountHints.expires > Date.now() ? bootstrapAccountHints.ids : [];
     bootstrapAccountHints = { userId: expectedUserId, ids: [...new Set([...previous, ...(result.joinedAccountIds || [])])].slice(0, 100), expires: Date.now() + 60_000 };
     return result;
