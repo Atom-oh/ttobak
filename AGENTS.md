@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 81e8f3cd6438 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 5cada4e1f773 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
 # TTOBAK review context
 
 Shared by Codex, Kiro, and the CI review panel. Extracted from the
@@ -175,9 +175,9 @@ ScreenCaptureKit. Report that limit instead of claiming a Mac build passed.
   token minting prevents orphans; download validity is five minutes. Edge bypass
   covers `/api/public/*`, but API Gateway bypass registers only this literal
   route. A new unauthenticated route is CRITICAL (ADR-022).
-- **Pending shares:** project invitations use `PROJECT_INVITES#` user queues and
-  transactional project reverse rows, consumed by authenticated session bootstrap
-  with verified JWT email/sub (ADR-044). Account/meeting grants keep dedicated `PENDING_SHARE#`/`PENDING_ACCOUNT#`/
+- **Pending shares:** `PROJECT_INVITES#` queues have transactional reverse rows
+  (ADR-044). Keep writers disabled until companion bootstrap and rollback guards
+  are deployed. Account/meeting `PENDING_SHARE#`/`PENDING_ACCOUNT#`/
   `PENDING_MEETING#` rows bind the invited Cognito sub and require verified email
   before materialization. Enforce 30-day expiry synchronously and via
   `pendingShareExpiresAt`. Revocation returns 409 when a live grant materialized.

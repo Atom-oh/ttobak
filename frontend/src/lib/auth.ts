@@ -294,8 +294,6 @@ export async function confirmForgotPassword(
   });
 }
 
-// Verification is an authenticated Cognito operation. Codes and passwords never
-// pass through our API or logs; only the refreshed verified claim does.
 async function authenticatedCognitoUser(expectedUserId: string): Promise<CognitoUser> {
   const pool = await getUserPool();
   const user = pool.getCurrentUser();
@@ -306,6 +304,7 @@ async function authenticatedCognitoUser(expectedUserId: string): Promise<Cognito
   }));
   return user;
 }
+
 export async function requestEmailVerification(expectedUserId: string): Promise<void> {
   const user = await authenticatedCognitoUser(expectedUserId);
   return new Promise((resolve, reject) => user.getAttributeVerificationCode('email', {
@@ -313,6 +312,7 @@ export async function requestEmailVerification(expectedUserId: string): Promise<
     inputVerificationCode: () => resolve(),
   }));
 }
+
 export async function confirmEmailVerification(expectedUserId: string, code: string): Promise<AuthUser> {
   const user = await authenticatedCognitoUser(expectedUserId);
   await new Promise<void>((resolve, reject) => user.verifyAttribute('email', code.trim(), { onSuccess: () => resolve(), onFailure: reject }));

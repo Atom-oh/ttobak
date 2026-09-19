@@ -92,6 +92,7 @@ func (s *MeetingService) bootstrapProjectInvitations(ctx context.Context, store 
 		result.RetryPending = true
 		return nil
 	}
+	awaitingVerification := false
 	for i := range projects {
 		if budget.Err() != nil {
 			result.RetryPending = true
@@ -114,6 +115,7 @@ func (s *MeetingService) bootstrapProjectInvitations(ctx context.Context, store 
 		}
 		if !verified {
 			result.PendingGrants++
+			awaitingVerification = true
 			continue
 		}
 		resolved, err := store.MaterializePendingProjectGrant(budget, p, userID, email)
@@ -134,6 +136,8 @@ func (s *MeetingService) bootstrapProjectInvitations(ctx context.Context, store 
 			result.JoinedProjectIDs = append(result.JoinedProjectIDs, p.ProjectID)
 		}
 	}
-	result.ProjectCursor = next
+	if !awaitingVerification {
+		result.ProjectCursor = next
+	}
 	return nil
 }

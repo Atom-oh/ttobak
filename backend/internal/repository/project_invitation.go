@@ -21,6 +21,19 @@ var ErrProjectInvitationsPaused = errors.New("project invitations paused")
 
 var ErrInvalidCursor = errors.New("invalid continuation cursor")
 
+func (repo *DynamoDBRepository) projectCheck(projectID, sortKey string, condition expression.ConditionBuilder) (types.TransactWriteItem, error) {
+	built, err := expression.NewBuilder().WithCondition(condition).Build()
+	if err != nil {
+		return types.TransactWriteItem{}, err
+	}
+	return types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{
+		TableName: aws.String(repo.tableName),
+		Key: map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: model.PrefixProject + projectID},
+			"SK": &types.AttributeValueMemberS{Value: sortKey}},
+		ConditionExpression: built.Condition(), ExpressionAttributeNames: built.Names(), ExpressionAttributeValues: built.Values(),
+	}}, nil
+}
+
 func projectInvitationSubjectKey(projectID, userID string) map[string]types.AttributeValue {
 	return map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: model.PrefixProject + projectID}, "SK": &types.AttributeValueMemberS{Value: "INVITE_SUB#" + userID}}
 }
@@ -71,19 +84,19 @@ func (r *DynamoDBRepository) PutPendingProjectShare(ctx context.Context, p *mode
 	if err != nil {
 		return err
 	}
-	owner, err := expression.NewBuilder().WithCondition(expression.AttributeExists(expression.Name("PK")).And(expression.Name("ownerUserId").Equal(expression.Value(p.InvitedByUserID)))).Build()
+	owner, err := r.projectCheck(p.ProjectID, model.SKProjectConfig, expression.AttributeExists(expression.Name("PK")).And(expression.Name("ownerUserId").Equal(expression.Value(p.InvitedByUserID))))
 	if err != nil {
 		return err
 	}
-	absent, err := expression.NewBuilder().WithCondition(expression.AttributeNotExists(expression.Name("PK"))).Build()
+	absent, err := r.projectCheck(p.ProjectID, model.PrefixProjectMember+p.InvitedCognitoSub, expression.AttributeNotExists(expression.Name("PK")))
 	if err != nil {
 		return err
 	}
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: []types.TransactWriteItem{
-		{ConditionCheck: &types.ConditionCheck{TableName: aws.String(r.tableName), Key: map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: model.PrefixProject + p.ProjectID}, "SK": &types.AttributeValueMemberS{Value: model.SKProjectConfig}}, ConditionExpression: owner.Condition(), ExpressionAttributeNames: owner.Names(), ExpressionAttributeValues: owner.Values()}},
+		owner,
 		{Put: &types.Put{TableName: aws.String(r.tableName), Item: item}},
 		{Put: &types.Put{TableName: aws.String(r.tableName), Item: reverseItem}},
-		{ConditionCheck: &types.ConditionCheck{TableName: aws.String(r.tableName), Key: map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: model.PrefixProject + p.ProjectID}, "SK": &types.AttributeValueMemberS{Value: model.PrefixProjectMember + p.InvitedCognitoSub}}, ConditionExpression: absent.Condition(), ExpressionAttributeNames: absent.Names()}},
+		absent,
 		{Put: &types.Put{TableName: aws.String(r.tableName), Item: subjectItem}},
 		fence,
 	}})
@@ -143,7 +156,7 @@ func (r *DynamoDBRepository) MaterializePendingProjectGrant(ctx context.Context,
 	if err != nil {
 		return false, err
 	}
-	owner, err := expression.NewBuilder().WithCondition(expression.AttributeExists(expression.Name("PK")).And(expression.Name("ownerUserId").Equal(expression.Value(p.InvitedByUserID)))).Build()
+	owner, err := r.projectCheck(p.ProjectID, model.SKProjectConfig, expression.AttributeExists(expression.Name("PK")).And(expression.Name("ownerUserId").Equal(expression.Value(p.InvitedByUserID))))
 	if err != nil {
 		return false, err
 	}
@@ -164,15 +177,15 @@ func (r *DynamoDBRepository) MaterializePendingProjectGrant(ctx context.Context,
 	deletes[0].Delete.ExpressionAttributeNames = identity.Names()
 	deletes[0].Delete.ExpressionAttributeValues = identity.Values()
 	items := []types.TransactWriteItem{
-		{ConditionCheck: &types.ConditionCheck{TableName: aws.String(r.tableName), Key: map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: model.PrefixProject + p.ProjectID}, "SK": &types.AttributeValueMemberS{Value: model.SKProjectConfig}}, ConditionExpression: owner.Condition(), ExpressionAttributeNames: owner.Names(), ExpressionAttributeValues: owner.Values()}},
+		owner,
 		{Put: &types.Put{TableName: aws.String(r.tableName), Item: item, ConditionExpression: absent.Condition(), ExpressionAttributeNames: absent.Names()}},
 	}
-	subject, err := expression.NewBuilder().WithCondition(expression.Name("createdAt").Equal(expression.Value(p.CreatedAt)).And(expression.Name("email").Equal(expression.Value(p.Email)))).Build()
+	subject, err := r.projectCheck(p.ProjectID, "INVITE_SUB#"+userID, expression.Name("createdAt").Equal(expression.Value(p.CreatedAt)).And(expression.Name("email").Equal(expression.Value(p.Email))))
 	if err != nil {
 		return false, err
 	}
 	items = append(items, deletes...)
-	items = append(items, types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{TableName: aws.String(r.tableName), Key: projectInvitationSubjectKey(p.ProjectID, userID), ConditionExpression: subject.Condition(), ExpressionAttributeNames: subject.Names(), ExpressionAttributeValues: subject.Values()}})
+	items = append(items, subject)
 	fence, err := r.projectInvitationFence(nil)
 	if err != nil {
 		return false, err
@@ -260,11 +273,16 @@ func (r *DynamoDBRepository) RevokePendingProjectShare(ctx context.Context, p *m
 	if err != nil {
 		return err
 	}
-	owner, err := expression.NewBuilder().WithCondition(expression.AttributeExists(expression.Name("PK")).And(expression.Name("ownerUserId").Equal(expression.Value(ownerID)))).Build()
+	owner, err := r.projectCheck(p.ProjectID, model.SKProjectConfig, expression.AttributeExists(expression.Name("PK")).And(expression.Name("ownerUserId").Equal(expression.Value(ownerID))))
 	if err != nil {
 		return err
 	}
-	items := append([]types.TransactWriteItem{{ConditionCheck: &types.ConditionCheck{TableName: aws.String(r.tableName), Key: map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: model.PrefixProject + p.ProjectID}, "SK": &types.AttributeValueMemberS{Value: model.SKProjectConfig}}, ConditionExpression: owner.Condition(), ExpressionAttributeNames: owner.Names(), ExpressionAttributeValues: owner.Values()}}}, deletes...)
+	absent, err := r.projectCheck(p.ProjectID, model.PrefixProjectMember+p.InvitedCognitoSub, expression.AttributeNotExists(expression.Name("PK")))
+	if err != nil {
+		return err
+	}
+	items := append([]types.TransactWriteItem{owner}, deletes...)
+	items = append(items, absent)
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
 	if err != nil {
 		return mapProjectTransactionCanceledError(err, p.ProjectID, "project", "revoke project invitation")
@@ -315,7 +333,7 @@ func (r *DynamoDBRepository) PutRegisteredProjectMember(ctx context.Context, own
 	if err != nil {
 		return err
 	}
-	owner, err := expression.NewBuilder().WithCondition(expression.AttributeExists(expression.Name("PK")).And(expression.Name("ownerUserId").Equal(expression.Value(ownerID)))).Build()
+	owner, err := r.projectCheck(projectID, model.SKProjectConfig, expression.AttributeExists(expression.Name("PK")).And(expression.Name("ownerUserId").Equal(expression.Value(ownerID))))
 	if err != nil {
 		return err
 	}
@@ -324,7 +342,7 @@ func (r *DynamoDBRepository) PutRegisteredProjectMember(ctx context.Context, own
 		return err
 	}
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: []types.TransactWriteItem{
-		{ConditionCheck: &types.ConditionCheck{TableName: aws.String(r.tableName), Key: map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: model.PrefixProject + projectID}, "SK": &types.AttributeValueMemberS{Value: model.SKProjectConfig}}, ConditionExpression: owner.Condition(), ExpressionAttributeNames: owner.Names(), ExpressionAttributeValues: owner.Values()}},
+		owner,
 		{Put: &types.Put{TableName: aws.String(r.tableName), Item: item, ConditionExpression: absent.Condition(), ExpressionAttributeNames: absent.Names()}},
 		{ConditionCheck: &types.ConditionCheck{TableName: aws.String(r.tableName), Key: pendingShareKey(email, model.PrefixPendingProject+projectID), ConditionExpression: absent.Condition(), ExpressionAttributeNames: absent.Names()}},
 		{Delete: &types.Delete{TableName: aws.String(r.tableName), Key: projectInvitationSubjectKey(projectID, userID)}},

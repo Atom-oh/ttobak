@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -16,7 +17,7 @@ export default function AccountDetailClient() {
   const pathname = usePathname();
   const router = useRouter();
   const accountId = decodeURIComponent(pathname.split('/').filter(Boolean).pop() || '');
-  const { user, isLoading, isAuthenticated, membershipRevision } = useAuth();
+  const { user, isLoading, isAuthenticated, isAdmin, membershipRevision } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [account, setAccount] = useState<Account | null>(null);
@@ -35,7 +36,7 @@ export default function AccountDetailClient() {
   const [pendingNotice, setPendingNotice] = useState<string | null>(null);
   // The email a pending notice is about, so its Cancel button can call
   // revokePendingMember without needing a listing feature -- the invite
-  // was just sent in this exact call, so the email is already known here.
+  // was just queued in this exact call, so the email is already known here.
   const [pendingNoticeEmail, setPendingNoticeEmail] = useState<string | null>(null);
   const [uploadingSlide, setUploadingSlide] = useState(false);
 
@@ -113,7 +114,7 @@ export default function AccountDetailClient() {
       // "Failed to add member" error banner -- fetchAll failing is a
       // separate, lower-priority problem than the invite itself failing.
       if (result?.pending) {
-        setPendingNotice(`${picked.email}님의 계정 추가를 예약했습니다. 로그인과 이메일 인증 후 자동으로 추가됩니다. 이 작업은 메일을 발송하지 않습니다. 초대 메일이 필요하면 설정의 사용자 관리에서 관리자가 재발송해야 합니다.`);
+        setPendingNotice(`${picked.email}님의 계정 추가를 예약했습니다. 로그인과 이메일 인증 후 자동으로 추가됩니다. 이 작업으로 초대 이메일이 발송되지는 않습니다.`);
         setPendingNoticeEmail(picked.email);
       }
       await fetchAll();
@@ -239,7 +240,16 @@ export default function AccountDetailClient() {
         )}
         {pendingNotice && (
           <div className="bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400 text-sm rounded-lg p-3 mb-4 flex items-center justify-between gap-3">
-            <span>{pendingNotice}</span>
+            <div className="min-w-0">
+              <p>{pendingNotice}</p>
+              {isAdmin ? (
+                <Link href="/settings#user-management" className="mt-1 inline-block font-semibold underline hover:no-underline">
+                  사용자 관리에서 초대 메일 재발송
+                </Link>
+              ) : (
+                <p className="mt-1">초대 메일이 필요하면 관리자에게 재발송을 요청하세요.</p>
+              )}
+            </div>
             <button
               type="button"
               onClick={handleRevokePendingMember}

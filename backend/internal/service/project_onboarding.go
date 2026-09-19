@@ -201,9 +201,8 @@ func (s *ProjectService) RevokePendingMember(ctx context.Context, userID, projec
 	if err != nil {
 		return err
 	}
-	sub := ""
 	if p != nil {
-		sub = p.InvitedCognitoSub
+		sub := p.InvitedCognitoSub
 		if p.Kind != model.PendingShareKindProject || p.ProjectID != projectID {
 			return ErrInvalidInput
 		}
@@ -222,19 +221,5 @@ func (s *ProjectService) RevokePendingMember(ctx context.Context, userID, projec
 		}
 		return nil
 	}
-	recipient, err := lookupInvitationRecipient(ctx, s.cognito, s.cognitoPoolID, email)
-	if errors.Is(err, ErrInvitationRequired) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	member, err := s.repo.GetProjectMember(ctx, projectID, recipient.Sub)
-	if err != nil {
-		return err
-	}
-	if member != nil {
-		return ErrPendingAlreadyClaimed
-	}
-	return nil
+	return repository.ErrConditionFailed
 }

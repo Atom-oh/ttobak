@@ -37,6 +37,11 @@ cursor. Profile initialization errors fail the request; invitation side effects
 surface retry state without blocking unrelated data. Unverified users cannot
 consume grants. The companion client initializes once and refreshes after later
 pages rather than interrupting an active recording.
+
+An unverified caller with matching project invitations retains the input page
+cursor until verification succeeds. Retry that cursor with refreshed verified
+claims; a page containing only unrelated identities can advance normally.
+
 Keep queued writers disabled until the consumer and client are deployed and verified.
 
 Owner-only `POST /api/projects/{projectId}/members` accepts `{ email, allowPending? }`
@@ -54,7 +59,8 @@ Owner-only `GET /api/projects/{projectId}/members/pending?cursor=...` returns
 `{ members: [{ email, expiresAt }], nextCursor? }`. Each page scans at most 25
 reverse rows and revalidates canonical grants; empty pages may have continuation.
 `DELETE /api/projects/{projectId}/members/pending` accepts `{ email }` and returns
-204 or 409 on a membership/version race. Already-joined users use member removal.
+204 after deletion, or 409 for missing/stale invitations or existing membership.
+Already-joined users use member removal; email aliases do not prove old recipients.
 A project/sub latest-invitation marker invalidates prior email-specific grants.
 Member removal and legacy direct addition retire it atomically; cleanup conflicts
 remain retryable. A durable control row also gates queue/claim transactions and bootstrap
@@ -78,7 +84,8 @@ supported; supplying both forms, invalid IDs or a mismatched cursor returns 400.
 An empty selection is unfiltered. Preserve normalized selection/tab/caller across
 continuation requests; restart pagination when filters change.
 
-`joinedAccountIds` accepts at most 100 normalized discovery hints from bootstrap.
+`joinedAccountIds` accepts at most 100 normalized discovery hints on the first
+page only. Omit it with `cursor`; the continuation already carries those hints.
 These are not filters or grants: current canonical membership is rechecked before
 any team content is returned. The browser retains hints for 60 seconds, bound to
 the current token's user ID, to bridge reverse-index propagation.

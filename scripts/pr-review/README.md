@@ -91,6 +91,11 @@ markers on their own lines at column one. Inline backticks are for single-line,
 whitespace-free symbol/path references; an empty `()` suffix is allowed. Use a
 longer outer fence around examples containing fences and use synthetic values.
 
+Shared prompts prefer plain prose and unquoted references. Claude's producer
+schema excludes backticks from evidence, finding conditions and uncertainties;
+examples can use top-level tilde fences. Path and identity fields are unchanged.
+This generation constraint does not replace the host's format or coverage checks.
+
 `review_format.py` checks prose before and after masking. Its bounded grammar
 recognizes explicit markup and sensitive assignments, including qualified keys
 and YAML tags/anchors; it does not identify every unmarked phrase as source code.
@@ -168,6 +173,17 @@ A terminal stderr control blocked after one call on both. A terminal diagnostic
 inside a native result envelope improved from two calls/pass on base to one
 call/blocked on the implementation. The raw-stdout classification gap is
 pre-existing, not a native-envelope guarantee or a waiver of required coverage.
+
+Kiro's zero-exit JSON syntax retry checks recognized terminal diagnostics in
+non-JSON stdout with both existing stderr classifiers before retrying, including
+overage, quota-exception and tool-use signals. Raw, control-normalized and scrubbed
+text in both streams is checked; normalization precedes secret masking for
+diagnostic detection.
+It preserves the normalized diagnostic through the bounded stderr scrubber and
+records a nonzero exit. Post-scrub and combined-stderr size limits are checked
+before any retry. Successfully
+parsed review JSON is not scanned as logs. This check does not change the
+nonzero-exit policy described above.
 
 Codex JSONL records split only at literal LF bytes; Unicode separators inside JSON
 strings remain payload. Terminal executor and final-file overflow are handled

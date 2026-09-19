@@ -29,7 +29,7 @@ export function InviteUser() {
         admin: makeAdmin,
       });
       setSuccess(
-        `${res.email} 님에게 초대 이메일 발송을 요청했습니다. 로그인 주소와 임시 비밀번호가 포함됩니다.${
+        `${res.email} 님의 초대 이메일 발송을 요청했습니다. 로그인 주소와 임시 비밀번호가 포함됩니다. 수신되지 않으면 스팸함을 확인하고 사용자 관리에서 재발송하세요.${
           res.addedToAdmins ? ' (관리자 권한 부여됨)' : ''
         }`
       );

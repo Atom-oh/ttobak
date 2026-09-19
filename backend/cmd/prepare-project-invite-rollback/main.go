@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -31,6 +32,51 @@ type operations struct {
 	setFence func(context.Context, string, bool) (repository.ProjectInvitationControl, error)
 	scan     func(context.Context, map[string]dt.AttributeValue) ([]model.PendingShare, map[string]dt.AttributeValue, error)
 	remove   func(context.Context, *model.PendingShare) error
+}
+
+type invitationScanClient interface {
+	Scan(context.Context, *dynamodb.ScanInput, ...func(*dynamodb.Options)) (*dynamodb.ScanOutput, error)
+}
+
+func scanProjectInvitations(ctx context.Context, client invitationScanClient, table string, cursor map[string]dt.AttributeValue, readUnitsPerSecond int) ([]model.PendingShare, map[string]dt.AttributeValue, error) {
+	if readUnitsPerSecond <= 0 {
+		return nil, nil, errors.New("scan read capacity must be positive")
+	}
+	filter, err := expression.NewBuilder().WithFilter(expression.BeginsWith(expression.Name("PK"), model.PrefixProjectInvites)).Build()
+	if err != nil {
+		return nil, nil, err
+	}
+	started := time.Now()
+	out, err := client.Scan(ctx, &dynamodb.ScanInput{
+		TableName: aws.String(table), ConsistentRead: aws.Bool(true), Limit: aws.Int32(100),
+		ExclusiveStartKey: cursor, FilterExpression: filter.Filter(),
+		ExpressionAttributeNames: filter.Names(), ExpressionAttributeValues: filter.Values(),
+		ReturnConsumedCapacity: dt.ReturnConsumedCapacityTotal,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	if out.ConsumedCapacity == nil || out.ConsumedCapacity.CapacityUnits == nil {
+		return nil, nil, errors.New("scan read capacity was not returned")
+	}
+	delay := time.Duration(aws.ToFloat64(out.ConsumedCapacity.CapacityUnits)/float64(readUnitsPerSecond)*float64(time.Second)) - time.Since(started)
+	if delay > 0 {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	var rows []model.PendingShare
+	if err := attributevalue.UnmarshalListOfMaps(out.Items, &rows); err != nil {
+		return nil, nil, err
+	}
+	return rows, out.LastEvaluatedKey, nil
 }
 
 func sameServing(a, b snapshot) bool {
@@ -218,12 +264,15 @@ func main() {
 	table := flag.String("table", "ttobak-main", "API table; must match the serving version environment")
 	apply := flag.Bool("run", false, "apply the pause/drain or resume; default is read-only")
 	resumeMode := flag.Bool("resume", false, "resume only an empty queue on the reviewed compatible API")
+	scanReadUnits := flag.Int("scan-read-units-per-second", 20, "positive scan read-capacity budget per second")
+	timeout := flag.Duration("timeout", 15*time.Minute, "positive maximum duration for the complete operation")
 	flag.Parse()
-	if *account == "" || *hash == "" {
-		fmt.Fprintln(os.Stderr, "expected-account and expected-code-sha256 are required")
+	if *account == "" || *hash == "" || *scanReadUnits <= 0 || *timeout <= 0 {
+		fmt.Fprintln(os.Stderr, "expected-account, expected-code-sha256 and positive scan/time budgets are required")
 		os.Exit(2)
 	}
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	defer cancel()
 	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(*region))
 	fatal(err)
 	identity, err := sts.NewFromConfig(cfg).GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
@@ -248,19 +297,7 @@ func main() {
 		},
 		fence: repo.GetProjectInvitationControl, setFence: repo.SetProjectInvitationControl, remove: repo.DeletePendingProjectShareIfMatch,
 		scan: func(ctx context.Context, cursor map[string]dt.AttributeValue) ([]model.PendingShare, map[string]dt.AttributeValue, error) {
-			filter, err := expression.NewBuilder().WithFilter(expression.BeginsWith(expression.Name("PK"), model.PrefixProjectInvites)).Build()
-			if err != nil {
-				return nil, nil, err
-			}
-			out, err := db.Scan(ctx, &dynamodb.ScanInput{TableName: table, ConsistentRead: aws.Bool(true), Limit: aws.Int32(100), ExclusiveStartKey: cursor, FilterExpression: filter.Filter(), ExpressionAttributeNames: filter.Names(), ExpressionAttributeValues: filter.Values()})
-			if err != nil {
-				return nil, nil, err
-			}
-			var rows []model.PendingShare
-			if err := attributevalue.UnmarshalListOfMaps(out.Items, &rows); err != nil {
-				return nil, nil, err
-			}
-			return rows, out.LastEvaluatedKey, nil
+			return scanProjectInvitations(ctx, db, *table, cursor, *scanReadUnits)
 		},
 	}
 	if *resumeMode {

@@ -67,6 +67,23 @@ retains the existing decoding limits. A complete original blocking chair verdict
 survives a formatting failure as a static FAIL with details withheld; quota and
 output-limit failures keep precedence.
 
+Review prompts prefer plain prose and unquoted references to avoid invalid inline
+assignments, argument-bearing calls, and HTML/JSX fragments. Claude's specialist
+schema excludes backticks from prose fields before host validation; necessary
+examples can use top-level tilde fences. This generation constraint does not
+replace identity, coverage, confidentiality, or verdict checks. Chair output that
+ignores the common format guidance still fails closed.
+Kiro responses with malformed JSON or an invalid JSON wrapper use the existing
+bounded retry budget and a fresh request nonce. Exhaustion still blocks coverage;
+valid reviews, schema/identity failures, and terminal provider diagnostics are
+not retried by this syntax check. Before a zero-exit syntax retry, recognized
+terminal diagnostics in non-JSON stdout are preserved as failures. Successfully
+parsed review JSON is not scanned as a diagnostic stream. Both existing
+classifiers inspect raw, control-normalized and scrubbed text in both streams
+before a syntax retry, so terminal rendering or secret masking cannot hide a
+recognized signal.
+Post-scrub or combined-diagnostic overflow remains terminal.
+
 With all four roles active, the ordinary path uses four review calls and two
 Kiro startup checks. Adjudication adds one chair call; retries and fallback add
 calls only when needed. This reduces duplicate requests, but is not a measured
