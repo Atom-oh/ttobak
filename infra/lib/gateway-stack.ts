@@ -86,15 +86,26 @@ export class GatewayStack extends cdk.Stack {
       throw new Error("Missing required CDK context 'ttobak:domainName' (see infra/cdk.json)");
     }
 
+    const projectInvitationsEnabled = new cdk.CfnParameter(this, 'ProjectInvitationsEnabled', {
+      type: 'String', default: 'false', allowedValues: ['false', 'true'],
+      description: 'Enable only after the invitation API, rollback guard and clients are verified.',
+    });
+
     // API Lambda function (Go runtime, arm64)
     this.apiFunction = new lambda.Function(this, 'ApiFunction', {
       functionName: 'ttobak-api',
+      currentVersionOptions: {
+        // Description is create-only: parameter-only toggles must publish a
+        // matching immutable version before the live alias can change behavior.
+        description: cdk.Fn.join('', ['project-invitations=', projectInvitationsEnabled.valueAsString]),
+      },
       runtime: lambda.Runtime.PROVIDED_AL2023,
       architecture: lambda.Architecture.ARM_64,
       handler: 'bootstrap',
       code: lambda.Code.fromAsset('../backend/cmd/api'),
       role: props.apiRole as iam.Role,
       environment: {
+        PROJECT_INVITATIONS_ENABLED: projectInvitationsEnabled.valueAsString,
         TABLE_NAME: props.table.tableName,
         BUCKET_NAME: props.bucket.bucketName,
         COGNITO_USER_POOL_ID: props.userPool.userPoolId,

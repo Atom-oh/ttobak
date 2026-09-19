@@ -26,10 +26,15 @@ to S3 GET presigns. PUT uploads continue to use signed S3 URLs.
 
 ### Session bootstrap and project invitations
 
-Core `POST /api/session/bootstrap` initializes the authenticated profile and
-account/meeting grants. It reports project capability disabled; bounded project
-pages are supplied by the companion guard/bootstrap change. Keep pending writers disabled until that
-consumer and the client are deployed and verified.
+An unverified caller with matching project invitations retains the input page
+cursor until verification succeeds. Retry that cursor with refreshed verified
+claims; a page containing only unrelated identities can advance normally.
+
+`POST /api/session/bootstrap` initializes the authenticated profile and account/meeting grants,
+then processes at most 25 project invitations under a five-second budget. It returns
+`projectCursor`, `retryPending`, `pendingGrants`, `emailVerified`, `joinedAccountIds`
+and `projectInvitationsEnabled`. Failed pages retain continuation for retry.
+Keep queued writers disabled until the consumer and client are deployed and verified.
 
 Owner-only `POST /api/projects/{projectId}/members` accepts `{ email, allowPending? }`
 (maximum 2,048 body bytes; email 254 bytes). It resolves current Cognito identity:
@@ -49,8 +54,10 @@ reverse rows and revalidates canonical grants; empty pages may have continuation
 204 after deletion, or 409 for missing/stale invitations or existing membership.
 Already-joined users use member removal; email aliases do not prove old recipients.
 A project/sub latest-invitation marker invalidates prior email-specific grants.
-Member removal and legacy direct addition retire that marker atomically. Project
-cleanup version conflicts remain retryable. User queues are isolated from old readers; transactional rows, TTL and
+Member removal and legacy direct addition retire it atomically; cleanup conflicts
+remain retryable. A durable control row also gates queue/claim transactions and bootstrap
+capabilities; a paused fence returns `INVITATIONS_PAUSED` and clears page
+continuation. Project user queues are isolated from old readers; transactional rows, TTL and
 the required incompatible-API rollback drain are specified in ADR-044.
 
 ### Meetings and pagination

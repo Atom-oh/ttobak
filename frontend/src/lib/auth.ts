@@ -36,6 +36,7 @@ export interface AuthUser {
   name?: string;
   groups: string[];
   isAdmin: boolean;
+  emailVerified?: boolean;
 }
 
 // buildAuthUser maps a decoded Cognito ID token payload to an AuthUser.
@@ -51,6 +52,7 @@ function buildAuthUser(payload: Record<string, unknown>): AuthUser {
     name: payload.name as string | undefined,
     groups,
     isAdmin: groups.includes('admins'),
+    emailVerified: payload.email_verified === true,
   };
 }
 
@@ -289,4 +291,37 @@ export async function confirmForgotPassword(
       onFailure: (err) => reject(err),
     });
   });
+}
+
+async function authenticatedCognitoUser(expectedUserId: string): Promise<CognitoUser> {
+  const pool = await getUserPool();
+  const user = pool.getCurrentUser();
+  if (!user) throw new Error('다시 로그인해주세요.');
+  await new Promise<void>((resolve, reject) => user.getSession((error: Error | null, session: CognitoUserSession | null) => {
+    if (error || !session?.isValid() || session.getIdToken().decodePayload().sub !== expectedUserId) reject(error || new Error('로그인 계정이 변경됐습니다. 다시 시도해주세요.'));
+    else resolve();
+  }));
+  return user;
+}
+
+export async function requestEmailVerification(expectedUserId: string): Promise<void> {
+  const user = await authenticatedCognitoUser(expectedUserId);
+  return new Promise((resolve, reject) => user.getAttributeVerificationCode('email', {
+    onSuccess: () => resolve(), onFailure: reject,
+    inputVerificationCode: () => resolve(),
+  }));
+}
+
+export async function confirmEmailVerification(expectedUserId: string, code: string): Promise<AuthUser> {
+  const user = await authenticatedCognitoUser(expectedUserId);
+  await new Promise<void>((resolve, reject) => user.verifyAttribute('email', code.trim(), { onSuccess: () => resolve(), onFailure: reject }));
+  const pool = await getUserPool();
+  if (pool.getCurrentUser()?.getUsername() !== user.getUsername()) throw new Error('로그인 계정이 변경됐습니다.');
+  const token = await refreshSession();
+  if (!token) throw new Error('이메일 인증은 완료됐습니다. 다시 로그인해주세요.');
+  const current = await getCurrentUser();
+  if (!current) throw new Error('다시 로그인해주세요.');
+  if (current.userId !== expectedUserId) throw new Error('로그인 계정이 변경됐습니다. 다시 로그인해주세요.');
+  if (current.emailVerified !== true) throw new Error('이메일 인증은 완료됐습니다. 계정 정보 갱신을 위해 다시 로그인해주세요.');
+  return current;
 }

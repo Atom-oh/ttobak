@@ -22,14 +22,26 @@ import (
 	"github.com/ttobak/backend/internal/model"
 )
 
-func projectInviteWire(t *testing.T, fn func(string, map[string]any) (int, string)) *DynamoDBRepository {
+func projectInviteWire(t *testing.T, fn func(string, map[string]any) (int, string), control ...string) *DynamoDBRepository {
 	t.Helper()
 	client := dynamodb.New(dynamodb.Options{Region: "ap-northeast-2", Credentials: aws.AnonymousCredentials{}, RetryMaxAttempts: 1, HTTPClient: meetingListHTTPClientFunc(func(req *http.Request) (*http.Response, error) {
 		var body map[string]any
 		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
-		status, text := fn(req.Header.Get("X-Amz-Target"), body)
+		var status int
+		var text string
+		key, _ := body["Key"].(map[string]any)
+		pk, _ := key["PK"].(map[string]any)
+		if strings.HasSuffix(req.Header.Get("X-Amz-Target"), ".GetItem") && pk["S"] == projectInvitationControlPK {
+			status = 200
+			text = "{}"
+			if len(control) > 0 {
+				text = control[0]
+			}
+		} else {
+			status, text = fn(req.Header.Get("X-Amz-Target"), body)
+		}
 		return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": {"application/x-amz-json-1.0"}}, Body: io.NopCloser(strings.NewReader(text))}, nil
 	})})
 	return NewDynamoDBRepository(client, "test")
@@ -57,7 +69,7 @@ func TestProjectInvitationQueuesBothRowsWithOwnerAndExistingMemberGuards(t *test
 			t.Fatal(target)
 		}
 		items := body["TransactItems"].([]any)
-		if len(items) != 5 {
+		if len(items) != 6 {
 			t.Fatalf("expected owner, canonical, reverse, absent-member checks: %d", len(items))
 		}
 		owner := items[0].(map[string]any)["ConditionCheck"].(map[string]any)
@@ -94,7 +106,7 @@ func TestProjectInvitationQueuesBothRowsWithOwnerAndExistingMemberGuards(t *test
 func TestProjectInvitationMaterializationBindsIdentityExpiryAndVersion(t *testing.T) {
 	r := projectInviteWire(t, func(_ string, body map[string]any) (int, string) {
 		items := body["TransactItems"].([]any)
-		if len(items) != 5 {
+		if len(items) != 6 {
 			t.Fatal("grant is not atomic with both queue rows")
 		}
 		canonical := items[2].(map[string]any)["Delete"].(map[string]any)
@@ -138,7 +150,7 @@ func TestProjectInvitationNewVersionRaceNeverCleansFreshGrant(t *testing.T) {
 	calls := 0
 	r := projectInviteWire(t, func(string, map[string]any) (int, string) {
 		calls++
-		return 400, projectCancellation(5, 2)
+		return 400, projectCancellation(6, 2)
 	})
 	ok, err := r.MaterializePendingProjectGrant(context.Background(), inviteFixture(), "recipient", "user@example.com")
 	if err != nil || ok || calls != 1 {
@@ -153,7 +165,7 @@ func TestProjectInvitationDeletedProjectOrExistingMemberRetiresOnlyObservedVersi
 			r := projectInviteWire(t, func(_ string, body map[string]any) (int, string) {
 				calls++
 				if calls == 1 {
-					return 400, projectCancellation(5, failed)
+					return 400, projectCancellation(6, failed)
 				}
 				items := body["TransactItems"].([]any)
 				if len(items) != 2 {
@@ -298,6 +310,49 @@ func TestLegacyProjectAddCannotCoexistWithPendingGrant(t *testing.T) {
 		return 400, projectCancellation(4, 2)
 	})
 	if err := r.PutRegisteredProjectMember(context.Background(), "owner", "project", "recipient", "user@example.com"); !errors.Is(err, ErrConditionFailed) {
+		t.Fatal(err)
+	}
+}
+
+func TestProjectFenceStopsQueueAndPinsEpochAcrossResume(t *testing.T) {
+	paused := projectInviteWire(t, func(string, map[string]any) (int, string) { t.Fatal("paused queue reached a write"); return 200, "{}" }, `{"Item":{"enabled":{"BOOL":false},"revision":{"S":"paused"}}}`)
+	if err := paused.PutPendingShare(context.Background(), inviteFixture()); !errors.Is(err, ErrProjectInvitationsPaused) {
+		t.Fatal(err)
+	}
+	active := projectInviteWire(t, func(_ string, body map[string]any) (int, string) {
+		items := body["TransactItems"].([]any)
+		check := items[5].(map[string]any)["ConditionCheck"].(map[string]any)
+		condition := analysisCondition(t, check)
+		if !strings.Contains(condition, "old-epoch") || !strings.Contains(condition, "revision") {
+			t.Fatal("late queue is not generation-bound", condition)
+		}
+		return 400, `{"__type":"TransactionCanceledException","CancellationReasons":[{"Code":"None"},{"Code":"None"},{"Code":"None"},{"Code":"None"},{"Code":"None"},{"Code":"ConditionalCheckFailed"}]}`
+	}, `{"Item":{"enabled":{"BOOL":true},"revision":{"S":"old-epoch"}}}`)
+	if err := active.PutPendingShare(context.Background(), inviteFixture()); !errors.Is(err, ErrProjectInvitationsPaused) {
+		t.Fatal(err)
+	}
+}
+func TestProjectFenceAlsoBlocksDeferredGrantPublication(t *testing.T) {
+	r := projectInviteWire(t, func(_ string, body map[string]any) (int, string) {
+		items := body["TransactItems"].([]any)
+		condition := analysisCondition(t, items[5].(map[string]any)["ConditionCheck"].(map[string]any))
+		if !strings.Contains(condition, "enabled") || !strings.Contains(condition, "revision") {
+			t.Fatal(condition)
+		}
+		return 400, `{"__type":"TransactionCanceledException","CancellationReasons":[{"Code":"None"},{"Code":"None"},{"Code":"None"},{"Code":"None"},{"Code":"None"},{"Code":"ConditionalCheckFailed"}]}`
+	})
+	if ok, err := r.MaterializePendingProjectGrant(context.Background(), inviteFixture(), "recipient", "user@example.com"); ok || !errors.Is(err, ErrProjectInvitationsPaused) {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+}
+func TestProjectControlUpdateIsRevisionConditional(t *testing.T) {
+	r := projectInviteWire(t, func(target string, body map[string]any) (int, string) {
+		if !strings.HasSuffix(target, ".UpdateItem") || !strings.Contains(analysisCondition(t, body), "old-control") {
+			t.Fatal(body)
+		}
+		return 400, `{"__type":"ConditionalCheckFailedException"}`
+	})
+	if _, err := r.SetProjectInvitationControl(context.Background(), "old-control", false); !errors.Is(err, ErrConditionFailed) {
 		t.Fatal(err)
 	}
 }

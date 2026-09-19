@@ -32,14 +32,35 @@ Never bulk-mark legacy addresses verified or reset users silently.
 
 ## Rollout and rollback
 
-Verify the API and companion rollback guard before explicitly enabling queued
-writers and publishing the frontend. Preserve runtime config, no-cache HTML and
-CloudFront invalidation. For an incompatible API rollback, the guard must pin the
-reviewed code/account, pause writers by revision, wait out old requests, conditionally
-cancel queued project grants and verify an empty queue under the same fence.
-Existing memberships remain unchanged. Never retain grants across an old API that
+The companion recovery/client release adds authenticated email verification,
+reset-code entry and state-specific admin controls. It must refresh verified JWT
+claims before retrying grants; it must never bulk-mark legacy emails verified.
+
+## Rollout and verification
+
+Run all Go tests including command packages, vet, ARM64 API build, frontend lint and
+production build, password-policy tests, and documentation checks. Deploy API first
+and verify its code revision/new authenticated routes before frontend publication.
+Frontend deployment must preserve runtime config, set HTML no-cache and invalidate
+CloudFront. Incompatible API rollback requires the companion operator guard:
+pin the reviewed serving alias/code/account, pause the persistent database
+fence by revision, conditionally cancel canonical/reverse project invitations
+and verify an empty queue while that transactional fence still holds. Existing
+memberships remain unchanged. Never retain pending grants across an older API that
 can add/remove members without retiring them; cancelled grants need fresh invites.
 
-Run full Go tests including commands, vet/ARM64 build, frontend lint/build, policy
-and browser tests, and documentation checks. Mail tests use fakes; they do not prove
-inbox delivery. Actual recipient or identity operations need explicit operator scope.
+Tests cover unknown/invited/recreated identities, current owner checks, revoked or
+refreshed grants, deleted projects, existing members, canonical pagination, missing
+email verification, disabled accounts, trusted bootstrap identity and forged
+account discovery hints. Mail tests use fakes; a passing unit test does not prove
+inbox delivery. Live recipient mail or identity changes require explicit operator
+scope and are not a side effect of deploying this implementation.
+
+The rollback fence is `CONTROL#PROJECT_INVITATIONS` / `STATE`, storing `enabled`
+and a revision. Queue transactions pin their observed revision; claims check the
+same control row. Pausing therefore also rejects delayed pre-pause transactions,
+without estimating old Lambda execution budgets. Neither code/alias deployments
+nor environment replacement resets the row. Resume is an explicit revision-guarded
+operator action requiring an empty queue and a reviewed compatible serving version.
+The infrastructure activation parameter defaults closed and salts the version
+description so `live` receives the intended environment on parameter changes.
