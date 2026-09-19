@@ -143,6 +143,49 @@ func TestProjectBootstrapProcessesOneBoundedPageAndReturnsContinuation(t *testin
 	}
 }
 
+func TestProjectBootstrapRetainsUnverifiedPageUntilClaimsAreVerified(t *testing.T) {
+	t.Setenv("PROJECT_INVITATIONS_ENABLED", "true")
+	for _, inputCursor := range []string{"", "current-page"} {
+		t.Run("cursor="+inputCursor, func(t *testing.T) {
+			store := &pagedProjectSessionRepo{
+				sessionProjectRepo: &sessionProjectRepo{mockMeetingRepo: newMockMeetingRepo()},
+				next:               "next-page",
+				listRows: []model.PendingShare{{
+					Kind: model.PendingShareKindProject, ProjectID: "project",
+					InvitedCognitoSub: "recipient", Email: "user@example.com",
+					TTL: time.Now().Add(time.Hour).Unix(),
+				}},
+			}
+			service := newMeetingServiceWithRepo(store)
+			waiting, err := service.BootstrapSession(context.Background(), "recipient", "user@example.com", "", false, inputCursor)
+			if err != nil || waiting.ProjectCursor != inputCursor || waiting.PendingGrants != 1 || waiting.RetryPending || store.grants != 0 {
+				t.Fatalf("unverified page skipped: result=%+v err=%v grants=%d", waiting, err, store.grants)
+			}
+			verified, err := service.BootstrapSession(context.Background(), "recipient", "user@example.com", "", true, waiting.ProjectCursor)
+			if err != nil || store.seen != inputCursor || verified.ProjectCursor != "next-page" || store.grants != 1 {
+				t.Fatalf("verified retry lost invitation: result=%+v err=%v cursor=%q grants=%d", verified, err, store.seen, store.grants)
+			}
+		})
+	}
+}
+
+func TestProjectBootstrapUnverifiedUserAdvancesPastOtherIdentities(t *testing.T) {
+	t.Setenv("PROJECT_INVITATIONS_ENABLED", "true")
+	store := &pagedProjectSessionRepo{
+		sessionProjectRepo: &sessionProjectRepo{mockMeetingRepo: newMockMeetingRepo()},
+		next:               "next-page",
+		listRows: []model.PendingShare{{
+			Kind: model.PendingShareKindProject, ProjectID: "project",
+			InvitedCognitoSub: "other-recipient", Email: "user@example.com",
+			TTL: time.Now().Add(time.Hour).Unix(),
+		}},
+	}
+	result, err := newMeetingServiceWithRepo(store).BootstrapSession(context.Background(), "recipient", "user@example.com", "", false, "current-page")
+	if err != nil || result.ProjectCursor != "next-page" || result.PendingGrants != 0 || store.grants != 0 {
+		t.Fatalf("unrelated identity stopped pagination: result=%+v err=%v grants=%d", result, err, store.grants)
+	}
+}
+
 type pausedProjectSessionRepo struct{ *sessionProjectRepo }
 
 func (r *pausedProjectSessionRepo) ProjectInvitationsAllowed(context.Context) (bool, error) {

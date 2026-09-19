@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	dt "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	lt "github.com/aws/aws-sdk-go-v2/service/lambda/types"
@@ -12,6 +13,50 @@ import (
 	"testing"
 	"time"
 )
+
+type boundedScanStub struct {
+	input  *dynamodb.ScanInput
+	output *dynamodb.ScanOutput
+}
+
+func (stub *boundedScanStub) Scan(_ context.Context, input *dynamodb.ScanInput, _ ...func(*dynamodb.Options)) (*dynamodb.ScanOutput, error) {
+	stub.input = input
+	return stub.output, nil
+}
+
+func TestInvitationScanThrottlingHonorsOperationDeadline(t *testing.T) {
+	client := &boundedScanStub{output: &dynamodb.ScanOutput{
+		ConsumedCapacity: &dt.ConsumedCapacity{CapacityUnits: aws.Float64(100)},
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	_, _, err := scanProjectInvitations(ctx, client, "table", nil, 20)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("scan ignored its deadline: %v", err)
+	}
+	if !aws.ToBool(client.input.ConsistentRead) || aws.ToInt32(client.input.Limit) != 100 || client.input.ReturnConsumedCapacity != dt.ReturnConsumedCapacityTotal {
+		t.Fatalf("scan lost authoritative bounded-page accounting: %+v", client.input)
+	}
+}
+
+func TestInvitationScanPreservesPaginationAndRequiresCapacityAccounting(t *testing.T) {
+	cursor := map[string]dt.AttributeValue{"PK": &dt.AttributeValueMemberS{Value: "next"}}
+	client := &boundedScanStub{output: &dynamodb.ScanOutput{
+		LastEvaluatedKey: cursor, ConsumedCapacity: &dt.ConsumedCapacity{CapacityUnits: aws.Float64(0)},
+	}}
+	_, next, err := scanProjectInvitations(context.Background(), client, "table", cursor, 20)
+	if err != nil || len(next) != 1 || len(client.input.ExclusiveStartKey) != 1 {
+		t.Fatalf("scan lost continuation: next=%v err=%v", next, err)
+	}
+	client.output.ConsumedCapacity = nil
+	if _, _, err := scanProjectInvitations(context.Background(), client, "table", nil, 20); err == nil {
+		t.Fatal("missing capacity accounting was accepted")
+	}
+	client.input = nil
+	if _, _, err := scanProjectInvitations(context.Background(), client, "table", nil, 0); err == nil || client.input != nil {
+		t.Fatal("invalid budget reached the database")
+	}
+}
 
 func fixtureOps(t *testing.T) (operations, *snapshot, *repository.ProjectInvitationControl, *bool, *int) {
 	t.Helper()

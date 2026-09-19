@@ -31,6 +31,19 @@ manual DynamoDB writes that ignore the control row are not allowed concurrent
 writers. Existing memberships, users/passwords and account/meeting queues are
 outside this command's mutation scope.
 
+Empty-queue verification requires a strongly consistent full-table scan; a
+prefix filter does not reduce the table's evaluated data or read charges.
+The command defaults to 20 scan read-capacity units per second and a 15-minute
+overall deadline. It accounts for each page's reported capacity before another
+page can start, so one bounded page can burst above that average. Alias/control
+checks and conditional writes consume additional capacity. A large table can
+exhaust the deadline: that is a failure, never an empty-queue assertion.
+Schedule an approved maintenance window and explicitly select
+`--scan-read-units-per-second` and `--timeout` for a larger operation.
+Do not replace the strong scan with an eventually consistent index or skip the
+final empty scan. After a confirmed pause followed by an interrupted drain,
+retain the pause and rerun the guard; previously deleted invitations stay deleted.
+
 The paused control row persists across older API rollback and CDK/environment
 updates. Never delete it to resume. After restoring and verifying a compatible
 API, configure the `ProjectInvitationsEnabled` GatewayStack parameter explicitly;

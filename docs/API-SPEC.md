@@ -26,6 +26,10 @@ to S3 GET presigns. PUT uploads continue to use signed S3 URLs.
 
 ### Session bootstrap and project invitations
 
+An unverified caller with matching project invitations retains the input page
+cursor until verification succeeds. Retry that cursor with refreshed verified
+claims; a page containing only unrelated identities can advance normally.
+
 `POST /api/session/bootstrap` initializes the authenticated profile and account/meeting grants,
 then processes at most 25 project invitations under a five-second budget. It returns
 `projectCursor`, `retryPending`, `pendingGrants`, `emailVerified`, `joinedAccountIds`
