@@ -176,8 +176,11 @@ pre-existing, not a native-envelope guarantee or a waiver of required coverage.
 
 Kiro's zero-exit JSON syntax retry checks recognized terminal diagnostics in
 non-JSON stdout with both existing stderr classifiers before retrying, including
-overage, quota-exception and tool-use signals. It preserves the original text
-through the existing bounded stderr scrubber and records a nonzero exit. Successfully
+overage, quota-exception and tool-use signals. Raw, control-normalized and scrubbed
+text are checked; normalization precedes secret masking for diagnostic detection.
+It preserves the normalized diagnostic through the bounded stderr scrubber and
+records a nonzero exit. Post-scrub and combined-stderr size limits are checked
+before any retry. Successfully
 parsed review JSON is not scanned as logs. This check does not change the
 nonzero-exit policy described above.
 

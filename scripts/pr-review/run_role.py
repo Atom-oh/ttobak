@@ -18,7 +18,7 @@ import sys
 import tempfile
 import time
 
-from role_review import diagnostic_failure, issue_request, issued_request, load_plan, digest, Invalid, MAX_REQUEST_BYTES, MAX_OUTPUT_BYTES, output_bytes, text_file, strict_json, canonical, parse_response
+from role_review import diagnostic_failure, issue_request, issued_request, load_plan, digest, Invalid, MAX_REQUEST_BYTES, MAX_OUTPUT_BYTES, output_bytes, text_file, strict_json, canonical, parse_response, strip_controls
 
 
 DIRECTORY = Path(__file__).resolve().parent
@@ -160,12 +160,14 @@ def scrub(text):
 
 
 def malformed_kiro_json(text):
-    """Inspect syntax without treating successfully parsed review data as logs."""
+    """Return syntax status and the bounded text that record will parse."""
+    clean = scrub(text)
+    output_bytes(clean)
     try:
-        parse_response(scrub(text))
+        parse_response(clean)
     except Invalid as error:
-        return str(error) in ("malformed_json", "invalid_json_wrapper")
-    return False
+        return str(error) in ("malformed_json", "invalid_json_wrapper"), clean
+    return False, clean
 
 
 def run(work, tag, kiro_startup=None):
@@ -229,11 +231,24 @@ def run(work, tag, kiro_startup=None):
                             code = code or 1
                             break
                         if code == 0 and output.strip():
-                            if not malformed_kiro_json(output):
+                            try:
+                                malformed, clean = malformed_kiro_json(output)
+                            except Invalid:
+                                code, output, error = 1, "", "output_byte_limit"
                                 break
-                            if FAILURE.search(output) or diagnostic_failure(output):
+                            if not malformed:
+                                break
+                            # Normalize before masking too: masking may remove a
+                            # diagnostic inside a sensitive-looking assignment.
+                            normalized = strip_controls(output)
+                            if any(FAILURE.search(text) or diagnostic_failure(text)
+                                   for text in (output, normalized, clean)):
                                 code = 1
-                                error += ("\n" if error else "") + output
+                                error += ("\n" if error else "") + normalized
+                                try:
+                                    output_bytes(error)
+                                except Invalid:
+                                    output, error = "", "output_byte_limit"
                                 break
         else:
             environment.pop("KIRO_API_KEY", None)

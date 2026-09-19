@@ -52,6 +52,8 @@ if tag == "kiro-fable":
     stdout_emitted = root / "kiro-stdout-error-emitted"
     if stdout_error.exists() and not stdout_emitted.exists():
         stdout_emitted.touch()
+        if (root / "kiro-large-stderr").exists():
+            print("x" * 700000, file=sys.stderr)
         print(stdout_error.read_text())
         raise SystemExit(0)
     malformed = root / "kiro-malformed"
@@ -215,6 +217,34 @@ class EndToEndRoleTests(unittest.TestCase):
 
     def test_kiro_zero_exit_stdout_tool_use_cannot_be_erased_by_json_retry(self):
         self.assert_kiro_stdout_terminal("using tool: synthetic", "cli_nonzero_exit")
+
+    def test_kiro_csi_split_stdout_overage_cannot_be_retried(self):
+        self.assert_kiro_stdout_terminal(
+            'Malformed JSON\nYou have reached the limit for over\x1b[31mages',
+            "cli_nonzero_exit")
+
+    def test_kiro_c1_split_stdout_tool_use_cannot_be_retried(self):
+        self.assert_kiro_stdout_terminal("using\x9b31m tool: synthetic", "cli_nonzero_exit")
+
+    def test_kiro_osc_split_stdout_quota_cannot_be_retried(self):
+        self.assert_kiro_stdout_terminal(
+            "ServiceQuota\x1b]0;synthetic\x07ExceededException", "cli_nonzero_exit")
+
+    def test_kiro_terminal_signal_is_checked_before_secret_masking(self):
+        self.assert_kiro_stdout_terminal(
+            "token='You have reached the limit for over\x1b[31mages'",
+            "cli_nonzero_exit")
+
+    def test_kiro_post_scrub_overflow_cannot_be_erased_by_json_retry(self):
+        # Each synthetic token expands from 15 to 22 characters when scrubbed.
+        self.assert_kiro_stdout_terminal(("xoxb-" + "a" * 10 + "\n") * 65000,
+                                         "output_byte_limit")
+
+    def test_kiro_combined_diagnostic_overflow_is_terminal(self):
+        (self.root / "kiro-large-stderr").touch()
+        self.assert_kiro_stdout_terminal(
+            "You have reached the limit for overages\n" + "x" * 700000,
+            "output_byte_limit")
 
     def test_kiro_valid_review_can_quote_diagnostics_without_retry(self):
         (self.root / "kiro-quoted-diagnostics").touch()
