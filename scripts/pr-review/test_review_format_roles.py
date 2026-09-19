@@ -66,6 +66,20 @@ class ReviewFormatTests(unittest.TestCase):
                 response, plan = self.response(text)
                 role_review.validate_response(response, plan, "codex")
 
+    def test_specialist_requests_receive_plain_prose_guidance(self):
+        helper = test_role_review.RoleReviewTests()
+        helper.setUp()
+        self.addCleanup(helper.tearDown)
+        helper.prepare(diff=test_role_review.patch("infra/lib/whisper-stack.ts"))
+        plan = helper.read("role-plan.json")
+        self.assertEqual({tag for tag, role in plan["roles"].items() if role["required"]},
+                         set(test_role_review.TAGS))
+        for tag, role in plan["roles"].items():
+            if role["required"]:
+                prompt = (helper.work / "roles" / f"{tag}.txt").read_text()
+                self.assertIn("Prefer plain English prose", prompt)
+                self.assertIn("never wrap those fragments in inline backticks", prompt)
+
     def heading_examples(self):
         return (
             "Authorization:\nThe handler checks the caller.",
@@ -183,6 +197,9 @@ assert role_review.format_violation(clean, role_review.PROSE_SENSITIVE_KEY) is N
     def test_unsupported_examples_in_each_prose_field(self):
         for text in (
             "Example: `password='synthetic'`.",
+            'Adds `id="user-management"` to the section.',
+            "Only `resendInvite(user.userId)` changes.",
+            'Adds `<Link href="/settings#user-management">`.',
             "Run `echo hello`.",
             "Run `first\nsecond`.",
             "Checked `unclosed.",
