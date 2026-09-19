@@ -220,12 +220,18 @@ def run(work, tag, kiro_startup=None):
                         "--agent", "inline-review", "--no-interactive", "--wrap", "never",
                         "--legacy-ui", "--agent-engine", "v1",
                     ]
+                    deadline = time.monotonic() + attempts * timeout
                     for _ in range(attempts):
                         nonce, framed_prompt, payload = issue_request(work, tag)
                         verify_kiro_startup(startup, work, plan, tag, nonce)
                         command[2] = framed_prompt + "\n" + payload
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            code, output, error = 124, "", "Review CLI budget exhausted."
+                            break
                         code, output, error = execute(
-                            command, cwd, kiro_environment(cwd, environment), "", timeout
+                            command, cwd, kiro_environment(cwd, environment), "",
+                            min(MAX_CALL_TIMEOUT, remaining)
                         )
                         if FAILURE.search(error) or diagnostic_failure(error):
                             code = code or 1
