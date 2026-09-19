@@ -37,6 +37,47 @@ DEFAULT_SENSITIVE_KEY = (
     r"secret|token|credential|passphrase|private[_-]?key|cookie|authorization|auth(?![A-Za-z])|dockerconfigjson|"
     r"connection[_-]?string|origin[_-]?verify|AccessKeyId|access[_-]?key[_-]?id|external[_-]?id)[A-Za-z0-9_.:-]*)"
 )
+DEFAULT_PATTERN = re.compile(DEFAULT_SENSITIVE_KEY)
+KEY_TOKEN = re.compile(r"[A-Za-z0-9_.:-]+", re.I)
+QUOTED_ASSIGNMENT_TAIL = re.compile(r"""(?:\\?["'])?""" + ASSIGNMENT_TAIL.pattern)
+
+
+def uses_default_pattern(pattern):
+    return pattern.pattern == DEFAULT_PATTERN.pattern and pattern.flags == DEFAULT_PATTERN.flags
+
+
+def sensitive_reference(reference, pattern):
+    if uses_default_pattern(pattern):
+        return any(pattern.fullmatch(reference, token.start(), token.end())
+                   for token in KEY_TOKEN.finditer(reference))
+    return pattern.search(reference)
+
+
+def assignment_matches(text, pattern):
+    """Locate an operator before asking the default regex to classify its key."""
+    if not uses_default_pattern(pattern):
+        combined = re.compile(pattern.pattern + r"""(?:\\?["'])?""" + ASSIGNMENT_TAIL.pattern,
+                              pattern.flags)
+        for match in combined.finditer(text):
+            yield match.start(), match
+        return
+    consumed = 0
+    for token in KEY_TOKEN.finditer(text):
+        start, end = max(token.start(), consumed), token.end()
+        if start >= end:
+            continue
+        tail = QUOTED_ASSIGNMENT_TAIL.match(text, end)
+        key_end = end
+        if tail is None:
+            # The greedy legacy matcher uses the last in-token colon when no
+            # operator follows the complete key token.
+            key_end = text.rfind(":", start, end)
+            if key_end < 0:
+                continue
+            tail = ASSIGNMENT_TAIL.match(text, key_end)
+        if pattern.fullmatch(text, start, key_end):
+            yield start, tail
+            consumed = tail.end()
 
 
 def is_assignment(text, match, quoted_key=False):
@@ -108,7 +149,7 @@ def format_violation(text, sensitive_pattern=DEFAULT_SENSITIVE_KEY):
                 return ERROR_CODE
             # Formatting only the key does not make an unfenced assignment safe.
             following = ASSIGNMENT_TAIL.match(text, line_start + closing.end())
-            if (sensitive_pattern.search(reference) and following
+            if (following and sensitive_reference(reference, sensitive_pattern)
                     and is_assignment(text, following)):
                 return ERROR_CODE
             prose.append(body[cursor:opening.start()])
@@ -117,15 +158,12 @@ def format_violation(text, sensitive_pattern=DEFAULT_SENSITIVE_KEY):
         prose.append(body[cursor:] + "\n")
     if fence is not None:
         return ERROR_CODE
-    assignment = re.compile(
-        sensitive_pattern.pattern + r"""(?:\\?["'])?""" + ASSIGNMENT_TAIL.pattern,
-        sensitive_pattern.flags)
     prose_text = "".join(prose)
-    for match in assignment.finditer(prose_text):
-        key = prose_text[match.start():match.start("spacing")]
+    for start, match in assignment_matches(prose_text, sensitive_pattern):
+        key = prose_text[start:match.start("spacing")]
         quoted_key = key.endswith(("'", '"'))
         path_key = (any(char in key for char in ".:")
-                    or (match.start() and prose_text[match.start() - 1] in "/\\."))
+                    or (start and prose_text[start - 1] in "/\\."))
         if (not quoted_key and path_key and match["operator"] == ":"
                 and not match["spacing"] and LINE_NUMBER.match(prose_text, match.end())):
             continue  # Only an adjacent numeric path:line suffix is a citation.
