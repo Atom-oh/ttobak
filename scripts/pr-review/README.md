@@ -175,7 +175,9 @@ call/blocked on the implementation. The raw-stdout classification gap is
 pre-existing, not a native-envelope guarantee or a waiver of required coverage.
 
 Kiro's zero-exit JSON syntax retry checks recognized terminal diagnostics in
-non-JSON stdout before retrying and preserves them as failures. Successfully
+non-JSON stdout with both existing stderr classifiers before retrying, including
+overage, quota-exception and tool-use signals. It preserves the original text
+through the existing bounded stderr scrubber and records a nonzero exit. Successfully
 parsed review JSON is not scanned as logs. This check does not change the
 nonzero-exit policy described above.
 

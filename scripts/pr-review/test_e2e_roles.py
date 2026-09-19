@@ -72,7 +72,11 @@ if tag == "kiro-fable":
                                 "condition":"When the branch runs",
                                 "evidence":"The changed return value loses state."}]
     if (root / "kiro-quoted-diagnostics").exists():
-        response["checks"][0]["evidence"] = "quota exceeded\nFalling back to another model"
+        response["checks"][0]["evidence"] = (
+            "quota exceeded\nFalling back to another model\n"
+            "You have reached the limit for overages\nServiceQuotaExceededException\n"
+            "using tool: synthetic"
+        )
 body = json.dumps(response)
 if tag == "claude-self":
     for marker, diagnostic in (
@@ -202,6 +206,15 @@ class EndToEndRoleTests(unittest.TestCase):
 
     def test_kiro_zero_exit_stdout_model_error_cannot_be_erased_by_json_retry(self):
         self.assert_kiro_stdout_terminal("Error: INVALID_MODEL_ID", "model_selection_diagnostic")
+
+    def test_kiro_zero_exit_stdout_overage_cannot_be_erased_by_json_retry(self):
+        self.assert_kiro_stdout_terminal("You have reached the limit for overages", "cli_nonzero_exit")
+
+    def test_kiro_zero_exit_stdout_quota_exception_cannot_be_erased_by_json_retry(self):
+        self.assert_kiro_stdout_terminal("ServiceQuotaExceededException", "cli_nonzero_exit")
+
+    def test_kiro_zero_exit_stdout_tool_use_cannot_be_erased_by_json_retry(self):
+        self.assert_kiro_stdout_terminal("using tool: synthetic", "cli_nonzero_exit")
 
     def test_kiro_valid_review_can_quote_diagnostics_without_retry(self):
         (self.root / "kiro-quoted-diagnostics").touch()
