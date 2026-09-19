@@ -79,8 +79,9 @@ valid reviews, schema/identity failures, and terminal provider diagnostics are
 not retried by this syntax check. Before a zero-exit syntax retry, recognized
 terminal diagnostics in non-JSON stdout are preserved as failures. Successfully
 parsed review JSON is not scanned as a diagnostic stream. Both existing
-classifiers inspect raw, control-normalized and scrubbed non-JSON text, so terminal
-rendering or secret masking cannot hide a recognized signal before retry.
+classifiers inspect raw, control-normalized and scrubbed text in both streams
+before a syntax retry, so terminal rendering or secret masking cannot hide a
+recognized signal.
 Post-scrub or combined-diagnostic overflow remains terminal.
 
 With all four roles active, the ordinary path uses four review calls and two

@@ -241,10 +241,18 @@ def run(work, tag, kiro_startup=None):
                             # Normalize before masking too: masking may remove a
                             # diagnostic inside a sensitive-looking assignment.
                             normalized = strip_controls(output)
+                            normalized_error = strip_controls(error)
+                            try:
+                                clean_error = scrub(error)
+                                output_bytes(clean_error)
+                            except Invalid:
+                                code, output, error = 1, "", "output_byte_limit"
+                                break
                             if any(FAILURE.search(text) or diagnostic_failure(text)
-                                   for text in (output, normalized, clean)):
+                                   for text in (output, normalized, clean,
+                                                error, normalized_error, clean_error)):
                                 code = 1
-                                error += ("\n" if error else "") + normalized
+                                error = normalized_error + ("\n" if normalized_error else "") + normalized
                                 try:
                                     output_bytes(error)
                                 except Invalid:

@@ -68,6 +68,10 @@ if tag == "kiro-fable":
             print('{"checks":[{"evidence":"An unescaped "quote"."}]}')
         if (root / "kiro-quota").exists():
             print("quota exceeded", file=sys.stderr)
+        if (root / "kiro-colored-stderr").exists():
+            print("You have reached the limit for over\x1b[31mages", file=sys.stderr)
+        if (root / "kiro-expanding-stderr").exists():
+            print(("xoxb-" + "a" * 10 + "\n") * 65000, file=sys.stderr)
         raise SystemExit(0)
     if (root / "kiro-major").exists():
         response["findings"] = [{"severity":"MAJOR","path":paths[0],
@@ -245,6 +249,26 @@ class EndToEndRoleTests(unittest.TestCase):
         self.assert_kiro_stdout_terminal(
             "You have reached the limit for overages\n" + "x" * 700000,
             "output_byte_limit")
+
+    def test_kiro_csi_split_stderr_cannot_be_erased_by_json_retry(self):
+        (self.root / "kiro-malformed-once").touch()
+        (self.root / "kiro-colored-stderr").touch()
+        self.environment["PANEL_RETRIES"] = "2"
+        calls = self.kiro_review_calls(self.run_pipeline("infra/lib/stack.ts"))
+        self.assertEqual(len(calls), 1)
+        result = json.loads((self.work / "slot/kiro-fable-result.json").read_text())
+        self.assertFalse(result["valid"])
+        self.assertIn("cli_nonzero_exit", result["failure_codes"])
+
+    def test_kiro_post_scrub_stderr_overflow_cannot_be_erased_by_json_retry(self):
+        (self.root / "kiro-malformed-once").touch()
+        (self.root / "kiro-expanding-stderr").touch()
+        self.environment["PANEL_RETRIES"] = "2"
+        calls = self.kiro_review_calls(self.run_pipeline("infra/lib/stack.ts"))
+        self.assertEqual(len(calls), 1)
+        result = json.loads((self.work / "slot/kiro-fable-result.json").read_text())
+        self.assertFalse(result["valid"])
+        self.assertIn("output_byte_limit", result["failure_codes"])
 
     def test_kiro_valid_review_can_quote_diagnostics_without_retry(self):
         (self.root / "kiro-quoted-diagnostics").touch()
