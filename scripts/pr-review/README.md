@@ -174,6 +174,11 @@ inside a native result envelope improved from two calls/pass on base to one
 call/blocked on the implementation. The raw-stdout classification gap is
 pre-existing, not a native-envelope guarantee or a waiver of required coverage.
 
+Kiro's zero-exit JSON syntax retry checks recognized terminal diagnostics in
+non-JSON stdout before retrying and preserves them as failures. Successfully
+parsed review JSON is not scanned as logs. This check does not change the
+nonzero-exit policy described above.
+
 Codex JSONL records split only at literal LF bytes; Unicode separators inside JSON
 strings remain payload. Terminal executor and final-file overflow are handled
 before transport parsing or diagnostic concatenation and cannot trigger retry.

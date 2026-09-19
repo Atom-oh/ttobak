@@ -159,13 +159,14 @@ def scrub(text):
     return process.stdout
 
 
-def malformed_kiro_json(text):
-    """Retry syntax failures only; never retry a valid review or erase diagnostics."""
+def kiro_json_failure(text):
+    """Inspect syntax before classifying non-JSON stdout as a diagnostic stream."""
     try:
         parse_response(scrub(text))
     except Invalid as error:
-        return str(error) in ("malformed_json", "invalid_json_wrapper")
-    return False
+        if str(error) in ("malformed_json", "invalid_json_wrapper"):
+            return diagnostic_failure(text) or str(error)
+    return None
 
 
 def run(work, tag, kiro_startup=None):
@@ -228,8 +229,21 @@ def run(work, tag, kiro_startup=None):
                         if FAILURE.search(error) or diagnostic_failure(error):
                             code = code or 1
                             break
-                        if code == 0 and output.strip() and not malformed_kiro_json(output):
-                            break
+                        if code == 0 and output.strip():
+                            failure = kiro_json_failure(output)
+                            native_error = {
+                                "model_selection_diagnostic": "Error: INVALID_MODEL_ID",
+                                "model_fallback_diagnostic": "Falling back to another model",
+                                "quota_diagnostic": "quota exceeded",
+                                "agent_preflight_diagnostic": "no agent with name inline-review found",
+                                "output_byte_limit": "output_byte_limit",
+                            }.get(failure)
+                            if native_error:
+                                code = 1
+                                error += ("\n" if error else "") + native_error
+                                break
+                            if failure is None:
+                                break
         else:
             environment.pop("KIRO_API_KEY", None)
             if tag == "codex":
