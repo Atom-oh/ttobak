@@ -110,7 +110,7 @@ export function UserManagement() {
     runAction(
       user.userId,
       () => adminUsersApi.resendInvite(user.userId),
-      `${user.email}에게 초대 이메일을 다시 보냈습니다.`
+      `${user.email}에게 초대 이메일 재발송을 요청했습니다. 수신되지 않으면 스팸함을 확인해주세요.`
     );
   };
 
