@@ -108,6 +108,14 @@ All current account members may add members/change assignable roles. Nobody can
 assign owner. Removal/pending-invite revocation stay owner-only (ADR-034). UI
 visibility is not the authorization boundary.
 
+Adding an existing invited user queues account membership; it does not send an
+email. The member picker says "add member", and the pending notice distinguishes
+the queued grant from mail delivery. Admins get a link to
+`/settings#user-management` for the explicit resend action; other members are
+directed to an administrator. New-user invitation and resend confirmations
+acknowledge a mail request, not inbox delivery. The configured invitation includes
+the login link and temporary password.
+
 Account document sharing creates a copy. Email sharing is a read-only reference,
 with no permission toggle. A public link is separately revocable. previewUrl is
 for converted PDF; downloadUrl remains the original file. Do not combine these

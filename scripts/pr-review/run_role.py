@@ -362,6 +362,16 @@ def main():
 def claude_schema():
     """Request structure; record still verifies exact identity and full coverage."""
     text = {"type": "string", "minLength": 1}
+    prose = {
+        **text,
+        "pattern": "^[^`]*$",
+        "description": (
+            "Use English prose and unquoted symbol/path references, without backticks. "
+            "Describe assignments and calls in prose instead of inline code snippets. "
+            "If an example is necessary, use a closed top-level tilde fence with "
+            "delimiters on their own lines. Existing review validation still applies."
+        ),
+    }
 
     def object_schema(properties):
         return {"type": "object", "properties": properties,
@@ -370,12 +380,12 @@ def claude_schema():
     return object_schema({
         "head_sha": text, "role": text, "scope_complete": {"type": "boolean"},
         "reviewed_paths": {"type": "array", "items": text},
-        "checks": {"type": "array", "items": object_schema({"path": text, "evidence": text})},
+        "checks": {"type": "array", "items": object_schema({"path": text, "evidence": prose})},
         "findings": {"type": "array", "items": object_schema({
             "severity": {"type": "string", "enum": ["CRITICAL", "MAJOR", "MINOR", "INFO"]},
-            "path": text, "condition": text, "evidence": text,
+            "path": text, "condition": prose, "evidence": prose,
         })},
-        "uncertainties": {"type": "array", "items": text},
+        "uncertainties": {"type": "array", "items": prose},
     })
 
 

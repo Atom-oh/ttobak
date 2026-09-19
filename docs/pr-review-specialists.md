@@ -67,6 +67,13 @@ retains the existing decoding limits. A complete original blocking chair verdict
 survives a formatting failure as a static FAIL with details withheld; quota and
 output-limit failures keep precedence.
 
+Review prompts prefer plain prose and unquoted references to avoid invalid inline
+assignments, argument-bearing calls, and HTML/JSX fragments. Claude's specialist
+schema excludes backticks from prose fields before host validation; necessary
+examples can use top-level tilde fences. This generation constraint does not
+replace identity, coverage, confidentiality, or verdict checks. Chair output that
+ignores the common format guidance still fails closed.
+
 With all four roles active, the ordinary path uses four review calls and two
 Kiro startup checks. Adjudication adds one chair call; retries and fallback add
 calls only when needed. This reduces duplicate requests, but is not a measured

@@ -31,6 +31,8 @@ export class WhisperStack extends cdk.Stack {
 
   constructor(scope: Construct, id: string, props: WhisperStackProps) {
     super(scope, id, props);
+    // Mixed instance policies require a launch template, including in test apps.
+    this.node.setContext('@aws-cdk/aws-autoscaling:generateLaunchTemplateInsteadOfLaunchConfig', true);
 
     const vpc = ec2.Vpc.fromLookup(this, 'WhisperVpc', { vpcId: props.vpcId });
 
@@ -59,21 +61,13 @@ export class WhisperStack extends cdk.Stack {
     const asg = new autoscaling.AutoScalingGroup(this, 'WhisperAsg', {
       autoScalingGroupName: 'ttobak-whisper-asg',
       vpc,
-      // Deliberately no `availabilityZones` filter: the imported VPC
-      // (`vpc-04e77172c67f19814`, an externally-owned FsiDemoVpc) only has
-      // PRIVATE_WITH_EGRESS subnets in 2a/2b. A hardcoded AZ allowlist that
-      // doesn't match the VPC's actual AZs silently collapses to whichever
-      // AZs DO intersect -- here just 2a -- pinning every Spot request to a
-      // single AZ's g5.xlarge capacity and causing repeated
-      // InsufficientInstanceCapacity retries (~7 min cold-start delay
-      // observed) even while capacity was available in 2c/2d (per AWS's own
-      // error message). Take every AZ the VPC actually offers instead --
-      // today that's still only 2a+2b, since this VPC has no subnets in
-      // 2c/2d; getting there would need a VPC/subnet change, not this one.
+      // The externally owned VPC has private egress subnets only in 2a/2b.
+      // Use both; instance-type diversification below makes 2b usable for
+      // GPU work without adding public subnets or changing the shared VPC.
       vpcSubnets: {
         subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
       },
-      instanceType: new ec2.InstanceType('g5.xlarge'),
+      instanceType: new ec2.InstanceType('g4dn.xlarge'),
       machineImage: ecs.EcsOptimizedImage.amazonLinux2(
         ecs.AmiHardwareType.GPU,
       ),
@@ -102,9 +96,34 @@ export class WhisperStack extends cdk.Stack {
       minCapacity: 0,
       maxCapacity: 10,
       desiredCapacity: 0,
-      spotPrice: '1.10',
       newInstancesProtectedFromScaleIn: false,
     });
+
+    // Retain the generated launch template, instance role and ECS user data.
+    // A single g5 pool cannot start when 2a is exhausted: 2b has no g5 offering.
+    // Both one-GPU alternatives are offered in both private AZs; an unsupported
+    // type/AZ combination can reject the entire EC2 Fleet request.
+    // Market options belong on the mixed policy, not on its launch template.
+    const cfnAsg = asg.node.defaultChild as autoscaling.CfnAutoScalingGroup;
+    cfnAsg.mixedInstancesPolicy = {
+      launchTemplate: {
+        launchTemplateSpecification: cfnAsg.launchTemplate!,
+        overrides: [
+          { instanceType: 'g4dn.xlarge' },
+          { instanceType: 'g4dn.2xlarge' },
+        ],
+      },
+      instancesDistribution: {
+        // Keep the first active worker off Spot so a regional Spot shortage
+        // cannot strand every meeting. min/desired=0 still allows zero-scale.
+        onDemandBaseCapacity: 1,
+        onDemandAllocationStrategy: 'prioritized',
+        onDemandPercentageAboveBaseCapacity: 0,
+        spotAllocationStrategy: 'price-capacity-optimized',
+        spotMaxPrice: '1.10',
+      },
+    };
+    cfnAsg.launchTemplate = undefined;
 
     // ECS Capacity Provider with managed scaling
     const capacityProvider = new ecs.AsgCapacityProvider(this, 'WhisperCapacityProvider', {
@@ -168,7 +187,7 @@ export class WhisperStack extends cdk.Stack {
     this.taskDefinition.addContainer('whisper', {
       containerName: WHISPER_CONTAINER_NAME,
       image: ecs.ContainerImage.fromEcrRepository(this.ecrRepository, 'latest'),
-      memoryLimitMiB: 12288, // 12GB (g5.xlarge has 16GB system RAM, reserve 4GB for OS/ECS agent)
+      memoryLimitMiB: 12288, // 12GB (smallest host has 16GB; reserve 4GB for OS/ECS agent)
       gpuCount: 1,
       environment: {
         BUCKET_NAME: props.bucket.bucketName,
