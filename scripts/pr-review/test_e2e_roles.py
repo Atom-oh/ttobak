@@ -47,6 +47,20 @@ response = {"head_sha":plan["head_sha"],"role":role["role"],"scope_complete":Tru
 if (root / "major").exists() and tag == "codex":
     response["findings"] = [{"severity":"MAJOR","path":paths[0],"condition":"When the branch runs",
                             "evidence":"The changed return value loses state."}]
+if tag == "kiro-fable":
+    malformed = root / "kiro-malformed"
+    once = root / "kiro-malformed-once"
+    emitted = root / "kiro-malformed-emitted"
+    if malformed.exists() or (once.exists() and not emitted.exists()):
+        emitted.touch()
+        print('{"checks":[{"evidence":"An unescaped "quote"."}]}')
+        if (root / "kiro-quota").exists():
+            print("quota exceeded", file=sys.stderr)
+        raise SystemExit(0)
+    if (root / "kiro-major").exists():
+        response["findings"] = [{"severity":"MAJOR","path":paths[0],
+                                "condition":"When the branch runs",
+                                "evidence":"The changed return value loses state."}]
 body = json.dumps(response)
 if tag == "claude-self":
     for marker, diagnostic in (
@@ -158,6 +172,51 @@ if (root / "claude-nonzero").exists() and tag == "claude-self":
 
 
 class EndToEndRoleTests(unittest.TestCase):
+    def kiro_review_calls(self, calls):
+        return [call for call in calls if call["name"] == "kiro-cli"
+                and not call["args"][1].startswith("Kiro startup safety check.")
+                and "claude-opus-5" in call["args"]]
+
+    def test_malformed_kiro_json_uses_existing_retry_budget_and_fresh_request(self):
+        (self.root / "kiro-malformed-once").touch()
+        self.environment["PANEL_RETRIES"] = "2"
+        calls = self.kiro_review_calls(self.run_pipeline("infra/lib/stack.ts"))
+        self.assertEqual(len(calls), 2)
+        self.assertNotEqual(calls[0]["args"][1], calls[1]["args"][1])
+        result = json.loads((self.work / "slot/kiro-fable-result.json").read_text())
+        self.assertTrue(result["valid"])
+        self.assertTrue((self.work / "review.md").read_text().endswith("VERDICT: PASS\n"))
+
+    def test_malformed_kiro_json_remains_blocked_after_retry_exhaustion(self):
+        (self.root / "kiro-malformed").touch()
+        self.environment["PANEL_RETRIES"] = "2"
+        calls = self.kiro_review_calls(self.run_pipeline("infra/lib/stack.ts"))
+        self.assertEqual(len(calls), 2)
+        result = json.loads((self.work / "slot/kiro-fable-result.json").read_text())
+        self.assertFalse(result["valid"])
+        self.assertIn("malformed_json", result["failure_codes"])
+        self.assertTrue((self.work / "review.md").read_text().endswith("VERDICT: FAIL\n"))
+
+    def test_kiro_quota_diagnostic_cannot_be_erased_by_json_retry(self):
+        (self.root / "kiro-malformed-once").touch()
+        (self.root / "kiro-quota").touch()
+        self.environment["PANEL_RETRIES"] = "2"
+        calls = self.kiro_review_calls(self.run_pipeline("infra/lib/stack.ts"))
+        self.assertEqual(len(calls), 1)
+        result = json.loads((self.work / "slot/kiro-fable-result.json").read_text())
+        self.assertFalse(result["valid"])
+        self.assertIn("quota_diagnostic", result["failure_codes"])
+
+    def test_valid_kiro_major_is_adjudicated_without_retry(self):
+        (self.root / "kiro-major").touch()
+        self.environment["PANEL_RETRIES"] = "2"
+        calls = self.kiro_review_calls(self.run_pipeline("infra/lib/stack.ts"))
+        self.assertEqual(len(calls), 1)
+        result = json.loads((self.work / "slot/kiro-fable-result.json").read_text())
+        self.assertTrue(result["valid"])
+        self.assertEqual(result["response"]["findings"][0]["severity"], "MAJOR")
+        self.assertTrue((self.work / "review.md").read_text().endswith("VERDICT: FAIL\n"))
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

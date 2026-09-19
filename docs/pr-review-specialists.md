@@ -73,6 +73,10 @@ schema excludes backticks from prose fields before host validation; necessary
 examples can use top-level tilde fences. This generation constraint does not
 replace identity, coverage, confidentiality, or verdict checks. Chair output that
 ignores the common format guidance still fails closed.
+Kiro responses with malformed JSON or an invalid JSON wrapper use the existing
+bounded retry budget and a fresh request nonce. Exhaustion still blocks coverage;
+valid reviews, schema/identity failures, and terminal provider diagnostics are
+not retried by this syntax check.
 
 With all four roles active, the ordinary path uses four review calls and two
 Kiro startup checks. Adjudication adds one chair call; retries and fallback add

@@ -18,7 +18,7 @@ import sys
 import tempfile
 import time
 
-from role_review import diagnostic_failure, issue_request, issued_request, load_plan, digest, Invalid, MAX_REQUEST_BYTES, MAX_OUTPUT_BYTES, output_bytes, text_file, strict_json, canonical
+from role_review import diagnostic_failure, issue_request, issued_request, load_plan, digest, Invalid, MAX_REQUEST_BYTES, MAX_OUTPUT_BYTES, output_bytes, text_file, strict_json, canonical, parse_response
 
 
 DIRECTORY = Path(__file__).resolve().parent
@@ -159,6 +159,15 @@ def scrub(text):
     return process.stdout
 
 
+def malformed_kiro_json(text):
+    """Retry syntax failures only; never retry a valid review or erase diagnostics."""
+    try:
+        parse_response(scrub(text))
+    except Invalid as error:
+        return str(error) in ("malformed_json", "invalid_json_wrapper")
+    return False
+
+
 def run(work, tag, kiro_startup=None):
     plan = load_plan(work)
     role = plan["roles"][tag]
@@ -219,7 +228,7 @@ def run(work, tag, kiro_startup=None):
                         if FAILURE.search(error) or diagnostic_failure(error):
                             code = code or 1
                             break
-                        if code == 0 and output.strip():
+                        if code == 0 and output.strip() and not malformed_kiro_json(output):
                             break
         else:
             environment.pop("KIRO_API_KEY", None)
