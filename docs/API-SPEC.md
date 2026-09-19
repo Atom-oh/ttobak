@@ -60,7 +60,8 @@ supported; supplying both forms, invalid IDs or a mismatched cursor returns 400.
 An empty selection is unfiltered. Preserve normalized selection/tab/caller across
 continuation requests; restart pagination when filters change.
 
-`joinedAccountIds` accepts at most 100 normalized discovery hints from bootstrap.
+`joinedAccountIds` accepts at most 100 normalized discovery hints on the first
+page only. Omit it with `cursor`; the continuation already carries those hints.
 These are not filters or grants: current canonical membership is rechecked before
 any team content is returned. The browser retains hints for 60 seconds, bound to
 the current token's user ID, to bridge reverse-index propagation.

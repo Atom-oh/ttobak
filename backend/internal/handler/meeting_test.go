@@ -572,11 +572,17 @@ func TestErrorResponseFormat(t *testing.T) {
 }
 
 func TestMeetingListRejectsInvalidBootstrapDiscoveryHints(t *testing.T) {
-	h, _ := newStubMeetingHandler()
-	req := withUserCtx(httptest.NewRequest(http.MethodGet, "/api/meetings?joinedAccountIds=../private", nil), "caller")
-	w := httptest.NewRecorder()
-	h.ListMeetings(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	for _, query := range []string{
+		"joinedAccountIds=../private",
+		"cursor=next-page&joinedAccountIds=00000000-0000-4000-8000-000000000001",
+		"joinedAccountIds=&joinedAccountIds=",
+	} {
+		handler, _ := newStubMeetingHandler()
+		request := withUserCtx(httptest.NewRequest(http.MethodGet, "/api/meetings?"+query, nil), "caller")
+		response := httptest.NewRecorder()
+		handler.ListMeetings(response, request)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("query=%s status=%d body=%s", query, response.Code, response.Body.String())
+		}
 	}
 }
