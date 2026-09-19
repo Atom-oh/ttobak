@@ -24,6 +24,35 @@ to S3 GET presigns. PUT uploads continue to use signed S3 URLs.
 
 ## Contracts that require care
 
+### Session bootstrap and project invitations
+
+Core `POST /api/session/bootstrap` initializes the authenticated profile and
+account/meeting grants. It reports project capability disabled; bounded project
+pages are supplied by the companion guard/bootstrap change. Keep pending writers disabled until that
+consumer and the client are deployed and verified.
+
+Owner-only `POST /api/projects/{projectId}/members` accepts `{ email, allowPending? }`
+(maximum 2,048 body bytes; email 254 bytes). It resolves current Cognito identity:
+unknown users return 409 `INVITATION_REQUIRED`, disabled users 409 `USER_DISABLED`.
+User creation/mail remains the separate admin-only settings invitation action.
+Legacy clients can atomically add a registered verified user only if no pending
+grant exists. Queueing requires `allowPending: true`; unsupported clients get
+409 `CLIENT_UPGRADE_REQUIRED`. Queued writes require `PROJECT_INVITATIONS_ENABLED=true`; absent/other values fail closed
+with 503 `INVITATIONS_PAUSED`. A queued response has `pending: true`, email,
+verification state and empty userId. A recreated identity never receives the old
+profile's user ID. Registered-member addition is idempotent.
+
+Owner-only `GET /api/projects/{projectId}/members/pending?cursor=...` returns
+`{ members: [{ email, expiresAt }], nextCursor? }`. Each page scans at most 25
+reverse rows and revalidates canonical grants; empty pages may have continuation.
+`DELETE /api/projects/{projectId}/members/pending` accepts `{ email }` and returns
+204 after deletion, or 409 for missing/stale invitations or existing membership.
+Already-joined users use member removal; email aliases do not prove old recipients.
+A project/sub latest-invitation marker invalidates prior email-specific grants.
+Member removal and legacy direct addition retire that marker atomically. Project
+cleanup version conflicts remain retryable. User queues are isolated from old readers; transactional rows, TTL and
+the required incompatible-API rollback drain are specified in ADR-044.
+
 ### Meetings and pagination
 
 `GET /api/meetings` accepts `tab=all|shared`, `limit`, opaque `cursor`, and optional
@@ -31,6 +60,12 @@ comma-separated `accountIds` (at most 100 distinct IDs). Legacy `accountId` rema
 supported; supplying both forms, invalid IDs or a mismatched cursor returns 400.
 An empty selection is unfiltered. Preserve normalized selection/tab/caller across
 continuation requests; restart pagination when filters change.
+
+`joinedAccountIds` accepts at most 100 normalized discovery hints on the first
+page only. Omit it with `cursor`; the continuation already carries those hints.
+These are not filters or grants: current canonical membership is rechecked before
+any team content is returned. The browser retains hints for 60 seconds, bound to
+the current token's user ID, to bridge reverse-index propagation.
 
 The service lists owned, direct-shared and inherited account-team meetings. These
 streams retain their own ordering; there is no global chronological merge. A
@@ -361,6 +396,7 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | GET | `/api/health` | `healthHandler.Health` |
 | GET | `/api/auth/allowed-domains` | `settingsHandler.GetAllowedDomains` |
 | GET | `/api/public/docs/{token}` | `documentHandler.PublicGetDoc` |
+| POST | `/api/session/bootstrap` | `sessionHandler.Bootstrap` |
 | GET | `/api/accounts` | `accountHandler.ListAccounts` |
 | POST | `/api/accounts` | `accountHandler.CreateAccount` |
 | GET | `/api/accounts/{accountId}` | `accountHandler.GetAccount` |
@@ -472,6 +508,8 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | PUT | `/api/projects/{projectId}` | `projectHandler.UpdateProject` |
 | DELETE | `/api/projects/{projectId}` | `projectHandler.DeleteProject` |
 | POST | `/api/projects/{projectId}/members` | `projectHandler.AddMember` |
+| GET | `/api/projects/{projectId}/members/pending` | `projectHandler.ListPendingMembers` |
+| DELETE | `/api/projects/{projectId}/members/pending` | `projectHandler.RevokePendingMember` |
 | DELETE | `/api/projects/{projectId}/members/{userId}` | `projectHandler.RemoveMember` |
 | POST | `/api/projects/{projectId}/accounts` | `projectHandler.LinkAccount` |
 | DELETE | `/api/projects/{projectId}/accounts/{accountId}` | `projectHandler.UnlinkAccount` |

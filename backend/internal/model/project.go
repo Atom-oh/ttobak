@@ -10,12 +10,15 @@ import "time"
 // Project meeting ref:  PK: PROJECT#{projectId}, SK: MEETINGREF#{occurredAt}#{meetingId}
 // Project research ref: PK: PROJECT#{projectId}, SK: RESEARCHREF#{researchId}
 const (
-	PrefixProject            = "PROJECT#"
-	SKProjectConfig          = "CONFIG"
-	PrefixProjectMember      = PrefixMember
-	PrefixProjectRef         = "PROJECTREF#"
-	PrefixProjectMeetingRef  = PrefixMeetingRef
-	PrefixProjectResearchRef = PrefixResearchRef
+	PrefixProjectInvites       = "PROJECT_INVITES#"
+	PrefixProject              = "PROJECT#"
+	SKProjectConfig            = "CONFIG"
+	PrefixProjectMember        = PrefixMember
+	PrefixPendingProject       = "PENDING_PROJECT#"
+	PrefixPendingProjectMember = "PENDING_MEMBER#"
+	PrefixProjectRef           = "PROJECTREF#"
+	PrefixProjectMeetingRef    = PrefixMeetingRef
+	PrefixProjectResearchRef   = PrefixResearchRef
 
 	EntityTypeProject            = "PROJECT"
 	EntityTypeProjectIndex       = "PROJECT_INDEX"
@@ -138,12 +141,15 @@ type ProjectSummary struct {
 }
 
 type ProjectMemberDTO struct {
-	UserID string `json:"userId"`
-	Email  string `json:"email,omitempty"`
+	Pending       bool   `json:"pending,omitempty"`
+	EmailVerified bool   `json:"emailVerified"`
+	UserID        string `json:"userId"`
+	Email         string `json:"email,omitempty"`
 }
 
 type AddProjectMemberRequest struct {
-	Email string `json:"email"`
+	AllowPending bool   `json:"allowPending,omitempty"`
+	Email        string `json:"email"`
 }
 
 type LinkProjectAccountRequest struct {
@@ -195,4 +201,14 @@ type ProjectBrief struct {
 	InsightsByType map[string][]ProjectInsightDTO `json:"insightsByType"`
 	Meetings       []ProjectMeetingRefDTO         `json:"meetings"`
 	Research       []ProjectResearchDTO           `json:"research"`
+}
+
+// PendingProjectMemberPage is an owner-only, bounded view of canonical pending grants.
+type PendingProjectMemberDTO struct {
+	Email     string `json:"email"`
+	ExpiresAt int64  `json:"expiresAt"`
+}
+type PendingProjectMemberPage struct {
+	Members    []PendingProjectMemberDTO `json:"members"`
+	NextCursor string                    `json:"nextCursor,omitempty"`
 }

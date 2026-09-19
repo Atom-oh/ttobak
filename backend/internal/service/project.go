@@ -62,7 +62,9 @@ type projectRepo interface {
 type ProjectRepo = projectRepo
 
 type ProjectService struct {
-	repo projectRepo
+	repo          projectRepo
+	cognito       cognitoAdminAPI
+	cognitoPoolID string
 }
 
 func NewProjectService(repo *repository.DynamoDBRepository) *ProjectService {
@@ -364,30 +366,11 @@ func (s *ProjectService) AddMember(ctx context.Context, requesterUserID, project
 	if req == nil || strings.TrimSpace(req.Email) == "" {
 		return nil, ErrInvalidInput
 	}
-	user, err := s.repo.GetUserByEmail(ctx, strings.TrimSpace(req.Email))
+	email, err := normalizeInvitationEmail(req.Email)
 	if err != nil {
 		return nil, err
 	}
-	if user == nil {
-		return nil, ErrUserNotFound
-	}
-	existing, err := s.repo.GetProjectMember(ctx, projectID, user.UserID)
-	if err != nil {
-		return nil, err
-	}
-	if existing != nil {
-		return nil, ErrMemberExists
-	}
-	member := &model.ProjectMember{
-		PK: model.PrefixProject + projectID, SK: model.PrefixProjectMember + user.UserID,
-		ProjectID: projectID, UserID: user.UserID, Email: user.Email,
-		AddedAt: time.Now().UTC(), GSI1PK: model.PrefixUser + user.UserID,
-		GSI1SK: model.PrefixProject + projectID, EntityType: model.EntityTypeProjectMember,
-	}
-	if err := s.repo.PutProjectMember(ctx, member); err != nil {
-		return nil, err
-	}
-	return &model.ProjectMemberDTO{UserID: user.UserID, Email: user.Email}, nil
+	return s.addOnboardingMember(ctx, requesterUserID, projectID, email, req.AllowPending)
 }
 
 // RemoveMember revokes a direct membership (owner only). Without this, a

@@ -570,3 +570,19 @@ func TestErrorResponseFormat(t *testing.T) {
 		t.Error("error response missing message field")
 	}
 }
+
+func TestMeetingListRejectsInvalidBootstrapDiscoveryHints(t *testing.T) {
+	for _, query := range []string{
+		"joinedAccountIds=../private",
+		"cursor=next-page&joinedAccountIds=00000000-0000-4000-8000-000000000001",
+		"joinedAccountIds=&joinedAccountIds=",
+	} {
+		handler, _ := newStubMeetingHandler()
+		request := withUserCtx(httptest.NewRequest(http.MethodGet, "/api/meetings?"+query, nil), "caller")
+		response := httptest.NewRecorder()
+		handler.ListMeetings(response, request)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("query=%s status=%d body=%s", query, response.Code, response.Body.String())
+		}
+	}
+}

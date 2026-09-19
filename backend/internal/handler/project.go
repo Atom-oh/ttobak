@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/ttobak/backend/internal/middleware"
 	"github.com/ttobak/backend/internal/model"
+	"github.com/ttobak/backend/internal/repository"
 	"github.com/ttobak/backend/internal/service"
 )
 
@@ -34,6 +35,20 @@ func projectIDFromRequest(w http.ResponseWriter, r *http.Request) (string, bool)
 
 func writeProjectError(w http.ResponseWriter, err error, forbiddenMessage string) {
 	switch {
+	case errors.Is(err, service.ErrClientUpgradeRequired):
+		writeError(w, http.StatusConflict, "CLIENT_UPGRADE_REQUIRED", "화면을 새로고침한 뒤 가입 대기 초대를 다시 요청하세요")
+	case errors.Is(err, service.ErrInvitationsPaused):
+		writeError(w, http.StatusServiceUnavailable, "INVITATIONS_PAUSED", "프로젝트 초대가 일시 중지됐습니다. 잠시 후 다시 시도해주세요")
+	case errors.Is(err, service.ErrInvitationRequired):
+		writeError(w, http.StatusConflict, "INVITATION_REQUIRED", "먼저 관리자가 사용자 초대 메일을 보내야 합니다")
+	case errors.Is(err, service.ErrUserDisabled):
+		writeError(w, http.StatusConflict, "USER_DISABLED", "비활성 사용자입니다. 관리자에게 문의하세요")
+	case errors.Is(err, service.ErrSelfShare):
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "프로젝트 소유자는 이미 접근할 수 있습니다")
+	case errors.Is(err, service.ErrPendingAlreadyClaimed), errors.Is(err, repository.ErrConditionFailed):
+		writeError(w, http.StatusConflict, "CONFLICT", "멤버십이 변경됐습니다. 목록을 새로 확인하세요")
+	case errors.Is(err, repository.ErrInvalidCursor):
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid cursor")
 	case errors.Is(err, service.ErrForbidden):
 		writeError(w, http.StatusForbidden, model.ErrCodeForbidden, forbiddenMessage)
 	case errors.Is(err, service.ErrNotFound):
@@ -163,7 +178,7 @@ func (h *ProjectHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req model.AddProjectMemberRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Email) == "" {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2048)).Decode(&req); err != nil || strings.TrimSpace(req.Email) == "" {
 		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "email is required")
 		return
 	}
@@ -380,4 +395,33 @@ func (h *ProjectHandler) ListAccountProjects(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"projects": projects})
+}
+
+func (h *ProjectHandler) ListPendingMembers(w http.ResponseWriter, r *http.Request) {
+	projectID, ok := projectIDFromRequest(w, r)
+	if !ok {
+		return
+	}
+	result, err := h.projectService.ListPendingMembers(r.Context(), middleware.GetUserID(r.Context()), projectID, r.URL.Query().Get("cursor"))
+	if err != nil {
+		writeProjectError(w, err, "Only the owner can list pending members")
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+func (h *ProjectHandler) RevokePendingMember(w http.ResponseWriter, r *http.Request) {
+	projectID, ok := projectIDFromRequest(w, r)
+	if !ok {
+		return
+	}
+	var req model.AddProjectMemberRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2048)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid request")
+		return
+	}
+	if err := h.projectService.RevokePendingMember(r.Context(), middleware.GetUserID(r.Context()), projectID, req.Email); err != nil {
+		writeProjectError(w, err, "Only the owner can revoke pending members")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

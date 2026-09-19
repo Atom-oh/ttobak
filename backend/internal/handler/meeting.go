@@ -116,11 +116,23 @@ func (h *MeetingHandler) ListMeetings(w http.ResponseWriter, r *http.Request) {
 	email := middleware.GetUserEmail(ctx)
 	name := middleware.GetUserName(ctx)
 	var joinedAccountIDs []string
+	if len(query["joinedAccountIds"]) > 1 || query.Has("joinedAccountIds") && query.Get("cursor") != "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Discovery hints belong only on the first page")
+		return
+	}
+	if raw := query.Get("joinedAccountIds"); raw != "" {
+		joinedAccountIDs, err = service.ParseMeetingAccountIDs(raw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid membership discovery hints")
+			return
+		}
+	}
+
 	if email != "" {
 		// Failures are logged inside the materializer. Carry freshly joined
 		// account IDs to the list so GSI propagation cannot hide this
 		// request's newly granted team membership.
-		joinedAccountIDs = h.meetingService.EnsureProfileAndMaterializePendingShares(ctx, userID, email, name, middleware.GetEmailVerified(ctx))
+		joinedAccountIDs = append(joinedAccountIDs, h.meetingService.EnsureProfileAndMaterializePendingShares(ctx, userID, email, name, middleware.GetEmailVerified(ctx))...)
 	}
 
 	tab := query.Get("tab")

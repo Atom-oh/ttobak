@@ -2590,8 +2590,12 @@ func (r *DynamoDBRepository) GetOrCreateUser(ctx context.Context, userID, email,
 }
 
 func pendingShareKey(email, sk string) map[string]types.AttributeValue {
+	prefix := model.PrefixPendingShare
+	if strings.HasPrefix(sk, model.PrefixPendingProject) {
+		prefix = model.PrefixProjectInvites
+	}
 	return map[string]types.AttributeValue{
-		"PK": &types.AttributeValueMemberS{Value: model.PrefixPendingShare + strings.ToLower(email)},
+		"PK": &types.AttributeValueMemberS{Value: prefix + strings.ToLower(email)},
 		"SK": &types.AttributeValueMemberS{Value: sk},
 	}
 }
@@ -2602,6 +2606,9 @@ func pendingShareKey(email, sk string) map[string]types.AttributeValue {
 // (email, meetingId) pair -- a repeat invite to the same target simply
 // refreshes the queued role/permission rather than erroring.
 func (r *DynamoDBRepository) PutPendingShare(ctx context.Context, share *model.PendingShare) error {
+	if share.Kind == model.PendingShareKindProject {
+		return r.PutPendingProjectShare(ctx, share)
+	}
 	share.Email = strings.ToLower(share.Email)
 	share.PK = model.PrefixPendingShare + share.Email
 	switch share.Kind {
@@ -2720,6 +2727,9 @@ func (r *DynamoDBRepository) DeletePendingShare(ctx context.Context, email, sk s
 // fresh row isn't this call's to delete, so it's treated as a no-op, not
 // an error.
 func (r *DynamoDBRepository) DeletePendingShareIfVersionMatches(ctx context.Context, email string, p *model.PendingShare) error {
+	if p.Kind == model.PendingShareKindProject {
+		return r.DeletePendingProjectShareIfMatch(ctx, p)
+	}
 	expr, err := expression.NewBuilder().WithCondition(
 		expression.Name("createdAt").Equal(expression.Value(p.CreatedAt)),
 	).Build()

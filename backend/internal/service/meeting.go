@@ -347,7 +347,16 @@ func (s *MeetingService) ListMeetings(ctx context.Context, userID, tab, cursor, 
 			return s.listTeamSharedMeetings(ctx, userID, tab, accountID, limit, cursor, nil)
 		}
 		cursor = continuation.RegularCursor
-		joinedAccountIDs = append(joinedAccountIDs, continuation.Accounts...)
+		joinedAccountIDs = append(append([]string(nil), joinedAccountIDs...), continuation.Accounts...)
+	}
+	combined := joinedAccountIDs
+	joinedAccountIDs = nil
+	seen := make(map[string]bool, len(combined))
+	for _, id := range combined {
+		if id != "" && !seen[id] {
+			seen[id] = true
+			joinedAccountIDs = append(joinedAccountIDs, id)
+		}
 	}
 	// Share rows do not contain accountId. Resolve their canonical meetings
 	// and advance empty filtered pages here; owned-meeting filtering happens
@@ -1218,6 +1227,14 @@ func (s *MeetingService) MaterializePendingShares(ctx context.Context, userID, e
 // alone doesn't distinguish a permanently dead grant from a transient race.
 func (s *MeetingService) materializeOne(ctx context.Context, userID, email string, p *model.PendingShare) (bool, error) {
 	switch p.Kind {
+	case model.PendingShareKindProject:
+		store, ok := s.repo.(interface {
+			MaterializePendingProjectGrant(context.Context, *model.PendingShare, string, string) (bool, error)
+		})
+		if !ok {
+			return false, fmt.Errorf("project invitation store unavailable")
+		}
+		return store.MaterializePendingProjectGrant(ctx, p, userID, email)
 	case model.PendingShareKindAccount:
 		return s.repo.MaterializePendingAccountGrant(ctx, p, userID, email)
 	case model.PendingShareKindMeeting:
