@@ -1,6 +1,7 @@
 """Claude's CLI envelope is transport metadata, never a replacement review."""
 import json
 from itertools import permutations
+import re
 import unittest
 
 import role_review
@@ -8,6 +9,54 @@ import run_role
 
 
 class ClaudeTransportTests(unittest.TestCase):
+    def test_prose_schema_prevents_observed_inline_code_failures(self):
+        properties = run_role.claude_schema()["properties"]
+        prose_fields = (
+            properties["checks"]["items"]["properties"]["evidence"],
+            properties["findings"]["items"]["properties"]["condition"],
+            properties["findings"]["items"]["properties"]["evidence"],
+            properties["uncertainties"]["items"],
+        )
+        for field in prose_fields:
+            for invalid in (
+                'Adds `id="user-management"` to the section.',
+                "The `admin invite` call is unchanged.",
+                "Only `resendInvite(user.userId)` changes.",
+                'Adds `<Link href="/settings#user-management">`.',
+            ):
+                with self.subTest(invalid=invalid):
+                    self.assertIsNone(re.search(field["pattern"], invalid))
+                    self.assertEqual(role_review.format_violation(
+                        invalid, role_review.PROSE_SENSITIVE_KEY), "unsupported_review_format")
+            for valid in (
+                "The resendInvite call keeps its userId argument.",
+                "Checked src/auth.ts and the /settings#user-management target.",
+                'Example:\n~~~html\n<p id="example">Text</p>\n~~~\nThe ID is unique.',
+            ):
+                with self.subTest(valid=valid):
+                    self.assertIsNotNone(re.search(field["pattern"], valid))
+                    self.assertIsNone(role_review.format_violation(
+                        valid, role_review.PROSE_SENSITIVE_KEY))
+        for field in (
+            properties["head_sha"], properties["role"], properties["reviewed_paths"]["items"],
+            properties["checks"]["items"]["properties"]["path"],
+            properties["findings"]["items"]["properties"]["path"],
+        ):
+            self.assertNotIn("pattern", field)
+
+    def test_producer_schema_does_not_replace_host_format_validation(self):
+        response = dict(self.response, checks=[{
+            "path": self.response["reviewed_paths"][0],
+            "evidence": "Run `echo synthetic`.",
+        }])
+        output, error, complete = self.decode(json.dumps(dict(
+            self.envelope, structured_output=response)))
+        self.assertTrue(complete, error)
+        plan = {"head_sha": response["head_sha"], "roles": {
+            "claude-self": {"role": response["role"], "paths": response["reviewed_paths"]}}}
+        with self.assertRaisesRegex(role_review.Invalid, "^unsupported_review_format$"):
+            role_review.validate_response(role_review.parse_response(output), plan, "claude-self")
+
     def setUp(self):
         self.response = {
             "head_sha": "a" * 40, "role": "requirements", "scope_complete": True,

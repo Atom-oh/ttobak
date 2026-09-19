@@ -234,6 +234,15 @@ class EndToEndRoleTests(unittest.TestCase):
         call = next(call for call in calls if call["name"] == "claude")
         self.assertEqual(call["args"][1], (self.work / "requests/claude-self.prompt").read_text())
         self.assertEqual(call["stdin"], (self.work / "requests/claude-self.input").read_text())
+        schema = json.loads(call["args"][call["args"].index("--json-schema") + 1])
+        properties = schema["properties"]
+        prose_fields = (
+            properties["checks"]["items"]["properties"]["evidence"],
+            properties["findings"]["items"]["properties"]["condition"],
+            properties["findings"]["items"]["properties"]["evidence"],
+            properties["uncertainties"]["items"],
+        )
+        self.assertTrue(all(field.get("pattern") == "^[^`]*$" for field in prose_fields))
         self.assertEqual(len(calls), 2)
 
     def test_claude_error_envelope_cannot_pass_even_with_a_valid_inner_review(self):
