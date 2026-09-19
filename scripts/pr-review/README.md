@@ -91,6 +91,11 @@ markers on their own lines at column one. Inline backticks are for single-line,
 whitespace-free symbol/path references; an empty `()` suffix is allowed. Use a
 longer outer fence around examples containing fences and use synthetic values.
 
+Shared prompts prefer plain prose and unquoted references. Claude's producer
+schema excludes backticks from evidence, finding conditions and uncertainties;
+examples can use top-level tilde fences. Path and identity fields are unchanged.
+This generation constraint does not replace the host's format or coverage checks.
+
 `review_format.py` checks prose before and after masking. Its bounded grammar
 recognizes explicit markup and sensitive assignments, including qualified keys
 and YAML tags/anchors; it does not identify every unmarked phrase as source code.
