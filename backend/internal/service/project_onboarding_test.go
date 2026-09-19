@@ -174,6 +174,15 @@ func TestProjectRevokeDetectsConcurrentMaterialization(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 }
+
+func TestProjectRevokeRequiresStoredRecipientBinding(test *testing.T) {
+	service, store, _ := onboardingService(test, ct.UserStatusTypeConfirmed, true)
+	store.projectMembers[projectMemberKey("project", "old-sub")] = &model.ProjectMember{UserID: "old-sub", Email: "invitee@example.com"}
+	if err := service.RevokePendingMember(context.Background(), "owner", "project", "invitee@example.com"); !errors.Is(err, repository.ErrConditionFailed) {
+		test.Fatalf("missing invitation reported revocation success: %v", err)
+	}
+}
+
 func TestProjectInvitationMaterializationFailureIsNotSuccess(t *testing.T) {
 	s, r, _ := onboardingService(t, ct.UserStatusTypeConfirmed, true)
 	r.users["invitee@example.com"] = &model.User{UserID: "current-sub"}

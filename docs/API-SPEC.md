@@ -46,7 +46,8 @@ Owner-only `GET /api/projects/{projectId}/members/pending?cursor=...` returns
 `{ members: [{ email, expiresAt }], nextCursor? }`. Each page scans at most 25
 reverse rows and revalidates canonical grants; empty pages may have continuation.
 `DELETE /api/projects/{projectId}/members/pending` accepts `{ email }` and returns
-204 or 409 on a membership/version race. Already-joined users use member removal.
+204 after deletion, or 409 for missing/stale invitations or existing membership.
+Already-joined users use member removal; email aliases do not prove old recipients.
 A project/sub latest-invitation marker invalidates prior email-specific grants.
 Member removal and legacy direct addition retire that marker atomically. Project
 cleanup version conflicts remain retryable. User queues are isolated from old readers; transactional rows, TTL and
