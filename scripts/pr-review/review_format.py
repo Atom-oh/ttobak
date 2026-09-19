@@ -7,7 +7,10 @@ import sys
 
 
 FORMAT_INSTRUCTIONS = (
-    "Use English prose. Inline backticks are only for single-line, whitespace-free "
+    "Prefer plain English prose and unquoted symbol/path names, without backticks. "
+    "Describe assignments, calls with arguments, HTML/JSX tags, conditions, and "
+    "commands in prose; never wrap those fragments in inline backticks. "
+    "Inline backticks are only for single-line, whitespace-free "
     "symbol/path references (an empty () suffix is allowed). Put all executable "
     "or configuration examples in closed top-level fenced code blocks, starting "
     "and ending on their own lines at column one. Use a longer outer fence if the example contains "
