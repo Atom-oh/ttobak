@@ -6,7 +6,7 @@ import { usePathname } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { FieldInsightsSection } from '@/components/FieldInsightsSection';
-import { accountApi, projectApi } from '@/lib/api';
+import { accountApi, projectApi, settingsApi, ApiError } from '@/lib/api';
 import type {
   AccountSummary,
   Project,
@@ -18,7 +18,7 @@ import type {
 export default function ProjectDetailClient() {
   const pathname = usePathname();
   const projectId = decodeURIComponent(pathname.split('/').filter(Boolean).pop() || '');
-  const { user, isLoading, isAuthenticated } = useAuth();
+  const { user, isLoading, isAuthenticated, isAdmin, membershipRevision, onboardingAvailable } = useAuth();
 
   const [project, setProject] = useState<Project | null>(null);
   const [meetings, setMeetings] = useState<ProjectMeetingRef[]>([]);
@@ -30,6 +30,13 @@ export default function ProjectDetailClient() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteCandidate, setInviteCandidate] = useState<string | null>(null);
+  const [inviteNotice, setInviteNotice] = useState('');
+  const [pendingMembers, setPendingMembers] = useState<{ email: string; expiresAt: number }[]>([]);
+  const [pendingCursor, setPendingCursor] = useState('');
+  const [pendingError, setPendingError] = useState('');
+  const [pendingLoading, setPendingLoading] = useState(false);
+  const pendingGeneration = useRef(0);
   const [inviting, setInviting] = useState(false);
   const [accountId, setAccountId] = useState('');
   const [linkingAccount, setLinkingAccount] = useState(false);
@@ -65,6 +72,8 @@ export default function ProjectDetailClient() {
   useEffect(() => {
     activeProjectIdRef.current = projectId;
     setProject(null);
+    setInviteCandidate(null); setInviteEmail(''); setInviteNotice('');
+    setPendingMembers([]); setPendingCursor(''); setPendingError(''); setPendingLoading(false); setInviting(false);
     setMeetings([]);
     setResearch([]);
     setInsights([]);
@@ -74,13 +83,16 @@ export default function ProjectDetailClient() {
     setError(null);
   }, [projectId]);
 
+  const fetchGeneration = useRef(0);
   const fetchAll = useCallback(async () => {
     const myProjectId = projectId;
+    if (activeProjectIdRef.current !== myProjectId) return;
+    const generation = ++fetchGeneration.current;
     if (!myProjectId || myProjectId === '_') {
       setLoading(false);
       return;
     }
-    if (activeProjectIdRef.current !== myProjectId) return; // superseded before this call even started
+    if ((activeProjectIdRef.current !== myProjectId || generation !== fetchGeneration.current)) return; // superseded before this call even started
     setLoading(true);
     setError(null);
     try {
@@ -95,14 +107,14 @@ export default function ProjectDetailClient() {
       // when a mutation handler re-runs fetchAll and this fetch transiently
       // fails).
       const proj = await projectApi.get(myProjectId);
-      if (activeProjectIdRef.current !== myProjectId) return; // superseded by a later navigation
+      if ((activeProjectIdRef.current !== myProjectId || generation !== fetchGeneration.current)) return; // superseded by a later navigation
       setProject(proj);
       const [mtg, res, ins] = await Promise.allSettled([
         projectApi.meetings(myProjectId),
         projectApi.research(myProjectId),
         projectApi.insights(myProjectId),
       ]);
-      if (activeProjectIdRef.current !== myProjectId) return; // superseded by a later navigation
+      if ((activeProjectIdRef.current !== myProjectId || generation !== fetchGeneration.current)) return; // superseded by a later navigation
       setMeetingsError(mtg.status === 'rejected');
       if (mtg.status === 'fulfilled') setMeetings(mtg.value.meetings ?? []);
       setResearchError(res.status === 'rejected');
@@ -110,16 +122,16 @@ export default function ProjectDetailClient() {
       setInsightsError(ins.status === 'rejected');
       if (ins.status === 'fulfilled') setInsights(ins.value.insights ?? []);
     } catch (err) {
-      if (activeProjectIdRef.current !== myProjectId) return; // superseded by a later navigation
+      if ((activeProjectIdRef.current !== myProjectId || generation !== fetchGeneration.current)) return; // superseded by a later navigation
       setError(err instanceof Error ? err.message : 'Failed to load project');
     } finally {
-      if (activeProjectIdRef.current === myProjectId) setLoading(false);
+      if ((activeProjectIdRef.current === myProjectId && generation === fetchGeneration.current)) setLoading(false);
     }
   }, [projectId]);
 
   useEffect(() => {
     if (isAuthenticated) fetchAll();
-  }, [isAuthenticated, fetchAll]);
+  }, [isAuthenticated, fetchAll, membershipRevision]);
 
   // User-scoped, not project-scoped -- unlike fetchAll, this doesn't need to
   // re-run on projectId change or guard against a stale-navigation race.
@@ -143,21 +155,66 @@ export default function ProjectDetailClient() {
 
   const accountNameById = new Map(accounts.map((a) => [a.accountId, a.name]));
 
+  const fetchPending = useCallback(async (cursor = '') => {
+    if (project?.ownerUserId !== user?.userId || activeProjectIdRef.current !== projectId) return;
+    const generation = ++pendingGeneration.current;
+    setPendingLoading(true); setPendingError('');
+    try {
+      const page = await projectApi.pendingMembers(projectId, cursor);
+      if (activeProjectIdRef.current !== projectId || generation !== pendingGeneration.current) return;
+      setPendingMembers(page.members); setPendingCursor(page.nextCursor || '');
+    } catch (error) {
+      if (activeProjectIdRef.current === projectId && generation === pendingGeneration.current) setPendingError(error instanceof Error ? error.message : '대기 중인 초대를 불러오지 못했습니다.');
+    } finally { if (activeProjectIdRef.current === projectId && generation === pendingGeneration.current) setPendingLoading(false); }
+  }, [projectId, project?.ownerUserId, user?.userId]);
+  useEffect(() => { if (isAuthenticated) void fetchPending(); }, [isAuthenticated, fetchPending, membershipRevision]);
+
+  const addMember = async (email: string) => {
+    const result = await projectApi.addMember(projectId, { email, allowPending: onboardingAvailable });
+    if (activeProjectIdRef.current !== projectId) return;
+    setInviteCandidate(null); setInviteEmail('');
+    setInviteNotice(result.pending
+      ? `${email}님의 가입을 기다리고 있습니다. 로그인과 이메일 인증이 완료되면 프로젝트에 자동 추가됩니다. 멤버 추가 요청만으로 메일을 재발송하지는 않습니다.`
+      : `${email}님을 프로젝트 멤버로 추가했습니다.`);
+    await fetchAll(); await fetchPending();
+    return result;
+  };
   const handleInvite = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const email = inviteEmail.trim();
-    if (!email) return;
-    setInviting(true);
-    setError(null);
+    const email = inviteEmail.trim().toLowerCase();
+    if (!email || inviting) return;
+    setInviting(true); setError(null); setInviteCandidate(null); setInviteNotice('');
+    try { await addMember(email); }
+    catch (error) {
+      if (activeProjectIdRef.current !== projectId) return;
+      if (error instanceof ApiError && error.code === 'INVITATION_REQUIRED') {
+        setInviteCandidate(email);
+        setInviteNotice(isAdmin ? `${email}님은 아직 등록되지 않았습니다. 아래 버튼으로 초대 메일을 보내고 프로젝트 가입을 예약할 수 있습니다.` : `${email}님은 아직 등록되지 않았습니다. 관리자에게 사용자 초대를 요청한 뒤 멤버 추가를 다시 시도하세요.`);
+      } else setError(error instanceof Error ? error.message : '멤버 추가에 실패했습니다.');
+    } finally { if (activeProjectIdRef.current === projectId) setInviting(false); }
+  };
+  const inviteNewUser = async () => {
+    const email = inviteCandidate;
+    if (!email || !isAdmin || inviting || !onboardingAvailable) return;
+    setInviting(true); setError(null);
+    let mailRequested = false;
     try {
-      await projectApi.addMember(projectId, { email });
-      setInviteEmail('');
-      await fetchAll();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to add member');
-    } finally {
-      setInviting(false);
-    }
+      try { await settingsApi.inviteUser({ email }); mailRequested = true; }
+      catch (error) { if (!(error instanceof ApiError && error.status === 409)) throw error; }
+      const result = await addMember(email);
+      if (activeProjectIdRef.current === projectId && mailRequested && result) setInviteNotice(`${email}님에게 초대 메일 발송을 요청했습니다. ${result.pending ? '로그인과 이메일 인증 후 프로젝트에 자동 추가됩니다.' : '프로젝트 멤버로 추가됐습니다.'} 로그인 주소와 임시 비밀번호가 포함됩니다. 수신되지 않으면 스팸함을 확인해주세요.`);
+    } catch (error) {
+      if (activeProjectIdRef.current !== projectId) return;
+      if (mailRequested) setInviteCandidate(null);
+      setError(`${mailRequested ? '초대 메일 발송 요청은 성공했지만 프로젝트 추가는 완료하지 못했습니다. 이메일을 다시 입력해 멤버 추가를 재시도하세요. ' : ''}${error instanceof Error ? error.message : '초대에 실패했습니다.'}`);
+    } finally { if (activeProjectIdRef.current === projectId) setInviting(false); }
+  };
+  const revokePending = async (email: string) => {
+    if (pendingLoading) return;
+    setPendingLoading(true); setPendingError('');
+    try { await projectApi.revokePendingMember(projectId, email); await fetchPending(); }
+    catch (error) { if (activeProjectIdRef.current === projectId) setPendingError(error instanceof Error ? error.message : '초대 취소에 실패했습니다.'); }
+    finally { if (activeProjectIdRef.current === projectId) setPendingLoading(false); }
   };
 
   const handleRemoveMember = async (userId: string) => {
@@ -287,6 +344,23 @@ export default function ProjectDetailClient() {
                   </div>
                 ))}
                 {isOwner && (
+                  <div className="space-y-2 text-sm">
+                    {!onboardingAvailable && <p role="status">초대 기능의 서버 연결을 기다리고 있습니다. 상단에서 연결을 다시 시도할 수 있습니다.</p>}
+                    {inviteNotice && <p role="status" className="text-slate-600 dark:text-text-secondary">{inviteNotice}</p>}
+                    {inviteCandidate && isAdmin && <button type="button" disabled={inviting || !onboardingAvailable} onClick={inviteNewUser} className="rounded bg-primary px-3 py-2 text-white disabled:opacity-50">초대 메일 발송 후 프로젝트 추가</button>}
+                    {pendingError && <p role="alert" className="text-red-600">{pendingError}</p>}
+                    {pendingMembers.map(member => <div key={member.email} className="flex flex-wrap items-center justify-between gap-2 rounded border p-2">
+                      <span>{member.email} · 가입 대기</span>
+                      <button type="button" disabled={pendingLoading} onClick={() => revokePending(member.email)} className="underline">초대 취소</button>
+                    </div>)}
+                    <div className="flex gap-3">
+                      <button type="button" disabled={pendingLoading} onClick={() => fetchPending()} className="underline">초대 목록 새로고침</button>
+                      {pendingCursor && <button type="button" disabled={pendingLoading} onClick={() => fetchPending(pendingCursor)} className="underline">다음 초대 보기</button>}
+                      {isAdmin && <a href="/settings#user-management" className="underline">초대 메일 재발송 관리</a>}
+                    </div>
+                  </div>
+                )}
+                {isOwner && (
                   <form onSubmit={handleInvite} className="flex gap-2 pt-2">
                     <input
                       type="email"
@@ -301,7 +375,7 @@ export default function ProjectDetailClient() {
                       disabled={inviting}
                       className="px-3 py-2 rounded-lg bg-primary hover:bg-primary-hover text-white text-sm disabled:opacity-50"
                     >
-                      {inviting ? 'Inviting…' : 'Invite'}
+                      {inviting ? '처리 중…' : '멤버 추가'}
                     </button>
                   </form>
                 )}

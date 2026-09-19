@@ -237,7 +237,7 @@ export function ShareButton({
         // Invited but not yet logged in: no real Share row exists yet
         // (see PendingShare), so don't optimistically add a fake entry to
         // sharedWith -- it'll appear for real once they sign in.
-        setPendingNotice(`${user.email}님은 아직 초대를 수락하지 않았습니다. 로그인하면 자동으로 공유됩니다.`);
+        setPendingNotice(`${user.email}님의 공유를 예약했습니다. 로그인과 이메일 인증 후 적용됩니다. 이 작업으로 메일이 발송되지는 않습니다.`);
         setPendingNoticeEmail(user.email);
       } else {
         // A free-text email can resolve to an already-registered user

@@ -6,6 +6,43 @@ import { triggerAuthFailure } from '@/components/auth/AuthProvider';
 import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory, Research, ResearchDetail, DictionaryTerm, ChatMessage, Account, AccountSummary, AccountMember, AccountMeetingRef, AccountInsight, AccountDocument, PutDocumentRequest, AccountResearchRef, Project, ProjectSummary, ProjectMember, ProjectMeetingRef, ProjectResearchRef, ProjectInsight, ProjectBrief } from '@/types/meeting';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
+const PROJECT_HINTS_KEY = 'ttobak:project-invitation-hints';
+let bootstrapProjectHints: { userId: string; ids: string[] } | null = null;
+let bootstrapAccountHints: { userId: string; ids: string[]; expires: number } | null = null;
+
+function projectHintIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 100).filter((id): id is string =>
+    typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id));
+}
+
+function projectDiscoveryHints(userId: string | null): string[] {
+  if (!userId) return [];
+  if (bootstrapProjectHints?.userId === userId) return bootstrapProjectHints.ids;
+  try {
+    const raw = typeof window === 'undefined' ? null : window.sessionStorage.getItem(PROJECT_HINTS_KEY);
+    if (!raw || raw.length > 8192) return [];
+    const stored = JSON.parse(raw);
+    if (!stored || stored.userId !== userId) return [];
+    const ids = projectHintIds(stored.ids);
+    bootstrapProjectHints = { userId, ids };
+    return ids;
+  } catch {
+    return [];
+  }
+}
+
+function rememberProjectHints(userId: string, value: unknown): void {
+  const ids = [...new Set([...projectHintIds(value), ...projectDiscoveryHints(userId)])].slice(0, 100);
+  bootstrapProjectHints = { userId, ids };
+  try {
+    if (typeof window !== 'undefined') {
+      window.sessionStorage.setItem(PROJECT_HINTS_KEY, JSON.stringify(bootstrapProjectHints));
+    }
+  } catch {
+    return;
+  }
+}
 
 interface FetchOptions extends RequestInit {
   skipAuth?: boolean;
@@ -163,6 +200,7 @@ export const meetingsApi = {
   list: (params?: { tab?: 'all' | 'shared'; accountId?: string; accountIds?: string[]; cursor?: string; limit?: number }, options?: { signal?: AbortSignal }) => {
     const query = new URLSearchParams();
     if (params?.tab) query.set('tab', params.tab);
+    if (!params?.cursor && bootstrapAccountHints && bootstrapAccountHints.userId === tokenUserId(getIdToken()) && bootstrapAccountHints.expires > Date.now() && bootstrapAccountHints.ids.length) query.set('joinedAccountIds', bootstrapAccountHints.ids.join(','));
     if (params?.accountIds?.length) query.set('accountIds', [...new Set(params.accountIds)].sort().join(','));
     else if (params?.accountId) query.set('accountId', params.accountId);
     if (params?.cursor) query.set('cursor', params.cursor);
@@ -522,6 +560,7 @@ export const adminUsersApi = {
 };
 
 export interface AdminUserSummary {
+  emailVerified?: boolean;
   userId: string;
   email: string;
   name?: string;
@@ -715,15 +754,21 @@ export const accountApi = {
 };
 
 export const projectApi = {
-  list: () => api.get<{ projects: ProjectSummary[] }>('/api/projects'),
+  pendingMembers: (id: string, cursor = '') => api.get<{ members: { email: string; expiresAt: number }[]; nextCursor?: string }>(`/api/projects/${encodeURIComponent(id)}/members/pending?cursor=${encodeURIComponent(cursor)}`),
+  revokePendingMember: (id: string, email: string) => api.delete<void>(`/api/projects/${encodeURIComponent(id)}/members/pending`, { body: JSON.stringify({ email }) }),
+
+  list: () => {
+    const ids = projectDiscoveryHints(tokenUserId(getIdToken()));
+    return api.get<{ projects: ProjectSummary[] }>(`/api/projects${ids.length ? `?joinedProjectIds=${encodeURIComponent(ids.join(','))}` : ''}`);
+  },
   get: (id: string) => api.get<Project>(`/api/projects/${encodeURIComponent(id)}`),
   create: (data: { name: string; description?: string; sfdcOpptyId?: string; sfdcUrl?: string; stage?: string }) =>
     api.post<Project>('/api/projects', data),
   update: (id: string, data: { name: string; description?: string; sfdcOpptyId?: string; sfdcUrl?: string; stage?: string }) =>
     api.put<Project>(`/api/projects/${encodeURIComponent(id)}`, data),
   delete: (id: string) => api.delete<void>(`/api/projects/${encodeURIComponent(id)}`),
-  addMember: (id: string, data: { email: string }) =>
-    api.post<ProjectMember>(`/api/projects/${encodeURIComponent(id)}/members`, data),
+  addMember: (id: string, data: { email: string; allowPending?: boolean }) =>
+    api.post<ProjectMember & { pending?: boolean; emailVerified?: boolean }>(`/api/projects/${encodeURIComponent(id)}/members`, data),
   removeMember: (id: string, userId: string) =>
     api.delete<void>(`/api/projects/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`),
   linkAccount: (id: string, accountId: string) =>
@@ -794,4 +839,35 @@ export const meetingAccountApi = {
   shareToAccount: (meetingId: string, accountId: string) =>
     api.post<{ accountId: string; sharedWith: number }>(
       `/api/meetings/${encodeURIComponent(meetingId)}/share-account`, { accountId }),
+};
+
+export interface SessionBootstrapResult {
+  emailVerified: boolean;
+  pendingGrants: number;
+  retryPending?: boolean;
+  projectCursor?: string;
+  projectInvitationsEnabled?: boolean;
+  joinedAccountIds?: string[];
+  joinedProjectIds?: string[];
+  legacyBootstrap?: boolean;
+}
+export const sessionApi = {
+  bootstrap: async (expectedUserId: string, projectCursor = ''): Promise<SessionBootstrapResult> => {
+    let result: SessionBootstrapResult;
+    try {
+      result = await apiFetch<SessionBootstrapResult>('/api/session/bootstrap', { method: 'POST', body: JSON.stringify({ projectCursor }), expectedUserId });
+    } catch (error) {
+      if (!(error instanceof ApiError) || error.status !== 404) throw error;
+      // Only an absent new route may use the older authenticated initializer.
+      // This still creates the caller's PROFILE; it never bypasses auth/errors.
+      await apiFetch('/api/meetings?limit=1', { expectedUserId });
+      result = { emailVerified: false, pendingGrants: 0, legacyBootstrap: true, projectInvitationsEnabled: false };
+    }
+    if (typeof result.emailVerified !== 'boolean' || !Number.isSafeInteger(result.pendingGrants) || result.pendingGrants < 0 ||
+        (result.projectCursor !== undefined && (typeof result.projectCursor !== 'string' || result.projectCursor.length > 512))) throw new Error('계정 연결 응답을 확인하지 못했습니다. 다시 시도해주세요.');
+    rememberProjectHints(expectedUserId, result.joinedProjectIds);
+    const previous = bootstrapAccountHints?.userId === expectedUserId && bootstrapAccountHints.expires > Date.now() ? bootstrapAccountHints.ids : [];
+    bootstrapAccountHints = { userId: expectedUserId, ids: [...new Set([...previous, ...(result.joinedAccountIds || [])])].slice(0, 100), expires: Date.now() + 60_000 };
+    return result;
+  },
 };

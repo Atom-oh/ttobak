@@ -17,7 +17,7 @@ export default function AccountDetailClient() {
   const pathname = usePathname();
   const router = useRouter();
   const accountId = decodeURIComponent(pathname.split('/').filter(Boolean).pop() || '');
-  const { user, isLoading, isAuthenticated, isAdmin } = useAuth();
+  const { user, isLoading, isAuthenticated, isAdmin, membershipRevision } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [account, setAccount] = useState<Account | null>(null);
@@ -61,9 +61,11 @@ export default function AccountDetailClient() {
     setProjectsError(false);
   }, [accountId]);
 
+  const fetchGeneration = useRef(0);
   const fetchAll = useCallback(async () => {
     if (!accountId || accountId === '_' || activeAccountIdRef.current !== accountId) return;
     const myAccountId = accountId;
+    const generation = ++fetchGeneration.current;
     setLoading(true);
     setError(null);
     try {
@@ -74,7 +76,7 @@ export default function AccountDetailClient() {
         accountApi.listDocuments(accountId),
         accountApi.research(accountId),
       ]);
-      if (activeAccountIdRef.current !== myAccountId) return;
+      if ((activeAccountIdRef.current !== myAccountId || generation !== fetchGeneration.current)) return;
       setAccount(acc);
       setMeetings(mtg?.meetings ?? []);
       setInsights(ins?.insights ?? []);
@@ -85,19 +87,19 @@ export default function AccountDetailClient() {
       // successful result on a later refetch -- and a response for an
       // accountId superseded by a newer navigation must not land here at all.
       const projectRes = await projectApi.accountProjects(myAccountId).catch(() => null);
-      if (activeAccountIdRef.current !== myAccountId) return;
+      if ((activeAccountIdRef.current !== myAccountId || generation !== fetchGeneration.current)) return;
       setProjectsError(projectRes === null);
       if (projectRes !== null) setProjects(projectRes.projects ?? []);
     } catch (err) {
-      if (activeAccountIdRef.current === myAccountId) setError(err instanceof Error ? err.message : 'Failed to load account');
+      if ((activeAccountIdRef.current === myAccountId && generation === fetchGeneration.current)) setError(err instanceof Error ? err.message : 'Failed to load account');
     } finally {
-      if (activeAccountIdRef.current === myAccountId) setLoading(false);
+      if ((activeAccountIdRef.current === myAccountId && generation === fetchGeneration.current)) setLoading(false);
     }
   }, [accountId]);
 
   useEffect(() => {
     if (isAuthenticated) fetchAll();
-  }, [isAuthenticated, fetchAll]);
+  }, [isAuthenticated, fetchAll, membershipRevision]);
 
   const handlePickMember = async (picked: User) => {
     setInviting(true);
@@ -112,7 +114,7 @@ export default function AccountDetailClient() {
       // "Failed to add member" error banner -- fetchAll failing is a
       // separate, lower-priority problem than the invite itself failing.
       if (result?.pending) {
-        setPendingNotice(`${picked.email}님의 계정 추가를 예약했습니다. 로그인하면 자동으로 추가됩니다. 이 작업으로 초대 이메일이 발송되지는 않습니다.`);
+        setPendingNotice(`${picked.email}님의 계정 추가를 예약했습니다. 로그인과 이메일 인증 후 자동으로 추가됩니다. 이 작업으로 초대 이메일이 발송되지는 않습니다.`);
         setPendingNoticeEmail(picked.email);
       }
       await fetchAll();

@@ -77,6 +77,7 @@ export async function signIn(
   email: string,
   password: string
 ): Promise<SignInResult> {
+  email = email.trim().toLowerCase();
   const pool = await getUserPool();
   return new Promise((resolve, reject) => {
     const authDetails = new AuthenticationDetails({

@@ -449,7 +449,7 @@ func TestEnableUser_NoGuard(t *testing.T) {
 func TestResendInvite_RejectsWrongStatus(t *testing.T) {
 	cognito := &fakeCognitoAdminAPI{
 		adminGetUserFn: func(_ context.Context, _ *cognitoidp.AdminGetUserInput) (*cognitoidp.AdminGetUserOutput, error) {
-			return &cognitoidp.AdminGetUserOutput{UserStatus: cognitoidptypes.UserStatusTypeConfirmed}, nil
+			return &cognitoidp.AdminGetUserOutput{Enabled: true, UserStatus: cognitoidptypes.UserStatusTypeConfirmed, UserAttributes: []cognitoidptypes.AttributeType{{Name: aws.String("email_verified"), Value: aws.String("true")}}}, nil
 		},
 	}
 	svc := newTestUserAdminService(cognito, &fakeUserAdminRepo{})
@@ -472,6 +472,7 @@ func TestResendInvite_UsesEmailFromCurrentUser(t *testing.T) {
 				t.Fatalf("status lookup must use the requested user ID, got %q", aws.ToString(in.Username))
 			}
 			return &cognitoidp.AdminGetUserOutput{
+				Enabled:    true,
 				Username:   aws.String(targetID),
 				UserStatus: cognitoidptypes.UserStatusTypeForceChangePassword,
 				UserAttributes: []cognitoidptypes.AttributeType{
@@ -574,7 +575,7 @@ func TestForceResetPassword_RejectsWrongStatus(t *testing.T) {
 func TestForceResetPassword_Success(t *testing.T) {
 	cognito := &fakeCognitoAdminAPI{
 		adminGetUserFn: func(_ context.Context, _ *cognitoidp.AdminGetUserInput) (*cognitoidp.AdminGetUserOutput, error) {
-			return &cognitoidp.AdminGetUserOutput{UserStatus: cognitoidptypes.UserStatusTypeConfirmed}, nil
+			return &cognitoidp.AdminGetUserOutput{Enabled: true, UserStatus: cognitoidptypes.UserStatusTypeConfirmed, UserAttributes: []cognitoidptypes.AttributeType{{Name: aws.String("email_verified"), Value: aws.String("true")}}}, nil
 		},
 	}
 	svc := newTestUserAdminService(cognito, &fakeUserAdminRepo{})
@@ -584,5 +585,37 @@ func TestForceResetPassword_Success(t *testing.T) {
 	}
 	if len(cognito.resetPwdUsers) != 1 || cognito.resetPwdUsers[0] != "target" {
 		t.Errorf("expected AdminResetUserPassword to be called for target, got %v", cognito.resetPwdUsers)
+	}
+}
+
+func TestRecoveryActionsRejectDisabledOrUnverifiedUsersBeforeMail(t *testing.T) {
+	for _, test := range []struct {
+		name                      string
+		enabled, verified, resend bool
+		want                      error
+	}{
+		{"disabled reset", false, true, false, ErrUserDisabled},
+		{"unverified reset", true, false, false, ErrEmailVerificationRequired},
+		{"disabled resend", false, true, true, ErrUserDisabled},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			status := cognitoidptypes.UserStatusTypeConfirmed
+			if test.resend {
+				status = cognitoidptypes.UserStatusTypeForceChangePassword
+			}
+			c := &fakeCognitoAdminAPI{adminGetUserFn: func(context.Context, *cognitoidp.AdminGetUserInput) (*cognitoidp.AdminGetUserOutput, error) {
+				return &cognitoidp.AdminGetUserOutput{Enabled: test.enabled, UserStatus: status, UserAttributes: []cognitoidptypes.AttributeType{{Name: aws.String("email_verified"), Value: aws.String(map[bool]string{true: "true", false: "false"}[test.verified])}}}, nil
+			}}
+			s := newTestUserAdminService(c, &fakeUserAdminRepo{})
+			var err error
+			if test.resend {
+				err = s.ResendInvite(context.Background(), "target")
+			} else {
+				err = s.ForceResetPassword(context.Background(), "target")
+			}
+			if !errors.Is(err, test.want) || len(c.resetPwdUsers) != 0 || len(c.createUserCalls) != 0 {
+				t.Fatalf("unexpected recovery result: %v", err)
+			}
+		})
 	}
 }

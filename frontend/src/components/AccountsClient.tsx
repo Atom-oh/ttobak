@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { accountApi } from '@/lib/api';
@@ -16,9 +16,10 @@ interface PendingMember extends User {
 
 export default function AccountsClient() {
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, isAuthenticated, membershipRevision } = useAuth();
   const [accounts, setAccounts] = useState<AccountSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const requestGeneration = useRef(0);
   const [error, setError] = useState<string | null>(null);
 
   const [showForm, setShowForm] = useState(false);
@@ -30,22 +31,26 @@ export default function AccountsClient() {
   const [pendingRole, setPendingRole] = useState('SSA');
   const [creating, setCreating] = useState(false);
 
+  const invalidateRequests = useCallback(() => { requestGeneration.current++; }, []);
+
   const fetchAccounts = useCallback(async () => {
+    const generation = ++requestGeneration.current;
     setLoading(true);
     setError(null);
     try {
       const res = await accountApi.list();
-      setAccounts(res?.accounts ?? []);
+      if (generation === requestGeneration.current) setAccounts(res?.accounts ?? []);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load accounts');
+      if (generation === requestGeneration.current) setError(err instanceof Error ? err.message : 'Failed to load accounts');
     } finally {
-      setLoading(false);
+      if (generation === requestGeneration.current) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    fetchAccounts();
-  }, [fetchAccounts]);
+    if (isAuthenticated) void fetchAccounts();
+    return invalidateRequests;
+  }, [fetchAccounts, isAuthenticated, membershipRevision, invalidateRequests]);
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();

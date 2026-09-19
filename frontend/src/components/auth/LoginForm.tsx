@@ -1,6 +1,8 @@
 'use client';
 
 import { useState } from 'react';
+import { authErrorMessage } from '@/lib/auth-errors';
+import { passwordPolicyError, PASSWORD_REQUIREMENTS } from '@/lib/password-policy';
 import { useAuth } from './AuthProvider';
 import { PrimaryButton } from '@/components/ui/Button';
 import { isNewPasswordRequired, NewPasswordRequiredResult } from '@/lib/auth';
@@ -34,7 +36,7 @@ export function LoginForm({ onForgotPassword }: LoginFormProps) {
         setChallenge(result);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Login failed');
+      setError(authErrorMessage(err, '로그인에 실패했습니다.'));
     } finally {
       setIsLoading(false);
     }
@@ -48,8 +50,9 @@ export function LoginForm({ onForgotPassword }: LoginFormProps) {
       setError('비밀번호가 일치하지 않습니다');
       return;
     }
-    if (newPassword.length < 8) {
-      setError('비밀번호는 8자 이상이어야 합니다');
+    const policyError = passwordPolicyError(newPassword);
+    if (policyError) {
+      setError(policyError);
       return;
     }
 
@@ -57,7 +60,7 @@ export function LoginForm({ onForgotPassword }: LoginFormProps) {
     try {
       await completeNewPassword(challenge!, newPassword);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to set new password');
+      setError(authErrorMessage(err, '새 비밀번호 설정에 실패했습니다.'));
     } finally {
       setIsLoading(false);
     }
@@ -100,7 +103,7 @@ export function LoginForm({ onForgotPassword }: LoginFormProps) {
                 onChange={(e) => setNewPassword(e.target.value)}
                 required
                 className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition-all dark:bg-black/30 dark:border-white/10 dark:text-white dark:placeholder-text-muted/40 dark:focus:ring-primary/30"
-                placeholder="8자 이상 입력하세요"
+                placeholder={PASSWORD_REQUIREMENTS}
               />
             </div>
           </div>

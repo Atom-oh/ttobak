@@ -26,14 +26,22 @@ to S3 GET presigns. PUT uploads continue to use signed S3 URLs.
 
 ### Session bootstrap and project invitations
 
+Authenticated `POST /api/session/bootstrap` takes optional `{ projectCursor }`
+(maximum 1,024 body bytes); identity comes only from verified JWT claims. It
+returns `emailVerified`, `pendingGrants`, `retryPending`, `projectCursor`,
+`projectInvitationsEnabled`, up to 100 `joinedAccountIds`, and the current
+page's `joinedProjectIds`. `GET /api/projects?joinedProjectIds=...` accepts up to
+100 UUID hints; each requires canonical project access and never grants access. Project work is
+limited to 25 canonical rows and five seconds per call. Failed pages retain their
+cursor. Profile initialization errors fail the request; invitation side effects
+surface retry state without blocking unrelated data. Unverified users cannot
+consume grants. The companion client initializes once and refreshes after later
+pages rather than interrupting an active recording.
+
 An unverified caller with matching project invitations retains the input page
 cursor until verification succeeds. Retry that cursor with refreshed verified
 claims; a page containing only unrelated identities can advance normally.
 
-`POST /api/session/bootstrap` initializes the authenticated profile and account/meeting grants,
-then processes at most 25 project invitations under a five-second budget. It returns
-`projectCursor`, `retryPending`, `pendingGrants`, `emailVerified`, `joinedAccountIds`
-and `projectInvitationsEnabled`. Failed pages retain continuation for retry.
 Keep queued writers disabled until the consumer and client are deployed and verified.
 
 Owner-only `POST /api/projects/{projectId}/members` accepts `{ email, allowPending? }`
@@ -59,6 +67,14 @@ remain retryable. A durable control row also gates queue/claim transactions and 
 capabilities; a paused fence returns `INVITATIONS_PAUSED` and clears page
 continuation. Project user queues are isolated from old readers; transactional rows, TTL and
 the required incompatible-API rollback drain are specified in ADR-044.
+
+Admin user summaries include `emailVerified`. Password reset requires an enabled,
+CONFIRMED user with verified email; missing verification returns 409
+`EMAIL_VERIFICATION_REQUIRED`. Disabled mail actions return 409 `USER_DISABLED`.
+An existing RESET_REQUIRED user completes or requests a code through the Cognito
+self-service flow rather than invoking the CONFIRMED-only admin reset again.
+Authenticated email verification uses Cognito SDK operations and refreshes JWT
+claims before bootstrap is retried; the app never silently sets verification.
 
 ### Meetings and pagination
 

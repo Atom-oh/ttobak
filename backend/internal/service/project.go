@@ -179,7 +179,18 @@ func (s *ProjectService) GetProject(ctx context.Context, userID, projectID strin
 // linked Account's membership must still surface here, or a member added
 // solely via that Account could pass requireProjectAccess yet never see
 // the project in GET /api/projects at all.
-func (s *ProjectService) ListMyProjects(ctx context.Context, userID string) ([]model.ProjectSummary, error) {
+func (s *ProjectService) ListMyProjects(ctx context.Context, userID string, joinedProjectIDs ...string) ([]model.ProjectSummary, error) {
+	if len(joinedProjectIDs) > 100 {
+		return nil, ErrInvalidInput
+	}
+	normalizedHints := make([]string, 0, len(joinedProjectIDs))
+	for _, hint := range joinedProjectIDs {
+		id, err := uuid.Parse(hint)
+		if err != nil {
+			return nil, ErrInvalidInput
+		}
+		normalizedHints = append(normalizedHints, id.String())
+	}
 	projects, err := s.repo.ListProjectsForUser(ctx, userID)
 	if err != nil {
 		return nil, err
@@ -191,6 +202,20 @@ func (s *ProjectService) ListMyProjects(ctx context.Context, userID string) ([]m
 		out = append(out, model.ProjectSummary{ProjectID: project.ProjectID, Name: project.Name, Stage: project.Stage, SfdcOpptyID: project.SfdcOpptyID})
 	}
 
+	for _, id := range normalizedHints {
+		if seen[id] {
+			continue
+		}
+		project, err := s.requireProjectAccess(ctx, userID, id)
+		if errors.Is(err, ErrNotFound) || errors.Is(err, ErrForbidden) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		seen[id] = true
+		out = append(out, model.ProjectSummary{ProjectID: project.ProjectID, Name: project.Name, Stage: project.Stage, SfdcOpptyID: project.SfdcOpptyID})
+	}
 	accountMemberships, err := s.repo.ListAccountsForUser(ctx, userID)
 	if err != nil {
 		return nil, err

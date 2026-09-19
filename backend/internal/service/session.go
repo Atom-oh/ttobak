@@ -12,6 +12,7 @@ import (
 )
 
 type SessionBootstrapResponse struct {
+	JoinedProjectIDs          []string `json:"joinedProjectIds,omitempty"`
 	ProjectCursor             string   `json:"projectCursor,omitempty"`
 	ProjectInvitationsEnabled bool     `json:"projectInvitationsEnabled"`
 	JoinedAccountIDs          []string `json:"joinedAccountIds,omitempty"`
@@ -130,6 +131,9 @@ func (s *MeetingService) bootstrapProjectInvitations(ctx context.Context, store 
 			result.RetryPending = true
 			result.PendingGrants++
 			return nil
+		}
+		if p.ProjectID != "" {
+			result.JoinedProjectIDs = append(result.JoinedProjectIDs, p.ProjectID)
 		}
 	}
 	if !awaitingVerification {

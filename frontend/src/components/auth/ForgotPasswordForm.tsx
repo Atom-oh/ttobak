@@ -10,6 +10,8 @@
  */
 
 import { useState } from 'react';
+import { authErrorMessage } from '@/lib/auth-errors';
+import { passwordPolicyError, PASSWORD_REQUIREMENTS } from '@/lib/password-policy';
 import { forgotPassword, confirmForgotPassword } from '@/lib/auth';
 
 interface ForgotPasswordFormProps {
@@ -40,7 +42,7 @@ export function ForgotPasswordForm({ onClose }: ForgotPasswordFormProps) {
       await forgotPassword(trimmed);
       setStep('confirm');
     } catch (err) {
-      setError(err instanceof Error ? err.message : '인증 코드 발송에 실패했습니다');
+      setError(authErrorMessage(err, '인증 코드 발송에 실패했습니다.'));
     } finally {
       setSubmitting(false);
     }
@@ -54,8 +56,9 @@ export function ForgotPasswordForm({ onClose }: ForgotPasswordFormProps) {
       setError('비밀번호가 일치하지 않습니다');
       return;
     }
-    if (newPassword.length < 8) {
-      setError('비밀번호는 8자 이상이어야 합니다');
+    const policyError = passwordPolicyError(newPassword);
+    if (policyError) {
+      setError(policyError);
       return;
     }
 
@@ -64,7 +67,7 @@ export function ForgotPasswordForm({ onClose }: ForgotPasswordFormProps) {
       await confirmForgotPassword(email.trim().toLowerCase(), code.trim(), newPassword);
       setSuccess('비밀번호가 변경되었습니다. 새 비밀번호로 로그인해주세요.');
     } catch (err) {
-      setError(err instanceof Error ? err.message : '비밀번호 재설정에 실패했습니다');
+      setError(authErrorMessage(err, '비밀번호 재설정에 실패했습니다.'));
     } finally {
       setSubmitting(false);
     }
@@ -140,6 +143,9 @@ export function ForgotPasswordForm({ onClose }: ForgotPasswordFormProps) {
               >
                 {submitting ? '발송 중...' : '인증 코드 받기'}
               </button>
+              <button type="button" disabled={submitting || !email.trim()} onClick={() => { setError(null); setStep('confirm'); }} className="w-full text-sm text-primary underline disabled:opacity-50">
+                이미 받은 인증 코드 입력
+              </button>
             </form>
           ) : (
             <form onSubmit={handleConfirm} className="space-y-4">
@@ -167,7 +173,7 @@ export function ForgotPasswordForm({ onClose }: ForgotPasswordFormProps) {
                   required
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="8자 이상 입력하세요"
+                  placeholder={PASSWORD_REQUIREMENTS}
                   className={inputClass}
                 />
               </div>

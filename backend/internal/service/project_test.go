@@ -1006,3 +1006,36 @@ func TestUnlinkResearch_ResourceOwnerCanUnlinkAfterLosingProjectAccess(t *testin
 		t.Fatal("expected research.ProjectIDs to no longer contain p1")
 	}
 }
+
+func TestProjectDiscoveryHintsBridgeIndexLagButNeverGrantAccess(t *testing.T) {
+	r := newMockProjectRepo()
+	s := newProjectServiceWithRepo(r)
+	id := "00000000-0000-4000-8000-000000000001"
+	r.projects[id] = &model.Project{ProjectID: id, OwnerUserID: "owner", Name: "Joined project"}
+	// No discovery index is provided by this wrapper, even after a direct grant.
+	lag := &projectDiscoveryLagRepo{mockProjectRepo: r}
+	s = newProjectServiceWithRepo(lag)
+	r.projectMembers[projectMemberKey(id, "member")] = &model.ProjectMember{ProjectID: id, UserID: "member"}
+	projects, err := s.ListMyProjects(context.Background(), "member", id)
+	if err != nil || len(projects) != 1 {
+		t.Fatalf("missing authorized hint: %v %v", projects, err)
+	}
+	projects, err = s.ListMyProjects(context.Background(), "outsider", id)
+	if err != nil || len(projects) != 0 {
+		t.Fatalf("hint granted access: %v %v", projects, err)
+	}
+	delete(r.projectMembers, projectMemberKey(id, "member"))
+	projects, err = s.ListMyProjects(context.Background(), "member", id)
+	if err != nil || len(projects) != 0 {
+		t.Fatalf("stale hint revived access: %v %v", projects, err)
+	}
+	if _, err := s.ListMyProjects(context.Background(), "member", "invalid-id"); !errors.Is(err, ErrInvalidInput) {
+		t.Fatal(err)
+	}
+}
+
+type projectDiscoveryLagRepo struct{ *mockProjectRepo }
+
+func (r *projectDiscoveryLagRepo) ListProjectsForUser(context.Context, string) ([]model.Project, error) {
+	return nil, nil
+}
