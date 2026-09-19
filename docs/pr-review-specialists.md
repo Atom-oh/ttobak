@@ -84,6 +84,12 @@ before a syntax retry, so terminal rendering or secret masking cannot hide a
 recognized signal.
 Post-scrub or combined-diagnostic overflow remains terminal.
 
+Kiro review attempts share the existing total time allowance instead of each
+restarting a slow response at the nominal timeout. The default remains 600
+seconds across at most two calls, with the same per-call maximum of 900 seconds.
+A slow first call may leave no retry; fast failures can use only the remaining
+time. Startup probes, requested models, input scope and all validation stay intact.
+
 With all four roles active, the ordinary path uses four review calls and two
 Kiro startup checks. Adjudication adds one chair call; retries and fallback add
 calls only when needed. This reduces duplicate requests, but is not a measured
