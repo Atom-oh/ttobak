@@ -1,9 +1,9 @@
 # TTOBAK MCP adapter
 
-TypeScript MCP adapter with local stdio and authenticated Streamable HTTP modes.
-Both call TTOBAK HTTPS APIs through CloudFront without an AWS execution role.
-The downloadable single-file client remains stdio; HTTP hosting uses the installed
-package and requires separately configured infrastructure and OAuth callbacks.
+TypeScript MCP server with stdio and authenticated Streamable HTTP entry points.
+Both call TTOBAK HTTPS APIs through CloudFront; neither accesses DynamoDB/S3 with
+an AWS execution role. Stdio is the default. The HTTP server implementation does
+not, by itself, provision a hosted endpoint.
 
 ## Build and configure
 
@@ -36,48 +36,97 @@ permissions. Refresh is attempted before requiring another login; do not promise
 a fixed login duration independent of pool policy or revocation. Logout clears
 local tokens. Do not commit/copy token files into documentation or diagnostics.
 
-## HTTP server (installed package)
+## Streamable HTTP
 
 ```bash
-npm start                         # stdio default
-npm run start:http                # installed HTTP server
+npm start                          # stdio (default)
+npm start -- --transport http       # installed HTTP server
+npm run start:http                  # equivalent HTTP entry point
 ```
 
-HTTP adds required `TTOBAK_USER_POOL_ID` and `TTOBAK_MCP_PUBLIC_URL` to the existing
-configuration. The latter is the exact HTTPS resource URL, normally the same-site
-`/api/mcp`. The upstream API must explicitly accept that resource audience while
-retaining client-ID/issuer/expiry and user authorization checks. No HTTP origin,
-callback, anonymous application route or audience change is provisioned here.
+The single-file download is the local stdio adapter; HTTP hosting uses the full
+installed package. Both share the registry/API code. `TTOBAK_MCP_TRANSPORT=http`
+is another selector; an explicit flag wins. HTTP clients connect by URL and do
+not download or launch the server. Tool-search deferral remains a host feature.
 
-The server verifies Cognito user access tokens: RS256/JWKS, issuer, expiry,
-client ID, user subject/username, exact resource audience and configured scopes.
-ID tokens and service identities are not accepted. Defaults are `openid email
-profile`; clients own PKCE login/refresh/logout and must register exact callbacks.
-Cognito's OAuth `resource` must equal the advertised MCP URL. Local token files
-are never shared. Public resource metadata and explicit 401 discovery headers
-point to the actual Cognito issuer. Live host login remains an acceptance gate.
+HTTP requires the existing API URL, Cognito Hosted UI domain and public client ID,
+plus `TTOBAK_USER_POOL_ID` and `TTOBAK_MCP_PUBLIC_URL`. For example:
 
-Optional HTTP variables: `TTOBAK_HTTP_HOST` (127.0.0.1), `TTOBAK_HTTP_PORT` (3000),
-`TTOBAK_HTTP_ALLOWED_HOSTS`, `TTOBAK_HTTP_ALLOWED_ORIGINS` (exact values, no wildcards),
-`TTOBAK_MCP_SCOPES`, and `TTOBAK_HTTP_TIMEOUT_MS` (at most 55000). Non-loopback
-listening requires approved HTTPS ingress. Each POST gets a fresh authenticated
-server/transport/API instance. GET streams and DELETE sessions are unsupported.
+```bash
+export TTOBAK_API_URL=https://ttobak.example.com
+export TTOBAK_COGNITO_DOMAIN=https://your-domain.auth.ap-northeast-2.amazoncognito.com
+export TTOBAK_CLIENT_ID=yourRegisteredPublicClientId
+export TTOBAK_USER_POOL_ID=ap-northeast-2_yourPoolId
+export TTOBAK_MCP_PUBLIC_URL=https://ttobak.example.com/api/mcp
+npm run start:http
+```
 
-Bounds: 1 MiB JSON request, 32 active calls, 32,000-byte tool results, 1 MiB general
-upstream responses, and the existing tighter reading-page bounds. Compressed bodies
-are rejected. Disconnects/deadlines abort HTTP work. Writes never retry automatically;
-a timeout may leave a completed mutation, so inspect current state before retrying.
+Every POST gets a fresh server, transport and API client. Verify RS256/JWKS,
+issuer, expiry, client ID, user subject/username, all configured scopes and an
+`aud` exactly equal to the public MCP URL before any MCP operation. Cognito's
+OAuth request must include that URL as its RFC 8707 `resource`. ID tokens,
+unbound access tokens and service identities are rejected. Only public keys are
+cached. Clients own PKCE login, refresh and logout; HTTP hides the local
+`ttobak_login`/`ttobak_logout` tools and never reads `~/.ttobak/tokens.json`.
 
-HTTP hides local login/logout tools. Uploads use `fileName` plus `contentBase64`
-(at most 512 KiB decoded), never server-local paths. Document uploads also need
-`title`. Larger files use stdio or the app. Large exports fail instead of being
-truncated or assigned invented continuation. Quick's 60-second operation limit
-still applies. Missing email claims are never fabricated to bypass invitation gates.
+`/.well-known/oauth-protected-resource` and its path-specific equivalent are
+public discovery documents. A 401 includes their explicit `WWW-Authenticate` URL.
+They advertise the actual Cognito issuer and scopes; discovery uses its OIDC
+metadata. This process is not an authorization server or DCR service. Use a
+pre-registered public OAuth client and register each host's exact callback.
+
+| Optional variable | Default / constraint |
+| --- | --- |
+| `TTOBAK_HTTP_HOST` | `127.0.0.1`; other interfaces require an HTTPS public URL behind approved ingress |
+| `TTOBAK_HTTP_PORT` | `3000`; `0` prints an ephemeral port to stderr |
+| `TTOBAK_HTTP_ALLOWED_HOSTS` | Public host plus exact comma-separated proxy/local Host values; no wildcards |
+| `TTOBAK_HTTP_ALLOWED_ORIGINS` | Public origin plus exact browser origins; absent Origin is permitted |
+| `TTOBAK_MCP_SCOPES` | `openid email profile`; all required, including mandatory `openid` |
+| `TTOBAK_HTTP_TIMEOUT_MS` | `55000`; configurable from 1000 to 55000 |
+
+The public resource and upstream API share the application CloudFront origin.
+The optional Gateway context `ttobak:mcpResourceAudience` admits this exact HTTPS
+`/api/mcp` audience alongside the existing client audience. Without that setup,
+API Gateway checks the URL `aud` instead of falling back to `client_id` and rejects
+the token. The edge client-ID gate and OriginVerify remain required. The setting
+creates no route, listener, callback or authentication bypass and is off by default.
+
+HTTP uses stateless JSON responses; authenticated GET/SSE and DELETE return 405.
+Limits: one JSON-RPC message, 1 MiB UTF-8 request, 32 active requests, 32,000-byte
+final tool result, 1 MiB general upstream response (reading retains its tighter
+32,000-byte wire cap). Compressed bodies are rejected. The absolute deadline
+includes auth/body/API work, and disconnects abort upstream HTTP. Writes never
+retry automatically: a timeout can leave an already-completed mutation. Inspect
+current state before retrying. Oversized reads fail without invented continuation.
+Successful writes return a compact completion receipt with saved record IDs and
+an explicit omitted-response marker when the full response exceeds the bound.
+
+Upload tools keep their names but accept `fileName` and `contentBase64` instead of
+`filePath`, with at most 512 KiB decoded. Document upload also requires `title`.
+Both dispatch and API adapters reject server filesystem access. Use stdio or the
+app for larger files. Vault export is already API-based but can exceed HTTP's
+result bound.
+
+Settings provides the client-specific instructions. Quick is remote-only, uses
+User OAuth/public PKCE, has a 60-second timeout and a 100-tool cap, and requires
+Sync after custom tool changes. It cannot use custom auth headers. Kiro Crew's
+remote-header flow needs separately issued resource-bound user credentials;
+never share one user's token across a shared Crew. Kiro CLI Tool Search is enabled
+separately with `kiro-cli settings toolSearch.enabled true` and retains its size
+thresholds. Existing host approval settings must be preserved.
+
+This implementation does not provision a hosted origin or register real clients.
+Route the authenticated endpoint and minimal public discovery through the approved
+CloudFront boundary. Publish `mcp: { "url": "/api/mcp" }` in runtime config only
+after deployment acceptance. Validate each client's exact callback, OIDC discovery,
+resource binding, refresh and representative operations. Access tokens need not
+carry email/verified-email claims: do not fabricate them or weaken pending-invite
+checks. Source wiring and synthetic tests do not prove live client acceptance.
 See [ADR-045](../docs/decisions/ADR-045-dual-mcp-transports.md).
 
 ## Tool behavior
 
-`src/index.ts` is the exact tool/schema inventory; `src/api.ts` implements HTTP
+`src/index.ts` is the shared tool/schema inventory; `src/api.ts` implements HTTP
 contracts and errors. The adapter covers login/status, meeting list/detail/QA,
 accounts and briefs/insights, personal/account documents, KB files/ingestion, vault
 export, projects and links.
@@ -88,8 +137,8 @@ export, projects and links.
   include required title/metadata fields according to its schema.
 - Read Document Hub content directly for current text. Canonical automatic indexing
   is implemented but gated behind snapshot verification and strict QA cutover;
-  the app currently enables only manual-only snapshot scheduling. A saved document
-  or index-status route does not establish active canonical indexing.
+  deployment acceptance must be verified independently of the checked-in mode.
+  A saved document or index-status route does not establish active canonical indexing.
 - For account hierarchy filters, list accessible accounts and explicitly include
   selected group/descendant IDs in accountIds. Preserve the same filter/cursor
   selection across pages; hierarchy does not grant access.
@@ -164,9 +213,10 @@ cp mcp-server/dist/ttobak-mcp.mjs frontend/public/mcp/ttobak-mcp.mjs
 diff mcp-server/dist/ttobak-mcp.mjs frontend/public/mcp/ttobak-mcp.mjs
 ```
 
-`npm test` builds modules, runs protocol regressions, and builds the bundle twice
-to check reproducibility and the same bounded-reading behavior in the standalone
-artifact. Fixtures exercise real HTTP/auth code and oversized-response aborts;
+`npm test` builds modules, runs stdio/HTTP protocol and JWT isolation regressions,
+and builds the bundle twice to check reproducibility, bounded stdio reads and
+HTTP startup in the installed package and rejection of HTTP mode in the client artifact. Fixtures exercise real
+HTTP/auth code and oversized-response aborts with synthetic keys and data;
 Go tests own source verification, Unicode pagination and cursor validity.
 `npm run test:bundle` runs bundle checks alone. Tests do not copy the public
 artifact; CI's byte comparison verifies the committed copy.
