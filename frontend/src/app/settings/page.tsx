@@ -108,7 +108,7 @@ export default function SettingsPage() {
             <CrawlerSettings />
           </section>
 
-          {/* Claude Code MCP Section */}
+          {/* MCP client connection guides */}
           <section>
             <h3 className="section-header mb-4">
               Developer Tools

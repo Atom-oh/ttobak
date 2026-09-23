@@ -235,6 +235,31 @@ targets only. Ordinary links and literal citation text keep their identity.
 
 Deploy attachment, saved-summary and index-status APIs before this UI.
 
+## MCP client setup guides
+
+Settings' MCP guide has separate selectors for Claude Code, Codex, Kiro Crew,
+Amazon Quick and Kiro CLI. Claude/Codex/Crew/Kiro CLI have local stdio and remote
+HTTP instructions; Quick is HTTP-only. Crew uses its Integrations dashboard and
+the documented remote-header authentication path, without promising native OAuth
+login/refresh. A shared Crew must not share one user's private credentials.
+
+Guide commands use the current HTTPS site origin, runtime Cognito client/pool
+configuration and bounded, timed public OIDC discovery. They never read or copy
+session tokens. The optional runtime `mcp.url` is accepted only for the same-site
+HTTPS `/api/mcp` resource. Its presence is described as a configured address, not
+proof of a successful client connection. Missing, loading and failed configuration
+are distinct; commands requiring an unknown HTTP URL cannot be copied.
+The guide does not invent an active endpoint from the site origin.
+
+Local setup documents the Node runtime, download, client registration, browser
+login and verification. JSON examples require an explicit absolute file path;
+shell examples quote deployment values. HTTP instructions cover client-specific
+OAuth callbacks, Crew's resource-bound access-token header, and Quick's user OAuth,
+Sync and 60-second operation limit. Existing approval settings are preserved.
+Copy controls report success/failure; client/transport controls work with keyboard,
+mobile and light/dark themes. Notes-first reads are distinguished from generated
+summary and transcript requests.
+
 ## Verification
 
 Run frontend lint/build for code changes and targeted browser checks for affected
