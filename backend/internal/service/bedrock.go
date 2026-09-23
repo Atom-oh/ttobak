@@ -1563,12 +1563,45 @@ func (s *BedrockService) invokeClaudeModelWithID(ctx context.Context, request Cl
 // invokeCompleteSummary is the strict completion path used only when generating
 // a final meeting note. Auxiliary image/refinement callers keep their own policy.
 func (s *BedrockService) invokeCompleteSummary(ctx context.Context, request ClaudeRequest) (string, error) {
-	body, err := s.invokeClaudeResponseBody(ctx, request, ClaudeOpusModelID)
-	if err != nil {
-		return "", err
+	request.Messages = append([]ClaudeMessage(nil), request.Messages...)
+	var content strings.Builder
+	for continuation := 0; continuation <= maxSummaryContinuations; continuation++ {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		body, err := s.invokeClaudeResponseBody(ctx, request, ClaudeOpusModelID)
+		if err != nil {
+			return "", err
+		}
+		text, stopReason, err := decodeClaudeTextResponse(body)
+		if err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(text) == "" {
+			return "", fmt.Errorf("empty text response from model")
+		}
+		if len(text) > maxSummaryOutputBytes-content.Len() {
+			return "", fmt.Errorf("complete summary exceeds output byte limit")
+		}
+		content.WriteString(text)
+		if stopReason != "max_tokens" || continuation == maxSummaryContinuations {
+			if _, err := parseClaudeTextResponse(body); err != nil {
+				return "", err
+			}
+			return content.String(), nil
+		}
+		log.Printf("Continuing final summary after output limit: continuation=%d accumulatedBytes=%d", continuation+1, content.Len())
+		request.Messages = append(request.Messages,
+			ClaudeMessage{Role: "assistant", Content: []ContentBlock{{Type: "text", Text: text}}},
+			ClaudeMessage{Role: "user", Content: []ContentBlock{{Type: "text", Text: summaryContinuationPrompt}}},
+		)
 	}
-	return parseClaudeTextResponse(body)
+	return "", fmt.Errorf("summary continuation limit exceeded")
 }
+
+const maxSummaryContinuations = 2
+const maxSummaryOutputBytes = 256 * 1024
+const summaryContinuationPrompt = `Continue the same meeting notes exactly from the next character after your previous response. Do not restart, repeat, summarize, or shorten the earlier text. Do not add an introduction or a new opening code fence when continuing an existing block. Complete the unfinished sentence or block and all remaining required sections. Keep the original sources, language, detail, evidence boundaries and citation rules.`
 
 func (s *BedrockService) invokeClaudeResponseBody(ctx context.Context, request ClaudeRequest, modelID string) ([]byte, error) {
 	requestBody, err := json.Marshal(request)

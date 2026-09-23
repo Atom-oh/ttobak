@@ -46,6 +46,18 @@ claim; it does not schedule another delivery. GetMeeting reconciles stuck status
 after 60 minutes. These thresholds solve different problems; do not shorten one
 based on a stale runbook or rewrite rows unconditionally.
 
+Final notes that stop at `max_tokens` continue within the same source snapshot,
+using the same model, system prompt, original messages and per-call token budget.
+At most two continuation calls are allowed, with a 256 KiB combined UTF-8 output
+cap and the caller's existing deadline. No partial result is published: the final
+response must end normally, and all source/permission/publication checks still
+run. Auxiliary refinement/image/action calls retain their own completion rules.
+Continuation is not a reset of the durable source-conflict retry budget.
+
+A saved-summary `SOURCE_CHANGED` failure means the snapshot no longer matched;
+preserve the newer human edits and request a fresh summary. Do not remove its
+conditions or publish output produced from the old snapshot.
+
 ## Authorized recovery
 
 Use the application Recover action for a saved recording_progress object, or
@@ -61,3 +73,19 @@ The script defaults to dry run. `--run` actually starts ECS work; `--num-speaker
 requires a single meeting ID. Check its present selection/write behavior before
 executing. Do not fabricate an event with reserved `aws.s3` source via PutEvents or
 blindly reset DynamoDB state. Preserve coherent ASR/pyannote image pins (ADR-035).
+
+For an operator-authorized saved-source recovery, `backend/cmd/resummary` defaults
+to read-only diagnostics (state, byte counts, hashes and source-object validation;
+never note/transcript text). It verifies the explicitly supplied AWS account and
+resolves the canonical owner before using the same service as the authenticated
+API. Run from `backend`, with the approved temporary-credential profile:
+
+```bash
+go run ./cmd/resummary --expected-account "$EXPECTED_ACCOUNT" --bucket "$ASSET_BUCKET" --meeting-id "$MEETING_ID"
+go run ./cmd/resummary --expected-account "$EXPECTED_ACCOUNT" --bucket "$ASSET_BUCKET" --meeting-id "$MEETING_ID" --request
+```
+
+Wait for `ANALYSIS#summary` success and verify its result hash matches the saved
+content. `--request-action-items` separately queues analysis of that saved summary,
+preserving existing task IDs/completion through the normal service. The tool never
+resets meeting status or retry counters, overwrites source text, or reruns STT.
