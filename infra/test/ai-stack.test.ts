@@ -37,6 +37,21 @@ describe('AiStack', () => {
     template = buildTemplate();
   });
 
+  test('only summary worker can invoke the exact GPT-6 Sol model', () => {
+    const grants = Object.values(template.findResources('AWS::IAM::Policy'))
+      .flatMap(policy => policy.Properties.PolicyDocument.Statement
+        .filter((statement: { Resource?: unknown }) => JSON.stringify(statement.Resource).includes('openai.'))
+        .map((statement: { Action: unknown; Resource: unknown }) => ({ policy, statement })));
+    expect(grants).toHaveLength(1);
+    expect(JSON.stringify(grants[0].policy.Properties.Roles)).toContain('TtobakSummarizeRole');
+    expect(grants[0].statement.Action).toBe('bedrock:InvokeModel');
+    const resources = JSON.stringify(grants[0].statement.Resource);
+    expect(resources).toContain('foundation-model/openai.gpt-6-sol');
+    expect(resources).toContain('inference-profile/global.openai.gpt-6-sol');
+    expect(resources).not.toContain('openai.*');
+  });
+
+
   test('qa role InvokeGateway grant is scoped to the Web Search Gateway ARN', () => {
     // search_web's SigV4 call needs exactly this permission; the resource
     // must stay the specific gateway ARN, never a wildcard (AGENTS.md IAM

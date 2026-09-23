@@ -1,0 +1,95 @@
+{
+  "caseResults": [
+    {
+      "id": "selected-source-numbers-negation",
+      "preferred": "tie",
+      "issues": [
+        {
+          "generator": "Y",
+          "severity": "low",
+          "quote": "각 항목에 대한 추가 논의나 후속 조치 합의는 녹취록에 나타나지 않습니다. [00:20](transcript://denied)",
+          "evidence": "No segment states this; it is a meta-observation about absence.",
+          "explanation": "Harmless but anchors a non-utterance to the 'denied' segment; filler rather than error."
+        }
+      ]
+    },
+    {
+      "id": "proposal-is-not-decision",
+      "preferred": "tie",
+      "issues": []
+    },
+    {
+      "id": "owners-and-deadlines",
+      "preferred": "X",
+      "issues": [
+        {
+          "generator": "Y",
+          "severity": "high",
+          "quote": "- [ ] 담당자 미정: 백업 검증 (기한: 미정) [00:10](transcript://unassigned)",
+          "evidence": "spk_1: \"백업 검증도 필요합니다. 다만 백업 검증의 담당자와 기한은 아직 미정입니다.\" Nobody takes or agrees to the task.",
+          "explanation": "A stated need with no owner, no deadline, and no acceptance is not an agreed follow-up. The contract's '미정' rule applies only to tasks that were actually agreed; the prior rule forbids creating 확인/검토-type tasks from a gap. Y invented a checkbox item; X correctly omitted it."
+        },
+        {
+          "generator": "Y",
+          "severity": "low",
+          "quote": "보안 체크리스트 확인과 백업 검증이라는 두 가지 후속 작업을 다루었습니다.",
+          "evidence": "Same segment; backup verification was only raised as a need.",
+          "explanation": "Overview pre-frames backup verification as a follow-up task, consistent with the invented action item."
+        },
+        {
+          "generator": "Y",
+          "severity": "low",
+          "quote": "- 민수(spk_0)가 보안 체크리스트를 2026년 9월 18일까지 확인하기로 했습니다.",
+          "evidence": "spk_0's unilateral \"제가 ... 확인하겠습니다\"; no group agreement is voiced.",
+          "explanation": "Listing a self-commitment as a 결정 사항 is borderline; it is already correctly captured as an action item. Not a factual error."
+        }
+      ]
+    },
+    {
+      "id": "notes-are-not-spoken-evidence",
+      "preferred": "X",
+      "issues": [
+        {
+          "generator": "Y",
+          "severity": "low",
+          "quote": "사용자 메모 기준으로, 예산 후보로 53만원이 적혀 있습니다. ... (사용자 메모 기준으로 \"서연에게 일정 확인\"이라는 개인 메모가 있습니다. ...)",
+          "evidence": "Memo content repeated in 개요, 주요 논의 사항, and 액션 아이템.",
+          "explanation": "Correctly labeled and never given a timestamp or attributed to a speaker, but repeated three times; redundant filler. Both generators handle source separation correctly."
+        }
+      ]
+    },
+    {
+      "id": "long-revised-decisions",
+      "preferred": "tie",
+      "issues": []
+    },
+    {
+      "id": "multilingual-numeric-boundaries",
+      "preferred": "tie",
+      "issues": [
+        {
+          "generator": "X",
+          "severity": "low",
+          "quote": "준호는 2026-09-28까지 복구 테스트 계획서를 작성하기로 합의했으나 참석 여부는 확인되지 않았습니다. [01:00](transcript://recovery)",
+          "evidence": "Statement originates in segment 'assigned' (startTime 120).",
+          "explanation": "Folded into the RPO/RTO paragraph and anchored to 'recovery'; the action-item fact links to the wrong segment. X's 개요 and 액션 아이템 cite it correctly."
+        },
+        {
+          "generator": "Y",
+          "severity": "low",
+          "quote": "준호가 2026-09-28까지 복구 테스트 계획서를 작성하기로 합의했습니다. [01:30](transcript://eu-denied)",
+          "evidence": "Statement originates in segment 'assigned' (startTime 120), not 'eu-denied' (90).",
+          "explanation": "Grouped with an unrelated EU-denial sentence, so the representative timestamp points to a different topic. Y's speaker/discussion/action sections cite it correctly."
+        }
+      ]
+    },
+    {
+      "id": "quoted-instruction-is-not-a-decision",
+      "preferred": "tie",
+      "issues": []
+    }
+  ],
+  "overallPreferred": "X",
+  "reasoning": "Across all seven cases both generators preserved the selected-source numbers (120만원 not 999만원; USD 12,500 not 125,000; 0.075s/0.1% not 75s/1%), units (월 240만원 not annual), negations (배포 미승인, EU NOT approved, blue-green not adopted), late-meeting revisions (180→240만원, 민수→지연, 2026-09-24 cancelled), all 48 A/B sample counts and their timestamps in the long case, and neither executed the quoted injection ([TS:999], 서연, 내일 배포 완료 all absent as facts). Neither promoted memo content to spoken evidence or attendees. The only material discriminator is owners-and-deadlines: Y turned spk_1's 'need with unknown owner/deadline' into a checkbox action item, which is an invented follow-up under the contract; X correctly listed only 민수's explicit commitment. Y is generally more granular (per-segment citations for 24 areas, explicit 준호 attendance caveat) and X more concise; those are near-wash. X wins on the one substantive factual-contract error.",
+  "limitations": "Single sample per case, judged by reading only, no tools. Both generators emit [mm:ss](transcript://id) instead of the ADR-013 [TS:NNN] marker; treated as a shared harness/format difference, not a semantic failure. The contract's '없으면 미정으로 표시' clause is ambiguous enough that Y's backup-verification item could be argued as literal compliance; I judged it against the stronger 'only tasks explicitly taken or agreed' rule and the fixture intent. Style deviations (bold sub-headings, bullet lists in 논의 사항, 3-paragraph speaker sections) were not scored as factual issues. Latency, cost, and token-ceiling effects were not assessed."
+}

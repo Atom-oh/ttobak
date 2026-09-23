@@ -224,6 +224,7 @@ export class GatewayStack extends cdk.Stack {
         TABLE_NAME: props.table.tableName,
         BUCKET_NAME: props.bucket.bucketName,
         BEDROCK_MODEL_ID: 'global.anthropic.claude-opus-5',
+        BEDROCK_SUMMARY_MODEL_ID: 'global.openai.gpt-6-sol',
         BEDROCK_SONNET_MODEL_ID: 'global.anthropic.claude-sonnet-5',
         KB_BUCKET_NAME: props.kbBucket?.bucketName || '',
         KB_ID: props.knowledgeBaseId || '',

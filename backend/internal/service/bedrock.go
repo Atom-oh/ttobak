@@ -71,6 +71,7 @@ type BedrockService struct {
 	s3Client       *s3.Client
 	repo           *repository.DynamoDBRepository
 	attachmentText summaryAttachmentProvider
+	summaryModelID string
 }
 
 func (s *BedrockService) SetAttachmentTextService(text summaryAttachmentProvider) {
@@ -84,9 +85,10 @@ func NewBedrockService(
 	repo *repository.DynamoDBRepository,
 ) *BedrockService {
 	return &BedrockService{
-		bedrockClient: bedrockClient,
-		s3Client:      s3Client,
-		repo:          repo,
+		bedrockClient:  bedrockClient,
+		s3Client:       s3Client,
+		repo:           repo,
+		summaryModelID: getEnvOrDefault("BEDROCK_SUMMARY_MODEL_ID", ClaudeOpusModelID),
 	}
 }
 
@@ -1575,6 +1577,13 @@ func (s *BedrockService) invokeClaudeModelWithID(ctx context.Context, request Cl
 // invokeCompleteSummary is the strict completion path used only when generating
 // a final meeting note. Auxiliary image/refinement callers keep their own policy.
 func (s *BedrockService) invokeCompleteSummary(ctx context.Context, request ClaudeRequest) (string, error) {
+	modelID := s.summaryModelID
+	if modelID == "" {
+		modelID = ClaudeOpusModelID
+	}
+	if isOpenAISummaryModel(modelID) {
+		return s.invokeOpenAISummary(ctx, request, modelID)
+	}
 	request.Messages = append([]ClaudeMessage(nil), request.Messages...)
 	var content strings.Builder
 	continuationBytes := 0
@@ -1582,7 +1591,7 @@ func (s *BedrockService) invokeCompleteSummary(ctx context.Context, request Clau
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		body, err := s.invokeClaudeResponseBody(ctx, request, ClaudeOpusModelID)
+		body, err := s.invokeClaudeResponseBody(ctx, request, modelID)
 		if err != nil {
 			return "", err
 		}
@@ -1676,7 +1685,10 @@ func (s *BedrockService) invokeClaudeResponseBody(ctx context.Context, request C
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
+	return s.invokeModelBody(ctx, requestBody, modelID)
+}
 
+func (s *BedrockService) invokeModelBody(ctx context.Context, requestBody []byte, modelID string) ([]byte, error) {
 	output, err := s.bedrockClient.InvokeModel(ctx, &bedrockruntime.InvokeModelInput{
 		ModelId:     aws.String(modelID),
 		ContentType: aws.String("application/json"),
@@ -1685,6 +1697,9 @@ func (s *BedrockService) invokeClaudeResponseBody(ctx context.Context, request C
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to invoke model: %w", err)
+	}
+	if output == nil {
+		return nil, fmt.Errorf("empty response from model")
 	}
 
 	return output.Body, nil

@@ -1,0 +1,11 @@
+{
+  "FunctionArn": "arn:aws:lambda:ap-northeast-2:180294183052:function:ttobak-summarize",
+  "RevisionId": "c1005e30-a4f3-4cc7-8d68-73ea4be9b17d",
+  "CodeSha256": "ElwkWwCGJDWpt2P3YW2n0BKqIczt30W7/NgrklT+NsM=",
+  "LastModified": "2026-09-19T05:35:42.000+0000",
+  "LastUpdateStatus": "Successful",
+  "models": {
+    "BEDROCK_SONNET_MODEL_ID": "global.anthropic.claude-sonnet-5",
+    "BEDROCK_MODEL_ID": "global.anthropic.claude-opus-5"
+  }
+}

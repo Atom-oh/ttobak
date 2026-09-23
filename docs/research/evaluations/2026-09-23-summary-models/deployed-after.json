@@ -1,0 +1,16 @@
+{
+  "FunctionArn": "arn:aws:lambda:ap-northeast-2:180294183052:function:ttobak-summarize",
+  "RevisionId": "a71329bb-9f66-4c0f-a86a-a72ff1fe3122",
+  "CodeSha256": "o5Phpg5oeMErOXzuPodNzyqHcbuGpAHJFbILut/S2iQ=",
+  "LastModified": "2026-09-23T03:01:44.000+0000",
+  "LastUpdateStatus": "Successful",
+  "State": "Active",
+  "models": {
+    "BEDROCK_SONNET_MODEL_ID": "global.anthropic.claude-sonnet-5",
+    "BEDROCK_SUMMARY_MODEL_ID": "global.openai.gpt-6-sol",
+    "BEDROCK_MODEL_ID": "global.anthropic.claude-opus-5"
+  },
+  "sourceBootstrapSha256": "66f01802dc4f6420d57a4febfa22d521d7b320657e5cd620e31659c13147fb61",
+  "deployedBootstrapMatchesBuild": true,
+  "releaseBaseCommit": "6193cc944b40c44ce2ad422465f86d3bd5490c9b"
+}

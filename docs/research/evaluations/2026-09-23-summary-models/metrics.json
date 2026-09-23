@@ -1,0 +1,24 @@
+{
+  "opus-5-5": {
+    "calls": 14,
+    "automatedCasesPassed": 12,
+    "automatedChecksPassed": 86,
+    "automatedChecksTotal": 88,
+    "meanWallSeconds": 16.192964403142856,
+    "medianWallSeconds": 14.048141885,
+    "maxWallSeconds": 32.633604854,
+    "inputTokens": 38660,
+    "outputTokens": 25847
+  },
+  "gpt-6-sol": {
+    "calls": 14,
+    "automatedCasesPassed": 14,
+    "automatedChecksPassed": 88,
+    "automatedChecksTotal": 88,
+    "meanWallSeconds": 7.710178335428571,
+    "medianWallSeconds": 6.683089442,
+    "maxWallSeconds": 16.116397835,
+    "inputTokens": 22758,
+    "outputTokens": 13848
+  }
+}

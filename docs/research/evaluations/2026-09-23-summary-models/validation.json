@@ -1,0 +1,34 @@
+{
+  "sourceBaseCommit": "6193cc944b40c44ce2ad422465f86d3bd5490c9b",
+  "runtimeChanges": [
+    "backend/internal/service/bedrock.go",
+    "backend/internal/service/openai_summary.go"
+  ],
+  "goFullSuite": "passed on working baseline and deployed-source release baseline",
+  "goVet": "passed on both baselines",
+  "linuxArm64Build": "API and summary passed; release summary built with CGO_ENABLED=0",
+  "cdkSynth": "passed",
+  "cdkTests": {
+    "suites": 13,
+    "tests": 84,
+    "result": "passed"
+  },
+  "docsTests": 6,
+  "docsCheck": "passed",
+  "regrade": "all 28 archived results reproduced with shared production request builder/completion parser",
+  "nativeTransportSmoke": "passed, 6.60 seconds, synthetic source only",
+  "savedSummaryRouting": "cmd/summarize handles SummaryRequested; resummary_generate.go calls shared generateSummarySnapshot",
+  "largeInput": {
+    "transcriptUtf8Bytes": 131190,
+    "combinedTranscriptAndSegmentsApproxBytes": 264509,
+    "gpt6SolSeconds": 15.925,
+    "opus55Seconds": 32.07,
+    "bothCompleted": true,
+    "all48SampleNumeralsRetained": true,
+    "lateCorrectionsRetained": true
+  },
+  "rolloutScope": "live template copy; only summary-role policy and summary Lambda code/model override change; all parameters/outputs/unrelated resources preserved",
+  "rollback": "original Lambda ZIP downloaded and CodeSha256 verified; remove summary override to restore auxiliary Opus default",
+  "activation": "Completed 2026-09-23T03:01:44Z; Active/Successful; deployed ZIP and bootstrap verified",
+  "sameRoleSmoke": "GenerateResummary passed in 7.79 seconds; synthetic snapshot only; temporary Lambda/log group absence verified"
+}
