@@ -41,7 +41,7 @@ documentation stays English.
 | Batch STT | GPU Spot ECS; production faster-whisper and separate benchmark engines | `backend/whisper/`, `infra/lib/whisper-stack.ts` |
 | Desktop | Tauri 2/Rust, macOS ScreenCaptureKit | `mac-app/src-tauri/` |
 | Infra | CDK TypeScript, eleven stacks | `infra/bin/infra.ts`, `infra/lib/` |
-| MCP | TypeScript stdio client of authenticated APIs | `mcp-server/src/`, `mcp-server/package.json` |
+| MCP | TypeScript stdio/HTTP adapter of authenticated APIs | `mcp-server/src/`, `mcp-server/package.json` |
 
 Model IDs are deployment configuration, not a global naming convention. Go uses
 `BEDROCK_MODEL_ID` for Opus and `BEDROCK_SONNET_MODEL_ID` for refinement; the
@@ -244,6 +244,8 @@ ScreenCaptureKit. Report that limit instead of claiming a Mac build passed.
   opaque server pages, defaults meeting reads to notes, and separately caps original
   HTTP bytes and serialized tool results at 32,000; never fall back to full-meeting
   reads or truncate a page while inventing continuation.
+  HTTP uses request-scoped, resource-bound access tokens, not local token files
+  or server file paths (ADR-045).
 - **Simulator:** transcript is used for extraction only. Only allowlisted numeric
   requirements/options JSON enters codegen; option names/descriptions remain
   user text. Security rests on the interpreter's empty IAM role plus SANDBOX

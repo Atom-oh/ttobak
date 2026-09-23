@@ -4,6 +4,10 @@
 - Decision date: Not recorded in the original ADR.
 - Implementation checked: 2026-09-13.
 
+[ADR-045](ADR-045-dual-mcp-transports.md) adds authenticated HTTP alongside stdio
+as of 2026-09-23. The local-only description below is historical; API authorization
+and the CloudFront boundary still apply.
+
 ## Context and decision
 
 External agents need authenticated meeting retrieval and Q&A without a separate
