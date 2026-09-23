@@ -1,34 +1,25 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { pathToFileURL } from 'node:url';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
+  type CallToolRequest,
+  type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import { CognitoAuth } from './auth.js';
 import { TtobakApi } from './api.js';
 import { readingOptions, readingResult, readingError } from './reading.js';
 
-const COGNITO_DOMAIN = process.env.TTOBAK_COGNITO_DOMAIN || '';
-const CLIENT_ID = process.env.TTOBAK_CLIENT_ID || '';
-const API_URL = process.env.TTOBAK_API_URL || '';
-
-if (!COGNITO_DOMAIN || !CLIENT_ID || !API_URL) {
-  console.error(
-    'Missing required env vars: TTOBAK_COGNITO_DOMAIN, TTOBAK_CLIENT_ID, TTOBAK_API_URL\n' +
-      'Run: npm run setup (in mcp-server/) or set them in .mcp.json',
-  );
-  process.exit(1);
+export interface ServerOptions {
+  auth: CognitoAuth;
+  api: TtobakApi;
+  apiUrl: string;
+  cognitoDomain: string;
+  clientId: string;
 }
 
-const auth = new CognitoAuth({ cognitoDomain: COGNITO_DOMAIN, clientId: CLIENT_ID });
-const api = new TtobakApi(auth, API_URL);
-
-const server = new Server(
-  { name: 'ttobak', version: '1.0.0' },
-  { capabilities: { tools: {} } },
-);
-
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
+const registry: { tools: Tool[] } = {
   tools: [
     {
       name: 'ttobak_login',
@@ -413,9 +404,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       inputSchema: { type: 'object' as const, properties: {} },
     },
   ],
-}));
+};
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
+async function callTool(request: CallToolRequest, options: ServerOptions) {
+  const { auth, api } = options;
+  const API_URL = options.apiUrl, COGNITO_DOMAIN = options.cognitoDomain, CLIENT_ID = options.clientId;
   const { name, arguments: args = {} } = request.params;
 
   try {
@@ -697,7 +690,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (name === 'ttobak_get_meeting' || name === 'ttobak_read_transcript') return readingError(msg);
     return error(msg);
   }
-});
+}
 
 function text(content: string) {
   return { content: [{ type: 'text' as const, text: content }] };
@@ -707,13 +700,29 @@ function error(message: string) {
   return { content: [{ type: 'text' as const, text: `Error: ${message}` }], isError: true };
 }
 
+export function createMcpServer(options: ServerOptions): Server {
+  const server = new Server({ name: 'ttobak', version: '1.0.0' }, { capabilities: { tools: {} } });
+  server.setRequestHandler(ListToolsRequestSchema, async () => registry);
+  server.setRequestHandler(CallToolRequestSchema, request => callTool(request, options));
+  return server;
+}
+
 async function main() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  const apiUrl = process.env.TTOBAK_API_URL || '';
+  const cognitoDomain = process.env.TTOBAK_COGNITO_DOMAIN || '';
+  const clientId = process.env.TTOBAK_CLIENT_ID || '';
+  if (!apiUrl || !cognitoDomain || !clientId) {
+    throw new Error('Missing required env vars: TTOBAK_COGNITO_DOMAIN, TTOBAK_CLIENT_ID, TTOBAK_API_URL');
+  }
+  const auth = new CognitoAuth({ cognitoDomain, clientId });
+  const server = createMcpServer({ auth, api: new TtobakApi(auth, apiUrl), apiUrl, cognitoDomain, clientId });
+  await server.connect(new StdioServerTransport());
   console.error('TTOBAK MCP server running');
 }
 
-main().catch((e) => {
-  console.error('Fatal:', e);
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((failure: unknown) => {
+    console.error('TTOBAK MCP startup failed:', failure instanceof Error ? failure.message : 'unknown error');
+    process.exitCode = 1;
+  });
+}
