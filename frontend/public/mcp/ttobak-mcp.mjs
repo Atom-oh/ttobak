@@ -20826,6 +20826,10 @@ var StdioServerTransport = class {
   }
 };
 
+// src/index.ts
+import { fileURLToPath } from "node:url";
+import { realpathSync as realpathSync2 } from "node:fs";
+
 // src/auth.ts
 import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
@@ -20910,7 +20914,7 @@ Opening browser for TTOBAK login...
   }
   waitForCallback(expectedState) {
     return new Promise((resolve, reject) => {
-      const server2 = createServer((req, res) => {
+      const server = createServer((req, res) => {
         const url2 = new URL2(req.url, `http://localhost:${CALLBACK_PORT}`);
         if (url2.pathname !== "/callback") return;
         const code = url2.searchParams.get("code");
@@ -20919,27 +20923,27 @@ Opening browser for TTOBAK login...
         if (error3) {
           res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
           res.end(html("Authentication Failed", `Error: ${error3}. Close this window and try again.`));
-          server2.close();
+          server.close();
           reject(new Error(`OAuth error: ${error3}`));
           return;
         }
         if (state !== expectedState || !code) {
           res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
           res.end(html("Error", "Invalid state or missing code."));
-          server2.close();
+          server.close();
           reject(new Error("Invalid OAuth callback"));
           return;
         }
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
         res.end(html("TTOBAK MCP Authenticated", "You can close this window and return to Claude Code."));
-        server2.close();
+        server.close();
         resolve(code);
       });
-      server2.listen(CALLBACK_PORT, () => {
+      server.listen(CALLBACK_PORT, () => {
         console.error(`Waiting for login callback on localhost:${CALLBACK_PORT}...`);
       });
       setTimeout(() => {
-        server2.close();
+        server.close();
         reject(new Error("Login timed out after 2 minutes. Please try again."));
       }, 12e4);
     });
@@ -21201,8 +21205,8 @@ function parseApiResponse(status, body) {
   return parsed;
 }
 var TtobakApi = class {
-  constructor(auth2, baseUrl) {
-    this.auth = auth2;
+  constructor(auth, baseUrl) {
+    this.auth = auth;
     this.baseUrl = baseUrl;
   }
   auth;
@@ -21489,22 +21493,7 @@ var TtobakApi = class {
 };
 
 // src/index.ts
-var COGNITO_DOMAIN = process.env.TTOBAK_COGNITO_DOMAIN || "";
-var CLIENT_ID = process.env.TTOBAK_CLIENT_ID || "";
-var API_URL = process.env.TTOBAK_API_URL || "";
-if (!COGNITO_DOMAIN || !CLIENT_ID || !API_URL) {
-  console.error(
-    "Missing required env vars: TTOBAK_COGNITO_DOMAIN, TTOBAK_CLIENT_ID, TTOBAK_API_URL\nRun: npm run setup (in mcp-server/) or set them in .mcp.json"
-  );
-  process.exit(1);
-}
-var auth = new CognitoAuth({ cognitoDomain: COGNITO_DOMAIN, clientId: CLIENT_ID });
-var api = new TtobakApi(auth, API_URL);
-var server = new Server(
-  { name: "ttobak", version: "1.0.0" },
-  { capabilities: { tools: {} } }
-);
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
+var registry2 = {
   tools: [
     {
       name: "ttobak_login",
@@ -21871,8 +21860,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       inputSchema: { type: "object", properties: {} }
     }
   ]
-}));
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
+};
+async function callTool(request, options) {
+  const { auth, api } = options;
+  const API_URL = options.apiUrl, COGNITO_DOMAIN = options.cognitoDomain, CLIENT_ID = options.clientId;
   const { name, arguments: args = {} } = request.params;
   try {
     switch (name) {
@@ -21894,12 +21885,12 @@ Client: ${CLIENT_ID.slice(0, 8)}...`
         return text(JSON.stringify(result, null, 2));
       }
       case "ttobak_get_meeting": {
-        const options = readingOptions(args, "meeting");
-        return readingResult(await api.readMeeting(options), options);
+        const options2 = readingOptions(args, "meeting");
+        return readingResult(await api.readMeeting(options2), options2);
       }
       case "ttobak_read_transcript": {
-        const options = readingOptions(args, "transcript");
-        return readingResult(await api.readMeeting(options), options);
+        const options2 = readingOptions(args, "transcript");
+        return readingResult(await api.readMeeting(options2), options2);
       }
       case "ttobak_list_accounts": {
         const result = await api.listAccounts();
@@ -22077,19 +22068,45 @@ Retrieval is scoped to you -- only your own ttobak_ask queries can find this fil
     if (name === "ttobak_get_meeting" || name === "ttobak_read_transcript") return readingError(msg);
     return error2(msg);
   }
-});
+}
 function text(content) {
   return { content: [{ type: "text", text: content }] };
 }
 function error2(message) {
   return { content: [{ type: "text", text: `Error: ${message}` }], isError: true };
 }
+function createMcpServer(options) {
+  const server = new Server({ name: "ttobak", version: "1.0.0" }, { capabilities: { tools: {} } });
+  server.setRequestHandler(ListToolsRequestSchema, async () => registry2);
+  server.setRequestHandler(CallToolRequestSchema, (request) => callTool(request, options));
+  return server;
+}
 async function main() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  const apiUrl = process.env.TTOBAK_API_URL || "";
+  const cognitoDomain = process.env.TTOBAK_COGNITO_DOMAIN || "";
+  const clientId = process.env.TTOBAK_CLIENT_ID || "";
+  if (!apiUrl || !cognitoDomain || !clientId) {
+    throw new Error("Missing required env vars: TTOBAK_COGNITO_DOMAIN, TTOBAK_CLIENT_ID, TTOBAK_API_URL");
+  }
+  const auth = new CognitoAuth({ cognitoDomain, clientId });
+  const server = createMcpServer({ auth, api: new TtobakApi(auth, apiUrl), apiUrl, cognitoDomain, clientId });
+  await server.connect(new StdioServerTransport());
   console.error("TTOBAK MCP server running");
 }
-main().catch((e) => {
-  console.error("Fatal:", e);
-  process.exit(1);
-});
+function isEntrypoint() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync2(fileURLToPath(import.meta.url)) === realpathSync2(process.argv[1]);
+  } catch {
+    return false;
+  }
+}
+if (isEntrypoint()) {
+  main().catch((failure) => {
+    console.error("TTOBAK MCP startup failed:", failure instanceof Error ? failure.message : "unknown error");
+    process.exit(1);
+  });
+}
+export {
+  createMcpServer
+};
