@@ -8,7 +8,7 @@ flowchart TB
   subgraph client[Clients]
     Web[Next.js static SPA]
     Mac[Tauri macOS wrapper]
-    MCP[Local stdio MCP adapter]
+    MCP[Stdio / HTTP MCP adapter]
   end
   subgraph ingress[Application HTTP ingress]
     CF[CloudFront and Edge JWT]
@@ -152,6 +152,9 @@ serialization. Notes, summary and action sections use metadata views; transcript
 reads hydrate only the authorized chosen source and eligible segments. Every page
 revalidates access/revision. The MCP adapter passes these pages through with its
 own byte ceiling; it no longer fetches full meeting detail for reading.
+The installed adapter also provides stateless, authenticated HTTP with caller-supplied
+file bytes. Remote hosting and OAuth client acceptance remain separate from code
+readiness; see [ADR-044](decisions/ADR-044-dual-mcp-transports.md).
 
 Attachment extraction supports bounded native text from PDF/PPTX/DOCX/Markdown.
 Canonical ATTACH#/ATTEXT# identities, run/lease and ETag checks bind immutable

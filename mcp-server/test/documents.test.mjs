@@ -47,6 +47,30 @@ test('invalid explicit document scope must not silently become personal scope', 
   assert.deepEqual(calls, []);
 });
 
+test('remote API uploads use supplied bytes and reject local paths before filesystem access', async () => {
+  let authCalls = 0;
+  const api = new TtobakApi({ getIdToken: async () => { authCalls++; return 'synthetic-token'; } },
+    'https://example.invalid', { allowLocalFiles: false });
+  await assert.rejects(api.uploadToKB('/etc/hosts'), /Local file access is unavailable/);
+  await assert.rejects(api.uploadDocument('/etc/hosts', 'title'), /Local file access is unavailable/);
+  assert.equal(authCalls, 0);
+  const calls = [], uploaded = [];
+  api.request = async (method, path, body) => {
+    calls.push({ method, path, body });
+    return { uploadUrl: 'https://bucket.s3.ap-northeast-2.amazonaws.com/object', key: 'docs/user/file.pdf' };
+  };
+  api.putBytes = async (url, data, contentType) => uploaded.push({ url, data, contentType });
+  const data = Buffer.from('document bytes');
+  await api.uploadDocumentBytes(data, 'Title', 'file.pdf', { accountId: 'account-1' });
+  assert.equal(calls[1].path, '/api/accounts/account-1/documents');
+  assert.equal(calls[1].body.fileSize, data.length);
+  assert.equal(calls[1].body.fileKey, 'docs/user/file.pdf');
+  assert.equal(uploaded[0].data, data);
+  await api.uploadBytesToKB(data, 'file.pdf');
+  assert.equal(calls[2].path, '/api/kb/upload');
+  assert.equal(uploaded[1].data, data);
+});
+
 test('meeting account filters reach the API without changing pagination', async () => {
   const { api, calls } = recordingApi();
   await api.listMeetings({ accountIds: ['toss', 'toss-securities'], cursor: 'next+cursor', limit: 20, tab: 'all' });

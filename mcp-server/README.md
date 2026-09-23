@@ -1,8 +1,9 @@
 # TTOBAK MCP adapter
 
-Local TypeScript stdio MCP server. It calls authenticated TTOBAK HTTPS APIs through
-CloudFront; it is not a hosted HTTP MCP service and does not access DynamoDB/S3 with
-an AWS execution role. Any compatible host can launch its Node entry point.
+TypeScript MCP adapter with local stdio and authenticated Streamable HTTP modes.
+Both call TTOBAK HTTPS APIs through CloudFront without an AWS execution role.
+The downloadable single-file client remains stdio; HTTP hosting uses the installed
+package and requires separately configured infrastructure and OAuth callbacks.
 
 ## Build and configure
 
@@ -34,6 +35,45 @@ PKCE code. Tokens are stored at `~/.ttobak/tokens.json` with restrictive creatio
 permissions. Refresh is attempted before requiring another login; do not promise
 a fixed login duration independent of pool policy or revocation. Logout clears
 local tokens. Do not commit/copy token files into documentation or diagnostics.
+
+## HTTP server (installed package)
+
+```bash
+npm start                         # stdio default
+npm run start:http                # installed HTTP server
+```
+
+HTTP adds required `TTOBAK_USER_POOL_ID` and `TTOBAK_MCP_PUBLIC_URL` to the existing
+configuration. The latter is the exact HTTPS resource URL, normally the same-site
+`/api/mcp`. The upstream API must explicitly accept that resource audience while
+retaining client-ID/issuer/expiry and user authorization checks. No HTTP origin,
+callback, anonymous application route or audience change is provisioned here.
+
+The server verifies Cognito user access tokens: RS256/JWKS, issuer, expiry,
+client ID, user subject/username, exact resource audience and configured scopes.
+ID tokens and service identities are not accepted. Defaults are `openid email
+profile`; clients own PKCE login/refresh/logout and must register exact callbacks.
+Cognito's OAuth `resource` must equal the advertised MCP URL. Local token files
+are never shared. Public resource metadata and explicit 401 discovery headers
+point to the actual Cognito issuer. Live host login remains an acceptance gate.
+
+Optional HTTP variables: `TTOBAK_HTTP_HOST` (127.0.0.1), `TTOBAK_HTTP_PORT` (3000),
+`TTOBAK_HTTP_ALLOWED_HOSTS`, `TTOBAK_HTTP_ALLOWED_ORIGINS` (exact values, no wildcards),
+`TTOBAK_MCP_SCOPES`, and `TTOBAK_HTTP_TIMEOUT_MS` (at most 55000). Non-loopback
+listening requires approved HTTPS ingress. Each POST gets a fresh authenticated
+server/transport/API instance. GET streams and DELETE sessions are unsupported.
+
+Bounds: 1 MiB JSON request, 32 active calls, 32,000-byte tool results, 1 MiB general
+upstream responses, and the existing tighter reading-page bounds. Compressed bodies
+are rejected. Disconnects/deadlines abort HTTP work. Writes never retry automatically;
+a timeout may leave a completed mutation, so inspect current state before retrying.
+
+HTTP hides local login/logout tools. Uploads use `fileName` plus `contentBase64`
+(at most 512 KiB decoded), never server-local paths. Document uploads also need
+`title`. Larger files use stdio or the app. Large exports fail instead of being
+truncated or assigned invented continuation. Quick's 60-second operation limit
+still applies. Missing email claims are never fabricated to bypass invitation gates.
+See [ADR-044](../docs/decisions/ADR-044-dual-mcp-transports.md).
 
 ## Tool behavior
 

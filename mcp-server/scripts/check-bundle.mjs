@@ -11,7 +11,7 @@ const first = readFileSync(new URL('../dist/ttobak-mcp.mjs', import.meta.url));
 bundle();
 assert.deepEqual(readFileSync(new URL('../dist/ttobak-mcp.mjs', import.meta.url)), first,
   'Repeated bundle builds must be byte-identical');
-execFileSync(process.execPath, ['--test', 'test/reading.test.mjs'], {
+execFileSync(process.execPath, ['--test', 'test/reading.test.mjs', 'test/http-artifact.test.mjs'], {
   cwd, stdio: 'inherit', env: { ...process.env, TTOBAK_TEST_BUNDLE: '1' },
 });
-console.log('Bundle reproducibility and reading protocol tests passed.');
+console.log('Bundle reproducibility, stdio reading and HTTP artifact tests passed.');

@@ -3,7 +3,6 @@ import { request as httpsRequest } from 'node:https';
 import { basename, extname, isAbsolute, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { URL } from 'node:url';
-import type { CognitoAuth } from './auth.js';
 import { MAX_READING_BYTES, type ReadingOptions } from './reading.js';
 
 // Extension -> MIME type, shared by both upload tools for inference only --
@@ -167,10 +166,24 @@ export function parseApiResponse(status: number, body: string): unknown {
   return parsed;
 }
 
+// The legacy name is retained for the stdio auth adapter. HTTP provides the
+// verified, request-scoped OAuth access token through the same interface.
+export interface ApiAuth {
+  getIdToken(): Promise<string>;
+}
+
+export interface ApiRequestOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  maxResponseBytes?: number;
+  allowLocalFiles?: boolean;
+}
+
 export class TtobakApi {
   constructor(
-    private auth: CognitoAuth,
+    private auth: ApiAuth,
     private baseUrl: string,
+    private options: ApiRequestOptions = {},
   ) {}
 
   async listMeetings(opts?: { cursor?: string; limit?: number; tab?: string; accountIds?: string[] }) {
@@ -345,6 +358,7 @@ export class TtobakApi {
   /** Upload a local file into the global Knowledge Base. Ingestion doesn't
    * start until syncKB() is called (upload can be batched, then synced once). */
   async uploadToKB(filePath: string, fileName?: string, fileType?: string) {
+    this.requireLocalFiles();
     const { path: resolvedPath } = guardUploadPath(filePath, MAX_KB_UPLOAD_BYTES);
     const { name, type } = resolveFileMeta(resolvedPath, fileName, fileType);
     const { uploadUrl, key } = (await this.post('/api/kb/upload', {
@@ -352,6 +366,15 @@ export class TtobakApi {
       fileType: type,
     })) as { uploadUrl: string; key: string };
     await this.putFile(uploadUrl, resolvedPath, type);
+    return { key, fileName: name, mimeType: type };
+  }
+
+  async uploadBytesToKB(data: Buffer, fileName: string, fileType?: string) {
+    const { name, type } = resolveFileMeta(fileName, fileName, fileType);
+    const { uploadUrl, key } = (await this.post('/api/kb/upload', {
+      fileName: name, fileType: type,
+    })) as { uploadUrl: string; key: string };
+    await this.putBytes(uploadUrl, data, type);
     return { key, fileName: name, mimeType: type };
   }
 
@@ -380,6 +403,7 @@ export class TtobakApi {
       path?: string;
     },
   ) {
+    this.requireLocalFiles();
     const { path: resolvedPath, size: fileSize } = guardUploadPath(filePath, MAX_UPLOAD_BYTES);
     const { name, type } = resolveFileMeta(resolvedPath, opts?.fileName, opts?.fileType);
     const { uploadUrl, key } = (await this.post('/api/upload/presigned', {
@@ -400,6 +424,26 @@ export class TtobakApi {
       docType: opts?.docType,
       path: opts?.path,
     });
+  }
+
+  async uploadDocumentBytes(
+    data: Buffer, title: string, fileName: string,
+    opts?: { accountId?: string; fileType?: string; docType?: string; path?: string },
+  ) {
+    const target = documentsPath(opts?.accountId);
+    const { name, type } = resolveFileMeta(fileName, fileName, opts?.fileType);
+    const { uploadUrl, key } = (await this.post('/api/upload/presigned', {
+      fileName: name, fileType: type, category: 'doc',
+    })) as { uploadUrl: string; key: string };
+    await this.putBytes(uploadUrl, data, type);
+    return this.post(target, {
+      title, fileKey: key, fileName: name, mimeType: type, fileSize: data.length,
+      docType: opts?.docType, path: opts?.path,
+    });
+  }
+
+  private requireLocalFiles(): void {
+    if (this.options.allowLocalFiles === false) throw new Error('Local file access is unavailable over HTTP MCP');
   }
 
   async createAccount(input: {
@@ -435,8 +479,14 @@ export class TtobakApi {
   /** PUT a local file's bytes directly to a presigned S3 URL -- no TTOBAK
    * bearer token here, the URL's own signature is the auth. */
   private async putFile(uploadUrl: string, filePath: string, contentType: string): Promise<void> {
+    this.requireLocalFiles();
     const data = readFileSync(filePath);
+    return this.putBytes(uploadUrl, data, contentType);
+  }
+
+  private async putBytes(uploadUrl: string, data: Buffer, contentType: string): Promise<void> {
     const url = new URL(uploadUrl);
+    if (url.protocol !== 'https:' || url.username || url.password) throw new Error('Invalid upload URL');
     return new Promise((resolve, reject) => {
       const req = httpsRequest(
         {
@@ -445,21 +495,24 @@ export class TtobakApi {
           path: url.pathname + url.search,
           method: 'PUT',
           headers: { 'Content-Type': contentType, 'Content-Length': String(data.length) },
-          timeout: 60_000,
+          timeout: this.options.timeoutMs ?? 60_000,
+          signal: this.options.signal,
         },
         (res) => {
-          let body = '';
-          res.on('data', (c) => (body += c));
+          // Upload responses never contribute data to the next request.
+          res.resume();
           res.on('end', () => {
             if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
               resolve();
             } else {
-              reject(new Error(`File upload to S3 failed: HTTP ${res.statusCode}: ${body.slice(0, 300)}`));
+              reject(new Error(`File upload to S3 failed: HTTP ${res.statusCode}`));
             }
           });
+          res.on('error', reject);
+          res.on('aborted', () => reject(new Error('Upload response aborted')));
         },
       );
-      req.on('timeout', () => req.destroy(new Error('File upload to S3 timed out after 60s')));
+      req.on('timeout', () => req.destroy(new Error('File upload to S3 timed out')));
       req.on('error', reject);
       req.write(data);
       req.end();
@@ -467,8 +520,12 @@ export class TtobakApi {
   }
 
   private async request(method: string, path: string, body?: unknown, maxResponseBytes?: number): Promise<unknown> {
+    this.options.signal?.throwIfAborted();
     const idToken = await this.auth.getIdToken();
     const url = new URL(path, this.baseUrl);
+    // A tool argument must never replace the configured application origin.
+    if (url.origin !== new URL(this.baseUrl).origin) throw new Error('API origin cannot change');
+    maxResponseBytes ??= this.options.maxResponseBytes;
     const data = body ? JSON.stringify(body) : undefined;
 
     return new Promise((resolve, reject) => {
@@ -478,7 +535,8 @@ export class TtobakApi {
           port: url.port || undefined,
           path: url.pathname + url.search,
           method,
-          timeout: 120_000,
+          timeout: this.options.timeoutMs ?? 120_000,
+          signal: this.options.signal,
           headers: {
             Authorization: `Bearer ${idToken}`,
             'Content-Type': 'application/json',
@@ -498,7 +556,9 @@ export class TtobakApi {
             res.destroy();
             req.destroy();
           };
-          const tooLarge = () => fail(new Error('READING_LIMIT: HTTP reading response exceeds 32000 bytes'));
+          const tooLarge = () => fail(new Error(maxResponseBytes === MAX_READING_BYTES
+            ? 'READING_LIMIT: HTTP reading response exceeds 32000 bytes'
+            : `RESULT_TOO_LARGE: HTTP API response exceeds ${maxResponseBytes} bytes`));
           res.on('error', fail);
           res.on('aborted', () => fail(new Error('TTOBAK response was aborted')));
           res.on('close', () => { if (!finished) fail(new Error('TTOBAK response ended before completion')); });
@@ -526,7 +586,7 @@ export class TtobakApi {
           }
         },
       );
-      req.on('timeout', () => req.destroy(new Error('TTOBAK request timed out after 120s')));
+      req.on('timeout', () => req.destroy(new Error('TTOBAK request timed out')));
       req.on('error', reject);
       if (data) req.write(data);
       req.end();
