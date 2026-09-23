@@ -140,7 +140,7 @@ export function mcpClientGuide(client: McpClient, transport: McpTransport, confi
       steps: [download, {
         title: 'Claude Code에 등록',
         description: '아래 명령은 사용자 범위에 ttobak을 등록합니다. 모델이나 도구 승인 설정은 변경하지 않습니다.',
-        code: [block('등록 명령', `claude mcp add --transport stdio --scope user \\\n${Object.entries(env).map(([key, value]) => `  -e ${quote(`${key}=${value}`)} \\\n`).join('')}  ttobak -- node "$HOME/.ttobak/server.mjs"`)],
+        code: [block('등록 명령', `claude mcp add ttobak --transport stdio --scope user \\\n${Object.entries(env).map(([key, value]) => `  -e ${quote(`${key}=${value}`)} \\\n`).join('')}  -- node "$HOME/.ttobak/server.mjs"`)],
       }, login, check],
       note: 'Claude Code의 Tool Search는 stdio에서도 동작합니다. HTTP로 바꾸는 것과 도구 지연 로딩은 별개입니다.',
     };
