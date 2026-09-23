@@ -1,4 +1,4 @@
-# ADR-044: Stdio and authenticated Streamable HTTP MCP
+# ADR-045: Stdio and authenticated Streamable HTTP MCP
 
 - Status: Accepted for implementation; remote deployment/consumer acceptance separate.
 - Decision date: 2026-09-23.
@@ -37,7 +37,8 @@ HTTP hides the local login/logout tools and accepts bounded base64 bytes for
 the two upload tools. A file path is rejected both at dispatch and the API adapter.
 Stdio keeps its browser login, local file guards and existing larger file limits.
 Vault export remains an API operation; oversized HTTP results fail rather than
-being truncated.
+being truncated. Successful writes with oversized responses instead return a
+compact completion receipt preserving returned record IDs; omitted content is explicit.
 
 HTTP bounds are 1 MiB request JSON, 512 KiB decoded uploads, 32,000-byte tool
 results, 32 active requests and a maximum 55-second absolute deadline. The tighter

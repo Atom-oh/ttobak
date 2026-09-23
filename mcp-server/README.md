@@ -73,7 +73,7 @@ HTTP hides local login/logout tools. Uploads use `fileName` plus `contentBase64`
 `title`. Larger files use stdio or the app. Large exports fail instead of being
 truncated or assigned invented continuation. Quick's 60-second operation limit
 still applies. Missing email claims are never fabricated to bypass invitation gates.
-See [ADR-044](../docs/decisions/ADR-044-dual-mcp-transports.md).
+See [ADR-045](../docs/decisions/ADR-045-dual-mcp-transports.md).
 
 ## Tool behavior
 

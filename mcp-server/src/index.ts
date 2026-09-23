@@ -10,7 +10,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { CognitoAuth } from './auth.js';
 import { TtobakApi, type ApiAuth } from './api.js';
-import { httpTools, decodeUpload, MAX_HTTP_RESULT_BYTES } from './remote-tools.js';
+import { httpTools, decodeUpload, mutationReceipt, MAX_HTTP_RESULT_BYTES } from './remote-tools.js';
 import { readingOptions, readingResult, readingError } from './reading.js';
 
 declare const TTOBAK_STANDALONE_STDIO: boolean;
@@ -738,7 +738,9 @@ export function createMcpServer(options: ServerOptions): Server {
     if (!tools.some(tool => tool.name === request.params.name)) return error('Unknown or unavailable tool');
     const result = await callTool(request, options);
     if (options.mode === 'http' && Buffer.byteLength(JSON.stringify(result)) > MAX_HTTP_RESULT_BYTES) {
-      return error('RESULT_TOO_LARGE: use a bounded reading tool or a narrower query.');
+      const receipt = !('isError' in result && result.isError) &&
+        mutationReceipt(request.params.name, result.content[0]?.text ?? '');
+      return receipt ? text(receipt) : error('RESULT_TOO_LARGE: narrow the read. For a write, verify current state before retrying; it may have completed.');
     }
     return result;
   });

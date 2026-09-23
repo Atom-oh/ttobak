@@ -154,7 +154,7 @@ revalidates access/revision. The MCP adapter passes these pages through with its
 own byte ceiling; it no longer fetches full meeting detail for reading.
 The installed adapter also provides stateless, authenticated HTTP with caller-supplied
 file bytes. Remote hosting and OAuth client acceptance remain separate from code
-readiness; see [ADR-044](decisions/ADR-044-dual-mcp-transports.md).
+readiness; see [ADR-045](decisions/ADR-045-dual-mcp-transports.md).
 
 Attachment extraction supports bounded native text from PDF/PPTX/DOCX/Markdown.
 Canonical ATTACH#/ATTEXT# identities, run/lease and ETag checks bind immutable

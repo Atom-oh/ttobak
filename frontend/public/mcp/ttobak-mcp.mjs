@@ -21543,6 +21543,23 @@ var MAX_HTTP_REQUEST_BYTES = 1024 * 1024;
 var MAX_HTTP_UPLOAD_BYTES = 512 * 1024;
 var MAX_HTTP_RESULT_BYTES = 32e3;
 var MAX_HTTP_API_BYTES = 1024 * 1024;
+function mutationReceipt(name, value) {
+  if (!/^ttobak_(create_|update_|put_|upload_|add_|link_|unlink_|kb_(upload|sync|delete_))/.test(name)) return;
+  const ids = {};
+  try {
+    const data = JSON.parse(value);
+    for (const key of ["projectId", "docId", "accountId", "fileId", "userId", "jobId"]) {
+      if (typeof data?.[key] === "string" && /^[\w-]{1,128}$/.test(data[key])) ids[key] = data[key];
+    }
+  } catch {
+  }
+  return JSON.stringify({
+    status: "completed",
+    ...ids,
+    responseOmitted: true,
+    message: "Write succeeded. Large response omitted; do not repeat the write. Read the saved record to inspect it."
+  });
+}
 function httpTools(tools) {
   return tools.filter((tool) => !["ttobak_login", "ttobak_logout"].includes(tool.name)).map((tool) => {
     if (!["ttobak_kb_upload", "ttobak_upload_document"].includes(tool.name)) return tool;
@@ -22195,7 +22212,8 @@ function createMcpServer(options) {
     if (!tools.some((tool) => tool.name === request.params.name)) return error2("Unknown or unavailable tool");
     const result = await callTool(request, options);
     if (options.mode === "http" && Buffer.byteLength(JSON.stringify(result)) > MAX_HTTP_RESULT_BYTES) {
-      return error2("RESULT_TOO_LARGE: use a bounded reading tool or a narrower query.");
+      const receipt = !("isError" in result && result.isError) && mutationReceipt(request.params.name, result.content[0]?.text ?? "");
+      return receipt ? text(receipt) : error2("RESULT_TOO_LARGE: narrow the read. For a write, verify current state before retrying; it may have completed.");
     }
     return result;
   });

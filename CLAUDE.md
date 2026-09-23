@@ -245,7 +245,7 @@ ScreenCaptureKit. Report that limit instead of claiming a Mac build passed.
   HTTP bytes and serialized tool results at 32,000; never fall back to full-meeting
   reads or truncate a page while inventing continuation.
   HTTP uses request-scoped, resource-bound access tokens, not local token files
-  or server file paths (ADR-044).
+  or server file paths (ADR-045).
 - **Simulator:** transcript is used for extraction only. Only allowlisted numeric
   requirements/options JSON enters codegen; option names/descriptions remain
   user text. Security rests on the interpreter's empty IAM role plus SANDBOX

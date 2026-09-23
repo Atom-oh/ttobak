@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 9687cd1cc965 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: b18e94181793 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
 # TTOBAK review context
 
 Shared by Codex, Kiro, and the CI review panel. Extracted from the
@@ -242,7 +242,7 @@ ScreenCaptureKit. Report that limit instead of claiming a Mac build passed.
   HTTP bytes and serialized tool results at 32,000; never fall back to full-meeting
   reads or truncate a page while inventing continuation.
   HTTP uses request-scoped, resource-bound access tokens, not local token files
-  or server file paths (ADR-044).
+  or server file paths (ADR-045).
 - **Simulator:** transcript is used for extraction only. Only allowlisted numeric
   requirements/options JSON enters codegen; option names/descriptions remain
   user text. Security rests on the interpreter's empty IAM role plus SANDBOX

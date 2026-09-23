@@ -299,6 +299,30 @@ test('large tool output is rejected rather than truncated with invented continua
   assert.equal(result.nextCursor, undefined);
 });
 
+test('large successful writes retain saved IDs without inviting duplicate creation', async t => {
+  let writes = 0;
+  const large = '가'.repeat(14000);
+  const f = await fixture(t, api => {
+    api.createProject = async () => { writes++; return { projectId: 'project-1', description: large }; };
+    api.putDocument = async () => { writes++; return { docId: 'doc-1', content: large }; };
+    api.updateDocument = async () => { writes++; return { docId: 'doc-1', content: large }; };
+  });
+  const client = await f.connect();
+  for (const [name, args, id] of [
+    ['ttobak_create_project', { name: 'test', description: large }, ['projectId', 'project-1']],
+    ['ttobak_put_document', { title: 'test', markdown: large }, ['docId', 'doc-1']],
+    ['ttobak_update_document', { title: 'test', docId: 'doc-1' }, ['docId', 'doc-1']],
+  ]) {
+    const result = await client.callTool({ name, arguments: args });
+    const receipt = parsed(result);
+    assert.equal(receipt.status, 'completed');
+    assert.equal(receipt[id[0]], id[1]);
+    assert.equal(receipt.responseOmitted, true);
+    assert.ok(Buffer.byteLength(JSON.stringify(result)) < 32000);
+  }
+  assert.equal(writes, 3);
+});
+
 test('absolute deadline aborts backend work and does not retry a mutation', async t => {
   let calls = 0, aborted = false;
   const f = await fixture(t, (api, _auth, options) => {

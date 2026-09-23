@@ -5,6 +5,19 @@ export const MAX_HTTP_UPLOAD_BYTES = 512 * 1024;
 export const MAX_HTTP_RESULT_BYTES = 32_000;
 export const MAX_HTTP_API_BYTES = 1024 * 1024;
 
+export function mutationReceipt(name: string, value: string): string | undefined {
+  if (!/^ttobak_(create_|update_|put_|upload_|add_|link_|unlink_|kb_(upload|sync|delete_))/.test(name)) return;
+  const ids: Record<string, string> = {};
+  try {
+    const data = JSON.parse(value);
+    for (const key of ['projectId', 'docId', 'accountId', 'fileId', 'userId', 'jobId']) {
+      if (typeof data?.[key] === 'string' && /^[\w-]{1,128}$/.test(data[key])) ids[key] = data[key];
+    }
+  } catch { /* A successful non-JSON response still confirms completion. */ }
+  return JSON.stringify({ status: 'completed', ...ids, responseOmitted: true,
+    message: 'Write succeeded. Large response omitted; do not repeat the write. Read the saved record to inspect it.' });
+}
+
 export function httpTools(tools: Tool[]): Tool[] {
   return tools.filter((tool) => !['ttobak_login', 'ttobak_logout'].includes(tool.name))
     .map((tool) => {
