@@ -64,6 +64,23 @@ describe('GatewayStack', () => {
     template = buildTemplate();
   });
 
+  test('final summary override leaves refinement and auxiliary model selections intact', () => {
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'ttobak-summarize',
+      Environment: {
+        Variables: Match.objectLike({
+          BEDROCK_MODEL_ID: 'global.anthropic.claude-opus-5',
+          BEDROCK_SUMMARY_MODEL_ID: 'global.openai.gpt-6-sol',
+          BEDROCK_SONNET_MODEL_ID: 'global.anthropic.claude-sonnet-5',
+        }),
+      },
+    });
+    const overridden = Object.values(template.findResources('AWS::Lambda::Function'))
+      .filter(resource => resource.Properties.Environment?.Variables?.BEDROCK_SUMMARY_MODEL_ID);
+    expect(overridden.map(resource => resource.Properties.FunctionName)).toEqual(['ttobak-summarize']);
+  });
+
+
   test('creates at least 6 Lambda functions', () => {
     // api, transcribe, summarize, process-image, kb, qa (+ ws-authorizer, websocket if resolved)
     const resources = template.findResources('AWS::Lambda::Function');

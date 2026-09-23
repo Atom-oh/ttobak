@@ -85,6 +85,7 @@ type qualityCaseResult struct {
 	Error        string           `json:"error,omitempty"`
 	InputTokens  int              `json:"inputTokens,omitempty"`
 	OutputTokens int              `json:"outputTokens,omitempty"`
+	WallSeconds  float64          `json:"wallSeconds,omitempty"`
 	Findings     []qualityFinding `json:"findings,omitempty"`
 	Evidence     *qualityEvidence `json:"evidence,omitempty"`
 }
@@ -114,6 +115,9 @@ func qualityProductionRequest(t *testing.T, fixture qualityCase, response []byte
 	t.Helper()
 	meeting := qualityMeeting(fixture)
 	request, note, _, err := invokeNoteSourceFixture(t, meeting, string(response), func(s *BedrockService) (string, error) {
+		// Capture the shared canonical prompt and postprocessing with the
+		// Anthropic envelope; provider adapters below retain native evidence.
+		s.summaryModelID = "global.anthropic.claude-opus-5"
 		return s.SummarizeTranscript(context.Background(), meeting.MeetingID, meeting.UserID, "")
 	})
 	body, marshalErr := json.Marshal(request)
@@ -190,6 +194,18 @@ func TestNoteQualityEvaluation(t *testing.T) {
 		region = "us-west-2" // Same default as cmd/summarize.
 	}
 	cases, corpus := loadQualityCases(t)
+	if extraPath := os.Getenv("TTOBAK_NOTE_EVAL_EXTRA_CASES"); extraPath != "" {
+		extra, err := os.ReadFile(extraPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var additional []qualityCase
+		if err := json.Unmarshal(extra, &additional); err != nil {
+			t.Fatal(err)
+		}
+		cases = append(cases, additional...)
+		corpus = append(corpus, extra...)
+	}
 	var client *bedrockruntime.Client
 	if mode == "live" {
 		if os.Getenv("AWS_ENDPOINT_URL") != "" || os.Getenv("AWS_ENDPOINT_URL_BEDROCK_RUNTIME") != "" {
@@ -206,14 +222,26 @@ func TestNoteQualityEvaluation(t *testing.T) {
 	}
 	results := make([]qualityCaseResult, 0, len(cases))
 	allPassed := mode != "requests"
+	seenCases := map[string]bool{}
+	for _, fixture := range cases {
+		if !regexp.MustCompile(`^[a-z0-9-]+$`).MatchString(fixture.ID) || seenCases[fixture.ID] ||
+			len(fixture.Criteria) == 0 {
+			t.Fatal("every evaluation case must have a unique safe ID and criteria")
+		}
+		seenCases[fixture.ID] = true
+	}
 	for _, fixture := range cases {
 		if !regexp.MustCompile(`^[a-z0-9-]+$`).MatchString(fixture.ID) {
 			t.Fatal("unsafe fixture ID")
 		}
-		request, _, err := qualityProductionRequest(t, fixture,
+		productionRequest, _, err := qualityProductionRequest(t, fixture,
 			[]byte(`{"content":[{"type":"text","text":"REQUEST_EXPORT_ONLY"}],"stop_reason":"end_turn"}`))
 		if err != nil {
 			t.Fatalf("construct production request for %s: %v", fixture.ID, err)
+		}
+		request, err := qualityProviderRequest(ClaudeOpusModelID, productionRequest)
+		if err != nil {
+			t.Fatal(err)
 		}
 		if mode == "grade" {
 			original, err := os.ReadFile(filepath.Join(dir, fixture.ID+".request.json"))
@@ -232,10 +260,12 @@ func TestNoteQualityEvaluation(t *testing.T) {
 		evidence := qualityEvidence{ModelID: ClaudeOpusModelID, Region: region, RequestSHA256: qualityHash(request)}
 		if mode == "live" {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			started := time.Now()
 			out, invokeErr := client.InvokeModel(ctx, &bedrockruntime.InvokeModelInput{
 				ModelId: aws.String(ClaudeOpusModelID), ContentType: aws.String("application/json"),
 				Accept: aws.String("application/json"), Body: request,
 			})
+			entry.WallSeconds = time.Since(started).Seconds()
 			cancel()
 			if invokeErr != nil {
 				entry.Error = fmt.Sprintf("model invocation failed: %v", invokeErr)
@@ -268,14 +298,21 @@ func TestNoteQualityEvaluation(t *testing.T) {
 		if entry.Error == "" {
 			// Reuse production completion validation and anchor resolution with
 			// the real response. This second model transport is synthetic.
-			replayed, note, replayErr := qualityProductionRequest(t, fixture, response)
-			if replayErr != nil || !bytes.Equal(request, replayed) {
+			completion, completionErr := qualityProviderCompletion(ClaudeOpusModelID, response)
+			if completionErr != nil {
+				entry.Error = completionErr.Error()
+				allPassed = false
+				results = append(results, entry)
+				continue
+			}
+			replayed, note, replayErr := qualityProductionRequest(t, fixture, completion)
+			if replayErr != nil || !bytes.Equal(productionRequest, replayed) {
 				entry.Error = fmt.Sprintf("production completion/postprocessing failed: %v", replayErr)
 			} else {
 				entry.Completed, entry.Passed = true, true
 				entry.Evidence = &evidence
 				var usage ClaudeResponse
-				if err := json.Unmarshal(response, &usage); err != nil {
+				if err := json.Unmarshal(completion, &usage); err != nil {
 					t.Fatal(err)
 				}
 				entry.InputTokens, entry.OutputTokens = usage.Usage.InputTokens, usage.Usage.OutputTokens

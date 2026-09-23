@@ -309,6 +309,16 @@ export class AiStack extends cdk.Stack {
     props.table.grantReadWriteData(this.summarizeRole);
     props.bucket.grantReadWrite(this.summarizeRole);
 
+    this.summarizeRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'InvokeFinalSummaryModel',
+      effect: iam.Effect.ALLOW,
+      actions: ['bedrock:InvokeModel'],
+      resources: [
+        `arn:aws:bedrock:*::foundation-model/openai.gpt-6-sol`,
+        `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/global.openai.gpt-6-sol`,
+      ],
+    }));
+
     this.summarizeRole.addToPolicy(
       new iam.PolicyStatement({
         sid: 'BedrockInvokeModel',

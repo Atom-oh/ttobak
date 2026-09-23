@@ -127,7 +127,9 @@ for a separate ttobak-connections table described an obsolete design.
 | convert-doc | Go/LibreOffice ARM64 container | 5m | 3008MB |
 
 Model/environment selection belongs to each function, not one repo-wide model.
-`gateway-stack.ts` selects Opus 5 for summary, Opus 4.8 for images, Sonnet 5 for
+`gateway-stack.ts` selects GPT-6 Sol for final notes via `BEDROCK_SUMMARY_MODEL_ID`,
+while auxiliary Opus calls remain on `BEDROCK_MODEL_ID`. Only the summary role
+receives the exact GPT model/profile grant. Images use Opus 4.8, Sonnet 5 is used for
 QA/simulator; Go refinement uses its Sonnet configuration and lightweight Go tasks
 use Haiku. QA detection and Translate are separate service/model choices.
 

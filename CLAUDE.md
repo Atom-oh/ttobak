@@ -43,13 +43,13 @@ documentation stays English.
 | Infra | CDK TypeScript, eleven stacks | `infra/bin/infra.ts`, `infra/lib/` |
 | MCP | TypeScript stdio/HTTP adapter of authenticated APIs | `mcp-server/src/`, `mcp-server/package.json` |
 
-Model IDs are deployment configuration, not a global naming convention. Go uses
-`BEDROCK_MODEL_ID` for Opus and `BEDROCK_SONNET_MODEL_ID` for refinement; the
-summarize Lambda selects Opus 5, image processing selects Opus 4.8, QA/simulator
-select Sonnet 5, and lightweight Go tasks use Haiku. Verify the specific call and
-injected environment in `backend/internal/service/bedrock.go` and
-`infra/lib/gateway-stack.ts`. QA detection uses qwen3-32b; translation uses
-Amazon Translate. CI reviewer model aliases have a separate configuration.
+Model IDs are function configuration. Go uses `BEDROCK_MODEL_ID` for auxiliary
+Opus and `BEDROCK_SONNET_MODEL_ID` for refinement. Final notes select GPT-6 Sol
+through `BEDROCK_SUMMARY_MODEL_ID`, with bounded continuation and strict completion
+before publication. Images use Opus 4.8; QA/simulator use Sonnet 5; lightweight Go
+uses Haiku. Verify `backend/internal/service/bedrock.go` and
+`infra/lib/gateway-stack.ts`. QA detection uses qwen3-32b; translation uses Amazon
+Translate. CI reviewer aliases are separate configuration.
 
 ## Verification commands
 
