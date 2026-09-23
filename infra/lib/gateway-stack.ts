@@ -460,12 +460,32 @@ export class GatewayStack extends cdk.Stack {
     this.simFunction.configureAsyncInvoke({ retryAttempts: 0 });
     this.apiFunction.addEnvironment('SIM_FUNCTION_NAME', this.simFunction.functionName);
 
+    // Opt-in audience for the same TTOBAK resource exposed through HTTP MCP.
+    // Cognito resource binding supplies aud on access tokens, so API Gateway
+    // no longer falls back to client_id. Keep the existing audience as well.
+    const mcpResourceAudience = this.node.tryGetContext('ttobak:mcpResourceAudience') as string | undefined;
+    if (mcpResourceAudience !== undefined) {
+      const resource = new URL(mcpResourceAudience);
+      const siteHosts = [
+        this.node.tryGetContext('ttobak:domainName'),
+        this.node.tryGetContext('ttobak:cloudfrontDomain'),
+      ].filter((host): host is string => typeof host === 'string' && host.length > 0);
+      if (resource.protocol !== 'https:' || resource.username || resource.password ||
+          resource.search || resource.hash || resource.pathname !== '/api/mcp' ||
+          resource.href !== mcpResourceAudience ||
+          (siteHosts.length > 0 && !siteHosts.includes(resource.host))) {
+        throw new Error('ttobak:mcpResourceAudience must be the exact HTTPS /api/mcp URL');
+      }
+    }
     // JWT Authorizer for Cognito
     const jwtAuthorizer = new apigatewayv2Authorizers.HttpJwtAuthorizer(
       'CognitoAuthorizer',
       `https://cognito-idp.${cdk.Aws.REGION}.amazonaws.com/${props.userPool.userPoolId}`,
       {
-        jwtAudience: [(props.spaClient ?? props.userPoolClient).userPoolClientId],
+        jwtAudience: [
+          (props.spaClient ?? props.userPoolClient).userPoolClientId,
+          ...(mcpResourceAudience ? [mcpResourceAudience] : []),
+        ],
         identitySource: ['$request.header.Authorization'],
       }
     );

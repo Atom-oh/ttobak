@@ -14,11 +14,12 @@ describe('GatewayStack', () => {
       .filter(resource => JSON.stringify(resource.Properties.FunctionName).includes('KbFunction'));
   }
 
-  function buildTemplate(indexingMode: 'manual-only' | 'all' = 'manual-only', scheduleEnabled = false): Template {
+  function buildTemplate(indexingMode: 'manual-only' | 'all' = 'manual-only', scheduleEnabled = false, mcpResourceAudience?: string): Template {
     const app = new cdk.App({
       context: {
         'ttobak:cloudfrontDomain': 'd2olomx8td8txt.cloudfront.net',
         'ttobak:domainName': 'ttobak.example.com',
+        ...(mcpResourceAudience === undefined ? {} : { 'ttobak:mcpResourceAudience': mcpResourceAudience }),
       },
     });
 
@@ -62,6 +63,21 @@ describe('GatewayStack', () => {
 
   beforeAll(() => {
     template = buildTemplate();
+  });
+
+  test('MCP resource audience is explicit and does not replace the existing client audience', () => {
+    const before = Object.values(template.findResources('AWS::ApiGatewayV2::Authorizer'))[0];
+    expect(before.Properties.JwtConfiguration.Audience).toHaveLength(1);
+    const enabled = buildTemplate('manual-only', false, 'https://ttobak.example.com/api/mcp');
+    const after = Object.values(enabled.findResources('AWS::ApiGatewayV2::Authorizer'))[0];
+    expect(after.Properties.JwtConfiguration.Audience).toHaveLength(2);
+    expect(after.Properties.JwtConfiguration.Audience[1]).toBe('https://ttobak.example.com/api/mcp');
+    expect(Object.keys(enabled.findResources('AWS::ApiGatewayV2::Route'))).toEqual(
+      Object.keys(template.findResources('AWS::ApiGatewayV2::Route')));
+    expect(() => buildTemplate('manual-only', false, 'http://ttobak.example.com/api/mcp')).toThrow();
+    expect(() => buildTemplate('manual-only', false, 'https://ttobak.example.com/api/public/anything')).toThrow();
+    expect(() => buildTemplate('manual-only', false, 'https://ttobak.example.com/api/mcp?wildcard=*')).toThrow();
+    expect(() => buildTemplate('manual-only', false, 'https://another.example.com/api/mcp')).toThrow();
   });
 
   test('final summary override leaves refinement and auxiliary model selections intact', () => {

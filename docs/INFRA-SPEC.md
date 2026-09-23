@@ -31,6 +31,9 @@ AuthStack explicitly disables self-signup. AdminCreateUser invitations are the
 account-creation gate. The domain allowlist is supplemental; RESEND trigger
 behavior is not verified. SPA client has no secret; server OAuth and MCP clients
 have separate settings. Inspect `auth-stack.ts` before changing flows/scopes.
+HTTP MCP optionally adds the exact HTTPS `/api/mcp` resource audience through
+`ttobak:mcpResourceAudience`; the existing client audience and edge client-ID
+checks remain. This opt-in provisions no route, origin or anonymous MCP access.
 
 The pre-signup trigger reads the configured domain allowlist. PostAuthentication
 writes a separate USER#/LOGIN item for lastLoginAt, with a short abort timeout,
