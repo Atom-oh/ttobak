@@ -17,4 +17,14 @@ Saved-summary runs recheck current edit grants and publish source/run/lease stat
 with content atomically; source and run deletion share one transaction.
 Retain ambiguous spills (ADR-037). These guarantees cost extra reads/conflicts.
 
+Long final-note responses may use at most two `max_tokens` continuations inside
+the same generation, retaining the source, model and per-call budget. The combined
+text is bounded at 256 KiB and is accepted only after a normal terminal response.
+Signed thinking and redacted-thinking blocks are replayed unchanged, including
+thinking-only cutoffs with no visible text. Opaque continuation history is capped
+at 1 MiB and never enters saved notes or logs.
+Cancellation, further truncation, empty output or unexpected stop reasons discard
+the whole generation. Source and publication guards are unchanged; continuation
+does not consume or reset the separate durable source-conflict retry budget.
+
 [Release/recovery](../runbooks/meeting-document-release.md)

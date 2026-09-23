@@ -98,8 +98,14 @@ func invokeNoteSourceFixture(t *testing.T, meeting *model.Meeting, modelResponse
 			if err := json.NewDecoder(req.Body).Decode(&request); err != nil {
 				t.Fatal(err)
 			}
-			if len(request.Messages) != 1 || len(request.Messages[0].Content) != 1 {
+			if len(request.Messages) == 0 || len(request.Messages)%2 != 1 || len(request.Messages[0].Content) != 1 {
 				t.Fatalf("unexpected summary request: %+v", request.Messages)
+			}
+			for index := 1; index < len(request.Messages); index += 2 {
+				if request.Messages[index].Role != "assistant" || request.Messages[index+1].Role != "user" ||
+					len(request.Messages[index+1].Content) != 1 || request.Messages[index+1].Content[0].Text != summaryContinuationPrompt {
+					t.Fatal("invalid summary continuation conversation")
+				}
 			}
 			return response(modelResponse), nil
 		}),
