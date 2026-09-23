@@ -100,8 +100,20 @@ type ClaudeRequest struct {
 
 // ClaudeMessage represents a message in a Claude conversation
 type ClaudeMessage struct {
-	Role    string         `json:"role"`
-	Content []ContentBlock `json:"content"`
+	Role            string         `json:"role"`
+	Content         []ContentBlock `json:"content"`
+	responseContent json.RawMessage
+}
+
+func (message ClaudeMessage) MarshalJSON() ([]byte, error) {
+	if message.responseContent == nil {
+		type plainMessage ClaudeMessage
+		return json.Marshal(plainMessage(message))
+	}
+	return json.Marshal(struct {
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
+	}{Role: message.Role, Content: message.responseContent})
 }
 
 // ContentBlock represents a content block in a Claude message
@@ -1565,6 +1577,7 @@ func (s *BedrockService) invokeClaudeModelWithID(ctx context.Context, request Cl
 func (s *BedrockService) invokeCompleteSummary(ctx context.Context, request ClaudeRequest) (string, error) {
 	request.Messages = append([]ClaudeMessage(nil), request.Messages...)
 	var content strings.Builder
+	continuationBytes := 0
 	for continuation := 0; continuation <= maxSummaryContinuations; continuation++ {
 		if err := ctx.Err(); err != nil {
 			return "", err
@@ -1577,9 +1590,6 @@ func (s *BedrockService) invokeCompleteSummary(ctx context.Context, request Clau
 		if err != nil {
 			return "", err
 		}
-		if strings.TrimSpace(text) == "" {
-			return "", fmt.Errorf("empty text response from model")
-		}
 		if len(text) > maxSummaryOutputBytes-content.Len() {
 			return "", fmt.Errorf("complete summary exceeds output byte limit")
 		}
@@ -1590,10 +1600,25 @@ func (s *BedrockService) invokeCompleteSummary(ctx context.Context, request Clau
 			}
 			return content.String(), nil
 		}
+		responseContent, hasThinking, err := summaryContinuationContent(body)
+		if err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(text) == "" && !hasThinking {
+			return "", fmt.Errorf("empty text response from model")
+		}
+		if len(responseContent) > maxSummaryContinuationBytes-continuationBytes {
+			return "", fmt.Errorf("summary continuation context exceeds byte limit")
+		}
+		continuationBytes += len(responseContent)
 		log.Printf("Continuing final summary after output limit: continuation=%d accumulatedBytes=%d", continuation+1, content.Len())
+		prompt := summaryContinuationPrompt
+		if strings.TrimSpace(content.String()) == "" {
+			prompt = summaryAfterThinkingPrompt
+		}
 		request.Messages = append(request.Messages,
-			ClaudeMessage{Role: "assistant", Content: []ContentBlock{{Type: "text", Text: text}}},
-			ClaudeMessage{Role: "user", Content: []ContentBlock{{Type: "text", Text: summaryContinuationPrompt}}},
+			ClaudeMessage{Role: "assistant", responseContent: responseContent},
+			ClaudeMessage{Role: "user", Content: []ContentBlock{{Type: "text", Text: prompt}}},
 		)
 	}
 	return "", fmt.Errorf("summary continuation limit exceeded")
@@ -1601,7 +1626,50 @@ func (s *BedrockService) invokeCompleteSummary(ctx context.Context, request Clau
 
 const maxSummaryContinuations = 2
 const maxSummaryOutputBytes = 256 * 1024
-const summaryContinuationPrompt = `Continue the same meeting notes exactly from the next character after your previous response. Do not restart, repeat, summarize, or shorten the earlier text. Do not add an introduction or a new opening code fence when continuing an existing block. Complete the unfinished sentence or block and all remaining required sections. Keep the original sources, language, detail, evidence boundaries and citation rules.`
+const maxSummaryContinuationBytes = 1024 * 1024
+const summaryContinuationPrompt = `Continue the unfinished visible meeting-note text from its next character. Return only the missing note text, without internal reasoning. Do not restart, repeat, summarize, or shorten the note text already returned. Do not add an introduction or a new opening code fence when continuing an existing block. Complete the unfinished sentence or block and all remaining required sections. Keep the original sources, language, detail, evidence boundaries and citation rules.`
+const summaryAfterThinkingPrompt = `Provide the complete final meeting notes requested in the original user message. Return only the finished notes, without internal reasoning. Keep the original sources, language, detail, evidence boundaries, required sections and citation rules.`
+
+func summaryContinuationContent(body []byte) (json.RawMessage, bool, error) {
+	var response struct {
+		Content json.RawMessage `json:"content"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, false, err
+	}
+	var blocks []struct {
+		Type      string  `json:"type"`
+		Text      *string `json:"text"`
+		Thinking  *string `json:"thinking"`
+		Signature string  `json:"signature"`
+		Data      string  `json:"data"`
+	}
+	if err := json.Unmarshal(response.Content, &blocks); err != nil {
+		return nil, false, err
+	}
+	hasThinking := false
+	for _, block := range blocks {
+		switch block.Type {
+		case "text":
+			if block.Text == nil {
+				return nil, false, fmt.Errorf("missing summary text block")
+			}
+		case "thinking":
+			if block.Thinking == nil || block.Signature == "" {
+				return nil, false, fmt.Errorf("unsigned summary thinking block")
+			}
+			hasThinking = true
+		case "redacted_thinking":
+			if block.Data == "" {
+				return nil, false, fmt.Errorf("empty redacted summary thinking block")
+			}
+			hasThinking = true
+		default:
+			return nil, false, fmt.Errorf("unsupported summary continuation block")
+		}
+	}
+	return response.Content, hasThinking, nil
+}
 
 func (s *BedrockService) invokeClaudeResponseBody(ctx context.Context, request ClaudeRequest, modelID string) ([]byte, error) {
 	requestBody, err := json.Marshal(request)

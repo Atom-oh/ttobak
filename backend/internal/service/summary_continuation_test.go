@@ -19,7 +19,7 @@ func (transport summaryContinuationHTTP) Do(request *http.Request) (*http.Respon
 	return transport(request)
 }
 
-func continuationFixture(t *testing.T, response func(int) (string, string)) (*BedrockService, *[]ClaudeRequest) {
+func continuationFixture(t *testing.T, response func(int) (string, string), firstBlocks ...[]map[string]string) (*BedrockService, *[]ClaudeRequest) {
 	t.Helper()
 	var requests []ClaudeRequest
 	client := bedrockruntime.New(bedrockruntime.Options{Region: "us-west-2", RetryMaxAttempts: 1,
@@ -27,16 +27,38 @@ func continuationFixture(t *testing.T, response func(int) (string, string)) (*Be
 			return aws.Credentials{AccessKeyID: "test-key", SecretAccessKey: "test-secret"}, nil
 		}),
 		HTTPClient: summaryContinuationHTTP(func(request *http.Request) (*http.Response, error) {
-			var body ClaudeRequest
-			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			encodedRequest, err := io.ReadAll(request.Body)
+			if err != nil {
 				t.Fatal(err)
+			}
+			var body ClaudeRequest
+			if err := json.Unmarshal(encodedRequest, &body); err != nil {
+				t.Fatal(err)
+			}
+			var raw struct {
+				Messages []struct {
+					Role    string          `json:"role"`
+					Content json.RawMessage `json:"content"`
+				} `json:"messages"`
+			}
+			if err := json.Unmarshal(encodedRequest, &raw); err != nil {
+				t.Fatal(err)
+			}
+			for index, message := range raw.Messages {
+				if message.Role == "assistant" {
+					body.Messages[index].responseContent = message.Content
+				}
 			}
 			if !strings.Contains(request.URL.Path, ClaudeOpusModelID) {
 				t.Fatal("continuation changed the selected model")
 			}
 			requests = append(requests, body)
 			text, reason := response(len(requests))
-			encoded, err := json.Marshal(map[string]interface{}{"content": []map[string]string{{"type": "text", "text": text}}, "stop_reason": reason})
+			content := []map[string]string{{"type": "text", "text": text}}
+			if len(requests) == 1 && len(firstBlocks) > 0 {
+				content = firstBlocks[0]
+			}
+			encoded, err := json.Marshal(map[string]interface{}{"content": content, "stop_reason": reason})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -44,6 +66,55 @@ func continuationFixture(t *testing.T, response func(int) (string, string)) (*Be
 		}),
 	})
 	return NewBedrockService(client, nil, nil), &requests
+}
+
+func TestFinalSummaryPreservesSignedThinkingWithoutPublishingIt(t *testing.T) {
+	for _, blocks := range [][]map[string]string{
+		{{"type": "thinking", "thinking": "", "signature": "opaque-signature"}},
+		{{"type": "thinking", "thinking": "synthetic internal work", "signature": "opaque-signature"}, {"type": "text", "text": "First "}},
+		{{"type": "redacted_thinking", "data": "opaque-redacted-data"}},
+	} {
+		service, requests := continuationFixture(t, func(attempt int) (string, string) {
+			if attempt == 1 {
+				return "", "max_tokens"
+			}
+			return "complete note", "end_turn"
+		}, blocks)
+		text, err := service.invokeCompleteSummary(context.Background(), ClaudeRequest{MaxTokens: 16000,
+			Messages: []ClaudeMessage{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "Original source"}}}}})
+		if err != nil || len(*requests) != 2 {
+			t.Fatalf("signed thinking could not continue: calls=%d err=%v", len(*requests), err)
+		}
+		if strings.Contains(text, "opaque") || strings.Contains(text, "internal work") || !strings.HasSuffix(text, "complete note") {
+			t.Fatal("thinking escaped into the saved meeting note")
+		}
+		var replayed []map[string]string
+		if err := json.Unmarshal((*requests)[1].Messages[1].responseContent, &replayed); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(replayed, blocks) {
+			t.Fatal("thinking signature, empty field or response block order changed")
+		}
+		if len(blocks) == 1 && (*requests)[1].Messages[2].Content[0].Text != summaryAfterThinkingPrompt {
+			t.Fatal("thinking-only response was asked to continue nonexistent visible text")
+		}
+	}
+}
+
+func TestFinalSummaryRejectsInvalidContinuationContext(t *testing.T) {
+	for _, blocks := range [][]map[string]string{
+		{{"type": "thinking", "thinking": "unsigned"}},
+		{{"type": "thinking", "signature": "missing-thinking-field"}},
+		{{"type": "tool_use", "text": "not a final note"}},
+		{{"type": "redacted_thinking", "data": ""}},
+		{{"type": "thinking", "thinking": "", "signature": strings.Repeat("x", maxSummaryContinuationBytes)}},
+	} {
+		service, requests := continuationFixture(t, func(int) (string, string) { return "", "max_tokens" }, blocks)
+		text, err := service.invokeCompleteSummary(context.Background(), ClaudeRequest{MaxTokens: 16000})
+		if err == nil || text != "" || len(*requests) != 1 {
+			t.Fatal("invalid or unbounded model context was forwarded")
+		}
+	}
 }
 
 func TestFinalSummaryContinuesTokenLimitWithoutChangingSourceModelOrBudget(t *testing.T) {

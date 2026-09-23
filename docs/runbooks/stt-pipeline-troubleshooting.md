@@ -53,6 +53,9 @@ cap and the caller's existing deadline. No partial result is published: the fina
 response must end normally, and all source/permission/publication checks still
 run. Auxiliary refinement/image/action calls retain their own completion rules.
 Continuation is not a reset of the durable source-conflict retry budget.
+Thinking consumes the same output limit and may return no visible text. Preserve
+the response's signed thinking/redacted blocks unchanged when continuing; never
+log or publish them. The opaque continuation context has a separate 1 MiB cap.
 
 A saved-summary `SOURCE_CHANGED` failure means the snapshot no longer matched;
 preserve the newer human edits and request a fresh summary. Do not remove its
@@ -78,7 +81,9 @@ For an operator-authorized saved-source recovery, `backend/cmd/resummary` defaul
 to read-only diagnostics (state, byte counts, hashes and source-object validation;
 never note/transcript text). It verifies the explicitly supplied AWS account and
 resolves the canonical owner before using the same service as the authenticated
-API. Run from `backend`, with the approved temporary-credential profile:
+API. The report includes the operator ARN, and failed selected-source validation
+returns a nonzero exit status. Unselected transcripts do not block recovery.
+Run from `backend`, with the approved temporary-credential profile:
 
 ```bash
 go run ./cmd/resummary --expected-account "$EXPECTED_ACCOUNT" --bucket "$ASSET_BUCKET" --meeting-id "$MEETING_ID"
@@ -87,5 +92,6 @@ go run ./cmd/resummary --expected-account "$EXPECTED_ACCOUNT" --bucket "$ASSET_B
 
 Wait for `ANALYSIS#summary` success and verify its result hash matches the saved
 content. `--request-action-items` separately queues analysis of that saved summary,
-preserving existing task IDs/completion through the normal service. The tool never
+without transcript/attachment preconditions, preserving existing task IDs/completion
+through the normal service. The tool never
 resets meeting status or retry counters, overwrites source text, or reruns STT.
