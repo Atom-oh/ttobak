@@ -20827,7 +20827,8 @@ var StdioServerTransport = class {
 };
 
 // src/index.ts
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
+import { realpathSync as realpathSync2 } from "node:fs";
 
 // src/auth.ts
 import { createHash, randomBytes } from "node:crypto";
@@ -22092,10 +22093,18 @@ async function main() {
   await server.connect(new StdioServerTransport());
   console.error("TTOBAK MCP server running");
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+function isEntrypoint() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync2(fileURLToPath(import.meta.url)) === realpathSync2(process.argv[1]);
+  } catch {
+    return false;
+  }
+}
+if (isEntrypoint()) {
   main().catch((failure) => {
     console.error("TTOBAK MCP startup failed:", failure instanceof Error ? failure.message : "unknown error");
-    process.exitCode = 1;
+    process.exit(1);
   });
 }
 export {

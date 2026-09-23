@@ -1,6 +1,7 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { realpathSync } from 'node:fs';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -720,9 +721,18 @@ async function main() {
   console.error('TTOBAK MCP server running');
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+function isEntrypoint(): boolean {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1]);
+  } catch {
+    return false;
+  }
+}
+
+if (isEntrypoint()) {
   main().catch((failure: unknown) => {
     console.error('TTOBAK MCP startup failed:', failure instanceof Error ? failure.message : 'unknown error');
-    process.exitCode = 1;
+    process.exit(1);
   });
 }
