@@ -29,6 +29,7 @@ function fakeApi({ failComplete = false } = {}) {
     puts.push({ url, file, size, type });
     if (control.put === 'reject') throw new UploadRejectedError('Audio upload to S3 failed: HTTP 403');
     if (control.put === 'network') throw new Error('socket hang up');
+    if (control.put === 's3-500') throw new Error('Audio upload to S3 failed with HTTP 500; the object may still have been stored');
     if (control.gate) await control.gate;
   };
   return { api, calls, puts, control };
@@ -140,15 +141,18 @@ test('rejected and unconfirmed PUTs are reported by phase and resumed safely', a
   assert.match(rejected.body, /No audio was uploaded.*reuses meeting meeting-1/);
   fake.control.put = 'network';
   const unknown = await call('ttobak_upload_audio', { recordingId });
-  assert.match(unknown.body, /did not confirm, so it may be stored and transcribing/);
+  assert.match(unknown.body, /did not confirm, so it may be stored/);
+  fake.control.put = 's3-500';
+  assert.match((await call('ttobak_upload_audio', { recordingId, previousUpload: 'reupload' })).body,
+    /did not confirm/, 'an S3 5xx is an unknown outcome, never "nothing uploaded"');
   const undecided = await call('ttobak_upload_audio', { recordingId });
   assert.match(undecided.body, /previousUpload "complete"/, 'an unknown PUT is never silently repeated');
-  assert.equal(fake.puts.length, 2);
+  assert.equal(fake.puts.length, 3);
 
   fake.control.put = 'ok';
   const completed = await call('ttobak_upload_audio', { recordingId, previousUpload: 'complete' });
   assert.equal(completed.isError, false, completed.body);
-  assert.equal(fake.puts.length, 2, 'previousUpload "complete" only completes');
+  assert.equal(fake.puts.length, 3, 'previousUpload "complete" only completes');
   assert.equal(fake.calls.filter((c) => c.path === '/api/meetings').length, 1);
   assert.equal(completed.json.localKept, true);
   assert.ok(existsSync(join(dir, `${recordingId}.wav`)));
@@ -209,4 +213,15 @@ test('stdio shutdown waits for an in-flight recording upload', async (t) => {
   await settling;
   assert.equal((await stopping).isError, false);
   assert.deepEqual(fake.calls.map((c) => c.path), ['/api/meetings', '/api/upload/presigned', '/api/upload/complete']);
+});
+
+test('a caller file whose upload is unbound says to delete the meeting and upload again', async (t) => {
+  const { root, recorder } = recorderFixture(t);
+  const fake = fakeApi({ failComplete: true });
+  const { call } = await connect(t, { api: fake.api, recorder });
+  const audio = join(root, 'call.m4a');
+  writeFileSync(audio, Buffer.alloc(1024));
+  const failed = await call('ttobak_upload_audio', { filePath: audio });
+  assert.match(failed.body, /will not produce notes: delete it in TTOBAK, then retry/);
+  assert.ok(existsSync(audio));
 });

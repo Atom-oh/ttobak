@@ -22,7 +22,8 @@ const MIME_BY_EXT: Record<string, string> = {
 
 export const MAX_UPLOAD_BYTES = 100 * 1024 * 1024; // 100MB (presigned document upload)
 export const MAX_KB_UPLOAD_BYTES = 50 * 1024 * 1024; // 50MB -- Bedrock KB per-file ingestion limit
-/** S3 answered a PUT with a failure status: the object was not stored. */
+/** S3 answered a PUT with a 4xx status: the object was not stored. A 5xx
+ * leaves the outcome unknown and is a plain Error. */
 export class UploadRejectedError extends Error {}
 
 export const MAX_AUDIO_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024; // 2GiB -- matches the audio crop source cap
@@ -489,9 +490,9 @@ export class TtobakApi {
     return { uploadUrl: result.uploadUrl, key: result.key };
   }
 
-  /** Streams the file to the presigned URL. Throws UploadRejectedError only when
-   * S3 answered with a failure status (nothing stored); any other error leaves
-   * the outcome unknown. */
+  /** Streams the file to the presigned URL. Throws UploadRejectedError only for
+   * a 4xx answer (nothing stored); a 5xx or transport error leaves the outcome
+   * unknown. */
   async putMeetingAudio(uploadUrl: string, filePath: string, size: number, type: string): Promise<void> {
     await this.putFileStream(uploadUrl, filePath, size, type);
   }
@@ -568,13 +569,15 @@ export class TtobakApi {
           signal: this.options.signal,
         },
         (res) => {
-          const ok = !!res.statusCode && res.statusCode >= 200 && res.statusCode < 300;
+          const status = res.statusCode ?? 0;
+          const ok = status >= 200 && status < 300;
           // S3 may answer before the body is sent; stop reading the file then.
           if (!ok) source.destroy();
           res.resume();
           res.on('end', () => {
             if (ok) resolve();
-            else reject(new UploadRejectedError(`Audio upload to S3 failed: HTTP ${res.statusCode}`));
+            else if (status >= 400 && status < 500) reject(new UploadRejectedError(`Audio upload to S3 rejected: HTTP ${status}`));
+            else reject(new Error(`Audio upload to S3 failed with HTTP ${status}; the object may still have been stored`));
           });
           res.on('error', reject);
           res.on('aborted', () => reject(new Error('Upload response aborted')));

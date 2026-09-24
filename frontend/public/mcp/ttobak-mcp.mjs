@@ -21448,9 +21448,9 @@ var TtobakApi = class {
     if (typeof result?.uploadUrl !== "string" || typeof result.key !== "string") throw new Error("Presign returned no upload URL");
     return { uploadUrl: result.uploadUrl, key: result.key };
   }
-  /** Streams the file to the presigned URL. Throws UploadRejectedError only when
-   * S3 answered with a failure status (nothing stored); any other error leaves
-   * the outcome unknown. */
+  /** Streams the file to the presigned URL. Throws UploadRejectedError only for
+   * a 4xx answer (nothing stored); a 5xx or transport error leaves the outcome
+   * unknown. */
   async putMeetingAudio(uploadUrl, filePath, size, type) {
     await this.putFileStream(uploadUrl, filePath, size, type);
   }
@@ -21510,12 +21510,14 @@ var TtobakApi = class {
           signal: this.options.signal
         },
         (res) => {
-          const ok = !!res.statusCode && res.statusCode >= 200 && res.statusCode < 300;
+          const status = res.statusCode ?? 0;
+          const ok = status >= 200 && status < 300;
           if (!ok) source.destroy();
           res.resume();
           res.on("end", () => {
             if (ok) resolve();
-            else reject(new UploadRejectedError(`Audio upload to S3 failed: HTTP ${res.statusCode}`));
+            else if (status >= 400 && status < 500) reject(new UploadRejectedError(`Audio upload to S3 rejected: HTTP ${status}`));
+            else reject(new Error(`Audio upload to S3 failed with HTTP ${status}; the object may still have been stored`));
           });
           res.on("error", reject);
           res.on("aborted", () => reject(new Error("Upload response aborted")));
@@ -22967,7 +22969,7 @@ async function uploadAudio(options, file2, target, title, date4, recordingId, pr
         }
         throw beforePut(message(e));
       }
-      throw new Error(`${message(e)}. The audio upload for meeting ${id} did not confirm, so it may be stored and transcribing. Nothing local was deleted. Check ${api.meetingUrl(id)} before retrying` + (recordingId ? ` ${retry} with previousUpload "complete" or "reupload".` : "; do not delete that meeting yet."));
+      throw new Error(`${message(e)}. The audio upload for meeting ${id} did not confirm, so it may be stored. Nothing local was deleted. ` + (recordingId ? `Check ${api.meetingUrl(id)}, then retry ${retry} with previousUpload "complete" or "reupload".` : `Meeting ${id} is not bound to audio and will not produce notes: delete it in TTOBAK, then retry ${retry} (creates a new meeting; the file is never deleted).`));
     }
     try {
       save({ uploadPut: true });
@@ -22978,7 +22980,7 @@ async function uploadAudio(options, file2, target, title, date4, recordingId, pr
   try {
     await api.completeMeetingAudio(id, key, size, type);
   } catch (e) {
-    throw new Error(`${message(e)}. The audio is stored for meeting ${id} (transcription may already start), but upload-complete failed. Nothing local was deleted. ` + (recordingId ? `Retry ${retry}; it only completes, without uploading again.` : `Do not upload it again; check ${api.meetingUrl(id)}.`));
+    throw new Error(`${message(e)}. The audio is stored for meeting ${id} (transcription may already start), but upload-complete failed. Nothing local was deleted. ` + (recordingId ? `Retry ${retry}; it only completes, without uploading again.` : `Meeting ${id} is not bound to the audio and will not produce notes: delete it in TTOBAK, then retry ${retry} (creates a new meeting; the file is never deleted).`));
   }
   if (recordingId && resumedComplete) {
     warnings.push(`Completed an audio upload made by an earlier attempt; transcription may already have finished before the meeting was bound and then never produce notes. The local recording ${recordingId} is kept. Check ${api.meetingUrl(id)}: if notes appear, delete ${file2} and its .json sidecar; otherwise retry ${retry} with previousUpload "reupload".`);

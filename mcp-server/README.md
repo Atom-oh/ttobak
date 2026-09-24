@@ -189,7 +189,8 @@ transport never lists them (`LOCAL_ONLY_TOOLS`, ADR-045).
   most 2 GiB) under the same path guard as document
   uploads. It validates the file before creating a meeting, uploads under a fixed
   `mcp_upload_*` object name, never deletes caller files, and names the failed
-  phase in its error.
+  phase in its error. If a caller file's audio may be stored but is not bound to
+  its meeting, that meeting will not produce notes: delete it and upload again.
 
 ## Bounded meeting and transcript reads
 

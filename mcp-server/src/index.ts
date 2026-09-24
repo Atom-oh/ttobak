@@ -989,9 +989,11 @@ async function uploadAudio(
         try { save({ uploadKey: undefined, uploadPut: undefined }); } catch { /* the retry then asks the caller to decide */ }
         throw beforePut(message(e));
       }
-      throw new Error(`${message(e)}. The audio upload for meeting ${id} did not confirm, so it may be stored and transcribing. ` +
-        `Nothing local was deleted. Check ${api.meetingUrl(id)} before retrying` +
-        (recordingId ? ` ${retry} with previousUpload "complete" or "reupload".` : '; do not delete that meeting yet.'));
+      throw new Error(`${message(e)}. The audio upload for meeting ${id} did not confirm, so it may be stored. ` +
+        `Nothing local was deleted. ` + (recordingId
+        ? `Check ${api.meetingUrl(id)}, then retry ${retry} with previousUpload "complete" or "reupload".`
+        : `Meeting ${id} is not bound to audio and will not produce notes: delete it in TTOBAK, then retry ${retry} ` +
+          '(creates a new meeting; the file is never deleted).'));
     }
     try { save({ uploadPut: true }); } catch (e) { warnings.push(`Could not record upload progress locally: ${message(e)}`); }
   }
@@ -1001,7 +1003,8 @@ async function uploadAudio(
   } catch (e) {
     throw new Error(`${message(e)}. The audio is stored for meeting ${id} (transcription may already start), but upload-complete ` +
       `failed. Nothing local was deleted. ` + (recordingId ? `Retry ${retry}; it only completes, without uploading again.`
-        : `Do not upload it again; check ${api.meetingUrl(id)}.`));
+        : `Meeting ${id} is not bound to the audio and will not produce notes: delete it in TTOBAK, then retry ${retry} ` +
+          '(creates a new meeting; the file is never deleted).'));
   }
   if (recordingId && resumedComplete) {
     warnings.push(`Completed an audio upload made by an earlier attempt; transcription may already have finished before ` +
