@@ -158,6 +158,8 @@ own byte ceiling; it no longer fetches full meeting detail for reading.
 The installed adapter also provides stateless, authenticated HTTP with caller-supplied
 file bytes. Remote hosting and OAuth client acceptance remain separate from code
 readiness; see [ADR-045](decisions/ADR-045-dual-mcp-transports.md).
+Stdio alone can record the Mac microphone through a local ffmpeg child and upload
+the audio as a new meeting using the existing meeting, presign and upload-complete APIs.
 
 Attachment extraction supports bounded native text from PDF/PPTX/DOCX/Markdown.
 Canonical ATTACH#/ATTEXT# identities, run/lease and ETag checks bind immutable

@@ -45,6 +45,11 @@ results, 32 active requests and a maximum 55-second absolute deadline. The tight
 reading-page limits remain. Abort upstream HTTP on disconnect/deadline, never
 retry a write automatically, and do not describe an uncertain mutation as rejected.
 
+Addendum, 2026-09-24: stdio also offers macOS microphone recording (ffmpeg child
+process) and meeting audio upload through the existing meeting, presign and
+upload-complete APIs. These tools are in `LOCAL_ONLY_TOOLS` and never exposed over
+HTTP, which must not spawn processes or read server files. See the MCP README.
+
 ## Verification and deployment boundary
 
 Protocol tests exercise concurrent users, bad/expired/wrong-resource JWTs,

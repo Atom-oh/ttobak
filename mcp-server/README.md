@@ -148,6 +148,52 @@ export, projects and links.
 - HTTP failures are tool errors, not success with error-shaped JSON. Streaming
   decoding must preserve UTF-8 across byte boundaries.
 
+## Local meeting recording (stdio only)
+
+`ttobak_list_audio_devices`, `ttobak_start_recording`, `ttobak_recording_status`,
+`ttobak_stop_recording` and `ttobak_upload_audio` exist only on stdio; the HTTP
+transport never lists them (`LOCAL_ONLY_TOOLS`, ADR-045).
+
+- Requires macOS and ffmpeg (`brew install ffmpeg`, or set `TTOBAK_FFMPEG`).
+  `src/recorder.ts` records the microphone only (avfoundation, 16 kHz mono WAV,
+  about 1.9 MB/min), not other apps' audio. It auto-stops after `maxMinutes`
+  (default and maximum 240, the Transcribe fallback's limit). One recording at a
+  time per server process; overlapping starts are refused.
+- ffmpeg inherits the MCP host app's macOS microphone permission (Claude Desktop,
+  Terminal/iTerm for Codex or Kiro CLI, an IDE...). Grant it under System Settings >
+  Privacy & Security > Microphone. Without it the file is silent: stop runs a
+  volume check and keeps a silent file locally unless `allowSilent` is true.
+- Start contacts no API. Stop finalizes the WAV, then creates the meeting
+  (`POST /api/meetings`, date = recording start), presigns an `audio` upload,
+  streams the file and calls `/api/upload/complete`; the S3 PUT itself starts
+  transcription. The local file is deleted only after complete succeeds.
+- Recordings live in `~/Library/Application Support/ttobak/recordings`
+  (`TTOBAK_RECORDINGS_DIR` overrides) with a sidecar JSON, so kept files survive a
+  host restart. Several hosts can share the directory: a capture is offered for
+  upload only once finalized (or once its server and ffmpeg have both exited), and
+  every upload holds an exclusive `<id>.lock`. Server shutdown stops ffmpeg
+  gracefully after in-flight uploads settle (at most 20 s; a second signal exits
+  at once, and an interrupted upload resumes from its saved progress). A hard
+  kill may leave ffmpeg running until `maxMinutes`. Kept
+  recordings are not aged out; delete them manually if they are not needed.
+- The sidecar records upload progress before each irreversible step, so
+  `ttobak_upload_audio` with a `recordingId` resumes: it reuses the meeting it
+  created, only completes an object already stored, and when an earlier PUT's
+  outcome is unknown it requires `previousUpload` (`complete` or `reupload`)
+  instead of guessing. A complete-only retry keeps the local recording and warns:
+  transcription may have run while the meeting was still `recording`, so notes
+  may never appear; `previousUpload: "reupload"` then uploads it again. Callers cannot pass a `meetingId`: upload-complete would
+  replace that meeting's audio.
+- `ttobak_upload_audio` also accepts an absolute `filePath` (m4a, mp4, mp3, wav,
+  webm, ogg, flac: containers both Whisper and the Transcribe fallback accept; at
+  most 2 GiB) under the same path guard as document
+  uploads. It validates the file before creating a meeting, uploads under a fixed
+  `mcp_upload_*` object name, never deletes caller files, and names the failed
+  phase in its error. An unconfirmed PUT or upload-complete is reported as an
+  unknown outcome: check the meeting, and only if it shows no audio delete it
+  and upload again. The TTOBAK API completes the same key idempotently, so a
+  recording's complete-only retry never resets a meeting's progress.
+
 ## Bounded meeting and transcript reads
 
 `ttobak_get_meeting({"meetingId":"id"})` now returns saved **notes** first.
