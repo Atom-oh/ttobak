@@ -179,7 +179,9 @@ transport never lists them (`LOCAL_ONLY_TOOLS`, ADR-045).
   `ttobak_upload_audio` with a `recordingId` resumes: it reuses the meeting it
   created, only completes an object already stored, and when an earlier PUT's
   outcome is unknown it requires `previousUpload` (`complete` or `reupload`)
-  instead of guessing. Callers cannot pass a `meetingId`: upload-complete would
+  instead of guessing. A complete-only retry keeps the local recording and warns:
+  transcription may have run while the meeting was still `recording`, so notes
+  may never appear; `previousUpload: "reupload"` then uploads it again. Callers cannot pass a `meetingId`: upload-complete would
   replace that meeting's audio.
 - `ttobak_upload_audio` also accepts an absolute `filePath` (m4a, mp4, mp3, wav,
   webm, ogg, flac: containers both Whisper and the Transcribe fallback accept; at

@@ -22570,7 +22570,7 @@ var RECORDING_TOOLS = [
         previousUpload: {
           type: "string",
           enum: ["complete", "reupload"],
-          description: 'Only when an earlier upload of this recording ended without confirmation: "complete" if the meeting shows its audio/transcription, otherwise "reupload"'
+          description: 'For a kept recording with an earlier unconfirmed or unfinished upload: "complete" if the meeting shows its audio/transcription, otherwise "reupload" (always uploads again)'
         },
         ...MEETING_TARGET_PROPERTIES
       },
@@ -22927,7 +22927,7 @@ async function uploadAudio(options, file2, target, title, date4, recordingId, pr
     try {
       meetingId = (await api.createMeeting({ title: title.trim().slice(0, 200) || "Uploaded audio", date: date4, ...target })).meetingId;
     } catch (e) {
-      throw new Error(`${message(e)}. No audio was uploaded and nothing local was deleted; retry ${retry}.`);
+      throw new Error(`${message(e)}. No audio was uploaded and nothing local was deleted; retry ${retry}. If a meeting was created anyway, it has no audio and can be deleted in TTOBAK.`);
     }
   }
   const id = meetingId;
@@ -22940,12 +22940,14 @@ async function uploadAudio(options, file2, target, title, date4, recordingId, pr
     }
   }
   let key = saved?.uploadKey;
-  if (key && !saved?.uploadPut) {
+  if (key && previousUpload === "reupload") {
+    key = void 0;
+  } else if (key && !saved?.uploadPut) {
     if (!previousUpload) {
       throw new Error(`An earlier upload of this recording to meeting ${id} ended without confirmation, so its audio may already be stored and transcribing. Open ${api.meetingUrl(id)}: if it shows the audio or a transcription, retry ${retry} with previousUpload "complete"; otherwise use previousUpload "reupload".`);
     }
-    if (previousUpload === "reupload") key = void 0;
   }
+  const resumedComplete = !!key;
   if (!key) {
     let uploadUrl;
     try {
@@ -22977,14 +22979,25 @@ async function uploadAudio(options, file2, target, title, date4, recordingId, pr
   } catch (e) {
     throw new Error(`${message(e)}. The audio is stored for meeting ${id} (transcription may already start), but upload-complete failed. Nothing local was deleted. ` + (recordingId ? `Retry ${retry}; it only completes, without uploading again.` : `Do not upload it again; check ${api.meetingUrl(id)}.`));
   }
-  if (recordingId) {
+  if (recordingId && resumedComplete) {
+    warnings.push(`Completed an audio upload made by an earlier attempt; transcription may already have finished before the meeting was bound and then never produce notes. The local recording ${recordingId} is kept. Check ${api.meetingUrl(id)}: if notes appear, delete ${file2} and its .json sidecar; otherwise retry ${retry} with previousUpload "reupload".`);
+  } else if (recordingId) {
     try {
       rec.discard(recordingId);
     } catch (e) {
       warnings.push(`Uploaded, but the local recording ${recordingId} could not be deleted: ${message(e)}`);
     }
   }
-  return { uploaded: true, meetingId: id, key, bytes: size, url: api.meetingUrl(id), created, warnings };
+  return {
+    uploaded: true,
+    meetingId: id,
+    key,
+    bytes: size,
+    url: api.meetingUrl(id),
+    created,
+    localKept: !!recordingId && resumedComplete,
+    warnings
+  };
 }
 function createMcpServer(options) {
   const server = new Server({ name: "ttobak", version: "1.1.0" }, {

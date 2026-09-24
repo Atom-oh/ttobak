@@ -116,6 +116,14 @@ test('silent recordings and failed completions are kept locally for retry', asyn
   assert.equal(failing.calls.filter((c) => c.path === '/api/upload/presigned').length, 1, 'a stored object is never uploaded twice');
   assert.equal(failing.puts.length, 1);
   assert.equal(failing.calls.at(-1).body.key, status.json.saved[0].uploadKey);
+  assert.equal(retried.json.localKept, true, 'a complete-only retry never deletes the source');
+  assert.match(retried.json.warnings.join(' '), /may already have finished/);
+  assert.ok(existsSync(join(dir, `${recordingId}.wav`)));
+
+  const reuploaded = await call('ttobak_upload_audio', { recordingId, previousUpload: 'reupload' });
+  assert.equal(reuploaded.isError, false, reuploaded.body);
+  assert.equal(failing.puts.length, 2, 'reupload always uploads again');
+  assert.equal(reuploaded.json.localKept, false);
   assert.deepEqual(readdirSync(dir), []);
 });
 
@@ -142,7 +150,8 @@ test('rejected and unconfirmed PUTs are reported by phase and resumed safely', a
   assert.equal(completed.isError, false, completed.body);
   assert.equal(fake.puts.length, 2, 'previousUpload "complete" only completes');
   assert.equal(fake.calls.filter((c) => c.path === '/api/meetings').length, 1);
-  assert.deepEqual(readdirSync(dir), []);
+  assert.equal(completed.json.localKept, true);
+  assert.ok(existsSync(join(dir, `${recordingId}.wav`)));
 });
 
 test('upload_audio validates input before creating a meeting', async (t) => {

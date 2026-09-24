@@ -489,7 +489,7 @@ const RECORDING_TOOLS: Tool[] = [
         title: { type: 'string', minLength: 1, maxLength: 200, description: 'Title for a new meeting (defaults to the recording title or file name)' },
         previousUpload: {
           type: 'string', enum: ['complete', 'reupload'],
-          description: 'Only when an earlier upload of this recording ended without confirmation: "complete" if the meeting shows its audio/transcription, otherwise "reupload"',
+          description: 'For a kept recording with an earlier unconfirmed or unfinished upload: "complete" if the meeting shows its audio/transcription, otherwise "reupload" (always uploads again)',
         },
         ...MEETING_TARGET_PROPERTIES,
       },
@@ -944,7 +944,8 @@ async function uploadAudio(
     try {
       meetingId = (await api.createMeeting({ title: title.trim().slice(0, 200) || 'Uploaded audio', date, ...target })).meetingId;
     } catch (e) {
-      throw new Error(`${message(e)}. No audio was uploaded and nothing local was deleted; retry ${retry}.`);
+      throw new Error(`${message(e)}. No audio was uploaded and nothing local was deleted; retry ${retry}. ` +
+        'If a meeting was created anyway, it has no audio and can be deleted in TTOBAK.');
     }
   }
   const id = meetingId;
@@ -957,14 +958,19 @@ async function uploadAudio(
   }
 
   let key = saved?.uploadKey;
-  if (key && !saved?.uploadPut) {
+  if (key && previousUpload === 'reupload') {
+    key = undefined;
+  } else if (key && !saved?.uploadPut) {
     if (!previousUpload) {
       throw new Error(`An earlier upload of this recording to meeting ${id} ended without confirmation, so its audio may ` +
         `already be stored and transcribing. Open ${api.meetingUrl(id)}: if it shows the audio or a transcription, retry ` +
         `${retry} with previousUpload "complete"; otherwise use previousUpload "reupload".`);
     }
-    if (previousUpload === 'reupload') key = undefined;
   }
+  // Completing an object PUT by an earlier call: transcription may already
+  // have run while the meeting was still 'recording', in which case the
+  // summarize step skipped it and nothing retriggers it.
+  const resumedComplete = !!key;
   if (!key) {
     let uploadUrl: string;
     try {
@@ -994,14 +1000,20 @@ async function uploadAudio(
       `failed. Nothing local was deleted. ` + (recordingId ? `Retry ${retry}; it only completes, without uploading again.`
         : `Do not upload it again; check ${api.meetingUrl(id)}.`));
   }
-  if (recordingId) {
+  if (recordingId && resumedComplete) {
+    warnings.push(`Completed an audio upload made by an earlier attempt; transcription may already have finished before ` +
+      `the meeting was bound and then never produce notes. The local recording ${recordingId} is kept. Check ` +
+      `${api.meetingUrl(id)}: if notes appear, delete ${file} and its .json sidecar; otherwise retry ${retry} with ` +
+      `previousUpload "reupload".`);
+  } else if (recordingId) {
     try {
       rec.discard(recordingId);
     } catch (e) {
       warnings.push(`Uploaded, but the local recording ${recordingId} could not be deleted: ${message(e)}`);
     }
   }
-  return { uploaded: true, meetingId: id, key, bytes: size, url: api.meetingUrl(id), created, warnings };
+  return { uploaded: true, meetingId: id, key, bytes: size, url: api.meetingUrl(id), created,
+    localKept: !!recordingId && resumedComplete, warnings };
 }
 
 export function createMcpServer(options: ServerOptions): Server {
