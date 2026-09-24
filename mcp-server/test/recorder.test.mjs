@@ -91,3 +91,35 @@ test('upload progress is validated, persisted atomically and removed with the re
   stopped.release();
   assert.deepEqual(readdirSync(dir), []);
 });
+
+test('stale lock takeover is exclusive and unreadable locks count as held', async (t) => {
+  const { dir, recorder } = recorderFixture(t);
+  const other = new Recorder({ dir, platform: 'darwin' });
+  mkdirSync(dir, { recursive: true });
+  const id = '33333333-3333-4333-8333-333333333333';
+  writeFileSync(join(dir, `${id}.wav`), Buffer.alloc(1024));
+  writeFileSync(join(dir, `${id}.json`), JSON.stringify({ id, title: id, startedAt: new Date().toISOString(), state: 'kept' }));
+  const lock = join(dir, `${id}.lock`);
+
+  writeFileSync(lock, '');
+  assert.throws(() => recorder.acquire(id), /being uploaded/, 'an empty lock may be mid-creation and is never removed');
+  assert.equal(recorder.listSaved()[0].uploading, true);
+
+  writeFileSync(lock, `${2 ** 22 + 12345}:dead-holder`);
+  const release = recorder.acquire(id);
+  assert.throws(() => other.acquire(id), /being uploaded/, 'a second contender cannot take over the fresh lock');
+  assert.deepEqual(readdirSync(dir).filter((name) => name.includes('.lock.') || name.endsWith('.tmp')), []);
+  release();
+
+  writeFileSync(lock, `${2 ** 22 + 12345}:dead-holder`);
+  writeFileSync(`${lock}.takeover`, `${2 ** 22 + 12345}:crashed`);
+  assert.throws(() => other.acquire(id), /lock is being recovered; if this persists, delete/);
+});
+
+test('silenceCheck only analyzes recordings in the recordings directory', async (t) => {
+  const { root, recorder } = recorderFixture(t);
+  for (const file of [join(root, 'ffmpeg'), '/etc/passwd', join(root, 'recordings', '..', 'x.wav')]) {
+    await assert.rejects(recorder.silenceCheck(file), /only a recording/);
+  }
+  assert.throws(() => recorder.saveProgress('../x', {}), /Invalid recording id/);
+});

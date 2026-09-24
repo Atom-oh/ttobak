@@ -1,8 +1,8 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
 // Local microphone capture for the stdio transport only (ADR-045: the HTTP
 // transport never touches the server's filesystem or processes). ffmpeg's
@@ -129,6 +129,18 @@ export function parseMaxVolume(stderr: string): number | null {
   return match[1] === '-inf' ? Number.NEGATIVE_INFINITY : Number(match[1]);
 }
 
+function fileSize(path: string): number | null {
+  try {
+    return statSync(path).size;
+  } catch {
+    return null;
+  }
+}
+
+function lockPid(content: string): number {
+  return Number(content.split(':')[0]);
+}
+
 /** True when a process exists (EPERM still means it exists). */
 export function isProcessAlive(pid: unknown): boolean {
   if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) return false;
@@ -189,6 +201,9 @@ export class Recorder {
     const info: RecordingInfo = {
       id, title, device, maxMinutes, file: join(this.dir, `${id}.wav`), startedAt: new Date().toISOString(),
     };
+    // Written before spawn so a host crash at any point leaves a recoverable
+    // identity; state 'recording' stays hidden while this process lives.
+    this.writeSidecar({ ...info, state: 'recording', ownerPid: process.pid });
     const child = spawn(this.ffmpegPath, [
       '-hide_banner', '-nostats', '-loglevel', 'error',
       '-f', 'avfoundation', '-i', `:${device}`,
@@ -212,6 +227,7 @@ export class Recorder {
     ]);
     if (early) {
       rmSync(info.file, { force: true });
+      this.removeSidecar(id);
       const hint = /ENOENT/.test(active.stderr) ? ' Install ffmpeg (brew install ffmpeg) or set TTOBAK_FFMPEG.' : '';
       throw new Error(`ffmpeg exited during startup: ${active.stderr.trim() || `code ${active.exitCode}`}.${hint}`);
     }
@@ -221,6 +237,7 @@ export class Recorder {
       child.kill('SIGKILL');
       await active.exited;
       rmSync(info.file, { force: true });
+      this.removeSidecar(id);
       throw new Error(`Could not save recording metadata: ${e instanceof Error ? e.message : String(e)}`);
     }
     this.active = active;
@@ -293,6 +310,10 @@ export class Recorder {
 
   /** Reports whether the file is effectively silent (e.g. host lacks mic permission). */
   async silenceCheck(file: string): Promise<{ maxVolumeDb: number | null; silent: boolean }> {
+    const name = basename(file);
+    if (dirname(file) !== this.dir || !name.endsWith('.wav') || !UUID_PATTERN.test(name.slice(0, -'.wav'.length))) {
+      throw new Error('silenceCheck accepts only a recording in the recordings directory');
+    }
     const { stderr } = await this.run(['-hide_banner', '-nostats', '-i', file, '-af', 'volumedetect', '-f', 'null', '-']);
     const maxVolumeDb = parseMaxVolume(stderr);
     return { maxVolumeDb, silent: maxVolumeDb !== null && maxVolumeDb < SILENCE_THRESHOLD_DB };
@@ -308,8 +329,9 @@ export class Recorder {
       const id = name.slice(0, -'.json'.length);
       if (!UUID_PATTERN.test(id) || id === this.active?.info.id) continue;
       const info = this.readSidecar(id);
-      if (!info || !existsSync(info.file)) continue;
-      saved.push({ ...info, bytes: statSync(info.file).size, uploading: this.lockHolder(id) !== null });
+      const bytes = info && fileSize(info.file);
+      if (!info || bytes === null) continue; // e.g. discarded concurrently
+      saved.push({ ...info, bytes, uploading: this.lockHolder(id) !== null });
     }
     return saved.sort((a, b) => a.startedAt.localeCompare(b.startedAt));
   }
@@ -320,42 +342,49 @@ export class Recorder {
       throw new Error(`No saved recording ${id}; see ttobak_recording_status`);
     }
     const info = this.readSidecar(id);
-    if (!info || !existsSync(info.file)) throw new Error(`No saved recording ${id}; see ttobak_recording_status`);
-    return { ...info, bytes: statSync(info.file).size };
+    const bytes = info && fileSize(info.file);
+    if (!info || bytes === null) throw new Error(`No saved recording ${id}; see ttobak_recording_status`);
+    return { ...info, bytes };
   }
 
-  /** Takes the exclusive per-recording upload lock (O_EXCL create). A lock whose
-   * holder process is gone is replaced; a live holder, including this process,
-   * is refused. Returns a release function. */
+  /** Takes the exclusive per-recording upload lock. The lock file is linked
+   * into place from a complete temporary file, so it never exists without its
+   * token. A lock whose holder process exited is replaced only while holding a
+   * short-lived takeover lock and only if its content is still the stale token
+   * observed, so two contenders cannot both remove each other's fresh lock.
+   * Unreadable or empty lock content counts as live. Returns a release function. */
   acquire(id: string): () => void {
     if (!UUID_PATTERN.test(id)) throw new Error('Invalid recording id');
     const lock = join(this.dir, `${id}.lock`);
     const token = `${process.pid}:${randomUUID()}`;
-    for (let attempt = 0; ; attempt++) {
-      try {
-        writeFileSync(lock, token, { flag: 'wx', mode: 0o600 });
-        break;
-      } catch (e) {
-        if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
-        const holder = this.lockHolder(id);
-        if (holder !== null || attempt > 0) {
-          throw new Error(`Recording ${id} is being uploaded by another request; check ttobak_recording_status`);
-        }
-        rmSync(lock, { force: true }); // stale: its holder process exited
+    const busy = () => new Error(`Recording ${id} is being uploaded by another request; check ttobak_recording_status`);
+    if (!this.createExclusive(lock, token)) {
+      const observed = this.readLock(lock);
+      if (observed === null || isProcessAlive(lockPid(observed))) throw busy();
+      const takeover = `${lock}.takeover`;
+      if (!this.createExclusive(takeover, token)) {
+        throw new Error(`Recording ${id} lock is being recovered; if this persists, delete ${takeover}`);
       }
+      try {
+        if (this.readLock(lock) === observed) rmSync(lock, { force: true });
+      } finally {
+        rmSync(takeover, { force: true });
+      }
+      if (!this.createExclusive(lock, token)) throw busy();
     }
     let released = false;
     return () => {
       if (released) return;
       released = true;
-      try {
-        if (readFileSync(lock, 'utf8') === token) rmSync(lock, { force: true });
-      } catch { /* already removed with the recording */ }
+      // Only a dead holder's lock is ever taken over, so while this process
+      // lives the lock still carries this token.
+      if (this.readLock(lock) === token) rmSync(lock, { force: true });
     };
   }
 
   /** Persists upload progress for a kept recording; the caller holds its lock. */
   saveProgress(id: string, progress: UploadProgress): void {
+    if (!UUID_PATTERN.test(id)) throw new Error('Invalid recording id');
     if (progress.meetingId !== undefined && !MEETING_ID_PATTERN.test(progress.meetingId)) throw new Error('Invalid meeting id');
     if (progress.uploadKey !== undefined && !UPLOAD_KEY_PATTERN.test(progress.uploadKey)) throw new Error('Invalid upload key');
     const info = this.readSidecar(id);
@@ -425,11 +454,35 @@ export class Recorder {
 
   /** PID of a live lock holder, or null when unlocked or stale. */
   private lockHolder(id: string): number | null {
+    const lock = join(this.dir, `${id}.lock`);
+    if (!existsSync(lock)) return null;
+    const content = this.readLock(lock);
+    if (content === null) return -1; // unreadable: treat as held
+    const pid = lockPid(content);
+    return isProcessAlive(pid) ? pid : null;
+  }
+
+  /** Lock content, or null when missing, empty or unreadable. */
+  private readLock(path: string): string | null {
     try {
-      const pid = Number(readFileSync(join(this.dir, `${id}.lock`), 'utf8').split(':')[0]);
-      return isProcessAlive(pid) ? pid : null;
+      return readFileSync(path, 'utf8') || null;
     } catch {
       return null;
+    }
+  }
+
+  /** Atomically creates path holding content; false if it already exists. */
+  private createExclusive(path: string, content: string): boolean {
+    const tmp = `${path}.${randomUUID()}.tmp`;
+    writeFileSync(tmp, content, { mode: 0o600 });
+    try {
+      linkSync(tmp, path);
+      return true;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'EEXIST') return false;
+      throw e;
+    } finally {
+      rmSync(tmp, { force: true });
     }
   }
 
