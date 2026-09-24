@@ -1182,6 +1182,55 @@ func (r *DynamoDBRepository) PreAllocateAudioKeys(ctx context.Context, userID, m
 	return nil
 }
 
+// BindMeetingAudioKey binds single-file audio to a meeting and moves it to
+// transcribing, unless the meeting already holds exactly this key. A repeated
+// upload-complete for the same object (a retry after a lost response, or after
+// transcription already finished) must never reset a meeting that has
+// progressed back to transcribing: no new S3 event would move it forward, so it
+// would sit until the stuck-meeting expiry marks it as an error. The check is
+// part of the write's condition, so a concurrent duplicate cannot slip in
+// between read and write. A different key still replaces the audio (the
+// detail page's "add file" flow re-transcribes a finished meeting that way).
+//
+// Returns bound=false with a nil error when the key was already bound, and
+// ErrConditionFailed when the meeting no longer exists.
+func (r *DynamoDBRepository) BindMeetingAudioKey(ctx context.Context, userID, meetingID, key string) (bound bool, err error) {
+	condition := expression.AttributeExists(expression.Name("PK")).And(
+		expression.AttributeNotExists(expression.Name("audioKey")).
+			Or(expression.Name("audioKey").NotEqual(expression.Value(key))))
+	update := expression.Set(expression.Name("audioKey"), expression.Value(key)).
+		Set(expression.Name("status"), expression.Value(model.StatusTranscribing)).
+		Set(expression.Name("updatedAt"), expression.Value(time.Now().UTC().Format(time.RFC3339Nano)))
+	expr, err := expression.NewBuilder().WithUpdate(update).WithCondition(condition).Build()
+	if err != nil {
+		return false, fmt.Errorf("failed to build audio bind expression: %w", err)
+	}
+	pk := &types.AttributeValueMemberS{Value: model.PrefixUser + userID}
+	sk := &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID}
+	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:                           aws.String(r.tableName),
+		Key:                                 map[string]types.AttributeValue{"PK": pk, "SK": sk},
+		UpdateExpression:                    expr.Update(),
+		ConditionExpression:                 expr.Condition(),
+		ExpressionAttributeNames:            expr.Names(),
+		ExpressionAttributeValues:           expr.Values(),
+		ReturnValuesOnConditionCheckFailure: types.ReturnValuesOnConditionCheckFailureAllOld,
+	})
+	if err == nil {
+		return true, nil
+	}
+	var ccfe *types.ConditionalCheckFailedException
+	if !errors.As(err, &ccfe) {
+		return false, fmt.Errorf("failed to bind meeting audio: %w", err)
+	}
+	// The failed condition returns the current item: present means this key
+	// is already bound; absent means the meeting is gone.
+	if len(ccfe.Item) > 0 {
+		return false, nil
+	}
+	return false, ErrConditionFailed
+}
+
 // SetAudioKeyAtIndex sets a specific index in the audioKeys list. Idempotent — re-uploading
 // the same part overwrites the same slot. Validates index is within pre-allocated range.
 //
