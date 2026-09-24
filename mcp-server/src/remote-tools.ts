@@ -18,8 +18,16 @@ export function mutationReceipt(name: string, value: string): string | undefined
     message: 'Write succeeded. Large response omitted; do not repeat the write. Read the saved record to inspect it.' });
 }
 
+// Tools that touch the MCP host's machine (session files, microphone, local
+// audio files). ADR-045: the HTTP transport never exposes them.
+export const LOCAL_ONLY_TOOLS = [
+  'ttobak_login', 'ttobak_logout',
+  'ttobak_list_audio_devices', 'ttobak_start_recording', 'ttobak_recording_status',
+  'ttobak_stop_recording', 'ttobak_upload_audio',
+];
+
 export function httpTools(tools: Tool[]): Tool[] {
-  return tools.filter((tool) => !['ttobak_login', 'ttobak_logout'].includes(tool.name))
+  return tools.filter((tool) => !LOCAL_ONLY_TOOLS.includes(tool.name))
     .map((tool) => {
       if (!['ttobak_kb_upload', 'ttobak_upload_document'].includes(tool.name)) return tool;
       const properties = { ...tool.inputSchema.properties };

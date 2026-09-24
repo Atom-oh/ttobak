@@ -50,8 +50,12 @@ test('stdio startup works through file and directory symlinks for source and pub
         env: { TTOBAK_API_URL: 'https://example.invalid', TTOBAK_COGNITO_DOMAIN: 'https://auth.invalid', TTOBAK_CLIENT_ID: 'fixture' },
         stderr: 'pipe',
       }));
-      assert.equal((await client.listTools()).tools.length, 32);
-      await client.close();
+      try {
+        // 32 shared tools plus the 5 stdio-only recording tools.
+        assert.equal((await client.listTools()).tools.length, 37);
+      } finally {
+        await client.close();
+      }
     }
   }
 });

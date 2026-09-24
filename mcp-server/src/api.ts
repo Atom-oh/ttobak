@@ -1,4 +1,4 @@
-import { readFileSync, statSync, realpathSync } from 'node:fs';
+import { createReadStream, readFileSync, statSync, realpathSync } from 'node:fs';
 import { request as httpsRequest } from 'node:https';
 import { basename, extname, isAbsolute, sep } from 'node:path';
 import { homedir } from 'node:os';
@@ -22,6 +22,26 @@ const MIME_BY_EXT: Record<string, string> = {
 
 export const MAX_UPLOAD_BYTES = 100 * 1024 * 1024; // 100MB (presigned document upload)
 export const MAX_KB_UPLOAD_BYTES = 50 * 1024 * 1024; // 50MB -- Bedrock KB per-file ingestion limit
+/** S3 answered a PUT with a failure status: the object was not stored. */
+export class UploadRejectedError extends Error {}
+
+export const MAX_AUDIO_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024; // 2GiB -- matches the audio crop source cap
+
+// Meeting audio formats for MCP uploads. Unlike documents this is an
+// allowlist: the backend does not validate audio types. The production Whisper
+// path decodes all of them through ffmpeg; .caf is not in the web picker, and
+// the Transcribe fallback does not accept every listed container.
+export const AUDIO_MIME_BY_EXT: Record<string, string> = {
+  '.m4a': 'audio/mp4',
+  '.mp4': 'audio/mp4',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.webm': 'audio/webm',
+  '.ogg': 'audio/ogg',
+  '.flac': 'audio/flac',
+  '.aac': 'audio/aac',
+  '.caf': 'audio/x-caf',
+};
 
 // System paths and secret-shaped filenames a prompt-injected agent would
 // reach for first. Checked against the symlink-resolved path/basename.
@@ -442,6 +462,51 @@ export class TtobakApi {
     });
   }
 
+  async createMeeting(input: { title: string; date?: string; participants?: string[]; accountId?: string }) {
+    const result = (await this.post('/api/meetings', input)) as { meetingId?: unknown };
+    if (typeof result?.meetingId !== 'string' || !result.meetingId) throw new Error('Meeting creation returned no meetingId');
+    return result as { meetingId: string } & Record<string, unknown>;
+  }
+
+  /** Validates a local meeting audio file before any meeting is created for it. */
+  resolveMeetingAudio(filePath: string): { path: string; size: number; ext: string; type: string } {
+    this.requireLocalFiles();
+    const { path, size } = guardUploadPath(filePath, MAX_AUDIO_UPLOAD_BYTES);
+    const ext = extname(path).toLowerCase();
+    const type = AUDIO_MIME_BY_EXT[ext];
+    if (!type) throw new Error(`Unsupported audio format "${ext || 'none'}"; use ${Object.keys(AUDIO_MIME_BY_EXT).join(', ')}`);
+    if (!size) throw new Error('Refusing to upload an empty audio file');
+    return { path, size, ext, type };
+  }
+
+  /** Issues an S3 upload for meeting audio. The PUT of the returned URL is
+   * what starts transcription (S3 event under audio/). A fixed object name
+   * keeps user file names containing the transcribe Lambda's skip markers
+   * (checkpoint_, recording_progress, realtime_, part_NNN_) out of the key. */
+  async presignMeetingAudio(meetingId: string, ext: string, type: string): Promise<{ uploadUrl: string; key: string }> {
+    const result = (await this.post('/api/upload/presigned', {
+      fileName: `mcp_upload_${Date.now()}${ext}`, fileType: type, category: 'audio', meetingId,
+    })) as { uploadUrl?: unknown; key?: unknown };
+    if (typeof result?.uploadUrl !== 'string' || typeof result.key !== 'string') throw new Error('Presign returned no upload URL');
+    return { uploadUrl: result.uploadUrl, key: result.key };
+  }
+
+  /** Streams the file to the presigned URL. Throws UploadRejectedError only when
+   * S3 answered with a failure status (nothing stored); any other error leaves
+   * the outcome unknown. */
+  async putMeetingAudio(uploadUrl: string, filePath: string, size: number, type: string): Promise<void> {
+    await this.putFileStream(uploadUrl, filePath, size, type);
+  }
+
+  /** Binds uploaded audio to the meeting and marks it transcribing. */
+  async completeMeetingAudio(meetingId: string, key: string, size: number, type: string): Promise<void> {
+    await this.post('/api/upload/complete', { meetingId, key, category: 'audio', fileSize: size, mimeType: type });
+  }
+
+  meetingUrl(meetingId: string): string {
+    return new URL(`/meeting/${encodeURIComponent(meetingId)}`, this.baseUrl).toString();
+  }
+
   private requireLocalFiles(): void {
     if (this.options.allowLocalFiles === false) throw new Error('Local file access is unavailable over HTTP MCP');
   }
@@ -482,6 +547,43 @@ export class TtobakApi {
     this.requireLocalFiles();
     const data = readFileSync(filePath);
     return this.putBytes(uploadUrl, data, contentType);
+  }
+
+  /** Streams a large local file to a presigned S3 URL without buffering it.
+   * The request `timeout` is Node's socket idle timeout, so it aborts a
+   * stalled upload rather than capping total duration (large recordings on
+   * slow links must be allowed to finish). */
+  private async putFileStream(uploadUrl: string, filePath: string, size: number, contentType: string): Promise<void> {
+    this.requireLocalFiles();
+    const url = new URL(uploadUrl);
+    if (url.protocol !== 'https:' || url.username || url.password) throw new Error('Invalid upload URL');
+    return new Promise((resolve, reject) => {
+      const req = httpsRequest(
+        {
+          hostname: url.hostname,
+          port: url.port || undefined,
+          path: url.pathname + url.search,
+          method: 'PUT',
+          headers: { 'Content-Type': contentType, 'Content-Length': String(size) },
+          timeout: this.options.timeoutMs ?? 60_000,
+          signal: this.options.signal,
+        },
+        (res) => {
+          res.resume();
+          res.on('end', () => {
+            if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) resolve();
+            else reject(new UploadRejectedError(`Audio upload to S3 failed: HTTP ${res.statusCode}`));
+          });
+          res.on('error', reject);
+          res.on('aborted', () => reject(new Error('Upload response aborted')));
+        },
+      );
+      const source = createReadStream(filePath);
+      source.on('error', (err) => req.destroy(err));
+      req.on('timeout', () => req.destroy(new Error('Audio upload to S3 stalled')));
+      req.on('error', (err) => { source.destroy(); reject(err); });
+      source.pipe(req);
+    });
   }
 
   private async putBytes(uploadUrl: string, data: Buffer, contentType: string): Promise<void> {
