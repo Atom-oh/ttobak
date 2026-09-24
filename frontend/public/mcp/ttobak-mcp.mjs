@@ -21123,9 +21123,7 @@ var AUDIO_MIME_BY_EXT = {
   ".wav": "audio/wav",
   ".webm": "audio/webm",
   ".ogg": "audio/ogg",
-  ".flac": "audio/flac",
-  ".aac": "audio/aac",
-  ".caf": "audio/x-caf"
+  ".flac": "audio/flac"
 };
 var BLOCKED_SYSTEM_PREFIXES = ["/etc", "/proc", "/sys", "/var/run/secrets", "/run/secrets"];
 var BLOCKED_NAME_PATTERNS = [
@@ -21500,6 +21498,7 @@ var TtobakApi = class {
     const url2 = new URL3(uploadUrl);
     if (url2.protocol !== "https:" || url2.username || url2.password) throw new Error("Invalid upload URL");
     return new Promise((resolve, reject) => {
+      const source = createReadStream(filePath);
       const req = httpsRequest2(
         {
           hostname: url2.hostname,
@@ -21511,16 +21510,17 @@ var TtobakApi = class {
           signal: this.options.signal
         },
         (res) => {
+          const ok = !!res.statusCode && res.statusCode >= 200 && res.statusCode < 300;
+          if (!ok) source.destroy();
           res.resume();
           res.on("end", () => {
-            if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) resolve();
+            if (ok) resolve();
             else reject(new UploadRejectedError(`Audio upload to S3 failed: HTTP ${res.statusCode}`));
           });
           res.on("error", reject);
           res.on("aborted", () => reject(new Error("Upload response aborted")));
         }
       );
-      const source = createReadStream(filePath);
       source.on("error", (err) => req.destroy(err));
       req.on("timeout", () => req.destroy(new Error("Audio upload to S3 stalled")));
       req.on("error", (err) => {
@@ -22559,7 +22559,7 @@ var RECORDING_TOOLS = [
   },
   {
     name: "ttobak_upload_audio",
-    description: "Upload meeting audio for transcription and AI notes: either a kept recording (recordingId from ttobak_recording_status) or a local audio file (absolute filePath; m4a, mp3, wav, webm, ogg, flac, aac, mp4, caf; at most 2 GiB). Always uploads into a meeting this adapter creates; retrying a kept recording reuses the meeting created for it, never another meeting.",
+    description: "Upload meeting audio for transcription and AI notes: either a kept recording (recordingId from ttobak_recording_status) or a local audio file (absolute filePath; m4a, mp4, mp3, wav, webm, ogg, flac; at most 2 GiB). Always uploads into a meeting this adapter creates; retrying a kept recording reuses the meeting created for it, never another meeting.",
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     inputSchema: {
       type: "object",
@@ -22579,6 +22579,10 @@ var RECORDING_TOOLS = [
   }
 ];
 var RECORDING_TOOL_NAMES = RECORDING_TOOLS.map((tool) => tool.name);
+var recordingWork = /* @__PURE__ */ new Set();
+async function settleRecordingWork() {
+  while (recordingWork.size) await Promise.allSettled([...recordingWork]);
+}
 async function callTool(request, options) {
   const { auth, api } = options;
   const API_URL = options.apiUrl, COGNITO_DOMAIN = options.cognitoDomain, CLIENT_ID = options.clientId;
@@ -22992,7 +22996,12 @@ function createMcpServer(options) {
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (!tools.some((tool) => tool.name === request.params.name)) return error2("Unknown or unavailable tool");
-    const result = await callTool(request, options);
+    const call = callTool(request, options);
+    if (RECORDING_TOOL_NAMES.includes(request.params.name)) {
+      recordingWork.add(call);
+      void call.finally(() => recordingWork.delete(call));
+    }
+    const result = await call;
     if (options.mode === "http" && Buffer.byteLength(JSON.stringify(result)) > MAX_HTTP_RESULT_BYTES) {
       const receipt = !("isError" in result && result.isError) && mutationReceipt(request.params.name, result.content[0]?.text ?? "");
       return receipt ? text(receipt) : error2("RESULT_TOO_LARGE: narrow the read. For a write, verify current state before retrying; it may have completed.");
@@ -23034,7 +23043,7 @@ async function main() {
   const shutdown = () => {
     if (exiting) return;
     exiting = true;
-    void recorder.shutdown().finally(() => process.exit(0));
+    void settleRecordingWork().then(() => recorder.shutdown()).finally(() => process.exit(0));
   };
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
@@ -23058,5 +23067,6 @@ if (isEntrypoint()) {
 }
 export {
   RECORDING_TOOL_NAMES,
-  createMcpServer
+  createMcpServer,
+  settleRecordingWork
 };

@@ -6,7 +6,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { TtobakApi, UploadRejectedError } from '../dist/api.js';
 import { recorderFixture } from './fixtures/fake-ffmpeg.mjs';
-import { createMcpServer } from '../dist/index.js';
+import { createMcpServer, settleRecordingWork } from '../dist/index.js';
 
 function fakeApi({ failComplete = false } = {}) {
   const calls = [], puts = [];
@@ -29,6 +29,7 @@ function fakeApi({ failComplete = false } = {}) {
     puts.push({ url, file, size, type });
     if (control.put === 'reject') throw new UploadRejectedError('Audio upload to S3 failed: HTTP 403');
     if (control.put === 'network') throw new Error('socket hang up');
+    if (control.gate) await control.gate;
   };
   return { api, calls, puts, control };
 }
@@ -157,6 +158,9 @@ test('upload_audio validates input before creating a meeting', async (t) => {
   assert.match((await call('ttobak_upload_audio', { filePath: audio, recordingId: 'x' })).body, /exactly one/);
   assert.match((await call('ttobak_upload_audio', { filePath: 'relative.m4a' })).body, /absolute/);
   assert.match((await call('ttobak_upload_audio', { filePath: notes })).body, /Unsupported audio format/);
+  const caf = join(root, 'memo.caf');
+  writeFileSync(caf, Buffer.alloc(1024));
+  assert.match((await call('ttobak_upload_audio', { filePath: caf })).body, /Unsupported audio format/, 'the Transcribe fallback cannot read CAF');
   assert.match((await call('ttobak_upload_audio', { recordingId: '../../etc/passwd' })).body, /No saved recording/);
   assert.match((await call('ttobak_upload_audio', { filePath: audio, meetingId: 'someone-else' })).body, /meetingId is not accepted/);
   assert.equal(calls.length, 0, 'invalid uploads must not create meetings');
@@ -177,4 +181,23 @@ test('HTTP transport never exposes local recording or audio file tools', async (
     assert.ok(!names.includes(name), `${name} must be stdio-only`);
     assert.equal((await call(name, {})).isError, true);
   }
+});
+
+test('stdio shutdown waits for an in-flight recording upload', async (t) => {
+  const { recorder } = recorderFixture(t);
+  const fake = fakeApi();
+  const { call } = await connect(t, { api: fake.api, recorder });
+  let open;
+  fake.control.gate = new Promise((resolve) => { open = resolve; });
+  await call('ttobak_start_recording', { title: 'shutdown' });
+  const stopping = call('ttobak_stop_recording');
+  while (!fake.puts.length) await new Promise((resolve) => setTimeout(resolve, 10));
+  let settled = false;
+  const settling = settleRecordingWork().then(() => { settled = true; });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(settled, false, 'shutdown must not proceed while the PUT is in flight');
+  open();
+  await settling;
+  assert.equal((await stopping).isError, false);
+  assert.deepEqual(fake.calls.map((c) => c.path), ['/api/meetings', '/api/upload/presigned', '/api/upload/complete']);
 });

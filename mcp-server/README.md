@@ -172,7 +172,8 @@ transport never lists them (`LOCAL_ONLY_TOOLS`, ADR-045).
   host restart. Several hosts can share the directory: a capture is offered for
   upload only once finalized (or once its server and ffmpeg have both exited), and
   every upload holds an exclusive `<id>.lock`. Server shutdown stops ffmpeg
-  gracefully; a hard kill may leave ffmpeg running until `maxMinutes`. Kept
+  gracefully after in-flight uploads settle; a hard kill may leave ffmpeg running
+  until `maxMinutes`. Kept
   recordings are not aged out; delete them manually if they are not needed.
 - The sidecar records upload progress before each irreversible step, so
   `ttobak_upload_audio` with a `recordingId` resumes: it reuses the meeting it
@@ -180,8 +181,9 @@ transport never lists them (`LOCAL_ONLY_TOOLS`, ADR-045).
   outcome is unknown it requires `previousUpload` (`complete` or `reupload`)
   instead of guessing. Callers cannot pass a `meetingId`: upload-complete would
   replace that meeting's audio.
-- `ttobak_upload_audio` also accepts an absolute `filePath` (m4a, mp3, wav, webm,
-  ogg, flac, aac, mp4, caf; at most 2 GiB) under the same path guard as document
+- `ttobak_upload_audio` also accepts an absolute `filePath` (m4a, mp4, mp3, wav,
+  webm, ogg, flac: containers both Whisper and the Transcribe fallback accept; at
+  most 2 GiB) under the same path guard as document
   uploads. It validates the file before creating a meeting, uploads under a fixed
   `mcp_upload_*` object name, never deletes caller files, and names the failed
   phase in its error.

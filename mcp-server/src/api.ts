@@ -28,9 +28,9 @@ export class UploadRejectedError extends Error {}
 export const MAX_AUDIO_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024; // 2GiB -- matches the audio crop source cap
 
 // Meeting audio formats for MCP uploads. Unlike documents this is an
-// allowlist: the backend does not validate audio types. The production Whisper
-// path decodes all of them through ffmpeg; .caf is not in the web picker, and
-// the Transcribe fallback does not accept every listed container.
+// allowlist: the backend does not validate audio types. Only containers both
+// the Whisper path (ffmpeg) and the Amazon Transcribe fallback accept are
+// listed, so raw .aac and .caf are excluded.
 export const AUDIO_MIME_BY_EXT: Record<string, string> = {
   '.m4a': 'audio/mp4',
   '.mp4': 'audio/mp4',
@@ -39,8 +39,6 @@ export const AUDIO_MIME_BY_EXT: Record<string, string> = {
   '.webm': 'audio/webm',
   '.ogg': 'audio/ogg',
   '.flac': 'audio/flac',
-  '.aac': 'audio/aac',
-  '.caf': 'audio/x-caf',
 };
 
 // System paths and secret-shaped filenames a prompt-injected agent would
@@ -558,6 +556,7 @@ export class TtobakApi {
     const url = new URL(uploadUrl);
     if (url.protocol !== 'https:' || url.username || url.password) throw new Error('Invalid upload URL');
     return new Promise((resolve, reject) => {
+      const source = createReadStream(filePath);
       const req = httpsRequest(
         {
           hostname: url.hostname,
@@ -569,16 +568,18 @@ export class TtobakApi {
           signal: this.options.signal,
         },
         (res) => {
+          const ok = !!res.statusCode && res.statusCode >= 200 && res.statusCode < 300;
+          // S3 may answer before the body is sent; stop reading the file then.
+          if (!ok) source.destroy();
           res.resume();
           res.on('end', () => {
-            if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) resolve();
+            if (ok) resolve();
             else reject(new UploadRejectedError(`Audio upload to S3 failed: HTTP ${res.statusCode}`));
           });
           res.on('error', reject);
           res.on('aborted', () => reject(new Error('Upload response aborted')));
         },
       );
-      const source = createReadStream(filePath);
       source.on('error', (err) => req.destroy(err));
       req.on('timeout', () => req.destroy(new Error('Audio upload to S3 stalled')));
       req.on('error', (err) => { source.destroy(); reject(err); });

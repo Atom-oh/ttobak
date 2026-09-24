@@ -478,7 +478,7 @@ const RECORDING_TOOLS: Tool[] = [
     name: 'ttobak_upload_audio',
     description:
       'Upload meeting audio for transcription and AI notes: either a kept recording (recordingId from ttobak_recording_status) ' +
-      'or a local audio file (absolute filePath; m4a, mp3, wav, webm, ogg, flac, aac, mp4, caf; at most 2 GiB). Always uploads ' +
+      'or a local audio file (absolute filePath; m4a, mp4, mp3, wav, webm, ogg, flac; at most 2 GiB). Always uploads ' +
       'into a meeting this adapter creates; retrying a kept recording reuses the meeting created for it, never another meeting.',
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     inputSchema: {
@@ -499,6 +499,16 @@ const RECORDING_TOOLS: Tool[] = [
 ];
 
 export const RECORDING_TOOL_NAMES = RECORDING_TOOLS.map((tool) => tool.name);
+
+// Recording tool calls in progress. Stdio shutdown waits for them, so a signal
+// or closed stdin never exits between an irreversible step (meeting create,
+// PUT, upload-complete) and its persisted progress or cleanup.
+const recordingWork = new Set<Promise<unknown>>();
+
+/** Resolves once every recording tool call in progress has settled. */
+export async function settleRecordingWork(): Promise<void> {
+  while (recordingWork.size) await Promise.allSettled([...recordingWork]);
+}
 
 async function callTool(request: CallToolRequest, options: ServerOptions) {
   const { auth, api } = options;
@@ -1007,7 +1017,12 @@ export function createMcpServer(options: ServerOptions): Server {
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
   server.setRequestHandler(CallToolRequestSchema, async request => {
     if (!tools.some(tool => tool.name === request.params.name)) return error('Unknown or unavailable tool');
-    const result = await callTool(request, options);
+    const call = callTool(request, options);
+    if (RECORDING_TOOL_NAMES.includes(request.params.name)) {
+      recordingWork.add(call);
+      void call.finally(() => recordingWork.delete(call));
+    }
+    const result = await call;
     if (options.mode === 'http' && Buffer.byteLength(JSON.stringify(result)) > MAX_HTTP_RESULT_BYTES) {
       const receipt = !('isError' in result && result.isError) &&
         mutationReceipt(request.params.name, result.content[0]?.text ?? '');
@@ -1047,13 +1062,14 @@ async function main() {
   const auth = new CognitoAuth({ cognitoDomain, clientId });
   const recorder = new Recorder();
   const server = createMcpServer({ auth, api: new TtobakApi(auth, apiUrl), apiUrl, cognitoDomain, clientId, recorder });
-  // Stop an active recording gracefully so its WAV header is finalized and the
-  // file stays available through ttobak_recording_status after a restart.
+  // Let in-flight recording uploads settle (their PUT has a stall timeout),
+  // then stop an active recording gracefully so its WAV header is finalized
+  // and the file stays available through ttobak_recording_status.
   let exiting = false;
   const shutdown = () => {
     if (exiting) return;
     exiting = true;
-    void recorder.shutdown().finally(() => process.exit(0));
+    void settleRecordingWork().then(() => recorder.shutdown()).finally(() => process.exit(0));
   };
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
