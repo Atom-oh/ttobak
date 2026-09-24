@@ -230,11 +230,15 @@ func (s *UploadService) CompleteUpload(ctx context.Context, userID string, req *
 			// Idempotent index-based set
 			return s.repo.SetAudioKeyAtIndex(ctx, meeting.UserID, meeting.MeetingID, req.Key, req.PartIndex)
 		}
-		// Single-file: existing flow
-		return s.repo.UpdateMeetingFields(ctx, meeting.UserID, meeting.MeetingID, map[string]interface{}{
-			"audioKey": req.Key,
-			"status":   model.StatusTranscribing,
-		})
+		// Single-file. Idempotent for the same key: re-completing an object
+		// that is already bound never resets the meeting's progress.
+		if _, err := s.repo.BindMeetingAudioKey(ctx, meeting.UserID, meeting.MeetingID, req.Key); err != nil {
+			if errors.Is(err, repository.ErrConditionFailed) {
+				return ErrNotFound
+			}
+			return err
+		}
+		return nil
 
 	case "image":
 		// Create attachment record

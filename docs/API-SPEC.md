@@ -705,6 +705,11 @@ persistence errors remain errors. Retry still returns errors when work cannot qu
 `POST /api/upload/complete` uses fixed error messages: 400 invalid input, 403 denied,
 404 missing meeting/source, 409 concurrent source change and 500 storage/event failure
 without a durable failure state. Its success response remains `{"status":"processing"}`.
+Single-file audio completion is idempotent per key: completing the key a meeting
+already holds succeeds without changing its status, so a retry after a lost
+response never moves a transcribed or finished meeting back to `transcribing`. A
+different key still replaces the audio and restarts transcription. The key check
+is part of the conditional write (`BindMeetingAudioKey`).
 
 ### GET /api/meetings/{meetingId}/attachments/{attachmentId}/text/status
 
