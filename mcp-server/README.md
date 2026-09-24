@@ -172,8 +172,9 @@ transport never lists them (`LOCAL_ONLY_TOOLS`, ADR-045).
   host restart. Several hosts can share the directory: a capture is offered for
   upload only once finalized (or once its server and ffmpeg have both exited), and
   every upload holds an exclusive `<id>.lock`. Server shutdown stops ffmpeg
-  gracefully after in-flight uploads settle; a hard kill may leave ffmpeg running
-  until `maxMinutes`. Kept
+  gracefully after in-flight uploads settle (at most 20 s; a second signal exits
+  at once, and an interrupted upload resumes from its saved progress). A hard
+  kill may leave ffmpeg running until `maxMinutes`. Kept
   recordings are not aged out; delete them manually if they are not needed.
 - The sidecar records upload progress before each irreversible step, so
   `ttobak_upload_audio` with a `recordingId` resumes: it reuses the meeting it

@@ -22580,6 +22580,7 @@ var RECORDING_TOOLS = [
 ];
 var RECORDING_TOOL_NAMES = RECORDING_TOOLS.map((tool) => tool.name);
 var recordingWork = /* @__PURE__ */ new Set();
+var SHUTDOWN_GRACE_MS = 2e4;
 async function settleRecordingWork() {
   while (recordingWork.size) await Promise.allSettled([...recordingWork]);
 }
@@ -23054,9 +23055,10 @@ async function main() {
   const server = createMcpServer({ auth, api: new TtobakApi(auth, apiUrl), apiUrl, cognitoDomain, clientId, recorder });
   let exiting = false;
   const shutdown = () => {
-    if (exiting) return;
+    if (exiting) process.exit(1);
     exiting = true;
-    void settleRecordingWork().then(() => recorder.shutdown()).finally(() => process.exit(0));
+    const grace = new Promise((resolve) => setTimeout(resolve, SHUTDOWN_GRACE_MS).unref());
+    void Promise.race([settleRecordingWork(), grace]).then(() => recorder.shutdown()).finally(() => process.exit(0));
   };
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);

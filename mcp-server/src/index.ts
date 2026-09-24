@@ -505,6 +505,9 @@ export const RECORDING_TOOL_NAMES = RECORDING_TOOLS.map((tool) => tool.name);
 // PUT, upload-complete) and its persisted progress or cleanup.
 const recordingWork = new Set<Promise<unknown>>();
 
+/** How long stdio shutdown waits for recording uploads before exiting anyway. */
+const SHUTDOWN_GRACE_MS = 20_000;
+
 /** Resolves once every recording tool call in progress has settled. */
 export async function settleRecordingWork(): Promise<void> {
   while (recordingWork.size) await Promise.allSettled([...recordingWork]);
@@ -1077,11 +1080,14 @@ async function main() {
   // Let in-flight recording uploads settle (their PUT has a stall timeout),
   // then stop an active recording gracefully so its WAV header is finalized
   // and the file stays available through ttobak_recording_status.
+  // The wait is bounded, and a second signal exits at once: upload progress is
+  // persisted before each irreversible step, so an interrupted upload resumes.
   let exiting = false;
   const shutdown = () => {
-    if (exiting) return;
+    if (exiting) process.exit(1);
     exiting = true;
-    void settleRecordingWork().then(() => recorder.shutdown()).finally(() => process.exit(0));
+    const grace = new Promise<void>((resolve) => setTimeout(resolve, SHUTDOWN_GRACE_MS).unref());
+    void Promise.race([settleRecordingWork(), grace]).then(() => recorder.shutdown()).finally(() => process.exit(0));
   };
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
