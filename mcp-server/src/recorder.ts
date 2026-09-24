@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, linkSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, resolve as resolvePath } from 'node:path';
 
 // Local microphone capture for the stdio transport only (ADR-045: the HTTP
 // transport never touches the server's filesystem or processes). ffmpeg's
@@ -164,7 +164,8 @@ export class Recorder {
 
   constructor(options: RecorderOptions = {}) {
     this.ffmpegPath = options.ffmpegPath ?? process.env.TTOBAK_FFMPEG ?? 'ffmpeg';
-    this.dir = options.dir ?? defaultRecordingsDir();
+    // Absolute and normalized: silenceCheck compares recording paths against it.
+    this.dir = resolvePath(options.dir ?? defaultRecordingsDir());
     this.platform = options.platform ?? process.platform;
     this.startupGraceMs = options.startupGraceMs ?? 2000;
     this.stopTimeoutMs = options.stopTimeoutMs ?? 10_000;
@@ -211,6 +212,17 @@ export class Recorder {
       '-t', String(maxMinutes * 60), '-y', info.file,
     ], { stdio: ['pipe', 'ignore', 'pipe'] });
     const active: Active = { info, child, stderr: '', exited: Promise.resolve(null) };
+    let pidSaved: unknown = null;
+    if (child.pid) {
+      // Synchronously, before the startup grace wait: from here on the capture
+      // stays hidden from other processes while ffmpeg lives, even if this
+      // host dies.
+      try {
+        this.writeSidecar({ ...info, state: 'recording', ownerPid: process.pid, ffmpegPid: child.pid });
+      } catch (e) {
+        pidSaved = e;
+      }
+    }
     active.exited = new Promise((resolve) => {
       child.on('error', (err) => { active.stderr += `\n${err.message}`; active.exitCode = -1; resolve(-1); });
       child.on('exit', (code) => { active.exitCode = code; resolve(code); });
@@ -231,14 +243,12 @@ export class Recorder {
       const hint = /ENOENT/.test(active.stderr) ? ' Install ffmpeg (brew install ffmpeg) or set TTOBAK_FFMPEG.' : '';
       throw new Error(`ffmpeg exited during startup: ${active.stderr.trim() || `code ${active.exitCode}`}.${hint}`);
     }
-    try {
-      this.writeSidecar({ ...info, state: 'recording', ownerPid: process.pid, ffmpegPid: child.pid });
-    } catch (e) {
+    if (pidSaved) {
       child.kill('SIGKILL');
       await active.exited;
       rmSync(info.file, { force: true });
       this.removeSidecar(id);
-      throw new Error(`Could not save recording metadata: ${e instanceof Error ? e.message : String(e)}`);
+      throw new Error(`Could not save recording metadata: ${pidSaved instanceof Error ? pidSaved.message : String(pidSaved)}`);
     }
     this.active = active;
     return info;
@@ -403,7 +413,12 @@ export class Recorder {
     await this.starting?.catch(() => {});
     const active = this.active;
     if (!active) return;
-    const stopped = await (active.stopping ?? this.stop()).catch(() => null);
+    if (active.stopping) {
+      // Another caller's stop owns the upload lock and releases it itself.
+      await active.stopping.catch(() => {});
+      return;
+    }
+    const stopped = await this.stop().catch(() => null);
     stopped?.release();
   }
 
@@ -424,7 +439,8 @@ export class Recorder {
       let stderr = '';
       child.stderr?.on('data', (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-64 * 1024); });
       child.on('error', (err) => reject(new Error(`${err.message}. Install ffmpeg (brew install ffmpeg) or set TTOBAK_FFMPEG.`)));
-      child.on('exit', (code) => resolve({ code, stderr }));
+      // 'close', not 'exit': stderr (e.g. volumedetect's summary) may still be draining at exit.
+      child.on('close', (code) => resolve({ code, stderr }));
     });
   }
 
@@ -439,7 +455,9 @@ export class Recorder {
     if (typeof parsed.title !== 'string' || typeof parsed.startedAt !== 'string') return null;
     // A capture is offered only once finalized, or once both its owner server
     // and its ffmpeg are gone (a crashed host leaves a usable WAV).
-    if (parsed.state !== 'kept' && (isProcessAlive(parsed.ownerPid) || isProcessAlive(parsed.ffmpegPid))) return null;
+    // Without a recorded ffmpeg PID, a capture's writer cannot be ruled out.
+    if (parsed.state !== 'kept' &&
+        (parsed.ffmpegPid === undefined || isProcessAlive(parsed.ownerPid) || isProcessAlive(parsed.ffmpegPid))) return null;
     const { meetingId, uploadKey, uploadPut } = parsed;
     return {
       id, title: parsed.title, startedAt: parsed.startedAt,

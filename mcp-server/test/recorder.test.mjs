@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Recorder, parseAudioDevices, parseMaxVolume, validateDevice } from '../dist/recorder.js';
+import { Recorder, parseAudioDevices, parseMaxVolume, validateDevice, validateMaxMinutes } from '../dist/recorder.js';
 import { recorderFixture } from './fixtures/fake-ffmpeg.mjs';
 
 // Recorder unit tests. The MCP tools that drive it are tested separately.
@@ -15,6 +15,9 @@ test('device list, device validation and volume parsing', () => {
   assert.equal(parseMaxVolume('no volume'), null);
   assert.equal(validateDevice(undefined), 'default');
   assert.equal(validateDevice(2), '2');
+  assert.equal(validateMaxMinutes(undefined), 240);
+  assert.equal(validateMaxMinutes(30), 30);
+  for (const bad of [0, 241, 1.5, '30']) assert.throws(() => validateMaxMinutes(bad), /maxMinutes/);
   for (const bad of ['0:1', 'a\nb', -1, 1.5, {}]) assert.throws(() => validateDevice(bad), /device/);
 });
 
@@ -57,17 +60,23 @@ test('a capture owned by another live process or held by an upload is not offere
   mkdirSync(dir, { recursive: true });
   const live = '11111111-1111-4111-8111-111111111111';
   const orphan = '22222222-2222-4222-8222-222222222222';
-  for (const [id, pid] of [[live, process.ppid], [orphan, 2 ** 22 + 12345]]) {
+  const dead = 2 ** 22 + 12345;
+  const liveFfmpeg = '44444444-4444-4444-8444-444444444444';
+  const noFfmpegPid = '55555555-5555-4555-8555-555555555555';
+  for (const [id, ownerPid, ffmpegPid] of [[live, process.ppid, process.ppid], [orphan, dead, dead],
+    [liveFfmpeg, dead, process.ppid], [noFfmpegPid, dead, undefined]]) {
     writeFileSync(join(dir, `${id}.wav`), Buffer.alloc(1024));
-    writeFileSync(join(dir, `${id}.json`), JSON.stringify({ id, title: id, startedAt: new Date().toISOString(), state: 'recording', ownerPid: pid, ffmpegPid: pid }));
+    writeFileSync(join(dir, `${id}.json`), JSON.stringify({ id, title: id, startedAt: new Date().toISOString(), state: 'recording', ownerPid, ffmpegPid }));
   }
-  assert.deepEqual(recorder.listSaved().map((r) => r.id), [orphan], 'only a capture whose owner and ffmpeg exited is recoverable');
+  assert.deepEqual(recorder.listSaved().map((r) => r.id), [orphan],
+    'only a capture whose owner and ffmpeg both exited is recoverable; a live or unknown ffmpeg hides it');
   assert.throws(() => recorder.getSaved(live), /No saved recording/);
 
   const release = recorder.acquire(orphan);
   assert.throws(() => recorder.acquire(orphan), /being uploaded by another request/);
   assert.equal(recorder.listSaved()[0].uploading, true);
   release();
+  assert.ok(!existsSync(join(dir, `${orphan}.lock`)), 'release removes the lock file');
   writeFileSync(join(dir, `${orphan}.lock`), `${2 ** 22 + 12345}:stale`);
   recorder.acquire(orphan)();
 });
@@ -122,4 +131,42 @@ test('silenceCheck only analyzes recordings in the recordings directory', async 
     await assert.rejects(recorder.silenceCheck(file), /only a recording/);
   }
   assert.throws(() => recorder.saveProgress('../x', {}), /Invalid recording id/);
+});
+
+test('shutdown during an in-flight stop leaves that caller holding the lock', async (t) => {
+  const { dir, recorder } = recorderFixture(t);
+  const { id } = await recorder.start({ title: 'in flight' });
+  const stopping = recorder.stop();
+  await recorder.shutdown();
+  const stopped = await stopping;
+  assert.throws(() => recorder.acquire(id), /being uploaded/, 'shutdown must not release a lock it does not own');
+  stopped.release();
+  assert.ok(!existsSync(join(dir, `${id}.lock`)));
+});
+
+test('the ffmpeg PID is persisted before the startup grace period and silence is checked', async (t) => {
+  const { dir, recorder } = recorderFixture(t);
+  const starting = recorder.start({ title: 'grace' });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const [sidecar] = readdirSync(dir).filter((name) => name.endsWith('.json'));
+  const early = JSON.parse(readFileSync(join(dir, sidecar), 'utf8'));
+  assert.equal(early.state, 'recording');
+  assert.equal(typeof early.ffmpegPid, 'number', 'written right after spawn, not after the grace wait');
+  await starting;
+  const stopped = await recorder.stop();
+  t.after(() => stopped.release());
+  assert.deepEqual(await recorder.silenceCheck(stopped.file), { maxVolumeDb: -12.5, silent: false });
+  process.env.FAKE_MAX_VOLUME = '-91.0';
+  t.after(() => { delete process.env.FAKE_MAX_VOLUME; });
+  assert.equal((await recorder.silenceCheck(stopped.file)).silent, true);
+});
+
+test('a relative or trailing-slash recordings directory is normalized', async (t) => {
+  const { root, dir, recorder: base } = recorderFixture(t);
+  const ffmpegPath = join(root, 'ffmpeg');
+  const recorder = new Recorder({ ffmpegPath, dir: `${dir}/`, platform: 'darwin' });
+  await assert.rejects(recorder.silenceCheck(join(dir, 'x.wav')), /only a recording/);
+  const file = join(dir, '66666666-6666-4666-8666-666666666666.wav');
+  assert.equal((await recorder.silenceCheck(file)).silent, false, 'a trailing slash does not reject real recordings');
+  assert.equal((await base.silenceCheck(file)).silent, false);
 });
