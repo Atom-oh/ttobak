@@ -215,13 +215,14 @@ test('stdio shutdown waits for an in-flight recording upload', async (t) => {
   assert.deepEqual(fake.calls.map((c) => c.path), ['/api/meetings', '/api/upload/presigned', '/api/upload/complete']);
 });
 
-test('a caller file whose upload is unbound says to delete the meeting and upload again', async (t) => {
+test('a caller file whose completion is unconfirmed is reported as uncertain, not unbound', async (t) => {
   const { root, recorder } = recorderFixture(t);
   const fake = fakeApi({ failComplete: true });
   const { call } = await connect(t, { api: fake.api, recorder });
   const audio = join(root, 'call.m4a');
   writeFileSync(audio, Buffer.alloc(1024));
   const failed = await call('ttobak_upload_audio', { filePath: audio });
-  assert.match(failed.body, /will not produce notes: delete it in TTOBAK, then retry/);
+  assert.match(failed.body, /may or may not be bound/);
+  assert.match(failed.body, /if it shows the audio or a transcription, nothing more is needed; otherwise delete that meeting/);
   assert.ok(existsSync(audio));
 });

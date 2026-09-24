@@ -189,8 +189,10 @@ transport never lists them (`LOCAL_ONLY_TOOLS`, ADR-045).
   most 2 GiB) under the same path guard as document
   uploads. It validates the file before creating a meeting, uploads under a fixed
   `mcp_upload_*` object name, never deletes caller files, and names the failed
-  phase in its error. If a caller file's audio may be stored but is not bound to
-  its meeting, that meeting will not produce notes: delete it and upload again.
+  phase in its error. An unconfirmed PUT or upload-complete is reported as an
+  unknown outcome: check the meeting, and only if it shows no audio delete it
+  and upload again. The TTOBAK API completes the same key idempotently, so a
+  recording's complete-only retry never resets a meeting's progress.
 
 ## Bounded meeting and transcript reads
 

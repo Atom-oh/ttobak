@@ -22969,7 +22969,7 @@ async function uploadAudio(options, file2, target, title, date4, recordingId, pr
         }
         throw beforePut(message(e));
       }
-      throw new Error(`${message(e)}. The audio upload for meeting ${id} did not confirm, so it may be stored. Nothing local was deleted. ` + (recordingId ? `Check ${api.meetingUrl(id)}, then retry ${retry} with previousUpload "complete" or "reupload".` : `Meeting ${id} is not bound to audio and will not produce notes: delete it in TTOBAK, then retry ${retry} (creates a new meeting; the file is never deleted).`));
+      throw new Error(`${message(e)}. The audio upload for meeting ${id} did not confirm, so it may be stored. Nothing local was deleted. ` + (recordingId ? `Check ${api.meetingUrl(id)}, then retry ${retry} with previousUpload "complete" or "reupload".` : `Check ${api.meetingUrl(id)}: if after a few minutes it shows no audio or transcription, delete that meeting and retry ${retry} (creates a new meeting; the file is never deleted).`));
     }
     try {
       save({ uploadPut: true });
@@ -22980,7 +22980,7 @@ async function uploadAudio(options, file2, target, title, date4, recordingId, pr
   try {
     await api.completeMeetingAudio(id, key, size, type);
   } catch (e) {
-    throw new Error(`${message(e)}. The audio is stored for meeting ${id} (transcription may already start), but upload-complete failed. Nothing local was deleted. ` + (recordingId ? `Retry ${retry}; it only completes, without uploading again.` : `Meeting ${id} is not bound to the audio and will not produce notes: delete it in TTOBAK, then retry ${retry} (creates a new meeting; the file is never deleted).`));
+    throw new Error(`${message(e)}. The audio is stored for meeting ${id}, but upload-complete did not confirm, so the meeting may or may not be bound to it. Nothing local was deleted. ` + (recordingId ? `Retry ${retry}; it only completes, without uploading again.` : `Check ${api.meetingUrl(id)}: if it shows the audio or a transcription, nothing more is needed; otherwise delete that meeting and retry ${retry} (creates a new meeting; the file is never deleted).`));
   }
   if (recordingId && resumedComplete) {
     warnings.push(`Completed an audio upload made by an earlier attempt; transcription may already have finished before the meeting was bound and then never produce notes. The local recording ${recordingId} is kept. Check ${api.meetingUrl(id)}: if notes appear, delete ${file2} and its .json sidecar; otherwise retry ${retry} with previousUpload "reupload".`);
