@@ -56,3 +56,15 @@ func TestAudioCropEligibility(t *testing.T) {
 		})
 	}
 }
+
+func TestExpiredAudioCropDoesNotQueueAgain(t *testing.T) {
+	crop := &model.AudioCrop{State: "queued"}
+	if !crop.QueuedFor(model.StatusTranscribing) {
+		t.Fatal("live queued crop must dispatch")
+	}
+	for _, status := range []string{model.StatusError, model.StatusDone, model.StatusRecording} {
+		if crop.QueuedFor(status) {
+			t.Fatalf("must not dispatch %s crop", status)
+		}
+	}
+}

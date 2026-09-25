@@ -95,7 +95,7 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 		if err != nil {
 			return err
 		}
-		if meeting == nil || meeting.AudioCrop == nil || meeting.AudioCrop.State != "queued" {
+		if meeting == nil || !meeting.AudioCrop.QueuedFor(meeting.Status) {
 			return nil
 		}
 		if whisperCluster == "" || whisperTaskDef == "" || whisperContainer != "whisper" {

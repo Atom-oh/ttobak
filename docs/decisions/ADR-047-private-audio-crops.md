@@ -15,7 +15,8 @@ The source revision check and conditional copy creation share a DynamoDB transac
 A caller UUID and range identify one copy; retrying a failed event publication uses
 the same identity. A private EventBridge event dispatches the production Whisper
 worker, whose ECS client token deduplicates dispatch. The worker conditionally
-claims the copy once, revalidates source ownership/key, and downloads with IfMatch
+claims a live queued copy once, persists runId/resultKey before uploading output,
+revalidates source ownership/key, and downloads with IfMatch
 against the pinned S3 ETag. FFmpeg produces a mono 16 kHz WAV for the selected range;
 only those bytes go to transcription. Publication requires the same worker run and
 an existing unmodified destination. Cropped audio uploads cannot trigger ordinary
@@ -33,7 +34,9 @@ conversion, transcription and audio upload. Lost claims cannot publish; an expir
 owned run is marked failed even if its meeting status is already error. Rejected
 publication deletes its unique audio object, while ambiguous bindings retain it.
 DynamoDB writes use one SDK attempt so a committed binding cannot be mistaken for
-rejection. Cleanup failures are reported. There is no automatic Spot restart.
+rejection. Cleanup failures are reported. There is no automatic Spot restart. Late delivery cannot revive an expired copy.
+After abrupt process loss, its durable candidate address supports operator
+reconciliation; close the run before cleanup and retain canonical audio.
 
 GatewayStack defaults AUDIO_CROP_ENABLED to 0. The opt-in context
 `ttobak:audioCropEnabled=true` must follow the worker-image rollout and actual

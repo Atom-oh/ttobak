@@ -75,7 +75,7 @@ func (s *UploadService) CropMeeting(ctx context.Context, userID, meetingID strin
 		if crop == nil || crop.SourceMeetingID != meetingID || crop.StartSeconds != request.StartSeconds || crop.EndSeconds != request.EndSeconds {
 			return nil, repository.ErrConditionFailed
 		}
-		if crop.State == "queued" {
+		if crop.QueuedFor(existing.Status) {
 			if err := s.publishAudioCrop(ctx, userID, croppedID); err != nil {
 				return nil, err
 			}

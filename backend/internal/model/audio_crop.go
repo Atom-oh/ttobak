@@ -8,6 +8,7 @@ type AudioCrop struct {
 	EndSeconds      int    `dynamodbav:"endSeconds" json:"endSeconds"`
 	State           string `dynamodbav:"state" json:"state"`
 	RunID           string `dynamodbav:"runId,omitempty" json:"-"`
+	ResultKey       string `dynamodbav:"resultKey,omitempty" json:"-"`
 }
 
 func (crop *AudioCrop) Active() bool {
@@ -18,4 +19,8 @@ type AudioCropRequest struct {
 	RequestID    string `json:"requestId"`
 	StartSeconds int    `json:"startSeconds"`
 	EndSeconds   int    `json:"endSeconds"`
+}
+
+func (crop *AudioCrop) QueuedFor(status string) bool {
+	return crop != nil && crop.State == "queued" && status == StatusTranscribing
 }

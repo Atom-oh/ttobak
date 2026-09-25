@@ -369,7 +369,8 @@ The source revision check and conditional copy creation are one transaction.
 Copies retain notes and participants, without prior transcripts, summaries,
 action items, attachments, account/project relations or shares. Detail exposes
 `supportsAudioCrop`, `audioCrop` provenance/status and `duration`. Source storage
-keys/ETags and worker claim IDs are not exposed through `audioCrop`. Cropped audio
+keys/ETags, worker claim IDs and candidate output keys are not exposed through
+`audioCrop`. Expired queued copies are not dispatched again. Cropped audio
 cannot be replaced or rediarized in place. Its worker claims once, reads the exact
 authorized source with `IfMatch`, verifies the decoded range length, and publishes
 only selected audio and its new transcript. Rejected publication does not emit a
