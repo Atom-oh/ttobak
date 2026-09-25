@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { clearQueuedNativeControl, dispatchNativeControl } from '@/lib/nativeControl';
@@ -13,13 +13,16 @@ export function NativeControlBridge() {
   const { isAuthenticated, isLoading } = useAuth();
   const router = useRouter();
   const authenticatedRef = useRef(isAuthenticated);
+  // Readiness is published only after the request listener is registered,
+  // so the app never emits a request nobody hears.
+  const [listening, setListening] = useState(false);
 
   useEffect(() => {
     authenticatedRef.current = isAuthenticated;
     if (!isAuthenticated) clearQueuedNativeControl();
-    if (!isTauri() || isLoading) return;
+    if (!isTauri() || isLoading || !listening) return;
     void markNativeControlReady(isAuthenticated);
-  }, [isAuthenticated, isLoading]);
+  }, [isAuthenticated, isLoading, listening]);
 
   // Not ready while the page is going away (reload, navigation out of the
   // app), so the app answers app_not_ready instead of waiting on a page that
@@ -60,7 +63,7 @@ export function NativeControlBridge() {
         return;
       }
       router.push('/record');
-    });
+    }, () => setListening(true));
   }, [router]);
 
   return null;

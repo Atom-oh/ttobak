@@ -534,6 +534,10 @@ function RecordPageInner() {
         fail('busy', 'A stop is already in progress.');
         return;
       }
+      if (latest.browserRecording && !isNativeRecordingRef.current) {
+        fail('browser_recording', 'A browser-mode recording is running in the TTOBAK window; stop it there.');
+        return;
+      }
       if (!isNativeRecordingRef.current) {
         fail('not_recording', 'The TTOBAK app is not recording.');
         return;
@@ -574,9 +578,15 @@ function RecordPageInner() {
   }, []);
   useEffect(() => {
     if (!isTauri()) return;
-    const phase = isNativeRecording ? 'recording' : (postRecording.step ?? (recordStartInFlight ? 'starting' : 'idle'));
-    void reportNativeControlState({ phase, meetingId: postRecording.serverMeetingId, error: postRecording.errorMessage });
-  }, [isNativeRecording, recordStartInFlight, postRecording.step, postRecording.serverMeetingId, postRecording.errorMessage]);
+    const recording = isNativeRecording || session.isRecording;
+    const phase = recording ? 'recording' : (postRecording.step ?? (recordStartInFlight ? 'starting' : 'idle'));
+    void reportNativeControlState({
+      phase,
+      ...(recording ? { source: isNativeRecording ? 'native' as const : 'browser' as const } : {}),
+      meetingId: postRecording.serverMeetingId,
+      error: postRecording.errorMessage,
+    });
+  }, [isNativeRecording, session.isRecording, recordStartInFlight, postRecording.step, postRecording.serverMeetingId, postRecording.errorMessage]);
 
   // Q&A context = user-provided meeting context + live transcript
   const qaContext = contextText.trim()

@@ -342,6 +342,7 @@ function subscribeTauriEvent<Raw, T>(
   eventName: string,
   decode: (raw: Raw) => T,
   handler: (value: T) => void,
+  onSubscribed?: () => void,
 ): () => void {
   if (typeof window === 'undefined' || !window.__TAURI__?.event?.listen) {
     return () => {};
@@ -355,6 +356,7 @@ function subscribeTauriEvent<Raw, T>(
         fn();
       } else {
         unlisten = fn;
+        onSubscribed?.();
       }
     })
     .catch((err) => {
@@ -442,12 +444,17 @@ function decodeControlRequest(raw: unknown): NativeControlRequest | null {
   };
 }
 
-/** Subscribe to control requests. Malformed payloads are dropped. */
-export function onNativeControlRequest(handler: (request: NativeControlRequest) => void): () => void {
+/** Subscribe to control requests. Malformed payloads are dropped.
+ * `onSubscribed` runs once the listener is registered. */
+export function onNativeControlRequest(
+  handler: (request: NativeControlRequest) => void,
+  onSubscribed?: () => void,
+): () => void {
   return subscribeTauriEvent<unknown, NativeControlRequest | null>(
     'native-control-request',
     decodeControlRequest,
     (request) => { if (request) handler(request); },
+    onSubscribed,
   );
 }
 
@@ -467,6 +474,9 @@ export function markNativeControlReady(loggedIn: boolean, mounted = true): Promi
 /** Latest recording phase for `status` over the control socket. */
 export function reportNativeControlState(state: {
   phase: 'idle' | 'starting' | 'recording' | 'notes' | 'creating' | 'saving' | 'uploading' | 'redirecting' | 'error';
+  /** For `recording`: the app's native capture, or a browser-mode recording
+   * in the window that MCP cannot stop. */
+  source?: 'native' | 'browser';
   meetingId?: string | null;
   error?: string | null;
 }): Promise<void> {
