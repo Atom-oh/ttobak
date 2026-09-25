@@ -624,7 +624,7 @@ function RecordPageInner() {
       session.startSession(cleanupPreview, stream);
     } else if (isTauri() && audioSource === 'system') {
       // Native (system audio): no MediaStream — capture happens in Rust via
-      // ScreenCaptureKit, and RecordButton manages its own timer/state.
+      // the native Core Audio capture, and RecordButton manages its own timer/state.
       // isNativeRecording drives the during-recording UI immediately,
       // rather than waiting on the async STT session start below.
       setIsNativeRecording(true);
@@ -1139,7 +1139,7 @@ function RecordPageInner() {
                 // the render where the user clicked (state still false) but
                 // fires after handleRecordingStart latched native mode — a
                 // state read takes the wrong branch on a native START
-                // failure (e.g. Screen Recording TCC denial) and leaves a
+                // failure (e.g. Core Audio device error) and leaves a
                 // zombie recording UI. Every onError while native mode is
                 // latched comes from RecordButton's native start/stop catch
                 // blocks — always a terminal failure. Terminal means the

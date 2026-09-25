@@ -57,6 +57,9 @@ type-checks against the objc2 Core Audio bindings, but only a signed macOS
 build validates the permission prompts, the device topology and the audio.
 Check a headphone call records both voices, a denied permission produces the
 silence warning, and removing the input device falls back to system audio only.
+Also confirm macOS 14.2/14.3 show the System Audio Recording prompt for
+`NSAudioCaptureUsageDescription`; if they do not, raise the minimum version to
+the first release that does.
 
 A default input device changed mid-recording is not followed. Bluetooth
 headsets used as input may switch to their lower-quality hands-free profile.

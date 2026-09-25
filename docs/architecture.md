@@ -74,8 +74,9 @@ flowchart TB
 
 The diagram groups responsibilities; it is not an exhaustive network-policy
 model. Browsers also use authenticated Cognito/Transcribe SDK calls and signed S3
-PUTs. Native finished audio uploads stream directly from disk in Rust; live PCM
-crosses IPC for captions. The public-document route is the single intentional
+PUTs. The Mac app records a Core Audio system-audio tap mixed with the microphone
+(ADR-046); native finished audio uploads stream directly from disk in Rust; live
+PCM crosses IPC for captions. The public-document route is the single intentional
 unauthenticated application GET and still validates a revocable share token.
 Extraction's event target/worker, API producers and summary consumer are wired;
 QA/UI activation remains separate. The KB activation configuration retains the

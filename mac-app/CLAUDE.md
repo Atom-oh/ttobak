@@ -1,8 +1,9 @@
 # macOS native module
 
-Tauri 2/Rust wraps the remote TTOBAK SPA and supplies ScreenCaptureKit system-audio
-capture. Auth, presigning, upload-complete and retry orchestration remain in the
-SPA. Rust owns finished WAV transport, not Cognito tokens. See ADR-006/024.
+Tauri 2/Rust wraps the remote TTOBAK SPA and supplies native capture: a Core Audio
+process tap of system audio mixed with the default microphone (macOS 14.2+). Auth,
+presigning, upload-complete and retry orchestration remain in the SPA. Rust owns
+finished WAV transport, not Cognito tokens. See ADR-006/024/046.
 
 ## Build and validation
 
@@ -21,17 +22,20 @@ building. Re-grant TCC permissions if a rebuilt ad-hoc signature invalidates the
 then test a short recording. Current codesign --deep is accepted for ad-hoc signing;
 real Developer ID notarization needs explicit nested signing.
 
-ScreenCaptureKit is macOS-gated. Linux can build Tauri only with its native GUI
+Core Audio capture is macOS-gated. Linux can build Tauri only with its native GUI
 dependencies; on hosts lacking those, a scratch crate can test Tauri-free portions
-of error.rs/audio.rs/leftover.rs/power.rs. That does not validate IOKit or capture.
-Keep pure helpers such as interleave_planes outside macOS-only modules.
+of error.rs/mix.rs/audio.rs/leftover.rs/power.rs. That does not validate IOKit or
+capture. Keep pure helpers (mix.rs) outside macOS-only modules. A Linux host with
+the `aarch64-apple-darwin` target can type-check and clippy the macOS module with
+`cargo check --target aarch64-apple-darwin` if `CC_aarch64_apple_darwin` points to a
+stub compiler for objc2's build script; that proves types, not runtime behavior.
 
 ## Wire contract
 
 | Command | Contract |
 |---|---|
-| start_recording | meeting_id; returns temp_path |
-| stop_recording | returns temp_path, duration_ms, byte_size, stop_timed_out |
+| start_recording | meeting_id; returns temp_path, optional warnings (e.g. no microphone) |
+| stop_recording | returns temp_path, duration_ms, byte_size, stop_timed_out, optional warnings (silent source, dropped buffers) |
 | recording_status | path; recording, temp_path, elapsed_ms, finalizing_for_path |
 | upload_recording | path, uploadUrl, contentType; returns HTTP status code |
 | cleanup_recording | Validated inactive/finalized path; removes WAV and adopted entry |
@@ -55,7 +59,7 @@ match the actual loaded origin; do not add speculative origins.
 - upload.rs bounds no-progress streaming at 60 seconds, then separately bounds
   waiting for the response after full send at 180 seconds. Do not replace this
   with a fixed total upload timeout or an unbounded final phase.
-- Never hold recorder locks across blocking ScreenCaptureKit FFI. StartGuard's
+- Never hold recorder locks across blocking Core Audio FFI. StartGuard's
   RAII drop clears abandoned starts; do not drop it while retaining the same
   non-reentrant lock.
 - stop_recording marks the path finalizing inside the same critical section as
@@ -64,9 +68,12 @@ match the actual loaded origin; do not add speculative origins.
 - recording_status checks lexical containment before canonicalization and checks
   resolved containment afterward. Out-of-tree status queries must not become
   file-existence probes.
-- Detect/interleave planar and interleaved buffers; do not assume the layout from
-  one device. System audio excludes the app's own sound. Capture needs a display
-  even when recording audio only; source-specific logic stays in audio.rs.
+- Aggregate input lists sub-device (microphone) streams first and tap streams
+  after them; map channels per buffer's mNumberChannels, never assume one layout.
+  The tap excludes the app's own sound. No display is required.
+- The IOProc is real-time: mix and enqueue only. The worker owns disk writes and
+  events. Teardown order: AudioDeviceStop, destroy IOProc, aggregate, tap, then
+  close the queue and join the worker before finalizing the WAV.
 - Graceful exit finalizes capture. Force Quit/SIGKILL cannot run that callback;
   periodic WAV flush checkpoints and startup recovery limit damage instead.
 

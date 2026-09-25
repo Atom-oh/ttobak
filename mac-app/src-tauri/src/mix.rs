@@ -6,6 +6,10 @@
 //! Deliberately free of FFI and not `cfg`-gated, so these rules are unit
 //! tested on every platform: this module has no CI on macOS, and a mis-split
 //! channel layout silently produces a garbled recording.
+//!
+//! The only consumer is the macOS capture backend, so other targets see the
+//! functions as unused outside tests.
+#![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
 /// One `AudioBuffer` from the IOProc's input list: `channels` interleaved
 /// f32 channels in `data` (Core Audio's canonical IOProc format).
