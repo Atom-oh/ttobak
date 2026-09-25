@@ -44,11 +44,10 @@ use tauri::{AppHandle, Manager, State};
 use crate::audio::{AudioRecorder, StartGuard};
 use crate::error::AppError;
 
-/// How long `stop_recording` waits for ScreenCaptureKit's `stop_capture` to
-/// return before giving up and reporting `stop_timed_out: true`. The
-/// underlying FFI call has no timeout of its own (it blocks on a plain
-/// `Condvar`), so without this a wedged stream previously could have hung
-/// the command's promise forever.
+/// How long `stop_recording` waits for the Core Audio capture stop to
+/// return before giving up and reporting `stop_timed_out: true`.
+/// `AudioDeviceStop` and the device teardown have no timeout of their own, so
+/// without this a wedged HAL call could hang the command's promise forever.
 const STOP_CAPTURE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A leftover temp WAV found at startup (see `run()`'s `.setup()`) older
@@ -111,6 +110,10 @@ pub struct RecorderState {
 #[derive(Serialize)]
 pub struct StartResponse {
     pub temp_path: String,
+    /// Non-fatal capture notes (e.g. no microphone, system audio only).
+    /// Additive field; older SPAs ignore it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -118,12 +121,16 @@ pub struct StopResponse {
     pub temp_path: String,
     pub duration_ms: u64,
     pub byte_size: u64,
-    /// True if ScreenCaptureKit's `stop_capture` did not return within
+    /// True if the Core Audio capture stop did not return within
     /// `STOP_CAPTURE_TIMEOUT`. The WAV up to the last periodic flush
     /// checkpoint (see `audio.rs`) is still valid and playable even when
     /// this is true — the frontend should proceed to upload rather than
     /// treat this as a hard failure.
     pub stop_timed_out: bool,
+    /// Non-fatal capture notes from the stop diagnosis (e.g. silent system
+    /// audio or microphone, dropped buffers). Additive field.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -221,6 +228,9 @@ pub(crate) fn validate_recording_path(
     Ok(canonical)
 }
 
+// The macOS block returns early and the non-macOS block is the fallback, so
+// on macOS its `return` is the last statement.
+#[allow(clippy::needless_return)]
 #[tauri::command]
 async fn start_recording(
     meeting_id: String,
@@ -228,7 +238,7 @@ async fn start_recording(
     app: AppHandle,
 ) -> Result<StartResponse, AppError> {
     // Reserve the slot (cheap, non-blocking) and let `state.recorder`'s lock
-    // go BEFORE the blocking ScreenCaptureKit FFI below — see
+    // go BEFORE the blocking Core Audio FFI below — see
     // `AudioRecorder::begin_start`'s doc comment for the bug this closes
     // (holding the lock across a permission-dialog-length block used to
     // freeze `recording_status`, a sync main-thread command, for as long as
@@ -272,6 +282,7 @@ async fn start_recording(
             }
         };
 
+        let warnings = backend.start_warnings();
         let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
         state.recording_power.lock().protect(canonical.clone(), || {
             power::PowerAssertion::acquire("TTOBAK recording awaiting upload")
@@ -283,6 +294,7 @@ async fn start_recording(
 
         return Ok(StartResponse {
             temp_path: canonical.to_string_lossy().into_owned(),
+            warnings,
         });
     }
 
@@ -304,7 +316,7 @@ async fn stop_recording(state: State<'_, RecorderState>) -> Result<StopResponse,
     // Take the handle out AND mark its path `finalizing`, in the SAME
     // critical section — then let the `state.recorder` lock go BEFORE the
     // blocking, no-timeout-of-its-own `stop_capture()` FFI call. Holding
-    // that lock across the FFI call used to mean a wedged ScreenCaptureKit
+    // that lock across the FFI call used to mean a wedged capture
     // stop could block every other command needing `RecorderState.recorder`
     // (notably `recording_status`, which runs on the app's main thread).
     //
@@ -340,7 +352,7 @@ async fn stop_recording(state: State<'_, RecorderState>) -> Result<StopResponse,
     let path = handle.path;
 
     #[cfg(target_os = "macos")]
-    let stop_timed_out = {
+    let (stop_timed_out, warnings) = {
         let backend = handle.backend;
         // Let the blocking task itself clear `finalizing` on completion —
         // that way the set stays accurate on the timed-out path too, where
@@ -360,7 +372,7 @@ async fn stop_recording(state: State<'_, RecorderState>) -> Result<StopResponse,
         // and can keep running in the background indefinitely (see the
         // `Err(_elapsed)` arm below) — holding the guard until THAT
         // background task finishes would mean a genuinely wedged
-        // ScreenCaptureKit stop blocks lid-close sleep until the process
+        // capture stop blocks lid-close sleep until the process
         // exits, which is exactly the open-ended hold this guard type must
         // never have (see power.rs's module doc). Keeping it a plain local
         // here instead bounds its lifetime to this command's own
@@ -376,7 +388,7 @@ async fn stop_recording(state: State<'_, RecorderState>) -> Result<StopResponse,
         });
 
         match tokio::time::timeout(STOP_CAPTURE_TIMEOUT, stop_task).await {
-            Ok(Ok(Ok(()))) => false,
+            Ok(Ok(Ok(warnings))) => (false, warnings),
             Ok(Ok(Err(e))) => return Err(e),
             Ok(Err(join_err)) => {
                 return Err(AppError::Backend(format!(
@@ -394,16 +406,16 @@ async fn stop_recording(state: State<'_, RecorderState>) -> Result<StopResponse,
                      stop_timed_out=true. The WAV up to the last periodic \
                      flush checkpoint is already valid on disk; finalize \
                      will still run in the background if/when \
-                     ScreenCaptureKit's stop eventually completes.",
+                     the Core Audio stop eventually completes.",
                     STOP_CAPTURE_TIMEOUT
                 );
-                true
+                (true, Vec::new())
             }
         }
     };
 
     #[cfg(not(target_os = "macos"))]
-    let stop_timed_out = false;
+    let (stop_timed_out, warnings) = (false, Vec::new());
 
     let byte_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
 
@@ -412,6 +424,7 @@ async fn stop_recording(state: State<'_, RecorderState>) -> Result<StopResponse,
         duration_ms,
         byte_size,
         stop_timed_out,
+        warnings,
     })
 }
 
@@ -544,7 +557,7 @@ fn list_leftover_recordings(state: State<'_, RecorderState>) -> Vec<LeftoverReco
             adopted.remove(&path);
         }
     }
-    out.sort_by(|a, b| b.modified_ms.cmp(&a.modified_ms));
+    out.sort_by_key(|r| std::cmp::Reverse(r.modified_ms));
     out
 }
 
@@ -631,7 +644,7 @@ pub fn run() {
             // this is deliberately synchronous and un-timed-out, unlike the
             // live `stop_recording` command's spawn_blocking+timeout dance —
             // there is no IPC promise to keep responsive here, and a slow
-            // ScreenCaptureKit stop at this point is better to just wait out
+            // capture stop at this point is better to just wait out
             // (process exit is already in motion; nothing else needs this
             // thread) than to abandon and lose the tail of the recording.
             if let tauri::RunEvent::Exit = event {

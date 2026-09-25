@@ -43,10 +43,10 @@
       "icons/128x128@2x.png"
     ],
     "category": "Productivity",
-    "shortDescription": "TTOBAK — record desktop meetings with system audio",
-    "longDescription": "TTOBAK Mac App captures system audio from desktop meetings (Zoom, Teams) using macOS ScreenCaptureKit and uploads recordings to the TTOBAK meeting workspace.",
+    "shortDescription": "TTOBAK — record desktop meetings with system audio and microphone",
+    "longDescription": "TTOBAK Mac App records desktop meetings (Zoom, Teams, Google Meet) by capturing system audio with a Core Audio process tap mixed with the microphone, and uploads recordings to the TTOBAK meeting workspace.",
     "macOS": {
-      "minimumSystemVersion": "13.0",
+      "minimumSystemVersion": "14.2",
       "entitlements": "Entitlements.plist",
       "exceptionDomain": "ttobak.atomai.click",
       "providerShortName": null,

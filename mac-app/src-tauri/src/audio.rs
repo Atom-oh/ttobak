@@ -1,19 +1,14 @@
-//! System audio capture.
+//! System audio + microphone capture.
 //!
-//! The macOS implementation uses ScreenCaptureKit (`SCStream`) with audio output
-//! enabled. ScreenCaptureKit captures the audio that other apps (Zoom, Teams,
-//! Chrome, …) play to the system, which is exactly what the user wants for
-//! desktop meetings. No video frames are decoded — we only consume the audio
-//! sample buffer output.
+//! The macOS implementation (`mod macos`) records a Core Audio process tap of
+//! every other app's output (Zoom, Teams, Chrome, …) mixed with the default
+//! microphone, through one private aggregate device (macOS 14.2+; see
+//! ADR-046). Channel splitting, mixing and caption resampling are pure
+//! functions in `crate::mix` so they are unit tested on every platform.
 //!
 //! Non-macOS builds provide a stub that returns `Unsupported`, so `cargo
-//! check`/`cargo test` run on Linux dev machines; only the ScreenCaptureKit
-//! backend inside `mod macos` is `cfg`-gated to a real Mac. Note that
-//! `interleave_planes` below is generalized to N planes, but everything
-//! downstream of it (the WAV writer's `channels: CHANNELS`, the
-//! `chunks_exact(CHANNELS)` downmix) is hard-wired to stereo — the capture
-//! callback logs a warning (once) if a buffer ever arrives with a different
-//! plane count, since that would mis-frame the whole recording.
+//! check`/`cargo test` run on Linux dev machines; only the Core Audio backend
+//! inside `mod macos` is `cfg`-gated to a real Mac.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -100,9 +95,9 @@ impl AudioRecorder {
     ///
     /// This exists because the backend construction that follows
     /// (`macos::Backend::start`) runs blocking FFI —
-    /// `SCShareableContent::get()` / `stream.start_capture()` — that can
-    /// block for as long as the user takes to respond to the Screen
-    /// Recording permission dialog (unbounded, human-scale). The previous
+    /// tap/aggregate creation and `AudioDeviceStart` — that can block for as
+    /// long as the user takes to answer the Microphone / System Audio
+    /// Recording permission dialogs (unbounded, human-scale). The previous
     /// version of this method ran that FFI while `AudioRecorder` was held
     /// under `RecorderState.recorder`'s lock from `lib.rs`'s
     /// `start_recording` command, which froze `recording_status` (a *sync*
@@ -152,7 +147,7 @@ impl AudioRecorder {
     /// (e.g. the `stop_recording` Tauri command) take the handle, drop the
     /// `RecorderState.recorder` lock, and only then run the blocking
     /// `stop_capture()` FFI call off the lock. Holding the lock across that
-    /// call is what let a wedged ScreenCaptureKit stop block every other
+    /// call is what let a wedged capture stop block every other
     /// command that needs `RecorderState.recorder` (e.g. `recording_status`,
     /// which — unlike `stop_recording`/`start_recording`/`cleanup_recording`
     /// — runs as a *sync* Tauri command on the app's main thread).
@@ -253,160 +248,467 @@ pub(crate) fn recording_path(meeting_id: &str) -> Result<PathBuf, AppError> {
 // ---------------------------------------------------------------------------
 #[cfg(target_os = "macos")]
 pub mod macos {
-    //! ScreenCaptureKit-backed audio capture.
+    //! Core Audio process-tap capture (macOS 14.2+), mixed with the default
+    //! microphone through one private aggregate device.
     //!
-    //! API surface targets `screencapturekit = "1"` (1.x series).
+    //! Topology: a stereo global tap excludes this process's own output, and
+    //! a private aggregate device has the default input (microphone) as its
+    //! only, clock-owning sub-device plus the tap with drift compensation.
+    //! One IOProc receives the microphone streams followed by the tap stream
+    //! in a single buffer list at the aggregate's nominal rate. Without an
+    //! input device, the aggregate clocks from the default output device and
+    //! records system audio only (reported as a start warning).
+    //!
+    //! The IOProc runs on Core Audio's real-time thread, so it only mixes and
+    //! hands samples to a bounded channel; a worker thread owns WAV writes,
+    //! flush checkpoints and Tauri events. Teardown order is: stop the device
+    //! (waits for any in-flight IOProc), destroy the IOProc, the aggregate,
+    //! then the tap, and only then close the channel and join the worker.
 
+    use std::ffi::{c_void, CStr};
+    use std::io::BufWriter;
     use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::ptr::NonNull;
+    use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+    use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
     use std::sync::{Arc, Mutex};
+    use std::thread::JoinHandle;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use base64::Engine;
+    use core_foundation::array::CFArray;
+    use core_foundation::base::{CFType, TCFType};
+    use core_foundation::boolean::CFBoolean;
+    use core_foundation::dictionary::CFDictionary;
+    use core_foundation::string::CFString;
     use hound::{SampleFormat, WavSpec, WavWriter};
-    use screencapturekit::prelude::*;
+    use objc2::AllocAnyThread;
+    use objc2_core_audio::{
+        kAudioAggregateDeviceIsPrivateKey, kAudioAggregateDeviceIsStackedKey,
+        kAudioAggregateDeviceMainSubDeviceKey, kAudioAggregateDeviceNameKey,
+        kAudioAggregateDeviceSubDeviceListKey, kAudioAggregateDeviceTapAutoStartKey,
+        kAudioAggregateDeviceTapListKey, kAudioAggregateDeviceUIDKey,
+        kAudioDevicePropertyDeviceUID, kAudioDevicePropertyNominalSampleRate,
+        kAudioDevicePropertyStreamConfiguration, kAudioHardwarePropertyDefaultInputDevice,
+        kAudioHardwarePropertyDefaultOutputDevice,
+        kAudioHardwarePropertyTranslatePIDToProcessObject, kAudioObjectPropertyElementMain,
+        kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyScopeInput, kAudioObjectSystemObject,
+        kAudioSubDeviceDriftCompensationKey, kAudioSubDeviceUIDKey,
+        kAudioSubTapDriftCompensationKey, kAudioSubTapUIDKey, AudioDeviceCreateIOProcID,
+        AudioDeviceDestroyIOProcID, AudioDeviceIOProcID, AudioDeviceStart, AudioDeviceStop,
+        AudioHardwareCreateAggregateDevice, AudioHardwareCreateProcessTap,
+        AudioHardwareDestroyAggregateDevice, AudioHardwareDestroyProcessTap,
+        AudioObjectGetPropertyData, AudioObjectGetPropertyDataSize, AudioObjectID,
+        AudioObjectPropertyAddress, AudioObjectPropertyScope, AudioObjectPropertySelector,
+        CATapDescription, CATapMuteBehavior,
+    };
+    use objc2_core_audio_types::{AudioBuffer, AudioBufferList, AudioTimeStamp};
+    use objc2_foundation::{NSArray, NSNumber, NSString};
     use tauri::{AppHandle, Emitter};
 
     use crate::error::AppError;
+    use crate::mix::{self, BufferView, ChannelLayout, Resampler};
 
-    /// Throttle for the `native-audio-level` event. ScreenCaptureKit delivers
-    /// audio buffers at ~50 Hz (1024 frames at 48 kHz). 33 ms ≈ 30 Hz which is
-    /// fast enough for a smooth meter and avoids spamming the IPC bridge.
+    /// Throttle for the `native-audio-level` event (~30 Hz).
     const LEVEL_EMIT_INTERVAL_MS: u64 = 33;
-
-    const SAMPLE_RATE: u32 = 48_000;
+    /// The WAV is always interleaved stereo: system L/R with the microphone
+    /// mixed into both channels (see `mix::mix`).
     const CHANNELS: u16 = 2;
-
-    /// Checkpoint the on-disk WAV header every ~5 seconds of audio (counted
-    /// in per-channel samples, matching `samples_written`) so a force-kill
-    /// loses at most ~5s instead of leaving a file whose RIFF/data size
-    /// fields are still hound's zero placeholder (only patched by
-    /// `finalize()`/`flush()`, both of which need the process to still be
-    /// running).
-    const FLUSH_INTERVAL_CHANNEL_SAMPLES: u64 = SAMPLE_RATE as u64 * CHANNELS as u64 * 5;
-
-    /// Live-caption PCM bridge: downsample captured system audio to 16kHz
-    /// mono, matching `frontend/public/pcm-processor.js`'s target rate for
-    /// Amazon Transcribe Streaming (`MediaSampleRateHertz: 16000`).
-    const PCM_TARGET_SAMPLE_RATE: u32 = 16_000;
-    /// Chunk size in samples (~64ms at 16kHz) — mirrors the browser-mode
-    /// AudioWorklet's chunking so both code paths hand Transcribe Streaming
-    /// similarly-shaped audio events.
+    /// Checkpoint the WAV header every ~5 seconds of audio so a force-kill
+    /// loses at most that much (hound patches sizes only in flush/finalize).
+    const FLUSH_INTERVAL_SECONDS: u64 = 5;
+    /// Live-caption PCM: 16 kHz mono, ~64 ms chunks, matching
+    /// `frontend/public/pcm-processor.js` and Transcribe Streaming.
+    const PCM_TARGET_SAMPLE_RATE: f64 = 16_000.0;
     const PCM_CHUNK_SAMPLES: usize = 1024;
+    /// IOProc → worker buffer queue. At a typical 512-frame IO buffer this is
+    /// several seconds of slack before a stalled disk drops audio (counted and
+    /// reported at stop, never silently).
+    const QUEUE_BUFFERS: usize = 1024;
+    /// Used when the aggregate does not report a usable nominal rate.
+    const FALLBACK_SAMPLE_RATE: u32 = 48_000;
+
+    type Wav = WavWriter<BufWriter<std::fs::File>>;
+
+    /// State shared with the real-time IOProc through its client-data
+    /// pointer. Lives in a `Box` owned by `Resources` until the IOProc has
+    /// been destroyed.
+    struct CallbackCtx {
+        tx: Mutex<Option<SyncSender<Vec<f32>>>>,
+        layout: ChannelLayout,
+        stats: Arc<Stats>,
+        my_generation: u64,
+        current_generation: Arc<AtomicU64>,
+    }
+
+    #[derive(Default)]
+    struct Stats {
+        callbacks: AtomicU64,
+        samples_written: AtomicU64,
+        dropped_buffers: AtomicU64,
+        logged_first: AtomicU64,
+        /// f32 bit patterns of non-negative peaks: monotonic under `fetch_max`.
+        system_peak_bits: AtomicU32,
+        mic_peak_bits: AtomicU32,
+    }
+
+    impl Stats {
+        fn system_peak(&self) -> f32 {
+            f32::from_bits(self.system_peak_bits.load(Ordering::Relaxed))
+        }
+        fn mic_peak(&self) -> f32 {
+            f32::from_bits(self.mic_peak_bits.load(Ordering::Relaxed))
+        }
+    }
+
+    /// Core Audio objects created for one recording. `Drop` releases them in
+    /// dependency order, so an error midway through `Backend::start` cleans
+    /// up whatever already exists.
+    struct Resources {
+        tap: AudioObjectID,
+        aggregate: AudioObjectID,
+        proc_id: AudioDeviceIOProcID,
+        started: bool,
+        ctx: *mut CallbackCtx,
+    }
+
+    // The raw pointers are only dereferenced by the IOProc (Core Audio's
+    // thread) until teardown reclaims them; `Resources` itself is moved
+    // between threads but never shared.
+    unsafe impl Send for Resources {}
+
+    impl Resources {
+        fn empty() -> Self {
+            Self {
+                tap: 0,
+                aggregate: 0,
+                proc_id: None,
+                started: false,
+                ctx: std::ptr::null_mut(),
+            }
+        }
+
+        /// Stops and destroys everything; returns the first failing call.
+        fn teardown(&mut self) -> Result<(), AppError> {
+            let mut first_err: Option<AppError> = None;
+            let mut note = |what: &str, status: i32| {
+                if status != 0 && first_err.is_none() {
+                    first_err = Some(AppError::Backend(format!(
+                        "{what} failed: OSStatus {status}"
+                    )));
+                }
+            };
+            unsafe {
+                if self.started {
+                    // Synchronous from a non-IO thread: returns after any
+                    // in-flight IOProc invocation has finished.
+                    note(
+                        "AudioDeviceStop",
+                        AudioDeviceStop(self.aggregate, self.proc_id),
+                    );
+                    self.started = false;
+                }
+                if self.proc_id.is_some() {
+                    note(
+                        "AudioDeviceDestroyIOProcID",
+                        AudioDeviceDestroyIOProcID(self.aggregate, self.proc_id),
+                    );
+                    self.proc_id = None;
+                }
+                if self.aggregate != 0 {
+                    note(
+                        "AudioHardwareDestroyAggregateDevice",
+                        AudioHardwareDestroyAggregateDevice(self.aggregate),
+                    );
+                    self.aggregate = 0;
+                }
+                if self.tap != 0 {
+                    note(
+                        "AudioHardwareDestroyProcessTap",
+                        AudioHardwareDestroyProcessTap(self.tap),
+                    );
+                    self.tap = 0;
+                }
+                if !self.ctx.is_null() {
+                    let ctx = Box::from_raw(self.ctx);
+                    self.ctx = std::ptr::null_mut();
+                    // Closing the sender ends the worker's receive loop.
+                    ctx.tx.lock().map(|mut tx| tx.take()).ok();
+                }
+            }
+            first_err.map_or(Ok(()), Err)
+        }
+    }
+
+    impl Drop for Resources {
+        fn drop(&mut self) {
+            if let Err(e) = self.teardown() {
+                log::error!("Core Audio teardown on drop: {e}");
+            }
+        }
+    }
 
     pub struct Backend {
-        stream: SCStream,
-        writer: Arc<Mutex<Option<WavWriter<std::io::BufWriter<std::fs::File>>>>>,
+        resources: Mutex<Option<Resources>>,
+        worker: Mutex<Option<JoinHandle<()>>>,
+        writer: Arc<Mutex<Option<Wav>>>,
         path: PathBuf,
-        /// Counts SCStream audio callbacks; used at stop() to detect silent
-        /// failures where ScreenCaptureKit reports `start_capture` success
-        /// but never delivers a single buffer (e.g. TCC denial after start,
-        /// content filter excluding all sources, etc.).
-        callbacks: Arc<AtomicU64>,
-        /// Total i16 samples written to the WAV writer. Useful sanity check
-        /// against `callbacks` — non-zero callbacks but zero samples means
-        /// the format-conversion path rejected every buffer.
-        samples_written: Arc<AtomicU64>,
+        stats: Arc<Stats>,
+        mic_active: bool,
+        start_warnings: Vec<String>,
     }
 
     impl Backend {
         /// `generation` / `generation_counter`: see `AudioRecorder`'s field
-        /// doc comment in the parent module — lets `AudioOutput` detect
-        /// once it's been superseded by a newer recording and stop acting.
+        /// doc comment in the parent module — lets the IOProc detect it has
+        /// been superseded by a newer recording and stop acting.
         pub fn start(
             path: &Path,
             app: AppHandle,
             generation: u64,
             generation_counter: Arc<AtomicU64>,
         ) -> Result<Self, AppError> {
+            let mut res = Resources::empty();
+            let mut start_warnings = Vec::new();
+
+            // 1. Tap of every process except this app (its own UI sounds).
+            let own = own_process_object();
+            let exclude: Vec<objc2::rc::Retained<NSNumber>> = own
+                .into_iter()
+                .map(NSNumber::numberWithUnsignedInt)
+                .collect();
+            let exclude = NSArray::from_retained_slice(&exclude);
+            let desc = unsafe {
+                CATapDescription::initStereoGlobalTapButExcludeProcesses(
+                    CATapDescription::alloc(),
+                    &exclude,
+                )
+            };
+            unsafe {
+                desc.setPrivate(true);
+                desc.setMuteBehavior(CATapMuteBehavior::Unmuted);
+                desc.setName(&NSString::from_str("TTOBAK system audio"));
+            }
+            let mut tap: AudioObjectID = 0;
+            check("AudioHardwareCreateProcessTap", unsafe {
+                AudioHardwareCreateProcessTap(Some(&desc), &mut tap)
+            })?;
+            res.tap = tap;
+            let tap_uid = unsafe { desc.UUID().UUIDString() }.to_string();
+
+            // 2. Clock/sub-device: the default microphone when present.
+            let input = default_device(kAudioHardwarePropertyDefaultInputDevice)
+                .and_then(|id| device_uid(id).map(|uid| (id, uid)));
+            let (main_uid, layout, mic_active) = match input {
+                Some((id, uid)) if input_channels(id) > 0 => (
+                    uid,
+                    ChannelLayout {
+                        skip: 0,
+                        mic: input_channels(id),
+                    },
+                    true,
+                ),
+                _ => {
+                    start_warnings.push(
+                        "No microphone input device is available; recording system audio only."
+                            .into(),
+                    );
+                    let out = default_device(kAudioHardwarePropertyDefaultOutputDevice)
+                        .ok_or_else(|| AppError::Backend("no default output device".into()))?;
+                    let uid = device_uid(out).ok_or_else(|| {
+                        AppError::Backend("default output device has no UID".into())
+                    })?;
+                    // A headset output can carry its own input streams; they
+                    // precede the tap in the buffer list and must be skipped.
+                    (
+                        uid,
+                        ChannelLayout {
+                            skip: input_channels(out),
+                            mic: 0,
+                        },
+                        false,
+                    )
+                }
+            };
+
+            let aggregate_uid = format!(
+                "click.atomai.ttobak.mac.capture.{}.{}",
+                std::process::id(),
+                now_ms()
+            );
+            let sub_device = cf_dict(&[
+                (kAudioSubDeviceUIDKey, CFString::new(&main_uid).as_CFType()),
+                (
+                    kAudioSubDeviceDriftCompensationKey,
+                    CFBoolean::false_value().as_CFType(),
+                ),
+            ]);
+            let sub_tap = cf_dict(&[
+                (kAudioSubTapUIDKey, CFString::new(&tap_uid).as_CFType()),
+                (
+                    kAudioSubTapDriftCompensationKey,
+                    CFBoolean::true_value().as_CFType(),
+                ),
+            ]);
+            let description = cf_dict(&[
+                (
+                    kAudioAggregateDeviceUIDKey,
+                    CFString::new(&aggregate_uid).as_CFType(),
+                ),
+                (
+                    kAudioAggregateDeviceNameKey,
+                    CFString::new("TTOBAK Capture").as_CFType(),
+                ),
+                (
+                    kAudioAggregateDeviceIsPrivateKey,
+                    CFBoolean::true_value().as_CFType(),
+                ),
+                (
+                    kAudioAggregateDeviceIsStackedKey,
+                    CFBoolean::false_value().as_CFType(),
+                ),
+                (
+                    kAudioAggregateDeviceTapAutoStartKey,
+                    CFBoolean::true_value().as_CFType(),
+                ),
+                (
+                    kAudioAggregateDeviceMainSubDeviceKey,
+                    CFString::new(&main_uid).as_CFType(),
+                ),
+                (
+                    kAudioAggregateDeviceSubDeviceListKey,
+                    CFArray::from_CFTypes(&[sub_device]).as_CFType(),
+                ),
+                (
+                    kAudioAggregateDeviceTapListKey,
+                    CFArray::from_CFTypes(&[sub_tap]).as_CFType(),
+                ),
+            ]);
+            let mut aggregate: AudioObjectID = 0;
+            check("AudioHardwareCreateAggregateDevice", unsafe {
+                // core-foundation's CFDictionaryRef and objc2's CFDictionary
+                // are the same toll-free CF object.
+                let dict = &*(description.as_concrete_TypeRef()
+                    as *const objc2_core_foundation::CFDictionary);
+                AudioHardwareCreateAggregateDevice(dict, NonNull::from(&mut aggregate))
+            })?;
+            res.aggregate = aggregate;
+            // Aggregates list sub-device input streams first and append tap
+            // streams after them; `ChannelLayout` relies on that order.
+            let total_channels = input_channels(aggregate);
+            if total_channels < layout.skip + layout.mic + 1 {
+                log::warn!(
+                    "aggregate reports {total_channels} input channels for layout {layout:?}; \
+                     the tap stream may be missing"
+                );
+            }
+
+            let sample_rate = get_f64(
+                aggregate,
+                kAudioDevicePropertyNominalSampleRate,
+                kAudioObjectPropertyScopeGlobal,
+            )
+            .filter(|r| r.is_finite() && *r >= 8_000.0 && *r <= 384_000.0)
+            .map(|r| r.round() as u32)
+            .unwrap_or(FALLBACK_SAMPLE_RATE);
+
+            // 3. Writer + worker before the IOProc can deliver anything.
             let spec = WavSpec {
                 channels: CHANNELS,
-                sample_rate: SAMPLE_RATE,
+                sample_rate,
                 bits_per_sample: 16,
                 sample_format: SampleFormat::Int,
             };
             let writer = WavWriter::create(path, spec)
                 .map_err(|e| AppError::Io(format!("create wav: {e}")))?;
             let writer = Arc::new(Mutex::new(Some(writer)));
+            let stats = Arc::new(Stats::default());
+            let (tx, rx) = sync_channel::<Vec<f32>>(QUEUE_BUFFERS);
+            let worker = spawn_worker(
+                rx,
+                Arc::clone(&writer),
+                Arc::clone(&stats),
+                app,
+                sample_rate,
+            )?;
 
-            let content = SCShareableContent::get()
-                .map_err(|e| AppError::Backend(format!("SCShareableContent::get: {e:?}")))?;
-            let display = content
-                .displays()
-                .into_iter()
-                .next()
-                .ok_or_else(|| AppError::Backend("no display available".into()))?;
+            let ctx = Box::into_raw(Box::new(CallbackCtx {
+                tx: Mutex::new(Some(tx)),
+                layout,
+                stats: Arc::clone(&stats),
+                my_generation: generation,
+                current_generation: generation_counter,
+            }));
+            res.ctx = ctx;
 
-            let filter = SCContentFilter::create()
-                .with_display(&display)
-                .with_excluding_windows(&[])
-                .build();
-
-            let config = SCStreamConfiguration::new()
-                .with_captures_audio(true)
-                .with_excludes_current_process_audio(true)
-                .with_sample_rate(SAMPLE_RATE as i32)
-                .with_channel_count(CHANNELS as i32);
-
-            let callbacks = Arc::new(AtomicU64::new(0));
-            let samples_written = Arc::new(AtomicU64::new(0));
-
-            let mut stream = SCStream::new(&filter, &config);
-            stream.add_output_handler(
-                AudioOutput {
-                    writer: Arc::clone(&writer),
-                    callbacks: Arc::clone(&callbacks),
-                    samples_written: Arc::clone(&samples_written),
-                    logged_first: Arc::new(AtomicU64::new(0)),
-                    logged_plane_mismatch: Arc::new(AtomicU64::new(0)),
-                    app,
-                    last_emit_ms: Arc::new(AtomicU64::new(0)),
-                    since_flush: Arc::new(AtomicU64::new(0)),
-                    pcm_pending: Arc::new(Mutex::new(Vec::with_capacity(PCM_CHUNK_SAMPLES * 2))),
-                    my_generation: generation,
-                    current_generation: generation_counter,
-                },
-                SCStreamOutputType::Audio,
-            );
-
-            stream
-                .start_capture()
-                .map_err(|e| AppError::Backend(format!("start_capture: {e:?}")))?;
+            // 4. IOProc, then start. Starting the aggregate raises the
+            // Microphone / System Audio Recording permission prompts once.
+            let mut proc_id: AudioDeviceIOProcID = None;
+            let started = (|| {
+                check("AudioDeviceCreateIOProcID", unsafe {
+                    AudioDeviceCreateIOProcID(
+                        aggregate,
+                        Some(io_proc),
+                        ctx.cast(),
+                        NonNull::from(&mut proc_id),
+                    )
+                })?;
+                res.proc_id = proc_id;
+                check("AudioDeviceStart", unsafe {
+                    AudioDeviceStart(aggregate, proc_id)
+                })?;
+                res.started = true;
+                Ok::<(), AppError>(())
+            })();
+            if let Err(e) = started {
+                drop(res); // tears down and closes the channel
+                let _ = worker.join();
+                if let Ok(mut w) = writer.lock() {
+                    w.take();
+                }
+                let _ = std::fs::remove_file(path);
+                return Err(e);
+            }
 
             log::info!(
-                "SCStream started — sample_rate={SAMPLE_RATE}Hz channels={CHANNELS} \
-                 excludes_current_process_audio=true path={}",
+                "Core Audio capture started — rate={sample_rate}Hz layout={layout:?} mic={mic_active} path={}",
                 path.display()
             );
-
             Ok(Self {
-                stream,
+                resources: Mutex::new(Some(res)),
+                worker: Mutex::new(Some(worker)),
                 writer,
                 path: path.to_path_buf(),
-                callbacks,
-                samples_written,
+                stats,
+                mic_active,
+                start_warnings,
             })
         }
 
-        /// Stop ScreenCaptureKit capture. This is the potentially-slow part —
-        /// the underlying FFI call blocks on a completion handler with no
-        /// timeout of its own (see the `screencapturekit` crate's
-        /// `SCStream::stop_capture`, which waits on a plain `Condvar`).
-        /// Callers are expected to run this inside `spawn_blocking` raced
-        /// against a timeout, NOT while holding any lock another command
-        /// needs (see `AudioRecorder::take_handle`).
-        pub fn stop_capture_blocking(&self) -> Result<(), AppError> {
-            self.stream
-                .stop_capture()
-                .map_err(|e| AppError::Backend(format!("stop_capture: {e:?}")))
+        /// Warnings to surface in the start response (e.g. no microphone).
+        pub fn start_warnings(&self) -> Vec<String> {
+            self.start_warnings.clone()
         }
 
-        /// Finalize the WAV writer (patches the RIFF/data size header hound
-        /// leaves as a zero placeholder until this runs). Idempotent — safe
-        /// to call more than once, and safe to call whether or not
-        /// `stop_capture_blocking` succeeded, timed out, or was never called
-        /// at all: a partial recording is still a playable WAV once this
-        /// runs at least once.
+        /// Stop capture and drain the worker. `AudioDeviceStop` waits for
+        /// the current IO cycle; callers still run this in `spawn_blocking`
+        /// raced against a timeout, never under a lock another command needs.
+        pub fn stop_capture_blocking(&self) -> Result<(), AppError> {
+            let taken = self.resources.lock().expect("resources poisoned").take();
+            let result = match taken {
+                Some(mut res) => res.teardown(),
+                None => Ok(()),
+            };
+            if let Some(worker) = self.worker.lock().expect("worker poisoned").take() {
+                if worker.join().is_err() {
+                    log::error!("audio worker thread panicked");
+                }
+            }
+            result
+        }
+
+        /// Finalize the WAV header. Idempotent; safe whether or not stop
+        /// succeeded — a partial recording is still a playable WAV.
         pub fn finalize_writer(&self) -> Result<(), AppError> {
             if let Some(w) = self.writer.lock().expect("writer poisoned").take() {
                 w.finalize()
@@ -415,74 +717,76 @@ pub mod macos {
             Ok(())
         }
 
-        /// Loud diagnostics for silent capture failures. Read-only against
-        /// the atomics the audio callback maintains — safe to call any time
-        /// after `finalize_writer`.
-        pub fn diagnose(&self) -> Result<(), AppError> {
-            let cb = self.callbacks.load(Ordering::Relaxed);
-            let sw = self.samples_written.load(Ordering::Relaxed);
+        /// Hard failures for recordings that captured nothing, plus
+        /// warnings for suspicious-but-usable ones.
+        pub fn diagnose(&self) -> Result<Vec<String>, AppError> {
+            let cb = self.stats.callbacks.load(Ordering::Relaxed);
+            let sw = self.stats.samples_written.load(Ordering::Relaxed);
+            let dropped = self.stats.dropped_buffers.load(Ordering::Relaxed);
             let bytes = std::fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0);
+            let (system_peak, mic_peak) = (self.stats.system_peak(), self.stats.mic_peak());
             log::info!(
-                "stopped capture: callbacks={cb} samples_written={sw} wav_bytes={bytes} path={}",
+                "stopped capture: callbacks={cb} samples_written={sw} dropped={dropped} \
+                 system_peak={system_peak:.4} mic_peak={mic_peak:.4} wav_bytes={bytes} path={}",
                 self.path.display()
             );
-
-            // Hard fail loud rather than silently shipping a 44-byte empty WAV
-            // header. The frontend will surface this through `onError`.
             if cb == 0 {
                 return Err(AppError::Backend(
-                    "ScreenCaptureKit delivered zero audio callbacks — likely a Screen \
-                     Recording permission issue or an empty content filter. Reset TCC \
-                     (`tccutil reset ScreenCapture click.atomai.ttobak.mac`) and relaunch."
+                    "Core Audio delivered zero callbacks — the capture device never ran. \
+                     Check System Settings > Privacy & Security (Microphone and System Audio \
+                     Recording), or reset with `tccutil reset AudioCapture click.atomai.ttobak.mac` \
+                     and relaunch."
                         .into(),
                 ));
             }
             if sw == 0 {
                 return Err(AppError::Backend(format!(
-                    "ScreenCaptureKit delivered {cb} callbacks but no samples were written — \
-                     audio buffer format probably is not f32 interleaved as assumed. Check \
-                     the format-description log on the first callback and update audio.rs."
+                    "Core Audio delivered {cb} callbacks but no samples were written — the \
+                     buffer layout did not match the expected tap/microphone streams."
                 )));
             }
-            Ok(())
+            let mut warnings = Vec::new();
+            if system_peak == 0.0 {
+                warnings.push(
+                    "System audio was silent for the whole recording — System Audio Recording \
+                     permission may be denied, or nothing was playing."
+                        .to_string(),
+                );
+            }
+            if self.mic_active && mic_peak == 0.0 {
+                warnings.push(
+                    "The microphone was silent for the whole recording — Microphone permission \
+                     may be denied or the input is muted."
+                        .to_string(),
+                );
+            }
+            if dropped > 0 {
+                warnings.push(format!(
+                    "{dropped} audio buffers were dropped because the disk writer fell behind."
+                ));
+            }
+            Ok(warnings)
         }
 
-        /// Orchestrates the full stop sequence: stop ScreenCaptureKit, THEN
-        /// finalize the writer regardless of whether that stop succeeded,
-        /// THEN diagnose. Finalizing unconditionally (rather than only on
-        /// the success path, as the previous implementation did) closes a
-        /// data-loss bug: a `stop_capture` error used to skip `finalize()`
-        /// entirely, leaving a WAV with an unpatched (zero) size header even
-        /// though ScreenCaptureKit may have already delivered plenty of
-        /// audio.
-        pub fn stop_and_finalize(&self) -> Result<(), AppError> {
+        /// Stop, THEN finalize regardless of the stop result, THEN diagnose.
+        /// Error precedence: finalize > stop > diagnose (a real stop/finalize
+        /// error must never be masked by a passing diagnose).
+        pub fn stop_and_finalize(&self) -> Result<Vec<String>, AppError> {
             let stop_result = self.stop_capture_blocking();
             let finalize_result = self.finalize_writer();
-
             if let Err(e) = &finalize_result {
                 log::error!("finalize_writer failed: {e}");
             }
             if let Err(e) = &stop_result {
-                log::error!("stop_capture failed (finalize still ran best-effort, see above): {e}");
+                log::error!("stop capture failed (finalize still ran best-effort): {e}");
             }
-
-            // Always run diagnose for its callbacks/samples/bytes triage log
-            // line — most useful exactly when something above already went
-            // wrong — but only let its result become this function's return
-            // value when stop AND finalize both succeeded; otherwise a real
-            // stop/finalize error would get silently swallowed by a
-            // diagnose() that happens to pass. (Previously, a stop_capture
-            // error skipped diagnose() entirely; a finalize_writer error was
-            // dropped on the floor whenever stop_capture had already
-            // failed.)
             let diagnose_result = self.diagnose();
             if let Err(e) = &diagnose_result {
                 log::warn!("diagnose reported: {e}");
             }
-
             match (finalize_result, stop_result) {
                 (Err(fin_err), Err(stop_err)) => Err(AppError::Backend(format!(
-                    "finalize_writer failed: {fin_err} (stop_capture also failed: {stop_err})"
+                    "finalize_writer failed: {fin_err} (stop capture also failed: {stop_err})"
                 ))),
                 (Err(fin_err), Ok(())) => Err(fin_err),
                 (Ok(()), Err(stop_err)) => Err(stop_err),
@@ -491,419 +795,327 @@ pub mod macos {
         }
     }
 
-    struct AudioOutput {
-        writer: Arc<Mutex<Option<WavWriter<std::io::BufWriter<std::fs::File>>>>>,
-        callbacks: Arc<AtomicU64>,
-        samples_written: Arc<AtomicU64>,
-        /// Tracks whether we have logged the first buffer's metadata. Cheap
-        /// AtomicU64 instead of `Once` so we can keep `AudioOutput: Send`.
-        logged_first: Arc<AtomicU64>,
-        /// One-shot flag for the plane-count warning in
-        /// `did_output_sample_buffer` — the callback fires ~50×/s, so a
-        /// mismatch must not log on every buffer.
-        logged_plane_mismatch: Arc<AtomicU64>,
-        /// Used to emit `native-audio-level` events to the WebView so the UI
-        /// can show a real meter in System Audio mode (where we have no
-        /// MediaStream / AnalyserNode on the JS side).
-        app: AppHandle,
-        last_emit_ms: Arc<AtomicU64>,
-        /// Per-channel samples written since the last `writer.flush()`
-        /// checkpoint. Reset (via `fetch_sub`) once it crosses
-        /// `FLUSH_INTERVAL_CHANNEL_SAMPLES`.
-        since_flush: Arc<AtomicU64>,
-        /// 16kHz-mono samples downsampled from this callback's audio but not
-        /// yet emitted as a full `PCM_CHUNK_SAMPLES`-sized `native-pcm-chunk`
-        /// event. ScreenCaptureKit callback sizes don't divide evenly by the
-        /// downsample ratio or the chunk size, so leftovers carry over.
-        pcm_pending: Arc<Mutex<Vec<f32>>>,
-        /// This recording's generation number, captured at `Backend::start`.
-        my_generation: u64,
-        /// Shared with `AudioRecorder` — bumped by every `start()`. If this
-        /// no longer equals `my_generation`, a newer recording has started
-        /// and this stream is orphaned (e.g. its `stop_capture` wedged past
-        /// `stop_recording`'s timeout and kept running in the background).
-        current_generation: Arc<AtomicU64>,
+    impl Drop for Backend {
+        fn drop(&mut self) {
+            // Normal paths already stopped; this only covers a Backend
+            // dropped without stop_and_finalize (e.g. a panic).
+            let _ = self.stop_capture_blocking();
+            let _ = self.finalize_writer();
+        }
     }
 
-    impl SCStreamOutputTrait for AudioOutput {
-        fn did_output_sample_buffer(&self, sample: CMSampleBuffer, of_type: SCStreamOutputType) {
-            if !matches!(of_type, SCStreamOutputType::Audio) {
+    /// Real-time IOProc: mix and enqueue only. Never blocks, never logs
+    /// beyond the one-time layout line, and never unwinds into Core Audio.
+    unsafe extern "C-unwind" fn io_proc(
+        _device: AudioObjectID,
+        _now: NonNull<AudioTimeStamp>,
+        input: NonNull<AudioBufferList>,
+        _input_time: NonNull<AudioTimeStamp>,
+        _output: NonNull<AudioBufferList>,
+        _output_time: NonNull<AudioTimeStamp>,
+        client: *mut c_void,
+    ) -> i32 {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if client.is_null() {
                 return;
             }
-
-            // A newer recording has started — this stream is orphaned.
-            // Stop writing AND emitting entirely: Tauri events are global
-            // broadcasts with no per-recording tag, so without this check
-            // an orphaned stream's `native-audio-level`/`native-pcm-chunk`
-            // events would leak into whatever recording started next,
-            // corrupting its waveform and feeding stale audio into its live
-            // captions. (Harmless to stop writing too — the newer
-            // recording always uses a fresh file path, so this stream's own
-            // file was already finalized via `stop_and_finalize` or will be
-            // whenever its `stop_capture` eventually returns.)
-            if self.current_generation.load(Ordering::Relaxed) != self.my_generation {
+            let ctx = &*(client as *const CallbackCtx);
+            if ctx.current_generation.load(Ordering::Relaxed) != ctx.my_generation {
                 return;
             }
+            ctx.stats.callbacks.fetch_add(1, Ordering::Relaxed);
 
-            self.callbacks.fetch_add(1, Ordering::Relaxed);
+            let list = input.as_ref();
+            let buffers: &[AudioBuffer] =
+                std::slice::from_raw_parts(list.mBuffers.as_ptr(), list.mNumberBuffers as usize);
+            let views: Vec<BufferView<'_>> = buffers
+                .iter()
+                .map(|b| {
+                    let channels = b.mNumberChannels as usize;
+                    let data: &[f32] = if b.mData.is_null() || channels == 0 {
+                        &[]
+                    } else {
+                        std::slice::from_raw_parts(
+                            b.mData as *const f32,
+                            b.mDataByteSize as usize / 4,
+                        )
+                    };
+                    BufferView { channels, data }
+                })
+                .collect();
 
-            // SCStreamConfiguration requests f32 interleaved PCM at 48 kHz stereo.
-            // Guard: skip buffers that don't align to 4-byte f32 frames.
-            let Some(list) = sample.audio_buffer_list() else {
-                log::warn!("audio callback delivered no audio_buffer_list");
-                return;
-            };
-
-            // Log the first buffer's shape so we can confirm the assumed
-            // buffer layout against actual ScreenCaptureKit output. If the
-            // user later sees a "non-empty callbacks but zero samples"
-            // error, this log narrows it to a format-conversion bug.
-            if self
+            if ctx
+                .stats
                 .logged_first
                 .compare_exchange(0, 1, Ordering::Relaxed, Ordering::Relaxed)
                 .is_ok()
             {
-                let buf_count = list.iter().count();
-                let total_bytes: usize = list.iter().map(|b| b.data().len()).sum();
-                let layout = if buf_count <= 1 {
-                    "interleaved (single buffer)"
-                } else {
-                    "planar (one buffer per channel) — de-interleaving below"
-                };
+                let shape: Vec<(usize, usize)> =
+                    views.iter().map(|v| (v.channels, v.data.len())).collect();
                 log::info!(
-                    "first audio buffer: buffer_count={buf_count} total_bytes={total_bytes} \
-                     layout={layout} (assuming f32 → frames≈{})",
-                    total_bytes / (CHANNELS as usize * 4)
+                    "first IOProc buffer list (channels, samples): {shape:?} layout={:?}",
+                    ctx.layout
                 );
             }
 
-            // ScreenCaptureKit can deliver either one interleaved buffer (all
-            // channels packed together, LRLRLR…) or one buffer per channel
-            // (planar — a whole mono plane per channel). Convert each raw
-            // buffer to f32 first, then normalize to interleaved samples so
-            // every consumer below (the WAV write pass's implicit
-            // `channels: 2` framing, and `emit_pcm_chunks`'s
-            // `chunks_exact(CHANNELS)` downmix) can keep assuming
-            // interleaved stereo regardless of which layout this callback
-            // actually used. Getting this wrong silently produces a
-            // double-speed, channel-swapped recording (planar treated as
-            // interleaved) — see the first-buffer log line above to confirm
-            // which layout is actually in play.
-            let planes: Vec<Vec<f32>> = list
-                .iter()
-                .map(|buf| {
-                    let data = buf.data();
-                    if data.len() % 4 != 0 {
-                        log::warn!("unexpected audio buffer size {}, skipping", data.len());
-                        return Vec::new();
-                    }
-                    data.chunks_exact(4)
-                        .map(|c| f32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
-                        .collect::<Vec<_>>()
-                })
-                .collect();
-
-            // `interleave_planes` is generalized to N planes, but everything
-            // after it is hard-wired to `CHANNELS` (the WAV writer's
-            // `channels: CHANNELS`, `emit_pcm_chunks`' `chunks_exact(CHANNELS)`
-            // downmix). A planar buffer with any other plane count would be
-            // interleaved "correctly" and then silently mis-framed by both —
-            // make that loud, once. A single buffer is always the
-            // already-interleaved layout and is fine regardless.
-            if planes.len() > 1
-                && planes.len() != CHANNELS as usize
-                && self
-                    .logged_plane_mismatch
-                    .compare_exchange(0, 1, Ordering::Relaxed, Ordering::Relaxed)
-                    .is_ok()
-            {
-                log::warn!(
-                    "audio callback delivered {} planar buffers but CHANNELS={CHANNELS}; \
-                     the WAV writer and PCM downmix assume {CHANNELS} channels, so this \
-                     recording will be mis-framed",
-                    planes.len()
-                );
+            let mixed = mix::mix(&views, ctx.layout, mix::MIC_GAIN);
+            ctx.stats
+                .system_peak_bits
+                .fetch_max(mixed.system_peak.to_bits(), Ordering::Relaxed);
+            ctx.stats
+                .mic_peak_bits
+                .fetch_max(mixed.mic_peak.to_bits(), Ordering::Relaxed);
+            if mixed.stereo.is_empty() {
+                return;
             }
-            let samples_f32: Vec<f32> = super::interleave_planes(planes);
-
-            // RMS over this buffer for the level meter event. Computed once,
-            // before we move on to the WAV write and PCM downsample passes.
-            let rms = if samples_f32.is_empty() {
-                0.0
-            } else {
-                let sum_sq: f32 = samples_f32.iter().map(|s| s * s).sum();
-                (sum_sq / samples_f32.len() as f32).sqrt()
-            };
-
-            // --- WAV write pass (unchanged behavior; iterates by reference
-            // so `samples_f32` is still available for the PCM downsample
-            // pass below) ---
-            let mut guard = self.writer.lock().expect("writer poisoned");
-            let mut written = 0u64;
-            if let Some(w) = guard.as_mut() {
-                for &s in &samples_f32 {
-                    let clamped = s.clamp(-1.0, 1.0);
-                    let i16_val = (clamped * i16::MAX as f32) as i16;
-                    if let Err(e) = w.write_sample(i16_val) {
-                        log::warn!("wav write error: {e}");
-                        break;
+            // try_lock: only teardown ever contends, and it runs after stop.
+            if let Ok(guard) = ctx.tx.try_lock() {
+                if let Some(tx) = guard.as_ref() {
+                    if let Err(TrySendError::Full(_)) = tx.try_send(mixed.stereo) {
+                        ctx.stats.dropped_buffers.fetch_add(1, Ordering::Relaxed);
                     }
-                    written += 1;
                 }
+            }
+        }));
+        0
+    }
 
-                // Periodic checkpoint: patch the RIFF/data size header now so
-                // a force-kill loses at most ~5s of audio instead of leaving
-                // a WAV whose header still says "0 bytes of data" (hound only
-                // patches it in `flush()`/`finalize()`).
-                let since_flush = self.since_flush.fetch_add(written, Ordering::Relaxed) + written;
-                if since_flush >= FLUSH_INTERVAL_CHANNEL_SAMPLES {
-                    match w.flush() {
-                        Ok(()) => {
-                            // Subtract the fixed threshold, not the observed
-                            // `since_flush` snapshot: subtracting the
-                            // snapshot would let two concurrent crossings
-                            // both subtract their own larger total,
-                            // underflowing this counter to near `u64::MAX`
-                            // and forcing every later callback to flush.
-                            // This is a mitigation, not a full fix, if the
-                            // single-callback-thread assumption (this whole
-                            // block runs under `self.writer.lock()`, which
-                            // today serializes callbacks) is ever loosened —
-                            // two truly concurrent crossings can still
-                            // double-subtract the fixed threshold and
-                            // underflow. A `fetch_update`/CAS loop would be
-                            // needed to make this correct under real
-                            // concurrency; this only narrows the window.
-                            self.since_flush
-                                .fetch_sub(FLUSH_INTERVAL_CHANNEL_SAMPLES, Ordering::Relaxed);
+    fn spawn_worker(
+        rx: Receiver<Vec<f32>>,
+        writer: Arc<Mutex<Option<Wav>>>,
+        stats: Arc<Stats>,
+        app: AppHandle,
+        sample_rate: u32,
+    ) -> Result<JoinHandle<()>, AppError> {
+        std::thread::Builder::new()
+            .name("ttobak-audio-writer".into())
+            .spawn(move || {
+                let flush_every = sample_rate as u64 * CHANNELS as u64 * FLUSH_INTERVAL_SECONDS;
+                let mut since_flush = 0u64;
+                let mut last_emit_ms = 0u64;
+                let mut resampler = Resampler::new(sample_rate as f64, PCM_TARGET_SAMPLE_RATE);
+                let mut pcm_pending: Vec<f32> = Vec::with_capacity(PCM_CHUNK_SAMPLES * 2);
+                // Ends when teardown drops the sender after AudioDeviceStop.
+                while let Ok(stereo) = rx.recv() {
+                    let mut written = 0u64;
+                    if let Ok(mut guard) = writer.lock() {
+                        if let Some(w) = guard.as_mut() {
+                            for &s in &stereo {
+                                let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+                                if let Err(e) = w.write_sample(v) {
+                                    log::warn!("wav write error: {e}");
+                                    break;
+                                }
+                                written += 1;
+                            }
+                            since_flush += written;
+                            if since_flush >= flush_every {
+                                match w.flush() {
+                                    Ok(()) => since_flush = 0,
+                                    Err(e) => {
+                                        log::warn!("periodic wav flush failed (will retry): {e}")
+                                    }
+                                }
+                            }
                         }
-                        Err(e) => log::warn!("periodic wav flush failed (will retry): {e}"),
+                    }
+                    stats.samples_written.fetch_add(written, Ordering::Relaxed);
+
+                    let now = now_ms();
+                    if now.saturating_sub(last_emit_ms) >= LEVEL_EMIT_INTERVAL_MS {
+                        last_emit_ms = now;
+                        let sum_sq: f32 = stereo.iter().map(|s| s * s).sum();
+                        let rms = (sum_sq / stereo.len().max(1) as f32).sqrt();
+                        let _ = app.emit("native-audio-level", (rms / 0.25).min(1.0));
+                    }
+
+                    pcm_pending.extend(resampler.process(&mix::downmix_stereo(&stereo)));
+                    while pcm_pending.len() >= PCM_CHUNK_SAMPLES {
+                        let mut bytes = Vec::with_capacity(PCM_CHUNK_SAMPLES * 2);
+                        for s in pcm_pending.drain(..PCM_CHUNK_SAMPLES) {
+                            let c = s.clamp(-1.0, 1.0);
+                            let v = if c < 0.0 {
+                                (c * 0x8000 as f32) as i16
+                            } else {
+                                (c * 0x7FFF as f32) as i16
+                            };
+                            bytes.extend_from_slice(&v.to_le_bytes());
+                        }
+                        let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                        let _ = app.emit("native-pcm-chunk", encoded);
                     }
                 }
-            }
-            drop(guard);
-            self.samples_written.fetch_add(written, Ordering::Relaxed);
+            })
+            .map_err(|e| AppError::Backend(format!("spawn audio writer: {e}")))
+    }
 
-            // Throttled level emit (~30 Hz). Buffers arrive faster than the UI
-            // needs to redraw; bouncing every callback over IPC is wasteful.
-            let now_ms = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_millis() as u64)
-                .unwrap_or(0);
-            let last = self.last_emit_ms.load(Ordering::Relaxed);
-            if now_ms.saturating_sub(last) >= LEVEL_EMIT_INTERVAL_MS {
-                self.last_emit_ms.store(now_ms, Ordering::Relaxed);
-                // Map RMS (typical speech ≈ 0.01–0.3 in normalized float) to
-                // a 0–1 meter range. Clamp to avoid >1 spikes from clipping.
-                let level = (rms / 0.25).min(1.0);
-                let _ = self.app.emit("native-audio-level", level);
-            }
+    // --- Core Audio property helpers ------------------------------------
 
-            // --- Live-caption PCM bridge: downsample this callback's audio
-            // to 16kHz mono and emit any full chunks. Mirrors
-            // `frontend/public/pcm-processor.js`'s approach (per-callback
-            // linear interpolation, no fractional-position carryover across
-            // callbacks — that file accepts the same tiny phase reset at
-            // each buffer boundary) so both code paths feed Transcribe
-            // Streaming similarly-shaped audio. ---
-            self.emit_pcm_chunks(&samples_f32);
+    fn check(what: &str, status: i32) -> Result<(), AppError> {
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(AppError::Backend(format!(
+                "{what} failed: OSStatus {status}"
+            )))
         }
     }
 
-    impl AudioOutput {
-        /// Average stereo channels to mono, linearly interpolate 48kHz →
-        /// 16kHz, and emit any complete `PCM_CHUNK_SAMPLES`-sized chunk as a
-        /// base64-encoded `native-pcm-chunk` event (Tauri events are JSON,
-        /// so raw bytes must be encoded — a 1024-sample/64ms chunk is ~2.7KB
-        /// base64, trivially small for the `evaluateJavaScript` bridge,
-        /// unlike the multi-hundred-MB mistake this module used to make).
-        fn emit_pcm_chunks(&self, samples_f32: &[f32]) {
-            if samples_f32.len() < 2 {
-                return;
-            }
-            let mono: Vec<f32> = samples_f32
-                .chunks_exact(CHANNELS as usize)
-                .map(|frame| frame.iter().sum::<f32>() / CHANNELS as f32)
-                .collect();
-            if mono.is_empty() {
-                return;
-            }
-
-            let ratio = SAMPLE_RATE as f64 / PCM_TARGET_SAMPLE_RATE as f64;
-            let out_len = (mono.len() as f64 / ratio).floor() as usize;
-            if out_len == 0 {
-                return;
-            }
-
-            let mut resampled = Vec::with_capacity(out_len);
-            for i in 0..out_len {
-                let src_index = i as f64 * ratio;
-                let src_floor = src_index.floor() as usize;
-                let src_ceil = (src_floor + 1).min(mono.len() - 1);
-                let frac = src_index - src_floor as f64;
-                let sample = mono[src_floor] as f64 * (1.0 - frac) + mono[src_ceil] as f64 * frac;
-                resampled.push(sample as f32);
-            }
-
-            // Hold the lock across drain-AND-emit for every chunk in this
-            // callback, rather than dropping it between chunks: each
-            // payload is tiny (~2.7KB) so the emit is cheap, and holding the
-            // lock is what actually guarantees chunk N is emitted before
-            // chunk N+1 if this ever runs from more than one thread — SCStream
-            // is documented to use a single serial callback queue today, so
-            // this is defense-in-depth rather than a fix for an observed
-            // reordering, but dropping the lock between drain and emit (the
-            // previous shape) would have made ordering an accident of
-            // scheduling instead of something this code actually enforces.
-            let mut pending = self.pcm_pending.lock().expect("pcm_pending poisoned");
-            pending.extend_from_slice(&resampled);
-
-            while pending.len() >= PCM_CHUNK_SAMPLES {
-                let chunk: Vec<f32> = pending.drain(..PCM_CHUNK_SAMPLES).collect();
-
-                let mut bytes = Vec::with_capacity(PCM_CHUNK_SAMPLES * 2);
-                for s in &chunk {
-                    let clamped = s.clamp(-1.0, 1.0);
-                    let i16_val = if clamped < 0.0 {
-                        (clamped * 0x8000 as f32) as i16
-                    } else {
-                        (clamped * 0x7FFF as f32) as i16
-                    };
-                    bytes.extend_from_slice(&i16_val.to_le_bytes());
-                }
-                let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                let _ = self.app.emit("native-pcm-chunk", encoded);
-            }
+    fn address(
+        selector: AudioObjectPropertySelector,
+        scope: AudioObjectPropertyScope,
+    ) -> AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress {
+            mSelector: selector,
+            mScope: scope,
+            mElement: kAudioObjectPropertyElementMain,
         }
     }
-}
 
-/// Normalize ScreenCaptureKit's per-buffer f32 planes to interleaved
-/// samples. ScreenCaptureKit can deliver either one interleaved buffer
-/// (all channels packed together, LRLRLR…) or one buffer per channel
-/// (planar — a whole mono plane per channel); every consumer downstream
-/// of this function assumes interleaved stereo (the WAV write pass's
-/// implicit `channels: 2` framing in `macos::did_output_sample_buffer`,
-/// and `macos::AudioOutput::emit_pcm_chunks`'s `chunks_exact(CHANNELS)`
-/// downmix), so this is where that assumption is made true regardless of
-/// which layout a given callback actually used. Getting this wrong
-/// silently produces a double-speed, channel-swapped recording (planar
-/// samples treated as interleaved) — see the "first audio buffer" log
-/// line in `did_output_sample_buffer` to confirm which layout is actually
-/// in play on real hardware. This function itself accepts any plane count;
-/// the caller is what warns (once per recording) when that count isn't
-/// `CHANNELS`, since only the caller knows the downstream framing.
-///
-/// Deliberately NOT inside `mod macos`'s `#[cfg(target_os = "macos")]`
-/// gate, even though its only real caller (`macos::did_output_sample_buffer`)
-/// lives inside it: this function itself has no ScreenCaptureKit/FFI
-/// dependency, so gating it out on non-macOS builds would only keep its
-/// regression tests below from ever running except on a Mac — and this
-/// module has no CI, so that would mean the planar/interleaved bug and the
-/// empty-plane bug these tests cover could never actually be caught by any
-/// automated run.
-///
-/// Pads short/malformed planes with silence up to the LONGEST plane,
-/// rather than truncating every plane down to the shortest. A single
-/// malformed buffer (see the `data.len() % 4 != 0` guard in
-/// `macos::did_output_sample_buffer`, which converts it to an empty plane)
-/// is a defensive, low-probability branch — but truncating-to-shortest
-/// would let that one empty plane force `frame_count` to 0 via `min()`,
-/// discarding every OTHER channel's real audio for the entire callback
-/// too. Padding instead means only the malformed channel loses that
-/// callback's audio (as silence); every good channel's audio survives.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-fn interleave_planes(planes: Vec<Vec<f32>>) -> Vec<f32> {
-    match planes.len() {
-        0 => Vec::new(),
-        1 => planes.into_iter().next().unwrap(),
-        n => {
-            let lens: Vec<usize> = planes.iter().map(|p| p.len()).collect();
-            let frame_count = lens.iter().copied().max().unwrap_or(0);
-            if frame_count == 0 {
-                return Vec::new();
-            }
-            if lens.iter().any(|&l| l != frame_count) {
-                log::warn!(
-                    "planar audio buffers have mismatched lengths {lens:?}, \
-                     padding short/malformed planes with silence up to \
-                     {frame_count} samples/plane"
-                );
-            }
-            let mut out = Vec::with_capacity(frame_count * n);
-            for i in 0..frame_count {
-                for plane in &planes {
-                    out.push(plane.get(i).copied().unwrap_or(0.0));
-                }
-            }
-            out
+    /// Reads a fixed-size property value.
+    fn get_property<T: Copy>(
+        object: AudioObjectID,
+        selector: AudioObjectPropertySelector,
+        scope: AudioObjectPropertyScope,
+        qualifier: Option<&[u8]>,
+    ) -> Option<T> {
+        let addr = address(selector, scope);
+        let mut value = std::mem::MaybeUninit::<T>::uninit();
+        let mut size = std::mem::size_of::<T>() as u32;
+        let (q_size, q_ptr) = qualifier.map_or((0, std::ptr::null()), |q| {
+            (q.len() as u32, q.as_ptr().cast())
+        });
+        let status = unsafe {
+            AudioObjectGetPropertyData(
+                object,
+                NonNull::from(&addr),
+                q_size,
+                q_ptr,
+                NonNull::from(&mut size),
+                NonNull::new(value.as_mut_ptr().cast::<c_void>())?,
+            )
+        };
+        (status == 0 && size as usize == std::mem::size_of::<T>())
+            .then(|| unsafe { value.assume_init() })
+    }
+
+    fn get_f64(
+        object: AudioObjectID,
+        selector: AudioObjectPropertySelector,
+        scope: AudioObjectPropertyScope,
+    ) -> Option<f64> {
+        get_property::<f64>(object, selector, scope, None)
+    }
+
+    fn default_device(selector: AudioObjectPropertySelector) -> Option<AudioObjectID> {
+        get_property::<AudioObjectID>(
+            kAudioObjectSystemObject as AudioObjectID,
+            selector,
+            kAudioObjectPropertyScopeGlobal,
+            None,
+        )
+        .filter(|id| *id != 0)
+    }
+
+    fn own_process_object() -> Option<AudioObjectID> {
+        let pid = std::process::id() as i32;
+        get_property::<AudioObjectID>(
+            kAudioObjectSystemObject as AudioObjectID,
+            kAudioHardwarePropertyTranslatePIDToProcessObject,
+            kAudioObjectPropertyScopeGlobal,
+            Some(&pid.to_ne_bytes()),
+        )
+        .filter(|id| *id != 0)
+    }
+
+    fn device_uid(device: AudioObjectID) -> Option<String> {
+        let raw = get_property::<*const c_void>(
+            device,
+            kAudioDevicePropertyDeviceUID,
+            kAudioObjectPropertyScopeGlobal,
+            None,
+        )?;
+        if raw.is_null() {
+            return None;
         }
+        // The HAL returns a +1 retained CFString.
+        let uid = unsafe {
+            CFString::wrap_under_create_rule(raw as core_foundation::string::CFStringRef)
+        };
+        Some(uid.to_string())
+    }
+
+    /// Total input channels of a device (sum over its input stream buffers).
+    fn input_channels(device: AudioObjectID) -> usize {
+        let addr = address(
+            kAudioDevicePropertyStreamConfiguration,
+            kAudioObjectPropertyScopeInput,
+        );
+        let mut size = 0u32;
+        let status = unsafe {
+            AudioObjectGetPropertyDataSize(
+                device,
+                NonNull::from(&addr),
+                0,
+                std::ptr::null(),
+                NonNull::from(&mut size),
+            )
+        };
+        if status != 0 || (size as usize) < std::mem::size_of::<AudioBufferList>() {
+            return 0;
+        }
+        // u64 storage keeps the AudioBufferList suitably aligned.
+        let mut storage = vec![0u64; (size as usize).div_ceil(8)];
+        let status = unsafe {
+            AudioObjectGetPropertyData(
+                device,
+                NonNull::from(&addr),
+                0,
+                std::ptr::null(),
+                NonNull::from(&mut size),
+                NonNull::new(storage.as_mut_ptr().cast::<c_void>()).expect("vec pointer"),
+            )
+        };
+        if status != 0 {
+            return 0;
+        }
+        unsafe {
+            let list = &*(storage.as_ptr() as *const AudioBufferList);
+            let count = list.mNumberBuffers as usize;
+            // Never read past the bytes the HAL actually wrote.
+            let header = std::mem::offset_of!(AudioBufferList, mBuffers);
+            let max = (size as usize).saturating_sub(header) / std::mem::size_of::<AudioBuffer>();
+            std::slice::from_raw_parts(list.mBuffers.as_ptr(), count.min(max))
+                .iter()
+                .map(|b| b.mNumberChannels as usize)
+                .sum()
+        }
+    }
+
+    fn cf_dict(pairs: &[(&CStr, CFType)]) -> CFType {
+        let pairs: Vec<(CFString, CFType)> = pairs
+            .iter()
+            .map(|(k, v)| {
+                (
+                    CFString::new(k.to_str().expect("ASCII Core Audio key")),
+                    v.clone(),
+                )
+            })
+            .collect();
+        CFDictionary::from_CFType_pairs(&pairs).as_CFType()
+    }
+
+    fn now_ms() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn single_buffer_passes_through_unchanged_as_already_interleaved() {
-        let planes = vec![vec![1.0, 2.0, 3.0, 4.0]];
-        assert_eq!(interleave_planes(planes), vec![1.0, 2.0, 3.0, 4.0]);
-    }
-
-    #[test]
-    fn two_planes_interleave_in_plane_order() {
-        // One plane per channel (planar): L = [1,2,3], R = [10,20,30].
-        // Correct interleaving is L0,R0,L1,R1,L2,R2 — NOT the buggy
-        // flatten-then-treat-as-interleaved behavior this replaces,
-        // which would have produced L0,L1,L2,R0,R1,R2.
-        let planes = vec![vec![1.0, 2.0, 3.0], vec![10.0, 20.0, 30.0]];
-        assert_eq!(
-            interleave_planes(planes),
-            vec![1.0, 10.0, 2.0, 20.0, 3.0, 30.0]
-        );
-    }
-
-    #[test]
-    fn mismatched_plane_lengths_pad_the_shorter_plane_with_silence() {
-        let planes = vec![vec![1.0, 2.0, 3.0], vec![10.0, 20.0]];
-        assert_eq!(
-            interleave_planes(planes),
-            vec![1.0, 10.0, 2.0, 20.0, 3.0, 0.0]
-        );
-    }
-
-    #[test]
-    fn one_empty_plane_does_not_erase_the_other_channels_audio() {
-        // Regression test: a single malformed/skipped buffer (see the
-        // `data.len() % 4 != 0` guard in `did_output_sample_buffer`)
-        // used to zero the WHOLE callback's audio when `frame_count`
-        // was computed as `min(lens)` — an empty plane forced that min
-        // to 0 regardless of how much real audio the other channel(s)
-        // had. Padding to `max(lens)` instead preserves it.
-        let planes = vec![vec![1.0, 2.0, 3.0], vec![]];
-        assert_eq!(
-            interleave_planes(planes),
-            vec![1.0, 0.0, 2.0, 0.0, 3.0, 0.0]
-        );
-    }
-
-    #[test]
-    fn empty_input_yields_empty_output() {
-        let planes: Vec<Vec<f32>> = vec![];
-        assert_eq!(interleave_planes(planes), Vec::<f32>::new());
-    }
-
-    #[test]
-    fn three_planes_interleave_correctly() {
-        // Not expected from a stereo config, but the function should
-        // generalize rather than silently assume exactly 2 channels.
-        let planes = vec![vec![1.0, 2.0], vec![10.0, 20.0], vec![100.0, 200.0]];
-        assert_eq!(
-            interleave_planes(planes),
-            vec![1.0, 10.0, 100.0, 2.0, 20.0, 200.0]
-        );
-    }
 
     // --- StartGuard -------------------------------------------------------
 

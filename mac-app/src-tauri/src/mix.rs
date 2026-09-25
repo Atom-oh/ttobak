@@ -6,10 +6,6 @@
 //! Deliberately free of FFI and not `cfg`-gated, so these rules are unit
 //! tested on every platform: this module has no CI on macOS, and a mis-split
 //! channel layout silently produces a garbled recording.
-//!
-//! The Core Audio process-tap backend (ADR-046) is the consumer; until it
-//! lands, only the tests below use these functions.
-#![allow(dead_code)]
 
 /// One `AudioBuffer` from the IOProc's input list: `channels` interleaved
 /// f32 channels in `data` (Core Audio's canonical IOProc format).
