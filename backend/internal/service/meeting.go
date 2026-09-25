@@ -673,6 +673,10 @@ func (s *MeetingService) UpdateMeeting(ctx context.Context, userID, meetingID st
 		return nil, ErrForbidden
 	}
 
+	if meeting.AudioCrop != nil && (req.Status != "" || meeting.AudioCrop.Active() && (req.TranscriptA != "" || req.SelectedTranscript != "")) {
+		return nil, fmt.Errorf("%w: cropped audio processing owns the recording state", ErrInvalidInput)
+	}
+
 	if req.ExpectedNotes != nil || req.ExpectedNotesRevision != nil {
 		if req.Notes == nil || req.ExpectedNotes == nil || req.Title != "" || req.Content != "" || req.LiveSummary != nil ||
 			req.TranscriptA != "" || req.SelectedTranscript != "" || req.Participants != nil || req.Status != "" {

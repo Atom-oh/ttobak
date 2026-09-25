@@ -1,8 +1,9 @@
 package main
 
 import (
-	"github.com/ttobak/backend/internal/model"
 	"testing"
+
+	"github.com/ttobak/backend/internal/model"
 )
 
 func TestExtractPartIndex(t *testing.T) {
@@ -76,5 +77,21 @@ func TestRecoveredAudioEventWaitsForCanonicalBinding(t *testing.T) {
 	}
 	if skip, err := recoveryAudioEvent(nil, "audio/owner/meeting/ordinary.webm"); skip || err != nil {
 		t.Fatal("ordinary upload changed")
+	}
+}
+
+func TestCropCandidatesNeverEnterOrdinaryTranscription(t *testing.T) {
+	for _, tc := range []struct {
+		key  string
+		skip bool
+	}{
+		{"audio/owner/copy/crop_result_0123456789abcdef0123456789abcdef.wav", true},
+		{"audio/owner/copy/123_crop_result_0123456789abcdef0123456789abcdef.wav", false},
+		{"audio/owner/copy/crop_result_invalid.wav", false},
+		{"audio/owner/copy/recording.wav", false},
+	} {
+		if got := cropResultKeyPattern.MatchString(tc.key); got != tc.skip {
+			t.Fatalf("key %q skip=%v", tc.key, got)
+		}
 	}
 }
