@@ -107,6 +107,10 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 		return nil
 	}
 
+	if cropResultKeyPattern.MatchString(key) {
+		return nil
+	}
+
 	// Skip realtime-aggregated audio (already transcribed in realtime by ECS whisper)
 	if strings.Contains(key, "realtime_") {
 		log.Printf("Skipping realtime audio file (already transcribed): %s", key)
@@ -295,6 +299,7 @@ func startWhisperTask(ctx context.Context, meetingID, userID, audioKey, initialP
 // routing it to the merge pipeline that would then block forever on
 // missing sibling parts.
 var partIndexPattern = regexp.MustCompile(`(?:^|/)part_(\d{3})_`)
+var cropResultKeyPattern = regexp.MustCompile(`^audio/[^/]+/[^/]+/crop_result_[0-9a-f]{32}\.wav$`)
 
 func extractPartIndex(key string) (int, bool) {
 	matches := partIndexPattern.FindStringSubmatch(key)

@@ -3,7 +3,8 @@
 The production Whisper image supports an optional `AUDIO_CROP=1` mode. Normal
 transcription and its pinned model/dispatcher remain unchanged. API orchestration
 and user-facing activation are separate changes; this worker mode is unused by
-the current normal upload path.
+the current normal upload path. Deploy the transcribe consumer filter before
+running crop-mode tasks: exact crop_result WAVs bypass ordinary S3-triggered STT.
 
 The input is an owner-partitioned meeting with status transcribing and a queued
 audioCrop containing sourceMeetingId, sourceKey, sourceETag, startSeconds and
@@ -36,3 +37,18 @@ loopback DynamoDB Local instance to test real claim/publication/expiry expressio
 and durable candidate recording. Unit tests cover range bytes, supported containers,
 source revision rejection, heartbeat loss, ambiguous writes and cleanup failure.
 Synthetic tests do not establish GPU/model or production acceptance.
+
+## Bound audio without a transcript
+
+After a confirmed task stop, inspect the same run and canonical audioKey. If the
+transcript object already exists, retain the audio and investigate the normal
+summary/event path; do not restart the crop or delete the object. If the transcript
+is confirmed absent, retain the bound WAV. Mark that stopped run failed only with
+conditions on its runId, state done and meeting status transcribing; do not regress
+an advanced meeting status.
+
+Request a new copy from the original with a new request ID once crop orchestration
+is available. If the original is unavailable, download the canonical WAV through
+authorized access and upload it as a new private meeting using the existing upload
+flow. Preserve any saved notes when doing so. Never reset the old run to queued or
+replace its binding. This is explicit operator/user recovery, not automatic resume.

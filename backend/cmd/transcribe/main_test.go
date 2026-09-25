@@ -4,10 +4,10 @@ import "testing"
 
 func TestExtractPartIndex(t *testing.T) {
 	cases := []struct {
-		name     string
-		key      string
-		wantIdx  int
-		wantOk   bool
+		name    string
+		key     string
+		wantIdx int
+		wantOk  bool
 	}{
 		{
 			name:    "multipart key at basename start",
@@ -48,5 +48,21 @@ func TestExtractPartIndex(t *testing.T) {
 					tc.key, idx, ok, tc.wantIdx, tc.wantOk)
 			}
 		})
+	}
+}
+
+func TestCropCandidatesNeverEnterOrdinaryTranscription(t *testing.T) {
+	for _, tc := range []struct {
+		key  string
+		skip bool
+	}{
+		{"audio/owner/copy/crop_result_0123456789abcdef0123456789abcdef.wav", true},
+		{"audio/owner/copy/123_crop_result_0123456789abcdef0123456789abcdef.wav", false},
+		{"audio/owner/copy/crop_result_invalid.wav", false},
+		{"audio/owner/copy/recording.wav", false},
+	} {
+		if got := cropResultKeyPattern.MatchString(tc.key); got != tc.skip {
+			t.Fatalf("key %q skip=%v", tc.key, got)
+		}
 	}
 }

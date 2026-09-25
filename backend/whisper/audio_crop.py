@@ -182,9 +182,11 @@ def run_crop(s3, table, bucket, user_id, meeting_id, transcribe):
             condition = "audioCrop.runId = :run AND audioCrop.#state = :owned"
             values = {":failed": "failed", ":error": "error", ":now": _now(), ":run": run_id,
                       ":owned": "done" if published else "processing"}
+            values[":transcribing"] = "transcribing"
             if published:
                 condition += " AND #status = :transcribing"
-                values[":transcribing"] = "transcribing"
+            else:
+                condition += " AND (#status = :transcribing OR #status = :error)"
             table.update_item(
                 Key=key, UpdateExpression="SET audioCrop.#state = :failed, #status = :error, updatedAt = :now",
                 ConditionExpression=condition,

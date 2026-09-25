@@ -172,7 +172,7 @@ class AudioCropTests(unittest.TestCase):
         with mock.patch("audio_crop.HEARTBEAT_SECONDS", 0.01), self.assertRaises(RuntimeError):
             run_crop(s3, table, "bucket", "owner", "copy", transcribe)
         self.assertFalse(any(call.kwargs["Key"].startswith("transcripts/") for call in s3.put_object.call_args_list))
-        self.assertNotIn("#status =", table.update_item.call_args.kwargs["ConditionExpression"])
+        self.assertIn("#status = :error", table.update_item.call_args.kwargs["ConditionExpression"])
 
     def test_ambiguous_publication_retains_audio_but_definite_rejection_cleans_it(self):
         for code in ("InternalServerError", "ConditionalCheckFailedException"):
