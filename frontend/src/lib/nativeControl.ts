@@ -34,12 +34,16 @@ export function clearQueuedNativeControl(): void {
 /** Delivers a request. When no page handles it yet, a start is queued (a
  * stop has nothing to act on) and `superseded` names an earlier queued start
  * that the caller must answer, so no request is left without a reply. */
-export function dispatchNativeControl(request: NativeControlRequest): { handled: boolean; superseded?: NativeControlRequest } {
+export function dispatchNativeControl(
+  request: NativeControlRequest,
+): { handled: boolean; superseded?: NativeControlRequest; startPending?: boolean } {
   if (handler) {
     handler(request);
     return { handled: true };
   }
-  if (request.action !== 'start') return { handled: false };
+  // A stop while a start waits for the record page: that start will still
+  // run, so the stop must not report not_recording.
+  if (request.action !== 'start') return { handled: false, startPending: queued !== null };
   const superseded = queued?.request;
   queued = { request, at: Date.now() };
   return { handled: false, superseded };

@@ -47,7 +47,7 @@ export function NativeControlBridge() {
         });
         return;
       }
-      const { handled, superseded } = dispatchNativeControl(request);
+      const { handled, superseded, startPending } = dispatchNativeControl(request);
       if (superseded) {
         void replyNativeControl(superseded.requestId, {
           ok: false,
@@ -55,6 +55,13 @@ export function NativeControlBridge() {
         });
       }
       if (handled) return;
+      if (request.action === 'stop' && startPending) {
+        void replyNativeControl(request.requestId, {
+          ok: false,
+          error: { code: 'busy', message: 'The recording is still starting; try again in a moment.' },
+        });
+        return;
+      }
       if (request.action === 'stop') {
         void replyNativeControl(request.requestId, {
           ok: false,

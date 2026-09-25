@@ -567,9 +567,18 @@ function RecordPageInner() {
       });
       return;
     }
+    // handleFinalNotesSkip refuses over-long notes without uploading; say so
+    // instead of claiming the upload started.
+    if (stop.upload && codePointLength(notes) > MAX_MEETING_NOTES) {
+      void replyNativeControl(stop.requestId, {
+        ok: false,
+        error: { code: 'notes_too_long', message: 'The recording stopped, but its notes are too long to upload; shorten them in the app and finish there.' },
+      });
+      return;
+    }
     if (stop.upload) void handleFinalNotesSkip();
     void replyNativeControl(stop.requestId, { ok: true, data: { meetingId, phase: stop.upload ? 'uploading' : 'notes' } });
-  }, [postRecording.step, postRecording.serverMeetingId, postRecording.errorMessage, handleFinalNotesSkip]);
+  }, [postRecording.step, postRecording.serverMeetingId, postRecording.errorMessage, handleFinalNotesSkip, notes]);
 
   useEffect(() => {
     if (!isTauri()) return;
