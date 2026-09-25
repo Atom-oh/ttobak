@@ -635,6 +635,8 @@ export class GatewayStack extends cdk.Stack {
       },
     });
     audioUploadRule.addTarget(new eventsTargets.LambdaFunction(this.transcribeFunction));
+    // Recovery copies must wait for their canonical binding before STT starts.
+    this.apiFunction.node.addDependency(this.transcribeFunction);
 
     // EventBridge rule for image uploads -> Process Image Lambda
     // Uses custom event from upload/complete API (not S3 event) to avoid

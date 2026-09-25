@@ -157,7 +157,10 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 		meeting, err = repo.GetMeetingByID(ctx, meetingID)
 	}
 	if err != nil {
-		log.Printf("Failed to get meeting record: %v", err)
+		return fmt.Errorf("read meeting before transcription: %w", err)
+	}
+	if skip, err := recoveryAudioEvent(meeting, key); skip || err != nil {
+		return err
 	}
 
 	sttProvider := "whisper"
@@ -315,4 +318,22 @@ func extractPartIndex(key string) (int, bool) {
 
 func main() {
 	lambda.Start(Handler)
+}
+
+// A copied checkpoint can emit its S3 event before RecoverMeeting commits the
+// canonical key. Retry that event; discard a copy that lost the state CAS.
+var recoveredAudioPattern = regexp.MustCompile(`^audio/[^/]+/[^/]+/recording_recovered_(?:[0-9]+|[0-9a-f]{32})\.(webm|m4a|ogg)$`)
+
+func recoveryAudioEvent(meeting *model.Meeting, key string) (bool, error) {
+	if !recoveredAudioPattern.MatchString(key) {
+		return false, nil
+	}
+	if meeting == nil {
+		return true, nil
+	}
+	keys := meeting.GetEffectiveAudioKeys()
+	if len(keys) == 0 {
+		return false, fmt.Errorf("recovered audio is awaiting its meeting binding")
+	}
+	return len(keys) != 1 || keys[0] != key, nil
 }

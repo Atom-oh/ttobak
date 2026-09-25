@@ -346,6 +346,15 @@ Recover uses a saved progress object. Rediarize accepts supported single-part
 Whisper meetings and a speaker-count hint. Use their handler/service contracts,
 not a raw DynamoDB status reset or a fabricated AWS S3 event.
 
+`canRecoverRecording` is owner-only and includes expired `error` drafts without
+existing audio, transcript or summary. `recover` returns
+`RECORDING_CHECKPOINT_MISSING` when no checkpoint exists, distinguishes storage
+failures, and compares the observed meeting state before publishing its result.
+The transcribe consumer retries a recovered-copy event until its canonical audio
+key is bound within the configured async retry budget, and discards copies that
+lost to a different upload. Recovery uses unique keys, deletes definitively
+rejected copies and surfaces cleanup failures. Ambiguous writes retain their copy.
+
 ### Simulator
 
 `POST .../sim/extract` extracts requirements for a done meeting. `POST .../sim`

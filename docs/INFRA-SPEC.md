@@ -136,6 +136,9 @@ receives the exact GPT model/profile grant. Images use Opus 4.8, Sonnet 5 is use
 QA/simulator; Go refinement uses its Sonnet configuration and lightweight Go tasks
 use Haiku. QA detection and Translate are separate service/model choices.
 
+The Go API also depends on the transcribe Lambda so recovered-copy event guards
+are installed before the recovery producer changes.
+
 The Go API explicitly depends on the QA Lambda so private relinking cannot deploy
 before the consumer's canonical publication checks.
 QA REST jobs use `ttobak-qa-jobs`: SQS-managed encryption, TLS, 1800s visibility,
