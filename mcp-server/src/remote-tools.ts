@@ -19,11 +19,13 @@ export function mutationReceipt(name: string, value: string): string | undefined
 }
 
 // Tools that touch the MCP host's machine (session files, microphone, local
-// audio files). ADR-045: the HTTP transport never exposes them.
+// audio files, the Mac app's control socket). ADR-045/046: the HTTP transport
+// never exposes them.
 export const LOCAL_ONLY_TOOLS = [
   'ttobak_login', 'ttobak_logout',
   'ttobak_list_audio_devices', 'ttobak_start_recording', 'ttobak_recording_status',
   'ttobak_stop_recording', 'ttobak_upload_audio',
+  'ttobak_app_status', 'ttobak_app_start_recording', 'ttobak_app_stop_recording',
 ];
 
 export function httpTools(tools: Tool[]): Tool[] {

@@ -194,6 +194,30 @@ transport never lists them (`LOCAL_ONLY_TOOLS`, ADR-045).
   and upload again. The TTOBAK API completes the same key idempotently, so a
   recording's complete-only retry never resets a meeting's progress.
 
+## Mac app recording control (stdio only)
+
+`ttobak_app_status`, `ttobak_app_start_recording` and `ttobak_app_stop_recording`
+drive the TTOBAK Mac app, which records system audio (Zoom, Teams, Meet) mixed with
+the microphone, even with headphones (ADR-046). Prefer them over the ffmpeg
+microphone tools when the app is running. The adapter sends one JSON line to the
+app's socket, `~/Library/Application Support/ttobak/control.sock`
+(`TTOBAK_APP_SOCKET` overrides). The app accepts only the same macOS user and
+forwards start/stop to its signed-in page, which creates the meeting and uploads
+on stop; the adapter never sees audio or tokens.
+
+- Start returns the meetingId once capture runs; the app window comes forward and
+  a notification names the recording. Stop uploads by default (`upload: false`
+  leaves the app's notes step open) and returns the meetingId; follow progress
+  with `ttobak_app_status`.
+- `app_not_running` means the app is closed or an older build; `app_not_ready` /
+  `login_required` mean its window has not loaded or is signed out; `busy` means
+  a recording, stop or upload is already in progress; `recording_unowned` means
+  capture is running but its recording screen was closed (stop it in the app);
+  `browser_recording` means a browser-mode recording in the app window is
+  active, which only its own stop button ends. A
+  `timeout` leaves the app's state unknown: check status before retrying.
+- Listed in `LOCAL_ONLY_TOOLS`; the HTTP transport never exposes them.
+
 ## Bounded meeting and transcript reads
 
 `ttobak_get_meeting({"meetingId":"id"})` now returns saved **notes** first.
