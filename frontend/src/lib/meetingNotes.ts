@@ -7,13 +7,13 @@ export async function readSavedMeetingSection(meetingId: string, section: 'notes
   return (await readSection(meetingId, section)).content;
 }
 
-export async function readSavedMeetingNotes(meetingId: string): Promise<SavedMeetingNotes> {
-  const result = await readSection(meetingId, 'notes');
+export async function readSavedMeetingNotes(meetingId: string, expectedUserId?: string): Promise<SavedMeetingNotes> {
+  const result = await readSection(meetingId, 'notes', expectedUserId);
   if (result.notesRevision === undefined) throw new Error('메모 버전을 확인하지 못했습니다. 잠시 후 다시 불러와 주세요.');
   return { notes: result.content, notesRevision: result.notesRevision };
 }
 
-async function readSection(meetingId: string, section: 'notes' | 'summary') {
+async function readSection(meetingId: string, section: 'notes' | 'summary', expectedUserId?: string) {
   let cursor: string | undefined;
   let content = '';
   let revision: string | undefined;
@@ -21,7 +21,7 @@ async function readSection(meetingId: string, section: 'notes' | 'summary') {
   let offset = 0;
   const cursors = new Set<string>();
   for (let pageIndex = 0; pageIndex < 64; pageIndex++) {
-    const page = await (section === 'notes' ? meetingsApi.readNotes(meetingId, cursor) : meetingsApi.readSummary(meetingId, cursor));
+    const page = await (section === 'notes' ? meetingsApi.readNotes(meetingId, cursor, { expectedUserId }) : meetingsApi.readSummary(meetingId, cursor));
     const text = 'notes' in page ? page.notes : page.content;
     if (page.meetingId !== meetingId || page.source !== section || typeof text !== 'string' || !page.page ||
         !page.revision || (revision && page.revision !== revision) || page.page.startOffset !== offset ||

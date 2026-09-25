@@ -46,7 +46,7 @@ function rememberProjectHints(userId: string, value: unknown): void {
 
 interface FetchOptions extends RequestInit {
   skipAuth?: boolean;
-  /** Bind a long-lived QA operation to the identity that submitted it. */
+  /** Bind a long-lived operation to the identity that submitted it. */
   expectedUserId?: string;
 }
 
@@ -78,7 +78,7 @@ function tokenUserId(token: string | null): string | null {
 
 function assertRequestUser(expectedUserId: string, token = getIdToken()) {
   if (tokenUserId(token) !== expectedUserId) {
-    throw new ApiError(401, 'AUTH_CHANGED', 'Authentication changed while waiting for QA.');
+    throw new ApiError(401, 'AUTH_CHANGED', 'Authentication changed during the request.');
   }
 }
 
@@ -212,7 +212,7 @@ export const meetingsApi = {
     );
   },
 
-  get: (id: string, options?: { signal?: AbortSignal }) => api.get<import('@/types/meeting').MeetingDetail>(`/api/meetings/${id}`, options),
+  get: (id: string, options?: FetchOptions) => api.get<import('@/types/meeting').MeetingDetail>(`/api/meetings/${id}`, options),
 
   getResummary: (id: string, options?: { signal?: AbortSignal }) =>
     api.get<import('@/types/meeting').ResummaryStatus>(`/api/meetings/${encodeURIComponent(id)}/resummary`, options),
@@ -223,7 +223,7 @@ export const meetingsApi = {
     if (cursor) query.set('cursor', cursor);
     return api.get<import('@/types/meeting').SummaryReadingPage>(`/api/meetings/${encodeURIComponent(id)}/reading?${query}`, options);
   },
-  readNotes: (id: string, cursor?: string, options?: { signal?: AbortSignal }) => {
+  readNotes: (id: string, cursor?: string, options?: FetchOptions) => {
     const query = new URLSearchParams({ kind: 'meeting', section: 'notes', pageSize: '8000' });
     if (cursor) query.set('cursor', cursor);
     return api.get<Omit<import('@/types/meeting').SummaryReadingPage, 'source' | 'content'> & { source: 'notes'; notes: string; notesRevision?: string }>(
@@ -231,8 +231,8 @@ export const meetingsApi = {
     );
   },
 
-  create: (data: { title: string; date?: string; participants?: string[]; sttProvider?: 'transcribe' | 'nova-sonic'; status?: string; notes?: string; accountId?: string }) =>
-    api.post<import('@/types/meeting').Meeting & { preparationApplied?: boolean; supportsNotesComparison?: boolean; supportsPrivateAccountLink?: boolean; notesRevision?: string }>('/api/meetings', data),
+  create: (data: { title: string; date?: string; participants?: string[]; sttProvider?: 'transcribe' | 'nova-sonic'; status?: string; notes?: string; accountId?: string }, options?: FetchOptions) =>
+    api.post<import('@/types/meeting').Meeting & { preparationApplied?: boolean; supportsNotesComparison?: boolean; supportsPrivateAccountLink?: boolean; notesRevision?: string }>('/api/meetings', data, options),
 
   recover: (meetingId: string) =>
     api.post<{ meetingId: string; status: string }>(`/api/meetings/${meetingId}/recover`, {}),
@@ -260,7 +260,7 @@ export const meetingsApi = {
     data: { requirements: import('@/types/meeting').SimRequirement[]; options: import('@/types/meeting').SimOption[] }
   ) => api.post<import('@/types/meeting').SimRun>(`/api/meetings/${meetingId}/sim`, data),
 
-  update: (id: string, data: { title?: string; content?: string; notes?: string; expectedNotes?: string; expectedNotesRevision?: string; liveSummary?: string; transcriptA?: string; selectedTranscript?: 'A' | 'B'; participants?: string[]; status?: string }, options?: { signal?: AbortSignal }) =>
+  update: (id: string, data: { title?: string; content?: string; notes?: string; expectedNotes?: string; expectedNotesRevision?: string; liveSummary?: string; transcriptA?: string; selectedTranscript?: 'A' | 'B'; participants?: string[]; status?: string }, options?: FetchOptions) =>
     api.put<{ meetingId: string; updatedAt: string; notesRevision?: string }>(`/api/meetings/${id}`, data, options),
 
   delete: (id: string) => api.delete(`/api/meetings/${id}`),
@@ -329,11 +329,11 @@ export const indexStatusApi = {
 
 // Presigned URL for uploads
 export const uploadsApi = {
-  getPresignedUrl: (data: { fileName: string; fileType: string; category: 'audio' | 'image' | 'file' | 'doc'; meetingId?: string; partIndex?: number; totalParts?: number }) =>
-    api.post<{ uploadUrl: string; key: string; expiresIn: number }>('/api/upload/presigned', data),
+  getPresignedUrl: (data: { fileName: string; fileType: string; category: 'audio' | 'image' | 'file' | 'doc'; meetingId?: string; partIndex?: number; totalParts?: number }, options?: FetchOptions) =>
+    api.post<{ uploadUrl: string; key: string; expiresIn: number }>('/api/upload/presigned', data, options),
 
-  notifyComplete: (data: { meetingId: string; key: string; category: 'audio' | 'image' | 'file'; fileName?: string; fileSize?: number; mimeType?: string; partIndex?: number; totalParts?: number }) =>
-    api.post<{ status: string }>('/api/upload/complete', data),
+  notifyComplete: (data: { meetingId: string; key: string; category: 'audio' | 'image' | 'file'; fileName?: string; fileSize?: number; mimeType?: string; partIndex?: number; totalParts?: number }, options?: FetchOptions) =>
+    api.post<{ status: string }>('/api/upload/complete', data, options),
 };
 
 // User search for sharing
