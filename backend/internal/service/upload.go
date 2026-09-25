@@ -23,13 +23,13 @@ import (
 
 // UploadService handles file upload operations
 type UploadService struct {
+	audioCropEnabled bool
 	s3Client         *s3.Client
 	presignClient    *s3.PresignClient
 	ebClient         *eventbridge.Client
 	repo             *repository.DynamoDBRepository
 	bucketName       string
 	attachmentText   *AttachmentTextService
-	audioCropEnabled bool
 
 	cfSignerMu      sync.Mutex
 	cfSigner        *CloudFrontSigner
@@ -223,6 +223,7 @@ func (s *UploadService) CompleteUpload(ctx context.Context, userID string, req *
 	if meeting.UserID != userID {
 		return ErrForbidden
 	}
+
 	if req.Category == "audio" && meeting.AudioCrop != nil {
 		return fmt.Errorf("%w: cropped audio is immutable", ErrInvalidInput)
 	}

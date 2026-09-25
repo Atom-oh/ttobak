@@ -81,16 +81,17 @@ def run_crop(s3, table, bucket, user_id, meeting_id, transcribe):
     key = {"PK": f"USER#{user_id}", "SK": f"MEETING#{meeting_id}"}
     meeting = table.get_item(Key=key, ConsistentRead=True).get("Item")
     crop = meeting.get("audioCrop") if meeting else None
-    if not crop or crop.get("state") != "queued" or meeting.get("userId") != user_id:
+    if not crop or crop.get("state") != "queued" or meeting.get("status") != "transcribing" or meeting.get("userId") != user_id:
         return
     run_id = uuid.uuid4().hex
+    candidate_key = f"audio/{user_id}/{meeting_id}/crop_result_{run_id}.wav"
     try:
         table.update_item(
             Key=key,
-            UpdateExpression="SET audioCrop.#state = :processing, audioCrop.runId = :run, #status = :transcribing, updatedAt = :now",
-            ConditionExpression="audioCrop.#state = :queued AND userId = :user AND attribute_not_exists(audioKey)",
+            UpdateExpression="SET audioCrop.#state = :processing, audioCrop.runId = :run, audioCrop.resultKey = :result, #status = :transcribing, updatedAt = :now",
+            ConditionExpression="audioCrop.#state = :queued AND #status = :transcribing AND userId = :user AND attribute_not_exists(audioKey)",
             ExpressionAttributeNames={"#state": "state", "#status": "status"},
-            ExpressionAttributeValues={":processing": "processing", ":run": run_id, ":transcribing": "transcribing",
+            ExpressionAttributeValues={":processing": "processing", ":run": run_id, ":result": candidate_key, ":transcribing": "transcribing",
                                        ":now": _now(), ":queued": "queued", ":user": user_id},
         )
     except ClientError as error:
@@ -107,7 +108,12 @@ def run_crop(s3, table, bucket, user_id, meeting_id, transcribe):
         source_key = _source_key(source, user_id, source_id)
         if source_key != crop["sourceKey"] or not crop.get("sourceETag"):
             raise ValueError("source audio changed")
-        start_seconds, end_seconds = int(crop["startSeconds"]), int(crop["endSeconds"])
+        raw_start, raw_end = crop["startSeconds"], crop["endSeconds"]
+        start_seconds, end_seconds = int(raw_start), int(raw_end)
+        if any(isinstance(raw, bool) or raw != value for raw, value in ((raw_start, start_seconds), (raw_end, end_seconds))):
+            raise ValueError("audio range must use integer seconds")
+        if start_seconds < 0 or end_seconds <= start_seconds or end_seconds > 86400 or end_seconds - start_seconds > 21600:
+            raise ValueError("invalid audio range")
         heartbeat = CropHeartbeat(table, key, run_id)
         with tempfile.TemporaryDirectory(prefix="ttobak-crop-") as directory:
             source_path = pathlib.Path(directory) / "source"
@@ -133,7 +139,7 @@ def run_crop(s3, table, bucket, user_id, meeting_id, transcribe):
             result = transcribe(str(output_path))
             if heartbeat.failure:
                 raise RuntimeError("Audio crop lost its processing claim")
-            output_key = f"audio/{user_id}/{meeting_id}/crop_result_{run_id}.wav"
+            output_key = candidate_key
             with output_path.open("rb") as audio:
                 s3.put_object(Bucket=bucket, Key=output_key, Body=audio, ContentType="audio/wav", IfNoneMatch="*")
             # Only the heartbeat accesses the Table during media work. Join it
@@ -166,6 +172,10 @@ def run_crop(s3, table, bucket, user_id, meeting_id, transcribe):
                 heartbeat.close()
             except Exception:
                 pass
+        if published:
+            # A timed-out PUT may already have emitted its S3 event. Keep the
+            # bound run eligible for that event and reconcile missing output.
+            raise RuntimeError("Cropped audio is bound; transcript publication is unconfirmed and retained for reconciliation") from None
         cleanup_failed = False
         if output_key and (not publication_attempted or publication_rejected):
             try:
@@ -178,12 +188,11 @@ def run_crop(s3, table, bucket, user_id, meeting_id, transcribe):
                 raise RuntimeError("heartbeat shutdown incomplete")
             # Expiry may already have set status=error; the owned processing run
             # must still become failed. Never overwrite an advanced summary.
-            condition = "audioCrop.runId = :run AND audioCrop.#state = :owned"
+            condition = "audioCrop.runId = :run AND audioCrop.#state = :owned AND attribute_not_exists(audioKey)"
             values = {":failed": "failed", ":error": "error", ":now": _now(), ":run": run_id,
-                      ":owned": "done" if published else "processing"}
-            if published:
-                condition += " AND #status = :transcribing"
-                values[":transcribing"] = "transcribing"
+                      ":owned": "processing"}
+            values[":transcribing"] = "transcribing"
+            condition += " AND (#status = :transcribing OR #status = :error)"
             table.update_item(
                 Key=key, UpdateExpression="SET audioCrop.#state = :failed, #status = :error, updatedAt = :now",
                 ConditionExpression=condition,

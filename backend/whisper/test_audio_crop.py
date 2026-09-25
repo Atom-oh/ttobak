@@ -35,7 +35,7 @@ class AudioCropTests(unittest.TestCase):
                 "sourceETag": '"revision"', "startSeconds": 1, "endSeconds": 3}
         table = mock.Mock()
         table.get_item.side_effect = [
-            {"Item": {"userId": "owner", "audioCrop": crop}},
+            {"Item": {"userId": "owner", "status": "transcribing", "audioCrop": crop}},
             {"Item": {"userId": "owner", "meetingId": "source", "audioKey": crop["sourceKey"]}},
         ]
         source = audio_bytes()
@@ -48,6 +48,21 @@ class AudioCropTests(unittest.TestCase):
             with mock.patch("audio_crop.datetime") as clock:
                 clock.now.return_value = datetime(2026, 9, 25, 0, 0, 0, micros, tzinfo=timezone.utc)
                 self.assertEqual(_now(), "2026-09-25T00:00:" + suffix)
+
+    def test_expired_queued_copy_cannot_be_resurrected(self):
+        table, s3, crop = self.fixture()
+        table.get_item.side_effect = [{"Item": {"userId": "owner", "status": "error", "audioCrop": crop}}]
+        run_crop(s3, table, "bucket", "owner", "copy", mock.Mock())
+        table.update_item.assert_not_called()
+        s3.get_object.assert_not_called()
+
+    def test_invalid_numeric_ranges_fail_before_audio_reads(self):
+        for start, end in [(0.5, 2), (True, 2), (0, 86401), (0, 21601), (3, 2)]:
+            table, s3, crop = self.fixture()
+            crop["startSeconds"], crop["endSeconds"] = start, end
+            with self.assertRaises(RuntimeError):
+                run_crop(s3, table, "bucket", "owner", "copy", mock.Mock())
+            s3.get_object.assert_not_called()
 
     def test_real_crop_excludes_before_and_after_audio(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -119,7 +134,7 @@ class AudioCropTests(unittest.TestCase):
         for replacement in [None, {"userId": "other", "meetingId": "source", "audioKey": "audio/owner/source/original.wav"},
                             {"userId": "owner", "meetingId": "source", "audioKey": "audio/owner/source/new.wav"}]:
             table, s3, crop = self.fixture()
-            table.get_item.side_effect = [{"Item": {"userId": "owner", "audioCrop": crop}}, {"Item": replacement}]
+            table.get_item.side_effect = [{"Item": {"userId": "owner", "status": "transcribing", "audioCrop": crop}}, {"Item": replacement}]
             with self.assertRaises(RuntimeError):
                 run_crop(s3, table, "bucket", "owner", "copy", mock.Mock())
             s3.get_object.assert_not_called()
@@ -165,7 +180,7 @@ class AudioCropTests(unittest.TestCase):
         with mock.patch("audio_crop.HEARTBEAT_SECONDS", 0.01), self.assertRaises(RuntimeError):
             run_crop(s3, table, "bucket", "owner", "copy", transcribe)
         self.assertFalse(any(call.kwargs["Key"].startswith("transcripts/") for call in s3.put_object.call_args_list))
-        self.assertNotIn("#status =", table.update_item.call_args.kwargs["ConditionExpression"])
+        self.assertIn("#status = :error", table.update_item.call_args.kwargs["ConditionExpression"])
 
     def test_ambiguous_publication_retains_audio_but_definite_rejection_cleans_it(self):
         for code in ("InternalServerError", "ConditionalCheckFailedException"):
@@ -222,6 +237,7 @@ class DynamoDBLocalCropTests(unittest.TestCase):
             saved = table.get_item(Key=key, ConsistentRead=True)["Item"]
             self.assertEqual(saved["audioCrop"]["state"], "done")
             self.assertEqual(saved["duration"], 2)
+            self.assertEqual(saved["audioCrop"]["resultKey"], saved["audioKey"])
             self.assertTrue(saved["audioKey"].startswith("audio/owner/copy/crop_result_"))
             self.assertEqual(s3.put_object.call_args.kwargs["Key"], "transcripts/copy.json")
             run_crop(s3, table, "bucket", "owner", "copy", transcribe)
@@ -242,5 +258,57 @@ class DynamoDBLocalCropTests(unittest.TestCase):
             self.assertEqual(failed["status"], "error")
             self.assertNotIn("audioKey", failed)
             next_s3.delete_object.assert_called_once_with(Bucket="bucket", Key=next_s3.put_object.call_args.kwargs["Key"])
+            # Even an in-flight legacy replacement must keep its own binding
+            # and processing status when this crop loses publication.
+            _, replacement_s3, _ = AudioCropTests().fixture()
+            replacement = {"PK": "USER#owner", "SK": "MEETING#replacement"}
+            table.put_item(Item={**replacement, "userId": "owner", "meetingId": "replacement", "status": "transcribing", "audioCrop": crop})
+            def replace(path):
+                table.update_item(Key=replacement, UpdateExpression="SET audioKey=:key", ExpressionAttributeValues={":key": "audio/owner/replacement/new.webm"})
+                return {}
+            with self.assertRaises(RuntimeError):
+                run_crop(replacement_s3, table, "bucket", "owner", "replacement", replace)
+            current = table.get_item(Key=replacement, ConsistentRead=True)["Item"]
+            self.assertEqual(current["status"], "transcribing")
+            self.assertEqual(current["audioKey"], "audio/owner/replacement/new.webm")
+
+            # A lost transcript PUT response must not make the real committed
+            # event ineligible for the summarize consumer's status whitelist.
+            _, uncertain_s3, _ = AudioCropTests().fixture()
+            uncertain = {"PK": "USER#owner", "SK": "MEETING#uncertain"}
+            table.put_item(Item={**uncertain, "userId": "owner", "meetingId": "uncertain", "status": "transcribing", "audioCrop": crop})
+            transcript_written = []
+            def lose_response(**request):
+                if request["Key"].startswith("transcripts/"):
+                    transcript_written.append(request["Body"])
+                    raise RuntimeError("response lost after commit")
+            uncertain_s3.put_object.side_effect = lose_response
+            with self.assertRaisesRegex(RuntimeError, "publication is unconfirmed"):
+                run_crop(uncertain_s3, table, "bucket", "owner", "uncertain", lambda path: {"results": {}})
+            current = table.get_item(Key=uncertain, ConsistentRead=True)["Item"]
+            self.assertEqual(current["status"], "transcribing")
+            self.assertEqual(current["audioCrop"]["state"], "done")
+            self.assertEqual(current["audioKey"], current["audioCrop"]["resultKey"])
+            self.assertEqual(len(transcript_written), 1)
+            uncertain_s3.delete_object.assert_not_called()
+
+            # The candidate address is durable before S3 succeeds. An abrupt
+            # process exit still leaves a deterministic reconciliation target.
+            _, interrupted_s3, _ = AudioCropTests().fixture()
+            interrupted = {"PK": "USER#owner", "SK": "MEETING#interrupted"}
+            table.put_item(Item={**interrupted, "userId": "owner", "meetingId": "interrupted", "status": "transcribing", "audioCrop": crop})
+            def interrupt(**request):
+                journal = table.get_item(Key=interrupted, ConsistentRead=True)["Item"]["audioCrop"]
+                self.assertEqual(journal["resultKey"], request["Key"])
+                self.assertTrue(journal["runId"])
+                raise SystemExit(17)
+            interrupted_s3.put_object.side_effect = interrupt
+            with mock.patch("audio_crop.CropHeartbeat") as heartbeat, self.assertRaises(SystemExit):
+                heartbeat.return_value.failure = None
+                run_crop(interrupted_s3, table, "bucket", "owner", "interrupted", lambda path: {})
+            retained = table.get_item(Key=interrupted, ConsistentRead=True)["Item"]
+            self.assertEqual(retained["audioCrop"]["state"], "processing")
+            self.assertIn("resultKey", retained["audioCrop"])
+            self.assertNotIn("audioKey", retained)
         finally:
             table.delete()

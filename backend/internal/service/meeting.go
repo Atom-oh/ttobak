@@ -674,6 +674,7 @@ func (s *MeetingService) UpdateMeeting(ctx context.Context, userID, meetingID st
 	if permission != "owner" && permission != model.PermissionEdit {
 		return nil, ErrForbidden
 	}
+
 	if meeting.AudioCrop != nil && (req.Status != "" || meeting.AudioCrop.Active() && (req.TranscriptA != "" || req.SelectedTranscript != "")) {
 		return nil, fmt.Errorf("%w: cropped audio processing owns the recording state", ErrInvalidInput)
 	}

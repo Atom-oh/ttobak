@@ -141,6 +141,10 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 		return nil
 	}
 
+	if cropResultKeyPattern.MatchString(key) {
+		return nil
+	}
+
 	// Skip realtime-aggregated audio (already transcribed in realtime by ECS whisper)
 	if strings.Contains(key, "realtime_") {
 		log.Printf("Skipping realtime audio file (already transcribed): %s", key)
@@ -189,11 +193,11 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	if err != nil {
 		return fmt.Errorf("read meeting before transcription: %w", err)
 	}
-	if skip, err := recoveryAudioEvent(meeting, key); skip || err != nil {
-		return err
-	}
 	if meeting != nil && meeting.AudioCrop != nil {
 		return nil
+	}
+	if skip, err := recoveryAudioEvent(meeting, key); skip || err != nil {
+		return err
 	}
 
 	sttProvider := "whisper"
