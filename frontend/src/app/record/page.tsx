@@ -29,7 +29,7 @@ import { useLeftoverRecordings } from '@/hooks/useLeftoverRecordings';
 import { useAudioDevices } from '@/hooks/useAudioDevices';
 import { useRecordingSession } from '@/hooks/useRecordingSession';
 import { useLiveSummary } from '@/hooks/useLiveSummary';
-import { usePostRecording } from '@/hooks/usePostRecording';
+import { usePostRecording, withTimeout } from '@/hooks/usePostRecording';
 import { uploadsApi, meetingsApi, meetingAccountApi, kbApi } from '@/lib/api';
 import { uploadToS3, notifyUploadComplete, formatFileSize, putWithProgress } from '@/lib/upload';
 import type { LiveSttProvider } from '@/lib/sttManager';
@@ -659,12 +659,12 @@ function RecordPageInner() {
         pendingCheckpointRef.current = null;
         try {
           const ext = checkpoint.mimeType.includes('mp4') ? 'm4a' : checkpoint.mimeType.includes('ogg') ? 'ogg' : 'webm';
-          const { uploadUrl } = await uploadsApi.getPresignedUrl({
+          const { uploadUrl } = await withTimeout(uploadsApi.getPresignedUrl({
             fileName: `recording_progress.${ext}`,
             fileType: checkpoint.mimeType || 'audio/webm',
             category: 'audio',
             meetingId: checkpoint.meetingId,
-          }, { expectedUserId: user?.userId });
+          }, { expectedUserId: user?.userId }), 15000, 'Recording checkpoint URL');
           await putWithProgress(uploadUrl, checkpoint.blob, checkpoint.mimeType || 'audio/webm', () => {});
           setCheckpointError('');
         } catch {

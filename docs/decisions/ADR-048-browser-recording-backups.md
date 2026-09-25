@@ -17,7 +17,9 @@ Stopping can retain audio and final notes for a later upload. Recovery uses the
 original account, compares saved notes, and retains the same uploaded object key
 across acknowledgement retries. A missing/deleted draft clears its old meeting and
 upload identity before creating a new meeting; permission or network errors retain
-that identity. Delete the local copy only after acknowledged
+that identity. An acknowledged audio upload alone does not discard local note/title edits: compare
+those fields first and reopen the notes step on differences without rereading audio.
+Delete the local copy only after acknowledged
 upload completion or explicit deletion. No scheduled TTL or sign-out purge applies:
 those would remove the only copy of a recording the user intentionally deferred.
 
