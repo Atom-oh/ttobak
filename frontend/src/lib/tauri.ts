@@ -413,3 +413,61 @@ export function onNativePcmChunk(handler: (chunk: Uint8Array) => void): () => vo
     handler,
   );
 }
+
+/** A request from the Mac app's local control socket (MCP), forwarded by
+ * Rust as `native-control-request`. See mac-app `control.rs` / ADR-046. */
+export interface NativeControlRequest {
+  requestId: string;
+  action: 'start' | 'stop';
+  params: { title?: string; accountId?: string; upload?: boolean };
+}
+
+export type NativeControlReply =
+  | { ok: true; data: Record<string, unknown> }
+  | { ok: false; error: { code: string; message: string } };
+
+function decodeControlRequest(raw: unknown): NativeControlRequest | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.requestId !== 'string' || (r.action !== 'start' && r.action !== 'stop')) return null;
+  const p = (r.params && typeof r.params === 'object' ? r.params : {}) as Record<string, unknown>;
+  return {
+    requestId: r.requestId,
+    action: r.action,
+    params: {
+      title: typeof p.title === 'string' ? p.title : undefined,
+      accountId: typeof p.accountId === 'string' ? p.accountId : undefined,
+      upload: typeof p.upload === 'boolean' ? p.upload : undefined,
+    },
+  };
+}
+
+/** Subscribe to control requests. Malformed payloads are dropped. */
+export function onNativeControlRequest(handler: (request: NativeControlRequest) => void): () => void {
+  return subscribeTauriEvent<unknown, NativeControlRequest | null>(
+    'native-control-request',
+    decodeControlRequest,
+    (request) => { if (request) handler(request); },
+  );
+}
+
+/** Answers one control request. Older app builds lack the command; ignore. */
+export function replyNativeControl(requestId: string, result: NativeControlReply): Promise<void> {
+  return invoke<void>('control_reply', { requestId, result }).catch((err) => {
+    console.warn('[tauri] control_reply failed', err);
+  });
+}
+
+/** Tells the app whether this SPA can take control requests (signed in). */
+export function markNativeControlReady(loggedIn: boolean): Promise<void> {
+  return invoke<void>('control_ready', { info: { loggedIn } }).catch(() => undefined);
+}
+
+/** Latest recording phase for `status` over the control socket. */
+export function reportNativeControlState(state: {
+  phase: 'idle' | 'starting' | 'recording' | 'notes' | 'creating' | 'saving' | 'uploading' | 'redirecting' | 'error';
+  meetingId?: string | null;
+  error?: string | null;
+}): Promise<void> {
+  return invoke<void>('control_report_state', { state }).catch(() => undefined);
+}

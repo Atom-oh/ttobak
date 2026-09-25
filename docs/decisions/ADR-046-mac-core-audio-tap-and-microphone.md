@@ -50,6 +50,30 @@ memory a late callback could reach. The minimum macOS
 version becomes 14.2, and ScreenCaptureKit and its Screen Recording usage
 string are removed.
 
+## Local control channel
+
+A stdio MCP server (or any same-user process) can start and stop an app
+recording through `~/Library/Application Support/ttobak/control.sock`:
+- The directory is 0700 and the socket 0600. The peer uid must equal the app's
+  uid, and a browser cannot reach a Unix socket.
+- Each connection carries one JSON request line (at most 16 KiB, 5-second read
+  timeout, at most 8 concurrent connections) and gets one JSON response line.
+- A stale socket is removed only after a failed connect probe; a non-socket
+  path is never deleted.
+
+Rust gains no meeting or auth state:
+- `start`/`stop` go to the signed-in SPA as a `native-control-request` event.
+- The SPA answers through `control_reply` and reports readiness
+  (`control_ready`) and its phase (`control_report_state`). Replies and state
+  are validated and bounded before being forwarded.
+- `status` combines that phase with the native recorder snapshot.
+
+A start reuses the record page's normal native path (draft meeting, capture,
+captions). It succeeds once capture runs, focuses the window, and posts a
+notification. A stop uploads by default through the notes-skip path. Busy,
+signed-out and not-ready states are explicit errors; a timeout is reported as
+an unknown outcome.
+
 ## Verification and limits
 
 Mixing and resampling are unit tested on Linux. The macOS module

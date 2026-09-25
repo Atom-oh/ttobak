@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHandle } from 'react';
+import { useState, useRef, useCallback, useEffect, useLayoutEffect, forwardRef, useImperativeHandle } from 'react';
 import { getPreferredMimeType, supportsMediaRecorder, supportsTabAudioCapture } from '@/lib/device';
 import { uploadAudioBlob } from '@/lib/upload';
 import { isTauri, startNativeRecording, stopNativeRecording, releaseRecordingPower, getNativeRecordingStatus, onNativeAudioLevel, onNativePcmChunk as subscribeNativePcmChunk, assertUploadRecordingAvailable, VERSION_SKEW_MESSAGE, type TauriStatusResponse } from '@/lib/tauri';
@@ -17,6 +17,11 @@ import { BrowserRecordingBackup } from '@/lib/browserRecordingBackup';
  */
 export interface RecordButtonHandle {
   resumeAudio: () => void;
+  /** Starts a recording exactly as the button would, for the Mac app's local
+   * control channel (MCP). Native system capture needs no user gesture. */
+  startExternal: () => Promise<void>;
+  /** Stops the active recording exactly as the stop button would. */
+  stopExternal: () => Promise<void>;
 }
 
 interface RecordButtonProps {
@@ -284,6 +289,8 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
     };
   }, [requestWakeLock]);
 
+  const startRecordingRef = useRef<(() => Promise<void>) | null>(null);
+  const stopRecordingRef = useRef<(() => Promise<void>) | null>(null);
   useImperativeHandle(ref, () => ({
     resumeAudio: () => {
       // Called from the recovery banner's onClick -- MUST run synchronously
@@ -307,6 +314,10 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
       // nothing.
       audioStallNotRunningSinceRef.current = null;
     },
+    // Through refs: this handle is created once, while start/stop close over
+    // the current render's props (audioSource, meetingId, disabled).
+    startExternal: () => startRecordingRef.current?.() ?? Promise.resolve(),
+    stopExternal: () => stopRecordingRef.current?.() ?? Promise.resolve(),
   }), []);
 
   // iOS Safari has supported MediaRecorder since 14.3 (audio/mp4 output,
@@ -967,6 +978,11 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
     }
     onRecordingStop?.();
   };
+  // Keep the imperative handle pointed at this render's start/stop.
+  useLayoutEffect(() => {
+    startRecordingRef.current = startRecording;
+    stopRecordingRef.current = stopRecording;
+  });
 
   const handleUpload = async (blob: Blob) => {
     setRecordingState('uploading');

@@ -24,7 +24,7 @@ import { appendMeetingNotes, preparationNotes, qaNoteMarkdown, referenceMarkdown
 import { LeftoverRecordingsCard, formatLeftoverTime } from '@/components/record/LeftoverRecordingsCard';
 import { BrowserRecordingsCard } from '@/components/record/BrowserRecordingsCard';
 import { supportsTabAudioCapture, hasMobileMicConflictRisk } from '@/lib/device';
-import { isTauri, cleanupRecording, type TauriLeftoverRecording } from '@/lib/tauri';
+import { isTauri, cleanupRecording, replyNativeControl, reportNativeControlState, type NativeControlReply, type NativeControlRequest, type TauriLeftoverRecording } from '@/lib/tauri';
 import { useLeftoverRecordings } from '@/hooks/useLeftoverRecordings';
 import { useAudioDevices } from '@/hooks/useAudioDevices';
 import { useRecordingSession } from '@/hooks/useRecordingSession';
@@ -32,6 +32,7 @@ import { useLiveSummary } from '@/hooks/useLiveSummary';
 import { usePostRecording, withTimeout } from '@/hooks/usePostRecording';
 import { uploadsApi, meetingsApi, meetingAccountApi, kbApi } from '@/lib/api';
 import { uploadToS3, notifyUploadComplete, formatFileSize, putWithProgress } from '@/lib/upload';
+import { registerNativeControlHandler } from '@/lib/nativeControl';
 import type { LiveSttProvider } from '@/lib/sttManager';
 
 export default function RecordPage() {
@@ -463,6 +464,95 @@ function RecordPageInner() {
       setSubmittingFinalNotes(false);
     }
   }, [flushNotesQueue, postRecording, notes]);
+
+  // --- Mac app local control (MCP over the app's socket; ADR-046) ---------
+  // A start sets title/source/account first, then fires once that state has
+  // rendered into RecordButton (controlTick); success is the native capture
+  // actually starting (onPermissionGranted), failure is onError or 40 s.
+  const [controlTick, setControlTick] = useState(0);
+  const [controlStarted, setControlStarted] = useState(false);
+  const controlStartRef = useRef<{ request: NativeControlRequest; timer: ReturnType<typeof setTimeout>; fired: boolean } | null>(null);
+  const controlStopRef = useRef<{ requestId: string; upload: boolean } | null>(null);
+  const controlLatestRef = useRef({ step: postRecording.step, meetingId: postRecording.serverMeetingId, browserRecording: session.isRecording });
+  useEffect(() => {
+    controlLatestRef.current = { step: postRecording.step, meetingId: postRecording.serverMeetingId, browserRecording: session.isRecording };
+  });
+  const finishControlStart = useCallback((result: NativeControlReply) => {
+    const pending = controlStartRef.current;
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    controlStartRef.current = null;
+    if (result.ok) setControlStarted(true);
+    void replyNativeControl(pending.request.requestId, result);
+  }, []);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    return registerNativeControlHandler((request) => {
+      const fail = (code: string, message: string) =>
+        void replyNativeControl(request.requestId, { ok: false, error: { code, message } });
+      const latest = controlLatestRef.current;
+      if (request.action === 'start') {
+        if (controlStartRef.current || isMeetingFlowBusy() || latest.browserRecording || latest.step !== null) {
+          fail('busy', 'A recording or its upload is already in progress in the TTOBAK app.');
+          return;
+        }
+        const title = request.params.title?.trim();
+        if (!title) {
+          fail('bad_request', 'title is required');
+          return;
+        }
+        controlStartRef.current = {
+          request: { ...request, params: { ...request.params, title } },
+          fired: false,
+          timer: setTimeout(() => finishControlStart({
+            ok: false, error: { code: 'start_timeout', message: 'The recording did not start within 40 seconds.' },
+          }), 40_000),
+        };
+        setMeetingTitle(title);
+        setAudioSource('system');
+        if (request.params.accountId) setReferenceAccountId(request.params.accountId);
+        setControlTick((n) => n + 1);
+        return;
+      }
+      if (!isNativeRecordingRef.current) {
+        fail('not_recording', 'The TTOBAK app is not recording.');
+        return;
+      }
+      controlStopRef.current = { requestId: request.requestId, upload: request.params.upload !== false };
+      void recordButtonRef.current?.stopExternal();
+    });
+  }, [finishControlStart]); // The handler reads refs; it registers once.
+
+  useEffect(() => {
+    const pending = controlStartRef.current;
+    if (!pending || pending.fired) return;
+    const { title, accountId } = pending.request.params;
+    if (audioSource !== 'system' || meetingTitle !== title || (accountId && referenceAccountId !== accountId)) return;
+    pending.fired = true;
+    void recordButtonRef.current?.startExternal();
+  }, [controlTick, audioSource, meetingTitle, referenceAccountId]);
+
+  useEffect(() => {
+    const stop = controlStopRef.current;
+    if (!stop || (postRecording.step !== 'notes' && postRecording.step !== 'error')) return;
+    controlStopRef.current = null;
+    const meetingId = postRecording.serverMeetingId;
+    if (postRecording.step === 'error') {
+      void replyNativeControl(stop.requestId, {
+        ok: false, error: { code: 'stop_failed', message: postRecording.errorMessage || 'Recording failed.' },
+      });
+      return;
+    }
+    if (stop.upload) void handleFinalNotesSkip();
+    void replyNativeControl(stop.requestId, { ok: true, data: { meetingId, phase: stop.upload ? 'uploading' : 'notes' } });
+  }, [postRecording.step, postRecording.serverMeetingId, postRecording.errorMessage, handleFinalNotesSkip]);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    const phase = isNativeRecording ? 'recording' : (postRecording.step ?? (recordStartInFlight ? 'starting' : 'idle'));
+    void reportNativeControlState({ phase, meetingId: postRecording.serverMeetingId, error: postRecording.errorMessage });
+  }, [isNativeRecording, recordStartInFlight, postRecording.step, postRecording.serverMeetingId, postRecording.errorMessage]);
 
   // Q&A context = user-provided meeting context + live transcript
   const qaContext = contextText.trim()
@@ -1135,6 +1225,11 @@ function RecordPageInner() {
           </div>
         )}
         <div className={`${isUploadMode && !isNativeRecording ? 'hidden' : 'flex'} flex-col items-center justify-center mb-8`}>
+          {controlStarted && isNativeRecording && (
+            <p className="mb-2 text-center text-xs font-medium text-purple-600 dark:text-purple-300">
+              MCP에서 시작한 녹음입니다 — 시스템 오디오와 마이크를 녹음하고 있습니다
+            </p>
+          )}
           <RecordButton
             ref={recordButtonRef}
             meetingId={clientMeetingId}
@@ -1160,6 +1255,7 @@ function RecordPageInner() {
             onNativeWarnings={(warnings) => setNativeWarnings((prev) => [...new Set([...prev, ...warnings])])}
             onNativePcmChunk={session.pushNativePcmChunk}
             onError={(error, opts) => {
+              finishControlStart({ ok: false, error: { code: 'start_failed', message: error } });
               if (opts?.terminal) {
                 setBrowserFinalizing(false);
                 // No audio was captured at all (finalizeRecordingBlob's
@@ -1211,8 +1307,14 @@ function RecordPageInner() {
             onStartAttempt={setRecordStartInFlight}
             onRecordingPause={session.pauseSession}
             onRecordingResume={session.resumeSession}
-            onRecordingStop={() => { session.stopSession(); setTabSharingLabel(null); setIsNativeRecording(false); setAudioStalled(false); }}
-            onPermissionGranted={refreshDevices}
+            onRecordingStop={() => { session.stopSession(); setTabSharingLabel(null); setIsNativeRecording(false); setAudioStalled(false); setControlStarted(false); }}
+            onPermissionGranted={() => {
+              refreshDevices();
+              // Native capture is running: answer a pending MCP start.
+              if (isNativeRecordingRef.current) {
+                finishControlStart({ ok: true, data: { meetingId: controlLatestRef.current.meetingId, phase: 'recording' } });
+              }
+            }}
             onCaptureImage={handleFileAttach}
             onAnalyserReady={setAnalyserNode}
             onCheckpoint={handleCheckpoint}

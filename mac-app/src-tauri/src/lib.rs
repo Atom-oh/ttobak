@@ -25,6 +25,8 @@
 //! `docs/decisions/ADR-024-mac-app-native-streaming-upload-and-system-audio-captions.md`.
 
 mod audio;
+mod control;
+mod control_proto;
 mod error;
 mod leftover;
 mod mix;
@@ -566,6 +568,8 @@ pub fn run() {
     env_logger::init();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
+        .manage(control::ControlState::default())
         .manage(RecorderState {
             recorder: Mutex::new(AudioRecorder::new()),
             recorded_paths: Mutex::new(HashSet::new()),
@@ -582,8 +586,13 @@ pub fn run() {
             cleanup_recording,
             release_recording_power,
             list_leftover_recordings,
+            control::control_ready,
+            control::control_reply,
+            control::control_report_state,
         ])
         .setup(|app| {
+            // MCP control channel (ADR-046); failure only disables it.
+            control::start(app.handle().clone());
             // Adopt any leftover temp WAVs from a previous run (crash, force
             // quit, or a stop that never got a chance to finalize) into
             // `recorded_paths` AND `adopted_paths`, so `upload_recording`/

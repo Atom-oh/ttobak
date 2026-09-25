@@ -41,11 +41,15 @@ stub compiler for objc2's build script; that proves types, not runtime behavior.
 | cleanup_recording | Validated inactive/finalized path; removes WAV and adopted entry |
 | release_recording_power | Releases only the path's idle-sleep protection, preserving recovery data |
 | list_leftover_recordings | Startup-adopted inactive WAVs, newest first; not current-session recordings |
+| control_ready | info {loggedIn}; SPA bridge readiness for the control socket |
+| control_reply | requestId, result {ok, data?/error{code,message}}; answers one native-control-request |
+| control_report_state | state object (phase, meetingId, error), at most 16 KiB; returned by socket status |
 
 finalizing_for_path is deliberately a new per-path field, not the older global
 finalizing flag. Frontend wire compatibility checks rely on that distinction.
 Events are native-audio-level (RMS), native-upload-progress (loaded/total), and
-native-pcm-chunk (16kHz mono PCM for captions). Remote event capability grants must
+native-pcm-chunk (16kHz mono PCM for captions); native-control-request
+({requestId, action start|stop, params}) goes to the main window only. Remote event capability grants must
 match the actual loaded origin; do not add speculative origins.
 
 ## Invariants
