@@ -473,9 +473,9 @@ function RecordPageInner() {
   const [controlStarted, setControlStarted] = useState(false);
   const controlStartRef = useRef<{ request: NativeControlRequest; timer: ReturnType<typeof setTimeout>; fired: boolean } | null>(null);
   const controlStopRef = useRef<{ requestId: string; upload: boolean } | null>(null);
-  const controlLatestRef = useRef({ step: postRecording.step, meetingId: postRecording.serverMeetingId, browserRecording: session.isRecording });
+  const controlLatestRef = useRef({ step: postRecording.step, meetingId: postRecording.serverMeetingId, browserRecording: session.isRecording, importing: uploadProgress !== null });
   useEffect(() => {
-    controlLatestRef.current = { step: postRecording.step, meetingId: postRecording.serverMeetingId, browserRecording: session.isRecording };
+    controlLatestRef.current = { step: postRecording.step, meetingId: postRecording.serverMeetingId, browserRecording: session.isRecording, importing: uploadProgress !== null };
   });
   const finishControlStart = useCallback((result: NativeControlReply) => {
     const pending = controlStartRef.current;
@@ -493,7 +493,9 @@ function RecordPageInner() {
         void replyNativeControl(request.requestId, { ok: false, error: { code, message } });
       const latest = controlLatestRef.current;
       if (request.action === 'start') {
-        if (controlStartRef.current || isMeetingFlowBusy() || latest.browserRecording || latest.step !== null) {
+        // `importing`: a file import navigates away when done, which would
+        // orphan a native capture started meanwhile.
+        if (controlStartRef.current || isMeetingFlowBusy() || latest.browserRecording || latest.step !== null || latest.importing) {
           fail('busy', 'A recording or its upload is already in progress in the TTOBAK app.');
           return;
         }
@@ -513,6 +515,17 @@ function RecordPageInner() {
         setAudioSource('system');
         if (request.params.accountId) setReferenceAccountId(request.params.accountId);
         setControlTick((n) => n + 1);
+        return;
+      }
+      // A stop during the native start (draft meeting created, capture not yet
+      // running) would find no capture to stop and orphan it; a second stop
+      // would steal the first one's reply.
+      if (controlStartRef.current || recordStartInFlightRef.current) {
+        fail('busy', 'The recording is still starting; try again in a moment.');
+        return;
+      }
+      if (controlStopRef.current) {
+        fail('busy', 'A stop is already in progress.');
         return;
       }
       if (!isNativeRecordingRef.current) {

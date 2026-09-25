@@ -9,27 +9,33 @@ import type { NativeControlRequest } from './tauri';
 
 type Handler = (request: NativeControlRequest) => void;
 
+/** Queued starts older than this are dropped: the app's socket waiter
+ * (45 s) has already given up on them. */
+const QUEUED_START_MAX_AGE_MS = 40_000;
+
 let handler: Handler | null = null;
-let queued: NativeControlRequest | null = null;
+let queued: { request: NativeControlRequest; at: number } | null = null;
 
 export function registerNativeControlHandler(next: Handler): () => void {
   handler = next;
   const pending = queued;
   queued = null;
-  if (pending) next(pending);
+  if (pending && Date.now() - pending.at < QUEUED_START_MAX_AGE_MS) next(pending.request);
   return () => {
     if (handler === next) handler = null;
   };
 }
 
-/** Delivers a request; returns false when no page handles it yet. Only a
- * start is kept (the latest) until a handler registers — there is nothing to
- * stop without the record page. */
-export function dispatchNativeControl(request: NativeControlRequest): boolean {
+/** Delivers a request. When no page handles it yet, a start is queued (a
+ * stop has nothing to act on) and `superseded` names an earlier queued start
+ * that the caller must answer, so no request is left without a reply. */
+export function dispatchNativeControl(request: NativeControlRequest): { handled: boolean; superseded?: NativeControlRequest } {
   if (handler) {
     handler(request);
-    return true;
+    return { handled: true };
   }
-  if (request.action === 'start') queued = request;
-  return false;
+  if (request.action !== 'start') return { handled: false };
+  const superseded = queued?.request;
+  queued = { request, at: Date.now() };
+  return { handled: false, superseded };
 }

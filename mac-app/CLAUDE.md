@@ -41,7 +41,7 @@ stub compiler for objc2's build script; that proves types, not runtime behavior.
 | cleanup_recording | Validated inactive/finalized path; removes WAV and adopted entry |
 | release_recording_power | Releases only the path's idle-sleep protection, preserving recovery data |
 | list_leftover_recordings | Startup-adopted inactive WAVs, newest first; not current-session recordings |
-| control_ready | info {loggedIn}; SPA bridge readiness for the control socket |
+| control_ready | info {loggedIn, mounted?}; SPA bridge readiness (mounted:false on unload clears it) |
 | control_reply | requestId, result {ok, data?/error{code,message}}; answers one native-control-request |
 | control_report_state | state object (phase, meetingId, error), at most 16 KiB; returned by socket status |
 

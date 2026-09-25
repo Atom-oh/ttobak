@@ -458,9 +458,10 @@ export function replyNativeControl(requestId: string, result: NativeControlReply
   });
 }
 
-/** Tells the app whether this SPA can take control requests (signed in). */
-export function markNativeControlReady(loggedIn: boolean): Promise<void> {
-  return invoke<void>('control_ready', { info: { loggedIn } }).catch(() => undefined);
+/** Tells the app whether this SPA can take control requests (signed in), or
+ * with `mounted: false` that the page is going away. */
+export function markNativeControlReady(loggedIn: boolean, mounted = true): Promise<void> {
+  return invoke<void>('control_ready', { info: { loggedIn, mounted } }).catch(() => undefined);
 }
 
 /** Latest recording phase for `status` over the control socket. */

@@ -250,6 +250,11 @@ fn notify_started(app: &AppHandle, title: &str) {
 
 #[tauri::command]
 pub fn control_ready(info: Value, control: State<'_, ControlState>) {
+    // `mounted: false`: the page is unloading, so nothing listens for requests.
+    if info.get("mounted").and_then(Value::as_bool) == Some(false) {
+        *control.ready.lock() = None;
+        return;
+    }
     let logged_in = info
         .get("loggedIn")
         .and_then(Value::as_bool)

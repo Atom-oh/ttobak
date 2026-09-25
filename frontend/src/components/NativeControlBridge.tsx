@@ -20,6 +20,19 @@ export function NativeControlBridge() {
     void markNativeControlReady(isAuthenticated);
   }, [isAuthenticated, isLoading]);
 
+  // Not ready while the page is going away (reload, navigation out of the
+  // app), so the app answers app_not_ready instead of waiting on a page that
+  // no longer listens.
+  useEffect(() => {
+    if (!isTauri()) return;
+    const leave = () => void markNativeControlReady(false, false);
+    window.addEventListener('pagehide', leave);
+    return () => {
+      window.removeEventListener('pagehide', leave);
+      leave();
+    };
+  }, []);
+
   useEffect(() => {
     if (!isTauri()) return;
     return onNativeControlRequest((request) => {
@@ -30,7 +43,14 @@ export function NativeControlBridge() {
         });
         return;
       }
-      if (dispatchNativeControl(request)) return;
+      const { handled, superseded } = dispatchNativeControl(request);
+      if (superseded) {
+        void replyNativeControl(superseded.requestId, {
+          ok: false,
+          error: { code: 'busy', message: 'A newer start request replaced this one.' },
+        });
+      }
+      if (handled) return;
       if (request.action === 'stop') {
         void replyNativeControl(request.requestId, {
           ok: false,
