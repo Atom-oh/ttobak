@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect, type MutableRefObject } from 'react';
 import { useRouter } from 'next/navigation';
-import { meetingAccountApi, meetingsApi, uploadsApi } from '@/lib/api';
+import { ApiError, meetingAccountApi, meetingsApi, uploadsApi } from '@/lib/api';
 import { preparationNotes, codePointLength, MAX_MEETING_NOTES } from '@/lib/meetingReferences';
 import { RecordingNotes } from '@/lib/recordingNotes';
 import { readSavedMeetingNotes } from '@/lib/meetingNotes';
@@ -406,10 +406,11 @@ export function usePostRecording({
 
   /** Called when a browser-mode (mic/tab) recording blob is ready — pause
    * for notes input. */
-  const handleBlobReady = useCallback(async (blob: Blob, mimeType: string, backup?: BrowserRecordingBackup) => {
-    if (!mountedRef.current) {
+  const captureBlobGeneration = useCallback(() => flowGenerationRef.current, []);
+  const handleBlobReady = useCallback((blob: Blob, mimeType: string, backup?: BrowserRecordingBackup, generation?: number) => {
+    if (!mountedRef.current || (generation !== undefined && generation !== flowGenerationRef.current)) {
       backup?.release();
-      return;
+      return false;
     }
     notesUserIdRef.current = backup?.metadata.userId || notesUserIdRef.current;
     pendingAudioRef.current = { kind: 'blob', blob, mimeType, backup };
@@ -417,39 +418,56 @@ export function usePostRecording({
     setCanKeepLocally(!!backup);
     putDoneRef.current = null;
     setStep('notes');
+    return true;
   }, []);
 
   const restoreBrowserRecording = useCallback(async (backup: BrowserRecordingBackup) => {
-    const metadata = backup.metadata;
+    const generation = ++flowGenerationRef.current;
+    const isCurrent = () => mountedRef.current && generation === flowGenerationRef.current;
+    let metadata = backup.metadata;
     notesUserIdRef.current = metadata.userId;
     setPendingAccountValue(null);
     preparationRef.current = { notes: metadata.notes };
-    let currentNotes = metadata.notes;
+    let meeting: Awaited<ReturnType<typeof meetingsApi.get>> | undefined;
     if (metadata.meetingId) {
-      const meeting = await meetingsApi.get(metadata.meetingId, { expectedUserId: metadata.userId });
+      try {
+        meeting = await meetingsApi.get(metadata.meetingId, { expectedUserId: metadata.userId });
+      } catch (error) {
+        if (!(error instanceof ApiError) || error.status !== 404) throw error;
+        if (!isCurrent()) { backup.release(); return; }
+        await backup.update({ meetingId: undefined, uploadKey: undefined });
+        metadata = backup.metadata;
+      }
+    }
+    if (!isCurrent()) { backup.release(); return; }
+    if (meeting && metadata.meetingId) {
       const keys = meeting.audioKeys?.length ? meeting.audioKeys : meeting.audioKey ? [meeting.audioKey] : [];
       if (keys.length && (!metadata.uploadKey || !keys.includes(metadata.uploadKey))) {
         throw new Error('기존 미팅에 다른 녹음이 저장되어 있습니다. 기기 보관본을 다운로드하여 확인해 주세요.');
       }
       if (metadata.uploadKey && keys.includes(metadata.uploadKey)) {
         await backup.remove();
-        router.push(`/meeting/${metadata.meetingId}`);
+        if (isCurrent()) router.push(`/meeting/${metadata.meetingId}`);
         return;
       }
       persistedMeetingIdRef.current = metadata.meetingId;
       setServerMeetingId(metadata.meetingId);
-      currentNotes = meeting.notes || '';
+      const currentNotes = meeting.notes || '';
       notesWriter.initialize(metadata.meetingId, currentNotes, meeting.supportsNotesComparison === true, meeting.notesRevision || '');
       setCreatedNotes({ meetingId: metadata.meetingId, notes: metadata.notes });
       setNotesConflict(metadata.notes !== currentNotes ? currentNotes : null);
     } else {
       persistedMeetingIdRef.current = null;
       setServerMeetingId(null);
+      notesWriter.reset();
+      setCreatedNotes(null);
+      setNotesConflict(null);
       preparationRef.current = { notes: metadata.notes };
     }
     const blob = await backup.readBlob();
+    if (!isCurrent()) { backup.release(); return; }
     submittedNotesRef.current = undefined;
-    flowGenerationRef.current++;
+    releasePendingPower(pendingAudioRef.current);
     pendingAudioRef.current = { kind: 'blob', blob, mimeType: metadata.mimeType, backup };
     putDoneRef.current = metadata.uploadKey ? { key: metadata.uploadKey } : null;
     setHasPendingAudio(true);
@@ -650,6 +668,7 @@ export function usePostRecording({
     canKeepLocally,
     keepLocally,
     restoreBrowserRecording,
+    captureBlobGeneration,
     handleBlobReady,
     handleNativeFileReady,
     handleNotesSubmit,
