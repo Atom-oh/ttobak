@@ -499,7 +499,7 @@ func (s *UploadService) RecoverMeeting(ctx context.Context, userID, meetingID st
 
 	// Copy progress file to a final filename (triggers EventBridge S3 event → transcribe Lambda),
 	// preserving whatever extension the progress file actually had.
-	finalKey := fmt.Sprintf("audio/%s/%s/recording_recovered_%d.%s", userID, meetingID, time.Now().UnixMilli(), ext)
+	finalKey := fmt.Sprintf("audio/%s/%s/recording_recovered_%s.%s", userID, meetingID, strings.ReplaceAll(uuid.NewString(), "-", ""), ext)
 	_, err = s.s3Client.CopyObject(ctx, &s3.CopyObjectInput{
 		Bucket:     aws.String(s.bucketName),
 		Key:        aws.String(finalKey),
@@ -510,11 +510,13 @@ func (s *UploadService) RecoverMeeting(ctx context.Context, userID, meetingID st
 	}
 
 	// Atomic partial update — set audio key and transition to transcribing
-	return s.repo.UpdateMeetingFieldsIfMatch(ctx, userID, meetingID,
-		map[string]interface{}{"status": meeting.Status, "updatedAt": meeting.UpdatedAt.Format(time.RFC3339Nano)}, map[string]interface{}{
-			"audioKey": finalKey,
-			"status":   model.StatusTranscribing,
-		})
+	err = s.repo.BindRecoveredRecording(ctx, meeting, finalKey)
+	if errors.Is(err, repository.ErrConditionFailed) {
+		if _, cleanupErr := s.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(s.bucketName), Key: aws.String(finalKey)}); cleanupErr != nil {
+			return errors.Join(err, ErrRecordingRecoveryCleanup, cleanupErr)
+		}
+	}
+	return err
 }
 
 // findProgressFile locates a recording checkpoint under

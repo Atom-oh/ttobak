@@ -317,7 +317,7 @@ func main() {
 
 // A copied checkpoint can emit its S3 event before RecoverMeeting commits the
 // canonical key. Retry that event; discard a copy that lost the state CAS.
-var recoveredAudioPattern = regexp.MustCompile(`^audio/[^/]+/[^/]+/recording_recovered_[0-9]+\.(webm|m4a|ogg)$`)
+var recoveredAudioPattern = regexp.MustCompile(`^audio/[^/]+/[^/]+/recording_recovered_(?:[0-9]+|[0-9a-f]{32})\.(webm|m4a|ogg)$`)
 
 func recoveryAudioEvent(meeting *model.Meeting, key string) (bool, error) {
 	if !recoveredAudioPattern.MatchString(key) {
