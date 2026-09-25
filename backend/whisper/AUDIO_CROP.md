@@ -3,7 +3,9 @@
 The production Whisper image supports an optional `AUDIO_CROP=1` mode. Normal
 transcription and its pinned model/dispatcher remain unchanged. API orchestration
 and user-facing activation are separate changes; this worker mode is unused by
-the current normal upload path. Deploy the transcribe consumer filter before
+the current normal upload path. API readers recognize crop metadata and reject
+replacement audio, checkpoint recovery, rediarization and recording-state resets.
+Ordinary S3 events for crop meetings are ignored. Deploy the transcribe consumer filter before
 running crop-mode tasks: exact crop_result WAVs bypass ordinary S3-triggered STT.
 
 The input is an owner-partitioned meeting with status transcribing and a queued
@@ -18,7 +20,9 @@ A run-bound heartbeat updates the meeting every 30 seconds while media work and
 upload run. Table operations are serialized by stopping the heartbeat before
 publication. The crop-specific DynamoDB client uses bounded connection/read timeouts
 and one attempt, so retries cannot disguise a successful binding as rejection.
-Expired queued work is not revived. A lost claim cannot publish; expired owned runs
+Expired queued work is not revived. Failure fencing requires no bound audio, so
+a replacement binding cannot be regressed. Once audio is bound, an unconfirmed
+transcript write leaves status transcribing so any committed S3 event can proceed. A lost claim cannot publish; expired owned runs
 can still be marked failed. Definitive rejection deletes the unique candidate;
 ambiguous binding retains it. Cleanup failures are reported.
 

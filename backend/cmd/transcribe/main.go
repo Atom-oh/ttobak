@@ -159,6 +159,9 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	if err != nil {
 		return fmt.Errorf("read meeting before transcription: %w", err)
 	}
+	if meeting != nil && meeting.AudioCrop != nil {
+		return nil
+	}
 	if skip, err := recoveryAudioEvent(meeting, key); skip || err != nil {
 		return err
 	}
