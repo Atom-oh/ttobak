@@ -389,54 +389,76 @@ pub mod macos {
         }
 
         /// Stops and destroys everything; returns the first failing call.
+        ///
+        /// The callback context is freed only once the IOProc is confirmed
+        /// detached (device stopped and IOProc destroyed). If either call
+        /// fails, the HAL may still invoke the IOProc, so the context and the
+        /// device objects are deliberately leaked; only the queue is closed,
+        /// which ends the worker and makes any later callback a no-op.
         fn teardown(&mut self) -> Result<(), AppError> {
-            let mut first_err: Option<AppError> = None;
-            let mut note = |what: &str, status: i32| {
-                if status != 0 && first_err.is_none() {
-                    first_err = Some(AppError::Backend(format!(
-                        "{what} failed: OSStatus {status}"
-                    )));
-                }
+            let fail = |what: &str, status: i32| {
+                AppError::Backend(format!("{what} failed: OSStatus {status}"))
             };
             unsafe {
                 if self.started {
                     // Synchronous from a non-IO thread: returns after any
                     // in-flight IOProc invocation has finished.
-                    note(
-                        "AudioDeviceStop",
-                        AudioDeviceStop(self.aggregate, self.proc_id),
-                    );
+                    let status = AudioDeviceStop(self.aggregate, self.proc_id);
+                    if status != 0 {
+                        self.abandon();
+                        return Err(fail("AudioDeviceStop", status));
+                    }
                     self.started = false;
                 }
                 if self.proc_id.is_some() {
-                    note(
-                        "AudioDeviceDestroyIOProcID",
-                        AudioDeviceDestroyIOProcID(self.aggregate, self.proc_id),
-                    );
+                    let status = AudioDeviceDestroyIOProcID(self.aggregate, self.proc_id);
+                    if status != 0 {
+                        self.abandon();
+                        return Err(fail("AudioDeviceDestroyIOProcID", status));
+                    }
                     self.proc_id = None;
                 }
-                if self.aggregate != 0 {
-                    note(
-                        "AudioHardwareDestroyAggregateDevice",
-                        AudioHardwareDestroyAggregateDevice(self.aggregate),
-                    );
-                    self.aggregate = 0;
-                }
-                if self.tap != 0 {
-                    note(
-                        "AudioHardwareDestroyProcessTap",
-                        AudioHardwareDestroyProcessTap(self.tap),
-                    );
-                    self.tap = 0;
-                }
+                // Detached: nothing can call the IOProc any more.
                 if !self.ctx.is_null() {
                     let ctx = Box::from_raw(self.ctx);
                     self.ctx = std::ptr::null_mut();
                     // Closing the sender ends the worker's receive loop.
                     ctx.tx.lock().map(|mut tx| tx.take()).ok();
                 }
+                let mut first_err = None;
+                if self.aggregate != 0 {
+                    let status = AudioHardwareDestroyAggregateDevice(self.aggregate);
+                    if status != 0 {
+                        first_err = Some(fail("AudioHardwareDestroyAggregateDevice", status));
+                    }
+                    self.aggregate = 0;
+                }
+                if self.tap != 0 {
+                    let status = AudioHardwareDestroyProcessTap(self.tap);
+                    if status != 0 && first_err.is_none() {
+                        first_err = Some(fail("AudioHardwareDestroyProcessTap", status));
+                    }
+                    self.tap = 0;
+                }
+                first_err.map_or(Ok(()), Err)
             }
-            first_err.map_or(Ok(()), Err)
+        }
+
+        /// Detachment failed: close the queue through the still-valid context
+        /// and forget every handle, leaking the context and device objects so
+        /// a late IOProc call never touches freed memory.
+        fn abandon(&mut self) {
+            if !self.ctx.is_null() {
+                // SAFETY: never freed on this path, so the pointer stays valid.
+                let ctx = unsafe { &*self.ctx };
+                ctx.tx.lock().map(|mut tx| tx.take()).ok();
+            }
+            log::error!("Core Audio IOProc detachment failed; leaking its context and devices");
+            self.ctx = std::ptr::null_mut();
+            self.started = false;
+            self.proc_id = None;
+            self.aggregate = 0;
+            self.tap = 0;
         }
     }
 
@@ -473,6 +495,12 @@ pub mod macos {
 
             // 1. Tap of every process except this app (its own UI sounds).
             let own = own_process_object();
+            if own.is_none() {
+                start_warnings.push(
+                    "Could not identify this app's audio process; its own sounds may be recorded."
+                        .into(),
+                );
+            }
             let exclude: Vec<objc2::rc::Retained<NSNumber>> = own
                 .into_iter()
                 .map(NSNumber::numberWithUnsignedInt)
@@ -610,7 +638,13 @@ pub mod macos {
             )
             .filter(|r| r.is_finite() && *r >= 8_000.0 && *r <= 384_000.0)
             .map(|r| r.round() as u32)
-            .unwrap_or(FALLBACK_SAMPLE_RATE);
+            .unwrap_or_else(|| {
+                start_warnings.push(format!(
+                    "Could not read the capture sample rate; assuming {FALLBACK_SAMPLE_RATE} Hz \
+                     (playback speed may be wrong)."
+                ));
+                FALLBACK_SAMPLE_RATE
+            });
 
             // 3. Writer + worker before the IOProc can deliver anything.
             let spec = WavSpec {
@@ -630,6 +664,8 @@ pub mod macos {
                 Arc::clone(&stats),
                 app,
                 sample_rate,
+                generation,
+                Arc::clone(&generation_counter),
             )?;
 
             let ctx = Box::into_raw(Box::new(CallbackCtx {
@@ -886,6 +922,8 @@ pub mod macos {
         stats: Arc<Stats>,
         app: AppHandle,
         sample_rate: u32,
+        my_generation: u64,
+        current_generation: Arc<AtomicU64>,
     ) -> Result<JoinHandle<()>, AppError> {
         std::thread::Builder::new()
             .name("ttobak-audio-writer".into())
@@ -920,6 +958,13 @@ pub mod macos {
                         }
                     }
                     stats.samples_written.fetch_add(written, Ordering::Relaxed);
+
+                    // Superseded (stopped, maybe a newer recording started):
+                    // keep draining into this WAV, but never emit — events
+                    // are global and would leak into the newer recording.
+                    if current_generation.load(Ordering::Relaxed) != my_generation {
+                        continue;
+                    }
 
                     let now = now_ms();
                     if now.saturating_sub(last_emit_ms) >= LEVEL_EMIT_INTERVAL_MS {

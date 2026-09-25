@@ -74,7 +74,7 @@ echo
 echo "Done. Re-signed ${#APPS[@]} bundle(s)."
 echo
 echo "First-run permission notes:"
-echo "  - macOS will prompt for Microphone and Screen Recording on first use."
+echo "  - macOS will prompt for Microphone and System Audio Recording on first use."
 echo "  - If prompts don't appear (stale TCC cache), reset and relaunch:"
 echo "      tccutil reset Microphone   click.atomai.ttobak.mac"
 echo "      tccutil reset Camera       click.atomai.ttobak.mac"

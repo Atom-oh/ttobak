@@ -41,8 +41,12 @@ Teardown order is fixed:
 3. Close the channel, join the worker, and finalize the WAV.
 
 Start and stop responses gain an additive `warnings` field: no microphone,
-silent system audio or microphone (typically a denied permission), and dropped
-buffers. Zero callbacks and zero samples remain hard failures. The minimum macOS
+silent system audio or microphone (typically a denied permission), dropped
+buffers, an unidentified own process, or an unreadable sample rate. The record
+page shows them; zero callbacks and zero samples remain hard failures. The
+worker emits events only while its recording generation is current, and a
+failed stop or IOProc destroy leaks the callback context rather than freeing
+memory a late callback could reach. The minimum macOS
 version becomes 14.2, and ScreenCaptureKit and its Screen Recording usage
 string are removed.
 

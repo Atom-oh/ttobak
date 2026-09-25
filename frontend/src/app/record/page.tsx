@@ -63,6 +63,8 @@ function RecordPageInner() {
   // so it should never be the default anywhere (ADR-030).
   const [liveSttProvider, setLiveSttProvider] = useState<LiveSttProvider>('transcribe-streaming');
   const [audioSource, setAudioSource] = useState<'mic' | 'tab' | 'system'>('mic');
+  // Mac app capture notes (silent source, no microphone); reset per recording.
+  const [nativeWarnings, setNativeWarnings] = useState<string[]>([]);
   const [tabSharingLabel, setTabSharingLabel] = useState<string | null>(null);
   // Tauri System Audio mode has no MediaStream, so `session.isRecording`
   // (which only flips true inside session.startSession, given a stream)
@@ -574,6 +576,7 @@ function RecordPageInner() {
   };
 
   const handleRecordingStart = async (stream: MediaStream | null) => {
+    setNativeWarnings([]);
     if (stream && audioSource === 'tab') {
       const label = stream.getAudioTracks()[0]?.label || 'Tab Audio';
       setTabSharingLabel(label);
@@ -1097,6 +1100,11 @@ function RecordPageInner() {
             otherwise the upload UI's own `!isNativeRecording` guard above
             hides IT too, leaving no Stop control on screen at all. */}
         <div className={`${isUploadMode && !isNativeRecording ? 'hidden' : 'flex'} flex-col items-center justify-center mb-8`}>
+          {nativeWarnings.length > 0 && (
+            <div role="status" className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-900/20 dark:text-amber-200">
+              {nativeWarnings.map((warning) => <p key={warning}>⚠️ {warning}</p>)}
+            </div>
+          )}
           <RecordButton
             ref={recordButtonRef}
             meetingId={clientMeetingId}
@@ -1110,6 +1118,7 @@ function RecordPageInner() {
             onRecordingComplete={postRecording.handleRecordingComplete}
             onBlobReady={postRecording.handleBlobReady}
             onNativeFileReady={postRecording.handleNativeFileReady}
+            onNativeWarnings={(warnings) => setNativeWarnings((prev) => [...new Set([...prev, ...warnings])])}
             onNativePcmChunk={session.pushNativePcmChunk}
             onError={(error, opts) => {
               if (opts?.terminal) {
