@@ -35,6 +35,10 @@ interface RecordButtonProps {
    * `lib/tauri.ts`'s `uploadRecording` and `usePostRecording`'s
    * `handleNativeFileReady`. */
   onNativeFileReady?: (path: string, byteSize: number) => void;
+  /** Non-fatal capture notes from the Mac app (no microphone, a silent
+   * source such as a denied System Audio Recording permission, dropped
+   * buffers). Newer app builds only. */
+  onNativeWarnings?: (warnings: string[]) => void;
   /** Called for each 16kHz mono 16-bit PCM chunk emitted from Rust during a
    * System Audio recording — feeds `useRecordingSession`'s
    * `pushNativePcmChunk` for live captions via Amazon Transcribe
@@ -118,6 +122,7 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
   backupNotes = '',
   serverMeetingId,
   onNativeFileReady,
+  onNativeWarnings,
   onNativePcmChunk,
   onError,
   onRecordingStart,
@@ -496,6 +501,7 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
           : null;
 
         const resp = await startNativeRecording(meetingId);
+        if (resp.warnings?.length) onNativeWarnings?.(resp.warnings);
         nativeTempPathRef.current = resp.temp_path;
         isRecordingRef.current = true;
         setRecordingState('recording');
@@ -841,6 +847,7 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
       nativeLevelRef.current = 0;
       try {
         const resp = await stopNativeRecording();
+        if (resp.warnings?.length) onNativeWarnings?.(resp.warnings);
         nativeTempPathRef.current = null;
         if (resp.stop_timed_out) {
           // The Rust stop task still owns the writer and keeps appending in
