@@ -48,3 +48,6 @@ Local Go, Python/FFmpeg, browser and CDK tests establish code behavior.
 The opt-in Python integration test uses only a loopback DynamoDB Local endpoint
 (`DYNAMODB_LOCAL_ENDPOINT`) to validate real worker expressions and publication. Synthetic
 media and a stub recognizer do not establish production GPU/model acceptance.
+
+See [worker publication and recovery](../../backend/whisper/AUDIO_CROP.md) for
+heartbeat, ambiguous publication and interrupted-run reconciliation details.
