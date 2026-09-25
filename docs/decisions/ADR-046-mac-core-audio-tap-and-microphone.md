@@ -71,8 +71,10 @@ Rust gains no meeting or auth state:
 A start reuses the record page's normal native path (draft meeting, capture,
 captions). It succeeds once capture runs, focuses the window, and posts a
 notification. A stop uploads by default through the notes-skip path. Busy,
-signed-out and not-ready states are explicit errors; a timeout is reported as
-an unknown outcome.
+signed-out and not-ready states are explicit errors, and a capture no page
+controls (record page closed) is `recording_unowned`, never `not_recording`; a
+timeout is reported as an unknown outcome. Remote starts run only on the
+recording screen, not during a file import.
 
 ## Verification and limits
 

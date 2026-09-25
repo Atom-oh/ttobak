@@ -70,6 +70,9 @@ pub enum Code {
     BadRequest,
     UnsupportedVersion,
     AppNotReady,
+    LoginRequired,
+    /// Native capture runs but no page can control it (record page closed).
+    RecordingUnowned,
     Timeout,
     Internal,
 }
@@ -80,6 +83,8 @@ impl Code {
             Code::BadRequest => "bad_request",
             Code::UnsupportedVersion => "unsupported_version",
             Code::AppNotReady => "app_not_ready",
+            Code::LoginRequired => "login_required",
+            Code::RecordingUnowned => "recording_unowned",
             Code::Timeout => "timeout",
             Code::Internal => "internal",
         }
@@ -237,10 +242,19 @@ pub fn error_line(id: Option<&str>, code: &str, message: &str) -> String {
     )
 }
 
-/// Forwards an SPA reply: `{ok, data?, error?}` merged under v/id.
+/// Forwards an SPA reply: only its `ok`, `data` and `error` fields, so a reply
+/// can never overwrite the envelope's `v`/`id`.
 pub fn spa_reply_line(id: &str, reply: &Value) -> String {
     match validate_spa_reply(reply) {
-        Ok(()) => response_line(Some(id), reply.clone()),
+        Ok(()) => {
+            let mut body = Map::new();
+            for key in ["ok", "data", "error"] {
+                if let Some(value) = reply.get(key) {
+                    body.insert(key.into(), value.clone());
+                }
+            }
+            response_line(Some(id), Value::Object(body))
+        }
         Err(reason) => error_line(
             Some(id),
             Code::Internal.as_str(),
@@ -388,6 +402,9 @@ mod tests {
             let v: Value = serde_json::from_str(spa_reply_line("a", &bad).trim_end()).unwrap();
             assert_eq!(v["error"]["code"], "internal", "{bad}");
         }
+        let spoof = json!({"ok": true, "v": 9, "id": "other", "extra": 1});
+        let v: Value = serde_json::from_str(spa_reply_line("a", &spoof).trim_end()).unwrap();
+        assert_eq!(v, json!({"v": 1, "id": "a", "ok": true}));
         let big = json!({"ok": true, "data": "x".repeat(MAX_SPA_PAYLOAD_BYTES)});
         assert!(validate_spa_reply(&big).is_err());
     }

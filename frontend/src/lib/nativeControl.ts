@@ -26,6 +26,11 @@ export function registerNativeControlHandler(next: Handler): () => void {
   };
 }
 
+/** Forgets a queued start (e.g. after sign-out). */
+export function clearQueuedNativeControl(): void {
+  queued = null;
+}
+
 /** Delivers a request. When no page handles it yet, a start is queued (a
  * stop has nothing to act on) and `superseded` names an earlier queued start
  * that the caller must answer, so no request is left without a reply. */

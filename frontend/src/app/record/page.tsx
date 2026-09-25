@@ -473,9 +473,9 @@ function RecordPageInner() {
   const [controlStarted, setControlStarted] = useState(false);
   const controlStartRef = useRef<{ request: NativeControlRequest; timer: ReturnType<typeof setTimeout>; fired: boolean } | null>(null);
   const controlStopRef = useRef<{ requestId: string; upload: boolean } | null>(null);
-  const controlLatestRef = useRef({ step: postRecording.step, meetingId: postRecording.serverMeetingId, browserRecording: session.isRecording, importing: uploadProgress !== null });
+  const controlLatestRef = useRef({ step: postRecording.step, meetingId: postRecording.serverMeetingId, browserRecording: session.isRecording, importing: uploadProgress !== null, uploadMode: isUploadMode });
   useEffect(() => {
-    controlLatestRef.current = { step: postRecording.step, meetingId: postRecording.serverMeetingId, browserRecording: session.isRecording, importing: uploadProgress !== null };
+    controlLatestRef.current = { step: postRecording.step, meetingId: postRecording.serverMeetingId, browserRecording: session.isRecording, importing: uploadProgress !== null, uploadMode: isUploadMode };
   });
   const finishControlStart = useCallback((result: NativeControlReply) => {
     const pending = controlStartRef.current;
@@ -495,6 +495,12 @@ function RecordPageInner() {
       if (request.action === 'start') {
         // `importing`: a file import navigates away when done, which would
         // orphan a native capture started meanwhile.
+        // Upload mode is a file-import screen; its import would navigate away
+        // mid-capture, so remote starts only run on the recording screen.
+        if (latest.uploadMode) {
+          fail('busy', 'The TTOBAK app is on the file upload screen; open the recording screen first.');
+          return;
+        }
         if (controlStartRef.current || isMeetingFlowBusy() || latest.browserRecording || latest.step !== null || latest.importing) {
           fail('busy', 'A recording or its upload is already in progress in the TTOBAK app.');
           return;
@@ -561,6 +567,11 @@ function RecordPageInner() {
     void replyNativeControl(stop.requestId, { ok: true, data: { meetingId, phase: stop.upload ? 'uploading' : 'notes' } });
   }, [postRecording.step, postRecording.serverMeetingId, postRecording.errorMessage, handleFinalNotesSkip]);
 
+  useEffect(() => {
+    if (!isTauri()) return;
+    // Leaving the record page: its phase no longer describes anything.
+    return () => { void reportNativeControlState({ phase: 'idle' }); };
+  }, []);
   useEffect(() => {
     if (!isTauri()) return;
     const phase = isNativeRecording ? 'recording' : (postRecording.step ?? (recordStartInFlight ? 'starting' : 'idle'));
@@ -836,6 +847,8 @@ function RecordPageInner() {
   };
 
   const handleAudioUpload = async (files: File[]) => {
+    // A recording (including a remote start) owns the page's meeting flow.
+    if (isMeetingFlowBusy()) return;
     if (files.length === 0) return;
     const audioExtensions = ['.m4a', '.mp3', '.wav', '.webm', '.ogg', '.flac', '.aac', '.mp4', '.caf'];
     const isAudio = (f: File) =>

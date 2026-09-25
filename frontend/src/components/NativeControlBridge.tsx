@@ -3,7 +3,7 @@
 import { useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
-import { dispatchNativeControl } from '@/lib/nativeControl';
+import { clearQueuedNativeControl, dispatchNativeControl } from '@/lib/nativeControl';
 import { isTauri, markNativeControlReady, onNativeControlRequest, replyNativeControl } from '@/lib/tauri';
 
 /** Mac app only: receives MCP control requests forwarded by the app's local
@@ -16,6 +16,7 @@ export function NativeControlBridge() {
 
   useEffect(() => {
     authenticatedRef.current = isAuthenticated;
+    if (!isAuthenticated) clearQueuedNativeControl();
     if (!isTauri() || isLoading) return;
     void markNativeControlReady(isAuthenticated);
   }, [isAuthenticated, isLoading]);

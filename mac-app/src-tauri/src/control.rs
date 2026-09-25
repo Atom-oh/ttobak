@@ -158,7 +158,7 @@ async fn dispatch(app: &AppHandle, request: proto::Request) -> String {
         Some(false) => {
             return proto::error_line(
                 Some(&request.id),
-                "login_required",
+                Code::LoginRequired.as_str(),
                 "Sign in to TTOBAK in the Mac app first.",
             )
         }
@@ -203,6 +203,24 @@ async fn dispatch(app: &AppHandle, request: proto::Request) -> String {
                 (&request.action, reply.get("ok").and_then(Value::as_bool))
             {
                 notify_started(app, title);
+            }
+            // The page only knows about recordings it controls; a capture it
+            // lost (record page closed mid-recording) must not read as idle.
+            let says_not_recording =
+                reply.pointer("/error/code").and_then(Value::as_str) == Some("not_recording");
+            if says_not_recording
+                && app
+                    .state::<RecorderState>()
+                    .recorder
+                    .lock()
+                    .snapshot()
+                    .recording
+            {
+                return proto::error_line(
+                    Some(&request.id),
+                    Code::RecordingUnowned.as_str(),
+                    "A recording is running but no TTOBAK page controls it; stop it from the app's recording screen, or quit the app to finalize it.",
+                );
             }
             proto::spa_reply_line(&request.id, &reply)
         }
@@ -253,6 +271,7 @@ pub fn control_ready(info: Value, control: State<'_, ControlState>) {
     // `mounted: false`: the page is unloading, so nothing listens for requests.
     if info.get("mounted").and_then(Value::as_bool) == Some(false) {
         *control.ready.lock() = None;
+        *control.last_state.lock() = None;
         return;
     }
     let logged_in = info
