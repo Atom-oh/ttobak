@@ -22,15 +22,16 @@ import { MeetingContextInput } from '@/components/record/MeetingContextInput';
 import { SAPreparation } from '@/components/record/SAPreparation';
 import { appendMeetingNotes, preparationNotes, qaNoteMarkdown, referenceMarkdown, type MeetingReference, type QAReferenceEvidence, type QuestionDraft, codePointLength, MAX_MEETING_NOTES } from '@/lib/meetingReferences';
 import { LeftoverRecordingsCard, formatLeftoverTime } from '@/components/record/LeftoverRecordingsCard';
+import { BrowserRecordingsCard } from '@/components/record/BrowserRecordingsCard';
 import { supportsTabAudioCapture, hasMobileMicConflictRisk } from '@/lib/device';
 import { isTauri, cleanupRecording, type TauriLeftoverRecording } from '@/lib/tauri';
 import { useLeftoverRecordings } from '@/hooks/useLeftoverRecordings';
 import { useAudioDevices } from '@/hooks/useAudioDevices';
 import { useRecordingSession } from '@/hooks/useRecordingSession';
 import { useLiveSummary } from '@/hooks/useLiveSummary';
-import { usePostRecording } from '@/hooks/usePostRecording';
+import { usePostRecording, withTimeout } from '@/hooks/usePostRecording';
 import { uploadsApi, meetingsApi, meetingAccountApi, kbApi } from '@/lib/api';
-import { uploadToS3, notifyUploadComplete, formatFileSize } from '@/lib/upload';
+import { uploadToS3, notifyUploadComplete, formatFileSize, putWithProgress } from '@/lib/upload';
 import type { LiveSttProvider } from '@/lib/sttManager';
 
 export default function RecordPage() {
@@ -45,7 +46,7 @@ function RecordPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const isUploadMode = searchParams.get('mode') === 'upload';
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, user } = useAuth();
   const { devices, selectedDeviceId, selectDevice, refreshDevices } = useAudioDevices();
 
   // Config state
@@ -99,6 +100,9 @@ function RecordPageInner() {
   // live-caption AudioContext) so the banner can show a distinct, correct
   // message even when captions happen to be fine.
   const [audioStalled, setAudioStalled] = useState(false);
+  const [checkpointError, setCheckpointError] = useState('');
+  const checkpointInFlightRef = useRef(false);
+  const pendingCheckpointRef = useRef<{ meetingId: string; blob: Blob; mimeType: string } | null>(null);
 
   // Client-side meeting ID (stable across re-renders)
   const [clientMeetingIdBase] = useState(() => `meeting_${Date.now()}`);
@@ -162,6 +166,7 @@ function RecordPageInner() {
 
   const postRecording = usePostRecording({
     meetingTitle,
+    userId: user?.userId,
     preparationContext: contextText,
     accountId: referenceAccountId,
     liveSummaryRef: summary.liveSummaryRef,
@@ -192,6 +197,12 @@ function RecordPageInner() {
   // click→permission-prompt→start window (`onStartAttempt`) — the latter
   // matters because `onRecordingStart` only fires AFTER the user answers
   // the permission prompt, which can take as long as they like.
+  const [browserFinalizing, setBrowserFinalizingState] = useState(false);
+  const browserFinalizingRef = useRef(false);
+  const setBrowserFinalizing = (value: boolean) => {
+    browserFinalizingRef.current = value;
+    setBrowserFinalizingState(value);
+  };
   const [flowBusy, setFlowBusyState] = useState(false);
   const [recordStartInFlight, setRecordStartInFlightState] = useState(false);
   const flowBusyRef = useRef(false);
@@ -207,8 +218,8 @@ function RecordPageInner() {
   // The native flag stays set through Stop/finalize until the completed
   // WAV is handed off. Keep that reservation in the parent across mode
   // changes so another draft cannot replace this recording's meeting ID.
-  const meetingFlowBusy = flowBusy || recordStartInFlight || isNativeRecording;
-  const isMeetingFlowBusy = () => flowBusyRef.current || recordStartInFlightRef.current || isNativeRecordingRef.current;
+  const meetingFlowBusy = flowBusy || recordStartInFlight || isNativeRecording || browserFinalizing;
+  const isMeetingFlowBusy = () => flowBusyRef.current || recordStartInFlightRef.current || isNativeRecordingRef.current || browserFinalizingRef.current;
 
   // Plain functions, like `handleRecordingStart` below (not useCallback):
   // they close over `resetSessionStateForNewMeeting`, which is itself a
@@ -639,24 +650,29 @@ function RecordPageInner() {
   const handleCheckpoint = async (blob: Blob, mimeType: string) => {
     const meetingId = postRecording.serverMeetingId;
     if (!meetingId) return; // draft creation failed — skip checkpoint
+    pendingCheckpointRef.current = { meetingId, blob, mimeType };
+    if (checkpointInFlightRef.current) return;
+    checkpointInFlightRef.current = true;
     try {
-      const ext = mimeType.includes('mp4') ? 'm4a'
-                : mimeType.includes('ogg') ? 'ogg'
-                : 'webm';
-      const fileName = `recording_progress.${ext}`; // fixed name → S3 overwrite
-      const { uploadUrl } = await uploadsApi.getPresignedUrl({
-        fileName,
-        fileType: mimeType || 'audio/webm',
-        category: 'audio',
-        meetingId,
-      });
-      await fetch(uploadUrl, {
-        method: 'PUT',
-        body: blob,
-        headers: { 'Content-Type': mimeType || 'audio/webm' },
-      });
-    } catch {
-      // Silent fail — checkpoint is best-effort
+      while (pendingCheckpointRef.current) {
+        const checkpoint = pendingCheckpointRef.current;
+        pendingCheckpointRef.current = null;
+        try {
+          const ext = checkpoint.mimeType.includes('mp4') ? 'm4a' : checkpoint.mimeType.includes('ogg') ? 'ogg' : 'webm';
+          const { uploadUrl } = await withTimeout(uploadsApi.getPresignedUrl({
+            fileName: `recording_progress.${ext}`,
+            fileType: checkpoint.mimeType || 'audio/webm',
+            category: 'audio',
+            meetingId: checkpoint.meetingId,
+          }, { expectedUserId: user?.userId }), 15000, 'Recording checkpoint URL');
+          await putWithProgress(uploadUrl, checkpoint.blob, checkpoint.mimeType || 'audio/webm', () => {});
+          setCheckpointError('');
+        } catch {
+          setCheckpointError('서버 중간 저장에 실패했습니다. 기기 저장 상태를 확인하고, 연결이 돌아오면 업로드해 주세요.');
+        }
+      }
+    } finally {
+      checkpointInFlightRef.current = false;
     }
   };
 
@@ -899,6 +915,19 @@ function RecordPageInner() {
       {/* Main Content */}
       <div className="flex flex-1 min-h-0">
       <main className="flex-1 flex flex-col px-6 lg:px-8 pt-8 lg:pt-8 pb-32 lg:pb-8 overflow-y-auto">
+        {user && !postRecording.step && !session.isRecording && !isNativeRecording && (
+          <BrowserRecordingsCard key={user.userId} userId={user.userId} busy={meetingFlowBusy} onRestore={async (backup) => {
+            if (isMeetingFlowBusy()) throw new Error('현재 녹음 작업을 먼저 마무리해 주세요.');
+            setFlowBusy(true);
+            try {
+              summary.reset();
+              setMeetingTitle(backup.metadata.title);
+              setNotes(backup.metadata.notes);
+              await postRecording.restoreBrowserRecording(backup);
+            } finally { setFlowBusy(false); }
+          }} />
+        )}
+        {checkpointError && <p role="alert" className="mb-3 text-xs text-amber-700 dark:text-amber-300">{checkpointError}</p>}
         {/* Upload Mode — audio file upload flow */}
         {isUploadMode && !postRecording.step && !session.isRecording && !isNativeRecording && (
           <div className="flex flex-col items-center gap-6 py-8">
@@ -1117,12 +1146,22 @@ function RecordPageInner() {
             disabled={!!postRecording.step || meetingFlowBusy}
             deviceId={audioSource === 'mic' ? (selectedDeviceId || undefined) : undefined}
             onRecordingComplete={postRecording.handleRecordingComplete}
-            onBlobReady={postRecording.handleBlobReady}
+            onBlobFinalizing={() => {
+              setBrowserFinalizing(true);
+              return postRecording.captureBlobGeneration();
+            }}
+            onBlobReady={(blob, mimeType, backup, generation) => {
+              if (postRecording.handleBlobReady(blob, mimeType, backup, generation)) setBrowserFinalizing(false);
+            }}
+            backupUserId={user?.userId}
+            backupNotes={notes}
+            serverMeetingId={postRecording.serverMeetingId}
             onNativeFileReady={postRecording.handleNativeFileReady}
             onNativeWarnings={(warnings) => setNativeWarnings((prev) => [...new Set([...prev, ...warnings])])}
             onNativePcmChunk={session.pushNativePcmChunk}
             onError={(error, opts) => {
               if (opts?.terminal) {
+                setBrowserFinalizing(false);
                 // No audio was captured at all (finalizeRecordingBlob's
                 // 0-byte case) -- by now stopRecording() has already run
                 // onRecordingStop synchronously, so session.isRecording
@@ -1162,7 +1201,7 @@ function RecordPageInner() {
                 // finalizes through the normal onstop -> onBlobReady flow.
                 // Surface the failure on the captions/session banner
                 // instead of discarding it.
-                postRecording.reset(); // clear any previous banner state
+                // Preserve the flow generation while its captured audio finalizes.
                 session.setSpeechError(error);
               } else {
                 session.setSpeechError(error);
@@ -1440,6 +1479,7 @@ function RecordPageInner() {
           onNotesSubmit={handleFinalNotesSubmit}
           onNotesSkip={handleFinalNotesSkip}
           initialNotes={notes}
+          onKeepLocally={postRecording.canKeepLocally ? postRecording.keepLocally : undefined}
         />
       )}
 

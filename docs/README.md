@@ -58,4 +58,5 @@ python3 scripts/docs/sync_review_context.py
 python3 scripts/docs/check_docs.py
 ```
 
+- [Browser recording recovery and retention](decisions/ADR-048-browser-recording-backups.md)
 - [Private audio crop worker](../backend/whisper/AUDIO_CROP.md)

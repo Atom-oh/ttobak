@@ -255,6 +255,7 @@ export interface User {
 
 // Extended meeting detail from API
 export interface MeetingDetail extends Meeting {
+  canRecoverRecording?: boolean;
   supportsNotesComparison?: boolean;
   notesRevision?: string;
   supportsPrivateAccountLink?: boolean;

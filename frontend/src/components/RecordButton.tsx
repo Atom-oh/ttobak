@@ -5,6 +5,7 @@ import { getPreferredMimeType, supportsMediaRecorder, supportsTabAudioCapture } 
 import { uploadAudioBlob } from '@/lib/upload';
 import { isTauri, startNativeRecording, stopNativeRecording, releaseRecordingPower, getNativeRecordingStatus, onNativeAudioLevel, onNativePcmChunk as subscribeNativePcmChunk, assertUploadRecordingAvailable, VERSION_SKEW_MESSAGE, type TauriStatusResponse } from '@/lib/tauri';
 import { CameraCapture } from '@/components/CameraCapture';
+import { BrowserRecordingBackup } from '@/lib/browserRecordingBackup';
 
 /**
  * Imperative handle for manually resuming the waveform AudioContext from a
@@ -23,7 +24,11 @@ interface RecordButtonProps {
   meetingTitle?: string;
   deviceId?: string;
   onRecordingComplete?: (audioUrl: string) => void;
-  onBlobReady?: (blob: Blob, mimeType: string) => void;
+  onBlobReady?: (blob: Blob, mimeType: string, backup?: BrowserRecordingBackup, generation?: number) => void;
+  onBlobFinalizing?: () => number;
+  backupUserId?: string;
+  backupNotes?: string;
+  serverMeetingId?: string | null;
   /** Called instead of `onBlobReady` when a Tauri System Audio recording
    * has been stopped and finalized on disk — the file's bytes never enter
    * the WebView; `path` is streamed straight to S3 from Rust. See
@@ -112,6 +117,10 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
   deviceId,
   onRecordingComplete,
   onBlobReady,
+  onBlobFinalizing,
+  backupUserId,
+  backupNotes = '',
+  serverMeetingId,
   onNativeFileReady,
   onNativeWarnings,
   onNativePcmChunk,
@@ -135,6 +144,19 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
   const recordingStateRef = useRef<RecordingState>('idle');
   const checkpointTimerRef = useRef<NodeJS.Timeout | null>(null);
   const isRecordingRef = useRef(false);
+  const finalizeGenerationRef = useRef<number | undefined>(undefined);
+  const backupRef = useRef<Promise<BrowserRecordingBackup> | null>(null);
+  const [backupStatus, setBackupStatus] = useState<{ savedAt?: number; error?: string }>({});
+  const checkpointHandlerRef = useRef(onCheckpoint);
+
+  useEffect(() => { checkpointHandlerRef.current = onCheckpoint; }, [onCheckpoint]);
+  useEffect(() => {
+    if (!backupRef.current) return;
+    void backupRef.current.then((backup) => backup.update({
+      title: meetingTitle, notes: backupNotes,
+      ...(serverMeetingId ? { meetingId: serverMeetingId } : {}),
+    })).catch(() => setBackupStatus({ error: '기기 저장에 실패했습니다. 종료 후 업로드가 완료될 때까지 이 탭을 유지해 주세요.' }));
+  }, [meetingTitle, backupNotes, serverMeetingId]);
 
   const setRecordingState = (newState: RecordingState) => {
     recordingStateRef.current = newState;
@@ -345,6 +367,7 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
       nativeUnlistenRef.current = null;
       nativePcmUnlistenRef.current?.();
       nativePcmUnlistenRef.current = null;
+      void backupRef.current?.then((backup) => backup.release()).catch(() => {});
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
         mediaRecorderRef.current.stop();
       }
@@ -610,10 +633,24 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
 
       chunksRef.current = [];
       stopFinalizedRef.current = false;
+      finalizeGenerationRef.current = undefined;
+      setBackupStatus({});
+      void backupRef.current?.then((backup) => backup.release()).catch(() => {});
+      const backupPromise = backupUserId
+        ? BrowserRecordingBackup.create(backupUserId, meetingTitle, backupNotes, mimeType)
+        : null;
+      backupRef.current = backupPromise;
+      void backupPromise?.catch(() => setBackupStatus({ error: '기기 저장을 시작하지 못했습니다. 종료 후 업로드가 완료될 때까지 이 탭을 유지해 주세요.' }));
 
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
           chunksRef.current.push(event.data);
+          void backupPromise?.then(async (backup) => {
+            await backup.append(event.data);
+            if (backupRef.current === backupPromise) setBackupStatus({ savedAt: backup.metadata.savedAt });
+          }).catch(() => {
+            if (backupRef.current === backupPromise) setBackupStatus({ error: '기기 저장에 실패했습니다. 종료 후 업로드가 완료될 때까지 이 탭을 유지해 주세요.' });
+          });
         }
       };
 
@@ -654,11 +691,11 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
       }, 1000);
 
       // Audio checkpoint: first at 10s, then every 60s — crash recovery
-      if (onCheckpoint) {
+      if (checkpointHandlerRef.current) {
         const doCheckpoint = () => {
           const allChunks = chunksRef.current.slice(0);
           if (allChunks.length > 0) {
-            onCheckpoint(new Blob(allChunks, { type: mimeType }), mimeType);
+            checkpointHandlerRef.current?.(new Blob(allChunks, { type: mimeType }), mimeType);
           }
         };
         const firstTimer = setTimeout(() => {
@@ -697,13 +734,13 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
         setElapsedTime((prev) => prev + 1);
       }, 1000);
       // Restart checkpoint timer (cleared on pause) — cumulative for crash recovery
-      if (onCheckpoint && !checkpointTimerRef.current) {
-        const mimeType = getPreferredMimeType();
+      if (checkpointHandlerRef.current && !checkpointTimerRef.current) {
+        const mimeType = mediaRecorderRef.current.mimeType || getPreferredMimeType();
         checkpointTimerRef.current = setInterval(() => {
           const allChunks = chunksRef.current.slice(0);
           if (allChunks.length > 0) {
             const checkpointBlob = new Blob(allChunks, { type: mimeType });
-            onCheckpoint(checkpointBlob, mimeType);
+            checkpointHandlerRef.current?.(checkpointBlob, mimeType);
           }
         }, 60000);
       }
@@ -725,9 +762,17 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
    * scenario -- the one the `onerror` handler exists to catch -- left
    * captured chunks never finalized and the UI stuck reading "recording".
    */
+  const reserveBlobFinalization = () => {
+    if (finalizeGenerationRef.current === undefined) {
+      finalizeGenerationRef.current = onBlobFinalizing?.();
+    }
+    return finalizeGenerationRef.current;
+  };
+
   const finalizeRecordingBlob = () => {
     if (stopFinalizedRef.current) return;
     stopFinalizedRef.current = true;
+    const generation = reserveBlobFinalization();
     cleanupAudioResources();
     const mimeType = mediaRecorderRef.current?.mimeType || getPreferredMimeType();
     const blob = new Blob(chunksRef.current, { type: mimeType });
@@ -742,9 +787,22 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
       return;
     }
     if (onBlobReady) {
-      setRecordingState('idle');
-      setElapsedTime(0);
-      onBlobReady(blob, mimeType);
+      setRecordingState('uploading');
+      void (async () => {
+        let backup: BrowserRecordingBackup | undefined;
+        try {
+          backup = await backupRef.current ?? undefined;
+          await backup?.update({ finalized: true });
+        } catch {
+          backup?.release();
+          backup = undefined;
+          setBackupStatus({ error: '기기 저장을 완료하지 못했습니다. 업로드가 완료될 때까지 이 탭을 유지해 주세요.' });
+        }
+        setRecordingState('idle');
+        setElapsedTime(0);
+        backupRef.current = null;
+        onBlobReady(blob, mimeType, backup, generation);
+      })();
     } else {
       void handleUpload(blob);
     }
@@ -886,6 +944,7 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
     }
 
     if (mediaRecorderRef.current) {
+      reserveBlobFinalization();
       if (mediaRecorderRef.current.state !== 'inactive') {
         mediaRecorderRef.current.stop();
       } else {
@@ -973,6 +1032,11 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
   // Desktop: Full recording UI
   return (
     <div className="flex flex-col items-center w-full">
+      {(backupStatus.error || backupStatus.savedAt) && (
+        <p role={backupStatus.error ? 'alert' : 'status'} className="mb-3 max-w-xl text-center text-xs text-slate-600 dark:text-slate-300">
+          {backupStatus.error || `이 브라우저에 저장됨 · ${new Date(backupStatus.savedAt!).toLocaleTimeString('ko-KR')} · 종료 후 나중에 업로드할 수 있습니다.`}
+        </p>
+      )}
       {/* Idle state: just the mic button */}
       {state === 'idle' && (
         <div className="flex flex-col items-center">
