@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useRouter, usePathname } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
+import { ApiError } from '@/lib/api';
 import { AudioPlayer } from '@/components/AudioPlayer';
 import { AudioUploader } from '@/components/AudioUploader';
 import { AttachmentGallery } from '@/components/AttachmentGallery';
@@ -219,32 +220,22 @@ function RecoveryBanner({ meetingId, onRecovered }: { meetingId: string; onRecov
   const router = useRouter();
   const [recovering, setRecovering] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [deleting, setDeleting] = useState(false);
+  const [isNoProgress, setIsNoProgress] = useState(false);
 
   const handleRecover = async () => {
     setRecovering(true);
     setError(null);
+    setIsNoProgress(false);
     try {
       await meetingsApi.recover(meetingId);
       onRecovered();
     } catch (err) {
+      setIsNoProgress(err instanceof ApiError && err.code === 'RECORDING_CHECKPOINT_MISSING');
       setError(err instanceof Error ? err.message : '복구에 실패했습니다');
     } finally {
       setRecovering(false);
     }
   };
-
-  const handleDelete = async () => {
-    setDeleting(true);
-    try {
-      await meetingsApi.delete(meetingId);
-      router.push('/');
-    } catch {
-      setDeleting(false);
-    }
-  };
-
-  const isNoProgress = error?.includes('progress file missing');
 
   return (
     <div className="mb-8 animate-fade-in">
@@ -252,15 +243,15 @@ function RecoveryBanner({ meetingId, onRecovered }: { meetingId: string; onRecov
         <span className="material-symbols-outlined text-red-500 mt-0.5">warning</span>
         <div className="flex-1">
           <span className="text-sm font-medium text-red-700 dark:text-red-300 block">
-            이 녹음은 비정상 종료된 것으로 보입니다
+            종료되지 않은 녹음이 있습니다
           </span>
           {isNoProgress ? (
             <span className="text-xs text-red-600/70 dark:text-red-400/70 mt-0.5 block">
-              저장된 체크포인트가 없어 복구할 수 없습니다. 이 미팅을 삭제하시겠습니까?
+              서버 중간 저장본이 없습니다. 녹음 화면에서 이 브라우저에 보관된 녹음을 확인해 주세요.
             </span>
           ) : (
             <span className="text-xs text-red-600/70 dark:text-red-400/70 mt-0.5 block">
-              마지막 체크포인트까지의 오디오를 복구할 수 있습니다
+              다른 탭에서 녹음 중이면 먼저 종료해 주세요. 서버의 마지막 중간 저장본으로 마무리할 수 있습니다.
             </span>
           )}
           {error && !isNoProgress && (
@@ -269,13 +260,7 @@ function RecoveryBanner({ meetingId, onRecovered }: { meetingId: string; onRecov
         </div>
         <div className="flex gap-2 shrink-0">
           {isNoProgress ? (
-            <button
-              onClick={handleDelete}
-              disabled={deleting}
-              className="px-4 py-2 rounded-lg text-xs font-bold bg-red-600 text-white hover:bg-red-700 transition-colors disabled:opacity-50"
-            >
-              {deleting ? '삭제 중...' : '미팅 삭제'}
-            </button>
+            <button onClick={() => router.push('/record')} className="px-4 py-2 text-xs font-bold text-primary">기기 보관본 확인</button>
           ) : (
             <button
               onClick={handleRecover}
@@ -607,7 +592,7 @@ function MeetingDetailContent() {
           />
 
           {/* Recovery banner for crashed recordings */}
-          {meeting.status === 'recording' && (
+          {(meeting.canRecoverRecording ?? (meeting.status === 'recording' && meeting.userId === user?.userId)) && (
             <RecoveryBanner meetingId={meetingId} onRecovered={refetchMeeting} />
           )}
 

@@ -614,6 +614,7 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 	fieldInsights, insightsError, insightsTruncated := meetingFieldInsights(meeting.Insights)
 
 	return &model.MeetingDetailResponse{
+		CanRecoverRecording:        permission == "owner" && CanRecoverRecording(meeting),
 		SupportsNotesComparison:    true,
 		SupportsPrivateAccountLink: true,
 		MeetingID:                  meeting.MeetingID,

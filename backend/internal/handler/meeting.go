@@ -625,6 +625,14 @@ func (h *MeetingHandler) RecoverMeeting(w http.ResponseWriter, r *http.Request) 
 
 	err := h.uploadService.RecoverMeeting(ctx, userID, meetingID)
 	if err != nil {
+		if errors.Is(err, service.ErrRecordingCheckpointMissing) {
+			writeError(w, http.StatusNotFound, "RECORDING_CHECKPOINT_MISSING", "서버에 저장된 녹음이 없습니다. 녹음 화면에서 이 브라우저의 기기 보관본을 확인해 주세요.")
+			return
+		}
+		if errors.Is(err, repository.ErrConditionFailed) {
+			writeError(w, http.StatusConflict, "CONFLICT", "미팅 상태가 변경되었습니다. 새로고침해 주세요.")
+			return
+		}
 		if errors.Is(err, service.ErrNotFound) {
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
 			return

@@ -1,13 +1,16 @@
 package main
 
-import "testing"
+import (
+	"github.com/ttobak/backend/internal/model"
+	"testing"
+)
 
 func TestExtractPartIndex(t *testing.T) {
 	cases := []struct {
-		name     string
-		key      string
-		wantIdx  int
-		wantOk   bool
+		name    string
+		key     string
+		wantIdx int
+		wantOk  bool
 	}{
 		{
 			name:    "multipart key at basename start",
@@ -48,5 +51,30 @@ func TestExtractPartIndex(t *testing.T) {
 					tc.key, idx, ok, tc.wantIdx, tc.wantOk)
 			}
 		})
+	}
+}
+
+func TestRecoveredAudioEventWaitsForCanonicalBinding(t *testing.T) {
+	key := "audio/owner/meeting/recording_recovered_123.webm"
+	for _, tc := range []struct {
+		name        string
+		meeting     *model.Meeting
+		skip, retry bool
+	}{
+		{"deleted", nil, true, false},
+		{"copy arrived before binding", &model.Meeting{}, false, true},
+		{"bound winner", &model.Meeting{AudioKey: key}, false, false},
+		{"different completed upload", &model.Meeting{AudioKey: "audio/owner/meeting/new.webm"}, true, false},
+		{"multipart winner", &model.Meeting{AudioKeys: []string{key, "another"}}, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			skip, err := recoveryAudioEvent(tc.meeting, key)
+			if skip != tc.skip || (err != nil) != tc.retry {
+				t.Fatalf("skip=%v err=%v", skip, err)
+			}
+		})
+	}
+	if skip, err := recoveryAudioEvent(nil, "audio/owner/meeting/ordinary.webm"); skip || err != nil {
+		t.Fatal("ordinary upload changed")
 	}
 }

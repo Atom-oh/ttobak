@@ -111,6 +111,9 @@ unconsumed project invitation rows expire through their existing TTL field.
 2. Upload audio to S3. EventBridge invokes the transcribe orchestrator, which uses
    configured Whisper ECS or AWS Transcribe fallback. Multipart completion and
    transcript uploads trigger summarization with concurrency/retry guards.
+   Browser chunks also have account-scoped IndexedDB recovery with exclusive
+   per-recording Web Locks; a local finalization can defer upload until the next
+   visit. Server recovery remains available for expired empty drafts.
 3. Refine text while preserving acoustic speakers; summarize the selected source,
    saved notes and supported context into editable meeting content. Transcript
    spill objects are rehydrated by repository reads. Stale segments must not

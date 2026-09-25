@@ -138,6 +138,7 @@ type MeetingListItem struct {
 
 // MeetingDetailResponse represents a meeting in detail view
 type MeetingDetailResponse struct {
+	CanRecoverRecording        bool                 `json:"canRecoverRecording"`
 	SupportsNotesComparison    bool                 `json:"supportsNotesComparison"`
 	SupportsPrivateAccountLink bool                 `json:"supportsPrivateAccountLink"`
 	MeetingID                  string               `json:"meetingId"`

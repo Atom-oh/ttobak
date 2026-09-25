@@ -57,3 +57,5 @@ After editing `CLAUDE.md`, regenerate `AGENTS.md` and check the documentation:
 python3 scripts/docs/sync_review_context.py
 python3 scripts/docs/check_docs.py
 ```
+
+- [Browser recording recovery and retention](decisions/ADR-046-browser-recording-backups.md)

@@ -483,8 +483,8 @@ func (s *UploadService) RecoverMeeting(ctx context.Context, userID, meetingID st
 	if meeting == nil {
 		return ErrNotFound
 	}
-	if meeting.Status != model.StatusRecording {
-		return fmt.Errorf("meeting is not in recording state (current: %s)", meeting.Status)
+	if !CanRecoverRecording(meeting) {
+		return fmt.Errorf("%w: meeting has no interrupted recording to recover", ErrInvalidInput)
 	}
 
 	// Find the progress file by prefix, not a hardcoded extension --
@@ -494,7 +494,7 @@ func (s *UploadService) RecoverMeeting(ctx context.Context, userID, meetingID st
 	// "no recoverable audio found" on every iOS recording, unconditionally.
 	progressKey, ext, err := s.findProgressFile(ctx, userID, meetingID)
 	if err != nil {
-		return fmt.Errorf("no recoverable audio found (progress file missing)")
+		return err
 	}
 
 	// Copy progress file to a final filename (triggers EventBridge S3 event → transcribe Lambda),
@@ -510,10 +510,11 @@ func (s *UploadService) RecoverMeeting(ctx context.Context, userID, meetingID st
 	}
 
 	// Atomic partial update — set audio key and transition to transcribing
-	return s.repo.UpdateMeetingFields(ctx, userID, meetingID, map[string]interface{}{
-		"audioKey": finalKey,
-		"status":   model.StatusTranscribing,
-	})
+	return s.repo.UpdateMeetingFieldsIfMatch(ctx, userID, meetingID,
+		map[string]interface{}{"status": meeting.Status, "updatedAt": meeting.UpdatedAt.Format(time.RFC3339Nano)}, map[string]interface{}{
+			"audioKey": finalKey,
+			"status":   model.StatusTranscribing,
+		})
 }
 
 // findProgressFile locates a recording checkpoint under
@@ -536,11 +537,11 @@ func (s *UploadService) findProgressFile(ctx context.Context, userID, meetingID 
 		return "", "", fmt.Errorf("listing progress files: %w", err)
 	}
 	if len(out.Contents) == 0 || out.Contents[0].Key == nil {
-		return "", "", fmt.Errorf("no progress file under %s", prefix)
+		return "", "", ErrRecordingCheckpointMissing
 	}
 	key = *out.Contents[0].Key
 	ext = strings.TrimPrefix(path.Ext(key), ".")
-	if !recordingCheckpointExtensions[ext] {
+	if !recordingCheckpointExtensions[ext] || key != prefix+ext {
 		return "", "", fmt.Errorf("progress file %s has unrecognized extension", key)
 	}
 	return key, ext, nil
