@@ -18,14 +18,23 @@ npm run build:signed
 
 Use build:signed so microphone/camera entitlements are applied. The first
 recording asks for Microphone and System Audio Recording permission; a new ad-hoc
-build may require granting them again (`tccutil reset Microphone|AudioCapture
-click.atomai.ttobak.mac`). Test a short recording with headphones after
+build may require granting them again (`tccutil reset Microphone click.atomai.ttobak.mac`
+and `tccutil reset AudioCapture click.atomai.ttobak.mac`). On macOS 14.2/14.3,
+confirm the System Audio Recording prompt appears (ADR-046). Test a short recording with headphones after
 installation: both your voice and the other participants' must be audible. This
 module is built/tested locally and has no CI coverage.
 
 ```bash
 (cd src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test)
 ```
+
+## MCP control
+
+A same-user process, typically the stdio TTOBAK MCP server, can start and stop
+recordings through the app's local socket
+(`~/Library/Application Support/ttobak/control.sock`). The app must be open and
+signed in; the window comes forward and a notification names each MCP-started
+recording. See [ADR-046](../docs/decisions/ADR-046-mac-core-audio-tap-and-microphone.md).
 
 ## Recovery and limits
 

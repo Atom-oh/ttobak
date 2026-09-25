@@ -34,9 +34,10 @@ const speechErrorMessages: Record<string, string> = {
   'transcribe-auth-failed': 'AWS 인증 실패. Browser Speech로 전환합니다.',
   'transcribe-stream-error': 'Transcribe Streaming 오류. Browser Speech로 전환합니다.',
   'transcribe-no-stream': 'Transcribe Streaming 연결 실패. Browser Speech로 전환합니다.',
-  // System Audio mode has no microphone, so there is no Web Speech fallback
-  // here — unlike the other transcribe-* errors above, this one can't
-  // "switch to" anything.
+  // Native (Mac app) mode has no WebView MediaStream — the microphone is
+  // captured and mixed in Rust — so there is no Web Speech fallback here;
+  // unlike the other transcribe-* errors above, this one can't "switch to"
+  // anything.
   'transcribe-native-unavailable': '실시간 자막을 사용할 수 없습니다 (AWS 인증/연결 필요). 녹음은 계속되며 종료 후 자동으로 전사됩니다.',
   // Web Speech's own mic capture can end the recording's mic track on
   // iOS/Android (see SttManager.fallbackToWebSpeech), so it's never used

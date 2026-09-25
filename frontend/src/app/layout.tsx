@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import { AuthProvider } from '@/components/auth/AuthProvider';
+import { NativeControlBridge } from '@/components/NativeControlBridge';
 
 export const metadata: Metadata = {
   title: 'TTOBAK - AI Meeting Assistant',
@@ -47,7 +48,10 @@ export default function RootLayout({
         />
       </head>
       <body className="font-sans antialiased bg-background-light dark:bg-background-dark text-slate-900 dark:text-slate-100">
-        <AuthProvider>{children}</AuthProvider>
+        <AuthProvider>
+          <NativeControlBridge />
+          {children}
+        </AuthProvider>
       </body>
     </html>
   );

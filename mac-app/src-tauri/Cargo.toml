@@ -20,7 +20,9 @@ serde_json = "1"
 thiserror = "1"
 log = "0.4"
 env_logger = "0.11"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "fs", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "fs", "time", "net", "io-util"] }
+# Local notification when MCP starts a recording (control.rs); Rust-side only.
+tauri-plugin-notification = "2"
 parking_lot = "0.12"
 hound = "3.5"
 base64 = "0.22"

@@ -24,7 +24,7 @@ import { appendMeetingNotes, preparationNotes, qaNoteMarkdown, referenceMarkdown
 import { LeftoverRecordingsCard, formatLeftoverTime } from '@/components/record/LeftoverRecordingsCard';
 import { BrowserRecordingsCard } from '@/components/record/BrowserRecordingsCard';
 import { supportsTabAudioCapture, hasMobileMicConflictRisk } from '@/lib/device';
-import { isTauri, cleanupRecording, type TauriLeftoverRecording } from '@/lib/tauri';
+import { isTauri, cleanupRecording, replyNativeControl, reportNativeControlState, type NativeControlReply, type NativeControlRequest, type TauriLeftoverRecording } from '@/lib/tauri';
 import { useLeftoverRecordings } from '@/hooks/useLeftoverRecordings';
 import { useAudioDevices } from '@/hooks/useAudioDevices';
 import { useRecordingSession } from '@/hooks/useRecordingSession';
@@ -32,6 +32,7 @@ import { useLiveSummary } from '@/hooks/useLiveSummary';
 import { usePostRecording, withTimeout } from '@/hooks/usePostRecording';
 import { uploadsApi, meetingsApi, meetingAccountApi, kbApi } from '@/lib/api';
 import { uploadToS3, notifyUploadComplete, formatFileSize, putWithProgress } from '@/lib/upload';
+import { registerNativeControlHandler } from '@/lib/nativeControl';
 import type { LiveSttProvider } from '@/lib/sttManager';
 
 export default function RecordPage() {
@@ -464,6 +465,145 @@ function RecordPageInner() {
     }
   }, [flushNotesQueue, postRecording, notes]);
 
+  // --- Mac app local control (MCP over the app's socket; ADR-046) ---------
+  // A start sets title/source/account first, then fires once that state has
+  // rendered into RecordButton (controlTick); success is the native capture
+  // actually starting (onPermissionGranted), failure is onError. There is no
+  // page-side timeout: the app's socket deadline reports an unknown outcome,
+  // and a start that completes later still shows as MCP-started.
+  const [controlTick, setControlTick] = useState(0);
+  const [controlStarted, setControlStarted] = useState(false);
+  const controlStartRef = useRef<{ request: NativeControlRequest; fired: boolean } | null>(null);
+  const controlStopRef = useRef<{ requestId: string; upload: boolean } | null>(null);
+  const controlLatestRef = useRef({ step: postRecording.step, meetingId: postRecording.serverMeetingId, browserRecording: session.isRecording, importing: uploadProgress !== null, uploadMode: isUploadMode });
+  useEffect(() => {
+    controlLatestRef.current = { step: postRecording.step, meetingId: postRecording.serverMeetingId, browserRecording: session.isRecording, importing: uploadProgress !== null, uploadMode: isUploadMode };
+  });
+  const finishControlStart = useCallback((result: NativeControlReply) => {
+    const pending = controlStartRef.current;
+    if (!pending) return;
+    controlStartRef.current = null;
+    if (result.ok) setControlStarted(true);
+    void replyNativeControl(pending.request.requestId, result);
+  }, []);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    return registerNativeControlHandler((request) => {
+      const fail = (code: string, message: string) =>
+        void replyNativeControl(request.requestId, { ok: false, error: { code, message } });
+      const latest = controlLatestRef.current;
+      if (request.action === 'start') {
+        // `importing`: a file import navigates away when done, which would
+        // orphan a native capture started meanwhile.
+        // Upload mode is a file-import screen; its import would navigate away
+        // mid-capture, so remote starts only run on the recording screen.
+        if (latest.uploadMode) {
+          fail('busy', 'The TTOBAK app is on the file upload screen; open the recording screen first.');
+          return;
+        }
+        if (controlStartRef.current || isMeetingFlowBusy() || latest.browserRecording || latest.step !== null || latest.importing) {
+          fail('busy', 'A recording or its upload is already in progress in the TTOBAK app.');
+          return;
+        }
+        const title = request.params.title?.trim();
+        if (!title) {
+          fail('bad_request', 'title is required');
+          return;
+        }
+        controlStartRef.current = {
+          request: { ...request, params: { ...request.params, title } },
+          fired: false,
+        };
+        setMeetingTitle(title);
+        setAudioSource('system');
+        if (request.params.accountId) setReferenceAccountId(request.params.accountId);
+        setControlTick((n) => n + 1);
+        return;
+      }
+      // A stop during the native start (draft meeting created, capture not yet
+      // running) would find no capture to stop and orphan it; a second stop
+      // would steal the first one's reply.
+      if (controlStartRef.current || recordStartInFlightRef.current) {
+        fail('busy', 'The recording is still starting; try again in a moment.');
+        return;
+      }
+      if (controlStopRef.current) {
+        fail('busy', 'A stop is already in progress.');
+        return;
+      }
+      if (latest.browserRecording && !isNativeRecordingRef.current) {
+        fail('browser_recording', 'A browser-mode recording is running in the TTOBAK window; stop it there.');
+        return;
+      }
+      if (!isNativeRecordingRef.current) {
+        fail('not_recording', 'The TTOBAK app is not recording.');
+        return;
+      }
+      controlStopRef.current = { requestId: request.requestId, upload: request.params.upload !== false };
+      void recordButtonRef.current?.stopExternal();
+    });
+  }, [finishControlStart]); // The handler reads refs; it registers once.
+
+  useEffect(() => {
+    const pending = controlStartRef.current;
+    if (!pending || pending.fired) return;
+    const { title, accountId } = pending.request.params;
+    if (audioSource !== 'system' || meetingTitle !== title || (accountId && referenceAccountId !== accountId)) return;
+    pending.fired = true;
+    const button = recordButtonRef.current;
+    const settle = () => {
+      // startExternal resolves after its success/error callbacks; if neither
+      // answered (e.g. the button was disabled), nothing started.
+      if (controlStartRef.current === pending && !isNativeRecordingRef.current) {
+        finishControlStart({ ok: false, error: { code: 'start_failed', message: 'The TTOBAK app could not start the recording.' } });
+      }
+    };
+    if (button) void button.startExternal().then(settle, settle);
+    else settle();
+  }, [controlTick, audioSource, meetingTitle, referenceAccountId, finishControlStart]);
+
+  useEffect(() => {
+    const stop = controlStopRef.current;
+    if (!stop || (postRecording.step !== 'notes' && postRecording.step !== 'error')) return;
+    controlStopRef.current = null;
+    const meetingId = postRecording.serverMeetingId;
+    if (postRecording.step === 'error') {
+      void replyNativeControl(stop.requestId, {
+        ok: false, error: { code: 'stop_failed', message: postRecording.errorMessage || 'Recording failed.' },
+      });
+      return;
+    }
+    // handleFinalNotesSkip refuses over-long notes without uploading; say so
+    // instead of claiming the upload started.
+    if (stop.upload && codePointLength(notes) > MAX_MEETING_NOTES) {
+      void replyNativeControl(stop.requestId, {
+        ok: false,
+        error: { code: 'notes_too_long', message: 'The recording stopped, but its notes are too long to upload; shorten them in the app and finish there.' },
+      });
+      return;
+    }
+    if (stop.upload) void handleFinalNotesSkip();
+    void replyNativeControl(stop.requestId, { ok: true, data: { meetingId, phase: stop.upload ? 'uploading' : 'notes' } });
+  }, [postRecording.step, postRecording.serverMeetingId, postRecording.errorMessage, handleFinalNotesSkip, notes]);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    // Leaving the record page: its phase no longer describes anything.
+    return () => { void reportNativeControlState({ phase: 'idle' }); };
+  }, []);
+  useEffect(() => {
+    if (!isTauri()) return;
+    const recording = isNativeRecording || session.isRecording;
+    const phase = recording ? 'recording' : (postRecording.step ?? (recordStartInFlight ? 'starting' : 'idle'));
+    void reportNativeControlState({
+      phase,
+      ...(recording ? { source: isNativeRecording ? 'native' as const : 'browser' as const } : {}),
+      meetingId: postRecording.serverMeetingId,
+      error: postRecording.errorMessage,
+    });
+  }, [isNativeRecording, session.isRecording, recordStartInFlight, postRecording.step, postRecording.serverMeetingId, postRecording.errorMessage]);
+
   // Q&A context = user-provided meeting context + live transcript
   const qaContext = contextText.trim()
     ? `[미팅 배경 정보]\n${contextText.trim()}\n\n${session.transcriptContext || ''}`
@@ -733,6 +873,8 @@ function RecordPageInner() {
   };
 
   const handleAudioUpload = async (files: File[]) => {
+    // A recording (including a remote start) owns the page's meeting flow.
+    if (isMeetingFlowBusy()) return;
     if (files.length === 0) return;
     const audioExtensions = ['.m4a', '.mp3', '.wav', '.webm', '.ogg', '.flac', '.aac', '.mp4', '.caf'];
     const isAudio = (f: File) =>
@@ -1135,6 +1277,11 @@ function RecordPageInner() {
           </div>
         )}
         <div className={`${isUploadMode && !isNativeRecording ? 'hidden' : 'flex'} flex-col items-center justify-center mb-8`}>
+          {controlStarted && isNativeRecording && (
+            <p className="mb-2 text-center text-xs font-medium text-purple-600 dark:text-purple-300">
+              MCP에서 시작한 녹음입니다 — 시스템 오디오와 마이크를 녹음하고 있습니다
+            </p>
+          )}
           <RecordButton
             ref={recordButtonRef}
             meetingId={clientMeetingId}
@@ -1160,6 +1307,7 @@ function RecordPageInner() {
             onNativeWarnings={(warnings) => setNativeWarnings((prev) => [...new Set([...prev, ...warnings])])}
             onNativePcmChunk={session.pushNativePcmChunk}
             onError={(error, opts) => {
+              finishControlStart({ ok: false, error: { code: 'start_failed', message: error } });
               if (opts?.terminal) {
                 setBrowserFinalizing(false);
                 // No audio was captured at all (finalizeRecordingBlob's
@@ -1211,8 +1359,14 @@ function RecordPageInner() {
             onStartAttempt={setRecordStartInFlight}
             onRecordingPause={session.pauseSession}
             onRecordingResume={session.resumeSession}
-            onRecordingStop={() => { session.stopSession(); setTabSharingLabel(null); setIsNativeRecording(false); setAudioStalled(false); }}
-            onPermissionGranted={refreshDevices}
+            onRecordingStop={() => { session.stopSession(); setTabSharingLabel(null); setIsNativeRecording(false); setAudioStalled(false); setControlStarted(false); }}
+            onPermissionGranted={() => {
+              refreshDevices();
+              // Native capture is running: answer a pending MCP start.
+              if (isNativeRecordingRef.current) {
+                finishControlStart({ ok: true, data: { meetingId: controlLatestRef.current.meetingId, phase: 'recording' } });
+              }
+            }}
             onCaptureImage={handleFileAttach}
             onAnalyserReady={setAnalyserNode}
             onCheckpoint={handleCheckpoint}
