@@ -83,6 +83,7 @@ func init() {
 	projectService.SetCognitoAdminAPI(cognitoClient, cognitoPoolID)
 	vaultService := service.NewVaultService(repo)
 	uploadService := service.NewUploadService(s3Client, repo, bucketName, ebClient)
+	uploadService.SetAudioCropEnabled(os.Getenv("AUDIO_CROP_ENABLED") == "1")
 	// Same-domain CloudFront-signed download URLs (ADR-027). Tried once at
 	// cold start; any failure falls back to raw S3 presigns. The reload
 	// callback is registered unconditionally (not just on failure) so a warm
@@ -264,6 +265,7 @@ func init() {
 
 		// Audio playback
 		r.Get("/api/meetings/{meetingId}/audio", meetingHandler.GetAudioURL)
+		r.Post("/api/meetings/{meetingId}/audio/crop", meetingHandler.CropAudio)
 
 		// Recording recovery (crashed browser)
 		r.Post("/api/meetings/{meetingId}/recover", meetingHandler.RecoverMeeting)

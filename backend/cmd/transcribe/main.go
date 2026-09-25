@@ -72,6 +72,37 @@ func init() {
 
 // Handler processes EventBridge S3 events for new audio uploads
 func Handler(ctx context.Context, raw json.RawMessage) error {
+	var envelope struct {
+		Source     string          `json:"source"`
+		DetailType string          `json:"detail-type"`
+		Detail     json.RawMessage `json:"detail"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return err
+	}
+	if envelope.Source == "ttobak.audio" && envelope.DetailType == "AudioCropRequested" {
+		var detail struct {
+			UserID    string `json:"userId"`
+			MeetingID string `json:"meetingId"`
+		}
+		if err := json.Unmarshal(envelope.Detail, &detail); err != nil {
+			return err
+		}
+		if detail.UserID == "" || detail.MeetingID == "" || strings.ContainsAny(detail.UserID+detail.MeetingID, "/\\") {
+			return fmt.Errorf("invalid crop identity")
+		}
+		meeting, err := repo.MetadataView().GetMeeting(ctx, detail.UserID, detail.MeetingID)
+		if err != nil {
+			return err
+		}
+		if meeting == nil || !meeting.AudioCrop.QueuedFor(meeting.Status) {
+			return nil
+		}
+		if whisperCluster == "" || whisperTaskDef == "" || whisperContainer != "whisper" {
+			return fmt.Errorf("audio cropping requires the production Whisper worker")
+		}
+		return startWhisperTask(ctx, detail.MeetingID, detail.UserID, "", "", "", len(meeting.Participants), true)
+	}
 	var event model.EventBridgeS3Event
 	if err := json.Unmarshal(raw, &event); err != nil {
 		return fmt.Errorf("failed to unmarshal EventBridge event: %w", err)
@@ -104,6 +135,9 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	// Skip progress files (cumulative checkpoint for crash recovery, not final audio)
 	if strings.Contains(key, "recording_progress") {
 		log.Printf("Skipping progress file: %s", key)
+		return nil
+	}
+	if cropResultKeyPattern.MatchString(key) {
 		return nil
 	}
 
@@ -241,7 +275,7 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	return nil
 }
 
-func startWhisperTask(ctx context.Context, meetingID, userID, audioKey, initialPrompt, outputKey string, numSpeakers int) error {
+func startWhisperTask(ctx context.Context, meetingID, userID, audioKey, initialPrompt, outputKey string, numSpeakers int, crop ...bool) error {
 	envOverrides := []ecsTypes.KeyValuePair{
 		{Name: aws.String("AUDIO_KEY"), Value: aws.String(audioKey)},
 		{Name: aws.String("MEETING_ID"), Value: aws.String(meetingID)},
@@ -265,11 +299,17 @@ func startWhisperTask(ctx context.Context, meetingID, userID, audioKey, initialP
 			Name: aws.String("NUM_SPEAKERS"), Value: aws.String(strconv.Itoa(numSpeakers)),
 		})
 	}
+	var clientToken *string
+	if len(crop) > 0 && crop[0] {
+		envOverrides = append(envOverrides, ecsTypes.KeyValuePair{Name: aws.String("AUDIO_CROP"), Value: aws.String("1")})
+		clientToken = aws.String("crop-" + meetingID)
+	}
 
 	result, err := ecsClient.RunTask(ctx, &ecs.RunTaskInput{
 		Cluster:        aws.String(whisperCluster),
 		TaskDefinition: aws.String(whisperTaskDef),
 		Count:          aws.Int32(1),
+		ClientToken:    clientToken,
 		CapacityProviderStrategy: []ecsTypes.CapacityProviderStrategyItem{
 			{
 				CapacityProvider: aws.String("ttobak-whisper-spot"),

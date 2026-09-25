@@ -237,6 +237,9 @@ export const meetingsApi = {
   recover: (meetingId: string) =>
     api.post<{ meetingId: string; status: string }>(`/api/meetings/${meetingId}/recover`, {}),
 
+  cropAudio: (meetingId: string, request: { requestId: string; startSeconds: number; endSeconds: number }) =>
+    api.post<{ meetingId: string; status: string }>(`/api/meetings/${encodeURIComponent(meetingId)}/audio/crop`, request),
+
   rediarize: (meetingId: string, speakerCount: number) =>
     api.post<{ meetingId: string; status: string }>(`/api/meetings/${meetingId}/rediarize`, { speakerCount }),
 

@@ -4,8 +4,10 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useRouter, usePathname } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
-import { ApiError } from '@/lib/api';
 import { AudioPlayer } from '@/components/AudioPlayer';
+import { AudioCropEditor } from '@/components/meeting/AudioCropEditor';
+import { ApiError } from '@/lib/api';
+import { formatAudioTime } from '@/lib/audioRange';
 import { AudioUploader } from '@/components/AudioUploader';
 import { AttachmentGallery } from '@/components/AttachmentGallery';
 import { FileUploader } from '@/components/FileUploader';
@@ -308,8 +310,10 @@ function MeetingDetailContent() {
   const [isLoading, setIsLoading] = useState(true);
   const [showUploader, setShowUploader] = useState(false);
   const [showAudioUploader, setShowAudioUploader] = useState(false);
-  const [audioUrl, setAudioUrl] = useState<string | null>(null);
-  const [audioUrls, setAudioUrls] = useState<string[]>([]);
+  const [audioSource, setAudioSource] = useState<{ meetingId: string; revision: string; url?: string; urls: string[] } | null>(null);
+  const audioRevision = JSON.stringify([meeting?.audioKey, meeting?.audioKeys]);
+  const audioUrl = audioSource?.meetingId === meeting?.meetingId && audioSource?.revision === audioRevision ? audioSource?.url : undefined;
+  const audioUrls = audioSource?.meetingId === meeting?.meetingId && audioSource?.revision === audioRevision ? audioSource?.urls || [] : [];
   // reserve = space owed to the sibling column: divider width + row gaps + the
   // sibling's own min-width, so effectiveMax leaves that column at least its
   // floor rather than a flat viewport ratio that can't see what's next to it.
@@ -401,13 +405,14 @@ function MeetingDetailContent() {
 
   const hasAudio = meeting?.audioKey || (meeting?.audioKeys && meeting.audioKeys.length > 0);
   useEffect(() => {
-    if (hasAudio && meeting?.status === 'done' && meetingId) {
+    let canceled = false;
+    if (hasAudio && meeting?.meetingId === meetingId && (meeting?.status === 'done' || meeting?.status === 'error') && meetingId) {
       meetingsApi.audioUrl(meetingId).then(res => {
-        if (res.audioUrls?.length) setAudioUrls(res.audioUrls);
-        if (res.audioUrl) setAudioUrl(res.audioUrl);
+        if (!canceled) setAudioSource({ meetingId, revision: audioRevision, url: res.audioUrl, urls: res.audioUrls || [] });
       }).catch(() => {});
     }
-  }, [hasAudio, meeting?.status, meetingId]);
+    return () => { canceled = true; };
+  }, [hasAudio, meeting?.status, meeting?.meetingId, meetingId, audioRevision]);
 
   useEffect(() => {
     if (!isAuthenticated || !meetingId) return;
@@ -595,6 +600,11 @@ function MeetingDetailContent() {
           {(meeting.canRecoverRecording ?? (meeting.status === 'recording' && meeting.userId === user?.userId)) && (
             <RecoveryBanner meetingId={meetingId} onRecovered={refetchMeeting} />
           )}
+          {meeting.audioCrop && <div className="mb-6 rounded-lg border border-slate-200 p-3 text-sm dark:border-white/10">
+            <p>원본의 {formatAudioTime(meeting.audioCrop.startSeconds)} ~ {formatAudioTime(meeting.audioCrop.endSeconds)} 구간으로 만든 미팅입니다.</p>
+            {(meeting.audioCrop.state === 'failed' || meeting.status === 'error') && <p role="alert" className="mt-1 text-red-600 dark:text-red-300">구간 처리에 실패했습니다. 원본 미팅에서 다시 요청할 수 있습니다.</p>}
+            <button type="button" onClick={() => router.push(`/meeting/${encodeURIComponent(meeting.audioCrop!.sourceMeetingId)}`)} className="mt-2 text-xs text-primary">원본 미팅 열기</button>
+          </div>}
 
           {/* Speaker Name Mapping — show when transcript exists (done or error with partial data) */}
           {(meeting.status === 'done' || meeting.transcription) && (
@@ -869,7 +879,11 @@ function MeetingDetailContent() {
           {audioUrls.length > 0 || audioUrl ? (
             <>
               <AudioPlayer audioUrl={audioUrl ?? undefined} audioUrls={audioUrls.length > 0 ? audioUrls : undefined} />
-              {(meeting.status === 'done' || meeting.status === 'error') && !showAudioUploader && (
+              {meeting.supportsAudioCrop && meeting.userId === user?.userId && (meeting.status === 'done' || meeting.status === 'error') && (meeting.audioKeys?.length ?? 0) <= 1 && (meeting.audioPartCount ?? 0) <= 1 && (
+                <AudioCropEditor key={`${meeting.meetingId}:${audioRevision}`} meetingId={meeting.meetingId} audioUrl={audioUrl || audioUrls[0]} duration={meeting.duration}
+                  dirty={summaryDirty || titleDirty || transcriptDirty || notesDirty} onCropped={(id) => router.push(`/meeting/${id}`)} />
+              )}
+              {!meeting.audioCrop && (meeting.status === 'done' || meeting.status === 'error') && !showAudioUploader && (
                 <div className="flex justify-center mt-4">
                   <button
                     onClick={() => setShowAudioUploader(true)}
@@ -884,7 +898,7 @@ function MeetingDetailContent() {
                 <AudioUploader meetingId={meeting.meetingId} onUploadComplete={() => { setShowAudioUploader(false); refetchMeeting(); }} />
               )}
             </>
-          ) : (meeting.status === 'done' || meeting.status === 'error') && !hasAudio ? (
+          ) : !meeting.audioCrop && (meeting.status === 'done' || meeting.status === 'error') && !hasAudio ? (
             <AudioUploader meetingId={meeting.meetingId} onUploadComplete={refetchMeeting} />
           ) : null}
           </div>

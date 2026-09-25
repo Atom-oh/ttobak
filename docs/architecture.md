@@ -115,6 +115,10 @@ unconsumed project invitation rows expire through their existing TTL field.
    Browser chunks also have account-scoped IndexedDB recovery with exclusive
    per-recording Web Locks; a local finalization can defer upload until the next
    visit. Server recovery remains available for expired empty drafts.
+   Owner-requested audio cropping creates an independent private meeting through
+   a source-checked transaction, then dispatches the existing Whisper worker.
+   The worker reads a pinned source revision, cuts the requested bytes and runs
+   transcription on that file. Original audio and prior human edits remain intact.
 3. Refine text while preserving acoustic speakers; summarize the selected source,
    saved notes and supported context into editable meeting content. Transcript
    spill objects are rehydrated by repository reads. Stale segments must not

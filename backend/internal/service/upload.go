@@ -23,12 +23,13 @@ import (
 
 // UploadService handles file upload operations
 type UploadService struct {
-	s3Client       *s3.Client
-	presignClient  *s3.PresignClient
-	ebClient       *eventbridge.Client
-	repo           *repository.DynamoDBRepository
-	bucketName     string
-	attachmentText *AttachmentTextService
+	audioCropEnabled bool
+	s3Client         *s3.Client
+	presignClient    *s3.PresignClient
+	ebClient         *eventbridge.Client
+	repo             *repository.DynamoDBRepository
+	bucketName       string
+	attachmentText   *AttachmentTextService
 
 	cfSignerMu      sync.Mutex
 	cfSigner        *CloudFrontSigner

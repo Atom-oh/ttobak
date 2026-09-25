@@ -14,11 +14,12 @@ describe('GatewayStack', () => {
       .filter(resource => JSON.stringify(resource.Properties.FunctionName).includes('KbFunction'));
   }
 
-  function buildTemplate(indexingMode: 'manual-only' | 'all' = 'manual-only', scheduleEnabled = false, mcpResourceAudience?: string): Template {
+  function buildTemplate(indexingMode: 'manual-only' | 'all' = 'manual-only', scheduleEnabled = false, mcpResourceAudience?: string, audioCropEnabled = false): Template {
     const app = new cdk.App({
       context: {
         'ttobak:cloudfrontDomain': 'd2olomx8td8txt.cloudfront.net',
         'ttobak:domainName': 'ttobak.example.com',
+        'ttobak:audioCropEnabled': audioCropEnabled,
         ...(mcpResourceAudience === undefined ? {} : { 'ttobak:mcpResourceAudience': mcpResourceAudience }),
       },
     });
@@ -312,6 +313,33 @@ describe('GatewayStack', () => {
     // audio upload, image upload, transcript upload, warming
     const rules = template.findResources('AWS::Events::Rule');
     expect(Object.keys(rules).length).toBeGreaterThanOrEqual(3);
+  });
+
+  test('audio cropping is off until the worker rollout is explicitly enabled', () => {
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'ttobak-api', Environment: { Variables: Match.objectLike({ AUDIO_CROP_ENABLED: '0' }) },
+    });
+    buildTemplate('manual-only', false, undefined, true).hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'ttobak-api', Environment: { Variables: Match.objectLike({ AUDIO_CROP_ENABLED: '1' }) },
+    });
+  });
+
+  test('audio crop uses the private transcribe consumer and installs it before its producer', () => {
+    template.hasResourceProperties('AWS::Events::Rule', {
+      Name: 'ttobak-audio-crop',
+      EventPattern: { source: ['ttobak.audio'], 'detail-type': ['AudioCropRequested'] },
+      Targets: Match.arrayWith([Match.objectLike({ Arn: { 'Fn::GetAtt': [resourceId('AWS::Lambda::Function', 'FunctionName', 'ttobak-transcribe'), 'Arn'] } })]),
+    });
+    const ruleId = resourceId('AWS::Events::Rule', 'Name', 'ttobak-audio-crop');
+    const apiId = resourceId('AWS::Lambda::Function', 'FunctionName', 'ttobak-api');
+    expect(template.toJSON().Resources[apiId].DependsOn).toEqual(expect.arrayContaining([
+      ruleId, resourceId('AWS::Lambda::Function', 'FunctionName', 'ttobak-transcribe'),
+    ]));
+    const permissionIds = Object.entries(template.findResources('AWS::Lambda::Permission'))
+      .filter(([, resource]) => JSON.stringify(resource.Properties.SourceArn).includes(ruleId))
+      .map(([id]) => id);
+    expect(permissionIds).toHaveLength(1);
+    expect(template.toJSON().Resources[apiId].DependsOn).toEqual(expect.arrayContaining(permissionIds));
   });
 
   test('creates 3 S3 event rules for pipeline', () => {
