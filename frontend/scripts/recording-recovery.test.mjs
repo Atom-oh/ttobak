@@ -121,9 +121,11 @@ test('recording timers use the new draft callback and finalized audio retains it
   const oldCheckpoints = [];
   const checkpoints = [];
   let finalized;
+  let reservations = 0;
   const props = {
     meetingId: 'local-draft', meetingTitle: 'Test recording', backupUserId: 'owner',
     onCheckpoint: (...args) => oldCheckpoints.push(args),
+    onBlobFinalizing: () => { reservations++; return 42; },
     onBlobReady: (...args) => { finalized = args; },
     onError: (error) => errors.push(error),
   };
@@ -136,14 +138,22 @@ test('recording timers use the new draft callback and finalized audio retains it
   assert.equal(checkpoints.length, 1);
   assert.equal(await checkpoints[0][0].text(), 'recorded audio');
   recorders[0].stop();
+  assert.equal(reservations, 1, 'reserve the page before waiting for IndexedDB');
+  assert.equal(finalized, undefined, 'the storage finalization is still pending');
   for (let attempt = 0; attempt < 100 && !finalized; attempt++) await tick();
   assert.ok(finalized, 'stop must complete after the local write commits');
   assert.equal(await finalized[0].text(), 'recorded audio');
   assert.equal(finalized[2].metadata.meetingId, 'server-draft');
   assert.equal(finalized[2].metadata.finalized, true);
+  assert.equal(finalized[3], 42);
+  assert.equal(reservations, 1);
   finalized[2].release();
   slots.forEach((slot) => slot?.cleanup?.());
 });
+
+class ApiError extends Error {
+  constructor(status, code) { super(code); this.status = status; this.code = code; }
+}
 
 function recoveryHook(meeting) {
   const states = [];
@@ -157,9 +167,9 @@ function recoveryHook(meeting) {
           useRef: (current) => ({ current }), useEffect() {}, useCallback: (callback) => callback,
         },
         'next/navigation': { useRouter: () => ({ push: (path) => navigations.push(path) }) },
-        '@/lib/api': { meetingsApi: { get: async (...args) => { requests.push(args); return meeting; } } },
+        '@/lib/api': { ApiError, meetingsApi: { get: async (...args) => { requests.push(args); if (meeting instanceof Error) throw meeting; return typeof meeting === 'function' ? meeting() : meeting; } } },
         '@/lib/meetingReferences': {},
-        '@/lib/recordingNotes': { RecordingNotes: class { initialize() {} } },
+        '@/lib/recordingNotes': { RecordingNotes: class { initialize() {} reset() {} } },
         '@/lib/meetingNotes': {}, '@/lib/upload': {}, '@/lib/tauri': {},
         '@/lib/browserRecordingBackup': {},
       };
@@ -193,5 +203,66 @@ test('an acknowledged upload is opened without reading audio or resetting the co
   });
   assert.equal(removed, true);
   assert.deepEqual(fixture.navigations, ['/meeting/draft']);
+  assert.equal(fixture.states.includes('notes'), false);
+});
+
+test('a deleted draft clears its old upload identity and retains audio for a new meeting', async () => {
+  const fixture = recoveryHook(new ApiError(404, 'NOT_FOUND'));
+  let read = false;
+  const backup = {
+    metadata: { userId: 'owner', meetingId: 'deleted', uploadKey: 'audio/owner/deleted/old.webm', notes: 'Local notes', mimeType: 'audio/webm' },
+    async update(patch) { this.metadata = { ...this.metadata, ...patch }; },
+    readBlob: async () => { read = true; return new Blob(['retained']); },
+  };
+  await fixture.hook.restoreBrowserRecording(backup);
+  assert.equal(backup.metadata.meetingId, undefined);
+  assert.equal(backup.metadata.uploadKey, undefined);
+  assert.equal(backup.metadata.notes, 'Local notes');
+  assert.equal(read, true);
+  assert.ok(fixture.states.includes('notes'));
+  assert.deepEqual(fixture.navigations, []);
+});
+
+test('permission and network errors do not detach a retained recording from its draft', async () => {
+  for (const error of [new ApiError(403, 'FORBIDDEN'), new Error('offline')]) {
+    const fixture = recoveryHook(error);
+    await assert.rejects(fixture.hook.restoreBrowserRecording({
+      metadata: { userId: 'owner', meetingId: 'draft' },
+      update() { assert.fail('only not-found can clear the identity'); },
+      readBlob() { assert.fail('failed authorization must not prepare upload'); },
+    }), (actual) => actual === error);
+  }
+});
+
+test('late audio from an older flow cannot overwrite a restored recording', async () => {
+  const fixture = recoveryHook({ notes: '', supportsNotesComparison: true });
+  const oldGeneration = fixture.hook.captureBlobGeneration();
+  let oldReleased = false;
+  await fixture.hook.restoreBrowserRecording({
+    metadata: { userId: 'owner', meetingId: 'restored', notes: '', mimeType: 'audio/webm' },
+    readBlob: async () => new Blob(['restored audio']),
+  });
+  const before = fixture.states.length;
+  const accepted = fixture.hook.handleBlobReady(new Blob(['old audio']), 'audio/webm', {
+    metadata: { userId: 'owner', meetingId: 'older' }, release() { oldReleased = true; },
+  }, oldGeneration);
+  assert.equal(accepted, false);
+  assert.equal(oldReleased, true);
+  assert.equal(fixture.states.length, before);
+});
+
+test('abandoning restoration during a read releases its lock without reviving the notes flow', async () => {
+  let resolveRead;
+  const fixture = recoveryHook(() => new Promise(resolve => { resolveRead = resolve; }));
+  let released = false;
+  const restoring = fixture.hook.restoreBrowserRecording({
+    metadata: { userId: 'owner', meetingId: 'draft' },
+    release() { released = true; },
+    readBlob() { assert.fail('an abandoned restore must not read its audio'); },
+  });
+  fixture.hook.reset();
+  resolveRead({ notes: '' });
+  await restoring;
+  assert.equal(released, true);
   assert.equal(fixture.states.includes('notes'), false);
 });

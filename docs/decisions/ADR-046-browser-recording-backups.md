@@ -11,9 +11,13 @@ chunk commit together; the displayed saved time advances only after commit. Web
 Locks permit only one active recorder/recovery handle per recording. A storage or
 lock failure must not stop capture or block uploading the complete in-memory audio.
 
+The page reserves the recording flow from stop through asynchronous finalization;
+a generation check rejects a late blob from an older flow.
 Stopping can retain audio and final notes for a later upload. Recovery uses the
 original account, compares saved notes, and retains the same uploaded object key
-across acknowledgement retries. Delete the local copy only after acknowledged
+across acknowledgement retries. A missing/deleted draft clears its old meeting and
+upload identity before creating a new meeting; permission or network errors retain
+that identity. Delete the local copy only after acknowledged
 upload completion or explicit deletion. No scheduled TTL or sign-out purge applies:
 those would remove the only copy of a recording the user intentionally deferred.
 

@@ -195,6 +195,12 @@ function RecordPageInner() {
   // click→permission-prompt→start window (`onStartAttempt`) — the latter
   // matters because `onRecordingStart` only fires AFTER the user answers
   // the permission prompt, which can take as long as they like.
+  const [browserFinalizing, setBrowserFinalizingState] = useState(false);
+  const browserFinalizingRef = useRef(false);
+  const setBrowserFinalizing = (value: boolean) => {
+    browserFinalizingRef.current = value;
+    setBrowserFinalizingState(value);
+  };
   const [flowBusy, setFlowBusyState] = useState(false);
   const [recordStartInFlight, setRecordStartInFlightState] = useState(false);
   const flowBusyRef = useRef(false);
@@ -210,8 +216,8 @@ function RecordPageInner() {
   // The native flag stays set through Stop/finalize until the completed
   // WAV is handed off. Keep that reservation in the parent across mode
   // changes so another draft cannot replace this recording's meeting ID.
-  const meetingFlowBusy = flowBusy || recordStartInFlight || isNativeRecording;
-  const isMeetingFlowBusy = () => flowBusyRef.current || recordStartInFlightRef.current || isNativeRecordingRef.current;
+  const meetingFlowBusy = flowBusy || recordStartInFlight || isNativeRecording || browserFinalizing;
+  const isMeetingFlowBusy = () => flowBusyRef.current || recordStartInFlightRef.current || isNativeRecordingRef.current || browserFinalizingRef.current;
 
   // Plain functions, like `handleRecordingStart` below (not useCallback):
   // they close over `resetSessionStateForNewMeeting`, which is itself a
@@ -1131,7 +1137,13 @@ function RecordPageInner() {
             disabled={!!postRecording.step || meetingFlowBusy}
             deviceId={audioSource === 'mic' ? (selectedDeviceId || undefined) : undefined}
             onRecordingComplete={postRecording.handleRecordingComplete}
-            onBlobReady={postRecording.handleBlobReady}
+            onBlobFinalizing={() => {
+              setBrowserFinalizing(true);
+              return postRecording.captureBlobGeneration();
+            }}
+            onBlobReady={(blob, mimeType, backup, generation) => {
+              if (postRecording.handleBlobReady(blob, mimeType, backup, generation)) setBrowserFinalizing(false);
+            }}
             backupUserId={user?.userId}
             backupNotes={notes}
             serverMeetingId={postRecording.serverMeetingId}
@@ -1139,6 +1151,7 @@ function RecordPageInner() {
             onNativePcmChunk={session.pushNativePcmChunk}
             onError={(error, opts) => {
               if (opts?.terminal) {
+                setBrowserFinalizing(false);
                 // No audio was captured at all (finalizeRecordingBlob's
                 // 0-byte case) -- by now stopRecording() has already run
                 // onRecordingStop synchronously, so session.isRecording
@@ -1178,7 +1191,7 @@ function RecordPageInner() {
                 // finalizes through the normal onstop -> onBlobReady flow.
                 // Surface the failure on the captions/session banner
                 // instead of discarding it.
-                postRecording.reset(); // clear any previous banner state
+                // Preserve the flow generation while its captured audio finalizes.
                 session.setSpeechError(error);
               } else {
                 session.setSpeechError(error);

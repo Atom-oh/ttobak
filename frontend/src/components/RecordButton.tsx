@@ -24,7 +24,8 @@ interface RecordButtonProps {
   meetingTitle?: string;
   deviceId?: string;
   onRecordingComplete?: (audioUrl: string) => void;
-  onBlobReady?: (blob: Blob, mimeType: string, backup?: BrowserRecordingBackup) => void;
+  onBlobReady?: (blob: Blob, mimeType: string, backup?: BrowserRecordingBackup, generation?: number) => void;
+  onBlobFinalizing?: () => number;
   backupUserId?: string;
   backupNotes?: string;
   serverMeetingId?: string | null;
@@ -112,6 +113,7 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
   deviceId,
   onRecordingComplete,
   onBlobReady,
+  onBlobFinalizing,
   backupUserId,
   backupNotes = '',
   serverMeetingId,
@@ -137,6 +139,7 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
   const recordingStateRef = useRef<RecordingState>('idle');
   const checkpointTimerRef = useRef<NodeJS.Timeout | null>(null);
   const isRecordingRef = useRef(false);
+  const finalizeGenerationRef = useRef<number | undefined>(undefined);
   const backupRef = useRef<Promise<BrowserRecordingBackup> | null>(null);
   const [backupStatus, setBackupStatus] = useState<{ savedAt?: number; error?: string }>({});
   const checkpointHandlerRef = useRef(onCheckpoint);
@@ -624,6 +627,7 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
 
       chunksRef.current = [];
       stopFinalizedRef.current = false;
+      finalizeGenerationRef.current = undefined;
       setBackupStatus({});
       void backupRef.current?.then((backup) => backup.release()).catch(() => {});
       const backupPromise = backupUserId
@@ -752,9 +756,17 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
    * scenario -- the one the `onerror` handler exists to catch -- left
    * captured chunks never finalized and the UI stuck reading "recording".
    */
+  const reserveBlobFinalization = () => {
+    if (finalizeGenerationRef.current === undefined) {
+      finalizeGenerationRef.current = onBlobFinalizing?.();
+    }
+    return finalizeGenerationRef.current;
+  };
+
   const finalizeRecordingBlob = () => {
     if (stopFinalizedRef.current) return;
     stopFinalizedRef.current = true;
+    const generation = reserveBlobFinalization();
     cleanupAudioResources();
     const mimeType = mediaRecorderRef.current?.mimeType || getPreferredMimeType();
     const blob = new Blob(chunksRef.current, { type: mimeType });
@@ -783,7 +795,7 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
         setRecordingState('idle');
         setElapsedTime(0);
         backupRef.current = null;
-        onBlobReady(blob, mimeType, backup);
+        onBlobReady(blob, mimeType, backup, generation);
       })();
     } else {
       void handleUpload(blob);
@@ -925,6 +937,7 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
     }
 
     if (mediaRecorderRef.current) {
+      reserveBlobFinalization();
       if (mediaRecorderRef.current.state !== 'inactive') {
         mediaRecorderRef.current.stop();
       } else {
