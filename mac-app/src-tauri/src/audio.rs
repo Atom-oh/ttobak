@@ -417,22 +417,23 @@ pub mod macos {
                     // Closing the sender ends the worker's receive loop.
                     ctx.tx.lock().map(|mut tx| tx.take()).ok();
                 }
-                let mut first_err = None;
+                // Aggregate before tap; on failure keep both handles so the
+                // `Drop` of these resources retries in the same order.
                 if self.aggregate != 0 {
                     let status = AudioHardwareDestroyAggregateDevice(self.aggregate);
                     if status != 0 {
-                        first_err = Some(fail("AudioHardwareDestroyAggregateDevice", status));
+                        return Err(fail("AudioHardwareDestroyAggregateDevice", status));
                     }
                     self.aggregate = 0;
                 }
                 if self.tap != 0 {
                     let status = AudioHardwareDestroyProcessTap(self.tap);
-                    if status != 0 && first_err.is_none() {
-                        first_err = Some(fail("AudioHardwareDestroyProcessTap", status));
+                    if status != 0 {
+                        return Err(fail("AudioHardwareDestroyProcessTap", status));
                     }
                     self.tap = 0;
                 }
-                first_err.map_or(Ok(()), Err)
+                Ok(())
             }
         }
 

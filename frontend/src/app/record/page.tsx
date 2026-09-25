@@ -1040,7 +1040,7 @@ function RecordPageInner() {
                   Zoom·Teams 데스크탑 앱과 Chrome의 Zoom Web·Google Meet 등 시스템 오디오를 캡처합니다 (실시간 자막은 베스트에포트로 시도되며, 연결에 실패해도 녹음 종료 후 자동으로 전사됩니다)
                 </div>
                 <div className="text-xs text-purple-600/80 dark:text-purple-300/70 ml-6">
-                  ⚠️ 다른 참가자 음성만 녹음됩니다 — 본인 마이크는 별도로 잡지 않습니다
+                  최신 Mac 앱(macOS 14.2 이상)은 시스템 오디오와 본인 마이크를 함께 녹음합니다. 이전 버전 앱은 다른 참가자 음성만 녹음합니다
                 </div>
               </div>
             )}
@@ -1099,12 +1099,13 @@ function RecordPageInner() {
             visible while a native recording is live even in upload mode --
             otherwise the upload UI's own `!isNativeRecording` guard above
             hides IT too, leaving no Stop control on screen at all. */}
+        {/* Mac app capture notes stay visible after stop, including the upload phase. */}
+        {nativeWarnings.length > 0 && (
+          <div role="status" className="mx-auto mb-3 max-w-xl rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-900/20 dark:text-amber-200">
+            {nativeWarnings.map((warning) => <p key={warning}>⚠️ {warning}</p>)}
+          </div>
+        )}
         <div className={`${isUploadMode && !isNativeRecording ? 'hidden' : 'flex'} flex-col items-center justify-center mb-8`}>
-          {nativeWarnings.length > 0 && (
-            <div role="status" className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-900/20 dark:text-amber-200">
-              {nativeWarnings.map((warning) => <p key={warning}>⚠️ {warning}</p>)}
-            </div>
-          )}
           <RecordButton
             ref={recordButtonRef}
             meetingId={clientMeetingId}
