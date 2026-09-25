@@ -23,7 +23,10 @@ ambiguous binding retains it. Cleanup failures are reported.
 
 Abrupt process/Spot termination can retain an uploaded candidate. Its address is
 persisted as audioCrop.resultKey (and derivable from its persisted runId), so an
-operator can reconcile it against canonical audioKey before deleting it. There is
+operator can reconcile it against canonical audioKey. Before deletion, confirm
+the task has stopped and conditionally fence that same run as failed; retain any
+object referenced by canonical audioKey. A live run must not be able to publish
+after the cleanup check. There is
 no automatic Spot restart or candidate janitor. Do not delete a candidate merely
 because its last worker response was missing.
 
