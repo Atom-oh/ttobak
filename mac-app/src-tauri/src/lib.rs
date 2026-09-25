@@ -111,6 +111,10 @@ pub struct RecorderState {
 #[derive(Serialize)]
 pub struct StartResponse {
     pub temp_path: String,
+    /// Non-fatal capture notes (e.g. no microphone, system audio only).
+    /// Additive field; older SPAs ignore it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -124,6 +128,10 @@ pub struct StopResponse {
     /// this is true — the frontend should proceed to upload rather than
     /// treat this as a hard failure.
     pub stop_timed_out: bool,
+    /// Non-fatal capture notes from the stop diagnosis (e.g. silent system
+    /// audio or microphone, dropped buffers). Additive field.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -221,6 +229,9 @@ pub(crate) fn validate_recording_path(
     Ok(canonical)
 }
 
+// The macOS block returns early and the non-macOS block is the fallback, so
+// on macOS its `return` is the last statement.
+#[allow(clippy::needless_return)]
 #[tauri::command]
 async fn start_recording(
     meeting_id: String,
@@ -272,6 +283,7 @@ async fn start_recording(
             }
         };
 
+        let warnings = backend.start_warnings();
         let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
         state.recording_power.lock().protect(canonical.clone(), || {
             power::PowerAssertion::acquire("TTOBAK recording awaiting upload")
@@ -283,6 +295,7 @@ async fn start_recording(
 
         return Ok(StartResponse {
             temp_path: canonical.to_string_lossy().into_owned(),
+            warnings,
         });
     }
 
@@ -340,7 +353,7 @@ async fn stop_recording(state: State<'_, RecorderState>) -> Result<StopResponse,
     let path = handle.path;
 
     #[cfg(target_os = "macos")]
-    let stop_timed_out = {
+    let (stop_timed_out, warnings) = {
         let backend = handle.backend;
         // Let the blocking task itself clear `finalizing` on completion —
         // that way the set stays accurate on the timed-out path too, where
@@ -376,7 +389,7 @@ async fn stop_recording(state: State<'_, RecorderState>) -> Result<StopResponse,
         });
 
         match tokio::time::timeout(STOP_CAPTURE_TIMEOUT, stop_task).await {
-            Ok(Ok(Ok(()))) => false,
+            Ok(Ok(Ok(warnings))) => (false, warnings),
             Ok(Ok(Err(e))) => return Err(e),
             Ok(Err(join_err)) => {
                 return Err(AppError::Backend(format!(
@@ -397,13 +410,13 @@ async fn stop_recording(state: State<'_, RecorderState>) -> Result<StopResponse,
                      ScreenCaptureKit's stop eventually completes.",
                     STOP_CAPTURE_TIMEOUT
                 );
-                true
+                (true, Vec::new())
             }
         }
     };
 
     #[cfg(not(target_os = "macos"))]
-    let stop_timed_out = false;
+    let (stop_timed_out, warnings) = (false, Vec::new());
 
     let byte_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
 
@@ -412,6 +425,7 @@ async fn stop_recording(state: State<'_, RecorderState>) -> Result<StopResponse,
         duration_ms,
         byte_size,
         stop_timed_out,
+        warnings,
     })
 }
 
@@ -544,7 +558,7 @@ fn list_leftover_recordings(state: State<'_, RecorderState>) -> Vec<LeftoverReco
             adopted.remove(&path);
         }
     }
-    out.sort_by(|a, b| b.modified_ms.cmp(&a.modified_ms));
+    out.sort_by_key(|r| std::cmp::Reverse(r.modified_ms));
     out
 }
 

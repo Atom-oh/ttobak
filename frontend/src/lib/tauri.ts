@@ -58,6 +58,8 @@ export const VERSION_SKEW_MESSAGE =
 
 export interface TauriStartResponse {
   temp_path: string;
+  /** Non-fatal capture notes (e.g. no microphone); newer app builds only. */
+  warnings?: string[];
 }
 
 export interface TauriStopResponse {
@@ -68,6 +70,8 @@ export interface TauriStopResponse {
    * timeout. The WAV up to the last periodic flush checkpoint is still
    * valid and playable — this is a soft warning, not a failure. */
   stop_timed_out: boolean;
+  /** Non-fatal notes such as a silent source; newer app builds only. */
+  warnings?: string[];
 }
 
 export interface TauriStatusResponse {

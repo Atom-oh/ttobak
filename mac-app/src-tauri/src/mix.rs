@@ -6,10 +6,6 @@
 //! Deliberately free of FFI and not `cfg`-gated, so these rules are unit
 //! tested on every platform: this module has no CI on macOS, and a mis-split
 //! channel layout silently produces a garbled recording.
-//!
-//! The Core Audio process-tap backend (ADR-046) is the consumer; until it
-//! lands, only the tests below use these functions.
-#![allow(dead_code)]
 
 /// One `AudioBuffer` from the IOProc's input list: `channels` interleaved
 /// f32 channels in `data` (Core Audio's canonical IOProc format).
@@ -48,13 +44,14 @@ pub struct Mixed {
 /// mix honest, the soft clip below absorbs the occasional sum above 1.0.
 pub const MIC_GAIN: f32 = 1.0;
 
-/// Mix one IOProc callback. Frames = the shortest buffer's frame count (the
-/// aggregate delivers equal-length buffers; a short or malformed buffer only
-/// truncates this callback instead of misaligning channels).
+/// Mix one IOProc callback. Frames = the shortest non-empty buffer's frame
+/// count (the aggregate delivers equal-length buffers; a short buffer only
+/// truncates this callback instead of misaligning channels). A buffer with no
+/// data (a null `mData`) contributes silence rather than erasing the others.
 pub fn mix(buffers: &[BufferView<'_>], layout: ChannelLayout, mic_gain: f32) -> Mixed {
     let frames = buffers
         .iter()
-        .filter(|b| b.channels > 0)
+        .filter(|b| b.channels > 0 && !b.data.is_empty())
         .map(|b| b.data.len() / b.channels)
         .min()
         .unwrap_or(0);
@@ -76,7 +73,7 @@ pub fn mix(buffers: &[BufferView<'_>], layout: ChannelLayout, mic_gain: f32) -> 
 
     let sample = |&(bi, ci): &(usize, usize), frame: usize| -> f32 {
         let b = &buffers[bi];
-        b.data[frame * b.channels + ci]
+        b.data.get(frame * b.channels + ci).copied().unwrap_or(0.0)
     };
 
     let mut out = Mixed {
@@ -252,6 +249,18 @@ mod tests {
             1.0,
         );
         assert_eq!(m.stereo.len(), 2);
+    }
+
+    #[test]
+    fn a_buffer_without_data_is_silence_not_a_lost_callback() {
+        let tap = [0.5, -0.5, 0.25, -0.25];
+        let m = mix(
+            &[view(1, &[]), view(2, &tap)],
+            ChannelLayout { skip: 0, mic: 1 },
+            1.0,
+        );
+        assert_eq!(m.stereo, vec![0.5, -0.5, 0.25, -0.25]);
+        assert_eq!(m.mic_peak, 0.0);
     }
 
     #[test]

@@ -63,6 +63,8 @@ function RecordPageInner() {
   // so it should never be the default anywhere (ADR-030).
   const [liveSttProvider, setLiveSttProvider] = useState<LiveSttProvider>('transcribe-streaming');
   const [audioSource, setAudioSource] = useState<'mic' | 'tab' | 'system'>('mic');
+  // Mac app capture notes (silent source, no microphone); reset per recording.
+  const [nativeWarnings, setNativeWarnings] = useState<string[]>([]);
   const [tabSharingLabel, setTabSharingLabel] = useState<string | null>(null);
   // Tauri System Audio mode has no MediaStream, so `session.isRecording`
   // (which only flips true inside session.startSession, given a stream)
@@ -574,6 +576,7 @@ function RecordPageInner() {
   };
 
   const handleRecordingStart = async (stream: MediaStream | null) => {
+    setNativeWarnings([]);
     if (stream && audioSource === 'tab') {
       const label = stream.getAudioTracks()[0]?.label || 'Tab Audio';
       setTabSharingLabel(label);
@@ -1037,7 +1040,7 @@ function RecordPageInner() {
                   Zoom·Teams 데스크탑 앱과 Chrome의 Zoom Web·Google Meet 등 시스템 오디오를 캡처합니다 (실시간 자막은 베스트에포트로 시도되며, 연결에 실패해도 녹음 종료 후 자동으로 전사됩니다)
                 </div>
                 <div className="text-xs text-purple-600/80 dark:text-purple-300/70 ml-6">
-                  ⚠️ 다른 참가자 음성만 녹음됩니다 — 본인 마이크는 별도로 잡지 않습니다
+                  최신 Mac 앱(macOS 14.2 이상)은 시스템 오디오와 본인 마이크를 함께 녹음합니다. 이전 버전 앱은 다른 참가자 음성만 녹음합니다
                 </div>
               </div>
             )}
@@ -1096,6 +1099,12 @@ function RecordPageInner() {
             visible while a native recording is live even in upload mode --
             otherwise the upload UI's own `!isNativeRecording` guard above
             hides IT too, leaving no Stop control on screen at all. */}
+        {/* Mac app capture notes stay visible after stop, including the upload phase. */}
+        {nativeWarnings.length > 0 && (
+          <div role="status" className="mx-auto mb-3 max-w-xl rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-900/20 dark:text-amber-200">
+            {nativeWarnings.map((warning) => <p key={warning}>⚠️ {warning}</p>)}
+          </div>
+        )}
         <div className={`${isUploadMode && !isNativeRecording ? 'hidden' : 'flex'} flex-col items-center justify-center mb-8`}>
           <RecordButton
             ref={recordButtonRef}
@@ -1110,6 +1119,7 @@ function RecordPageInner() {
             onRecordingComplete={postRecording.handleRecordingComplete}
             onBlobReady={postRecording.handleBlobReady}
             onNativeFileReady={postRecording.handleNativeFileReady}
+            onNativeWarnings={(warnings) => setNativeWarnings((prev) => [...new Set([...prev, ...warnings])])}
             onNativePcmChunk={session.pushNativePcmChunk}
             onError={(error, opts) => {
               if (opts?.terminal) {
