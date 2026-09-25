@@ -23009,7 +23009,7 @@ Retrieval is scoped to you -- only your own ttobak_ask queries can find this fil
           request2 = { action: "status" };
         } else if (name === "ttobak_app_start_recording") {
           const { title, accountId } = args;
-          if (typeof title !== "string" || !title.trim() || title.length > 200) return error2("title must be 1-200 characters");
+          if (typeof title !== "string" || !title.trim() || [...title.trim()].length > 200) return error2("title must be 1-200 characters");
           if (accountId !== void 0 && (typeof accountId !== "string" || !accountId.trim() || accountId.length > 128)) {
             return error2("accountId must be a non-empty string");
           }
@@ -23166,7 +23166,7 @@ function createMcpServer(options) {
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (!tools.some((tool) => tool.name === request.params.name)) return error2("Unknown or unavailable tool");
     const call = callTool(request, options);
-    if (RECORDING_TOOL_NAMES.includes(request.params.name)) {
+    if (RECORDING_TOOL_NAMES.includes(request.params.name) || APP_TOOL_NAMES.includes(request.params.name)) {
       recordingWork.add(call);
       void call.finally(() => recordingWork.delete(call));
     }

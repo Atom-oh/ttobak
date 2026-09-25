@@ -923,6 +923,7 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
               }
               if (status.finalizing_for_path === false) {
                 finalized = true;
+                if (status.warnings?.length) onNativeWarnings?.(status.warnings);
                 break;
               }
             }

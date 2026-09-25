@@ -36,7 +36,7 @@ stub compiler for objc2's build script; that proves types, not runtime behavior.
 |---|---|
 | start_recording | meeting_id; returns temp_path, optional warnings (e.g. no microphone) |
 | stop_recording | returns temp_path, duration_ms, byte_size, stop_timed_out, optional warnings (silent source, dropped buffers) |
-| recording_status | path; recording, temp_path, elapsed_ms, finalizing_for_path |
+| recording_status | path; recording, temp_path, elapsed_ms, finalizing_for_path, optional warnings once that path finalized (covers stops that timed out) |
 | upload_recording | path, uploadUrl, contentType; returns HTTP status code |
 | cleanup_recording | Validated inactive/finalized path; removes WAV and adopted entry |
 | release_recording_power | Releases only the path's idle-sleep protection, preserving recovery data |

@@ -544,9 +544,9 @@ const APP_TOOLS: Tool[] = [
 
 export const APP_TOOL_NAMES = APP_TOOLS.map((tool) => tool.name);
 
-// Recording tool calls in progress. Stdio shutdown waits for them, so a signal
-// or closed stdin never exits between an irreversible step (meeting create,
-// PUT, upload-complete) and its persisted progress or cleanup.
+// Recording and Mac app control calls in progress. Stdio shutdown waits for
+// them, so a signal or closed stdin never exits between an irreversible step
+// (meeting create, PUT, upload-complete, an app start/stop) and its result.
 const recordingWork = new Set<Promise<unknown>>();
 
 /** How long stdio shutdown waits for recording uploads before exiting anyway. */
@@ -928,7 +928,8 @@ async function callTool(request: CallToolRequest, options: ServerOptions) {
           request = { action: 'status' };
         } else if (name === 'ttobak_app_start_recording') {
           const { title, accountId } = args as Record<string, unknown>;
-          if (typeof title !== 'string' || !title.trim() || title.length > 200) return error('title must be 1-200 characters');
+          // Code points, as the app counts them (a UTF-16 length rejects valid titles).
+          if (typeof title !== 'string' || !title.trim() || [...title.trim()].length > 200) return error('title must be 1-200 characters');
           if (accountId !== undefined && (typeof accountId !== 'string' || !accountId.trim() || accountId.length > 128)) {
             return error('accountId must be a non-empty string');
           }
@@ -1117,7 +1118,7 @@ export function createMcpServer(options: ServerOptions): Server {
   server.setRequestHandler(CallToolRequestSchema, async request => {
     if (!tools.some(tool => tool.name === request.params.name)) return error('Unknown or unavailable tool');
     const call = callTool(request, options);
-    if (RECORDING_TOOL_NAMES.includes(request.params.name)) {
+    if (RECORDING_TOOL_NAMES.includes(request.params.name) || APP_TOOL_NAMES.includes(request.params.name)) {
       recordingWork.add(call);
       void call.finally(() => recordingWork.delete(call));
     }
