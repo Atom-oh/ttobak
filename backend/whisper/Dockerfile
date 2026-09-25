@@ -61,6 +61,7 @@ RUN python3 /tmp/verify_pins.py && pip3 check
 # transfer each). Keeps the image itself free of model weights and allows
 # model updates without a rebuild.
 COPY transcribe.py /app/transcribe.py
+COPY audio_crop.py /app/audio_crop.py
 WORKDIR /app
 
 ENTRYPOINT ["python3", "transcribe.py"]
