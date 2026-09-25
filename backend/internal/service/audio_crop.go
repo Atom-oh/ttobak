@@ -46,9 +46,6 @@ func validateAudioCrop(source *model.Meeting, userID string, request model.Audio
 		strings.Contains(key, "%") || len(key) == len(prefix) {
 		return "", ErrForbidden
 	}
-	if source.Duration > 0 && request.EndSeconds > source.Duration+1 {
-		return "", fmt.Errorf("%w: selected range exceeds the recording", ErrInvalidInput)
-	}
 	return key, nil
 }
 

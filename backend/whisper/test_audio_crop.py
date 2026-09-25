@@ -1,6 +1,9 @@
 import io
 import json
 import pathlib
+import os
+import uuid
+from urllib.parse import urlparse
 import struct
 import subprocess
 import tempfile
@@ -11,7 +14,8 @@ from unittest import mock
 from botocore.exceptions import ClientError
 from botocore.response import StreamingBody
 
-from audio_crop import _source_key, run_crop, trim_audio
+from audio_crop import _source_key, _now, run_crop, trim_audio
+from datetime import datetime, timezone
 
 
 def audio_bytes():
@@ -37,6 +41,12 @@ class AudioCropTests(unittest.TestCase):
         s3 = mock.Mock()
         s3.get_object.return_value = {"ContentLength": len(source), "Body": StreamingBody(io.BytesIO(source), len(source))}
         return table, s3, crop
+
+    def test_revision_timestamps_match_go_rfc3339nano_precision(self):
+        for micros, suffix in [(0, "00Z"), (100000, "00.1Z"), (120000, "00.12Z"), (123456, "00.123456Z")]:
+            with mock.patch("audio_crop.datetime") as clock:
+                clock.now.return_value = datetime(2026, 9, 25, 0, 0, 0, micros, tzinfo=timezone.utc)
+                self.assertEqual(_now(), "2026-09-25T00:00:" + suffix)
 
     def test_real_crop_excludes_before_and_after_audio(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -127,3 +137,41 @@ class AudioCropTests(unittest.TestCase):
                     "audio/owner/source/%2e%2e.wav", "audio/owner/source/", "audio/owner/source/.."]:
             with self.assertRaises(ValueError):
                 _source_key({"userId": "owner", "meetingId": "source", "audioKey": key}, "owner", "source")
+
+
+@unittest.skipUnless(os.environ.get("DYNAMODB_LOCAL_ENDPOINT"), "requires a loopback DynamoDB Local endpoint")
+class DynamoDBLocalCropTests(unittest.TestCase):
+    def test_worker_publication_uses_valid_dynamodb_expressions(self):
+        import boto3
+        endpoint = os.environ["DYNAMODB_LOCAL_ENDPOINT"]
+        parsed = urlparse(endpoint)
+        self.assertEqual(parsed.scheme, "http")
+        self.assertIn(parsed.hostname, ("127.0.0.1", "localhost"))
+        database = boto3.resource("dynamodb", endpoint_url=endpoint, region_name="us-west-2",
+                                  aws_access_key_id="local", aws_secret_access_key="local")
+        table = database.create_table(
+            TableName="crop-test-" + uuid.uuid4().hex,
+            KeySchema=[{"AttributeName": "PK", "KeyType": "HASH"}, {"AttributeName": "SK", "KeyType": "RANGE"}],
+            AttributeDefinitions=[{"AttributeName": name, "AttributeType": "S"} for name in ("PK", "SK")],
+            BillingMode="PAY_PER_REQUEST",
+        )
+        try:
+            table.wait_until_exists()
+            _, s3, crop = AudioCropTests().fixture()
+            source = {"PK": "USER#owner", "SK": "MEETING#source", "userId": "owner", "meetingId": "source",
+                      "audioKey": crop["sourceKey"]}
+            table.put_item(Item=source)
+            key = {"PK": "USER#owner", "SK": "MEETING#copy"}
+            table.put_item(Item={**key, "userId": "owner", "meetingId": "copy", "status": "transcribing", "audioCrop": crop})
+            transcribe = mock.Mock(return_value={"results": {"transcripts": [{"transcript": "selected speech"}]}})
+            run_crop(s3, table, "bucket", "owner", "copy", transcribe)
+            saved = table.get_item(Key=key, ConsistentRead=True)["Item"]
+            self.assertEqual(saved["audioCrop"]["state"], "done")
+            self.assertEqual(saved["duration"], 2)
+            self.assertTrue(saved["audioKey"].startswith("audio/owner/copy/crop_result_"))
+            self.assertEqual(s3.put_object.call_args.kwargs["Key"], "transcripts/copy.json")
+            run_crop(s3, table, "bucket", "owner", "copy", transcribe)
+            transcribe.assert_called_once()
+            self.assertEqual(table.get_item(Key={"PK": "USER#owner", "SK": "MEETING#source"}, ConsistentRead=True)["Item"], source)
+        finally:
+            table.delete()

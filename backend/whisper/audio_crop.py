@@ -13,7 +13,8 @@ MAX_SOURCE_BYTES = 2 * 1024 * 1024 * 1024
 
 
 def _now():
-    return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+    value = datetime.now(timezone.utc).isoformat(timespec="microseconds").removesuffix("+00:00")
+    return value.rstrip("0").rstrip(".") + "Z"
 
 
 def _source_key(source, user_id, meeting_id):
@@ -103,9 +104,9 @@ def run_crop(s3, table, bucket, user_id, meeting_id, transcribe):
                 s3.put_object(Bucket=bucket, Key=output_key, Body=audio, ContentType="audio/wav", IfNoneMatch="*")
             table.update_item(
                 Key=key,
-                UpdateExpression="SET audioKey = :audio, duration = :duration, audioCrop.#state = :done, updatedAt = :now",
+                UpdateExpression="SET audioKey = :audio, #duration = :duration, audioCrop.#state = :done, updatedAt = :now",
                 ConditionExpression="audioCrop.runId = :run AND audioCrop.#state = :processing AND #status = :transcribing AND attribute_not_exists(audioKey)",
-                ExpressionAttributeNames={"#state": "state", "#status": "status"},
+                ExpressionAttributeNames={"#state": "state", "#status": "status", "#duration": "duration"},
                 ExpressionAttributeValues={":audio": output_key, ":duration": end_seconds - start_seconds,
                                            ":done": "done", ":now": _now(), ":run": run_id, ":processing": "processing",
                                            ":transcribing": "transcribing"},

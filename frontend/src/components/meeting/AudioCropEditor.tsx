@@ -16,7 +16,7 @@ export function AudioCropEditor({ meetingId, audioUrl, duration, dirty, onCroppe
   const [end, setEnd] = useState(duration ? formatAudioTime(duration) : '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [knownDuration, setKnownDuration] = useState(duration || 0);
+  const [knownDuration, setKnownDuration] = useState(0);
   const requestRef = useRef<{ range: string; id: string } | null>(null);
   const mountedRef = useRef(true);
   useEffect(() => {

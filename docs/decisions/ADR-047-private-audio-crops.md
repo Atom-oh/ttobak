@@ -28,6 +28,9 @@ Source size is at most 2 GiB; selected duration at most six hours; end time at m
 container demuxers. Overrun or short output fails rather than silently shortening
 the range. The original remains available on failure. There is no automatic Spot
 worker restart; a failed/interrupted copy requires another request from the original.
+The existing meeting detail expiry can also mark a transcribing copy as error after
+60 minutes without an updated timestamp; this worker has no heartbeat. The input
+range limit does not guarantee completion of every long-running task.
 
 GatewayStack defaults AUDIO_CROP_ENABLED to 0. The opt-in context
 `ttobak:audioCropEnabled=true` must follow the worker-image rollout and actual
@@ -35,5 +38,7 @@ crop/transcription acceptance. Consumer Lambda, event rule and invocation permis
 precede the API producer. This decision adds an authenticated API route through the
 existing CloudFront origin; it adds no public compute origin or auth bypass.
 
-Local Go, Python/FFmpeg, browser and CDK tests establish code behavior. Synthetic
+Local Go, Python/FFmpeg, browser and CDK tests establish code behavior.
+The opt-in Python integration test uses only a loopback DynamoDB Local endpoint
+(`DYNAMODB_LOCAL_ENDPOINT`) to validate real worker expressions and publication. Synthetic
 media and a stub recognizer do not establish production GPU/model acceptance.

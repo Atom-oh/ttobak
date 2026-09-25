@@ -30,7 +30,16 @@ func TestAudioCropEligibility(t *testing.T) {
 		{"active recording", func(meeting *model.Meeting, _ *model.AudioCropRequest) { meeting.Status = model.StatusRecording }, ErrInvalidInput},
 		{"empty range", func(_ *model.Meeting, request *model.AudioCropRequest) { request.EndSeconds = 0 }, ErrInvalidInput},
 		{"negative start", func(_ *model.Meeting, request *model.AudioCropRequest) { request.StartSeconds = -1 }, ErrInvalidInput},
-		{"out of audio", func(_ *model.Meeting, request *model.AudioCropRequest) { request.EndSeconds = 18002 }, ErrInvalidInput},
+		{"stale duration after replacement", func(meeting *model.Meeting, request *model.AudioCropRequest) {
+			meeting.Status = model.StatusError
+			meeting.Duration = 300
+			request.EndSeconds = 3600
+		}, nil},
+		{"over six hours", func(_ *model.Meeting, request *model.AudioCropRequest) { request.EndSeconds = 21601 }, ErrInvalidInput},
+		{"beyond first day", func(_ *model.Meeting, request *model.AudioCropRequest) {
+			request.StartSeconds = 86000
+			request.EndSeconds = 86401
+		}, ErrInvalidInput},
 		{"invalid request id", func(_ *model.Meeting, request *model.AudioCropRequest) { request.RequestID = "invalid" }, ErrInvalidInput},
 	}
 	for _, test := range tests {
