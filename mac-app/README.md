@@ -1,9 +1,10 @@
 # TTOBAK for macOS
 
-Tauri 2 wrapper around the existing TTOBAK web app, adding native ScreenCaptureKit
-system-audio capture. Login remains in the web app. System audio is recorded to a
-WAV on disk; Rust streams finished uploads directly to a signed S3 URL. Small PCM
-events provide live captions through the existing browser Transcribe client.
+Tauri 2 wrapper around the existing TTOBAK web app, adding native capture of
+system audio (Core Audio process tap) mixed with the default microphone, on macOS
+14.2 or later. Login remains in the web app. The mix is recorded to a WAV on disk;
+Rust streams finished uploads directly to a signed S3 URL. Small PCM events provide
+live captions through the existing browser Transcribe client.
 
 ## Build
 
@@ -15,9 +16,12 @@ npm run dev
 npm run build:signed
 ```
 
-Use build:signed so microphone/camera entitlements are applied. A new ad-hoc build
-may require re-granting Screen Recording permission. Test a short recording after
-installation. This module is built/tested locally and has no CI coverage.
+Use build:signed so microphone/camera entitlements are applied. The first
+recording asks for Microphone and System Audio Recording permission; a new ad-hoc
+build may require granting them again (`tccutil reset Microphone|AudioCapture
+click.atomai.ttobak.mac`). Test a short recording with headphones after
+installation: both your voice and the other participants' must be audible. This
+module is built/tested locally and has no CI coverage.
 
 ```bash
 (cd src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test)
@@ -36,10 +40,13 @@ macOS user directory, not a specific TTOBAK login. Confirm the file before uploa
 or deleting it on a shared Mac. Force Quit may leave only the last flushed audio;
 graceful exit has a separate finalization path.
 
-System audio is the implemented native capture mode. Native microphone mixing is
-not implied by the wrapper; browser microphone recording is a separate mode.
+Native mode records system audio and the default microphone together. Without an
+input device it records system audio only and says so in the start warning; a
+silent source (usually a denied permission) is reported when recording stops.
+Browser microphone recording remains a separate mode.
 Real Developer ID distribution/notarization is not established by ad-hoc signing.
 
 See [developer guidance](CLAUDE.md),
 [ADR-024](../docs/decisions/ADR-024-mac-app-native-streaming-upload-and-system-audio-captions.md),
+[ADR-046](../docs/decisions/ADR-046-mac-core-audio-tap-and-microphone.md),
 and the actual remote URL/capabilities in src-tauri configuration.

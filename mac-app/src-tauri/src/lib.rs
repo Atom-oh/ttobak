@@ -44,11 +44,10 @@ use tauri::{AppHandle, Manager, State};
 use crate::audio::{AudioRecorder, StartGuard};
 use crate::error::AppError;
 
-/// How long `stop_recording` waits for ScreenCaptureKit's `stop_capture` to
-/// return before giving up and reporting `stop_timed_out: true`. The
-/// underlying FFI call has no timeout of its own (it blocks on a plain
-/// `Condvar`), so without this a wedged stream previously could have hung
-/// the command's promise forever.
+/// How long `stop_recording` waits for the Core Audio capture stop to
+/// return before giving up and reporting `stop_timed_out: true`.
+/// `AudioDeviceStop` and the device teardown have no timeout of their own, so
+/// without this a wedged HAL call could hang the command's promise forever.
 const STOP_CAPTURE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A leftover temp WAV found at startup (see `run()`'s `.setup()`) older
@@ -122,7 +121,7 @@ pub struct StopResponse {
     pub temp_path: String,
     pub duration_ms: u64,
     pub byte_size: u64,
-    /// True if ScreenCaptureKit's `stop_capture` did not return within
+    /// True if the Core Audio capture stop did not return within
     /// `STOP_CAPTURE_TIMEOUT`. The WAV up to the last periodic flush
     /// checkpoint (see `audio.rs`) is still valid and playable even when
     /// this is true — the frontend should proceed to upload rather than
@@ -239,7 +238,7 @@ async fn start_recording(
     app: AppHandle,
 ) -> Result<StartResponse, AppError> {
     // Reserve the slot (cheap, non-blocking) and let `state.recorder`'s lock
-    // go BEFORE the blocking ScreenCaptureKit FFI below — see
+    // go BEFORE the blocking Core Audio FFI below — see
     // `AudioRecorder::begin_start`'s doc comment for the bug this closes
     // (holding the lock across a permission-dialog-length block used to
     // freeze `recording_status`, a sync main-thread command, for as long as
@@ -317,7 +316,7 @@ async fn stop_recording(state: State<'_, RecorderState>) -> Result<StopResponse,
     // Take the handle out AND mark its path `finalizing`, in the SAME
     // critical section — then let the `state.recorder` lock go BEFORE the
     // blocking, no-timeout-of-its-own `stop_capture()` FFI call. Holding
-    // that lock across the FFI call used to mean a wedged ScreenCaptureKit
+    // that lock across the FFI call used to mean a wedged capture
     // stop could block every other command needing `RecorderState.recorder`
     // (notably `recording_status`, which runs on the app's main thread).
     //
@@ -373,7 +372,7 @@ async fn stop_recording(state: State<'_, RecorderState>) -> Result<StopResponse,
         // and can keep running in the background indefinitely (see the
         // `Err(_elapsed)` arm below) — holding the guard until THAT
         // background task finishes would mean a genuinely wedged
-        // ScreenCaptureKit stop blocks lid-close sleep until the process
+        // capture stop blocks lid-close sleep until the process
         // exits, which is exactly the open-ended hold this guard type must
         // never have (see power.rs's module doc). Keeping it a plain local
         // here instead bounds its lifetime to this command's own
@@ -407,7 +406,7 @@ async fn stop_recording(state: State<'_, RecorderState>) -> Result<StopResponse,
                      stop_timed_out=true. The WAV up to the last periodic \
                      flush checkpoint is already valid on disk; finalize \
                      will still run in the background if/when \
-                     ScreenCaptureKit's stop eventually completes.",
+                     the Core Audio stop eventually completes.",
                     STOP_CAPTURE_TIMEOUT
                 );
                 (true, Vec::new())
@@ -645,7 +644,7 @@ pub fn run() {
             // this is deliberately synchronous and un-timed-out, unlike the
             // live `stop_recording` command's spawn_blocking+timeout dance —
             // there is no IPC promise to keep responsive here, and a slow
-            // ScreenCaptureKit stop at this point is better to just wait out
+            // capture stop at this point is better to just wait out
             // (process exit is already in motion; nothing else needs this
             // thread) than to abandon and lose the tail of the recording.
             if let tauri::RunEvent::Exit = event {

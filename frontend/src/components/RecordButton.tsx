@@ -376,7 +376,7 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
     return () => cancelAnimationFrame(frameId);
   }, [state]);
 
-  // Drive PC waveform bars from native ScreenCaptureKit RMS levels (System mode).
+  // Drive PC waveform bars from native capture RMS levels (System mode).
   // The Rust side has no FFT, only a single 0–1 RMS value per ~33 ms tick.
   // Render that as a moving "scope" — shift bars left and push the latest
   // level on the right, so any captured audio shows visible motion. Lights up
@@ -450,7 +450,7 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
       try {
         // Fail BEFORE anything is created or recorded if the installed app
         // is too old to upload (see ADR-024 for the incident this guards
-        // against). Ordering matters: no draft meeting, no ScreenCaptureKit
+        // against). Ordering matters: no draft meeting, no native
         // permission prompt. The catch below already routes this to onError.
         await assertUploadRecordingAvailable();
 
