@@ -214,7 +214,10 @@ on stop; the adapter never sees audio or tokens.
   a recording, stop or upload is already in progress; `recording_unowned` means
   capture is running but its recording screen was closed (stop it in the app);
   `browser_recording` means a browser-mode recording in the app window is
-  active, which only its own stop button ends. A
+  active, which only its own stop button ends; `notes_too_long` means the stop
+  succeeded but the app kept the recording at its notes step;
+  `start_interrupted` / `stop_interrupted` mean the recording screen closed
+  mid-request. A
   `timeout` leaves the app's state unknown: check status before retrying.
 - Listed in `LOCAL_ONLY_TOOLS`; the HTTP transport never exposes them.
 

@@ -34,7 +34,7 @@ mod mix;
 mod power;
 mod upload;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -102,6 +102,11 @@ pub struct RecorderState {
     /// overlap, which is exactly the scenario this whole mechanism exists to
     /// handle correctly.
     pub finalizing: Arc<Mutex<HashSet<PathBuf>>>,
+    /// Stop-diagnosis warnings per canonical path, recorded when finalize
+    /// completes (including a finalize that outlived `STOP_CAPTURE_TIMEOUT`,
+    /// whose stop response could not carry them). `recording_status`
+    /// returns them; `cleanup_recording` forgets them.
+    pub finalize_warnings: Arc<Mutex<HashMap<PathBuf, Vec<String>>>>,
     /// Pending canonical paths and their shared idle-sleep assertion are
     /// changed under one lock; an older cleanup must not release a newer
     /// recording's protection.
@@ -154,6 +159,10 @@ pub struct StatusResponse {
     /// name would have let that stale build pass the check and be misread as
     /// per-path. Don't rename this back.
     pub finalizing_for_path: bool,
+    /// Stop warnings for this path once finalized (e.g. silent source after a
+    /// stop that timed out). Additive; older SPAs ignore it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 /// One startup-adopted leftover recording, as reported by
@@ -366,6 +375,7 @@ async fn stop_recording(state: State<'_, RecorderState>) -> Result<StopResponse,
         // OTHER one's path as done — see `RecorderState::finalizing`'s doc
         // comment.
         let finalizing = Arc::clone(&state.finalizing);
+        let finalize_warnings = Arc::clone(&state.finalize_warnings);
         // Blocks lid-close sleep for this bounded finalize window only (see
         // power.rs) — closing the lid the instant "end meeting" is clicked
         // used to be able to suspend the process mid stop_and_finalize with
@@ -385,6 +395,15 @@ async fn stop_recording(state: State<'_, RecorderState>) -> Result<StopResponse,
         let _lid_guard = power::LidCloseGuard::acquire("TTOBAK finishing recording");
         let stop_task = tauri::async_runtime::spawn_blocking(move || {
             let result = backend.stop_and_finalize();
+            // Publish warnings before clearing `finalizing`, so a status poll
+            // that sees the file finished also sees its warnings.
+            if let Ok(warnings) = &result {
+                if !warnings.is_empty() {
+                    finalize_warnings
+                        .lock()
+                        .insert(finalize_path.clone(), warnings.clone());
+                }
+            }
             finalizing.lock().remove(&finalize_path);
             result
         });
@@ -455,11 +474,20 @@ fn recording_status(path: String, state: State<'_, RecorderState>) -> StatusResp
         let set = state.finalizing.lock();
         leftover::finalizing_for_path(&path, &allowed_dir(), &set)
     };
+    let canonical = leftover::canonical_in_allowed(&path, &allowed_dir());
+    let warnings = if finalizing {
+        Vec::new()
+    } else {
+        canonical
+            .and_then(|c| state.finalize_warnings.lock().get(&c).cloned())
+            .unwrap_or_default()
+    };
     StatusResponse {
         recording: snapshot.recording,
         temp_path: snapshot.path.map(|p| p.to_string_lossy().into_owned()),
         elapsed_ms: snapshot.elapsed_ms,
         finalizing_for_path: finalizing,
+        warnings,
     }
 }
 
@@ -503,6 +531,7 @@ async fn cleanup_recording(path: String, state: State<'_, RecorderState>) -> Res
         .map_err(|e| AppError::Io(format!("remove {}: {e}", canonical.display())))?;
     state.recorded_paths.lock().remove(&canonical);
     state.adopted_paths.lock().remove(&canonical);
+    state.finalize_warnings.lock().remove(&canonical);
     log::info!("cleaned up recording: {}", canonical.display());
 
     Ok(())
@@ -575,6 +604,7 @@ pub fn run() {
             recorded_paths: Mutex::new(HashSet::new()),
             adopted_paths: Mutex::new(HashSet::new()),
             finalizing: Arc::new(Mutex::new(HashSet::new())),
+            finalize_warnings: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(target_os = "macos")]
             recording_power: Mutex::new(power::RecordingPower::new()),
         })

@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { createMcpServer } from '../dist/index.js';
+import { createMcpServer, settleRecordingWork } from '../dist/index.js';
 import { sendAppRequest, MAX_APP_RESPONSE_BYTES } from '../dist/app-control.js';
 
 // A stand-in for the Mac app's control socket (mac-app control.rs): records
@@ -115,4 +115,22 @@ test('app control tools are stdio-only', async (t) => {
     assert.equal((await http.call(name, { title: 'x' })).isError, true);
   }
   assert.equal(app.requests.length, 0);
+});
+
+test('titles are bounded by code points and app calls hold stdio shutdown', async (t) => {
+  const app = await fakeApp(t, (request) => (request.action === 'stop' ? undefined : ok(request, {})));
+  const { call } = await connect(t, { socketPath: app.socketPath, timeoutMs: 300 });
+  const emoji = '🎙'.repeat(200); // 200 code points, 400 UTF-16 units
+  assert.equal((await call('ttobak_app_start_recording', { title: emoji })).isError, false);
+  assert.match((await call('ttobak_app_start_recording', { title: emoji + '🎙' })).body, /title must be/);
+
+  const stopping = call('ttobak_app_stop_recording');
+  while (!app.requests.some((r) => r.action === 'stop')) await new Promise((r) => setTimeout(r, 10));
+  let settled = false;
+  const settling = settleRecordingWork().then(() => { settled = true; });
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(settled, false, 'shutdown waits for the in-flight app stop');
+  assert.match((await stopping).body, /timeout/, 'the fake app never answers stop');
+  await settling;
+  assert.equal(settled, true);
 });

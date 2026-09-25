@@ -98,14 +98,21 @@ pub(crate) fn finalizing_for_path(
     allowed: &Path,
     finalizing: &HashSet<PathBuf>,
 ) -> bool {
+    canonical_in_allowed(raw, allowed)
+        .map(|canonical| finalizing.contains(&canonical))
+        .unwrap_or(false)
+}
+
+/// Canonical form of a WebView-supplied path, only when it is inside
+/// `allowed` both lexically (checked before any filesystem access, so this
+/// is never an existence oracle for outside paths) and after resolution.
+pub(crate) fn canonical_in_allowed(raw: &str, allowed: &Path) -> Option<PathBuf> {
     if !Path::new(raw).starts_with(allowed) {
-        return false;
+        return None;
     }
     std::fs::canonicalize(raw)
         .ok()
         .filter(|canonical| canonical.starts_with(allowed))
-        .map(|canonical| finalizing.contains(&canonical))
-        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -263,5 +270,25 @@ mod tests {
         assert!(!finalizing_for_path(link.to_str().unwrap(), &allowed, &set));
         fs::remove_dir_all(&allowed).ok();
         fs::remove_dir_all(&outside).ok();
+    }
+
+    #[test]
+    fn canonical_in_allowed_resolves_only_contained_paths() {
+        let allowed = std::fs::canonicalize(scratch_dir("canon")).unwrap();
+        let inside = allowed.join("a.wav");
+        fs::write(&inside, b"x").unwrap();
+        assert_eq!(
+            canonical_in_allowed(inside.to_str().unwrap(), &allowed),
+            Some(inside.clone())
+        );
+        let missing = allowed.join("missing.wav");
+        assert_eq!(
+            canonical_in_allowed(missing.to_str().unwrap(), &allowed),
+            None
+        );
+        let escape = format!("{}/../x.wav", allowed.display());
+        assert_eq!(canonical_in_allowed(&escape, &allowed), None);
+        assert_eq!(canonical_in_allowed("/etc/passwd", &allowed), None);
+        fs::remove_dir_all(&allowed).ok();
     }
 }

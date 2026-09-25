@@ -589,8 +589,28 @@ function RecordPageInner() {
 
   useEffect(() => {
     if (!isTauri()) return;
-    // Leaving the record page: its phase no longer describes anything.
-    return () => { void reportNativeControlState({ phase: 'idle' }); };
+    // Leaving the record page: its phase no longer describes anything, and a
+    // start or stop still in flight can no longer be answered by its normal
+    // path — say so rather than let the app time out on it.
+    return () => {
+      const start = controlStartRef.current;
+      controlStartRef.current = null;
+      if (start) {
+        void replyNativeControl(start.request.requestId, {
+          ok: false,
+          error: { code: 'start_interrupted', message: 'The recording screen closed while starting; capture may still have started — check ttobak_app_status.' },
+        });
+      }
+      const stop = controlStopRef.current;
+      controlStopRef.current = null;
+      if (stop) {
+        void replyNativeControl(stop.requestId, {
+          ok: false,
+          error: { code: 'stop_interrupted', message: 'The recording screen closed while stopping; check ttobak_app_status.' },
+        });
+      }
+      void reportNativeControlState({ phase: 'idle' });
+    };
   }, []);
   useEffect(() => {
     if (!isTauri()) return;

@@ -100,6 +100,9 @@ export interface TauriStatusResponse {
    * poll loop — the one place this matters — fails fast with
    * `VERSION_SKEW_MESSAGE` on the first `undefined`. */
   finalizing_for_path?: boolean;
+  /** Stop warnings for this path once finalized, e.g. after a stop that
+   * timed out (its stop response had none). Newer app builds only. */
+  warnings?: string[];
 }
 
 /**
