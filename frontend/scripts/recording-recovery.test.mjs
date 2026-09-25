@@ -64,6 +64,18 @@ test('recording timers use the new draft callback and finalized audio retains it
         });
       }
     },
+    // Same slot bookkeeping as useEffect; RecordButton keeps its control
+    // handle refs current in a layout effect.
+    useLayoutEffect(effect, dependencies) {
+      const index = cursor++;
+      // No dependency array: runs after every render, as in React.
+      if (dependencies === undefined || !same(slots[index]?.dependencies, dependencies)) {
+        effects.push(() => {
+          slots[index]?.cleanup?.();
+          slots[index] = { dependencies, cleanup: effect() };
+        });
+      }
+    },
     useImperativeHandle() { cursor++; },
   };
   const timers = [];
