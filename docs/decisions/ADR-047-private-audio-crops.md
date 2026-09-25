@@ -28,9 +28,12 @@ Source size is at most 2 GiB; selected duration at most six hours; end time at m
 container demuxers. Overrun or short output fails rather than silently shortening
 the range. The original remains available on failure. There is no automatic Spot
 worker restart; a failed/interrupted copy requires another request from the original.
-The existing meeting detail expiry can also mark a transcribing copy as error after
-60 minutes without an updated timestamp; this worker has no heartbeat. The input
-range limit does not guarantee completion of every long-running task.
+A run-bound heartbeat refreshes processing every 30 seconds through download,
+conversion, transcription and audio upload. Lost claims cannot publish; an expired
+owned run is marked failed even if its meeting status is already error. Rejected
+publication deletes its unique audio object, while ambiguous bindings retain it.
+DynamoDB writes use one SDK attempt so a committed binding cannot be mistaken for
+rejection. Cleanup failures are reported. There is no automatic Spot restart.
 
 GatewayStack defaults AUDIO_CROP_ENABLED to 0. The opt-in context
 `ttobak:audioCropEnabled=true` must follow the worker-image rollout and actual

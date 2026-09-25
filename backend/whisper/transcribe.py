@@ -12,6 +12,7 @@ from contextlib import closing
 
 import boto3
 from botocore.exceptions import ClientError
+from botocore.config import Config
 from faster_whisper import WhisperModel
 
 REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
@@ -373,7 +374,12 @@ def main():
     user_id = os.environ["USER_ID"]
     if os.environ.get("AUDIO_CROP") == "1":
         from audio_crop import run_crop
-        return run_crop(s3, dynamodb.Table(TABLE), BUCKET, user_id, meeting_id, transcribe_local)
+        # A retry must not hide a committed binding behind a later condition
+        # rejection, which would wrongly authorize deleting its audio object.
+        crop_table = boto3.resource("dynamodb", region_name=REGION,
+                                    config=Config(connect_timeout=5, read_timeout=15,
+                                                  retries={"total_max_attempts": 1})).Table(TABLE)
+        return run_crop(s3, crop_table, BUCKET, user_id, meeting_id, transcribe_local)
     audio_key = os.environ.get("AUDIO_KEY")
     if audio_key and not _audio_key_exists(audio_key):
         print(f"AUDIO_KEY {audio_key!r} not found in S3 (likely Unicode mismatch); falling back to prefix scan")

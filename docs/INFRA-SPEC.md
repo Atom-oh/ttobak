@@ -232,7 +232,8 @@ the worker rollout and acceptance checks;
 GatewayStack orders the transcribe consumer, event rule and invocation permission
 before the API producer. The image must include `audio_crop.py` before enabling
 the producer. Cropped-audio S3 writes do not start a second transcription task.
-The source is ETag-pinned. FFmpeg has a 15-minute conversion timeout, only
+The source is ETag-pinned. A 30-second, run-bound heartbeat keeps long processing
+current; DynamoDB writes disable SDK retries so rejected-copy cleanup is safe. FFmpeg has a 15-minute conversion timeout, only
 file/pipe protocols, and an audio-container demuxer allowlist excluding playlists.
 The existing image dispatcher/pins remain unchanged.
 

@@ -3,6 +3,7 @@ import os
 import pathlib
 import subprocess
 import tempfile
+import threading
 import uuid
 import wave
 from datetime import datetime, timezone
@@ -10,11 +11,38 @@ from datetime import datetime, timezone
 from botocore.exceptions import ClientError
 
 MAX_SOURCE_BYTES = 2 * 1024 * 1024 * 1024
+HEARTBEAT_SECONDS = 30
 
 
 def _now():
     value = datetime.now(timezone.utc).isoformat(timespec="microseconds").removesuffix("+00:00")
     return value.rstrip("0").rstrip(".") + "Z"
+
+
+class CropHeartbeat:
+    def __init__(self, table, key, run_id):
+        self.stop = threading.Event()
+        self.failure = None
+        def run():
+            while not self.stop.wait(HEARTBEAT_SECONDS):
+                try:
+                    table.update_item(
+                        Key=key, UpdateExpression="SET updatedAt = :now",
+                        ConditionExpression="audioCrop.runId = :run AND audioCrop.#state = :processing AND #status = :transcribing",
+                        ExpressionAttributeNames={"#state": "state", "#status": "status"},
+                        ExpressionAttributeValues={":run": run_id, ":processing": "processing", ":transcribing": "transcribing", ":now": _now()},
+                    )
+                except Exception as error:
+                    self.failure = error
+                    return
+        self.thread = threading.Thread(target=run, daemon=True)
+        self.thread.start()
+
+    def close(self):
+        self.stop.set()
+        self.thread.join(timeout=25)
+        if self.thread.is_alive() or self.failure:
+            raise RuntimeError("Audio crop lost its processing claim")
 
 
 def _source_key(source, user_id, meeting_id):
@@ -70,6 +98,9 @@ def run_crop(s3, table, bucket, user_id, meeting_id, transcribe):
             return
         raise
 
+    heartbeat = None
+    output_key = None
+    publication_attempted = publication_rejected = published = False
     try:
         source_id = crop["sourceMeetingId"]
         source = table.get_item(Key={"PK": f"USER#{user_id}", "SK": f"MEETING#{source_id}"}, ConsistentRead=True).get("Item")
@@ -77,6 +108,7 @@ def run_crop(s3, table, bucket, user_id, meeting_id, transcribe):
         if source_key != crop["sourceKey"] or not crop.get("sourceETag"):
             raise ValueError("source audio changed")
         start_seconds, end_seconds = int(crop["startSeconds"]), int(crop["endSeconds"])
+        heartbeat = CropHeartbeat(table, key, run_id)
         with tempfile.TemporaryDirectory(prefix="ttobak-crop-") as directory:
             source_path = pathlib.Path(directory) / "source"
             output_path = pathlib.Path(directory) / "cropped.wav"
@@ -99,32 +131,66 @@ def run_crop(s3, table, bucket, user_id, meeting_id, transcribe):
                 body.close()
             trim_audio(source_path, output_path, start_seconds, end_seconds)
             result = transcribe(str(output_path))
+            if heartbeat.failure:
+                raise RuntimeError("Audio crop lost its processing claim")
             output_key = f"audio/{user_id}/{meeting_id}/crop_result_{run_id}.wav"
             with output_path.open("rb") as audio:
                 s3.put_object(Bucket=bucket, Key=output_key, Body=audio, ContentType="audio/wav", IfNoneMatch="*")
-            table.update_item(
-                Key=key,
-                UpdateExpression="SET audioKey = :audio, #duration = :duration, audioCrop.#state = :done, updatedAt = :now",
-                ConditionExpression="audioCrop.runId = :run AND audioCrop.#state = :processing AND #status = :transcribing AND attribute_not_exists(audioKey)",
-                ExpressionAttributeNames={"#state": "state", "#status": "status", "#duration": "duration"},
-                ExpressionAttributeValues={":audio": output_key, ":duration": end_seconds - start_seconds,
-                                           ":done": "done", ":now": _now(), ":run": run_id, ":processing": "processing",
-                                           ":transcribing": "transcribing"},
-            )
+            # Only the heartbeat accesses the Table during media work. Join it
+            # before publication so boto3 resource calls never overlap.
+            heartbeat.close()
+            heartbeat = None
+            publication_attempted = True
+            try:
+                table.update_item(
+                    Key=key,
+                    UpdateExpression="SET audioKey = :audio, #duration = :duration, audioCrop.#state = :done, updatedAt = :now",
+                    ConditionExpression="audioCrop.runId = :run AND audioCrop.#state = :processing AND #status = :transcribing AND attribute_not_exists(audioKey)",
+                    ExpressionAttributeNames={"#state": "state", "#status": "status", "#duration": "duration"},
+                    ExpressionAttributeValues={":audio": output_key, ":duration": end_seconds - start_seconds,
+                                               ":done": "done", ":now": _now(), ":run": run_id, ":processing": "processing",
+                                               ":transcribing": "transcribing"},
+                )
+            except ClientError as error:
+                publication_rejected = error.response["Error"]["Code"] in (
+                    "ConditionalCheckFailedException", "ValidationException", "ResourceNotFoundException", "AccessDeniedException")
+                raise
+            published = True
             s3.put_object(
                 Bucket=bucket, Key=f"transcripts/{meeting_id}.json",
                 Body=json.dumps(result, ensure_ascii=False).encode("utf-8"), ContentType="application/json",
             )
     except Exception:
+        if heartbeat:
+            try:
+                heartbeat.close()
+            except Exception:
+                pass
+        cleanup_failed = False
+        if output_key and (not publication_attempted or publication_rejected):
+            try:
+                s3.delete_object(Bucket=bucket, Key=output_key)
+            except Exception as cleanup_error:
+                cleanup_failed = True
+                print(f"Rejected crop cleanup failed: {type(cleanup_error).__name__}")
         try:
+            if heartbeat and heartbeat.thread.is_alive():
+                raise RuntimeError("heartbeat shutdown incomplete")
+            # Expiry may already have set status=error; the owned processing run
+            # must still become failed. Never overwrite an advanced summary.
+            condition = "audioCrop.runId = :run AND audioCrop.#state = :owned"
+            values = {":failed": "failed", ":error": "error", ":now": _now(), ":run": run_id,
+                      ":owned": "done" if published else "processing"}
+            if published:
+                condition += " AND #status = :transcribing"
+                values[":transcribing"] = "transcribing"
             table.update_item(
-                Key=key,
-                UpdateExpression="SET audioCrop.#state = :failed, #status = :error, updatedAt = :now",
-                ConditionExpression="audioCrop.runId = :run AND #status = :transcribing",
+                Key=key, UpdateExpression="SET audioCrop.#state = :failed, #status = :error, updatedAt = :now",
+                ConditionExpression=condition,
                 ExpressionAttributeNames={"#state": "state", "#status": "status"},
-                ExpressionAttributeValues={":failed": "failed", ":error": "error", ":now": _now(), ":run": run_id,
-                                           ":transcribing": "transcribing"},
+                ExpressionAttributeValues=values,
             )
         except Exception as update_error:
             print(f"Audio crop failure status unavailable: {type(update_error).__name__}")
-        raise RuntimeError("Audio crop failed; original recording is unchanged") from None
+        suffix = "; temporary audio cleanup could not be confirmed" if cleanup_failed else ""
+        raise RuntimeError("Audio crop failed; original recording is unchanged" + suffix) from None

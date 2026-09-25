@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 import struct
 import subprocess
 import tempfile
+import threading
 import unittest
 import wave
 from unittest import mock
@@ -132,6 +133,58 @@ class AudioCropTests(unittest.TestCase):
         self.assertEqual(s3.put_object.call_count, 1)
         self.assertNotIn("transcripts/", s3.put_object.call_args.kwargs["Key"])
 
+    def test_long_transcription_refreshes_the_owned_claim(self):
+        table, s3, _ = self.fixture()
+        refreshed = threading.Event()
+        def update(**request):
+            if request["UpdateExpression"] == "SET updatedAt = :now":
+                refreshed.set()
+        table.update_item.side_effect = update
+        def transcribe(path):
+            self.assertTrue(refreshed.wait(1), "heartbeat must run during transcription")
+            return {}
+        with mock.patch("audio_crop.HEARTBEAT_SECONDS", 0.01):
+            run_crop(s3, table, "bucket", "owner", "copy", transcribe)
+        claim = table.update_item.call_args_list[0].kwargs["ExpressionAttributeValues"][":run"]
+        beats = [call.kwargs for call in table.update_item.call_args_list if call.kwargs["UpdateExpression"] == "SET updatedAt = :now"]
+        self.assertTrue(beats)
+        self.assertTrue(all(beat["ExpressionAttributeValues"][":run"] == claim for beat in beats))
+        self.assertEqual(s3.put_object.call_count, 2)
+
+    def test_lost_heartbeat_claim_cannot_publish_a_transcript(self):
+        table, s3, _ = self.fixture()
+        rejected = threading.Event()
+        def update(**request):
+            if request["UpdateExpression"] == "SET updatedAt = :now":
+                rejected.set()
+                raise ClientError({"Error": {"Code": "ConditionalCheckFailedException"}}, "UpdateItem")
+        table.update_item.side_effect = update
+        def transcribe(path):
+            self.assertTrue(rejected.wait(1))
+            return {}
+        with mock.patch("audio_crop.HEARTBEAT_SECONDS", 0.01), self.assertRaises(RuntimeError):
+            run_crop(s3, table, "bucket", "owner", "copy", transcribe)
+        self.assertFalse(any(call.kwargs["Key"].startswith("transcripts/") for call in s3.put_object.call_args_list))
+        self.assertNotIn("#status =", table.update_item.call_args.kwargs["ConditionExpression"])
+
+    def test_ambiguous_publication_retains_audio_but_definite_rejection_cleans_it(self):
+        for code in ("InternalServerError", "ConditionalCheckFailedException"):
+            table, s3, _ = self.fixture()
+            table.update_item.side_effect = [None, ClientError({"Error": {"Code": code}}, "UpdateItem"), None]
+            with self.assertRaises(RuntimeError):
+                run_crop(s3, table, "bucket", "owner", "copy", lambda path: {})
+            if code == "InternalServerError":
+                s3.delete_object.assert_not_called()
+            else:
+                s3.delete_object.assert_called_once_with(Bucket="bucket", Key=s3.put_object.call_args.kwargs["Key"])
+
+    def test_rejected_audio_cleanup_failure_is_reported(self):
+        table, s3, _ = self.fixture()
+        table.update_item.side_effect = [None, ClientError({"Error": {"Code": "ConditionalCheckFailedException"}}, "UpdateItem"), None]
+        s3.delete_object.side_effect = RuntimeError("storage unavailable")
+        with self.assertRaisesRegex(RuntimeError, "cleanup could not be confirmed"):
+            run_crop(s3, table, "bucket", "owner", "copy", lambda path: {})
+
     def test_invalid_source_paths_are_rejected(self):
         for key in ["audio/other/source/file.wav", "audio/owner/other/file.wav", "audio/owner/source/../file.wav",
                     "audio/owner/source/%2e%2e.wav", "audio/owner/source/", "audio/owner/source/.."]:
@@ -143,12 +196,13 @@ class AudioCropTests(unittest.TestCase):
 class DynamoDBLocalCropTests(unittest.TestCase):
     def test_worker_publication_uses_valid_dynamodb_expressions(self):
         import boto3
+        from botocore.config import Config
         endpoint = os.environ["DYNAMODB_LOCAL_ENDPOINT"]
         parsed = urlparse(endpoint)
         self.assertEqual(parsed.scheme, "http")
         self.assertIn(parsed.hostname, ("127.0.0.1", "localhost"))
         database = boto3.resource("dynamodb", endpoint_url=endpoint, region_name="us-west-2",
-                                  aws_access_key_id="local", aws_secret_access_key="local")
+                                  aws_access_key_id="local", aws_secret_access_key="local", config=Config(retries={"total_max_attempts": 1}))
         table = database.create_table(
             TableName="crop-test-" + uuid.uuid4().hex,
             KeySchema=[{"AttributeName": "PK", "KeyType": "HASH"}, {"AttributeName": "SK", "KeyType": "RANGE"}],
@@ -173,5 +227,20 @@ class DynamoDBLocalCropTests(unittest.TestCase):
             run_crop(s3, table, "bucket", "owner", "copy", transcribe)
             transcribe.assert_called_once()
             self.assertEqual(table.get_item(Key={"PK": "USER#owner", "SK": "MEETING#source"}, ConsistentRead=True)["Item"], source)
+            # Expiry/status changes must terminate the owned run and remove the
+            # rejected WAV even though status is no longer transcribing.
+            _, next_s3, _ = AudioCropTests().fixture()
+            expired = {"PK": "USER#owner", "SK": "MEETING#expired"}
+            table.put_item(Item={**expired, "userId": "owner", "meetingId": "expired", "status": "transcribing", "audioCrop": crop})
+            def expire(path):
+                table.update_item(Key=expired, UpdateExpression="SET #s=:s", ExpressionAttributeNames={"#s": "status"}, ExpressionAttributeValues={":s": "error"})
+                return {}
+            with self.assertRaises(RuntimeError):
+                run_crop(next_s3, table, "bucket", "owner", "expired", expire)
+            failed = table.get_item(Key=expired, ConsistentRead=True)["Item"]
+            self.assertEqual(failed["audioCrop"]["state"], "failed")
+            self.assertEqual(failed["status"], "error")
+            self.assertNotIn("audioKey", failed)
+            next_s3.delete_object.assert_called_once_with(Bucket="bucket", Key=next_s3.put_object.call_args.kwargs["Key"])
         finally:
             table.delete()

@@ -602,7 +602,7 @@ function MeetingDetailContent() {
           )}
           {meeting.audioCrop && <div className="mb-6 rounded-lg border border-slate-200 p-3 text-sm dark:border-white/10">
             <p>원본의 {formatAudioTime(meeting.audioCrop.startSeconds)} ~ {formatAudioTime(meeting.audioCrop.endSeconds)} 구간으로 만든 미팅입니다.</p>
-            {meeting.audioCrop.state === 'failed' && <p role="alert" className="mt-1 text-red-600 dark:text-red-300">구간 처리에 실패했습니다. 원본 미팅에서 다시 요청할 수 있습니다.</p>}
+            {(meeting.audioCrop.state === 'failed' || meeting.status === 'error') && <p role="alert" className="mt-1 text-red-600 dark:text-red-300">구간 처리에 실패했습니다. 원본 미팅에서 다시 요청할 수 있습니다.</p>}
             <button type="button" onClick={() => router.push(`/meeting/${encodeURIComponent(meeting.audioCrop!.sourceMeetingId)}`)} className="mt-2 text-xs text-primary">원본 미팅 열기</button>
           </div>}
 

@@ -373,7 +373,10 @@ keys/ETags and worker claim IDs are not exposed through `audioCrop`. Cropped aud
 cannot be replaced or rediarized in place. Its worker claims once, reads the exact
 authorized source with `IfMatch`, verifies the decoded range length, and publishes
 only selected audio and its new transcript. Rejected publication does not emit a
-transcript or recreate a deleted meeting.
+transcript or recreate a deleted meeting. A run-bound heartbeat keeps long media
+work current; loss or expiry of that claim fails the copy and prevents publication.
+Definitively rejected audio is deleted, ambiguous bindings retain their object,
+and cleanup failures surface.
 
 ### Simulator
 
