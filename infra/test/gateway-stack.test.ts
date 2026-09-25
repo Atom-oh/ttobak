@@ -97,6 +97,13 @@ describe('GatewayStack', () => {
   });
 
 
+  test('recovery consumer is installed before the API producer', () => {
+    const functions = template.findResources('AWS::Lambda::Function');
+    const apiId = Object.keys(functions).find(id => functions[id].Properties.FunctionName === 'ttobak-api')!;
+    const transcribeId = Object.keys(functions).find(id => functions[id].Properties.FunctionName === 'ttobak-transcribe')!;
+    expect(template.toJSON().Resources[apiId].DependsOn).toContain(transcribeId);
+  });
+
   test('creates at least 6 Lambda functions', () => {
     // api, transcribe, summarize, process-image, kb, qa (+ ws-authorizer, websocket if resolved)
     const resources = template.findResources('AWS::Lambda::Function');
