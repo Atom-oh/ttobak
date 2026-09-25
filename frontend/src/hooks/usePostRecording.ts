@@ -2,13 +2,14 @@
 
 import { useState, useCallback, useRef, useEffect, type MutableRefObject } from 'react';
 import { useRouter } from 'next/navigation';
-import { meetingAccountApi, meetingsApi, uploadsApi } from '@/lib/api';
+import { ApiError, meetingAccountApi, meetingsApi, uploadsApi } from '@/lib/api';
 import { preparationNotes, codePointLength, MAX_MEETING_NOTES } from '@/lib/meetingReferences';
 import { RecordingNotes } from '@/lib/recordingNotes';
 import { readSavedMeetingNotes } from '@/lib/meetingNotes';
 import { putWithProgress, type UploadProgress } from '@/lib/upload';
 import { uploadRecordingWithRetry, onNativeUploadProgress, cleanupRecording, releaseRecordingPower, isCommandNotFound, VERSION_SKEW_MESSAGE } from '@/lib/tauri';
 import type { PostRecordingStep } from '@/components/record/PostRecordingBanner';
+import { BrowserRecordingBackup } from '@/lib/browserRecordingBackup';
 
 function formatDefaultTitle(date: Date): string {
   const month = date.getMonth() + 1;
@@ -54,10 +55,11 @@ export function withTimeout<T>(promise: Promise<T>, ms: number, label: string): 
  * been confirmed, so a failed upload never silently loses the recording.
  */
 type PendingAudio =
-  | { kind: 'blob'; blob: Blob; mimeType: string }
+  | { kind: 'blob'; blob: Blob; mimeType: string; backup?: BrowserRecordingBackup }
   | { kind: 'native'; path: string; byteSize: number };
 
 function releasePendingPower(pending: PendingAudio | null) {
+  if (pending?.kind === 'blob') pending.backup?.release();
   if (pending?.kind !== 'native') return;
   void releaseRecordingPower(pending.path).catch((err) => {
     console.warn('Unable to release abandoned recording idle-sleep protection:', err);
@@ -66,6 +68,7 @@ function releasePendingPower(pending: PendingAudio | null) {
 
 interface UsePostRecordingOptions {
   meetingTitle: string;
+  userId?: string;
   preparationContext?: string;
   accountId?: string;
   /** Live summary built during recording (useLiveSummary's liveSummaryRef) — persisted at save time when non-empty */
@@ -83,6 +86,7 @@ interface UsePostRecordingOptions {
 
 export function usePostRecording({
   meetingTitle,
+  userId,
   preparationContext,
   accountId,
   liveSummaryRef,
@@ -98,12 +102,14 @@ export function usePostRecording({
   const [notesConflict, setNotesConflict] = useState<string | null>(null);
   const [notesEditorVersion, setNotesEditorVersion] = useState(0);
   const [hasPendingAudio, setHasPendingAudio] = useState(false);
+  const [canKeepLocally, setCanKeepLocally] = useState(false);
   const [pendingAccount, setPendingAccount] = useState<string | null>(null);
   const pendingAccountRef = useRef<string | null>(null);
+  const notesUserIdRef = useRef<string | undefined>(undefined);
   const [notesWriter] = useState(() => new RecordingNotes({
-    supportsComparison: async (id) => (await meetingsApi.get(id)).supportsNotesComparison === true,
-    write: (id, notes, expectedNotes, expectedNotesRevision, signal) => meetingsApi.update(id, { notes, expectedNotes, expectedNotesRevision }, { signal }),
-    read: readSavedMeetingNotes,
+    supportsComparison: async (id) => (await meetingsApi.get(id, { expectedUserId: notesUserIdRef.current })).supportsNotesComparison === true,
+    write: (id, notes, expectedNotes, expectedNotesRevision, signal) => meetingsApi.update(id, { notes, expectedNotes, expectedNotesRevision }, { signal, expectedUserId: notesUserIdRef.current }),
+    read: (id) => readSavedMeetingNotes(id, notesUserIdRef.current),
   }));
   const persistNotes = useCallback((id: string, notes: string) => notesWriter.persist(id, notes), [notesWriter]);
   const setPendingAccountValue = useCallback((id: string | null) => {
@@ -157,6 +163,8 @@ export function usePostRecording({
 
   /** Create a draft meeting at recording start for crash recovery */
   const createDraftMeeting = useCallback(async (): Promise<string | null> => {
+    notesUserIdRef.current = userId;
+    setCanKeepLocally(false);
     // A stale pending payload from a previous, never-resolved recording
     // (e.g. the user started a new recording without retrying or
     // dismissing an earlier upload error) must not bleed into this new
@@ -185,7 +193,7 @@ export function usePostRecording({
           title: meetingTitle || formatDefaultTitle(new Date()),
           status: 'recording',
           ...prepared,
-        }),
+        }, { expectedUserId: notesUserIdRef.current }),
         15000, 'Create draft meeting',
       );
       if (!mountedRef.current || flowGenerationRef.current !== generation) return null;
@@ -206,7 +214,7 @@ export function usePostRecording({
       if (mountedRef.current && flowGenerationRef.current === generation) setPreparationError('미팅 생성에 실패했습니다. 녹음과 준비 내용은 유지되며 저장 단계에서 다시 시도합니다.');
       return null;
     }
-  }, [meetingTitle, preparationContext, accountId, notesWriter, setPendingAccountValue]);
+  }, [meetingTitle, userId, preparationContext, accountId, notesWriter, setPendingAccountValue]);
 
   /** Resume the save+upload flow after notes step (or a retry). Safe to
    * call more than once for the same `payload` — if the PUT already
@@ -219,6 +227,8 @@ export function usePostRecording({
     // banner or redirecting for a flow the user already walked away from.
     const myGeneration = flowGenerationRef.current;
     const isCurrent = () => flowGenerationRef.current === myGeneration;
+    const backup = payload.kind === 'blob' ? payload.backup : undefined;
+    const identity = { expectedUserId: backup?.metadata.userId || notesUserIdRef.current };
     try {
       await flushPendingSummary?.();
       if (!isCurrent()) return; // abandoned during the flush await above
@@ -230,11 +240,15 @@ export function usePostRecording({
         if (codePointLength(notes) > MAX_MEETING_NOTES) throw new Error('메모를 줄여 다시 저장해 주세요.');
         const result = await withTimeout(meetingsApi.create({
           title: meetingTitle || formatDefaultTitle(new Date()), ...preparationRef.current, notes,
-        }), 15000, 'Create meeting');
+        }, identity), 15000, 'Create meeting');
         if (!isCurrent()) return;
         meetingId = result.meetingId;
         persistedMeetingIdRef.current = meetingId;
         setServerMeetingId(meetingId);
+        await backup?.update({ meetingId }).catch(() => {
+          setCanKeepLocally(false);
+          setPreparationError('기기 보관 정보 저장에 실패했습니다. 업로드를 계속합니다.');
+        });
         const acknowledged = result.preparationApplied ? notes : '';
         notesWriter.initialize(meetingId, acknowledged, result.supportsNotesComparison === true, result.notesRevision || '');
         setCreatedNotes({ meetingId, notes: acknowledged });
@@ -255,10 +269,18 @@ export function usePostRecording({
         if (!isCurrent()) return;
         setNotesConflict(null);
       }
+      if (backup) {
+        const current = await meetingsApi.get(meetingId, identity);
+        if (!isCurrent()) return;
+        const keys = current.audioKeys?.length ? current.audioKeys : current.audioKey ? [current.audioKey] : [];
+        if (keys.length && (!putDoneRef.current || keys.length !== 1 || keys[0] !== putDoneRef.current.key)) {
+          throw new ApiError(409, 'AUDIO_CHANGED', '다른 녹음이 저장되었습니다. 기기 보관본을 다운로드하여 확인해 주세요.');
+        }
+      }
       await withTimeout(meetingsApi.update(meetingId, {
-        title: meetingTitle || formatDefaultTitle(new Date()), status: 'transcribing',
+        title: meetingTitle || formatDefaultTitle(new Date()), ...(!putDoneRef.current ? { status: 'transcribing' } : {}),
         ...(liveSummaryRef?.current ? { liveSummary: truncateLiveSummary(liveSummaryRef.current) } : {}),
-      }), 15000, 'Save transcript');
+      }, identity), 15000, 'Save transcript');
 
       if (!isCurrent()) return;
       setStep('uploading');
@@ -276,7 +298,7 @@ export function usePostRecording({
 
         if (payload.kind === 'blob') {
           const { uploadUrl, key } = await withTimeout(
-            uploadsApi.getPresignedUrl({ fileName, fileType: resolvedMime, category: 'audio', meetingId }),
+            uploadsApi.getPresignedUrl({ fileName, fileType: resolvedMime, category: 'audio', meetingId }, identity),
             15000, 'Get upload URL',
           );
           if (!isCurrent()) return; // abandoned before the PUT even started
@@ -284,6 +306,10 @@ export function usePostRecording({
           if (!isCurrent()) return; // uploaded, but the user already walked away -- skip notify/redirect
           putDoneRef.current = { key };
           uploadKey = key;
+          if (backup) await backup.update({ uploadKey: key }).catch(() => {
+            setCanKeepLocally(false);
+            setPreparationError('기기 보관 정보 저장에 실패했습니다. 현재 업로드가 완료될 때까지 이 탭을 유지해 주세요.');
+          });
         } else {
           // Re-presigned per attempt inside uploadRecordingWithRetry (not
           // fetched once up front) -- a presigned PUT URL's TTL can expire
@@ -324,8 +350,9 @@ export function usePostRecording({
         }
       }
 
+      if (!isCurrent()) return;
       await withTimeout(
-        uploadsApi.notifyComplete({ meetingId, key: uploadKey, category: 'audio' }),
+        uploadsApi.notifyComplete({ meetingId, key: uploadKey, category: 'audio' }, identity),
         15000, 'Notify upload complete',
       );
       if (!isCurrent()) return;
@@ -340,8 +367,15 @@ export function usePostRecording({
           console.warn('cleanup_recording failed (recording already uploaded):', e);
         });
       }
+      if (backup) {
+        await backup.remove().catch(() => {
+          backup.release();
+          console.warn('Uploaded recording retained in browser storage; cleanup failed.');
+        });
+      }
       pendingAudioRef.current = null;
       setHasPendingAudio(false);
+      setCanKeepLocally(false);
       putDoneRef.current = null;
       setUploadProgress(null);
 
@@ -380,12 +414,99 @@ export function usePostRecording({
 
   /** Called when a browser-mode (mic/tab) recording blob is ready — pause
    * for notes input. */
-  const handleBlobReady = useCallback(async (blob: Blob, mimeType: string) => {
-    pendingAudioRef.current = { kind: 'blob', blob, mimeType };
+  const captureBlobGeneration = useCallback(() => flowGenerationRef.current, []);
+  const handleBlobReady = useCallback((blob: Blob, mimeType: string, backup?: BrowserRecordingBackup, generation?: number) => {
+    if (!mountedRef.current || (generation !== undefined && generation !== flowGenerationRef.current)) {
+      backup?.release();
+      return false;
+    }
+    notesUserIdRef.current = backup?.metadata.userId || notesUserIdRef.current;
+    pendingAudioRef.current = { kind: 'blob', blob, mimeType, backup };
     setHasPendingAudio(true);
+    setCanKeepLocally(!!backup);
     putDoneRef.current = null;
     setStep('notes');
+    return true;
   }, []);
+
+  const restoreBrowserRecording = useCallback(async (backup: BrowserRecordingBackup) => {
+    const generation = ++flowGenerationRef.current;
+    const isCurrent = () => mountedRef.current && generation === flowGenerationRef.current;
+    let metadata = backup.metadata;
+    notesUserIdRef.current = metadata.userId;
+    setPendingAccountValue(null);
+    preparationRef.current = { notes: metadata.notes };
+    let meeting: Awaited<ReturnType<typeof meetingsApi.get>> | undefined;
+    let uploaded = false;
+    if (metadata.meetingId) {
+      try {
+        meeting = await meetingsApi.get(metadata.meetingId, { expectedUserId: metadata.userId });
+      } catch (error) {
+        if (!(error instanceof ApiError) || error.status !== 404) throw error;
+        if (!isCurrent()) { backup.release(); return; }
+        await backup.update({ meetingId: undefined, uploadKey: undefined });
+        metadata = backup.metadata;
+      }
+    }
+    if (!isCurrent()) { backup.release(); return; }
+    if (meeting && metadata.meetingId) {
+      const keys = meeting.audioKeys?.length ? meeting.audioKeys : meeting.audioKey ? [meeting.audioKey] : [];
+      if (keys.length && (!metadata.uploadKey || !keys.includes(metadata.uploadKey))) {
+        throw new Error('기존 미팅에 다른 녹음이 저장되어 있습니다. 기기 보관본을 다운로드하여 확인해 주세요.');
+      }
+      uploaded = !!metadata.uploadKey && keys.includes(metadata.uploadKey);
+      if (uploaded && metadata.notes === (meeting.notes || '') && (metadata.title || '') === (meeting.title || '')) {
+        await backup.remove();
+        if (isCurrent()) router.push(`/meeting/${metadata.meetingId}`);
+        return;
+      }
+      if (uploaded) setPreparationError(`이미 업로드된 녹음입니다. 기기에 보관한 메모와 제목을 확인하고 저장해 주세요. 현재 서버 제목: ${meeting.title || ''}`);
+      persistedMeetingIdRef.current = metadata.meetingId;
+      setServerMeetingId(metadata.meetingId);
+      const currentNotes = meeting.notes || '';
+      notesWriter.initialize(metadata.meetingId, currentNotes, meeting.supportsNotesComparison === true, meeting.notesRevision || '');
+      setCreatedNotes({ meetingId: metadata.meetingId, notes: metadata.notes });
+      setNotesConflict(metadata.notes !== currentNotes ? currentNotes : null);
+    } else {
+      persistedMeetingIdRef.current = null;
+      setServerMeetingId(null);
+      notesWriter.reset();
+      setCreatedNotes(null);
+      setNotesConflict(null);
+      preparationRef.current = { notes: metadata.notes };
+    }
+    // Uploaded bytes are already acknowledged; local note/title edits remain
+    // recoverable even if the redundant audio chunks cannot be read.
+    const blob = uploaded ? new Blob([], { type: metadata.mimeType }) : await backup.readBlob();
+    if (!isCurrent()) { backup.release(); return; }
+    submittedNotesRef.current = undefined;
+    releasePendingPower(pendingAudioRef.current);
+    pendingAudioRef.current = { kind: 'blob', blob, mimeType: metadata.mimeType, backup };
+    putDoneRef.current = metadata.uploadKey ? { key: metadata.uploadKey } : null;
+    setHasPendingAudio(true);
+    setCanKeepLocally(true);
+    setErrorMessage(null);
+    setNotesEditorVersion((value) => value + 1);
+    setStep('notes');
+  }, [notesWriter, router, setPendingAccountValue]);
+
+  useEffect(() => {
+    const pending = pendingAudioRef.current;
+    if (!serverMeetingId || pending?.kind !== 'blob' || !pending.backup) return;
+    void pending.backup.update({ meetingId: serverMeetingId }).catch(() => {
+      setCanKeepLocally(false);
+      setErrorMessage('기기 보관본의 미팅 연결을 저장하지 못했습니다. 업로드를 완료해 주세요.');
+    });
+  }, [serverMeetingId]);
+
+  const keepLocally = useCallback(async (notes: string) => {
+    const pending = pendingAudioRef.current;
+    if (pending?.kind !== 'blob' || !pending.backup) throw new Error('기기 보관본을 확인할 수 없습니다.');
+    if (codePointLength(notes) > MAX_MEETING_NOTES) throw new Error('메모는 32,000자까지 저장할 수 있습니다.');
+    await pending.backup.update({ notes, title: meetingTitle, finalized: true,
+      ...(persistedMeetingIdRef.current ? { meetingId: persistedMeetingIdRef.current } : {}) });
+    router.push('/');
+  }, [meetingTitle, router]);
 
   /** Called when a Tauri System Audio recording has been stopped and
    * finalized on disk — mirrors `handleBlobReady`, but hands off a file
@@ -438,6 +559,10 @@ export function usePostRecording({
     // the upload. A missing initial meeting ID must not lose final notes.
     if (codePointLength(notes) > MAX_MEETING_NOTES) { setErrorMessage('메모는 32,000자까지 저장할 수 있습니다.'); setStep('notes'); return; }
     submittedNotesRef.current = notes;
+    if (pending.kind === 'blob' && pending.backup) await pending.backup.update({ notes }).catch(() => {
+      setCanKeepLocally(false);
+      setPreparationError('메모의 기기 저장에 실패했습니다. 서버 업로드를 계속합니다.');
+    });
     await runUploadFlow(pending);
   }, [runUploadFlow]);
 
@@ -448,6 +573,10 @@ export function usePostRecording({
     if (notes !== undefined) {
       if (codePointLength(notes) > MAX_MEETING_NOTES) { setErrorMessage('메모는 32,000자까지 저장할 수 있습니다.'); setStep('notes'); return; }
       submittedNotesRef.current = notes;
+      if (pending.kind === 'blob' && pending.backup) await pending.backup.update({ notes }).catch(() => {
+        setCanKeepLocally(false);
+        setPreparationError('메모의 기기 저장에 실패했습니다. 서버 업로드를 계속합니다.');
+      });
     }
     await runUploadFlow(pending);
   }, [runUploadFlow]);
@@ -522,6 +651,7 @@ export function usePostRecording({
     setErrorMessage(null);
     setPreparationError(null);
     setHasPendingAudio(false); notesWriter.reset(); setCreatedNotes(null); setNotesConflict(null); setPendingAccountValue(null);
+    setCanKeepLocally(false);
     setUploadProgress(null);
     releasePendingPower(pendingAudioRef.current);
     pendingAudioRef.current = null;
@@ -548,6 +678,10 @@ export function usePostRecording({
     preparationError,
     createdNotes, notesConflict, notesEditorVersion, hasPendingAudio, pendingAccount, persistNotes, retainNotesError, editNotes, skipAccountRetry,
     createDraftMeeting,
+    canKeepLocally,
+    keepLocally,
+    restoreBrowserRecording,
+    captureBlobGeneration,
     handleBlobReady,
     handleNativeFileReady,
     handleNotesSubmit,

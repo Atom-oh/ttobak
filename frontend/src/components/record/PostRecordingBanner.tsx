@@ -32,6 +32,7 @@ interface PostRecordingBannerProps {
   comparisonNotes?: string | null;
   onEditNotes?: () => void;
   onSkipAccountRetry?: () => void;
+  onKeepLocally?: (notes: string) => Promise<void>;
 }
 
 const STEP_LABELS: Record<string, string> = {
@@ -41,8 +42,10 @@ const STEP_LABELS: Record<string, string> = {
   redirecting: 'Opening meeting...',
 };
 
-export function PostRecordingBanner({ step, errorMessage, uploadProgress, onRetry, onDismiss, onNotesSubmit, onNotesSkip, initialNotes, notesError, submitting, comparisonNotes, onEditNotes, onSkipAccountRetry }: PostRecordingBannerProps) {
+export function PostRecordingBanner({ step, errorMessage, uploadProgress, onRetry, onDismiss, onNotesSubmit, onNotesSkip, initialNotes, notesError, submitting, comparisonNotes, onEditNotes, onSkipAccountRetry, onKeepLocally }: PostRecordingBannerProps) {
   const [notes, setNotes] = useState(initialNotes || '');
+  const [keeping, setKeeping] = useState(false);
+  const [keepError, setKeepError] = useState('');
   const isError = step === 'error';
   const isNotes = step === 'notes';
 
@@ -58,7 +61,7 @@ export function PostRecordingBanner({ step, errorMessage, uploadProgress, onRetr
           </div>
           <textarea
             value={notes}
-            disabled={submitting}
+            disabled={submitting || keeping}
             onChange={(e) => setNotes(e.target.value)}
             placeholder="회의 중 주요 내용을 간략히 적어주세요..."
             rows={6}
@@ -72,21 +75,31 @@ export function PostRecordingBanner({ step, errorMessage, uploadProgress, onRetr
             <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap rounded bg-slate-50 p-2 dark:bg-black/20">{comparisonNotes || '(빈 메모)'}</pre>
           </details>}
           <div className="flex justify-end gap-2 mt-3">
+            {onKeepLocally && <button type="button" disabled={submitting || keeping} onClick={async () => {
+              setKeeping(true);
+              setKeepError('');
+              try { await onKeepLocally(notes); }
+              catch (error) { setKeepError(error instanceof Error ? error.message : '기기 보관에 실패했습니다.'); }
+              finally { setKeeping(false); }
+            }} className="mr-auto rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-primary dark:border-white/10 disabled:opacity-50">
+              {keeping ? '기기에 저장 중…' : '기기에 보관·나중에 업로드'}
+            </button>}
             <button
               onClick={() => onNotesSkip?.()}
-              disabled={submitting}
+              disabled={submitting || keeping}
               className="px-4 py-1.5 rounded-lg text-xs font-medium text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
             >
               건너뛰기
             </button>
             <button
               onClick={() => onNotesSubmit?.(notes)}
-              disabled={submitting}
+              disabled={submitting || keeping}
               className="px-4 py-1.5 rounded-lg text-xs font-medium bg-primary text-white hover:bg-primary/90 transition-colors"
             >
               {submitting ? '저장 중…' : '완료'}
             </button>
           </div>
+          {keepError && <p role="alert" className="mt-2 text-sm text-red-600">{keepError}</p>}
         </div>
       </div>
     );

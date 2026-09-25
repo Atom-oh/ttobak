@@ -87,6 +87,23 @@ When Transcribe configuration is unavailable, desktop recovery retains Web Speec
 mobile still blocks its competing microphone capture. Leaving the recording route
 releases the caption manager and its network listeners.
 
+Browser microphone/tab capture also stores each delivered audio chunk in IndexedDB,
+partitioned by Cognito user and a random recording ID. A Web Lock keeps a live or
+pending recording from being recovered in another tab. The displayed saved time
+advances only after the audio transaction commits; storage failure does not stop
+capture or prevent an in-memory upload. Periodic server checkpoints use the latest
+draft ID and serialize cumulative writes, coalescing pending snapshots.
+
+After stop, "keep on device / upload later" commits final notes and returns home.
+The recording page lists the signed-in user's local recordings, with restore,
+download and explicit deletion. Restore reuses the draft meeting when available;
+an acknowledged upload is cleaned up without resetting its processing status.
+Local copies remain until successful upload acknowledgement or explicit deletion.
+Closing a lid does not guarantee a final callback or network upload: recovery is
+limited to committed chunks, and browser data deletion/eviction can remove them.
+An expired empty recording still offers server-checkpoint recovery; a missing
+checkpoint directs the user to local recordings instead of suggesting deletion.
+
 Crash-leftover native WAVs are not Cognito-scoped. Show the existing caveat and
 require per-file confirmation for upload/delete; retain the 48-hour cleanup policy.
 This confirmation is a mitigation, not an ownership binding (ADR-024).
