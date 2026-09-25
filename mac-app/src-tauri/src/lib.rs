@@ -27,6 +27,7 @@
 mod audio;
 mod error;
 mod leftover;
+mod mix;
 #[cfg(any(target_os = "macos", test))]
 mod power;
 mod upload;
