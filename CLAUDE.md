@@ -39,7 +39,7 @@ documentation stays English.
 | Document conversion | Separate Go container with LibreOffice; not a zip | `backend/cmd/convert-doc/` |
 | Python | QA, crawler, simulator and document-extraction Lambdas; separate research-agent container | `backend/python/`, each requirements/Dockerfile |
 | Batch STT | GPU Spot ECS; production faster-whisper and separate benchmark engines | `backend/whisper/`, `infra/lib/whisper-stack.ts` |
-| Desktop | Tauri 2/Rust, macOS ScreenCaptureKit | `mac-app/src-tauri/` |
+| Desktop | Tauri 2/Rust, macOS Core Audio process tap + microphone | `mac-app/src-tauri/` |
 | Infra | CDK TypeScript, eleven stacks | `infra/bin/infra.ts`, `infra/lib/` |
 | MCP | TypeScript stdio/HTTP adapter of authenticated APIs | `mcp-server/src/`, `mcp-server/package.json` |
 
@@ -82,8 +82,9 @@ bash scripts/pr-review/chair-timeout-policy-check.sh
 
 Mac changes have no CI coverage. Full native validation requires macOS; on Linux,
 Tauri also needs native GUI dependencies. A scratch crate can test the Tauri-free
-`error.rs`, `audio.rs`, `leftover.rs`, and `power.rs` portions, but does not validate
-ScreenCaptureKit. Report that limit instead of claiming a Mac build passed.
+`error.rs`, `mix.rs`, `audio.rs`, `leftover.rs`, and `power.rs` portions, and a
+macOS-target `cargo check` type-checks Core Audio code, but neither validates
+capture. Report that limit instead of claiming a Mac build passed.
 
 ## Application boundaries
 
@@ -256,7 +257,9 @@ ScreenCaptureKit. Report that limit instead of claiming a Mac build passed.
   live raw PCM chunks intentionally cross IPC. Pin the exact
   `EXPECTED_BUCKET_HOST`, not an AWS domain suffix. Upload timeouts measure stalled
   progress, not total duration; delete WAV only after upload-complete succeeds.
-  Release recorder locks around blocking ScreenCaptureKit FFI. Update transition
+  Release recorder locks around blocking Core Audio FFI; the real-time IOProc only
+  mixes and enqueues, and taps/aggregates tear down after `AudioDeviceStop`
+  (ADR-046). Update transition
   state in the same critical section; `StartGuard` clears abandoned starts.
   Check path containment before canonicalization to avoid existence probes.
 - **Mobile:** keep recording when captions fail. Wake-lock/reconnect/watchdog and

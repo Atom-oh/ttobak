@@ -2,7 +2,9 @@
 
 - Status: Accepted; supersedes [ADR-001](ADR-001-system-audio-capture-for-remote-meetings.md).
   Native transport and recovery are extended by
-  [ADR-024](ADR-024-mac-app-native-streaming-upload-and-system-audio-captions.md).
+  [ADR-024](ADR-024-mac-app-native-streaming-upload-and-system-audio-captions.md);
+  the ScreenCaptureKit capture engine is superseded by
+  [ADR-046](ADR-046-mac-core-audio-tap-and-microphone.md).
 - Decision date: Not recorded; browser design specification dated 2026-04-20.
 - Implementation checked: 2026-09-13.
 

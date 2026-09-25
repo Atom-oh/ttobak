@@ -23,7 +23,7 @@ completes first login; password reset is separate from signup.
 
 Run relevant checks from the project guide. Go `./...` includes command-package
 tests. Frontend has lint/build only. Infra has real Jest assertions, not placeholder
-tests. Linux-only Rust checks do not validate ScreenCaptureKit.
+tests. Linux-only Rust checks do not validate Core Audio capture.
 
 Add HTTP routes in `backend/cmd/api/main.go`, handlers in `internal/handler`,
 business rules in services, and persistence in repositories. Go API payload is

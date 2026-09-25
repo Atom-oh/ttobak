@@ -58,16 +58,20 @@ export const VERSION_SKEW_MESSAGE =
 
 export interface TauriStartResponse {
   temp_path: string;
+  /** Non-fatal capture notes (e.g. no microphone); newer app builds only. */
+  warnings?: string[];
 }
 
 export interface TauriStopResponse {
   temp_path: string;
   duration_ms: number;
   byte_size: number;
-  /** True if ScreenCaptureKit's stop didn't return within the Rust-side
+  /** True if the native capture stop didn't return within the Rust-side
    * timeout. The WAV up to the last periodic flush checkpoint is still
    * valid and playable — this is a soft warning, not a failure. */
   stop_timed_out: boolean;
+  /** Non-fatal notes such as a silent source; newer app builds only. */
+  warnings?: string[];
 }
 
 export interface TauriStatusResponse {

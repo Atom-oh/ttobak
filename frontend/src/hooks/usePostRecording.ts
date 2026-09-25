@@ -350,6 +350,7 @@ export function usePostRecording({
         }
       }
 
+      if (!isCurrent()) return;
       await withTimeout(
         uploadsApi.notifyComplete({ meetingId, key: uploadKey, category: 'audio' }, identity),
         15000, 'Notify upload complete',
@@ -436,6 +437,7 @@ export function usePostRecording({
     setPendingAccountValue(null);
     preparationRef.current = { notes: metadata.notes };
     let meeting: Awaited<ReturnType<typeof meetingsApi.get>> | undefined;
+    let uploaded = false;
     if (metadata.meetingId) {
       try {
         meeting = await meetingsApi.get(metadata.meetingId, { expectedUserId: metadata.userId });
@@ -452,11 +454,13 @@ export function usePostRecording({
       if (keys.length && (!metadata.uploadKey || !keys.includes(metadata.uploadKey))) {
         throw new Error('기존 미팅에 다른 녹음이 저장되어 있습니다. 기기 보관본을 다운로드하여 확인해 주세요.');
       }
-      if (metadata.uploadKey && keys.includes(metadata.uploadKey)) {
+      uploaded = !!metadata.uploadKey && keys.includes(metadata.uploadKey);
+      if (uploaded && metadata.notes === (meeting.notes || '') && (metadata.title || '') === (meeting.title || '')) {
         await backup.remove();
         if (isCurrent()) router.push(`/meeting/${metadata.meetingId}`);
         return;
       }
+      if (uploaded) setPreparationError(`이미 업로드된 녹음입니다. 기기에 보관한 메모와 제목을 확인하고 저장해 주세요. 현재 서버 제목: ${meeting.title || ''}`);
       persistedMeetingIdRef.current = metadata.meetingId;
       setServerMeetingId(metadata.meetingId);
       const currentNotes = meeting.notes || '';
@@ -471,7 +475,9 @@ export function usePostRecording({
       setNotesConflict(null);
       preparationRef.current = { notes: metadata.notes };
     }
-    const blob = await backup.readBlob();
+    // Uploaded bytes are already acknowledged; local note/title edits remain
+    // recoverable even if the redundant audio chunks cannot be read.
+    const blob = uploaded ? new Blob([], { type: metadata.mimeType }) : await backup.readBlob();
     if (!isCurrent()) { backup.release(); return; }
     submittedNotesRef.current = undefined;
     releasePendingPower(pendingAudioRef.current);

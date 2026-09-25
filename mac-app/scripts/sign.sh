@@ -7,7 +7,8 @@
 #   `codesign --entitlements`. As a result, Entitlements.plist is shipped
 #   inside the bundle but is never actually applied to the binary, so macOS
 #   silently refuses to expose getUserMedia / mediaDevices, never prompts
-#   for the mic permission, and ScreenCaptureKit fails to start.
+#   for the mic permission, and the microphone half of the Core Audio
+#   capture records silence.
 #
 # What this does:
 #   For every .app under src-tauri/target/.../bundle/macos/, force a
@@ -73,8 +74,8 @@ echo
 echo "Done. Re-signed ${#APPS[@]} bundle(s)."
 echo
 echo "First-run permission notes:"
-echo "  - macOS will prompt for Microphone and Screen Recording on first use."
+echo "  - macOS will prompt for Microphone and System Audio Recording on first use."
 echo "  - If prompts don't appear (stale TCC cache), reset and relaunch:"
 echo "      tccutil reset Microphone   click.atomai.ttobak.mac"
 echo "      tccutil reset Camera       click.atomai.ttobak.mac"
-echo "      tccutil reset ScreenCapture click.atomai.ttobak.mac"
+echo "      tccutil reset AudioCapture click.atomai.ttobak.mac   # System Audio Recording"

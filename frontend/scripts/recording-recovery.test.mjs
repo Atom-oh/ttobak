@@ -297,3 +297,18 @@ test('a newly observed different recording prevents the restored upload from sta
   assert.deepEqual(updates, []);
   assert.ok(fixture.states.includes('error'));
 });
+
+test('acknowledged audio keeps later local notes and title edits without rereading audio', async () => {
+  for (const field of ['notes', 'title']) {
+    const fixture = recoveryHook({ title: 'Server title', notes: 'Server notes', status: 'done', audioKey: 'audio/owner/draft/final.webm', supportsNotesComparison: true });
+    const metadata = { userId: 'owner', meetingId: 'draft', title: 'Server title', notes: 'Server notes', mimeType: 'audio/webm', uploadKey: 'audio/owner/draft/final.webm', [field]: 'Later local edit' };
+    await fixture.hook.restoreBrowserRecording({
+      metadata,
+      readBlob: async () => { assert.fail('acknowledged audio must not block note recovery'); },
+      remove: async () => { assert.fail('local edits must not be deleted'); },
+    });
+    assert.ok(fixture.states.includes('notes'));
+    assert.deepEqual(fixture.navigations, []);
+    assert.ok(fixture.states.some(value => typeof value === 'string' && value.includes('Server title')));
+  }
+});

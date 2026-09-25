@@ -15,7 +15,7 @@
  * - `start(stream)`: browser mic/tab modes — sets up an AudioWorklet that
  *   downsamples the MediaStream to 16kHz mono PCM.
  * - `startNative()`: Tauri System Audio mode, where there is no
- *   MediaStream at all (capture happens in Rust via ScreenCaptureKit).
+ *   MediaStream at all (capture happens in Rust via a Core Audio tap).
  *   Chunks are pushed in externally via `pushChunk` — see
  *   `useRecordingSession`'s native path, fed by `lib/tauri.ts`'s
  *   `onNativePcmChunk`. Rust downsamples to the same 16kHz mono format the

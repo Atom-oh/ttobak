@@ -350,7 +350,7 @@ export function useRecordingSession({
 
   /**
    * Start live captions with no MediaStream — Tauri System Audio mode.
-   * Capture happens in Rust via ScreenCaptureKit; audio arrives via
+   * Capture happens in Rust (Core Audio tap + microphone); audio arrives via
    * `pushNativePcmChunk` instead of an AudioWorklet. There is no Web
    * Speech fallback in this mode (it requires a microphone that doesn't
    * exist here) — see `SttManager.startNative`.
