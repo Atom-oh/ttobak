@@ -51,8 +51,8 @@ test('stdio startup works through file and directory symlinks for source and pub
         stderr: 'pipe',
       }));
       try {
-        // 32 shared tools plus the 5 stdio-only recording tools.
-        assert.equal((await client.listTools()).tools.length, 37);
+        // 32 shared tools, 5 stdio-only recording tools, 3 Mac app control tools.
+        assert.equal((await client.listTools()).tools.length, 40);
       } finally {
         await client.close();
       }
