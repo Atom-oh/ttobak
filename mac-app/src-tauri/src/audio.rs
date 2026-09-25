@@ -248,22 +248,14 @@ pub(crate) fn recording_path(meeting_id: &str) -> Result<PathBuf, AppError> {
 // ---------------------------------------------------------------------------
 #[cfg(target_os = "macos")]
 pub mod macos {
-    //! Core Audio process-tap capture (macOS 14.2+), mixed with the default
-    //! microphone through one private aggregate device.
-    //!
-    //! Topology: a stereo global tap excludes this process's own output, and
-    //! a private aggregate device has the default input (microphone) as its
-    //! only, clock-owning sub-device plus the tap with drift compensation.
-    //! One IOProc receives the microphone streams followed by the tap stream
-    //! in a single buffer list at the aggregate's nominal rate. Without an
-    //! input device, the aggregate clocks from the default output device and
-    //! records system audio only (reported as a start warning).
-    //!
-    //! The IOProc runs on Core Audio's real-time thread, so it only mixes and
-    //! hands samples to a bounded channel; a worker thread owns WAV writes,
-    //! flush checkpoints and Tauri events. Teardown order is: stop the device
-    //! (waits for any in-flight IOProc), destroy the IOProc, the aggregate,
-    //! then the tap, and only then close the channel and join the worker.
+    //! Core Audio process-tap capture (macOS 14.2+) mixed with the default
+    //! microphone in one private aggregate device (ADR-046): the microphone
+    //! is the clock sub-device, the tap is drift-compensated, and one IOProc
+    //! gets the mic streams followed by the tap stream. Without an input
+    //! device the default output clocks a system-only recording. The
+    //! real-time IOProc only mixes and enqueues; a worker thread writes the
+    //! WAV and emits events. Teardown: stop the device, destroy the IOProc,
+    //! aggregate and tap, then close the queue and join the worker.
 
     use std::ffi::{c_void, CStr};
     use std::io::BufWriter;
