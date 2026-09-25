@@ -110,6 +110,7 @@ export class GatewayStack extends cdk.Stack {
         BUCKET_NAME: props.bucket.bucketName,
         COGNITO_USER_POOL_ID: props.userPool.userPoolId,
         COGNITO_CLIENT_ID: props.userPoolClient.userPoolClientId,
+        AUDIO_CROP_ENABLED: [true, 'true'].includes(this.node.tryGetContext('ttobak:audioCropEnabled')) ? '1' : '0',
         KB_BUCKET_NAME: props.kbBucket?.bucketName || '',
         // NOTE: api reads KB_DATASOURCE_ID (cmd/api/main.go), NOT the
         // DATA_SOURCE_ID name the summarize/crawler Lambdas use -- copying
@@ -635,8 +636,14 @@ export class GatewayStack extends cdk.Stack {
       },
     });
     audioUploadRule.addTarget(new eventsTargets.LambdaFunction(this.transcribeFunction));
-    // Recovery copies must wait for their canonical binding before STT starts.
-    this.apiFunction.node.addDependency(this.transcribeFunction);
+    const audioCropRule = new events.Rule(this, 'AudioCropRequestedRule', {
+      ruleName: 'ttobak-audio-crop',
+      eventPattern: { source: ['ttobak.audio'], detailType: ['AudioCropRequested'] },
+    });
+    audioCropRule.addTarget(new eventsTargets.LambdaFunction(this.transcribeFunction));
+    const transcribePermissions = this.transcribeFunction.node.findAll()
+      .filter(child => child instanceof lambda.CfnPermission);
+    this.apiFunction.node.addDependency(this.transcribeFunction, audioCropRule, ...transcribePermissions);
 
     // EventBridge rule for image uploads -> Process Image Lambda
     // Uses custom event from upload/complete API (not S3 event) to avoid

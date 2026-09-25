@@ -12,21 +12,22 @@ type MeetingPreparation struct {
 // Meeting represents a meeting record in DynamoDB
 // PK: USER#{userId}, SK: MEETING#{meetingId}
 type Meeting struct {
-	PK                 string    `dynamodbav:"PK"`
-	SK                 string    `dynamodbav:"SK"`
-	MeetingID          string    `dynamodbav:"meetingId"`
-	UserID             string    `dynamodbav:"userId"`
-	Title              string    `dynamodbav:"title"`
-	Date               time.Time `dynamodbav:"date"`
-	Content            string    `dynamodbav:"content,omitempty"`                      // Markdown meeting notes
-	TranscriptA        string    `dynamodbav:"transcriptA,omitempty"`                  // AWS Transcribe result
-	TranscriptB        string    `dynamodbav:"transcriptB,omitempty"`                  // Nova Sonic result
-	SelectedTranscript string    `dynamodbav:"selectedTranscript,omitempty"`           // "A" or "B"
-	AudioKey           string    `dynamodbav:"audioKey,omitempty"`                     // S3 key for audio file (legacy single-file)
-	AudioKeys          []string  `dynamodbav:"audioKeys,omitempty"`                    // Ordered S3 keys for multi-file uploads
-	AudioPartCount     int       `dynamodbav:"audioPartCount,omitempty"`               // Total parts expected
-	AudioPartsReady    int       `dynamodbav:"audioPartsReady,omitempty"`              // Parts with completed transcription
-	AudioPartsReadySet []int     `dynamodbav:"audioPartsReadySet,omitempty,numberset"` // Set of completed part indices (source-of-truth for idempotent counting)
+	PK                 string     `dynamodbav:"PK"`
+	SK                 string     `dynamodbav:"SK"`
+	MeetingID          string     `dynamodbav:"meetingId"`
+	UserID             string     `dynamodbav:"userId"`
+	Title              string     `dynamodbav:"title"`
+	Date               time.Time  `dynamodbav:"date"`
+	Content            string     `dynamodbav:"content,omitempty"`            // Markdown meeting notes
+	TranscriptA        string     `dynamodbav:"transcriptA,omitempty"`        // AWS Transcribe result
+	TranscriptB        string     `dynamodbav:"transcriptB,omitempty"`        // Nova Sonic result
+	SelectedTranscript string     `dynamodbav:"selectedTranscript,omitempty"` // "A" or "B"
+	AudioKey           string     `dynamodbav:"audioKey,omitempty"`           // S3 key for audio file (legacy single-file)
+	AudioCrop          *AudioCrop `dynamodbav:"audioCrop,omitempty"`
+	AudioKeys          []string   `dynamodbav:"audioKeys,omitempty"`                    // Ordered S3 keys for multi-file uploads
+	AudioPartCount     int        `dynamodbav:"audioPartCount,omitempty"`               // Total parts expected
+	AudioPartsReady    int        `dynamodbav:"audioPartsReady,omitempty"`              // Parts with completed transcription
+	AudioPartsReadySet []int      `dynamodbav:"audioPartsReadySet,omitempty,numberset"` // Set of completed part indices (source-of-truth for idempotent counting)
 	// AllPartsEmittedAt marks the moment we first emitted the
 	// `AllPartsTranscribed` EventBridge event for this meeting. Used as a
 	// once-only lock so EventBridge at-least-once re-deliveries of part

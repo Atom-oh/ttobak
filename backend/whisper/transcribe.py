@@ -371,6 +371,9 @@ def _find_audio_key(user_id: str, meeting_id: str) -> str | None:
 def main():
     meeting_id = os.environ["MEETING_ID"]
     user_id = os.environ["USER_ID"]
+    if os.environ.get("AUDIO_CROP") == "1":
+        from audio_crop import run_crop
+        return run_crop(s3, dynamodb.Table(TABLE), BUCKET, user_id, meeting_id, transcribe_local)
     audio_key = os.environ.get("AUDIO_KEY")
     if audio_key and not _audio_key_exists(audio_key):
         print(f"AUDIO_KEY {audio_key!r} not found in S3 (likely Unicode mismatch); falling back to prefix scan")
@@ -389,6 +392,18 @@ def main():
     file_mb = os.path.getsize(local_path) / 1048576
     print(f"Audio: {file_mb:.1f} MB")
 
+    result = transcribe_local(local_path)
+    output_key = os.environ.get("OUTPUT_KEY", "").strip() or f"transcripts/{meeting_id}.json"
+    s3.put_object(
+        Bucket=BUCKET, Key=output_key,
+        Body=json.dumps(result, ensure_ascii=False, indent=2).encode("utf-8"),
+        ContentType="application/json",
+    )
+    print(f"Uploaded s3://{BUCKET}/{output_key}")
+    print("Transcript uploaded — EventBridge will trigger summarize Lambda")
+
+
+def transcribe_local(local_path):
     vocab_prompt = _load_custom_vocab_prompt()
 
     # Merge with INITIAL_PROMPT env var (user's custom dictionary from DynamoDB)
@@ -468,18 +483,7 @@ def main():
         },
     }
 
-    # OUTPUT_KEY lets the transcribe Lambda route multi-part audio to a
-    # per-part key; without honoring it, every part would overwrite the same
-    # transcripts/{meeting_id}.json.
-    output_key = os.environ.get("OUTPUT_KEY", "").strip() or f"transcripts/{meeting_id}.json"
-    s3.put_object(
-        Bucket=BUCKET,
-        Key=output_key,
-        Body=json.dumps(result, ensure_ascii=False, indent=2).encode("utf-8"),
-        ContentType="application/json",
-    )
-    print(f"Uploaded s3://{BUCKET}/{output_key}")
-    print("Transcript uploaded — EventBridge will trigger summarize Lambda")
+    return result
 
 
 if __name__ == "__main__":
@@ -489,7 +493,7 @@ if __name__ == "__main__":
         print(f"ERROR: {e}", file=sys.stderr)
         meeting_id = os.environ.get("MEETING_ID", "")
         user_id = os.environ.get("USER_ID", "")
-        if meeting_id and user_id:
+        if meeting_id and user_id and os.environ.get("AUDIO_CROP") != "1":
             try:
                 dynamodb.Table(TABLE).update_item(
                     Key={"PK": f"USER#{user_id}", "SK": f"MEETING#{meeting_id}"},

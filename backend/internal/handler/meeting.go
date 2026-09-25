@@ -284,6 +284,9 @@ func (h *MeetingHandler) GetMeeting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.uploadService != nil {
+		result.SupportsAudioCrop = h.uploadService.AudioCropEnabled()
+	}
 	if h.actionItemsService != nil {
 		analysis, analysisErr := h.actionItemsService.Get(ctx, userID, meetingID)
 		if analysisErr != nil {

@@ -224,6 +224,23 @@ benchmark task has its own bundle variable; do not conflate the two. Its
 run_engine.py allowlisting entrypoint must not be overridden by CDK entryPoint or
 command. Engine selection uses ENGINE; image and CDK tests guard the boundary.
 
+Audio cropping uses the private `ttobak.audio` / `AudioCropRequested` EventBridge
+rule to the existing transcribe Lambda and production Whisper task. It adds no
+public compute origin or unauthenticated endpoint. API capability is gated by
+`AUDIO_CROP_ENABLED`, default off. Enable `ttobak:audioCropEnabled=true` only after
+the worker rollout and acceptance checks;
+GatewayStack orders the transcribe consumer, event rule and invocation permission
+before the API producer. The image must include `audio_crop.py` before enabling
+the producer. Cropped-audio S3 writes do not start a second transcription task.
+The source is ETag-pinned. FFmpeg has a 15-minute conversion timeout, only
+file/pipe protocols, and an audio-container demuxer allowlist excluding playlists.
+The existing image dispatcher/pins remain unchanged.
+
+Deploy the Whisper image first, then the transcribe Lambda and GatewayStack
+(`--exclusively`), then API/frontend. Before activation, verify a short real crop
+and a five-hour-source/one-hour-selection case through the authenticated UI.
+Local tests and synthesized dependencies do not establish deployed acceptance.
+
 AgentCore research runs as a separate FastAPI/Strands container, updated outside
 CDK by deploy-research-agent.yml. ResearchAgentStack still declares a legacy
 Bedrock Agent/alias and tool Lambdas, not that AgentCore Runtime. AI imports

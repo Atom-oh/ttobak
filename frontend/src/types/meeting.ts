@@ -256,6 +256,8 @@ export interface User {
 // Extended meeting detail from API
 export interface MeetingDetail extends Meeting {
   canRecoverRecording?: boolean;
+  supportsAudioCrop?: boolean;
+  audioCrop?: { sourceMeetingId: string; startSeconds: number; endSeconds: number; state: string };
   supportsNotesComparison?: boolean;
   notesRevision?: string;
   supportsPrivateAccountLink?: boolean;

@@ -104,6 +104,14 @@ limited to committed chunks, and browser data deletion/eviction can remove them.
 An expired empty recording still offers server-checkpoint recovery; a missing
 checkpoint directs the user to local recordings instead of suggesting deletion.
 
+When the API reports crop support, owners of single-file recordings can choose a start/end time, preview the range,
+and create a private cropped meeting. Cropping retains the original meeting and
+copies saved notes/participants, but not attachments, relationships, shares, human
+summary edits or derived analyses. The new recording is transcribed and summarized
+from the selected bytes. Its audio cannot be replaced in place; crop another copy
+to change the range. Limits are 2 GiB source audio, a six-hour selected range, and
+an end time within the first 24 hours. Failures link back to the original.
+
 Crash-leftover native WAVs are not Cognito-scoped. Show the existing caveat and
 require per-file confirmation for upload/delete; retain the 48-hour cleanup policy.
 This confirmation is a mitigation, not an ownership binding (ADR-024).

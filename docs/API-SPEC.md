@@ -353,6 +353,26 @@ failures, and compares the observed meeting state before publishing its result.
 The transcribe consumer retries a recovered-copy event until its canonical audio
 key is bound, and discards copies that lost to a different upload.
 
+`POST /api/meetings/{meetingId}/audio/crop` accepts a bounded JSON object containing
+`requestId` (UUID), `startSeconds` and `endSeconds` (integer seconds). Owner-only,
+single-file `done`/`error` sources are eligible. The server resolves the canonical
+audio key and pins its S3 ETag; clients cannot select arbitrary keys. Source size
+is at most 2 GiB, range length at most six hours, and end at most 24 hours.
+The 202 response contains the new `meetingId` and status. Reusing a request ID and
+range returns the same copy; conflicting reuse returns 409. A queued event publish
+failure can be retried with the same request ID. A failed worker requires a new
+request from the original; there is no automatic Spot-task restart.
+
+The source revision check and conditional copy creation are one transaction.
+Copies retain notes and participants, without prior transcripts, summaries,
+action items, attachments, account/project relations or shares. Detail exposes
+`supportsAudioCrop`, `audioCrop` provenance/status and `duration`. Source storage
+keys/ETags and worker claim IDs are not exposed through `audioCrop`. Cropped audio
+cannot be replaced or rediarized in place. Its worker claims once, reads the exact
+authorized source with `IfMatch`, verifies the decoded range length, and publishes
+only selected audio and its new transcript. Rejected publication does not emit a
+transcript or recreate a deleted meeting.
+
 ### Simulator
 
 `POST .../sim/extract` extracts requirements for a done meeting. `POST .../sim`
@@ -477,6 +497,7 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | PUT | `/api/meetings/{meetingId}` | `meetingHandler.UpdateMeeting` |
 | DELETE | `/api/meetings/{meetingId}` | `meetingHandler.DeleteMeeting` |
 | GET | `/api/meetings/{meetingId}/audio` | `meetingHandler.GetAudioURL` |
+| POST | `/api/meetings/{meetingId}/audio/crop` | `meetingHandler.CropAudio` |
 | POST | `/api/meetings/{meetingId}/recover` | `meetingHandler.RecoverMeeting` |
 | POST | `/api/meetings/{meetingId}/rediarize` | `meetingHandler.RediarizeMeeting` |
 | POST | `/api/meetings/{meetingId}/sim/extract` | `simHandler.ExtractRequirements` |

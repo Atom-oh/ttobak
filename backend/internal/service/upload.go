@@ -23,12 +23,13 @@ import (
 
 // UploadService handles file upload operations
 type UploadService struct {
-	s3Client       *s3.Client
-	presignClient  *s3.PresignClient
-	ebClient       *eventbridge.Client
-	repo           *repository.DynamoDBRepository
-	bucketName     string
-	attachmentText *AttachmentTextService
+	s3Client         *s3.Client
+	presignClient    *s3.PresignClient
+	ebClient         *eventbridge.Client
+	repo             *repository.DynamoDBRepository
+	bucketName       string
+	attachmentText   *AttachmentTextService
+	audioCropEnabled bool
 
 	cfSignerMu      sync.Mutex
 	cfSigner        *CloudFrontSigner
@@ -130,6 +131,15 @@ func (s *UploadService) GeneratePresignedUploadURL(
 	userID string,
 	req *model.PresignedURLRequest,
 ) (*model.PresignedURLResponse, error) {
+	if req.Category == "audio" && req.MeetingID != "" {
+		meeting, err := s.repo.MetadataView().GetMeeting(ctx, userID, req.MeetingID)
+		if err != nil {
+			return nil, err
+		}
+		if meeting != nil && meeting.AudioCrop != nil {
+			return nil, fmt.Errorf("%w: cropped audio is immutable; create another cropped copy", ErrInvalidInput)
+		}
+	}
 	// Generate S3 key based on category
 	var s3Key string
 	switch req.Category {
@@ -212,6 +222,9 @@ func (s *UploadService) CompleteUpload(ctx context.Context, userID string, req *
 	}
 	if meeting.UserID != userID {
 		return ErrForbidden
+	}
+	if req.Category == "audio" && meeting.AudioCrop != nil {
+		return fmt.Errorf("%w: cropped audio is immutable", ErrInvalidInput)
 	}
 
 	switch req.Category {
@@ -557,6 +570,9 @@ func validateRediarizeEligibility(meeting *model.Meeting, userID string, speaker
 	}
 	if meeting == nil {
 		return "", ErrNotFound
+	}
+	if meeting.AudioCrop != nil {
+		return "", fmt.Errorf("%w: cropped audio is immutable", ErrInvalidInput)
 	}
 	if meeting.SttProvider != "" && meeting.SttProvider != "whisper" {
 		return "", fmt.Errorf("rediarization is only supported for whisper-transcribed meetings: %w", ErrInvalidInput)
