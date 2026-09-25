@@ -468,10 +468,12 @@ function RecordPageInner() {
   // --- Mac app local control (MCP over the app's socket; ADR-046) ---------
   // A start sets title/source/account first, then fires once that state has
   // rendered into RecordButton (controlTick); success is the native capture
-  // actually starting (onPermissionGranted), failure is onError or 40 s.
+  // actually starting (onPermissionGranted), failure is onError. There is no
+  // page-side timeout: the app's socket deadline reports an unknown outcome,
+  // and a start that completes later still shows as MCP-started.
   const [controlTick, setControlTick] = useState(0);
   const [controlStarted, setControlStarted] = useState(false);
-  const controlStartRef = useRef<{ request: NativeControlRequest; timer: ReturnType<typeof setTimeout>; fired: boolean } | null>(null);
+  const controlStartRef = useRef<{ request: NativeControlRequest; fired: boolean } | null>(null);
   const controlStopRef = useRef<{ requestId: string; upload: boolean } | null>(null);
   const controlLatestRef = useRef({ step: postRecording.step, meetingId: postRecording.serverMeetingId, browserRecording: session.isRecording, importing: uploadProgress !== null, uploadMode: isUploadMode });
   useEffect(() => {
@@ -480,7 +482,6 @@ function RecordPageInner() {
   const finishControlStart = useCallback((result: NativeControlReply) => {
     const pending = controlStartRef.current;
     if (!pending) return;
-    clearTimeout(pending.timer);
     controlStartRef.current = null;
     if (result.ok) setControlStarted(true);
     void replyNativeControl(pending.request.requestId, result);
@@ -513,9 +514,6 @@ function RecordPageInner() {
         controlStartRef.current = {
           request: { ...request, params: { ...request.params, title } },
           fired: false,
-          timer: setTimeout(() => finishControlStart({
-            ok: false, error: { code: 'start_timeout', message: 'The recording did not start within 40 seconds.' },
-          }), 40_000),
         };
         setMeetingTitle(title);
         setAudioSource('system');
@@ -553,8 +551,17 @@ function RecordPageInner() {
     const { title, accountId } = pending.request.params;
     if (audioSource !== 'system' || meetingTitle !== title || (accountId && referenceAccountId !== accountId)) return;
     pending.fired = true;
-    void recordButtonRef.current?.startExternal();
-  }, [controlTick, audioSource, meetingTitle, referenceAccountId]);
+    const button = recordButtonRef.current;
+    const settle = () => {
+      // startExternal resolves after its success/error callbacks; if neither
+      // answered (e.g. the button was disabled), nothing started.
+      if (controlStartRef.current === pending && !isNativeRecordingRef.current) {
+        finishControlStart({ ok: false, error: { code: 'start_failed', message: 'The TTOBAK app could not start the recording.' } });
+      }
+    };
+    if (button) void button.startExternal().then(settle, settle);
+    else settle();
+  }, [controlTick, audioSource, meetingTitle, referenceAccountId, finishControlStart]);
 
   useEffect(() => {
     const stop = controlStopRef.current;
