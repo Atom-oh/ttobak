@@ -12,7 +12,7 @@ function load(name, globals = {}) {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   });
   const exports = {};
-  vm.runInNewContext(outputText, { exports, Blob, crypto: webcrypto, console, ...globals });
+  vm.runInNewContext(outputText, { exports, Blob, crypto: webcrypto, console, setTimeout, clearTimeout, AbortController, ...globals });
   return exports;
 }
 
@@ -155,7 +155,7 @@ class ApiError extends Error {
   constructor(status, code) { super(code); this.status = status; this.code = code; }
 }
 
-function recoveryHook(meeting) {
+function recoveryHook(meeting, apiOverrides = {}) {
   const states = [];
   const navigations = [];
   const requests = [];
@@ -167,10 +167,10 @@ function recoveryHook(meeting) {
           useRef: (current) => ({ current }), useEffect() {}, useCallback: (callback) => callback,
         },
         'next/navigation': { useRouter: () => ({ push: (path) => navigations.push(path) }) },
-        '@/lib/api': { ApiError, meetingsApi: { get: async (...args) => { requests.push(args); if (meeting instanceof Error) throw meeting; return typeof meeting === 'function' ? meeting() : meeting; } } },
-        '@/lib/meetingReferences': {},
-        '@/lib/recordingNotes': { RecordingNotes: class { initialize() {} reset() {} } },
-        '@/lib/meetingNotes': {}, '@/lib/upload': {}, '@/lib/tauri': {},
+        '@/lib/api': { ApiError, meetingsApi: { get: async (...args) => { requests.push(args); if (meeting instanceof Error) throw meeting; return typeof meeting === 'function' ? meeting() : meeting; }, ...apiOverrides } },
+        '@/lib/meetingReferences': { codePointLength: value => [...value].length, MAX_MEETING_NOTES: 32000 },
+        '@/lib/recordingNotes': { RecordingNotes: class { initialize() {} reset() {} async persist() {} conflict() { return null; } } },
+        '@/lib/meetingNotes': {}, '@/lib/upload': {}, '@/lib/tauri': { isCommandNotFound: () => false },
         '@/lib/browserRecordingBackup': {},
       };
       assert.ok(name in modules, name);
@@ -265,4 +265,35 @@ test('abandoning restoration during a read releases its lock without reviving th
   await restoring;
   assert.equal(released, true);
   assert.equal(fixture.states.includes('notes'), false);
+});
+
+test('cancelling while the pre-upload read waits cannot reset a completed meeting', async () => {
+  let reads = 0, resolveRead;
+  const updates = [];
+  const fixture = recoveryHook(() => ++reads === 1 ? { notes: '', supportsNotesComparison: true }
+    : new Promise(resolve => { resolveRead = resolve; }), { update: async (...args) => { updates.push(args); return {}; } });
+  const backup = { metadata: { userId: 'owner', meetingId: 'draft', notes: '', mimeType: 'audio/webm', uploadKey: 'audio/owner/draft/saved.webm' },
+    update: async () => {}, release() {}, readBlob: async () => new Blob(['audio']) };
+  await fixture.hook.restoreBrowserRecording(backup);
+  const pending = fixture.hook.handleNotesSubmit('notes');
+  for (let attempt = 0; attempt < 50 && !resolveRead; attempt++) await tick();
+  assert.ok(resolveRead, 'must reach the asynchronous pre-upload read');
+  fixture.hook.reset();
+  resolveRead({ status: 'done', audioKey: backup.metadata.uploadKey });
+  await pending;
+  assert.deepEqual(updates, []);
+});
+
+test('a newly observed different recording prevents the restored upload from starting', async () => {
+  let reads = 0;
+  const updates = [];
+  const fixture = recoveryHook(() => ++reads === 1 ? { notes: '' } : { status: 'done', audioKey: 'audio/owner/draft/another.webm' },
+    { update: async (...args) => { updates.push(args); return {}; } });
+  await fixture.hook.restoreBrowserRecording({
+    metadata: { userId: 'owner', meetingId: 'draft', notes: '', mimeType: 'audio/webm' },
+    update: async () => {}, readBlob: async () => new Blob(['retained']),
+  });
+  await fixture.hook.handleNotesSubmit('notes');
+  assert.deepEqual(updates, []);
+  assert.ok(fixture.states.includes('error'));
 });

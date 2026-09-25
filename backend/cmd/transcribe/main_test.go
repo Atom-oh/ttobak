@@ -55,7 +55,7 @@ func TestExtractPartIndex(t *testing.T) {
 }
 
 func TestRecoveredAudioEventWaitsForCanonicalBinding(t *testing.T) {
-	key := "audio/owner/meeting/recording_recovered_123.webm"
+	key := "audio/owner/meeting/recording_recovered_0123456789abcdef0123456789abcdef.webm"
 	for _, tc := range []struct {
 		name        string
 		meeting     *model.Meeting

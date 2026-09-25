@@ -6,6 +6,8 @@ import (
 	"github.com/ttobak/backend/internal/model"
 )
 
+var ErrRecordingRecoveryCleanup = errors.New("rejected recording recovery cleanup failed")
+
 var ErrRecordingCheckpointMissing = errors.New("recording checkpoint missing")
 
 func CanRecoverRecording(meeting *model.Meeting) bool {

@@ -269,7 +269,14 @@ export function usePostRecording({
         if (!isCurrent()) return;
         setNotesConflict(null);
       }
-      if (backup) await meetingsApi.get(meetingId, identity);
+      if (backup) {
+        const current = await meetingsApi.get(meetingId, identity);
+        if (!isCurrent()) return;
+        const keys = current.audioKeys?.length ? current.audioKeys : current.audioKey ? [current.audioKey] : [];
+        if (keys.length && (!putDoneRef.current || keys.length !== 1 || keys[0] !== putDoneRef.current.key)) {
+          throw new ApiError(409, 'AUDIO_CHANGED', '다른 녹음이 저장되었습니다. 기기 보관본을 다운로드하여 확인해 주세요.');
+        }
+      }
       await withTimeout(meetingsApi.update(meetingId, {
         title: meetingTitle || formatDefaultTitle(new Date()), ...(!putDoneRef.current ? { status: 'transcribing' } : {}),
         ...(liveSummaryRef?.current ? { liveSummary: truncateLiveSummary(liveSummaryRef.current) } : {}),
