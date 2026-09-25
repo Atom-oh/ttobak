@@ -1,4 +1,4 @@
-# ADR-046: Account-scoped browser recording recovery
+# ADR-048: Account-scoped browser recording recovery
 
 Status: Accepted (implementation; no claim of production acceptance)
 Date: 2026-09-25
