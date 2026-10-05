@@ -98,6 +98,20 @@ describe('GatewayStack', () => {
   });
 
 
+  test('API Lambda selects the live interpreter model without touching the summary override', () => {
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'ttobak-api',
+      Environment: {
+        Variables: Match.objectLike({ BEDROCK_TRANSLATE_MODEL_ID: 'global.openai.gpt-6-luna' }),
+      },
+    });
+    const withInterpreter = Object.values(template.findResources('AWS::Lambda::Function'))
+      .filter(resource => resource.Properties.Environment?.Variables?.BEDROCK_TRANSLATE_MODEL_ID);
+    expect(withInterpreter.map(resource => resource.Properties.FunctionName)).toEqual(['ttobak-api']);
+    const api = withInterpreter[0].Properties.Environment.Variables;
+    expect(api.BEDROCK_SUMMARY_MODEL_ID).toBeUndefined();
+  });
+
   test('recovery consumer is installed before the API producer', () => {
     const functions = template.findResources('AWS::Lambda::Function');
     const apiId = Object.keys(functions).find(id => functions[id].Properties.FunctionName === 'ttobak-api')!;

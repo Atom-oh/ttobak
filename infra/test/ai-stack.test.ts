@@ -37,11 +37,15 @@ describe('AiStack', () => {
     template = buildTemplate();
   });
 
-  test('only summary worker can invoke the exact GPT-6 Sol model', () => {
-    const grants = Object.values(template.findResources('AWS::IAM::Policy'))
+  function openAiGrants() {
+    return Object.values(template.findResources('AWS::IAM::Policy'))
       .flatMap(policy => policy.Properties.PolicyDocument.Statement
         .filter((statement: { Resource?: unknown }) => JSON.stringify(statement.Resource).includes('openai.'))
         .map((statement: { Action: unknown; Resource: unknown }) => ({ policy, statement })));
+  }
+
+  test('only summary worker can invoke the exact GPT-6 Sol model', () => {
+    const grants = openAiGrants().filter(grant => JSON.stringify(grant.statement.Resource).includes('gpt-6-sol'));
     expect(grants).toHaveLength(1);
     expect(JSON.stringify(grants[0].policy.Properties.Roles)).toContain('TtobakSummarizeRole');
     expect(grants[0].statement.Action).toBe('bedrock:InvokeModel');
@@ -49,6 +53,25 @@ describe('AiStack', () => {
     expect(resources).toContain('foundation-model/openai.gpt-6-sol');
     expect(resources).toContain('inference-profile/global.openai.gpt-6-sol');
     expect(resources).not.toContain('openai.*');
+  });
+
+  test('only the API role can invoke the exact GPT-6 Luna interpreter model', () => {
+    const grants = openAiGrants().filter(grant => JSON.stringify(grant.statement.Resource).includes('gpt-6-luna'));
+    expect(grants).toHaveLength(1);
+    expect(JSON.stringify(grants[0].policy.Properties.Roles)).toContain('TtobakApiRole');
+    expect(grants[0].statement.Action).toBe('bedrock:InvokeModel');
+    const resources = JSON.stringify(grants[0].statement.Resource);
+    expect(resources).toContain('foundation-model/openai.gpt-6-luna');
+    expect(resources).toContain('inference-profile/global.openai.gpt-6-luna');
+    expect(resources).not.toContain('openai.*');
+  });
+
+  test('no other OpenAI model grant exists and none uses a wildcard', () => {
+    const grants = openAiGrants();
+    expect(grants).toHaveLength(2);
+    for (const grant of grants) {
+      expect(JSON.stringify(grant.statement.Resource)).not.toMatch(/openai\.[^"]*\*/);
+    }
   });
 
 

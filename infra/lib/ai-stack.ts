@@ -221,6 +221,21 @@ export class AiStack extends cdk.Stack {
       })
     );
 
+    // Live interpreter model for /api/translate quality=high. Exact model and
+    // global profile only; GatewayStack's BEDROCK_TRANSLATE_MODEL_ID must name
+    // this model (other IDs are denied and /api/translate falls back to Translate).
+    this.apiRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'InvokeInterpreterModel',
+        effect: iam.Effect.ALLOW,
+        actions: ['bedrock:InvokeModel'],
+        resources: [
+          `arn:aws:bedrock:*::foundation-model/openai.gpt-6-luna`,
+          `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/global.openai.gpt-6-luna`,
+        ],
+      })
+    );
+
     // Bedrock KB Retrieve (for RAG queries)
     this.apiRole.addToPolicy(
       new iam.PolicyStatement({

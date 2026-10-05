@@ -379,6 +379,26 @@ work current; loss or expiry of that claim fails the copy and prevents publicati
 Definitively rejected audio is deleted, ambiguous bindings retain their object,
 and cleanup failures surface.
 
+### Live translation
+
+`POST /api/translate` translates one live caption segment:
+`{text, sourceLang?, targetLang, quality?, context?}`. `text` is at most 9,000 UTF-8
+bytes. `sourceLang` is `auto` or one of `ko|en|ja|zh|es|fr|de` (default `auto`);
+`targetLang` is one of the same codes and must differ from the source. The
+client-only bilingual sentinel `ko-en` is resolved before the call. The body is
+capped at 32KB; violations return 400.
+
+`quality` defaults to `fast` (Amazon Translate only). `high` asks the interpreter
+model configured by `BEDROCK_TRANSLATE_MODEL_ID` first, then falls back to Amazon
+Translate on any model error, timeout (3s), truncated or implausible output, or
+when the model is unset or the text exceeds 3,000 bytes. `context` (at most two
+earlier source segments, 2,000 bytes total) is reference data for `high` only and is
+JSON-encoded separately from the current segment. The response is
+`{translatedText, sourceLang, targetLang, quality, engine}` where `engine` is
+`llm` or `translate`; a caller can show the `fast` result and replace it with `high`.
+Failures return a generic 500 without segment text; the text is never logged.
+`high` has no per-user rate limit; no route throttling is configured in `gateway-stack.ts`.
+
 ### Simulator
 
 `POST .../sim/extract` extracts requirements for a done meeting. `POST .../sim`
