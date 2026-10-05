@@ -121,6 +121,9 @@ export class GatewayStack extends cdk.Stack {
         KMS_KEY_ID: props.kmsKeyId || '',
         ORIGIN_VERIFY_SECRET: props.originVerifySecret || '',
         AWS_REGION_NAME: cdk.Aws.REGION,
+        // Live interpreter for /api/translate quality=high; must match AiStack's
+        // InvokeInterpreterModel grant. Unset/blank means Amazon Translate only.
+        BEDROCK_TRANSLATE_MODEL_ID: 'global.openai.gpt-6-luna',
         FRONTEND_BASE_URL: `https://${domainName}`,
         // Same-domain CloudFront-signed download URLs (ADR-027). Key material
         // comes from fixed-name SSM params (/ttobak/cloudfront/*) at runtime,

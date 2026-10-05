@@ -135,6 +135,9 @@ while auxiliary Opus calls remain on `BEDROCK_MODEL_ID`. Only the summary role
 receives the exact GPT model/profile grant. Images use Opus 4.8, Sonnet 5 is used for
 QA/simulator; Go refinement uses its Sonnet configuration and lightweight Go tasks
 use Haiku. QA detection and Translate are separate service/model choices.
+The API Lambda's `BEDROCK_TRANSLATE_MODEL_ID` selects GPT-6 Luna for
+`/api/translate` `quality=high`; only the API role receives that exact
+model/profile grant (`InvokeInterpreterModel`), with Amazon Translate as fallback.
 
 The Go API also depends on the transcribe Lambda so recovered-copy event guards
 are installed before the recovery producer changes.

@@ -115,7 +115,11 @@ func init() {
 	}
 	indexStatusHandler := handler.NewIndexStatusHandler(service.NewIndexStatusService(repo, indexStatusEngine))
 	notionService := service.NewNotionService()
-	translateService := service.NewTranslateService(translateClient)
+	// An empty BEDROCK_TRANSLATE_MODEL_ID keeps /api/translate on Amazon Translate.
+	translateService := service.NewTranslateService(
+		translateClient,
+		service.WithInterpreterModel(bedrockRuntimeClient2, os.Getenv("BEDROCK_TRANSLATE_MODEL_ID")),
+	)
 	// Initialize handlers
 	healthHandler := handler.NewHealthHandler()
 	meetingHandler := handler.NewMeetingHandler(meetingService, repo, uploadService)
