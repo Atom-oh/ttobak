@@ -28,9 +28,9 @@ var (
 	// ClaudeOpusModelID is for complex tasks (Q&A with tools, summarization, image analysis)
 	ClaudeOpusModelID = getEnvOrDefault("BEDROCK_MODEL_ID", "global.anthropic.claude-opus-5")
 	// ClaudeSonnetModelID is for transcript refinement and mid-tier tasks
-	ClaudeSonnetModelID = getEnvOrDefaultChain("global.anthropic.claude-sonnet-5", "BEDROCK_SONNET_MODEL_ID", "BEDROCK_SUMMARIZE_MODEL_ID")
+	ClaudeSonnetModelID = getEnvOrDefaultChain("global.anthropic.claude-sonnet-5-5", "BEDROCK_SONNET_MODEL_ID", "BEDROCK_SUMMARIZE_MODEL_ID")
 	// ClaudeHaikuModelID is for live summary (fast, low-cost incremental updates)
-	ClaudeHaikuModelID = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+	ClaudeHaikuModelID = "global.anthropic.claude-haiku-5-5"
 )
 
 // stripCodeFences removes markdown code fences (```json ... ```) that LLMs sometimes wrap around JSON output.
@@ -98,6 +98,26 @@ type ClaudeRequest struct {
 	MaxTokens        int             `json:"max_tokens"`
 	Messages         []ClaudeMessage `json:"messages"`
 	System           string          `json:"system,omitempty"`
+	// Thinking is set only where a model's default reasoning would consume the
+	// output budget (see PrepareClaudeRequest).
+	Thinking *ClaudeThinking `json:"thinking,omitempty"`
+}
+
+// ClaudeThinking is the Messages API thinking configuration.
+type ClaudeThinking struct {
+	Type string `json:"type"`
+}
+
+// PrepareClaudeRequest applies per-model request requirements. Haiku 5.5 enables
+// adaptive thinking by default, and on real Korean meeting transcripts that spent
+// the 2,048-token output budget so 12 of 15 live summaries ended at max_tokens
+// (versus 2 of 15 with thinking disabled). Auxiliary Haiku tasks are short
+// extraction/summary work, so thinking is disabled for them.
+func PrepareClaudeRequest(request ClaudeRequest, modelID string) ClaudeRequest {
+	if modelID == ClaudeHaikuModelID {
+		request.Thinking = &ClaudeThinking{Type: "disabled"}
+	}
+	return request
 }
 
 // ClaudeMessage represents a message in a Claude conversation
@@ -1681,7 +1701,7 @@ func summaryContinuationContent(body []byte) (json.RawMessage, bool, error) {
 }
 
 func (s *BedrockService) invokeClaudeResponseBody(ctx context.Context, request ClaudeRequest, modelID string) ([]byte, error) {
-	requestBody, err := json.Marshal(request)
+	requestBody, err := json.Marshal(PrepareClaudeRequest(request, modelID))
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}

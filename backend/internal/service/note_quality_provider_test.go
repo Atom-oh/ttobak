@@ -50,7 +50,7 @@ func qualityProviderCompletion(modelID string, original []byte) ([]byte, error) 
 }
 
 func TestQualityOpenAICompletionRequiresCompleteVisibleText(t *testing.T) {
-	model := "global.openai.gpt-6-sol"
+	model := "global.openai.gpt-6.1-sol"
 	for _, response := range []string{
 		`{}`, `{"choices":[]}`,
 		`{"choices":[{"finish_reason":"length","message":{"content":"partial"}}]}`,
@@ -84,7 +84,7 @@ func TestQualityOpenAIRequestPreservesProductionPrompt(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		adapted, err := qualityProviderRequest("global.openai.gpt-6-sol", production)
+		adapted, err := qualityProviderRequest("global.openai.gpt-6.1-sol", production)
 		if err != nil {
 			t.Fatal(err)
 		}

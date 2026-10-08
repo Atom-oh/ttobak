@@ -130,11 +130,11 @@ for a separate ttobak-connections table described an obsolete design.
 | convert-doc | Go/LibreOffice ARM64 container | 5m | 3008MB |
 
 Model/environment selection belongs to each function, not one repo-wide model.
-`gateway-stack.ts` selects GPT-6 Sol for final notes via `BEDROCK_SUMMARY_MODEL_ID`,
+`gateway-stack.ts` selects GPT-6.1 Sol for final notes via `BEDROCK_SUMMARY_MODEL_ID`,
 while auxiliary Opus calls remain on `BEDROCK_MODEL_ID`. Only the summary role
-receives the exact GPT model/profile grant. Images use Opus 4.8, Sonnet 5 is used for
-QA/simulator; Go refinement uses its Sonnet configuration and lightweight Go tasks
-use Haiku. QA detection and Translate are separate service/model choices.
+receives the exact GPT-6.1 Sol model/profile grant. Images use Opus 4.8, Sonnet 5.5 is used
+for QA/simulator; Go refinement uses its Sonnet configuration and lightweight Go tasks
+use Haiku 5.5. QA detection and Translate are separate service/model choices.
 The API Lambda's `BEDROCK_TRANSLATE_MODEL_ID` selects GPT-6 Luna for
 `/api/translate` `quality=high`; only the API role receives that exact
 model/profile grant (`InvokeInterpreterModel`), with Amazon Translate as fallback.

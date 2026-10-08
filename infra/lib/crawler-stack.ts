@@ -28,7 +28,7 @@ export class CrawlerStack extends cdk.Stack {
       KB_BUCKET_NAME: props.kbBucket.bucketName,
       KB_ID: props.knowledgeBaseId || '',
       DATA_SOURCE_ID: props.dataSourceId || '',
-      SUMMARIZE_MODEL_ID: 'global.anthropic.claude-sonnet-5',
+      SUMMARIZE_MODEL_ID: 'global.anthropic.claude-sonnet-5-5',
       WEB_SEARCH_GATEWAY_URL: props.webSearchGatewayUrl,
       WEB_SEARCH_GATEWAY_REGION: 'us-east-1',
       RELEVANCE_THRESHOLD: '0.7',

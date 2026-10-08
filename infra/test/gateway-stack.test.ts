@@ -87,8 +87,8 @@ describe('GatewayStack', () => {
       Environment: {
         Variables: Match.objectLike({
           BEDROCK_MODEL_ID: 'global.anthropic.claude-opus-5',
-          BEDROCK_SUMMARY_MODEL_ID: 'global.openai.gpt-6-sol',
-          BEDROCK_SONNET_MODEL_ID: 'global.anthropic.claude-sonnet-5',
+          BEDROCK_SUMMARY_MODEL_ID: 'global.openai.gpt-6.1-sol',
+          BEDROCK_SONNET_MODEL_ID: 'global.anthropic.claude-sonnet-5-5',
         }),
       },
     });

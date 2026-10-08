@@ -329,8 +329,8 @@ export class AiStack extends cdk.Stack {
       effect: iam.Effect.ALLOW,
       actions: ['bedrock:InvokeModel'],
       resources: [
-        `arn:aws:bedrock:*::foundation-model/openai.gpt-6-sol`,
-        `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/global.openai.gpt-6-sol`,
+        `arn:aws:bedrock:*::foundation-model/openai.gpt-6.1-sol`,
+        `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/global.openai.gpt-6.1-sol`,
       ],
     }));
 

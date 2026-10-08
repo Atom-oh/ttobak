@@ -62,7 +62,7 @@ Be concise — this is a live summary updated every ~1000 words.`
 		},
 	}
 
-	requestBody, err := json.Marshal(request)
+	requestBody, err := json.Marshal(service.PrepareClaudeRequest(request, service.ClaudeHaikuModelID))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to create request")
 		return

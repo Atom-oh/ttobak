@@ -34,7 +34,7 @@ logger.setLevel(logging.INFO)
 
 TABLE_NAME = os.environ.get('TABLE_NAME', 'ttobak-main')
 KB_BUCKET_NAME = os.environ.get('KB_BUCKET_NAME', 'ttobak-kb')
-SUMMARIZE_MODEL_ID = os.environ.get('SUMMARIZE_MODEL_ID', 'global.anthropic.claude-sonnet-5')
+SUMMARIZE_MODEL_ID = os.environ.get('SUMMARIZE_MODEL_ID', 'global.anthropic.claude-sonnet-5-5')
 
 # AgentCore Gateway Web Search connector (us-east-1 only). SigV4-signed MCP
 # tools/call replaces the old Google News / site RSS fetch.
