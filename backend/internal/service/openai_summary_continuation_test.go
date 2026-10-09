@@ -21,7 +21,7 @@ func openAIContinuationFixture(t *testing.T, responses ...string) (*BedrockServi
 			return aws.Credentials{AccessKeyID: "test-key", SecretAccessKey: "test-secret"}, nil
 		}),
 		HTTPClient: summaryContinuationHTTP(func(request *http.Request) (*http.Response, error) {
-			if !strings.Contains(request.URL.Path, "global.openai.gpt-6-sol") {
+			if !strings.Contains(request.URL.Path, "global.openai.gpt-6.1-sol") {
 				t.Fatal("continuation changed the model")
 			}
 			var body openAISummaryRequest
@@ -37,7 +37,7 @@ func openAIContinuationFixture(t *testing.T, responses ...string) (*BedrockServi
 		}),
 	})
 	service := NewBedrockService(client, nil, nil)
-	service.summaryModelID = "global.openai.gpt-6-sol"
+	service.summaryModelID = "global.openai.gpt-6.1-sol"
 	return service, &requests
 }
 

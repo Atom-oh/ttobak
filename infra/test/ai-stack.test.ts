@@ -44,14 +44,18 @@ describe('AiStack', () => {
         .map((statement: { Action: unknown; Resource: unknown }) => ({ policy, statement })));
   }
 
-  test('only summary worker can invoke the exact GPT-6 Sol model', () => {
-    const grants = openAiGrants().filter(grant => JSON.stringify(grant.statement.Resource).includes('gpt-6-sol'));
+  test('only summary worker can invoke the exact GPT-6.1 Sol model (and the outgoing GPT-6 Sol during cutover)', () => {
+    const grants = openAiGrants().filter(grant => JSON.stringify(grant.statement.Resource).includes('gpt-6.1-sol'));
     expect(grants).toHaveLength(1);
     expect(JSON.stringify(grants[0].policy.Properties.Roles)).toContain('TtobakSummarizeRole');
     expect(grants[0].statement.Action).toBe('bedrock:InvokeModel');
     const resources = JSON.stringify(grants[0].statement.Resource);
-    expect(resources).toContain('foundation-model/openai.gpt-6-sol');
-    expect(resources).toContain('inference-profile/global.openai.gpt-6-sol');
+    expect(resources).toContain('foundation-model/openai.gpt-6.1-sol"');
+    expect(resources).toContain('inference-profile/global.openai.gpt-6.1-sol"');
+    // Outgoing pair: AiStack lands before GatewayStack changes the environment.
+    expect(resources).toContain('foundation-model/openai.gpt-6-sol"');
+    expect(resources).toContain('inference-profile/global.openai.gpt-6-sol"');
+    expect((grants[0].statement.Resource as unknown[])).toHaveLength(4);
     expect(resources).not.toContain('openai.*');
   });
 

@@ -13,7 +13,7 @@ import (
 )
 
 func TestOpenAISummaryUsesIndependentModelAndNativeTransport(t *testing.T) {
-	const modelID = "global.openai.gpt-6-sol"
+	const modelID = "global.openai.gpt-6.1-sol"
 	t.Setenv("BEDROCK_SUMMARY_MODEL_ID", modelID)
 	request := ClaudeRequest{AnthropicVersion: "bedrock-2023-05-31", MaxTokens: 16000,
 		System:   "원문의 숫자와 부정을 보존하세요.",

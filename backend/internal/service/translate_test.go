@@ -123,7 +123,7 @@ func TestTranslateSegmentEngines(t *testing.T) {
 		},
 		{
 			name: "non-OpenAI model is ignored", req: TranslateRequest{Text: "안녕", SourceLang: "ko", TargetLang: "en", Quality: TranslateQualityHigh},
-			invoker: &fakeModelInvoker{body: chatResponse("x", "stop")}, modelID: "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+			invoker: &fakeModelInvoker{body: chatResponse("x", "stop")}, modelID: "global.anthropic.claude-haiku-5-5",
 			wantEngine: TranslateEngineTranslate, wantText: "hello (mt)", wantMT: 1,
 		},
 	}

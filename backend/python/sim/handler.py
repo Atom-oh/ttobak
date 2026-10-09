@@ -32,7 +32,7 @@ logger.setLevel(logging.INFO)
 
 TABLE_NAME = os.environ.get("TABLE_NAME", "ttobak-main")
 BUCKET_NAME = os.environ.get("BUCKET_NAME", "ttobak-assets")
-BEDROCK_MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", "global.anthropic.claude-sonnet-5")
+BEDROCK_MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", "global.anthropic.claude-sonnet-5-5")
 CODE_INTERPRETER_ID = os.environ.get("CODE_INTERPRETER_ID", "ttobak_sim")
 AWS_REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
 

@@ -127,7 +127,7 @@ unconsumed project invitation rows expire through their existing TTL field.
    writes retain new objects. Reader compatibility precedes writer deployment.
    Saved notes remain separately attributed evidence and cannot fabricate speech
    timestamps, decisions or assigned tasks.
-   Final notes use the GPT-6 Sol summary override. Both providers retain bounded
+   Final notes use the GPT-6.1 Sol summary override. Both providers retain bounded
    continuation after token exhaustion and publish only complete visible text.
    Refinement and auxiliary calls keep their independent model selection.
 4. Derive account/project material using explicit relations and current access.
