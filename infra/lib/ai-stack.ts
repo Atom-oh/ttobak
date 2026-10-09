@@ -324,6 +324,10 @@ export class AiStack extends cdk.Stack {
     props.table.grantReadWriteData(this.summarizeRole);
     props.bucket.grantReadWrite(this.summarizeRole);
 
+    // AiStack deploys before GatewayStack flips BEDROCK_SUMMARY_MODEL_ID, and a
+    // failed final-note run is not redelivered, so the outgoing GPT-6 Sol pair
+    // stays granted for this release. Remove it in a follow-up once GatewayStack
+    // carries gpt-6.1-sol. Exact ARNs only.
     this.summarizeRole.addToPolicy(new iam.PolicyStatement({
       sid: 'InvokeFinalSummaryModel',
       effect: iam.Effect.ALLOW,
@@ -331,6 +335,8 @@ export class AiStack extends cdk.Stack {
       resources: [
         `arn:aws:bedrock:*::foundation-model/openai.gpt-6.1-sol`,
         `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/global.openai.gpt-6.1-sol`,
+        `arn:aws:bedrock:*::foundation-model/openai.gpt-6-sol`,
+        `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/global.openai.gpt-6-sol`,
       ],
     }));
 
