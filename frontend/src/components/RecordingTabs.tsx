@@ -15,7 +15,7 @@ const tabs: { id: TabId; label: string; icon: string }[] = [
   { id: 'summary', label: '요약', icon: 'summarize' },
   { id: 'notes', label: '노트', icon: 'edit_note' },
   { id: 'captions', label: '자막', icon: 'subtitles' },
-  { id: 'translation', label: '번역', icon: 'translate' },
+  { id: 'translation', label: '통역', icon: 'translate' },
 ];
 
 export function RecordingTabs({ captionsContent, translationContent, summaryContent, notesContent }: RecordingTabsProps) {

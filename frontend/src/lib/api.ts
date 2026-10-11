@@ -588,10 +588,11 @@ export interface AdminUserActionResponse {
 
 // Translation API
 export const translateApi = {
-  translate: (text: string, sourceLang: string, targetLang: string) =>
+  translate: (text: string, sourceLang: string, targetLang: string, signal?: AbortSignal) =>
     api.post<{ translatedText: string; sourceLang: string; targetLang: string }>(
       '/api/translate',
-      { text, sourceLang, targetLang }
+      { text, sourceLang, targetLang },
+      { signal },
     ),
 };
 

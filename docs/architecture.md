@@ -109,6 +109,14 @@ unconsumed project invitation rows expire through their existing TTL field.
 
 1. Capture microphone/tab/native system audio. Live captions use browser Transcribe
    Streaming, with guarded fallback/recovery that prioritizes preserving recording.
+   Opt-in live interpretation uses the authenticated Translate API. The browser
+   keeps each utterance's detected language and stream-scoped result ID, translates
+   Korean to English and English to Korean, and renders both columns together.
+   Missing language metadata uses the current text's script, never the previous
+   utterance's language. The shared translation scheduler bounds pending finals,
+   concurrency, UTF-8 request/result sizes and request duration; it rejects stale
+   responses after finalization, setting changes or stop. Interpretation failures
+   do not stop capture. This path does not change batch transcription or saved notes.
 2. Upload audio to S3. EventBridge invokes the transcribe orchestrator, which uses
    configured Whisper ECS or AWS Transcribe fallback. Multipart completion and
    transcript uploads trigger summarization with concurrency/retry guards.

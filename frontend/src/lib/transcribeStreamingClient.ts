@@ -39,7 +39,7 @@ export interface TranscribeStreamingConfig {
   languageOptions?: string;
   preferredLanguage?: string;
   vocabularyName?: string;
-  onTranscript: (text: string, isFinal: boolean, languageCode?: string) => void;
+  onTranscript: (text: string, isFinal: boolean, languageCode?: string, resultId?: string) => void;
   onError: (error: string) => void;
 }
 
@@ -264,7 +264,11 @@ export class TranscribeStreamingSession {
       }
 
       if (this.config.vocabularyName) {
-        commandInput.VocabularyName = this.config.vocabularyName;
+        if (this.config.multiLanguage) {
+          commandInput.VocabularyNames = this.config.vocabularyName;
+        } else {
+          commandInput.VocabularyName = this.config.vocabularyName;
+        }
       }
 
       const command = new StartStreamTranscriptionCommand(commandInput);
@@ -285,8 +289,7 @@ export class TranscribeStreamingSession {
           for (const result of event.TranscriptEvent.Transcript.Results) {
             const text = result.Alternatives?.[0]?.Transcript || '';
             if (text) {
-              const lang = (result as Record<string, unknown>).LanguageCode as string | undefined;
-              this.config.onTranscript(text, !result.IsPartial, lang);
+              this.config.onTranscript(text, !result.IsPartial, result.LanguageCode, result.ResultId);
             }
           }
         }

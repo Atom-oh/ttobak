@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { hasMobileMicConflictRisk } from '@/lib/device';
+import { TRANSLATION_TARGETS } from '@/lib/liveTranslation';
 
 interface RecordingConfigProps {
   summaryInterval: number;
@@ -24,8 +25,9 @@ export function RecordingConfig({
   onTargetLangChange,
 }: Pick<RecordingConfigProps, 'summaryInterval' | 'onSummaryIntervalChange' | 'translationEnabled' | 'onTranslationToggle' | 'targetLang' | 'onTargetLangChange'>) {
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-wrap items-center gap-3">
       <select
+        aria-label="실시간 요약 간격"
         value={summaryInterval}
         onChange={(e) => onSummaryIntervalChange(Number(e.target.value))}
         className="text-sm bg-slate-100 dark:bg-slate-800 border-none rounded-lg px-3 py-1.5 text-slate-600 dark:text-gray-400 focus:outline-none focus:ring-2 focus:ring-primary/30"
@@ -42,20 +44,18 @@ export function RecordingConfig({
           onChange={(e) => onTranslationToggle(e.target.checked)}
           className="rounded border-slate-300 text-primary focus:ring-primary"
         />
-        번역
+        실시간 통역
       </label>
       {translationEnabled && (
         <select
+          aria-label="통역 언어 선택"
           value={targetLang}
           onChange={(e) => onTargetLangChange(e.target.value)}
           className="text-sm bg-slate-100 dark:bg-slate-800 border-none rounded-lg px-3 py-1.5 text-slate-600 dark:text-gray-400 focus:outline-none focus:ring-2 focus:ring-primary/30"
         >
-          <option value="en">EN</option>
-          <option value="ja">JA</option>
-          <option value="zh">ZH</option>
-          <option value="es">ES</option>
-          <option value="fr">FR</option>
-          <option value="de">DE</option>
+          {TRANSLATION_TARGETS.map((language) => (
+            <option key={language.code} value={language.code}>{language.label}</option>
+          ))}
         </select>
       )}
     </div>

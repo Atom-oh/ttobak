@@ -1,122 +1,106 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-
-interface TranslationEntry {
-  original: string;
-  translated: string;
-  targetLang: string;
-  timestamp: string;
-}
+import { BILINGUAL_TARGET, TRANSLATION_TARGETS, type TranslationEntry } from '@/lib/liveTranslation';
 
 interface TranslationViewProps {
   translations: TranslationEntry[];
   targetLang: string;
   onTargetLangChange: (lang: string) => void;
   isActive: boolean;
-  interimTranslation?: { original: string; translated: string; targetLang: string } | null;
 }
 
-const SUPPORTED_LANGUAGES = [
-  { code: 'en', label: 'English' },
-  { code: 'ja', label: '日本語' },
-  { code: 'zh', label: '中文' },
-  { code: 'es', label: 'Español' },
-  { code: 'fr', label: 'Français' },
-  { code: 'de', label: 'Deutsch' },
-];
-
-function formatTime(timestamp: string): string {
-  const date = new Date(timestamp);
-  return date.toLocaleTimeString('en-US', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
+function CaptionText({ text, language, isOriginal, failed }: {
+  text: string;
+  language: string;
+  isOriginal: boolean;
+  failed: boolean;
+}) {
+  return (
+    <div className="min-w-0 rounded-lg bg-slate-50 p-3 dark:bg-white/5">
+      <div className="mb-1 flex items-center gap-2 text-xs text-slate-500 dark:text-text-muted">
+        <span>{language === 'ko' ? '한국어' : language === 'en' ? 'English' : language.toUpperCase()}</span>
+        <span>{isOriginal ? '원문' : '번역'}</span>
+      </div>
+      <p lang={language} className="whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-900 dark:text-text-main">
+        {text || (failed ? '번역하지 못했습니다.' : '통역 중…')}
+      </p>
+    </div>
+  );
 }
 
-export function TranslationView({ translations, targetLang, onTargetLangChange, isActive, interimTranslation }: TranslationViewProps) {
+export function TranslationView({ translations, targetLang, onTargetLangChange, isActive }: TranslationViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const bilingual = targetLang === BILINGUAL_TARGET;
 
   useEffect(() => {
     if (containerRef.current && isActive) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
     }
-  }, [translations, interimTranslation, isActive]);
+  }, [translations, isActive]);
 
   return (
-    <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
-      {/* Language Selector Header */}
-      <div className="flex items-center gap-3 p-4 border-b border-slate-100 dark:border-slate-800">
-        <span className="material-symbols-outlined text-primary">translate</span>
-        <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Translation</h3>
-        <div className="ml-auto">
-          <select
-            value={targetLang}
-            onChange={(e) => onTargetLangChange(e.target.value)}
-            className="text-sm bg-slate-100 dark:bg-slate-800 border-none rounded-lg px-3 py-1.5 text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-2 focus:ring-primary/30"
-          >
-            {SUPPORTED_LANGUAGES.map((lang) => (
-              <option key={lang.code} value={lang.code}>
-                {lang.label}
-              </option>
-            ))}
-          </select>
-        </div>
+    <section aria-label="실시간 통역" className="overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-white/10 dark:bg-surface-lowest">
+      <div className="flex flex-wrap items-center gap-3 border-b border-slate-100 p-4 dark:border-white/10">
+        <span className="material-symbols-outlined text-primary" aria-hidden="true">translate</span>
+        <h3 className="text-sm font-semibold text-slate-900 dark:text-text-main">실시간 통역</h3>
+        <select
+          aria-label="통역 언어"
+          value={targetLang}
+          onChange={(event) => onTargetLangChange(event.target.value)}
+          className="ml-auto rounded-lg border-none bg-slate-100 px-3 py-1.5 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-primary/30 dark:bg-white/5 dark:text-text-main"
+        >
+          {TRANSLATION_TARGETS.map((language) => (
+            <option key={language.code} value={language.code}>{language.label}</option>
+          ))}
+        </select>
+        <p className="w-full text-xs text-slate-500 dark:text-text-muted">
+          {bilingual ? '한국어와 영어를 나란히 표시합니다. ' : '원문과 번역을 함께 표시합니다. '}
+          말하는 중에는 임시 번역이며, 인식이 확정되면 갱신됩니다.
+        </p>
       </div>
-
-      {/* Translation Content */}
-      <div ref={containerRef} className="p-4 max-h-96 overflow-y-auto">
+      <div ref={containerRef} className="max-h-[48vh] overflow-y-auto p-4">
         {translations.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-8 text-slate-400">
-            <span className="material-symbols-outlined text-4xl mb-2">translate</span>
-            <p className="text-sm">Translations will appear here...</p>
-            <p className="text-xs mt-1 text-slate-400">Final transcripts are auto-translated</p>
-          </div>
+          <p className="py-8 text-center text-sm text-slate-500 dark:text-text-muted">
+            음성이 인식되면 원문과 번역이 여기에 표시됩니다.
+          </p>
         ) : (
-          <div className="space-y-4">
-            {translations.map((entry, index) => (
-              <div key={index} className="group">
-                <div className="flex items-start gap-3">
-                  <span className="text-[10px] text-slate-400 font-mono mt-0.5 shrink-0">
-                    {formatTime(entry.timestamp)}
-                  </span>
-                  <div className="flex-1 space-y-1.5">
-                    <p className="text-sm text-slate-500 dark:text-slate-400">
-                      {entry.original}
-                    </p>
-                    <div className="flex items-start gap-2 pl-3 border-l-2 border-primary/30">
-                      <p className="text-sm text-slate-900 dark:text-slate-100 font-medium">
-                        {entry.translated}
-                      </p>
-                    </div>
+          <ol aria-label="통역 자막" className="space-y-4">
+            {translations.map((entry) => {
+              const languages = bilingual ? ['ko', 'en'] : [entry.sourceLang, entry.targetLang];
+              return (
+                <li key={entry.id}>
+                  <div className="mb-1.5 flex items-center gap-2 text-xs text-slate-500 dark:text-text-muted">
+                    <time dateTime={entry.timestamp}>{new Date(entry.timestamp).toLocaleTimeString('ko-KR')}</time>
+                    <span className={entry.status === 'error' ? 'text-amber-600 dark:text-amber-400' : ''}>
+                      {entry.status === 'error' ? '번역 실패 · 원문 유지' : entry.status === 'complete' ? '확정' : '임시 자막 · 통역 중'}
+                    </span>
                   </div>
-                </div>
-              </div>
-            ))}
-            {interimTranslation && (
-              <div className="group opacity-60 italic">
-                <div className="flex items-start gap-3">
-                  <span className="text-[10px] text-slate-400 font-mono mt-0.5 shrink-0">
-                    {formatTime(new Date().toISOString())}
-                  </span>
-                  <div className="flex-1 space-y-1.5">
-                    <p className="text-sm text-slate-500 dark:text-slate-400">
-                      {interimTranslation.original}
-                    </p>
-                    <div className="flex items-start gap-2 pl-3 border-l-2 border-primary/30">
-                      <p className="text-sm text-slate-900 dark:text-slate-100 font-medium">
-                        {interimTranslation.translated}
-                        <span className="inline-block w-0.5 h-4 bg-primary/60 animate-pulse ml-0.5 align-middle" />
-                      </p>
-                    </div>
+                  <div className="grid grid-cols-2 gap-2 sm:gap-3">
+                    {languages.map((language, index) => {
+                      const isOriginal = bilingual ? language === entry.sourceLang : index === 0;
+                      return (
+                        <CaptionText
+                          key={`${language}-${index}`}
+                          text={isOriginal ? entry.original : entry.translated}
+                          language={language}
+                          isOriginal={isOriginal}
+                          failed={entry.status === 'error'}
+                        />
+                      );
+                    })}
                   </div>
-                </div>
-              </div>
-            )}
-          </div>
+                  {entry.originalTruncated && (
+                    <p className="mt-1 text-xs text-slate-500 dark:text-text-muted">
+                      긴 원문의 일부만 표시합니다. 전체 원문은 실시간 자막에서 확인할 수 있습니다.
+                    </p>
+                  )}
+                </li>
+              );
+            })}
+          </ol>
         )}
       </div>
-    </div>
+    </section>
   );
 }
