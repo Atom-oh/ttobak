@@ -297,8 +297,8 @@ test('bilingual rendering keeps Korean on the left, English on the right, includ
 
 test('caption rendering treats recognized and translated markup as text', async () => {
   const state = fixture();
-  state.translator.update('markup', '<script>example()</script>', true, 'en-US');
-  state.requests[0].resolve({ translatedText: '<img src=x onerror=example()>' });
+  state.translator.update('markup', '<SCRIPT data-example=true>example()</SCRIPT>', true, 'en-US');
+  state.requests[0].resolve({ translatedText: '<IMG src=x onerror=example()>' });
   await tick();
   const { TranslationView } = loadModule('components/TranslationView.tsx', {
     react: React,
@@ -308,8 +308,8 @@ test('caption rendering treats recognized and translated markup as text', async 
   const html = renderToStaticMarkup(React.createElement(TranslationView, {
     translations: [...state.entries.values()], targetLang: 'ko-en', onTargetLangChange() {}, isActive: false,
   }));
-  assert.doesNotMatch(html, /<script>|<img /);
-  assert.match(html, /&lt;script&gt;/);
+  assert.doesNotMatch(html, /<(?:script|img)\b/i);
+  assert.match(html, /&lt;script\b/i);
   state.translator.stop();
 });
 
@@ -369,4 +369,36 @@ test('streaming forwards segment language and ID and uses plural vocabularies wi
   assert.equal(commandInput.VocabularyName, undefined);
   assert.deepEqual(transcripts, [['Hello.', true, 'en-US', 'utterance']]);
   session.stop();
+});
+
+test('failed authoritative translation never retains a provisional translation for changed speech', async () => {
+  const state = fixture();
+  state.translator.update('speech', 'We can deploy.', false, 'en-US');
+  await state.advance(500);
+  state.requests[0].resolve({ translatedText: '배포할 수 있습니다.' });
+  await tick();
+  assert.equal(state.entries.get('speech').translated, '배포할 수 있습니다.');
+  state.translator.update('speech', 'We cannot deploy.', true, 'en-US');
+  assert.equal(state.entries.get('speech').translated, '');
+  state.requests[1].reject(new Error('Unavailable'));
+  await tick();
+  assert.equal(state.entries.get('speech').original, 'We cannot deploy.');
+  assert.equal(state.entries.get('speech').translated, '');
+  assert.equal(state.entries.get('speech').status, 'error');
+  state.translator.stop();
+});
+
+test('the translation deadline settles even while authentication ignores cancellation', async () => {
+  const state = fixture({ honorAbort: false });
+  state.translator.update('first', '첫 문장', true, 'ko-KR');
+  state.translator.update('second', 'Second sentence', true, 'en-US');
+  state.translator.update('third', '셋째 문장', true, 'ko-KR');
+  await state.advance(8000);
+  assert.equal(state.requests.length, 3);
+  assert.equal(state.entries.get('first').status, 'error');
+  state.requests[0].resolve({ translatedText: 'Late result' });
+  await tick();
+  assert.equal(state.entries.get('first').translated, '');
+  assert.equal(state.entries.get('first').status, 'error');
+  state.translator.stop();
 });

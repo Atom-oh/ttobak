@@ -79,7 +79,9 @@ export class LiveTranslation {
     segment.entry = {
       ...segment.entry, original: text.slice(0, 9000), originalTruncated: text.length > 9000,
       sourceLang, targetLang, isFinal, status: 'pending',
-      translated: sameDirection ? segment.entry.translated : '',
+      translated: !isFinal && sameDirection && text.startsWith(segment.entry.original)
+        ? segment.entry.translated
+        : '',
     };
     this.segments.set(id, segment);
     if (this.segments.size > MAX_TRANSLATION_ENTRIES) {
@@ -143,15 +145,22 @@ export class LiveTranslation {
     this.requests.add(controller);
     if (!isFinal) this.interimRequest = controller;
     const timer = setTimeout(() => controller.abort(), 8000);
+    let rejectCancellation: (reason: Error) => void = () => {};
+    const cancellation = new Promise<never>((resolve, reject) => {
+      rejectCancellation = reject;
+    });
+    const onAbort = () => rejectCancellation(new Error('Translation cancelled'));
+    controller.signal.addEventListener('abort', onAbort, { once: true });
     const isCurrent = () => !this.stopped && this.options.enabled &&
       generation === this.generation && this.segments.get(snapshot.id) === segment &&
       segment.entry.sourceLang === snapshot.sourceLang && segment.entry.targetLang === snapshot.targetLang &&
       (isFinal ? segment.revision === revision : !segment.entry.isFinal);
     try {
       if (new TextEncoder().encode(snapshot.original).length > 9000) throw new Error('Translation input too long');
-      const result = snapshot.sourceLang === snapshot.targetLang
-        ? { translatedText: snapshot.original }
-        : await this.options.translate(snapshot.original, snapshot.sourceLang, snapshot.targetLang, controller.signal);
+      const request = snapshot.sourceLang === snapshot.targetLang
+        ? Promise.resolve({ translatedText: snapshot.original })
+        : this.options.translate(snapshot.original, snapshot.sourceLang, snapshot.targetLang, controller.signal);
+      const result = await Promise.race([request, cancellation]);
       if (!isCurrent() || controller.signal.aborted) return;
       if (!result.translatedText.trim() || new TextEncoder().encode(result.translatedText).length > 30000) {
         throw new Error('Invalid translation result');
@@ -164,11 +173,12 @@ export class LiveTranslation {
       this.publish(segment);
     } catch {
       if (isCurrent()) {
-        segment.entry = { ...segment.entry, status: 'error' };
+        segment.entry = { ...segment.entry, translated: '', status: 'error' };
         this.publish(segment);
       }
     } finally {
       clearTimeout(timer);
+      controller.signal.removeEventListener('abort', onAbort);
       this.requests.delete(controller);
       if (this.interimRequest === controller) {
         this.interimRequest = null;
