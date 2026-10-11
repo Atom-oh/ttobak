@@ -34,6 +34,7 @@ import { uploadsApi, meetingsApi, meetingAccountApi, kbApi } from '@/lib/api';
 import { uploadToS3, notifyUploadComplete, formatFileSize, putWithProgress } from '@/lib/upload';
 import { registerNativeControlHandler } from '@/lib/nativeControl';
 import type { LiveSttProvider } from '@/lib/sttManager';
+import { BILINGUAL_TARGET } from '@/lib/liveTranslation';
 
 export default function RecordPage() {
   return (
@@ -54,7 +55,7 @@ function RecordPageInner() {
   const [meetingTitle, setMeetingTitle] = useState('');
   const [summaryInterval, setSummaryInterval] = useState(50);
   const [translationEnabled, setTranslationEnabled] = useState(false);
-  const [targetLang, setTargetLang] = useState('en');
+  const [targetLang, setTargetLang] = useState(BILINGUAL_TARGET);
   const [attachments, setAttachments] = useState<{ name: string; url: string; s3Key?: string; mimeType?: string; status?: 'uploading' | 'complete' | 'error'; kbStatus?: 'idle' | 'copying' | 'done' | 'error' }[]>([]);
   // Default to AWS Transcribe Streaming, not Web Speech: SttManager.start()
   // already falls back to Web Speech on its own on desktop when the
@@ -979,15 +980,24 @@ function RecordPageInner() {
           placeholder="Meeting Title"
           className="text-lg font-bold tracking-tight bg-transparent border-none text-center focus:outline-none focus:ring-0 text-slate-900 dark:text-gray-100 placeholder:text-slate-400 flex-1 mx-4"
         />
-        <RecordingConfig
-          summaryInterval={summaryInterval}
-          onSummaryIntervalChange={setSummaryInterval}
-          translationEnabled={translationEnabled}
-          onTranslationToggle={setTranslationEnabled}
-          targetLang={targetLang}
-          onTargetLangChange={setTargetLang}
-        />
       </header>
+      {(!isUploadMode || session.isRecording || isNativeRecording) && (
+        <div className="flex flex-wrap items-center justify-center gap-3 border-b border-slate-100 px-4 py-3 dark:border-white/10">
+          <RecordingConfig
+            summaryInterval={summaryInterval}
+            onSummaryIntervalChange={setSummaryInterval}
+            translationEnabled={translationEnabled}
+            onTranslationToggle={setTranslationEnabled}
+            targetLang={targetLang}
+            onTargetLangChange={setTargetLang}
+          />
+          {translationEnabled && session.isRecording && session.activeProvider === 'web-speech' && (
+            <p className="w-full text-center text-xs text-amber-700 dark:text-amber-400">
+              현재 브라우저 인식은 한국어 기준입니다. 한·영 자동 인식은 AWS Streaming 연결이 필요합니다.
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Speech Recognition Error Banner */}
       {session.speechError && (
@@ -1398,6 +1408,14 @@ function RecordPageInner() {
         {/* Desktop: Summary (hero) + Notes side by side, transcript as collapsible strip */}
         {session.isRecording && (
           <div className="hidden lg:flex lg:flex-col gap-4">
+            {translationEnabled && (
+              <TranslationView
+                translations={session.translations}
+                targetLang={targetLang}
+                onTargetLangChange={setTargetLang}
+                isActive={!session.isPaused}
+              />
+            )}
             <div className="grid grid-cols-2 gap-4" style={{ height: '48vh' }}>
               <LiveSummary
                 summary={summary.liveSummary}
@@ -1467,14 +1485,13 @@ function RecordPageInner() {
                     translations={session.translations}
                     targetLang={targetLang}
                     onTargetLangChange={setTargetLang}
-                    isActive={true}
-                    interimTranslation={session.currentInterimTranslation}
+                    isActive={!session.isPaused}
                   />
                 ) : (
                   <div className="flex flex-col items-center justify-center py-12 text-center">
-                    <span className="material-symbols-outlined text-4xl text-slate-300 dark:text-slate-600 mb-3">translate</span>
+                    <span aria-hidden="true" className="material-symbols-outlined text-4xl text-slate-300 dark:text-slate-600 mb-3">translate</span>
                     <p className="text-sm text-slate-400 dark:text-slate-500">
-                      번역 기능을 활성화하려면 상단의 번역 체크박스를 켜세요
+                      상단의 실시간 통역을 켜면 원문과 번역 자막을 함께 볼 수 있습니다.
                     </p>
                   </div>
                 )

@@ -19,7 +19,7 @@ function loadModule(name, dependencies, globals = {}) {
       return dependencies[id];
     },
     console: { warn() {}, error() {} },
-    setTimeout, clearTimeout, setInterval, clearInterval, AbortController,
+    setTimeout, clearTimeout, setInterval, clearInterval, AbortController, TextEncoder,
     ...globals,
   });
   return exports;
@@ -27,22 +27,28 @@ function loadModule(name, dependencies, globals = {}) {
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const config = { region: 'test', identityPoolId: 'test', userPoolId: 'test' };
+const translationModule = loadModule('liveTranslation', {});
 
-function managerFixture({ withConfig = true } = {}) {
+function managerFixture({ withConfig = true, translationEnabled = false, targetLang = 'ko' } = {}) {
   const window = new EventTarget();
   const document = Object.assign(new EventTarget(), { visibilityState: 'visible' });
   const navigator = { onLine: true };
   const sessions = [];
   const fallbacks = [];
   const events = [];
+  const captions = new Map();
+  const translationRequests = [];
   let trackStops = 0;
   let mobile = false;
   class Session {
     constructor(options) { this.options = options; sessions.push(this); this.active = false; }
     async start() { this.active = true; }
+    async startNative() { this.active = true; }
     stop() { this.active = false; }
     fail() { this.options.onError('transcribe-stream-error'); }
-    transcript() { this.options.onTranscript('Recovered speech', true, 'en-US'); }
+    transcript(text = 'Recovered speech', isFinal = true, languageCode = 'en-US', resultId) {
+      this.options.onTranscript(text, isFinal, languageCode, resultId);
+    }
   }
   class Fallback {
     constructor(callbacks) { this.callbacks = callbacks; fallbacks.push(this); }
@@ -55,24 +61,28 @@ function managerFixture({ withConfig = true } = {}) {
   const { SttManager } = loadModule('sttManager', {
     './transcribeStreamingClient': { TranscribeStreamingSession: Session },
     './transcribeClient': { TranscribeFallbackClient: Fallback },
-    './api': { translateApi: {} },
+    './api': { translateApi: { translate: async (text, sourceLang, destinationLang) => {
+      translationRequests.push({ text, sourceLang, targetLang: destinationLang });
+      return { translatedText: sourceLang === 'ko' ? 'English output' : '한국어 출력' };
+    } } },
     './device': { hasMobileMicConflictRisk: () => mobile },
+    './liveTranslation': translationModule,
   }, { window, document, navigator });
   const manager = new SttManager({
     callbacks: {
       onTranscript: (text) => events.push(text),
       onError: (error) => events.push(error),
-      onTranslation() {},
+      onTranslation: (entry) => captions.set(entry.id, entry),
     },
-    targetLang: 'ko',
-    translationEnabled: false,
+    targetLang,
+    translationEnabled,
     transcribeStreamingConfig: withConfig ? config : undefined,
     onReconnecting: () => events.push('reconnecting'),
     onReconnected: () => events.push('reconnected'),
   });
   const stream = { getTracks: () => [{ stop: () => { trackStops++; } }] };
   return {
-    manager, sessions, fallbacks, events, document, stream,
+    manager, sessions, fallbacks, events, document, stream, captions, translationRequests,
     start: (provider = 'transcribe-streaming') => manager.start(stream, provider),
     network(online) {
       navigator.onLine = online;
@@ -82,6 +92,39 @@ function managerFixture({ withConfig = true } = {}) {
     get trackStops() { return trackStops; },
   };
 }
+
+test('browser interpretation retains each language and scopes result IDs across reconnects', async () => {
+  const state = managerFixture({ translationEnabled: true, targetLang: 'ko-en' });
+  await state.start();
+  state.sessions[0].transcript('다음 주입니다.', true, 'ko-KR', 'first');
+  state.sessions[0].transcript('Sounds good.', true, 'en-US', 'second');
+  await tick();
+  assert.deepEqual(state.translationRequests.map(({ sourceLang, targetLang }) => [sourceLang, targetLang]), [
+    ['ko', 'en'], ['en', 'ko'],
+  ]);
+  state.sessions[0].fail();
+  state.sessions[1].transcript('다시 연결했습니다.', true, 'ko-KR', 'first');
+  await tick();
+  assert.equal(state.captions.size, 3);
+  state.manager.stop();
+});
+
+test('native interpretation uses the same bilingual scheduler and ignores stopped sessions', async () => {
+  const state = managerFixture({ translationEnabled: true, targetLang: 'ko-en' });
+  await state.manager.startNative('transcribe-streaming');
+  state.sessions[0].transcript('안녕', false, 'ko-KR', 'first');
+  state.sessions[0].transcript('안녕하세요.', true, 'ko-KR', 'first');
+  state.sessions[0].transcript('Hello.', true, 'en-US', 'second');
+  await tick();
+  assert.equal(state.captions.size, 2);
+  assert.deepEqual(state.translationRequests.map(({ sourceLang, targetLang }) => [sourceLang, targetLang]), [
+    ['ko', 'en'], ['en', 'ko'],
+  ]);
+  state.manager.stop();
+  state.sessions[0].transcript('Late transcript', true, 'en-US', 'third');
+  assert.equal(state.captions.size, 2);
+  assert.equal(state.events.includes('Late transcript'), false);
+});
 
 test('Wi-Fi loss suspends captions and reconnects once online without stopping capture', async () => {
   const f = managerFixture();
@@ -209,6 +252,7 @@ test('the recording hook stops its manager on unmount, preventing off-page recon
     '@/lib/sttManager': { SttManager: class { constructor() { return f.manager; } } },
     '@/lib/speechRecognition': { countWords: () => 0 },
     '@/lib/runtimeConfig': { getRuntimeConfig: async () => ({ cognito: {} }) },
+    '@/lib/liveTranslation': translationModule,
   });
   const hook = useRecordingSession({
     targetLang: 'ko', translationEnabled: false, liveSttProvider: 'transcribe-streaming',

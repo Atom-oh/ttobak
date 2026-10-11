@@ -87,6 +87,31 @@ When Transcribe configuration is unavailable, desktop recovery retains Web Speec
 mobile still blocks its competing microphone capture. Leaving the recording route
 releases the caption manager and its network listeners.
 
+Live interpretation is opt-in from recording controls visible on desktop and mobile.
+Its default language choice is bidirectional Korean/English: Korean stays in the
+left column and English in the right, with the recognized original labeled.
+Desktop places interpretation above the summary/notes panels; mobile exposes an
+interpretation tab. Single-target translation remains available, including Korean.
+Each utterance appears immediately, before its translation finishes. Partial
+translations refresh on a 500ms throttle and are explicitly provisional; final
+recognition clears provisional output and triggers a separate authoritative
+translation. Response order never
+changes utterance order. Language/enable changes discard the previous translation
+view and cancel pending work. Failures retain recognized text and show an error.
+The view retains at most 200 utterances and caps each displayed original at 9,000
+UTF-16 code units, marking truncated originals. This display cap is separate from
+the 9,000-byte translation request limit; the full transcript remains separate.
+Auto-scroll follows new captions only while the reader remains near the bottom.
+A polite live region announces completed translations, not provisional updates.
+Single-target speech already in the target language uses one original column.
+Desktop Web
+Speech fallback remains Korean-configured and the interpretation UI explains
+that mixed-language recognition requires the Transcribe Streaming connection.
+These controls do not establish a measured speech-accuracy or end-to-end latency
+guarantee. Run regression checks explicitly with
+`node --test scripts/live-translation.test.mjs scripts/stt-recovery.test.mjs` from
+`frontend/`; the required lint/build commands do not run these scripts.
+
 Browser microphone/tab capture also stores each delivered audio chunk in IndexedDB,
 partitioned by Cognito user and a random recording ID. A Web Lock keeps a live or
 pending recording from being recovered in another tab. The displayed saved time

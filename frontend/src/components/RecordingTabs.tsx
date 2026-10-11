@@ -15,7 +15,7 @@ const tabs: { id: TabId; label: string; icon: string }[] = [
   { id: 'summary', label: '요약', icon: 'summarize' },
   { id: 'notes', label: '노트', icon: 'edit_note' },
   { id: 'captions', label: '자막', icon: 'subtitles' },
-  { id: 'translation', label: '번역', icon: 'translate' },
+  { id: 'translation', label: '통역', icon: 'translate' },
 ];
 
 export function RecordingTabs({ captionsContent, translationContent, summaryContent, notesContent }: RecordingTabsProps) {
@@ -35,7 +35,7 @@ export function RecordingTabs({ captionsContent, translationContent, summaryCont
                 : 'text-slate-500 dark:text-text-muted hover:text-slate-700 dark:hover:text-text-secondary'
             }`}
           >
-            <span className="material-symbols-outlined text-[18px]">{tab.icon}</span>
+            <span aria-hidden="true" className="material-symbols-outlined text-[18px]">{tab.icon}</span>
             {tab.label}
             {activeTab === tab.id && (
               <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-full" />

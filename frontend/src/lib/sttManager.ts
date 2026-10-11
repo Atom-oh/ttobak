@@ -12,6 +12,7 @@ import { TranscribeFallbackClient, type TranscribeCallbacks } from './transcribe
 import { TranscribeStreamingSession } from './transcribeStreamingClient';
 import { translateApi } from './api';
 import { hasMobileMicConflictRisk } from './device';
+import { LiveTranslation } from './liveTranslation';
 
 export type LiveSttProvider = 'transcribe-streaming' | 'web-speech';
 
@@ -103,13 +104,18 @@ export class SttManager {
   private awaitingReconnectConfirmation = false;
   private networkRecoveryPending = false;
 
-  // Translation state (shared across providers)
-  private translateTimer: ReturnType<typeof setTimeout> | undefined;
-  private interimTranslateTimer: ReturnType<typeof setTimeout> | undefined;
-  private pendingTexts: string[] = [];
+  private translation: LiveTranslation;
+  private nextStreamId = 0;
 
   constructor(config: SttManagerConfig) {
     this.config = config;
+    this.translation = new LiveTranslation({
+      enabled: config.translationEnabled,
+      targetLang: config.targetLang,
+      onUpdate: (entry) => this.config.callbacks.onTranslation(entry),
+      onReset: () => this.config.callbacks.onTranslationReset?.(),
+      translate: (text, sourceLang, targetLang, signal) => translateApi.translate(text, sourceLang, targetLang, signal),
+    });
   }
 
   private clearPendingStallReconnect(): void {
@@ -367,7 +373,16 @@ export class SttManager {
     this.transcribeSession?.pushChunk(chunk);
   }
 
-  private lastDetectedLang = 'ko';
+  private transcriptHandler() {
+    const streamId = ++this.nextStreamId;
+    let segmentIndex = 0;
+    return (text: string, isFinal: boolean, languageCode?: string, resultId?: string) => {
+      const segmentId = `${streamId}:${resultId ?? segmentIndex}`;
+      this.config.callbacks.onTranscript(text, isFinal);
+      this.translation.update(segmentId, text, isFinal, languageCode);
+      if (isFinal) segmentIndex++;
+    };
+  }
 
   private async startTranscribeStreaming(stream: MediaStream): Promise<void> {
     if (this.stopped || this.paused) return;
@@ -381,6 +396,7 @@ export class SttManager {
       this.networkRecoveryPending = false;
     }
     const tsConfig = this.config.transcribeStreamingConfig!;
+    const handleTranscript = this.transcriptHandler();
 
     // Captured by this attempt's own callbacks below so they can tell
     // whether they're still the CURRENT session before touching shared
@@ -399,19 +415,11 @@ export class SttManager {
       languageOptions: 'ko-KR,en-US',
       preferredLanguage: 'ko-KR',
       vocabularyName: tsConfig.vocabularyName,
-      onTranscript: (text, isFinal, detectedLang) => {
+      onTranscript: (text, isFinal, detectedLang, resultId) => {
         if (this.transcribeSession !== session) return;
         // A transcript, including interim, proves transport recovery.
         this.confirmReconnection();
-        if (detectedLang) {
-          this.lastDetectedLang = detectedLang.substring(0, 2);
-        }
-        this.config.callbacks.onTranscript(text, isFinal);
-        if (isFinal) {
-          this.handleFinalTranslation(text);
-        } else {
-          this.handleInterimTranslation(text);
-        }
+        handleTranscript(text, isFinal, detectedLang, resultId);
       },
       onError: (error) => {
         if (this.transcribeSession !== session) return;
@@ -524,8 +532,9 @@ export class SttManager {
 
   private async startTranscribeStreamingNative(): Promise<void> {
     const tsConfig = this.config.transcribeStreamingConfig!;
+    const handleTranscript = this.transcriptHandler();
 
-    this.transcribeSession = new TranscribeStreamingSession({
+    const session = new TranscribeStreamingSession({
       region: tsConfig.region,
       identityPoolId: tsConfig.identityPoolId,
       userPoolId: tsConfig.userPoolId,
@@ -533,29 +542,25 @@ export class SttManager {
       languageOptions: 'ko-KR,en-US',
       preferredLanguage: 'ko-KR',
       vocabularyName: tsConfig.vocabularyName,
-      onTranscript: (text, isFinal, detectedLang) => {
-        if (detectedLang) {
-          this.lastDetectedLang = detectedLang.substring(0, 2);
-        }
-        this.config.callbacks.onTranscript(text, isFinal);
-        if (isFinal) {
-          this.handleFinalTranslation(text);
-        } else {
-          this.handleInterimTranslation(text);
-        }
+      onTranscript: (text, isFinal, detectedLang, resultId) => {
+        if (this.stopped || this.transcribeSession !== session) return;
+        handleTranscript(text, isFinal, detectedLang, resultId);
       },
       onError: (error) => {
+        if (this.stopped || this.transcribeSession !== session) return;
         console.error('Transcribe Streaming (native) error:', error);
         this.transcribeSession?.stop();
         this.transcribeSession = null;
         this.config.callbacks.onError('transcribe-native-unavailable');
       },
     });
+    this.transcribeSession = session;
 
-    await this.transcribeSession.startNative();
+    await session.startNative();
   }
 
   private startWebSpeech(sourceLang: string): void {
+    const handleTranscript = this.transcriptHandler();
     const client = new TranscribeFallbackClient(
       {
         ...this.config.callbacks,
@@ -563,61 +568,22 @@ export class SttManager {
           // pause() still allows recognition's pending final onend flush.
           if (this.stopped || this.webSpeechClient !== client) return;
           this.confirmReconnection();
-          this.config.callbacks.onTranscript(text, isFinal);
+          handleTranscript(text, isFinal);
         },
       },
-      this.config.targetLang,
-      this.config.translationEnabled,
     );
     this.webSpeechClient = client;
     client.start(sourceLang);
   }
 
-  private handleFinalTranslation(text: string): void {
-    if (!this.config.translationEnabled) return;
-    this.pendingTexts.push(text);
-    if (this.translateTimer) clearTimeout(this.translateTimer);
-    this.translateTimer = setTimeout(() => {
-      const batch = this.pendingTexts.splice(0);
-      if (batch.length === 0) return;
-      const combined = batch.join('\n');
-      const srcLang = this.lastDetectedLang || 'ko';
-      if (srcLang === this.config.targetLang) return;
-      translateApi
-        .translate(combined, srcLang, this.config.targetLang)
-        .then((res) => {
-          const parts = res.translatedText.split('\n');
-          batch.forEach((original, i) => {
-            this.config.callbacks.onTranslation(original, parts[i] || '', this.config.targetLang, true);
-          });
-        })
-        .catch((err) => console.error('Translation failed:', err));
-    }, 300);
-  }
-
-  private handleInterimTranslation(text: string): void {
-    if (!this.config.translationEnabled) return;
-    if (this.interimTranslateTimer) clearTimeout(this.interimTranslateTimer);
-    this.interimTranslateTimer = setTimeout(() => {
-      const srcLang = this.lastDetectedLang || 'ko';
-      if (srcLang === this.config.targetLang) return;
-      translateApi
-        .translate(text, srcLang, this.config.targetLang)
-        .then((res) => {
-          this.config.callbacks.onTranslation(text, res.translatedText, this.config.targetLang, false);
-        })
-        .catch((err) => console.error('Interim translation failed:', err));
-    }, 500);
-  }
-
   updateTargetLang(lang: string): void {
     this.config.targetLang = lang;
-    this.webSpeechClient?.updateTargetLang(lang);
+    this.translation.updateTargetLang(lang);
   }
 
   updateTranslationEnabled(enabled: boolean): void {
     this.config.translationEnabled = enabled;
-    this.webSpeechClient?.updateTranslationEnabled(enabled);
+    this.translation.updateEnabled(enabled);
   }
 
   pause(): void {
@@ -689,8 +655,6 @@ export class SttManager {
     this.webSpeechClient?.stop();
     this.webSpeechClient = null;
     this.stream = null;
-    if (this.translateTimer) clearTimeout(this.translateTimer);
-    if (this.interimTranslateTimer) clearTimeout(this.interimTranslateTimer);
-    this.pendingTexts = [];
+    this.translation.stop();
   }
 }

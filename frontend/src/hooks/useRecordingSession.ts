@@ -4,24 +4,12 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { SttManager, type LiveSttProvider, type TranscribeStreamingConfig } from '@/lib/sttManager';
 import { countWords } from '@/lib/speechRecognition';
 import { getRuntimeConfig } from '@/lib/runtimeConfig';
+import { MAX_TRANSLATION_ENTRIES, type TranslationEntry } from '@/lib/liveTranslation';
 
 export interface TranscriptEntry {
   text: string;
   isFinal: boolean;
   timestamp: string;
-}
-
-interface TranslationEntry {
-  original: string;
-  translated: string;
-  targetLang: string;
-  timestamp: string;
-}
-
-interface InterimTranslation {
-  original: string;
-  translated: string;
-  targetLang: string;
 }
 
 const speechErrorMessages: Record<string, string> = {
@@ -106,7 +94,6 @@ export function useRecordingSession({
 
   // Translation state
   const [translations, setTranslations] = useState<TranslationEntry[]>([]);
-  const [currentInterimTranslation, setCurrentInterimTranslation] = useState<InterimTranslation | null>(null);
 
   const sttManagerRef = useRef<SttManager | null>(null);
   const targetLangRef = useRef(targetLang);
@@ -260,19 +247,12 @@ export function useRecordingSession({
     const manager = new SttManager({
       callbacks: {
         onTranscript: handleTranscriptResult,
-        onTranslation: (original, translated, lang, isFinal) => {
-          if (isFinal) {
-            setTranslations((prev) => [...prev, {
-              original,
-              translated,
-              targetLang: lang,
-              timestamp: new Date().toISOString(),
-            }]);
-            setCurrentInterimTranslation(null);
-          } else {
-            setCurrentInterimTranslation({ original, translated, targetLang: lang });
-          }
+        onTranslation: (entry) => {
+          setTranslations((previous) => [...previous.filter((item) => item.id !== entry.id), entry]
+            .sort((left, right) => left.order - right.order)
+            .slice(-MAX_TRANSLATION_ENTRIES));
         },
+        onTranslationReset: () => setTranslations([]),
         onError: (error) => {
           setSpeechError(speechErrorMessages[error] || error);
         },
@@ -421,7 +401,6 @@ export function useRecordingSession({
     canRetryLiveCaptions,
     retryLiveCaptions,
     translations,
-    currentInterimTranslation,
     displayTranscripts,
     transcriptContext,
     activeProvider,
