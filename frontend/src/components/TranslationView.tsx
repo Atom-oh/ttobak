@@ -22,7 +22,7 @@ function CaptionText({ text, language, isOriginal, failed }: {
         <span>{language === 'ko' ? '한국어' : language === 'en' ? 'English' : language.toUpperCase()}</span>
         <span>{isOriginal ? '원문' : '번역'}</span>
       </div>
-      <p lang={language} className="whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-900 dark:text-text-main">
+      <p lang={text ? language : 'ko'} className="whitespace-pre-wrap break-words [word-break:keep-all] text-sm leading-relaxed text-slate-900 dark:text-text-main">
         {text || (failed ? '번역하지 못했습니다.' : '통역 중…')}
       </p>
     </div>
@@ -31,10 +31,12 @@ function CaptionText({ text, language, isOriginal, failed }: {
 
 export function TranslationView({ translations, targetLang, onTargetLangChange, isActive }: TranslationViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const followTailRef = useRef(true);
   const bilingual = targetLang === BILINGUAL_TARGET;
 
   useEffect(() => {
-    if (containerRef.current && isActive) {
+    if (translations.length === 0) followTailRef.current = true;
+    if (containerRef.current && isActive && followTailRef.current) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
     }
   }, [translations, isActive]);
@@ -59,7 +61,14 @@ export function TranslationView({ translations, targetLang, onTargetLangChange, 
           말하는 중에는 임시 번역이며, 인식이 확정되면 갱신됩니다.
         </p>
       </div>
-      <div ref={containerRef} className="max-h-[48vh] overflow-y-auto p-4">
+      <div
+        ref={containerRef}
+        onScroll={(event) => {
+          const { scrollHeight, scrollTop, clientHeight } = event.currentTarget;
+          followTailRef.current = scrollHeight - scrollTop - clientHeight <= 48;
+        }}
+        className="max-h-[48vh] overflow-y-auto p-4"
+      >
         {translations.length === 0 ? (
           <p className="py-8 text-center text-sm text-slate-500 dark:text-text-muted">
             음성이 인식되면 원문과 번역이 여기에 표시됩니다.
@@ -67,16 +76,21 @@ export function TranslationView({ translations, targetLang, onTargetLangChange, 
         ) : (
           <ol aria-label="통역 자막" className="space-y-4">
             {translations.map((entry) => {
-              const languages = bilingual ? ['ko', 'en'] : [entry.sourceLang, entry.targetLang];
+              const languages = bilingual ? ['ko', 'en']
+                : entry.sourceLang === entry.targetLang ? [entry.sourceLang]
+                : [entry.sourceLang, entry.targetLang];
               return (
                 <li key={entry.id}>
                   <div className="mb-1.5 flex items-center gap-2 text-xs text-slate-500 dark:text-text-muted">
                     <time dateTime={entry.timestamp}>{new Date(entry.timestamp).toLocaleTimeString('ko-KR')}</time>
-                    <span className={entry.status === 'error' ? 'text-amber-600 dark:text-amber-400' : ''}>
+                    <span
+                      role={entry.status === 'error' ? 'status' : undefined}
+                      className={entry.status === 'error' ? 'text-amber-700 dark:text-amber-400' : ''}
+                    >
                       {entry.status === 'error' ? '번역 실패 · 원문 유지' : entry.status === 'complete' ? '확정' : '임시 자막 · 통역 중'}
                     </span>
                   </div>
-                  <div className="grid grid-cols-2 gap-2 sm:gap-3">
+                  <div className={`grid ${languages.length === 1 ? 'grid-cols-1' : 'grid-cols-2'} gap-2 sm:gap-3`}>
                     {languages.map((language, index) => {
                       const isOriginal = bilingual ? language === entry.sourceLang : index === 0;
                       return (
@@ -100,6 +114,11 @@ export function TranslationView({ translations, targetLang, onTargetLangChange, 
             })}
           </ol>
         )}
+      </div>
+      <div role="log" aria-label="확정 통역 자막" aria-live="polite" aria-relevant="additions" className="sr-only">
+        {translations.filter((entry) => entry.status === 'complete').map((entry) => (
+          <p key={entry.id} lang={entry.targetLang}>{entry.translated}</p>
+        ))}
       </div>
     </section>
   );

@@ -1489,9 +1489,9 @@ function RecordPageInner() {
                   />
                 ) : (
                   <div className="flex flex-col items-center justify-center py-12 text-center">
-                    <span className="material-symbols-outlined text-4xl text-slate-300 dark:text-slate-600 mb-3">translate</span>
+                    <span aria-hidden="true" className="material-symbols-outlined text-4xl text-slate-300 dark:text-slate-600 mb-3">translate</span>
                     <p className="text-sm text-slate-400 dark:text-slate-500">
-                      상단의 실시간 통역을 켜면 한국어와 영어 자막을 함께 볼 수 있습니다
+                      상단의 실시간 통역을 켜면 원문과 번역 자막을 함께 볼 수 있습니다.
                     </p>
                   </div>
                 )

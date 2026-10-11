@@ -99,8 +99,12 @@ translation. Response order never
 changes utterance order. Language/enable changes discard the previous translation
 view and cancel pending work. Failures retain recognized text and show an error.
 The view retains at most 200 utterances and caps each displayed original at 9,000
-UTF-16 code units, marking abbreviations. This display cap is separate from the
-9,000-byte translation request limit; the full transcript remains separate. Desktop Web
+UTF-16 code units, marking truncated originals. This display cap is separate from
+the 9,000-byte translation request limit; the full transcript remains separate.
+Auto-scroll follows new captions only while the reader remains near the bottom.
+A polite live region announces completed translations, not provisional updates.
+Single-target speech already in the target language uses one original column.
+Desktop Web
 Speech fallback remains Korean-configured and the interpretation UI explains
 that mixed-language recognition requires the Transcribe Streaming connection.
 These controls do not establish a measured speech-accuracy or end-to-end latency

@@ -35,7 +35,7 @@ export function RecordingTabs({ captionsContent, translationContent, summaryCont
                 : 'text-slate-500 dark:text-text-muted hover:text-slate-700 dark:hover:text-text-secondary'
             }`}
           >
-            <span className="material-symbols-outlined text-[18px]">{tab.icon}</span>
+            <span aria-hidden="true" className="material-symbols-outlined text-[18px]">{tab.icon}</span>
             {tab.label}
             {activeTab === tab.id && (
               <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-full" />

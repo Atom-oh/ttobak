@@ -388,6 +388,93 @@ test('failed authoritative translation never retains a provisional translation f
   state.translator.stop();
 });
 
+test('caption placeholders use Korean and only completed translations enter the live region', async () => {
+  const state = fixture();
+  state.translator.update('complete', 'Hello.', true, 'en-US');
+  state.requests[0].resolve({ translatedText: '안녕하세요.' });
+  await tick();
+  state.translator.update('pending', '지금 말하는 중', false, 'ko-KR');
+  const { TranslationView } = loadModule('components/TranslationView.tsx', {
+    react: React,
+    'react/jsx-runtime': jsxRuntime,
+    '@/lib/liveTranslation': state.translationModule,
+  });
+  const html = renderToStaticMarkup(React.createElement(TranslationView, {
+    translations: [...state.entries.values()], targetLang: 'ko-en', onTargetLangChange() {}, isActive: false,
+  }));
+  assert.match(html, /lang="ko"[^>]*>통역 중/);
+  const announcements = html.slice(html.indexOf('role="log"'));
+  assert.match(announcements, /aria-live="polite"/);
+  assert.match(announcements, /안녕하세요/);
+  assert.doesNotMatch(announcements, /지금 말하는 중|통역 중/);
+  state.translator.stop();
+});
+
+test('single-target speech already in the target language displays one original column', async () => {
+  const state = fixture({ targetLang: 'ko' });
+  state.translator.update('korean', '한국어 원문입니다.', true, 'ko-KR');
+  await tick();
+  const { TranslationView } = loadModule('components/TranslationView.tsx', {
+    react: React,
+    'react/jsx-runtime': jsxRuntime,
+    '@/lib/liveTranslation': state.translationModule,
+  });
+  const html = renderToStaticMarkup(React.createElement(TranslationView, {
+    translations: [...state.entries.values()], targetLang: 'ko', onTargetLangChange() {}, isActive: false,
+  }));
+  assert.match(html, /grid grid-cols-1/);
+  assert.doesNotMatch(html, /<span>번역<\/span>/);
+  assert.equal(state.requests.length, 0);
+  state.translator.stop();
+});
+
+test('caption updates preserve a reader scroll position and resume following near the bottom', () => {
+  const state = fixture();
+  const container = { scrollHeight: 1000, scrollTop: 0, clientHeight: 300 };
+  const references = [{ current: container }, { current: true }];
+  let referenceIndex = 0;
+  let effect;
+  const { TranslationView } = loadModule('components/TranslationView.tsx', {
+    react: {
+      useRef: () => references[referenceIndex++],
+      useEffect: (callback) => { effect = callback; },
+    },
+    'react/jsx-runtime': jsxRuntime,
+    '@/lib/liveTranslation': state.translationModule,
+  });
+  function scrollElement(element) {
+    if (typeof element?.props?.onScroll === 'function') return element;
+    for (const child of React.Children.toArray(element?.props?.children)) {
+      const found = scrollElement(child);
+      if (found) return found;
+    }
+  }
+  const render = () => {
+    referenceIndex = 0;
+    const view = TranslationView({
+      translations: [{
+        id: 'speech', order: 0, original: 'Hello', translated: '', sourceLang: 'en',
+        targetLang: 'ko', timestamp: '2026-10-11T09:00:00Z', isFinal: false, status: 'pending',
+      }],
+      targetLang: 'ko-en', onTargetLangChange() {}, isActive: true,
+    });
+    effect();
+    return scrollElement(view);
+  };
+  const scroll = render();
+  container.scrollTop = 100;
+  scroll.props.onScroll({ currentTarget: container });
+  container.scrollHeight = 1500;
+  render();
+  assert.equal(container.scrollTop, 100);
+  container.scrollTop = 1200;
+  scroll.props.onScroll({ currentTarget: container });
+  container.scrollHeight = 1700;
+  render();
+  assert.equal(container.scrollTop, 1700);
+  state.translator.stop();
+});
+
 test('the translation deadline settles even while authentication ignores cancellation', async () => {
   const state = fixture({ honorAbort: false });
   state.translator.update('first', '첫 문장', true, 'ko-KR');

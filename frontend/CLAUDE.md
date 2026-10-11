@@ -8,7 +8,7 @@ Next.js 16 static SPA deployed to S3/CloudFront.
 npm run dev       # local dev server (SSR, hot reload)
 npm run build     # static export to out/
 npm run lint      # ESLint
-node scripts/stt-recovery.test.mjs  # Caption recovery/lifecycle regression tests
+node --test scripts/live-translation.test.mjs scripts/stt-recovery.test.mjs
 ```
 
 ## Structure
@@ -28,7 +28,8 @@ node scripts/stt-recovery.test.mjs  # Caption recovery/lifecycle regression test
   - `sttManager.ts` — Orchestrates live STT engine switching (Web Speech / AWS Transcribe Streaming)
   - `transcribeStreamingClient.ts` — Browser-to-AWS Transcribe Streaming via `@aws-sdk/client-transcribe-streaming`
   - `speechRecognition.ts` — Web Speech API wrapper
-  - `transcribeClient.ts` — Server-side transcription API calls
+  - `transcribeClient.ts` — Browser Speech Recognition fallback
+  - `liveTranslation.ts` — Bounded per-utterance translation scheduling and cancellation
   - `upload.ts` — S3 presigned URL upload
   - `tauri.ts` — Tauri desktop app bridge: `isTauri()`, native recording commands/events (see mac-app/CLAUDE.md)
   - `device.ts` — Audio input device enumeration
