@@ -31,9 +31,17 @@ AuthStack explicitly disables self-signup. AdminCreateUser invitations are the
 account-creation gate. The domain allowlist is supplemental; RESEND trigger
 behavior is not verified. SPA client has no secret; server OAuth and MCP clients
 have separate settings. Inspect `auth-stack.ts` before changing flows/scopes.
-HTTP MCP optionally adds the exact HTTPS `/api/mcp` resource audience through
-`ttobak:mcpResourceAudience`; the existing client audience and edge client-ID
-checks remain. This opt-in provisions no route, origin or anonymous MCP access.
+HTTP MCP is enabled by `ttobak:mcpResourceAudience` (set in `cdk.json`). It adds
+that exact HTTPS `/api/mcp` audience to the JWT authorizer next to the client
+audience, and AuthStack registers the URL as a resource server and uses managed
+login (v2, Cognito-provided branding per client): Cognito issues `aud`=URL for a
+`resource` request only with both. GatewayStack then runs `ttobak-mcp` (Node.js 22,
+ARM64, no AWS permissions, 29s timeout, 25s server deadline) behind `ANY /api/mcp`
+with the JWT authorizer, plus two unauthenticated static discovery routes,
+`GET /.well-known/oauth-protected-resource` and `.../api/mcp` (ADR-045).
+FrontendStack routes those two exact paths to the API origin without the edge
+function; `/api/mcp` keeps the `/api/*` edge client-ID check. The Lambda checks
+`x-origin-verify` and pins Host to the public host.
 
 The pre-signup trigger reads the configured domain allowlist. PostAuthentication
 writes a separate USER#/LOGIN item for lastLoginAt, with a short abort timeout,
@@ -48,7 +56,8 @@ and does not enable self-signup.
 EdgeAuth validates viewer JWTs for application API requests. GatewayStack uses a
 Cognito HTTP JWT authorizer plus Go/Python integrations: Go chi payload **1.0**,
 Python QA payload **2.0**. The literal public-doc GET registration deliberately has
-no authorizer; its handler verifies the bearer share token. The broader edge
+no authorizer; its handler verifies the bearer share token. The two MCP discovery
+GETs above are the only other unauthenticated routes. The broader edge
 `/api/public/*` bypass is not permission to register more public routes.
 
 WebSocket QA uses the site's CloudFront `/ws` behavior, rewritten to `/production`.

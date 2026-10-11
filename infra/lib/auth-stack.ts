@@ -153,6 +153,10 @@ export class AuthStack extends cdk.Stack {
       cognitoDomain: {
         domainPrefix: `ttobak-auth-${cdk.Aws.ACCOUNT_ID}`,
       },
+      // RFC 8707 resource binding (`resource` -> access-token `aud`) exists only
+      // on managed login, not the classic hosted UI. HTTP MCP verifies that
+      // `aud` equals its public URL (ADR-045), so the domain must use it.
+      managedLoginVersion: cognito.ManagedLoginVersion.NEWER_MANAGED_LOGIN,
     });
 
     // Admins group — members get an "admins" entry in the cognito:groups JWT
@@ -227,6 +231,33 @@ export class AuthStack extends cdk.Stack {
       idTokenValidity: cdk.Duration.hours(1),
       refreshTokenValidity: cdk.Duration.days(30),
     });
+
+    // Managed login requires a branding record for every client that signs in
+    // through the hosted pages (the MCP OAuth login uses the SPA client).
+    // Cognito-provided values keep the default look; no custom assets.
+    [['AppClient', this.userPoolClient], ['SpaClient', this.spaClient]].forEach(([name, client]) => {
+      const branding = new cognito.CfnManagedLoginBranding(this, `ManagedLoginBranding${name as string}`, {
+        userPoolId: this.userPool.userPoolId,
+        clientId: (client as cognito.IUserPoolClient).userPoolClientId,
+        useCognitoProvidedValues: true,
+      });
+      branding.node.addDependency(this.userPoolDomain);
+    });
+
+    // HTTP MCP resource server. With managed login, Cognito issues
+    // aud=<this URL> for `resource=<this URL>` only when the URL is registered
+    // as a resource server (verified: without it the code exchange fails with
+    // invalid_grant). No client requests the placeholder scope, so token scopes
+    // stay openid/email/profile. Enabled together with the Gateway Lambda by the
+    // same context value.
+    const mcpResourceAudience = this.node.tryGetContext('ttobak:mcpResourceAudience') as string | undefined;
+    if (mcpResourceAudience) {
+      this.userPool.addResourceServer('McpResourceServer', {
+        identifier: mcpResourceAudience,
+        userPoolResourceServerName: 'ttobak-mcp',
+        scopes: [new cognito.ResourceServerScope({ scopeName: 'access', scopeDescription: 'Reserved; HTTP MCP requests only openid, email and profile' })],
+      });
+    }
 
     // Cognito Identity Pool — enables browser-direct access to AWS services
     // (e.g., Amazon Transcribe Streaming for real-time STT)

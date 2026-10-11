@@ -115,9 +115,20 @@ never share one user's token across a shared Crew. Kiro CLI Tool Search is enabl
 separately with `kiro-cli settings toolSearch.enabled true` and retains its size
 thresholds. Existing host approval settings must be preserved.
 
-This implementation does not provision a hosted origin or register real clients.
-Route the authenticated endpoint and minimal public discovery through the approved
-CloudFront boundary. Publish `mcp: { "url": "/api/mcp" }` in runtime config only
+Hosted deployment: `src/lambda.ts` runs this same server on a loopback port inside
+the `ttobak-mcp` Lambda (`npm run bundle:lambda` builds `dist/lambda-bundle/`).
+GatewayStack serves `ANY /api/mcp` with the Cognito JWT authorizer and the two
+discovery GETs without one; CloudFront routes only those exact discovery paths
+around the edge function. The wrapper rejects a missing or wrong `x-origin-verify`,
+pins Host to the public host and forwards only MCP-relevant headers. API Gateway
+limits integrations to 30s, so the hosted deadline is 25s. A token rejected by the
+gateway authorizer gets a 401 without `resource_metadata`; clients then use the
+discovery documents. Cognito issues the required `aud` only through managed login
+with the MCP URL registered as a resource server (AuthStack does both). The pool's
+OIDC metadata omits `code_challenge_methods_supported`; PKCE S256 still works, but
+a client that insists on that field may refuse. Clients use the SPA public client
+and its registered callback (`http://localhost:9876/callback`) unless more are added.
+Publish `mcp: { "url": "/api/mcp" }` in runtime config only
 after deployment acceptance. Validate each client's exact callback, OIDC discovery,
 resource binding, refresh and representative operations. Access tokens need not
 carry email/verified-email claims: do not fabricate them or weaken pending-invite

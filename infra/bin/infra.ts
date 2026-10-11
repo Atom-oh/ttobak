@@ -130,6 +130,7 @@ const gatewayStack = new GatewayStack(app, 'TtobakGatewayStack', {
   kmsKeyId: aiStack.kmsKey.keyId,
   legacyRole: aiStack.legacyRole,
   originVerifySecret,
+  cognitoDomainUrl: authStack.userPoolDomain.baseUrl(),
   agentCoreRuntimeArn,
   researchWorkerRole: aiStack.researchWorkerRole,
   convertDocRole: aiStack.convertDocRole,

@@ -12,6 +12,8 @@ on:
   pull_request:
     paths:
       - 'infra/**'
+      # GatewayStack bundles the HTTP MCP Lambda from mcp-server.
+      - 'mcp-server/**'
       # Re-run on workflow changes so PRs that only touch CI still trigger
       # the required check (same convention as test-backend.yml) — without
       # this, a PR editing/neutering this gate would merge unverified.
@@ -36,6 +38,14 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
+
+      - name: Build HTTP MCP Lambda bundle
+        # GatewayStack's ttobak-mcp function uses Code.fromAsset on this
+        # gitignored output; cdk synth fails without it.
+        working-directory: mcp-server
+        run: |
+          npm ci
+          npm run bundle:lambda
 
       - name: Infra synth + unit tests
         # `cdk synth` is part of the documented verification (CLAUDE.md:

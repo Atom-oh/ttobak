@@ -3,7 +3,7 @@ name: Deploy Infrastructure
 on:
   push:
     branches: [main]
-    paths: ['infra/**', 'backend/cmd/**', 'backend/internal/**', 'backend/go.*', 'backend/python/qa/**', 'backend/python/crawler/**', 'backend/python/document-extract/**']
+    paths: ['infra/**', 'backend/cmd/**', 'backend/internal/**', 'backend/go.*', 'backend/python/qa/**', 'backend/python/crawler/**', 'backend/python/document-extract/**', 'mcp-server/**']
   workflow_dispatch:
 
 permissions:
@@ -25,6 +25,13 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
+      - name: Build HTTP MCP Lambda bundle
+        # GatewayStack's ttobak-mcp function uses Code.fromAsset on this
+        # gitignored output; cdk synth fails without it.
+        working-directory: mcp-server
+        run: |
+          npm ci
+          npm run bundle:lambda
       - name: Infra synth + unit tests (gate before any deploy)
         # Security invariants live in these jest assertions (e.g.
         # whisper-stack.test.ts's "no EntryPoint/Command on the whisperx
@@ -66,6 +73,14 @@ jobs:
           for dir in cmd/api cmd/transcribe cmd/summarize cmd/process-image cmd/kb cmd/research-worker cmd/websocket cmd/ws-authorizer; do
             GOOS=linux GOARCH=arm64 go build -tags lambda.norpc -o "$dir/bootstrap" "./$dir"
           done
+
+      - name: Build HTTP MCP Lambda bundle
+        # GatewayStack's ttobak-mcp function uses Code.fromAsset on this
+        # gitignored output; cdk synth fails without it.
+        working-directory: mcp-server
+        run: |
+          npm ci
+          npm run bundle:lambda
 
       - name: CDK deploy
         working-directory: infra

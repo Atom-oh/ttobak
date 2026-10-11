@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: f6e02fc2c6be · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: b465555cbc44 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
 # TTOBAK review context
 
 Shared by Codex, Kiro, and the CI review panel. Extracted from the
@@ -171,11 +171,11 @@ capture. Report that limit instead of claiming a Mac build passed.
   Owner-only mutations use partition isolation; authorized recipients can read
   through the share row. Inaccessible docs return 404. Use `SHAREDDOC#` and
   `DOCSHARE_TO#`, never meeting `SHARED#` keys (ADR-022/029).
-- **Public documents:** the single intended unauthenticated application route is
-  `GET /api/public/docs/{token}`. Revalidate against `PublicShareToken`; conditional
-  token minting prevents orphans; download validity is five minutes. Edge bypass
-  covers `/api/public/*`, but API Gateway bypass registers only this literal
-  route. A new unauthenticated route is CRITICAL (ADR-022).
+- **Public routes:** `GET /api/public/docs/{token}` and ADR-045's two static MCP
+  discovery GETs are the only unauthenticated routes. Revalidate `PublicShareToken`;
+  conditional minting prevents orphans; downloads last five minutes. Edge bypass
+  covers `/api/public/*`; API Gateway registers only the literal doc route.
+  A new unauthenticated route is CRITICAL (ADR-022).
 - **Pending shares:** `PROJECT_INVITES#` queues have transactional reverse rows
   (ADR-044). Keep writers disabled until companion bootstrap and rollback guards
   are deployed. Account/meeting `PENDING_SHARE#`/`PENDING_ACCOUNT#`/

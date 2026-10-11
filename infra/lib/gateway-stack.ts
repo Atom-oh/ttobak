@@ -54,6 +54,8 @@ export interface GatewayStackProps extends cdk.StackProps {
   /** @deprecated Keep cross-stack reference alive for RealtimeStack */
   legacyRole?: iam.IRole;
   originVerifySecret?: string;
+  /** Cognito hosted domain base URL; required when HTTP MCP is enabled. */
+  cognitoDomainUrl?: string;
   /** AgentCore Web Search Gateway MCP endpoint (us-east-1) for the QA Lambda's search_web tool */
   webSearchGatewayUrl?: string;
   /** ADR-033 cost/sizing simulator */
@@ -62,6 +64,8 @@ export interface GatewayStackProps extends cdk.StackProps {
 }
 
 export class GatewayStack extends cdk.Stack {
+  /** Present only when ttobak:mcpResourceAudience enables HTTP MCP. */
+  public readonly mcpFunction?: lambda.Function;
   public readonly httpApi: apigatewayv2.HttpApi;
   public readonly apiFunction: lambda.Function;
   public readonly transcribeFunction: lambda.Function;
@@ -481,6 +485,36 @@ export class GatewayStack extends cdk.Stack {
         throw new Error('ttobak:mcpResourceAudience must be the exact HTTPS /api/mcp URL');
       }
     }
+    // HTTP MCP (ADR-045): the installed-package HTTP server bundled as one
+    // Lambda behind the existing API. Enabled by the same context value that
+    // admits the MCP audience, so the audience and the endpoint cannot diverge.
+    // API Gateway caps HTTP API integrations at 30s, so the Lambda runs 29s and
+    // the server's own deadline is 25s (the package default of 55s is too long).
+    // It needs no AWS permissions: it calls the TTOBAK API over HTTPS with the
+    // caller's own bearer token and fetches Cognito's public JWKS.
+    if (mcpResourceAudience) {
+      if (!props.cognitoDomainUrl) throw new Error('cognitoDomainUrl is required when HTTP MCP is enabled');
+      this.mcpFunction = new lambda.Function(this, 'McpFunction', {
+        functionName: 'ttobak-mcp',
+        description: 'TTOBAK HTTP MCP server (Streamable HTTP, stateless)',
+        runtime: lambda.Runtime.NODEJS_22_X,
+        architecture: lambda.Architecture.ARM_64,
+        handler: 'index.handler',
+        code: lambda.Code.fromAsset('../mcp-server/dist/lambda-bundle'),
+        timeout: cdk.Duration.seconds(29),
+        memorySize: 512,
+        environment: {
+          TTOBAK_MCP_PUBLIC_URL: mcpResourceAudience,
+          TTOBAK_API_URL: new URL(mcpResourceAudience).origin,
+          TTOBAK_USER_POOL_ID: props.userPool.userPoolId,
+          TTOBAK_CLIENT_ID: (props.spaClient ?? props.userPoolClient).userPoolClientId,
+          TTOBAK_COGNITO_DOMAIN: props.cognitoDomainUrl,
+          TTOBAK_HTTP_TIMEOUT_MS: '25000',
+          ORIGIN_VERIFY_SECRET: props.originVerifySecret || '',
+        },
+      });
+    }
+
     // JWT Authorizer for Cognito
     const jwtAuthorizer = new apigatewayv2Authorizers.HttpJwtAuthorizer(
       'CognitoAuthorizer',
@@ -565,6 +599,35 @@ export class GatewayStack extends cdk.Stack {
       integration: qaIntegration,
       authorizer: jwtAuthorizer,
     });
+
+    if (this.mcpFunction) {
+      const mcpIntegration = new apigatewayv2Integrations.HttpLambdaIntegration(
+        'McpIntegration',
+        this.mcpFunction,
+        { payloadFormatVersion: apigatewayv2.PayloadFormatVersion.VERSION_2_0 },
+      );
+      // The endpoint keeps the Cognito JWT authorizer (aud = MCP URL or the SPA
+      // client) in addition to the CloudFront edge check and the Lambda's own
+      // strict verification, so no unauthenticated MCP route exists. A request
+      // rejected here has no resource_metadata challenge; clients fall back to
+      // the public discovery documents below.
+      this.httpApi.addRoutes({
+        path: '/api/mcp',
+        methods: [apigatewayv2.HttpMethod.ANY],
+        integration: mcpIntegration,
+        authorizer: jwtAuthorizer,
+      });
+      // Public RFC 9728 discovery documents (ADR-045). Deliberately without an
+      // authorizer: static metadata, no meeting or user data. Do not add other
+      // unauthenticated routes here.
+      for (const path of ['/.well-known/oauth-protected-resource', '/.well-known/oauth-protected-resource/api/mcp']) {
+        this.httpApi.addRoutes({
+          path,
+          methods: [apigatewayv2.HttpMethod.GET],
+          integration: mcpIntegration,
+        });
+      }
+    }
 
     // Add route: ANY /api/{proxy+}
     this.httpApi.addRoutes({

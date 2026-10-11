@@ -328,6 +328,26 @@ function handler(event) {
             },
           ],
         },
+        // HTTP MCP public discovery (RFC 9728), ADR-045. Exactly these two
+        // paths, never '/.well-known/*'. They return a static document naming
+        // the Cognito issuer and scopes and expose no data; the MCP endpoint
+        // itself stays under '/api/*' with the edge check and API authorizer.
+        // Same apiOrigin, so x-origin-verify is injected. Authorization and
+        // WWW-Authenticate pass through unchanged (no response-header policy).
+        '/.well-known/oauth-protected-resource': {
+          origin: apiOrigin,
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
+          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+          originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+        },
+        '/.well-known/oauth-protected-resource/api/mcp': {
+          origin: apiOrigin,
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
+          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+          originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+        },
         // Public slide-share redirects — MUST be defined before '/api/*'
         // below: CloudFront evaluates additionalBehaviors path patterns in
         // insertion order (first match wins), so this more-specific pattern

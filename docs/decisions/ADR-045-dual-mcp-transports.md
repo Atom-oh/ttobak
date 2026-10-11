@@ -69,6 +69,16 @@ The implementation provisions no HTTP MCP origin or public route. Any hosted
 rollout must separately wire the authenticated endpoint and minimal public
 discovery through the existing approved ingress.
 
+Addendum, 2026-10-11 (hosted rollout): the `ttobak-mcp` Lambda behind the existing
+HTTP API is that wiring, enabled by `ttobak:mcpResourceAudience`. `ANY /api/mcp`
+keeps the CloudFront edge check and the Cognito JWT authorizer in front of the
+server's own verification; only the two static discovery GETs are unauthenticated.
+A throwaway pool showed Cognito sets `aud` to the requested resource only with
+managed login and that URL registered as a resource server (otherwise the code
+exchange fails `invalid_grant`), so AuthStack moves the domain to managed login v2.
+The 30s API Gateway limit caps the hosted deadline at 25s. Authorizer 401s lack the
+`resource_metadata` challenge. Per-client login acceptance remains a live check.
+
 ## References
 
 - [MCP operation and client configuration](../../mcp-server/README.md)

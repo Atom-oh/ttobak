@@ -57,6 +57,8 @@ describe('GatewayStack', () => {
       indexScheduleEnabled: scheduleEnabled,
       dataSourceId: 'test-ds-id',
       webSearchGatewayUrl: 'https://test-gateway.gateway.bedrock-agentcore.us-east-1.api.aws/mcp',
+      cognitoDomainUrl: 'https://test-auth.auth.ap-northeast-2.amazoncognito.com',
+      originVerifySecret: 'test-origin-secret',
     });
 
     return Template.fromStack(stack);
@@ -73,12 +75,65 @@ describe('GatewayStack', () => {
     const after = Object.values(enabled.findResources('AWS::ApiGatewayV2::Authorizer'))[0];
     expect(after.Properties.JwtConfiguration.Audience).toHaveLength(2);
     expect(after.Properties.JwtConfiguration.Audience[1]).toBe('https://ttobak.example.com/api/mcp');
-    expect(Object.keys(enabled.findResources('AWS::ApiGatewayV2::Route'))).toEqual(
-      Object.keys(template.findResources('AWS::ApiGatewayV2::Route')));
+    // Enabling the audience adds exactly the HTTP MCP endpoint and its two
+    // discovery documents; every existing route is unchanged.
+    const routeKeys = (value: Template) => Object.values(value.findResources('AWS::ApiGatewayV2::Route'))
+      .map(route => route.Properties.RouteKey as string).sort();
+    expect(routeKeys(enabled).filter(key => !routeKeys(template).includes(key))).toEqual([
+      'ANY /api/mcp',
+      'GET /.well-known/oauth-protected-resource',
+      'GET /.well-known/oauth-protected-resource/api/mcp',
+    ]);
+    expect(routeKeys(template).every(key => routeKeys(enabled).includes(key))).toBe(true);
     expect(() => buildTemplate('manual-only', false, 'http://ttobak.example.com/api/mcp')).toThrow();
     expect(() => buildTemplate('manual-only', false, 'https://ttobak.example.com/api/public/anything')).toThrow();
     expect(() => buildTemplate('manual-only', false, 'https://ttobak.example.com/api/mcp?wildcard=*')).toThrow();
     expect(() => buildTemplate('manual-only', false, 'https://another.example.com/api/mcp')).toThrow();
+  });
+
+  test('HTTP MCP exists only with the audience, keeps the JWT authorizer and exposes only discovery publicly', () => {
+    const functionNames = (value: Template) => Object.values(value.findResources('AWS::Lambda::Function'))
+      .map(resource => resource.Properties.FunctionName);
+    expect(functionNames(template)).not.toContain('ttobak-mcp');
+    const enabled = buildTemplate('manual-only', false, 'https://ttobak.example.com/api/mcp');
+    enabled.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'ttobak-mcp',
+      Runtime: 'nodejs22.x',
+      Architectures: ['arm64'],
+      Handler: 'index.handler',
+      Timeout: 29,
+      Environment: { Variables: Match.objectLike({
+        TTOBAK_MCP_PUBLIC_URL: 'https://ttobak.example.com/api/mcp',
+        TTOBAK_API_URL: 'https://ttobak.example.com',
+        TTOBAK_COGNITO_DOMAIN: 'https://test-auth.auth.ap-northeast-2.amazoncognito.com',
+        TTOBAK_HTTP_TIMEOUT_MS: '25000',
+        ORIGIN_VERIFY_SECRET: 'test-origin-secret',
+      }) },
+    });
+    // HTTP API routes only; the realtime WebSocket API in this stack has its own $connect authorizer.
+    const routes = Object.values(enabled.findResources('AWS::ApiGatewayV2::Route'))
+      .map(route => route.Properties)
+      .filter(route => JSON.stringify(route.ApiId).includes('TtobakHttpApi'));
+    const byKey = (key: string) => routes.find(route => route.RouteKey === key)!;
+    expect(byKey('ANY /api/mcp').AuthorizationType).toBe('JWT');
+    for (const key of ['GET /.well-known/oauth-protected-resource', 'GET /.well-known/oauth-protected-resource/api/mcp']) {
+      expect(byKey(key).AuthorizationType ?? 'NONE').toBe('NONE');
+    }
+    // Unauthenticated routes stay limited to the public document redirect and the
+    // two static discovery documents (ADR-022, ADR-045).
+    expect(routes.filter(route => (route.AuthorizationType ?? 'NONE') === 'NONE').map(route => route.RouteKey).sort()).toEqual([
+      'GET /.well-known/oauth-protected-resource',
+      'GET /.well-known/oauth-protected-resource/api/mcp',
+      'GET /api/public/docs/{token}',
+    ]);
+    const integrations = Object.values(enabled.findResources('AWS::ApiGatewayV2::Integration'))
+      .filter(integration => JSON.stringify(integration.Properties.IntegrationUri).includes('McpFunction'));
+    expect(integrations).toHaveLength(1);
+    expect(integrations[0].Properties.PayloadFormatVersion).toBe('2.0');
+    // The MCP function needs no AWS permissions beyond its logs.
+    const roles = Object.values(enabled.findResources('AWS::IAM::Policy'))
+      .filter(policy => JSON.stringify(policy.Properties.Roles).includes('McpFunction'));
+    expect(roles).toHaveLength(0);
   });
 
   test('final summary override leaves refinement and auxiliary model selections intact', () => {

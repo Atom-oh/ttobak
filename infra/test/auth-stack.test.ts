@@ -64,4 +64,31 @@ describe('AuthStack', () => {
       },
     });
   });
+  test('hosted login uses managed login with branding for every OAuth client', () => {
+    template.hasResourceProperties('AWS::Cognito::UserPoolDomain', { ManagedLoginVersion: 2 });
+    const brandings = Object.values(template.findResources('AWS::Cognito::ManagedLoginBranding'))
+      .map(resource => resource.Properties);
+    const clients = Object.keys(template.findResources('AWS::Cognito::UserPoolClient'));
+    expect(brandings).toHaveLength(clients.length);
+    for (const branding of brandings) expect(branding.UseCognitoProvidedValues).toBe(true);
+    expect(brandings.map(b => JSON.stringify(b.ClientId)).sort())
+      .toEqual(clients.map(id => JSON.stringify({ Ref: id })).sort());
+  });
+
+  test('the HTTP MCP resource server exists only with the MCP resource context', () => {
+    expect(Object.keys(template.findResources('AWS::Cognito::UserPoolResourceServer'))).toHaveLength(0);
+    const app = new cdk.App({ context: {
+      'ttobak:domainName': 'ttobak.example.com',
+      'ttobak:mcpResourceAudience': 'https://ttobak.example.com/api/mcp',
+    } });
+    const enabled = Template.fromStack(new AuthStack(app, 'TestAuthStackMcp'));
+    enabled.resourceCountIs('AWS::Cognito::UserPoolResourceServer', 1);
+    enabled.hasResourceProperties('AWS::Cognito::UserPoolResourceServer', {
+      Identifier: 'https://ttobak.example.com/api/mcp',
+    });
+    // Clients keep standard scopes only; the reserved scope is never granted.
+    for (const client of Object.values(enabled.findResources('AWS::Cognito::UserPoolClient'))) {
+      expect([...(client.Properties.AllowedOAuthScopes ?? [])].sort()).toEqual(['email', 'openid', 'profile']);
+    }
+  });
 });

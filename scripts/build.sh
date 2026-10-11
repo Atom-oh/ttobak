@@ -3,7 +3,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 # Usage: ./build.sh [target...]
-# Targets: backend, frontend, all (default: all)
+# Targets: backend, mcp, frontend, all (default: all)
 
 targets=("${@:-all}")
 
@@ -17,6 +17,14 @@ build_backend() {
   echo "  Go build complete"
 }
 
+build_mcp() {
+  echo "==> Building HTTP MCP Lambda bundle..."
+  cd "$ROOT/mcp-server"
+  npm ci
+  npm run bundle:lambda
+  echo "  MCP Lambda bundle complete: mcp-server/dist/lambda-bundle/"
+}
+
 build_frontend() {
   echo "==> Building frontend..."
   cd "$ROOT/frontend"
@@ -27,9 +35,10 @@ build_frontend() {
 for target in "${targets[@]}"; do
   case "$target" in
     backend)  build_backend ;;
+    mcp)      build_mcp ;;
     frontend) build_frontend ;;
-    all)      build_backend; build_frontend ;;
-    *)        echo "Unknown target: $target (use: backend, frontend, all)"; exit 1 ;;
+    all)      build_backend; build_mcp; build_frontend ;;
+    *)        echo "Unknown target: $target (use: backend, mcp, frontend, all)"; exit 1 ;;
   esac
 done
 
