@@ -32,13 +32,14 @@ TABLE_NAME = os.environ.get("TABLE_NAME", "ttobak-main")
 KB_BUCKET = os.environ.get("KB_BUCKET_NAME", "ttobak-kb-180294183052")
 
 MODEL_BY_MODE = {
-    "quick": "global.anthropic.claude-sonnet-5-5",
-    "standard": "global.anthropic.claude-sonnet-5-5",
-    "deep": "us.anthropic.claude-opus-4-7",
+    "quick": "global.anthropic.claude-opus-5-5",
+    "standard": "global.anthropic.claude-opus-5-5",
+    "deep": "global.anthropic.claude-opus-5-5",
 }
 
-# Light model for plan/respond (fast, cheap)
-CHAT_MODEL = "global.anthropic.claude-sonnet-5-5"
+# Plan/respond model. Opus 5.5 always uses adaptive thinking (it cannot be turned
+# off; "thinking.type.disabled" is rejected) and a plan reply takes ~18-25s.
+CHAT_MODEL = "global.anthropic.claude-opus-5-5"
 
 RESEARCH_SYSTEM_PROMPT = """You are a Deep Research Agent for Ttobak, an AI meeting assistant for AWS Solutions Architects.
 
