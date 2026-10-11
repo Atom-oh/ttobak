@@ -14,6 +14,9 @@ export interface HttpApiEvent {
   requestContext?: { http?: { method?: string } };
 }
 
+/** The only Lambda context field the wrapper touches. */
+export interface LambdaContext { callbackWaitsForEmptyEventLoop?: boolean }
+
 export interface HttpApiResult {
   statusCode: number;
   headers: Record<string, string>;
@@ -42,9 +45,8 @@ function startLoopback() {
       server.once('error', reject);
       server.listen(0, '127.0.0.1', () => { server.off('error', reject); resolve(); });
     });
-    if (!process.env.ORIGIN_VERIFY_SECRET) {
-      console.error('ORIGIN_VERIFY_SECRET is not set: direct API Gateway callers are not rejected');
-    }
+    // The listening socket must never keep the runtime's event loop alive.
+    server.unref();
     return { port: (server.address() as AddressInfo).port, host: new URL(config.publicUrl).host, deadlineMs: config.deadlineMs };
   })().catch((error) => { loopback = undefined; throw error; });
   return loopback;
@@ -52,7 +54,8 @@ function startLoopback() {
 
 function originVerified(headers: Record<string, string | undefined>): boolean {
   const expected = process.env.ORIGIN_VERIFY_SECRET ?? '';
-  if (!expected) return true; // Same semantics as the Go API's OriginVerify middleware.
+  // Fail closed. GatewayStack refuses to synthesize HTTP MCP without the secret.
+  if (!expected) return false;
   const actual = Buffer.from(headers['x-origin-verify'] ?? '');
   const wanted = Buffer.from(expected);
   return actual.length === wanted.length && timingSafeEqual(actual, wanted);
@@ -64,7 +67,10 @@ const reply = (statusCode: number, value: unknown): HttpApiResult => ({
   body: JSON.stringify(value),
 });
 
-export async function handler(event: HttpApiEvent): Promise<HttpApiResult> {
+export async function handler(event: HttpApiEvent, context?: LambdaContext): Promise<HttpApiResult> {
+  // Async handlers already return on promise settlement; this also covers a
+  // runtime that would otherwise wait for an empty event loop.
+  if (context) context.callbackWaitsForEmptyEventLoop = false;
   const incoming = event.headers ?? {};
   if (!originVerified(incoming)) return reply(403, { error: { code: 'FORBIDDEN', message: 'Forbidden' } });
   let server;
@@ -87,7 +93,8 @@ export async function handler(event: HttpApiEvent): Promise<HttpApiResult> {
   const path = event.rawPath + (event.rawQueryString ? `?${event.rawQueryString}` : '');
   return new Promise<HttpApiResult>((resolve) => {
     const upstream = httpRequest(
-      { host: '127.0.0.1', port: server.port, method, path, headers },
+      // agent:false + Connection: close leaves no pooled loopback socket behind.
+      { host: '127.0.0.1', port: server.port, method, path, headers: { ...headers, connection: 'close' }, agent: false },
       (response) => {
         const chunks: Buffer[] = [];
         response.on('data', (chunk: Buffer) => chunks.push(chunk));

@@ -95,6 +95,7 @@ for (const [label, entry] of entries) {
     assert.ok(names.includes('ttobak_list_meetings'));
     assert.ok(!names.includes('ttobak_login'), 'HTTP hides the local login tool');
     assert.ok(!names.includes('ttobak_start_recording'), 'HTTP hides local-only tools');
+    assert.equal(listed._context.callbackWaitsForEmptyEventLoop, false);
     const status = await invoke(viaApiGateway({ body: Buffer.from(rpc('tools/call', { name: 'ttobak_status', arguments: {} }, 2)).toString('base64'), isBase64Encoded: true }));
     assert.equal(status.statusCode, 200, status.body);
     assert.match(JSON.parse(status.body).result.content[0].text, /Authenticated: true/);
@@ -134,6 +135,36 @@ for (const [label, entry] of entries) {
     assert.equal(encoded.statusCode, 415);
     assert.equal((await invoke(viaApiGateway({ requestContext: { http: { method: 'GET' } } }))).statusCode, 405);
     assert.equal((await invoke(viaApiGateway({ rawPath: '/api/mcp/extra', body: rpc('tools/list') }))).statusCode, 404);
+  });
+
+  test(`${label}: leaves no handle that keeps the event loop alive`, async () => {
+    const started = Date.now();
+    const child = spawn(process.execPath, [
+      '--import', fileURLToPath(new URL('./fixtures/http-preload.mjs', import.meta.url)),
+      fileURLToPath(new URL('./fixtures/lambda-once.mjs', import.meta.url)),
+    ], { env: {
+      ...process.env,
+      TTOBAK_LAMBDA_ENTRY: fileURLToPath(new URL(entry, import.meta.url)),
+      TTOBAK_LAMBDA_EVENT: JSON.stringify(viaApiGateway({ body: rpc('tools/list') })),
+      TTOBAK_MCP_PUBLIC_URL: PUBLIC_URL, TTOBAK_API_URL: 'https://ttobak.example.com',
+      TTOBAK_COGNITO_DOMAIN: 'https://test.auth.ap-northeast-2.amazoncognito.com',
+      TTOBAK_USER_POOL_ID: 'ap-northeast-2_testpool', TTOBAK_CLIENT_ID: 'testclient',
+      TTOBAK_TEST_JWKS: JSON.stringify(jwks), ORIGIN_VERIFY_SECRET: 'edge-secret',
+    }, stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    child.stdout.on('data', (data) => { out += data; });
+    const code = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('process kept running after the response')); }, 10000);
+      child.once('exit', (exitCode) => { clearTimeout(timer); resolve(exitCode); });
+    });
+    assert.equal(code, 0);
+    assert.equal(JSON.parse(out).statusCode, 200);
+    assert.ok(Date.now() - started < 10000);
+  });
+
+  test(`${label}: fails closed when the origin secret is not configured`, async (t) => {
+    const { invoke } = await harness(t, entry, { ORIGIN_VERIFY_SECRET: '' });
+    assert.equal((await invoke(viaApiGateway({ body: rpc('tools/list') }))).statusCode, 403);
   });
 
   test(`${label}: reports a configuration error without leaking request data`, async (t) => {

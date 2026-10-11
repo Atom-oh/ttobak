@@ -5,6 +5,7 @@ import { createInterface } from 'node:readline';
 const { handler } = await import(process.env.TTOBAK_LAMBDA_ENTRY);
 for await (const line of createInterface({ input: process.stdin })) {
   if (!line.trim()) continue;
-  const result = await handler(JSON.parse(line));
-  process.stdout.write(JSON.stringify(result) + '\n');
+  const context = { callbackWaitsForEmptyEventLoop: true };
+  const result = await handler(JSON.parse(line), context);
+  process.stdout.write(JSON.stringify({ ...result, _context: context }) + '\n');
 }

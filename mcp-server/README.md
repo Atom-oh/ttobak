@@ -85,11 +85,11 @@ pre-registered public OAuth client and register each host's exact callback.
 | `TTOBAK_HTTP_TIMEOUT_MS` | `55000`; configurable from 1000 to 55000 |
 
 The public resource and upstream API share the application CloudFront origin.
-The optional Gateway context `ttobak:mcpResourceAudience` admits this exact HTTPS
-`/api/mcp` audience alongside the existing client audience. Without that setup,
-API Gateway checks the URL `aud` instead of falling back to `client_id` and rejects
-the token. The edge client-ID gate and OriginVerify remain required. The setting
-creates no route, listener, callback or authentication bypass and is off by default.
+The Gateway context `ttobak:mcpResourceAudience` (set in `infra/cdk.json`) admits
+this exact HTTPS `/api/mcp` audience alongside the existing client audience and
+enables the hosted Lambda described below. Without it, API Gateway checks the URL
+`aud` instead of falling back to `client_id` and rejects the token. The edge
+client-ID gate and OriginVerify remain required.
 
 HTTP uses stateless JSON responses; authenticated GET/SSE and DELETE return 405.
 Limits: one JSON-RPC message, 1 MiB UTF-8 request, 32 active requests, 32,000-byte
