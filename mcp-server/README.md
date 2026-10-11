@@ -85,11 +85,11 @@ pre-registered public OAuth client and register each host's exact callback.
 | `TTOBAK_HTTP_TIMEOUT_MS` | `55000`; configurable from 1000 to 55000 |
 
 The public resource and upstream API share the application CloudFront origin.
-The optional Gateway context `ttobak:mcpResourceAudience` admits this exact HTTPS
-`/api/mcp` audience alongside the existing client audience. Without that setup,
-API Gateway checks the URL `aud` instead of falling back to `client_id` and rejects
-the token. The edge client-ID gate and OriginVerify remain required. The setting
-creates no route, listener, callback or authentication bypass and is off by default.
+The Gateway context `ttobak:mcpResourceAudience` (set in `infra/cdk.json`) admits
+this exact HTTPS `/api/mcp` audience alongside the existing client audience and
+enables the hosted Lambda described below. Without it, API Gateway checks the URL
+`aud` instead of falling back to `client_id` and rejects the token. The edge
+client-ID gate and OriginVerify remain required.
 
 HTTP uses stateless JSON responses; authenticated GET/SSE and DELETE return 405.
 Limits: one JSON-RPC message, 1 MiB UTF-8 request, 32 active requests, 32,000-byte
@@ -115,9 +115,20 @@ never share one user's token across a shared Crew. Kiro CLI Tool Search is enabl
 separately with `kiro-cli settings toolSearch.enabled true` and retains its size
 thresholds. Existing host approval settings must be preserved.
 
-This implementation does not provision a hosted origin or register real clients.
-Route the authenticated endpoint and minimal public discovery through the approved
-CloudFront boundary. Publish `mcp: { "url": "/api/mcp" }` in runtime config only
+Hosted deployment: `src/lambda.ts` runs this same server on a loopback port inside
+the `ttobak-mcp` Lambda (`npm run bundle:lambda` builds `dist/lambda-bundle/`).
+GatewayStack serves `ANY /api/mcp` with the Cognito JWT authorizer and the two
+discovery GETs without one; CloudFront routes only those exact discovery paths
+around the edge function. The wrapper rejects a missing or wrong `x-origin-verify`,
+pins Host to the public host and forwards only MCP-relevant headers. API Gateway
+limits integrations to 30s, so the hosted deadline is 25s. A token rejected by the
+gateway authorizer gets a 401 without `resource_metadata`; clients then use the
+discovery documents. Cognito issues the required `aud` only through managed login
+with the MCP URL registered as a resource server (AuthStack does both). The pool's
+OIDC metadata omits `code_challenge_methods_supported`; PKCE S256 still works, but
+a client that insists on that field may refuse. Clients use the SPA public client
+and its registered callback (`http://localhost:9876/callback`) unless more are added.
+Publish `mcp: { "url": "/api/mcp" }` in runtime config only
 after deployment acceptance. Validate each client's exact callback, OIDC discovery,
 resource binding, refresh and representative operations. Access tokens need not
 carry email/verified-email claims: do not fabricate them or weaken pending-invite

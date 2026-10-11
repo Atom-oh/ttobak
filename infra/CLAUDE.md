@@ -5,6 +5,7 @@ edges are authoritative. `lib/*-stack.ts` owns resources and `test/` contains
 active Jest assertions, including security invariants.
 
 ```bash
+(cd ../mcp-server && npm ci && npm run bundle:lambda)  # ttobak-mcp asset, gitignored
 npx cdk synth
 npm test
 ```

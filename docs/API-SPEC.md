@@ -236,6 +236,13 @@ after authorization. Storage references are never returned. Source:
 `handler/meeting_reading.go`, `service/meeting_reading*.go`; MCP usage:
 [adapter README](../mcp-server/README.md).
 
+HTTP MCP (ADR-045) is served by the `ttobak-mcp` Lambda, not the Go API:
+`ANY /api/mcp` (JWT authorizer; POST JSON-RPC, stateless, other methods 405) and
+the unauthenticated static discovery documents
+`GET /.well-known/oauth-protected-resource` and
+`GET /.well-known/oauth-protected-resource/api/mcp`. Tokens must be Cognito access
+tokens with `aud` equal to `https://<site>/api/mcp`; see the adapter README.
+
 ### Action item analysis
 
 GET `.../action-items` permits meeting readers; POST `.../action-items/retry` and

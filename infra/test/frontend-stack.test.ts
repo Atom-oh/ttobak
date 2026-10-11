@@ -123,4 +123,27 @@ describe('FrontendStack', () => {
     const mediaPolicyRef = JSON.stringify(behaviors[mediaIndex].ResponseHeadersPolicyId);
     expect(docsPdfPolicyRef).not.toEqual(mediaPolicyRef);
   });
+  test('HTTP MCP discovery uses exactly two edge-free API behaviors placed before /api/*', () => {
+    const dist = Object.values(template.findResources('AWS::CloudFront::Distribution'))[0] as {
+      Properties: { DistributionConfig: { CacheBehaviors: Array<Record<string, unknown> & { PathPattern: string }> } };
+    };
+    const behaviors = dist.Properties.DistributionConfig.CacheBehaviors;
+    const api = behaviors.find(b => b.PathPattern === '/api/*')!;
+    const apiIndex = behaviors.indexOf(api);
+    const wellKnown = behaviors.filter(b => b.PathPattern.startsWith('/.well-known/'));
+    // Exact discovery paths only; a '/.well-known/*' wildcard would route unrelated paths to the API.
+    expect(wellKnown.map(b => b.PathPattern).sort()).toEqual([
+      '/.well-known/oauth-protected-resource',
+      '/.well-known/oauth-protected-resource/api/mcp',
+    ]);
+    for (const behavior of wellKnown) {
+      expect(behaviors.indexOf(behavior)).toBeLessThan(apiIndex);
+      expect(behavior.TargetOriginId).toEqual(api.TargetOriginId);
+      expect(behavior.LambdaFunctionAssociations).toBeUndefined();
+      expect(behavior.AllowedMethods).toEqual(['GET', 'HEAD', 'OPTIONS']);
+    }
+    // The MCP endpoint itself stays behind the edge JWT check.
+    expect(behaviors.find(b => b.PathPattern === '/api/mcp')).toBeUndefined();
+    expect(api.LambdaFunctionAssociations).toBeDefined();
+  });
 });
