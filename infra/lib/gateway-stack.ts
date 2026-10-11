@@ -494,6 +494,9 @@ export class GatewayStack extends cdk.Stack {
     // caller's own bearer token and fetches Cognito's public JWKS.
     if (mcpResourceAudience) {
       if (!props.cognitoDomainUrl) throw new Error('cognitoDomainUrl is required when HTTP MCP is enabled');
+      // Unlike the Go API's optional check, MCP requires the CloudFront origin
+      // proof so the endpoint and discovery routes cannot be called directly.
+      if (!props.originVerifySecret) throw new Error('originVerifySecret is required when HTTP MCP is enabled');
       this.mcpFunction = new lambda.Function(this, 'McpFunction', {
         functionName: 'ttobak-mcp',
         description: 'TTOBAK HTTP MCP server (Streamable HTTP, stateless)',
@@ -510,7 +513,7 @@ export class GatewayStack extends cdk.Stack {
           TTOBAK_CLIENT_ID: (props.spaClient ?? props.userPoolClient).userPoolClientId,
           TTOBAK_COGNITO_DOMAIN: props.cognitoDomainUrl,
           TTOBAK_HTTP_TIMEOUT_MS: '25000',
-          ORIGIN_VERIFY_SECRET: props.originVerifySecret || '',
+          ORIGIN_VERIFY_SECRET: props.originVerifySecret,
         },
       });
     }

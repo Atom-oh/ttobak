@@ -24,7 +24,7 @@ export interface HttpApiResult {
 // Only these viewer headers reach the MCP server. Host is rewritten below; the
 // origin-verify secret is checked here and never forwarded.
 const FORWARDED_HEADERS = [
-  'authorization', 'content-type', 'accept', 'origin', 'mcp-protocol-version', 'mcp-session-id', 'user-agent',
+  'authorization', 'content-type', 'content-encoding', 'accept', 'origin', 'mcp-protocol-version', 'mcp-session-id', 'user-agent',
 ];
 
 let loopback: Promise<{ port: number; host: string; deadlineMs: number }> | undefined;

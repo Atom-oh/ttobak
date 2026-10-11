@@ -14,7 +14,7 @@ describe('GatewayStack', () => {
       .filter(resource => JSON.stringify(resource.Properties.FunctionName).includes('KbFunction'));
   }
 
-  function buildTemplate(indexingMode: 'manual-only' | 'all' = 'manual-only', scheduleEnabled = false, mcpResourceAudience?: string, audioCropEnabled = false): Template {
+  function buildTemplate(indexingMode: 'manual-only' | 'all' = 'manual-only', scheduleEnabled = false, mcpResourceAudience?: string, audioCropEnabled = false, originVerifySecret = 'test-origin-secret'): Template {
     const app = new cdk.App({
       context: {
         'ttobak:cloudfrontDomain': 'd2olomx8td8txt.cloudfront.net',
@@ -58,7 +58,7 @@ describe('GatewayStack', () => {
       dataSourceId: 'test-ds-id',
       webSearchGatewayUrl: 'https://test-gateway.gateway.bedrock-agentcore.us-east-1.api.aws/mcp',
       cognitoDomainUrl: 'https://test-auth.auth.ap-northeast-2.amazoncognito.com',
-      originVerifySecret: 'test-origin-secret',
+      originVerifySecret,
     });
 
     return Template.fromStack(stack);
@@ -95,6 +95,8 @@ describe('GatewayStack', () => {
     const functionNames = (value: Template) => Object.values(value.findResources('AWS::Lambda::Function'))
       .map(resource => resource.Properties.FunctionName);
     expect(functionNames(template)).not.toContain('ttobak-mcp');
+    // The origin proof is mandatory for MCP even though the Go API treats it as optional.
+    expect(() => buildTemplate('manual-only', false, 'https://ttobak.example.com/api/mcp', false, '')).toThrow(/originVerifySecret/);
     const enabled = buildTemplate('manual-only', false, 'https://ttobak.example.com/api/mcp');
     enabled.hasResourceProperties('AWS::Lambda::Function', {
       FunctionName: 'ttobak-mcp',

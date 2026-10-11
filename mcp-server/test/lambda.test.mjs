@@ -128,8 +128,10 @@ for (const [label, entry] of entries) {
     assert.equal(forged.statusCode, 200);
   });
 
-  test(`${label}: stateless GET and unknown paths are refused, not served`, async (t) => {
+  test(`${label}: stateless GET, unknown paths and encoded bodies are refused, not served`, async (t) => {
     const { invoke } = await harness(t, entry);
+    const encoded = await invoke(viaApiGateway({ body: rpc('tools/list'), headers: { ...viaApiGateway().headers, 'content-encoding': 'gzip' } }));
+    assert.equal(encoded.statusCode, 415);
     assert.equal((await invoke(viaApiGateway({ requestContext: { http: { method: 'GET' } } }))).statusCode, 405);
     assert.equal((await invoke(viaApiGateway({ rawPath: '/api/mcp/extra', body: rpc('tools/list') }))).statusCode, 404);
   });
