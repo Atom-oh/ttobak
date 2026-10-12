@@ -49,6 +49,7 @@ const storageStack = new StorageStack(app, 'TtobakStorageStack', {
 // Stack 2: Auth (depends on Storage for Pre Sign-Up Lambda's DynamoDB table access)
 const authStack = new AuthStack(app, 'TtobakAuthStack', {
   env,
+  terminationProtection: true,
   description: 'TTOBAK AI Meeting Assistant - Authentication (Cognito)',
   table: storageStack.table,
 });
