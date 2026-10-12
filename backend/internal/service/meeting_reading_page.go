@@ -32,6 +32,8 @@ var (
 type ReadingOptions struct {
 	Kind, Section, Source, Cursor string
 	PageSize                      int
+	MaxBytes                      int
+	ExpectedRevision              string
 	StartTime, EndTime            *float64
 }
 
@@ -188,6 +190,13 @@ func readingChunkFor(points []rune, w readingWindow, start, count int) readingCh
 	return c
 }
 func paginateReading(text string, windows []readingWindow, o ReadingOptions, binding string, render func([]readingChunk, readingObject) readingObject) ([]byte, error) {
+	maxBytes := o.MaxBytes
+	if maxBytes == 0 {
+		maxBytes = MaxMeetingReadingBytes
+	}
+	if maxBytes < 1 || maxBytes > MaxMeetingReadingBytes {
+		return nil, ErrInvalidReadingOptions
+	}
 	if !utf8.ValidString(text) {
 		return nil, ErrReadingData
 	}
@@ -233,7 +242,7 @@ func paginateReading(text string, windows []readingWindow, o ReadingOptions, bin
 		if err != nil {
 			return nil, err
 		}
-		if len(data) > MaxMeetingReadingBytes {
+		if len(data) > maxBytes {
 			low, high := 0, count
 			for low < high {
 				mid := (low + high + 1) / 2
@@ -241,7 +250,7 @@ func paginateReading(text string, windows []readingWindow, o ReadingOptions, bin
 				if err != nil {
 					return nil, err
 				}
-				if len(data) <= MaxMeetingReadingBytes {
+				if len(data) <= maxBytes {
 					low = mid
 				} else {
 					high = mid - 1
@@ -262,7 +271,7 @@ func paginateReading(text string, windows []readingWindow, o ReadingOptions, bin
 	if err != nil {
 		return nil, err
 	}
-	if (len(windows) > 0 && len(chunks) == 0) || len(data) > MaxMeetingReadingBytes {
+	if (len(windows) > 0 && len(chunks) == 0) || len(data) > maxBytes {
 		return nil, ErrReadingData
 	}
 	return data, nil

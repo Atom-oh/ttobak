@@ -4,6 +4,7 @@ import { basename, extname, isAbsolute, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { URL } from 'node:url';
 import { MAX_READING_BYTES, type ReadingOptions } from './reading.js';
+import type { DocumentReadingOptions } from './document-reading.js';
 
 // Extension -> MIME type, shared by both upload tools for inference only --
 // each tool advertises its own narrower format list (kb_upload: pdf/md/pptx/
@@ -368,6 +369,17 @@ export class TtobakApi {
 
   async getDocument(accountId: string | undefined, docId: string) {
     return this.get(`${documentsPath(accountId)}/${identifier(docId, 'docId')}`);
+  }
+
+  async readDocument(options: DocumentReadingOptions) {
+    const query = new URLSearchParams({
+      section: options.section, pageSize: String(options.pageSize), maxBytes: '10000',
+    });
+    if (options.cursor !== undefined) query.set('cursor', options.cursor);
+    if (options.expectedRevision !== undefined) query.set('expectedRevision', options.expectedRevision);
+    return this.request('GET',
+      `${documentsPath(options.accountId)}/${identifier(options.docId, 'docId')}/reading?${query}`,
+      undefined, MAX_READING_BYTES);
   }
 
   async updateDocument(accountId: string | undefined, docId: string, doc: DocumentInput) {

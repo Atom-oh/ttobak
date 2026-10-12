@@ -13,6 +13,7 @@ import { CognitoAuth } from './auth.js';
 import { TtobakApi, UploadRejectedError, type ApiAuth } from './api.js';
 import { httpTools, decodeUpload, mutationReceipt, MAX_HTTP_RESULT_BYTES } from './remote-tools.js';
 import { readingOptions, readingResult, readingError } from './reading.js';
+import { documentReadingOptions, documentReadingResult } from './document-reading.js';
 import { Recorder, MAX_MAX_MINUTES, type UploadProgress } from './recorder.js';
 import { AppControlError, defaultAppSocketPath, sendAppRequest, type AppAction } from './app-control.js';
 
@@ -285,15 +286,20 @@ const registry: { tools: Tool[] } = {
     },
     {
       name: 'ttobak_get_document',
-      description: 'Read the current document content. Omit accountId for a personal or directly-shared document; use the same accountId as its listing for an account document. Shared personal documents are read-only. File documents return download/preview links; their file contents are not extracted.',
+      description: 'Read bounded current document pages. Follow page.nextCursor with the same accountId, docId and section until complete; restart stale cursors. Omit accountId for personal or directly-shared documents. Every page rechecks access and source revision. Files include authorized short-lived download/preview links and explicit unavailable text. If previewStatus=deferred, follow previewRead with section=preview. Public sharing tokens are never returned.',
       annotations: { readOnlyHint: true },
       inputSchema: {
         type: 'object' as const,
         properties: {
           accountId: { type: 'string', minLength: 1, description: 'Optional account scope; omit for a personal or directly-shared document' },
           docId: { type: 'string', description: 'Document ID' },
+          section: { type: 'string', enum: ['content', 'metadata', 'download', 'preview'], default: 'content' },
+          pageSize: { type: 'integer', minimum: 1, maximum: 8000, default: 4000 },
+          cursor: { type: 'string', maxLength: 2048, description: 'Opaque server continuation; retain scope and section' },
+          expectedRevision: { type: 'string', pattern: '^[a-f0-9]{64}$', description: 'Pin a related file-link read to the returned source revision' },
         },
         required: ['docId'],
+        additionalProperties: false,
       },
     },
     {
@@ -735,10 +741,8 @@ async function callTool(request: CallToolRequest, options: ServerOptions) {
       }
 
       case 'ttobak_get_document': {
-        const { accountId, docId } = args as { accountId?: string; docId: string };
-        if (!docId) return error('docId is required');
-        const result = await api.getDocument(accountId, docId);
-        return text(JSON.stringify(result, null, 2));
+        const options = documentReadingOptions(args);
+        return documentReadingResult(await api.readDocument(options), options);
       }
 
       case 'ttobak_update_document': {
