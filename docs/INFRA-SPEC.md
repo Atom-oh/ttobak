@@ -31,6 +31,16 @@ AuthStack explicitly disables self-signup. AdminCreateUser invitations are the
 account-creation gate. The domain allowlist is supplemental; RESEND trigger
 behavior is not verified. SPA client has no secret; server OAuth and MCP clients
 have separate settings. Inspect `auth-stack.ts` before changing flows/scopes.
+The existing user pool retains its logical ID, has deletion protection enabled,
+and uses `Retain` for both deletion and replacement. The app also enables AuthStack
+termination protection. These declarations protect identity storage; they do not
+prevent every authentication configuration change or establish administrator MFA.
+Before applying an auth change, inspect the diff for pool replacement. Deploy
+AuthStack individually with `--exclusively`, then verify the live pool's
+`DeletionProtection=ACTIVE` and stack's `EnableTerminationProtection=true`.
+Intentional retirement requires a separately reviewed identity migration and
+explicitly disabling both protections; retaining the pool does not preserve
+every client or trigger after stack deletion.
 HTTP MCP is enabled by `ttobak:mcpResourceAudience` (set in `cdk.json`). It adds
 that exact HTTPS `/api/mcp` audience to the JWT authorizer next to the client
 audience, and AuthStack registers the URL as a resource server and uses managed

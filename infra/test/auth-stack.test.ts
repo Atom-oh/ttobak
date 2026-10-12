@@ -1,5 +1,8 @@
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
+import * as ts from 'typescript';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { AuthStack } from '../lib/auth-stack';
 
 describe('AuthStack', () => {
@@ -12,6 +15,48 @@ describe('AuthStack', () => {
     const app = new cdk.App({ context: { 'ttobak:domainName': 'ttobak.example.com' } });
     const stack = new AuthStack(app, 'TestAuthStack');
     template = Template.fromStack(stack);
+  });
+
+  test('the existing user pool retains identities on deletion and replacement', () => {
+    const pools = template.findResources('AWS::Cognito::UserPool');
+    // Pin the established identity resource: a construct rename would otherwise
+    // create a new empty pool even if the original pool were safely retained.
+    expect(Object.keys(pools)).toEqual(['TtobakUserPoolD45BA8D6']);
+    expect(pools.TtobakUserPoolD45BA8D6).toMatchObject({
+      DeletionPolicy: 'Retain',
+      UpdateReplacePolicy: 'Retain',
+      Properties: { DeletionProtection: 'ACTIVE' },
+    });
+  });
+
+  test('the deployed AuthStack enables termination protection in its assembly', () => {
+    // Read the real app binding so testing a protected throwaway stack cannot
+    // conceal an unprotected production stack.
+    const source = ts.createSourceFile('infra.ts',
+      readFileSync(join(__dirname, '../bin/infra.ts'), 'utf8'), ts.ScriptTarget.Latest, true);
+    const auth = source.statements.filter(ts.isVariableStatement)
+      .flatMap(statement => [...statement.declarationList.declarations])
+      .find(node => ts.isIdentifier(node.name) && node.name.text === 'authStack');
+    const initializer = auth?.initializer;
+    if (!initializer || !ts.isNewExpression(initializer)
+        || initializer.expression.getText(source) !== 'AuthStack') {
+      throw new Error('AuthStack app wiring missing');
+    }
+    const props = initializer.arguments?.[2];
+    if (!props || !ts.isObjectLiteralExpression(props)) {
+      throw new Error('AuthStack properties missing');
+    }
+    const protection = props.properties.find(node => ts.isPropertyAssignment(node)
+      && ts.isIdentifier(node.name) && node.name.text === 'terminationProtection');
+    if (!protection || !ts.isPropertyAssignment(protection)) {
+      throw new Error('AuthStack termination protection missing');
+    }
+    expect(protection.initializer.kind).toBe(ts.SyntaxKind.TrueKeyword);
+    const app = new cdk.App();
+    const stack = new AuthStack(app, 'ProtectedAuthStack', {
+      terminationProtection: protection.initializer.kind === ts.SyntaxKind.TrueKeyword,
+    });
+    expect(app.synth().getStackArtifact(stack.artifactId).terminationProtection).toBe(true);
   });
 
   // Company security policy: accounts are created by an administrator only

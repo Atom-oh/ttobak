@@ -116,7 +116,10 @@ export class AuthStack extends cdk.Stack {
         postAuthentication: postAuthFn,
       },
       accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
-      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      // Production identities must survive stack removal or resource replacement.
+      // Keep this construct ID stable when changing authentication settings.
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      deletionProtection: true,
       // Invite email for AdminCreateUser (the ONLY onboarding mail an invited
       // user gets -- there is no sign-up form). Without this block Cognito
       // sends its default English one-liner, "Your username is {username} and
