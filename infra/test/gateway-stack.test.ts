@@ -14,10 +14,10 @@ describe('GatewayStack', () => {
       .filter(resource => JSON.stringify(resource.Properties.FunctionName).includes('KbFunction'));
   }
 
-  function buildTemplate(indexingMode: 'manual-only' | 'all' = 'manual-only', scheduleEnabled = false, mcpResourceAudience?: string, audioCropEnabled = false, originVerifySecret = 'test-origin-secret'): Template {
+  function buildTemplate(indexingMode: 'manual-only' | 'all' = 'manual-only', scheduleEnabled = false, mcpResourceAudience?: string, audioCropEnabled = false, originVerifySecret = 'test-origin-secret', cloudfrontDomain: string | null = 'd2olomx8td8txt.cloudfront.net'): Template {
     const app = new cdk.App({
       context: {
-        'ttobak:cloudfrontDomain': 'd2olomx8td8txt.cloudfront.net',
+        ...(cloudfrontDomain === null ? {} : { 'ttobak:cloudfrontDomain': cloudfrontDomain }),
         'ttobak:domainName': 'ttobak.example.com',
         'ttobak:audioCropEnabled': audioCropEnabled,
         ...(mcpResourceAudience === undefined ? {} : { 'ttobak:mcpResourceAudience': mcpResourceAudience }),
@@ -97,6 +97,8 @@ describe('GatewayStack', () => {
     expect(functionNames(template)).not.toContain('ttobak-mcp');
     // The origin proof is mandatory for MCP even though the Go API treats it as optional.
     expect(() => buildTemplate('manual-only', false, 'https://ttobak.example.com/api/mcp', false, '')).toThrow(/originVerifySecret/);
+    // A missing CloudFront domain must not become the CORS origin "https://undefined".
+    expect(() => buildTemplate('manual-only', false, undefined, false, 'test-origin-secret', null)).toThrow(/cloudfrontDomain/);
     const enabled = buildTemplate('manual-only', false, 'https://ttobak.example.com/api/mcp');
     enabled.hasResourceProperties('AWS::Lambda::Function', {
       FunctionName: 'ttobak-mcp',

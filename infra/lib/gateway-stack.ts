@@ -531,13 +531,19 @@ export class GatewayStack extends cdk.Stack {
       }
     );
 
+    // A missing value would otherwise allow the literal origin "https://undefined".
+    const cloudfrontDomain = scope.node.tryGetContext('ttobak:cloudfrontDomain');
+    if (typeof cloudfrontDomain !== 'string' || !cloudfrontDomain) {
+      throw new Error('ttobak:cloudfrontDomain context is required for the API CORS origin');
+    }
+
     // HTTP API (ttobak-api)
     this.httpApi = new apigatewayv2.HttpApi(this, 'TtobakHttpApi', {
       apiName: 'ttobak-api',
       description: 'TTOBAK HTTP API',
       corsPreflight: {
         allowOrigins: [
-          `https://${scope.node.tryGetContext('ttobak:cloudfrontDomain')}`,
+          `https://${cloudfrontDomain}`,
           'http://localhost:3000',
         ],
         allowMethods: [

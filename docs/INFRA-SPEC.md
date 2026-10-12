@@ -40,7 +40,8 @@ ARM64, no AWS permissions, 29s timeout, 25s server deadline) behind `ANY /api/mc
 with the JWT authorizer, plus two unauthenticated static discovery routes,
 `GET /.well-known/oauth-protected-resource` and `.../api/mcp` (ADR-045).
 FrontendStack routes those two exact paths to the API origin without the edge
-function; `/api/mcp` keeps the `/api/*` edge client-ID check. The Lambda checks
+function; `/api/mcp` keeps the `/api/*` edge client-ID check, whose 401 for that
+path carries `WWW-Authenticate` with the path-specific `resource_metadata` URL. The Lambda checks
 `x-origin-verify` and pins Host to the public host.
 
 The pre-signup trigger reads the configured domain allowlist. PostAuthentication
@@ -74,9 +75,10 @@ and denies failed/expired reads. JWT verification still runs for every connect.
 `ask_live` asynchronously invokes Python QA. See the
 [WS rollout and rotation runbook](runbooks/websocket-runtime.md).
 
-CloudFront-only application HTTP ingress is policy. `originVerifySecret` is optional
-CDK context and defaults empty in the app; do not infer effective origin blocking
-from the presence of middleware alone. That legacy HTTP option is distinct from
+CloudFront-only application HTTP ingress is policy. `bin/infra.ts` refuses to
+synthesize without a 16+ character `ttobak:originVerifySecret`, so CloudFront always
+sends the proof; the Go and QA middleware still skip the check if their environment
+value is empty, so do not infer origin blocking from the middleware alone. That legacy HTTP option is distinct from
 the required WS secret. Existing browser Cognito/Transcribe SDK calls, signed S3
 PUTs and IAM-signed server callback requests are separate service integrations,
 not newly approved public application origins.
