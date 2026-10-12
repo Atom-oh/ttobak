@@ -8,6 +8,12 @@ delivery and synthetic failure/recovery acceptance must be recorded separately.
 GatewayStack owns two seven-day, SSE-SQS encrypted, TLS-only queues, retained on
 stack removal. Neither queue has a consumer or an automatic redrive destination.
 
+Their fixed physical names can collide after stack deletion or rollback retains
+the queues. Inventory existing ownership before recreating the stack. Preserve
+messages and review resource import or a deliberate new-name migration with both
+queues monitored until recovery finishes. Never purge/delete a retained queue or
+change its removal policy simply to make redeployment succeed.
+
 | Queue | Record | Coverage |
 |---|---|---|
 | `ttobak-pipeline-delivery-failures` | Original EventBridge event plus `RULE_ARN`/`TARGET_ARN` message attributes | Audio upload/crop, image completion, transcript upload, all-parts completion and optional slide conversion |
@@ -40,6 +46,9 @@ drops/destination delivery failures, and core EventBridge delivery failures.
 Sparse failure metrics use one breaching sample in two one-minute periods and
 `notBreaching` missing-data treatment. Backlog alarms trigger at one message;
 queue-age alarms trigger at fifteen minutes. Tune against measured traffic.
+The delivery-loss metric is exactly `InvocationsFailedToBeSentToDlq` in
+`AWS/Events`, scoped by `RuleName`. AWS emits it only when nonzero; the spelling
+and missing-data behavior are significant.
 
 `PipelineAlarmTopicArn` is an optional CloudFormation parameter on GatewayStack.
 An empty value creates alarms without notification actions, and stack output
@@ -100,6 +109,24 @@ current work state and source ETag/version where available. It uses strongly
 consistent metadata reads and S3 HEAD, without reading transcript/note bodies.
 Custom events without source versions additionally reject objects modified after
 the event; the inspected current version is included in the confirmation hash.
+
+Timestamp parsing preserves Go's RFC3339Nano precision on Python 3.9 and 3.12.
+A whole-second event represents that one-second interval for creation/emission
+checks. Next-second creation still rejects; fractional event times keep exact
+ordering. All-parts replay additionally requires the last meeting update to
+precede its canonical emission marker, preserving later-edit rejection.
+
+S3 audio events precede the upload-complete call that binds the key. A later
+meeting update is replayable only with the exact currently bound key, unchanged
+ETag and matching non-null immutable S3 version from the original event. Missing
+version evidence, completed audio parts and rebindings reject. Other transcript
+and crop freshness checks remain strict. Personal document rows may also be
+created after their raw S3 event; their current document/file-key and object
+identity checks remain the relevant binding.
+
+Custom image/all-parts events do not carry complete original source revisions.
+Their current source checks and worker publication guards remain necessary;
+these timestamp corrections do not invent missing subsecond provenance.
 
 Rejects are deliberate. Missing identities, rebound audio/files, changed source
 objects, stale analysis run IDs, expired leases, completed parts and active

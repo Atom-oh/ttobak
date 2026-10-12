@@ -49,7 +49,7 @@ export class PipelineFailures extends Construct {
   /** Keep EventBridge's existing default retry policy; this adds durable storage. */
   addTarget(id: string, rule: events.Rule, fn: lambda.IFunction): void {
     rule.addTarget(new targets.LambdaFunction(fn, { deadLetterQueue: this.deliveryQueue }));
-    for (const metricName of ['FailedInvocations', 'InvocationsFailedToBeSentToDLQ']) {
+    for (const metricName of ['FailedInvocations', 'InvocationsFailedToBeSentToDlq']) {
       this.alarm(`${id}${metricName}`, new cloudwatch.Metric({
         namespace: 'AWS/Events', metricName, dimensionsMap: { RuleName: rule.ruleName },
         statistic: 'Sum', period: cdk.Duration.minutes(1),

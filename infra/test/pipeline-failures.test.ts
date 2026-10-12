@@ -82,9 +82,15 @@ describe('pipeline failure retention and alarm routing', () => {
     const alarms = Object.values(template.findResources('AWS::CloudWatch::Alarm')).map(a => a.Properties);
     expect(alarms.map(a => a.MetricName)).toEqual(expect.arrayContaining([
       'Errors', 'Throttles', 'AsyncEventsDropped', 'DestinationDeliveryFailures',
-      'FailedInvocations', 'InvocationsFailedToBeSentToDLQ',
+      'FailedInvocations', 'InvocationsFailedToBeSentToDlq',
       'ApproximateNumberOfMessagesVisible', 'ApproximateAgeOfOldestMessage',
     ]));
+    // AWS publishes "Dlq", not "DLQ"; the wrong metric silently stays empty.
+    expect(alarms.some(a => a.MetricName === 'InvocationsFailedToBeSentToDLQ')).toBe(false);
+    expect(alarms.find(a => a.MetricName === 'InvocationsFailedToBeSentToDlq')).toMatchObject({
+      Namespace: 'AWS/Events', Statistic: 'Sum',
+      Dimensions: [{ Name: 'RuleName', Value: expect.anything() }],
+    });
     for (const alarm of alarms) {
       expect(alarm).toMatchObject({ EvaluationPeriods: 2, DatapointsToAlarm: 1, TreatMissingData: 'notBreaching' });
       expect(alarm.AlarmActions['Fn::If'][1]).toEqual([{ Ref: 'PipelineAlarmTopicArn' }]);

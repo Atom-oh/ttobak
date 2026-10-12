@@ -16,6 +16,8 @@ from urllib.parse import unquote_plus
 
 MAX_BYTES = 1024 * 1024
 ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+NANOSECONDS = 1_000_000_000
+RFC3339 = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?(Z|[+-]\d\d:\d\d)$")
 ROUTES = {
     ("ttobak.audio", "AudioCropRequested"): ("transcribe", "ttobak-audio-crop"),
     ("ttobak.upload", "ImageUploadCompleted"): ("process-image", "ttobak-image-upload"),
@@ -39,14 +41,24 @@ def require(condition, code):
         raise Rejected(code)
 
 
-def timestamp(value):
+def timestamp_ns(value):
+    """Keep Go's RFC3339Nano precision, including on Python 3.9."""
     require(isinstance(value, str), "INVALID_TIMESTAMP")
+    match = RFC3339.fullmatch(value)
+    require(match is not None, "INVALID_TIMESTAMP")
     try:
-        result = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        result = datetime.fromisoformat(match[1] + match[3].replace("Z", "+00:00"))
     except ValueError:
         raise Rejected("INVALID_TIMESTAMP") from None
-    require(result.tzinfo is not None, "INVALID_TIMESTAMP")
-    return result.timestamp()
+    delta = result - datetime(1970, 1, 1, tzinfo=timezone.utc)
+    return (delta.days * 86400 + delta.seconds) * NANOSECONDS + int((match[2] or "").ljust(9, "0"))
+
+
+def event_bounds(value):
+    start = timestamp_ns(value)
+    # Only a whole-second envelope represents this one-second interval.
+    # Fractional event timestamps keep their exact ordering.
+    return start, start + (NANOSECONDS if RFC3339.fullmatch(value)[2] is None else 1)
 
 
 def normalize(value):
@@ -135,7 +147,7 @@ class Inspector:
         current = self.s3.head_object(Bucket=self.bucket, Key=key)
         require(current.get("ETag") and isinstance(current.get("LastModified"), datetime),
                 "INVALID_OBJECT_METADATA")
-        require(current["LastModified"].timestamp() <= event_time, "SOURCE_REPLACED_AFTER_EVENT")
+        require(timestamp_ns(current["LastModified"].isoformat()) <= event_time, "SOURCE_REPLACED_AFTER_EVENT")
         if original is not None:
             require(isinstance(original.get("etag"), str) and
                     original["etag"].strip('"') == current["ETag"].strip('"'), "SOURCE_ETAG_CHANGED")
@@ -145,51 +157,63 @@ class Inspector:
                               "version": current.get("VersionId"), "modified": current["LastModified"]})
         return current
 
-    def meeting_row(self, event_time):
+    def meeting_row(self, event_end):
         require(bool(self.meeting), "MEETING_ID_REQUIRED")
         meeting = self.read("USER#" + self.owner, "MEETING#" + self.meeting, MEETING_FIELDS)
         require(meeting.get("meetingId") == self.meeting and meeting.get("userId") == self.owner,
                 "CURRENT_IDENTITY_MISMATCH")
-        require(timestamp(meeting.get("createdAt")) <= event_time, "EVENT_PREDATES_RESOURCE")
+        require(timestamp_ns(meeting.get("createdAt")) < event_end, "EVENT_PREDATES_RESOURCE")
         return meeting
 
-    def summary_ready(self, meeting, event_time):
+    def summary_ready(self, meeting, event_time, emitted=None):
         status = meeting.get("status")
         require(status not in ("done", "error"), "USE_AUTHENTICATED_RESUMMARY")
         require(not meeting.get("summarizeRetryClaimedAt"), "SUMMARY_CLAIM_PRESENT")
         require(int(meeting.get("summaryRetryAttempts", 0)) < 2, "USE_AUTHENTICATED_RESUMMARY")
         if status == "summarizing":
-            require(timestamp(meeting.get("updatedAt")) + 20 * 60 <= self.now, "SUMMARY_STILL_ACTIVE")
+            require(timestamp_ns(meeting.get("updatedAt")) + 20 * 60 * NANOSECONDS <= self.now_ns,
+                    "SUMMARY_STILL_ACTIVE")
         else:
             require(status == "transcribing", "MEETING_NOT_REPLAYABLE")
-            require(timestamp(meeting.get("updatedAt")) <= event_time, "MEETING_CHANGED_AFTER_EVENT")
+            require(timestamp_ns(meeting.get("updatedAt")) <= (event_time if emitted is None else emitted),
+                    "MEETING_CHANGED_AFTER_EVENT" if emitted is None else "MEETING_CHANGED_AFTER_EMISSION")
 
     def plan(self, message, kind):
         self.now = self.fixed_now if self.fixed_now is not None else datetime.now(timezone.utc).timestamp()
+        self.now_ns = int(Decimal(str(self.now)) * NANOSECONDS)
         self.observed = []
         event, body = unwrap(message, kind, self.account, self.region)
-        event_time = timestamp(event.get("time"))
-        require(self.now - 7 * 86400 <= event_time <= self.now, "EVENT_OUTSIDE_RETENTION")
+        event_time, event_end = event_bounds(event.get("time"))
+        require(self.now_ns - 7 * 86400 * NANOSECONDS <= event_time <= self.now_ns, "EVENT_OUTSIDE_RETENTION")
         detail = event["detail"]
         route = ROUTES.get((event.get("source"), event.get("detail-type")))
         if event.get("source") == "aws.s3" and event.get("detail-type") == "Object Created":
             require(detail.get("bucket", {}).get("name") == self.bucket, "FOREIGN_BUCKET")
             obj = detail.get("object", {})
             key = obj.get("key", "")
+            late_audio_binding = False
             if key.startswith("audio/"):
                 route = ("transcribe", "ttobak-audio-upload")
-                meeting = self.meeting_row(event_time)
+                meeting = self.meeting_row(event_end)
                 require(meeting.get("status") == "transcribing" and not meeting.get("audioCrop"),
                         "AUDIO_NOT_REPLAYABLE")
-                require(timestamp(meeting.get("updatedAt")) <= event_time, "MEETING_CHANGED_AFTER_EVENT")
+                # S3 emits before upload-complete binds the key. A later row
+                # update requires immutable object identity, not a time waiver.
+                late_audio_binding = timestamp_ns(meeting.get("updatedAt")) > event_time
                 keys = meeting.get("audioKeys") or [meeting.get("audioKey")]
                 require(key in keys and key.startswith(f"audio/{self.owner}/{self.meeting}/"),
                         "AUDIO_BINDING_CHANGED")
                 require(not any(marker in key for marker in ("checkpoint_", "recording_progress", "realtime_", "crop_result_")),
                         "NONFINAL_AUDIO")
+                part = re.search(r"(?:^|/)part_([0-9]{3})_", key)
+                if part:
+                    index = int(part[1])
+                    require(index < int(meeting.get("audioPartCount", 0)) and
+                            index < len(keys) and keys[index] == key, "INVALID_AUDIO_PART")
+                    require(index not in meeting.get("audioPartsReadySet", set()), "AUDIO_PART_ALREADY_APPLIED")
             elif key.startswith("transcripts/"):
                 route = ("summarize", "ttobak-transcript-upload")
-                meeting = self.meeting_row(event_time)
+                meeting = self.meeting_row(event_end)
                 self.summary_ready(meeting, event_time)
                 match = re.fullmatch(r"transcripts/" + re.escape(self.meeting) + r"(?:_part_([0-9]{3})|-nova)?\.json", key)
                 require(match is not None, "TRANSCRIPT_IDENTITY_MISMATCH")
@@ -210,10 +234,14 @@ class Inspector:
             # Existing transcribe/summarize handlers decode form-style keys.
             # Do not replay a key they would interpret differently.
             require(route[0] == "convert-doc" or unquote_plus(key) == key, "AMBIGUOUS_LEGACY_KEY")
-            self.head(key, event_time, obj)
+            current = self.head(key, event_time, obj)
+            if late_audio_binding:
+                version = obj.get("version-id")
+                require(isinstance(version, str) and version not in ("", "null") and
+                        version == current.get("VersionId"), "AUDIO_VERSION_REQUIRED_AFTER_BINDING")
         elif route:
             require(detail.get("meetingId") == self.meeting, "EVENT_MEETING_MISMATCH")
-            meeting = self.meeting_row(event_time)
+            meeting = self.meeting_row(event_end)
             event_type = event["detail-type"]
             if event_type in ("SummaryRequested", "ActionItemsRequested"):
                 run = detail.get("runId")
@@ -228,22 +256,22 @@ class Inspector:
                 require((state.get("ownerId") if summary else detail.get("ownerId")) == self.owner,
                         "EVENT_OWNER_MISMATCH")
             elif event_type == "AllPartsTranscribed":
-                self.summary_ready(meeting, event_time)
+                emitted = timestamp_ns(meeting.get("allPartsEmittedAt"))
+                require(emitted < event_end and event_time <= emitted + 60 * NANOSECONDS, "STALE_PARTS_EVENT")
+                self.summary_ready(meeting, event_time, emitted=emitted)
                 require(detail.get("userId") == self.owner and detail.get("bucket") == self.bucket,
                         "EVENT_OWNER_OR_BUCKET_MISMATCH")
                 parts = detail.get("partCount")
-                require(isinstance(parts, int) and 1 <= parts <= 10 and parts == meeting.get("audioPartCount")
+                require(type(parts) is int and 1 <= parts <= 10 and parts == meeting.get("audioPartCount")
                         and set(meeting.get("audioPartsReadySet", set())) == set(range(parts)),
                         "PART_SET_CHANGED")
-                emitted = timestamp(meeting.get("allPartsEmittedAt"))
-                require(emitted <= event_time <= emitted + 60, "STALE_PARTS_EVENT")
                 for part in range(parts):
                     self.head(f"transcripts/{self.meeting}_part_{part:03d}.json", event_time)
             elif event_type == "AudioCropRequested":
                 crop = meeting.get("audioCrop") or {}
                 require(detail.get("userId") == self.owner and meeting.get("status") == "transcribing"
                         and crop.get("state") == "queued" and not crop.get("runId"), "CROP_NOT_REPLAYABLE")
-                require(timestamp(meeting.get("updatedAt")) <= event_time, "MEETING_CHANGED_AFTER_EVENT")
+                require(timestamp_ns(meeting.get("updatedAt")) <= event_time, "MEETING_CHANGED_AFTER_EVENT")
                 require(str(crop.get("sourceKey", "")).startswith(f"audio/{self.owner}/{crop.get('sourceMeetingId')}/"),
                         "FOREIGN_CROP_SOURCE")
                 source = self.read("USER#" + self.owner, "MEETING#" + str(crop.get("sourceMeetingId")),
@@ -262,7 +290,7 @@ class Inspector:
                 require(att.get("attachmentId") == self.attachment and att.get("meetingId") == self.meeting
                         and att.get("userId") == uploader and att.get("originalKey") == key, "IMAGE_BINDING_CHANGED")
                 require(att.get("status") in ("uploaded", "processing"), "IMAGE_ALREADY_COMPLETED")
-                require(timestamp(att.get("createdAt")) <= event_time, "EVENT_PREDATES_ATTACHMENT")
+                require(timestamp_ns(att.get("createdAt")) < event_end, "EVENT_PREDATES_ATTACHMENT")
                 self.head(key, event_time)
         else:
             raise Rejected("UNSUPPORTED_EVENT")

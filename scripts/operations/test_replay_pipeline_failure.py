@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from replay_pipeline_failure import Inspector, Rejected, execute, main
+from replay_pipeline_failure import Inspector, Rejected, execute, main, timestamp_ns, event_bounds
 
 ACCOUNT, REGION = "111111111111", "ap-northeast-2"
 NOW = 1791806400
@@ -17,6 +17,9 @@ NOW = 1791806400
 
 def iso(seconds):
     return datetime.fromtimestamp(seconds, timezone.utc).isoformat()
+
+def nano(seconds, fraction):
+    return iso(seconds).replace("+00:00", "." + fraction + "+00:00")
 
 
 class Table:
@@ -135,7 +138,10 @@ class ReplayTests(unittest.TestCase):
         self.rejected(message(event()), "CURRENT_IDENTITY_MISMATCH")
         self.meeting["userId"] = "owner"
         self.meeting["updatedAt"] = iso(NOW - 10)
-        self.rejected(message(event()), "MEETING_CHANGED_AFTER_EVENT")
+        transcript = event(detail={"bucket": {"name": "assets"}, "object": {
+            "key": "transcripts/meeting.json", "etag": "etag", "version-id": "v1"}})
+        self.rejected(message(transcript, function="summarize", rule="ttobak-transcript-upload"),
+                      "MEETING_CHANGED_AFTER_EVENT")
         self.table.items.clear()
         self.rejected(message(event()), "CURRENT_RESOURCE_MISSING")
 
@@ -223,13 +229,92 @@ class ReplayTests(unittest.TestCase):
 
     def test_document_replay_binds_current_file_and_preserves_literal_plus(self):
         key = "docs/owner/a+b.pptx"
-        self.table.items[("USER#owner", "DOC#document")] = {"docId": "document", "fileKey": key}
+        # The raw S3 event can precede the API call that creates the document.
+        self.table.items[("USER#owner", "DOC#document")] = {
+            "docId": "document", "fileKey": key, "createdAt": nano(NOW - 90, "123456789")}
         payload = message(event(detail={"bucket": {"name": "assets"},
-                                       "object": {"key": key, "etag": "etag"}}),
+                                       "object": {"key": key, "etag": "etag", "version-id": "v1"}}),
                           function="convert-doc", rule="ttobak-doc-slide-upload")
         self.assertEqual(self.inspector.plan(payload, "delivery")["event"]["detail"]["object"]["key"], key)
         self.table.items[("USER#owner", "DOC#document")]["fileKey"] = "docs/owner/other.pptx"
         self.rejected(payload, "DOCUMENT_BINDING_CHANGED")
+
+    def test_rfc3339_nano_preserves_exact_order_and_timezone_on_supported_python_versions(self):
+        base = timestamp_ns(iso(NOW))
+        self.assertEqual(timestamp_ns(nano(NOW, "123456789")), base + 123456789)
+        self.assertEqual(timestamp_ns(nano(NOW, "123456790")), base + 123456790)
+        self.assertEqual(timestamp_ns("1970-01-01T09:00:00.000000001+09:00"), 1)
+        self.assertEqual(event_bounds(iso(NOW)), (base, base + 1_000_000_000))
+        self.assertEqual(event_bounds(nano(NOW, "123456789")), (base + 123456789, base + 123456790))
+        for value in ("not a timestamp", "2026-10-12T12:00:00", nano(NOW, "1234567890")):
+            with self.assertRaisesRegex(Rejected, "INVALID_TIMESTAMP"):
+                timestamp_ns(value)
+
+    def test_audio_event_before_completion_binding_needs_current_immutable_version(self):
+        self.meeting["updatedAt"] = nano(NOW - 50, "123456789")
+        original = event()
+        self.assertEqual(self.inspector.plan(message(original), "delivery")["event"], original)
+        self.s3.value["VersionId"] = "v2"  # Equal bytes/ETag are insufficient.
+        self.rejected(message(original), "SOURCE_VERSION_CHANGED")
+        self.s3.value["VersionId"] = "v1"
+        missing = copy.deepcopy(original)
+        del missing["detail"]["object"]["version-id"]
+        self.rejected(message(missing), "AUDIO_VERSION_REQUIRED_AFTER_BINDING")
+        self.s3.value["VersionId"] = missing["detail"]["object"]["version-id"] = "null"
+        self.rejected(message(missing), "AUDIO_VERSION_REQUIRED_AFTER_BINDING")
+        self.s3.value["VersionId"] = "v1"
+        for status in ("done", "error", "summarizing"):
+            self.meeting["status"] = status
+            self.rejected(message(original), "AUDIO_NOT_REPLAYABLE")
+        self.meeting["status"], self.meeting["audioKey"] = "transcribing", "audio/owner/meeting/rebound.wav"
+        self.rejected(message(original), "AUDIO_BINDING_CHANGED")
+
+    def test_audio_part_replay_rejects_completed_or_wrong_index_binding(self):
+        key = "audio/owner/meeting/part_001_final.wav"
+        self.meeting.update(audioKeys=["audio/owner/meeting/part_000_first.wav", key],
+                            audioPartCount=2, audioPartsReadySet={0}, updatedAt=nano(NOW - 80, "123456789"))
+        original = event(detail={"bucket": {"name": "assets"},
+                                 "object": {"key": key, "etag": "etag", "version-id": "v1"}})
+        self.inspector.plan(message(original), "delivery")
+        self.meeting["audioPartsReadySet"].add(1)
+        self.rejected(message(original), "AUDIO_PART_ALREADY_APPLIED")
+        self.meeting["audioPartsReadySet"] = {0}
+        self.meeting["audioKeys"].reverse()
+        self.rejected(message(original), "INVALID_AUDIO_PART")
+
+    def test_same_second_creation_is_allowed_but_next_second_or_precise_later_creation_is_not(self):
+        self.image()
+        self.meeting["createdAt"] = nano(NOW - 100, "100000001")
+        att = self.table.items[("MEETING#meeting", "ATTACH#attachment")]
+        att["createdAt"] = nano(NOW - 100, "234567891")
+        self.inspector.plan(self.image_message(), "delivery")
+        att["createdAt"] = nano(NOW - 99, "000000001")
+        self.rejected(self.image_message(), "EVENT_PREDATES_ATTACHMENT")
+        att["createdAt"] = nano(NOW - 100, "234567891")
+        precise = self.image_message()
+        body = json.loads(precise["Body"])
+        body["time"] = nano(NOW - 100, "234567890")
+        precise["Body"] = json.dumps(body)
+        self.rejected(precise, "EVENT_PREDATES_ATTACHMENT")
+        self.meeting["createdAt"] = iso(NOW - 99)
+        self.rejected(self.image_message(), "EVENT_PREDATES_RESOURCE")
+
+    def test_all_parts_uses_readiness_then_emission_order_not_truncated_event_second(self):
+        self.meeting.update(audioPartCount=2, audioPartsReadySet={0, 1},
+                            updatedAt=nano(NOW - 100, "123456789"),
+                            allPartsEmittedAt=nano(NOW - 100, "234567891"))
+        payload = message(event("ttobak.transcribe", "AllPartsTranscribed", {
+            "meetingId": "meeting", "userId": "owner", "bucket": "assets", "partCount": 2}),
+            function="summarize", rule="ttobak-all-parts-transcribed")
+        self.inspector.plan(payload, "delivery")
+        self.meeting["updatedAt"] = nano(NOW - 100, "234567892")
+        self.rejected(payload, "MEETING_CHANGED_AFTER_EMISSION")
+        self.meeting["updatedAt"] = nano(NOW - 100, "123456789")
+        self.meeting["allPartsEmittedAt"] = nano(NOW - 99, "000000001")
+        self.rejected(payload, "STALE_PARTS_EVENT")
+        self.meeting["allPartsEmittedAt"] = nano(NOW - 100, "234567891")
+        self.s3.value["LastModified"] = datetime.fromtimestamp(NOW - 99, timezone.utc)
+        self.rejected(payload, "SOURCE_REPLACED_AFTER_EVENT")
 
     def test_unknown_events_and_old_messages_are_not_rewritten(self):
         self.rejected(message(event("other", "Other", {"meetingId": "meeting"})), "UNSUPPORTED_EVENT")
