@@ -1,18 +1,12 @@
 package service
 
-// These adapters belong only to the opt-in evaluation harness. They preserve
-// the production system/user text and store original provider request/response
-// bytes as evidence. They do not enable OpenAI in the application transport.
+// These adapters replay historical single-call evidence only. Current model
+// evaluation records the actual production provider transport and continuations.
 import (
-	"context"
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/aws/aws-sdk-go-v2/config"
 )
 
 func qualityProviderRequest(modelID string, production []byte) ([]byte, error) {
@@ -79,7 +73,7 @@ func TestQualityOpenAICompletionRequiresCompleteVisibleText(t *testing.T) {
 
 func TestQualityOpenAIRequestPreservesProductionPrompt(t *testing.T) {
 	for _, fixture := range mustQualityCases(t) {
-		production, _, err := qualityProductionRequest(t, fixture,
+		production, _, err := qualityLegacyProductionRequest(t, fixture,
 			[]byte(`{"content":[{"type":"text","text":"export"}],"stop_reason":"end_turn"}`))
 		if err != nil {
 			t.Fatal(err)
@@ -137,60 +131,11 @@ func TestQualityStressReferences(t *testing.T) {
 	}
 }
 
-// Explicit opt-in for the production native transport, without repository
-// reads or writes. All input comes from the checked-in synthetic corpus.
+// The former single-fixture smoke probe did not retain every native call.
+// Reject the old opt-in explicitly instead of publishing incomplete evidence.
 func TestQualityLiveSummaryTransport(t *testing.T) {
 	if os.Getenv("TTOBAK_NOTE_EVAL_NATIVE_SMOKE") != "1" {
-		t.Skip("production transport smoke test is explicit opt-in")
+		t.Skip("legacy smoke entry point is disabled")
 	}
-	out := os.Getenv("TTOBAK_NOTE_EVAL_OUT")
-	if !filepath.IsAbs(out) {
-		t.Fatal("smoke output must be an absolute path")
-	}
-	region := os.Getenv("BEDROCK_REGION")
-	if region == "" {
-		region = "us-west-2"
-	}
-	if os.Getenv("AWS_ENDPOINT_URL") != "" || os.Getenv("AWS_ENDPOINT_URL_BEDROCK_RUNTIME") != "" {
-		t.Fatal("live smoke does not accept endpoint overrides")
-	}
-	cfg, err := config.LoadDefaultConfig(context.Background(), config.WithRegion(region))
-	if err != nil {
-		t.Fatal(err)
-	}
-	client, err := qualityLiveClient(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fixture := mustQualityCases(t)[0]
-	canonical, _, err := qualityProductionRequest(t, fixture,
-		[]byte(`{"content":[{"type":"text","text":"export"}],"stop_reason":"end_turn"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var request ClaudeRequest
-	if err := json.Unmarshal(canonical, &request); err != nil {
-		t.Fatal(err)
-	}
-	svc := NewBedrockService(client, nil, nil)
-	started := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-	text, err := svc.invokeCompleteSummary(ctx, request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(text, "[TS:") {
-		t.Fatal("native production transport returned no source markers")
-	}
-	if err := os.Mkdir(out, 0700); err != nil {
-		t.Fatal("use a fresh smoke output directory: ", err)
-	}
-	writeQualityFile(t, out, "note.txt", []byte(text))
-	writeQualityFile(t, out, "evidence.json", qualityJSON(t, map[string]any{
-		"modelId": svc.summaryModelID, "region": region, "observedAt": time.Now().UTC(),
-		"wallSeconds": time.Since(started).Seconds(), "outputSha256": qualityHash([]byte(text)),
-		"path":       "BedrockService.invokeCompleteSummary",
-		"dataAccess": "synthetic fixture only; no repository",
-	}))
+	t.Fatal("use scripts/eval-note-quality.sh live with a deployment snapshot; it retains every native request/response")
 }
