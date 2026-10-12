@@ -100,7 +100,12 @@ edgeAuthStack.addDependency(authStack);
 
 // Origin verify secret: CloudFront injects this header; Lambdas reject requests without it.
 // This prevents direct API Gateway access, enforcing CloudFront-only traffic.
-const originVerifySecret = app.node.tryGetContext('ttobak:originVerifySecret') || '';
+const originVerifySecret = app.node.tryGetContext('ttobak:originVerifySecret');
+// Without it CloudFront sends no origin proof and the Go API and QA Lambdas skip
+// origin verification silently, so a missing value must stop synthesis.
+if (typeof originVerifySecret !== 'string' || originVerifySecret.length < 16) {
+  throw new Error('ttobak:originVerifySecret context (16+ characters) is required');
+}
 
 // Stack 6: Gateway (API Gateway + Lambda) - depends on Auth, Storage, AI, Knowledge, WebSearchGateway
 const gatewayStack = new GatewayStack(app, 'TtobakGatewayStack', {

@@ -158,6 +158,28 @@ async function validateToken(token) {
   }
 }
 
+// HTTP MCP clients start OAuth from this RFC 9728 challenge, so the MCP endpoint's
+// edge 401 names its protected-resource metadata. Every other API path keeps the
+// plain JSON 401. The viewer Host is the site domain CloudFront accepted; it is
+// still restricted to hostname characters before entering a header.
+const MCP_PATH = '/api/mcp';
+const MCP_SCOPES = 'openid email profile';
+function unauthorized(request, message, tokenPresented) {
+  const headers = {
+    'content-type': [{ key: 'Content-Type', value: 'application/json' }],
+    'cache-control': [{ key: 'Cache-Control', value: 'no-store' }],
+  };
+  const host = request.headers.host && request.headers.host[0] && request.headers.host[0].value;
+  if (request.uri === MCP_PATH && host && /^[A-Za-z0-9.-]+(:[0-9]+)?$/.test(host)) {
+    headers['www-authenticate'] = [{
+      key: 'WWW-Authenticate',
+      value: 'Bearer resource_metadata="https://' + host + '/.well-known/oauth-protected-resource' + MCP_PATH +
+        '", scope="' + MCP_SCOPES + '"' + (tokenPresented ? ', error="invalid_token"' : ''),
+    }];
+  }
+  return { status: '401', statusDescription: 'Unauthorized', headers, body: JSON.stringify({ error: message }) };
+}
+
 // Lambda@Edge handler
 exports.handler = async (event) => {
   const request = event.Records[0].cf.request;
@@ -170,15 +192,7 @@ exports.handler = async (event) => {
   // Extract Authorization header
   const authHeader = request.headers['authorization'];
   if (!authHeader || !authHeader[0]) {
-    return {
-      status: '401',
-      statusDescription: 'Unauthorized',
-      headers: {
-        'content-type': [{ key: 'Content-Type', value: 'application/json' }],
-        'cache-control': [{ key: 'Cache-Control', value: 'no-store' }],
-      },
-      body: JSON.stringify({ error: 'Missing authorization header' }),
-    };
+    return unauthorized(request, 'Missing authorization header', false);
   }
 
   const authValue = authHeader[0].value;
@@ -188,15 +202,7 @@ exports.handler = async (event) => {
   const isValid = await validateToken(token);
 
   if (!isValid) {
-    return {
-      status: '401',
-      statusDescription: 'Unauthorized',
-      headers: {
-        'content-type': [{ key: 'Content-Type', value: 'application/json' }],
-        'cache-control': [{ key: 'Cache-Control', value: 'no-store' }],
-      },
-      body: JSON.stringify({ error: 'Invalid or expired token' }),
-    };
+    return unauthorized(request, 'Invalid or expired token', true);
   }
 
   // Token is valid, pass through request

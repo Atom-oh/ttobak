@@ -121,9 +121,9 @@ GatewayStack serves `ANY /api/mcp` with the Cognito JWT authorizer and the two
 discovery GETs without one; CloudFront routes only those exact discovery paths
 around the edge function. The wrapper rejects a missing or wrong `x-origin-verify`,
 pins Host to the public host and forwards only MCP-relevant headers. API Gateway
-limits integrations to 30s, so the hosted deadline is 25s. A token rejected by the
-gateway authorizer gets a 401 without `resource_metadata`; clients then use the
-discovery documents. Cognito issues the required `aud` only through managed login
+limits integrations to 30s, so the hosted deadline is 25s. A missing or invalid
+token is rejected at the CloudFront edge with a 401 whose `WWW-Authenticate` names
+`/.well-known/oauth-protected-resource/api/mcp`. Cognito issues the required `aud` only through managed login
 with the MCP URL registered as a resource server (AuthStack does both). The pool's
 OIDC metadata omits `code_challenge_methods_supported`; PKCE S256 still works, but
 a client that insists on that field may refuse. Clients use the SPA public client

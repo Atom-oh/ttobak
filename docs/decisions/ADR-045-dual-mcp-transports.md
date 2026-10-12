@@ -76,8 +76,10 @@ server's own verification; only the two static discovery GETs are unauthenticate
 A throwaway pool showed Cognito sets `aud` to the requested resource only with
 managed login and that URL registered as a resource server (otherwise the code
 exchange fails `invalid_grant`), so AuthStack moves the domain to managed login v2.
-The 30s API Gateway limit caps the hosted deadline at 25s. Authorizer 401s lack the
-`resource_metadata` challenge. Per-client login acceptance remains a live check.
+The 30s API Gateway limit caps the hosted deadline at 25s. Per-client login
+acceptance remains a live check. Follow-up 2026-10-12: live testing showed the edge
+function, not the authorizer, answers token-less requests, so its `/api/mcp` 401
+now carries the `resource_metadata` challenge (other paths are unchanged).
 
 ## References
 
