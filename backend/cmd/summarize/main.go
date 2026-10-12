@@ -109,6 +109,12 @@ type WhisperMetadata struct {
 	Language        string                   `json:"language"`
 	DurationSeconds float64                  `json:"duration_seconds"`
 	Segments        []service.WhisperSegment `json:"segments"`
+	Diarization     *WhisperDiarization      `json:"diarization,omitempty"`
+}
+
+type WhisperDiarization struct {
+	Enabled          bool `json:"enabled"`
+	DetectedSpeakers int  `json:"num_speakers_detected"`
 }
 
 // SpeakerLabels represents the speaker diarization results
@@ -232,11 +238,11 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	}
 
 	// Single/legacy transcript: full processing + summary
-	return handleSingleTranscript(ctx, bucket, key)
+	return handleSingleTranscript(ctx, bucket, key, event.Detail.Object.ETag)
 }
 
 // handleSingleTranscript processes a single (non-part) transcript: parse, refine, save, summarize
-func handleSingleTranscript(ctx context.Context, bucket, key string) error {
+func handleSingleTranscript(ctx context.Context, bucket, key string, eventETags ...string) error {
 	meetingID := extractMeetingIDFromTranscriptKey(key)
 	if meetingID == "" {
 		log.Printf("Could not extract meeting ID from key: %s", key)
@@ -292,35 +298,26 @@ func handleSingleTranscript(ctx context.Context, bucket, key string) error {
 		}
 	}
 
-	isNova := strings.Contains(key, "-nova.json")
-
-	transcript, segments, whisperSegments, audioDuration, err := downloadAndParseTranscript(ctx, bucket, key)
-	if err != nil {
-		log.Printf("Failed to parse transcript: %v", err)
-		setMeetingError(ctx, meetingID)
+	if err != nil || meeting == nil {
+		return errors.New("meeting metadata unavailable before transcription")
+	}
+	snapshot, err := repo.CaptureTranscriptUpdate(ctx, meeting.UserID, meetingID)
+	if err != nil || snapshot == nil {
+		return errors.Join(err, errors.New("transcript snapshot unavailable"))
+	}
+	if snapshot.Meeting.Status != meeting.Status {
 		return nil
 	}
-
-	// Refine Whisper transcript using Sonnet if Whisper segments are available
-	if len(whisperSegments) > 0 && len(segments) == 0 {
-		log.Printf("Refining %d Whisper segments for meeting %s", len(whisperSegments), meetingID)
-		refinedText, refinedSegs, refineErr := bedrockService.RefineTranscript(ctx, whisperSegments)
-		if refineErr != nil {
-			log.Printf("Failed to refine transcript (using raw): %v", refineErr)
-		} else {
-			transcript = refinedText
-			segments = make([]TranscriptSegmentOut, len(refinedSegs))
-			for i, rs := range refinedSegs {
-				segments[i] = TranscriptSegmentOut{
-					Speaker:   rs.Speaker,
-					Text:      rs.Text,
-					StartTime: rs.StartTime,
-					EndTime:   rs.EndTime,
-				}
-			}
-			log.Printf("Refined transcript: %d segments -> %d clean segments", len(whisperSegments), len(refinedSegs))
-		}
+	isNova := strings.Contains(key, "-nova.json")
+	parsed, err := downloadAndParseTranscript(ctx, bucket, key)
+	if err != nil {
+		return errors.Join(err, failTranscriptSnapshot(ctx, snapshot))
 	}
+	if len(eventETags) > 0 && eventETags[0] != "" && strings.Trim(eventETags[0], "\"") != strings.Trim(parsed.Objects[0].ETag, "\"") {
+		return nil // superseded S3 delivery
+	}
+	refineParsedTranscript(ctx, parsed)
+	transcript, segments, whisperSegments, audioDuration := parsed.Text, parsed.Segments, parsed.Whisper, parsed.Duration
 
 	// Same fallback chain as the multi-part merge path (merge.go): the raw
 	// audioDuration comes only from whisper_metadata.duration_seconds, which is
@@ -351,11 +348,13 @@ func handleSingleTranscript(ctx context.Context, bucket, key string) error {
 		log.Printf("Meeting %s: no usable duration source; using 0 (duration will not be persisted)", meetingID)
 	}
 
-	err = updateMeetingTranscript(ctx, meetingID, transcript, segments, isNova, resolvedDuration)
+	parsed.Duration = resolvedDuration
+	err = updateMeetingTranscript(ctx, snapshot, parsed, isNova)
+	if errors.Is(err, repository.ErrConditionFailed) {
+		return resolveTranscriptConflict(ctx, snapshot, isNova)
+	}
 	if err != nil {
-		log.Printf("Failed to update meeting with transcript: %v", err)
-		setMeetingError(ctx, meetingID)
-		return nil
+		return err
 	}
 
 	log.Printf("Updated meeting %s with transcript (nova=%v)", meetingID, isNova)
@@ -502,19 +501,24 @@ func handleAllPartsTranscribed(ctx context.Context, detail *model.AllPartsTransc
 		log.Printf("Reprocessing stuck meeting %s (status=summarizing since %s)", meetingID, meeting.UpdatedAt)
 	}
 
-	transcript, segments, totalDuration, err := mergePartTranscripts(ctx, detail.Bucket, meetingID, detail.PartCount)
-	if err != nil {
-		log.Printf("Failed to merge transcripts for meeting %s: %v", meetingID, err)
-		setMeetingError(ctx, meetingID)
+	snapshot, err := repo.CaptureTranscriptUpdate(ctx, userID, meetingID)
+	if err != nil || snapshot == nil {
+		return errors.Join(err, errors.New("transcript snapshot unavailable"))
+	}
+	if snapshot.Meeting.Status != meeting.Status {
 		return nil
 	}
-
-	err = updateMeetingTranscript(ctx, meetingID, transcript, segments, false, totalDuration)
+	parsed, err := mergePartTranscripts(ctx, detail.Bucket, meetingID, detail.PartCount)
 	if err != nil {
-		log.Printf("Failed to save merged transcript for meeting %s: %v", meetingID, err)
-		setMeetingError(ctx, meetingID)
-		return nil
+		return errors.Join(err, failTranscriptSnapshot(ctx, snapshot))
 	}
+	if err := updateMeetingTranscript(ctx, snapshot, parsed, false); err != nil {
+		if errors.Is(err, repository.ErrConditionFailed) {
+			return resolveTranscriptConflict(ctx, snapshot, false)
+		}
+		return err
+	}
+	transcript, segments := parsed.Text, parsed.Segments
 
 	log.Printf("Saved merged transcript for meeting %s: %d chars, %d segments", meetingID, len(transcript), len(segments))
 
@@ -862,43 +866,28 @@ func archiveMergedTranscript(ctx context.Context, bucket, meetingID, transcript 
 // transcription time in this field, since the field's meaning changed
 // without a rename; there is no reliable way to detect that from the JSON
 // alone, so such historical transcripts may report an inaccurate value here.
-func downloadAndParseTranscript(ctx context.Context, bucket, key string) (string, []TranscriptSegmentOut, []service.WhisperSegment, float64, error) {
-	result, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(bucket),
-		Key:    aws.String(key),
-	})
+func downloadAndParseTranscript(ctx context.Context, bucket, key string) (*parsedTranscript, error) {
+	result, err := s3Client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String(key)})
 	if err != nil {
-		return "", nil, nil, 0, fmt.Errorf("failed to download transcript: %w", err)
+		return nil, err
 	}
 	defer result.Body.Close()
-
-	data, err := io.ReadAll(result.Body)
-	if err != nil {
-		return "", nil, nil, 0, fmt.Errorf("failed to read transcript: %w", err)
+	const maxTranscriptBytes = 16 * 1024 * 1024
+	data, err := io.ReadAll(io.LimitReader(result.Body, maxTranscriptBytes+1))
+	if err != nil || len(data) > maxTranscriptBytes {
+		return nil, errors.New("transcript read failed or exceeded limit")
 	}
-
-	var transcribeResult TranscribeResult
-	if err := json.Unmarshal(data, &transcribeResult); err != nil {
-		return "", nil, nil, 0, fmt.Errorf("failed to parse transcript JSON: %w", err)
+	var source TranscribeResult
+	if json.Unmarshal(data, &source) != nil || len(source.Results.Transcripts) == 0 {
+		return nil, errors.New("invalid transcript source")
 	}
-
-	if len(transcribeResult.Results.Transcripts) == 0 {
-		return "", nil, nil, 0, fmt.Errorf("no transcript found in result")
+	parsed := &parsedTranscript{Text: source.Results.Transcripts[0].Transcript, Segments: extractSpeakerSegments(&source),
+		Objects: []model.SummaryObject{{Bucket: bucket, Key: key, ETag: aws.ToString(result.ETag), VersionID: aws.ToString(result.VersionId)}}}
+	parsed.Quality = parsedTranscriptQuality(&source, parsed.Segments)
+	if source.WhisperMetadata != nil {
+		parsed.Whisper, parsed.Duration = source.WhisperMetadata.Segments, source.WhisperMetadata.DurationSeconds
 	}
-
-	transcript := transcribeResult.Results.Transcripts[0].Transcript
-	segments := extractSpeakerSegments(&transcribeResult)
-
-	var whisperSegments []service.WhisperSegment
-	var durationSeconds float64
-	if transcribeResult.WhisperMetadata != nil {
-		if len(transcribeResult.WhisperMetadata.Segments) > 0 {
-			whisperSegments = transcribeResult.WhisperMetadata.Segments
-		}
-		durationSeconds = transcribeResult.WhisperMetadata.DurationSeconds
-	}
-
-	return transcript, segments, whisperSegments, durationSeconds, nil
+	return parsed, nil
 }
 
 func extractSpeakerSegments(result *TranscribeResult) []TranscriptSegmentOut {
@@ -927,8 +916,13 @@ func extractSpeakerSegments(result *TranscribeResult) []TranscriptSegmentOut {
 			continue
 		}
 
-		startTime, _ := strconv.ParseFloat(seg.StartTime, 64)
-		endTime, _ := strconv.ParseFloat(seg.EndTime, 64)
+		startTime, startErr := strconv.ParseFloat(seg.StartTime, 64)
+		endTime, endErr := strconv.ParseFloat(seg.EndTime, 64)
+		if startErr != nil || endErr != nil || math.IsNaN(startTime) || math.IsNaN(endTime) ||
+			math.IsInf(startTime, 0) || math.IsInf(endTime, 0) || startTime < 0 || endTime <= startTime ||
+			len(segments) > 0 && startTime < segments[len(segments)-1].StartTime {
+			return nil // Keep readable source text, without fabricated timing.
+		}
 
 		segments = append(segments, TranscriptSegmentOut{
 			Speaker:   seg.SpeakerLabel,
@@ -1004,43 +998,6 @@ func extractPartInfo(key string) (meetingID string, partIndex int, ok bool) {
 		return "", 0, false
 	}
 	return meetingID, partIndex, true
-}
-
-func updateMeetingTranscript(ctx context.Context, meetingID, transcript string, segments []TranscriptSegmentOut, isNova bool, durationSeconds float64) error {
-	meeting, err := repo.GetMeetingByID(ctx, meetingID)
-	if err != nil {
-		return err
-	}
-	if meeting == nil {
-		return fmt.Errorf("meeting not found")
-	}
-
-	fields := map[string]interface{}{}
-	if isNova {
-		fields["transcriptB"] = transcript
-	} else {
-		fields["transcriptA"] = transcript
-	}
-
-	if len(segments) > 0 {
-		// ADR-013: ensure every segment carries a stable ID so the AI summary
-		// can deep-link into the transcript via `transcript://{id}`.
-		assignSegmentIDs(segments)
-		segJSON, err := json.Marshal(segments)
-		if err == nil {
-			fields["transcriptSegments"] = string(segJSON)
-			log.Printf("Saved %d speaker segments for meeting %s", len(segments), meetingID)
-		}
-	}
-
-	// Single choke point both transcript paths (single + multi-part merge) pass
-	// through, which is why duration is persisted here rather than at call sites.
-	// The > 0 guard ensures a zero never overwrites a previously-stored good value.
-	if durationSeconds > 0 {
-		fields["duration"] = int(math.Round(durationSeconds))
-	}
-
-	return repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, fields)
 }
 
 func main() {

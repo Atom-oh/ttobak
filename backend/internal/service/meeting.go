@@ -651,6 +651,7 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 		LiveSummary:                meeting.LiveSummary,
 		TranscriptA:                meeting.TranscriptA,
 		TranscriptB:                meeting.TranscriptB,
+		TranscriptQuality:          model.MatchingTranscriptQuality(meeting, variant),
 		SelectedTranscript:         strPtr(variant),
 		AudioKey:                   meeting.AudioKey,
 		AudioKeys:                  meeting.AudioKeys,

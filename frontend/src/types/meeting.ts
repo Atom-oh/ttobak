@@ -254,7 +254,19 @@ export interface User {
 }
 
 // Extended meeting detail from API
+export interface TranscriptQuality {
+  refinement: 'validated' | 'partial' | 'raw' | 'not_requested' | 'unknown' | 'edited';
+  degraded: boolean;
+  speakerProvenance: 'acoustic' | 'text_inferred' | 'mixed' | 'unknown';
+  totalChunks?: number;
+  fallbackChunks?: number;
+  reasons?: string[];
+  diarizationEnabled?: boolean;
+  detectedSpeakers?: number;
+}
+
 export interface MeetingDetail extends Meeting {
+  transcriptQuality?: TranscriptQuality;
   canRecoverRecording?: boolean;
   supportsAudioCrop?: boolean;
   audioCrop?: { sourceMeetingId: string; startSeconds: number; endSeconds: number; state: string };

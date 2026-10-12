@@ -171,6 +171,31 @@ Saved notes are user input, distinct from generated content. Stuck transcription
 or summarization is reconciled after 60 minutes; summarize retry eligibility is a
 separate 20-minute conditional claim, not a retry scheduler.
 
+Meeting detail includes `transcriptQuality` for the effective selected A/B text.
+`refinement` is `validated`, `partial`, `raw`, `not_requested`, `unknown` or
+`edited`; `speakerProvenance` is `acoustic`, `text_inferred`, `mixed` or `unknown`.
+`degraded`, chunk/fallback counts and bounded reason codes describe raw fallback
+and unavailable acoustic labels. Optional diarization configuration and detected
+label counts come from STT metadata; multipart counts sum the part-local labels,
+not unique people. Acoustic labels remain authoritative when present.
+
+Whisper refinement accepts only a complete `end_turn` response with the strict
+segment schema, finite source-bound times and every input `sourceIds` index
+exactly once in order. Missing/duplicate/foreign IDs, missing text/times, invalid
+JSON and truncated responses fall back to the raw chunk. This verifies structural
+coverage, not retention of every meaning or factual accuracy. Invalid raw timing
+retains the readable original text without fabricated timed segments. Raw
+transcript JSON is bounded at 16 MiB; each model chunk has at most 2,048 source
+segments and 128 KiB of text, with bounded response decoding.
+
+Workers capture exact meeting/audio/source state before refinement, recheck S3
+ETag/version before publication, and conditionally save transcript, timed
+segments and per-variant quality together using immutable spill references.
+Concurrent input/selection/human edits reject stale publication. S3 preflight
+and DynamoDB publication are separate operations, not a cross-service transaction.
+Quality fingerprints cover the stored text and segment bytes; an edit reports
+`edited`, while legacy or mismatched segment metadata reports `unknown`.
+
 Conditional transcript/speaker edits publish new immutable
 `transcripts/{meetingId}/{field}.{32-lowercase-hex}.txt` references only with a
 matching database update. Conflicts return 409; ambiguous database failures retain

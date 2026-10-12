@@ -159,6 +159,7 @@ type MeetingDetailResponse struct {
 	LiveSummary                string               `json:"liveSummary,omitempty"`
 	TranscriptA                string               `json:"transcriptA,omitempty"`
 	TranscriptB                string               `json:"transcriptB,omitempty"`
+	TranscriptQuality          *TranscriptQuality   `json:"transcriptQuality,omitempty"`
 	SelectedTranscript         *string              `json:"selectedTranscript,omitempty"` // "A" | "B" | null
 	AudioKey                   string               `json:"audioKey,omitempty"`
 	AudioKeys                  []string             `json:"audioKeys,omitempty"`

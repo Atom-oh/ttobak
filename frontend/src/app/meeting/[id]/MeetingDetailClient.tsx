@@ -846,6 +846,7 @@ function MeetingDetailContent() {
               onDirtyChange={onTranscriptDirtyChange}
               transcription={meeting.transcription || []}
               rawTranscript={displayedTranscript}
+              quality={meeting.transcriptQuality}
               onSaveRawTranscript={usingTranscriptB || meeting.permission === 'read' ? undefined : async (text) => {
                 await meetingsApi.update(meeting.meetingId, { transcriptA: text });
                 setIndexRevision((value) => value + 1);
@@ -853,6 +854,7 @@ function MeetingDetailContent() {
                   ...current,
                   transcriptA: text,
                   transcription: text === current.transcriptA ? current.transcription : [],
+                  transcriptQuality: text === current.transcriptA ? current.transcriptQuality : undefined,
                 } : current);
                 let refreshed: MeetingDetail;
                 try {
@@ -866,6 +868,7 @@ function MeetingDetailContent() {
                   transcriptB: refreshed.transcriptB,
                   selectedTranscript: refreshed.selectedTranscript,
                   transcription: refreshed.transcription || [],
+                  transcriptQuality: refreshed.transcriptQuality,
                   updatedAt: refreshed.updatedAt,
                 } : current);
               }}

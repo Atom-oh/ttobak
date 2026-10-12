@@ -62,6 +62,14 @@ use CSS variants.
 Resolve exact paths under `frontend/src/` rather than treating this table as an
 exhaustive file inventory. New static pages need the CloudFront knownPages mapping.
 
+Meeting detail's full transcript shows the selected source's processing status
+and speaker provenance. A warning identifies chunks retained as raw STT after
+failed refinement, unavailable acoustic diarization, and legacy or edited text
+whose previous processing status cannot be applied. Text-inferred or mixed speaker
+labels are explicit. Structural validation is never presented as semantic
+accuracy or verified real-world speaker identity. Editing clears the old quality
+display immediately; the subsequent detail refresh supplies the current status.
+
 ## Recording and recovery
 
 Browser modes use microphone/tab MediaStreams; the macOS system-audio mode uses

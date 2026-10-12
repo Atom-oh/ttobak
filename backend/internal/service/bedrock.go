@@ -963,10 +963,13 @@ type WhisperSegment struct {
 
 // RefinedSegment represents a cleaned-up transcript segment with inferred speaker turns
 type RefinedSegment struct {
-	Speaker   string  `json:"speaker"`
-	Text      string  `json:"text"`
-	StartTime float64 `json:"startTime"`
-	EndTime   float64 `json:"endTime"`
+	Speaker           string  `json:"speaker"`
+	Text              string  `json:"text"`
+	StartTime         float64 `json:"startTime"`
+	EndTime           float64 `json:"endTime"`
+	FallbackCode      string  `json:"-"`
+	ChunkIndex        int     `json:"-"`
+	SpeakerProvenance string  `json:"-"`
 }
 
 var (
@@ -979,20 +982,34 @@ var (
 // Log only closed categories. SDK errors, JSON errors and panic values can
 // contain meeting text or provider-controlled content.
 func logRefinementFallback(chunkIdx, totalChunks int, err error) {
-	code := "unknown"
+	code := refinementFailureCode(err)
+	log.Printf("refinement fallback chunk=%d total_chunks=%d code=%s class=%s", chunkIdx+1, totalChunks, code, refinementFailureClass(err))
+}
+
+func refinementFailureCode(err error) string {
 	switch {
 	case err == nil:
-		code = "empty_result"
+		return "empty_result"
 	case errors.Is(err, errRefinementModel):
-		code = "model_failure"
+		return "model_failure"
 	case errors.Is(err, errRefinementParse):
-		code = "invalid_json"
+		return "invalid_json"
 	case errors.Is(err, errRefinementSpeakerMerge):
-		code = "speaker_merge"
+		return "speaker_merge"
 	case errors.Is(err, errRefinementPanic):
-		code = "panic"
+		return "panic"
+	case errors.Is(err, errRefinementIncomplete):
+		return "incomplete_response"
+	case errors.Is(err, errRefinementSchema):
+		return "invalid_schema"
+	case errors.Is(err, errRefinementTimeline):
+		return "invalid_timeline"
+	case errors.Is(err, errRefinementCoverage):
+		return "invalid_coverage"
+	case errors.Is(err, errRefinementInput):
+		return "invalid_input"
 	}
-	log.Printf("refinement fallback chunk=%d total_chunks=%d code=%s", chunkIdx+1, totalChunks, code)
+	return "unknown"
 }
 
 // RefineTranscript takes raw Whisper segments and uses Sonnet to clean up:
@@ -1008,10 +1025,14 @@ func logRefinementFallback(chunkIdx, totalChunks int, err error) {
 // takes) plus the Opus 5 summarize call that follows, not this threshold.
 // Per-chunk failures fall back to raw segments rather than discarding the entire result.
 func (s *BedrockService) RefineTranscript(ctx context.Context, segments []WhisperSegment) (string, []RefinedSegment, error) {
-	if len(segments) == 0 {
-		return "", nil, fmt.Errorf("no segments to refine")
-	}
+	text, refined, _, err := s.RefineTranscriptWithQuality(ctx, segments)
+	return text, refined, err
+}
 
+func (s *BedrockService) RefineTranscriptWithQuality(ctx context.Context, segments []WhisperSegment) (string, []RefinedSegment, *model.TranscriptQuality, error) {
+	if !validRefinementInput(segments) {
+		return "", nil, &model.TranscriptQuality{Refinement: "raw", Degraded: true, SpeakerProvenance: "unknown", Reasons: []string{"invalid_input"}}, errRefinementInput
+	}
 	chunks := chunkWhisperSegments(segments, 300)
 
 	var allRefined []RefinedSegment
@@ -1036,7 +1057,7 @@ func (s *BedrockService) RefineTranscript(ctx context.Context, segments []Whispe
 		sb.WriteString(seg.Text)
 	}
 
-	return sb.String(), allRefined, nil
+	return sb.String(), allRefined, refinementQuality(allRefined, len(chunks)), nil
 }
 
 func (s *BedrockService) refineSequential(ctx context.Context, chunks [][]WhisperSegment) []RefinedSegment {
@@ -1048,8 +1069,11 @@ func (s *BedrockService) refineSequential(ctx context.Context, chunks [][]Whispe
 		if err != nil || len(refined) == 0 {
 			logRefinementFallback(i, len(chunks), err)
 			lastSpeaker := lastSpeakerLabel(allRefined)
-			allRefined = append(allRefined, rawFallbackSegments(chunk, lastSpeaker)...)
+			allRefined = append(allRefined, refinementFallback(chunk, lastSpeaker, i, err)...)
 			continue
+		}
+		for j := range refined {
+			refined[j].ChunkIndex = i
 		}
 		allRefined = append(allRefined, refined...)
 		if len(refined) >= 3 {
@@ -1078,8 +1102,8 @@ type chunkResult struct {
 // exactly one result, keeping the collector's count intact.
 func recoverRefineChunk(idx, total int, done chan<- chunkResult, c []WhisperSegment, tail []RefinedSegment) {
 	if r := recover(); r != nil {
-		log.Printf("refinement fallback chunk=%d total_chunks=%d code=panic", idx+1, total)
-		done <- chunkResult{index: idx, segments: rawFallbackSegments(c, lastSpeakerLabel(tail))}
+		log.Printf("refinement fallback chunk=%d total_chunks=%d code=panic class=other", idx+1, total)
+		done <- chunkResult{index: idx, segments: refinementFallback(c, lastSpeakerLabel(tail), idx, errRefinementPanic)}
 	}
 }
 
@@ -1089,7 +1113,7 @@ func (s *BedrockService) refineParallel(ctx context.Context, chunks [][]WhisperS
 	firstResult, err := s.refineChunk(ctx, chunks[0], 0, len(chunks), nil)
 	if err != nil || len(firstResult) == 0 {
 		logRefinementFallback(0, len(chunks), err)
-		firstResult = rawFallbackSegments(chunks[0], "spk_0")
+		firstResult = refinementFallback(chunks[0], "spk_0", 0, err)
 	}
 	// Build a tail that includes at least one segment per unique speaker from chunk 1,
 	// plus the last 3 segments for continuity context
@@ -1111,7 +1135,7 @@ func (s *BedrockService) refineParallel(ctx context.Context, chunks [][]WhisperS
 			refined, err := s.refineChunk(ctx, c, idx, len(chunks), tail)
 			if err != nil || len(refined) == 0 {
 				logRefinementFallback(idx, len(chunks), err)
-				done <- chunkResult{index: idx, segments: rawFallbackSegments(c, lastSpeakerLabel(tail))}
+				done <- chunkResult{index: idx, segments: refinementFallback(c, lastSpeakerLabel(tail), idx, err)}
 				return
 			}
 			done <- chunkResult{index: idx, segments: refined}
@@ -1124,10 +1148,21 @@ func (s *BedrockService) refineParallel(ctx context.Context, chunks [][]WhisperS
 	}
 
 	var allRefined []RefinedSegment
-	for _, segs := range results {
+	for index, segs := range results {
+		for i := range segs {
+			segs[i].ChunkIndex = index
+		}
 		allRefined = append(allRefined, segs...)
 	}
 	return allRefined
+}
+
+func refinementFallback(chunk []WhisperSegment, speaker string, index int, err error) []RefinedSegment {
+	result := rawFallbackSegments(chunk, speaker)
+	for i := range result {
+		result[i].FallbackCode, result[i].ChunkIndex = refinementFailureCode(err), index
+	}
+	return result
 }
 
 func rawFallbackSegments(chunk []WhisperSegment, speaker string) []RefinedSegment {
@@ -1145,10 +1180,14 @@ func rawFallbackSegments(chunk []WhisperSegment, speaker string) []RefinedSegmen
 			segSpeaker = speaker
 		}
 		segments[i] = RefinedSegment{
-			Speaker:   segSpeaker,
-			Text:      seg.Text,
-			StartTime: seg.Start,
-			EndTime:   seg.End,
+			Speaker:           segSpeaker,
+			Text:              seg.Text,
+			StartTime:         seg.Start,
+			EndTime:           seg.End,
+			SpeakerProvenance: "unknown",
+		}
+		if seg.Speaker != "" {
+			segments[i].SpeakerProvenance = "acoustic"
 		}
 	}
 	return segments
@@ -1223,10 +1262,11 @@ Your tasks:
 2. **Fix misrecognized words**: Correct obvious STT errors (e.g. "상침" → "상세" or "상위", "아키드" → "아키텍트", "채우해" → "셰어해"). Use surrounding context to infer correct words.
 3. **Remove hallucinations**: Whisper sometimes repeats words/phrases (e.g. "법인으로 법인으로 법인으로"). Keep only one instance.
 %s
-5. **Preserve timestamps**: Each output segment should have the start time of its first source segment and end time of its last source segment.
+5. **Preserve timestamps and source identity**: Each input line has a source ID. List the consecutive source IDs represented by each output segment in sourceIds. Include every source ID exactly once, in input order; never omit an input line, even if it is only a filler. Each output segment must start at its first source segment's exact start time and end at the maximum end time of its listed source segments. Preserve overlapping speech.
 6. **Remove filler words**: Clean up meaningless fillers ("음", "어", "그") but keep discourse markers that carry meaning.
 
-Output ONLY a JSON array. Each element: {"speaker":"spk_0","text":"정제된 문장","startTime":0.0,"endTime":6.5}
+Source IDs show structural coverage only; keep all meaningful speech, numbers, negations and corrections. Never replace several utterances with a summary.
+Output ONLY a JSON array. Each element: {"speaker":"spk_0","text":"정제된 문장","startTime":0.0,"endTime":6.5,"sourceIds":[0,1]}
 Do NOT include any text outside the JSON array. No markdown fences.`, speakerTask)
 }
 
@@ -1234,11 +1274,11 @@ Do NOT include any text outside the JSON array. No markdown fences.`, speakerTas
 // prefixing each line with its acoustic speaker label in preserve mode.
 func buildRefineSegmentLines(segments []WhisperSegment, preserveSpeakers bool) string {
 	var sb strings.Builder
-	for _, seg := range segments {
+	for i, seg := range segments {
 		if preserveSpeakers {
-			sb.WriteString(fmt.Sprintf("[%.1f-%.1f] %s: %s\n", seg.Start, seg.End, seg.Speaker, seg.Text))
+			sb.WriteString(fmt.Sprintf("[sourceId=%d][%g-%g] %s: %s\n", i, seg.Start, seg.End, seg.Speaker, seg.Text))
 		} else {
-			sb.WriteString(fmt.Sprintf("[%.1f-%.1f] %s\n", seg.Start, seg.End, seg.Text))
+			sb.WriteString(fmt.Sprintf("[sourceId=%d][%g-%g] %s\n", i, seg.Start, seg.End, seg.Text))
 		}
 	}
 	return sb.String()
@@ -1252,6 +1292,16 @@ func (s *BedrockService) refineChunk(ctx context.Context, segments []WhisperSegm
 			refined, err = nil, errRefinementPanic
 		}
 	}()
+	if !validRefinementInput(segments) {
+		return nil, errRefinementInput
+	}
+	inputBytes := 0
+	for _, segment := range segments {
+		inputBytes += len(segment.Text)
+	}
+	if len(segments) > 2048 || inputBytes > 128*1024 {
+		return nil, errRefinementInput
+	}
 	preserveSpeakers := hasAcousticSpeakers(segments)
 	sb := strings.Builder{}
 	sb.WriteString(buildRefineSegmentLines(segments, preserveSpeakers))
@@ -1278,6 +1328,9 @@ func (s *BedrockService) refineChunk(ctx context.Context, segments []WhisperSegm
 	} else {
 		userPrompt = fmt.Sprintf("다음은 Whisper STT 원본 세그먼트입니다 (파트 %d/%d). 위 규칙에 따라 정제해주세요:\n\n%s", chunkIdx+1, totalChunks, sb.String())
 	}
+	if len(userPrompt) > 256*1024 {
+		return nil, errRefinementInput
+	}
 
 	request := ClaudeRequest{
 		AnthropicVersion: "bedrock-2023-05-31",
@@ -1291,15 +1344,18 @@ func (s *BedrockService) refineChunk(ctx context.Context, segments []WhisperSegm
 		System: systemPrompt,
 	}
 
-	result, err := s.invokeClaudeModelWithID(ctx, request, ClaudeSonnetModelID)
+	body, err := s.invokeClaudeResponseBody(ctx, request, ClaudeSonnetModelID)
 	if err != nil {
-		return nil, errRefinementModel
+		return nil, sanitizedRefinementModelError(err)
 	}
 
-	result = extractJSONArray(result)
-
-	if err := json.Unmarshal([]byte(result), &refined); err != nil {
-		return nil, errRefinementParse
+	result, err := refinementCompletion(body)
+	if err != nil {
+		return nil, err
+	}
+	refined, err = validateRefinementJSON(result, segments)
+	if err != nil {
+		return nil, err
 	}
 
 	if preserveSpeakers {
@@ -1320,6 +1376,23 @@ func (s *BedrockService) refineChunk(ctx context.Context, segments []WhisperSegm
 		// model's speaker field at all: recompute it structurally from the
 		// same acoustic input the prompt was built from.
 		remapPreservedSpeakers(segments, refined)
+	} else {
+		for _, segment := range refined {
+			if !validInferredSpeaker(segment.Speaker) {
+				return nil, errRefinementSchema
+			}
+		}
+	}
+	for i := range refined {
+		refined[i].SpeakerProvenance = "text_inferred"
+		if preserveSpeakers {
+			refined[i].SpeakerProvenance = "acoustic"
+			for _, input := range segments {
+				if input.Speaker == "" && input.End > refined[i].StartTime && input.Start < refined[i].EndTime {
+					refined[i].SpeakerProvenance = "mixed"
+				}
+			}
+		}
 	}
 
 	return refined, nil
