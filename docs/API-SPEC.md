@@ -22,6 +22,13 @@ Downloads are signed CloudFront `/media/{s3Key}` URLs, usually valid for one hou
 public-document downloads use five minutes. Signing-key read failure falls back
 to S3 GET presigns. PUT uploads continue to use signed S3 URLs.
 
+Application request logs contain the registered route pattern, allowlisted HTTP
+method, response status/size, elapsed time and a hash of the request ID. They
+exclude actual paths, queries, headers and bodies, including public-share tokens
+in unmatched or encoded URLs. Public-share cleanup failures also omit tokens
+and provider error text. Existing logs and previously exposed links require
+separate operational review; changing the logger does not revoke a public link.
+
 ## Contracts that require care
 
 ### Session bootstrap and project invitations
