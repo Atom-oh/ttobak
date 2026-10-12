@@ -1200,7 +1200,7 @@ func (s *AccountService) updateDoc(ctx context.Context, userID, pk, docID string
 		// this token as the doc's live PublicShareToken again); a failure
 		// here just leaves an inert orphaned PublicShare pointer.
 		if err := s.repo.DeletePublicShare(ctx, removedToken); err != nil {
-			log.Printf("cleanup public share pointer for doc %s during file->markdown conversion: %v", docID, err)
+			log.Printf("public share cleanup failed operation=conversion document_id=%q", docID)
 		}
 	}
 	if oldFileKey != "" && oldFileKey != existing.FileKey && ownsFileKey(userID, oldFileKey) && s.s3 != nil {
@@ -1312,7 +1312,7 @@ func (s *AccountService) deleteDoc(ctx context.Context, userID, pk, docID string
 		// the now-deleted doc will 404 it, so it's inert, not exploitable)
 		// rather than blocking the delete the caller already committed to.
 		if err := s.repo.DeletePublicShare(ctx, doc.PublicShareToken); err != nil {
-			log.Printf("cleanup public share pointer for deleted doc %s: %v", docID, err)
+			log.Printf("public share cleanup failed operation=delete document_id=%q", docID)
 		}
 	}
 	if doc.FileKey != "" && ownsFileKey(userID, doc.FileKey) && s.s3 != nil {
@@ -1565,7 +1565,7 @@ func (s *AccountService) CreateUserDocPublicShare(ctx context.Context, userID, d
 	// exists but no longer matches the doc (see SetPublicShareTokenIfAbsent).
 	if err := s.repo.SetPublicShareTokenIfAbsent(ctx, doc.PK, docID, token); err != nil {
 		if delErr := s.repo.DeletePublicShare(ctx, token); delErr != nil {
-			log.Printf("cleanup orphaned public share pointer %s: %v", token, delErr)
+			log.Printf("public share cleanup failed operation=mint document_id=%q", docID)
 		}
 		if !errors.Is(err, repository.ErrConditionFailed) {
 			return "", err
@@ -1629,7 +1629,7 @@ func (s *AccountService) RevokeUserDocPublicShare(ctx context.Context, userID, d
 		return err
 	}
 	if err := s.repo.DeletePublicShare(ctx, doc.PublicShareToken); err != nil {
-		log.Printf("cleanup public share pointer for doc %s: %v", docID, err)
+		log.Printf("public share cleanup failed operation=revoke document_id=%q", docID)
 	}
 	return nil
 }

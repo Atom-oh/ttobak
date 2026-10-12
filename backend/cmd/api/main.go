@@ -188,7 +188,7 @@ func init() {
 	// Global middleware
 	r.Use(chimiddleware.RequestID)
 	r.Use(chimiddleware.RealIP)
-	r.Use(chimiddleware.Logger)
+	r.Use(middleware.RequestLog)
 	r.Use(middleware.Recovery)
 	r.Use(middleware.OriginVerify) // Block direct API Gateway access (CloudFront-only)
 	r.Use(middleware.CORS)
