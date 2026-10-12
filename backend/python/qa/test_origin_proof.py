@@ -79,6 +79,48 @@ class OriginProofTests(unittest.TestCase):
                 self.assertEqual(handler.lambda_handler({"Records": [{}]}, None), {"internal": "queue"})
                 queue.assert_called_once()
 
+    def test_protocol_marker_requires_verified_http_and_preserves_early_errors(self):
+        import test_handler
+        handler = test_handler.handler
+        verifier = OriginVerifier("", None, legacy=PREVIOUS)
+        request = dict(event(PREVIOUS), rawPath="/api/qa/__origin_probe__",
+                       requestContext={"http": {"method": "GET"}}, body="{}")
+        with mock.patch.object(handler, "_HTTP_ORIGIN", verifier), \
+                mock.patch.object(handler, "handle_ask") as ask, \
+                mock.patch.object(handler, "handle_meeting_ask") as meeting:
+            result = handler.lambda_handler(request, None)
+            self.assertEqual(result["statusCode"], 405)
+            self.assertEqual(result["headers"]["x-ttobak-origin-protocol"], "1")
+            request["requestContext"]["http"]["method"] = "POST"
+            result = handler.lambda_handler(request, None)
+            self.assertEqual(result["statusCode"], 401)
+            self.assertEqual(result["headers"]["x-ttobak-origin-protocol"], "1")
+            request["headers"] = {}
+            result = handler.lambda_handler(request, None)
+            self.assertEqual(result["statusCode"], 403)
+            self.assertNotIn("x-ttobak-origin-protocol", result["headers"])
+            ask.assert_not_called()
+            meeting.assert_not_called()
+
+    def test_legacy_format_is_preserved_exactly_without_empty_bypass(self):
+        for proof in ("short", "legacy,comma", "기존 검증값", "x" * 129, " spaced "):
+            verifier = OriginVerifier("", None, legacy=proof)
+            self.assertTrue(verifier.verify(event(proof)))
+            self.assertFalse(verifier.verify(event(proof + "wrong")))
+            self.assertFalse(verifier.verify(dict(event(proof), multiValueHeaders={"x-origin-verify": [proof, proof]})))
+        self.assertFalse(OriginVerifier("", None).verify(event("")))
+
+    def test_immutable_version_pin_reaches_sdk_and_diagnostics_omit_values(self):
+        pin = "b" * 32
+        verifier = OriginVerifier("synthetic-secret-arn", self.client, version_id=pin, now=lambda: self.now)
+        self.assertTrue(verifier.verify(event(CURRENT)))
+        self.client.get_secret_value.assert_called_once_with(SecretId="synthetic-secret-arn", VersionId=pin)
+        self.now += 61
+        self.client.get_secret_value.side_effect = RuntimeError("private provider output")
+        with self.assertLogs("origin_proof", level="WARNING") as messages:
+            self.assertFalse(verifier.verify(event(CURRENT)))
+        self.assertEqual(messages.records[0].getMessage(), "http_origin_rejected category=secret_unavailable")
+
 
 if __name__ == "__main__":
     unittest.main()

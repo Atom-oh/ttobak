@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"log"
 	"net/http"
 	"regexp"
 	"strings"
@@ -18,6 +19,7 @@ const originCacheTTL = time.Minute
 const originMaxOverlapSeconds = int64(24 * 60 * 60)
 
 var originGeneration = regexp.MustCompile(`^[0-9a-f]{32}$`)
+var originVersion = regexp.MustCompile(`^[A-Za-z0-9-]{32,64}$`)
 
 type originSecretClient interface {
 	GetSecretValue(context.Context, *secretsmanager.GetSecretValueInput, ...func(*secretsmanager.Options)) (*secretsmanager.GetSecretValueOutput, error)
@@ -37,6 +39,7 @@ type originProofSet struct {
 // never authentication decisions; expiry is checked on every request.
 type OriginVerifier struct {
 	arn, legacy string
+	version     string
 	client      originSecretClient
 	local       bool
 	now         func() time.Time
@@ -48,9 +51,13 @@ type OriginVerifier struct {
 
 // legacy is temporary rollout compatibility: ARN configuration always wins,
 // including when its read fails. The migration removes legacy Lambda env values.
-func NewOriginVerifier(arn, legacy string, client originSecretClient, localDevelopment bool) *OriginVerifier {
-	return &OriginVerifier{arn: arn, legacy: legacy, client: client, local: localDevelopment,
+func NewOriginVerifier(arn, legacy string, client originSecretClient, localDevelopment bool, versions ...string) *OriginVerifier {
+	v := &OriginVerifier{arn: arn, legacy: legacy, client: client, local: localDevelopment,
 		now: time.Now, lookup: make(chan struct{}, 1)}
+	if len(versions) > 0 {
+		v.version = versions[0]
+	}
+	return v
 }
 
 func validOriginProof(value string) bool {
@@ -92,13 +99,13 @@ func parseOriginProofSet(raw string) (originProofSet, bool) {
 		value.PreviousExpiresAt-value.RotationStartedAt <= originMaxOverlapSeconds
 }
 
-func originHeader(headers http.Header) (string, bool) {
+func originHeader(headers http.Header, strict bool) (string, bool) {
 	actual, found := "", false
 	for name, values := range headers {
 		if !strings.EqualFold(name, "x-origin-verify") {
 			continue
 		}
-		if found || len(values) != 1 || !validOriginProof(values[0]) {
+		if found || len(values) != 1 || (strict && !validOriginProof(values[0])) {
 			return "", false
 		}
 		actual, found = values[0], true
@@ -113,7 +120,7 @@ func (v *OriginVerifier) cached() (originProofSet, bool) {
 }
 
 func (v *OriginVerifier) secret(ctx context.Context) (originProofSet, bool) {
-	if v.client == nil {
+	if v.client == nil || (v.version != "" && !originVersion.MatchString(v.version)) {
 		return originProofSet{}, false
 	}
 	if value, ok := v.cached(); ok {
@@ -133,14 +140,18 @@ func (v *OriginVerifier) secret(ctx context.Context) (originProofSet, bool) {
 	if value, ok := v.cached(); ok {
 		return value, true
 	}
-	out, err := v.client.GetSecretValue(bounded, &secretsmanager.GetSecretValueInput{
-		SecretId: aws.String(v.arn),
-	}, func(options *secretsmanager.Options) { options.Retryer = aws.NopRetryer{} })
+	input := &secretsmanager.GetSecretValueInput{SecretId: aws.String(v.arn)}
+	if v.version != "" {
+		input.VersionId = aws.String(v.version)
+	}
+	out, err := v.client.GetSecretValue(bounded, input, func(options *secretsmanager.Options) { options.Retryer = aws.NopRetryer{} })
 	if err != nil || out == nil || out.SecretString == nil {
+		log.Print("http_origin_rejected category=secret_unavailable")
 		return originProofSet{}, false
 	}
 	value, ok := parseOriginProofSet(*out.SecretString)
 	if !ok {
+		log.Print("http_origin_rejected category=secret_invalid")
 		return originProofSet{}, false
 	}
 	v.mu.Lock()
@@ -156,12 +167,12 @@ func (v *OriginVerifier) allows(ctx context.Context, headers http.Header) bool {
 	if v.arn == "" && v.legacy == "" && v.local {
 		return true
 	}
-	actual, ok := originHeader(headers)
+	actual, ok := originHeader(headers, v.arn != "")
 	if !ok {
 		return false
 	}
 	if v.arn == "" {
-		return validOriginProof(v.legacy) && subtle.ConstantTimeCompare([]byte(actual), []byte(v.legacy)) == 1
+		return v.legacy != "" && subtle.ConstantTimeCompare([]byte(actual), []byte(v.legacy)) == 1
 	}
 	value, ok := v.secret(ctx)
 	if !ok {
@@ -182,6 +193,7 @@ func (v *OriginVerifier) Middleware(next http.Handler) http.Handler {
 			_, _ = w.Write([]byte(`{"error":{"code":"FORBIDDEN","message":"direct access not allowed"}}`))
 			return
 		}
+		w.Header().Set("X-Ttobak-Origin-Protocol", "1")
 		next.ServeHTTP(w, r)
 	})
 }

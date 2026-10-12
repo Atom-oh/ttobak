@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { OriginVerifier, parseProofs } from '../dist/origin-proof.js';
+import { OriginVerifier, parseProofs, environmentOriginVerifier } from '../dist/origin-proof.js';
+import { SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 
 const current = 'synthetic-current-proof-1234567890';
 const previous = 'synthetic-previous-proof-1234567890';
@@ -70,4 +71,34 @@ test('concurrent lookups coalesce and timeout even if a provider ignores cancell
   assert.equal(calls, 1);
   assert.equal(signal.aborted, true);
   assert.ok(Date.now() - started < 1000);
+});
+
+test('legacy keeps nonempty exact values outside the new proof grammar', async () => {
+  for (const proof of ['short', 'legacy,comma', '기존 검증값', 'x'.repeat(129), ' spaced ']) {
+    const verifier = new OriginVerifier('', async () => undefined, proof);
+    assert.equal(await verifier.verify(headers(proof)), true);
+    assert.equal(await verifier.verify(headers(proof + 'wrong')), false);
+    assert.equal(await verifier.verify({ ...headers(proof), 'X-Origin-Verify': proof }), false);
+  }
+  assert.equal(await new OriginVerifier('', async () => undefined).verify(headers('')), false);
+});
+
+test('environment version pin reaches the SDK and failures log only fixed categories', async () => {
+  const send = SecretsManagerClient.prototype.send, warn = console.warn;
+  const pin = 'b'.repeat(32), logs = [];
+  try {
+    SecretsManagerClient.prototype.send = async command => {
+      assert.deepEqual(command.input, { SecretId: 'synthetic-arn', VersionId: pin });
+      return { SecretString: document({ phase: 'active', previous: '', previousExpiresAt: 0 }) };
+    };
+    const env = { ORIGIN_VERIFY_SECRET_ARN: 'synthetic-arn', ORIGIN_VERIFY_SECRET_VERSION_ID: pin };
+    assert.equal(await environmentOriginVerifier(env).verify(headers(current)), true);
+    console.warn = message => logs.push(message);
+    SecretsManagerClient.prototype.send = async () => { throw new Error('private provider output'); };
+    assert.equal(await environmentOriginVerifier(env).verify(headers(current)), false);
+    assert.deepEqual(logs, ['http_origin_rejected category=secret_unavailable']);
+  } finally {
+    SecretsManagerClient.prototype.send = send;
+    console.warn = warn;
+  }
 });

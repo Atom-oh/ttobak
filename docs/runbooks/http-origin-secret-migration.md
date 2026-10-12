@@ -14,8 +14,10 @@ and a verified rotation receipt.
 
 ARN configuration takes precedence over the legacy `ORIGIN_VERIFY_SECRET`.
 If the ARN read fails, the consumer denies access instead of trying the legacy
-value. The legacy path exists only to preserve the current proof during the
-consumer-first rollout and must be removed with the final environment migration.
+value. The legacy path preserves every nonempty existing value exactly, including
+Unicode, commas and values outside the new proof length range. It rejects
+observable duplicate/conflicting representations but does not reinterpret a
+single legacy value. It must be removed with the final environment migration.
 Do not point a production consumer at a new random proof before CloudFront and
 the other consumers can use it.
 
@@ -26,6 +28,14 @@ no local bypass; the existing local MCP HTTP transport is a separate entry point
 QA's existing WebSocket invocation, authorized through Identity and Access
 Management (IAM), and its source-validated Simple Queue Service (SQS) worker
 branches remain separate from the HTTP origin check.
+
+Verified HTTP responses carry the constant `X-Ttobak-Origin-Protocol: 1` marker,
+including normal authentication, unknown-route and configuration error responses.
+Rejected origin proofs and internal QA transports do not carry it. The marker
+identifies the installed reader contract; it does not prove Secrets Manager
+permissions or an ARN cutover. Before activation mutations, the release must
+verify the marker on the existing content-free paths and pin the consumers'
+code hash, configuration revision and alias version against concurrent changes.
 
 ## Version 1 proof document
 
@@ -48,11 +58,15 @@ The generation is nonsecret metadata; proof values must never be printed.
 not invalidate the current proof. The time check runs on every request, including
 when the document is cached.
 
-All consumers reject missing, duplicate, conflicting, comma-combined, whitespace
-or oversized proof headers and compare values in constant time. API Gateway
+In ARN mode, all consumers reject missing, duplicate, conflicting, comma-combined,
+whitespace or oversized proof headers and compare values in constant time. API Gateway
 payload 2.0 comma-combined duplicates are rejected. Go and Python additionally
 reject conflicting multi-value representations supplied by their adapters.
 The wrapper never forwards the origin proof to the MCP application server.
+
+The optional nonsecret `ORIGIN_VERIFY_SECRET_VERSION_ID` pins an immutable
+Secrets Manager version. Activation must configure and verify a version pin on
+every consumer; an ARN alone does not establish the intended source version.
 
 Secret documents are cached for at most 60 seconds. Go and MCP bound lookup
 waiting to three seconds and disable software development kit (SDK) retries.
@@ -78,11 +92,15 @@ reviewed release workflow:
    preserving the currently accepted proof.
 3. Configure CloudFront with a Secrets Manager reference to the same proof and
    verify the distribution has deployed.
-4. Generate a new proof and explicit bounded overlap metadata. Force a CloudFront
-   secret-version update; changing a secret alone does not update its resolved
+4. Generate a new proof and explicit bounded overlap metadata. Deploy and verify
+   consumers pinned to the immutable dual-proof version, then drain old caches
+   for at least 65 seconds (60-second TTL, three-second lookup and margin).
+   Require actual new-proof acceptance before the producer changes. Force a
+   CloudFront secret-version update; changing a secret alone does not update its resolved
    origin header. Retain enough time to finish or resume the cutover safely.
-5. Remove the previous proof only after CloudFront is deployed with the new proof
-   and consumer cache expiry is accounted for. Verify both successful CloudFront
+5. Remove the previous proof only after CloudFront is deployed with the new proof.
+   Deploy consumers pinned to the immutable active version and drain caches again
+   before verifying retirement. Verify both successful CloudFront
    requests and rejection of direct-origin and retired-proof requests.
 6. Remove the tracked literal and legacy environment/read path, and record a
    redacted receipt of the deployed revision and completed rotation.

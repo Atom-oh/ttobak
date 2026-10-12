@@ -36,7 +36,7 @@ export function parseProofs(raw: unknown): ProofSet | undefined {
 }
 
 function equals(actual: string, expected: string): boolean {
-  const left = Buffer.from(actual), right = Buffer.from(expected);
+  const left = Buffer.from(actual, 'utf16le'), right = Buffer.from(expected, 'utf16le');
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
@@ -65,8 +65,10 @@ export class OriginVerifier {
         ]);
         const value = parseProofs(raw);
         if (value) this.cached = { value, expires: this.now() + 60 };
+        else console.warn('http_origin_rejected category=secret_invalid');
         return value;
       } catch {
+        console.warn('http_origin_rejected category=secret_unavailable');
         return undefined; // No service message, proof, header or ARN enters a log.
       } finally {
         if (timer) clearTimeout(timer);
@@ -77,10 +79,11 @@ export class OriginVerifier {
 
   async verify(headers: Record<string, unknown>): Promise<boolean> {
     const values = Object.entries(headers).filter(([name]) => name.toLowerCase() === 'x-origin-verify');
-    if (values.length !== 1 || !validProof(values[0][1])) return false;
+    if (values.length !== 1 || typeof values[0][1] !== 'string') return false;
     const actual = values[0][1];
     // Temporary rollout compatibility; an ARN never falls back to legacy.
-    if (!this.arn) return validProof(this.legacy) && equals(actual, this.legacy);
+    if (!this.arn) return this.legacy.length > 0 && equals(actual, this.legacy);
+    if (!validProof(actual)) return false;
     const value = await this.secret();
     if (!value) return false;
     const current = equals(actual, value.current), previous = equals(actual, value.previous);
@@ -91,8 +94,11 @@ export class OriginVerifier {
 
 export function environmentOriginVerifier(env: NodeJS.ProcessEnv): OriginVerifier {
   const client = new SecretsManagerClient({ maxAttempts: 1 });
+  const version = env.ORIGIN_VERIFY_SECRET_VERSION_ID ?? '';
   return new OriginVerifier(env.ORIGIN_VERIFY_SECRET_ARN ?? '', async (arn, signal) => {
-    const result = await client.send(new GetSecretValueCommand({ SecretId: arn }), { abortSignal: signal });
+    if (version && !/^[A-Za-z0-9-]{32,64}$/.test(version)) return undefined;
+    const result = await client.send(new GetSecretValueCommand({ SecretId: arn,
+      ...(version ? { VersionId: version } : {}) }), { abortSignal: signal });
     return result.SecretString;
   }, env.ORIGIN_VERIFY_SECRET ?? '');
 }

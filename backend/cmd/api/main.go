@@ -195,6 +195,7 @@ func init() {
 		os.Getenv("ORIGIN_VERIFY_SECRET_ARN"), os.Getenv("ORIGIN_VERIFY_SECRET"),
 		secretsmanager.NewFromConfig(cfg),
 		os.Getenv("TTOBAK_ORIGIN_LOCAL_DEV") == "1" && os.Getenv("AWS_LAMBDA_FUNCTION_NAME") == "",
+		os.Getenv("ORIGIN_VERIFY_SECRET_VERSION_ID"),
 	)
 	r.Use(originVerifier.Middleware) // Block direct API Gateway access (CloudFront-only)
 	r.Use(middleware.CORS)

@@ -18,13 +18,15 @@ const currentProof = "synthetic-current-proof-1234567890"
 const previousProof = "synthetic-previous-proof-1234567890"
 
 type fakeOriginSecret struct {
-	raw   string
-	err   error
-	calls int
+	raw     string
+	err     error
+	calls   int
+	version string
 }
 
 func (f *fakeOriginSecret) GetSecretValue(ctx context.Context, input *secretsmanager.GetSecretValueInput, options ...func(*secretsmanager.Options)) (*secretsmanager.GetSecretValueOutput, error) {
 	f.calls++
+	f.version = aws.ToString(input.VersionId)
 	if input.SecretId == nil || *input.SecretId != "synthetic-secret-arn" {
 		panic("secret identity changed")
 	}
@@ -154,5 +156,48 @@ func TestOriginCanceledLookupAndHTTPFailureRevealNoSecrets(t *testing.T) {
 	})).ServeHTTP(w, httptest.NewRequest("GET", "/api/public/docs/synthetic-capability", nil))
 	if w.Code != 403 || strings.Contains(w.Body.String(), "synthetic") || strings.Contains(w.Body.String(), "private") {
 		t.Fatal("origin failure leaked values or admitted request")
+	}
+}
+
+func TestOriginProtocolMarkerRequiresVerifiedHTTP(t *testing.T) {
+	verifier := NewOriginVerifier("", previousProof, nil, false)
+	for _, status := range []int{200, 401, 404, 405} {
+		r := httptest.NewRequest("GET", "/api/public/docs/__origin_migration_probe__", nil)
+		r.Header.Set("X-Origin-Verify", previousProof)
+		w := httptest.NewRecorder()
+		verifier.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(status)
+		})).ServeHTTP(w, r)
+		if w.Code != status || w.Header().Get("X-Ttobak-Origin-Protocol") != "1" {
+			t.Fatal("verified early response lost protocol marker or changed status")
+		}
+	}
+	w := httptest.NewRecorder()
+	verifier.Middleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("unverified request reached application")
+	})).ServeHTTP(w, httptest.NewRequest("GET", "/api/public/docs/__origin_migration_probe__", nil))
+	if w.Code != 403 || w.Header().Get("X-Ttobak-Origin-Protocol") != "" {
+		t.Fatal("unverified request advertised the verified protocol")
+	}
+}
+
+func TestLegacyOriginPreservesEveryNonemptyExactProof(t *testing.T) {
+	for _, proof := range []string{"short", "legacy,comma", "기존 검증값", strings.Repeat("x", 129), " spaced "} {
+		v := NewOriginVerifier("", proof, nil, false)
+		if !v.allows(context.Background(), http.Header{"X-Origin-Verify": {proof}}) ||
+			v.allows(context.Background(), http.Header{"X-Origin-Verify": {proof + "wrong"}}) ||
+			v.allows(context.Background(), http.Header{"X-Origin-Verify": {proof, proof}}) {
+			t.Fatal("legacy exact comparison or observable duplicate rejection changed")
+		}
+	}
+}
+
+func TestOriginReadPinsImmutableVersion(t *testing.T) {
+	client := &fakeOriginSecret{raw: marshalProof(proofDocument())}
+	pin := strings.Repeat("b", 32)
+	v := NewOriginVerifier("synthetic-secret-arn", "", client, false, pin)
+	v.now = func() time.Time { return time.Unix(1010, 0) }
+	if !v.allows(context.Background(), http.Header{"X-Origin-Verify": {currentProof}}) || client.version != pin {
+		t.Fatal("immutable version pin was not sent to Secrets Manager")
 	}
 }

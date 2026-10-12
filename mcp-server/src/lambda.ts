@@ -65,6 +65,11 @@ export async function handler(event: HttpApiEvent, context?: LambdaContext): Pro
   if (context) context.callbackWaitsForEmptyEventLoop = false;
   const incoming = event.headers ?? {};
   if (!await originVerifier.verify(incoming)) return reply(403, { error: { code: 'FORBIDDEN', message: 'Forbidden' } });
+  const result = await handleVerified(event, incoming);
+  return { ...result, headers: { ...result.headers, 'x-ttobak-origin-protocol': '1' } };
+}
+
+async function handleVerified(event: HttpApiEvent, incoming: Record<string, string | undefined>): Promise<HttpApiResult> {
   let server;
   try { server = await startLoopback(); }
   catch (error) {

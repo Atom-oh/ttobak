@@ -106,6 +106,7 @@ for (const [label, entry] of entries) {
     for (const rawPath of ['/.well-known/oauth-protected-resource', '/.well-known/oauth-protected-resource/api/mcp']) {
       const result = await invoke({ rawPath, headers: { host: 'abc123.execute-api.ap-northeast-2.amazonaws.com', 'x-origin-verify': 'synthetic-edge-secret' }, requestContext: { http: { method: 'GET' } } });
       assert.equal(result.statusCode, 200, rawPath);
+      assert.equal(result.headers['x-ttobak-origin-protocol'], '1');
       const document = JSON.parse(result.body);
       assert.equal(document.resource, PUBLIC_URL);
       assert.deepEqual(document.authorization_servers.length, 1);
@@ -145,7 +146,9 @@ for (const [label, entry] of entries) {
     const { invoke } = await harness(t, entry);
     const direct = viaApiGateway({ body: rpc('tools/list') });
     delete direct.headers['x-origin-verify'];
-    assert.equal((await invoke(direct)).statusCode, 403);
+    const rejected = await invoke(direct);
+    assert.equal(rejected.statusCode, 403);
+    assert.equal(rejected.headers['x-ttobak-origin-protocol'], undefined);
     const wrong = viaApiGateway({ body: rpc('tools/list') });
     wrong.headers['x-origin-verify'] = 'synthetic-edge-secreT';
     assert.equal((await invoke(wrong)).statusCode, 403);
@@ -196,6 +199,7 @@ for (const [label, entry] of entries) {
     const { invoke, stderr } = await harness(t, entry, { TTOBAK_MCP_PUBLIC_URL: 'http://not-https.example.com/api/mcp' });
     const result = await invoke(viaApiGateway({ body: rpc('tools/list') }));
     assert.equal(result.statusCode, 500);
+    assert.equal(result.headers['x-ttobak-origin-protocol'], '1');
     assert.doesNotMatch(result.body, /Bearer|authorization/i);
     assert.doesNotMatch(stderr(), /Bearer /);
   });

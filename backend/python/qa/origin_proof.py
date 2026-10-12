@@ -1,6 +1,7 @@
 """Bounded HTTP origin proof verification; no request or provider text logging."""
 import hmac
 import json
+import logging
 import re
 import threading
 import time
@@ -37,7 +38,7 @@ def parse_proofs(raw):
     return value
 
 
-def origin_header(event):
+def origin_header(event, strict=True):
     headers = event.get("headers") or {}
     if not isinstance(headers, dict):
         return None
@@ -45,7 +46,7 @@ def origin_header(event):
              if isinstance(name, str) and name.lower() == "x-origin-verify"]
     # Payload 2.0 joins duplicates with commas. Case duplicates in synthetic or
     # alternate adapters are rejected too; never normalize a malformed value.
-    if len(found) != 1 or not valid_proof(found[0]):
+    if len(found) != 1 or not isinstance(found[0], str) or (strict and not valid_proof(found[0])):
         return None
     multi = event.get("multiValueHeaders") or {}
     if not isinstance(multi, dict):
@@ -58,13 +59,16 @@ def origin_header(event):
 
 
 class OriginVerifier:
-    def __init__(self, arn, client, *, legacy="", local_development=False, now=time.time):
+    def __init__(self, arn, client, *, legacy="", local_development=False, now=time.time, version_id=""):
         self.arn, self.client, self.legacy, self.local = arn, client, legacy, local_development
         self.now = now
+        self.version_id = version_id
         self.cached, self.expires = None, 0
         self.lock = threading.Lock()
 
     def secret(self):
+        if self.version_id and not re.fullmatch(r"[A-Za-z0-9-]{32,64}", self.version_id):
+            return None
         if self.cached is not None and self.now() < self.expires:
             return self.cached
         # The SDK client has one-second connect/read limits and no retries;
@@ -75,11 +79,16 @@ class OriginVerifier:
             if self.cached is not None and self.now() < self.expires:
                 return self.cached
             try:
-                result = self.client.get_secret_value(SecretId=self.arn)
+                arguments = {"SecretId": self.arn}
+                if self.version_id:
+                    arguments["VersionId"] = self.version_id
+                result = self.client.get_secret_value(**arguments)
                 value = parse_proofs(result.get("SecretString"))
             except Exception:
+                logging.getLogger(__name__).warning("http_origin_rejected category=secret_unavailable")
                 return None
             if value is None:
+                logging.getLogger(__name__).warning("http_origin_rejected category=secret_invalid")
                 return None
             self.cached, self.expires = value, self.now() + 60
             return value
@@ -89,13 +98,14 @@ class OriginVerifier:
     def verify(self, event):
         if not self.arn and not self.legacy and self.local:
             return True
-        actual = origin_header(event)
+        actual = origin_header(event, strict=bool(self.arn))
         if actual is None:
             return False
         if not self.arn:
             # Temporary consumer-first rollout compatibility. An ARN lookup
             # failure must never fall back to this legacy environment value.
-            return valid_proof(self.legacy) and hmac.compare_digest(actual, self.legacy)
+            return bool(self.legacy) and hmac.compare_digest(
+                actual.encode("utf-8", "surrogatepass"), self.legacy.encode("utf-8", "surrogatepass"))
         value = self.secret()
         if value is None:
             return False
