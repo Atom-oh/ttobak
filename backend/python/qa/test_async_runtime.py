@@ -66,7 +66,8 @@ class TestAsyncRuntime(_JobFixture, unittest.TestCase):
                 model.converse.assert_called_once()
 
     def test_authenticated_async_routes_preserve_sync_contract_and_reject_body_identity(self):
-        with mock.patch.object(handler, '_job_service', return_value=self.jobs, create=True):
+        with mock.patch.object(handler, '_job_service', return_value=self.jobs, create=True), \
+                mock.patch.object(handler._HTTP_ORIGIN, 'verify', return_value=True):
             result = handler.lambda_handler(self.event('POST', '/api/qa/jobs', self.body), None)
             self.assertEqual(result['statusCode'], 202)
             self.assertEqual(json.loads(result['body'])['jobId'], self.job_id)
@@ -76,6 +77,7 @@ class TestAsyncRuntime(_JobFixture, unittest.TestCase):
             forged['requestContext']['authorizer'] = {}
             self.assertEqual(handler.lambda_handler(forged, None)['statusCode'], 401)
         with mock.patch.object(handler, 'extract_user_id', return_value='reader'), \
+                mock.patch.object(handler._HTTP_ORIGIN, 'verify', return_value=True), \
                 mock.patch.object(handler, 'handle_ask', return_value={'statusCode': 200, 'body': 'sync'}) as sync:
             self.assertEqual(handler.lambda_handler(self.event('POST', '/api/qa/ask', {'question': 'old client'}), None)['body'], 'sync')
             sync.assert_called_once()

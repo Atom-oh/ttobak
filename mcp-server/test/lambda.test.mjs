@@ -36,7 +36,11 @@ async function harness(t, entry, env = {}) {
       TTOBAK_COGNITO_DOMAIN: 'https://test.auth.ap-northeast-2.amazoncognito.com',
       TTOBAK_USER_POOL_ID: 'ap-northeast-2_testpool', TTOBAK_CLIENT_ID: 'testclient',
       TTOBAK_TEST_JWKS: JSON.stringify(jwks),
-      ORIGIN_VERIFY_SECRET: 'edge-secret',
+      ORIGIN_VERIFY_SECRET: 'synthetic-edge-secret',
+      ORIGIN_VERIFY_SECRET_ARN: '',
+      AWS_REGION: 'ap-northeast-2', AWS_EC2_METADATA_DISABLED: 'true',
+      AWS_ACCESS_KEY_ID: 'synthetic-access-key', AWS_SECRET_ACCESS_KEY: 'synthetic-secret-key',
+      AWS_SESSION_TOKEN: '', AWS_PROFILE: '', AWS_DEFAULT_PROFILE: '',
       ...env,
     },
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -61,7 +65,7 @@ async function harness(t, entry, env = {}) {
 const viaApiGateway = (overrides = {}) => ({
   rawPath: '/api/mcp', rawQueryString: '',
   headers: {
-    host: 'abc123.execute-api.ap-northeast-2.amazonaws.com', 'x-origin-verify': 'edge-secret',
+    host: 'abc123.execute-api.ap-northeast-2.amazonaws.com', 'x-origin-verify': 'synthetic-edge-secret',
     authorization: `Bearer ${jwt()}`, 'content-type': 'application/json',
     accept: 'application/json, text/event-stream',
   },
@@ -76,10 +80,31 @@ if (existsSync(fileURLToPath(new URL('../dist/lambda-bundle/index.mjs', import.m
 }
 
 for (const [label, entry] of entries) {
+  test(`${label}: ARN-only origin verification uses the bounded secret document`, async (t) => {
+    const current = 'synthetic-current-proof-1234567890';
+    const previous = 'synthetic-previous-proof-1234567890';
+    const now = Math.floor(Date.now() / 1000);
+    const { invoke } = await harness(t, entry, {
+      ORIGIN_VERIFY_SECRET: '',
+      ORIGIN_VERIFY_SECRET_ARN: 'arn:aws:secretsmanager:ap-northeast-2:111111111111:secret:synthetic',
+      TTOBAK_TEST_ORIGIN_SECRET: JSON.stringify({
+        schemaVersion: 1, current, previous, generation: 'a'.repeat(32), phase: 'rotating',
+        rotationStartedAt: now - 5, previousExpiresAt: now + 60,
+      }),
+    });
+    for (const proof of [current, previous]) {
+      const result = await invoke(viaApiGateway({ body: rpc('tools/list'),
+        headers: { ...viaApiGateway().headers, 'x-origin-verify': proof } }));
+      assert.equal(result.statusCode, 200);
+    }
+    assert.equal((await invoke(viaApiGateway({ body: rpc('tools/list'),
+      headers: { ...viaApiGateway().headers, 'x-origin-verify': `${current},${current}` } }))).statusCode, 403);
+  });
+
   test(`${label}: serves public discovery documents through the API Gateway host`, async (t) => {
     const { invoke } = await harness(t, entry);
     for (const rawPath of ['/.well-known/oauth-protected-resource', '/.well-known/oauth-protected-resource/api/mcp']) {
-      const result = await invoke({ rawPath, headers: { host: 'abc123.execute-api.ap-northeast-2.amazonaws.com', 'x-origin-verify': 'edge-secret' }, requestContext: { http: { method: 'GET' } } });
+      const result = await invoke({ rawPath, headers: { host: 'abc123.execute-api.ap-northeast-2.amazonaws.com', 'x-origin-verify': 'synthetic-edge-secret' }, requestContext: { http: { method: 'GET' } } });
       assert.equal(result.statusCode, 200, rawPath);
       const document = JSON.parse(result.body);
       assert.equal(document.resource, PUBLIC_URL);
@@ -122,7 +147,7 @@ for (const [label, entry] of entries) {
     delete direct.headers['x-origin-verify'];
     assert.equal((await invoke(direct)).statusCode, 403);
     const wrong = viaApiGateway({ body: rpc('tools/list') });
-    wrong.headers['x-origin-verify'] = 'edge-secreT';
+    wrong.headers['x-origin-verify'] = 'synthetic-edge-secreT';
     assert.equal((await invoke(wrong)).statusCode, 403);
     // The wrapper pins Host to the public host: an unrelated Host header cannot reach the server.
     const forged = await invoke(viaApiGateway({ body: rpc('tools/list'), headers: { ...viaApiGateway().headers, host: 'evil.example.com' } }));
@@ -149,7 +174,7 @@ for (const [label, entry] of entries) {
       TTOBAK_MCP_PUBLIC_URL: PUBLIC_URL, TTOBAK_API_URL: 'https://ttobak.example.com',
       TTOBAK_COGNITO_DOMAIN: 'https://test.auth.ap-northeast-2.amazoncognito.com',
       TTOBAK_USER_POOL_ID: 'ap-northeast-2_testpool', TTOBAK_CLIENT_ID: 'testclient',
-      TTOBAK_TEST_JWKS: JSON.stringify(jwks), ORIGIN_VERIFY_SECRET: 'edge-secret',
+      TTOBAK_TEST_JWKS: JSON.stringify(jwks), ORIGIN_VERIFY_SECRET: 'synthetic-edge-secret',
     }, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     child.stdout.on('data', (data) => { out += data; });

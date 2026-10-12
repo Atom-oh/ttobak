@@ -1,8 +1,8 @@
 import { request as httpRequest } from 'node:http';
-import { timingSafeEqual } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import { createHttpServer } from './http.js';
 import { httpConfig } from './http-auth.js';
+import { environmentOriginVerifier } from './origin-proof.js';
 
 /** The subset of an API Gateway HTTP API payload-format-2.0 event that is used. */
 export interface HttpApiEvent {
@@ -31,6 +31,7 @@ const FORWARDED_HEADERS = [
 ];
 
 let loopback: Promise<{ port: number; host: string; deadlineMs: number }> | undefined;
+const originVerifier = environmentOriginVerifier(process.env);
 
 /**
  * The existing Node HTTP server is reused unchanged on a loopback port, so the
@@ -52,15 +53,6 @@ function startLoopback() {
   return loopback;
 }
 
-function originVerified(headers: Record<string, string | undefined>): boolean {
-  const expected = process.env.ORIGIN_VERIFY_SECRET ?? '';
-  // Fail closed. GatewayStack refuses to synthesize HTTP MCP without the secret.
-  if (!expected) return false;
-  const actual = Buffer.from(headers['x-origin-verify'] ?? '');
-  const wanted = Buffer.from(expected);
-  return actual.length === wanted.length && timingSafeEqual(actual, wanted);
-}
-
 const reply = (statusCode: number, value: unknown): HttpApiResult => ({
   statusCode, isBase64Encoded: false,
   headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
@@ -72,7 +64,7 @@ export async function handler(event: HttpApiEvent, context?: LambdaContext): Pro
   // runtime that would otherwise wait for an empty event loop.
   if (context) context.callbackWaitsForEmptyEventLoop = false;
   const incoming = event.headers ?? {};
-  if (!originVerified(incoming)) return reply(403, { error: { code: 'FORBIDDEN', message: 'Forbidden' } });
+  if (!await originVerifier.verify(incoming)) return reply(403, { error: { code: 'FORBIDDEN', message: 'Forbidden' } });
   let server;
   try { server = await startLoopback(); }
   catch (error) {
