@@ -1045,11 +1045,23 @@ func (s *BedrockService) refineSequential(ctx context.Context, chunks [][]Whispe
 // 1. Sonnet infers speakers from conversational flow within each chunk
 // 2. The summary (Opus) re-identifies speakers from the full refined transcript
 // 3. Sequential mode (≤5 chunks, ~25 min) covers most meetings with full consistency
-func (s *BedrockService) refineParallel(ctx context.Context, chunks [][]WhisperSegment) []RefinedSegment {
-	type chunkResult struct {
-		index    int
-		segments []RefinedSegment
+// chunkResult carries one parallel refinement result back to its collector.
+type chunkResult struct {
+	index    int
+	segments []RefinedSegment
+}
+
+// recoverRefineChunk turns a panicking parallel refinement into that chunk's
+// raw-segment fallback, so one bad chunk cannot crash the whole run. It sends
+// exactly one result, keeping the collector's count intact.
+func recoverRefineChunk(idx, total int, done chan<- chunkResult, c []WhisperSegment, tail []RefinedSegment) {
+	if r := recover(); r != nil {
+		log.Printf("Chunk %d/%d refinement panicked (parallel), using raw: %v", idx+1, total, r)
+		done <- chunkResult{index: idx, segments: rawFallbackSegments(c, lastSpeakerLabel(tail))}
 	}
+}
+
+func (s *BedrockService) refineParallel(ctx context.Context, chunks [][]WhisperSegment) []RefinedSegment {
 
 	// Run first chunk synchronously to establish baseline speaker labels
 	firstResult, err := s.refineChunk(ctx, chunks[0], 0, len(chunks), nil)
@@ -1073,6 +1085,9 @@ func (s *BedrockService) refineParallel(ctx context.Context, chunks [][]WhisperS
 		sem <- struct{}{}
 		go func(idx int, c []WhisperSegment, tail []RefinedSegment) {
 			defer func() { <-sem }()
+			// A panic here would kill the Lambda (recovery middleware does not
+			// cover goroutines); fall back to raw segments like any chunk failure.
+			defer recoverRefineChunk(idx, len(chunks), done, c, tail)
 			refined, err := s.refineChunk(ctx, c, idx, len(chunks), tail)
 			if err != nil || len(refined) == 0 {
 				if err != nil {

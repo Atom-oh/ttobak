@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -131,12 +132,20 @@ func (h *KBHandler) DeleteFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err := h.kbService.DeleteFile(ctx, userID, fileID)
-	if err != nil {
-		if err.Error() == "file not found" {
-			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "File not found")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+	switch {
+	case err == nil:
+	case errors.Is(err, service.ErrNotFound):
+		writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "File not found")
+		return
+	case errors.Is(err, service.ErrInvalidInput):
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid fileId")
+		return
+	case errors.Is(err, service.ErrKBFileAmbiguous):
+		writeError(w, http.StatusConflict, model.ErrCodeConflict, "Several files share this name; rename or remove them from the console")
+		return
+	default:
+		log.Printf("kb delete failed: %v", err)
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to delete file")
 		return
 	}
 

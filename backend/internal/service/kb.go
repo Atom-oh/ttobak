@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -12,6 +14,14 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/ttobak/backend/internal/model"
 )
+
+// ErrKBFileAmbiguous means several KB objects share the requested file ID, so a
+// delete by that ID cannot know which one the caller meant.
+var ErrKBFileAmbiguous = errors.New("more than one KB file has this name")
+
+// kbFileID is the file ID ListFiles exposes and DeleteFile accepts: the key's
+// final path segment.
+func kbFileID(key string) string { return path.Base(key) }
 
 // KBService handles Knowledge Base operations
 type KBService struct {
@@ -131,8 +141,7 @@ func (s *KBService) ListFiles(ctx context.Context, userID string) (*model.KBFile
 				continue
 			}
 
-			// Use the key as fileId (base64 or just the key)
-			fileID := filepath.Base(*obj.Key)
+			fileID := kbFileID(*obj.Key)
 
 			var size int64
 			if obj.Size != nil {
@@ -171,42 +180,44 @@ func (s *KBService) ListFiles(ctx context.Context, userID string) (*model.KBFile
 	return &model.KBFilesResponse{Files: files}, nil
 }
 
-// DeleteFile deletes a KB file
+// DeleteFile deletes the caller's KB object whose file ID is exactly fileID.
+// Every listing page is searched. A name shared by more than one object is
+// refused instead of deleting whichever key happened to be listed first.
 func (s *KBService) DeleteFile(ctx context.Context, userID, fileID string) error {
-	// fileID is the filename part, reconstruct the full key
-	// We need to find the exact key
+	if fileID == "" || fileID == "." || fileID == ".." || strings.ContainsAny(fileID, `/\`) {
+		return ErrInvalidInput
+	}
 	prefix := fmt.Sprintf("kb/%s/", userID)
-
-	// List to find the exact file
-	result, err := s.s3Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+	pages := s3.NewListObjectsV2Paginator(s.s3Client, &s3.ListObjectsV2Input{
 		Bucket: aws.String(s.kbBucketName),
 		Prefix: aws.String(prefix),
 	})
-	if err != nil {
-		return fmt.Errorf("failed to list KB files: %w", err)
-	}
-
-	// Find matching file
-	var keyToDelete string
-	for _, obj := range result.Contents {
-		if obj.Key != nil && strings.HasSuffix(*obj.Key, fileID) {
-			keyToDelete = *obj.Key
-			break
+	var matches []string
+	for pages.HasMorePages() {
+		page, err := pages.NextPage(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to list KB files: %w", err)
+		}
+		for _, obj := range page.Contents {
+			if obj.Key != nil && kbFileID(*obj.Key) == fileID {
+				matches = append(matches, *obj.Key)
+			}
 		}
 	}
-
-	if keyToDelete == "" {
-		return fmt.Errorf("file not found")
+	switch len(matches) {
+	case 0:
+		return ErrNotFound
+	case 1:
+	default:
+		return ErrKBFileAmbiguous
 	}
 
-	_, err = s.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
+	if _, err := s.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(s.kbBucketName),
-		Key:    aws.String(keyToDelete),
-	})
-	if err != nil {
+		Key:    aws.String(matches[0]),
+	}); err != nil {
 		return fmt.Errorf("failed to delete KB file: %w", err)
 	}
-
 	return nil
 }
 

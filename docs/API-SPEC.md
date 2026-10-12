@@ -176,6 +176,11 @@ continuation pages under the caller's `kb/{userId}/` prefix. Any page failure
 fails the request rather than returning a silently incomplete successful list.
 This is storage pagination; the HTTP response remains a complete file list.
 
+`DELETE /api/kb/files/{fileId}` deletes the one object under that prefix whose
+final path segment equals `fileId` exactly, searching every listing page. An ID
+with a path separator or `..` returns 400, no match 404, and several objects with
+the same name 409 (nothing is deleted). Server errors return a generic message.
+
 ### Bounded meeting reading
 
 Bounded `section=notes` pages include the exact `notesRevision` (empty for legacy
@@ -825,6 +830,11 @@ persisted as `failed/INTERRUPTED`. A successful resultHash is the SHA-256 of the
 saved summary text.
 
 This differs from POST `/summarize`, which is live, caller-text summarization.
+That route requires owner or `edit` access to `{meetingId}` before any model call
+(404 without access, 403 read-only) and caps the body at 1 MiB. Recorders send the
+server draft meeting ID. A browser-only `meeting_<epoch ms>` ID is still accepted
+without a meeting check during the frontend rollout; remove that allowance once the
+updated frontend is deployed.
 Re-summary reads saved notes/summary, the current selected transcript and
 verified document extraction. It does not rerun STT or refinement and does not
 import linked-meeting context. Unavailable documents are omitted with notices

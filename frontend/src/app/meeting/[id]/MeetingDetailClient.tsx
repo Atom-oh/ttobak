@@ -469,13 +469,21 @@ function MeetingDetailContent() {
   };
 
   // Polling for in-progress meetings (timeout after 5 minutes)
+  // Both the counter and the timeout belong to one meeting: navigating to another
+  // meeting (the route component can be reused) starts from a fresh budget.
   const pollCountRef = useRef(0);
-  const [pollTimedOut, setPollTimedOut] = useState(false);
+  const pollCountMeetingRef = useRef<string | undefined>(undefined);
+  const [pollTimedOutFor, setPollTimedOutFor] = useState<string | null>(null);
   const MAX_POLLS = 60; // 60 * 5s = 5 minutes
   const polledMeetingId = meeting?.meetingId;
   const polledMeetingStatus = meeting?.status;
+  const pollTimedOut = !!polledMeetingId && pollTimedOutFor === polledMeetingId;
 
   useEffect(() => {
+    if (pollCountMeetingRef.current !== polledMeetingId) {
+      pollCountMeetingRef.current = polledMeetingId;
+      pollCountRef.current = 0;
+    }
     if (!polledMeetingId || !polledMeetingStatus || !['transcribing', 'summarizing'].includes(polledMeetingStatus)) return;
     if (pollTimedOut) return;
 
@@ -483,7 +491,7 @@ function MeetingDetailContent() {
       pollCountRef.current += 1;
       if (pollCountRef.current >= MAX_POLLS) {
         clearInterval(interval);
-        setPollTimedOut(true);
+        setPollTimedOutFor(polledMeetingId);
         return;
       }
       try {
@@ -723,7 +731,7 @@ function MeetingDetailContent() {
                       </span>
                     </div>
                     <button
-                      onClick={() => { pollCountRef.current = 0; setPollTimedOut(false); }}
+                      onClick={() => { pollCountRef.current = 0; setPollTimedOutFor(null); }}
                       className="px-3 py-1.5 rounded-lg text-xs font-medium border border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/40 transition-colors shrink-0"
                     >
                       다시 확인

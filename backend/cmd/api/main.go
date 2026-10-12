@@ -142,7 +142,7 @@ func init() {
 	dictService := service.NewDictionaryService(dictRepo, transcribeClient)
 	dictHandler := handler.NewDictionaryHandler(dictService)
 	translateHandler := handler.NewTranslateHandler(translateService)
-	summarizeLiveHandler := handler.NewSummarizeLiveHandler(bedrockRuntimeClient2)
+	summarizeLiveHandler := handler.NewSummarizeLiveHandler(bedrockRuntimeClient2, meetingService)
 	crawlerRepo := repository.NewCrawlerRepository(dynamoClient, tableName)
 	crawlerService := service.NewCrawlerService(crawlerRepo)
 	insightsService := service.NewInsightsService(crawlerRepo, s3Client, kbBucketName)

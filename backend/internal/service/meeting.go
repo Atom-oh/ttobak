@@ -321,6 +321,23 @@ func (s *MeetingService) checkAccess(ctx context.Context, userID, meetingID stri
 	return resolveSharedAccess(ctx, s.repo, userID, meetingID)
 }
 
+// AuthorizeEdit allows the meeting owner and edit-share recipients. A caller with
+// no access gets ErrNotFound (existence is not revealed); read-only access gets
+// ErrForbidden. It reads only the meeting metadata used for the decision.
+func (s *MeetingService) AuthorizeEdit(ctx context.Context, userID, meetingID string) error {
+	meeting, permission, err := s.checkAccess(ctx, userID, meetingID)
+	if err != nil {
+		return err
+	}
+	if meeting == nil {
+		return ErrNotFound
+	}
+	if permission != "owner" && permission != model.PermissionEdit {
+		return ErrForbidden
+	}
+	return nil
+}
+
 // ListMeetings lists meetings for a user with pagination. joinedAccountIDs
 // supplies discovery hints from grants materialized in this request; the team
 // stream still re-checks membership and never treats those hints as grants.

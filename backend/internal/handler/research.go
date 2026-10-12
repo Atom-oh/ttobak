@@ -50,8 +50,7 @@ func (h *ResearchHandler) CreateResearch(w http.ResponseWriter, r *http.Request)
 
 	research, err := h.researchService.CreateResearch(ctx, userID, &req)
 	if err != nil {
-		// Mode validation errors surface as non-sentinel errors
-		if strings.Contains(err.Error(), "invalid mode") {
+		if errors.Is(err, service.ErrInvalidResearchMode) {
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "mode must be quick, standard, or deep")
 			return
 		}
