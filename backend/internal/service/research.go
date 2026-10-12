@@ -86,11 +86,14 @@ func generateID() string {
 	return hex.EncodeToString(b)
 }
 
+// ErrInvalidResearchMode rejects a research mode other than quick, standard or deep.
+var ErrInvalidResearchMode = errors.New("invalid research mode")
+
 func (s *ResearchService) CreateResearch(ctx context.Context, userId string, req *model.CreateResearchRequest) (*model.Research, error) {
 	switch req.Mode {
 	case "quick", "standard", "deep":
 	default:
-		return nil, fmt.Errorf("invalid mode %q: must be quick, standard, or deep", req.Mode)
+		return nil, fmt.Errorf("%w %q: must be quick, standard, or deep", ErrInvalidResearchMode, req.Mode)
 	}
 
 	id := generateID()

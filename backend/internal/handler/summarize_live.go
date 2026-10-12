@@ -1,28 +1,78 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
+	"regexp"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/go-chi/chi/v5"
+	"github.com/ttobak/backend/internal/middleware"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/service"
 )
 
+// maxLiveSummaryBodyBytes bounds one update. The recorder currently sends the
+// whole running transcript plus the previous summary; several hours of Korean
+// speech stay well under 1 MiB.
+const maxLiveSummaryBodyBytes = 1 << 20
+
+// legacyClientMeetingID matches the browser-only ID (`meeting_<epoch ms>`) that
+// recorders sent before they passed the server draft meeting ID. It has no
+// server record to authorize against, so it keeps the previous behavior only
+// until the updated frontend is deployed; remove it in the follow-up.
+var legacyClientMeetingID = regexp.MustCompile(`^meeting_[0-9]{10,16}$`)
+
+type liveSummaryModel interface {
+	InvokeModel(context.Context, *bedrockruntime.InvokeModelInput, ...func(*bedrockruntime.Options)) (*bedrockruntime.InvokeModelOutput, error)
+}
+
+type liveSummaryAccess interface {
+	AuthorizeEdit(ctx context.Context, userID, meetingID string) error
+}
+
 type SummarizeLiveHandler struct {
-	bedrockClient *bedrockruntime.Client
+	bedrockClient liveSummaryModel
+	access        liveSummaryAccess
 }
 
-func NewSummarizeLiveHandler(bedrockClient *bedrockruntime.Client) *SummarizeLiveHandler {
-	return &SummarizeLiveHandler{bedrockClient: bedrockClient}
+func NewSummarizeLiveHandler(bedrockClient liveSummaryModel, access liveSummaryAccess) *SummarizeLiveHandler {
+	return &SummarizeLiveHandler{bedrockClient: bedrockClient, access: access}
 }
 
-// SummarizeLive handles POST /api/meetings/{meetingId}/summarize
+// SummarizeLive handles POST /api/meetings/{meetingId}/summarize. The caller
+// must be able to edit the meeting being recorded; the model is never invoked
+// for a meeting the caller cannot edit.
 func (h *SummarizeLiveHandler) SummarizeLive(w http.ResponseWriter, r *http.Request) {
-	_ = chi.URLParam(r, "meetingId")
+	meetingID := chi.URLParam(r, "meetingId")
+	if meetingID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "meetingId is required")
+		return
+	}
+	var err error
+	if legacyClientMeetingID.MatchString(meetingID) {
+		log.Printf("live summary: legacy client meeting id accepted without meeting authorization")
+	} else {
+		err = h.access.AuthorizeEdit(r.Context(), middleware.GetUserID(r.Context()), meetingID)
+	}
+	switch {
+	case err == nil:
+	case errors.Is(err, service.ErrNotFound):
+		writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
+		return
+	case errors.Is(err, service.ErrForbidden):
+		writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Edit access is required")
+		return
+	default:
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to check meeting access")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxLiveSummaryBodyBytes)
 
 	var req struct {
 		Transcript      string `json:"transcript"`

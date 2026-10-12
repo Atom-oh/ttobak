@@ -95,3 +95,76 @@ func TestValidateAssetOwnership(t *testing.T) {
 		})
 	}
 }
+
+func TestKBDeleteFileMatchesExactNamesAcrossPages(t *testing.T) {
+	page := func(truncated bool, token string, keys ...string) string {
+		body := `<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`
+		body += fmt.Sprintf(`<IsTruncated>%t</IsTruncated>`, truncated)
+		if token != "" {
+			body += `<NextContinuationToken>` + token + `</NextContinuationToken>`
+		}
+		for _, key := range keys {
+			body += `<Contents><Key>` + key + `</Key><Size>1</Size></Contents>`
+		}
+		return body + `</ListBucketResult>`
+	}
+	cases := []struct {
+		name    string
+		fileID  string
+		pages   []string
+		deleted string
+		want    error
+	}{
+		{
+			name:    "suffix collision deletes only the exact name",
+			fileID:  "report.pdf",
+			pages:   []string{page(false, "", "kb/owner/2026-report.pdf", "kb/owner/report.pdf", "kb/owner/old_report.pdf")},
+			deleted: "kb/owner/report.pdf",
+		},
+		{
+			name:    "match on a later page is found",
+			fileID:  "1790_deck.pdf",
+			pages:   []string{page(true, "p2", "kb/owner/a.pdf"), page(false, "", "kb/owner/1790_deck.pdf")},
+			deleted: "kb/owner/1790_deck.pdf",
+		},
+		{
+			name:   "two objects with the same file name are refused",
+			fileID: "notes.md",
+			pages:  []string{page(true, "p2", "kb/owner/notes.md"), page(false, "", "kb/owner/meetings/notes.md")},
+			want:   ErrKBFileAmbiguous,
+		},
+		{name: "missing file", fileID: "gone.pdf", pages: []string{page(false, "", "kb/owner/gone.pdf.bak")}, want: ErrNotFound},
+		{name: "path separator", fileID: "../other/secret.pdf", want: ErrInvalidInput},
+		{name: "backslash", fileID: `a\b.pdf`, want: ErrInvalidInput},
+		{name: "dot dot", fileID: "..", want: ErrInvalidInput},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			lists, deletes := 0, []string{}
+			client := s3.New(s3.Options{
+				Region: "ap-northeast-2", Credentials: aws.AnonymousCredentials{}, RetryMaxAttempts: 1,
+				HTTPClient: indexProviderHTTP(func(r *http.Request) (*http.Response, error) {
+					if r.Method == http.MethodDelete {
+						deletes = append(deletes, strings.TrimPrefix(r.URL.Path, "/"))
+						return indexHTTPResponse(204, "", nil), nil
+					}
+					if q := r.URL.Query(); q.Get("prefix") != "kb/owner/" || lists >= len(tc.pages) {
+						t.Fatalf("unexpected list request %s", r.URL)
+					}
+					lists++
+					return indexHTTPResponse(200, tc.pages[lists-1], nil), nil
+				}),
+			})
+			err := NewKBService(client, nil, "knowledge", "", "").DeleteFile(context.Background(), "owner", tc.fileID)
+			if tc.want != nil {
+				if !errors.Is(err, tc.want) || len(deletes) != 0 {
+					t.Fatalf("err=%v deletes=%v, want %v and no delete", err, deletes, tc.want)
+				}
+				return
+			}
+			if err != nil || len(deletes) != 1 || !strings.HasSuffix(deletes[0], tc.deleted) || lists != len(tc.pages) {
+				t.Fatalf("err=%v deletes=%v lists=%d, want only %s after %d pages", err, deletes, lists, tc.deleted, len(tc.pages))
+			}
+		})
+	}
+}

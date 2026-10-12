@@ -108,6 +108,7 @@ function RecordPageInner() {
 
   // Client-side meeting ID (stable across re-renders)
   const [clientMeetingIdBase] = useState(() => `meeting_${Date.now()}`);
+  const serverMeetingIdRef = useRef<string | null>(null);
 
   // Upload mode state
   const [uploadProgress, setUploadProgress] = useState<string | null>(null);
@@ -159,11 +160,15 @@ function RecordPageInner() {
     // "active" badge already reads session.activeProvider, which
     // useRecordingSession updates from this same signal internally --
     // this prop has no other consumer, so it's simply omitted.
+    // The live summary is authorized against the server meeting, so it needs
+    // the current draft meeting ID, read through a ref: this callback is created
+    // once. Before the draft exists there is nothing to summarize against.
     onTranscriptUpdate: useCallback((totalWordCount: number, allText: string) => {
-      const meetingId = postRecording.serverMeetingId || clientMeetingIdBase;
+      const meetingId = serverMeetingIdRef.current;
+      if (!meetingId) return;
       summary.checkThreshold(totalWordCount, allText, meetingId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [clientMeetingIdBase]),
+    }, []),
   });
 
   const postRecording = usePostRecording({
@@ -174,6 +179,9 @@ function RecordPageInner() {
     liveSummaryRef: summary.liveSummaryRef,
     flushPendingSummary: summary.flushPendingSummary,
   });
+
+  const serverMeetingId = postRecording.serverMeetingId;
+  useEffect(() => { serverMeetingIdRef.current = serverMeetingId; }, [serverMeetingId]);
 
   const clientMeetingId = postRecording.serverMeetingId || clientMeetingIdBase;
   const persistRecordingNotes = postRecording.persistNotes;
