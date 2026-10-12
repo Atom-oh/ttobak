@@ -325,6 +325,40 @@ S3 copy; an email share references the original and is read-only.
 Document shares use SHAREDDOC#/DOCSHARE_TO#, not meeting SHARED# keys. Deleting an
 owner document can leave share rows; list reads skip missing targets.
 
+Authenticated `GET /api/documents/{docId}/reading` and
+`GET /api/accounts/{accountId}/documents/{docId}/reading` return bounded current
+document pages. `section=content` is the default; `metadata` omits text.
+File-only `download` and `preview` selections request their respective links.
+`pageSize` counts Unicode code points (1–8000, default 4000). `maxBytes` bounds
+encoded JSON including its newline (8000–14000, default 10000), leaving room
+for MCP text and structured representations together. Content is never silently
+truncated: follow `page.nextCursor` until `complete=true` and `nextCursor=null`.
+Page offsets and totals use `unicode_code_points`.
+
+Every page reads present ownership/membership/share authorization and the current
+document using consistent primary reads, and rechecks both before returning.
+Cursors bind user, account scope, document, section, source revision and grant.
+Changing any of those makes continuation fail; content changes invalidate it even
+when the saved timestamp is unchanged. `STALE_CURSOR` returns 409 and requires a
+fresh read. Invalid options/cursors return 400; inaccessible personal documents
+return 404 and unauthorized account reads return 403.
+
+Responses include `revision`, `scope`, `permission`, `mode`, `textStatus`,
+`provenance`, explicit `metadataTruncated` fields, `content` and `page`.
+File-backed documents return `mode=file`, `textStatus=not_available`, bounded file
+metadata, authorized five-minute download/preview URLs and `textExtracted=false`.
+The existing AccountService and UploadService paths revalidate file access and
+sign the exact current key. Personal/shared keys must belong to the source
+owner; account file keys remain authoritative after another editor replaces a
+file. Public sharing tokens and raw `fileKey` fields are never returned.
+Link failures are explicit `downloadStatus`/`previewStatus=unavailable`. URLs are
+never truncated: oversized metadata previews shrink with `metadataTruncated`;
+if both full URLs still exceed the page budget, the download remains and
+`previewStatus=deferred` supplies `previewRead` for a separately authorized
+`section=preview` read. Its `expectedRevision` rejects file replacement with
+`STALE_CURSOR`; callers can also pin other related reads with that field.
+These links do not claim extracted file text.
+
 PPT/PPTX uploads trigger convert-doc and produce a docs-pdf/ sidecar. previewUrl
 points to the PDF while downloadUrl always points to the original. The converter
 records the actual GET's source ETag/version, rechecks the original, and replaces
@@ -508,12 +542,14 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | POST | `/api/accounts/{accountId}/documents` | `accountHandler.PutDocument` |
 | GET | `/api/accounts/{accountId}/documents` | `accountHandler.ListDocuments` |
 | GET | `/api/accounts/{accountId}/documents/{docId}` | `accountHandler.GetDocument` |
+| GET | `/api/accounts/{accountId}/documents/{docId}/reading` | `documentReadingHandler.Get` |
 | GET | `/api/accounts/{accountId}/documents/{docId}/index-status` | `indexStatusHandler.AccountDocument` |
 | PUT | `/api/accounts/{accountId}/documents/{docId}` | `accountHandler.UpdateDocument` |
 | DELETE | `/api/accounts/{accountId}/documents/{docId}` | `accountHandler.DeleteDocument` |
 | POST | `/api/documents` | `documentHandler.PutDocument` |
 | GET | `/api/documents` | `documentHandler.ListDocuments` |
 | GET | `/api/documents/{docId}` | `documentHandler.GetDocument` |
+| GET | `/api/documents/{docId}/reading` | `documentReadingHandler.Get` |
 | GET | `/api/documents/{docId}/index-status` | `indexStatusHandler.PersonalDocument` |
 | PUT | `/api/documents/{docId}` | `documentHandler.UpdateDocument` |
 | DELETE | `/api/documents/{docId}` | `documentHandler.DeleteDocument` |
