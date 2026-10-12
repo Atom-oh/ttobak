@@ -3,10 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"log"
-	"net/url"
 	"os"
+	"path"
 	"strings"
 
 	"github.com/aws/aws-lambda-go/lambda"
@@ -22,6 +22,7 @@ import (
 var (
 	bedrockService *service.BedrockService
 	repo           *repository.DynamoDBRepository
+	bucketName     string
 )
 
 func init() {
@@ -48,6 +49,7 @@ func init() {
 	if tableName == "" {
 		tableName = "ttobak-main"
 	}
+	bucketName = os.Getenv("BUCKET_NAME")
 
 	repo = repository.NewDynamoDBRepository(dynamoClient, tableName)
 	bedrockService = service.NewBedrockService(bedrockClient, s3Client, repo)
@@ -55,7 +57,9 @@ func init() {
 
 // imageUploadEvent represents the custom EventBridge event from upload/complete
 type imageUploadEvent struct {
-	Detail struct {
+	Source     string `json:"source"`
+	DetailType string `json:"detail-type"`
+	Detail     struct {
 		Bucket    string `json:"bucket"`
 		Key       string `json:"key"`
 		MeetingID string `json:"meetingId"`
@@ -63,78 +67,72 @@ type imageUploadEvent struct {
 	} `json:"detail"`
 }
 
+type imageAnalyzer interface {
+	AnalyzeImage(context.Context, string, string) (string, string, error)
+}
+
+type imageRepository interface {
+	ListAttachments(context.Context, string) ([]model.Attachment, error)
+	SaveImageResult(context.Context, *model.Attachment, string, string) error
+}
+
 // Handler processes custom EventBridge events for completed image uploads
 func Handler(ctx context.Context, raw json.RawMessage) error {
+	return processImage(ctx, raw, bucketName, bedrockService, repo)
+}
+
+func processImage(ctx context.Context, raw json.RawMessage, expectedBucket string, analyzer imageAnalyzer, store imageRepository) error {
+	// Errors reach Lambda's asynchronous failure destination. Keep them closed:
+	// provider responses, object names and generated content must not enter logs.
+	if len(raw) > 32*1024 {
+		return errors.New("image event too large")
+	}
 	var event imageUploadEvent
 	if err := json.Unmarshal(raw, &event); err != nil {
-		return fmt.Errorf("failed to unmarshal EventBridge event: %w", err)
+		return errors.New("invalid image event")
 	}
-
+	if event.Source != "ttobak.upload" || event.DetailType != "ImageUploadCompleted" {
+		return nil
+	}
 	bucket := event.Detail.Bucket
 	key := event.Detail.Key
 	userID := event.Detail.UserID
 	meetingID := event.Detail.MeetingID
-
-	// URL decode the key (handles both + and %XX encoding)
-	if decoded, err := url.QueryUnescape(key); err == nil {
-		key = decoded
+	// The upload-complete producer emits the literal key, not a URL-encoded key.
+	prefix := "images/" + userID + "/" + meetingID + "/"
+	if expectedBucket == "" || bucket != expectedBucket || userID == "" || meetingID == "" ||
+		strings.ContainsAny(userID+meetingID, "/\\") || !strings.HasPrefix(key, prefix) ||
+		len(key) <= len(prefix) || path.Clean(key) != key || strings.Contains(key, "\\") {
+		return errors.New("invalid image identity")
 	}
-
-	log.Printf("Processing image: bucket=%s, key=%s", bucket, key)
-
-	// Only process image files
-	if !strings.HasPrefix(key, "images/") {
-		log.Printf("Skipping non-image file: %s", key)
-		return nil
-	}
-
-	if userID == "" || meetingID == "" {
-		// Fallback: extract from key path
-		userID, meetingID = service.ExtractInfoFromImageKey(key)
-	}
-	if userID == "" || meetingID == "" {
-		log.Printf("Could not extract user/meeting ID from key: %s", key)
-		return nil
-	}
-
-	log.Printf("Processing image for user %s, meeting %s", userID, meetingID)
-
-	// Analyze the image with Bedrock Vision
-	classification, analysis, err := bedrockService.AnalyzeImage(ctx, bucket, key)
+	attachments, err := store.ListAttachments(ctx, meetingID)
 	if err != nil {
-		log.Printf("Failed to analyze image: %v", err)
-		return nil
+		return errors.New("image attachment read failed")
 	}
-
-	log.Printf("Image classified as: %s", classification)
-
-	// Find and update the attachment record
-	if err := updateAttachmentByKey(ctx, meetingID, key, classification, analysis); err != nil {
-		log.Printf("Failed to update attachment: %v", err)
-		return nil
-	}
-
-	log.Printf("Successfully analyzed image: %s", key)
-	return nil
-}
-
-func updateAttachmentByKey(ctx context.Context, meetingID, originalKey, attachType, processedContent string) error {
-	attachments, err := repo.ListAttachments(ctx, meetingID)
-	if err != nil {
-		return err
-	}
-
 	for _, att := range attachments {
-		if att.OriginalKey == originalKey {
-			att.Type = attachType
-			att.ProcessedContent = processedContent
-			att.Status = model.AttachStatusDone
-			return repo.UpdateAttachment(ctx, &att)
+		if att.OriginalKey != key || att.MeetingID != meetingID || att.UserID != userID {
+			continue
 		}
+		if att.Status != model.AttachStatusUploaded && att.Status != model.AttachStatusProcessing {
+			return nil
+		}
+		classification, analysis, err := analyzer.AnalyzeImage(ctx, bucket, key)
+		if err != nil {
+			return errors.New("image analysis failed")
+		}
+		if len(classification)+len(analysis) > 256*1024 {
+			return errors.New("image result too large")
+		}
+		err = store.SaveImageResult(ctx, &att, classification, analysis)
+		if errors.Is(err, repository.ErrConditionFailed) {
+			return nil // Removed, changed or completed while the model was running.
+		}
+		if err != nil {
+			return errors.New("image publication failed")
+		}
+		return nil
 	}
-
-	log.Printf("No attachment found with originalKey=%s for meeting=%s", originalKey, meetingID)
-	return nil
+	return nil // Deleted attachments and unrelated/stale deliveries stay ignored.
 }
 
 func main() {
