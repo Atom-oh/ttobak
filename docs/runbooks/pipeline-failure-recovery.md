@@ -5,8 +5,9 @@ notification delivery and synthetic failure/recovery separately.
 
 ## What is retained
 
-GatewayStack owns two seven-day, SSE-SQS encrypted, TLS-only queues with RETAIN
-on stack removal and no consumer or automatic redrive.
+GatewayStack owns two seven-day queues with Amazon SQS-managed server-side
+encryption (SSE-SQS), Transport Layer Security (TLS), RETAIN on stack removal
+and no consumer or automatic redrive.
 
 Fixed names can collide after stack deletion or rollback. Inventory ownership
 before recreation; preserve messages and review import or a new-name migration,
@@ -42,9 +43,9 @@ nonzero-only `AWS/Events` metric `InvocationsFailedToBeSentToDlq`, scoped by `Ru
 
 GatewayStack's optional `PipelineAlarmTopicArn` parameter defaults empty: alarms
 have no actions and `PipelineAlarmRouting` reports `UNCONFIGURED`. Configure an
-existing standard SNS topic with reviewed regional CloudWatch publish permission
-and a confirmed operator subscription. This change creates no topic/subscription
-and sends no notifications.
+existing standard Amazon Simple Notification Service (SNS) topic with reviewed
+regional CloudWatch publish permission and a confirmed operator subscription.
+This change creates no topic/subscription and sends no notifications.
 
 After reviewing the exact synth/diff, deploy changed stacks individually with
 `--exclusively`; never deploy KnowledgeStack incidentally. Example parameter:
@@ -59,8 +60,9 @@ production invocation policy or publish private meeting content for testing.
 
 ## Inspect one retained event
 
-Install `boto3<2`; use the intended AWS profile/region. STS determines the account:
-the tool uses its `ttobak-main`, `ttobak-assets-ACCOUNT` and allowlisted functions.
+Install `boto3<2`; use the intended AWS profile/region. AWS Security Token Service
+(STS) determines the account: the tool uses its `ttobak-main`,
+`ttobak-assets-ACCOUNT` and allowlisted functions.
 Grant STS identity, exact-table `GetItem`, scoped S3 HEAD and, for execution,
 `lambda:InvokeFunction` on the intended worker. Queue inspection/deletion is separate.
 
