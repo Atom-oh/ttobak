@@ -9,11 +9,14 @@ targets=("${@:-all}")
 
 build_backend() {
   echo "==> Building Go Lambda functions (ARM64)..."
+  npm --prefix "$ROOT/backend/internal/service/pdfassets" ci --ignore-scripts --no-audit --no-fund
+  npm --prefix "$ROOT/backend/internal/service/pdfassets" run verify
   cd "$ROOT/backend"
   for dir in cmd/api cmd/transcribe cmd/summarize cmd/process-image cmd/kb cmd/research-worker cmd/websocket cmd/ws-authorizer; do
     echo "  - $dir"
     GOOS=linux GOARCH=arm64 /usr/local/go/bin/go build -tags lambda.norpc -o "$dir/bootstrap" "./$dir"
   done
+  cp internal/service/pdfassets/node_modules/pretendard/dist/LICENSE.txt cmd/api/Pretendard-OFL.txt
   echo "  Go build complete"
 }
 

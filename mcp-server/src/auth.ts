@@ -7,6 +7,8 @@ import {
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { execFile } from 'node:child_process';
+import { CognitoJwtVerifier } from 'aws-jwt-verify';
+import { SimpleJwksCache } from 'aws-jwt-verify/jwk';
 
 const CALLBACK_PORT = 9876;
 const MAX_AUTH_BYTES = 64 * 1024;
@@ -24,6 +26,8 @@ interface TokenData {
 export interface AuthConfig {
   cognitoDomain: string;
   clientId: string;
+  apiUrl: string;
+  userPoolId?: string;
 }
 
 /** Injection points for synthetic tests; none are environment-configurable. */
@@ -124,6 +128,28 @@ export function requestAuthJson(url: URL, body?: URLSearchParams): Promise<unkno
   });
 }
 
+function createVerifier(userPoolId: string, clientId: string, fetchJson: NonNullable<AuthDependencies['requestJson']>) {
+  return CognitoJwtVerifier.create({
+    userPoolId, clientId, tokenUse: null,
+    customJwtCheck: ({ header, payload }) => {
+      const now = Date.now() / 1000;
+      if (header.alg !== 'RS256' || typeof payload.sub !== 'string' || !payload.sub ||
+          typeof payload.exp !== 'number' || !Number.isSafeInteger(payload.exp) || payload.exp <= 0 ||
+          typeof payload.iat !== 'number' || !Number.isSafeInteger(payload.iat) || payload.iat > now + 60 ||
+          (payload.nbf !== undefined && (typeof payload.nbf !== 'number' || !Number.isFinite(payload.nbf) || payload.nbf > now))) {
+        throw new Error('Invalid Cognito user token');
+      }
+    },
+  }, {
+    jwksCache: new SimpleJwksCache({
+      fetcher: { fetch: async (url) => {
+        const value = await fetchJson(new URL(url));
+        return new TextEncoder().encode(JSON.stringify(value)).buffer;
+      } },
+    }),
+  });
+}
+
 export class CognitoAuth {
   private readonly config: AuthConfig;
   private readonly dependencies: AuthDependencies;
@@ -134,9 +160,12 @@ export class CognitoAuth {
   private pending?: Promise<string>;
   private cancelLogin?: () => void;
   private generation = 0;
+  private initialization?: Promise<void>;
+  private verifier?: ReturnType<typeof createVerifier>;
 
   constructor(config: AuthConfig, dependencies: AuthDependencies = {}) {
-    this.config = { ...config, cognitoDomain: origin(config.cognitoDomain, 'TTOBAK_COGNITO_DOMAIN') };
+    this.config = { ...config, cognitoDomain: origin(config.cognitoDomain, 'TTOBAK_COGNITO_DOMAIN'),
+      apiUrl: origin(config.apiUrl, 'TTOBAK_API_URL') };
     if (!/^[a-zA-Z0-9]{1,128}$/.test(config.clientId)) throw new Error('Invalid TTOBAK_CLIENT_ID');
     this.dependencies = dependencies;
     this.fetchJson = dependencies.requestJson ?? requestAuthJson;
@@ -174,6 +203,39 @@ export class CognitoAuth {
     if (generation !== this.generation) throw new Error('Authentication was cancelled by logout');
   }
 
+  private initialize(): Promise<void> {
+    this.initialization ??= this.discover().catch((error) => {
+      this.initialization = undefined;
+      throw error;
+    });
+    return this.initialization;
+  }
+
+  private async discover(): Promise<void> {
+    let userPoolId = this.config.userPoolId;
+    if (!userPoolId) {
+      const runtime = await this.fetchJson(new URL('/config.json', this.config.apiUrl));
+      if (!record(runtime) || !record(runtime.cognito) ||
+          runtime.cognito.userPoolClientId !== this.config.clientId ||
+          typeof runtime.cognito.userPoolId !== 'string' ||
+          typeof runtime.cognito.region !== 'string' ||
+          !runtime.cognito.userPoolId.startsWith(runtime.cognito.region + '_')) {
+        throw new Error('Application login configuration does not match this MCP deployment');
+      }
+      userPoolId = runtime.cognito.userPoolId;
+    }
+    let issuer: string, jwksUri: string;
+    try { ({ issuer, jwksUri } = CognitoJwtVerifier.parseUserPoolId(userPoolId)); }
+    catch { throw new Error('Invalid TTOBAK_USER_POOL_ID or application login configuration'); }
+    const metadata = await this.fetchJson(new URL(issuer + '/.well-known/openid-configuration'));
+    if (!record(metadata) || metadata.issuer !== issuer || metadata.jwks_uri !== jwksUri ||
+        metadata.authorization_endpoint !== this.config.cognitoDomain + '/oauth2/authorize' ||
+        metadata.token_endpoint !== this.config.cognitoDomain + '/oauth2/token') {
+      throw new Error('Cognito issuer and Hosted UI configuration do not match');
+    }
+    this.verifier = createVerifier(userPoolId, this.config.clientId, this.fetchJson);
+  }
+
   private async acquireToken(generation: number): Promise<string> {
     this.assertGeneration(generation);
     if (this.isAuthenticated()) return this.tokens!.id_token;
@@ -192,6 +254,17 @@ export class CognitoAuth {
     return this.tokens!.id_token;
   }
 
+  private async verifyReturnedTokens(tokens: TokenData): Promise<TokenData> {
+    try {
+      const [id, access] = await Promise.all([
+        this.verifier!.verify(tokens.id_token, { tokenUse: 'id', graceSeconds: 0 }),
+        this.verifier!.verify(tokens.access_token, { tokenUse: 'access', graceSeconds: 0 }),
+      ]);
+      if (id.sub !== access.sub) throw new Error('Token subjects differ');
+      return { ...tokens, expires_at: Math.min(tokens.expires_at, id.exp, access.exp) };
+    } catch { throw new Error('Returned credentials are not valid for this deployment'); }
+  }
+
   private loadTokens(): void {
     try {
       if (!existsSync(this.tokenFile)) return;
@@ -201,15 +274,19 @@ export class CognitoAuth {
   }
 
   private async saveTokens(tokens: TokenData, generation: number): Promise<void> {
+    await this.initialize();
+    const verified = await this.verifyReturnedTokens(tokens);
     this.assertGeneration(generation);
     try {
       mkdirSync(this.tokenDirectory, { recursive: true, mode: 0o700 });
-      writeFileSync(this.tokenFile, JSON.stringify(tokens), { mode: 0o600 });
+      writeFileSync(this.tokenFile, JSON.stringify(verified), { mode: 0o600 });
     } catch { throw new Error('Could not store credentials'); }
-    this.tokens = tokens;
+    this.tokens = verified;
   }
 
   private async login(generation: number): Promise<void> {
+    await this.initialize();
+    this.assertGeneration(generation);
     const verifier = randomBytes(32).toString('base64url');
     const state = randomBytes(32).toString('hex');
     const callback = await this.waitForCallback(state);
@@ -333,6 +410,8 @@ export class CognitoAuth {
   }
 
   private async refresh(generation: number): Promise<void> {
+    await this.initialize();
+    this.assertGeneration(generation);
     const refreshToken = this.tokens!.refresh_token;
     const body = new URLSearchParams({
       grant_type: 'refresh_token', client_id: this.config.clientId, refresh_token: refreshToken,

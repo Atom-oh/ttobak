@@ -36,11 +36,14 @@ cd infra && npm install && cd ..
 # Build backend
 echo ""
 echo "Building Go Lambda binaries..."
+npm --prefix backend/internal/service/pdfassets ci --ignore-scripts --no-audit --no-fund
+npm --prefix backend/internal/service/pdfassets run verify
 cd backend
 for dir in cmd/api cmd/transcribe cmd/summarize cmd/process-image cmd/kb; do
   echo "  Building $dir..."
   GOOS=linux GOARCH=arm64 /usr/local/go/bin/go build -tags lambda.norpc -o "$dir/bootstrap" "./$dir"
 done
+cp internal/service/pdfassets/node_modules/pretendard/dist/LICENSE.txt cmd/api/Pretendard-OFL.txt
 cd ..
 
 # Build frontend

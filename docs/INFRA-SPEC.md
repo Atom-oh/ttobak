@@ -7,6 +7,13 @@ Root security requirements remain requirements even where existing IaC has a gap
 
 ## Stack ownership
 
+Meeting PDF exports are tagged temporary objects under the existing `files/`
+download prefix. StorageStack declares seven-day current/noncurrent expiration
+only for `ttobak-artifact=meeting-pdf-export`; other files remain outside this
+rule. Noncurrent age starts at supersession, so versioned bodies can survive
+current expiration; physical cleanup is asynchronous. The declaration and synthesis
+do not establish that the rule is deployed.
+
 | Stack | Role | Dependencies explicitly declared in the app |
 |---|---|---|
 | TtobakWebSearchGatewayStack | AgentCore Web Search Gateway, us-east-1 | None |
@@ -207,6 +214,24 @@ queue SendMessage. The existing summarize worker processes owner/meeting/run IDs
 without rerunning transcription/summary. Analysis state and five-minute leases
 live in `MEETING#{id}/ANALYSIS#actionItems`; expired work becomes retryable failure.
 The DLQ covers delivery, not downstream model failures.
+
+Core audio/crop, image, transcript, multipart and optional slide-conversion
+EventBridge targets retain exhausted delivery failures in the Gateway-owned
+`ttobak-pipeline-delivery-failures` queue. Transcribe, summarize, process-image and
+optional convert-doc retain exhausted asynchronous execution records in the
+separate `ttobak-pipeline-execution-failures` queue, preserving two Lambda retries
+and the six-hour event-age default. Both queues use SSE-SQS, require TLS, retain
+seven days and have no automatic consumer. Gateway-owned exact queue-send
+policies avoid a reverse dependency on AiStack roles.
+
+Backlog/age, worker failure/drop/throttle and EventBridge delivery alarms are
+declared in `PipelineFailures`. Existing QA/index/action/saved-summary DLQs retain
+their behavior and gain queue alarms. Notifications require the explicit
+`PipelineAlarmTopicArn` parameter and separately verified topic policy/subscriber
+delivery; the empty default reports `UNCONFIGURED`. The inspected replay tool
+defaults to dry run, preserves original events/run IDs and never deletes messages.
+See [failure retention and replay](runbooks/pipeline-failure-recovery.md) for
+limits, operator prerequisites and required live acceptance.
 
 ### Attachment extraction
 

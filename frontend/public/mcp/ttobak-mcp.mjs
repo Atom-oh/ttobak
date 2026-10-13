@@ -19113,8 +19113,8 @@ var Protocol = class {
     this._taskStore = _options?.taskStore;
     this._taskMessageQueue = _options?.taskMessageQueue;
     if (this._taskStore) {
-      this.setRequestHandler(GetTaskRequestSchema, async (request, extra) => {
-        const task = await this._taskStore.getTask(request.params.taskId, extra.sessionId);
+      this.setRequestHandler(GetTaskRequestSchema, async (request2, extra) => {
+        const task = await this._taskStore.getTask(request2.params.taskId, extra.sessionId);
         if (!task) {
           throw new McpError(ErrorCode.InvalidParams, "Failed to retrieve task: Task not found");
         }
@@ -19122,9 +19122,9 @@ var Protocol = class {
           ...task
         };
       });
-      this.setRequestHandler(GetTaskPayloadRequestSchema, async (request, extra) => {
+      this.setRequestHandler(GetTaskPayloadRequestSchema, async (request2, extra) => {
         const handleTaskResult = async () => {
-          const taskId = request.params.taskId;
+          const taskId = request2.params.taskId;
           if (this._taskMessageQueue) {
             let queuedMessage;
             while (queuedMessage = await this._taskMessageQueue.dequeue(taskId, extra.sessionId)) {
@@ -19175,9 +19175,9 @@ var Protocol = class {
         };
         return await handleTaskResult();
       });
-      this.setRequestHandler(ListTasksRequestSchema, async (request, extra) => {
+      this.setRequestHandler(ListTasksRequestSchema, async (request2, extra) => {
         try {
-          const { tasks, nextCursor } = await this._taskStore.listTasks(request.params?.cursor, extra.sessionId);
+          const { tasks, nextCursor } = await this._taskStore.listTasks(request2.params?.cursor, extra.sessionId);
           return {
             tasks,
             nextCursor,
@@ -19187,20 +19187,20 @@ var Protocol = class {
           throw new McpError(ErrorCode.InvalidParams, `Failed to list tasks: ${error3 instanceof Error ? error3.message : String(error3)}`);
         }
       });
-      this.setRequestHandler(CancelTaskRequestSchema, async (request, extra) => {
+      this.setRequestHandler(CancelTaskRequestSchema, async (request2, extra) => {
         try {
-          const task = await this._taskStore.getTask(request.params.taskId, extra.sessionId);
+          const task = await this._taskStore.getTask(request2.params.taskId, extra.sessionId);
           if (!task) {
-            throw new McpError(ErrorCode.InvalidParams, `Task not found: ${request.params.taskId}`);
+            throw new McpError(ErrorCode.InvalidParams, `Task not found: ${request2.params.taskId}`);
           }
           if (isTerminal(task.status)) {
             throw new McpError(ErrorCode.InvalidParams, `Cannot cancel task in terminal status: ${task.status}`);
           }
-          await this._taskStore.updateTaskStatus(request.params.taskId, "cancelled", "Client cancelled task execution.", extra.sessionId);
-          this._clearTaskQueue(request.params.taskId);
-          const cancelledTask = await this._taskStore.getTask(request.params.taskId, extra.sessionId);
+          await this._taskStore.updateTaskStatus(request2.params.taskId, "cancelled", "Client cancelled task execution.", extra.sessionId);
+          this._clearTaskQueue(request2.params.taskId);
+          const cancelledTask = await this._taskStore.getTask(request2.params.taskId, extra.sessionId);
           if (!cancelledTask) {
-            throw new McpError(ErrorCode.InvalidParams, `Task not found after cancellation: ${request.params.taskId}`);
+            throw new McpError(ErrorCode.InvalidParams, `Task not found after cancellation: ${request2.params.taskId}`);
           }
           return {
             _meta: {},
@@ -19321,14 +19321,14 @@ var Protocol = class {
     }
     Promise.resolve().then(() => handler(notification)).catch((error3) => this._onerror(new Error(`Uncaught error in notification handler: ${error3}`)));
   }
-  _onrequest(request, extra) {
-    const handler = this._requestHandlers.get(request.method) ?? this.fallbackRequestHandler;
+  _onrequest(request2, extra) {
+    const handler = this._requestHandlers.get(request2.method) ?? this.fallbackRequestHandler;
     const capturedTransport = this._transport;
-    const relatedTaskId = request.params?._meta?.[RELATED_TASK_META_KEY]?.taskId;
+    const relatedTaskId = request2.params?._meta?.[RELATED_TASK_META_KEY]?.taskId;
     if (handler === void 0) {
       const errorResponse = {
         jsonrpc: "2.0",
-        id: request.id,
+        id: request2.id,
         error: {
           code: ErrorCode.MethodNotFound,
           message: "Method not found"
@@ -19346,17 +19346,17 @@ var Protocol = class {
       return;
     }
     const abortController = new AbortController();
-    this._requestHandlerAbortControllers.set(request.id, abortController);
-    const taskCreationParams = isTaskAugmentedRequestParams(request.params) ? request.params.task : void 0;
-    const taskStore = this._taskStore ? this.requestTaskStore(request, capturedTransport?.sessionId) : void 0;
+    this._requestHandlerAbortControllers.set(request2.id, abortController);
+    const taskCreationParams = isTaskAugmentedRequestParams(request2.params) ? request2.params.task : void 0;
+    const taskStore = this._taskStore ? this.requestTaskStore(request2, capturedTransport?.sessionId) : void 0;
     const fullExtra = {
       signal: abortController.signal,
       sessionId: capturedTransport?.sessionId,
-      _meta: request.params?._meta,
+      _meta: request2.params?._meta,
       sendNotification: async (notification) => {
         if (abortController.signal.aborted)
           return;
-        const notificationOptions = { relatedRequestId: request.id };
+        const notificationOptions = { relatedRequestId: request2.id };
         if (relatedTaskId) {
           notificationOptions.relatedTask = { taskId: relatedTaskId };
         }
@@ -19366,7 +19366,7 @@ var Protocol = class {
         if (abortController.signal.aborted) {
           throw new McpError(ErrorCode.ConnectionClosed, "Request was cancelled");
         }
-        const requestOptions = { ...options, relatedRequestId: request.id };
+        const requestOptions = { ...options, relatedRequestId: request2.id };
         if (relatedTaskId && !requestOptions.relatedTask) {
           requestOptions.relatedTask = { taskId: relatedTaskId };
         }
@@ -19377,7 +19377,7 @@ var Protocol = class {
         return await this.request(r, resultSchema, requestOptions);
       },
       authInfo: extra?.authInfo,
-      requestId: request.id,
+      requestId: request2.id,
       requestInfo: extra?.requestInfo,
       taskId: relatedTaskId,
       taskStore,
@@ -19387,16 +19387,16 @@ var Protocol = class {
     };
     Promise.resolve().then(() => {
       if (taskCreationParams) {
-        this.assertTaskHandlerCapability(request.method);
+        this.assertTaskHandlerCapability(request2.method);
       }
-    }).then(() => handler(request, fullExtra)).then(async (result) => {
+    }).then(() => handler(request2, fullExtra)).then(async (result) => {
       if (abortController.signal.aborted) {
         return;
       }
       const response = {
         result,
         jsonrpc: "2.0",
-        id: request.id
+        id: request2.id
       };
       if (relatedTaskId && this._taskMessageQueue) {
         await this._enqueueTaskMessage(relatedTaskId, {
@@ -19413,7 +19413,7 @@ var Protocol = class {
       }
       const errorResponse = {
         jsonrpc: "2.0",
-        id: request.id,
+        id: request2.id,
         error: {
           code: Number.isSafeInteger(error3["code"]) ? error3["code"] : ErrorCode.InternalError,
           message: error3.message ?? "Internal error",
@@ -19430,8 +19430,8 @@ var Protocol = class {
         await capturedTransport?.send(errorResponse);
       }
     }).catch((error3) => this._onerror(new Error(`Failed to send response: ${error3}`))).finally(() => {
-      if (this._requestHandlerAbortControllers.get(request.id) === abortController) {
-        this._requestHandlerAbortControllers.delete(request.id);
+      if (this._requestHandlerAbortControllers.get(request2.id) === abortController) {
+        this._requestHandlerAbortControllers.delete(request2.id);
       }
     });
   }
@@ -19535,11 +19535,11 @@ var Protocol = class {
    *
    * @experimental Use `client.experimental.tasks.requestStream()` to access this method.
    */
-  async *requestStream(request, resultSchema, options) {
+  async *requestStream(request2, resultSchema, options) {
     const { task } = options ?? {};
     if (!task) {
       try {
-        const result = await this.request(request, resultSchema, options);
+        const result = await this.request(request2, resultSchema, options);
         yield { type: "result", result };
       } catch (error3) {
         yield {
@@ -19551,7 +19551,7 @@ var Protocol = class {
     }
     let taskId;
     try {
-      const createResult = await this.request(request, CreateTaskResultSchema, options);
+      const createResult = await this.request(request2, CreateTaskResultSchema, options);
       if (createResult.task) {
         taskId = createResult.task.taskId;
         yield { type: "taskCreated", task: createResult.task };
@@ -19599,7 +19599,7 @@ var Protocol = class {
    *
    * Do not use this method to emit notifications! Use notification() instead.
    */
-  request(request, resultSchema, options) {
+  request(request2, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
     return new Promise((resolve, reject) => {
       const earlyReject = (error3) => {
@@ -19611,9 +19611,9 @@ var Protocol = class {
       }
       if (this._options?.enforceStrictCapabilities === true) {
         try {
-          this.assertCapabilityForMethod(request.method);
+          this.assertCapabilityForMethod(request2.method);
           if (task) {
-            this.assertTaskCapability(request.method);
+            this.assertTaskCapability(request2.method);
           }
         } catch (e) {
           earlyReject(e);
@@ -19623,16 +19623,16 @@ var Protocol = class {
       options?.signal?.throwIfAborted();
       const messageId = this._requestMessageId++;
       const jsonrpcRequest = {
-        ...request,
+        ...request2,
         jsonrpc: "2.0",
         id: messageId
       };
       if (options?.onprogress) {
         this._progressHandlers.set(messageId, options.onprogress);
         jsonrpcRequest.params = {
-          ...request.params,
+          ...request2.params,
           _meta: {
-            ...request.params?._meta || {},
+            ...request2.params?._meta || {},
             progressToken: messageId
           }
         };
@@ -19836,8 +19836,8 @@ var Protocol = class {
   setRequestHandler(requestSchema, handler) {
     const method = getMethodLiteral(requestSchema);
     this.assertRequestHandlerCapability(method);
-    this._requestHandlers.set(method, (request, extra) => {
-      const parsed = parseWithCompat(requestSchema, request);
+    this._requestHandlers.set(method, (request2, extra) => {
+      const parsed = parseWithCompat(requestSchema, request2);
       return Promise.resolve(handler(parsed, extra));
     });
   }
@@ -19952,19 +19952,19 @@ var Protocol = class {
       }, { once: true });
     });
   }
-  requestTaskStore(request, sessionId) {
+  requestTaskStore(request2, sessionId) {
     const taskStore = this._taskStore;
     if (!taskStore) {
       throw new Error("No task store configured");
     }
     return {
       createTask: async (taskParams) => {
-        if (!request) {
+        if (!request2) {
           throw new Error("No request provided");
         }
-        return await taskStore.createTask(taskParams, request.id, {
-          method: request.method,
-          params: request.params
+        return await taskStore.createTask(taskParams, request2.id, {
+          method: request2.method,
+          params: request2.params
         }, sessionId);
       },
       getTask: async (taskId) => {
@@ -20125,8 +20125,8 @@ var ExperimentalServerTasks = class {
    *
    * @experimental
    */
-  requestStream(request, resultSchema, options) {
-    return this._server.requestStream(request, resultSchema, options);
+  requestStream(request2, resultSchema, options) {
+    return this._server.requestStream(request2, resultSchema, options);
   }
   /**
    * Sends a sampling request and returns an AsyncGenerator that yields response messages.
@@ -20371,12 +20371,12 @@ var Server = class extends Protocol {
     this._capabilities = options?.capabilities ?? {};
     this._instructions = options?.instructions;
     this._jsonSchemaValidator = options?.jsonSchemaValidator ?? new AjvJsonSchemaValidator();
-    this.setRequestHandler(InitializeRequestSchema, (request) => this._oninitialize(request));
+    this.setRequestHandler(InitializeRequestSchema, (request2) => this._oninitialize(request2));
     this.setNotificationHandler(InitializedNotificationSchema, () => this.oninitialized?.());
     if (this._capabilities.logging) {
-      this.setRequestHandler(SetLevelRequestSchema, async (request, extra) => {
+      this.setRequestHandler(SetLevelRequestSchema, async (request2, extra) => {
         const transportSessionId = extra.sessionId || extra.requestInfo?.headers["mcp-session-id"] || void 0;
-        const { level } = request.params;
+        const { level } = request2.params;
         const parseResult = LoggingLevelSchema.safeParse(level);
         if (parseResult.success) {
           this._loggingLevels.set(transportSessionId, parseResult.data);
@@ -20435,14 +20435,14 @@ var Server = class extends Protocol {
     }
     const method = methodValue;
     if (method === "tools/call") {
-      const wrappedHandler = async (request, extra) => {
-        const validatedRequest = safeParse2(CallToolRequestSchema, request);
+      const wrappedHandler = async (request2, extra) => {
+        const validatedRequest = safeParse2(CallToolRequestSchema, request2);
         if (!validatedRequest.success) {
           const errorMessage = validatedRequest.error instanceof Error ? validatedRequest.error.message : String(validatedRequest.error);
           throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call request: ${errorMessage}`);
         }
         const { params } = validatedRequest.data;
-        const result = await Promise.resolve(handler(request, extra));
+        const result = await Promise.resolve(handler(request2, extra));
         if (params.task) {
           const taskValidationResult = safeParse2(CreateTaskResultSchema, result);
           if (!taskValidationResult.success) {
@@ -20573,10 +20573,10 @@ var Server = class extends Protocol {
     }
     assertToolsCallTaskCapability(this._capabilities.tasks?.requests, method, "Server");
   }
-  async _oninitialize(request) {
-    const requestedVersion = request.params.protocolVersion;
-    this._clientCapabilities = request.params.capabilities;
-    this._clientVersion = request.params.clientInfo;
+  async _oninitialize(request2) {
+    const requestedVersion = request2.params.protocolVersion;
+    this._clientCapabilities = request2.params.capabilities;
+    this._clientVersion = request2.params.clientInfo;
     const protocolVersion = SUPPORTED_PROTOCOL_VERSIONS.includes(requestedVersion) ? requestedVersion : LATEST_PROTOCOL_VERSION;
     return {
       protocolVersion,
@@ -20845,6 +20845,1083 @@ import {
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { execFile } from "node:child_process";
+
+// node_modules/aws-jwt-verify/dist/esm/error.js
+var JwtBaseError = class extends Error {
+};
+var FailedAssertionError = class extends JwtBaseError {
+  constructor(msg, actual, expected) {
+    super(msg);
+    this.failedAssertion = {
+      actual,
+      expected
+    };
+  }
+};
+var JwtParseError = class extends JwtBaseError {
+  constructor(msg, error3) {
+    const message = error3 != null ? `${msg}: ${error3}` : msg;
+    super(message);
+  }
+};
+var ParameterValidationError = class extends JwtBaseError {
+};
+var JwtInvalidSignatureError = class extends JwtBaseError {
+};
+var JwtInvalidSignatureAlgorithmError = class extends FailedAssertionError {
+};
+var JwtInvalidClaimError = class extends FailedAssertionError {
+  withRawJwt({ header, payload }) {
+    this.rawJwt = {
+      header,
+      payload
+    };
+    return this;
+  }
+};
+var JwtInvalidIssuerError = class extends JwtInvalidClaimError {
+};
+var JwtInvalidAudienceError = class extends JwtInvalidClaimError {
+};
+var JwtInvalidScopeError = class extends JwtInvalidClaimError {
+};
+var JwtExpiredError = class extends JwtInvalidClaimError {
+};
+var JwtNotBeforeError = class extends JwtInvalidClaimError {
+};
+var CognitoJwtInvalidGroupError = class extends JwtInvalidClaimError {
+};
+var CognitoJwtInvalidTokenUseError = class extends JwtInvalidClaimError {
+};
+var CognitoJwtInvalidClientIdError = class extends JwtInvalidClaimError {
+};
+var JwksValidationError = class extends JwtBaseError {
+};
+var JwkValidationError = class extends JwtBaseError {
+};
+var JwtWithoutValidKidError = class extends JwtBaseError {
+};
+var KidNotFoundInJwksError = class extends JwtBaseError {
+};
+var WaitPeriodNotYetEndedJwkError = class extends JwtBaseError {
+};
+var JwksNotAvailableInCacheError = class extends JwtBaseError {
+};
+var JwkInvalidUseError = class extends FailedAssertionError {
+};
+var JwkInvalidKtyError = class extends FailedAssertionError {
+};
+var FetchError = class extends JwtBaseError {
+  constructor(uri, msg) {
+    super(`Failed to fetch ${uri}: ${msg}`);
+  }
+};
+var NonRetryableFetchError = class extends FetchError {
+};
+
+// node_modules/aws-jwt-verify/dist/esm/node-web-compat-node.js
+import { createPublicKey, createVerify, verify } from "crypto";
+
+// node_modules/aws-jwt-verify/dist/esm/https-node.js
+import { request } from "https";
+import { pipeline } from "stream";
+async function fetch(uri, requestOptions, data) {
+  let responseTimeout;
+  return new Promise((resolve, reject) => {
+    const req = request(uri, {
+      method: "GET",
+      ...requestOptions
+    }, (response) => {
+      if (response.statusCode !== 200) {
+        done(new NonRetryableFetchError(uri, `Status code is ${response.statusCode}, expected 200`));
+        return;
+      }
+      pipeline(response, async (responseBody) => {
+        const chunks = [];
+        for await (const chunk of responseBody) {
+          chunks.push(chunk);
+        }
+        const buf = Buffer.concat(chunks);
+        return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+      }, (err, data2) => done(err, data2));
+    });
+    if (requestOptions?.responseTimeout) {
+      responseTimeout = setTimeout(() => done(new FetchError(uri, `Response time-out (after ${requestOptions.responseTimeout} ms.)`)), requestOptions.responseTimeout);
+      responseTimeout.unref();
+    }
+    function done(err, data2) {
+      if (responseTimeout)
+        clearTimeout(responseTimeout);
+      if (err == null) {
+        resolve(data2);
+        return;
+      }
+      req.socket?.emit("agentRemove");
+      if (!(err instanceof FetchError)) {
+        err = new FetchError(uri, err.message);
+      }
+      req.destroy();
+      reject(err);
+    }
+    req.on("error", done);
+    req.end(data);
+  });
+}
+
+// node_modules/aws-jwt-verify/dist/esm/node-web-compat-node.js
+var JwtSignatureAlgorithmHashNames;
+(function(JwtSignatureAlgorithmHashNames2) {
+  JwtSignatureAlgorithmHashNames2["RS256"] = "RSA-SHA256";
+  JwtSignatureAlgorithmHashNames2["RS384"] = "RSA-SHA384";
+  JwtSignatureAlgorithmHashNames2["RS512"] = "RSA-SHA512";
+  JwtSignatureAlgorithmHashNames2["ES256"] = "RSA-SHA256";
+  JwtSignatureAlgorithmHashNames2["ES384"] = "RSA-SHA384";
+  JwtSignatureAlgorithmHashNames2["ES512"] = "RSA-SHA512";
+})(JwtSignatureAlgorithmHashNames || (JwtSignatureAlgorithmHashNames = {}));
+var nodeWebCompat = {
+  fetch,
+  transformJwkToKeyObjectSync: (jwk) => createPublicKey({
+    key: jwk,
+    format: "jwk"
+  }),
+  transformJwkToKeyObjectAsync: async (jwk) => createPublicKey({
+    key: jwk,
+    format: "jwk"
+  }),
+  parseB64UrlString: (b64) => Buffer.from(b64, "base64").toString("utf8"),
+  verifySignatureSync: ({ alg, keyObject, jwsSigningInput, signature }) => alg !== "EdDSA" ? (
+    // eslint-disable-next-line security/detect-object-injection
+    createVerify(JwtSignatureAlgorithmHashNames[alg]).update(jwsSigningInput).verify({
+      key: keyObject,
+      dsaEncoding: "ieee-p1363"
+      // Signature format r || s (not used for RSA)
+    }, signature, "base64")
+  ) : verify(null, Buffer.from(jwsSigningInput), keyObject, Buffer.from(signature, "base64")),
+  verifySignatureAsync: async (args) => nodeWebCompat.verifySignatureSync(args),
+  defaultFetchTimeouts: {
+    socketIdle: 1500,
+    response: 3e3
+  },
+  setTimeoutUnref: (...args) => setTimeout(...args).unref(),
+  transformPemToJwk: async (pem) => {
+    return createPublicKey({
+      key: Buffer.from(pem),
+      format: "pem"
+    }).export({
+      format: "jwk"
+    });
+  }
+};
+
+// node_modules/aws-jwt-verify/dist/esm/https.js
+var fetch2 = nodeWebCompat.fetch.bind(void 0);
+var SimpleFetcher = class {
+  constructor(props) {
+    this.defaultRequestOptions = {
+      timeout: nodeWebCompat.defaultFetchTimeouts.socketIdle,
+      responseTimeout: nodeWebCompat.defaultFetchTimeouts.response,
+      ...props?.defaultRequestOptions
+    };
+  }
+  /**
+   * Execute a HTTPS request (with 1 immediate retry in case of errors)
+   * @param uri - The URI
+   * @param requestOptions - The RequestOptions to use (depending on the runtime context, either Node.js RequestOptions or Web Fetch init)
+   * @param data - Data to send to the URI (e.g. POST data)
+   * @returns - The response body as ArrayBuffer
+   */
+  async fetch(uri, requestOptions, data) {
+    requestOptions = { ...this.defaultRequestOptions, ...requestOptions };
+    try {
+      return await fetch2(uri, requestOptions, data);
+    } catch (err) {
+      if (err instanceof NonRetryableFetchError) {
+        throw err;
+      }
+      return fetch2(uri, requestOptions, data);
+    }
+  }
+};
+
+// node_modules/aws-jwt-verify/dist/esm/safe-json-parse.js
+function isJsonObject(j) {
+  return typeof j === "object" && !Array.isArray(j) && j !== null;
+}
+function safeJsonParse(s) {
+  return JSON.parse(s, (_, value) => {
+    if (typeof value === "object" && !Array.isArray(value) && value !== null) {
+      delete value.__proto__;
+      delete value.constructor;
+    }
+    return value;
+  });
+}
+
+// node_modules/aws-jwt-verify/dist/esm/assert.js
+function assertStringEquals(name, actual, expected, errorConstructor = FailedAssertionError) {
+  if (!actual) {
+    throw new errorConstructor(`Missing ${name}. Expected: ${expected}`, actual, expected);
+  }
+  if (typeof actual !== "string") {
+    throw new errorConstructor(`${name} is not of type string`, actual, expected);
+  }
+  if (expected !== actual) {
+    throw new errorConstructor(`${name} not allowed: ${actual}. Expected: ${expected}`, actual, expected);
+  }
+}
+function assertStringArrayContainsString(name, actual, expected, errorConstructor = FailedAssertionError) {
+  if (!actual) {
+    throw new errorConstructor(`Missing ${name}. ${expectationMessage(expected)}`, actual, expected);
+  }
+  if (typeof actual !== "string") {
+    throw new errorConstructor(`${name} is not of type string`, actual, expected);
+  }
+  return assertStringArraysOverlap(name, actual, expected, errorConstructor);
+}
+function assertStringArraysOverlap(name, actual, expected, errorConstructor = FailedAssertionError) {
+  if (!actual) {
+    throw new errorConstructor(`Missing ${name}. ${expectationMessage(expected)}`, actual, expected);
+  }
+  const expectedAsSet = new Set(Array.isArray(expected) ? expected : [expected]);
+  if (typeof actual === "string") {
+    actual = [actual];
+  }
+  if (!Array.isArray(actual)) {
+    throw new errorConstructor(`${name} is not an array`, actual, expected);
+  }
+  const overlaps = actual.some((actualItem) => {
+    if (typeof actualItem !== "string") {
+      throw new errorConstructor(`${name} includes elements that are not of type string`, actual, expected);
+    }
+    return expectedAsSet.has(actualItem);
+  });
+  if (!overlaps) {
+    throw new errorConstructor(`${name} not allowed: ${actual.join(", ")}. ${expectationMessage(expected)}`, actual, expected);
+  }
+}
+function expectationMessage(expected) {
+  if (Array.isArray(expected)) {
+    if (expected.length > 1) {
+      return `Expected one of: ${expected.join(", ")}`;
+    }
+    return `Expected: ${expected[0]}`;
+  }
+  return `Expected: ${expected}`;
+}
+function assertIsNotPromise(actual, errorFactory) {
+  if (actual && typeof actual.then === "function") {
+    throw errorFactory();
+  }
+}
+
+// node_modules/aws-jwt-verify/dist/esm/jwk.js
+var optionalJwkFieldNames = [
+  "use",
+  // https://datatracker.ietf.org/doc/html/rfc7517#section-4.2
+  "alg",
+  // https://datatracker.ietf.org/doc/html/rfc7517#section-4.4
+  "kid",
+  // https://datatracker.ietf.org/doc/html/rfc7517#section-4.5
+  "n",
+  // https://datatracker.ietf.org/doc/html/rfc7518#section-6.3.1.1
+  "e",
+  // https://datatracker.ietf.org/doc/html/rfc7518#section-6.3.1.2
+  "x",
+  // https://datatracker.ietf.org/doc/html/rfc7518#section-6.2.1.2
+  "y",
+  // https://datatracker.ietf.org/doc/html/rfc7518#section-6.2.1.3
+  "crv"
+  //https:// datatracker.ietf.org/doc/html/rfc7518#section-6.2.1.1
+];
+var mandatoryJwkFieldNames = [
+  "kty"
+  // https://datatracker.ietf.org/doc/html/rfc7517#section-4.1
+];
+function findJwkInJwks(jwks, kid) {
+  return jwks.keys.find((jwk) => jwk.kid != null && jwk.kid === kid);
+}
+var parseJwks = function(jwksBin) {
+  let jwks;
+  try {
+    const jwksText = new TextDecoder("utf8", {
+      fatal: true,
+      ignoreBOM: true
+    }).decode(jwksBin);
+    jwks = safeJsonParse(jwksText);
+  } catch (err) {
+    throw new JwksValidationError(`JWKS could not be parsed as JSON: ${err}`);
+  }
+  assertIsJwks(jwks);
+  return jwks;
+};
+function assertIsJwks(jwks) {
+  if (!jwks) {
+    throw new JwksValidationError("JWKS empty");
+  }
+  if (!isJsonObject(jwks)) {
+    throw new JwksValidationError("JWKS should be an object");
+  }
+  if (!Object.keys(jwks).includes("keys")) {
+    throw new JwksValidationError("JWKS does not include keys");
+  }
+  if (!Array.isArray(jwks.keys)) {
+    throw new JwksValidationError("JWKS keys should be an array");
+  }
+  for (const jwk of jwks.keys) {
+    assertIsJwk(jwk);
+  }
+}
+function assertIsSignatureJwk(jwk) {
+  assertStringArrayContainsString("JWK kty", jwk.kty, ["EC", "RSA", "OKP"], JwkInvalidKtyError);
+  if (jwk.kty === "EC") {
+    assertIsEsSignatureJwk(jwk);
+  } else if (jwk.kty === "RSA") {
+    assertIsRsaSignatureJwk(jwk);
+  } else if (jwk.kty === "OKP") {
+    assertIsEdDSASignatureJwk(jwk);
+  }
+}
+function assertIsEdDSASignatureJwk(jwk) {
+  if (jwk.use) {
+    assertStringEquals("JWK use", jwk.use, "sig", JwkInvalidUseError);
+  }
+  assertStringEquals("JWK kty", jwk.kty, "OKP", JwkInvalidKtyError);
+  if (!jwk.crv)
+    throw new JwkValidationError("Missing Curve (crv)");
+  if (!jwk.x)
+    throw new JwkValidationError("Missing X Coordinate (x)");
+}
+function assertIsEsSignatureJwk(jwk) {
+  if (jwk.use) {
+    assertStringEquals("JWK use", jwk.use, "sig", JwkInvalidUseError);
+  }
+  assertStringEquals("JWK kty", jwk.kty, "EC", JwkInvalidKtyError);
+  if (!jwk.crv)
+    throw new JwkValidationError("Missing Curve (crv)");
+  if (!jwk.x)
+    throw new JwkValidationError("Missing X Coordinate (x)");
+  if (!jwk.y)
+    throw new JwkValidationError("Missing Y Coordinate (y)");
+}
+function assertIsRsaSignatureJwk(jwk) {
+  if (jwk.use) {
+    assertStringEquals("JWK use", jwk.use, "sig", JwkInvalidUseError);
+  }
+  assertStringEquals("JWK kty", jwk.kty, "RSA", JwkInvalidKtyError);
+  if (!jwk.n)
+    throw new JwkValidationError("Missing modulus (n)");
+  if (!jwk.e)
+    throw new JwkValidationError("Missing exponent (e)");
+}
+function assertIsJwk(jwk) {
+  if (!jwk) {
+    throw new JwkValidationError("JWK empty");
+  }
+  if (!isJsonObject(jwk)) {
+    throw new JwkValidationError("JWK should be an object");
+  }
+  for (const field of mandatoryJwkFieldNames) {
+    if (typeof jwk[field] !== "string") {
+      throw new JwkValidationError(`JWK ${field} should be a string`);
+    }
+  }
+  for (const field of optionalJwkFieldNames) {
+    if (field in jwk && typeof jwk[field] !== "string") {
+      throw new JwkValidationError(`JWK ${field} should be a string`);
+    }
+  }
+}
+function isJwks(jwks) {
+  try {
+    assertIsJwks(jwks);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function isJwk(jwk) {
+  try {
+    assertIsJwk(jwk);
+    return true;
+  } catch {
+    return false;
+  }
+}
+var SimplePenaltyBox = class {
+  constructor(props) {
+    this.waitingUris = /* @__PURE__ */ new Map();
+    this.waitSeconds = props?.waitSeconds ?? 10;
+  }
+  async wait(jwksUri) {
+    if (this.waitingUris.has(jwksUri)) {
+      throw new WaitPeriodNotYetEndedJwkError("Not allowed to fetch JWKS yet, still waiting for back off period to end");
+    }
+  }
+  release(jwksUri) {
+    const i = this.waitingUris.get(jwksUri);
+    if (i) {
+      clearTimeout(i);
+      this.waitingUris.delete(jwksUri);
+    }
+  }
+  registerFailedAttempt(jwksUri) {
+    const i = nodeWebCompat.setTimeoutUnref(() => {
+      this.waitingUris.delete(jwksUri);
+    }, this.waitSeconds * 1e3);
+    this.waitingUris.set(jwksUri, i);
+  }
+  registerSuccessfulAttempt(jwksUri) {
+    this.release(jwksUri);
+  }
+};
+var SimpleJwksCache = class {
+  constructor(props) {
+    this.jwksCache = /* @__PURE__ */ new Map();
+    this.fetchingJwks = /* @__PURE__ */ new Map();
+    this.penaltyBox = props?.penaltyBox ?? new SimplePenaltyBox();
+    this.fetcher = props?.fetcher ?? new SimpleFetcher();
+    this.jwksParser = props?.jwksParser ?? parseJwks;
+  }
+  /**
+   * Add a JWKS to the cache explicitly. E.g. you may want to do this, if you have already downloaded the JWKS.
+   *
+   * @param jwksUri - The URI where your IDP exposes the JWKS, e.g. `https://example.com/my-idp/.well-known/jwks.json` (this is used as cache key)
+   * @param jwks - The JWKS
+   */
+  addJwks(jwksUri, jwks) {
+    this.jwksCache.set(jwksUri, jwks);
+  }
+  /**
+   * Fetch and cache the JWKS from the jwksUri
+   *
+   * @param jwksUri - The URI where your IDP exposes the JWKS, e.g. `https://example.com/my-idp/.well-known/jwks.json`
+   * @returns - The fetched jwks
+   */
+  async getJwks(jwksUri) {
+    const existingFetch = this.fetchingJwks.get(jwksUri);
+    if (existingFetch) {
+      return existingFetch;
+    }
+    const jwksPromise = this.fetcher.fetch(jwksUri).then(this.jwksParser);
+    this.fetchingJwks.set(jwksUri, jwksPromise);
+    let jwks;
+    try {
+      jwks = await jwksPromise;
+    } finally {
+      this.fetchingJwks.delete(jwksUri);
+    }
+    this.jwksCache.set(jwksUri, jwks);
+    return jwks;
+  }
+  /**
+   * Get the JWKS from the cache (synchronously). Raises an error if the JWKS is not yet cached, or does not have the right JWK.
+   *
+   * @param jwksUri - The URI where your IDP exposes the JWKS, e.g. `https://example.com/my-idp/.well-known/jwks.json` (this is used as cache key)
+   * @param decomposedJwt - The decomposed JWT
+   * @returns - The previously cached JWKS
+   */
+  getCachedJwk(jwksUri, decomposedJwt) {
+    if (typeof decomposedJwt.header.kid !== "string") {
+      throw new JwtWithoutValidKidError("JWT header does not have valid kid claim");
+    }
+    if (!this.jwksCache.has(jwksUri)) {
+      throw new JwksNotAvailableInCacheError(`JWKS for uri ${jwksUri} not yet available in cache`);
+    }
+    const jwk = findJwkInJwks(this.jwksCache.get(jwksUri), decomposedJwt.header.kid);
+    if (!jwk) {
+      throw new KidNotFoundInJwksError(`JWK for kid ${decomposedJwt.header.kid} not found in the JWKS`);
+    }
+    return jwk;
+  }
+  /**
+   * Get the right JWK to verify the JWT with. This will fetch (and cache) the JWKS in case it's not yet been cached,
+   * or if the cached JWKS doesn't have the right JWK (to account for key rotations, based on `kid`).
+   *
+   * @param jwksUri
+   * @param decomposedJwt
+   * @returns  - The JWK
+   */
+  async getJwk(jwksUri, decomposedJwt) {
+    if (typeof decomposedJwt.header.kid !== "string") {
+      throw new JwtWithoutValidKidError("JWT header does not have valid kid claim");
+    }
+    const cachedJwks = this.jwksCache.get(jwksUri);
+    if (cachedJwks) {
+      const cachedJwk = findJwkInJwks(cachedJwks, decomposedJwt.header.kid);
+      if (cachedJwk) {
+        return cachedJwk;
+      }
+    }
+    await this.penaltyBox.wait(jwksUri, decomposedJwt.header.kid);
+    const jwks = await this.getJwks(jwksUri);
+    const jwk = findJwkInJwks(jwks, decomposedJwt.header.kid);
+    if (!jwk) {
+      this.penaltyBox.registerFailedAttempt(jwksUri, decomposedJwt.header.kid);
+      throw new KidNotFoundInJwksError(`JWK for kid "${decomposedJwt.header.kid}" not found in the JWKS`);
+    } else {
+      this.penaltyBox.registerSuccessfulAttempt(jwksUri, decomposedJwt.header.kid);
+    }
+    return jwk;
+  }
+};
+
+// node_modules/aws-jwt-verify/dist/esm/jwt.js
+function assertJwtHeader(header) {
+  if (!isJsonObject(header)) {
+    throw new JwtParseError("JWT header is not an object");
+  }
+  if (header.alg !== void 0 && typeof header.alg !== "string") {
+    throw new JwtParseError("JWT header alg claim is not a string");
+  }
+  if (header.kid !== void 0 && typeof header.kid !== "string") {
+    throw new JwtParseError("JWT header kid claim is not a string");
+  }
+}
+function assertJwtPayload(payload) {
+  if (!isJsonObject(payload)) {
+    throw new JwtParseError("JWT payload is not an object");
+  }
+  if (payload.exp !== void 0 && !Number.isFinite(payload.exp)) {
+    throw new JwtParseError("JWT payload exp claim is not a number");
+  }
+  if (payload.iss !== void 0 && typeof payload.iss !== "string") {
+    throw new JwtParseError("JWT payload iss claim is not a string");
+  }
+  if (payload.sub !== void 0 && typeof payload.sub !== "string") {
+    throw new JwtParseError("JWT payload sub claim is not a string");
+  }
+  if (payload.aud !== void 0 && typeof payload.aud !== "string" && (!Array.isArray(payload.aud) || payload.aud.some((aud) => typeof aud !== "string"))) {
+    throw new JwtParseError("JWT payload aud claim is not a string or array of strings");
+  }
+  if (payload.nbf !== void 0 && !Number.isFinite(payload.nbf)) {
+    throw new JwtParseError("JWT payload nbf claim is not a number");
+  }
+  if (payload.iat !== void 0 && !Number.isFinite(payload.iat)) {
+    throw new JwtParseError("JWT payload iat claim is not a number");
+  }
+  if (payload.scope !== void 0 && typeof payload.scope !== "string") {
+    throw new JwtParseError("JWT payload scope claim is not a string");
+  }
+  if (payload.jti !== void 0 && typeof payload.jti !== "string") {
+    throw new JwtParseError("JWT payload jti claim is not a string");
+  }
+}
+var JWT_REGEX = /^[A-Za-z0-9_-]+={0,2}\.[A-Za-z0-9_-]+={0,2}\.[A-Za-z0-9_-]+={0,2}$/;
+function decomposeUnverifiedJwt(jwt2) {
+  if (!jwt2) {
+    throw new JwtParseError("Empty JWT");
+  }
+  if (typeof jwt2 !== "string") {
+    throw new JwtParseError("JWT is not a string");
+  }
+  if (!JWT_REGEX.test(jwt2)) {
+    throw new JwtParseError("JWT string does not consist of exactly 3 parts (header, payload, signature)");
+  }
+  const [headerB64, payloadB64, signatureB64] = jwt2.split(".");
+  const [headerString, payloadString] = [headerB64, payloadB64].map(nodeWebCompat.parseB64UrlString);
+  let header;
+  try {
+    header = safeJsonParse(headerString);
+  } catch (err) {
+    throw new JwtParseError("Invalid JWT. Header is not a valid JSON object", err);
+  }
+  assertJwtHeader(header);
+  let payload;
+  try {
+    payload = safeJsonParse(payloadString);
+  } catch (err) {
+    throw new JwtParseError("Invalid JWT. Payload is not a valid JSON object", err);
+  }
+  assertJwtPayload(payload);
+  return {
+    header,
+    headerB64,
+    payload,
+    payloadB64,
+    signatureB64
+  };
+}
+function validateJwtFields(payload, options) {
+  if (payload.exp !== void 0) {
+    if (payload.exp + (options.graceSeconds ?? 0) < Date.now() / 1e3) {
+      throw new JwtExpiredError(`Token expired at ${new Date(payload.exp * 1e3).toISOString()}`, payload.exp);
+    }
+  }
+  if (payload.nbf !== void 0) {
+    if (payload.nbf - (options.graceSeconds ?? 0) > Date.now() / 1e3) {
+      throw new JwtNotBeforeError(`Token can't be used before ${new Date(payload.nbf * 1e3).toISOString()}`, payload.nbf);
+    }
+  }
+  if (options.issuer !== null) {
+    if (options.issuer === void 0) {
+      throw new ParameterValidationError("issuer must be provided or set to null explicitly");
+    }
+    assertStringArrayContainsString("Issuer", payload.iss, options.issuer, JwtInvalidIssuerError);
+  }
+  if (options.audience !== null) {
+    if (options.audience === void 0) {
+      throw new ParameterValidationError("audience must be provided or set to null explicitly");
+    }
+    assertStringArraysOverlap("Audience", payload.aud, options.audience, JwtInvalidAudienceError);
+  }
+  if (options.scope != null) {
+    assertStringArraysOverlap("Scope", payload.scope?.split(" "), options.scope, JwtInvalidScopeError);
+  }
+}
+
+// node_modules/aws-jwt-verify/dist/esm/jwt-verifier.js
+var supportedSignatureAlgorithms = [
+  "RS256",
+  "RS384",
+  "RS512",
+  "ES256",
+  "ES384",
+  "ES512",
+  "EdDSA"
+];
+function validateJwtHeaderAndJwk(header, jwk) {
+  assertIsSignatureJwk(jwk);
+  if (jwk.alg) {
+    assertStringEquals("JWT signature algorithm", header.alg, jwk.alg, JwtInvalidSignatureAlgorithmError);
+  }
+  assertStringArrayContainsString("JWT signature algorithm", header.alg, supportedSignatureAlgorithms, JwtInvalidSignatureAlgorithmError);
+}
+async function verifyDecomposedJwt(decomposedJwt, jwksUri, options, jwkFetcher, transformJwkToKeyObjectFn) {
+  const { header, headerB64, payload, payloadB64, signatureB64 } = decomposedJwt;
+  const jwk = await jwkFetcher(jwksUri, decomposedJwt);
+  validateJwtHeaderAndJwk(decomposedJwt.header, jwk);
+  const keyObject = await transformJwkToKeyObjectFn(jwk, header.alg, payload.iss);
+  const valid = await nodeWebCompat.verifySignatureAsync({
+    jwsSigningInput: `${headerB64}.${payloadB64}`,
+    signature: signatureB64,
+    alg: header.alg,
+    keyObject
+  });
+  if (!valid) {
+    throw new JwtInvalidSignatureError("Invalid signature");
+  }
+  try {
+    validateJwtFields(payload, options);
+    if (options.customJwtCheck) {
+      await options.customJwtCheck({ header, payload, jwk });
+    }
+  } catch (err) {
+    if (options.includeRawJwtInErrors && err instanceof JwtInvalidClaimError) {
+      throw err.withRawJwt(decomposedJwt);
+    }
+    throw err;
+  }
+  return payload;
+}
+function verifyDecomposedJwtSync(decomposedJwt, jwkOrJwks, options, transformJwkToKeyObjectFn) {
+  const { header, headerB64, payload, payloadB64, signatureB64 } = decomposedJwt;
+  let jwk;
+  if (isJwk(jwkOrJwks)) {
+    jwk = jwkOrJwks;
+  } else if (isJwks(jwkOrJwks)) {
+    const locatedJwk = header.kid ? findJwkInJwks(jwkOrJwks, header.kid) : void 0;
+    if (!locatedJwk) {
+      throw new KidNotFoundInJwksError(`JWK for kid ${header.kid} not found in the JWKS`);
+    }
+    jwk = locatedJwk;
+  } else {
+    throw new ParameterValidationError([
+      `Expected a valid JWK or JWKS (parsed as JavaScript object), but received: ${jwkOrJwks}.`,
+      "If you're passing a JWKS URI, use the async verify() method instead, it will download and parse the JWKS for you"
+    ].join());
+  }
+  validateJwtHeaderAndJwk(decomposedJwt.header, jwk);
+  const keyObject = transformJwkToKeyObjectFn(jwk, header.alg, payload.iss);
+  const valid = nodeWebCompat.verifySignatureSync({
+    jwsSigningInput: `${headerB64}.${payloadB64}`,
+    signature: signatureB64,
+    alg: header.alg,
+    keyObject
+  });
+  if (!valid) {
+    throw new JwtInvalidSignatureError("Invalid signature");
+  }
+  try {
+    validateJwtFields(payload, options);
+    if (options.customJwtCheck) {
+      const res = options.customJwtCheck({ header, payload, jwk });
+      assertIsNotPromise(res, () => new ParameterValidationError("Custom JWT checks must be synchronous but a promise was returned"));
+    }
+  } catch (err) {
+    if (options.includeRawJwtInErrors && err instanceof JwtInvalidClaimError) {
+      throw err.withRawJwt(decomposedJwt);
+    }
+    throw err;
+  }
+  return payload;
+}
+var JwtVerifierBase = class {
+  constructor(verifyProperties, jwksCache = new SimpleJwksCache()) {
+    this.jwksCache = jwksCache;
+    this.issuersConfig = /* @__PURE__ */ new Map();
+    this.publicKeyCache = new KeyObjectCache();
+    if (Array.isArray(verifyProperties)) {
+      if (!verifyProperties.length) {
+        throw new ParameterValidationError("Provide at least one issuer configuration");
+      }
+      verifyProperties.forEach((prop, index) => {
+        if (this.issuersConfig.has(prop.issuer)) {
+          throw new ParameterValidationError(`issuer ${prop.issuer} supplied multiple times`);
+        } else if (prop.issuer === null && verifyProperties.length >= 2) {
+          throw new ParameterValidationError(`issuer cannot be null when multiple issuers are supplied (at issuer: ${index})`);
+        }
+        this.issuersConfig.set(prop.issuer, this.withJwksUri(prop));
+      });
+    } else {
+      this.issuersConfig.set(verifyProperties.issuer, this.withJwksUri(verifyProperties));
+    }
+  }
+  getIssuerConfig(issuer) {
+    if (this.issuersConfig.size === 1) {
+      issuer = this.issuersConfig.keys().next().value;
+    }
+    if (issuer === void 0) {
+      throw new ParameterValidationError("issuer must be provided");
+    }
+    const config2 = this.issuersConfig.get(issuer);
+    if (!config2) {
+      throw new ParameterValidationError(`issuer not configured: ${issuer}`);
+    }
+    return config2;
+  }
+  /**
+   * This method loads a JWKS that you provide, into the JWKS cache, so that it is
+   * available for JWT verification. Use this method to speed up the first JWT verification
+   * (when the JWKS would otherwise have to be downloaded from the JWKS uri), or to provide the JWKS
+   * in case the JwtVerifier does not have internet access to download the JWKS
+   *
+   * @param jwksThe JWKS
+   * @param issuer The issuer for which you want to cache the JWKS
+   *  Supply this field, if you instantiated the JwtVerifier with multiple issuers
+   * @returns void
+   */
+  cacheJwks(...[jwks, issuer]) {
+    const issuerConfig = this.getIssuerConfig(issuer);
+    this.jwksCache.addJwks(issuerConfig.jwksUri, jwks);
+    this.publicKeyCache.clearCache(issuerConfig.issuer);
+  }
+  /**
+   * Hydrate the JWKS cache for (all of) the configured issuer(s).
+   * This will fetch and cache the latest and greatest JWKS for concerned issuer(s).
+   *
+   * @returns void
+   */
+  async hydrate() {
+    const jwksFetches = Array.from(this.issuersConfig.values()).map(({ jwksUri }) => this.jwksCache.getJwks(jwksUri));
+    const results = await Promise.allSettled(jwksFetches);
+    const allFailed = results.every((r) => r.status === "rejected");
+    if (allFailed) {
+      throw results[0].reason;
+    }
+  }
+  /**
+   * Verify (synchronously) a JWT.
+   *
+   * @param jwt The JWT, as string
+   * @param props Verification properties
+   * @returns The payload of the JWT––if the JWT is valid, otherwise an error is thrown
+   */
+  verifySync(...[jwt2, properties]) {
+    const { decomposedJwt, jwksUri, verifyProperties } = this.getVerifyParameters(jwt2, properties);
+    return this.verifyDecomposedJwtSync(decomposedJwt, jwksUri, verifyProperties);
+  }
+  /**
+   * Verify (synchronously) an already decomposed JWT.
+   *
+   * @param decomposedJwt The decomposed Jwt
+   * @param jwk The JWK to verify the JWTs signature with
+   * @param verifyProperties The properties to use for verification
+   * @returns The payload of the JWT––if the JWT is valid, otherwise an error is thrown
+   */
+  verifyDecomposedJwtSync(decomposedJwt, jwksUri, verifyProperties) {
+    const jwk = this.jwksCache.getCachedJwk(jwksUri, decomposedJwt);
+    return verifyDecomposedJwtSync(decomposedJwt, jwk, verifyProperties, this.publicKeyCache.transformJwkToKeyObjectSync.bind(this.publicKeyCache));
+  }
+  /**
+   * Verify (asynchronously) a JWT.
+   * This call is asynchronous, and the JWKS will be fetched from the JWKS uri,
+   * in case it is not yet available in the cache.
+   *
+   * @param jwt The JWT, as string
+   * @param props Verification properties
+   * @returns Promise that resolves to the payload of the JWT––if the JWT is valid, otherwise the promise rejects
+   */
+  async verify(...[jwt2, properties]) {
+    const { decomposedJwt, jwksUri, verifyProperties } = this.getVerifyParameters(jwt2, properties);
+    return this.verifyDecomposedJwt(decomposedJwt, jwksUri, verifyProperties);
+  }
+  /**
+   * Verify (asynchronously) an already decomposed JWT.
+   *
+   * @param decomposedJwt The decomposed Jwt
+   * @param jwk The JWK to verify the JWTs signature with
+   * @param verifyProperties The properties to use for verification
+   * @returns The payload of the JWT––if the JWT is valid, otherwise an error is thrown
+   */
+  verifyDecomposedJwt(decomposedJwt, jwksUri, verifyProperties) {
+    return verifyDecomposedJwt(decomposedJwt, jwksUri, verifyProperties, this.jwksCache.getJwk.bind(this.jwksCache), this.publicKeyCache.transformJwkToKeyObjectAsync.bind(this.publicKeyCache));
+  }
+  /**
+   * Get the verification parameters to use, by merging the issuer configuration,
+   * with the overriding properties that are now provided
+   *
+   * @param jwt: the JWT that is going to be verified
+   * @param verifyProperties: the overriding properties, that override the issuer configuration
+   * @returns The merged verification parameters
+   */
+  getVerifyParameters(jwt2, verifyProperties) {
+    const decomposedJwt = decomposeUnverifiedJwt(jwt2);
+    const issuerConfig = this.getIssuerConfig(decomposedJwt.payload.iss);
+    return {
+      decomposedJwt,
+      jwksUri: issuerConfig.jwksUri,
+      verifyProperties: {
+        ...issuerConfig,
+        ...verifyProperties
+      }
+    };
+  }
+  /**
+   * Get issuer config with JWKS URI, by adding a default JWKS URI if needed
+   *
+   * @param config: the issuer config.
+   * @returns The config with JWKS URI
+   */
+  withJwksUri(config2) {
+    if (config2.jwksUri) {
+      return config2;
+    }
+    const issuer = config2.issuer;
+    if (!issuer) {
+      throw new ParameterValidationError("jwksUri must be provided for issuer null");
+    }
+    const issuerUri = new URL(issuer).pathname.replace(/\/$/, "");
+    return {
+      jwksUri: new URL(`${issuerUri}/.well-known/jwks.json`, issuer).href,
+      ...config2
+    };
+  }
+};
+var KeyObjectCache = class {
+  constructor(transformJwkToKeyObjectSyncFn = nodeWebCompat.transformJwkToKeyObjectSync, transformJwkToKeyObjectAsyncFn = nodeWebCompat.transformJwkToKeyObjectAsync) {
+    this.transformJwkToKeyObjectSyncFn = transformJwkToKeyObjectSyncFn;
+    this.transformJwkToKeyObjectAsyncFn = transformJwkToKeyObjectAsyncFn;
+    this.publicKeys = /* @__PURE__ */ new Map();
+  }
+  /**
+   * Transform the JWK into a public key in native key object format.
+   * If the transformed JWK is already in the cache, it is returned from the cache instead.
+   *
+   * @param jwk: the JWK
+   * @param jwtHeaderAlg: the alg from the JWT header (used if absent on JWK)
+   * @param issuer: the issuer that uses the JWK for signing JWTs (used for caching the transformation)
+   * @returns the public key in native key object format
+   */
+  transformJwkToKeyObjectSync(jwk, jwtHeaderAlg, issuer) {
+    const alg = jwk.alg ?? jwtHeaderAlg;
+    if (!issuer || !jwk.kid || !alg) {
+      return this.transformJwkToKeyObjectSyncFn(jwk, alg, issuer);
+    }
+    const fromCache = this.publicKeys.get(issuer)?.get(jwk.kid)?.get(alg);
+    if (fromCache)
+      return fromCache;
+    const publicKey = this.transformJwkToKeyObjectSyncFn(jwk, alg, issuer);
+    this.putKeyObjectInCache(issuer, jwk.kid, alg, publicKey);
+    return publicKey;
+  }
+  /**
+   * Transform the JWK into a public key in native key object format (async).
+   * If the transformed JWK is already in the cache, it is returned from the cache instead.
+   *
+   * @param jwk: the JWK
+   * @param jwtHeaderAlg: the alg from the JWT header (used if absent on JWK)
+   * @param issuer: the issuer that uses the JWK for signing JWTs (used for caching the transformation)
+   * @returns the public key in native key object format
+   */
+  async transformJwkToKeyObjectAsync(jwk, jwtHeaderAlg, issuer) {
+    const alg = jwk.alg ?? jwtHeaderAlg;
+    if (!issuer || !jwk.kid || !alg) {
+      return this.transformJwkToKeyObjectAsyncFn(jwk, alg, issuer);
+    }
+    const fromCache = this.publicKeys.get(issuer)?.get(jwk.kid)?.get(alg);
+    if (fromCache)
+      return fromCache;
+    const publicKey = await this.transformJwkToKeyObjectAsyncFn(jwk, alg, issuer);
+    this.putKeyObjectInCache(issuer, jwk.kid, alg, publicKey);
+    return publicKey;
+  }
+  putKeyObjectInCache(issuer, kid, alg, publicKey) {
+    const cachedIssuer = this.publicKeys.get(issuer);
+    const cachedIssuerKid = cachedIssuer?.get(kid);
+    if (cachedIssuerKid) {
+      cachedIssuerKid.set(alg, publicKey);
+    } else if (cachedIssuer) {
+      cachedIssuer.set(kid, /* @__PURE__ */ new Map([[alg, publicKey]]));
+    } else {
+      this.publicKeys.set(issuer, /* @__PURE__ */ new Map([[kid, /* @__PURE__ */ new Map([[alg, publicKey]])]]));
+    }
+  }
+  clearCache(issuer) {
+    this.publicKeys.delete(issuer);
+  }
+};
+
+// node_modules/aws-jwt-verify/dist/esm/cognito-verifier.js
+function validateCognitoJwtFields(payload, options) {
+  if (options.groups != null) {
+    assertStringArraysOverlap("Cognito group", payload["cognito:groups"], options.groups, CognitoJwtInvalidGroupError);
+  }
+  assertStringArrayContainsString("Token use", payload.token_use, ["id", "access"], CognitoJwtInvalidTokenUseError);
+  if (options.tokenUse !== null) {
+    if (options.tokenUse === void 0) {
+      throw new ParameterValidationError("tokenUse must be provided or set to null explicitly");
+    }
+    assertStringEquals("Token use", payload.token_use, options.tokenUse, CognitoJwtInvalidTokenUseError);
+  }
+  if (options.clientId !== null) {
+    if (options.clientId === void 0) {
+      throw new ParameterValidationError("clientId must be provided or set to null explicitly");
+    }
+    if (payload.token_use === "id") {
+      assertStringArrayContainsString('Client ID ("audience")', payload.aud, options.clientId, CognitoJwtInvalidClientIdError);
+    } else {
+      assertStringArrayContainsString("Client ID", payload.client_id, options.clientId, CognitoJwtInvalidClientIdError);
+    }
+  }
+}
+var CognitoJwtVerifier = class _CognitoJwtVerifier extends JwtVerifierBase {
+  constructor(props, jwksCache) {
+    const issuerConfig = Array.isArray(props) ? props.flatMap((p) => {
+      const regionFormat = _CognitoJwtVerifier.parseUserPoolId(p.userPoolId);
+      const globalFormatIssuer = `https://issuer-cognito-idp.${p.userPoolId.split("_")[0]}.amazonaws.com/${p.userPoolId}`;
+      const globalFormat = _CognitoJwtVerifier.parseUserPoolId(p.userPoolId, globalFormatIssuer);
+      return [
+        { ...p, ...regionFormat, audience: null },
+        { ...p, ...globalFormat, audience: null }
+      ];
+    }) : [
+      // Single user pool - create configs for both formats
+      // audience checked by validateCognitoJwtFields
+      {
+        ...props,
+        ..._CognitoJwtVerifier.parseUserPoolId(props.userPoolId),
+        audience: null
+      },
+      {
+        ...props,
+        ..._CognitoJwtVerifier.parseUserPoolId(props.userPoolId, `https://issuer-cognito-idp.${props.userPoolId.split("_")[0]}.amazonaws.com/${props.userPoolId}`),
+        audience: null
+      }
+    ];
+    super(issuerConfig, jwksCache);
+  }
+  /**
+   * Parse a User Pool ID, to extract the issuer and JWKS URI
+   *
+   * @param userPoolId The User Pool ID
+   * @param jwtIssuer Optional issuer claim from the JWT being verified, used to determine the issuer format
+   * @returns The issuer and JWKS URI for the User Pool
+   */
+  static parseUserPoolId(userPoolId, jwtIssuer) {
+    const match = userPoolId.match(this.USER_POOL_ID_REGEX);
+    if (!match) {
+      throw new ParameterValidationError(`Invalid Cognito User Pool ID: ${userPoolId}`);
+    }
+    const region = match.groups.region;
+    let issuer;
+    if (jwtIssuer) {
+      if (jwtIssuer.includes("issuer-cognito-idp")) {
+        issuer = `https://issuer-cognito-idp.${region}.amazonaws.com/${userPoolId}`;
+      } else {
+        issuer = `https://cognito-idp.${region}.amazonaws.com/${userPoolId}`;
+      }
+    } else {
+      issuer = `https://cognito-idp.${region}.amazonaws.com/${userPoolId}`;
+    }
+    return {
+      issuer,
+      jwksUri: `${issuer}/.well-known/jwks.json`
+    };
+  }
+  static create(verifyProperties, additionalProperties) {
+    return new this(verifyProperties, additionalProperties?.jwksCache);
+  }
+  /**
+   * Verify (synchronously) a JWT that is signed by Amazon Cognito.
+   *
+   * @param jwt The JWT, as string
+   * @param props Verification properties
+   * @returns The payload of the JWT––if the JWT is valid, otherwise an error is thrown
+   */
+  verifySync(...[jwt2, properties]) {
+    const { decomposedJwt, jwksUri, verifyProperties } = this.getVerifyParameters(jwt2, properties);
+    this.verifyDecomposedJwtSync(decomposedJwt, jwksUri, verifyProperties);
+    try {
+      validateCognitoJwtFields(decomposedJwt.payload, verifyProperties);
+    } catch (err) {
+      if (verifyProperties.includeRawJwtInErrors && err instanceof JwtInvalidClaimError) {
+        throw err.withRawJwt(decomposedJwt);
+      }
+      throw err;
+    }
+    return decomposedJwt.payload;
+  }
+  /**
+   * Verify (asynchronously) a JWT that is signed by Amazon Cognito.
+   * This call is asynchronous, and the JWKS will be fetched from the JWKS uri,
+   * in case it is not yet available in the cache.
+   *
+   * @param jwt The JWT, as string
+   * @param props Verification properties
+   * @returns Promise that resolves to the payload of the JWT––if the JWT is valid, otherwise the promise rejects
+   */
+  async verify(...[jwt2, properties]) {
+    const { decomposedJwt, jwksUri, verifyProperties } = this.getVerifyParameters(jwt2, properties);
+    await this.verifyDecomposedJwt(decomposedJwt, jwksUri, verifyProperties);
+    try {
+      validateCognitoJwtFields(decomposedJwt.payload, verifyProperties);
+    } catch (err) {
+      if (verifyProperties.includeRawJwtInErrors && err instanceof JwtInvalidClaimError) {
+        throw err.withRawJwt(decomposedJwt);
+      }
+      throw err;
+    }
+    return decomposedJwt.payload;
+  }
+  /**
+   * This method loads a JWKS that you provide, into the JWKS cache, so that it is
+   * available for JWT verification. Use this method to speed up the first JWT verification
+   * (when the JWKS would otherwise have to be downloaded from the JWKS uri), or to provide the JWKS
+   * in case the JwtVerifier does not have internet access to download the JWKS
+   *
+   * @param jwks The JWKS
+   * @param userPoolId The userPoolId for which you want to cache the JWKS
+   *  Supply this field, if you instantiated the CognitoJwtVerifier with multiple userPoolIds
+   * @returns void
+   */
+  cacheJwks(...[jwks, userPoolId]) {
+    let poolId = userPoolId;
+    if (!poolId) {
+      const uniqueUserPoolIds = new Set(Array.from(this.issuersConfig.values()).map((config2) => config2.userPoolId));
+      if (uniqueUserPoolIds.size > 1) {
+        throw new ParameterValidationError("userPoolId must be provided");
+      }
+      poolId = Array.from(uniqueUserPoolIds)[0];
+    }
+    const regionFormatIssuer = _CognitoJwtVerifier.parseUserPoolId(poolId).issuer;
+    const globalFormatIssuer = _CognitoJwtVerifier.parseUserPoolId(poolId, `https://issuer-cognito-idp.${poolId.split("_")[0]}.amazonaws.com/${poolId}`).issuer;
+    super.cacheJwks(jwks, regionFormatIssuer);
+    super.cacheJwks(jwks, globalFormatIssuer);
+  }
+};
+CognitoJwtVerifier.USER_POOL_ID_REGEX = /^(?<region>(?:eusc-[a-z]{2}|[a-z]{2})-(gov-)?[a-z]+-\d)_[a-zA-Z0-9]+$/;
+
+// src/auth.ts
 var CALLBACK_PORT = 9876;
 var MAX_AUTH_BYTES = 64 * 1024;
 var MAX_TOKEN_LENGTH = 16 * 1024;
@@ -20936,6 +22013,26 @@ function requestAuthJson(url2, body) {
     req.end(data);
   });
 }
+function createVerifier(userPoolId, clientId, fetchJson) {
+  return CognitoJwtVerifier.create({
+    userPoolId,
+    clientId,
+    tokenUse: null,
+    customJwtCheck: ({ header, payload }) => {
+      const now = Date.now() / 1e3;
+      if (header.alg !== "RS256" || typeof payload.sub !== "string" || !payload.sub || typeof payload.exp !== "number" || !Number.isSafeInteger(payload.exp) || payload.exp <= 0 || typeof payload.iat !== "number" || !Number.isSafeInteger(payload.iat) || payload.iat > now + 60 || payload.nbf !== void 0 && (typeof payload.nbf !== "number" || !Number.isFinite(payload.nbf) || payload.nbf > now)) {
+        throw new Error("Invalid Cognito user token");
+      }
+    }
+  }, {
+    jwksCache: new SimpleJwksCache({
+      fetcher: { fetch: async (url2) => {
+        const value = await fetchJson(new URL(url2));
+        return new TextEncoder().encode(JSON.stringify(value)).buffer;
+      } }
+    })
+  });
+}
 var CognitoAuth = class {
   config;
   dependencies;
@@ -20946,8 +22043,14 @@ var CognitoAuth = class {
   pending;
   cancelLogin;
   generation = 0;
+  initialization;
+  verifier;
   constructor(config2, dependencies = {}) {
-    this.config = { ...config2, cognitoDomain: origin(config2.cognitoDomain, "TTOBAK_COGNITO_DOMAIN") };
+    this.config = {
+      ...config2,
+      cognitoDomain: origin(config2.cognitoDomain, "TTOBAK_COGNITO_DOMAIN"),
+      apiUrl: origin(config2.apiUrl, "TTOBAK_API_URL")
+    };
     if (!/^[a-zA-Z0-9]{1,128}$/.test(config2.clientId)) throw new Error("Invalid TTOBAK_CLIENT_ID");
     this.dependencies = dependencies;
     this.fetchJson = dependencies.requestJson ?? requestAuthJson;
@@ -20981,6 +22084,34 @@ var CognitoAuth = class {
   assertGeneration(generation) {
     if (generation !== this.generation) throw new Error("Authentication was cancelled by logout");
   }
+  initialize() {
+    this.initialization ??= this.discover().catch((error3) => {
+      this.initialization = void 0;
+      throw error3;
+    });
+    return this.initialization;
+  }
+  async discover() {
+    let userPoolId = this.config.userPoolId;
+    if (!userPoolId) {
+      const runtime = await this.fetchJson(new URL("/config.json", this.config.apiUrl));
+      if (!record2(runtime) || !record2(runtime.cognito) || runtime.cognito.userPoolClientId !== this.config.clientId || typeof runtime.cognito.userPoolId !== "string" || typeof runtime.cognito.region !== "string" || !runtime.cognito.userPoolId.startsWith(runtime.cognito.region + "_")) {
+        throw new Error("Application login configuration does not match this MCP deployment");
+      }
+      userPoolId = runtime.cognito.userPoolId;
+    }
+    let issuer, jwksUri;
+    try {
+      ({ issuer, jwksUri } = CognitoJwtVerifier.parseUserPoolId(userPoolId));
+    } catch {
+      throw new Error("Invalid TTOBAK_USER_POOL_ID or application login configuration");
+    }
+    const metadata = await this.fetchJson(new URL(issuer + "/.well-known/openid-configuration"));
+    if (!record2(metadata) || metadata.issuer !== issuer || metadata.jwks_uri !== jwksUri || metadata.authorization_endpoint !== this.config.cognitoDomain + "/oauth2/authorize" || metadata.token_endpoint !== this.config.cognitoDomain + "/oauth2/token") {
+      throw new Error("Cognito issuer and Hosted UI configuration do not match");
+    }
+    this.verifier = createVerifier(userPoolId, this.config.clientId, this.fetchJson);
+  }
   async acquireToken(generation) {
     this.assertGeneration(generation);
     if (this.isAuthenticated()) return this.tokens.id_token;
@@ -20998,6 +22129,18 @@ var CognitoAuth = class {
     this.assertGeneration(generation);
     return this.tokens.id_token;
   }
+  async verifyReturnedTokens(tokens) {
+    try {
+      const [id, access] = await Promise.all([
+        this.verifier.verify(tokens.id_token, { tokenUse: "id", graceSeconds: 0 }),
+        this.verifier.verify(tokens.access_token, { tokenUse: "access", graceSeconds: 0 })
+      ]);
+      if (id.sub !== access.sub) throw new Error("Token subjects differ");
+      return { ...tokens, expires_at: Math.min(tokens.expires_at, id.exp, access.exp) };
+    } catch {
+      throw new Error("Returned credentials are not valid for this deployment");
+    }
+  }
   loadTokens() {
     try {
       if (!existsSync(this.tokenFile)) return;
@@ -21008,16 +22151,20 @@ var CognitoAuth = class {
     }
   }
   async saveTokens(tokens, generation) {
+    await this.initialize();
+    const verified = await this.verifyReturnedTokens(tokens);
     this.assertGeneration(generation);
     try {
       mkdirSync(this.tokenDirectory, { recursive: true, mode: 448 });
-      writeFileSync(this.tokenFile, JSON.stringify(tokens), { mode: 384 });
+      writeFileSync(this.tokenFile, JSON.stringify(verified), { mode: 384 });
     } catch {
       throw new Error("Could not store credentials");
     }
-    this.tokens = tokens;
+    this.tokens = verified;
   }
   async login(generation) {
+    await this.initialize();
+    this.assertGeneration(generation);
     const verifier = randomBytes(32).toString("base64url");
     const state = randomBytes(32).toString("hex");
     const callback = await this.waitForCallback(state);
@@ -21163,6 +22310,8 @@ var CognitoAuth = class {
     await this.acceptResponse(value, "", generation);
   }
   async refresh(generation) {
+    await this.initialize();
+    this.assertGeneration(generation);
     const refreshToken = this.tokens.refresh_token;
     const body = new URLSearchParams({
       grant_type: "refresh_token",
@@ -22451,10 +23600,10 @@ var AppControlError = class extends Error {
   }
   code;
 };
-function sendAppRequest(request, options = {}) {
+function sendAppRequest(request2, options = {}) {
   const socketPath = options.socketPath ?? defaultAppSocketPath();
   const id = randomUUID2();
-  const line = JSON.stringify({ v: 1, id, ...request }) + "\n";
+  const line = JSON.stringify({ v: 1, id, ...request2 }) + "\n";
   return new Promise((resolve, reject) => {
     const socket = createConnection(socketPath);
     const chunks = [];
@@ -23002,10 +24151,10 @@ var SHUTDOWN_GRACE_MS = 2e4;
 async function settleRecordingWork() {
   while (recordingWork.size) await Promise.allSettled([...recordingWork]);
 }
-async function callTool(request, options) {
+async function callTool(request2, options) {
   const { auth, api } = options;
   const API_URL = options.apiUrl, COGNITO_DOMAIN = options.cognitoDomain, CLIENT_ID = options.clientId;
-  const { name, arguments: args = {} } = request.params;
+  const { name, arguments: args = {} } = request2.params;
   try {
     switch (name) {
       case "ttobak_login": {
@@ -23296,23 +24445,23 @@ Retrieval is scoped to you -- only your own ttobak_ask queries can find this fil
       case "ttobak_app_start_recording":
       case "ttobak_app_stop_recording": {
         if (options.mode === "http" || !options.appControl) return error2("Mac app control is available only over stdio");
-        let request2;
+        let request3;
         if (name === "ttobak_app_status") {
-          request2 = { action: "status" };
+          request3 = { action: "status" };
         } else if (name === "ttobak_app_start_recording") {
           const { title, accountId } = args;
           if (typeof title !== "string" || !title.trim() || [...title.trim()].length > 200) return error2("title must be 1-200 characters");
           if (accountId !== void 0 && (typeof accountId !== "string" || !accountId.trim() || accountId.length > 128)) {
             return error2("accountId must be a non-empty string");
           }
-          request2 = { action: "start", title: title.trim(), ...accountId ? { accountId: accountId.trim() } : {} };
+          request3 = { action: "start", title: title.trim(), ...accountId ? { accountId: accountId.trim() } : {} };
         } else {
           const { upload } = args;
           if (upload !== void 0 && typeof upload !== "boolean") return error2("upload must be a boolean");
-          request2 = { action: "stop", ...upload === void 0 ? {} : { upload } };
+          request3 = { action: "stop", ...upload === void 0 ? {} : { upload } };
         }
         try {
-          const reply = await sendAppRequest(request2, options.appControl);
+          const reply = await sendAppRequest(request3, options.appControl);
           if (!reply.ok) return error2(`${reply.error?.code}: ${reply.error?.message}`);
           return text(JSON.stringify(reply.data ?? {}, null, 2));
         } catch (e) {
@@ -23455,16 +24604,16 @@ function createMcpServer(options) {
   ];
   const tools = options.mode === "http" ? httpTools(registry2.tools) : stdioTools;
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    if (!tools.some((tool) => tool.name === request.params.name)) return error2("Unknown or unavailable tool");
-    const call = callTool(request, options);
-    if (RECORDING_TOOL_NAMES.includes(request.params.name) || APP_TOOL_NAMES.includes(request.params.name)) {
+  server.setRequestHandler(CallToolRequestSchema, async (request2) => {
+    if (!tools.some((tool) => tool.name === request2.params.name)) return error2("Unknown or unavailable tool");
+    const call = callTool(request2, options);
+    if (RECORDING_TOOL_NAMES.includes(request2.params.name) || APP_TOOL_NAMES.includes(request2.params.name)) {
       recordingWork.add(call);
       void call.finally(() => recordingWork.delete(call));
     }
     const result = await call;
     if (options.mode === "http" && Buffer.byteLength(JSON.stringify(result)) > MAX_HTTP_RESULT_BYTES) {
-      const receipt = !("isError" in result && result.isError) && mutationReceipt(request.params.name, result.content[0]?.text ?? "");
+      const receipt = !("isError" in result && result.isError) && mutationReceipt(request2.params.name, result.content[0]?.text ?? "");
       return receipt ? text(receipt) : error2("RESULT_TOO_LARGE: narrow the read. For a write, verify current state before retrying; it may have completed.");
     }
     return result;
@@ -23497,7 +24646,7 @@ async function main() {
   if (!apiUrl || !cognitoDomain || !clientId) {
     throw new Error("Missing required env vars: TTOBAK_COGNITO_DOMAIN, TTOBAK_CLIENT_ID, TTOBAK_API_URL");
   }
-  const auth = new CognitoAuth({ cognitoDomain, clientId });
+  const auth = new CognitoAuth({ cognitoDomain, clientId, apiUrl, userPoolId: process.env.TTOBAK_USER_POOL_ID });
   const recorder = new Recorder();
   const server = createMcpServer({
     auth,

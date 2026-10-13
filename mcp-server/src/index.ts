@@ -1166,7 +1166,7 @@ async function main() {
   if (!apiUrl || !cognitoDomain || !clientId) {
     throw new Error('Missing required env vars: TTOBAK_COGNITO_DOMAIN, TTOBAK_CLIENT_ID, TTOBAK_API_URL');
   }
-  const auth = new CognitoAuth({ cognitoDomain, clientId });
+  const auth = new CognitoAuth({ cognitoDomain, clientId, apiUrl, userPoolId: process.env.TTOBAK_USER_POOL_ID });
   const recorder = new Recorder();
   const server = createMcpServer({
     auth, api: new TtobakApi(auth, apiUrl), apiUrl, cognitoDomain, clientId, recorder,

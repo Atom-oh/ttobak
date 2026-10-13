@@ -68,6 +68,27 @@ describe('GatewayStack', () => {
     template = buildTemplate();
   });
 
+  test('core pipeline rules retain delivery failures and workers retain exhausted async executions', () => {
+    const rules = Object.values(template.findResources('AWS::Events::Rule'));
+    for (const name of ['ttobak-audio-upload', 'ttobak-audio-crop', 'ttobak-image-upload',
+      'ttobak-transcript-upload', 'ttobak-all-parts-transcribed']) {
+      const target = rules.find(r => r.Properties.Name === name)!.Properties.Targets[0];
+      expect(JSON.stringify(target.DeadLetterConfig)).toContain('PipelineFailuresDelivery');
+      expect(target.RetryPolicy).toBeUndefined();
+    }
+    const configs = Object.values(template.findResources('AWS::Lambda::EventInvokeConfig'));
+    for (const name of ['TranscribeFunction', 'SummarizeFunction', 'ProcessImageFunction']) {
+      const config = configs.find(c => JSON.stringify(c.Properties.FunctionName).includes(name))!;
+      expect(config.Properties).toMatchObject({ MaximumRetryAttempts: 2, MaximumEventAgeInSeconds: 21600 });
+      expect(JSON.stringify(config.Properties.DestinationConfig.OnFailure)).toContain('PipelineFailuresExecution');
+    }
+    // Existing no-retry workers keep their separate delivery/state contracts.
+    for (const name of ['QAFunction', 'SimFunction']) {
+      expect(configs.find(c => JSON.stringify(c.Properties.FunctionName).includes(name))!
+        .Properties.MaximumRetryAttempts).toBe(0);
+    }
+  });
+
   test('MCP resource audience is explicit and does not replace the existing client audience', () => {
     const before = Object.values(template.findResources('AWS::ApiGatewayV2::Authorizer'))[0];
     expect(before.Properties.JwtConfiguration.Audience).toHaveLength(1);

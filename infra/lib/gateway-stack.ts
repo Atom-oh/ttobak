@@ -18,6 +18,7 @@ import { Construct } from 'constructs';
 import { WHISPER_CLUSTER_NAME, WHISPER_TASK_FAMILY, WHISPER_CONTAINER_NAME } from './whisper-stack';
 import { DocumentExtraction } from './document-extraction';
 import { WebSocketOriginVerification, WEBSOCKET_ORIGIN_HEADER, WEBSOCKET_STAGE } from './websocket-origin';
+import { PipelineFailures } from './pipeline-failures';
 
 export const RESEARCH_SFN_NAME = 'ttobak-research-workflow';
 
@@ -94,6 +95,7 @@ export class GatewayStack extends cdk.Stack {
       type: 'String', default: 'false', allowedValues: ['false', 'true'],
       description: 'Enable only after the invitation API, rollback guard and clients are verified.',
     });
+    const pipelineFailures = new PipelineFailures(this, 'PipelineFailures');
 
     // API Lambda function (Go runtime, arm64)
     this.apiFunction = new lambda.Function(this, 'ApiFunction', {
@@ -268,6 +270,9 @@ export class GatewayStack extends cdk.Stack {
       timeout: cdk.Duration.minutes(2),
       memorySize: 1024,
     });
+    pipelineFailures.watchFunction('Transcribe', this.transcribeFunction, props.transcribeRole);
+    pipelineFailures.watchFunction('Summarize', this.summarizeFunction, props.summarizeRole);
+    pipelineFailures.watchFunction('Image', this.processImageFunction, props.processImageRole);
 
     // KB Lambda function (for Knowledge Base sync operations)
     this.kbFunction = new lambda.Function(this, 'KbFunction', {
@@ -378,6 +383,8 @@ export class GatewayStack extends cdk.Stack {
       visibilityTimeout: cdk.Duration.minutes(30),
       deadLetterQueue: { queue: qaJobsDlq, maxReceiveCount: 3 },
     });
+    pipelineFailures.watchQueue('CanonicalIndex', indexDlq);
+    pipelineFailures.watchQueue('QAJobs', qaJobsDlq);
 
     // Q&A Lambda function (Python runtime for flexible prompt engineering)
     this.qaFunction = new lambda.Function(this, 'QAFunction', {
@@ -710,12 +717,12 @@ export class GatewayStack extends cdk.Stack {
         },
       },
     });
-    audioUploadRule.addTarget(new eventsTargets.LambdaFunction(this.transcribeFunction));
+    pipelineFailures.addTarget('Audio', audioUploadRule, this.transcribeFunction);
     const audioCropRule = new events.Rule(this, 'AudioCropRequestedRule', {
       ruleName: 'ttobak-audio-crop',
       eventPattern: { source: ['ttobak.audio'], detailType: ['AudioCropRequested'] },
     });
-    audioCropRule.addTarget(new eventsTargets.LambdaFunction(this.transcribeFunction));
+    pipelineFailures.addTarget('AudioCrop', audioCropRule, this.transcribeFunction);
     const transcribePermissions = this.transcribeFunction.node.findAll()
       .filter(child => child instanceof lambda.CfnPermission);
     this.apiFunction.node.addDependency(this.transcribeFunction, audioCropRule, ...transcribePermissions);
@@ -731,7 +738,7 @@ export class GatewayStack extends cdk.Stack {
         detailType: ['ImageUploadCompleted'],
       },
     });
-    imageUploadRule.addTarget(new eventsTargets.LambdaFunction(this.processImageFunction));
+    pipelineFailures.addTarget('Image', imageUploadRule, this.processImageFunction);
 
     if (props.enableDocumentExtraction) {
       if (!props.vpcId) {
@@ -767,7 +774,7 @@ export class GatewayStack extends cdk.Stack {
         },
       },
     });
-    transcriptUploadRule.addTarget(new eventsTargets.LambdaFunction(this.summarizeFunction));
+    pipelineFailures.addTarget('Transcript', transcriptUploadRule, this.summarizeFunction);
 
     // EventBridge rule for AllPartsTranscribed custom event -> Summarize Lambda
     const allPartsTranscribedRule = new events.Rule(this, 'AllPartsTranscribedRule', {
@@ -778,7 +785,7 @@ export class GatewayStack extends cdk.Stack {
         detailType: ['AllPartsTranscribed'],
       },
     });
-    allPartsTranscribedRule.addTarget(new eventsTargets.LambdaFunction(this.summarizeFunction));
+    pipelineFailures.addTarget('AllParts', allPartsTranscribedRule, this.summarizeFunction);
 
     // Action-item retries use the existing worker with their original event detail.
     const actionItemsDlq = new sqs.Queue(this, 'ActionItemsDlq', {
@@ -818,6 +825,8 @@ export class GatewayStack extends cdk.Stack {
       retryAttempts: 3,
       deadLetterQueue: savedSummaryDlq,
     }));
+    pipelineFailures.watchQueue('ActionItems', actionItemsDlq);
+    pipelineFailures.watchQueue('SavedSummary', savedSummaryDlq);
     // Install the consumer, rule and invocation permission before API code
     // can acknowledge a newly published request during this stack update.
     // Private relinking must not precede QA's canonical publication reader.
@@ -889,7 +898,8 @@ export class GatewayStack extends cdk.Stack {
           },
         },
       });
-      docSlideUploadRule.addTarget(new eventsTargets.LambdaFunction(this.convertDocFunction));
+      pipelineFailures.watchFunction('ConvertDoc', this.convertDocFunction, props.convertDocRole);
+      pipelineFailures.addTarget('ConvertDoc', docSlideUploadRule, this.convertDocFunction);
     }
 
     // ==================== WebSocket API (Live QA Streaming) ====================

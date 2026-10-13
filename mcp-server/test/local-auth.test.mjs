@@ -14,7 +14,7 @@ import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
 import { CognitoAuth, requestAuthJson } from '../dist/auth.js';
 import {
-  authJson, cacheFile, config, deployment, issuer, jwt, metadata, response, saveCache, tokens,
+  authJson, config, deployment, issuer, jwt, metadata, response, saveCache, tokens,
 } from './fixtures/local-auth-data.mjs';
 
 function fixture(t, overrides = {}, dependencies = {}) {
@@ -60,10 +60,10 @@ test('listener binds loopback and rejects invalid-state errors without ending th
   const url = new URL(waiting.redirectUri);
   url.hostname = '127.0.0.1';
   assert.deepEqual(hosts, ['127.0.0.1']);
-  url.search = new URLSearchParams({ state: 'wrong-state', error: '<script>private-provider-text</script>' }).toString();
+  url.search = new URLSearchParams({ state: 'wrong-state', error: '<SCRIPT>private-provider-text</SCRIPT>' }).toString();
   const bad = await fetch(url);
   assert.equal(bad.status, 400);
-  assert.doesNotMatch(await bad.text(), /private-provider-text|<script>/);
+  assert.doesNotMatch(await bad.text(), /private-provider-text|<script>/i);
   assert.equal(bad.headers.get('cache-control'), 'no-store');
   const other = new URL('/favicon.ico', url);
   assert.equal((await fetch(other)).status, 404);
@@ -154,7 +154,7 @@ test('logout closes a pending login callback and leaves no credentials', async t
   await auth.logout();
   await rejected;
   await assert.rejects(fetch(callbackURL(url)), /fetch failed/);
-  assert.equal(existsSync(cacheFile(tokenDirectory)), false);
+  assert.equal(existsSync(join(tokenDirectory, 'tokens.json')), false);
 });
 
 test('malformed provider token responses are not saved', async t => {
@@ -167,7 +167,7 @@ test('malformed provider token responses are not saved', async t => {
   for (const value of invalid) {
     const { auth, tokenDirectory } = fixture(t);
     await assert.rejects(auth.acceptResponse(value, '', 0), /Invalid Cognito token response|not valid for this deployment/);
-    assert.equal(existsSync(cacheFile(tokenDirectory)), false);
+    assert.equal(existsSync(join(tokenDirectory, 'tokens.json')), false);
     assert.equal(auth.isAuthenticated(), false);
   }
 });
@@ -216,9 +216,11 @@ test('concurrent expired-token requests share one refresh operation', async t =>
   const { auth } = fixture(t, {}, {
     seedCache: tokens({ expires_at: Math.floor(Date.now() / 1000) - 1 }),
     async requestJson(url, body) {
-      assert.equal(body.get('grant_type'), 'refresh_token');
-      refreshed++;
-      await new Promise(resolve => setTimeout(resolve, 10));
+      if (body) {
+        assert.equal(body.get('grant_type'), 'refresh_token');
+        refreshed++;
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
       return authJson(url, body);
     },
   });
@@ -232,8 +234,7 @@ test('logout during refresh prevents late credentials from returning or being sa
   const { auth, tokenDirectory } = fixture(t, {}, {
     seedCache: tokens({ expires_at: Math.floor(Date.now() / 1000) - 1 }),
     async requestJson(url, body) {
-      entered.resolve();
-      await release.promise;
+      if (body) { entered.resolve(); await release.promise; }
       return authJson(url, body);
     },
   });
@@ -245,4 +246,47 @@ test('logout during refresh prevents late credentials from returning or being sa
   await rejected;
   assert.equal(existsSync(join(tokenDirectory, 'tokens.json')), false);
   assert.equal(auth.isAuthenticated(), false);
+});
+
+test('Cognito deployment discovery preserves existing three-variable configuration', async t => {
+  const { auth } = fixture(t, { userPoolId: undefined });
+  await auth.initialize();
+  const saved = response();
+  await auth.acceptResponse(saved, '', 0);
+  assert.equal(await auth.getIdToken(), saved.id_token);
+});
+
+test('discovery rejects mismatched runtime clients and provider endpoints', async t => {
+  for (const broken of ['client', 'issuer', 'authorization', 'token', 'jwks']) {
+    const { auth } = fixture(t, { userPoolId: undefined }, {
+      async requestJson(url, body) {
+        const value = structuredClone(await authJson(url, body));
+        if (broken === 'client' && value.cognito) value.cognito.userPoolClientId = 'other';
+        if (value.issuer) {
+          const key = { issuer: 'issuer', authorization: 'authorization_endpoint', token: 'token_endpoint', jwks: 'jwks_uri' }[broken];
+          if (key) value[key] = 'https://other.invalid';
+        }
+        return value;
+      },
+    });
+    await assert.rejects(auth.getIdToken(), /configuration.*match/);
+  }
+});
+
+test('newly issued tokens must have valid signatures, claims and matching subjects', async t => {
+  const forged = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey;
+  for (const invalid of [
+    { id_token: jwt('id', {}, forged) },
+    { id_token: jwt('id', { iss: 'https://other.invalid' }) },
+    { id_token: jwt('id', { aud: 'otherclient' }) },
+    { id_token: jwt('access') },
+    { id_token: jwt('id', { exp: 1 }) },
+    { access_token: jwt('access', { client_id: 'otherclient' }) },
+    { access_token: jwt('access', { sub: 'otheruser' }) },
+  ]) {
+    const { auth, tokenDirectory } = fixture(t);
+    await assert.rejects(auth.acceptResponse(response(invalid), '', 0), /not valid for this deployment/);
+    assert.equal(auth.isAuthenticated(), false);
+    assert.equal(existsSync(join(tokenDirectory, 'tokens.json')), false);
+  }
 });
