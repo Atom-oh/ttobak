@@ -2,11 +2,17 @@
 # equivalent of the ARM64 zip-Lambda build used by the other 8 zip-deployed Go functions --
 # it's a native binary + a large font/office dependency tree, not a single
 # static Go binary).
+FROM node:24-bookworm-slim AS pdf-fonts
+WORKDIR /pdfassets
+COPY internal/service/pdfassets/package.json internal/service/pdfassets/package-lock.json internal/service/pdfassets/verify.mjs ./
+RUN npm ci --ignore-scripts --no-audit --no-fund && npm run verify
+
 FROM golang:1.25-bookworm AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
+COPY --from=pdf-fonts /pdfassets/node_modules ./internal/service/pdfassets/node_modules
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags lambda.norpc -o /out/convert-doc ./cmd/convert-doc
 
 # fonts-noto-cjk is not optional: without it, Korean text in a converted PDF

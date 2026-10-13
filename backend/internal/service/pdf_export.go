@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"unicode/utf8"
@@ -25,7 +27,18 @@ const (
 	maxPDFSourceBytes = 2 * 1024 * 1024
 	maxPDFPages       = 200
 	maxPDFBytes       = 8 * 1024 * 1024
+	pdfFontSHA256     = "6d0af5258997aec7354a6e340fc2325ba321c410ca48b3af858c8c3d6e92a324"
+	pdfLicenseSHA256  = "b04538c9abec39a3db75108cf0af0fd9c77032fe8aa2cf38345b4d250e98e38e"
 )
+
+func validatePDFAssets(font, license []byte) error {
+	fontDigest, licenseDigest := sha256.Sum256(font), sha256.Sum256(license)
+	if hex.EncodeToString(fontDigest[:]) != pdfFontSHA256 ||
+		hex.EncodeToString(licenseDigest[:]) != pdfLicenseSHA256 {
+		return errors.New("PDF font asset verification failed")
+	}
+	return nil
+}
 
 // RenderMeetingPDF embeds a licensed Korean font and preserves all source text.
 // Unsupported glyphs and excessive documents fail explicitly instead of
@@ -33,6 +46,9 @@ const (
 func RenderMeetingPDF(ctx context.Context, content string) ([]byte, error) {
 	if len(content) > maxPDFSourceBytes || !utf8.ValidString(content) {
 		return nil, ErrPDFExportLimit
+	}
+	if err := validatePDFAssets(pdfExportFont, pdfExportFontLicense); err != nil {
+		return nil, err
 	}
 	pdf := &gopdf.GoPdf{}
 	pdf.Start(gopdf.Config{PageSize: *gopdf.PageSizeA4})

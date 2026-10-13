@@ -10,6 +10,22 @@ import (
 	"testing"
 )
 
+func TestPDFExportVerifiesEmbeddedFontAndLicense(t *testing.T) {
+	if err := validatePDFAssets(pdfExportFont, pdfExportFontLicense); err != nil {
+		t.Fatal(err)
+	}
+	for _, assets := range [][2][]byte{
+		{nil, pdfExportFontLicense},
+		{pdfExportFont, nil},
+		{[]byte("corrupt font"), pdfExportFontLicense},
+		{pdfExportFont, []byte("corrupt license")},
+	} {
+		if err := validatePDFAssets(assets[0], assets[1]); err == nil {
+			t.Fatal("unverified embedded assets accepted")
+		}
+	}
+}
+
 func TestPDFExportEmbedsKoreanTextAndPaginates(t *testing.T) {
 	text := "회의 제목: 한국어 검증\n결정: 비용 1,200,000원, 지연 30ms\n담당자: 민수\n"
 	data, err := RenderMeetingPDF(context.Background(), strings.Repeat(text, 200))
