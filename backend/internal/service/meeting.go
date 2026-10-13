@@ -741,6 +741,11 @@ func (s *MeetingService) UpdateMeeting(ctx context.Context, userID, meetingID st
 		}
 		fields["liveSummary"] = *req.LiveSummary
 	}
+	// Transcript text belongs to the transcription delivery until it publishes. A human
+	// edit during transcribing would leave no completion path, so it is refused.
+	if req.TranscriptA != "" && meeting.Status == model.StatusTranscribing {
+		return nil, fmt.Errorf("%w: transcript text is unavailable while transcribing", ErrInvalidInput)
+	}
 	if req.TranscriptA != "" {
 		if strings.TrimSpace(req.TranscriptA) == "" {
 			return nil, fmt.Errorf("%w: transcriptA must contain non-whitespace text", ErrInvalidInput)

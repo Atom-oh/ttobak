@@ -847,7 +847,7 @@ function MeetingDetailContent() {
               transcription={meeting.transcription || []}
               rawTranscript={displayedTranscript}
               quality={meeting.transcriptQuality}
-              onSaveRawTranscript={usingTranscriptB || meeting.permission === 'read' ? undefined : async (text) => {
+              onSaveRawTranscript={usingTranscriptB || meeting.permission === 'read' || meeting.status === 'transcribing' ? undefined : async (text) => {
                 await meetingsApi.update(meeting.meetingId, { transcriptA: text });
                 setIndexRevision((value) => value + 1);
                 setMeeting((current) => current?.meetingId === meeting.meetingId ? {

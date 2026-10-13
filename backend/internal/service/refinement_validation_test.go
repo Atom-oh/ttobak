@@ -162,3 +162,31 @@ func TestRefinementInferenceCannotBypassPartSpeakerNamespaces(t *testing.T) {
 		}
 	}
 }
+
+func TestRefinementNormalizationKeepsShortSpeechAndDropsBlankText(t *testing.T) {
+	input := []WhisperSegment{{Start: 0, End: 0, Text: "네."}, {Start: 0.5, End: 0.5, Text: "  "}, {Start: 1, End: 2, Text: "next"}}
+	got := normalizeRefinementInput(input)
+	if len(got) != 2 || got[0].Text != "네." || got[0].End != refinementMinDuration || got[1].Text != "next" {
+		t.Fatalf("normalized input = %+v", got)
+	}
+	if input[0].End != 0 {
+		t.Fatal("normalization mutated the caller's segments")
+	}
+	if !validRefinementInput(got) {
+		t.Fatal("normalized input should be valid")
+	}
+}
+
+func TestRefinementReachesModelWhenOnlyAZeroLengthSegmentNeedsWidening(t *testing.T) {
+	input := []WhisperSegment{{Start: 0, End: 0, Text: "네."}, {Start: 1, End: 2, Text: "second", Speaker: "spk_1"}}
+	text := `[{"speaker":"spk_0","text":"네.","startTime":0,"endTime":0.01,"sourceIds":[0]},{"speaker":"spk_1","text":"second","startTime":1,"endTime":2,"sourceIds":[1]}]`
+	calls := 0
+	svc := summaryTestService(noteSourceHTTPClient(func(*http.Request) (*http.Response, error) {
+		calls++
+		return indexHTTPResponse(200, refinementResponse(text, "end_turn"), nil), nil
+	}))
+	_, segments, quality, err := svc.RefineTranscriptWithQuality(context.Background(), input)
+	if err != nil || calls != 1 || quality.Refinement != "validated" || len(segments) != 2 || segments[0].Text != "네." {
+		t.Fatalf("zero-length segment disabled refinement: calls=%d segments=%+v quality=%+v err=%v", calls, segments, quality, err)
+	}
+}

@@ -41,12 +41,17 @@ func TestTranscriptUpdateFencesConcurrentInputAndPublishesQualityTogether(t *tes
 					return string(encoded)
 				})
 				for _, field := range []string{"audioKey", "audioKeys", "audioCrop", "diarizationSpeakerHint",
-					"updatedAt", "transcriptA", "transcriptB", "transcriptSegments", "selectedTranscript", "notes", "content", "status"} {
+					"transcriptA", "transcriptB", "transcriptSegments", "selectedTranscript", "status"} {
 					if !strings.Contains(condition, field) {
 						t.Fatalf("missing freshness fence: %s", field)
 					}
 				}
-				for _, value := range []string{"old.wav", "prior text", "human note", "2026-10-12"} {
+				for _, field := range []string{"notes", "content", "updatedAt"} {
+					if strings.Contains(condition, field) {
+						t.Fatalf("unrelated field fenced: %s", field)
+					}
+				}
+				for _, value := range []string{"old.wav", "prior text"} {
 					if !strings.Contains(condition, value) {
 						t.Fatalf("snapshot observation missing: %s", value)
 					}

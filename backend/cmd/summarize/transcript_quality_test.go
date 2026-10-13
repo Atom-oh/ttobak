@@ -118,14 +118,29 @@ func TestInvalidRawTimingRemainsReadableWithoutFabricatedSegments(t *testing.T) 
 		Quality: &model.TranscriptQuality{Refinement: "not_requested", SpeakerProvenance: "unknown"}}
 	refineParsedTranscript(context.Background(), parsed)
 	fields, err := transcriptUpdateFields(parsed, false)
-	if err != nil || fields["transcriptA"] != "preserved source text" || fields["transcriptSegments"] != "" ||
+	_, hasSegments := fields["transcriptSegments"]
+	if err != nil || fields["transcriptA"] != "preserved source text" || hasSegments ||
 		!parsed.Quality.Degraded || parsed.Quality.Refinement != "raw" {
 		t.Fatal("invalid source lost readable text or gained invented timing")
 	}
 }
 
+func TestTranscriptUpdateOmitsSegmentsWhenNoneWereTimed(t *testing.T) {
+	parsed := &parsedTranscript{Text: "untimed text", Quality: &model.TranscriptQuality{Refinement: "raw", SpeakerProvenance: "unknown"}}
+	fields, err := transcriptUpdateFields(parsed, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := fields["transcriptSegments"]; ok {
+		t.Fatal("untimed publication blanked the shared segments field")
+	}
+	if fields["transcriptB"] != "untimed text" {
+		t.Fatal("text was not published")
+	}
+}
+
 func TestSingleWorkerDiscardsOutputAfterConcurrentSourceChanges(t *testing.T) {
-	for _, changedField := range []string{"transcriptA", "audioKey", "selectedTranscript", "notes"} {
+	for _, changedField := range []string{"transcriptA", "audioKey", "selectedTranscript"} {
 		t.Run(changedField, func(t *testing.T) {
 			current := model.Meeting{PK: "USER#owner", SK: "MEETING#m", MeetingID: "m", UserID: "owner", Status: model.StatusTranscribing,
 				AudioKey: "audio/owner/m/source.wav", TranscriptA: "prior transcript", Notes: "prior note", UpdatedAt: time.Now().UTC()}
@@ -179,8 +194,6 @@ func TestSingleWorkerDiscardsOutputAfterConcurrentSourceChanges(t *testing.T) {
 					current.AudioKey = "audio/owner/m/replacement.wav"
 				case "selectedTranscript":
 					current.SelectedTranscript = "B"
-				case "notes":
-					current.Notes = "concurrent human note"
 				}
 				current.UpdatedAt = current.UpdatedAt.Add(time.Second)
 				return transcriptFixtureResponse(200, `{"stop_reason":"end_turn","content":[{"type":"text","text":"[{\"speaker\":\"spk_0\",\"text\":\"source words\",\"startTime\":0,\"endTime\":2,\"sourceIds\":[0]}]"}]}`, nil), nil
@@ -191,7 +204,7 @@ func TestSingleWorkerDiscardsOutputAfterConcurrentSourceChanges(t *testing.T) {
 			cfg := aws.Config{Region: "us-west-2", Credentials: aws.AnonymousCredentials{}, HTTPClient: client, Retryer: func() aws.Retryer { return aws.NopRetryer{} }}
 			repo = repository.NewDynamoDBRepositoryWithS3(dynamodb.NewFromConfig(cfg), "table", s3Client, "bucket")
 			err := handleSingleTranscript(context.Background(), "bucket", "transcripts/m.json", "source")
-			needsFreshRetry := changedField == "notes" || changedField == "selectedTranscript"
+			needsFreshRetry := changedField == "selectedTranscript"
 			if needsFreshRetry && !errors.Is(err, repository.ErrConditionFailed) || !needsFreshRetry && err != nil {
 				t.Fatalf("superseded delivery/fresh retry classification: %v", err)
 			}

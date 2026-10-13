@@ -137,8 +137,12 @@ func transcriptUpdateFields(parsed *parsedTranscript, isNova bool) (map[string]i
 	}
 	quality := *parsed.Quality
 	quality.TextSHA256, quality.SegmentsSHA256 = model.TranscriptHash(parsed.Text), model.TranscriptHash(segments)
-	fields := map[string]interface{}{"transcript" + variant: parsed.Text,
-		"transcriptSegments": segments, "transcriptQuality" + variant: quality}
+	fields := map[string]interface{}{"transcript" + variant: parsed.Text, "transcriptQuality" + variant: quality}
+	// Segments are shared by both variants: an untimed publication must not blank
+	// segments written for the other one. The base writer skipped empty segments too.
+	if segments != "" {
+		fields["transcriptSegments"] = segments
+	}
 	if parsed.Duration > 0 && !math.IsInf(parsed.Duration, 0) && !math.IsNaN(parsed.Duration) {
 		fields["duration"] = int(math.Round(parsed.Duration))
 	}

@@ -37,6 +37,35 @@ func validRefinementInput(input []WhisperSegment) bool {
 
 func finiteTime(t float64) bool { return !math.IsNaN(t) && !math.IsInf(t, 0) && t >= 0 }
 
+// refinementMinDuration widens a zero-length segment that Whisper rounding collapsed,
+// so its words still reach refinement instead of invalidating the meeting.
+const refinementMinDuration = 0.01
+
+// normalizeRefinementInput returns a copy without blank segments and with zero-length
+// ones widened. Blank text carries no words; other timing faults keep chunk fallback.
+func normalizeRefinementInput(input []WhisperSegment) []WhisperSegment {
+	out := make([]WhisperSegment, 0, len(input))
+	for _, segment := range input {
+		if strings.TrimSpace(segment.Text) == "" {
+			continue
+		}
+		if finiteTime(segment.Start) && finiteTime(segment.End) && segment.End == segment.Start {
+			segment.End += refinementMinDuration
+		}
+		out = append(out, segment)
+	}
+	return out
+}
+
+func anyValidRefinementChunk(chunks [][]WhisperSegment) bool {
+	for _, chunk := range chunks {
+		if validRefinementInput(chunk) {
+			return true
+		}
+	}
+	return false
+}
+
 func validInferredSpeaker(label string) bool {
 	number, err := strconv.Atoi(strings.TrimPrefix(label, "spk_"))
 	return err == nil && number >= 0 && number < speaker.MaxPerPart && label == "spk_"+strconv.Itoa(number)

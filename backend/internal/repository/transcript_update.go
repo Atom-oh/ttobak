@@ -9,11 +9,13 @@ import (
 // Capture before fetching/refining audio-derived text. Exact stored presence
 // fences concurrent uploads, A/B selection, human edits and competing workers.
 func (r *DynamoDBRepository) CaptureTranscriptUpdate(ctx context.Context, ownerID, meetingID string) (*model.SummarySnapshot, error) {
+	// Notes, summary content and updatedAt are guarded by the summary CAS. Pinning
+	// them here made unrelated edits retry an already-finished refinement.
 	return r.captureMeetingSummaryMetadata(ctx, ownerID, meetingID, []string{
-		"meetingId", "userId", "status", "updatedAt", "audioKey", "audioKeys", "audioCrop",
+		"meetingId", "userId", "status", "audioKey", "audioKeys", "audioCrop",
 		"audioPartCount", "audioPartsReadySet", "diarizationSpeakerHint", "summarizeRetryClaimedAt",
 		"transcriptA", "transcriptB", "transcriptSegments", "selectedTranscript",
-		"transcriptQualityA", "transcriptQualityB", "notes", "content",
+		"transcriptQualityA", "transcriptQualityB",
 	})
 }
 

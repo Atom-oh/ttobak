@@ -1030,10 +1030,13 @@ func (s *BedrockService) RefineTranscript(ctx context.Context, segments []Whispe
 }
 
 func (s *BedrockService) RefineTranscriptWithQuality(ctx context.Context, segments []WhisperSegment) (string, []RefinedSegment, *model.TranscriptQuality, error) {
-	if !validRefinementInput(segments) {
+	segments = normalizeRefinementInput(segments)
+	chunks := chunkWhisperSegments(segments, 300)
+	// One bad segment must not disable refinement for the whole meeting: refineChunk
+	// validates each chunk and falls back to raw text for that chunk alone.
+	if !anyValidRefinementChunk(chunks) {
 		return "", nil, &model.TranscriptQuality{Refinement: "raw", Degraded: true, SpeakerProvenance: "unknown", Reasons: []string{"invalid_input"}}, errRefinementInput
 	}
-	chunks := chunkWhisperSegments(segments, 300)
 
 	var allRefined []RefinedSegment
 	if len(chunks) <= 5 {
