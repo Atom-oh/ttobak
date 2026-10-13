@@ -7,6 +7,7 @@ import (
 	"math"
 	"reflect"
 	"sort"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -215,12 +216,17 @@ func beginTranscriptSummary(ctx context.Context, snapshot *model.SummarySnapshot
 	if err != nil {
 		return nil, err
 	}
+	release := func(cause error) (*model.Meeting, error) {
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		return nil, errors.Join(cause, repo.ReleaseSummaryRetryClaim(cleanup, snapshot.Meeting.UserID, snapshot.Meeting.MeetingID, claim))
+	}
 	current, err := repo.MetadataView().GetMeeting(ctx, snapshot.Meeting.UserID, snapshot.Meeting.MeetingID)
 	if err != nil {
-		return nil, err
+		return release(err)
 	}
 	if current == nil || current.Status != model.StatusSummarizing || !current.SummaryRetryPending || current.SummarizeRetryClaimedAt != claim {
-		return nil, repository.ErrConditionFailed
+		return release(repository.ErrConditionFailed)
 	}
 	return current, nil
 }

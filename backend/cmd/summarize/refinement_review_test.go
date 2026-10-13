@@ -20,16 +20,19 @@ import (
 )
 
 func TestTranscriptHandoffPreservesHumanEditsAndClaimsDurably(t *testing.T) {
-	for _, scenario := range []string{"normal", "human-edit", "audio-change", "selection-change"} {
+	for _, scenario := range []string{"normal", "human-edit", "audio-change", "selection-change", "handoff-read-failure"} {
 		t.Run(scenario, func(t *testing.T) {
 			human := scenario == "human-edit"
 			row, _ := attributevalue.MarshalMap(model.Meeting{PK: "USER#owner", SK: "MEETING#m", UserID: "owner", MeetingID: "m", Status: model.StatusTranscribing, TranscriptA: "prior", Content: "prior saved note"})
 			initial := true
-			commits, rejected := 0, 0
+			commits, rejected, releases := 0, 0, 0
 			client := retryHTTP(func(request *http.Request) (*http.Response, error) {
 				raw, _ := io.ReadAll(request.Body)
 				switch request.Header.Get("X-Amz-Target") {
 				case "DynamoDB_20120810.GetItem":
+					if scenario == "handoff-read-failure" && commits > 0 && releases == 0 {
+						return transcriptFixtureResponse(503, `{"__type":"InternalServerError"}`, nil), nil
+					}
 					data, _ := attributevalue.MarshalMapJSON(row)
 					if initial {
 						initial = false
@@ -55,8 +58,18 @@ func TestTranscriptHandoffPreservesHumanEditsAndClaimsDurably(t *testing.T) {
 					if json.Unmarshal(raw, &wire) != nil {
 						t.Fatal("bad update")
 					}
+					if strings.Contains(wire.UpdateExpression, "REMOVE") {
+						if strings.Contains(string(raw), "RETRY_EXHAUSTED") {
+							return transcriptFixtureResponse(400, `{"__type":"ConditionalCheckFailedException"}`, nil), nil
+						}
+						if request.Context().Err() != nil {
+							t.Fatal("cleanup inherited cancellation")
+						}
+						delete(row, "summarizeRetryClaimedAt")
+						releases++
+					}
 					for alias, name := range wire.ExpressionAttributeNames {
-						if scenario != "normal" && name == "transcriptQualityA" && strings.Contains(wire.UpdateExpression, alias) {
+						if scenario != "normal" && scenario != "handoff-read-failure" && name == "transcriptQualityA" && strings.Contains(wire.UpdateExpression, alias) {
 							rejected++
 							return transcriptFixtureResponse(400, `{"__type":"ConditionalCheckFailedException"}`, nil), nil
 						}
@@ -68,7 +81,9 @@ func TestTranscriptHandoffPreservesHumanEditsAndClaimsDurably(t *testing.T) {
 						}
 						row[wire.ExpressionAttributeNames[pair[1]]] = values["v"]
 					}
-					commits++
+					if !strings.Contains(wire.UpdateExpression, "REMOVE") {
+						commits++
+					}
 					return transcriptFixtureResponse(200, `{}`, nil), nil
 				default:
 					t.Fatalf("unexpected request: %s", request.Header.Get("X-Amz-Target"))
@@ -85,6 +100,14 @@ func TestTranscriptHandoffPreservesHumanEditsAndClaimsDurably(t *testing.T) {
 			}
 			parsed := &parsedTranscript{Text: "new refined output", Quality: &model.TranscriptQuality{Refinement: "validated", Timing: "unavailable"}}
 			current, err := beginTranscriptSummary(context.Background(), snapshot, parsed, false)
+			if scenario == "handoff-read-failure" {
+				_, claimed := row["summarizeRetryClaimedAt"]
+				pending, ok := row["summaryRetryPending"].(*types.AttributeValueMemberBOOL)
+				if err == nil || current != nil || commits != 1 || releases != 1 || claimed || !ok || !pending.Value {
+					t.Fatal("read failure left owned claim stranded", err, releases)
+				}
+				return
+			}
 			if scenario == "audio-change" || scenario == "selection-change" {
 				if current != nil || commits != 0 || rejected < 1 || scenario == "audio-change" && err != nil || scenario == "selection-change" && err != repository.ErrConditionFailed {
 					t.Fatal("superseded output was rebound", scenario, err)
