@@ -1,5 +1,15 @@
 # Prepared HTTP origin release coordinator
 
+Run from a clean checkout matching `GITHUB_SHA` when that variable is set.
+The coordinator deploys the exact cloud assembly accepted by its diff and
+activation checks, verifies its hash before each deployment, and fails if the
+checkout or assembly changes. The Storage-only `retighten` action applies the
+same account, revision and assembly checks without rotating origin proofs.
+
+A receipt with `recoveredExpiredCutover: true` records restoration after an
+expired overlap had already interrupted availability. Its final checks establish
+the recovered state; they do not assert uninterrupted availability.
+
 `http_origin_release.py` prepares a coordinated migration of the existing HTTP
 origin proof. The tool can be reviewed before the paired infrastructure and
 workflow activation. It rejects templates without the required Amazon Resource

@@ -3,6 +3,7 @@
 import argparse
 from dataclasses import dataclass, field
 import hmac
+import hashlib
 import importlib.util
 import json
 import os
@@ -51,6 +52,18 @@ def equal(left, right):
         left.encode("utf-8", "surrogatepass"), right.encode("utf-8", "surrogatepass"))
 
 
+def checkout_revision():
+    revision = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True, stderr=subprocess.DEVNULL).strip()
+    require(not os.environ.get("GITHUB_SHA") or os.environ["GITHUB_SHA"] == revision,
+            "CHECKOUT_REVISION_MISMATCH")
+    status = subprocess.check_output(
+        ["git", "status", "--porcelain", "--untracked-files=normal"],
+        cwd=ROOT, stderr=subprocess.DEVNULL)
+    require(not status, "CHECKOUT_NOT_CLEAN")
+    return revision
+
+
 @dataclass
 class State:
     arn: str
@@ -69,21 +82,44 @@ class Cdk:
         self.profile = profile
         self.required_readers = {"ttobak-api", "ttobak-qa"} | ({"ttobak-mcp"} if with_mcp else set())
         self.assembly = ROOT / "build/verification/http-origin-assembly"
+        self.revision = None
+        self.assembly_digest = None
 
-    def command(self, arguments):
+    def command(self, arguments, *, from_assembly=False):
         # Even `cdk diff` can print the OLD plaintext proof when removing it.
         # Discard all child diagnostics; report only fixed phase/stack categories.
         # Operators inspect CloudFormation events privately if a deploy fails.
         command = ["npx", "cdk", *arguments, "--output", str(self.assembly)]
+        if from_assembly:
+            command += ["--app", str(self.assembly)]
         if self.profile:
             command += ["--profile", self.profile]
         result = subprocess.run(command, cwd=ROOT / "infra", env=self.env,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
         require(result.returncode == 0, "CDK_COMMAND_FAILED")
 
-    def diff(self):
-        self.command(["diff", *STACKS, "--exclusively", "--no-change-set"])
-        self.validate_activation_templates()
+    def assembly_hash(self):
+        require(self.assembly.is_dir() and not self.assembly.is_symlink(),
+                "REVIEWED_ASSEMBLY_MISSING")
+        require((self.assembly / "manifest.json").is_file(), "REVIEWED_ASSEMBLY_MISSING")
+        digest = hashlib.sha256()
+        for path in sorted(self.assembly.rglob("*")):
+            require(not path.is_symlink(), "REVIEWED_ASSEMBLY_SYMLINK")
+            if path.is_file() and path.name != ".lock":
+                digest.update(str(path.relative_to(self.assembly)).encode() + b"\0")
+                with path.open("rb") as source:
+                    for block in iter(lambda: source.read(1024 * 1024), b""):
+                        digest.update(block)
+        return digest.hexdigest()
+
+    def diff(self, stacks=STACKS, *, activation=True):
+        require(bool(stacks) and all(stack in STACKS for stack in stacks), "UNAPPROVED_STACK")
+        self.revision = checkout_revision()
+        self.command(["diff", *stacks, "--exclusively", "--no-change-set"])
+        if activation:
+            self.validate_activation_templates()
+        require(checkout_revision() == self.revision, "CHECKOUT_REVISION_CHANGED")
+        self.assembly_digest = self.assembly_hash()
 
     def validate_activation_templates(self):
         # The coordinator can be reviewed and shipped before activation. Refuse
@@ -119,11 +155,16 @@ class Cdk:
 
     def deploy(self, stack, parameters=None):
         require(stack in STACKS, "UNAPPROVED_STACK")
+        require(self.revision is not None and self.assembly_digest is not None,
+                "ASSEMBLY_NOT_REVIEWED")
+        require(checkout_revision() == self.revision, "CHECKOUT_REVISION_CHANGED")
+        require(self.assembly_hash() == self.assembly_digest, "REVIEWED_ASSEMBLY_CHANGED")
         args = ["deploy", stack, "--exclusively", "--require-approval", "never", "--previous-parameters"]
         for name, value in (parameters or {}).items():
             require(name in ("HttpOriginSecretArn", "HttpOriginSecretVersionId"), "UNAPPROVED_PARAMETER")
             args += ["--parameters", f"{stack}:{name}={value}"]
-        self.command(args)
+        self.command(args, from_assembly=True)
+        require(self.assembly_hash() == self.assembly_digest, "REVIEWED_ASSEMBLY_CHANGED")
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -157,6 +198,7 @@ class Release:
         self.live_proof = None
         self.api_url = self.site_url = self.distribution = ""
         self.checks = {}
+        self.recovered_expired_cutover = False
 
     def mark(self, phase):
         self.phase = phase
@@ -440,8 +482,23 @@ class Release:
                 not response.get("FunctionError"), "CONSUMER_CANARY_FAILED")
         require(response.get("ExecutedVersion") == self.configs[name]["Version"], "INVOKED_VERSION_CHANGED")
         result = json.loads(data)
-        headers = {key.lower(): value for key, value in result.get("headers", {}).items()}
-        return result.get("statusCode"), headers.get("x-ttobak-origin-protocol")
+        single = result.get("headers") or {}
+        multiple = result.get("multiValueHeaders") or {}
+        require(isinstance(single, dict) and isinstance(multiple, dict), "CANARY_HEADERS_INVALID")
+        values = []
+        for source, is_multiple in ((single, False), (multiple, True)):
+            for key, value in source.items():
+                require(isinstance(key, str), "CANARY_HEADERS_INVALID")
+                if key.lower() == "x-ttobak-origin-protocol":
+                    if is_multiple:
+                        require(isinstance(value, list) and all(isinstance(v, str) for v in value),
+                                "CANARY_HEADERS_INVALID")
+                        values.extend(value)
+                    else:
+                        require(isinstance(value, str), "CANARY_HEADERS_INVALID")
+                        values.append(value)
+        protocol = "1" if values and set(values) == {"1"} else None
+        return result.get("statusCode"), protocol
 
     def verify_readers(self, retired=None, adopt=False, expected=None):
         self.arn_only()
@@ -504,6 +561,7 @@ class Release:
         require(doc["phase"] == "rotating", "ROTATION_STATE_REQUIRED")
         self.mark("resuming_rotation" if self.now() < doc["previousExpiresAt"] else "repairing_expired_cutover")
         if self.now() >= doc["previousExpiresAt"] and not equal(self.distribution_proof(), doc["current"]):
+            self.recovered_expired_cutover = True
             # An expired previous proof must not be restored or its deadline
             # extended. Avoid turning still-seeded consumers into a new outage.
             require(all(self.environment(name).get("ORIGIN_VERIFY_SECRET_VERSION_ID") == self.state.version
@@ -572,7 +630,8 @@ class Release:
 
     def receipt(self, status, code=None):
         result = {"status": status, "phase": self.phase, "revision": self.revision,
-                  "account": self.account, "region": self.region, "checkedAt": int(self.now())}
+                  "account": self.account, "region": self.region, "checkedAt": int(self.now()),
+                  "recoveredExpiredCutover": self.recovered_expired_cutover}
         if code:
             result["code"] = code
         if self.state:
@@ -607,19 +666,23 @@ def main():
     args = parser.parse_args()
     release = None
     try:
-        if args.action == "retighten":
-            # Preserve the workflow's always-run OAC repair without inspecting,
-            # rotating or publishing any HTTP proof after a failed release.
-            Cdk(args.region, os.environ.get("CDK_DEFAULT_ACCOUNT", ""), args.profile).deploy("TtobakStorageStack")
-            return 0
         import boto3
         from botocore.config import Config
         session = boto3.Session(profile_name=args.profile, region_name=args.region)
         config = Config(connect_timeout=3, read_timeout=40, retries={"total_max_attempts": 1})
         account = session.client("sts", config=config).get_caller_identity()["Account"]
         require(bool(re.fullmatch(r"[0-9]{12}", account)), "ACCOUNT_IDENTITY_INVALID")
-        revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
-        require(not os.environ.get("GITHUB_SHA") or os.environ["GITHUB_SHA"] == revision, "CHECKOUT_REVISION_MISMATCH")
+        revision = checkout_revision()
+        if args.action == "retighten":
+            # Repair only OAC, with the same account/revision and assembly guards.
+            cdk = Cdk(args.region, account, args.profile)
+            cdk.diff(("TtobakStorageStack",), activation=False)
+            cdk.deploy("TtobakStorageStack")
+            result = {"status": "retightened", "revision": revision, "account": account,
+                      "region": args.region}
+            save_receipt(args.receipt, result)
+            print(json.dumps(result, sort_keys=True), flush=True)
+            return 0
         context = json.loads((ROOT / "infra/cdk.json").read_text())["context"]
         clients = {name: session.client(service, config=config) for name, service in (
             ("cfn", "cloudformation"), ("lambda", "lambda"), ("cloudfront", "cloudfront"),

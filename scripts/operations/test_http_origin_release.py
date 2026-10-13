@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
-from http_origin_release import CACHE_WAIT, RETIRED_STAGE, SECRET_NAME, STACKS, Cdk, Release, ReleaseError
+from http_origin_release import CACHE_WAIT, RETIRED_STAGE, SECRET_NAME, STACKS, Cdk, Release, ReleaseError, checkout_revision, main
 
 ACCOUNT, REGION = "111111111111", "ap-northeast-2"
 OLD = "synthetic-old-origin-proof"
@@ -88,8 +88,13 @@ class World:
         accepted = self.accepts(FunctionName, event["headers"].get("x-origin-verify"))
         status = Release.expected_status(FunctionName) if accepted else 403
         marker = accepted and self.foundation and self.marker_missing_for != FunctionName
-        response = {"statusCode": status, "headers": {"X-Ttobak-Origin-Protocol": "1"} if marker else {},
-                    "body": "synthetic empty probe"}
+        if FunctionName.startswith("ttobak-api"):
+            response = {"statusCode": status, "headers": None,
+                        "multiValueHeaders": {"X-Ttobak-Origin-Protocol": ["1"]} if marker else {},
+                        "body": "synthetic empty probe"}
+        else:
+            response = {"statusCode": status, "headers": {"X-Ttobak-Origin-Protocol": "1"} if marker else {},
+                        "body": "synthetic empty probe"}
         return {"StatusCode": 200, "ExecutedVersion": self.functions[FunctionName]["Version"],
                 "Payload": io.BytesIO(json.dumps(response).encode())}
 
@@ -402,7 +407,9 @@ class ReleaseTests(unittest.TestCase):
             self.quiet_run(world.release())
         world.now = world.doc()["previousExpiresAt"] + 1
         self.assertFalse(any(world.accepts(name, OLD) for name in world.functions))
-        self.assertEqual(self.quiet_run(world.release())["status"], "complete")
+        receipt = self.quiet_run(world.release())
+        self.assertEqual(receipt["status"], "complete")
+        self.assertTrue(receipt["recoveredExpiredCutover"])
         self.assertTrue(all(world.accepts(name, NEW) and not world.accepts(name, OLD) for name in world.functions))
 
     def test_failed_cleanup_deployment_resumes_from_active_state(self):
@@ -420,7 +427,9 @@ class ReleaseTests(unittest.TestCase):
     def test_cdk_never_prints_retired_proof_or_deploys_dependency_closure(self):
         runner = Cdk(REGION, ACCOUNT)
         with mock.patch("http_origin_release.subprocess.run", return_value=SimpleNamespace(returncode=0)) as run, \
-                mock.patch.object(runner, "validate_activation_templates"):
+                mock.patch.object(runner, "validate_activation_templates"), \
+                mock.patch("http_origin_release.checkout_revision", return_value="a" * 40), \
+                mock.patch.object(runner, "assembly_hash", return_value="reviewed-assembly"):
             runner.diff()
             runner.deploy("TtobakGatewayStack", {"HttpOriginSecretArn": ARN, "HttpOriginSecretVersionId": "a" * 32})
         for call in run.call_args_list:
@@ -430,6 +439,74 @@ class ReleaseTests(unittest.TestCase):
             self.assertNotIn("TtobakKnowledgeStack", arguments)
             self.assertEqual(call.kwargs["stdout"], -3)
             self.assertEqual(call.kwargs["stderr"], -3)
+        deploy_args = run.call_args_list[-1].args[0]
+        self.assertEqual(deploy_args[deploy_args.index("--app") + 1], str(runner.assembly))
+
+    def test_canary_normalizes_go_and_python_headers_and_rejects_conflicting_markers(self):
+        world = World()
+        release = world.release()
+        release.inspect()
+        for headers in (
+            {"headers": None, "multiValueHeaders": {"X-Ttobak-Origin-Protocol": ["1"]}},
+            {"multiValueHeaders": {"x-ttobak-origin-protocol": ["1"]}},
+            {"headers": {"X-Ttobak-Origin-Protocol": "1"}},
+        ):
+            result = {"statusCode": 404, **headers}
+            with mock.patch.object(world, "invoke", return_value={
+                "StatusCode": 200, "ExecutedVersion": "$LATEST",
+                "Payload": io.BytesIO(json.dumps(result).encode()),
+            }):
+                self.assertEqual(release.canary("ttobak-api", OLD), (404, "1"))
+        result = {"statusCode": 404, "headers": {"x-ttobak-origin-protocol": "1"},
+                  "multiValueHeaders": {"X-Ttobak-Origin-Protocol": ["2"]}}
+        with mock.patch.object(world, "invoke", return_value={
+            "StatusCode": 200, "ExecutedVersion": "$LATEST",
+            "Payload": io.BytesIO(json.dumps(result).encode()),
+        }):
+            self.assertEqual(release.canary("ttobak-api", OLD), (404, None))
+
+    def test_checkout_requires_clean_matching_revision(self):
+        with mock.patch("http_origin_release.subprocess.check_output", side_effect=["a" * 40, b" M infra/cdk.json"]):
+            with self.assertRaisesRegex(ReleaseError, "CHECKOUT_NOT_CLEAN"):
+                checkout_revision()
+        with mock.patch.dict("os.environ", {"GITHUB_SHA": "b" * 40}), \
+                mock.patch("http_origin_release.subprocess.check_output", return_value="a" * 40):
+            with self.assertRaisesRegex(ReleaseError, "CHECKOUT_REVISION_MISMATCH"):
+                checkout_revision()
+
+    def test_deploy_rejects_source_and_reviewed_template_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runner = Cdk(REGION, ACCOUNT)
+            runner.assembly = Path(directory)
+            (runner.assembly / "manifest.json").write_text('{"version":"1"}')
+            template = runner.assembly / "TtobakStorageStack.template.json"
+            template.write_text('{"Resources":{}}')
+            with mock.patch("http_origin_release.checkout_revision", return_value="a" * 40), \
+                    mock.patch("http_origin_release.subprocess.run", return_value=SimpleNamespace(returncode=0)) as run:
+                runner.diff(("TtobakStorageStack",), activation=False)
+                template.write_text('{"Resources":{"Changed":{}}}')
+                with self.assertRaisesRegex(ReleaseError, "REVIEWED_ASSEMBLY_CHANGED"):
+                    runner.deploy("TtobakStorageStack")
+                self.assertEqual(run.call_count, 1)
+                template.write_text('{"Resources":{}}')
+                with mock.patch("http_origin_release.checkout_revision", return_value="b" * 40):
+                    with self.assertRaisesRegex(ReleaseError, "CHECKOUT_REVISION_CHANGED"):
+                        runner.deploy("TtobakStorageStack")
+                self.assertEqual(run.call_count, 1)
+
+    def test_retighten_cannot_bypass_revision_guard(self):
+        session = SimpleNamespace(client=lambda *args, **kwargs: SimpleNamespace(
+            get_caller_identity=lambda: {"Account": ACCOUNT}))
+        modules = {"boto3": SimpleNamespace(Session=lambda **kwargs: session),
+                   "botocore.config": SimpleNamespace(Config=lambda **kwargs: None)}
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.dict("sys.modules", modules), \
+                mock.patch("sys.argv", ["release", "retighten", "--receipt", str(Path(directory) / "receipt.json")]), \
+                mock.patch("http_origin_release.checkout_revision", side_effect=ReleaseError("CHECKOUT_REVISION_MISMATCH")), \
+                mock.patch.object(Cdk, "deploy") as deploy, \
+                mock.patch("sys.stderr", io.StringIO()):
+            self.assertEqual(main(), 1)
+            deploy.assert_not_called()
 
 
 if __name__ == "__main__":
