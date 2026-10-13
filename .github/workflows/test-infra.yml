@@ -14,6 +14,8 @@ on:
       - 'infra/**'
       # GatewayStack bundles the HTTP MCP Lambda from mcp-server.
       - 'mcp-server/**'
+      - 'scripts/operations/http_origin_release.py'
+      - 'scripts/operations/test_http_origin_release.py'
       # Re-run on workflow changes so PRs that only touch CI still trigger
       # the required check (same convention as test-backend.yml) — without
       # this, a PR editing/neutering this gate would merge unverified.
