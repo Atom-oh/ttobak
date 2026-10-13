@@ -26,7 +26,7 @@ func validRefinementInput(input []WhisperSegment) bool {
 		return false
 	}
 	for i, segment := range input {
-		if !finiteTime(segment.Start) || !finiteTime(segment.End) ||
+		if segment.Untimed || !finiteTime(segment.Start) || !finiteTime(segment.End) ||
 			segment.End <= segment.Start || strings.TrimSpace(segment.Text) == "" ||
 			i > 0 && segment.Start < input[i-1].Start {
 			return false
@@ -45,6 +45,7 @@ const refinementMinDuration = 0.01
 // ones widened. Blank text carries no words; other timing faults keep chunk fallback.
 func normalizeRefinementInput(input []WhisperSegment) []WhisperSegment {
 	out := make([]WhisperSegment, 0, len(input))
+	prior := -1.0
 	for _, segment := range input {
 		if strings.TrimSpace(segment.Text) == "" {
 			continue
@@ -52,18 +53,14 @@ func normalizeRefinementInput(input []WhisperSegment) []WhisperSegment {
 		if finiteTime(segment.Start) && finiteTime(segment.End) && segment.End == segment.Start {
 			segment.End += refinementMinDuration
 		}
+		if segment.Untimed || !finiteTime(segment.Start) || !finiteTime(segment.End) || segment.End <= segment.Start || segment.Start < prior {
+			segment.Start, segment.End, segment.Untimed = 0, 0, true
+		} else {
+			prior = segment.Start
+		}
 		out = append(out, segment)
 	}
 	return out
-}
-
-func anyValidRefinementChunk(chunks [][]WhisperSegment) bool {
-	for _, chunk := range chunks {
-		if validRefinementInput(chunk) {
-			return true
-		}
-	}
-	return false
 }
 
 func validInferredSpeaker(label string) bool {
@@ -146,13 +143,22 @@ func validateRefinementJSON(text string, input []WhisperSegment) ([]RefinedSegme
 }
 
 func refinementQuality(segments []RefinedSegment, chunks int) *model.TranscriptQuality {
-	quality := &model.TranscriptQuality{Refinement: "validated", TotalChunks: chunks}
+	quality := &model.TranscriptQuality{Refinement: "validated", TotalChunks: chunks, Timing: "available"}
 	fallbacks, reasons, provenance := map[int]bool{}, map[string]bool{}, map[string]bool{}
 	for _, segment := range segments {
+		if segment.Untimed {
+			quality.UntimedSegments++
+		}
 		if segment.FallbackCode != "" {
 			fallbacks[segment.ChunkIndex], reasons[segment.FallbackCode] = true, true
 		}
 		provenance[segment.SpeakerProvenance] = true
+	}
+	if quality.UntimedSegments > 0 {
+		quality.Timing = "partial"
+		if quality.UntimedSegments == len(segments) {
+			quality.Timing = "unavailable"
+		}
 	}
 	quality.FallbackChunks = len(fallbacks)
 	if len(fallbacks) > 0 {

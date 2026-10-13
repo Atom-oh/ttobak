@@ -85,8 +85,19 @@ func TestRefinementRejectsInvalidInputBeforeInvokingModel(t *testing.T) {
 			return nil, nil
 		}))
 		_, segments, quality, err := svc.RefineTranscriptWithQuality(context.Background(), input)
-		if !errors.Is(err, errRefinementInput) || len(segments) != 0 || !quality.Degraded || quality.Refinement != "raw" {
-			t.Fatal("invalid source received usable/verified timing")
+		if len(normalizeRefinementInput(input)) == 0 {
+			if !errors.Is(err, errRefinementInput) || len(segments) != 0 {
+				t.Fatal("empty source retained segments")
+			}
+			continue
+		}
+		if err != nil || len(segments) != len(input) || !quality.Degraded || quality.Refinement != "raw" {
+			t.Fatal("invalid source lost raw speech")
+		}
+		for _, segment := range segments {
+			if segment.Untimed && (segment.StartTime != 0 || segment.EndTime != 0) {
+				t.Fatal("untimed speech inherited fabricated timing")
+			}
 		}
 	}
 }
@@ -188,5 +199,15 @@ func TestRefinementReachesModelWhenOnlyAZeroLengthSegmentNeedsWidening(t *testin
 	_, segments, quality, err := svc.RefineTranscriptWithQuality(context.Background(), input)
 	if err != nil || calls != 1 || quality.Refinement != "validated" || len(segments) != 2 || segments[0].Text != "네." {
 		t.Fatalf("zero-length segment disabled refinement: calls=%d segments=%+v quality=%+v err=%v", calls, segments, quality, err)
+	}
+}
+
+func TestMixedInvalidTimingKeepsEveryWordAndValidAcousticTime(t *testing.T) {
+	svc := summaryTestService(noteSourceHTTPClient(func(*http.Request) (*http.Response, error) { t.Fatal("invalid chunk reached model"); return nil, nil }))
+	text, segments, quality, err := svc.RefineTranscriptWithQuality(context.Background(), []WhisperSegment{
+		{Start: 1, End: 2, Text: "first", Speaker: "spk_0"}, {Start: 9, End: 8, Text: "preserved", Speaker: "spk_1"}, {Start: 3, End: 4, Text: "last", Speaker: "spk_0"},
+	})
+	if err != nil || len(segments) != 3 || !strings.Contains(text, "first") || !strings.Contains(text, "preserved") || !strings.Contains(text, "last") || !segments[1].Untimed || segments[1].StartTime != 0 || segments[0].StartTime != 1 || segments[2].StartTime != 3 || quality.Timing != "partial" || quality.UntimedSegments != 1 {
+		t.Fatal("raw speech/timing was discarded or invented", err, quality)
 	}
 }

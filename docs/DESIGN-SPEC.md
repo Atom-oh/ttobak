@@ -76,8 +76,8 @@ legacy array without duplication. Speaker-map/rediarization refreshes explicitly
 clear omitted versioned data; a pending local transcript edit preserves its
 paired source and segments. Saving changed A text clears old quality/segments
 until the detail refresh supplies current data. Canonical A/B bytes and existing
-text-only updates remain intact. These readers precede the later strict worker
-activation; old processing output is not described as newly verified.
+text-only updates remain intact. Strict worker output uses these readers; legacy processing output remains
+unknown. Raw chunk fallback and unknown speaker provenance remain explicit.
 
 ## Recording and recovery
 

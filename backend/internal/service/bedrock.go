@@ -1074,11 +1074,13 @@ func (s *BedrockService) RefineTranscript(ctx context.Context, segments []Whispe
 }
 
 func (s *BedrockService) RefineTranscriptWithQuality(ctx context.Context, segments []WhisperSegment) (string, []RefinedSegment, *model.TranscriptQuality, error) {
+	originalCount := len(segments)
 	segments = normalizeRefinementInput(segments)
+	blankCount := originalCount - len(segments)
 	chunks := chunkWhisperSegments(segments, 300)
 	// One bad segment must not disable refinement for the whole meeting: refineChunk
 	// validates each chunk and falls back to raw text for that chunk alone.
-	if !anyValidRefinementChunk(chunks) {
+	if len(chunks) == 0 {
 		return "", nil, &model.TranscriptQuality{Refinement: "raw", Degraded: true, SpeakerProvenance: "unknown", Reasons: []string{"invalid_input"}}, errRefinementInput
 	}
 
@@ -1104,7 +1106,9 @@ func (s *BedrockService) RefineTranscriptWithQuality(ctx context.Context, segmen
 		sb.WriteString(seg.Text)
 	}
 
-	return sb.String(), allRefined, refinementQuality(allRefined, len(chunks)), nil
+	quality := refinementQuality(allRefined, len(chunks))
+	quality.BlankSegments = blankCount
+	return sb.String(), allRefined, quality, nil
 }
 
 func (s *BedrockService) refineSequential(ctx context.Context, chunks [][]WhisperSegment) []RefinedSegment {
@@ -1232,6 +1236,7 @@ func rawFallbackSegments(chunk []WhisperSegment, speaker string) []RefinedSegmen
 			StartTime:         seg.Start,
 			EndTime:           seg.End,
 			SpeakerProvenance: "unknown",
+			Untimed:           seg.Untimed,
 		}
 		if seg.Speaker != "" {
 			segments[i].SpeakerProvenance = "acoustic"

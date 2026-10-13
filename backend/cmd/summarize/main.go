@@ -159,6 +159,7 @@ type TranscriptSegmentOut struct {
 	Text      string  `json:"text"`
 	StartTime float64 `json:"startTime"`
 	EndTime   float64 `json:"endTime"`
+	Untimed   bool    `json:"untimed,omitempty"`
 }
 
 // assignSegmentIDs gives every segment a deterministic, stable identifier the
@@ -171,7 +172,11 @@ func assignSegmentIDs(segs []TranscriptSegmentOut) {
 		if segs[i].ID != "" {
 			continue
 		}
-		segs[i].ID = fmt.Sprintf("seg-%d", int64(segs[i].StartTime*1000))
+		if segs[i].Untimed {
+			segs[i].ID = fmt.Sprintf("untimed-%d", i)
+		} else {
+			segs[i].ID = fmt.Sprintf("seg-%d", int64(segs[i].StartTime*1000))
+		}
 	}
 }
 
@@ -256,7 +261,7 @@ func handleSingleTranscript(ctx context.Context, bucket, key string, eventETags 
 		if err != nil || meeting == nil {
 			return err
 		}
-		if handled, retryErr := resumeSummaryRetry(ctx, meeting, repo.MetadataView(), generateSummary); handled {
+		if handled, retryErr := resumeSummaryRetry(ctx, meeting, repo.MetadataView(), generateResumedSummary); handled {
 			return retryErr
 		}
 		// Whitelist guard — process when status is `transcribing`, or when
@@ -301,14 +306,18 @@ func handleSingleTranscript(ctx context.Context, bucket, key string, eventETags 
 	if err != nil || meeting == nil {
 		return errors.New("meeting metadata unavailable before transcription")
 	}
-	snapshot, err := repo.CaptureTranscriptUpdate(ctx, meeting.UserID, meetingID)
+	source := "A"
+	if strings.Contains(key, "-nova.json") {
+		source = "B"
+	}
+	snapshot, err := repo.CaptureTranscriptUpdate(ctx, meeting.UserID, meetingID, source)
 	if err != nil || snapshot == nil {
 		return errors.Join(err, errors.New("transcript snapshot unavailable"))
 	}
 	if snapshot.Meeting.Status != meeting.Status {
 		return nil
 	}
-	isNova := strings.Contains(key, "-nova.json")
+	isNova := source == "B"
 	parsed, err := downloadAndParseTranscript(ctx, bucket, key)
 	if err != nil {
 		return errors.Join(err, failTranscriptSnapshot(ctx, snapshot))
@@ -317,7 +326,7 @@ func handleSingleTranscript(ctx context.Context, bucket, key string, eventETags 
 		return nil // superseded S3 delivery
 	}
 	refineParsedTranscript(ctx, parsed)
-	transcript, segments, whisperSegments, audioDuration := parsed.Text, parsed.Segments, parsed.Whisper, parsed.Duration
+	segments, whisperSegments, audioDuration := parsed.Segments, parsed.Whisper, parsed.Duration
 
 	// Same fallback chain as the multi-part merge path (merge.go): the raw
 	// audioDuration comes only from whisper_metadata.duration_seconds, which is
@@ -349,38 +358,11 @@ func handleSingleTranscript(ctx context.Context, bucket, key string, eventETags 
 	}
 
 	parsed.Duration = resolvedDuration
-	err = updateMeetingTranscript(ctx, snapshot, parsed, isNova)
-	if errors.Is(err, repository.ErrConditionFailed) {
-		return resolveTranscriptConflict(ctx, snapshot, isNova)
-	}
-	if err != nil {
+	current, err := beginTranscriptSummary(ctx, snapshot, parsed, isNova)
+	if err != nil || current == nil {
 		return err
 	}
-
-	log.Printf("Updated meeting %s with transcript (nova=%v)", meetingID, isNova)
-
-	// Re-fetch meeting for summary generation. The earlier `meeting` from the
-	// status guard at the top of this function may be nil (GSI eventual
-	// consistency) — we shadow it here and the explicit nil/error returns
-	// below guarantee `meeting` is non-nil before any field access.
-	meeting, err = repo.GetMeetingByID(ctx, meetingID)
-	if err != nil || meeting == nil {
-		log.Printf("Failed to get meeting via GSI, retrying after 1s: %v", err)
-		time.Sleep(1 * time.Second)
-		meeting, err = repo.GetMeetingByID(ctx, meetingID)
-		if err != nil || meeting == nil {
-			log.Printf("Still failed to get meeting: %v", err)
-			return nil
-		}
-	}
-
-	if transcript == "" {
-		return nil
-	}
-
-	// `meeting` is guaranteed non-nil here by the retry block above.
-	priorContext := buildLinkedMeetingContext(ctx, meeting)
-	return generateSummary(ctx, meeting, priorContext)
+	return generateClaimedSummary(ctx, current, buildLinkedMeetingContext(ctx, current), false)
 }
 
 // handlePartTranscript increments the parts-ready counter and emits AllPartsTranscribed when all parts are done
@@ -471,7 +453,7 @@ func handleAllPartsTranscribed(ctx context.Context, detail *model.AllPartsTransc
 		log.Printf("Failed to get meeting %s: %v", meetingID, err)
 		return nil
 	}
-	if handled, retryErr := resumeSummaryRetry(ctx, meeting, repo.MetadataView(), generateSummary); handled {
+	if handled, retryErr := resumeSummaryRetry(ctx, meeting, repo.MetadataView(), generateResumedSummary); handled {
 		return retryErr
 	}
 
@@ -512,32 +494,11 @@ func handleAllPartsTranscribed(ctx context.Context, detail *model.AllPartsTransc
 	if err != nil {
 		return errors.Join(err, failTranscriptSnapshot(ctx, snapshot))
 	}
-	if err := updateMeetingTranscript(ctx, snapshot, parsed, false); err != nil {
-		if errors.Is(err, repository.ErrConditionFailed) {
-			return resolveTranscriptConflict(ctx, snapshot, false)
-		}
+	current, err := beginTranscriptSummary(ctx, snapshot, parsed, false)
+	if err != nil || current == nil {
 		return err
 	}
 	transcript, segments := parsed.Text, parsed.Segments
-
-	log.Printf("Saved merged transcript for meeting %s: %d chars, %d segments", meetingID, len(transcript), len(segments))
-
-	// Flip status to `summarizing` BEFORE the archival S3 write so the
-	// EventBridge re-trigger from `PutObject(transcripts/{id}.json)`
-	// (which routes to `handleSingleTranscript`) is rejected by that
-	// path's `status == transcribing` whitelist guard. Without this
-	// reorder the archival write would replay the entire single-file
-	// pipeline (refine + save + summarize) on top of the already-merged
-	// content. Errors here must abort so we don't write the archive
-	// under an inconsistent status.
-	statusFields := map[string]interface{}{"status": model.StatusSummarizing}
-	if !meeting.SummaryRetryPending || meeting.Status != model.StatusSummarizing {
-		statusFields["summaryRetryAttempts"], statusFields["summaryRetryPending"], statusFields["summaryConflictCode"] = 0, false, ""
-	}
-	if statusErr := repo.UpdateMeetingFields(ctx, userID, meetingID, statusFields); statusErr != nil {
-		log.Printf("Failed to set status=summarizing before archive for meeting %s: %v", meetingID, statusErr)
-		return fmt.Errorf("set summarizing status failed (retrying): %w", statusErr)
-	}
 
 	// Archive the merged transcript to S3 (ADR-014 design.md §5.1 step 7).
 	// AudioPlayer uses presigned URLs from `audioKeys` so playback doesn't
@@ -548,19 +509,29 @@ func handleAllPartsTranscribed(ctx context.Context, detail *model.AllPartsTransc
 		log.Printf("Non-fatal: failed to archive merged transcript for meeting %s: %v", meetingID, archiveErr)
 	}
 
-	// Re-fetch meeting to get updated state
-	meeting, err = repo.GetMeeting(ctx, userID, meetingID)
-	if err != nil || meeting == nil {
-		log.Printf("Failed to re-fetch meeting %s after merge: %v", meetingID, err)
-		return nil
-	}
-
-	priorContext := buildLinkedMeetingContext(ctx, meeting)
-	return generateSummary(ctx, meeting, priorContext)
+	return generateClaimedSummary(ctx, current, buildLinkedMeetingContext(ctx, current), false)
 }
 
 // generateSummary runs the full Bedrock pipeline: summary, action items, tags, sentiment, KB export
 func generateSummary(ctx context.Context, meeting *model.Meeting, priorContext string) error {
+	return generateSummaryRun(ctx, meeting, priorContext, "", false)
+}
+
+func generateResumedSummary(ctx context.Context, meeting *model.Meeting, priorContext string) error {
+	return generateSummaryRun(ctx, meeting, priorContext, meeting.SummarizeRetryClaimedAt, true)
+}
+
+func generateClaimedSummary(ctx context.Context, meeting *model.Meeting, priorContext string, resumed bool) error {
+	err := generateSummaryRun(ctx, meeting, priorContext, meeting.SummarizeRetryClaimedAt, resumed)
+	if err == nil {
+		return nil
+	}
+	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	return errors.Join(err, repo.ReleaseSummaryRetryClaim(cleanup, meeting.UserID, meeting.MeetingID, meeting.SummarizeRetryClaimedAt))
+}
+
+func generateSummaryRun(ctx context.Context, meeting *model.Meeting, priorContext, claim string, resumed bool) error {
 	retry := meeting.SummaryRetryPending && meeting.Status == model.StatusSummarizing
 	meetingID := meeting.MeetingID
 	userID := meeting.UserID
@@ -577,12 +548,23 @@ func generateSummary(ctx context.Context, meeting *model.Meeting, priorContext s
 	if !retry {
 		fields["summaryRetryAttempts"], fields["summaryRetryPending"], fields["summaryConflictCode"] = 0, false, ""
 	}
-	if statusErr := repo.UpdateMeetingFields(ctx, userID, meetingID, fields); statusErr != nil {
-		log.Printf("Failed to set status=summarizing for meeting %s: %v", meetingID, statusErr)
-		return fmt.Errorf("set summarizing status failed (retrying): %w", statusErr)
-	}
+	if claim == "" {
+		if statusErr := repo.UpdateMeetingFields(ctx, userID, meetingID, fields); statusErr != nil {
+			log.Printf("Failed to set status=summarizing for meeting %s: %v", meetingID, statusErr)
+			return fmt.Errorf("set summarizing status failed (retrying): %w", statusErr)
+		}
 
-	content, err := bedrockService.SummarizeTranscript(ctx, meetingID, userID, priorContext)
+	}
+	var content string
+	var err error
+	if claim != "" {
+		content, err = bedrockService.SummarizeClaimedTranscript(ctx, meetingID, userID, priorContext, claim, resumed)
+	} else {
+		content, err = bedrockService.SummarizeTranscript(ctx, meetingID, userID, priorContext)
+	}
+	if errors.Is(err, service.ErrSummaryHumanContentPreserved) {
+		return nil
+	}
 	if err != nil {
 		if retry {
 			return err // The owning retry claim decides pending versus terminal.

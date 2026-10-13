@@ -40,14 +40,14 @@ func refineParsedTranscript(ctx context.Context, parsed *parsedTranscript) {
 	parsed.Segments = make([]TranscriptSegmentOut, len(segments))
 	for i, segment := range segments {
 		parsed.Segments[i] = TranscriptSegmentOut{Speaker: segment.Speaker, Text: segment.Text,
-			StartTime: segment.StartTime, EndTime: segment.EndTime}
+			StartTime: segment.StartTime, EndTime: segment.EndTime, Untimed: segment.Untimed}
 	}
 }
 
 func parsedTranscriptQuality(result *TranscribeResult, segments []TranscriptSegmentOut) *model.TranscriptQuality {
-	quality := &model.TranscriptQuality{Refinement: "not_requested", SpeakerProvenance: "unknown"}
+	quality := &model.TranscriptQuality{Refinement: "not_requested", SpeakerProvenance: "unknown", Timing: "unavailable"}
 	if len(segments) > 0 {
-		quality.SpeakerProvenance = "acoustic"
+		quality.SpeakerProvenance, quality.Timing = "acoustic", "available"
 	}
 	if metadata := result.WhisperMetadata; metadata != nil {
 		if metadata.Diarization != nil {
@@ -67,6 +67,8 @@ func mergeTranscriptQuality(parts []*model.TranscriptQuality) *model.TranscriptQ
 	provenance, reasons, refinements := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	allEnabled, knownEnabled := true, true
 	for _, part := range parts {
+		result.BlankSegments += part.BlankSegments
+		result.UntimedSegments += part.UntimedSegments
 		result.TotalChunks += part.TotalChunks
 		result.FallbackChunks += part.FallbackChunks
 		result.Degraded = result.Degraded || part.Degraded
@@ -96,7 +98,25 @@ func mergeTranscriptQuality(parts []*model.TranscriptQuality) *model.TranscriptQ
 			result.Refinement = refinement
 		}
 	} else {
-		result.Refinement = "partial"
+		result.Refinement = "mixed"
+		if result.FallbackChunks > 0 {
+			result.Refinement = "partial"
+		}
+	}
+	result.Timing = "available"
+	for _, part := range parts {
+		if part.Timing != "available" {
+			result.Timing = "partial"
+		}
+	}
+	if len(parts) > 0 {
+		allUntimed := true
+		for _, part := range parts {
+			allUntimed = allUntimed && part.Timing == "unavailable"
+		}
+		if allUntimed {
+			result.Timing = "unavailable"
+		}
 	}
 	for reason := range reasons {
 		result.Reasons = append(result.Reasons, reason)
@@ -149,15 +169,60 @@ func transcriptUpdateFields(parsed *parsedTranscript, isNova bool) (map[string]i
 	return fields, nil
 }
 
-func updateMeetingTranscript(ctx context.Context, snapshot *model.SummarySnapshot, parsed *parsedTranscript, isNova bool) error {
+// Transcript publication and summary ownership share one immutable CAS.
+// Conflicts discard old output; a human edit is summarized from saved current text.
+func beginTranscriptSummary(ctx context.Context, snapshot *model.SummarySnapshot, parsed *parsedTranscript, isNova bool) (*model.Meeting, error) {
 	fields, err := transcriptUpdateFields(parsed, isNova)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := checkTranscriptObjects(ctx, parsed.Objects); err != nil {
-		return err
+		return nil, err
 	}
-	return repo.SaveTranscriptUpdate(ctx, snapshot, fields)
+	if same, err := repo.TranscriptTargetsMatch(ctx, snapshot); err != nil || !same {
+		if err == nil {
+			err = repository.ErrConditionFailed
+		}
+		return nil, err
+	}
+	contentHash := repository.SummaryContentHash(snapshot)
+	claim, err := repo.StartTranscriptSummary(ctx, snapshot, fields, contentHash)
+	if errors.Is(err, repository.ErrConditionFailed) {
+		current, captureErr := repo.CaptureTranscriptUpdate(ctx, snapshot.Meeting.UserID, snapshot.Meeting.MeetingID)
+		if captureErr != nil {
+			return nil, captureErr
+		}
+		if current == nil || current.Meeting.Status != snapshot.Meeting.Status {
+			return nil, nil
+		}
+		for _, field := range []string{"audioKey", "audioKeys", "audioCrop", "diarizationSpeakerHint", "audioPartCount", "summarizeRetryClaimedAt"} {
+			if !reflect.DeepEqual(snapshot.Checks[0].Fields[field], current.Checks[0].Fields[field]) {
+				return nil, nil
+			}
+		}
+		variant := "A"
+		if isNova {
+			variant = "B"
+		}
+		changed := !reflect.DeepEqual(snapshot.Checks[0].Fields["transcript"+variant], current.Checks[0].Fields["transcript"+variant]) ||
+			!reflect.DeepEqual(snapshot.Checks[0].Fields["transcriptRevision"+variant], current.Checks[0].Fields["transcriptRevision"+variant])
+		if !changed {
+			return nil, repository.ErrConditionFailed
+		}
+		// Empty fields never rebind the discarded worker output to a fresh source.
+		claim, err = repo.StartTranscriptSummary(ctx, current, nil, contentHash)
+	}
+	if err != nil {
+		return nil, err
+	}
+	current, err := repo.MetadataView().GetMeeting(ctx, snapshot.Meeting.UserID, snapshot.Meeting.MeetingID)
+	if err != nil {
+		return nil, err
+	}
+	if current == nil || current.Status != model.StatusSummarizing || !current.SummaryRetryPending || current.SummarizeRetryClaimedAt != claim {
+		return nil, repository.ErrConditionFailed
+	}
+	return current, nil
 }
 
 func failTranscriptSnapshot(ctx context.Context, snapshot *model.SummarySnapshot) error {
@@ -166,28 +231,4 @@ func failTranscriptSnapshot(ctx context.Context, snapshot *model.SummarySnapshot
 		return nil
 	}
 	return err
-}
-
-// A competing transcript/audio run owns a superseded delivery. Unrelated edits
-// (for example notes or selection) need a fresh retry rather than a silent ACK
-// that would leave this meeting transcribing forever. Never reuse old output.
-func resolveTranscriptConflict(ctx context.Context, snapshot *model.SummarySnapshot, isNova bool) error {
-	current, err := repo.CaptureTranscriptUpdate(ctx, snapshot.Meeting.UserID, snapshot.Meeting.MeetingID)
-	if err != nil {
-		return err
-	}
-	if current == nil || current.Meeting.Status != snapshot.Meeting.Status {
-		return nil
-	}
-	variant := "transcriptA"
-	if isNova {
-		variant = "transcriptB"
-	}
-	for _, field := range []string{variant, "audioKey", "audioKeys", "audioCrop", "diarizationSpeakerHint",
-		"audioPartCount", "summarizeRetryClaimedAt"} {
-		if !reflect.DeepEqual(snapshot.Checks[0].Fields[field], current.Checks[0].Fields[field]) {
-			return nil
-		}
-	}
-	return repository.ErrConditionFailed
 }

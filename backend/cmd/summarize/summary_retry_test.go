@@ -52,6 +52,7 @@ func TestSummaryRetryRunCancellationAndChangedStatusRelease(t *testing.T) {
 	for _, changed := range []bool{false, true} {
 		old := &model.Meeting{UserID: "owner", MeetingID: "m", Status: model.StatusSummarizing, SummaryRetryPending: true}
 		current := *old
+		current.SummarizeRetryClaimedAt = "owned-claim"
 		if changed {
 			current.Status = model.StatusDone
 			current.SummarizeRetryClaimedAt = "newer-claim"
@@ -95,7 +96,7 @@ func TestSummaryRetryReadFailureReleasesOnlyOwnedClaim(t *testing.T) {
 
 func TestSummaryConflictRedeliveryGeneratesFromFreshSourceOnly(t *testing.T) {
 	old := &model.Meeting{UserID: "owner", MeetingID: "m", Status: model.StatusSummarizing, SummaryRetryPending: true, Notes: "old"}
-	fresh := &model.Meeting{UserID: "owner", MeetingID: "m", Status: model.StatusSummarizing, SummaryRetryPending: true, Notes: "new", TranscriptA: "edited"}
+	fresh := &model.Meeting{UserID: "owner", MeetingID: "m", Status: model.StatusSummarizing, SummaryRetryPending: true, Notes: "new", TranscriptA: "edited", SummarizeRetryClaimedAt: "owned-claim"}
 	for _, claimed := range []bool{true, false} {
 		store := &retryStoreFixture{current: fresh, claimed: claimed}
 		calls := 0
@@ -109,5 +110,19 @@ func TestSummaryConflictRedeliveryGeneratesFromFreshSourceOnly(t *testing.T) {
 		if err != nil || !handled || store.claims != 1 || claimed && (calls != 1 || store.reads != 1) || !claimed && (calls != 0 || store.reads != 0) {
 			t.Fatalf("unsafe duplicate/retry: %+v calls=%d err=%v", store, calls, err)
 		}
+	}
+}
+
+func TestSummaryRetryDoesNotGenerateAfterSameStatusClaimTakeover(t *testing.T) {
+	old := &model.Meeting{UserID: "owner", MeetingID: "m", Status: model.StatusSummarizing, SummaryRetryPending: true}
+	current := *old
+	current.SummarizeRetryClaimedAt = "different-claim"
+	store := &retryStoreFixture{current: &current, claimed: true}
+	handled, err := resumeSummaryRetry(context.Background(), old, store, func(context.Context, *model.Meeting, string) error {
+		t.Fatal("foreign claim reached generation")
+		return nil
+	})
+	if !handled || err != nil || store.released != "owned-claim" {
+		t.Fatal("claim takeover not isolated", err)
 	}
 }

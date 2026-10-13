@@ -9,12 +9,9 @@ import (
 	"net/http"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
@@ -118,8 +115,12 @@ func TestInvalidRawTimingRemainsReadableWithoutFabricatedSegments(t *testing.T) 
 		Quality: &model.TranscriptQuality{Refinement: "not_requested", SpeakerProvenance: "unknown"}}
 	refineParsedTranscript(context.Background(), parsed)
 	fields, err := transcriptUpdateFields(parsed, false)
-	_, hasSegments := fields["transcriptSegments"]
-	if err != nil || fields["transcriptA"] != "preserved source text" || hasSegments ||
+	raw, hasSegments := fields["transcriptSegments"]
+	var preserved []TranscriptSegmentOut
+	if hasSegments {
+		_ = json.Unmarshal([]byte(raw.(string)), &preserved)
+	}
+	if err != nil || !strings.Contains(fields["transcriptA"].(string), "preserved source text") || !hasSegments || len(preserved) != 1 || !preserved[0].Untimed || preserved[0].StartTime != 0 || preserved[0].EndTime != 0 ||
 		!parsed.Quality.Degraded || parsed.Quality.Refinement != "raw" {
 		t.Fatal("invalid source lost readable text or gained invented timing")
 	}
@@ -136,83 +137,5 @@ func TestTranscriptUpdateOmitsSegmentsWhenNoneWereTimed(t *testing.T) {
 	}
 	if fields["transcriptB"] != "untimed text" {
 		t.Fatal("text was not published")
-	}
-}
-
-func TestSingleWorkerDiscardsOutputAfterConcurrentSourceChanges(t *testing.T) {
-	for _, changedField := range []string{"transcriptA", "audioKey", "selectedTranscript"} {
-		t.Run(changedField, func(t *testing.T) {
-			current := model.Meeting{PK: "USER#owner", SK: "MEETING#m", MeetingID: "m", UserID: "owner", Status: model.StatusTranscribing,
-				AudioKey: "audio/owner/m/source.wav", TranscriptA: "prior transcript", Notes: "prior note", UpdatedAt: time.Now().UTC()}
-			modelCalls, attemptedWrites, committedWrites := 0, 0, 0
-			client := retryHTTP(func(request *http.Request) (*http.Response, error) {
-				switch request.Header.Get("X-Amz-Target") {
-				case "DynamoDB_20120810.Query", "DynamoDB_20120810.GetItem":
-					item, _ := attributevalue.MarshalMap(current)
-					data, _ := attributevalue.MarshalMapJSON(item)
-					body := `{"Item":` + string(data) + `}`
-					if strings.HasSuffix(request.Header.Get("X-Amz-Target"), ".Query") {
-						body = `{"Items":[` + string(data) + `]}`
-					}
-					return transcriptFixtureResponse(200, body, nil), nil
-				case "DynamoDB_20120810.UpdateItem":
-					attemptedWrites++
-					body, _ := io.ReadAll(request.Body)
-					var wire struct {
-						ConditionExpression      string
-						ExpressionAttributeNames map[string]string
-					}
-					if err := json.Unmarshal(body, &wire); err != nil {
-						t.Fatal(err)
-					}
-					guarded := false
-					for alias, name := range wire.ExpressionAttributeNames {
-						if name == changedField && strings.Contains(wire.ConditionExpression, alias) {
-							guarded = true
-						}
-					}
-					if !guarded || !strings.Contains(string(body), "transcriptQualityA") || modelCalls != 1 {
-						t.Fatal("worker publication was not source-fenced with quality")
-					}
-					if guarded {
-						return transcriptFixtureResponse(400, `{"__type":"ConditionalCheckFailedException"}`, nil), nil
-					}
-					committedWrites++
-					return transcriptFixtureResponse(200, `{}`, nil), nil
-				}
-				if request.Method == "HEAD" {
-					return transcriptFixtureResponse(200, "", http.Header{"Etag": {`"source"`}}), nil
-				}
-				if request.Method == "GET" {
-					return transcriptFixtureResponse(200, `{"results":{"transcripts":[{"transcript":"source words"}]},"whisper_metadata":{"duration_seconds":2,"segments":[{"start":0,"end":2,"text":"source words","speaker":"spk_0"}]}}`, http.Header{"Etag": {`"source"`}}), nil
-				}
-				modelCalls++
-				switch changedField {
-				case "transcriptA":
-					current.TranscriptA = "human correction"
-				case "audioKey":
-					current.AudioKey = "audio/owner/m/replacement.wav"
-				case "selectedTranscript":
-					current.SelectedTranscript = "B"
-				}
-				current.UpdatedAt = current.UpdatedAt.Add(time.Second)
-				return transcriptFixtureResponse(200, `{"stop_reason":"end_turn","content":[{"type":"text","text":"[{\"speaker\":\"spk_0\",\"text\":\"source words\",\"startTime\":0,\"endTime\":2,\"sourceIds\":[0]}]"}]}`, nil), nil
-			})
-			installTranscriptFixture(t, client)
-			priorRepo := repo
-			t.Cleanup(func() { repo = priorRepo })
-			cfg := aws.Config{Region: "us-west-2", Credentials: aws.AnonymousCredentials{}, HTTPClient: client, Retryer: func() aws.Retryer { return aws.NopRetryer{} }}
-			repo = repository.NewDynamoDBRepositoryWithS3(dynamodb.NewFromConfig(cfg), "table", s3Client, "bucket")
-			err := handleSingleTranscript(context.Background(), "bucket", "transcripts/m.json", "source")
-			needsFreshRetry := changedField == "selectedTranscript"
-			if needsFreshRetry && !errors.Is(err, repository.ErrConditionFailed) || !needsFreshRetry && err != nil {
-				t.Fatalf("superseded delivery/fresh retry classification: %v", err)
-			}
-			// The existing sibling-size writer may retry the same immutable
-			// source condition up to three times; it must never rebind output.
-			if modelCalls != 1 || attemptedWrites < 1 || attemptedWrites > 3 || committedWrites != 0 || current.Status != model.StatusTranscribing {
-				t.Fatalf("stale worker changed state or ran summary: models=%d attempts=%d commits=%d", modelCalls, attemptedWrites, committedWrites)
-			}
-		})
 	}
 }

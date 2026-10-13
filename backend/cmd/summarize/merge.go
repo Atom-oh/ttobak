@@ -93,6 +93,10 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 		refineParsedTranscript(ctx, parsed)
 		qualities, objects = append(qualities, parsed.Quality), append(objects, parsed.Objects...)
 		transcript, segments, whisperSegments, audioDuration := parsed.Text, parsed.Segments, parsed.Whisper, parsed.Duration
+		if len(segments) == 0 && strings.TrimSpace(transcript) != "" {
+			segments = []TranscriptSegmentOut{{Speaker: "spk_0", Text: transcript, Untimed: true}}
+			parsed.Quality.UntimedSegments++
+		}
 		for i := range segments {
 			segments[i].Speaker = speaker.Namespace(segments[i].Speaker, part.index)
 		}
@@ -138,12 +142,11 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 
 		// Offset segment timestamps and append to merged list
 		for _, seg := range segments {
-			allSegments = append(allSegments, TranscriptSegmentOut{
-				Speaker:   seg.Speaker,
-				Text:      seg.Text,
-				StartTime: seg.StartTime + cumulativeOffset,
-				EndTime:   seg.EndTime + cumulativeOffset,
-			})
+			if !seg.Untimed {
+				seg.StartTime += cumulativeOffset
+				seg.EndTime += cumulativeOffset
+			}
+			allSegments = append(allSegments, seg)
 		}
 
 		cumulativeOffset += partDuration
