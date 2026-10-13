@@ -1,0 +1,14 @@
+{
+  "name": "ttobak-pdf-font-assets",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pinned build-time Korean font for meeting PDF exports",
+  "type": "module",
+  "scripts": {
+    "verify": "node verify.mjs",
+    "test": "node --test verify.test.mjs"
+  },
+  "dependencies": {
+    "pretendard": "1.3.9"
+  }
+}

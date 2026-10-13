@@ -15,6 +15,8 @@ if [[ ! -x "$go_binary" ]]; then
   go_binary="$(command -v go || true)"
 fi
 [[ -n "$go_binary" && -x "$go_binary" ]] || { echo "Set TTOBAK_GO_BINARY to the Go executable" >&2; exit 2; }
+npm --prefix "$repo_root/backend/internal/service/pdfassets" ci --ignore-scripts --no-audit --no-fund
+npm --prefix "$repo_root/backend/internal/service/pdfassets" run verify
 export TTOBAK_NOTE_EVAL_MODE="$mode" TTOBAK_NOTE_EVAL_OUT="$output"
 if [[ "$mode" == grade || "$mode" == historical-grade ]]; then
   [[ "$grade_output" = /* ]] || { echo "Grade needs a separate absolute output directory" >&2; exit 2; }

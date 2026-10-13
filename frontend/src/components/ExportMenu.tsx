@@ -49,9 +49,14 @@ export function ExportMenu({ meetingId, onExportStart, onExportComplete }: Expor
         }
       } else if (format === 'pdf') {
         const response = await exportApi.export(meetingId, 'pdf');
-        if (response.url) {
-          window.open(response.url, '_blank');
-        }
+        if (!response.url) throw new Error('PDF download was not returned.');
+        const download = document.createElement('a');
+        download.href = response.url;
+        download.download = response.filename || `meeting-${meetingId}.pdf`;
+        download.rel = 'noopener noreferrer';
+        document.body.appendChild(download);
+        download.click();
+        download.remove();
       } else if (format === 'obsidian') {
         const response = await exportApi.obsidian(meetingId);
         // Download as .md file with YAML frontmatter

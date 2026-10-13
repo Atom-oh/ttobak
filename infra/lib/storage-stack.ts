@@ -139,6 +139,13 @@ export class StorageStack extends cdk.Stack {
       ],
       lifecycleRules: [
         {
+          id: 'ExpireMeetingPDFExports',
+          prefix: 'files/',
+          tagFilters: { 'ttobak-artifact': 'meeting-pdf-export' },
+          expiration: cdk.Duration.days(7),
+          noncurrentVersionExpiration: cdk.Duration.days(7),
+        },
+        {
           id: 'AudioToIA',
           prefix: 'audio/',
           transitions: [

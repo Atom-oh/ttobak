@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	htmltomarkdown "github.com/JohannesKaufmann/html-to-markdown/v2"
 	"github.com/go-chi/chi/v5"
@@ -48,6 +50,15 @@ type ExportHandler struct {
 	repo            *repository.DynamoDBRepository
 	crypto          *service.CryptoService
 	frontendBaseURL string
+	pdfStorage      interface {
+		StorePDFExport(context.Context, string, string, string, []byte) (string, error)
+	}
+}
+
+func (h *ExportHandler) SetPDFStorage(storage interface {
+	StorePDFExport(context.Context, string, string, string, []byte) (string, error)
+}) {
+	h.pdfStorage = storage
 }
 
 // NewExportHandler creates a new export handler. frontendBaseURL is the
@@ -81,6 +92,7 @@ func (h *ExportHandler) ExportMeeting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	var req model.ExportRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid request body")
@@ -98,19 +110,61 @@ func (h *ExportHandler) ExportMeeting(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Meeting unavailable")
 		return
 	}
 
 	switch req.Format {
 	case "pdf":
-		// PDF export - placeholder, return content as text for now
+		if h.pdfStorage == nil {
+			writeError(w, http.StatusServiceUnavailable, model.ErrCodeInternalError, "PDF export unavailable")
+			return
+		}
 		content := h.generatePDFContent(meetingDetail)
-		filename := fmt.Sprintf("%s.txt", sanitizeFilename(meetingDetail.Title))
+		data, err := service.RenderMeetingPDF(ctx, content)
+		if err != nil {
+			status := http.StatusInternalServerError
+			message := "PDF generation failed"
+			if errors.Is(err, service.ErrPDFExportLimit) {
+				status, message = http.StatusRequestEntityTooLarge, "PDF export exceeds its document limit"
+			} else if errors.Is(err, service.ErrPDFExportGlyph) {
+				status, message = http.StatusUnprocessableEntity, "PDF font does not support every character; use Markdown export"
+			}
+			writeError(w, status, model.ErrCodeInternalError, message)
+			return
+		}
+		// Generation must not issue a new capability after access or source
+		// changed. Export the actual authorized view, including future privacy
+		// projections, rather than fetching an unfiltered owner row.
+		current, err := h.meetingService.GetMeetingDetail(ctx, userID, meetingID)
+		if err != nil {
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting unavailable")
+			return
+		}
+		if h.generatePDFContent(current) != content {
+			writeError(w, http.StatusConflict, model.ErrCodeBadRequest, "Meeting changed; export again")
+			return
+		}
+		filename := fmt.Sprintf("%s.pdf", sanitizeFilename(meetingDetail.Title))
+		downloadURL, err := h.pdfStorage.StorePDFExport(ctx, userID, meetingID, filename, data)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "PDF delivery failed")
+			return
+		}
+		// Storage/signing can block. Revalidate before disclosing the capability.
+		current, err = h.meetingService.GetMeetingDetail(ctx, userID, meetingID)
+		if err != nil {
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting unavailable")
+			return
+		}
+		if h.generatePDFContent(current) != content {
+			writeError(w, http.StatusConflict, model.ErrCodeBadRequest, "Meeting changed; export again")
+			return
+		}
 		writeJSON(w, http.StatusOK, model.ExportResponse{
 			Format:   "pdf",
 			Filename: &filename,
-			Content:  &content,
+			URL:      &downloadURL,
 		})
 
 	case "notion":
@@ -229,9 +283,15 @@ func (h *ExportHandler) generatePDFContent(meeting *model.MeetingDetailResponse)
 		sb.WriteString(fmt.Sprintf("Participants: %s\n\n", strings.Join(meeting.Participants, ", ")))
 	}
 
+	if meeting.Notes != "" {
+		sb.WriteString("--- Saved Notes ---\n\n")
+		sb.WriteString(meeting.Notes)
+		sb.WriteString("\n\n")
+	}
+
 	if meeting.Content != "" {
 		sb.WriteString("--- Summary ---\n\n")
-		sb.WriteString(meeting.Content)
+		sb.WriteString(contentAsMarkdown(meeting.Content))
 		sb.WriteString("\n\n")
 	}
 
@@ -593,9 +653,22 @@ func sanitizeFilename(name string) string {
 	}
 	// Trim spaces
 	result = strings.TrimSpace(result)
+	result = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return '_'
+		}
+		return r
+	}, result)
 	// Limit length
 	if len(result) > 100 {
-		result = result[:100]
+		end := 100
+		for end > 0 && !utf8.RuneStart(result[end]) {
+			end--
+		}
+		result = result[:end]
+	}
+	if result == "" {
+		return "meeting"
 	}
 	return result
 }
