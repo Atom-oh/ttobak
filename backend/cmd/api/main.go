@@ -184,6 +184,7 @@ func init() {
 	documentReadingService := service.NewDocumentReadingService(repo)
 	documentReadingService.SetFileServices(accountService, uploadService)
 	documentReadingHandler := handler.NewDocumentReadingHandler(documentReadingService)
+	documentCatalogHandler := handler.NewDocumentCatalogHandler(service.NewDocumentCatalogService(repo))
 	actionItemsHandler := handler.NewActionItemsHandler(actionItemsService)
 	meetingHandler.SetActionItemsService(actionItemsService)
 	sessionHandler := handler.NewSessionHandler(meetingService)
@@ -248,6 +249,7 @@ func init() {
 		// Personal (account-less) document routes
 		r.Post("/api/documents", documentHandler.PutDocument)
 		r.Get("/api/documents", documentHandler.ListDocuments)
+		r.Get("/api/document-catalog", documentCatalogHandler.Get)
 		r.Get("/api/documents/{docId}", documentHandler.GetDocument)
 		r.Get("/api/documents/{docId}/reading", documentReadingHandler.Get)
 		r.Get("/api/documents/{docId}/index-status", indexStatusHandler.PersonalDocument)
