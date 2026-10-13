@@ -2,7 +2,8 @@
 
 The build pins the official `pretendard` npm package to **1.3.9**. Go embeds its
 unmodified `dist/public/static/alternative/Pretendard-Regular.ttf` and
-`dist/LICENSE.txt` directly from the restored dependency. The lockfile pins
+`dist/LICENSE.txt` (SIL Open Font License, OFL, 1.1) directly from the restored
+dependency. The lockfile pins
 the package's integrity; `verify.mjs` and the renderer independently check
 the exact font and license SHA-256 digests. No font is fetched at runtime.
 
