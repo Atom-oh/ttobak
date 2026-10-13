@@ -174,8 +174,11 @@ separate 20-minute conditional claim, not a retry scheduler.
 Meeting detail includes `transcriptQuality` for the effective selected A/B text.
 The status records refinement and speaker provenance, degradation, optional
 diarization metadata and available/partial/unavailable timing. Legacy processing
-status is `unknown`; ordinary text writes invalidate earlier attestation and
-advance only that variant's server-managed revision. Text and segment fingerprints
+status is `unknown`; text writes advance only that variant's server-managed
+revision. Human API edits explicitly invalidate earlier attestation as `edited`.
+Legacy machine publication with text plus segments records unknown processing
+with fresh byte fingerprints; its full-text-matched timing stays usable before
+strict writer activation. A text-only machine write cannot borrow sibling timing. Text and segment fingerprints
 must match the current selected source before its processing metadata supplies
 timing. Equal words alone cannot make a known untimed B variant borrow A's cache.
 These checks describe structural/source identity, not semantic accuracy or a

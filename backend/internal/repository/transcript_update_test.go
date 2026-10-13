@@ -119,8 +119,8 @@ func TestTranscriptRevisionOnlyFollowsWrittenVariant(t *testing.T) {
 						t.Fatal("revision/quality touched unchanged sibling")
 					}
 				}
-				if field != "notes" && (!strings.Contains(string(raw), `"S":"edited"`) || !strings.Contains(string(raw), `"S":"unavailable"`)) {
-					t.Fatal("manual edit retained stale timing")
+				if field != "notes" && (!strings.Contains(string(raw), `"S":"unknown"`) || !strings.Contains(string(raw), `"S":"unavailable"`)) {
+					t.Fatal("legacy text-only write inherited timing")
 				}
 				return summaryHTTPResponse(200, `{}`, nil), nil
 			}))

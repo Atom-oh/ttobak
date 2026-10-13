@@ -946,8 +946,13 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 			fields["transcriptRevision"+variant] = uuid.NewString()
 			if _, provided := fields["transcriptQuality"+variant]; !provided {
 				if text, ok := fields["transcript"+variant].(string); ok {
-					fields["transcriptQuality"+variant] = model.TranscriptQuality{Refinement: "edited",
-						SpeakerProvenance: "unknown", Timing: "unavailable", TextSHA256: model.TranscriptHash(text)}
+					// Legacy machine publishers do not supply attestation. Keep their
+					// current matched segments usable without calling them edited.
+					quality := model.TranscriptQuality{Refinement: "unknown", SpeakerProvenance: "unknown", Timing: "unavailable", TextSHA256: model.TranscriptHash(text)}
+					if segments, ok := fields["transcriptSegments"].(string); ok && segments != "" && !strings.HasPrefix(segments, "s3://") {
+						quality.Timing, quality.SegmentsSHA256 = "available", model.TranscriptHash(segments)
+					}
+					fields["transcriptQuality"+variant] = quality
 				}
 			}
 		}

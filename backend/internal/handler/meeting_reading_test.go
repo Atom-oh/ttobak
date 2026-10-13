@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -107,6 +108,29 @@ func newReadingFixture(t *testing.T) *readingFixture {
 				}
 				// Encode DynamoDB's wire format rather than Go interface wrappers.
 				payload = map[string]any{"Item": readingAttributeMap(attrs)}
+			}
+		case "DynamoDB_20120810.UpdateItem":
+			var wire struct {
+				UpdateExpression          string
+				ExpressionAttributeNames  map[string]string
+				ExpressionAttributeValues map[string]json.RawMessage
+			}
+			if json.NewDecoder(req.Body).Decode(&wire) != nil {
+				t.Fatal("invalid worker update")
+			}
+			attrs, err := attributevalue.MarshalMap(f.meeting)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, match := range regexp.MustCompile(`(#[0-9]+) = (:[0-9]+)`).FindAllStringSubmatch(wire.UpdateExpression, -1) {
+				value, err := attributevalue.UnmarshalMapJSON([]byte(`{"v":` + string(wire.ExpressionAttributeValues[match[2]]) + `}`))
+				if err != nil {
+					t.Fatal(err)
+				}
+				attrs[wire.ExpressionAttributeNames[match[1]]] = value["v"]
+			}
+			if attributevalue.UnmarshalMap(attrs, f.meeting) != nil {
+				t.Fatal("invalid stored worker row")
 			}
 		case "DynamoDB_20120810.Query":
 			item := f.meeting
@@ -681,5 +705,39 @@ func TestReadingAPIPreservesActionJSONExtensions(t *testing.T) {
 	}
 	if len(f.s3Keys) != 0 {
 		t.Fatal("action JSON reading hydrated transcripts")
+	}
+}
+
+func TestLegacyWorkerPublicationAndHumanEditHaveDistinctTiming(t *testing.T) {
+	f := newReadingFixture(t)
+	text, segments := "first last", `[{"text":"first","startTime":1,"endTime":2},{"text":"last","startTime":3,"endTime":4}]`
+	if err := f.repo.UpdateMeetingFields(context.Background(), "owner", "m1", map[string]interface{}{"transcriptA": text, "transcriptSegments": segments}); err != nil {
+		t.Fatal(err)
+	}
+	if f.meeting.TranscriptQualityA == nil || f.meeting.TranscriptQualityA.Refinement != "unknown" || !model.TranscriptTimingMatches(f.meeting, "A") {
+		t.Fatal("legacy worker acquired edited or stale timing status")
+	}
+	value := readingResult(t, f.call(t, map[string][]string{"kind": {"transcript"}, "startTime": {"0"}, "endTime": {"5"}}))
+	if len(value["chunks"].([]any)) != 2 {
+		t.Fatal("legacy worker lost verified timing")
+	}
+	q := model.TranscriptQuality{Refinement: "edited", Timing: "unavailable", TextSHA256: model.TranscriptHash(text)}
+	if err := f.repo.UpdateMeetingFields(context.Background(), "owner", "m1", map[string]interface{}{"transcriptA": text, "transcriptQualityA": q}); err != nil {
+		t.Fatal(err)
+	}
+	if model.TranscriptTimingMatches(f.meeting, "A") {
+		t.Fatal("explicit human edit inherited legacy timing")
+	}
+}
+
+func TestSpilledCurrentQualityUsesHydratedTranscriptForTiming(t *testing.T) {
+	f := newReadingFixture(t)
+	text, segments := "first last", `[{"text":"first","startTime":1,"endTime":2},{"text":"last","startTime":3,"endTime":4}]`
+	f.objects["transcripts/m1/transcriptA.txt"], f.objects["transcripts/m1/transcriptSegments.txt"] = text, segments
+	f.meeting.TranscriptSegments = "s3://reading-fixture/transcripts/m1/transcriptSegments.txt"
+	f.meeting.TranscriptQualityA = &model.TranscriptQuality{Refinement: "validated", Timing: "available", TextSHA256: model.TranscriptHash(text), SegmentsSHA256: model.TranscriptHash(segments)}
+	value := readingResult(t, f.call(t, map[string][]string{"kind": {"transcript"}, "startTime": {"0"}, "endTime": {"5"}}))
+	if len(value["chunks"].([]any)) != 2 {
+		t.Fatal("spilled current text lost segment evidence")
 	}
 }

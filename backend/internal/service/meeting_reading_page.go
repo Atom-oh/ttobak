@@ -302,7 +302,7 @@ func readingWindows(text, raw string) []readingWindow {
 			continue
 		}
 		if t.Start == nil || t.End == nil || math.IsNaN(*t.Start) || math.IsInf(*t.Start, 0) ||
-			math.IsNaN(*t.End) || math.IsInf(*t.End, 0) || *t.Start < 0 || *t.Start < prior || *t.End <= *t.Start {
+			math.IsNaN(*t.End) || math.IsInf(*t.End, 0) || *t.Start < 0 || *t.Start < prior || *t.End < *t.Start {
 			return nil
 		}
 		prior = *t.Start

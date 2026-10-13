@@ -765,6 +765,7 @@ func (s *MeetingService) UpdateMeeting(ctx context.Context, userID, meetingID st
 		}
 		if req.TranscriptA != meeting.TranscriptA {
 			fields["transcriptA"] = req.TranscriptA
+			fields["transcriptQualityA"] = model.TranscriptQuality{Refinement: "edited", SpeakerProvenance: "unknown", Timing: "unavailable", TextSHA256: model.TranscriptHash(req.TranscriptA)}
 			// Preserve shared candidate metadata: it may describe B, including
 			// a concurrent B producer. Every consumer verifies against the
 			// selected current text, so stale A words cannot override this edit.
