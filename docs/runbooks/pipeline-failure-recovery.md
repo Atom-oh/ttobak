@@ -1,61 +1,50 @@
 # Pipeline failure retention and controlled replay
 
-This runbook describes checked-in recovery controls. Deployment, notification
-delivery and synthetic failure/recovery acceptance must be recorded separately.
+These are checked-in controls, not deployed acceptance. Record deployment,
+notification delivery and synthetic failure/recovery separately.
 
 ## What is retained
 
-GatewayStack owns two seven-day, SSE-SQS encrypted, TLS-only queues, retained on
-stack removal. Neither queue has a consumer or an automatic redrive destination.
+GatewayStack owns two seven-day, SSE-SQS encrypted, TLS-only queues with RETAIN
+on stack removal and no consumer or automatic redrive.
 
-Their fixed physical names can collide after stack deletion or rollback retains
-the queues. Inventory existing ownership before recreating the stack. Preserve
-messages and review resource import or a deliberate new-name migration with both
-queues monitored until recovery finishes. Never purge/delete a retained queue or
-change its removal policy simply to make redeployment succeed.
+Fixed names can collide after stack deletion or rollback. Inventory ownership
+before recreation; preserve messages and review import or a new-name migration,
+monitoring both queues until recovery finishes. Never purge/delete a retained
+queue or change RETAIN to unblock deployment.
 
 | Queue | Record | Coverage |
 |---|---|---|
-| `ttobak-pipeline-delivery-failures` | Original EventBridge event plus `RULE_ARN`/`TARGET_ARN` message attributes | Audio upload/crop, image completion, transcript upload, all-parts completion and optional slide conversion |
-| `ttobak-pipeline-execution-failures` | Lambda destination record with `requestPayload`, execution context and possible error output | Transcribe, summarize, process-image and optional convert-doc |
+| `ttobak-pipeline-delivery-failures` | EventBridge event and `RULE_ARN`/`TARGET_ARN` attributes | Audio/crop, image, transcript/all-parts, optional slide conversion |
+| `ttobak-pipeline-execution-failures` | Lambda `requestPayload`, execution context and error output | Transcribe, summarize, process-image, optional convert-doc |
 
-Existing EventBridge retry defaults are unchanged. These Lambda functions keep
-two asynchronous retries and a six-hour maximum event age; only exhausted
-failures are sent to the execution queue. The action-item, saved-summary, QA,
-extraction and canonical-index delivery/retry controls remain separate.
-Action-item and saved-summary executions also use the summarize destination.
-QA, canonical-index, action-item and saved-summary DLQs gain backlog/age alarms.
+EventBridge retry defaults remain unchanged. Lambda keeps two async retries and
+six-hour maximum event age; exhausted failures reach the execution queue.
+Other delivery/retry controls remain separate. Action-item/saved-summary executions
+also use the summarize destination. QA, canonical-index, action-item and
+saved-summary dead-letter queues (DLQs) gain backlog/age alarms.
 
-Image analysis now returns closed failure categories for model, metadata and
-publication failures. It preserves prior content on failure and conditionally
-publishes only to the same unfinished attachment. Completed/deleted/changed
-attachments are ignored on redelivery. Classification and output are never put
-in these new error messages.
+Image model/metadata/publication failures use closed error categories without
+classification or output. Failure preserves prior content; publication requires
+the same unfinished attachment. Redelivery ignores completed/deleted/changed rows.
 
-Destinations capture Lambda failures, not every product failure. A handler that
-deliberately records a terminal application error and returns success does not
-produce a destination record. Successful ECS task submission is not successful
-transcription; subsequent GPU/Spot failures still need the existing meeting/device
-recovery and worker investigation. Check canonical meeting/analysis state as well
-as queues and Lambda metrics.
+Lambda success creates no destination record even after a recorded application
+error. ECS submission does not prove transcription: later GPU/Spot failures need
+meeting/device recovery and investigation. Check canonical state as well as metrics/queues.
 
 ## Alarm routing and release acceptance
 
-Alarms cover visible backlog, oldest-message age, Lambda errors/throttles/async
-drops/destination delivery failures, and core EventBridge delivery failures.
-Sparse failure metrics use one breaching sample in two one-minute periods and
-`notBreaching` missing-data treatment. Backlog alarms trigger at one message;
-queue-age alarms trigger at fifteen minutes. Tune against measured traffic.
-The delivery-loss metric is exactly `InvocationsFailedToBeSentToDlq` in
-`AWS/Events`, scoped by `RuleName`. AWS emits it only when nonzero; the spelling
-and missing-data behavior are significant.
+Alarms cover backlog/age, Lambda errors/throttles/async drops/destination loss and
+core EventBridge delivery failures. They use one breaching sample in two one-minute
+periods and `notBreaching` missing data; backlog threshold is one message and age
+is fifteen minutes. Tune against measured traffic. Delivery loss uses the exact
+nonzero-only `AWS/Events` metric `InvocationsFailedToBeSentToDlq`, scoped by `RuleName`.
 
-`PipelineAlarmTopicArn` is an optional CloudFormation parameter on GatewayStack.
-An empty value creates alarms without notification actions, and stack output
-`PipelineAlarmRouting` explicitly reports `UNCONFIGURED`. Configure an existing
-standard SNS topic with a reviewed policy permitting the regional CloudWatch
-service to publish and a confirmed operator subscription. This change does not
-create a topic, subscribe an address or send notifications.
+GatewayStack's optional `PipelineAlarmTopicArn` parameter defaults empty: alarms
+have no actions and `PipelineAlarmRouting` reports `UNCONFIGURED`. Configure an
+existing standard SNS topic with reviewed regional CloudWatch publish permission
+and a confirmed operator subscription. This change creates no topic/subscription
+and sends no notifications.
 
 After reviewing the exact synth/diff, deploy changed stacks individually with
 `--exclusively`; never deploy KnowledgeStack incidentally. Example parameter:
@@ -65,27 +54,18 @@ npx cdk deploy TtobakGatewayStack --exclusively \
   --parameters TtobakGatewayStack:PipelineAlarmTopicArn=arn:aws:sns:ap-northeast-2:ACCOUNT:APPROVED_TOPIC
 ```
 
-A configured ARN is not proof that anyone receives alarms. Before release,
-record the deployed revision, queue/destination settings, scoped send policies,
-alarm actions, confirmed subscription status and a received synthetic alarm.
-Use a synthetic test pipeline to exercise both delivery rejection and a worker
-that exhausts its configured retries. Do not break a production invocation policy
-or publish private meeting content as a test. Confirm the expected queue receives
-each shape, a missing destination send grant raises its own alarm, and restored
-delivery completes a synthetic resource exactly once.
+Complete the acceptance record below in a synthetic pipeline. Never break a
+production invocation policy or publish private meeting content for testing.
 
 ## Inspect one retained event
 
-Install `boto3<2` in the operator environment. Use the intended AWS profile and
-region. The replay tool derives the account from STS and uses only that account's
-`ttobak-main` table, `ttobak-assets-ACCOUNT` bucket and allowlisted functions.
-Its credentials require STS identity, exact-table `GetItem`, scoped S3 metadata
-reads and, only for execution, `lambda:InvokeFunction` on the intended worker.
-Queue inspection/deletion permissions are separate operator responsibilities.
+Install `boto3<2`; use the intended AWS profile/region. STS determines the account:
+the tool uses its `ttobak-main`, `ttobak-assets-ACCOUNT` and allowlisted functions.
+Grant STS identity, exact-table `GetItem`, scoped S3 HEAD and, for execution,
+`lambda:InvokeFunction` on the intended worker. Queue inspection/deletion is separate.
 
-Save exactly one `ReceiveMessage` message to a private file, including all
-message attributes. It can contain sensitive filenames or provider error output:
-do not paste its body in tickets, terminal logs or review comments.
+Save one `ReceiveMessage` message with all attributes to a private file. Its
+sensitive filenames/provider errors must not enter tickets, logs or review comments.
 
 ```bash
 umask 077
@@ -98,48 +78,42 @@ python3 scripts/operations/replay_pipeline_failure.py \
   --owner-id OWNER --meeting-id MEETING
 ```
 
-Use `--kind execution` for the Lambda destination queue. Add `--attachment-id`
-for image events or `--document-id` for personal slide conversion. The tool does
-not support account-shared slide copies or unrelated queues. Output contains only
-the decision, target function and a confirmation hash, never the event body.
+Use `--kind execution` for destinations, `--attachment-id` for images and
+`--document-id` for personal slides. Shared copies/unrelated queues are unsupported.
+Output is decision/target/confirmation hash, never the body.
 
-The default is read-only. The tool validates account, region, exact delivery
-rule/target or execution function, event age, canonical owner/resource identity,
-current work state and source ETag/version where available. It uses strongly
-consistent metadata reads and S3 HEAD, without reading transcript/note bodies.
-Custom events without source versions additionally reject objects modified after
-the event; the inspected current version is included in the confirmation hash.
+Default operation is read-only: validate account/region, exact rule/target or
+function, event age, canonical owner/resource, work state and available ETag/version.
+Strongly consistent metadata reads and S3 HEAD never read transcript/note bodies.
+Custom events reject sources modified after the event; inspected versions enter
+the confirmation hash.
 
-Timestamp parsing preserves Go's RFC3339Nano precision on Python 3.9 and 3.12.
-A whole-second event represents that one-second interval for creation/emission
-checks. Next-second creation still rejects; fractional event times keep exact
-ordering. All-parts replay additionally requires the last meeting update to
-precede its canonical emission marker, preserving later-edit rejection.
+RFC3339Nano parsing retains nanoseconds on Python 3.9/3.12. Whole-second events
+represent a one-second creation/emission interval; next-second creation rejects
+and fractional times retain exact ordering. All-parts replay requires the last
+meeting update to precede its canonical emission marker.
 
-S3 audio events precede the upload-complete call that binds the key. A later
-meeting update is replayable only with the exact currently bound key, unchanged
-ETag and matching non-null immutable S3 version from the original event. Missing
-version evidence, completed audio parts and rebindings reject. Other transcript
-and crop freshness checks remain strict. Personal document rows may also be
-created after their raw S3 event; their current document/file-key and object
-identity checks remain the relevant binding.
+S3 audio events precede completion binding. Later meeting updates require the exact
+bound key, unchanged ETag and matching original non-null S3 version. Missing versions,
+completed parts and rebindings reject. Multipart transcript replay checks its own
+readiness bit and current part audio's modification time, rejecting newer/unknown
+generations while permitting sibling progress. Other transcript/crop freshness
+checks remain strict. Personal documents can be created after S3 delivery; current
+document/file-key and object identity bind their replay.
 
-Custom image/all-parts events do not carry complete original source revisions.
-Their current source checks and worker publication guards remain necessary;
-these timestamp corrections do not invent missing subsecond provenance.
+Image/all-parts events lack complete original revisions: source checks and worker
+publication guards do not establish missing subsecond provenance.
 
-Rejects are deliberate. Missing identities, rebound audio/files, changed source
-objects, stale analysis run IDs, expired leases, completed parts and active
-summary claims must be handled through the supported product recovery path.
-Never edit a retained event to invent a newer run ID or clear a claim.
+Use product recovery for missing identities, rebound/changed sources, stale runs,
+expired leases, completed parts or active summary claims. Never edit retained
+events to invent run IDs or clear claims.
 
 ## Submit only a verified, quiescent replay
 
-Inspect the retained error, resolve its cause and verify that no active Lambda,
-ECS worker, user edit or retry can race the replay. The source metadata check is
-not an atomic worker claim. In particular, ordinary audio task submission has
-no operator replay lease. Pause competing recovery work and verify worker status
-before using the required `--workers-quiesced` acknowledgement.
+Resolve the error and verify no Lambda, ECS worker, edit or retry can race replay.
+Metadata checks are not atomic claims; ordinary audio submission has no replay
+lease. Pause competing recovery and verify workers before acknowledging
+`--workers-quiesced`.
 
 Re-run with the dry-run hash and the same identity arguments:
 
@@ -150,30 +124,26 @@ python3 scripts/operations/replay_pipeline_failure.py \
   --execute --workers-quiesced --confirm-plan PLAN_HASH
 ```
 
-The tool re-reads state before submitting the unchanged event. It does not mutate
-DynamoDB, reset retry budgets, republish an `aws.s3` event through EventBridge,
-delete the queue message or automatically retry an ambiguous invocation. It
-invokes the allowlisted Lambda asynchronously once. `accepted_not_completed`
-means only that Lambda accepted delivery. Verify canonical completion and
-source identity before separately deleting the original queue message. If the
-invoke response is lost, inspect current work instead of immediately repeating.
-Remove the private local message file after the incident is resolved.
+The tool re-reads state and asynchronously submits the unchanged event once.
+It never mutates DynamoDB, resets budgets, republishes through EventBridge or
+deletes messages. `accepted_not_completed` means accepted delivery only.
+Verify canonical completion/source before separate deletion; investigate lost
+responses before retrying. Remove the private file after resolution.
 
-Terminal batch summaries use owner/editor POST `/api/meetings/{id}/resummary`;
-replaying their old transcript event alone is a no-op. Expired/failed saved-summary
-or action-item runs likewise need their authenticated retry APIs to create a new
-run. The operator tool never manufactures that transition. See
+Terminal summaries use owner/editor POST `/api/meetings/{id}/resummary`; old transcript
+replay alone is a no-op. Expired/failed saved-summary and action-item runs need their
+authenticated retry APIs to create a run; the tool never creates one. See
 [meeting summary recovery](meeting-document-release.md).
 
 ## Acceptance record
 
-No live record is supplied by this source change. Complete these checks against
-the deployed revision before claiming monitored failure recovery:
+No live acceptance is supplied. Record the deployed revision and:
 
-- Both failure shapes arrive in their intended queue after the original retries.
-- The configured operator receives a synthetic alarm and can access only the
-  required diagnostic resources.
-- A synthetic dry run performs no writes; an approved replay completes once.
+- Queue/destination settings, scoped send policies, alarm actions and confirmed
+  subscription; the operator receives a synthetic alarm with diagnostic-only access.
+- Both failure shapes arrive after original retries; removing a destination send
+  grant in the synthetic pipeline triggers its own alarm.
+- Dry run performs no writes; restored delivery and approved replay complete once.
 - A completed resource, changed source and stale run are rejected on replay.
 - An ambiguous invocation is investigated without automatic duplicate submission.
 - Queue messages and private diagnostic files follow the seven-day retention and
