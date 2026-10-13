@@ -129,9 +129,20 @@ func (s *MeetingReadingService) transcript(ctx context.Context, m *model.Meeting
 		if err != nil {
 			return nil, readingDataError(err)
 		}
-		verified = readingWindows(text, raw)
+		m.TranscriptSegments = raw
+		if model.TranscriptTimingMatches(m, source) {
+			verified = readingWindows(text, raw)
+		}
 	}
-	if o.StartTime != nil && len(verified) == 0 {
+	timed, unlocated := 0, 0
+	for _, window := range verified {
+		if window.segment.Untimed {
+			unlocated += window.end - window.start
+		} else {
+			timed++
+		}
+	}
+	if o.StartTime != nil && timed == 0 {
 		return nil, ErrReadingTimeRange
 	}
 	windows := verified
@@ -141,7 +152,7 @@ func (s *MeetingReadingService) transcript(ctx context.Context, m *model.Meeting
 	if o.StartTime != nil {
 		filtered := []readingWindow{}
 		for _, w := range windows {
-			if w.segment.StartTime < *o.EndTime && w.segment.EndTime > *o.StartTime {
+			if !w.segment.Untimed && w.segment.StartTime < *o.EndTime && w.segment.EndTime > *o.StartTime {
 				filtered = append(filtered, w)
 			}
 		}
@@ -154,7 +165,7 @@ func (s *MeetingReadingService) transcript(ctx context.Context, m *model.Meeting
 		rows := []interface{}{}
 		for _, w := range verified {
 			v := w.segment
-			rows = append(rows, []interface{}{v.ID, v.Speaker, v.Text, v.StartTime, v.EndTime})
+			rows = append(rows, []interface{}{v.ID, v.Speaker, v.Text, v.StartTime, v.EndTime, v.Untimed})
 		}
 		segments = rows
 	}
@@ -163,6 +174,9 @@ func (s *MeetingReadingService) transcript(ctx context.Context, m *model.Meeting
 	if o.StartTime != nil {
 		timeRange = readingObject{"startTime": *o.StartTime, "endTime": *o.EndTime}
 		scope = "requested_time_range"
+		if unlocated > 0 {
+			scope = "verified_timed_segments"
+		}
 	}
 	revision := readingHash([]interface{}{source, text, m.SttProvider, segments})
 	binding := readingHash([]interface{}{1, "transcript", meetingID, o.Source, selected, source, timeRange, revision})
@@ -173,6 +187,7 @@ func (s *MeetingReadingService) transcript(ctx context.Context, m *model.Meeting
 		"provenance": readingObject{"field": "transcript" + source, "segmentEvidence": evidence,
 			"sttProvider": readingLimit(m.SttProvider, 64, "sttProvider", &truncated), "providerScope": "meeting"},
 		"metadataTruncated": truncated, "mode": mode, "timeRange": timeRange, "completenessScope": scope,
+		"unlocatedCodePoints": unlocated,
 	}
 	return paginateReading(text, windows, o, binding, func(chunks []readingChunk, page readingObject) readingObject {
 		base["chunks"], base["page"] = chunks, page

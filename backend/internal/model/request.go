@@ -159,12 +159,14 @@ type MeetingDetailResponse struct {
 	LiveSummary                string               `json:"liveSummary,omitempty"`
 	TranscriptA                string               `json:"transcriptA,omitempty"`
 	TranscriptB                string               `json:"transcriptB,omitempty"`
+	TranscriptQuality          *TranscriptQuality   `json:"transcriptQuality,omitempty"`
 	SelectedTranscript         *string              `json:"selectedTranscript,omitempty"` // "A" | "B" | null
 	AudioKey                   string               `json:"audioKey,omitempty"`
 	AudioKeys                  []string             `json:"audioKeys,omitempty"`
 	AudioPartCount             int                  `json:"audioPartCount,omitempty"`
 	AudioPartsReady            int                  `json:"audioPartsReady,omitempty"`
 	Transcription              json.RawMessage      `json:"transcription,omitempty"`
+	TranscriptionV2            json.RawMessage      `json:"transcriptionV2,omitempty"` // Complete mixed/untimed segments; legacy clients use canonical raw text.
 	Tags                       []string             `json:"tags,omitempty"`
 	ActionItems                json.RawMessage      `json:"actionItems,omitempty"`
 	SpeakerMap                 map[string]string    `json:"speakerMap,omitempty"`

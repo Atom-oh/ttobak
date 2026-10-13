@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect, useMemo } from 'react';
-import type { TranscriptSegment } from '@/types/meeting';
+import type { TranscriptQuality, TranscriptSegment } from '@/types/meeting';
 import { SPEAKER_COLORS } from '@/lib/speakerColors';
 
 interface TranscriptSectionProps {
@@ -9,12 +9,14 @@ interface TranscriptSectionProps {
   rawTranscript?: string;
   onSaveRawTranscript?: (text: string) => Promise<void>;
   onDirtyChange?: (dirty: boolean) => void;
+  quality?: TranscriptQuality;
 }
 
 interface SpeakerGroup {
   speaker: string;
   startTime: number;
   endTime: number;
+  untimed: boolean;
   segments: TranscriptSegment[];
 }
 
@@ -36,7 +38,7 @@ function groupBySpeaker(segments: TranscriptSegment[]): SpeakerGroup[] {
   const groups: SpeakerGroup[] = [];
   for (const seg of segments) {
     const last = groups[groups.length - 1];
-    if (last && last.speaker === seg.speaker) {
+    if (last && last.speaker === seg.speaker && last.untimed === !!seg.untimed) {
       last.segments.push(seg);
       last.endTime = seg.endTime;
     } else {
@@ -44,6 +46,7 @@ function groupBySpeaker(segments: TranscriptSegment[]): SpeakerGroup[] {
         speaker: seg.speaker,
         startTime: seg.startTime,
         endTime: seg.endTime,
+        untimed: !!seg.untimed,
         segments: [seg],
       });
     }
@@ -75,7 +78,7 @@ function EditableText({ text, onSave }: { text: string; onSave?: (text: string) 
         className={onSave ? 'cursor-text hover:bg-slate-100 dark:hover:bg-white/5 rounded px-0.5 -mx-0.5 transition-colors' : ''}
         onClick={() => onSave && setEditing(true)}
       >
-        {value}
+        {onSave ? value : text}
       </span>
     );
   }
@@ -96,7 +99,41 @@ function EditableText({ text, onSave }: { text: string; onSave?: (text: string) 
   );
 }
 
-export function TranscriptSection({ transcription, rawTranscript, onSaveRawTranscript, onDirtyChange }: TranscriptSectionProps) {
+export function TranscriptQualityNotice({ quality }: { quality?: TranscriptQuality }) {
+  const refinement = quality?.refinement || 'unknown';
+  const speaker = quality?.speakerProvenance || 'unknown';
+  const caution = quality?.degraded || refinement === 'unknown' || refinement === 'edited';
+  const text = refinement === 'partial' || refinement === 'raw'
+    ? '일부 구간의 AI 정제 결과를 확인할 수 없어 음성 인식 원문을 보존했습니다. 중요한 발언은 녹음과 대조해 주세요.'
+    : refinement === 'edited'
+      ? '수정된 전사입니다. 수정 전의 정제·화자 검증 정보는 적용되지 않습니다.'
+      : refinement === 'unknown'
+        ? '이 전사의 정제·화자 검증 정보를 확인할 수 없습니다.'
+        : refinement === 'validated'
+          ? 'AI로 정제한 전사입니다. 발화 대응과 시간 검증은 내용의 정확성을 보증하지 않습니다.'
+          : '음성 인식 전사입니다. 숫자·이름·결정 사항은 녹음과 확인해 주세요.';
+  const speakerText = speaker === 'acoustic'
+    ? '화자 구분은 음성 기반입니다. 실제 이름은 확인해 주세요.'
+    : speaker === 'text_inferred'
+      ? '화자 구분은 대화 내용으로 추정했습니다. 실제 목소리와 다를 수 있습니다.'
+      : speaker === 'mixed'
+        ? '화자 구분 방법이 구간마다 다릅니다. 녹음에서 화자를 확인해 주세요.'
+        : '화자 구분을 확인할 수 없습니다. 같은 라벨이 같은 사람을 뜻하지 않을 수 있습니다.';
+  return (
+    <div role="note" className={`mb-5 rounded-lg border p-3 text-sm ${caution
+      ? 'border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-200'
+      : 'border-slate-200 text-slate-600 dark:border-white/10 dark:text-text-muted'}`}>
+      <p>{text}</p>
+      <p className="mt-1">{speakerText}</p>
+      {!!quality?.fallbackChunks && <p className="mt-1">원문 보존 구간: {quality.fallbackChunks} / {quality.totalChunks}</p>}
+      {!!quality?.untimedSegments && <p className="mt-1">시간을 확인할 수 없는 {quality.untimedSegments}개 발화도 원문에 포함되어 있습니다.</p>}
+      {quality?.timing === 'unavailable' && <p className="mt-1">현재 전사의 시간 정보를 확인할 수 없습니다.</p>}
+      {!!quality?.blankSegments && <p className="mt-1">내용이 없는 {quality.blankSegments}개 구간은 생략했습니다.</p>}
+    </div>
+  );
+}
+
+export function TranscriptSection({ transcription, rawTranscript, onSaveRawTranscript, onDirtyChange, quality }: TranscriptSectionProps) {
   const [editingRaw, setEditingRaw] = useState(false);
   const [rawValue, setRawValue] = useState(rawTranscript || '');
   const [saving, setSaving] = useState(false);
@@ -172,6 +209,7 @@ export function TranscriptSection({ transcription, rawTranscript, onSaveRawTrans
         </div>
       </div>
 
+      <TranscriptQualityNotice quality={quality} />
       {hasSegments ? (
         <div className="space-y-1">
           {groups.map((group, gi) => {
@@ -183,7 +221,7 @@ export function TranscriptSection({ transcription, rawTranscript, onSaveRawTrans
             // straight to the right speaker turn. Older meetings without
             // saved segment ids fall back to a startTime-based key.
             const groupAnchor =
-              group.segments[0]?.id || `seg-${Math.round(group.startTime * 1000)}`;
+              group.segments[0]?.id || (group.untimed ? `untimed-group-${gi}` : `seg-${Math.round(group.startTime * 1000)}`);
             return (
               <div
                 key={`${group.speaker}-${group.startTime}-${gi}`}
@@ -208,7 +246,7 @@ export function TranscriptSection({ transcription, rawTranscript, onSaveRawTrans
                       {group.speaker}
                     </span>
                     <span className="text-[12px] text-slate-400 dark:text-text-muted tabular-nums">
-                      {formatTimestamp(group.startTime)}
+                      {group.untimed ? '시간 정보 없음' : formatTimestamp(group.startTime)}
                     </span>
                   </div>
 
@@ -220,7 +258,7 @@ export function TranscriptSection({ transcription, rawTranscript, onSaveRawTrans
                       // within a long speaker turn. The first segment's anchor
                       // already lives on the group wrapper above, so skip it
                       // here to avoid a duplicate DOM id.
-                      const segAnchor = seg.id || `seg-${Math.round(seg.startTime * 1000)}`;
+                      const segAnchor = seg.id || (seg.untimed ? `untimed-${gi}-${si}` : `seg-${Math.round(seg.startTime * 1000)}`);
                       const isDuplicateOfGroupAnchor = si === 0 && segAnchor === groupAnchor;
                       return (
                         <span
@@ -239,7 +277,7 @@ export function TranscriptSection({ transcription, rawTranscript, onSaveRawTrans
                 {/* Hover timestamp for end */}
                 <div className="opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 pt-1">
                   <span className="text-[11px] text-slate-400 dark:text-text-muted tabular-nums">
-                    {formatTimestamp(group.endTime)}
+                    {group.untimed ? '' : formatTimestamp(group.endTime)}
                   </span>
                 </div>
               </div>

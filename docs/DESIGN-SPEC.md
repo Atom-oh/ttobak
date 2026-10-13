@@ -62,6 +62,23 @@ use CSS variants.
 Resolve exact paths under `frontend/src/` rather than treating this table as an
 exhaustive file inventory. New static pages need the CloudFront knownPages mapping.
 
+`TranscriptSection` shows source-bound refinement and speaker status beside the
+current transcript. Missing legacy attestation and human edits are explicit;
+structural validation does not promise semantic accuracy or real-world identity.
+Untimed speech remains visible with an unavailable-time label beside valid timed
+speech. Grouping follows both speaker and timing availability; unknown times
+never become zero-time links. Blank/untimed counts describe available metadata.
+
+Meeting detail and `SpeakerMapEditor` prefer `transcriptionV2` when supplied.
+Mixed/untimed arrays use that additive field while old clients receive no legacy
+segment array and retain complete plain text. Wholly timed responses keep the
+legacy array without duplication. Speaker-map/rediarization refreshes explicitly
+clear omitted versioned data; a pending local transcript edit preserves its
+paired source and segments. Saving changed A text clears old quality/segments
+until the detail refresh supplies current data. Canonical A/B bytes and existing
+text-only updates remain intact. These readers precede the later strict worker
+activation; old processing output is not described as newly verified.
+
 ## Recording and recovery
 
 Browser modes use microphone/tab MediaStreams; the macOS system-audio mode uses

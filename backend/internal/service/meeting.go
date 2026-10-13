@@ -609,13 +609,22 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 	// The shared candidates may describe either variant or a previous edit.
 	// Only render those verified against the currently selected text.
 	transcript, variant := selectMeetingTranscript(meeting)
-	var transcription json.RawMessage
-	if segments := transcriptSegmentsForText(transcript, meeting.TranscriptSegments); len(segments) > 0 {
+	var transcription, transcriptionV2 json.RawMessage
+	if segments := meetingTranscriptSegments(meeting, transcript); len(segments) > 0 {
 		// Legacy Transcribe segments may have been reconstructed with current
 		// punctuation. Render that verified text while retaining IDs/timestamps.
 		transcription, err = json.Marshal(segments)
 		if err != nil {
 			return nil, fmt.Errorf("failed to encode transcript segments: %w", err)
+		}
+		for _, segment := range segments {
+			if segment.Untimed {
+				// Existing clients always render legacy segment times. Keep
+				// their complete canonical-text fallback rather than emit
+				// invented zero timestamps or omit untimed speech.
+				transcriptionV2, transcription = transcription, nil
+				break
+			}
 		}
 	}
 
@@ -651,6 +660,7 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 		LiveSummary:                meeting.LiveSummary,
 		TranscriptA:                meeting.TranscriptA,
 		TranscriptB:                meeting.TranscriptB,
+		TranscriptQuality:          model.MatchingTranscriptQuality(meeting, variant),
 		SelectedTranscript:         strPtr(variant),
 		AudioKey:                   meeting.AudioKey,
 		AudioKeys:                  meeting.AudioKeys,
@@ -664,6 +674,7 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 		NotionPageID:               notionPageID,
 		Permission:                 permission,
 		Transcription:              transcription,
+		TranscriptionV2:            transcriptionV2,
 		Attachments:                attachmentResponses,
 		Shares:                     shareResponses,
 		CreatedAt:                  meeting.CreatedAt.Format(time.RFC3339),
@@ -805,6 +816,14 @@ func (s *MeetingService) UpdateSpeakers(ctx context.Context, userID, meetingID s
 		return nil, ErrForbidden
 	}
 
+	qualities := map[string]*model.TranscriptQuality{}
+	for variant, text := range map[string]string{"A": meeting.TranscriptA, "B": meeting.TranscriptB} {
+		q := model.MatchingTranscriptQuality(meeting, variant)
+		if !model.TranscriptTimingMatches(meeting, variant) || len(transcriptSegmentsForText(text, meeting.TranscriptSegments)) == 0 {
+			q.Timing = "unavailable"
+		}
+		qualities[variant] = q
+	}
 	// Apply replacements to all text fields. Plain-text fields use a
 	// word-boundary-aware replace (speaker.ReplaceLabel) so a label like
 	// "spk_1" never partially matches a namespaced label like "spk_1000000"
@@ -822,6 +841,10 @@ func (s *MeetingService) UpdateSpeakers(ctx context.Context, userID, meetingID s
 		meeting.ActionItems = speaker.ReplaceLabel(meeting.ActionItems, label, name)
 	}
 	meeting.TranscriptSegments = renameSegmentSpeakers(meeting.TranscriptSegments, req.SpeakerMap)
+	for variant, text := range map[string]string{"A": meeting.TranscriptA, "B": meeting.TranscriptB} {
+		qualities[variant].TextSHA256 = model.TranscriptHash(text)
+		qualities[variant].SegmentsSHA256 = model.TranscriptHash(meeting.TranscriptSegments)
+	}
 
 	// Store the mapping for reference
 	meeting.SpeakerMap = req.SpeakerMap
@@ -833,6 +856,7 @@ func (s *MeetingService) UpdateSpeakers(ctx context.Context, userID, meetingID s
 		map[string]interface{}{
 			"content": meeting.Content, "transcriptA": meeting.TranscriptA, "transcriptB": meeting.TranscriptB,
 			"transcriptSegments": meeting.TranscriptSegments, "actionItems": meeting.ActionItems, "speakerMap": meeting.SpeakerMap,
+			"transcriptQualityA": qualities["A"], "transcriptQualityB": qualities["B"],
 		}); err != nil {
 		return nil, err
 	}
@@ -854,6 +878,7 @@ type segmentSpeakerField struct {
 	Text      string  `json:"text"`
 	StartTime float64 `json:"startTime"`
 	EndTime   float64 `json:"endTime"`
+	Untimed   bool    `json:"untimed,omitempty"`
 }
 
 // renameSegmentSpeakers rewrites the `speaker` field of each element in a
