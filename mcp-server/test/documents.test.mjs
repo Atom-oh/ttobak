@@ -120,7 +120,7 @@ test('MCP discovery and protocol support a personal note round trip and a revisi
   await call('ttobak_update_document', { docId: 'doc-1', title: '수정된 제목', markdown: '납기 24일' });
   const current = JSON.parse((await call('ttobak_get_document', { docId: 'doc-1' })).content[0].text);
   assert.equal(current.content, '납기 24일');
-  assert.equal(current.request.path, '/api/documents/doc-1');
+  assert.equal(current.request.path, '/api/documents/doc-1/reading?section=content&pageSize=4000&maxBytes=10000');
   const after = JSON.parse((await call('ttobak_list_documents')).content[0].text);
   assert.equal(after.documents.length, 1, 'revising an existing note must not create duplicates');
 });

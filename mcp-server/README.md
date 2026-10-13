@@ -149,8 +149,24 @@ export, projects and links.
 
 - Omit accountId for personal Document Hub operations; provide it explicitly for
   account space. Directly shared documents can be read, but only owners revise them.
+- list_documents uses the bounded `/api/document-catalog` endpoint. Keep the same
+  accountId/docType while following cursors, including empty filtered pages.
+  It returns current metadata previews without loading bodies; the list is live,
+  and changed continuation anchors or grants require a fresh read. A returned
+  `metadataRevision` is not a body revision for get_document's `expectedRevision`.
+  Deploy this authenticated route before publishing the adapter.
 - put_document creates a new ID. update_document preserves the ID and omitted body;
   include required title/metadata fields according to its schema.
+- get_document uses authenticated document `/reading` pages for both transports.
+  Follow `page.nextCursor` with the same docId, accountId and section; restart
+  after `STALE_CURSOR`. Default pages have a 10,000-byte encoded API budget,
+  original HTTP bodies and final tool results each retain their 32,000-byte cap.
+  Deploy the API route before publishing the adapter: it never falls back to a
+  full-document read or invents continuation. File documents preserve authorized
+  five-minute download/preview URLs and explicitly report unavailable extracted
+  text. If unusually long links require `previewStatus=deferred`, follow the
+  returned `previewRead` to retrieve the intact preview URL. Public share tokens
+  are never returned.
 - Read Document Hub content directly for current text. Canonical automatic indexing
   is implemented but gated behind snapshot verification and strict QA cutover;
   deployment acceptance must be verified independently of the checked-in mode.

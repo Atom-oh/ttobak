@@ -4,6 +4,8 @@ import { basename, extname, isAbsolute, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { URL } from 'node:url';
 import { MAX_READING_BYTES, type ReadingOptions } from './reading.js';
+import type { DocumentReadingOptions } from './document-reading.js';
+import type { DocumentCatalogOptions } from './document-catalog.js';
 
 // Extension -> MIME type, shared by both upload tools for inference only --
 // each tool advertises its own narrower format list (kb_upload: pdf/md/pptx/
@@ -366,8 +368,27 @@ export class TtobakApi {
     return this.get(`${documentsPath(accountId)}${qs ? '?' + qs : ''}`);
   }
 
+  async readDocumentCatalog(options: DocumentCatalogOptions) {
+    const query = new URLSearchParams({ pageSize: String(options.pageSize) });
+    if (options.accountId !== undefined) query.set('accountId', identifier(options.accountId, 'accountId'));
+    if (options.docType !== undefined) query.set('docType', options.docType);
+    if (options.cursor !== undefined) query.set('cursor', options.cursor);
+    return this.request('GET', `/api/document-catalog?${query}`, undefined, MAX_READING_BYTES);
+  }
+
   async getDocument(accountId: string | undefined, docId: string) {
     return this.get(`${documentsPath(accountId)}/${identifier(docId, 'docId')}`);
+  }
+
+  async readDocument(options: DocumentReadingOptions) {
+    const query = new URLSearchParams({
+      section: options.section, pageSize: String(options.pageSize), maxBytes: '10000',
+    });
+    if (options.cursor !== undefined) query.set('cursor', options.cursor);
+    if (options.expectedRevision !== undefined) query.set('expectedRevision', options.expectedRevision);
+    return this.request('GET',
+      `${documentsPath(options.accountId)}/${identifier(options.docId, 'docId')}/reading?${query}`,
+      undefined, MAX_READING_BYTES);
   }
 
   async updateDocument(accountId: string | undefined, docId: string, doc: DocumentInput) {
