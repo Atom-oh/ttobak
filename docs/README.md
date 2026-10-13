@@ -28,6 +28,7 @@ Markdown for English language and historical/current status.
 | [Unverified account recovery](runbooks/unverified-account-recovery.md) | Identity-verified operator password recovery | Cognito and the authenticated verification flow |
 | [WebSocket runtime](runbooks/websocket-runtime.md) | CloudFront ingress, secret rotation, real acceptance | Frontend/Gateway stacks and ws-authorizer |
 | [Pipeline recovery](runbooks/pipeline-failure-recovery.md) | Failure queues, alarm routing and controlled replay | GatewayStack, failure construct and replay tool |
+| [HTTP origin proof migration](runbooks/http-origin-secret-migration.md) | Consumer contract and coordinated rotation gates | Go/QA/MCP origin verifiers and deployment configuration |
 
 ## Feature workflows
 

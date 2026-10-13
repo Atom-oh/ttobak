@@ -30,8 +30,13 @@ setup helper reads CloudFormation and writes host configuration; inspect its
 selected values before running it. Normal MCP calls need Cognito login, not AWS
 credentials. Keep stdout reserved for MCP and diagnostics on stderr.
 
-First authentication opens the browser, validates callback state and exchanges the
-PKCE code. Tokens are stored at `~/.ttobak/tokens.json` with restrictive creation
+First authentication binds the callback listener to IPv4 loopback (`127.0.0.1`)
+before opening the browser. The registered redirect remains
+`http://localhost:9876/callback`. Every callback must match the login state before
+its result is handled; unrelated callbacks do not terminate the pending login.
+The PKCE exchange bounds response size and network time, validates token-response
+fields and reports generic provider errors. Concurrent authentication calls share
+one login or refresh operation, and logout cancels pending authentication. Tokens are stored at `~/.ttobak/tokens.json` with restrictive creation
 permissions. Refresh is attempted before requiring another login; do not promise
 a fixed login duration independent of pool policy or revocation. Logout clears
 local tokens. Do not commit/copy token files into documentation or diagnostics.

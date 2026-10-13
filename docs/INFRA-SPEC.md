@@ -87,9 +87,13 @@ and denies failed/expired reads. JWT verification still runs for every connect.
 
 CloudFront-only application HTTP ingress is policy. `bin/infra.ts` refuses to
 synthesize without a 16+ character `ttobak:originVerifySecret`, so CloudFront always
-sends the proof; the Go and QA middleware still skip the check if their environment
-value is empty, so do not infer origin blocking from the middleware alone. That legacy HTTP option is distinct from
-the required WS secret. Existing browser Cognito/Transcribe SDK calls, signed S3
+sends the proof. Go, QA and HTTP MCP now deny missing proof configuration; Go/QA
+local development requires an explicit flag outside Lambda. ARN-capable consumers
+support a bounded rotation document and a 60-second cache, with no fallback to a
+legacy proof after an ARN read failure. Current CDK still supplies the legacy
+HTTP proof; the coordinated Secrets Manager migration and verified rotation remain
+separate release work. See the [HTTP proof migration contract](runbooks/http-origin-secret-migration.md).
+This HTTP rollout is distinct from the required WS secret. Existing browser Cognito/Transcribe SDK calls, signed S3
 PUTs and IAM-signed server callback requests are separate service integrations,
 not newly approved public application origins.
 

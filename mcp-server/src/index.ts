@@ -20,7 +20,7 @@ declare const TTOBAK_STANDALONE_STDIO: boolean;
 
 export interface ToolAuth extends ApiAuth {
   isAuthenticated(): boolean;
-  logout?(): void;
+  logout?(): void | Promise<void>;
 }
 
 export interface ServerOptions {
@@ -950,7 +950,7 @@ async function callTool(request: CallToolRequest, options: ServerOptions) {
       }
 
       case 'ttobak_logout': {
-        auth.logout?.();
+        await auth.logout?.();
         return text('Logged out. Tokens removed from ~/.ttobak/tokens.json');
       }
 
