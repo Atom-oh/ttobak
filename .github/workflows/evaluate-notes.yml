@@ -21,6 +21,13 @@ jobs:
         with:
           go-version: '1.25'
 
+      - name: Verify evaluator offline
+        run: |
+          python3 -m unittest discover -s scripts -p 'test_prepare_note_evaluation.py' -v
+          go -C backend test ./internal/service \
+            -run '^Test(NativeQuality|NoteQualityRubric|NoteQualityEvidence|NoteQualityRejectsSharedProfileEndpointOverrides)' \
+            -count=1
+
       - name: Read deployed model configuration
         env:
           AWS_REGION: ap-northeast-2
@@ -29,28 +36,16 @@ jobs:
           echo "EVAL_DIRECTORY=$RUNNER_TEMP/note-quality-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
           aws lambda get-function-configuration \
             --function-name ttobak-summarize --region ap-northeast-2 \
-            --query '{modelId:Environment.Variables.BEDROCK_MODEL_ID,region:Environment.Variables.BEDROCK_REGION,codeSha256:CodeSha256,state:State,lastUpdateStatus:LastUpdateStatus}' \
+            --query '{summaryModelId:Environment.Variables.BEDROCK_SUMMARY_MODEL_ID,auxiliaryModelId:Environment.Variables.BEDROCK_MODEL_ID,region:Environment.Variables.BEDROCK_REGION,codeSha256:CodeSha256,state:State,lastUpdateStatus:LastUpdateStatus,revisionId:RevisionId}' \
             --output json > "$RUNNER_TEMP/note-model.json"
-          python3 - <<'PY'
-          import json, os, re
-          from pathlib import Path
-          config = json.loads((Path(os.environ["RUNNER_TEMP"]) / "note-model.json").read_text())
-          if config["state"] != "Active" or config["lastUpdateStatus"] != "Successful":
-              raise SystemExit("Summarize deployment is not stable")
-          model = config.get("modelId") or ""
-          region = config.get("region") or "us-west-2"
-          if not model or not re.fullmatch(r"[A-Za-z0-9:/._-]+", model) or not re.fullmatch(r"[a-z0-9-]+", region):
-              raise SystemExit("Invalid deployed model configuration")
-          with open(os.environ["GITHUB_ENV"], "a") as env:
-              env.write(f"BEDROCK_MODEL_ID={model}\nBEDROCK_REGION={region}\n")
-          PY
+          python3 scripts/prepare-note-evaluation.py "$RUNNER_TEMP/note-model.json" "$GITHUB_ENV"
 
       - name: Evaluate four synthetic meetings with the real model
         run: |
           TTOBAK_GO_BINARY="$(command -v go)" \
             scripts/eval-note-quality.sh live "$EVAL_DIRECTORY"
 
-      - name: Preserve deployed configuration evidence
+      - name: Preserve deployment discovery evidence
         if: always() && env.EVAL_DIRECTORY != ''
         run: |
           if [ -d "$EVAL_DIRECTORY" ] && [ -f "$RUNNER_TEMP/note-model.json" ]; then

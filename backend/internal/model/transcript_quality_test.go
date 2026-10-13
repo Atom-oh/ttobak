@@ -18,8 +18,8 @@ func TestTranscriptQualityFollowsCurrentVariantAndBytes(t *testing.T) {
 		t.Fatal("human edit inherited verified status")
 	}
 	meeting.TranscriptA, meeting.TranscriptSegments = "a", "new segments"
-	if MatchingTranscriptQuality(meeting, "A").Refinement == "validated" {
-		t.Fatal("different segments inherited status")
+	if MatchingTranscriptQuality(meeting, "A").Timing != "unavailable" || TranscriptTimingMatches(meeting, "A") {
+		t.Fatal("different segments inherited timing")
 	}
 	if quality.Refinement != "validated" {
 		t.Fatal("status lookup mutated stored quality")

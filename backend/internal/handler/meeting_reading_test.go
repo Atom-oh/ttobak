@@ -204,6 +204,28 @@ func (f *readingFixture) call(t *testing.T, query map[string][]string) events.AP
 	return response
 }
 
+func TestReadingUntimedSpeechAndVariantGate(t *testing.T) {
+	f := newReadingFixture(t)
+	f.meeting.TranscriptA = "first preserved last"
+	f.meeting.TranscriptSegments = `[{"text":"first","startTime":0,"endTime":1},{"text":"preserved","startTime":0,"endTime":0,"untimed":true},{"text":"last","startTime":2,"endTime":3}]`
+	full := readingResult(t, f.call(t, map[string][]string{"kind": {"transcript"}}))
+	chunks := full["chunks"].([]any)
+	if len(chunks) != 3 || chunks[1].(map[string]any)["segment"].(map[string]any)["timingScope"] != "unavailable" {
+		t.Fatal("untimed speech omitted or given timing")
+	}
+	ranged := readingResult(t, f.call(t, map[string][]string{"kind": {"transcript"}, "startTime": {"0"}, "endTime": {"4"}}))
+	if len(ranged["chunks"].([]any)) != 2 || ranged["completenessScope"] != "verified_timed_segments" || ranged["unlocatedCodePoints"].(float64) == 0 {
+		t.Fatal("range claimed completeness over unlocated speech")
+	}
+	f.meeting.SelectedTranscript = "B"
+	f.meeting.TranscriptB = f.meeting.TranscriptA
+	f.meeting.TranscriptQualityB = &model.TranscriptQuality{Refinement: "not_requested", Timing: "unavailable", TextSHA256: model.TranscriptHash(f.meeting.TranscriptB)}
+	b := readingResult(t, f.call(t, map[string][]string{"kind": {"transcript"}}))
+	if b["mode"] != "text" || b["provenance"].(map[string]any)["segmentEvidence"] != "unavailable" {
+		t.Fatal("untimed B borrowed matching A timing")
+	}
+}
+
 func TestReadingAPIHandlesOversizedMeetingWithoutNotesHydration(t *testing.T) {
 	f := newReadingFixture(t)
 	response := f.call(t, nil)

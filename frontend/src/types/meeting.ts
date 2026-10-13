@@ -16,6 +16,8 @@ export interface Meeting {
   summary?: string;
   actionItems?: ActionItem[];
   transcription?: TranscriptSegment[];
+  /** Complete mixed/untimed segments; absent for legacy or wholly timed results. */
+  transcriptionV2?: TranscriptSegment[];
   attachments?: Attachment[];
   sharedWith?: SharedUser[];
   createdAt: string;
@@ -105,6 +107,7 @@ export interface TranscriptSegment {
   text: string;
   startTime: number;
   endTime: number;
+  untimed?: boolean;
 }
 
 export interface Attachment {
@@ -255,11 +258,14 @@ export interface User {
 
 // Extended meeting detail from API
 export interface TranscriptQuality {
-  refinement: 'validated' | 'partial' | 'raw' | 'not_requested' | 'unknown' | 'edited';
+  refinement: 'validated' | 'partial' | 'raw' | 'mixed' | 'not_requested' | 'unknown' | 'edited';
   degraded: boolean;
   speakerProvenance: 'acoustic' | 'text_inferred' | 'mixed' | 'unknown';
   totalChunks?: number;
   fallbackChunks?: number;
+  timing?: 'available' | 'partial' | 'unavailable';
+  blankSegments?: number;
+  untimedSegments?: number;
   reasons?: string[];
   diarizationEnabled?: boolean;
   detectedSpeakers?: number;

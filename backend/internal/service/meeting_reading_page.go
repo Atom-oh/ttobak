@@ -32,6 +32,8 @@ var (
 type ReadingOptions struct {
 	Kind, Section, Source, Cursor string
 	PageSize                      int
+	MaxBytes                      int
+	ExpectedRevision              string
 	StartTime, EndTime            *float64
 }
 
@@ -184,10 +186,22 @@ func readingChunkFor(points []rune, w readingWindow, start, count int) readingCh
 			"startTime": s.StartTime, "endTime": s.EndTime, "timingScope": "whole_segment",
 			"partial": start != w.start || start+count != w.end, "metadataTruncated": truncated,
 		}
+		if s.Untimed {
+			delete(c.Segment, "startTime")
+			delete(c.Segment, "endTime")
+			c.Segment["timingScope"] = "unavailable"
+		}
 	}
 	return c
 }
 func paginateReading(text string, windows []readingWindow, o ReadingOptions, binding string, render func([]readingChunk, readingObject) readingObject) ([]byte, error) {
+	maxBytes := o.MaxBytes
+	if maxBytes == 0 {
+		maxBytes = MaxMeetingReadingBytes
+	}
+	if maxBytes < 1 || maxBytes > MaxMeetingReadingBytes {
+		return nil, ErrInvalidReadingOptions
+	}
 	if !utf8.ValidString(text) {
 		return nil, ErrReadingData
 	}
@@ -233,7 +247,7 @@ func paginateReading(text string, windows []readingWindow, o ReadingOptions, bin
 		if err != nil {
 			return nil, err
 		}
-		if len(data) > MaxMeetingReadingBytes {
+		if len(data) > maxBytes {
 			low, high := 0, count
 			for low < high {
 				mid := (low + high + 1) / 2
@@ -241,7 +255,7 @@ func paginateReading(text string, windows []readingWindow, o ReadingOptions, bin
 				if err != nil {
 					return nil, err
 				}
-				if len(data) <= MaxMeetingReadingBytes {
+				if len(data) <= maxBytes {
 					low = mid
 				} else {
 					high = mid - 1
@@ -262,7 +276,7 @@ func paginateReading(text string, windows []readingWindow, o ReadingOptions, bin
 	if err != nil {
 		return nil, err
 	}
-	if (len(windows) > 0 && len(chunks) == 0) || len(data) > MaxMeetingReadingBytes {
+	if (len(windows) > 0 && len(chunks) == 0) || len(data) > maxBytes {
 		return nil, ErrReadingData
 	}
 	return data, nil
@@ -272,16 +286,23 @@ func paginateReading(text string, windows []readingWindow, o ReadingOptions, bin
 // Legacy punctuation repair is accepted only when its resulting text aligns.
 func readingWindows(text, raw string) []readingWindow {
 	var times []struct {
-		Start *float64 `json:"startTime"`
-		End   *float64 `json:"endTime"`
+		Start   *float64 `json:"startTime"`
+		End     *float64 `json:"endTime"`
+		Untimed bool     `json:"untimed"`
 	}
 	if json.Unmarshal([]byte(raw), &times) != nil || len(times) == 0 {
 		return nil
 	}
 	prior := -1.0
 	for _, t := range times {
+		if t.Untimed {
+			if t.Start != nil && *t.Start != 0 || t.End != nil && *t.End != 0 {
+				return nil
+			}
+			continue
+		}
 		if t.Start == nil || t.End == nil || math.IsNaN(*t.Start) || math.IsInf(*t.Start, 0) ||
-			math.IsNaN(*t.End) || math.IsInf(*t.End, 0) || *t.Start < 0 || *t.Start < prior || *t.End < *t.Start {
+			math.IsNaN(*t.End) || math.IsInf(*t.End, 0) || *t.Start < 0 || *t.Start < prior || *t.End <= *t.Start {
 			return nil
 		}
 		prior = *t.Start

@@ -16,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	lambdasdk "github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	"github.com/aws/aws-sdk-go-v2/service/sfn"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/aws/aws-sdk-go-v2/service/transcribe"
@@ -179,6 +180,10 @@ func init() {
 	meetingHandler.SetSimService(simService)
 	actionItemsService := service.NewMetadataActionItemsAnalysisService(repo, bedrockService, service.ActionItemsPublisher(ebClient))
 	readingHandler := handler.NewMeetingReadingHandler(service.NewMeetingReadingService(repo, actionItemsService))
+	documentReadingService := service.NewDocumentReadingService(repo)
+	documentReadingService.SetFileServices(accountService, uploadService)
+	documentReadingHandler := handler.NewDocumentReadingHandler(documentReadingService)
+	documentCatalogHandler := handler.NewDocumentCatalogHandler(service.NewDocumentCatalogService(repo))
 	actionItemsHandler := handler.NewActionItemsHandler(actionItemsService)
 	meetingHandler.SetActionItemsService(actionItemsService)
 	sessionHandler := handler.NewSessionHandler(meetingService)
@@ -190,7 +195,13 @@ func init() {
 	r.Use(chimiddleware.RealIP)
 	r.Use(middleware.RequestLog)
 	r.Use(middleware.Recovery)
-	r.Use(middleware.OriginVerify) // Block direct API Gateway access (CloudFront-only)
+	originVerifier := middleware.NewOriginVerifier(
+		os.Getenv("ORIGIN_VERIFY_SECRET_ARN"), os.Getenv("ORIGIN_VERIFY_SECRET"),
+		secretsmanager.NewFromConfig(cfg),
+		os.Getenv("TTOBAK_ORIGIN_LOCAL_DEV") == "1" && os.Getenv("AWS_LAMBDA_FUNCTION_NAME") == "",
+		os.Getenv("ORIGIN_VERIFY_SECRET_VERSION_ID"),
+	)
+	r.Use(originVerifier.Middleware) // Block direct API Gateway access (CloudFront-only)
 	r.Use(middleware.CORS)
 	r.Use(middleware.JSON)
 
@@ -229,6 +240,7 @@ func init() {
 		r.Post("/api/accounts/{accountId}/documents", accountHandler.PutDocument)
 		r.Get("/api/accounts/{accountId}/documents", accountHandler.ListDocuments)
 		r.Get("/api/accounts/{accountId}/documents/{docId}", accountHandler.GetDocument)
+		r.Get("/api/accounts/{accountId}/documents/{docId}/reading", documentReadingHandler.Get)
 		r.Get("/api/accounts/{accountId}/documents/{docId}/index-status", indexStatusHandler.AccountDocument)
 		r.Put("/api/accounts/{accountId}/documents/{docId}", accountHandler.UpdateDocument)
 		r.Delete("/api/accounts/{accountId}/documents/{docId}", accountHandler.DeleteDocument)
@@ -236,7 +248,9 @@ func init() {
 		// Personal (account-less) document routes
 		r.Post("/api/documents", documentHandler.PutDocument)
 		r.Get("/api/documents", documentHandler.ListDocuments)
+		r.Get("/api/document-catalog", documentCatalogHandler.Get)
 		r.Get("/api/documents/{docId}", documentHandler.GetDocument)
+		r.Get("/api/documents/{docId}/reading", documentReadingHandler.Get)
 		r.Get("/api/documents/{docId}/index-status", indexStatusHandler.PersonalDocument)
 		r.Put("/api/documents/{docId}", documentHandler.UpdateDocument)
 		r.Delete("/api/documents/{docId}", documentHandler.DeleteDocument)

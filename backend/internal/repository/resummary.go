@@ -16,7 +16,8 @@ import (
 )
 
 var summaryMeetingFields = []string{"meetingId", "userId", "status", "content", "notes",
-	"transcriptA", "transcriptB", "selectedTranscript", "transcriptSegments", "accountId", "sharedToAccount"}
+	"transcriptA", "transcriptB", "selectedTranscript", "transcriptSegments", "accountId", "sharedToAccount",
+	"transcriptQualityA", "transcriptQualityB", "transcriptRevisionA", "transcriptRevisionB"}
 
 var summaryAttachmentFields = []string{"attachmentId", "meetingId", "userId", "originalKey", "processedKey", "type", "status", "fileName", "processedContent", "description"}
 var summaryTextFields = []string{"runId", "status", "leaseUntil", "sourceKey", "ownerId", "uploaderId", "sourceETag", "resultKey", "unitCount", "complete", "updatedAt"}

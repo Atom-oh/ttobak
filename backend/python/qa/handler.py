@@ -16,6 +16,7 @@ from current_input import (
     current_input_turn, project_current_input,
 )
 from delivery_proof import validate_delivery
+from origin_proof import OriginVerifier
 
 from aws_docs import search_aws_docs
 from prompts import get_system_prompt, DETECT_QUESTIONS_PROMPT
@@ -64,7 +65,15 @@ dynamodb = boto3.resource('dynamodb')
 table = dynamodb.Table(TABLE_NAME)
 BUCKET_NAME = os.environ.get('BUCKET_NAME', '')
 KB_BUCKET_NAME = os.environ.get('KB_BUCKET_NAME', '')
-ORIGIN_VERIFY_SECRET = os.environ.get('ORIGIN_VERIFY_SECRET', '')
+_HTTP_ORIGIN = OriginVerifier(
+    os.environ.get('ORIGIN_VERIFY_SECRET_ARN', ''),
+    boto3.client('secretsmanager', config=Config(
+        connect_timeout=1, read_timeout=1, retries={'total_max_attempts': 1})),
+    legacy=os.environ.get('ORIGIN_VERIFY_SECRET', ''),
+    version_id=os.environ.get('ORIGIN_VERIFY_SECRET_VERSION_ID', ''),
+    local_development=os.environ.get('TTOBAK_ORIGIN_LOCAL_DEV') == '1'
+    and not os.environ.get('AWS_LAMBDA_FUNCTION_NAME'),
+)
 RESEARCH_SFN_ARN = os.environ.get('RESEARCH_SFN_ARN', '')
 DAILY_RESEARCH_LIMIT = 5
 QA_JOBS_QUEUE_URL = os.environ.get('QA_JOBS_QUEUE_URL', '')
@@ -420,11 +429,15 @@ def lambda_handler(event, context):
         return handle_ask_stream(event)
 
     # Block direct API Gateway access — only allow requests through CloudFront
-    if ORIGIN_VERIFY_SECRET:
-        headers = event.get('headers', {})
-        if headers.get('x-origin-verify', '') != ORIGIN_VERIFY_SECRET:
-            return response(403, {'error': {'code': 'FORBIDDEN', 'message': 'direct access not allowed'}})
+    if not _HTTP_ORIGIN.verify(event):
+        return response(403, {'error': {'code': 'FORBIDDEN', 'message': 'direct access not allowed'}})
 
+    result = _handle_verified_http(event, context)
+    result.setdefault('headers', {})['x-ttobak-origin-protocol'] = '1'
+    return result
+
+
+def _handle_verified_http(event, context):
     http_method = event.get('requestContext', {}).get('http', {}).get('method', '')
     path = event.get('rawPath', '')
 

@@ -16,6 +16,7 @@ interface SpeakerGroup {
   speaker: string;
   startTime: number;
   endTime: number;
+  untimed: boolean;
   segments: TranscriptSegment[];
 }
 
@@ -37,7 +38,7 @@ function groupBySpeaker(segments: TranscriptSegment[]): SpeakerGroup[] {
   const groups: SpeakerGroup[] = [];
   for (const seg of segments) {
     const last = groups[groups.length - 1];
-    if (last && last.speaker === seg.speaker) {
+    if (last && last.speaker === seg.speaker && last.untimed === !!seg.untimed) {
       last.segments.push(seg);
       last.endTime = seg.endTime;
     } else {
@@ -45,6 +46,7 @@ function groupBySpeaker(segments: TranscriptSegment[]): SpeakerGroup[] {
         speaker: seg.speaker,
         startTime: seg.startTime,
         endTime: seg.endTime,
+        untimed: !!seg.untimed,
         segments: [seg],
       });
     }
@@ -76,7 +78,7 @@ function EditableText({ text, onSave }: { text: string; onSave?: (text: string) 
         className={onSave ? 'cursor-text hover:bg-slate-100 dark:hover:bg-white/5 rounded px-0.5 -mx-0.5 transition-colors' : ''}
         onClick={() => onSave && setEditing(true)}
       >
-        {value}
+        {onSave ? value : text}
       </span>
     );
   }
@@ -124,6 +126,9 @@ export function TranscriptQualityNotice({ quality }: { quality?: TranscriptQuali
       <p>{text}</p>
       <p className="mt-1">{speakerText}</p>
       {!!quality?.fallbackChunks && <p className="mt-1">원문 보존 구간: {quality.fallbackChunks} / {quality.totalChunks}</p>}
+      {!!quality?.untimedSegments && <p className="mt-1">시간을 확인할 수 없는 {quality.untimedSegments}개 발화도 원문에 포함되어 있습니다.</p>}
+      {quality?.timing === 'unavailable' && <p className="mt-1">현재 전사의 시간 정보를 확인할 수 없습니다.</p>}
+      {!!quality?.blankSegments && <p className="mt-1">내용이 없는 {quality.blankSegments}개 구간은 생략했습니다.</p>}
     </div>
   );
 }
@@ -216,7 +221,7 @@ export function TranscriptSection({ transcription, rawTranscript, onSaveRawTrans
             // straight to the right speaker turn. Older meetings without
             // saved segment ids fall back to a startTime-based key.
             const groupAnchor =
-              group.segments[0]?.id || `seg-${Math.round(group.startTime * 1000)}`;
+              group.segments[0]?.id || (group.untimed ? `untimed-group-${gi}` : `seg-${Math.round(group.startTime * 1000)}`);
             return (
               <div
                 key={`${group.speaker}-${group.startTime}-${gi}`}
@@ -241,7 +246,7 @@ export function TranscriptSection({ transcription, rawTranscript, onSaveRawTrans
                       {group.speaker}
                     </span>
                     <span className="text-[12px] text-slate-400 dark:text-text-muted tabular-nums">
-                      {formatTimestamp(group.startTime)}
+                      {group.untimed ? '시간 정보 없음' : formatTimestamp(group.startTime)}
                     </span>
                   </div>
 
@@ -253,7 +258,7 @@ export function TranscriptSection({ transcription, rawTranscript, onSaveRawTrans
                       // within a long speaker turn. The first segment's anchor
                       // already lives on the group wrapper above, so skip it
                       // here to avoid a duplicate DOM id.
-                      const segAnchor = seg.id || `seg-${Math.round(seg.startTime * 1000)}`;
+                      const segAnchor = seg.id || (seg.untimed ? `untimed-${gi}-${si}` : `seg-${Math.round(seg.startTime * 1000)}`);
                       const isDuplicateOfGroupAnchor = si === 0 && segAnchor === groupAnchor;
                       return (
                         <span
@@ -272,7 +277,7 @@ export function TranscriptSection({ transcription, rawTranscript, onSaveRawTrans
                 {/* Hover timestamp for end */}
                 <div className="opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 pt-1">
                   <span className="text-[11px] text-slate-400 dark:text-text-muted tabular-nums">
-                    {formatTimestamp(group.endTime)}
+                    {group.untimed ? '' : formatTimestamp(group.endTime)}
                   </span>
                 </div>
               </div>

@@ -12,24 +12,26 @@ type MeetingPreparation struct {
 // Meeting represents a meeting record in DynamoDB
 // PK: USER#{userId}, SK: MEETING#{meetingId}
 type Meeting struct {
-	PK                 string             `dynamodbav:"PK"`
-	SK                 string             `dynamodbav:"SK"`
-	MeetingID          string             `dynamodbav:"meetingId"`
-	UserID             string             `dynamodbav:"userId"`
-	Title              string             `dynamodbav:"title"`
-	Date               time.Time          `dynamodbav:"date"`
-	Content            string             `dynamodbav:"content,omitempty"`     // Markdown meeting notes
-	TranscriptA        string             `dynamodbav:"transcriptA,omitempty"` // AWS Transcribe result
-	TranscriptB        string             `dynamodbav:"transcriptB,omitempty"` // Nova Sonic result
-	TranscriptQualityA *TranscriptQuality `dynamodbav:"transcriptQualityA,omitempty"`
-	TranscriptQualityB *TranscriptQuality `dynamodbav:"transcriptQualityB,omitempty"`
-	SelectedTranscript string             `dynamodbav:"selectedTranscript,omitempty"` // "A" or "B"
-	AudioKey           string             `dynamodbav:"audioKey,omitempty"`           // S3 key for audio file (legacy single-file)
-	AudioCrop          *AudioCrop         `dynamodbav:"audioCrop,omitempty"`
-	AudioKeys          []string           `dynamodbav:"audioKeys,omitempty"`                    // Ordered S3 keys for multi-file uploads
-	AudioPartCount     int                `dynamodbav:"audioPartCount,omitempty"`               // Total parts expected
-	AudioPartsReady    int                `dynamodbav:"audioPartsReady,omitempty"`              // Parts with completed transcription
-	AudioPartsReadySet []int              `dynamodbav:"audioPartsReadySet,omitempty,numberset"` // Set of completed part indices (source-of-truth for idempotent counting)
+	PK                  string             `dynamodbav:"PK"`
+	SK                  string             `dynamodbav:"SK"`
+	MeetingID           string             `dynamodbav:"meetingId"`
+	UserID              string             `dynamodbav:"userId"`
+	Title               string             `dynamodbav:"title"`
+	Date                time.Time          `dynamodbav:"date"`
+	Content             string             `dynamodbav:"content,omitempty"`     // Markdown meeting notes
+	TranscriptA         string             `dynamodbav:"transcriptA,omitempty"` // AWS Transcribe result
+	TranscriptB         string             `dynamodbav:"transcriptB,omitempty"` // Nova Sonic result
+	TranscriptQualityA  *TranscriptQuality `dynamodbav:"transcriptQualityA,omitempty"`
+	TranscriptQualityB  *TranscriptQuality `dynamodbav:"transcriptQualityB,omitempty"`
+	TranscriptRevisionA string             `dynamodbav:"transcriptRevisionA,omitempty"`
+	TranscriptRevisionB string             `dynamodbav:"transcriptRevisionB,omitempty"`
+	SelectedTranscript  string             `dynamodbav:"selectedTranscript,omitempty"` // "A" or "B"
+	AudioKey            string             `dynamodbav:"audioKey,omitempty"`           // S3 key for audio file (legacy single-file)
+	AudioCrop           *AudioCrop         `dynamodbav:"audioCrop,omitempty"`
+	AudioKeys           []string           `dynamodbav:"audioKeys,omitempty"`                    // Ordered S3 keys for multi-file uploads
+	AudioPartCount      int                `dynamodbav:"audioPartCount,omitempty"`               // Total parts expected
+	AudioPartsReady     int                `dynamodbav:"audioPartsReady,omitempty"`              // Parts with completed transcription
+	AudioPartsReadySet  []int              `dynamodbav:"audioPartsReadySet,omitempty,numberset"` // Set of completed part indices (source-of-truth for idempotent counting)
 	// AllPartsEmittedAt marks the moment we first emitted the
 	// `AllPartsTranscribed` EventBridge event for this meeting. Used as a
 	// once-only lock so EventBridge at-least-once re-deliveries of part
@@ -47,14 +49,15 @@ type Meeting struct {
 	SummaryRetryPending      bool              `dynamodbav:"summaryRetryPending,omitempty"`
 	SummaryRetryAttempts     int               `dynamodbav:"summaryRetryAttempts,omitempty"`
 	SummaryConflictCode      string            `dynamodbav:"summaryConflictCode,omitempty"`
-	SttProvider              string            `dynamodbav:"sttProvider,omitempty"`              // "transcribe" or "nova-sonic"
-	TranscriptSegments       string            `dynamodbav:"transcriptSegments,omitempty"`       // JSON string of speaker-labeled segments
-	ActionItems              string            `dynamodbav:"actionItems,omitempty"`              // JSON string of extracted action items
-	AttachmentSummarySources string            `dynamodbav:"attachmentSummarySources,omitempty"` // Content hash + document revisions used by saved summary
-	Notes                    string            `dynamodbav:"notes,omitempty"`                    // User-written meeting notes (post-recording)
-	NotesRevision            string            `dynamodbav:"notesRevision,omitempty"`            // Server-generated UUID; absent legacy revisions read as empty.
-	LiveSummary              string            `dynamodbav:"liveSummary,omitempty"`              // Real-time summary built during recording (markdown incl. mermaid)
-	SpeakerMap               map[string]string `dynamodbav:"speakerMap,omitempty"`               // spk_0 -> "김팀장" mapping
+	SummaryBatchContentHash  string            `json:"-" dynamodbav:"summaryBatchContentHash,omitempty"` // Internal pre-ASR human-content fence; not a success attestation.
+	SttProvider              string            `dynamodbav:"sttProvider,omitempty"`                      // "transcribe" or "nova-sonic"
+	TranscriptSegments       string            `dynamodbav:"transcriptSegments,omitempty"`               // JSON string of speaker-labeled segments
+	ActionItems              string            `dynamodbav:"actionItems,omitempty"`                      // JSON string of extracted action items
+	AttachmentSummarySources string            `dynamodbav:"attachmentSummarySources,omitempty"`         // Content hash + document revisions used by saved summary
+	Notes                    string            `dynamodbav:"notes,omitempty"`                            // User-written meeting notes (post-recording)
+	NotesRevision            string            `dynamodbav:"notesRevision,omitempty"`                    // Server-generated UUID; absent legacy revisions read as empty.
+	LiveSummary              string            `dynamodbav:"liveSummary,omitempty"`                      // Real-time summary built during recording (markdown incl. mermaid)
+	SpeakerMap               map[string]string `dynamodbav:"speakerMap,omitempty"`                       // spk_0 -> "김팀장" mapping
 	// DiarizationSpeakerHint overrides len(Participants) as pyannote's
 	// max_speakers bound when re-diarizing a meeting on demand (see
 	// RediarizeMeeting) — set once a user-supplied headcount is known to be

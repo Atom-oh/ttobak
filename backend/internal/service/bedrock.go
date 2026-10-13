@@ -176,6 +176,7 @@ type speakerSegment struct {
 	Text      string  `json:"text"`
 	StartTime float64 `json:"startTime"`
 	EndTime   float64 `json:"endTime"`
+	Untimed   bool    `json:"untimed,omitempty"`
 }
 
 // resolveTranscriptAnchors replaces `[TS:NNN]` markers Claude emitted in the
@@ -205,6 +206,9 @@ func resolveTranscriptAnchors(content string, segments []speakerSegment) string 
 		bestIdx := -1
 		bestDiff := math.MaxFloat64
 		for i, seg := range segments {
+			if seg.Untimed {
+				continue
+			}
 			diff := math.Abs(seg.StartTime - float64(target))
 			if diff < bestDiff {
 				bestDiff = diff
@@ -398,7 +402,11 @@ func buildSummarizeUserPrompt(transcript, priorContext string, segments []speake
 		var sb strings.Builder
 		sb.WriteString("다음은 화자별로 분리된 회의 녹취록입니다:\n\n")
 		for _, seg := range segments {
-			sb.WriteString(fmt.Sprintf("[%s %.0f초~%.0f초] %s\n", seg.Speaker, seg.StartTime, seg.EndTime, seg.Text))
+			if seg.Untimed {
+				fmt.Fprintf(&sb, "[%s, 시간 미확인] %s\n", seg.Speaker, seg.Text)
+			} else {
+				sb.WriteString(fmt.Sprintf("[%s %.0f초~%.0f초] %s\n", seg.Speaker, seg.StartTime, seg.EndTime, seg.Text))
+			}
 		}
 		body = sb.String() + "\n\n위 녹취록을 바탕으로 회의록을 작성해주세요."
 	} else {
@@ -685,6 +693,21 @@ func buildAttachmentContext(attachments []model.Attachment) string {
 // userID enables strongly-consistent base table read instead of GSI.
 // priorContext is optional linked-meeting context prepended to the prompt.
 func (s *BedrockService) SummarizeTranscript(ctx context.Context, meetingID, userID, priorContext string) (string, error) {
+	return s.summarizeTranscript(ctx, meetingID, userID, priorContext, "", nil)
+}
+
+var ErrSummaryHumanContentPreserved = errors.New("human content preserved; automatic summary skipped")
+
+// The initial claimed run keeps the normal fresh prompt; retries retain the
+// existing saved-content policy. Claim validation precedes all model evidence.
+func (s *BedrockService) SummarizeClaimedTranscript(ctx context.Context, meetingID, userID, priorContext, claim string, resumed bool) (string, error) {
+	if claim == "" {
+		return "", repository.ErrConditionFailed
+	}
+	return s.summarizeTranscript(ctx, meetingID, userID, priorContext, claim, &resumed)
+}
+
+func (s *BedrockService) summarizeTranscript(ctx context.Context, meetingID, userID, priorContext, claim string, includeSaved *bool) (string, error) {
 	if userID == "" {
 		owner, err := s.repo.MetadataView().GetMeetingByID(ctx, meetingID)
 		if err != nil {
@@ -703,6 +726,16 @@ func (s *BedrockService) SummarizeTranscript(ctx context.Context, meetingID, use
 		return "", fmt.Errorf("meeting not found: %s", meetingID)
 	}
 	meeting := snapshot.Meeting
+	if claim != "" && (meeting.Status != model.StatusSummarizing || !meeting.SummaryRetryPending || meeting.SummarizeRetryClaimedAt != claim) {
+		// Do not mark/release a different run's captured claim.
+		return "", repository.ErrConditionFailed
+	}
+	if claim != "" && meeting.SummaryBatchContentHash != "" && meeting.SummaryBatchContentHash != repository.SummaryContentHash(snapshot) {
+		if err := s.repo.FinishSummaryPreservingContent(ctx, snapshot); err != nil {
+			return "", err
+		}
+		return meeting.Content, ErrSummaryHumanContentPreserved
+	}
 	conflict := func(cause error) (string, error) {
 		if !errors.Is(cause, repository.ErrConditionFailed) {
 			return "", cause
@@ -732,6 +765,8 @@ func (s *BedrockService) SummarizeTranscript(ctx context.Context, meetingID, use
 			unselected = "transcriptA"
 		}
 		delete(snapshot.Checks[0].Fields, unselected)
+		delete(snapshot.Checks[0].Fields, "transcriptRevision"+strings.TrimPrefix(unselected, "transcript"))
+		delete(snapshot.Checks[0].Fields, "transcriptQuality"+strings.TrimPrefix(unselected, "transcript"))
 	}
 	meeting.TranscriptA, meeting.TranscriptB = "", ""
 	if variant == "B" {
@@ -781,7 +816,11 @@ func (s *BedrockService) SummarizeTranscript(ctx context.Context, meetingID, use
 		return conflict(err)
 	}
 	priorContext = FoldLiveSummary(priorContext, meeting.LiveSummary)
-	content, err := s.generateSummarySnapshot(ctx, meeting, attachments, priorContext, meeting.SummaryRetryPending)
+	saved := meeting.SummaryRetryPending
+	if includeSaved != nil {
+		saved = *includeSaved
+	}
+	content, err := s.generateSummarySnapshot(ctx, meeting, attachments, priorContext, saved)
 	if err != nil {
 		return "", err
 	}
@@ -851,7 +890,10 @@ ADR-013 — 트랜스크립트 딥 링크:
 
 	// Use candidates for either variant only after verifying the selected text.
 	// The same verified segments drive both the prompt and transcript anchors.
-	parsedSegments := transcriptSegmentsForText(transcript, meeting.TranscriptSegments)
+	parsedSegments := meetingTranscriptSegments(meeting, transcript)
+	if len(parsedSegments) > len(timedSpeakerSegments(parsedSegments)) {
+		systemPrompt += "\n시간 미확인 발언도 포함하되 해당 발언에 시간 마커를 만들지 마세요."
+	}
 	userPrompt := buildSummarizeUserPrompt(transcript, priorContext, parsedSegments)
 	if meeting.Notes != "" {
 		// JSON string encoding preserves the text while escaping angle brackets,
@@ -959,6 +1001,7 @@ type WhisperSegment struct {
 	End     float64 `json:"end"`
 	Text    string  `json:"text"`
 	Speaker string  `json:"speaker,omitempty"`
+	Untimed bool    `json:"-"`
 }
 
 // RefinedSegment represents a cleaned-up transcript segment with inferred speaker turns
@@ -970,6 +1013,7 @@ type RefinedSegment struct {
 	FallbackCode      string  `json:"-"`
 	ChunkIndex        int     `json:"-"`
 	SpeakerProvenance string  `json:"-"`
+	Untimed           bool    `json:"untimed,omitempty"`
 }
 
 var (
@@ -2036,7 +2080,7 @@ func (s *BedrockService) ExtractSimRequirements(ctx context.Context, meeting *mo
 	// transcript is also where a [TS:NNN] marker can still be *added*
 	// against real segment start times below.
 	transcript, _ := selectMeetingTranscript(meeting)
-	segments := transcriptSegmentsForText(transcript, meeting.TranscriptSegments)
+	segments := meetingTranscriptSegments(meeting, transcript)
 	if transcript == "" && meeting.Content != "" {
 		// No raw transcript at all (e.g. a manually-created meeting) --
 		// fall back to the note body with no TS-marker expectation.
@@ -2050,7 +2094,11 @@ func (s *BedrockService) ExtractSimRequirements(ctx context.Context, meeting *mo
 	if len(segments) > 0 {
 		var sb strings.Builder
 		for _, seg := range segments {
-			fmt.Fprintf(&sb, "[TS:%.0f] %s: %s\n", seg.StartTime, seg.Speaker, seg.Text)
+			if seg.Untimed {
+				fmt.Fprintf(&sb, "[시간 미확인] %s: %s\n", seg.Speaker, seg.Text)
+			} else {
+				fmt.Fprintf(&sb, "[TS:%.0f] %s: %s\n", seg.StartTime, seg.Speaker, seg.Text)
+			}
 		}
 		sourceText = sb.String()
 	} else {
@@ -2097,7 +2145,7 @@ func (s *BedrockService) ExtractSimRequirements(ctx context.Context, meeting *mo
 		return nil, fmt.Errorf("failed to extract sim requirements: %w", err)
 	}
 
-	return parseSimRequirements(response, segments), nil
+	return parseSimRequirements(response, timedSpeakerSegments(segments)), nil
 }
 
 // ExtractTags extracts topic tags from a meeting transcript using Claude Haiku.
@@ -2135,7 +2183,7 @@ Rules:
 	// Build prompt with speaker segments if available
 	userPrompt := fmt.Sprintf("Extract topic tags from this meeting transcript:\n\n%s", transcript)
 
-	if segments := transcriptSegmentsForText(transcript, meeting.TranscriptSegments); len(segments) > 0 {
+	if segments := meetingTranscriptSegments(meeting, transcript); len(segments) > 0 {
 		var sb strings.Builder
 		sb.WriteString("Extract topic tags from this speaker-labeled meeting transcript:\n\n")
 		for _, seg := range segments {
@@ -2247,7 +2295,7 @@ Output the single word, lowercase, no punctuation, no quotes, no explanation.`
 			return "", nil
 		}
 		userPrompt = fmt.Sprintf("Classify the overall tone of this meeting transcript:\n\n%s", transcript)
-		if segments := transcriptSegmentsForText(transcript, meeting.TranscriptSegments); len(segments) > 0 {
+		if segments := meetingTranscriptSegments(meeting, transcript); len(segments) > 0 {
 			var sb strings.Builder
 			sb.WriteString("Classify the overall tone of this speaker-labeled meeting transcript:\n\n")
 			for _, seg := range segments {

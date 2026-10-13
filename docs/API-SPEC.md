@@ -172,29 +172,42 @@ or summarization is reconciled after 60 minutes; summarize retry eligibility is 
 separate 20-minute conditional claim, not a retry scheduler.
 
 Meeting detail includes `transcriptQuality` for the effective selected A/B text.
-`refinement` is `validated`, `partial`, `raw`, `not_requested`, `unknown` or
-`edited`; `speakerProvenance` is `acoustic`, `text_inferred`, `mixed` or `unknown`.
-`degraded`, chunk/fallback counts and bounded reason codes describe raw fallback
-and unavailable acoustic labels. Optional diarization configuration and detected
-label counts come from STT metadata; multipart counts sum the part-local labels,
-not unique people. Acoustic labels remain authoritative when present.
+The status records refinement and speaker provenance, degradation, optional
+diarization metadata and available/partial/unavailable timing. Legacy processing
+status is `unknown`; ordinary text writes invalidate earlier attestation and
+advance only that variant's server-managed revision. Text and segment fingerprints
+must match the current selected source before its processing metadata supplies
+timing. Equal words alone cannot make a known untimed B variant borrow A's cache.
+These checks describe structural/source identity, not semantic accuracy or a
+verified person's name.
 
-Whisper refinement accepts only a complete `end_turn` response with the strict
-segment schema, finite source-bound times and every input `sourceIds` index
-exactly once in order. Missing/duplicate/foreign IDs, missing text/times, invalid
-JSON and truncated responses fall back to the raw chunk. This verifies structural
-coverage, not retention of every meaning or factual accuracy. Invalid raw timing
-retains the readable original text without fabricated timed segments. Raw
-transcript JSON is bounded at 16 MiB; each model chunk has at most 2,048 source
-segments and 128 KiB of text, with bounded response decoding.
+Detail presentation preserves canonical `transcriptA` and `transcriptB` exactly.
+Wholly timed, full-text-matched segments retain the existing `transcription`
+array. If any verified segment is `untimed: true`, the complete array is returned
+only as additive `transcriptionV2`; legacy `transcription` is absent so older
+clients show their existing complete canonical-text fallback. Current clients use
+`transcriptionV2 ?? transcription ?? []`. Unknown times are explicit, never zero
+timestamps. Stale or unavailable timing uses plain text. Existing transcript
+updates containing only `transcriptA` remain supported; no new client revision or
+projected display text is required.
 
-Workers capture exact meeting/audio/source state before refinement, recheck S3
-ETag/version before publication, and conditionally save transcript, timed
-segments and per-variant quality together using immutable spill references.
-Concurrent input/selection/human edits reject stale publication. S3 preflight
-and DynamoDB publication are separate operations, not a cross-service transaction.
-Quality fingerprints cover the stored text and segment bytes; an edit reports
-`edited`, while legacy or mismatched segment metadata reports `unknown`.
+Bounded transcript reads retain untimed speech without start/end time metadata.
+Time-range requests include only verified timed segments, report
+`unlocatedCodePoints`, and use `completenessScope: verified_timed_segments` when
+some speech cannot be located. Summary/simulator anchors and KB exports likewise
+cannot invent times for untimed speech.
+
+The repository provides typed ASR snapshot, atomic transcript/summary-claim and
+presence-and-bytes content-fence primitives. The claimed-summary entry point
+checks ownership before model evidence and can end an owned batch as `done` with
+`HUMAN_CONTENT_PRESERVED` without replacing human content or recording fresh
+model-success coverage. Production transcription workers and their active
+refinement path remain unchanged in this reader-first stage; the new claim path
+is not activated. Complete reader deployment must precede strict refinement and
+worker publication. Drain older writers before relying on server revisions:
+older binaries cannot stamp them, and legacy fixed-key S3 checks remain preflight
+checks rather than an atomic S3/DynamoDB fence. Code installation is not runtime
+acceptance of the later worker rollout.
 
 Conditional transcript/speaker edits publish new immutable
 `transcripts/{meetingId}/{field}.{32-lowercase-hex}.txt` references only with a
@@ -349,6 +362,57 @@ An inaccessible document returns 404. An account share creates an independent
 S3 copy; an email share references the original and is read-only.
 Document shares use SHAREDDOC#/DOCSHARE_TO#, not meeting SHARED# keys. Deleting an
 owner document can leave share rows; list reads skip missing targets.
+
+Authenticated `GET /api/documents/{docId}/reading` and
+`GET /api/accounts/{accountId}/documents/{docId}/reading` return bounded current
+document pages. `section=content` is the default; `metadata` omits text.
+File-only `download` and `preview` selections request their respective links.
+`pageSize` counts Unicode code points (1–8000, default 4000). `maxBytes` bounds
+encoded JSON including its newline (8000–14000, default 10000), leaving room
+for MCP text and structured representations together. Content is never silently
+truncated: follow `page.nextCursor` until `complete=true` and `nextCursor=null`.
+Page offsets and totals use `unicode_code_points`.
+
+Every page reads present ownership/membership/share authorization and the current
+document using consistent primary reads, and rechecks both before returning.
+Cursors bind user, account scope, document, section, source revision and grant.
+Changing any of those makes continuation fail; content changes invalidate it even
+when the saved timestamp is unchanged. `STALE_CURSOR` returns 409 and requires a
+fresh read. Invalid options/cursors return 400; inaccessible personal documents
+return 404 and unauthorized account reads return 403.
+
+Responses include `revision`, `scope`, `permission`, `mode`, `textStatus`,
+`provenance`, explicit `metadataTruncated` fields, `content` and `page`.
+File-backed documents return `mode=file`, `textStatus=not_available`, bounded file
+metadata, authorized five-minute download/preview URLs and `textExtracted=false`.
+The existing AccountService and UploadService paths revalidate file access and
+sign the exact current key. Personal/shared keys must belong to the source
+owner; account file keys remain authoritative after another editor replaces a
+file. Public sharing tokens and raw `fileKey` fields are never returned.
+Link failures are explicit `downloadStatus`/`previewStatus=unavailable`. URLs are
+never truncated: oversized metadata previews shrink with `metadataTruncated`;
+if both full URLs still exceed the page budget, the download remains and
+`previewStatus=deferred` supplies `previewRead` for a separately authorized
+`section=preview` read. Its `expectedRevision` rejects file replacement with
+`STALE_CURSOR`; callers can also pin other related reads with that field.
+These links do not claim extracted file text.
+
+Authenticated `GET /api/document-catalog` provides bounded metadata pages for
+MCP discovery. Omit `accountId` for personal and directly-shared documents; an
+explicit account requires current membership. Preserve `accountId` and `docType`
+while following the opaque `cursor`. `pageSize` is 1–50 (default 20); each call
+issues at most one DynamoDB query and never loads document bodies. Encoded JSON
+is capped at 10,000 bytes, including metadata previews and continuation.
+Empty filtered pages can have another cursor and must not be treated as complete.
+
+Rows revalidate their canonical metadata and current grants before publication.
+Cursors bind the caller, selection, current account grant and last returned
+item's metadata/grant. A changed anchor or revoked grant rejects continuation.
+The list is live (`consistency=current_per_item`), not a collection-wide
+snapshot. `metadataRevision` identifies metadata only; it is not a document-body
+revision for `expectedRevision`. Read the selected document to obtain that
+revision. `metadataTruncated` marks shortened field/link previews; body bytes,
+raw file keys and public-share capabilities are excluded from catalog responses.
 
 PPT/PPTX uploads trigger convert-doc and produce a docs-pdf/ sidecar. previewUrl
 points to the PDF while downloadUrl always points to the original. The converter
@@ -533,12 +597,15 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | POST | `/api/accounts/{accountId}/documents` | `accountHandler.PutDocument` |
 | GET | `/api/accounts/{accountId}/documents` | `accountHandler.ListDocuments` |
 | GET | `/api/accounts/{accountId}/documents/{docId}` | `accountHandler.GetDocument` |
+| GET | `/api/accounts/{accountId}/documents/{docId}/reading` | `documentReadingHandler.Get` |
 | GET | `/api/accounts/{accountId}/documents/{docId}/index-status` | `indexStatusHandler.AccountDocument` |
 | PUT | `/api/accounts/{accountId}/documents/{docId}` | `accountHandler.UpdateDocument` |
 | DELETE | `/api/accounts/{accountId}/documents/{docId}` | `accountHandler.DeleteDocument` |
 | POST | `/api/documents` | `documentHandler.PutDocument` |
 | GET | `/api/documents` | `documentHandler.ListDocuments` |
+| GET | `/api/document-catalog` | `documentCatalogHandler.Get` |
 | GET | `/api/documents/{docId}` | `documentHandler.GetDocument` |
+| GET | `/api/documents/{docId}/reading` | `documentReadingHandler.Get` |
 | GET | `/api/documents/{docId}/index-status` | `indexStatusHandler.PersonalDocument` |
 | PUT | `/api/documents/{docId}` | `documentHandler.UpdateDocument` |
 | DELETE | `/api/documents/{docId}` | `documentHandler.DeleteDocument` |

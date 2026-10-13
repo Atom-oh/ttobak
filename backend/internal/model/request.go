@@ -166,6 +166,7 @@ type MeetingDetailResponse struct {
 	AudioPartCount             int                  `json:"audioPartCount,omitempty"`
 	AudioPartsReady            int                  `json:"audioPartsReady,omitempty"`
 	Transcription              json.RawMessage      `json:"transcription,omitempty"`
+	TranscriptionV2            json.RawMessage      `json:"transcriptionV2,omitempty"` // Complete mixed/untimed segments; legacy clients use canonical raw text.
 	Tags                       []string             `json:"tags,omitempty"`
 	ActionItems                json.RawMessage      `json:"actionItems,omitempty"`
 	SpeakerMap                 map[string]string    `json:"speakerMap,omitempty"`

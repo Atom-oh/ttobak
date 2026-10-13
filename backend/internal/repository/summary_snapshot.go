@@ -21,7 +21,9 @@ var (
 )
 
 var batchSummaryFields = []string{"meetingId", "userId", "status", "content", "notes", "liveSummary",
-	"transcriptA", "transcriptB", "selectedTranscript", "transcriptSegments", "attachmentSummarySources", "summarizeRetryClaimedAt", "summaryRetryAttempts"}
+	"transcriptA", "transcriptB", "selectedTranscript", "transcriptSegments", "transcriptQualityA", "transcriptQualityB",
+	"transcriptRevisionA", "transcriptRevisionB", "attachmentSummarySources", "summarizeRetryClaimedAt", "summaryRetryAttempts",
+	"summaryRetryPending", "summaryBatchContentHash"}
 
 func summaryRowKey(pk, sk string) map[string]types.AttributeValue {
 	return map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: pk}, "SK": &types.AttributeValueMemberS{Value: sk}}
