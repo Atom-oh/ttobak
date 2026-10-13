@@ -47,11 +47,12 @@ class S3:
     def __init__(self):
         self.value = {"ETag": '"etag"', "VersionId": "v1",
                       "LastModified": datetime.fromtimestamp(NOW - 200, timezone.utc)}
+        self.overrides = {}
         self.reads = []
 
     def head_object(self, **kwargs):
         self.reads.append(kwargs)
-        return copy.deepcopy(self.value)
+        return copy.deepcopy(self.overrides.get(kwargs.get("Key"), self.value))
 
 
 def event(source="aws.s3", kind="Object Created", detail=None):
@@ -248,6 +249,22 @@ class ReplayTests(unittest.TestCase):
         self.assertIn("summarize", self.inspector.plan(payload, "delivery")["target"])
         self.meeting["audioPartsReadySet"] = {0, 1}
         self.rejected(payload, "TRANSCRIPT_PART_ALREADY_APPLIED")
+
+    def test_part_transcript_replay_is_bound_to_its_audio_generation(self):
+        key = "transcripts/meeting_part_000.json"
+        audio0, audio1 = "audio/owner/meeting/part_000_a.wav", "audio/owner/meeting/part_001_b.wav"
+        self.meeting.update(audioPartCount=2, audioKeys=[audio0, audio1], audioPartsReadySet={1},
+                            updatedAt=iso(NOW - 20))
+        payload = message(event(detail={"bucket": {"name": "assets"}, "object": {
+            "key": key, "etag": "etag", "version-id": "v1"}}),
+            function="summarize", rule="ttobak-transcript-upload")
+        self.s3.overrides[audio0] = {"ETag": '"a0"', "LastModified": datetime.fromtimestamp(NOW - 200, timezone.utc)}
+        self.assertIn("summarize", self.inspector.plan(payload, "delivery")["target"])
+        # A newer batch re-uploaded this part audio after the retained event.
+        self.s3.overrides[audio0]["LastModified"] = datetime.fromtimestamp(NOW - 50, timezone.utc)
+        self.rejected(payload, "SOURCE_REPLACED_AFTER_EVENT")
+        self.meeting.update(audioKeys=[], audioKey=None)
+        self.rejected(payload, "PART_GENERATION_UNKNOWN")
 
     def test_audio_replay_rejects_a_key_that_nfc_normalization_would_change(self):
         nfd = unicodedata.normalize("NFD", "audio/owner/meeting/final_한글.wav")

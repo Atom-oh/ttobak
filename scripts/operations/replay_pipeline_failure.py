@@ -228,6 +228,13 @@ class Inspector:
                     part = int(match.group(1))
                     require(part < int(meeting.get("audioPartCount", 0)), "INVALID_TRANSCRIPT_PART")
                     require(part not in meeting.get("audioPartsReadySet", set()), "TRANSCRIPT_PART_ALREADY_APPLIED")
+                    # Sibling completions move updatedAt, so the part is bound to its generation
+                    # through its audio object: a newer batch re-uploads that object after this
+                    # event, and head() rejects it as replaced.
+                    audio_keys = meeting.get("audioKeys") or [meeting.get("audioKey")]
+                    require(part < len(audio_keys) and isinstance(audio_keys[part], str) and audio_keys[part],
+                            "PART_GENERATION_UNKNOWN")
+                    self.head(audio_keys[part], event_time)
             elif key.startswith("docs/"):
                 route = ("convert-doc", "ttobak-doc-slide-upload")
                 require(self.document and key.startswith(f"docs/{self.owner}/") and
