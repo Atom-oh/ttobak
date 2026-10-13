@@ -38,12 +38,22 @@ jobs:
           # with `go.mod requires go >= 1.25.0 (running go 1.24.13)`.
           go-version: '1.25'
 
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Restore and verify PDF font dependency
+        run: |
+          npm --prefix backend/internal/service/pdfassets ci --ignore-scripts --no-audit --no-fund
+          npm --prefix backend/internal/service/pdfassets run verify
+          npm --prefix backend/internal/service/pdfassets test
+
       - name: Build all Lambda binaries
         working-directory: backend
         run: |
           for dir in cmd/api cmd/transcribe cmd/summarize cmd/process-image cmd/kb cmd/research-worker cmd/websocket cmd/ws-authorizer; do
             GOOS=linux GOARCH=arm64 go build -tags lambda.norpc -o "$dir/bootstrap" "./$dir"
           done
+          cp internal/service/pdfassets/node_modules/pretendard/dist/LICENSE.txt cmd/api/Pretendard-OFL.txt
 
       - name: Run tests
         working-directory: backend

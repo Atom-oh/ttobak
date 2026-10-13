@@ -10,8 +10,11 @@ import (
 	"github.com/signintech/gopdf"
 )
 
-//go:embed pdfassets/Pretendard-Regular.ttf
+//go:embed pdfassets/node_modules/pretendard/dist/public/static/alternative/Pretendard-Regular.ttf
 var pdfExportFont []byte
+
+//go:embed pdfassets/node_modules/pretendard/dist/LICENSE.txt
+var pdfExportFontLicense []byte
 
 var (
 	ErrPDFExportLimit = errors.New("PDF export exceeds its size or page limit")
