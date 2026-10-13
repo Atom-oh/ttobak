@@ -22,6 +22,7 @@ these environment values for the target deployment:
 | TTOBAK_CLIENT_ID | Public OAuth-capable client ID |
 | TTOBAK_API_URL | Application CloudFront URL |
 | TTOBAK_REGION | Application region |
+| TTOBAK_USER_POOL_ID | Optional for stdio; otherwise resolved from public `/config.json` |
 
 The OAuth client must allow authorization-code PKCE, openid/email/profile scopes
 and `http://localhost:9876/callback`. Current AuthStack configures the SPA client
@@ -40,6 +41,15 @@ one login or refresh operation, and logout cancels pending authentication. Token
 permissions. Refresh is attempted before requiring another login; do not promise
 a fixed login duration independent of pool policy or revocation. Logout clears
 local tokens. Do not commit/copy token files into documentation or diagnostics.
+
+Before login or refresh, stdio validates the configured Hosted UI against the
+Cognito issuer's discovery document. Newly issued ID and access tokens must have
+valid signatures, issuer, client, token use, matching subjects and unexpired
+claims before they are stored or sent to the API. Existing three-variable
+configurations resolve the matching pool from public `/config.json`; an explicit
+pool ID supports other registered clients. The existing global cache and its
+cached-token validation remain a separate follow-up; this change alone does not
+establish deployment isolation for previously cached credentials.
 
 ## Streamable HTTP
 
