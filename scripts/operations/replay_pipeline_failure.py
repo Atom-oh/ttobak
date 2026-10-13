@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 import re
 import sys
+import unicodedata
 from urllib.parse import unquote_plus
 
 MAX_BYTES = 1024 * 1024
@@ -165,7 +166,7 @@ class Inspector:
         require(timestamp_ns(meeting.get("createdAt")) < event_end, "EVENT_PREDATES_RESOURCE")
         return meeting
 
-    def summary_ready(self, meeting, event_time, emitted=None):
+    def summary_ready(self, meeting, event_time, emitted=None, part=False):
         status = meeting.get("status")
         require(status not in ("done", "error"), "USE_AUTHENTICATED_RESUMMARY")
         require(not meeting.get("summarizeRetryClaimedAt"), "SUMMARY_CLAIM_PRESENT")
@@ -175,8 +176,11 @@ class Inspector:
                     "SUMMARY_STILL_ACTIVE")
         else:
             require(status == "transcribing", "MEETING_NOT_REPLAYABLE")
-            require(timestamp_ns(meeting.get("updatedAt")) <= (event_time if emitted is None else emitted),
-                    "MEETING_CHANGED_AFTER_EVENT" if emitted is None else "MEETING_CHANGED_AFTER_EMISSION")
+            # A part is fenced by its own readiness bit: sibling completions move the
+            # meeting-wide updatedAt, so that timestamp cannot prove this part's freshness.
+            if not part:
+                require(timestamp_ns(meeting.get("updatedAt")) <= (event_time if emitted is None else emitted),
+                        "MEETING_CHANGED_AFTER_EVENT" if emitted is None else "MEETING_CHANGED_AFTER_EMISSION")
 
     def plan(self, message, kind):
         self.now = self.fixed_now if self.fixed_now is not None else datetime.now(timezone.utc).timestamp()
@@ -193,6 +197,9 @@ class Inspector:
             key = obj.get("key", "")
             late_audio_binding = False
             if key.startswith("audio/"):
+                # The transcribe Lambda applies NFC before starting the worker, so an
+                # NFD key would verify one object while another is transcribed.
+                require(unicodedata.normalize("NFC", key) == key, "NONCANONICAL_AUDIO_KEY")
                 route = ("transcribe", "ttobak-audio-upload")
                 meeting = self.meeting_row(event_end)
                 require(meeting.get("status") == "transcribing" and not meeting.get("audioCrop"),
@@ -214,9 +221,9 @@ class Inspector:
             elif key.startswith("transcripts/"):
                 route = ("summarize", "ttobak-transcript-upload")
                 meeting = self.meeting_row(event_end)
-                self.summary_ready(meeting, event_time)
                 match = re.fullmatch(r"transcripts/" + re.escape(self.meeting) + r"(?:_part_([0-9]{3})|-nova)?\.json", key)
                 require(match is not None, "TRANSCRIPT_IDENTITY_MISMATCH")
+                self.summary_ready(meeting, event_time, part=match.group(1) is not None)
                 if match.group(1) is not None:
                     part = int(match.group(1))
                     require(part < int(meeting.get("audioPartCount", 0)), "INVALID_TRANSCRIPT_PART")
@@ -271,7 +278,8 @@ class Inspector:
                 crop = meeting.get("audioCrop") or {}
                 require(detail.get("userId") == self.owner and meeting.get("status") == "transcribing"
                         and crop.get("state") == "queued" and not crop.get("runId"), "CROP_NOT_REPLAYABLE")
-                require(timestamp_ns(meeting.get("updatedAt")) <= event_time, "MEETING_CHANGED_AFTER_EVENT")
+                # Same-second creation stamps updatedAt inside the event's whole-second interval.
+                require(timestamp_ns(meeting.get("updatedAt")) < event_end, "MEETING_CHANGED_AFTER_EVENT")
                 require(str(crop.get("sourceKey", "")).startswith(f"audio/{self.owner}/{crop.get('sourceMeetingId')}/"),
                         "FOREIGN_CROP_SOURCE")
                 source = self.read("USER#" + self.owner, "MEETING#" + str(crop.get("sourceMeetingId")),

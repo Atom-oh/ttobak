@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
+import unicodedata
 import unittest
 from unittest.mock import patch
 
@@ -226,6 +227,33 @@ class ReplayTests(unittest.TestCase):
         self.assertIn("transcribe", self.inspector.plan(payload, "delivery")["target"])
         self.meeting["audioCrop"]["state"] = "processing"
         self.rejected(payload, "CROP_NOT_REPLAYABLE")
+
+    def test_crop_same_second_creation_is_allowed_but_a_later_edit_is_not(self):
+        self.table.items[("USER#owner", "MEETING#source")] = {"meetingId": "source", "userId": "owner"}
+        self.meeting["audioCrop"] = {"state": "queued", "sourceMeetingId": "source",
+                                    "sourceKey": "audio/owner/source/a.wav", "sourceETag": "etag"}
+        payload = message(event("ttobak.audio", "AudioCropRequested", {
+            "meetingId": "meeting", "userId": "owner"}), rule="ttobak-audio-crop")
+        self.meeting["updatedAt"] = nano(NOW - 100, "345000000")
+        self.assertIn("transcribe", self.inspector.plan(payload, "delivery")["target"])
+        self.meeting["updatedAt"] = iso(NOW - 99)
+        self.rejected(payload, "MEETING_CHANGED_AFTER_EVENT")
+
+    def test_part_transcript_replay_ignores_sibling_progress_but_not_its_own_application(self):
+        key = "transcripts/meeting_part_000.json"
+        self.meeting.update(audioPartCount=2, audioPartsReadySet={1}, updatedAt=iso(NOW - 50))
+        payload = message(event(detail={"bucket": {"name": "assets"}, "object": {
+            "key": key, "etag": "etag", "version-id": "v1"}}),
+            function="summarize", rule="ttobak-transcript-upload")
+        self.assertIn("summarize", self.inspector.plan(payload, "delivery")["target"])
+        self.meeting["audioPartsReadySet"] = {0, 1}
+        self.rejected(payload, "TRANSCRIPT_PART_ALREADY_APPLIED")
+
+    def test_audio_replay_rejects_a_key_that_nfc_normalization_would_change(self):
+        nfd = unicodedata.normalize("NFD", "audio/owner/meeting/final_한글.wav")
+        self.assertNotEqual(nfd, unicodedata.normalize("NFC", nfd))
+        self.rejected(message(event(detail={"bucket": {"name": "assets"}, "object": {
+            "key": nfd, "etag": "etag", "version-id": "v1"}})), "NONCANONICAL_AUDIO_KEY")
 
     def test_document_replay_binds_current_file_and_preserves_literal_plus(self):
         key = "docs/owner/a+b.pptx"
