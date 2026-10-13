@@ -58,9 +58,8 @@ var jwksCache struct {
 }
 
 var (
-	cognitoRegion      = getEnvOrDefault("COGNITO_REGION", "ap-northeast-2")
-	cognitoUserPoolID  = os.Getenv("COGNITO_USER_POOL_ID")
-	originVerifySecret = os.Getenv("ORIGIN_VERIFY_SECRET")
+	cognitoRegion     = getEnvOrDefault("COGNITO_REGION", "ap-northeast-2")
+	cognitoUserPoolID = os.Getenv("COGNITO_USER_POOL_ID")
 )
 
 func getEnvOrDefault(key, defaultVal string) string {
@@ -82,19 +81,6 @@ type ALBOIDCClaims struct {
 	Exp           int64    `json:"exp"`
 	Iss           string   `json:"iss"`
 	TokenUse      string   `json:"token_use"`
-}
-
-// OriginVerify rejects requests that did not come through CloudFront.
-// CloudFront injects a secret x-origin-verify header; direct API Gateway
-// callers won't have it. Skipped when ORIGIN_VERIFY_SECRET is empty (local dev).
-func OriginVerify(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if originVerifySecret != "" && r.Header.Get("x-origin-verify") != originVerifySecret {
-			http.Error(w, `{"error":{"code":"FORBIDDEN","message":"direct access not allowed"}}`, http.StatusForbidden)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }
 
 // Auth is middleware that extracts user information from JWT

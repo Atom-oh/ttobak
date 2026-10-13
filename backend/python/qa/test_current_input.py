@@ -64,7 +64,7 @@ class TestCurrentInputRequests(_QAConversationFixture, unittest.TestCase):
         event = {'rawPath': '/api/qa/ask', 'requestContext': {'http': {'method': 'POST'}},
                  'body': json.dumps(body)}
         with mock.patch.object(handler, 'extract_user_id', return_value='reader'), \
-                mock.patch.object(handler, 'ORIGIN_VERIFY_SECRET', ''):
+                mock.patch.object(handler._HTTP_ORIGIN, 'verify', return_value=True):
             return handler.lambda_handler(event, None)
 
     def receipt(self, message, *, ephemeral=False):

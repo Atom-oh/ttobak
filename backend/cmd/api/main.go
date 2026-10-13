@@ -16,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	lambdasdk "github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	"github.com/aws/aws-sdk-go-v2/service/sfn"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/aws/aws-sdk-go-v2/service/transcribe"
@@ -193,7 +194,13 @@ func init() {
 	r.Use(chimiddleware.RealIP)
 	r.Use(middleware.RequestLog)
 	r.Use(middleware.Recovery)
-	r.Use(middleware.OriginVerify) // Block direct API Gateway access (CloudFront-only)
+	originVerifier := middleware.NewOriginVerifier(
+		os.Getenv("ORIGIN_VERIFY_SECRET_ARN"), os.Getenv("ORIGIN_VERIFY_SECRET"),
+		secretsmanager.NewFromConfig(cfg),
+		os.Getenv("TTOBAK_ORIGIN_LOCAL_DEV") == "1" && os.Getenv("AWS_LAMBDA_FUNCTION_NAME") == "",
+		os.Getenv("ORIGIN_VERIFY_SECRET_VERSION_ID"),
+	)
+	r.Use(originVerifier.Middleware) // Block direct API Gateway access (CloudFront-only)
 	r.Use(middleware.CORS)
 	r.Use(middleware.JSON)
 
