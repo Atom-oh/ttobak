@@ -13,7 +13,7 @@ const tokenFile = '/synthetic-ttobak-reading/.ttobak/tokens.json';
 const exists = fs.existsSync, read = fs.readFileSync;
 fs.existsSync = (path) => path === tokenFile || exists(path);
 fs.readFileSync = (path, ...args) => path === tokenFile
-  ? JSON.stringify({ id_token: 'synthetic-token', expires_at: Date.now() / 1000 + 3600 })
+  ? JSON.stringify({ id_token: 'synthetic-token', access_token: 'synthetic-access', refresh_token: '', expires_at: Math.floor(Date.now() / 1000) + 3600 })
   : read(path, ...args);
 
 const calls = new Map();

@@ -11744,7 +11744,7 @@ var numericOriginMap = {
 };
 var $ZodCheckLessThan = /* @__PURE__ */ $constructor("$ZodCheckLessThan", (inst, def) => {
   $ZodCheck.init(inst, def);
-  const origin = numericOriginMap[typeof def.value];
+  const origin2 = numericOriginMap[typeof def.value];
   inst._zod.onattach.push((inst2) => {
     const bag = inst2._zod.bag;
     const curr = (def.inclusive ? bag.maximum : bag.exclusiveMaximum) ?? Number.POSITIVE_INFINITY;
@@ -11760,7 +11760,7 @@ var $ZodCheckLessThan = /* @__PURE__ */ $constructor("$ZodCheckLessThan", (inst,
       return;
     }
     payload.issues.push({
-      origin,
+      origin: origin2,
       code: "too_big",
       maximum: typeof def.value === "object" ? def.value.getTime() : def.value,
       input: payload.value,
@@ -11772,7 +11772,7 @@ var $ZodCheckLessThan = /* @__PURE__ */ $constructor("$ZodCheckLessThan", (inst,
 });
 var $ZodCheckGreaterThan = /* @__PURE__ */ $constructor("$ZodCheckGreaterThan", (inst, def) => {
   $ZodCheck.init(inst, def);
-  const origin = numericOriginMap[typeof def.value];
+  const origin2 = numericOriginMap[typeof def.value];
   inst._zod.onattach.push((inst2) => {
     const bag = inst2._zod.bag;
     const curr = (def.inclusive ? bag.minimum : bag.exclusiveMinimum) ?? Number.NEGATIVE_INFINITY;
@@ -11788,7 +11788,7 @@ var $ZodCheckGreaterThan = /* @__PURE__ */ $constructor("$ZodCheckGreaterThan", 
       return;
     }
     payload.issues.push({
-      origin,
+      origin: origin2,
       code: "too_small",
       minimum: typeof def.value === "object" ? def.value.getTime() : def.value,
       input: payload.value,
@@ -11824,7 +11824,7 @@ var $ZodCheckNumberFormat = /* @__PURE__ */ $constructor("$ZodCheckNumberFormat"
   $ZodCheck.init(inst, def);
   def.format = def.format || "float64";
   const isInt = def.format?.includes("int");
-  const origin = isInt ? "int" : "number";
+  const origin2 = isInt ? "int" : "number";
   const [minimum, maximum] = NUMBER_FORMAT_RANGES[def.format];
   inst._zod.onattach.push((inst2) => {
     const bag = inst2._zod.bag;
@@ -11839,7 +11839,7 @@ var $ZodCheckNumberFormat = /* @__PURE__ */ $constructor("$ZodCheckNumberFormat"
     if (isInt) {
       if (!Number.isInteger(input)) {
         payload.issues.push({
-          expected: origin,
+          expected: origin2,
           format: def.format,
           code: "invalid_type",
           continue: false,
@@ -11856,7 +11856,7 @@ var $ZodCheckNumberFormat = /* @__PURE__ */ $constructor("$ZodCheckNumberFormat"
             maximum: Number.MAX_SAFE_INTEGER,
             note: "Integers must be within the safe integer range.",
             inst,
-            origin,
+            origin: origin2,
             inclusive: true,
             continue: !def.abort
           });
@@ -11867,7 +11867,7 @@ var $ZodCheckNumberFormat = /* @__PURE__ */ $constructor("$ZodCheckNumberFormat"
             minimum: Number.MIN_SAFE_INTEGER,
             note: "Integers must be within the safe integer range.",
             inst,
-            origin,
+            origin: origin2,
             inclusive: true,
             continue: !def.abort
           });
@@ -12037,9 +12037,9 @@ var $ZodCheckMaxLength = /* @__PURE__ */ $constructor("$ZodCheckMaxLength", (ins
     const length = input.length;
     if (length <= def.maximum)
       return;
-    const origin = getLengthableOrigin(input);
+    const origin2 = getLengthableOrigin(input);
     payload.issues.push({
-      origin,
+      origin: origin2,
       code: "too_big",
       maximum: def.maximum,
       inclusive: true,
@@ -12066,9 +12066,9 @@ var $ZodCheckMinLength = /* @__PURE__ */ $constructor("$ZodCheckMinLength", (ins
     const length = input.length;
     if (length >= def.minimum)
       return;
-    const origin = getLengthableOrigin(input);
+    const origin2 = getLengthableOrigin(input);
     payload.issues.push({
-      origin,
+      origin: origin2,
       code: "too_small",
       minimum: def.minimum,
       inclusive: true,
@@ -12096,10 +12096,10 @@ var $ZodCheckLengthEquals = /* @__PURE__ */ $constructor("$ZodCheckLengthEquals"
     const length = input.length;
     if (length === def.length)
       return;
-    const origin = getLengthableOrigin(input);
+    const origin2 = getLengthableOrigin(input);
     const tooBig = length > def.length;
     payload.issues.push({
-      origin,
+      origin: origin2,
       ...tooBig ? { code: "too_big", maximum: def.length } : { code: "too_small", minimum: def.length },
       inclusive: true,
       exact: true,
@@ -14301,8 +14301,8 @@ var error = () => {
     set: { unit: "items", verb: "to have" },
     map: { unit: "entries", verb: "to have" }
   };
-  function getSizing(origin) {
-    return Sizable[origin] ?? null;
+  function getSizing(origin2) {
+    return Sizable[origin2] ?? null;
   }
   const FormatDictionary = {
     regex: "input",
@@ -20832,201 +20832,363 @@ import { realpathSync as realpathSync2 } from "node:fs";
 import { basename as basename3, extname as extname2 } from "node:path";
 
 // src/auth.ts
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import { request as httpsRequest } from "node:https";
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync
+} from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { execFile } from "node:child_process";
-import { URL as URL2, URLSearchParams as URLSearchParams2 } from "node:url";
-var TOKEN_DIR = join(homedir(), ".ttobak");
-var TOKEN_FILE = join(TOKEN_DIR, "tokens.json");
 var CALLBACK_PORT = 9876;
+var MAX_AUTH_BYTES = 64 * 1024;
+var MAX_TOKEN_LENGTH = 16 * 1024;
+var LOGIN_TIMEOUT_MS = 12e4;
+var NETWORK_TIMEOUT_MS = 1e4;
+function record2(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+function origin(value, name) {
+  let url2;
+  try {
+    url2 = new URL(value);
+  } catch {
+    throw new Error(`${name} must be an HTTPS origin`);
+  }
+  if (url2.protocol !== "https:" || url2.username || url2.password || url2.pathname !== "/" || url2.search || url2.hash) {
+    throw new Error(`${name} must be an HTTPS origin`);
+  }
+  return url2.origin;
+}
+function tokenString(value) {
+  return typeof value === "string" && value.length > 0 && value.length <= MAX_TOKEN_LENGTH && !/[\s\x00-\x1f\x7f]/.test(value);
+}
+function tokenData(value) {
+  return record2(value) && tokenString(value.id_token) && tokenString(value.access_token) && typeof value.refresh_token === "string" && (value.refresh_token === "" || tokenString(value.refresh_token)) && typeof value.expires_at === "number" && Number.isSafeInteger(value.expires_at) && value.expires_at > 0;
+}
+function requestAuthJson(url2, body) {
+  if (url2.protocol !== "https:" || url2.username || url2.password || url2.hash) {
+    return Promise.reject(new Error("Authentication endpoint must use HTTPS"));
+  }
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let timer;
+    const data = body?.toString();
+    const finish = (error3, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error3) reject(error3);
+      else resolve(value);
+    };
+    const req = httpsRequest(url2, {
+      method: body ? "POST" : "GET",
+      headers: body ? {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Content-Length": Buffer.byteLength(data),
+        Accept: "application/json"
+      } : { Accept: "application/json" }
+    }, (res) => {
+      res.on("error", () => finish(new Error("Authentication response interrupted")));
+      res.on("aborted", () => finish(new Error("Authentication response interrupted")));
+      if (res.statusCode !== 200 || res.headers["content-encoding"] && res.headers["content-encoding"] !== "identity") {
+        res.destroy();
+        finish(new Error("Authentication endpoint rejected the request"));
+        return;
+      }
+      const length = res.headers["content-length"];
+      if (length !== void 0 && (!/^\d+$/.test(length) || Number(length) > MAX_AUTH_BYTES)) {
+        res.destroy();
+        finish(new Error("Authentication response exceeds its size limit"));
+        return;
+      }
+      const parts = [];
+      let size = 0;
+      res.on("data", (chunk) => {
+        size += chunk.length;
+        if (size > MAX_AUTH_BYTES) {
+          parts.length = 0;
+          res.destroy();
+          finish(new Error("Authentication response exceeds its size limit"));
+        } else parts.push(chunk);
+      });
+      res.on("end", () => {
+        if (settled) return;
+        try {
+          finish(void 0, JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(parts))));
+        } catch {
+          finish(new Error("Invalid authentication JSON response"));
+        }
+      });
+    });
+    const timeout = () => {
+      finish(new Error("Authentication request timed out"));
+      req.destroy();
+    };
+    timer = setTimeout(timeout, NETWORK_TIMEOUT_MS);
+    req.setTimeout(NETWORK_TIMEOUT_MS, timeout);
+    req.on("error", () => finish(new Error("Authentication request failed")));
+    req.end(data);
+  });
+}
 var CognitoAuth = class {
   config;
+  dependencies;
+  fetchJson;
+  tokenDirectory;
+  tokenFile;
   tokens = null;
-  constructor(config2) {
-    this.config = config2;
+  pending;
+  cancelLogin;
+  generation = 0;
+  constructor(config2, dependencies = {}) {
+    this.config = { ...config2, cognitoDomain: origin(config2.cognitoDomain, "TTOBAK_COGNITO_DOMAIN") };
+    if (!/^[a-zA-Z0-9]{1,128}$/.test(config2.clientId)) throw new Error("Invalid TTOBAK_CLIENT_ID");
+    this.dependencies = dependencies;
+    this.fetchJson = dependencies.requestJson ?? requestAuthJson;
+    this.tokenDirectory = dependencies.tokenDirectory ?? join(homedir(), ".ttobak");
+    this.tokenFile = join(this.tokenDirectory, "tokens.json");
     this.loadTokens();
   }
-  async getIdToken() {
-    if (this.tokens && Date.now() / 1e3 < this.tokens.expires_at - 60) {
-      return this.tokens.id_token;
-    }
-    if (this.tokens?.refresh_token) {
-      try {
-        await this.refresh();
-        return this.tokens.id_token;
-      } catch {
-      }
-    }
-    await this.login();
-    return this.tokens.id_token;
+  getIdToken() {
+    if (this.pending) return this.pending;
+    const generation = this.generation;
+    const pending = this.acquireToken(generation).finally(() => {
+      if (this.pending === pending) this.pending = void 0;
+    });
+    this.pending = pending;
+    return pending;
   }
   isAuthenticated() {
     return this.tokens !== null && Date.now() / 1e3 < this.tokens.expires_at - 60;
   }
-  logout() {
+  async logout() {
+    ++this.generation;
+    this.cancelLogin?.();
+    this.pending = void 0;
     this.tokens = null;
     try {
-      if (existsSync(TOKEN_FILE)) unlinkSync(TOKEN_FILE);
-    } catch {
+      unlinkSync(this.tokenFile);
+    } catch (error3) {
+      if (error3.code !== "ENOENT") throw new Error("Could not remove saved credentials");
     }
+  }
+  assertGeneration(generation) {
+    if (generation !== this.generation) throw new Error("Authentication was cancelled by logout");
+  }
+  async acquireToken(generation) {
+    this.assertGeneration(generation);
+    if (this.isAuthenticated()) return this.tokens.id_token;
+    if (this.tokens?.refresh_token) {
+      try {
+        await this.refresh(generation);
+        this.assertGeneration(generation);
+        return this.tokens.id_token;
+      } catch {
+        this.assertGeneration(generation);
+        this.tokens = null;
+      }
+    }
+    await this.login(generation);
+    this.assertGeneration(generation);
+    return this.tokens.id_token;
   }
   loadTokens() {
     try {
-      if (existsSync(TOKEN_FILE)) {
-        this.tokens = JSON.parse(readFileSync(TOKEN_FILE, "utf-8"));
-      }
+      if (!existsSync(this.tokenFile)) return;
+      const saved = JSON.parse(readFileSync(this.tokenFile, "utf8"));
+      this.tokens = tokenData(saved) ? saved : null;
     } catch {
       this.tokens = null;
     }
   }
-  saveTokens(tokens) {
-    if (!existsSync(TOKEN_DIR)) {
-      mkdirSync(TOKEN_DIR, { recursive: true, mode: 448 });
+  async saveTokens(tokens, generation) {
+    this.assertGeneration(generation);
+    try {
+      mkdirSync(this.tokenDirectory, { recursive: true, mode: 448 });
+      writeFileSync(this.tokenFile, JSON.stringify(tokens), { mode: 384 });
+    } catch {
+      throw new Error("Could not store credentials");
     }
-    writeFileSync(TOKEN_FILE, JSON.stringify(tokens, null, 2), { mode: 384 });
     this.tokens = tokens;
   }
-  async login() {
+  async login(generation) {
     const verifier = randomBytes(32).toString("base64url");
-    const challenge = createHash("sha256").update(verifier).digest("base64url");
-    const state = randomBytes(16).toString("hex");
-    const redirectUri = `http://localhost:${CALLBACK_PORT}/callback`;
-    const params = new URLSearchParams2({
-      response_type: "code",
-      client_id: this.config.clientId,
-      redirect_uri: redirectUri,
-      code_challenge: challenge,
-      code_challenge_method: "S256",
-      scope: "openid email profile",
-      state
-    });
-    const url2 = `${this.config.cognitoDomain}/oauth2/authorize?${params}`;
-    console.error(`
-Opening browser for TTOBAK login...
-  ${url2}
-`);
-    openBrowser(url2);
-    const code = await this.waitForCallback(state);
-    await this.exchangeCode(code, verifier, redirectUri);
+    const state = randomBytes(32).toString("hex");
+    const callback = await this.waitForCallback(state);
+    try {
+      this.assertGeneration(generation);
+      const params = new URLSearchParams({
+        response_type: "code",
+        client_id: this.config.clientId,
+        redirect_uri: callback.redirectUri,
+        code_challenge: createHash("sha256").update(verifier).digest("base64url"),
+        code_challenge_method: "S256",
+        scope: "openid email profile",
+        state
+      });
+      const url2 = `${this.config.cognitoDomain}/oauth2/authorize?${params}`;
+      console.error("\nOpening browser for TTOBAK login...");
+      (this.dependencies.openBrowser ?? openBrowser)(url2);
+      const code = await callback.code;
+      this.assertGeneration(generation);
+      await this.exchangeCode(code, verifier, callback.redirectUri, generation);
+    } finally {
+      callback.close();
+    }
   }
   waitForCallback(expectedState) {
-    return new Promise((resolve, reject) => {
-      const server = createServer((req, res) => {
-        const url2 = new URL2(req.url, `http://localhost:${CALLBACK_PORT}`);
-        if (url2.pathname !== "/callback") return;
-        const code = url2.searchParams.get("code");
-        const state = url2.searchParams.get("state");
-        const error3 = url2.searchParams.get("error");
+    return new Promise((ready, rejectReady) => {
+      let settled = false;
+      let listening = false;
+      let timer;
+      let resolveCode, rejectCode;
+      const code = new Promise((resolve, reject) => {
+        resolveCode = resolve;
+        rejectCode = reject;
+      });
+      void code.catch(() => {
+      });
+      const finish = (error3, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (this.cancelLogin === cancel) this.cancelLogin = void 0;
+        server.close();
+        server.closeIdleConnections();
+        if (error3) server.closeAllConnections();
         if (error3) {
-          res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
-          res.end(html("Authentication Failed", `Error: ${error3}. Close this window and try again.`));
-          server.close();
-          reject(new Error(`OAuth error: ${error3}`));
+          rejectCode(error3);
+          if (!listening) rejectReady(error3);
+        } else resolveCode(value);
+      };
+      const cancel = () => finish(new Error("Authentication was cancelled"));
+      const reply = (res, status, message) => {
+        res.writeHead(status, {
+          "Content-Type": "text/html; charset=utf-8",
+          "Cache-Control": "no-store",
+          "X-Content-Type-Options": "nosniff",
+          "Referrer-Policy": "no-referrer",
+          "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'",
+          Connection: "close"
+        });
+        res.end(html(status === 200 ? "TTOBAK MCP Authenticated" : "TTOBAK Login", message));
+      };
+      const server = createServer({ maxHeaderSize: 8192 }, (req, res) => {
+        req.on("error", () => {
+        });
+        if (req.method !== "GET") {
+          res.setHeader("Allow", "GET");
+          reply(res, 405, "GET required.");
+          req.resume();
           return;
         }
-        if (state !== expectedState || !code) {
-          res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
-          res.end(html("Error", "Invalid state or missing code."));
-          server.close();
-          reject(new Error("Invalid OAuth callback"));
+        if (!req.url || req.url.length > 8192 || !req.url.startsWith("/callback?")) {
+          reply(res, 404, "Not found.");
+          req.resume();
           return;
         }
-        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-        res.end(html("TTOBAK MCP Authenticated", "You can close this window and return to Claude Code."));
-        server.close();
-        resolve(code);
+        const url2 = new URL(req.url, "http://localhost");
+        const states = url2.searchParams.getAll("state");
+        const actual = Buffer.from(states[0] ?? ""), expected = Buffer.from(expectedState);
+        if (url2.pathname !== "/callback" || states.length !== 1 || actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
+          reply(res, 400, "Invalid login state. Continue in the original login window.");
+          return;
+        }
+        if (url2.searchParams.has("error")) {
+          reply(res, 400, "Authentication failed. Close this window and try again.");
+          finish(new Error("Cognito login was declined or failed"));
+          return;
+        }
+        const codes = url2.searchParams.getAll("code");
+        if (codes.length !== 1 || !codes[0] || codes[0].length > 4096 || /[\x00-\x20\x7f]/.test(codes[0])) {
+          reply(res, 400, "Missing or invalid authorization code.");
+          finish(new Error("Invalid OAuth callback"));
+          return;
+        }
+        reply(res, 200, "You can close this window and return to your MCP client.");
+        finish(void 0, codes[0]);
       });
-      server.listen(CALLBACK_PORT, () => {
-        console.error(`Waiting for login callback on localhost:${CALLBACK_PORT}...`);
+      server.requestTimeout = 1e4;
+      server.headersTimeout = 5e3;
+      server.timeout = 5e3;
+      server.maxConnections = 8;
+      server.on("error", () => finish(new Error("Could not open the local login callback. Close another login attempt and retry.")));
+      this.cancelLogin = cancel;
+      server.listen(this.dependencies.callbackPort ?? CALLBACK_PORT, "127.0.0.1", () => {
+        if (settled) {
+          server.close();
+          return;
+        }
+        listening = true;
+        const address = server.address();
+        if (!address || typeof address !== "object") {
+          finish(new Error("Local login callback unavailable"));
+          return;
+        }
+        timer = setTimeout(
+          () => finish(new Error("Login timed out after 2 minutes. Please try again.")),
+          this.dependencies.loginTimeoutMs ?? LOGIN_TIMEOUT_MS
+        );
+        ready({ redirectUri: `http://localhost:${address.port}/callback`, code, close: cancel });
       });
-      setTimeout(() => {
-        server.close();
-        reject(new Error("Login timed out after 2 minutes. Please try again."));
-      }, 12e4);
     });
   }
-  async exchangeCode(code, verifier, redirectUri) {
-    const body = new URLSearchParams2({
+  async acceptResponse(value, refreshToken, generation) {
+    if (!record2(value) || value.token_type !== "Bearer" || !tokenString(value.id_token) || !tokenString(value.access_token) || value.error !== void 0 || typeof value.expires_in !== "number" || !Number.isSafeInteger(value.expires_in) || value.expires_in <= 0 || value.expires_in > 86400 || value.refresh_token !== void 0 && !tokenString(value.refresh_token)) {
+      throw new Error("Invalid Cognito token response");
+    }
+    await this.saveTokens({
+      id_token: value.id_token,
+      access_token: value.access_token,
+      refresh_token: typeof value.refresh_token === "string" ? value.refresh_token : refreshToken,
+      expires_at: Math.floor(Date.now() / 1e3) + value.expires_in
+    }, generation);
+  }
+  async exchangeCode(code, verifier, redirectUri, generation) {
+    const body = new URLSearchParams({
       grant_type: "authorization_code",
       client_id: this.config.clientId,
       code,
       redirect_uri: redirectUri,
       code_verifier: verifier
     });
-    const resp = await this.postToken(body);
-    this.saveTokens({
-      id_token: resp.id_token,
-      access_token: resp.access_token,
-      refresh_token: resp.refresh_token || "",
-      expires_at: Math.floor(Date.now() / 1e3) + resp.expires_in
-    });
+    const value = await this.fetchJson(new URL("/oauth2/token", this.config.cognitoDomain), body);
+    this.assertGeneration(generation);
+    await this.acceptResponse(value, "", generation);
   }
-  async refresh() {
-    const body = new URLSearchParams2({
+  async refresh(generation) {
+    const refreshToken = this.tokens.refresh_token;
+    const body = new URLSearchParams({
       grant_type: "refresh_token",
       client_id: this.config.clientId,
-      refresh_token: this.tokens.refresh_token
+      refresh_token: refreshToken
     });
-    const resp = await this.postToken(body);
-    this.saveTokens({
-      id_token: resp.id_token,
-      access_token: resp.access_token,
-      refresh_token: resp.refresh_token || this.tokens.refresh_token,
-      expires_at: Math.floor(Date.now() / 1e3) + resp.expires_in
-    });
-  }
-  postToken(body) {
-    const url2 = new URL2(`${this.config.cognitoDomain}/oauth2/token`);
-    const data = body.toString();
-    return new Promise((resolve, reject) => {
-      const req = httpsRequest(
-        {
-          hostname: url2.hostname,
-          path: url2.pathname,
-          method: "POST",
-          headers: {
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Content-Length": Buffer.byteLength(data)
-          }
-        },
-        (res) => {
-          let chunks = "";
-          res.on("data", (c) => chunks += c);
-          res.on("end", () => {
-            try {
-              const parsed = JSON.parse(chunks);
-              if (parsed.error) reject(new Error(`${parsed.error}: ${parsed.error_description}`));
-              else resolve(parsed);
-            } catch {
-              reject(new Error(`Bad token response: ${chunks.slice(0, 200)}`));
-            }
-          });
-        }
-      );
-      req.on("error", reject);
-      req.write(data);
-      req.end();
-    });
+    const value = await this.fetchJson(new URL("/oauth2/token", this.config.cognitoDomain), body);
+    this.assertGeneration(generation);
+    await this.acceptResponse(value, refreshToken, generation);
   }
 };
 function openBrowser(url2) {
-  const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
-  const args = process.platform === "win32" ? ["/c", "start", "", url2] : [url2];
+  const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "rundll32" : "xdg-open";
+  const args = process.platform === "win32" ? ["url.dll,FileProtocolHandler", url2] : [url2];
   execFile(cmd, args, (err) => {
-    if (err) console.error(`Could not open browser. Open this URL manually:
+    if (err) console.error(`Could not open browser. Open this login URL manually:
   ${url2}`);
   });
 }
 function html(title, message) {
-  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title>
+  const escape2 = (value) => value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escape2(title)}</title>
 <style>body{font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#f6f6f8}
 .card{background:#fff;border-radius:16px;padding:48px;text-align:center;box-shadow:0 2px 12px rgba(0,0,0,.08)}
 h1{color:#3211d4;margin:0 0 12px}p{color:#666;margin:0}</style></head>
-<body><div class="card"><h1>${title}</h1><p>${message}</p></div></body></html>`;
+<body><div class="card"><h1>${escape2(title)}</h1><p>${escape2(message)}</p></div></body></html>`;
 }
 
 // src/api.ts
@@ -21034,7 +21196,7 @@ import { createReadStream, readFileSync as readFileSync2, statSync, realpathSync
 import { request as httpsRequest2 } from "node:https";
 import { basename, extname, isAbsolute, sep } from "node:path";
 import { homedir as homedir2 } from "node:os";
-import { URL as URL3 } from "node:url";
+import { URL as URL2 } from "node:url";
 
 // src/reading.ts
 var MAX_READING_BYTES = 32e3;
@@ -21068,15 +21230,15 @@ function readingOptions(args, kind) {
   }
   return { ...common, kind, source, startTime: args.startTime, endTime: args.endTime };
 }
-function record2(value) {
+function record3(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 function readingResult(value, options) {
-  if (!record2(value) || value.meetingId !== options.meetingId) {
+  if (!record3(value) || value.meetingId !== options.meetingId) {
     throw new Error("INVALID_READING_RESPONSE: meeting identity does not match");
   }
   const page = value.page;
-  if (!record2(page) || page.unit !== "unicode_code_points" || typeof page.complete !== "boolean" || (page.complete ? page.nextCursor !== null : typeof page.nextCursor !== "string" || !page.nextCursor.length || page.nextCursor.length > 2048)) {
+  if (!record3(page) || page.unit !== "unicode_code_points" || typeof page.complete !== "boolean" || (page.complete ? page.nextCursor !== null : typeof page.nextCursor !== "string" || !page.nextCursor.length || page.nextCursor.length > 2048)) {
     throw new Error("INVALID_READING_RESPONSE: missing or invalid page continuation");
   }
   let result = value;
@@ -21085,7 +21247,7 @@ function readingResult(value, options) {
     if (typeof value[field] !== "string") throw new Error("INVALID_READING_RESPONSE: missing section text");
     if (value.actionItemsAnalysis === void 0 || value.actionItemsAnalysis === null) {
       result = { ...value, actionItemsAnalysis: { status: "unknown" } };
-    } else if (!record2(value.actionItemsAnalysis) || !["unknown", "queued", "running", "failed", "succeeded"].includes(value.actionItemsAnalysis.status)) {
+    } else if (!record3(value.actionItemsAnalysis) || !["unknown", "queued", "running", "failed", "succeeded"].includes(value.actionItemsAnalysis.status)) {
       throw new Error("INVALID_READING_RESPONSE: invalid action analysis state");
     }
   } else if (!Array.isArray(value.chunks)) {
@@ -21459,7 +21621,7 @@ var TtobakApi = class {
     await this.post("/api/upload/complete", { meetingId, key, category: "audio", fileSize: size, mimeType: type });
   }
   meetingUrl(meetingId) {
-    return new URL3(`/meeting/${encodeURIComponent(meetingId)}`, this.baseUrl).toString();
+    return new URL2(`/meeting/${encodeURIComponent(meetingId)}`, this.baseUrl).toString();
   }
   requireLocalFiles() {
     if (this.options.allowLocalFiles === false) throw new Error("Local file access is unavailable over HTTP MCP");
@@ -21495,7 +21657,7 @@ var TtobakApi = class {
    * slow links must be allowed to finish). */
   async putFileStream(uploadUrl, filePath, size, contentType) {
     this.requireLocalFiles();
-    const url2 = new URL3(uploadUrl);
+    const url2 = new URL2(uploadUrl);
     if (url2.protocol !== "https:" || url2.username || url2.password) throw new Error("Invalid upload URL");
     return new Promise((resolve, reject) => {
       const source = createReadStream(filePath);
@@ -21533,7 +21695,7 @@ var TtobakApi = class {
     });
   }
   async putBytes(uploadUrl, data, contentType) {
-    const url2 = new URL3(uploadUrl);
+    const url2 = new URL2(uploadUrl);
     if (url2.protocol !== "https:" || url2.username || url2.password) throw new Error("Invalid upload URL");
     return new Promise((resolve, reject) => {
       const req = httpsRequest2(
@@ -21568,8 +21730,8 @@ var TtobakApi = class {
   async request(method, path, body, maxResponseBytes) {
     this.options.signal?.throwIfAborted();
     const idToken = await this.auth.getIdToken();
-    const url2 = new URL3(path, this.baseUrl);
-    if (url2.origin !== new URL3(this.baseUrl).origin) throw new Error("API origin cannot change");
+    const url2 = new URL2(path, this.baseUrl);
+    if (url2.origin !== new URL2(this.baseUrl).origin) throw new Error("API origin cannot change");
     maxResponseBytes ??= this.options.maxResponseBytes;
     const data = body ? JSON.stringify(body) : void 0;
     return new Promise((resolve, reject) => {
@@ -23029,7 +23191,7 @@ Retrieval is scoped to you -- only your own ttobak_ask queries can find this fil
         }
       }
       case "ttobak_logout": {
-        auth.logout?.();
+        await auth.logout?.();
         return text("Logged out. Tokens removed from ~/.ttobak/tokens.json");
       }
       default:
