@@ -324,3 +324,9 @@ For connection failures, first verify the executable path, target configuration,
 OAuth callback/scopes and current user login. Do not solve authorization failures
 by granting anonymous API access. See [API reference](../docs/API-SPEC.md) and
 [ADR-003](../docs/decisions/ADR-003-mcp-server-for-external-meeting-access.md).
+
+The dormant `deployment-auth.ts` module provides deployment/profile-bound,
+verified credential caches and current-API pool binding. Its tests exercise signed
+cached tokens, atomic private files, cancellation and alternate registered clients.
+Stdio still imports the existing auth module until the separate adapter/bundle
+cutover; installing this prerequisite does not activate cache isolation.
