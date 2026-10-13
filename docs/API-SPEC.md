@@ -397,6 +397,23 @@ if both full URLs still exceed the page budget, the download remains and
 `STALE_CURSOR`; callers can also pin other related reads with that field.
 These links do not claim extracted file text.
 
+Authenticated `GET /api/document-catalog` provides bounded metadata pages for
+MCP discovery. Omit `accountId` for personal and directly-shared documents; an
+explicit account requires current membership. Preserve `accountId` and `docType`
+while following the opaque `cursor`. `pageSize` is 1–50 (default 20); each call
+issues at most one DynamoDB query and never loads document bodies. Encoded JSON
+is capped at 10,000 bytes, including metadata previews and continuation.
+Empty filtered pages can have another cursor and must not be treated as complete.
+
+Rows revalidate their canonical metadata and current grants before publication.
+Cursors bind the caller, selection, current account grant and last returned
+item's metadata/grant. A changed anchor or revoked grant rejects continuation.
+The list is live (`consistency=current_per_item`), not a collection-wide
+snapshot. `metadataRevision` identifies metadata only; it is not a document-body
+revision for `expectedRevision`. Read the selected document to obtain that
+revision. `metadataTruncated` marks shortened field/link previews; body bytes,
+raw file keys and public-share capabilities are excluded from catalog responses.
+
 PPT/PPTX uploads trigger convert-doc and produce a docs-pdf/ sidecar. previewUrl
 points to the PDF while downloadUrl always points to the original. The converter
 records the actual GET's source ETag/version, rechecks the original, and replaces
@@ -586,6 +603,7 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | DELETE | `/api/accounts/{accountId}/documents/{docId}` | `accountHandler.DeleteDocument` |
 | POST | `/api/documents` | `documentHandler.PutDocument` |
 | GET | `/api/documents` | `documentHandler.ListDocuments` |
+| GET | `/api/document-catalog` | `documentCatalogHandler.Get` |
 | GET | `/api/documents/{docId}` | `documentHandler.GetDocument` |
 | GET | `/api/documents/{docId}/reading` | `documentReadingHandler.Get` |
 | GET | `/api/documents/{docId}/index-status` | `indexStatusHandler.PersonalDocument` |
