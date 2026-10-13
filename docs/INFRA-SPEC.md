@@ -215,6 +215,24 @@ without rerunning transcription/summary. Analysis state and five-minute leases
 live in `MEETING#{id}/ANALYSIS#actionItems`; expired work becomes retryable failure.
 The DLQ covers delivery, not downstream model failures.
 
+Core audio/crop, image, transcript, multipart and optional slide-conversion
+EventBridge targets retain exhausted delivery failures in the Gateway-owned
+`ttobak-pipeline-delivery-failures` queue. Transcribe, summarize, process-image and
+optional convert-doc retain exhausted asynchronous execution records in the
+separate `ttobak-pipeline-execution-failures` queue, preserving two Lambda retries
+and the six-hour event-age default. Both queues use SSE-SQS, require TLS, retain
+seven days and have no automatic consumer. Gateway-owned exact queue-send
+policies avoid a reverse dependency on AiStack roles.
+
+Backlog/age, worker failure/drop/throttle and EventBridge delivery alarms are
+declared in `PipelineFailures`. Existing QA/index/action/saved-summary DLQs retain
+their behavior and gain queue alarms. Notifications require the explicit
+`PipelineAlarmTopicArn` parameter and separately verified topic policy/subscriber
+delivery; the empty default reports `UNCONFIGURED`. The inspected replay tool
+defaults to dry run, preserves original events/run IDs and never deletes messages.
+See [failure retention and replay](runbooks/pipeline-failure-recovery.md) for
+limits, operator prerequisites and required live acceptance.
+
 ### Attachment extraction
 
 The app enables the DocumentExtraction construct. Its worker validates current

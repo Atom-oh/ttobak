@@ -50,6 +50,11 @@ to recover from saved sources. Before deployment, an operator must start a NEW r
    afresh. Never reset the budget per attempt or rebind old output.
 
 Inspect Lambda Errors and DynamoDB conflict codes; the UI sees `status=error`.
+GatewayStack now declares separate core EventBridge delivery and Lambda execution
+failure queues plus alarms; notification routing and actual recovery require
+live acceptance. Use the [pipeline recovery runbook](pipeline-failure-recovery.md)
+to inspect retained events and validate a dry run. A terminal summary still
+requires `/resummary`; the replay tool never resets its budget or invents a run.
 Rollback: revert/redeploy, preserving readers/workers and ambiguous spills.
 Bounds: 8 MiB/source, 1 MiB snapshot, 300 KiB row, 22 objects, 100 checks.
 [ADR-040](../decisions/ADR-040-guarded-summary-publication.md).
