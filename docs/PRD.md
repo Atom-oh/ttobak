@@ -68,9 +68,13 @@ must be verified through public endpoints before claiming cutover. See the
 
 ## Remaining limitations and historical goals
 
-The current export handler's `pdf` branch is a text-download placeholder; do not
-claim a generated PDF merely because the frontend button is labeled PDF. Document
-PPT/PPTX-to-PDF preview conversion is implemented in a different artifact.
+The meeting export handler generates a real PDF with embedded Korean glyphs,
+the authorized summary, saved notes and selected transcript. Unsupported glyphs
+or document limits fail explicitly; Markdown remains available. Its five-minute
+download capability and tagged temporary file have separate lifetimes. The
+current and noncurrent S3 lifecycle windows are separate and asynchronous; a
+versioned body can survive current expiration. The rule requires deployment verification.
+Document PPT/PPTX-to-PDF preview conversion uses a different artifact.
 
 Mac crash leftovers lack Cognito ownership binding. Manual QA search can transmit
 model-composed meeting-derived queries externally. QA TTL attributes do not imply

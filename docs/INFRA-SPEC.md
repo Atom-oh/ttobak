@@ -7,6 +7,13 @@ Root security requirements remain requirements even where existing IaC has a gap
 
 ## Stack ownership
 
+Meeting PDF exports are tagged temporary objects under the existing `files/`
+download prefix. StorageStack declares seven-day current/noncurrent expiration
+only for `ttobak-artifact=meeting-pdf-export`; other files remain outside this
+rule. Noncurrent age starts at supersession, so versioned bodies can survive
+current expiration; physical cleanup is asynchronous. The declaration and synthesis
+do not establish that the rule is deployed.
+
 | Stack | Role | Dependencies explicitly declared in the app |
 |---|---|---|
 | TtobakWebSearchGatewayStack | AgentCore Web Search Gateway, us-east-1 | None |

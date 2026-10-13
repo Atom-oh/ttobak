@@ -27,6 +27,21 @@ describe('StorageStack', () => {
     template = Template.fromStack(stack);
   });
 
+  test('only tagged temporary meeting PDFs expire, leaving canonical files unchanged', () => {
+    template.hasResourceProperties('AWS::S3::Bucket', {
+      LifecycleConfiguration: {
+        Rules: Match.arrayWith([{
+          Id: 'ExpireMeetingPDFExports',
+          Status: 'Enabled',
+          ExpirationInDays: 7,
+          NoncurrentVersionExpiration: { NoncurrentDays: 7 },
+          Prefix: 'files/',
+          TagFilters: [{ Key: 'ttobak-artifact', Value: 'meeting-pdf-export' }],
+        }]),
+      },
+    });
+  });
+
   test('OAC bucket policy is scoped to the 5 download prefixes, excluding transcripts/*', () => {
     template.hasResourceProperties('AWS::S3::BucketPolicy', {
       PolicyDocument: Match.objectLike({

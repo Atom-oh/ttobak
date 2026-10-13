@@ -188,6 +188,32 @@ final path segment equals `fileId` exactly, searching every listing page. An ID
 with a path separator or `..` returns 400, no match 404, and several objects with
 the same name 409 (nothing is deleted). Server errors return a generic message.
 
+### Meeting PDF export
+
+Authenticated `POST /api/meetings/{meetingId}/export` with `{"format":"pdf"}`
+returns a `.pdf` filename and five-minute signed download URL, not text under a
+PDF label. Owners and currently authorized recipients export their current
+authorized view. Source and access are rechecked before storage and before the
+URL is returned; changes return 409 or an inaccessible-resource response.
+
+The PDF embeds the licensed Pretendard font and contains the title, date,
+participants, saved notes, HTML-to-text summary and selected A/B transcript.
+Input is limited to 2MiB of UTF-8 text, 200 pages and 8MiB of PDF output; the request
+body is capped at 4KiB. Limits return 413, unsupported glyphs 422, and generation,
+storage or signing failures return a generic error. No successful export silently
+drops unsupported text. Markdown export remains available.
+
+Temporary artifacts use fresh `files/{callerId}/{meetingId}/export_{uuid}.pdf`
+keys, the existing private bucket/download signer and an attachment disposition.
+The `ttobak-artifact=meeting-pdf-export` tag limits the seven-day lifecycle rule
+to these exports. Current versions become eligible after seven days; the
+noncurrent seven-day clock starts when a version is superseded. A body can remain
+after current-version expiration until that separate window and asynchronous
+cleanup finish. This does not extend the download URL or delete canonical records.
+Deploy and verify the StorageStack lifecycle rule before claiming retention is
+active. Meeting deletion or grant revocation does not immediately revoke an
+already issued five-minute URL.
+
 ### Bounded meeting reading
 
 Bounded `section=notes` pages include the exact `notesRevision` (empty for legacy
