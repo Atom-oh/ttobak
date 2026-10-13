@@ -150,6 +150,15 @@ func TestMeetingDetailKeepsLegacyRawSpeechAndVersionedSegments(t *testing.T) {
 				if json.Unmarshal(detail.TranscriptionV2, &current) != nil || len(current) != len(segments) {
 					t.Fatal("versioned response dropped speech")
 				}
+				var fields []map[string]interface{}
+				if json.Unmarshal(detail.TranscriptionV2, &fields) != nil {
+					t.Fatal("invalid versioned segment JSON")
+				}
+				for _, segment := range fields {
+					if segment["untimed"] == true && (segment["startTime"] != nil || segment["endTime"] != nil) {
+						t.Fatal("untimed speech leaked zero timestamps")
+					}
+				}
 				for i, segment := range current {
 					if segment != segments[i] {
 						t.Fatal("versioned response changed speech, labels or timing")

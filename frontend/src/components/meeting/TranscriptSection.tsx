@@ -40,12 +40,12 @@ function groupBySpeaker(segments: TranscriptSegment[]): SpeakerGroup[] {
     const last = groups[groups.length - 1];
     if (last && last.speaker === seg.speaker && last.untimed === !!seg.untimed) {
       last.segments.push(seg);
-      last.endTime = seg.endTime;
+      last.endTime = seg.untimed ? 0 : seg.endTime;
     } else {
       groups.push({
         speaker: seg.speaker,
-        startTime: seg.startTime,
-        endTime: seg.endTime,
+        startTime: seg.untimed ? 0 : seg.startTime,
+        endTime: seg.untimed ? 0 : seg.endTime,
         untimed: !!seg.untimed,
         segments: [seg],
       });

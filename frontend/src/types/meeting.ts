@@ -99,16 +99,18 @@ export interface ActionItemsResponse {
   analysis: ActionItemsAnalysis;
 }
 
-export interface TranscriptSegment {
+interface TranscriptSegmentBase {
   id: string;
   speaker: string;
   speakerInitials?: string;
   timestamp: string;
   text: string;
-  startTime: number;
-  endTime: number;
-  untimed?: boolean;
 }
+
+export type TranscriptSegment = TranscriptSegmentBase & (
+  | { untimed?: false; startTime: number; endTime: number }
+  | { untimed: true; startTime?: never; endTime?: never }
+);
 
 export interface Attachment {
   id: string;
