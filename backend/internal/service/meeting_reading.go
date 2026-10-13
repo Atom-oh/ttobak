@@ -130,6 +130,11 @@ func (s *MeetingReadingService) transcript(ctx context.Context, m *model.Meeting
 			return nil, readingDataError(err)
 		}
 		m.TranscriptSegments = raw
+		if source == "B" {
+			m.TranscriptB = text
+		} else {
+			m.TranscriptA = text
+		}
 		if model.TranscriptTimingMatches(m, source) {
 			verified = readingWindows(text, raw)
 		}
