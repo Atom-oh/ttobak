@@ -109,12 +109,6 @@ type WhisperMetadata struct {
 	Language        string                   `json:"language"`
 	DurationSeconds float64                  `json:"duration_seconds"`
 	Segments        []service.WhisperSegment `json:"segments"`
-	Diarization     *WhisperDiarization      `json:"diarization,omitempty"`
-}
-
-type WhisperDiarization struct {
-	Enabled          bool `json:"enabled"`
-	DetectedSpeakers int  `json:"num_speakers_detected"`
 }
 
 // SpeakerLabels represents the speaker diarization results
@@ -159,7 +153,6 @@ type TranscriptSegmentOut struct {
 	Text      string  `json:"text"`
 	StartTime float64 `json:"startTime"`
 	EndTime   float64 `json:"endTime"`
-	Untimed   bool    `json:"untimed,omitempty"`
 }
 
 // assignSegmentIDs gives every segment a deterministic, stable identifier the
@@ -172,11 +165,7 @@ func assignSegmentIDs(segs []TranscriptSegmentOut) {
 		if segs[i].ID != "" {
 			continue
 		}
-		if segs[i].Untimed {
-			segs[i].ID = fmt.Sprintf("untimed-%d", i)
-		} else {
-			segs[i].ID = fmt.Sprintf("seg-%d", int64(segs[i].StartTime*1000))
-		}
+		segs[i].ID = fmt.Sprintf("seg-%d", int64(segs[i].StartTime*1000))
 	}
 }
 
@@ -243,11 +232,11 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	}
 
 	// Single/legacy transcript: full processing + summary
-	return handleSingleTranscript(ctx, bucket, key, event.Detail.Object.ETag)
+	return handleSingleTranscript(ctx, bucket, key)
 }
 
 // handleSingleTranscript processes a single (non-part) transcript: parse, refine, save, summarize
-func handleSingleTranscript(ctx context.Context, bucket, key string, eventETags ...string) error {
+func handleSingleTranscript(ctx context.Context, bucket, key string) error {
 	meetingID := extractMeetingIDFromTranscriptKey(key)
 	if meetingID == "" {
 		log.Printf("Could not extract meeting ID from key: %s", key)
@@ -261,7 +250,7 @@ func handleSingleTranscript(ctx context.Context, bucket, key string, eventETags 
 		if err != nil || meeting == nil {
 			return err
 		}
-		if handled, retryErr := resumeSummaryRetry(ctx, meeting, repo.MetadataView(), generateResumedSummary); handled {
+		if handled, retryErr := resumeSummaryRetry(ctx, meeting, repo.MetadataView(), generateSummary); handled {
 			return retryErr
 		}
 		// Whitelist guard — process when status is `transcribing`, or when
@@ -303,30 +292,35 @@ func handleSingleTranscript(ctx context.Context, bucket, key string, eventETags 
 		}
 	}
 
-	if err != nil || meeting == nil {
-		return errors.New("meeting metadata unavailable before transcription")
-	}
-	source := "A"
-	if strings.Contains(key, "-nova.json") {
-		source = "B"
-	}
-	snapshot, err := repo.CaptureTranscriptUpdate(ctx, meeting.UserID, meetingID, source)
-	if err != nil || snapshot == nil {
-		return errors.Join(err, errors.New("transcript snapshot unavailable"))
-	}
-	if snapshot.Meeting.Status != meeting.Status {
+	isNova := strings.Contains(key, "-nova.json")
+
+	transcript, segments, whisperSegments, audioDuration, err := downloadAndParseTranscript(ctx, bucket, key)
+	if err != nil {
+		log.Printf("Failed to parse transcript: %v", err)
+		setMeetingError(ctx, meetingID)
 		return nil
 	}
-	isNova := source == "B"
-	parsed, err := downloadAndParseTranscript(ctx, bucket, key)
-	if err != nil {
-		return errors.Join(err, failTranscriptSnapshot(ctx, snapshot))
+
+	// Refine Whisper transcript using Sonnet if Whisper segments are available
+	if len(whisperSegments) > 0 && len(segments) == 0 {
+		log.Printf("Refining %d Whisper segments for meeting %s", len(whisperSegments), meetingID)
+		refinedText, refinedSegs, refineErr := bedrockService.RefineTranscript(ctx, whisperSegments)
+		if refineErr != nil {
+			log.Printf("Failed to refine transcript (using raw): %v", refineErr)
+		} else {
+			transcript = refinedText
+			segments = make([]TranscriptSegmentOut, len(refinedSegs))
+			for i, rs := range refinedSegs {
+				segments[i] = TranscriptSegmentOut{
+					Speaker:   rs.Speaker,
+					Text:      rs.Text,
+					StartTime: rs.StartTime,
+					EndTime:   rs.EndTime,
+				}
+			}
+			log.Printf("Refined transcript: %d segments -> %d clean segments", len(whisperSegments), len(refinedSegs))
+		}
 	}
-	if len(eventETags) > 0 && eventETags[0] != "" && strings.Trim(eventETags[0], "\"") != strings.Trim(parsed.Objects[0].ETag, "\"") {
-		return nil // superseded S3 delivery
-	}
-	refineParsedTranscript(ctx, parsed)
-	segments, whisperSegments, audioDuration := parsed.Segments, parsed.Whisper, parsed.Duration
 
 	// Same fallback chain as the multi-part merge path (merge.go): the raw
 	// audioDuration comes only from whisper_metadata.duration_seconds, which is
@@ -357,12 +351,37 @@ func handleSingleTranscript(ctx context.Context, bucket, key string, eventETags 
 		log.Printf("Meeting %s: no usable duration source; using 0 (duration will not be persisted)", meetingID)
 	}
 
-	parsed.Duration = resolvedDuration
-	current, err := beginTranscriptSummary(ctx, snapshot, parsed, isNova)
-	if err != nil || current == nil {
-		return err
+	err = updateMeetingTranscript(ctx, meetingID, transcript, segments, isNova, resolvedDuration)
+	if err != nil {
+		log.Printf("Failed to update meeting with transcript: %v", err)
+		setMeetingError(ctx, meetingID)
+		return nil
 	}
-	return generateClaimedSummary(ctx, current, buildLinkedMeetingContext(ctx, current), false)
+
+	log.Printf("Updated meeting %s with transcript (nova=%v)", meetingID, isNova)
+
+	// Re-fetch meeting for summary generation. The earlier `meeting` from the
+	// status guard at the top of this function may be nil (GSI eventual
+	// consistency) — we shadow it here and the explicit nil/error returns
+	// below guarantee `meeting` is non-nil before any field access.
+	meeting, err = repo.GetMeetingByID(ctx, meetingID)
+	if err != nil || meeting == nil {
+		log.Printf("Failed to get meeting via GSI, retrying after 1s: %v", err)
+		time.Sleep(1 * time.Second)
+		meeting, err = repo.GetMeetingByID(ctx, meetingID)
+		if err != nil || meeting == nil {
+			log.Printf("Still failed to get meeting: %v", err)
+			return nil
+		}
+	}
+
+	if transcript == "" {
+		return nil
+	}
+
+	// `meeting` is guaranteed non-nil here by the retry block above.
+	priorContext := buildLinkedMeetingContext(ctx, meeting)
+	return generateSummary(ctx, meeting, priorContext)
 }
 
 // handlePartTranscript increments the parts-ready counter and emits AllPartsTranscribed when all parts are done
@@ -453,7 +472,7 @@ func handleAllPartsTranscribed(ctx context.Context, detail *model.AllPartsTransc
 		log.Printf("Failed to get meeting %s: %v", meetingID, err)
 		return nil
 	}
-	if handled, retryErr := resumeSummaryRetry(ctx, meeting, repo.MetadataView(), generateResumedSummary); handled {
+	if handled, retryErr := resumeSummaryRetry(ctx, meeting, repo.MetadataView(), generateSummary); handled {
 		return retryErr
 	}
 
@@ -483,22 +502,38 @@ func handleAllPartsTranscribed(ctx context.Context, detail *model.AllPartsTransc
 		log.Printf("Reprocessing stuck meeting %s (status=summarizing since %s)", meetingID, meeting.UpdatedAt)
 	}
 
-	snapshot, err := repo.CaptureTranscriptUpdate(ctx, userID, meetingID)
-	if err != nil || snapshot == nil {
-		return errors.Join(err, errors.New("transcript snapshot unavailable"))
-	}
-	if snapshot.Meeting.Status != meeting.Status {
+	transcript, segments, totalDuration, err := mergePartTranscripts(ctx, detail.Bucket, meetingID, detail.PartCount)
+	if err != nil {
+		log.Printf("Failed to merge transcripts for meeting %s: %v", meetingID, err)
+		setMeetingError(ctx, meetingID)
 		return nil
 	}
-	parsed, err := mergePartTranscripts(ctx, detail.Bucket, meetingID, detail.PartCount)
+
+	err = updateMeetingTranscript(ctx, meetingID, transcript, segments, false, totalDuration)
 	if err != nil {
-		return errors.Join(err, failTranscriptSnapshot(ctx, snapshot))
+		log.Printf("Failed to save merged transcript for meeting %s: %v", meetingID, err)
+		setMeetingError(ctx, meetingID)
+		return nil
 	}
-	current, err := beginTranscriptSummary(ctx, snapshot, parsed, false)
-	if err != nil || current == nil {
-		return err
+
+	log.Printf("Saved merged transcript for meeting %s: %d chars, %d segments", meetingID, len(transcript), len(segments))
+
+	// Flip status to `summarizing` BEFORE the archival S3 write so the
+	// EventBridge re-trigger from `PutObject(transcripts/{id}.json)`
+	// (which routes to `handleSingleTranscript`) is rejected by that
+	// path's `status == transcribing` whitelist guard. Without this
+	// reorder the archival write would replay the entire single-file
+	// pipeline (refine + save + summarize) on top of the already-merged
+	// content. Errors here must abort so we don't write the archive
+	// under an inconsistent status.
+	statusFields := map[string]interface{}{"status": model.StatusSummarizing}
+	if !meeting.SummaryRetryPending || meeting.Status != model.StatusSummarizing {
+		statusFields["summaryRetryAttempts"], statusFields["summaryRetryPending"], statusFields["summaryConflictCode"] = 0, false, ""
 	}
-	transcript, segments := parsed.Text, parsed.Segments
+	if statusErr := repo.UpdateMeetingFields(ctx, userID, meetingID, statusFields); statusErr != nil {
+		log.Printf("Failed to set status=summarizing before archive for meeting %s: %v", meetingID, statusErr)
+		return fmt.Errorf("set summarizing status failed (retrying): %w", statusErr)
+	}
 
 	// Archive the merged transcript to S3 (ADR-014 design.md §5.1 step 7).
 	// AudioPlayer uses presigned URLs from `audioKeys` so playback doesn't
@@ -509,29 +544,19 @@ func handleAllPartsTranscribed(ctx context.Context, detail *model.AllPartsTransc
 		log.Printf("Non-fatal: failed to archive merged transcript for meeting %s: %v", meetingID, archiveErr)
 	}
 
-	return generateClaimedSummary(ctx, current, buildLinkedMeetingContext(ctx, current), false)
+	// Re-fetch meeting to get updated state
+	meeting, err = repo.GetMeeting(ctx, userID, meetingID)
+	if err != nil || meeting == nil {
+		log.Printf("Failed to re-fetch meeting %s after merge: %v", meetingID, err)
+		return nil
+	}
+
+	priorContext := buildLinkedMeetingContext(ctx, meeting)
+	return generateSummary(ctx, meeting, priorContext)
 }
 
 // generateSummary runs the full Bedrock pipeline: summary, action items, tags, sentiment, KB export
 func generateSummary(ctx context.Context, meeting *model.Meeting, priorContext string) error {
-	return generateSummaryRun(ctx, meeting, priorContext, "", false)
-}
-
-func generateResumedSummary(ctx context.Context, meeting *model.Meeting, priorContext string) error {
-	return generateSummaryRun(ctx, meeting, priorContext, meeting.SummarizeRetryClaimedAt, true)
-}
-
-func generateClaimedSummary(ctx context.Context, meeting *model.Meeting, priorContext string, resumed bool) error {
-	err := generateSummaryRun(ctx, meeting, priorContext, meeting.SummarizeRetryClaimedAt, resumed)
-	if err == nil {
-		return nil
-	}
-	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer cancel()
-	return errors.Join(err, repo.ReleaseSummaryRetryClaim(cleanup, meeting.UserID, meeting.MeetingID, meeting.SummarizeRetryClaimedAt))
-}
-
-func generateSummaryRun(ctx context.Context, meeting *model.Meeting, priorContext, claim string, resumed bool) error {
 	retry := meeting.SummaryRetryPending && meeting.Status == model.StatusSummarizing
 	meetingID := meeting.MeetingID
 	userID := meeting.UserID
@@ -548,23 +573,12 @@ func generateSummaryRun(ctx context.Context, meeting *model.Meeting, priorContex
 	if !retry {
 		fields["summaryRetryAttempts"], fields["summaryRetryPending"], fields["summaryConflictCode"] = 0, false, ""
 	}
-	if claim == "" {
-		if statusErr := repo.UpdateMeetingFields(ctx, userID, meetingID, fields); statusErr != nil {
-			log.Printf("Failed to set status=summarizing for meeting %s: %v", meetingID, statusErr)
-			return fmt.Errorf("set summarizing status failed (retrying): %w", statusErr)
-		}
+	if statusErr := repo.UpdateMeetingFields(ctx, userID, meetingID, fields); statusErr != nil {
+		log.Printf("Failed to set status=summarizing for meeting %s: %v", meetingID, statusErr)
+		return fmt.Errorf("set summarizing status failed (retrying): %w", statusErr)
+	}
 
-	}
-	var content string
-	var err error
-	if claim != "" {
-		content, err = bedrockService.SummarizeClaimedTranscript(ctx, meetingID, userID, priorContext, claim, resumed)
-	} else {
-		content, err = bedrockService.SummarizeTranscript(ctx, meetingID, userID, priorContext)
-	}
-	if errors.Is(err, service.ErrSummaryHumanContentPreserved) {
-		return nil
-	}
+	content, err := bedrockService.SummarizeTranscript(ctx, meetingID, userID, priorContext)
 	if err != nil {
 		if retry {
 			return err // The owning retry claim decides pending versus terminal.
@@ -848,28 +862,43 @@ func archiveMergedTranscript(ctx context.Context, bucket, meetingID, transcript 
 // transcription time in this field, since the field's meaning changed
 // without a rename; there is no reliable way to detect that from the JSON
 // alone, so such historical transcripts may report an inaccurate value here.
-func downloadAndParseTranscript(ctx context.Context, bucket, key string) (*parsedTranscript, error) {
-	result, err := s3Client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String(key)})
+func downloadAndParseTranscript(ctx context.Context, bucket, key string) (string, []TranscriptSegmentOut, []service.WhisperSegment, float64, error) {
+	result, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
 	if err != nil {
-		return nil, err
+		return "", nil, nil, 0, fmt.Errorf("failed to download transcript: %w", err)
 	}
 	defer result.Body.Close()
-	const maxTranscriptBytes = 16 * 1024 * 1024
-	data, err := io.ReadAll(io.LimitReader(result.Body, maxTranscriptBytes+1))
-	if err != nil || len(data) > maxTranscriptBytes {
-		return nil, errors.New("transcript read failed or exceeded limit")
+
+	data, err := io.ReadAll(result.Body)
+	if err != nil {
+		return "", nil, nil, 0, fmt.Errorf("failed to read transcript: %w", err)
 	}
-	var source TranscribeResult
-	if json.Unmarshal(data, &source) != nil || len(source.Results.Transcripts) == 0 {
-		return nil, errors.New("invalid transcript source")
+
+	var transcribeResult TranscribeResult
+	if err := json.Unmarshal(data, &transcribeResult); err != nil {
+		return "", nil, nil, 0, fmt.Errorf("failed to parse transcript JSON: %w", err)
 	}
-	parsed := &parsedTranscript{Text: source.Results.Transcripts[0].Transcript, Segments: extractSpeakerSegments(&source),
-		Objects: []model.SummaryObject{{Bucket: bucket, Key: key, ETag: aws.ToString(result.ETag), VersionID: aws.ToString(result.VersionId)}}}
-	parsed.Quality = parsedTranscriptQuality(&source, parsed.Segments)
-	if source.WhisperMetadata != nil {
-		parsed.Whisper, parsed.Duration = source.WhisperMetadata.Segments, source.WhisperMetadata.DurationSeconds
+
+	if len(transcribeResult.Results.Transcripts) == 0 {
+		return "", nil, nil, 0, fmt.Errorf("no transcript found in result")
 	}
-	return parsed, nil
+
+	transcript := transcribeResult.Results.Transcripts[0].Transcript
+	segments := extractSpeakerSegments(&transcribeResult)
+
+	var whisperSegments []service.WhisperSegment
+	var durationSeconds float64
+	if transcribeResult.WhisperMetadata != nil {
+		if len(transcribeResult.WhisperMetadata.Segments) > 0 {
+			whisperSegments = transcribeResult.WhisperMetadata.Segments
+		}
+		durationSeconds = transcribeResult.WhisperMetadata.DurationSeconds
+	}
+
+	return transcript, segments, whisperSegments, durationSeconds, nil
 }
 
 func extractSpeakerSegments(result *TranscribeResult) []TranscriptSegmentOut {
@@ -898,13 +927,8 @@ func extractSpeakerSegments(result *TranscribeResult) []TranscriptSegmentOut {
 			continue
 		}
 
-		startTime, startErr := strconv.ParseFloat(seg.StartTime, 64)
-		endTime, endErr := strconv.ParseFloat(seg.EndTime, 64)
-		if startErr != nil || endErr != nil || math.IsNaN(startTime) || math.IsNaN(endTime) ||
-			math.IsInf(startTime, 0) || math.IsInf(endTime, 0) || startTime < 0 || endTime <= startTime ||
-			len(segments) > 0 && startTime < segments[len(segments)-1].StartTime {
-			return nil // Keep readable source text, without fabricated timing.
-		}
+		startTime, _ := strconv.ParseFloat(seg.StartTime, 64)
+		endTime, _ := strconv.ParseFloat(seg.EndTime, 64)
 
 		segments = append(segments, TranscriptSegmentOut{
 			Speaker:   seg.SpeakerLabel,
@@ -980,6 +1004,43 @@ func extractPartInfo(key string) (meetingID string, partIndex int, ok bool) {
 		return "", 0, false
 	}
 	return meetingID, partIndex, true
+}
+
+func updateMeetingTranscript(ctx context.Context, meetingID, transcript string, segments []TranscriptSegmentOut, isNova bool, durationSeconds float64) error {
+	meeting, err := repo.GetMeetingByID(ctx, meetingID)
+	if err != nil {
+		return err
+	}
+	if meeting == nil {
+		return fmt.Errorf("meeting not found")
+	}
+
+	fields := map[string]interface{}{}
+	if isNova {
+		fields["transcriptB"] = transcript
+	} else {
+		fields["transcriptA"] = transcript
+	}
+
+	if len(segments) > 0 {
+		// ADR-013: ensure every segment carries a stable ID so the AI summary
+		// can deep-link into the transcript via `transcript://{id}`.
+		assignSegmentIDs(segments)
+		segJSON, err := json.Marshal(segments)
+		if err == nil {
+			fields["transcriptSegments"] = string(segJSON)
+			log.Printf("Saved %d speaker segments for meeting %s", len(segments), meetingID)
+		}
+	}
+
+	// Single choke point both transcript paths (single + multi-part merge) pass
+	// through, which is why duration is persisted here rather than at call sites.
+	// The > 0 guard ensures a zero never overwrites a previously-stored good value.
+	if durationSeconds > 0 {
+		fields["duration"] = int(math.Round(durationSeconds))
+	}
+
+	return repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, fields)
 }
 
 func main() {

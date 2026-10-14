@@ -95,9 +95,9 @@ func TestRefinementFailuresNeverExposeSourceOrProviderText(t *testing.T) {
 				case "provider":
 					wantCode = "model_failure"
 				case "empty":
-					output, wantCode = "[]", "invalid_schema"
+					output, wantCode = "[]", "empty_result"
 				case "speaker":
-					output = `[{"speaker":"spk_0","text":"` + canary + `","startTime":0,"endTime":2,"sourceIds":[0,1]}]`
+					output = `[{"speaker":"spk_0","text":"` + canary + `","startTime":0,"endTime":2}]`
 					wantCode = "speaker_merge"
 				case "panic":
 					wantCode = "panic"

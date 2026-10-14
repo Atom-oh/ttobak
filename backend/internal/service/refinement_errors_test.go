@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 	"testing"
 
@@ -24,13 +23,11 @@ func TestRefinementSDKClassesAreClosedAndDiscardPrivateCauses(t *testing.T) {
 	for _, test := range cases {
 		for _, wrapped := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/wrapped=%v", test.class, wrapped), func(t *testing.T) {
-				logs := capturePrivacyLogs(t)
 				var cause error = &smithy.GenericAPIError{Code: test.code, Message: canary}
 				if wrapped {
 					cause = &smithy.OperationError{ServiceID: canary, OperationName: canary, Err: cause}
 				}
 				safe := sanitizedRefinementModelError(cause)
-				logRefinementFallback(0, 1, fmt.Errorf("%s: %w", canary, safe))
 				if !errors.Is(safe, errRefinementModel) || errors.Is(safe, cause) ||
 					strings.Contains(safe.Error(), canary) || strings.Contains(safe.Error(), test.code) {
 					t.Fatal("sanitized model error retained a provider cause/code/message")
@@ -39,9 +36,8 @@ func TestRefinementSDKClassesAreClosedAndDiscardPrivateCauses(t *testing.T) {
 				if errors.As(safe, &original) {
 					t.Fatal("provider error escaped through Unwrap")
 				}
-				if strings.Contains(logs.String(), canary) || strings.Contains(logs.String(), test.code) ||
-					!strings.Contains(logs.String(), "code=model_failure class="+test.class) {
-					t.Fatal("SDK diagnostic was not closed and redacted")
+				if refinementFailureClass(safe) != test.class {
+					t.Fatal("SDK failure class was not closed")
 				}
 			})
 		}
@@ -61,18 +57,5 @@ func TestRefinementSDKClassesAreClosedAndDiscardPrivateCauses(t *testing.T) {
 	}
 	if refinementFailureClass(&refinementModelError{class: 255}) != "other" {
 		t.Fatal("unknown class did not fail closed")
-	}
-}
-
-func TestRefinementInvocationRetainsOnlySafeSDKClass(t *testing.T) {
-	logs := capturePrivacyLogs(t)
-	svc := summaryTestService(noteSourceHTTPClient(func(*http.Request) (*http.Response, error) {
-		return nil, &smithy.GenericAPIError{Code: "AccessDeniedException", Message: "SYNTHETIC_PRIVATE_TRANSPORT_MESSAGE"}
-	}))
-	_, _, quality, err := svc.RefineTranscriptWithQuality(context.Background(), []WhisperSegment{{Start: 0, End: 1, Text: "synthetic source"}})
-	if err != nil || !quality.Degraded || quality.Refinement != "raw" ||
-		!strings.Contains(logs.String(), "code=model_failure class=access_denied") ||
-		strings.Contains(logs.String(), "SYNTHETIC_PRIVATE") {
-		t.Fatal("actual invocation lost safe classification or raw fallback")
 	}
 }

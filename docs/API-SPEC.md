@@ -204,23 +204,13 @@ The repository provides typed ASR snapshot, atomic transcript/summary-claim and
 presence-and-bytes content-fence primitives. The claimed-summary entry point
 checks ownership before model evidence and can end an owned batch as `done` with
 `HUMAN_CONTENT_PRESERVED` without replacing human content or recording fresh
-model-success coverage. Workers now publish transcript/quality and an owned
-summary claim atomically. A human transcript edit during refinement discards old
-output and starts from the current saved source; a competing audio/processing run
-owns its own delivery. Fresh claims reset the two-retry budget; resumed claims
-retain it and verify ownership again before model evidence. Reader deployment
-must precede writer deployment; drain older writers before relying on revisions.
-Legacy fixed-key S3 checks are preflight checks rather than an atomic S3/DynamoDB
-fence. Code installation does not prove deployed acceptance.
-
-Whisper refinement requires a complete `end_turn` response, strict segment schema,
-finite source-bound times and each input `sourceIds` index exactly once in order.
-Missing/duplicate/foreign IDs, incomplete output or invalid schema falls back to
-raw speech for that chunk. Blank segments are counted and omitted; rounded
-zero-length segments widen by 0.01 seconds. Other invalid times retain every word
-as explicitly untimed speech alongside valid timed speech. Raw transcript JSON
-is capped at 16 MiB, each chunk at 2,048 segments/128 KiB of text, and responses
-have bounded decoding. Structural coverage does not attest semantic accuracy.
+model-success coverage. Production transcription workers and their active
+refinement path remain unchanged in this reader-first stage; the new claim path
+is not activated. Complete reader deployment must precede strict refinement and
+worker publication. Drain older writers before relying on server revisions:
+older binaries cannot stamp them, and legacy fixed-key S3 checks remain preflight
+checks rather than an atomic S3/DynamoDB fence. Code installation is not runtime
+acceptance of the later worker rollout.
 
 Conditional transcript/speaker edits publish new immutable
 `transcripts/{meetingId}/{field}.{32-lowercase-hex}.txt` references only with a
