@@ -38,7 +38,7 @@ func resumeSummaryRetry(ctx context.Context, meeting *model.Meeting, store summa
 	if current.UserID != meeting.UserID || current.MeetingID != meeting.MeetingID {
 		return release(fmt.Errorf("summary retry source identity changed"))
 	}
-	if current.Status != model.StatusSummarizing {
+	if current.Status != model.StatusSummarizing || !current.SummaryRetryPending || current.SummarizeRetryClaimedAt != claim {
 		return release(nil)
 	}
 	err = run(ctx, current, buildLinkedMeetingContext(ctx, current))

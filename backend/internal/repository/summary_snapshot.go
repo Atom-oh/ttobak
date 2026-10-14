@@ -44,7 +44,11 @@ func summaryCheck(pk, sk string, item map[string]types.AttributeValue, fields []
 		value, exists := item[name]
 		field := model.SummaryValue{Present: exists}
 		if exists {
-			if err := attributevalue.Unmarshal(value, &field.Value); err != nil {
+			// A number set must be pinned as stored: decoding it into an interface yields
+			// []float64, which re-marshals as a list and can never equal the stored NS.
+			if set, ok := value.(*types.AttributeValueMemberNS); ok {
+				field.Value = set
+			} else if err := attributevalue.Unmarshal(value, &field.Value); err != nil {
 				return check, err
 			}
 		}
