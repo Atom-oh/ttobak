@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/ttobak/backend/internal/duration"
+	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/speaker"
 )
 
@@ -19,7 +20,7 @@ var partKeyPattern = regexp.MustCompile(`_part_(\d{3})\.json$`)
 
 // mergePartTranscripts downloads all part transcripts, refines each, offsets timestamps, and concatenates them.
 // It also returns the total merged duration in seconds (the cumulative timestamp offset across all parts).
-func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCount int) (string, []TranscriptSegmentOut, float64, error) {
+func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCount int) (*parsedTranscript, error) {
 	prefix := fmt.Sprintf("transcripts/%s_part_", meetingID)
 
 	result, err := s3Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
@@ -27,11 +28,11 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 		Prefix: aws.String(prefix),
 	})
 	if err != nil {
-		return "", nil, 0, fmt.Errorf("failed to list part transcripts: %w", err)
+		return nil, fmt.Errorf("failed to list part transcripts: %w", err)
 	}
 
 	if len(result.Contents) == 0 {
-		return "", nil, 0, fmt.Errorf("no part transcripts found for meeting %s", meetingID)
+		return nil, fmt.Errorf("no part transcripts found for meeting %s", meetingID)
 	}
 
 	type partFile struct {
@@ -61,7 +62,7 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 	// are claimed once-only via `allPartsEmittedAt`, so a transient lag
 	// resolves on the next invocation.
 	if len(parts) != partCount {
-		return "", nil, 0, fmt.Errorf(
+		return nil, fmt.Errorf(
 			"part count mismatch for meeting %s: expected %d, got %d (S3 list lag or missing parts)",
 			meetingID, partCount, len(parts),
 		)
@@ -71,7 +72,7 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 	// expected pattern.
 	for i, p := range parts {
 		if p.index != i {
-			return "", nil, 0, fmt.Errorf(
+			return nil, fmt.Errorf(
 				"part index gap for meeting %s: expected index %d, got %d",
 				meetingID, i, p.index,
 			)
@@ -81,45 +82,29 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 	var allTexts []string
 	var allSegments []TranscriptSegmentOut
 	var cumulativeOffset float64
+	var qualities []*model.TranscriptQuality
+	var objects []model.SummaryObject
 
 	for _, part := range parts {
-		transcript, segments, whisperSegments, audioDuration, parseErr := downloadAndParseTranscript(ctx, bucket, part.key)
+		parsed, parseErr := downloadAndParseTranscript(ctx, bucket, part.key)
 		if parseErr != nil {
-			// Fail fast: continuing would download/refine the rest of the
-			// parts only to abort at the end (the prior loop drained S3 +
-			// Bedrock budget on a doomed merge). The merge is all-or-nothing.
-			return "", nil, 0, fmt.Errorf("part %d parse failed for meeting %s: %w", part.index, meetingID, parseErr)
+			return nil, parseErr
 		}
-
-		if len(whisperSegments) > 0 && len(segments) == 0 {
-			_, refinedSegs, refineErr := bedrockService.RefineTranscript(ctx, whisperSegments)
-			if refineErr == nil {
-				// Each part's spk_N numbering restarts at 0 independently --
-				// whether from preserved acoustic labels or from RefineTranscript
-				// inferring them fresh per part -- so without namespacing, part
-				// 1's spk_0 and part 2's spk_0 would refer to different real
-				// speakers but display as the same one after merge. Namespace
-				// unconditionally: infer-mode multi-part is a normal path (any
-				// diarization failure -- missing S3 bundle, pyannote/ffmpeg
-				// error -- falls back to it, not just older transcripts), and
-				// namespacing is a collision-avoidance property of spk_N labels
-				// in general, not something that depends on acoustic authority.
-				segments = make([]TranscriptSegmentOut, len(refinedSegs))
-				for i, rs := range refinedSegs {
-					segments[i] = TranscriptSegmentOut{
-						Speaker:   speaker.Namespace(rs.Speaker, part.index),
-						Text:      rs.Text,
-						StartTime: rs.StartTime,
-						EndTime:   rs.EndTime,
-					}
-				}
-				// RefineTranscript's own assembled text uses the PRE-namespaced
-				// labels (bedrock.go), so it still has the exact cross-part
-				// "spk_0" collision namespacing exists to prevent -- rebuild the
-				// text from the namespaced segments instead (its return value is
-				// discarded above for this reason).
-				transcript = buildTranscriptText(segments)
-			}
+		// AWS Transcribe speaker-label segments keep only pronunciation items. Their
+		// canonical text retains punctuation and carries no labels to namespace.
+		transcribeSegments := len(parsed.Segments) > 0
+		refineParsedTranscript(ctx, parsed)
+		qualities, objects = append(qualities, parsed.Quality), append(objects, parsed.Objects...)
+		transcript, segments, whisperSegments, audioDuration := parsed.Text, parsed.Segments, parsed.Whisper, parsed.Duration
+		if len(segments) == 0 && strings.TrimSpace(transcript) != "" {
+			segments = []TranscriptSegmentOut{{Speaker: "spk_0", Text: transcript, Untimed: true}}
+			parsed.Quality.UntimedSegments++
+		}
+		for i := range segments {
+			segments[i].Speaker = speaker.Namespace(segments[i].Speaker, part.index)
+		}
+		if len(segments) > 0 && !transcribeSegments {
+			transcript = buildTranscriptText(segments)
 		}
 
 		allTexts = append(allTexts, transcript)
@@ -160,19 +145,18 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 
 		// Offset segment timestamps and append to merged list
 		for _, seg := range segments {
-			allSegments = append(allSegments, TranscriptSegmentOut{
-				Speaker:   seg.Speaker,
-				Text:      seg.Text,
-				StartTime: seg.StartTime + cumulativeOffset,
-				EndTime:   seg.EndTime + cumulativeOffset,
-			})
+			if !seg.Untimed {
+				seg.StartTime += cumulativeOffset
+				seg.EndTime += cumulativeOffset
+			}
+			allSegments = append(allSegments, seg)
 		}
 
 		cumulativeOffset += partDuration
 	}
 
 	if len(allTexts) == 0 {
-		return "", nil, 0, fmt.Errorf("no valid transcripts found for meeting %s", meetingID)
+		return nil, fmt.Errorf("no valid transcripts found for meeting %s", meetingID)
 	}
 
 	mergedText := strings.Join(allTexts, "\n\n")
@@ -180,7 +164,7 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 	log.Printf("Merged %d parts for meeting %s: %d chars, %d segments, total duration %.0fs",
 		len(parts), meetingID, len(mergedText), len(allSegments), cumulativeOffset)
 
-	return mergedText, allSegments, cumulativeOffset, nil
+	return &parsedTranscript{Text: mergedText, Segments: allSegments, Duration: cumulativeOffset, Quality: mergeTranscriptQuality(qualities), Objects: objects}, nil
 }
 
 // buildTranscriptText reassembles transcript body text from segments, using

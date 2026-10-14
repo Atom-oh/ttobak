@@ -120,7 +120,7 @@ func (r *DynamoDBRepository) StartTranscriptSummary(ctx context.Context, snapsho
 		return "", ErrConditionFailed
 	}
 	claim := time.Now().UTC().Format(time.RFC3339Nano)
-	update := make(map[string]interface{}, len(fields)+5)
+	update := make(map[string]interface{}, len(fields))
 	for name, value := range fields {
 		update[name] = value
 	}
