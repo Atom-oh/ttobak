@@ -90,6 +90,9 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 		if parseErr != nil {
 			return nil, parseErr
 		}
+		// AWS Transcribe speaker-label segments keep only pronunciation items. Their
+		// canonical text retains punctuation and carries no labels to namespace.
+		transcribeSegments := len(parsed.Segments) > 0
 		refineParsedTranscript(ctx, parsed)
 		qualities, objects = append(qualities, parsed.Quality), append(objects, parsed.Objects...)
 		transcript, segments, whisperSegments, audioDuration := parsed.Text, parsed.Segments, parsed.Whisper, parsed.Duration
@@ -100,7 +103,7 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 		for i := range segments {
 			segments[i].Speaker = speaker.Namespace(segments[i].Speaker, part.index)
 		}
-		if len(segments) > 0 {
+		if len(segments) > 0 && !transcribeSegments {
 			transcript = buildTranscriptText(segments)
 		}
 

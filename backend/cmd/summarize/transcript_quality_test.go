@@ -91,6 +91,40 @@ func TestMergedTranscriptRetainsDegradationProvenanceAndPartOffsets(t *testing.T
 	}
 }
 
+func TestMergedTranscribePartsKeepCanonicalPunctuation(t *testing.T) {
+	installTranscriptFixture(t, retryHTTP(func(request *http.Request) (*http.Response, error) {
+		switch {
+		case request.URL.Query().Get("list-type") == "2":
+			return transcriptFixtureResponse(200, `<ListBucketResult><Contents><Key>transcripts/m_part_000.json</Key></Contents><Contents><Key>transcripts/m_part_001.json</Key></Contents></ListBucketResult>`, nil), nil
+		case request.Method == "GET":
+			body := `{"results":{"transcripts":[{"transcript":"No, more tests."}],` +
+				`"speaker_labels":{"speakers":1,"segments":[{"start_time":"0.0","end_time":"2.0","speaker_label":"spk_0","items":[` +
+				`{"start_time":"0.0","end_time":"0.5","speaker_label":"spk_0"},{"start_time":"0.6","end_time":"1.0","speaker_label":"spk_0"},` +
+				`{"start_time":"1.1","end_time":"2.0","speaker_label":"spk_0"}]}]},"items":[` +
+				`{"start_time":"0.0","end_time":"0.5","type":"pronunciation","alternatives":[{"content":"No"}]},` +
+				`{"type":"punctuation","alternatives":[{"content":","}]},` +
+				`{"start_time":"0.6","end_time":"1.0","type":"pronunciation","alternatives":[{"content":"more"}]},` +
+				`{"start_time":"1.1","end_time":"2.0","type":"pronunciation","alternatives":[{"content":"tests"}]},` +
+				`{"type":"punctuation","alternatives":[{"content":"."}]}]}}`
+			return transcriptFixtureResponse(200, body, http.Header{"Etag": {`"part"`}}), nil
+		default:
+			t.Fatal("Transcribe parts invoked refinement")
+			return nil, nil
+		}
+	}))
+	parsed, err := mergePartTranscripts(context.Background(), "bucket", "m", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Text != "No, more tests.\n\nNo, more tests." {
+		t.Fatalf("canonical punctuation lost: %q", parsed.Text)
+	}
+	if len(parsed.Segments) != 2 || parsed.Segments[0].Speaker != "spk_0" || parsed.Segments[1].Speaker != "spk_1000000" ||
+		parsed.Segments[1].StartTime != 2 || parsed.Segments[1].EndTime != 4 {
+		t.Fatalf("Transcribe part identity/timeline lost: %+v", parsed.Segments)
+	}
+}
+
 func TestTranscriptObjectReplacementRejectsOldRefinement(t *testing.T) {
 	installTranscriptFixture(t, retryHTTP(func(request *http.Request) (*http.Response, error) {
 		if request.Method != "HEAD" {
