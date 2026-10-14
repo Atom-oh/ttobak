@@ -282,14 +282,20 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(world.secret_changes, 0)
         self.assertFalse(any(entry[0] == "deploy" for entry in world.history))
 
-    def test_actual_template_gate_requires_pins_and_rejects_plaintext_without_printing_it(self):
-        runner = Cdk(REGION, ACCOUNT)
+    @staticmethod
+    def activation_templates():
         environment = {"ORIGIN_VERIFY_SECRET_ARN": {"Ref": "HttpOriginSecretArn"},
                        "ORIGIN_VERIFY_SECRET_VERSION_ID": {"Ref": "HttpOriginSecretVersionId"}}
-        gateway = {"Parameters": {"HttpOriginSecretArn": {}, "HttpOriginSecretVersionId": {}},
-                   "Resources": {name: {"Type": "AWS::Lambda::Function", "Properties": {
-                       "FunctionName": name, "Environment": {"Variables": copy.deepcopy(environment)}}}
-                       for name in ("ttobak-api", "ttobak-qa", "ttobak-mcp")}}
+        gateway = {"Parameters": {"HttpOriginSecretArn": {}, "HttpOriginSecretVersionId": {}}, "Resources": {}}
+        for name in ("ttobak-api", "ttobak-qa", "ttobak-mcp"):
+            # Imported AiStack roles render as an export; the MCP role is stack-local.
+            role = {"Fn::GetAtt": ["McpRole", "Arn"]} if name == "ttobak-mcp" else {"Fn::ImportValue": f"Ai:{name}"}
+            roles = [{"Ref": "McpRole"}] if name == "ttobak-mcp" else [{"Fn::Select": [1, {"Fn::Split": ["/", role]}]}]
+            gateway["Resources"][name] = {"Type": "AWS::Lambda::Function", "DependsOn": [name + "Read"], "Properties": {
+                "FunctionName": name, "Role": role, "Environment": {"Variables": copy.deepcopy(environment)}}}
+            gateway["Resources"][name + "Read"] = {"Type": "AWS::IAM::Policy", "Properties": {"Roles": roles,
+                "PolicyDocument": {"Statement": [{"Effect": "Allow", "Action": "secretsmanager:GetSecretValue",
+                                                  "Resource": {"Ref": "HttpOriginSecretArn"}}]}}}
         gateway["Resources"]["Version"] = {"Type": "AWS::Lambda::Version", "Properties": {
             "FunctionName": {"Ref": "ApiFunction"}, "Description": {"Ref": "HttpOriginSecretVersionId"}}}
         frontend = {"Parameters": {"HttpOriginSecretVersionId": {}}, "Resources": {
@@ -298,6 +304,34 @@ class ReleaseTests(unittest.TestCase):
                     "HeaderName": "x-origin-verify", "HeaderValue": {"Fn::Join": ["", [
                         "{{resolve:secretsmanager:", {"Ref": "Arn"}, ":SecretString:current::",
                         {"Ref": "HttpOriginSecretVersionId"}, "}}"]]}}]}]}}}}}
+        return gateway, frontend
+
+    def test_actual_template_gate_requires_consumer_secret_read_grants(self):
+        breaks = {
+            "ACTIVATION_SECRET_READ_NOT_GRANTED": (
+                lambda g: g["Resources"]["ttobak-qa"].pop("DependsOn"),
+                lambda g: g["Resources"]["ttobak-qaRead"]["Properties"]["PolicyDocument"]["Statement"][0].update(Resource="*"),
+                lambda g: g["Resources"]["ttobak-mcpRead"]["Properties"].update(Roles=[{"Ref": "OtherRole"}]),
+                lambda g: g["Resources"]["ttobak-apiRead"]["Properties"]["PolicyDocument"]["Statement"][0].update(Effect="Deny"),
+            ),
+            "ACTIVATION_CONSUMER_VPC_UNVERIFIED": (
+                lambda g: g["Resources"]["ttobak-api"]["Properties"].update(VpcConfig={"SubnetIds": ["subnet"]}),),
+        }
+        runner = Cdk(REGION, ACCOUNT)
+        for code, mutations in breaks.items():
+            for mutate in mutations:
+                gateway, frontend = self.activation_templates()
+                mutate(gateway)
+                with tempfile.TemporaryDirectory() as directory:
+                    runner.assembly = Path(directory)
+                    (runner.assembly / "TtobakGatewayStack.template.json").write_text(json.dumps(gateway))
+                    (runner.assembly / "TtobakFrontendStack.template.json").write_text(json.dumps(frontend))
+                    with self.assertRaisesRegex(ReleaseError, f"^{code}$"):
+                        runner.validate_activation_templates()
+
+    def test_actual_template_gate_requires_pins_and_rejects_plaintext_without_printing_it(self):
+        runner = Cdk(REGION, ACCOUNT)
+        gateway, frontend = self.activation_templates()
         with tempfile.TemporaryDirectory() as directory:
             runner.assembly = Path(directory)
             (runner.assembly / "TtobakGatewayStack.template.json").write_text(json.dumps(gateway))
@@ -412,6 +446,24 @@ class ReleaseTests(unittest.TestCase):
         self.assertTrue(receipt["recoveredExpiredCutover"])
         self.assertTrue(all(world.accepts(name, NEW) and not world.accepts(name, OLD) for name in world.functions))
 
+    def test_expired_rotation_reports_recovery_only_when_a_consumer_had_rejected_the_producer(self):
+        for drifted in (True, False):
+            world = World()
+            release = world.release()
+            # Fail after CloudFront already sends the new proof, before retirement.
+            release.probe = lambda url: 500 if world.proof == NEW else world.public_status(url)
+            with self.assertRaisesRegex(ReleaseError, "CLOUDFRONT_PROBE_FAILED"):
+                self.quiet_run(release)
+            self.assertEqual((world.doc()["phase"], world.proof), ("rotating", NEW))
+            if drifted:
+                world.functions["ttobak-qa"]["Environment"]["Variables"] = {"ORIGIN_VERIFY_SECRET": OLD}
+            world.now = world.doc()["previousExpiresAt"] + 1
+            self.assertEqual(world.accepts("ttobak-qa", NEW), not drifted)
+            receipt = self.quiet_run(world.release())
+            self.assertEqual(receipt["status"], "complete")
+            self.assertEqual(receipt["recoveredExpiredCutover"], drifted)
+            self.assertTrue(all(world.accepts(name, NEW) and not world.accepts(name, OLD) for name in world.functions))
+
     def test_failed_cleanup_deployment_resumes_from_active_state(self):
         world = World()
         world.fail_active_consumers = True
@@ -466,9 +518,16 @@ class ReleaseTests(unittest.TestCase):
             self.assertEqual(release.canary("ttobak-api", OLD), (404, None))
 
     def test_checkout_requires_clean_matching_revision(self):
-        with mock.patch("http_origin_release.subprocess.check_output", side_effect=["a" * 40, b" M infra/cdk.json"]):
-            with self.assertRaisesRegex(ReleaseError, "CHECKOUT_NOT_CLEAN"):
-                checkout_revision()
+        # CI exports the real GITHUB_SHA; pin or clear it so each case is deterministic.
+        for environment in ({"GITHUB_SHA": "a" * 40}, {}):
+            with mock.patch.dict("os.environ", environment, clear=True), \
+                    mock.patch("http_origin_release.subprocess.check_output",
+                               side_effect=["a" * 40, b" M infra/cdk.json"]):
+                with self.assertRaisesRegex(ReleaseError, "CHECKOUT_NOT_CLEAN"):
+                    checkout_revision()
+        with mock.patch.dict("os.environ", {"GITHUB_SHA": "a" * 40}, clear=True), \
+                mock.patch("http_origin_release.subprocess.check_output", side_effect=["a" * 40, b""]):
+            self.assertEqual(checkout_revision(), "a" * 40)
         with mock.patch.dict("os.environ", {"GITHUB_SHA": "b" * 40}), \
                 mock.patch("http_origin_release.subprocess.check_output", return_value="a" * 40):
             with self.assertRaisesRegex(ReleaseError, "CHECKOUT_REVISION_MISMATCH"):

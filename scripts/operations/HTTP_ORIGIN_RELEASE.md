@@ -6,9 +6,17 @@ activation checks, verifies its hash before each deployment, and fails if the
 checkout or assembly changes. The Storage-only `retighten` action applies the
 same account, revision and assembly checks without rotating origin proofs.
 
-A receipt with `recoveredExpiredCutover: true` records restoration after an
-expired overlap had already interrupted availability. Its final checks establish
-the recovered state; they do not assert uninterrupted availability.
+A complete receipt with `recoveredExpiredCutover: true` records restoration after
+an expired overlap had already interrupted availability: the run started past the
+deadline with CloudFront or any consumer outside the rotating version. Its final
+checks establish the recovered state; they do not assert uninterrupted
+availability. Incomplete receipts never set it.
+
+The activation gate also requires every consumer function to depend on a
+GatewayStack policy granting `secretsmanager:GetSecretValue` on
+`HttpOriginSecretArn` to that function's role, and to stay outside a VPC. One
+GatewayStack deployment switches all consumers to ARN lookup, so a missing grant
+or unreachable endpoint would otherwise fail every origin check closed.
 
 `http_origin_release.py` prepares a coordinated migration of the existing HTTP
 origin proof. The tool can be reviewed before the paired infrastructure and
@@ -74,6 +82,7 @@ proof rotation. The operator environment needs `boto3<2`; tests use synthetic
 clients and make no AWS or model calls.
 
 Tests cover proof disagreement, missing reader readiness, configuration changes,
-old-cache cutover, interrupted/resumed rotation, lost responses, expired windows,
+consumer secret read grants, old-cache cutover, interrupted/resumed rotation, lost
+responses, expired windows and their recovery receipts,
 idempotent completion and value-free CDK diagnostics. A live completed receipt is
 still required to establish the deployed outcome.

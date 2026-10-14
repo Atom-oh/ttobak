@@ -121,6 +121,26 @@ class Cdk:
         require(checkout_revision() == self.revision, "CHECKOUT_REVISION_CHANGED")
         self.assembly_digest = self.assembly_hash()
 
+    @staticmethod
+    def listed(value):
+        return value if isinstance(value, list) else [] if value is None else [value]
+
+    @staticmethod
+    def role_token(role):
+        # Imported roles render as their export name, stack roles as a logical ID;
+        # the same quoted token appears in the policy's role-name expression.
+        if isinstance(role, dict) and isinstance(role.get("Fn::ImportValue"), str):
+            return json.dumps(role["Fn::ImportValue"])
+        if isinstance(role, dict) and isinstance(role.get("Fn::GetAtt"), list) and role["Fn::GetAtt"]:
+            return json.dumps(role["Fn::GetAtt"][0])
+        return None
+
+    @staticmethod
+    def grants_proof_read(statement):
+        return (isinstance(statement, dict) and statement.get("Effect") == "Allow"
+                and "secretsmanager:GetSecretValue" in Cdk.listed(statement.get("Action"))
+                and {"Ref": "HttpOriginSecretArn"} in Cdk.listed(statement.get("Resource")))
+
     def validate_activation_templates(self):
         # The coordinator can be reviewed and shipped before activation. Refuse
         # all mutations when the paired ARN/version-only IaC is not installed.
@@ -128,16 +148,28 @@ class Cdk:
         frontend = json.loads((self.assembly / "TtobakFrontendStack.template.json").read_text())
         require({"HttpOriginSecretArn", "HttpOriginSecretVersionId"} <= gateway.get("Parameters", {}).keys()
                 and "HttpOriginSecretVersionId" in frontend.get("Parameters", {}), "ACTIVATION_TEMPLATE_NOT_READY")
-        functions = {item["Properties"].get("FunctionName"): item["Properties"]
+        functions = {item["Properties"].get("FunctionName"): item
                      for item in gateway.get("Resources", {}).values() if item.get("Type") == "AWS::Lambda::Function"}
         require(self.required_readers <= functions.keys(), "ACTIVATION_CONSUMER_MISSING")
+        policies = {key: item.get("Properties", {}) for key, item in gateway.get("Resources", {}).items()
+                    if item.get("Type") == "AWS::IAM::Policy"}
         for name in ("ttobak-api", "ttobak-qa", "ttobak-mcp"):
             if name not in functions:
                 continue
-            env = functions[name].get("Environment", {}).get("Variables", {})
+            properties = functions[name]["Properties"]
+            env = properties.get("Environment", {}).get("Variables", {})
             require(env.get("ORIGIN_VERIFY_SECRET_ARN") == {"Ref": "HttpOriginSecretArn"}
                     and env.get("ORIGIN_VERIFY_SECRET_VERSION_ID") == {"Ref": "HttpOriginSecretVersionId"}
                     and "ORIGIN_VERIFY_SECRET" not in env, "ACTIVATION_CONSUMER_NOT_PINNED")
+            # One GatewayStack deployment switches every consumer to ARN lookup. An
+            # ungranted or unreachable read would fail all origin checks closed at once.
+            require("VpcConfig" not in properties, "ACTIVATION_CONSUMER_VPC_UNVERIFIED")
+            role = self.role_token(properties.get("Role"))
+            require(role is not None and any(
+                key in self.listed(functions[name].get("DependsOn")) and role in json.dumps(policy.get("Roles"))
+                and any(self.grants_proof_read(statement)
+                        for statement in self.listed(policy.get("PolicyDocument", {}).get("Statement")))
+                for key, policy in policies.items()), "ACTIVATION_SECRET_READ_NOT_GRANTED")
         versions = [item["Properties"] for item in gateway["Resources"].values()
                     if item.get("Type") == "AWS::Lambda::Version"]
         require(any("HttpOriginSecretVersionId" in json.dumps(item.get("Description"))
@@ -561,7 +593,6 @@ class Release:
         require(doc["phase"] == "rotating", "ROTATION_STATE_REQUIRED")
         self.mark("resuming_rotation" if self.now() < doc["previousExpiresAt"] else "repairing_expired_cutover")
         if self.now() >= doc["previousExpiresAt"] and not equal(self.distribution_proof(), doc["current"]):
-            self.recovered_expired_cutover = True
             # An expired previous proof must not be restored or its deadline
             # extended. Avoid turning still-seeded consumers into a new outage.
             require(all(self.environment(name).get("ORIGIN_VERIFY_SECRET_VERSION_ID") == self.state.version
@@ -574,9 +605,20 @@ class Release:
         self.write(dict(doc, previous="", previousExpiresAt=0, phase="active"))
         self.deploy_consumers()
 
+    def expired_cutover_interrupted(self, producer):
+        # After the overlap, a producer or any consumer outside the rotating
+        # version has already rejected traffic. Classify it before repairs.
+        doc = self.state.document if self.state else None
+        if not doc or doc["phase"] != "rotating" or self.now() < doc["previousExpiresAt"]:
+            return False
+        return not (equal(producer, doc["current"]) and all(
+            self.environment(name).get("ORIGIN_VERIFY_SECRET_VERSION_ID") == self.state.version
+            for name in self.configs))
+
     def run(self):
         live = self.inspect()
         self.verify_foundation()
+        self.recovered_expired_cutover = self.expired_cutover_interrupted(live)
         self.mark("reviewing_stack_diff")
         self.cdk.diff()
         self.bootstrap(live)
@@ -631,7 +673,7 @@ class Release:
     def receipt(self, status, code=None):
         result = {"status": status, "phase": self.phase, "revision": self.revision,
                   "account": self.account, "region": self.region, "checkedAt": int(self.now()),
-                  "recoveredExpiredCutover": self.recovered_expired_cutover}
+                  "recoveredExpiredCutover": status == "complete" and self.recovered_expired_cutover}
         if code:
             result["code"] = code
         if self.state:
