@@ -49,7 +49,7 @@ function TranscriptPanel({
                 {segment.speaker}
               </span>
               <span className="text-xs text-primary bg-primary/10 px-1.5 py-0.5 rounded">
-                {formatTimestamp(segment.startTime)}
+                {segment.untimed ? '시간 정보 없음' : formatTimestamp(segment.startTime)}
               </span>
             </div>
             <p className="text-sm text-slate-700 dark:text-slate-300 leading-relaxed">

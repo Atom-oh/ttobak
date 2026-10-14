@@ -558,6 +558,7 @@ function MeetingDetailContent() {
 
   const usingTranscriptB = Boolean(meeting.transcriptB?.trim() && (meeting.selectedTranscript === 'B' || !meeting.transcriptA?.trim()));
   const displayedTranscript = usingTranscriptB ? meeting.transcriptB : (meeting.transcriptA?.trim() ? meeting.transcriptA : undefined);
+  const displayedSegments = meeting.transcriptionV2 ?? meeting.transcription ?? [];
   const canEdit = meeting.permission === 'edit' || (!meeting.isShared && meeting.permission !== 'read');
   const canEditNotes = canEdit && meeting.supportsNotesComparison === true && typeof meeting.notesRevision === 'string';
   const canManageAssociations = meeting.userId === user?.userId;
@@ -615,9 +616,9 @@ function MeetingDetailContent() {
           </div>}
 
           {/* Speaker Name Mapping — show when transcript exists (done or error with partial data) */}
-          {(meeting.status === 'done' || meeting.transcription) && (
+          {(meeting.status === 'done' || displayedSegments.length > 0) && (
             <SpeakerMapEditor
-              transcription={meeting.transcription}
+              transcription={displayedSegments}
               content={meeting.content}
               speakerMap={meeting.speakerMap}
               onSave={async (speakerMap) => {
@@ -627,6 +628,8 @@ function MeetingDetailContent() {
                 const refreshed = await meetingsApi.get(meeting.meetingId);
                 setMeeting((current) => current?.meetingId === meeting.meetingId ? {
                   ...current, ...(refreshed as MeetingDetail),
+                  transcriptionV2: refreshed.transcriptionV2,
+                  transcriptQuality: refreshed.transcriptQuality,
                   // The user may have started editing while either request was pending.
                   ...(dirtyRef.current.summary || summaryRevision !== summaryRevisionRef.current
                     ? { content: current.content, summary: current.summary } : {}),
@@ -634,6 +637,8 @@ function MeetingDetailContent() {
                     transcriptA: current.transcriptA,
                     transcriptB: current.transcriptB,
                     transcription: current.transcription,
+                    transcriptionV2: current.transcriptionV2,
+                    transcriptQuality: current.transcriptQuality,
                     selectedTranscript: current.selectedTranscript,
                   } : {}),
                   // Refreshed download URLs also change the summary editor's HTML.
@@ -648,12 +653,16 @@ function MeetingDetailContent() {
                 const refreshed = await meetingsApi.get(meeting.meetingId);
                 setMeeting((current) => current?.meetingId === meeting.meetingId ? {
                   ...current, ...(refreshed as MeetingDetail),
+                  transcriptionV2: refreshed.transcriptionV2,
+                  transcriptQuality: refreshed.transcriptQuality,
                   ...(dirtyRef.current.summary || summaryRevision !== summaryRevisionRef.current
                     ? { content: current.content, summary: current.summary } : {}),
                   ...(dirtyRef.current.transcript ? {
                     transcriptA: current.transcriptA,
                     transcriptB: current.transcriptB,
                     transcription: current.transcription,
+                    transcriptionV2: current.transcriptionV2,
+                    transcriptQuality: current.transcriptQuality,
                     selectedTranscript: current.selectedTranscript,
                   } : {}),
                   attachments: dirtyRef.current.summary ? current.attachments : normalizeAttachments(refreshed.attachments),
@@ -841,11 +850,12 @@ function MeetingDetailContent() {
           )}
 
           {/* Full Transcription */}
-          {((meeting.transcription?.length ?? 0) > 0 || displayedTranscript) && (
+          {(displayedSegments.length > 0 || displayedTranscript) && (
             <TranscriptSection
               onDirtyChange={onTranscriptDirtyChange}
-              transcription={meeting.transcription || []}
+              transcription={displayedSegments}
               rawTranscript={displayedTranscript}
+              quality={meeting.transcriptQuality}
               onSaveRawTranscript={usingTranscriptB || meeting.permission === 'read' ? undefined : async (text) => {
                 await meetingsApi.update(meeting.meetingId, { transcriptA: text });
                 setIndexRevision((value) => value + 1);
@@ -853,6 +863,8 @@ function MeetingDetailContent() {
                   ...current,
                   transcriptA: text,
                   transcription: text === current.transcriptA ? current.transcription : [],
+                  transcriptionV2: text === current.transcriptA ? current.transcriptionV2 : undefined,
+                  transcriptQuality: text === current.transcriptA ? current.transcriptQuality : undefined,
                 } : current);
                 let refreshed: MeetingDetail;
                 try {
@@ -866,6 +878,8 @@ function MeetingDetailContent() {
                   transcriptB: refreshed.transcriptB,
                   selectedTranscript: refreshed.selectedTranscript,
                   transcription: refreshed.transcription || [],
+                  transcriptionV2: refreshed.transcriptionV2,
+                  transcriptQuality: refreshed.transcriptQuality,
                   updatedAt: refreshed.updatedAt,
                 } : current);
               }}

@@ -628,6 +628,12 @@ func (r *DynamoDBRepository) UpdateMeeting(ctx context.Context, meeting *model.M
 	// Marshal a shallow storage copy instead; string-field swaps on the copy
 	// never touch the original, and the shared slices/maps are only read.
 	stored := *meeting
+	if stored.TranscriptA != "" {
+		stored.TranscriptRevisionA = uuid.NewString()
+	}
+	if stored.TranscriptB != "" {
+		stored.TranscriptRevisionB = uuid.NewString()
+	}
 	// Whole-item legacy writes also replace notes, even when their text did
 	// not change. Never reuse a caller's old revision for that replacement.
 	stored.NotesRevision = uuid.NewString()
@@ -918,8 +924,15 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 	if _, assigned := fields["notesRevision"]; assigned {
 		return fmt.Errorf("notesRevision is server-managed")
 	}
+	for _, name := range []string{"transcriptRevisionA", "transcriptRevisionB"} {
+		if _, assigned := fields[name]; assigned {
+			return fmt.Errorf("%s is server-managed", name)
+		}
+	}
 	_, writesNotes := fields["notes"]
-	if immutableSpills || writesNotes {
+	_, writesA := fields["transcriptA"]
+	_, writesB := fields["transcriptB"]
+	if immutableSpills || writesNotes || writesA || writesB {
 		// Do not leave internal spill refs or a generated revision in a
 		// caller's map that could be reused for a later retry.
 		copyFields := make(map[string]interface{}, len(fields))
@@ -927,6 +940,22 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 			copyFields[name] = value
 		}
 		fields = copyFields
+	}
+	for _, variant := range []string{"A", "B"} {
+		if _, written := fields["transcript"+variant]; written {
+			fields["transcriptRevision"+variant] = uuid.NewString()
+			if _, provided := fields["transcriptQuality"+variant]; !provided {
+				if text, ok := fields["transcript"+variant].(string); ok {
+					// Legacy machine publishers do not supply attestation. Keep their
+					// current matched segments usable without calling them edited.
+					quality := model.TranscriptQuality{Refinement: "unknown", SpeakerProvenance: "unknown", Timing: "unavailable", TextSHA256: model.TranscriptHash(text)}
+					if segments, ok := fields["transcriptSegments"].(string); ok && segments != "" && !strings.HasPrefix(segments, "s3://") {
+						quality.Timing, quality.SegmentsSHA256 = "available", model.TranscriptHash(segments)
+					}
+					fields["transcriptQuality"+variant] = quality
+				}
+			}
+		}
 	}
 	if writesNotes {
 		revision := uuid.NewString()

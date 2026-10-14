@@ -110,9 +110,13 @@ func GenerateMeetingDocument(meeting *model.Meeting, attachments []model.Attachm
 
 	// Export verified segments for the chosen variant, or its current raw text.
 	transcript, _ := selectMeetingTranscript(meeting)
-	if segments := transcriptSegmentsForText(transcript, meeting.TranscriptSegments); len(segments) > 0 {
+	if segments := meetingTranscriptSegments(meeting, transcript); len(segments) > 0 {
 		b.WriteString("## Transcript\n\n")
 		for _, seg := range segments {
+			if seg.Untimed {
+				b.WriteString(fmt.Sprintf("**%s** [time unavailable]: %s\n\n", seg.Speaker, seg.Text))
+				continue
+			}
 			minutes := int(seg.StartTime) / 60
 			seconds := int(seg.StartTime) % 60
 			b.WriteString(fmt.Sprintf("**%s** [%02d:%02d]: %s\n\n", seg.Speaker, minutes, seconds, seg.Text))

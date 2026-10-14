@@ -16,6 +16,8 @@ export interface Meeting {
   summary?: string;
   actionItems?: ActionItem[];
   transcription?: TranscriptSegment[];
+  /** Complete mixed/untimed segments; absent for legacy or wholly timed results. */
+  transcriptionV2?: TranscriptSegment[];
   attachments?: Attachment[];
   sharedWith?: SharedUser[];
   createdAt: string;
@@ -97,15 +99,18 @@ export interface ActionItemsResponse {
   analysis: ActionItemsAnalysis;
 }
 
-export interface TranscriptSegment {
+interface TranscriptSegmentBase {
   id: string;
   speaker: string;
   speakerInitials?: string;
   timestamp: string;
   text: string;
-  startTime: number;
-  endTime: number;
 }
+
+export type TranscriptSegment = TranscriptSegmentBase & (
+  | { untimed?: false; startTime: number; endTime: number }
+  | { untimed: true; startTime?: never; endTime?: never }
+);
 
 export interface Attachment {
   id: string;
@@ -254,7 +259,22 @@ export interface User {
 }
 
 // Extended meeting detail from API
+export interface TranscriptQuality {
+  refinement: 'validated' | 'partial' | 'raw' | 'mixed' | 'not_requested' | 'unknown' | 'edited';
+  degraded: boolean;
+  speakerProvenance: 'acoustic' | 'text_inferred' | 'mixed' | 'unknown';
+  totalChunks?: number;
+  fallbackChunks?: number;
+  timing?: 'available' | 'partial' | 'unavailable';
+  blankSegments?: number;
+  untimedSegments?: number;
+  reasons?: string[];
+  diarizationEnabled?: boolean;
+  detectedSpeakers?: number;
+}
+
 export interface MeetingDetail extends Meeting {
+  transcriptQuality?: TranscriptQuality;
   canRecoverRecording?: boolean;
   supportsAudioCrop?: boolean;
   audioCrop?: { sourceMeetingId: string; startSeconds: number; endSeconds: number; state: string };

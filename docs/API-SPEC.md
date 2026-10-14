@@ -171,6 +171,47 @@ Saved notes are user input, distinct from generated content. Stuck transcription
 or summarization is reconciled after 60 minutes; summarize retry eligibility is a
 separate 20-minute conditional claim, not a retry scheduler.
 
+Meeting detail includes `transcriptQuality` for the effective selected A/B text.
+The status records refinement and speaker provenance, degradation, optional
+diarization metadata and available/partial/unavailable timing. Legacy processing
+status is `unknown`; text writes advance only that variant's server-managed
+revision. Human API edits explicitly invalidate earlier attestation as `edited`.
+Legacy machine publication with text plus segments records unknown processing
+with fresh byte fingerprints; its full-text-matched timing stays usable before
+strict writer activation. A text-only machine write cannot borrow sibling timing. Text and segment fingerprints
+must match the current selected source before its processing metadata supplies
+timing. Equal words alone cannot make a known untimed B variant borrow A's cache.
+These checks describe structural/source identity, not semantic accuracy or a
+verified person's name.
+
+Detail presentation preserves canonical `transcriptA` and `transcriptB` exactly.
+Wholly timed, full-text-matched segments retain the existing `transcription`
+array. If any verified segment is `untimed: true`, the complete array is returned
+only as additive `transcriptionV2`; legacy `transcription` is absent so older
+clients show their existing complete canonical-text fallback. Current clients use
+`transcriptionV2 ?? transcription ?? []`. Unknown times are explicit, never zero
+timestamps. Stale or unavailable timing uses plain text. Existing transcript
+updates containing only `transcriptA` remain supported; no new client revision or
+projected display text is required.
+
+Bounded transcript reads retain untimed speech without start/end time metadata.
+Time-range requests include only verified timed segments, report
+`unlocatedCodePoints`, and use `completenessScope: verified_timed_segments` when
+some speech cannot be located. Summary/simulator anchors and KB exports likewise
+cannot invent times for untimed speech.
+
+The repository provides typed ASR snapshot, atomic transcript/summary-claim and
+presence-and-bytes content-fence primitives. The claimed-summary entry point
+checks ownership before model evidence and can end an owned batch as `done` with
+`HUMAN_CONTENT_PRESERVED` without replacing human content or recording fresh
+model-success coverage. Production transcription workers and their active
+refinement path remain unchanged in this reader-first stage; the new claim path
+is not activated. Complete reader deployment must precede strict refinement and
+worker publication. Drain older writers before relying on server revisions:
+older binaries cannot stamp them, and legacy fixed-key S3 checks remain preflight
+checks rather than an atomic S3/DynamoDB fence. Code installation is not runtime
+acceptance of the later worker rollout.
+
 Conditional transcript/speaker edits publish new immutable
 `transcripts/{meetingId}/{field}.{32-lowercase-hex}.txt` references only with a
 matching database update. Conflicts return 409; ambiguous database failures retain
