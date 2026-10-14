@@ -211,3 +211,21 @@ func TestMixedInvalidTimingKeepsEveryWordAndValidAcousticTime(t *testing.T) {
 		t.Fatal("raw speech/timing was discarded or invented", err, quality)
 	}
 }
+
+func TestRefinementCompletionSkipsVerifiedReasoningBlocks(t *testing.T) {
+	answer := `[{"speaker":"spk_0","text":"안녕하세요","startTime":0,"endTime":1,"sourceIds":[0]}]`
+	text, _ := json.Marshal(answer)
+	for block, want := range map[string]error{
+		`{"type":"thinking","thinking":"plan","signature":"sig"}`: nil,
+		`{"type":"redacted_thinking","data":"opaque"}`:            nil,
+		`{"type":"thinking","thinking":"plan"}`:                   errRefinementIncomplete,
+		`{"type":"redacted_thinking","data":""}`:                  errRefinementIncomplete,
+		`{"type":"tool_use","id":"t","name":"x","input":{}}`:      errRefinementIncomplete,
+	} {
+		body := `{"stop_reason":"end_turn","content":[` + block + `,{"type":"text","text":` + string(text) + `}]}`
+		got, err := refinementCompletion([]byte(body))
+		if !errors.Is(err, want) || want == nil && got != answer {
+			t.Fatalf("%s: got %q, %v; want %v", block, got, err, want)
+		}
+	}
+}

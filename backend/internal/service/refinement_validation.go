@@ -72,7 +72,16 @@ func refinementCompletion(body []byte) (string, error) {
 	if len(body) > 512*1024 {
 		return "", errRefinementSchema
 	}
-	var response ClaudeResponse
+	var response struct {
+		StopReason string `json:"stop_reason"`
+		Content    []struct {
+			Type      string  `json:"type"`
+			Text      string  `json:"text"`
+			Thinking  *string `json:"thinking"`
+			Signature string  `json:"signature"`
+			Data      string  `json:"data"`
+		} `json:"content"`
+	}
 	if json.Unmarshal(body, &response) != nil {
 		return "", errRefinementParse
 	}
@@ -81,10 +90,15 @@ func refinementCompletion(body []byte) (string, error) {
 	}
 	var text strings.Builder
 	for _, block := range response.Content {
-		if block.Type != "text" {
+		switch {
+		case block.Type == "text":
+			text.WriteString(block.Text)
+		// Adaptive reasoning can precede the answer; it carries no transcript text.
+		case block.Type == "thinking" && block.Thinking != nil && block.Signature != "",
+			block.Type == "redacted_thinking" && block.Data != "":
+		default:
 			return "", errRefinementIncomplete
 		}
-		text.WriteString(block.Text)
 	}
 	if text.Len() == 0 || text.Len() > 256*1024 {
 		return "", errRefinementSchema
