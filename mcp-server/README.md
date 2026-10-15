@@ -22,7 +22,7 @@ these environment values for the target deployment:
 | TTOBAK_CLIENT_ID | Public OAuth-capable client ID |
 | TTOBAK_API_URL | Application CloudFront URL |
 | TTOBAK_REGION | Application region |
-| TTOBAK_USER_POOL_ID | Optional for stdio; otherwise resolved from the site's public `/config.json` |
+| TTOBAK_USER_POOL_ID | Optional for stdio; explicit IDs still require a match with the site's public `/config.json` |
 | TTOBAK_PROFILE | Optional local credential profile; defaults to `default` |
 
 The OAuth client must allow authorization-code PKCE, openid/email/profile scopes
@@ -44,14 +44,23 @@ subject and expiration before sending an ID token to the API. Existing
 three-variable host configurations continue to work when the site's public
 `/config.json` identifies the matching client and pool. Explicit pool IDs support
 other registered clients without inferring an issuer from an unverified token.
+Token use and status require reachable application configuration and Cognito
+discovery/JWKS; an explicit pool ID does not bypass the current API pool check.
 
 Credentials are stored atomically under
 `~/.ttobak/tokens/<deployment-hash>.json`; the hash binds issuer, Hosted UI,
-client, API origin and profile. Directories use mode 0700 and files 0600.
+client, API origin and profile. On POSIX systems, directories use mode 0700 and
+files 0600; the parent `~/.ttobak` directory must be owned by the current user and
+must not be a symlink. Windows does not provide these same POSIX permission guarantees.
 The former `~/.ttobak/tokens.json` is ignored and never migrated automatically:
-upgrading requires a new login, and the old file can be removed after confirming
-the new connection. `ttobak_status` shows the verified identity. Logout clears
-only this deployment/profile's credentials and cancels pending authentication.
+upgrading requires a new login. After confirming the new connection, manually
+remove the old file; logout does not remove that unused global cache.
+`ttobak_status` sends the verified subject, username and verified email to the
+MCP client as tool text. Logout cancels pending authentication and removes saved
+credentials locally without discovery. An explicit pool selects its exact cache;
+discovered-pool configurations remove issuer variants matching the configured
+API, Hosted UI, client and profile. Other configurations are preserved. A bounded
+scan or filesystem failure returns an error instead of claiming completed removal.
 Refresh is attempted before another login; its lifetime depends on pool policy
 and revocation. Do not copy token files into documentation or diagnostics.
 

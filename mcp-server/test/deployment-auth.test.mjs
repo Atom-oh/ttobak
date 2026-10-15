@@ -235,6 +235,53 @@ test('global legacy token cache is ignored and existing permissions are tightene
   assert.equal(statSync(tokenDirectory).mode & 0o777, 0o700);
 });
 
+test('fresh-process logout removes only its local binding while discovery is offline', async t => {
+  for (const userPoolId of [config.userPoolId, undefined]) {
+    let requests = 0;
+    const { auth, tokenDirectory } = fixture(t, { userPoolId }, {
+      async requestJson() { requests++; throw new Error('Synthetic discovery unavailable'); },
+    });
+    const current = saveCache(tokenDirectory);
+    const otherPool = saveCache(tokenDirectory, tokens(), deployment({ issuer: issuer.replace('_fixture', '_other') }));
+    const unrelated = [
+      { profile: 'work' }, { apiUrl: 'https://other.invalid' },
+      { cognitoDomain: 'https://other.invalid' }, { clientId: 'otherclient' },
+    ].map(scope => saveCache(tokenDirectory, tokens(), deployment(scope)));
+    await auth.logout();
+    assert.equal(requests, 0, 'local credential removal must not perform discovery or token verification');
+    assert.equal(existsSync(current), false);
+    assert.equal(existsSync(otherPool), userPoolId !== undefined);
+    assert.ok(unrelated.every(existsSync));
+    const next = new CognitoAuth({ ...config, userPoolId }, { tokenDirectory, requestJson: authJson });
+    assert.deepEqual(await next.getStatus(), { authenticated: false }, 'a later process cannot reuse logged-out credentials');
+  }
+});
+
+test('discovered-pool offline logout preserves unbound metadata and never follows symlinks', async t => {
+  const { auth, tokenDirectory, directory } = fixture(t, { userPoolId: undefined });
+  const current = saveCache(tokenDirectory);
+  const unrelated = join(directory, 'unrelated.json');
+  writeFileSync(unrelated, 'synthetic-unrelated-data');
+  const link = join(tokenDirectory, '0'.repeat(64) + '.json');
+  symlinkSync(unrelated, link);
+  const invalidIssuer = saveCache(tokenDirectory, tokens(), deployment({ issuer: 'https://other.invalid/pool' }));
+  const wrongName = join(tokenDirectory, '1'.repeat(64) + '.json');
+  writeFileSync(wrongName, readFileSync(current));
+  await auth.logout();
+  assert.equal(existsSync(current), false);
+  assert.equal(readFileSync(unrelated, 'utf8'), 'synthetic-unrelated-data');
+  assert.ok([link, invalidIssuer, wrongName].every(existsSync));
+});
+
+test('offline logout reports bounded-scan failure before deleting any credentials', async t => {
+  const { auth, tokenDirectory } = fixture(t, { userPoolId: undefined });
+  const current = saveCache(tokenDirectory);
+  for (let index = 0; index < 256; index++) writeFileSync(join(tokenDirectory, `unrelated-${index}`), '');
+  await assert.rejects(auth.logout(), /^Error: Could not remove this deployment’s saved credentials$/);
+  assert.equal(existsSync(current), true, 'overflow must not report complete deletion');
+  assert.equal(auth.isAuthenticated(), false);
+});
+
 test('forged, wrong-claim and mismatched-subject cached tokens are never returned or refreshed', async t => {
   const forgedKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey;
   const invalid = [
@@ -314,9 +361,11 @@ test('expired signed tokens only permit a single refresh, with unchanged user id
 
 test('logout during refresh prevents late cache resurrection or token return', async t => {
   const entered = deferred(), release = deferred();
+  let offline = false;
   const { auth, tokenDirectory } = fixture(t, {}, {
     async requestJson(url, body) {
       if (body) { entered.resolve(); await release.promise; }
+      else if (offline) throw new Error('Synthetic discovery unavailable');
       return authJson(url, body);
     },
   });
@@ -324,10 +373,13 @@ test('logout during refresh prevents late cache resurrection or token return', a
   const request = auth.getIdToken();
   const rejected = assert.rejects(request, /cancelled by logout/);
   await entered.promise;
+  offline = true;
   await auth.logout();
   release.resolve();
   await rejected;
   assert.equal(existsSync(cacheFile(tokenDirectory)), false);
+  assert.equal(auth.isAuthenticated(), false);
+  offline = false;
   assert.deepEqual(await auth.getStatus(), { authenticated: false });
 });
 

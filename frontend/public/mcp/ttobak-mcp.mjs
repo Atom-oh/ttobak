@@ -20845,6 +20845,8 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  readSync,
+  opendirSync,
   renameSync,
   unlinkSync,
   writeFileSync,
@@ -21935,6 +21937,7 @@ var MAX_AUTH_BYTES = 64 * 1024;
 var MAX_TOKEN_LENGTH = 16 * 1024;
 var LOGIN_TIMEOUT_MS = 12e4;
 var NETWORK_TIMEOUT_MS = 1e4;
+var MAX_LOGOUT_ENTRIES = 256;
 function record2(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
@@ -22093,21 +22096,88 @@ var CognitoAuth = class {
     return { authenticated: this.isAuthenticated(), ...this.identity ? { identity: this.identity } : {} };
   }
   async logout() {
-    const generation = ++this.generation;
+    ++this.generation;
     this.cancelLogin?.();
     this.pending = void 0;
     this.loading = void 0;
     this.tokens = null;
     this.identity = void 0;
     this.cacheLoaded = true;
-    await this.initialize();
-    this.assertGeneration(generation);
     try {
       this.ensureDirectories(false);
-      unlinkSync(this.tokenFile);
     } catch (error3) {
-      if (error3.code !== "ENOENT") throw new Error("Could not remove this deployment\u2019s saved credentials");
+      if (error3.code === "ENOENT") return;
+      throw new Error("Could not remove this deployment\u2019s saved credentials");
     }
+    try {
+      const files = this.config.userPoolId === void 0 ? this.logoutFiles() : [this.cachePath(CognitoJwtVerifier.parseUserPoolId(this.config.userPoolId).issuer)];
+      for (const file2 of files) {
+        try {
+          unlinkSync(file2);
+        } catch (error3) {
+          if (error3.code !== "ENOENT") throw error3;
+        }
+      }
+    } catch {
+      throw new Error("Could not remove this deployment\u2019s saved credentials");
+    }
+  }
+  binding(issuer) {
+    return {
+      issuer,
+      clientId: this.config.clientId,
+      apiUrl: this.config.apiUrl,
+      cognitoDomain: this.config.cognitoDomain,
+      profile: this.config.profile ?? "default"
+    };
+  }
+  cachePath(issuer) {
+    const key = createHash("sha256").update(JSON.stringify(this.binding(issuer))).digest("hex");
+    return join(this.tokenDirectory, key + ".json");
+  }
+  /** Metadata selects files for deletion only, never authentication. */
+  logoutFiles() {
+    const directory = opendirSync(this.tokenDirectory);
+    const files = [];
+    let entries = 0;
+    try {
+      for (let entry = directory.readSync(); entry; entry = directory.readSync()) {
+        if (++entries > MAX_LOGOUT_ENTRIES) throw new Error("Credential directory exceeds removal limit");
+        if (!entry.isFile() || !/^[0-9a-f]{64}\.json$/.test(entry.name)) continue;
+        const file2 = join(this.tokenDirectory, entry.name);
+        const fd = openSync(file2, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+        let saved;
+        try {
+          const info = fstatSync(fd);
+          if (!info.isFile() || process.getuid && info.uid !== process.getuid()) {
+            throw new Error("Unsafe credential file");
+          }
+          if (info.size > MAX_AUTH_BYTES) continue;
+          const bytes = Buffer.alloc(MAX_AUTH_BYTES + 1);
+          let length = 0, count;
+          while (length < bytes.length && (count = readSync(fd, bytes, length, bytes.length - length, null)) > 0) length += count;
+          if (length > MAX_AUTH_BYTES) continue;
+          try {
+            saved = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, length)));
+          } catch {
+            continue;
+          }
+        } finally {
+          closeSync(fd);
+        }
+        if (!record2(saved) || saved.version !== 1 || !record2(saved.deployment) || typeof saved.deployment.issuer !== "string") continue;
+        const issuer = saved.deployment.issuer;
+        try {
+          if (CognitoJwtVerifier.parseUserPoolId(issuer.slice(issuer.lastIndexOf("/") + 1)).issuer !== issuer) continue;
+        } catch {
+          continue;
+        }
+        if (JSON.stringify(saved.deployment) === JSON.stringify(this.binding(issuer)) && file2 === this.cachePath(issuer)) files.push(file2);
+      }
+    } finally {
+      directory.closeSync();
+    }
+    return files;
   }
   assertGeneration(generation) {
     if (generation !== this.generation) throw new Error("Authentication was cancelled by logout");
@@ -22135,15 +22205,8 @@ var CognitoAuth = class {
     if (!record2(metadata) || metadata.issuer !== issuer || metadata.jwks_uri !== jwksUri || metadata.authorization_endpoint !== this.config.cognitoDomain + "/oauth2/authorize" || metadata.token_endpoint !== this.config.cognitoDomain + "/oauth2/token") {
       throw new Error("Cognito issuer and Hosted UI configuration do not match");
     }
-    this.deployment = {
-      issuer,
-      clientId: this.config.clientId,
-      apiUrl: this.config.apiUrl,
-      cognitoDomain: this.config.cognitoDomain,
-      profile: this.config.profile ?? "default"
-    };
-    const key = createHash("sha256").update(JSON.stringify(this.deployment)).digest("hex");
-    this.tokenFile = join(this.tokenDirectory, key + ".json");
+    this.deployment = this.binding(issuer);
+    this.tokenFile = this.cachePath(issuer);
     this.verifier = createVerifier(userPoolId, this.config.clientId, this.fetchJson);
   }
   async acquireToken(generation) {
