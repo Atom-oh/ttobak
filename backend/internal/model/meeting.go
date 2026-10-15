@@ -73,15 +73,20 @@ type Meeting struct {
 	// ProjectIDs links this meeting to zero or more projects (many-to-many).
 	// Stored as a DynamoDB String Set (stringset tag), not a List, so link
 	// mutations can use atomic ADD/DELETE without a read-modify-write race.
-	ProjectIDs      []string  `dynamodbav:"projectIds,omitempty,stringset" json:"projectIds,omitempty"`
-	SharedToAccount bool      `dynamodbav:"sharedToAccount,omitempty"` // published to account team
-	NotionPageID    string    `dynamodbav:"notionPageId,omitempty"`    // Notion page created by a prior export; re-export updates it in place instead of creating a duplicate
-	Status          string    `dynamodbav:"status"`                    // recording, transcribing, summarizing, done, error
-	CreatedAt       time.Time `dynamodbav:"createdAt"`
-	UpdatedAt       time.Time `dynamodbav:"updatedAt"`
-	GSI1PK          string    `dynamodbav:"GSI1PK,omitempty"` // USER#{userId} for date sorting
-	GSI1SK          string    `dynamodbav:"GSI1SK,omitempty"` // timestamp for sorting
-	EntityType      string    `dynamodbav:"entityType"`       // "MEETING"
+	ProjectIDs            []string                          `dynamodbav:"projectIds,omitempty,stringset" json:"projectIds,omitempty"`
+	SharedToAccount       bool                              `dynamodbav:"sharedToAccount,omitempty"` // published to account team
+	NotionPageID          string                            `dynamodbav:"notionPageId,omitempty"`    // Notion page created by a prior export; re-export updates it in place instead of creating a duplicate
+	AuthorizationRevision int64                             `dynamodbav:"authorizationRevision,omitempty" json:"-"`
+	SummaryPrivacy        *SummaryPrivacy                   `dynamodbav:"summaryPrivacy,omitempty" json:"-"`
+	ActionItemContinuity  map[string][]ActionItemContinuity `dynamodbav:"actionItemContinuity,omitempty" json:"-"`
+	SummaryReadRestricted bool                              `dynamodbav:"-" json:"-"`
+	InsightsRevision      string                            `dynamodbav:"insightsRevision,omitempty" json:"-"`
+	Status                string                            `dynamodbav:"status"` // recording, transcribing, summarizing, done, error
+	CreatedAt             time.Time                         `dynamodbav:"createdAt"`
+	UpdatedAt             time.Time                         `dynamodbav:"updatedAt"`
+	GSI1PK                string                            `dynamodbav:"GSI1PK,omitempty"` // USER#{userId} for date sorting
+	GSI1SK                string                            `dynamodbav:"GSI1SK,omitempty"` // timestamp for sorting
+	EntityType            string                            `dynamodbav:"entityType"`       // "MEETING"
 }
 
 // Attachment represents a file attachment for a meeting

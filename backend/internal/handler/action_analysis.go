@@ -59,6 +59,8 @@ func writeActionItemsResponse(w http.ResponseWriter, status int, result *service
 	switch {
 	case err == nil:
 		writeJSON(w, status, result)
+	case errors.Is(err, service.ErrSummaryReadRestricted):
+		writeError(w, http.StatusConflict, "SHARING_REGEN_REQUIRED", "소유자가 공유용 회의록을 재생성해야 액션 아이템을 사용할 수 있습니다.")
 	case errors.Is(err, service.ErrForbidden):
 		writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
 	case errors.Is(err, service.ErrNotFound):

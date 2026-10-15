@@ -53,12 +53,12 @@ func TestGetMeetingPublicationStrongMetadataRead(t *testing.T) {
 					for _, alias := range strings.Split(input.ProjectionExpression, ",") {
 						fields[input.ExpressionAttributeNames[strings.TrimSpace(alias)]] = true
 					}
-					for _, field := range []string{"PK", "SK", "meetingId", "userId", "entityType", "accountId", "sharedToAccount"} {
+					for _, field := range []string{"PK", "SK", "meetingId", "userId", "entityType", "accountId", "sharedToAccount", "summaryPrivacy", "insightsRevision"} {
 						if !fields[field] {
 							t.Errorf("missing identity/publication field: %s", field)
 						}
 					}
-					if len(fields) != 7 {
+					if len(fields) != 9 {
 						t.Fatalf("publication read loaded unrelated meeting content: %+v", fields)
 					}
 					return &http.Response{StatusCode: tc.status,

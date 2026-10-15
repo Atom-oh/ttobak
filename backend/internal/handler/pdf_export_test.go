@@ -129,7 +129,9 @@ type pdfChangingRepo struct {
 
 func (r *pdfChangingRepo) GetMeeting(ctx context.Context, userID, meetingID string) (*model.Meeting, error) {
 	r.reads++
-	if r.reads == 2 {
+	// Privacy readers revalidate within GetMeetingDetail. Change the source
+	// after that first complete view, before the export's storage recheck.
+	if r.reads == 3 {
 		r.meetings[hKey(userID, meetingID)].Notes = "동시 변경"
 	}
 	return r.mockHandlerMeetingRepo.GetMeeting(ctx, userID, meetingID)

@@ -290,8 +290,13 @@ func (h *MeetingHandler) GetMeeting(w http.ResponseWriter, r *http.Request) {
 	if h.actionItemsService != nil {
 		analysis, analysisErr := h.actionItemsService.Get(ctx, userID, meetingID)
 		if analysisErr != nil {
-			log.Printf("Action item status lookup failed: %v", analysisErr)
-			result.ActionItemsAnalysis = &model.ActionItemsAnalysis{Status: model.AnalysisUnknown, ErrorCode: "STATUS_UNAVAILABLE"}
+			code := "STATUS_UNAVAILABLE"
+			if errors.Is(analysisErr, service.ErrSummaryReadRestricted) {
+				code = "SHARING_REGEN_REQUIRED"
+			} else {
+				log.Printf("Action item status lookup failed: %v", analysisErr)
+			}
+			result.ActionItemsAnalysis = &model.ActionItemsAnalysis{Status: model.AnalysisUnknown, ErrorCode: code}
 		} else {
 			result.ActionItemsAnalysis = analysis.Analysis
 			result.ActionItems, _ = json.Marshal(analysis.ActionItems) // fixed string/bool struct
@@ -332,7 +337,7 @@ func (h *MeetingHandler) GetMeeting(w http.ResponseWriter, r *http.Request) {
 	// ReconcileStuckSimRun here is just a defensive fallback for this one
 	// response in case that persist failed, not the primary reconciliation
 	// path anymore.
-	if h.simService != nil {
+	if h.simService != nil && (result.SummarySharing == nil || !result.SummarySharing.DerivedReadRestricted) {
 		run, err := h.simService.GetSimRun(ctx, meetingID)
 		if err != nil {
 			// Best-effort attach: simRun is a secondary field on GetMeeting,
@@ -340,6 +345,11 @@ func (h *MeetingHandler) GetMeeting(w http.ResponseWriter, r *http.Request) {
 			// swallow here previously gave no signal at all when this broke.
 			log.Printf("GetMeeting: failed to get sim run for meeting %s: %v", meetingID, err)
 		} else if run != nil {
+			if result.Permission != "owner" && run.SummaryGeneration != result.SummaryGeneration {
+				result.SimRun = &model.SimRunResponse{Status: model.SimStatusError, ErrorMessage: "소유자가 현재 원본에서 시뮬레이션을 다시 생성해야 합니다."}
+				writeJSON(w, http.StatusOK, result)
+				return
+			}
 			if service.ReconcileStuckSimRun(run) {
 				run.Status = model.SimStatusError
 				run.ErrorMessage = "시뮬레이션이 응답하지 않아 시간 초과로 처리되었습니다"

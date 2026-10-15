@@ -50,16 +50,17 @@ type Account struct {
 
 // AccountMember binds a user (with a role) to an account.
 type AccountMember struct {
-	PK         string    `dynamodbav:"PK"` // ACCOUNT#{accountId}
-	SK         string    `dynamodbav:"SK"` // MEMBER#{userId}
-	AccountID  string    `dynamodbav:"accountId"`
-	UserID     string    `dynamodbav:"userId"`
-	Email      string    `dynamodbav:"email,omitempty"`
-	Role       string    `dynamodbav:"role"`
-	AddedAt    time.Time `dynamodbav:"addedAt"`
-	GSI1PK     string    `dynamodbav:"GSI1PK,omitempty"` // USER#{userId}
-	GSI1SK     string    `dynamodbav:"GSI1SK,omitempty"` // ACCOUNT#{accountId}
-	EntityType string    `dynamodbav:"entityType"`       // "ACCOUNT_MEMBER"
+	PK                    string    `dynamodbav:"PK"` // ACCOUNT#{accountId}
+	SK                    string    `dynamodbav:"SK"` // MEMBER#{userId}
+	AccountID             string    `dynamodbav:"accountId"`
+	UserID                string    `dynamodbav:"userId"`
+	Email                 string    `dynamodbav:"email,omitempty"`
+	Role                  string    `dynamodbav:"role"`
+	AddedAt               time.Time `dynamodbav:"addedAt"`
+	SummaryPrivacyVersion int       `dynamodbav:"summaryPrivacyVersion,omitempty" json:"-"`
+	GSI1PK                string    `dynamodbav:"GSI1PK,omitempty"` // USER#{userId}
+	GSI1SK                string    `dynamodbav:"GSI1SK,omitempty"` // ACCOUNT#{accountId}
+	EntityType            string    `dynamodbav:"entityType"`       // "ACCOUNT_MEMBER"
 }
 
 // --- Request / Response DTOs ---
@@ -235,23 +236,25 @@ type MeetingInsight struct {
 // AccountInsight is a persisted insight item in the account partition.
 // PK: ACCOUNT#{accountId}, SK: INSIGHT#{occurredAt}#{meetingId}#{index}
 type AccountInsight struct {
-	PK           string    `dynamodbav:"PK"`
-	SK           string    `dynamodbav:"SK"`
-	AccountID    string    `dynamodbav:"accountId"`
-	InsightID    string    `dynamodbav:"insightId"`
-	Type         string    `dynamodbav:"type"`
-	Text         string    `dynamodbav:"text"`
-	Evidence     string    `dynamodbav:"evidence,omitempty"`
-	Implication  string    `dynamodbav:"implication,omitempty"`
-	NextAction   string    `dynamodbav:"nextAction,omitempty"`
-	SourceType   string    `dynamodbav:"sourceType"` // "meeting" | "news" | "ingest"
-	SourceID     string    `dynamodbav:"sourceId"`
-	SourceUserID string    `dynamodbav:"sourceUserId,omitempty"`
-	OccurredAt   time.Time `dynamodbav:"occurredAt"`
-	TsMarker     string    `dynamodbav:"tsMarker,omitempty"`
-	Entities     []string  `dynamodbav:"entities,omitempty"`
-	CreatedAt    time.Time `dynamodbav:"createdAt"`
-	EntityType   string    `dynamodbav:"entityType"` // "ACCOUNT_INSIGHT"
+	PK                string    `dynamodbav:"PK"`
+	SK                string    `dynamodbav:"SK"`
+	AccountID         string    `dynamodbav:"accountId"`
+	InsightID         string    `dynamodbav:"insightId"`
+	Type              string    `dynamodbav:"type"`
+	Text              string    `dynamodbav:"text"`
+	Evidence          string    `dynamodbav:"evidence,omitempty"`
+	Implication       string    `dynamodbav:"implication,omitempty"`
+	NextAction        string    `dynamodbav:"nextAction,omitempty"`
+	SourceType        string    `dynamodbav:"sourceType"` // "meeting" | "news" | "ingest"
+	SourceID          string    `dynamodbav:"sourceId"`
+	SourceUserID      string    `dynamodbav:"sourceUserId,omitempty"`
+	SummaryGeneration string    `dynamodbav:"summaryGeneration,omitempty"`
+	InsightsRevision  string    `dynamodbav:"insightsRevision,omitempty"`
+	OccurredAt        time.Time `dynamodbav:"occurredAt"`
+	TsMarker          string    `dynamodbav:"tsMarker,omitempty"`
+	Entities          []string  `dynamodbav:"entities,omitempty"`
+	CreatedAt         time.Time `dynamodbav:"createdAt"`
+	EntityType        string    `dynamodbav:"entityType"` // "ACCOUNT_INSIGHT"
 }
 
 // AccountInsightDTO deliberately has no Evidence field: near-verbatim meeting

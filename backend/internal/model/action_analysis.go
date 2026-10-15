@@ -20,13 +20,14 @@ const (
 // ActionItemsAnalysis is separate from Meeting so unrelated whole-item writes
 // cannot erase an active claim. No source text or generated output is copied here.
 type ActionItemsAnalysis struct {
-	RunID      string    `dynamodbav:"runId" json:"runId,omitempty"`
-	Status     string    `dynamodbav:"status" json:"status"`
-	SourceHash string    `dynamodbav:"sourceHash" json:"-"`
-	StartedAt  time.Time `dynamodbav:"startedAt" json:"startedAt,omitempty"`
-	UpdatedAt  time.Time `dynamodbav:"updatedAt" json:"updatedAt,omitempty"`
-	LeaseUntil int64     `dynamodbav:"leaseUntil" json:"leaseUntil,omitempty"`
-	ErrorCode  string    `dynamodbav:"errorCode" json:"errorCode,omitempty"`
+	RunID             string    `dynamodbav:"runId" json:"runId,omitempty"`
+	Status            string    `dynamodbav:"status" json:"status"`
+	SourceHash        string    `dynamodbav:"sourceHash" json:"-"`
+	SummaryGeneration string    `dynamodbav:"summaryGeneration,omitempty" json:"-"`
+	StartedAt         time.Time `dynamodbav:"startedAt" json:"startedAt,omitempty"`
+	UpdatedAt         time.Time `dynamodbav:"updatedAt" json:"updatedAt,omitempty"`
+	LeaseUntil        int64     `dynamodbav:"leaseUntil" json:"leaseUntil,omitempty"`
+	ErrorCode         string    `dynamodbav:"errorCode" json:"errorCode,omitempty"`
 }
 
 type ActionItemsRequested struct {

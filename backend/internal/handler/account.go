@@ -357,6 +357,8 @@ func (h *AccountHandler) ListAccountInsights(w http.ResponseWriter, r *http.Requ
 	list, err := h.accountService.ListAccountInsights(ctx, userID, accountID, from, to, types)
 	if err != nil {
 		switch {
+		case errors.Is(err, service.ErrSummaryReadRestricted):
+			writeError(w, http.StatusConflict, "SHARING_REGEN_REQUIRED", "The owner must regenerate sharing-safe meeting notes before these insights can be read")
 		case errors.Is(err, service.ErrForbidden):
 			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
 		case errors.Is(err, service.ErrNotFound):
@@ -411,6 +413,8 @@ func (h *AccountHandler) GetAccountBrief(w http.ResponseWriter, r *http.Request)
 	brief, err := h.accountService.GetAccountBrief(ctx, userID, accountID, from, to, types)
 	if err != nil {
 		switch {
+		case errors.Is(err, service.ErrSummaryReadRestricted):
+			writeError(w, http.StatusConflict, "SHARING_REGEN_REQUIRED", "The owner must regenerate sharing-safe meeting notes before these insights can be read")
 		case errors.Is(err, service.ErrForbidden):
 			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
 		case errors.Is(err, service.ErrNotFound):
