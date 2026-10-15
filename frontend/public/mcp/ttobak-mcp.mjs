@@ -22651,8 +22651,30 @@ var TtobakApi = class {
     const qs = q.toString();
     return this.get(`${documentsPath(accountId)}${qs ? "?" + qs : ""}`);
   }
+  async readDocumentCatalog(options) {
+    const query = new URLSearchParams({ pageSize: String(options.pageSize) });
+    if (options.accountId !== void 0) query.set("accountId", identifier(options.accountId, "accountId"));
+    if (options.docType !== void 0) query.set("docType", options.docType);
+    if (options.cursor !== void 0) query.set("cursor", options.cursor);
+    return this.request("GET", `/api/document-catalog?${query}`, void 0, MAX_READING_BYTES);
+  }
   async getDocument(accountId, docId) {
     return this.get(`${documentsPath(accountId)}/${identifier(docId, "docId")}`);
+  }
+  async readDocument(options) {
+    const query = new URLSearchParams({
+      section: options.section,
+      pageSize: String(options.pageSize),
+      maxBytes: "10000"
+    });
+    if (options.cursor !== void 0) query.set("cursor", options.cursor);
+    if (options.expectedRevision !== void 0) query.set("expectedRevision", options.expectedRevision);
+    return this.request(
+      "GET",
+      `${documentsPath(options.accountId)}/${identifier(options.docId, "docId")}/reading?${query}`,
+      void 0,
+      MAX_READING_BYTES
+    );
   }
   async updateDocument(accountId, docId, doc) {
     return this.put(`${documentsPath(accountId)}/${identifier(docId, "docId")}`, doc);
@@ -23023,6 +23045,109 @@ function decodeUpload(args) {
     throw new Error("contentBase64 must encode 1\u2013524288 bytes");
   }
   return { data, fileName };
+}
+
+// src/document-reading.ts
+function documentReadingOptions(args) {
+  if (Object.keys(args).some((key) => !["docId", "accountId", "section", "pageSize", "cursor", "expectedRevision"].includes(key))) {
+    throw new Error("INVALID_ARGUMENT: unknown document reading option");
+  }
+  for (const key of ["docId", "accountId"]) {
+    if (key === "accountId" && args[key] === void 0) continue;
+    if (typeof args[key] !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(args[key])) {
+      throw new Error(`INVALID_ARGUMENT: ${key} must be a document/account ID`);
+    }
+  }
+  const section = args.section === void 0 ? "content" : args.section;
+  const pageSize = args.pageSize === void 0 ? 4e3 : args.pageSize;
+  if (section !== "content" && section !== "metadata" && section !== "download" && section !== "preview") {
+    throw new Error("INVALID_ARGUMENT: section must be content, metadata, download or preview");
+  }
+  if (typeof pageSize !== "number" || !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 8e3) {
+    throw new Error("INVALID_ARGUMENT: pageSize must be an integer from 1 to 8000");
+  }
+  if (args.cursor !== void 0 && (typeof args.cursor !== "string" || !args.cursor.length || args.cursor.length > 2048)) {
+    throw new Error("INVALID_CURSOR: cursor must be a nonempty string of at most 2048 characters");
+  }
+  if (args.expectedRevision !== void 0 && (typeof args.expectedRevision !== "string" || !/^[a-f0-9]{64}$/.test(args.expectedRevision))) {
+    throw new Error("INVALID_ARGUMENT: expectedRevision must be a server-returned revision");
+  }
+  return {
+    docId: args.docId,
+    accountId: args.accountId,
+    section,
+    pageSize,
+    cursor: args.cursor,
+    expectedRevision: args.expectedRevision
+  };
+}
+function record4(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+function documentReadingResult(value, options) {
+  if (!record4(value) || value.docId !== options.docId || value.accountId !== (options.accountId ?? "") || value.section !== options.section || typeof value.content !== "string" || typeof value.revision !== "string" || !/^[a-f0-9]{64}$/.test(value.revision) || options.expectedRevision !== void 0 && value.revision !== options.expectedRevision || !["owner", "edit", "read"].includes(value.permission) || !(options.accountId ? value.scope === "account" : ["personal", "shared"].includes(value.scope)) || !["text", "file"].includes(value.mode) || !["available", "empty", "not_available"].includes(value.textStatus) || "publicShareToken" in value || "fileKey" in value) {
+    throw new Error("INVALID_READING_RESPONSE: document identity or source metadata is invalid");
+  }
+  const page = value.page;
+  if (!record4(page) || page.unit !== "unicode_code_points" || typeof page.complete !== "boolean" || ![page.startOffset, page.endOffset, page.totalCodePoints].every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0) || page.endOffset < page.startOffset || page.endOffset > page.totalCodePoints || Array.from(value.content).length !== page.endOffset - page.startOffset || (page.complete ? page.endOffset !== page.totalCodePoints : page.endOffset === page.startOffset || page.endOffset >= page.totalCodePoints) || (page.complete ? page.nextCursor !== null : typeof page.nextCursor !== "string" || !page.nextCursor.length || page.nextCursor.length > 2048)) {
+    throw new Error("INVALID_READING_RESPONSE: document page continuation is invalid");
+  }
+  if (value.mode === "file" && (value.content !== "" || value.textStatus !== "not_available")) {
+    throw new Error("INVALID_READING_RESPONSE: file text is unavailable");
+  }
+  const result = { content: [{ type: "text", text: JSON.stringify(value) }] };
+  if (Buffer.byteLength(JSON.stringify(result)) > MAX_READING_BYTES) {
+    throw new Error("READING_LIMIT: document response exceeds 32000 bytes");
+  }
+  return result;
+}
+
+// src/document-catalog.ts
+function documentCatalogOptions(args) {
+  if (Object.keys(args).some((key) => !["accountId", "docType", "pageSize", "cursor"].includes(key))) {
+    throw new Error("INVALID_ARGUMENT: unknown document catalog option");
+  }
+  if (args.accountId !== void 0 && (typeof args.accountId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(args.accountId))) {
+    throw new Error("INVALID_ARGUMENT: accountId must be an account ID; omit it for personal documents");
+  }
+  if (args.docType !== void 0 && (typeof args.docType !== "string" || Array.from(args.docType).length > 256)) {
+    throw new Error("INVALID_ARGUMENT: docType must contain at most 256 characters");
+  }
+  const pageSize = args.pageSize === void 0 ? 20 : args.pageSize;
+  if (typeof pageSize !== "number" || !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 50) {
+    throw new Error("INVALID_ARGUMENT: pageSize must be an integer from 1 to 50");
+  }
+  if (args.cursor !== void 0 && (typeof args.cursor !== "string" || !args.cursor.length || args.cursor.length > 2048)) {
+    throw new Error("INVALID_CURSOR: expected a nonempty server cursor of at most 2048 characters");
+  }
+  return {
+    accountId: args.accountId,
+    docType: args.docType,
+    pageSize,
+    cursor: args.cursor
+  };
+}
+function record5(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+function documentCatalogResult(value, options) {
+  if (!record5(value) || value.accountId !== (options.accountId ?? "") || value.consistency !== "current_per_item" || !Array.isArray(value.documents) || value.documents.length > options.pageSize) {
+    throw new Error("INVALID_READING_RESPONSE: invalid document catalog identity");
+  }
+  for (const doc of value.documents) {
+    if (!record5(doc) || typeof doc.docId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(doc.docId) || typeof doc.title !== "string" || typeof doc.metadataRevision !== "string" || !/^[a-f0-9]{64}$/.test(doc.metadataRevision) || !["owner", "edit", "read"].includes(doc.permission) || !(options.accountId ? doc.scope === "account" : ["personal", "shared"].includes(doc.scope)) || "content" in doc || "publicShareToken" in doc || "fileKey" in doc) {
+      throw new Error("INVALID_READING_RESPONSE: invalid document metadata");
+    }
+  }
+  const page = value.page;
+  if (!record5(page) || page.unit !== "items" || page.returned !== value.documents.length || typeof page.complete !== "boolean" || (page.complete ? page.nextCursor !== null : typeof page.nextCursor !== "string" || !page.nextCursor.length || page.nextCursor.length > 2048)) {
+    throw new Error("INVALID_READING_RESPONSE: invalid catalog continuation");
+  }
+  const result = { content: [{ type: "text", text: JSON.stringify(value) }] };
+  if (Buffer.byteLength(JSON.stringify(result)) > MAX_READING_BYTES) {
+    throw new Error("READING_LIMIT: document catalog exceeds 32000 bytes");
+  }
+  return result;
 }
 
 // src/recorder.ts
@@ -23774,27 +23899,35 @@ var registry2 = {
     },
     {
       name: "ttobak_list_documents",
-      description: "List document metadata (docId, title, docType). Omit accountId for your personal Document Hub, including notes shared directly with you (sharedBy); set it for account documents. Use ttobak_get_document to read current contents. These notes are not automatically indexed in ttobak_ask.",
+      description: "Page through current document metadata without loading bodies. Omit accountId for owned and directly-shared documents; set it for an account. Follow page.nextCursor with the same accountId/docType, including empty filtered pages, until complete. Permissions and the continuation anchor are rechecked; restart stale cursors. Metadata previews are explicitly marked when shortened. Use ttobak_get_document for content.",
       annotations: { readOnlyHint: true },
       inputSchema: {
         type: "object",
         properties: {
           accountId: { type: "string", minLength: 1, description: "Optional account scope; omit for the personal Document Hub" },
-          docType: { type: "string", description: "Optional docType filter" }
-        }
+          docType: { type: "string", description: "Optional docType filter" },
+          pageSize: { type: "integer", minimum: 1, maximum: 50, default: 20 },
+          cursor: { type: "string", maxLength: 2048, description: "Opaque catalog continuation" }
+        },
+        additionalProperties: false
       }
     },
     {
       name: "ttobak_get_document",
-      description: "Read the current document content. Omit accountId for a personal or directly-shared document; use the same accountId as its listing for an account document. Shared personal documents are read-only. File documents return download/preview links; their file contents are not extracted.",
+      description: "Read bounded current document pages. Follow page.nextCursor with the same accountId, docId and section until complete; restart stale cursors. Omit accountId for personal or directly-shared documents. Every page rechecks access and source revision. Files include authorized short-lived download/preview links and explicit unavailable text. If previewStatus=deferred, follow previewRead with section=preview. Public sharing tokens are never returned.",
       annotations: { readOnlyHint: true },
       inputSchema: {
         type: "object",
         properties: {
           accountId: { type: "string", minLength: 1, description: "Optional account scope; omit for a personal or directly-shared document" },
-          docId: { type: "string", description: "Document ID" }
+          docId: { type: "string", description: "Document ID" },
+          section: { type: "string", enum: ["content", "metadata", "download", "preview"], default: "content" },
+          pageSize: { type: "integer", minimum: 1, maximum: 8e3, default: 4e3 },
+          cursor: { type: "string", maxLength: 2048, description: "Opaque server continuation; retain scope and section" },
+          expectedRevision: { type: "string", pattern: "^[a-f0-9]{64}$", description: "Pin a related file-link read to the returned source revision" }
         },
-        required: ["docId"]
+        required: ["docId"],
+        additionalProperties: false
       }
     },
     {
@@ -24138,15 +24271,12 @@ Client: ${CLIENT_ID.slice(0, 8)}...`
         return text(JSON.stringify(result, null, 2));
       }
       case "ttobak_list_documents": {
-        const { accountId, docType } = args;
-        const result = await api.listDocuments(accountId, docType);
-        return text(JSON.stringify(result, null, 2));
+        const options2 = documentCatalogOptions(args);
+        return documentCatalogResult(await api.readDocumentCatalog(options2), options2);
       }
       case "ttobak_get_document": {
-        const { accountId, docId } = args;
-        if (!docId) return error2("docId is required");
-        const result = await api.getDocument(accountId, docId);
-        return text(JSON.stringify(result, null, 2));
+        const options2 = documentReadingOptions(args);
+        return documentReadingResult(await api.readDocument(options2), options2);
       }
       case "ttobak_update_document": {
         const { accountId, docId, title, markdown, docType, path } = args;

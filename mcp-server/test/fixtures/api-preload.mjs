@@ -9,6 +9,23 @@ const saved = new Map();
 TtobakApi.prototype.request = async function (method, path, body) {
   if (path.endsWith('/shared-doc') && method === 'PUT') throw new Error('HTTP 404: NOT_FOUND');
   const request = { method, path, body: body === undefined ? undefined : JSON.parse(JSON.stringify(body)) };
+  if (path.startsWith('/api/document-catalog?')) {
+    const documents = [...saved.values()].map(({ docId, title }) => ({
+      docId, title, scope: 'personal', permission: 'owner', metadataRevision: 'a'.repeat(64),
+    }));
+    return { documents, accountId: '', consistency: 'current_per_item',
+      page: { unit: 'items', returned: documents.length, complete: true, nextCursor: null } };
+  }
+  if (path.startsWith('/api/documents/doc-1/reading?')) {
+    const doc = saved.get('doc-1');
+    const count = Array.from(doc.content).length;
+    return {
+      ...doc, request, accountId: '', scope: 'personal', section: 'content',
+      permission: 'owner', revision: 'a'.repeat(64), mode: 'text', textStatus: 'available',
+      page: { unit: 'unicode_code_points', startOffset: 0, endOffset: count,
+        totalCodePoints: count, complete: true, nextCursor: null },
+    };
+  }
   if (path === '/api/documents' && method === 'POST') {
     const doc = { docId: 'doc-1', title: body.title, content: body.markdown };
     saved.set(doc.docId, doc);
