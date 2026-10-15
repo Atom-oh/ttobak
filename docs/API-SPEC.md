@@ -453,6 +453,37 @@ revision for `expectedRevision`. Read the selected document to obtain that
 revision. `metadataTruncated` marks shortened field/link previews; body bytes,
 raw file keys and public-share capabilities are excluded from catalog responses.
 
+Authenticated `GET /api/kb/files/reading` pages the caller's private KB file
+metadata. It accepts `pageSize` (1–50, default 20) and an opaque `cursor`, with
+the same 10,000-byte encoded page budget. Each request uses one bounded S3 list
+operation in the configured general-purpose bucket and checks current object
+metadata before returning it. The cursor binds the user/bucket and last
+consumed object's revision; changed/deleted anchors return `STALE_CURSOR`.
+Names may have explicit preview truncation, but `fileId` is preserved exactly.
+The list is live, not a collection-wide snapshot. No object body is downloaded,
+and foreign-prefix objects fail closed.
+
+Authenticated `GET /api/navigation/accounts` and `/api/navigation/projects`
+provide bounded metadata catalogs (`pageSize` 1–50, default 20; opaque `cursor`;
+10,000 encoded bytes). GSI candidates are revalidated against consistent
+canonical membership/resource reads; indexes never grant access. Account
+hierarchy remains classification only. Project pages visit ownership, direct
+membership and linked-account membership. Deduplication uses only exact IDs
+already emitted, never an inferred earlier path: membership/ref indexes can lag.
+The cursor retains up to 32 emitted IDs while staying within 2048 characters.
+When that bounded state fills, `overlapPossible=true` is explicit; combine
+project results by the declared `unionKey=projectId`. No authorized project is
+suppressed merely because another membership exists but its index is delayed.
+
+Project account traversal is resumable. Each request issues at most two
+bounded candidate queries and does not enumerate earlier-account memberships
+to infer duplicates. Empty continuation pages remain possible. Continue until
+`complete=true`; do not treat an empty page as completion. Canonical String Sets
+are sorted for stable metadata revisions. Continuations revalidate
+their last returned resource/grant and any in-progress account scope. These
+are live catalogs, not collection-wide snapshots; concurrent changes can
+require a fresh read.
+
 PPT/PPTX uploads trigger convert-doc and produce a docs-pdf/ sidecar. previewUrl
 points to the PDF while downloadUrl always points to the original. The converter
 records the actual GET's source ETag/version, rechecks the original, and replaces
@@ -621,6 +652,7 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | GET | `/api/public/docs/{token}` | `documentHandler.PublicGetDoc` |
 | POST | `/api/session/bootstrap` | `sessionHandler.Bootstrap` |
 | GET | `/api/accounts` | `accountHandler.ListAccounts` |
+| GET | `/api/navigation/accounts` | `accountCatalogHandler.Get` |
 | POST | `/api/accounts` | `accountHandler.CreateAccount` |
 | GET | `/api/accounts/{accountId}` | `accountHandler.GetAccount` |
 | PUT | `/api/accounts/{accountId}/parent` | `accountHandler.UpdateAccountParent` |
@@ -691,6 +723,7 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | POST | `/api/kb/sync` | `kbHandler.SyncKB` |
 | POST | `/api/kb/copy-attachment` | `kbHandler.CopyAttachment` |
 | GET | `/api/kb/files` | `kbHandler.ListFiles` |
+| GET | `/api/kb/files/reading` | `kbHandler.ReadFiles` |
 | DELETE | `/api/kb/files/{fileId}` | `kbHandler.DeleteFile` |
 | POST | `/api/meetings/{meetingId}/export` | `exportHandler.ExportMeeting` |
 | GET | `/api/meetings/{meetingId}/export/obsidian` | `exportHandler.ExportObsidian` |
@@ -731,6 +764,7 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | DELETE | `/api/research/{researchId}/accounts/{accountId}` | `researchHandler.UnlinkAccount` |
 | POST | `/api/projects` | `projectHandler.CreateProject` |
 | GET | `/api/projects` | `projectHandler.ListMyProjects` |
+| GET | `/api/navigation/projects` | `projectCatalogHandler.Get` |
 | GET | `/api/projects/{projectId}` | `projectHandler.GetProject` |
 | PUT | `/api/projects/{projectId}` | `projectHandler.UpdateProject` |
 | DELETE | `/api/projects/{projectId}` | `projectHandler.DeleteProject` |

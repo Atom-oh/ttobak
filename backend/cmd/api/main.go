@@ -181,6 +181,9 @@ func init() {
 	meetingHandler.SetSimService(simService)
 	actionItemsService := service.NewMetadataActionItemsAnalysisService(repo, bedrockService, service.ActionItemsPublisher(ebClient))
 	readingHandler := handler.NewMeetingReadingHandler(service.NewMeetingReadingService(repo, actionItemsService))
+	navigationService := service.NewNavigationCatalogService(repo)
+	accountCatalogHandler := handler.NewNavigationCatalogHandler(navigationService, "accounts")
+	projectCatalogHandler := handler.NewNavigationCatalogHandler(navigationService, "projects")
 	documentReadingService := service.NewDocumentReadingService(repo)
 	documentReadingService.SetFileServices(accountService, uploadService)
 	documentReadingHandler := handler.NewDocumentReadingHandler(documentReadingService)
@@ -226,6 +229,7 @@ func init() {
 
 		// Account routes
 		r.Get("/api/accounts", accountHandler.ListAccounts)
+		r.Get("/api/navigation/accounts", accountCatalogHandler.Get)
 		r.Post("/api/accounts", accountHandler.CreateAccount)
 		r.Get("/api/accounts/{accountId}", accountHandler.GetAccount)
 		r.Put("/api/accounts/{accountId}/parent", accountHandler.UpdateAccountParent)
@@ -322,6 +326,7 @@ func init() {
 		r.Post("/api/kb/sync", kbHandler.SyncKB)
 		r.Post("/api/kb/copy-attachment", kbHandler.CopyAttachment)
 		r.Get("/api/kb/files", kbHandler.ListFiles)
+		r.Get("/api/kb/files/reading", kbHandler.ReadFiles)
 		r.Delete("/api/kb/files/{fileId}", kbHandler.DeleteFile)
 
 		// Q&A routes — migrated to Python Lambda (ttobak-qa)
@@ -391,6 +396,7 @@ func init() {
 		// Project routes
 		r.Post("/api/projects", projectHandler.CreateProject)
 		r.Get("/api/projects", projectHandler.ListMyProjects)
+		r.Get("/api/navigation/projects", projectCatalogHandler.Get)
 		r.Get("/api/projects/{projectId}", projectHandler.GetProject)
 		r.Put("/api/projects/{projectId}", projectHandler.UpdateProject)
 		r.Delete("/api/projects/{projectId}", projectHandler.DeleteProject)
