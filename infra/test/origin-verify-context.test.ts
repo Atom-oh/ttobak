@@ -1,10 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-// bin/infra.ts is not executed by Jest; pin that the full app refuses to
-// synthesize without the CloudFront origin proof.
-test('the app requires ttobak:originVerifySecret instead of defaulting to empty', () => {
-  const code = readFileSync(join(__dirname, '../bin/infra.ts'), 'utf8');
-  expect(code).not.toMatch(/tryGetContext\('ttobak:originVerifySecret'\)\s*\|\|\s*''/);
-  expect(code).toMatch(/if \(typeof originVerifySecret !== 'string' \|\| originVerifySecret\.length < 16\) \{\s*throw new Error/);
+test('origin proof is not stored in CDK context or passed as application props', () => {
+  const context = JSON.parse(readFileSync(join(__dirname, '../cdk.json'), 'utf8')).context;
+  // Assert only presence; never print a secret-bearing context object on failure.
+  expect(Object.hasOwn(context, 'ttobak:originVerifySecret')).toBe(false);
+  const app = readFileSync(join(__dirname, '../bin/infra.ts'), 'utf8');
+  expect(app.includes('originVerifySecret')).toBe(false);
+  expect(app).toContain('httpOriginSecret: gatewayStack.httpOrigin.secret');
 });

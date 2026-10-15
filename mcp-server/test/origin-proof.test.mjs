@@ -19,7 +19,7 @@ test('current and bounded previous proof work; expired cache never falls back to
     calls++;
     if (fail) throw new Error('private provider response');
     return document();
-  }, previous, () => now);
+  }, () => now);
   assert.equal(await verifier.verify(headers(current)), true);
   assert.equal(await verifier.verify(headers(previous)), true);
   assert.equal(calls, 1);
@@ -54,10 +54,10 @@ test('schema, bounded overlap and proof format are validated', () => {
   assert.ok(parseProofs(document({ phase: 'active', previous: '', previousExpiresAt: 0 })));
 });
 
-test('legacy proof remains valid during consumer rollout but missing configuration always denies', async () => {
-  assert.equal(await new OriginVerifier('', async () => undefined, previous).verify(headers(previous)), true);
+test('missing ARN or version cannot reuse a legacy environment proof', async () => {
   assert.equal(await new OriginVerifier('', async () => document()).verify(headers(current)), false);
-  assert.equal(await new OriginVerifier('arn', async () => undefined, previous).verify(headers(previous)), false);
+  assert.equal(await environmentOriginVerifier({ ORIGIN_VERIFY_SECRET: previous }).verify(headers(previous)), false);
+  assert.equal(await environmentOriginVerifier({ ORIGIN_VERIFY_SECRET_ARN: 'arn' }).verify(headers(current)), false);
 });
 
 test('concurrent lookups coalesce and timeout even if a provider ignores cancellation', async () => {
@@ -65,23 +65,19 @@ test('concurrent lookups coalesce and timeout even if a provider ignores cancell
   const verifier = new OriginVerifier('arn', async (_arn, received) => {
     calls++; signal = received;
     return new Promise(() => {});
-  }, '', () => 1010, 10);
+  }, () => 1010, 10);
   const started = Date.now();
-  assert.deepEqual(await Promise.all([verifier.verify(headers(current)), verifier.verify(headers(current))]), [false, false]);
+  const warn = console.warn, logs = [];
+  try {
+    console.warn = message => logs.push(message);
+    assert.deepEqual(await Promise.all([verifier.verify(headers(current)), verifier.verify(headers(current))]), [false, false]);
+  } finally { console.warn = warn; }
+  assert.deepEqual(logs, ['http_origin_rejected category=secret_unavailable']);
   assert.equal(calls, 1);
   assert.equal(signal.aborted, true);
   assert.ok(Date.now() - started < 1000);
 });
 
-test('legacy keeps nonempty exact values outside the new proof grammar', async () => {
-  for (const proof of ['short', 'legacy,comma', '기존 검증값', 'x'.repeat(129), ' spaced ']) {
-    const verifier = new OriginVerifier('', async () => undefined, proof);
-    assert.equal(await verifier.verify(headers(proof)), true);
-    assert.equal(await verifier.verify(headers(proof + 'wrong')), false);
-    assert.equal(await verifier.verify({ ...headers(proof), 'X-Origin-Verify': proof }), false);
-  }
-  assert.equal(await new OriginVerifier('', async () => undefined).verify(headers('')), false);
-});
 
 test('environment version pin reaches the SDK and failures log only fixed categories', async () => {
   const send = SecretsManagerClient.prototype.send, warn = console.warn;
@@ -97,6 +93,20 @@ test('environment version pin reaches the SDK and failures log only fixed catego
     SecretsManagerClient.prototype.send = async () => { throw new Error('private provider output'); };
     assert.equal(await environmentOriginVerifier(env).verify(headers(current)), false);
     assert.deepEqual(logs, ['http_origin_rejected category=secret_unavailable']);
+  } finally {
+    SecretsManagerClient.prototype.send = send;
+    console.warn = warn;
+  }
+});
+
+test('invalid version configuration is a fixed category and never reaches the SDK', async () => {
+  const send = SecretsManagerClient.prototype.send, warn = console.warn, logs = [];
+  try {
+    console.warn = message => logs.push(message);
+    SecretsManagerClient.prototype.send = async () => { assert.fail('invalid pin reached SDK'); };
+    assert.equal(await environmentOriginVerifier({ ORIGIN_VERIFY_SECRET_ARN: 'synthetic-arn',
+      ORIGIN_VERIFY_SECRET_VERSION_ID: 'private-invalid-value' }).verify(headers(current)), false);
+    assert.deepEqual(logs, ['http_origin_rejected category=configuration_invalid']);
   } finally {
     SecretsManagerClient.prototype.send = send;
     console.warn = warn;

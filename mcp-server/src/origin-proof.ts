@@ -41,13 +41,14 @@ function equals(actual: string, expected: string): boolean {
 }
 
 type ReadSecret = (arn: string, signal: AbortSignal) => Promise<unknown>;
+class OriginConfigurationError extends Error {}
 
 export class OriginVerifier {
   private cached?: { value: ProofSet; expires: number };
   private pending?: Promise<ProofSet | undefined>;
 
   constructor(private readonly arn: string, private readonly read: ReadSecret,
-              private readonly legacy = '', private readonly now = () => Date.now() / 1000,
+              private readonly now = () => Date.now() / 1000,
               private readonly lookupMs = 3000) {}
 
   private async secret(): Promise<ProofSet | undefined> {
@@ -59,16 +60,18 @@ export class OriginVerifier {
       try {
         const raw = await Promise.race([
           this.read(this.arn, abort.signal),
-          new Promise<undefined>((resolve) => {
-            timer = setTimeout(() => { abort.abort(); resolve(undefined); }, this.lookupMs);
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(() => { abort.abort(); reject(new Error('origin lookup timeout')); }, this.lookupMs);
           }),
         ]);
         const value = parseProofs(raw);
         if (value) this.cached = { value, expires: this.now() + 60 };
         else console.warn('http_origin_rejected category=secret_invalid');
         return value;
-      } catch {
-        console.warn('http_origin_rejected category=secret_unavailable');
+      } catch (error) {
+        console.warn(error instanceof OriginConfigurationError
+          ? 'http_origin_rejected category=configuration_invalid'
+          : 'http_origin_rejected category=secret_unavailable');
         return undefined; // No service message, proof, header or ARN enters a log.
       } finally {
         if (timer) clearTimeout(timer);
@@ -81,8 +84,10 @@ export class OriginVerifier {
     const values = Object.entries(headers).filter(([name]) => name.toLowerCase() === 'x-origin-verify');
     if (values.length !== 1 || typeof values[0][1] !== 'string') return false;
     const actual = values[0][1];
-    // Temporary rollout compatibility; an ARN never falls back to legacy.
-    if (!this.arn) return this.legacy.length > 0 && equals(actual, this.legacy);
+    if (!this.arn) {
+      console.warn('http_origin_rejected category=configuration_invalid');
+      return false;
+    }
     if (!validProof(actual)) return false;
     const value = await this.secret();
     if (!value) return false;
@@ -96,9 +101,9 @@ export function environmentOriginVerifier(env: NodeJS.ProcessEnv): OriginVerifie
   const client = new SecretsManagerClient({ maxAttempts: 1 });
   const version = env.ORIGIN_VERIFY_SECRET_VERSION_ID ?? '';
   return new OriginVerifier(env.ORIGIN_VERIFY_SECRET_ARN ?? '', async (arn, signal) => {
-    if (version && !/^[A-Za-z0-9-]{32,64}$/.test(version)) return undefined;
+    if (!/^[A-Za-z0-9-]{32,64}$/.test(version)) throw new OriginConfigurationError();
     const result = await client.send(new GetSecretValueCommand({ SecretId: arn,
-      ...(version ? { VersionId: version } : {}) }), { abortSignal: signal });
-    return result.SecretString;
-  }, env.ORIGIN_VERIFY_SECRET ?? '');
+      VersionId: version }), { abortSignal: signal });
+    return result?.SecretString;
+  });
 }

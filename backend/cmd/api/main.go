@@ -197,7 +197,7 @@ func init() {
 	r.Use(middleware.RequestLog)
 	r.Use(middleware.Recovery)
 	originVerifier := middleware.NewOriginVerifier(
-		os.Getenv("ORIGIN_VERIFY_SECRET_ARN"), os.Getenv("ORIGIN_VERIFY_SECRET"),
+		os.Getenv("ORIGIN_VERIFY_SECRET_ARN"),
 		secretsmanager.NewFromConfig(cfg),
 		os.Getenv("TTOBAK_ORIGIN_LOCAL_DEV") == "1" && os.Getenv("AWS_LAMBDA_FUNCTION_NAME") == "",
 		os.Getenv("ORIGIN_VERIFY_SECRET_VERSION_ID"),

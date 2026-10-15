@@ -7,6 +7,15 @@ import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 
 const PUBLIC_URL = 'https://ttobak.example.com/api/mcp';
+const ORIGIN_ENV = {
+  ORIGIN_VERIFY_SECRET_ARN: 'arn:aws:secretsmanager:ap-northeast-2:111111111111:secret:synthetic',
+  ORIGIN_VERIFY_SECRET_VERSION_ID: 'b'.repeat(32),
+  TTOBAK_TEST_ORIGIN_SECRET: JSON.stringify({ schemaVersion: 1, current: 'synthetic-edge-secret', previous: '',
+    generation: 'a'.repeat(32), phase: 'active', rotationStartedAt: 0, previousExpiresAt: 0 }),
+  AWS_REGION: 'ap-northeast-2', AWS_EC2_METADATA_DISABLED: 'true',
+  AWS_ACCESS_KEY_ID: 'synthetic-access-key', AWS_SECRET_ACCESS_KEY: 'synthetic-secret-key',
+  AWS_SESSION_TOKEN: '', AWS_PROFILE: '', AWS_DEFAULT_PROFILE: '',
+};
 const pair = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const jwks = { keys: [{ ...pair.publicKey.export({ format: 'jwk' }), kid: 'test-key', alg: 'RS256', use: 'sig' }] };
 
@@ -36,11 +45,7 @@ async function harness(t, entry, env = {}) {
       TTOBAK_COGNITO_DOMAIN: 'https://test.auth.ap-northeast-2.amazoncognito.com',
       TTOBAK_USER_POOL_ID: 'ap-northeast-2_testpool', TTOBAK_CLIENT_ID: 'testclient',
       TTOBAK_TEST_JWKS: JSON.stringify(jwks),
-      ORIGIN_VERIFY_SECRET: 'synthetic-edge-secret',
-      ORIGIN_VERIFY_SECRET_ARN: '',
-      AWS_REGION: 'ap-northeast-2', AWS_EC2_METADATA_DISABLED: 'true',
-      AWS_ACCESS_KEY_ID: 'synthetic-access-key', AWS_SECRET_ACCESS_KEY: 'synthetic-secret-key',
-      AWS_SESSION_TOKEN: '', AWS_PROFILE: '', AWS_DEFAULT_PROFILE: '',
+      ...ORIGIN_ENV,
       ...env,
     },
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -85,7 +90,6 @@ for (const [label, entry] of entries) {
     const previous = 'synthetic-previous-proof-1234567890';
     const now = Math.floor(Date.now() / 1000);
     const { invoke } = await harness(t, entry, {
-      ORIGIN_VERIFY_SECRET: '',
       ORIGIN_VERIFY_SECRET_ARN: 'arn:aws:secretsmanager:ap-northeast-2:111111111111:secret:synthetic',
       TTOBAK_TEST_ORIGIN_SECRET: JSON.stringify({
         schemaVersion: 1, current, previous, generation: 'a'.repeat(32), phase: 'rotating',
@@ -177,7 +181,7 @@ for (const [label, entry] of entries) {
       TTOBAK_MCP_PUBLIC_URL: PUBLIC_URL, TTOBAK_API_URL: 'https://ttobak.example.com',
       TTOBAK_COGNITO_DOMAIN: 'https://test.auth.ap-northeast-2.amazoncognito.com',
       TTOBAK_USER_POOL_ID: 'ap-northeast-2_testpool', TTOBAK_CLIENT_ID: 'testclient',
-      TTOBAK_TEST_JWKS: JSON.stringify(jwks), ORIGIN_VERIFY_SECRET: 'synthetic-edge-secret',
+      TTOBAK_TEST_JWKS: JSON.stringify(jwks), ...ORIGIN_ENV,
     }, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     child.stdout.on('data', (data) => { out += data; });
@@ -191,7 +195,7 @@ for (const [label, entry] of entries) {
   });
 
   test(`${label}: fails closed when the origin secret is not configured`, async (t) => {
-    const { invoke } = await harness(t, entry, { ORIGIN_VERIFY_SECRET: '' });
+    const { invoke } = await harness(t, entry, { ORIGIN_VERIFY_SECRET_ARN: '' });
     assert.equal((await invoke(viaApiGateway({ body: rpc('tools/list') }))).statusCode, 403);
   });
 

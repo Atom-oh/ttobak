@@ -14,7 +14,7 @@ describe('GatewayStack', () => {
       .filter(resource => JSON.stringify(resource.Properties.FunctionName).includes('KbFunction'));
   }
 
-  function buildTemplate(indexingMode: 'manual-only' | 'all' = 'manual-only', scheduleEnabled = false, mcpResourceAudience?: string, audioCropEnabled = false, originVerifySecret = 'test-origin-secret', cloudfrontDomain: string | null = 'd2olomx8td8txt.cloudfront.net'): Template {
+  function buildTemplate(indexingMode: 'manual-only' | 'all' = 'manual-only', scheduleEnabled = false, mcpResourceAudience?: string, audioCropEnabled = false, cloudfrontDomain: string | null = 'd2olomx8td8txt.cloudfront.net'): Template {
     const app = new cdk.App({
       context: {
         ...(cloudfrontDomain === null ? {} : { 'ttobak:cloudfrontDomain': cloudfrontDomain }),
@@ -58,7 +58,6 @@ describe('GatewayStack', () => {
       dataSourceId: 'test-ds-id',
       webSearchGatewayUrl: 'https://test-gateway.gateway.bedrock-agentcore.us-east-1.api.aws/mcp',
       cognitoDomainUrl: 'https://test-auth.auth.ap-northeast-2.amazoncognito.com',
-      originVerifySecret,
     });
 
     return Template.fromStack(stack);
@@ -89,6 +88,25 @@ describe('GatewayStack', () => {
     }
   });
 
+  test('HTTP consumers use only a scoped proof ARN and immutable version, published into the API alias', () => {
+    const enabled = buildTemplate('manual-only', false, 'https://ttobak.example.com/api/mcp');
+    for (const name of ['ttobak-api', 'ttobak-qa', 'ttobak-mcp']) {
+      const fn = Object.values(enabled.findResources('AWS::Lambda::Function'))
+        .find(value => value.Properties.FunctionName === name)!;
+      expect(fn.Properties.Environment.Variables.ORIGIN_VERIFY_SECRET).toBeUndefined();
+      expect(fn.Properties.Environment.Variables.ORIGIN_VERIFY_SECRET_ARN).toEqual({ Ref: 'HttpOriginSecretArn' });
+      expect(fn.Properties.Environment.Variables.ORIGIN_VERIFY_SECRET_VERSION_ID).toEqual({ Ref: 'HttpOriginSecretVersionId' });
+      const policy = Object.entries(enabled.findResources('AWS::IAM::Policy')).find(([id, value]) =>
+        JSON.stringify(value.Properties.PolicyDocument).includes('HttpOriginSecretArn')
+        && fn.DependsOn?.includes(id));
+      expect(policy).toBeDefined();
+    }
+    const version = Object.values(enabled.findResources('AWS::Lambda::Version'))
+      .find(value => JSON.stringify(value.Properties.FunctionName).includes('ApiFunction'))!;
+    expect(JSON.stringify(version.Properties.Description)).toContain('HttpOriginSecretVersionId');
+    expect(JSON.stringify(version.Properties.Description)).toContain('ProjectInvitationsEnabled');
+  });
+
   test('MCP resource audience is explicit and does not replace the existing client audience', () => {
     const before = Object.values(template.findResources('AWS::ApiGatewayV2::Authorizer'))[0];
     expect(before.Properties.JwtConfiguration.Audience).toHaveLength(1);
@@ -116,10 +134,8 @@ describe('GatewayStack', () => {
     const functionNames = (value: Template) => Object.values(value.findResources('AWS::Lambda::Function'))
       .map(resource => resource.Properties.FunctionName);
     expect(functionNames(template)).not.toContain('ttobak-mcp');
-    // The origin proof is mandatory for MCP even though the Go API treats it as optional.
-    expect(() => buildTemplate('manual-only', false, 'https://ttobak.example.com/api/mcp', false, '')).toThrow(/originVerifySecret/);
     // A missing CloudFront domain must not become the CORS origin "https://undefined".
-    expect(() => buildTemplate('manual-only', false, undefined, false, 'test-origin-secret', null)).toThrow(/cloudfrontDomain/);
+    expect(() => buildTemplate('manual-only', false, undefined, false, null)).toThrow(/cloudfrontDomain/);
     const enabled = buildTemplate('manual-only', false, 'https://ttobak.example.com/api/mcp');
     enabled.hasResourceProperties('AWS::Lambda::Function', {
       FunctionName: 'ttobak-mcp',
@@ -132,7 +148,8 @@ describe('GatewayStack', () => {
         TTOBAK_API_URL: 'https://ttobak.example.com',
         TTOBAK_COGNITO_DOMAIN: 'https://test-auth.auth.ap-northeast-2.amazoncognito.com',
         TTOBAK_HTTP_TIMEOUT_MS: '25000',
-        ORIGIN_VERIFY_SECRET: 'test-origin-secret',
+        ORIGIN_VERIFY_SECRET_ARN: { Ref: 'HttpOriginSecretArn' },
+        ORIGIN_VERIFY_SECRET_VERSION_ID: { Ref: 'HttpOriginSecretVersionId' },
       }) },
     });
     // HTTP API routes only; the realtime WebSocket API in this stack has its own $connect authorizer.
@@ -155,10 +172,13 @@ describe('GatewayStack', () => {
       .filter(integration => JSON.stringify(integration.Properties.IntegrationUri).includes('McpFunction'));
     expect(integrations).toHaveLength(1);
     expect(integrations[0].Properties.PayloadFormatVersion).toBe('2.0');
-    // The MCP function needs no AWS permissions beyond its logs.
+    // MCP reads only its exact origin secret, in addition to its existing logs.
     const roles = Object.values(enabled.findResources('AWS::IAM::Policy'))
       .filter(policy => JSON.stringify(policy.Properties.Roles).includes('McpFunction'));
-    expect(roles).toHaveLength(0);
+    expect(roles).toHaveLength(1);
+    expect(roles[0].Properties.PolicyDocument.Statement).toEqual([{
+      Action: 'secretsmanager:GetSecretValue', Effect: 'Allow', Resource: { Ref: 'HttpOriginSecretArn' },
+    }]);
   });
 
   test('final summary override leaves refinement and auxiliary model selections intact', () => {

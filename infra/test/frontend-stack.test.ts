@@ -27,6 +27,7 @@ describe('FrontendStack', () => {
       httpApiUrl: 'https://test-api-id.execute-api.ap-northeast-2.amazonaws.com',
       websocketApiUrl: 'wss://test-ws-id.execute-api.ap-northeast-2.amazonaws.com/production',
       websocketOriginSecret: new secretsmanager.Secret(mockStack, 'WebSocketOriginSecret'),
+      httpOriginSecret: new secretsmanager.Secret(mockStack, 'HttpOriginSecret'),
       edgeFunctionVersion: edgeFn.currentVersion,
       cognitoRegion: 'ap-northeast-2',
       userPoolId: 'ap-northeast-2_test',
@@ -35,6 +36,19 @@ describe('FrontendStack', () => {
     });
 
     template = Template.fromStack(stack);
+  });
+
+  test('the HTTP origin resolves only the current field of an explicit secret version', () => {
+    const dist = Object.values(template.findResources('AWS::CloudFront::Distribution'))[0];
+    const origin = dist.Properties.DistributionConfig.Origins.find(
+      (value: { DomainName: unknown }) => value.DomainName === 'test-api-id.execute-api.ap-northeast-2.amazonaws.com');
+    expect(origin.OriginCustomHeaders).toHaveLength(1);
+    const header = origin.OriginCustomHeaders[0];
+    expect(header.HeaderName).toBe('x-origin-verify');
+    expect(JSON.stringify(header.HeaderValue)).toContain('{{resolve:secretsmanager:');
+    expect(JSON.stringify(header.HeaderValue)).toContain('SecretString:current::');
+    expect(JSON.stringify(header.HeaderValue)).toContain('HttpOriginSecretVersionId');
+    expect(template.toJSON().Parameters.HttpOriginSecretVersionId.Default).toBeUndefined();
   });
 
   test('/media/* behavior requires a non-empty trusted key group (ADR-027 viewer auth)', () => {

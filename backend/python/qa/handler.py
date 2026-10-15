@@ -69,7 +69,6 @@ _HTTP_ORIGIN = OriginVerifier(
     os.environ.get('ORIGIN_VERIFY_SECRET_ARN', ''),
     boto3.client('secretsmanager', config=Config(
         connect_timeout=1, read_timeout=1, retries={'total_max_attempts': 1})),
-    legacy=os.environ.get('ORIGIN_VERIFY_SECRET', ''),
     version_id=os.environ.get('ORIGIN_VERIFY_SECRET_VERSION_ID', ''),
     local_development=os.environ.get('TTOBAK_ORIGIN_LOCAL_DEV') == '1'
     and not os.environ.get('AWS_LAMBDA_FUNCTION_NAME'),

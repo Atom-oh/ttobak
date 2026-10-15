@@ -1,9 +1,11 @@
 package middleware
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -57,7 +59,7 @@ func marshalProof(value originProofSet) string {
 func TestOriginRotationExpiryAndCacheAreCheckedPerRequest(t *testing.T) {
 	client := &fakeOriginSecret{raw: marshalProof(proofDocument())}
 	now := int64(1010)
-	verifier := NewOriginVerifier("synthetic-secret-arn", previousProof, client, false)
+	verifier := NewOriginVerifier("synthetic-secret-arn", client, false, strings.Repeat("b", 32))
 	verifier.now = func() time.Time { return time.Unix(now, 0) }
 	allowed := func(value string) bool {
 		return verifier.allows(context.Background(), http.Header{"X-Origin-Verify": {value}})
@@ -78,7 +80,7 @@ func TestOriginRotationExpiryAndCacheAreCheckedPerRequest(t *testing.T) {
 
 func TestOriginHeaderMissingDuplicateCombinedAndMalformedFailClosed(t *testing.T) {
 	client := &fakeOriginSecret{raw: marshalProof(proofDocument())}
-	verifier := NewOriginVerifier("synthetic-secret-arn", "", client, false)
+	verifier := NewOriginVerifier("synthetic-secret-arn", client, false, strings.Repeat("b", 32))
 	verifier.now = func() time.Time { return time.Unix(1010, 0) }
 	for _, headers := range []http.Header{
 		nil, {"X-Origin-Verify": {}}, {"X-Origin-Verify": {currentProof, currentProof}},
@@ -124,27 +126,24 @@ func TestOriginSecretMetadataRejectsUnboundedOrMalformedRotation(t *testing.T) {
 	}
 }
 
-func TestOriginLegacyCompatibilityIsExplicitAndNeverFailOpen(t *testing.T) {
+func TestOriginRequiresARNAndVersionOutsideExplicitLocalDevelopment(t *testing.T) {
+	t.Setenv("ORIGIN_VERIFY_SECRET", previousProof)
 	headers := http.Header{"X-Origin-Verify": {previousProof}}
-	if !NewOriginVerifier("", previousProof, nil, false).allows(context.Background(), headers) {
-		t.Fatal("existing proof must survive the consumer rollout")
-	}
-	for _, value := range []*OriginVerifier{
-		nil, NewOriginVerifier("", "", nil, false),
-		NewOriginVerifier("synthetic-secret-arn", previousProof, nil, true),
-	} {
+	for _, value := range []*OriginVerifier{nil, NewOriginVerifier("", nil, false, ""),
+		NewOriginVerifier("synthetic-secret-arn", nil, true, ""),
+		NewOriginVerifier("synthetic-secret-arn", &fakeOriginSecret{raw: marshalProof(proofDocument())}, false, "")} {
 		if value.allows(context.Background(), headers) {
-			t.Fatal("unconfigured/failed verifier admitted request")
+			t.Fatal("legacy environment or missing pin admitted request")
 		}
 	}
-	if !NewOriginVerifier("", "", nil, true).allows(context.Background(), nil) {
-		t.Fatal("explicit local development unavailable")
+	if !NewOriginVerifier("", nil, true, "").allows(context.Background(), nil) {
+		t.Fatal("explicit local mode unavailable")
 	}
 }
 
 func TestOriginCanceledLookupAndHTTPFailureRevealNoSecrets(t *testing.T) {
 	client := &fakeOriginSecret{raw: marshalProof(proofDocument())}
-	verifier := NewOriginVerifier("synthetic-secret-arn", "", client, false)
+	verifier := NewOriginVerifier("synthetic-secret-arn", client, false, strings.Repeat("b", 32))
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if verifier.allows(ctx, http.Header{"X-Origin-Verify": {currentProof}}) || client.calls != 0 {
@@ -160,7 +159,8 @@ func TestOriginCanceledLookupAndHTTPFailureRevealNoSecrets(t *testing.T) {
 }
 
 func TestOriginProtocolMarkerRequiresVerifiedHTTP(t *testing.T) {
-	verifier := NewOriginVerifier("", previousProof, nil, false)
+	verifier := NewOriginVerifier("synthetic-secret-arn", &fakeOriginSecret{raw: marshalProof(proofDocument())}, false, strings.Repeat("b", 32))
+	verifier.now = func() time.Time { return time.Unix(1010, 0) }
 	for _, status := range []int{200, 401, 404, 405} {
 		r := httptest.NewRequest("GET", "/api/public/docs/__origin_migration_probe__", nil)
 		r.Header.Set("X-Origin-Verify", previousProof)
@@ -181,23 +181,40 @@ func TestOriginProtocolMarkerRequiresVerifiedHTTP(t *testing.T) {
 	}
 }
 
-func TestLegacyOriginPreservesEveryNonemptyExactProof(t *testing.T) {
-	for _, proof := range []string{"short", "legacy,comma", "기존 검증값", strings.Repeat("x", 129), " spaced "} {
-		v := NewOriginVerifier("", proof, nil, false)
-		if !v.allows(context.Background(), http.Header{"X-Origin-Verify": {proof}}) ||
-			v.allows(context.Background(), http.Header{"X-Origin-Verify": {proof + "wrong"}}) ||
-			v.allows(context.Background(), http.Header{"X-Origin-Verify": {proof, proof}}) {
-			t.Fatal("legacy exact comparison or observable duplicate rejection changed")
-		}
-	}
-}
-
 func TestOriginReadPinsImmutableVersion(t *testing.T) {
 	client := &fakeOriginSecret{raw: marshalProof(proofDocument())}
 	pin := strings.Repeat("b", 32)
-	v := NewOriginVerifier("synthetic-secret-arn", "", client, false, pin)
+	v := NewOriginVerifier("synthetic-secret-arn", client, false, pin)
 	v.now = func() time.Time { return time.Unix(1010, 0) }
 	if !v.allows(context.Background(), http.Header{"X-Origin-Verify": {currentProof}}) || client.version != pin {
 		t.Fatal("immutable version pin was not sent to Secrets Manager")
+	}
+}
+
+func TestOriginDiagnosticsContainOnlyFixedFailureCategories(t *testing.T) {
+	for _, scenario := range []struct {
+		category string
+		version  string
+		client   *fakeOriginSecret
+	}{
+		{"configuration_invalid", "", &fakeOriginSecret{}},
+		{"secret_unavailable", strings.Repeat("b", 32), &fakeOriginSecret{err: errors.New("private provider message")}},
+		{"secret_invalid", strings.Repeat("b", 32), &fakeOriginSecret{raw: "private malformed document"}},
+	} {
+		t.Run(scenario.category, func(t *testing.T) {
+			var output bytes.Buffer
+			previous := log.Writer()
+			log.SetOutput(&output)
+			defer log.SetOutput(previous)
+			v := NewOriginVerifier("synthetic-secret-arn", scenario.client, false, scenario.version)
+			if v.allows(context.Background(), http.Header{"X-Origin-Verify": {currentProof}}) {
+				t.Fatal("failure was authorized")
+			}
+			if !strings.Contains(output.String(), "category="+scenario.category) ||
+				strings.Contains(output.String(), "private") || strings.Contains(output.String(), currentProof) ||
+				strings.Contains(output.String(), "synthetic-secret-arn") {
+				t.Fatal("diagnostic category missing or value leaked")
+			}
+		})
 	}
 }

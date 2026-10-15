@@ -53,7 +53,7 @@ that exact HTTPS `/api/mcp` audience to the JWT authorizer next to the client
 audience, and AuthStack registers the URL as a resource server and uses managed
 login (v2, Cognito-provided branding per client): Cognito issues `aud`=URL for a
 `resource` request only with both. GatewayStack then runs `ttobak-mcp` (Node.js 22,
-ARM64, no AWS permissions, 29s timeout, 25s server deadline) behind `ANY /api/mcp`
+ARM64, exact origin-secret read permission, 29s timeout, 25s server deadline) behind `ANY /api/mcp`
 with the JWT authorizer, plus two unauthenticated static discovery routes,
 `GET /.well-known/oauth-protected-resource` and `.../api/mcp` (ADR-045).
 FrontendStack routes those two exact paths to the API origin without the edge
@@ -92,14 +92,14 @@ and denies failed/expired reads. JWT verification still runs for every connect.
 `ask_live` asynchronously invokes Python QA. See the
 [WS rollout and rotation runbook](runbooks/websocket-runtime.md).
 
-CloudFront-only application HTTP ingress is policy. `bin/infra.ts` refuses to
-synthesize without a 16+ character `ttobak:originVerifySecret`, so CloudFront always
-sends the proof. Go, QA and HTTP MCP now deny missing proof configuration; Go/QA
-local development requires an explicit flag outside Lambda. ARN-capable consumers
-support a bounded rotation document and a 60-second cache, with no fallback to a
-legacy proof after an ARN read failure. Current CDK still supplies the legacy
-HTTP proof; the coordinated Secrets Manager migration and verified rotation remain
-separate release work. See the [HTTP proof migration contract](runbooks/http-origin-secret-migration.md).
+CloudFront-only application HTTP ingress is policy. HTTP consumers require an
+origin proof loaded from the exact Secrets Manager ARN and immutable version in
+their environment. CloudFront resolves that version's current value through a
+private dynamic reference. The normal infrastructure release verifies deployed
+reader readiness and live proof agreement, seeds the same proof, then performs a
+bounded consumer-first rotation with cache drains and retired-proof rejection
+checks. Current source does not prove the live rotation completed: retain its
+redacted receipt. See the [HTTP proof migration contract](runbooks/http-origin-secret-migration.md).
 This HTTP rollout is distinct from the required WS secret. Existing browser Cognito/Transcribe SDK calls, signed S3
 PUTs and IAM-signed server callback requests are separate service integrations,
 not newly approved public application origins.

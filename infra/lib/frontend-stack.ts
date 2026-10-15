@@ -17,7 +17,7 @@ export interface FrontendStackProps extends cdk.StackProps {
   websocketApiUrl: string;
   websocketOriginSecret: secretsmanager.ISecret;
   edgeFunctionVersion: lambda.IVersion;
-  originVerifySecret?: string;
+  httpOriginSecret: secretsmanager.ISecret;
   cognitoRegion: string;
   userPoolId: string;
   userPoolClientId: string;
@@ -50,13 +50,19 @@ export class FrontendStack extends cdk.Stack {
     // httpApiUrl format: https://{apiId}.execute-api.{region}.amazonaws.com
     // Split by '/' → ['https:', '', 'domain'] → select index 2
     const httpApiDomain = cdk.Fn.select(2, cdk.Fn.split('/', props.httpApiUrl));
+    const httpProofVersion = new cdk.CfnParameter(this, 'HttpOriginSecretVersionId', {
+      type: 'String', allowedPattern: '^[A-Za-z0-9-]{32,64}$',
+      description: 'Exact Secrets Manager version whose current proof CloudFront injects; changed by the release coordinator.',
+    });
 
     // API Gateway HTTP API Origin — custom header prevents direct access (bypassing CloudFront)
     const apiOrigin = new origins.HttpOrigin(httpApiDomain, {
       protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
-      customHeaders: props.originVerifySecret
-        ? { 'x-origin-verify': props.originVerifySecret }
-        : undefined,
+      customHeaders: {
+        'x-origin-verify': cdk.SecretValue.secretsManager(props.httpOriginSecret.secretArn, {
+          jsonField: 'current', versionId: httpProofVersion.valueAsString,
+        }).unsafeUnwrap(),
+      },
     });
 
     const websocketDomain = cdk.Fn.select(2, cdk.Fn.split('/', props.websocketApiUrl));

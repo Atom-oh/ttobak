@@ -38,26 +38,20 @@ type originProofSet struct {
 // OriginVerifier reads only the configured secret. Its cache contains proofs,
 // never authentication decisions; expiry is checked on every request.
 type OriginVerifier struct {
-	arn, legacy string
-	version     string
-	client      originSecretClient
-	local       bool
-	now         func() time.Time
-	mu          sync.RWMutex
-	proofs      originProofSet
-	expires     time.Time
-	lookup      chan struct{}
+	arn     string
+	version string
+	client  originSecretClient
+	local   bool
+	now     func() time.Time
+	mu      sync.RWMutex
+	proofs  originProofSet
+	expires time.Time
+	lookup  chan struct{}
 }
 
-// legacy is temporary rollout compatibility: ARN configuration always wins,
-// including when its read fails. The migration removes legacy Lambda env values.
-func NewOriginVerifier(arn, legacy string, client originSecretClient, localDevelopment bool, versions ...string) *OriginVerifier {
-	v := &OriginVerifier{arn: arn, legacy: legacy, client: client, local: localDevelopment,
+func NewOriginVerifier(arn string, client originSecretClient, localDevelopment bool, version string) *OriginVerifier {
+	return &OriginVerifier{arn: arn, version: version, client: client, local: localDevelopment,
 		now: time.Now, lookup: make(chan struct{}, 1)}
-	if len(versions) > 0 {
-		v.version = versions[0]
-	}
-	return v
 }
 
 func validOriginProof(value string) bool {
@@ -120,7 +114,8 @@ func (v *OriginVerifier) cached() (originProofSet, bool) {
 }
 
 func (v *OriginVerifier) secret(ctx context.Context) (originProofSet, bool) {
-	if v.client == nil || (v.version != "" && !originVersion.MatchString(v.version)) {
+	if v.client == nil || !originVersion.MatchString(v.version) {
+		log.Print("http_origin_rejected category=configuration_invalid")
 		return originProofSet{}, false
 	}
 	if value, ok := v.cached(); ok {
@@ -132,21 +127,24 @@ func (v *OriginVerifier) secret(ctx context.Context) (originProofSet, bool) {
 	case v.lookup <- struct{}{}:
 		defer func() { <-v.lookup }()
 	case <-bounded.Done():
+		log.Print("http_origin_rejected category=secret_unavailable")
 		return originProofSet{}, false
 	}
 	if bounded.Err() != nil {
+		log.Print("http_origin_rejected category=secret_unavailable")
 		return originProofSet{}, false
 	}
 	if value, ok := v.cached(); ok {
 		return value, true
 	}
-	input := &secretsmanager.GetSecretValueInput{SecretId: aws.String(v.arn)}
-	if v.version != "" {
-		input.VersionId = aws.String(v.version)
-	}
+	input := &secretsmanager.GetSecretValueInput{SecretId: aws.String(v.arn), VersionId: aws.String(v.version)}
 	out, err := v.client.GetSecretValue(bounded, input, func(options *secretsmanager.Options) { options.Retryer = aws.NopRetryer{} })
-	if err != nil || out == nil || out.SecretString == nil {
+	if err != nil {
 		log.Print("http_origin_rejected category=secret_unavailable")
+		return originProofSet{}, false
+	}
+	if out == nil || out.SecretString == nil {
+		log.Print("http_origin_rejected category=secret_invalid")
 		return originProofSet{}, false
 	}
 	value, ok := parseOriginProofSet(*out.SecretString)
@@ -164,7 +162,7 @@ func (v *OriginVerifier) allows(ctx context.Context, headers http.Header) bool {
 	if v == nil {
 		return false
 	}
-	if v.arn == "" && v.legacy == "" && v.local {
+	if v.arn == "" && v.local {
 		return true
 	}
 	actual, ok := originHeader(headers, v.arn != "")
@@ -172,7 +170,8 @@ func (v *OriginVerifier) allows(ctx context.Context, headers http.Header) bool {
 		return false
 	}
 	if v.arn == "" {
-		return v.legacy != "" && subtle.ConstantTimeCompare([]byte(actual), []byte(v.legacy)) == 1
+		log.Print("http_origin_rejected category=configuration_invalid")
+		return false
 	}
 	value, ok := v.secret(ctx)
 	if !ok {
