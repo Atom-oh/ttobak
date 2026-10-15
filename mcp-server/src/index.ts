@@ -9,7 +9,7 @@ import {
   type CallToolRequest,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
-import { CognitoAuth } from './auth.js';
+import { CognitoAuth, type LocalAuthStatus } from './deployment-auth.js';
 import { TtobakApi, UploadRejectedError, type ApiAuth } from './api.js';
 import { httpTools, decodeUpload, mutationReceipt, MAX_HTTP_RESULT_BYTES } from './remote-tools.js';
 import { readingOptions, readingResult, readingError } from './reading.js';
@@ -20,6 +20,7 @@ declare const TTOBAK_STANDALONE_STDIO: boolean;
 
 export interface ToolAuth extends ApiAuth {
   isAuthenticated(): boolean;
+  getStatus?(): Promise<LocalAuthStatus>;
   logout?(): void | Promise<void>;
 }
 
@@ -570,9 +571,10 @@ async function callTool(request: CallToolRequest, options: ServerOptions) {
       }
 
       case 'ttobak_status': {
-        const authenticated = auth.isAuthenticated();
+        const status = auth.getStatus ? await auth.getStatus() : { authenticated: auth.isAuthenticated() };
         return text(
-          `Authenticated: ${authenticated}\n` +
+          `Authenticated: ${status.authenticated}\n` +
+            (status.identity ? `Signed in: ${JSON.stringify(status.identity)}\n` : '') +
             `API: ${API_URL}\n` +
             `Cognito: ${COGNITO_DOMAIN}\n` +
             `Client: ${CLIENT_ID.slice(0, 8)}...`,
@@ -951,7 +953,7 @@ async function callTool(request: CallToolRequest, options: ServerOptions) {
 
       case 'ttobak_logout': {
         await auth.logout?.();
-        return text('Logged out. Tokens removed from ~/.ttobak/tokens.json');
+        return text('Logged out. Saved credentials for this deployment and profile were removed.');
       }
 
       default:
@@ -1159,7 +1161,10 @@ async function main() {
   if (!apiUrl || !cognitoDomain || !clientId) {
     throw new Error('Missing required env vars: TTOBAK_COGNITO_DOMAIN, TTOBAK_CLIENT_ID, TTOBAK_API_URL');
   }
-  const auth = new CognitoAuth({ cognitoDomain, clientId, apiUrl, userPoolId: process.env.TTOBAK_USER_POOL_ID });
+  const auth = new CognitoAuth({
+    cognitoDomain, clientId, apiUrl,
+    userPoolId: process.env.TTOBAK_USER_POOL_ID, profile: process.env.TTOBAK_PROFILE,
+  });
   const recorder = new Recorder();
   const server = createMcpServer({
     auth, api: new TtobakApi(auth, apiUrl), apiUrl, cognitoDomain, clientId, recorder,
