@@ -4,6 +4,10 @@ import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { GatewayStack } from '../lib/gateway-stack';
 
 describe('GatewayStack', () => {
@@ -14,7 +18,7 @@ describe('GatewayStack', () => {
       .filter(resource => JSON.stringify(resource.Properties.FunctionName).includes('KbFunction'));
   }
 
-  function buildTemplate(indexingMode: 'manual-only' | 'all' = 'manual-only', scheduleEnabled = false, mcpResourceAudience?: string, audioCropEnabled = false, cloudfrontDomain: string | null = 'd2olomx8td8txt.cloudfront.net'): Template {
+  function buildTemplate(indexingMode: 'manual-only' | 'all' = 'manual-only', scheduleEnabled = false, mcpResourceAudience?: string, audioCropEnabled = false, cloudfrontDomain: string | null = 'd2olomx8td8txt.cloudfront.net', save?: (g: Template, r: Template) => void): Template {
     const app = new cdk.App({
       context: {
         ...(cloudfrontDomain === null ? {} : { 'ttobak:cloudfrontDomain': cloudfrontDomain }),
@@ -24,7 +28,8 @@ describe('GatewayStack', () => {
       },
     });
 
-    const mockStack = new cdk.Stack(app, 'MockStack');
+    const env = save ? { account: '111111111111', region: 'ap-northeast-2' } : undefined;
+    const mockStack = new cdk.Stack(app, 'MockStack', { env });
     const table = new dynamodb.Table(mockStack, 'Table', {
       partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
       stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
@@ -39,6 +44,7 @@ describe('GatewayStack', () => {
       });
 
     const stack = new GatewayStack(app, 'TestGatewayStack', {
+      env,
       apiRole: makeRole('ApiRole'),
       transcribeRole: makeRole('TranscribeRole'),
       summarizeRole: makeRole('SummarizeRole'),
@@ -60,7 +66,9 @@ describe('GatewayStack', () => {
       cognitoDomainUrl: 'https://test-auth.auth.ap-northeast-2.amazoncognito.com',
     });
 
-    return Template.fromStack(stack);
+    const result = Template.fromStack(stack);
+    save?.(result, Template.fromStack(mockStack));
+    return result;
   }
 
   beforeAll(() => {
@@ -105,6 +113,40 @@ describe('GatewayStack', () => {
       .find(value => JSON.stringify(value.Properties.FunctionName).includes('ApiFunction'))!;
     expect(JSON.stringify(version.Properties.Description)).toContain('HttpOriginSecretVersionId');
     expect(JSON.stringify(version.Properties.Description)).toContain('ProjectInvitationsEnabled');
+  });
+
+  test('release validates synthesized role identity and rejects ungranted readers', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ttobak-origin-validator-'));
+    try {
+      buildTemplate('manual-only', false, 'https://ttobak.example.com/api/mcp', false, undefined, (gateway, roles) => {
+        writeFileSync(join(directory, 'TtobakGatewayStack.template.json'), JSON.stringify(gateway.toJSON()));
+        writeFileSync(join(directory, 'MockStack.template.json'), JSON.stringify(roles.toJSON()));
+      });
+      execFileSync('python3', ['-c', `
+import copy,json,sys
+from pathlib import Path
+sys.path.insert(0,'scripts/operations')
+from http_origin_release import Cdk,ReleaseError
+from test_http_origin_release import ReleaseTests
+root=Path(sys.argv[1]); runner=Cdk('ap-northeast-2','111111111111');runner.assembly=root
+_,frontend=ReleaseTests.activation_templates()
+(root/'TtobakFrontendStack.template.json').write_text(json.dumps(frontend))
+path=root/'TtobakGatewayStack.template.json'; original=json.loads(path.read_text())
+runner.validate_activation_templates()
+qa=next(v['Properties']['Roles'][0] for k,v in original['Resources'].items()
+        if k.startswith('HttpOriginQAReadProof'))
+for bad in ({'Ref':'OtherRole'}, {'Fn::ImportValue':'unknown'}, qa):
+    changed=copy.deepcopy(original)
+    target=next(v['Properties'] for v in changed['Resources'].values()
+                if v['Type']=='AWS::IAM::Policy' and 'HttpOriginSecretArn' in json.dumps(v))
+    target['Roles']=[bad];path.write_text(json.dumps(changed))
+    try:runner.validate_activation_templates()
+    except ReleaseError as error:assert str(error)=='ACTIVATION_SECRET_READ_NOT_GRANTED'
+    else:raise AssertionError('ungranted reader accepted')
+`, directory], { cwd: join(__dirname, '../..'), timeout: 30_000 });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   test('MCP resource audience is explicit and does not replace the existing client audience', () => {
