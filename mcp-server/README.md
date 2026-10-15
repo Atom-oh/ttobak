@@ -22,7 +22,8 @@ these environment values for the target deployment:
 | TTOBAK_CLIENT_ID | Public OAuth-capable client ID |
 | TTOBAK_API_URL | Application CloudFront URL |
 | TTOBAK_REGION | Application region |
-| TTOBAK_USER_POOL_ID | Optional for stdio; otherwise resolved from public `/config.json` |
+| TTOBAK_USER_POOL_ID | Optional for stdio; explicit IDs still require a match with the site's public `/config.json` |
+| TTOBAK_PROFILE | Optional local credential profile; defaults to `default` |
 
 The OAuth client must allow authorization-code PKCE, openid/email/profile scopes
 and `http://localhost:9876/callback`. Current AuthStack configures the SPA client
@@ -31,25 +32,37 @@ setup helper reads CloudFormation and writes host configuration; inspect its
 selected values before running it. Normal MCP calls need Cognito login, not AWS
 credentials. Keep stdout reserved for MCP and diagnostics on stderr.
 
-First authentication binds the callback listener to IPv4 loopback (`127.0.0.1`)
-before opening the browser. The registered redirect remains
+First authentication starts a callback listener on IPv4 loopback (`127.0.0.1`),
+then opens the browser. The registered redirect remains
 `http://localhost:9876/callback`. Every callback must match the login state before
 its result is handled; unrelated callbacks do not terminate the pending login.
-The PKCE exchange bounds response size and network time, validates token-response
-fields and reports generic provider errors. Concurrent authentication calls share
-one login or refresh operation, and logout cancels pending authentication. Tokens are stored at `~/.ttobak/tokens.json` with restrictive creation
-permissions. Refresh is attempted before requiring another login; do not promise
-a fixed login duration independent of pool policy or revocation. Logout clears
-local tokens. Do not commit/copy token files into documentation or diagnostics.
+Concurrent authentication calls share one login or refresh operation.
 
-Before login or refresh, stdio validates the configured Hosted UI against the
-Cognito issuer's discovery document. Newly issued ID and access tokens must have
-valid signatures, issuer, client, token use, matching subjects and unexpired
-claims before they are stored or sent to the API. Existing three-variable
-configurations resolve the matching pool from public `/config.json`; an explicit
-pool ID supports other registered clients. The existing global cache and its
-cached-token validation remain a separate follow-up; this change alone does not
-establish deployment isolation for previously cached credentials.
+Stdio verifies the configured issuer and Hosted UI against Cognito discovery,
+then verifies both returned/cached tokens' signatures, issuer, client, token use,
+subject and expiration before sending an ID token to the API. Existing
+three-variable host configurations continue to work when the site's public
+`/config.json` identifies the matching client and pool. Explicit pool IDs support
+other registered clients without inferring an issuer from an unverified token.
+Token use and status require reachable application configuration and Cognito
+discovery/JWKS; an explicit pool ID does not bypass the current API pool check.
+
+Credentials are stored atomically under
+`~/.ttobak/tokens/<deployment-hash>.json`; the hash binds issuer, Hosted UI,
+client, API origin and profile. On POSIX systems, directories use mode 0700 and
+files 0600; the parent `~/.ttobak` directory must be owned by the current user and
+must not be a symlink. Windows does not provide these same POSIX permission guarantees.
+The former `~/.ttobak/tokens.json` is ignored and never migrated automatically:
+upgrading requires a new login. After confirming the new connection, manually
+remove the old file; logout does not remove that unused global cache.
+`ttobak_status` sends the verified subject, username and verified email to the
+MCP client as tool text. Logout cancels pending authentication and removes saved
+credentials locally without discovery. An explicit pool selects its exact cache;
+discovered-pool configurations remove issuer variants matching the configured
+API, Hosted UI, client and profile. Other configurations are preserved. A bounded
+scan or filesystem failure returns an error instead of claiming completed removal.
+Refresh is attempted before another login; its lifetime depends on pool policy
+and revocation. Do not copy token files into documentation or diagnostics.
 
 ## Streamable HTTP
 
@@ -82,7 +95,7 @@ issuer, expiry, client ID, user subject/username, all configured scopes and an
 OAuth request must include that URL as its RFC 8707 `resource`. ID tokens,
 unbound access tokens and service identities are rejected. Only public keys are
 cached. Clients own PKCE login, refresh and logout; HTTP hides the local
-`ttobak_login`/`ttobak_logout` tools and never reads `~/.ttobak/tokens.json`.
+`ttobak_login`/`ttobak_logout` tools and never reads local credential caches.
 
 `/.well-known/oauth-protected-resource` and its path-specific equivalent are
 public discovery documents. A 401 includes their explicit `WWW-Authenticate` URL.
@@ -340,9 +353,3 @@ For connection failures, first verify the executable path, target configuration,
 OAuth callback/scopes and current user login. Do not solve authorization failures
 by granting anonymous API access. See [API reference](../docs/API-SPEC.md) and
 [ADR-003](../docs/decisions/ADR-003-mcp-server-for-external-meeting-access.md).
-
-The dormant `deployment-auth.ts` module provides deployment/profile-bound,
-verified credential caches and current-API pool binding. Its tests exercise signed
-cached tokens, atomic private files, cancellation and alternate registered clients.
-Stdio still imports the existing auth module until the separate adapter/bundle
-cutover; installing this prerequisite does not activate cache isolation.

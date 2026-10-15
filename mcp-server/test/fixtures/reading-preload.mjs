@@ -7,21 +7,33 @@ import { syncBuiltinESMExports } from 'node:module';
 import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
 import { CURSOR, responseFixture } from './reading-data.mjs';
+import { authJson, saveCache, tokens } from './local-auth-data.mjs';
 
-os.homedir = () => '/synthetic-ttobak-reading';
-const tokenFile = '/synthetic-ttobak-reading/.ttobak/tokens.json';
-const exists = fs.existsSync, read = fs.readFileSync;
-fs.existsSync = (path) => path === tokenFile || exists(path);
-fs.readFileSync = (path, ...args) => path === tokenFile
-  ? JSON.stringify({ id_token: 'synthetic-token', access_token: 'synthetic-access', refresh_token: '', expires_at: Math.floor(Date.now() / 1000) + 3600 })
-  : read(path, ...args);
+const home = fs.mkdtempSync(os.tmpdir() + '/ttobak-reading-');
+os.homedir = () => home;
+const credentials = tokens();
+saveCache(home + '/.ttobak/tokens', credentials);
+process.once('exit', () => fs.rmSync(home, { recursive: true, force: true }));
 
 const calls = new Map();
 const trace = (event) => process.stderr.write(`READING_FIXTURE ${JSON.stringify(event)}\n`);
-https.request = (options, onResponse) => {
+https.request = (options, callbackOrOptions, authCallback) => {
+  if (options instanceof URL) {
+    const req = new EventEmitter();
+    req.setTimeout = () => req;
+    req.destroy = () => req;
+    req.end = () => void authJson(options).then(value => {
+      const res = Readable.from([Buffer.from(JSON.stringify(value))]);
+      res.statusCode = 200;
+      res.headers = {};
+      authCallback(res);
+    });
+    return req;
+  }
+  const onResponse = callbackOrOptions;
   trace({ event: 'request', path: options.path, method: options.method });
   if (options.hostname !== 'example.invalid' || options.method !== 'GET' ||
-      options.headers.Authorization !== 'Bearer synthetic-token' ||
+      options.headers.Authorization !== 'Bearer ' + credentials.id_token ||
       !/^\/api\/meetings\/[A-Za-z0-9_-]+\/reading\?/.test(options.path)) {
     throw new Error('Full meeting requests and unauthenticated requests are forbidden');
   }
