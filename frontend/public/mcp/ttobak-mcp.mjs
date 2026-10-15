@@ -406,11 +406,11 @@ var require_codegen = __commonJS({
         const rhs = this.rhs === void 0 ? "" : ` = ${this.rhs}`;
         return `${varKind} ${this.name}${rhs};` + _n;
       }
-      optimizeNames(names, constants) {
+      optimizeNames(names, constants2) {
         if (!names[this.name.str])
           return;
         if (this.rhs)
-          this.rhs = optimizeExpr(this.rhs, names, constants);
+          this.rhs = optimizeExpr(this.rhs, names, constants2);
         return this;
       }
       get names() {
@@ -427,10 +427,10 @@ var require_codegen = __commonJS({
       render({ _n }) {
         return `${this.lhs} = ${this.rhs};` + _n;
       }
-      optimizeNames(names, constants) {
+      optimizeNames(names, constants2) {
         if (this.lhs instanceof code_1.Name && !names[this.lhs.str] && !this.sideEffects)
           return;
-        this.rhs = optimizeExpr(this.rhs, names, constants);
+        this.rhs = optimizeExpr(this.rhs, names, constants2);
         return this;
       }
       get names() {
@@ -491,8 +491,8 @@ var require_codegen = __commonJS({
       optimizeNodes() {
         return `${this.code}` ? this : void 0;
       }
-      optimizeNames(names, constants) {
-        this.code = optimizeExpr(this.code, names, constants);
+      optimizeNames(names, constants2) {
+        this.code = optimizeExpr(this.code, names, constants2);
         return this;
       }
       get names() {
@@ -521,12 +521,12 @@ var require_codegen = __commonJS({
         }
         return nodes.length > 0 ? this : void 0;
       }
-      optimizeNames(names, constants) {
+      optimizeNames(names, constants2) {
         const { nodes } = this;
         let i = nodes.length;
         while (i--) {
           const n = nodes[i];
-          if (n.optimizeNames(names, constants))
+          if (n.optimizeNames(names, constants2))
             continue;
           subtractNames(names, n.names);
           nodes.splice(i, 1);
@@ -579,12 +579,12 @@ var require_codegen = __commonJS({
           return void 0;
         return this;
       }
-      optimizeNames(names, constants) {
+      optimizeNames(names, constants2) {
         var _a2;
-        this.else = (_a2 = this.else) === null || _a2 === void 0 ? void 0 : _a2.optimizeNames(names, constants);
-        if (!(super.optimizeNames(names, constants) || this.else))
+        this.else = (_a2 = this.else) === null || _a2 === void 0 ? void 0 : _a2.optimizeNames(names, constants2);
+        if (!(super.optimizeNames(names, constants2) || this.else))
           return;
-        this.condition = optimizeExpr(this.condition, names, constants);
+        this.condition = optimizeExpr(this.condition, names, constants2);
         return this;
       }
       get names() {
@@ -607,10 +607,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.iteration})` + super.render(opts);
       }
-      optimizeNames(names, constants) {
-        if (!super.optimizeNames(names, constants))
+      optimizeNames(names, constants2) {
+        if (!super.optimizeNames(names, constants2))
           return;
-        this.iteration = optimizeExpr(this.iteration, names, constants);
+        this.iteration = optimizeExpr(this.iteration, names, constants2);
         return this;
       }
       get names() {
@@ -646,10 +646,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.varKind} ${this.name} ${this.loop} ${this.iterable})` + super.render(opts);
       }
-      optimizeNames(names, constants) {
-        if (!super.optimizeNames(names, constants))
+      optimizeNames(names, constants2) {
+        if (!super.optimizeNames(names, constants2))
           return;
-        this.iterable = optimizeExpr(this.iterable, names, constants);
+        this.iterable = optimizeExpr(this.iterable, names, constants2);
         return this;
       }
       get names() {
@@ -691,11 +691,11 @@ var require_codegen = __commonJS({
         (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNodes();
         return this;
       }
-      optimizeNames(names, constants) {
+      optimizeNames(names, constants2) {
         var _a2, _b;
-        super.optimizeNames(names, constants);
-        (_a2 = this.catch) === null || _a2 === void 0 ? void 0 : _a2.optimizeNames(names, constants);
-        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants);
+        super.optimizeNames(names, constants2);
+        (_a2 = this.catch) === null || _a2 === void 0 ? void 0 : _a2.optimizeNames(names, constants2);
+        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants2);
         return this;
       }
       get names() {
@@ -996,7 +996,7 @@ var require_codegen = __commonJS({
     function addExprNames(names, from) {
       return from instanceof code_1._CodeOrName ? addNames(names, from.names) : names;
     }
-    function optimizeExpr(expr, names, constants) {
+    function optimizeExpr(expr, names, constants2) {
       if (expr instanceof code_1.Name)
         return replaceName(expr);
       if (!canOptimize(expr))
@@ -1011,14 +1011,14 @@ var require_codegen = __commonJS({
         return items;
       }, []));
       function replaceName(n) {
-        const c = constants[n.str];
+        const c = constants2[n.str];
         if (c === void 0 || names[n.str] !== 1)
           return n;
         delete names[n.str];
         return c;
       }
       function canOptimize(e) {
-        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants[c.str] !== void 0);
+        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants2[c.str] !== void 0);
       }
     }
     function subtractNames(names, from) {
@@ -20831,18 +20831,26 @@ import { fileURLToPath } from "node:url";
 import { realpathSync as realpathSync2 } from "node:fs";
 import { basename as basename3, extname as extname2 } from "node:path";
 
-// src/auth.ts
+// src/deployment-auth.ts
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import { request as httpsRequest } from "node:https";
 import {
-  existsSync,
+  constants,
+  closeSync,
+  fchmodSync,
+  fstatSync,
+  fsyncSync,
+  lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  renameSync,
   unlinkSync,
-  writeFileSync
+  writeFileSync,
+  chmodSync
 } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { execFile } from "node:child_process";
 
@@ -21921,7 +21929,7 @@ var CognitoJwtVerifier = class _CognitoJwtVerifier extends JwtVerifierBase {
 };
 CognitoJwtVerifier.USER_POOL_ID_REGEX = /^(?<region>(?:eusc-[a-z]{2}|[a-z]{2})-(gov-)?[a-z]+-\d)_[a-zA-Z0-9]+$/;
 
-// src/auth.ts
+// src/deployment-auth.ts
 var CALLBACK_PORT = 9876;
 var MAX_AUTH_BYTES = 64 * 1024;
 var MAX_TOKEN_LENGTH = 16 * 1024;
@@ -22038,25 +22046,30 @@ var CognitoAuth = class {
   dependencies;
   fetchJson;
   tokenDirectory;
-  tokenFile;
   tokens = null;
+  identity;
+  verifier;
+  deployment;
+  tokenFile;
+  initialization;
   pending;
   cancelLogin;
   generation = 0;
-  initialization;
-  verifier;
+  cacheLoaded = false;
+  loading;
   constructor(config2, dependencies = {}) {
     this.config = {
       ...config2,
-      cognitoDomain: origin(config2.cognitoDomain, "TTOBAK_COGNITO_DOMAIN"),
-      apiUrl: origin(config2.apiUrl, "TTOBAK_API_URL")
+      apiUrl: origin(config2.apiUrl, "TTOBAK_API_URL"),
+      cognitoDomain: origin(config2.cognitoDomain, "TTOBAK_COGNITO_DOMAIN")
     };
     if (!/^[a-zA-Z0-9]{1,128}$/.test(config2.clientId)) throw new Error("Invalid TTOBAK_CLIENT_ID");
+    if (config2.profile !== void 0 && !/^[A-Za-z0-9_-]{1,64}$/.test(config2.profile)) {
+      throw new Error("TTOBAK_PROFILE must be 1\u201364 letters, digits, underscores or hyphens");
+    }
     this.dependencies = dependencies;
     this.fetchJson = dependencies.requestJson ?? requestAuthJson;
-    this.tokenDirectory = dependencies.tokenDirectory ?? join(homedir(), ".ttobak");
-    this.tokenFile = join(this.tokenDirectory, "tokens.json");
-    this.loadTokens();
+    this.tokenDirectory = dependencies.tokenDirectory ?? join(homedir(), ".ttobak", "tokens");
   }
   getIdToken() {
     if (this.pending) return this.pending;
@@ -22070,15 +22083,30 @@ var CognitoAuth = class {
   isAuthenticated() {
     return this.tokens !== null && Date.now() / 1e3 < this.tokens.expires_at - 60;
   }
+  /** Checks saved credentials without opening a browser or refreshing tokens. */
+  async getStatus() {
+    const generation = this.generation;
+    await this.initialize();
+    this.assertGeneration(generation);
+    await this.ensureTokensLoaded(generation);
+    this.assertGeneration(generation);
+    return { authenticated: this.isAuthenticated(), ...this.identity ? { identity: this.identity } : {} };
+  }
   async logout() {
-    ++this.generation;
+    const generation = ++this.generation;
     this.cancelLogin?.();
     this.pending = void 0;
+    this.loading = void 0;
     this.tokens = null;
+    this.identity = void 0;
+    this.cacheLoaded = true;
+    await this.initialize();
+    this.assertGeneration(generation);
     try {
+      this.ensureDirectories(false);
       unlinkSync(this.tokenFile);
     } catch (error3) {
-      if (error3.code !== "ENOENT") throw new Error("Could not remove saved credentials");
+      if (error3.code !== "ENOENT") throw new Error("Could not remove this deployment\u2019s saved credentials");
     }
   }
   assertGeneration(generation) {
@@ -22092,14 +22120,11 @@ var CognitoAuth = class {
     return this.initialization;
   }
   async discover() {
-    let userPoolId = this.config.userPoolId;
-    if (!userPoolId) {
-      const runtime = await this.fetchJson(new URL("/config.json", this.config.apiUrl));
-      if (!record2(runtime) || !record2(runtime.cognito) || runtime.cognito.userPoolClientId !== this.config.clientId || typeof runtime.cognito.userPoolId !== "string" || typeof runtime.cognito.region !== "string" || !runtime.cognito.userPoolId.startsWith(runtime.cognito.region + "_")) {
-        throw new Error("Application login configuration does not match this MCP deployment");
-      }
-      userPoolId = runtime.cognito.userPoolId;
+    const runtime = await this.fetchJson(new URL("/config.json", this.config.apiUrl));
+    if (!record2(runtime) || !record2(runtime.cognito) || typeof runtime.cognito.userPoolId !== "string" || typeof runtime.cognito.region !== "string" || !runtime.cognito.userPoolId.startsWith(runtime.cognito.region + "_") || (this.config.userPoolId !== void 0 ? this.config.userPoolId !== runtime.cognito.userPoolId : runtime.cognito.userPoolClientId !== this.config.clientId)) {
+      throw new Error("Application login configuration does not match this MCP deployment");
     }
+    const userPoolId = runtime.cognito.userPoolId;
     let issuer, jwksUri;
     try {
       ({ issuer, jwksUri } = CognitoJwtVerifier.parseUserPoolId(userPoolId));
@@ -22110,9 +22135,21 @@ var CognitoAuth = class {
     if (!record2(metadata) || metadata.issuer !== issuer || metadata.jwks_uri !== jwksUri || metadata.authorization_endpoint !== this.config.cognitoDomain + "/oauth2/authorize" || metadata.token_endpoint !== this.config.cognitoDomain + "/oauth2/token") {
       throw new Error("Cognito issuer and Hosted UI configuration do not match");
     }
+    this.deployment = {
+      issuer,
+      clientId: this.config.clientId,
+      apiUrl: this.config.apiUrl,
+      cognitoDomain: this.config.cognitoDomain,
+      profile: this.config.profile ?? "default"
+    };
+    const key = createHash("sha256").update(JSON.stringify(this.deployment)).digest("hex");
+    this.tokenFile = join(this.tokenDirectory, key + ".json");
     this.verifier = createVerifier(userPoolId, this.config.clientId, this.fetchJson);
   }
   async acquireToken(generation) {
+    await this.initialize();
+    this.assertGeneration(generation);
+    await this.ensureTokensLoaded(generation);
     this.assertGeneration(generation);
     if (this.isAuthenticated()) return this.tokens.id_token;
     if (this.tokens?.refresh_token) {
@@ -22123,48 +22160,104 @@ var CognitoAuth = class {
       } catch {
         this.assertGeneration(generation);
         this.tokens = null;
+        this.identity = void 0;
       }
     }
     await this.login(generation);
     this.assertGeneration(generation);
     return this.tokens.id_token;
   }
-  async verifyReturnedTokens(tokens) {
+  async verifyTokens(tokens, allowExpired = false) {
     try {
+      const graceSeconds = allowExpired ? Number.MAX_SAFE_INTEGER : 0;
       const [id, access] = await Promise.all([
-        this.verifier.verify(tokens.id_token, { tokenUse: "id", graceSeconds: 0 }),
-        this.verifier.verify(tokens.access_token, { tokenUse: "access", graceSeconds: 0 })
+        this.verifier.verify(tokens.id_token, { tokenUse: "id", graceSeconds }),
+        this.verifier.verify(tokens.access_token, { tokenUse: "access", graceSeconds })
       ]);
       if (id.sub !== access.sub) throw new Error("Token subjects differ");
-      return { ...tokens, expires_at: Math.min(tokens.expires_at, id.exp, access.exp) };
+      const identity = { subject: id.sub };
+      if (typeof id["cognito:username"] === "string") identity.username = id["cognito:username"];
+      if (id.email_verified === true && typeof id.email === "string") identity.email = id.email;
+      return {
+        tokens: { ...tokens, expires_at: Math.min(tokens.expires_at, id.exp, access.exp) },
+        identity
+      };
     } catch {
-      throw new Error("Returned credentials are not valid for this deployment");
+      throw new Error("Saved or returned credentials are not valid for this deployment");
     }
   }
-  loadTokens() {
+  ensureTokensLoaded(generation) {
+    if (this.cacheLoaded) return Promise.resolve();
+    this.loading ??= this.loadTokens(generation);
+    return this.loading;
+  }
+  async loadTokens(generation) {
+    let fd;
     try {
-      if (!existsSync(this.tokenFile)) return;
-      const saved = JSON.parse(readFileSync(this.tokenFile, "utf8"));
-      this.tokens = tokenData(saved) ? saved : null;
+      this.ensureDirectories(false);
+      fd = openSync(this.tokenFile, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      const info = fstatSync(fd);
+      if (!info.isFile() || info.size > MAX_AUTH_BYTES || process.getuid && info.uid !== process.getuid()) throw new Error("Unsafe credential file");
+      fchmodSync(fd, 384);
+      const saved = JSON.parse(readFileSync(fd, "utf8"));
+      closeSync(fd);
+      fd = void 0;
+      if (!record2(saved) || saved.version !== 1 || JSON.stringify(saved.deployment) !== JSON.stringify(this.deployment) || !tokenData(saved.tokens)) {
+        throw new Error("Credential deployment mismatch");
+      }
+      const verified = await this.verifyTokens(saved.tokens, true);
+      this.assertGeneration(generation);
+      this.tokens = verified.tokens;
+      this.identity = verified.identity;
     } catch {
+      this.assertGeneration(generation);
       this.tokens = null;
+      this.identity = void 0;
+    } finally {
+      if (fd !== void 0) closeSync(fd);
+    }
+    this.assertGeneration(generation);
+    this.cacheLoaded = true;
+  }
+  ensureDirectories(create) {
+    for (const directory of [dirname(this.tokenDirectory), this.tokenDirectory]) {
+      if (create) mkdirSync(directory, { recursive: true, mode: 448 });
+      const info = lstatSync(directory);
+      if (!info.isDirectory() || info.isSymbolicLink() || process.getuid && info.uid !== process.getuid()) throw new Error("Unsafe credential directory");
+      chmodSync(directory, 448);
     }
   }
-  async saveTokens(tokens, generation) {
-    await this.initialize();
-    const verified = await this.verifyReturnedTokens(tokens);
+  async saveTokens(tokens, generation, expectedSubject) {
+    const verified = await this.verifyTokens(tokens);
     this.assertGeneration(generation);
-    try {
-      mkdirSync(this.tokenDirectory, { recursive: true, mode: 448 });
-      writeFileSync(this.tokenFile, JSON.stringify(verified), { mode: 384 });
-    } catch {
-      throw new Error("Could not store credentials");
+    if (expectedSubject !== void 0 && verified.identity.subject !== expectedSubject) {
+      throw new Error("Refreshed credentials do not match the signed-in user");
     }
-    this.tokens = verified;
+    const temporary = this.tokenFile + "." + randomBytes(16).toString("hex") + ".tmp";
+    let fd;
+    try {
+      this.ensureDirectories(true);
+      fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 384);
+      writeFileSync(fd, JSON.stringify({ version: 1, deployment: this.deployment, tokens: verified.tokens }));
+      fchmodSync(fd, 384);
+      fsyncSync(fd);
+      closeSync(fd);
+      fd = void 0;
+      renameSync(temporary, this.tokenFile);
+    } catch {
+      throw new Error("Could not securely store this deployment\u2019s credentials");
+    } finally {
+      if (fd !== void 0) closeSync(fd);
+      try {
+        unlinkSync(temporary);
+      } catch {
+      }
+    }
+    this.tokens = verified.tokens;
+    this.identity = verified.identity;
+    this.cacheLoaded = true;
   }
   async login(generation) {
-    await this.initialize();
-    this.assertGeneration(generation);
     const verifier = randomBytes(32).toString("base64url");
     const state = randomBytes(32).toString("hex");
     const callback = await this.waitForCallback(state);
@@ -22286,7 +22379,7 @@ var CognitoAuth = class {
       });
     });
   }
-  async acceptResponse(value, refreshToken, generation) {
+  async acceptResponse(value, refreshToken, generation, expectedSubject) {
     if (!record2(value) || value.token_type !== "Bearer" || !tokenString(value.id_token) || !tokenString(value.access_token) || value.error !== void 0 || typeof value.expires_in !== "number" || !Number.isSafeInteger(value.expires_in) || value.expires_in <= 0 || value.expires_in > 86400 || value.refresh_token !== void 0 && !tokenString(value.refresh_token)) {
       throw new Error("Invalid Cognito token response");
     }
@@ -22295,7 +22388,7 @@ var CognitoAuth = class {
       access_token: value.access_token,
       refresh_token: typeof value.refresh_token === "string" ? value.refresh_token : refreshToken,
       expires_at: Math.floor(Date.now() / 1e3) + value.expires_in
-    }, generation);
+    }, generation, expectedSubject);
   }
   async exchangeCode(code, verifier, redirectUri, generation) {
     const body = new URLSearchParams({
@@ -22310,9 +22403,8 @@ var CognitoAuth = class {
     await this.acceptResponse(value, "", generation);
   }
   async refresh(generation) {
-    await this.initialize();
-    this.assertGeneration(generation);
     const refreshToken = this.tokens.refresh_token;
+    const expectedSubject = this.identity.subject;
     const body = new URLSearchParams({
       grant_type: "refresh_token",
       client_id: this.config.clientId,
@@ -22320,7 +22412,7 @@ var CognitoAuth = class {
     });
     const value = await this.fetchJson(new URL("/oauth2/token", this.config.cognitoDomain), body);
     this.assertGeneration(generation);
-    await this.acceptResponse(value, refreshToken, generation);
+    await this.acceptResponse(value, refreshToken, generation, expectedSubject);
   }
 };
 function openBrowser(url2) {
@@ -23153,9 +23245,9 @@ function documentCatalogResult(value, options) {
 // src/recorder.ts
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync as existsSync2, linkSync, mkdirSync as mkdirSync2, readdirSync, readFileSync as readFileSync3, renameSync, rmSync, statSync as statSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { existsSync, linkSync, mkdirSync as mkdirSync2, readdirSync, readFileSync as readFileSync3, renameSync as renameSync2, rmSync, statSync as statSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
-import { basename as basename2, dirname, join as join2, resolve as resolvePath } from "node:path";
+import { basename as basename2, dirname as dirname2, join as join2, resolve as resolvePath } from "node:path";
 var DEFAULT_MAX_MINUTES = 240;
 var MAX_MAX_MINUTES = 240;
 var SAMPLE_RATE = 16e3;
@@ -23347,7 +23439,7 @@ ${err.message}`;
       ...info,
       running: this.active.exitCode === void 0,
       elapsedSeconds: Math.round((Date.now() - Date.parse(info.startedAt)) / 1e3),
-      bytes: existsSync2(info.file) ? statSync2(info.file).size : 0
+      bytes: existsSync(info.file) ? statSync2(info.file).size : 0
     };
   }
   /** Stops and finalizes the active recording. It returns holding the
@@ -23376,7 +23468,7 @@ ${err.message}`;
       }
     }
     const { id, file: file2 } = active.info;
-    const bytes = existsSync2(file2) ? statSync2(file2).size : 0;
+    const bytes = existsSync(file2) ? statSync2(file2).size : 0;
     if (bytes <= WAV_HEADER_BYTES) {
       rmSync(file2, { force: true });
       this.removeSidecar(id);
@@ -23401,7 +23493,7 @@ ${err.message}`;
   /** Reports whether the file is effectively silent (e.g. host lacks mic permission). */
   async silenceCheck(file2) {
     const name = basename2(file2);
-    if (dirname(file2) !== this.dir || !name.endsWith(".wav") || !UUID_PATTERN.test(name.slice(0, -".wav".length))) {
+    if (dirname2(file2) !== this.dir || !name.endsWith(".wav") || !UUID_PATTERN.test(name.slice(0, -".wav".length))) {
       throw new Error("silenceCheck accepts only a recording in the recordings directory");
     }
     const { stderr } = await this.run(["-hide_banner", "-nostats", "-i", file2, "-af", "volumedetect", "-f", "null", "-"]);
@@ -23411,7 +23503,7 @@ ${err.message}`;
   /** Finalized recordings kept on disk (e.g. after an upload failure or host
    * restart). A recording still being captured by a live process is omitted. */
   listSaved() {
-    if (!existsSync2(this.dir)) return [];
+    if (!existsSync(this.dir)) return [];
     const saved = [];
     for (const name of readdirSync(this.dir)) {
       if (!name.endsWith(".json")) continue;
@@ -23540,7 +23632,7 @@ ${err.message}`;
   /** PID of a live lock holder, or null when unlocked or stale. */
   lockHolder(id) {
     const lock = join2(this.dir, `${id}.lock`);
-    if (!existsSync2(lock)) return null;
+    if (!existsSync(lock)) return null;
     const content = this.readLock(lock);
     if (content === null) return -1;
     const pid = lockPid(content);
@@ -23575,7 +23667,7 @@ ${err.message}`;
     delete stored.release;
     const tmp = join2(this.dir, `${id}.json.${process.pid}.tmp`);
     writeFileSync2(tmp, JSON.stringify(stored), { mode: 384 });
-    renameSync(tmp, join2(this.dir, `${id}.json`));
+    renameSync2(tmp, join2(this.dir, `${id}.json`));
   }
   removeSidecar(id) {
     rmSync(join2(this.dir, `${id}.json`), { force: true });
@@ -24162,10 +24254,11 @@ async function callTool(request2, options) {
         return text("Authenticated successfully with TTOBAK.");
       }
       case "ttobak_status": {
-        const authenticated = auth.isAuthenticated();
+        const status = auth.getStatus ? await auth.getStatus() : { authenticated: auth.isAuthenticated() };
         return text(
-          `Authenticated: ${authenticated}
-API: ${API_URL}
+          `Authenticated: ${status.authenticated}
+` + (status.identity ? `Signed in: ${JSON.stringify(status.identity)}
+` : "") + `API: ${API_URL}
 Cognito: ${COGNITO_DOMAIN}
 Client: ${CLIENT_ID.slice(0, 8)}...`
         );
@@ -24471,7 +24564,7 @@ Retrieval is scoped to you -- only your own ttobak_ask queries can find this fil
       }
       case "ttobak_logout": {
         await auth.logout?.();
-        return text("Logged out. Tokens removed from ~/.ttobak/tokens.json");
+        return text("Logged out. Saved credentials for this deployment and profile were removed.");
       }
       default:
         return error2(`Unknown tool: ${name}`);
@@ -24646,7 +24739,13 @@ async function main() {
   if (!apiUrl || !cognitoDomain || !clientId) {
     throw new Error("Missing required env vars: TTOBAK_COGNITO_DOMAIN, TTOBAK_CLIENT_ID, TTOBAK_API_URL");
   }
-  const auth = new CognitoAuth({ cognitoDomain, clientId, apiUrl, userPoolId: process.env.TTOBAK_USER_POOL_ID });
+  const auth = new CognitoAuth({
+    cognitoDomain,
+    clientId,
+    apiUrl,
+    userPoolId: process.env.TTOBAK_USER_POOL_ID,
+    profile: process.env.TTOBAK_PROFILE
+  });
   const recorder = new Recorder();
   const server = createMcpServer({
     auth,
