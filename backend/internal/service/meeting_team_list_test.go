@@ -52,6 +52,42 @@ func TestListMeetings_LaterTeamMemberAutomaticallySeesPublishedMeetings(t *testi
 	}
 }
 
+func TestListMeetings_LaterGuardedTeamMemberCannotReadPrivateDerivatives(t *testing.T) {
+	for _, safe := range []bool{false, true} {
+		t.Run(fmt.Sprintf("safe=%v", safe), func(t *testing.T) {
+			repo, svc := publishedTeamMeeting(t)
+			meeting := repo.meetings[meetingKey("owner", "published")]
+			meeting.Content, meeting.Tags, meeting.Sentiment = "PRIVATE_PREDECESSOR", []string{"PRIVATE_TAG"}, "PRIVATE_SENTIMENT"
+			repo.addMember("acc-a", "new-member", model.RoleSA)
+			repo.members["acc-a|new-member"].SummaryPrivacyVersion = 1
+			if safe {
+				meeting.SummaryPrivacy = &model.SummaryPrivacy{
+					Version: 1, State: model.SummaryPrivacySafe, GenerationID: "safe-generation",
+					ContentSHA256: model.SummaryPrivacyHash(meeting.Content),
+				}
+			}
+			if share, _ := repo.GetShare(context.Background(), "new-member", "published"); share != nil {
+				t.Fatal("fixture must have no individual share after account publication")
+			}
+			got, err := svc.ListMeetings(context.Background(), "new-member", "shared", "", "acc-a", 20)
+			if err != nil || len(got.Meetings) != 1 {
+				t.Fatalf("team list unavailable: response=%+v error=%v", got, err)
+			}
+			item := got.Meetings[0]
+			if safe {
+				if item.Summary != meeting.Content || len(item.Tags) != 1 || item.Sentiment != meeting.Sentiment {
+					t.Fatalf("safe derived view lost: %+v", item)
+				}
+			} else if item.Summary != "" || len(item.Tags) != 0 || item.Sentiment != "" {
+				t.Fatalf("inherited team stream leaked private derivatives: %+v", item)
+			}
+			if meeting.Content != "PRIVATE_PREDECESSOR" || len(meeting.Tags) != 1 || meeting.Sentiment != "PRIVATE_SENTIMENT" {
+				t.Fatal("list projection mutated canonical content")
+			}
+		})
+	}
+}
+
 func TestListMeetings_TeamInheritanceRejectsStaleAndPrivateReferences(t *testing.T) {
 	for _, state := range []string{"link-only", "moved", "deleted", "membership-removed", "other-filter"} {
 		t.Run(state, func(t *testing.T) {

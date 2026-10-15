@@ -110,20 +110,25 @@ func (s *ActionItemsAnalysisService) Describe(ctx context.Context, meeting *mode
 	return nil, repository.ErrConditionFailed
 }
 
-func (s *ActionItemsAnalysisService) response(ctx context.Context, meeting *model.Meeting) (*ActionItemsResponse, error) {
+func (s *ActionItemsAnalysisService) response(ctx context.Context, userID string, meeting *model.Meeting) (*ActionItemsResponse, error) {
 	state, err := s.Describe(ctx, meeting)
 	if err != nil {
 		return nil, err
 	}
-	// Read items AFTER status using the repository's strongly consistent read.
+	// Read items AFTER status using a fresh, caller-authorized view backed by
+	// strongly consistent reads. A canonical owner reload would discard the
+	// account privacy projection or retain access after a concurrent revocation.
 	// Otherwise a completion between the two reads can pair "succeeded" with
 	// the pre-completion empty array.
-	fresh, err := s.repo.GetMeeting(ctx, meeting.UserID, meeting.MeetingID)
+	fresh, _, err := s.meetings.checkAccess(ctx, userID, meeting.MeetingID)
 	if err != nil {
 		return nil, err
 	}
 	if fresh == nil {
 		return nil, ErrNotFound
+	}
+	if fresh.SummaryReadRestricted {
+		return nil, ErrSummaryReadRestricted
 	}
 	if state.Status == model.AnalysisSucceeded && state.SourceHash != actionSourceHash(fresh.Content) {
 		state.Status, state.ErrorCode = model.AnalysisFailed, model.AnalysisSourceChanged
@@ -143,7 +148,10 @@ func (s *ActionItemsAnalysisService) Get(ctx context.Context, userID, meetingID 
 	if meeting == nil {
 		return nil, ErrNotFound
 	}
-	return s.response(ctx, meeting)
+	if meeting.SummaryReadRestricted {
+		return nil, ErrSummaryReadRestricted
+	}
+	return s.response(ctx, userID, meeting)
 }
 
 func (s *ActionItemsAnalysisService) editable(ctx context.Context, userID, meetingID string) (*model.Meeting, error) {
@@ -202,7 +210,7 @@ func (s *ActionItemsAnalysisService) Request(ctx context.Context, userID, meetin
 			return nil, fmt.Errorf("publish action analysis: %w", err)
 		}
 	}
-	return s.response(ctx, meeting)
+	return s.response(ctx, userID, meeting)
 }
 
 func (s *ActionItemsAnalysisService) RunInline(ctx context.Context, ownerID, meetingID string) error {
