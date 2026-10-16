@@ -136,4 +136,21 @@ describe('AuthStack', () => {
       expect([...(client.Properties.AllowedOAuthScopes ?? [])].sort()).toEqual(['email', 'openid', 'profile']);
     }
   });
+
+  test('the public MCP client retains the legacy and exact Codex callbacks', () => {
+    const clients = template.findResources('AWS::Cognito::UserPoolClient');
+    const spa = Object.values(clients).find(client =>
+      client.Properties.ClientName === 'ttobak-spa-client');
+    expect(spa).toBeDefined();
+    expect(spa!.Properties).toMatchObject({
+      GenerateSecret: false,
+      AllowedOAuthFlows: ['code'],
+      AllowedOAuthScopes: ['email', 'openid', 'profile'],
+      CallbackURLs: [
+        'http://localhost:9876/callback',
+        'http://localhost:9876/callback/Z3RALQJi3TX1',
+      ],
+      LogoutURLs: ['http://localhost:9876'],
+    });
+  });
 });

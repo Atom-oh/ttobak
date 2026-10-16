@@ -155,7 +155,16 @@ token is rejected at the CloudFront edge with a 401 whose `WWW-Authenticate` nam
 with the MCP URL registered as a resource server (AuthStack does both). The pool's
 OIDC metadata omits `code_challenge_methods_supported`; PKCE S256 still works, but
 a client that insists on that field may refuse. Clients use the SPA public client
-and its registered callback (`http://localhost:9876/callback`) unless more are added.
+and an exactly registered callback. The SPA client retains
+`http://localhost:9876/callback` and adds the configured Codex host's callback,
+`http://localhost:9876/callback/Z3RALQJi3TX1`. Codex appends this server-specific
+path because Cognito discovery does not advertise authorization-response `iss`.
+Use callback port `9876`, callback base `http://localhost:9876/callback`, and
+explicit login scopes `openid,email,profile`; the issuer also advertises `phone`,
+which this client does not grant. Compare the final redirect URI with the
+deployed client's callback list before signing in. On a remote Codex host,
+forward the browser's localhost port to that host so the authorization code
+returns directly to the login process; never paste codes or tokens into chat.
 Publish `mcp: { "url": "/api/mcp" }` in runtime config only
 after deployment acceptance. Validate each client's exact callback, OIDC discovery,
 resource binding, refresh and representative operations. Access tokens need not

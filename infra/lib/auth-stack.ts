@@ -220,7 +220,12 @@ export class AuthStack extends cdk.Stack {
           cognito.OAuthScope.OPENID,
           cognito.OAuthScope.PROFILE,
         ],
-        callbackUrls: ['http://localhost:9876/callback'],
+        callbackUrls: [
+          'http://localhost:9876/callback',
+          // Codex uses a server-specific callback path when the Cognito
+          // OIDC discovery does not advertise authorization-response `iss`.
+          'http://localhost:9876/callback/Z3RALQJi3TX1',
+        ],
         logoutUrls: ['http://localhost:9876'],
       },
       authFlows: {
