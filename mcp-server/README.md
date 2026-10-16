@@ -172,6 +172,136 @@ carry email/verified-email claims: do not fabricate them or weaken pending-invit
 checks. Source wiring and synthetic tests do not prove live client acceptance.
 See [ADR-045](../docs/decisions/ADR-045-dual-mcp-transports.md).
 
+### HTTP MCP from code-server
+
+Register the same Streamable HTTP endpoint in the Codex configuration used by
+the remote host. Codex CLI and the Codex IDE extension share that configuration.
+Use your existing authenticated code-server HTTPS origin and the callback ID
+displayed for this exact MCP URL:
+
+```toml
+[mcp_servers.ttobak]
+url = "https://ttobak.atomai.click/api/mcp"
+oauth_resource = "https://ttobak.atomai.click/api/mcp"
+
+[mcp_servers.ttobak.oauth]
+client_id = "33rh85mv6l9n7tn3s5h16prfdr"
+callback_port = 9876
+callback_url = "https://YOUR_CODE_SERVER_HOST/absproxy/9876/callback/YOUR_CALLBACK_ID"
+```
+
+The public client ID is deployment configuration, not a secret. Keep the
+code-server browser session signed in, then run this in its terminal:
+
+```sh
+codex mcp login ttobak --scopes openid,email,profile
+```
+
+Open the displayed authorization link in that browser and sign in to TTOBAK.
+The callback uses the existing authenticated code-server HTTPS proxy to reach
+the remote listener on port `9876`. Use `/absproxy/`, which preserves the entire
+callback path; `/proxy/` removes its prefix. This path does not require an SSH
+tunnel or access to the browser machine's localhost. Codex binds a listener for
+an external callback URL to `0.0.0.0`; keep that development port behind the
+existing network controls and code-server authentication. Do not add public
+ingress or disable proxy authentication.
+
+Before signing in, verify that this exact redirect URI is deployed in the
+Cognito client's callback list. AuthStack adds private deployment callbacks from
+the SSM StringList `/ttobak/auth/mcp-callback-urls` to the two retained local
+callbacks. An operator must create this parameter in the deployment account and
+region before deploying AuthStack; a missing parameter blocks deployment.
+Populate it with the exact approved client redirect URIs, without empty entries
+or duplicate local callbacks. Keep workstation hostnames in that private
+configuration, outside repository source, CDK context and published history.
+Callback URLs are configuration; never put authorization codes or tokens in the
+parameter. Verify proxy reachability before configuring a host callback.
+
+Another code-server hostname or MCP URL needs its own exact callback
+registration; do not assume a wildcard or the same server-specific suffix.
+No new TTOBAK public route or application origin is introduced.
+
+Claude Code and Kiro use separate client configuration and authentication.
+Codex TOML does not register this server in either client. Run only one login
+at a time when the clients share callback port `9876`.
+
+For Claude Code, register the public client in its user configuration:
+
+```sh
+claude mcp add --transport http --scope user \
+  --client-id 33rh85mv6l9n7tn3s5h16prfdr --callback-port 9876 \
+  ttobak https://ttobak.atomai.click/api/mcp
+claude mcp login ttobak --no-browser
+```
+
+Open the authorization link in your browser. When the browser redirects to
+`http://localhost:9876/callback`, paste the complete redirect URL into Claude
+Code's own interactive terminal prompt. That URL contains a short-lived code;
+never put it in chat, logs or a shared document. This manual completion works
+without the browser reaching the remote listener. Claude Code's documented
+callback-port option does not configure an HTTPS callback.
+
+For Kiro CLI, merge the following entry into the existing `mcpServers` object
+in `~/.kiro/settings/mcp.json`, preserving other servers and file permissions:
+
+```json
+{
+  "mcpServers": {
+    "ttobak": {
+      "url": "https://ttobak.atomai.click/api/mcp",
+      "oauth": {
+        "clientId": "33rh85mv6l9n7tn3s5h16prfdr",
+        "redirectUri": "http://localhost:9876/callback",
+        "oauthScopes": ["openid", "email", "profile"]
+      }
+    }
+  }
+}
+```
+
+Kiro CLI 2.29.1 accepts only an HTTP loopback `redirectUri`. Its HTTPS MCP
+transport does not change this OAuth callback requirement, and an HTTPS
+code-server proxy URL cannot replace that URI. Before starting `/mcp auth`,
+forward the browser machine's localhost port `9876` to the remote host's
+port `9876` through your existing SSH or IDE connection. The destination must
+reach the host or container in which Kiro's listener actually runs. The fixed
+port setting alone does not create a forward. Confirm the browser's localhost
+resolves to the address covered by your forward. No Kiro manual callback paste
+flow has been established for this version.
+
+These instructions describe the installed terminal clients, including terminals
+inside code-server. Kiro IDE and other editor extensions are separate clients.
+Verify each client's final redirect against the deployed allowlist and confirm
+its granted scopes, resource binding, token refresh and representative API
+operations independently. Registration and a synthetic proxy check do not prove
+authenticated client acceptance.
+
+VS Code's native MCP registry is separate from Codex. Its workspace declaration
+uses `servers`, rather than Codex TOML:
+
+```json
+{
+  "servers": {
+    "ttobak": {
+      "type": "http",
+      "url": "https://ttobak.atomai.click/api/mcp"
+    }
+  }
+}
+```
+
+Save that declaration as `.vscode/mcp.json` only when using a native MCP client.
+The installed code-server 4.106.3 / VS Code 1.106.3 schema has no per-server
+OAuth client-ID or callback setting. This declaration registers the transport;
+native-client OAuth acceptance still needs a supported client-registration flow
+and its own exactly registered callback. Do not copy Codex OAuth fields into
+this JSON or claim native sign-in passed.
+
+Code-server proxy reachability, deployed callbacks, authenticated HTTP
+initialization, refresh and representative bounded reads require separate live
+acceptance. A configuration entry or successful infrastructure deployment alone
+does not establish user authentication or R9 consumer acceptance.
+
 ## Tool behavior
 
 `src/index.ts` is the shared tool/schema inventory; `src/api.ts` implements HTTP

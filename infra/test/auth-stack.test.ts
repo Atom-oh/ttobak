@@ -137,7 +137,7 @@ describe('AuthStack', () => {
     }
   });
 
-  test('the public MCP client retains the legacy and exact Codex callbacks', () => {
+  test('the public MCP client retains local callbacks and privately configured redirects', () => {
     const clients = template.findResources('AWS::Cognito::UserPoolClient');
     const spa = Object.values(clients).find(client =>
       client.Properties.ClientName === 'ttobak-spa-client');
@@ -146,11 +146,33 @@ describe('AuthStack', () => {
       GenerateSecret: false,
       AllowedOAuthFlows: ['code'],
       AllowedOAuthScopes: ['email', 'openid', 'profile'],
-      CallbackURLs: [
-        'http://localhost:9876/callback',
-        'http://localhost:9876/callback/Z3RALQJi3TX1',
-      ],
       LogoutURLs: ['http://localhost:9876'],
     });
+    const parameters = template.toJSON().Parameters;
+    const parameter = Object.keys(parameters).find(name =>
+      parameters[name].Default === '/ttobak/auth/mcp-callback-urls');
+    expect(parameter).toBeDefined();
+    expect(parameters[parameter!].Type).toBe('AWS::SSM::Parameter::Value<List<String>>');
+    const configured = ['https://code.example.com/absproxy/9876/callback/example-id'];
+    const resolve = (value: unknown): unknown => {
+      if (typeof value !== 'object' || value === null) return value;
+      if (Array.isArray(value)) return value.map(resolve);
+      const expression = value as Record<string, unknown>;
+      if (expression.Ref === parameter) return configured;
+      if ('Fn::Join' in expression) {
+        const [separator, entries] = expression['Fn::Join'] as [string, unknown[]];
+        return (resolve(entries) as string[]).join(separator);
+      }
+      if ('Fn::Split' in expression) {
+        const [separator, input] = expression['Fn::Split'] as [string, unknown];
+        return (resolve(input) as string).split(separator);
+      }
+      throw new Error('Unexpected callback template expression');
+    };
+    expect(resolve(spa!.Properties.CallbackURLs)).toEqual([
+      'http://localhost:9876/callback',
+      'http://localhost:9876/callback/Z3RALQJi3TX1',
+      ...configured,
+    ]);
   });
 });

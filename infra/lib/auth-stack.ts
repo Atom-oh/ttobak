@@ -3,6 +3,7 @@ import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as path from 'path';
 import { Construct } from 'constructs';
 
@@ -207,6 +208,18 @@ export class AuthStack extends cdk.Stack {
       refreshTokenValidity: cdk.Duration.days(30),
     });
 
+    // Resolve host-specific redirects from private deployment configuration.
+    // Bootstrap this StringList before deploying; workstation hostnames stay
+    // out of the template, context and published source history.
+    const configuredMcpCallbacks = ssm.StringListParameter.valueForTypedListParameter(
+      this, '/ttobak/auth/mcp-callback-urls',
+    );
+    const mcpCallbacks = cdk.Fn.split(',', cdk.Fn.join(',', [
+      'http://localhost:9876/callback',
+      'http://localhost:9876/callback/Z3RALQJi3TX1',
+      cdk.Fn.join(',', configuredMcpCallbacks),
+    ]));
+
     // Public SPA client (no secret — safe for browser-based auth + MCP OAuth PKCE)
     this.spaClient = this.userPool.addClient('TtobakSpaClient', {
       userPoolClientName: 'ttobak-spa-client',
@@ -220,12 +233,7 @@ export class AuthStack extends cdk.Stack {
           cognito.OAuthScope.OPENID,
           cognito.OAuthScope.PROFILE,
         ],
-        callbackUrls: [
-          'http://localhost:9876/callback',
-          // Codex uses a server-specific callback path when the Cognito
-          // OIDC discovery does not advertise authorization-response `iss`.
-          'http://localhost:9876/callback/Z3RALQJi3TX1',
-        ],
+        callbackUrls: mcpCallbacks,
         logoutUrls: ['http://localhost:9876'],
       },
       authFlows: {
