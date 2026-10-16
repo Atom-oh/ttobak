@@ -263,3 +263,24 @@ Existing unscoped receipts remain compatible; older readers reject the new
 scoped receipt shape rather than replaying it as a global search. Selection
 keys are redacted in tool-input logs. No public route, IAM grant or source
 visibility rule changes.
+
+## Staged summary privacy scope
+
+`summary_privacy.py` is wired into the handler, canonical source reader,
+indexed retrieval and strict account aggregation. Account access is checked
+before source bytes; a protected membership receives parent-owned raw notes and
+transcript plus `summaryReadRestriction: SHARING_REGEN_REQUIRED`, with derived
+summary/tasks omitted. Semantic scores over withheld derivation cannot reintroduce
+the identity; fresh permitted keyword text may still match it.
+
+The user-scoped restriction changes the rendered source revision, so prior
+derived history cannot replay under the protected view. Account insight copies
+also bind current generation/revision and recheck before CompleteRead; omitted
+private insights carry an explicit restriction rather than an empty-evidence claim.
+`test_handler` loads `test_summary_privacy` and the account/source regression tests.
+
+Stamped memberships enforce this reader policy even in installation mode.
+Unmarked membership activation requires the same fixed UTC cutoff and rollout
+fence as Go. Writer provenance, grant transactions, owner regeneration and
+reader-before-writer deployment remain outstanding; this source wiring is not
+R1 completion or deployed acceptance.

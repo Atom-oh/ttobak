@@ -6,13 +6,15 @@ from boto3.dynamodb.conditions import Key
 
 from source_revision import IDENTIFIER
 from tool_history import CompleteRead, normalize_input
+from summary_privacy import enforce_summary_guard, safe_summary
 
-MEMBER_FIELDS = ('PK', 'SK', 'accountId', 'userId', 'role')
+MEMBER_FIELDS = ('PK', 'SK', 'accountId', 'userId', 'role', 'addedAt', 'summaryPrivacyVersion')
 ACCOUNT_FIELDS = ('PK', 'SK', 'accountId', 'name', 'aliases', 'industry')
-MEETING_AUTH = ('PK', 'SK', 'meetingId', 'userId', 'entityType', 'accountId', 'sharedToAccount')
+MEETING_AUTH = ('PK', 'SK', 'meetingId', 'userId', 'entityType', 'accountId', 'sharedToAccount',
+                'summaryPrivacy', 'insightsRevision')
 RESEARCH_AUTH = ('PK', 'SK', 'researchId', 'userId', 'accountIds', 'trashedAt')
 INSIGHT_AUTH = ('PK', 'SK', 'accountId', 'entityType', 'sourceType',
-                'sourceId', 'sourceUserId', 'occurredAt')
+                'sourceId', 'sourceUserId', 'occurredAt', 'summaryGeneration', 'insightsRevision')
 INSIGHT_METADATA = INSIGHT_AUTH + ('insightId', 'type')
 RFC3339 = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})')
 
@@ -174,8 +176,9 @@ class StrictAccountReader:
             return False
         return 'USER#' + owner, 'MEETING#' + source_id, owner, source_id
 
-    def _insights(self, account_id, date_from=None, date_to=None, types=None):
+    def _insights(self, account_id, date_from=None, date_to=None, types=None, member=None):
         result, guards = [], []
+        restricted = False
         for row in self._query('ACCOUNT#' + account_id, 'INSIGHT#', INSIGHT_METADATA):
             source = self._insight_source(row, account_id)
             if source is False:
@@ -188,8 +191,14 @@ class StrictAccountReader:
                 continue
             if source is not None:
                 pk, sk, owner, meeting_id = source
-                if not self._published(self._get(pk, sk, MEETING_AUTH), owner, meeting_id, account_id):
+                parent = self._get(pk, sk, MEETING_AUTH)
+                if (self._published(parent, owner, meeting_id, account_id)
+                        and self._derived_restricted(parent, member, owner)):
+                    restricted = True
                     continue
+                if not self._insight_allowed(parent, member, row, owner, meeting_id, account_id):
+                    continue
+                source = (*source, self._generation(parent), _text(parent, 'insightsRevision'))
             current = self._get(row['PK'], row['SK'], INSIGHT_METADATA + ('text', 'entities'))
             if current is None or any(
                     (field in current) != (field in row) or current.get(field) != row.get(field)
@@ -205,23 +214,27 @@ class StrictAccountReader:
                            'sourceType': _text(current, 'sourceType'), 'entities': _strings(current.get('entities'))})
             if source is not None:
                 guards.append(source)
-        return sorted(result, key=lambda item: (item['occurredAt'], item['insightId']), reverse=True), guards
+        return sorted(result, key=lambda item: (item['occurredAt'], item['insightId']), reverse=True), guards, restricted
 
     def get_account_insights(self, user_id, account_query, date_from=None, date_to=None, types=None):
         self._user(user_id)
         args = normalize_input('get_account_insights',
                                {'account': account_query, 'from': date_from, 'to': date_to, 'types': types})
         account, member = self._resolve(user_id, args['account'])
-        insights, guards = self._insights(account['accountId'], args.get('from'), args.get('to'), args.get('types'))
-        self._recheck_publications(account['accountId'], guards)
+        insights, guards, restricted = self._insights(
+            account['accountId'], args.get('from'), args.get('to'), args.get('types'), member)
+        self._recheck_publications(account['accountId'], guards, member)
         self._recheck_member(user_id, member)
-        return CompleteRead({'accountId': account['accountId'], 'account': _text(account, 'name'), 'insights': insights})
+        value = {'accountId': account['accountId'], 'account': _text(account, 'name'), 'insights': insights}
+        if restricted:
+            value['summaryReadRestriction'] = 'SHARING_REGEN_REQUIRED'
+        return CompleteRead(value)
 
     @staticmethod
     def _published(row, owner, meeting_id, account_id):
         if row is None:
             return False
-        fields = {field: _text(row, field) for field in MEETING_AUTH if field != 'sharedToAccount'}
+        fields = {field: _text(row, field) for field in MEETING_AUTH if field not in ('sharedToAccount','summaryPrivacy')}
         shared = row.get('sharedToAccount')
         if shared is not None and type(shared) is not bool:
             raise ValueError('Invalid meeting account publication flag')
@@ -230,10 +243,42 @@ class StrictAccountReader:
                 and fields['meetingId'] == meeting_id and fields['userId'] == owner
                 and fields['accountId'] == account_id and shared is True)
 
-    def _recheck_publications(self, account_id, guards):
-        for pk, sk, owner, meeting_id in sorted(set(guards)):
-            if not self._published(self._get(pk, sk, MEETING_AUTH), owner, meeting_id, account_id):
+    def _recheck_publications(self, account_id, guards, member):
+        for guard in sorted(set(guards)):
+            pk, sk, owner, meeting_id = guard[:4]
+            current = self._get(pk, sk, MEETING_AUTH)
+            if not self._published(current, owner, meeting_id, account_id):
                 raise PermissionError('Meeting account publication changed during aggregation')
+            if len(guard) > 4:
+                if (self._generation(current) != guard[4]
+                        or _text(current, 'insightsRevision') != guard[5]
+                        or self._derived_restricted(current, member, owner)):
+                    raise PermissionError('Meeting insight generation changed during aggregation')
+
+    @staticmethod
+    def _generation(row):
+        privacy=row.get('summaryPrivacy') if row else None
+        if privacy is None:
+            return ''
+        if type(privacy) is not dict:
+            raise ValueError('Invalid summary privacy metadata')
+        return _text(privacy,'generationId')
+
+    @staticmethod
+    def _derived_restricted(parent, member, owner):
+        return ((member is None or member.get('userId') != owner)
+                and enforce_summary_guard(member) and not safe_summary(parent))
+
+    def _insight_allowed(self, parent, member, row, owner, meeting_id, account_id):
+        if not self._published(parent, owner, meeting_id, account_id):
+            return False
+        if self._derived_restricted(parent, member, owner):
+            return False
+        generation = self._generation(parent)
+        if generation:
+            return (_text(row, 'summaryGeneration') == generation and bool(_text(parent, 'insightsRevision'))
+                    and _text(row, 'insightsRevision') == _text(parent, 'insightsRevision'))
+        return not _text(row, 'summaryGeneration') and not _text(row, 'insightsRevision')
 
     def _meetings(self, account_id):
         result, guards, seen = [], [], set()
@@ -289,17 +334,20 @@ class StrictAccountReader:
         args = normalize_input('get_account_brief', {'account': account_query})
         account, member = self._resolve(user_id, args['account'])
         account_id = account['accountId']
-        insights, insight_guards = self._insights(account_id)
+        insights, insight_guards, restricted = self._insights(account_id, member=member)
         meetings, meeting_guards = self._meetings(account_id)
         research, research_guards = self._research(account_id)
         for research_id in research_guards:
             if not self._linked(self._get('RESEARCH#' + research_id, 'CONFIG', RESEARCH_AUTH), research_id, account_id):
                 raise PermissionError('Research account linkage changed during aggregation')
-        self._recheck_publications(account_id, insight_guards + meeting_guards)
+        self._recheck_publications(account_id, insight_guards + meeting_guards, member)
         self._recheck_member(user_id, member)
         by_type = {}
         for insight in insights:
             by_type.setdefault(insight['type'], []).append(insight)
-        return CompleteRead({'accountId': account_id, 'account': _text(account, 'name'),
-                             'industry': _text(account, 'industry'), 'insightsByType': by_type,
-                             'meetings': meetings, 'research': research})
+        value = {'accountId': account_id, 'account': _text(account, 'name'),
+                 'industry': _text(account, 'industry'), 'insightsByType': by_type,
+                 'meetings': meetings, 'research': research}
+        if restricted:
+            value['summaryReadRestriction'] = 'SHARING_REGEN_REQUIRED'
+        return CompleteRead(value)
