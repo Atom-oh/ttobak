@@ -19,6 +19,7 @@ import { WHISPER_CLUSTER_NAME, WHISPER_TASK_FAMILY, WHISPER_CONTAINER_NAME } fro
 import { DocumentExtraction } from './document-extraction';
 import { WebSocketOriginVerification, WEBSOCKET_ORIGIN_HEADER, WEBSOCKET_STAGE } from './websocket-origin';
 import { PipelineFailures } from './pipeline-failures';
+import { HttpOrigin } from './http-origin';
 
 export const RESEARCH_SFN_NAME = 'ttobak-research-workflow';
 
@@ -54,7 +55,6 @@ export interface GatewayStackProps extends cdk.StackProps {
   enableDocumentExtraction?: boolean;
   /** @deprecated Keep cross-stack reference alive for RealtimeStack */
   legacyRole?: iam.IRole;
-  originVerifySecret?: string;
   /** Cognito hosted domain base URL; required when HTTP MCP is enabled. */
   cognitoDomainUrl?: string;
   /** AgentCore Web Search Gateway MCP endpoint (us-east-1) for the QA Lambda's search_web tool */
@@ -78,6 +78,7 @@ export class GatewayStack extends cdk.Stack {
   public readonly websocketApi: apigatewayv2.WebSocketApi;
   public readonly websocketFunction: lambda.Function;
   public readonly websocketOrigin: WebSocketOriginVerification;
+  public readonly httpOrigin: HttpOrigin;
   public readonly websocketApiUrl: string;
   public convertDocFunction?: lambda.DockerImageFunction;
   constructor(scope: Construct, id: string, props: GatewayStackProps) {
@@ -96,6 +97,7 @@ export class GatewayStack extends cdk.Stack {
       description: 'Enable only after the invitation API, rollback guard and clients are verified.',
     });
     const pipelineFailures = new PipelineFailures(this, 'PipelineFailures');
+    this.httpOrigin = new HttpOrigin(this, 'HttpOrigin');
 
     // API Lambda function (Go runtime, arm64)
     this.apiFunction = new lambda.Function(this, 'ApiFunction', {
@@ -103,7 +105,8 @@ export class GatewayStack extends cdk.Stack {
       currentVersionOptions: {
         // Description is create-only: parameter-only toggles must publish a
         // matching immutable version before the live alias can change behavior.
-        description: cdk.Fn.join('', ['project-invitations=', projectInvitationsEnabled.valueAsString]),
+        description: cdk.Fn.join('', ['project-invitations=', projectInvitationsEnabled.valueAsString,
+          ';http-origin-version=', this.httpOrigin.versionId]),
       },
       runtime: lambda.Runtime.PROVIDED_AL2023,
       architecture: lambda.Architecture.ARM_64,
@@ -125,7 +128,8 @@ export class GatewayStack extends cdk.Stack {
         KB_ID: props.knowledgeBaseId || '',
         KB_DATASOURCE_ID: props.dataSourceId || '',
         KMS_KEY_ID: props.kmsKeyId || '',
-        ORIGIN_VERIFY_SECRET: props.originVerifySecret || '',
+        ORIGIN_VERIFY_SECRET_ARN: this.httpOrigin.secret.secretArn,
+        ORIGIN_VERIFY_SECRET_VERSION_ID: this.httpOrigin.versionId,
         AWS_REGION_NAME: cdk.Aws.REGION,
         // Live interpreter for /api/translate quality=high; must match AiStack's
         // InvokeInterpreterModel grant. Unset/blank means Amazon Translate only.
@@ -139,6 +143,7 @@ export class GatewayStack extends cdk.Stack {
       timeout: cdk.Duration.seconds(30),
       memorySize: 256,
     });
+    this.httpOrigin.addReader('Api', this.apiFunction, props.apiRole);
 
     // API Lambda alias with provisioned concurrency for zero cold-start after deploy
     const apiVersion = this.apiFunction.currentVersion;
@@ -404,7 +409,8 @@ export class GatewayStack extends cdk.Stack {
         MAX_TOOL_ROUNDS: '5',
         KB_CACHE_TTL_SECONDS: '600',
         SHARED_MEETINGS_CACHE_TTL_SECONDS: '300',
-        ORIGIN_VERIFY_SECRET: props.originVerifySecret || '',
+        ORIGIN_VERIFY_SECRET_ARN: this.httpOrigin.secret.secretArn,
+        ORIGIN_VERIFY_SECRET_VERSION_ID: this.httpOrigin.versionId,
         QA_JOBS_QUEUE_URL: qaJobsQueue.queueUrl,
         QA_JOBS_QUEUE_ARN: qaJobsQueue.queueArn,
         // search_web tool: us-east-1 AgentCore Web Search Gateway, called
@@ -421,6 +427,7 @@ export class GatewayStack extends cdk.Stack {
       memorySize: 512,
     });
 
+    this.httpOrigin.addReader('QA', this.qaFunction, props.qaRole);
     this.qaFunction.addEnvironment('RESEARCH_SFN_ARN', researchSfn.stateMachineArn);
 
     // The websocket Lambda invokes ttobak-qa with InvocationType=Event; Lambda's
@@ -497,13 +504,10 @@ export class GatewayStack extends cdk.Stack {
     // admits the MCP audience, so the audience and the endpoint cannot diverge.
     // API Gateway caps HTTP API integrations at 30s, so the Lambda runs 29s and
     // the server's own deadline is 25s (the package default of 55s is too long).
-    // It needs no AWS permissions: it calls the TTOBAK API over HTTPS with the
-    // caller's own bearer token and fetches Cognito's public JWKS.
+    // Its only application AWS permission reads this origin proof. API calls
+    // still use the caller's own bearer token and Cognito's public JWKS.
     if (mcpResourceAudience) {
       if (!props.cognitoDomainUrl) throw new Error('cognitoDomainUrl is required when HTTP MCP is enabled');
-      // Unlike the Go API's optional check, MCP requires the CloudFront origin
-      // proof so the endpoint and discovery routes cannot be called directly.
-      if (!props.originVerifySecret) throw new Error('originVerifySecret is required when HTTP MCP is enabled');
       this.mcpFunction = new lambda.Function(this, 'McpFunction', {
         functionName: 'ttobak-mcp',
         description: 'TTOBAK HTTP MCP server (Streamable HTTP, stateless)',
@@ -520,9 +524,11 @@ export class GatewayStack extends cdk.Stack {
           TTOBAK_CLIENT_ID: (props.spaClient ?? props.userPoolClient).userPoolClientId,
           TTOBAK_COGNITO_DOMAIN: props.cognitoDomainUrl,
           TTOBAK_HTTP_TIMEOUT_MS: '25000',
-          ORIGIN_VERIFY_SECRET: props.originVerifySecret,
+          ORIGIN_VERIFY_SECRET_ARN: this.httpOrigin.secret.secretArn,
+          ORIGIN_VERIFY_SECRET_VERSION_ID: this.httpOrigin.versionId,
         },
       });
+      this.httpOrigin.addReader('Mcp', this.mcpFunction, this.mcpFunction.role!);
     }
 
     // JWT Authorizer for Cognito

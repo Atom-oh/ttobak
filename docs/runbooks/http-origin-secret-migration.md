@@ -1,123 +1,135 @@
-# HTTP origin proof migration
+# HTTP origin proof migration and rotation
 
-## Current implementation and release boundary
+This runbook describes the release coordinator and its remaining runtime acceptance.
+Source checks alone do not prove a deployed rotation. See
+[ADR-050](../decisions/ADR-050-http-origin-proof-rotation.md).
 
-The Go application programming interface (API), Python question answering (QA)
-and hosted Model Context Protocol (MCP) consumers verify the Hypertext Transfer
-Protocol (HTTP) origin. They support the Amazon Resource Name (ARN) configured in
-`ORIGIN_VERIFY_SECRET_ARN` and the proof document below. This is the consumer
-foundation for a coordinated migration. The checked-in Cloud Development Kit
-(CDK) configuration still supplies the legacy environment proof; no new secret,
-permission grant, CloudFront cutover or rotation is performed by this foundation.
-The original plaintext-disclosure finding remains open until the later migration
-and a verified rotation receipt.
+## Activation prerequisite
 
-ARN configuration takes precedence over the legacy `ORIGIN_VERIFY_SECRET`.
-If the ARN read fails, the consumer denies access instead of trying the legacy
-value. The legacy path preserves every nonempty existing value exactly, including
-Unicode, commas and values outside the new proof length range. It rejects
-observable duplicate/conflicting representations but does not reinterpret a
-single legacy value. It must be removed with the final environment migration.
-Do not point a production consumer at a new random proof before CloudFront and
-the other consumers can use it.
+The compatible reader release must actually be deployed before activation. Its
+verified HTTP responses carry `X-Ttobak-Origin-Protocol: 1`; the marker alone does
+not establish Secrets Manager permission or successful version binding.
 
-Missing configuration denies HTTP requests. Local Go/QA development can explicitly
-set `TTOBAK_ORIGIN_LOCAL_DEV=1` only outside Lambda: the application binding also
-requires `AWS_LAMBDA_FUNCTION_NAME` to be absent. The HTTP MCP Lambda wrapper has
-no local bypass; the existing local MCP HTTP transport is a separate entry point.
-QA's existing WebSocket invocation, authorized through Identity and Access
-Management (IAM), and its source-validated Simple Queue Service (SQS) worker
-branches remain separate from the HTTP origin check.
+The coordinator reads the currently deployed API alias, latest API, QA and enabled
+HTTP MCP configurations, their code hashes/revisions, the API routes/integrations
+and CloudFront's HTTP origin. It uses existing content-free probes: a nonexistent
+public-document token returns 404, an unknown QA GET returns 405 before user/model
+handling, and existing MCP discovery returns 200. Every successful probe requires
+the marker; a missing proof must be rejected without it. No JWT is invented, no
+meeting is read, and no model is invoked. Function identity, code hash, configuration
+revision and alias version are rechecked immediately before mutations. Weighted
+aliases and unstable stacks are rejected.
 
-Verified HTTP responses carry the constant `X-Ttobak-Origin-Protocol: 1` marker,
-including normal authentication, unknown-route and configuration error responses.
-Rejected origin proofs and internal QA transports do not carry it. The marker
-identifies the installed reader contract; it does not prove Secrets Manager
-permissions or an ARN cutover. Before activation mutations, the release must
-verify the marker on the existing content-free paths and pin the consumers'
-code hash, configuration revision and alias version against concurrent changes.
+Initial proofs must agree across the live consumers and CloudFront. The old CDK
+literal is never used as evidence of deployment. The new proof document requires
+16–128 visible ASCII characters without commas; a legacy value outside that
+contract stops activation before any mutation and needs a separately reviewed
+migration. The compatible reader release preserves such legacy values meanwhile.
 
-## Version 1 proof document
+## Managed values and permissions
 
-Secrets Manager `SecretString` contains a JavaScript Object Notation (JSON) object
-of at most 2,048 bytes in UTF-8 Unicode encoding.
-The generation is nonsecret metadata; proof values must never be printed.
+The release bootstraps `/ttobak/http/origin-verify` with the existing live proof.
+It is an external Secrets Manager resource retained independently of stack removal;
+the coordinator never deletes it. Gateway-owned policies grant only its exact
+`GetSecretValue` ARN to the API, QA and HTTP MCP roles, avoiding a reverse dependency
+on AiStack. Consumers receive only the ARN and an immutable version identifier:
 
-| Field | Contract |
+- `ORIGIN_VERIFY_SECRET_ARN`
+- `ORIGIN_VERIFY_SECRET_VERSION_ID`
+
+The legacy environment/read path is removed. Missing ARN/version configuration
+denies HTTP access; Go/QA local development still requires an explicit flag outside
+Lambda. The existing internal QA WebSocket and SQS paths remain separate.
+
+CloudFront resolves the version's `current` JSON field through a dynamic reference.
+`HttpOriginSecretVersionId` is a required parameter in GatewayStack and FrontendStack.
+Changing the Gateway version also changes the API version description, ensuring a
+new immutable alias version is published for a parameter-only transition. The
+CloudFront version parameter forces an actual header update; rotating a secret
+alone does not update its resolved origin value.
+
+The runner needs scoped Secrets Manager create/read/version-write/stage-update
+permissions, Lambda configuration/alias reads and invocation of the named consumers,
+CloudFormation inventory, API Gateway inventory, CloudFront inventory, and its
+existing deployment permissions. Runtime roles receive no rotation permissions.
+Permission failures stop the release; code does not establish that live runner
+permissions have already been granted.
+
+## Normal release order
+
+The existing main-branch infrastructure workflow runs synth/tests before its deploy
+job, builds all original artifacts, then invokes `http_origin_release.py release`.
+The coordinator preserves explicit per-stack `--exclusively` deployment order and
+excludes KnowledgeStack. Existing parameter values are preserved. The workflow's
+always-run StorageStack OAC repair remains separate and does not rotate a proof.
+
+1. Inspect live agreement, verify the installed reader marker and capture stable
+   code/configuration identities. Run the stack diff before activation mutations.
+2. Bootstrap the same proof if the secret does not exist. Deploy the existing stack
+   sequence with consumers pinned to that immutable seeded version. Verify actual
+   reads before binding CloudFront to the same proof/version.
+3. Publish a dual-proof version using an expected-current-version stage transition.
+   Deploy consumers pinned to it. Drain for at least 65 seconds: 60-second cache,
+   three-second in-flight lookup and margin. Require actual new-proof acceptance
+   before updating CloudFront.
+4. Update the explicit CloudFront version and require the distribution to be
+   deployed with the expected proof. Verify CloudFront success and direct-origin
+   rejection on the existing public probe.
+5. Publish an active version without the previous proof, deploy consumers pinned to
+   it, drain again and verify current-proof success plus missing/retired-proof
+   rejection. Record the checked function versions, code hashes and revisions.
+
+All proof comparisons use fixed-time primitives. The version-1 JSON contract has
+`schemaVersion=1`, `current`, `previous`, `rotationStartedAt`, `previousExpiresAt`,
+`generation` (32 lowercase hex characters) and `phase` (`seeded`, `rotating`, `active`).
+The previous value is accepted only within its explicit window, at most 24 hours.
+`retiredVersionId` links the immutable pre-rotation value for rejection checks.
+The `TTOBAK_HTTP_RETIRED` staging label preserves that version after it loses
+`AWSPREVIOUS`; an unlabeled version can be deleted by Secrets Manager. The label
+does not make a consumer accept the retired proof.
+Documents are limited to 2,048 UTF-8 bytes. Each runtime cache lasts at most 60
+seconds; lookups and diagnostics retain the bounded, value-free reader contract.
+
+## Failure and resume behavior
+
+| State | Behavior |
 |---|---|
-| `schemaVersion` | Integer `1` |
-| `current` | 16–128 visible ASCII characters, excluding commas |
-| `previous` | Empty for `seeded`/`active`; a different valid proof for `rotating` |
-| `rotationStartedAt` | Nonnegative Unix seconds; positive during rotation |
-| `previousExpiresAt` | Zero for `seeded`/`active`; strictly after rotation start and at most 24 hours later during rotation |
-| `generation` | Exactly 32 lowercase hexadecimal characters |
-| `phase` | `seeded`, `rotating` or `active` |
+| Foundation missing, proof disagreement or changed consumer revision | No activation mutation; deploy/verify the reader prerequisite first |
+| Seeded migration interrupted | The same original proof remains usable; re-inspect and resume |
+| Dual version published, producer not switched | Both proofs remain accepted by transitioned consumers within the original window; resume without extending it |
+| Less than one hour remains with mixed old consumers and an old producer | Stop before mutation with `INSUFFICIENT_ROTATION_WINDOW`; do not start another consumer transition |
+| Lost stage-promotion response | Re-read the immutable version; never blindly repeat the mutation |
+| Producer switched, cleanup interrupted | Current proof remains accepted; finish active-version deployment and rejection checks |
+| Expired window with mixed old consumers and an old producer | Stop before further deployment with `EXPIRED_MIXED_CUTOVER_REQUIRES_OPERATOR`; never silently renew or restore an expired proof |
+| Expired window with all dual consumers, or already-switched producer | Roll forward using the original state and normal dependency order; existing availability loss is not hidden |
 
-`current` is accepted after a valid secret read. `previous` is accepted only while
-`rotationStartedAt <= now < previousExpiresAt`. An expired previous proof does
-not invalidate the current proof. The time check runs on every request, including
-when the document is cached.
+Keep exclusive operational control during the release. Revision checks detect
+changes but are not a distributed lock against another administrator. Never edit
+secret stages, functions, aliases or origin headers concurrently. An interrupted
+release must be investigated before its overlap deadline; bounded expiry cannot
+guarantee availability after an indefinitely abandoned rollout.
+The one-hour minimum is checked before mutations and provides operational
+headroom; it does not guarantee CloudFormation completion within that hour.
 
-In ARN mode, all consumers reject missing, duplicate, conflicting, comma-combined,
-whitespace or oversized proof headers and compare values in constant time. API Gateway
-payload 2.0 comma-combined duplicates are rejected. Go and Python additionally
-reject conflicting multi-value representations supplied by their adapters.
-The wrapper never forwards the origin proof to the MCP application server.
+## Operator checks and receipts
 
-The optional nonsecret `ORIGIN_VERIFY_SECRET_VERSION_ID` pins an immutable
-Secrets Manager version. Activation must configure and verify a version pin on
-every consumer; an ARN alone does not establish the intended source version.
+`check` performs inventory/agreement checks without mutation; it is not a readiness
+or rotation receipt. The normal release performs the additional IAM-authorized
+content-free probes and transitions:
 
-Secret documents are cached for at most 60 seconds. Go and MCP bound lookup
-waiting to three seconds and disable software development kit (SDK) retries.
-QA bounds lock waiting to one second and uses one-second SDK connect/read timeouts
-with one total attempt.
-Expired cache entries never authorize a request after a failed refresh. Rejection
-responses use fixed messages and do not include AWS errors, proof values, request
-headers, secret identifiers or generated content.
+```bash
+python3 scripts/operations/http_origin_release.py check
+```
 
-The Secrets Manager JavaScript SDK is an exact build dependency included in the
-Lambda bundle. It does not become a runtime dependency of the downloadable stdio
-bundle or change that bundle's Node.js compatibility.
+A completed workflow writes `build/verification/http-origin-release.json` and a
+redacted summary. Completion is emitted only after all acceptance checks. Incomplete
+receipts name a fixed failure category and phase; proof values, headers, complete
+environments and provider messages are never logged. CDK child output is discarded
+because even a deletion diff can expose the retired plaintext. Inspect CloudFormation
+events privately when a fixed deployment-failure category needs diagnosis.
 
-## Required coordinated follow-up
-
-The final migration must perform and verify all of these steps through the normal
-reviewed release workflow:
-
-1. Read the proof from the **currently deployed API configuration**, verify the
-   other consumers and CloudFront agree, and bootstrap Secrets Manager with that
-   same proof. Never assume the tracked CDK value matches deployment.
-2. Install exact secret-read permissions and ARN-only consumer configuration,
-   preserving the currently accepted proof.
-3. Configure CloudFront with a Secrets Manager reference to the same proof and
-   verify the distribution has deployed.
-4. Generate a new proof and explicit bounded overlap metadata. Deploy and verify
-   consumers pinned to the immutable dual-proof version, then drain old caches
-   for at least 65 seconds (60-second TTL, three-second lookup and margin).
-   Require actual new-proof acceptance before the producer changes. Force a
-   CloudFront secret-version update; changing a secret alone does not update its resolved
-   origin header. Retain enough time to finish or resume the cutover safely.
-5. Remove the previous proof only after CloudFront is deployed with the new proof.
-   Deploy consumers pinned to the immutable active version and drain caches again
-   before verifying retirement. Verify both successful CloudFront
-   requests and rejection of direct-origin and retired-proof requests.
-6. Remove the tracked literal and legacy environment/read path, and record a
-   redacted receipt of the deployed revision and completed rotation.
-
-Failure or abort handling must preserve a resumable generation/deadline and must
-not discard a proof while CloudFront might still send it. A configured ARN, clean
-template or successful unit test is not a rotation receipt. Repository history
-retains the old disclosed value, so removing its current-file occurrence alone
-does not close the finding.
-
-## Verification
-
-Go middleware tests, QA handler/origin tests and MCP tests cover bounded overlap,
-per-request expiry during caching, failed refresh, malformed/duplicate headers,
-legacy compatibility and denial without configuration. Actual SDK requests to
-synthetic Secrets Manager responses run against both the TypeScript output and
-the distributed Lambda bundle. The existing QA HTTP tests explicitly stub the
-origin boundary; separate tests verify HTTP denial and unchanged internal routing.
-These checks make no authenticated production requests and establish no deployed
-secret state.
+Do not claim the finding closed from an ARN, a clean template or a unit test. Keep
+the actual completed receipt tied to the deployed revision. Repository history and
+old immutable Lambda/secret versions can retain the retired value; rejection of
+that value on active ingress is the required closure evidence. This receipt covers
+the named consumers and existing ingress probes, not a general compliance audit.

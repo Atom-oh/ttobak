@@ -37,6 +37,7 @@ describe('CloudFront WebSocket origin boundary', () => {
       httpApiUrl: 'https://http-api.execute-api.ap-northeast-2.amazonaws.com',
       websocketApiUrl: 'wss://ws-api.execute-api.ap-northeast-2.amazonaws.com/production',
       websocketOriginSecret: secret,
+      httpOriginSecret: new secretsmanager.Secret(dependencies, 'HttpOriginSecret'),
       edgeFunctionVersion: edge.currentVersion,
       cognitoRegion: 'ap-northeast-2',
       userPoolId: 'ap-northeast-2_test',
@@ -151,7 +152,8 @@ describe('CloudFront WebSocket origin boundary', () => {
     expect(Object.keys(fn!.Properties.Environment.Variables).filter(key => key.includes('SECRET'))).toEqual(['WS_ORIGIN_SECRET_ARN']);
     const policies = Object.entries(gateway.findResources('AWS::IAM::Policy'));
     const [policyID, policy] = policies.find(([, value]) =>
-      JSON.stringify(value.Properties.PolicyDocument).includes('secretsmanager:GetSecretValue'))!;
+      JSON.stringify(value.Properties.PolicyDocument).includes('secretsmanager:GetSecretValue')
+      && JSON.stringify(value.Properties.PolicyDocument).includes(secretID))!;
     expect(policy).toBeDefined();
     expect(policy.Properties.PolicyDocument.Statement).toEqual([{
       Action: 'secretsmanager:GetSecretValue', Effect: 'Allow', Resource: { Ref: secretID },

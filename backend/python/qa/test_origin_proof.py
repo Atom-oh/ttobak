@@ -24,12 +24,12 @@ class OriginProofTests(unittest.TestCase):
         self.client = mock.Mock()
         self.client.get_secret_value.return_value = {"SecretString": document()}
         self.verifier = OriginVerifier("synthetic-secret-arn", self.client,
-                                       legacy=PREVIOUS, now=lambda: self.now)
+                                       version_id="b" * 32, now=lambda: self.now)
 
     def test_rotation_expiry_is_checked_even_inside_valid_cache(self):
         self.assertTrue(self.verifier.verify(event()))
         self.assertTrue(self.verifier.verify(event(PREVIOUS)))
-        self.client.get_secret_value.assert_called_once_with(SecretId="synthetic-secret-arn")
+        self.client.get_secret_value.assert_called_once_with(SecretId="synthetic-secret-arn", VersionId="b" * 32)
         self.now = 1030
         self.assertFalse(self.verifier.verify(event(PREVIOUS)))
         self.assertTrue(self.verifier.verify(event()))
@@ -61,11 +61,12 @@ class OriginProofTests(unittest.TestCase):
             self.assertIsNone(parse_proofs(document(**change)), change)
         self.assertIsNotNone(parse_proofs(document(phase="active", previous="", previousExpiresAt=0)))
 
-    def test_legacy_is_compatible_but_empty_configuration_requires_explicit_local_mode(self):
-        self.assertTrue(OriginVerifier("", None, legacy=PREVIOUS).verify(event(PREVIOUS)))
-        self.assertFalse(OriginVerifier("", None).verify(event()))
+    def test_arn_and_version_are_required_outside_explicit_local_mode(self):
+        with mock.patch.dict("os.environ", {"ORIGIN_VERIFY_SECRET": PREVIOUS}):
+            self.assertFalse(OriginVerifier("", None).verify(event(PREVIOUS)))
+        self.assertFalse(OriginVerifier("arn", self.client).verify(event()))
         self.assertTrue(OriginVerifier("", None, local_development=True).verify({}))
-        self.assertFalse(OriginVerifier("arn", None, legacy=PREVIOUS, local_development=True).verify(event(PREVIOUS)))
+        self.assertFalse(OriginVerifier("arn", None, local_development=True).verify(event()))
 
     def test_handler_preserves_internal_transports_and_closes_unconfigured_http(self):
         import test_handler
@@ -82,7 +83,7 @@ class OriginProofTests(unittest.TestCase):
     def test_protocol_marker_requires_verified_http_and_preserves_early_errors(self):
         import test_handler
         handler = test_handler.handler
-        verifier = OriginVerifier("", None, legacy=PREVIOUS)
+        verifier = OriginVerifier("synthetic-secret-arn", self.client, version_id="b" * 32, now=lambda: self.now)
         request = dict(event(PREVIOUS), rawPath="/api/qa/__origin_probe__",
                        requestContext={"http": {"method": "GET"}}, body="{}")
         with mock.patch.object(handler, "_HTTP_ORIGIN", verifier), \
@@ -102,13 +103,6 @@ class OriginProofTests(unittest.TestCase):
             ask.assert_not_called()
             meeting.assert_not_called()
 
-    def test_legacy_format_is_preserved_exactly_without_empty_bypass(self):
-        for proof in ("short", "legacy,comma", "기존 검증값", "x" * 129, " spaced "):
-            verifier = OriginVerifier("", None, legacy=proof)
-            self.assertTrue(verifier.verify(event(proof)))
-            self.assertFalse(verifier.verify(event(proof + "wrong")))
-            self.assertFalse(verifier.verify(dict(event(proof), multiValueHeaders={"x-origin-verify": [proof, proof]})))
-        self.assertFalse(OriginVerifier("", None).verify(event("")))
 
     def test_immutable_version_pin_reaches_sdk_and_diagnostics_omit_values(self):
         pin = "b" * 32
@@ -120,6 +114,18 @@ class OriginProofTests(unittest.TestCase):
         with self.assertLogs("origin_proof", level="WARNING") as messages:
             self.assertFalse(verifier.verify(event(CURRENT)))
         self.assertEqual(messages.records[0].getMessage(), "http_origin_rejected category=secret_unavailable")
+
+    def test_configuration_parse_and_busy_lookup_have_fixed_diagnostics(self):
+        for category in ("configuration_invalid", "secret_invalid", "secret_unavailable"):
+            verifier = OriginVerifier("synthetic-secret-arn", self.client,
+                                      version_id="" if category == "configuration_invalid" else "b" * 32)
+            self.client.get_secret_value.return_value = {"SecretString": "private malformed document"}
+            if category == "secret_unavailable":
+                verifier.lock = mock.Mock()
+                verifier.lock.acquire.return_value = False
+            with self.assertLogs("origin_proof", level="WARNING") as messages:
+                self.assertFalse(verifier.verify(event(CURRENT)))
+            self.assertEqual(messages.records[0].getMessage(), "http_origin_rejected category=" + category)
 
 
 if __name__ == "__main__":

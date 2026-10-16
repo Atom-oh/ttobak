@@ -49,6 +49,7 @@ test('the explicit app opt-in produces boolean true in the deployed config asset
       httpApiUrl: 'https://http-api.execute-api.ap-northeast-2.amazonaws.com',
       websocketApiUrl: 'wss://ws-api.execute-api.ap-northeast-2.amazonaws.com/production',
       websocketOriginSecret: new secretsmanager.Secret(dependencies, 'OriginSecret'),
+      httpOriginSecret: new secretsmanager.Secret(dependencies, 'HttpOriginSecret'),
       edgeFunctionVersion: edge.currentVersion,
       qaAsyncJobsEnabled: configuredOptIn(),
       cognitoRegion: 'ap-northeast-2',

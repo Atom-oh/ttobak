@@ -126,13 +126,28 @@ class Cdk:
         return value if isinstance(value, list) else [] if value is None else [value]
 
     @staticmethod
-    def role_token(role):
-        # Imported roles render as their export name, stack roles as a logical ID;
-        # the same quoted token appears in the policy's role-name expression.
-        if isinstance(role, dict) and isinstance(role.get("Fn::ImportValue"), str):
-            return json.dumps(role["Fn::ImportValue"])
-        if isinstance(role, dict) and isinstance(role.get("Fn::GetAtt"), list) and role["Fn::GetAtt"]:
-            return json.dumps(role["Fn::GetAtt"][0])
+    def role_identity(value, stack, templates, exports, *, arn):
+        # Resolve ARN/name exports to the same exact reviewed IAM resource.
+        if isinstance(value, dict) and set(value) == {"Fn::ImportValue"}:
+            name = value["Fn::ImportValue"]
+            bindings = exports.get(name, []) if isinstance(name, str) else []
+            if len(bindings) != 1:
+                return None
+            stack, value = bindings[0]
+        if not isinstance(value, dict):
+            return None
+        if arn:
+            parts = value.get("Fn::GetAtt")
+            if set(value) != {"Fn::GetAtt"} or not isinstance(parts, list) or len(parts) != 2 or parts[1] != "Arn":
+                return None
+            logical_id = parts[0]
+        else:
+            if set(value) != {"Ref"}:
+                return None
+            logical_id = value["Ref"]
+        if (isinstance(logical_id, str)
+                and templates[stack].get("Resources", {}).get(logical_id, {}).get("Type") == "AWS::IAM::Role"):
+            return stack, logical_id
         return None
 
     @staticmethod
@@ -144,8 +159,15 @@ class Cdk:
     def validate_activation_templates(self):
         # The coordinator can be reviewed and shipped before activation. Refuse
         # all mutations when the paired ARN/version-only IaC is not installed.
-        gateway = json.loads((self.assembly / "TtobakGatewayStack.template.json").read_text())
-        frontend = json.loads((self.assembly / "TtobakFrontendStack.template.json").read_text())
+        templates = {path.name: json.loads(path.read_text()) for path in self.assembly.glob("*.template.json")}
+        gateway = templates["TtobakGatewayStack.template.json"]
+        frontend = templates["TtobakFrontendStack.template.json"]
+        exports = {}
+        for stack, template in templates.items():
+            for output in template.get("Outputs", {}).values():
+                name = output.get("Export", {}).get("Name")
+                if isinstance(name, str):
+                    exports.setdefault(name, []).append((stack, output.get("Value")))
         require({"HttpOriginSecretArn", "HttpOriginSecretVersionId"} <= gateway.get("Parameters", {}).keys()
                 and "HttpOriginSecretVersionId" in frontend.get("Parameters", {}), "ACTIVATION_TEMPLATE_NOT_READY")
         functions = {item["Properties"].get("FunctionName"): item
@@ -164,9 +186,11 @@ class Cdk:
             # One GatewayStack deployment switches every consumer to ARN lookup. An
             # ungranted or unreachable read would fail all origin checks closed at once.
             require("VpcConfig" not in properties, "ACTIVATION_CONSUMER_VPC_UNVERIFIED")
-            role = self.role_token(properties.get("Role"))
+            role = self.role_identity(properties.get("Role"), "TtobakGatewayStack.template.json", templates, exports, arn=True)
             require(role is not None and any(
-                key in self.listed(functions[name].get("DependsOn")) and role in json.dumps(policy.get("Roles"))
+                key in self.listed(functions[name].get("DependsOn")) and any(
+                    self.role_identity(value, "TtobakGatewayStack.template.json", templates, exports, arn=False) == role
+                    for value in self.listed(policy.get("Roles")))
                 and any(self.grants_proof_read(statement)
                         for statement in self.listed(policy.get("PolicyDocument", {}).get("Statement")))
                 for key, policy in policies.items()), "ACTIVATION_SECRET_READ_NOT_GRANTED")

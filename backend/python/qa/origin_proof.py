@@ -16,9 +16,11 @@ def valid_proof(value):
 
 
 def parse_proofs(raw):
-    if not isinstance(raw, str) or len(raw.encode("utf-8")) > 2048:
+    if not isinstance(raw, str):
         return None
     try:
+        if len(raw.encode("utf-8")) > 2048:
+            return None
         value = json.loads(raw)
     except (ValueError, UnicodeError):
         return None
@@ -59,34 +61,34 @@ def origin_header(event, strict=True):
 
 
 class OriginVerifier:
-    def __init__(self, arn, client, *, legacy="", local_development=False, now=time.time, version_id=""):
-        self.arn, self.client, self.legacy, self.local = arn, client, legacy, local_development
+    def __init__(self, arn, client, *, local_development=False, now=time.time, version_id=""):
+        self.arn, self.client, self.local = arn, client, local_development
         self.now = now
         self.version_id = version_id
         self.cached, self.expires = None, 0
         self.lock = threading.Lock()
 
     def secret(self):
-        if self.version_id and not re.fullmatch(r"[A-Za-z0-9-]{32,64}", self.version_id):
+        if self.client is None or not re.fullmatch(r"[A-Za-z0-9-]{32,64}", self.version_id):
+            logging.getLogger(__name__).warning("http_origin_rejected category=configuration_invalid")
             return None
         if self.cached is not None and self.now() < self.expires:
             return self.cached
         # The SDK client has one-second connect/read limits and no retries;
         # waiting for an in-flight lookup is bounded independently.
         if not self.lock.acquire(timeout=1):
+            logging.getLogger(__name__).warning("http_origin_rejected category=secret_unavailable")
             return None
         try:
             if self.cached is not None and self.now() < self.expires:
                 return self.cached
             try:
-                arguments = {"SecretId": self.arn}
-                if self.version_id:
-                    arguments["VersionId"] = self.version_id
+                arguments = {"SecretId": self.arn, "VersionId": self.version_id}
                 result = self.client.get_secret_value(**arguments)
-                value = parse_proofs(result.get("SecretString"))
             except Exception:
                 logging.getLogger(__name__).warning("http_origin_rejected category=secret_unavailable")
                 return None
+            value = parse_proofs(result.get("SecretString") if isinstance(result, dict) else None)
             if value is None:
                 logging.getLogger(__name__).warning("http_origin_rejected category=secret_invalid")
                 return None
@@ -96,16 +98,14 @@ class OriginVerifier:
             self.lock.release()
 
     def verify(self, event):
-        if not self.arn and not self.legacy and self.local:
+        if not self.arn and self.local:
             return True
         actual = origin_header(event, strict=bool(self.arn))
         if actual is None:
             return False
         if not self.arn:
-            # Temporary consumer-first rollout compatibility. An ARN lookup
-            # failure must never fall back to this legacy environment value.
-            return bool(self.legacy) and hmac.compare_digest(
-                actual.encode("utf-8", "surrogatepass"), self.legacy.encode("utf-8", "surrogatepass"))
+            logging.getLogger(__name__).warning("http_origin_rejected category=configuration_invalid")
+            return False
         value = self.secret()
         if value is None:
             return False

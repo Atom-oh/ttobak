@@ -288,9 +288,10 @@ class ReleaseTests(unittest.TestCase):
                        "ORIGIN_VERIFY_SECRET_VERSION_ID": {"Ref": "HttpOriginSecretVersionId"}}
         gateway = {"Parameters": {"HttpOriginSecretArn": {}, "HttpOriginSecretVersionId": {}}, "Resources": {}}
         for name in ("ttobak-api", "ttobak-qa", "ttobak-mcp"):
-            # Imported AiStack roles render as an export; the MCP role is stack-local.
-            role = {"Fn::GetAtt": ["McpRole", "Arn"]} if name == "ttobak-mcp" else {"Fn::ImportValue": f"Ai:{name}"}
-            roles = [{"Ref": "McpRole"}] if name == "ttobak-mcp" else [{"Fn::Select": [1, {"Fn::Split": ["/", role]}]}]
+            role_id = name + "Role"
+            gateway["Resources"][role_id] = {"Type": "AWS::IAM::Role"}
+            role = {"Fn::GetAtt": [role_id, "Arn"]}
+            roles = [{"Ref": role_id}]
             gateway["Resources"][name] = {"Type": "AWS::Lambda::Function", "DependsOn": [name + "Read"], "Properties": {
                 "FunctionName": name, "Role": role, "Environment": {"Variables": copy.deepcopy(environment)}}}
             gateway["Resources"][name + "Read"] = {"Type": "AWS::IAM::Policy", "Properties": {"Roles": roles,

@@ -3,7 +3,7 @@ name: Deploy Infrastructure
 on:
   push:
     branches: [main]
-    paths: ['infra/**', 'backend/cmd/**', 'backend/internal/**', 'backend/go.*', 'backend/python/qa/**', 'backend/python/crawler/**', 'backend/python/document-extract/**', 'mcp-server/**']
+    paths: ['infra/**', 'backend/cmd/**', 'backend/internal/**', 'backend/go.*', 'backend/python/qa/**', 'backend/python/crawler/**', 'backend/python/document-extract/**', 'mcp-server/**', 'scripts/operations/http_origin_release.py', '.github/workflows/deploy-infra.yml']
   workflow_dispatch:
 
 permissions:
@@ -39,8 +39,8 @@ jobs:
         # let a silently-bypassing CDK edit auto-ship on push-to-main.
         # `cdk synth` must gate here too: jest's per-stack synth uses dummy
         # envs and misses full-app synth errors, and the deploy job's
-        # `cdk diff || true` swallows them — without this line they'd first
-        # surface mid-`cdk deploy`.
+        # release coordinator is a separate execution step. Keep synthesis
+        # and tests as prerequisites before every deployment mutation.
         working-directory: infra
         run: |
           npm ci
@@ -89,49 +89,21 @@ jobs:
           npm ci
           npm run bundle:lambda
 
-      - name: CDK deploy
+      - name: Prepare release SDK
+        run: |
+          python3 -m venv build/origin-release-venv
+          build/origin-release-venv/bin/python -m pip install --disable-pip-version-check 'boto3<2'
+
+      - name: CDK deploy with verified HTTP origin migration
         working-directory: infra
         run: |
           npm ci
-          npx cdk diff 2>&1 || true
-          # Never `--all` and never list stacks without `--exclusively`:
-          # either one pulls in each named stack's full dependency closure,
-          # which includes TtobakKnowledgeStack -- it stages a deliberate,
-          # undeployed Bedrock KB teardown that would apply for real (see
-          # CLAUDE.md Known Issues). Deploy every other stack individually
-          # with --exclusively, in dependency order (see infra/bin/infra.ts
-          # addDependency calls), so TtobakKnowledgeStack is never touched.
-          # A stack with no changes is a no-op under --exclusively, so
-          # running this same full list every push is safe -- it does not
-          # mean every stack redeploys on every change.
-          npx cdk deploy TtobakWebSearchGatewayStack --exclusively --require-approval never
-          npx cdk deploy TtobakStorageStack --exclusively --require-approval never
-          npx cdk deploy TtobakAuthStack --exclusively --require-approval never
-          # ttobak-agentcore-research-role is a manually-created,
-          # pre-existing IAM resource (not produced by any CI pipeline) --
-          # TtobakAiStack imports it by ARN and attaches an inline policy to
-          # it, so this deploy role's credentials must already be able to
-          # mutate IAM roles generally (a strictly higher privilege than
-          # iam:GetRole). Verify existence right before that stack to fail
-          # fast with a clear message instead of an obscure CFN
-          # inline-policy-attach error -- but if the read itself is denied
-          # for some unrelated policy reason, don't let this precondition
-          # check become a NEW failure mode; warn and let the real
-          # CFN deploy be the source of truth.
-          if ! ROLE_CHECK=$(aws iam get-role --role-name ttobak-agentcore-research-role 2>&1); then
-            if echo "$ROLE_CHECK" | grep -q 'NoSuchEntity'; then
-              echo "::error::ttobak-agentcore-research-role does not exist -- create it before deploying TtobakAiStack (see CLAUDE.md Known Issues)."
-              exit 1
-            fi
-            echo "::warning::Could not verify ttobak-agentcore-research-role via iam:GetRole ($ROLE_CHECK) -- proceeding, TtobakAiStack's deploy will surface the real error if the role is actually missing."
-          fi
-          npx cdk deploy TtobakAiStack --exclusively --require-approval never
-          npx cdk deploy TtobakEdgeAuthStack --exclusively --require-approval never
-          npx cdk deploy TtobakGatewayStack --exclusively --require-approval never
-          npx cdk deploy TtobakCrawlerStack --exclusively --require-approval never
-          npx cdk deploy TtobakResearchAgentStack --exclusively --require-approval never
-          npx cdk deploy TtobakWhisperStack --exclusively --require-approval never
-          npx cdk deploy TtobakFrontendStack --exclusively --require-approval never
+          # The coordinator preserves the explicit per-stack --exclusively order,
+          # excludes KnowledgeStack, verifies deployed reader readiness, and owns
+          # same-proof bootstrap, pinned consumer/producer cutover and retirement.
+          # CDK output is discarded because a diff can expose the old proof.
+          ../build/origin-release-venv/bin/python ../scripts/operations/http_origin_release.py release \
+            --receipt ../build/verification/http-origin-release.json
 
       - name: CDK deploy — re-tighten TtobakStorageStack's OAC policy (ADR-027)
         # if: always() so this still runs even if an earlier stack in the
@@ -151,4 +123,5 @@ jobs:
           # a Timestamp property on every synth specifically to force
           # CloudFormation to re-run it on every deploy (see storage-stack.ts)
           # -- that forced update is the whole mechanism this step relies on.
-          npx cdk deploy TtobakStorageStack --exclusively --require-approval never
+          ../build/origin-release-venv/bin/python ../scripts/operations/http_origin_release.py retighten \
+            --receipt ../build/verification/http-origin-retighten.json

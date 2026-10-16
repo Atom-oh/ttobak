@@ -65,3 +65,4 @@ python3 scripts/docs/check_docs.py
 - [Browser recording recovery and retention](decisions/ADR-048-browser-recording-backups.md)
 - [Private audio crop worker](../backend/whisper/AUDIO_CROP.md)
 - [Private audio crops and activation](decisions/ADR-047-private-audio-crops.md)
+- [Versioned HTTP origin proof rotation](decisions/ADR-050-http-origin-proof-rotation.md)

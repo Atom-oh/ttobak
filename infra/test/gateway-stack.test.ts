@@ -4,6 +4,10 @@ import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { GatewayStack } from '../lib/gateway-stack';
 
 describe('GatewayStack', () => {
@@ -14,7 +18,7 @@ describe('GatewayStack', () => {
       .filter(resource => JSON.stringify(resource.Properties.FunctionName).includes('KbFunction'));
   }
 
-  function buildTemplate(indexingMode: 'manual-only' | 'all' = 'manual-only', scheduleEnabled = false, mcpResourceAudience?: string, audioCropEnabled = false, originVerifySecret = 'test-origin-secret', cloudfrontDomain: string | null = 'd2olomx8td8txt.cloudfront.net'): Template {
+  function buildTemplate(indexingMode: 'manual-only' | 'all' = 'manual-only', scheduleEnabled = false, mcpResourceAudience?: string, audioCropEnabled = false, cloudfrontDomain: string | null = 'd2olomx8td8txt.cloudfront.net', save?: (g: Template, r: Template) => void): Template {
     const app = new cdk.App({
       context: {
         ...(cloudfrontDomain === null ? {} : { 'ttobak:cloudfrontDomain': cloudfrontDomain }),
@@ -24,7 +28,8 @@ describe('GatewayStack', () => {
       },
     });
 
-    const mockStack = new cdk.Stack(app, 'MockStack');
+    const env = save ? { account: '111111111111', region: 'ap-northeast-2' } : undefined;
+    const mockStack = new cdk.Stack(app, 'MockStack', { env });
     const table = new dynamodb.Table(mockStack, 'Table', {
       partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
       stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
@@ -39,6 +44,7 @@ describe('GatewayStack', () => {
       });
 
     const stack = new GatewayStack(app, 'TestGatewayStack', {
+      env,
       apiRole: makeRole('ApiRole'),
       transcribeRole: makeRole('TranscribeRole'),
       summarizeRole: makeRole('SummarizeRole'),
@@ -58,10 +64,11 @@ describe('GatewayStack', () => {
       dataSourceId: 'test-ds-id',
       webSearchGatewayUrl: 'https://test-gateway.gateway.bedrock-agentcore.us-east-1.api.aws/mcp',
       cognitoDomainUrl: 'https://test-auth.auth.ap-northeast-2.amazoncognito.com',
-      originVerifySecret,
     });
 
-    return Template.fromStack(stack);
+    const result = Template.fromStack(stack);
+    save?.(result, Template.fromStack(mockStack));
+    return result;
   }
 
   beforeAll(() => {
@@ -86,6 +93,59 @@ describe('GatewayStack', () => {
     for (const name of ['QAFunction', 'SimFunction']) {
       expect(configs.find(c => JSON.stringify(c.Properties.FunctionName).includes(name))!
         .Properties.MaximumRetryAttempts).toBe(0);
+    }
+  });
+
+  test('HTTP consumers use only a scoped proof ARN and immutable version, published into the API alias', () => {
+    const enabled = buildTemplate('manual-only', false, 'https://ttobak.example.com/api/mcp');
+    for (const name of ['ttobak-api', 'ttobak-qa', 'ttobak-mcp']) {
+      const fn = Object.values(enabled.findResources('AWS::Lambda::Function'))
+        .find(value => value.Properties.FunctionName === name)!;
+      expect(fn.Properties.Environment.Variables.ORIGIN_VERIFY_SECRET).toBeUndefined();
+      expect(fn.Properties.Environment.Variables.ORIGIN_VERIFY_SECRET_ARN).toEqual({ Ref: 'HttpOriginSecretArn' });
+      expect(fn.Properties.Environment.Variables.ORIGIN_VERIFY_SECRET_VERSION_ID).toEqual({ Ref: 'HttpOriginSecretVersionId' });
+      const policy = Object.entries(enabled.findResources('AWS::IAM::Policy')).find(([id, value]) =>
+        JSON.stringify(value.Properties.PolicyDocument).includes('HttpOriginSecretArn')
+        && fn.DependsOn?.includes(id));
+      expect(policy).toBeDefined();
+    }
+    const version = Object.values(enabled.findResources('AWS::Lambda::Version'))
+      .find(value => JSON.stringify(value.Properties.FunctionName).includes('ApiFunction'))!;
+    expect(JSON.stringify(version.Properties.Description)).toContain('HttpOriginSecretVersionId');
+    expect(JSON.stringify(version.Properties.Description)).toContain('ProjectInvitationsEnabled');
+  });
+
+  test('release validates synthesized role identity and rejects ungranted readers', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ttobak-origin-validator-'));
+    try {
+      buildTemplate('manual-only', false, 'https://ttobak.example.com/api/mcp', false, undefined, (gateway, roles) => {
+        writeFileSync(join(directory, 'TtobakGatewayStack.template.json'), JSON.stringify(gateway.toJSON()));
+        writeFileSync(join(directory, 'MockStack.template.json'), JSON.stringify(roles.toJSON()));
+      });
+      execFileSync('python3', ['-c', `
+import copy,json,sys
+from pathlib import Path
+sys.path.insert(0,'scripts/operations')
+from http_origin_release import Cdk,ReleaseError
+from test_http_origin_release import ReleaseTests
+root=Path(sys.argv[1]); runner=Cdk('ap-northeast-2','111111111111');runner.assembly=root
+_,frontend=ReleaseTests.activation_templates()
+(root/'TtobakFrontendStack.template.json').write_text(json.dumps(frontend))
+path=root/'TtobakGatewayStack.template.json'; original=json.loads(path.read_text())
+runner.validate_activation_templates()
+qa=next(v['Properties']['Roles'][0] for k,v in original['Resources'].items()
+        if k.startswith('HttpOriginQAReadProof'))
+for bad in ({'Ref':'OtherRole'}, {'Fn::ImportValue':'unknown'}, qa):
+    changed=copy.deepcopy(original)
+    target=next(v['Properties'] for v in changed['Resources'].values()
+                if v['Type']=='AWS::IAM::Policy' and 'HttpOriginSecretArn' in json.dumps(v))
+    target['Roles']=[bad];path.write_text(json.dumps(changed))
+    try:runner.validate_activation_templates()
+    except ReleaseError as error:assert str(error)=='ACTIVATION_SECRET_READ_NOT_GRANTED'
+    else:raise AssertionError('ungranted reader accepted')
+`, directory], { cwd: join(__dirname, '../..'), timeout: 30_000 });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
     }
   });
 
@@ -116,10 +176,8 @@ describe('GatewayStack', () => {
     const functionNames = (value: Template) => Object.values(value.findResources('AWS::Lambda::Function'))
       .map(resource => resource.Properties.FunctionName);
     expect(functionNames(template)).not.toContain('ttobak-mcp');
-    // The origin proof is mandatory for MCP even though the Go API treats it as optional.
-    expect(() => buildTemplate('manual-only', false, 'https://ttobak.example.com/api/mcp', false, '')).toThrow(/originVerifySecret/);
     // A missing CloudFront domain must not become the CORS origin "https://undefined".
-    expect(() => buildTemplate('manual-only', false, undefined, false, 'test-origin-secret', null)).toThrow(/cloudfrontDomain/);
+    expect(() => buildTemplate('manual-only', false, undefined, false, null)).toThrow(/cloudfrontDomain/);
     const enabled = buildTemplate('manual-only', false, 'https://ttobak.example.com/api/mcp');
     enabled.hasResourceProperties('AWS::Lambda::Function', {
       FunctionName: 'ttobak-mcp',
@@ -132,7 +190,8 @@ describe('GatewayStack', () => {
         TTOBAK_API_URL: 'https://ttobak.example.com',
         TTOBAK_COGNITO_DOMAIN: 'https://test-auth.auth.ap-northeast-2.amazoncognito.com',
         TTOBAK_HTTP_TIMEOUT_MS: '25000',
-        ORIGIN_VERIFY_SECRET: 'test-origin-secret',
+        ORIGIN_VERIFY_SECRET_ARN: { Ref: 'HttpOriginSecretArn' },
+        ORIGIN_VERIFY_SECRET_VERSION_ID: { Ref: 'HttpOriginSecretVersionId' },
       }) },
     });
     // HTTP API routes only; the realtime WebSocket API in this stack has its own $connect authorizer.
@@ -155,10 +214,13 @@ describe('GatewayStack', () => {
       .filter(integration => JSON.stringify(integration.Properties.IntegrationUri).includes('McpFunction'));
     expect(integrations).toHaveLength(1);
     expect(integrations[0].Properties.PayloadFormatVersion).toBe('2.0');
-    // The MCP function needs no AWS permissions beyond its logs.
+    // MCP reads only its exact origin secret, in addition to its existing logs.
     const roles = Object.values(enabled.findResources('AWS::IAM::Policy'))
       .filter(policy => JSON.stringify(policy.Properties.Roles).includes('McpFunction'));
-    expect(roles).toHaveLength(0);
+    expect(roles).toHaveLength(1);
+    expect(roles[0].Properties.PolicyDocument.Statement).toEqual([{
+      Action: 'secretsmanager:GetSecretValue', Effect: 'Allow', Resource: { Ref: 'HttpOriginSecretArn' },
+    }]);
   });
 
   test('final summary override leaves refinement and auxiliary model selections intact', () => {
