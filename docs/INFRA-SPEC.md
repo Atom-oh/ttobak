@@ -61,6 +61,17 @@ function; `/api/mcp` keeps the `/api/*` edge client-ID check, whose 401 for that
 path carries `WWW-Authenticate` with the path-specific `resource_metadata` URL. The Lambda checks
 `x-origin-verify` and pins Host to the public host.
 
+The public SPA/MCP client retains its two local port-9876 callbacks and adds
+deployment-specific redirects from the SSM StringList
+`/ttobak/auth/mcp-callback-urls`. Bootstrap that parameter in the deployment
+account and region before deploying AuthStack; its absence fails deployment.
+Use exact approved redirect URLs without empty entries or duplicate local
+callbacks. Keep private workstation hostnames in SSM instead of source, CDK
+context or published history. Confirm the authenticated code-server proxy reaches
+the client's listener before adding its callback, then verify the deployed
+Cognito callback list and actual OAuth completion separately. See the
+[client instructions](../mcp-server/README.md#http-mcp-from-code-server).
+
 The pre-signup trigger reads the configured domain allowlist. PostAuthentication
 writes a separate USER#/LOGIN item for lastLoginAt, with a short abort timeout,
 try/catch, no reserved concurrency and a DISABLED switch. It must fail open; it is
