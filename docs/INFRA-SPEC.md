@@ -380,6 +380,19 @@ the client accepts only the same-site WS path. Local development defaults to RES
 loopback WS validation needs an explicitly supplied config and local proxy.
 Invalid/missing config retains REST fallback.
 
+The default application behavior has CSP, one-year HSTS, nosniff, frame denial
+and no-referrer. Its cache policy enables gzip/Brotli compression and has a zero
+minimum TTL so origin `Cache-Control: no-cache` is honored; other public assets
+retain the previous one-day default TTL. Runtime config carries no-cache metadata.
+The ordered frontend publisher must supply HTML/RSC no-cache metadata before
+producer release. Immutable Next assets use a separate optimized caching behavior.
+Media/PDF policies remain separate; static bootstrap/native injection still
+requires inline scripts. These are source declarations, not live-header or device
+acceptance. The SPA router
+preserves segmented `__next.*.txt` filenames while mapping dynamic directories.
+Infrastructure publishes a nonsecret `staticRouterRevision: "segmented-rsc-v1"`
+after distribution update for producers that require the compatible consumer.
+
 The StorageStack OAC custom resource reads the distribution ID and tightens the
 bucket policy. Its changing Timestamp deliberately forces re-invocation. The infra
 workflow redeploys StorageStack after FrontendStack even following earlier failure;
