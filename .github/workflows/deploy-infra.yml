@@ -89,9 +89,16 @@ jobs:
           npm ci
           npm run bundle:lambda
 
+      - name: Set up release Python
+        id: release-python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+          architecture: 'arm64'
+
       - name: Prepare release SDK
         run: |
-          python3 -m venv build/origin-release-venv
+          "${{ steps.release-python.outputs.python-path }}" -m venv build/origin-release-venv
           build/origin-release-venv/bin/python -m pip install --disable-pip-version-check 'boto3<2'
 
       - name: CDK deploy with verified HTTP origin migration

@@ -182,13 +182,18 @@ displayed for this exact MCP URL:
 ```toml
 [mcp_servers.ttobak]
 url = "https://ttobak.atomai.click/api/mcp"
-oauth_resource = "https://ttobak.atomai.click/api/mcp"
 
 [mcp_servers.ttobak.oauth]
 client_id = "33rh85mv6l9n7tn3s5h16prfdr"
 callback_port = 9876
 callback_url = "https://YOUR_CODE_SERVER_HOST/absproxy/9876/callback/YOUR_CALLBACK_ID"
 ```
+
+Codex discovers the resource from the protected-resource metadata. Do not add an
+explicit `oauth_resource` for this deployment: Codex CLI 0.162.1 then sends the
+same resource twice, and Cognito rejects the request before showing login with
+`invalid_request` / `multi-resource binding is not supported`. Verify that the
+authorization request has one `resource` equal to the MCP URL.
 
 The public client ID is deployment configuration, not a secret. Keep the
 code-server browser session signed in, then run this in its terminal:
