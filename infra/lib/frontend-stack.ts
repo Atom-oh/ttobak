@@ -8,6 +8,7 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { WEBSOCKET_ORIGIN_HEADER, WEBSOCKET_PATH, WEBSOCKET_STAGE } from './websocket-origin';
+import { applicationContentSecurityPolicy } from './frontend-policy';
 import { Construct } from 'constructs';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -99,6 +100,15 @@ function handler(event) {
     return request;
   }
 
+  // Next 16.4 exports segmented RSC files inside each route directory.
+  // Rewrite only the directory: "__next.*.txt" is framework data, not an ID.
+  var payload = '';
+  var payloadMatch = uri.match(/\\/(__next\\.[^\\/]+\\.txt)$/);
+  if (payloadMatch) {
+    payload = payloadMatch[0];
+    uri = uri.slice(0, -payload.length);
+  }
+
   // Dynamic route: /meeting/{id} → rewrite to /meeting/_ (preserve extension and subpaths)
   // [^\\/\\.]+ stops before '.' or '/' so .txt and /subpath are preserved
   if (uri.match(/^\\/meeting\\//) && !uri.match(/^\\/meeting\\/_([\\/.])/) && uri !== '/meeting/_') {
@@ -143,6 +153,11 @@ function handler(event) {
   if (uri.match(/^\\/docs\\/[^\\/]+/) && !uri.match(/^\\/docs\\/_/)) {
     uri = uri.replace(/^\\/docs\\/[^\\/\\.]+/, '/docs/_');
     request.uri = uri;
+  }
+
+  if (payload) {
+    request.uri = uri + payload;
+    return request;
   }
 
   // Known static pages → append .html; unknown paths → SPA fallback
@@ -262,6 +277,37 @@ function handler(event) {
     const certificateArn = this.node.tryGetContext('ttobak:certificateArn');
     const certificate = acm.Certificate.fromCertificateArn(this, 'TtobakCert', certificateArn);
 
+    const applicationHeaders = new cloudfront.ResponseHeadersPolicy(this, 'ApplicationResponseHeadersPolicy', {
+      responseHeadersPolicyName: `ttobak-application-headers-${cdk.Aws.REGION}`,
+      securityHeadersBehavior: {
+        contentSecurityPolicy: {
+          contentSecurityPolicy: applicationContentSecurityPolicy(
+            props.cognitoRegion, this.node.tryGetContext('ttobak:domainName'), dataBucket.bucketName,
+            `ttobak-kb-${cdk.Aws.ACCOUNT_ID}`, this.node.tryGetContext('ttobak:cloudfrontDomain')),
+          override: true,
+        },
+        contentTypeOptions: { override: true },
+        frameOptions: { frameOption: cloudfront.HeadersFrameOption.DENY, override: true },
+        referrerPolicy: { referrerPolicy: cloudfront.HeadersReferrerPolicy.NO_REFERRER, override: true },
+        strictTransportSecurity: {
+          accessControlMaxAge: cdk.Duration.days(365), includeSubdomains: true, override: true,
+        },
+      },
+    });
+
+    // Honor origin no-cache metadata for HTML/RSC/config while retaining the
+    // previous optimized policy's default TTL for other public assets.
+    const applicationCache = new cloudfront.CachePolicy(this, 'ApplicationCachePolicy', {
+      minTtl: cdk.Duration.seconds(0),
+      defaultTtl: cdk.Duration.days(1),
+      maxTtl: cdk.Duration.days(365),
+      enableAcceptEncodingGzip: true,
+      enableAcceptEncodingBrotli: true,
+      cookieBehavior: cloudfront.CacheCookieBehavior.none(),
+      headerBehavior: cloudfront.CacheHeaderBehavior.none(),
+      queryStringBehavior: cloudfront.CacheQueryStringBehavior.none(),
+    });
+
     // CloudFront distribution
     this.distribution = new cloudfront.Distribution(this, 'TtobakDistribution', {
       domainNames: [this.node.tryGetContext('ttobak:domainName')],
@@ -273,7 +319,8 @@ function handler(event) {
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
         cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD_OPTIONS,
-        cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
+        cachePolicy: applicationCache,
+        responseHeadersPolicy: applicationHeaders,
         compress: true,
         functionAssociations: [
           {
@@ -283,6 +330,15 @@ function handler(event) {
         ],
       },
       additionalBehaviors: {
+        '/_next/static/*': {
+          origin: s3Origin,
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
+          cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD_OPTIONS,
+          cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
+          responseHeadersPolicy: applicationHeaders,
+          compress: true,
+        },
         [WEBSOCKET_PATH]: {
           origin: websocketOrigin,
           viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.HTTPS_ONLY,
@@ -431,11 +487,12 @@ function handler(event) {
     // Runtime config.json — Cognito/API IDs resolved at deploy time, fetched by the
     // browser at startup. Decouples the static build bundle from infrastructure IDs
     // so `npm run build` no longer needs NEXT_PUBLIC_COGNITO_* env vars.
-    new s3deploy.BucketDeployment(this, 'ConfigDeployment', {
+    const configDeployment = new s3deploy.BucketDeployment(this, 'ConfigDeployment', {
       destinationBucket: this.siteBucket,
       sources: [
         s3deploy.Source.jsonData('config.json', {
           wsUrl: WEBSOCKET_PATH,
+          staticRouterRevision: 'segmented-rsc-v1',
           qaAsyncJobs: props.qaAsyncJobsEnabled === true,
           cognito: {
             region: props.cognitoRegion,
@@ -450,5 +507,7 @@ function handler(event) {
       distributionPaths: ['/config.json'],
       cacheControl: [s3deploy.CacheControl.noCache()],
     });
+    // Publish the consumer revision only after distribution/router update.
+    configDeployment.node.addDependency(this.distribution);
   }
 }

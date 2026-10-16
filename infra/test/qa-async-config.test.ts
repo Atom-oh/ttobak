@@ -59,7 +59,7 @@ test('the explicit app opt-in produces boolean true in the deployed config asset
     });
     const config = jsonData.mock.calls.find(([name]) => name === 'config.json')?.[1];
     expect(config).toEqual({
-      qaAsyncJobs: true, wsUrl: '/ws',
+      qaAsyncJobs: true, wsUrl: '/ws', staticRouterRevision: 'segmented-rsc-v1',
       cognito: { region: 'ap-northeast-2', userPoolId: 'ap-northeast-2_test',
         userPoolClientId: 'test-client', identityPoolId: 'ap-northeast-2:test' },
     });

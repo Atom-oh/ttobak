@@ -71,7 +71,8 @@ describe('CloudFront WebSocket origin boundary', () => {
 
   test('runtime config advertises only the same-site WS path and no origin proof', () => {
     expect(runtimeConfig.wsUrl).toBe('/ws');
-    expect(Object.keys(runtimeConfig).sort()).toEqual(['cognito', 'qaAsyncJobs', 'wsUrl']);
+    expect(Object.keys(runtimeConfig).sort()).toEqual(['cognito', 'qaAsyncJobs', 'staticRouterRevision', 'wsUrl']);
+    expect(runtimeConfig.staticRouterRevision).toBe('segmented-rsc-v1');
     expect(JSON.stringify(runtimeConfig)).not.toContain('execute-api');
     expect(JSON.stringify(runtimeConfig)).not.toContain('secretsmanager');
   });

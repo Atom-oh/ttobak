@@ -3,6 +3,8 @@ import { Template, Match } from 'aws-cdk-lib/assertions';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { FrontendStack } from '../lib/frontend-stack';
+import { applicationContentSecurityPolicy } from '../lib/frontend-policy';
+import * as vm from 'node:vm';
 
 describe('FrontendStack', () => {
   let template: Template;
@@ -13,6 +15,7 @@ describe('FrontendStack', () => {
         'ttobak:certificateArn':
           'arn:aws:acm:us-east-1:111111111111:certificate/test-cert',
         'ttobak:domainName': 'ttobak.example.com',
+        'ttobak:cloudfrontDomain': 'test-site.cloudfront.net',
       },
     });
 
@@ -159,5 +162,119 @@ describe('FrontendStack', () => {
     // The MCP endpoint itself stays behind the edge JWT check.
     expect(behaviors.find(b => b.PathPattern === '/api/mcp')).toBeUndefined();
     expect(api.LambdaFunctionAssociations).toBeDefined();
+  });
+
+  test('application headers and origin cache metadata coexist with compressed public assets and immutable chunks', () => {
+    const policies = template.findResources('AWS::CloudFront::ResponseHeadersPolicy');
+    const [policyId, policy] = Object.entries(policies).find(([id]) => id.startsWith('ApplicationResponseHeadersPolicy'))!;
+    const security = policy.Properties.ResponseHeadersPolicyConfig.SecurityHeadersConfig;
+    expect(security).toMatchObject({
+      ContentSecurityPolicy: { Override: true },
+      ContentTypeOptions: { Override: true },
+      FrameOptions: { FrameOption: 'DENY', Override: true },
+      ReferrerPolicy: { ReferrerPolicy: 'no-referrer', Override: true },
+      StrictTransportSecurity: { AccessControlMaxAgeSec: 31536000, IncludeSubdomains: true, Override: true },
+    });
+    const csp = JSON.stringify(security.ContentSecurityPolicy.ContentSecurityPolicy);
+    expect(csp).toContain("frame-ancestors 'none'");
+    expect(csp).toContain('ttobak-kb-');
+    expect(csp).toContain('https://test-site.cloudfront.net');
+    expect(csp).toContain('wss://test-site.cloudfront.net');
+    expect(csp).not.toContain('*.cloudfront.net');
+    const distribution = Object.values(template.findResources('AWS::CloudFront::Distribution'))[0];
+    const config = distribution.Properties.DistributionConfig;
+    expect(config.DefaultCacheBehavior.ResponseHeadersPolicyId).toEqual({ Ref: policyId });
+    const [cachePolicyId, cachePolicy] = Object.entries(template.findResources('AWS::CloudFront::CachePolicy'))
+      .find(([id]) => id.startsWith('ApplicationCachePolicy'))!;
+    expect(config.DefaultCacheBehavior.CachePolicyId).toEqual({ Ref: cachePolicyId });
+    expect(config.DefaultCacheBehavior.Compress).toBe(true);
+    expect(cachePolicy.Properties.CachePolicyConfig).toMatchObject({
+      MinTTL: 0,
+      DefaultTTL: 86400,
+      MaxTTL: 31536000,
+      ParametersInCacheKeyAndForwardedToOrigin: {
+        EnableAcceptEncodingGzip: true,
+        EnableAcceptEncodingBrotli: true,
+        CookiesConfig: { CookieBehavior: 'none' },
+        HeadersConfig: { HeaderBehavior: 'none' },
+        QueryStringsConfig: { QueryStringBehavior: 'none' },
+      },
+    });
+    const staticAssets = config.CacheBehaviors.find((b: { PathPattern: string }) => b.PathPattern === '/_next/static/*');
+    expect(staticAssets.CachePolicyId).toEqual('658327ea-f89d-4fab-a63d-7e88639e58f6');
+    expect(staticAssets.ResponseHeadersPolicyId).toEqual({ Ref: policyId });
+    for (const path of [
+      '/api/*', '/api/public/*', '/ws', '/media/*', '/media/docs-pdf/*',
+      '/.well-known/oauth-protected-resource', '/.well-known/oauth-protected-resource/api/mcp',
+    ]) {
+      const behavior = config.CacheBehaviors.find((b: { PathPattern: string }) => b.PathPattern === path);
+      expect(behavior.ResponseHeadersPolicyId).not.toEqual({ Ref: policyId });
+      expect(behavior.CachePolicyId).toEqual('4135ea2d-6df8-44a3-9df3-4b5a84be39ad');
+    }
+  });
+
+  test('CSP preserves KB uploads, both application entries, signed previews, WASM and the native bridge', () => {
+    const csp = applicationContentSecurityPolicy(
+      'ap-northeast-2', 'ttobak.example.com', 'test-assets', 'test-kb', 'test-site.cloudfront.net',
+    );
+    const directives = Object.fromEntries(csp.split('; ').map(d => {
+      const [name, ...values] = d.split(' ');
+      return [name, values];
+    }));
+    expect(csp.length).toBeLessThan(1783);
+    expect(directives['script-src']).toEqual(["'self'", "'unsafe-inline'", "'wasm-unsafe-eval'"]);
+    expect(csp).not.toContain("'unsafe-eval'");
+    expect(directives['connect-src']).toEqual(expect.arrayContaining([
+      "'self'", 'https://ttobak.example.com', 'https://test-site.cloudfront.net',
+      'wss://ttobak.example.com', 'wss://test-site.cloudfront.net', 'https://cognito-idp.ap-northeast-2.amazonaws.com',
+      'https://cognito-identity.ap-northeast-2.amazonaws.com',
+      'wss://transcribestreaming.ap-northeast-2.amazonaws.com:8443', 'ipc:', 'http://ipc.localhost',
+      'https://test-assets.s3.ap-northeast-2.amazonaws.com',
+      'https://test-kb.s3.ap-northeast-2.amazonaws.com', 'https://test-kb.s3.amazonaws.com',
+    ]));
+    expect(directives['frame-src']).toEqual(expect.arrayContaining([
+      "'self'", 'blob:', 'https://ttobak.example.com', 'https://test-site.cloudfront.net',
+      'https://test-assets.s3.ap-northeast-2.amazonaws.com',
+    ]));
+    expect(directives['media-src']).toEqual(expect.arrayContaining([
+      "'self'", 'blob:', 'asset:', 'https://ttobak.example.com', 'https://test-site.cloudfront.net',
+      'https://test-assets.s3.ap-northeast-2.amazonaws.com',
+    ]));
+    expect(csp).not.toContain('*.cloudfront.net');
+    expect(directives['object-src']).toEqual(["'none'"]);
+    expect(directives['frame-ancestors']).toEqual(["'none'"]);
+    expect(directives['worker-src']).toEqual(["'self'", 'blob:']);
+    // HTTP ipc.localhost must remain usable by Tauri, not upgraded to HTTPS.
+    expect(directives['upgrade-insecure-requests']).toBeUndefined();
+  });
+
+  test('SPA routing preserves segmented Next payload filenames and maps dynamic directories', () => {
+    const functions = Object.values(template.findResources('AWS::CloudFront::Function'));
+    const router = functions.find(f => f.Properties.FunctionCode.includes('var knownPages'))!;
+    const context = vm.createContext({});
+    vm.runInContext(router.Properties.FunctionCode, context);
+    for (const [path, expected] of [
+      ['/accounts/__next.accounts.__PAGE__.txt', '/accounts/__next.accounts.__PAGE__.txt'],
+      ['/projects/__next.projects.__PAGE__.txt', '/projects/__next.projects.__PAGE__.txt'],
+      ['/docs/__next.docs.__PAGE__.txt', '/docs/__next.docs.__PAGE__.txt'],
+      ['/meeting/abc/__next.meeting.$d$id.__PAGE__.txt', '/meeting/_/__next.meeting.$d$id.__PAGE__.txt'],
+      ['/accounts/a/docs/d/__next.accounts.$d$id.docs.$d$docId.__PAGE__.txt', '/accounts/_/docs/_/__next.accounts.$d$id.docs.$d$docId.__PAGE__.txt'],
+      ['/insights/s/d/__next._full.txt', '/insights/_/_/__next._full.txt'],
+      ['/insights/research/r/__next._tree.txt', '/insights/research/_/__next._tree.txt'],
+      ['/__next._tree.txt', '/__next._tree.txt'],
+      ['/meeting/abc.txt', '/meeting/_.txt'],
+      ['/meeting/abc', '/meeting/_.html'],
+      ['/_next/static/chunks/test.js', '/_next/static/chunks/test.js'],
+      ['/api/meetings/abc', '/api/meetings/abc'],
+    ]) {
+      context.event = { request: { uri: path } };
+      expect(vm.runInContext('handler(event).uri', context)).toBe(expected);
+    }
+  });
+
+  test('runtime config publication waits for the compatible distribution update', () => {
+    const distributionId = Object.keys(template.findResources('AWS::CloudFront::Distribution'))[0];
+    const deployment = Object.values(template.findResources('Custom::CDKBucketDeployment'))[0];
+    expect(deployment.DependsOn).toContain(distributionId);
   });
 });
