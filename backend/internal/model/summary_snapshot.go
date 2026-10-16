@@ -13,12 +13,14 @@ type SummaryCheck struct {
 	Fields map[string]SummaryValue `json:"fields,omitempty"`
 }
 type SummarySnapshot struct {
-	Meeting     *Meeting
-	Attachments []Attachment
-	TextStates  map[string]*AttachmentTextState
-	Checks      []SummaryCheck // first check is the canonical meeting
-	Stored      map[string]interface{}
-	Objects     []SummaryObject
+	Meeting       *Meeting
+	Attachments   []Attachment
+	TextStates    map[string]*AttachmentTextState
+	Checks        []SummaryCheck // first check is the canonical meeting
+	Stored        map[string]interface{}
+	Objects       []SummaryObject
+	LinkedSources []LinkedSummarySource
+	SharingSafe   bool
 }
 type SummaryObject struct {
 	Bucket    string `json:"bucket"`

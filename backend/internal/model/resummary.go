@@ -16,6 +16,7 @@ type ResummaryState struct {
 	UpdatedAt   time.Time `dynamodbav:"updatedAt"`
 	ErrorCode   string    `dynamodbav:"errorCode"`
 	ResultHash  string    `dynamodbav:"resultHash,omitempty"`
+	SharingSafe bool      `dynamodbav:"sharingSafe,omitempty"`
 }
 
 func (s *ResummaryState) Pending() bool {

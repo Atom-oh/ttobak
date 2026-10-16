@@ -54,6 +54,9 @@ func (s *MeetingReadingService) Read(ctx context.Context, userID, meetingID stri
 	if o.Kind == "transcript" {
 		return s.transcript(ctx, meeting, meetingID, o)
 	}
+	if meeting.SummaryReadRestricted && o.Section != "notes" {
+		return nil, ErrSummaryReadRestricted
+	}
 
 	state, err := s.actions.Describe(ctx, meeting)
 	if err != nil {
@@ -68,6 +71,9 @@ func (s *MeetingReadingService) Read(ctx context.Context, userID, meetingID stri
 	}
 	if meeting == nil {
 		return nil, ErrNotFound
+	}
+	if meeting.SummaryReadRestricted && o.Section != "notes" {
+		return nil, ErrSummaryReadRestricted
 	}
 	if state == nil {
 		state = &model.ActionItemsAnalysis{Status: model.AnalysisUnknown}
@@ -231,6 +237,7 @@ func renderMeetingReading(m *model.Meeting, permission string, state *model.Acti
 		"date":                m.Date.Format(time.RFC3339Nano),
 		"status":              readingLimit(m.Status, 64, "status", &truncated),
 		"permission":          readingLimit(permission, 16, "permission", &truncated),
+		"summarySharing":      summarySharingStatus(m, permission),
 		"updatedAt":           m.UpdatedAt.Format(time.RFC3339Nano),
 		"availableCodePoints": readingObject{"notes": utf8.RuneCountInString(m.Notes), "summary": utf8.RuneCountInString(m.Content)},
 		"readingHints": readingObject{"summary": "ttobak_get_meeting(section=summary)",

@@ -15,9 +15,15 @@ type analysisTestRepo struct {
 	*mockMeetingRepo
 	state                      *model.ActionItemsAnalysis
 	failWrite, completionError error
+	afterStatusRead            func()
 }
 
 func (r *analysisTestRepo) GetActionAnalysis(context.Context, string) (*model.ActionItemsAnalysis, error) {
+	if r.afterStatusRead != nil {
+		hook := r.afterStatusRead
+		r.afterStatusRead = nil
+		defer hook()
+	}
 	if r.state == nil {
 		return nil, nil
 	}
@@ -263,9 +269,60 @@ func TestActionAnalysisUsesFreshSourceAfterAuthorization(t *testing.T) {
 	meeting.Content = "새 요약"
 	meeting.ActionItems = `[{"id":"new","text":"새 작업","completed":false}]`
 	repo.state = &model.ActionItemsAnalysis{RunID: "new-run", Status: model.AnalysisSucceeded, SourceHash: actionSourceHash(meeting.Content)}
-	got, err := s.response(context.Background(), &authorizedSnapshot)
+	got, err := s.response(context.Background(), "owner", &authorizedSnapshot)
 	if err != nil || got.Analysis.Status != model.AnalysisSucceeded || len(got.ActionItems) != 1 || got.ActionItems[0].ID != "new" {
 		t.Fatalf("fresh successful run misclassified: %+v %v", got, err)
+	}
+}
+
+func TestActionAnalysisGuardedAccountReadDoesNotRestoreCanonicalItems(t *testing.T) {
+	s, repo, meeting := newAnalysisTest(t, nil)
+	meeting.AccountID, meeting.SharedToAccount = "account", true
+	repo.members["account|reader"] = &model.AccountMember{
+		AccountID: "account", UserID: "reader", SummaryPrivacyVersion: 1,
+	}
+	if got, err := s.Get(context.Background(), "reader", "meeting"); !errors.Is(err, ErrSummaryReadRestricted) || got != nil {
+		t.Fatalf("restricted account tasks restored: response=%+v error=%v", got, err)
+	}
+	for _, user := range []string{"owner", "direct"} {
+		repo.shares[shareKey("direct", "meeting")] = &model.Share{
+			MeetingID: "meeting", OwnerID: "owner", SharedToID: "direct", Permission: model.PermissionRead,
+		}
+		got, err := s.Get(context.Background(), user, "meeting")
+		if err != nil || len(got.ActionItems) != 1 || got.ActionItems[0].ID != "old" {
+			t.Fatalf("independent %s grant lost: response=%+v error=%v", user, got, err)
+		}
+	}
+}
+
+func TestActionAnalysisFreshReadRevalidatesPrivacyAndAccess(t *testing.T) {
+	for _, change := range []string{"private-summary", "revoked-membership"} {
+		t.Run(change, func(t *testing.T) {
+			s, repo, meeting := newAnalysisTest(t, nil)
+			meeting.AccountID, meeting.SharedToAccount = "account", true
+			meeting.SummaryPrivacy = &model.SummaryPrivacy{
+				Version: 1, State: model.SummaryPrivacySafe, GenerationID: "safe-generation",
+				ContentSHA256: model.SummaryPrivacyHash(meeting.Content),
+			}
+			repo.members["account|reader"] = &model.AccountMember{
+				AccountID: "account", UserID: "reader", SummaryPrivacyVersion: 1,
+			}
+			repo.state = &model.ActionItemsAnalysis{Status: model.AnalysisSucceeded, SourceHash: actionSourceHash(meeting.Content)}
+			repo.afterStatusRead = func() {
+				if change == "private-summary" {
+					meeting.SummaryPrivacy.State = model.SummaryPrivacyPrivate
+				} else {
+					delete(repo.members, "account|reader")
+				}
+			}
+			expected := ErrSummaryReadRestricted
+			if change == "revoked-membership" {
+				expected = ErrNotFound
+			}
+			if got, err := s.Get(context.Background(), "reader", "meeting"); !errors.Is(err, expected) || got != nil {
+				t.Fatalf("fresh tasks bypassed current %s: response=%+v error=%v", change, got, err)
+			}
+		})
 	}
 }
 

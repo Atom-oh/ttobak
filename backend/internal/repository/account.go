@@ -92,7 +92,8 @@ func (r *DynamoDBRepository) GetMember(ctx context.Context, accountID, userID st
 func (r *DynamoDBRepository) GetMeetingPublication(ctx context.Context, ownerID, meetingID string) (*model.Meeting, error) {
 	projection := expression.NamesList(expression.Name("PK"), expression.Name("SK"),
 		expression.Name("meetingId"), expression.Name("userId"), expression.Name("entityType"),
-		expression.Name("accountId"), expression.Name("sharedToAccount"))
+		expression.Name("accountId"), expression.Name("sharedToAccount"),
+		expression.Name("summaryPrivacy"), expression.Name("insightsRevision"))
 	expr, err := expression.NewBuilder().WithProjection(projection).Build()
 	if err != nil {
 		return nil, fmt.Errorf("build meeting publication projection: %w", err)

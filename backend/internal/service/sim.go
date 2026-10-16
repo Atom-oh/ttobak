@@ -427,11 +427,12 @@ func (s *SimService) ExtractRequirements(ctx context.Context, userID, meetingID 
 	}
 
 	run := &model.SimRun{
-		SimRunID:     uuid.New().String(),
-		MeetingID:    meetingID,
-		UserID:       userID,
-		Status:       model.SimStatusExtracted,
-		Requirements: string(reqsJSON),
+		SimRunID:          uuid.New().String(),
+		MeetingID:         meetingID,
+		UserID:            userID,
+		Status:            model.SimStatusExtracted,
+		Requirements:      string(reqsJSON),
+		SummaryGeneration: meeting.SummaryGeneration(),
 	}
 	if err := s.repo.PutSimRunIfNotRunning(ctx, run); err != nil {
 		if errors.Is(err, repository.ErrConditionFailed) {
@@ -466,6 +467,9 @@ func (s *SimService) CreateSimulation(ctx context.Context, userID, meetingID str
 	existingStatus := ""
 	if existing != nil {
 		existingStatus = existing.Status
+		if meeting == nil || existing.SummaryGeneration != meeting.SummaryGeneration() {
+			return nil, fmt.Errorf("현재 회의록에서 요구사항을 다시 추출한 뒤 실행해 주세요: %w", ErrInvalidInput)
+		}
 	}
 
 	if err := validateSimRequirements(meeting, userID, reqs, opts, existingStatus); err != nil {
@@ -482,12 +486,13 @@ func (s *SimService) CreateSimulation(ctx context.Context, userID, meetingID str
 	}
 
 	run := &model.SimRun{
-		SimRunID:     uuid.New().String(),
-		MeetingID:    meetingID,
-		UserID:       userID,
-		Status:       model.SimStatusQueued,
-		Requirements: string(reqsJSON),
-		Options:      string(optsJSON),
+		SimRunID:          uuid.New().String(),
+		MeetingID:         meetingID,
+		UserID:            userID,
+		Status:            model.SimStatusQueued,
+		Requirements:      string(reqsJSON),
+		Options:           string(optsJSON),
+		SummaryGeneration: meeting.SummaryGeneration(),
 	}
 	if err := s.repo.PutSimRunIfNotRunning(ctx, run); err != nil {
 		if errors.Is(err, repository.ErrConditionFailed) {

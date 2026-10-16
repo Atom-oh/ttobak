@@ -35,6 +35,8 @@ func (h *MeetingReadingHandler) Get(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		status, code, message := http.StatusInternalServerError, "READING_UNAVAILABLE", "Meeting reading is unavailable"
 		switch {
+		case errors.Is(err, service.ErrSummaryReadRestricted):
+			status, code, message = http.StatusConflict, "SHARING_REGEN_REQUIRED", "소유자가 공유용 회의록을 재생성해야 이 내용을 읽을 수 있습니다."
 		case errors.Is(err, service.ErrForbidden):
 			status, code, message = http.StatusForbidden, "FORBIDDEN", "Access denied"
 		case errors.Is(err, service.ErrNotFound):

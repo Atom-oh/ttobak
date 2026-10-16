@@ -12,12 +12,13 @@ import (
 // one extra item regardless of how many times a meeting is re-simulated,
 // and so a stale "running" row can't accumulate alongside newer ones.
 type SimRun struct {
-	PK        string `dynamodbav:"PK"`
-	SK        string `dynamodbav:"SK"`
-	SimRunID  string `dynamodbav:"simRunId"` // fresh uuid per run, used only for S3 pathing
-	MeetingID string `dynamodbav:"meetingId"`
-	UserID    string `dynamodbav:"userId"`
-	Status    string `dynamodbav:"status"` // extracted | queued | running | done | error
+	PK                string `dynamodbav:"PK"`
+	SK                string `dynamodbav:"SK"`
+	SimRunID          string `dynamodbav:"simRunId"` // fresh uuid per run, used only for S3 pathing
+	MeetingID         string `dynamodbav:"meetingId"`
+	UserID            string `dynamodbav:"userId"`
+	Status            string `dynamodbav:"status"` // extracted | queued | running | done | error
+	SummaryGeneration string `dynamodbav:"summaryGeneration,omitempty" json:"-"`
 
 	// Requirements is the JSON-encoded []SimRequirement -- the extracted
 	// draft, then the user-confirmed set once a run starts. Small (a

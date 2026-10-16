@@ -695,10 +695,27 @@ func (s *AccountService) isMeetingPublishedToAccount(ctx context.Context, accoun
 	if err != nil {
 		return false, err
 	}
+	return meetingPublishedToAccount(meeting, accountID, ownerID, meetingID), nil
+}
+
+func meetingPublishedToAccount(meeting *model.Meeting, accountID, ownerID, meetingID string) bool {
 	return meeting != nil &&
 		meeting.PK == model.PrefixUser+ownerID && meeting.SK == model.PrefixMeeting+meetingID &&
 		meeting.UserID == ownerID && meeting.MeetingID == meetingID && meeting.EntityType == "MEETING" &&
-		meeting.AccountID == accountID && meeting.SharedToAccount, nil
+		meeting.AccountID == accountID && meeting.SharedToAccount
+}
+
+func accountMeetingInsightAllowed(meeting *model.Meeting, member *model.AccountMember, ins model.AccountInsight, userID string) bool {
+	if !meetingPublishedToAccount(meeting, ins.AccountID, ins.SourceUserID, ins.SourceID) {
+		return false
+	}
+	if userID != meeting.UserID && accountMemberNeedsSummaryGuard(member) && !meeting.SummaryPrivacy.SafeMetadata() {
+		return false
+	}
+	if meeting.SummaryGeneration() != "" {
+		return ins.SummaryGeneration == meeting.SummaryGeneration() && meeting.InsightsRevision != "" && ins.InsightsRevision == meeting.InsightsRevision
+	}
+	return ins.SummaryGeneration == "" && ins.InsightsRevision == ""
 }
 
 // ListAccountMeetings returns only still-published shared-meeting references.
@@ -768,6 +785,7 @@ func (s *AccountService) ListAccountInsights(ctx context.Context, userID, accoun
 		typeSet[t] = true
 	}
 	out := make([]model.AccountInsightDTO, 0, len(insights))
+	consumed := make([]model.AccountInsight, 0, len(insights))
 	for _, ins := range insights {
 		if !from.IsZero() && ins.OccurredAt.Before(from) {
 			continue
@@ -792,13 +810,21 @@ func (s *AccountService) ListAccountInsights(ctx context.Context, userID, accoun
 			if !matches || index == "" || strings.Trim(index, "0123456789") != "" {
 				continue
 			}
-			published, err := s.isMeetingPublishedToAccount(ctx, accountID, ins.SourceUserID, ins.SourceID)
+			meeting, err := s.repo.GetMeetingPublication(ctx, ins.SourceUserID, ins.SourceID)
 			if err != nil {
 				return nil, fmt.Errorf("check account insight source: %w", err)
 			}
-			if !published {
+			if meetingPublishedToAccount(meeting, ins.AccountID, ins.SourceUserID, ins.SourceID) &&
+				userID != meeting.UserID && accountMemberNeedsSummaryGuard(member) && !meeting.SummaryPrivacy.SafeMetadata() {
+				return nil, ErrSummaryReadRestricted
+			}
+			if !accountMeetingInsightAllowed(meeting, member, ins, userID) {
 				continue
 			}
+			consumed = append(consumed, model.AccountInsight{
+				AccountID: ins.AccountID, SourceUserID: ins.SourceUserID, SourceID: ins.SourceID,
+				SummaryGeneration: ins.SummaryGeneration, InsightsRevision: ins.InsightsRevision,
+			})
 		case "news", "ingest":
 			// These are explicit account-owned sources in AccountInsight's
 			// contract, independent of a meeting publication grant.
@@ -822,6 +848,23 @@ func (s *AccountService) ListAccountInsights(ctx context.Context, userID, accoun
 			TsMarker:    ins.TsMarker,
 			Entities:    ins.Entities,
 		})
+	}
+	currentMember, err := s.repo.GetMember(ctx, accountID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if currentMember == nil || !currentMember.AddedAt.Equal(member.AddedAt) ||
+		currentMember.SummaryPrivacyVersion != member.SummaryPrivacyVersion {
+		return nil, ErrForbidden
+	}
+	for _, ins := range consumed {
+		current, err := s.repo.GetMeetingPublication(ctx, ins.SourceUserID, ins.SourceID)
+		if err != nil {
+			return nil, fmt.Errorf("recheck account insight source: %w", err)
+		}
+		if !accountMeetingInsightAllowed(current, currentMember, ins, userID) {
+			return nil, ErrForbidden
+		}
 	}
 	return out, nil
 }

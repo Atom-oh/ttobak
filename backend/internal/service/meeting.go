@@ -280,7 +280,7 @@ func resolveSharedAccess(ctx context.Context, repo shareAccessRepo, userID, meet
 			if share != nil {
 				permission = share.Permission
 			}
-			return byID, permission, nil
+			return projectAccountMeeting(byID, member), permission, nil
 		}
 	}
 
@@ -467,7 +467,7 @@ func (s *MeetingService) listMeetingsFilteredPage(ctx context.Context, params re
 			}
 			// memberCache avoids a duplicate GetMember call per meeting when
 			// the same account appears more than once in this page's shares.
-			memberCache := make(map[string]bool)
+			memberCache := make(map[string]*model.AccountMember)
 			for _, share := range result.Shares {
 				meeting, ok := meetingMap[share.MeetingID]
 				if !ok {
@@ -491,9 +491,10 @@ func (s *MeetingService) listMeetingsFilteredPage(ctx context.Context, params re
 					if !meeting.SharedToAccount || meeting.AccountID == "" {
 						continue
 					}
-					isMember, cached := memberCache[meeting.AccountID]
+					member, cached := memberCache[meeting.AccountID]
 					if !cached {
-						member, err := s.repo.GetMember(ctx, meeting.AccountID, userID)
+						var err error
+						member, err = s.repo.GetMember(ctx, meeting.AccountID, userID)
 						if err != nil {
 							if params.AccountIDs != nil {
 								return nil, fmt.Errorf("check shared meeting membership: %w", err)
@@ -506,17 +507,29 @@ func (s *MeetingService) listMeetingsFilteredPage(ctx context.Context, params re
 							log.Printf("ListMeetings: get member for account %s (meeting %s): %v", meeting.AccountID, meeting.MeetingID, err)
 							continue
 						}
-						isMember = member != nil
-						memberCache[meeting.AccountID] = isMember
+						memberCache[meeting.AccountID] = member
 					}
-					if !isMember {
+					if member == nil {
 						continue
 					}
+					meeting = projectAccountMeeting(meeting, member)
 				}
 				perm := share.Permission
 				item := model.ToMeetingListItem(meeting, true, &share.OwnerEmail, &perm)
 				response.Meetings = append(response.Meetings, item)
 				listed[meeting.MeetingID] = true
+			}
+			for accountID, before := range memberCache {
+				if before == nil {
+					continue
+				}
+				after, err := s.repo.GetMember(ctx, accountID, userID)
+				if err != nil {
+					return nil, err
+				}
+				if after == nil || !after.AddedAt.Equal(before.AddedAt) || after.SummaryPrivacyVersion != before.SummaryPrivacyVersion {
+					return nil, ErrForbidden
+				}
 			}
 		} else {
 			return nil, fmt.Errorf("failed to load shared meetings: %w", err)
@@ -608,6 +621,13 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 
 	// The shared candidates may describe either variant or a previous edit.
 	// Only render those verified against the currently selected text.
+	meeting, permission, err = s.checkAccess(ctx, userID, meetingID)
+	if err != nil {
+		return nil, err
+	}
+	if meeting == nil {
+		return nil, ErrNotFound
+	}
 	transcript, variant := selectMeetingTranscript(meeting)
 	var transcription, transcriptionV2 json.RawMessage
 	if segments := meetingTranscriptSegments(meeting, transcript); len(segments) > 0 {
@@ -645,6 +665,8 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 		Duration:                   meeting.Duration,
 		SupportsNotesComparison:    true,
 		SupportsPrivateAccountLink: true,
+		SummarySharing:             summarySharingStatus(meeting, permission),
+		SummaryGeneration:          meeting.SummaryGeneration(),
 		MeetingID:                  meeting.MeetingID,
 		UserID:                     meeting.UserID,
 		AccountID:                  meeting.AccountID,
@@ -1470,6 +1492,11 @@ func (s *MeetingService) UpdateMeetingTranscript(ctx context.Context, meetingID 
 
 // UpdateMeetingContent updates the content/summary field (internal use)
 func (s *MeetingService) UpdateMeetingContent(ctx context.Context, meetingID, content string) error {
+	if repository.SummaryPrivacyWritesEnabled() {
+		// Legacy generated-content publication has no captured source. Active
+		// summary workers publish through their immutable summary snapshot.
+		return repository.ErrConditionFailed
+	}
 	meeting, err := s.repo.GetMeetingByID(ctx, meetingID)
 	if err != nil {
 		return err
@@ -1624,16 +1651,18 @@ func BuildAccountInsights(accountID string, meeting *model.Meeting) ([]model.Acc
 			// source meeting would otherwise be able to read direct quotes
 			// from it via this derived view. Implication/nextAction are
 			// LLM-generated summaries, not quotes, so they're safe to carry.
-			Implication:  p.Implication,
-			NextAction:   p.NextAction,
-			SourceType:   "meeting",
-			SourceID:     meeting.MeetingID,
-			SourceUserID: meeting.UserID,
-			OccurredAt:   meeting.Date,
-			TsMarker:     p.TsMarker,
-			Entities:     p.Entities,
-			CreatedAt:    now,
-			EntityType:   model.EntityTypeInsight,
+			Implication:       p.Implication,
+			NextAction:        p.NextAction,
+			SourceType:        "meeting",
+			SourceID:          meeting.MeetingID,
+			SourceUserID:      meeting.UserID,
+			SummaryGeneration: meeting.SummaryGeneration(),
+			InsightsRevision:  meeting.InsightsRevision,
+			OccurredAt:        meeting.Date,
+			TsMarker:          p.TsMarker,
+			Entities:          p.Entities,
+			CreatedAt:         now,
+			EntityType:        model.EntityTypeInsight,
 		})
 	}
 	return out, nil

@@ -55,6 +55,9 @@ func (s *KnowledgeService) Ask(ctx context.Context, userID, meetingID, question 
 		}
 	}
 
+	if meeting.SummaryReadRestricted {
+		return nil, ErrSummaryReadRestricted
+	}
 	// Build context from meeting
 	meetingContext := fmt.Sprintf("Meeting: %s\nDate: %s\n", meeting.Title, meeting.Date.Format("2006-01-02"))
 	if len(meeting.Participants) > 0 {

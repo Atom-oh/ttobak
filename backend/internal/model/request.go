@@ -138,47 +138,49 @@ type MeetingListItem struct {
 
 // MeetingDetailResponse represents a meeting in detail view
 type MeetingDetailResponse struct {
-	SupportsAudioCrop          bool                 `json:"supportsAudioCrop"`
-	CanRecoverRecording        bool                 `json:"canRecoverRecording"`
-	AudioCrop                  *AudioCrop           `json:"audioCrop,omitempty"`
-	Duration                   int                  `json:"duration,omitempty"`
-	SupportsNotesComparison    bool                 `json:"supportsNotesComparison"`
-	SupportsPrivateAccountLink bool                 `json:"supportsPrivateAccountLink"`
-	MeetingID                  string               `json:"meetingId"`
-	UserID                     string               `json:"userId"`
-	AccountID                  string               `json:"accountId,omitempty"`
-	SharedToAccount            bool                 `json:"sharedToAccount"`
-	ProjectIDs                 []string             `json:"projectIds,omitempty"` // Owner only.
-	Title                      string               `json:"title"`
-	Date                       string               `json:"date"`
-	Status                     string               `json:"status"`
-	Participants               []string             `json:"participants,omitempty"`
-	Content                    string               `json:"content,omitempty"`
-	Notes                      string               `json:"notes,omitempty"`
-	NotesRevision              string               `json:"notesRevision"`
-	LiveSummary                string               `json:"liveSummary,omitempty"`
-	TranscriptA                string               `json:"transcriptA,omitempty"`
-	TranscriptB                string               `json:"transcriptB,omitempty"`
-	TranscriptQuality          *TranscriptQuality   `json:"transcriptQuality,omitempty"`
-	SelectedTranscript         *string              `json:"selectedTranscript,omitempty"` // "A" | "B" | null
-	AudioKey                   string               `json:"audioKey,omitempty"`
-	AudioKeys                  []string             `json:"audioKeys,omitempty"`
-	AudioPartCount             int                  `json:"audioPartCount,omitempty"`
-	AudioPartsReady            int                  `json:"audioPartsReady,omitempty"`
-	Transcription              json.RawMessage      `json:"transcription,omitempty"`
-	TranscriptionV2            json.RawMessage      `json:"transcriptionV2,omitempty"` // Complete mixed/untimed segments; legacy clients use canonical raw text.
-	Tags                       []string             `json:"tags,omitempty"`
-	ActionItems                json.RawMessage      `json:"actionItems,omitempty"`
-	SpeakerMap                 map[string]string    `json:"speakerMap,omitempty"`
-	SttProvider                string               `json:"sttProvider,omitempty"`
-	LinkedMeetingIDs           []string             `json:"linkedMeetingIds,omitempty"`
-	NotionPageID               string               `json:"notionPageId,omitempty"`
-	Permission                 string               `json:"permission"` // "owner", "read", or "edit"
-	Attachments                []AttachmentResponse `json:"attachments,omitempty"`
-	Shares                     []ShareResponse      `json:"shares,omitempty"` // Only visible to owner
-	SimRun                     *SimRunResponse      `json:"simRun,omitempty"` // ADR-033 cost/sizing simulator, singleton per meeting
-	CreatedAt                  string               `json:"createdAt"`
-	UpdatedAt                  string               `json:"updatedAt"`
+	SupportsAudioCrop          bool                  `json:"supportsAudioCrop"`
+	CanRecoverRecording        bool                  `json:"canRecoverRecording"`
+	AudioCrop                  *AudioCrop            `json:"audioCrop,omitempty"`
+	Duration                   int                   `json:"duration,omitempty"`
+	SupportsNotesComparison    bool                  `json:"supportsNotesComparison"`
+	SupportsPrivateAccountLink bool                  `json:"supportsPrivateAccountLink"`
+	SummarySharing             *SummarySharingStatus `json:"summarySharing,omitempty"`
+	SummaryGeneration          string                `json:"-"`
+	MeetingID                  string                `json:"meetingId"`
+	UserID                     string                `json:"userId"`
+	AccountID                  string                `json:"accountId,omitempty"`
+	SharedToAccount            bool                  `json:"sharedToAccount"`
+	ProjectIDs                 []string              `json:"projectIds,omitempty"` // Owner only.
+	Title                      string                `json:"title"`
+	Date                       string                `json:"date"`
+	Status                     string                `json:"status"`
+	Participants               []string              `json:"participants,omitempty"`
+	Content                    string                `json:"content,omitempty"`
+	Notes                      string                `json:"notes,omitempty"`
+	NotesRevision              string                `json:"notesRevision"`
+	LiveSummary                string                `json:"liveSummary,omitempty"`
+	TranscriptA                string                `json:"transcriptA,omitempty"`
+	TranscriptB                string                `json:"transcriptB,omitempty"`
+	TranscriptQuality          *TranscriptQuality    `json:"transcriptQuality,omitempty"`
+	SelectedTranscript         *string               `json:"selectedTranscript,omitempty"` // "A" | "B" | null
+	AudioKey                   string                `json:"audioKey,omitempty"`
+	AudioKeys                  []string              `json:"audioKeys,omitempty"`
+	AudioPartCount             int                   `json:"audioPartCount,omitempty"`
+	AudioPartsReady            int                   `json:"audioPartsReady,omitempty"`
+	Transcription              json.RawMessage       `json:"transcription,omitempty"`
+	TranscriptionV2            json.RawMessage       `json:"transcriptionV2,omitempty"` // Complete mixed/untimed segments; legacy clients use canonical raw text.
+	Tags                       []string              `json:"tags,omitempty"`
+	ActionItems                json.RawMessage       `json:"actionItems,omitempty"`
+	SpeakerMap                 map[string]string     `json:"speakerMap,omitempty"`
+	SttProvider                string                `json:"sttProvider,omitempty"`
+	LinkedMeetingIDs           []string              `json:"linkedMeetingIds,omitempty"`
+	NotionPageID               string                `json:"notionPageId,omitempty"`
+	Permission                 string                `json:"permission"` // "owner", "read", or "edit"
+	Attachments                []AttachmentResponse  `json:"attachments,omitempty"`
+	Shares                     []ShareResponse       `json:"shares,omitempty"` // Only visible to owner
+	SimRun                     *SimRunResponse       `json:"simRun,omitempty"` // ADR-033 cost/sizing simulator, singleton per meeting
+	CreatedAt                  string                `json:"createdAt"`
+	UpdatedAt                  string                `json:"updatedAt"`
 
 	ActionItemsAnalysis    *ActionItemsAnalysis `json:"actionItemsAnalysis,omitempty"`
 	FieldInsights          []MeetingInsight     `json:"fieldInsights"`
