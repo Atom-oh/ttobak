@@ -284,12 +284,26 @@ func (h *MeetingHandler) GetMeeting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.uploadService != nil {
-		result.SupportsAudioCrop = h.uploadService.AudioCropEnabled()
-	}
 	if h.actionItemsService != nil {
 		analysis, analysisErr := h.actionItemsService.Get(ctx, userID, meetingID)
 		if analysisErr != nil {
+			if errors.Is(analysisErr, service.ErrSummaryReadRestricted) ||
+				errors.Is(analysisErr, service.ErrForbidden) || errors.Is(analysisErr, service.ErrNotFound) {
+				// A later authorization read invalidates the earlier detail view.
+				// Refresh the whole projection before returning any derived bytes.
+				result, err = h.meetingService.GetMeetingDetail(ctx, userID, meetingID)
+				if err != nil {
+					switch {
+					case errors.Is(err, service.ErrForbidden):
+						writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
+					case errors.Is(err, service.ErrNotFound):
+						writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
+					default:
+						writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+					}
+					return
+				}
+			}
 			code := "STATUS_UNAVAILABLE"
 			if errors.Is(analysisErr, service.ErrSummaryReadRestricted) {
 				code = "SHARING_REGEN_REQUIRED"
@@ -301,6 +315,9 @@ func (h *MeetingHandler) GetMeeting(w http.ResponseWriter, r *http.Request) {
 			result.ActionItemsAnalysis = analysis.Analysis
 			result.ActionItems, _ = json.Marshal(analysis.ActionItems) // fixed string/bool struct
 		}
+	}
+	if h.uploadService != nil {
+		result.SupportsAudioCrop = h.uploadService.AudioCropEnabled()
 	}
 
 	// Generate presigned download URLs for image attachments
