@@ -585,14 +585,18 @@ def _is_account_member(account_id, user_id):
     Read errors propagate so callers cannot mistake an incomplete access check
     for an empty search or reuse a previously authorized KB cache entry.
     """
+    return _current_account_member(account_id,user_id) is not None
+
+
+def _current_account_member(account_id,user_id):
     if not account_id or not user_id:
-        return False
+        return None
     result = table.get_item(
         Key={'PK': f'ACCOUNT#{account_id}', 'SK': f'MEMBER#{user_id}'},
         ConsistentRead=True,
     )
     member = result.get('Item') or {}
-    return member.get('accountId') == account_id and member.get('userId') == user_id
+    return member if member.get('accountId') == account_id and member.get('userId') == user_id else None
 
 
 def _list_shared_meetings_raw(user_id):
@@ -641,6 +645,7 @@ def _has_meeting_access(user_id, owner_id, meeting_id, meeting, source_account_i
     """Authorize the canonical row just read, independently of discovery caches."""
     if not user_id or not meeting:
         return False
+    meeting['_summaryReadRestricted'] = False
     if user_id == owner_id:
         return True
     share = table.get_item(
@@ -655,7 +660,12 @@ def _has_meeting_access(user_id, owner_id, meeting_id, meeting, source_account_i
         return False
     if source_account_id and account_id != source_account_id:
         return False  # stale/misplaced account reference
-    return _is_account_member(account_id, user_id)
+    member = _current_account_member(account_id,user_id)
+    if member is None:
+        return False
+    from summary_privacy import enforce_summary_guard, safe_summary
+    meeting['_summaryReadRestricted'] = enforce_summary_guard(member) and not safe_summary(meeting)
+    return True
 
 
 def _list_shared_meetings(user_id):
@@ -676,7 +686,7 @@ def _list_shared_meetings(user_id):
             continue
         meeting = table.get_item(
             Key={'PK': f'USER#{owner_id}', 'SK': f'MEETING#{meeting_id}'},
-            ProjectionExpression='meetingId, accountId, sharedToAccount',
+            ProjectionExpression='meetingId, accountId, sharedToAccount, summaryPrivacy',
             ConsistentRead=True,
         ).get('Item')
         if _has_meeting_access(user_id, owner_id, meeting_id, meeting, entry.get('sourceAccountId')):
@@ -694,7 +704,7 @@ def list_meetings_for_user(user_id, date_from=None, date_to=None, tag=None, keyw
     limit = limit or 20
     if not user_id:
         raise ValueError('Authenticated user is required for meeting retrieval')
-    projection = 'meetingId, title, createdAt, tags, #s, accountId, sharedToAccount'
+    projection = 'meetingId, title, createdAt, tags, #s, accountId, sharedToAccount, summaryPrivacy'
     expr_names = {'#s': 'status'}
     meetings = []
 
@@ -733,11 +743,13 @@ def list_meetings_for_user(user_id, date_from=None, date_to=None, tag=None, keyw
                 item = resp.get('Item')
                 # Recheck the consumed row: access can change after enumeration.
                 if _has_meeting_access(user_id, s['ownerId'], s['meetingId'], item):
+                    restricted=bool(item.get('_summaryReadRestricted'))
                     meetings.append({
                         'meetingId': item.get('meetingId', ''),
                         'title': item.get('title', ''),
                         'date': item.get('createdAt', ''),
-                        'tags': item.get('tags', []),
+                        'tags': [] if restricted else item.get('tags', []),
+                        'summaryReadRestriction': 'SHARING_REGEN_REQUIRED' if restricted else '',
                         'status': item.get('status', ''),
                         'isShared': True,
                         'sharedBy': s['ownerId'],
