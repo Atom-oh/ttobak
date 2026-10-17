@@ -10,6 +10,8 @@ import os
 from pathlib import Path
 import re
 import secrets
+import stat
+import struct
 import subprocess
 import sys
 import time
@@ -17,6 +19,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+import zipfile
+import zlib
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("origin_contract", ROOT / "backend/python/qa/origin_proof.py")
@@ -84,6 +88,7 @@ class Cdk:
         self.assembly = ROOT / "build/verification/http-origin-assembly"
         self.revision = None
         self.assembly_digest = None
+        self.reviewed_stacks = None
 
     def command(self, arguments, *, from_assembly=False):
         # Even `cdk diff` can print the OLD plaintext proof when removing it.
@@ -102,18 +107,182 @@ class Cdk:
         require(self.assembly.is_dir() and not self.assembly.is_symlink(),
                 "REVIEWED_ASSEMBLY_MISSING")
         require((self.assembly / "manifest.json").is_file(), "REVIEWED_ASSEMBLY_MISSING")
-        digest = hashlib.sha256()
-        for path in sorted(self.assembly.rglob("*")):
+        paths = sorted(self.assembly.rglob("*"))
+        for path in paths:
             require(not path.is_symlink(), "REVIEWED_ASSEMBLY_SYMLINK")
-            if path.is_file() and path.name != ".lock":
+            require(path.is_dir() or stat.S_ISREG(path.stat().st_mode),
+                    "REVIEWED_ASSEMBLY_SPECIAL_FILE")
+        caches = self.validated_asset_caches()
+        digest = hashlib.sha256()
+        digest.update(b"reviewed-exclusive-stacks\0")
+        for stack in self.reviewed_stacks or STACKS:
+            digest.update(stack.encode() + b"\0")
+        for path in paths:
+            if path.is_file() and path != self.assembly / ".lock" and path not in caches:
                 digest.update(str(path.relative_to(self.assembly)).encode() + b"\0")
+                # CDK preserves staged Unix modes in ZIP members. Pin these as
+                # reviewed inputs too; changing both source/cache modes is drift.
+                digest.update(stat.S_IMODE(path.stat().st_mode).to_bytes(2, "big") + b"\0")
+                # Frame contents so embedded path/mode bytes cannot impersonate
+                # a second file in the concatenated reviewed input stream.
+                digest.update(path.stat().st_size.to_bytes(8, "big") + b"\0")
                 with path.open("rb") as source:
                     for block in iter(lambda: source.read(1024 * 1024), b""):
                         digest.update(block)
         return digest.hexdigest()
 
+    def validated_asset_caches(self):
+        cache = self.assembly / ".cache"
+        require(not cache.exists() or cache.is_dir(), "REVIEWED_ASSEMBLY_CACHE_INVALID")
+        try:
+            candidates = list(cache.iterdir()) if cache.exists() else []
+            require(all(path.is_file() and re.fullmatch(r"[0-9a-f]{64}\.zip", path.name) is not None
+                        for path in candidates), "REVIEWED_ASSEMBLY_CACHE_INVALID")
+            manifest = json.loads((self.assembly / "manifest.json").read_text())
+            artifacts = manifest.get("artifacts", {})
+            selected = set()
+            for stack in self.reviewed_stacks or STACKS:
+                artifact = artifacts.get(stack)
+                require(isinstance(artifact, dict) and artifact.get("type") == "aws:cloudformation:stack",
+                        "REVIEWED_ASSEMBLY_CACHE_INVALID")
+                dependencies = artifact.get("dependencies", [])
+                require(isinstance(dependencies, list), "REVIEWED_ASSEMBLY_CACHE_INVALID")
+                for dependency in dependencies:
+                    referenced = artifacts.get(dependency)
+                    require(isinstance(referenced, dict), "REVIEWED_ASSEMBLY_CACHE_INVALID")
+                    if referenced.get("type") == "cdk:asset-manifest":
+                        selected.add(dependency)
+                    # Do not traverse CloudFormation stack dependencies:
+                    # deploy --exclusively publishes only selected stack assets.
+            asset_manifests = {}
+            for identity, artifact in artifacts.items():
+                if artifact.get("type") != "cdk:asset-manifest":
+                    continue
+                name = artifact["properties"]["file"]
+                require(isinstance(name, str) and Path(name).name == name
+                        and name.endswith(".assets.json"), "REVIEWED_ASSEMBLY_CACHE_INVALID")
+                assets = json.loads((self.assembly / name).read_text())
+                asset_manifests[identity] = assets.get("files", {})
+            needed = {path.stem for path in candidates}
+            for identity in selected:
+                needed.update(asset_id for asset_id, asset in asset_manifests[identity].items()
+                              if asset["source"].get("packaging") == "zip")
+            declared = {}
+            for assets in asset_manifests.values():
+                for asset_id, asset in assets.items():
+                    source = asset["source"]
+                    if source.get("packaging") != "zip" or asset_id not in needed:
+                        continue
+                    relative = source.get("path")
+                    require(re.fullmatch(r"[0-9a-f]{64}", asset_id) is not None
+                            and "executable" not in source and isinstance(relative, str),
+                            "REVIEWED_ASSEMBLY_CACHE_INVALID")
+                    path = Path(relative)
+                    require(not path.is_absolute() and path.parts
+                            and ".." not in path.parts and path.parts[0] != ".cache"
+                            and path.as_posix() == relative and "\\" not in relative,
+                            "REVIEWED_ASSEMBLY_CACHE_INVALID")
+                    staged = self.assembly / path
+                    require(staged.is_dir() and (asset_id not in declared or declared[asset_id] == staged),
+                            "REVIEWED_ASSEMBLY_CACHE_INVALID")
+                    declared[asset_id] = staged
+            validated = set()
+            for path in candidates:
+                require(path.stem in declared, "REVIEWED_ASSEMBLY_CACHE_INVALID")
+                self.validate_cached_zip(path, declared[path.stem])
+                validated.add(path)
+            return validated
+        except (OSError, ValueError, KeyError, TypeError, AttributeError,
+                zipfile.BadZipFile, zlib.error, struct.error, OverflowError):
+            raise ReleaseError("REVIEWED_ASSEMBLY_CACHE_INVALID") from None
+
+    @staticmethod
+    def validate_cached_zip(cache, staged):
+        # Pinned CDK packageFile writes only direct .cache/<asset-id>.zip outputs
+        # and REUSES existing bytes. Never exempt a directory or filename alone.
+        # Read-only validation accepts its ZIP32/DEFLATE format, including dot
+        # files, UTF-8 names and executable modes; no extraction or second ZIP
+        # producer. Future unsupported formats stop until separately reviewed.
+        category = "REVIEWED_ASSEMBLY_CACHE_INVALID"
+        files = {path.relative_to(staged).as_posix(): path
+                 for path in staged.rglob("*") if path.is_file()}
+        sizes = {name: path.stat().st_size for name, path in files.items()}
+        names = {name: name.encode("utf-8") for name in files}
+        require(len(files) < 65535 and all("\\" not in name and "\0" not in name
+                and len(names[name]) < 65536 and sizes[name] < 2**32 for name in files), category)
+        # Bound central-directory parsing and compressed input from staged
+        # member counts/bytes before ZipFile constructs any member objects.
+        central_size = sum(46 + len(name) for name in names.values())
+        archive_limit = 22 + sum(76 + 2 * len(names[name]) + size + (size + 999) // 1000 + 64
+                                 for name, size in sizes.items())
+        archive_size = cache.stat().st_size
+        require(22 <= archive_size <= archive_limit and archive_size < 2**32, category)
+        with cache.open("rb") as raw:
+            raw.seek(-22, os.SEEK_END)
+            end = struct.unpack("<4s4H2IH", raw.read(22))
+            require(end[:3] == (b"PK\x05\x06", 0, 0)
+                    and end[3] == end[4] == len(files) and end[5] == central_size
+                    and end[6] + central_size + 22 == archive_size and end[7] == 0, category)
+            with zipfile.ZipFile(raw) as archive:
+                infos = archive.infolist()
+                require(not archive.comment and len(infos) == len(files)
+                        and len({info.filename for info in infos}) == len(files)
+                        and {info.filename for info in infos} == files.keys()
+                        and archive.start_dir == end[6], category)
+                cursor, central = 0, end[6]
+                for info in infos:
+                    path, name = files[info.filename], names[info.filename]
+                    mode = path.stat().st_mode & 0xffff
+                    require(stat.S_ISREG(mode) and info.file_size == sizes[info.filename]
+                            and info.orig_filename == info.filename
+                            and info.header_offset == cursor and info.create_system == 3
+                            and info.create_version == 63 and info.extract_version == 20
+                            and info.flag_bits == 0x800 and info.compress_type == zipfile.ZIP_DEFLATED
+                            and info.date_time == (1980, 1, 1, 0, 0, 0)
+                            and not info.extra and not info.comment and info.volume == 0
+                            and info.internal_attr == 0 and info.external_attr == mode << 16
+                            and info.compress_size <= info.file_size + (info.file_size + 999) // 1000 + 64,
+                            category)
+                    local = struct.pack("<4s5H3I2H", b"PK\x03\x04", 20, 0x800, 8, 0, 33,
+                                        info.CRC, info.compress_size, info.file_size, len(name), 0) + name
+                    raw.seek(cursor)
+                    require(raw.read(len(local)) == local, category)
+                    decompressor = zlib.decompressobj(-15)
+                    remaining, received, crc = info.compress_size, 0, 0
+                    with path.open("rb") as source:
+                        while remaining:
+                            compressed = raw.read(min(65536, remaining))
+                            require(compressed, category)
+                            remaining -= len(compressed)
+                            while compressed:
+                                output = decompressor.decompress(compressed, 65536)
+                                compressed = decompressor.unconsumed_tail
+                                require(not decompressor.unused_data
+                                        and received + len(output) <= info.file_size
+                                        and source.read(len(output)) == output, category)
+                                received += len(output)
+                                crc = zlib.crc32(output, crc)
+                        require(decompressor.eof and not decompressor.unused_data
+                                and received == info.file_size and not source.read(1)
+                                and crc == info.CRC, category)
+                    cursor += len(local) + info.compress_size
+                    # Exact local/central/end layout rejects comments, extras,
+                    # hidden payloads, overlaps, gaps, descriptors and trailing
+                    # data instead of silently ignoring arbitrary ZIP bytes.
+                    expected = struct.pack("<4s6H3I5H2I", b"PK\x01\x02", 0x33f, 20, 0x800, 8, 0, 33,
+                                           info.CRC, info.compress_size, info.file_size, len(name),
+                                           0, 0, 0, 0, mode << 16, info.header_offset) + name
+                    raw.seek(central)
+                    require(raw.read(len(expected)) == expected, category)
+                    central += len(expected)
+                require(cursor == end[6] and central == archive_size - 22, category)
+
     def diff(self, stacks=STACKS, *, activation=True):
-        require(bool(stacks) and all(stack in STACKS for stack in stacks), "UNAPPROVED_STACK")
+        stacks = tuple(stacks)
+        require(bool(stacks) and len(stacks) == len(set(stacks))
+                and all(stack in STACKS for stack in stacks), "UNAPPROVED_STACK")
+        self.assembly_digest = None
+        self.reviewed_stacks = stacks
         self.revision = checkout_revision()
         self.command(["diff", *stacks, "--exclusively", "--no-change-set"])
         if activation:
@@ -213,6 +382,7 @@ class Cdk:
         require(stack in STACKS, "UNAPPROVED_STACK")
         require(self.revision is not None and self.assembly_digest is not None,
                 "ASSEMBLY_NOT_REVIEWED")
+        require(self.reviewed_stacks is not None and stack in self.reviewed_stacks, "UNREVIEWED_STACK")
         require(checkout_revision() == self.revision, "CHECKOUT_REVISION_CHANGED")
         require(self.assembly_hash() == self.assembly_digest, "REVIEWED_ASSEMBLY_CHANGED")
         args = ["deploy", stack, "--exclusively", "--require-approval", "never", "--previous-parameters"]
