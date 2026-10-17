@@ -101,6 +101,7 @@ export class GatewayStack extends cdk.Stack {
     const originReleaseCiRoleName = this.node.tryGetContext('ttobak:httpOriginReleaseCiRoleName');
     if (originReleaseCiRoleName !== undefined && originReleaseCiRoleName !== false) {
       if (typeof originReleaseCiRoleName !== 'string'
+          || originReleaseCiRoleName === 'false' || originReleaseCiRoleName === 'true'
           || !/^[A-Za-z0-9_+=,.@-]{1,64}$/.test(originReleaseCiRoleName)) {
         throw new Error('ttobak:httpOriginReleaseCiRoleName must be an existing IAM role name or boolean false');
       }

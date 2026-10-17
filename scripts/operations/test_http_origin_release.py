@@ -646,6 +646,46 @@ class CdkAssemblyCacheTests(unittest.TestCase):
         self.assertEqual(self.runner.assembly_hash(), reviewed)
         self.assertEqual(self.runner.validated_asset_caches(), {self.cache})
 
+    def test_valid_members_at_and_after_output_boundaries_preserve_digest(self):
+        member = self.staged / "bootstrap"
+        for size in (65536, 65537, 65538, 131072, 131073, 131074):
+            for byte in (b"A", b"x", b"\0"):
+                with self.subTest(size=size, byte=byte):
+                    self.cache.unlink(missing_ok=True)
+                    member.write_bytes(byte * size)
+                    reviewed = self.runner.assembly_hash()
+                    self.write_cache()
+                    self.assertEqual(self.runner.assembly_hash(), reviewed)
+                    self.assertEqual(self.runner.assembly_hash(), reviewed)
+
+    def test_buffered_last_byte_must_match_the_staged_source(self):
+        member = self.staged / "bootstrap"
+        member.write_bytes(b"A" * 65537)
+        entries = self.entries()
+        changed = [(name, data[:-1] + b"B" if name == "bootstrap" else data, mode)
+                   for name, data, mode in entries]
+        self.write_cache(changed)
+        self.assert_cache_invalid()
+
+    def test_buffered_expansion_beyond_declared_source_size_is_rejected(self):
+        member = self.staged / "bootstrap"
+        data = b"A" * 65536
+        member.write_bytes(data)
+        mode = member.stat().st_mode & 0xffff
+        # Keep the oversized DEFLATE stream, but forge both headers to claim
+        # the staged size and CRC. Its last byte arrives on an empty-input drain.
+        entries = [("bootstrap", data + b"A", mode)]
+        entries.extend(entry for entry in self.entries() if entry[0] != "bootstrap")
+        malicious = bytearray(self.archive_bytes(entries))
+        central_offset = struct.unpack_from("<I", malicious, len(malicious) - 6)[0]
+        for offset in (14, central_offset + 16):
+            struct.pack_into("<I", malicious, offset, zlib.crc32(data))
+        for offset in (22, central_offset + 24):
+            struct.pack_into("<I", malicious, offset, len(data))
+        self.cache.parent.mkdir()
+        self.cache.write_bytes(malicious)
+        self.assert_cache_invalid()
+
     def test_existing_cache_is_validated_before_any_deploy(self):
         self.write_cache()
         self.runner.revision = "a" * 40

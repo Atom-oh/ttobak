@@ -112,7 +112,7 @@ describe('GatewayStack', () => {
       && resource.Properties.PolicyName === 'ttobak-http-origin-release')).toBe(false);
   });
 
-  test.each(['', '*', 'role/*', ' role ', 'arn:aws:iam::111111111111:role/runner',
+  test.each(['', '*', 'role/*', ' role ', 'false', 'true', 'arn:aws:iam::111111111111:role/runner',
     'x'.repeat(65), true, null, 1, {}])('invalid CI role context %p fails before permissions are created', roleName => {
     expect(() => buildTemplate(undefined, undefined, undefined, undefined, undefined, undefined, roleName))
       .toThrow('ttobak:httpOriginReleaseCiRoleName must be an existing IAM role name or boolean false');

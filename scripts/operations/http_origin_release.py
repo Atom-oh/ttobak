@@ -262,7 +262,20 @@ class Cdk:
                                         and source.read(len(output)) == output, category)
                                 received += len(output)
                                 crc = zlib.crc32(output, crc)
+                        # max_length can leave output or the stream terminator
+                        # buffered even when all compressed input was consumed.
+                        # Drain with the same byte bound and source checks.
+                        while not decompressor.eof:
+                            output = decompressor.decompress(b"", 65536)
+                            require((output or decompressor.eof)
+                                    and not decompressor.unused_data
+                                    and not decompressor.unconsumed_tail
+                                    and received + len(output) <= info.file_size
+                                    and source.read(len(output)) == output, category)
+                            received += len(output)
+                            crc = zlib.crc32(output, crc)
                         require(decompressor.eof and not decompressor.unused_data
+                                and not decompressor.unconsumed_tail
                                 and received == info.file_size and not source.read(1)
                                 and crc == info.CRC, category)
                     cursor += len(local) + info.compress_size

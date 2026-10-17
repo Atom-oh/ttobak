@@ -58,11 +58,24 @@ role. GatewayStack owns one inline policy granting only `GetSecretValue`,
 `PutSecretValue` and `UpdateSecretVersionStage` on the exact
 `HttpOriginSecretArn` parameter. It creates no role or secret, changes no trust
 policy, and grants no wildcard, List, Delete or CreateSecret action. Omit this
-context or set JSON boolean `false` to disable the grant; invalid role names or
-types stop synthesis. This grant is intended only for an existing
+context or set JSON boolean `false` in `cdk.json` to disable the grant. CLI context
+values are strings: `-c ttobak:httpOriginReleaseCiRoleName=false` does not disable
+it. Both string values `false` and `true`, invalid role names and invalid types
+stop synthesis. This grant is intended only for an existing
 seeded/rotating/active secret. The coordinator's initial read uses its fixed
 secret name; successful CI Get-by-name still requires the policy's actual
 deployment and verification under the actual CI caller.
+
+Before first installation, confirm the target role exists with `aws iam get-role`,
+then inspect `aws iam get-role-policy` for policy name `ttobak-http-origin-release`
+on that exact role. Proceed only when the policy lookup returns `NoSuchEntity`;
+permission or transport errors do not establish absence. If the name already
+exists, stop and resolve its ownership before deployment, because IAM inline
+policy writes replace a policy with the same name. For subsequent updates,
+verify that GatewayStack's synthesized `AWS::IAM::Policy` logical ID belongs to
+the actual GatewayStack through `aws cloudformation describe-stack-resource`,
+and that its role and policy name match the reviewed template. Any ownership
+mismatch stops the update.
 
 The coordinator reads with `get_secret_value`; version publication uses
 `put_secret_value`, and expected-current promotion plus retirement labeling use
