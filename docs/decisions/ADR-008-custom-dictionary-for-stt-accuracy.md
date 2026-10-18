@@ -109,28 +109,43 @@ changes no runtime behavior.
   3-second context. The row stores hashes, enums and counts, never term text.
 - **acceptedTerms** holds at most 40 `{termKey, sourceTypes}` entries (32-hex
   keys, `transcript|notes|document`). It lists every term this meeting has an
-  observation for and only grows, because deletion cleanup can find a
-  meeting's `DICTOBS#` rows only through it. The merger therefore writes a new
-  key only while the list has room, and returns the list even on failure so
-  Fail can record it.
+  observation for and only grows, because the planned deletion cleanup
+  (design A8) can find a meeting's `DICTOBS#` rows only through it. The merger
+  writes a new key only while the list has room, checked per candidate so
+  skipped candidates take no slot, and returns the list even on failure so
+  Fail can record it. Deletion cleanup is not implemented: deleting a meeting
+  currently leaves its `ANALYSIS#terms` row (not among `DeleteMeeting`'s
+  singleton deletes) and its `DICTOBS#` rows. It must land before or with the
+  first writer.
 - **Merge** (`TermsMerger.MergeExtractedTerms`, owner's personal scope only):
   no row creates an auto term with hits 1 (`suggested` when the meeting is
   tainted); tombstones, manual rows, rows with `userEditedAt` and unknown
   states are skipped; an untainted run promotes a suggestion to `active` with
   a version-CAS transaction that also records the observation
   (`PromoteSuggestedTerm`) and merges into an active auto term
-  (`MergeAutoObservation`, which now also unions `sourceTypes`). A tainted
-  run never reinforces an existing term. An alias whose key equals its own
+  (`MergeAutoObservation`, which now also unions `sourceTypes`). Promotion
+  replaces the suggestion's heardAs, sourceTypes, displayAs, phrase, type,
+  confidence and recognition flags with the untainted run's values and sets
+  `hits` to 1, so nothing a non-owner planted becomes active or counts toward
+  `hits >= 2`. Tainted observations carry `tainted: true`. A tainted run never
+  reinforces an existing term. An alias whose key equals its own
   term or another active or candidate term is dropped; heardAs stays at most
-  five. A version conflict re-reads and retries, three attempts in total; an
-  existing observation is a no-op, so re-running a meeting keeps `hits`. A
+  five. A version conflict or a `TransactionConflict` cancellation
+  (`ErrDictTransactionConflict`) re-reads and retries, three attempts in
+  total; an existing observation is a no-op, and a meeting whose
+  acceptedTerms already lists the key (its observation was pruned) records the
+  observation again without a hit, so re-running a meeting keeps `hits`. A
+  meeting whose earlier write failed ambiguously is also listed and so may be
+  undercounted, never double-counted. A
   leftover observation without a term (failed eviction cleanup) is deleted
   before the create is retried.
 - **Caps.** Unedited automatic terms (active or suggested) are capped at 300 per
   scope; `EvictAutoTerm` (now also accepting `suggested`) removes the lowest
   `hits*2 + (lastSeen within 30 days ? 1 : 0)` first, oldest `lastSeenAt` on
-  ties, and its version and `userEditedAt` guards skip terms edited
-  meanwhile. Each term keeps its ten newest observations; `hits` is never
+  ties. When its version and `userEditedAt` guards fail, the row is re-read: a
+  row now gone, edited or tombstoned reduces the excess (a concurrent merge
+  may already have evicted it), and only a still-evictable newer row moves on
+  to the next candidate. Each term keeps its ten newest observations; `hits` is never
   decremented. Cleanup failures are surfaced. Account scope, the manual
   500-term cap and tombstone pruning are not implemented.
 

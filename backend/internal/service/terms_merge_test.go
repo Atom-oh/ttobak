@@ -85,7 +85,7 @@ func (s *memDictStore) CreateAutoTerm(_ context.Context, term *model.DictTerm, o
 	return nil
 }
 
-func (s *memDictStore) observe(op, fromState string, in repository.DictMergeInput) error {
+func (s *memDictStore) observe(op, fromState string, in repository.DictMergeInput, promotion *repository.DictPromotion) error {
 	if err := s.before(op); err != nil {
 		return err
 	}
@@ -101,17 +101,23 @@ func (s *memDictStore) observe(op, fromState string, in repository.DictMergeInpu
 		t.SourceTypes = in.SourceTypes
 	}
 	t.Version++
-	t.Hits++
+	switch {
+	case promotion != nil:
+		t.DisplayAs, t.Phrase, t.Type, t.Confidence = promotion.DisplayAs, promotion.Phrase, promotion.Type, promotion.Confidence
+		t.TranscribeKo, t.TranscribeEn, t.FirstSourceMeetingID, t.Hits = promotion.TranscribeKo, promotion.TranscribeEn, promotion.FirstSourceMeetingID, 1
+	case !in.SkipHit:
+		t.Hits++
+	}
 	s.terms[t.SK], s.obs[in.Observation.SK] = t, *in.Observation
 	return nil
 }
 
 func (s *memDictStore) MergeAutoObservation(_ context.Context, in repository.DictMergeInput) error {
-	return s.observe("merge", model.TermStateActive, in)
+	return s.observe("merge", model.TermStateActive, in, nil)
 }
 
-func (s *memDictStore) PromoteSuggestedTerm(_ context.Context, in repository.DictMergeInput) error {
-	return s.observe("promote", model.TermStateSuggested, in)
+func (s *memDictStore) PromoteSuggestedTerm(_ context.Context, in repository.DictMergeInput, content repository.DictPromotion) error {
+	return s.observe("promote", model.TermStateSuggested, in, &content)
 }
 
 func (s *memDictStore) EvictAutoTerm(_ context.Context, _ string, key string, v int64) (repository.DictWriteResult, error) {
@@ -298,8 +304,13 @@ func TestTaintedRunsOnlySuggestAndUntaintedRunsPromote(t *testing.T) {
 	m := newTestMerger(store)
 	tainted := ref("A")
 	tainted.Tainted = true
-	res := mustMerge(t, m, tainted, cand("AlphaGrid"))
+	planted := cand("AlphaGrid", "planted-alias")
+	planted.Phrase, planted.Type = "planted-phrase", "planted-type"
+	res := mustMerge(t, m, tainted, planted)
 	row, _ := store.term("AlphaGrid")
+	if !store.obs[model.DictObsSK(TermKey("AlphaGrid"), "A")].Tainted {
+		t.Fatal("a tainted run's observation must be marked")
+	}
 	if row.State != model.TermStateSuggested || res.Counters.Suggested != 1 || len(res.Accepted) != 1 {
 		t.Fatalf("a tainted meeting may only suggest: %+v %+v", res.Counters, row)
 	}
@@ -308,10 +319,59 @@ func TestTaintedRunsOnlySuggestAndUntaintedRunsPromote(t *testing.T) {
 	if res.Counters.SkippedTainted != 1 || len(store.obs) != 1 {
 		t.Fatalf("a tainted meeting must not reinforce a term: %+v", res.Counters)
 	}
-	res = mustMerge(t, m, ref("C"), cand("AlphaGrid"))
+	res = mustMerge(t, m, ref("C"), cand("AlphaGrid", "알파그리드"))
 	row, _ = store.term("AlphaGrid")
-	if res.Counters.Promoted != 1 || row.State != model.TermStateActive || row.Hits != 2 || row.UserEditedAt != "" {
+	if res.Counters.Promoted != 1 || row.State != model.TermStateActive || row.UserEditedAt != "" {
 		t.Fatalf("an untainted meeting promotes the suggestion: %+v %+v", res.Counters, row)
+	}
+	// Nothing the tainted run planted survives promotion, and its hit does
+	// not count: one tainted plus one untainted meeting is hits=1.
+	if row.Hits != 1 || strings.Join(row.HeardAs, "|") != "알파그리드" || row.Phrase != "" || row.Type != "" || row.FirstSourceMeetingID != "C" {
+		t.Fatalf("promotion must keep only the untainted run's evidence: %+v", row)
+	}
+	mustMerge(t, m, ref("D"), cand("AlphaGrid"))
+	if row, _ = store.term("AlphaGrid"); row.Hits != 2 {
+		t.Fatalf("a second untainted meeting reaches hits=2: %d", row.Hits)
+	}
+}
+
+func TestPrunedMeetingIsNotCountedAgain(t *testing.T) {
+	store := newMemDictStore()
+	key := TermKey("AlphaGrid")
+	store.seed(model.DictTerm{DisplayAs: "AlphaGrid", Origin: model.TermOriginAuto, State: model.TermStateActive, Hits: 11})
+	// m00's observation was pruned earlier; its acceptedTerms still lists the key.
+	r := ref("m00")
+	r.Accepted = []model.TermsAcceptedTerm{{TermKey: key, SourceTypes: []string{model.TermSourceTranscript}}}
+	res := mustMerge(t, newTestMerger(store), r, cand("AlphaGrid"))
+	row, _ := store.term("AlphaGrid")
+	if row.Hits != 11 || res.Counters.AlreadyCounted != 1 || res.Counters.Merged != 0 {
+		t.Fatalf("re-running a pruned meeting must not add a hit: hits=%d %+v", row.Hits, res.Counters)
+	}
+	if _, ok := store.obs[model.DictObsSK(key, "m00")]; !ok {
+		t.Fatal("the observation is recorded again as evidence")
+	}
+}
+
+func TestMergeRetriesTransactionConflicts(t *testing.T) {
+	store := newMemDictStore()
+	store.seed(model.DictTerm{DisplayAs: "AlphaGrid", Origin: model.TermOriginAuto, State: model.TermStateActive, Hits: 1})
+	store.failOn["merge"] = fmt.Errorf("%w: %w", repository.ErrDictTransactionConflict, repository.ErrDictTransactionCancelled)
+	store.hooks["merge"] = func() {
+		if store.calls["merge"] == 2 {
+			delete(store.failOn, "merge")
+		}
+	}
+	res := mustMerge(t, newTestMerger(store), ref("B"), cand("AlphaGrid"), cand("BetaGrid"))
+	row, _ := store.term("AlphaGrid")
+	if res.Counters.Merged != 1 || res.Counters.Created != 1 || row.Hits != 2 || store.calls["merge"] != 2 {
+		t.Fatalf("a transaction conflict must re-read and retry: %+v calls=%d", res.Counters, store.calls["merge"])
+	}
+
+	store = newMemDictStore()
+	store.failOn["create"] = fmt.Errorf("throttled: %w", repository.ErrDictTransactionCancelled)
+	res, err := newTestMerger(store).MergeExtractedTerms(context.Background(), "USER#owner", []ExtractedTerm{cand("AlphaGrid")}, ref("A"))
+	if err == nil || len(res.Accepted) != 0 {
+		t.Fatalf("a cancelled transaction applied nothing, so its key is not accepted: %v %+v", err, res)
 	}
 }
 
@@ -327,33 +387,70 @@ func TestAliasEqualToAnotherTermIsDropped(t *testing.T) {
 }
 
 func TestAutoCapEvictsLowestScoreThenOldest(t *testing.T) {
-	store := newMemDictStore()
 	recent := mergeClock.Add(-time.Hour).Format(model.DictTimeLayout)
 	old := mergeClock.Add(-60 * 24 * time.Hour).Format(model.DictTimeLayout)
 	older := mergeClock.Add(-90 * 24 * time.Hour).Format(model.DictTimeLayout)
-	for i := 0; i < MaxAutoTermsPerScope-4; i++ {
-		store.seed(model.DictTerm{DisplayAs: fmt.Sprintf("Term%03d", i), Origin: model.TermOriginAuto, State: model.TermStateActive, Hits: 1, LastSeenAt: recent})
-	}
-	// Score 2 (hits 1, stale): "Older" is evicted first, but the user edits
-	// it just before eviction, so the next lowest goes instead.
-	store.seed(model.DictTerm{DisplayAs: "OlderTerm", Origin: model.TermOriginAuto, State: model.TermStateActive, Hits: 1, LastSeenAt: older})
-	store.seed(model.DictTerm{DisplayAs: "OldTerm", Origin: model.TermOriginAuto, State: model.TermStateSuggested, Hits: 1, LastSeenAt: old})
-	store.seed(model.DictTerm{DisplayAs: "PopularOld", Origin: model.TermOriginAuto, State: model.TermStateActive, Hits: 5, LastSeenAt: older})
-	store.seed(model.DictTerm{DisplayAs: "ManualOld", Origin: model.TermOriginManual, State: model.TermStateActive, LastSeenAt: older})
-	store.hooks["evict"] = func() {
-		delete(store.hooks, "evict")
-		row, _ := store.term("OlderTerm")
-		row.UserEditedAt, row.Version = "now", row.Version+1
-		store.terms[row.SK] = row
-	}
-	res := mustMerge(t, newTestMerger(store), ref("A"), cand("NewTermA"), cand("NewTermB"))
-	if res.Counters.Created != 2 || res.Counters.Evicted != 1 || res.Counters.Conflicts != 1 {
-		t.Fatalf("301 auto terms must evict down to 300 (the edited one now exempt): %+v", res.Counters)
-	}
-	for display, want := range map[string]bool{"OlderTerm": true, "OldTerm": false, "PopularOld": true, "ManualOld": true, "NewTermA": true} {
-		if _, ok := store.term(display); ok != want {
-			t.Errorf("%s present=%v, want %v", display, ok, want)
+	// 296 + 3 seeded auto terms + 2 created = 301: one must go. "OlderTerm"
+	// (score 2, oldest) is the first target.
+	setup := func() *memDictStore {
+		store := newMemDictStore()
+		for i := 0; i < MaxAutoTermsPerScope-4; i++ {
+			store.seed(model.DictTerm{DisplayAs: fmt.Sprintf("Term%03d", i), Origin: model.TermOriginAuto, State: model.TermStateActive, Hits: 1, LastSeenAt: recent})
 		}
+		store.seed(model.DictTerm{DisplayAs: "OlderTerm", Origin: model.TermOriginAuto, State: model.TermStateActive, Hits: 1, LastSeenAt: older})
+		store.seed(model.DictTerm{DisplayAs: "OldTerm", Origin: model.TermOriginAuto, State: model.TermStateSuggested, Hits: 1, LastSeenAt: old})
+		store.seed(model.DictTerm{DisplayAs: "PopularOld", Origin: model.TermOriginAuto, State: model.TermStateActive, Hits: 5, LastSeenAt: older})
+		store.seed(model.DictTerm{DisplayAs: "ManualOld", Origin: model.TermOriginManual, State: model.TermStateActive, LastSeenAt: older})
+		return store
+	}
+	for _, tc := range []struct {
+		name      string
+		race      func(row *model.DictTerm, store *memDictStore)
+		evicted   int
+		wantTerms map[string]bool
+	}{
+		{"no race", nil, 1, map[string]bool{"OlderTerm": false, "OldTerm": true, "PopularOld": true, "ManualOld": true, "NewTermA": true}},
+		{"target merged meanwhile: next lowest goes", func(row *model.DictTerm, store *memDictStore) {
+			row.Version++
+			row.LastSeenAt = recent
+			store.terms[row.SK] = *row
+		}, 1, map[string]bool{"OlderTerm": true, "OldTerm": false, "PopularOld": true}},
+		{"target edited meanwhile: it no longer counts", func(row *model.DictTerm, store *memDictStore) {
+			row.UserEditedAt, row.Version = "now", row.Version+1
+			store.terms[row.SK] = *row
+		}, 0, map[string]bool{"OlderTerm": true, "OldTerm": true, "PopularOld": true}},
+		{"target evicted by a concurrent merge: no extra eviction", func(row *model.DictTerm, store *memDictStore) {
+			delete(store.terms, row.SK)
+		}, 0, map[string]bool{"OlderTerm": false, "OldTerm": true, "PopularOld": true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := setup()
+			if tc.race != nil {
+				store.hooks["evict"] = func() {
+					delete(store.hooks, "evict")
+					row, _ := store.term("OlderTerm")
+					tc.race(&row, store)
+				}
+			}
+			res := mustMerge(t, newTestMerger(store), ref("A"), cand("NewTermA"), cand("NewTermB"))
+			if res.Counters.Created != 2 || res.Counters.Evicted != tc.evicted {
+				t.Fatalf("unexpected eviction: %+v", res.Counters)
+			}
+			auto := 0
+			for _, row := range store.terms {
+				if evictable(row) {
+					auto++
+				}
+			}
+			if auto != MaxAutoTermsPerScope {
+				t.Fatalf("the scope must end with exactly %d automatic terms, got %d", MaxAutoTermsPerScope, auto)
+			}
+			for display, want := range tc.wantTerms {
+				if _, ok := store.term(display); ok != want {
+					t.Errorf("%s present=%v, want %v", display, ok, want)
+				}
+			}
+		})
 	}
 }
 
@@ -392,6 +489,22 @@ func TestAcceptedTermsStayWithinForty(t *testing.T) {
 	}
 	if _, ok := store.term("FreshTwo"); ok {
 		t.Fatal("a capped candidate must not be written, or deletion cleanup would miss it")
+	}
+}
+
+func TestSkippedCandidatesDoNotUseAcceptedRoom(t *testing.T) {
+	store := newMemDictStore()
+	store.seed(model.DictTerm{DisplayAs: "TombA", Origin: model.TermOriginAuto, State: model.TermStateDeleted})
+	store.seed(model.DictTerm{DisplayAs: "TombB", Origin: model.TermOriginAuto, State: model.TermStateDeleted})
+	var prior []model.TermsAcceptedTerm
+	for i := 0; i < model.MaxTermsAccepted-2; i++ {
+		prior = append(prior, model.TermsAcceptedTerm{TermKey: TermKey(fmt.Sprintf("Prior%02d", i))})
+	}
+	r := ref("A")
+	r.Accepted = prior
+	res := mustMerge(t, newTestMerger(store), r, cand("TombA"), cand("TombB"), cand("NewC"))
+	if _, ok := store.term("NewC"); !ok || res.Counters.Capped != 0 || len(res.Accepted) != model.MaxTermsAccepted-1 {
+		t.Fatalf("skipped tombstones must leave room for a later candidate: %d %+v", len(res.Accepted), res.Counters)
 	}
 }
 

@@ -206,26 +206,29 @@ func TestTermsAnalysisMapsConditionFailures(t *testing.T) {
 	}
 }
 
-func TestPromoteSuggestedTermActivatesAndCounts(t *testing.T) {
+func TestPromoteSuggestedTermActivatesAndRestartsHits(t *testing.T) {
 	_, obs := sampleTerm()
 	repo, calls := dictWire(t, nil)
 	in := DictMergeInput{PK: "USER#u1", TermKey: obs.TermKey, Observation: obs, HeardAs: []string{"알파"},
 		SourceTypes: []string{model.TermSourceTranscript}, SeenAt: "now", ExpectedVersion: 2}
-	if err := repo.PromoteSuggestedTerm(context.Background(), in); err != nil {
+	if err := repo.PromoteSuggestedTerm(context.Background(), in, DictPromotion{DisplayAs: "AlphaGrid", FirstSourceMeetingID: "m1"}); err != nil {
 		t.Fatal(err)
 	}
 	items := txItems(t, (*calls)[0])
 	if _, ok := items[0]["Put"]; !ok || len(items) != 2 {
 		t.Fatal("promotion must create the observation and update the term atomically")
 	}
-	requireAll(t, "promote", resolved(items[1]["Update"].(map[string]any), "UpdateExpression"),
-		`state = {"S":"active"}`, "ADD hits", "sourceTypes", "heardAs", "lastSeenAt", "version")
+	update := resolved(items[1]["Update"].(map[string]any), "UpdateExpression")
+	requireAll(t, "promote", update, `state = {"S":"active"}`, `hits = {"N":"1"}`, "sourceTypes", "heardAs", "lastSeenAt", "version")
+	if strings.Contains(update, "ADD") {
+		t.Fatalf("the tainted suggestion's hit must not count: %s", update)
+	}
 
 	bad := in
 	other := *obs
 	other.SK = model.DictObsSK(obs.TermKey, "m2")
 	bad.Observation = &other
-	if err := repo.PromoteSuggestedTerm(context.Background(), bad); err == nil {
+	if err := repo.PromoteSuggestedTerm(context.Background(), bad, DictPromotion{DisplayAs: "AlphaGrid"}); err == nil {
 		t.Fatal("an observation key for another meeting must be rejected")
 	}
 }

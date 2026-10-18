@@ -16,9 +16,11 @@ import (
 // Terms analysis run state follows the action-items CAS: every transition is
 // conditioned on the observed run identity, status and lease. Queue, Start,
 // RenewLease and Complete also carry a ConditionCheck on the meeting item, so
-// a late write cannot outlive a deleted meeting. Fail is a single conditional
-// update of an existing row and never creates one; callers run it with a
-// detached short (3 s) context.
+// those transitions fail once the meeting item is gone. Fail is a single
+// conditional update of an existing row with no meeting check and never
+// creates one; callers run it with a detached short (3 s) context. Meeting
+// deletion does not yet remove ANALYSIS#terms or the meeting's DICTOBS# rows
+// (design A8); that cleanup must ship before or with the first writer.
 
 func termsAnalysisKey(meetingID string) map[string]types.AttributeValue {
 	return map[string]types.AttributeValue{

@@ -37,7 +37,7 @@ type TermsMergeStore interface {
 	ListDictObs(ctx context.Context, pk, termKey string) ([]model.DictObservation, error)
 	CreateAutoTerm(ctx context.Context, term *model.DictTerm, obs *model.DictObservation) error
 	MergeAutoObservation(ctx context.Context, in repository.DictMergeInput) error
-	PromoteSuggestedTerm(ctx context.Context, in repository.DictMergeInput) error
+	PromoteSuggestedTerm(ctx context.Context, in repository.DictMergeInput, content repository.DictPromotion) error
 	EvictAutoTerm(ctx context.Context, pk, termKey string, expectedVersion int64) (repository.DictWriteResult, error)
 	DeleteDictObs(ctx context.Context, pk, sk string) error
 }
@@ -59,7 +59,9 @@ type ExtractedTerm struct {
 // TermsMeetingRef identifies the source meeting of a merge. Tainted means a
 // non-owner edited a source (A2.1): new terms are only suggested and
 // existing terms are not reinforced. Accepted is the meeting's prior
-// acceptedTerms list, which the merge extends.
+// acceptedTerms list, which the merge extends; a key already in it means the
+// meeting was counted for that term, so a pruned observation is re-recorded
+// without another hit.
 type TermsMeetingRef struct {
 	OwnerID           string
 	MeetingID         string
@@ -107,13 +109,15 @@ const (
 //	none                    -> CreateAutoTerm (active, or suggested when tainted), hits=1
 //	tombstone               -> skip
 //	manual or userEditedAt  -> skip
-//	suggested, untainted    -> PromoteSuggestedTerm (version CAS) + observation
+//	suggested, untainted    -> PromoteSuggestedTerm (version CAS) + observation;
+//	                           the tainted content is replaced and hits restarts at 1
 //	auto active, untainted  -> MergeAutoObservation (version CAS)
 //	existing, tainted       -> skip
 //
 // A heardAs whose key is another term's key is dropped. Version conflicts
-// re-read and retry up to three attempts; an already recorded observation is
-// a no-op. Afterwards the scope's automatic terms are capped at 300 and each
+// and transaction conflicts re-read and retry up to three attempts; an already
+// recorded observation is a no-op, and a meeting already in ref.Accepted whose
+// observation was pruned is recorded again without a hit. Afterwards the scope's automatic terms are capped at 300 and each
 // observed term keeps at most 10 observations.
 func (m *TermsMerger) MergeExtractedTerms(ctx context.Context, scopePK string, candidates []ExtractedTerm, ref TermsMeetingRef) (*TermsMergeResult, error) {
 	if ref.OwnerID == "" || ref.MeetingID == "" || scopePK != model.PrefixUser+ref.OwnerID {
@@ -144,6 +148,12 @@ func (m *TermsMerger) MergeExtractedTerms(ctx context.Context, scopePK string, c
 
 	var cleanup []error
 	for _, c := range merged {
+		// Only a written observation takes an acceptedTerms slot, so the
+		// room check runs per candidate, after earlier skips freed theirs.
+		if acceptedIndex(result.Accepted, c.key) < 0 && len(result.Accepted) >= model.MaxTermsAccepted {
+			result.Counters.Capped++
+			continue
+		}
 		outcome, err := m.mergeOne(ctx, scopePK, c, byKey[c.key], termKeys, ref, result, &cleanup)
 		if outcome == outcomeObserved {
 			addAccepted(result, c.key, c.SourceTypes)
@@ -161,9 +171,8 @@ func (m *TermsMerger) MergeExtractedTerms(ctx context.Context, scopePK string, c
 	return result, nil
 }
 
-// prepare drops structurally invalid candidates, folds duplicates of a key
-// into the first, and keeps only keys that fit acceptedTerms: a key already
-// accepted always fits, a new one only while the list has room.
+// prepare drops structurally invalid candidates and folds duplicates of a key
+// into the first.
 func (m *TermsMerger) prepare(candidates []ExtractedTerm, result *TermsMergeResult) []mergeCandidate {
 	index := map[string]int{}
 	var merged []mergeCandidate
@@ -186,19 +195,7 @@ func (m *TermsMerger) prepare(candidates []ExtractedTerm, result *TermsMergeResu
 		c.SourceTypes = unionStrings(nil, c.SourceTypes)
 		merged = append(merged, mergeCandidate{ExtractedTerm: c, key: key})
 	}
-	room := model.MaxTermsAccepted - len(result.Accepted)
-	kept := merged[:0]
-	for _, c := range merged {
-		if acceptedIndex(result.Accepted, c.key) >= 0 {
-			kept = append(kept, c)
-		} else if room > 0 {
-			room--
-			kept = append(kept, c)
-		} else {
-			result.Counters.Capped++
-		}
-	}
-	return kept
+	return merged
 }
 
 func validSourceTypes(types []string) bool {
@@ -286,7 +283,7 @@ func (m *TermsMerger) mergeOne(ctx context.Context, pk string, c mergeCandidate,
 		obs := &model.DictObservation{
 			PK: pk, SK: model.DictObsSK(c.key, ref.MeetingID), TermKey: c.key, MeetingID: ref.MeetingID,
 			OwnerID: ref.OwnerID, HeardAs: obsHeard, SourceTypes: c.SourceTypes,
-			SummaryGeneration: ref.SummaryGeneration, NotesSafe: ref.NotesSafe,
+			SummaryGeneration: ref.SummaryGeneration, NotesSafe: ref.NotesSafe, Tainted: ref.Tainted,
 			CreatedAt: now, EntityType: model.EntityTypeDictObservation,
 		}
 		var err error
@@ -320,21 +317,38 @@ func (m *TermsMerger) mergeOne(ctx context.Context, pk string, c mergeCandidate,
 		case ref.Tainted:
 			counters.SkippedTainted++
 			return outcomeSkipped, nil
+		case term.State == model.TermStateSuggested:
+			// The suggestion's aliases, sources, content and hit came from
+			// a tainted run; only this untainted run's evidence survives.
+			in := repository.DictMergeInput{
+				PK: pk, TermKey: c.key, Observation: obs, SeenAt: now, ExpectedVersion: term.Version,
+				HeardAs: obsHeard, SourceTypes: c.SourceTypes,
+			}
+			err = m.store.PromoteSuggestedTerm(ctx, in, repository.DictPromotion{
+				DisplayAs: strings.TrimSpace(c.DisplayAs), Phrase: c.Phrase, Type: c.Type,
+				Confidence: c.Confidence, TranscribeKo: c.TranscribeKo, TranscribeEn: c.TranscribeEn,
+				FirstSourceMeetingID: ref.MeetingID,
+			})
+			if err == nil {
+				counters.Promoted++
+				m.pruneObservations(ctx, pk, c.key, counters, cleanup)
+				return outcomeObserved, nil
+			}
+			if errors.Is(err, repository.ErrDictObservationExists) {
+				counters.AlreadyCounted++
+				return outcomeObserved, nil
+			}
 		default:
 			in := repository.DictMergeInput{
 				PK: pk, TermKey: c.key, Observation: obs, SeenAt: now, ExpectedVersion: term.Version,
 				HeardAs:     cleanHeardAs(c.key, termKeys, append(append([]string(nil), term.HeardAs...), obsHeard...), new(int)),
 				SourceTypes: unionStrings(term.SourceTypes, c.SourceTypes),
+				SkipHit:     acceptedIndex(ref.Accepted, c.key) >= 0,
 			}
-			promote := term.State == model.TermStateSuggested
-			if promote {
-				err = m.store.PromoteSuggestedTerm(ctx, in)
-			} else {
-				err = m.store.MergeAutoObservation(ctx, in)
-			}
+			err = m.store.MergeAutoObservation(ctx, in)
 			if err == nil {
-				if promote {
-					counters.Promoted++
+				if in.SkipHit {
+					counters.AlreadyCounted++
 				} else {
 					counters.Merged++
 				}
@@ -346,11 +360,16 @@ func (m *TermsMerger) mergeOne(ctx context.Context, pk string, c mergeCandidate,
 				return outcomeObserved, nil
 			}
 		}
-		if !errors.Is(err, repository.ErrDictTermConflict) {
-			// The write may have committed (an ambiguous response), so the
-			// key is still recorded for deletion cleanup.
-			return outcomeObserved, fmt.Errorf("failed to merge dictionary term: %w", err)
+		if errors.Is(err, repository.ErrDictTermConflict) || errors.Is(err, repository.ErrDictTransactionConflict) {
+			continue // re-read and retry
 		}
+		if errors.Is(err, repository.ErrDictTransactionCancelled) {
+			// A cancelled transaction applied nothing.
+			return outcomeSkipped, fmt.Errorf("failed to merge dictionary term: %w", err)
+		}
+		// Any other failure may have committed (an ambiguous response), so
+		// the key is still recorded for deletion cleanup.
+		return outcomeObserved, fmt.Errorf("failed to merge dictionary term: %w", err)
 	}
 	counters.Conflicts++
 	return outcomeSkipped, nil
@@ -373,7 +392,8 @@ func newAutoTerm(pk string, c mergeCandidate, heard []string, ref TermsMeetingRe
 }
 
 // pruneObservations deletes the oldest observations beyond ten. hits is not
-// decremented. Failures are surfaced, not fatal.
+// decremented; the meeting's acceptedTerms entry keeps it from being counted
+// again (SkipHit). Failures are surfaced, not fatal.
 func (m *TermsMerger) pruneObservations(ctx context.Context, pk, key string, counters *model.TermsCounters, cleanup *[]error) {
 	rows, err := m.store.ListDictObs(ctx, pk, key)
 	if err != nil {
@@ -414,9 +434,10 @@ func termScore(t model.DictTerm, now time.Time) int {
 }
 
 // enforceAutoCap evicts the lowest-scoring, then least recently seen,
-// unedited automatic terms until at most 300 remain. A term that changed
-// since it was listed (version, user edit) is skipped by EvictAutoTerm's
-// guard and the next one is tried.
+// unedited automatic terms until at most 300 remain. When EvictAutoTerm's
+// guard fails the row is re-read: a row now gone, edited or tombstoned no
+// longer counts toward the cap (a concurrent merge may have evicted it), so
+// it reduces the excess; one that is merely newer is skipped for the next.
 func (m *TermsMerger) enforceAutoCap(ctx context.Context, pk string, result *TermsMergeResult, cleanup *[]error) error {
 	rows, err := m.store.ListDictTerms(ctx, pk)
 	if err != nil {
@@ -450,6 +471,13 @@ func (m *TermsMerger) enforceAutoCap(ctx context.Context, pk string, result *Ter
 		res, err := m.store.EvictAutoTerm(ctx, pk, row.TermKey, row.Version)
 		if errors.Is(err, repository.ErrDictTermConflict) {
 			result.Counters.Conflicts++
+			fresh, getErr := m.store.GetDictTerm(ctx, pk, row.TermKey)
+			if getErr != nil {
+				return fmt.Errorf("failed to re-read dictionary term for the cap: %w", getErr)
+			}
+			if fresh == nil || !evictable(*fresh) {
+				excess--
+			}
 			continue
 		}
 		if err != nil {
