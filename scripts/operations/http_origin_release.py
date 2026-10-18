@@ -914,9 +914,12 @@ def main():
     parser.add_argument("--receipt", default=str(ROOT / "build/verification/http-origin-release.json"))
     args = parser.parse_args()
     release = None
+    client_error_type = None
     try:
         import boto3
         from botocore.config import Config
+        from botocore.exceptions import ClientError
+        client_error_type = ClientError
         session = boto3.Session(profile_name=args.profile, region_name=args.region)
         config = Config(connect_timeout=3, read_timeout=40, retries={"total_max_attempts": 1})
         account = session.client("sts", config=config).get_caller_identity()["Account"]
@@ -950,6 +953,11 @@ def main():
         return 0
     except Exception as error:
         code = str(error) if isinstance(error, ReleaseError) else "OPERATION_FAILED_OR_OUTCOME_UNKNOWN"
+        if (client_error_type is not None and isinstance(error, client_error_type)
+                and error.operation_name == "Invoke"
+                and isinstance(error.response.get("Error"), dict)
+                and error.response["Error"].get("Code") == "AccessDeniedException"):
+            code = "CONSUMER_INVOKE_ACCESS_DENIED"
         result = release.receipt("incomplete", code) if release else {"status": "incomplete", "code": code}
         try:
             save_receipt(args.receipt, result)

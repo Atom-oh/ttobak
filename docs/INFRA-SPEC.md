@@ -111,7 +111,14 @@ reader readiness and live proof agreement, seeds the same proof, then performs a
 bounded consumer-first rotation with cache drains and retired-proof rejection
 checks. Current source does not prove the live rotation completed: retain its
 redacted receipt. See the [HTTP proof migration contract](runbooks/http-origin-secret-migration.md).
-GatewayStack's optional `ttobak:httpOriginReleaseCiRoleName` context grants the existing CI role only `GetSecretValue`, `PutSecretValue` and `UpdateSecretVersionStage` on the exact `HttpOriginSecretArn` parameter; management-role bootstrap remains separate, and source does not prove deployed permissions or CI acceptance.
+GatewayStack's optional `ttobak:httpOriginReleaseCiRoleName` context keeps
+`GetSecretValue`, `PutSecretValue` and `UpdateSecretVersionStage` on the exact
+`HttpOriginSecretArn` parameter and adds `lambda:InvokeFunction` only on the four
+existing same-account, same-region coordinator targets: `ttobak-api`,
+`ttobak-api:live`, `ttobak-qa` and `ttobak-mcp`. These statements share the existing
+CI-role policy; missing context or boolean `false` omits it. Management-role
+bootstrap remains separate. Source does not prove deployed permissions, CI
+acceptance or completed release; see the [coordinator guide](../scripts/operations/HTTP_ORIGIN_RELEASE.md).
 This HTTP rollout is distinct from the required WS secret. Existing browser Cognito/Transcribe SDK calls, signed S3
 PUTs and IAM-signed server callback requests are separate service integrations,
 not newly approved public application origins.
