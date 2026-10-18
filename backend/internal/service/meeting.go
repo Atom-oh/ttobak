@@ -123,6 +123,7 @@ type meetingRepo interface {
 	ListMeetingRefsForAccountPage(ctx context.Context, accountID, cursor string, limit int32) ([]model.MeetingRef, *string, error)
 	PutMeetingRef(ctx context.Context, ref *model.MeetingRef) error
 	PutAccountInsights(ctx context.Context, insights []model.AccountInsight) error
+	ClearAccountInsights(ctx context.Context, ownerID, meetingID, accountID, generation, revision string) error
 	PutPendingShare(ctx context.Context, share *model.PendingShare) error
 	ListPendingShares(ctx context.Context, email string) ([]model.PendingShare, error)
 	GetPendingShare(ctx context.Context, email, sk string) (*model.PendingShare, error)
@@ -1654,6 +1655,12 @@ func (s *MeetingService) ShareMeetingToAccount(ctx context.Context, ownerID, own
 
 	if items, berr := BuildAccountInsights(accountID, meeting); berr == nil && len(items) > 0 {
 		if err := s.repo.PutAccountInsights(ctx, items); err != nil {
+			return nil, err
+		}
+	} else if berr == nil {
+		// Republication must not revive rows from an earlier nonempty fanout.
+		if err := s.repo.ClearAccountInsights(ctx, ownerID, meetingID, accountID,
+			meeting.SummaryGeneration(), meeting.InsightsRevision); err != nil {
 			return nil, err
 		}
 	}

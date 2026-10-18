@@ -350,6 +350,10 @@ func (m *mockHandlerMeetingRepo) PutAccountInsights(_ context.Context, insights 
 	return nil
 }
 
+func (m *mockHandlerMeetingRepo) ClearAccountInsights(context.Context, string, string, string, string, string) error {
+	return nil
+}
+
 // --- Tests ---
 
 func TestCreateMeetingHandler(t *testing.T) {

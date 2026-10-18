@@ -386,7 +386,7 @@ func (r *DynamoDBRepository) CompleteResummary(ctx context.Context, snapshot *mo
 		found := false
 		for i := 2; i < len(items); i++ {
 			check := items[i].ConditionCheck
-			if check != nil && check.Key["SK"].(*types.AttributeValueMemberS).Value == model.ActionAnalysisSK {
+			if sk, ok := summaryCheckSK(check); ok && sk == model.ActionAnalysisSK {
 				found = true
 				items[i] = types.TransactWriteItem{Delete: &types.Delete{
 					TableName: check.TableName, Key: check.Key, ConditionExpression: check.ConditionExpression,
@@ -415,4 +415,15 @@ func (r *DynamoDBRepository) CompleteResummary(ctx context.Context, snapshot *mo
 func summaryKey(meetingID string) map[string]types.AttributeValue {
 	return map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
 		"SK": &types.AttributeValueMemberS{Value: model.ResummarySK}}
+}
+
+func summaryCheckSK(check *types.ConditionCheck) (string, bool) {
+	if check == nil {
+		return "", false
+	}
+	sk, ok := check.Key["SK"].(*types.AttributeValueMemberS)
+	if !ok {
+		return "", false
+	}
+	return sk.Value, true
 }

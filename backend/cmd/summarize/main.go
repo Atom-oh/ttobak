@@ -640,6 +640,12 @@ func generateSummaryRun(ctx context.Context, meeting *model.Meeting, priorContex
 	} else if current != nil && current.SharedToAccount && current.AccountID != "" {
 		if items, err := service.BuildAccountInsights(current.AccountID, current); err != nil {
 			log.Printf("Failed to build account insights (non-fatal): %v", err)
+		} else if len(items) == 0 {
+			// A validated empty result must not leave the previous account copy readable.
+			if err := repo.ClearAccountInsights(ctx, userID, meetingID, current.AccountID,
+				current.SummaryGeneration(), current.InsightsRevision); err != nil {
+				log.Printf("Failed to clear stale account insights (non-fatal): %v", err)
+			}
 		} else if err := repo.PutAccountInsights(ctx, items); err != nil {
 			log.Printf("Failed to fan out current insights (non-fatal): %v", err)
 		}

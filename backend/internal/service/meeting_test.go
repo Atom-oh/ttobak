@@ -564,6 +564,17 @@ func (m *mockMeetingRepo) PutAccountInsights(_ context.Context, insights []model
 	return nil
 }
 
+func (m *mockMeetingRepo) ClearAccountInsights(_ context.Context, _, meetingID, accountID, _, _ string) error {
+	kept := m.accountInsights[:0]
+	for _, ai := range m.accountInsights {
+		if ai.PK != model.PrefixAccount+accountID || ai.SourceID != meetingID {
+			kept = append(kept, ai)
+		}
+	}
+	m.accountInsights = kept
+	return nil
+}
+
 // --- Tests ---
 
 func (m *mockMeetingRepo) addMember(accountID, userID, role string) {
@@ -2108,5 +2119,9 @@ func TestShareMeetingToAccount_ReplacesStaleInsights(t *testing.T) {
 	}
 	if repo.accountInsights[0].Text != "a-updated" {
 		t.Errorf("expected updated insight text, got %q", repo.accountInsights[0].Text)
+	}
+	repo.addMeeting(&model.Meeting{MeetingID: "m-1", UserID: "owner-1", Status: model.StatusDone, Date: when, Insights: "[]"})
+	if _, err := svc.ShareMeetingToAccount(context.Background(), "owner-1", "o@x.com", "m-1", "acc-1"); err != nil || len(repo.accountInsights) != 0 {
+		t.Fatalf("validated empty insights must clear the account copy: %v %d", err, len(repo.accountInsights))
 	}
 }
