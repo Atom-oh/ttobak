@@ -44,12 +44,16 @@ func summaryCheck(pk, sk string, item map[string]types.AttributeValue, fields []
 		value, exists := item[name]
 		field := model.SummaryValue{Present: exists}
 		if exists {
-			// A number set must be pinned as stored: decoding it into an interface yields
-			// []float64, which re-marshals as a list and can never equal the stored NS.
-			if set, ok := value.(*types.AttributeValueMemberNS); ok {
-				field.Value = set
-			} else if err := attributevalue.Unmarshal(value, &field.Value); err != nil {
-				return check, err
+			// Preserve set wire types in equality fences. Decoding into an
+			// interface produces a slice that re-marshals as a list, which
+			// cannot equal the stored String Set or Number Set.
+			switch value.(type) {
+			case *types.AttributeValueMemberSS, *types.AttributeValueMemberNS:
+				field.Value = value
+			default:
+				if err := attributevalue.Unmarshal(value, &field.Value); err != nil {
+					return check, err
+				}
 			}
 		}
 		check.Fields[name] = field
@@ -109,7 +113,7 @@ func (r *DynamoDBRepository) captureMeetingSummaryMetadata(ctx context.Context, 
 // CaptureMeetingSummary records exact stored presence before source selection.
 // Hydration binds the effective selected field to bytes separately.
 func (r *DynamoDBRepository) CaptureMeetingSummary(ctx context.Context, ownerID, meetingID string) (*model.SummarySnapshot, error) {
-	return r.captureMeetingSummaryMetadata(ctx, ownerID, meetingID, batchSummaryFields)
+	return r.captureMeetingSummaryMetadata(ctx, ownerID, meetingID, withSummaryClearanceFields(batchSummaryFields))
 }
 
 func validSummarySnapshot(snapshot *model.SummarySnapshot) bool {
