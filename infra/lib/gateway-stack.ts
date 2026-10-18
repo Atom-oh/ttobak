@@ -64,6 +64,21 @@ export interface GatewayStackProps extends cdk.StackProps {
   simCodeInterpreterId?: string;
 }
 
+/**
+ * Reads a non-negative integer limit from CDK context and renders it as a
+ * Lambda env string. A context value changes the function configuration, so
+ * the live alias publishes a new version; invalid values fail synth.
+ */
+export function rateLimitContext(scope: Construct, key: string, defaultValue: number): string {
+  const raw = scope.node.tryGetContext(key);
+  if (raw === undefined || raw === null || raw === '') return String(defaultValue);
+  const text = String(raw).trim();
+  if (!/^\d{1,9}$/.test(text)) {
+    throw new Error(`${key} must be a non-negative integer (0 disables the limit), got ${JSON.stringify(raw)}`);
+  }
+  return String(Number(text));
+}
+
 export class GatewayStack extends cdk.Stack {
   /** Present only when ttobak:mcpResourceAudience enables HTTP MCP. */
   public readonly mcpFunction?: lambda.Function;
@@ -153,6 +168,9 @@ export class GatewayStack extends cdk.Stack {
         // Live interpreter for /api/translate quality=high; must match AiStack's
         // InvokeInterpreterModel grant. Unset/blank means Amazon Translate only.
         BEDROCK_TRANSLATE_MODEL_ID: 'global.openai.gpt-6-luna',
+        // Per-user hourly /api/translate cost guard (0 disables a limit).
+        TRANSLATE_HOURLY_LIMIT: rateLimitContext(this, 'ttobak:translateHourlyLimit', 3000),
+        TRANSLATE_HIGH_HOURLY_LIMIT: rateLimitContext(this, 'ttobak:translateHighHourlyLimit', 1500),
         FRONTEND_BASE_URL: `https://${domainName}`,
         // Same-domain CloudFront-signed download URLs (ADR-027). Key material
         // comes from fixed-name SSM params (/ttobak/cloudfront/*) at runtime,

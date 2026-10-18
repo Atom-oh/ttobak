@@ -4,9 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
+	"github.com/ttobak/backend/internal/middleware"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/service"
 )
@@ -18,6 +22,15 @@ const (
 	translateMaxContextItems = 2
 	translateMaxContextBytes = 2000
 	translateMaxBodyBytes    = 32 * 1024
+
+	// Per-user hourly counters. Every accepted request counts toward the
+	// total; "high" requests also count toward the interpreter budget.
+	translateRateBucket     = "translate"
+	translateHighRateBucket = "translate-high"
+	translateRateWindow     = time.Hour
+
+	DefaultTranslateHourlyLimit     = 3000
+	DefaultTranslateHighHourlyLimit = 1500
 )
 
 var (
@@ -29,12 +42,65 @@ type segmentTranslator interface {
 	TranslateSegment(context.Context, service.TranslateRequest) (service.TranslateResult, error)
 }
 
+type translateLimiter interface {
+	Exceeds(ctx context.Context, userID, bucket string, window time.Duration, n, limit int64) (bool, service.WindowUsage)
+}
+
+// TranslateLimits are hourly per-user request limits; 0 disables one.
+type TranslateLimits struct {
+	Hourly     int64
+	HighHourly int64
+}
+
 type TranslateHandler struct {
 	translateService segmentTranslator
+	limiter          translateLimiter
+	limits           TranslateLimits
+	now              func() time.Time
 }
 
 func NewTranslateHandler(translateService segmentTranslator) *TranslateHandler {
-	return &TranslateHandler{translateService: translateService}
+	return &TranslateHandler{translateService: translateService, now: time.Now}
+}
+
+// SetRateLimits enables the cost guard. It is an abuse brake, not an access
+// boundary: the limiter fails open when its storage is unavailable.
+func (h *TranslateHandler) SetRateLimits(limiter translateLimiter, limits TranslateLimits) {
+	h.limiter = limiter
+	h.limits = limits
+}
+
+// translateMeter is the per-request metering line. It never carries segment
+// text or the user ID.
+type translateMeter struct {
+	Event          string `json:"evt"`
+	Quality        string `json:"q"`
+	Engine         string `json:"engine"`
+	Source         string `json:"src"`
+	Target         string `json:"tgt"`
+	InBytes        int    `json:"inBytes"`
+	OutBytes       int    `json:"outBytes"`
+	Millis         int64  `json:"ms"`
+	Glossary       bool   `json:"glossary"`
+	Limited        bool   `json:"limited"`
+	FallbackReason string `json:"fallbackReason"`
+}
+
+func logTranslateMeter(m translateMeter) {
+	m.Event = "translate"
+	line, err := json.Marshal(m)
+	if err != nil {
+		return
+	}
+	log.Print(string(line))
+}
+
+func retryAfterSeconds(now, windowEnd time.Time) string {
+	seconds := int64(math.Ceil(windowEnd.Sub(now).Seconds()))
+	if seconds < 1 {
+		seconds = 1
+	}
+	return strconv.FormatInt(seconds, 10)
 }
 
 type translateRequest struct {
@@ -98,6 +164,25 @@ func (h *TranslateHandler) Translate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	requestedQuality := req.Quality
+	limited := false
+	if userID := middleware.GetUserID(r.Context()); h.limiter != nil && userID != "" {
+		over, usage := h.limiter.Exceeds(r.Context(), userID, translateRateBucket, translateRateWindow, 1, h.limits.Hourly)
+		if over {
+			log.Printf(`{"evt":"translate_denied","q":%q,"src":%q,"tgt":%q}`, requestedQuality, req.SourceLang, req.TargetLang)
+			w.Header().Set("Retry-After", retryAfterSeconds(h.now(), usage.WindowEnd))
+			writeError(w, http.StatusTooManyRequests, model.ErrCodeRateLimited, "Translation limit reached; try again later")
+			return
+		}
+		if req.Quality == service.TranslateQualityHigh {
+			if over, _ := h.limiter.Exceeds(r.Context(), userID, translateHighRateBucket, translateRateWindow, 1, h.limits.HighHourly); over {
+				req.Quality = service.TranslateQualityFast
+				limited = true
+			}
+		}
+	}
+
+	started := h.now()
 	result, err := h.translateService.TranslateSegment(r.Context(), service.TranslateRequest{
 		Text: req.Text, SourceLang: req.SourceLang, TargetLang: req.TargetLang,
 		Context: req.Context, Quality: req.Quality,
@@ -109,11 +194,18 @@ func (h *TranslateHandler) Translate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{
+	logTranslateMeter(translateMeter{
+		Quality: requestedQuality, Engine: result.Engine, Source: req.SourceLang, Target: req.TargetLang,
+		InBytes: len(req.Text), OutBytes: len(result.Text), Millis: h.now().Sub(started).Milliseconds(),
+		Limited: limited, FallbackReason: result.FallbackReason,
+	})
+
+	writeJSON(w, http.StatusOK, map[string]any{
 		"translatedText": result.Text,
 		"sourceLang":     req.SourceLang,
 		"targetLang":     req.TargetLang,
 		"quality":        req.Quality,
 		"engine":         result.Engine,
+		"limited":        limited,
 	})
 }

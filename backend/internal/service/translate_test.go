@@ -220,3 +220,80 @@ func TestInterpreterRequestKeepsSegmentTextAsData(t *testing.T) {
 		t.Fatalf("round-tripped input = %+v", input)
 	}
 }
+
+type capturingTextTranslator struct {
+	inputs []*translate.TranslateTextInput
+}
+
+func (f *capturingTextTranslator) TranslateText(_ context.Context, in *translate.TranslateTextInput, _ ...func(*translate.Options)) (*translate.TranslateTextOutput, error) {
+	f.inputs = append(f.inputs, in)
+	return &translate.TranslateTextOutput{TranslatedText: aws.String("out")}, nil
+}
+
+func TestMachineTranslateRequestShape(t *testing.T) {
+	tests := []struct {
+		name       string
+		source     string
+		target     string
+		wantFormal bool
+	}{
+		{"korean target is formal", "en", "ko", true},
+		{"auto source to korean is formal", "auto", "ko", true},
+		{"english target has no settings", "ko", "en", false},
+		{"japanese target keeps provider default", "ko", "ja", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &capturingTextTranslator{}
+			s := &TranslateService{client: client, llmTimeout: translateLLMTimeout}
+			if _, err := s.Translate(context.Background(), "synthetic segment", tt.source, tt.target); err != nil {
+				t.Fatal(err)
+			}
+			in := client.inputs[0]
+			if aws.ToString(in.SourceLanguageCode) != tt.source || aws.ToString(in.TargetLanguageCode) != tt.target {
+				t.Fatalf("languages = %s -> %s", aws.ToString(in.SourceLanguageCode), aws.ToString(in.TargetLanguageCode))
+			}
+			if !tt.wantFormal {
+				if in.Settings != nil {
+					t.Fatalf("settings = %+v, want nil", in.Settings)
+				}
+				return
+			}
+			if in.Settings == nil || in.Settings.Formality != "FORMAL" {
+				t.Fatalf("settings = %+v, want FORMAL", in.Settings)
+			}
+			if in.Settings.Profanity != "" || in.Settings.Brevity != "" {
+				t.Fatalf("only formality may be set: %+v", in.Settings)
+			}
+		})
+	}
+}
+
+func TestTranslateSegmentFallbackReason(t *testing.T) {
+	tests := []struct {
+		name    string
+		invoker *fakeModelInvoker
+		text    string
+		quality string
+		engine  string
+		reason  string
+	}{
+		{"fast has no reason", &fakeModelInvoker{body: chatResponse("hi", "stop")}, "안녕", TranslateQualityFast, TranslateEngineTranslate, ""},
+		{"high success", &fakeModelInvoker{body: chatResponse("hi", "stop")}, "안녕", TranslateQualityHigh, TranslateEngineLLM, ""},
+		{"high without model", nil, "안녕", TranslateQualityHigh, TranslateEngineTranslate, TranslateFallbackUnavailable},
+		{"high too long", &fakeModelInvoker{body: chatResponse("hi", "stop")}, strings.Repeat("a", translateLLMMaxBytes+1), TranslateQualityHigh, TranslateEngineTranslate, TranslateFallbackTooLong},
+		{"high model error", &fakeModelInvoker{err: errors.New("throttled")}, "안녕", TranslateQualityHigh, TranslateEngineTranslate, TranslateFallbackLLMError},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newTestTranslateService(&fakeTextTranslator{out: "mt"}, tt.invoker, lunaID)
+			got, err := s.TranslateSegment(context.Background(), TranslateRequest{Text: tt.text, SourceLang: "ko", TargetLang: "en", Quality: tt.quality})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Engine != tt.engine || got.FallbackReason != tt.reason {
+				t.Fatalf("got engine=%s reason=%q", got.Engine, got.FallbackReason)
+			}
+		})
+	}
+}

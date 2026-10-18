@@ -182,6 +182,12 @@ use Haiku 5.5. QA detection and Translate are separate service/model choices.
 The API Lambda's `BEDROCK_TRANSLATE_MODEL_ID` selects GPT-6 Luna for
 `/api/translate` `quality=high`; only the API role receives that exact
 model/profile grant (`InvokeInterpreterModel`), with Amazon Translate as fallback.
+The API Lambda also receives `TRANSLATE_HOURLY_LIMIT` (default 3000) and
+`TRANSLATE_HIGH_HOURLY_LIMIT` (default 1500) from CDK context
+`ttobak:translateHourlyLimit` / `ttobak:translateHighHourlyLimit`; synth rejects
+values that are not non-negative integers, and 0 disables a limit. Changing either
+changes the function configuration and publishes a new `live` alias version. The
+counters use the existing table grant and `pendingShareExpiresAt` TTL.
 
 The Go API also depends on the transcribe Lambda so recovered-copy event guards
 are installed before the recovery producer changes.

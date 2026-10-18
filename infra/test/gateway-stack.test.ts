@@ -18,7 +18,7 @@ describe('GatewayStack', () => {
       .filter(resource => JSON.stringify(resource.Properties.FunctionName).includes('KbFunction'));
   }
 
-  function buildTemplate(indexingMode: 'manual-only' | 'all' = 'manual-only', scheduleEnabled = false, mcpResourceAudience?: string, audioCropEnabled = false, cloudfrontDomain: string | null = 'd2olomx8td8txt.cloudfront.net', save?: (g: Template, r: Template) => void, originReleaseCiRoleName?: unknown): Template {
+  function buildTemplate(indexingMode: 'manual-only' | 'all' = 'manual-only', scheduleEnabled = false, mcpResourceAudience?: string, audioCropEnabled = false, cloudfrontDomain: string | null = 'd2olomx8td8txt.cloudfront.net', save?: (g: Template, r: Template) => void, originReleaseCiRoleName?: unknown, extraContext: Record<string, unknown> = {}): Template {
     const app = new cdk.App({
       context: {
         ...(cloudfrontDomain === null ? {} : { 'ttobak:cloudfrontDomain': cloudfrontDomain }),
@@ -26,6 +26,7 @@ describe('GatewayStack', () => {
         'ttobak:audioCropEnabled': audioCropEnabled,
         ...(mcpResourceAudience === undefined ? {} : { 'ttobak:mcpResourceAudience': mcpResourceAudience }),
         ...(originReleaseCiRoleName === undefined ? {} : { 'ttobak:httpOriginReleaseCiRoleName': originReleaseCiRoleName }),
+        ...extraContext,
       },
     });
 
@@ -295,6 +296,22 @@ for bad in ({'Ref':'OtherRole'}, {'Fn::ImportValue':'unknown'}, qa):
     expect(withInterpreter.map(resource => resource.Properties.FunctionName)).toEqual(['ttobak-api']);
     const api = withInterpreter[0].Properties.Environment.Variables;
     expect(api.BEDROCK_SUMMARY_MODEL_ID).toBeUndefined();
+  });
+
+  test('API Lambda carries the translate cost guard limits from context with defaults', () => {
+    const apiEnv = (value: Template) => Object.values(value.findResources('AWS::Lambda::Function'))
+      .find(resource => resource.Properties.FunctionName === 'ttobak-api')!.Properties.Environment.Variables;
+    expect(apiEnv(template)).toMatchObject({ TRANSLATE_HOURLY_LIMIT: '3000', TRANSLATE_HIGH_HOURLY_LIMIT: '1500' });
+    const custom = buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined,
+      { 'ttobak:translateHourlyLimit': '0', 'ttobak:translateHighHourlyLimit': 200 });
+    expect(apiEnv(custom)).toMatchObject({ TRANSLATE_HOURLY_LIMIT: '0', TRANSLATE_HIGH_HOURLY_LIMIT: '200' });
+    const limited = Object.values(template.findResources('AWS::Lambda::Function'))
+      .filter(resource => resource.Properties.Environment?.Variables?.TRANSLATE_HOURLY_LIMIT !== undefined);
+    expect(limited.map(resource => resource.Properties.FunctionName)).toEqual(['ttobak-api']);
+    for (const bad of ['-1', '1.5', 'many', true]) {
+      expect(() => buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined,
+        { 'ttobak:translateHourlyLimit': bad })).toThrow(/ttobak:translateHourlyLimit must be a non-negative integer/);
+    }
   });
 
   test('recovery consumer is installed before the API producer', () => {

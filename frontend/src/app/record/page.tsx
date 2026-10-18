@@ -55,6 +55,8 @@ function RecordPageInner() {
   const [meetingTitle, setMeetingTitle] = useState('');
   const [summaryInterval, setSummaryInterval] = useState(50);
   const [translationEnabled, setTranslationEnabled] = useState(false);
+  // Draft (partial-caption) translation is opt-in: each revision is a billed request.
+  const [interimTranslation, setInterimTranslation] = useState(false);
   const [targetLang, setTargetLang] = useState(BILINGUAL_TARGET);
   const [attachments, setAttachments] = useState<{ name: string; url: string; s3Key?: string; mimeType?: string; status?: 'uploading' | 'complete' | 'error'; kbStatus?: 'idle' | 'copying' | 'done' | 'error' }[]>([]);
   // Default to AWS Transcribe Streaming, not Web Speech: SttManager.start()
@@ -147,6 +149,7 @@ function RecordPageInner() {
   const session = useRecordingSession({
     targetLang,
     translationEnabled,
+    interimTranslation,
     liveSttProvider,
     // Deliberately NOT wired to setLiveSttProvider: this fires on every
     // runtime provider change, including a transient Transcribe Streaming
@@ -998,6 +1001,8 @@ function RecordPageInner() {
             onTranslationToggle={setTranslationEnabled}
             targetLang={targetLang}
             onTargetLangChange={setTargetLang}
+            interimTranslation={interimTranslation}
+            onInterimTranslationToggle={setInterimTranslation}
           />
           {translationEnabled && session.isRecording && session.activeProvider === 'web-speech' && (
             <p className="w-full text-center text-xs text-amber-700 dark:text-amber-400">
