@@ -206,13 +206,7 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	}
 
 	// Look up user's custom vocabulary for Transcribe
-	var customVocab string
-	if userID != "" {
-		if vocab, vocabErr := dictService.GetVocabularyForTranscription(ctx, userID); vocabErr == nil && vocab != "" {
-			customVocab = vocab
-			log.Printf("Using custom vocabulary %s for user %s", vocab, userID)
-		}
-	}
+	customVocab := transcriptionVocabulary(ctx, dictService, userID)
 
 	var jobName string
 	switch sttProvider {
@@ -223,21 +217,7 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 		} else {
 			log.Printf("Using Whisper GPU for meeting: %s", meetingID)
 			// Build initial_prompt from user's custom dictionary for Whisper
-			var initialPrompt string
-			if userID != "" {
-				if dict, dictErr := dictService.GetDictionary(ctx, userID); dictErr == nil && dict != nil && len(dict.Terms) > 0 {
-					var phrases []string
-					for _, t := range dict.Terms {
-						display := t.DisplayAs
-						if display == "" {
-							display = t.Phrase
-						}
-						phrases = append(phrases, display)
-					}
-					initialPrompt = strings.Join(phrases, ", ")
-					log.Printf("Whisper initial_prompt: %d terms for user %s", len(phrases), userID)
-				}
-			}
+			initialPrompt := whisperInitialPrompt(ctx, dictService, userID)
 			// Participant count is passed through as pyannote's max_speakers
 			// upper bound (pyannote still auto-detects the actual count
 			// within it -- registered headcount can exceed actual speakers,
@@ -273,6 +253,51 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	log.Printf("Started transcription job: %s (provider=%s) for meeting: %s", jobName, sttProvider, meetingID)
 
 	return nil
+}
+
+// dictionaryReader is the dictionary surface the transcribe Lambda reads.
+type dictionaryReader interface {
+	GetVocabularyForTranscription(ctx context.Context, userID string) (string, error)
+	GetDictionary(ctx context.Context, userID string) (*model.DictionaryResponse, error)
+}
+
+// transcriptionVocabulary returns the user's READY personal vocabulary name,
+// or "" when there is none or the lookup fails.
+func transcriptionVocabulary(ctx context.Context, dict dictionaryReader, userID string) string {
+	if userID == "" {
+		return ""
+	}
+	vocab, err := dict.GetVocabularyForTranscription(ctx, userID)
+	if err != nil {
+		log.Printf("custom vocabulary lookup failed for user %s: %v", userID, err)
+		return ""
+	}
+	if vocab != "" {
+		log.Printf("Using custom vocabulary %s for user %s", vocab, userID)
+	}
+	return vocab
+}
+
+// whisperInitialPrompt joins the display forms of the user's dictionary
+// terms (v2 rows, or the legacy blob before migration).
+func whisperInitialPrompt(ctx context.Context, dict dictionaryReader, userID string) string {
+	if userID == "" {
+		return ""
+	}
+	resp, err := dict.GetDictionary(ctx, userID)
+	if err != nil || resp == nil || len(resp.Terms) == 0 {
+		return ""
+	}
+	phrases := make([]string, 0, len(resp.Terms))
+	for _, t := range resp.Terms {
+		display := t.DisplayAs
+		if display == "" {
+			display = t.Phrase
+		}
+		phrases = append(phrases, display)
+	}
+	log.Printf("Whisper initial_prompt: %d terms for user %s", len(phrases), userID)
+	return strings.Join(phrases, ", ")
 }
 
 func startWhisperTask(ctx context.Context, meetingID, userID, audioKey, initialPrompt, outputKey string, numSpeakers int, crop ...bool) error {

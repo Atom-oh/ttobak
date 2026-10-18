@@ -3,7 +3,7 @@
 - Status: Accepted; phonetic TSV uploads and automatic suggestion ingestion remain
   original plans, not current behavior.
 - Decision date: Not recorded; original rationale references the 2026-04-23 STT evaluation.
-- Implementation checked: 2026-09-13.
+- Implementation checked: 2026-09-13; v2 storage amendment checked 2026-10-18.
 
 ## Context and decision
 
@@ -27,7 +27,8 @@ and could not guarantee term recognition.
   `soundsLike`/`displayAs` mappings to Transcribe, or merge system base terms into
   that list. The resource name uses `vocabSuffix(userID)`, not the full literal
   user ID promised in the old example.
-- Reads refresh pending vocabulary status. Batch Transcribe selects a ready
+- Reads refresh pending vocabulary status with a conditional update (see the
+  2026-10-18 amendment); they no longer rewrite the dictionary item. Batch Transcribe selects a ready
   personal vocabulary or its configured base fallback through
   `LanguageIdSettings["ko-KR"]`. Live streaming can also receive a vocabulary name.
 - The transcribe Lambda constructs Whisper's `INITIAL_PROMPT` from `displayAs`
@@ -37,6 +38,38 @@ and could not guarantee term recognition.
 The old crawler/research extraction Lambda, approval inbox, CSV import, and
 fixed vocabulary build time were plans or estimates. They are not requirements
 that current PRs must implement, nor evidence that phonetic mappings affect ASR.
+
+## Amendment 2026-10-18: v2 storage and union readers
+
+Per-term rows now sit beside the legacy `SK=DICTIONARY` item so automatic terms
+can be added later without rewriting a shared list. This covers storage and
+readers only: no extraction, term CRUD route, vocabulary builder or UI change.
+
+- **Terms** `DICTTERM#{termKey}` live in the owning partition (`USER#`; `ACCOUNT#`
+  is reserved). `termKey` is 32 lowercase hex of SHA-256 over
+  `NormalizeTermKey(displayAs)` (NFKC, lowercase, whitespace and `- . _ ·`
+  removed). Rows carry `origin=manual|auto`, `state=active|suggested|deleted`
+  and a `version` that guards every update. A user edit sets `userEditedAt`,
+  which blocks automatic merge and eviction. Delete leaves a content-free
+  tombstone; creates require `attribute_not_exists(PK)`, so a tombstoned term is
+  never re-added automatically.
+- **Observations** `DICTOBS#{termKey}#{meetingId}` record provenance per meeting.
+  A merge creates the observation and bumps the term (`ADD hits 1`) in one
+  transaction, so re-running a meeting never inflates `hits`.
+- **Vocabulary state** `VOCAB#{ctx}#{lang}` holds the active Transcribe name and
+  build status under a version guard.
+- **Non-destructive migration.** `MigrateLegacyDictionary` copies blob terms into
+  `origin=manual` rows (existing rows and tombstones win), writes
+  `VOCAB#personal#ko-KR` with the existing vocabulary name, then sets
+  `migratedAt`. It never removes blob fields and is safe to re-run. It has no
+  caller yet; term CRUD must first move the legacy PUT/DELETE onto rows.
+- **Readers.** `GetDictionary` keeps the legacy response: active rows plus blob
+  terms (rows and tombstones win by `termKey`) before `migratedAt`, rows only
+  after. Status sync is a conditional update of the `VOCAB#` row, or of the
+  blob's status for the observed name and status; the unconditional whole-item
+  `PutItem` is gone and the legacy PUT updates only its own fields.
+  `GetVocabularyForTranscription` reads `VOCAB#` first, falls back to the blob
+  and never writes; the transcribe Lambda uses both readers.
 
 ## Consequences and risks
 
@@ -48,7 +81,11 @@ concerns. This feature does not remove the need to review transcripts.
 
 ## Evidence
 
-- [dictionary.go](../../backend/internal/model/dictionary.go): stored fields.
+- [dictionary.go](../../backend/internal/model/dictionary.go): stored fields and
+  v2 row types.
+- [repository dictionary.go](../../backend/internal/repository/dictionary.go) and
+  [dictionary_v2.go](../../backend/internal/service/dictionary_v2.go): v2 guards,
+  migration, union reader and merge; tests beside each.
 - [dictionary.go](../../backend/internal/service/dictionary.go): resource naming,
   status, and phrase-only vocabulary construction.
 - [transcribe.go](../../backend/internal/service/transcribe.go),

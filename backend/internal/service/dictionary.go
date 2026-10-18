@@ -17,72 +17,155 @@ import (
 	"github.com/ttobak/backend/internal/repository"
 )
 
+// DictionaryStore is the persistence used by DictionaryService.
+// *repository.DictionaryRepository implements it.
+type DictionaryStore interface {
+	GetDictionary(ctx context.Context, userID string) (*model.UserDictionary, error)
+	SaveDictionary(ctx context.Context, dict *model.UserDictionary) error
+	UpdateLegacyVocabularyStatus(ctx context.Context, userID, vocabName, from, to string) error
+	MarkDictionaryMigrated(ctx context.Context, userID, now string) error
+	ListDictTerms(ctx context.Context, pk string) ([]model.DictTerm, error)
+	PutDictTermsIfAbsent(ctx context.Context, terms []model.DictTerm) (int, error)
+	GetVocabularyState(ctx context.Context, userID, vocabContext, lang string) (*model.VocabularyState, error)
+	CreateVocabularyStateIfAbsent(ctx context.Context, state *model.VocabularyState) error
+	UpdateVocabularyState(ctx context.Context, userID, vocabContext, lang string, expectedVersion int64, change repository.VocabularyStateChange, now string) error
+}
+
+// TranscribeVocabularyAPI is the subset of the Transcribe client used here.
+type TranscribeVocabularyAPI interface {
+	GetVocabulary(ctx context.Context, in *transcribe.GetVocabularyInput, optFns ...func(*transcribe.Options)) (*transcribe.GetVocabularyOutput, error)
+	CreateVocabulary(ctx context.Context, in *transcribe.CreateVocabularyInput, optFns ...func(*transcribe.Options)) (*transcribe.CreateVocabularyOutput, error)
+	UpdateVocabulary(ctx context.Context, in *transcribe.UpdateVocabularyInput, optFns ...func(*transcribe.Options)) (*transcribe.UpdateVocabularyOutput, error)
+	DeleteVocabulary(ctx context.Context, in *transcribe.DeleteVocabularyInput, optFns ...func(*transcribe.Options)) (*transcribe.DeleteVocabularyOutput, error)
+}
+
 // DictionaryService handles custom dictionary business logic
 type DictionaryService struct {
-	repo             *repository.DictionaryRepository
-	transcribeClient *transcribe.Client
+	repo             DictionaryStore
+	transcribeClient TranscribeVocabularyAPI
+	now              func() time.Time
 }
 
 // NewDictionaryService creates a new dictionary service
 func NewDictionaryService(repo *repository.DictionaryRepository, transcribeClient *transcribe.Client) *DictionaryService {
-	return &DictionaryService{
-		repo:             repo,
-		transcribeClient: transcribeClient,
+	if transcribeClient == nil {
+		return NewDictionaryServiceWithStore(repo, nil)
 	}
+	return NewDictionaryServiceWithStore(repo, transcribeClient)
 }
 
-// GetDictionary retrieves a user's custom dictionary
+// NewDictionaryServiceWithStore builds the service over any store; a nil
+// client disables Transcribe status checks.
+func NewDictionaryServiceWithStore(store DictionaryStore, client TranscribeVocabularyAPI) *DictionaryService {
+	return &DictionaryService{repo: store, transcribeClient: client, now: func() time.Time { return time.Now().UTC() }}
+}
+
+// GetDictionary returns the legacy-shaped dictionary: the union of v2 term
+// rows and the legacy blob (rows win) until the blob is migrated, then rows
+// only. It never rewrites the blob; vocabulary status sync is a conditional
+// update of the VOCAB# row (or of the blob status field before migration).
 func (s *DictionaryService) GetDictionary(ctx context.Context, userID string) (*model.DictionaryResponse, error) {
 	dict, err := s.repo.GetDictionary(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get dictionary: %w", err)
 	}
+	rows, err := s.repo.ListDictTerms(ctx, model.PrefixUser+userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get dictionary terms: %w", err)
+	}
+	return &model.DictionaryResponse{
+		Terms:  unionLegacyTerms(dict, rows),
+		Status: s.personalVocabularyStatus(ctx, userID, dict),
+	}, nil
+}
 
+// personalVocabularyStatus reports the legacy status string for the personal
+// ko-KR vocabulary, preferring the VOCAB# row over the blob.
+func (s *DictionaryService) personalVocabularyStatus(ctx context.Context, userID string, dict *model.UserDictionary) string {
+	state, err := s.repo.GetVocabularyState(ctx, userID, model.VocabContextPersonal, model.VocabLangKo)
+	if err != nil {
+		log.Printf("failed to read vocabulary state for user %s: %v", userID, err)
+	} else if state != nil {
+		return legacyVocabularyStatus(s.syncVocabularyState(ctx, userID, state))
+	}
 	if dict == nil {
-		return &model.DictionaryResponse{
-			Terms:  []model.DictionaryTerm{},
-			Status: "",
-		}, nil
+		return ""
 	}
-
-	terms := dict.Terms
-	if terms == nil {
-		terms = []model.DictionaryTerm{}
-	}
-
 	status := dict.VocabularyStatus
-	if status == "PENDING" && dict.VocabularyName != "" && s.transcribeClient != nil {
-		result, err := s.transcribeClient.GetVocabulary(ctx, &transcribe.GetVocabularyInput{
-			VocabularyName: aws.String(dict.VocabularyName),
-		})
-		if err == nil {
-			switch result.VocabularyState {
-			case transcribeTypes.VocabularyStateReady:
-				status = "READY"
-			case transcribeTypes.VocabularyStateFailed:
-				status = "FAILED"
-			}
-			if status != dict.VocabularyStatus {
-				dict.VocabularyStatus = status
-				if saveErr := s.repo.SaveDictionary(ctx, dict); saveErr != nil {
-					log.Printf("failed to sync vocabulary status for user %s: %v", userID, saveErr)
-				}
-			}
-		} else if isVocabularyNotFoundError(err) {
-			status = "FAILED"
-			dict.VocabularyStatus = status
-			if saveErr := s.repo.SaveDictionary(ctx, dict); saveErr != nil {
-				log.Printf("failed to persist FAILED status for user %s: %v", userID, saveErr)
-			}
-		} else {
-			log.Printf("failed to get vocabulary status for user %s: %v", userID, err)
+	if status != "PENDING" || dict.VocabularyName == "" || s.transcribeClient == nil {
+		return status
+	}
+	next, ok := s.providerStatus(ctx, dict.VocabularyName)
+	if !ok || next == status {
+		return status
+	}
+	if err := s.repo.UpdateLegacyVocabularyStatus(ctx, userID, dict.VocabularyName, status, next); err != nil {
+		// A condition failure means a concurrent writer changed the blob;
+		// its newer state wins.
+		if !errors.Is(err, repository.ErrConditionFailed) {
+			log.Printf("failed to sync vocabulary status for user %s: %v", userID, err)
 		}
 	}
+	return next
+}
 
-	return &model.DictionaryResponse{
-		Terms:  terms,
-		Status: status,
-	}, nil
+// providerStatus maps Transcribe's state for a vocabulary to READY, FAILED or
+// PENDING. ok is false when the state could not be determined.
+func (s *DictionaryService) providerStatus(ctx context.Context, name string) (string, bool) {
+	result, err := s.transcribeClient.GetVocabulary(ctx, &transcribe.GetVocabularyInput{VocabularyName: aws.String(name)})
+	if err != nil {
+		if isVocabularyNotFoundError(err) {
+			return "FAILED", true
+		}
+		log.Printf("failed to get vocabulary status for %s: %v", name, err)
+		return "", false
+	}
+	switch result.VocabularyState {
+	case transcribeTypes.VocabularyStateReady:
+		return "READY", true
+	case transcribeTypes.VocabularyStateFailed:
+		return "FAILED", true
+	}
+	return "PENDING", true
+}
+
+// syncVocabularyState refreshes a single-slot (legacy, in-place) build from
+// Transcribe under a version guard and returns the state to report.
+func (s *DictionaryService) syncVocabularyState(ctx context.Context, userID string, state *model.VocabularyState) *model.VocabularyState {
+	if state.Status != model.VocabStatusBuilding || state.ActiveName == "" || state.InactiveName != "" || s.transcribeClient == nil {
+		return state
+	}
+	provider, ok := s.providerStatus(ctx, state.ActiveName)
+	if !ok || provider == "PENDING" {
+		return state
+	}
+	next := *state
+	next.ActiveReady = provider == "READY"
+	next.Status = model.VocabStatusReady
+	next.FailureCode = ""
+	if provider == "FAILED" {
+		next.Status = model.VocabStatusFailed
+		next.FailureCode = "PROVIDER"
+	}
+	change := repository.VocabularyStateChange{Status: &next.Status, ActiveReady: &next.ActiveReady, FailureCode: &next.FailureCode}
+	err := s.repo.UpdateVocabularyState(ctx, userID, state.Context, state.Language, state.Version, change, s.now().Format(model.DictTimeLayout))
+	if err != nil && !errors.Is(err, repository.ErrConditionFailed) {
+		log.Printf("failed to sync vocabulary state for user %s: %v", userID, err)
+	}
+	return &next
+}
+
+// legacyVocabularyStatus maps a VOCAB# build status to the legacy API value.
+func legacyVocabularyStatus(state *model.VocabularyState) string {
+	switch state.Status {
+	case model.VocabStatusReady:
+		return "READY"
+	case model.VocabStatusBuilding:
+		return "PENDING"
+	case model.VocabStatusFailed, model.VocabStatusQuotaExceeded:
+		return "FAILED"
+	}
+	return ""
 }
 
 // UpdateDictionary updates a user's custom dictionary and triggers vocabulary build
@@ -122,7 +205,9 @@ func (s *DictionaryService) UpdateDictionary(ctx context.Context, userID string,
 		// No terms — delete vocabulary if it exists
 		s.deleteTranscribeVocabulary(ctx, vocabName)
 		dict.VocabularyStatus = ""
-		s.repo.SaveDictionary(ctx, dict)
+		if err := s.repo.SaveDictionary(ctx, dict); err != nil {
+			log.Printf("failed to clear vocabulary status for user %s: %v", userID, err)
+		}
 	}
 
 	return &model.DictionaryResponse{
@@ -162,37 +247,49 @@ func (s *DictionaryService) DeleteTerm(ctx context.Context, userID, phrase strin
 	return err
 }
 
-// GetVocabularyForTranscription returns the vocabulary name if the user has a READY vocabulary
+// GetVocabularyForTranscription returns the personal ko-KR vocabulary name
+// when it is READY. The VOCAB# row is authoritative when present; the legacy
+// blob is the fallback for users without one. It never writes.
 func (s *DictionaryService) GetVocabularyForTranscription(ctx context.Context, userID string) (string, error) {
+	state, err := s.repo.GetVocabularyState(ctx, userID, model.VocabContextPersonal, model.VocabLangKo)
+	if err != nil {
+		return "", err
+	}
+	if state != nil {
+		return s.readyVocabulary(ctx, state.ActiveName, state.ActiveReady), nil
+	}
+
 	dict, err := s.repo.GetDictionary(ctx, userID)
 	if err != nil {
 		return "", err
 	}
-
-	if dict == nil || dict.VocabularyName == "" {
+	if dict == nil {
 		return "", nil
 	}
+	return s.readyVocabulary(ctx, dict.VocabularyName, dict.VocabularyStatus == "READY"), nil
+}
 
-	// Check actual vocabulary status from AWS Transcribe
-	if s.transcribeClient != nil {
-		result, err := s.transcribeClient.GetVocabulary(ctx, &transcribe.GetVocabularyInput{
-			VocabularyName: aws.String(dict.VocabularyName),
-		})
-		if err != nil {
-			log.Printf("failed to get vocabulary status for %s: %v", dict.VocabularyName, err)
-			return "", nil
-		}
-		if result.VocabularyState == transcribeTypes.VocabularyStateReady {
-			return dict.VocabularyName, nil
-		}
-		return "", nil
+// readyVocabulary confirms a name with Transcribe when a client exists and
+// otherwise trusts the stored readiness.
+func (s *DictionaryService) readyVocabulary(ctx context.Context, name string, storedReady bool) string {
+	if name == "" {
+		return ""
 	}
-
-	// Fallback: trust DynamoDB status
-	if dict.VocabularyStatus == "READY" {
-		return dict.VocabularyName, nil
+	if s.transcribeClient == nil {
+		if storedReady {
+			return name
+		}
+		return ""
 	}
-	return "", nil
+	result, err := s.transcribeClient.GetVocabulary(ctx, &transcribe.GetVocabularyInput{VocabularyName: aws.String(name)})
+	if err != nil {
+		log.Printf("failed to get vocabulary status for %s: %v", name, err)
+		return ""
+	}
+	if result.VocabularyState == transcribeTypes.VocabularyStateReady {
+		return name
+	}
+	return ""
 }
 
 // buildTranscribeVocabulary creates or updates an AWS Transcribe custom vocabulary
