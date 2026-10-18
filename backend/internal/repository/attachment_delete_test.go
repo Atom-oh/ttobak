@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/ttobak/backend/internal/model"
 )
 
 func TestDeleteAttachmentAtomicallyRemovesTextState(t *testing.T) {
@@ -30,6 +32,7 @@ func TestDeleteAttachmentAtomicallyRemovesTextState(t *testing.T) {
 
 func TestDeleteMeetingCascadesTextStatesAcrossBatchesAndPages(t *testing.T) {
 	deleted := map[string]bool{}
+	termKey := strings.Repeat("d", 32)
 	sweep := 0
 	repo := indexingWire(t, func(target string, body map[string]interface{}) string {
 		if strings.HasSuffix(target, ".Query") {
@@ -55,6 +58,19 @@ func TestDeleteMeetingCascadesTextStatesAcrossBatchesAndPages(t *testing.T) {
 				return `{"Items":[` + strings.Join(items, ",") + `]}`
 			}
 			return `{"Items":[]}`
+		}
+		if strings.HasSuffix(target, ".GetItem") {
+			encoded, _ := json.Marshal(body)
+			if strings.Contains(string(encoded), "ANALYSIS#terms") {
+				return `{"Item":{"PK":{"S":"MEETING#meeting"},"SK":{"S":"ANALYSIS#terms"},"ownerId":{"S":"owner"},"runId":{"S":"r"},` +
+					`"status":{"S":"succeeded"},"acceptedTerms":{"L":[{"M":{"termKey":{"S":"` + termKey + `"}}}]}}}`
+			}
+			return "{}" // the accepted auto term no longer exists
+		}
+		if strings.HasSuffix(target, ".DeleteItem") {
+			key := body["Key"].(map[string]interface{})
+			deleted[key["PK"].(map[string]interface{})["S"].(string)+"|"+key["SK"].(map[string]interface{})["S"].(string)] = true
+			return "{}"
 		}
 		if !strings.HasSuffix(target, ".TransactWriteItems") {
 			t.Fatalf("unexpected call %s", target)
@@ -89,5 +105,8 @@ func TestDeleteMeetingCascadesTextStatesAcrossBatchesAndPages(t *testing.T) {
 	}
 	if !deleted["ANALYSIS#summary"] {
 		t.Fatal("saved re-summary state survived meeting deletion")
+	}
+	if !deleted["USER#owner|"+model.DictObsSK(termKey, "meeting")] || !deleted["MEETING#meeting|"+model.TermsAnalysisSK] {
+		t.Fatalf("the term sweep did not remove the observation and run state: %v", deleted)
 	}
 }

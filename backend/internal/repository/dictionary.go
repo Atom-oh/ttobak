@@ -25,6 +25,9 @@ var (
 	ErrDictTermConflict      = errors.New("dictionary term guard failed")
 	ErrDictObservationExists = errors.New("dictionary observation already recorded")
 	ErrLegacyBlobChanged     = errors.New("legacy dictionary changed or was migrated")
+	// ErrDictSourceMeetingGone: the observation's source meeting no longer
+	// exists, so nothing was written (deletion cleanup already ran or will).
+	ErrDictSourceMeetingGone = errors.New("dictionary observation source meeting is gone")
 )
 
 // Cancelled dictionary transactions with no failed condition. Neither matches
@@ -529,11 +532,32 @@ func (r *DictionaryRepository) CreateAutoTerm(ctx context.Context, term *model.D
 	if err != nil {
 		return err
 	}
-	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: []types.TransactWriteItem{termPut, obsPut}})
+	items, err := r.withSourceMeetingCheck([]types.TransactWriteItem{termPut, obsPut}, obs)
 	if err != nil {
-		return dictTransactError(err, []error{ErrDictTermConflict, ErrDictObservationExists})
+		return err
+	}
+	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
+	if err != nil {
+		return dictTransactError(err, []error{ErrDictTermConflict, ErrDictObservationExists, ErrDictSourceMeetingGone})
 	}
 	return nil
+}
+
+// withSourceMeetingCheck appends a ConditionCheck that the observation's
+// source meeting (USER#{owner}/MEETING#{meeting}) still exists, so a worker
+// that outlives a meeting deletion cannot leave observations behind (A8).
+func (r *DictionaryRepository) withSourceMeetingCheck(items []types.TransactWriteItem, obs *model.DictObservation) ([]types.TransactWriteItem, error) {
+	if obs.OwnerID == "" || obs.MeetingID == "" {
+		return items, nil
+	}
+	expr, err := expression.NewBuilder().WithCondition(expression.AttributeExists(expression.Name("PK"))).Build()
+	if err != nil {
+		return nil, err
+	}
+	return append(items, types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{
+		TableName: aws.String(r.tableName), Key: dictKey(model.PrefixUser+obs.OwnerID, model.PrefixMeeting+obs.MeetingID),
+		ConditionExpression: expr.Condition(), ExpressionAttributeNames: expr.Names(),
+	}}), nil
 }
 
 // MergeAutoObservation records a new observation and bumps the auto term in
@@ -600,14 +624,17 @@ func (r *DictionaryRepository) observeAutoTerm(ctx context.Context, in DictMerge
 	if err != nil {
 		return err
 	}
-	items := []types.TransactWriteItem{obsPut, {Update: &types.Update{
+	items, err := r.withSourceMeetingCheck([]types.TransactWriteItem{obsPut, {Update: &types.Update{
 		TableName: aws.String(r.tableName), Key: dictKey(in.PK, model.DictTermSK(in.TermKey)),
 		UpdateExpression: expr.Update(), ConditionExpression: expr.Condition(),
 		ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(),
-	}}}
+	}}}, in.Observation)
+	if err != nil {
+		return err
+	}
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
 	if err != nil {
-		return dictTransactError(err, []error{ErrDictObservationExists, ErrDictTermConflict})
+		return dictTransactError(err, []error{ErrDictObservationExists, ErrDictTermConflict, ErrDictSourceMeetingGone})
 	}
 	return nil
 }

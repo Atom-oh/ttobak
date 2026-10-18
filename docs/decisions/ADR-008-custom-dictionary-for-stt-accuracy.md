@@ -202,9 +202,9 @@ Rules, in order:
 
 ## Amendment 2026-10-18: terms run state and merge rules (inert)
 
-Storage and merge code for automatic terms exists but nothing calls it: no
-extraction, trigger, route, event rule or model call ships with it, so it
-changes no runtime behavior.
+Storage and merge code for automatic terms exists but no extraction calls it:
+no extraction, trigger, route, event rule or model call ships with it. The
+provenance amendment below adds only source markers and the deletion sweep.
 
 - **Run state** `MEETING#{mid}/ANALYSIS#terms` (`model.TermsAnalysis`) follows the
   action-items CAS: `runId`, `status` queued|running|succeeded|failed,
@@ -223,10 +223,7 @@ changes no runtime behavior.
   (design A8) can find a meeting's `DICTOBS#` rows only through it. The merger
   writes a new key only while the list has room, checked per candidate so
   skipped candidates take no slot, and returns the list even on failure so
-  Fail can record it. Deletion cleanup is not implemented: deleting a meeting
-  currently leaves its `ANALYSIS#terms` row (not among `DeleteMeeting`'s
-  singleton deletes) and its `DICTOBS#` rows. It must land before or with the
-  first writer.
+  Fail can record it. Deletion cleanup is in the provenance amendment below.
 - **Merge** (`TermsMerger.MergeExtractedTerms`, owner's personal scope only):
   no row creates an auto term with hits 1 (`suggested` when the meeting is
   tainted); tombstones, manual rows, rows with `userEditedAt` and unknown
@@ -256,8 +253,36 @@ changes no runtime behavior.
   row now gone, edited or tombstoned reduces the excess (a concurrent merge
   may already have evicted it), and only a still-evictable newer row moves on
   to the next candidate. Each term keeps its ten newest observations; `hits` is never
-  decremented. Cleanup failures are surfaced. Account scope, the manual
-  500-term cap and tombstone pruning are not implemented.
+  decremented. Cleanup failures are surfaced. Account scope is not implemented; the
+  manual 500-term cap and tombstone pruning belong to the term CRUD amendment.
+
+## Amendment 2026-10-18: term provenance and deletion sweep (inert)
+
+Prerequisites for the first automatic-term writer. No extraction job, trigger,
+event rule or model call ships with them; without a writer no `ANALYSIS#terms`
+or `DICTOBS#` row exists, so the sweep finds nothing.
+
+- **Provenance.** A non-owner write that changes content, transcriptA/B, the
+  selected transcript, saved notes (including the `expectedNotes`
+  compare-and-set path, marked before its write) or liveSummary sets sticky
+  `sourceEditedByNonOwnerAt`; notes and liveSummary feed the AI notes a term
+  job would read (`TestSourceWriterAllowlist` classifies every writer).
+  Attachments need no marker: upload completion is owner-only. The marker has
+  no reader yet; the merger's tainted path makes such a run suggest only.
+- **Observation guards.** `ReserveTermsAccepted` renews the live lease and
+  stores the keys a run may observe in `acceptedTerms` before any observation
+  write. Every observation transaction (`CreateAutoTerm`, `MergeAutoObservation`,
+  `PromoteSuggestedTerm`) carries a ConditionCheck that the owner's meeting
+  exists; a deleted meeting cancels it with `ErrDictSourceMeetingGone`, which
+  the merger surfaces without retrying. Queue records `ownerId`.
+- **Deletion.** `SweepMeetingTerms` follows `DeleteMeeting`: it deletes the
+  meeting's `DICTOBS#` rows, unedited auto terms left without observations
+  (the term version is read before the observation count, so a concurrent
+  observation fails the version-guarded delete) and then the run state; only
+  the owner recorded on that state is swept. A failed sweep keeps the state and
+  surfaces the error; the owner's retried DELETE of the gone meeting re-runs it
+  before returning 404, and a failed owner lookup is returned for retry.
+  There is no scheduled reconciliation, so an un-retried failure leaves the rows.
 
 ## Consequences and risks
 
@@ -280,7 +305,10 @@ concerns. This feature does not remove the need to review transcripts.
 - [terms_analysis.go](../../backend/internal/model/terms_analysis.go),
   [repository terms_analysis.go](../../backend/internal/repository/terms_analysis.go)
   and [terms_merge.go](../../backend/internal/service/terms_merge.go): run state,
-  CAS transitions and merge rules; tests beside each.
+  CAS transitions, merge rules and the deletion sweep; tests beside each.
+- [meeting.go](../../backend/internal/service/meeting.go) and
+  [meeting_source_taint_test.go](../../backend/internal/service/meeting_source_taint_test.go):
+  non-owner source markers and the writer allowlist.
 - [dictionary.go](../../backend/internal/service/dictionary.go): resource naming,
   status, and phrase-only vocabulary construction.
 - [transcribe.go](../../backend/internal/service/transcribe.go),
