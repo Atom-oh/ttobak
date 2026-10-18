@@ -253,6 +253,7 @@ and [async contract](../backend/python/qa/ASYNC_CONTRACT.md).
 | Custom AllPartsTranscribed | summarize |
 | Custom ImageUploadCompleted | process-image |
 | Custom ActionItemsRequested, ttobak.analysis | summarize, action analysis only |
+| Custom TermsRequested, ttobak.analysis | summarize, automatic term extraction only |
 | Custom DocumentUploadCompleted, ttobak.upload | document-extract, queued canonical runs only |
 | S3 Object Created, docs/ slide suffix filter | convert-doc |
 | One-minute ttobak-kb-index-tick | kb; configured enabled by the checked-in CDK app, all mode |
@@ -493,6 +494,31 @@ dependencies so the producer cannot update ahead of delivery setup. The document
 worker from #208 must still be physically deployed before document upload
 producers. See [release order](runbooks/meeting-document-release.md); this code
 does not claim that deployment has happened.
+
+## Automatic term extraction delivery
+
+`TtobakGatewayStack` routes default-bus `ttobak.analysis` events with
+detail-type `TermsRequested` (rule `ttobak-terms-requested`) to the existing
+summarize Lambda. Detail contains only `{ownerId,meetingId,runId}`; the worker
+rereads every source. Delivery expires after five minutes, with three retry
+attempts and the SSE-SQS `ttobak-terms-dlq` (seven-day retention, redrive from
+other queues denied). Queue SendMessage and Lambda invocation are scoped to the
+exact rule ARN, and `PipelineFailures` watches the DLQ. The summarize role's
+existing default-bus `PutEvents` and Bedrock grants cover publication and the
+Claude model. The API function depends on the rule, as for saved summaries.
+
+Summarize receives `AUTO_TERMS_MODE` (`off` by default, or `personal`),
+`AUTO_TERMS_USERS` (comma-separated Cognito subs, empty means every owner),
+`AUTO_TERMS_MIN_CONFIDENCE` (default `0.85`, in (0, 1]) and
+`BEDROCK_TERMS_MODEL_ID` (default `global.anthropic.claude-sonnet-5-5`; a
+`global.`/`apac.` Claude profile) from CDK context `ttobak:autoTermsMode`,
+`ttobak:autoTermsUsers`, `ttobak:autoTermsMinConfidence` and
+`ttobak:bedrockTermsModelId`; invalid values fail synth. No other function
+receives these variables. With the default `off`, Enqueue returns `DISABLED`
+before any read, write or publish, so the rule stays idle. Set `personal` only in
+a deployment after one with `off` has delivered the rule and summarize code. Before
+merging, the worker migrates the owner's legacy dictionary blob through the
+summarize role's existing table grant. See ADR-008.
 
 ## Project invitation activation
 

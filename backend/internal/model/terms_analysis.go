@@ -58,6 +58,7 @@ type TermsCounters struct {
 // sourceHash of the last succeeded run; a new run is queued only for a
 // different source. AcceptedTerms accumulates across runs for the meeting.
 type TermsAnalysis struct {
+	OwnerID             string              `dynamodbav:"ownerId,omitempty" json:"-"` // meeting owner; binds deletion sweeps
 	RunID               string              `dynamodbav:"runId" json:"runId,omitempty"`
 	Status              string              `dynamodbav:"status" json:"status"`
 	SourceHash          string              `dynamodbav:"sourceHash" json:"-"`
@@ -71,6 +72,14 @@ type TermsAnalysis struct {
 	AcceptedTerms       []TermsAcceptedTerm `dynamodbav:"acceptedTerms,omitempty" json:"-"`
 }
 
+// TermsRequested is the ttobak.analysis/TermsRequested event detail. It
+// carries identities only; the worker rereads every source.
+type TermsRequested struct {
+	OwnerID   string `json:"ownerId"`
+	MeetingID string `json:"meetingId"`
+	RunID     string `json:"runId"`
+}
+
 // Pending reports a queued or running run.
 func (a *TermsAnalysis) Pending() bool {
 	return a != nil && (a.Status == AnalysisQueued || a.Status == AnalysisRunning)
@@ -80,7 +89,7 @@ func (a *TermsAnalysis) Pending() bool {
 func ValidTermsErrorCode(code string) bool {
 	switch code {
 	case AnalysisInvalidOutput, AnalysisProviderFailed, AnalysisSourceChanged, AnalysisInterrupted,
-		AnalysisPersistenceFail, TermsErrorDisabled, TermsErrorTaintedSuggestOnly:
+		AnalysisPersistenceFail, AnalysisPublishFailed, TermsErrorDisabled, TermsErrorTaintedSuggestOnly:
 		return true
 	}
 	return false
