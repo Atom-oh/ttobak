@@ -181,7 +181,7 @@ Deploy Go/QA reader compatibility before writers (ADR-037).
 Whisper benchmark objects under bench-transcripts/ have current and noncurrent
 version expiry; a delete marker is not immediate physical deletion of all versions.
 Transcribe vocabulary table files under vocab/ (`vocab/{name}.{fingerprint}.tsv`) expire after
-one day, current and noncurrent (the ADR-008 A/B builder writes them). The
+one day, current and noncurrent; the API deletes each after READY, FAILED or quota rejection. The
 prefix is not in the OAC allowlist and is never served by CloudFront.
 Inspect exact lifecycle values in StorageStack when changing retention. The
 websocket Lambda has no current dedicated connections-table CRUD; old documentation
