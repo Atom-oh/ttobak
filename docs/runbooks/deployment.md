@@ -47,6 +47,13 @@ pages; no deleting sync is used. The manual helper defaults to frontend and
 rejects generic infra/all deployment. See the
 [security, publication and recovery contract](frontend-release.md).
 
+The publisher's preflight requires bucket/distribution-ID formats, `index.html`,
+an `_next/static` directory and no export symlinks. Segmented exports additionally
+require the infrastructure `staticRouterRevision: "segmented-rsc-v1"` marker.
+Full authentication/API runtime-config validity, referenced-chunk completeness,
+actual target/router/header/cache/OAC and publisher-principal acceptance remain
+separate checks. Multi-object page publication is not atomic.
+
 Verify `/config.json`, current HTML and the JS/CSS chunks referenced by that HTML
 through CloudFront. A successful upload alone does not prove the site is usable.
 

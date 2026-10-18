@@ -73,10 +73,15 @@ and prerequisite changes. Never deploy KnowledgeStack incidentally.
 ## Publication order
 
 The frontend workflow and frontend-only manual helper call
-`scripts/publish-frontend.sh`. Its preflight rejects incomplete exports,
-symlinks and missing/invalid target configuration before any cloud write.
+`scripts/publish-frontend.sh`. Before any cloud write, its preflight requires
+`S3_BUCKET` and `CF_DISTRIBUTION` and checks their bucket/distribution-ID formats.
+The export must contain `index.html` and an `_next/static` directory, with no
+symlinks anywhere under the export.
 For segmented exports it privately reads the infrastructure-owned
 `staticRouterRevision` from `config.json` and requires `segmented-rsc-v1`.
+This marker is the only runtime-config field checked by the publisher.
+Valid authentication/API configuration, every referenced chunk's availability,
+and the actual target/router/header/cache/OAC mapping require separate acceptance.
 ConfigDeployment depends on the distribution, so this producer gate follows the
 compatible router update. The release role needs scoped GetObject permission on
 the site bucket's `config.json`; missing permission/readiness fails before writes.
