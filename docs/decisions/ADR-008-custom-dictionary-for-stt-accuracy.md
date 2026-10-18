@@ -3,7 +3,7 @@
 - Status: Accepted; phonetic TSV uploads and automatic suggestion ingestion remain
   original plans, not current behavior.
 - Decision date: Not recorded; original rationale references the 2026-04-23 STT evaluation.
-- Implementation checked: 2026-09-13; v2 storage, term CRUD and terms
+- Implementation checked: 2026-09-13; v2 storage, term CRUD, filter and terms
   run-state/merge amendments checked 2026-10-18.
 
 ## Context and decision
@@ -125,8 +125,8 @@ yet" note. Routes: [API-SPEC](../API-SPEC.md#personal-dictionary).
 
 ## Amendment 2026-10-18: automatic-term filters
 
-`FilterCandidates` in `service/terms_filter.go` is pure and has no caller yet;
-extraction wiring is a later change. A candidate failing a rule is dropped alone,
+`FilterCandidates` in `service/terms_filter.go` is pure; the extraction job
+below calls it. A candidate failing a rule is dropped alone,
 and the per-rule drop counts (`TermFilterCounts`) hold numbers only, never text.
 Rules, in order:
 
@@ -171,9 +171,8 @@ Rules, in order:
 
 ## Amendment 2026-10-18: terms run state and merge rules (inert)
 
-Storage and merge code for automatic terms exists but no extraction calls it:
-no extraction, trigger, route, event rule or model call ships with it. The
-provenance amendment below adds only source markers and the deletion sweep.
+Storage and merge code for automatic terms; the extraction job amendment below
+is its caller.
 
 - **Run state** `MEETING#{mid}/ANALYSIS#terms` (`model.TermsAnalysis`) follows the
   action-items CAS: `runId`, `status` queued|running|succeeded|failed,
@@ -192,7 +191,7 @@ provenance amendment below adds only source markers and the deletion sweep.
   (design A8) can find a meeting's `DICTOBS#` rows only through it. The merger
   writes a new key only while the list has room, checked per candidate so
   skipped candidates take no slot, and returns the list even on failure so
-  Fail can record it. Deletion cleanup is in the provenance amendment below.
+  Fail can record it. Deletion cleanup is in the extraction job amendment.
 - **Merge** (`TermsMerger.MergeExtractedTerms`, owner's personal scope only):
   no row creates an auto term with hits 1 (`suggested` when the meeting is
   tainted); tombstones, manual rows, rows with `userEditedAt` and unknown
@@ -225,31 +224,37 @@ provenance amendment below adds only source markers and the deletion sweep.
   decremented. Cleanup failures are surfaced. Account scope is not implemented; the
   manual 500-term cap and tombstone pruning belong to the term CRUD amendment.
 
-## Amendment 2026-10-18: term provenance and deletion sweep (inert)
-
-Prerequisites for the first automatic-term writer. No extraction job, trigger,
-event rule or model call ships with them; without a writer no `ANALYSIS#terms`
-or `DICTOBS#` row exists, so the sweep finds nothing.
+## Amendment 2026-10-18: extraction job (off by default)
 
 - **Provenance.** A non-owner write that changes content, transcriptA/B, the
   selected transcript, saved notes (including the `expectedNotes`
   compare-and-set path, marked before its write) or liveSummary sets sticky
-  `sourceEditedByNonOwnerAt`; notes and liveSummary feed the AI notes a term
-  job would read (`TestSourceWriterAllowlist` classifies every writer).
-  Attachments need no marker: upload completion is owner-only. The marker has
-  no reader yet; the merger's tainted path makes such a run suggest only.
-- **Observation guards.** `ReserveTermsAccepted` renews the live lease and
-  stores the keys a run may observe in `acceptedTerms` before any observation
-  write. Every observation transaction (`CreateAutoTerm`, `MergeAutoObservation`,
-  `PromoteSuggestedTerm`) carries a ConditionCheck that the owner's meeting
-  exists; a deleted meeting cancels it with `ErrDictSourceMeetingGone`, which
-  the merger surfaces without retrying. Queue records `ownerId`.
+  `sourceEditedByNonOwnerAt`; notes and liveSummary feed the AI notes the job
+  reads (`TestSourceWriterAllowlist` classifies every writer). Attachments need
+  no marker: upload completion is owner-only. Tainted runs only suggest
+  (`TAINTED_SUGGEST_ONLY`); only owner-uploaded documents are direct evidence.
+- **Job.** `TermsAnalysisService.Enqueue` is `DISABLED` unless
+  `AUTO_TERMS_MODE=personal` and `AUTO_TERMS_USERS` is empty or lists the owner,
+  skips an unchanged `sourceHash` and publishes `TermsRequested` (triggers: end
+  of summarize analyses, preserved human content, re-summary; non-fatal). The
+  summarize dispatch runs it within min(300 s, deadline-30 s): at most three
+  90 s calls (Sonnet default, 3000 tokens, thinking off, strict JSON), then the
+  filters and merger. Keys are reserved in `acceptedTerms` before observation
+  writes, which check that the meeting exists. An Enqueue during a live run is
+  `PENDING` and records nothing, so a run failing `SOURCE_CHANGED`, and every
+  successful run, calls Enqueue again for the current source.
 - **Deletion.** `SweepMeetingTerms` follows `DeleteMeeting`: it deletes the
   meeting's `DICTOBS#` rows, unedited auto terms left without observations
-  (version-guarded) and then the run state; only the owner recorded on that
-  state is swept. A failed sweep keeps the state and surfaces the error; the
+  (version-guarded) and then the run state, which records `ownerId`; only that
+  owner is swept. A failed sweep keeps the state and surfaces the error; the
   owner's retried DELETE of the gone meeting re-runs it before returning 404.
   There is no scheduled reconciliation, so an un-retried failure leaves the rows.
+  STT-failed deletions skip the sweep (they never reach `done` or queue a run).
+- **Not in this change.** GatewayStack infrastructure is a follow-up: the
+  `TermsRequested` rule to summarize, its DLQ and alarm, and the
+  `AUTO_TERMS_*`/`BEDROCK_TERMS_MODEL_ID` environment. Until it ships, nothing
+  routes the event and the job cannot run in any deployment; a hand-set mode
+  only queues runs that expire. INFRA-SPEC and architecture updates go with it.
 
 ## Consequences and risks
 
@@ -269,13 +274,12 @@ concerns. This feature does not remove the need to review transcripts.
 - [dictionary_terms.go](../../backend/internal/service/dictionary_terms.go) and
   [dictionary_validate.go](../../backend/internal/service/dictionary_validate.go):
   term CRUD and the shared validator; tests beside each.
+- [terms_analysis.go](../../backend/internal/service/terms_analysis.go) and
+  [terms_extract.go](../../backend/internal/service/terms_extract.go): extraction job.
 - [terms_analysis.go](../../backend/internal/model/terms_analysis.go),
   [repository terms_analysis.go](../../backend/internal/repository/terms_analysis.go)
   and [terms_merge.go](../../backend/internal/service/terms_merge.go): run state,
-  CAS transitions, merge rules and the deletion sweep; tests beside each.
-- [meeting.go](../../backend/internal/service/meeting.go) and
-  [meeting_source_taint_test.go](../../backend/internal/service/meeting_source_taint_test.go):
-  non-owner source markers and the writer allowlist.
+  CAS transitions and merge rules; tests beside each.
 - [dictionary.go](../../backend/internal/service/dictionary.go): resource naming,
   status, and phrase-only vocabulary construction.
 - [transcribe.go](../../backend/internal/service/transcribe.go),
