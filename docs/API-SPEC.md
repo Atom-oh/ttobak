@@ -616,56 +616,49 @@ without text or user ID. No route throttling is configured in `gateway-stack.ts`
 ### Meeting translation
 
 `POST /api/meetings/{meetingId}/translation` translates one bounded reading page of
-a meeting's AI notes or selected transcript on demand. Nothing is persisted
-(`persisted: false`, `Cache-Control: no-store`). Unless
-`MEETING_TRANSLATION_ENABLED=true` it returns 404 `FEATURE_DISABLED` before identity
-or storage checks; meeting detail exposes the flag as `supportsMeetingTranslation`.
+a meeting's AI notes or selected transcript; nothing is persisted (`persisted:
+false`, `Cache-Control: no-store`). Unless `MEETING_TRANSLATION_ENABLED=true` it
+returns 404 `FEATURE_DISABLED` before identity or storage checks; meeting detail
+exposes `supportsMeetingTranslation`.
 
-The body is `{part, target, cursor?}`, at most 4KB (413 above), decoded strictly.
-Unknown fields, trailing values, `part` other than `notes|transcript` or `target`
-other than `ko|en` return 400 `BAD_REQUEST`; a cursor over 2048 characters or
-outside the reading-cursor alphabet returns 400 `INVALID_CURSOR`; both before
-storage reads. Pages come only from `MeetingReadingService` (notes read
-`kind=meeting&section=summary` `content`; transcript reads
-`kind=transcript&source=selected`; 4000 code points), so authorization and cursors
-match `/reading`: non-readers get 404, restricted derived content 409
-`SHARING_REGEN_REQUIRED`, changed sources 409 `STALE_CURSOR`. A non-final page is
-trimmed to its last line outside a fenced block (notes), speaker header or line
-(text transcript) or whole segment, and `nextCursor` is the reader's cursor
-re-issued there. A page without such a boundary is kept whole; a notes page kept
-whole inside a fence returns a wrapper cursor carrying the open fence. As in
-CommonMark, a fence closes only on a bare run of its character at least as long.
-Pass `nextCursor` unchanged with the same `part`; pages concatenate to the source.
+The strict body `{part, target, cursor?}` is at most 4KB (413 above). Unknown
+fields, trailing values, `part` other than `notes|transcript` or `target` other
+than `ko|en` return 400 `BAD_REQUEST`; a cursor over 2048 characters or outside the
+reading-cursor alphabet 400 `INVALID_CURSOR`, before storage reads. Pages of 4000
+code points come only from `MeetingReadingService` (notes: `kind=meeting&section=
+summary`; transcript: `kind=transcript&source=selected`), so access and cursor
+errors match `/reading` (404, 409 `SHARING_REGEN_REQUIRED`, 409 `STALE_CURSOR`).
+A non-final page is trimmed to its last line start (notes: outside a fence if any;
+text transcript: a speaker header after a blank line, else a line not directly
+after a header) or whole segment, re-issuing the reader's cursor; a page without
+one is kept whole. A wrapper cursor carries an open notes fence (closed, as in
+CommonMark, only by a bare run of its character at least as long) or the
+text-transcript speaker and mid-run state. Pass `nextCursor` unchanged with the
+same `part`; pages concatenate to the source.
 
-Notes are translated per Markdown line: heading/list/quote/checkbox markers stay
-local; links, images, inline code, HTML and URLs become `⟦Ln⟧` placeholders;
-fenced code, table rules and blank lines are not sent. Long lines never split
-inside a placeholder, and a line that does not restore every placeholder exactly
-once keeps its source. Transcript segments are sent without speaker labels or
-timestamps, reattached from the page (`segments[]` with `segmentId`, `speaker`,
-`startTime`/`endTime` only when timed, `partial`, `text`); text-mode `[speaker]`
-headers (first line or after a blank line) are not sent, other bracketed lines are
-speech. Lines with at least 30% Hangul are Korean, Latin-only lines English, and
-code-mixed Hangul/Latin lines are sent as the non-target language; lines already
-in the target or in another script keep their source. Lines are grouped by source
-language into at most 12 chunks of at most 3,000 bytes, translated with concurrency
-4 inside a 20 s budget through the `quality: high` interpreter path (validation and
-Amazon Translate fallback) with a rule to keep line count and placeholders. A chunk
-whose output changes line count, placeholder set or table pipes is retried once with
-Amazon Translate; if that fails, the budget expires, or it is beyond 12 chunks, its
-lines keep the source. Source-kept lines count toward `untranslatedLines`. If every
-chunk fails the API returns 502 `TRANSLATION_FAILED`; a response over 64KB returns
-502 `TRANSLATION_TOO_LARGE`.
+Notes are translated per Markdown line: markers stay local; links, images, inline
+code, HTML and URLs become atomic `⟦Ln⟧` placeholders; fenced code, table rules and
+blank lines are not sent. Transcript text is sent without speaker labels or times,
+reattached from the page (`segments[]`: `segmentId`, `speaker`, `startTime`/
+`endTime` when timed, `partial`, `text`); text-mode `[speaker]` headers (page start
+outside a run, or after a blank line) are not sent, other bracketed lines are
+speech. Lines with at least 30% Hangul are Korean, Latin-only lines English,
+code-mixed lines the non-target language; target-language or other-script lines
+stay source. At most 12 same-language chunks of 3,000 bytes run with concurrency 4
+in a 20 s budget through the `quality: high` interpreter path; a chunk changing
+line count, placeholders or table pipes is retried once with Amazon Translate. A
+line with any failed, over-cap or unrestorable piece keeps its whole source and
+counts toward `untranslatedLines`. All chunks failing returns 502
+`TRANSLATION_FAILED`; a response over 64KB 502 `TRANSLATION_TOO_LARGE`.
 
 The response is `{meetingId, part, target, revision, mode?, notes? | segments?,
 engines, untranslatedLines, nextCursor, complete, persisted}`. Bytes to be sent are
-charged on attempt, including failed requests, to the daily per-user
-`WindowCounter` bucket `meeting-translate` (UTC day, TTL window end + 2h); above
-`MEETING_TRANSLATE_DAILY_BYTES` (default 2,000,000; 0 disables) the API returns 429
-`RATE_LIMITED` with `Retry-After`. Counter errors fail open. Each translation
-attempt, including both 502 outcomes, logs one metering line `{evt:
-"meeting_translate", outcome, part, tgt, inBytes, outBytes, chunks, failedChunks,
-untranslatedLines, ms}` without text or user ID.
+charged on attempt to the daily per-user `WindowCounter` bucket `meeting-translate`
+(UTC day, TTL window end + 2h); above `MEETING_TRANSLATE_DAILY_BYTES` (default
+2,000,000; 0 disables) the API returns 429 `RATE_LIMITED` with `Retry-After`.
+Counter errors fail open. Each attempt after the page read, including 429 and 502,
+logs one line `{evt: "meeting_translate", outcome, part, tgt, inBytes, outBytes,
+chunks, failedChunks, untranslatedLines, ms}` without text or user ID.
 
 ### Simulator
 

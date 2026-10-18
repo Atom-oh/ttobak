@@ -111,25 +111,22 @@ rate in production; tune the timeout from the metering logs.
 
 ## Amendment 2026-10-18: on-demand meeting translation (G1)
 
-- Live translations are not persisted. Readers translate the final AI notes or
-  selected transcript on demand with `POST /api/meetings/{id}/translation`; the
-  result exists only in the response and client memory.
-- Pages come only from `MeetingReadingService`, never full-meeting reads, so read
-  authorization, restricted-summary projection and revision-bound cursors are the
-  reading endpoint's own. A non-final page is trimmed to a line, speaker header or
-  whole-segment boundary and the reader's cursor is re-issued there; a page without
-  one is kept whole. The translator never invents a binding or skips text.
-- Notes are translated per Markdown line with links, code, HTML and URLs behind
-  atomic `⟦Ln⟧` placeholders that must round-trip exactly, or the line keeps its
-  source; transcript text is sent without speaker labels or timestamps. A chunk
-  that does not round-trip is retried with Amazon Translate, else kept and counted.
-- Lines are sent as Korean (≥30% Hangul), English (Latin only) or, if code-mixed,
-  the non-target language; other scripts stay source.
-- Cost bounds: at most 12 chunks of 3,000 bytes, concurrency 4, a 20 s budget, a
-  64KB response and a daily per-user byte counter (`MEETING_TRANSLATE_DAILY_BYTES`)
-  charged on attempt as an abuse brake. `MEETING_TRANSLATION_ENABLED` defaults off.
-- Not included: the meeting glossary (not on this branch); single lines or segments
-  longer than one page still split at the reader's cut.
+- Live translations are not persisted. Readers translate final AI notes or the
+  selected transcript with `POST /api/meetings/{id}/translation`; the result
+  exists only in the response and client memory.
+- Pages come only from `MeetingReadingService`, so read authorization, restricted
+  summaries and revision-bound cursors are the reading endpoint's own. Non-final
+  pages end at a line, speaker header or whole segment; a wrapper cursor carries an
+  open fence or the text-transcript speaker. No binding is invented or text skipped.
+- Links, code, HTML and URLs are atomic `⟦Ln⟧` placeholders that must round-trip,
+  and transcript text is sent without labels or times. A line with any failed piece
+  keeps its source and is counted. Lines go as Korean (≥30% Hangul), English
+  (Latin only) or, if code-mixed, the non-target language; other scripts stay.
+- Bounds: 12 chunks of 3,000 bytes, concurrency 4, a 20 s budget, a 64KB response
+  and a daily per-user byte brake charged on attempt (`MEETING_TRANSLATE_DAILY_BYTES`).
+  `MEETING_TRANSLATION_ENABLED` defaults off.
+- Not included: the meeting glossary; a single line longer than a page splits at
+  the reader's cut.
 
 ## Evidence
 
