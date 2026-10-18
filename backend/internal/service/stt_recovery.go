@@ -109,9 +109,11 @@ func SttFailureMarkCurrent(row model.SttRecoveryRow) bool {
 	return row.SttFailureCode != "" && row.Status == model.StatusError && row.SttFailedAt != "" && row.UpdatedAt == row.SttFailedAt
 }
 
-// SttRecoveryDeadline is when a claimed or stuck STT run is presumed dead.
+// SttRecoveryDeadline is when a claimed or stuck STT run is presumed dead. The
+// short retry delay applies only to a current retryable mark: a stale code left
+// on a row a user has since restarted never shortens a healthy run's window.
 func SttRecoveryDeadline(row model.SttRecoveryRow, facts SttRecoveryFacts) time.Time {
-	if model.IsRetryableSttFailure(row.SttFailureCode) {
+	if model.IsRetryableSttFailure(row.SttFailureCode) && SttFailureMarkCurrent(row) {
 		if failed, ok := parseSttTime(row.SttFailedAt); ok {
 			return failed.Add(SttRecoveryRetryDelay)
 		}
@@ -133,8 +135,9 @@ func SttRecoveryDeadline(row model.SttRecoveryRow, facts SttRecoveryFacts) time.
 }
 
 // SttPipelineRestartedAt is the latest observed (re)start of the STT pipeline:
-// the newest audio-prefix object, the last recovery claim and, while
-// transcribing, updatedAt. A transcript older than this belongs to a superseded
+// the newest audio-prefix object, the last STT recovery claim and, while
+// transcribing, updatedAt unless it is this tick's own summary re-drive claim
+// (that re-emits the transcript; it restarts nothing). A transcript older than this belongs to a superseded
 // run (for example a user rediarization still in progress) and must never be
 // re-published. It is truncated to whole seconds because S3 LastModified has
 // second precision while claims use RFC3339Nano.
@@ -146,7 +149,7 @@ func SttPipelineRestartedAt(row model.SttRecoveryRow, facts SttRecoveryFacts) ti
 	if claimed, ok := parseSttTime(row.SttRecoveryClaimedAt); ok && claimed.After(restart) {
 		restart = claimed
 	}
-	if row.Status == model.StatusTranscribing {
+	if row.Status == model.StatusTranscribing && row.UpdatedAt != row.SttSummaryRedriveClaimedAt {
 		if updated, ok := parseSttTime(row.UpdatedAt); ok && updated.After(restart) {
 			restart = updated
 		}
@@ -213,21 +216,22 @@ func ClassifySttRecovery(row model.SttRecoveryRow, facts SttRecoveryFacts, now t
 	if !facts.AudioFound || facts.AudioSize < SttRecoveryMinAudioBytes {
 		return SttRecoveryDecision{Action: SttRecoveryReport, Reason: "audio_missing"}
 	}
+	// Both budgets are bound to the audio key they were spent on.
+	attempts, summaryAttempts := 0, 0
+	if row.SttRecoveryAudioKey == key {
+		attempts, summaryAttempts = row.SttRecoveryAttempts, row.SttSummaryRedriveAttempts
+	}
 	if facts.TranscriptFound && !facts.TranscriptModified.Before(SttPipelineRestartedAt(row, facts)) {
 		if now.Sub(facts.TranscriptModified) < SttSummaryRedriveMinAge {
 			return skip("transcript_fresh")
 		}
-		if row.SttSummaryRedriveAttempts >= model.MaxSttRecoveryAttempts {
+		if summaryAttempts >= model.MaxSttRecoveryAttempts {
 			return SttRecoveryDecision{Action: SttRecoveryReport, Reason: "summary_redrive_exhausted"}
 		}
-		return SttRecoveryDecision{Action: SttRecoveryRedriveSummary, Reason: "transcript_unpublished", Key: key, Attempt: row.SttSummaryRedriveAttempts + 1}
+		return SttRecoveryDecision{Action: SttRecoveryRedriveSummary, Reason: "transcript_unpublished", Key: key, Attempt: summaryAttempts + 1}
 	}
 	if now.Before(SttRecoveryDeadline(row, facts)) {
 		return skip("in_flight")
-	}
-	attempts := 0
-	if row.SttRecoveryAudioKey == key {
-		attempts = row.SttRecoveryAttempts
 	}
 	if attempts >= model.MaxSttRecoveryAttempts {
 		return SttRecoveryDecision{Action: SttRecoveryMarkExhausted, Reason: "attempts", Key: key}
@@ -236,9 +240,14 @@ func ClassifySttRecovery(row model.SttRecoveryRow, facts SttRecoveryFacts, now t
 }
 
 // SttFailureDeletionDue reports whether a marked failed recording passed its
-// grace period with no activity at all. Only UUID meeting IDs are eligible.
+// grace period with no activity at all. Only UUID meeting IDs of single-file
+// recordings without a speaker hint are eligible; this pre-filters rows the
+// guarded repository delete would refuse anyway.
 func SttFailureDeletionDue(row model.SttRecoveryRow, now time.Time) bool {
 	if row.Status != model.StatusError || !model.IsDeletableSttFailure(row.SttFailureCode) || !SttFailureMarkCurrent(row) {
+		return false
+	}
+	if len(row.AudioKeys) > 0 || row.AudioPartCount > 1 || row.DiarizationSpeakerHint != 0 {
 		return false
 	}
 	failed, ok := parseSttTime(row.SttFailedAt)

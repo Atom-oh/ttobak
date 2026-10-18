@@ -78,7 +78,10 @@ func TestClassifySttRecovery(t *testing.T) {
 		{"tiny audio", sttRow(), sttFacts(func(f *SttRecoveryFacts) { f.AudioSize = 1023 }), SttRecoveryReport, "audio_missing", 0},
 		{"transcript newer than audio and old enough", sttRow(), sttFacts(transcriptAt(-30 * time.Minute)), SttRecoveryRedriveSummary, "transcript_unpublished", 1},
 		{"transcript still fresh", sttRow(), sttFacts(transcriptAt(-10 * time.Minute)), SttRecoverySkip, "transcript_fresh", 0},
-		{"summary redrive budget spent", sttRow(func(r *model.SttRecoveryRow) { r.SttSummaryRedriveAttempts = 2 }), sttFacts(transcriptAt(-30 * time.Minute)), SttRecoveryReport, "summary_redrive_exhausted", 0},
+		{"summary redrive budget spent", sttRow(func(r *model.SttRecoveryRow) { r.SttSummaryRedriveAttempts, r.SttRecoveryAudioKey = 2, sttKey }), sttFacts(transcriptAt(-30 * time.Minute)), SttRecoveryReport, "summary_redrive_exhausted", 0},
+		{"summary budget of replaced audio resets", sttRow(func(r *model.SttRecoveryRow) {
+			r.SttSummaryRedriveAttempts, r.SttRecoveryAudioKey = 2, "audio/owner-1/"+sttMeeting+"/old.webm"
+		}), sttFacts(transcriptAt(-30 * time.Minute)), SttRecoveryRedriveSummary, "transcript_unpublished", 1},
 		{"rediarize restart newer than transcript is in flight", sttRow(func(r *model.SttRecoveryRow) {
 			r.UpdatedAt = sttNow.Add(-10 * time.Minute).Format(time.RFC3339Nano)
 		}), sttFacts(transcriptAt(-30*time.Minute), newestAudioAt(-10*time.Minute)), SttRecoverySkip, "in_flight", 0},
@@ -92,10 +95,14 @@ func TestClassifySttRecovery(t *testing.T) {
 		}), sttFacts(transcriptAt(-30 * time.Minute)), SttRecoverySkip, "in_flight", 0},
 		{"dead restart falls back to the STT deadline", sttRow(func(r *model.SttRecoveryRow) { r.Status = model.StatusError }),
 			sttFacts(transcriptAt(-5*time.Hour), newestAudioAt(-4*time.Hour)), SttRecoveryRedriveSTT, "stuck", 1},
-		{"own summary claim within the same second still redrives", sttRow(func(r *model.SttRecoveryRow) {
-			claim := sttNow.Add(-30*time.Minute + 500*time.Millisecond).Format(time.RFC3339Nano)
-			r.UpdatedAt, r.SttRecoveryClaimedAt, r.SttSummaryRedriveAttempts = claim, claim, 1
-		}), sttFacts(transcriptAt(-30 * time.Minute)), SttRecoveryRedriveSummary, "transcript_unpublished", 2},
+		{"own summary claim is not an STT restart", sttRow(func(r *model.SttRecoveryRow) {
+			claim := sttNow.Add(-40 * time.Minute).Format(time.RFC3339Nano)
+			r.UpdatedAt, r.SttSummaryRedriveClaimedAt, r.SttSummaryRedriveAttempts, r.SttRecoveryAudioKey = claim, claim, 1, sttKey
+		}), sttFacts(transcriptAt(-2 * time.Hour)), SttRecoveryRedriveSummary, "transcript_unpublished", 2},
+		{"released summary claim keeps the transcript", sttRow(retryable(-30*time.Minute), func(r *model.SttRecoveryRow) {
+			r.SttFailureCode, r.SttSummaryRedriveAttempts, r.SttRecoveryAudioKey = model.SttFailureRedriveFailed, 1, sttKey
+			r.SttSummaryRedriveClaimedAt = sttNow.Add(-31 * time.Minute).Format(time.RFC3339Nano)
+		}), sttFacts(transcriptAt(-2 * time.Hour)), SttRecoveryRedriveSummary, "transcript_unpublished", 2},
 		{"stale transcript older than audio is ignored", sttRow(), sttFacts(transcriptAt(-7 * time.Hour)), SttRecoveryRedriveSTT, "stuck", 1},
 		{"stuck past deadline", sttRow(), sttFacts(), SttRecoveryRedriveSTT, "stuck", 1},
 		{"error row past deadline", sttRow(func(r *model.SttRecoveryRow) { r.Status = model.StatusError }), sttFacts(), SttRecoveryRedriveSTT, "stuck", 1},
@@ -107,6 +114,9 @@ func TestClassifySttRecovery(t *testing.T) {
 		{"in flight", sttRow(func(r *model.SttRecoveryRow) { r.UpdatedAt = sttNow.Add(-30 * time.Minute).Format(time.RFC3339Nano) }), sttFacts(), SttRecoverySkip, "in_flight", 0},
 		{"retryable code waits for its delay", sttRow(retryable(-10 * time.Minute)), sttFacts(), SttRecoverySkip, "in_flight", 0},
 		{"retryable code after its delay", sttRow(retryable(-16 * time.Minute)), sttFacts(), SttRecoveryRedriveSTT, "stuck", 1},
+		{"stale retryable code never shortens a restarted run", sttRow(retryable(-2*time.Hour), func(r *model.SttRecoveryRow) {
+			r.Status, r.UpdatedAt = model.StatusTranscribing, sttNow.Add(-10*time.Minute).Format(time.RFC3339Nano)
+		}), sttFacts(func(f *SttRecoveryFacts) { f.AudioModified = sttNow.Add(-10 * time.Minute) }), SttRecoverySkip, "in_flight", 0},
 		{"stale terminal mark on a restarted run", sttRow(func(r *model.SttRecoveryRow) {
 			r.SttFailureCode, r.SttFailedAt = model.SttFailureAudioCorrupt, "2026-01-01T00:00:00Z"
 		}), sttFacts(), SttRecoveryRedriveSTT, "stuck", 1},
@@ -198,6 +208,9 @@ func TestSttFailureDeletionDue(t *testing.T) {
 		{"legacy meeting id", marked(30*24*time.Hour, func(r *model.SttRecoveryRow) { r.MeetingID = "meeting_1700000000" }), false},
 		{"unsafe user id", marked(30*24*time.Hour, func(r *model.SttRecoveryRow) { r.UserID = "a/b" }), false},
 		{"not in error", marked(30*24*time.Hour, func(r *model.SttRecoveryRow) { r.Status = model.StatusTranscribing }), false},
+		{"multipart keys", marked(30*24*time.Hour, func(r *model.SttRecoveryRow) { r.AudioKeys = []string{sttKey} }), false},
+		{"multipart count", marked(30*24*time.Hour, func(r *model.SttRecoveryRow) { r.AudioPartCount = 2 }), false},
+		{"speaker hint is user input", marked(30*24*time.Hour, func(r *model.SttRecoveryRow) { r.DiarizationSpeakerHint = 3 }), false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
