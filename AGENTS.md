@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 9e3b72877656 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: bd4d1f66224f · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
 # TTOBAK review context
 
 Shared by Codex, Kiro, and the CI review panel. Extracted from the
@@ -52,14 +52,14 @@ Translate. CI reviewer aliases are separate configuration.
 
 Run each parenthesized command from the repository root. Use
 `/usr/local/go/bin/go` locally; CI may use `go` after `actions/setup-go`.
-Go tests must include `cmd/*`, not just `internal/*`. Frontend has no unit-test
-framework: lint and production build are its required checks.
+Go tests must include `cmd/*`, not just `internal/*`. Frontend checks are lint,
+`node:test` scripts and production build.
 
 ```bash
 (cd backend && /usr/local/go/bin/go test ./... -count=1)
 (cd backend && /usr/local/go/bin/go vet ./...)
 (cd backend && GOOS=linux GOARCH=arm64 /usr/local/go/bin/go build -tags lambda.norpc -o cmd/api/bootstrap ./cmd/api)
-(cd frontend && npm run lint && npm run build)
+(cd frontend && npm run lint && npm run test:unit && npm run build)
 # Install boto3<2 in the active Python environment for crawler/research SigV4 tests.
 (cd backend/python/crawler && python3 -m unittest test_crawlers -v)
 (cd backend/python/research-agent && python3 -m unittest test_tools -v)

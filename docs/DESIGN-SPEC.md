@@ -128,9 +128,8 @@ Desktop Web
 Speech fallback remains Korean-configured and the interpretation UI explains
 that mixed-language recognition requires the Transcribe Streaming connection.
 These controls do not establish a measured speech-accuracy or end-to-end latency
-guarantee. Run regression checks explicitly with
-`node --test scripts/live-translation.test.mjs scripts/stt-recovery.test.mjs` from
-`frontend/`; the required lint/build commands do not run these scripts.
+guarantee. Their regression scripts run with every `frontend/scripts/*.test.mjs`
+suite through `npm run test:unit` in `frontend/`; lint and build do not run them.
 
 Browser microphone/tab capture also stores each delivered audio chunk in IndexedDB,
 partitioned by Cognito user and a random recording ID. A Web Lock keeps a live or
