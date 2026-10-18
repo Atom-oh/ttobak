@@ -35,7 +35,8 @@ key-only or one-package revert; see ADR-035.
 
 Build with `npm run build` in `frontend/`. The current workflow then runs
 `npm run test:unit` (the `frontend/scripts/*.test.mjs` suites) and stops before
-upload if they fail. It runs only on pushes to `main`, not on pull requests.
+upload if they fail. Pull requests that touch `frontend/` run the same suites
+and lint in `test-frontend.yml`.
 It preserves the CDK-generated `config.json` during S3 sync and invalidates CloudFront. It does not
 perform an unconditional HTML copy or set no-cache metadata: forced HTML refresh
 remains a release requirement and a workflow gap, not implemented CI behavior.
