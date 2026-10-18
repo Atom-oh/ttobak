@@ -36,6 +36,10 @@ jobs:
         working-directory: frontend
         run: npm ci && npm run build
 
+      - name: Run frontend unit tests
+        working-directory: frontend
+        run: npm run test:unit
+
       - name: Sync to S3
         run: aws s3 sync frontend/out/ "s3://${S3_BUCKET}/" --delete --exclude "config.json"
 

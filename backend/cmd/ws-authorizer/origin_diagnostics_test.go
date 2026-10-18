@@ -95,7 +95,7 @@ func TestOriginFailureLogsFixedReasonsWithoutPrivateInputs(t *testing.T) {
 			tokenCalls := 0
 			verifyToken = func(string) (*middleware.ALBOIDCClaims, error) {
 				tokenCalls++
-				return &middleware.ALBOIDCClaims{Sub: "synthetic-user"}, nil
+				return firstPartyClaims(), nil
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -160,7 +160,7 @@ func TestExpiredSecretFailureIsLoggedWithoutFallback(t *testing.T) {
 	t.Cleanup(func() { cognitoUserPoolID, verifyToken, cloudFrontOrigin = oldPool, oldToken, oldOrigin })
 	cognitoUserPoolID = "test-pool"
 	verifyToken = func(string) (*middleware.ALBOIDCClaims, error) {
-		return &middleware.ALBOIDCClaims{Sub: "synthetic-user"}, nil
+		return firstPartyClaims(), nil
 	}
 	cloudFrontOrigin = newOriginVerifier(testSecretARN, client)
 	now := time.Unix(1000, 0)
