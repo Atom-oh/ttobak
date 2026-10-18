@@ -79,6 +79,18 @@ export function rateLimitContext(scope: Construct, key: string, defaultValue: nu
   return String(Number(text));
 }
 
+/**
+ * Reads a strict boolean feature flag from CDK context as "true"/"false".
+ * Absent means off; anything other than a boolean or its string fails synth.
+ */
+export function booleanContext(scope: Construct, key: string): string {
+  const raw = scope.node.tryGetContext(key);
+  if (raw === undefined || raw === null) return 'false';
+  if (raw === true || raw === 'true') return 'true';
+  if (raw === false || raw === 'false') return 'false';
+  throw new Error(`${key} must be true or false, got ${JSON.stringify(raw)}`);
+}
+
 /** Reads an integer millisecond context value within [min, max]. */
 export function millisecondsContext(scope: Construct, key: string, defaultValue: number, min: number, max: number): string {
   const raw = scope.node.tryGetContext(key);
@@ -233,6 +245,10 @@ export class GatewayStack extends cdk.Stack {
         // Interpreter call deadline; Amazon Translate fallback must still fit the
         // browser's 10s abort. Bounds match ParseTranslateHighTimeout.
         TRANSLATE_HIGH_TIMEOUT_MS: millisecondsContext(this, 'ttobak:translateHighTimeoutMs', 6000, 500, 8000),
+        // On-demand meeting translation (POST /api/meetings/{id}/translation):
+        // off by default; per-user daily byte budget (0 disables the limit).
+        MEETING_TRANSLATION_ENABLED: booleanContext(this, 'ttobak:meetingTranslationEnabled'),
+        MEETING_TRANSLATE_DAILY_BYTES: rateLimitContext(this, 'ttobak:meetingTranslateDailyBytes', 2000000),
         FRONTEND_BASE_URL: `https://${domainName}`,
         // Same-domain CloudFront-signed download URLs (ADR-027). Key material
         // comes from fixed-name SSM params (/ttobak/cloudfront/*) at runtime,

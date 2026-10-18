@@ -191,7 +191,16 @@ func init() {
 	simHandler := handler.NewSimHandler(simService)
 	meetingHandler.SetSimService(simService)
 	actionItemsService := service.NewMetadataActionItemsAnalysisService(repo, bedrockService, service.ActionItemsPublisher(ebClient))
-	readingHandler := handler.NewMeetingReadingHandler(service.NewMeetingReadingService(repo, actionItemsService))
+	readingService := service.NewMeetingReadingService(repo, actionItemsService)
+	readingHandler := handler.NewMeetingReadingHandler(readingService)
+	// On-demand meeting translation (ADR-005 amendment): off unless exactly "true".
+	meetingTranslationEnabled := os.Getenv("MEETING_TRANSLATION_ENABLED") == "true"
+	meetingTranslationHandler := handler.NewMeetingTranslationHandler(service.NewMeetingTranslationService(
+		readingService, translateService,
+		service.NewWindowCounter(repository.NewRateCounterRepository(dynamoClient, tableName)),
+		service.ParseRateLimit("MEETING_TRANSLATE_DAILY_BYTES", os.Getenv("MEETING_TRANSLATE_DAILY_BYTES"), service.DefaultMeetingTranslateDailyBytes),
+	), meetingTranslationEnabled)
+	meetingHandler.SetMeetingTranslationEnabled(meetingTranslationEnabled)
 	navigationService := service.NewNavigationCatalogService(repo)
 	accountCatalogHandler := handler.NewNavigationCatalogHandler(navigationService, "accounts")
 	projectCatalogHandler := handler.NewNavigationCatalogHandler(navigationService, "projects")
@@ -285,6 +294,7 @@ func init() {
 		r.Post("/api/meetings", meetingHandler.CreateMeeting)
 		r.Get("/api/meetings/{meetingId}", meetingHandler.GetMeeting)
 		r.Get("/api/meetings/{meetingId}/reading", readingHandler.Get)
+		r.Post("/api/meetings/{meetingId}/translation", meetingTranslationHandler.Post)
 		r.Get("/api/meetings/{meetingId}/action-items", actionItemsHandler.Get)
 		r.Get("/api/meetings/{meetingId}/resummary", resummaryHandler.Get)
 		r.Post("/api/meetings/{meetingId}/resummary", resummaryHandler.Request)
