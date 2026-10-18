@@ -234,7 +234,13 @@ func TestDictionaryWriteGuards(t *testing.T) {
 				_, err := r.EvictAutoTerm(context.Background(), "USER#u1", key, 5)
 				return err
 			},
-			ErrDictTermConflict, "", 0, []string{`version = {"N":"5"}`, `origin = {"S":"auto"}`, "attribute_not_exists (userEditedAt)", `state = {"S":"active"}`}, nil},
+			ErrDictTermConflict, "", 0, []string{`version = {"N":"5"}`, `origin = {"S":"auto"}`, "attribute_not_exists (userEditedAt)", `state IN ({"S":"active"}, {"S":"suggested"})`}, nil},
+		{"promote: version, suggested state, origin or user edit", cancelled("None", "ConditionalCheckFailed"),
+			func(r *DictionaryRepository) error { return r.PromoteSuggestedTerm(context.Background(), merge) },
+			ErrDictTermConflict, "Update", 1, []string{`version = {"N":"3"}`, `state = {"S":"suggested"}`, `origin = {"S":"auto"}`, "attribute_not_exists (userEditedAt)"}, nil},
+		{"promote: meeting already counted", cancelled("ConditionalCheckFailed", "None"),
+			func(r *DictionaryRepository) error { return r.PromoteSuggestedTerm(context.Background(), merge) },
+			ErrDictObservationExists, "Put", 0, []string{"attribute_not_exists (PK)"}, nil},
 		{"user edit is version guarded", conditionalFailed,
 			func(r *DictionaryRepository) error {
 				return r.UpdateDictTerm(context.Background(), "USER#u1", key, DictTermChange{Phrase: &phrase}, "u1", "now", 9)
@@ -311,7 +317,11 @@ func TestDictionaryWriteEffects(t *testing.T) {
 	if err := repo.MergeAutoObservation(context.Background(), DictMergeInput{PK: "USER#u1", TermKey: key, Observation: obs, ExpectedVersion: 1}); err != nil {
 		t.Fatal(err)
 	}
-	requireAll(t, "merge", resolved(txItems(t, (*calls)[0])[1]["Update"].(map[string]any), "UpdateExpression"), "ADD hits", "heardAs", "lastSeenAt", "version")
+	mergeUpdate := resolved(txItems(t, (*calls)[0])[1]["Update"].(map[string]any), "UpdateExpression")
+	requireAll(t, "merge", mergeUpdate, "ADD hits", "heardAs", "lastSeenAt", "version")
+	if strings.Contains(mergeUpdate, "sourceTypes") || strings.Contains(mergeUpdate, "state") {
+		t.Fatalf("merge without source types must not touch them or the state: %s", mergeUpdate)
+	}
 	if err := repo.RestoreDictTerm(context.Background(), term, 4); err != nil {
 		t.Fatal(err)
 	}

@@ -111,6 +111,7 @@ type DictMergeInput struct {
 	TermKey         string
 	Observation     *model.DictObservation
 	HeardAs         []string // deduped, trimmed union computed by the caller
+	SourceTypes     []string // union computed by the caller; nil leaves it as is
 	SeenAt          string
 	ExpectedVersion int64
 }
@@ -490,7 +491,22 @@ func (r *DictionaryRepository) CreateAutoTerm(ctx context.Context, term *model.D
 // MergeAutoObservation records a new observation and bumps the auto term in
 // one transaction. hits increases only when the observation row is new.
 func (r *DictionaryRepository) MergeAutoObservation(ctx context.Context, in DictMergeInput) error {
-	if in.Observation == nil || in.Observation.PK != in.PK || in.Observation.TermKey != in.TermKey {
+	return r.observeAutoTerm(ctx, in, model.TermStateActive, expression.UpdateBuilder{})
+}
+
+// PromoteSuggestedTerm turns an unedited suggested auto term active at the
+// expected version, recording the observation and bumping hits in the same
+// transaction (A4: an untainted run confirms a suggestion).
+func (r *DictionaryRepository) PromoteSuggestedTerm(ctx context.Context, in DictMergeInput) error {
+	return r.observeAutoTerm(ctx, in, model.TermStateSuggested,
+		expression.Set(expression.Name("state"), expression.Value(model.TermStateActive)))
+}
+
+// observeAutoTerm is the shared obs Put + guarded term Update. fromState is
+// the state the term must be in; extra carries additional SET clauses.
+func (r *DictionaryRepository) observeAutoTerm(ctx context.Context, in DictMergeInput, fromState string, extra expression.UpdateBuilder) error {
+	if in.Observation == nil || in.Observation.PK != in.PK || in.Observation.TermKey != in.TermKey ||
+		in.Observation.SK != model.DictObsSK(in.TermKey, in.Observation.MeetingID) {
 		return fmt.Errorf("invalid dictionary observation merge")
 	}
 	obsPut, err := r.putIfAbsent(in.Observation)
@@ -498,14 +514,17 @@ func (r *DictionaryRepository) MergeAutoObservation(ctx context.Context, in Dict
 		return err
 	}
 	condition := expression.Name("version").Equal(expression.Value(in.ExpectedVersion)).
-		And(expression.Name("state").Equal(expression.Value(model.TermStateActive))).
+		And(expression.Name("state").Equal(expression.Value(fromState))).
 		And(expression.Name("origin").Equal(expression.Value(model.TermOriginAuto))).
 		And(expression.AttributeNotExists(expression.Name("userEditedAt")))
-	update := expression.Set(expression.Name("heardAs"), expression.Value(in.HeardAs)).
+	update := extra.Set(expression.Name("heardAs"), expression.Value(in.HeardAs)).
 		Set(expression.Name("lastSeenAt"), expression.Value(in.SeenAt)).
 		Set(expression.Name("updatedAt"), expression.Value(in.SeenAt)).
 		Set(expression.Name("version"), expression.Name("version").Plus(expression.Value(1))).
 		Add(expression.Name("hits"), expression.Value(1))
+	if len(in.SourceTypes) > 0 {
+		update = update.Set(expression.Name("sourceTypes"), expression.Value(in.SourceTypes))
+	}
 	expr, err := expression.NewBuilder().WithUpdate(update).WithCondition(condition).Build()
 	if err != nil {
 		return err
@@ -618,13 +637,14 @@ func (r *DictionaryRepository) RestoreDictTerm(ctx context.Context, term *model.
 	return dictSingleError(err, ErrDictTermConflict)
 }
 
-// EvictAutoTerm deletes an unedited active auto term at the expected version,
-// then deletes its observations best effort.
+// EvictAutoTerm deletes an unedited active or suggested auto term at the
+// expected version, then deletes its observations best effort. Both states
+// count toward the automatic-term cap.
 func (r *DictionaryRepository) EvictAutoTerm(ctx context.Context, pk, termKey string, expectedVersion int64) (DictWriteResult, error) {
 	condition := expression.Name("version").Equal(expression.Value(expectedVersion)).
 		And(expression.Name("origin").Equal(expression.Value(model.TermOriginAuto))).
 		And(expression.AttributeNotExists(expression.Name("userEditedAt"))).
-		And(expression.Name("state").Equal(expression.Value(model.TermStateActive)))
+		And(expression.Name("state").In(expression.Value(model.TermStateActive), expression.Value(model.TermStateSuggested)))
 	expr, err := expression.NewBuilder().WithCondition(condition).Build()
 	if err != nil {
 		return DictWriteResult{}, err
