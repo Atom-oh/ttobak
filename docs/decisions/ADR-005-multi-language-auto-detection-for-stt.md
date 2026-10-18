@@ -95,6 +95,32 @@ are deliberately generous and should be revisited from the metering logs.
 Not yet measured: the interpreter's latency distribution and validation rejection
 rate in production; tune the timeout from the metering logs.
 
+## Amendment 2026-10-18: on-demand meeting translation (G1)
+
+- Live translations are not persisted. Instead, a reader can translate the final
+  AI notes or selected transcript on demand with
+  `POST /api/meetings/{id}/translation`; the result exists only in the response and
+  client memory.
+- Pages come only from `MeetingReadingService`, never full-meeting reads, so read
+  authorization, restricted-summary projection and revision-bound cursors are the
+  reading endpoint's own. Continuation is the reading service's own cursor: a
+  non-final page is trimmed back to its last line outside a fenced block (notes),
+  speaker header or line (text transcript) or whole segment, and the reader's
+  cursor binding is re-issued at that offset; a page with no boundary is kept whole.
+  The translator never invents a binding or skips text.
+- Notes are translated per Markdown line with links, code, HTML and URLs behind
+  `⟦Ln⟧` placeholders that must round-trip exactly; transcript text is sent without
+  speaker labels or timestamps. A chunk whose structure does not round-trip is
+  retried with Amazon Translate and otherwise kept as source and counted.
+- Cost bounds: at most 12 chunks of 3,000 bytes, concurrency 4, a 20 s budget,
+  a 64KB response and a daily per-user byte counter (`MEETING_TRANSLATE_DAILY_BYTES`).
+  `MEETING_TRANSLATION_ENABLED` defaults to false.
+- Lines are sent as Korean (≥30% Hangul), English (Latin only) or, for code-mixed
+  Hangul/Latin lines, the language that is not the target; other scripts stay source.
+  The byte counter is an abuse brake charged on attempt, including failed attempts.
+- Not included: the meeting glossary (not present on this branch), and single lines,
+  segments or fenced blocks longer than one page, which still split at the reader's cut.
+
 ## Evidence
 
 - [transcribe.go](../../backend/internal/service/transcribe.go): both batch methods.
@@ -106,3 +132,6 @@ rate in production; tune the timeout from the metering logs.
   [translate.go handler](../../backend/internal/handler/translate.go),
   [translate.go service](../../backend/internal/service/translate.go),
   [liveTranslation.ts](../../frontend/src/lib/liveTranslation.ts): 2026-10-18 amendment.
+- [meeting_translation.go](../../backend/internal/service/meeting_translation.go),
+  [meeting translation handler](../../backend/internal/handler/meeting_translation.go):
+  on-demand meeting translation amendment.

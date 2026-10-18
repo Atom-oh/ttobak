@@ -79,6 +79,9 @@ type TranslateRequest struct {
 	TargetLang string
 	Context    []string
 	Quality    string
+	// PreserveMarkup asks the interpreter to keep line breaks and ⟦Ln⟧
+	// placeholders; meeting translation validates both before use.
+	PreserveMarkup bool
 }
 
 type TranslateResult struct {
@@ -215,6 +218,10 @@ type interpreterInput struct {
 	Current string   `json:"current_segment"`
 }
 
+// interpreterMarkupRule is appended for multi-line document translation.
+const interpreterMarkupRule = " current_segment may contain several lines: translate each line separately, " +
+	"keep exactly the same number of lines in the same order, and copy every token of the form ⟦L1⟧ unchanged."
+
 func interpreterSystemPrompt(sourceLang, targetLang string) string {
 	source := "the source language"
 	if name, ok := translateLanguageNames[sourceLang]; ok {
@@ -237,9 +244,13 @@ func buildInterpreterRequest(req TranslateRequest) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	prompt := interpreterSystemPrompt(req.SourceLang, req.TargetLang)
+	if req.PreserveMarkup {
+		prompt += interpreterMarkupRule
+	}
 	return json.Marshal(interpreterRequest{
 		Messages: []openAISummaryMessage{
-			{Role: "developer", Content: interpreterSystemPrompt(req.SourceLang, req.TargetLang)},
+			{Role: "developer", Content: prompt},
 			{Role: "user", Content: string(input)},
 		},
 		MaxCompletionTokens: translateLLMMaxTokens,

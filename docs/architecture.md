@@ -121,6 +121,12 @@ unconsumed project invitation rows expire through their existing TTL field.
    Translate fallback, and the API applies per-user hourly request limits
    (ADR-005 amendments). Interpretation failures
    do not stop capture. This path does not change batch transcription or saved notes.
+   Live translations are not persisted. After a meeting, readers can translate the
+   final AI notes or selected transcript on demand: the API reads one bounded page
+   through `MeetingReadingService` (authorization, restricted summaries, revision
+   cursors), sends placeholder-protected text without speaker labels or times to
+   the same validated interpreter path, and returns the page to client memory
+   only, behind `MEETING_TRANSLATION_ENABLED` and a daily byte budget.
 2. Upload audio to S3. EventBridge invokes the transcribe orchestrator, which uses
    configured Whisper ECS or AWS Transcribe fallback. Multipart completion and
    transcript uploads trigger summarization with concurrency/retry guards.

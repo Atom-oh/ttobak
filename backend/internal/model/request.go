@@ -139,6 +139,7 @@ type MeetingListItem struct {
 // MeetingDetailResponse represents a meeting in detail view
 type MeetingDetailResponse struct {
 	SupportsAudioCrop          bool                  `json:"supportsAudioCrop"`
+	SupportsMeetingTranslation bool                  `json:"supportsMeetingTranslation"`
 	CanRecoverRecording        bool                  `json:"canRecoverRecording"`
 	AudioCrop                  *AudioCrop            `json:"audioCrop,omitempty"`
 	Duration                   int                   `json:"duration,omitempty"`
