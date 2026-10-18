@@ -91,6 +91,36 @@ export function millisecondsContext(scope: Construct, key: string, defaultValue:
   return String(value);
 }
 
+/**
+ * Automatic term extraction flags for the summarize Lambda (design A2.4).
+ * Every value is CDK context rendered into env, defaulting to off; invalid
+ * values fail synth. The model must be a Claude ID, which the summarize
+ * role's existing Bedrock grant covers.
+ */
+export function autoTermsEnvironment(scope: Construct): Record<string, string> {
+  const read = (key: string) => {
+    const raw = scope.node.tryGetContext(key);
+    return raw === undefined || raw === null ? '' : String(raw).trim();
+  };
+  const mode = read('ttobak:autoTermsMode') || 'off';
+  if (mode !== 'off' && mode !== 'personal') {
+    throw new Error(`ttobak:autoTermsMode must be off or personal, got ${JSON.stringify(mode)}`);
+  }
+  const users = read('ttobak:autoTermsUsers');
+  if (users && !/^[A-Za-z0-9-]{1,64}(,[A-Za-z0-9-]{1,64})*$/.test(users)) {
+    throw new Error('ttobak:autoTermsUsers must be a comma-separated list of Cognito subs');
+  }
+  const confidence = read('ttobak:autoTermsMinConfidence') || '0.85';
+  if (!/^(0(\.\d+)?|1(\.0+)?)$/.test(confidence) || Number(confidence) <= 0) {
+    throw new Error(`ttobak:autoTermsMinConfidence must be in (0, 1], got ${JSON.stringify(confidence)}`);
+  }
+  const model = read('ttobak:bedrockTermsModelId') || 'global.anthropic.claude-sonnet-5-5';
+  if (!/^(global|apac)\.anthropic\.claude-[a-z0-9.-]+$/.test(model)) {
+    throw new Error(`ttobak:bedrockTermsModelId must be a Claude inference profile, got ${JSON.stringify(model)}`);
+  }
+  return { AUTO_TERMS_MODE: mode, AUTO_TERMS_USERS: users, AUTO_TERMS_MIN_CONFIDENCE: confidence, BEDROCK_TERMS_MODEL_ID: model };
+}
+
 export class GatewayStack extends cdk.Stack {
   /** Present only when ttobak:mcpResourceAudience enables HTTP MCP. */
   public readonly mcpFunction?: lambda.Function;
@@ -331,6 +361,7 @@ export class GatewayStack extends cdk.Stack {
         BEDROCK_MODEL_ID: 'global.anthropic.claude-opus-5',
         BEDROCK_SUMMARY_MODEL_ID: 'global.openai.gpt-6.1-sol',
         BEDROCK_SONNET_MODEL_ID: 'global.anthropic.claude-sonnet-5-5',
+        ...autoTermsEnvironment(this),
         KB_BUCKET_NAME: props.kbBucket?.bucketName || '',
         KB_ID: props.knowledgeBaseId || '',
         DATA_SOURCE_ID: props.dataSourceId || '',
@@ -934,12 +965,30 @@ export class GatewayStack extends cdk.Stack {
       retryAttempts: 3,
       deadLetterQueue: savedSummaryDlq,
     }));
+    // Automatic term extraction runs in its own summarize invocation (A2.4).
+    const termsDlq = new sqs.Queue(this, 'TermsDlq', {
+      queueName: 'ttobak-terms-dlq',
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      retentionPeriod: cdk.Duration.days(7),
+      redriveAllowPolicy: { redrivePermission: sqs.RedrivePermission.DENY_ALL },
+    });
+    const termsRequestedRule = new events.Rule(this, 'TermsRequestedRule', {
+      ruleName: 'ttobak-terms-requested',
+      description: 'Extract dictionary terms for the requested meeting analysis run',
+      eventPattern: { source: ['ttobak.analysis'], detailType: ['TermsRequested'] },
+    });
+    termsRequestedRule.addTarget(new eventsTargets.LambdaFunction(this.summarizeFunction, {
+      maxEventAge: cdk.Duration.minutes(5),
+      retryAttempts: 3,
+      deadLetterQueue: termsDlq,
+    }));
     pipelineFailures.watchQueue('ActionItems', actionItemsDlq);
     pipelineFailures.watchQueue('SavedSummary', savedSummaryDlq);
+    pipelineFailures.watchQueue('Terms', termsDlq);
     // Install the consumer, rule and invocation permission before API code
     // can acknowledge a newly published request during this stack update.
     // Private relinking must not precede QA's canonical publication reader.
-    this.apiFunction.node.addDependency(this.summarizeFunction, savedSummaryRule, this.qaFunction);
+    this.apiFunction.node.addDependency(this.summarizeFunction, savedSummaryRule, termsRequestedRule, this.qaFunction);
 
     // Convert Doc Lambda (container image w/ LibreOffice) + EventBridge rule
     // for PPTX/PPT slide uploads -> PDF sidecar conversion. Optional (like
