@@ -48,12 +48,43 @@ new immutable alias version is published for a parameter-only transition. The
 CloudFront version parameter forces an actual header update; rotating a secret
 alone does not update its resolved origin value.
 
-The runner needs scoped Secrets Manager create/read/version-write/stage-update
-permissions, Lambda configuration/alias reads and invocation of the named consumers,
-CloudFormation inventory, API Gateway inventory, CloudFront inventory, and its
-existing deployment permissions. Runtime roles receive no rotation permissions.
-Permission failures stop the release; code does not establish that live runner
-permissions have already been granted.
+Initial missing-secret bootstrap remains an explicitly authorized management-role
+operation. The CI role does not receive `CreateSecret`: a missing secret stops its
+release before it can create one. Bootstrap must preserve the inspected live proof
+and complete the original coordinator's agreement/foundation guards.
+
+`ttobak:httpOriginReleaseCiRoleName` names the existing `mall-apne2-mgmt-ci-runner`
+role. GatewayStack owns one inline policy granting only `GetSecretValue`,
+`PutSecretValue` and `UpdateSecretVersionStage` on the exact
+`HttpOriginSecretArn` parameter. It creates no role or secret, changes no trust
+policy, and grants no wildcard, List, Delete or CreateSecret action. Omit this
+context or set JSON boolean `false` in `cdk.json` to disable the grant. CLI context
+values are strings: `-c ttobak:httpOriginReleaseCiRoleName=false` does not disable
+it. Both string values `false` and `true`, invalid role names and invalid types
+stop synthesis. This grant is intended only for an existing
+seeded/rotating/active secret. The coordinator's initial read uses its fixed
+secret name; successful CI Get-by-name still requires the policy's actual
+deployment and verification under the actual CI caller.
+
+Before first installation, confirm the target role exists with `aws iam get-role`,
+then inspect `aws iam get-role-policy` for policy name `ttobak-http-origin-release`
+on that exact role. Proceed only when the policy lookup returns `NoSuchEntity`;
+permission or transport errors do not establish absence. If the name already
+exists, stop and resolve its ownership before deployment, because IAM inline
+policy writes replace a policy with the same name. For subsequent updates,
+verify that GatewayStack's synthesized `AWS::IAM::Policy` logical ID belongs to
+the actual GatewayStack through `aws cloudformation describe-stack-resource`,
+and that its role and policy name match the reviewed template. Any ownership
+mismatch stops the update.
+
+The coordinator reads with `get_secret_value`; version publication uses
+`put_secret_value`, and expected-current promotion plus retirement labeling use
+`update_secret_version_stage`. Its `create_secret` path is only the missing-secret
+bootstrap. Inventory/deployment and named-consumer invocation permissions remain
+separate existing prerequisites. Runtime roles receive no rotation permissions.
+Permission failures still stop the release. This source grant does not establish
+live permissions: independent content/control review, exact-head native/CI,
+actual-main integration and root-only reviewed policy deployment remain required.
 
 ## Normal release order
 
@@ -62,6 +93,32 @@ job, builds all original artifacts, then invokes `http_origin_release.py release
 The coordinator preserves explicit per-stack `--exclusively` deployment order and
 excludes KnowledgeStack. Existing parameter values are preserved. The workflow's
 always-run StorageStack OAC repair remains separate and does not rotate a proof.
+
+The reviewed assembly digest pins the explicitly diffed stack set, all input file
+bytes and Unix permission modes. Deployment must target a member of that reviewed
+set with `--exclusively`; a Storage-only review cannot authorize Gateway deployment.
+Only the assembly-root `.lock` is transient; `.lock` files inside staged assets
+remain inputs. CDK can create `.cache/<asset-id>.zip` while publishing a declared
+directory asset. Before and after every deployment, the coordinator validates each
+such direct cache file against its manifest-declared, assembly-staged source:
+exact member names, bytes, CRC, regular-file types and modes, including hidden files.
+Validation streams bounded chunks without extracting files. Unknown or nested cache
+paths, symlinks, malformed archives and changed inputs stop the release. There is
+no directory-wide cache exemption.
+
+The cache reader supports the pinned CLI's ZIP32/DEFLATE format and rejects unsupported
+cache formats. Before deployment, every ZIP directory source in the reviewed stacks'
+direct asset manifests must be staged inside the assembly, even without an existing
+cache. The guard never traverses CloudFormation stack dependency closure. Storage-only
+retighten therefore preserves its original scope; an uncached, unselected Gateway
+source does not become a publication prerequisite. Every existing cache is still
+validated against all declared manifests and staged sources, including unselected
+assets. Unselected templates, manifests and staged input files remain in the digest.
+A fresh full-release diff must stage its selected sources; do not disable the guard
+or substitute a partial repair assembly for that review. A guard failure after a
+successful stack deployment does not roll that deployment back. Re-inspect the actual
+state and prepare a fresh source-bound diff before an authorized resume. Local cache
+tests establish this guard's behavior, not completed migration or runtime acceptance.
 
 1. Inspect live agreement, verify the installed reader marker and capture stable
    code/configuration identities. Run the stack diff before activation mutations.
