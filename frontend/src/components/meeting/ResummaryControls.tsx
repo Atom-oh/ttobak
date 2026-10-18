@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import type { NoteLanguage, ResummaryStatus } from '@/types/meeting';
+import type { MeetingDetail, NoteLanguage, ResummaryStatus } from '@/types/meeting';
 
 const failures: Record<string, string> = {
   PUBLISH_FAILED: '요약 작업을 전달하지 못했습니다.',
@@ -23,11 +23,13 @@ const noteLanguages: { value: NoteLanguage; label: string }[] = [
   { value: 'ko', label: '한국어' },
   { value: 'en', label: 'English' },
 ];
-export function ResummaryControls({ status, canRequest, dirty, busy, error, onRequest, onRefresh, onLoad, noteLanguage, languageLocked, onNoteLanguageChange }: {
+export function ResummaryControls({ status, canRequest, dirty, busy, error, onRequest, onRefresh, onLoad, noteLanguage, languageLocked, onNoteLanguageChange, sharing, onSharingSafe }: {
   status: ResummaryStatus; canRequest: boolean; dirty: boolean; busy: boolean; error: string | null;
   onRequest: () => void; onRefresh: () => void; onLoad: () => void;
   noteLanguage: NoteLanguage; languageLocked: boolean; onNoteLanguageChange?: (language: NoteLanguage) => Promise<void>;
+  sharing?: MeetingDetail['summarySharing']; onSharingSafe?: () => void;
 }) {
+  const [confirming, setConfirming] = useState(false);
   const pending = status.status === 'queued' || status.status === 'running';
   const [savingLanguage, setSavingLanguage] = useState(false);
   const [languageChanged, setLanguageChanged] = useState(false);
@@ -65,6 +67,25 @@ export function ResummaryControls({ status, canRequest, dirty, busy, error, onRe
           className="rounded-lg border border-primary/30 px-3 py-2 font-semibold text-primary disabled:opacity-40">새 요약 불러오기</button>}
       </div>
       <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">저장된 메모, 선택한 녹취, 추출된 첨부 자료로 요약합니다. 기존 요약은 완료 후 변경됩니다.</p>
+      {sharing?.derivedReadRestricted && <p role="status" className="mt-2 text-xs text-amber-800 dark:text-amber-200">
+        기존 회의록과 분석 결과는 소유자의 공유용 재생성이 필요합니다. 저장 메모와 녹취는 계속 확인할 수 있습니다.
+      </p>}
+      {sharing?.requiresRegeneration && !sharing.derivedReadRestricted && <p className="mt-2 text-xs text-amber-800 dark:text-amber-200">
+        새 공유에는 공유용 회의록이 필요합니다. 일반 다시 요약과 편집은 기존 비공개 자료의 사용 이력을 유지합니다.
+      </p>}
+      {sharing?.canRegenerate && onSharingSafe && <div className="mt-3">
+        {!confirming ? <button type="button" disabled={dirty || busy || pending} onClick={() => setConfirming(true)}
+          className="rounded-lg border border-primary/30 px-3 py-2 font-semibold text-primary disabled:opacity-40">공유용 회의록 재생성</button>
+          : <div className="rounded-lg border border-amber-300 p-3 dark:border-amber-700">
+            <p>이전 연결 미팅과 기존 생성 결과를 제외하고 저장 메모, 선택한 녹취, 현재 추출된 문서로 재생성합니다. 완료되면 기존 회의록과 분석·시뮬레이션 결과가 교체되며, 실패하면 기존 결과를 유지합니다.</p>
+            <p className="mt-2 text-xs">녹취를 다시 실행하지 않습니다. 새로 추출된 동일 작업은 기존 ID와 완료 상태를 이어받습니다. 저장 자료에 민감한 내용이 있는지 먼저 확인하세요.</p>
+            <div className="mt-3 flex gap-3">
+              <button type="button" disabled={dirty || busy || pending} onClick={() => { setConfirming(false); onSharingSafe(); }}
+                className="rounded-lg bg-primary px-3 py-2 font-semibold text-white disabled:opacity-40">확인하고 재생성</button>
+              <button type="button" onClick={() => setConfirming(false)} className="text-primary">취소</button>
+            </div>
+          </div>}
+      </div>}
       {dirty && <p className="mt-2 text-xs text-amber-800 dark:text-amber-200">편집 중인 내용을 먼저 저장해 주세요.</p>}
       <p role="status" className="mt-2 text-xs text-slate-600 dark:text-slate-300">
         {status.status === 'queued' ? '다시 요약 대기 중…' : status.status === 'running' ? '저장 자료로 요약하는 중…'

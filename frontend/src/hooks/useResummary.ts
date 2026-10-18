@@ -52,7 +52,7 @@ export function useResummary({
   enabled: boolean;
   canEdit: boolean;
   isDirty: () => boolean;
-  onLoaded: (content: string) => void;
+  onLoaded: (content: string, sharingSafe: boolean) => void;
 }) {
   const [status, setStatus] = useState<ResummaryStatus>({ status: 'unknown' });
   const [error, setError] = useState<string | null>(null);
@@ -92,13 +92,14 @@ export function useResummary({
     return () => clearInterval(timer);
   }, [pending, action, refresh]);
 
-  const request = async () => {
+  const request = async (sharingSafe = false) => {
     if (!enabled || !canEdit || pending || mutationRef.current || callbacks.current.isDirty()) return;
     requestRef.current?.abort();
     const controller = new AbortController(); mutationRef.current = controller; setAction('request'); setError(null);
     let reconcile = false;
     try {
-      const next = await meetingsApi.requestResummary(meetingId, { signal: controller.signal });
+      const next = await (sharingSafe ? meetingsApi.requestSharingSafeResummary : meetingsApi.requestResummary)(
+        meetingId, { signal: controller.signal });
       if (!controller.signal.aborted && alive.current) setStatus(next);
     } catch (cause) {
       if (!controller.signal.aborted && alive.current) { setError(cause instanceof Error ? cause.message : '요약 요청에 실패했습니다.'); reconcile = true; }
@@ -114,7 +115,7 @@ export function useResummary({
       const content = await loadVerifiedSummary(meetingId, status, controller.signal);
       if (!controller.signal.aborted && alive.current) {
         if (callbacks.current.isDirty()) throw new Error('편집 중인 내용이 있어 새 요약을 적용하지 않았습니다. 먼저 저장해 주세요.');
-        callbacks.current.onLoaded(content);
+        callbacks.current.onLoaded(content, !!status.sharingSafe);
       }
     } catch (cause) {
       if (!controller.signal.aborted && alive.current) setError(cause instanceof Error ? cause.message : '새 요약을 읽지 못했습니다.');

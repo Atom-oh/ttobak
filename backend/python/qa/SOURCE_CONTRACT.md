@@ -287,6 +287,7 @@ does not become readable by following that continuation or constitute no tasks.
 
 Stamped memberships enforce this reader policy even in installation mode.
 Unmarked membership activation requires the same fixed UTC cutoff and rollout
-fence as Go. Writer provenance, grant transactions, owner regeneration and
-reader-before-writer deployment remain outstanding; this source wiring is not
-R1 completion or deployed acceptance.
+fence as Go. Go provenance, grant transactions and owner regeneration are
+implemented behind `SUMMARY_PRIVACY_WRITER_ENABLED=1`. Coordinated activation,
+old API/worker/queued-work drain and reader/consumer acceptance remain
+outstanding; this source wiring is not R1 completion or deployed acceptance.
