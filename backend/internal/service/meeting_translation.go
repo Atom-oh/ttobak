@@ -17,10 +17,8 @@ import (
 	"unicode/utf8"
 )
 
-// On-demand translation of one bounded page of a meeting's AI notes or
-// selected transcript (ADR-005 2026-10-18 amendment). Pages come only from
-// MeetingReadingService, which owns read authorization, restricted-summary
-// handling and revision-bound cursors. Nothing is persisted.
+// On-demand translation of one MeetingReadingService page of AI notes or the
+// selected transcript (ADR-005 2026-10-18 amendment). Nothing is persisted.
 const (
 	MeetingTranslationBucket          = "meeting-translate"
 	MeetingTranslationWindow          = 24 * time.Hour
@@ -45,6 +43,7 @@ var (
 	translationMarkdownLead  = regexp.MustCompile(`^\s*(?:(?:#{1,6}|>|[-*+]|\d{1,9}[.)])(?:\s+|$)(?:\[[ xX]\]\s+)?)*`)
 	translationTableRule     = regexp.MustCompile(`^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?\s*$`)
 	translationSpeakerHeader = regexp.MustCompile(`^\s*\[([^\[\]\n]{1,128})\]\s*$`)
+	translationSpeakerName   = regexp.MustCompile(`^[^\[\]\n]{1,128}$`)
 )
 
 // MeetingTranslationLimitError carries the end of the exhausted daily window.
@@ -127,13 +126,12 @@ type translationPiece struct {
 	language string
 }
 
-// render restores placeholders over the joined line; unless every token
-// appears exactly once with no stray brackets, the line keeps its source and
-// is marked untranslated, so token text is never shown.
+// render restores placeholders; unless every token appears exactly once with
+// no stray brackets, the line keeps its source and is marked untranslated.
 func (l *translationLine) render() string {
 	source := l.prefix + l.body + l.suffix
-	if l.pieces == nil {
-		return source
+	if l.pieces == nil || l.untranslated {
+		return source // including a line with any failed piece
 	}
 	var b strings.Builder
 	for _, p := range l.pieces {
@@ -209,10 +207,9 @@ func prepareTranslationLine(prefix, body, suffix string, next *int) *translation
 	return line
 }
 
-// splitTranslationBody splits text into pieces of at most limit bytes,
-// preferring spaces. seps[i] restores what was removed before piece i.
-// Placeholders are atomic: they contain no space, and a byte cut moves
-// before (or, for a leading placeholder, after) one it would bisect.
+// splitTranslationBody splits text into pieces of at most limit bytes at
+// spaces; seps[i] restores what was removed before piece i. A byte cut moves
+// before (or, if leading, after) a placeholder it would bisect.
 func splitTranslationBody(text string, limit int) (pieces, seps []string) {
 	sep := ""
 	for len(text) > limit {
@@ -276,7 +273,6 @@ func translationSourceLanguage(language, target string) string {
 
 // notesTranslationLines keeps fenced code, table rules and blank lines as
 // source and sends only the text after a line's Markdown markers.
-// fence is the open fence carried from the previous page ("" when none).
 func notesTranslationLines(text string, fence markdownFence) []*translationLine {
 	lines := []*translationLine{}
 	next := 0
@@ -327,29 +323,24 @@ type meetingReadingPage struct {
 	} `json:"page"`
 }
 
-// alignTranslationPage trims a non-final page to a line (notes outside fences,
-// text transcript, preferring speaker headers) or whole-segment boundary and
-// re-issues the reader's cursor there, so nothing is translated as fragments.
-// A page without a boundary is kept whole; a notes page kept whole inside a
-// fence (startFence is the one carried in) wraps the cursor with that fence.
-func alignTranslationPage(page *meetingReadingPage, part string, startFence markdownFence) {
+// alignTranslationPage trims a non-final page to a line or whole-segment
+// boundary and re-issues the reader's cursor there; a page without one is kept
+// whole. It returns the notes fence open at the new end.
+func alignTranslationPage(page *meetingReadingPage, part string, state translationState) markdownFence {
 	if page.Page.NextCursor == nil {
-		return
+		return ""
 	}
 	reader, err := decodeReadingCursor(*page.Page.NextCursor)
 	if err != nil {
-		return
+		return ""
 	}
-	offset := -1
+	offset, fence := -1, markdownFence("")
 	switch {
 	case part == "notes":
-		cut, endFence := notesPageCut(page.Content, startFence)
-		if cut > 0 {
+		var cut int
+		if cut, fence = notesPageCut(page.Content, state.fence); cut > 0 {
 			page.Content = string([]rune(page.Content)[:cut])
 			offset = page.Page.StartOffset + cut
-		} else if endFence != "" {
-			next := encodeTranslationCursor(*page.Page.NextCursor, endFence)
-			page.Page.NextCursor = &next
 		}
 	case len(page.Chunks) > 1 && page.Chunks[len(page.Chunks)-1].Segment != nil:
 		// Earlier chunks end their segment, so a partial last one starts it.
@@ -358,31 +349,39 @@ func alignTranslationPage(page *meetingReadingPage, part string, startFence mark
 			offset = last.StartOffset
 		}
 	case len(page.Chunks) == 1 && page.Chunks[0].Segment == nil:
-		if cut := transcriptTextPageCut(page.Chunks[0].Text); cut > 0 {
+		if cut := transcriptTextPageCut(page.Chunks[0].Text, !state.mid); cut > 0 {
 			page.Chunks[0].Text = string([]rune(page.Chunks[0].Text)[:cut])
 			offset = page.Chunks[0].StartOffset + cut
 		}
 	}
-	if offset < 0 {
-		return
+	if offset >= 0 {
+		raw, _ := json.Marshal(readingCursor{1, reader.Binding, offset})
+		next := base64.RawURLEncoding.EncodeToString(raw)
+		page.Page.NextCursor = &next
 	}
-	raw, _ := json.Marshal(readingCursor{1, reader.Binding, offset})
-	next := base64.RawURLEncoding.EncodeToString(raw)
-	page.Page.NextCursor = &next
+	return fence
 }
 
 // notesPageCut returns the code-point offset of the last line start outside a
-// fence (0 when none) and the fence open at the end, given the one at start.
+// fence, else inside one (0 when none), and the fence open there.
 func notesPageCut(text string, fence markdownFence) (int, markdownFence) {
-	cut, at := 0, 0
+	cut, inside, insideFence, at := 0, 0, fence, 0
 	for i, line := range strings.Split(text, "\n") {
 		if i > 0 && fence == "" {
 			cut = at
+		} else if i > 0 {
+			inside, insideFence = at, fence
 		}
 		fence.step(line)
 		at += utf8.RuneCountInString(line) + 1
 	}
-	return cut, fence
+	if cut > 0 {
+		return cut, ""
+	}
+	if inside > 0 {
+		return inside, insideFence
+	}
+	return 0, fence
 }
 
 // markdownFence is the opening run of an open fenced block ("" when none).
@@ -409,49 +408,63 @@ func (f *markdownFence) step(line string) bool {
 	return true
 }
 
-// translationCursor wraps a reader cursor whose page begins inside a fenced
-// block. Plain reader cursors are passed through unchanged.
+// translationCursor wraps a reader cursor with the open notes fence, or the
+// text-transcript speaker and mid-run flag (first line is not a header). The
+// speaker only labels the caller's own response; the reader binds the cursor.
 type translationCursor struct {
 	Version int    `json:"tv"`
 	Reader  string `json:"reader"`
-	Fence   string `json:"fence"`
+	Fence   string `json:"fence,omitempty"`
+	Speaker string `json:"speaker,omitempty"`
+	Mid     bool   `json:"mid,omitempty"`
 }
 
-func encodeTranslationCursor(reader string, fence markdownFence) string {
-	raw, _ := json.Marshal(translationCursor{1, reader, string(fence)})
+type translationState struct {
+	fence   markdownFence
+	speaker string
+	mid     bool
+}
+
+func encodeTranslationCursor(reader string, st translationState) string {
+	raw, _ := json.Marshal(translationCursor{1, reader, string(st.fence), st.speaker, st.mid})
 	return base64.RawURLEncoding.EncodeToString(raw)
 }
 
-// decodeTranslationCursor returns the reader cursor and carried open fence.
-// Anything that is not a canonical wrapper is an opaque reader cursor.
-func decodeTranslationCursor(cursor string) (string, markdownFence) {
+// decodeTranslationCursor treats anything but a canonical wrapper for part as
+// an opaque reader cursor.
+func decodeTranslationCursor(cursor, part string) (string, translationState) {
 	raw, err := base64.RawURLEncoding.Strict().DecodeString(cursor)
 	if err != nil {
-		return cursor, ""
+		return cursor, translationState{}
 	}
 	var c translationCursor
-	if json.Unmarshal(raw, &c) != nil || c.Version != 1 || translationFenceRun.FindString(c.Fence) != c.Fence || c.Fence == "" || !readingCursorAlphabet.MatchString(c.Reader) {
-		return cursor, ""
+	if json.Unmarshal(raw, &c) != nil || c.Version != 1 || !readingCursorAlphabet.MatchString(c.Reader) {
+		return cursor, translationState{}
 	}
-	if canonical, _ := json.Marshal(c); string(canonical) != string(raw) {
-		return cursor, ""
+	valid := c.Fence != "" && translationFenceRun.FindString(c.Fence) == c.Fence && c.Speaker == "" && !c.Mid
+	if part == "transcript" {
+		valid = c.Fence == "" && (c.Speaker != "" || c.Mid) && (c.Speaker == "" || translationSpeakerName.MatchString(c.Speaker))
 	}
-	return c.Reader, markdownFence(c.Fence)
+	if canonical, _ := json.Marshal(c); !valid || string(canonical) != string(raw) {
+		return cursor, translationState{}
+	}
+	return c.Reader, translationState{markdownFence(c.Fence), c.Speaker, c.Mid}
 }
 
-// transcriptTextPageCut prefers the last "[speaker]" header that follows a
-// blank line, then the last line start; 0 means no boundary.
-func transcriptTextPageCut(text string) int {
+// transcriptTextPageCut prefers the last "[speaker]" header after a blank
+// line, then the last line start not right after a header (0: none).
+func transcriptTextPageCut(text string, afterBlank bool) int {
 	header, line, at := 0, 0, 0
-	prevBlank := true
+	prevHeader := false
 	for i, raw := range strings.Split(text, "\n") {
-		if i > 0 {
-			line = at
-			if prevBlank && translationSpeakerHeader.MatchString(raw) {
-				header = at
-			}
+		isHeader := afterBlank && translationSpeakerHeader.MatchString(raw)
+		if i > 0 && isHeader {
+			header = at
 		}
-		prevBlank = strings.TrimSpace(raw) == ""
+		if i > 0 && !prevHeader {
+			line = at
+		}
+		prevHeader, afterBlank = isHeader, strings.TrimSpace(raw) == ""
 		at += utf8.RuneCountInString(raw) + 1
 	}
 	if header > 0 {
@@ -460,13 +473,13 @@ func transcriptTextPageCut(text string) int {
 	return line
 }
 
-// transcriptTranslationSegments sends segment text without speaker labels or
-// timestamps; labels and times are reattached from the reading page.
-func transcriptTranslationSegments(page *meetingReadingPage) []MeetingTranslationSegment {
+// transcriptTranslationSegments sends text without speaker labels or times,
+// reattached from the page. Text mode returns the state at the page end.
+func transcriptTranslationSegments(page *meetingReadingPage, state translationState) ([]MeetingTranslationSegment, translationState) {
 	segments := []MeetingTranslationSegment{}
 	next := 0
-	speaker := ""
-	for _, chunk := range page.Chunks {
+	speaker, afterBlank, text := state.speaker, !state.mid, false
+	for ci, chunk := range page.Chunks {
 		if s := chunk.Segment; s != nil {
 			parts := []string{}
 			for _, line := range strings.Split(chunk.Text, "\n") {
@@ -487,13 +500,19 @@ func transcriptTranslationSegments(page *meetingReadingPage) []MeetingTranslatio
 		}
 		// Text mode: a bracketed line at the start of the text or after a blank
 		// line is a speaker header (buildTranscriptText writes "\n\n[speaker]\n")
-		// and is never sent. Other bracketed lines ("[웃음]") are speech.
+		// and is never sent; other bracketed lines ("[웃음]") are speech. A
+		// non-final page's last line is a reader-cut fragment.
 		var current *MeetingTranslationSegment
-		afterBlank := true
-		for _, raw := range strings.Split(chunk.Text, "\n") {
+		text = true
+		lines := strings.Split(chunk.Text, "\n")
+		for i, raw := range lines {
 			trimmed := strings.TrimSpace(raw)
-			header := afterBlank
-			afterBlank = trimmed == ""
+			fragment := page.Page.NextCursor != nil && ci == len(page.Chunks)-1 && i == len(lines)-1
+			if fragment && raw == "" {
+				break
+			}
+			header := afterBlank && !fragment
+			afterBlank = trimmed == "" && !fragment
 			if m := translationSpeakerHeader.FindStringSubmatch(raw); header && m != nil {
 				speaker, current = m[1], nil
 				continue
@@ -508,7 +527,10 @@ func transcriptTranslationSegments(page *meetingReadingPage) []MeetingTranslatio
 			current.lines = append(current.lines, prepareTranslationLine("", trimmed, "", &next))
 		}
 	}
-	return segments
+	if !text {
+		return segments, translationState{}
+	}
+	return segments, translationState{speaker: speaker, mid: !afterBlank}
 }
 
 type translationChunk struct {
@@ -584,9 +606,8 @@ func acceptTranslatedChunk(c *translationChunk, output string) bool {
 	return true
 }
 
-// translateChunk tries the interpreter (with its own output validation and
-// Translate fallback), then Amazon Translate once more if the structure did
-// not round-trip. It returns the engine, or "" when the source is kept.
+// translateChunk tries the interpreter, then Amazon Translate if the structure
+// did not round-trip. It returns the engine, or "" when the source is kept.
 func (s *MeetingTranslationService) translateChunk(ctx context.Context, c *translationChunk, target string) string {
 	text := c.text()
 	for _, quality := range []string{TranslateQualityHigh, TranslateQualityFast} {
@@ -632,12 +653,10 @@ func (s *MeetingTranslationService) Translate(ctx context.Context, userID, meeti
 	if req.Part == "transcript" {
 		q = url.Values{"kind": {"transcript"}, "source": {"selected"}, "pageSize": {meetingTranslationPageSize}}
 	}
-	startFence := markdownFence("")
+	var state translationState
 	if req.Cursor != "" {
-		cursor := req.Cursor
-		if req.Part == "notes" {
-			cursor, startFence = decodeTranslationCursor(cursor)
-		}
+		var cursor string
+		cursor, state = decodeTranslationCursor(req.Cursor, req.Part)
 		q.Set("cursor", cursor)
 	}
 	raw, err := s.reader.Read(ctx, userID, meetingID, q)
@@ -648,19 +667,23 @@ func (s *MeetingTranslationService) Translate(ctx context.Context, userID, meeti
 	if err := json.Unmarshal(raw, &page); err != nil {
 		return nil, readingDataError(err)
 	}
-	alignTranslationPage(&page, req.Part, startFence)
+	carry := translationState{fence: alignTranslationPage(&page, req.Part, state)}
 
 	response := meetingTranslationResponse{MeetingID: meetingID, Part: req.Part, Target: req.Target,
 		Revision: page.Revision, Engines: map[string]int{}, NextCursor: page.Page.NextCursor, Complete: page.Page.Complete}
 	var lines []*translationLine
 	if req.Part == "notes" {
-		lines = notesTranslationLines(page.Content, startFence)
+		lines = notesTranslationLines(page.Content, state.fence)
 	} else {
 		response.Mode = page.Mode
-		response.Segments = transcriptTranslationSegments(&page)
+		response.Segments, carry = transcriptTranslationSegments(&page, state)
 		for _, segment := range response.Segments {
 			lines = append(lines, segment.lines...)
 		}
+	}
+	if page.Page.NextCursor != nil && carry != (translationState{}) {
+		next := encodeTranslationCursor(*page.Page.NextCursor, carry)
+		response.NextCursor = &next
 	}
 
 	chunks := planTranslationChunks(lines, req.Target)
@@ -676,15 +699,21 @@ func (s *MeetingTranslationService) Translate(ctx context.Context, userID, meeti
 	for _, c := range chunks {
 		inBytes += int64(len(c.text()))
 	}
-	// An abuse brake charged on attempt: bytes count even if translation then
-	// fails, so concurrent requests cannot spend past the limit before a refund.
+	started, failed := time.Now(), 0
+	meter := func(outcome string, outBytes int) {
+		line, _ := json.Marshal(map[string]any{"evt": "meeting_translate", "outcome": outcome, "part": req.Part, "tgt": req.Target,
+			"inBytes": inBytes, "outBytes": outBytes, "chunks": len(chunks), "failedChunks": failed,
+			"untranslatedLines": response.UntranslatedLines, "ms": time.Since(started).Milliseconds()})
+		log.Print(string(line))
+	}
+	// An abuse brake charged on attempt, so failures cannot spend past it.
 	if inBytes > 0 && s.limiter != nil {
 		if over, usage := s.limiter.Exceeds(ctx, userID, MeetingTranslationBucket, MeetingTranslationWindow, inBytes, s.dailyBytes); over {
+			meter("limited", 0)
 			return nil, &MeetingTranslationLimitError{RetryAt: usage.WindowEnd}
 		}
 	}
 
-	started := time.Now()
 	budget, cancel := context.WithTimeout(ctx, s.budget)
 	defer cancel()
 	engines := make([]string, len(chunks))
@@ -705,7 +734,6 @@ func (s *MeetingTranslationService) Translate(ctx context.Context, userID, meeti
 	}
 	wg.Wait()
 
-	failed := 0
 	for i, engine := range engines {
 		if engine == "" {
 			failed++
@@ -716,12 +744,6 @@ func (s *MeetingTranslationService) Translate(ctx context.Context, userID, meeti
 			continue
 		}
 		response.Engines[engine]++
-	}
-	meter := func(outcome string, outBytes int) {
-		line, _ := json.Marshal(map[string]any{"evt": "meeting_translate", "outcome": outcome, "part": req.Part, "tgt": req.Target,
-			"inBytes": inBytes, "outBytes": outBytes, "chunks": len(chunks), "failedChunks": failed,
-			"untranslatedLines": response.UntranslatedLines, "ms": time.Since(started).Milliseconds()})
-		log.Print(string(line))
 	}
 	if len(chunks) > 0 && failed == len(chunks) {
 		meter("failed", 0)

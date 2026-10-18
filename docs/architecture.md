@@ -121,12 +121,11 @@ unconsumed project invitation rows expire through their existing TTL field.
    Translate fallback, and the API applies per-user hourly request limits
    (ADR-005 amendments). Interpretation failures
    do not stop capture. This path does not change batch transcription or saved notes.
-   Live translations are not persisted. After a meeting, readers can translate the
-   final AI notes or selected transcript on demand: the API reads one bounded page
-   through `MeetingReadingService` (authorization, restricted summaries, revision
-   cursors), sends placeholder-protected text without speaker labels or times to
-   the same validated interpreter path, and returns the page to client memory
-   only, behind `MEETING_TRANSLATION_ENABLED` and a daily byte budget.
+   Live translations are not persisted. Readers can translate final AI notes or
+   the selected transcript on demand: one `MeetingReadingService` page goes,
+   placeholder-protected and without speaker labels or times, through the same
+   interpreter path to client memory only (`MEETING_TRANSLATION_ENABLED`, daily
+   byte budget).
 2. Upload audio to S3. EventBridge invokes the transcribe orchestrator, which uses
    configured Whisper ECS or AWS Transcribe fallback. Multipart completion and
    transcript uploads trigger summarization with concurrency/retry guards.
@@ -181,6 +180,15 @@ pipeline runs it inline; authorized editor retries send ActionItemsRequested to
 the same summarize Lambda. Run/source/prior-item checks publish items and success
 together, preserving unchanged IDs/completion and prior results on failure.
 An empty array alone never establishes successful analysis.
+
+Automatic dictionary term extraction (ADR-008) has its own
+MEETING#/ANALYSIS#terms state. The end of summary analyses, a preserved-human-content
+summary and a saved-source re-summary call a non-fatal Enqueue, which publishes
+TermsRequested to the same summarize Lambda only when `AUTO_TERMS_MODE=personal`
+allows the owner (default `off`). The worker rereads the sources, calls the model
+within a bounded budget, filters candidates and merges them into the owner's
+personal dictionary; non-owner source edits make a run suggest only. Meeting
+deletion sweeps the meeting's observations and run state.
 
 The authenticated `/api/meetings/{id}/reading` route bounds JSON before Lambda
 serialization. Notes, summary and action sections use metadata views; transcript

@@ -235,11 +235,12 @@ func TestMeetingTranslationKeepsSourceForFailedChunksOnly(t *testing.T) {
 		t.Fatalf("requests=%d engines=%v", len(tr.requests), out.Engines)
 	}
 
-	long := strings.Repeat("첫째 문장입니다. ", 200) + "\n" + strings.Repeat("둘째 문장입니다. ", 200)
-	s = NewMeetingTranslationService(notesPage(long, nil), &lineTranslator{edit: failSecond}, nil, 0)
-	out = runTranslation(t, s, MeetingTranslationRequest{Part: "notes", Target: "en"})
-	if out.UntranslatedLines != 1 || !strings.Contains(*out.Notes, "\n"+strings.Repeat("둘째 문장입니다. ", 200)) {
-		t.Fatalf("failed chunk not kept as source: untranslated=%d", out.UntranslatedLines)
+	// A split line whose pieces have mixed outcomes keeps its whole source.
+	long := strings.TrimSpace(strings.Repeat("첫째 ", 600) + strings.Repeat("둘째 ", 600))
+	out = runTranslation(t, NewMeetingTranslationService(notesPage(long, nil), &lineTranslator{edit: failSecond}, nil, 0),
+		MeetingTranslationRequest{Part: "notes", Target: "en"})
+	if *out.Notes != long || out.UntranslatedLines != 1 || out.Engines[TranslateEngineLLM] == 0 {
+		t.Fatalf("partially translated line: untranslated=%d engines=%v", out.UntranslatedLines, out.Engines)
 	}
 }
 
@@ -377,13 +378,37 @@ func TestMeetingTranslationCarriesFenceAcrossOversizedCodeBlock(t *testing.T) {
 			}
 		}
 	}
-	// A forged or plain cursor is passed through unchanged.
-	forged, _ := json.Marshal(translationCursor{1, "abc", "``"})
-	for cursor, want := range map[string]markdownFence{"abc": "", encodeTranslationCursor("abc", "~~~~"): "~~~~",
-		base64.RawURLEncoding.EncodeToString(forged): ""} {
-		if c, fence := decodeTranslationCursor(cursor); fence != want || (c == "abc") != (cursor == "abc" || want != "") {
-			t.Fatalf("cursor %q decoded to %q fence=%q", cursor, c, fence)
+	// A forged, plain or other-part cursor is passed through unchanged.
+	forged, _ := json.Marshal(translationCursor{Version: 1, Reader: "abc", Fence: "``"})
+	speaker := encodeTranslationCursor("abc", translationState{speaker: "화자A", mid: true})
+	for _, tc := range []struct {
+		cursor, part string
+		want         translationState
+	}{{"abc", "notes", translationState{}}, {encodeTranslationCursor("abc", translationState{fence: "~~~~"}), "notes", translationState{fence: "~~~~"}},
+		{base64.RawURLEncoding.EncodeToString(forged), "notes", translationState{}}, {speaker, "transcript", translationState{speaker: "화자A", mid: true}},
+		{speaker, "notes", translationState{}}, {encodeTranslationCursor("abc", translationState{speaker: "[x]"}), "transcript", translationState{}}} {
+		if c, st := decodeTranslationCursor(tc.cursor, tc.part); st != tc.want || (c == "abc") != (tc.cursor == "abc" || tc.want != translationState{}) {
+			t.Fatalf("cursor %q decoded to %q state=%+v", tc.cursor, c, st)
 		}
+	}
+}
+
+func TestMeetingTranslationFenceCloseStraddlingPageCut(t *testing.T) {
+	// The closing run starts at code point 3999, so the reader's cut at 4000
+	// bisects it; the page must end before that line instead.
+	source := "```\n" + strings.Repeat("c123456789\n", 363) + "a\n```"
+	want := source
+	for i := 0; i < 20; i++ {
+		line := fmt.Sprintf("\nAfter %02d says hello", i)
+		source, want = source+line, want+"\nEN<"+line[1:]+">"
+	}
+	pages := translateAllPages(t, NewMeetingTranslationService(pagedReader(t, source, ""), &lineTranslator{}, nil, 0), "notes")
+	var joined strings.Builder
+	for _, page := range pages {
+		joined.WriteString(*page.Notes)
+	}
+	if len(pages) < 2 || joined.String() != want {
+		t.Fatalf("pages=%d: prose after the fence was not translated", len(pages))
 	}
 }
 
@@ -437,25 +462,32 @@ func TestTranslationLineRenderFallsBackOnPlaceholderMismatch(t *testing.T) {
 }
 
 func TestMeetingTranslationTextTranscriptPagesKeepSpeakers(t *testing.T) {
-	runs, speakers := []string{}, []string{}
-	for i := 0; i < 40; i++ {
-		speaker := fmt.Sprintf("화자%d", i%3)
-		speakers = append(speakers, speaker)
-		runs = append(runs, "["+speaker+"]\n"+strings.TrimSpace(strings.Repeat(fmt.Sprintf("run %d words ", i), 25)))
+	// Runs longer than a page (annotation lines; one line after a header) keep
+	// their speaker, and a leading "[웃음 n]" is speech, not a header.
+	runA := []string{}
+	for i := 0; i < 500; i++ {
+		runA = append(runA, fmt.Sprintf("[웃음 %03d]", i))
 	}
-	s := NewMeetingTranslationService(pagedReader(t, strings.Join(runs, "\n\n"), "text"), &lineTranslator{}, nil, 0)
-	got := []map[string]any{}
-	pages := translateAllPages(t, s, "transcript")
+	long := strings.TrimSpace(strings.Repeat("가나다 ", 1500))
+	sources := map[string]string{"화자A": strings.Join(runA, ""), "화자B": long, "화자C": "짧은말"}
+	text := "[화자A]\n" + strings.Join(runA, "\n") + "\n\n[화자B]\n" + long + "\n\n[화자C]\n짧은 말"
+	pages := translateAllPages(t, NewMeetingTranslationService(pagedReader(t, text, "text"), &lineTranslator{}, nil, 0), "transcript")
+	got := map[string]string{}
 	for _, page := range pages {
-		got = append(got, page.Segments...)
+		if page.UntranslatedLines != 0 {
+			t.Fatal("untranslated lines")
+		}
+		for _, seg := range page.Segments {
+			body := strings.NewReplacer("EN<", "", ">", "", " ", "", "\n", "").Replace(seg["text"].(string))
+			got[fmt.Sprint(seg["speaker"])] += body
+		}
 	}
-	if len(pages) < 3 || len(got) != len(runs) {
-		t.Fatalf("pages=%d segments=%d", len(pages), len(got))
+	if len(pages) < 4 || len(got) != 3 {
+		t.Fatalf("pages=%d speakers=%d", len(pages), len(got))
 	}
-	for i, seg := range got {
-		body := strings.SplitN(runs[i], "\n", 2)[1]
-		if seg["speaker"] != speakers[i] || seg["text"] != "EN<"+body+">" {
-			t.Fatalf("segment %d speaker=%v", i, seg["speaker"])
+	for speaker, want := range sources {
+		if got[speaker] != strings.ReplaceAll(want, " ", "") {
+			t.Fatalf("speaker %s lost or gained text", speaker)
 		}
 	}
 }
@@ -603,37 +635,14 @@ func TestMeetingTranslationBoundsChunksConcurrencyAndBudget(t *testing.T) {
 	}
 }
 
-func TestMeetingTranslationLimitAndValidation(t *testing.T) {
-	reads := 0
-	reader := pageReaderFunc(func(q url.Values) ([]byte, error) {
-		reads++
-		return notesPage("번역할 문장", nil)(q)
-	})
-	limiter := &recordingLimiter{over: true}
+func TestMeetingTranslationLimitAndReaderErrors(t *testing.T) {
+	// Request validation is covered through the handler's strict-body test.
 	tr := &lineTranslator{}
-	s := NewMeetingTranslationService(reader, tr, limiter, DefaultMeetingTranslateDailyBytes)
+	s := NewMeetingTranslationService(notesPage("번역할 문장", nil), tr, &recordingLimiter{over: true}, DefaultMeetingTranslateDailyBytes)
 	_, err := s.Translate(context.Background(), "owner", "m1", MeetingTranslationRequest{Part: "notes", Target: "en"})
 	var limited *MeetingTranslationLimitError
 	if !errors.Is(err, ErrMeetingTranslationLimited) || !errors.As(err, &limited) || limited.RetryAt.IsZero() || len(tr.requests) != 0 {
 		t.Fatalf("limit = %v requests=%d", err, len(tr.requests))
-	}
-	reads = 0
-	for _, req := range []MeetingTranslationRequest{
-		{Part: "summary", Target: "en"}, {Part: "notes", Target: "ja"}, {Part: "notes", Target: ""},
-	} {
-		if _, err := s.Translate(context.Background(), "owner", "m1", req); !errors.Is(err, ErrMeetingTranslationInvalid) {
-			t.Fatalf("%+v accepted: %v", req, err)
-		}
-	}
-	for _, req := range []MeetingTranslationRequest{
-		{Part: "transcript", Target: "ko", Cursor: "bad cursor!"}, {Part: "notes", Target: "en", Cursor: strings.Repeat("a", 2049)},
-	} {
-		if _, err := s.Translate(context.Background(), "owner", "m1", req); !errors.Is(err, ErrInvalidReadingCursor) {
-			t.Fatalf("%+v cursor accepted: %v", req, err)
-		}
-	}
-	if reads != 0 {
-		t.Fatal("invalid request reached the reader")
 	}
 	stale := pageReaderFunc(func(url.Values) ([]byte, error) { return nil, ErrStaleReadingCursor })
 	if _, err := NewMeetingTranslationService(stale, tr, nil, 0).Translate(context.Background(), "owner", "m1",

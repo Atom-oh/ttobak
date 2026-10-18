@@ -158,9 +158,14 @@ func TestResummarySelectedSnapshotAndAtomicCompletion(t *testing.T) {
 	if len(r.reads) != 0 {
 		t.Fatal("queue hydrated S3")
 	}
+	var enqueued []string
+	s.SetTermsEnqueuer(func(_ context.Context, owner, meeting string) { enqueued = append(enqueued, owner+"/"+meeting) })
 	event := model.SummaryRequested{MeetingID: "meeting", RunID: result.RunID}
 	if err := s.Process(context.Background(), event); err != nil {
 		t.Fatal(err)
+	}
+	if len(enqueued) != 1 || enqueued[0] != "owner/meeting" {
+		t.Fatalf("terms extraction must follow CompleteResummary once: %v", enqueued)
 	}
 	if r.completes != 1 || *calls != 1 || r.state.Status != model.AnalysisSucceeded || r.meetings[meetingKey("owner", "meeting")].Content != "새 요약" {
 		t.Fatalf("run %+v calls=%d", r.state, *calls)
@@ -304,6 +309,7 @@ func TestResummaryCompletionFailuresRemainObservable(t *testing.T) {
 				t.Fatal(err)
 			}
 			r.completeError = completion
+			s.SetTermsEnqueuer(func(context.Context, string, string) { t.Fatal("a failed publication must not enqueue terms") })
 			if failState {
 				r.failError = stateErr
 			}

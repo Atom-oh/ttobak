@@ -212,6 +212,7 @@ func TestMeetingTranslationAPIStrictBody(t *testing.T) {
 		{`{"part":"notes","target":"en","cursor":"` + strings.Repeat("a", 2049) + `"}`, 400, "INVALID_CURSOR"},
 		{`not json`, 400, "BAD_REQUEST"},
 		{`{"part":"notes","target":"en","cursor":"` + strings.Repeat("a", 4096) + `"}`, 413, "BAD_REQUEST"},
+		{`{"part":"notes","target":"en"}` + strings.Repeat(" ", 4096), 413, "BAD_REQUEST"},
 	} {
 		if r := f.post(t, tc.body); r.StatusCode != tc.status || errorCode(t, r) != tc.code {
 			t.Fatalf("%.60s: status=%d body=%s", tc.body, r.StatusCode, r.Body)

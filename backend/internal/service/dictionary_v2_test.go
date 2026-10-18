@@ -28,6 +28,8 @@ type fakeDictStore struct {
 	putErr      error
 	putErrAfter int               // rows written before putErr is returned
 	hooks       map[string]func() // one-shot, run before the named write
+	cleanupErr  error
+	onUpdate    func() // runs after a successful UpdateDictTerm
 }
 
 // fire runs and clears the hook for op, simulating a concurrent writer that
@@ -66,6 +68,13 @@ func (f *fakeDictStore) GetDictionary(context.Context, string) (*model.UserDicti
 }
 func (f *fakeDictStore) SaveDictionary(_ context.Context, d *model.UserDictionary) error {
 	f.saveCalls++
+	if f.blob == nil {
+		f.blob = &model.UserDictionary{UserID: d.UserID}
+	}
+	f.blob.Terms = append([]model.DictionaryTerm(nil), d.Terms...)
+	f.blob.VocabularyName, f.blob.VocabularyStatus = d.VocabularyName, d.VocabularyStatus
+	f.blob.BlobRevision++
+	f.blob.UpdatedAt = fmt.Sprintf("rev-%d", f.blob.BlobRevision)
 	return nil
 }
 func (f *fakeDictStore) UpdateLegacyVocabularyStatus(_ context.Context, _ string, name, from, to string) error {
@@ -128,6 +137,7 @@ func (f *fakeDictStore) ListDictTerms(context.Context, string) ([]model.DictTerm
 		out = append(out, t)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].SK < out[j].SK })
+	f.fire("list") // after the snapshot: a writer commits once it is stale
 	return out, nil
 }
 func (f *fakeDictStore) PutDictTermsIfAbsent(_ context.Context, g repository.LegacyBlobGuard, terms []model.DictTerm) (int, error) {
@@ -197,6 +207,12 @@ func (f *fakeDictStore) UpdateVocabularyState(_ context.Context, _ string, c, l 
 	}
 	if ch.FailureCode != nil {
 		s.FailureCode = *ch.FailureCode
+	}
+	if ch.ActiveName != nil {
+		s.ActiveName = *ch.ActiveName
+	}
+	if ch.TermCount != nil {
+		s.TermCount = *ch.TermCount
 	}
 	s.Version++
 	f.vocab[s.SK] = s

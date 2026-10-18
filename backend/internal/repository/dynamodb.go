@@ -1650,7 +1650,7 @@ func (r *DynamoDBRepository) DeleteMeeting(ctx context.Context, userID, meetingI
 
 	// The source is now gone, so conditional workers cannot create new states.
 	// Sweep rows whose attachments disappeared or were created after enumeration.
-	return r.deleteAttachmentTextStates(ctx, meetingID)
+	return errors.Join(r.deleteAttachmentTextStates(ctx, meetingID), r.SweepMeetingTerms(ctx, userID, meetingID))
 }
 
 // ListMeetingsParams contains parameters for listing meetings

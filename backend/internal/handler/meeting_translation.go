@@ -49,16 +49,21 @@ func (h *MeetingTranslationHandler) Post(w http.ResponseWriter, r *http.Request)
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	var req service.MeetingTranslationRequest
-	if err := decoder.Decode(&req); err != nil {
+	err := decoder.Decode(&req)
+	if err == nil {
+		// Trailing whitespace past the limit is still an oversized body.
+		if _, err = decoder.Token(); errors.Is(err, io.EOF) {
+			err = nil
+		} else if err == nil {
+			err = errors.New("trailing value")
+		}
+	}
+	if err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
 			writeError(w, http.StatusRequestEntityTooLarge, model.ErrCodeBadRequest, "Request body is too large")
 			return
 		}
-		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid request body")
-		return
-	}
-	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
 		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid request body")
 		return
 	}
