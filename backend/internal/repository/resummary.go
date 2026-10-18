@@ -397,9 +397,8 @@ func (r *DynamoDBRepository) CompleteResummary(ctx context.Context, snapshot *mo
 		if !found {
 			return ErrConditionFailed
 		}
-		// Run IDs on both Go/Python workers prevent a deleted singleton from
-		// being recreated by late result writes. New claims also fence the
-		// canonical generation in PutSimRunIfNotRunning.
+		// Go/Python run IDs reject late singleton recreation; new claims also
+		// fence canonical generation in PutSimRunIfNotRunning.
 		items = append(items, types.TransactWriteItem{Delete: &types.Delete{
 			TableName: aws.String(r.tableName), Key: simRunKey(snapshot.Meeting.MeetingID),
 		}})

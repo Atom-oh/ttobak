@@ -18,8 +18,7 @@ func TestInsightRevisionFollowsCapturedGenerationAcrossWriterRollback(t *testing
 				t.Setenv("SUMMARY_PRIVACY_WRITER_ENABLED", flag)
 				parent := privacyParent()
 				parent.Content, parent.AuthorizationRevision = "summary", 7
-				// A leftover legacy revision is removed rather than copied into
-				// an unreadable generation-zero row.
+				// Remove legacy revision: copying it makes generation-zero rows unreadable.
 				parent.InsightsRevision = "previous-insight"
 				if generation != "" {
 					privacyStamp(parent, model.SummaryPrivacySafe, generation)

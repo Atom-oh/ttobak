@@ -619,8 +619,7 @@ func (r *DynamoDBRepository) BatchGetMeetings(ctx context.Context, keys []Meetin
 // Large transcripts are automatically stored in S3 to avoid DynamoDB's 400KB limit
 func (r *DynamoDBRepository) UpdateMeeting(ctx context.Context, meeting *model.Meeting) error {
 	if SummaryPrivacyWritesEnabled() {
-		// Legacy whole-item writes carry no observed source/authorization
-		// snapshot. Production callers use conditional field updates.
+		// Legacy whole-item writes lack source/auth snapshots; production uses conditional fields.
 		return ErrConditionFailed
 	}
 	meeting.UpdatedAt = time.Now().UTC()
@@ -999,8 +998,7 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 				return ErrConditionFailed
 			}
 			parent := snapshot.Meeting
-			// Classification/publication must retain the owner's current
-			// canonical membership, not a service-layer preflight alone.
+			// Classification/publication pins canonical owner membership, beyond preflight.
 			account, assigned := fields["accountId"].(string)
 			publish, _ := fields["sharedToAccount"].(bool)
 			if publish && account == "" {
@@ -2194,9 +2192,8 @@ func (r *DynamoDBRepository) CreateShare(ctx context.Context, meetingID, ownerID
 		return nil, fmt.Errorf("failed to marshal share: %w", err)
 	}
 
-	// New independent grants and their parent authorization revision are
-	// published atomically. Updating an existing direct grant preserves it,
-	// but must condition on its continued presence to avoid resurrection.
+	// Publish new grants/parent auth revision atomically; direct updates pin
+	// continued presence against resurrection.
 	items := []types.TransactWriteItem{
 		{Put: &types.Put{TableName: aws.String(r.tableName), Item: item1}},
 		{Put: &types.Put{TableName: aws.String(r.tableName), Item: item2}},

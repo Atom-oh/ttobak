@@ -307,11 +307,9 @@ const (
 // represented in the prompt -- only to people who can read the CURRENT
 // meeting's resulting summary.
 //
-// Activated summary writers bind prior context through the captured parent
-// ACL/publication/link snapshot and authorized predecessor bytes. Publication
-// retains private ancestry and source CAS prevents new-grant or source races.
-// Installation-mode legacy callers still use buildLinkedMeetingContext's share
-// gate. This formatting helper grants no source authority or declassification.
+// Active writers bind parent ACL/publication/links and authorized predecessor
+// bytes, retain private ancestry and CAS-fence grant/source races. Legacy callers
+// keep buildLinkedMeetingContext's share gate. Formatting grants no authority or declassification.
 //
 // Write-time size is capped in UpdateMeeting; the rune cap here is a second
 // line for legacy oversized values.
@@ -741,8 +739,8 @@ func (s *BedrockService) summarizeTranscript(ctx context.Context, meetingID, use
 		return "", err
 	}
 	if repository.SummaryPrivacyWritesEnabled() {
-		// Claim and human-content checks precede predecessor/model evidence.
-		// The legacy argument never grants source authority.
+		// Check claims/human content before predecessor/model evidence;
+		// legacy arguments grant no source authority.
 		priorContext = linkedSummaryContext(snapshot.LinkedSources)
 	}
 	conflict := func(cause error) (string, error) {

@@ -20,6 +20,10 @@ var ErrSummarySharingUnsafe = errors.New("sharing-safe summary regeneration requ
 
 // Readers are installed before these writers are enabled. This switch never
 // disables protection for an already-stamped membership.
+// Installation-only: SUMMARY_PRIVACY_WRITER_ENABLED must stay unset/0 in this revision.
+// Activation needs deployed readers, canonical KB export/permission, old-writer
+// drain/backfill, cross-user acceptance, and unadopted owner SharingSafe request/UI
+// plus SHARING_REGEN_REQUIRED mapping.
 func SummaryPrivacyWritesEnabled() bool {
 	value := os.Getenv("SUMMARY_PRIVACY_WRITER_ENABLED")
 	return value == "1"
@@ -226,9 +230,8 @@ func invalidateSummaryClearance(update expression.UpdateBuilder) expression.Upda
 		Remove(expression.Name("insightsRevision")))
 }
 
-// Source-fenced publishers supply new stamps; generic updates first reject
-// caller-assigned server fields. Preserve fresh provenance and reset identity,
-// clearing older derivative identity. Without a stamp, invalidate under any flag.
+// Fenced stamps preserve provenance/reset identity and clear old derivatives.
+// Generic writes reject server fields; no stamp invalidates in every mode.
 func summaryContentRevisionUpdate(update expression.UpdateBuilder, fields map[string]interface{}) expression.UpdateBuilder {
 	if _, fresh := fields["summaryPrivacy"]; !fresh {
 		return invalidateSummaryClearance(update)
@@ -263,9 +266,8 @@ func (r *DynamoDBRepository) PublishSummaryDerivatives(ctx context.Context, snap
 	}
 	if _, insights := fields["insights"]; insights {
 		if snapshot.Meeting.SummaryGeneration() == "" {
-			// Legacy readers require an empty generation/revision pair. The
-			// captured identity, not the creation flag, also protects stamped
-			// generations when writers are rolled back.
+			// Empty legacy generation/revision; captured identity protects stamped
+			// generations through rollback regardless of creation flag.
 			update = update.Remove(expression.Name("insightsRevision"))
 		} else {
 			update = update.Set(expression.Name("insightsRevision"), expression.Value(uuid.NewString()))

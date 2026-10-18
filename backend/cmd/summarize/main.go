@@ -633,8 +633,7 @@ func generateSummaryRun(ctx context.Context, meeting *model.Meeting, priorContex
 			log.Printf("Failed to publish current %s (non-fatal): %v", field, err)
 		}
 	}
-	// Copy only the current saved insight revision; the repository verifies
-	// the canonical publication/generation in the same transaction as copies.
+	// Copy saved insights; the transaction verifies canonical publication/generation/revision.
 	current, err := repo.MetadataView().GetMeeting(ctx, userID, meetingID)
 	if err != nil {
 		log.Printf("Failed to read current insights for fanout (non-fatal): %v", err)
@@ -649,9 +648,8 @@ func generateSummaryRun(ctx context.Context, meeting *model.Meeting, priorContex
 	enqueueTerms(ctx, userID, meetingID, "summary")
 
 	if repository.SummaryPrivacyWritesEnabled() {
-		// The canonical stream/reconciliation worker owns immutable, revision-
-		// checked index exports. The legacy fixed object can restore stale
-		// derivation after a source reset and must drain before activation.
+		// Canonical stream/reconciliation owns immutable revision-checked exports.
+		// Drain legacy fixed objects before activation; resets can revive stale derivation.
 		return nil
 	}
 
