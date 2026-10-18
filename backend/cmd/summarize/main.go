@@ -83,8 +83,9 @@ func init() {
 	bedrockService.SetAttachmentTextService(attachmentTextService)
 	resummaryService = service.NewResummaryService(metadata, service.NewMeetingService(metadata), bedrockService, attachmentTextService, nil)
 	actionItemsService = service.NewMetadataActionItemsAnalysisService(repo, bedrockService, nil)
-	termsService := service.NewTermsAnalysisService(repo, service.NewTermsMerger(repository.NewDictionaryRepository(dynamoClient, tableName)),
-		bedrockService, attachmentTextService, service.TermsPublisher(ebClient), service.TermsConfigFromEnv())
+	dictionaryRepo := repository.NewDictionaryRepository(dynamoClient, tableName)
+	termsService := service.NewTermsAnalysisService(repo, service.NewTermsMerger(dictionaryRepo),
+		service.NewDictionaryService(dictionaryRepo, nil), bedrockService, attachmentTextService, service.TermsPublisher(ebClient), service.TermsConfigFromEnv())
 	processTermsRequested = termsService.Process
 	enqueueTerms = func(ctx context.Context, ownerID, meetingID, reason string) {
 		termsService.Enqueue(ctx, ownerID, meetingID, reason) // non-fatal; logs its outcome code

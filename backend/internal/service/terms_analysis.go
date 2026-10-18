@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"strconv"
@@ -92,6 +93,18 @@ type termsMergeRunner interface {
 	MergeExtractedTerms(context.Context, string, []ExtractedTerm, TermsMeetingRef) (*TermsMergeResult, error)
 }
 
+// termsLegacyMigrator makes the owner's term rows authoritative before a
+// merge, as every manual v2 write does (ensureMigrated). Until migratedAt is
+// set, readers union the legacy blob under the rows and migration copies only
+// keys without a row, so an automatic row written first would hide or replace
+// a blob term now and drop it permanently at migration.
+// *DictionaryService implements it.
+type termsLegacyMigrator interface {
+	MigrateLegacyDictionary(context.Context, string) (LegacyMigrationResult, error)
+}
+
+var _ termsLegacyMigrator = (*DictionaryService)(nil)
+
 type termsAttachmentSource interface {
 	summaryAttachments(context.Context, string, string) ([]model.Attachment, error)
 }
@@ -100,6 +113,7 @@ type termsAttachmentSource interface {
 type TermsAnalysisService struct {
 	repo        termsAnalysisRepo
 	merger      termsMergeRunner
+	migrator    termsLegacyMigrator
 	model       termsModel
 	attachments termsAttachmentSource
 	publish     func(context.Context, model.TermsRequested) error
@@ -107,9 +121,10 @@ type TermsAnalysisService struct {
 	now         func() time.Time
 }
 
-// NewTermsAnalysisService wires the job; attachments may be nil.
-func NewTermsAnalysisService(repo termsAnalysisRepo, merger termsMergeRunner, llm termsModel, attachments termsAttachmentSource, publish func(context.Context, model.TermsRequested) error, cfg TermsConfig) *TermsAnalysisService {
-	return &TermsAnalysisService{repo: repo, merger: merger, model: llm, attachments: attachments, publish: publish, cfg: cfg, now: time.Now}
+// NewTermsAnalysisService wires the job; attachments may be nil. A nil
+// migrator fails every run before any dictionary write.
+func NewTermsAnalysisService(repo termsAnalysisRepo, merger termsMergeRunner, migrator termsLegacyMigrator, llm termsModel, attachments termsAttachmentSource, publish func(context.Context, model.TermsRequested) error, cfg TermsConfig) *TermsAnalysisService {
+	return &TermsAnalysisService{repo: repo, merger: merger, migrator: migrator, model: llm, attachments: attachments, publish: publish, cfg: cfg, now: time.Now}
 }
 
 // TermsPublisher publishes ttobak.analysis/TermsRequested on the default bus.
@@ -318,6 +333,16 @@ func (s *TermsAnalysisService) Process(ctx context.Context, event model.TermsReq
 			Confidence: f.Confidence, TranscribeKo: f.TranscribeKo, TranscribeEn: f.TranscribeEn,
 		})
 	}
+	// Migrate the owner's legacy blob first (a no-op once migratedAt is set),
+	// before reserving keys, so no automatic row can claim a blob term's key.
+	if err := s.migrateLegacy(runCtx, event.OwnerID); err != nil {
+		code := model.AnalysisPersistenceFail
+		if errors.Is(err, ErrLegacyDictionaryConflict) {
+			// Permanent until the owner resolves it; do not ask for redelivery.
+			return s.fail(ctx, event.MeetingID, &running, code, nil)
+		}
+		return errors.Join(err, s.fail(ctx, event.MeetingID, &running, code, nil))
+	}
 	reserveAt := s.now()
 	reserveLease := reserveAt.Add(termsLease).UnixMilli()
 	if err := s.repo.ReserveTermsAccepted(runCtx, event.OwnerID, event.MeetingID, event.RunID, running.LeaseUntil, reserveAt, reserveLease, planned); err != nil {
@@ -357,6 +382,19 @@ func (s *TermsAnalysisService) Process(ctx context.Context, event model.TermsReq
 	// An Enqueue during this run returned PENDING and queued nothing; a source
 	// that changed after the freshness check gets its own run now.
 	s.Enqueue(ctx, event.OwnerID, event.MeetingID, "post-run")
+	return nil
+}
+
+// migrateLegacy runs the legacy dictionary migration for ownerID; a missing
+// migrator is a wiring error, never a reason to merge unmigrated.
+func (s *TermsAnalysisService) migrateLegacy(ctx context.Context, ownerID string) error {
+	if s.migrator == nil {
+		return errors.New("terms run: legacy dictionary migrator is not configured")
+	}
+	if _, err := s.migrator.MigrateLegacyDictionary(ctx, ownerID); err != nil {
+		log.Printf("terms run: legacy dictionary migration failed: conflict=%t", errors.Is(err, ErrLegacyDictionaryConflict))
+		return fmt.Errorf("failed to migrate legacy dictionary: %w", err)
+	}
 	return nil
 }
 

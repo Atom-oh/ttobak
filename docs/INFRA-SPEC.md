@@ -503,7 +503,10 @@ Summarize receives `AUTO_TERMS_MODE` (`off` by default, or `personal`),
 `ttobak:autoTermsUsers`, `ttobak:autoTermsMinConfidence` and
 `ttobak:bedrockTermsModelId`; invalid values fail synth. No other function
 receives these variables. With the default `off`, Enqueue returns `DISABLED`
-before any read, write or publish, so the rule stays idle. See ADR-008.
+before any read, write or publish, so the rule stays idle. Set `personal` only in
+a deployment after one with `off` has delivered the rule and summarize code. Before
+merging, the worker migrates the owner's legacy dictionary blob through the
+summarize role's existing table grant. See ADR-008.
 
 ## Project invitation activation
 

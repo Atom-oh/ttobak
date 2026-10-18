@@ -1,10 +1,10 @@
 # ADR-008: Per-User Dictionaries for Speech Recognition
 
-- Status: Accepted; phonetic TSV uploads and automatic suggestion ingestion remain
-  original plans, not current behavior.
+- Status: Accepted; phonetic TSV uploads remain an original plan, not current
+  behavior. Automatic term extraction ships off by default (`AUTO_TERMS_MODE=off`).
 - Decision date: Not recorded; original rationale references the 2026-04-23 STT evaluation.
-- Implementation checked: 2026-09-13; v2 storage, term CRUD, filter and terms
-  run-state/merge amendments checked 2026-10-18.
+- Implementation checked: 2026-09-13; v2 storage, term CRUD, filter, terms
+  run-state/merge and extraction job amendments checked 2026-10-18.
 
 ## Context and decision
 
@@ -176,7 +176,7 @@ Rules, in order:
 - **Duplicates** by term key keep the best-ranked candidate.
 - **Cap.** At most 15 terms per run, ranked by confidence, then source-type count.
 
-## Amendment 2026-10-18: terms run state and merge rules (inert)
+## Amendment 2026-10-18: terms run state and merge rules
 
 Storage and merge code for automatic terms; the extraction job amendment below
 is its caller.
@@ -246,8 +246,12 @@ is its caller.
   of summarize analyses, preserved human content, re-summary; non-fatal). The
   summarize dispatch runs it within min(300 s, deadline-30 s): at most three
   90 s calls (Sonnet default, 3000 tokens, thinking off, strict JSON), then the
-  filters and merger. Keys are reserved in `acceptedTerms` before observation
-  writes, which check that the meeting exists. An Enqueue during a live run is
+  filters, `MigrateLegacyDictionary` for the owner and the merger. As for manual
+  v2 writes, migration runs first and a failure fails the run before any key is
+  reserved or row written, so an automatic row never claims an observed
+  unmigrated blob term's key; a blob first created by a legacy PUT during the
+  run is the same window manual writes have. Keys are reserved in
+  `acceptedTerms` before observation writes, which check that the meeting exists. An Enqueue during a live run is
   `PENDING` and records nothing, so a run failing `SOURCE_CHANGED`, and every
   successful run, calls Enqueue again for the current source.
 - **Deletion.** `SweepMeetingTerms` follows `DeleteMeeting`: it deletes the
@@ -263,7 +267,8 @@ is its caller.
   DLQ and alarm, and renders `AUTO_TERMS_*`/`BEDROCK_TERMS_MODEL_ID` from
   validated CDK context, `AUTO_TERMS_MODE=off` by default
   ([INFRA-SPEC](../INFRA-SPEC.md#automatic-term-extraction-delivery)). Enabling
-  `personal` is a separate, explicit context change; synth is not deployment.
+  `personal` is a separate, explicit context change made after a deployment with
+  `off`; synth is not deployment.
 
 ## Consequences and risks
 
@@ -284,7 +289,9 @@ concerns. This feature does not remove the need to review transcripts.
   [dictionary_validate.go](../../backend/internal/service/dictionary_validate.go):
   term CRUD and the shared validator; tests beside each.
 - [terms_analysis.go](../../backend/internal/service/terms_analysis.go) and
-  [terms_extract.go](../../backend/internal/service/terms_extract.go): extraction job.
+  [terms_extract.go](../../backend/internal/service/terms_extract.go): extraction job;
+  [meeting_source_taint_test.go](../../backend/internal/service/meeting_source_taint_test.go):
+  `TestSourceWriterAllowlist`.
 - [terms_analysis.go](../../backend/internal/model/terms_analysis.go),
   [repository terms_analysis.go](../../backend/internal/repository/terms_analysis.go)
   and [terms_merge.go](../../backend/internal/service/terms_merge.go): run state,

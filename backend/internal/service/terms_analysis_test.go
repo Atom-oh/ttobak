@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -122,12 +123,25 @@ var termsTestNow = time.Date(2026, 10, 18, 9, 0, 0, 0, time.UTC)
 
 func newTermsTestService(repo *termsRepoFake, llm termsModel, merger termsMergeRunner, cfg TermsConfig) (*TermsAnalysisService, *[]model.TermsRequested) {
 	published := &[]model.TermsRequested{}
-	s := NewTermsAnalysisService(repo, merger, llm, nil, func(_ context.Context, e model.TermsRequested) error {
+	s := NewTermsAnalysisService(repo, merger, noLegacyDictionary{}, llm, nil, func(_ context.Context, e model.TermsRequested) error {
 		*published = append(*published, e)
 		return nil
 	}, cfg)
 	s.now = func() time.Time { return termsTestNow }
 	return s, published
+}
+
+// noLegacyDictionary is an owner without a legacy blob.
+type noLegacyDictionary struct{}
+
+func (noLegacyDictionary) MigrateLegacyDictionary(context.Context, string) (LegacyMigrationResult, error) {
+	return LegacyMigrationResult{NoDictionary: true}, nil
+}
+
+type failingMigrator struct{ err error }
+
+func (f failingMigrator) MigrateLegacyDictionary(context.Context, string) (LegacyMigrationResult, error) {
+	return LegacyMigrationResult{}, f.err
 }
 
 var termsOn = TermsConfig{Mode: AutoTermsModePersonal, MinConfidence: 0.85, ModelID: "test-model"}
@@ -465,5 +479,71 @@ func TestTermsChunkingAndSampling(t *testing.T) {
 	sampled := sampleChunks([]string{"0", "1", "2", "3", "4", "5", "6"}, 3)
 	if strings.Join(sampled, ",") != "0,3,6" {
 		t.Fatalf("sampled %v", sampled)
+	}
+}
+
+// An unmigrated legacy blob is migrated before the merge: the owner's manual
+// blob term becomes a manual row, so the extracted duplicate is skipped and
+// the union reader and later migrations keep the owner's phrase.
+func TestTermsProcessMigratesLegacyDictionaryFirst(t *testing.T) {
+	meeting := termsTestMeeting()
+	repo := &termsRepoFake{meeting: meeting, state: queuedTermsState(meeting)}
+	mem := newMemDictStore()
+	legacy := newFakeDictStore()
+	legacy.terms = mem.terms // one table: the merger sees the migrated rows
+	legacy.blob = &model.UserDictionary{
+		PK: "USER#owner", SK: model.PrefixDictionary, UserID: "owner", BlobRevision: 1, UpdatedAt: "2026-10-18T08:00:00Z",
+		Terms: []model.DictionaryTerm{{Phrase: "Dynamo-DB", SoundsLike: "다이나모", DisplayAs: "DynamoDB"}},
+	}
+	dict := newTestDictService(legacy, nil)
+	s, _ := newTermsTestService(repo, &termsModelFake{outputs: []string{termsGoodOutput}}, newTestMerger(mem), termsOn)
+	s.migrator = dict
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	if err := s.Process(ctx, model.TermsRequested{OwnerID: "owner", MeetingID: "m1", RunID: "run-1"}); err != nil || repo.completed == nil {
+		t.Fatalf("err=%v completed=%v failed=%s", err, repo.completed, repo.failed)
+	}
+	if legacy.blob.MigratedAt == "" {
+		t.Fatal("the legacy blob must be migrated before the merge")
+	}
+	term, ok := mem.term("DynamoDB")
+	if !ok || term.Origin != model.TermOriginManual || term.Phrase != "Dynamo-DB" || mem.calls["create"] != 0 {
+		t.Fatalf("manual blob term displaced: %+v calls=%v", term, mem.calls)
+	}
+	if repo.completed.Counters.SkippedManual != 1 || len(repo.completed.AcceptedTerms) != 0 {
+		t.Fatalf("counters %+v accepted %+v", repo.completed.Counters, repo.completed.AcceptedTerms)
+	}
+	if got := legacy.phrases(dict); got != "Dynamo-DB/DynamoDB" {
+		t.Fatalf("dictionary reads %q", got)
+	}
+}
+
+func TestTermsProcessMigrationFailureWritesNothing(t *testing.T) {
+	cases := []struct {
+		name     string
+		migrator termsLegacyMigrator
+		wantErr  bool
+	}{
+		{"transient error is surfaced", failingMigrator{errors.New("throttled")}, true},
+		{"lossy blob fails without redelivery", failingMigrator{fmt.Errorf("%w: 1 terms", ErrLegacyDictionaryConflict)}, false},
+		{"missing migrator fails closed", nil, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			meeting := termsTestMeeting()
+			repo := &termsRepoFake{meeting: meeting, state: queuedTermsState(meeting)}
+			mem := newMemDictStore()
+			s, _ := newTermsTestService(repo, &termsModelFake{outputs: []string{termsGoodOutput}}, newTestMerger(mem), termsOn)
+			s.migrator = tc.migrator
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			defer cancel()
+			err := s.Process(ctx, model.TermsRequested{OwnerID: "owner", MeetingID: "m1", RunID: "run-1"})
+			if (err != nil) != tc.wantErr || repo.failed != model.AnalysisPersistenceFail || repo.completed != nil {
+				t.Fatalf("err=%v failed=%s completed=%v", err, repo.failed, repo.completed)
+			}
+			if repo.reserved != nil || len(mem.terms) != 0 || mem.calls["list"] != 0 {
+				t.Fatalf("no key may be reserved or merged: reserved=%v terms=%d calls=%v", repo.reserved, len(mem.terms), mem.calls)
+			}
+		})
 	}
 }
