@@ -8,6 +8,7 @@ from source_revision import (
     IDENTIFIER, FILE_EXTENSIONS, resource_identity, source_fields, source_revision,
 )
 from transcript_storage import validate_transcript_ref
+from summary_privacy import RESTRICTION, project_meeting
 
 MAX_SOURCE_BYTES = 50 * 1024 * 1024
 
@@ -29,18 +30,33 @@ class SourceReader:
         # Identity and authorization metadata only, before notes/transcripts.
         metadata = self.table.get_item(
             Key=key, ConsistentRead=True,
-            ProjectionExpression='PK, SK, meetingId, userId, accountId, sharedToAccount',
+            ProjectionExpression='PK, SK, meetingId, userId, accountId, sharedToAccount, summaryPrivacy',
         ).get('Item')
+        metadata = dict(metadata) if metadata else metadata
         if not self._meeting_identity(metadata, key, owner, meeting_id):
             return None
         if not self.meeting_access(user_id, owner, meeting_id, metadata):
             return None
-        record = self.table.get_item(Key=key, ConsistentRead=True).get('Item')
+        request = {'Key': key, 'ConsistentRead': True}
+        if metadata.get('_summaryReadRestricted'):
+            raw_fields = ('PK', 'SK', 'meetingId', 'userId', 'accountId', 'sharedToAccount',
+                          'summaryPrivacy', 'title', 'date', 'status', 'notes',
+                          'selectedTranscript', 'transcriptA', 'transcriptB', 'updatedAt')
+            request['ExpressionAttributeNames'] = {f'#raw{i}': field for i, field in enumerate(raw_fields)}
+            request['ProjectionExpression'] = ', '.join(request['ExpressionAttributeNames'])
+        record = self.table.get_item(**request).get('Item')
+        record = dict(record) if record else record
         if not self._meeting_identity(record, key, owner, meeting_id):
             return None
         if not self.meeting_access(user_id, owner, meeting_id, record):
             return None
-        return source_fields(identity, record)
+        restricted = bool(metadata.get('_summaryReadRestricted') or record.get('_summaryReadRestricted'))
+        fields = source_fields(identity, project_meeting(record,restricted))
+        if restricted:
+            # User-scoped revision changes invalidate earlier derived history
+            # even when a prior rendered field happened to be empty.
+            fields['summaryReadRestriction'] = RESTRICTION
+        return fields
 
     @staticmethod
     def _meeting_identity(record, key, owner, meeting_id):
@@ -153,6 +169,8 @@ class SourceReader:
     def meeting_text(self, snapshot, include_notes=True):
         fields, identity = snapshot['fields'], snapshot['identity']
         parts = []
+        if fields.get('summaryReadRestriction'):
+            parts.append('소유자가 공유용 회의록을 재생성하기 전에는 저장된 요약과 작업 항목을 사용할 수 없습니다. 아래는 현재 회의의 원문과 사용자 메모입니다.')
         if fields.get('title'):
             parts.append('제목: ' + fields['title'])
         for name, title in (('notes', '사용자 메모'), ('content', '저장된 요약'), ('actionItems', '저장된 작업 항목')):

@@ -90,3 +90,23 @@ real history/session helpers. Coverage includes retained private insights, exact
 projection/canonical identity, authorization before body reads, aggregation
 revocation without meeting refs, read failures, and history replay after
 publication changes. No live AWS or new test framework is required.
+
+## Staged meeting-derivation scope
+
+Membership metadata additionally pins `addedAt` and `summaryPrivacyVersion`.
+Meeting authorization metadata includes `summaryPrivacy` and `insightsRevision`;
+it does not load meeting content or transcripts. Copied meeting insights require
+the current generation/revision. Publication rechecks also revalidate the reader's
+derivation clearance, and membership changes invalidate CompleteRead.
+
+When private/unknown insights are withheld, account insight/brief output contains
+`summaryReadRestriction: SHARING_REGEN_REQUIRED`. This is a restricted result,
+not proof of successful empty analysis. Owner and existing direct-meeting grants
+retain their separate access; an account membership does not inherit those grants.
+The known restriction survives ToolHistory's public projection and rendered-view
+fingerprint. Both account formatters explain withholding instead of reporting an
+ordinary empty result, while retaining any separately permitted insights and brief
+context. A marker-only change invalidates prior derived conversation in either
+direction; a stable restricted view may replay after current authorization checks.
+The installation/activation and remaining writer gates are documented in
+[the source contract](SOURCE_CONTRACT.md#staged-summary-privacy-scope).
