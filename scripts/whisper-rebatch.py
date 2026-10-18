@@ -1,20 +1,24 @@
 #!/usr/bin/env python3
-"""SUPERSEDED operator tool: re-run Whisper for ONE explicitly named meeting.
+"""Operator tool: re-run Whisper ECS batch transcription for existing meetings.
 
-Stuck single-file meetings are now re-driven automatically, with durable
-conditional claims and a two-attempt budget, by the scheduled STT recovery
-tick (ttobak-stt-recovery -> ttobak-transcribe; ADR-031 amendment and
-docs/runbooks/stt-pipeline-troubleshooting.md). Prefer that path.
+Lists eligible meetings (dry run by default) and, with --run, triggers one
+Whisper ECS task per selected meeting. The existing pipeline then handles
+Whisper -> S3 transcripts/ -> EventBridge -> summarize. Nothing re-runs a task
+automatically; this script is the authorized manual path
+(docs/runbooks/stt-pipeline-troubleshooting.md).
 
-This script remains for a deliberate one-off. It refuses to run without an
-explicit meeting ID, rejects done/summarizing meetings, changes status only
-through a conditional update on the observed status and raw updatedAt (and
-bumps updatedAt), and never prints meeting titles. The existing pipeline then
-handles Whisper -> S3 transcripts/ -> EventBridge -> summarize.
+Safety: only error/transcribing meetings are eligible (done/summarizing are
+never overwritten); the audio key's user segment must match the meeting row's
+owner; cropped meetings (audioCrop) are skipped; status changes only through a
+conditional update on the observed status and raw updatedAt (which it bumps);
+meeting titles are never printed. Re-running a transcribing meeting whose task
+is still in flight starts a second task -- check `aws ecs list-tasks` first.
 
 Usage:
+  python3 scripts/whisper-rebatch.py                                    # dry-run: list eligible meetings
   python3 scripts/whisper-rebatch.py <id>                               # dry-run for one meeting
   python3 scripts/whisper-rebatch.py --run <id>                         # trigger one ECS task
+  python3 scripts/whisper-rebatch.py --run --all                        # trigger every eligible meeting
   python3 scripts/whisper-rebatch.py --run --num-speakers 8 <id>        # hint a max speaker count
                                                                          # (upper bound; pyannote still
                                                                          # auto-detects within it)
@@ -23,6 +27,7 @@ import argparse
 import json
 import os
 import sys
+import time
 import unicodedata
 from datetime import datetime, timezone
 
@@ -91,6 +96,7 @@ def get_meeting(meeting_id):
             "status": item.get("status", {}).get("S", ""),
             "userId": item.get("userId", {}).get("S", ""),
             "sttProvider": item.get("sttProvider", {}).get("S", ""),
+            "audioCrop": "audioCrop" in item,
         }
     return None
 
@@ -163,39 +169,101 @@ def claim_meeting(target):
         raise
 
 
+ELIGIBLE_STATUSES = ("error", "transcribing")
+
+
+def check_target(af, meeting):
+    """Returns (target, None) for an eligible meeting or (None, reason)."""
+    if not meeting:
+        return None, "no meeting row"
+    if meeting["status"] not in ELIGIBLE_STATUSES:
+        return None, f"status={meeting['status']} (only error/transcribing are re-run)"
+    # Bind the audio key to the meeting row: audio/{userId}/{meetingId}/...
+    if (meeting["userId"] != af["user_id"] or meeting["PK"] != f"USER#{af['user_id']}"
+            or meeting["meetingId"] != af["meeting_id"]):
+        return None, "audio key owner does not match the meeting row"
+    if meeting["audioCrop"]:
+        return None, "meeting has an audioCrop (cropped re-runs are not supported here)"
+    if not meeting["updatedAt"]:
+        return None, "meeting has no updatedAt to fence on"
+    return {**af, "status": meeting["status"], "updatedAt": meeting["updatedAt"],
+            "sttProvider": meeting["sttProvider"]}, None
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Re-run Whisper ECS for one explicitly named meeting (superseded by the recovery tick)")
-    parser.add_argument("--run", action="store_true", help="Actually trigger the ECS task (default: dry-run)")
+    parser = argparse.ArgumentParser(description="Re-batch existing meetings through Whisper ECS")
+    parser.add_argument("--run", action="store_true", help="Actually trigger ECS tasks (default: dry-run)")
+    parser.add_argument("--all", action="store_true",
+                        help="With --run and no meeting_id, trigger every eligible meeting")
     parser.add_argument("--num-speakers", type=int, default=None,
                          help="Hint a maximum speaker count to the diarization pipeline -- "
-                              "an upper bound pyannote still auto-detects within, not an exact count")
-    parser.add_argument("meeting_id", help="The single meeting ID to re-run (required)")
+                              "an upper bound pyannote still auto-detects within, not an exact "
+                              "count (only meaningful with a single meeting_id)")
+    parser.add_argument("meeting_id", nargs="?", help="Process single meeting ID")
     args = parser.parse_args()
 
-    print(f"Whisper Re-Batch (superseded; see ADR-031 amendment) — {'RUN' if args.run else 'DRY RUN'}")
+    if args.num_speakers and not args.meeting_id:
+        print("ERROR: --num-speakers requires a single meeting_id (it would apply the same "
+              "speaker count to every re-batched meeting otherwise)", file=sys.stderr)
+        sys.exit(1)
+    if args.meeting_id and args.all:
+        print("ERROR: --all cannot be combined with a meeting_id", file=sys.stderr)
+        sys.exit(1)
+    if args.run and not args.meeting_id and not args.all:
+        print("ERROR: --run without a meeting_id requires --all", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Whisper Re-Batch — {'RUN' if args.run else 'DRY RUN'}")
+    print(f"Cluster: {CLUSTER} | Task: {TASK_DEF}")
+    print()
+
     audio_files = find_audio_files()
-    af = audio_files.get(args.meeting_id)
-    meeting = get_meeting(args.meeting_id) if af else None
-    if not af or not meeting:
-        print("No audio or meeting found for that ID", file=sys.stderr)
-        sys.exit(1)
-    if meeting["status"] not in ("error", "transcribing"):
-        print(f"Refusing: status={meeting['status']} (only error/transcribing meetings are re-run)", file=sys.stderr)
-        sys.exit(1)
-    if not meeting["updatedAt"]:
-        print("Refusing: meeting has no updatedAt to fence on", file=sys.stderr)
-        sys.exit(1)
-    target = {**af, "status": meeting["status"], "updatedAt": meeting["updatedAt"]}
-    print(f"Target: {target['meeting_id']} size={target['size_mb']:.1f}M status={target['status']} "
-          f"provider={meeting['sttProvider'] or 'transcribe'}")
+    print(f"Found {len(audio_files)} meetings with audio files")
+
+    if args.meeting_id:
+        af = audio_files.get(args.meeting_id)
+        if not af:
+            print("No audio found for that meeting ID", file=sys.stderr)
+            sys.exit(1)
+        candidates = [af]
+    else:
+        candidates = [af for _, af in sorted(audio_files.items())]
+
+    targets = []
+    for af in candidates:
+        target, reason = check_target(af, get_meeting(af["meeting_id"]))
+        if target:
+            targets.append(target)
+        elif args.meeting_id:
+            print(f"Refusing: {reason}", file=sys.stderr)
+            sys.exit(1)
+
+    print(f"\nTargets: {len(targets)} meetings")
+    print(f"{'ID':>10s}  {'Size':>6s}  {'Provider':>12s}  {'Status':>12s}")
+    print("-" * 48)
+    for t in targets:
+        print(f"{t['meeting_id'][:10]}  {t['size_mb']:>5.1f}M  {t['sttProvider'] or 'transcribe':>12s}  {t['status']:>12s}")
+
     if not args.run:
-        print("Dry run complete. Use --run to trigger the ECS task.")
+        hint = "--run <id>" if args.meeting_id else "--run <id> (or --run --all)"
+        print(f"\nDry run complete. Use {hint} to trigger ECS tasks.")
         return
-    if not claim_meeting(target):
-        print("Refusing: the meeting changed since it was read", file=sys.stderr)
-        sys.exit(1)
-    ok = run_whisper_task(target["meeting_id"], target["user_id"], target["key"], args.num_speakers)
-    print("Triggered" if ok else "Task did not start; the meeting stays transcribing until the recovery tick or expiry")
+
+    print(f"\nTriggering {len(targets)} Whisper ECS tasks...")
+    success = 0
+    for i, t in enumerate(targets):
+        print(f"\n[{i+1}/{len(targets)}] {t['meeting_id'][:10]}")
+        if not claim_meeting(t):
+            print("  SKIPPED: status, updatedAt or audioCrop changed since it was read")
+            continue
+        if run_whisper_task(t["meeting_id"], t["user_id"], t["key"], args.num_speakers):
+            success += 1
+        else:
+            print("  The meeting stays transcribing until the stale-transcribing expiry or another re-run")
+        time.sleep(2)
+
+    print(f"\n{'=' * 60}")
+    print(f"Triggered: {success}/{len(targets)} tasks")
     print("Monitor progress: aws ecs list-tasks --cluster ttobak-whisper")
 
 

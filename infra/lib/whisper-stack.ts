@@ -136,7 +136,7 @@ export class WhisperStack extends cdk.Stack {
       minimumScalingStepSize: 1,
       maximumScalingStepSize: 2,
       targetCapacityPercent: 100,
-      // ECS managed draining (ADR-031 amendment). Left unset, aws-cdk-lib adds its own
+      // ECS managed draining (ADR-009 host lifecycle amendment). Left unset, aws-cdk-lib adds its own
       // InstanceDrainHook Lambda, which cannot drain a host that has not yet
       // registered with ECS: when AZRebalance picked a just-launched host,
       // the hook logged "container instance ARN None", returned, and the
@@ -168,18 +168,19 @@ export class WhisperStack extends cdk.Stack {
     asg.addUserData(
       'echo ECS_ENGINE_TASK_CLEANUP_WAIT_DURATION=3m >> /etc/ecs/ecs.config',
       // Stop placing new tasks on a Spot host that has received its
-      // two-minute interruption notice (ADR-031 amendment). Running tasks still die
-      // with the host; the scheduled STT recovery tick re-drives them.
+      // two-minute interruption notice (ADR-009). Running tasks still die with
+      // the host; this setting does not re-run them.
       'echo ECS_ENABLE_SPOT_INSTANCE_DRAINING=true >> /etc/ecs/ecs.config',
     );
 
-    // Suspend AZRebalance (ADR-031 amendment): rebalancing terminates healthy hosts,
+    // Suspend AZRebalance (ADR-009): rebalancing terminates healthy hosts,
     // including one that just accepted a Whisper task, to even out AZs --
     // the root cause of silently killed transcriptions. CloudFormation has no
     // suspended-processes property, so this follows the existing
     // custom-resource precedent. Deleting the resource resumes the process.
-    // Drift is possible if an operator resumes it manually; the runbook
-    // checks SuspendedProcesses.
+    // The constant physical ID means a redeploy does not re-suspend after a
+    // manual resume; docs/runbooks/stt-pipeline-troubleshooting.md checks
+    // SuspendedProcesses and re-suspends.
     const azRebalanceCall = (action: 'suspendProcesses' | 'resumeProcesses'): cr.AwsSdkCall => ({
       service: 'AutoScaling',
       action,
