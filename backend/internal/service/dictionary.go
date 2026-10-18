@@ -88,37 +88,27 @@ func (s *DictionaryService) readDictionary(ctx context.Context, userID string) (
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to get dictionary terms: %w", err)
 	}
-	status, name := s.personalVocabularyStatus(ctx, userID, dict)
 	return &model.DictionaryResponse{
-		Terms:          unionLegacyTerms(dict, rows),
-		Status:         status,
-		VocabularyName: name,
+		Terms:  unionLegacyTerms(dict, rows),
+		Status: s.personalVocabularyStatus(ctx, userID, dict),
 	}, dict, rows, nil
 }
 
-// personalVocabularyStatus reports the legacy status string and, while it is
-// READY, the name of the personal ko-KR vocabulary, preferring the VOCAB#
-// row over the blob.
-func (s *DictionaryService) personalVocabularyStatus(ctx context.Context, userID string, dict *model.UserDictionary) (string, string) {
+// personalVocabularyStatus reports the legacy status string for the personal
+// ko-KR vocabulary, preferring the VOCAB# row over the blob. The response
+// carries no vocabulary name: the live client would send a ko-KR-only
+// vocabulary on its ko-KR/en-US stream (ADR-008 acceptance item 5).
+func (s *DictionaryService) personalVocabularyStatus(ctx context.Context, userID string, dict *model.UserDictionary) string {
 	state, err := s.repo.GetVocabularyState(ctx, userID, model.VocabContextPersonal, model.VocabLangKo)
 	if err != nil {
 		log.Printf("failed to read vocabulary state for user %s: %v", userID, err)
 	} else if state != nil {
-		state = s.syncVocabularyState(ctx, userID, state)
-		status := legacyVocabularyStatus(state)
-		if status == "READY" {
-			return status, state.ActiveName
-		}
-		return status, ""
+		return legacyVocabularyStatus(s.syncVocabularyState(ctx, userID, state))
 	}
 	if dict == nil {
-		return "", ""
+		return ""
 	}
-	status := s.legacyBlobStatus(ctx, userID, dict)
-	if status == "READY" {
-		return status, dict.VocabularyName
-	}
-	return status, ""
+	return s.legacyBlobStatus(ctx, userID, dict)
 }
 
 // legacyBlobStatus reports and refreshes an unmigrated blob's status.
@@ -308,10 +298,15 @@ func (s *DictionaryService) GetVocabularyForTranscription(ctx context.Context, u
 		return "", err
 	}
 	if state != nil {
-		if !state.ActiveReady { // an emptied language is unmarked before deletion
-			return "", nil
+		if state.ActiveReady {
+			return s.readyVocabulary(ctx, state.ActiveName, true), nil
 		}
-		return s.readyVocabulary(ctx, state.ActiveName, true), nil
+		// A legacy in-place build is only marked ready by an API-side sync, so
+		// ask Transcribe. An A/B row or an emptied language is never used unready.
+		if state.Status == model.VocabStatusBuilding && state.BuildingFingerprint == "" && state.InactiveName == "" && state.EmptySince == "" {
+			return s.readyVocabulary(ctx, state.ActiveName, false), nil
+		}
+		return "", nil
 	}
 
 	dict, err := s.repo.GetDictionary(ctx, userID)

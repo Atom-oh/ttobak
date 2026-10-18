@@ -384,8 +384,10 @@ func intp(n int) *int       { return &n }
 
 func (s *DictionaryService) vocabularyStep(ctx context.Context, userID string, st *model.VocabularyState, plan vocabPlan, bypass *bool) vocabStep {
 	now := s.now()
-	// 1. A retired slot is deleted before anything else.
-	if st.RetiredName != "" {
+	// 1. A retired slot is deleted before anything else. The demoted legacy
+	// name waits out the grace window there, so it never blocks a build.
+	legacyWaiting := st.RetiredName == legacyVocabularyName(userID) && elapsedSince(st.FlippedAt, now) < vocabSlotGrace
+	if st.RetiredName != "" && !legacyWaiting {
 		if err := s.deleteVocabulary(ctx, st.RetiredName); err != nil {
 			log.Printf("vocabulary %s deletion failed: %v", st.RetiredName, err)
 			return vocabStep{warnings: []string{vocabCleanupWarning}}
@@ -407,7 +409,7 @@ func (s *DictionaryService) vocabularyStep(ctx context.Context, userID string, s
 		return s.emptyVocabularyStep(ctx, userID, st, now)
 	}
 	// 3. Steady state is one vocabulary: retire the old slot after grace.
-	if st.InactiveName != "" && elapsedSince(st.FlippedAt, now) >= vocabSlotGrace {
+	if st.InactiveName != "" && st.RetiredName == "" && (st.InactiveName == legacyVocabularyName(userID) || elapsedSince(st.FlippedAt, now) >= vocabSlotGrace) {
 		return s.casStep(ctx, userID, st, repository.VocabularyStateChange{RetiredName: &st.InactiveName, InactiveName: strp("")})
 	}
 	if st.ActiveReady && st.ActiveName != "" && plan.fingerprint == st.ActiveFingerprint {
@@ -424,10 +426,10 @@ func (s *DictionaryService) vocabularyStep(ctx context.Context, userID string, s
 		return vocabStep{}
 	}
 	target := st.InactiveName
-	switch {
-	case target == legacyVocabularyName(userID):
-		return vocabStep{} // the derived legacy name is retired, never rebuilt
-	case target == "":
+	if target == legacyVocabularyName(userID) {
+		return vocabStep{} // unreachable: step 3 retires it; never rebuilt
+	}
+	if target == "" {
 		name, err := s.builder.newName()
 		if err != nil {
 			log.Printf("vocabulary name generation failed: %v", err)
@@ -473,15 +475,21 @@ func (s *DictionaryService) advanceBuild(ctx context.Context, userID string, st 
 			return s.casStep(ctx, userID, st, repository.VocabularyStateChange{BuildSubmitted: boolp(false)})
 		}
 		log.Printf("vocabulary %s poll failed: %v", st.InactiveName, err)
-		return vocabStep{}
+		return vocabStep{warnings: []string{vocabularyRebuildWarning}}
 	}
 	switch out.VocabularyState {
 	case transcribeTypes.VocabularyStateReady:
-		step := s.casStep(ctx, userID, st, repository.VocabularyStateChange{
+		change := repository.VocabularyStateChange{
 			ActiveName: &st.InactiveName, InactiveName: &st.ActiveName, ActiveFingerprint: &st.BuildingFingerprint,
 			ActiveReady: boolp(true), Status: strp(model.VocabStatusReady), FailureCode: strp(""),
 			FlippedAt: strp(s.stamp()), BuildSubmitted: boolp(false), EmptySince: strp(""),
-		})
+		}
+		if st.ActiveName == legacyVocabularyName(userID) && st.RetiredName == "" {
+			// The legacy name is retired at its first flip; step 1 deletes it
+			// after the grace window, and the next build gets a fresh name.
+			change.InactiveName, change.RetiredName = strp(""), &st.ActiveName
+		}
+		step := s.casStep(ctx, userID, st, change)
 		if step.more {
 			step.warnings = s.deleteVocabularyFile(ctx, st.InactiveName)
 		}
@@ -558,8 +566,8 @@ func (s *DictionaryService) emptyVocabularyStep(ctx context.Context, userID stri
 			ActiveFingerprint: strp(""), BuildingFingerprint: strp(""), EmptySince: &since, TermCount: intp(0),
 		})
 	}
-	if elapsedSince(st.EmptySince, now) < vocabSlotGrace {
-		return vocabStep{}
+	if elapsedSince(st.EmptySince, now) < vocabSlotGrace || st.RetiredName != "" {
+		return vocabStep{} // a waiting legacy retirement keeps the single retired slot
 	}
 	if st.InactiveName != "" {
 		return s.casStep(ctx, userID, st, repository.VocabularyStateChange{RetiredName: &st.InactiveName, InactiveName: strp("")})

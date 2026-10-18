@@ -168,7 +168,16 @@ readers never build. Callers and response: [API-SPEC](../API-SPEC.md#personal-di
 - **Slots.** New names are `ttobak-vocab-{16 random hex}`. The demoted slot stays
   inactive for 24 h after a flip (rebuildable in place, never advertised), then
   is retired and deleted with retries: one vocabulary per language at rest, two
-  at peak. The derived legacy name is demoted at its first flip, never rebuilt.
+  at peak. The derived legacy name is retired at its first flip (never rebuilt)
+  and deleted 24 h after the latest flip, so the next build takes a fresh name
+  at once (three names at peak until then). A failed poll is a `warnings` entry.
+- **Batch** uses `ActiveName` while `activeReady`; a pre-A/B in-place build
+  (no fingerprint) is still confirmed with Transcribe, as before.
+- **No vocabulary name in responses** (the design added `vocabularyName`): the
+  existing live client would send it as `VocabularyNames` on an
+  `IdentifyMultipleLanguages` ko-KR/en-US stream, and a stream whose identified
+  language matches no listed vocabulary may fail. It waits for item 5 and the
+  live-config client.
 - **Empty language** stops advertising at once and is deleted after 24 h (the
   design deferred both), so removed terms stop biasing recognition.
 - **Not covered:** batch en-US `LanguageIdSettings` (batch uses ko-KR only),
@@ -185,6 +194,8 @@ Rollout acceptance (record each with a date):
 4. Whether `StartStreamTranscriptionWebSocket` has a vocabulary resource type
    (unverified). Until then the identity-pool `*` grant lets a user who learns a
    vocabulary name bias their own stream; random names reduce that risk.
+5. Whether a multi-language stream with ko-KR-only or ko-KR plus en-US
+   `VocabularyNames` survives en-US speech.
 
 ## Consequences and risks
 

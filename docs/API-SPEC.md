@@ -614,7 +614,7 @@ never blocklisted (`terms_blocklist.txt`) or the term's own key; `phrase` at mos
 
 - `GET /api/settings/dictionary` migrates the legacy item best effort, runs
   `EnsureVocabularies` (see below), then returns legacy `terms`/`status`,
-  `vocabularyName`, `vocabularies`, `warnings?` plus `items` (non-tombstone rows: `termId`,
+  `vocabularies`, `warnings?` plus `items` (non-tombstone rows: `termId`,
   `displayAs`, `phrase`, `heardAs`, `aliasMode`, `type`, `origin`,
   `state` `active|suggested`, `userEdited`, `version`, flags, `hits`, times).
   `migrationPending` means the legacy item is not yet migrated: either it is
@@ -657,9 +657,10 @@ never blocklisted (`terms_blocklist.txt`) or the term's own key; `phrase` at mos
   builds; failures are `warnings` and the active vocabulary keeps serving.
   `vocabularies: {ko, en}` gives `{status, activeReady, failureCode?, termCount}`
   per language (`status` `READY|BUILDING|FAILED|QUOTA_EXCEEDED|NONE` is the
-  latest build; `failureCode` `PROVIDER|QUOTA`). GET/PUT `vocabularyName` is the
-  ready personal ko-KR active name (else `""`); legacy `status` is `READY`
-  whenever that active vocabulary is ready.
+  latest build; `failureCode` `PROVIDER|QUOTA`). Legacy `status` is `READY`
+  whenever the personal ko-KR active vocabulary is ready. No response carries a
+  vocabulary name yet: the live client would send a ko-KR-only
+  `VocabularyNames` on its ko-KR/en-US stream (ADR-008 acceptance item 5).
 
 ### Index status and automatic indexing rollout
 

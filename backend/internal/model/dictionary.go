@@ -43,12 +43,10 @@ type DeleteTermRequest struct {
 // DictionaryResponse represents the API response for dictionary operations.
 // Terms and Status are the legacy fields; Items lists the v2 rows.
 type DictionaryResponse struct {
-	Terms  []DictionaryTerm `json:"terms"`
-	Status string           `json:"status"`
-	// VocabularyName is the READY personal ko-KR ActiveName (legacy client).
-	VocabularyName string           `json:"vocabularyName"`
-	Vocabularies   *VocabularyViews `json:"vocabularies,omitempty"`
-	Items          []DictTermView   `json:"items,omitempty"`
+	Terms        []DictionaryTerm `json:"terms"`
+	Status       string           `json:"status"`
+	Vocabularies *VocabularyViews `json:"vocabularies,omitempty"`
+	Items        []DictTermView   `json:"items,omitempty"`
 	// MigrationPending means the legacy list is not yet copied into rows, so
 	// some legacy terms have no termId; a legacy PUT resolves it.
 	MigrationPending bool     `json:"migrationPending,omitempty"`

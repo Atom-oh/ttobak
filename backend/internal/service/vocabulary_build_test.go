@@ -295,7 +295,7 @@ func TestEnsureVocabulariesFailedKeepsActive(t *testing.T) {
 		!views.Ko.ActiveReady || len(warnings) == 0 || len(fx.objects.puts) != 0 || fx.batch(t) != active {
 		t.Fatalf("FAILED keeps the active slot: %+v %v", ko, warnings)
 	}
-	if resp, _ := fx.svc.GetDictionary(context.Background(), "u1"); resp.Status != "READY" || resp.VocabularyName != active {
+	if resp, _ := fx.svc.GetDictionary(context.Background(), "u1"); resp.Status != "READY" {
 		t.Fatalf("legacy client keeps the active name: %+v", resp)
 	}
 	submits := len(fx.tr.calls)
@@ -384,16 +384,50 @@ func TestEnsureVocabulariesRetiresLegacyName(t *testing.T) {
 	fx.add("Alpha Grid", "Alpha-Grid")
 	fx.ensure(false)
 	fx.tr.settle(tt.VocabularyStateReady)
-	if fx.ensure(false); fx.ko().InactiveName != legacy || fx.tr.count("update:"+legacy) != 0 {
-		t.Fatalf("legacy demoted, not rebuilt: %+v", fx.ko())
+	if fx.ensure(false); fx.ko().RetiredName != legacy || fx.ko().InactiveName != "" || fx.tr.count("update:"+legacy) != 0 || fx.tr.vocabs[legacy] == nil {
+		t.Fatalf("legacy retired at the first flip, kept for grace: %+v", fx.ko())
 	}
 	fx.add("Beta Node", "Beta-Node")
-	if fx.ensure(true); fx.ko().Status == model.VocabStatusBuilding {
-		t.Fatal("the legacy slot is never a build target")
+	fx.after(time.Minute)
+	if _, warnings := fx.ensure(true); fx.ko().Status != model.VocabStatusBuilding || fx.ko().InactiveName != name("a", 2) || len(warnings) != 0 {
+		t.Fatalf("a manual write builds a fresh name during the legacy grace: %+v %v", fx.ko(), warnings)
+	}
+	fx.tr.settle(tt.VocabularyStateReady)
+	if fx.ensure(false); fx.ko().ActiveName != name("a", 2) || fx.ko().RetiredName != legacy || fx.tr.vocabs[legacy] == nil {
+		t.Fatalf("second flip keeps the waiting legacy name: %+v", fx.ko())
 	}
 	fx.after(24 * time.Hour)
-	if fx.ensure(false); fx.tr.vocabs[legacy] != nil || fx.ko().Status != model.VocabStatusBuilding || fx.ko().InactiveName == legacy {
-		t.Fatalf("legacy deleted after 24 h: %+v", fx.ko())
+	if fx.ensure(false); fx.tr.vocabs[legacy] != nil || fx.ko().RetiredName != "" || fx.ko().InactiveName != "" || fx.tr.vocabs[name("a", 1)] != nil {
+		t.Fatalf("legacy and demoted slot deleted after 24 h: %+v", fx.ko())
+	}
+}
+
+func TestEnsureVocabulariesPollErrorWarns(t *testing.T) {
+	fx := newBuilderFixture(t, "a")
+	fx.add("Alpha Grid", "Alpha-Grid")
+	fx.ensure(true)
+	fx.svc.transcribeClient = pollErrorTranscribe{fx.tr}
+	if _, warnings := fx.ensure(false); len(warnings) == 0 || fx.ko().Status != model.VocabStatusBuilding {
+		t.Fatalf("a failing poll surfaces a warning: %v %+v", warnings, fx.ko())
+	}
+}
+
+type pollErrorTranscribe struct{ *fakeTranscribe }
+
+func (pollErrorTranscribe) GetVocabulary(context.Context, *transcribe.GetVocabularyInput, ...func(*transcribe.Options)) (*transcribe.GetVocabularyOutput, error) {
+	return nil, apiError("AccessDeniedException")
+}
+
+func TestBatchUsesProviderReadyLegacyBuild(t *testing.T) {
+	fx := newBuilderFixture(t, "a")
+	legacy := legacyVocabularyName("u1")
+	fx.seedState(model.VocabularyState{ActiveName: legacy, Status: model.VocabStatusBuilding, Version: 2}, legacy)
+	if got := fx.batch(t); got != legacy {
+		t.Fatalf("a provider-READY legacy in-place build is used: %q", got)
+	}
+	fx.seedState(model.VocabularyState{ActiveName: legacy, Status: model.VocabStatusNone, EmptySince: "2026-10-18T09:00:00Z", Version: 3}, legacy)
+	if got := fx.batch(t); got != "" {
+		t.Fatalf("an emptied language is never used: %q", got)
 	}
 }
 
@@ -440,14 +474,14 @@ func TestDictionaryGetStartsBuildAndReportsVocabularies(t *testing.T) {
 	fx := newBuilderFixture(t, "a")
 	fx.add("Alpha Grid", "Alpha-Grid")
 	resp, err := fx.svc.GetDictionaryWithTerms(context.Background(), "u1")
-	if err != nil || resp.Vocabularies.Ko.Status != model.VocabStatusBuilding || resp.VocabularyName != "" || resp.Status != "PENDING" {
+	if err != nil || resp.Vocabularies.Ko.Status != model.VocabStatusBuilding || resp.Status != "PENDING" {
 		t.Fatalf("GET builds: %+v %v", resp, err)
 	}
 	fx.tr.settle(tt.VocabularyStateReady)
 	resp, _ = fx.svc.GetDictionaryWithTerms(context.Background(), "u1")
 	raw, _ := json.Marshal(resp)
-	want := fmt.Sprintf(`"status":"READY","vocabularyName":%q,"vocabularies":{"ko":{"status":"READY","activeReady":true,"termCount":1},"en":{"status":"NONE","activeReady":false,"termCount":0}}`, name("a", 1))
-	if !strings.Contains(string(raw), want) {
+	want := `"status":"READY","vocabularies":{"ko":{"status":"READY","activeReady":true,"termCount":1},"en":{"status":"NONE","activeReady":false,"termCount":0}}`
+	if !strings.Contains(string(raw), want) || strings.Contains(string(raw), "vocabularyName") {
 		t.Fatalf("response = %s", raw)
 	}
 }
