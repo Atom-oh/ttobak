@@ -21,7 +21,7 @@ type actionAnalysisRepo interface {
 	QueueActionAnalysis(context.Context, string, string, string, *model.ActionItemsAnalysis, *model.ActionItemsAnalysis) error
 	StartActionAnalysis(context.Context, string, string, time.Time, int64) error
 	FailActionAnalysis(context.Context, string, *model.ActionItemsAnalysis, string, time.Time) error
-	CompleteActionAnalysis(context.Context, string, string, string, string, string, string, time.Time) error
+	CompleteActionAnalysis(context.Context, string, string, string, string, string, string, string, time.Time) error
 	UpdateMeetingFieldsIfMatch(context.Context, string, string, map[string]interface{}, map[string]interface{}) error
 }
 
@@ -90,6 +90,9 @@ func storedActionItems(raw string) ([]ActionItem, error) {
 
 // Describe is only for callers that have already authorized this meeting.
 func (s *ActionItemsAnalysisService) Describe(ctx context.Context, meeting *model.Meeting) (*model.ActionItemsAnalysis, error) {
+	if meeting.SummaryReadRestricted {
+		return &model.ActionItemsAnalysis{Status: model.AnalysisUnknown, ErrorCode: "SHARING_REGEN_REQUIRED"}, nil
+	}
 	for attempt := 0; attempt < 3; attempt++ {
 		state, err := s.repo.GetActionAnalysis(ctx, meeting.MeetingID)
 		if err != nil {
@@ -130,7 +133,8 @@ func (s *ActionItemsAnalysisService) response(ctx context.Context, userID string
 	if fresh.SummaryReadRestricted {
 		return nil, ErrSummaryReadRestricted
 	}
-	if state.Status == model.AnalysisSucceeded && state.SourceHash != actionSourceHash(fresh.Content) {
+	if state.Status == model.AnalysisSucceeded && (state.SourceHash != actionSourceHash(fresh.Content) ||
+		state.SummaryGeneration != fresh.SummaryGeneration()) {
 		state.Status, state.ErrorCode = model.AnalysisFailed, model.AnalysisSourceChanged
 	}
 	items, err := storedActionItems(fresh.ActionItems)
@@ -162,6 +166,9 @@ func (s *ActionItemsAnalysisService) editable(ctx context.Context, userID, meeti
 	if meeting == nil {
 		return nil, ErrNotFound
 	}
+	if meeting.SummaryReadRestricted {
+		return nil, ErrSummaryReadRestricted
+	}
 	if permission != "owner" && permission != "edit" {
 		return nil, ErrForbidden
 	}
@@ -184,7 +191,8 @@ func (s *ActionItemsAnalysisService) queue(ctx context.Context, meeting *model.M
 	}
 	next := &model.ActionItemsAnalysis{
 		RunID: uuid.NewString(), Status: model.AnalysisQueued, SourceHash: actionSourceHash(meeting.Content),
-		StartedAt: now, UpdatedAt: now, LeaseUntil: now.Add(5 * time.Minute).UnixMilli(),
+		SummaryGeneration: meeting.SummaryGeneration(),
+		StartedAt:         now, UpdatedAt: now, LeaseUntil: now.Add(5 * time.Minute).UnixMilli(),
 	}
 	if err := s.repo.QueueActionAnalysis(ctx, meeting.UserID, meeting.MeetingID, meeting.Content, prior, next); err != nil {
 		return nil, false, err
@@ -253,7 +261,8 @@ func (s *ActionItemsAnalysisService) Process(ctx context.Context, event model.Ac
 	if err != nil {
 		return err
 	}
-	if meeting == nil || meeting.Status != model.StatusDone || strings.TrimSpace(meeting.Content) == "" || state.SourceHash != actionSourceHash(meeting.Content) {
+	if meeting == nil || meeting.Status != model.StatusDone || strings.TrimSpace(meeting.Content) == "" ||
+		state.SourceHash != actionSourceHash(meeting.Content) || state.SummaryGeneration != meeting.SummaryGeneration() {
 		return s.fail(ctx, event.MeetingID, state, model.AnalysisSourceChanged)
 	}
 	now := s.now()
@@ -288,11 +297,12 @@ func (s *ActionItemsAnalysisService) Process(ctx context.Context, event model.Ac
 		}
 		return s.fail(ctx, event.MeetingID, state, code)
 	}
-	result, err = reconcileActionItems(snapshot.ActionItems, result)
+	result, err = reconcileActionItemsWithContinuity(snapshot.ActionItems, result, snapshot.ActionItemContinuity)
 	if err != nil {
 		return s.fail(ctx, event.MeetingID, state, model.AnalysisInvalidOutput)
 	}
-	err = s.repo.CompleteActionAnalysis(ctx, event.OwnerID, event.MeetingID, event.RunID, snapshot.Content, snapshot.ActionItems, result, s.now())
+	err = s.repo.CompleteActionAnalysis(ctx, event.OwnerID, event.MeetingID, event.RunID,
+		snapshot.Content, snapshot.ActionItems, result, snapshot.SummaryGeneration(), s.now())
 	if errors.Is(err, repository.ErrConditionFailed) {
 		return s.fail(ctx, event.MeetingID, state, model.AnalysisSourceChanged)
 	}
@@ -303,6 +313,20 @@ func (s *ActionItemsAnalysisService) Process(ctx context.Context, event model.Ac
 }
 
 func reconcileActionItems(previous, generated string) (string, error) {
+	return reconcileActionItemsWithContinuity(previous, generated, nil)
+}
+
+func reconcileActionItemsWithContinuity(previous, generated string, continuity map[string][]model.ActionItemContinuity) (string, error) {
+	total := 0
+	for hash, values := range continuity {
+		if len(hash) != 64 {
+			return "", ErrInvalidAnalysisResponse
+		}
+		total += len(values)
+	}
+	if total > 500 {
+		return "", ErrInvalidAnalysisResponse
+	}
 	old, err := storedActionItems(previous)
 	if err != nil {
 		return "", err
@@ -336,6 +360,18 @@ func reconcileActionItems(previous, generated string) (string, error) {
 			}
 		}
 		byKey[key(items[i])] = matches
+		if !used[items[i].ID] {
+			for _, match := range continuity[model.ActionContinuityHash(items[i].Text, items[i].Assignee, items[i].DueDate)] {
+				if match.ID == "" || len(match.ID) > 128 {
+					return "", ErrInvalidAnalysisResponse
+				}
+				if !used[match.ID] {
+					items[i].ID, items[i].Completed = match.ID, match.Completed
+					used[match.ID] = true
+					break
+				}
+			}
+		}
 	}
 	data, err := json.Marshal(items)
 	return string(data), err

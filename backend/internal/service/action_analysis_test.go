@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,7 +34,7 @@ func (r *analysisTestRepo) GetActionAnalysis(context.Context, string) (*model.Ac
 
 func (r *analysisTestRepo) QueueActionAnalysis(_ context.Context, owner, id, source string, prior, next *model.ActionItemsAnalysis) error {
 	meeting := r.meetings[meetingKey(owner, id)]
-	if meeting == nil || meeting.Content != source || meeting.Status != model.StatusDone {
+	if meeting == nil || meeting.Content != source || meeting.Status != model.StatusDone || meeting.SummaryGeneration() != next.SummaryGeneration {
 		return repository.ErrConditionFailed
 	}
 	if (prior == nil) != (r.state == nil) || (prior != nil && *prior != *r.state) {
@@ -65,16 +66,17 @@ func (r *analysisTestRepo) FailActionAnalysis(_ context.Context, _ string, state
 	return nil
 }
 
-func (r *analysisTestRepo) CompleteActionAnalysis(_ context.Context, owner, id, run, source, old, result string, now time.Time) error {
+func (r *analysisTestRepo) CompleteActionAnalysis(_ context.Context, owner, id, run, source, old, result, generation string, now time.Time) error {
 	if r.completionError != nil {
 		return r.completionError
 	}
 	m := r.meetings[meetingKey(owner, id)]
-	if m == nil || m.Content != source || m.ActionItems != old || r.state == nil ||
-		r.state.RunID != run || r.state.Status != model.AnalysisRunning || r.state.LeaseUntil <= now.UnixMilli() {
+	if m == nil || m.Content != source || m.ActionItems != old || m.SummaryGeneration() != generation || r.state == nil ||
+		r.state.RunID != run || r.state.Status != model.AnalysisRunning || r.state.SummaryGeneration != generation || r.state.LeaseUntil <= now.UnixMilli() {
 		return repository.ErrConditionFailed
 	}
 	m.ActionItems = result
+	m.ActionItemContinuity = nil
 	r.state.Status, r.state.ErrorCode, r.state.LeaseUntil = model.AnalysisSucceeded, "", 0
 	return nil
 }
@@ -106,6 +108,50 @@ func newAnalysisTest(t *testing.T, extract analysisExtractorFunc) (*ActionItemsA
 	s := NewActionItemsAnalysisService(repo, NewMeetingServiceForTest(repo), extract, func(context.Context, model.ActionItemsRequested) error { return nil })
 	s.now = func() time.Time { return time.Date(2026, 9, 12, 0, 0, 0, 0, time.UTC) }
 	return s, repo, meeting
+}
+
+func TestActionAnalysisRejectsSameContentAfterGenerationReset(t *testing.T) {
+	var meeting *model.Meeting
+	s, _, m := newAnalysisTest(t, func(_ context.Context, source *model.Meeting) (string, error) {
+		if source.SummaryGeneration() != "before" {
+			t.Fatal("extractor did not receive captured generation")
+		}
+		next := *meeting.SummaryPrivacy
+		next.GenerationID = "after"
+		meeting.SummaryPrivacy = &next
+		return `[{"text":"old private follow-up"}]`, nil
+	})
+	meeting = m
+	meeting.SummaryPrivacy = &model.SummaryPrivacy{Version: 1, State: model.SummaryPrivacySafe,
+		GenerationID: "before", ContentSHA256: model.SummaryPrivacyHash(meeting.Content)}
+	prior := meeting.ActionItems
+	if err := s.RunInline(context.Background(), "owner", "meeting"); err != nil {
+		t.Fatal(err)
+	}
+	if meeting.ActionItems != prior {
+		t.Fatal("late task worker restored output across generation reset")
+	}
+	state, err := s.repo.GetActionAnalysis(context.Background(), "meeting")
+	if err != nil || state.Status != model.AnalysisFailed || state.ErrorCode != model.AnalysisSourceChanged {
+		t.Fatalf("same-content generation race must be explicit failure: %+v %v", state, err)
+	}
+}
+
+func TestActionContinuityCarriesOnlyMatchingIDsAndCompletion(t *testing.T) {
+	continuity := map[string][]model.ActionItemContinuity{
+		model.ActionContinuityHash("prepare deck", "owner", "2026-10-20"): {{ID: "existing", Completed: true}},
+		model.ActionContinuityHash("private task", "secret", ""):          {{ID: "private", Completed: true}},
+	}
+	result, err := reconcileActionItemsWithContinuity("[]",
+		`[{"text":"prepare deck","assignee":"owner","dueDate":"2026-10-20"},{"text":"new task"}]`, continuity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := storedActionItems(result)
+	if err != nil || len(items) != 2 || items[0].ID != "existing" || !items[0].Completed ||
+		items[1].ID == "private" || items[1].Completed || strings.Contains(result, "private task") {
+		t.Fatalf("continuity retained old prose or lost matching completion: %s %v", result, err)
+	}
 }
 
 func TestActionAnalysisEmptySuccessAndFailureAreDifferent(t *testing.T) {
