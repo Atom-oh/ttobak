@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -54,34 +55,32 @@ func cancelled(codes ...string) string {
 
 const conditionalFailed = `{"__type":"com.amazonaws.dynamodb.v20120810#ConditionalCheckFailedException","message":"failed"}`
 
-// resolved returns the expression with names and values substituted; longer
-// aliases go first so #1 never rewrites part of #10.
+// resolved returns the expression with names and values substituted in one
+// pass, so a substituted value (such as a timestamp containing ":0") is never
+// rewritten again and #1 never matches part of #10.
 func resolved(op map[string]any, field string) string {
 	expr, _ := op[field].(string)
-	var pairs []string
+	subst := map[string]string{}
 	if names, ok := op["ExpressionAttributeNames"].(map[string]any); ok {
 		for alias, name := range names {
-			pairs = append(pairs, alias, name.(string))
+			subst[alias] = name.(string)
 		}
 	}
 	if values, ok := op["ExpressionAttributeValues"].(map[string]any); ok {
 		for alias, value := range values {
 			encoded, _ := json.Marshal(value)
-			pairs = append(pairs, alias, string(encoded))
+			subst[alias] = string(encoded)
 		}
 	}
-	for n := len(pairs) / 2; n > 0; n-- { // longest alias first
-		best := 0
-		for i := 2; i < 2*n; i += 2 {
-			if len(pairs[i]) > len(pairs[best]) {
-				best = i
-			}
+	return expressionAlias.ReplaceAllStringFunc(expr, func(alias string) string {
+		if v, ok := subst[alias]; ok {
+			return v
 		}
-		expr = strings.ReplaceAll(expr, pairs[best], pairs[best+1])
-		pairs = append(pairs[:best], pairs[best+2:]...)
-	}
-	return expr
+		return alias
+	})
 }
+
+var expressionAlias = regexp.MustCompile(`[#:][A-Za-z0-9_]+`)
 
 func requireAll(t *testing.T, label, expr string, parts ...string) {
 	t.Helper()
