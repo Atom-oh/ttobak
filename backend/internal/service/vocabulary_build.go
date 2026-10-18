@@ -418,10 +418,9 @@ func (s *DictionaryService) vocabularyStep(ctx context.Context, userID string, s
 		}
 		return s.casStep(ctx, userID, st, repository.VocabularyStateChange{RetiredName: strp("")})
 	}
-	// 2. A legacy in-place build (no fingerprint) only refreshes ActiveReady;
-	// A/B builds never touch ActiveName, so they may proceed meanwhile.
+	// 2. A legacy in-place build (no fingerprint) only refreshes ActiveReady.
 	if st.Status == model.VocabStatusBuilding && st.BuildingFingerprint == "" {
-		if synced := s.syncVocabularyState(ctx, userID, st); synced.Version != st.Version {
+		if synced := s.syncVocabularyState(ctx, userID, st); synced != st { // synced or raced: re-read
 			return vocabStep{more: true}
 		}
 	}
@@ -432,6 +431,11 @@ func (s *DictionaryService) vocabularyStep(ctx context.Context, userID string, s
 	}
 	if plan.empty {
 		return s.emptyVocabularyStep(ctx, userID, st, now)
+	}
+	if st.Status == model.VocabStatusBuilding && st.BuildingFingerprint == "" && st.InactiveName == "" && st.ActiveName != "" {
+		// The legacy build is still pending: an A/B claim now would stop step 2
+		// from ever marking it ready, hiding a READY result from batch.
+		return vocabStep{}
 	}
 	// 3. Retire the demoted (or failed) slot after grace; never a claimed build.
 	if st.InactiveName != "" && st.RetiredName == "" && (st.InactiveName == legacyVocabularyName(userID) || elapsedSince(st.FlippedAt, now) >= vocabSlotGrace) {

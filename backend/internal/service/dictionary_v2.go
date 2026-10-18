@@ -343,6 +343,9 @@ func (s *DictionaryService) migrateLegacyVocabulary(ctx context.Context, guard r
 	if prior == nil {
 		return fmt.Errorf("vocabulary state vanished during migration: %w", repository.ErrConditionFailed)
 	}
+	if prior.ActiveFingerprint != "" || prior.BuildingFingerprint != "" || prior.InactiveName != "" || prior.RetiredName != "" {
+		return nil // the A/B builder owns this row; resetting ActiveName would orphan its slots
+	}
 	var change repository.VocabularyStateChange
 	if prior.ActiveName != state.ActiveName {
 		change = repository.VocabularyStateChange{

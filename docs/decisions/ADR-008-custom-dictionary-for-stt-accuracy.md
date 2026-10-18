@@ -193,8 +193,10 @@ readers never build. Callers and response: [API-SPEC](../API-SPEC.md#personal-di
   polling the GET, which flips. Each recording start also calls the GET.
 - **Batch** reads only: a submitted build verified READY (as in Submit) is used
   before any flip, else `ActiveName` while `activeReady`; a pre-A/B in-place
-  build (no fingerprint) is still confirmed with Transcribe, as before. Live
-  streams receive no vocabulary name (below).
+  build (no fingerprint) is still confirmed with Transcribe, as before, and no
+  A/B build is claimed until its result is recorded. A migration retry leaves
+  a row with A/B fields to the builder. Live streams receive no vocabulary
+  name (below).
 - **No vocabulary name in responses** (the design added `vocabularyName`): the
   existing live client would send it as `VocabularyNames` on an
   `IdentifyMultipleLanguages` ko-KR/en-US stream, and a stream whose identified

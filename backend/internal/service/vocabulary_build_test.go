@@ -519,6 +519,25 @@ func TestBatchUsesProviderReadyLegacyBuild(t *testing.T) {
 	}
 }
 
+func TestPendingLegacyBuildBlocksABClaim(t *testing.T) {
+	fx := newBuilderFixture(t, "a")
+	legacy := legacyVocabularyName("u1")
+	fx.seedState(model.VocabularyState{ActiveName: legacy, Status: model.VocabStatusBuilding, Version: 2}, legacy)
+	fx.tr.vocabs[legacy].state = tt.VocabularyStatePending
+	fx.add("Alpha Grid", "Alpha-Grid")
+	if fx.ensure(true); fx.ko().InactiveName != "" || fx.ko().BuildingFingerprint != "" || fx.tr.count("create:") != 0 {
+		t.Fatalf("no A/B claim while the legacy build is pending: %+v", fx.ko())
+	}
+	fx.tr.settle(tt.VocabularyStateReady)
+	if fx.ensure(true); !fx.ko().ActiveReady || fx.ko().ActiveName != legacy || fx.ko().InactiveName != name("a", 1) {
+		t.Fatalf("the legacy result is recorded, then the A/B build is claimed: %+v", fx.ko())
+	}
+	fx.tr.settle(tt.VocabularyStateFailed)
+	if fx.ensure(false); fx.ko().Status != model.VocabStatusFailed || fx.batch(t) != legacy {
+		t.Fatalf("batch keeps the READY legacy vocabulary after the A/B build fails: %+v", fx.ko())
+	}
+}
+
 func TestEnsureVocabulariesDefersEnglishAndEmptiesLanguage(t *testing.T) {
 	fx := newBuilderFixture(t, "a")
 	for _, w := range []string{"Alpha", "Bravo", "Charlie", "Delta", "Echo"} {

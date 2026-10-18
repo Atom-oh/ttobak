@@ -630,4 +630,18 @@ func TestMigrationReconcilesAnEarlierVocabularyState(t *testing.T) {
 	if state := store.vocab[sk]; state.Status != model.VocabStatusReady || !state.ActiveReady || state.TermCount != 2 || state.Version != 6 {
 		t.Fatalf("a matching VOCAB# row keeps its status: %+v", state)
 	}
+
+	// A retry after the builder flipped (legacy retired) must not reset
+	// ActiveName to the legacy name, which step 1 would then delete.
+	store = newFakeDictStore()
+	store.blob = legacyBlob("READY")
+	flipped := model.VocabularyState{SK: sk, ActiveName: "ttobak-vocab-ab", ActiveFingerprint: "f1", RetiredName: store.blob.VocabularyName,
+		Status: model.VocabStatusReady, ActiveReady: true, TermCount: 9, Version: 7}
+	store.vocab[sk] = flipped
+	if _, err := newTestDictService(store, nil).MigrateLegacyDictionary(context.Background(), "u1"); err != nil || store.blob.MigratedAt == "" {
+		t.Fatal(err)
+	}
+	if state := store.vocab[sk]; state != flipped {
+		t.Fatalf("an A/B row is left to the builder: %+v", state)
+	}
 }
