@@ -263,7 +263,7 @@ export const meetingsApi = {
     data: { requirements: import('@/types/meeting').SimRequirement[]; options: import('@/types/meeting').SimOption[] }
   ) => api.post<import('@/types/meeting').SimRun>(`/api/meetings/${meetingId}/sim`, data),
 
-  update: (id: string, data: { title?: string; content?: string; notes?: string; expectedNotes?: string; expectedNotesRevision?: string; liveSummary?: string; transcriptA?: string; selectedTranscript?: 'A' | 'B'; participants?: string[]; status?: string }, options?: FetchOptions) =>
+  update: (id: string, data: { title?: string; content?: string; notes?: string; expectedNotes?: string; expectedNotesRevision?: string; liveSummary?: string; transcriptA?: string; selectedTranscript?: 'A' | 'B'; noteLanguage?: import('@/types/meeting').NoteLanguage; participants?: string[]; status?: string }, options?: FetchOptions) =>
     api.put<{ meetingId: string; updatedAt: string; notesRevision?: string }>(`/api/meetings/${id}`, data, options),
 
   delete: (id: string) => api.delete(`/api/meetings/${id}`),

@@ -30,6 +30,20 @@ parallel single-language jobs with an ambiguous merge.
   `language="ko"` and uses vocabulary prompts. This ADR does not claim that every
   current STT engine auto-detects multiple languages.
 
+## Note language amendment, 2026-10-18
+
+STT detection stays automatic, but the generated-note language is now a
+per-meeting choice. `Meeting.noteLanguage` accepts only `""` (automatic), `ko`
+and `en` through the existing meeting update with edit permission.
+`noteLanguageDirective` in `backend/internal/service/bedrock.go` maps it to a
+fixed sentence for both batch and saved-source summaries; stored text never
+enters the prompt verbatim, and automatic keeps the previous sentence byte-for-byte
+so recorded evaluation request hashes still hold. English notes translate the
+section headings and keep `[TS:NNN]`/`[DOC:...]` markers. Batch and re-summary
+captures pin `noteLanguage` in their source conditions (ADR-040), so a mid-run
+change yields `SOURCE_CHANGED` instead of publishing notes in the old language.
+Live captions, live summaries and translation keep their own language handling.
+
 ## Consequences and risks
 
 Transcribe can identify either expected language without an extra user choice.
