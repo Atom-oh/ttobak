@@ -701,8 +701,6 @@ function MeetingDetailContent() {
                   transcriptA={meeting.transcriptA}
                   onDirtyChange={onSummaryDirtyChange}
                   interactionLocked={resummary.action === 'load'}
-                  meetingId={meeting.meetingId}
-                  translationEnabled={meeting.supportsMeetingTranslation === true}
                   onSave={canEdit ? async (content) => {
                     await meetingsApi.update(meeting.meetingId, { content });
                     // Publish the saved snapshot; AISummaryCard keeps newer typing local.
@@ -864,8 +862,6 @@ function MeetingDetailContent() {
               transcription={displayedSegments}
               rawTranscript={displayedTranscript}
               quality={meeting.transcriptQuality}
-              meetingId={meeting.meetingId}
-              translationEnabled={meeting.supportsMeetingTranslation === true}
               onSaveRawTranscript={usingTranscriptB || meeting.permission === 'read' ? undefined : async (text) => {
                 await meetingsApi.update(meeting.meetingId, { transcriptA: text });
                 setIndexRevision((value) => value + 1);

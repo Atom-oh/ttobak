@@ -6,7 +6,6 @@ import { Marked } from 'marked';
 import TurndownService from 'turndown';
 import { MarkdownRenderer } from '@/components/markdown/MarkdownRenderer';
 import { bindMeetingCitations, restoreMeetingCitations } from '@/lib/meetingCitations';
-import { TranslationControls, TranslationStatus, useMeetingTranslation } from './MeetingTranslation';
 
 const MeetingEditor = dynamic(() => import('../MeetingEditor').then(m => ({ default: m.MeetingEditor })), {
   loading: () => <div className="animate-pulse bg-slate-100 dark:bg-slate-800 rounded-xl h-64" />,
@@ -51,14 +50,10 @@ interface AISummaryCardProps {
   onSave?: (content: string) => Promise<void>;
   onDirtyChange?: (dirty: boolean) => void;
   interactionLocked?: boolean;
-  meetingId?: string;
-  /** Server-advertised meeting translation flag; hides the control when off. */
-  translationEnabled?: boolean;
 }
 
-export function AISummaryCard({ content, summary, canonicalContent, resolveCitation, transcriptA, onSave, onDirtyChange, interactionLocked = false, meetingId, translationEnabled = false }: AISummaryCardProps) {
+export function AISummaryCard({ content, summary, canonicalContent, resolveCitation, transcriptA, onSave, onDirtyChange, interactionLocked = false }: AISummaryCardProps) {
   const rawText = content || summary || '';
-  const translation = useMeetingTranslation(meetingId, 'notes', canonicalContent ?? rawText);
   const renderEditorContent = () => bindMeetingCitations(
     marked.parse(canonicalContent ?? rawText, { async: false }) as string,
     resolveCitation ?? ((source) => source),
@@ -128,14 +123,13 @@ export function AISummaryCard({ content, summary, canonicalContent, resolveCitat
         <span className="material-symbols-outlined text-primary dark:text-accent">auto_awesome</span>
         <h3 className="font-bold dark:font-headline text-primary dark:text-accent">AI Summary</h3>
         <div className="flex-1" />
-        {translationEnabled && meetingId && rawText && !editing && <TranslationControls translation={translation} />}
         {rawText && onSave && (
           <div className="flex items-center gap-2">
             {saving && <span className="text-xs text-slate-400 animate-pulse">Saving...</span>}
             {savedAt && !saving && <span className="text-xs text-slate-400">Saved {savedAt}</span>}
             <button
               onClick={() => {
-                if (!editing) { translation.clear(); savedHTML.current = renderEditorContent(); latestHTML.current = savedHTML.current; }
+                if (!editing) { savedHTML.current = renderEditorContent(); latestHTML.current = savedHTML.current; }
                 setEditing(!editing);
               }}
               disabled={interactionLocked || (editing && (dirty || saving))}
@@ -170,16 +164,6 @@ export function AISummaryCard({ content, summary, canonicalContent, resolveCitat
           onAutoSave={handleAutoSave}
           autoSaveDelay={3000}
         />
-      ) : rawText && translation.target ? (
-        <div>
-          {translation.notes && (
-            <div className="ai-summary-prose" lang={translation.target}>
-              {/* Same sanitized renderer as the source notes; citations resolve the same way. */}
-              <MarkdownRenderer content={resolveCitation ? resolveCitation(translation.notes) : translation.notes} />
-            </div>
-          )}
-          <TranslationStatus translation={translation} />
-        </div>
       ) : rawText ? (
         <div className="ai-summary-prose">
           <MarkdownRenderer content={rawText} />
