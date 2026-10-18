@@ -81,7 +81,10 @@ func (fakeMeetings) GetMeeting(_ context.Context, uid, mid string) (*model.Meeti
 type fakeDeleter struct {
 	deleted []string
 	blocked map[string]bool
-	tried   int
+	// postCommitListFail returns the committed-rows, failed-listing shape:
+	// zero counts plus ErrSttDeletionPostCommit.
+	postCommitListFail bool
+	tried              int
 }
 
 func (f *fakeDeleter) DeleteFailedRecording(_ context.Context, _, mid string, mark model.SttFailureMark) (repository.SttFailedMeetingObjectsResult, error) {
@@ -90,6 +93,9 @@ func (f *fakeDeleter) DeleteFailedRecording(_ context.Context, _, mid string, ma
 		return repository.SttFailedMeetingObjectsResult{}, repository.ErrSttDeletionBlocked
 	}
 	f.deleted = append(f.deleted, mid+":"+mark.Code)
+	if f.postCommitListFail {
+		return repository.SttFailedMeetingObjectsResult{}, errors.Join(repository.ErrSttDeletionPostCommit, errors.New("list throttled"))
+	}
 	return repository.SttFailedMeetingObjectsResult{Deleted: 2}, nil
 }
 
@@ -326,6 +332,26 @@ func TestRecoveryDeletePassHonoursReferencesAndBounds(t *testing.T) {
 	}
 	if len(h.ecs.runs) != 0 {
 		t.Fatal("terminal marks are never re-run")
+	}
+}
+
+// A committed delete whose object listing failed still consumes the deletion
+// budget, so a tick never commits more than maxDeletes deletions.
+func TestRecoveryDeletePassCountsPostCommitListingFailure(t *testing.T) {
+	stamp := recNow.Add(-8 * 24 * time.Hour).Format(time.RFC3339Nano)
+	var rows []model.SttRecoveryRow
+	for i := 0; i < 5; i++ {
+		row := stuckRow(fmt.Sprintf("%d%s", i, recM1[1:]))
+		row.SttFailureCode, row.SttFailedAt, row.UpdatedAt = model.SttFailureNoSpeech, stamp, stamp
+		rows = append(rows, row)
+	}
+	h := newHarness(t, sttRecoveryModeActive, rows...)
+	h.deleter.postCommitListFail = true
+	if err := h.runner.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.deleter.deleted) != 2 {
+		t.Fatalf("committed deletions=%v, want the per-tick bound of 2", h.deleter.deleted)
 	}
 }
 

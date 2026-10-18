@@ -225,6 +225,7 @@ type sttDeleteRepo struct {
 	meetingRepo
 	rowsErr    error
 	objectsErr error
+	listFails  bool
 	rowCalls   int
 	objCalls   int
 }
@@ -236,6 +237,9 @@ func (r *sttDeleteRepo) DeleteSttFailedMeeting(context.Context, string, string, 
 
 func (r *sttDeleteRepo) DeleteSttFailedMeetingObjects(context.Context, string, string) (repository.SttFailedMeetingObjectsResult, error) {
 	r.objCalls++
+	if r.listFails {
+		return repository.SttFailedMeetingObjectsResult{}, r.objectsErr
+	}
 	if r.objectsErr != nil {
 		return repository.SttFailedMeetingObjectsResult{Deleted: 1, Failed: 2}, r.objectsErr
 	}
@@ -255,7 +259,8 @@ func TestDeleteFailedRecordingOrdersRowsBeforeObjects(t *testing.T) {
 		{"a superseded mark touches no object", &sttDeleteRepo{rowsErr: repository.ErrConditionFailed}, repository.ErrConditionFailed, 0, 0, 0},
 		{"related data blocks deletion", &sttDeleteRepo{rowsErr: repository.ErrSttDeletionBlocked}, repository.ErrSttDeletionBlocked, 0, 0, 0},
 		{"post-commit sweep failure still cleans objects", &sttDeleteRepo{rowsErr: repository.ErrSttDeletionPostCommit}, repository.ErrSttDeletionPostCommit, 1, 3, 0},
-		{"object failures surface", &sttDeleteRepo{objectsErr: errors.New("denied")}, nil, 1, 1, 2},
+		{"object failures surface as post-commit", &sttDeleteRepo{objectsErr: errors.New("denied")}, repository.ErrSttDeletionPostCommit, 1, 1, 2},
+		{"a listing failure after commit is post-commit", &sttDeleteRepo{objectsErr: errors.New("list throttled"), listFails: true}, repository.ErrSttDeletionPostCommit, 1, 0, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svc := &MeetingService{repo: tc.repo}
