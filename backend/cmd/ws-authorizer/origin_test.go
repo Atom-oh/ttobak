@@ -83,7 +83,7 @@ func TestProxyRequiresBothOriginAndCurrentJWT(t *testing.T) {
 		if token != "synthetic-valid-jwt" {
 			return nil, errors.New("synthetic private token detail")
 		}
-		return &middleware.ALBOIDCClaims{Sub: "synthetic-user"}, nil
+		return firstPartyClaims(), nil
 	}
 	for i := 0; i < 2; i++ {
 		response, err := handler(context.Background(), proxyEvent(fixture.value))

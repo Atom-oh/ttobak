@@ -5,7 +5,7 @@ import { SttManager, type LiveSttProvider, type TranscribeStreamingConfig } from
 import { countWords } from '@/lib/speechRecognition';
 import { getRuntimeConfig } from '@/lib/runtimeConfig';
 import { MAX_TRANSLATION_ENTRIES, type TranslationEntry } from '@/lib/liveTranslation';
-import { selectLiveVocabularies, VOCABULARY_FALLBACK_NOTICE, type LiveVocabularyNames } from '@/lib/liveVocabulary';
+import { VOCABULARY_FALLBACK_NOTICE } from '@/lib/liveVocabulary';
 
 export interface TranscriptEntry {
   text: string;
@@ -73,6 +73,8 @@ const RETRYABLE_LIVE_CAPTION_ERRORS = new Set([
 interface UseRecordingSessionOptions {
   targetLang: string;
   translationEnabled: boolean;
+  /** Translate partial captions too (opt-in, higher cost) */
+  interimTranslation?: boolean;
   /** Preferred live STT provider */
   liveSttProvider: LiveSttProvider;
   /** Called each time a final transcript arrives with updated word count and full text */
@@ -82,6 +84,7 @@ interface UseRecordingSessionOptions {
 export function useRecordingSession({
   targetLang,
   translationEnabled,
+  interimTranslation = false,
   liveSttProvider,
   onTranscriptUpdate,
 }: UseRecordingSessionOptions) {
@@ -99,6 +102,7 @@ export function useRecordingSession({
 
   const sttManagerRef = useRef<SttManager | null>(null);
   const targetLangRef = useRef(targetLang);
+  const interimTranslationRef = useRef(interimTranslation);
   const transcriptsRef = useRef(transcripts);
   const onTranscriptUpdateRef = useRef(onTranscriptUpdate);
   const transcribeConfigRef = useRef<TranscribeStreamingConfig | null>(null);
@@ -122,19 +126,14 @@ export function useRecordingSession({
     getRuntimeConfig().then(async (cfg) => {
       if (cancelled) return;
       if (cfg.cognito.identityPoolId && cfg.cognito.userPoolId) {
-        let vocabularies: LiveVocabularyNames | undefined;
-        try {
-          const { dictionaryApi } = await import('@/lib/api');
-          vocabularies = selectLiveVocabularies(await dictionaryApi.liveConfig());
-        } catch {
-          // Dictionary not available — proceed without custom vocabulary
-        }
-        if (cancelled) return;
+        // The dictionary GET is a vocabulary poll/flip opportunity (ADR-008).
+        // No response names a vocabulary for live streams until acceptance
+        // item 5, so live captions send none and the vocabulary retry is inert.
+        import('@/lib/api').then(({ dictionaryApi }) => dictionaryApi.get()).catch(() => {});
         const config: TranscribeStreamingConfig = {
           region: cfg.cognito.region,
           identityPoolId: cfg.cognito.identityPoolId,
           userPoolId: cfg.cognito.userPoolId,
-          vocabularies,
         };
         transcribeConfigRef.current = config;
         // A recording that started (createManager, below) before this fetch
@@ -167,6 +166,12 @@ export function useRecordingSession({
   useEffect(() => {
     sttManagerRef.current?.updateTranslationEnabled(translationEnabled);
   }, [translationEnabled]);
+
+  // Propagate the draft (interim) translation opt-in to STT manager
+  useEffect(() => {
+    interimTranslationRef.current = interimTranslation;
+    sttManagerRef.current?.updateInterimTranslation(interimTranslation);
+  }, [interimTranslation]);
 
   const isSttPermanentlyFailed = speechError === speechErrorMessages['recognition-failed'];
 
@@ -259,6 +264,7 @@ export function useRecordingSession({
       },
       targetLang: targetLangRef.current,
       translationEnabled,
+      interimTranslation: interimTranslationRef.current,
       transcribeStreamingConfig: transcribeConfig ?? undefined,
       onReconnecting: () => {
         setSpeechError(speechErrorMessages['transcribe-stream-reconnecting']);

@@ -191,8 +191,11 @@ type DictObservation struct {
 	SourceTypes       []string `dynamodbav:"sourceTypes,omitempty"`
 	SummaryGeneration int64    `dynamodbav:"summaryGeneration"`
 	NotesSafe         bool     `dynamodbav:"notesSafe"`
-	CreatedAt         string   `dynamodbav:"createdAt"`
-	EntityType        string   `dynamodbav:"entityType"`
+	// Tainted marks evidence from a run whose sources a non-owner edited
+	// (A2.1); it never counts toward an active term.
+	Tainted    bool   `dynamodbav:"tainted,omitempty"`
+	CreatedAt  string `dynamodbav:"createdAt"`
+	EntityType string `dynamodbav:"entityType"`
 }
 
 // VocabularyState tracks one context and language with two slots: ActiveName
@@ -217,12 +220,15 @@ type VocabularyState struct {
 	// BypassPending lets the next claim skip the minimum interval once.
 	BypassPending  bool   `dynamodbav:"bypassPending,omitempty"`
 	BuildStartedAt string `dynamodbav:"buildStartedAt,omitempty"`
-	FlippedAt      string `dynamodbav:"flippedAt,omitempty"`
-	EmptySince     string `dynamodbav:"emptySince,omitempty"`
-	TermCount      int    `dynamodbav:"termCount"`
-	UpdatedAt      string `dynamodbav:"updatedAt"`
-	Version        int64  `dynamodbav:"version"`
-	EntityType     string `dynamodbav:"entityType"`
+	// SubmittedAt is stamped by the submit claim, before the provider call; a
+	// poll accepts a provider result only if modified at or after it.
+	SubmittedAt string `dynamodbav:"submittedAt,omitempty"`
+	FlippedAt   string `dynamodbav:"flippedAt,omitempty"`
+	EmptySince  string `dynamodbav:"emptySince,omitempty"`
+	TermCount   int    `dynamodbav:"termCount"`
+	UpdatedAt   string `dynamodbav:"updatedAt"`
+	Version     int64  `dynamodbav:"version"`
+	EntityType  string `dynamodbav:"entityType"`
 }
 
 // VocabularyView is the API form of a VocabularyState.
@@ -237,25 +243,6 @@ type VocabularyView struct {
 type VocabularyViews struct {
 	Ko VocabularyView `json:"ko"`
 	En VocabularyView `json:"en"`
-}
-
-// LiveVocabularyView is one language of GET .../live-config: Name is set only
-// for a vocabulary confirmed READY; Status is the latest build status.
-type LiveVocabularyView struct {
-	Name   string `json:"name,omitempty"`
-	Status string `json:"status"`
-}
-
-// LiveVocabularyViews lists the live vocabularies by language.
-type LiveVocabularyViews struct {
-	Ko LiveVocabularyView `json:"ko"`
-	En LiveVocabularyView `json:"en"`
-}
-
-// LiveDictionaryConfig is the response of GET /api/settings/dictionary/live-config.
-type LiveDictionaryConfig struct {
-	Vocabularies LiveVocabularyViews `json:"vocabularies"`
-	Warnings     []string            `json:"warnings,omitempty"`
 }
 
 // DictTimeLayout is the fixed-width UTC timestamp used by v2 dictionary rows

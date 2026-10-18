@@ -137,6 +137,35 @@ describe('AuthStack', () => {
     }
   });
 
+  test('the companion client is a code-grant public client without password auth, with private SSM-configured redirects', () => {
+    const clients = template.findResources('AWS::Cognito::UserPoolClient');
+    const companion = Object.values(clients).find(client =>
+      client.Properties.ClientName === 'ttobak-companion-client');
+    expect(companion).toBeDefined();
+    expect(companion!.Properties).toMatchObject({
+      GenerateSecret: false,
+      AllowedOAuthFlows: ['code'],
+      AllowedOAuthScopes: ['email', 'openid', 'profile'],
+      SupportedIdentityProviders: ['COGNITO'],
+      PreventUserExistenceErrors: 'ENABLED',
+    });
+    expect([...companion!.Properties.ExplicitAuthFlows].sort()).toEqual(['ALLOW_REFRESH_TOKEN_AUTH', 'ALLOW_USER_SRP_AUTH']);
+    const parameters = template.toJSON().Parameters;
+    const ref = (name: string) => Object.keys(parameters).find(key => parameters[key].Default === name);
+    for (const name of ['/ttobak/auth/companion-callback-urls', '/ttobak/auth/companion-logout-urls']) {
+      const key = ref(name);
+      expect(key).toBeDefined();
+      expect(parameters[key!].Type).toBe('AWS::SSM::Parameter::Value<List<String>>');
+    }
+    expect(companion!.Properties.CallbackURLs).toEqual({ Ref: ref('/ttobak/auth/companion-callback-urls') });
+    expect(companion!.Properties.LogoutURLs).toEqual({ Ref: ref('/ttobak/auth/companion-logout-urls') });
+    // companion tokens must not be exchangeable for AWS credentials
+    const companionId = Object.keys(clients).find(id => clients[id] === companion);
+    const pools = Object.values(template.findResources('AWS::Cognito::IdentityPool'));
+    expect(pools).toHaveLength(1);
+    expect(JSON.stringify(pools[0].Properties.CognitoIdentityProviders)).not.toContain(companionId!);
+  });
+
   test('the public MCP client retains local callbacks and privately configured redirects', () => {
     const clients = template.findResources('AWS::Cognito::UserPoolClient');
     const spa = Object.values(clients).find(client =>

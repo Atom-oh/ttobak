@@ -51,13 +51,6 @@ func (h *DictionaryHandler) GetDictionary(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, result)
 }
 
-// GetLiveConfig handles GET /api/settings/dictionary/live-config: the
-// caller's READY personal vocabulary names for live captions.
-func (h *DictionaryHandler) GetLiveConfig(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	writeJSON(w, http.StatusOK, h.dictService.LiveDictionaryConfig(ctx, middleware.GetUserID(ctx)))
-}
-
 // UpdateDictionary handles PUT /api/settings/dictionary
 func (h *DictionaryHandler) UpdateDictionary(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()

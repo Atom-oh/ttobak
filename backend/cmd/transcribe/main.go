@@ -30,7 +30,9 @@ var (
 	transcribeService *service.TranscribeService
 	dictService       *service.DictionaryService
 	repo              *repository.DynamoDBRepository
-	ecsClient         *ecs.Client
+	ecsClient         ecsAPI
+	s3Client          *s3.Client
+	outputBucketName  string
 	whisperCluster    string
 	whisperTaskDef    string
 	whisperContainer  string
@@ -43,7 +45,7 @@ func init() {
 	}
 
 	dynamoClient := dynamodb.NewFromConfig(cfg)
-	s3Client := s3.NewFromConfig(cfg)
+	s3Client0 := s3.NewFromConfig(cfg)
 	transcribeClient := transcribe.NewFromConfig(cfg)
 
 	tableName := os.Getenv("TABLE_NAME")
@@ -55,13 +57,14 @@ func init() {
 		outputBucket = "ttobak-assets"
 	}
 
-	repo = repository.NewDynamoDBRepositoryWithS3(dynamoClient, tableName, s3Client, outputBucket)
-	transcribeService = service.NewTranscribeService(transcribeClient, s3Client, repo, outputBucket)
+	repo = repository.NewDynamoDBRepositoryWithS3(dynamoClient, tableName, s3Client0, outputBucket)
+	transcribeService = service.NewTranscribeService(transcribeClient, s3Client0, repo, outputBucket)
 
 	dictRepo := repository.NewDictionaryRepository(dynamoClient, tableName)
 	dictService = service.NewDictionaryService(dictRepo, transcribeClient)
 
 	ecsClient = ecs.NewFromConfig(cfg)
+	s3Client, outputBucketName = s3Client0, outputBucket
 	whisperCluster = os.Getenv("WHISPER_CLUSTER")
 	whisperTaskDef = os.Getenv("WHISPER_TASK_DEF")
 	whisperContainer = os.Getenv("WHISPER_CONTAINER")
@@ -79,6 +82,9 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	}
 	if err := json.Unmarshal(raw, &envelope); err != nil {
 		return err
+	}
+	if envelope.Source == sttRecoverySource && envelope.DetailType == sttRecoveryDetailType {
+		return runSttRecoveryTick(ctx)
 	}
 	if envelope.Source == "ttobak.audio" && envelope.DetailType == "AudioCropRequested" {
 		var detail struct {
@@ -101,7 +107,8 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 		if whisperCluster == "" || whisperTaskDef == "" || whisperContainer != "whisper" {
 			return fmt.Errorf("audio cropping requires the production Whisper worker")
 		}
-		return startWhisperTask(ctx, detail.MeetingID, detail.UserID, "", "", "", len(meeting.Participants), true)
+		return startWhisperTask(ctx, detail.MeetingID, detail.UserID, "", "", "", len(meeting.Participants),
+			whisperTaskOptions{Crop: true, ClientToken: "crop-" + detail.MeetingID})
 	}
 	var event model.EventBridgeS3Event
 	if err := json.Unmarshal(raw, &event); err != nil {
@@ -216,22 +223,8 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 			jobName, err = transcribeService.StartTranscriptionJob(ctx, meetingID, bucket, key, outputKey, customVocab)
 		} else {
 			log.Printf("Using Whisper GPU for meeting: %s", meetingID)
-			// Build initial_prompt from user's custom dictionary for Whisper
-			initialPrompt := whisperInitialPrompt(ctx, dictService, userID)
-			// Participant count is passed through as pyannote's max_speakers
-			// upper bound (pyannote still auto-detects the actual count
-			// within it -- registered headcount can exceed actual speakers,
-			// e.g. invited-but-silent attendees); 0 (Participants
-			// empty/unset) means "no bound, fully auto-detect" -- see
-			// startWhisperTask.
-			numSpeakers := 0
-			if meeting != nil {
-				numSpeakers = len(meeting.Participants)
-				if meeting.DiarizationSpeakerHint > 0 {
-					numSpeakers = meeting.DiarizationSpeakerHint
-				}
-			}
-			err = startWhisperTask(ctx, meetingID, userID, key, initialPrompt, outputKey, numSpeakers)
+			initialPrompt, numSpeakers := whisperInputs(ctx, meeting, userID)
+			err = startWhisperTask(ctx, meetingID, userID, key, initialPrompt, outputKey, numSpeakers, whisperTaskOptions{})
 			jobName = "whisper-ecs-" + meetingID
 		}
 	case "nova-sonic":
@@ -278,15 +271,15 @@ func transcriptionVocabulary(ctx context.Context, dict dictionaryReader, userID 
 	return vocab
 }
 
-// whisperInitialPrompt joins the display forms of the user's dictionary
+// dictionaryDisplayTerms returns the display forms of the user's dictionary
 // terms (v2 rows, or the legacy blob before migration).
-func whisperInitialPrompt(ctx context.Context, dict dictionaryReader, userID string) string {
+func dictionaryDisplayTerms(ctx context.Context, dict dictionaryReader, userID string) ([]string, error) {
 	if userID == "" {
-		return ""
+		return nil, nil
 	}
 	resp, err := dict.GetDictionary(ctx, userID)
-	if err != nil || resp == nil || len(resp.Terms) == 0 {
-		return ""
+	if err != nil || resp == nil {
+		return nil, err
 	}
 	phrases := make([]string, 0, len(resp.Terms))
 	for _, t := range resp.Terms {
@@ -296,11 +289,61 @@ func whisperInitialPrompt(ctx context.Context, dict dictionaryReader, userID str
 		}
 		phrases = append(phrases, display)
 	}
-	log.Printf("Whisper initial_prompt: %d terms for user %s", len(phrases), userID)
+	return phrases, nil
+}
+
+// whisperInitialPrompt joins the user's dictionary display forms.
+func whisperInitialPrompt(ctx context.Context, dict dictionaryReader, userID string) string {
+	phrases, err := dictionaryDisplayTerms(ctx, dict, userID)
+	if err != nil {
+		return ""
+	}
 	return strings.Join(phrases, ", ")
 }
 
-func startWhisperTask(ctx context.Context, meetingID, userID, audioKey, initialPrompt, outputKey string, numSpeakers int, crop ...bool) error {
+// whisperTaskOptions distinguishes ordinary, crop and recovery runs. Only
+// container environment overrides are ever set: never entryPoint/command.
+type whisperTaskOptions struct {
+	Crop        bool
+	ClientToken string
+	StartedBy   string
+}
+
+type ecsAPI interface {
+	RunTask(ctx context.Context, params *ecs.RunTaskInput, optFns ...func(*ecs.Options)) (*ecs.RunTaskOutput, error)
+	ListTasks(ctx context.Context, params *ecs.ListTasksInput, optFns ...func(*ecs.Options)) (*ecs.ListTasksOutput, error)
+}
+
+// whisperInputs derives the ASR inputs shared by the S3-event and recovery
+// paths: the user's dictionary as initial_prompt and the max_speakers bound.
+func whisperInputs(ctx context.Context, meeting *model.Meeting, userID string) (string, int) {
+	var initialPrompt string
+	if userID != "" && loadDictionaryTerms != nil {
+		if phrases, err := loadDictionaryTerms(ctx, userID); err == nil && len(phrases) > 0 {
+			initialPrompt = strings.Join(phrases, ", ")
+			log.Printf("Whisper initial_prompt: %d terms for user %s", len(phrases), userID)
+		}
+	}
+	// Participant count is passed through as pyannote's max_speakers
+	// upper bound (pyannote still auto-detects the actual count within it --
+	// registered headcount can exceed actual speakers, e.g. invited-but-silent
+	// attendees); 0 (Participants empty/unset) means "no bound, fully
+	// auto-detect".
+	numSpeakers := 0
+	if meeting != nil {
+		numSpeakers = len(meeting.Participants)
+		if meeting.DiarizationSpeakerHint > 0 {
+			numSpeakers = meeting.DiarizationSpeakerHint
+		}
+	}
+	return initialPrompt, numSpeakers
+}
+
+var loadDictionaryTerms = func(ctx context.Context, userID string) ([]string, error) {
+	return dictionaryDisplayTerms(ctx, dictService, userID)
+}
+
+func whisperRunTaskInput(meetingID, userID, audioKey, initialPrompt, outputKey string, numSpeakers int, opts whisperTaskOptions) *ecs.RunTaskInput {
 	envOverrides := []ecsTypes.KeyValuePair{
 		{Name: aws.String("AUDIO_KEY"), Value: aws.String(audioKey)},
 		{Name: aws.String("MEETING_ID"), Value: aws.String(meetingID)},
@@ -324,17 +367,13 @@ func startWhisperTask(ctx context.Context, meetingID, userID, audioKey, initialP
 			Name: aws.String("NUM_SPEAKERS"), Value: aws.String(strconv.Itoa(numSpeakers)),
 		})
 	}
-	var clientToken *string
-	if len(crop) > 0 && crop[0] {
+	if opts.Crop {
 		envOverrides = append(envOverrides, ecsTypes.KeyValuePair{Name: aws.String("AUDIO_CROP"), Value: aws.String("1")})
-		clientToken = aws.String("crop-" + meetingID)
 	}
-
-	result, err := ecsClient.RunTask(ctx, &ecs.RunTaskInput{
+	input := &ecs.RunTaskInput{
 		Cluster:        aws.String(whisperCluster),
 		TaskDefinition: aws.String(whisperTaskDef),
 		Count:          aws.Int32(1),
-		ClientToken:    clientToken,
 		CapacityProviderStrategy: []ecsTypes.CapacityProviderStrategyItem{
 			{
 				CapacityProvider: aws.String("ttobak-whisper-spot"),
@@ -349,7 +388,18 @@ func startWhisperTask(ctx context.Context, meetingID, userID, audioKey, initialP
 				},
 			},
 		},
-	})
+	}
+	if opts.ClientToken != "" {
+		input.ClientToken = aws.String(opts.ClientToken)
+	}
+	if opts.StartedBy != "" {
+		input.StartedBy = aws.String(opts.StartedBy)
+	}
+	return input
+}
+
+func startWhisperTask(ctx context.Context, meetingID, userID, audioKey, initialPrompt, outputKey string, numSpeakers int, opts whisperTaskOptions) error {
+	result, err := ecsClient.RunTask(ctx, whisperRunTaskInput(meetingID, userID, audioKey, initialPrompt, outputKey, numSpeakers, opts))
 	if err != nil {
 		return err
 	}
@@ -358,7 +408,7 @@ func startWhisperTask(ctx context.Context, meetingID, userID, audioKey, initialP
 	}
 	if len(result.Failures) > 0 {
 		log.Printf("ECS task placement failures: %v", result.Failures)
-		return fmt.Errorf("ECS task placement failed: %s", *result.Failures[0].Reason)
+		return fmt.Errorf("ECS task placement failed: %s", aws.ToString(result.Failures[0].Reason))
 	}
 	return nil
 }

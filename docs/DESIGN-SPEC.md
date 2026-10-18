@@ -110,9 +110,21 @@ left column and English in the right, with the recognized original labeled.
 Desktop places interpretation above the summary/notes panels; mobile exposes an
 interpretation tab. Single-target translation remains available, including Korean.
 Each utterance appears immediately, before its translation finishes. Partial
-translations refresh on a 500ms throttle and are explicitly provisional; final
-recognition clears provisional output and triggers a separate authoritative
-translation. Response order never
+(draft) translation is off by default; a draft-translation checkbox labelled
+as higher cost (`RecordingConfig`), shown only
+while interpretation is on, opts in. Drafts then refresh on a 500ms throttle and
+are explicitly provisional; turning drafts off cancels the pending draft without
+an error. Final recognition clears provisional output and triggers a separate
+authoritative translation, requested as `quality: high` with up to two earlier
+final source texts (2,000 bytes) frozen when the final is queued; the browser
+aborts after 10s. Each completed line carries an engine badge from the response (Korean labels in
+`ENGINE_BADGES`, `TranslationView.tsx`): AI (interpreter), machine (Amazon Translate
+requested) or machine-fallback (AI was requested but Translate answered: fallback
+or hourly downgrade). Finals made only of Korean or English hesitation sounds and
+their repeats (`FILLER_TOKEN`, e.g. uh, um, er, hmm) are labelled as skipped without
+a request; short Korean answers such as yes and numbers are still translated.
+`?debugCaptions=1` on the record page shows the share of retained finals with at
+most two words (fragment measurement only; nothing is merged). Response order never
 changes utterance order. Language/enable changes discard the previous translation
 view and cancel pending work. Failures retain recognized text and show an error.
 The view retains at most 200 utterances and caps each displayed original at 9,000
@@ -125,9 +137,8 @@ Desktop Web
 Speech fallback remains Korean-configured and the interpretation UI explains
 that mixed-language recognition requires the Transcribe Streaming connection.
 These controls do not establish a measured speech-accuracy or end-to-end latency
-guarantee. Run regression checks explicitly with
-`node --test scripts/live-translation.test.mjs scripts/stt-recovery.test.mjs` from
-`frontend/`; the required lint/build commands do not run these scripts.
+guarantee. Their regression scripts run with every `frontend/scripts/*.test.mjs`
+suite through `npm run test:unit` in `frontend/`; lint and build do not run them.
 
 Browser microphone/tab capture also stores each delivered audio chunk in IndexedDB,
 partitioned by Cognito user and a random recording ID. A Web Lock keeps a live or
@@ -300,6 +311,14 @@ Failures retain that draft and expose retry. Editing preserves canonical
 attachment/transcript citation IDs; signed URLs and page anchors are display
 targets only. Ordinary links and literal citation text keep their identity.
 
+The same panel shows editors a note-language select (automatic, Korean,
+English). A change saves `noteLanguage` through the meeting update and then
+offers a regenerate-in-this-language action, which sends the existing empty
+re-summary request. The select is
+disabled while a batch summary or re-summary is running, because a mid-run change
+discards that run as `SOURCE_CHANGED`. Save failures show an inline alert and
+keep the previous value.
+
 Deploy attachment, saved-summary and index-status APIs before this UI.
 
 ## MCP client setup guides
@@ -339,17 +358,18 @@ conflicts and 404 reload the list. An open editor diffs and versions against the
 row snapshot taken when editing began; polled responses older than a mutation are
 dropped. Duplicates use `normalizeTermKey`, checked against Go's
 `backend/internal/service/testdata/term-key/vectors.json` by `npm run test:unit`
-(local only; CI runs just the Go half). Legacy terms without a row cannot be edited
+(CI runs it only when `frontend/**` changes; the Go half runs with the backend). Legacy terms without a row cannot be edited
 while `migrationPending`; terms that refuse migration are marked and can be deleted
 through the legacy DELETE-by-phrase, which retries migration. KO/EN badges show in use, preparing,
 "updating (current vocabulary in use)", failure codes in plain Korean, and off;
 the page polls every 10 seconds only during a build.
 
-Live captions fetch READY names from `GET .../live-config` once per recording page
-and send at most one per `LanguageOptions` language (`lib/liveVocabulary.ts`). A
-vocabulary BadRequest before the first stream event retries once without it; any
-vocabulary rejection drops it for the recording and shows an informational
-"recognizing without the custom dictionary" line.
+The recording page calls the dictionary GET once (a builder poll opportunity) but
+sends no vocabulary on live streams: no API names one yet (ADR-008 item 5).
+`lib/liveVocabulary.ts` would send at most one name per `LanguageOptions`
+language; with a name, a vocabulary BadRequest before the first stream event
+retries once without it, and any vocabulary rejection drops it for the recording
+and shows an informational "recognizing without the custom dictionary" line.
 
 ## Verification
 

@@ -141,7 +141,7 @@ export function vocabularyBadge(view: VocabularyView | undefined, lang: 'ko' | '
     default:
       if (ready) return { label: '사용 중', tone: 'ok' };
       if (view.status === 'READY') return { label: '준비 중', tone: 'busy' };
-      return { label: '사용 안 함', tone: 'muted', detail: lang === 'en' ? '영문 용어 5개 이상부터 만듭니다.' : undefined };
+      return { label: '사용 안 함', tone: 'muted', detail: lang === 'en' ? '영문 사전은 아직 만들지 않습니다.' : undefined };
   }
 }
 

@@ -3,50 +3,36 @@ package service
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
-	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/transcribe"
 	transcribeTypes "github.com/aws/aws-sdk-go-v2/service/transcribe/types"
-	smithy "github.com/aws/smithy-go"
-	"golang.org/x/text/unicode/norm"
 
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 )
 
-// Transcribe custom vocabulary builds (A/B slots). The table file has four
-// columns; SoundsLike and IPA stay empty.
+// Transcribe custom vocabulary builds (A/B slots, vocabulary_build.go).
 const (
-	VocabTSVHeader = "Phrase\tSoundsLike\tIPA\tDisplayAs\n"
-	VocabMaxRows   = 1500
-	VocabMaxBytes  = 48 << 10
-	// VocabEnMinTerms is the en-US build threshold; fewer terms build nothing.
-	VocabEnMinTerms = 5
-
 	DefaultVocabRebuildMinInterval = 10 * time.Minute
-	vocabBuildStaleAfter           = 30 * time.Minute
-	// vocabSlotGrace keeps a demoted (or emptied) vocabulary for streams that
-	// started with it; deletion waits this long after the flip.
+	// vocabSubmitSkew tolerates clock and timestamp-precision differences when
+	// a poll compares the provider's LastModifiedTime with SubmittedAt.
+	vocabSubmitSkew = 5 * time.Second
+	// vocabSlotGrace delays deleting a demoted (or emptied) vocabulary for
+	// streams and jobs that started with it; deletion waits this long after the
+	// flip. The demoted slot stays the next build target and may be rebuilt in
+	// place during the window (ADR-008 amendment).
 	vocabSlotGrace   = 24 * time.Hour
 	vocabObjectDir   = "vocab/"
 	vocabNamePrefix  = "ttobak-vocab-"
 	vocabEnsureSteps = 8
-	vocabDisplayMax  = 256
-
-	// koDottedAcronymsAccepted stays false until rollout acceptance records
-	// that ko-KR accepts dotted acronyms (E.K.S.); until then such ko phrases
-	// are dropped so one row cannot fail the whole build.
-	koDottedAcronymsAccepted = false
 )
 
 const (
@@ -55,6 +41,11 @@ const (
 	vocabQuotaWarning    = "vocabulary quota reached; recognition keeps the previous vocabulary"
 	vocabCleanupWarning  = "old vocabulary cleanup is pending"
 )
+
+// vocabBuildLanguages are the languages EnsureVocabularies builds. en-US is
+// deferred until a consumer exists: batch uses ko-KR only and no response
+// carries a name for live streams (ADR-008 amendment). Its table rules stay.
+var vocabBuildLanguages = []string{model.VocabLangKo}
 
 // VocabularyObjectAPI is the S3 surface the builder uses for table files.
 type VocabularyObjectAPI interface {
@@ -99,159 +90,22 @@ func randomVocabularyName() (string, error) {
 	return vocabNamePrefix + hex.EncodeToString(b[:]), nil
 }
 
-func vocabObjectKey(name string) string { return vocabObjectDir + name + ".tsv" }
-
-func isASCIILetter(r rune) bool { return (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') }
-
-// TranscribePhrase is the minimal phrase derivation: NFKC, trimmed, and
-// space runs joined with "-" (Transcribe phrases cannot contain spaces).
-func TranscribePhrase(raw string) string {
-	return strings.Join(strings.Fields(norm.NFKC.String(raw)), "-")
+// vocabObjectKey is vocab/{name}.{fingerprint}.tsv: a stale submitter never
+// overwrites a different table. It is not attempt-unique (unlike ADR-037), so
+// two attempts of the same table share one key.
+func vocabObjectKey(name, fingerprint string) string {
+	return vocabObjectDir + name + "." + fingerprint + ".tsv"
 }
 
-// ValidTranscribePhrase applies the table rules: ko-KR [A-Za-z-.] plus Hangul
-// syllables, en-US [A-Za-z'-.]; at most 256; no leading . ' -, no trailing
-// ' -, no "--" or ".."; periods only after a single letter (E.K.S.).
-func ValidTranscribePhrase(phrase, lang string) bool {
-	runes := []rune(phrase)
-	if len(runes) == 0 || len(runes) > TermPhraseMaxRunes {
+// submittedProviderResult accepts a provider result only when it was modified
+// at or after the submit claim, so an older build on a reused slot (or a claim
+// whose provider call never ran) is never published as the claimed table.
+func submittedProviderResult(modified *time.Time, submittedAt string) bool {
+	if modified == nil || submittedAt == "" {
 		return false
 	}
-	for i, r := range runes {
-		switch {
-		case isASCIILetter(r), r == '-', r == '.':
-		case r == '\'' && lang == model.VocabLangEn:
-		case r >= 0xAC00 && r <= 0xD7A3 && lang == model.VocabLangKo:
-		default:
-			return false
-		}
-		if i > 0 && (r == '-' || r == '.') && runes[i-1] == r {
-			return false
-		}
-		if r == '.' {
-			if i == 0 || !isASCIILetter(runes[i-1]) || (i >= 2 && runes[i-2] != '-' && runes[i-2] != '.') {
-				return false
-			}
-			if lang == model.VocabLangKo && !koDottedAcronymsAccepted {
-				return false
-			}
-		}
-	}
-	first, last := runes[0], runes[len(runes)-1]
-	return first != '.' && first != '\'' && first != '-' && last != '\'' && last != '-'
-}
-
-// validVocabDisplay accepts an optional DisplayAs without control, format or
-// line-separator characters (a tab would break the table).
-func validVocabDisplay(s string) bool {
-	return checkTermRunes("displayAs", s) == nil && utf8.RuneCountInString(s) <= vocabDisplayMax
-}
-
-type vocabEntry struct{ Phrase, DisplayAs string }
-
-// vocabPlan is the desired table for one language.
-type vocabPlan struct {
-	body        string
-	count       int
-	fingerprint string
-	empty       bool
-}
-
-// vocabularyEntries orders eligible active terms (manual, hits, oldest),
-// dedupes by Phrase (first DisplayAs wins) and drops invalid rows singly.
-func vocabularyEntries(rows []model.DictTerm, lang string) []vocabEntry {
-	eligible := make([]model.DictTerm, 0, len(rows))
-	for _, row := range rows {
-		if row.State != model.TermStateActive || row.Phrase == "" {
-			continue
-		}
-		if row.TranscribeKo || (lang == model.VocabLangEn && row.TranscribeEn) {
-			eligible = append(eligible, row)
-		}
-	}
-	sort.SliceStable(eligible, func(i, j int) bool {
-		a, b := eligible[i], eligible[j]
-		if (a.Origin == model.TermOriginManual) != (b.Origin == model.TermOriginManual) {
-			return a.Origin == model.TermOriginManual
-		}
-		if a.Hits != b.Hits {
-			return a.Hits > b.Hits
-		}
-		if a.AddedAt != b.AddedAt {
-			return a.AddedAt < b.AddedAt
-		}
-		return a.SK < b.SK
-	})
-	seen := map[string]bool{}
-	var out []vocabEntry
-	for _, row := range eligible {
-		phrase := TranscribePhrase(row.Phrase)
-		display := strings.TrimSpace(row.DisplayAs)
-		key := strings.ToLower(phrase)
-		if seen[key] || !ValidTranscribePhrase(phrase, lang) || !validVocabDisplay(display) {
-			continue
-		}
-		seen[key] = true
-		out = append(out, vocabEntry{Phrase: phrase, DisplayAs: display})
-	}
-	return out
-}
-
-// RenderVocabularyTSV writes the four-column table, stopping at
-// VocabMaxRows rows or VocabMaxBytes bytes. It returns the rows written.
-func RenderVocabularyTSV(entries []vocabEntry) (string, int) {
-	var b strings.Builder
-	b.WriteString(VocabTSVHeader)
-	n := 0
-	for _, e := range entries {
-		line := e.Phrase + "\t\t\t" + e.DisplayAs + "\n"
-		if n == VocabMaxRows || b.Len()+len(line) > VocabMaxBytes {
-			break
-		}
-		b.WriteString(line)
-		n++
-	}
-	return b.String(), n
-}
-
-func planVocabulary(rows []model.DictTerm, lang string) vocabPlan {
-	body, n := RenderVocabularyTSV(vocabularyEntries(rows, lang))
-	min := 1
-	if lang == model.VocabLangEn {
-		min = VocabEnMinTerms
-	}
-	if n < min {
-		return vocabPlan{empty: true}
-	}
-	sum := sha256.Sum256([]byte(body))
-	return vocabPlan{body: body, count: n, fingerprint: hex.EncodeToString(sum[:16])}
-}
-
-type vocabErrKind int
-
-const (
-	vocabErrOther vocabErrKind = iota
-	vocabErrNotFound
-	vocabErrBadRequest
-	vocabErrConflict
-	vocabErrLimit
-)
-
-// classifyVocabularyError maps Transcribe errors by error code.
-func classifyVocabularyError(err error) vocabErrKind {
-	var apiErr smithy.APIError
-	if !errors.As(err, &apiErr) {
-		return vocabErrOther
-	}
-	return map[string]vocabErrKind{"NotFoundException": vocabErrNotFound, "BadRequestException": vocabErrBadRequest,
-		"ConflictException": vocabErrConflict, "LimitExceededException": vocabErrLimit}[apiErr.ErrorCode()]
-}
-
-// vocabularyMissing: NotFound, or the BadRequest returned for an unknown name
-// (a wrong guess makes CreateVocabulary fail safely with ConflictException).
-func vocabularyMissing(err error) bool {
-	kind := classifyVocabularyError(err)
-	return kind == vocabErrNotFound || kind == vocabErrBadRequest
+	t, err := time.Parse(model.DictTimeLayout, submittedAt)
+	return err == nil && !modified.Before(t.Add(-vocabSubmitSkew))
 }
 
 func elapsedSince(stamp string, now time.Time) time.Duration {
@@ -295,21 +149,18 @@ func (s *DictionaryService) vocabularyViews(ctx context.Context, userID string) 
 	return &model.VocabularyViews{Ko: view(model.VocabLangKo), En: view(model.VocabLangEn)}
 }
 
-// EnsureVocabularies advances the personal ko-KR and en-US builds by bounded
-// steps (retire, submit, poll, flip or claim); manual grants one interval
-// bypass. Without SetVocabularyBuilder it only reads. Failures are warnings.
+// EnsureVocabularies advances the personal builds (vocabBuildLanguages) by
+// bounded steps (retire, submit, poll, flip or claim); manual grants one
+// interval bypass. Without SetVocabularyBuilder it only reads. Failures are
+// warnings. The dictionary GET runs it, including the one each recording start
+// makes, so a finished build flips without a settings-page visit.
 func (s *DictionaryService) EnsureVocabularies(ctx context.Context, userID, vocabContext string, manual bool) (*model.VocabularyViews, []string) {
 	if vocabContext != model.VocabContextPersonal || s.builder == nil || s.transcribeClient == nil {
 		return s.vocabularyViews(ctx, userID), nil
 	}
-	rows, err := s.repo.ListDictTerms(ctx, model.PrefixUser+userID)
-	if err != nil {
-		log.Printf("vocabulary build skipped for user %s: %v", userID, err)
-		return s.vocabularyViews(ctx, userID), []string{vocabularyRebuildWarning}
-	}
 	var warnings []string
-	for _, lang := range []string{model.VocabLangKo, model.VocabLangEn} {
-		warnings = append(warnings, s.ensureVocabulary(ctx, userID, lang, planVocabulary(rows, lang), manual)...)
+	for _, lang := range vocabBuildLanguages {
+		warnings = append(warnings, s.ensureVocabulary(ctx, userID, lang, manual)...)
 	}
 	return s.vocabularyViews(ctx, userID), dedupeWarnings(warnings)
 }
@@ -332,7 +183,12 @@ type vocabStep struct {
 	warnings []string
 }
 
-func (s *DictionaryService) ensureVocabulary(ctx context.Context, userID, lang string, plan vocabPlan, manual bool) []string {
+// ensureVocabulary reads the state and only then lists the terms, on every
+// step. A term write committed after the listing is followed by its writer's
+// own ensure, which either moves the row first (failing this step's CAS) or
+// sees this step's write; every step that could reach the provider relists,
+// so a deleted term is never built back in from a stale snapshot.
+func (s *DictionaryService) ensureVocabulary(ctx context.Context, userID, lang string, manual bool) []string {
 	bypass := manual
 	var warnings []string
 	for step := 0; step < vocabEnsureSteps; step++ {
@@ -341,6 +197,12 @@ func (s *DictionaryService) ensureVocabulary(ctx context.Context, userID, lang s
 			log.Printf("vocabulary state read failed for user %s: %v", userID, err)
 			return append(warnings, vocabularyRebuildWarning)
 		}
+		rows, err := s.repo.ListDictTerms(ctx, model.PrefixUser+userID)
+		if err != nil {
+			log.Printf("vocabulary build skipped for user %s: %v", userID, err)
+			return append(warnings, vocabularyRebuildWarning)
+		}
+		plan := planVocabulary(rows, lang)
 		if st == nil {
 			if plan.empty {
 				return warnings
@@ -370,12 +232,21 @@ func (s *DictionaryService) ensureVocabulary(ctx context.Context, userID, lang s
 
 // casStep applies a version-guarded change; a lost race re-reads.
 func (s *DictionaryService) casStep(ctx context.Context, userID string, st *model.VocabularyState, change repository.VocabularyStateChange) vocabStep {
+	step, _ := s.casApplied(ctx, userID, st, change)
+	return step
+}
+
+// casApplied is casStep that also reports whether this caller's change won.
+func (s *DictionaryService) casApplied(ctx context.Context, userID string, st *model.VocabularyState, change repository.VocabularyStateChange) (vocabStep, bool) {
 	err := s.repo.UpdateVocabularyState(ctx, userID, st.Context, st.Language, st.Version, change, s.stamp())
-	if err == nil || errors.Is(err, repository.ErrConditionFailed) {
-		return vocabStep{more: true}
+	switch {
+	case err == nil:
+		return vocabStep{more: true}, true
+	case errors.Is(err, repository.ErrConditionFailed):
+		return vocabStep{more: true}, false
 	}
 	log.Printf("vocabulary state update failed for user %s: %v", userID, err)
-	return vocabStep{warnings: []string{vocabularyRebuildWarning}}
+	return vocabStep{warnings: []string{vocabularyRebuildWarning}}, false
 }
 
 func strp(s string) *string { return &s }
@@ -394,21 +265,29 @@ func (s *DictionaryService) vocabularyStep(ctx context.Context, userID string, s
 		}
 		return s.casStep(ctx, userID, st, repository.VocabularyStateChange{RetiredName: strp("")})
 	}
-	// 2. A legacy in-place build (no fingerprint) only refreshes ActiveReady;
-	// A/B builds never touch ActiveName, so they may proceed meanwhile.
+	// 2. A legacy in-place build (no fingerprint) only refreshes ActiveReady.
 	if st.Status == model.VocabStatusBuilding && st.BuildingFingerprint == "" {
-		if synced := s.syncVocabularyState(ctx, userID, st); synced.Version != st.Version {
+		if synced := s.syncVocabularyState(ctx, userID, st); synced != st { // synced or raced: re-read
 			return vocabStep{more: true}
 		}
 	}
-	building := st.Status == model.VocabStatusBuilding && st.BuildingFingerprint != "" && st.InactiveName != ""
-	if building && elapsedSince(st.BuildStartedAt, now) < vocabBuildStaleAfter {
-		return s.advanceBuild(ctx, userID, st, plan, bypass)
-	}
+	// An emptied language stops advertising at once, before any claimed build
+	// is advanced: the claim (submitted or not) is dropped, so a pending
+	// result is never flipped or served (ADR-008 amendment).
 	if plan.empty {
 		return s.emptyVocabularyStep(ctx, userID, st, now)
 	}
-	// 3. Steady state is one vocabulary: retire the old slot after grace.
+	// A claimed build is resumed or polled whatever its age: the provider
+	// state decides, so an aged build is never reclaimed or deleted unpolled.
+	if st.Status == model.VocabStatusBuilding && st.BuildingFingerprint != "" && st.InactiveName != "" {
+		return s.advanceBuild(ctx, userID, st, plan, bypass)
+	}
+	if st.Status == model.VocabStatusBuilding && st.BuildingFingerprint == "" && st.InactiveName == "" && st.ActiveName != "" {
+		// The legacy build is still pending: an A/B claim now would stop step 2
+		// from ever marking it ready, hiding a READY result from batch.
+		return vocabStep{}
+	}
+	// 3. Retire the demoted (or failed) slot after grace; never a claimed build.
 	if st.InactiveName != "" && st.RetiredName == "" && (st.InactiveName == legacyVocabularyName(userID) || elapsedSince(st.FlippedAt, now) >= vocabSlotGrace) {
 		return s.casStep(ctx, userID, st, repository.VocabularyStateChange{RetiredName: &st.InactiveName, InactiveName: strp("")})
 	}
@@ -437,37 +316,32 @@ func (s *DictionaryService) vocabularyStep(ctx context.Context, userID string, s
 		}
 		target = name
 	}
-	out := s.casStep(ctx, userID, st, repository.VocabularyStateChange{
+	out, won := s.casApplied(ctx, userID, st, repository.VocabularyStateChange{
 		Status: strp(model.VocabStatusBuilding), BuildingFingerprint: strp(plan.fingerprint),
 		BuildStartedAt: strp(now.Format(model.DictTimeLayout)), InactiveName: &target,
 		BuildSubmitted: boolp(false), BypassPending: boolp(false), FailureCode: strp(""),
 		TermCount: intp(plan.count), EmptySince: strp(""),
 	})
-	if out.more {
-		*bypass = false
+	if won {
+		*bypass = false // a lost claim race keeps the manual bypass
 	}
 	return out
 }
 
-// advanceBuild submits or polls a claimed build that is not stale.
+// advanceBuild submits or polls a claimed build; plan is never empty here.
 func (s *DictionaryService) advanceBuild(ctx context.Context, userID string, st *model.VocabularyState, plan vocabPlan, bypass *bool) vocabStep {
 	if !st.BuildSubmitted {
-		if plan.empty {
-			// Nothing left to build: release the claim and keep the active slot.
-			status := model.VocabStatusNone
-			if st.ActiveReady {
-				status = model.VocabStatusReady
-			}
-			return s.casStep(ctx, userID, st, repository.VocabularyStateChange{Status: &status, BuildingFingerprint: strp("")})
-		}
 		if plan.fingerprint != st.BuildingFingerprint {
 			return s.casStep(ctx, userID, st, repository.VocabularyStateChange{BuildingFingerprint: strp(plan.fingerprint), TermCount: intp(plan.count)})
 		}
 		return s.submitBuild(ctx, userID, st, plan)
 	}
-	if *bypass && !plan.empty && plan.fingerprint != st.BuildingFingerprint && !st.BypassPending {
-		*bypass = false
-		return s.casStep(ctx, userID, st, repository.VocabularyStateChange{BypassPending: boolp(true)})
+	if *bypass && plan.fingerprint != st.BuildingFingerprint && !st.BypassPending {
+		out, won := s.casApplied(ctx, userID, st, repository.VocabularyStateChange{BypassPending: boolp(true)})
+		if won {
+			*bypass = false
+		}
+		return out
 	}
 	out, err := s.transcribeClient.GetVocabulary(ctx, &transcribe.GetVocabularyInput{VocabularyName: aws.String(st.InactiveName)})
 	if err != nil {
@@ -477,9 +351,14 @@ func (s *DictionaryService) advanceBuild(ctx context.Context, userID string, st 
 		log.Printf("vocabulary %s poll failed: %v", st.InactiveName, err)
 		return vocabStep{warnings: []string{vocabularyRebuildWarning}}
 	}
+	if out.VocabularyState != transcribeTypes.VocabularyStatePending && !submittedProviderResult(out.LastModifiedTime, st.SubmittedAt) {
+		// The slot shows an older build: the submission never reached the
+		// provider (a crash after the claim, or a released claim). Resubmit.
+		return s.casStep(ctx, userID, st, repository.VocabularyStateChange{BuildSubmitted: boolp(false), ExpectBuildingFingerprint: &st.BuildingFingerprint})
+	}
 	switch out.VocabularyState {
 	case transcribeTypes.VocabularyStateReady:
-		change := repository.VocabularyStateChange{
+		change := repository.VocabularyStateChange{ExpectBuildingFingerprint: &st.BuildingFingerprint,
 			ActiveName: &st.InactiveName, InactiveName: &st.ActiveName, ActiveFingerprint: &st.BuildingFingerprint,
 			ActiveReady: boolp(true), Status: strp(model.VocabStatusReady), FailureCode: strp(""),
 			FlippedAt: strp(s.stamp()), BuildSubmitted: boolp(false), EmptySince: strp(""),
@@ -491,23 +370,25 @@ func (s *DictionaryService) advanceBuild(ctx context.Context, userID string, st 
 		}
 		step := s.casStep(ctx, userID, st, change)
 		if step.more {
-			step.warnings = s.deleteVocabularyFile(ctx, st.InactiveName)
+			step.warnings = s.deleteVocabularyFile(ctx, st.InactiveName, st.BuildingFingerprint)
 		}
 		return step
 	case transcribeTypes.VocabularyStateFailed:
-		step := s.casStep(ctx, userID, st, repository.VocabularyStateChange{
+		step := s.casStep(ctx, userID, st, repository.VocabularyStateChange{ExpectBuildingFingerprint: &st.BuildingFingerprint,
 			Status: strp(model.VocabStatusFailed), FailureCode: strp(vocabFailureProvider), BuildSubmitted: boolp(false),
 		})
-		step.warnings = append(s.deleteVocabularyFile(ctx, st.InactiveName), vocabularyRebuildWarning)
+		step.warnings = append(s.deleteVocabularyFile(ctx, st.InactiveName, st.BuildingFingerprint), vocabularyRebuildWarning)
 		step.more = false
 		return step
 	}
 	return vocabStep{} // still PENDING
 }
 
-// submitBuild writes the table file and creates or updates the inactive slot.
+// submitBuild writes the immutable table file, records the submit claim
+// (version, fingerprint and BuildSubmitted guarded) and only then creates or
+// updates the inactive slot, so a stale caller never reaches the provider.
 func (s *DictionaryService) submitBuild(ctx context.Context, userID string, st *model.VocabularyState, plan vocabPlan) vocabStep {
-	name, key := st.InactiveName, vocabObjectKey(st.InactiveName)
+	name, key := st.InactiveName, vocabObjectKey(st.InactiveName, plan.fingerprint)
 	if _, err := s.builder.objects.PutObject(ctx, &s3.PutObjectInput{
 		Bucket: aws.String(s.builder.bucket), Key: aws.String(key), Body: strings.NewReader(plan.body),
 		ContentType: aws.String("text/tab-separated-values; charset=utf-8"),
@@ -515,6 +396,24 @@ func (s *DictionaryService) submitBuild(ctx context.Context, userID string, st *
 		log.Printf("vocabulary file write failed for %s: %v", name, err)
 		return vocabStep{warnings: []string{vocabularyRebuildWarning}}
 	}
+	submittedAt := s.stamp()
+	claim := repository.VocabularyStateChange{BuildSubmitted: boolp(true), SubmittedAt: &submittedAt, ExpectBuildingFingerprint: &plan.fingerprint}
+	if err := s.repo.UpdateVocabularyState(ctx, userID, st.Context, st.Language, st.Version, claim, submittedAt); err != nil {
+		if errors.Is(err, repository.ErrConditionFailed) {
+			// Another caller moved the row; its table has its own key. A
+			// leftover file here expires by the vocab/ lifecycle rule.
+			return vocabStep{more: true}
+		}
+		log.Printf("vocabulary submit claim failed for user %s: %v", userID, err)
+		return vocabStep{warnings: []string{vocabularyRebuildWarning}}
+	}
+	// Another caller may still move the row during the provider call (an
+	// emptied plan, or a stall across a whole build). Every later CAS is
+	// version and fingerprint guarded, so a release below then fails harmlessly
+	// and only a row still holding this claim ever polls the result.
+	claimed := *st
+	claimed.Version++
+	claimed.BuildSubmitted, claimed.SubmittedAt = true, submittedAt
 	uri := fmt.Sprintf("s3://%s/%s", s.builder.bucket, key)
 	lang := transcribeTypes.LanguageCode(st.Language)
 	var err error
@@ -526,26 +425,33 @@ func (s *DictionaryService) submitBuild(ctx context.Context, userID string, st *
 		err = getErr
 	}
 	if err == nil {
-		step := s.casStep(ctx, userID, st, repository.VocabularyStateChange{BuildSubmitted: boolp(true)})
-		step.more = false // poll on a later call
-		return step
+		return vocabStep{} // poll on a later call
+	}
+	release := func(change repository.VocabularyStateChange, extra ...string) vocabStep {
+		change.BuildSubmitted, change.ExpectBuildingFingerprint = boolp(false), &plan.fingerprint
+		step := s.casStep(ctx, userID, &claimed, change)
+		return vocabStep{warnings: append(step.warnings, extra...)}
 	}
 	switch classifyVocabularyError(err) {
 	case vocabErrConflict:
-		return vocabStep{} // keep the claim; a later call retries
+		return release(repository.VocabularyStateChange{}) // keep the claim; a later call resubmits
 	case vocabErrLimit:
-		step := s.casStep(ctx, userID, st, repository.VocabularyStateChange{Status: strp(model.VocabStatusQuotaExceeded), FailureCode: strp(vocabFailureQuota)})
-		return vocabStep{warnings: append(append(step.warnings, s.deleteVocabularyFile(ctx, name)...), vocabQuotaWarning)}
+		return release(repository.VocabularyStateChange{Status: strp(model.VocabStatusQuotaExceeded), FailureCode: strp(vocabFailureQuota)},
+			append(s.deleteVocabularyFile(ctx, name, plan.fingerprint), vocabQuotaWarning)...)
 	case vocabErrBadRequest:
-		step := s.casStep(ctx, userID, st, repository.VocabularyStateChange{Status: strp(model.VocabStatusFailed), FailureCode: strp(vocabFailureProvider)})
-		return vocabStep{warnings: append(append(step.warnings, s.deleteVocabularyFile(ctx, name)...), vocabularyRebuildWarning)}
+		return release(repository.VocabularyStateChange{Status: strp(model.VocabStatusFailed), FailureCode: strp(vocabFailureProvider)},
+			append(s.deleteVocabularyFile(ctx, name, plan.fingerprint), vocabularyRebuildWarning)...)
 	}
+	// Ambiguous: the provider may have accepted it. Keep the claim; the poll
+	// accepts only a result modified after SubmittedAt and otherwise resubmits.
 	log.Printf("vocabulary %s submit failed: %v", name, err)
 	return vocabStep{warnings: []string{vocabularyRebuildWarning}}
 }
 
 // emptyVocabularyStep handles a language without eligible terms: stop
-// advertising at once, delete both slots after the grace window.
+// advertising at once (also dropping any claimed or submitted build, whose
+// provider result is then never polled or flipped), delete both slots after
+// the grace window.
 func (s *DictionaryService) emptyVocabularyStep(ctx context.Context, userID string, st *model.VocabularyState, now time.Time) vocabStep {
 	if st.ActiveName == "" && st.InactiveName == "" {
 		if st.Status != model.VocabStatusNone || st.ActiveReady || st.FailureCode != "" || st.EmptySince != "" {
@@ -556,7 +462,7 @@ func (s *DictionaryService) emptyVocabularyStep(ctx context.Context, userID stri
 		}
 		return vocabStep{}
 	}
-	if st.EmptySince == "" || st.ActiveReady || st.Status != model.VocabStatusNone {
+	if st.EmptySince == "" || st.ActiveReady || st.Status != model.VocabStatusNone || st.BuildSubmitted || st.BuildingFingerprint != "" {
 		since := st.EmptySince
 		if since == "" {
 			since = now.Format(model.DictTimeLayout)
@@ -564,6 +470,7 @@ func (s *DictionaryService) emptyVocabularyStep(ctx context.Context, userID stri
 		return s.casStep(ctx, userID, st, repository.VocabularyStateChange{
 			Status: strp(model.VocabStatusNone), ActiveReady: boolp(false), FailureCode: strp(""),
 			ActiveFingerprint: strp(""), BuildingFingerprint: strp(""), EmptySince: &since, TermCount: intp(0),
+			BuildSubmitted: boolp(false), BypassPending: boolp(false),
 		})
 	}
 	if elapsedSince(st.EmptySince, now) < vocabSlotGrace || st.RetiredName != "" {
@@ -587,11 +494,26 @@ func (s *DictionaryService) deleteVocabulary(ctx context.Context, name string) e
 	return err
 }
 
-// deleteVocabularyFile removes the table file; lifecycle covers a failure.
-func (s *DictionaryService) deleteVocabularyFile(ctx context.Context, name string) []string {
-	if _, err := s.builder.objects.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(s.builder.bucket), Key: aws.String(vocabObjectKey(name))}); err != nil {
+// deleteVocabularyFile removes one table file; lifecycle covers a failure.
+func (s *DictionaryService) deleteVocabularyFile(ctx context.Context, name, fingerprint string) []string {
+	if _, err := s.builder.objects.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(s.builder.bucket), Key: aws.String(vocabObjectKey(name, fingerprint))}); err != nil {
 		log.Printf("vocabulary file cleanup failed for %s: %v", name, err)
 		return []string{"vocabulary file cleanup incomplete"}
 	}
 	return nil
+}
+
+// verifiedReadyBuild reports, read-only, whether a submitted A/B build is
+// READY at the provider with a result no older than its submit claim. Batch
+// uses it so a finished build serves before any API call flips it.
+func (s *DictionaryService) verifiedReadyBuild(ctx context.Context, st *model.VocabularyState) bool {
+	if st.Status != model.VocabStatusBuilding || !st.BuildSubmitted || st.InactiveName == "" || st.BuildingFingerprint == "" || s.transcribeClient == nil {
+		return false
+	}
+	out, err := s.transcribeClient.GetVocabulary(ctx, &transcribe.GetVocabularyInput{VocabularyName: aws.String(st.InactiveName)})
+	if err != nil {
+		log.Printf("failed to get vocabulary status for %s: %v", st.InactiveName, err)
+		return false
+	}
+	return out.VocabularyState == transcribeTypes.VocabularyStateReady && submittedProviderResult(out.LastModifiedTime, st.SubmittedAt)
 }

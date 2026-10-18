@@ -57,9 +57,13 @@ func legacyTermKey(t model.DictionaryTerm) string {
 	return TermKey(display)
 }
 
+// legacyTermFromRow is a row's legacy form. LegacyDisplayEmpty keeps an empty
+// displayAs only while the phrase still derives the row's key: after a v2
+// phrase edit, an empty displayAs would make legacyTermKey name a different
+// term, so a legacy GET-to-PUT round trip would replace the row.
 func legacyTermFromRow(row model.DictTerm) model.DictionaryTerm {
 	display := row.DisplayAs
-	if row.LegacyDisplayEmpty {
+	if row.LegacyDisplayEmpty && TermKey(row.Phrase) == row.TermKey {
 		display = ""
 	}
 	return model.DictionaryTerm{
@@ -342,6 +346,9 @@ func (s *DictionaryService) migrateLegacyVocabulary(ctx context.Context, guard r
 	}
 	if prior == nil {
 		return fmt.Errorf("vocabulary state vanished during migration: %w", repository.ErrConditionFailed)
+	}
+	if prior.ActiveFingerprint != "" || prior.BuildingFingerprint != "" || prior.InactiveName != "" || prior.RetiredName != "" {
+		return nil // the A/B builder owns this row; resetting ActiveName would orphan its slots
 	}
 	var change repository.VocabularyStateChange
 	if prior.ActiveName != state.ActiveName {

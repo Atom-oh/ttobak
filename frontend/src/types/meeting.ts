@@ -292,6 +292,8 @@ export interface MeetingDetail extends Meeting {
   transcriptA?: string;
   transcriptB?: string;
   selectedTranscript?: 'A' | 'B' | null;
+  /** Generated-note language: '' automatic, 'ko' Korean, 'en' English. */
+  noteLanguage?: NoteLanguage;
   audioKey?: string;
   audioKeys?: string[];
   audioPartCount?: number;
@@ -628,3 +630,6 @@ export interface ChatSession {
   lastMessageAt: string;
   messageCount: number;
 }
+
+/** Allowlisted values of the meeting noteLanguage field. */
+export type NoteLanguage = '' | 'ko' | 'en';

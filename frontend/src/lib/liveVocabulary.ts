@@ -1,23 +1,12 @@
 // Live-caption vocabulary selection and start-of-stream fallback (import-free for node:test).
 
-/** GET /api/settings/dictionary/live-config; `name` is present only when READY. */
-export interface LiveDictionaryConfigResponse {
-  vocabularies?: { ko?: { name?: string }; en?: { name?: string } };
-}
-
-/** READY vocabulary names by Transcribe language code. */
+/**
+ * READY vocabulary names by Transcribe language code. No API supplies these
+ * yet (ADR-008 item 5), so callers pass none and every helper below is inert.
+ */
 export type LiveVocabularyNames = Partial<Record<'ko-KR' | 'en-US', string>>;
 
 const isName = (name: unknown): name is string => typeof name === 'string' && /^[0-9A-Za-z._-]{1,200}$/.test(name);
-
-export function selectLiveVocabularies(resp?: LiveDictionaryConfigResponse | null): LiveVocabularyNames {
-  const out: LiveVocabularyNames = {};
-  const ko = resp?.vocabularies?.ko?.name;
-  const en = resp?.vocabularies?.en?.name;
-  if (isName(ko)) out['ko-KR'] = ko;
-  if (isName(en)) out['en-US'] = en;
-  return out;
-}
 
 /**
  * StartStreamTranscription vocabulary fields. IdentifyMultipleLanguages takes
