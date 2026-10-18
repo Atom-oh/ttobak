@@ -169,6 +169,13 @@ export class StorageStack extends cdk.Stack {
           id: 'DeleteIncompleteMultipartUploads',
           abortIncompleteMultipartUploadAfter: cdk.Duration.days(7),
         },
+        // Leftover Transcribe vocabulary table files (vocab/{name}.{fingerprint}.tsv).
+        {
+          id: 'ExpireVocabularyTables',
+          prefix: 'vocab/',
+          expiration: cdk.Duration.days(1),
+          noncurrentVersionExpiration: cdk.Duration.days(1),
+        },
         // Benchmark transcripts (docs/runbooks/whisperx-benchmark.md) carry
         // full meeting text (PII) and are operator-scratch only -- expire
         // them instead of relying on manual runbook cleanup (CLAUDE.md

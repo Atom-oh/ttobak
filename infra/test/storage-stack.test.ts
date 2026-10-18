@@ -42,6 +42,20 @@ describe('StorageStack', () => {
     });
   });
 
+  test('vocabulary table files under vocab/ expire after one day, including noncurrent versions', () => {
+    template.hasResourceProperties('AWS::S3::Bucket', {
+      LifecycleConfiguration: {
+        Rules: Match.arrayWith([{
+          Id: 'ExpireVocabularyTables',
+          Status: 'Enabled',
+          ExpirationInDays: 1,
+          NoncurrentVersionExpiration: { NoncurrentDays: 1 },
+          Prefix: 'vocab/',
+        }]),
+      },
+    });
+  });
+
   test('OAC bucket policy is scoped to the 5 download prefixes, excluding transcripts/*', () => {
     template.hasResourceProperties('AWS::S3::BucketPolicy', {
       PolicyDocument: Match.objectLike({
