@@ -111,5 +111,26 @@ class TestLegacyPinLockstep(unittest.TestCase):
         self.assertEqual(docker_rest, verified)
 
 
+
+class TestLegacyImageLogging(unittest.TestCase):
+    """The production image must flush stdout line by line: a block-buffered
+    worker killed mid-run left an empty log stream (ADR-031 amendment)."""
+
+    def _legacy(self, name: str) -> list:
+        with open(LEGACY_DOCKERFILE) as f:
+            lines = [ln for ln in f.read().splitlines() if not ln.lstrip().startswith('#')]
+        joined = re.sub(r'\\\s*\n', ' ', '\n'.join(lines))
+        return [ln.strip()[len(name):].strip() for ln in joined.splitlines()
+                if ln.strip().upper().startswith(name.upper() + ' ')]
+
+    def test_pythonunbuffered_is_set(self):
+        self.assertIn('PYTHONUNBUFFERED=1', ' '.join(self._legacy('ENV')))
+
+    def test_entrypoint_is_unchanged(self):
+        entrypoints = self._legacy('ENTRYPOINT')
+        self.assertEqual(json.loads(entrypoints[-1]), ['python3', 'transcribe.py'])
+        self.assertEqual(self._legacy('CMD'), [])
+
+
 if __name__ == '__main__':
     unittest.main()

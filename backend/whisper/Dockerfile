@@ -64,4 +64,8 @@ COPY transcribe.py /app/transcribe.py
 COPY audio_crop.py /app/audio_crop.py
 WORKDIR /app
 
+# Line-buffered logs: a worker killed mid-run (Spot reclaim, host drain) must
+# still leave its progress lines in CloudWatch (ADR-031 amendment).
+ENV PYTHONUNBUFFERED=1
+
 ENTRYPOINT ["python3", "transcribe.py"]

@@ -5,6 +5,8 @@
   [ADR-035](ADR-035-diarization-pyannote4-community1-asr-pins.md).
 - Decision date: Not recorded; motivating benchmark dated 2026-04-23.
 - Capacity decision amended: 2026-09-17 (first active worker uses On-Demand).
+- Recovery amended 2026-10-17 by the [ADR-031 scheduled STT recovery amendment](ADR-031-summarize-timeout-resilience.md#amendment-2026-10-17-scheduled-stt-recovery-and-failed-recording-retention):
+  managed draining, AZRebalance suspension, Spot instance draining and a bounded automatic re-run.
 - Implementation checked: 2026-09-17.
 
 ## Context and decision
@@ -87,8 +89,9 @@ remove that setting. Existing task interruption/recovery limitations remain.
 
 GPU batch inference improves the evaluated workload while retaining live captions.
 Costs include cold starts, large runtime dependencies, model staging, GPU AMI
-maintenance, and Spot capacity/interruption failures. User retry and existing
-pipeline recovery are not a guarantee of automatic task recovery. Deploy only
+maintenance, and Spot capacity/interruption failures. The ADR-031 amendment adds
+a bounded scheduled re-run (two attempts per audio key, single-file meetings
+only); it is not a guarantee that every interrupted task is recovered. Deploy only
 named changed stacks with `--exclusively`; never deploy the staged Knowledge
 stack teardown through dependencies.
 

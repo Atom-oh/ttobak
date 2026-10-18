@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
-"""Re-run Whisper ECS batch transcription for existing meetings.
+"""SUPERSEDED operator tool: re-run Whisper for ONE explicitly named meeting.
 
-Finds meetings that were transcribed by AWS Transcribe (not Whisper),
-then triggers Whisper ECS tasks for each. The existing pipeline handles
-the rest: Whisper → S3 transcripts/ → EventBridge → summarize Lambda.
+Stuck single-file meetings are now re-driven automatically, with durable
+conditional claims and a two-attempt budget, by the scheduled STT recovery
+tick (ttobak-stt-recovery -> ttobak-transcribe; ADR-031 amendment and
+docs/runbooks/stt-pipeline-troubleshooting.md). Prefer that path.
+
+This script remains for a deliberate one-off. It refuses to run without an
+explicit meeting ID, rejects done/summarizing meetings, changes status only
+through a conditional update on the observed status and raw updatedAt (and
+bumps updatedAt), and never prints meeting titles. The existing pipeline then
+handles Whisper -> S3 transcripts/ -> EventBridge -> summarize.
 
 Usage:
-  python3 scripts/whisper-rebatch.py                                    # dry-run: list meetings
-  python3 scripts/whisper-rebatch.py --run                              # trigger ECS tasks
-  python3 scripts/whisper-rebatch.py --run <id>                         # single meeting
+  python3 scripts/whisper-rebatch.py <id>                               # dry-run for one meeting
+  python3 scripts/whisper-rebatch.py --run <id>                         # trigger one ECS task
   python3 scripts/whisper-rebatch.py --run --num-speakers 8 <id>        # hint a max speaker count
                                                                          # (upper bound; pyannote still
                                                                          # auto-detects within it)
@@ -17,10 +23,11 @@ import argparse
 import json
 import os
 import sys
-import time
 import unicodedata
+from datetime import datetime, timezone
 
 import boto3
+from botocore.exceptions import ClientError
 
 REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
 BUCKET = os.environ.get("BUCKET_NAME", "ttobak-assets-180294183052")
@@ -80,7 +87,7 @@ def get_meeting(meeting_id):
             "PK": item["PK"]["S"],
             "SK": item["SK"]["S"],
             "meetingId": item["meetingId"]["S"],
-            "title": item.get("title", {}).get("S", ""),
+            "updatedAt": item.get("updatedAt", {}).get("S", ""),
             "status": item.get("status", {}).get("S", ""),
             "userId": item.get("userId", {}).get("S", ""),
             "sttProvider": item.get("sttProvider", {}).get("S", ""),
@@ -130,69 +137,65 @@ def run_whisper_task(meeting_id, user_id, audio_key, num_speakers=None):
     return True
 
 
+def _now():
+    """Go RFC3339Nano UTC, matching the Go writers' updatedAt format."""
+    value = datetime.now(timezone.utc).isoformat(timespec="microseconds").removesuffix("+00:00")
+    return value.rstrip("0").rstrip(".") + "Z"
+
+
+def claim_meeting(target):
+    """Conditionally moves the observed meeting to transcribing. Returns False
+    when anything changed since it was read."""
+    table = boto3.resource("dynamodb", region_name=REGION).Table(TABLE)
+    try:
+        table.update_item(
+            Key={"PK": f"USER#{target['user_id']}", "SK": f"MEETING#{target['meeting_id']}"},
+            UpdateExpression="SET #s = :s, sttProvider = :p, updatedAt = :now",
+            ConditionExpression="#s = :observed AND updatedAt = :updated AND attribute_not_exists(audioCrop)",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={":s": "transcribing", ":p": "whisper", ":now": _now(),
+                                       ":observed": target["status"], ":updated": target["updatedAt"]},
+        )
+        return True
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            return False
+        raise
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Re-batch existing meetings through Whisper ECS")
-    parser.add_argument("--run", action="store_true", help="Actually trigger ECS tasks (default: dry-run)")
+    parser = argparse.ArgumentParser(description="Re-run Whisper ECS for one explicitly named meeting (superseded by the recovery tick)")
+    parser.add_argument("--run", action="store_true", help="Actually trigger the ECS task (default: dry-run)")
     parser.add_argument("--num-speakers", type=int, default=None,
                          help="Hint a maximum speaker count to the diarization pipeline -- "
-                              "an upper bound pyannote still auto-detects within, not an exact "
-                              "count (only meaningful with a single meeting_id)")
-    parser.add_argument("meeting_id", nargs="?", help="Process single meeting ID")
+                              "an upper bound pyannote still auto-detects within, not an exact count")
+    parser.add_argument("meeting_id", help="The single meeting ID to re-run (required)")
     args = parser.parse_args()
 
-    if args.num_speakers and not args.meeting_id:
-        print("ERROR: --num-speakers requires a single meeting_id (it would apply the same "
-              "speaker count to every re-batched meeting otherwise)", file=sys.stderr)
-        sys.exit(1)
-
-    print(f"Whisper Re-Batch — {'RUN' if args.run else 'DRY RUN'}")
-    print(f"Cluster: {CLUSTER} | Task: {TASK_DEF}")
-    print()
-
+    print(f"Whisper Re-Batch (superseded; see ADR-031 amendment) — {'RUN' if args.run else 'DRY RUN'}")
     audio_files = find_audio_files()
-    print(f"Found {len(audio_files)} meetings with audio files")
-
-    targets = []
-    for mid, af in sorted(audio_files.items()):
-        if args.meeting_id and mid != args.meeting_id:
-            continue
-        meeting = get_meeting(mid)
-        if not meeting:
-            continue
-        if meeting["status"] not in ("done", "error", "transcribing", "summarizing"):
-            continue
-        targets.append({**af, "title": meeting["title"], "status": meeting["status"], "sttProvider": meeting["sttProvider"]})
-
-    print(f"\nTargets: {len(targets)} meetings")
-    print(f"{'ID':>10s}  {'Size':>6s}  {'Provider':>12s}  {'Status':>12s}  Title")
-    print("-" * 80)
-    for t in targets:
-        print(f"{t['meeting_id'][:10]}  {t['size_mb']:>5.1f}M  {t['sttProvider'] or 'transcribe':>12s}  {t['status']:>12s}  {t['title'][:30]}")
-
+    af = audio_files.get(args.meeting_id)
+    meeting = get_meeting(args.meeting_id) if af else None
+    if not af or not meeting:
+        print("No audio or meeting found for that ID", file=sys.stderr)
+        sys.exit(1)
+    if meeting["status"] not in ("error", "transcribing"):
+        print(f"Refusing: status={meeting['status']} (only error/transcribing meetings are re-run)", file=sys.stderr)
+        sys.exit(1)
+    if not meeting["updatedAt"]:
+        print("Refusing: meeting has no updatedAt to fence on", file=sys.stderr)
+        sys.exit(1)
+    target = {**af, "status": meeting["status"], "updatedAt": meeting["updatedAt"]}
+    print(f"Target: {target['meeting_id']} size={target['size_mb']:.1f}M status={target['status']} "
+          f"provider={meeting['sttProvider'] or 'transcribe'}")
     if not args.run:
-        print(f"\nDry run complete. Use --run to trigger {len(targets)} ECS tasks.")
+        print("Dry run complete. Use --run to trigger the ECS task.")
         return
-
-    print(f"\nTriggering {len(targets)} Whisper ECS tasks...")
-    success = 0
-    for i, t in enumerate(targets):
-        print(f"\n[{i+1}/{len(targets)}] {t['meeting_id'][:10]} — {t['title'][:40]}")
-
-        # Mark as transcribing
-        ddb_resource = boto3.resource("dynamodb", region_name=REGION)
-        ddb_resource.Table(TABLE).update_item(
-            Key={"PK": f"USER#{t['user_id']}", "SK": f"MEETING#{t['meeting_id']}"},
-            UpdateExpression="SET #s = :s, sttProvider = :p",
-            ExpressionAttributeNames={"#s": "status"},
-            ExpressionAttributeValues={":s": "transcribing", ":p": "whisper"},
-        )
-
-        if run_whisper_task(t["meeting_id"], t["user_id"], t["key"], args.num_speakers):
-            success += 1
-        time.sleep(2)
-
-    print(f"\n{'=' * 60}")
-    print(f"Triggered: {success}/{len(targets)} tasks")
+    if not claim_meeting(target):
+        print("Refusing: the meeting changed since it was read", file=sys.stderr)
+        sys.exit(1)
+    ok = run_whisper_task(target["meeting_id"], target["user_id"], target["key"], args.num_speakers)
+    print("Triggered" if ok else "Task did not start; the meeting stays transcribing until the recovery tick or expiry")
     print("Monitor progress: aws ecs list-tasks --cluster ttobak-whisper")
 
 

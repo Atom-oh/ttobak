@@ -221,3 +221,41 @@ describe('WhisperStack legacy task definition (ADR-035)', () => {
     }
   });
 });
+
+describe('WhisperStack drain root-cause fix (ADR-031 amendment)', () => {
+  test('uses ECS managed draining, so CDK adds no InstanceDrainHook', () => {
+    const template = synth();
+    template.resourceCountIs('AWS::AutoScaling::LifecycleHook', 0);
+    template.hasResourceProperties('AWS::ECS::CapacityProvider', {
+      AutoScalingGroupProvider: Match.objectLike({ ManagedDraining: 'ENABLED' }),
+    });
+    const functions = Object.values(template.findResources('AWS::Lambda::Function'));
+    for (const fn of functions) {
+      expect(JSON.stringify(fn)).not.toContain('DrainECSHook');
+    }
+  });
+
+  test('suspends AZRebalance on create/update and resumes it on delete, scoped to the Whisper ASG', () => {
+    const template = synth();
+    const custom = Object.values(template.findResources('Custom::AWS'));
+    expect(custom).toHaveLength(1);
+    const props = custom[0].Properties;
+    for (const phase of ['Create', 'Update', 'Delete']) {
+      expect(JSON.stringify(props[phase])).toContain('AZRebalance');
+      expect(JSON.stringify(props[phase])).toContain(phase === 'Delete' ? 'resumeProcesses' : 'suspendProcesses');
+    }
+    const statements = Object.values(template.findResources('AWS::IAM::Policy'))
+      .flatMap(policy => policy.Properties.PolicyDocument.Statement as any[])
+      .filter(statement => [statement.Action].flat().some((a: string) => a.startsWith('autoscaling:')));
+    expect(statements).toHaveLength(1);
+    expect([statements[0].Action].flat().sort()).toEqual(['autoscaling:ResumeProcesses', 'autoscaling:SuspendProcesses']);
+    expect(JSON.stringify(statements[0].Resource)).toContain('autoScalingGroupName/ttobak-whisper-asg');
+    expect(JSON.stringify(statements[0].Resource)).not.toBe('"*"');
+  });
+
+  test('Spot hosts stop accepting placements after an interruption notice', () => {
+    const template = synth();
+    const lt = Object.values(template.findResources('AWS::EC2::LaunchTemplate'))[0];
+    expect(JSON.stringify(lt.Properties.LaunchTemplateData.UserData)).toContain('ECS_ENABLE_SPOT_INSTANCE_DRAINING=true');
+  });
+});
