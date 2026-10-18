@@ -145,6 +145,7 @@ type DictPromotion struct {
 // DictTermChange lists the user-editable fields; nil leaves a field as is.
 // displayAs is the key's source, so renaming is a new term, not an edit.
 type DictTermChange struct {
+	DisplayAs    *string // same termKey only (e.g. a casing change); the caller checks
 	Phrase       *string
 	HeardAs      *[]string
 	AliasMode    *string
@@ -152,6 +153,8 @@ type DictTermChange struct {
 	State        *string
 	TranscribeKo *bool
 	TranscribeEn *bool
+	// LegacyDisplayEmpty keeps the legacy response's empty displayAs.
+	LegacyDisplayEmpty *bool
 }
 
 // VocabularyStateChange lists VOCAB# fields updated under a version guard.
@@ -624,6 +627,7 @@ func (r *DictionaryRepository) UpdateDictTerm(ctx context.Context, pk, termKey s
 		Set(expression.Name("updatedAt"), expression.Value(now)).
 		Set(expression.Name("version"), expression.Name("version").Plus(expression.Value(1)))
 	update = setPresent(update, map[string]interface{}{
+		"displayAs": change.DisplayAs, "legacyDisplayEmpty": change.LegacyDisplayEmpty,
 		"phrase": change.Phrase, "aliasMode": change.AliasMode,
 		"type": change.Type, "state": change.State, "heardAs": change.HeardAs,
 		"transcribeKo": change.TranscribeKo, "transcribeEn": change.TranscribeEn,
@@ -685,6 +689,52 @@ func (r *DictionaryRepository) RestoreDictTerm(ctx context.Context, term *model.
 	}
 	_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName: aws.String(r.tableName), Item: av,
+		ConditionExpression: expr.Condition(), ExpressionAttributeNames: expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	return dictSingleError(err, ErrDictTermConflict)
+}
+
+// CreateDictTerm creates one term row; any existing row, including a
+// tombstone, fails with ErrDictTermConflict.
+func (r *DictionaryRepository) CreateDictTerm(ctx context.Context, term *model.DictTerm) error {
+	if term == nil || term.SK != model.DictTermSK(term.TermKey) || term.State == model.TermStateDeleted {
+		return fmt.Errorf("invalid dictionary term create")
+	}
+	put, err := r.putIfAbsent(term)
+	if err != nil {
+		return err
+	}
+	_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: put.Put.TableName, Item: put.Put.Item,
+		ConditionExpression: put.Put.ConditionExpression, ExpressionAttributeNames: put.Put.ExpressionAttributeNames,
+	})
+	return dictSingleError(err, ErrDictTermConflict)
+}
+
+// DeleteManualTerm hard-deletes an active manual term at the expected
+// version. Auto, suggested and tombstoned rows never match, so the legacy
+// whole-list PUT and legacy DELETE cannot remove or tombstone them.
+func (r *DictionaryRepository) DeleteManualTerm(ctx context.Context, pk, termKey string, expectedVersion int64) error {
+	return r.conditionalDelete(ctx, pk, termKey, expression.Name("version").Equal(expression.Value(expectedVersion)).
+		And(expression.Name("origin").Equal(expression.Value(model.TermOriginManual))).
+		And(expression.Name("state").Equal(expression.Value(model.TermStateActive))))
+}
+
+// DeleteTombstone hard-deletes a tombstone at the expected version; used to
+// prune the oldest tombstones beyond the per-scope cap.
+func (r *DictionaryRepository) DeleteTombstone(ctx context.Context, pk, termKey string, expectedVersion int64) error {
+	return r.conditionalDelete(ctx, pk, termKey, expression.Name("version").Equal(expression.Value(expectedVersion)).
+		And(expression.Name("state").Equal(expression.Value(model.TermStateDeleted))))
+}
+
+func (r *DictionaryRepository) conditionalDelete(ctx context.Context, pk, termKey string, condition expression.ConditionBuilder) error {
+	expr, err := expression.NewBuilder().WithCondition(condition).Build()
+	if err != nil {
+		return err
+	}
+	_, err = r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(r.tableName), Key: dictKey(pk, model.DictTermSK(termKey)),
 		ConditionExpression: expr.Condition(), ExpressionAttributeNames: expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
 	})
@@ -767,6 +817,34 @@ func (r *DictionaryRepository) CreateLegacyVocabularyState(ctx context.Context, 
 		return err
 	}
 	return r.guardedLegacyWrite(ctx, guard, put)
+}
+
+// CreateMigratedVocabularyState writes the initial VOCAB# row once for a v2
+// write path, in one transaction with a ConditionCheck that the legacy
+// DICTIONARY item is absent or already migrated; while a blob is still
+// unmigrated only migration (CreateLegacyVocabularyState) may create the row.
+// An existing row fails with ErrDictTermConflict, an unmigrated blob with
+// ErrLegacyBlobChanged.
+func (r *DictionaryRepository) CreateMigratedVocabularyState(ctx context.Context, userID string, state *model.VocabularyState) error {
+	if userID == "" || state == nil || state.PK != model.PrefixUser+userID {
+		return fmt.Errorf("invalid vocabulary state create")
+	}
+	put, err := r.putIfAbsent(state)
+	if err != nil {
+		return err
+	}
+	expr, err := expression.NewBuilder().WithCondition(
+		expression.AttributeNotExists(expression.Name("PK")).
+			Or(expression.AttributeExists(expression.Name("migratedAt")))).Build()
+	if err != nil {
+		return err
+	}
+	check := types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{
+		TableName: aws.String(r.tableName), Key: dictKey(model.PrefixUser+userID, model.PrefixDictionary),
+		ConditionExpression: expr.Condition(), ExpressionAttributeNames: expr.Names(),
+	}}
+	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: []types.TransactWriteItem{put, check}})
+	return dictTransactError(err, []error{ErrDictTermConflict, ErrLegacyBlobChanged})
 }
 
 // ReconcileLegacyVocabularyState applies a migration change to an existing

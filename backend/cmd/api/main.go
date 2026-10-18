@@ -370,6 +370,9 @@ func init() {
 		r.Get("/api/settings/dictionary", dictHandler.GetDictionary)
 		r.Put("/api/settings/dictionary", dictHandler.UpdateDictionary)
 		r.Delete("/api/settings/dictionary/term", dictHandler.DeleteTerm)
+		r.Post("/api/settings/dictionary/terms", dictHandler.CreateTerm)
+		r.Patch("/api/settings/dictionary/terms/{termId}", dictHandler.UpdateTerm)
+		r.Delete("/api/settings/dictionary/terms/{termId}", dictHandler.DeleteDictTerm)
 
 		// Translation route
 		r.Post("/api/translate", translateHandler.Translate)
