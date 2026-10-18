@@ -198,6 +198,12 @@ func TestDictionaryWriteGuards(t *testing.T) {
 				return r.UpdateVocabularyState(context.Background(), "u1", model.VocabContextPersonal, model.VocabLangKo, 3, VocabularyStateChange{Status: &ready}, "now")
 			},
 			ErrDictTermConflict, "", 0, []string{`version = {"N":"3"}`}, nil},
+		{"vocabulary submit claim also pins the build fingerprint", conditionalFailed,
+			func(r *DictionaryRepository) error {
+				fp := "0123456789abcdef0123456789abcdef"
+				return r.UpdateVocabularyState(context.Background(), "u1", model.VocabContextPersonal, model.VocabLangKo, 3, VocabularyStateChange{SubmittedAt: &fp, ExpectBuildingFingerprint: &fp}, "now")
+			},
+			ErrDictTermConflict, "", 0, []string{`version = {"N":"3"}`, `buildingFingerprint = {"S":"0123456789abcdef0123456789abcdef"}`, "AND"}, nil},
 		{"vocabulary state create is create-only", cancelled("ConditionalCheckFailed", "None"),
 			func(r *DictionaryRepository) error {
 				return r.CreateLegacyVocabularyState(context.Background(), blob, vocabState)
