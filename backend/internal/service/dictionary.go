@@ -291,55 +291,67 @@ func (s *DictionaryService) deleteLegacyBlobTerm(ctx context.Context, userID, ph
 // GetVocabularyForTranscription returns the personal ko-KR ActiveName when
 // it is READY, never a building slot. The VOCAB# row is authoritative when
 // present; the legacy blob is the fallback for users without one. It never
-// writes.
+// writes. A Transcribe lookup failure is logged and yields no name.
 func (s *DictionaryService) GetVocabularyForTranscription(ctx context.Context, userID string) (string, error) {
+	name, providerErr, err := s.koVocabularyForTranscription(ctx, userID)
+	if providerErr != nil {
+		log.Printf("failed to confirm ko-KR vocabulary for user %s: %v", userID, providerErr)
+	}
+	return name, err
+}
+
+// koVocabularyForTranscription separates stored-state errors (err) from a
+// Transcribe confirmation failure (providerErr), which both yield no name.
+func (s *DictionaryService) koVocabularyForTranscription(ctx context.Context, userID string) (name string, providerErr, err error) {
 	state, err := s.repo.GetVocabularyState(ctx, userID, model.VocabContextPersonal, model.VocabLangKo)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if state != nil {
 		if state.ActiveReady {
-			return s.readyVocabulary(ctx, state.ActiveName, true), nil
+			name, providerErr = s.confirmReady(ctx, state.ActiveName, true)
+			return name, providerErr, nil
 		}
 		// A legacy in-place build is only marked ready by an API-side sync, so
 		// ask Transcribe. An A/B row or an emptied language is never used unready.
 		if state.Status == model.VocabStatusBuilding && state.BuildingFingerprint == "" && state.InactiveName == "" && state.EmptySince == "" {
-			return s.readyVocabulary(ctx, state.ActiveName, false), nil
+			name, providerErr = s.confirmReady(ctx, state.ActiveName, false)
+			return name, providerErr, nil
 		}
-		return "", nil
+		return "", nil, nil
 	}
 
 	dict, err := s.repo.GetDictionary(ctx, userID)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if dict == nil {
-		return "", nil
+		return "", nil, nil
 	}
-	return s.readyVocabulary(ctx, dict.VocabularyName, dict.VocabularyStatus == "READY"), nil
+	name, providerErr = s.confirmReady(ctx, dict.VocabularyName, dict.VocabularyStatus == "READY")
+	return name, providerErr, nil
 }
 
-// readyVocabulary confirms a name with Transcribe when a client exists and
-// otherwise trusts the stored readiness.
-func (s *DictionaryService) readyVocabulary(ctx context.Context, name string, storedReady bool) string {
+// confirmReady returns name only when it is READY; a GetVocabulary failure
+// returns "" and the error.
+func (s *DictionaryService) confirmReady(ctx context.Context, name string, storedReady bool) (string, error) {
 	if name == "" {
-		return ""
+		return "", nil
 	}
 	if s.transcribeClient == nil {
 		if storedReady {
-			return name
+			return name, nil
 		}
-		return ""
+		return "", nil
 	}
 	result, err := s.transcribeClient.GetVocabulary(ctx, &transcribe.GetVocabularyInput{VocabularyName: aws.String(name)})
 	if err != nil {
-		log.Printf("failed to get vocabulary status for %s: %v", name, err)
-		return ""
+		return "", err
 	}
 	if result.VocabularyState == transcribeTypes.VocabularyStateReady {
-		return name
+		return name, nil
 	}
-	return ""
+	return "", nil
 }
 
 // buildTranscribeVocabulary creates or updates an AWS Transcribe custom vocabulary

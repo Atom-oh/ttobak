@@ -357,15 +357,16 @@ test('streaming forwards segment language and ID and uses plural vocabularies wi
       },
     },
     '@aws-sdk/credential-providers': { fromCognitoIdentityPool: () => ({}) },
+    '@/lib/liveVocabulary': loadModule('lib/liveVocabulary.ts'),
   });
   const session = new TranscribeStreamingSession({
     region: 'synthetic-region', identityPoolId: 'synthetic-identity', userPoolId: 'synthetic-user',
-    multiLanguage: true, vocabularyName: 'synthetic-vocabulary',
+    multiLanguage: true, vocabularies: { 'en-US': 'synthetic-en', 'ko-KR': 'synthetic-ko' },
     onTranscript: (...args) => transcripts.push(args), onError() {},
   });
   await session.startNative();
   assert.equal(commandInput.IdentifyMultipleLanguages, true);
-  assert.equal(commandInput.VocabularyNames, 'synthetic-vocabulary');
+  assert.equal(commandInput.VocabularyNames, 'synthetic-ko,synthetic-en');
   assert.equal(commandInput.VocabularyName, undefined);
   assert.deepEqual(transcripts, [['Hello.', true, 'en-US', 'utterance']]);
   session.stop();

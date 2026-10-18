@@ -5,6 +5,7 @@ import { SttManager, type LiveSttProvider, type TranscribeStreamingConfig } from
 import { countWords } from '@/lib/speechRecognition';
 import { getRuntimeConfig } from '@/lib/runtimeConfig';
 import { MAX_TRANSLATION_ENTRIES, type TranslationEntry } from '@/lib/liveTranslation';
+import { selectLiveVocabularies, VOCABULARY_FALLBACK_NOTICE, type LiveVocabularyNames } from '@/lib/liveVocabulary';
 
 export interface TranscriptEntry {
   text: string;
@@ -90,6 +91,7 @@ export function useRecordingSession({
   const [currentInterim, setCurrentInterim] = useState('');
   const [totalWordCount, setTotalWordCount] = useState(0);
   const [speechError, setSpeechError] = useState<string | null>(null);
+  const [vocabularyNotice, setVocabularyNotice] = useState<string | null>(null);
   const [activeProvider, setActiveProvider] = useState<LiveSttProvider>('web-speech');
 
   // Translation state
@@ -120,13 +122,10 @@ export function useRecordingSession({
     getRuntimeConfig().then(async (cfg) => {
       if (cancelled) return;
       if (cfg.cognito.identityPoolId && cfg.cognito.userPoolId) {
-        let vocabularyName: string | undefined;
+        let vocabularies: LiveVocabularyNames | undefined;
         try {
           const { dictionaryApi } = await import('@/lib/api');
-          const dict = await dictionaryApi.get();
-          if (dict.status === 'READY' && dict.vocabularyName) {
-            vocabularyName = dict.vocabularyName;
-          }
+          vocabularies = selectLiveVocabularies(await dictionaryApi.liveConfig());
         } catch {
           // Dictionary not available — proceed without custom vocabulary
         }
@@ -135,7 +134,7 @@ export function useRecordingSession({
           region: cfg.cognito.region,
           identityPoolId: cfg.cognito.identityPoolId,
           userPoolId: cfg.cognito.userPoolId,
-          vocabularyName,
+          vocabularies,
         };
         transcribeConfigRef.current = config;
         // A recording that started (createManager, below) before this fetch
@@ -217,6 +216,7 @@ export function useRecordingSession({
     setTotalWordCount(0);
     setTranslations([]);
     setSpeechError(null);
+    setVocabularyNotice(null);
     transcriptsRef.current = [];
 
     const handleTranscriptResult = (text: string, isFinal: boolean) => {
@@ -263,6 +263,7 @@ export function useRecordingSession({
       onReconnecting: () => {
         setSpeechError(speechErrorMessages['transcribe-stream-reconnecting']);
       },
+      onVocabularyFallback: () => setVocabularyNotice(VOCABULARY_FALLBACK_NOTICE),
       // Deliberately separate from onProviderChange below: this fires only
       // once the reconnected session's first transcript proves it's
       // actually alive (see SttManagerConfig's doc comment), whereas
@@ -397,6 +398,7 @@ export function useRecordingSession({
     totalWordCount,
     speechError,
     setSpeechError,
+    vocabularyNotice,
     isSttPermanentlyFailed,
     canRetryLiveCaptions,
     retryLiveCaptions,

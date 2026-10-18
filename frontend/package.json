@@ -8,6 +8,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test:unit": "node --test scripts/*.test.mjs",
     "icons:check": "node scripts/update-icon-font.mjs --check",
     "icons:update": "node scripts/update-icon-font.mjs"
   },

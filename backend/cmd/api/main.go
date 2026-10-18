@@ -361,6 +361,7 @@ func init() {
 
 		// Dictionary routes
 		r.Get("/api/settings/dictionary", dictHandler.GetDictionary)
+		r.Get("/api/settings/dictionary/live-config", dictHandler.GetLiveConfig)
 		r.Put("/api/settings/dictionary", dictHandler.UpdateDictionary)
 		r.Delete("/api/settings/dictionary/term", dictHandler.DeleteTerm)
 		r.Post("/api/settings/dictionary/terms", dictHandler.CreateTerm)

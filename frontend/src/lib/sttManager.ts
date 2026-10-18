@@ -13,6 +13,7 @@ import { TranscribeStreamingSession } from './transcribeStreamingClient';
 import { translateApi } from './api';
 import { hasMobileMicConflictRisk } from './device';
 import { LiveTranslation } from './liveTranslation';
+import type { LiveVocabularyNames } from './liveVocabulary';
 
 export type LiveSttProvider = 'transcribe-streaming' | 'web-speech';
 
@@ -20,7 +21,7 @@ export interface TranscribeStreamingConfig {
   region: string;
   identityPoolId: string;
   userPoolId: string;
-  vocabularyName?: string;
+  vocabularies?: LiveVocabularyNames; // READY names only
 }
 
 export interface SttManagerConfig {
@@ -53,6 +54,8 @@ export interface SttManagerConfig {
    * single most common outcome (the automatic retry succeeding).
    */
   onReconnected?: () => void;
+  /** Transcribe rejected the vocabulary; later sessions omit it. */
+  onVocabularyFallback?: () => void;
 }
 
 export class SttManager {
@@ -75,6 +78,7 @@ export class SttManager {
   // fallbackToWebSpeech would still start Web Speech (grabbing the mic
   // again) after the user thinks recording has already stopped.
   private stopped = false;
+  private vocabularyDisabled = false;
   // The provider the user actually asked for at start() -- distinct from
   // `activeProvider` (what's running right now, which can differ after a
   // fallback). The provider selector is disabled for the whole recording
@@ -414,7 +418,8 @@ export class SttManager {
       multiLanguage: true,
       languageOptions: 'ko-KR,en-US',
       preferredLanguage: 'ko-KR',
-      vocabularyName: tsConfig.vocabularyName,
+      vocabularies: this.vocabularyDisabled ? undefined : tsConfig.vocabularies,
+      onVocabularyFallback: () => this.handleVocabularyFallback(session),
       onTranscript: (text, isFinal, detectedLang, resultId) => {
         if (this.transcribeSession !== session) return;
         // A transcript, including interim, proves transport recovery.
@@ -530,6 +535,12 @@ export class SttManager {
     });
   }
 
+  private handleVocabularyFallback(session: TranscribeStreamingSession): void {
+    if (this.stopped || this.transcribeSession !== session || this.vocabularyDisabled) return;
+    this.vocabularyDisabled = true;
+    this.config.onVocabularyFallback?.();
+  }
+
   private async startTranscribeStreamingNative(): Promise<void> {
     const tsConfig = this.config.transcribeStreamingConfig!;
     const handleTranscript = this.transcriptHandler();
@@ -541,7 +552,8 @@ export class SttManager {
       multiLanguage: true,
       languageOptions: 'ko-KR,en-US',
       preferredLanguage: 'ko-KR',
-      vocabularyName: tsConfig.vocabularyName,
+      vocabularies: this.vocabularyDisabled ? undefined : tsConfig.vocabularies,
+      onVocabularyFallback: () => this.handleVocabularyFallback(session),
       onTranscript: (text, isFinal, detectedLang, resultId) => {
         if (this.stopped || this.transcribeSession !== session) return;
         handleTranscript(text, isFinal, detectedLang, resultId);

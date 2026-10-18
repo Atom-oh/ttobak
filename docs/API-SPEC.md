@@ -658,9 +658,13 @@ never blocklisted (`terms_blocklist.txt`) or the term's own key; `phrase` at mos
   `vocabularies: {ko, en}` gives `{status, activeReady, failureCode?, termCount}`
   per language (`status` `READY|BUILDING|FAILED|QUOTA_EXCEEDED|NONE` is the
   latest build; `failureCode` `PROVIDER|QUOTA`). Legacy `status` is `READY`
-  whenever the personal ko-KR active vocabulary is ready. No response carries a
-  vocabulary name yet: the live client would send a ko-KR-only
-  `VocabularyNames` on its ko-KR/en-US stream (ADR-008 acceptance item 5).
+  whenever the personal ko-KR active vocabulary is ready. The settings GET and
+  term mutations carry no vocabulary name.
+- `GET .../live-config` runs the same `EnsureVocabularies` step and returns
+  `{vocabularies: {ko: {name?, status}, en: {name?, status}}, warnings?}`. `name`
+  is the caller's personal active vocabulary only when Transcribe confirms it
+  READY (ko-KR falls back to a legacy READY name, like the batch reader). A
+  stored-state or Transcribe lookup failure omits it with a warning. No account context or aliases yet.
 
 ### Index status and automatic indexing rollout
 
@@ -799,6 +803,7 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | POST | `/api/settings/users/{userId}/resend-invite` | `userAdminHandler.ResendInvite` |
 | POST | `/api/settings/users/{userId}/reset-password` | `userAdminHandler.ResetPassword` |
 | GET | `/api/settings/dictionary` | `dictHandler.GetDictionary` |
+| GET | `/api/settings/dictionary/live-config` | `dictHandler.GetLiveConfig` |
 | PUT | `/api/settings/dictionary` | `dictHandler.UpdateDictionary` |
 | DELETE | `/api/settings/dictionary/term` | `dictHandler.DeleteTerm` |
 | POST | `/api/settings/dictionary/terms` | `dictHandler.CreateTerm` |

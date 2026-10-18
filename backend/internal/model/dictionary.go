@@ -239,6 +239,25 @@ type VocabularyViews struct {
 	En VocabularyView `json:"en"`
 }
 
+// LiveVocabularyView is one language of GET .../live-config: Name is set only
+// for a vocabulary confirmed READY; Status is the latest build status.
+type LiveVocabularyView struct {
+	Name   string `json:"name,omitempty"`
+	Status string `json:"status"`
+}
+
+// LiveVocabularyViews lists the live vocabularies by language.
+type LiveVocabularyViews struct {
+	Ko LiveVocabularyView `json:"ko"`
+	En LiveVocabularyView `json:"en"`
+}
+
+// LiveDictionaryConfig is the response of GET /api/settings/dictionary/live-config.
+type LiveDictionaryConfig struct {
+	Vocabularies LiveVocabularyViews `json:"vocabularies"`
+	Warnings     []string            `json:"warnings,omitempty"`
+}
+
 // DictTimeLayout is the fixed-width UTC timestamp used by v2 dictionary rows
 // so that string order equals time order.
 const DictTimeLayout = "2006-01-02T15:04:05.000000Z"
