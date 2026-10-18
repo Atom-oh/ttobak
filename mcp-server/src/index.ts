@@ -3,6 +3,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { fileURLToPath } from 'node:url';
 import { realpathSync } from 'node:fs';
 import { basename, extname } from 'node:path';
+import type { Readable, Writable } from 'node:stream';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -1191,23 +1192,60 @@ async function main() {
     auth, api: new TtobakApi(auth, apiUrl), apiUrl, cognitoDomain, clientId, recorder,
     appControl: { socketPath: defaultAppSocketPath() },
   });
-  // Let in-flight recording uploads settle (their PUT has a stall timeout),
-  // then stop an active recording gracefully so its WAV header is finalized
-  // and the file stays available through ttobak_recording_status.
-  // The wait is bounded, and a second signal exits at once: upload progress is
-  // persisted before each irreversible step, so an interrupted upload resumes.
-  let exiting = false;
-  const shutdown = () => {
-    if (exiting) process.exit(1);
-    exiting = true;
-    const grace = new Promise<void>((resolve) => setTimeout(resolve, SHUTDOWN_GRACE_MS).unref());
-    void Promise.race([settleRecordingWork(), grace]).then(() => recorder.shutdown()).finally(() => process.exit(0));
-  };
-  process.on('SIGTERM', shutdown);
-  process.on('SIGINT', shutdown);
-  process.stdin.on('end', shutdown);
-  await server.connect(new StdioServerTransport());
+  await serveStdio(server, recorder);
   console.error('TTOBAK MCP server running');
+}
+
+export interface StdioLifecycleOptions {
+  stdin?: Readable;
+  stdout?: Writable;
+  /** Defaults to process.exit; tests inject a recorder of exit codes. */
+  exit?: (code: number) => void;
+  /** Register SIGTERM/SIGINT handlers (default true). */
+  signals?: boolean;
+  graceMs?: number;
+}
+
+/**
+ * Connects the stdio transport and owns process shutdown. Signals, stdin end
+ * and any transport close (including the SDK closing itself after a ReadBuffer
+ * overflow, which also pauses stdin so `end` never fires) run the same routine:
+ * let in-flight recording uploads settle (their PUT has a stall timeout), then
+ * stop an active recording gracefully so its WAV header is finalized and the
+ * file stays available through ttobak_recording_status. The routine runs once;
+ * the wait is bounded, and only a second signal forces an immediate exit.
+ * Upload progress is persisted before each irreversible step, so an
+ * interrupted upload resumes.
+ */
+export async function serveStdio(server: Server, recorder: Pick<Recorder, 'shutdown'>,
+  options: StdioLifecycleOptions = {}): Promise<void> {
+  const exit = options.exit ?? ((code: number) => process.exit(code));
+  const graceMs = options.graceMs ?? SHUTDOWN_GRACE_MS;
+  let exiting = false;
+  const shutdown = (force: boolean) => {
+    if (exiting) {
+      if (force) exit(1);
+      return;
+    }
+    exiting = true;
+    const grace = new Promise<void>((resolve) => setTimeout(resolve, graceMs).unref());
+    void Promise.race([settleRecordingWork(), grace])
+      .then(() => recorder.shutdown())
+      .catch((err) => console.error('Recorder shutdown failed:', err instanceof Error ? err.message : err))
+      .finally(() => exit(0));
+  };
+  if (options.signals ?? true) {
+    process.on('SIGTERM', () => shutdown(true));
+    process.on('SIGINT', () => shutdown(true));
+  }
+  const stdin = options.stdin ?? process.stdin;
+  stdin.on('end', () => shutdown(false));
+  const previousOnClose = server.onclose;
+  server.onclose = () => {
+    previousOnClose?.();
+    shutdown(false);
+  };
+  await server.connect(new StdioServerTransport(stdin, options.stdout ?? process.stdout));
 }
 
 function isEntrypoint(): boolean {

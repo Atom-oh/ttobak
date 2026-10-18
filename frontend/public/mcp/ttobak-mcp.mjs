@@ -25337,18 +25337,34 @@ async function main() {
     recorder,
     appControl: { socketPath: defaultAppSocketPath() }
   });
-  let exiting = false;
-  const shutdown = () => {
-    if (exiting) process.exit(1);
-    exiting = true;
-    const grace = new Promise((resolve) => setTimeout(resolve, SHUTDOWN_GRACE_MS).unref());
-    void Promise.race([settleRecordingWork(), grace]).then(() => recorder.shutdown()).finally(() => process.exit(0));
-  };
-  process.on("SIGTERM", shutdown);
-  process.on("SIGINT", shutdown);
-  process.stdin.on("end", shutdown);
-  await server.connect(new StdioServerTransport());
+  await serveStdio(server, recorder);
   console.error("TTOBAK MCP server running");
+}
+async function serveStdio(server, recorder, options = {}) {
+  const exit = options.exit ?? ((code) => process.exit(code));
+  const graceMs = options.graceMs ?? SHUTDOWN_GRACE_MS;
+  let exiting = false;
+  const shutdown = (force) => {
+    if (exiting) {
+      if (force) exit(1);
+      return;
+    }
+    exiting = true;
+    const grace = new Promise((resolve) => setTimeout(resolve, graceMs).unref());
+    void Promise.race([settleRecordingWork(), grace]).then(() => recorder.shutdown()).catch((err) => console.error("Recorder shutdown failed:", err instanceof Error ? err.message : err)).finally(() => exit(0));
+  };
+  if (options.signals ?? true) {
+    process.on("SIGTERM", () => shutdown(true));
+    process.on("SIGINT", () => shutdown(true));
+  }
+  const stdin = options.stdin ?? process.stdin;
+  stdin.on("end", () => shutdown(false));
+  const previousOnClose = server.onclose;
+  server.onclose = () => {
+    previousOnClose?.();
+    shutdown(false);
+  };
+  await server.connect(new StdioServerTransport(stdin, options.stdout ?? process.stdout));
 }
 function isEntrypoint() {
   if (!process.argv[1]) return false;
@@ -25368,5 +25384,6 @@ export {
   APP_TOOL_NAMES,
   RECORDING_TOOL_NAMES,
   createMcpServer,
+  serveStdio,
   settleRecordingWork
 };
