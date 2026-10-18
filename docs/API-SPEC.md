@@ -613,6 +613,53 @@ success logs one metering JSON line
 `{evt, q, engine, src, tgt, inBytes, outBytes, ms, limited, fallbackReason}`
 without text or user ID. No route throttling is configured in `gateway-stack.ts`.
 
+### Meeting translation
+
+`POST /api/meetings/{meetingId}/translation` translates one bounded reading page of
+a meeting's AI notes or selected transcript; nothing is persisted (`persisted:
+false`, `Cache-Control: no-store`). Unless `MEETING_TRANSLATION_ENABLED=true` it
+returns 404 `FEATURE_DISABLED` before identity or storage checks; meeting detail
+exposes `supportsMeetingTranslation`.
+
+The strict body `{part, target, cursor?}` is at most 4KB (413 above). Unknown
+fields, trailing values, `part` other than `notes|transcript` or `target` other
+than `ko|en` return 400 `BAD_REQUEST`; a cursor over 2048 characters or outside the
+reading-cursor alphabet 400 `INVALID_CURSOR`, before storage reads. Pages of 4000
+code points come only from `MeetingReadingService` (notes: `kind=meeting&section=
+summary`; transcript: `kind=transcript&source=selected`), so access and cursor
+errors match `/reading` (404, 409 `SHARING_REGEN_REQUIRED`, 409 `STALE_CURSOR`).
+A non-final page is trimmed to its last line start (notes: outside a fence if any;
+text transcript: a speaker header after a blank line, else a line not directly
+after a header) or whole segment, re-issuing the reader's cursor; a page without
+one is kept whole. A wrapper cursor carries an open notes fence (closed, as in
+CommonMark, only by a bare run of its character at least as long) or the
+text-transcript speaker and mid-run state. Pass `nextCursor` unchanged with the
+same `part`; pages concatenate to the source.
+
+Notes are translated per Markdown line: markers stay local; links, images, inline
+code, HTML and URLs become atomic `⟦Ln⟧` placeholders; fenced code, table rules and
+blank lines are not sent. Transcript text is sent without speaker labels or times,
+reattached from the page (`segments[]`: `segmentId`, `speaker`, `startTime`/
+`endTime` when timed, `partial`, `text`); text-mode `[speaker]` headers (page start
+outside a run, or after a blank line) are not sent, other bracketed lines are
+speech. Lines with at least 30% Hangul are Korean, Latin-only lines English,
+code-mixed lines the non-target language; target-language or other-script lines
+stay source. At most 12 same-language chunks of 3,000 bytes run with concurrency 4
+in a 20 s budget through the `quality: high` interpreter path; a chunk changing
+line count, placeholders or table pipes is retried once with Amazon Translate. A
+line with any failed, over-cap or unrestorable piece keeps its whole source and
+counts toward `untranslatedLines`. All chunks failing returns 502
+`TRANSLATION_FAILED`; a response over 64KB 502 `TRANSLATION_TOO_LARGE`.
+
+The response is `{meetingId, part, target, revision, mode?, notes? | segments?,
+engines, untranslatedLines, nextCursor, complete, persisted}`. Bytes to be sent are
+charged on attempt to the daily per-user `WindowCounter` bucket `meeting-translate`
+(UTC day, TTL window end + 2h); above `MEETING_TRANSLATE_DAILY_BYTES` (default
+2,000,000; 0 disables) the API returns 429 `RATE_LIMITED` with `Retry-After`.
+Counter errors fail open. Each attempt after the page read, including 429 and 502,
+logs one line `{evt: "meeting_translate", outcome, part, tgt, inBytes, outBytes,
+chunks, failedChunks, untranslatedLines, ms}` without text or user ID.
+
 ### Simulator
 
 `POST .../sim/extract` extracts requirements for a done meeting. `POST .../sim`
@@ -805,6 +852,7 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | POST | `/api/meetings` | `meetingHandler.CreateMeeting` |
 | GET | `/api/meetings/{meetingId}` | `meetingHandler.GetMeeting` |
 | GET | `/api/meetings/{meetingId}/reading` | `readingHandler.Get` |
+| POST | `/api/meetings/{meetingId}/translation` | `meetingTranslationHandler.Post` |
 | GET | `/api/meetings/{meetingId}/action-items` | `actionItemsHandler.Get` |
 | GET | `/api/meetings/{meetingId}/resummary` | `resummaryHandler.Get` |
 | POST | `/api/meetings/{meetingId}/resummary` | `resummaryHandler.Request` |

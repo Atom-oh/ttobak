@@ -69,6 +69,16 @@ Untimed speech remains visible with an unavailable-time label beside valid timed
 speech. Grouping follows both speaker and timing availability; unknown times
 never become zero-time links. Blank/untimed counts describe available metadata.
 
+When meeting detail reports `supportsMeetingTranslation`, the AI notes card and
+`TranscriptSection` show a translation select (original, Korean, English;
+`MeetingTranslation.tsx`). It is hidden when the flag is off or while editing.
+Translated notes render through the same sanitized `MarkdownRenderer` with the
+same citation resolution; translated transcript segments render as React text with
+the source speaker and time. Translations stay in component memory, are discarded
+when the source text changes, and are labelled as unsaved machine translation.
+Further pages load with an explicit next-part button; untranslated lines, daily
+limit and changed-source errors are shown inline.
+
 Meeting detail and `SpeakerMapEditor` prefer `transcriptionV2` when supplied.
 Mixed/untimed arrays use that additive field while old clients receive no legacy
 segment array and retain complete plain text. Wholly timed responses keep the
@@ -347,6 +357,24 @@ mobile and light/dark themes. Notes-first reads are distinguished from generated
 summary and transcript requests.
 
 ## Personal dictionary
+
+Settings' dictionary (`CustomDictionary.tsx`, `DictionaryTable.tsx`; copy in those
+files and `lib/dictionary.ts`) uses only per-term routes. Columns: display form,
+recognized-as aliases, type, source (manual, automatic, or a source meeting link
+once the API returns it). Filters all / automatic / manual / suggested. Actions:
+edit (case, spacing or `- . _ ·` only), keep (`aliasMode=always`), delete (toast:
+never re-added automatically) and add on suggestions. Writes send `version`;
+conflicts and 404 reload the list. An open editor diffs and versions against the
+row snapshot taken when editing began; polled responses older than a mutation are
+dropped. Duplicates use `normalizeTermKey`, checked against Go's
+`backend/internal/service/testdata/term-key/vectors.json` by `npm run test:unit`
+(CI runs it only when `frontend/**` changes; the Go half runs with the backend). Legacy terms without a row cannot be edited
+while `migrationPending`; terms that refuse migration are marked and can be deleted
+through the legacy DELETE-by-phrase, which retries migration. That delete rewrites
+the whole blob without a revision guard, so the UI runs one at a time, reload
+included (`LEGACY_DELETE_KEY`). KO/EN badges show in use, preparing,
+"updating (current vocabulary in use)", failure codes in plain Korean, and off;
+the page polls every 10 seconds only during a build.
 
 The recording page calls the dictionary GET once (a builder poll opportunity) but
 sends no vocabulary on live streams: no API names one yet (ADR-008 item 5).

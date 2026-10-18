@@ -221,6 +221,11 @@ values that are not non-negative integers, and 0 disables a limit.
 bounds each interpreter call; synth rejects values outside 500–8000. Changing either
 changes the function configuration and publishes a new `live` alias version. The
 counters use the existing table grant and `pendingShareExpiresAt` TTL.
+`MEETING_TRANSLATION_ENABLED` (context `ttobak:meetingTranslationEnabled`, strict
+boolean, default `false`) enables on-demand meeting translation, and
+`MEETING_TRANSLATE_DAILY_BYTES` (context `ttobak:meetingTranslateDailyBytes`,
+default 2000000, 0 disables) bounds its daily per-user input bytes; synth rejects
+other values. Both are API-only and reuse the existing Translate/interpreter grants.
 
 Custom vocabularies: AiStack's API role statement `TranscribeVocabulary` allows
 Create/Update/Get/DeleteVocabulary only on
