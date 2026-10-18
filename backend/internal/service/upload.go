@@ -670,9 +670,9 @@ func (s *UploadService) RediarizeMeeting(ctx context.Context, userID, meetingID 
 		// pipeline's own status transitions if the copy did secretly
 		// succeed. The status write above already moved this meeting to
 		// "transcribing", so a genuinely failed copy leaves it stuck there --
-		// which is exactly what the existing 30-minute stuck-transcribing
-		// auto-expiry (meeting.go's stuckTranscribingThreshold, surfaced via
-		// GetMeeting) is for. Let that reconcile it instead of guessing here.
+		// which is exactly what the 60-minute stuck-transcribing auto-expiry
+		// (meeting.go's stuckTranscribingThreshold, surfaced via GetMeeting)
+		// is for. Let that reconcile it instead of guessing here.
 		return fmt.Errorf("failed to retrigger re-diarization: %w", err)
 	}
 	return nil

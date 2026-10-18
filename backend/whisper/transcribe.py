@@ -13,7 +13,7 @@ from contextlib import closing
 import boto3
 from botocore.exceptions import ClientError
 from botocore.config import Config
-from faster_whisper import WhisperModel
+from faster_whisper import WhisperModel, decode_audio
 
 REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
 BUCKET = os.environ["BUCKET_NAME"]
@@ -32,6 +32,16 @@ MODEL_LOCAL_DIR = "/tmp/whisper-model"
 # ADR-035 commit and rebuilding -- not editing env or this line alone.
 DIARIZATION_S3_KEY = os.environ.get("DIARIZATION_S3_KEY", "models/whisperx-diarization-4.x.tar.gz")
 DIARIZATION_LOCAL_DIR = "/tmp/diarization-model"
+
+# Whisper's feature extractor rate; decoding at it explicitly is exactly what
+# model.transcribe(path) does internally, so the ASR input is unchanged.
+WHISPER_SAMPLE_RATE = 16000
+# Anything shorter than this decodes to effectively nothing usable.
+MIN_DECODED_SECONDS = 0.5
+
+# Machine-readable failure codes, read by the Go STT recovery classifier.
+FAILURE_AUDIO_CORRUPT = "AUDIO_CORRUPT"
+FAILURE_WORKER_FAILED = "WORKER_FAILED"
 
 # Audio discovery filters — exclude empty/placeholder uploads and progress/checkpoint sidecars.
 MIN_AUDIO_SIZE_BYTES = 1024
@@ -335,6 +345,97 @@ def _load_custom_vocab_prompt() -> str:
         return ""
 
 
+class AudioDecodeError(Exception):
+    """The bound audio could not be decoded, or decoded to (almost) nothing.
+    Carries no file content; callers log only the class name."""
+
+
+def _av_error_type(name: str):
+    """A PyAV error class (av.<name> or av.error.<name>), or None. Imported
+    lazily so the unit tests (and the crop path) need no PyAV install."""
+    try:
+        import av
+    except Exception:
+        return None
+    err = getattr(av, name, None) or getattr(getattr(av, "error", None), name, None)
+    return err if isinstance(err, type) else None
+
+
+def _is_corrupt_input(exc: BaseException) -> bool:
+    """Only invalid input data is terminal. PyAV maps errno failures (ENOMEM,
+    ENOENT, EACCES, EINVAL, ...) to other FFmpegError subclasses; those are
+    host or worker problems and stay retryable. A plain ValueError from the
+    decoder wrapper (for example no decodable frames at all) is corrupt input."""
+    invalid = _av_error_type("InvalidDataError")
+    if invalid is not None and isinstance(exc, invalid):
+        return True
+    ffmpeg = _av_error_type("FFmpegError")
+    if ffmpeg is not None and isinstance(exc, ffmpeg):
+        return False
+    return isinstance(exc, ValueError)
+
+
+def _decode_audio(local_path: str):
+    """Decodes explicitly so a corrupt upload is distinguishable from a GPU,
+    memory or network failure. Returns the float32 array model.transcribe
+    would otherwise have decoded itself."""
+    try:
+        audio = decode_audio(local_path, sampling_rate=WHISPER_SAMPLE_RATE)
+    except Exception as e:
+        if _is_corrupt_input(e):
+            raise AudioDecodeError(type(e).__name__) from e
+        raise
+    if audio is None or len(audio) < WHISPER_SAMPLE_RATE * MIN_DECODED_SECONDS:
+        raise AudioDecodeError("decoded audio too short")
+    return audio
+
+
+def _now() -> str:
+    """Go RFC3339Nano UTC (trailing zeros trimmed), matching the Go writers so
+    raw updatedAt == sttFailedAt comparisons stay exact."""
+    from datetime import datetime, timezone
+    value = datetime.now(timezone.utc).isoformat(timespec="microseconds").removesuffix("+00:00")
+    return value.rstrip("0").rstrip(".") + "Z"
+
+
+def _failure_code(exc: BaseException) -> str:
+    return FAILURE_AUDIO_CORRUPT if isinstance(exc, AudioDecodeError) else FAILURE_WORKER_FAILED
+
+
+def _mark_failure(tbl, user_id: str, meeting_id: str, audio_key: str | None, code: str) -> bool:
+    """Conditionally records status=error plus a failure code for THIS run.
+
+    Fenced on status=transcribing, no audio crop, and (unless this is a
+    rediarize_ copy, which is never bound) the audio key still being the
+    meeting's bound audio: a newer upload or a finished run is never
+    overwritten. sttFailedAt and updatedAt share one value. A failed
+    condition is not an error. Returns whether the mark was written."""
+    stamp = _now()
+    condition = "#s = :transcribing AND attribute_not_exists(audioCrop)"
+    values = {":transcribing": "transcribing", ":error": "error", ":code": code, ":now": stamp}
+    basename = (audio_key or "").rsplit("/", 1)[-1]
+    if audio_key and not basename.startswith("rediarize_"):
+        condition += " AND (audioKey = :k OR contains(audioKeys, :k))"
+        values[":k"] = audio_key
+    try:
+        tbl.update_item(
+            Key={"PK": f"USER#{user_id}", "SK": f"MEETING#{meeting_id}"},
+            UpdateExpression="SET #s = :error, sttFailureCode = :code, sttFailedAt = :now, updatedAt = :now",
+            ConditionExpression=condition,
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues=values,
+        )
+        return True
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            return False
+        raise
+
+
+# The key this run actually transcribes, for the failure mark's fence.
+_CURRENT_AUDIO_KEY: str | None = None
+
+
 def _audio_key_exists(key: str) -> bool:
     """Verify the given S3 key exists. Returns False only on 404; re-raises auth/throttle errors."""
     try:
@@ -388,6 +489,8 @@ def main():
         audio_key = _find_audio_key(user_id, meeting_id)
     if not audio_key:
         raise RuntimeError(f"No audio file found for meeting {meeting_id}")
+    global _CURRENT_AUDIO_KEY
+    _CURRENT_AUDIO_KEY = audio_key
 
     basename = audio_key.rsplit("/", 1)[-1]
     ext = basename.rsplit(".", 1)[-1] if "." in basename else "bin"
@@ -436,7 +539,8 @@ def transcribe_local(local_path):
     )
     if vocab_prompt:
         transcribe_kwargs["initial_prompt"] = vocab_prompt
-    segments, info = model.transcribe(local_path, **transcribe_kwargs)
+    audio = _decode_audio(local_path)
+    segments, info = model.transcribe(audio, **transcribe_kwargs)
 
     all_segments = []
     for seg in segments:
@@ -496,17 +600,15 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        print(f"ERROR: {e}", file=sys.stderr)
+        # Type and code only: library messages can embed file metadata.
+        code = _failure_code(e)
+        print(f"ERROR: {type(e).__name__} code={code}", file=sys.stderr)
         meeting_id = os.environ.get("MEETING_ID", "")
         user_id = os.environ.get("USER_ID", "")
         if meeting_id and user_id and os.environ.get("AUDIO_CROP") != "1":
             try:
-                dynamodb.Table(TABLE).update_item(
-                    Key={"PK": f"USER#{user_id}", "SK": f"MEETING#{meeting_id}"},
-                    UpdateExpression="SET #s = :s",
-                    ExpressionAttributeNames={"#s": "status"},
-                    ExpressionAttributeValues={":s": "error"},
-                )
-            except Exception:
-                pass
+                _mark_failure(dynamodb.Table(TABLE), user_id, meeting_id,
+                              _CURRENT_AUDIO_KEY or os.environ.get("AUDIO_KEY") or None, code)
+            except Exception as mark_err:
+                print(f"Failure mark not written: {type(mark_err).__name__}", file=sys.stderr)
         sys.exit(1)

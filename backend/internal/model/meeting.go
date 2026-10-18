@@ -87,6 +87,16 @@ type Meeting struct {
 	GSI1PK                string                            `dynamodbav:"GSI1PK,omitempty"` // USER#{userId} for date sorting
 	GSI1SK                string                            `dynamodbav:"GSI1SK,omitempty"` // timestamp for sorting
 	EntityType            string                            `dynamodbav:"entityType"`       // "MEETING"
+
+	// STT failure mark and bounded automatic recovery state (see model/stt_recovery.go).
+	// These round-trip so a whole-item write never drops a claim or a mark.
+	SttFailureCode             string `dynamodbav:"sttFailureCode,omitempty" json:"-"`
+	SttFailedAt                string `dynamodbav:"sttFailedAt,omitempty" json:"-"`
+	SttRecoveryAttempts        int    `dynamodbav:"sttRecoveryAttempts,omitempty" json:"-"`
+	SttRecoveryAudioKey        string `dynamodbav:"sttRecoveryAudioKey,omitempty" json:"-"`
+	SttRecoveryClaimedAt       string `dynamodbav:"sttRecoveryClaimedAt,omitempty" json:"-"`
+	SttSummaryRedriveAttempts  int    `dynamodbav:"sttSummaryRedriveAttempts,omitempty" json:"-"`
+	SttSummaryRedriveClaimedAt string `dynamodbav:"sttSummaryRedriveClaimedAt,omitempty" json:"-"`
 }
 
 // Attachment represents a file attachment for a meeting

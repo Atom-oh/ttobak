@@ -325,6 +325,11 @@ func handleSingleTranscript(ctx context.Context, bucket, key string, eventETags 
 	if len(eventETags) > 0 && eventETags[0] != "" && strings.Trim(eventETags[0], "\"") != strings.Trim(parsed.Objects[0].ETag, "\"") {
 		return nil // superseded S3 delivery
 	}
+	if !isNova {
+		if handled, err := handleNoSpeech(ctx, snapshot, parsed); handled {
+			return err
+		}
+	}
 	refineParsedTranscript(ctx, parsed)
 	segments, whisperSegments, audioDuration := parsed.Segments, parsed.Whisper, parsed.Duration
 
@@ -493,6 +498,9 @@ func handleAllPartsTranscribed(ctx context.Context, detail *model.AllPartsTransc
 	parsed, err := mergePartTranscripts(ctx, detail.Bucket, meetingID, detail.PartCount)
 	if err != nil {
 		return errors.Join(err, failTranscriptSnapshot(ctx, snapshot))
+	}
+	if handled, err := handleNoSpeech(ctx, snapshot, parsed); handled {
+		return err
 	}
 	current, err := beginTranscriptSummary(ctx, snapshot, parsed, false)
 	if err != nil || current == nil {
