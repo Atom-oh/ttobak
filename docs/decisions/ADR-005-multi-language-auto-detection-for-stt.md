@@ -133,5 +133,6 @@ rate in production; tune the timeout from the metering logs.
   [translate.go service](../../backend/internal/service/translate.go),
   [liveTranslation.ts](../../frontend/src/lib/liveTranslation.ts): 2026-10-18 amendment.
 - [meeting_translation.go](../../backend/internal/service/meeting_translation.go),
-  [meeting translation handler](../../backend/internal/handler/meeting_translation.go):
+  [meeting translation handler](../../backend/internal/handler/meeting_translation.go),
+  [MeetingTranslation.tsx](../../frontend/src/components/meeting/MeetingTranslation.tsx):
   on-demand meeting translation amendment.
