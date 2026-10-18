@@ -6,7 +6,8 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { TtobakApi, UploadRejectedError } from '../dist/api.js';
 import { recorderFixture } from './fixtures/fake-ffmpeg.mjs';
-import { createMcpServer, settleRecordingWork } from '../dist/index.js';
+import { PassThrough } from 'node:stream';
+import { createMcpServer, serveStdio, settleRecordingWork } from '../dist/index.js';
 
 function fakeApi({ failComplete = false } = {}) {
   const calls = [], puts = [];
@@ -213,6 +214,36 @@ test('stdio shutdown waits for an in-flight recording upload', async (t) => {
   await settling;
   assert.equal((await stopping).isError, false);
   assert.deepEqual(fake.calls.map((c) => c.path), ['/api/meetings', '/api/upload/presigned', '/api/upload/complete']);
+});
+
+test('a stdio transport that closes itself after ReadBuffer overflow stops the active recording and exits once', async (t) => {
+  const { recorder } = recorderFixture(t);
+  const server = createMcpServer({
+    mode: 'stdio', api: fakeApi().api, recorder,
+    auth: { getIdToken: async () => 'synthetic-token', isAuthenticated: () => true },
+    apiUrl: 'https://ttobak.example.com', cognitoDomain: 'https://auth.invalid', clientId: 'fixture-client',
+  });
+  const stdin = new PassThrough(), stdout = new PassThrough();
+  const exits = [];
+  let exited;
+  const exitedOnce = new Promise((resolve) => { exited = resolve; });
+  await serveStdio(server, recorder, { stdin, stdout, signals: false, exit: (code) => { exits.push(code); exited(); } });
+  await recorder.start({ title: 'overflow' });
+  assert.equal(recorder.status()?.running, true);
+  // More than the SDK's 10 MiB default with no newline: the transport closes
+  // itself and pauses stdin, so a later host EOF would never emit 'end'.
+  stdin.write(Buffer.alloc(10 * 1024 * 1024 + 1, 0x61));
+  let timer;
+  await Promise.race([exitedOnce, new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error('transport close did not run shutdown')), 10_000);
+  })]).finally(() => clearTimeout(timer));
+  assert.deepEqual(exits, [0]);
+  assert.equal(recorder.status(), null, 'the active recording must be stopped before exit');
+  assert.equal(recorder.listSaved().length, 1, 'the finalized recording stays available locally');
+  stdin.end();
+  await server.close();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.deepEqual(exits, [0], 'later close or end events must not rerun shutdown');
 });
 
 test('a caller file whose completion is unconfirmed is reported as uncertain, not unbound', async (t) => {
