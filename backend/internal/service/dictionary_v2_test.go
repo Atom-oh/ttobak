@@ -130,6 +130,7 @@ func (f *fakeDictStore) ListDictTerms(context.Context, string) ([]model.DictTerm
 		out = append(out, t)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].SK < out[j].SK })
+	f.fire("list") // after the snapshot: a writer commits once it is stale
 	return out, nil
 }
 func (f *fakeDictStore) PutDictTermsIfAbsent(_ context.Context, g repository.LegacyBlobGuard, terms []model.DictTerm) (int, error) {
