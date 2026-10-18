@@ -12,6 +12,29 @@ export const TRANSLATION_TARGETS = [
   { code: 'de', label: 'Deutsch' },
 ];
 
+/** Browser deadline for one translation request (server interpreter: 6s + fallback). */
+export const TRANSLATION_TIMEOUT_MS = 10000;
+/** Matches the API's context bounds: two items, 2,000 UTF-8 bytes in total. */
+export const MAX_CONTEXT_ITEMS = 2;
+export const MAX_CONTEXT_BYTES = 2000;
+
+export type TranslationQuality = 'fast' | 'high';
+/** ai = interpreter model; machine = Amazon Translate; machine-fallback = high was requested but Translate answered. */
+export type TranslationEngineBadge = 'ai' | 'machine' | 'machine-fallback';
+
+export interface TranslateRequestOptions {
+  quality: TranslationQuality;
+  /** Earlier final source texts, oldest first; reference data for quality high only. */
+  context?: string[];
+}
+
+export interface TranslateResponse {
+  translatedText: string;
+  engine?: string;
+  quality?: string;
+  limited?: boolean;
+}
+
 export interface TranslationEntry {
   id: string;
   order: number;
@@ -22,12 +45,16 @@ export interface TranslationEntry {
   targetLang: string;
   timestamp: string;
   isFinal: boolean;
-  status: 'pending' | 'complete' | 'error';
+  /** skipped = a hesitation-only final that was intentionally not translated. */
+  status: 'pending' | 'complete' | 'error' | 'skipped';
+  engine?: TranslationEngineBadge;
 }
 
 interface TranslationSegment {
   entry: TranslationEntry;
   revision: number;
+  /** Frozen when the final is enqueued, so completion order cannot change it. */
+  context?: string[];
 }
 
 interface TranslationOptions {
@@ -40,8 +67,40 @@ interface TranslationOptions {
   interim?: boolean;
   onUpdate: (entry: TranslationEntry) => void;
   onReset: () => void;
-  translate: (text: string, sourceLang: string, targetLang: string, signal: AbortSignal) => Promise<{ translatedText: string }>;
+  translate: (
+    text: string, sourceLang: string, targetLang: string, signal: AbortSignal, options: TranslateRequestOptions,
+  ) => Promise<TranslateResponse>;
 }
+
+// Pure hesitation sounds only, including repeats ("어어", "umm"). Short words
+// that carry meaning (네, 예, 그) and numbers are deliberately absent.
+const FILLER_TOKEN = /^(?:어+|음+|아+|으+음+|u+h+|u+m+|e+r+|h+m+)$/;
+
+/** True when every word of text is a hesitation sound; such finals are not translated. */
+export function isFillerOnly(text: string): boolean {
+  const tokens = text.normalize('NFC').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  return tokens.length > 0 && tokens.every((token) => FILLER_TOKEN.test(token));
+}
+
+export function countWords(text: string): number {
+  return text.trim().split(/\s+/).filter(Boolean).length;
+}
+
+/** G4 measurement: finals of at most two words among the retained finals. No merging. */
+export function fragmentStats(entries: TranslationEntry[]): { finals: number; fragments: number } {
+  const finals = entries.filter((entry) => entry.isFinal);
+  return { finals: finals.length, fragments: finals.filter((entry) => countWords(entry.original) <= 2).length };
+}
+
+export function translationEngineBadge(
+  requested: TranslationQuality, response: TranslateResponse,
+): TranslationEngineBadge | undefined {
+  if (response.engine === 'llm') return 'ai';
+  if (response.engine === 'translate') return requested === 'high' ? 'machine-fallback' : 'machine';
+  return undefined;
+}
+
+const utf8Length = (text: string) => new TextEncoder().encode(text).length;
 
 export function translationSourceLanguage(text: string, detectedLanguage?: string): string {
   const language = detectedLanguage?.split('-')[0];
@@ -60,6 +119,8 @@ export class LiveTranslation {
   private generation = 0;
   private nextOrder = 0;
   private stopped = false;
+  /** Recent final source texts in enqueue order, for request context. */
+  private recentFinals: string[] = [];
 
   constructor(private options: TranslationOptions) {}
 
@@ -72,6 +133,7 @@ export class LiveTranslation {
     const targetLang = this.options.targetLang === BILINGUAL_TARGET
       ? sourceLang === 'ko' ? 'en' : 'ko'
       : this.options.targetLang;
+    const filler = isFillerOnly(text);
     const segment: TranslationSegment = previous ?? {
       entry: {
         id, order: this.nextOrder++, original: '', translated: '',
@@ -103,6 +165,13 @@ export class LiveTranslation {
 
     if (isFinal) {
       if (this.interim === segment) this.clearInterim();
+      if (filler) {
+        segment.entry = { ...segment.entry, translated: '', status: 'skipped' };
+        this.publish(segment);
+        return;
+      }
+      segment.context = this.finalContext();
+      this.rememberFinal(segment.entry.original);
       if (this.finalQueue.length >= 40) {
         segment.entry = { ...segment.entry, translated: '', status: 'error' };
         this.publish(segment);
@@ -110,10 +179,30 @@ export class LiveTranslation {
       }
       this.finalQueue.push(segment);
       this.drainFinals();
+    } else if (filler) {
+      if (this.interim === segment) this.clearInterim();
     } else if (this.options.interim) {
       this.interim = segment;
       this.scheduleInterim();
     }
+  }
+
+  /** Up to two most recent earlier finals within the byte budget, oldest first. */
+  private finalContext(): string[] {
+    const context: string[] = [];
+    let bytes = 0;
+    for (let index = this.recentFinals.length - 1; index >= 0 && context.length < MAX_CONTEXT_ITEMS; index--) {
+      const size = utf8Length(this.recentFinals[index]);
+      if (bytes + size > MAX_CONTEXT_BYTES) break;
+      bytes += size;
+      context.unshift(this.recentFinals[index]);
+    }
+    return context;
+  }
+
+  private rememberFinal(text: string): void {
+    this.recentFinals.push(text);
+    if (this.recentFinals.length > MAX_CONTEXT_ITEMS) this.recentFinals.shift();
   }
 
   private publish(segment: TranslationSegment): void {
@@ -149,7 +238,12 @@ export class LiveTranslation {
     const controller = new AbortController();
     this.requests.add(controller);
     if (!isFinal) this.interimRequest = controller;
-    const timer = setTimeout(() => controller.abort(), 8000);
+    const timer = setTimeout(() => controller.abort(), TRANSLATION_TIMEOUT_MS);
+    // Finals ask for the interpreter; drafts stay on the fast path.
+    const quality: TranslationQuality = isFinal ? 'high' : 'fast';
+    const requestOptions: TranslateRequestOptions = isFinal && segment.context?.length
+      ? { quality, context: [...segment.context] }
+      : { quality };
     let rejectCancellation: (reason: Error) => void = () => {};
     const cancellation = new Promise<never>((resolve, reject) => {
       rejectCancellation = reject;
@@ -161,19 +255,20 @@ export class LiveTranslation {
       segment.entry.sourceLang === snapshot.sourceLang && segment.entry.targetLang === snapshot.targetLang &&
       (isFinal ? segment.revision === revision : !!this.options.interim && !segment.entry.isFinal);
     try {
-      if (new TextEncoder().encode(snapshot.original).length > 9000) throw new Error('Translation input too long');
-      const request = snapshot.sourceLang === snapshot.targetLang
+      if (utf8Length(snapshot.original) > 9000) throw new Error('Translation input too long');
+      const request: Promise<TranslateResponse> = snapshot.sourceLang === snapshot.targetLang
         ? Promise.resolve({ translatedText: snapshot.original })
-        : this.options.translate(snapshot.original, snapshot.sourceLang, snapshot.targetLang, controller.signal);
+        : this.options.translate(snapshot.original, snapshot.sourceLang, snapshot.targetLang, controller.signal, requestOptions);
       const result = await Promise.race([request, cancellation]);
       if (!isCurrent() || controller.signal.aborted) return;
-      if (!result.translatedText.trim() || new TextEncoder().encode(result.translatedText).length > 30000) {
+      if (typeof result.translatedText !== 'string' || !result.translatedText.trim() || utf8Length(result.translatedText) > 30000) {
         throw new Error('Invalid translation result');
       }
       if (!isFinal && !segment.entry.original.startsWith(snapshot.original)) return;
       segment.entry = {
         ...segment.entry, translated: result.translatedText,
         status: isFinal ? 'complete' : 'pending',
+        engine: isFinal ? translationEngineBadge(quality, result) : undefined,
       };
       this.publish(segment);
     } catch {
@@ -208,6 +303,7 @@ export class LiveTranslation {
     this.requests.forEach((controller) => controller.abort());
     this.requests.clear();
     this.finalQueue = [];
+    this.recentFinals = [];
     this.segments.clear();
     this.options.onReset();
   }
@@ -238,6 +334,7 @@ export class LiveTranslation {
     this.requests.forEach((controller) => controller.abort());
     this.requests.clear();
     this.finalQueue = [];
+    this.recentFinals = [];
     this.segments.clear();
   }
 }

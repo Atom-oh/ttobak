@@ -3,10 +3,13 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
@@ -29,15 +32,24 @@ const (
 	TranslateFallbackUnavailable = "unavailable"
 	TranslateFallbackTooLong     = "too-long"
 	TranslateFallbackLLMError    = "llm-error"
+	// The model answered, but validateInterpretation rejected the text.
+	TranslateFallbackInvalidOutput = "invalid-output"
+
+	// DefaultTranslateHighTimeout bounds one interpreter call; the Amazon
+	// Translate fallback still fits the browser's 10s abort.
+	DefaultTranslateHighTimeout = 6 * time.Second
+	minTranslateHighTimeout     = 500 * time.Millisecond
+	maxTranslateHighTimeout     = 8 * time.Second
 
 	// Longer segments go straight to Amazon Translate: model latency and cost
 	// grow with length while a live caption segment is normally one sentence.
-	translateLLMMaxBytes     = 3000
-	translateLLMTimeout      = 3 * time.Second
-	translateLLMMaxTokens    = 2048
-	translateLLMEffort       = "low"
-	translateLLMOutputFactor = 10
+	translateLLMMaxBytes  = 3000
+	translateLLMMaxTokens = 2048
+	translateLLMEffort    = "low"
 )
+
+// errInvalidInterpretation marks model output that must not be shown.
+var errInvalidInterpretation = errors.New("invalid interpreter output")
 
 var translateLanguageNames = map[string]string{
 	"ko": "Korean", "en": "English", "ja": "Japanese", "zh": "Chinese",
@@ -96,8 +108,35 @@ func WithInterpreterModel(invoker modelInvoker, modelID string) TranslateOption 
 	}
 }
 
+// WithInterpreterTimeout overrides the per-call interpreter deadline; a
+// non-positive value keeps DefaultTranslateHighTimeout.
+func WithInterpreterTimeout(timeout time.Duration) TranslateOption {
+	return func(s *TranslateService) {
+		if timeout > 0 {
+			s.llmTimeout = timeout
+		}
+	}
+}
+
+// ParseTranslateHighTimeout reads TRANSLATE_HIGH_TIMEOUT_MS. Empty, malformed
+// or out-of-range values (500..8000 ms, which leaves room for the Translate
+// fallback inside the 10 s client abort) use the default.
+func ParseTranslateHighTimeout(raw string) time.Duration {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return DefaultTranslateHighTimeout
+	}
+	ms, err := strconv.Atoi(raw)
+	timeout := time.Duration(ms) * time.Millisecond
+	if err != nil || timeout < minTranslateHighTimeout || timeout > maxTranslateHighTimeout {
+		log.Printf("warn: invalid TRANSLATE_HIGH_TIMEOUT_MS %q; using default %v", raw, DefaultTranslateHighTimeout)
+		return DefaultTranslateHighTimeout
+	}
+	return timeout
+}
+
 func NewTranslateService(client *translate.Client, options ...TranslateOption) *TranslateService {
-	s := &TranslateService{client: client, llmTimeout: translateLLMTimeout}
+	s := &TranslateService{client: client, llmTimeout: DefaultTranslateHighTimeout}
 	for _, option := range options {
 		option(s)
 	}
@@ -128,6 +167,9 @@ func (s *TranslateService) TranslateSegment(ctx context.Context, req TranslateRe
 			// Never log segment text. The error carries the model/SDK failure only.
 			log.Printf("Interpreter model failed, using Amazon Translate: model=%s err=%v", s.modelID, err)
 			fallback = TranslateFallbackLLMError
+			if errors.Is(err, errInvalidInterpretation) {
+				fallback = TranslateFallbackInvalidOutput
+			}
 		}
 	}
 	text, err := s.machineTranslate(ctx, req.Text, req.SourceLang, req.TargetLang)
@@ -233,8 +275,107 @@ func (s *TranslateService) interpret(ctx context.Context, req TranslateRequest) 
 	if text == "" {
 		return "", fmt.Errorf("blank interpreter output")
 	}
-	if len(text) > translateLLMOutputFactor*len(req.Text)+1000 {
-		return "", fmt.Errorf("interpreter output is implausibly long")
+	if err := validateInterpretation(req.Text, text, req.SourceLang, req.TargetLang); err != nil {
+		return "", err
 	}
 	return text, nil
+}
+
+// Labels a model may put before the translation instead of answering with it.
+// "Here is"/"Here's" alone is ordinary speech ("Here is the report"), so only
+// the forms that announce a translation are rejected.
+var interpreterMetaPrefixes = []string{
+	"translation:", "translated text:", "translation result:",
+	"english translation:", "korean translation:",
+	"here is the translation", "here's the translation",
+	"here is the translated", "here's the translated",
+	"here is your translation", "here's your translation",
+	"번역:", "번역 결과:", "번역문:", "통역:",
+}
+
+// validateInterpretation rejects interpreter output that is not a plain
+// translation of source into targetLang. Errors wrap errInvalidInterpretation
+// and never carry segment text.
+func validateInterpretation(source, output, sourceLang, targetLang string) error {
+	trimmed := strings.TrimSpace(output)
+	lower := strings.ToLower(trimmed)
+	for _, prefix := range interpreterMetaPrefixes {
+		if strings.HasPrefix(lower, prefix) {
+			return fmt.Errorf("%w: meta prefix", errInvalidInterpretation)
+		}
+	}
+	if strings.HasPrefix(trimmed, "{") || strings.Contains(lower, "current_segment") || strings.Contains(lower, "previous_segments") {
+		return fmt.Errorf("%w: echoed request structure", errInvalidInterpretation)
+	}
+	if len(output) > 4*len(source)+200 {
+		return fmt.Errorf("%w: implausibly long", errInvalidInterpretation)
+	}
+	hangul, letters := hangulShare(trimmed)
+	if letters == 0 {
+		return nil
+	}
+	share := float64(hangul) / float64(letters)
+	switch targetLang {
+	case "ko":
+		if share < 0.3 && !(isLatinOnly(source) && tokensAppearIn(trimmed, source)) {
+			return fmt.Errorf("%w: not Korean", errInvalidInterpretation)
+		}
+	case "en":
+		if share > 0.1 {
+			return fmt.Errorf("%w: not English", errInvalidInterpretation)
+		}
+	}
+	return nil
+}
+
+func hangulShare(text string) (hangul, letters int) {
+	for _, r := range text {
+		if !unicode.IsLetter(r) {
+			continue
+		}
+		letters++
+		if unicode.Is(unicode.Hangul, r) {
+			hangul++
+		}
+	}
+	return hangul, letters
+}
+
+// isLatinOnly reports whether every letter in text is Latin script.
+func isLatinOnly(text string) bool {
+	for _, r := range text {
+		if unicode.IsLetter(r) && !unicode.Is(unicode.Latin, r) {
+			return false
+		}
+	}
+	return true
+}
+
+func wordTokens(text string) []string {
+	return strings.FieldsFunc(strings.ToLower(text), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+}
+
+// maxKeptLatinTokens bounds the untranslated-name exception: a short name or
+// acronym ("AWS Lambda") may stay as spoken, an echoed sentence may not.
+const maxKeptLatinTokens = 4
+
+// tokensAppearIn reports whether output is a few words that all occur in
+// source, which is how a Latin-only name or acronym legitimately stays
+// untranslated.
+func tokensAppearIn(output, source string) bool {
+	if len(wordTokens(output)) > maxKeptLatinTokens {
+		return false
+	}
+	known := map[string]bool{}
+	for _, token := range wordTokens(source) {
+		known[token] = true
+	}
+	for _, token := range wordTokens(output) {
+		if !known[token] {
+			return false
+		}
+	}
+	return true
 }

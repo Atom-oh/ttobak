@@ -120,6 +120,7 @@ func init() {
 	translateService := service.NewTranslateService(
 		translateClient,
 		service.WithInterpreterModel(bedrockRuntimeClient2, os.Getenv("BEDROCK_TRANSLATE_MODEL_ID")),
+		service.WithInterpreterTimeout(service.ParseTranslateHighTimeout(os.Getenv("TRANSLATE_HIGH_TIMEOUT_MS"))),
 	)
 	// Initialize handlers
 	healthHandler := handler.NewHealthHandler()

@@ -48,6 +48,8 @@ function RecordPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const isUploadMode = searchParams.get('mode') === 'upload';
+  // Diagnostics only (G4 fragment counter); not a user-facing setting.
+  const debugCaptions = searchParams.get('debugCaptions') === '1';
   const { isAuthenticated, isLoading, user } = useAuth();
   const { devices, selectedDeviceId, selectDevice, refreshDevices } = useAudioDevices();
 
@@ -1427,6 +1429,7 @@ function RecordPageInner() {
                 targetLang={targetLang}
                 onTargetLangChange={setTargetLang}
                 isActive={!session.isPaused}
+                debugCaptions={debugCaptions}
               />
             )}
             <div className="grid grid-cols-2 gap-4" style={{ height: '48vh' }}>
@@ -1499,6 +1502,7 @@ function RecordPageInner() {
                     targetLang={targetLang}
                     onTargetLangChange={setTargetLang}
                     isActive={!session.isPaused}
+                    debugCaptions={debugCaptions}
                   />
                 ) : (
                   <div className="flex flex-col items-center justify-center py-12 text-center">

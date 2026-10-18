@@ -213,7 +213,9 @@ model/profile grant (`InvokeInterpreterModel`), with Amazon Translate as fallbac
 The API Lambda also receives `TRANSLATE_HOURLY_LIMIT` (default 3000) and
 `TRANSLATE_HIGH_HOURLY_LIMIT` (default 1500) from CDK context
 `ttobak:translateHourlyLimit` / `ttobak:translateHighHourlyLimit`; synth rejects
-values that are not non-negative integers, and 0 disables a limit. Changing either
+values that are not non-negative integers, and 0 disables a limit.
+`TRANSLATE_HIGH_TIMEOUT_MS` (context `ttobak:translateHighTimeoutMs`, default 6000)
+bounds each interpreter call; synth rejects values outside 500–8000. Changing either
 changes the function configuration and publishes a new `live` alias version. The
 counters use the existing table grant and `pendingShareExpiresAt` TTL.
 

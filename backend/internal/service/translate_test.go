@@ -60,7 +60,7 @@ func chatResponse(content, finish string) string {
 }
 
 func newTestTranslateService(t *fakeTextTranslator, inv *fakeModelInvoker, modelID string) *TranslateService {
-	s := &TranslateService{client: t, llmTimeout: translateLLMTimeout}
+	s := &TranslateService{client: t, llmTimeout: DefaultTranslateHighTimeout}
 	if inv != nil {
 		WithInterpreterModel(inv, modelID)(s)
 	}
@@ -245,7 +245,7 @@ func TestMachineTranslateRequestShape(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			client := &capturingTextTranslator{}
-			s := &TranslateService{client: client, llmTimeout: translateLLMTimeout}
+			s := &TranslateService{client: client, llmTimeout: DefaultTranslateHighTimeout}
 			if _, err := s.Translate(context.Background(), "synthetic segment", tt.source, tt.target); err != nil {
 				t.Fatal(err)
 			}
