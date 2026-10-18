@@ -39,11 +39,55 @@ aws autoscaling describe-lifecycle-hooks --auto-scaling-group-name ttobak-whispe
 ```
 
 `AZRebalance` must be listed. The only termination hook should be ECS's own
-managed-draining hook; a CDK `...DrainHook...` hook means the old
-InstanceDrainHook is back. A redeploy does not re-suspend after a manual resume
+`ecs-managed-draining-termination-hook`; a CDK `...DrainHook...` hook means the
+old InstanceDrainHook is back. A redeploy does not re-suspend after a manual resume
 (the custom resource has a constant physical ID), so an authorized operator
 re-suspends with `aws autoscaling suspend-processes --auto-scaling-group-name
 ttobak-whisper-asg --scaling-processes AZRebalance`.
+
+## Scheduled STT recovery
+
+`ttobak-stt-recovery` invokes `ttobak-transcribe` every 15 minutes (ADR-031
+amendment). Its log lines start with `stt-recovery` and carry only meeting IDs,
+statuses, sizes, attempts and fixed reasons; each tick ends with one
+`Ttobak/SttRecovery` embedded-metric line of counts.
+
+```bash
+aws logs tail /aws/lambda/ttobak-transcribe --since 1h --filter-pattern '"stt-recovery"' --region ap-northeast-2
+# startedBy must be the only filter; it lists the running recovery task.
+aws ecs list-tasks --cluster ttobak-whisper --started-by sttrec-<MEETING_ID> --region ap-northeast-2
+# Stopped tasks: list by status, then match startedBy in describe-tasks.
+aws ecs list-tasks --cluster ttobak-whisper --desired-status STOPPED --region ap-northeast-2
+```
+
+| Action | Meaning |
+|---|---|
+| `redrive_stt` | Stuck past its size-based deadline; claims attempt n (max 2) and runs Whisper with a claim-bound `ClientToken` and `StartedBy sttrec-{id}` |
+| `redrive_summary` | `transcripts/{id}.json` exists, is not older than the latest restart (newest audio-prefix object such as a `rediarize_` copy, last STT claim, or `updatedAt` while transcribing, excluding the tick's own summary claim) and was never published; self-copy emits a real S3 event (max 2) |
+| `mark_exhausted` | Both attempts used for this audio key; marks `RECOVERY_EXHAUSTED` |
+| `report_checkpoint_only` | Only `recording_progress.*` exists; the owner recovers it (ADR-048) |
+| `report_multipart`, `report_unsupported`, `report` | Not processed automatically; investigate |
+| `terminal`, `would_delete`, `delete` | `AUDIO_CORRUPT`/`NO_SPEECH` mark; deletion after seven untouched days |
+| `cluster_busy`, `stt_deferred` | Another task holds the GPU pool or the one-run budget is used |
+| `cluster_check_error` | ListTasks failed; STT re-runs are deferred as if busy |
+| `facts_error`, `rows_deferred` | S3 facts failed or exceeded the listing cap, or the four-minute row budget ran out; retried next tick |
+
+`STT_RECOVERY_MODE` and `STT_RECOVERY_DELETE_MODE` take `off`, `report` or
+`active` (unknown values mean `off`). `report` writes nothing. To stop the tick in
+an incident, set both to `off` through a GatewayStack change (either alone stops
+only its own pass), or disable the rule. Any user write after a mark (notes, re-upload, rediarize) bumps `updatedAt`
+and permanently cancels that mark's deletion.
+
+Grace deletion removes only current S3 versions. To restore an object, list its
+versions and delete the delete marker:
+
+```bash
+aws s3api list-object-versions --bucket <BUCKET> --prefix audio/<USER_ID>/<MEETING_ID>/ --region ap-northeast-2
+aws s3api delete-object --bucket <BUCKET> --key <KEY> --version-id <DELETE_MARKER_VERSION_ID> --region ap-northeast-2
+```
+
+The DynamoDB rows are not restorable this way; restoring a meeting requires a
+table point-in-time recovery review.
 
 ## Summarizing
 
@@ -57,9 +101,11 @@ aws events describe-rule --name ttobak-transcript-upload --region ap-northeast-2
 aws logs tail /aws/lambda/ttobak-summarize --since 30m --region ap-northeast-2
 ```
 
-The Lambda budget is 15 minutes. Retry eligibility after 20 minutes uses an atomic
-claim; it does not schedule another delivery. GetMeeting reconciles stuck status
-after 60 minutes. These thresholds solve different problems; do not shorten one
+The Lambda budget is 15 minutes. Summarize-retry eligibility after 20 minutes uses
+an atomic claim; it does not schedule another delivery. GetMeeting reconciles stuck
+status after 60 minutes. The separate STT recovery tick re-drives an unpublished
+single-file transcript after 20 minutes. A blank transcript is marked `NO_SPEECH`
+instead of being summarized. These thresholds solve different problems; do not shorten one
 based on a stale runbook or rewrite rows unconditionally.
 
 Final notes that stop at `max_tokens` continue within the same source snapshot,
@@ -81,18 +127,20 @@ conditions or publish output produced from the old snapshot.
 
 Use the application Recover action for a saved recording_progress object, or
 Rediarize for supported single-part Whisper meetings and a corrected speaker bound.
-For an operator-approved full rebatch, inspect the maintenance script and preview
-one target first:
+The scheduled tick supersedes bulk rebatching. For an operator-approved one-off,
+the maintenance script requires an explicit meeting ID and previews by default:
 
 ```bash
 python3 scripts/whisper-rebatch.py <MEETING_ID>
 ```
 
-The script defaults to dry run and lists only error/transcribing meetings.
-`--run <MEETING_ID>` starts one ECS task; a bulk run needs `--run --all`;
-`--num-speakers` requires a single meeting ID. It claims each meeting with a
-conditional update and starts a second task if one is still in flight. Check its present selection/write behavior before
-executing. Do not fabricate an event with reserved `aws.s3` source via PutEvents or
+The scheduled `ttobak-stt-recovery` tick is the preferred automatic path for
+single-file meetings; the script is a manual fallback. It defaults to dry run and
+lists only error/transcribing meetings. `--run <MEETING_ID>` starts one ECS task;
+a bulk run needs `--run --all`; `--num-speakers` requires a single meeting ID. It
+claims each meeting with a conditional update, prints no titles, and starts a
+second task if one is still in flight, so check `list-tasks` first. Do not
+fabricate an event with reserved `aws.s3` source via PutEvents or
 blindly reset DynamoDB state. Preserve coherent ASR/pyannote image pins (ADR-035).
 
 For an operator-authorized saved-source recovery, `backend/cmd/resummary` defaults
