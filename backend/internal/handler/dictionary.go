@@ -17,8 +17,11 @@ import (
 	"github.com/ttobak/backend/internal/service"
 )
 
-// dictTermMaxBytes bounds a v2 dictionary term request body.
-const dictTermMaxBytes = 4 << 10
+// Request bounds for dictionary routes.
+const (
+	dictLegacyPutMaxBytes = 256 << 10
+	dictTermMaxBytes      = 4 << 10
+)
 
 var dictTermIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
@@ -39,9 +42,9 @@ func (h *DictionaryHandler) GetDictionary(w http.ResponseWriter, r *http.Request
 	ctx := r.Context()
 	userID := middleware.GetUserID(ctx)
 
-	result, err := h.dictService.GetDictionary(ctx, userID)
+	result, err := h.dictService.GetDictionaryWithTerms(ctx, userID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to get dictionary")
+		writeDictionaryError(w, err, "Failed to get dictionary")
 		return
 	}
 
@@ -54,7 +57,7 @@ func (h *DictionaryHandler) UpdateDictionary(w http.ResponseWriter, r *http.Requ
 	userID := middleware.GetUserID(ctx)
 
 	var req model.UpdateDictionaryRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, dictLegacyPutMaxBytes)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid request body")
 		return
 	}
@@ -64,17 +67,11 @@ func (h *DictionaryHandler) UpdateDictionary(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Validate terms
-	for _, t := range req.Terms {
-		if t.Phrase == "" {
-			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Each term must have a phrase")
-			return
-		}
-	}
-
+	// Terms are validated by the service: unchanged and auto-row entries
+	// returned by GET may legitimately lack a phrase.
 	result, err := h.dictService.UpdateDictionary(ctx, userID, req.Terms)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to update dictionary")
+		writeDictionaryError(w, err, "Failed to update dictionary")
 		return
 	}
 
@@ -87,7 +84,7 @@ func (h *DictionaryHandler) DeleteTerm(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.GetUserID(ctx)
 
 	var req model.DeleteTermRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, dictTermMaxBytes)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid request body")
 		return
 	}
@@ -99,11 +96,7 @@ func (h *DictionaryHandler) DeleteTerm(w http.ResponseWriter, r *http.Request) {
 
 	err := h.dictService.DeleteTerm(ctx, userID, req.Phrase)
 	if err != nil {
-		if errors.Is(err, service.ErrNotFound) {
-			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Term not found")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to delete term")
+		writeDictionaryError(w, err, "Failed to delete term")
 		return
 	}
 
@@ -124,6 +117,8 @@ func writeDictionaryError(w http.ResponseWriter, err error, fallback string) {
 		writeError(w, http.StatusConflict, "DICTIONARY_FULL", "The dictionary already has the maximum number of manual terms")
 	case errors.Is(err, service.ErrDictionaryTermExists):
 		writeError(w, http.StatusConflict, "TERM_EXISTS", "The term already exists")
+	case errors.Is(err, service.ErrDictionaryTermNotManual):
+		writeError(w, http.StatusConflict, "TERM_NOT_MANUAL", "Only manually added terms can be removed this way")
 	case errors.Is(err, service.ErrLegacyDictionaryConflict):
 		writeError(w, http.StatusConflict, "LEGACY_DICTIONARY_CONFLICT", "Remove duplicate terms and save the dictionary list first")
 	case errors.Is(err, repository.ErrConditionFailed):
