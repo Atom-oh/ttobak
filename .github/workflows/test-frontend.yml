@@ -5,7 +5,13 @@ on:
     branches: [main]
     paths: ['frontend/**', '.github/workflows/test-frontend.yml']
   pull_request:
-    paths: ['frontend/**', '.github/workflows/test-frontend.yml']
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/test-frontend.yml'
+      - '.github/workflows/deploy-frontend.yml'
+      - 'scripts/deploy.sh'
+      - 'scripts/publish-frontend.sh'
+      - 'scripts/test_publish_frontend.py'
 
 permissions:
   contents: read
