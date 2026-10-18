@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"net/http"
 	"testing"
 
 	"github.com/ttobak/backend/internal/model"
@@ -87,5 +88,18 @@ func TestHandleNoSpeechMarksWithoutSummarizing(t *testing.T) {
 	markNoSpeech = func(context.Context, *model.SummarySnapshot) error { return errors.New("throttled") }
 	if handled, err := handleNoSpeech(context.Background(), snapshot, &parsedTranscript{}); !handled || err == nil {
 		t.Fatal("a transient mark failure must be retried by Lambda")
+	}
+
+	// A transcript replaced after download is superseded: no mark at all.
+	installTranscriptFixture(t, retryHTTP(func(request *http.Request) (*http.Response, error) {
+		if request.Method != "HEAD" {
+			t.Fatal("revalidation read source content")
+		}
+		return transcriptFixtureResponse(200, "", http.Header{"Etag": {`"new"`}}), nil
+	}))
+	markNoSpeech = func(context.Context, *model.SummarySnapshot) error { t.Fatal("stale bytes marked"); return nil }
+	stale := &parsedTranscript{Objects: []model.SummaryObject{{Bucket: "bucket", Key: "transcripts/m.json", ETag: `"old"`}}}
+	if handled, err := handleNoSpeech(context.Background(), snapshot, stale); !handled || err != nil {
+		t.Fatalf("replaced transcript: handled=%v err=%v", handled, err)
 	}
 }

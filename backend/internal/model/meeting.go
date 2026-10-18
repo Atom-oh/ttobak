@@ -45,27 +45,19 @@ type Meeting struct {
 	// UpdateMeeting (PutItem) write during reprocessing would silently drop
 	// the claim, letting a second concurrent redelivery re-claim and
 	// double-run Bedrock summarize + KB export.
-	SummarizeRetryClaimedAt string `dynamodbav:"summarizeRetryClaimedAt,omitempty"`
-	SummaryRetryPending     bool   `dynamodbav:"summaryRetryPending,omitempty"`
-	SummaryRetryAttempts    int    `dynamodbav:"summaryRetryAttempts,omitempty"`
-	SummaryConflictCode     string `dynamodbav:"summaryConflictCode,omitempty"`
-	SummaryBatchContentHash string `json:"-" dynamodbav:"summaryBatchContentHash,omitempty"` // Internal pre-ASR human-content fence; not a success attestation.
-	SttProvider             string `dynamodbav:"sttProvider,omitempty"`                      // "transcribe" or "nova-sonic"
-	// STT failure mark and bounded automatic recovery state (ADR-031 amendment). These
-	// round-trip so a whole-item write never drops a claim or a mark.
-	SttFailureCode            string            `dynamodbav:"sttFailureCode,omitempty" json:"-"`
-	SttFailedAt               string            `dynamodbav:"sttFailedAt,omitempty" json:"-"`
-	SttRecoveryAttempts       int               `dynamodbav:"sttRecoveryAttempts,omitempty" json:"-"`
-	SttRecoveryAudioKey       string            `dynamodbav:"sttRecoveryAudioKey,omitempty" json:"-"`
-	SttRecoveryClaimedAt      string            `dynamodbav:"sttRecoveryClaimedAt,omitempty" json:"-"`
-	SttSummaryRedriveAttempts int               `dynamodbav:"sttSummaryRedriveAttempts,omitempty" json:"-"`
-	TranscriptSegments        string            `dynamodbav:"transcriptSegments,omitempty"`       // JSON string of speaker-labeled segments
-	ActionItems               string            `dynamodbav:"actionItems,omitempty"`              // JSON string of extracted action items
-	AttachmentSummarySources  string            `dynamodbav:"attachmentSummarySources,omitempty"` // Content hash + document revisions used by saved summary
-	Notes                     string            `dynamodbav:"notes,omitempty"`                    // User-written meeting notes (post-recording)
-	NotesRevision             string            `dynamodbav:"notesRevision,omitempty"`            // Server-generated UUID; absent legacy revisions read as empty.
-	LiveSummary               string            `dynamodbav:"liveSummary,omitempty"`              // Real-time summary built during recording (markdown incl. mermaid)
-	SpeakerMap                map[string]string `dynamodbav:"speakerMap,omitempty"`               // spk_0 -> "김팀장" mapping
+	SummarizeRetryClaimedAt  string            `dynamodbav:"summarizeRetryClaimedAt,omitempty"`
+	SummaryRetryPending      bool              `dynamodbav:"summaryRetryPending,omitempty"`
+	SummaryRetryAttempts     int               `dynamodbav:"summaryRetryAttempts,omitempty"`
+	SummaryConflictCode      string            `dynamodbav:"summaryConflictCode,omitempty"`
+	SummaryBatchContentHash  string            `json:"-" dynamodbav:"summaryBatchContentHash,omitempty"` // Internal pre-ASR human-content fence; not a success attestation.
+	SttProvider              string            `dynamodbav:"sttProvider,omitempty"`                      // "transcribe" or "nova-sonic"
+	TranscriptSegments       string            `dynamodbav:"transcriptSegments,omitempty"`               // JSON string of speaker-labeled segments
+	ActionItems              string            `dynamodbav:"actionItems,omitempty"`                      // JSON string of extracted action items
+	AttachmentSummarySources string            `dynamodbav:"attachmentSummarySources,omitempty"`         // Content hash + document revisions used by saved summary
+	Notes                    string            `dynamodbav:"notes,omitempty"`                            // User-written meeting notes (post-recording)
+	NotesRevision            string            `dynamodbav:"notesRevision,omitempty"`                    // Server-generated UUID; absent legacy revisions read as empty.
+	LiveSummary              string            `dynamodbav:"liveSummary,omitempty"`                      // Real-time summary built during recording (markdown incl. mermaid)
+	SpeakerMap               map[string]string `dynamodbav:"speakerMap,omitempty"`                       // spk_0 -> "김팀장" mapping
 	// DiarizationSpeakerHint overrides len(Participants) as pyannote's
 	// max_speakers bound when re-diarizing a meeting on demand (see
 	// RediarizeMeeting) — set once a user-supplied headcount is known to be
@@ -95,6 +87,16 @@ type Meeting struct {
 	GSI1PK                string                            `dynamodbav:"GSI1PK,omitempty"` // USER#{userId} for date sorting
 	GSI1SK                string                            `dynamodbav:"GSI1SK,omitempty"` // timestamp for sorting
 	EntityType            string                            `dynamodbav:"entityType"`       // "MEETING"
+
+	// STT failure mark and bounded automatic recovery state (see model/stt_recovery.go).
+	// These round-trip so a whole-item write never drops a claim or a mark.
+	SttFailureCode             string `dynamodbav:"sttFailureCode,omitempty" json:"-"`
+	SttFailedAt                string `dynamodbav:"sttFailedAt,omitempty" json:"-"`
+	SttRecoveryAttempts        int    `dynamodbav:"sttRecoveryAttempts,omitempty" json:"-"`
+	SttRecoveryAudioKey        string `dynamodbav:"sttRecoveryAudioKey,omitempty" json:"-"`
+	SttRecoveryClaimedAt       string `dynamodbav:"sttRecoveryClaimedAt,omitempty" json:"-"`
+	SttSummaryRedriveAttempts  int    `dynamodbav:"sttSummaryRedriveAttempts,omitempty" json:"-"`
+	SttSummaryRedriveClaimedAt string `dynamodbav:"sttSummaryRedriveClaimedAt,omitempty" json:"-"`
 }
 
 // Attachment represents a file attachment for a meeting
