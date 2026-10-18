@@ -72,6 +72,27 @@ the client's listener before adding its callback, then verify the deployed
 Cognito callback list and actual OAuth completion separately. See the
 [client instructions](../mcp-server/README.md#http-mcp-from-code-server).
 
+The companion client (`ttobak-companion-client`, export `TtobakCompanionClientId`)
+lets companion apps such as per-customer insight dashboards sign users in through
+managed login with their TTOBAK identity. It is a public code-grant client
+without `USER_PASSWORD_AUTH`. Direct `USER_SRP_AUTH` stays enabled, as on the
+SPA client, but companion apps must use managed login, send an S256 PKCE
+challenge (Cognito cannot require it per client) and exchange the code
+server-side. Its ID tokens carry the companion client ID in `aud` and its access
+tokens in `client_id`. The HTTP API JWT authorizer, edge auth and identity pool
+accept only the SPA client. Behind them, the Go API middleware checks every
+token it verifies, on the `Authorization` and `x-amzn-oidc-data` paths alike,
+against `API_ALLOWED_CLIENT_IDS`, and the WebSocket authorizer against
+`WS_ALLOWED_CLIENT_IDS`; both lists hold the first-party app and SPA clients
+and fail closed when unset. Companion tokens therefore never act as TTOBAK API
+or live-QA credentials. Rollout: AuthStack deploys before GatewayStack, so a
+companion client can exist briefly before the gates; no companion app can hold
+tokens until it is configured with the new client ID after both deploy. Bootstrap the SSM StringLists
+`/ttobak/auth/companion-callback-urls` and `/ttobak/auth/companion-logout-urls`
+with each app's exact callback and sign-out URLs before deploying AuthStack;
+their absence fails deployment. Companion apps authorize by reading TTOBAK
+account membership themselves; this stack grants them no table access.
+
 The pre-signup trigger reads the configured domain allowlist. PostAuthentication
 writes a separate USER#/LOGIN item for lastLoginAt, with a short abort timeout,
 try/catch, no reserved concurrency and a DISABLED switch. It must fail open; it is

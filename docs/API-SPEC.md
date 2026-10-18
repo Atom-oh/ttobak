@@ -153,6 +153,18 @@ Audio-upload retries do not resend acknowledged notes. An uncertain write is
 read back without silently adopting another editor's value; conflicts require
 explicit comparison. Size and save errors retain the editable draft and audio.
 
+`PUT /api/meetings/{meetingId}` also accepts `noteLanguage` with owner/edit
+permission. Allowed values are exactly `""` (automatic), `"ko"` and `"en"`; any
+other value, including case variants, returns 400 `BAD_REQUEST`. An explicit `""`
+returns the meeting to automatic; an omitted field preserves the stored value,
+and an unchanged value is not written. It cannot be combined with an
+`expectedNotes` notes-only update. Meeting detail always returns `noteLanguage`
+(`""` for legacy rows). Batch and saved-source summaries map it to a fixed prompt
+directive (`noteLanguageDirective`); automatic keeps the historical "Korean unless
+the transcript is entirely English" rule. Both summary captures pin the field in
+their source conditions, so a change during a run fails that run with
+`SOURCE_CHANGED` and keeps the prior summary.
+
 GetMeeting resolves S3 transcript spills and returns the active note/transcript
 state, attachments and optional simRun. A/B selection and edited text must remain
 the source of truth: old timestamped segments cannot override the selected text.
@@ -1085,7 +1097,9 @@ server draft meeting ID. A browser-only `meeting_<epoch ms>` ID is still accepte
 without a meeting check during the frontend rollout; remove that allowance once the
 updated frontend is deployed.
 Re-summary reads saved notes/summary, the current selected transcript and
-verified document extraction. It does not rerun STT or refinement and does not
+verified document extraction, and writes notes in the meeting's stored
+`noteLanguage`; the POST body never selects a language. Change the language
+through the meeting update first, then request a re-summary. It does not rerun STT or refinement and does not
 import linked-meeting context. Unavailable documents are omitted with notices
 when trusted notes/transcript remain. If no other source exists, pending/failed/
 missing document text returns `409 SOURCE_NOT_READY`; active transcription returns `409 MEETING_BUSY`;

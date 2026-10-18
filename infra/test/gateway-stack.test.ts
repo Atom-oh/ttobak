@@ -77,6 +77,20 @@ describe('GatewayStack', () => {
     template = buildTemplate();
   });
 
+  test('the API and WebSocket authorizer allowlist only the first-party app clients', () => {
+    const template = buildTemplate();
+    const fns = Object.values(template.findResources('AWS::Lambda::Function'));
+    const env = (name: string) => {
+      const matches = fns.filter(fn => fn.Properties.FunctionName === name);
+      expect(matches).toHaveLength(1);
+      return matches[0].Properties.Environment.Variables;
+    };
+    // exactly the injected first-party client (CDK folds the one-item join); never a companion client
+    const firstParty = { 'Fn::ImportValue': expect.stringContaining('ExportsOutputRefUserPoolClient') };
+    expect(env('ttobak-ws-authorizer').WS_ALLOWED_CLIENT_IDS).toEqual(firstParty);
+    expect(env('ttobak-api').API_ALLOWED_CLIENT_IDS).toEqual(firstParty);
+  });
+
   test('the existing CI policy retains exact secret permissions and adds only four consumer invoke ARNs', () => {
     const ciRoleName = 'mall-apne2-mgmt-ci-runner';
     const enabled = buildTemplate(undefined, undefined, undefined, undefined, undefined, undefined, ciRoleName);
