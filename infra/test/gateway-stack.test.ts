@@ -18,13 +18,14 @@ describe('GatewayStack', () => {
       .filter(resource => JSON.stringify(resource.Properties.FunctionName).includes('KbFunction'));
   }
 
-  function buildTemplate(indexingMode: 'manual-only' | 'all' = 'manual-only', scheduleEnabled = false, mcpResourceAudience?: string, audioCropEnabled = false, cloudfrontDomain: string | null = 'd2olomx8td8txt.cloudfront.net', save?: (g: Template, r: Template) => void): Template {
+  function buildTemplate(indexingMode: 'manual-only' | 'all' = 'manual-only', scheduleEnabled = false, mcpResourceAudience?: string, audioCropEnabled = false, cloudfrontDomain: string | null = 'd2olomx8td8txt.cloudfront.net', save?: (g: Template, r: Template) => void, originReleaseCiRoleName?: unknown): Template {
     const app = new cdk.App({
       context: {
         ...(cloudfrontDomain === null ? {} : { 'ttobak:cloudfrontDomain': cloudfrontDomain }),
         'ttobak:domainName': 'ttobak.example.com',
         'ttobak:audioCropEnabled': audioCropEnabled,
         ...(mcpResourceAudience === undefined ? {} : { 'ttobak:mcpResourceAudience': mcpResourceAudience }),
+        ...(originReleaseCiRoleName === undefined ? {} : { 'ttobak:httpOriginReleaseCiRoleName': originReleaseCiRoleName }),
       },
     });
 
@@ -73,6 +74,48 @@ describe('GatewayStack', () => {
 
   beforeAll(() => {
     template = buildTemplate();
+  });
+
+  test('the existing CI role receives only exact-ARN rotation permissions in Gateway', () => {
+    const ciRoleName = 'mall-apne2-mgmt-ci-runner';
+    const enabled = buildTemplate(undefined, undefined, undefined, undefined, undefined, undefined, ciRoleName);
+    const synthesized = enabled.toJSON();
+    const resources = synthesized.Resources;
+    const grants = Object.entries(resources).filter(([, resource]: [string, any]) =>
+      resource.Type === 'AWS::IAM::Policy' && resource.Properties.Roles?.includes(ciRoleName));
+    expect(grants).toHaveLength(1);
+    const [policyId, policy]: [string, any] = grants[0];
+    expect(policy.Properties).toEqual({
+      PolicyName: 'ttobak-http-origin-release',
+      Roles: [ciRoleName],
+      PolicyDocument: {
+        Version: '2012-10-17',
+        Statement: [{
+          Effect: 'Allow',
+          Action: ['secretsmanager:GetSecretValue', 'secretsmanager:PutSecretValue',
+            'secretsmanager:UpdateSecretVersionStage'],
+          Resource: { Ref: 'HttpOriginSecretArn' },
+        }],
+      },
+    });
+    // Removing that one policy leaves the complete original template: no
+    // new role, trust policy, secret, consumer grant or other stack resource.
+    delete resources[policyId];
+    expect(synthesized).toEqual(template.toJSON());
+  });
+
+  test('missing or explicitly disabled CI-role context adds no release policy or secret', () => {
+    const disabled = buildTemplate(undefined, undefined, undefined, undefined, undefined, undefined, false);
+    expect(disabled.toJSON()).toEqual(template.toJSON());
+    const resources = Object.values(disabled.toJSON().Resources) as any[];
+    expect(resources.some(resource => resource.Type === 'AWS::IAM::Policy'
+      && resource.Properties.PolicyName === 'ttobak-http-origin-release')).toBe(false);
+  });
+
+  test.each(['', '*', 'role/*', ' role ', 'false', 'true', 'arn:aws:iam::111111111111:role/runner',
+    'x'.repeat(65), true, null, 1, {}])('invalid CI role context %p fails before permissions are created', roleName => {
+    expect(() => buildTemplate(undefined, undefined, undefined, undefined, undefined, undefined, roleName))
+      .toThrow('ttobak:httpOriginReleaseCiRoleName must be an existing IAM role name or boolean false');
   });
 
   test('core pipeline rules retain delivery failures and workers retain exhausted async executions', () => {

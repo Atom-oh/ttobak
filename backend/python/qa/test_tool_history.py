@@ -429,3 +429,68 @@ class TestToolHistory(unittest.TestCase):
         receipt = history.research_receipt(state, {'topic': 'Conflict'}, {'researchId': 'created'})
         self.assertEqual(receipt['researchId'], 'created')
         self.assertFalse(state['replayable'])
+
+    def test_restricted_account_tools_explain_withholding_and_keep_permitted_insights(self):
+        import tools
+        from tool_history import CompleteRead, ToolHistory
+        for name in ('get_account_insights', 'get_account_brief'):
+            for available in (False, True):
+                with self.subTest(tool=name, available=available):
+                    insight = {'insightId': 'visible', 'type': 'risk', 'text': 'PERMITTED_INSIGHT',
+                               'occurredAt': '2026-09-12', 'entities': []}
+                    value = {'account': 'Account', 'accountId': 'a',
+                             'summaryReadRestriction': 'SHARING_REGEN_REQUIRED',
+                             'insights': [insight] if available else [],
+                             'insightsByType': {'risk': [insight]} if available else {},
+                             'industry': 'Industry', 'meetings': [{'meetingId': 'm', 'title': 'Raw title'}],
+                             'research': []}
+                    history = ToolHistory('reader', {
+                        name: lambda user, **kw: CompleteRead(copy.deepcopy(value))})
+                    state = provenance.new_source_state()
+                    text, sources = tools.execute_tool(
+                        name, {'account': 'Account'}, dict(user_id='reader', **history.callbacks(state)))
+                    self.assertIn('SHARING_REGEN_REQUIRED', text)
+                    self.assertNotIn('인사이트가 없습니다', text)
+                    self.assertNotIn('인사이트 없음', text)
+                    self.assertEqual('PERMITTED_INSIGHT' in text, available)
+                    self.assertEqual(sources, [])
+                    self.assertEqual(len(state['dependencies']), 1)
+                    if name == 'get_account_brief':
+                        self.assertIn('Industry', text)
+                        self.assertIn('Raw title', text)
+                    value.pop('summaryReadRestriction')
+                    value['insights'] = []
+                    value['insightsByType'] = {}
+                    empty, _ = tools.execute_tool(
+                        name, {'account': 'Account'},
+                        dict(user_id='reader', **history.callbacks(provenance.new_source_state())))
+                    self.assertNotIn('SHARING_REGEN_REQUIRED', empty)
+                    self.assertIn('인사이트가 없습니다' if name == 'get_account_insights'
+                                  else '인사이트 없음', empty)
+
+    def test_marker_only_change_invalidates_account_history_in_both_directions(self):
+        from tool_history import CompleteRead, ToolHistory, _public_view, fingerprint
+        for name in ('get_account_insights', 'get_account_brief'):
+            for initially_restricted in (False, True):
+                with self.subTest(tool=name, initially_restricted=initially_restricted):
+                    value = {'account': 'Account', 'accountId': 'a', 'insights': [],
+                             'insightsByType': {}, 'meetings': [], 'research': []}
+                    restricted = dict(value, summaryReadRestriction='SHARING_REGEN_REQUIRED')
+                    self.assertNotEqual(fingerprint(_public_view(name, value)),
+                                        fingerprint(_public_view(name, restricted)))
+                    if initially_restricted:
+                        value.update(summaryReadRestriction='SHARING_REGEN_REQUIRED')
+                    history = ToolHistory('reader', {
+                        name: lambda user, **kw: CompleteRead(copy.deepcopy(value))})
+                    state = provenance.new_source_state()
+                    history.read(state, name, {'account': 'Account'})
+                    messages = conversation('original view', name, {'account': 'Account'})
+                    saved = session(state, messages)
+                    self.assertEqual(provenance.restore_messages(
+                        saved, provenance.new_source_state(), lambda _: False, tool_history=history), messages)
+                    if initially_restricted:
+                        value.pop('summaryReadRestriction')
+                    else:
+                        value.update(summaryReadRestriction='SHARING_REGEN_REQUIRED')
+                    self.assertEqual(provenance.restore_messages(
+                        saved, provenance.new_source_state(), lambda _: False, tool_history=history), [])

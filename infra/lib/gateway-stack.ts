@@ -98,6 +98,25 @@ export class GatewayStack extends cdk.Stack {
     });
     const pipelineFailures = new PipelineFailures(this, 'PipelineFailures');
     this.httpOrigin = new HttpOrigin(this, 'HttpOrigin');
+    const originReleaseCiRoleName = this.node.tryGetContext('ttobak:httpOriginReleaseCiRoleName');
+    if (originReleaseCiRoleName !== undefined && originReleaseCiRoleName !== false) {
+      if (typeof originReleaseCiRoleName !== 'string'
+          || originReleaseCiRoleName === 'false' || originReleaseCiRoleName === 'true'
+          || !/^[A-Za-z0-9_+=,.@-]{1,64}$/.test(originReleaseCiRoleName)) {
+        throw new Error('ttobak:httpOriginReleaseCiRoleName must be an existing IAM role name or boolean false');
+      }
+      // Gateway owns this policy on the existing CI role. Initial secret
+      // creation remains an operator bootstrap; CI can rotate only this ARN.
+      new iam.Policy(this, 'HttpOriginReleaseCiPolicy', {
+        policyName: 'ttobak-http-origin-release',
+        roles: [iam.Role.fromRoleName(this, 'HttpOriginReleaseCiRole', originReleaseCiRoleName)],
+        statements: [new iam.PolicyStatement({
+          actions: ['secretsmanager:GetSecretValue', 'secretsmanager:PutSecretValue',
+            'secretsmanager:UpdateSecretVersionStage'],
+          resources: [this.httpOrigin.secret.secretArn],
+        })],
+      });
+    }
 
     // API Lambda function (Go runtime, arm64)
     this.apiFunction = new lambda.Function(this, 'ApiFunction', {

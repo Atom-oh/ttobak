@@ -21,6 +21,7 @@
     "ttobak:certificateArn": "arn:aws:acm:us-east-1:180294183052:certificate/f6b6907a-5747-4039-967a-a8c7c73116a7",
     "ttobak:cloudfrontDomain": "d2olomx8td8txt.cloudfront.net",
     "ttobak:mcpResourceAudience": "https://ttobak.atomai.click/api/mcp",
+    "ttobak:httpOriginReleaseCiRoleName": "mall-apne2-mgmt-ci-runner",
     "ttobak:knowledgeBaseId": "BJJLVLFTOR",
     "ttobak:dataSourceId": "3AVMMT3RF3",
     "@aws-cdk/aws-signer:signingProfileNamePassedToCfn": true,

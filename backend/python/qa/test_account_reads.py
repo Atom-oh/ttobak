@@ -368,7 +368,8 @@ class TestStrictAccountReads(unittest.TestCase):
             self.assertFalse({'content', 'transcriptA', 'transcriptB', 's3Key', 'evidence'} & fields)
             if key == source_key:
                 self.assertEqual(fields, {'PK', 'SK', 'meetingId', 'userId', 'entityType',
-                                          'accountId', 'sharedToAccount'})
+                                          'accountId', 'sharedToAccount',
+                                          'summaryPrivacy', 'insightsRevision'})
 
     def test_mismatched_canonical_primary_key_cannot_load_insight_body(self):
         for field, value in (('PK', 'USER#other'), ('SK', 'MEETING#other')):
@@ -381,6 +382,33 @@ class TestStrictAccountReads(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.reader().get_account_insights('reader', 'Account')
                 self.assertFalse(any(key[1].startswith('INSIGHT#') for key, _ in self.table.reads))
+
+    def test_stamped_membership_rejects_old_derived_insight_before_body_read(self):
+        self.account()
+        self.meeting()
+        self.insight()
+        self.table.items[('ACCOUNT#a', 'MEMBER#reader')]['summaryPrivacyVersion'] = 1
+        with mock.patch.dict('os.environ', {'SUMMARY_PRIVACY_READER_ENABLED': '0'}):
+            result = self.reader().get_account_insights('reader', 'Account')
+        self.assertEqual(result.value['insights'], [])
+        self.assertEqual(result.value['summaryReadRestriction'], 'SHARING_REGEN_REQUIRED')
+        self.assertFalse(any(key[1].startswith('INSIGHT#') for key, _ in self.table.reads))
+
+    def test_insight_generation_change_after_body_read_invalidates_complete_read(self):
+        import hashlib
+        self.account()
+        privacy = {'version': 1, 'state': 'safe', 'generationId': 'generation',
+                   'contentSha256': hashlib.sha256(b'summary').hexdigest()}
+        self.meeting(summaryPrivacy=privacy, insightsRevision='revision')
+        self.insight(summaryGeneration='generation', insightsRevision='revision')
+        self.table.items[('ACCOUNT#a', 'MEMBER#reader')]['summaryPrivacyVersion'] = 1
+
+        def rotate_after_body(key, args):
+            if key['SK'].startswith('INSIGHT#') and 'text' in args.get('ExpressionAttributeNames', {}).values():
+                self.table.items[('USER#owner', 'MEETING#m')]['insightsRevision'] = 'replacement'
+        self.table.after_read = rotate_after_body
+        with self.assertRaises(PermissionError):
+            self.reader().get_account_insights('reader', 'Account')
 
     def test_unusable_insight_projection_identities_are_omitted_before_body_reads(self):
         changes = [

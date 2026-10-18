@@ -3,10 +3,13 @@ from contextlib import redirect_stdout
 import io
 import json
 from pathlib import Path
+import stat
+import struct
 import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest import mock
+import zlib
 
 from http_origin_release import CACHE_WAIT, RETIRED_STAGE, SECRET_NAME, STACKS, Cdk, Release, ReleaseError, checkout_revision, main
 
@@ -538,7 +541,8 @@ class ReleaseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             runner = Cdk(REGION, ACCOUNT)
             runner.assembly = Path(directory)
-            (runner.assembly / "manifest.json").write_text('{"version":"1"}')
+            (runner.assembly / "manifest.json").write_text(json.dumps({"version": "1", "artifacts": {
+                "TtobakStorageStack": {"type": "aws:cloudformation:stack", "dependencies": []}}}))
             template = runner.assembly / "TtobakStorageStack.template.json"
             template.write_text('{"Resources":{}}')
             with mock.patch("http_origin_release.checkout_revision", return_value="a" * 40), \
@@ -567,6 +571,415 @@ class ReleaseTests(unittest.TestCase):
                 mock.patch("sys.stderr", io.StringIO()):
             self.assertEqual(main(), 1)
             deploy.assert_not_called()
+
+
+class CdkAssemblyCacheTests(unittest.TestCase):
+    """Synthetic malformed archives plus deploy guards; never deploy or extract."""
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.runner = Cdk(REGION, ACCOUNT)
+        self.runner.assembly = Path(self.directory.name)
+        self.staged = self.runner.assembly / "asset.synthetic"
+        (self.staged / "nested").mkdir(parents=True)
+        (self.staged / "empty").mkdir()
+        (self.staged / ".cache").mkdir()
+        for name, data, mode in (
+            ("bootstrap", b"executable\0" * 20000, 0o755),
+            (".DS_Store", b"dot file", 0o644),
+            (".lock", b"staged lock is an input", 0o600),
+            (".cache/.lock", b"nested cache lock is also an input", 0o600),
+            ("nested/한국어.txt", b"UTF-8 member", 0o640),
+        ):
+            path = self.staged / name
+            path.write_bytes(data)
+            path.chmod(mode)
+        self.asset_id = "a" * 64
+        self.asset_manifest = self.runner.assembly / "Synthetic.assets.json"
+        self.asset_manifest.write_text(json.dumps({"files": {
+            self.asset_id: {"source": {"path": self.staged.name, "packaging": "zip"}}}}))
+        self.manifest = self.runner.assembly / "manifest.json"
+        artifacts = {stack: {"type": "aws:cloudformation:stack", "dependencies": ["Synthetic.assets"]}
+                     for stack in STACKS}
+        artifacts["Synthetic.assets"] = {
+            "type": "cdk:asset-manifest", "properties": {"file": self.asset_manifest.name}}
+        self.manifest.write_text(json.dumps({"artifacts": artifacts}))
+        self.template = self.runner.assembly / "TtobakStorageStack.template.json"
+        self.template.write_text('{"Resources":{}}')
+        self.cache = self.runner.assembly / ".cache" / (self.asset_id + ".zip")
+
+    def entries(self):
+        return [(path.relative_to(self.staged).as_posix(), path.read_bytes(), path.stat().st_mode & 0xffff)
+                for path in sorted(self.staged.rglob("*")) if path.is_file()]
+
+    @staticmethod
+    def archive_bytes(entries):
+        # Test-only fixture for the pinned format. The private evidence packet
+        # separately exercises actual installed CDK packageFile bytes.
+        local, central = bytearray(), bytearray()
+        for name, data, mode in entries:
+            name = name.encode("utf-8")
+            compressor = zlib.compressobj(wbits=-15)
+            compressed = compressor.compress(data) + compressor.flush()
+            crc = zlib.crc32(data)
+            offset = len(local)
+            local += struct.pack("<4s5H3I2H", b"PK\x03\x04", 20, 0x800, 8, 0, 33,
+                                 crc, len(compressed), len(data), len(name), 0) + name + compressed
+            central += struct.pack("<4s6H3I5H2I", b"PK\x01\x02", 0x33f, 20, 0x800, 8, 0, 33,
+                                   crc, len(compressed), len(data), len(name), 0, 0, 0, 0,
+                                   mode << 16, offset) + name
+        return bytes(local + central + struct.pack("<4s4H2IH", b"PK\x05\x06", 0, 0, len(entries),
+                                                  len(entries), len(central), len(local), 0))
+
+    def write_cache(self, entries=None):
+        self.cache.parent.mkdir(exist_ok=True)
+        self.cache.write_bytes(self.archive_bytes(self.entries() if entries is None else entries))
+
+    def assert_cache_invalid(self):
+        with self.assertRaisesRegex(ReleaseError, "^REVIEWED_ASSEMBLY_CACHE_INVALID$"):
+            self.runner.assembly_hash()
+
+    def test_declared_cache_generation_and_reuse_preserve_reviewed_input_digest(self):
+        reviewed = self.runner.assembly_hash()
+        self.write_cache()
+        self.assertEqual(self.runner.assembly_hash(), reviewed)
+        self.assertEqual(self.runner.assembly_hash(), reviewed)
+        self.assertEqual(self.runner.validated_asset_caches(), {self.cache})
+
+    def test_valid_members_at_and_after_output_boundaries_preserve_digest(self):
+        member = self.staged / "bootstrap"
+        for size in (65536, 65537, 65538, 131072, 131073, 131074):
+            for byte in (b"A", b"x", b"\0"):
+                with self.subTest(size=size, byte=byte):
+                    self.cache.unlink(missing_ok=True)
+                    member.write_bytes(byte * size)
+                    reviewed = self.runner.assembly_hash()
+                    self.write_cache()
+                    self.assertEqual(self.runner.assembly_hash(), reviewed)
+                    self.assertEqual(self.runner.assembly_hash(), reviewed)
+
+    def test_buffered_last_byte_must_match_the_staged_source(self):
+        member = self.staged / "bootstrap"
+        member.write_bytes(b"A" * 65537)
+        entries = self.entries()
+        changed = [(name, data[:-1] + b"B" if name == "bootstrap" else data, mode)
+                   for name, data, mode in entries]
+        self.write_cache(changed)
+        self.assert_cache_invalid()
+
+    def test_buffered_expansion_beyond_declared_source_size_is_rejected(self):
+        member = self.staged / "bootstrap"
+        data = b"A" * 65536
+        member.write_bytes(data)
+        mode = member.stat().st_mode & 0xffff
+        # Keep the oversized DEFLATE stream, but forge both headers to claim
+        # the staged size and CRC. Its last byte arrives on an empty-input drain.
+        entries = [("bootstrap", data + b"A", mode)]
+        entries.extend(entry for entry in self.entries() if entry[0] != "bootstrap")
+        malicious = bytearray(self.archive_bytes(entries))
+        central_offset = struct.unpack_from("<I", malicious, len(malicious) - 6)[0]
+        for offset in (14, central_offset + 16):
+            struct.pack_into("<I", malicious, offset, zlib.crc32(data))
+        for offset in (22, central_offset + 24):
+            struct.pack_into("<I", malicious, offset, len(data))
+        self.cache.parent.mkdir()
+        self.cache.write_bytes(malicious)
+        self.assert_cache_invalid()
+
+    def test_existing_cache_is_validated_before_any_deploy(self):
+        self.write_cache()
+        self.runner.revision = "a" * 40
+        self.runner.reviewed_stacks = ("TtobakStorageStack",)
+        self.runner.assembly_digest = self.runner.assembly_hash()
+        entries = self.entries()
+        name, data, mode = entries[0]
+        entries[0] = (name, data + b"unreviewed", mode)
+        self.write_cache(entries)
+        with mock.patch("http_origin_release.checkout_revision", return_value="a" * 40), \
+                mock.patch.object(self.runner, "command") as command:
+            with self.assertRaisesRegex(ReleaseError, "REVIEWED_ASSEMBLY_CACHE_INVALID"):
+                self.runner.deploy("TtobakStorageStack")
+            command.assert_not_called()
+
+    def test_deploy_allows_generated_cache_but_rejects_template_change_after_command(self):
+        self.runner.revision = "a" * 40
+        self.runner.reviewed_stacks = ("TtobakStorageStack",)
+        self.runner.assembly_digest = self.runner.assembly_hash()
+        with mock.patch("http_origin_release.checkout_revision", return_value="a" * 40), \
+                mock.patch.object(self.runner, "command", side_effect=lambda *a, **kw: self.write_cache()):
+            self.runner.deploy("TtobakStorageStack")
+        with mock.patch("http_origin_release.checkout_revision", return_value="a" * 40), \
+                mock.patch.object(self.runner, "command",
+                                  side_effect=lambda *a, **kw: self.template.write_text('{"changed":true}')):
+            with self.assertRaisesRegex(ReleaseError, "REVIEWED_ASSEMBLY_CHANGED"):
+                self.runner.deploy("TtobakStorageStack")
+
+    def test_source_bytes_modes_and_manifest_remain_guarded_with_matching_cache(self):
+        original = self.runner.assembly_hash()
+        for name, mode_only in (("bootstrap", False), ("bootstrap", True),
+                                (".lock", False), (".cache/.lock", False)):
+            with self.subTest(name=name, mode_only=mode_only):
+                path = self.staged / name
+                data, mode = path.read_bytes(), path.stat().st_mode
+                if mode_only:
+                    path.chmod(0o644)
+                else:
+                    path.write_bytes(data + b"changed")
+                self.write_cache()
+                self.assertNotEqual(self.runner.assembly_hash(), original)
+                path.write_bytes(data)
+                path.chmod(stat.S_IMODE(mode))
+        self.write_cache()
+        self.asset_manifest.write_text(self.asset_manifest.read_text() + "\n")
+        self.assertNotEqual(self.runner.assembly_hash(), original)
+
+    def test_unknown_nested_and_basename_trick_caches_are_rejected(self):
+        self.write_cache()
+        for name in ("unknown.zip", "b" * 64 + ".zip", self.asset_id.upper() + ".zip",
+                     self.asset_id + ".zip._tmp", ".lock"):
+            with self.subTest(name=name):
+                bad = self.cache.parent / name
+                bad.write_bytes(self.cache.read_bytes())
+                self.assert_cache_invalid()
+                bad.unlink()
+        nested = self.cache.parent / "nested"
+        nested.mkdir()
+        self.assert_cache_invalid()
+
+    def test_cache_and_staged_symlinks_are_rejected(self):
+        self.cache.parent.mkdir()
+        self.cache.symlink_to(self.template)
+        with self.assertRaisesRegex(ReleaseError, "REVIEWED_ASSEMBLY_SYMLINK"):
+            self.runner.assembly_hash()
+        self.cache.unlink()
+        (self.staged / "link").symlink_to(self.staged / "bootstrap")
+        with self.assertRaisesRegex(ReleaseError, "REVIEWED_ASSEMBLY_SYMLINK"):
+            self.runner.assembly_hash()
+
+    def test_nonzip_executable_external_and_ambiguous_declarations_cannot_exempt_cache(self):
+        self.write_cache()
+        for source in (
+            {"path": self.staged.name, "packaging": "file"},
+            {"path": self.staged.name, "packaging": "zip", "executable": ["command"]},
+            {"path": str(self.staged), "packaging": "zip"},
+            {"path": "../outside", "packaging": "zip"},
+            {"path": ".cache", "packaging": "zip"},
+        ):
+            with self.subTest(source=source):
+                self.asset_manifest.write_text(json.dumps({"files": {self.asset_id: {"source": source}}}))
+                self.assert_cache_invalid()
+        self.asset_manifest.write_text(json.dumps({"files": {self.asset_id: {
+            "source": {"path": self.staged.name, "packaging": "zip"}}}}))
+        duplicate = self.runner.assembly / "Other.assets.json"
+        (self.runner.assembly / "asset.other").mkdir()
+        duplicate.write_text(json.dumps({"files": {self.asset_id: {
+            "source": {"path": "asset.other", "packaging": "zip"}}}}))
+        data = json.loads(self.manifest.read_text())
+        data["artifacts"]["Other.assets"] = {
+            "type": "cdk:asset-manifest", "properties": {"file": duplicate.name}}
+        self.manifest.write_text(json.dumps(data))
+        self.assert_cache_invalid()
+
+    def test_external_source_is_rejected_before_deploy_even_without_cache(self):
+        self.asset_manifest.write_text(json.dumps({"files": {self.asset_id: {
+            "source": {"path": str(self.staged), "packaging": "zip"}}}}))
+        self.runner.revision = "a" * 40
+        self.runner.reviewed_stacks = ("TtobakStorageStack",)
+        self.runner.assembly_digest = "reviewed-before-external-source-change"
+        with mock.patch("http_origin_release.checkout_revision", return_value="a" * 40), \
+                mock.patch.object(self.runner, "command") as command:
+            with self.assertRaisesRegex(ReleaseError, "REVIEWED_ASSEMBLY_CACHE_INVALID"):
+                self.runner.deploy("TtobakStorageStack")
+            command.assert_not_called()
+
+    def add_unselected_external_zip(self):
+        other = self.runner.assembly / "Gateway.assets.json"
+        other.write_text(json.dumps({"files": {"b" * 64: {"source": {
+            "path": str(self.staged), "packaging": "zip"}}}}))
+        data = json.loads(self.manifest.read_text())
+        data["artifacts"]["Gateway.assets"] = {
+            "type": "cdk:asset-manifest", "properties": {"file": other.name}}
+        data["artifacts"]["TtobakGatewayStack"]["dependencies"] = ["Gateway.assets", "TtobakStorageStack"]
+        # The deliberately unsafe unselected Knowledge declaration must never
+        # become an implicit stack-closure review or deployment prerequisite.
+        data["artifacts"]["TtobakKnowledgeStack"] = {
+            "type": "aws:cloudformation:stack", "dependencies": ["Gateway.assets"]}
+        data["artifacts"]["TtobakStorageStack"]["dependencies"].append("TtobakKnowledgeStack")
+        self.manifest.write_text(json.dumps(data))
+        return other
+
+    def test_storage_only_review_preserves_retighten_without_following_stack_closure(self):
+        self.add_unselected_external_zip()
+        self.write_cache()
+        with mock.patch("http_origin_release.checkout_revision", return_value="a" * 40), \
+                mock.patch.object(self.runner, "command") as command:
+            self.runner.diff(("TtobakStorageStack",), activation=False)
+            reviewed = self.runner.assembly_digest
+            self.runner.deploy("TtobakStorageStack")
+            self.assertEqual(command.call_count, 2)
+            self.assertEqual(self.runner.assembly_hash(), reviewed)
+            with self.assertRaisesRegex(ReleaseError, "^UNREVIEWED_STACK$"):
+                self.runner.deploy("TtobakGatewayStack")
+            self.assertEqual(command.call_count, 2)
+            with self.assertRaisesRegex(ReleaseError, "^REVIEWED_ASSEMBLY_CACHE_INVALID$"):
+                self.runner.diff(activation=False)
+
+    def test_selected_scope_and_unselected_inputs_are_in_reviewed_digest(self):
+        self.runner.reviewed_stacks = ("TtobakStorageStack",)
+        original = self.runner.assembly_hash()
+        self.runner.reviewed_stacks = ("TtobakGatewayStack",)
+        self.assertNotEqual(self.runner.assembly_hash(), original)
+        self.runner.reviewed_stacks = ("TtobakStorageStack",)
+        unselected = self.runner.assembly / "TtobakGatewayStack.template.json"
+        unselected.write_text('{"unselected":true}')
+        self.assertNotEqual(self.runner.assembly_hash(), original)
+
+    def test_file_content_cannot_impersonate_an_added_input_in_digest_stream(self):
+        first, second = self.staged / "zz-first", self.staged / "zz-second"
+        payload = b"new staged source"
+        second.write_bytes(payload)
+        second.chmod(0o644)
+        label = (str(second.relative_to(self.runner.assembly)).encode() + b"\0"
+                 + stat.S_IMODE(second.stat().st_mode).to_bytes(2, "big") + b"\0")
+        second.unlink()
+        first.write_bytes(label + payload)
+        first.chmod(0o644)
+        original = self.runner.assembly_hash()
+        first.write_bytes(b"")
+        second.write_bytes(payload)
+        second.chmod(0o644)
+        self.assertNotEqual(self.runner.assembly_hash(), original)
+
+    def test_full_release_external_source_is_rejected_before_publication_command(self):
+        self.add_unselected_external_zip()
+        self.runner.reviewed_stacks = STACKS
+        self.runner.revision = "a" * 40
+        self.runner.assembly_digest = "previous-review"
+        with mock.patch("http_origin_release.checkout_revision", return_value="a" * 40), \
+                mock.patch.object(self.runner, "command") as command:
+            with self.assertRaisesRegex(ReleaseError, "^REVIEWED_ASSEMBLY_CACHE_INVALID$"):
+                self.runner.deploy("TtobakGatewayStack")
+            command.assert_not_called()
+
+    def test_unselected_cached_external_source_cannot_be_exempted(self):
+        self.add_unselected_external_zip()
+        self.runner.reviewed_stacks = ("TtobakStorageStack",)
+        self.write_cache()
+        (self.cache.parent / ("b" * 64 + ".zip")).write_bytes(self.cache.read_bytes())
+        self.assert_cache_invalid()
+
+    def test_bad_unselected_cache_bytes_are_rejected_even_with_safe_staged_source(self):
+        other = self.add_unselected_external_zip()
+        other.write_text(json.dumps({"files": {"b" * 64: {"source": {
+            "path": self.staged.name, "packaging": "zip"}}}}))
+        self.runner.reviewed_stacks = ("TtobakStorageStack",)
+        self.write_cache()
+        unselected_cache = self.cache.parent / ("b" * 64 + ".zip")
+        unselected_cache.write_bytes(self.cache.read_bytes())
+        self.runner.assembly_hash()
+        unselected_cache.write_bytes(b"unreviewed bytes")
+        self.assert_cache_invalid()
+
+    def test_missing_stack_type_and_unsafe_direct_manifest_identity_fail(self):
+        self.runner.reviewed_stacks = ("TtobakStorageStack",)
+        original = json.loads(self.manifest.read_text())
+        malformed = copy.deepcopy(original)
+        malformed["artifacts"]["TtobakStorageStack"]["type"] = "cdk:asset-manifest"
+        self.manifest.write_text(json.dumps(malformed))
+        self.assert_cache_invalid()
+        malformed = copy.deepcopy(original)
+        malformed["artifacts"]["Synthetic.assets"]["properties"]["file"] = "../outside.assets.json"
+        self.manifest.write_text(json.dumps(malformed))
+        self.assert_cache_invalid()
+
+    def test_extra_duplicate_missing_traversal_and_directory_members_are_rejected(self):
+        entries = self.entries()
+        for malformed in (
+            entries + [("extra", b"extra", stat.S_IFREG | 0o644)],
+            entries + [entries[0]],
+            entries[1:],
+            [("../" + name, data, mode) for name, data, mode in entries],
+            [("/" + name, data, mode) for name, data, mode in entries],
+            [(name + "\0hidden", data, mode) for name, data, mode in entries],
+            [(name.replace("/", "\\"), data, mode) for name, data, mode in entries],
+            entries + [("empty/", b"", stat.S_IFDIR | 0o755)],
+        ):
+            with self.subTest(names=[entry[0] for entry in malformed]):
+                self.write_cache(malformed)
+                self.assert_cache_invalid()
+
+    def test_changed_bytes_types_and_modes_are_rejected(self):
+        entries = self.entries()
+        name, data, mode = entries[0]
+        for changed in ((name, data + b"extra", mode), (name, b"x" * len(data), mode),
+                        (name, data, stat.S_IFLNK | 0o777), (name, data, stat.S_IFREG | 0o777)):
+            with self.subTest(mode=changed[2], size=len(changed[1])):
+                self.write_cache([changed] + entries[1:])
+                self.assert_cache_invalid()
+
+    def test_comments_corruption_prefixes_and_trailing_bytes_are_rejected(self):
+        original = self.archive_bytes(self.entries())
+        for malformed in (b"prefix" + original, original + b"trailing",
+                          original[:-1], original[:-2] + b"\x01\0x",
+                          original[:40] + bytes([original[40] ^ 0xff]) + original[41:]):
+            with self.subTest(length=len(malformed)):
+                self.cache.parent.mkdir(exist_ok=True)
+                self.cache.write_bytes(malformed)
+                self.assert_cache_invalid()
+
+    def test_compressed_size_and_central_count_are_bounded_before_parsing(self):
+        self.write_cache()
+        original = self.cache.read_bytes()
+        # Size bound rejects unbounded data without opening the ZIP parser.
+        self.cache.write_bytes(original + b"x" * 400000)
+        with mock.patch("http_origin_release.zipfile.ZipFile") as reader:
+            self.assert_cache_invalid()
+            reader.assert_not_called()
+        malformed = bytearray(original)
+        struct.pack_into("<H", malformed, len(malformed) - 14, 50000)
+        self.cache.write_bytes(malformed)
+        with mock.patch("http_origin_release.zipfile.ZipFile") as reader:
+            self.assert_cache_invalid()
+            reader.assert_not_called()
+
+    def test_expansion_beyond_declared_source_size_is_rejected(self):
+        entries = self.entries()
+        name, data, mode = entries[0]
+        malicious = bytearray(self.archive_bytes([(name, data + b"x" * 300000, mode)] + entries[1:]))
+        # A forged member advertises the exact staged size/CRC, while its
+        # compressed stream expands beyond that boundary. Do not let a ZIP
+        # reader silently truncate the additional output to the advertised size.
+        central_offset = struct.unpack_from("<I", malicious, len(malicious) - 6)[0]
+        struct.pack_into("<I", malicious, 14, zlib.crc32(data))
+        struct.pack_into("<I", malicious, 22, len(data))
+        struct.pack_into("<I", malicious, central_offset + 16, zlib.crc32(data))
+        struct.pack_into("<I", malicious, central_offset + 24, len(data))
+        self.cache.parent.mkdir()
+        self.cache.write_bytes(malicious)
+        self.assert_cache_invalid()
+
+    def test_noncache_hidden_inputs_are_hashed_and_local_headers_cannot_disagree(self):
+        original = self.runner.assembly_hash()
+        lookalike = self.runner.assembly / "nested" / ".cache"
+        lookalike.mkdir(parents=True)
+        (lookalike / ".lock").write_bytes(b"ordinary input")
+        self.assertNotEqual(self.runner.assembly_hash(), original)
+        self.write_cache()
+        data = bytearray(self.cache.read_bytes())
+        # Change only the local CRC, leaving the central directory intact.
+        struct.pack_into("<I", data, 14, 0)
+        self.cache.write_bytes(data)
+        self.assert_cache_invalid()
+
+    def test_empty_directory_asset_has_only_empty_zip_and_root_lock_is_transient(self):
+        for path in self.staged.rglob("*"):
+            if path.is_file():
+                path.unlink()
+        original = self.runner.assembly_hash()
+        self.write_cache([])
+        self.assertEqual(self.runner.assembly_hash(), original)
+        (self.runner.assembly / ".lock").write_bytes(b"CDK lock")
+        self.assertEqual(self.runner.assembly_hash(), original)
 
 
 if __name__ == "__main__":
