@@ -103,7 +103,7 @@ export function CustomDictionary() {
       mutationEpoch.current++;
       done(resp);
       if (resp.vocabularies) setVocabularies(resp.vocabularies);
-      setWarned(Boolean(resp.warnings?.length));
+      if (resp.warnings !== undefined) setWarned(resp.warnings.length > 0);
       return true;
     } catch (err) {
       mutationEpoch.current++;
