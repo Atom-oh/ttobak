@@ -973,7 +973,9 @@ func (s *MeetingService) DeleteMeeting(ctx context.Context, userID, meetingID st
 			return ErrForbidden
 		}
 		if err != nil {
-			return ErrNotFound
+			// A transient lookup failure is not "gone": surface it so the
+			// client retries DELETE and the re-sweep below still runs.
+			return err
 		}
 		// The meeting item is gone. Its post-delete term sweep may have failed;
 		// a retried DELETE re-runs it (bound to the owner on the run state).

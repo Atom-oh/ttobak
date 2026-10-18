@@ -265,22 +265,11 @@ func (r *DynamoDBRepository) SweepMeetingTerms(ctx context.Context, ownerID, mee
 	return nil
 }
 
+// deleteOrphanAutoTerm reads the term version BEFORE counting the remaining
+// observations. An observation write (observeAutoTerm) puts DICTOBS# and bumps
+// the version in one transaction, so any write that lands after the read fails
+// the version-guarded delete; one that lands before it is seen by the count.
 func (r *DynamoDBRepository) deleteOrphanAutoTerm(ctx context.Context, pk, termKey string) error {
-	keyExpr, err := expression.NewBuilder().WithKeyCondition(expression.Key("PK").Equal(expression.Value(pk)).
-		And(expression.Key("SK").BeginsWith(model.PrefixDictObs + termKey + "#"))).Build()
-	if err != nil {
-		return err
-	}
-	remaining, err := r.client.Query(ctx, &dynamodb.QueryInput{
-		TableName: aws.String(r.tableName), ConsistentRead: aws.Bool(true), Limit: aws.Int32(1), Select: types.SelectCount,
-		KeyConditionExpression: keyExpr.KeyCondition(), ExpressionAttributeNames: keyExpr.Names(), ExpressionAttributeValues: keyExpr.Values(),
-	})
-	if err != nil {
-		return fmt.Errorf("count term observations: %w", err)
-	}
-	if remaining.Count > 0 {
-		return nil
-	}
 	got, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{TableName: aws.String(r.tableName), Key: dictKey(pk, model.DictTermSK(termKey)), ConsistentRead: aws.Bool(true)})
 	if err != nil {
 		return fmt.Errorf("read swept term: %w", err)
@@ -294,6 +283,21 @@ func (r *DynamoDBRepository) deleteOrphanAutoTerm(ctx context.Context, pk, termK
 	}
 	if term.Origin != model.TermOriginAuto || term.UserEditedAt != "" ||
 		(term.State != model.TermStateActive && term.State != model.TermStateSuggested) {
+		return nil
+	}
+	keyExpr, err := expression.NewBuilder().WithKeyCondition(expression.Key("PK").Equal(expression.Value(pk)).
+		And(expression.Key("SK").BeginsWith(model.PrefixDictObs + termKey + "#"))).Build()
+	if err != nil {
+		return err
+	}
+	remaining, err := r.client.Query(ctx, &dynamodb.QueryInput{
+		TableName: aws.String(r.tableName), ConsistentRead: aws.Bool(true), Limit: aws.Int32(1), Select: types.SelectCount,
+		KeyConditionExpression: keyExpr.KeyCondition(), ExpressionAttributeNames: keyExpr.Names(), ExpressionAttributeValues: keyExpr.Values(),
+	})
+	if err != nil {
+		return fmt.Errorf("count term observations: %w", err)
+	}
+	if remaining.Count > 0 {
 		return nil
 	}
 	condition := expression.Name("version").Equal(expression.Value(term.Version)).

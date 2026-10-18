@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -307,5 +308,51 @@ func TestSweepMeetingTermsDeletesObservationsOrphansAndState(t *testing.T) {
 		if err != nil || got != want {
 			t.Fatalf("sweep: err=%v\n got %s\nwant %s", err, got, want)
 		}
+	}
+}
+
+// Interleaving (review of PR #374): the sweep reads the term version before it
+// counts observations. A merge for another live meeting that commits DICTOBS#
+// plus version+1 after the count must make the version-guarded delete fail,
+// so the active auto term survives with its new observation.
+func TestDeleteOrphanAutoTermLosesToConcurrentObservation(t *testing.T) {
+	key := strings.Repeat("d", 32)
+	version, observations := 4, 0
+	var order []string
+	dict, calls := dictWire(t, func(_ int, op string, body map[string]any) (int, string) {
+		encoded, _ := json.Marshal(body)
+		text := string(encoded)
+		switch {
+		case op == "GetItem" && strings.Contains(text, "DICTTERM#"):
+			order = append(order, "read-term")
+			return 200, `{"Item":{"PK":{"S":"USER#owner"},"SK":{"S":"DICTTERM#` + key + `"},"termKey":{"S":"` + key +
+				`"},"origin":{"S":"auto"},"state":{"S":"active"},"version":{"N":"` + strconv.Itoa(version) + `"}}}`
+		case op == "Query":
+			order = append(order, "count")
+			count := observations
+			// observeAutoTerm for meeting m2 commits right after the count:
+			// DICTOBS#key#m2 and version+1 in one transaction.
+			observations++
+			version++
+			return 200, `{"Count":` + strconv.Itoa(count) + `}`
+		case op == "DeleteItem" && strings.Contains(text, "DICTTERM#"):
+			order = append(order, "delete-term")
+			if !strings.Contains(resolved(body, "ConditionExpression"), `version = {"N":"`+strconv.Itoa(version)+`"}`) {
+				return 400, `{"__type":"ConditionalCheckFailedException","message":"stale"}`
+			}
+			return 200, `{}`
+		}
+		return 200, `{}`
+	})
+	repo := NewDynamoDBRepository(dict.client, "dict-test")
+	if err := repo.deleteOrphanAutoTerm(context.Background(), "USER#owner", key); err != nil {
+		t.Fatalf("a lost race is not an error: %v", err)
+	}
+	if got := strings.Join(order, ","); got != "read-term,count,delete-term" {
+		t.Fatalf("the term version must be read before the observation count: %s", got)
+	}
+	last := (*calls)[len(*calls)-1]
+	if cond := resolved(last.body, "ConditionExpression"); !strings.Contains(cond, `version = {"N":"4"}`) {
+		t.Fatalf("delete must bind the version read before the count: %s", cond)
 	}
 }
