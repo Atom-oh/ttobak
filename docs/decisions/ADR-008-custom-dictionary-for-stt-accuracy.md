@@ -3,7 +3,8 @@
 - Status: Accepted; phonetic TSV uploads and automatic suggestion ingestion remain
   original plans, not current behavior.
 - Decision date: Not recorded; original rationale references the 2026-04-23 STT evaluation.
-- Implementation checked: 2026-09-13; v2 storage amendment checked 2026-10-18.
+- Implementation checked: 2026-09-13; v2 storage and terms run-state/merge
+  amendments checked 2026-10-18.
 
 ## Context and decision
 
@@ -89,6 +90,65 @@ readers only: no extraction, term CRUD route, vocabulary builder or UI change.
   `GetVocabularyForTranscription` reads `VOCAB#` first, falls back to the blob
   and never writes; the transcribe Lambda uses both readers.
 
+## Amendment 2026-10-18: terms run state and merge rules (inert)
+
+Storage and merge code for automatic terms exists but nothing calls it: no
+extraction, trigger, route, event rule or model call ships with it, so it
+changes no runtime behavior.
+
+- **Run state** `MEETING#{mid}/ANALYSIS#terms` (`model.TermsAnalysis`) follows the
+  action-items CAS: `runId`, `status` queued|running|succeeded|failed,
+  `sourceHash`, `summaryGeneration`, `leaseUntil` (ms), an enum `errorCode`
+  (shared analysis codes plus `DISABLED` and `TAINTED_SUGGEST_ONLY`), counters
+  and `acceptedTerms`. Queue requires the observed prior run/status/lease (an
+  expired lease when pending) and a `sourceHash` different from
+  `succeededSourceHash`, which only Complete sets. Queue, Start and RenewLease
+  carry a ConditionCheck that the owner's meeting exists and is done; Complete
+  matches run and lease and checks that the meeting exists; Fail is one
+  conditional update of the observed run, run by the caller with a detached
+  3-second context. The row stores hashes, enums and counts, never term text.
+- **acceptedTerms** holds at most 40 `{termKey, sourceTypes}` entries (32-hex
+  keys, `transcript|notes|document`). It lists every term this meeting has an
+  observation for and only grows, because the planned deletion cleanup
+  (design A8) can find a meeting's `DICTOBS#` rows only through it. The merger
+  writes a new key only while the list has room, checked per candidate so
+  skipped candidates take no slot, and returns the list even on failure so
+  Fail can record it. Deletion cleanup is not implemented: deleting a meeting
+  currently leaves its `ANALYSIS#terms` row (not among `DeleteMeeting`'s
+  singleton deletes) and its `DICTOBS#` rows. It must land before or with the
+  first writer.
+- **Merge** (`TermsMerger.MergeExtractedTerms`, owner's personal scope only):
+  no row creates an auto term with hits 1 (`suggested` when the meeting is
+  tainted); tombstones, manual rows, rows with `userEditedAt` and unknown
+  states are skipped; an untainted run promotes a suggestion to `active` with
+  a version-CAS transaction that also records the observation
+  (`PromoteSuggestedTerm`) and merges into an active auto term
+  (`MergeAutoObservation`, which now also unions `sourceTypes`). Promotion
+  replaces the suggestion's heardAs, sourceTypes, displayAs, phrase, type,
+  confidence and recognition flags with the untainted run's values and sets
+  `hits` to 1, so nothing a non-owner planted becomes active or counts toward
+  `hits >= 2`. Tainted observations carry `tainted: true`. A tainted run never
+  reinforces an existing term. An alias whose key equals its own
+  term or another active or candidate term is dropped; heardAs stays at most
+  five. A version conflict or a `TransactionConflict` cancellation
+  (`ErrDictTransactionConflict`) re-reads and retries, three attempts in
+  total; an existing observation is a no-op, and a meeting whose
+  acceptedTerms already lists the key (its observation was pruned) records the
+  observation again without a hit, so re-running a meeting keeps `hits`. A
+  meeting whose earlier write failed ambiguously is also listed and so may be
+  undercounted, never double-counted. A
+  leftover observation without a term (failed eviction cleanup) is deleted
+  before the create is retried.
+- **Caps.** Unedited automatic terms (active or suggested) are capped at 300 per
+  scope; `EvictAutoTerm` (now also accepting `suggested`) removes the lowest
+  `hits*2 + (lastSeen within 30 days ? 1 : 0)` first, oldest `lastSeenAt` on
+  ties. When its version and `userEditedAt` guards fail, the row is re-read: a
+  row now gone, edited or tombstoned reduces the excess (a concurrent merge
+  may already have evicted it), and only a still-evictable newer row moves on
+  to the next candidate. Each term keeps its ten newest observations; `hits` is never
+  decremented. Cleanup failures are surfaced. Account scope, the manual
+  500-term cap and tombstone pruning are not implemented.
+
 ## Consequences and risks
 
 Terms persist across meetings and customize both recognition paths. Transcribe
@@ -104,6 +164,10 @@ concerns. This feature does not remove the need to review transcripts.
 - [repository dictionary.go](../../backend/internal/repository/dictionary.go) and
   [dictionary_v2.go](../../backend/internal/service/dictionary_v2.go): v2 guards,
   migration, union reader and merge; tests beside each.
+- [terms_analysis.go](../../backend/internal/model/terms_analysis.go),
+  [repository terms_analysis.go](../../backend/internal/repository/terms_analysis.go)
+  and [terms_merge.go](../../backend/internal/service/terms_merge.go): run state,
+  CAS transitions and merge rules; tests beside each.
 - [dictionary.go](../../backend/internal/service/dictionary.go): resource naming,
   status, and phrase-only vocabulary construction.
 - [transcribe.go](../../backend/internal/service/transcribe.go),
