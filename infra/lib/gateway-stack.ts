@@ -106,7 +106,8 @@ export class GatewayStack extends cdk.Stack {
         throw new Error('ttobak:httpOriginReleaseCiRoleName must be an existing IAM role name or boolean false');
       }
       // Gateway owns this policy on the existing CI role. Initial secret
-      // creation remains an operator bootstrap; CI can rotate only this ARN.
+      // creation remains an operator bootstrap; CI can rotate only this ARN
+      // and invoke the four existing foundation-check function/alias targets.
       new iam.Policy(this, 'HttpOriginReleaseCiPolicy', {
         policyName: 'ttobak-http-origin-release',
         roles: [iam.Role.fromRoleName(this, 'HttpOriginReleaseCiRole', originReleaseCiRoleName)],
@@ -114,6 +115,13 @@ export class GatewayStack extends cdk.Stack {
           actions: ['secretsmanager:GetSecretValue', 'secretsmanager:PutSecretValue',
             'secretsmanager:UpdateSecretVersionStage'],
           resources: [this.httpOrigin.secret.secretArn],
+        }), new iam.PolicyStatement({
+          actions: ['lambda:InvokeFunction'],
+          resources: ['ttobak-api', 'ttobak-api:live', 'ttobak-qa', 'ttobak-mcp'].map(name =>
+            this.formatArn({
+              service: 'lambda', resource: 'function', resourceName: name,
+              arnFormat: cdk.ArnFormat.COLON_RESOURCE_NAME,
+            })),
         })],
       });
     }
