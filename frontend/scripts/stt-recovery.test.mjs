@@ -28,8 +28,9 @@ function loadModule(name, dependencies, globals = {}) {
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const config = { region: 'test', identityPoolId: 'test', userPoolId: 'test' };
 const translationModule = loadModule('liveTranslation', {});
+const liveVocabularyModule = loadModule('liveVocabulary', {});
 
-function managerFixture({ withConfig = true, translationEnabled = false, targetLang = 'ko' } = {}) {
+function managerFixture({ withConfig = true, translationEnabled = false, targetLang = 'ko', vocabularies } = {}) {
   const window = new EventTarget();
   const document = Object.assign(new EventTarget(), { visibilityState: 'visible' });
   const navigator = { onLine: true };
@@ -76,9 +77,10 @@ function managerFixture({ withConfig = true, translationEnabled = false, targetL
     },
     targetLang,
     translationEnabled,
-    transcribeStreamingConfig: withConfig ? config : undefined,
+    transcribeStreamingConfig: withConfig ? { ...config, vocabularies } : undefined,
     onReconnecting: () => events.push('reconnecting'),
     onReconnected: () => events.push('reconnected'),
+    onVocabularyFallback: () => events.push('vocabulary-fallback'),
   });
   const stream = { getTracks: () => [{ stop: () => { trackStops++; } }] };
   return {
@@ -92,6 +94,16 @@ function managerFixture({ withConfig = true, translationEnabled = false, targetL
     get trackStops() { return trackStops; },
   };
 }
+
+test('a rejected vocabulary is dropped for later sessions of the recording', async () => {
+  const state = managerFixture({ vocabularies: { 'ko-KR': 'v-ko' } });
+  await state.start();
+  [0, 1].forEach(() => state.sessions[0].options.onVocabularyFallback());
+  state.sessions[0].fail();
+  assert.deepEqual(state.sessions.map((s) => s.options.vocabularies?.['ko-KR']), ['v-ko', undefined]);
+  assert.equal(state.events.filter((e) => e === 'vocabulary-fallback').length, 1);
+  state.manager.stop();
+});
 
 test('browser interpretation retains each language and scopes result IDs across reconnects', async () => {
   const state = managerFixture({ translationEnabled: true, targetLang: 'ko-en' });
@@ -253,6 +265,7 @@ test('the recording hook stops its manager on unmount, preventing off-page recon
     '@/lib/speechRecognition': { countWords: () => 0 },
     '@/lib/runtimeConfig': { getRuntimeConfig: async () => ({ cognito: {} }) },
     '@/lib/liveTranslation': translationModule,
+    '@/lib/liveVocabulary': liveVocabularyModule,
   });
   const hook = useRecordingSession({
     targetLang: 'ko', translationEnabled: false, liveSttProvider: 'transcribe-streaming',
@@ -293,6 +306,7 @@ function streamingFixture({ send, refreshSession = async () => 'token', getIdTok
       StartStreamTranscriptionCommand: class {},
     },
     '@aws-sdk/credential-providers': { fromCognitoIdentityPool: () => ({}) },
+    '@/lib/liveVocabulary': liveVocabularyModule,
   }, {
     AudioContext: class {
       state = 'running';

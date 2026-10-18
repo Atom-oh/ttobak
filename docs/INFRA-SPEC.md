@@ -181,7 +181,7 @@ Deploy Go/QA reader compatibility before writers (ADR-037).
 Whisper benchmark objects under bench-transcripts/ have current and noncurrent
 version expiry; a delete marker is not immediate physical deletion of all versions.
 Transcribe vocabulary table files under vocab/ (`vocab/{name}.{fingerprint}.tsv`) expire after
-one day, current and noncurrent (the ADR-008 A/B builder writes them). The
+one day, current and noncurrent; the API deletes each after READY, FAILED or quota rejection. The
 prefix is not in the OAC allowlist and is never served by CloudFront.
 Inspect exact lifecycle values in StorageStack when changing retention. The
 websocket Lambda has no current dedicated connections-table CRUD; old documentation
@@ -221,6 +221,11 @@ values that are not non-negative integers, and 0 disables a limit.
 bounds each interpreter call; synth rejects values outside 500–8000. Changing either
 changes the function configuration and publishes a new `live` alias version. The
 counters use the existing table grant and `pendingShareExpiresAt` TTL.
+`MEETING_TRANSLATION_ENABLED` (context `ttobak:meetingTranslationEnabled`, strict
+boolean, default `false`) enables on-demand meeting translation, and
+`MEETING_TRANSLATE_DAILY_BYTES` (context `ttobak:meetingTranslateDailyBytes`,
+default 2000000, 0 disables) bounds its daily per-user input bytes; synth rejects
+other values. Both are API-only and reuse the existing Translate/interpreter grants.
 
 Custom vocabularies: AiStack's API role statement `TranscribeVocabulary` allows
 Create/Update/Get/DeleteVocabulary only on

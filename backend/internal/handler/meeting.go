@@ -28,7 +28,11 @@ type MeetingHandler struct {
 	simService            *service.SimService
 	actionItemsService    *service.ActionItemsAnalysisService
 	attachmentTextService *service.AttachmentTextService
+	meetingTranslation    bool
 }
+
+// SetMeetingTranslationEnabled advertises POST /translation on detail reads.
+func (h *MeetingHandler) SetMeetingTranslationEnabled(enabled bool) { h.meetingTranslation = enabled }
 
 func (h *MeetingHandler) SetAttachmentTextService(s *service.AttachmentTextService) {
 	h.attachmentTextService = s
@@ -319,6 +323,7 @@ func (h *MeetingHandler) GetMeeting(w http.ResponseWriter, r *http.Request) {
 	if h.uploadService != nil {
 		result.SupportsAudioCrop = h.uploadService.AudioCropEnabled()
 	}
+	result.SupportsMeetingTranslation = h.meetingTranslation
 
 	// Generate presigned download URLs for image attachments
 	for i := range result.Attachments {

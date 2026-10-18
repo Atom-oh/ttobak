@@ -109,6 +109,25 @@ are deliberately generous and should be revisited from the metering logs.
 Not yet measured: the interpreter's latency distribution and validation rejection
 rate in production; tune the timeout from the metering logs.
 
+## Amendment 2026-10-18: on-demand meeting translation (G1)
+
+- Live translations are not persisted. Readers translate final AI notes or the
+  selected transcript with `POST /api/meetings/{id}/translation`; the result
+  exists only in the response and client memory.
+- Pages come only from `MeetingReadingService`, so read authorization, restricted
+  summaries and revision-bound cursors are the reading endpoint's own. Non-final
+  pages end at a line, speaker header or whole segment; a wrapper cursor carries an
+  open fence or the text-transcript speaker. No binding is invented or text skipped.
+- Links, code, HTML and URLs are atomic `⟦Ln⟧` placeholders that must round-trip,
+  and transcript text is sent without labels or times. A line with any failed piece
+  keeps its source and is counted. Lines go as Korean (≥30% Hangul), English
+  (Latin only) or, if code-mixed, the non-target language; other scripts stay.
+- Bounds: 12 chunks of 3,000 bytes, concurrency 4, a 20 s budget, a 64KB response
+  and a daily per-user byte brake charged on attempt (`MEETING_TRANSLATE_DAILY_BYTES`).
+  `MEETING_TRANSLATION_ENABLED` defaults off.
+- Not included: the meeting glossary; a single line longer than a page splits at
+  the reader's cut.
+
 ## Evidence
 
 - [transcribe.go](../../backend/internal/service/transcribe.go): both batch methods.
@@ -120,3 +139,7 @@ rate in production; tune the timeout from the metering logs.
   [translate.go handler](../../backend/internal/handler/translate.go),
   [translate.go service](../../backend/internal/service/translate.go),
   [liveTranslation.ts](../../frontend/src/lib/liveTranslation.ts): 2026-10-18 amendment.
+- [meeting_translation.go](../../backend/internal/service/meeting_translation.go),
+  [meeting translation handler](../../backend/internal/handler/meeting_translation.go),
+  [MeetingTranslation.tsx](../../frontend/src/components/meeting/MeetingTranslation.tsx):
+  on-demand meeting translation amendment.
