@@ -281,9 +281,8 @@ readers never build. Callers and response: [API-SPEC](../API-SPEC.md#personal-di
   a stale submitter writes its own key, never a newer table) with header
   `Phrase\tSoundsLike\tIPA\tDisplayAs`, four fields per row, at most 1,500 rows
   and 48 KB; invalid rows are dropped individually. The phrase validator is
-  minimal (spaces become `-`, AWS table rules); the builder does not use the
-  automatic-term `deriveTranscribePhrase` or its separate validator in
-  `terms_filter.go`. ko-KR drops dotted acronyms until acceptance item 2. en-US
+  minimal (spaces become `-`, AWS table rules), separate from `terms_filter.go`.
+  ko-KR drops dotted acronyms until acceptance item 2. en-US
   needs five Latin-only phrases. The file is deleted after READY, FAILED or quota.
 - **Claims** need a changed fingerprint, no claimed build, and
   `VOCAB_REBUILD_MIN_INTERVAL` (default 10m) since the last flip or build start;
@@ -320,14 +319,9 @@ readers never build. Callers and response: [API-SPEC](../API-SPEC.md#personal-di
   A/B build is claimed until its result is recorded. A migration retry leaves
   a row with A/B fields to the builder. Live streams receive no vocabulary
   name (below).
-- **No vocabulary name in responses** (the design added `vocabularyName`): the
-  existing live client would send it as `VocabularyNames` on an
-  `IdentifyMultipleLanguages` ko-KR/en-US stream, and a stream whose identified
-  language matches no listed vocabulary may fail. It waits for item 5 and the
-  live-config client.
-- **Empty language** stops advertising at once and is deleted on the first
-  request after 24 h, as in Slots (the design deferred both), so removed terms
-  stop biasing recognition.
+- **No vocabulary name in responses:** the live client would send it on a
+  ko-KR/en-US multi-language stream, which may fail; it waits for item 5.
+- **Empty language** stops advertising at once; deleted after 24 h as in Slots.
 - **Not covered:** en-US builds, batch en-US `LanguageIdSettings`, scheduled
   reclamation of inactive or retired names,
   account contexts, live-config, client stream retry, and GatewayStack wiring
