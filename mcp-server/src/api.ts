@@ -6,6 +6,8 @@ import { URL } from 'node:url';
 import { MAX_READING_BYTES, type ReadingOptions } from './reading.js';
 import type { DocumentReadingOptions } from './document-reading.js';
 import type { DocumentCatalogOptions } from './document-catalog.js';
+import type { KBReadingOptions } from './kb-catalog.js';
+import type { NavigationKind } from './navigation-catalog.js';
 
 // Extension -> MIME type, shared by both upload tools for inference only --
 // each tool advertises its own narrower format list (kb_upload: pdf/md/pptx/
@@ -249,6 +251,13 @@ export class TtobakApi {
     return this.get('/api/accounts');
   }
 
+  async readNavigation(kind: NavigationKind, options: KBReadingOptions) {
+    if (kind !== 'accounts' && kind !== 'projects') throw new Error('Invalid navigation kind');
+    const query = new URLSearchParams({ pageSize: String(options.pageSize) });
+    if (options.cursor !== undefined) query.set('cursor', options.cursor);
+    return this.request('GET', `/api/navigation/${kind}?${query}`, undefined, MAX_READING_BYTES);
+  }
+
   async getAccount(accountId: string) {
     return this.get(`/api/accounts/${accountId}`);
   }
@@ -424,6 +433,12 @@ export class TtobakApi {
 
   async listKBFiles() {
     return this.get('/api/kb/files');
+  }
+
+  async readKBFiles(options: KBReadingOptions) {
+    const query = new URLSearchParams({ pageSize: String(options.pageSize) });
+    if (options.cursor !== undefined) query.set('cursor', options.cursor);
+    return this.request('GET', `/api/kb/files/reading?${query}`, undefined, MAX_READING_BYTES);
   }
 
   async deleteKBFile(fileId: string) {

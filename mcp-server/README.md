@@ -497,3 +497,12 @@ For connection failures, first verify the executable path, target configuration,
 OAuth callback/scopes and current user login. Do not solve authorization failures
 by granting anonymous API access. See [API reference](../docs/API-SPEC.md) and
 [ADR-003](../docs/decisions/ADR-003-mcp-server-for-external-meeting-access.md).
+
+KB file discovery uses bounded `/api/kb/files/reading` pages. Preserve opaque
+continuations until complete and restart stale anchors. File IDs stay exact;
+shortened names are marked. Deploy the API producer before this adapter.
+
+Account/project discovery uses bounded navigation pages and canonical grants.
+Follow empty continuation pages; merge project entries by `projectId` when
+`overlapPossible` is true. Linked accounts do not authorize meeting content.
+Deploy both navigation API producers before this adapter.
