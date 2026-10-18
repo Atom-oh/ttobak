@@ -230,7 +230,7 @@ func invalidateSummaryClearance(update expression.UpdateBuilder) expression.Upda
 		Remove(expression.Name("insightsRevision")))
 }
 
-// Fenced stamps preserve provenance/reset identity and clear old derivatives.
+// Fenced stamps preserve provenance/reset identity and clear old derivative identity.
 // Generic writes reject server fields; no stamp invalidates in every mode.
 func summaryContentRevisionUpdate(update expression.UpdateBuilder, fields map[string]interface{}) expression.UpdateBuilder {
 	if _, fresh := fields["summaryPrivacy"]; !fresh {

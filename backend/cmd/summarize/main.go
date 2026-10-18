@@ -649,7 +649,7 @@ func generateSummaryRun(ctx context.Context, meeting *model.Meeting, priorContex
 
 	if repository.SummaryPrivacyWritesEnabled() {
 		// Canonical stream/reconciliation owns immutable revision-checked exports.
-		// Drain legacy fixed objects before activation; resets can revive stale derivation.
+		// Drain legacy fixed objects; they can revive stale derivation after resets.
 		return nil
 	}
 
