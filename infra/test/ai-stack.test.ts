@@ -44,6 +44,38 @@ describe('AiStack', () => {
         .map((statement: { Action: unknown; Resource: unknown }) => ({ policy, statement })));
   }
 
+  function statementsOf(roleFragment: string) {
+    return Object.values(template.findResources('AWS::IAM::Policy'))
+      .filter(policy => JSON.stringify(policy.Properties.Roles).includes(roleFragment))
+      .flatMap(policy => policy.Properties.PolicyDocument.Statement as Array<{ Sid?: string; Action: unknown; Resource: unknown }>);
+  }
+
+  test('API vocabulary management is scoped to ttobak-vocab-* names', () => {
+    const vocab = statementsOf('TtobakApiRole').filter(statement => statement.Sid === 'TranscribeVocabulary');
+    expect(vocab).toHaveLength(1);
+    expect(vocab[0].Action).toEqual([
+      'transcribe:CreateVocabulary', 'transcribe:UpdateVocabulary', 'transcribe:GetVocabulary', 'transcribe:DeleteVocabulary',
+    ]);
+    const resource = JSON.stringify(vocab[0].Resource);
+    expect(resource).toContain(':transcribe:');
+    expect(resource).toContain(':vocabulary/ttobak-vocab-*');
+    expect(vocab[0].Resource).not.toEqual('*');
+    // No other API statement grants vocabulary writes.
+    const others = statementsOf('TtobakApiRole').filter(statement => statement.Sid !== 'TranscribeVocabulary'
+      && JSON.stringify(statement.Action).includes('Vocabulary'));
+    expect(others).toHaveLength(0);
+    // The transcribe role keeps its read-only GetVocabulary for batch jobs.
+    const transcribe = statementsOf('TtobakTranscribeRole').find(statement => statement.Sid === 'TranscribeAccess');
+    expect(JSON.stringify(transcribe?.Action)).toContain('transcribe:GetVocabulary');
+    expect(JSON.stringify(transcribe?.Action)).not.toContain('CreateVocabulary');
+  });
+
+  test('API role can write and delete vocab/ table files', () => {
+    const actions = JSON.stringify(statementsOf('TtobakApiRole').map(statement => statement.Action));
+    expect(actions).toContain('s3:PutObject');
+    expect(actions).toContain('s3:DeleteObject*');
+  });
+
   test('only summary worker can invoke the exact GPT-6.1 Sol model', () => {
     const grants = openAiGrants().filter(grant => JSON.stringify(grant.statement.Resource).includes('gpt-6.1-sol'));
     expect(grants).toHaveLength(1);

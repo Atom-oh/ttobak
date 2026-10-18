@@ -180,6 +180,9 @@ Deploy Go/QA reader compatibility before writers (ADR-037).
 
 Whisper benchmark objects under bench-transcripts/ have current and noncurrent
 version expiry; a delete marker is not immediate physical deletion of all versions.
+Transcribe vocabulary table files under vocab/ (`vocab/{name}.{fingerprint}.tsv`) expire after
+one day, current and noncurrent (the ADR-008 A/B builder writes them). The
+prefix is not in the OAC allowlist and is never served by CloudFront.
 Inspect exact lifecycle values in StorageStack when changing retention. The
 websocket Lambda has no current dedicated connections-table CRUD; old documentation
 for a separate ttobak-connections table described an obsolete design.
@@ -218,6 +221,15 @@ values that are not non-negative integers, and 0 disables a limit.
 bounds each interpreter call; synth rejects values outside 500–8000. Changing either
 changes the function configuration and publishes a new `live` alias version. The
 counters use the existing table grant and `pendingShareExpiresAt` TTL.
+
+Custom vocabularies: AiStack's API role statement `TranscribeVocabulary` allows
+Create/Update/Get/DeleteVocabulary only on
+`arn:{partition}:transcribe:{region}:{account}:vocabulary/ttobak-vocab-*`; the
+existing assets-bucket read/write grant covers vocab/ table writes, deletes and
+the caller-credential file read by Create/UpdateVocabulary. The transcribe role
+keeps `GetVocabulary` on `*` for batch jobs. GatewayStack does not set
+`VOCAB_REBUILD_MIN_INTERVAL` yet, so the API uses its 10m default. Operator
+checks before rollout (vocabulary quota, default 100 per account) are in ADR-008.
 
 The Go API also depends on the transcribe Lambda so recovered-copy event guards
 are installed before the recovery producer changes.

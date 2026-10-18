@@ -269,7 +269,8 @@ export class AiStack extends cdk.Stack {
       })
     );
 
-    // Transcribe Vocabulary management (custom dictionary feature)
+    // Transcribe vocabulary A/B builder: ttobak-vocab-* names only; vocab/
+    // table files use the bucket grant above.
     this.apiRole.addToPolicy(
       new iam.PolicyStatement({
         sid: 'TranscribeVocabulary',
@@ -280,7 +281,7 @@ export class AiStack extends cdk.Stack {
           'transcribe:GetVocabulary',
           'transcribe:DeleteVocabulary',
         ],
-        resources: ['*'],
+        resources: [`arn:${cdk.Aws.PARTITION}:transcribe:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:vocabulary/ttobak-vocab-*`],
       })
     );
 
