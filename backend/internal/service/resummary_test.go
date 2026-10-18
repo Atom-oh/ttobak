@@ -42,7 +42,7 @@ func (r *resummaryTestRepo) CaptureResummary(_ context.Context, owner, mid, requ
 	copy := *m
 	fields := map[string]model.SummaryValue{}
 	stored := map[string]interface{}{}
-	for k, v := range map[string]interface{}{"content": m.Content, "notes": m.Notes, "transcriptA": m.TranscriptA, "transcriptB": m.TranscriptB, "selectedTranscript": m.SelectedTranscript, "transcriptSegments": m.TranscriptSegments, "status": m.Status} {
+	for k, v := range map[string]interface{}{"content": m.Content, "notes": m.Notes, "transcriptA": m.TranscriptA, "transcriptB": m.TranscriptB, "selectedTranscript": m.SelectedTranscript, "transcriptSegments": m.TranscriptSegments, "status": m.Status, "noteLanguage": m.NoteLanguage} {
 		fields[k] = model.SummaryValue{Present: true, Value: v}
 		stored[k] = v
 	}
@@ -173,7 +173,7 @@ func TestResummarySelectedSnapshotAndAtomicCompletion(t *testing.T) {
 	}
 }
 func TestResummarySourceChangesAndRevocationPreserveHumanContent(t *testing.T) {
-	for _, kind := range []string{"content", "notes", "transcript", "revoked", "deleted"} {
+	for _, kind := range []string{"content", "notes", "transcript", "noteLanguage", "revoked", "deleted"} {
 		t.Run(kind, func(t *testing.T) {
 			s, r, _ := newResummaryFixture(t)
 			requested, err := s.Request(context.Background(), "owner", "meeting")
@@ -189,6 +189,8 @@ func TestResummarySourceChangesAndRevocationPreserveHumanContent(t *testing.T) {
 					m.Notes = "new notes"
 				case "transcript":
 					m.TranscriptB = "changed selected text"
+				case "noteLanguage":
+					m.NoteLanguage = model.NoteLanguageEnglish
 				case "revoked":
 					r.revoked = true
 				case "deleted":
@@ -204,6 +206,9 @@ func TestResummarySourceChangesAndRevocationPreserveHumanContent(t *testing.T) {
 			}
 			if m := r.meetings[meetingKey("owner", "meeting")]; m != nil && m.Content == "stale generated text" {
 				t.Fatal("human content overwritten")
+			}
+			if kind == "noteLanguage" && r.state.ErrorCode != model.AnalysisSourceChanged {
+				t.Fatal(r.state.ErrorCode)
 			}
 			if kind == "revoked" && r.state.ErrorCode != "ACCESS_REVOKED" {
 				t.Fatal(r.state.ErrorCode)

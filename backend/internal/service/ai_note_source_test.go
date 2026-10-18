@@ -58,6 +58,7 @@ func invokeNoteSourceFixture(t *testing.T, meeting *model.Meeting, modelResponse
 		"transcriptA": meeting.TranscriptA, "transcriptB": meeting.TranscriptB,
 		"selectedTranscript": meeting.SelectedTranscript, "transcriptSegments": meeting.TranscriptSegments,
 		"notes": meeting.Notes, "content": meeting.Content, "actionItems": meeting.ActionItems,
+		"noteLanguage": meeting.NoteLanguage,
 	} {
 		item[name] = map[string]string{"S": value}
 	}

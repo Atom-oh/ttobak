@@ -153,6 +153,13 @@ export class GatewayStack extends cdk.Stack {
       });
     }
 
+    // App clients whose tokens are TTOBAK credentials (API + WebSocket). The pool
+    // also issues companion-app tokens; those must be rejected everywhere.
+    const firstPartyClientIds = cdk.Fn.join(',', [...new Set([
+      props.userPoolClient.userPoolClientId,
+      (props.spaClient ?? props.userPoolClient).userPoolClientId,
+    ])]);
+
     // API Lambda function (Go runtime, arm64)
     this.apiFunction = new lambda.Function(this, 'ApiFunction', {
       functionName: 'ttobak-api',
@@ -173,6 +180,8 @@ export class GatewayStack extends cdk.Stack {
         BUCKET_NAME: props.bucket.bucketName,
         COGNITO_USER_POOL_ID: props.userPool.userPoolId,
         COGNITO_CLIENT_ID: props.userPoolClient.userPoolClientId,
+        // first-party clients only; companion-app tokens never act as API credentials
+        API_ALLOWED_CLIENT_IDS: firstPartyClientIds,
         AUDIO_CROP_ENABLED: [true, 'true'].includes(this.node.tryGetContext('ttobak:audioCropEnabled')) ? '1' : '0',
         KB_BUCKET_NAME: props.kbBucket?.bucketName || '',
         // NOTE: api reads KB_DATASOURCE_ID (cmd/api/main.go), NOT the
@@ -1018,6 +1027,8 @@ export class GatewayStack extends cdk.Stack {
         COGNITO_USER_POOL_ID: props.userPool.userPoolId,
         COGNITO_REGION: cdk.Aws.REGION,
         WS_ORIGIN_SECRET_ARN: this.websocketOrigin.secret.secretArn,
+        // first-party clients only; companion-app tokens are rejected on $connect
+        WS_ALLOWED_CLIENT_IDS: firstPartyClientIds,
       },
       timeout: cdk.Duration.seconds(10),
       memorySize: 128,
