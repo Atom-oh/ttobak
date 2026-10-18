@@ -93,8 +93,9 @@ type TermFilterCounts struct {
 }
 
 // FilterCandidates applies the deterministic auto-term rules in order:
-// confidence, shape (shared validator plus auto-only shape rules), blocklist,
-// grounding, duplicate keys, Transcribe phrase derivation and the per-run cap.
+// confidence, blocklist (term key and every heardAs), shape (shared validator
+// plus auto-only shape rules), grounding, Transcribe phrase derivation,
+// duplicate keys (the best-ranked candidate is kept) and the per-run cap.
 // A failing candidate is dropped on its own. A minConfidence outside (0, 1]
 // falls back to DefaultAutoTermsMinConfidence.
 func FilterCandidates(candidates []TermCandidate, sources TermSources, minConfidence float64) ([]FilteredTerm, TermFilterCounts) {
@@ -193,17 +194,24 @@ func TermBlocklisted(s string) bool {
 	return termsBlocklist[NormalizeTermKey(normalizeTermText(s))]
 }
 
+const termMonthNames = `(jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|june?|july?|aug(ust)?|sept?(ember)?|oct(ober)?|nov(ember)?|dec(ember)?)`
+
 var (
 	termDatePatterns = []*regexp.Regexp{
 		regexp.MustCompile(`\b\d{4}\s*[./-]\s*\d{1,2}\b`),
 		regexp.MustCompile(`\b\d{1,2}\s*[./-]\s*\d{1,2}\s*[./-]\s*\d{2,4}\b`),
 		regexp.MustCompile(`\b\d{1,2}:\d{2}\b`),
 		regexp.MustCompile(`\d+\s*(년|월|일)`),
-		regexp.MustCompile(`(?i)\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,4}\b`),
-		regexp.MustCompile(`(?i)\b\d{1,2}(st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b`),
+		// Only whole month names or abbreviations count, so "JUnit 5",
+		// "MariaDB 10" and "Decimal 128" are not dates.
+		regexp.MustCompile(`(?i)\b` + termMonthNames + `\b\.?\s+\d{1,4}\b`),
+		regexp.MustCompile(`(?i)\b\d{1,2}(st|nd|rd|th)?\s+` + termMonthNames + `\b`),
 	}
 	termEmailPattern = regexp.MustCompile(`[^\s@]+@[^\s@]+\.[^\s@]+`)
-	termURLPattern   = regexp.MustCompile(`(?i)(\b[a-z][a-z0-9+.-]*://|\bwww\.|\b[a-z0-9-]+\.(com|net|org|io|co|kr|ai|dev|app|me|biz|info|xyz)\b)`)
+	termURLPattern   = regexp.MustCompile(`(?i)(\b[a-z][a-z0-9+.-]*://|\bwww\.)`)
+	// termBareDomainPattern applies only to all-lowercase terms, so product
+	// names such as "ASP.NET", "Socket.IO" and "Character.AI" survive.
+	termBareDomainPattern = regexp.MustCompile(`\b[a-z0-9-]+\.(com|net|org|io|co|kr|ai|dev|app|me|biz|info|xyz)\b`)
 	// Seven or more digits, optionally separated by spaces, '-' or '.', look
 	// like phone, account or card numbers.
 	termLongDigitRun = regexp.MustCompile(`\d(?:[\s.-]?\d){6,}`)
@@ -215,6 +223,9 @@ func autoTermShapeOK(display string) bool {
 		return false
 	}
 	if strings.ContainsRune(display, '@') || termEmailPattern.MatchString(display) || termURLPattern.MatchString(display) {
+		return false
+	}
+	if display == strings.ToLower(display) && termBareDomainPattern.MatchString(display) {
 		return false
 	}
 	if termLongDigitRun.MatchString(display) {
@@ -284,8 +295,9 @@ func newMatchText(s string) matchText {
 func (m matchText) boundaryAt(i int) bool { return i >= len(m.runes) || m.sepBefore[i] }
 
 // count returns non-overlapping occurrences of needle. With wordBounds set, a
-// match may not extend a Latin/digit run on either side; Hangul matches may
-// carry particles (josa).
+// match may not extend a Latin/digit run on either side, and a match starting
+// with a Hangul syllable may not continue a preceding Hangul word; a Hangul
+// match may still be followed by particles (josa).
 func (m matchText) count(needle matchText, wordBounds bool) int {
 	n := len(needle.runes)
 	if n == 0 || n > len(m.runes) {
@@ -304,7 +316,9 @@ func (m matchText) count(needle matchText, wordBounds bool) int {
 }
 
 func (m matchText) boundsOK(i, n int) bool {
-	left := i == 0 || m.boundaryAt(i) || !(isASCIIAlnum(m.runes[i-1]) && isASCIIAlnum(m.runes[i]))
+	left := i == 0 || m.boundaryAt(i) ||
+		!(isASCIIAlnum(m.runes[i-1]) && isASCIIAlnum(m.runes[i])) &&
+			!(isHangulSyllable(m.runes[i-1]) && isHangulSyllable(m.runes[i]))
 	j := i + n
 	right := j >= len(m.runes) || m.boundaryAt(j) || !(isASCIIAlnum(m.runes[j-1]) && isASCIIAlnum(m.runes[j]))
 	return left && right
@@ -338,7 +352,8 @@ func newTermSourceIndex(s TermSources) termSourceIndex {
 // ground applies the grounding rules and returns the source types in which the
 // term itself is attested:
 //   - at least one quote; each is a normalized substring of its named source
-//     and contains the term or one of its heardAs;
+//     and contains the term or one of its heardAs at word bounds judged in
+//     that source, so a quote cut from inside a longer word does not count;
 //   - every heardAs occurs in the transcript (its key differs from the term's,
 //     which ValidateTermInput already enforces);
 //   - displayAs occurs in notes or a document, or at least twice in the
@@ -363,8 +378,7 @@ func (idx termSourceIndex) ground(v ValidatedTerm, evidence []TermEvidence) ([]s
 		if !ok {
 			return nil, false
 		}
-		quote := newMatchText(e.Quote)
-		if len(quote.runes) == 0 || src.count(quote, false) == 0 || !quoteNamesTerm(quote, forms) {
+		if !src.quoteNamesTerm(newMatchText(e.Quote), forms) {
 			return nil, false
 		}
 	}
@@ -410,10 +424,26 @@ func (idx termSourceIndex) source(e TermEvidence) (matchText, bool) {
 	return matchText{}, false
 }
 
-func quoteNamesTerm(quote matchText, forms []matchText) bool {
-	for _, f := range forms {
-		if quote.count(f, true) > 0 {
-			return true
+// quoteNamesTerm reports whether quote occurs in m at a position where one of
+// forms lies inside the quote and satisfies the word bounds of m itself. The
+// quote's own edges are not boundaries: "eks" quoted from "weeks" does not
+// name EKS.
+func (m matchText) quoteNamesTerm(quote matchText, forms []matchText) bool {
+	n := len(quote.runes)
+	if n == 0 || n > len(m.runes) {
+		return false
+	}
+	for i := 0; i+n <= len(m.runes); i++ {
+		if !runesEqual(m.runes[i:i+n], quote.runes) {
+			continue
+		}
+		for _, f := range forms {
+			fn := len(f.runes)
+			for k := 0; fn > 0 && k+fn <= n; k++ {
+				if runesEqual(quote.runes[k:k+fn], f.runes) && m.boundsOK(i+k, fn) {
+					return true
+				}
+			}
 		}
 	}
 	return false
@@ -473,24 +503,34 @@ func transcribePhraseFor(display, modelPhrase string) (string, bool, bool) {
 }
 
 // deriveTranscribePhrase builds an AWS custom-vocabulary Phrase from a display
-// form: words and camelCase or script boundaries are joined with '-', and an
-// all-caps segment of 2-6 letters is spelled as a dotted acronym
-// (DynamoDB -> Dynamo-D.B., EKS -> E.K.S.). It returns "" when the result does
-// not satisfy validTranscribePhrase for lang.
+// form: words and camelCase or script boundaries are joined with '-', and every
+// all-caps segment of 2-6 letters is spelled as a dotted acronym, following the
+// AWS rule that acronym letters are separated by periods. This is intentional
+// wherever the segment sits: a trailing camelCase run (DynamoDB ->
+// Dynamo-D.B.), a leading run (AWSLambda -> A.W.S.-Lambda), a standalone term
+// (EKS -> E.K.S.) or a standalone word of a multi-word name (Amazon EKS ->
+// Amazon-E.K.S.). An all-caps word pronounced as a word (NASA) is therefore
+// spelled out; a valid model phrase with the same term key takes precedence.
+// When the dotted form fails validTranscribePhrase (for example by length) the
+// undotted join is tried. The result is either "" or a phrase that passes
+// validTranscribePhrase for lang.
 func deriveTranscribePhrase(display, lang string) string {
 	var segments []string
 	for _, word := range strings.FieldsFunc(norm.NFKC.String(display), func(r rune) bool {
 		return unicode.IsSpace(r) || r == '-' || r == '_' || r == '.' || r == '·' || r == '/'
 	}) {
-		for _, seg := range splitPhraseWord(word) {
-			segments = append(segments, dotAcronym(seg))
+		segments = append(segments, splitPhraseWord(word)...)
+	}
+	dotted := make([]string, len(segments))
+	for i, seg := range segments {
+		dotted[i] = dotAcronym(seg)
+	}
+	for _, phrase := range []string{strings.Join(dotted, "-"), strings.Join(segments, "-")} {
+		if validTranscribePhrase(phrase, lang) {
+			return phrase
 		}
 	}
-	phrase := strings.Join(segments, "-")
-	if !validTranscribePhrase(phrase, lang) {
-		return ""
-	}
-	return phrase
+	return ""
 }
 
 type runeClass int

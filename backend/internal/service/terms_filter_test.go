@@ -211,6 +211,46 @@ func TestFilterCandidatesRules(t *testing.T) {
 	}
 }
 
+func TestFilterCandidatesBoundsJudgedInSource(t *testing.T) {
+	sources := TermSources{
+		Transcript: "EKS 클러스터를 씁니다. EKS 노드는 두 weeks 뒤에 늘립니다. 쿠버네티스 버전은 쿠버네티스를 따릅니다.",
+	}
+	tests := []struct {
+		name     string
+		cand     TermCandidate
+		wantKept bool
+	}{
+		{"bounded quote names EKS", TermCandidate{DisplayAs: "EKS", Confidence: 0.9, Evidence: transcriptEvidence("EKS 노드는")}, true},
+		{"quote cut from weeks", TermCandidate{DisplayAs: "EKS", Confidence: 0.9, Evidence: transcriptEvidence("eks 뒤에")}, false},
+		{"Hangul term with particle", TermCandidate{DisplayAs: "쿠버네티스", Confidence: 0.9, Evidence: transcriptEvidence("쿠버네티스를")}, true},
+		{"Hangul fragment inside a word", TermCandidate{DisplayAs: "버네티스", Confidence: 0.9, Evidence: transcriptEvidence("버네티스 버전은")}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, counts := FilterCandidates([]TermCandidate{tc.cand}, sources, 0.85)
+			if (len(got) == 1) != tc.wantKept {
+				t.Fatalf("kept %d, want kept=%v; counts %+v", len(got), tc.wantKept, counts)
+			}
+			if !tc.wantKept && counts.Grounding != 1 {
+				t.Fatalf("counts = %+v, want a grounding drop", counts)
+			}
+		})
+	}
+}
+
+func TestMatchTextHangulLeftBound(t *testing.T) {
+	src := newMatchText("쿠버네티스를 쓰고 쿠버네티스 클러스터")
+	if got := src.count(newMatchText("버네티스"), true); got != 0 {
+		t.Fatalf("fragment count = %d, want 0", got)
+	}
+	if got := src.count(newMatchText("쿠버네티스"), true); got != 2 {
+		t.Fatalf("term count = %d, want 2", got)
+	}
+	if got := newMatchText("쿠버네티스EKS").count(newMatchText("EKS"), true); got != 1 {
+		t.Fatalf("Latin after Hangul count = %d, want 1", got)
+	}
+}
+
 func TestFilterCandidatesDefaultConfidence(t *testing.T) {
 	cands := []TermCandidate{
 		{DisplayAs: "DynamoDB", Confidence: 0.86, Evidence: transcriptEvidence("DynamoDB")},
@@ -298,11 +338,26 @@ func TestAutoTermShapeOK(t *testing.T) {
 		{"10:30 회의", false},
 		{"Oct 18", false},
 		{"18 October", false},
+		{"May 5", false},
+		{"Sept. 3", false},
+		{"3rd June", false},
+		{"december 25", false},
+		{"JUnit 5", true},
+		{"MariaDB 10", true},
+		{"Decimal 128", true},
+		{"Octane 2", true},
+		{"Novell 6", true},
+		{"Augmented 3", true},
 		{"ops@example.com", false},
 		{"@channel", false},
 		{"https://example", false},
 		{"www.example", false},
 		{"ttobak.com", false},
+		{"socket.io", false},
+		{"ASP.NET", true},
+		{"VB.NET", true},
+		{"Socket.IO", true},
+		{"Character.AI", true},
 		{"010-1234-5678", false},
 		{"1234 5678 9012 3456", false},
 		{"a b c d e f g", false},
@@ -348,6 +403,9 @@ func TestTermsBlocklist(t *testing.T) {
 
 func TestDeriveTranscribePhrase(t *testing.T) {
 	long := strings.Repeat("Abcdefghij", 26)
+	// 247 lowercase letters plus " ABCDEF": the dotted join is 260 characters,
+	// the undotted join 254.
+	longWord := strings.Repeat("abcdefghij", 24) + "abcdefg"
 	tests := []struct {
 		in, lang, want string
 	}{
@@ -356,6 +414,11 @@ func TestDeriveTranscribePhrase(t *testing.T) {
 		{"EKS", model.VocabLangEn, "E.K.S."},
 		{"Amazon Bedrock", model.VocabLangEn, "Amazon-Bedrock"},
 		{"AWSLambda", model.VocabLangEn, "A.W.S.-Lambda"},
+		{"AWS Lambda", model.VocabLangEn, "A.W.S.-Lambda"},
+		{"Amazon EKS", model.VocabLangEn, "Amazon-E.K.S."},
+		{"NASA", model.VocabLangEn, "N.A.S.A."},
+		{"Amazon EKS Anywhere", model.VocabLangKo, "Amazon-E.K.S.-Anywhere"},
+		{longWord + " ABCDEF", model.VocabLangEn, longWord + "-ABCDEF"},
 		{"camelCaseWord", model.VocabLangEn, "camel-Case-Word"},
 		{"KUBERNETES", model.VocabLangEn, "KUBERNETES"},
 		{"X", model.VocabLangEn, "X"},
@@ -374,8 +437,12 @@ func TestDeriveTranscribePhrase(t *testing.T) {
 		{long, model.VocabLangEn, ""},
 	}
 	for _, tc := range tests {
-		if got := deriveTranscribePhrase(tc.in, tc.lang); got != tc.want {
+		got := deriveTranscribePhrase(tc.in, tc.lang)
+		if got != tc.want {
 			t.Errorf("deriveTranscribePhrase(%q, %s) = %q, want %q", tc.in, tc.lang, got, tc.want)
+		}
+		if got != "" && !validTranscribePhrase(got, tc.lang) {
+			t.Errorf("deriveTranscribePhrase(%q, %s) = %q fails validTranscribePhrase", tc.in, tc.lang, got)
 		}
 	}
 }

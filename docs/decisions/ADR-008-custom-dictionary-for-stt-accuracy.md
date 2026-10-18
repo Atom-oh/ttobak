@@ -132,33 +132,40 @@ Rules, in order:
 - **Confidence** at least the configured minimum (default 0.85; values outside
   (0, 1] use the default).
 - **Blocklist.** The embedded `terms_blocklist.txt` (common Korean and English
-  meeting and function words plus fillers, about 550 entries) is matched on the
-  term key and on every heardAs. Manual terms keep the heardAs check through
-  `ValidateTermInput`; a manual display form is not blocklisted, because typing
-  it is an explicit user act.
+  meeting and function words plus fillers, about 550 entries) is matched on an
+  automatic candidate's term key and on every heardAs. For manual terms,
+  `ValidateTermInput` rejects a blocklisted heardAs, but the manual display form
+  is not blocklisted, because typing it is an explicit user act.
 - **Shape.** `ValidateTermInput`, then: no digits-only or punctuation-only
-  terms, dates or times, emails, URLs or domains, runs of 7 or more digits
-  (phone- or card-like), or more than 6 words. Hangul-only terms need 2
-  syllables; Latin-only terms need 2 letters, and 3 unless all capitals.
+  terms, dates or times (month names count only as whole names or
+  abbreviations, so `JUnit 5` is kept and `Oct 18` is not), emails, URLs with a
+  scheme or `www.`, all-lowercase bare domains (`ttobak.com`; `ASP.NET` and
+  `Socket.IO` are kept), runs of 7 or more digits (phone- or card-like), or more
+  than 6 words. Hangul-only terms need 2 syllables; Latin-only terms need 2
+  letters, and 3 unless all capitals.
 - **Grounding** after NFKC, lowercase and removal of the term-key separators,
-  with Latin/digit word boundaries for term matches (so `EKS` does not match
-  `weeks`; Hangul matches may carry particles): at least one quote; every quote
-  is a substring of its named source (transcript, notes or an identified
-  document) and contains the term or a heardAs; every heardAs occurs in the
-  transcript; the display form occurs in notes or a document, or twice in the
-  transcript; notes-only terms must also occur in the transcript. Source types
-  come from where the term occurs, not from the model's labels.
-- **Duplicates** by term key keep the best-ranked candidate.
+  with word boundaries for term matches: a match may not extend a Latin/digit
+  run (so `EKS` does not match `weeks`), and a Hangul match may not continue a
+  preceding Hangul syllable but may carry particles. At least one quote; every
+  quote is a substring of its named source (transcript, notes or an identified
+  document) and contains the term or a heardAs at boundaries judged in that
+  source, so a quote cut from inside a longer word does not count; every heardAs
+  occurs in the transcript; the display form occurs in notes or a document, or
+  twice in the transcript; notes-only terms must also occur in the transcript.
+  Source types come from where the term occurs, not from the model's labels.
 - **Transcribe phrase.** A model phrase is used only when it has the same term
   key and passes the AWS phrase validator; otherwise `deriveTranscribePhrase`
-  joins words and camelCase or script boundaries with `-` and dots each 2-6
-  capital segment (`DynamoDB` -> `Dynamo-D.B.`, `EKS` -> `E.K.S.`). The
-  validator enforces ko-KR `[A-Za-z\-.]` plus Hangul syllables
+  joins words and camelCase or script boundaries with `-` and dots every 2-6
+  capital segment, whether a camelCase run or a standalone word (`DynamoDB` ->
+  `Dynamo-D.B.`, `EKS` -> `E.K.S.`, `Amazon EKS` -> `Amazon-E.K.S.`; an
+  all-caps word such as `NASA` is also spelled out). If the dotted form fails
+  validation, the undotted join is tried. The validator enforces ko-KR `[A-Za-z\-.]` plus Hangul syllables
   (U+AC00-U+D7A3), en-US `[A-Za-z'\-.]`, no digits, at most 256 characters, no leading `.`/`'`/`-`, no trailing `'`/`-`, no
   `--`/`..`, and periods only after single letters. Hangul-containing terms are
   ko only; Latin-only terms are ko and en; other scripts get no phrase. Dotted
   acronyms keep `TranscribeKo=false` until a live ko-KR build records that
   Transcribe accepts them. A term without a phrase is still kept.
+- **Duplicates** by term key keep the best-ranked candidate.
 - **Cap.** At most 15 terms per run, ranked by confidence, then source-type count.
 
 ## Consequences and risks
