@@ -137,6 +137,30 @@ describe('AuthStack', () => {
     }
   });
 
+  test('the companion client is OAuth code + PKCE only, with private SSM-configured redirects', () => {
+    const clients = template.findResources('AWS::Cognito::UserPoolClient');
+    const companion = Object.values(clients).find(client =>
+      client.Properties.ClientName === 'ttobak-companion-client');
+    expect(companion).toBeDefined();
+    expect(companion!.Properties).toMatchObject({
+      GenerateSecret: false,
+      AllowedOAuthFlows: ['code'],
+      AllowedOAuthScopes: ['email', 'openid', 'profile'],
+      SupportedIdentityProviders: ['COGNITO'],
+      PreventUserExistenceErrors: 'ENABLED',
+    });
+    expect(companion!.Properties.ExplicitAuthFlows).not.toContain('ALLOW_USER_PASSWORD_AUTH');
+    const parameters = template.toJSON().Parameters;
+    const ref = (name: string) => Object.keys(parameters).find(key => parameters[key].Default === name);
+    for (const name of ['/ttobak/auth/companion-callback-urls', '/ttobak/auth/companion-logout-urls']) {
+      const key = ref(name);
+      expect(key).toBeDefined();
+      expect(parameters[key!].Type).toBe('AWS::SSM::Parameter::Value<List<String>>');
+    }
+    expect(companion!.Properties.CallbackURLs).toEqual({ Ref: ref('/ttobak/auth/companion-callback-urls') });
+    expect(companion!.Properties.LogoutURLs).toEqual({ Ref: ref('/ttobak/auth/companion-logout-urls') });
+  });
+
   test('the public MCP client retains local callbacks and privately configured redirects', () => {
     const clients = template.findResources('AWS::Cognito::UserPoolClient');
     const spa = Object.values(clients).find(client =>
