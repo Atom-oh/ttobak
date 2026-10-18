@@ -589,7 +589,7 @@ seconds and does not call a translator. `high` requests also count toward
 disables that check. Counter storage errors fail open: this is an abuse/cost brake,
 not an access boundary. Rejected requests also count within their window. Each
 success logs one metering JSON line
-`{evt, q, engine, src, tgt, inBytes, outBytes, ms, glossary, limited, fallbackReason}`
+`{evt, q, engine, src, tgt, inBytes, outBytes, ms, limited, fallbackReason}`
 without text or user ID. No route throttling is configured in `gateway-stack.ts`.
 
 ### Simulator

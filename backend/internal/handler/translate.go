@@ -81,7 +81,6 @@ type translateMeter struct {
 	InBytes        int    `json:"inBytes"`
 	OutBytes       int    `json:"outBytes"`
 	Millis         int64  `json:"ms"`
-	Glossary       bool   `json:"glossary"`
 	Limited        bool   `json:"limited"`
 	FallbackReason string `json:"fallbackReason"`
 }

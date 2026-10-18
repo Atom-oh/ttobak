@@ -236,7 +236,7 @@ func TestTranslateHandlerMeteringOmitsTextAndUser(t *testing.T) {
 		t.Fatalf("metering line is not JSON: %q", out)
 	}
 	for key, want := range map[string]any{"evt": "translate", "q": "high", "engine": "translate", "src": "auto", "tgt": "en",
-		"inBytes": float64(len("합성 문장")), "outBytes": float64(len("synthetic output")), "glossary": false, "limited": false, "fallbackReason": "llm-error"} {
+		"inBytes": float64(len("합성 문장")), "outBytes": float64(len("synthetic output")), "limited": false, "fallbackReason": "llm-error"} {
 		if meter[key] != want {
 			t.Fatalf("%s = %v, want %v (line %s)", key, meter[key], want, line)
 		}
