@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -36,11 +37,23 @@ func actionAnalysisWire(t *testing.T, inspect func(string, map[string]any), stat
 func analysisCondition(t *testing.T, op map[string]any) string {
 	t.Helper()
 	condition := op["ConditionExpression"].(string)
-	for alias, name := range op["ExpressionAttributeNames"].(map[string]any) {
-		condition = strings.ReplaceAll(condition, alias, name.(string))
+	names := op["ExpressionAttributeNames"].(map[string]any)
+	aliases := make([]string, 0, len(names))
+	for alias := range names {
+		aliases = append(aliases, alias)
 	}
-	for alias, value := range op["ExpressionAttributeValues"].(map[string]any) {
-		encoded, _ := json.Marshal(value)
+	sort.Slice(aliases, func(i, j int) bool { return len(aliases[i]) > len(aliases[j]) })
+	for _, alias := range aliases {
+		condition = strings.ReplaceAll(condition, alias, names[alias].(string))
+	}
+	values := op["ExpressionAttributeValues"].(map[string]any)
+	aliases = aliases[:0]
+	for alias := range values {
+		aliases = append(aliases, alias)
+	}
+	sort.Slice(aliases, func(i, j int) bool { return len(aliases[i]) > len(aliases[j]) })
+	for _, alias := range aliases {
+		encoded, _ := json.Marshal(values[alias])
 		condition = strings.ReplaceAll(condition, alias, string(encoded))
 	}
 	return condition
@@ -84,7 +97,7 @@ func TestActionAnalysisCompletionIsOneGuardedTransaction(t *testing.T) {
 			}
 		}
 	}, 200, `{}`)
-	if err := repo.CompleteActionAnalysis(context.Background(), "owner", "meeting", "run-1", "snapshot", "previous", "[]", time.Now().UTC()); err != nil {
+	if err := repo.CompleteActionAnalysis(context.Background(), "owner", "meeting", "run-1", "snapshot", "previous", "[]", "", time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -118,9 +131,44 @@ func TestActionAnalysisMapsOnlyConditionalCancellation(t *testing.T) {
 	for _, code := range []string{"ConditionalCheckFailed", "TransactionConflict"} {
 		body := `{"__type":"com.amazonaws.dynamodb.v20120810#TransactionCanceledException","CancellationReasons":[{"Code":"` + code + `"}]}`
 		repo := actionAnalysisWire(t, nil, 400, body)
-		err := repo.CompleteActionAnalysis(context.Background(), "owner", "meeting", "run", "content", "", "[]", time.Now())
+		err := repo.CompleteActionAnalysis(context.Background(), "owner", "meeting", "run", "content", "", "[]", "", time.Now())
 		if errors.Is(err, ErrConditionFailed) != (code == "ConditionalCheckFailed") {
 			t.Fatalf("%s mapped incorrectly: %v", code, err)
 		}
+	}
+}
+
+func TestActionAnalysisPinsGenerationOnQueueAndCompletion(t *testing.T) {
+	t.Setenv("SUMMARY_PRIVACY_WRITER_ENABLED", "1")
+	for _, phase := range []string{"queue", "complete"} {
+		t.Run(phase, func(t *testing.T) {
+			repo := actionAnalysisWire(t, func(_ string, body map[string]any) {
+				ops := body["TransactItems"].([]any)
+				kind := "Update"
+				if phase == "queue" {
+					kind = "ConditionCheck"
+				}
+				parent := ops[0].(map[string]any)[kind].(map[string]any)
+				condition := analysisCondition(t, parent)
+				if !strings.Contains(condition, "summaryPrivacy.generationId") || !strings.Contains(condition, "original-generation") {
+					t.Fatalf("parent generation missing: %s", condition)
+				}
+				run := ops[1].(map[string]any)["Update"].(map[string]any)
+				if phase == "complete" && !strings.Contains(analysisCondition(t, run), "summaryGeneration") {
+					t.Fatal("completion did not bind run to captured generation")
+				}
+			}, 400, projectCancellation(2, 0))
+			var err error
+			if phase == "queue" {
+				err = repo.QueueActionAnalysis(context.Background(), "owner", "meeting", "same-content", nil,
+					&model.ActionItemsAnalysis{RunID: "run", SummaryGeneration: "original-generation"})
+			} else {
+				err = repo.CompleteActionAnalysis(context.Background(), "owner", "meeting", "run",
+					"same-content", "[]", "[]", "original-generation", time.Now())
+			}
+			if !errors.Is(err, ErrConditionFailed) {
+				t.Fatalf("generation race was not rejected: %v", err)
+			}
+		})
 	}
 }

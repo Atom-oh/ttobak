@@ -49,7 +49,16 @@ func TestActionLifecycleMetadataAvoidsS3AndKeepsWrites(t *testing.T) {
 		if rows[key] == nil {
 			rows[key] = attributes{}
 		}
-		for _, assignment := range strings.Split(strings.TrimPrefix(op.UpdateExpression, "SET "), ",") {
+		remove, assignments := "", op.UpdateExpression
+		if strings.HasPrefix(assignments, "REMOVE ") {
+			remove, assignments, _ = strings.Cut(strings.TrimPrefix(assignments, "REMOVE "), "\nSET ")
+		} else {
+			assignments = strings.TrimPrefix(assignments, "SET ")
+		}
+		for _, alias := range strings.Split(remove, ",") {
+			delete(rows[key], op.ExpressionAttributeNames[strings.TrimSpace(alias)])
+		}
+		for _, assignment := range strings.Split(assignments, ",") {
 			parts := strings.Fields(assignment)
 			if len(parts) != 3 || parts[1] != "=" {
 				t.Fatalf("unexpected update: %s", op.UpdateExpression)

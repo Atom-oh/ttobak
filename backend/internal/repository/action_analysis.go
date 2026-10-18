@@ -86,6 +86,7 @@ func (r *DynamoDBRepository) QueueActionAnalysis(ctx context.Context, ownerID, m
 	update := expression.Set(expression.Name("runId"), expression.Value(next.RunID)).
 		Set(expression.Name("status"), expression.Value(model.AnalysisQueued)).
 		Set(expression.Name("sourceHash"), expression.Value(next.SourceHash)).
+		Set(expression.Name("summaryGeneration"), expression.Value(next.SummaryGeneration)).
 		Set(expression.Name("startedAt"), expression.Value(next.StartedAt)).
 		Set(expression.Name("updatedAt"), expression.Value(next.UpdatedAt)).
 		Set(expression.Name("leaseUntil"), expression.Value(next.LeaseUntil)).
@@ -98,7 +99,8 @@ func (r *DynamoDBRepository) QueueActionAnalysis(ctx context.Context, ownerID, m
 	sourceCheck, err := expression.NewBuilder().WithCondition(
 		expression.AttributeExists(expression.Name("PK")).
 			And(expression.Name("content").Equal(expression.Value(source))).
-			And(expression.Name("status").Equal(expression.Value(model.StatusDone))),
+			And(expression.Name("status").Equal(expression.Value(model.StatusDone))).
+			And(summaryGenerationCondition(next.SummaryGeneration)),
 	).Build()
 	if err != nil {
 		return err
@@ -164,12 +166,15 @@ func actionItemsMatch(expected string) expression.ConditionBuilder {
 	return match
 }
 
-func (r *DynamoDBRepository) CompleteActionAnalysis(ctx context.Context, ownerID, meetingID, runID, source, previous, result string, now time.Time) error {
+func (r *DynamoDBRepository) CompleteActionAnalysis(ctx context.Context, ownerID, meetingID, runID, source, previous, result, generation string, now time.Time) error {
 	meetingCondition := expression.AttributeExists(expression.Name("PK")).
 		And(expression.Name("content").Equal(expression.Value(source))).
+		And(expression.Name("status").Equal(expression.Value(model.StatusDone))).
+		And(summaryGenerationCondition(generation)).
 		And(actionItemsMatch(previous))
 	resultWrite, err := analysisUpdate(r.tableName, meetingKey(ownerID, meetingID),
 		expression.Set(expression.Name("actionItems"), expression.Value(result)).
+			Remove(expression.Name("actionItemContinuity")).
 			Set(expression.Name("updatedAt"), expression.Value(now)),
 		meetingCondition,
 	)
@@ -182,6 +187,7 @@ func (r *DynamoDBRepository) CompleteActionAnalysis(ctx context.Context, ownerID
 			Set(expression.Name("updatedAt"), expression.Value(now)).
 			Set(expression.Name("leaseUntil"), expression.Value(int64(0))),
 		analysisRunCondition(runID, model.AnalysisRunning).
+			And(analysisGenerationCondition(generation)).
 			And(expression.Name("leaseUntil").GreaterThan(expression.Value(now.UnixMilli()))),
 	)
 	if err != nil {
