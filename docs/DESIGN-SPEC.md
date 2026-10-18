@@ -358,6 +358,24 @@ summary and transcript requests.
 
 ## Personal dictionary
 
+Settings' dictionary (`CustomDictionary.tsx`, `DictionaryTable.tsx`; copy in those
+files and `lib/dictionary.ts`) uses only per-term routes. Columns: display form,
+recognized-as aliases, type, source (manual, automatic, or a source meeting link
+once the API returns it). Filters all / automatic / manual / suggested. Actions:
+edit (case, spacing or `- . _ ·` only), keep (`aliasMode=always`), delete (toast:
+never re-added automatically) and add on suggestions. Writes send `version`;
+conflicts and 404 reload the list. An open editor diffs and versions against the
+row snapshot taken when editing began; polled responses older than a mutation are
+dropped. Duplicates use `normalizeTermKey`, checked against Go's
+`backend/internal/service/testdata/term-key/vectors.json` by `npm run test:unit`
+(CI runs it only when `frontend/**` changes; the Go half runs with the backend). Legacy terms without a row cannot be edited
+while `migrationPending`; terms that refuse migration are marked and can be deleted
+through the legacy DELETE-by-phrase, which retries migration. That delete rewrites
+the whole blob without a revision guard, so the UI runs one at a time, reload
+included (`LEGACY_DELETE_KEY`). KO/EN badges show in use, preparing,
+"updating (current vocabulary in use)", failure codes in plain Korean, and off;
+the page polls every 10 seconds only during a build.
+
 The recording page calls the dictionary GET once (a builder poll opportunity) but
 sends no vocabulary on live streams: no API names one yet (ADR-008 item 5).
 `lib/liveVocabulary.ts` would send at most one name per `LanguageOptions`
