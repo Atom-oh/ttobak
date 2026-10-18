@@ -213,13 +213,7 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	}
 
 	// Look up user's custom vocabulary for Transcribe
-	var customVocab string
-	if userID != "" {
-		if vocab, vocabErr := dictService.GetVocabularyForTranscription(ctx, userID); vocabErr == nil && vocab != "" {
-			customVocab = vocab
-			log.Printf("Using custom vocabulary %s for user %s", vocab, userID)
-		}
-	}
+	customVocab := transcriptionVocabulary(ctx, dictService, userID)
 
 	var jobName string
 	switch sttProvider {
@@ -252,6 +246,59 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	log.Printf("Started transcription job: %s (provider=%s) for meeting: %s", jobName, sttProvider, meetingID)
 
 	return nil
+}
+
+// dictionaryReader is the dictionary surface the transcribe Lambda reads.
+type dictionaryReader interface {
+	GetVocabularyForTranscription(ctx context.Context, userID string) (string, error)
+	GetDictionary(ctx context.Context, userID string) (*model.DictionaryResponse, error)
+}
+
+// transcriptionVocabulary returns the user's READY personal vocabulary name,
+// or "" when there is none or the lookup fails.
+func transcriptionVocabulary(ctx context.Context, dict dictionaryReader, userID string) string {
+	if userID == "" {
+		return ""
+	}
+	vocab, err := dict.GetVocabularyForTranscription(ctx, userID)
+	if err != nil {
+		log.Printf("custom vocabulary lookup failed for user %s: %v", userID, err)
+		return ""
+	}
+	if vocab != "" {
+		log.Printf("Using custom vocabulary %s for user %s", vocab, userID)
+	}
+	return vocab
+}
+
+// dictionaryDisplayTerms returns the display forms of the user's dictionary
+// terms (v2 rows, or the legacy blob before migration).
+func dictionaryDisplayTerms(ctx context.Context, dict dictionaryReader, userID string) ([]string, error) {
+	if userID == "" {
+		return nil, nil
+	}
+	resp, err := dict.GetDictionary(ctx, userID)
+	if err != nil || resp == nil {
+		return nil, err
+	}
+	phrases := make([]string, 0, len(resp.Terms))
+	for _, t := range resp.Terms {
+		display := t.DisplayAs
+		if display == "" {
+			display = t.Phrase
+		}
+		phrases = append(phrases, display)
+	}
+	return phrases, nil
+}
+
+// whisperInitialPrompt joins the user's dictionary display forms.
+func whisperInitialPrompt(ctx context.Context, dict dictionaryReader, userID string) string {
+	phrases, err := dictionaryDisplayTerms(ctx, dict, userID)
+	if err != nil {
+		return ""
+	}
+	return strings.Join(phrases, ", ")
 }
 
 // whisperTaskOptions distinguishes ordinary, crop and recovery runs. Only
@@ -293,19 +340,7 @@ func whisperInputs(ctx context.Context, meeting *model.Meeting, userID string) (
 }
 
 var loadDictionaryTerms = func(ctx context.Context, userID string) ([]string, error) {
-	dict, err := dictService.GetDictionary(ctx, userID)
-	if err != nil || dict == nil {
-		return nil, err
-	}
-	phrases := make([]string, 0, len(dict.Terms))
-	for _, t := range dict.Terms {
-		display := t.DisplayAs
-		if display == "" {
-			display = t.Phrase
-		}
-		phrases = append(phrases, display)
-	}
-	return phrases, nil
+	return dictionaryDisplayTerms(ctx, dictService, userID)
 }
 
 func whisperRunTaskInput(meetingID, userID, audioKey, initialPrompt, outputKey string, numSpeakers int, opts whisperTaskOptions) *ecs.RunTaskInput {
