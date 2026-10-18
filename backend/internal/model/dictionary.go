@@ -40,10 +40,68 @@ type DeleteTermRequest struct {
 	Phrase string `json:"phrase"`
 }
 
-// DictionaryResponse represents the API response for dictionary operations
+// DictionaryResponse represents the API response for dictionary operations.
+// Terms and Status are the legacy fields; Items lists the v2 rows.
 type DictionaryResponse struct {
-	Terms  []DictionaryTerm `json:"terms"`
-	Status string           `json:"status"`
+	Terms        []DictionaryTerm `json:"terms"`
+	Status       string           `json:"status"`
+	Vocabularies *VocabularyViews `json:"vocabularies,omitempty"`
+	Items        []DictTermView   `json:"items,omitempty"`
+	// MigrationPending means the legacy list is not yet copied into rows, so
+	// some legacy terms have no termId; a legacy PUT resolves it.
+	MigrationPending bool     `json:"migrationPending,omitempty"`
+	Warnings         []string `json:"warnings,omitempty"`
+}
+
+// DictTermView is the API form of a v2 term row. Tombstones are never listed.
+type DictTermView struct {
+	TermID       string   `json:"termId"`
+	DisplayAs    string   `json:"displayAs"`
+	Phrase       string   `json:"phrase"`
+	HeardAs      []string `json:"heardAs"`
+	AliasMode    string   `json:"aliasMode"`
+	Type         string   `json:"type"`
+	Origin       string   `json:"origin"`
+	State        string   `json:"state"`
+	UserEdited   bool     `json:"userEdited"`
+	Version      int64    `json:"version"`
+	TranscribeKo bool     `json:"transcribeKo"`
+	TranscribeEn bool     `json:"transcribeEn"`
+	Hits         int      `json:"hits"`
+	AddedAt      string   `json:"addedAt"`
+	UpdatedAt    string   `json:"updatedAt"`
+}
+
+// DictTermMutationResponse answers a v2 term create, update or delete.
+type DictTermMutationResponse struct {
+	Item         *DictTermView    `json:"item,omitempty"`
+	TermID       string           `json:"termId"`
+	State        string           `json:"state"`
+	Status       string           `json:"status"`
+	Vocabularies *VocabularyViews `json:"vocabularies,omitempty"`
+	Warnings     []string         `json:"warnings,omitempty"`
+}
+
+// CreateDictTermRequest is the body of POST /api/settings/dictionary/terms.
+// An omitted phrase defaults to displayAs, as the legacy list does.
+type CreateDictTermRequest struct {
+	DisplayAs string   `json:"displayAs"`
+	Phrase    *string  `json:"phrase,omitempty"`
+	HeardAs   []string `json:"heardAs,omitempty"`
+	Type      string   `json:"type,omitempty"`
+	AliasMode string   `json:"aliasMode,omitempty"`
+}
+
+// UpdateDictTermRequest is the body of PATCH .../terms/{termId}; omitted
+// fields stay as they are. State may only move a suggestion to active.
+type UpdateDictTermRequest struct {
+	Version   *int64    `json:"version"`
+	DisplayAs *string   `json:"displayAs,omitempty"`
+	Phrase    *string   `json:"phrase,omitempty"`
+	HeardAs   *[]string `json:"heardAs,omitempty"`
+	Type      *string   `json:"type,omitempty"`
+	AliasMode *string   `json:"aliasMode,omitempty"`
+	State     *string   `json:"state,omitempty"`
 }
 
 // Dictionary v2 keys. Terms (DICTTERM#{termKey}) and observations
@@ -140,9 +198,9 @@ type DictObservation struct {
 	EntityType string `dynamodbav:"entityType"`
 }
 
-// VocabularyState tracks the Transcribe vocabulary for one context and
-// language. Status describes the latest build, not ActiveName. Build
-// fingerprints and A/B slot timestamps arrive with the vocabulary builder.
+// VocabularyState tracks one context and language with two slots: ActiveName
+// changes only by a flip to a READY build; InactiveName is the build target or
+// the demoted slot. Status describes the latest build, not ActiveName.
 type VocabularyState struct {
 	PK           string `dynamodbav:"PK"`
 	SK           string `dynamodbav:"SK"`
@@ -150,13 +208,41 @@ type VocabularyState struct {
 	Language     string `dynamodbav:"language"`
 	ActiveName   string `dynamodbav:"activeName,omitempty"`
 	InactiveName string `dynamodbav:"inactiveName,omitempty"`
-	Status       string `dynamodbav:"status"`
-	ActiveReady  bool   `dynamodbav:"activeReady"`
-	FailureCode  string `dynamodbav:"failureCode,omitempty"`
-	TermCount    int    `dynamodbav:"termCount"`
-	UpdatedAt    string `dynamodbav:"updatedAt"`
-	Version      int64  `dynamodbav:"version"`
-	EntityType   string `dynamodbav:"entityType"`
+	// RetiredName awaits deletion.
+	RetiredName         string `dynamodbav:"retiredName,omitempty"`
+	ActiveFingerprint   string `dynamodbav:"activeFingerprint,omitempty"`
+	BuildingFingerprint string `dynamodbav:"buildingFingerprint,omitempty"`
+	Status              string `dynamodbav:"status"`
+	ActiveReady         bool   `dynamodbav:"activeReady"`
+	FailureCode         string `dynamodbav:"failureCode,omitempty"`
+	// BuildSubmitted is false while a claimed build is not yet sent.
+	BuildSubmitted bool `dynamodbav:"buildSubmitted,omitempty"`
+	// BypassPending lets the next claim skip the minimum interval once.
+	BypassPending  bool   `dynamodbav:"bypassPending,omitempty"`
+	BuildStartedAt string `dynamodbav:"buildStartedAt,omitempty"`
+	// SubmittedAt is stamped by the submit claim, before the provider call; a
+	// poll accepts a provider result only if modified at or after it.
+	SubmittedAt string `dynamodbav:"submittedAt,omitempty"`
+	FlippedAt   string `dynamodbav:"flippedAt,omitempty"`
+	EmptySince  string `dynamodbav:"emptySince,omitempty"`
+	TermCount   int    `dynamodbav:"termCount"`
+	UpdatedAt   string `dynamodbav:"updatedAt"`
+	Version     int64  `dynamodbav:"version"`
+	EntityType  string `dynamodbav:"entityType"`
+}
+
+// VocabularyView is the API form of a VocabularyState.
+type VocabularyView struct {
+	Status      string `json:"status"`
+	ActiveReady bool   `json:"activeReady"`
+	FailureCode string `json:"failureCode,omitempty"`
+	TermCount   int    `json:"termCount"`
+}
+
+// VocabularyViews lists the personal vocabularies by language.
+type VocabularyViews struct {
+	Ko VocabularyView `json:"ko"`
+	En VocabularyView `json:"en"`
 }
 
 // DictTimeLayout is the fixed-width UTC timestamp used by v2 dictionary rows

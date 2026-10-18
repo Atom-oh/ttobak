@@ -182,6 +182,15 @@ the same summarize Lambda. Run/source/prior-item checks publish items and succes
 together, preserving unchanged IDs/completion and prior results on failure.
 An empty array alone never establishes successful analysis.
 
+Automatic dictionary term extraction (ADR-008) has its own
+MEETING#/ANALYSIS#terms state. The end of summary analyses, a preserved-human-content
+summary and a saved-source re-summary call a non-fatal Enqueue, which publishes
+TermsRequested to the same summarize Lambda only when `AUTO_TERMS_MODE=personal`
+allows the owner (default `off`). The worker rereads the sources, calls the model
+within a bounded budget, filters candidates and merges them into the owner's
+personal dictionary; non-owner source edits make a run suggest only. Meeting
+deletion sweeps the meeting's observations and run state.
+
 The authenticated `/api/meetings/{id}/reading` route bounds JSON before Lambda
 serialization. Notes, summary and action sections use metadata views; transcript
 reads hydrate only the authorized chosen source and eligible segments. Every page

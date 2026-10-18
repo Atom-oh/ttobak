@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -19,8 +20,8 @@ import (
 // those transitions fail once the meeting item is gone. Fail is a single
 // conditional update of an existing row with no meeting check and never
 // creates one; callers run it with a detached short (3 s) context. Meeting
-// deletion does not yet remove ANALYSIS#terms or the meeting's DICTOBS# rows
-// (design A8); that cleanup must ship before or with the first writer.
+// deletion sweeps ANALYSIS#terms and the meeting's DICTOBS# rows after the
+// meeting item is gone (SweepMeetingTerms, design A8).
 
 func termsAnalysisKey(meetingID string) map[string]types.AttributeValue {
 	return map[string]types.AttributeValue{
@@ -115,6 +116,7 @@ func (r *DynamoDBRepository) QueueTermsAnalysis(ctx context.Context, ownerID, me
 	condition = condition.And(expression.AttributeNotExists(expression.Name("succeededSourceHash")).
 		Or(expression.Name("succeededSourceHash").NotEqual(expression.Value(next.SourceHash))))
 	update := expression.Set(expression.Name("runId"), expression.Value(next.RunID)).
+		Set(expression.Name("ownerId"), expression.Value(ownerID)).
 		Set(expression.Name("status"), expression.Value(model.AnalysisQueued)).
 		Set(expression.Name("sourceHash"), expression.Value(next.SourceHash)).
 		Set(expression.Name("summaryGeneration"), expression.Value(next.SummaryGeneration)).
@@ -146,6 +148,21 @@ func (r *DynamoDBRepository) RenewTermsAnalysisLease(ctx context.Context, ownerI
 		And(expression.Name("leaseUntil").GreaterThan(expression.Value(now.UnixMilli())))
 	update := expression.Set(expression.Name("leaseUntil"), expression.Value(leaseUntil)).
 		Set(expression.Name("updatedAt"), expression.Value(now))
+	return r.checkedTermsWrite(ctx, ownerID, meetingID, true, update, condition)
+}
+
+// ReserveTermsAccepted renews the lease like RenewTermsAnalysisLease and
+// stores accepted (the prior list plus the keys this run may observe) before
+// any observation is written, so a meeting deleted mid-run still has every
+// observation key listed for the deletion sweep. The list only grows.
+func (r *DynamoDBRepository) ReserveTermsAccepted(ctx context.Context, ownerID, meetingID, runID string, expectedLease int64, now time.Time, leaseUntil int64, accepted []model.TermsAcceptedTerm) error {
+	if err := model.ValidateTermsAccepted(accepted); err != nil {
+		return err
+	}
+	condition := termsLeaseCondition(runID, model.AnalysisRunning, expectedLease).
+		And(expression.Name("leaseUntil").GreaterThan(expression.Value(now.UnixMilli())))
+	update := setAcceptedTerms(expression.Set(expression.Name("leaseUntil"), expression.Value(leaseUntil)).
+		Set(expression.Name("updatedAt"), expression.Value(now)), accepted)
 	return r.checkedTermsWrite(ctx, ownerID, meetingID, true, update, condition)
 }
 
@@ -207,4 +224,100 @@ func setAcceptedTerms(update expression.UpdateBuilder, accepted []model.TermsAcc
 		return update
 	}
 	return update.Set(expression.Name("acceptedTerms"), expression.Value(accepted))
+}
+
+// SweepMeetingTerms runs after the meeting item is deleted (design A8): per
+// acceptedTerms key it deletes the owner-scope DICTOBS# row and an unedited
+// auto term left without observations (version-guarded). The run state goes
+// last, only when every step succeeded, so a retry still finds the keys. Only
+// the owner recorded on the run state is swept; the meeting service re-runs
+// this when the owner retries DELETE on an already-deleted meeting.
+func (r *DynamoDBRepository) SweepMeetingTerms(ctx context.Context, ownerID, meetingID string) error {
+	state, err := r.GetTermsAnalysis(ctx, meetingID)
+	if err != nil || state == nil {
+		return err
+	}
+	if state.OwnerID != ownerID {
+		return nil // another owner's run state: a retried sweep never touches it
+	}
+	pk := model.PrefixUser + ownerID
+	var errs []error
+	for _, accepted := range state.AcceptedTerms {
+		if !model.ValidTermKey(accepted.TermKey) {
+			continue
+		}
+		if _, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+			TableName: aws.String(r.tableName), Key: dictKey(pk, model.DictObsSK(accepted.TermKey, meetingID)),
+		}); err != nil {
+			errs = append(errs, fmt.Errorf("delete term observation: %w", err))
+			continue
+		}
+		if err := r.deleteOrphanAutoTerm(ctx, pk, accepted.TermKey); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	if _, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{TableName: aws.String(r.tableName), Key: termsAnalysisKey(meetingID)}); err != nil {
+		return fmt.Errorf("delete terms analysis: %w", err)
+	}
+	return nil
+}
+
+// deleteOrphanAutoTerm reads the term version BEFORE counting the remaining
+// observations. An observation write (observeAutoTerm) puts DICTOBS# and bumps
+// the version in one transaction, so any write that lands after the read fails
+// the version-guarded delete; one that lands before it is seen by the count.
+func (r *DynamoDBRepository) deleteOrphanAutoTerm(ctx context.Context, pk, termKey string) error {
+	got, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{TableName: aws.String(r.tableName), Key: dictKey(pk, model.DictTermSK(termKey)), ConsistentRead: aws.Bool(true)})
+	if err != nil {
+		return fmt.Errorf("read swept term: %w", err)
+	}
+	if len(got.Item) == 0 {
+		return nil
+	}
+	var term model.DictTerm
+	if err := attributevalue.UnmarshalMap(got.Item, &term); err != nil {
+		return fmt.Errorf("decode swept term: %w", err)
+	}
+	if term.Origin != model.TermOriginAuto || term.UserEditedAt != "" ||
+		(term.State != model.TermStateActive && term.State != model.TermStateSuggested) {
+		return nil
+	}
+	keyExpr, err := expression.NewBuilder().WithKeyCondition(expression.Key("PK").Equal(expression.Value(pk)).
+		And(expression.Key("SK").BeginsWith(model.PrefixDictObs + termKey + "#"))).Build()
+	if err != nil {
+		return err
+	}
+	remaining, err := r.client.Query(ctx, &dynamodb.QueryInput{
+		TableName: aws.String(r.tableName), ConsistentRead: aws.Bool(true), Limit: aws.Int32(1), Select: types.SelectCount,
+		KeyConditionExpression: keyExpr.KeyCondition(), ExpressionAttributeNames: keyExpr.Names(), ExpressionAttributeValues: keyExpr.Values(),
+	})
+	if err != nil {
+		return fmt.Errorf("count term observations: %w", err)
+	}
+	if remaining.Count > 0 {
+		return nil
+	}
+	condition := expression.Name("version").Equal(expression.Value(term.Version)).
+		And(expression.Name("origin").Equal(expression.Value(model.TermOriginAuto))).
+		And(expression.AttributeNotExists(expression.Name("userEditedAt"))).
+		And(expression.Name("state").In(expression.Value(model.TermStateActive), expression.Value(model.TermStateSuggested)))
+	expr, err := expression.NewBuilder().WithCondition(condition).Build()
+	if err != nil {
+		return err
+	}
+	_, err = r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(r.tableName), Key: dictKey(pk, model.DictTermSK(termKey)),
+		ConditionExpression: expr.Condition(), ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(),
+	})
+	var failed *types.ConditionalCheckFailedException
+	if errors.As(err, &failed) {
+		return nil // edited, merged or evicted concurrently
+	}
+	if err != nil {
+		return fmt.Errorf("delete orphan auto term: %w", err)
+	}
+	return nil
 }
