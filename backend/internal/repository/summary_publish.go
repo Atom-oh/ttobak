@@ -74,7 +74,7 @@ func (r *DynamoDBRepository) publishMeetingSummary(ctx context.Context, snapshot
 			update = update.Set(expression.Name(key), expression.Value(value))
 		}
 	}
-	update = update.Remove(expression.Name("summarizeRetryClaimedAt"))
+	update = invalidateSummaryClearance(update.Remove(expression.Name("summarizeRetryClaimedAt")))
 	op, err := analysisUpdate(r.tableName, summaryRowKey(parent.PK, parent.SK), update, summaryCondition(parent))
 	if err != nil {
 		return err

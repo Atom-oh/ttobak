@@ -628,6 +628,10 @@ func (r *DynamoDBRepository) UpdateMeeting(ctx context.Context, meeting *model.M
 	// Marshal a shallow storage copy instead; string-field swaps on the copy
 	// never touch the original, and the shared slices/maps are only read.
 	stored := *meeting
+	// A legacy whole-item replacement cannot attest to the content it saves.
+	// Never copy stored clearance from the caller, including after rollback.
+	stored.SummaryPrivacy = nil
+	stored.InsightsRevision = ""
 	if stored.TranscriptA != "" {
 		stored.TranscriptRevisionA = uuid.NewString()
 	}
@@ -718,20 +722,45 @@ func (r *DynamoDBRepository) UpdateMeeting(ctx context.Context, meeting *model.M
 	// callers, which never populate it) -- proceeding on a read failure
 	// risks wiping every project link on one transient GetItem error, which
 	// is worse than the race this exists to close.
+	// Account classification and publication are also owned by partial
+	// writers. Preserve their current values and fence their exact presence;
+	// legacy account writes do not necessarily advance authorizationRevision.
 	const maxProjectIDsAttempts = 3
 	for attempt := 1; ; attempt++ {
-		current, err := r.getMeetingProjectIDs(ctx, meeting.UserID, meeting.MeetingID)
+		current, fence, err := r.getMeetingWriteMetadata(ctx, meeting.UserID, meeting.MeetingID)
 		if err != nil {
-			return fmt.Errorf("failed to preserve projectIds on meeting update: %w", err)
+			return fmt.Errorf("failed to preserve meeting write metadata: %w", err)
 		}
-		stored.ProjectIDs = current
+		stored.ProjectIDs = current.ProjectIDs
+		stored.AuthorizationRevision = current.AuthorizationRevision + 1
+		if fence.Exists {
+			stored.AccountID = current.AccountID
+			stored.SharedToAccount = current.SharedToAccount
+		}
 
 		item, err := attributevalue.MarshalMap(&stored)
 		if err != nil {
 			return fmt.Errorf("failed to marshal meeting: %w", err)
 		}
+		if fence.Exists {
+			// Model omitempty would lose explicit false/empty attributes.
+			// Restore exact current presence and values, never stale caller
+			// grants. A conditional create retains caller preparation.
+			for _, name := range []string{"accountId", "sharedToAccount"} {
+				field := fence.Fields[name]
+				if !field.Present {
+					delete(item, name)
+					continue
+				}
+				value, err := attributevalue.Marshal(field.Value)
+				if err != nil {
+					return fmt.Errorf("marshal preserved meeting metadata %s: %w", name, err)
+				}
+				item[name] = value
+			}
+		}
 
-		condExpr, err := projectIDsUnchangedCondition(current)
+		condExpr, err := expression.NewBuilder().WithCondition(summaryCondition(fence)).Build()
 		if err != nil {
 			return fmt.Errorf("build projectIds-unchanged condition: %w", err)
 		}
@@ -801,18 +830,17 @@ func projectIDsUnchangedCondition(current []string) (expression.Expression, erro
 	return expression.NewBuilder().WithCondition(cond).Build()
 }
 
-// getMeetingProjectIDs reads only the projectIds attribute of a meeting,
-// via ProjectionExpression -- see UpdateMeeting's comment for why this
-// read-before-write matters. A missing item or missing attribute both
-// resolve to a nil slice (not an error): the caller is mid-write on a
-// meeting that either doesn't exist yet or has no project links, and in
-// both cases overwriting with nil is correct, not a failure to report.
-func (r *DynamoDBRepository) getMeetingProjectIDs(ctx context.Context, ownerUserID, meetingID string) ([]string, error) {
+// Pin both the relation set and the current authorization revision. A stale
+// whole-item caller must not roll that revision backward or overwrite a
+// concurrent grant/publication fence. Missing items retain conditional-create
+// behavior; no meeting body or transcript hydration is needed here.
+func (r *DynamoDBRepository) getMeetingWriteMetadata(ctx context.Context, ownerUserID, meetingID string) (*model.Meeting, model.SummaryCheck, error) {
 	expr, err := expression.NewBuilder().
-		WithProjection(expression.NamesList(expression.Name("projectIds"))).
+		WithProjection(expression.NamesList(expression.Name("PK"), expression.Name("projectIds"),
+			expression.Name("authorizationRevision"), expression.Name("accountId"), expression.Name("sharedToAccount"))).
 		Build()
 	if err != nil {
-		return nil, fmt.Errorf("build projectIds projection: %w", err)
+		return nil, model.SummaryCheck{}, fmt.Errorf("build meeting write projection: %w", err)
 	}
 	result, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName:      aws.String(r.tableName),
@@ -825,18 +853,22 @@ func (r *DynamoDBRepository) getMeetingProjectIDs(ctx context.Context, ownerUser
 		ExpressionAttributeNames: expr.Names(),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("get meeting projectIds: %w", err)
+		return nil, model.SummaryCheck{}, fmt.Errorf("get meeting write metadata: %w", err)
 	}
-	if result.Item == nil {
-		return nil, nil
-	}
-	var projected struct {
-		ProjectIDs []string `dynamodbav:"projectIds,omitempty,stringset"`
-	}
+	var projected model.Meeting
 	if err := attributevalue.UnmarshalMap(result.Item, &projected); err != nil {
-		return nil, fmt.Errorf("unmarshal meeting projectIds: %w", err)
+		return nil, model.SummaryCheck{}, fmt.Errorf("unmarshal meeting write metadata: %w", err)
 	}
-	return projected.ProjectIDs, nil
+	fence, err := summaryCheck(model.PrefixUser+ownerUserID, model.PrefixMeeting+meetingID,
+		result.Item, []string{"projectIds", "authorizationRevision", "accountId", "sharedToAccount"})
+	if err != nil {
+		return nil, model.SummaryCheck{}, err
+	}
+	if value := fence.Fields["authorizationRevision"]; value.Present {
+		value.Value = projected.AuthorizationRevision
+		fence.Fields["authorizationRevision"] = value
+	}
+	return &projected, fence, nil
 }
 
 func singleDynamoDBAttempt(o *dynamodb.Options) {
@@ -924,7 +956,7 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 	if _, assigned := fields["notesRevision"]; assigned {
 		return fmt.Errorf("notesRevision is server-managed")
 	}
-	for _, name := range []string{"transcriptRevisionA", "transcriptRevisionB"} {
+	for _, name := range []string{"transcriptRevisionA", "transcriptRevisionB", "summaryPrivacy", "insightsRevision", "authorizationRevision"} {
 		if _, assigned := fields[name]; assigned {
 			return fmt.Errorf("%s is server-managed", name)
 		}
@@ -932,7 +964,10 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 	_, writesNotes := fields["notes"]
 	_, writesA := fields["transcriptA"]
 	_, writesB := fields["transcriptB"]
-	if immutableSpills || writesNotes || writesA || writesB {
+	_, writesContent := fields["content"]
+	_, writesLiveSummary := fields["liveSummary"]
+	invalidatesClearance := writesContent || writesLiveSummary
+	if immutableSpills || writesNotes || writesA || writesB || invalidatesClearance {
 		// Do not leave internal spill refs or a generated revision in a
 		// caller's map that could be reused for a later retry.
 		copyFields := make(map[string]interface{}, len(fields))
@@ -1100,6 +1135,9 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 				update = update.Set(expression.Name(k), expression.Value(v))
 			}
 		}
+		if invalidatesClearance {
+			update = invalidateSummaryClearance(update)
+		}
 
 		expr, err := expression.NewBuilder().WithUpdate(update).WithCondition(writeCond).Build()
 		if err != nil {
@@ -1108,7 +1146,7 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 
 		var options []func(*dynamodb.Options)
 		_, writesNotes := fields["notes"]
-		if len(uploadedKeys) > 0 || writesNotes {
+		if len(uploadedKeys) > 0 || writesNotes || invalidatesClearance {
 			// An SDK retry could hide a committed write behind a later failed
 			// condition or restore an older notes revision after a newer fence.
 			// Ambiguous failures require readback; never replay the old UUID.
