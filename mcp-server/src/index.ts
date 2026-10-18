@@ -15,6 +15,8 @@ import { httpTools, decodeUpload, mutationReceipt, MAX_HTTP_RESULT_BYTES } from 
 import { readingOptions, readingResult, readingError } from './reading.js';
 import { documentReadingOptions, documentReadingResult } from './document-reading.js';
 import { documentCatalogOptions, documentCatalogResult } from './document-catalog.js';
+import { kbReadingOptions, kbReadingResult } from './kb-catalog.js';
+import { navigationOptions, navigationResult } from './navigation-catalog.js';
 import { Recorder, MAX_MAX_MINUTES, type UploadProgress } from './recorder.js';
 import { AppControlError, defaultAppSocketPath, sendAppRequest, type AppAction } from './app-control.js';
 
@@ -104,8 +106,12 @@ const registry: { tools: Tool[] } = {
     },
     {
       name: 'ttobak_list_accounts',
-      description: 'List customer accounts you belong to (id, name, parentAccountId, your role). Build group/subsidiary trees using parentAccountId. Hierarchy does not grant access to other accounts.',
-      inputSchema: { type: 'object' as const, properties: {} },
+      description: 'Page through customer accounts with current membership. Follow opaque page.nextCursor until complete, including empty pages, and restart stale cursors. Build group/subsidiary trees using parentAccountId only after reading every page; hierarchy never grants access.',
+      annotations: { readOnlyHint: true },
+      inputSchema: { type: 'object' as const, properties: {
+        pageSize: { type: 'integer', minimum: 1, maximum: 50, default: 20 },
+        cursor: { type: 'string', maxLength: 2048 },
+      }, additionalProperties: false },
     },
     {
       name: 'ttobak_get_account',
@@ -173,8 +179,12 @@ const registry: { tools: Tool[] } = {
     {
       name: 'ttobak_list_projects',
       description:
-        'List projects you own, are directly invited to, or can reach via a linked Account\'s membership (projectId, name, stage, SFDC Oppty ID).',
-      inputSchema: { type: 'object' as const, properties: {} },
+        'Page through projects you own, directly joined or can access through linked accounts. Follow opaque page.nextCursor, including empty pages, until complete; restart stale cursors. Current memberships/links are revalidated. Combine results by projectId (unionKey); overlapPossible is explicit when bounded cursor memory cannot suppress every repeated access path. Metadata never grants access.',
+      annotations: { readOnlyHint: true },
+      inputSchema: { type: 'object' as const, properties: {
+        pageSize: { type: 'integer', minimum: 1, maximum: 50, default: 20 },
+        cursor: { type: 'string', maxLength: 2048 },
+      }, additionalProperties: false },
     },
     {
       name: 'ttobak_get_project',
@@ -367,8 +377,12 @@ const registry: { tools: Tool[] } = {
     },
     {
       name: 'ttobak_kb_list_files',
-      description: 'List your own uploaded Knowledge Base files (fileId, fileName, size, lastModified).',
-      inputSchema: { type: 'object' as const, properties: {} },
+      description: 'Read bounded pages of your uploaded Knowledge Base file metadata. Follow the opaque page.nextCursor until complete; restart stale cursors. File IDs remain exact for later explicit deletion; shortened display names are marked. This lists metadata without downloading or indexing file contents.',
+      annotations: { readOnlyHint: true },
+      inputSchema: { type: 'object' as const, properties: {
+        pageSize: { type: 'integer', minimum: 1, maximum: 50, default: 20 },
+        cursor: { type: 'string', maxLength: 2048, description: 'Opaque server continuation bound to your KB scope' },
+      }, additionalProperties: false },
     },
     {
       name: 'ttobak_kb_delete_file',
@@ -607,8 +621,8 @@ async function callTool(request: CallToolRequest, options: ServerOptions) {
       }
 
       case 'ttobak_list_accounts': {
-        const result = await api.listAccounts();
-        return text(JSON.stringify(result, null, 2));
+        const options = navigationOptions(args);
+        return navigationResult(await api.readNavigation('accounts', options), options, 'accounts');
       }
 
       case 'ttobak_get_account': {
@@ -663,8 +677,8 @@ async function callTool(request: CallToolRequest, options: ServerOptions) {
       }
 
       case 'ttobak_list_projects': {
-        const result = await api.listProjects();
-        return text(JSON.stringify(result, null, 2));
+        const options = navigationOptions(args);
+        return navigationResult(await api.readNavigation('projects', options), options, 'projects');
       }
 
       case 'ttobak_get_project': {
@@ -797,8 +811,8 @@ async function callTool(request: CallToolRequest, options: ServerOptions) {
       }
 
       case 'ttobak_kb_list_files': {
-        const result = await api.listKBFiles();
-        return text(JSON.stringify(result, null, 2));
+        const options = kbReadingOptions(args);
+        return kbReadingResult(await api.readKBFiles(options), options);
       }
 
       case 'ttobak_kb_delete_file': {
