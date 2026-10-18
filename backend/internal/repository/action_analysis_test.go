@@ -139,7 +139,7 @@ func TestActionAnalysisMapsOnlyConditionalCancellation(t *testing.T) {
 }
 
 func TestActionAnalysisPinsGenerationOnQueueAndCompletion(t *testing.T) {
-	privacyWriterEnabled(t)
+	t.Setenv("SUMMARY_PRIVACY_WRITER_ENABLED", "1")
 	for _, phase := range []string{"queue", "complete"} {
 		t.Run(phase, func(t *testing.T) {
 			repo := actionAnalysisWire(t, func(_ string, body map[string]any) {
