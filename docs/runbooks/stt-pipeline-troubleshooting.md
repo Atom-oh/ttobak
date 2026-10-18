@@ -29,6 +29,59 @@ Use ASG scaling activities and actual subnet availability for capacity failures.
 Do not force a historic AZ list. Reused hosts require disk headroom and shortened
 stopped-task cleanup; do not remove those settings as arbitrary overprovisioning.
 
+Check that AZRebalance is still suspended and that no CDK drain hook exists
+(managed draining replaces it):
+
+```bash
+aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names ttobak-whisper-asg \
+  --query 'AutoScalingGroups[0].SuspendedProcesses[].ProcessName' --region ap-northeast-2
+aws autoscaling describe-lifecycle-hooks --auto-scaling-group-name ttobak-whisper-asg --region ap-northeast-2
+```
+
+`AZRebalance` must be listed. The only termination hook should be ECS's own
+`ecs-managed-draining-termination-hook`; a CDK `...DrainHook...` hook means the
+old InstanceDrainHook is back. A manual resume is
+drift; redeploy WhisperStack (idle cluster only) rather than editing it by hand.
+
+## Scheduled STT recovery
+
+`ttobak-stt-recovery` invokes `ttobak-transcribe` every 15 minutes (ADR-031
+amendment). Its log lines start with `stt-recovery` and carry only meeting IDs,
+statuses, sizes, attempts and fixed reasons; each tick ends with one
+`Ttobak/SttRecovery` embedded-metric line of counts.
+
+```bash
+aws logs tail /aws/lambda/ttobak-transcribe --since 1h --filter-pattern '"stt-recovery"' --region ap-northeast-2
+aws ecs list-tasks --cluster ttobak-whisper --started-by sttrec-<MEETING_ID> --desired-status STOPPED --region ap-northeast-2
+```
+
+| Action | Meaning |
+|---|---|
+| `redrive_stt` | Stuck past its size-based deadline; claims attempt n (max 2) and runs Whisper with `ClientToken sttrec-{id}-{n}` |
+| `redrive_summary` | `transcripts/{id}.json` exists, is not older than the latest restart (newest audio-prefix object such as a `rediarize_` copy, last claim, or `updatedAt` while transcribing) and was never published; self-copy emits a real S3 event (max 2) |
+| `mark_exhausted` | Both attempts used for this audio key; marks `RECOVERY_EXHAUSTED` |
+| `report_checkpoint_only` | Only `recording_progress.*` exists; the owner recovers it (ADR-048) |
+| `report_multipart`, `report_unsupported`, `report` | Not processed automatically; investigate |
+| `terminal`, `would_delete`, `delete` | `AUDIO_CORRUPT`/`NO_SPEECH` mark; deletion after seven untouched days |
+| `cluster_busy`, `stt_deferred` | Another task holds the GPU pool or the one-run budget is used |
+
+`STT_RECOVERY_MODE` and `STT_RECOVERY_DELETE_MODE` take `off`, `report` or
+`active` (unknown values mean `off`). `report` writes nothing. To stop the tick in
+an incident, set either to `off` through a GatewayStack change, or disable the
+rule. Any user write after a mark (notes, re-upload, rediarize) bumps `updatedAt`
+and permanently cancels that mark's deletion.
+
+Grace deletion removes only current S3 versions. To restore an object, list its
+versions and delete the delete marker:
+
+```bash
+aws s3api list-object-versions --bucket <BUCKET> --prefix audio/<USER_ID>/<MEETING_ID>/ --region ap-northeast-2
+aws s3api delete-object --bucket <BUCKET> --key <KEY> --version-id <DELETE_MARKER_VERSION_ID> --region ap-northeast-2
+```
+
+The DynamoDB rows are not restorable this way; restoring a meeting requires a
+table point-in-time recovery review.
+
 ## Summarizing
 
 Check the expected transcripts/ output and matching EventBridge rule, then
@@ -41,9 +94,11 @@ aws events describe-rule --name ttobak-transcript-upload --region ap-northeast-2
 aws logs tail /aws/lambda/ttobak-summarize --since 30m --region ap-northeast-2
 ```
 
-The Lambda budget is 15 minutes. Retry eligibility after 20 minutes uses an atomic
-claim; it does not schedule another delivery. GetMeeting reconciles stuck status
-after 60 minutes. These thresholds solve different problems; do not shorten one
+The Lambda budget is 15 minutes. Summarize-retry eligibility after 20 minutes uses
+an atomic claim; it does not schedule another delivery. GetMeeting reconciles stuck
+status after 60 minutes. The separate STT recovery tick re-drives an unpublished
+single-file transcript after 20 minutes. A blank transcript is marked `NO_SPEECH`
+instead of being summarized. These thresholds solve different problems; do not shorten one
 based on a stale runbook or rewrite rows unconditionally.
 
 Final notes that stop at `max_tokens` continue within the same source snapshot,
@@ -65,16 +120,15 @@ conditions or publish output produced from the old snapshot.
 
 Use the application Recover action for a saved recording_progress object, or
 Rediarize for supported single-part Whisper meetings and a corrected speaker bound.
-For an operator-approved full rebatch, inspect the maintenance script and preview
-one target first:
+The scheduled tick supersedes bulk rebatching. For an operator-approved one-off,
+the maintenance script requires an explicit meeting ID and previews by default:
 
 ```bash
 python3 scripts/whisper-rebatch.py <MEETING_ID>
 ```
 
-The script defaults to dry run. `--run` actually starts ECS work; `--num-speakers`
-requires a single meeting ID. Check its present selection/write behavior before
-executing. Do not fabricate an event with reserved `aws.s3` source via PutEvents or
+`--run` starts ECS work only for an `error`/`transcribing` meeting, after a
+conditional update on its observed status and `updatedAt`; it prints no titles. Do not fabricate an event with reserved `aws.s3` source via PutEvents or
 blindly reset DynamoDB state. Preserve coherent ASR/pyannote image pins (ADR-035).
 
 For an operator-authorized saved-source recovery, `backend/cmd/resummary` defaults
