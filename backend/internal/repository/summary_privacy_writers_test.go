@@ -81,13 +81,27 @@ func dynamoJSON(attrs map[string]types.AttributeValue) map[string]interface{} {
 	return out
 }
 
+func privacyWriterEnabled(t *testing.T) {
+	t.Helper()
+	t.Setenv("SUMMARY_PRIVACY_WRITER_ENABLED", "1")
+}
+
+func privacyWriterFences(t *testing.T, condition, format string, fields []string, args ...any) {
+	t.Helper()
+	for _, field := range fields {
+		if !strings.Contains(condition, field) {
+			t.Fatalf(format, append(args, field)...)
+		}
+	}
+}
+
 func privacyParent() *model.Meeting {
 	return &model.Meeting{PK: "USER#owner", SK: "MEETING#meeting", UserID: "owner",
 		MeetingID: "meeting", EntityType: "MEETING", Status: model.StatusDone}
 }
 
 func TestAllNewGrantPathsRejectUnknownAndPrivateDerivation(t *testing.T) {
-	t.Setenv("SUMMARY_PRIVACY_WRITER_ENABLED", "1")
+	privacyWriterEnabled(t)
 	for _, private := range []bool{false, true} {
 		for _, path := range []string{"direct", "pending", "materialized", "account"} {
 			t.Run(path+map[bool]string{false: "-unknown", true: "-private"}[private], func(t *testing.T) {
@@ -130,7 +144,7 @@ func TestAllNewGrantPathsRejectUnknownAndPrivateDerivation(t *testing.T) {
 }
 
 func TestEveryNewGrantFencesParentAndRetainsInviteOnParentRace(t *testing.T) {
-	t.Setenv("SUMMARY_PRIVACY_WRITER_ENABLED", "1")
+	privacyWriterEnabled(t)
 	for _, path := range []string{"direct", "pending", "materialized", "account-cache"} {
 		t.Run(path, func(t *testing.T) {
 			parent := privacyParent()
@@ -152,21 +166,11 @@ func TestEveryNewGrantFencesParentAndRetainsInviteOnParentRace(t *testing.T) {
 					}
 					update := ops[index].(map[string]any)["Update"].(map[string]any)
 					condition := analysisCondition(t, update)
-					for _, field := range []string{"authorizationRevision", "summaryPrivacy", "content", "sharedToAccount", "linkedMeetingIds"} {
-						if !strings.Contains(condition, field) {
-							t.Fatalf("%s grant lost parent fence %s", path, field)
-						}
-					}
+					privacyWriterFences(t, condition, "%s grant lost parent fence %s", []string{"authorizationRevision", "summaryPrivacy", "content", "sharedToAccount", "linkedMeetingIds"}, path)
 					if !strings.Contains(update["UpdateExpression"].(string), "ADD ") {
 						t.Fatal("grant did not advance authorization revision")
 					}
-					reasons := make([]map[string]string, len(ops))
-					for i := range reasons {
-						reasons[i] = map[string]string{"Code": "None"}
-					}
-					reasons[index]["Code"] = "ConditionalCheckFailed"
-					reply, _ := json.Marshal(map[string]interface{}{"__type": "TransactionCanceledException", "CancellationReasons": reasons})
-					return 400, string(reply)
+					return 400, projectCancellation(len(ops), index)
 				})
 			pending := &model.PendingShare{Kind: model.PendingShareKindMeeting, MeetingID: "meeting", SK: "PENDING_MEETING#meeting",
 				Email: "reader@example.test", InvitedByUserID: "owner", CreatedAt: time.Now().UTC()}
@@ -193,7 +197,7 @@ func TestEveryNewGrantFencesParentAndRetainsInviteOnParentRace(t *testing.T) {
 }
 
 func TestAccountPublicationFencesCanonicalMembershipAndParent(t *testing.T) {
-	t.Setenv("SUMMARY_PRIVACY_WRITER_ENABLED", "1")
+	privacyWriterEnabled(t)
 	parent := privacyParent()
 	rows := map[string]interface{}{"USER#owner/MEETING#meeting": parent,
 		"ACCOUNT#account/MEMBER#owner": &model.AccountMember{AccountID: "account", UserID: "owner", AddedAt: time.Now().UTC(), SummaryPrivacyVersion: 1}}
@@ -205,18 +209,10 @@ func TestAccountPublicationFencesCanonicalMembershipAndParent(t *testing.T) {
 		}
 		ops := body["TransactItems"].([]any)
 		member := ops[0].(map[string]any)["ConditionCheck"].(map[string]any)
-		for _, field := range []string{"addedAt", "summaryPrivacyVersion", "accountId", "userId"} {
-			if !strings.Contains(analysisCondition(t, member), field) {
-				t.Fatalf("missing canonical membership identity %s", field)
-			}
-		}
+		privacyWriterFences(t, analysisCondition(t, member), "missing canonical membership identity %s", []string{"addedAt", "summaryPrivacyVersion", "accountId", "userId"})
 		meeting := ops[1].(map[string]any)["Update"].(map[string]any)
-		for _, field := range []string{"authorizationRevision", "summaryPrivacy", "content", "linkedMeetingIds", "sharedToAccount"} {
-			if !strings.Contains(analysisCondition(t, meeting), field) {
-				t.Fatalf("missing parent publication fence %s", field)
-			}
-		}
-		return 400, `{"__type":"TransactionCanceledException","CancellationReasons":[{"Code":"ConditionalCheckFailed"},{"Code":"None"}]}`
+		privacyWriterFences(t, analysisCondition(t, meeting), "missing parent publication fence %s", []string{"authorizationRevision", "summaryPrivacy", "content", "linkedMeetingIds", "sharedToAccount"})
+		return 400, projectCancellation(2, 0)
 	})
 	err := repo.UpdateMeetingFields(context.Background(), "owner", "meeting",
 		map[string]interface{}{"accountId": "account", "sharedToAccount": true})
@@ -226,7 +222,7 @@ func TestAccountPublicationFencesCanonicalMembershipAndParent(t *testing.T) {
 }
 
 func TestBatchLinkedPublicationPinsPredecessorBytesAndAuthorizationRevision(t *testing.T) {
-	t.Setenv("SUMMARY_PRIVACY_WRITER_ENABLED", "1")
+	privacyWriterEnabled(t)
 	parent := privacyParent()
 	parent.LinkedMeetingIDs, parent.TranscriptA = []string{"predecessor"}, "own raw transcript"
 	source := &model.Meeting{PK: "USER#owner", SK: "MEETING#predecessor", UserID: "owner",
@@ -242,12 +238,8 @@ func TestBatchLinkedPublicationPinsPredecessorBytesAndAuthorizationRevision(t *t
 			t.Fatal("a grant created during generation would not invalidate publication")
 		}
 		check := ops[1].(map[string]any)["ConditionCheck"].(map[string]any)
-		for _, value := range []string{"userId", "title", "before", "content", "PRIVATE_SOURCE", "actionItems", "summaryPrivacy"} {
-			if !strings.Contains(analysisCondition(t, check), value) {
-				t.Fatalf("predecessor changed during generation was not pinned: %s", value)
-			}
-		}
-		return 400, `{"__type":"TransactionCanceledException","CancellationReasons":[{"Code":"None"},{"Code":"ConditionalCheckFailed"}]}`
+		privacyWriterFences(t, analysisCondition(t, check), "predecessor changed during generation was not pinned: %s", []string{"userId", "title", "before", "content", "PRIVATE_SOURCE", "actionItems", "summaryPrivacy"})
+		return 400, projectCancellation(2, 1)
 	})
 	snapshot, err := repo.CaptureMeetingSummary(context.Background(), "owner", "meeting")
 	if err != nil {
@@ -266,7 +258,7 @@ func TestBatchLinkedPublicationPinsPredecessorBytesAndAuthorizationRevision(t *t
 }
 
 func TestDerivativePublicationRejectsResetWithSameContent(t *testing.T) {
-	t.Setenv("SUMMARY_PRIVACY_WRITER_ENABLED", "1")
+	privacyWriterEnabled(t)
 	parent := privacyParent()
 	parent.Content = "same summary"
 	parent.SummaryPrivacy = &model.SummaryPrivacy{Version: 1, State: model.SummaryPrivacyPrivate,
@@ -308,7 +300,7 @@ func privacyWriterSetValue(t *testing.T, op map[string]any, field string) map[st
 }
 
 func TestSharingSafeModeAndResetArePersistedAtomically(t *testing.T) {
-	t.Setenv("SUMMARY_PRIVACY_WRITER_ENABLED", "1")
+	privacyWriterEnabled(t)
 	parent := privacyParent()
 	parent.Content, parent.Notes = "PRIVATE_OLD_SUMMARY", "saved human memo"
 	parent.ActionItems = `[{"id":"keep-completed-id","text":"PRIVATE_OLD_TASK","completed":true}]`
@@ -351,7 +343,7 @@ func TestSharingSafeModeAndResetArePersistedAtomically(t *testing.T) {
 		if !strings.Contains(analysisCondition(t, ops[1].(map[string]any)["Update"].(map[string]any)), "sharingSafe") {
 			t.Fatal("completion lost the owner-confirmed operation mode")
 		}
-		return 400, `{"__type":"TransactionCanceledException","CancellationReasons":[{"Code":"ConditionalCheckFailed"},{"Code":"None"},{"Code":"None"},{"Code":"None"}]}`
+		return 400, projectCancellation(4, 0)
 	})
 	snapshot, err := repo.CaptureResummary(context.Background(), "owner", "meeting", "owner")
 	if err != nil {
@@ -370,7 +362,7 @@ func TestSharingSafeModeAndResetArePersistedAtomically(t *testing.T) {
 }
 
 func TestNewMembershipStampAndRoleUpdateDoNotGrandfatherReaddedMembers(t *testing.T) {
-	t.Setenv("SUMMARY_PRIVACY_WRITER_ENABLED", "1")
+	privacyWriterEnabled(t)
 	member := &model.AccountMember{PK: "ACCOUNT#account", SK: "MEMBER#reader", AccountID: "account", UserID: "reader",
 		AddedAt: time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)}
 	repo := privacyWriterWire(t, nil, func(target string, body map[string]any) (int, string) {
@@ -403,7 +395,7 @@ func TestNewMembershipStampAndRoleUpdateDoNotGrandfatherReaddedMembers(t *testin
 }
 
 func TestAccountInsightCopyCannotRepublishOldGenerationOrRevision(t *testing.T) {
-	t.Setenv("SUMMARY_PRIVACY_WRITER_ENABLED", "1")
+	privacyWriterEnabled(t)
 	for _, race := range []string{"generation", "revision", "after-read"} {
 		t.Run(race, func(t *testing.T) {
 			parent := privacyParent()
@@ -438,12 +430,8 @@ func TestAccountInsightCopyCannotRepublishOldGenerationOrRevision(t *testing.T) 
 						t.Fatal("insight replacement missing atomic canonical check")
 					}
 					check := ops[0].(map[string]any)["ConditionCheck"].(map[string]any)
-					for _, value := range []string{"summaryPrivacy", "current-generation", "insightsRevision", "current-insight", "sharedToAccount"} {
-						if !strings.Contains(analysisCondition(t, check), value) {
-							t.Fatalf("copy source fence lost %s", value)
-						}
-					}
-					return 400, `{"__type":"TransactionCanceledException","CancellationReasons":[{"Code":"ConditionalCheckFailed"},{"Code":"None"}]}`
+					privacyWriterFences(t, analysisCondition(t, check), "copy source fence lost %s", []string{"summaryPrivacy", "current-generation", "insightsRevision", "current-insight", "sharedToAccount"})
+					return 400, projectCancellation(2, 0)
 				})
 			err := repo.PutAccountInsights(context.Background(), []model.AccountInsight{insight})
 			if !errors.Is(err, ErrConditionFailed) || (race == "after-read") != (writes == 1) {
@@ -461,7 +449,7 @@ func TestSimulatorClaimFencesCapturedGeneration(t *testing.T) {
 			!strings.Contains(condition, "before-reset") {
 			t.Fatalf("simulator claim lost source generation: %s", condition)
 		}
-		return 400, `{"__type":"TransactionCanceledException","CancellationReasons":[{"Code":"ConditionalCheckFailed"},{"Code":"None"}]}`
+		return 400, projectCancellation(2, 0)
 	})
 	err := repo.PutSimRunIfNotRunning(context.Background(), &model.SimRun{
 		MeetingID: "meeting", UserID: "owner", SimRunID: "run", Status: model.SimStatusQueued,
