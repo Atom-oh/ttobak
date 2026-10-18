@@ -458,16 +458,20 @@ Invalid/missing config retains REST fallback.
 
 The default application behavior has CSP, one-year HSTS, nosniff, frame denial
 and no-referrer. Its cache policy enables gzip/Brotli compression and has a zero
-minimum TTL so origin `Cache-Control: no-cache` is honored; other public assets
-retain the previous one-day default TTL. Runtime config carries no-cache metadata.
-The ordered frontend publisher must supply HTML/RSC no-cache metadata before
-producer release. Immutable Next assets use a separate optimized caching behavior.
-Media/PDF policies remain separate; static bootstrap/native injection still
-requires inline scripts. These are source declarations, not live-header or device
-acceptance. The SPA router
-preserves segmented `__next.*.txt` filenames while mapping dynamic directories.
-Infrastructure publishes a nonsecret `staticRouterRevision: "segmented-rsc-v1"`
-after distribution update for producers that require the compatible consumer.
+minimum TTL so origin `Cache-Control: no-cache` is honored; objects without cache
+metadata retain the previous one-day default TTL. Infrastructure owns runtime
+config and its no-cache metadata; the ordered frontend publisher supplies
+HTML/RSC and mutable public-asset no-cache metadata before producer release.
+A separate `/_next/static/*` behavior caches immutable assets. The application
+CSP preserves Cognito/Transcribe, same-site WS, signed S3 fallback, blob
+workers/PDF frames, Tauri IPC and WASM; static bootstrap/native injection still
+require inline scripts. Media and PDF policies remain separate. These are source
+declarations, not a live-header or device acceptance claim. See the
+[frontend release contract](runbooks/frontend-release.md).
+The router preserves segmented `__next.*.txt` payload names and maps their route
+directories. Infrastructure publishes `staticRouterRevision: "segmented-rsc-v1"`
+after distribution update; the shared publisher checks it before segmented
+exports, preserving runtime config rather than manufacturing readiness.
 
 The StorageStack OAC custom resource reads the distribution ID and tightens the
 bucket policy. Its changing Timestamp deliberately forces re-invocation. The infra
@@ -476,7 +480,7 @@ removing that step/property breaks the tightening mechanism.
 
 Run synth and Jest before deployment. Deploy changed stacks individually with
 `--exclusively`, following the graph above, never `--all` or implicit dependencies.
-The workflow excludes KnowledgeStack. The local helper and test/deploy CI loops
+The workflow excludes KnowledgeStack. The build helper and test/deploy CI loops
 build all eight declared Go zip artifacts, including websocket/ws-authorizer, with
 ARM64 and lambda.norpc. convert-doc remains a separate container image. See the
 [deployment runbook](runbooks/deployment.md) and exact workflow before acting.
@@ -524,6 +528,17 @@ before any read, write or publish, so the rule stays idle. Set `personal` only i
 a deployment after one with `off` has delivered the rule and summarize code. Before
 merging, the worker migrates the owner's legacy dictionary blob through the
 summarize role's existing table grant. See ADR-008.
+
+## Summary privacy writer activation
+
+`SUMMARY_PRIVACY_WRITER_ENABLED=1` is read by `repository.SummaryPrivacyWritesEnabled`.
+GatewayStack sets neither it nor `SUMMARY_PRIVACY_READER_ENABLED`, so writers are
+off. Grant fences that would reject unsafe summaries (`summaryGrantFence`) are not
+yet called by the share, pending-invite or publication writers, and no API route or
+service requests an owner sharing-safe regeneration (`ResummaryState.SharingSafe`).
+Do not enable the writer flag in any deployment until both the fenced grant writers
+and that owner reset path ship; the handlers already map
+`ErrSummarySharingUnsafe` to 409 `SUMMARY_SHARING_UNSAFE` for when they do.
 
 ## Project invitation activation
 

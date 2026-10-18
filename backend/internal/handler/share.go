@@ -8,8 +8,30 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/ttobak/backend/internal/middleware"
 	"github.com/ttobak/backend/internal/model"
+	"github.com/ttobak/backend/internal/repository"
 	"github.com/ttobak/backend/internal/service"
 )
+
+// ErrCodeSummarySharingUnsafe is returned when a new grant or team publication
+// would expose generated meeting content that is not cleared for sharing.
+const ErrCodeSummarySharingUnsafe = "SUMMARY_SHARING_UNSAFE"
+
+// writeSummaryGrantError maps the summary-privacy outcomes of grant and
+// publication writes. It reports false for errors the caller must classify.
+func writeSummaryGrantError(w http.ResponseWriter, err error) bool {
+	switch {
+	case errors.Is(err, repository.ErrSummarySharingUnsafe):
+		writeError(w, http.StatusConflict, ErrCodeSummarySharingUnsafe,
+			"The generated meeting notes are not cleared for sharing; the owner must regenerate sharing-safe notes first")
+	case errors.Is(err, repository.ErrSummaryAccess):
+		writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
+	case errors.Is(err, repository.ErrConditionFailed):
+		writeError(w, http.StatusConflict, model.ErrCodeConflict, "The meeting changed during sharing; reload and try again")
+	default:
+		return false
+	}
+	return true
+}
 
 // ShareHandler handles meeting sharing requests
 type ShareHandler struct {
@@ -70,6 +92,8 @@ func (h *ShareHandler) ShareMeeting(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, service.ErrSelfShare):
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Cannot share meeting with yourself")
 			return
+		case writeSummaryGrantError(w, err):
+			return
 		default:
 			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
 			return
@@ -120,6 +144,7 @@ func (h *ShareHandler) ShareToAccount(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
 		case errors.Is(err, service.ErrNotFound):
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
+		case writeSummaryGrantError(w, err):
 		default:
 			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
 		}
