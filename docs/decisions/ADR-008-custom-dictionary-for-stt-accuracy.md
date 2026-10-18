@@ -3,8 +3,8 @@
 - Status: Accepted; phonetic TSV uploads and automatic suggestion ingestion remain
   original plans, not current behavior.
 - Decision date: Not recorded; original rationale references the 2026-04-23 STT evaluation.
-- Implementation checked: 2026-09-13; v2 storage and terms run-state/merge
-  amendments checked 2026-10-18.
+- Implementation checked: 2026-09-13; v2 storage, term CRUD and terms
+  run-state/merge amendments checked 2026-10-18.
 
 ## Context and decision
 
@@ -90,6 +90,45 @@ readers only: no extraction, term CRUD route, vocabulary builder or UI change.
   `GetVocabularyForTranscription` reads `VOCAB#` first, falls back to the blob
   and never writes; the transcribe Lambda uses both readers.
 
+## Amendment 2026-10-18: term CRUD and shared validator
+
+Migration now has callers; this replaces the previous amendment's "no caller
+yet" note. Routes: [API-SPEC](../API-SPEC.md#personal-dictionary).
+
+- **Validator.** `ValidateTermInput` applies to manual terms now, and to
+  automatic terms when extraction lands; its blocklist is a seed.
+- **User actions.** Delete tombstones any origin. Edit sets `userEditedAt` under
+  the caller's `version` and keeps `origin`; keep is `aliasMode=always`;
+  accepting a suggestion sets `state=active`. Renaming to another key is a new
+  term. Creating a tombstoned term restores it as manual (an explicit user act).
+- **Migration callers.** v2 writes migrate first. The shared transcribe reader
+  never writes. An unmigratable item blocks v2 writes
+  (`LEGACY_DICTIONARY_CONFLICT`). Until the legacy PUT/DELETE move onto rows
+  (the follow-up change, deployed together with this one), a legacy write after
+  a v2 write updates only the legacy item, which v2 readers ignore once migrated.
+- **Caps and keys.** 500 active manual terms per scope, checked before the write
+  (concurrent creates may overshoot slightly). Tombstones beyond 2,000 are pruned
+  oldest first, bounding the guessable-hash retention noted above. `termKey`
+  stays unsalted: a salt in the same table does not stop a table reader, who can
+  already read live terms and meetings.
+- **Vocabulary handoff.** Recognition-affecting manual changes keep the pre-v2
+  in-place rebuild of the derived name, recorded in `VOCAB#personal#ko-KR`.
+  Each attempt reads that row before listing terms and writes only if its
+  version is unchanged, so any rebuild recorded since that read rejects the
+  stale write; a conflict recomputes from a fresh row and term listing (three
+  attempts, then a warning without a write). The Transcribe call precedes the
+  guarded write, so an exhausted or failed attempt can leave the provider ahead
+  of the record until the next change. While Transcribe reports a pending
+  build, the update is skipped with a warning and the next change rebuilds.
+  A row with an inactive slot is left to the A/B builder.
+  When that row is missing (no legacy item ever existed), the rebuild creates
+  it in a transaction whose ConditionCheck requires the legacy item to be
+  absent or already migrated, so only migration creates it for an unmigrated
+  item.
+  Pending updates are skipped by batch jobs (`GetVocabularyForTranscription`
+  requires READY); the response still has no `vocabularyName`, so the live
+  client passes none.
+
 ## Amendment 2026-10-18: terms run state and merge rules (inert)
 
 Storage and merge code for automatic terms exists but nothing calls it: no
@@ -164,6 +203,9 @@ concerns. This feature does not remove the need to review transcripts.
 - [repository dictionary.go](../../backend/internal/repository/dictionary.go) and
   [dictionary_v2.go](../../backend/internal/service/dictionary_v2.go): v2 guards,
   migration, union reader and merge; tests beside each.
+- [dictionary_terms.go](../../backend/internal/service/dictionary_terms.go) and
+  [dictionary_validate.go](../../backend/internal/service/dictionary_validate.go):
+  term CRUD and the shared validator; tests beside each.
 - [terms_analysis.go](../../backend/internal/model/terms_analysis.go),
   [repository terms_analysis.go](../../backend/internal/repository/terms_analysis.go)
   and [terms_merge.go](../../backend/internal/service/terms_merge.go): run state,
