@@ -62,6 +62,9 @@ func (c *WindowCounter) Take(ctx context.Context, userID, bucket string, window 
 	return WindowUsage{Count: count, WindowEnd: end}, nil
 }
 
+// rateCounterTimeout caps one counter update before Exceeds fails open.
+const rateCounterTimeout = 400 * time.Millisecond
+
 // Exceeds reports whether taking n puts the caller over limit. A limit of 0
 // (or less) disables the check without touching storage. Storage errors fail
 // open: the error is logged without the user ID and the call is allowed.
@@ -69,7 +72,11 @@ func (c *WindowCounter) Exceeds(ctx context.Context, userID, bucket string, wind
 	if limit <= 0 {
 		return false, WindowUsage{}
 	}
-	usage, err := c.Take(ctx, userID, bucket, window, n)
+	// Bound the abuse brake so a slow table fails open quickly instead of
+	// spending the request's own deadline on SDK retries.
+	takeCtx, cancel := context.WithTimeout(ctx, rateCounterTimeout)
+	defer cancel()
+	usage, err := c.Take(takeCtx, userID, bucket, window, n)
 	if err != nil {
 		log.Printf("rate counter unavailable, failing open: bucket=%s err=%v", bucket, err)
 		return false, WindowUsage{}
