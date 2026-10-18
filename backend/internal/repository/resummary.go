@@ -47,7 +47,7 @@ func (r *DynamoDBRepository) summaryRows(ctx context.Context, meetingID, prefix 
 // CaptureResummary performs metadata-only reads and records exact conditions
 // for the source plus current edit grant. No transcript S3 hydration occurs.
 func (r *DynamoDBRepository) CaptureResummary(ctx context.Context, ownerID, meetingID, requester string) (*model.SummarySnapshot, error) {
-	snapshot, err := r.captureMeetingSummaryMetadata(ctx, ownerID, meetingID, summaryMeetingFields)
+	snapshot, err := r.captureMeetingSummaryMetadata(ctx, ownerID, meetingID, withSummaryClearanceFields(summaryMeetingFields))
 	if err != nil || snapshot == nil {
 		return nil, err
 	}
@@ -325,6 +325,7 @@ func (r *DynamoDBRepository) CompleteResummary(ctx context.Context, snapshot *mo
 			update = update.Set(expression.Name(key), expression.Value(value))
 		}
 	}
+	update = invalidateSummaryClearance(update)
 	meeting, err := analysisUpdate(r.tableName, meetingKey(state.OwnerID, snapshot.Meeting.MeetingID), update, summaryCondition(snapshot.Checks[0]))
 	if err != nil {
 		return err

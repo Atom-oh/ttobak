@@ -80,6 +80,13 @@ func withSummaryPrivacyFields(fields []string) []string {
 	return result
 }
 
+// Legacy completion only invalidates clearance; unrelated derivative edits
+// remain outside its source fence. Fresh provenance publishers bind the full
+// privacy snapshot separately.
+func withSummaryClearanceFields(fields []string) []string {
+	return append(append([]string(nil), fields...), "authorizationRevision", "summaryPrivacy", "insightsRevision")
+}
+
 func (r *DynamoDBRepository) CaptureSummaryPrivacy(ctx context.Context, ownerID, meetingID string) (*model.SummarySnapshot, error) {
 	return r.captureMeetingSummaryMetadata(ctx, ownerID, meetingID, withSummaryPrivacyFields([]string{
 		"meetingId", "userId", "content", "title", "status", "date", "notes", "liveSummary",
@@ -206,6 +213,16 @@ func summaryPublicationPrivacy(snapshot *model.SummarySnapshot, content string) 
 
 func summaryPrivacyRevisionUpdate(update expression.UpdateBuilder) expression.UpdateBuilder {
 	return update.Add(expression.Name("authorizationRevision"), expression.Value(1))
+}
+
+// Legacy/content editors cannot attest to the newly written summary. This
+// invalidation is independent of the switch that creates new provenance, so
+// stored clearance cannot survive writer rollback or an ordinary human edit.
+// Explicit source-fenced publication may install fresh provenance separately.
+func invalidateSummaryClearance(update expression.UpdateBuilder) expression.UpdateBuilder {
+	return summaryPrivacyRevisionUpdate(update.
+		Remove(expression.Name("summaryPrivacy")).
+		Remove(expression.Name("insightsRevision")))
 }
 
 // Model derivatives use the exact stored source snapshot, including the
