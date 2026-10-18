@@ -185,7 +185,7 @@ export class GatewayStack extends cdk.Stack {
         TRANSLATE_HIGH_HOURLY_LIMIT: rateLimitContext(this, 'ttobak:translateHighHourlyLimit', 1500),
         // Interpreter call deadline; Amazon Translate fallback must still fit the
         // browser's 10s abort. Bounds match ParseTranslateHighTimeout.
-        TRANSLATE_HIGH_TIMEOUT_MS: millisecondsContext(this, 'ttobak:translateHighTimeoutMs', 6000, 500, 20000),
+        TRANSLATE_HIGH_TIMEOUT_MS: millisecondsContext(this, 'ttobak:translateHighTimeoutMs', 6000, 500, 8000),
         FRONTEND_BASE_URL: `https://${domainName}`,
         // Same-domain CloudFront-signed download URLs (ADR-027). Key material
         // comes from fixed-name SSM params (/ttobak/cloudfront/*) at runtime,

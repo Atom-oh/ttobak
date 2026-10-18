@@ -101,9 +101,9 @@ func TestInterpreterTimeoutConfiguration(t *testing.T) {
 		{"6000", 6 * time.Second},
 		{" 2500 ", 2500 * time.Millisecond},
 		{"500", 500 * time.Millisecond},
-		{"20000", 20 * time.Second},
+		{"8000", 8 * time.Second},
 		{"499", DefaultTranslateHighTimeout},
-		{"20001", DefaultTranslateHighTimeout},
+		{"8001", DefaultTranslateHighTimeout},
 		{"-1", DefaultTranslateHighTimeout},
 		{"6s", DefaultTranslateHighTimeout},
 	}

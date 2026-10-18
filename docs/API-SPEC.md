@@ -569,7 +569,7 @@ capped at 32KB; violations return 400.
 `quality` defaults to `fast` (Amazon Translate only). `high` asks the interpreter
 model configured by `BEDROCK_TRANSLATE_MODEL_ID` first, then falls back to Amazon
 Translate on any model error, timeout (`TRANSLATE_HIGH_TIMEOUT_MS`, default 6000,
-accepted 500–20000), truncated or rejected output, or when the model is unset or
+accepted 500–8000), truncated or rejected output, or when the model is unset or
 the text exceeds 3,000 bytes. `validateInterpretation` rejects output that starts
 with a translation label (English or Korean `Translation:` labels, `Here is the translation`…; see `interpreterMetaPrefixes`),
 starts with `{` or echoes `current_segment`/`previous_segments`, is longer than

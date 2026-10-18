@@ -39,7 +39,7 @@ const (
 	// Translate fallback still fits the browser's 10s abort.
 	DefaultTranslateHighTimeout = 6 * time.Second
 	minTranslateHighTimeout     = 500 * time.Millisecond
-	maxTranslateHighTimeout     = 20 * time.Second
+	maxTranslateHighTimeout     = 8 * time.Second
 
 	// Longer segments go straight to Amazon Translate: model latency and cost
 	// grow with length while a live caption segment is normally one sentence.
@@ -119,7 +119,8 @@ func WithInterpreterTimeout(timeout time.Duration) TranslateOption {
 }
 
 // ParseTranslateHighTimeout reads TRANSLATE_HIGH_TIMEOUT_MS. Empty, malformed
-// or out-of-range values (500..20000 ms) use the default.
+// or out-of-range values (500..8000 ms, which leaves room for the Translate
+// fallback inside the 10 s client abort) use the default.
 func ParseTranslateHighTimeout(raw string) time.Duration {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

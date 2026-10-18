@@ -324,9 +324,9 @@ for bad in ({'Ref':'OtherRole'}, {'Fn::ImportValue':'unknown'}, qa):
     const withTimeout = Object.values(template.findResources('AWS::Lambda::Function'))
       .filter(resource => resource.Properties.Environment?.Variables?.TRANSLATE_HIGH_TIMEOUT_MS !== undefined);
     expect(withTimeout.map(resource => resource.Properties.FunctionName)).toEqual(['ttobak-api']);
-    for (const bad of ['499', '20001', '6s', '-1', true]) {
+    for (const bad of ['499', '8001', '6s', '-1', true]) {
       expect(() => buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined,
-        { 'ttobak:translateHighTimeoutMs': bad })).toThrow(/ttobak:translateHighTimeoutMs must be an integer from 500 to 20000/);
+        { 'ttobak:translateHighTimeoutMs': bad })).toThrow(/ttobak:translateHighTimeoutMs must be an integer from 500 to 8000/);
     }
   });
 
