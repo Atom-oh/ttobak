@@ -91,6 +91,32 @@ test('the table shows the v2 columns, source links and only allowed actions', ()
   assert.equal(html.match(/>유지</g).length, 2, 'a 유지 chip on the kept row and the action on the plain auto row');
 });
 
+test('legacy deletes run one at a time, each finishing its reload first', async () => {
+  const inFlight = new Set();
+  const log = [];
+  let finish;
+  const run = async (phrase) => {
+    if (!d.claimInFlight(inFlight, d.LEGACY_DELETE_KEY)) return log.push(`skip ${phrase}`);
+    try {
+      await d.deleteLegacyThenReload(
+        () => { log.push(`delete ${phrase}`); return new Promise((r) => { finish = r; }); },
+        async () => { log.push('reload'); });
+    } finally { inFlight.delete(d.LEGACY_DELETE_KEY); }
+  };
+  const first = run('Alpha');
+  await run('Beta');
+  assert.deepEqual(log, ['delete Alpha', 'skip Beta'], 'a second phrase cannot start while the first is in flight');
+  finish();
+  await first;
+  assert.deepEqual(log.slice(2), ['reload'], 'the key is held until the reload completes');
+  const second = run('Beta');
+  finish();
+  await second;
+  assert.deepEqual(log.slice(3), ['delete Beta', 'reload']);
+  assert.equal(d.claimInFlight(inFlight, 'row-1'), true);
+  assert.equal(d.claimInFlight(inFlight, 'row-1'), false);
+});
+
 test('an edit diffs and versions against the row as it was when 편집 was clicked', () => {
   const v3 = row({ termId: 't', version: 3, heardAs: ['A1'] });
   const edit = d.startTermEdit(v3);

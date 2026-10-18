@@ -3,8 +3,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { ApiError, dictionaryApi } from '@/lib/api';
 import {
-  DICTIONARY_FILTERS, dictionaryErrorMessage, filterTerms, findDuplicateTerm, isBuilding,
-  isLegacyConflict, legacyOnlyTerms, normalizeTermKey, parseHeardAs, shouldReloadAfterError, vocabularyBadge,
+  claimInFlight, deleteLegacyThenReload, DICTIONARY_FILTERS, dictionaryErrorMessage, filterTerms, findDuplicateTerm,
+  isBuilding, isLegacyConflict, LEGACY_DELETE_KEY, legacyOnlyTerms, normalizeTermKey, parseHeardAs, shouldReloadAfterError, vocabularyBadge,
   type BadgeTone, type DictTermItem, type DictTermMutationResponse, type DictionaryFilter,
   type LegacyDictionaryTerm, type TermPatch, type VocabularyViews,
 } from '@/lib/dictionary';
@@ -49,6 +49,8 @@ export function CustomDictionary() {
   // finished meanwhile; otherwise it could revert a row to an older version.
   const fetchSeq = useRef(0);
   const mutationEpoch = useRef(0);
+  // Only a later successful GET clears a GET error; mutation errors stay.
+  const loadError = useRef<string | null>(null);
   const fetchTerms = useCallback(async (retry = true): Promise<void> => {
     const seq = ++fetchSeq.current;
     const epoch = mutationEpoch.current;
@@ -63,8 +65,13 @@ export function CustomDictionary() {
       setLegacyOnly(legacyOnlyTerms(legacy, rows));
       setVocabularies(data.vocabularies);
       setWarned(Boolean(data.warnings?.length));
+      const stale = loadError.current;
+      loadError.current = null;
+      if (stale) setError((e) => (e === stale ? null : e));
     } catch (err) {
-      if (seq === fetchSeq.current) setError(err instanceof Error ? err.message : '사전을 불러오지 못했습니다.');
+      if (seq !== fetchSeq.current) return;
+      loadError.current = err instanceof Error ? err.message : '사전을 불러오지 못했습니다.';
+      setError(loadError.current);
     }
   }, []);
 
@@ -85,16 +92,11 @@ export function CustomDictionary() {
   }, [building, fetchTerms]);
 
   // Runs one row's mutation; conflicts reload the list.
-  const setBusy = (termId: string, on: boolean) => {
-    if (on) inFlight.current.add(termId);
-    else inFlight.current.delete(termId);
-    setBusyTermIds(new Set(inFlight.current));
-  };
-
   const mutate = async (termId: string, run: () => Promise<DictTermMutationResponse | void>, done: (r: DictTermMutationResponse) => void) => {
-    if (inFlight.current.has(termId)) return false;
-    setBusy(termId, true);
+    if (!claimInFlight(inFlight.current, termId)) return false;
+    setBusyTermIds(new Set(inFlight.current));
     mutationEpoch.current++;
+    loadError.current = null;
     setError(null);
     try {
       const resp = (await run()) ?? {};
@@ -110,7 +112,8 @@ export function CustomDictionary() {
         : '요청을 처리하지 못했습니다. 다시 시도해 주세요.');
       return false;
     } finally {
-      setBusy(termId, false);
+      inFlight.current.delete(termId);
+      setBusyTermIds(new Set(inFlight.current));
     }
   };
 
@@ -129,12 +132,12 @@ export function CustomDictionary() {
 
   // Removes one unmigrated blob term through the legacy DELETE-by-phrase,
   // the server's resolution path for LEGACY_DICTIONARY_CONFLICT; migration
-  // is retried server-side, so reload afterwards.
+  // is retried server-side. One legacy delete runs at a time, reload included
+  // (see LEGACY_DELETE_KEY).
   const handleLegacyDelete = (term: LegacyDictionaryTerm) =>
-    void mutate(`legacy:${term.phrase}`, () => dictionaryApi.deleteLegacyTerm(term.phrase), () => {
-      toast('이전 용어를 삭제했습니다.');
-      void fetchTerms();
-    });
+    void mutate(LEGACY_DELETE_KEY,
+      () => deleteLegacyThenReload(() => dictionaryApi.deleteLegacyTerm(term.phrase), () => fetchTerms()),
+      () => toast('이전 용어를 삭제했습니다.'));
 
   const handleAdd = async () => {
     if (inFlight.current.has('new')) return;
@@ -227,7 +230,7 @@ export function CustomDictionary() {
                 {t.phrase && (
                   <button
                     onClick={() => handleLegacyDelete(t)}
-                    disabled={busyTermIds.has(`legacy:${t.phrase}`)}
+                    disabled={busyTermIds.has(LEGACY_DELETE_KEY)}
                     className="px-2 py-1 text-xs font-medium rounded-lg hover:bg-slate-100 hover:text-red-500 dark:hover:bg-white/5 disabled:opacity-40"
                   >삭제</button>
                 )}

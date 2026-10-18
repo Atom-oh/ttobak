@@ -26,7 +26,10 @@ export function DictionaryTable({ items, busyTermIds, onUpdate, onDelete, onErro
   const save = async (current: TermEdit) => {
     const result = termEditPatch(current);
     if ('error' in result) return onError(result.error);
-    if (Object.keys(result.patch).length === 0 || (await onUpdate(current.base, result.patch))) setEdit(null);
+    if (Object.keys(result.patch).length === 0 || (await onUpdate(current.base, result.patch))) {
+      // Keep an editor opened on another row while this save was in flight.
+      setEdit((e) => (e?.base.termId === current.base.termId ? null : e));
+    }
   };
 
   if (items.length === 0) {

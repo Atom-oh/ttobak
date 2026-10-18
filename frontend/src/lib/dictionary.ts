@@ -184,3 +184,24 @@ export function isLegacyConflict(term: LegacyDictionaryTerm, terms: readonly Leg
   return key === '' || terms.some((t) => legacyKey(t) === key
     && (t.phrase !== term.phrase || t.displayAs !== term.displayAs || t.soundsLike !== term.soundsLike));
 }
+
+/**
+ * Every legacy delete shares this busy key. The server's legacy delete reads,
+ * filters and saves the whole blob without a revision guard, so two overlapping
+ * deletes could each save a blob that still holds the other's term.
+ */
+export const LEGACY_DELETE_KEY = 'legacy-delete';
+
+/** Claims `key` in the in-flight set; false while it is already held. */
+export function claimInFlight(inFlight: Set<string>, key: string): boolean {
+  if (inFlight.has(key)) return false;
+  inFlight.add(key);
+  return true;
+}
+
+/** Resolves only after the reload, so the next legacy delete starts from the saved blob. */
+export async function deleteLegacyThenReload<T>(remove: () => Promise<T>, reload: () => Promise<void>): Promise<T> {
+  const result = await remove();
+  await reload();
+  return result;
+}

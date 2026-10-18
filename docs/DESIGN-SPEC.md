@@ -360,7 +360,9 @@ dropped. Duplicates use `normalizeTermKey`, checked against Go's
 `backend/internal/service/testdata/term-key/vectors.json` by `npm run test:unit`
 (CI runs it only when `frontend/**` changes; the Go half runs with the backend). Legacy terms without a row cannot be edited
 while `migrationPending`; terms that refuse migration are marked and can be deleted
-through the legacy DELETE-by-phrase, which retries migration. KO/EN badges show in use, preparing,
+through the legacy DELETE-by-phrase, which retries migration. That delete rewrites
+the whole blob without a revision guard, so the UI runs one at a time, reload
+included (`LEGACY_DELETE_KEY`). KO/EN badges show in use, preparing,
 "updating (current vocabulary in use)", failure codes in plain Korean, and off;
 the page polls every 10 seconds only during a build.
 
