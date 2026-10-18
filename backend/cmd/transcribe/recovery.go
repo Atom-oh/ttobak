@@ -466,6 +466,10 @@ func (r *sttRecoveryRunner) deletePass(ctx context.Context, due []model.SttRecov
 		case errors.Is(err, repository.ErrSttDeletionBlocked):
 			tally["delete_blocked"]++
 		default:
+			// The repository resolves lost responses by reading the row back;
+			// an error left here may still hide a commit, so it conservatively
+			// consumes a deletion slot to keep the per-tick bound.
+			deleted++
 			tally["delete_error"]++
 		}
 		r.logf("stt-recovery meeting=%s action=delete objects=%d failed=%d outcome=%s", row.MeetingID, result.Deleted, result.Failed, deleteOutcome(err))
