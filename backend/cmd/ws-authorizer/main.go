@@ -4,7 +4,6 @@ import (
 	"context"
 	"log"
 	"os"
-	"strings"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -19,18 +18,8 @@ var (
 	cloudFrontOrigin  *originVerifier
 	// First-party app clients whose tokens may open a connection. The pool also
 	// issues tokens to companion apps, which must not reach live QA. Empty denies all.
-	allowedClients = parseClientList(os.Getenv("WS_ALLOWED_CLIENT_IDS"))
+	allowedClients = middleware.ParseClientIDs(os.Getenv("WS_ALLOWED_CLIENT_IDS"))
 )
-
-func parseClientList(v string) map[string]bool {
-	out := map[string]bool{}
-	for _, id := range strings.Split(v, ",") {
-		if id = strings.TrimSpace(id); id != "" {
-			out[id] = true
-		}
-	}
-	return out
-}
 
 func handler(ctx context.Context, event events.APIGatewayCustomAuthorizerRequestTypeRequest) (events.APIGatewayCustomAuthorizerResponse, error) {
 	token := event.QueryStringParameters["token"]

@@ -256,8 +256,9 @@ export class AuthStack extends cdk.Stack {
     // companion app must send S256 code_challenge itself. USER_PASSWORD_AUTH is
     // off; direct SRP stays enabled like the SPA client. ID tokens carry this
     // client in aud and access tokens in client_id; the API authorizer, edge
-    // auth, identity pool and WebSocket authorizer (WS_ALLOWED_CLIENT_IDS) all
-    // reject it, so these are not TTOBAK API credentials. Redirects come from
+    // auth, identity pool, Go API middleware (API_ALLOWED_CLIENT_IDS) and
+    // WebSocket authorizer (WS_ALLOWED_CLIENT_IDS) all reject it, so these are
+    // not TTOBAK API credentials. Redirects come from
     // private SSM StringLists, bootstrapped before deploy like the MCP callbacks.
     this.companionClient = this.userPool.addClient('TtobakCompanionClient', {
       userPoolClientName: 'ttobak-companion-client',

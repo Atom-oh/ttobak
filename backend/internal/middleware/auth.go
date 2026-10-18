@@ -60,6 +60,10 @@ var jwksCache struct {
 var (
 	cognitoRegion     = getEnvOrDefault("COGNITO_REGION", "ap-northeast-2")
 	cognitoUserPoolID = os.Getenv("COGNITO_USER_POOL_ID")
+	// First-party app clients whose tokens may call the API. The pool also issues
+	// tokens to companion apps, which must never act as API credentials, on either
+	// the Bearer or the x-amzn-oidc-data path. Empty denies every request.
+	apiAllowedClients = ParseClientIDs(os.Getenv("API_ALLOWED_CLIENT_IDS"))
 )
 
 func getEnvOrDefault(key, defaultVal string) string {
@@ -83,6 +87,17 @@ type ALBOIDCClaims struct {
 	TokenUse      string   `json:"token_use"`
 	Aud           []string `json:"aud"`       // ID tokens: the app client ID (string or list on the wire)
 	ClientID      string   `json:"client_id"` // access tokens: the app client ID
+}
+
+// ParseClientIDs turns a comma-separated client ID list into an allowlist.
+func ParseClientIDs(v string) map[string]bool {
+	out := map[string]bool{}
+	for _, id := range strings.Split(v, ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			out[id] = true
+		}
+	}
+	return out
 }
 
 // IssuedToClient reports whether a verified Cognito token was issued to one of
@@ -140,6 +155,11 @@ func Auth(next http.Handler) http.Handler {
 			return
 		}
 
+		if !claims.IssuedToClient(apiAllowedClients) {
+			http.Error(w, `{"error":"unauthorized","message":"token not issued to this application"}`, http.StatusUnauthorized)
+			return
+		}
+
 		// Add user info to context
 		ctx := r.Context()
 		ctx = context.WithValue(ctx, UserIDKey, claims.Sub)
@@ -170,8 +190,11 @@ func parseJWT(token string) (*ALBOIDCClaims, error) {
 	if cognitoUserPoolID == "" {
 		return nil, &AuthError{Message: "server misconfiguration: COGNITO_USER_POOL_ID is not set"}
 	}
-	return ParseVerifiedJWT(token)
+	return verifyJWT(token)
 }
+
+// verifyJWT is ParseVerifiedJWT; a variable so tests can supply verified claims.
+var verifyJWT = ParseVerifiedJWT
 
 // ParseVerifiedJWT verifies JWT signature using Cognito JWKS.
 // Exported so the WebSocket authorizer Lambda can reuse the same verification logic.

@@ -77,14 +77,18 @@ describe('GatewayStack', () => {
     template = buildTemplate();
   });
 
-  test('the WebSocket authorizer allowlists only the first-party app clients', () => {
+  test('the API and WebSocket authorizer allowlist only the first-party app clients', () => {
     const template = buildTemplate();
-    const fns = Object.values(template.findResources('AWS::Lambda::Function'))
-      .filter(fn => fn.Properties.FunctionName === 'ttobak-ws-authorizer');
-    expect(fns).toHaveLength(1);
-    const allowed = fns[0].Properties.Environment.Variables.WS_ALLOWED_CLIENT_IDS;
+    const fns = Object.values(template.findResources('AWS::Lambda::Function'));
+    const env = (name: string) => {
+      const matches = fns.filter(fn => fn.Properties.FunctionName === name);
+      expect(matches).toHaveLength(1);
+      return matches[0].Properties.Environment.Variables;
+    };
     // exactly the injected first-party client (CDK folds the one-item join); never a companion client
-    expect(allowed).toEqual({ 'Fn::ImportValue': expect.stringContaining('ExportsOutputRefUserPoolClient') });
+    const firstParty = { 'Fn::ImportValue': expect.stringContaining('ExportsOutputRefUserPoolClient') };
+    expect(env('ttobak-ws-authorizer').WS_ALLOWED_CLIENT_IDS).toEqual(firstParty);
+    expect(env('ttobak-api').API_ALLOWED_CLIENT_IDS).toEqual(firstParty);
   });
 
   test('the existing CI policy retains exact secret permissions and adds only four consumer invoke ARNs', () => {

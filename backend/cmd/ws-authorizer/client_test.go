@@ -12,7 +12,7 @@ import (
 const testFirstPartyClient = "first-party-client"
 
 func TestMain(m *testing.M) {
-	allowedClients = parseClientList(" " + testFirstPartyClient + " ,,")
+	allowedClients = middleware.ParseClientIDs(" " + testFirstPartyClient + " ,,")
 	os.Exit(m.Run())
 }
 
@@ -62,7 +62,7 @@ func TestConnectDeniesEveryClientWhenAllowlistIsEmpty(t *testing.T) {
 	t.Cleanup(func() {
 		cognitoUserPoolID, verifyToken, cloudFrontOrigin, allowedClients = oldPool, oldToken, oldOrigin, oldAllowed
 	})
-	cognitoUserPoolID, cloudFrontOrigin, allowedClients = "test-pool", origin, parseClientList("")
+	cognitoUserPoolID, cloudFrontOrigin, allowedClients = "test-pool", origin, middleware.ParseClientIDs("")
 	verifyToken = func(string) (*middleware.ALBOIDCClaims, error) { return firstPartyClaims(), nil }
 	response, _ := handler(context.Background(), proxyEvent(fixture.value))
 	if response.PolicyDocument.Statement[0].Effect != "Deny" {

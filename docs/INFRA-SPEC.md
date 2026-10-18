@@ -80,9 +80,14 @@ SPA client, but companion apps must use managed login, send an S256 PKCE
 challenge (Cognito cannot require it per client) and exchange the code
 server-side. Its ID tokens carry the companion client ID in `aud` and its access
 tokens in `client_id`. The HTTP API JWT authorizer, edge auth and identity pool
-accept only the SPA client, and the WebSocket authorizer accepts only the
-first-party clients in `WS_ALLOWED_CLIENT_IDS` (fails closed when unset), so
-companion tokens never act as TTOBAK API or live-QA credentials. Bootstrap the SSM StringLists
+accept only the SPA client. Behind them, the Go API middleware checks every
+token it verifies, on the `Authorization` and `x-amzn-oidc-data` paths alike,
+against `API_ALLOWED_CLIENT_IDS`, and the WebSocket authorizer against
+`WS_ALLOWED_CLIENT_IDS`; both lists hold the first-party app and SPA clients
+and fail closed when unset. Companion tokens therefore never act as TTOBAK API
+or live-QA credentials. Rollout: AuthStack deploys before GatewayStack, so a
+companion client can exist briefly before the gates; no companion app can hold
+tokens until it is configured with the new client ID after both deploy. Bootstrap the SSM StringLists
 `/ttobak/auth/companion-callback-urls` and `/ttobak/auth/companion-logout-urls`
 with each app's exact callback and sign-out URLs before deploying AuthStack;
 their absence fails deployment. Companion apps authorize by reading TTOBAK
