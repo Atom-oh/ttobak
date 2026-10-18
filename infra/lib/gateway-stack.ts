@@ -228,6 +228,10 @@ export class GatewayStack extends cdk.Stack {
         WHISPER_CLUSTER: WHISPER_CLUSTER_NAME,
         WHISPER_TASK_DEF: WHISPER_TASK_FAMILY,
         WHISPER_CONTAINER: WHISPER_CONTAINER_NAME,
+        // Scheduled STT recovery (ADR-031 amendment): off | report | active. Report
+        // logs decisions without writing; activate in a separate change.
+        STT_RECOVERY_MODE: 'report',
+        STT_RECOVERY_DELETE_MODE: 'report',
       },
       timeout: cdk.Duration.minutes(5),
       memorySize: 512,
@@ -251,6 +255,23 @@ export class GatewayStack extends cdk.Stack {
           `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/ttobak-whisper-execution-role`,
           `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/ttobak-whisper-task-role`,
         ],
+      })
+    );
+
+    // Single-flight check for the recovery tick: list tasks of the Whisper
+    // cluster only. ListTasks authorizes against container-instance with the
+    // ecs:cluster condition key; RunTask/PassRole above stay unchanged.
+    (props.transcribeRole as iam.Role).addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'EcsListWhisperTasks',
+        effect: iam.Effect.ALLOW,
+        actions: ['ecs:ListTasks'],
+        // ListTasks without a containerInstance filter authorizes only against
+        // "*"; the ecs:cluster condition confines it to the Whisper cluster.
+        resources: ['*'],
+        conditions: {
+          ArnEquals: { 'ecs:cluster': `arn:aws:ecs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:cluster/${WHISPER_CLUSTER_NAME}` },
+        },
       })
     );
 
@@ -756,6 +777,19 @@ export class GatewayStack extends cdk.Stack {
       eventPattern: { source: ['ttobak.audio'], detailType: ['AudioCropRequested'] },
     });
     pipelineFailures.addTarget('AudioCrop', audioCropRule, this.transcribeFunction);
+    // Scheduled STT recovery tick (ADR-031 amendment). The input carries no parameters,
+    // so a forged tick can only start the same bounded sweep. A lost tick is
+    // harmless: no retries, no DLQ.
+    const sttRecoveryRule = new events.Rule(this, 'SttRecoveryTick', {
+      ruleName: 'ttobak-stt-recovery',
+      description: 'Bounded re-drive of stuck single-file STT meetings and failed-recording grace cleanup',
+      schedule: events.Schedule.rate(cdk.Duration.minutes(15)),
+    });
+    sttRecoveryRule.addTarget(new eventsTargets.LambdaFunction(this.transcribeFunction, {
+      event: events.RuleTargetInput.fromObject({ source: 'ttobak.recovery', 'detail-type': 'SttRecoveryTick', detail: {} }),
+      retryAttempts: 0,
+      maxEventAge: cdk.Duration.minutes(10),
+    }));
     const transcribePermissions = this.transcribeFunction.node.findAll()
       .filter(child => child instanceof lambda.CfnPermission);
     this.apiFunction.node.addDependency(this.transcribeFunction, audioCropRule, ...transcribePermissions);

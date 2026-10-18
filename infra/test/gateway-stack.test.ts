@@ -685,4 +685,48 @@ for bad in ({'Ref':'OtherRole'}, {'Fn::ImportValue':'unknown'}, qa):
       MemorySize: 256,
     });
   });
+  test('STT recovery tick reuses the transcribe worker with a fixed, unretried input (ADR-031 amendment)', () => {
+    template.hasResourceProperties('AWS::Events::Rule', {
+      Name: 'ttobak-stt-recovery',
+      ScheduleExpression: 'rate(15 minutes)',
+      State: 'ENABLED',
+      Targets: [Match.objectLike({
+        Arn: { 'Fn::GetAtt': [resourceId('AWS::Lambda::Function', 'FunctionName', 'ttobak-transcribe'), 'Arn'] },
+        Input: JSON.stringify({ source: 'ttobak.recovery', 'detail-type': 'SttRecoveryTick', detail: {} }),
+        RetryPolicy: { MaximumRetryAttempts: 0, MaximumEventAgeInSeconds: 600 },
+        DeadLetterConfig: Match.absent(),
+      })],
+    });
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'ttobak-transcribe',
+      Environment: { Variables: Match.objectLike({ STT_RECOVERY_MODE: 'report', STT_RECOVERY_DELETE_MODE: 'report' }) },
+    });
+    // No other rule may match the recovery envelope.
+    for (const rule of Object.values(template.findResources('AWS::Events::Rule'))) {
+      expect(JSON.stringify(rule.Properties.EventPattern ?? {})).not.toContain('ttobak.recovery');
+    }
+  });
+
+  test('STT recovery lists only Whisper cluster tasks and leaves RunTask/PassRole unchanged', () => {
+    let roles: Template | undefined;
+    buildTemplate('manual-only', false, undefined, false, 'd2olomx8td8txt.cloudfront.net', (_g, r) => { roles = r; });
+    const statements = Object.values(roles!.findResources('AWS::IAM::Policy'))
+      .flatMap(policy => policy.Properties.PolicyDocument.Statement as any[]);
+    const list = statements.find(statement => statement.Sid === 'EcsListWhisperTasks');
+    expect(list).toBeDefined();
+    expect(list.Action).toBe('ecs:ListTasks');
+    expect(list.Resource).toBe('*');
+    expect(Object.keys(list.Condition)).toEqual(['ArnEquals']);
+    expect(JSON.stringify(list.Condition)).toContain('ecs:cluster');
+    expect(JSON.stringify(list.Condition)).toContain('cluster/ttobak-whisper');
+    const run = statements.find(statement => statement.Sid === 'EcsRunWhisperTask');
+    expect(run.Action).toBe('ecs:RunTask');
+    expect(JSON.stringify(run.Resource)).toContain('task-definition/ttobak-whisper*');
+    for (const statement of statements) {
+      const actions = [statement.Action].flat();
+      for (const forbidden of ['ecs:DescribeTasks', 'ecs:StopTask', 'ecs:TagResource', 'ecs:*']) {
+        expect(actions).not.toContain(forbidden);
+      }
+    }
+  });
 });
