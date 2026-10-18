@@ -588,11 +588,19 @@ export interface AdminUserActionResponse {
 
 // Translation API
 export const translateApi = {
-  translate: (text: string, sourceLang: string, targetLang: string, signal?: AbortSignal) =>
-    // Fast (Amazon Translate) path. A 429 RATE_LIMITED rejects like any error.
+  translate: (
+    text: string, sourceLang: string, targetLang: string, signal?: AbortSignal,
+    options?: { quality?: 'fast' | 'high'; context?: string[] },
+  ) =>
+    // quality defaults to fast (Amazon Translate). high asks the interpreter and the
+    // response engine says who answered. A 429 RATE_LIMITED rejects like any error.
     api.post<{ translatedText: string; sourceLang: string; targetLang: string; quality?: string; engine?: string; limited?: boolean }>(
       '/api/translate',
-      { text, sourceLang, targetLang },
+      {
+        text, sourceLang, targetLang,
+        ...(options?.quality ? { quality: options.quality } : {}),
+        ...(options?.context?.length ? { context: options.context } : {}),
+      },
       { signal },
     ),
 };

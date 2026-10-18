@@ -79,6 +79,18 @@ export function rateLimitContext(scope: Construct, key: string, defaultValue: nu
   return String(Number(text));
 }
 
+/** Reads an integer millisecond context value within [min, max]. */
+export function millisecondsContext(scope: Construct, key: string, defaultValue: number, min: number, max: number): string {
+  const raw = scope.node.tryGetContext(key);
+  if (raw === undefined || raw === null || raw === '') return String(defaultValue);
+  const text = String(raw).trim();
+  const value = Number(text);
+  if (!/^\d{1,9}$/.test(text) || value < min || value > max) {
+    throw new Error(`${key} must be an integer from ${min} to ${max} milliseconds, got ${JSON.stringify(raw)}`);
+  }
+  return String(value);
+}
+
 export class GatewayStack extends cdk.Stack {
   /** Present only when ttobak:mcpResourceAudience enables HTTP MCP. */
   public readonly mcpFunction?: lambda.Function;
@@ -171,6 +183,9 @@ export class GatewayStack extends cdk.Stack {
         // Per-user hourly /api/translate cost guard (0 disables a limit).
         TRANSLATE_HOURLY_LIMIT: rateLimitContext(this, 'ttobak:translateHourlyLimit', 3000),
         TRANSLATE_HIGH_HOURLY_LIMIT: rateLimitContext(this, 'ttobak:translateHighHourlyLimit', 1500),
+        // Interpreter call deadline; Amazon Translate fallback must still fit the
+        // browser's 10s abort. Bounds match ParseTranslateHighTimeout.
+        TRANSLATE_HIGH_TIMEOUT_MS: millisecondsContext(this, 'ttobak:translateHighTimeoutMs', 6000, 500, 20000),
         FRONTEND_BASE_URL: `https://${domainName}`,
         // Same-domain CloudFront-signed download URLs (ADR-027). Key material
         // comes from fixed-name SSM params (/ttobak/cloudfront/*) at runtime,

@@ -568,8 +568,17 @@ capped at 32KB; violations return 400.
 
 `quality` defaults to `fast` (Amazon Translate only). `high` asks the interpreter
 model configured by `BEDROCK_TRANSLATE_MODEL_ID` first, then falls back to Amazon
-Translate on any model error, timeout (3s), truncated or implausible output, or
-when the model is unset or the text exceeds 3,000 bytes. `context` (at most two
+Translate on any model error, timeout (`TRANSLATE_HIGH_TIMEOUT_MS`, default 6000,
+accepted 500–20000), truncated or rejected output, or when the model is unset or
+the text exceeds 3,000 bytes. `validateInterpretation` rejects output that starts
+with a translation label (English or Korean `Translation:` labels, `Here is the translation`…; see `interpreterMetaPrefixes`),
+starts with `{` or echoes `current_segment`/`previous_segments`, is longer than
+`4*len(text)+200` bytes, has a Hangul letter share below 0.3 for a `ko` target
+(except at most four words that all occur in a Latin-only source, such as kept
+product names), or above 0.1 for an `en` target. Fallback reasons in metering are
+`unavailable`, `too-long`, `llm-error` (including timeout) and `invalid-output`.
+The web client sends `high` with context for finals and `fast` for opt-in drafts.
+`context` (at most two
 earlier source segments, 2,000 bytes total) is reference data for `high` only and is
 JSON-encoded separately from the current segment. The response is
 `{translatedText, sourceLang, targetLang, quality, engine, limited}` where `engine` is

@@ -314,6 +314,22 @@ for bad in ({'Ref':'OtherRole'}, {'Fn::ImportValue':'unknown'}, qa):
     }
   });
 
+  test('API Lambda carries the interpreter timeout from context with a bounded default', () => {
+    const apiEnv = (value: Template) => Object.values(value.findResources('AWS::Lambda::Function'))
+      .find(resource => resource.Properties.FunctionName === 'ttobak-api')!.Properties.Environment.Variables;
+    expect(apiEnv(template).TRANSLATE_HIGH_TIMEOUT_MS).toBe('6000');
+    const custom = buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined,
+      { 'ttobak:translateHighTimeoutMs': '4500' });
+    expect(apiEnv(custom).TRANSLATE_HIGH_TIMEOUT_MS).toBe('4500');
+    const withTimeout = Object.values(template.findResources('AWS::Lambda::Function'))
+      .filter(resource => resource.Properties.Environment?.Variables?.TRANSLATE_HIGH_TIMEOUT_MS !== undefined);
+    expect(withTimeout.map(resource => resource.Properties.FunctionName)).toEqual(['ttobak-api']);
+    for (const bad of ['499', '20001', '6s', '-1', true]) {
+      expect(() => buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined,
+        { 'ttobak:translateHighTimeoutMs': bad })).toThrow(/ttobak:translateHighTimeoutMs must be an integer from 500 to 20000/);
+    }
+  });
+
   test('recovery consumer is installed before the API producer', () => {
     const functions = template.findResources('AWS::Lambda::Function');
     const apiId = Object.keys(functions).find(id => functions[id].Properties.FunctionName === 'ttobak-api')!;

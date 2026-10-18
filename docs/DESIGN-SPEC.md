@@ -115,7 +115,16 @@ as higher cost (`RecordingConfig`), shown only
 while interpretation is on, opts in. Drafts then refresh on a 500ms throttle and
 are explicitly provisional; turning drafts off cancels the pending draft without
 an error. Final recognition clears provisional output and triggers a separate
-authoritative translation. Response order never
+authoritative translation, requested as `quality: high` with up to two earlier
+final source texts (2,000 bytes) frozen when the final is queued; the browser
+aborts after 10s. Each completed line carries an engine badge from the response (Korean labels in
+`ENGINE_BADGES`, `TranslationView.tsx`): AI (interpreter), machine (Amazon Translate
+requested) or machine-fallback (AI was requested but Translate answered: fallback
+or hourly downgrade). Finals made only of Korean or English hesitation sounds and
+their repeats (`FILLER_TOKEN`, e.g. uh, um, er, hmm) are labelled as skipped without
+a request; short Korean answers such as yes and numbers are still translated.
+`?debugCaptions=1` on the record page shows the share of retained finals with at
+most two words (fragment measurement only; nothing is merged). Response order never
 changes utterance order. Language/enable changes discard the previous translation
 view and cancel pending work. Failures retain recognized text and show an error.
 The view retains at most 200 utterances and caps each displayed original at 9,000
