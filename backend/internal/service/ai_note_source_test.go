@@ -58,7 +58,7 @@ func invokeNoteSourceFixture(t *testing.T, meeting *model.Meeting, modelResponse
 		"transcriptA": meeting.TranscriptA, "transcriptB": meeting.TranscriptB,
 		"selectedTranscript": meeting.SelectedTranscript, "transcriptSegments": meeting.TranscriptSegments,
 		"notes": meeting.Notes, "content": meeting.Content, "actionItems": meeting.ActionItems,
-		"noteLanguage": meeting.NoteLanguage,
+		"noteLanguage": meeting.NoteLanguage, "status": string(meeting.Status),
 	} {
 		item[name] = map[string]string{"S": value}
 	}
@@ -114,6 +114,37 @@ func invokeNoteSourceFixture(t *testing.T, meeting *model.Meeting, modelResponse
 	svc := NewBedrockService(bedrock, nil, repository.NewDynamoDBRepository(db, "note-source-test"))
 	content, err = invoke(svc)
 	return request, content, writes, err
+}
+
+func TestSummaryDerivatives_InvalidOutputRetainsPrior(t *testing.T) {
+	t.Setenv("SUMMARY_PRIVACY_WRITER_ENABLED", "0")
+	for _, tc := range []struct {
+		field, raw string
+		valid      bool
+	}{
+		{"insights", "broken", false}, {"insights", "null", false},
+		{"insights", "[{}]", false}, {"insights", "[]", true},
+		{"tags", "broken", false}, {"tags", "null", false},
+		{"tags", "[null]", false}, {"tags", `[" "]`, false}, {"tags", "[]", true},
+		{"sentiment", "unknown", false}, {"sentiment", "null", false},
+		{"sentiment", "positive", true},
+	} {
+		t.Run(tc.field+"/"+tc.raw, func(t *testing.T) {
+			meeting := &model.Meeting{MeetingID: "m", UserID: "owner",
+				Status: model.StatusDone, TranscriptA: "source", Content: "summary"}
+			body := actionItemsModelResponse(t, tc.raw, "end_turn")
+			_, _, writes, err := invokeNoteSourceFixture(t, meeting, body, func(s *BedrockService) (string, error) {
+				return "", s.DeriveSummary(context.Background(), "owner", "m", tc.field)
+			})
+			if tc.valid {
+				if err != nil || writes != 1 {
+					t.Fatalf("valid publication: writes=%d err=%v", writes, err)
+				}
+			} else if !errors.Is(err, ErrInvalidAnalysisResponse) || writes != 0 {
+				t.Fatalf("invalid output must not publish: writes=%d err=%v", writes, err)
+			}
+		})
+	}
 }
 
 func TestSummarizeTranscript_SourceFidelity(t *testing.T) {

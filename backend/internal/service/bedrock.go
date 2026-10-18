@@ -2000,7 +2000,7 @@ func parseMeetingInsights(raw string) ([]model.MeetingInsight, error) {
 }
 
 // ExtractInsights classifies a meeting into the 8 typed insights using Claude Haiku.
-// Retains its legacy JSON array contract ("[]" on parse failure).
+// Invalid model output returns ErrInvalidAnalysisResponse, including for ID callers.
 func (s *BedrockService) ExtractInsights(ctx context.Context, meetingID string, userID ...string) (string, error) {
 	var meeting *model.Meeting
 	var err error
@@ -2078,13 +2078,17 @@ tsMarker는 입력에 정확한 [TS:NNN] 표식이 있을 때만 그대로 복�
 		return "", fmt.Errorf("failed to extract insights: %w", err)
 	}
 
+	var rawItems []model.MeetingInsight
+	if err := json.Unmarshal([]byte(stripCodeFences(response)), &rawItems); err != nil || rawItems == nil {
+		return "", ErrInvalidAnalysisResponse
+	}
 	items, err := parseMeetingInsights(response)
-	if err != nil {
-		return "[]", nil
+	if err != nil || len(items) != len(rawItems) {
+		return "", ErrInvalidAnalysisResponse
 	}
 	result, err := json.Marshal(items)
 	if err != nil {
-		return "[]", nil
+		return "", ErrInvalidAnalysisResponse
 	}
 	return string(result), nil
 }
@@ -2257,24 +2261,27 @@ Rules:
 
 	// Validate JSON response (strip code fences LLMs sometimes add)
 	response = stripCodeFences(response)
-	var tags []string
-	if err := json.Unmarshal([]byte(response), &tags); err != nil {
-		return []string{}, nil
+	var tags []*string
+	if err := json.Unmarshal([]byte(response), &tags); err != nil || tags == nil {
+		return nil, ErrInvalidAnalysisResponse
 	}
 
 	// Validate and normalize: max 5 tags, each max 30 chars, lowercase
 	var validated []string
 	for _, tag := range tags {
-		tag = strings.TrimSpace(strings.ToLower(tag))
-		if tag != "" && len(tag) <= 30 {
-			validated = append(validated, tag)
+		if tag == nil {
+			return nil, ErrInvalidAnalysisResponse
 		}
-		if len(validated) >= 5 {
-			break
+		value := strings.TrimSpace(strings.ToLower(*tag))
+		if value != "" && len(value) <= 30 && len(validated) < 5 {
+			validated = append(validated, value)
 		}
 	}
 
 	if len(validated) == 0 {
+		if len(tags) > 0 {
+			return nil, ErrInvalidAnalysisResponse
+		}
 		return []string{}, nil
 	}
 
@@ -2282,8 +2289,8 @@ Rules:
 }
 
 // ExtractSentiment classifies overall meeting tone using Claude Haiku.
-// Returns one of "positive" / "neutral" / "negative", or "" when the transcript
-// is missing or the model output cannot be classified.
+// Returns one of "positive" / "neutral" / "negative", or "" without a source.
+// Unrecognized model output returns ErrInvalidAnalysisResponse.
 //
 // When userID is provided, uses a strongly-consistent base table read instead of GSI,
 // matching ExtractTags above.
@@ -2380,7 +2387,7 @@ Output the single word, lowercase, no punctuation, no quotes, no explanation.`
 	case "positive", "neutral", "negative":
 		return cleaned, nil
 	default:
-		return "", nil
+		return "", ErrInvalidAnalysisResponse
 	}
 }
 
