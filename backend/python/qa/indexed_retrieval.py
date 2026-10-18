@@ -100,6 +100,9 @@ def _current_result(snapshot, uri, score, content_source):
             'updatedAt': fields.get('updatedAt'), 'notes': fields.get('notes') or '',
             'content': fields.get('content') or '', 'actionItems': fields.get('actionItems') or '',
         }
+        if fields.get('summaryReadRestriction'):
+            result['meeting']['summaryReadRestriction']=fields['summaryReadRestriction']
+            result['provenance']['partial']=True
     else:
         result['document'] = {
             'docId': identity['resourceId'], 'title': fields.get('title') or '',
@@ -137,6 +140,11 @@ def hydrate_candidates(reader, user_id, question, candidates, identities, limit,
             snapshots[key] = reader.read(user_id, *key)
         snapshot = snapshots[key]
         if snapshot is None:
+            continue
+        if snapshot['fields'].get('summaryReadRestriction'):
+            # A vector score over withheld derived text is not evidence for
+            # this reader. Only fresh keyword matches over permitted raw
+            # fields may reintroduce this identity below.
             continue
         result = results.get(key)
         if result is None:
