@@ -78,9 +78,17 @@ func (fakeMeetings) GetMeeting(_ context.Context, uid, mid string) (*model.Meeti
 		Participants: []string{"a", "b", "c"}}, nil
 }
 
-type fakeDeleter struct{ deleted []string }
+type fakeDeleter struct {
+	deleted []string
+	blocked map[string]bool
+	tried   int
+}
 
 func (f *fakeDeleter) DeleteFailedRecording(_ context.Context, _, mid string, mark model.SttFailureMark) (repository.SttFailedMeetingObjectsResult, error) {
+	f.tried++
+	if f.blocked[mid] {
+		return repository.SttFailedMeetingObjectsResult{}, repository.ErrSttDeletionBlocked
+	}
 	f.deleted = append(f.deleted, mid+":"+mark.Code)
 	return repository.SttFailedMeetingObjectsResult{Deleted: 2}, nil
 }
@@ -89,6 +97,7 @@ type fakeS3 struct {
 	transcripts map[string]time.Time
 	extra       []s3types.Object
 	copies      []*s3.CopyObjectInput
+	endless     bool
 }
 
 func (f *fakeS3) ListObjectsV2(_ context.Context, in *s3.ListObjectsV2Input, _ ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
@@ -96,7 +105,11 @@ func (f *fakeS3) ListObjectsV2(_ context.Context, in *s3.ListObjectsV2Input, _ .
 	mid := strings.Split(prefix, "/")[2]
 	contents := []s3types.Object{{Key: aws.String(recKey(mid)), Size: aws.Int64(5_000_000),
 		LastModified: aws.Time(recNow.Add(-5 * time.Hour))}}
-	return &s3.ListObjectsV2Output{Contents: append(contents, f.extra...)}, nil
+	out := &s3.ListObjectsV2Output{Contents: append(contents, f.extra...)}
+	if f.endless {
+		out.IsTruncated, out.NextContinuationToken = aws.Bool(true), aws.String("next")
+	}
+	return out, nil
 }
 func (f *fakeS3) HeadObject(_ context.Context, in *s3.HeadObjectInput, _ ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
 	if modified, ok := f.transcripts[aws.ToString(in.Key)]; ok {
@@ -151,9 +164,10 @@ func newHarness(t *testing.T, mode string, rows ...model.SttRecoveryRow) *recove
 	h.runner = &sttRecoveryRunner{
 		repo: h.repo, meetings: fakeMeetings{}, deleter: h.deleter, storage: h.s3, ecs: h.ecs, bucket: "bucket",
 		mode: mode, deleteMode: mode, whisperOK: true, now: func() time.Time { return recNow },
-		inputs: func(_ context.Context, m *model.Meeting, _ string) (string, int) { return "", len(m.Participants) },
-		logf:   func(format string, args ...interface{}) { h.logs = append(h.logs, fmt.Sprintf(format, args...)) },
-		emit:   func(line string) { h.metrics = append(h.metrics, line) },
+		inputs:  func(_ context.Context, m *model.Meeting, _ string) (string, int) { return "", len(m.Participants) },
+		logf:    func(format string, args ...interface{}) { h.logs = append(h.logs, fmt.Sprintf(format, args...)) },
+		emit:    func(line string) { h.metrics = append(h.metrics, line) },
+		shuffle: func(int, func(i, j int)) {},
 	}
 	return h
 }
@@ -167,7 +181,8 @@ func TestRecoveryStartsAtMostOneTaskPerTick(t *testing.T) {
 		t.Fatalf("runs=%d claims=%v", len(h.ecs.runs), h.repo.claims)
 	}
 	in := h.ecs.runs[0]
-	if aws.ToString(in.ClientToken) != "sttrec-"+recM1+"-1" || aws.ToString(in.StartedBy) != "sttrec-"+recM1 {
+	claim := recNow.Format(time.RFC3339Nano)
+	if aws.ToString(in.ClientToken) != sttRecoveryClientToken(recM1, recKey(recM1), claim) || aws.ToString(in.StartedBy) != "sttrec-"+recM1 {
 		t.Fatalf("token=%q startedBy=%q", aws.ToString(in.ClientToken), aws.ToString(in.StartedBy))
 	}
 	if aws.ToString(in.TaskDefinition) != "ttobak-whisper" || len(in.Overrides.ContainerOverrides) != 1 {
@@ -311,6 +326,87 @@ func TestRecoveryDeletePassHonoursReferencesAndBounds(t *testing.T) {
 	}
 	if len(h.ecs.runs) != 0 {
 		t.Fatal("terminal marks are never re-run")
+	}
+}
+
+// Rows the guarded delete refuses must not consume the deletion budget.
+func TestRecoveryDeletePassIsNotStarvedByRefusedRows(t *testing.T) {
+	stamp := recNow.Add(-8 * 24 * time.Hour).Format(time.RFC3339Nano)
+	var rows []model.SttRecoveryRow
+	for i := 0; i < 5; i++ {
+		row := stuckRow(fmt.Sprintf("%d%s", i, recM1[1:]))
+		row.SttFailureCode, row.SttFailedAt, row.UpdatedAt = model.SttFailureNoSpeech, stamp, stamp
+		rows = append(rows, row)
+	}
+	h := newHarness(t, sttRecoveryModeActive, rows...)
+	h.deleter.blocked = map[string]bool{rows[0].MeetingID: true, rows[1].MeetingID: true}
+	if err := h.runner.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.deleter.deleted) != 2 || h.deleter.deleted[0] != rows[2].MeetingID+":NO_SPEECH" {
+		t.Fatalf("deleted=%v", h.deleter.deleted)
+	}
+	h = newHarness(t, sttRecoveryModeActive, rows...)
+	h.deleter.blocked = map[string]bool{}
+	for _, row := range rows {
+		h.deleter.blocked[row.MeetingID] = true
+	}
+	h.runner.maxDeleteTries = 3
+	if err := h.runner.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if h.deleter.tried != 3 {
+		t.Fatalf("delete tries=%d, want the per-tick cap", h.deleter.tried)
+	}
+}
+
+func TestRecoveryClaimBoundIdentifiers(t *testing.T) {
+	token := sttRecoveryClientToken(recM1, recKey(recM1), "2026-10-17T12:00:00Z")
+	if len(token) > 64 || strings.ContainsFunc(token, func(c rune) bool { return c < 33 || c > 126 }) {
+		t.Fatalf("invalid ECS client token %q", token)
+	}
+	for _, other := range []string{
+		sttRecoveryClientToken(recM1, recKey(recM1)+"x", "2026-10-17T12:00:00Z"),
+		sttRecoveryClientToken(recM1, recKey(recM1), "2026-10-17T12:15:00Z"),
+	} {
+		if other == token {
+			t.Fatal("replacement audio or a later claim must not reuse a client token")
+		}
+	}
+	long := strings.Repeat("m", 128)
+	for _, id := range []string{long, "meeting.1", "회의"} {
+		if got := sttRecoveryStartedBy(id); len(got) > 128 || !ecsStartedByChars.MatchString(got) {
+			t.Fatalf("invalid startedBy %q for %q", got, id)
+		}
+	}
+}
+
+func TestRecoveryDefersPartialAndOverBudgetWork(t *testing.T) {
+	h := newHarness(t, sttRecoveryModeActive, stuckRow(recM1))
+	h.s3.endless = true
+	if err := h.runner.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.repo.claims) != 0 || !strings.Contains(h.metrics[0], `"facts_error":1`) {
+		t.Fatalf("a truncated listing must defer the row: claims=%v metrics=%v", h.repo.claims, h.metrics)
+	}
+	h = newHarness(t, sttRecoveryModeActive, stuckRow(recM1), stuckRow(recM2))
+	h.runner.rowBudget = time.Nanosecond
+	ticks := 0
+	h.runner.now = func() time.Time { ticks++; return recNow.Add(time.Duration(ticks) * time.Second) }
+	if err := h.runner.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.repo.claims) != 0 || len(h.metrics) != 1 || !strings.Contains(h.metrics[0], `"rows_deferred":2`) {
+		t.Fatalf("over-budget rows must be deferred with a tally: %v", h.metrics)
+	}
+	h = newHarness(t, sttRecoveryModeActive, stuckRow(recM1))
+	h.runner.ecs = &fakeECS{listErr: errors.New("denied")}
+	if err := h.runner.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(h.metrics[0], `"cluster_check_error":1`) {
+		t.Fatalf("a failed cluster check must be distinguishable: %v", h.metrics)
 	}
 }
 

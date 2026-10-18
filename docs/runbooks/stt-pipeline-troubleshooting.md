@@ -52,23 +52,28 @@ statuses, sizes, attempts and fixed reasons; each tick ends with one
 
 ```bash
 aws logs tail /aws/lambda/ttobak-transcribe --since 1h --filter-pattern '"stt-recovery"' --region ap-northeast-2
-aws ecs list-tasks --cluster ttobak-whisper --started-by sttrec-<MEETING_ID> --desired-status STOPPED --region ap-northeast-2
+# startedBy must be the only filter; it lists the running recovery task.
+aws ecs list-tasks --cluster ttobak-whisper --started-by sttrec-<MEETING_ID> --region ap-northeast-2
+# Stopped tasks: list by status, then match startedBy in describe-tasks.
+aws ecs list-tasks --cluster ttobak-whisper --desired-status STOPPED --region ap-northeast-2
 ```
 
 | Action | Meaning |
 |---|---|
-| `redrive_stt` | Stuck past its size-based deadline; claims attempt n (max 2) and runs Whisper with `ClientToken sttrec-{id}-{n}` |
-| `redrive_summary` | `transcripts/{id}.json` exists, is not older than the latest restart (newest audio-prefix object such as a `rediarize_` copy, last claim, or `updatedAt` while transcribing) and was never published; self-copy emits a real S3 event (max 2) |
+| `redrive_stt` | Stuck past its size-based deadline; claims attempt n (max 2) and runs Whisper with a claim-bound `ClientToken` and `StartedBy sttrec-{id}` |
+| `redrive_summary` | `transcripts/{id}.json` exists, is not older than the latest restart (newest audio-prefix object such as a `rediarize_` copy, last STT claim, or `updatedAt` while transcribing, excluding the tick's own summary claim) and was never published; self-copy emits a real S3 event (max 2) |
 | `mark_exhausted` | Both attempts used for this audio key; marks `RECOVERY_EXHAUSTED` |
 | `report_checkpoint_only` | Only `recording_progress.*` exists; the owner recovers it (ADR-048) |
 | `report_multipart`, `report_unsupported`, `report` | Not processed automatically; investigate |
 | `terminal`, `would_delete`, `delete` | `AUDIO_CORRUPT`/`NO_SPEECH` mark; deletion after seven untouched days |
 | `cluster_busy`, `stt_deferred` | Another task holds the GPU pool or the one-run budget is used |
+| `cluster_check_error` | ListTasks failed; STT re-runs are deferred as if busy |
+| `facts_error`, `rows_deferred` | S3 facts failed or exceeded the listing cap, or the four-minute row budget ran out; retried next tick |
 
 `STT_RECOVERY_MODE` and `STT_RECOVERY_DELETE_MODE` take `off`, `report` or
 `active` (unknown values mean `off`). `report` writes nothing. To stop the tick in
-an incident, set either to `off` through a GatewayStack change, or disable the
-rule. Any user write after a mark (notes, re-upload, rediarize) bumps `updatedAt`
+an incident, set both to `off` through a GatewayStack change (either alone stops
+only its own pass), or disable the rule. Any user write after a mark (notes, re-upload, rediarize) bumps `updatedAt`
 and permanently cancels that mark's deletion.
 
 Grace deletion removes only current S3 versions. To restore an object, list its

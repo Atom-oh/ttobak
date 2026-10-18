@@ -2,12 +2,16 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"math/rand/v2"
 	"os"
 	"path"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -79,7 +83,18 @@ type sttRecoveryRunner struct {
 	logf        func(format string, args ...interface{})
 	emit        func(line string)
 	maxListPage int
+	// maxDeleteTries bounds delete attempts per tick, including refused ones;
+	// shuffle randomizes their order so refused rows cannot starve others.
+	maxDeleteTries int
+	shuffle        func(n int, swap func(i, j int))
+	// rowBudget stops per-row S3 work well inside the 5-minute Lambda timeout
+	// so the tally is still emitted.
+	rowBudget time.Duration
 }
+
+// errSttListingTruncated defers a row whose audio prefix exceeds the listing
+// cap instead of classifying it from partial facts.
+var errSttListingTruncated = errors.New("audio prefix listing exceeds the page cap")
 
 func recoveryMode(raw string) string {
 	switch raw {
@@ -130,6 +145,15 @@ func (r *sttRecoveryRunner) defaults() {
 	if r.maxListPage == 0 {
 		r.maxListPage = 10
 	}
+	if r.maxDeleteTries == 0 {
+		r.maxDeleteTries = 10
+	}
+	if r.shuffle == nil {
+		r.shuffle = rand.Shuffle
+	}
+	if r.rowBudget == 0 {
+		r.rowBudget = 4 * time.Minute
+	}
 }
 
 type sttRecoveryTally map[string]int
@@ -150,8 +174,12 @@ func (r *sttRecoveryRunner) run(ctx context.Context) error {
 	var deletions []model.SttRecoveryRow
 	sttDone, summaryDone := 0, 0
 	clusterChecked, clusterBusy := false, false
-	for _, row := range rows {
+	for i, row := range rows {
 		now := r.now()
+		if now.Sub(started) > r.rowBudget {
+			tally["rows_deferred"] += len(rows) - i
+			break
+		}
 		facts := service.SttRecoveryFacts{}
 		if needsSttFacts(row) {
 			facts, err = r.facts(ctx, row)
@@ -188,7 +216,12 @@ func (r *sttRecoveryRunner) run(ctx context.Context) error {
 				continue
 			}
 			if !clusterChecked {
-				clusterChecked, clusterBusy = true, r.clusterBusy(ctx)
+				var checkErr error
+				clusterBusy, checkErr = r.clusterBusy(ctx)
+				clusterChecked, clusterBusy = true, clusterBusy || checkErr != nil
+				if checkErr != nil {
+					tally["cluster_check_error"]++
+				}
 			}
 			if clusterBusy {
 				tally["cluster_busy"]++
@@ -271,9 +304,13 @@ func (r *sttRecoveryRunner) facts(ctx context.Context, row model.SttRecoveryRow)
 			}
 		}
 		if !aws.ToBool(out.IsTruncated) || out.NextContinuationToken == nil {
+			token = nil
 			break
 		}
 		token = out.NextContinuationToken
+	}
+	if token != nil {
+		return facts, errSttListingTruncated
 	}
 	head, err := r.storage.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(r.bucket), Key: aws.String("transcripts/" + row.MeetingID + ".json")})
 	if err != nil {
@@ -289,16 +326,37 @@ func (r *sttRecoveryRunner) facts(ctx context.Context, row model.SttRecoveryRow)
 
 // clusterBusy is the single-flight rule: any task the Whisper cluster wants
 // running (production, benchmark or still provisioning) defers STT re-runs.
-// Errors count as busy so recovery never fans out GPU hosts.
-func (r *sttRecoveryRunner) clusterBusy(ctx context.Context) bool {
+// The caller treats a check error as busy so recovery never fans out GPU hosts.
+func (r *sttRecoveryRunner) clusterBusy(ctx context.Context) (bool, error) {
 	out, err := r.ecs.ListTasks(ctx, &ecs.ListTasksInput{
 		Cluster: aws.String(whisperCluster), DesiredStatus: ecsTypes.DesiredStatusRunning, MaxResults: aws.Int32(1),
 	})
 	if err != nil {
 		r.logf("stt-recovery cluster check failed; deferring STT re-runs")
-		return true
+		return true, err
 	}
-	return len(out.TaskArns) > 0
+	return len(out.TaskArns) > 0, nil
+}
+
+var ecsStartedByChars = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+// sttRecoveryStartedBy is a valid ECS startedBy (at most 128 of [A-Za-z0-9_-/])
+// for any meeting ID; UUID IDs stay readable for list-tasks filtering.
+func sttRecoveryStartedBy(meetingID string) string {
+	if len(sttRecoveryStartedByPrefix)+len(meetingID) <= 128 && ecsStartedByChars.MatchString(meetingID) {
+		return sttRecoveryStartedByPrefix + meetingID
+	}
+	sum := sha256.Sum256([]byte(meetingID))
+	return sttRecoveryStartedByPrefix + hex.EncodeToString(sum[:16])
+}
+
+// sttRecoveryClientToken binds RunTask idempotency to this exact claim: the
+// meeting, the claimed audio key and the unique claim value. SDK retries of
+// one call reuse it; a later claim (or replacement audio) never collides with
+// an earlier task. 7 + 56 = 63 characters, inside ECS's 64-character limit.
+func sttRecoveryClientToken(meetingID, key, claim string) string {
+	sum := sha256.Sum256([]byte(meetingID + "\x00" + key + "\x00" + claim))
+	return sttRecoveryStartedByPrefix + hex.EncodeToString(sum[:])[:56]
 }
 
 func (r *sttRecoveryRunner) redriveSTT(ctx context.Context, row model.SttRecoveryRow, decision service.SttRecoveryDecision, now time.Time) string {
@@ -315,8 +373,8 @@ func (r *sttRecoveryRunner) redriveSTT(ctx context.Context, row model.SttRecover
 	}
 	prompt, speakers := r.inputs(ctx, meeting, row.UserID)
 	input := whisperRunTaskInput(row.MeetingID, row.UserID, decision.Key, prompt, "", speakers, whisperTaskOptions{
-		ClientToken: fmt.Sprintf("%s%s-%d", sttRecoveryStartedByPrefix, row.MeetingID, decision.Attempt),
-		StartedBy:   sttRecoveryStartedByPrefix + row.MeetingID,
+		ClientToken: sttRecoveryClientToken(row.MeetingID, decision.Key, claim),
+		StartedBy:   sttRecoveryStartedBy(row.MeetingID),
 	})
 	out, err := r.ecs.RunTask(ctx, input)
 	if err == nil && len(out.Failures) == 0 && len(out.Tasks) > 0 {
@@ -374,7 +432,8 @@ func (r *sttRecoveryRunner) deletePass(ctx context.Context, due []model.SttRecov
 		r.logf("stt-recovery action=delete_reference_error")
 		return
 	}
-	deleted := 0
+	deleted, tries := 0, 0
+	r.shuffle(len(due), func(i, j int) { due[i], due[j] = due[j], due[i] })
 	for _, row := range due {
 		if refs[row.MeetingID] {
 			tally["delete_blocked"]++
@@ -386,22 +445,26 @@ func (r *sttRecoveryRunner) deletePass(ctx context.Context, due []model.SttRecov
 			r.logf("stt-recovery meeting=%s action=would_delete code=%s", row.MeetingID, row.SttFailureCode)
 			continue
 		}
-		if deleted >= r.maxDeletes || r.now().Sub(started) > r.actBudget {
+		if deleted >= r.maxDeletes || tries >= r.maxDeleteTries || r.now().Sub(started) > r.actBudget {
 			tally["delete_deferred"]++
 			continue
 		}
-		deleted++
+		// Only committed deletions consume the deletion budget; a refused or
+		// superseded candidate consumes a try, never a deletion.
+		tries++
 		result, err := r.deleter.DeleteFailedRecording(ctx, row.UserID, row.MeetingID, model.SttFailureMark{Code: row.SttFailureCode, FailedAt: row.SttFailedAt})
 		switch {
+		case result.Failed > 0 || errors.Is(err, repository.ErrSttDeletionPostCommit):
+			deleted++
+			tally["deleted"]++
+			tally["SttDeleteS3CleanupFailed"] += max(result.Failed, 1)
 		case err == nil:
+			deleted++
 			tally["deleted"]++
 		case errors.Is(err, repository.ErrConditionFailed):
 			tally["delete_superseded"]++
 		case errors.Is(err, repository.ErrSttDeletionBlocked):
 			tally["delete_blocked"]++
-		case result.Failed > 0 || errors.Is(err, repository.ErrSttDeletionPostCommit):
-			tally["deleted"]++
-			tally["SttDeleteS3CleanupFailed"] += max(result.Failed, 1)
 		default:
 			tally["delete_error"]++
 		}
