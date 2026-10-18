@@ -28,6 +28,8 @@ type fakeDictStore struct {
 	putErr      error
 	putErrAfter int               // rows written before putErr is returned
 	hooks       map[string]func() // one-shot, run before the named write
+	cleanupErr  error
+	onUpdate    func() // runs after a successful UpdateDictTerm
 }
 
 // fire runs and clears the hook for op, simulating a concurrent writer that
@@ -197,6 +199,12 @@ func (f *fakeDictStore) UpdateVocabularyState(_ context.Context, _ string, c, l 
 	}
 	if ch.FailureCode != nil {
 		s.FailureCode = *ch.FailureCode
+	}
+	if ch.ActiveName != nil {
+		s.ActiveName = *ch.ActiveName
+	}
+	if ch.TermCount != nil {
+		s.TermCount = *ch.TermCount
 	}
 	s.Version++
 	f.vocab[s.SK] = s

@@ -602,6 +602,37 @@ and NEW_PASSWORD_REQUIRED, never self-signup. The domain allowlist is supplement
 `PreSignUp_AdminCreateUser`; it grants neither a domain-wide exception nor group
 membership. RESEND trigger behavior remains unverified.
 
+### Personal dictionary
+
+Storage and migration: ADR-008's 2026-10-18 amendments. Routes act on the
+caller's `USER#` partition; `termId` is the 32-hex `termKey` (other shapes 404).
+`ValidateTermInput`: NFKC and trim of surrounding spaces; Cc/Cf (tabs and
+newlines anywhere, including the edges) and line separators rejected;
+`displayAs` 2-40 runes, at most 120 bytes; at most five 2-40 rune `heardAs`,
+never blocklisted (`terms_blocklist.txt`) or the term's own key; `phrase` at most
+256 runes. Errors are 400 `field: reason` and never echo input.
+
+- `POST .../terms` `{displayAs, phrase?, heardAs?, type?, aliasMode?}` (at most
+  4 KB, no unknown fields or trailing data) creates a manual term or restores a
+  tombstone as manual; `phrase` defaults to `displayAs`, and `""` keeps the term
+  out of the vocabulary. 201 `{item, termId, state, status, warnings?}`; 409
+  `TERM_EXISTS`, or `DICTIONARY_FULL` at 500 active manual terms. The cap is
+  best effort (check, then write): concurrent creates can slightly exceed it.
+- `PATCH .../terms/{termId}` requires `version` (stale: 409 `VERSION_CONFLICT`);
+  optional `displayAs` (same key only), `phrase`, `heardAs`, `type`, `aliasMode`
+  (`hint|always`, the keep action) and `state: "active"` (accept a suggestion).
+  Every edit sets `userEditedAt`, blocking automatic writes; `origin` is kept.
+- `DELETE .../terms/{termId}[?version=]` tombstones any origin; failed observation
+  cleanup or pruning (beyond 2,000 tombstones, oldest first) is a `warnings` entry.
+- v2 writes migrate the legacy item first; an unmigratable item (distinct
+  terms sharing a key) is 409 `LEGACY_DICTIONARY_CONFLICT`, and a legacy item
+  that kept changing during migration is 409 `CONFLICT`. The legacy `GET`, `PUT`
+  and `DELETE .../term` keep their pre-v2 behavior until the follow-up change
+  moves them onto rows.
+- Recognition-affecting manual changes rebuild the derived ko-KR vocabulary in
+  place and record it in `VOCAB#personal#ko-KR`; `status` and `warnings` report
+  it. A/B builds and `vocabularyName` belong to the vocabulary builder.
+
 ### Index status and automatic indexing rollout
 
 Authenticated GET index-status routes cover meetings, personal/shared documents,
@@ -741,6 +772,9 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | GET | `/api/settings/dictionary` | `dictHandler.GetDictionary` |
 | PUT | `/api/settings/dictionary` | `dictHandler.UpdateDictionary` |
 | DELETE | `/api/settings/dictionary/term` | `dictHandler.DeleteTerm` |
+| POST | `/api/settings/dictionary/terms` | `dictHandler.CreateTerm` |
+| PATCH | `/api/settings/dictionary/terms/{termId}` | `dictHandler.UpdateTerm` |
+| DELETE | `/api/settings/dictionary/terms/{termId}` | `dictHandler.DeleteDictTerm` |
 | POST | `/api/translate` | `translateHandler.Translate` |
 | POST | `/api/meetings/{meetingId}/summarize` | `summarizeLiveHandler.SummarizeLive` |
 | GET | `/api/crawler/sources` | `crawlerHandler.ListSources` |
