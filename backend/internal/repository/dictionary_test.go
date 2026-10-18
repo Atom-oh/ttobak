@@ -145,6 +145,12 @@ func TestDictionaryWriteGuards(t *testing.T) {
 	merge := DictMergeInput{PK: "USER#u1", TermKey: key, Observation: obs, HeardAs: []string{"알파"}, SeenAt: "now", ExpectedVersion: 3}
 	phrase, ready := "Alpha-Grid", model.VocabStatusReady
 	legacyGuard := []string{`legacyMigrated = {"BOOL":true}`, `version = {"N":"1"}`, `state = {"S":"active"}`, `origin = {"S":"manual"}`, "attribute_not_exists (userEditedAt)"}
+	blob := LegacyBlobGuard{UserID: "u1", Revision: 7, UpdatedAt: "2026-10-18T09:00:00Z"}
+	blobCheck := []string{"attribute_exists (PK)", "attribute_not_exists (migratedAt)", `blobRevision = {"N":"7"}`, `updatedAt = {"S":"2026-10-18T09:00:00Z"}`}
+	pristine := *term
+	pristine.Origin, pristine.LegacyMigrated = model.TermOriginManual, true
+	vocabState := &model.VocabularyState{PK: "USER#u1", SK: "VOCAB#personal#ko-KR"}
+	vocabName := "ttobak-vocab-y"
 	cases := []guardCase{
 		{"legacy status sync pins observed name and status", conditionalFailed,
 			func(r *DictionaryRepository) error {
@@ -161,28 +167,56 @@ func TestDictionaryWriteGuards(t *testing.T) {
 				return r.MarkDictionaryMigrated(context.Background(), "u1", "now", 0, "")
 			},
 			ErrDictTermConflict, "", 0, []string{"attribute_not_exists (blobRevision)", "attribute_not_exists (updatedAt)"}, nil},
-		{"legacy copy refresh only touches pristine copies", conditionalFailed,
+		{"legacy copy refresh only touches pristine copies", cancelled("ConditionalCheckFailed", "None"),
 			func(r *DictionaryRepository) error {
-				next := *term
-				next.Origin, next.LegacyMigrated = model.TermOriginManual, true
-				return r.ReplaceLegacyMigratedTerm(context.Background(), "USER#u1", key, 1, &next)
+				return r.ReplaceLegacyMigratedTerm(context.Background(), blob, "USER#u1", key, 1, &pristine)
 			},
-			ErrDictTermConflict, "", 0, legacyGuard, nil},
-		{"legacy copy removal only touches pristine copies", conditionalFailed,
+			ErrDictTermConflict, "Put", 0, legacyGuard, nil},
+		{"legacy copy refresh is pinned to the copied blob", cancelled("ConditionalCheckFailed", "ConditionalCheckFailed"),
 			func(r *DictionaryRepository) error {
-				return r.ReplaceLegacyMigratedTerm(context.Background(), "USER#u1", key, 1, nil)
+				return r.ReplaceLegacyMigratedTerm(context.Background(), blob, "USER#u1", key, 1, &pristine)
 			},
-			ErrDictTermConflict, "", 0, legacyGuard, nil},
+			ErrLegacyBlobChanged, "ConditionCheck", 1, blobCheck, nil},
+		{"legacy copy removal only touches pristine copies", cancelled("ConditionalCheckFailed", "None"),
+			func(r *DictionaryRepository) error {
+				return r.ReplaceLegacyMigratedTerm(context.Background(), blob, "USER#u1", key, 1, nil)
+			},
+			ErrDictTermConflict, "Delete", 0, legacyGuard, nil},
+		{"legacy copy removal is pinned to the copied blob", cancelled("None", "ConditionalCheckFailed"),
+			func(r *DictionaryRepository) error {
+				return r.ReplaceLegacyMigratedTerm(context.Background(), blob, "USER#u1", key, 1, nil)
+			},
+			ErrLegacyBlobChanged, "ConditionCheck", 1, blobCheck, nil},
+		{"pre-v2 blob check requires no revision", cancelled("None", "ConditionalCheckFailed"),
+			func(r *DictionaryRepository) error {
+				return r.ReplaceLegacyMigratedTerm(context.Background(), LegacyBlobGuard{UserID: "u1"}, "USER#u1", key, 1, nil)
+			},
+			ErrLegacyBlobChanged, "ConditionCheck", 1, []string{"attribute_not_exists (migratedAt)", "attribute_not_exists (blobRevision)", "attribute_not_exists (updatedAt)"}, nil},
 		{"vocabulary state update is version guarded", conditionalFailed,
 			func(r *DictionaryRepository) error {
 				return r.UpdateVocabularyState(context.Background(), "u1", model.VocabContextPersonal, model.VocabLangKo, 3, VocabularyStateChange{Status: &ready}, "now")
 			},
 			ErrDictTermConflict, "", 0, []string{`version = {"N":"3"}`}, nil},
-		{"vocabulary state create is create-only", conditionalFailed,
+		{"vocabulary state create is create-only", cancelled("ConditionalCheckFailed", "None"),
 			func(r *DictionaryRepository) error {
-				return r.CreateVocabularyStateIfAbsent(context.Background(), &model.VocabularyState{PK: "USER#u1", SK: "VOCAB#personal#ko-KR"})
+				return r.CreateLegacyVocabularyState(context.Background(), blob, vocabState)
 			},
-			ErrDictTermConflict, "", 0, []string{"attribute_not_exists (PK)"}, nil},
+			ErrDictTermConflict, "Put", 0, []string{"attribute_not_exists (PK)"}, nil},
+		{"vocabulary state create is pinned to the copied blob", cancelled("None", "ConditionalCheckFailed"),
+			func(r *DictionaryRepository) error {
+				return r.CreateLegacyVocabularyState(context.Background(), blob, vocabState)
+			},
+			ErrLegacyBlobChanged, "ConditionCheck", 1, blobCheck, nil},
+		{"vocabulary state reconcile is version guarded", cancelled("ConditionalCheckFailed", "None"),
+			func(r *DictionaryRepository) error {
+				return r.ReconcileLegacyVocabularyState(context.Background(), blob, model.VocabContextPersonal, model.VocabLangKo, 4, VocabularyStateChange{ActiveName: &vocabName}, "now")
+			},
+			ErrDictTermConflict, "Update", 0, []string{`version = {"N":"4"}`}, nil},
+		{"vocabulary state reconcile is pinned to the copied blob", cancelled("None", "ConditionalCheckFailed"),
+			func(r *DictionaryRepository) error {
+				return r.ReconcileLegacyVocabularyState(context.Background(), blob, model.VocabContextPersonal, model.VocabLangKo, 4, VocabularyStateChange{ActiveName: &vocabName}, "now")
+			},
+			ErrLegacyBlobChanged, "ConditionCheck", 1, blobCheck, nil},
 		{"tombstone or existing row blocks create", cancelled("ConditionalCheckFailed", "None"),
 			func(r *DictionaryRepository) error { return r.CreateAutoTerm(context.Background(), term, obs) },
 			ErrDictTermConflict, "Put", 0, []string{"attribute_not_exists (PK)"}, nil},
@@ -296,6 +330,7 @@ func TestPutDictTermsIfAbsentChunksAndSkipsExisting(t *testing.T) {
 	for i := range terms {
 		terms[i] = model.DictTerm{PK: "USER#u1", SK: fmt.Sprintf("DICTTERM#%032d", i), Version: 1}
 	}
+	guard := LegacyBlobGuard{UserID: "u1", Revision: 3, UpdatedAt: "t3"}
 	repo, calls := dictWire(t, func(i int, _ string, body map[string]any) (int, string) {
 		if i == 0 {
 			codes := make([]string, len(body["TransactItems"].([]any)))
@@ -307,7 +342,7 @@ func TestPutDictTermsIfAbsentChunksAndSkipsExisting(t *testing.T) {
 		}
 		return 200, `{}`
 	})
-	created, err := repo.PutDictTermsIfAbsent(context.Background(), terms)
+	created, err := repo.PutDictTermsIfAbsent(context.Background(), guard, terms)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,11 +350,40 @@ func TestPutDictTermsIfAbsentChunksAndSkipsExisting(t *testing.T) {
 	for _, c := range *calls {
 		items := txItems(t, c)
 		sizes = append(sizes, len(items))
-		for _, item := range items {
+		for _, item := range items[:len(items)-1] {
 			requireAll(t, "migration put", resolved(item["Put"].(map[string]any), "ConditionExpression"), "attribute_not_exists (PK)")
 		}
+		check := items[len(items)-1]["ConditionCheck"].(map[string]any)
+		requireAll(t, "blob check", resolved(check, "ConditionExpression"), "attribute_not_exists (migratedAt)", `blobRevision = {"N":"3"}`, `updatedAt = {"S":"t3"}`)
+		if key := check["Key"].(map[string]any); key["PK"].(map[string]any)["S"] != "USER#u1" || key["SK"].(map[string]any)["S"] != model.PrefixDictionary {
+			t.Fatalf("check must target the legacy item: %v", key)
+		}
 	}
-	if fmt.Sprint(sizes) != "[99 98 51]" || created != 149 {
-		t.Fatalf("sizes=%v created=%d", sizes, created)
+	if fmt.Sprint(sizes) != "[100 99 52]" || created != 149 {
+		t.Fatalf("each chunk is at most 99 puts plus the check: sizes=%v created=%d", sizes, created)
+	}
+}
+
+// A migration that copied a superseded blob must stop creating rows once the
+// check fails, even if every put's own condition passed.
+func TestPutDictTermsIfAbsentStopsWhenTheBlobChanged(t *testing.T) {
+	terms := make([]model.DictTerm, 120)
+	for i := range terms {
+		terms[i] = model.DictTerm{PK: "USER#u1", SK: fmt.Sprintf("DICTTERM#%032d", i), Version: 1}
+	}
+	repo, calls := dictWire(t, func(_ int, _ string, body map[string]any) (int, string) {
+		codes := make([]string, len(body["TransactItems"].([]any)))
+		for j := range codes {
+			codes[j] = "None"
+		}
+		codes[len(codes)-1] = "ConditionalCheckFailed"
+		return 400, cancelled(codes...)
+	})
+	created, err := repo.PutDictTermsIfAbsent(context.Background(), LegacyBlobGuard{UserID: "u1", Revision: 1}, terms)
+	if !errors.Is(err, ErrLegacyBlobChanged) || !errors.Is(err, ErrConditionFailed) || created != 0 || len(*calls) != 1 {
+		t.Fatalf("want ErrLegacyBlobChanged after one transaction: %v created=%d calls=%d", err, created, len(*calls))
+	}
+	if _, err := repo.PutDictTermsIfAbsent(context.Background(), LegacyBlobGuard{UserID: "u2"}, terms); err == nil {
+		t.Fatal("rows outside the guarded user's partition must be refused")
 	}
 }
