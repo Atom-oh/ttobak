@@ -68,6 +68,13 @@ func (f *fakeDictStore) GetDictionary(context.Context, string) (*model.UserDicti
 }
 func (f *fakeDictStore) SaveDictionary(_ context.Context, d *model.UserDictionary) error {
 	f.saveCalls++
+	if f.blob == nil {
+		f.blob = &model.UserDictionary{UserID: d.UserID}
+	}
+	f.blob.Terms = append([]model.DictionaryTerm(nil), d.Terms...)
+	f.blob.VocabularyName, f.blob.VocabularyStatus = d.VocabularyName, d.VocabularyStatus
+	f.blob.BlobRevision++
+	f.blob.UpdatedAt = fmt.Sprintf("rev-%d", f.blob.BlobRevision)
 	return nil
 }
 func (f *fakeDictStore) UpdateLegacyVocabularyStatus(_ context.Context, _ string, name, from, to string) error {

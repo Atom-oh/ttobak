@@ -26,6 +26,7 @@ func dictRouter() http.Handler {
 	r.Post("/api/settings/dictionary/terms", h.CreateTerm)
 	r.Patch("/api/settings/dictionary/terms/{termId}", h.UpdateTerm)
 	r.Delete("/api/settings/dictionary/terms/{termId}", h.DeleteDictTerm)
+	r.Put("/api/settings/dictionary", h.UpdateDictionary)
 	return r
 }
 
@@ -43,6 +44,9 @@ func TestDictionaryRequestBounds(t *testing.T) {
 		{"bad term id", "PATCH", "/api/settings/dictionary/terms/ABC", `{"version":1}`, 404},
 		{"traversal term id", "DELETE", "/api/settings/dictionary/terms/..%2F" + id, ``, 404},
 		{"bad delete version", "DELETE", "/api/settings/dictionary/terms/" + id + "?version=0", ``, 400},
+		{"legacy PUT over 256 KB", "PUT", "/api/settings/dictionary", `{"terms":[{"phrase":"` + strings.Repeat("a", 256<<10) + `"}]}`, 400},
+		// A phrase-less legacy term is the service's decision (GET may return
+		// phrase-less rows); see TestLegacyPutValidation.
 	}
 	router := dictRouter()
 	for _, tc := range cases {
@@ -65,6 +69,7 @@ func TestDictionaryErrorCodes(t *testing.T) {
 		{fmt.Errorf("wrapped: %w", service.ErrDictionaryVersionConflict), 409, "VERSION_CONFLICT"},
 		{service.ErrDictionaryFull, 409, "DICTIONARY_FULL"},
 		{service.ErrDictionaryTermExists, 409, "TERM_EXISTS"},
+		{service.ErrDictionaryTermNotManual, 409, "TERM_NOT_MANUAL"},
 		{fmt.Errorf("%w: 2 terms", service.ErrLegacyDictionaryConflict), 409, "LEGACY_DICTIONARY_CONFLICT"},
 		{fmt.Errorf("%w", repository.ErrConditionFailed), 409, model.ErrCodeConflict},
 		{service.ErrNotFound, 404, model.ErrCodeNotFound},
