@@ -115,7 +115,11 @@ unconsumed project invitation rows expire through their existing TTL field.
    Missing language metadata uses the current text's script, never the previous
    utterance's language. The shared translation scheduler bounds pending finals,
    concurrency, UTF-8 request/result sizes and request duration; it rejects stale
-   responses after finalization, setting changes or stop. Interpretation failures
+   responses after finalization, setting changes or stop. Partial-caption drafts
+   are translated only after an explicit opt-in (fast path); finals use the
+   validated high-quality interpreter with frozen source context and Amazon
+   Translate fallback, and the API applies per-user hourly request limits
+   (ADR-005 amendments). Interpretation failures
    do not stop capture. This path does not change batch transcription or saved notes.
 2. Upload audio to S3. EventBridge invokes the transcribe orchestrator, which uses
    configured Whisper ECS or AWS Transcribe fallback. Multipart completion and
@@ -127,6 +131,12 @@ unconsumed project invitation rows expire through their existing TTL field.
    a source-checked transaction, then dispatches the existing Whisper worker.
    The worker reads a pinned source revision, cuts the requested bytes and runs
    transcription on that file. Original audio and prior human edits remain intact.
+   A 15-minute scheduled tick on the same transcribe Lambda re-drives stuck
+   single-file Whisper meetings with conditional, two-attempt claims. It re-runs STT
+   only when the GPU cluster is idle, re-drives an unpublished transcript through
+   summarize, records `AUDIO_CORRUPT`/`NO_SPEECH`/`WORKER_FAILED` marks, and after
+   seven untouched days deletes marked meetings that hold no user data. Checkpoint-only
+   and multipart meetings are reported, not processed (ADR-031 amendment).
 3. Refine text while preserving acoustic speakers; summarize the selected source,
    saved notes and supported context into editable meeting content. Transcript
    spill objects are rehydrated by repository reads. Stale segments must not

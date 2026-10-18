@@ -189,8 +189,11 @@ type DictObservation struct {
 	SourceTypes       []string `dynamodbav:"sourceTypes,omitempty"`
 	SummaryGeneration int64    `dynamodbav:"summaryGeneration"`
 	NotesSafe         bool     `dynamodbav:"notesSafe"`
-	CreatedAt         string   `dynamodbav:"createdAt"`
-	EntityType        string   `dynamodbav:"entityType"`
+	// Tainted marks evidence from a run whose sources a non-owner edited
+	// (A2.1); it never counts toward an active term.
+	Tainted    bool   `dynamodbav:"tainted,omitempty"`
+	CreatedAt  string `dynamodbav:"createdAt"`
+	EntityType string `dynamodbav:"entityType"`
 }
 
 // VocabularyState tracks the Transcribe vocabulary for one context and
