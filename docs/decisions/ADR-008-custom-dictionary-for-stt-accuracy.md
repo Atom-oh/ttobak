@@ -95,7 +95,8 @@ Migration now has callers; this replaces the previous amendment's "no caller
 yet" note. Routes: [API-SPEC](../API-SPEC.md#personal-dictionary).
 
 - **Validator.** `ValidateTermInput` applies to manual terms now, and to
-  automatic terms when extraction lands; its blocklist is a seed.
+  automatic terms when extraction lands; its blocklist is a seed (grown by the
+  automatic-term filters amendment below).
 - **User actions.** Delete tombstones any origin. Edit sets `userEditedAt` under
   the caller's `version` and keeps `origin`; keep is `aliasMode=always`;
   accepting a suggestion sets `state=active`. Renaming to another key is a new
@@ -120,6 +121,45 @@ yet" note. Routes: [API-SPEC](../API-SPEC.md#personal-dictionary).
   Pending updates are skipped by batch jobs (`GetVocabularyForTranscription`
   requires READY); the response still has no `vocabularyName`, so the live
   client passes none.
+
+## Amendment 2026-10-18: automatic-term filters
+
+`FilterCandidates` in `service/terms_filter.go` is pure and has no caller yet;
+extraction wiring is a later change. A candidate failing a rule is dropped alone,
+and the per-rule drop counts (`TermFilterCounts`) hold numbers only, never text.
+Rules, in order:
+
+- **Confidence** at least the configured minimum (default 0.85; values outside
+  (0, 1] use the default).
+- **Blocklist.** The embedded `terms_blocklist.txt` (common Korean and English
+  meeting and function words plus fillers, about 550 entries) is matched on the
+  term key and on every heardAs. Manual terms keep the heardAs check through
+  `ValidateTermInput`; a manual display form is not blocklisted, because typing
+  it is an explicit user act.
+- **Shape.** `ValidateTermInput`, then: no digits-only or punctuation-only
+  terms, dates or times, emails, URLs or domains, runs of 7 or more digits
+  (phone- or card-like), or more than 6 words. Hangul-only terms need 2
+  syllables; Latin-only terms need 2 letters, and 3 unless all capitals.
+- **Grounding** after NFKC, lowercase and removal of the term-key separators,
+  with Latin/digit word boundaries for term matches (so `EKS` does not match
+  `weeks`; Hangul matches may carry particles): at least one quote; every quote
+  is a substring of its named source (transcript, notes or an identified
+  document) and contains the term or a heardAs; every heardAs occurs in the
+  transcript; the display form occurs in notes or a document, or twice in the
+  transcript; notes-only terms must also occur in the transcript. Source types
+  come from where the term occurs, not from the model's labels.
+- **Duplicates** by term key keep the best-ranked candidate.
+- **Transcribe phrase.** A model phrase is used only when it has the same term
+  key and passes the AWS phrase validator; otherwise `deriveTranscribePhrase`
+  joins words and camelCase or script boundaries with `-` and dots each 2-6
+  capital segment (`DynamoDB` -> `Dynamo-D.B.`, `EKS` -> `E.K.S.`). The
+  validator enforces ko-KR `[A-Za-z\-.]` plus Hangul syllables
+  (U+AC00-U+D7A3), en-US `[A-Za-z'\-.]`, no digits, at most 256 characters, no leading `.`/`'`/`-`, no trailing `'`/`-`, no
+  `--`/`..`, and periods only after single letters. Hangul-containing terms are
+  ko only; Latin-only terms are ko and en; other scripts get no phrase. Dotted
+  acronyms keep `TranscribeKo=false` until a live ko-KR build records that
+  Transcribe accepts them. A term without a phrase is still kept.
+- **Cap.** At most 15 terms per run, ranked by confidence, then source-type count.
 
 ## Consequences and risks
 
