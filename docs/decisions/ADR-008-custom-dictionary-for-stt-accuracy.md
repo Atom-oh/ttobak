@@ -372,6 +372,12 @@ readers never build. Callers and response: [API-SPEC](../API-SPEC.md#personal-di
 
 ## Amendment 2026-10-18: settings UI v2 and live vocabulary client
 
+- **UI** uses only the per-term routes; the legacy PUT stays for older clients.
+  Duplicates use the `termKey` normalization (the old lowercase-phrase check let
+  `Dynamo-DB` and `DynamoDB` coexist), checked against shared Go vectors (the JS
+  half runs in `npm run test:unit`, in CI only for `frontend/**` changes). An unmigratable legacy
+  item's terms cannot be edited; the UI marks the conflicting ones and deletes
+  them through the legacy DELETE-by-phrase, which retries migration.
 - **No live name.** The A/B amendment's wait for item 5 stands: there is no
   live-config route and no response names a vocabulary, so the recording page
   only calls the dictionary GET (a flip opportunity) and live streams send none.

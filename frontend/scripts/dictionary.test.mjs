@@ -4,6 +4,9 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import vm from 'node:vm';
 import ts from 'typescript';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import * as jsxRuntime from 'react/jsx-runtime';
 
 function loadModule(path, deps = {}) {
   const source = readFileSync(new URL(`../src/${path}`, import.meta.url), 'utf8');
@@ -66,6 +69,52 @@ test('conflicts reload and errors read as plain Korean', () => {
   assert.match(d.dictionaryErrorMessage('VERSION_CONFLICT', ''), /새로 불러왔습니다/);
   assert.match(d.dictionaryErrorMessage('BAD_REQUEST', 'heardAs: at most 5 aliases'), /5개까지/);
   assert.equal(d.dictionaryErrorMessage('BAD_REQUEST', 'version is required'), undefined);
+});
+
+test('the table shows the v2 columns, source links and only allowed actions', () => {
+  const { DictionaryTable } = loadModule('components/DictionaryTable.tsx', {
+    react: React, 'react/jsx-runtime': jsxRuntime, '@/lib/dictionary': d,
+    'next/link': { __esModule: true, default: ({ href, children }) => React.createElement('a', { href }, children) },
+  });
+  const html = renderToStaticMarkup(React.createElement(DictionaryTable, {
+    items: [
+      row({ termId: 'b', displayAs: 'Beta Node', origin: 'auto', state: 'suggested', heardAs: ['베타 노드'], type: 'product' }),
+      row({ termId: 'c', origin: 'auto', aliasMode: 'always', sourceMeetingId: 'm/1', sourceMeetingTitle: '합성 회의' }),
+      row({ termId: 'd', origin: 'auto' }),
+    ],
+    busyTermIds: new Set(['d']), onUpdate: async () => true, onDelete() {}, onError() {}, emptyText: '',
+  }));
+  for (const h of ['표기', '인식된 표기', '유형', '출처']) assert.ok(html.includes(`>${h}</th>`), h);
+  assert.ok(html.includes('베타 노드') && html.includes('제품') && html.includes('>자동</td>'));
+  assert.ok(html.includes('href="/meeting/m%2F1"'));
+  assert.equal(html.match(/>추가</g).length, 1, 'only the suggestion offers 추가');
+  assert.equal(html.match(/>유지</g).length, 2, 'a 유지 chip on the kept row and the action on the plain auto row');
+});
+
+test('legacy deletes run one at a time, each finishing its reload first', async () => {
+  const inFlight = new Set();
+  const log = [];
+  let finish;
+  const run = async (phrase) => {
+    if (!d.claimInFlight(inFlight, d.LEGACY_DELETE_KEY)) return log.push(`skip ${phrase}`);
+    try {
+      await d.deleteLegacyThenReload(
+        () => { log.push(`delete ${phrase}`); return new Promise((r) => { finish = r; }); },
+        async () => { log.push('reload'); });
+    } finally { inFlight.delete(d.LEGACY_DELETE_KEY); }
+  };
+  const first = run('Alpha');
+  await run('Beta');
+  assert.deepEqual(log, ['delete Alpha', 'skip Beta'], 'a second phrase cannot start while the first is in flight');
+  finish();
+  await first;
+  assert.deepEqual(log.slice(2), ['reload'], 'the key is held until the reload completes');
+  const second = run('Beta');
+  finish();
+  await second;
+  assert.deepEqual(log.slice(3), ['delete Beta', 'reload']);
+  assert.equal(d.claimInFlight(inFlight, 'row-1'), true);
+  assert.equal(d.claimInFlight(inFlight, 'row-1'), false);
 });
 
 test('an edit diffs and versions against the row as it was when 편집 was clicked', () => {

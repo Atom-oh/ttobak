@@ -3,8 +3,8 @@
 import { getIdToken, refreshSession } from './auth';
 import { getRuntimeConfig } from './runtimeConfig';
 import { triggerAuthFailure } from '@/components/auth/AuthProvider';
-import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory, Research, ResearchDetail, DictionaryTerm, ChatMessage, Account, AccountSummary, AccountMember, AccountMeetingRef, AccountInsight, AccountDocument, PutDocumentRequest, AccountResearchRef, Project, ProjectSummary, ProjectMember, ProjectMeetingRef, ProjectResearchRef, ProjectInsight, ProjectBrief } from '@/types/meeting';
-import type { CreateDictTermInput, DictTermMutationResponse, TermPatch } from '@/lib/dictionary';
+import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory, Research, ResearchDetail, ChatMessage, Account, AccountSummary, AccountMember, AccountMeetingRef, AccountInsight, AccountDocument, PutDocumentRequest, AccountResearchRef, Project, ProjectSummary, ProjectMember, ProjectMeetingRef, ProjectResearchRef, ProjectInsight, ProjectBrief } from '@/types/meeting';
+import type { CreateDictTermInput, DictionaryResponse, DictTermMutationResponse, TermPatch } from '@/lib/dictionary';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 const PROJECT_HINTS_KEY = 'ttobak:project-invitation-hints';
@@ -682,8 +682,7 @@ const DICT = '/api/settings/dictionary';
 const termPath = (termId: string) => `${DICT}/terms/${encodeURIComponent(termId)}`;
 
 export const dictionaryApi = {
-  get: () => api.get<{ terms: DictionaryTerm[]; status: string; vocabularyName?: string }>(DICT),
-  update: (terms: DictionaryTerm[]) => api.put<{ terms: DictionaryTerm[]; status: string; vocabularyName?: string }>(DICT, { terms }),
+  get: () => api.get<DictionaryResponse>(DICT),
   createTerm: (input: CreateDictTermInput) => api.post<DictTermMutationResponse>(`${DICT}/terms`, input),
   updateTerm: (termId: string, version: number, patch: TermPatch) =>
     api.patch<DictTermMutationResponse>(termPath(termId), { ...patch, version }),

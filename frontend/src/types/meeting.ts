@@ -625,24 +625,12 @@ export const INSIGHT_TYPES = [
   'trend', 'need', 'competitive', 'risk', 'opportunity', 'tech', 'stakeholder', 'action',
 ] as const;
 
-export interface DictionaryTerm {
-  phrase: string;
-  soundsLike: string;
-  displayAs: string;
-}
-
 export interface ChatSession {
   sessionId: string;
   title: string;
   createdAt: string;
   lastMessageAt: string;
   messageCount: number;
-}
-
-export interface DictionaryTerm {
-  phrase: string;
-  soundsLike: string;
-  displayAs: string;
 }
 
 /** One translated reading page; held in client memory only, never stored. */
