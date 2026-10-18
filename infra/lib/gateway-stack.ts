@@ -239,7 +239,9 @@ export class GatewayStack extends cdk.Stack {
         sid: 'EcsListWhisperTasks',
         effect: iam.Effect.ALLOW,
         actions: ['ecs:ListTasks'],
-        resources: [`arn:aws:ecs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:container-instance/${WHISPER_CLUSTER_NAME}/*`],
+        // ListTasks without a containerInstance filter authorizes only against
+        // "*"; the ecs:cluster condition confines it to the Whisper cluster.
+        resources: ['*'],
         conditions: {
           ArnEquals: { 'ecs:cluster': `arn:aws:ecs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:cluster/${WHISPER_CLUSTER_NAME}` },
         },

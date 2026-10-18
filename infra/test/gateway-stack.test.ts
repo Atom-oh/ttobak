@@ -658,7 +658,8 @@ for bad in ({'Ref':'OtherRole'}, {'Fn::ImportValue':'unknown'}, qa):
     const list = statements.find(statement => statement.Sid === 'EcsListWhisperTasks');
     expect(list).toBeDefined();
     expect(list.Action).toBe('ecs:ListTasks');
-    expect(JSON.stringify(list.Resource)).toContain('container-instance/ttobak-whisper/*');
+    expect(list.Resource).toBe('*');
+    expect(Object.keys(list.Condition)).toEqual(['ArnEquals']);
     expect(JSON.stringify(list.Condition)).toContain('ecs:cluster');
     expect(JSON.stringify(list.Condition)).toContain('cluster/ttobak-whisper');
     const run = statements.find(statement => statement.Sid === 'EcsRunWhisperTask');

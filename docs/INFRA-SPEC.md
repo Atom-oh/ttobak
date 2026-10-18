@@ -301,8 +301,9 @@ GatewayStack's `ttobak-stt-recovery` rule (`rate(15 minutes)`, retry 0, 10-minut
 maximum age, no DLQ) sends the fixed input `{source: ttobak.recovery,
 detail-type: SttRecoveryTick, detail: {}}` to the existing transcribe Lambda.
 `STT_RECOVERY_MODE` and `STT_RECOVERY_DELETE_MODE` (`off|report|active`) default to
-`report`. The transcribe role adds only `ecs:ListTasks` on
-`container-instance/ttobak-whisper/*` with an `ArnEquals ecs:cluster` condition;
+`report`. The transcribe role adds only `ecs:ListTasks` on `Resource: "*"`
+confined by an `ArnEquals ecs:cluster` condition to the Whisper cluster (a
+cluster-only ListTasks call does not match a container-instance resource);
 RunTask and PassRole are unchanged. Existing AiStack table and bucket grants cover
 the scan, claims, transactional deletes, transcript self-copy and object deletes.
 Deletions leave noncurrent object versions in the versioned bucket. See the
