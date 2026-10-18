@@ -75,18 +75,23 @@ func NewDictionaryServiceWithStore(store DictionaryStore, client TranscribeVocab
 // only. It never rewrites the blob; vocabulary status sync is a conditional
 // update of the VOCAB# row (or of the blob status field before migration).
 func (s *DictionaryService) GetDictionary(ctx context.Context, userID string) (*model.DictionaryResponse, error) {
+	resp, _, _, err := s.readDictionary(ctx, userID)
+	return resp, err
+}
+
+func (s *DictionaryService) readDictionary(ctx context.Context, userID string) (*model.DictionaryResponse, *model.UserDictionary, []model.DictTerm, error) {
 	dict, err := s.repo.GetDictionary(ctx, userID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get dictionary: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to get dictionary: %w", err)
 	}
 	rows, err := s.repo.ListDictTerms(ctx, model.PrefixUser+userID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get dictionary terms: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to get dictionary terms: %w", err)
 	}
 	return &model.DictionaryResponse{
 		Terms:  unionLegacyTerms(dict, rows),
 		Status: s.personalVocabularyStatus(ctx, userID, dict),
-	}, nil
+	}, dict, rows, nil
 }
 
 // personalVocabularyStatus reports the legacy status string for the personal
@@ -191,9 +196,10 @@ func legacyVocabularyStatus(state *model.VocabularyState) string {
 	return ""
 }
 
-// UpdateDictionary updates a user's custom dictionary and triggers vocabulary build
-func (s *DictionaryService) UpdateDictionary(ctx context.Context, userID string, terms []model.DictionaryTerm) (*model.DictionaryResponse, error) {
-	vocabName := fmt.Sprintf("ttobak-vocab-%s", vocabSuffix(userID))
+// saveLegacyBlob is the pre-v2 blob write and in-place rebuild, kept only for
+// a blob that migration refuses (ErrLegacyDictionaryConflict).
+func (s *DictionaryService) saveLegacyBlob(ctx context.Context, userID string, terms []model.DictionaryTerm) (*model.DictionaryResponse, error) {
+	vocabName := legacyVocabularyName(userID)
 
 	dict := &model.UserDictionary{
 		PK:               model.PrefixUser + userID,
@@ -239,8 +245,8 @@ func (s *DictionaryService) UpdateDictionary(ctx context.Context, userID string,
 	}, nil
 }
 
-// DeleteTerm removes a single term from the user's dictionary
-func (s *DictionaryService) DeleteTerm(ctx context.Context, userID, phrase string) error {
+// deleteLegacyBlobTerm is the pre-v2 delete for a blob that migration refuses.
+func (s *DictionaryService) deleteLegacyBlobTerm(ctx context.Context, userID, phrase string) error {
 	dict, err := s.repo.GetDictionary(ctx, userID)
 	if err != nil {
 		return fmt.Errorf("failed to get dictionary: %w", err)
@@ -266,7 +272,7 @@ func (s *DictionaryService) DeleteTerm(ctx context.Context, userID, phrase strin
 	}
 
 	// Update with remaining terms
-	_, err = s.UpdateDictionary(ctx, userID, remaining)
+	_, err = s.saveLegacyBlob(ctx, userID, remaining)
 	return err
 }
 

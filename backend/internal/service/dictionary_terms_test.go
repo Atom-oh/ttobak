@@ -300,6 +300,117 @@ func TestTombstoneTermSurfacesCleanupAndPrunes(t *testing.T) {
 	}
 }
 
+func TestLegacyPutNeverTombstonesOrTouchesAutoRows(t *testing.T) {
+	ctx := context.Background()
+	store := migratedStore()
+	keep := store.seedRow("Alpha Grid", "Alpha-Grid", model.TermOriginManual, model.TermStateActive, 1)
+	gone := store.seedRow("Beta Node", "Beta-Node", model.TermOriginManual, model.TermStateActive, 1)
+	auto := store.seedRow("Gamma Cloud", "Gamma-Cloud", model.TermOriginAuto, model.TermStateActive, 3)
+	hidden := store.seedRow("Delta Mesh", "Delta-Mesh", model.TermOriginAuto, model.TermStateSuggested, 5)
+	absentAuto := store.seedRow("Zeta Port", "Zeta-Port", model.TermOriginAuto, model.TermStateActive, 2)
+	tomb := store.seedRow("Epsilon", "", model.TermOriginAuto, model.TermStateDeleted, 7)
+	client := &fakeVocabWriter{}
+	resp, err := newTestDictService(store, client).UpdateDictionary(ctx, "u1", []model.DictionaryTerm{
+		{Phrase: "Alpha-Grid", SoundsLike: "알파 그리드, 알파그릿", DisplayAs: "Alpha Grid"}, // edited
+		{Phrase: "Gamma-Cloud-X", DisplayAs: "Gamma Cloud"},                         // auto row listed by GET
+		{Phrase: "Omega", DisplayAs: "Omega"},                                       // new
+		{Phrase: "Epsilon", DisplayAs: "Epsilon"},                                   // explicit re-add
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row := store.terms[model.DictTermSK(keep)]; len(row.HeardAs) != 2 || row.Version != 2 {
+		t.Fatalf("changed manual term must be edited: %+v", row)
+	}
+	if _, ok := store.terms[model.DictTermSK(gone)]; ok {
+		t.Fatal("a manual term absent from the body must be hard-deleted")
+	}
+	for key, version := range map[string]int64{auto: 3, hidden: 5, absentAuto: 2} {
+		if row := store.terms[model.DictTermSK(key)]; row.Version != version || row.State == model.TermStateDeleted {
+			t.Fatalf("legacy PUT touched an auto or suggested row: %+v", row)
+		}
+	}
+	if row := store.terms[model.DictTermSK(tomb)]; row.State != model.TermStateActive || row.Origin != model.TermOriginManual {
+		t.Fatalf("an explicit re-add restores the tombstone as manual: %+v", row)
+	}
+	deleted := 0
+	for _, row := range store.terms {
+		if row.State == model.TermStateDeleted {
+			deleted++
+		}
+	}
+	if deleted != 0 || store.terms[model.DictTermSK(TermKey("Omega"))].Origin != model.TermOriginManual {
+		t.Fatalf("legacy PUT must create manual rows and never tombstone: %d tombstones", deleted)
+	}
+	if len(client.updates) != 1 || !strings.Contains(fmt.Sprint(client.updates[0]), "Omega") || resp.Status != "PENDING" {
+		t.Fatalf("legacy PUT must keep the in-place rebuild: %v %q", client.updates, resp.Status)
+	}
+	if len(resp.Terms) != 5 {
+		t.Fatalf("legacy response lists the active rows: %+v", resp.Terms)
+	}
+	if len(resp.Warnings) != 1 || resp.Warnings[0] != legacyIgnoredWarning {
+		t.Fatalf("an ignored edit of an auto row must be reported: %v", resp.Warnings)
+	}
+	for _, blobTerm := range store.blob.Terms {
+		if blobTerm.DisplayAs == "Gamma Cloud" || blobTerm.DisplayAs == "Zeta Port" {
+			t.Fatalf("auto terms must not be copied into the legacy blob: %+v", store.blob.Terms)
+		}
+	}
+}
+
+func TestLegacyPutRoundTripsGetOutput(t *testing.T) {
+	ctx := context.Background()
+	store := migratedStore()
+	store.seedRow("Auto Term", "", model.TermOriginAuto, model.TermStateActive, 1)
+	for i := 0; i < 450; i++ {
+		store.seedRow(fmt.Sprintf("Manual %03d", i), fmt.Sprintf("Manual-%03d", i), model.TermOriginManual, model.TermStateActive, 1)
+	}
+	for i := 0; i < 100; i++ {
+		store.seedRow(fmt.Sprintf("Auto %03d", i), fmt.Sprintf("Auto-%03d", i), model.TermOriginAuto, model.TermStateActive, 1)
+	}
+	svc := newTestDictService(store, nil)
+	empty := ""
+	if _, err := svc.CreateTerm(ctx, "u1", model.CreateDictTermRequest{DisplayAs: "No Phrase", Phrase: &empty}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.GetDictionaryWithTerms(ctx, "u1")
+	if err != nil || len(got.Terms) != 552 {
+		t.Fatalf("GET = %d terms %v", len(got.Terms), err)
+	}
+	body := append(append([]model.DictionaryTerm{}, got.Terms...), model.DictionaryTerm{Phrase: "Omega", DisplayAs: "Omega"})
+	resp, err := svc.UpdateDictionary(ctx, "u1", body)
+	if err != nil || len(resp.Warnings) != 0 || len(resp.Terms) != 553 {
+		t.Fatalf("GET-then-PUT with phrase-less and >500 union terms must succeed: %v %v %d", err, resp, len(got.Terms))
+	}
+	if row := store.terms[model.DictTermSK(TermKey("No Phrase"))]; row.Version != 1 || row.Origin != model.TermOriginManual {
+		t.Fatalf("unchanged phrase-less manual term must be kept: %+v", row)
+	}
+	if len(store.blob.Terms) != 452 {
+		t.Fatalf("blob holds manual terms only: %d", len(store.blob.Terms))
+	}
+
+	tooMany := append([]model.DictionaryTerm{}, body...)
+	for i := 0; i < 50; i++ {
+		tooMany = append(tooMany, model.DictionaryTerm{Phrase: fmt.Sprintf("Extra-%02d", i)})
+	}
+	var input *TermInputError
+	if _, err := svc.UpdateDictionary(ctx, "u1", tooMany); !errors.As(err, &input) || input.Field != "terms" {
+		t.Fatalf("more than %d manual terms must be rejected: %v", MaxManualTermsPerScope, err)
+	}
+}
+
+func TestLegacyPutReportsHiddenSuggestion(t *testing.T) {
+	store := migratedStore()
+	key := store.seedRow("Delta Mesh", "Delta-Mesh", model.TermOriginAuto, model.TermStateSuggested, 5)
+	resp, err := newTestDictService(store, nil).UpdateDictionary(context.Background(), "u1", []model.DictionaryTerm{{Phrase: "Delta-Mesh", DisplayAs: "Delta Mesh"}})
+	if err != nil || len(resp.Warnings) == 0 || resp.Warnings[0] != legacyIgnoredWarning {
+		t.Fatalf("a body term naming a suggestion must warn: %+v %v", resp, err)
+	}
+	if row := store.terms[model.DictTermSK(key)]; row.Version != 5 || row.State != model.TermStateSuggested {
+		t.Fatalf("the suggestion must stay untouched: %+v", row)
+	}
+}
+
 func TestUpdateTermConcurrentDeleteIsNotFound(t *testing.T) {
 	store := migratedStore()
 	key := store.seedRow("Alpha Grid", "Alpha-Grid", model.TermOriginManual, model.TermStateActive, 1)
@@ -308,5 +419,97 @@ func TestUpdateTermConcurrentDeleteIsNotFound(t *testing.T) {
 	_, err := newTestDictService(store, nil).UpdateTerm(context.Background(), "u1", key, model.UpdateDictTermRequest{Version: ver(1), AliasMode: &mode})
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("a row removed after the update must be not found, got %v", err)
+	}
+}
+
+func TestLegacyPutValidation(t *testing.T) {
+	ctx := context.Background()
+	store := migratedStore()
+	store.seedRow("X1", "X", model.TermOriginManual, model.TermStateActive, 1)
+	// A stored term that predates the validator (one-rune phrase as display).
+	key := TermKey("Q")
+	store.terms[model.DictTermSK(key)] = model.DictTerm{SK: model.DictTermSK(key), TermKey: key, DisplayAs: "Q", Phrase: "Q",
+		Origin: model.TermOriginManual, State: model.TermStateActive, Version: 1, LegacyDisplayEmpty: true}
+	svc := newTestDictService(store, nil)
+	cases := []struct {
+		name  string
+		terms []model.DictionaryTerm
+		field string
+	}{
+		{"tab in a new term", []model.DictionaryTerm{{Phrase: "Q"}, {Phrase: "New", DisplayAs: "New\tTerm"}}, "terms[1].displayAs"},
+		{"newline in an alias", []model.DictionaryTerm{{Phrase: "New", SoundsLike: "뉴\n텀"}}, "terms[0].heardAs"},
+		{"distinct terms sharing a key", []model.DictionaryTerm{{Phrase: "A.I"}, {Phrase: "AI"}}, "terms[1]"},
+		{"too many terms", make([]model.DictionaryTerm, MaxLegacyTerms+1), "terms"},
+		{"new term without phrase", []model.DictionaryTerm{{DisplayAs: "Fresh Term"}}, "terms[0].phrase"},
+		{"unchanged legacy term is kept", []model.DictionaryTerm{{Phrase: "Q"}, {Phrase: "Delta", DisplayAs: "Delta"}, {Phrase: "Delta", DisplayAs: "Delta"}}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			before := store.saveCalls
+			_, err := svc.UpdateDictionary(ctx, "u1", tc.terms)
+			var input *TermInputError
+			if tc.field == "" {
+				if err != nil || store.terms[model.DictTermSK(key)].Version != 1 {
+					t.Fatalf("got %v", err)
+				}
+				return
+			}
+			if !errors.As(err, &input) || input.Field != tc.field || store.saveCalls != before {
+				t.Fatalf("want %s rejected before any write, got %v", tc.field, err)
+			}
+		})
+	}
+}
+
+func TestLegacyWritesMigrateTheBlobFirst(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeDictStore()
+	store.blob = legacyBlob("READY")
+	client := &fakeVocabWriter{}
+	svc := newTestDictService(store, client)
+	resp, err := svc.UpdateDictionary(ctx, "u1", []model.DictionaryTerm{store.blob.Terms[0], {Phrase: "Omega", DisplayAs: "Omega"}})
+	if err != nil || store.blob.MigratedAt == "" || len(store.terms) != 2 || len(resp.Terms) != 2 {
+		t.Fatalf("legacy PUT must migrate and replace the list: %v %+v rows=%d", err, store.blob, len(store.terms))
+	}
+	state := store.vocab[model.VocabSK(model.VocabContextPersonal, model.VocabLangKo)]
+	if state.Status != model.VocabStatusBuilding || state.ActiveName != "ttobak-vocab-0123456789abcdef" || state.TermCount != 2 {
+		t.Fatalf("rebuild must be recorded in VOCAB#: %+v", state)
+	}
+	if err := svc.DeleteTerm(ctx, "u1", "Omega"); err != nil || len(store.terms) != 1 {
+		t.Fatalf("legacy DELETE hard-deletes the manual row: %v", err)
+	}
+	if err := svc.DeleteTerm(ctx, "u1", "Ttobak-Sync"); err != nil || store.vocab[state.SK].Status != model.VocabStatusNone || client.deletes != 1 {
+		t.Fatalf("emptying the dictionary deletes the vocabulary: %v %+v", err, store.vocab[state.SK])
+	}
+	store.seedRow("Auto Term", "Auto-Term", model.TermOriginAuto, model.TermStateActive, 1)
+	if err := svc.DeleteTerm(ctx, "u1", "Auto-Term"); !errors.Is(err, ErrDictionaryTermNotManual) {
+		t.Fatalf("legacy DELETE must not remove auto rows: %v", err)
+	}
+	if err := svc.DeleteTerm(ctx, "u1", "Missing"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestConflictingBlobKeepsLegacyPathUntilResolved(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeDictStore()
+	store.blob = &model.UserDictionary{UserID: "u1", Terms: []model.DictionaryTerm{{Phrase: "A.I"}, {Phrase: "AI"}, {Phrase: "Delta"}}}
+	svc := newTestDictService(store, nil)
+	resp, err := svc.GetDictionaryWithTerms(ctx, "u1")
+	if err != nil || !resp.MigrationPending || len(resp.Terms) != 3 || len(resp.Items) != 0 {
+		t.Fatalf("a refused blob stays readable and flagged: %+v %v", resp, err)
+	}
+	if _, err := svc.CreateTerm(ctx, "u1", model.CreateDictTermRequest{DisplayAs: "Omega"}); !errors.Is(err, ErrLegacyDictionaryConflict) {
+		t.Fatalf("v2 writes wait for the conflict to be resolved: %v", err)
+	}
+	if err := svc.DeleteTerm(ctx, "u1", "AI"); err != nil || len(store.blob.Terms) != 2 {
+		t.Fatalf("legacy DELETE keeps the blob path: %v %+v", err, store.blob.Terms)
+	}
+	if store.blob.MigratedAt == "" || len(store.terms) != 2 {
+		t.Fatalf("migration retries once the conflict is gone: %+v rows=%d", store.blob, len(store.terms))
+	}
+	resp, err = svc.GetDictionaryWithTerms(ctx, "u1")
+	if err != nil || resp.MigrationPending || len(resp.Items) != 2 || resp.Items[0].TermID != TermKey("A.I") {
+		t.Fatalf("migrated items carry termIds: %+v %v", resp, err)
 	}
 }
