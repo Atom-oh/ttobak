@@ -4,13 +4,25 @@ on:
   push:
     branches: [main]
     paths: ['frontend/**', 'scripts/publish-frontend.sh', 'scripts/test_publish_frontend.py', '.github/workflows/deploy-frontend.yml']
+  pull_request:
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/deploy-frontend.yml'
+      - 'docs/INFRA-SPEC.md'
+      - 'docs/README.md'
+      - 'docs/architecture.md'
+      - 'docs/runbooks/deployment.md'
+      - 'docs/runbooks/frontend-release.md'
+      - 'scripts/deploy.sh'
+      - 'scripts/publish-frontend.sh'
+      - 'scripts/test_publish_frontend.py'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: deploy-frontend
+  group: ${{ github.event_name == 'pull_request' && format('deploy-frontend-pr-{0}', github.event.pull_request.number) || 'deploy-frontend' }}
   cancel-in-progress: false
 
 env:
@@ -18,7 +30,29 @@ env:
   CF_DISTRIBUTION: ${{ vars.CF_DISTRIBUTION }}
 
 jobs:
+  test:
+    runs-on: ttobak-arm
+    # Apply the existing same-repository guard before scheduling a PR runner.
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Verify publication contract and shell syntax
+        run: |
+          python3 -m unittest discover -s scripts -p 'test_publish_frontend.py' -v
+          bash -n scripts/publish-frontend.sh scripts/deploy.sh
+      - name: Test, lint and build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run test:unit
+          npm run lint
+          npm run build
+
   build-and-deploy:
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
     runs-on: ttobak-x86
     steps:
       - uses: actions/checkout@v6
