@@ -533,12 +533,11 @@ summarize role's existing table grant. See ADR-008.
 
 `SUMMARY_PRIVACY_WRITER_ENABLED=1` is read by `repository.SummaryPrivacyWritesEnabled`.
 GatewayStack sets neither it nor `SUMMARY_PRIVACY_READER_ENABLED`, so writers are
-off. Grant fences that would reject unsafe summaries (`summaryGrantFence`) are not
-yet called by the share, pending-invite or publication writers, and no API route or
-service requests an owner sharing-safe regeneration (`ResummaryState.SharingSafe`).
-Do not enable the writer flag in any deployment until both the fenced grant writers
-and that owner reset path ship; the handlers already map
-`ErrSummarySharingUnsafe` to 409 `SUMMARY_SHARING_UNSAFE` for when they do.
+off. With writers on, direct shares and pending meeting invites call
+`summaryGrantFence`, so unsafe summaries return 409 `SUMMARY_SHARING_UNSAFE`, but no
+API route or service requests an owner sharing-safe regeneration
+(`ResummaryState.SharingSafe`). Do not enable the writer flag in any deployment
+until that owner reset path ships.
 
 ## Project invitation activation
 
