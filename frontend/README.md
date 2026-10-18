@@ -10,7 +10,8 @@ npm run lint
 npm run build
 ```
 
-There is no unit-test framework. Use lint/build and targeted browser checks for
-interaction changes. `/config.json` supplies runtime Cognito/API configuration.
+There is no component test framework. `npm run test:unit` runs the node:test
+suites in `scripts/*.test.mjs` (also in CI); use lint/build and targeted browser
+checks for interaction changes. `/config.json` supplies runtime Cognito/API configuration.
 See [module guidance](CLAUDE.md), [UI reference](../docs/DESIGN-SPEC.md), and the
 [deployment runbook](../docs/runbooks/deployment.md).
