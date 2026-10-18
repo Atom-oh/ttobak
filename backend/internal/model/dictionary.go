@@ -217,12 +217,15 @@ type VocabularyState struct {
 	// BypassPending lets the next claim skip the minimum interval once.
 	BypassPending  bool   `dynamodbav:"bypassPending,omitempty"`
 	BuildStartedAt string `dynamodbav:"buildStartedAt,omitempty"`
-	FlippedAt      string `dynamodbav:"flippedAt,omitempty"`
-	EmptySince     string `dynamodbav:"emptySince,omitempty"`
-	TermCount      int    `dynamodbav:"termCount"`
-	UpdatedAt      string `dynamodbav:"updatedAt"`
-	Version        int64  `dynamodbav:"version"`
-	EntityType     string `dynamodbav:"entityType"`
+	// SubmittedAt is stamped by the submit claim, before the provider call; a
+	// poll accepts a provider result only if modified at or after it.
+	SubmittedAt string `dynamodbav:"submittedAt,omitempty"`
+	FlippedAt   string `dynamodbav:"flippedAt,omitempty"`
+	EmptySince  string `dynamodbav:"emptySince,omitempty"`
+	TermCount   int    `dynamodbav:"termCount"`
+	UpdatedAt   string `dynamodbav:"updatedAt"`
+	Version     int64  `dynamodbav:"version"`
+	EntityType  string `dynamodbav:"entityType"`
 }
 
 // VocabularyView is the API form of a VocabularyState.

@@ -169,7 +169,7 @@ export class StorageStack extends cdk.Stack {
           id: 'DeleteIncompleteMultipartUploads',
           abortIncompleteMultipartUploadAfter: cdk.Duration.days(7),
         },
-        // Leftover Transcribe vocabulary table files (vocab/{name}.tsv).
+        // Leftover Transcribe vocabulary table files (vocab/{name}.{fingerprint}.tsv).
         {
           id: 'ExpireVocabularyTables',
           prefix: 'vocab/',

@@ -196,7 +196,7 @@ func (f *fakeDictStore) UpdateVocabularyState(_ context.Context, _ string, c, l 
 	f.fire("vocabUpdate")
 	f.vocabCalls++
 	s, ok := f.vocab[model.VocabSK(c, l)]
-	if !ok || s.Version != v {
+	if !ok || s.Version != v || (ch.ExpectBuildingFingerprint != nil && s.BuildingFingerprint != *ch.ExpectBuildingFingerprint) {
 		return cond()
 	}
 	setS := func(dst *string, src *string) {
@@ -219,6 +219,7 @@ func (f *fakeDictStore) UpdateVocabularyState(_ context.Context, _ string, c, l 
 	setS(&s.BuildStartedAt, ch.BuildStartedAt)
 	setS(&s.FlippedAt, ch.FlippedAt)
 	setS(&s.EmptySince, ch.EmptySince)
+	setS(&s.SubmittedAt, ch.SubmittedAt)
 	setB(&s.ActiveReady, ch.ActiveReady)
 	setB(&s.BuildSubmitted, ch.BuildSubmitted)
 	setB(&s.BypassPending, ch.BypassPending)

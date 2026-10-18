@@ -24,7 +24,7 @@ and could not guarantee term recognition.
 - Authenticated settings routes support GET/PUT `/api/settings/dictionary` and
   DELETE `/api/settings/dictionary/term`.
 - Superseded for migrated users by the A/B builder amendment below (four-column
-  table file, ko-KR and en-US). Originally, and still for an unmigratable legacy
+  table file, ko-KR builds). Originally, and still for an unmigratable legacy
   item: `DictionaryService` creates/updates a Korean Transcribe vocabulary using the
   **`Phrases` list**. It does not upload the proposed four-column TSV, send
   `soundsLike`/`displayAs` mappings to Transcribe, or merge system base terms into
@@ -148,47 +148,72 @@ replaces the in-place rebuild. Only the API Lambda enables it; the shared
 readers never build. Callers and response: [API-SPEC](../API-SPEC.md#personal-dictionary).
 
 - **Never in place.** `VOCAB#personal#{lang}` has `ActiveName`/`InactiveName`.
-  Builds target the inactive slot; a later call flips both by version CAS only
-  on READY. Consumers use `ActiveName` only while `activeReady`. FAILED keeps it.
+  Builds target the inactive slot; a later call flips both by version and
+  fingerprint CAS only on READY. FAILED keeps the active slot.
+- **Languages.** Only ko-KR is built. en-US builds are deferred until a consumer
+  exists (batch uses ko-KR only; no response names a vocabulary for live
+  streams); the en-US table rules below stay, unused, and `vocabularies.en`
+  reports `NONE`.
 - **Table.** Active phrase terms, manual first, then hits, then oldest, deduped
-  by phrase; `vocab/{InactiveName}.tsv` with header
+  by phrase; immutable `vocab/{InactiveName}.{fingerprint}.tsv` (ADR-037 style:
+  a stale submitter writes its own key, never a newer table) with header
   `Phrase\tSoundsLike\tIPA\tDisplayAs`, four fields per row, at most 1,500 rows
   and 48 KB; invalid rows are dropped individually. The phrase validator is
   minimal (spaces become `-`, AWS table rules); `deriveTranscribePhrase` is not
   in this branch. ko-KR drops dotted acronyms until acceptance item 2. en-US
   needs five Latin-only phrases. The file is deleted after READY, FAILED or quota.
-- **Claims** need a changed fingerprint, no build younger than 30 minutes, and
+- **Claims** need a changed fingerprint, no claimed build, and
   `VOCAB_REBUILD_MIN_INTERVAL` (default 10m) since the last flip or build start;
   each manual write grants one bypass (kept as `bypassPending` during a build).
-  A FAILED table is retried only after a change or a manual write.
+  A FAILED table is retried only after a change or a manual write. A claimed
+  build is resumed or polled whatever its age; it is never reclaimed or deleted
+  without its provider state.
+- **Submit.** After writing the table file, a submit claim CAS (version,
+  `buildingFingerprint`) sets `buildSubmitted` and `submittedAt`; only the
+  winner calls Transcribe. A poll accepts READY or FAILED only when the
+  provider's `LastModifiedTime` is at or after `submittedAt` (5 s tolerance);
+  an older result (a reused slot whose submission never ran) or a missing name
+  resubmits.
 - **Errors.** `GetVocabulary` first; NotFound or the unknown-name BadRequest
   creates (a wrong guess fails safely with ConflictException), else update with
-  `VocabularyFileUri`. Conflict keeps the claim; LimitExceeded is
-  `QUOTA_EXCEEDED`; other BadRequest is FAILED. Classified by error code.
+  `VocabularyFileUri`. Conflict releases the submit claim for a later retry;
+  LimitExceeded is `QUOTA_EXCEEDED`; other BadRequest is FAILED; an ambiguous
+  error keeps the claim for the poll to verify. Classified by error code.
 - **Slots.** New names are `ttobak-vocab-{16 random hex}`. The demoted slot stays
-  inactive for 24 h after a flip (rebuildable in place, never advertised), then
-  is retired and deleted with retries: one vocabulary per language at rest, two
-  at peak. The derived legacy name is retired at its first flip (never rebuilt)
-  and deleted 24 h after the latest flip, so the next build takes a fresh name
-  at once (three names at peak until then). A failed poll is a `warnings` entry.
-- **Batch** uses `ActiveName` while `activeReady`; a pre-A/B in-place build
-  (no fingerprint) is still confirmed with Transcribe, as before.
+  inactive for 24 h after a flip (rebuildable in place, never advertised).
+  Retirement and deletion run only inside `EnsureVocabularies`, on the user's
+  next dictionary GET or write after the grace window (the GET each recording
+  start makes counts); there is no scheduled reclamation. Resting count per
+  user is therefore one ko-KR name after a first build, two after any later
+  flip until such a request, and up to three for a migrated legacy user (the
+  retired derived name waits for 24 h after the latest flip). Base used one.
+  A failed poll is a `warnings` entry.
+- **Flip opportunities.** Legacy `status` is `PENDING` while a build is in
+  flight, even over a READY active slot, so the shipped settings UI keeps
+  polling the GET, which flips. Each recording start also calls the GET.
+- **Batch** reads only: a submitted build verified READY (as in Submit) is used
+  before any flip, else `ActiveName` while `activeReady`; a pre-A/B in-place
+  build (no fingerprint) is still confirmed with Transcribe, as before. Live
+  streams receive no vocabulary name (below).
 - **No vocabulary name in responses** (the design added `vocabularyName`): the
   existing live client would send it as `VocabularyNames` on an
   `IdentifyMultipleLanguages` ko-KR/en-US stream, and a stream whose identified
   language matches no listed vocabulary may fail. It waits for item 5 and the
   live-config client.
-- **Empty language** stops advertising at once and is deleted after 24 h (the
-  design deferred both), so removed terms stop biasing recognition.
-- **Not covered:** batch en-US `LanguageIdSettings` (batch uses ko-KR only),
+- **Empty language** stops advertising at once and is deleted on the first
+  request after 24 h, as in Slots (the design deferred both), so removed terms
+  stop biasing recognition.
+- **Not covered:** en-US builds, batch en-US `LanguageIdSettings`, scheduled
+  reclamation of inactive or retired names,
   account contexts, live-config, client stream retry, and GatewayStack wiring
   of `VOCAB_REBUILD_MIN_INTERVAL`. An unmigratable legacy item keeps the pre-v2
   `Phrases` rebuild.
 
 Rollout acceptance (record each with a date):
 
-1. Vocabulary quota usage (default 100 per account; two per language per user at peak).
-2. A live Create from the four-column file reaches READY for ko-KR and en-US;
+1. Vocabulary quota usage (default 100 per account; up to three ko-KR names per
+   user at rest, as in Slots).
+2. A live Create from the four-column file reaches READY for ko-KR;
    whether ko-KR accepts dotted acronyms and the `DisplayAs` characters used.
 3. Whether deleting or updating a vocabulary affects an active stream or job.
 4. Whether `StartStreamTranscriptionWebSocket` has a vocabulary resource type
@@ -196,6 +221,8 @@ Rollout acceptance (record each with a date):
    vocabulary name bias their own stream; random names reduce that risk.
 5. Whether a multi-language stream with ko-KR-only or ko-KR plus en-US
    `VocabularyNames` survives en-US speech.
+6. That `GetVocabulary` `LastModifiedTime` advances on each accepted Create
+   and Update, which the submit verification relies on.
 
 ## Consequences and risks
 

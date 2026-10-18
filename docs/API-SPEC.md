@@ -653,12 +653,15 @@ never blocklisted (`terms_blocklist.txt`) or the term's own key; `phrase` at mos
   item that kept changing during migration.
 - Vocabularies (ADR-008 A/B builder amendment): the GET and every
   recognition-affecting manual write (one interval bypass each) call
-  `EnsureVocabularies`, which polls, flips or starts personal ko-KR/en-US
-  builds; failures are `warnings` and the active vocabulary keeps serving.
+  `EnsureVocabularies`, which polls, flips or starts the personal ko-KR build
+  (en-US is deferred and reports `NONE`); failures are `warnings` and the
+  active vocabulary keeps serving.
   `vocabularies: {ko, en}` gives `{status, activeReady, failureCode?, termCount}`
   per language (`status` `READY|BUILDING|FAILED|QUOTA_EXCEEDED|NONE` is the
-  latest build; `failureCode` `PROVIDER|QUOTA`). Legacy `status` is `READY`
-  whenever the personal ko-KR active vocabulary is ready. No response carries a
+  latest build; `failureCode` `PROVIDER|QUOTA`). Legacy `status` is `PENDING`
+  while a ko-KR build is in flight (so the settings UI keeps polling the GET,
+  which flips it), otherwise `READY` whenever the active vocabulary is ready.
+  No response carries a
   vocabulary name yet: the live client would send a ko-KR-only
   `VocabularyNames` on its ko-KR/en-US stream (ADR-008 acceptance item 5).
 

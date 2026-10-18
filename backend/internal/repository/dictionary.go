@@ -147,6 +147,10 @@ type VocabularyStateChange struct {
 	BypassPending       *bool
 	FlippedAt           *string
 	EmptySince          *string
+	SubmittedAt         *string
+	// ExpectBuildingFingerprint adds a buildingFingerprint condition to
+	// UpdateVocabularyState (submit claims and flips).
+	ExpectBuildingFingerprint *string
 }
 
 // DictWriteResult surfaces a failed best-effort observation cleanup after a
@@ -809,12 +813,16 @@ func vocabularyStateUpdate(change VocabularyStateChange, now string) expression.
 		"activeFingerprint": change.ActiveFingerprint, "buildingFingerprint": change.BuildingFingerprint,
 		"buildStartedAt": change.BuildStartedAt, "buildSubmitted": change.BuildSubmitted,
 		"bypassPending": change.BypassPending, "flippedAt": change.FlippedAt, "emptySince": change.EmptySince,
+		"submittedAt": change.SubmittedAt,
 	})
 }
 
 // UpdateVocabularyState applies a change to a VOCAB# row at the expected
 // version and bumps the version.
 func (r *DictionaryRepository) UpdateVocabularyState(ctx context.Context, userID, vocabContext, lang string, expectedVersion int64, change VocabularyStateChange, now string) error {
-	return r.guardedUpdate(ctx, dictKey(model.PrefixUser+userID, model.VocabSK(vocabContext, lang)), vocabularyStateUpdate(change, now),
-		expression.Name("version").Equal(expression.Value(expectedVersion)))
+	condition := expression.Name("version").Equal(expression.Value(expectedVersion))
+	if change.ExpectBuildingFingerprint != nil {
+		condition = condition.And(expression.Name("buildingFingerprint").Equal(expression.Value(*change.ExpectBuildingFingerprint)))
+	}
+	return r.guardedUpdate(ctx, dictKey(model.PrefixUser+userID, model.VocabSK(vocabContext, lang)), vocabularyStateUpdate(change, now), condition)
 }

@@ -34,9 +34,10 @@ func (o *fakeObjects) DeleteObject(_ context.Context, in *s3.DeleteObjectInput, 
 }
 
 type fakeVocabulary struct {
-	state tt.VocabularyState
-	lang  tt.LanguageCode
-	uri   string
+	state    tt.VocabularyState
+	lang     tt.LanguageCode
+	uri      string
+	modified time.Time // seeded vocabularies are older than any claim
 }
 
 // fakeTranscribe: unknown names are BadRequest on Get, NotFound on Delete.
@@ -44,6 +45,7 @@ type fakeTranscribe struct {
 	vocabs    map[string]*fakeVocabulary
 	calls     []string
 	createErr error // one-shot
+	now       func() time.Time
 }
 
 func apiError(code string) error { return &smithy.GenericAPIError{Code: code, Message: "synthetic"} }
@@ -53,7 +55,8 @@ func (f *fakeTranscribe) GetVocabulary(_ context.Context, in *transcribe.GetVoca
 	if !ok {
 		return nil, apiError("BadRequestException")
 	}
-	return &transcribe.GetVocabularyOutput{VocabularyName: in.VocabularyName, VocabularyState: v.state}, nil
+	modified := v.modified
+	return &transcribe.GetVocabularyOutput{VocabularyName: in.VocabularyName, VocabularyState: v.state, LastModifiedTime: &modified}, nil
 }
 
 func (f *fakeTranscribe) CreateVocabulary(_ context.Context, in *transcribe.CreateVocabularyInput, _ ...func(*transcribe.Options)) (*transcribe.CreateVocabularyOutput, error) {
@@ -66,7 +69,7 @@ func (f *fakeTranscribe) CreateVocabulary(_ context.Context, in *transcribe.Crea
 	if _, ok := f.vocabs[name]; ok || len(in.Phrases) > 0 {
 		return nil, apiError("ConflictException")
 	}
-	f.vocabs[name] = &fakeVocabulary{state: tt.VocabularyStatePending, lang: in.LanguageCode, uri: aws.ToString(in.VocabularyFileUri)}
+	f.vocabs[name] = &fakeVocabulary{state: tt.VocabularyStatePending, lang: in.LanguageCode, uri: aws.ToString(in.VocabularyFileUri), modified: f.now()}
 	return &transcribe.CreateVocabularyOutput{}, nil
 }
 
@@ -77,7 +80,7 @@ func (f *fakeTranscribe) UpdateVocabulary(_ context.Context, in *transcribe.Upda
 	if !ok || v.state == tt.VocabularyStatePending {
 		return nil, apiError("ConflictException")
 	}
-	v.state, v.uri = tt.VocabularyStatePending, aws.ToString(in.VocabularyFileUri)
+	v.state, v.uri, v.modified = tt.VocabularyStatePending, aws.ToString(in.VocabularyFileUri), f.now()
 	return &transcribe.UpdateVocabularyOutput{}, nil
 }
 
@@ -120,6 +123,7 @@ type builderFixture struct {
 func newBuilderFixture(t *testing.T, prefix string) *builderFixture {
 	fx := &builderFixture{store: migratedStore(), tr: &fakeTranscribe{vocabs: map[string]*fakeVocabulary{}},
 		objects: &fakeObjects{puts: map[string]string{}}, clock: time.Date(2026, 10, 18, 9, 0, 0, 0, time.UTC)}
+	fx.tr.now = func() time.Time { return fx.clock }
 	fx.svc = fx.newService(prefix)
 	return fx
 }
@@ -238,18 +242,23 @@ func TestEnsureVocabulariesFlipsOnlyOnReady(t *testing.T) {
 	fx.add("Alpha Grid", "Alpha-Grid")
 	fx.ensure(true)
 	first, second := name("a", 1), name("a", 2)
-	if ko := fx.ko(); ko.Status != model.VocabStatusBuilding || ko.InactiveName != first || !ko.BuildSubmitted || ko.ActiveName != "" {
+	ko := fx.ko()
+	if ko.Status != model.VocabStatusBuilding || ko.InactiveName != first || !ko.BuildSubmitted || ko.ActiveName != "" || ko.SubmittedAt == "" {
 		t.Fatalf("claim and submit the inactive slot: %+v", ko)
 	}
-	if v := fx.tr.vocabs[first]; v.uri != "s3://assets/vocab/"+first+".tsv" || v.lang != tt.LanguageCodeKoKr ||
-		fx.objects.puts["vocab/"+first+".tsv"] != VocabTSVHeader+"Alpha-Grid\t\t\tAlpha Grid\n" {
-		t.Fatalf("create from the fixed key: %+v %v", v, fx.objects.puts)
+	key := "vocab/" + first + "." + ko.BuildingFingerprint + ".tsv"
+	if v := fx.tr.vocabs[first]; len(ko.BuildingFingerprint) != 32 || v.uri != "s3://assets/"+key || v.lang != tt.LanguageCodeKoKr ||
+		fx.objects.puts[key] != VocabTSVHeader+"Alpha-Grid\t\t\tAlpha Grid\n" {
+		t.Fatalf("create from the fingerprint-bound key: %+v %v", v, fx.objects.puts)
 	}
 	fx.ensure(false)
 	if fx.ko().ActiveName != "" || fx.batch(t) != "" {
 		t.Fatal("PENDING is never used")
 	}
 	fx.tr.settle(tt.VocabularyStateReady)
+	if fx.batch(t) != first || fx.ko().ActiveName != "" {
+		t.Fatal("batch uses a verified READY build before any API call flips it")
+	}
 	views, _ := fx.ensure(false)
 	if ko := fx.ko(); ko.ActiveName != first || ko.InactiveName != "" || !ko.ActiveReady || ko.FlippedAt == "" ||
 		len(fx.objects.puts) != 0 || views.Ko.Status != model.VocabStatusReady || fx.batch(t) != first {
@@ -370,10 +379,89 @@ func TestEnsureVocabulariesIntervalBypassAndStaleBuild(t *testing.T) {
 	if fx.ensure(false); fx.ko().Status != model.VocabStatusBuilding {
 		t.Fatal("builds after the interval")
 	}
-	started := fx.ko().BuildStartedAt
+	aged := fx.ko()
+	calls := len(fx.tr.calls)
 	fx.after(31 * time.Minute)
-	if fx.ensure(false); fx.ko().BuildStartedAt == started {
-		t.Fatal("stale build reclaimed")
+	if fx.ensure(false); fx.ko().BuildStartedAt != aged.BuildStartedAt || fx.ko().InactiveName != aged.InactiveName || len(fx.tr.calls) != calls {
+		t.Fatalf("an aged PENDING build is polled, never reclaimed: %+v %v", fx.ko(), fx.tr.calls)
+	}
+	fx.tr.settle(tt.VocabularyStateReady)
+	if fx.ensure(false); fx.ko().ActiveName != aged.InactiveName || fx.ko().ActiveFingerprint != aged.BuildingFingerprint {
+		t.Fatalf("the aged build flips when READY: %+v", fx.ko())
+	}
+}
+
+func TestAgedFirstBuildIsPolledNotDeleted(t *testing.T) {
+	fx := newBuilderFixture(t, "a")
+	fx.add("Alpha Grid", "Alpha-Grid")
+	fx.ensure(true)
+	first := name("a", 1)
+	fx.after(2 * time.Hour) // FlippedAt is empty: no flip yet
+	if fx.ensure(false); fx.ko().InactiveName != first || fx.ko().RetiredName != "" || fx.tr.count("delete:") != 0 || fx.tr.vocabs[first] == nil {
+		t.Fatalf("a PENDING first build is never retired: %+v %v", fx.ko(), fx.tr.calls)
+	}
+	fx.tr.settle(tt.VocabularyStateReady)
+	fx.after(25 * time.Hour) // the user returns much later
+	if fx.ensure(false); fx.ko().ActiveName != first || fx.tr.count("delete:") != 0 || fx.tr.count("create:") != 1 {
+		t.Fatalf("a READY first build flips instead of restarting: %+v %v", fx.ko(), fx.tr.calls)
+	}
+}
+
+func TestStaleSubmitterNeverOverwritesNewerTable(t *testing.T) {
+	fx := newBuilderFixture(t, "a")
+	ctx := context.Background()
+	plan := func() vocabPlan {
+		rows, _ := fx.store.ListDictTerms(ctx, "USER#u1")
+		return planVocabulary(rows, model.VocabLangKo)
+	}
+	fx.add("Alpha Grid", "Alpha-Grid")
+	old := plan()
+	target := name("a", 9)
+	fx.seedState(model.VocabularyState{Status: model.VocabStatusBuilding, BuildingFingerprint: old.fingerprint, InactiveName: target,
+		BuildStartedAt: fx.clock.Format(model.DictTimeLayout), Version: 3})
+	stale := fx.ko() // request A read F1 and stalls
+	fx.add("Beta Node", "Beta-Node")
+	fx.ensure(false) // request B advances to F2 and submits
+	next := plan()
+	newKey := vocabObjectKey(target, next.fingerprint)
+	if ko := fx.ko(); ko.BuildingFingerprint != next.fingerprint || !ko.BuildSubmitted || fx.tr.vocabs[target].uri != "s3://assets/"+newKey {
+		t.Fatalf("B submits F2: %+v", ko)
+	}
+	if out := fx.svc.submitBuild(ctx, "u1", &stale, old); !out.more || fx.tr.count("create:")+fx.tr.count("update:") != 1 {
+		t.Fatalf("a stale submitter never reaches the provider: %+v %v", out, fx.tr.calls)
+	}
+	if fx.objects.puts[newKey] != next.body || fx.objects.puts[vocabObjectKey(target, old.fingerprint)] != old.body ||
+		fx.tr.vocabs[target].uri != "s3://assets/"+newKey {
+		t.Fatalf("the F1 table has its own key: %v", fx.objects.puts)
+	}
+	fx.tr.settle(tt.VocabularyStateReady)
+	if fx.ensure(false); fx.ko().ActiveName != target || fx.ko().ActiveFingerprint != next.fingerprint || fx.ko().TermCount != 2 {
+		t.Fatalf("the flip publishes F2 from the F2 table: %+v", fx.ko())
+	}
+}
+
+func TestSubmitClaimWithoutProviderCallResubmits(t *testing.T) {
+	fx := newBuilderFixture(t, "a")
+	fx.add("Alpha Grid", "Alpha-Grid")
+	rows, _ := fx.store.ListDictTerms(context.Background(), "USER#u1")
+	p := planVocabulary(rows, model.VocabLangKo)
+	active, slot := name("a", 1), name("a", 2)
+	// The claim was recorded, then the Lambda stopped before UpdateVocabulary:
+	// the reused slot still shows its older READY build.
+	fx.seedState(model.VocabularyState{ActiveName: active, ActiveReady: true, ActiveFingerprint: "old", InactiveName: slot,
+		Status: model.VocabStatusBuilding, BuildingFingerprint: p.fingerprint, BuildSubmitted: true,
+		BuildStartedAt: fx.clock.Format(model.DictTimeLayout), SubmittedAt: fx.clock.Format(model.DictTimeLayout),
+		FlippedAt: fx.clock.Add(-time.Hour).Format(model.DictTimeLayout), Version: 5}, active, slot)
+	fx.tr.vocabs[slot].modified = fx.clock.Add(-time.Hour)
+	if fx.batch(t) != active {
+		t.Fatal("batch never uses the older build as the claimed one")
+	}
+	if fx.ensure(false); fx.ko().ActiveName != active || fx.tr.count("update:"+slot) != 1 || !fx.ko().BuildSubmitted {
+		t.Fatalf("an older READY result resubmits instead of flipping: %+v %v", fx.ko(), fx.tr.calls)
+	}
+	fx.tr.settle(tt.VocabularyStateReady)
+	if fx.ensure(false); fx.ko().ActiveName != slot || fx.ko().ActiveFingerprint != p.fingerprint {
+		t.Fatalf("the resubmitted build flips: %+v", fx.ko())
 	}
 }
 
@@ -431,27 +519,29 @@ func TestBatchUsesProviderReadyLegacyBuild(t *testing.T) {
 	}
 }
 
-func TestEnsureVocabulariesEnglishThresholdAndEmptyLanguage(t *testing.T) {
+func TestEnsureVocabulariesDefersEnglishAndEmptiesLanguage(t *testing.T) {
 	fx := newBuilderFixture(t, "a")
 	for _, w := range []string{"Alpha", "Bravo", "Charlie", "Delta", "Echo"} {
 		fx.add(w+" Grid", w+"-Grid")
 	}
-	fx.ensure(true)
+	views, _ := fx.ensure(true)
 	fx.tr.settle(tt.VocabularyStateReady)
 	fx.ensure(false)
-	en := fx.state(model.VocabLangEn)
-	if !en.ActiveReady || en.TermCount != 5 || fx.tr.vocabs[en.ActiveName].lang != tt.LanguageCodeEnUs {
-		t.Fatalf("five Latin terms build en-US: %+v", en)
+	if _, ok := fx.store.vocab[model.VocabSK(model.VocabContextPersonal, model.VocabLangEn)]; ok || len(fx.tr.vocabs) != 1 ||
+		views.En.Status != model.VocabStatusNone || fx.tr.vocabs[fx.ko().ActiveName].lang != tt.LanguageCodeKoKr {
+		t.Fatalf("en-US has no consumer and is not built: %v", fx.tr.calls)
 	}
-	delete(fx.store.terms, model.DictTermSK(TermKey("Echo Grid")))
+	for _, w := range []string{"Alpha", "Bravo", "Charlie", "Delta", "Echo"} {
+		delete(fx.store.terms, model.DictTermSK(TermKey(w+" Grid")))
+	}
+	gone := fx.ko().ActiveName
 	fx.after(time.Minute)
 	fx.ensure(true)
-	if en = fx.state(model.VocabLangEn); en.ActiveReady || en.Status != model.VocabStatusNone || fx.tr.vocabs[en.ActiveName] == nil {
-		t.Fatalf("under five, en stops at once, kept 24 h: %+v", en)
+	if ko := fx.ko(); ko.ActiveReady || ko.Status != model.VocabStatusNone || fx.tr.vocabs[gone] == nil || fx.batch(t) != "" {
+		t.Fatalf("an emptied language stops at once, kept 24 h: %+v", ko)
 	}
-	gone := en.ActiveName
 	fx.after(24 * time.Hour)
-	if fx.ensure(false); fx.state(model.VocabLangEn).ActiveName != "" || fx.tr.vocabs[gone] != nil {
+	if fx.ensure(false); fx.ko().ActiveName != "" || fx.tr.vocabs[gone] != nil {
 		t.Fatalf("empty language deleted after 24 h")
 	}
 }
@@ -483,5 +573,15 @@ func TestDictionaryGetStartsBuildAndReportsVocabularies(t *testing.T) {
 	want := `"status":"READY","vocabularies":{"ko":{"status":"READY","activeReady":true,"termCount":1},"en":{"status":"NONE","activeReady":false,"termCount":0}}`
 	if !strings.Contains(string(raw), want) || strings.Contains(string(raw), "vocabularyName") {
 		t.Fatalf("response = %s", raw)
+	}
+	active := fx.ko().ActiveName
+	fx.add("Beta Node", "Beta-Node")
+	fx.ensure(true)
+	if resp, _ = fx.svc.GetDictionaryWithTerms(context.Background(), "u1"); resp.Status != "PENDING" || !resp.Vocabularies.Ko.ActiveReady || fx.batch(t) != active {
+		t.Fatalf("a replacement build reports PENDING so the legacy UI keeps polling: %+v", resp)
+	}
+	fx.tr.settle(tt.VocabularyStateReady)
+	if resp, _ = fx.svc.GetDictionaryWithTerms(context.Background(), "u1"); resp.Status != "READY" || fx.ko().ActiveName == active {
+		t.Fatalf("the polled GET flips the finished build: %+v", resp)
 	}
 }

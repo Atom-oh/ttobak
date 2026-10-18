@@ -190,18 +190,21 @@ func (s *DictionaryService) syncVocabularyState(ctx context.Context, userID stri
 	return &next
 }
 
-// legacyVocabularyStatus maps a VOCAB# row to the legacy API value. A READY
-// active slot reports READY even while a newer build runs or failed, so the
-// legacy client keeps using it; per-build status is in vocabularies.
+// legacyVocabularyStatus maps a VOCAB# row to the legacy API value. A build
+// in flight is PENDING even over a READY active slot: the shipped settings UI
+// polls the GET (which flips) only while PENDING. Otherwise a READY active
+// slot reports READY, also after a newer build failed; per-build status is in
+// vocabularies.
 func legacyVocabularyStatus(state *model.VocabularyState) string {
+	if state.Status == model.VocabStatusBuilding {
+		return "PENDING"
+	}
 	if state.ActiveReady && state.ActiveName != "" {
 		return "READY"
 	}
 	switch state.Status {
 	case model.VocabStatusReady:
 		return "READY"
-	case model.VocabStatusBuilding:
-		return "PENDING"
 	case model.VocabStatusFailed, model.VocabStatusQuotaExceeded:
 		return "FAILED"
 	}
@@ -288,16 +291,21 @@ func (s *DictionaryService) deleteLegacyBlobTerm(ctx context.Context, userID, ph
 	return err
 }
 
-// GetVocabularyForTranscription returns the personal ko-KR ActiveName when
-// it is READY, never a building slot. The VOCAB# row is authoritative when
-// present; the legacy blob is the fallback for users without one. It never
-// writes.
+// GetVocabularyForTranscription returns the personal ko-KR vocabulary for a
+// batch job: a submitted A/B build already READY at the provider (verified
+// against its submit claim, so it does not wait for an API call to flip),
+// else ActiveName when READY, never a pending slot. The VOCAB# row is
+// authoritative when present; the legacy blob is the fallback for users
+// without one. It never writes.
 func (s *DictionaryService) GetVocabularyForTranscription(ctx context.Context, userID string) (string, error) {
 	state, err := s.repo.GetVocabularyState(ctx, userID, model.VocabContextPersonal, model.VocabLangKo)
 	if err != nil {
 		return "", err
 	}
 	if state != nil {
+		if s.verifiedReadyBuild(ctx, state) {
+			return state.InactiveName, nil
+		}
 		if state.ActiveReady {
 			return s.readyVocabulary(ctx, state.ActiveName, true), nil
 		}

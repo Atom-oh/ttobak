@@ -326,10 +326,10 @@ func TestLegacyPutNeverTombstonesOrTouchesAutoRows(t *testing.T) {
 	if deleted != 0 || store.terms[model.DictTermSK(TermKey("Omega"))].Origin != model.TermOriginManual {
 		t.Fatalf("legacy PUT must create manual rows and never tombstone: %d tombstones", deleted)
 	}
-	table := fx.objects.puts["vocab/ttobak-vocab-a000000000000001.tsv"]
 	ko := fx.tr.vocabs["ttobak-vocab-a000000000000001"]
-	// Five Latin terms also qualify en-US, so two vocabularies are created.
-	if ko == nil || ko.lang != transcribeTypes.LanguageCodeKoKr || fx.tr.count("create:") != 2 || !strings.Contains(table, "Omega\t\t\tOmega\n") || resp.Status != "PENDING" {
+	table := fx.objects.puts[strings.TrimPrefix(ko.uri, "s3://assets/")]
+	// Five Latin terms would qualify en-US, but en-US builds are deferred.
+	if ko == nil || ko.lang != transcribeTypes.LanguageCodeKoKr || fx.tr.count("create:") != 1 || !strings.Contains(table, "Omega\t\t\tOmega\n") || resp.Status != "PENDING" {
 		t.Fatalf("legacy PUT must start an A/B build: %v %q %q", fx.tr.calls, table, resp.Status)
 	}
 	if len(resp.Terms) != 5 {
