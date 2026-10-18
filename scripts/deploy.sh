@@ -6,7 +6,7 @@ BUCKET="ttobak-site-180294183052-ap-northeast-2"
 DIST_ID="E3BPV9VFNI1H2S"
 
 # Usage: ./deploy.sh [target...]
-# Targets: infra, frontend, all (default: all)
+# Target: frontend (default). Infrastructure uses reviewed, explicit stack deploys.
 # Options: --build  Run build before deploying
 
 targets=()
@@ -20,34 +20,31 @@ for arg in "$@"; do
 done
 
 if [ ${#targets[@]} -eq 0 ]; then
-  targets=("all")
+  targets=("frontend")
 fi
 
 deploy_infra() {
-  echo "==> Deploying CDK stacks..."
-  cd "$ROOT/infra"
-  npx cdk deploy --all --require-approval never
-  echo "  CDK deploy complete"
+  echo "Use the reviewed infrastructure workflow or explicit --exclusively stack deployments." >&2
+  return 2
 }
 
 deploy_frontend() {
   echo "==> Deploying frontend to S3 + CloudFront..."
   cd "$ROOT/frontend"
-  aws s3 sync out/ "s3://${BUCKET}/" --delete
-  aws cloudfront create-invalidation --distribution-id "$DIST_ID" --paths "/*" --output text
+  S3_BUCKET="$BUCKET" CF_DISTRIBUTION="$DIST_ID" bash "$ROOT/scripts/publish-frontend.sh" out
   echo "  Frontend deploy complete"
 }
 
 if $do_build; then
-  "$ROOT/scripts/build.sh" all
+  "$ROOT/scripts/build.sh" frontend
 fi
 
 for target in "${targets[@]}"; do
   case "$target" in
     infra)    deploy_infra ;;
     frontend) deploy_frontend ;;
-    all)      deploy_infra; deploy_frontend ;;
-    *)        echo "Unknown target: $target (use: infra, frontend, all)"; exit 1 ;;
+    all)      deploy_infra ;;
+    *)        echo "Unknown target: $target (use: frontend)"; exit 1 ;;
   esac
 done
 

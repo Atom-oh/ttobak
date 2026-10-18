@@ -245,6 +245,13 @@ and unswept QA TTL fields are documented discrepancies, not claims of compliance
 
 ## References
 
+Application HTML and immutable Next assets use distinct CloudFront caching
+behaviors. The application response policy preserves browser/native service
+integrations; media/PDF policies remain separate. Frontend publication uploads
+referenced assets before forced no-cache HTML/RSC replacement, retains old chunks
+and preserves infrastructure-owned runtime config. See the
+[frontend release contract](runbooks/frontend-release.md) for source and live gates.
+
 - [Project constraints and accepted limits](../CLAUDE.md)
 - [API contracts](API-SPEC.md)
 - [Infrastructure](INFRA-SPEC.md)
