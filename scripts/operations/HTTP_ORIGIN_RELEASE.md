@@ -30,6 +30,26 @@ its verified-response protocol marker on existing content-free paths, rejects
 missing proofs, captures function code/configuration identities and rechecks
 them before mutation. Source ancestry alone is insufficient.
 
+The caller needs synchronous `lambda:InvokeFunction` permission for all four
+existing consumer targets: `ttobak-api:live`, `ttobak-api`, `ttobak-qa` and
+`ttobak-mcp`. The checks use a nonexistent public document, the QA
+unsupported-method path and static MCP discovery; they do not read private
+meeting content. GatewayStack's optional `ttobak:httpOriginReleaseCiRoleName`
+context adds those four exact same-account, same-region function or alias ARNs
+to its existing `ttobak-http-origin-release` policy. It keeps the three existing
+Secret operations on `HttpOriginSecretArn`: `GetSecretValue`, `PutSecretValue`
+and `UpdateSecretVersionStage`. It creates no role, trust policy or secret.
+Missing context or boolean `false` omits the whole optional policy.
+
+Initial secret creation remains a separate management-role bootstrap. For an
+already seeded deployment, verify the current state and resume that generation;
+do not repeat bootstrap or infer permission from a different caller's successful
+checks. A source or synthesized policy does not establish installed permissions,
+CI acceptance or a completed release. A future SDK `ClientError` from `Invoke`
+with exact code `AccessDeniedException` produces the fixed
+`CONSUMER_INVOKE_ACCESS_DENIED` incomplete receipt. Other provider failures keep
+their existing unknown-outcome classification; SDK messages are never printed.
+
 | Phase | Expiry and recovery |
 |---|---|
 | Before seeded bootstrap | Failed readiness/agreement changes no proof or environment |

@@ -7,7 +7,8 @@ notification delivery and synthetic failure/recovery separately.
 
 GatewayStack owns two seven-day queues with Amazon SQS-managed server-side
 encryption (SSE-SQS), Transport Layer Security (TLS), RETAIN on stack removal
-and no consumer or automatic redrive.
+and no consumer or automatic redrive. The separate STT recovery tick reads
+meeting state, not these queues.
 
 Fixed names can collide after stack deletion or rollback. Inventory ownership
 before recreation; preserve messages and review import or a new-name migration,
@@ -30,8 +31,11 @@ classification or output. Failure preserves prior content; publication requires
 the same unfinished attachment. Redelivery ignores completed/deleted/changed rows.
 
 Lambda success creates no destination record even after a recorded application
-error. ECS submission does not prove transcription: later GPU/Spot failures need
-meeting/device recovery and investigation. Check canonical state as well as metrics/queues.
+error. ECS submission does not prove transcription. Later GPU/Spot failures of
+single-file Whisper meetings are re-driven by the scheduled STT recovery tick
+(two attempts; see [STT troubleshooting](stt-pipeline-troubleshooting.md)).
+Multipart and checkpoint-only meetings still need meeting/device recovery and
+investigation. Check canonical state as well as metrics/queues.
 
 ## Alarm routing and release acceptance
 
