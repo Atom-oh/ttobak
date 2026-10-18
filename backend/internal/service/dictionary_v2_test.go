@@ -26,6 +26,8 @@ type fakeDictStore struct {
 	legacyCalls []string
 	vocabCalls  int
 	putErr      error
+	putErrAfter int // rows written before putErr is returned
+	onMark      func()
 }
 
 func newFakeDictStore() *fakeDictStore {
@@ -53,12 +55,51 @@ func (f *fakeDictStore) UpdateLegacyVocabularyStatus(_ context.Context, _ string
 	f.blob.VocabularyStatus = to
 	return nil
 }
-func (f *fakeDictStore) MarkDictionaryMigrated(_ context.Context, _ string, now string) error {
-	if f.blob == nil || f.blob.MigratedAt != "" {
+func (f *fakeDictStore) MarkDictionaryMigrated(_ context.Context, _ string, now string, rev int64, updatedAt string) error {
+	if f.onMark != nil {
+		hook := f.onMark
+		f.onMark = nil
+		hook()
+	}
+	if f.blob == nil || f.blob.MigratedAt != "" || f.blob.BlobRevision != rev || f.blob.UpdatedAt != updatedAt {
 		return cond()
 	}
 	f.blob.MigratedAt = now
 	return nil
+}
+func (f *fakeDictStore) ReplaceLegacyMigratedTerm(_ context.Context, _ string, key string, v int64, next *model.DictTerm) error {
+	sk := model.DictTermSK(key)
+	row, ok := f.terms[sk]
+	if !ok || !pristineLegacyRow(row) || row.Version != v {
+		return cond()
+	}
+	if next == nil {
+		delete(f.terms, sk)
+		return nil
+	}
+	n := *next
+	n.Version = v + 1
+	f.terms[sk] = n
+	return nil
+}
+
+// legacySave mimics a legacy PUT: new terms, revision and updatedAt.
+func (f *fakeDictStore) legacySave(terms ...model.DictionaryTerm) {
+	f.blob.Terms = terms
+	f.blob.BlobRevision++
+	f.blob.UpdatedAt = fmt.Sprintf("2026-10-18T09:00:%02dZ", f.blob.BlobRevision)
+}
+
+func (f *fakeDictStore) phrases(svc *DictionaryService) string {
+	resp, err := svc.GetDictionary(context.Background(), "u1")
+	if err != nil {
+		panic(err)
+	}
+	var got []string
+	for _, term := range resp.Terms {
+		got = append(got, term.Phrase+"/"+term.DisplayAs)
+	}
+	return strings.Join(got, "|")
 }
 func (f *fakeDictStore) ListDictTerms(context.Context, string) ([]model.DictTerm, error) {
 	out := []model.DictTerm{}
@@ -69,11 +110,11 @@ func (f *fakeDictStore) ListDictTerms(context.Context, string) ([]model.DictTerm
 	return out, nil
 }
 func (f *fakeDictStore) PutDictTermsIfAbsent(_ context.Context, terms []model.DictTerm) (int, error) {
-	if f.putErr != nil {
-		return 0, f.putErr
-	}
 	n := 0
-	for _, t := range terms {
+	for i, t := range terms {
+		if f.putErr != nil && i >= f.putErrAfter {
+			return n, f.putErr
+		}
 		if _, ok := f.terms[t.SK]; ok {
 			continue
 		}
@@ -209,7 +250,7 @@ func TestMigrateLegacyDictionaryIsNonDestructiveAndIdempotent(t *testing.T) {
 		t.Fatal("migration resurrected a tombstone")
 	}
 	resp, _ := svc.GetDictionary(context.Background(), "u1")
-	if len(resp.Terms) != 2 || resp.Terms[0].SoundsLike != "또박 싱크" || resp.Terms[1].DisplayAs != "베타 노드" {
+	if len(resp.Terms) != 2 || resp.Terms[0].SoundsLike != "또박 싱크" || resp.Terms[1].DisplayAs != "베타 노드" || resp.Terms[0].DisplayAs != "TtobakSync" {
 		t.Fatalf("migrated reader must keep blob order without the tombstone: %+v", resp.Terms)
 	}
 	state := store.vocab[model.VocabSK(model.VocabContextPersonal, model.VocabLangKo)]
@@ -303,6 +344,90 @@ func TestVocabularySyncLosesToConcurrentWriter(t *testing.T) {
 	}
 	if store.blob.VocabularyStatus != "PENDING" || len(store.blob.Terms) != 1 || store.saveCalls != 0 {
 		t.Fatalf("stale status sync overwrote a concurrent writer: %+v", store.blob)
+	}
+
+	// VOCAB#: the builder moves the row while the reader polls; the reader
+	// must report the builder's state, not its own lost update.
+	sk := model.VocabSK(model.VocabContextPersonal, model.VocabLangKo)
+	store = newFakeDictStore()
+	store.vocab[sk] = model.VocabularyState{SK: sk, Context: model.VocabContextPersonal, Language: model.VocabLangKo, ActiveName: "n1", Status: model.VocabStatusBuilding, Version: 3}
+	client = &fakeVocabClient{states: map[string]transcribeTypes.VocabularyState{"n1": transcribeTypes.VocabularyStateReady}}
+	client.onGet = func() {
+		s := store.vocab[sk]
+		s.Status, s.FailureCode, s.Version = model.VocabStatusQuotaExceeded, "QUOTA", 4
+		store.vocab[sk] = s
+	}
+	resp, err := newTestDictService(store, client).GetDictionary(context.Background(), "u1")
+	if err != nil || resp.Status != "FAILED" || store.vocab[sk].Version != 4 {
+		t.Fatalf("lost CAS must report the winner's state, got %q %v %+v", resp.Status, err, store.vocab[sk])
+	}
+}
+
+func TestMigrationPinsTheCopiedBlob(t *testing.T) {
+	store := newFakeDictStore()
+	store.blob = legacyBlob("")
+	store.blob.BlobRevision, store.blob.UpdatedAt = 1, "2026-10-18T09:00:01Z"
+	svc := newTestDictService(store, nil)
+	clock := time.Date(2026, 10, 18, 9, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { clock = clock.Add(time.Second); return clock }
+	// Between the copy and the mark the user adds Gamma and removes Alpha Grid.
+	store.onMark = func() {
+		store.legacySave(store.blob.Terms[0], store.blob.Terms[2], model.DictionaryTerm{Phrase: "Gamma", DisplayAs: "Gamma"})
+	}
+	if _, err := svc.MigrateLegacyDictionary(context.Background(), "u1"); err != nil {
+		t.Fatal(err)
+	}
+	if store.blob.MigratedAt == "" {
+		t.Fatal("migration must finish against the re-read blob")
+	}
+	if got := store.phrases(svc); got != "Ttobak-Sync/TtobakSync|/베타 노드|Gamma/Gamma" {
+		t.Fatalf("migrated rows must match the blob that was marked, got %q", got)
+	}
+}
+
+func TestPartialMigrationKeepsBlobAuthoritative(t *testing.T) {
+	store := newFakeDictStore()
+	store.blob = legacyBlob("")
+	svc := newTestDictService(store, nil)
+	store.putErr, store.putErrAfter = errors.New("throttled"), 2
+	if _, err := svc.MigrateLegacyDictionary(context.Background(), "u1"); err == nil || len(store.terms) != 2 || store.blob.MigratedAt != "" {
+		t.Fatalf("want a partial copy without migratedAt: %d rows %+v", len(store.terms), store.blob)
+	}
+	// The legacy DELETE drops Alpha Grid and edits SoundsLike on Ttobak-Sync.
+	store.legacySave(model.DictionaryTerm{Phrase: "Ttobak-Sync", SoundsLike: "또박", DisplayAs: "TtobakSync"}, store.blob.Terms[2])
+	if got := store.phrases(svc); got != "Ttobak-Sync/TtobakSync|/베타 노드" {
+		t.Fatalf("partial copies must not outlive a legacy delete, got %q", got)
+	}
+	store.putErr = nil
+	if _, err := svc.MigrateLegacyDictionary(context.Background(), "u1"); err != nil || store.blob.MigratedAt == "" {
+		t.Fatalf("re-run must complete: %v", err)
+	}
+	resp, _ := svc.GetDictionary(context.Background(), "u1")
+	if len(resp.Terms) != 2 || resp.Terms[0].SoundsLike != "또박" || len(store.terms) != 2 {
+		t.Fatalf("re-run must reconcile stale copies: %+v rows=%d", resp.Terms, len(store.terms))
+	}
+}
+
+func TestMigrationRefusesLossyBlobs(t *testing.T) {
+	for name, terms := range map[string][]model.DictionaryTerm{
+		"shared display": {{Phrase: "AWS", DisplayAs: "AWS"}, {Phrase: "에이더블유에스", DisplayAs: "AWS"}},
+		"same key":       {{Phrase: "A.I"}, {Phrase: "AI"}},
+		"no key":         {{Phrase: "Delta"}, {Phrase: "-"}},
+	} {
+		store := newFakeDictStore()
+		store.blob = &model.UserDictionary{UserID: "u1", Terms: terms}
+		_, err := newTestDictService(store, nil).MigrateLegacyDictionary(context.Background(), "u1")
+		if !errors.Is(err, ErrLegacyDictionaryConflict) || len(store.terms) != 0 || store.blob.MigratedAt != "" {
+			t.Fatalf("%s: lossy blob must not migrate: %v rows=%d", name, err, len(store.terms))
+		}
+	}
+	store := newFakeDictStore()
+	store.blob = &model.UserDictionary{UserID: "u1", Terms: []model.DictionaryTerm{{Phrase: "Delta"}, {Phrase: "Delta"}}}
+	if _, err := newTestDictService(store, nil).MigrateLegacyDictionary(context.Background(), "u1"); err != nil || len(store.terms) != 1 {
+		t.Fatalf("exact duplicates collapse: %v", err)
+	}
+	if got := store.phrases(newTestDictService(store, nil)); got != "Delta/" {
+		t.Fatalf("empty legacy displayAs must stay empty after migration, got %q", got)
 	}
 }
 

@@ -50,21 +50,33 @@ readers only: no extraction, term CRUD route, vocabulary builder or UI change.
   `NormalizeTermKey(displayAs)` (NFKC, lowercase, whitespace and `- . _ ·`
   removed). Rows carry `origin=manual|auto`, `state=active|suggested|deleted`
   and a `version` that guards every update. A user edit sets `userEditedAt`,
-  which blocks automatic merge and eviction. Delete leaves a content-free
-  tombstone; creates require `attribute_not_exists(PK)`, so a tombstoned term is
-  never re-added automatically.
+  which blocks automatic merge and eviction. Delete leaves a tombstone that
+  drops the content, counters and recognition flags but keeps `termKey`, scope,
+  origin, state, version and timestamps; creates require
+  `attribute_not_exists(PK)`, so a tombstoned term is never re-added
+  automatically. `termKey` is an unsalted hash of a short, often guessable
+  term, so anyone who can read the table can confirm a deleted term by hashing
+  candidates. Tombstones have no TTL and live as long as the owning partition;
+  a salted key or a retention limit is an open decision for the term CRUD work.
 - **Observations** `DICTOBS#{termKey}#{meetingId}` record provenance per meeting.
   A merge creates the observation and bumps the term (`ADD hits 1`) in one
   transaction, so re-running a meeting never inflates `hits`.
 - **Vocabulary state** `VOCAB#{ctx}#{lang}` holds the active Transcribe name and
   build status under a version guard.
 - **Non-destructive migration.** `MigrateLegacyDictionary` copies blob terms into
-  `origin=manual` rows (existing rows and tombstones win), writes
-  `VOCAB#personal#ko-KR` with the existing vocabulary name, then sets
-  `migratedAt`. It never removes blob fields and is safe to re-run. It has no
-  caller yet; term CRUD must first move the legacy PUT/DELETE onto rows.
+  `origin=manual` rows marked `legacyMigrated` (other existing rows and
+  tombstones win), reconciles pristine copies left by an earlier partial run,
+  writes `VOCAB#personal#ko-KR` with the existing vocabulary name, then sets
+  `migratedAt` only if the blob still has the `blobRevision` and `updatedAt` it
+  copied; every legacy PUT bumps `blobRevision`, and a changed blob re-runs the
+  copy. Blobs whose distinct terms share a `termKey`, or have none, are refused
+  with `ErrLegacyDictionaryConflict` and nothing is written; exact duplicates
+  collapse. An empty legacy `displayAs` is still returned as empty. Migration
+  never removes blob fields and is safe to re-run. It has no caller yet; term
+  CRUD must first move the legacy PUT/DELETE onto rows and resolve refused blobs.
 - **Readers.** `GetDictionary` keeps the legacy response: active rows plus blob
-  terms (rows and tombstones win by `termKey`) before `migratedAt`, rows only
+  terms (rows and tombstones win by `termKey`; pristine legacy copies are
+  ignored, so the blob stays authoritative) before `migratedAt`, rows only
   after. Status sync is a conditional update of the `VOCAB#` row, or of the
   blob's status for the observed name and status; the unconditional whole-item
   `PutItem` is gone and the legacy PUT updates only its own fields.

@@ -22,6 +22,9 @@ type UserDictionary struct {
 	// rows. v2 readers ignore the blob terms afterwards; the blob itself is
 	// retained until every reader is on v2.
 	MigratedAt string `dynamodbav:"migratedAt,omitempty" json:"-"`
+	// BlobRevision is bumped by every legacy terms write so migration can
+	// pin the blob it copied. Absent on blobs written before v2.
+	BlobRevision int64 `dynamodbav:"blobRevision,omitempty" json:"-"`
 }
 
 // Key prefix for dictionary records
@@ -79,8 +82,9 @@ const (
 	EntityTypeVocabularyState = "VOCABULARY_STATE"
 )
 
-// DictTerm is one dictionary term row. A tombstone keeps only its key, state
-// and timestamps so the term is never automatically re-added.
+// DictTerm is one dictionary term row. A tombstone drops the term content and
+// counters but keeps its (unsalted, guessable) termKey hash, origin, state and
+// timestamps so the term is never automatically re-added.
 type DictTerm struct {
 	PK                   string   `dynamodbav:"PK"`
 	SK                   string   `dynamodbav:"SK"`
@@ -108,6 +112,13 @@ type DictTerm struct {
 	UpdatedBy            string   `dynamodbav:"updatedBy,omitempty"`
 	Version              int64    `dynamodbav:"version"`
 	EntityType           string   `dynamodbav:"entityType"`
+	// LegacyMigrated marks a row copied from the legacy blob. Until
+	// migratedAt such a row, while active and unedited, is only a copy: the
+	// blob stays authoritative and migration may rewrite or delete it.
+	LegacyMigrated bool `dynamodbav:"legacyMigrated,omitempty"`
+	// LegacyDisplayEmpty records that the blob term had no displayAs, so the
+	// legacy response keeps returning "" although displayAs fell back to phrase.
+	LegacyDisplayEmpty bool `dynamodbav:"legacyDisplayEmpty,omitempty"`
 }
 
 // DictObservation records that one meeting produced evidence for a term. It

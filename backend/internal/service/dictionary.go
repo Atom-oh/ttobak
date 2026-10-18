@@ -23,9 +23,10 @@ type DictionaryStore interface {
 	GetDictionary(ctx context.Context, userID string) (*model.UserDictionary, error)
 	SaveDictionary(ctx context.Context, dict *model.UserDictionary) error
 	UpdateLegacyVocabularyStatus(ctx context.Context, userID, vocabName, from, to string) error
-	MarkDictionaryMigrated(ctx context.Context, userID, now string) error
+	MarkDictionaryMigrated(ctx context.Context, userID, now string, observedRevision int64, observedUpdatedAt string) error
 	ListDictTerms(ctx context.Context, pk string) ([]model.DictTerm, error)
 	PutDictTermsIfAbsent(ctx context.Context, terms []model.DictTerm) (int, error)
+	ReplaceLegacyMigratedTerm(ctx context.Context, pk, termKey string, expectedVersion int64, next *model.DictTerm) error
 	GetVocabularyState(ctx context.Context, userID, vocabContext, lang string) (*model.VocabularyState, error)
 	CreateVocabularyStateIfAbsent(ctx context.Context, state *model.VocabularyState) error
 	UpdateVocabularyState(ctx context.Context, userID, vocabContext, lang string, expectedVersion int64, change repository.VocabularyStateChange, now string) error
@@ -100,11 +101,16 @@ func (s *DictionaryService) personalVocabularyStatus(ctx context.Context, userID
 		return status
 	}
 	if err := s.repo.UpdateLegacyVocabularyStatus(ctx, userID, dict.VocabularyName, status, next); err != nil {
-		// A condition failure means a concurrent writer changed the blob;
-		// its newer state wins.
 		if !errors.Is(err, repository.ErrConditionFailed) {
 			log.Printf("failed to sync vocabulary status for user %s: %v", userID, err)
+			return next
 		}
+		// A concurrent writer changed the blob; report its newer state.
+		current, readErr := s.repo.GetDictionary(ctx, userID)
+		if readErr != nil || current == nil {
+			return status
+		}
+		return current.VocabularyStatus
 	}
 	return next
 }
@@ -149,7 +155,15 @@ func (s *DictionaryService) syncVocabularyState(ctx context.Context, userID stri
 	}
 	change := repository.VocabularyStateChange{Status: &next.Status, ActiveReady: &next.ActiveReady, FailureCode: &next.FailureCode}
 	err := s.repo.UpdateVocabularyState(ctx, userID, state.Context, state.Language, state.Version, change, s.now().Format(model.DictTimeLayout))
-	if err != nil && !errors.Is(err, repository.ErrConditionFailed) {
+	if errors.Is(err, repository.ErrConditionFailed) {
+		// A concurrent writer moved the row; report its state, not ours.
+		current, readErr := s.repo.GetVocabularyState(ctx, userID, state.Context, state.Language)
+		if readErr != nil || current == nil {
+			return state
+		}
+		return current
+	}
+	if err != nil {
 		log.Printf("failed to sync vocabulary state for user %s: %v", userID, err)
 	}
 	return &next

@@ -54,19 +54,31 @@ func cancelled(codes ...string) string {
 
 const conditionalFailed = `{"__type":"com.amazonaws.dynamodb.v20120810#ConditionalCheckFailedException","message":"failed"}`
 
-// resolved returns the expression with names and values substituted.
+// resolved returns the expression with names and values substituted; longer
+// aliases go first so #1 never rewrites part of #10.
 func resolved(op map[string]any, field string) string {
 	expr, _ := op[field].(string)
+	var pairs []string
 	if names, ok := op["ExpressionAttributeNames"].(map[string]any); ok {
 		for alias, name := range names {
-			expr = strings.ReplaceAll(expr, alias, name.(string))
+			pairs = append(pairs, alias, name.(string))
 		}
 	}
 	if values, ok := op["ExpressionAttributeValues"].(map[string]any); ok {
 		for alias, value := range values {
 			encoded, _ := json.Marshal(value)
-			expr = strings.ReplaceAll(expr, alias, string(encoded))
+			pairs = append(pairs, alias, string(encoded))
 		}
+	}
+	for n := len(pairs) / 2; n > 0; n-- { // longest alias first
+		best := 0
+		for i := 2; i < 2*n; i += 2 {
+			if len(pairs[i]) > len(pairs[best]) {
+				best = i
+			}
+		}
+		expr = strings.ReplaceAll(expr, pairs[best], pairs[best+1])
+		pairs = append(pairs[:best], pairs[best+2:]...)
 	}
 	return expr
 }
@@ -112,6 +124,7 @@ func TestSaveDictionaryIsFieldScopedUpsert(t *testing.T) {
 	if strings.Contains(update, "migratedAt") || strings.Contains(update, "REMOVE") {
 		t.Fatalf("legacy write must preserve migratedAt: %s", update)
 	}
+	requireAll(t, "legacy write", update, `ADD blobRevision {"N":"1"}`)
 }
 
 // guardCase runs one write against a response and checks the mapped error
@@ -132,17 +145,35 @@ func TestDictionaryWriteGuards(t *testing.T) {
 	key := term.TermKey
 	merge := DictMergeInput{PK: "USER#u1", TermKey: key, Observation: obs, HeardAs: []string{"알파"}, SeenAt: "now", ExpectedVersion: 3}
 	phrase, ready := "Alpha-Grid", model.VocabStatusReady
+	legacyGuard := []string{`legacyMigrated = {"BOOL":true}`, `version = {"N":"1"}`, `state = {"S":"active"}`, `origin = {"S":"manual"}`, "attribute_not_exists (userEditedAt)"}
 	cases := []guardCase{
 		{"legacy status sync pins observed name and status", conditionalFailed,
 			func(r *DictionaryRepository) error {
 				return r.UpdateLegacyVocabularyStatus(context.Background(), "u1", "ttobak-vocab-x", "PENDING", "READY")
 			},
 			ErrDictTermConflict, "", 0, []string{`vocabularyName = {"S":"ttobak-vocab-x"}`, `vocabularyStatus = {"S":"PENDING"}`}, []string{"terms"}},
-		{"migration mark is set once and removes nothing", conditionalFailed,
+		{"migration mark is set once on the copied blob and removes nothing", conditionalFailed,
 			func(r *DictionaryRepository) error {
-				return r.MarkDictionaryMigrated(context.Background(), "u1", "now")
+				return r.MarkDictionaryMigrated(context.Background(), "u1", "now", 7, "2026-10-18T09:00:00Z")
 			},
-			ErrDictTermConflict, "", 0, []string{"attribute_not_exists (migratedAt)"}, []string{"REMOVE", "terms", "vocabulary"}},
+			ErrDictTermConflict, "", 0, []string{"attribute_not_exists (migratedAt)", `blobRevision = {"N":"7"}`, `updatedAt = {"S":"2026-10-18T09:00:00Z"}`}, []string{"REMOVE", "terms", "vocabulary"}},
+		{"pre-v2 blob mark requires no revision", conditionalFailed,
+			func(r *DictionaryRepository) error {
+				return r.MarkDictionaryMigrated(context.Background(), "u1", "now", 0, "")
+			},
+			ErrDictTermConflict, "", 0, []string{"attribute_not_exists (blobRevision)", "attribute_not_exists (updatedAt)"}, nil},
+		{"legacy copy refresh only touches pristine copies", conditionalFailed,
+			func(r *DictionaryRepository) error {
+				next := *term
+				next.Origin, next.LegacyMigrated = model.TermOriginManual, true
+				return r.ReplaceLegacyMigratedTerm(context.Background(), "USER#u1", key, 1, &next)
+			},
+			ErrDictTermConflict, "", 0, legacyGuard, nil},
+		{"legacy copy removal only touches pristine copies", conditionalFailed,
+			func(r *DictionaryRepository) error {
+				return r.ReplaceLegacyMigratedTerm(context.Background(), "USER#u1", key, 1, nil)
+			},
+			ErrDictTermConflict, "", 0, legacyGuard, nil},
 		{"vocabulary state update is version guarded", conditionalFailed,
 			func(r *DictionaryRepository) error {
 				return r.UpdateVocabularyState(context.Background(), "u1", model.VocabContextPersonal, model.VocabLangKo, 3, VocabularyStateChange{Status: &ready}, "now")
@@ -241,7 +272,7 @@ func TestDictionaryWriteEffects(t *testing.T) {
 	if err != nil || res.CleanupErr == nil {
 		t.Fatalf("tombstone must commit and surface the cleanup failure: %v %v", err, res.CleanupErr)
 	}
-	requireAll(t, "tombstone", resolved((*calls)[0].body, "UpdateExpression"), "REMOVE", "displayAs", "phrase", "heardAs", `"deleted"`)
+	requireAll(t, "tombstone", resolved((*calls)[0].body, "UpdateExpression"), "REMOVE", "displayAs", "phrase", "heardAs", "type", "aliasMode", "lastSeenAt", `hits = {"N":"0"}`, `"deleted"`)
 
 	repo, calls = dictWire(t, nil)
 	if err := repo.MergeAutoObservation(context.Background(), DictMergeInput{PK: "USER#u1", TermKey: key, Observation: obs, ExpectedVersion: 1}); err != nil {

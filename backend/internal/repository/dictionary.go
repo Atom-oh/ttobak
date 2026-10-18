@@ -165,15 +165,16 @@ func (r *DictionaryRepository) GetDictionary(ctx context.Context, userID string)
 	return &dict, nil
 }
 
-// SaveDictionary writes the legacy blob's terms and vocabulary fields. It is
-// a field-scoped upsert so it never clears migratedAt.
+// SaveDictionary writes the legacy blob's terms and vocabulary fields and
+// bumps blobRevision. It is a field-scoped upsert so it never clears migratedAt.
 func (r *DictionaryRepository) SaveDictionary(ctx context.Context, dict *model.UserDictionary) error {
 	update := expression.Set(expression.Name("userId"), expression.Value(dict.UserID)).
 		Set(expression.Name("terms"), expression.Value(dict.Terms)).
 		Set(expression.Name("vocabularyName"), expression.Value(dict.VocabularyName)).
 		Set(expression.Name("vocabularyStatus"), expression.Value(dict.VocabularyStatus)).
 		Set(expression.Name("updatedAt"), expression.Value(dict.UpdatedAt)).
-		Set(expression.Name("entityType"), expression.Value("DICTIONARY"))
+		Set(expression.Name("entityType"), expression.Value("DICTIONARY")).
+		Add(expression.Name("blobRevision"), expression.Value(1))
 	expr, err := expression.NewBuilder().WithUpdate(update).Build()
 	if err != nil {
 		return fmt.Errorf("failed to build dictionary update: %w", err)
@@ -201,12 +202,61 @@ func (r *DictionaryRepository) UpdateLegacyVocabularyStatus(ctx context.Context,
 		expression.Set(expression.Name("vocabularyStatus"), expression.Value(to)), condition)
 }
 
-// MarkDictionaryMigrated sets migratedAt once. It never removes blob terms.
-func (r *DictionaryRepository) MarkDictionaryMigrated(ctx context.Context, userID, now string) error {
+// MarkDictionaryMigrated sets migratedAt once, only while the blob is still
+// at the revision and updatedAt that migration copied. It never removes blob
+// terms.
+func (r *DictionaryRepository) MarkDictionaryMigrated(ctx context.Context, userID, now string, observedRevision int64, observedUpdatedAt string) error {
+	revision := expression.AttributeNotExists(expression.Name("blobRevision"))
+	if observedRevision != 0 {
+		revision = expression.Name("blobRevision").Equal(expression.Value(observedRevision))
+	}
+	updatedAt := expression.AttributeNotExists(expression.Name("updatedAt"))
+	if observedUpdatedAt != "" {
+		updatedAt = expression.Name("updatedAt").Equal(expression.Value(observedUpdatedAt))
+	}
 	condition := expression.AttributeExists(expression.Name("PK")).
-		And(expression.AttributeNotExists(expression.Name("migratedAt")))
+		And(expression.AttributeNotExists(expression.Name("migratedAt"))).
+		And(revision).And(updatedAt)
 	return r.guardedUpdate(ctx, dictKey(model.PrefixUser+userID, model.PrefixDictionary),
 		expression.Set(expression.Name("migratedAt"), expression.Value(now)), condition)
+}
+
+// ReplaceLegacyMigratedTerm rewrites (next != nil) or deletes (next == nil) a
+// pristine legacy-migrated row: active, manual, unedited, at expectedVersion.
+// Migration uses it to bring earlier copies back in line with the blob.
+func (r *DictionaryRepository) ReplaceLegacyMigratedTerm(ctx context.Context, pk, termKey string, expectedVersion int64, next *model.DictTerm) error {
+	condition := expression.Name("legacyMigrated").Equal(expression.Value(true)).
+		And(expression.Name("version").Equal(expression.Value(expectedVersion))).
+		And(expression.Name("state").Equal(expression.Value(model.TermStateActive))).
+		And(expression.Name("origin").Equal(expression.Value(model.TermOriginManual))).
+		And(expression.AttributeNotExists(expression.Name("userEditedAt")))
+	expr, err := expression.NewBuilder().WithCondition(condition).Build()
+	if err != nil {
+		return err
+	}
+	if next == nil {
+		_, err = r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+			TableName: aws.String(r.tableName), Key: dictKey(pk, model.DictTermSK(termKey)),
+			ConditionExpression: expr.Condition(), ExpressionAttributeNames: expr.Names(),
+			ExpressionAttributeValues: expr.Values(),
+		})
+		return dictSingleError(err, ErrDictTermConflict)
+	}
+	if next.PK != pk || next.TermKey != termKey || next.SK != model.DictTermSK(termKey) || !next.LegacyMigrated {
+		return fmt.Errorf("invalid legacy term replacement")
+	}
+	replacement := *next
+	replacement.Version = expectedVersion + 1
+	av, err := attributevalue.MarshalMap(&replacement)
+	if err != nil {
+		return err
+	}
+	_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: aws.String(r.tableName), Item: av,
+		ConditionExpression: expr.Condition(), ExpressionAttributeNames: expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	return dictSingleError(err, ErrDictTermConflict)
 }
 
 func (r *DictionaryRepository) queryPrefix(ctx context.Context, pk, prefix string, visit func(map[string]types.AttributeValue) error) error {
@@ -438,6 +488,8 @@ func (r *DictionaryRepository) UpdateDictTerm(ctx context.Context, pk, termKey s
 
 // TombstoneDictTerm replaces a term with a tombstone so it is never
 // automatically re-added, then deletes its observations best effort.
+// The tombstone keeps termKey, scope, origin, state, version and timestamps;
+// content, counters and recognition flags are cleared.
 func (r *DictionaryRepository) TombstoneDictTerm(ctx context.Context, pk, termKey, actor, now string, expectedVersion int64) (DictWriteResult, error) {
 	update := expression.Set(expression.Name("state"), expression.Value(model.TermStateDeleted)).
 		Set(expression.Name("deletedAt"), expression.Value(now)).
@@ -449,7 +501,14 @@ func (r *DictionaryRepository) TombstoneDictTerm(ctx context.Context, pk, termKe
 		Remove(expression.Name("heardAs")).
 		Remove(expression.Name("sourceTypes")).
 		Remove(expression.Name("firstSourceMeetingId")).
-		Remove(expression.Name("confidence"))
+		Remove(expression.Name("confidence")).
+		Remove(expression.Name("type")).
+		Remove(expression.Name("aliasMode")).
+		Remove(expression.Name("lastSeenAt")).
+		Remove(expression.Name("legacyDisplayEmpty")).
+		Set(expression.Name("hits"), expression.Value(0)).
+		Set(expression.Name("transcribeKo"), expression.Value(false)).
+		Set(expression.Name("transcribeEn"), expression.Value(false))
 	condition := expression.Name("version").Equal(expression.Value(expectedVersion)).
 		And(expression.Name("state").NotEqual(expression.Value(model.TermStateDeleted)))
 	if err := r.updateTerm(ctx, pk, termKey, update, condition); err != nil {
