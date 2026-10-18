@@ -363,7 +363,7 @@ func (m *TermsMerger) mergeOne(ctx context.Context, pk string, c mergeCandidate,
 		if errors.Is(err, repository.ErrDictTermConflict) || errors.Is(err, repository.ErrDictTransactionConflict) {
 			continue // re-read and retry
 		}
-		if errors.Is(err, repository.ErrDictTransactionCancelled) {
+		if errors.Is(err, repository.ErrDictTransactionCancelled) || errors.Is(err, repository.ErrDictSourceMeetingGone) {
 			// A cancelled transaction applied nothing.
 			return outcomeSkipped, fmt.Errorf("failed to merge dictionary term: %w", err)
 		}

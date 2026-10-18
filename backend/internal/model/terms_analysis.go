@@ -58,6 +58,7 @@ type TermsCounters struct {
 // sourceHash of the last succeeded run; a new run is queued only for a
 // different source. AcceptedTerms accumulates across runs for the meeting.
 type TermsAnalysis struct {
+	OwnerID             string              `dynamodbav:"ownerId,omitempty" json:"-"` // meeting owner; binds deletion sweeps
 	RunID               string              `dynamodbav:"runId" json:"runId,omitempty"`
 	Status              string              `dynamodbav:"status" json:"status"`
 	SourceHash          string              `dynamodbav:"sourceHash" json:"-"`
