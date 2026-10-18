@@ -18,7 +18,7 @@ describe('GatewayStack', () => {
       .filter(resource => JSON.stringify(resource.Properties.FunctionName).includes('KbFunction'));
   }
 
-  function buildTemplate(indexingMode: 'manual-only' | 'all' = 'manual-only', scheduleEnabled = false, mcpResourceAudience?: string, audioCropEnabled = false, cloudfrontDomain: string | null = 'd2olomx8td8txt.cloudfront.net', save?: (g: Template, r: Template) => void, originReleaseCiRoleName?: unknown): Template {
+  function buildTemplate(indexingMode: 'manual-only' | 'all' = 'manual-only', scheduleEnabled = false, mcpResourceAudience?: string, audioCropEnabled = false, cloudfrontDomain: string | null = 'd2olomx8td8txt.cloudfront.net', save?: (g: Template, r: Template) => void, originReleaseCiRoleName?: unknown, extraContext: Record<string, unknown> = {}): Template {
     const app = new cdk.App({
       context: {
         ...(cloudfrontDomain === null ? {} : { 'ttobak:cloudfrontDomain': cloudfrontDomain }),
@@ -26,6 +26,7 @@ describe('GatewayStack', () => {
         'ttobak:audioCropEnabled': audioCropEnabled,
         ...(mcpResourceAudience === undefined ? {} : { 'ttobak:mcpResourceAudience': mcpResourceAudience }),
         ...(originReleaseCiRoleName === undefined ? {} : { 'ttobak:httpOriginReleaseCiRoleName': originReleaseCiRoleName }),
+        ...extraContext,
       },
     });
 
@@ -76,7 +77,21 @@ describe('GatewayStack', () => {
     template = buildTemplate();
   });
 
-  test('the existing CI role receives only exact-ARN rotation permissions in Gateway', () => {
+  test('the API and WebSocket authorizer allowlist only the first-party app clients', () => {
+    const template = buildTemplate();
+    const fns = Object.values(template.findResources('AWS::Lambda::Function'));
+    const env = (name: string) => {
+      const matches = fns.filter(fn => fn.Properties.FunctionName === name);
+      expect(matches).toHaveLength(1);
+      return matches[0].Properties.Environment.Variables;
+    };
+    // exactly the injected first-party client (CDK folds the one-item join); never a companion client
+    const firstParty = { 'Fn::ImportValue': expect.stringContaining('ExportsOutputRefUserPoolClient') };
+    expect(env('ttobak-ws-authorizer').WS_ALLOWED_CLIENT_IDS).toEqual(firstParty);
+    expect(env('ttobak-api').API_ALLOWED_CLIENT_IDS).toEqual(firstParty);
+  });
+
+  test('the existing CI policy retains exact secret permissions and adds only four consumer invoke ARNs', () => {
     const ciRoleName = 'mall-apne2-mgmt-ci-runner';
     const enabled = buildTemplate(undefined, undefined, undefined, undefined, undefined, undefined, ciRoleName);
     const synthesized = enabled.toJSON();
@@ -85,6 +100,7 @@ describe('GatewayStack', () => {
       resource.Type === 'AWS::IAM::Policy' && resource.Properties.Roles?.includes(ciRoleName));
     expect(grants).toHaveLength(1);
     const [policyId, policy]: [string, any] = grants[0];
+    expect(policyId).toBe('HttpOriginReleaseCiPolicy84DAB38C');
     expect(policy.Properties).toEqual({
       PolicyName: 'ttobak-http-origin-release',
       Roles: [ciRoleName],
@@ -95,6 +111,19 @@ describe('GatewayStack', () => {
           Action: ['secretsmanager:GetSecretValue', 'secretsmanager:PutSecretValue',
             'secretsmanager:UpdateSecretVersionStage'],
           Resource: { Ref: 'HttpOriginSecretArn' },
+        }, {
+          Effect: 'Allow',
+          Action: 'lambda:InvokeFunction',
+          Resource: [
+            { 'Fn::Join': ['', ['arn:', { Ref: 'AWS::Partition' }, ':lambda:', { Ref: 'AWS::Region' },
+              ':', { Ref: 'AWS::AccountId' }, ':function:ttobak-api']] },
+            { 'Fn::Join': ['', ['arn:', { Ref: 'AWS::Partition' }, ':lambda:', { Ref: 'AWS::Region' },
+              ':', { Ref: 'AWS::AccountId' }, ':function:ttobak-api:live']] },
+            { 'Fn::Join': ['', ['arn:', { Ref: 'AWS::Partition' }, ':lambda:', { Ref: 'AWS::Region' },
+              ':', { Ref: 'AWS::AccountId' }, ':function:ttobak-qa']] },
+            { 'Fn::Join': ['', ['arn:', { Ref: 'AWS::Partition' }, ':lambda:', { Ref: 'AWS::Region' },
+              ':', { Ref: 'AWS::AccountId' }, ':function:ttobak-mcp']] },
+          ],
         }],
       },
     });
@@ -295,6 +324,38 @@ for bad in ({'Ref':'OtherRole'}, {'Fn::ImportValue':'unknown'}, qa):
     expect(withInterpreter.map(resource => resource.Properties.FunctionName)).toEqual(['ttobak-api']);
     const api = withInterpreter[0].Properties.Environment.Variables;
     expect(api.BEDROCK_SUMMARY_MODEL_ID).toBeUndefined();
+  });
+
+  test('API Lambda carries the translate cost guard limits from context with defaults', () => {
+    const apiEnv = (value: Template) => Object.values(value.findResources('AWS::Lambda::Function'))
+      .find(resource => resource.Properties.FunctionName === 'ttobak-api')!.Properties.Environment.Variables;
+    expect(apiEnv(template)).toMatchObject({ TRANSLATE_HOURLY_LIMIT: '3000', TRANSLATE_HIGH_HOURLY_LIMIT: '1500' });
+    const custom = buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined,
+      { 'ttobak:translateHourlyLimit': '0', 'ttobak:translateHighHourlyLimit': 200 });
+    expect(apiEnv(custom)).toMatchObject({ TRANSLATE_HOURLY_LIMIT: '0', TRANSLATE_HIGH_HOURLY_LIMIT: '200' });
+    const limited = Object.values(template.findResources('AWS::Lambda::Function'))
+      .filter(resource => resource.Properties.Environment?.Variables?.TRANSLATE_HOURLY_LIMIT !== undefined);
+    expect(limited.map(resource => resource.Properties.FunctionName)).toEqual(['ttobak-api']);
+    for (const bad of ['-1', '1.5', 'many', true]) {
+      expect(() => buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined,
+        { 'ttobak:translateHourlyLimit': bad })).toThrow(/ttobak:translateHourlyLimit must be a non-negative integer/);
+    }
+  });
+
+  test('API Lambda carries the interpreter timeout from context with a bounded default', () => {
+    const apiEnv = (value: Template) => Object.values(value.findResources('AWS::Lambda::Function'))
+      .find(resource => resource.Properties.FunctionName === 'ttobak-api')!.Properties.Environment.Variables;
+    expect(apiEnv(template).TRANSLATE_HIGH_TIMEOUT_MS).toBe('6000');
+    const custom = buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined,
+      { 'ttobak:translateHighTimeoutMs': '4500' });
+    expect(apiEnv(custom).TRANSLATE_HIGH_TIMEOUT_MS).toBe('4500');
+    const withTimeout = Object.values(template.findResources('AWS::Lambda::Function'))
+      .filter(resource => resource.Properties.Environment?.Variables?.TRANSLATE_HIGH_TIMEOUT_MS !== undefined);
+    expect(withTimeout.map(resource => resource.Properties.FunctionName)).toEqual(['ttobak-api']);
+    for (const bad of ['499', '8001', '6s', '-1', true]) {
+      expect(() => buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined,
+        { 'ttobak:translateHighTimeoutMs': bad })).toThrow(/ttobak:translateHighTimeoutMs must be an integer from 500 to 8000/);
+    }
   });
 
   test('recovery consumer is installed before the API producer', () => {
@@ -670,5 +731,49 @@ for bad in ({'Ref':'OtherRole'}, {'Fn::ImportValue':'unknown'}, qa):
       Timeout: 30,
       MemorySize: 256,
     });
+  });
+  test('STT recovery tick reuses the transcribe worker with a fixed, unretried input (ADR-031 amendment)', () => {
+    template.hasResourceProperties('AWS::Events::Rule', {
+      Name: 'ttobak-stt-recovery',
+      ScheduleExpression: 'rate(15 minutes)',
+      State: 'ENABLED',
+      Targets: [Match.objectLike({
+        Arn: { 'Fn::GetAtt': [resourceId('AWS::Lambda::Function', 'FunctionName', 'ttobak-transcribe'), 'Arn'] },
+        Input: JSON.stringify({ source: 'ttobak.recovery', 'detail-type': 'SttRecoveryTick', detail: {} }),
+        RetryPolicy: { MaximumRetryAttempts: 0, MaximumEventAgeInSeconds: 600 },
+        DeadLetterConfig: Match.absent(),
+      })],
+    });
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'ttobak-transcribe',
+      Environment: { Variables: Match.objectLike({ STT_RECOVERY_MODE: 'report', STT_RECOVERY_DELETE_MODE: 'report' }) },
+    });
+    // No other rule may match the recovery envelope.
+    for (const rule of Object.values(template.findResources('AWS::Events::Rule'))) {
+      expect(JSON.stringify(rule.Properties.EventPattern ?? {})).not.toContain('ttobak.recovery');
+    }
+  });
+
+  test('STT recovery lists only Whisper cluster tasks and leaves RunTask/PassRole unchanged', () => {
+    let roles: Template | undefined;
+    buildTemplate('manual-only', false, undefined, false, 'd2olomx8td8txt.cloudfront.net', (_g, r) => { roles = r; });
+    const statements = Object.values(roles!.findResources('AWS::IAM::Policy'))
+      .flatMap(policy => policy.Properties.PolicyDocument.Statement as any[]);
+    const list = statements.find(statement => statement.Sid === 'EcsListWhisperTasks');
+    expect(list).toBeDefined();
+    expect(list.Action).toBe('ecs:ListTasks');
+    expect(list.Resource).toBe('*');
+    expect(Object.keys(list.Condition)).toEqual(['ArnEquals']);
+    expect(JSON.stringify(list.Condition)).toContain('ecs:cluster');
+    expect(JSON.stringify(list.Condition)).toContain('cluster/ttobak-whisper');
+    const run = statements.find(statement => statement.Sid === 'EcsRunWhisperTask');
+    expect(run.Action).toBe('ecs:RunTask');
+    expect(JSON.stringify(run.Resource)).toContain('task-definition/ttobak-whisper*');
+    for (const statement of statements) {
+      const actions = [statement.Action].flat();
+      for (const forbidden of ['ecs:DescribeTasks', 'ecs:StopTask', 'ecs:TagResource', 'ecs:*']) {
+        expect(actions).not.toContain(forbidden);
+      }
+    }
   });
 });

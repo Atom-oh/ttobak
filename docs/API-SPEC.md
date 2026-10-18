@@ -153,6 +153,18 @@ Audio-upload retries do not resend acknowledged notes. An uncertain write is
 read back without silently adopting another editor's value; conflicts require
 explicit comparison. Size and save errors retain the editable draft and audio.
 
+`PUT /api/meetings/{meetingId}` also accepts `noteLanguage` with owner/edit
+permission. Allowed values are exactly `""` (automatic), `"ko"` and `"en"`; any
+other value, including case variants, returns 400 `BAD_REQUEST`. An explicit `""`
+returns the meeting to automatic; an omitted field preserves the stored value,
+and an unchanged value is not written. It cannot be combined with an
+`expectedNotes` notes-only update. Meeting detail always returns `noteLanguage`
+(`""` for legacy rows). Batch and saved-source summaries map it to a fixed prompt
+directive (`noteLanguageDirective`); automatic keeps the historical "Korean unless
+the transcript is entirely English" rule. Both summary captures pin the field in
+their source conditions, so a change during a run fails that run with
+`SOURCE_CHANGED` and keeps the prior summary.
+
 GetMeeting resolves S3 transcript spills and returns the active note/transcript
 state, attachments and optional simRun. A/B selection and edited text must remain
 the source of truth: old timestamped segments cannot override the selected text.
@@ -568,14 +580,38 @@ capped at 32KB; violations return 400.
 
 `quality` defaults to `fast` (Amazon Translate only). `high` asks the interpreter
 model configured by `BEDROCK_TRANSLATE_MODEL_ID` first, then falls back to Amazon
-Translate on any model error, timeout (3s), truncated or implausible output, or
-when the model is unset or the text exceeds 3,000 bytes. `context` (at most two
+Translate on any model error, timeout (`TRANSLATE_HIGH_TIMEOUT_MS`, default 6000,
+accepted 500–8000), truncated or rejected output, or when the model is unset or
+the text exceeds 3,000 bytes. `validateInterpretation` rejects output that starts
+with a translation label (English or Korean `Translation:` labels, `Here is the translation`…; see `interpreterMetaPrefixes`),
+starts with `{` or echoes `current_segment`/`previous_segments`, is longer than
+`4*len(text)+200` bytes, has a Hangul letter share below 0.3 for a `ko` target
+(except at most four words that all occur in a Latin-only source, such as kept
+product names), or above 0.1 for an `en` target. Fallback reasons in metering are
+`unavailable`, `too-long`, `llm-error` (including timeout) and `invalid-output`.
+The web client sends `high` with context for finals and `fast` for opt-in drafts.
+`context` (at most two
 earlier source segments, 2,000 bytes total) is reference data for `high` only and is
 JSON-encoded separately from the current segment. The response is
-`{translatedText, sourceLang, targetLang, quality, engine}` where `engine` is
+`{translatedText, sourceLang, targetLang, quality, engine, limited}` where `engine` is
 `llm` or `translate`; a caller can show the `fast` result and replace it with `high`.
-Failures return a generic 500 without segment text; the text is never logged.
-`high` has no per-user rate limit; no route throttling is configured in `gateway-stack.ts`.
+Amazon Translate requests targeting `ko` set `Settings.Formality=FORMAL`; profanity
+masking is not enabled. Failures return a generic 500 without segment text; the text
+is never logged.
+
+Cost guard: each authenticated user has fixed hourly UTC windows counted by
+`WindowCounter` (`USER#{userId}/RATE#translate#{windowStart}` and
+`RATE#translate-high#{windowStart}`, atomic `ADD count`, `pendingShareExpiresAt` =
+window end + 2h). Every validated request counts toward `TRANSLATE_HOURLY_LIMIT`
+(default 3000); above it the API returns 429 `RATE_LIMITED` with `Retry-After`
+seconds and does not call a translator. `high` requests also count toward
+`TRANSLATE_HIGH_HOURLY_LIMIT` (default 1500); above it the request is served by
+`fast`, and the response has `quality: "fast"`, `limited: true`. A limit of 0
+disables that check. Counter storage errors fail open: this is an abuse/cost brake,
+not an access boundary. Rejected requests also count within their window. Each
+success logs one metering JSON line
+`{evt, q, engine, src, tgt, inBytes, outBytes, ms, limited, fallbackReason}`
+without text or user ID. No route throttling is configured in `gateway-stack.ts`.
 
 ### Simulator
 
@@ -621,7 +657,10 @@ never blocklisted (`terms_blocklist.txt`) or the term's own key; `phrase` at mos
   refused (distinct terms share a key, which a deduplicated legacy PUT resolves)
   or the best-effort migration failed and is retried later. Legacy `terms` list
   active rows of every origin, possibly without a `phrase`, and exclude
-  suggestions.
+  suggestions. `items` is omitted when there are no rows. A term saved without
+  `displayAs` lists `displayAs: ""` only while its `phrase` still names the
+  term; after a v2 phrase edit it lists the stored `displayAs`, so an unchanged
+  round trip keeps the same row.
 - `POST .../terms` `{displayAs, phrase?, heardAs?, type?, aliasMode?}` (at most
   4 KB, no unknown fields or trailing data) creates a manual term or restores a
   tombstone as manual; `phrase` defaults to `displayAs`, and `""` keeps the term
@@ -644,8 +683,15 @@ never blocklisted (`terms_blocklist.txt`) or the term's own key; `phrase` at mos
   the manual terms to the legacy item, migrates, then reconciles **manual** rows
   only: create (restoring a tombstone), edit changed terms, hard-delete manual
   rows absent from the body. It never tombstones and never modifies auto or
-  suggested rows.
-- Legacy `DELETE .../term` `{phrase}` hard-deletes active manual matches (204);
+  suggested rows. The PUT is not atomic across rows: each row write is
+  version-conditioned, a failure part-way leaves earlier writes applied and
+  skips the rebuild, and retrying the same body converges. It is last writer
+  wins for the whole list: a manual term created (through v2 or an overlapping
+  PUT) after the body's GET is absent from the body and is deleted without a
+  conflict, and two overlapping PUTs with different bodies can each delete the
+  other's terms.
+- Legacy `DELETE .../term` `{phrase}` hard-deletes active manual matches (204,
+  with no body, so rebuild status and warnings are not reported);
   auto or suggested matches are 409 `TERM_NOT_MANUAL`. An unmigratable legacy
   item keeps the pre-v2 update; v2 writes on it are 409
   `LEGACY_DICTIONARY_CONFLICT`. A manual row changed concurrently during a legacy
@@ -664,6 +710,9 @@ never blocklisted (`terms_blocklist.txt`) or the term's own key; `phrase` at mos
   No response carries a
   vocabulary name yet: the live client would send a ko-KR-only
   `VocabularyNames` on its ko-KR/en-US stream (ADR-008 acceptance item 5).
+  The builder replaces the earlier in-place rebuild of the derived ko-KR
+  vocabulary, including its pending-build deferral warning and bounded
+  conflict recomputation; that path no longer exists.
 
 ### Index status and automatic indexing rollout
 
@@ -1074,7 +1123,9 @@ server draft meeting ID. A browser-only `meeting_<epoch ms>` ID is still accepte
 without a meeting check during the frontend rollout; remove that allowance once the
 updated frontend is deployed.
 Re-summary reads saved notes/summary, the current selected transcript and
-verified document extraction. It does not rerun STT or refinement and does not
+verified document extraction, and writes notes in the meeting's stored
+`noteLanguage`; the POST body never selects a language. Change the language
+through the meeting update first, then request a re-summary. It does not rerun STT or refinement and does not
 import linked-meeting context. Unavailable documents are omitted with notices
 when trusted notes/transcript remain. If no other source exists, pending/failed/
 missing document text returns `409 SOURCE_NOT_READY`; active transcription returns `409 MEETING_BUSY`;

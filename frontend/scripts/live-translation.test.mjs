@@ -31,7 +31,9 @@ function loadModule(path, dependencies = {}, globals = {}) {
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
-function fixture({ targetLang = 'ko-en', enabled = true, honorAbort = true } = {}) {
+// Most cases below specify draft (interim) behavior, so they opt in; the
+// product default is covered by 'draft translation is off unless opted in'.
+function fixture({ targetLang = 'ko-en', enabled = true, honorAbort = true, interim = true } = {}) {
   let now = 0;
   let nextTimerId = 0;
   const timers = new Map();
@@ -47,15 +49,15 @@ function fixture({ targetLang = 'ko-en', enabled = true, honorAbort = true } = {
     clearTimeout: (timerId) => timers.delete(timerId),
   });
   const translator = new translationModule.LiveTranslation({
-    enabled, targetLang,
+    enabled, targetLang, ...(interim === null ? {} : { interim }),
     onUpdate(entry) {
       entries.set(entry.id, entry);
       updates.push(entry);
     },
     onReset: () => entries.clear(),
-    translate(text, sourceLang, destinationLang, signal) {
+    translate(text, sourceLang, destinationLang, signal, options) {
       return new Promise((resolve, reject) => {
-        requests.push({ text, sourceLang, targetLang: destinationLang, signal, resolve, reject });
+        requests.push({ text, sourceLang, targetLang: destinationLang, signal, options, resolve, reject });
         if (honorAbort) signal.addEventListener('abort', () => reject(new Error('Aborted')), { once: true });
       });
     },
@@ -210,7 +212,9 @@ test('request timeouts release stalled translations without stopping the next ut
   state.translator.update('first', '첫 문장', true, 'ko-KR');
   state.translator.update('second', '둘째 문장', true, 'ko-KR');
   state.translator.update('third', '셋째 문장', true, 'ko-KR');
-  await state.advance(8000);
+  await state.advance(9999);
+  assert.equal(state.requests[0].signal.aborted, false, 'the client deadline is 10s');
+  await state.advance(1);
   assert.equal(state.requests[0].signal.aborted, true);
   assert.equal(state.entries.get('first').status, 'error');
   assert.equal(state.requests[2].text, '셋째 문장');
@@ -480,12 +484,184 @@ test('the translation deadline settles even while authentication ignores cancell
   state.translator.update('first', '첫 문장', true, 'ko-KR');
   state.translator.update('second', 'Second sentence', true, 'en-US');
   state.translator.update('third', '셋째 문장', true, 'ko-KR');
-  await state.advance(8000);
+  await state.advance(10000);
   assert.equal(state.requests.length, 3);
   assert.equal(state.entries.get('first').status, 'error');
   state.requests[0].resolve({ translatedText: 'Late result' });
   await tick();
   assert.equal(state.entries.get('first').translated, '');
   assert.equal(state.entries.get('first').status, 'error');
+  state.translator.stop();
+});
+
+test('draft translation is off unless opted in; finals still translate', async () => {
+  const state = fixture({ interim: null });
+  state.translator.update('speech', '오늘 배포', false, 'ko-KR');
+  await state.advance(2000);
+  assert.equal(state.requests.length, 0);
+  assert.equal(state.entries.get('speech').original, '오늘 배포');
+  assert.equal(state.entries.get('speech').translated, '');
+  state.translator.update('speech', '오늘 배포합니다.', true, 'ko-KR');
+  assert.equal(state.requests.length, 1);
+  assert.equal(state.requests[0].text, '오늘 배포합니다.');
+  state.requests[0].resolve({ translatedText: 'We deploy today.' });
+  await tick();
+  assert.equal(state.entries.get('speech').status, 'complete');
+  state.translator.stop();
+});
+
+test('turning drafts off cancels the pending draft without marking it failed', async () => {
+  const state = fixture({ honorAbort: false });
+  state.translator.update('speech', 'We ship', false, 'en-US');
+  await state.advance(500);
+  assert.equal(state.requests.length, 1);
+  state.translator.updateInterim(false);
+  assert.equal(state.requests[0].signal.aborted, true);
+  state.requests[0].resolve({ translatedText: '출시합니다' });
+  await tick();
+  assert.equal(state.entries.get('speech').status, 'pending');
+  assert.equal(state.entries.get('speech').translated, '');
+  state.translator.update('speech', 'We ship tomorrow', false, 'en-US');
+  await state.advance(2000);
+  assert.equal(state.requests.length, 1);
+  state.translator.updateInterim(true);
+  state.translator.update('speech', 'We ship tomorrow morning', false, 'en-US');
+  await state.advance(500);
+  assert.equal(state.requests.length, 2);
+  state.translator.stop();
+});
+
+test('the draft toggle is labelled with its cost and only shown with interpretation on', () => {
+  const { RecordingConfig } = loadModule('components/record/RecordingConfig.tsx', {
+    react: React,
+    'react/jsx-runtime': jsxRuntime,
+    '@/lib/device': { hasMobileMicConflictRisk: () => false },
+    '@/lib/liveTranslation': loadModule('lib/liveTranslation.ts'),
+  });
+  const render = (translationEnabled, interimTranslation) => renderToStaticMarkup(React.createElement(RecordingConfig, {
+    summaryInterval: 100, onSummaryIntervalChange() {}, translationEnabled, onTranslationToggle() {},
+    targetLang: 'ko-en', onTargetLangChange() {}, interimTranslation, onInterimTranslationToggle() {},
+  }));
+  assert.doesNotMatch(render(false, false), /초안 번역/);
+  const draftInput = (html) => {
+    const label = html.indexOf('초안 번역 (비용↑)');
+    assert.ok(label > 0, 'draft toggle is missing');
+    return html.slice(html.lastIndexOf('<input', label), label);
+  };
+  assert.doesNotMatch(draftInput(render(true, false)), /checked/);
+  assert.match(draftInput(render(true, true)), /checked/);
+});
+
+// Objects created inside the vm context have another realm's prototypes.
+const plain = (value) => (value === undefined ? undefined : JSON.parse(JSON.stringify(value)));
+
+const renderView = (state, props = {}) => {
+  const { TranslationView } = loadModule('components/TranslationView.tsx', {
+    react: React,
+    'react/jsx-runtime': jsxRuntime,
+    '@/lib/liveTranslation': state.translationModule,
+  });
+  return renderToStaticMarkup(React.createElement(TranslationView, {
+    translations: [...state.entries.values()], targetLang: 'ko-en', onTargetLangChange() {}, isActive: false, ...props,
+  }));
+};
+
+test('finals request high quality with context frozen at enqueue, even at concurrency 2', async () => {
+  const state = fixture();
+  state.translator.update('a', '첫째 문장입니다.', true, 'ko-KR');
+  state.translator.update('b', 'Second sentence here.', true, 'en-US');
+  state.translator.update('c', '셋째 문장입니다.', true, 'ko-KR');
+  state.translator.update('d', '넷째 문장입니다.', true, 'ko-KR');
+  assert.equal(state.requests.length, 2);
+  assert.deepEqual(state.requests.map((request) => plain(request.options)), [
+    { quality: 'high' },
+    { quality: 'high', context: ['첫째 문장입니다.'] },
+  ]);
+  // The later request finishes first; queued finals keep their enqueue-time context.
+  state.requests[1].resolve({ translatedText: '두 번째 문장입니다.', engine: 'llm' });
+  await tick();
+  assert.equal(state.requests[2].text, '셋째 문장입니다.');
+  assert.deepEqual(plain(state.requests[2].options.context), ['첫째 문장입니다.', 'Second sentence here.']);
+  state.requests[0].resolve({ translatedText: 'First sentence.', engine: 'llm' });
+  await tick();
+  assert.deepEqual(plain(state.requests[3].options.context), ['Second sentence here.', '셋째 문장입니다.']);
+  assert.ok(state.requests.every((request) => request.options.quality === 'high'));
+  state.translator.stop();
+});
+
+test('context respects the API bounds of two items and 2,000 bytes', () => {
+  const state = fixture();
+  const large = '가'.repeat(500); // 1,500 UTF-8 bytes
+  state.translator.update('one', `${large}1`, true, 'ko-KR');
+  state.translator.update('two', `${large}2`, true, 'ko-KR');
+  state.translator.update('three', '짧은 문장', true, 'ko-KR');
+  state.requests[0].resolve({ translatedText: 'x' });
+  return tick().then(() => {
+    const context = state.requests[2].options.context;
+    assert.deepEqual(plain(context), [`${large}2`]);
+    assert.ok(new TextEncoder().encode(context.join('')).length <= 2000);
+    state.translator.stop();
+  });
+});
+
+test('drafts stay on the fast path without context', async () => {
+  const state = fixture();
+  state.translator.update('earlier', 'Earlier final.', true, 'en-US');
+  state.translator.update('speech', '오늘 배포', false, 'ko-KR');
+  await state.advance(500);
+  assert.deepEqual(plain(state.requests[1].options), { quality: 'fast' });
+  state.translator.stop();
+});
+
+test('hesitation-only finals are skipped without a request; meaningful short words are kept', async () => {
+  const state = fixture();
+  const { isFillerOnly } = state.translationModule;
+  for (const [text, expected] of [
+    ['어', true], ['음...', true], ['어어 음', true], ['으음', true], ['아', true],
+    ['Um, uh', true], ['hmm', true], ['er', true], ['UMM', true],
+    ['네', false], ['예', false], ['그', false], ['3', false], ['어 네', false],
+    ['어음', false], ['아니요', false], ['um yes', false], ['', false], ['...', false],
+  ]) {
+    assert.equal(isFillerOnly(text), expected, `isFillerOnly(${JSON.stringify(text)})`);
+  }
+  state.translator.update('filler', '음...', true, 'ko-KR');
+  assert.equal(state.requests.length, 0);
+  assert.equal(state.entries.get('filler').status, 'skipped');
+  state.translator.update('yes', '네', true, 'ko-KR');
+  assert.equal(state.requests.length, 1);
+  assert.equal(state.requests[0].options.context, undefined, 'a skipped filler is not context');
+  const html = renderView(state);
+  assert.match(html, /간투사 · 번역 생략/);
+  const announcements = html.slice(html.indexOf('role="log"'));
+  assert.doesNotMatch(announcements, /음\.\.\./);
+  state.translator.stop();
+});
+
+test('each completed line shows which engine answered', async () => {
+  const state = fixture({ targetLang: 'en' });
+  state.translator.update('ai', '안녕하세요.', true, 'ko-KR');
+  state.translator.update('fallback', '감사합니다.', true, 'ko-KR');
+  state.requests[0].resolve({ translatedText: 'Hello.', engine: 'llm', quality: 'high' });
+  state.requests[1].resolve({ translatedText: 'Thank you.', engine: 'translate', quality: 'fast', limited: true });
+  await tick();
+  assert.equal(state.entries.get('ai').engine, 'ai');
+  assert.equal(state.entries.get('fallback').engine, 'machine-fallback');
+  const { translationEngineBadge } = state.translationModule;
+  assert.equal(translationEngineBadge('fast', { translatedText: 'x', engine: 'translate' }), 'machine');
+  assert.equal(translationEngineBadge('high', { translatedText: 'x' }), undefined);
+  const html = renderView(state, { targetLang: 'en' });
+  assert.match(html, />AI</);
+  assert.match(html, />기계\(대체\)</);
+  state.translator.stop();
+});
+
+test('the fragment counter appears only with debugCaptions', async () => {
+  const state = fixture();
+  state.translator.update('short', '네 알겠습니다', true, 'ko-KR');
+  state.translator.update('long', 'We will deploy on Friday.', true, 'en-US');
+  state.translator.update('draft', '지금', false, 'ko-KR');
+  assert.deepEqual({ ...state.translationModule.fragmentStats([...state.entries.values()]) }, { finals: 2, fragments: 1 });
+  assert.doesNotMatch(renderView(state), /caption-fragments/);
+  assert.match(renderView(state, { debugCaptions: true }), /2단어 이하\): 1\/2 \(50%\)/);
   state.translator.stop();
 });

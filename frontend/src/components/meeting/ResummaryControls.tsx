@@ -1,6 +1,7 @@
 'use client';
 
-import type { ResummaryStatus } from '@/types/meeting';
+import { useState } from 'react';
+import type { NoteLanguage, ResummaryStatus } from '@/types/meeting';
 
 const failures: Record<string, string> = {
   PUBLISH_FAILED: '요약 작업을 전달하지 못했습니다.',
@@ -17,16 +18,48 @@ const failures: Record<string, string> = {
   PERSISTENCE_FAILED: '새 요약을 저장하지 못했습니다.',
   TIMEOUT: '요약 처리 시간이 초과되었습니다.',
 };
-export function ResummaryControls({ status, canRequest, dirty, busy, error, onRequest, onRefresh, onLoad }: {
+const noteLanguages: { value: NoteLanguage; label: string }[] = [
+  { value: '', label: '자동' },
+  { value: 'ko', label: '한국어' },
+  { value: 'en', label: 'English' },
+];
+export function ResummaryControls({ status, canRequest, dirty, busy, error, onRequest, onRefresh, onLoad, noteLanguage, languageLocked, onNoteLanguageChange }: {
   status: ResummaryStatus; canRequest: boolean; dirty: boolean; busy: boolean; error: string | null;
   onRequest: () => void; onRefresh: () => void; onLoad: () => void;
+  noteLanguage: NoteLanguage; languageLocked: boolean; onNoteLanguageChange?: (language: NoteLanguage) => Promise<void>;
 }) {
   const pending = status.status === 'queued' || status.status === 'running';
+  const [savingLanguage, setSavingLanguage] = useState(false);
+  const [languageChanged, setLanguageChanged] = useState(false);
+  const [languageError, setLanguageError] = useState<string | null>(null);
+  const changeLanguage = async (language: NoteLanguage) => {
+    if (!onNoteLanguageChange || language === noteLanguage) return;
+    setSavingLanguage(true);
+    setLanguageError(null);
+    try {
+      await onNoteLanguageChange(language);
+      setLanguageChanged(true);
+    } catch {
+      setLanguageError('회의록 언어를 저장하지 못했습니다.');
+    } finally {
+      setSavingLanguage(false);
+    }
+  };
   return (
     <div id="resummary-status" className="my-4 rounded-xl border border-slate-200 p-4 text-sm dark:border-slate-700" aria-label="저장 자료 다시 요약">
       <div className="flex flex-wrap items-center gap-3">
         {canRequest && <button type="button" onClick={onRequest} disabled={dirty || busy || pending}
           className="rounded-lg bg-primary px-3 py-2 font-semibold text-white disabled:opacity-40">저장 자료로 다시 요약</button>}
+        {onNoteLanguageChange && <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+          회의록 언어
+          <select value={noteLanguage} onChange={(event) => { void changeLanguage(event.target.value as NoteLanguage); }}
+            disabled={savingLanguage || languageLocked || pending}
+            className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm text-slate-900 disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
+            {noteLanguages.map((option) => <option key={option.value || 'auto'} value={option.value}>{option.label}</option>)}
+          </select>
+        </label>}
+        {canRequest && languageChanged && <button type="button" onClick={onRequest} disabled={dirty || busy || pending || savingLanguage}
+          className="rounded-lg border border-primary/30 px-3 py-2 font-semibold text-primary disabled:opacity-40">이 언어로 다시 생성</button>}
         <button type="button" onClick={onRefresh} disabled={busy} className="text-xs text-primary underline disabled:opacity-40">요약 상태 확인</button>
         {status.status === 'succeeded' && <button type="button" onClick={onLoad} disabled={dirty || busy}
           className="rounded-lg border border-primary/30 px-3 py-2 font-semibold text-primary disabled:opacity-40">새 요약 불러오기</button>}
@@ -38,6 +71,7 @@ export function ResummaryControls({ status, canRequest, dirty, busy, error, onRe
           : status.status === 'succeeded' ? '새 요약이 저장되었습니다. 불러오기를 눌러 확인하세요.'
           : status.status === 'failed' ? `${failures[status.errorCode ?? ''] ?? '요약하지 못했습니다.'} 기존 요약은 유지됩니다.` : ''}
       </p>
+      {languageError && <p role="alert" className="mt-2 text-xs text-red-700 dark:text-red-300">{languageError}</p>}
       {error && <p role="alert" className="mt-2 text-xs text-red-700 dark:text-red-300">{error}</p>}
     </div>
   );

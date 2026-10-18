@@ -165,6 +165,8 @@ func (m *mockMeetingRepo) UpdateMeetingFields(_ context.Context, userID, meeting
 			cp.TranscriptSegments = v.(string)
 		case "selectedTranscript":
 			cp.SelectedTranscript = v.(string)
+		case "noteLanguage":
+			cp.NoteLanguage = v.(string)
 		case "participants":
 			cp.Participants = v.([]string)
 		case "status":

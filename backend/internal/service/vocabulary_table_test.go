@@ -53,7 +53,7 @@ func TestVocabularyTSVGolden(t *testing.T) {
 	}
 }
 
-func TestValidTranscribePhrase(t *testing.T) {
+func TestVocabularyTableValidTranscribePhrase(t *testing.T) {
 	for _, tc := range []struct {
 		phrase string
 		ko, en bool

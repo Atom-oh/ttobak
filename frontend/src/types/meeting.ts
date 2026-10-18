@@ -292,6 +292,8 @@ export interface MeetingDetail extends Meeting {
   transcriptA?: string;
   transcriptB?: string;
   selectedTranscript?: 'A' | 'B' | null;
+  /** Generated-note language: '' automatic, 'ko' Korean, 'en' English. */
+  noteLanguage?: NoteLanguage;
   audioKey?: string;
   audioKeys?: string[];
   audioPartCount?: number;
@@ -640,3 +642,6 @@ export interface DictionaryTerm {
   soundsLike: string;
   displayAs: string;
 }
+
+/** Allowlisted values of the meeting noteLanguage field. */
+export type NoteLanguage = '' | 'ko' | 'en';
