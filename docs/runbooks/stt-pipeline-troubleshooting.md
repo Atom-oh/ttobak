@@ -29,6 +29,22 @@ Use ASG scaling activities and actual subnet availability for capacity failures.
 Do not force a historic AZ list. Reused hosts require disk headroom and shortened
 stopped-task cleanup; do not remove those settings as arbitrary overprovisioning.
 
+Check that AZRebalance is still suspended and that no CDK drain hook exists
+(managed draining replaces it; ADR-009 host lifecycle amendment):
+
+```bash
+aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names ttobak-whisper-asg \
+  --query 'AutoScalingGroups[0].SuspendedProcesses[].ProcessName' --region ap-northeast-2
+aws autoscaling describe-lifecycle-hooks --auto-scaling-group-name ttobak-whisper-asg --region ap-northeast-2
+```
+
+`AZRebalance` must be listed. The only termination hook should be ECS's own
+managed-draining hook; a CDK `...DrainHook...` hook means the old
+InstanceDrainHook is back. A redeploy does not re-suspend after a manual resume
+(the custom resource has a constant physical ID), so an authorized operator
+re-suspends with `aws autoscaling suspend-processes --auto-scaling-group-name
+ttobak-whisper-asg --scaling-processes AZRebalance`.
+
 ## Summarizing
 
 Check the expected transcripts/ output and matching EventBridge rule, then
@@ -72,8 +88,10 @@ one target first:
 python3 scripts/whisper-rebatch.py <MEETING_ID>
 ```
 
-The script defaults to dry run. `--run` actually starts ECS work; `--num-speakers`
-requires a single meeting ID. Check its present selection/write behavior before
+The script defaults to dry run and lists only error/transcribing meetings.
+`--run <MEETING_ID>` starts one ECS task; a bulk run needs `--run --all`;
+`--num-speakers` requires a single meeting ID. It claims each meeting with a
+conditional update and starts a second task if one is still in flight. Check its present selection/write behavior before
 executing. Do not fabricate an event with reserved `aws.s3` source via PutEvents or
 blindly reset DynamoDB state. Preserve coherent ASR/pyannote image pins (ADR-035).
 
