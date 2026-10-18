@@ -375,6 +375,11 @@ relinking an already team-shared meeting to the same or a different account.
 Notes and independent direct shares are preserved. Account-origin share rows
 remain subject to current meeting publication/membership checks; an explicit
 `POST /api/meetings/{meetingId}/share-account` is required to publish to a team.
+When summary-privacy writers are enabled, `POST /api/meetings/{meetingId}/share`
+(direct or pending invite) and `share-account` return 409 `SUMMARY_SHARING_UNSAFE`
+for generated notes not cleared for sharing, 409 `CONFLICT` when the meeting
+changed during the grant, and 403 when the owner's access or account membership is no longer
+current. The activation prerequisite is in INFRA-SPEC.
 
 Account meeting lists and meeting-sourced insights, including the registered QA
 account insight/brief tools, revalidate the exact

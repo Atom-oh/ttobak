@@ -525,6 +525,19 @@ a deployment after one with `off` has delivered the rule and summarize code. Bef
 merging, the worker migrates the owner's legacy dictionary blob through the
 summarize role's existing table grant. See ADR-008.
 
+## Summary privacy writer activation
+
+`SUMMARY_PRIVACY_WRITER_ENABLED=1` turns on summary-privacy provenance writes and
+grant fences in the Go functions (`repository.SummaryPrivacyWritesEnabled`).
+GatewayStack sets neither it nor `SUMMARY_PRIVACY_READER_ENABLED`, so writers are
+off. With writers on, a new direct share, pending meeting invite or team
+publication of a meeting whose generated notes are not cleared for sharing returns
+409 `SUMMARY_SHARING_UNSAFE`, and such pending meeting grants are not materialized.
+The only recovery is an owner sharing-safe regeneration
+(`ResummaryState.SharingSafe`): the repository completes it, but no API route or
+service requests it yet. Do not enable the writer flag in any deployment until that
+owner reset path ships; otherwise affected meetings cannot be newly shared.
+
 ## Project invitation activation
 
 GatewayStack declares `ProjectInvitationsEnabled` with allowed values `false` and
