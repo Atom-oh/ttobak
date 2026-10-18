@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/translate"
+	translatetypes "github.com/aws/aws-sdk-go-v2/service/translate/types"
 )
 
 // Translation qualities. "fast" is Amazon Translate only (the original
@@ -23,6 +24,11 @@ const (
 
 	TranslateEngineTranslate = "translate"
 	TranslateEngineLLM       = "llm"
+
+	// Why a "high" request was answered by Amazon Translate. Metering only.
+	TranslateFallbackUnavailable = "unavailable"
+	TranslateFallbackTooLong     = "too-long"
+	TranslateFallbackLLMError    = "llm-error"
 
 	// Longer segments go straight to Amazon Translate: model latency and cost
 	// grow with length while a live caption segment is normally one sentence.
@@ -66,6 +72,8 @@ type TranslateRequest struct {
 type TranslateResult struct {
 	Text   string
 	Engine string
+	// FallbackReason is set when quality "high" was answered by Amazon Translate.
+	FallbackReason string
 }
 
 // TranslateOption configures optional capabilities of TranslateService.
@@ -105,27 +113,47 @@ func (s *TranslateService) Translate(ctx context.Context, text, sourceLang, targ
 }
 
 func (s *TranslateService) TranslateSegment(ctx context.Context, req TranslateRequest) (TranslateResult, error) {
-	if req.Quality == TranslateQualityHigh && s.invoker != nil && len(req.Text) <= translateLLMMaxBytes {
-		text, err := s.interpret(ctx, req)
-		if err == nil {
-			return TranslateResult{Text: text, Engine: TranslateEngineLLM}, nil
+	fallback := ""
+	if req.Quality == TranslateQualityHigh {
+		switch {
+		case s.invoker == nil:
+			fallback = TranslateFallbackUnavailable
+		case len(req.Text) > translateLLMMaxBytes:
+			fallback = TranslateFallbackTooLong
+		default:
+			text, err := s.interpret(ctx, req)
+			if err == nil {
+				return TranslateResult{Text: text, Engine: TranslateEngineLLM}, nil
+			}
+			// Never log segment text. The error carries the model/SDK failure only.
+			log.Printf("Interpreter model failed, using Amazon Translate: model=%s err=%v", s.modelID, err)
+			fallback = TranslateFallbackLLMError
 		}
-		// Never log segment text. The error carries the model/SDK failure only.
-		log.Printf("Interpreter model failed, using Amazon Translate: model=%s err=%v", s.modelID, err)
 	}
 	text, err := s.machineTranslate(ctx, req.Text, req.SourceLang, req.TargetLang)
 	if err != nil {
 		return TranslateResult{}, err
 	}
-	return TranslateResult{Text: text, Engine: TranslateEngineTranslate}, nil
+	return TranslateResult{Text: text, Engine: TranslateEngineTranslate, FallbackReason: fallback}, nil
 }
 
-func (s *TranslateService) machineTranslate(ctx context.Context, text, sourceLang, targetLang string) (string, error) {
-	output, err := s.client.TranslateText(ctx, &translate.TranslateTextInput{
+// machineTranslateInput builds the Amazon Translate request. Korean output
+// uses the formal register (meeting speech is addressed to colleagues and
+// customers); profanity masking stays off so the record is not altered.
+func machineTranslateInput(text, sourceLang, targetLang string) *translate.TranslateTextInput {
+	input := &translate.TranslateTextInput{
 		Text:               aws.String(text),
 		SourceLanguageCode: aws.String(sourceLang),
 		TargetLanguageCode: aws.String(targetLang),
-	})
+	}
+	if targetLang == "ko" {
+		input.Settings = &translatetypes.TranslationSettings{Formality: translatetypes.FormalityFormal}
+	}
+	return input
+}
+
+func (s *TranslateService) machineTranslate(ctx context.Context, text, sourceLang, targetLang string) (string, error) {
+	output, err := s.client.TranslateText(ctx, machineTranslateInput(text, sourceLang, targetLang))
 	if err != nil {
 		return "", fmt.Errorf("translate failed: %w", err)
 	}
