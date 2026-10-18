@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import type { TranscriptQuality, TranscriptSegment } from '@/types/meeting';
 import { SPEAKER_COLORS } from '@/lib/speakerColors';
+import { TranslationControls, TranslationStatus, useMeetingTranslation } from './MeetingTranslation';
 
 interface TranscriptSectionProps {
   transcription: TranscriptSegment[];
@@ -10,6 +11,9 @@ interface TranscriptSectionProps {
   onSaveRawTranscript?: (text: string) => Promise<void>;
   onDirtyChange?: (dirty: boolean) => void;
   quality?: TranscriptQuality;
+  meetingId?: string;
+  /** Server-advertised meeting translation flag; hides the control when off. */
+  translationEnabled?: boolean;
 }
 
 interface SpeakerGroup {
@@ -133,13 +137,14 @@ export function TranscriptQualityNotice({ quality }: { quality?: TranscriptQuali
   );
 }
 
-export function TranscriptSection({ transcription, rawTranscript, onSaveRawTranscript, onDirtyChange, quality }: TranscriptSectionProps) {
+export function TranscriptSection({ transcription, rawTranscript, onSaveRawTranscript, onDirtyChange, quality, meetingId, translationEnabled = false }: TranscriptSectionProps) {
   const [editingRaw, setEditingRaw] = useState(false);
   const [rawValue, setRawValue] = useState(rawTranscript || '');
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
   const hasSegments = transcription && transcription.length > 0;
+  const translation = useMeetingTranslation(meetingId, 'transcript', rawTranscript ?? '');
 
   const speakerColorMap = useMemo(() => {
     const map = new Map<string, typeof SPEAKER_COLORS[0]>();
@@ -187,7 +192,8 @@ export function TranscriptSection({ transcription, rawTranscript, onSaveRawTrans
           Full Transcription
         </h2>
         <div className="flex gap-2">
-          {onSaveRawTranscript && !hasSegments && (
+          {translationEnabled && meetingId && !editingRaw && <TranslationControls translation={translation} />}
+          {onSaveRawTranscript && !hasSegments && !translation.target && (
             <button
               disabled={saving}
               onClick={() => {
@@ -210,7 +216,27 @@ export function TranscriptSection({ transcription, rawTranscript, onSaveRawTrans
       </div>
 
       <TranscriptQualityNotice quality={quality} />
-      {hasSegments ? (
+      {translation.target ? (
+        <div className="space-y-3" lang={translation.target}>
+          {/* Translated text renders as React text only, never as HTML or Markdown. */}
+          {translation.segments.map((segment, index) => (
+            <div key={`${segment.segmentId ?? 'line'}-${index}`} className="flex gap-3">
+              <div className="min-w-0 flex-1">
+                {(segment.speaker || segment.startTime !== undefined) && (
+                  <div className="mb-0.5 flex items-baseline gap-2">
+                    {segment.speaker && <span className="text-[14px] font-semibold text-slate-900 dark:text-gray-100">{segment.speaker}</span>}
+                    {segment.startTime !== undefined && (
+                      <span className="text-[12px] tabular-nums text-slate-400 dark:text-text-muted">{formatTimestamp(segment.startTime)}</span>
+                    )}
+                  </div>
+                )}
+                <p className="whitespace-pre-wrap text-[15px] leading-[1.75] text-slate-700 dark:text-gray-300">{segment.text}</p>
+              </div>
+            </div>
+          ))}
+          <TranslationStatus translation={translation} />
+        </div>
+      ) : hasSegments ? (
         <div className="space-y-1">
           {groups.map((group, gi) => {
             const color = speakerColorMap.get(group.speaker) || SPEAKER_COLORS[0];
