@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 65926088c983 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: bd4d1f66224f · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
 # TTOBAK review context
 
 Shared by Codex, Kiro, and the CI review panel. Extracted from the
@@ -152,12 +152,12 @@ capture. Report that limit instead of claiming a Mac build passed.
   is `ENTRYPOINT ["python3", "run_engine.py"]`; engine selection uses `ENGINE`.
   Adding task-definition `entryPoint`/`command` overrides or bypassing the image
   dispatcher is CRITICAL. Both CDK and image tests enforce this.
-- **Recovery:** checkpoints intentionally overwrite exact allowlisted
-  `recording_progress.{webm|m4a|ogg}` filenames without a timestamp. Other uploads
-  retain unique names; do not loosen `isCheckpointFileName` to a suffix match.
-  Summarize retry claims after 20 minutes are distinct from the 60-minute stuck
-  meeting expiry; retry eligibility does not schedule redelivery. Lambda timeout
-  is 15 minutes. See ADR-031 and `ClaimSummarizeRetry`.
+- **Recovery:** checkpoints overwrite exact `recording_progress.{webm|m4a|ogg}`
+  names, other uploads stay unique; never loosen `isCheckpointFileName`. Summarize
+  retry claims (20 min) differ from 60-minute stuck expiry; Lambda timeout is 15
+  min. The ADR-031 `ttobak-stt-recovery` tick re-drives only untranscribed
+  single-file audio via two conditional claims, never via `GetMeetingDetail` or
+  checkpoints; marked-failure deletion spares user data.
 - **Accounts:** any existing member may add members or change assignable roles;
   nobody may assign `owner` (ADR-034). Removal and pending-invite revocation remain
   owner-only. Account parent changes are owner-only; hierarchy never inherits

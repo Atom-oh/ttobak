@@ -353,6 +353,13 @@ const (
 	PrefixHistory    = "HISTORY#"
 	PrefixConfig     = "CONFIG"
 	PrefixResearch   = "RESEARCH#"
+	// PrefixRate keys Go fixed-window usage counters:
+	// USER#{id}/RATE#{bucket}#{windowKey}. They share the
+	// pendingShareExpiresAt sweep like the QA counter below.
+	PrefixRate = "RATE#"
+	// PendingShareTTLAttribute is the attribute storage-stack.ts configures
+	// as the table's timeToLiveAttribute.
+	PendingShareTTLAttribute = "pendingShareExpiresAt"
 
 	// (The qa Lambda's web-search hourly rate-limit counter — Python-only,
 	// USER#{id}/WEBSEARCH_HOURLY#{YYYY-MM-DDTHH}, no Go model — shares
