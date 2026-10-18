@@ -137,7 +137,7 @@ describe('AuthStack', () => {
     }
   });
 
-  test('the companion client is OAuth code + PKCE only, with private SSM-configured redirects', () => {
+  test('the companion client is a code-grant public client without password auth, with private SSM-configured redirects', () => {
     const clients = template.findResources('AWS::Cognito::UserPoolClient');
     const companion = Object.values(clients).find(client =>
       client.Properties.ClientName === 'ttobak-companion-client');
@@ -149,7 +149,7 @@ describe('AuthStack', () => {
       SupportedIdentityProviders: ['COGNITO'],
       PreventUserExistenceErrors: 'ENABLED',
     });
-    expect(companion!.Properties.ExplicitAuthFlows).not.toContain('ALLOW_USER_PASSWORD_AUTH');
+    expect([...companion!.Properties.ExplicitAuthFlows].sort()).toEqual(['ALLOW_REFRESH_TOKEN_AUTH', 'ALLOW_USER_SRP_AUTH']);
     const parameters = template.toJSON().Parameters;
     const ref = (name: string) => Object.keys(parameters).find(key => parameters[key].Default === name);
     for (const name of ['/ttobak/auth/companion-callback-urls', '/ttobak/auth/companion-logout-urls']) {

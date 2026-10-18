@@ -72,6 +72,18 @@ the client's listener before adding its callback, then verify the deployed
 Cognito callback list and actual OAuth completion separately. See the
 [client instructions](../mcp-server/README.md#http-mcp-from-code-server).
 
+The companion client (`ttobak-companion-client`, export `TtobakCompanionClientId`)
+lets companion apps such as per-customer insight dashboards sign users in through
+managed login with their TTOBAK identity. It is a public code-grant client
+without `USER_PASSWORD_AUTH`; each app must send an S256 PKCE challenge and
+exchange the code server-side. Its tokens carry the companion client's audience,
+which the API authorizer, edge auth and identity pool reject, so they never act
+as TTOBAK API credentials. Bootstrap the SSM StringLists
+`/ttobak/auth/companion-callback-urls` and `/ttobak/auth/companion-logout-urls`
+with each app's exact callback and sign-out URLs before deploying AuthStack;
+their absence fails deployment. Companion apps authorize by reading TTOBAK
+account membership themselves; this stack grants them no table access.
+
 The pre-signup trigger reads the configured domain allowlist. PostAuthentication
 writes a separate USER#/LOGIN item for lastLoginAt, with a short abort timeout,
 try/catch, no reserved concurrency and a DISABLED switch. It must fail open; it is
