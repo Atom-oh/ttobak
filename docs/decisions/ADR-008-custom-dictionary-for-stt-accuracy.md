@@ -108,7 +108,15 @@ yet" note. Routes: [API-SPEC](../API-SPEC.md#personal-dictionary).
   (possibly phrase-less) in legacy `terms`, so the PUT passes entries keyed to
   automatic or suggested rows through without validation, counts only manual
   entries toward the cap, and warns when it ignores a change to one; a GET
-  round-trip always saves. Legacy DELETE removes manual rows.
+  round-trip always saves. A legacy-empty `displayAs` is shown only while the
+  phrase still derives the term's key, so a v2 phrase edit does not make the
+  round trip replace the row. Legacy DELETE removes manual rows.
+- **Legacy PUT limits.** Reconciliation is per row, not one transaction; row
+  writes are version-conditioned and a retry converges. The whole list is last
+  writer wins: manual rows created after the client's GET, including by an
+  overlapping PUT, are deleted without a conflict. Fencing the legacy item
+  write on its observed `blobRevision` would serialize overlapping PUTs; it is
+  not implemented.
 - **Migration callers.** v2 writes and the legacy PUT migrate first; the API GET
   migrates best effort. The shared transcribe reader never writes. An
   unmigratable item blocks v2 writes (`LEGACY_DICTIONARY_CONFLICT`) and keeps the

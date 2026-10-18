@@ -656,7 +656,10 @@ never blocklisted (`terms_blocklist.txt`) or the term's own key; `phrase` at mos
   refused (distinct terms share a key, which a deduplicated legacy PUT resolves)
   or the best-effort migration failed and is retried later. Legacy `terms` list
   active rows of every origin, possibly without a `phrase`, and exclude
-  suggestions.
+  suggestions. `items` is omitted when there are no rows. A term saved without
+  `displayAs` lists `displayAs: ""` only while its `phrase` still names the
+  term; after a v2 phrase edit it lists the stored `displayAs`, so an unchanged
+  round trip keeps the same row.
 - `POST .../terms` `{displayAs, phrase?, heardAs?, type?, aliasMode?}` (at most
   4 KB, no unknown fields or trailing data) creates a manual term or restores a
   tombstone as manual; `phrase` defaults to `displayAs`, and `""` keeps the term
@@ -679,8 +682,15 @@ never blocklisted (`terms_blocklist.txt`) or the term's own key; `phrase` at mos
   the manual terms to the legacy item, migrates, then reconciles **manual** rows
   only: create (restoring a tombstone), edit changed terms, hard-delete manual
   rows absent from the body. It never tombstones and never modifies auto or
-  suggested rows.
-- Legacy `DELETE .../term` `{phrase}` hard-deletes active manual matches (204);
+  suggested rows. The PUT is not atomic across rows: each row write is
+  version-conditioned, a failure part-way leaves earlier writes applied and
+  skips the rebuild, and retrying the same body converges. It is last writer
+  wins for the whole list: a manual term created (through v2 or an overlapping
+  PUT) after the body's GET is absent from the body and is deleted without a
+  conflict, and two overlapping PUTs with different bodies can each delete the
+  other's terms.
+- Legacy `DELETE .../term` `{phrase}` hard-deletes active manual matches (204,
+  with no body, so rebuild status and warnings are not reported);
   auto or suggested matches are 409 `TERM_NOT_MANUAL`. An unmigratable legacy
   item keeps the pre-v2 update; v2 writes on it are 409
   `LEGACY_DICTIONARY_CONFLICT`. A manual row changed concurrently during a legacy
