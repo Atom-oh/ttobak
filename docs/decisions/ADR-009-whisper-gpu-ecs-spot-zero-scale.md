@@ -8,6 +8,8 @@
 - Host lifecycle amended 2026-10-17: ECS managed draining, AZRebalance
   suspension, Spot instance draining and unbuffered worker logs (below).
 - Implementation checked: 2026-09-17.
+- Clarification note 2026-10-18: production entry point and code-switching
+  language pinning (below); no decision change.
 
 ## Context and decision
 
@@ -102,10 +104,20 @@ The block-buffered worker also left an empty log stream. The amended decision:
   re-suspend after an out-of-band resume; the STT runbook checks for that drift.
 - `ECS_ENABLE_SPOT_INSTANCE_DRAINING=true` stops new placement on a host that
   received its Spot interruption notice. Tasks already running still die with
-  the host; this change adds no automatic re-run, so such meetings follow the
-  existing stale-transcribing expiry and authorized operator recovery.
+  the host. The [ADR-031 amendment](ADR-031-summarize-timeout-resilience.md#amendment-2026-10-17-scheduled-stt-recovery-and-failed-recording-retention)'s scheduled `ttobak-stt-recovery` tick re-drives
+  such single-file meetings (two attempts per audio key); multi-part and
+  checkpoint-only meetings follow authorized operator or owner recovery.
 - The production image sets `PYTHONUNBUFFERED=1` so a killed worker's progress
   lines reach CloudWatch. ENTRYPOINT and the absent CMD are unchanged.
+
+Clarification note, 2026-10-18. This note changes no decision or code. The
+production worker is the `backend/whisper/Dockerfile` image, whose
+`ENTRYPOINT ["python3", "transcribe.py"]` runs `transcribe.py`; WhisperX and
+`fw_p4` are reachable only through the separate benchmark image's
+`run_engine.py`. `transcribe.py` pins `language="ko"` for every meeting. Whether
+automatic detection (`language=None`) handles Korean/English code-switched
+meetings better is an open benchmark item only; any production change would be a
+separate amendment backed by a recorded comparison.
 
 GPU batch inference improves the evaluated workload while retaining live captions.
 Costs include cold starts, large runtime dependencies, model staging, GPU AMI

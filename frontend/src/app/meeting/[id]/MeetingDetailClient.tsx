@@ -603,6 +603,12 @@ function MeetingDetailContent() {
             onRequest={() => { void resummary.request(); }}
             onRefresh={() => { void resummary.refresh(); }}
             onLoad={() => { void resummary.load(); }}
+            noteLanguage={meeting.noteLanguage ?? ''}
+            languageLocked={meeting.status === 'summarizing'}
+            onNoteLanguageChange={canEdit ? async (noteLanguage) => {
+              await meetingsApi.update(meeting.meetingId, { noteLanguage });
+              setMeeting((current) => current?.meetingId === meeting.meetingId ? { ...current, noteLanguage } : current);
+            } : undefined}
           />
 
           {/* Recovery banner for crashed recordings */}

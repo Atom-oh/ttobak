@@ -3,8 +3,9 @@
 
 Lists eligible meetings (dry run by default) and, with --run, triggers one
 Whisper ECS task per selected meeting. The existing pipeline then handles
-Whisper -> S3 transcripts/ -> EventBridge -> summarize. Nothing re-runs a task
-automatically; this script is the authorized manual path
+Whisper -> S3 transcripts/ -> EventBridge -> summarize. The scheduled
+ttobak-stt-recovery tick (ADR-031 amendment) is the preferred automatic path for
+single-file meetings; this script is the authorized manual fallback
 (docs/runbooks/stt-pipeline-troubleshooting.md).
 
 Safety: only error/transcribing meetings are eligible (done/summarizing are
@@ -259,7 +260,7 @@ def main():
         if run_whisper_task(t["meeting_id"], t["user_id"], t["key"], args.num_speakers):
             success += 1
         else:
-            print("  The meeting stays transcribing until the stale-transcribing expiry or another re-run")
+            print("  The meeting stays transcribing until the recovery tick, the stale-transcribing expiry or another re-run")
         time.sleep(2)
 
     print(f"\n{'=' * 60}")

@@ -60,6 +60,10 @@ var jwksCache struct {
 var (
 	cognitoRegion     = getEnvOrDefault("COGNITO_REGION", "ap-northeast-2")
 	cognitoUserPoolID = os.Getenv("COGNITO_USER_POOL_ID")
+	// First-party app clients whose tokens may call the API. The pool also issues
+	// tokens to companion apps, which must never act as API credentials, on either
+	// the Bearer or the x-amzn-oidc-data path. Empty denies every request.
+	apiAllowedClients = ParseClientIDs(os.Getenv("API_ALLOWED_CLIENT_IDS"))
 )
 
 func getEnvOrDefault(key, defaultVal string) string {
@@ -81,6 +85,36 @@ type ALBOIDCClaims struct {
 	Exp           int64    `json:"exp"`
 	Iss           string   `json:"iss"`
 	TokenUse      string   `json:"token_use"`
+	Aud           []string `json:"aud"`       // ID tokens: the app client ID (string or list on the wire)
+	ClientID      string   `json:"client_id"` // access tokens: the app client ID
+}
+
+// ParseClientIDs turns a comma-separated client ID list into an allowlist.
+func ParseClientIDs(v string) map[string]bool {
+	out := map[string]bool{}
+	for _, id := range strings.Split(v, ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			out[id] = true
+		}
+	}
+	return out
+}
+
+// IssuedToClient reports whether a verified Cognito token was issued to one of
+// the allowed app clients. ID tokens name the client in aud, access tokens in
+// client_id; any other token_use is rejected.
+func (c *ALBOIDCClaims) IssuedToClient(allowed map[string]bool) bool {
+	switch c.TokenUse {
+	case "id":
+		for _, a := range c.Aud {
+			if allowed[a] {
+				return true
+			}
+		}
+	case "access":
+		return allowed[c.ClientID]
+	}
+	return false
 }
 
 // Auth is middleware that extracts user information from JWT
@@ -121,6 +155,11 @@ func Auth(next http.Handler) http.Handler {
 			return
 		}
 
+		if !claims.IssuedToClient(apiAllowedClients) {
+			http.Error(w, `{"error":"unauthorized","message":"token not issued to this application"}`, http.StatusUnauthorized)
+			return
+		}
+
 		// Add user info to context
 		ctx := r.Context()
 		ctx = context.WithValue(ctx, UserIDKey, claims.Sub)
@@ -151,8 +190,11 @@ func parseJWT(token string) (*ALBOIDCClaims, error) {
 	if cognitoUserPoolID == "" {
 		return nil, &AuthError{Message: "server misconfiguration: COGNITO_USER_POOL_ID is not set"}
 	}
-	return ParseVerifiedJWT(token)
+	return verifyJWT(token)
 }
+
+// verifyJWT is ParseVerifiedJWT; a variable so tests can supply verified claims.
+var verifyJWT = ParseVerifiedJWT
 
 // ParseVerifiedJWT verifies JWT signature using Cognito JWKS.
 // Exported so the WebSocket authorizer Lambda can reuse the same verification logic.
@@ -202,6 +244,12 @@ func ParseVerifiedJWT(tokenStr string) (*ALBOIDCClaims, error) {
 		FamilyName: getStringClaim(mapClaims, "family_name"),
 		Iss:        getStringClaim(mapClaims, "iss"),
 		Groups:     getStringSliceClaim(mapClaims, "cognito:groups"),
+		TokenUse:   getStringClaim(mapClaims, "token_use"),
+		ClientID:   getStringClaim(mapClaims, "client_id"),
+		Aud:        getStringSliceClaim(mapClaims, "aud"),
+	}
+	if aud := getStringClaim(mapClaims, "aud"); aud != "" {
+		claims.Aud = []string{aud}
 	}
 	if v, ok := mapClaims["email_verified"].(bool); ok {
 		claims.EmailVerified = v
