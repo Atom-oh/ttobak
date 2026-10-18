@@ -23,6 +23,9 @@ func (r *DynamoDBRepository) publishMeetingSummary(ctx context.Context, snapshot
 	}
 	fields := map[string]interface{}{"content": content, "status": model.StatusDone, "attachmentSummarySources": coverage,
 		"summaryRetryPending": false, "summaryConflictCode": "", "summaryRetryAttempts": 0, "updatedAt": time.Now().UTC().Format(time.RFC3339Nano)}
+	if SummaryPrivacyWritesEnabled() {
+		fields["summaryPrivacy"] = summaryPublicationPrivacy(snapshot, content)
+	}
 	stored := map[string]interface{}{}
 	for key, value := range snapshot.Stored {
 		stored[key] = value
@@ -74,7 +77,8 @@ func (r *DynamoDBRepository) publishMeetingSummary(ctx context.Context, snapshot
 			update = update.Set(expression.Name(key), expression.Value(value))
 		}
 	}
-	update = invalidateSummaryClearance(update.Remove(expression.Name("summarizeRetryClaimedAt")))
+	update = update.Remove(expression.Name("summarizeRetryClaimedAt"))
+	update = summaryContentRevisionUpdate(update, fields)
 	op, err := analysisUpdate(r.tableName, summaryRowKey(parent.PK, parent.SK), update, summaryCondition(parent))
 	if err != nil {
 		return err

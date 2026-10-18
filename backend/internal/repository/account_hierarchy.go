@@ -150,6 +150,7 @@ func (r *DynamoDBRepository) accountCreationItems(account *model.Account, owner 
 // CreateAccountWithParent atomically creates the account and its sole initial
 // member, conditioned on the observed ancestry and requester's parent membership.
 func (r *DynamoDBRepository) CreateAccountWithParent(ctx context.Context, account *model.Account, owner *model.AccountMember, ancestors []AccountParentLink) error {
+	owner = stampSummaryMembership(owner)
 	checks, err := r.hierarchyParentChecks(account.AccountID, owner.UserID, account.ParentAccountID, ancestors)
 	if err != nil {
 		return err

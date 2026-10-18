@@ -307,16 +307,11 @@ const (
 // represented in the prompt -- only to people who can read the CURRENT
 // meeting's resulting summary.
 //
-// Mitigated at the call site: buildLinkedMeetingContext (cmd/summarize)
-// skips fetching linked content entirely -- via AnyNonOwnerShare below --
-// whenever this meeting has ANY non-owner collaborator, so priorContext
-// simply never carries cross-meeting content in a session where that
-// content could leak through this field. An owner-only meeting has no one
-// to exfiltrate to, so linking stays enabled there. This function itself
-// still can't tell a safe priorContext from an unsafe one -- the invariant
-// is enforced by the caller, not by FoldLiveSummary refusing anything -- so
-// a future priorContext source added without going through that same gate
-// would reopen this path.
+// Activated summary writers bind prior context through the captured parent
+// ACL/publication/link snapshot and authorized predecessor bytes. Publication
+// retains private ancestry and source CAS prevents new-grant or source races.
+// Installation-mode legacy callers still use buildLinkedMeetingContext's share
+// gate. This formatting helper grants no source authority or declassification.
 //
 // Write-time size is capped in UpdateMeeting; the rune cap here is a second
 // line for legacy oversized values.
@@ -741,6 +736,14 @@ func (s *BedrockService) summarizeTranscript(ctx context.Context, meetingID, use
 			return "", err
 		}
 		return meeting.Content, ErrSummaryHumanContentPreserved
+	}
+	if err := bindLinkedSummarySources(ctx, s.repo, snapshot); err != nil {
+		return "", err
+	}
+	if repository.SummaryPrivacyWritesEnabled() {
+		// Claim and human-content checks precede predecessor/model evidence.
+		// The legacy argument never grants source authority.
+		priorContext = linkedSummaryContext(snapshot.LinkedSources)
 	}
 	conflict := func(cause error) (string, error) {
 		if !errors.Is(cause, repository.ErrConditionFailed) {
@@ -2012,6 +2015,13 @@ func (s *BedrockService) ExtractInsights(ctx context.Context, meetingID string, 
 	if meeting == nil {
 		return "", fmt.Errorf("meeting not found: %s", meetingID)
 	}
+	return s.ExtractInsightsForMeeting(ctx, meeting)
+}
+
+func (s *BedrockService) ExtractInsightsForMeeting(ctx context.Context, meeting *model.Meeting) (string, error) {
+	if meeting == nil {
+		return "", ErrNoAnalysisSource
+	}
 
 	source := meeting.Content
 	if source == "" {
@@ -2190,6 +2200,13 @@ func (s *BedrockService) ExtractTags(ctx context.Context, meetingID string, user
 	if meeting == nil {
 		return nil, fmt.Errorf("meeting not found: %s", meetingID)
 	}
+	return s.ExtractTagsForMeeting(ctx, meeting)
+}
+
+func (s *BedrockService) ExtractTagsForMeeting(ctx context.Context, meeting *model.Meeting) ([]string, error) {
+	if meeting == nil {
+		return nil, ErrNoAnalysisSource
+	}
 
 	transcript, _ := selectMeetingTranscript(meeting)
 	if transcript == "" {
@@ -2283,6 +2300,13 @@ func (s *BedrockService) ExtractSentiment(ctx context.Context, meetingID string,
 	}
 	if meeting == nil {
 		return "", fmt.Errorf("meeting not found: %s", meetingID)
+	}
+	return s.ExtractSentimentForMeeting(ctx, meeting)
+}
+
+func (s *BedrockService) ExtractSentimentForMeeting(ctx context.Context, meeting *model.Meeting) (string, error) {
+	if meeting == nil {
+		return "", ErrNoAnalysisSource
 	}
 
 	systemPrompt := `You classify the overall tone of a meeting.

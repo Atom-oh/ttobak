@@ -45,7 +45,7 @@ func (r *privacyActionHandlerRepo) StartActionAnalysis(context.Context, string, 
 func (r *privacyActionHandlerRepo) FailActionAnalysis(context.Context, string, *model.ActionItemsAnalysis, string, time.Time) error {
 	return errors.New("unexpected action analysis write")
 }
-func (r *privacyActionHandlerRepo) CompleteActionAnalysis(context.Context, string, string, string, string, string, string, time.Time) error {
+func (r *privacyActionHandlerRepo) CompleteActionAnalysis(context.Context, string, string, string, string, string, string, string, time.Time) error {
 	return errors.New("unexpected action analysis write")
 }
 

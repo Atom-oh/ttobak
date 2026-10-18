@@ -91,6 +91,7 @@ func (r *DynamoDBRepository) CaptureSummaryPrivacy(ctx context.Context, ownerID,
 	return r.captureMeetingSummaryMetadata(ctx, ownerID, meetingID, withSummaryPrivacyFields([]string{
 		"meetingId", "userId", "content", "title", "status", "date", "notes", "liveSummary",
 		"transcriptA", "transcriptB", "selectedTranscript", "transcriptSegments",
+		"transcriptQualityA", "transcriptQualityB", "transcriptRevisionA", "transcriptRevisionB",
 	}))
 }
 
@@ -225,6 +226,19 @@ func invalidateSummaryClearance(update expression.UpdateBuilder) expression.Upda
 		Remove(expression.Name("insightsRevision")))
 }
 
+// Source-fenced publishers supply new stamps; generic updates first reject
+// caller-assigned server fields. Preserve fresh provenance and reset identity,
+// clearing older derivative identity. Without a stamp, invalidate under any flag.
+func summaryContentRevisionUpdate(update expression.UpdateBuilder, fields map[string]interface{}) expression.UpdateBuilder {
+	if _, fresh := fields["summaryPrivacy"]; !fresh {
+		return invalidateSummaryClearance(update)
+	}
+	if _, fresh := fields["insightsRevision"]; !fresh {
+		update = update.Remove(expression.Name("insightsRevision"))
+	}
+	return summaryPrivacyRevisionUpdate(update)
+}
+
 // Model derivatives use the exact stored source snapshot, including the
 // generation and task bytes actually consumed. A late worker cannot repopulate
 // fields cleared by sharing-safe regeneration, even when new content is equal.
@@ -248,7 +262,14 @@ func (r *DynamoDBRepository) PublishSummaryDerivatives(ctx context.Context, snap
 		}
 	}
 	if _, insights := fields["insights"]; insights {
-		update = update.Set(expression.Name("insightsRevision"), expression.Value(uuid.NewString()))
+		if snapshot.Meeting.SummaryGeneration() == "" {
+			// Legacy readers require an empty generation/revision pair. The
+			// captured identity, not the creation flag, also protects stamped
+			// generations when writers are rolled back.
+			update = update.Remove(expression.Name("insightsRevision"))
+		} else {
+			update = update.Set(expression.Name("insightsRevision"), expression.Value(uuid.NewString()))
+		}
 	}
 	update = update.Set(expression.Name("updatedAt"), expression.Value(time.Now().UTC()))
 	op, err := analysisUpdate(r.tableName, meetingKey(snapshot.Meeting.UserID, snapshot.Meeting.MeetingID),

@@ -88,7 +88,8 @@ func (r *DynamoDBRepository) PutSimRunIfNotRunning(ctx context.Context, run *mod
 		return fmt.Errorf("failed to build condition: %w", err)
 	}
 	meetingExistsExpr, err := expression.NewBuilder().
-		WithCondition(expression.AttributeExists(expression.Name("PK"))).
+		WithCondition(expression.AttributeExists(expression.Name("PK")).
+			And(summaryGenerationCondition(run.SummaryGeneration))).
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to build meeting-exists condition: %w", err)
