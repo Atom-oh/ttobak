@@ -75,10 +75,14 @@ Cognito callback list and actual OAuth completion separately. See the
 The companion client (`ttobak-companion-client`, export `TtobakCompanionClientId`)
 lets companion apps such as per-customer insight dashboards sign users in through
 managed login with their TTOBAK identity. It is a public code-grant client
-without `USER_PASSWORD_AUTH`; each app must send an S256 PKCE challenge and
-exchange the code server-side. Its tokens carry the companion client's audience,
-which the API authorizer, edge auth and identity pool reject, so they never act
-as TTOBAK API credentials. Bootstrap the SSM StringLists
+without `USER_PASSWORD_AUTH`. Direct `USER_SRP_AUTH` stays enabled, as on the
+SPA client, but companion apps must use managed login, send an S256 PKCE
+challenge (Cognito cannot require it per client) and exchange the code
+server-side. Its ID tokens carry the companion client ID in `aud` and its access
+tokens in `client_id`. The HTTP API JWT authorizer, edge auth and identity pool
+accept only the SPA client, and the WebSocket authorizer accepts only the
+first-party clients in `WS_ALLOWED_CLIENT_IDS` (fails closed when unset), so
+companion tokens never act as TTOBAK API or live-QA credentials. Bootstrap the SSM StringLists
 `/ttobak/auth/companion-callback-urls` and `/ttobak/auth/companion-logout-urls`
 with each app's exact callback and sign-out URLs before deploying AuthStack;
 their absence fails deployment. Companion apps authorize by reading TTOBAK

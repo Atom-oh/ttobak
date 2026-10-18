@@ -951,6 +951,11 @@ export class GatewayStack extends cdk.Stack {
         COGNITO_USER_POOL_ID: props.userPool.userPoolId,
         COGNITO_REGION: cdk.Aws.REGION,
         WS_ORIGIN_SECRET_ARN: this.websocketOrigin.secret.secretArn,
+        // first-party clients only; companion-app tokens are rejected on $connect
+        WS_ALLOWED_CLIENT_IDS: cdk.Fn.join(',', [...new Set([
+          props.userPoolClient.userPoolClientId,
+          (props.spaClient ?? props.userPoolClient).userPoolClientId,
+        ])]),
       },
       timeout: cdk.Duration.seconds(10),
       memorySize: 128,

@@ -254,9 +254,10 @@ export class AuthStack extends cdk.Stack {
     // server-side, so they never handle passwords. Public client (no secret to
     // share across stacks): Cognito cannot require PKCE per client, so each
     // companion app must send S256 code_challenge itself. USER_PASSWORD_AUTH is
-    // off; SRP stays enabled like the other clients. Its tokens carry this
-    // client's aud, which the API authorizer, edge auth and identity pool do not
-    // accept, so they are not TTOBAK API credentials. Redirects come from
+    // off; direct SRP stays enabled like the SPA client. ID tokens carry this
+    // client in aud and access tokens in client_id; the API authorizer, edge
+    // auth, identity pool and WebSocket authorizer (WS_ALLOWED_CLIENT_IDS) all
+    // reject it, so these are not TTOBAK API credentials. Redirects come from
     // private SSM StringLists, bootstrapped before deploy like the MCP callbacks.
     this.companionClient = this.userPool.addClient('TtobakCompanionClient', {
       userPoolClientName: 'ttobak-companion-client',

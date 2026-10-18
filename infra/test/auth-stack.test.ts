@@ -159,6 +159,11 @@ describe('AuthStack', () => {
     }
     expect(companion!.Properties.CallbackURLs).toEqual({ Ref: ref('/ttobak/auth/companion-callback-urls') });
     expect(companion!.Properties.LogoutURLs).toEqual({ Ref: ref('/ttobak/auth/companion-logout-urls') });
+    // companion tokens must not be exchangeable for AWS credentials
+    const companionId = Object.keys(clients).find(id => clients[id] === companion);
+    const pools = Object.values(template.findResources('AWS::Cognito::IdentityPool'));
+    expect(pools).toHaveLength(1);
+    expect(JSON.stringify(pools[0].Properties.CognitoIdentityProviders)).not.toContain(companionId!);
   });
 
   test('the public MCP client retains local callbacks and privately configured redirects', () => {

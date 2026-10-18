@@ -81,6 +81,25 @@ type ALBOIDCClaims struct {
 	Exp           int64    `json:"exp"`
 	Iss           string   `json:"iss"`
 	TokenUse      string   `json:"token_use"`
+	Aud           []string `json:"aud"`       // ID tokens: the app client ID (string or list on the wire)
+	ClientID      string   `json:"client_id"` // access tokens: the app client ID
+}
+
+// IssuedToClient reports whether a verified Cognito token was issued to one of
+// the allowed app clients. ID tokens name the client in aud, access tokens in
+// client_id; any other token_use is rejected.
+func (c *ALBOIDCClaims) IssuedToClient(allowed map[string]bool) bool {
+	switch c.TokenUse {
+	case "id":
+		for _, a := range c.Aud {
+			if allowed[a] {
+				return true
+			}
+		}
+	case "access":
+		return allowed[c.ClientID]
+	}
+	return false
 }
 
 // Auth is middleware that extracts user information from JWT
@@ -202,6 +221,12 @@ func ParseVerifiedJWT(tokenStr string) (*ALBOIDCClaims, error) {
 		FamilyName: getStringClaim(mapClaims, "family_name"),
 		Iss:        getStringClaim(mapClaims, "iss"),
 		Groups:     getStringSliceClaim(mapClaims, "cognito:groups"),
+		TokenUse:   getStringClaim(mapClaims, "token_use"),
+		ClientID:   getStringClaim(mapClaims, "client_id"),
+		Aud:        getStringSliceClaim(mapClaims, "aud"),
+	}
+	if aud := getStringClaim(mapClaims, "aud"); aud != "" {
+		claims.Aud = []string{aud}
 	}
 	if v, ok := mapClaims["email_verified"].(bool); ok {
 		claims.EmailVerified = v
