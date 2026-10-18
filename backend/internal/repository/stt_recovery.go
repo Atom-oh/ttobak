@@ -22,6 +22,9 @@ import (
 // shares, a simulation, ...) that make it user data; it is only ever marked.
 var ErrSttDeletionBlocked = errors.New("failed recording has related data and is not auto-deletable")
 
+// ErrSttNoSpeechSnapshot is a structurally unusable snapshot, not a lost fence.
+var ErrSttNoSpeechSnapshot = errors.New("no-speech mark needs exactly one meeting snapshot check")
+
 // ErrSttDeletionPostCommit wraps a failure that happened after the meeting
 // rows were already deleted; object cleanup must still run.
 var ErrSttDeletionPostCommit = errors.New("failed recording rows deleted; post-commit cleanup failed")
@@ -134,7 +137,7 @@ func meetingRowKey(ownerID, meetingID string) map[string]types.AttributeValue {
 
 // claimSttRow writes one claim without SDK retries. An ambiguous failure is
 // resolved by reading back the unique claim value, never by resending.
-func (r *DynamoDBRepository) claimSttRow(ctx context.Context, row model.SttRecoveryRow, condition expression.ConditionBuilder, update expression.UpdateBuilder, claim string) (string, error) {
+func (r *DynamoDBRepository) claimSttRow(ctx context.Context, row model.SttRecoveryRow, condition expression.ConditionBuilder, update expression.UpdateBuilder, claimField, claim string) (string, error) {
 	expr, err := expression.NewBuilder().WithCondition(condition).WithUpdate(update).Build()
 	if err != nil {
 		return "", err
@@ -151,15 +154,15 @@ func (r *DynamoDBRepository) claimSttRow(ctx context.Context, row model.SttRecov
 	if errors.As(err, &conflict) {
 		return "", ErrConditionFailed
 	}
-	current, readErr := r.sttClaimValue(ctx, row.UserID, row.MeetingID)
+	current, readErr := r.sttClaimValue(ctx, row.UserID, row.MeetingID, claimField)
 	if readErr == nil && current == claim {
 		return claim, nil
 	}
 	return "", errors.Join(err, readErr)
 }
 
-func (r *DynamoDBRepository) sttClaimValue(ctx context.Context, ownerID, meetingID string) (string, error) {
-	expr, err := expression.NewBuilder().WithProjection(expression.NamesList(expression.Name("sttRecoveryClaimedAt"))).Build()
+func (r *DynamoDBRepository) sttClaimValue(ctx context.Context, ownerID, meetingID, claimField string) (string, error) {
+	expr, err := expression.NewBuilder().WithProjection(expression.NamesList(expression.Name(claimField))).Build()
 	if err != nil {
 		return "", err
 	}
@@ -170,13 +173,29 @@ func (r *DynamoDBRepository) sttClaimValue(ctx context.Context, ownerID, meeting
 	if err != nil {
 		return "", err
 	}
-	var value struct {
-		Claim string `dynamodbav:"sttRecoveryClaimedAt"`
+	var claim string
+	if value, ok := out.Item[claimField]; ok {
+		if err := attributevalue.Unmarshal(value, &claim); err != nil {
+			return "", err
+		}
 	}
-	if err := attributevalue.UnmarshalMap(out.Item, &value); err != nil {
-		return "", err
+	return claim, nil
+}
+
+// sttClaimUpdate is shared by both claims. Both budgets are bound to
+// sttRecoveryAudioKey: claiming a different key resets the other budget.
+func sttClaimUpdate(row model.SttRecoveryRow, key, claimField, counterField, otherCounter string, attempt int, claim string) expression.UpdateBuilder {
+	update := expression.Set(expression.Name("status"), expression.Value(model.StatusTranscribing)).
+		Set(expression.Name("updatedAt"), expression.Value(claim)).
+		Set(expression.Name(claimField), expression.Value(claim)).
+		Set(expression.Name(counterField), expression.Value(attempt)).
+		Set(expression.Name("sttRecoveryAudioKey"), expression.Value(key)).
+		Remove(expression.Name("sttFailureCode")).
+		Remove(expression.Name("sttFailedAt"))
+	if row.SttRecoveryAudioKey != key {
+		update = update.Set(expression.Name(otherCounter), expression.Value(0))
 	}
-	return value.Claim, nil
+	return update
 }
 
 // ClaimSttRecovery moves an eligible stuck meeting back to transcribing and
@@ -187,18 +206,13 @@ func (r *DynamoDBRepository) ClaimSttRecovery(ctx context.Context, row model.Stt
 		return "", err
 	}
 	claim := now.UTC().Format(time.RFC3339Nano)
-	update := expression.Set(expression.Name("status"), expression.Value(model.StatusTranscribing)).
-		Set(expression.Name("updatedAt"), expression.Value(claim)).
-		Set(expression.Name("sttRecoveryClaimedAt"), expression.Value(claim)).
-		Set(expression.Name("sttRecoveryAttempts"), expression.Value(attempt)).
-		Set(expression.Name("sttRecoveryAudioKey"), expression.Value(key)).
-		Remove(expression.Name("sttFailureCode")).
-		Remove(expression.Name("sttFailedAt"))
-	return r.claimSttRow(ctx, row, condition, update, claim)
+	update := sttClaimUpdate(row, key, "sttRecoveryClaimedAt", "sttRecoveryAttempts", "sttSummaryRedriveAttempts", attempt, claim)
+	return r.claimSttRow(ctx, row, condition, update, "sttRecoveryClaimedAt", claim)
 }
 
 // ClaimSttSummaryRedrive claims a meeting whose transcript JSON exists but was
-// never published, recording summary re-drive attempt n.
+// never published, recording summary re-drive attempt n. Its claim lives in
+// sttSummaryRedriveClaimedAt, so it never reads as an STT restart.
 func (r *DynamoDBRepository) ClaimSttSummaryRedrive(ctx context.Context, row model.SttRecoveryRow, attempt int, now time.Time) (string, error) {
 	condition, err := sttRecoveryBaseCondition(row, row.AudioKey)
 	if err != nil {
@@ -206,13 +220,8 @@ func (r *DynamoDBRepository) ClaimSttSummaryRedrive(ctx context.Context, row mod
 	}
 	condition = condition.And(pinObserved(row, "sttSummaryRedriveAttempts", row.SttSummaryRedriveAttempts))
 	claim := now.UTC().Format(time.RFC3339Nano)
-	update := expression.Set(expression.Name("status"), expression.Value(model.StatusTranscribing)).
-		Set(expression.Name("updatedAt"), expression.Value(claim)).
-		Set(expression.Name("sttRecoveryClaimedAt"), expression.Value(claim)).
-		Set(expression.Name("sttSummaryRedriveAttempts"), expression.Value(attempt)).
-		Remove(expression.Name("sttFailureCode")).
-		Remove(expression.Name("sttFailedAt"))
-	return r.claimSttRow(ctx, row, condition, update, claim)
+	update := sttClaimUpdate(row, row.AudioKey, "sttSummaryRedriveClaimedAt", "sttSummaryRedriveAttempts", "sttRecoveryAttempts", attempt, claim)
+	return r.claimSttRow(ctx, row, condition, update, "sttSummaryRedriveClaimedAt", claim)
 }
 
 // markSttFailure writes status=error plus a code, with sttFailedAt and
@@ -243,13 +252,15 @@ func (r *DynamoDBRepository) markSttFailure(ctx context.Context, ownerID, meetin
 	return err
 }
 
-// MarkSttFailureForClaim releases this tick's own claim with a failure code.
+// MarkSttFailureForClaim releases this tick's own STT or summary claim with a
+// failure code.
 func (r *DynamoDBRepository) MarkSttFailureForClaim(ctx context.Context, ownerID, meetingID, code, claim string) error {
 	if claim == "" {
 		return ErrConditionFailed
 	}
 	condition := expression.AttributeExists(expression.Name("PK")).
-		And(expression.Name("sttRecoveryClaimedAt").Equal(expression.Value(claim))).
+		And(expression.Name("sttRecoveryClaimedAt").Equal(expression.Value(claim)).
+			Or(expression.Name("sttSummaryRedriveClaimedAt").Equal(expression.Value(claim)))).
 		And(expression.Name("status").Equal(expression.Value(model.StatusTranscribing))).
 		And(expression.Name("updatedAt").Equal(expression.Value(claim)))
 	return r.markSttFailure(ctx, ownerID, meetingID, code, condition)
@@ -271,7 +282,7 @@ func (r *DynamoDBRepository) MarkSttFailureObserved(ctx context.Context, row mod
 // that failTranscriptSnapshot uses, without publishing any transcript field.
 func (r *DynamoDBRepository) MarkSttNoSpeech(ctx context.Context, snapshot *model.SummarySnapshot) error {
 	if !validSummarySnapshot(snapshot) || len(snapshot.Checks) != 1 {
-		return ErrConditionFailed
+		return ErrSttNoSpeechSnapshot
 	}
 	return r.markSttFailure(ctx, snapshot.Meeting.UserID, snapshot.Meeting.MeetingID, model.SttFailureNoSpeech,
 		summaryCondition(snapshot.Checks[0]))
@@ -333,10 +344,12 @@ func meetingSingletonDeleteKeys(ownerID, meetingID string) []map[string]types.At
 	}
 }
 
-// sttFailedMeetingDeleteCondition requires the exact current mark and the
-// absence of every user-authored or relation field.
+// sttFailedMeetingDeleteCondition requires the exact current mark, the
+// single-file shape (one corrupt part never deletes a multipart recording) and
+// the absence of every user-authored or relation field.
 func sttFailedMeetingDeleteCondition(mark model.SttFailureMark) expression.ConditionBuilder {
 	condition := expression.AttributeExists(expression.Name("PK")).
+		And(expression.AttributeNotExists(expression.Name("audioPartCount")).Or(expression.Name("audioPartCount").LessThanEqual(expression.Value(1)))).
 		And(expression.Name("status").Equal(expression.Value(model.StatusError))).
 		And(expression.Name("sttFailureCode").Equal(expression.Value(mark.Code))).
 		And(expression.Name("sttFailedAt").Equal(expression.Value(mark.FailedAt))).
@@ -349,7 +362,7 @@ func sttFailedMeetingDeleteCondition(mark model.SttFailureMark) expression.Condi
 	for _, field := range []string{"notes", "content", "transcriptA", "transcriptB", "transcriptSegments", "liveSummary", "actionItems", "notionPageId", "accountId"} {
 		condition = condition.And(emptyOrAbsent(field))
 	}
-	for _, field := range []string{"linkedMeetingIds", "participants", "speakerMap"} {
+	for _, field := range []string{"audioKeys", "linkedMeetingIds", "participants", "speakerMap"} {
 		condition = condition.And(absentOrEmptyCollection(field))
 	}
 	return condition

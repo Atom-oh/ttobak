@@ -262,17 +262,23 @@ var markNoSpeech = func(ctx context.Context, snapshot *model.SummarySnapshot) er
 	return repo.MarkSttNoSpeech(ctx, snapshot)
 }
 
-// handleNoSpeech marks an empty transcript instead of summarizing it. A lost
-// fence means another writer progressed; that is not an error to retry.
+// handleNoSpeech marks an empty transcript instead of summarizing it. Like
+// publication, the mark first revalidates the downloaded objects, so a
+// replaced transcript is never marked from stale bytes. A lost fence means
+// another writer progressed; that is not an error to retry.
 func handleNoSpeech(ctx context.Context, snapshot *model.SummarySnapshot, parsed *parsedTranscript) (bool, error) {
 	if !transcriptHasNoSpeech(parsed) {
 		return false, nil
 	}
-	err := markNoSpeech(ctx, snapshot)
-	if errors.Is(err, repository.ErrConditionFailed) {
-		err = nil
-	}
+	err := checkTranscriptObjects(ctx, parsed.Objects)
 	if err == nil {
+		err = markNoSpeech(ctx, snapshot)
+	}
+	switch {
+	case errors.Is(err, repository.ErrConditionFailed):
+		log.Printf("Meeting %s: empty transcript superseded before the %s mark", snapshot.Meeting.MeetingID, model.SttFailureNoSpeech)
+		return true, nil
+	case err == nil:
 		log.Printf("Meeting %s: transcript has no speech; marked %s", snapshot.Meeting.MeetingID, model.SttFailureNoSpeech)
 	}
 	return true, err

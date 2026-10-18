@@ -322,23 +322,42 @@ class _FakeFFmpegError(Exception):
     pass
 
 
+class _FakeInvalidDataError(_FakeFFmpegError, ValueError):
+    pass
+
+
+class _FakeErrnoValueError(_FakeFFmpegError, ValueError):
+    """PyAV's EINVAL mapping: an FFmpegError that is also a ValueError."""
+
+
+class _FakeErrnoMemoryError(_FakeFFmpegError, MemoryError):
+    pass
+
+
 class TestDecodeClassification(unittest.TestCase):
-    """Corrupt audio is a terminal AUDIO_CORRUPT; anything else is a
-    retryable WORKER_FAILED (ADR-031 amendment)."""
+    """Invalid input data is a terminal AUDIO_CORRUPT; anything else is a
+    retryable WORKER_FAILED."""
 
     def _decode(self, result=None, raises=None):
         fake = mock.MagicMock(side_effect=raises, return_value=result)
         av_mod = types.ModuleType('av')
         av_mod.FFmpegError = _FakeFFmpegError
+        av_mod.InvalidDataError = _FakeInvalidDataError
         with mock.patch.object(transcribe, 'decode_audio', fake), \
                 mock.patch.dict(sys.modules, {'av': av_mod}):
             return transcribe._decode_audio('/tmp/x.webm'), fake
 
-    def test_ffmpeg_error_is_audio_corrupt(self):
+    def test_invalid_data_is_audio_corrupt(self):
         with self.assertRaises(transcribe.AudioDecodeError) as ctx:
-            self._decode(raises=_FakeFFmpegError('Invalid data found'))
+            self._decode(raises=_FakeInvalidDataError('Invalid data found'))
         self.assertEqual(transcribe._failure_code(ctx.exception), 'AUDIO_CORRUPT')
         self.assertNotIn('Invalid data', str(ctx.exception))
+
+    def test_errno_ffmpeg_errors_stay_retryable(self):
+        for exc in (_FakeFFmpegError('io'), _FakeErrnoValueError('EINVAL'), _FakeErrnoMemoryError('ENOMEM')):
+            with self.assertRaises(type(exc)) as ctx:
+                self._decode(raises=exc)
+            self.assertEqual(transcribe._failure_code(ctx.exception), 'WORKER_FAILED')
 
     def test_value_error_is_audio_corrupt(self):
         with self.assertRaises(transcribe.AudioDecodeError):
