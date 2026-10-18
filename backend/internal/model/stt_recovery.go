@@ -1,8 +1,11 @@
 package model
 
-// Machine-readable STT failure codes (ADR-031 amendment). A code is honored only while
-// the meeting is still status=error and its raw updatedAt equals sttFailedAt:
-// any later write bumps updatedAt and permanently cancels the mark's effect.
+// Machine-readable STT failure codes for the scheduled STT recovery tick. A
+// mark is current only while the meeting is status=error and its raw updatedAt
+// equals sttFailedAt. Only a current retryable mark schedules a retry and only
+// a current deletable mark ages toward grace deletion; a later write cancels
+// both, and a stale terminal mark still blocks re-runs unless the pipeline
+// itself restarted (status transcribing).
 const (
 	// SttFailureAudioCorrupt: the Whisper worker could not decode the bound
 	// audio (or it decoded to effectively nothing). Terminal; delete-eligible.
@@ -71,7 +74,10 @@ type SttRecoveryRow struct {
 	SttRecoveryAudioKey       string      `dynamodbav:"sttRecoveryAudioKey"`
 	SttRecoveryClaimedAt      string      `dynamodbav:"sttRecoveryClaimedAt"`
 	SttSummaryRedriveAttempts int         `dynamodbav:"sttSummaryRedriveAttempts"`
-	DiarizationSpeakerHint    int         `dynamodbav:"diarizationSpeakerHint"`
+	// SttSummaryRedriveClaimedAt is kept apart from SttRecoveryClaimedAt: a
+	// summary re-drive re-emits the existing transcript, it does not restart STT.
+	SttSummaryRedriveClaimedAt string `dynamodbav:"sttSummaryRedriveClaimedAt"`
+	DiarizationSpeakerHint     int    `dynamodbav:"diarizationSpeakerHint"`
 	// Present records which projected attributes existed, so claims can pin
 	// "absent" separately from a stored zero value.
 	Present map[string]bool `dynamodbav:"-"`
@@ -82,7 +88,7 @@ var SttRecoveryProjection = []string{
 	"meetingId", "userId", "status", "updatedAt", "createdAt", "audioKey", "audioKeys",
 	"audioPartCount", "audioCrop", "sttProvider", "summarizeRetryClaimedAt", "summaryRetryPending",
 	"summaryConflictCode", "sttFailureCode", "sttFailedAt", "sttRecoveryAttempts", "sttRecoveryAudioKey",
-	"sttRecoveryClaimedAt", "sttSummaryRedriveAttempts", "diarizationSpeakerHint",
+	"sttRecoveryClaimedAt", "sttSummaryRedriveAttempts", "sttSummaryRedriveClaimedAt", "diarizationSpeakerHint",
 }
 
 // SttFailureMark identifies the exact mark a grace deletion is conditioned on.

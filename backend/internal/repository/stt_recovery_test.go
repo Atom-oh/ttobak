@@ -178,6 +178,27 @@ func TestClaimSttSummaryRedrivePinsItsCounter(t *testing.T) {
 	if !strings.Contains(body["ConditionExpression"].(string), "attribute_not_exists") {
 		t.Fatal("an absent counter must be pinned as absent")
 	}
+	// A summary claim is not an STT restart: it never writes sttRecoveryClaimedAt.
+	if claim := wireSetValue(body, "sttSummaryRedriveClaimedAt"); claim == "" || claim != wireSetValue(body, "updatedAt") ||
+		wireSetValue(body, "sttRecoveryClaimedAt") != "" || wireSetValue(body, "sttRecoveryAttempts") != "" {
+		t.Fatalf("summary claim fields: %v", body["UpdateExpression"])
+	}
+	// Replacement audio starts both budgets afresh.
+	replaced := sttClaimRow()
+	replaced.SttRecoveryAudioKey = "audio/owner/m/old.webm"
+	if _, err := repo.ClaimSttSummaryRedrive(context.Background(), replaced, 1, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	body = (*calls)[1].body
+	if wireSetValue(body, "sttRecoveryAttempts") != "0" || wireSetValue(body, "sttRecoveryAudioKey") != replaced.AudioKey {
+		t.Fatalf("summary claim must rebind the budget to the new key: %v", body["UpdateExpression"])
+	}
+	if _, err := repo.ClaimSttRecovery(context.Background(), replaced, replaced.AudioKey, 1, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if body = (*calls)[2].body; wireSetValue(body, "sttSummaryRedriveAttempts") != "0" {
+		t.Fatalf("STT claim must reset the summary budget for a new key: %v", body["UpdateExpression"])
+	}
 }
 
 func TestMarkSttFailureWritesOneTimestamp(t *testing.T) {
@@ -193,7 +214,7 @@ func TestMarkSttFailureWritesOneTimestamp(t *testing.T) {
 	if wireSetValue(body, "status") != model.StatusError || wireSetValue(body, "sttFailureCode") != model.SttFailureRunTaskFailed {
 		t.Fatal("mark must set status=error and the code")
 	}
-	if names := wireNames(body); !names["sttRecoveryClaimedAt"] {
+	if names := wireNames(body); !names["sttRecoveryClaimedAt"] || !names["sttSummaryRedriveClaimedAt"] {
 		t.Fatal("a release must be fenced on its own claim")
 	}
 	if _, err := time.Parse(time.RFC3339Nano, failed); err != nil {
@@ -217,6 +238,10 @@ func TestMarkSttFailureWritesOneTimestamp(t *testing.T) {
 		if wireSetValue(body, field) != "" {
 			t.Fatalf("no-speech mark must not publish %s", field)
 		}
+	}
+	snapshot.Checks = nil
+	if err := repo.MarkSttNoSpeech(context.Background(), snapshot); !errors.Is(err, ErrSttNoSpeechSnapshot) || errors.Is(err, ErrConditionFailed) {
+		t.Fatalf("a structural snapshot failure is not a lost fence: %v", err)
 	}
 }
 
@@ -311,7 +336,7 @@ func TestDeleteSttFailedMeetingIsConditionalOnTheMark(t *testing.T) {
 	items := transact["TransactItems"].([]any)
 	meeting := items[0].(map[string]any)["Delete"].(map[string]any)
 	names := wireNames(meeting)
-	for _, field := range []string{"status", "sttFailureCode", "sttFailedAt", "updatedAt", "notes", "content", "transcriptA", "transcriptB",
+	for _, field := range []string{"status", "sttFailureCode", "sttFailedAt", "updatedAt", "audioKeys", "audioPartCount", "notes", "content", "transcriptA", "transcriptB",
 		"transcriptSegments", "liveSummary", "actionItems", "notionPageId", "accountId", "projectIds", "linkedMeetingIds",
 		"participants", "speakerMap", "sharedToAccount", "diarizationSpeakerHint", "audioCrop", "summarizeRetryClaimedAt"} {
 		if !names[field] {

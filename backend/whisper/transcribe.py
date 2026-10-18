@@ -39,7 +39,7 @@ WHISPER_SAMPLE_RATE = 16000
 # Anything shorter than this decodes to effectively nothing usable.
 MIN_DECODED_SECONDS = 0.5
 
-# Machine-readable failure codes (ADR-031 amendment). The Go recovery tick reads them.
+# Machine-readable failure codes, read by the Go STT recovery classifier.
 FAILURE_AUDIO_CORRUPT = "AUDIO_CORRUPT"
 FAILURE_WORKER_FAILED = "WORKER_FAILED"
 
@@ -350,18 +350,29 @@ class AudioDecodeError(Exception):
     Carries no file content; callers log only the class name."""
 
 
-def _decode_error_types() -> tuple:
-    """FFmpeg errors raised by PyAV while decoding. Imported lazily so the
-    unit tests (and the crop path) need no PyAV install."""
-    types_ = [ValueError]
+def _av_error_type(name: str):
+    """A PyAV error class (av.<name> or av.error.<name>), or None. Imported
+    lazily so the unit tests (and the crop path) need no PyAV install."""
     try:
         import av
-        err = getattr(av, "FFmpegError", None) or getattr(getattr(av, "error", None), "FFmpegError", None)
-        if isinstance(err, type):
-            types_.append(err)
     except Exception:
-        pass
-    return tuple(types_)
+        return None
+    err = getattr(av, name, None) or getattr(getattr(av, "error", None), name, None)
+    return err if isinstance(err, type) else None
+
+
+def _is_corrupt_input(exc: BaseException) -> bool:
+    """Only invalid input data is terminal. PyAV maps errno failures (ENOMEM,
+    ENOENT, EACCES, EINVAL, ...) to other FFmpegError subclasses; those are
+    host or worker problems and stay retryable. A plain ValueError from the
+    decoder wrapper (for example no decodable frames at all) is corrupt input."""
+    invalid = _av_error_type("InvalidDataError")
+    if invalid is not None and isinstance(exc, invalid):
+        return True
+    ffmpeg = _av_error_type("FFmpegError")
+    if ffmpeg is not None and isinstance(exc, ffmpeg):
+        return False
+    return isinstance(exc, ValueError)
 
 
 def _decode_audio(local_path: str):
@@ -370,8 +381,10 @@ def _decode_audio(local_path: str):
     would otherwise have decoded itself."""
     try:
         audio = decode_audio(local_path, sampling_rate=WHISPER_SAMPLE_RATE)
-    except _decode_error_types() as e:
-        raise AudioDecodeError(type(e).__name__) from e
+    except Exception as e:
+        if _is_corrupt_input(e):
+            raise AudioDecodeError(type(e).__name__) from e
+        raise
     if audio is None or len(audio) < WHISPER_SAMPLE_RATE * MIN_DECODED_SECONDS:
         raise AudioDecodeError("decoded audio too short")
     return audio
