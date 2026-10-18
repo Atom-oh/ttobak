@@ -250,11 +250,11 @@ is its caller.
   owner's retried DELETE of the gone meeting re-runs it before returning 404.
   There is no scheduled reconciliation, so an un-retried failure leaves the rows.
   STT-failed deletions skip the sweep (they never reach `done` or queue a run).
-- **Not in this change.** GatewayStack infrastructure is a follow-up: the
-  `TermsRequested` rule to summarize, its DLQ and alarm, and the
-  `AUTO_TERMS_*`/`BEDROCK_TERMS_MODEL_ID` environment. Until it ships, nothing
-  routes the event and the job cannot run in any deployment; a hand-set mode
-  only queues runs that expire. INFRA-SPEC and architecture updates go with it.
+- **Infrastructure.** GatewayStack routes `TermsRequested` to summarize with a
+  DLQ and alarm, and renders `AUTO_TERMS_*`/`BEDROCK_TERMS_MODEL_ID` from
+  validated CDK context, `AUTO_TERMS_MODE=off` by default
+  ([INFRA-SPEC](../INFRA-SPEC.md#automatic-term-extraction-delivery)). Enabling
+  `personal` is a separate, explicit context change; synth is not deployment.
 
 ## Consequences and risks
 
