@@ -36,5 +36,10 @@ func (s *MeetingService) DeleteFailedRecording(ctx context.Context, ownerID, mee
 		return repository.SttFailedMeetingObjectsResult{}, rowsErr
 	}
 	result, err := deleter.DeleteSttFailedMeetingObjects(ctx, ownerID, meetingID)
+	if err != nil && !errors.Is(err, repository.ErrSttDeletionPostCommit) {
+		// The rows are already gone, so every object-cleanup failure (listing
+		// included) is post-commit: callers must count it as a committed delete.
+		err = errors.Join(repository.ErrSttDeletionPostCommit, err)
+	}
 	return result, errors.Join(rowsErr, err)
 }

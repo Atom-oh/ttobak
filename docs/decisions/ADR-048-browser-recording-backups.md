@@ -25,6 +25,12 @@ those would remove the only copy of a recording the user intentionally deferred.
 
 ## Retention and limits
 
+Server-side grace deletion of `AUDIO_CORRUPT`/`NO_SPEECH` meetings (the
+[ADR-031 amendment](ADR-031-summarize-timeout-resilience.md#amendment-2026-10-17-scheduled-stt-recovery-and-failed-recording-retention))
+is separate from these browser backups. It never processes checkpoint-only
+meetings, which the scheduled tick only reports; recovering them stays
+owner-initiated.
+
 The application lists and opens only the current account's rows; this is application
 isolation, not encryption or an OS security boundary. Audio/notes remain on the
 browser profile after sign-out and are accessible to someone controlling that

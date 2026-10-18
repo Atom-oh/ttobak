@@ -312,6 +312,27 @@ benchmark task has its own bundle variable; do not conflate the two. Its
 run_engine.py allowlisting entrypoint must not be overridden by CDK entryPoint or
 command. Engine selection uses ENGINE; image and CDK tests guard the boundary.
 
+The capacity provider enables ECS managed draining, so aws-cdk-lib adds no
+InstanceDrainHook lifecycle hook or drain Lambda; that hook could not drain a host
+that had not yet registered with ECS. The `WhisperAzRebalanceSuspended` custom
+resource suspends `AZRebalance` on `ttobak-whisper-asg` (its IAM is
+`autoscaling:SuspendProcesses`/`ResumeProcesses` on that group only), and deleting
+it resumes the process. Host user data sets `ECS_ENABLE_SPOT_INSTANCE_DRAINING=true`.
+The production image sets `PYTHONUNBUFFERED=1`. Every WhisperStack deploy also
+reapplies `desiredCapacity: 0`; deploy it only while the cluster is idle.
+
+GatewayStack's `ttobak-stt-recovery` rule (`rate(15 minutes)`, retry 0, 10-minute
+maximum age, no DLQ) sends the fixed input `{source: ttobak.recovery,
+detail-type: SttRecoveryTick, detail: {}}` to the existing transcribe Lambda.
+`STT_RECOVERY_MODE` and `STT_RECOVERY_DELETE_MODE` (`off|report|active`) default to
+`report`. The transcribe role adds only `ecs:ListTasks` on `Resource: "*"`
+confined by an `ArnEquals ecs:cluster` condition to the Whisper cluster (a
+cluster-only ListTasks call does not match a container-instance resource);
+RunTask and PassRole are unchanged. Existing AiStack table and bucket grants cover
+the scan, claims, transactional deletes, transcript self-copy and object deletes.
+Deletions leave noncurrent object versions in the versioned bucket. See the
+[ADR-031 amendment](decisions/ADR-031-summarize-timeout-resilience.md#amendment-2026-10-17-scheduled-stt-recovery-and-failed-recording-retention).
+
 Audio cropping uses the private `ttobak.audio` / `AudioCropRequested` EventBridge
 rule to the existing transcribe Lambda and production Whisper task. It adds no
 public compute origin or unauthenticated endpoint. API capability is gated by
