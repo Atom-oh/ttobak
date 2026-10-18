@@ -31,7 +31,9 @@ function loadModule(path, dependencies = {}, globals = {}) {
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
-function fixture({ targetLang = 'ko-en', enabled = true, honorAbort = true } = {}) {
+// Most cases below specify draft (interim) behavior, so they opt in; the
+// product default is covered by 'draft translation is off unless opted in'.
+function fixture({ targetLang = 'ko-en', enabled = true, honorAbort = true, interim = true } = {}) {
   let now = 0;
   let nextTimerId = 0;
   const timers = new Map();
@@ -47,7 +49,7 @@ function fixture({ targetLang = 'ko-en', enabled = true, honorAbort = true } = {
     clearTimeout: (timerId) => timers.delete(timerId),
   });
   const translator = new translationModule.LiveTranslation({
-    enabled, targetLang,
+    enabled, targetLang, ...(interim === null ? {} : { interim }),
     onUpdate(entry) {
       entries.set(entry.id, entry);
       updates.push(entry);
@@ -488,4 +490,62 @@ test('the translation deadline settles even while authentication ignores cancell
   assert.equal(state.entries.get('first').translated, '');
   assert.equal(state.entries.get('first').status, 'error');
   state.translator.stop();
+});
+
+test('draft translation is off unless opted in; finals still translate', async () => {
+  const state = fixture({ interim: null });
+  state.translator.update('speech', '오늘 배포', false, 'ko-KR');
+  await state.advance(2000);
+  assert.equal(state.requests.length, 0);
+  assert.equal(state.entries.get('speech').original, '오늘 배포');
+  assert.equal(state.entries.get('speech').translated, '');
+  state.translator.update('speech', '오늘 배포합니다.', true, 'ko-KR');
+  assert.equal(state.requests.length, 1);
+  assert.equal(state.requests[0].text, '오늘 배포합니다.');
+  state.requests[0].resolve({ translatedText: 'We deploy today.' });
+  await tick();
+  assert.equal(state.entries.get('speech').status, 'complete');
+  state.translator.stop();
+});
+
+test('turning drafts off cancels the pending draft without marking it failed', async () => {
+  const state = fixture({ honorAbort: false });
+  state.translator.update('speech', 'We ship', false, 'en-US');
+  await state.advance(500);
+  assert.equal(state.requests.length, 1);
+  state.translator.updateInterim(false);
+  assert.equal(state.requests[0].signal.aborted, true);
+  state.requests[0].resolve({ translatedText: '출시합니다' });
+  await tick();
+  assert.equal(state.entries.get('speech').status, 'pending');
+  assert.equal(state.entries.get('speech').translated, '');
+  state.translator.update('speech', 'We ship tomorrow', false, 'en-US');
+  await state.advance(2000);
+  assert.equal(state.requests.length, 1);
+  state.translator.updateInterim(true);
+  state.translator.update('speech', 'We ship tomorrow morning', false, 'en-US');
+  await state.advance(500);
+  assert.equal(state.requests.length, 2);
+  state.translator.stop();
+});
+
+test('the draft toggle is labelled with its cost and only shown with interpretation on', () => {
+  const { RecordingConfig } = loadModule('components/record/RecordingConfig.tsx', {
+    react: React,
+    'react/jsx-runtime': jsxRuntime,
+    '@/lib/device': { hasMobileMicConflictRisk: () => false },
+    '@/lib/liveTranslation': loadModule('lib/liveTranslation.ts'),
+  });
+  const render = (translationEnabled, interimTranslation) => renderToStaticMarkup(React.createElement(RecordingConfig, {
+    summaryInterval: 100, onSummaryIntervalChange() {}, translationEnabled, onTranslationToggle() {},
+    targetLang: 'ko-en', onTargetLangChange() {}, interimTranslation, onInterimTranslationToggle() {},
+  }));
+  assert.doesNotMatch(render(false, false), /초안 번역/);
+  const draftInput = (html) => {
+    const label = html.indexOf('초안 번역 (비용↑)');
+    assert.ok(label > 0, 'draft toggle is missing');
+    return html.slice(html.lastIndexOf('<input', label), label);
+  };
+  assert.doesNotMatch(draftInput(render(true, false)), /checked/);
+  assert.match(draftInput(render(true, true)), /checked/);
 });

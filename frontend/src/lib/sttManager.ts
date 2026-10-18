@@ -27,6 +27,8 @@ export interface SttManagerConfig {
   callbacks: TranscribeCallbacks;
   targetLang: string;
   translationEnabled: boolean;
+  /** Also translate partial captions (billed per revision); off by default. */
+  interimTranslation?: boolean;
   transcribeStreamingConfig?: TranscribeStreamingConfig;
   onProviderChange?: (provider: LiveSttProvider) => void;
   /**
@@ -112,6 +114,7 @@ export class SttManager {
     this.translation = new LiveTranslation({
       enabled: config.translationEnabled,
       targetLang: config.targetLang,
+      interim: config.interimTranslation ?? false,
       onUpdate: (entry) => this.config.callbacks.onTranslation(entry),
       onReset: () => this.config.callbacks.onTranslationReset?.(),
       translate: (text, sourceLang, targetLang, signal) => translateApi.translate(text, sourceLang, targetLang, signal),
@@ -579,6 +582,11 @@ export class SttManager {
   updateTargetLang(lang: string): void {
     this.config.targetLang = lang;
     this.translation.updateTargetLang(lang);
+  }
+
+  updateInterimTranslation(enabled: boolean): void {
+    this.config.interimTranslation = enabled;
+    this.translation.updateInterim(enabled);
   }
 
   updateTranslationEnabled(enabled: boolean): void {
