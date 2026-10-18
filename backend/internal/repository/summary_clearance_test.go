@@ -382,16 +382,32 @@ func TestContentWritesInvalidateStoredClearanceAcrossWriterRollback(t *testing.T
 					state := &model.ResummaryState{OwnerID: "owner", RunID: "run", Status: model.AnalysisRunning, LeaseUntil: now.Add(time.Minute).UnixMilli()}
 					err = repo.CompleteResummary(ctx, snapshot, state, "private edited summary", "coverage", "result", now)
 				}
+				if flag == "1" && path == "whole item" {
+					if !errors.Is(err, ErrConditionFailed) || len(wire.writes) != 0 ||
+						wire.meeting(t).SummaryGeneration() != "generation-old" {
+						t.Fatal("unfenced whole write was not rejected before storage mutation")
+					}
+					return
+				}
 				if err != nil {
 					t.Fatal(err)
 				}
 				metadata := wire.meeting(t)
 				// Metadata-only readers must reject old derived rows without
 				// fetching content or permitting the old generation to replay.
-				if metadata.SummaryPrivacy.SafeMetadata() || metadata.SummaryGeneration() == "generation-old" ||
+				fencedPublication := flag == "1" && (path == "batch summary" || path == "resummary")
+				if metadata.SummaryPrivacy.SafeMetadata() != fencedPublication || metadata.SummaryGeneration() == "generation-old" ||
 					metadata.InsightsRevision != "" || metadata.AuthorizationRevision != 8 {
 					t.Fatalf("stale clearance survived %s: privacy=%+v insight=%q revision=%d",
 						path, metadata.SummaryPrivacy, metadata.InsightsRevision, metadata.AuthorizationRevision)
+				}
+				if flag == "1" {
+					if metadata.SummaryGeneration() == "" ||
+						metadata.SummaryPrivacy.ContentSHA256 != model.SummaryPrivacyHash(metadata.Content) {
+						t.Fatal("fenced content publication lost its fresh source-bound generation")
+					}
+				} else if metadata.SummaryPrivacy != nil {
+					t.Fatal("writer rollback retained content clearance")
 				}
 				if caller.SummaryPrivacy == nil || caller.InsightsRevision != "insights-old" {
 					t.Fatal("write mutated caller provenance rather than the storage copy")
@@ -578,10 +594,14 @@ func TestSummaryCaptureAlwaysPinsStoredPrivacy(t *testing.T) {
 					}
 				}
 				if capture == "batch" {
-					for _, field := range []string{"title", "updatedAt", "actionItems"} {
+					for _, field := range []string{"title", "updatedAt"} {
 						if _, pinned := snapshot.Checks[0].Fields[field]; pinned {
 							t.Fatalf("legacy completion fenced unrelated metadata %s", field)
 						}
+					}
+					_, pinsActions := snapshot.Checks[0].Fields["actionItems"]
+					if pinsActions != (flag == "1") {
+						t.Fatal("capture lost the writer publication fence or blocked a legacy metadata edit")
 					}
 				}
 			})

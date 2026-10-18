@@ -20,6 +20,10 @@ var ErrSummarySharingUnsafe = errors.New("sharing-safe summary regeneration requ
 
 // Readers are installed before these writers are enabled. This switch never
 // disables protection for an already-stamped membership.
+// Installation-only: SUMMARY_PRIVACY_WRITER_ENABLED must stay unset/0 in this revision.
+// Activation needs deployed readers, canonical KB export/permission, old-writer
+// drain/backfill, cross-user acceptance, and unadopted owner SharingSafe request/UI
+// plus SHARING_REGEN_REQUIRED mapping.
 func SummaryPrivacyWritesEnabled() bool {
 	value := os.Getenv("SUMMARY_PRIVACY_WRITER_ENABLED")
 	return value == "1"
@@ -91,6 +95,7 @@ func (r *DynamoDBRepository) CaptureSummaryPrivacy(ctx context.Context, ownerID,
 	return r.captureMeetingSummaryMetadata(ctx, ownerID, meetingID, withSummaryPrivacyFields([]string{
 		"meetingId", "userId", "content", "title", "status", "date", "notes", "liveSummary",
 		"transcriptA", "transcriptB", "selectedTranscript", "transcriptSegments",
+		"transcriptQualityA", "transcriptQualityB", "transcriptRevisionA", "transcriptRevisionB",
 	}))
 }
 
@@ -225,6 +230,18 @@ func invalidateSummaryClearance(update expression.UpdateBuilder) expression.Upda
 		Remove(expression.Name("insightsRevision")))
 }
 
+// Fenced stamps preserve provenance/reset identity and clear old derivative identity.
+// Generic writes reject server fields; no stamp invalidates in every mode.
+func summaryContentRevisionUpdate(update expression.UpdateBuilder, fields map[string]interface{}) expression.UpdateBuilder {
+	if _, fresh := fields["summaryPrivacy"]; !fresh {
+		return invalidateSummaryClearance(update)
+	}
+	if _, fresh := fields["insightsRevision"]; !fresh {
+		update = update.Remove(expression.Name("insightsRevision"))
+	}
+	return summaryPrivacyRevisionUpdate(update)
+}
+
 // Model derivatives use the exact stored source snapshot, including the
 // generation and task bytes actually consumed. A late worker cannot repopulate
 // fields cleared by sharing-safe regeneration, even when new content is equal.
@@ -248,7 +265,13 @@ func (r *DynamoDBRepository) PublishSummaryDerivatives(ctx context.Context, snap
 		}
 	}
 	if _, insights := fields["insights"]; insights {
-		update = update.Set(expression.Name("insightsRevision"), expression.Value(uuid.NewString()))
+		if snapshot.Meeting.SummaryGeneration() == "" {
+			// Empty legacy generation/revision; captured identity protects stamped
+			// generations through rollback regardless of creation flag.
+			update = update.Remove(expression.Name("insightsRevision"))
+		} else {
+			update = update.Set(expression.Name("insightsRevision"), expression.Value(uuid.NewString()))
+		}
 	}
 	update = update.Set(expression.Name("updatedAt"), expression.Value(time.Now().UTC()))
 	op, err := analysisUpdate(r.tableName, meetingKey(snapshot.Meeting.UserID, snapshot.Meeting.MeetingID),

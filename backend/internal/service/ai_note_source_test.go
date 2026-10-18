@@ -58,7 +58,7 @@ func invokeNoteSourceFixture(t *testing.T, meeting *model.Meeting, modelResponse
 		"transcriptA": meeting.TranscriptA, "transcriptB": meeting.TranscriptB,
 		"selectedTranscript": meeting.SelectedTranscript, "transcriptSegments": meeting.TranscriptSegments,
 		"notes": meeting.Notes, "content": meeting.Content, "actionItems": meeting.ActionItems,
-		"noteLanguage": meeting.NoteLanguage,
+		"noteLanguage": meeting.NoteLanguage, "status": string(meeting.Status),
 	} {
 		item[name] = map[string]string{"S": value}
 	}
@@ -114,6 +114,45 @@ func invokeNoteSourceFixture(t *testing.T, meeting *model.Meeting, modelResponse
 	svc := NewBedrockService(bedrock, nil, repository.NewDynamoDBRepository(db, "note-source-test"))
 	content, err = invoke(svc)
 	return request, content, writes, err
+}
+
+func TestSummaryDerivatives_InvalidOutputRetainsPrior(t *testing.T) {
+	t.Setenv("SUMMARY_PRIVACY_WRITER_ENABLED", "0")
+	for _, tc := range []struct {
+		field, raw string
+		valid      bool
+	}{
+		{"insights", "broken", false}, {"insights", "null", false},
+		{"insights", "[{}]", false}, {"insights", "[]", true},
+		{"tags", "broken", false}, {"tags", "null", false},
+		{"tags", "[null]", false}, {"tags", `[" "]`, false}, {"tags", "[]", true},
+		{"sentiment", "unknown", false}, {"sentiment", "null", false},
+		{"sentiment", "positive", true},
+		{"tags", "no-source", false}, {"insights", "no-source", false}, {"sentiment", "no-source", false},
+	} {
+		t.Run(tc.field+"/"+tc.raw, func(t *testing.T) {
+			meeting := &model.Meeting{MeetingID: "m", UserID: "owner",
+				Status: model.StatusDone, TranscriptA: "source", Content: "summary"}
+			want, count, calls := ErrInvalidAnalysisResponse, 0, 1
+			if tc.valid {
+				want, count = nil, 1
+			}
+			if tc.raw == "no-source" {
+				meeting.TranscriptA = ""
+				if tc.field != "tags" {
+					meeting.Content = ""
+				}
+				want, calls = ErrNoAnalysisSource, 0
+			}
+			body := actionItemsModelResponse(t, tc.raw, "end_turn")
+			request, _, writes, err := invokeNoteSourceFixture(t, meeting, body, func(s *BedrockService) (string, error) {
+				return "", s.DeriveSummary(context.Background(), "owner", "m", tc.field)
+			})
+			if !errors.Is(err, want) || writes != count || len(request.Messages) != calls {
+				t.Fatalf("writes=%d model messages=%d err=%v, want %d/%d/%v", writes, len(request.Messages), err, count, calls, want)
+			}
+		})
+	}
 }
 
 func TestSummarizeTranscript_SourceFidelity(t *testing.T) {

@@ -618,6 +618,10 @@ func (r *DynamoDBRepository) BatchGetMeetings(ctx context.Context, keys []Meetin
 // UpdateMeeting updates a meeting record
 // Large transcripts are automatically stored in S3 to avoid DynamoDB's 400KB limit
 func (r *DynamoDBRepository) UpdateMeeting(ctx context.Context, meeting *model.Meeting) error {
+	if SummaryPrivacyWritesEnabled() {
+		// Legacy whole-item writes lack source/auth snapshots; production uses conditional fields.
+		return ErrConditionFailed
+	}
 	meeting.UpdatedAt = time.Now().UTC()
 
 	// The s3:// ref substitution below must NOT mutate the caller's Meeting:
@@ -967,7 +971,7 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 	_, writesContent := fields["content"]
 	_, writesLiveSummary := fields["liveSummary"]
 	invalidatesClearance := writesContent || writesLiveSummary
-	if immutableSpills || writesNotes || writesA || writesB || invalidatesClearance {
+	if immutableSpills || writesNotes || writesA || writesB || invalidatesClearance || SummaryPrivacyWritesEnabled() {
 		// Do not leave internal spill refs or a generated revision in a
 		// caller's map that could be reused for a later retry.
 		copyFields := make(map[string]interface{}, len(fields))
@@ -975,6 +979,81 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 			copyFields[name] = value
 		}
 		fields = copyFields
+	}
+	privacyRevision := false
+	var accountMembership *types.ConditionCheck
+	if SummaryPrivacyWritesEnabled() {
+		_, contentWrite := fields["content"]
+		_, liveWrite := fields["liveSummary"]
+		_, accountWrite := fields["accountId"]
+		_, publicationWrite := fields["sharedToAccount"]
+		_, linksWrite := fields["linkedMeetingIds"]
+		privacyRevision = contentWrite || liveWrite || accountWrite || publicationWrite || linksWrite
+		if privacyRevision {
+			snapshot, err := r.CaptureSummaryPrivacy(ctx, userID, meetingID)
+			if err != nil {
+				return err
+			}
+			if snapshot == nil {
+				return ErrConditionFailed
+			}
+			parent := snapshot.Meeting
+			// Classification/publication pins canonical owner membership, beyond preflight.
+			account, assigned := fields["accountId"].(string)
+			publish, _ := fields["sharedToAccount"].(bool)
+			if publish && account == "" {
+				account = parent.AccountID
+			}
+			if account != "" && (assigned || publish) {
+				row, err := r.summaryRow(ctx, model.PrefixAccount+account, model.PrefixMember+userID)
+				if err != nil {
+					return err
+				}
+				if len(row) == 0 {
+					return ErrSummaryAccess
+				}
+				check, err := summaryCheck(model.PrefixAccount+account, model.PrefixMember+userID, row,
+					[]string{"accountId", "userId", "addedAt", "summaryPrivacyVersion"})
+				if err != nil {
+					return err
+				}
+				expr, err := expression.NewBuilder().WithCondition(summaryCondition(check)).Build()
+				if err != nil {
+					return err
+				}
+				accountMembership = &types.ConditionCheck{TableName: aws.String(r.tableName),
+					Key: summaryRowKey(check.PK, check.SK), ConditionExpression: expr.Condition(),
+					ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values()}
+			}
+			if publish, _ := fields["sharedToAccount"].(bool); publish {
+				account, _ := fields["accountId"].(string)
+				if account == "" {
+					account = parent.AccountID
+				}
+				if (!parent.SharedToAccount || account != parent.AccountID) && !parent.CanCreateSummaryGrant() {
+					return ErrSummarySharingUnsafe
+				}
+			}
+			condition = condition.And(summaryCondition(snapshot.Checks[0]))
+			if contentWrite || liveWrite {
+				content := parent.Content
+				if contentWrite {
+					var ok bool
+					content, ok = fields["content"].(string)
+					if !ok {
+						return ErrConditionFailed
+					}
+				}
+				state := parent.SummaryPrivacyState()
+				if state == model.SummaryPrivacySafe {
+					state = model.SummaryPrivacyUnknown
+				}
+				fields["summaryPrivacy"] = &model.SummaryPrivacy{
+					Version: model.SummaryPrivacyVersion, State: state, GenerationID: uuid.NewString(),
+					ContentSHA256: model.SummaryPrivacyHash(content), InheritedState: state,
+				}
+			}
+		}
 	}
 	for _, variant := range []string{"A", "B"} {
 		if _, written := fields["transcript"+variant]; written {
@@ -1136,7 +1215,9 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 			}
 		}
 		if invalidatesClearance {
-			update = invalidateSummaryClearance(update)
+			update = summaryContentRevisionUpdate(update, fields)
+		} else if privacyRevision {
+			update = summaryPrivacyRevisionUpdate(update)
 		}
 
 		expr, err := expression.NewBuilder().WithUpdate(update).WithCondition(writeCond).Build()
@@ -1152,7 +1233,7 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 			// Ambiguous failures require readback; never replay the old UUID.
 			options = append(options, singleDynamoDBAttempt)
 		}
-		_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		input := &dynamodb.UpdateItemInput{
 			TableName: aws.String(r.tableName),
 			Key: map[string]types.AttributeValue{
 				"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
@@ -1162,7 +1243,22 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 			ConditionExpression:       expr.Condition(),
 			ExpressionAttributeNames:  expr.Names(),
 			ExpressionAttributeValues: expr.Values(),
-		}, options...)
+		}
+		if accountMembership != nil {
+			_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+				TransactItems: []types.TransactWriteItem{
+					{ConditionCheck: accountMembership},
+					{Update: &types.Update{TableName: input.TableName, Key: input.Key, UpdateExpression: input.UpdateExpression,
+						ConditionExpression: input.ConditionExpression, ExpressionAttributeNames: input.ExpressionAttributeNames,
+						ExpressionAttributeValues: input.ExpressionAttributeValues}},
+				},
+			}, noSummaryRetries)
+			if isConditionalCheckFailedTransaction(err) {
+				return ErrConditionFailed
+			}
+		} else {
+			_, err = r.client.UpdateItem(ctx, input, options...)
+		}
 		if err != nil {
 			var ccfe *types.ConditionalCheckFailedException
 			if errors.As(err, &ccfe) {
@@ -2096,14 +2192,46 @@ func (r *DynamoDBRepository) CreateShare(ctx context.Context, meetingID, ownerID
 		return nil, fmt.Errorf("failed to marshal share: %w", err)
 	}
 
-	// Use TransactWriteItems for atomic creation of both records
+	// Publish new grants/parent auth revision atomically; direct updates pin
+	// continued presence against resurrection.
+	items := []types.TransactWriteItem{
+		{Put: &types.Put{TableName: aws.String(r.tableName), Item: item1}},
+		{Put: &types.Put{TableName: aws.String(r.tableName), Item: item2}},
+	}
+	if SummaryPrivacyWritesEnabled() {
+		existing, err := r.GetShare(ctx, sharedToID, meetingID)
+		if err != nil {
+			return nil, err
+		}
+		retained := existing != nil && existing.OwnerID == ownerID && existing.Origin != model.ShareOriginAccount
+		fence, _, err := r.summaryAuthorizationFence(ctx, ownerID, meetingID, !retained)
+		if err != nil {
+			return nil, err
+		}
+		if retained {
+			condition, err := expression.NewBuilder().WithCondition(
+				expression.AttributeExists(expression.Name("PK")).
+					And(expression.Name("ownerId").Equal(expression.Value(ownerID))).
+					And(expression.AttributeNotExists(expression.Name("origin")).Or(
+						expression.Name("origin").Equal(expression.Value(""))))).Build()
+			if err != nil {
+				return nil, err
+			}
+			for i := range items {
+				items[i].Put.ConditionExpression = condition.Condition()
+				items[i].Put.ExpressionAttributeNames = condition.Names()
+				items[i].Put.ExpressionAttributeValues = condition.Values()
+			}
+		}
+		items = append(items, types.TransactWriteItem{Update: fence})
+	}
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
-		TransactItems: []types.TransactWriteItem{
-			{Put: &types.Put{TableName: aws.String(r.tableName), Item: item1}},
-			{Put: &types.Put{TableName: aws.String(r.tableName), Item: item2}},
-		},
+		TransactItems: items,
 	})
 	if err != nil {
+		if SummaryPrivacyWritesEnabled() && isConditionalCheckFailedTransaction(err) {
+			return nil, ErrConditionFailed
+		}
 		return nil, fmt.Errorf("failed to create share: %w", err)
 	}
 
@@ -2235,7 +2363,7 @@ func (r *DynamoDBRepository) CreateShareIfMember(ctx context.Context, meetingID,
 		return nil, fmt.Errorf("build member condition: %w", err)
 	}
 
-	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+	input := &dynamodb.TransactWriteItemsInput{
 		TransactItems: []types.TransactWriteItem{
 			{
 				ConditionCheck: &types.ConditionCheck{
@@ -2268,7 +2396,18 @@ func (r *DynamoDBRepository) CreateShareIfMember(ctx context.Context, meetingID,
 				},
 			},
 		},
-	})
+	}
+	if SummaryPrivacyWritesEnabled() {
+		fence, snapshot, err := r.summaryAuthorizationFence(ctx, ownerID, meetingID, false)
+		if err != nil {
+			return nil, err
+		}
+		if !snapshot.Meeting.SharedToAccount || snapshot.Meeting.AccountID != accountID {
+			return nil, ErrSummaryAccess
+		}
+		input.TransactItems = append(input.TransactItems, types.TransactWriteItem{Update: fence})
+	}
+	_, err = r.client.TransactWriteItems(ctx, input)
 	if err != nil {
 		// Gate the item-by-item classification below on
 		// isConditionalCheckFailedTransaction (same helper
@@ -2282,11 +2421,15 @@ func (r *DynamoDBRepository) CreateShareIfMember(ctx context.Context, meetingID,
 		if isConditionalCheckFailedTransaction(err) {
 			var tce *types.TransactionCanceledException
 			errors.As(err, &tce)
+			if SummaryPrivacyWritesEnabled() && len(tce.CancellationReasons) > 3 &&
+				aws.ToString(tce.CancellationReasons[3].Code) == "ConditionalCheckFailed" {
+				return nil, ErrConditionFailed
+			}
 			// Item 0 is the member ConditionCheck; items 1-2 are the Share Puts.
 			if code := tce.CancellationReasons[0].Code; code != nil && *code == "ConditionalCheckFailed" {
 				return nil, ErrMemberRemoved
 			}
-			for _, reason := range tce.CancellationReasons[1:] {
+			for _, reason := range tce.CancellationReasons[1:3] {
 				if reason.Code != nil && *reason.Code == "ConditionalCheckFailed" {
 					// A pre-existing direct share blocked the write -- same
 					// outcome as the plain CreateShare's clobber-guard:
@@ -2744,6 +2887,16 @@ func (r *DynamoDBRepository) PutPendingShare(ctx context.Context, share *model.P
 	if err != nil {
 		return fmt.Errorf("failed to marshal pending share: %w", err)
 	}
+	if share.Kind == model.PendingShareKindMeeting && SummaryPrivacyWritesEnabled() {
+		fence, _, err := r.summaryGrantFence(ctx, share.InvitedByUserID, share.MeetingID)
+		if err != nil {
+			return err
+		}
+		_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: []types.TransactWriteItem{
+			{Update: fence}, {Put: &types.Put{TableName: aws.String(r.tableName), Item: item}},
+		}})
+		return analysisWriteError(err)
+	}
 	_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName: aws.String(r.tableName),
 		Item:      item,
@@ -2915,6 +3068,7 @@ func (r *DynamoDBRepository) MaterializePendingAccountGrant(ctx context.Context,
 		GSI1SK:     model.PrefixAccount + p.AccountID,
 		EntityType: model.EntityTypeAccountMember,
 	}
+	member = stampSummaryMembership(member)
 	item, err := attributevalue.MarshalMap(member)
 	if err != nil {
 		return false, fmt.Errorf("marshal account member: %w", err)
@@ -3067,7 +3221,7 @@ func (r *DynamoDBRepository) MaterializePendingMeetingGrant(ctx context.Context,
 		idxDelete  = 3
 		numItems   = 4
 	)
-	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+	input := &dynamodb.TransactWriteItemsInput{
 		TransactItems: []types.TransactWriteItem{
 			{
 				// PK: USER#{ownerId}, SK: MEETING#{meetingId} -- exists only
@@ -3113,7 +3267,18 @@ func (r *DynamoDBRepository) MaterializePendingMeetingGrant(ctx context.Context,
 				},
 			},
 		},
-	})
+	}
+	if SummaryPrivacyWritesEnabled() {
+		fence, _, err := r.summaryGrantFence(ctx, p.InvitedByUserID, p.MeetingID)
+		if errors.Is(err, ErrSummarySharingUnsafe) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		input.TransactItems[idxMeeting] = types.TransactWriteItem{Update: fence}
+	}
+	_, err = r.client.TransactWriteItems(ctx, input)
 	if err == nil {
 		return true, nil
 	}
@@ -3121,6 +3286,9 @@ func (r *DynamoDBRepository) MaterializePendingMeetingGrant(ctx context.Context,
 		return false, nil
 	}
 	meetingFailed, ok1 := transactionItemFailed(err, idxMeeting, numItems)
+	if SummaryPrivacyWritesEnabled() && ok1 && meetingFailed {
+		return false, nil
+	}
 	put1Failed, ok2 := transactionItemFailed(err, idxPut1, numItems)
 	put2Failed, ok3 := transactionItemFailed(err, idxPut2, numItems)
 	if (ok1 && meetingFailed) || (ok2 && put1Failed) || (ok3 && put2Failed) {
