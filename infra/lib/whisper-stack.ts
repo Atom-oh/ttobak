@@ -7,6 +7,7 @@ import * as autoscaling from 'aws-cdk-lib/aws-autoscaling';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as cr from 'aws-cdk-lib/custom-resources';
 import { Construct } from 'constructs';
 
 export interface WhisperStackProps extends cdk.StackProps {
@@ -21,6 +22,7 @@ export const WHISPER_CONTAINER_NAME = 'whisper';
 export const WHISPER_CAPACITY_PROVIDER = 'ttobak-whisper-spot';
 export const WHISPERX_TASK_FAMILY = 'ttobak-whisperx';
 export const WHISPERX_CONTAINER_NAME = 'whisperx';
+export const WHISPER_ASG_NAME = 'ttobak-whisper-asg';
 
 export class WhisperStack extends cdk.Stack {
   public readonly cluster: ecs.Cluster;
@@ -59,7 +61,7 @@ export class WhisperStack extends cdk.Stack {
 
     // Auto Scaling Group: min=0 for zero-scale
     const asg = new autoscaling.AutoScalingGroup(this, 'WhisperAsg', {
-      autoScalingGroupName: 'ttobak-whisper-asg',
+      autoScalingGroupName: WHISPER_ASG_NAME,
       vpc,
       // The externally owned VPC has private egress subnets only in 2a/2b.
       // Use both; instance-type diversification below makes 2b usable for
@@ -134,6 +136,14 @@ export class WhisperStack extends cdk.Stack {
       minimumScalingStepSize: 1,
       maximumScalingStepSize: 2,
       targetCapacityPercent: 100,
+      // ECS managed draining (ADR-009 host lifecycle amendment). Left unset, aws-cdk-lib adds its own
+      // InstanceDrainHook Lambda, which cannot drain a host that has not yet
+      // registered with ECS: when AZRebalance picked a just-launched host,
+      // the hook logged "container instance ARN None", returned, and the
+      // host then received a RunTask task and was terminated ~300 s later
+      // with no STOPPED reason. Managed draining is ECS-native, tracks
+      // registration itself and makes CDK omit the hook entirely.
+      enableManagedDraining: true,
     });
 
     this.cluster.addAsgCapacityProvider(capacityProvider);
@@ -157,7 +167,37 @@ export class WhisperStack extends cdk.Stack {
     // grouped with the capacity provider it tunes.
     asg.addUserData(
       'echo ECS_ENGINE_TASK_CLEANUP_WAIT_DURATION=3m >> /etc/ecs/ecs.config',
+      // Stop placing new tasks on a Spot host that has received its
+      // two-minute interruption notice (ADR-009). Running tasks still die with
+      // the host; this setting does not re-run them.
+      'echo ECS_ENABLE_SPOT_INSTANCE_DRAINING=true >> /etc/ecs/ecs.config',
     );
+
+    // Suspend AZRebalance (ADR-009): rebalancing terminates healthy hosts,
+    // including one that just accepted a Whisper task, to even out AZs --
+    // the root cause of silently killed transcriptions. CloudFormation has no
+    // suspended-processes property, so this follows the existing
+    // custom-resource precedent. Deleting the resource resumes the process.
+    // The constant physical ID means a redeploy does not re-suspend after a
+    // manual resume; docs/runbooks/stt-pipeline-troubleshooting.md checks
+    // SuspendedProcesses and re-suspends.
+    const azRebalanceCall = (action: 'suspendProcesses' | 'resumeProcesses'): cr.AwsSdkCall => ({
+      service: 'AutoScaling',
+      action,
+      parameters: { AutoScalingGroupName: asg.autoScalingGroupName, ScalingProcesses: ['AZRebalance'] },
+      physicalResourceId: cr.PhysicalResourceId.of('ttobak-whisper-asg-azrebalance-suspended'),
+    });
+    const azRebalance = new cr.AwsCustomResource(this, 'WhisperAzRebalanceSuspended', {
+      onCreate: azRebalanceCall('suspendProcesses'),
+      onUpdate: azRebalanceCall('suspendProcesses'),
+      onDelete: azRebalanceCall('resumeProcesses'),
+      policy: cr.AwsCustomResourcePolicy.fromStatements([new iam.PolicyStatement({
+        actions: ['autoscaling:SuspendProcesses', 'autoscaling:ResumeProcesses'],
+        resources: [`arn:aws:autoscaling:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:autoScalingGroup:*:autoScalingGroupName/${WHISPER_ASG_NAME}`],
+      })]),
+      installLatestAwsSdk: false,
+    });
+    azRebalance.node.addDependency(asg);
 
     // Task execution role
     const executionRole = new iam.Role(this, 'WhisperExecutionRole', {

@@ -64,4 +64,8 @@ COPY transcribe.py /app/transcribe.py
 COPY audio_crop.py /app/audio_crop.py
 WORKDIR /app
 
+# Unbuffered stdout/stderr: a worker killed mid-run (Spot reclaim, host drain)
+# must still leave its progress lines in CloudWatch (ADR-009).
+ENV PYTHONUNBUFFERED=1
+
 ENTRYPOINT ["python3", "transcribe.py"]

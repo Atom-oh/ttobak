@@ -5,6 +5,8 @@
   [ADR-035](ADR-035-diarization-pyannote4-community1-asr-pins.md).
 - Decision date: Not recorded; motivating benchmark dated 2026-04-23.
 - Capacity decision amended: 2026-09-17 (first active worker uses On-Demand).
+- Host lifecycle amended 2026-10-17: ECS managed draining, AZRebalance
+  suspension, Spot instance draining and unbuffered worker logs (below).
 - Implementation checked: 2026-09-17.
 
 ## Context and decision
@@ -84,6 +86,26 @@ base instance successfully launched; recheck quota usage before another rollout.
 Launch-template versions 17 (before) and 19 (mixed policy) had identical user
 data. Neither contained `ECS_ENABLE_SPOT_INSTANCE_DRAINING`; this change did not
 remove that setting. Existing task interruption/recovery limitations remain.
+
+Host lifecycle amendment, 2026-10-17. Whisper tasks were observed to stop about
+300 seconds after placement with no STOPPED reason. The ASG's AZRebalance process
+had selected a just-launched host; aws-cdk-lib's default InstanceDrainHook Lambda
+logged a missing container-instance ARN (the host had not yet registered with
+ECS), returned, and the host then accepted a RunTask task before termination.
+The block-buffered worker also left an empty log stream. The amended decision:
+
+- The capacity provider enables ECS managed draining, which tracks registration
+  itself; CDK then omits its InstanceDrainHook Lambda and lifecycle hook.
+- AZRebalance is suspended through a custom resource (CloudFormation has no
+  suspended-processes property); deleting the resource resumes it. The resource
+  has a constant physical ID and static parameters, so a redeploy does not
+  re-suspend after an out-of-band resume; the STT runbook checks for that drift.
+- `ECS_ENABLE_SPOT_INSTANCE_DRAINING=true` stops new placement on a host that
+  received its Spot interruption notice. Tasks already running still die with
+  the host; this change adds no automatic re-run, so such meetings follow the
+  existing stale-transcribing expiry and authorized operator recovery.
+- The production image sets `PYTHONUNBUFFERED=1` so a killed worker's progress
+  lines reach CloudWatch. ENTRYPOINT and the absent CMD are unchanged.
 
 GPU batch inference improves the evaluated workload while retaining live captions.
 Costs include cold starts, large runtime dependencies, model staging, GPU AMI
