@@ -57,9 +57,13 @@ func legacyTermKey(t model.DictionaryTerm) string {
 	return TermKey(display)
 }
 
+// legacyTermFromRow is a row's legacy form. LegacyDisplayEmpty keeps an empty
+// displayAs only while the phrase still derives the row's key: after a v2
+// phrase edit, an empty displayAs would make legacyTermKey name a different
+// term, so a legacy GET-to-PUT round trip would replace the row.
 func legacyTermFromRow(row model.DictTerm) model.DictionaryTerm {
 	display := row.DisplayAs
-	if row.LegacyDisplayEmpty {
+	if row.LegacyDisplayEmpty && TermKey(row.Phrase) == row.TermKey {
 		display = ""
 	}
 	return model.DictionaryTerm{

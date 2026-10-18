@@ -90,23 +90,38 @@ readers only: no extraction, term CRUD route, vocabulary builder or UI change.
   `GetVocabularyForTranscription` reads `VOCAB#` first, falls back to the blob
   and never writes; the transcribe Lambda uses both readers.
 
-## Amendment 2026-10-18: term CRUD and shared validator
+## Amendment 2026-10-18: term CRUD, shared validator and legacy semantics
 
 Migration now has callers; this replaces the previous amendment's "no caller
 yet" note. Routes: [API-SPEC](../API-SPEC.md#personal-dictionary).
 
-- **Validator.** `ValidateTermInput` applies to manual terms now, and to
-  automatic terms when extraction lands; its blocklist is a seed (grown by the
-  automatic-term filters amendment below).
+- **Validator.** `ValidateTermInput` applies to manual terms and the legacy PUT
+  now, and to automatic terms when extraction lands; its blocklist is a seed
+  (grown by the automatic-term filters amendment below).
 - **User actions.** Delete tombstones any origin. Edit sets `userEditedAt` under
   the caller's `version` and keeps `origin`; keep is `aliasMode=always`;
   accepting a suggestion sets `state=active`. Renaming to another key is a new
   term. Creating a tombstoned term restores it as manual (an explicit user act).
-- **Migration callers.** v2 writes migrate first. The shared transcribe reader
-  never writes. An unmigratable item blocks v2 writes
-  (`LEGACY_DICTIONARY_CONFLICT`). Until the legacy PUT/DELETE move onto rows
-  (the follow-up change, deployed together with this one), a legacy write after
-  a v2 write updates only the legacy item, which v2 readers ignore once migrated.
+- **Legacy routes.** The whole-list PUT writes the legacy item, migrates it and
+  reconciles manual rows only, so a legacy or stale client never tombstones or
+  erases automatic terms. Unchanged terms skip revalidation so stored terms that
+  predate the validator do not block saving. GET lists active automatic rows
+  (possibly phrase-less) in legacy `terms`, so the PUT passes entries keyed to
+  automatic or suggested rows through without validation, counts only manual
+  entries toward the cap, and warns when it ignores a change to one; a GET
+  round-trip always saves. A legacy-empty `displayAs` is shown only while the
+  phrase still derives the term's key, so a v2 phrase edit does not make the
+  round trip replace the row. Legacy DELETE removes manual rows.
+- **Legacy PUT limits.** Reconciliation is per row, not one transaction; row
+  writes are version-conditioned and a retry converges. The whole list is last
+  writer wins: manual rows created after the client's GET, including by an
+  overlapping PUT, are deleted without a conflict. Fencing the legacy item
+  write on its observed `blobRevision` would serialize overlapping PUTs; it is
+  not implemented.
+- **Migration callers.** v2 writes and the legacy PUT migrate first; the API GET
+  migrates best effort. The shared transcribe reader never writes. An
+  unmigratable item blocks v2 writes (`LEGACY_DICTIONARY_CONFLICT`) and keeps the
+  pre-v2 legacy DELETE until a deduplicated legacy PUT resolves it.
 - **Caps and keys.** 500 active manual terms per scope, checked before the write
   (concurrent creates may overshoot slightly). Tombstones beyond 2,000 are pruned
   oldest first, bounding the guessable-hash retention noted above. `termKey`
@@ -129,6 +144,15 @@ yet" note. Routes: [API-SPEC](../API-SPEC.md#personal-dictionary).
   Pending updates are skipped by batch jobs (`GetVocabularyForTranscription`
   requires READY); the response still has no `vocabularyName`, so the live
   client passes none.
+- **Legacy item copies.** The PUT writes only manual terms to the legacy item, so
+  automatic (meeting-derived) terms never gain a second copy there. A manual term
+  later tombstoned through the v2 DELETE keeps its text in the legacy item until
+  the next legacy PUT or the legacy item's removal; v2 readers ignore it after
+  migration. Tombstone content clearing does not cover that copy.
+- **Rollback.** Once this version migrates a user, an older API's legacy PUT
+  writes only the legacy item, which v2 readers ignore; roll forward instead. An
+  older API would also read the legacy item's retained manual copies, including
+  terms since deleted through v2.
 
 ## Amendment 2026-10-18: automatic-term filters
 
@@ -277,7 +301,7 @@ concerns. This feature does not remove the need to review transcripts.
   migration, union reader and merge; tests beside each.
 - [dictionary_terms.go](../../backend/internal/service/dictionary_terms.go) and
   [dictionary_validate.go](../../backend/internal/service/dictionary_validate.go):
-  term CRUD and the shared validator; tests beside each.
+  term CRUD, legacy semantics and the shared validator; tests beside each.
 - [terms_analysis.go](../../backend/internal/model/terms_analysis.go),
   [repository terms_analysis.go](../../backend/internal/repository/terms_analysis.go)
   and [terms_merge.go](../../backend/internal/service/terms_merge.go): run state,

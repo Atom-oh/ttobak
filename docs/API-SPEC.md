@@ -648,6 +648,18 @@ newlines anywhere, including the edges) and line separators rejected;
 never blocklisted (`terms_blocklist.txt`) or the term's own key; `phrase` at most
 256 runes. Errors are 400 `field: reason` and never echo input.
 
+- `GET /api/settings/dictionary` migrates the legacy item best effort, then
+  returns legacy `terms`/`status` plus `items` (non-tombstone rows: `termId`,
+  `displayAs`, `phrase`, `heardAs`, `aliasMode`, `type`, `origin`,
+  `state` `active|suggested`, `userEdited`, `version`, flags, `hits`, times).
+  `migrationPending` means the legacy item is not yet migrated: either it is
+  refused (distinct terms share a key, which a deduplicated legacy PUT resolves)
+  or the best-effort migration failed and is retried later. Legacy `terms` list
+  active rows of every origin, possibly without a `phrase`, and exclude
+  suggestions. `items` is omitted when there are no rows. A term saved without
+  `displayAs` lists `displayAs: ""` only while its `phrase` still names the
+  term; after a v2 phrase edit it lists the stored `displayAs`, so an unchanged
+  round trip keeps the same row.
 - `POST .../terms` `{displayAs, phrase?, heardAs?, type?, aliasMode?}` (at most
   4 KB, no unknown fields or trailing data) creates a manual term or restores a
   tombstone as manual; `phrase` defaults to `displayAs`, and `""` keeps the term
@@ -660,11 +672,30 @@ never blocklisted (`terms_blocklist.txt`) or the term's own key; `phrase` at mos
   Every edit sets `userEditedAt`, blocking automatic writes; `origin` is kept.
 - `DELETE .../terms/{termId}[?version=]` tombstones any origin; failed observation
   cleanup or pruning (beyond 2,000 tombstones, oldest first) is a `warnings` entry.
-- v2 writes migrate the legacy item first; an unmigratable item (distinct
-  terms sharing a key) is 409 `LEGACY_DICTIONARY_CONFLICT`, and a legacy item
-  that kept changing during migration is 409 `CONFLICT`. The legacy `GET`, `PUT`
-  and `DELETE .../term` keep their pre-v2 behavior until the follow-up change
-  moves them onto rows.
+- Legacy `PUT` (at most 256 KB and 1,000 entries; `soundsLike` splits on commas)
+  accepts the GET `terms` unchanged. Entries whose key belongs to a live auto or
+  suggested row are passed through without validation and never written; if one
+  differs from that row, or names a suggestion, the response carries a
+  `warnings` entry. The remaining entries are manual terms (at most 500): new or
+  changed ones are validated and creates or restores need a `phrase`; unchanged
+  ones are kept as stored. Distinct terms sharing a key are 400. The PUT writes
+  the manual terms to the legacy item, migrates, then reconciles **manual** rows
+  only: create (restoring a tombstone), edit changed terms, hard-delete manual
+  rows absent from the body. It never tombstones and never modifies auto or
+  suggested rows. The PUT is not atomic across rows: each row write is
+  version-conditioned, a failure part-way leaves earlier writes applied and
+  skips the rebuild, and retrying the same body converges. It is last writer
+  wins for the whole list: a manual term created (through v2 or an overlapping
+  PUT) after the body's GET is absent from the body and is deleted without a
+  conflict, and two overlapping PUTs with different bodies can each delete the
+  other's terms.
+- Legacy `DELETE .../term` `{phrase}` hard-deletes active manual matches (204,
+  with no body, so rebuild status and warnings are not reported);
+  auto or suggested matches are 409 `TERM_NOT_MANUAL`. An unmigratable legacy
+  item keeps the pre-v2 update; v2 writes on it are 409
+  `LEGACY_DICTIONARY_CONFLICT`. A manual row changed concurrently during a legacy
+  PUT or DELETE is 409 `VERSION_CONFLICT`; 409 `CONFLICT` only reports a legacy
+  item that kept changing during migration.
 - Recognition-affecting manual changes rebuild the derived ko-KR vocabulary in
   place and record it in `VOCAB#personal#ko-KR`; `status` and `warnings` report
   it. A change made while the previous build is pending is deferred to the next
