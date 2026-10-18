@@ -85,7 +85,7 @@ export function rateLimitContext(scope: Construct, key: string, defaultValue: nu
  */
 export function booleanContext(scope: Construct, key: string): string {
   const raw = scope.node.tryGetContext(key);
-  if (raw === undefined || raw === null || raw === '') return 'false';
+  if (raw === undefined || raw === null) return 'false';
   if (raw === true || raw === 'true') return 'true';
   if (raw === false || raw === 'false') return 'false';
   throw new Error(`${key} must be true or false, got ${JSON.stringify(raw)}`);

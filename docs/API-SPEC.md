@@ -624,8 +624,8 @@ same flag as `supportsMeetingTranslation`.
 
 The body is `{part, target, cursor?}`, at most 4KB (413 above), decoded strictly:
 unknown fields, trailing values, `part` other than `notes|transcript`, `target`
-other than `ko|en`, or a cursor over 2048 characters or outside the reading-cursor
-alphabet return 400 before storage reads. Pages come only from
+other than `ko|en` return 400 `BAD_REQUEST`, and a cursor over 2048 characters or
+outside the reading-cursor alphabet returns 400 `INVALID_CURSOR`, before storage reads. Pages come only from
 `MeetingReadingService` (`part: notes` reads `kind=meeting&section=summary`, i.e.
 the AI notes `content`; `transcript` reads `kind=transcript&source=selected`;
 4000 code points), so read authorization, restricted-summary handling and
@@ -635,12 +635,16 @@ non-final page is trimmed to its last line outside a fenced block (notes), speak
 header or line (text transcript) or whole segment, and `nextCursor` is the reader's
 cursor re-issued at that offset (a page without such a boundary is kept whole; a
 notes page kept whole inside a fenced block returns a wrapper cursor that carries
-the open fence, so later code lines stay code). Pass
+the open fence, so later code lines stay code). As in CommonMark, a fence closes
+only on a run of the opener's character at least as long as the opener. Pass
 `nextCursor` unchanged with the same `part`; concatenated pages cover the source.
 
 Notes are translated per Markdown line: heading/list/quote/checkbox markers stay
 local; links, images, inline code, HTML and URLs are replaced by `⟦Ln⟧`
 placeholders and restored; fenced code, table rules and blank lines are not sent.
+Over-long lines are split for chunking without ever splitting a placeholder, and a
+line whose output does not restore every placeholder exactly once keeps its source
+and counts toward `untranslatedLines`; placeholder text is never returned.
 Transcript segments are sent without speaker labels or timestamps, which are
 reattached from the reading page (`segments[]` with `segmentId`, `speaker`,
 `startTime`/`endTime` only when timed, `partial`, `text`); text-mode `[speaker]`

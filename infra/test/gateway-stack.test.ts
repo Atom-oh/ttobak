@@ -368,7 +368,7 @@ for bad in ({'Ref':'OtherRole'}, {'Fn::ImportValue':'unknown'}, qa):
     const flagged = Object.values(template.findResources('AWS::Lambda::Function'))
       .filter(resource => resource.Properties.Environment?.Variables?.MEETING_TRANSLATION_ENABLED !== undefined);
     expect(flagged.map(resource => resource.Properties.FunctionName)).toEqual(['ttobak-api']);
-    for (const bad of ['yes', '1', 1]) {
+    for (const bad of ['yes', '1', 1, '']) {
       expect(() => buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined,
         { 'ttobak:meetingTranslationEnabled': bad })).toThrow(/ttobak:meetingTranslationEnabled must be true or false/);
     }

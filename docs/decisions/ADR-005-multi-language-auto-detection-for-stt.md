@@ -123,7 +123,8 @@ rate in production; tune the timeout from the metering logs.
   cursor binding is re-issued at that offset; a page with no boundary is kept whole.
   The translator never invents a binding or skips text.
 - Notes are translated per Markdown line with links, code, HTML and URLs behind
-  `⟦Ln⟧` placeholders that must round-trip exactly; transcript text is sent without
+  `⟦Ln⟧` placeholders that must round-trip exactly (splitting treats them as atomic,
+  and a line that fails the round trip renders its source); transcript text is sent without
   speaker labels or timestamps. A chunk whose structure does not round-trip is
   retried with Amazon Translate and otherwise kept as source and counted.
 - Cost bounds: at most 12 chunks of 3,000 bytes, concurrency 4, a 20 s budget,

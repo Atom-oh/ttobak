@@ -383,11 +383,116 @@ func TestMeetingTranslationCarriesFenceAcrossOversizedCodeBlock(t *testing.T) {
 		}
 	}
 	// A forged or plain cursor is passed through unchanged.
-	if c, fenced := decodeTranslationCursor("abc"); c != "abc" || fenced {
-		t.Fatalf("plain cursor=%q fenced=%v", c, fenced)
+	if c, fence := decodeTranslationCursor("abc"); c != "abc" || fence != "" {
+		t.Fatalf("plain cursor=%q fence=%q", c, fence)
 	}
-	if c, fenced := decodeTranslationCursor(encodeTranslationCursor("abc")); c != "abc" || !fenced {
-		t.Fatalf("wrapped cursor=%q fenced=%v", c, fenced)
+	for _, fence := range []markdownFence{"```", "~~~~"} {
+		if c, got := decodeTranslationCursor(encodeTranslationCursor("abc", fence)); c != "abc" || got != fence {
+			t.Fatalf("wrapped cursor=%q fence=%q", c, got)
+		}
+	}
+	forged, _ := json.Marshal(translationCursor{1, "abc", "``"})
+	if c, fence := decodeTranslationCursor(base64.RawURLEncoding.EncodeToString(forged)); fence != "" || c == "abc" {
+		t.Fatalf("non-fence wrapper decoded: %q %q", c, fence)
+	}
+}
+
+func TestMeetingTranslationFenceMatchesDelimiterCharAndLength(t *testing.T) {
+	content := strings.Join([]string{
+		"````markdown",
+		"```",
+		"코드 안의 문장",
+		"```",
+		"~~~",
+		"````",
+		"~~~",
+		"물결 안의 문장",
+		"```",
+		"~~~~",
+		"바깥 문장",
+	}, "\n")
+	tr := &lineTranslator{}
+	out := runTranslation(t, NewMeetingTranslationService(notesPage(content, nil), tr, nil, 0),
+		MeetingTranslationRequest{Part: "notes", Target: "en"})
+	want := strings.Replace(content, "바깥 문장", "EN<바깥 문장>", 1)
+	if *out.Notes != want || len(tr.requests) != 1 || tr.requests[0].Text != "바깥 문장" {
+		t.Fatalf("notes=%q requests=%+v", *out.Notes, tr.requests)
+	}
+	// A backtick info string containing a backtick is not an opener.
+	tr = &lineTranslator{}
+	out = runTranslation(t, NewMeetingTranslationService(notesPage("```a`b 인라인\n다음 문장", nil), tr, nil, 0),
+		MeetingTranslationRequest{Part: "notes", Target: "en"})
+	if strings.Contains(*out.Notes, "\n다음 문장") {
+		t.Fatalf("line after a non-fence was treated as code: %q", *out.Notes)
+	}
+}
+
+func TestSplitTranslationBodyKeepsPlaceholdersWhole(t *testing.T) {
+	hangul := strings.Repeat("가", 998) // 2994 bytes, no space
+	for _, text := range []string{
+		hangul + "⟦L1⟧",
+		hangul + "⟦L12⟧뒤",
+		"⟦L1⟧" + strings.Repeat("나", 1200),
+		strings.Repeat("⟦L7⟧", 600),
+	} {
+		pieces, seps := splitTranslationBody(text, meetingTranslationChunkBytes)
+		var joined strings.Builder
+		for i, piece := range pieces {
+			joined.WriteString(seps[i] + piece)
+			if strings.Count(piece, "⟦") != len(translationPlaceholder.FindAllString(piece, -1)) ||
+				strings.Count(piece, "⟧") != strings.Count(piece, "⟦") {
+				t.Fatalf("piece %d bisects a placeholder: %q", i, piece[max(0, len(piece)-12):])
+			}
+			if len(piece) > meetingTranslationChunkBytes {
+				t.Fatalf("piece %d is %d bytes", i, len(piece))
+			}
+		}
+		if joined.String() != text || len(pieces) < 2 {
+			t.Fatalf("pieces=%d do not rejoin to the source", len(pieces))
+		}
+	}
+}
+
+func TestMeetingTranslationSpacelessLineEndingInLink(t *testing.T) {
+	// 2,994 spaceless bytes plus one link protect to 3,002 bytes, so the
+	// no-space cut would land inside the placeholder.
+	content := strings.Repeat("가", 998) + "[링크](https://example.com/a)"
+	for _, target := range []string{"ko", "en"} {
+		tr := &lineTranslator{}
+		out := runTranslation(t, NewMeetingTranslationService(notesPage(content, nil), tr, nil, 0),
+			MeetingTranslationRequest{Part: "notes", Target: target})
+		if strings.ContainsAny(*out.Notes, "⟦⟧") || !strings.Contains(*out.Notes, "[링크](https://example.com/a)") || out.UntranslatedLines != 0 {
+			t.Fatalf("target=%s untranslated=%d notes tail=%q", target, out.UntranslatedLines, (*out.Notes)[max(0, len(*out.Notes)-40):])
+		}
+		if target == "ko" && (*out.Notes != content || len(tr.requests) != 0) {
+			t.Fatalf("same-language line changed: requests=%d", len(tr.requests))
+		}
+		if target == "en" && (len(tr.requests) == 0 || !strings.Contains(*out.Notes, "EN<")) {
+			t.Fatalf("requests=%d", len(tr.requests))
+		}
+	}
+}
+
+func TestTranslationLineRenderFallsBackOnPlaceholderMismatch(t *testing.T) {
+	for _, out := range []string{
+		"Budget ⟦L1⟧⟦L1⟧ confirmed", // duplicate
+		"Budget confirmed",          // missing
+		"Budget ⟦L9⟧ confirmed",     // unknown
+		"Budget ⟦L1⟧ ⟧ confirmed",   // stray bracket
+		"Budget ⟦L1 confirmed",      // bisected
+	} {
+		next := 0
+		line := prepareTranslationLine("- ", "예산 [근거](transcript://s1) 확정", "", &next)
+		line.pieces[0].out, line.pieces[0].done = out, true
+		if got := line.render(); got != "- 예산 [근거](transcript://s1) 확정" || !line.untranslated {
+			t.Fatalf("%q rendered %q untranslated=%v", out, got, line.untranslated)
+		}
+	}
+	next := 0
+	line := prepareTranslationLine("- ", "예산 [근거](transcript://s1) 확정", "", &next)
+	line.pieces[0].out, line.pieces[0].done = "Budget ⟦L1⟧ confirmed", true
+	if got := line.render(); got != "- Budget [근거](transcript://s1) confirmed" || line.untranslated {
+		t.Fatalf("valid output rendered %q", got)
 	}
 }
 
@@ -576,10 +681,16 @@ func TestMeetingTranslationLimitAndValidation(t *testing.T) {
 	reads = 0
 	for _, req := range []MeetingTranslationRequest{
 		{Part: "summary", Target: "en"}, {Part: "notes", Target: "ja"}, {Part: "notes", Target: ""},
-		{Part: "transcript", Target: "ko", Cursor: "bad cursor!"}, {Part: "notes", Target: "en", Cursor: strings.Repeat("a", 2049)},
 	} {
 		if _, err := s.Translate(context.Background(), "owner", "m1", req); !errors.Is(err, ErrMeetingTranslationInvalid) {
 			t.Fatalf("%+v accepted: %v", req, err)
+		}
+	}
+	for _, req := range []MeetingTranslationRequest{
+		{Part: "transcript", Target: "ko", Cursor: "bad cursor!"}, {Part: "notes", Target: "en", Cursor: strings.Repeat("a", 2049)},
+	} {
+		if _, err := s.Translate(context.Background(), "owner", "m1", req); !errors.Is(err, ErrInvalidReadingCursor) {
+			t.Fatalf("%+v cursor accepted: %v", req, err)
 		}
 	}
 	if reads != 0 {

@@ -127,25 +127,41 @@ type translationPiece struct {
 	language string
 }
 
+// render restores placeholders over the whole joined line. If the joined
+// text does not hold every protected token exactly once and nothing else in
+// placeholder brackets, the line falls back to its source and is marked
+// untranslated: internal token text is never shown.
 func (l *translationLine) render() string {
+	source := l.prefix + l.body + l.suffix
 	if l.pieces == nil {
-		return l.prefix + l.body + l.suffix
+		return source
 	}
 	var b strings.Builder
-	b.WriteString(l.prefix)
 	for _, p := range l.pieces {
 		b.WriteString(p.sep)
-		text := p.text
 		if p.done {
-			text = p.out
+			b.WriteString(p.out)
+		} else {
+			b.WriteString(p.text)
 		}
-		b.WriteString(translationPlaceholder.ReplaceAllStringFunc(text, func(token string) string {
-			id, _ := strconv.Atoi(translationPlaceholder.FindStringSubmatch(token)[1])
-			return l.tokens[id]
-		}))
 	}
-	b.WriteString(l.suffix)
-	return b.String()
+	joined := b.String()
+	seen := map[int]bool{}
+	valid := !strings.ContainsAny(translationPlaceholder.ReplaceAllString(joined, ""), "⟦⟧")
+	restored := translationPlaceholder.ReplaceAllStringFunc(joined, func(token string) string {
+		id, _ := strconv.Atoi(translationPlaceholder.FindStringSubmatch(token)[1])
+		original, known := l.tokens[id]
+		if !known || seen[id] {
+			valid = false
+		}
+		seen[id] = true
+		return original
+	})
+	if !valid || len(seen) != len(l.tokens) {
+		l.untranslated = true
+		return source
+	}
+	return l.prefix + restored + l.suffix
 }
 
 // prepareTranslationLine protects links, code spans, HTML and URLs behind
@@ -195,8 +211,10 @@ func prepareTranslationLine(prefix, body, suffix string, next *int) *translation
 }
 
 // splitTranslationBody splits text into pieces of at most limit bytes,
-// preferring spaces. seps[i] restores what was removed before piece i; a
-// placeholder never contains a space and is never split at a space.
+// preferring spaces. seps[i] restores what was removed before piece i.
+// Placeholders are atomic: they contain no space, and a cut without a space
+// moves before (or, for a leading placeholder, after) any placeholder it
+// would bisect.
 func splitTranslationBody(text string, limit int) (pieces, seps []string) {
 	sep := ""
 	for len(text) > limit {
@@ -209,6 +227,21 @@ func splitTranslationBody(text string, limit int) (pieces, seps []string) {
 		cut = limit
 		for cut > 0 && !utf8RuneStart(text[cut]) {
 			cut--
+		}
+		for _, loc := range translationPlaceholder.FindAllStringIndex(text, -1) {
+			if loc[0] >= cut {
+				break
+			}
+			if cut < loc[1] {
+				cut = loc[0]
+				if cut == 0 {
+					cut = loc[1]
+				}
+				break
+			}
+		}
+		if cut <= 0 {
+			cut = len(text)
 		}
 		pieces, seps = append(pieces, text[:cut]), append(seps, sep)
 		text, sep = text[cut:], ""
@@ -245,20 +278,18 @@ func translationSourceLanguage(language, target string) string {
 
 // notesTranslationLines keeps fenced code, table rules and blank lines as
 // source and sends only the text after a line's Markdown markers.
-// fenced reports that text begins inside a fenced block carried from the
-// previous page.
-func notesTranslationLines(text string, fenced bool) []*translationLine {
+// fence is the open fence carried from the previous page ("" when none).
+func notesTranslationLines(text string, fence markdownFence) []*translationLine {
 	lines := []*translationLine{}
 	next := 0
 	for _, raw := range strings.Split(text, "\n") {
 		body, suffix := strings.CutSuffix(raw, "\r")
 		trimmed := strings.TrimSpace(body)
-		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
-			fenced = !fenced
+		if fence.step(body) {
 			lines = append(lines, &translationLine{body: raw})
 			continue
 		}
-		if fenced || trimmed == "" || translationTableRule.MatchString(body) {
+		if fence != "" || trimmed == "" || translationTableRule.MatchString(body) {
 			lines = append(lines, &translationLine{body: raw})
 			continue
 		}
@@ -304,9 +335,9 @@ type meetingReadingPage struct {
 // fragments. Notes never end inside a fenced block; text-mode transcript
 // pages prefer a speaker-header boundary so the next page knows its speaker.
 // A page with no usable boundary is kept whole; a notes page kept whole while
-// inside a fenced block (startFenced is the state carried into it) wraps the
+// inside a fenced block (startFence is the fence carried into it) wraps the
 // next cursor so the following page starts with the fence still open.
-func alignTranslationPage(page *meetingReadingPage, part string, startFenced bool) {
+func alignTranslationPage(page *meetingReadingPage, part string, startFence markdownFence) {
 	if page.Page.NextCursor == nil {
 		return
 	}
@@ -317,12 +348,12 @@ func alignTranslationPage(page *meetingReadingPage, part string, startFenced boo
 	offset := -1
 	switch {
 	case part == "notes":
-		cut, endFenced := notesPageCut(page.Content, startFenced)
+		cut, endFence := notesPageCut(page.Content, startFence)
 		if cut > 0 {
 			page.Content = string([]rune(page.Content)[:cut])
 			offset = page.Page.StartOffset + cut
-		} else if endFenced {
-			next := encodeTranslationCursor(*page.Page.NextCursor)
+		} else if endFence != "" {
+			next := encodeTranslationCursor(*page.Page.NextCursor, endFence)
 			page.Page.NextCursor = &next
 		}
 	case len(page.Chunks) > 1 && page.Chunks[len(page.Chunks)-1].Segment != nil:
@@ -346,21 +377,51 @@ func alignTranslationPage(page *meetingReadingPage, part string, startFenced boo
 }
 
 // notesPageCut returns the code-point offset of the last line start outside a
-// fenced block (0 when there is none) and whether text ends inside a fence;
-// fenced is the state at the start of text.
-func notesPageCut(text string, fenced bool) (int, bool) {
+// fenced block (0 when there is none) and the fence still open at the end of
+// text; fence is the one open at its start.
+func notesPageCut(text string, fence markdownFence) (int, markdownFence) {
 	cut, at := 0, 0
 	for i, line := range strings.Split(text, "\n") {
-		if i > 0 && !fenced {
+		if i > 0 && fence == "" {
 			cut = at
 		}
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
-			fenced = !fenced
-		}
+		fence.step(line)
 		at += utf8.RuneCountInString(line) + 1
 	}
-	return cut, fenced
+	return cut, fence
+}
+
+// markdownFence is the opening run of an open fenced code block ("" when
+// none). As in CommonMark, only a run of the same character at least as long
+// as the opener, with nothing after it, closes the block, so a ```` block may
+// contain ``` lines.
+type markdownFence string
+
+const maxCarriedFence = 64
+
+var translationFenceRun = regexp.MustCompile("^(?:`{3,}|~{3,})")
+
+// step advances the fence over one line and reports whether the line is an
+// opening or closing delimiter.
+func (f *markdownFence) step(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	run := translationFenceRun.FindString(trimmed)
+	if run == "" {
+		return false
+	}
+	if *f == "" {
+		// A backtick fence's info string may not contain a backtick.
+		if run[0] == '`' && strings.Contains(trimmed[len(run):], "`") {
+			return false
+		}
+		*f = markdownFence(run)
+		return true
+	}
+	if run[0] == (*f)[0] && len(run) >= len(*f) && trimmed == run {
+		*f = ""
+		return true
+	}
+	return false
 }
 
 // translationCursor wraps a reader cursor whose page begins inside a fenced
@@ -368,29 +429,32 @@ func notesPageCut(text string, fenced bool) (int, bool) {
 type translationCursor struct {
 	Version int    `json:"tv"`
 	Reader  string `json:"reader"`
-	Fenced  bool   `json:"fenced"`
+	Fence   string `json:"fence"`
 }
 
-func encodeTranslationCursor(reader string) string {
-	raw, _ := json.Marshal(translationCursor{1, reader, true})
+var translationCarriedFence = regexp.MustCompile("^(?:`{3,64}|~{3,64})$")
+
+func encodeTranslationCursor(reader string, fence markdownFence) string {
+	// An absurdly long opener is carried truncated; it can then only close early.
+	raw, _ := json.Marshal(translationCursor{1, reader, string(fence[:min(len(fence), maxCarriedFence)])})
 	return base64.RawURLEncoding.EncodeToString(raw)
 }
 
-// decodeTranslationCursor returns the reader cursor and carried fence state.
+// decodeTranslationCursor returns the reader cursor and carried open fence.
 // Anything that is not a canonical wrapper is an opaque reader cursor.
-func decodeTranslationCursor(cursor string) (string, bool) {
+func decodeTranslationCursor(cursor string) (string, markdownFence) {
 	raw, err := base64.RawURLEncoding.Strict().DecodeString(cursor)
 	if err != nil {
-		return cursor, false
+		return cursor, ""
 	}
 	var c translationCursor
-	if json.Unmarshal(raw, &c) != nil || c.Version != 1 || !c.Fenced || !readingCursorAlphabet.MatchString(c.Reader) {
-		return cursor, false
+	if json.Unmarshal(raw, &c) != nil || c.Version != 1 || !translationCarriedFence.MatchString(c.Fence) || !readingCursorAlphabet.MatchString(c.Reader) {
+		return cursor, ""
 	}
 	if canonical, _ := json.Marshal(c); string(canonical) != string(raw) {
-		return cursor, false
+		return cursor, ""
 	}
-	return c.Reader, true
+	return c.Reader, markdownFence(c.Fence)
 }
 
 // transcriptTextPageCut prefers the last "[speaker]" header that follows a
@@ -562,30 +626,35 @@ func (s *MeetingTranslationService) translateChunk(ctx context.Context, c *trans
 	return ""
 }
 
-func validMeetingTranslationRequest(req MeetingTranslationRequest) bool {
+// validateMeetingTranslationRequest rejects part/target before storage reads;
+// a malformed cursor is the reading service's own INVALID_CURSOR failure.
+func validateMeetingTranslationRequest(req MeetingTranslationRequest) error {
 	if req.Part != "notes" && req.Part != "transcript" {
-		return false
+		return ErrMeetingTranslationInvalid
 	}
 	if req.Target != "ko" && req.Target != "en" {
-		return false
+		return ErrMeetingTranslationInvalid
 	}
-	return len(req.Cursor) <= 2048 && (req.Cursor == "" || readingCursorAlphabet.MatchString(req.Cursor))
+	if len(req.Cursor) > 2048 || (req.Cursor != "" && !readingCursorAlphabet.MatchString(req.Cursor)) {
+		return ErrInvalidReadingCursor
+	}
+	return nil
 }
 
 // Translate returns sized JSON for one translated reading page.
 func (s *MeetingTranslationService) Translate(ctx context.Context, userID, meetingID string, req MeetingTranslationRequest) ([]byte, error) {
-	if !validMeetingTranslationRequest(req) {
-		return nil, ErrMeetingTranslationInvalid
+	if err := validateMeetingTranslationRequest(req); err != nil {
+		return nil, err
 	}
 	q := url.Values{"kind": {"meeting"}, "section": {"summary"}, "pageSize": {meetingTranslationPageSize}}
 	if req.Part == "transcript" {
 		q = url.Values{"kind": {"transcript"}, "source": {"selected"}, "pageSize": {meetingTranslationPageSize}}
 	}
-	startFenced := false
+	startFence := markdownFence("")
 	if req.Cursor != "" {
 		cursor := req.Cursor
 		if req.Part == "notes" {
-			cursor, startFenced = decodeTranslationCursor(cursor)
+			cursor, startFence = decodeTranslationCursor(cursor)
 		}
 		q.Set("cursor", cursor)
 	}
@@ -597,13 +666,13 @@ func (s *MeetingTranslationService) Translate(ctx context.Context, userID, meeti
 	if err := json.Unmarshal(raw, &page); err != nil {
 		return nil, readingDataError(err)
 	}
-	alignTranslationPage(&page, req.Part, startFenced)
+	alignTranslationPage(&page, req.Part, startFence)
 
 	response := meetingTranslationResponse{MeetingID: meetingID, Part: req.Part, Target: req.Target,
 		Revision: page.Revision, Engines: map[string]int{}, NextCursor: page.Page.NextCursor, Complete: page.Page.Complete}
 	var lines []*translationLine
 	if req.Part == "notes" {
-		lines = notesTranslationLines(page.Content, startFenced)
+		lines = notesTranslationLines(page.Content, startFence)
 	} else {
 		response.Mode = page.Mode
 		response.Segments = transcriptTranslationSegments(&page)
@@ -666,15 +735,17 @@ func (s *MeetingTranslationService) Translate(ctx context.Context, userID, meeti
 		}
 		response.Engines[engine]++
 	}
+	meter := func(outcome string, outBytes int) {
+		line, _ := json.Marshal(map[string]any{"evt": "meeting_translate", "outcome": outcome, "part": req.Part, "tgt": req.Target,
+			"inBytes": inBytes, "outBytes": outBytes, "chunks": len(chunks), "failedChunks": failed,
+			"untranslatedLines": response.UntranslatedLines, "ms": time.Since(started).Milliseconds()})
+		log.Print(string(line))
+	}
 	if len(chunks) > 0 && failed == len(chunks) {
+		meter("failed", 0)
 		return nil, ErrMeetingTranslationUnavailable
 	}
 
-	for _, line := range lines {
-		if line.untranslated {
-			response.UntranslatedLines++
-		}
-	}
 	if req.Part == "notes" {
 		rendered := make([]string, len(lines))
 		for i, line := range lines {
@@ -691,16 +762,20 @@ func (s *MeetingTranslationService) Translate(ctx context.Context, userID, meeti
 			response.Segments[i].Text = strings.Join(rendered, "\n")
 		}
 	}
+	// Counted after rendering, which may fall a line back to its source.
+	for _, line := range lines {
+		if line.untranslated {
+			response.UntranslatedLines++
+		}
+	}
 	out, err := readingJSON(response)
 	if err != nil {
 		return nil, err
 	}
 	if len(out) > MaxMeetingTranslationBytes {
+		meter("too_large", len(out))
 		return nil, ErrMeetingTranslationTooLarge
 	}
-	line, _ := json.Marshal(map[string]any{"evt": "meeting_translate", "part": req.Part, "tgt": req.Target,
-		"inBytes": inBytes, "outBytes": len(out), "chunks": len(chunks), "failedChunks": failed,
-		"untranslatedLines": response.UntranslatedLines, "ms": time.Since(started).Milliseconds()})
-	log.Print(string(line))
+	meter("ok", len(out))
 	return out, nil
 }
