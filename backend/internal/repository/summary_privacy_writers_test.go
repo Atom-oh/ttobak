@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/smithy-go"
 	"github.com/ttobak/backend/internal/model"
 )
 
@@ -411,6 +413,319 @@ func TestAccountInsightCopyCannotRepublishOldGenerationOrRevision(t *testing.T) 
 			err := repo.PutAccountInsights(context.Background(), []model.AccountInsight{insight})
 			if !errors.Is(err, ErrConditionFailed) || (race == "after-read") != (writes == 1) {
 				t.Fatalf("copy race was accepted: %s writes=%d err=%v", race, writes, err)
+			}
+		})
+	}
+}
+
+type accountInsightWire struct {
+	repo         *DynamoDBRepository
+	parent       *model.Meeting
+	rows         map[string]model.AccountInsight
+	transactions int
+	reject       bool
+	failPage     bool
+}
+
+func newAccountInsightWire(t *testing.T, parent *model.Meeting) *accountInsightWire {
+	t.Helper()
+	wire := &accountInsightWire{parent: parent, rows: map[string]model.AccountInsight{}}
+	wire.repo = summarySDKRepo(func(req *http.Request) (*http.Response, error) {
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		target := req.Header.Get("X-Amz-Target")
+		reply := map[string]any{}
+		item := func(value any) map[string]any {
+			attrs, err := attributevalue.MarshalMap(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := attributevalue.MarshalMapJSON(attrs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var result map[string]any
+			if err := json.Unmarshal(data, &result); err != nil {
+				t.Fatal(err)
+			}
+			return result
+		}
+		put := func(value any) {
+			data, _ := json.Marshal(value)
+			attrs, err := attributevalue.UnmarshalMapJSON(data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var insight model.AccountInsight
+			if err := attributevalue.UnmarshalMap(attrs, &insight); err != nil {
+				t.Fatal(err)
+			}
+			wire.rows[insight.SK] = insight
+		}
+		key := func(value any) string {
+			return value.(map[string]any)["SK"].(map[string]any)["S"].(string)
+		}
+		switch {
+		case strings.HasSuffix(target, ".GetItem"):
+			reply["Item"] = item(wire.parent)
+		case strings.HasSuffix(target, ".Query"):
+			pk, prefix := "", ""
+			for _, value := range body["ExpressionAttributeValues"].(map[string]any) {
+				text, _ := value.(map[string]any)["S"].(string)
+				if strings.HasPrefix(text, "ACCOUNT#") {
+					pk = text
+				} else if strings.HasPrefix(text, "INSIGHT#") {
+					prefix = text
+				}
+			}
+			var keys []string
+			for sk, insight := range wire.rows {
+				if insight.PK == pk && strings.HasPrefix(sk, prefix) {
+					keys = append(keys, sk)
+				}
+			}
+			sort.Strings(keys)
+			start := 0
+			if previous := body["ExclusiveStartKey"]; previous != nil {
+				if wire.failPage {
+					return summaryHTTPResponse(400, `{"__type":"ValidationException"}`, nil), nil
+				}
+				for i, sk := range keys {
+					if sk == key(previous) {
+						start = i + 1
+						break
+					}
+				}
+			}
+			reply["Items"] = []any{}
+			if start < len(keys) {
+				sk := keys[start]
+				row := item(wire.rows[sk])
+				if body["ProjectionExpression"] != nil {
+					row = map[string]any{"PK": row["PK"], "SK": row["SK"]}
+				}
+				reply["Items"] = []any{row}
+				if start+1 < len(keys) {
+					reply["LastEvaluatedKey"] = map[string]any{"PK": map[string]any{"S": pk}, "SK": map[string]any{"S": sk}}
+				}
+			}
+		case strings.HasSuffix(target, ".PutItem"):
+			put(body["Item"])
+		case strings.HasSuffix(target, ".DeleteItem"):
+			delete(wire.rows, key(body["Key"]))
+		case strings.HasSuffix(target, ".TransactWriteItems"):
+			wire.transactions++
+			ops := body["TransactItems"].([]any)
+			check := ops[0].(map[string]any)["ConditionCheck"].(map[string]any)
+			privacyWriterFences(t, resolved(check, "ConditionExpression"), "replacement lost source fence %s",
+				[]string{"insights", "insightsRevision", "summaryPrivacy", "sharedToAccount", "accountId", "date", "userId", "meetingId"})
+			if wire.reject {
+				return summaryHTTPResponse(400, projectCancellation(len(ops), 0), nil), nil
+			}
+			for _, value := range ops[1:] {
+				op := value.(map[string]any)
+				if deletion := op["Delete"]; deletion != nil {
+					delete(wire.rows, key(deletion.(map[string]any)["Key"]))
+				}
+				if insertion := op["Put"]; insertion != nil {
+					put(insertion.(map[string]any)["Item"])
+				}
+			}
+		default:
+			t.Fatalf("unexpected insight request %s", target)
+		}
+		data, _ := json.Marshal(reply)
+		return summaryHTTPResponse(200, string(data), nil), nil
+	})
+	return wire
+}
+
+func TestAccountInsightValidEmptyReplacementRemovesPreviousRows(t *testing.T) {
+	for _, enabled := range []string{"0", "1"} {
+		t.Run(enabled, func(t *testing.T) {
+			t.Setenv("SUMMARY_PRIVACY_WRITER_ENABLED", enabled)
+			parent := privacyParent()
+			parent.AccountID, parent.SharedToAccount = "account", true
+			parent.Date = time.Date(2026, 10, 18, 0, 0, 0, 0, time.UTC)
+			parent.Insights = `[{"type":"risk","text":"prior insight"}]`
+			if enabled == "1" {
+				privacyStamp(parent, model.SummaryPrivacySafe, "generation")
+				parent.InsightsRevision = "revision"
+			}
+			wire := newAccountInsightWire(t, parent)
+			previous := model.AccountInsight{PK: "ACCOUNT#account", SK: "INSIGHT#2026-10-18T00:00:00Z#meeting#0",
+				AccountID: "account", SourceType: "meeting", SourceID: "meeting", SourceUserID: "owner",
+				SummaryGeneration: parent.SummaryGeneration(), InsightsRevision: parent.InsightsRevision,
+				OccurredAt: parent.Date, Type: "risk", Text: "prior insight"}
+			if err := wire.repo.ReplaceMeetingAccountInsights(context.Background(), parent, []model.AccountInsight{previous}); err != nil {
+				t.Fatal(err)
+			}
+			before, err := wire.repo.ListInsightsForAccount(context.Background(), "account")
+			if err != nil || len(before) != 1 || before[0].Text != "prior insight" {
+				t.Fatalf("nonempty publication missing: %#v %v", before, err)
+			}
+			second := previous
+			second.SK = "INSIGHT#2026-10-18T00:00:00Z#meeting#1"
+			wire.rows[second.SK] = second
+			unrelated := previous
+			unrelated.SK, unrelated.SourceID = "INSIGHT#2026-10-18T00:00:00Z#other#0", "other"
+			wire.rows[unrelated.SK] = unrelated
+			parent.Insights = `[]`
+			if err := wire.repo.ReplaceMeetingAccountInsights(context.Background(), parent, []model.AccountInsight{}); err != nil {
+				t.Fatal(err)
+			}
+			after, err := wire.repo.ListInsightsForAccount(context.Background(), "account")
+			if err != nil || len(after) != 1 || after[0].SourceID != "other" {
+				t.Fatalf("empty replacement retained old rows or removed another meeting: %#v %v", after, err)
+			}
+		})
+	}
+}
+
+func TestEmptyAccountInsightReplacementRejectsInvalidOrChangedSource(t *testing.T) {
+	for _, tc := range []string{"absent", "null", "malformed", "nonempty", "unshared", "account", "date", "generation", "revision", "canonical", "condition", "later-page", "limit"} {
+		t.Run(tc, func(t *testing.T) {
+			t.Setenv("SUMMARY_PRIVACY_WRITER_ENABLED", "0")
+			parent := privacyParent()
+			parent.AccountID, parent.SharedToAccount, parent.Insights = "account", true, "[]"
+			parent.Date = time.Date(2026, 10, 18, 0, 0, 0, 0, time.UTC)
+			observed := *parent
+			wire := newAccountInsightWire(t, parent)
+			old := model.AccountInsight{PK: "ACCOUNT#account", SK: "INSIGHT#2026-10-18T00:00:00Z#meeting#0",
+				AccountID: "account", SourceID: "meeting", Text: "prior insight"}
+			wire.rows[old.SK] = old
+			expected := ErrConditionFailed
+			switch tc {
+			case "absent":
+				observed.Insights = ""
+			case "null":
+				observed.Insights = "null"
+			case "malformed":
+				observed.Insights = "["
+			case "nonempty":
+				observed.Insights = `[{"text":"new"}]`
+			case "unshared":
+				parent.SharedToAccount = false
+			case "account":
+				parent.AccountID = "other"
+			case "date":
+				parent.Date = parent.Date.Add(time.Hour)
+			case "generation":
+				privacyStamp(parent, model.SummaryPrivacySafe, "new")
+			case "revision":
+				parent.InsightsRevision = "new"
+			case "canonical":
+				parent.Insights = `[{"text":"new"}]`
+			case "condition":
+				wire.reject = true
+			case "later-page", "limit":
+				count := 2
+				if tc == "limit" {
+					count, expected = 100, ErrSummaryLimit
+				}
+				for i := 1; i < count; i++ {
+					row := old
+					row.SK += strings.Repeat("x", i)
+					wire.rows[row.SK] = row
+				}
+				wire.failPage = tc == "later-page"
+			}
+			before := len(wire.rows)
+			err := wire.repo.ReplaceMeetingAccountInsights(context.Background(), &observed, nil)
+			if tc == "later-page" {
+				var apiErr smithy.APIError
+				if !errors.As(err, &apiErr) || apiErr.ErrorCode() != "ValidationException" {
+					t.Fatalf("pagination failure lost: %v", err)
+				}
+			} else if !errors.Is(err, expected) {
+				t.Fatalf("invalid source accepted: %v", err)
+			}
+			if len(wire.rows) != before || wire.rows[old.SK].Text != "prior insight" ||
+				(tc == "condition") != (wire.transactions == 1) {
+				t.Fatalf("failed replacement changed copies: rows=%d tx=%d", len(wire.rows), wire.transactions)
+			}
+		})
+	}
+}
+
+func TestMembershipTransactionSpillUsesDeferredCleanup(t *testing.T) {
+	privacyWriterEnabled(t)
+	for _, tc := range []string{"condition", "cleanup-failure", "ambiguous", "success"} {
+		t.Run(tc, func(t *testing.T) {
+			parent := privacyParent()
+			parent.AccountID = "account"
+			puts, transactions, deletes := 0, 0, 0
+			key := ""
+			repo := summarySDKRepo(func(req *http.Request) (*http.Response, error) {
+				if req.Method == "PUT" {
+					puts++
+					key = req.URL.Path
+					if !regexp.MustCompile(`^/bucket/transcripts/meeting/transcriptA\.[a-f0-9]{32}\.txt$`).MatchString(key) {
+						t.Fatalf("spill was not immutable: %s", key)
+					}
+					return summaryHTTPResponse(200, "", nil), nil
+				}
+				if req.Method == "DELETE" {
+					deletes++
+					if req.URL.Path != key {
+						t.Fatal("cleanup deleted a preexisting spill")
+					}
+					if tc == "cleanup-failure" {
+						return summaryHTTPResponse(403, `<Error><Code>AccessDenied</Code></Error>`, nil), nil
+					}
+					return summaryHTTPResponse(204, "", nil), nil
+				}
+				var body map[string]any
+				json.NewDecoder(req.Body).Decode(&body)
+				switch {
+				case strings.HasSuffix(req.Header.Get("X-Amz-Target"), ".GetItem"):
+					row := any(parent)
+					if body["Key"].(map[string]any)["SK"].(map[string]any)["S"] == "MEMBER#owner" {
+						row = &model.AccountMember{AccountID: "account", UserID: "owner"}
+					}
+					attrs, _ := attributevalue.MarshalMap(row)
+					data, _ := attributevalue.MarshalMapJSON(attrs)
+					return summaryHTTPResponse(200, `{"Item":`+string(data)+`}`, nil), nil
+				case strings.HasSuffix(req.Header.Get("X-Amz-Target"), ".TransactWriteItems"):
+					transactions++
+					ops := body["TransactItems"].([]any)
+					update := ops[1].(map[string]any)["Update"].(map[string]any)
+					values, _ := json.Marshal(update["ExpressionAttributeValues"])
+					if !strings.Contains(string(values), "s3://bucket/"+strings.TrimPrefix(key, "/bucket/")) {
+						t.Fatal("transaction did not publish the new spill")
+					}
+					if tc == "ambiguous" {
+						return summaryHTTPResponse(500, `{"__type":"InternalServerError"}`, nil), nil
+					}
+					if tc != "success" {
+						return summaryHTTPResponse(400, projectCancellation(len(ops), 1), nil), nil
+					}
+					return summaryHTTPResponse(200, `{}`, nil), nil
+				}
+				t.Fatalf("unexpected request %s", req.Header.Get("X-Amz-Target"))
+				return nil, nil
+			})
+			fields := map[string]interface{}{"accountId": "account", "transcriptA": strings.Repeat("x", 310*1024)}
+			err := repo.UpdateMeetingFieldsIfMatch(context.Background(), "owner", "meeting", map[string]interface{}{"status": model.StatusDone}, fields)
+			conditional := tc == "condition" || tc == "cleanup-failure"
+			if errors.Is(err, ErrConditionFailed) != conditional || (err == nil) != (tc == "success") {
+				t.Fatalf("wrong write outcome: %v", err)
+			}
+			if tc == "cleanup-failure" {
+				var apiErr smithy.APIError
+				if !errors.As(err, &apiErr) || apiErr.ErrorCode() != "AccessDenied" {
+					t.Fatalf("cleanup failure was hidden: %v", err)
+				}
+			}
+			expectedDeletes := 0
+			if conditional {
+				expectedDeletes = 1
+			}
+			if puts != 1 || transactions != 1 || deletes != expectedDeletes ||
+				fields["transcriptA"] != strings.Repeat("x", 310*1024) {
+				t.Fatalf("unsafe spill outcome: put=%d tx=%d delete=%d", puts, transactions, deletes)
 			}
 		})
 	}
