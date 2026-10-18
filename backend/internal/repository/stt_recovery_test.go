@@ -353,6 +353,50 @@ func TestDeleteSttFailedMeetingIsConditionalOnTheMark(t *testing.T) {
 	}
 }
 
+// A lost transaction response is resolved by a consistent read: an absent
+// meeting row is a committed delete (post-commit), a present row is not.
+func TestDeleteSttFailedMeetingResolvesAmbiguousCommit(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		getItem    string
+		postCommit bool
+	}{
+		{"row gone means committed", `{}`, true},
+		{"row present means not committed", `{"Item":{"PK":{"S":"USER#owner"}}}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var reads, queries, transacts int
+			repo, _ := sttWire(t, func(op string, body map[string]any) (int, string) {
+				switch op {
+				case "Query":
+					// The first query is the child-row check; later ones are
+					// the post-commit attachment-text sweep.
+					if queries++; queries > 1 {
+						return 200, `{"Items":[]}`
+					}
+					return 200, `{"Items":[{"SK":{"S":"ANALYSIS#actionItems"}}]}`
+				case "TransactWriteItems":
+					if transacts++; transacts > 1 {
+						t.Fatal("an ambiguous delete must never be resent")
+					}
+					return 500, `{"__type":"InternalServerError","message":"lost"}`
+				case "GetItem":
+					reads++
+					if body["ConsistentRead"] != true {
+						t.Fatal("ambiguity must be resolved with a consistent read")
+					}
+					return 200, tc.getItem
+				}
+				return 200, `{"Items":[]}`
+			})
+			err := repo.DeleteSttFailedMeeting(context.Background(), "owner", "m", sttDeleteMark())
+			if err == nil || errors.Is(err, ErrSttDeletionPostCommit) != tc.postCommit || reads != 1 {
+				t.Fatalf("err=%v reads=%d", err, reads)
+			}
+		})
+	}
+}
+
 func sttDeletedKeys(body map[string]any) []string {
 	var keys []string
 	for _, item := range body["TransactItems"].([]any) {

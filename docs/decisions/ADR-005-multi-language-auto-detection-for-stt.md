@@ -3,7 +3,7 @@
 - Status: Accepted for AWS Transcribe paths; primary batch processing later
   changed under [ADR-009](ADR-009-whisper-gpu-ecs-spot-zero-scale.md).
 - Decision date: Not recorded; original implementation referenced commit `ad5905b`.
-- Implementation checked: 2026-09-13.
+- Implementation checked: 2026-09-13; amended 2026-10-18 (interpretation cost guard).
 
 ## Context and decision
 
@@ -38,6 +38,32 @@ technical terms or support for unexpected languages. Initial detection can delay
 captions; Web Speech and Whisper retain different language behavior. The original
 accuracy and latency statements were expectations, not guarantees.
 
+## Amendment 2026-10-18: interpretation cost guard and Korean formality
+
+Live interpretation reuses this detection to choose a direction per utterance;
+its cost and register are decided here until a separate interpretation ADR exists.
+
+- Partial-caption (draft) translation is opt-in in the recording controls. Every
+  partial revision was a billed request; finals alone bound the request count to
+  utterances. Finals still use `fast` in this change.
+- `/api/translate` counts requests per user in fixed hourly UTC windows
+  (`service.WindowCounter`, atomic `ADD`, TTL = window end + 2h so a daily window
+  would live at least 26h). Above `TRANSLATE_HOURLY_LIMIT` (3000) it returns 429
+  `RATE_LIMITED`; above `TRANSLATE_HIGH_HOURLY_LIMIT` (1500) `high` is downgraded to
+  `fast` with `limited: true`. 0 disables a limit. Counter errors fail open because
+  the guard is a cost/abuse brake, not an access boundary, matching QA's web-search
+  limiter. Values are CDK context rendered into Lambda env.
+- A metering log line records engine, languages, byte counts, latency, `limited`
+  and fallback reason, never text or user ID, so limits can be tuned from data.
+- Amazon Translate output to Korean requests the formal register; meeting speech
+  addresses colleagues and customers. Profanity masking stays off so translations
+  do not alter what was said.
+
+Rejected: a route-level API Gateway throttle (not per user, and it would also block
+`fast` finals) and failing closed on counter errors (would stop captions during a
+DynamoDB incident). Not yet measured: real per-meeting request rates; the defaults
+are deliberately generous and should be revisited from the metering logs.
+
 ## Evidence
 
 - [transcribe.go](../../backend/internal/service/transcribe.go): both batch methods.
@@ -45,3 +71,7 @@ accuracy and latency statements were expectations, not guarantees.
   [transcribeStreamingClient.ts](../../frontend/src/lib/transcribeStreamingClient.ts),
   [speechRecognition.ts](../../frontend/src/lib/speechRecognition.ts): live paths.
 - [transcribe.py](../../backend/whisper/transcribe.py): production Whisper options.
+- [ratelimit.go](../../backend/internal/service/ratelimit.go),
+  [translate.go handler](../../backend/internal/handler/translate.go),
+  [translate.go service](../../backend/internal/service/translate.go),
+  [liveTranslation.ts](../../frontend/src/lib/liveTranslation.ts): 2026-10-18 amendment.
