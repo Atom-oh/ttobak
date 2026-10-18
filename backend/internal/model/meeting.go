@@ -110,6 +110,11 @@ type Meeting struct {
 	SttRecoveryClaimedAt       string `dynamodbav:"sttRecoveryClaimedAt,omitempty" json:"-"`
 	SttSummaryRedriveAttempts  int    `dynamodbav:"sttSummaryRedriveAttempts,omitempty" json:"-"`
 	SttSummaryRedriveClaimedAt string `dynamodbav:"sttSummaryRedriveClaimedAt,omitempty" json:"-"`
+
+	// SourceEditedByNonOwnerAt is set, and never cleared, when anyone other
+	// than the owner writes transcriptA/B, the selected transcript or content.
+	// Automatic term extraction then only suggests terms (design A2.1).
+	SourceEditedByNonOwnerAt string `dynamodbav:"sourceEditedByNonOwnerAt,omitempty" json:"-"`
 }
 
 // Attachment represents a file attachment for a meeting

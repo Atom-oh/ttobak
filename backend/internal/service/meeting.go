@@ -744,6 +744,15 @@ func (s *MeetingService) UpdateMeeting(ctx context.Context, userID, meetingID st
 		if req.ExpectedNotesRevision != nil && len(*req.ExpectedNotesRevision) > 128 {
 			return nil, fmt.Errorf("%w: expectedNotesRevision exceeds 128 bytes", ErrInvalidInput)
 		}
+		// Saved notes feed the summary that term extraction reads. A non-owner
+		// change is marked before the compare-and-set write: a lost race leaves
+		// a conservative sticky marker, never an unmarked editor change.
+		if userID != meeting.UserID && *req.Notes != *req.ExpectedNotes {
+			marker := map[string]interface{}{"sourceEditedByNonOwnerAt": time.Now().UTC().Format(time.RFC3339)}
+			if err := s.repo.UpdateMeetingFields(ctx, meeting.UserID, meeting.MeetingID, marker); err != nil {
+				return nil, err
+			}
+		}
 		revision, err := s.repo.UpdateMeetingNotesWithRevision(ctx, meeting.UserID, meeting.MeetingID, *req.ExpectedNotes, *req.Notes, req.ExpectedNotesRevision)
 		if err != nil {
 			return nil, err
@@ -818,6 +827,7 @@ func (s *MeetingService) UpdateMeeting(ctx context.Context, userID, meetingID st
 	if req.Status != "" {
 		fields["status"] = req.Status
 	}
+	markNonOwnerSourceEdit(fields, userID, meeting)
 
 	updatedAt := time.Now().UTC()
 	notesRevision := meeting.NotesRevision
@@ -855,6 +865,7 @@ func (s *MeetingService) UpdateSpeakers(ctx context.Context, userID, meetingID s
 		return nil, ErrForbidden
 	}
 
+	before := *meeting
 	qualities := map[string]*model.TranscriptQuality{}
 	for variant, text := range map[string]string{"A": meeting.TranscriptA, "B": meeting.TranscriptB} {
 		q := model.MatchingTranscriptQuality(meeting, variant)
@@ -890,13 +901,14 @@ func (s *MeetingService) UpdateSpeakers(ctx context.Context, userID, meetingID s
 
 	// Guard the original version: hydrated transcripts can differ from stored S3 refs.
 	updatedAt := time.Now().UTC()
+	fields := map[string]interface{}{
+		"content": meeting.Content, "transcriptA": meeting.TranscriptA, "transcriptB": meeting.TranscriptB,
+		"transcriptSegments": meeting.TranscriptSegments, "actionItems": meeting.ActionItems, "speakerMap": meeting.SpeakerMap,
+		"transcriptQualityA": qualities["A"], "transcriptQualityB": qualities["B"],
+	}
+	markNonOwnerSourceEdit(fields, userID, &before)
 	if err := s.repo.UpdateMeetingFieldsIfMatch(ctx, meeting.UserID, meetingID,
-		map[string]interface{}{"updatedAt": meeting.UpdatedAt.Format(time.RFC3339Nano)},
-		map[string]interface{}{
-			"content": meeting.Content, "transcriptA": meeting.TranscriptA, "transcriptB": meeting.TranscriptB,
-			"transcriptSegments": meeting.TranscriptSegments, "actionItems": meeting.ActionItems, "speakerMap": meeting.SpeakerMap,
-			"transcriptQualityA": qualities["A"], "transcriptQualityB": qualities["B"],
-		}); err != nil {
+		map[string]interface{}{"updatedAt": meeting.UpdatedAt.Format(time.RFC3339Nano)}, fields); err != nil {
 		return nil, err
 	}
 
@@ -956,14 +968,29 @@ func (s *MeetingService) DeleteMeeting(ctx context.Context, userID, meetingID st
 	}
 	if meeting == nil {
 		// Check if it exists but user is not owner
-		existing, _ := s.repo.GetMeetingByID(ctx, meetingID)
+		existing, err := s.repo.GetMeetingByID(ctx, meetingID)
 		if existing != nil {
 			return ErrForbidden
+		}
+		if err != nil {
+			return ErrNotFound
+		}
+		// The meeting item is gone. Its post-delete term sweep may have failed;
+		// a retried DELETE re-runs it (bound to the owner on the run state).
+		if sweeper, ok := s.repo.(termsSweeper); ok {
+			if err := sweeper.SweepMeetingTerms(ctx, userID, meetingID); err != nil {
+				return err
+			}
 		}
 		return ErrNotFound
 	}
 
 	return s.repo.DeleteMeeting(ctx, userID, meetingID)
+}
+
+// termsSweeper re-runs the meeting-deletion term sweep (repository A8).
+type termsSweeper interface {
+	SweepMeetingTerms(ctx context.Context, ownerID, meetingID string) error
 }
 
 // SelectTranscript selects which transcript to use (A or B)
@@ -979,7 +1006,34 @@ func (s *MeetingService) SelectTranscript(ctx context.Context, userID, meetingID
 		return ErrForbidden
 	}
 
-	return s.repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, map[string]interface{}{"selectedTranscript": selected})
+	fields := map[string]interface{}{"selectedTranscript": selected}
+	markNonOwnerSourceEdit(fields, userID, meeting)
+	return s.repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, fields)
+}
+
+// termSourceFields are the meeting fields automatic term extraction reads,
+// directly or through the AI notes: saved notes and liveSummary are summary
+// prompt inputs. Attachments need no marker: upload completion is owner-only.
+var termSourceFields = []string{"content", "transcriptA", "transcriptB", "selectedTranscript", "notes", "liveSummary"}
+
+// markNonOwnerSourceEdit adds the sticky SourceEditedByNonOwnerAt marker to
+// the same write when an actor other than the owner changes a term source
+// field (design A2.1). An unchanged value is not an edit.
+func markNonOwnerSourceEdit(fields map[string]interface{}, actorID string, before *model.Meeting) {
+	if before == nil || actorID == before.UserID {
+		return
+	}
+	current := map[string]string{
+		"content": before.Content, "transcriptA": before.TranscriptA,
+		"transcriptB": before.TranscriptB, "selectedTranscript": before.SelectedTranscript,
+		"notes": before.Notes, "liveSummary": before.LiveSummary,
+	}
+	for _, field := range termSourceFields {
+		if value, ok := fields[field].(string); ok && value != current[field] {
+			fields["sourceEditedByNonOwnerAt"] = time.Now().UTC().Format(time.RFC3339)
+			return
+		}
+	}
 }
 
 // ShareMeetingByEmail shares a meeting with a user identified by email. The
