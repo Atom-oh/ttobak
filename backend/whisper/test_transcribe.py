@@ -17,10 +17,10 @@ os.environ['TABLE_NAME'] = 'test-table'
 
 # faster_whisper is a container-only dependency (not installed in the test
 # env, and heavy -- pulls in torch). Stub it so transcribe.py imports.
-if 'faster_whisper' not in sys.modules:
-    faster_whisper_mod = types.ModuleType('faster_whisper')
-    faster_whisper_mod.WhisperModel = mock.MagicMock()
-    sys.modules['faster_whisper'] = faster_whisper_mod
+faster_whisper_mod = sys.modules.setdefault('faster_whisper', types.ModuleType('faster_whisper'))
+for _attr in ('WhisperModel', 'decode_audio'):
+    if not hasattr(faster_whisper_mod, _attr):
+        setattr(faster_whisper_mod, _attr, mock.MagicMock())
 
 with mock.patch('boto3.client'), mock.patch('boto3.resource'):
     import transcribe
@@ -315,6 +315,105 @@ class TestLoadWavWaveform(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     transcribe._load_wav_waveform(path)
         self.assertNotIn('raw_len', captured)
+
+
+
+class _FakeFFmpegError(Exception):
+    pass
+
+
+class _FakeInvalidDataError(_FakeFFmpegError, ValueError):
+    pass
+
+
+class _FakeErrnoValueError(_FakeFFmpegError, ValueError):
+    """PyAV's EINVAL mapping: an FFmpegError that is also a ValueError."""
+
+
+class _FakeErrnoMemoryError(_FakeFFmpegError, MemoryError):
+    pass
+
+
+class TestDecodeClassification(unittest.TestCase):
+    """Invalid input data is a terminal AUDIO_CORRUPT; anything else is a
+    retryable WORKER_FAILED."""
+
+    def _decode(self, result=None, raises=None):
+        fake = mock.MagicMock(side_effect=raises, return_value=result)
+        av_mod = types.ModuleType('av')
+        av_mod.FFmpegError = _FakeFFmpegError
+        av_mod.InvalidDataError = _FakeInvalidDataError
+        with mock.patch.object(transcribe, 'decode_audio', fake), \
+                mock.patch.dict(sys.modules, {'av': av_mod}):
+            return transcribe._decode_audio('/tmp/x.webm'), fake
+
+    def test_invalid_data_is_audio_corrupt(self):
+        with self.assertRaises(transcribe.AudioDecodeError) as ctx:
+            self._decode(raises=_FakeInvalidDataError('Invalid data found'))
+        self.assertEqual(transcribe._failure_code(ctx.exception), 'AUDIO_CORRUPT')
+        self.assertNotIn('Invalid data', str(ctx.exception))
+
+    def test_errno_ffmpeg_errors_stay_retryable(self):
+        for exc in (_FakeFFmpegError('io'), _FakeErrnoValueError('EINVAL'), _FakeErrnoMemoryError('ENOMEM')):
+            with self.assertRaises(type(exc)) as ctx:
+                self._decode(raises=exc)
+            self.assertEqual(transcribe._failure_code(ctx.exception), 'WORKER_FAILED')
+
+    def test_value_error_is_audio_corrupt(self):
+        with self.assertRaises(transcribe.AudioDecodeError):
+            self._decode(raises=ValueError('bad'))
+
+    def test_zero_length_and_sub_half_second_are_audio_corrupt(self):
+        for samples in (0, 7999):
+            with self.assertRaises(transcribe.AudioDecodeError):
+                self._decode(result=[0.0] * samples)
+
+    def test_valid_audio_passes_through_at_16k(self):
+        audio, fake = self._decode(result=[0.0] * 8000)
+        self.assertEqual(len(audio), 8000)
+        fake.assert_called_once_with('/tmp/x.webm', sampling_rate=16000)
+
+    def test_other_errors_are_worker_failed(self):
+        for exc in (MemoryError(), OSError('disk'), RuntimeError('CUDA')):
+            self.assertEqual(transcribe._failure_code(exc), 'WORKER_FAILED')
+
+
+class TestMarkFailure(unittest.TestCase):
+    def test_conditional_mark_with_one_go_timestamp(self):
+        table = mock.MagicMock()
+        key = 'audio/u/m/1700_rec.webm'
+        self.assertTrue(transcribe._mark_failure(table, 'u', 'm', key, 'AUDIO_CORRUPT'))
+        kwargs = table.update_item.call_args.kwargs
+        self.assertEqual(kwargs['Key'], {'PK': 'USER#u', 'SK': 'MEETING#m'})
+        self.assertIn('#s = :transcribing', kwargs['ConditionExpression'])
+        self.assertIn('attribute_not_exists(audioCrop)', kwargs['ConditionExpression'])
+        self.assertIn('audioKey = :k OR contains(audioKeys, :k)', kwargs['ConditionExpression'])
+        values = kwargs['ExpressionAttributeValues']
+        self.assertEqual(values[':k'], key)
+        self.assertEqual(values[':code'], 'AUDIO_CORRUPT')
+        self.assertIn('sttFailedAt = :now, updatedAt = :now', kwargs['UpdateExpression'])
+        # Go RFC3339Nano: trailing zeros trimmed, Z suffix, no offset.
+        self.assertRegex(values[':now'], r'^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d*[1-9])?Z$')
+
+    def test_rediarize_copy_skips_the_key_clause(self):
+        table = mock.MagicMock()
+        transcribe._mark_failure(table, 'u', 'm', 'audio/u/m/rediarize_x_rec.webm', 'WORKER_FAILED')
+        kwargs = table.update_item.call_args.kwargs
+        self.assertNotIn(':k', kwargs['ExpressionAttributeValues'])
+        self.assertNotIn('audioKey', kwargs['ConditionExpression'])
+
+    def test_conditional_check_failure_is_swallowed(self):
+        table = mock.MagicMock()
+        table.update_item.side_effect = transcribe.ClientError(
+            {'Error': {'Code': 'ConditionalCheckFailedException'}}, 'UpdateItem')
+        self.assertFalse(transcribe._mark_failure(table, 'u', 'm', 'audio/u/m/a.webm', 'WORKER_FAILED'))
+
+    def test_other_client_errors_surface(self):
+        table = mock.MagicMock()
+        table.update_item.side_effect = transcribe.ClientError(
+            {'Error': {'Code': 'AccessDeniedException'}}, 'UpdateItem')
+        with self.assertRaises(transcribe.ClientError):
+            transcribe._mark_failure(table, 'u', 'm', 'audio/u/m/a.webm', 'WORKER_FAILED')
 
 
 if __name__ == '__main__':

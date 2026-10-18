@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"math"
 	"reflect"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -237,4 +239,47 @@ func failTranscriptSnapshot(ctx context.Context, snapshot *model.SummarySnapshot
 		return nil
 	}
 	return err
+}
+
+// transcriptHasNoSpeech reports a decodable transcript that carries no text at
+// all: blank text, no speaker segments and only blank Whisper segments. Such a
+// run is terminal (NO_SPEECH), not a summary to retry three times.
+func transcriptHasNoSpeech(parsed *parsedTranscript) bool {
+	if parsed == nil || strings.TrimSpace(parsed.Text) != "" || len(parsed.Segments) > 0 {
+		return false
+	}
+	for _, segment := range parsed.Whisper {
+		if strings.TrimSpace(segment.Text) != "" {
+			return false
+		}
+	}
+	return true
+}
+
+// markNoSpeech records the terminal NO_SPEECH code under the transcript
+// snapshot fence. It publishes no transcript field and makes no model call.
+var markNoSpeech = func(ctx context.Context, snapshot *model.SummarySnapshot) error {
+	return repo.MarkSttNoSpeech(ctx, snapshot)
+}
+
+// handleNoSpeech marks an empty transcript instead of summarizing it. Like
+// publication, the mark first revalidates the downloaded objects, so a
+// replaced transcript is never marked from stale bytes. A lost fence means
+// another writer progressed; that is not an error to retry.
+func handleNoSpeech(ctx context.Context, snapshot *model.SummarySnapshot, parsed *parsedTranscript) (bool, error) {
+	if !transcriptHasNoSpeech(parsed) {
+		return false, nil
+	}
+	err := checkTranscriptObjects(ctx, parsed.Objects)
+	if err == nil {
+		err = markNoSpeech(ctx, snapshot)
+	}
+	switch {
+	case errors.Is(err, repository.ErrConditionFailed):
+		log.Printf("Meeting %s: empty transcript superseded before the %s mark", snapshot.Meeting.MeetingID, model.SttFailureNoSpeech)
+		return true, nil
+	case err == nil:
+		log.Printf("Meeting %s: transcript has no speech; marked %s", snapshot.Meeting.MeetingID, model.SttFailureNoSpeech)
+	}
+	return true, err
 }
