@@ -231,6 +231,10 @@ export const meetingsApi = {
     );
   },
 
+  // On-demand translation of one reading page; the result is never persisted.
+  translate: (id: string, body: { part: 'notes' | 'transcript'; target: 'ko' | 'en'; cursor?: string }, options?: { signal?: AbortSignal }) =>
+    api.post<import('@/types/meeting').MeetingTranslationPage>(`/api/meetings/${encodeURIComponent(id)}/translation`, body, options),
+
   create: (data: { title: string; date?: string; participants?: string[]; sttProvider?: 'transcribe' | 'nova-sonic'; status?: string; notes?: string; accountId?: string }, options?: FetchOptions) =>
     api.post<import('@/types/meeting').Meeting & { preparationApplied?: boolean; supportsNotesComparison?: boolean; supportsPrivateAccountLink?: boolean; notesRevision?: string }>('/api/meetings', data, options),
 

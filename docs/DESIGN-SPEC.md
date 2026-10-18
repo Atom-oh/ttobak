@@ -69,6 +69,16 @@ Untimed speech remains visible with an unavailable-time label beside valid timed
 speech. Grouping follows both speaker and timing availability; unknown times
 never become zero-time links. Blank/untimed counts describe available metadata.
 
+When meeting detail reports `supportsMeetingTranslation`, the AI notes card and
+`TranscriptSection` show a translation select (original, Korean, English;
+`MeetingTranslation.tsx`). It is hidden when the flag is off or while editing.
+Translated notes render through the same sanitized `MarkdownRenderer` with the
+same citation resolution; translated transcript segments render as React text with
+the source speaker and time. Translations stay in component memory, are discarded
+when the source text changes, and are labelled as unsaved machine translation.
+Further pages load with an explicit next-part button; untranslated lines, daily
+limit and changed-source errors are shown inline.
+
 Meeting detail and `SpeakerMapEditor` prefer `transcriptionV2` when supplied.
 Mixed/untimed arrays use that additive field while old clients receive no legacy
 segment array and retain complete plain text. Wholly timed responses keep the
