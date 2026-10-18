@@ -722,18 +722,42 @@ func (r *DynamoDBRepository) UpdateMeeting(ctx context.Context, meeting *model.M
 	// callers, which never populate it) -- proceeding on a read failure
 	// risks wiping every project link on one transient GetItem error, which
 	// is worse than the race this exists to close.
+	// Account classification and publication are also owned by partial
+	// writers. Preserve their current values and fence their exact presence;
+	// legacy account writes do not necessarily advance authorizationRevision.
 	const maxProjectIDsAttempts = 3
 	for attempt := 1; ; attempt++ {
 		current, fence, err := r.getMeetingWriteMetadata(ctx, meeting.UserID, meeting.MeetingID)
 		if err != nil {
-			return fmt.Errorf("failed to preserve projectIds on meeting update: %w", err)
+			return fmt.Errorf("failed to preserve meeting write metadata: %w", err)
 		}
 		stored.ProjectIDs = current.ProjectIDs
 		stored.AuthorizationRevision = current.AuthorizationRevision + 1
+		if fence.Exists {
+			stored.AccountID = current.AccountID
+			stored.SharedToAccount = current.SharedToAccount
+		}
 
 		item, err := attributevalue.MarshalMap(&stored)
 		if err != nil {
 			return fmt.Errorf("failed to marshal meeting: %w", err)
+		}
+		if fence.Exists {
+			// Model omitempty would lose explicit false/empty attributes.
+			// Restore exact current presence and values, never stale caller
+			// grants. A conditional create retains caller preparation.
+			for _, name := range []string{"accountId", "sharedToAccount"} {
+				field := fence.Fields[name]
+				if !field.Present {
+					delete(item, name)
+					continue
+				}
+				value, err := attributevalue.Marshal(field.Value)
+				if err != nil {
+					return fmt.Errorf("marshal preserved meeting metadata %s: %w", name, err)
+				}
+				item[name] = value
+			}
 		}
 
 		condExpr, err := expression.NewBuilder().WithCondition(summaryCondition(fence)).Build()
@@ -812,7 +836,8 @@ func projectIDsUnchangedCondition(current []string) (expression.Expression, erro
 // behavior; no meeting body or transcript hydration is needed here.
 func (r *DynamoDBRepository) getMeetingWriteMetadata(ctx context.Context, ownerUserID, meetingID string) (*model.Meeting, model.SummaryCheck, error) {
 	expr, err := expression.NewBuilder().
-		WithProjection(expression.NamesList(expression.Name("PK"), expression.Name("projectIds"), expression.Name("authorizationRevision"))).
+		WithProjection(expression.NamesList(expression.Name("PK"), expression.Name("projectIds"),
+			expression.Name("authorizationRevision"), expression.Name("accountId"), expression.Name("sharedToAccount"))).
 		Build()
 	if err != nil {
 		return nil, model.SummaryCheck{}, fmt.Errorf("build meeting write projection: %w", err)
@@ -835,7 +860,7 @@ func (r *DynamoDBRepository) getMeetingWriteMetadata(ctx context.Context, ownerU
 		return nil, model.SummaryCheck{}, fmt.Errorf("unmarshal meeting write metadata: %w", err)
 	}
 	fence, err := summaryCheck(model.PrefixUser+ownerUserID, model.PrefixMeeting+meetingID,
-		result.Item, []string{"projectIds", "authorizationRevision"})
+		result.Item, []string{"projectIds", "authorizationRevision", "accountId", "sharedToAccount"})
 	if err != nil {
 		return nil, model.SummaryCheck{}, err
 	}

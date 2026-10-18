@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -306,7 +308,8 @@ func (w *clearanceWire) repository(t *testing.T) *DynamoDBRepository {
 					row = map[string]map[string]any{}
 					for _, alias := range strings.Split(input.ProjectionExpression, ",") {
 						field := input.ExpressionAttributeNames[strings.TrimSpace(alias)]
-						if field != "PK" && field != "projectIds" && field != "authorizationRevision" {
+						if field != "PK" && field != "projectIds" && field != "authorizationRevision" &&
+							field != "accountId" && field != "sharedToAccount" {
 							t.Fatalf("whole-write metadata projected body field %s", field)
 						}
 						if value, ok := w.row[field]; ok {
@@ -584,4 +587,164 @@ func TestSummaryCaptureAlwaysPinsStoredPrivacy(t *testing.T) {
 			})
 		}
 	}
+}
+
+type wholeMeetingAccessRequest struct {
+	Item                      map[string]map[string]any
+	ProjectionExpression      string
+	ExpressionAttributeNames  map[string]string
+	ExpressionAttributeValues map[string]map[string]any
+	ConditionExpression       string
+	ConsistentRead            bool
+}
+
+type wholeMeetingAccessWire struct {
+	row       map[string]map[string]any
+	afterRead func()
+	projected []string
+	puts      []wholeMeetingAccessRequest
+	gets      int
+}
+
+func wholeMeetingAccessResponse(status int, body string) *http.Response {
+	return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": {"application/x-amz-json-1.0"}},
+		Body: io.NopCloser(strings.NewReader(body))}
+}
+
+func (w *wholeMeetingAccessWire) Do(req *http.Request) (*http.Response, error) {
+	var input wholeMeetingAccessRequest
+	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
+		return nil, err
+	}
+	switch {
+	case strings.HasSuffix(req.Header.Get("X-Amz-Target"), ".GetItem"):
+		if !input.ConsistentRead {
+			return nil, fmt.Errorf("metadata read must be strongly consistent")
+		}
+		w.gets++
+		projected := map[string]map[string]any{}
+		for _, alias := range strings.Split(input.ProjectionExpression, ",") {
+			name := input.ExpressionAttributeNames[strings.TrimSpace(alias)]
+			w.projected = append(w.projected, name)
+			if value, exists := w.row[name]; exists {
+				projected[name] = value
+			}
+		}
+		body, err := json.Marshal(map[string]any{"Item": projected})
+		if err != nil {
+			return nil, err
+		}
+		if w.afterRead != nil {
+			mutate := w.afterRead
+			w.afterRead = nil
+			mutate()
+		}
+		return wholeMeetingAccessResponse(200, string(body)), nil
+	case strings.HasSuffix(req.Header.Get("X-Amz-Target"), ".PutItem"):
+		w.puts = append(w.puts, input)
+		// Evaluate the exact equality/existence subset emitted by these
+		// positive-project-set cases. No live DynamoDB or permissive mock is used.
+		for _, match := range regexp.MustCompile(`(#\w+)\s*=\s*(:\w+)`).FindAllStringSubmatch(input.ConditionExpression, -1) {
+			name := input.ExpressionAttributeNames[match[1]]
+			value, exists := w.row[name]
+			if !exists || !reflect.DeepEqual(value, input.ExpressionAttributeValues[match[2]]) {
+				return wholeMeetingAccessResponse(400, `{"__type":"ConditionalCheckFailedException"}`), nil
+			}
+		}
+		for _, match := range regexp.MustCompile(`attribute_(not_)?exists\s*\(\s*(#\w+)\s*\)`).FindAllStringSubmatch(input.ConditionExpression, -1) {
+			_, exists := w.row[input.ExpressionAttributeNames[match[2]]]
+			if exists == (match[1] == "not_") {
+				return wholeMeetingAccessResponse(400, `{"__type":"ConditionalCheckFailedException"}`), nil
+			}
+		}
+		w.row = input.Item
+		return wholeMeetingAccessResponse(200, `{}`), nil
+	default:
+		return nil, fmt.Errorf("unexpected operation; fixture never forwards network requests")
+	}
+}
+
+func wholeMeetingAccessRow(account string, shared bool, revision bool) map[string]map[string]any {
+	row := map[string]map[string]any{
+		"PK": {"S": "USER#owner"}, "SK": {"S": "MEETING#meeting"},
+		"projectIds": {"SS": []any{"project"}},
+		"accountId":  {"S": account}, "sharedToAccount": {"BOOL": shared},
+	}
+	if revision {
+		row["authorizationRevision"] = map[string]any{"N": "8"}
+	}
+	return row
+}
+
+func TestWholeMeetingWritePreservesCurrentAccountAuthorization(t *testing.T) {
+	cases := []struct {
+		name     string
+		account  string
+		shared   bool
+		revision bool
+		after    bool
+		absent   bool
+	}{
+		{"unshare_before_metadata_read", "current-account", false, true, false, false},
+		{"new_grant_before_metadata_read", "current-account", true, true, false, false},
+		{"legacy_no_revision_unshare_before_read", "current-account", false, false, false, false},
+		{"account_change_after_read_same_revision", "stale-account", true, true, true, false},
+		{"account_change_after_read_absent_revision", "stale-account", true, false, true, false},
+		{"absent_current_account_fields", "", false, true, false, true},
+		{"explicit_empty_account_and_false_sharing", "", false, true, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := &wholeMeetingAccessWire{row: wholeMeetingAccessRow(tc.account, tc.shared, tc.revision)}
+			if tc.absent {
+				delete(w.row, "accountId")
+				delete(w.row, "sharedToAccount")
+			}
+			caller := &model.Meeting{PK: "USER#owner", SK: "MEETING#meeting", UserID: "owner", MeetingID: "meeting",
+				AccountID: "stale-account", SharedToAccount: true, AuthorizationRevision: 7, ProjectIDs: []string{"project"}}
+			if tc.name == "new_grant_before_metadata_read" {
+				caller.AccountID, caller.SharedToAccount = "", false
+			}
+			if tc.after {
+				w.afterRead = func() {
+					w.row["accountId"] = map[string]any{"S": "current-account"}
+					w.row["sharedToAccount"] = map[string]any{"BOOL": false}
+				}
+			}
+			wantAccount, wantShared := w.row["accountId"], w.row["sharedToAccount"]
+			if tc.after {
+				wantAccount, wantShared = map[string]any{"S": "current-account"}, map[string]any{"BOOL": false}
+			}
+			repo := NewDynamoDBRepository(dynamodb.New(dynamodb.Options{
+				Region: "ap-northeast-2", Credentials: aws.AnonymousCredentials{}, HTTPClient: w,
+			}), "synthetic-table")
+			if err := repo.UpdateMeeting(context.Background(), caller); err != nil {
+				t.Fatalf("whole save failed: %v", err)
+			}
+			t.Logf("reads=%d puts=%d projected=%v stampedRevision=%v", w.gets, len(w.puts), w.projected, w.row["authorizationRevision"])
+			if !reflect.DeepEqual(w.row["accountId"], wantAccount) || !reflect.DeepEqual(w.row["sharedToAccount"], wantShared) {
+				t.Fatalf("stale authorization payload accepted: account=%v shared=%v; want current account=%v shared=%v",
+					w.row["accountId"], w.row["sharedToAccount"], wantAccount, wantShared)
+			}
+			if caller.AuthorizationRevision != 7 {
+				t.Fatal("storage metadata refresh mutated caller")
+			}
+		})
+	}
+}
+
+func TestWholeMeetingWriteMissingRowRetainsCallerClassification(t *testing.T) {
+	w := &wholeMeetingAccessWire{row: map[string]map[string]any{}}
+	caller := &model.Meeting{PK: "USER#owner", SK: "MEETING#meeting", UserID: "owner", MeetingID: "meeting",
+		AccountID: "prepared-account", SharedToAccount: false}
+	repo := NewDynamoDBRepository(dynamodb.New(dynamodb.Options{
+		Region: "ap-northeast-2", Credentials: aws.AnonymousCredentials{}, HTTPClient: w,
+	}), "synthetic-table")
+	if err := repo.UpdateMeeting(context.Background(), caller); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(w.row["accountId"], map[string]any{"S": "prepared-account"}) {
+		t.Fatal("missing-row create dropped caller's classification")
+	}
+	t.Log("missing-row classification retained; existing-row preservation must not replace it with empty metadata")
 }
