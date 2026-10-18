@@ -33,27 +33,19 @@ key-only or one-package revert; see ADR-035.
 
 ## Frontend
 
-Build with `npm run build` in `frontend/`. The current workflow then runs
-`npm run test:unit` (the `frontend/scripts/*.test.mjs` suites) and stops before
-upload if they fail. Pull requests that touch `frontend/` run the same suites
-and lint in `test-frontend.yml`.
-It preserves the CDK-generated `config.json` during S3 sync and invalidates CloudFront. It does not
-perform an unconditional HTML copy or set no-cache metadata: forced HTML refresh
-remains a release requirement and a workflow gap, not implemented CI behavior.
-A bare sync without the config exclusion breaks runtime auth configuration.
+Run `npm ci`, then `npm run lint && npm run test:unit && npm run build` in
+`frontend/` for local verification. The deployment workflow installs dependencies,
+runs `npm run test:unit` (the `frontend/scripts/*.test.mjs` suites), then runs
+the required lint and production build before the publication contract tests.
+Each failed check stops the workflow before upload. Pull requests that touch
+`frontend/` run the unit suites and lint in `test-frontend.yml`.
 
-For an authorized manual release, insert the following after sync and before
-invalidation, with TTOBAK_SITE_BUCKET set to the verified target bucket:
-
-```bash
-aws s3 cp frontend/out/ "s3://${TTOBAK_SITE_BUCKET:?set the verified site bucket}/" \
-  --recursive --exclude "*" --include "*.html" \
-  --content-type "text/html; charset=utf-8" --cache-control "no-cache"
-```
-
-This forces HTML to reference the uploaded chunks even when sync would skip an
-equal-size file. Preserve config.json and use the target distribution's
-invalidation; do not infer that running the unchanged workflow adds this step.
+The workflow's shared publisher uploads immutable assets first, preserves
+CDK-generated `config.json`, force-copies HTML and RSC payloads with no-cache
+metadata, then invalidates CloudFront. Old chunks are retained for existing
+pages; no deleting sync is used. The manual helper defaults to frontend and
+rejects generic infra/all deployment. See the
+[security, publication and recovery contract](frontend-release.md).
 
 Verify `/config.json`, current HTML and the JS/CSS chunks referenced by that HTML
 through CloudFront. A successful upload alone does not prove the site is usable.

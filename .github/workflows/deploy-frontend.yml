@@ -3,7 +3,7 @@ name: Deploy Frontend
 on:
   push:
     branches: [main]
-    paths: ['frontend/**']
+    paths: ['frontend/**', 'scripts/publish-frontend.sh', 'scripts/test_publish_frontend.py', '.github/workflows/deploy-frontend.yml']
   workflow_dispatch:
 
 permissions:
@@ -11,7 +11,7 @@ permissions:
 
 concurrency:
   group: deploy-frontend
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   S3_BUCKET: ${{ vars.S3_BUCKET }}
@@ -32,16 +32,20 @@ jobs:
           unzip -q /tmp/awscli.zip -d /tmp && /tmp/aws/install --install-dir $HOME/.local/aws-cli --bin-dir $HOME/.local/bin --update
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Build frontend
+      - name: Install frontend dependencies
         working-directory: frontend
-        run: npm ci && npm run build
+        run: npm ci
 
       - name: Run frontend unit tests
         working-directory: frontend
         run: npm run test:unit
 
-      - name: Sync to S3
-        run: aws s3 sync frontend/out/ "s3://${S3_BUCKET}/" --delete --exclude "config.json"
+      - name: Lint and build frontend
+        working-directory: frontend
+        run: npm run lint && npm run build
 
-      - name: Invalidate CloudFront
-        run: aws cloudfront create-invalidation --distribution-id "${CF_DISTRIBUTION}" --paths "/*"
+      - name: Verify publication contract
+        run: python3 -m unittest discover -s scripts -p 'test_publish_frontend.py' -v
+
+      - name: Publish assets, refresh HTML and invalidate CloudFront
+        run: bash scripts/publish-frontend.sh frontend/out
