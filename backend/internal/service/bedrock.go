@@ -833,6 +833,21 @@ func (s *BedrockService) summarizeTranscript(ctx context.Context, meetingID, use
 	return content, nil
 }
 
+// noteLanguageDirective is the final-note language rule shared by batch and
+// saved-source summaries. Auto keeps the historical sentence byte-for-byte;
+// values outside the model allowlist also fall back to auto, so stored data
+// never reaches the system prompt verbatim.
+func noteLanguageDirective(language string) string {
+	switch language {
+	case model.NoteLanguageKorean:
+		return "Write the entire meeting notes in Korean, regardless of the transcript language. Keep proper nouns, product names and code identifiers in their original spelling."
+	case model.NoteLanguageEnglish:
+		return "Write the entire meeting notes in English, regardless of the transcript language. Translate the section headings above into English (Meeting Notes, Attendees, Overview, Key Points by Speaker, Discussion, Architecture Diagram, Decisions, Action Items) while keeping the same structure; when there are no confirmed action items, write \"No confirmed action items.\" Keep speaker labels, [TS:NNN] and [DOC:...] markers, proper nouns and code identifiers unchanged."
+	default:
+		return "Format in Korean unless the transcript is entirely in English."
+	}
+}
+
 func (s *BedrockService) generateSummarySnapshot(ctx context.Context, meeting *model.Meeting, attachments []model.Attachment, priorContext string, includeSaved bool) (string, error) {
 	if meeting == nil {
 		return "", ErrResummaryNoSource
@@ -878,7 +893,7 @@ Your output MUST follow this exact structure:
 - 합의된 후속 작업이 없으면 체크박스를 만들지 말고 "확정된 액션 아이템이 없습니다."라고 기재.
 - 담당자와 기한은 명시된 경우에만 기재하고, 없으면 미정으로 표시. 임의로 담당자를 배정하거나 날짜를 만들지 말 것.
 
-Format in Korean unless the transcript is entirely in English.
+` + noteLanguageDirective(meeting.NoteLanguage) + `
 결정 사항과 액션 아이템만 bullet/checkbox 리스트로 작성하고, 그 외 섹션(개요/화자별 발언/논의 사항)은 문단 형태로 서술해 불필요한 불릿 나열을 피할 것. Include timestamps where available.
 각 섹션은 트랜스크립트에 담긴 구체적인 근거(누가 무엇을 언급했는지, 어떤 수치·이름·이유가 나왔는지)를 최대한 살려 상세하고 세밀하게 작성할 것 — 뭉뚱그린 한두 문장으로 축약하지 말 것.
 

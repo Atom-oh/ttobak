@@ -300,6 +300,14 @@ Failures retain that draft and expose retry. Editing preserves canonical
 attachment/transcript citation IDs; signed URLs and page anchors are display
 targets only. Ordinary links and literal citation text keep their identity.
 
+The same panel shows editors a note-language select (automatic, Korean,
+English). A change saves `noteLanguage` through the meeting update and then
+offers a regenerate-in-this-language action, which sends the existing empty
+re-summary request. The select is
+disabled while a batch summary or re-summary is running, because a mid-run change
+discards that run as `SOURCE_CHANGED`. Save failures show an inline alert and
+keep the previous value.
+
 Deploy attachment, saved-summary and index-status APIs before this UI.
 
 ## MCP client setup guides

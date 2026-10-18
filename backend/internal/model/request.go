@@ -59,6 +59,9 @@ type UpdateMeetingRequest struct {
 	SelectedTranscript string   `json:"selectedTranscript,omitempty"` // "A" or "B"
 	Participants       []string `json:"participants,omitempty"`
 	Status             string   `json:"status,omitempty"`
+	// NoteLanguage selects the generated-note language: "" (auto), "ko" or
+	// "en". A pointer so an explicit "" returns the meeting to auto.
+	NoteLanguage *string `json:"noteLanguage,omitempty"`
 }
 
 // SelectTranscriptRequest represents the request body for selecting a transcript
@@ -163,6 +166,7 @@ type MeetingDetailResponse struct {
 	TranscriptB                string                `json:"transcriptB,omitempty"`
 	TranscriptQuality          *TranscriptQuality    `json:"transcriptQuality,omitempty"`
 	SelectedTranscript         *string               `json:"selectedTranscript,omitempty"` // "A" | "B" | null
+	NoteLanguage               string                `json:"noteLanguage"`                 // "" (auto) | "ko" | "en"
 	AudioKey                   string                `json:"audioKey,omitempty"`
 	AudioKeys                  []string              `json:"audioKeys,omitempty"`
 	AudioPartCount             int                   `json:"audioPartCount,omitempty"`
@@ -599,6 +603,7 @@ func ToMeetingDetailResponse(m *Meeting, attachments []AttachmentResponse, share
 		TranscriptA:        m.TranscriptA,
 		TranscriptB:        m.TranscriptB,
 		SelectedTranscript: selectedTranscript,
+		NoteLanguage:       m.NoteLanguage,
 		AudioKey:           m.AudioKey,
 		Attachments:        attachments,
 		Shares:             shares,
