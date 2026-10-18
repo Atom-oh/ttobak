@@ -358,6 +358,24 @@ for bad in ({'Ref':'OtherRole'}, {'Fn::ImportValue':'unknown'}, qa):
     }
   });
 
+  test('API Lambda carries the meeting translation flag and daily byte budget from context', () => {
+    const apiEnv = (value: Template) => Object.values(value.findResources('AWS::Lambda::Function'))
+      .find(resource => resource.Properties.FunctionName === 'ttobak-api')!.Properties.Environment.Variables;
+    expect(apiEnv(template)).toMatchObject({ MEETING_TRANSLATION_ENABLED: 'false', MEETING_TRANSLATE_DAILY_BYTES: '2000000' });
+    const custom = buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined,
+      { 'ttobak:meetingTranslationEnabled': 'true', 'ttobak:meetingTranslateDailyBytes': '0' });
+    expect(apiEnv(custom)).toMatchObject({ MEETING_TRANSLATION_ENABLED: 'true', MEETING_TRANSLATE_DAILY_BYTES: '0' });
+    const flagged = Object.values(template.findResources('AWS::Lambda::Function'))
+      .filter(resource => resource.Properties.Environment?.Variables?.MEETING_TRANSLATION_ENABLED !== undefined);
+    expect(flagged.map(resource => resource.Properties.FunctionName)).toEqual(['ttobak-api']);
+    for (const bad of ['yes', '1', 1, '']) {
+      expect(() => buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined,
+        { 'ttobak:meetingTranslationEnabled': bad })).toThrow(/ttobak:meetingTranslationEnabled must be true or false/);
+    }
+    expect(() => buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined,
+      { 'ttobak:meetingTranslateDailyBytes': '-5' })).toThrow(/ttobak:meetingTranslateDailyBytes must be a non-negative integer/);
+  });
+
   test('recovery consumer is installed before the API producer', () => {
     const functions = template.findResources('AWS::Lambda::Function');
     const apiId = Object.keys(functions).find(id => functions[id].Properties.FunctionName === 'ttobak-api')!;
