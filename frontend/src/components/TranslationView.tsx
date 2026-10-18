@@ -1,20 +1,37 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { BILINGUAL_TARGET, TRANSLATION_TARGETS, type TranslationEntry } from '@/lib/liveTranslation';
+import {
+  BILINGUAL_TARGET, TRANSLATION_TARGETS, fragmentStats, type TranslationEngineBadge, type TranslationEntry,
+} from '@/lib/liveTranslation';
 
 interface TranslationViewProps {
   translations: TranslationEntry[];
   targetLang: string;
   onTargetLangChange: (lang: string) => void;
   isActive: boolean;
+  /** ?debugCaptions=1: show the short-final (fragment) counter. */
+  debugCaptions?: boolean;
 }
 
-function CaptionText({ text, language, isOriginal, failed }: {
+const ENGINE_BADGES: Record<TranslationEngineBadge, { label: string; title: string }> = {
+  ai: { label: 'AI', title: 'AI 통역' },
+  machine: { label: '기계', title: '기계 번역' },
+  'machine-fallback': { label: '기계(대체)', title: 'AI 통역을 사용할 수 없어 기계 번역으로 대체했습니다' },
+};
+
+function statusLabel(status: TranslationEntry['status']): string {
+  if (status === 'error') return '번역 실패 · 원문 유지';
+  if (status === 'complete') return '확정';
+  if (status === 'skipped') return '간투사 · 번역 생략';
+  return '임시 자막 · 통역 중';
+}
+
+function CaptionText({ text, language, isOriginal, status }: {
   text: string;
   language: string;
   isOriginal: boolean;
-  failed: boolean;
+  status: TranslationEntry['status'];
 }) {
   return (
     <div className="min-w-0 rounded-lg bg-slate-50 p-3 dark:bg-white/5">
@@ -23,13 +40,13 @@ function CaptionText({ text, language, isOriginal, failed }: {
         <span>{isOriginal ? '원문' : '번역'}</span>
       </div>
       <p lang={text ? language : 'ko'} className="whitespace-pre-wrap break-words [word-break:keep-all] text-sm leading-relaxed text-slate-900 dark:text-text-main">
-        {text || (failed ? '번역하지 못했습니다.' : '통역 중…')}
+        {text || (status === 'error' ? '번역하지 못했습니다.' : status === 'skipped' ? '번역 생략' : '통역 중…')}
       </p>
     </div>
   );
 }
 
-export function TranslationView({ translations, targetLang, onTargetLangChange, isActive }: TranslationViewProps) {
+export function TranslationView({ translations, targetLang, onTargetLangChange, isActive, debugCaptions = false }: TranslationViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const followTailRef = useRef(true);
   const bilingual = targetLang === BILINGUAL_TARGET;
@@ -60,6 +77,15 @@ export function TranslationView({ translations, targetLang, onTargetLangChange, 
           {bilingual ? '한국어와 영어를 나란히 표시합니다. ' : '원문과 번역을 함께 표시합니다. '}
           말하는 중에는 임시 번역이며, 인식이 확정되면 갱신됩니다.
         </p>
+        {debugCaptions && (() => {
+          const { finals, fragments } = fragmentStats(translations);
+          const percent = finals ? Math.round((fragments / finals) * 100) : 0;
+          return (
+            <p data-testid="caption-fragments" className="w-full font-mono text-xs text-slate-500 dark:text-text-muted">
+              짧은 확정 문장(2단어 이하): {fragments}/{finals} ({percent}%)
+            </p>
+          );
+        })()}
       </div>
       <div
         ref={containerRef}
@@ -87,8 +113,18 @@ export function TranslationView({ translations, targetLang, onTargetLangChange, 
                       role={entry.status === 'error' ? 'status' : undefined}
                       className={entry.status === 'error' ? 'text-amber-700 dark:text-amber-400' : ''}
                     >
-                      {entry.status === 'error' ? '번역 실패 · 원문 유지' : entry.status === 'complete' ? '확정' : '임시 자막 · 통역 중'}
+                      {statusLabel(entry.status)}
                     </span>
+                    {entry.status === 'complete' && entry.engine && (
+                      <span
+                        title={ENGINE_BADGES[entry.engine].title}
+                        className={`rounded px-1.5 py-0.5 font-medium ${entry.engine === 'ai'
+                          ? 'bg-primary/10 text-primary'
+                          : 'bg-slate-100 text-slate-600 dark:bg-white/10 dark:text-text-muted'}`}
+                      >
+                        {ENGINE_BADGES[entry.engine].label}
+                      </span>
+                    )}
                   </div>
                   <div className={`grid ${languages.length === 1 ? 'grid-cols-1' : 'grid-cols-2'} gap-2 sm:gap-3`}>
                     {languages.map((language, index) => {
@@ -99,7 +135,7 @@ export function TranslationView({ translations, targetLang, onTargetLangChange, 
                           text={isOriginal ? entry.original : entry.translated}
                           language={language}
                           isOriginal={isOriginal}
-                          failed={entry.status === 'error'}
+                          status={entry.status}
                         />
                       );
                     })}

@@ -117,7 +117,8 @@ export class SttManager {
       interim: config.interimTranslation ?? false,
       onUpdate: (entry) => this.config.callbacks.onTranslation(entry),
       onReset: () => this.config.callbacks.onTranslationReset?.(),
-      translate: (text, sourceLang, targetLang, signal) => translateApi.translate(text, sourceLang, targetLang, signal),
+      translate: (text, sourceLang, targetLang, signal, options) =>
+        translateApi.translate(text, sourceLang, targetLang, signal, options),
     });
   }
 
