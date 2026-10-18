@@ -14,7 +14,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/ttobak/backend/internal/model"
 )
 
@@ -36,12 +35,11 @@ func privacyWriterWire(t *testing.T, rows map[string]interface{}, write func(str
 					if err != nil {
 						t.Fatal(err)
 					}
-					// SDK attribute JSON uses uppercase type discriminants.
-					data, err := json.Marshal(map[string]interface{}{"Item": dynamoJSON(attrs)})
+					data, err := attributevalue.MarshalMapJSON(attrs)
 					if err != nil {
-						t.Fatal(err)
+						t.Fatalf("marshal fixture: %v", err)
 					}
-					reply = string(data)
+					reply = `{"Item":` + string(data) + `}`
 				}
 			} else if strings.HasSuffix(target, ".Query") {
 				reply = `{"Items":[]}`
@@ -52,33 +50,6 @@ func privacyWriterWire(t *testing.T, rows map[string]interface{}, write func(str
 				Body: io.NopCloser(strings.NewReader(reply))}, nil
 		})})
 	return NewDynamoDBRepository(client, "privacy-test")
-}
-
-func dynamoJSON(attrs map[string]types.AttributeValue) map[string]interface{} {
-	out := map[string]interface{}{}
-	for key, value := range attrs {
-		switch v := value.(type) {
-		case *types.AttributeValueMemberS:
-			out[key] = map[string]interface{}{"S": v.Value}
-		case *types.AttributeValueMemberN:
-			out[key] = map[string]interface{}{"N": v.Value}
-		case *types.AttributeValueMemberBOOL:
-			out[key] = map[string]interface{}{"BOOL": v.Value}
-		case *types.AttributeValueMemberM:
-			out[key] = map[string]interface{}{"M": dynamoJSON(v.Value)}
-		case *types.AttributeValueMemberL:
-			list := make([]interface{}, 0, len(v.Value))
-			for _, item := range v.Value {
-				list = append(list, dynamoJSON(map[string]types.AttributeValue{"x": item})["x"])
-			}
-			out[key] = map[string]interface{}{"L": list}
-		case *types.AttributeValueMemberNULL:
-			out[key] = map[string]interface{}{"NULL": v.Value}
-		case *types.AttributeValueMemberSS:
-			out[key] = map[string]interface{}{"SS": v.Value}
-		}
-	}
-	return out
 }
 
 func privacyWriterEnabled(t *testing.T) {

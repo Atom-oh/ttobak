@@ -2000,7 +2000,7 @@ func parseMeetingInsights(raw string) ([]model.MeetingInsight, error) {
 }
 
 // ExtractInsights classifies a meeting into the 8 typed insights using Claude Haiku.
-// Invalid model output returns ErrInvalidAnalysisResponse, including for ID callers.
+// ID calls propagate missing-source and invalid-output errors.
 func (s *BedrockService) ExtractInsights(ctx context.Context, meetingID string, userID ...string) (string, error) {
 	var meeting *model.Meeting
 	var err error
@@ -2028,7 +2028,7 @@ func (s *BedrockService) ExtractInsightsForMeeting(ctx context.Context, meeting 
 		source, _ = selectMeetingTranscript(meeting)
 	}
 	if source == "" {
-		return "[]", nil
+		return "", ErrNoAnalysisSource
 	}
 
 	systemPrompt := `회의 요약/트랜스크립트에서 영업·고객 인사이트를 추출해 분류하세요.
@@ -2214,7 +2214,7 @@ func (s *BedrockService) ExtractTagsForMeeting(ctx context.Context, meeting *mod
 
 	transcript, _ := selectMeetingTranscript(meeting)
 	if transcript == "" {
-		return []string{}, nil
+		return nil, ErrNoAnalysisSource
 	}
 
 	systemPrompt := `You are an expert at categorizing meeting topics. Analyze the meeting transcript and extract 1-5 short tags that describe the main topics discussed.
@@ -2289,8 +2289,8 @@ Rules:
 }
 
 // ExtractSentiment classifies overall meeting tone using Claude Haiku.
-// Returns one of "positive" / "neutral" / "negative", or "" without a source.
-// Unrecognized model output returns ErrInvalidAnalysisResponse.
+// Returns positive, neutral or negative, or an analysis error.
+// Missing source and invalid output return their sentinels.
 //
 // When userID is provided, uses a strongly-consistent base table read instead of GSI,
 // matching ExtractTags above.
@@ -2349,7 +2349,7 @@ Output the single word, lowercase, no punctuation, no quotes, no explanation.`
 		// Fallback path: summary not yet generated — use transcript directly.
 		transcript, _ := selectMeetingTranscript(meeting)
 		if transcript == "" {
-			return "", nil
+			return "", ErrNoAnalysisSource
 		}
 		userPrompt = fmt.Sprintf("Classify the overall tone of this meeting transcript:\n\n%s", transcript)
 		if segments := meetingTranscriptSegments(meeting, transcript); len(segments) > 0 {

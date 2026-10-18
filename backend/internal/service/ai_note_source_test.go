@@ -128,20 +128,28 @@ func TestSummaryDerivatives_InvalidOutputRetainsPrior(t *testing.T) {
 		{"tags", "[null]", false}, {"tags", `[" "]`, false}, {"tags", "[]", true},
 		{"sentiment", "unknown", false}, {"sentiment", "null", false},
 		{"sentiment", "positive", true},
+		{"tags", "no-source", false}, {"insights", "no-source", false}, {"sentiment", "no-source", false},
 	} {
 		t.Run(tc.field+"/"+tc.raw, func(t *testing.T) {
 			meeting := &model.Meeting{MeetingID: "m", UserID: "owner",
 				Status: model.StatusDone, TranscriptA: "source", Content: "summary"}
+			want, count, calls := ErrInvalidAnalysisResponse, 0, 1
+			if tc.valid {
+				want, count = nil, 1
+			}
+			if tc.raw == "no-source" {
+				meeting.TranscriptA = ""
+				if tc.field != "tags" {
+					meeting.Content = ""
+				}
+				want, calls = ErrNoAnalysisSource, 0
+			}
 			body := actionItemsModelResponse(t, tc.raw, "end_turn")
-			_, _, writes, err := invokeNoteSourceFixture(t, meeting, body, func(s *BedrockService) (string, error) {
+			request, _, writes, err := invokeNoteSourceFixture(t, meeting, body, func(s *BedrockService) (string, error) {
 				return "", s.DeriveSummary(context.Background(), "owner", "m", tc.field)
 			})
-			if tc.valid {
-				if err != nil || writes != 1 {
-					t.Fatalf("valid publication: writes=%d err=%v", writes, err)
-				}
-			} else if !errors.Is(err, ErrInvalidAnalysisResponse) || writes != 0 {
-				t.Fatalf("invalid output must not publish: writes=%d err=%v", writes, err)
+			if !errors.Is(err, want) || writes != count || len(request.Messages) != calls {
+				t.Fatalf("writes=%d model messages=%d err=%v, want %d/%d/%v", writes, len(request.Messages), err, count, calls, want)
 			}
 		})
 	}
