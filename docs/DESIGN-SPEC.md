@@ -110,9 +110,12 @@ left column and English in the right, with the recognized original labeled.
 Desktop places interpretation above the summary/notes panels; mobile exposes an
 interpretation tab. Single-target translation remains available, including Korean.
 Each utterance appears immediately, before its translation finishes. Partial
-translations refresh on a 500ms throttle and are explicitly provisional; final
-recognition clears provisional output and triggers a separate authoritative
-translation. Response order never
+(draft) translation is off by default; a draft-translation checkbox labelled
+as higher cost (`RecordingConfig`), shown only
+while interpretation is on, opts in. Drafts then refresh on a 500ms throttle and
+are explicitly provisional; turning drafts off cancels the pending draft without
+an error. Final recognition clears provisional output and triggers a separate
+authoritative translation. Response order never
 changes utterance order. Language/enable changes discard the previous translation
 view and cancel pending work. Failures retain recognized text and show an error.
 The view retains at most 200 utterances and caps each displayed original at 9,000

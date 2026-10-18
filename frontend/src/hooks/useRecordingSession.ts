@@ -72,6 +72,8 @@ const RETRYABLE_LIVE_CAPTION_ERRORS = new Set([
 interface UseRecordingSessionOptions {
   targetLang: string;
   translationEnabled: boolean;
+  /** Translate partial captions too (opt-in, higher cost) */
+  interimTranslation?: boolean;
   /** Preferred live STT provider */
   liveSttProvider: LiveSttProvider;
   /** Called each time a final transcript arrives with updated word count and full text */
@@ -81,6 +83,7 @@ interface UseRecordingSessionOptions {
 export function useRecordingSession({
   targetLang,
   translationEnabled,
+  interimTranslation = false,
   liveSttProvider,
   onTranscriptUpdate,
 }: UseRecordingSessionOptions) {
@@ -97,6 +100,7 @@ export function useRecordingSession({
 
   const sttManagerRef = useRef<SttManager | null>(null);
   const targetLangRef = useRef(targetLang);
+  const interimTranslationRef = useRef(interimTranslation);
   const transcriptsRef = useRef(transcripts);
   const onTranscriptUpdateRef = useRef(onTranscriptUpdate);
   const transcribeConfigRef = useRef<TranscribeStreamingConfig | null>(null);
@@ -168,6 +172,12 @@ export function useRecordingSession({
   useEffect(() => {
     sttManagerRef.current?.updateTranslationEnabled(translationEnabled);
   }, [translationEnabled]);
+
+  // Propagate the draft (interim) translation opt-in to STT manager
+  useEffect(() => {
+    interimTranslationRef.current = interimTranslation;
+    sttManagerRef.current?.updateInterimTranslation(interimTranslation);
+  }, [interimTranslation]);
 
   const isSttPermanentlyFailed = speechError === speechErrorMessages['recognition-failed'];
 
@@ -259,6 +269,7 @@ export function useRecordingSession({
       },
       targetLang: targetLangRef.current,
       translationEnabled,
+      interimTranslation: interimTranslationRef.current,
       transcribeStreamingConfig: transcribeConfig ?? undefined,
       onReconnecting: () => {
         setSpeechError(speechErrorMessages['transcribe-stream-reconnecting']);

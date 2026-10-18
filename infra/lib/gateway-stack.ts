@@ -64,6 +64,21 @@ export interface GatewayStackProps extends cdk.StackProps {
   simCodeInterpreterId?: string;
 }
 
+/**
+ * Reads a non-negative integer limit from CDK context and renders it as a
+ * Lambda env string. A context value changes the function configuration, so
+ * the live alias publishes a new version; invalid values fail synth.
+ */
+export function rateLimitContext(scope: Construct, key: string, defaultValue: number): string {
+  const raw = scope.node.tryGetContext(key);
+  if (raw === undefined || raw === null || raw === '') return String(defaultValue);
+  const text = String(raw).trim();
+  if (!/^\d{1,9}$/.test(text)) {
+    throw new Error(`${key} must be a non-negative integer (0 disables the limit), got ${JSON.stringify(raw)}`);
+  }
+  return String(Number(text));
+}
+
 export class GatewayStack extends cdk.Stack {
   /** Present only when ttobak:mcpResourceAudience enables HTTP MCP. */
   public readonly mcpFunction?: lambda.Function;
@@ -106,7 +121,8 @@ export class GatewayStack extends cdk.Stack {
         throw new Error('ttobak:httpOriginReleaseCiRoleName must be an existing IAM role name or boolean false');
       }
       // Gateway owns this policy on the existing CI role. Initial secret
-      // creation remains an operator bootstrap; CI can rotate only this ARN.
+      // creation remains an operator bootstrap; CI can rotate only this ARN
+      // and invoke the four existing foundation-check function/alias targets.
       new iam.Policy(this, 'HttpOriginReleaseCiPolicy', {
         policyName: 'ttobak-http-origin-release',
         roles: [iam.Role.fromRoleName(this, 'HttpOriginReleaseCiRole', originReleaseCiRoleName)],
@@ -114,6 +130,13 @@ export class GatewayStack extends cdk.Stack {
           actions: ['secretsmanager:GetSecretValue', 'secretsmanager:PutSecretValue',
             'secretsmanager:UpdateSecretVersionStage'],
           resources: [this.httpOrigin.secret.secretArn],
+        }), new iam.PolicyStatement({
+          actions: ['lambda:InvokeFunction'],
+          resources: ['ttobak-api', 'ttobak-api:live', 'ttobak-qa', 'ttobak-mcp'].map(name =>
+            this.formatArn({
+              service: 'lambda', resource: 'function', resourceName: name,
+              arnFormat: cdk.ArnFormat.COLON_RESOURCE_NAME,
+            })),
         })],
       });
     }
@@ -153,6 +176,9 @@ export class GatewayStack extends cdk.Stack {
         // Live interpreter for /api/translate quality=high; must match AiStack's
         // InvokeInterpreterModel grant. Unset/blank means Amazon Translate only.
         BEDROCK_TRANSLATE_MODEL_ID: 'global.openai.gpt-6-luna',
+        // Per-user hourly /api/translate cost guard (0 disables a limit).
+        TRANSLATE_HOURLY_LIMIT: rateLimitContext(this, 'ttobak:translateHourlyLimit', 3000),
+        TRANSLATE_HIGH_HOURLY_LIMIT: rateLimitContext(this, 'ttobak:translateHighHourlyLimit', 1500),
         FRONTEND_BASE_URL: `https://${domainName}`,
         // Same-domain CloudFront-signed download URLs (ADR-027). Key material
         // comes from fixed-name SSM params (/ttobak/cloudfront/*) at runtime,
@@ -220,6 +246,10 @@ export class GatewayStack extends cdk.Stack {
         WHISPER_CLUSTER: WHISPER_CLUSTER_NAME,
         WHISPER_TASK_DEF: WHISPER_TASK_FAMILY,
         WHISPER_CONTAINER: WHISPER_CONTAINER_NAME,
+        // Scheduled STT recovery (ADR-031 amendment): off | report | active. Report
+        // logs decisions without writing; activate in a separate change.
+        STT_RECOVERY_MODE: 'report',
+        STT_RECOVERY_DELETE_MODE: 'report',
       },
       timeout: cdk.Duration.minutes(5),
       memorySize: 512,
@@ -243,6 +273,23 @@ export class GatewayStack extends cdk.Stack {
           `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/ttobak-whisper-execution-role`,
           `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/ttobak-whisper-task-role`,
         ],
+      })
+    );
+
+    // Single-flight check for the recovery tick: list tasks of the Whisper
+    // cluster only. ListTasks authorizes against container-instance with the
+    // ecs:cluster condition key; RunTask/PassRole above stay unchanged.
+    (props.transcribeRole as iam.Role).addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'EcsListWhisperTasks',
+        effect: iam.Effect.ALLOW,
+        actions: ['ecs:ListTasks'],
+        // ListTasks without a containerInstance filter authorizes only against
+        // "*"; the ecs:cluster condition confines it to the Whisper cluster.
+        resources: ['*'],
+        conditions: {
+          ArnEquals: { 'ecs:cluster': `arn:aws:ecs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:cluster/${WHISPER_CLUSTER_NAME}` },
+        },
       })
     );
 
@@ -748,6 +795,19 @@ export class GatewayStack extends cdk.Stack {
       eventPattern: { source: ['ttobak.audio'], detailType: ['AudioCropRequested'] },
     });
     pipelineFailures.addTarget('AudioCrop', audioCropRule, this.transcribeFunction);
+    // Scheduled STT recovery tick (ADR-031 amendment). The input carries no parameters,
+    // so a forged tick can only start the same bounded sweep. A lost tick is
+    // harmless: no retries, no DLQ.
+    const sttRecoveryRule = new events.Rule(this, 'SttRecoveryTick', {
+      ruleName: 'ttobak-stt-recovery',
+      description: 'Bounded re-drive of stuck single-file STT meetings and failed-recording grace cleanup',
+      schedule: events.Schedule.rate(cdk.Duration.minutes(15)),
+    });
+    sttRecoveryRule.addTarget(new eventsTargets.LambdaFunction(this.transcribeFunction, {
+      event: events.RuleTargetInput.fromObject({ source: 'ttobak.recovery', 'detail-type': 'SttRecoveryTick', detail: {} }),
+      retryAttempts: 0,
+      maxEventAge: cdk.Duration.minutes(10),
+    }));
     const transcribePermissions = this.transcribeFunction.node.findAll()
       .filter(child => child instanceof lambda.CfnPermission);
     this.apiFunction.node.addDependency(this.transcribeFunction, audioCropRule, ...transcribePermissions);

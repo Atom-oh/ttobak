@@ -589,7 +589,8 @@ export interface AdminUserActionResponse {
 // Translation API
 export const translateApi = {
   translate: (text: string, sourceLang: string, targetLang: string, signal?: AbortSignal) =>
-    api.post<{ translatedText: string; sourceLang: string; targetLang: string }>(
+    // Fast (Amazon Translate) path. A 429 RATE_LIMITED rejects like any error.
+    api.post<{ translatedText: string; sourceLang: string; targetLang: string; quality?: string; engine?: string; limited?: boolean }>(
       '/api/translate',
       { text, sourceLang, targetLang },
       { signal },

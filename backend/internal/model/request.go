@@ -390,6 +390,7 @@ const (
 	ErrCodeNotFound      = "NOT_FOUND"
 	ErrCodeConflict      = "CONFLICT"
 	ErrCodeInternalError = "INTERNAL_ERROR"
+	ErrCodeRateLimited   = "RATE_LIMITED"
 )
 
 // AskQuestionRequest represents the request body for asking a question about a meeting

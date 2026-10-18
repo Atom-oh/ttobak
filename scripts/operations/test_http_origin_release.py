@@ -562,7 +562,8 @@ class ReleaseTests(unittest.TestCase):
         session = SimpleNamespace(client=lambda *args, **kwargs: SimpleNamespace(
             get_caller_identity=lambda: {"Account": ACCOUNT}))
         modules = {"boto3": SimpleNamespace(Session=lambda **kwargs: session),
-                   "botocore.config": SimpleNamespace(Config=lambda **kwargs: None)}
+                   "botocore.config": SimpleNamespace(Config=lambda **kwargs: None),
+                   "botocore.exceptions": SimpleNamespace(ClientError=type("SdkError", (Exception,), {}))}
         with tempfile.TemporaryDirectory() as directory, \
                 mock.patch.dict("sys.modules", modules), \
                 mock.patch("sys.argv", ["release", "retighten", "--receipt", str(Path(directory) / "receipt.json")]), \
@@ -571,6 +572,82 @@ class ReleaseTests(unittest.TestCase):
                 mock.patch("sys.stderr", io.StringIO()):
             self.assertEqual(main(), 1)
             deploy.assert_not_called()
+
+    def test_invoke_access_denied_has_a_fixed_receipt_before_any_mutation(self):
+        try:
+            from botocore.exceptions import ClientError
+        except ImportError:
+            self.skipTest("botocore is required only for this SDK exception boundary test")
+        for denied_name in ("ttobak-api:live", "ttobak-api", "ttobak-qa", "ttobak-mcp"):
+            with self.subTest(consumer=denied_name):
+                world = World()
+                release = world.release()
+                original_invoke = world.invoke
+                private_message = "synthetic-private-provider-diagnostic"
+
+                def invoke(**kwargs):
+                    if kwargs["FunctionName"] == denied_name:
+                        raise ClientError({"Error": {"Code": "AccessDeniedException",
+                                                    "Message": private_message}}, "Invoke")
+                    return original_invoke(**kwargs)
+
+                session = SimpleNamespace(client=lambda *args, **kwargs: SimpleNamespace(
+                    get_caller_identity=lambda: {"Account": ACCOUNT}))
+                with tempfile.TemporaryDirectory() as directory, \
+                        mock.patch.dict("sys.modules", {"boto3": SimpleNamespace(Session=lambda **kwargs: session)}), \
+                        mock.patch("sys.argv", ["release", "release", "--receipt", str(Path(directory) / "receipt.json")]), \
+                        mock.patch("http_origin_release.checkout_revision", return_value="a" * 40), \
+                        mock.patch("http_origin_release.Release", return_value=release), \
+                        mock.patch.object(world, "invoke", side_effect=invoke), \
+                        mock.patch("sys.stdout", io.StringIO()) as stdout, \
+                        mock.patch("sys.stderr", io.StringIO()) as stderr:
+                    self.assertEqual(main(), 1)
+                    receipt = json.loads((Path(directory) / "receipt.json").read_text())
+                self.assertEqual(receipt["status"], "incomplete")
+                self.assertEqual(receipt["code"], "CONSUMER_INVOKE_ACCESS_DENIED")
+                self.assertEqual(world.secret_changes, 0)
+                self.assertFalse(any(entry[0] == "deploy" for entry in world.history))
+                for value in (stdout.getvalue(), stderr.getvalue(), json.dumps(receipt)):
+                    self.assertNotIn(private_message, value)
+                    self.assertNotIn(OLD, value)
+                    self.assertNotIn(NEW, value)
+
+    def test_other_errors_are_not_misclassified_as_consumer_invoke_permissions(self):
+        try:
+            from botocore.exceptions import ClientError
+        except ImportError:
+            self.skipTest("botocore is required only for this SDK exception boundary test")
+        private_message = "synthetic-private-provider-diagnostic"
+        cases = [
+            (ClientError({"Error": {"Code": "AccessDeniedException", "Message": private_message}},
+                         "GetSecretValue"), "OPERATION_FAILED_OR_OUTCOME_UNKNOWN"),
+            (ClientError({"Error": {"Code": "KMSAccessDeniedException", "Message": private_message}},
+                         "Invoke"), "OPERATION_FAILED_OR_OUTCOME_UNKNOWN"),
+            (ClientError({"Error": {"Code": "ResourceNotFoundException", "Message": private_message}},
+                         "Invoke"), "OPERATION_FAILED_OR_OUTCOME_UNKNOWN"),
+            (ClientError({"Error": {"Code": "AccessDenied", "Message": private_message}},
+                         "Invoke"), "OPERATION_FAILED_OR_OUTCOME_UNKNOWN"),
+            (RuntimeError("AccessDeniedException " + private_message), "OPERATION_FAILED_OR_OUTCOME_UNKNOWN"),
+            (ReleaseError("CONSUMER_CHANGED_DURING_PREFLIGHT"), "CONSUMER_CHANGED_DURING_PREFLIGHT"),
+        ]
+        for error, expected in cases:
+            with self.subTest(error_type=type(error).__name__, operation=getattr(error, "operation_name", None)):
+                world = World()
+                release = world.release()
+                session = SimpleNamespace(client=lambda *args, **kwargs: SimpleNamespace(
+                    get_caller_identity=lambda: {"Account": ACCOUNT}))
+                with tempfile.TemporaryDirectory() as directory, \
+                        mock.patch.dict("sys.modules", {"boto3": SimpleNamespace(Session=lambda **kwargs: session)}), \
+                        mock.patch("sys.argv", ["release", "release", "--receipt", str(Path(directory) / "receipt.json")]), \
+                        mock.patch("http_origin_release.checkout_revision", return_value="a" * 40), \
+                        mock.patch("http_origin_release.Release", return_value=release), \
+                        mock.patch.object(release, "run", side_effect=error), \
+                        mock.patch("sys.stderr", io.StringIO()) as stderr:
+                    self.assertEqual(main(), 1)
+                    receipt = json.loads((Path(directory) / "receipt.json").read_text())
+                self.assertEqual(receipt["code"], expected)
+                self.assertNotIn(private_message, stderr.getvalue())
+                self.assertNotIn(private_message, json.dumps(receipt))
 
 
 class CdkAssemblyCacheTests(unittest.TestCase):

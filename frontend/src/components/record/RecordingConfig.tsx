@@ -11,6 +11,8 @@ interface RecordingConfigProps {
   onTranslationToggle: (enabled: boolean) => void;
   targetLang: string;
   onTargetLangChange: (lang: string) => void;
+  interimTranslation?: boolean;
+  onInterimTranslationToggle?: (enabled: boolean) => void;
   isRecording: boolean;
   sttProvider: 'transcribe' | 'nova-sonic';
   onSttProviderChange: (provider: 'transcribe' | 'nova-sonic') => void;
@@ -23,7 +25,9 @@ export function RecordingConfig({
   onTranslationToggle,
   targetLang,
   onTargetLangChange,
-}: Pick<RecordingConfigProps, 'summaryInterval' | 'onSummaryIntervalChange' | 'translationEnabled' | 'onTranslationToggle' | 'targetLang' | 'onTargetLangChange'>) {
+  interimTranslation = false,
+  onInterimTranslationToggle,
+}: Pick<RecordingConfigProps, 'summaryInterval' | 'onSummaryIntervalChange' | 'translationEnabled' | 'onTranslationToggle' | 'targetLang' | 'onTargetLangChange' | 'interimTranslation' | 'onInterimTranslationToggle'>) {
   return (
     <div className="flex flex-wrap items-center gap-3">
       <select
@@ -57,6 +61,20 @@ export function RecordingConfig({
             <option key={language.code} value={language.code}>{language.label}</option>
           ))}
         </select>
+      )}
+      {translationEnabled && onInterimTranslationToggle && (
+        <label
+          className="flex items-center gap-1.5 text-sm text-slate-600 dark:text-gray-400"
+          title="말하는 도중의 문장도 번역합니다. 번역 요청이 크게 늘어납니다."
+        >
+          <input
+            type="checkbox"
+            checked={interimTranslation}
+            onChange={(e) => onInterimTranslationToggle(e.target.checked)}
+            className="rounded border-slate-300 text-primary focus:ring-primary"
+          />
+          초안 번역 (비용↑)
+        </label>
       )}
     </div>
   );

@@ -584,10 +584,25 @@ Translate on any model error, timeout (3s), truncated or implausible output, or
 when the model is unset or the text exceeds 3,000 bytes. `context` (at most two
 earlier source segments, 2,000 bytes total) is reference data for `high` only and is
 JSON-encoded separately from the current segment. The response is
-`{translatedText, sourceLang, targetLang, quality, engine}` where `engine` is
+`{translatedText, sourceLang, targetLang, quality, engine, limited}` where `engine` is
 `llm` or `translate`; a caller can show the `fast` result and replace it with `high`.
-Failures return a generic 500 without segment text; the text is never logged.
-`high` has no per-user rate limit; no route throttling is configured in `gateway-stack.ts`.
+Amazon Translate requests targeting `ko` set `Settings.Formality=FORMAL`; profanity
+masking is not enabled. Failures return a generic 500 without segment text; the text
+is never logged.
+
+Cost guard: each authenticated user has fixed hourly UTC windows counted by
+`WindowCounter` (`USER#{userId}/RATE#translate#{windowStart}` and
+`RATE#translate-high#{windowStart}`, atomic `ADD count`, `pendingShareExpiresAt` =
+window end + 2h). Every validated request counts toward `TRANSLATE_HOURLY_LIMIT`
+(default 3000); above it the API returns 429 `RATE_LIMITED` with `Retry-After`
+seconds and does not call a translator. `high` requests also count toward
+`TRANSLATE_HIGH_HOURLY_LIMIT` (default 1500); above it the request is served by
+`fast`, and the response has `quality: "fast"`, `limited: true`. A limit of 0
+disables that check. Counter storage errors fail open: this is an abuse/cost brake,
+not an access boundary. Rejected requests also count within their window. Each
+success logs one metering JSON line
+`{evt, q, engine, src, tgt, inBytes, outBytes, ms, limited, fallbackReason}`
+without text or user ID. No route throttling is configured in `gateway-stack.ts`.
 
 ### Simulator
 
