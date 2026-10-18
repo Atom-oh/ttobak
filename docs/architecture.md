@@ -115,7 +115,9 @@ unconsumed project invitation rows expire through their existing TTL field.
    Missing language metadata uses the current text's script, never the previous
    utterance's language. The shared translation scheduler bounds pending finals,
    concurrency, UTF-8 request/result sizes and request duration; it rejects stale
-   responses after finalization, setting changes or stop. Interpretation failures
+   responses after finalization, setting changes or stop. Partial-caption drafts
+   are translated only after an explicit opt-in, and the API applies per-user
+   hourly request limits (ADR-005 amendment). Interpretation failures
    do not stop capture. This path does not change batch transcription or saved notes.
 2. Upload audio to S3. EventBridge invokes the transcribe orchestrator, which uses
    configured Whisper ECS or AWS Transcribe fallback. Multipart completion and

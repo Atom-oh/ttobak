@@ -33,6 +33,11 @@ interface TranslationSegment {
 interface TranslationOptions {
   enabled: boolean;
   targetLang: string;
+  /**
+   * Translate partial (interim) captions too. Off by default: every partial
+   * revision is a billed request, while finals alone keep the cost bounded.
+   */
+  interim?: boolean;
   onUpdate: (entry: TranslationEntry) => void;
   onReset: () => void;
   translate: (text: string, sourceLang: string, targetLang: string, signal: AbortSignal) => Promise<{ translatedText: string }>;
@@ -105,7 +110,7 @@ export class LiveTranslation {
       }
       this.finalQueue.push(segment);
       this.drainFinals();
-    } else {
+    } else if (this.options.interim) {
       this.interim = segment;
       this.scheduleInterim();
     }
@@ -154,7 +159,7 @@ export class LiveTranslation {
     const isCurrent = () => !this.stopped && this.options.enabled &&
       generation === this.generation && this.segments.get(snapshot.id) === segment &&
       segment.entry.sourceLang === snapshot.sourceLang && segment.entry.targetLang === snapshot.targetLang &&
-      (isFinal ? segment.revision === revision : !segment.entry.isFinal);
+      (isFinal ? segment.revision === revision : !!this.options.interim && !segment.entry.isFinal);
     try {
       if (new TextEncoder().encode(snapshot.original).length > 9000) throw new Error('Translation input too long');
       const request = snapshot.sourceLang === snapshot.targetLang
@@ -211,6 +216,13 @@ export class LiveTranslation {
     if (this.options.targetLang === targetLang) return;
     this.options.targetLang = targetLang;
     this.reset();
+  }
+
+  /** Turning drafts off cancels the pending draft; finals are unaffected. */
+  updateInterim(interim: boolean): void {
+    if (!!this.options.interim === interim) return;
+    this.options.interim = interim;
+    if (!interim) this.clearInterim();
   }
 
   updateEnabled(enabled: boolean): void {
