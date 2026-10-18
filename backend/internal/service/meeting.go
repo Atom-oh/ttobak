@@ -684,6 +684,7 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 		TranscriptB:                meeting.TranscriptB,
 		TranscriptQuality:          model.MatchingTranscriptQuality(meeting, variant),
 		SelectedTranscript:         strPtr(variant),
+		NoteLanguage:               meeting.NoteLanguage,
 		AudioKey:                   meeting.AudioKey,
 		AudioKeys:                  meeting.AudioKeys,
 		AudioPartCount:             meeting.AudioPartCount,
@@ -731,7 +732,7 @@ func (s *MeetingService) UpdateMeeting(ctx context.Context, userID, meetingID st
 
 	if req.ExpectedNotes != nil || req.ExpectedNotesRevision != nil {
 		if req.Notes == nil || req.ExpectedNotes == nil || req.Title != "" || req.Content != "" || req.LiveSummary != nil ||
-			req.TranscriptA != "" || req.SelectedTranscript != "" || req.Participants != nil || req.Status != "" {
+			req.TranscriptA != "" || req.SelectedTranscript != "" || req.NoteLanguage != nil || req.Participants != nil || req.Status != "" {
 			return nil, fmt.Errorf("%w: expectedNotes requires a notes-only update", ErrInvalidInput)
 		}
 		if err := validateMeetingNotes(*req.Notes); err != nil {
@@ -800,6 +801,16 @@ func (s *MeetingService) UpdateMeeting(ctx context.Context, userID, meetingID st
 	}
 	if req.SelectedTranscript != "" {
 		fields["selectedTranscript"] = req.SelectedTranscript
+	}
+	if req.NoteLanguage != nil {
+		if !model.ValidNoteLanguage(*req.NoteLanguage) {
+			return nil, fmt.Errorf("%w: noteLanguage must be \"\", \"ko\" or \"en\"", ErrInvalidInput)
+		}
+		// An unchanged value is not written, so it cannot invalidate a
+		// summary run whose source CAS pins noteLanguage.
+		if *req.NoteLanguage != meeting.NoteLanguage {
+			fields["noteLanguage"] = *req.NoteLanguage
+		}
 	}
 	if req.Participants != nil {
 		fields["participants"] = req.Participants

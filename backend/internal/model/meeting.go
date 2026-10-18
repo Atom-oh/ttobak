@@ -9,6 +9,18 @@ type MeetingPreparation struct {
 	AccountID string
 }
 
+// Final-note output languages. Auto ("") keeps the historical prompt rule.
+const (
+	NoteLanguageAuto    = ""
+	NoteLanguageKorean  = "ko"
+	NoteLanguageEnglish = "en"
+)
+
+// ValidNoteLanguage is the exact allowlist for Meeting.NoteLanguage writes.
+func ValidNoteLanguage(language string) bool {
+	return language == NoteLanguageAuto || language == NoteLanguageKorean || language == NoteLanguageEnglish
+}
+
 // Meeting represents a meeting record in DynamoDB
 // PK: USER#{userId}, SK: MEETING#{meetingId}
 type Meeting struct {
@@ -26,6 +38,7 @@ type Meeting struct {
 	TranscriptRevisionA string             `dynamodbav:"transcriptRevisionA,omitempty"`
 	TranscriptRevisionB string             `dynamodbav:"transcriptRevisionB,omitempty"`
 	SelectedTranscript  string             `dynamodbav:"selectedTranscript,omitempty"` // "A" or "B"
+	NoteLanguage        string             `dynamodbav:"noteLanguage,omitempty"`       // "" auto, "ko", "en"; see ValidNoteLanguage
 	AudioKey            string             `dynamodbav:"audioKey,omitempty"`           // S3 key for audio file (legacy single-file)
 	AudioCrop           *AudioCrop         `dynamodbav:"audioCrop,omitempty"`
 	AudioKeys           []string           `dynamodbav:"audioKeys,omitempty"`                    // Ordered S3 keys for multi-file uploads
@@ -353,6 +366,13 @@ const (
 	PrefixHistory    = "HISTORY#"
 	PrefixConfig     = "CONFIG"
 	PrefixResearch   = "RESEARCH#"
+	// PrefixRate keys Go fixed-window usage counters:
+	// USER#{id}/RATE#{bucket}#{windowKey}. They share the
+	// pendingShareExpiresAt sweep like the QA counter below.
+	PrefixRate = "RATE#"
+	// PendingShareTTLAttribute is the attribute storage-stack.ts configures
+	// as the table's timeToLiveAttribute.
+	PendingShareTTLAttribute = "pendingShareExpiresAt"
 
 	// (The qa Lambda's web-search hourly rate-limit counter — Python-only,
 	// USER#{id}/WEBSEARCH_HOURLY#{YYYY-MM-DDTHH}, no Go model — shares

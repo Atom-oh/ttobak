@@ -120,6 +120,7 @@ func init() {
 	translateService := service.NewTranslateService(
 		translateClient,
 		service.WithInterpreterModel(bedrockRuntimeClient2, os.Getenv("BEDROCK_TRANSLATE_MODEL_ID")),
+		service.WithInterpreterTimeout(service.ParseTranslateHighTimeout(os.Getenv("TRANSLATE_HIGH_TIMEOUT_MS"))),
 	)
 	// Initialize handlers
 	healthHandler := handler.NewHealthHandler()
@@ -144,6 +145,14 @@ func init() {
 	dictService := service.NewDictionaryService(dictRepo, transcribeClient)
 	dictHandler := handler.NewDictionaryHandler(dictService)
 	translateHandler := handler.NewTranslateHandler(translateService)
+	// Per-user hourly cost guard; 0 disables a limit, storage errors fail open.
+	translateHandler.SetRateLimits(
+		service.NewWindowCounter(repository.NewRateCounterRepository(dynamoClient, tableName)),
+		handler.TranslateLimits{
+			Hourly:     service.ParseRateLimit("TRANSLATE_HOURLY_LIMIT", os.Getenv("TRANSLATE_HOURLY_LIMIT"), handler.DefaultTranslateHourlyLimit),
+			HighHourly: service.ParseRateLimit("TRANSLATE_HIGH_HOURLY_LIMIT", os.Getenv("TRANSLATE_HIGH_HOURLY_LIMIT"), handler.DefaultTranslateHighHourlyLimit),
+		},
+	)
 	summarizeLiveHandler := handler.NewSummarizeLiveHandler(bedrockRuntimeClient2, meetingService)
 	crawlerRepo := repository.NewCrawlerRepository(dynamoClient, tableName)
 	crawlerService := service.NewCrawlerService(crawlerRepo)
