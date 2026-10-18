@@ -29,6 +29,7 @@ import type {
   AudioStream,
 } from '@aws-sdk/client-transcribe-streaming';
 import { getIdToken, refreshSession } from '@/lib/auth';
+import { isVocabularyBadRequest, shouldRetryWithoutVocabulary, vocabularyRequestFields, type LiveVocabularyNames } from '@/lib/liveVocabulary';
 
 export interface TranscribeStreamingConfig {
   region: string;
@@ -38,7 +39,8 @@ export interface TranscribeStreamingConfig {
   multiLanguage?: boolean;
   languageOptions?: string;
   preferredLanguage?: string;
-  vocabularyName?: string;
+  vocabularies?: LiveVocabularyNames; // READY names only
+  onVocabularyFallback?: () => void; // Transcribe rejected the vocabulary
   onTranscript: (text: string, isFinal: boolean, languageCode?: string, resultId?: string) => void;
   onError: (error: string) => void;
 }
@@ -184,13 +186,13 @@ export class TranscribeStreamingSession {
     }
   }
 
-  private async connectAndTranscribe(): Promise<void> {
+  private async connectAndTranscribe(withoutVocabulary = false): Promise<void> {
     if (this.stopped) return;
     // Reset the queue BEFORE any await: chunks produced while the SDK
     // import/credential exchange below is in flight (native PCM starts
     // flowing as soon as capture does) must be queued and sent, not wiped
     // by a post-await reset — that used to drop the first utterance.
-    this.audioQueue = [];
+    if (!withoutVocabulary) this.audioQueue = []; // a retry keeps queued audio
     this.audioResolve = null;
     this.audioDone = false;
 
@@ -247,6 +249,8 @@ export class TranscribeStreamingSession {
 
     this.isActive = true;
     this.abortController = new AbortController();
+    let usedVocabulary = false;
+    let receivedEvent = false;
 
     try {
       const commandInput: StartStreamTranscriptionCommandInput = {
@@ -263,12 +267,15 @@ export class TranscribeStreamingSession {
         commandInput.LanguageCode = (this.config.languageCode || 'ko-KR') as StartStreamTranscriptionCommandInput['LanguageCode'];
       }
 
-      if (this.config.vocabularyName) {
-        if (this.config.multiLanguage) {
-          commandInput.VocabularyNames = this.config.vocabularyName;
-        } else {
-          commandInput.VocabularyName = this.config.vocabularyName;
-        }
+      if (!withoutVocabulary) {
+        const fields = vocabularyRequestFields({
+          vocabularies: this.config.vocabularies,
+          multiLanguage: Boolean(this.config.multiLanguage),
+          languageOptions: commandInput.LanguageOptions,
+          languageCode: commandInput.LanguageCode,
+        });
+        Object.assign(commandInput, fields);
+        usedVocabulary = Object.keys(fields).length > 0;
       }
 
       const command = new StartStreamTranscriptionCommand(commandInput);
@@ -285,6 +292,7 @@ export class TranscribeStreamingSession {
 
       for await (const event of response.TranscriptResultStream) {
         if (!this.isActive) break;
+        receivedEvent = true;
         if (event.TranscriptEvent?.Transcript?.Results) {
           for (const result of event.TranscriptEvent.Transcript.Results) {
             const text = result.Alternatives?.[0]?.Transcript || '';
@@ -300,6 +308,13 @@ export class TranscribeStreamingSession {
       if (this.isActive) this.config.onError('transcribe-stream-error');
     } catch (err) {
       if (this.isActive) {
+        // A vocabulary rejected before any event: retry once without it.
+        if (shouldRetryWithoutVocabulary({ error: err, usedVocabulary, receivedEvent, alreadyRetried: withoutVocabulary })) {
+          this.config.onVocabularyFallback?.();
+          return this.connectAndTranscribe(true);
+        }
+        // Later, the owner reconnects without the vocabulary.
+        if (usedVocabulary && isVocabularyBadRequest(err)) this.config.onVocabularyFallback?.();
         console.error('Transcribe Streaming error:', err);
         this.config.onError('transcribe-stream-error');
       }

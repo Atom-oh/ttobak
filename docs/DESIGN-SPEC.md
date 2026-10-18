@@ -346,12 +346,22 @@ Copy controls report success/failure; client/transport controls work with keyboa
 mobile and light/dark themes. Notes-first reads are distinguished from generated
 summary and transcript requests.
 
+## Personal dictionary
+
+The recording page calls the dictionary GET once (a builder poll opportunity) but
+sends no vocabulary on live streams: no API names one yet (ADR-008 item 5).
+`lib/liveVocabulary.ts` would send at most one name per `LanguageOptions`
+language; with a name, a vocabulary BadRequest before the first stream event
+retries once without it, and any vocabulary rejection drops it for the recording
+and shows an informational "recognizing without the custom dictionary" line.
+
 ## Verification
 
 Run frontend lint/build for code changes and targeted browser checks for affected
 interactions. Check light/dark, mobile/desktop, keyboard access, loading/empty/error,
-permission differences and recovery paths where applicable. No frontend unit-test
-framework exists. Documentation changes alone do not require a frontend rebuild.
+permission differences and recovery paths where applicable. There is no frontend
+test framework; `npm run test:unit` runs the `scripts/*.test.mjs` node:test files
+(not part of lint/build). Documentation changes alone do not require a frontend rebuild.
 The generated `public/mcp/ttobak-mcp.mjs` download is excluded from frontend lint;
 validate its authored Node source and bundle with `npm test` in `mcp-server`.
 

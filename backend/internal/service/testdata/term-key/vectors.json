@@ -1,0 +1,25 @@
+{
+  "comment": "Synthetic NormalizeTermKey/TermKey vectors for the Go test and frontend/scripts/dictionary.test.mjs.",
+  "vectors": [
+    {"input": "Amazon Bedrock", "normalized": "amazonbedrock", "termKey": "f805983b885f50e10f1db808b7ade8c3"},
+    {"input": "Ａｍａｚｏｎ\u3000Ｂｅｄｒｏｃｋ", "normalized": "amazonbedrock", "termKey": "f805983b885f50e10f1db808b7ade8c3"},
+    {"input": "베드·록", "normalized": "베드록", "termKey": "77502ce550df18138e5647b9623afff8"},
+    {"input": "K8s\u0009Cluster\u000a", "normalized": "k8scluster", "termKey": "bacc63da7477d7e7001a625a53cb67b3"},
+    {"input": "Dynamo-DB", "normalized": "dynamodb", "termKey": "cf99b895f350b77585881438ab38a935"},
+    {"input": "E.K.S.", "normalized": "eks", "termKey": "6e884711fb5f5560386641ff08349621"},
+    {"input": "ﬁle ﬂow", "normalized": "fileflow", "termKey": "7b7b41c25ae77c3f4dae5675ffa50e7b"},
+    {"input": "①번 Ⅻ", "normalized": "1번xii", "termKey": "8b34a51895d0de4d5c1536a06e181edb"},
+    {"input": "e\u0301clair", "normalized": "éclair", "termKey": "0ebe6cb10ee48b340d8c35152b94cded"},
+    {"input": "ㄱㄴ 테스트", "normalized": "ᄀᄂ테스트", "termKey": "d305681098147feceb44cacbaf35da34"},
+    {"input": "İstanbul", "normalized": "istanbul", "termKey": "751c59fe1fa734e61bec7c142171bfcb"},
+    {"input": "ΣΑΣ", "normalized": "σασ", "termKey": "54727c9d3baefbcb4d3824f184a8a46e"},
+    {"input": "a\u2028b\u2029c", "normalized": "abc", "termKey": "ba7816bf8f01cfea414140de5dae2223"},
+    {"input": "a\u0085b", "normalized": "ab", "termKey": "fb8e20fc2e4c3f248c60c39bd652f3c1"},
+    {"input": "a\u200bb", "normalized": "a\u200bb", "termKey": "8df62aef5f92e4c30c0c938497f55f60"},
+    {"input": "a\ufeffb", "normalized": "a\ufeffb", "termKey": "47a12dcb64e9ad8dc2c0819464d72388"},
+    {"input": "a\u1680b\u205fc", "normalized": "abc", "termKey": "ba7816bf8f01cfea414140de5dae2223"},
+    {"input": "㈜또박", "normalized": "(주)또박", "termKey": "91ceee7b54950d4212639ef26e6666ce"},
+    {"input": "ﾃｽﾄ", "normalized": "テスト", "termKey": "8a535a3f4dcd2c396db11b7c1e54221d"},
+    {"input": "- . _ ·", "normalized": "", "termKey": ""}
+  ]
+}
