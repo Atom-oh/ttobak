@@ -696,6 +696,61 @@ for bad in ({'Ref':'OtherRole'}, {'Fn::ImportValue':'unknown'}, qa):
     }]);
   });
 
+  test('term extraction requests reach only summarize through a bounded rule, DLQ and alarm', () => {
+    const summarizeId = resourceId('AWS::Lambda::Function', 'FunctionName', 'ttobak-summarize');
+    const apiId = resourceId('AWS::Lambda::Function', 'FunctionName', 'ttobak-api');
+    const queueId = resourceId('AWS::SQS::Queue', 'QueueName', 'ttobak-terms-dlq');
+    const ruleId = resourceId('AWS::Events::Rule', 'Name', 'ttobak-terms-requested');
+    const rule = template.findResources('AWS::Events::Rule')[ruleId].Properties;
+    expect(rule.EventPattern).toEqual({ source: ['ttobak.analysis'], 'detail-type': ['TermsRequested'] });
+    expect(rule.Targets).toEqual([{
+      Arn: { 'Fn::GetAtt': [summarizeId, 'Arn'] },
+      Id: expect.any(String),
+      DeadLetterConfig: { Arn: { 'Fn::GetAtt': [queueId, 'Arn'] } },
+      RetryPolicy: { MaximumEventAgeInSeconds: 300, MaximumRetryAttempts: 3 },
+    }]);
+    const queue = template.findResources('AWS::SQS::Queue')[queueId].Properties;
+    expect(queue.SqsManagedSseEnabled).toBe(true);
+    expect(queue.MessageRetentionPeriod).toBe(604800);
+    expect(queue.RedriveAllowPolicy).toEqual({ redrivePermission: 'denyAll' });
+    const statements = Object.values(template.findResources('AWS::SQS::QueuePolicy'))
+      .flatMap((policy) => policy.Properties.PolicyDocument.Statement)
+      .filter((statement) => JSON.stringify(statement.Resource) === JSON.stringify({ 'Fn::GetAtt': [queueId, 'Arn'] }));
+    expect(statements).toHaveLength(1);
+    expect(statements[0].Condition).toEqual({ ArnEquals: { 'aws:SourceArn': { 'Fn::GetAtt': [ruleId, 'Arn'] } } });
+    const alarms = Object.values(template.findResources('AWS::CloudWatch::Alarm'))
+      .filter((alarm) => JSON.stringify(alarm.Properties.Dimensions ?? []).includes(queueId));
+    expect(alarms.length).toBeGreaterThan(0);
+    expect(template.toJSON().Resources[apiId].DependsOn ?? []).toContain(ruleId);
+  });
+
+  test('automatic term extraction is off by default and its flags come from validated context', () => {
+    const summarizeEnv = (value: Template) => Object.values(value.findResources('AWS::Lambda::Function'))
+      .find(resource => resource.Properties.FunctionName === 'ttobak-summarize')!.Properties.Environment.Variables;
+    expect(summarizeEnv(template)).toMatchObject({
+      AUTO_TERMS_MODE: 'off', AUTO_TERMS_USERS: '', AUTO_TERMS_MIN_CONFIDENCE: '0.85',
+      BEDROCK_TERMS_MODEL_ID: 'global.anthropic.claude-sonnet-5-5',
+    });
+    const withTerms = Object.values(template.findResources('AWS::Lambda::Function'))
+      .filter(resource => resource.Properties.Environment?.Variables?.AUTO_TERMS_MODE !== undefined);
+    expect(withTerms.map(resource => resource.Properties.FunctionName)).toEqual(['ttobak-summarize']);
+    const custom = buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined, {
+      'ttobak:autoTermsMode': 'personal', 'ttobak:autoTermsUsers': 'sub-1,sub-2',
+      'ttobak:autoTermsMinConfidence': '0.9', 'ttobak:bedrockTermsModelId': 'global.anthropic.claude-opus-5',
+    });
+    expect(summarizeEnv(custom)).toMatchObject({
+      AUTO_TERMS_MODE: 'personal', AUTO_TERMS_USERS: 'sub-1,sub-2', AUTO_TERMS_MIN_CONFIDENCE: '0.9',
+      BEDROCK_TERMS_MODEL_ID: 'global.anthropic.claude-opus-5',
+    });
+    for (const [key, bad] of [
+      ['ttobak:autoTermsMode', 'all'], ['ttobak:autoTermsUsers', 'a b'], ['ttobak:autoTermsMinConfidence', '1.5'],
+      ['ttobak:autoTermsMinConfidence', '0'], ['ttobak:bedrockTermsModelId', 'global.openai.gpt-6.1-sol'],
+    ]) {
+      expect(() => buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined, { [key]: bad }))
+        .toThrow(new RegExp(key));
+    }
+  });
+
   test('action-item DLQ is encrypted, retains seven days, and accepts only this rule', () => {
     const queueId = resourceId('AWS::SQS::Queue', 'QueueName', 'ttobak-action-items-dlq');
     const ruleId = resourceId('AWS::Events::Rule', 'Name', 'ttobak-action-items-requested');
