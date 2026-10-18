@@ -22729,6 +22729,12 @@ var TtobakApi = class {
   async listAccounts() {
     return this.get("/api/accounts");
   }
+  async readNavigation(kind, options) {
+    if (kind !== "accounts" && kind !== "projects") throw new Error("Invalid navigation kind");
+    const query = new URLSearchParams({ pageSize: String(options.pageSize) });
+    if (options.cursor !== void 0) query.set("cursor", options.cursor);
+    return this.request("GET", `/api/navigation/${kind}?${query}`, void 0, MAX_READING_BYTES);
+  }
   async getAccount(accountId) {
     return this.get(`/api/accounts/${accountId}`);
   }
@@ -22861,6 +22867,11 @@ var TtobakApi = class {
   }
   async listKBFiles() {
     return this.get("/api/kb/files");
+  }
+  async readKBFiles(options) {
+    const query = new URLSearchParams({ pageSize: String(options.pageSize) });
+    if (options.cursor !== void 0) query.set("cursor", options.cursor);
+    return this.request("GET", `/api/kb/files/reading?${query}`, void 0, MAX_READING_BYTES);
   }
   async deleteKBFile(fileId) {
     return this.delete(`/api/kb/files/${encodeURIComponent(fileId)}`);
@@ -23301,6 +23312,75 @@ function documentCatalogResult(value, options) {
   const result = { content: [{ type: "text", text: JSON.stringify(value) }] };
   if (Buffer.byteLength(JSON.stringify(result)) > MAX_READING_BYTES) {
     throw new Error("READING_LIMIT: document catalog exceeds 32000 bytes");
+  }
+  return result;
+}
+
+// src/kb-catalog.ts
+function kbReadingOptions(args) {
+  if (Object.keys(args).some((key) => !["pageSize", "cursor"].includes(key))) {
+    throw new Error("INVALID_ARGUMENT: unknown KB catalog option");
+  }
+  const pageSize = args.pageSize === void 0 ? 20 : args.pageSize;
+  if (typeof pageSize !== "number" || !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 50) {
+    throw new Error("INVALID_ARGUMENT: pageSize must be an integer from 1 to 50");
+  }
+  if (args.cursor !== void 0 && (typeof args.cursor !== "string" || !args.cursor.length || Buffer.byteLength(args.cursor) > 2048)) {
+    throw new Error("INVALID_ARGUMENT: invalid catalog cursor");
+  }
+  return { pageSize, cursor: args.cursor };
+}
+function record6(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+function kbReadingResult(value, options) {
+  if (!record6(value) || !Array.isArray(value.files) || value.files.length > options.pageSize || value.consistency !== "current_per_item") throw new Error("INVALID_READING_RESPONSE: invalid KB catalog");
+  for (const file2 of value.files) {
+    if (!record6(file2) || typeof file2.fileId !== "string" || !file2.fileId || Buffer.byteLength(file2.fileId) > 1024 || /[/\\]/.test(file2.fileId) || typeof file2.fileName !== "string" || typeof file2.fileType !== "string" || typeof file2.size !== "number" || !Number.isSafeInteger(file2.size) || file2.size < 0 || typeof file2.lastModified !== "string" || typeof file2.metadataRevision !== "string" || !/^[a-f0-9]{64}$/.test(file2.metadataRevision)) {
+      throw new Error("INVALID_READING_RESPONSE: invalid KB file metadata");
+    }
+  }
+  const page = value.page;
+  if (!record6(page) || page.unit !== "items" || page.returned !== value.files.length || typeof page.complete !== "boolean" || (page.complete ? page.nextCursor !== null : typeof page.nextCursor !== "string" || !page.nextCursor.length || page.nextCursor.length > 2048)) {
+    throw new Error("INVALID_READING_RESPONSE: invalid KB continuation");
+  }
+  const result = { content: [{ type: "text", text: JSON.stringify(value) }] };
+  if (Buffer.byteLength(JSON.stringify(result)) > MAX_READING_BYTES) {
+    throw new Error("READING_LIMIT: KB catalog exceeds 32000 bytes");
+  }
+  return result;
+}
+
+// src/navigation-catalog.ts
+function navigationOptions(args) {
+  if (Object.keys(args).some((key) => !["pageSize", "cursor"].includes(key))) {
+    throw new Error("INVALID_ARGUMENT: unknown navigation option");
+  }
+  return kbReadingOptions(args);
+}
+function record7(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+function navigationResult(value, options, kind) {
+  if (!record7(value) || value.consistency !== "current_per_item" || !Array.isArray(value[kind]) || value[kind].length > options.pageSize) {
+    throw new Error("INVALID_READING_RESPONSE: invalid navigation catalog");
+  }
+  const items = value[kind];
+  if (kind === "projects" && (value.unionKey !== "projectId" || typeof value.overlapPossible !== "boolean")) {
+    throw new Error("INVALID_READING_RESPONSE: missing project union contract");
+  }
+  for (const item of items) {
+    if (!record7(item) || typeof item[kind === "accounts" ? "accountId" : "projectId"] !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(item[kind === "accounts" ? "accountId" : "projectId"]) || typeof item.name !== "string" || typeof item.metadataRevision !== "string" || !/^[a-f0-9]{64}$/.test(item.metadataRevision)) {
+      throw new Error("INVALID_READING_RESPONSE: invalid navigation metadata");
+    }
+  }
+  const page = value.page;
+  if (!record7(page) || page.unit !== "items" || page.returned !== items.length || typeof page.complete !== "boolean" || (page.complete ? page.nextCursor !== null : typeof page.nextCursor !== "string" || !page.nextCursor.length || page.nextCursor.length > 2048)) {
+    throw new Error("INVALID_READING_RESPONSE: invalid navigation continuation");
+  }
+  const result = { content: [{ type: "text", text: JSON.stringify(value) }] };
+  if (Buffer.byteLength(JSON.stringify(result)) > MAX_READING_BYTES) {
+    throw new Error("READING_LIMIT: navigation response exceeds 32000 bytes");
   }
   return result;
 }
@@ -23885,8 +23965,12 @@ var registry2 = {
     },
     {
       name: "ttobak_list_accounts",
-      description: "List customer accounts you belong to (id, name, parentAccountId, your role). Build group/subsidiary trees using parentAccountId. Hierarchy does not grant access to other accounts.",
-      inputSchema: { type: "object", properties: {} }
+      description: "Page through customer accounts with current membership. Follow opaque page.nextCursor until complete, including empty pages, and restart stale cursors. Build group/subsidiary trees using parentAccountId only after reading every page; hierarchy never grants access.",
+      annotations: { readOnlyHint: true },
+      inputSchema: { type: "object", properties: {
+        pageSize: { type: "integer", minimum: 1, maximum: 50, default: 20 },
+        cursor: { type: "string", maxLength: 2048 }
+      }, additionalProperties: false }
     },
     {
       name: "ttobak_get_account",
@@ -23951,8 +24035,12 @@ var registry2 = {
     },
     {
       name: "ttobak_list_projects",
-      description: "List projects you own, are directly invited to, or can reach via a linked Account's membership (projectId, name, stage, SFDC Oppty ID).",
-      inputSchema: { type: "object", properties: {} }
+      description: "Page through projects you own, directly joined or can access through linked accounts. Follow opaque page.nextCursor, including empty pages, until complete; restart stale cursors. Current memberships/links are revalidated. Combine results by projectId (unionKey); overlapPossible is explicit when bounded cursor memory cannot suppress every repeated access path. Metadata never grants access.",
+      annotations: { readOnlyHint: true },
+      inputSchema: { type: "object", properties: {
+        pageSize: { type: "integer", minimum: 1, maximum: 50, default: 20 },
+        cursor: { type: "string", maxLength: 2048 }
+      }, additionalProperties: false }
     },
     {
       name: "ttobak_get_project",
@@ -24135,8 +24223,12 @@ var registry2 = {
     },
     {
       name: "ttobak_kb_list_files",
-      description: "List your own uploaded Knowledge Base files (fileId, fileName, size, lastModified).",
-      inputSchema: { type: "object", properties: {} }
+      description: "Read bounded pages of your uploaded Knowledge Base file metadata. Follow the opaque page.nextCursor until complete; restart stale cursors. File IDs remain exact for later explicit deletion; shortened display names are marked. This lists metadata without downloading or indexing file contents.",
+      annotations: { readOnlyHint: true },
+      inputSchema: { type: "object", properties: {
+        pageSize: { type: "integer", minimum: 1, maximum: 50, default: 20 },
+        cursor: { type: "string", maxLength: 2048, description: "Opaque server continuation bound to your KB scope" }
+      }, additionalProperties: false }
     },
     {
       name: "ttobak_kb_delete_file",
@@ -24339,8 +24431,8 @@ Client: ${CLIENT_ID.slice(0, 8)}...`
         return readingResult(await api.readMeeting(options2), options2);
       }
       case "ttobak_list_accounts": {
-        const result = await api.listAccounts();
-        return text(JSON.stringify(result, null, 2));
+        const options2 = navigationOptions(args);
+        return navigationResult(await api.readNavigation("accounts", options2), options2, "accounts");
       }
       case "ttobak_get_account": {
         const { accountId } = args;
@@ -24373,8 +24465,8 @@ Client: ${CLIENT_ID.slice(0, 8)}...`
         return text(JSON.stringify(result, null, 2));
       }
       case "ttobak_list_projects": {
-        const result = await api.listProjects();
-        return text(JSON.stringify(result, null, 2));
+        const options2 = navigationOptions(args);
+        return navigationResult(await api.readNavigation("projects", options2), options2, "projects");
       }
       case "ttobak_get_project": {
         const { projectId } = args;
@@ -24467,8 +24559,8 @@ Retrieval is scoped to you -- only your own ttobak_ask queries can find this fil
         return text(JSON.stringify(result, null, 2));
       }
       case "ttobak_kb_list_files": {
-        const result = await api.listKBFiles();
-        return text(JSON.stringify(result, null, 2));
+        const options2 = kbReadingOptions(args);
+        return kbReadingResult(await api.readKBFiles(options2), options2);
       }
       case "ttobak_kb_delete_file": {
         const { fileId } = args;
