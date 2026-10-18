@@ -15,7 +15,7 @@ func TestConnectRejectsDirectOriginEvenWithValidJWT(t *testing.T) {
 	verified := false
 	verifyToken = func(string) (*middleware.ALBOIDCClaims, error) {
 		verified = true
-		return &middleware.ALBOIDCClaims{Sub: "synthetic-user"}, nil
+		return firstPartyClaims(), nil
 	}
 	event := events.APIGatewayCustomAuthorizerRequestTypeRequest{
 		MethodArn:             "arn:aws:execute-api:ap-northeast-2:111111111111:api/production/$connect",

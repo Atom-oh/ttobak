@@ -179,6 +179,16 @@ type speakerSegment struct {
 	Untimed   bool    `json:"untimed,omitempty"`
 }
 
+// maxAnchorSnapSeconds bounds how far a `[TS:NNN]` marker may sit from the
+// start of the segment it snaps to. Markers are integer seconds the model was
+// told to copy from a segment start, so a small rounding window is expected;
+// anything farther is treated as unresolvable rather than guessed (ADR-013).
+const maxAnchorSnapSeconds = 2.0
+
+// anchorRoundingSlack lets a marker rounded up from the last segment's end
+// (for example 59.6s emitted as 60) still resolve.
+const anchorRoundingSlack = 0.5
+
 // resolveTranscriptAnchors replaces `[TS:NNN]` markers Claude emitted in the
 // summary with proper markdown links pointing at the closest transcript
 // segment by start time. Per ADR-013 the protocol is `transcript://{segmentId}`;
@@ -186,11 +196,14 @@ type speakerSegment struct {
 // the markdown renderer, then attaches a smooth-scroll click handler.
 //
 // NNN is approximate seconds — Claude is told to emit the segment's start
-// time but may round, so we snap to the nearest segment instead of requiring
-// an exact match. If no segments exist, the markers are stripped.
+// time but may round, so we snap to the nearest timed segment within
+// maxAnchorSnapSeconds instead of requiring an exact match. A marker outside
+// that bound, or past the last timed segment's end, stays an unlinked plain
+// timestamp label: the note text is kept, only the deep link is withheld.
+// Without any timed segment the markers are stripped.
 func resolveTranscriptAnchors(content string, segments []speakerSegment) string {
 	re := regexp.MustCompile(`\[TS:(\d+)\]`)
-	if len(segments) == 0 {
+	if !hasTimedSegment(segments) {
 		return re.ReplaceAllString(content, "")
 	}
 	return re.ReplaceAllStringFunc(content, func(match string) string {
@@ -202,26 +215,10 @@ func resolveTranscriptAnchors(content string, segments []speakerSegment) string 
 		if err != nil {
 			return ""
 		}
-		// Snap to nearest segment by startTime.
-		bestIdx := -1
-		bestDiff := math.MaxFloat64
-		for i, seg := range segments {
-			if seg.Untimed {
-				continue
-			}
-			diff := math.Abs(seg.StartTime - float64(target))
-			if diff < bestDiff {
-				bestDiff = diff
-				bestIdx = i
-			}
-		}
-		if bestIdx < 0 {
-			return ""
-		}
-		seg := segments[bestIdx]
-		if seg.ID == "" {
-			// Without a stable ID we can't make a deep link. Fall back to
-			// a plain timestamp label so the line still reads correctly.
+		seg := nearestSegment(segments, float64(target))
+		if seg == nil || seg.ID == "" {
+			// Out of bound, or no stable ID to deep-link: keep a plain
+			// timestamp label so the line still reads correctly.
 			return fmt.Sprintf("(%s)", formatTSLabel(target))
 		}
 		// Markdown inline link. Frontend strips `transcript://` → `#ts-` so
@@ -229,6 +226,15 @@ func resolveTranscriptAnchors(content string, segments []speakerSegment) string 
 		// in MarkdownRenderer's `<a>` component takes over the click.
 		return fmt.Sprintf("[%s](transcript://%s)", formatTSLabel(target), seg.ID)
 	})
+}
+
+func hasTimedSegment(segments []speakerSegment) bool {
+	for _, seg := range segments {
+		if !seg.Untimed {
+			return true
+		}
+	}
+	return false
 }
 
 // formatTSLabel renders an integer-second offset as `MM:SS` (or `H:MM:SS` past
@@ -833,6 +839,21 @@ func (s *BedrockService) summarizeTranscript(ctx context.Context, meetingID, use
 	return content, nil
 }
 
+// noteLanguageDirective is the final-note language rule shared by batch and
+// saved-source summaries. Auto keeps the historical sentence byte-for-byte;
+// values outside the model allowlist also fall back to auto, so stored data
+// never reaches the system prompt verbatim.
+func noteLanguageDirective(language string) string {
+	switch language {
+	case model.NoteLanguageKorean:
+		return "Write the entire meeting notes in Korean, regardless of the transcript language. Keep proper nouns, product names and code identifiers in their original spelling."
+	case model.NoteLanguageEnglish:
+		return "Write the entire meeting notes in English, regardless of the transcript language. Translate the section headings above into English (Meeting Notes, Attendees, Overview, Key Points by Speaker, Discussion, Architecture Diagram, Decisions, Action Items) while keeping the same structure; when there are no confirmed action items, write \"No confirmed action items.\" Keep speaker labels, [TS:NNN] and [DOC:...] markers, proper nouns and code identifiers unchanged."
+	default:
+		return "Format in Korean unless the transcript is entirely in English."
+	}
+}
+
 func (s *BedrockService) generateSummarySnapshot(ctx context.Context, meeting *model.Meeting, attachments []model.Attachment, priorContext string, includeSaved bool) (string, error) {
 	if meeting == nil {
 		return "", ErrResummaryNoSource
@@ -878,7 +899,7 @@ Your output MUST follow this exact structure:
 - 합의된 후속 작업이 없으면 체크박스를 만들지 말고 "확정된 액션 아이템이 없습니다."라고 기재.
 - 담당자와 기한은 명시된 경우에만 기재하고, 없으면 미정으로 표시. 임의로 담당자를 배정하거나 날짜를 만들지 말 것.
 
-Format in Korean unless the transcript is entirely in English.
+` + noteLanguageDirective(meeting.NoteLanguage) + `
 결정 사항과 액션 아이템만 bullet/checkbox 리스트로 작성하고, 그 외 섹션(개요/화자별 발언/논의 사항)은 문단 형태로 서술해 불필요한 불릿 나열을 피할 것. Include timestamps where available.
 각 섹션은 트랜스크립트에 담긴 구체적인 근거(누가 무엇을 언급했는지, 어떤 수치·이름·이유가 나왔는지)를 최대한 살려 상세하고 세밀하게 작성할 것 — 뭉뚱그린 한두 문장으로 축약하지 말 것.
 

@@ -16,6 +16,7 @@ export class AuthStack extends cdk.Stack {
   public readonly userPool: cognito.UserPool;
   public readonly userPoolClient: cognito.UserPoolClient;
   public readonly spaClient: cognito.UserPoolClient;
+  public readonly companionClient: cognito.UserPoolClient;
   public readonly userPoolDomain: cognito.UserPoolDomain;
   public readonly identityPoolId: string;
 
@@ -248,10 +249,48 @@ export class AuthStack extends cdk.Stack {
       refreshTokenValidity: cdk.Duration.days(30),
     });
 
+    // Companion apps (e.g. per-customer insight dashboards) sign users in with
+    // their TTOBAK identity through managed login and exchange the code
+    // server-side, so they never handle passwords. Public client (no secret to
+    // share across stacks): Cognito cannot require PKCE per client, so each
+    // companion app must send S256 code_challenge itself. USER_PASSWORD_AUTH is
+    // off; direct SRP stays enabled like the SPA client. ID tokens carry this
+    // client in aud and access tokens in client_id; the API authorizer, edge
+    // auth, identity pool, Go API middleware (API_ALLOWED_CLIENT_IDS) and
+    // WebSocket authorizer (WS_ALLOWED_CLIENT_IDS) all reject it, so these are
+    // not TTOBAK API credentials. Redirects come from
+    // private SSM StringLists, bootstrapped before deploy like the MCP callbacks.
+    this.companionClient = this.userPool.addClient('TtobakCompanionClient', {
+      userPoolClientName: 'ttobak-companion-client',
+      generateSecret: false,
+      oAuth: {
+        flows: {
+          authorizationCodeGrant: true,
+        },
+        scopes: [
+          cognito.OAuthScope.EMAIL,
+          cognito.OAuthScope.OPENID,
+          cognito.OAuthScope.PROFILE,
+        ],
+        callbackUrls: ssm.StringListParameter.valueForTypedListParameter(this, '/ttobak/auth/companion-callback-urls'),
+        logoutUrls: ssm.StringListParameter.valueForTypedListParameter(this, '/ttobak/auth/companion-logout-urls'),
+      },
+      authFlows: {
+        userSrp: true,
+      },
+      supportedIdentityProviders: [
+        cognito.UserPoolClientIdentityProvider.COGNITO,
+      ],
+      preventUserExistenceErrors: true,
+      accessTokenValidity: cdk.Duration.hours(1),
+      idTokenValidity: cdk.Duration.hours(1),
+      refreshTokenValidity: cdk.Duration.days(1),
+    });
+
     // Managed login requires a branding record for every client that signs in
     // through the hosted pages (the MCP OAuth login uses the SPA client).
     // Cognito-provided values keep the default look; no custom assets.
-    [['AppClient', this.userPoolClient], ['SpaClient', this.spaClient]].forEach(([name, client]) => {
+    [['AppClient', this.userPoolClient], ['SpaClient', this.spaClient], ['CompanionClient', this.companionClient]].forEach(([name, client]) => {
       const branding = new cognito.CfnManagedLoginBranding(this, `ManagedLoginBranding${name as string}`, {
         userPoolId: this.userPool.userPoolId,
         clientId: (client as cognito.IUserPoolClient).userPoolClientId,
@@ -331,6 +370,11 @@ export class AuthStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'SpaClientId', {
       value: this.spaClient.userPoolClientId,
       exportName: 'TtobakSpaClientId',
+    });
+
+    new cdk.CfnOutput(this, 'CompanionClientId', {
+      value: this.companionClient.userPoolClientId,
+      exportName: 'TtobakCompanionClientId',
     });
 
     new cdk.CfnOutput(this, 'UserPoolDomainUrl', {
