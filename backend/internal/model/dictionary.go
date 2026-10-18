@@ -45,7 +45,10 @@ type DeleteTermRequest struct {
 type DictionaryResponse struct {
 	Terms  []DictionaryTerm `json:"terms"`
 	Status string           `json:"status"`
-	Items  []DictTermView   `json:"items,omitempty"`
+	// VocabularyName is the READY personal ko-KR ActiveName (legacy client).
+	VocabularyName string           `json:"vocabularyName"`
+	Vocabularies   *VocabularyViews `json:"vocabularies,omitempty"`
+	Items          []DictTermView   `json:"items,omitempty"`
 	// MigrationPending means the legacy list is not yet copied into rows, so
 	// some legacy terms have no termId; a legacy PUT resolves it.
 	MigrationPending bool     `json:"migrationPending,omitempty"`
@@ -73,11 +76,12 @@ type DictTermView struct {
 
 // DictTermMutationResponse answers a v2 term create, update or delete.
 type DictTermMutationResponse struct {
-	Item     *DictTermView `json:"item,omitempty"`
-	TermID   string        `json:"termId"`
-	State    string        `json:"state"`
-	Status   string        `json:"status"`
-	Warnings []string      `json:"warnings,omitempty"`
+	Item         *DictTermView    `json:"item,omitempty"`
+	TermID       string           `json:"termId"`
+	State        string           `json:"state"`
+	Status       string           `json:"status"`
+	Vocabularies *VocabularyViews `json:"vocabularies,omitempty"`
+	Warnings     []string         `json:"warnings,omitempty"`
 }
 
 // CreateDictTermRequest is the body of POST /api/settings/dictionary/terms.
@@ -193,9 +197,9 @@ type DictObservation struct {
 	EntityType        string   `dynamodbav:"entityType"`
 }
 
-// VocabularyState tracks the Transcribe vocabulary for one context and
-// language. Status describes the latest build, not ActiveName. Build
-// fingerprints and A/B slot timestamps arrive with the vocabulary builder.
+// VocabularyState tracks one context and language with two slots: ActiveName
+// changes only by a flip to a READY build; InactiveName is the build target or
+// the demoted slot. Status describes the latest build, not ActiveName.
 type VocabularyState struct {
 	PK           string `dynamodbav:"PK"`
 	SK           string `dynamodbav:"SK"`
@@ -203,13 +207,38 @@ type VocabularyState struct {
 	Language     string `dynamodbav:"language"`
 	ActiveName   string `dynamodbav:"activeName,omitempty"`
 	InactiveName string `dynamodbav:"inactiveName,omitempty"`
-	Status       string `dynamodbav:"status"`
-	ActiveReady  bool   `dynamodbav:"activeReady"`
-	FailureCode  string `dynamodbav:"failureCode,omitempty"`
-	TermCount    int    `dynamodbav:"termCount"`
-	UpdatedAt    string `dynamodbav:"updatedAt"`
-	Version      int64  `dynamodbav:"version"`
-	EntityType   string `dynamodbav:"entityType"`
+	// RetiredName awaits deletion.
+	RetiredName         string `dynamodbav:"retiredName,omitempty"`
+	ActiveFingerprint   string `dynamodbav:"activeFingerprint,omitempty"`
+	BuildingFingerprint string `dynamodbav:"buildingFingerprint,omitempty"`
+	Status              string `dynamodbav:"status"`
+	ActiveReady         bool   `dynamodbav:"activeReady"`
+	FailureCode         string `dynamodbav:"failureCode,omitempty"`
+	// BuildSubmitted is false while a claimed build is not yet sent.
+	BuildSubmitted bool `dynamodbav:"buildSubmitted,omitempty"`
+	// BypassPending lets the next claim skip the minimum interval once.
+	BypassPending  bool   `dynamodbav:"bypassPending,omitempty"`
+	BuildStartedAt string `dynamodbav:"buildStartedAt,omitempty"`
+	FlippedAt      string `dynamodbav:"flippedAt,omitempty"`
+	EmptySince     string `dynamodbav:"emptySince,omitempty"`
+	TermCount      int    `dynamodbav:"termCount"`
+	UpdatedAt      string `dynamodbav:"updatedAt"`
+	Version        int64  `dynamodbav:"version"`
+	EntityType     string `dynamodbav:"entityType"`
+}
+
+// VocabularyView is the API form of a VocabularyState.
+type VocabularyView struct {
+	Status      string `json:"status"`
+	ActiveReady bool   `json:"activeReady"`
+	FailureCode string `json:"failureCode,omitempty"`
+	TermCount   int    `json:"termCount"`
+}
+
+// VocabularyViews lists the personal vocabularies by language.
+type VocabularyViews struct {
+	Ko VocabularyView `json:"ko"`
+	En VocabularyView `json:"en"`
 }
 
 // DictTimeLayout is the fixed-width UTC timestamp used by v2 dictionary rows

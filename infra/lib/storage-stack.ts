@@ -173,6 +173,13 @@ export class StorageStack extends cdk.Stack {
         // full meeting text (PII) and are operator-scratch only -- expire
         // them instead of relying on manual runbook cleanup (CLAUDE.md
         // security policy: PII requires TTL).
+        // Leftover Transcribe vocabulary table files (vocab/{name}.tsv).
+        {
+          id: 'ExpireVocabularyTables',
+          prefix: 'vocab/',
+          expiration: cdk.Duration.days(1),
+          noncurrentVersionExpiration: cdk.Duration.days(1),
+        },
         {
           id: 'ExpireBenchTranscripts',
           prefix: 'bench-transcripts/',

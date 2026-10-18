@@ -78,17 +78,20 @@ func termViews(dict *model.UserDictionary, rows []model.DictTerm) []model.DictTe
 }
 
 // GetDictionaryWithTerms is the API GET: a best-effort migration first, so
-// terms have termIds, then legacy fields plus rows. Shared readers keep the
-// never-writing GetDictionary.
+// terms have termIds, then EnsureVocabularies (poll, flip or start a build),
+// then legacy fields plus rows. Shared readers keep the never-writing
+// GetDictionary.
 func (s *DictionaryService) GetDictionaryWithTerms(ctx context.Context, userID string) (*model.DictionaryResponse, error) {
 	if _, err := s.MigrateLegacyDictionary(ctx, userID); err != nil && !errors.Is(err, ErrLegacyDictionaryConflict) {
 		log.Printf("dictionary migration deferred for user %s: %v", userID, err)
 	}
+	views, warnings := s.EnsureVocabularies(ctx, userID, model.VocabContextPersonal, false)
 	resp, dict, rows, err := s.readDictionary(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
 	resp.Items = termViews(dict, rows)
+	resp.Vocabularies, resp.Warnings = views, warnings
 	resp.MigrationPending = dict != nil && dict.MigratedAt == "" && len(dict.Terms) > 0
 	return resp, nil
 }
@@ -307,12 +310,8 @@ func (s *DictionaryService) TombstoneTerm(ctx context.Context, userID, termKey s
 		log.Printf("dictionary tombstone pruning failed for user %s: %v", userID, err)
 		resp.Warnings = append(resp.Warnings, "tombstone pruning incomplete")
 	}
-	if row.State == model.TermStateActive && row.TranscribeKo && row.Phrase != "" {
-		status, warnings := s.rebuildPersonalVocabulary(ctx, userID)
-		resp.Status, resp.Warnings = status, append(resp.Warnings, warnings...)
-	} else {
-		resp.Status = s.currentVocabularyStatus(ctx, userID)
-	}
+	views, warnings := s.ensureAfterWrite(ctx, userID, row.State == model.TermStateActive && row.TranscribeKo && row.Phrase != "")
+	resp.Status, resp.Vocabularies, resp.Warnings = s.currentVocabularyStatus(ctx, userID), views, append(resp.Warnings, warnings...)
 	return resp, nil
 }
 
@@ -348,12 +347,18 @@ func (s *DictionaryService) pruneTombstones(ctx context.Context, pk string) erro
 func (s *DictionaryService) mutationResult(ctx context.Context, userID string, row *model.DictTerm, rebuild bool) *model.DictTermMutationResponse {
 	view := termView(*row)
 	resp := &model.DictTermMutationResponse{Item: &view, TermID: row.TermKey, State: row.State}
-	if rebuild {
-		resp.Status, resp.Warnings = s.rebuildPersonalVocabulary(ctx, userID)
-	} else {
-		resp.Status = s.currentVocabularyStatus(ctx, userID)
-	}
+	resp.Vocabularies, resp.Warnings = s.ensureAfterWrite(ctx, userID, rebuild)
+	resp.Status = s.currentVocabularyStatus(ctx, userID)
 	return resp
+}
+
+// ensureAfterWrite runs EnsureVocabularies with the manual-write bypass when
+// the write can change a vocabulary, and otherwise only reads the states.
+func (s *DictionaryService) ensureAfterWrite(ctx context.Context, userID string, changed bool) (*model.VocabularyViews, []string) {
+	if !changed {
+		return s.vocabularyViews(ctx, userID), nil
+	}
+	return s.EnsureVocabularies(ctx, userID, model.VocabContextPersonal, true)
 }
 
 func (s *DictionaryService) currentVocabularyStatus(ctx context.Context, userID string) string {
@@ -518,7 +523,7 @@ func (s *DictionaryService) UpdateDictionary(ctx context.Context, userID string,
 	if err := s.reconcileManualRows(ctx, userID, desired); err != nil {
 		return nil, err
 	}
-	status, warnings := s.rebuildPersonalVocabulary(ctx, userID)
+	views, warnings := s.EnsureVocabularies(ctx, userID, model.VocabContextPersonal, true)
 	resp, _, _, err := s.readDictionary(ctx, userID)
 	if err != nil {
 		return nil, err
@@ -526,7 +531,7 @@ func (s *DictionaryService) UpdateDictionary(ctx context.Context, userID string,
 	if plan.ignored {
 		warnings = append([]string{legacyIgnoredWarning}, warnings...)
 	}
-	resp.Status, resp.Warnings = status, warnings
+	resp.Vocabularies, resp.Warnings = views, warnings
 	return resp, nil
 }
 
@@ -619,96 +624,8 @@ func (s *DictionaryService) DeleteTerm(ctx context.Context, userID, phrase strin
 	case matched == 0:
 		return ErrNotFound
 	}
-	s.rebuildPersonalVocabulary(ctx, userID)
+	if _, warnings := s.EnsureVocabularies(ctx, userID, model.VocabContextPersonal, true); len(warnings) > 0 {
+		log.Printf("vocabulary update after legacy delete for user %s: %d warnings", userID, len(warnings))
+	}
 	return nil
-}
-
-// vocabularyPhrases lists the in-place vocabulary's phrases: active rows with
-// a Transcribe phrase, oldest first, exact duplicates once.
-func vocabularyPhrases(rows []model.DictTerm) []model.DictionaryTerm {
-	active := make([]model.DictTerm, 0, len(rows))
-	for _, row := range rows {
-		if row.State == model.TermStateActive && row.TranscribeKo && row.Phrase != "" {
-			active = append(active, row)
-		}
-	}
-	sortRowsByAdded(active)
-	seen := map[string]bool{}
-	var phrases []model.DictionaryTerm
-	for _, row := range active {
-		if !seen[row.Phrase] {
-			seen[row.Phrase] = true
-			phrases = append(phrases, model.DictionaryTerm{Phrase: row.Phrase})
-		}
-	}
-	return phrases
-}
-
-// rebuildPersonalVocabulary keeps the pre-v2 in-place rebuild for manual
-// changes and records it in VOCAB#personal#ko-KR under its version guard.
-func (s *DictionaryService) rebuildPersonalVocabulary(ctx context.Context, userID string) (string, []string) {
-	pk := model.PrefixUser + userID
-	rows, err := s.repo.ListDictTerms(ctx, pk)
-	if err != nil {
-		log.Printf("vocabulary rebuild skipped for user %s: %v", userID, err)
-		return s.currentVocabularyStatus(ctx, userID), []string{vocabularyRebuildWarning}
-	}
-	state, err := s.personalVocabularyState(ctx, userID)
-	if err != nil {
-		log.Printf("vocabulary rebuild skipped for user %s: %v", userID, err)
-		return "", []string{vocabularyRebuildWarning}
-	}
-	if state.InactiveName != "" { // an A/B build owns this row
-		return legacyVocabularyStatus(state), nil
-	}
-	phrases := vocabularyPhrases(rows)
-	name := state.ActiveName
-	if name == "" {
-		name = legacyVocabularyName(userID)
-	}
-	status, failure, warnings := model.VocabStatusBuilding, "", []string(nil)
-	switch {
-	case len(phrases) == 0:
-		s.deleteTranscribeVocabulary(ctx, name)
-		status, name = model.VocabStatusNone, ""
-	default:
-		if err := s.buildTranscribeVocabulary(ctx, userID, name, phrases); err != nil {
-			log.Printf("failed to build vocabulary for user %s: %v", userID, err)
-			status, failure, warnings = model.VocabStatusFailed, "PROVIDER", []string{vocabularyRebuildWarning}
-		}
-	}
-	notReady, count := false, len(phrases)
-	change := repository.VocabularyStateChange{ActiveName: &name, Status: &status, ActiveReady: &notReady, FailureCode: &failure, TermCount: &count}
-	for attempt := 0; attempt < 3; attempt++ {
-		err = s.repo.UpdateVocabularyState(ctx, userID, model.VocabContextPersonal, model.VocabLangKo, state.Version, change, s.stamp())
-		if !errors.Is(err, repository.ErrConditionFailed) {
-			break
-		}
-		if state, err = s.personalVocabularyState(ctx, userID); err != nil {
-			break
-		}
-	}
-	if err != nil {
-		log.Printf("failed to record vocabulary build for user %s: %v", userID, err)
-		warnings = append(warnings, vocabularyRebuildWarning)
-	}
-	return legacyVocabularyStatus(&model.VocabularyState{Status: status}), warnings
-}
-
-func (s *DictionaryService) personalVocabularyState(ctx context.Context, userID string) (*model.VocabularyState, error) {
-	for attempt := 0; attempt < 2; attempt++ {
-		state, err := s.repo.GetVocabularyState(ctx, userID, model.VocabContextPersonal, model.VocabLangKo)
-		if err != nil || state != nil {
-			return state, err
-		}
-		err = s.repo.CreateMigratedVocabularyState(ctx, userID, &model.VocabularyState{
-			PK: model.PrefixUser + userID, SK: model.VocabSK(model.VocabContextPersonal, model.VocabLangKo),
-			Context: model.VocabContextPersonal, Language: model.VocabLangKo, Status: model.VocabStatusNone,
-			UpdatedAt: s.stamp(), Version: 1, EntityType: model.EntityTypeVocabularyState,
-		})
-		if err != nil && !errors.Is(err, repository.ErrConditionFailed) {
-			return nil, err
-		}
-	}
-	return nil, fmt.Errorf("vocabulary state unavailable: %w", repository.ErrConditionFailed)
 }

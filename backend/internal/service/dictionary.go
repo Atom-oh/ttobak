@@ -12,7 +12,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/transcribe"
 	transcribeTypes "github.com/aws/aws-sdk-go-v2/service/transcribe/types"
-	smithy "github.com/aws/smithy-go"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 )
@@ -53,6 +52,7 @@ type TranscribeVocabularyAPI interface {
 type DictionaryService struct {
 	repo             DictionaryStore
 	transcribeClient TranscribeVocabularyAPI
+	builder          *vocabularyBuilder // API Lambda only; nil never builds
 	now              func() time.Time
 }
 
@@ -88,24 +88,41 @@ func (s *DictionaryService) readDictionary(ctx context.Context, userID string) (
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to get dictionary terms: %w", err)
 	}
+	status, name := s.personalVocabularyStatus(ctx, userID, dict)
 	return &model.DictionaryResponse{
-		Terms:  unionLegacyTerms(dict, rows),
-		Status: s.personalVocabularyStatus(ctx, userID, dict),
+		Terms:          unionLegacyTerms(dict, rows),
+		Status:         status,
+		VocabularyName: name,
 	}, dict, rows, nil
 }
 
-// personalVocabularyStatus reports the legacy status string for the personal
-// ko-KR vocabulary, preferring the VOCAB# row over the blob.
-func (s *DictionaryService) personalVocabularyStatus(ctx context.Context, userID string, dict *model.UserDictionary) string {
+// personalVocabularyStatus reports the legacy status string and, while it is
+// READY, the name of the personal ko-KR vocabulary, preferring the VOCAB#
+// row over the blob.
+func (s *DictionaryService) personalVocabularyStatus(ctx context.Context, userID string, dict *model.UserDictionary) (string, string) {
 	state, err := s.repo.GetVocabularyState(ctx, userID, model.VocabContextPersonal, model.VocabLangKo)
 	if err != nil {
 		log.Printf("failed to read vocabulary state for user %s: %v", userID, err)
 	} else if state != nil {
-		return legacyVocabularyStatus(s.syncVocabularyState(ctx, userID, state))
+		state = s.syncVocabularyState(ctx, userID, state)
+		status := legacyVocabularyStatus(state)
+		if status == "READY" {
+			return status, state.ActiveName
+		}
+		return status, ""
 	}
 	if dict == nil {
-		return ""
+		return "", ""
 	}
+	status := s.legacyBlobStatus(ctx, userID, dict)
+	if status == "READY" {
+		return status, dict.VocabularyName
+	}
+	return status, ""
+}
+
+// legacyBlobStatus reports and refreshes an unmigrated blob's status.
+func (s *DictionaryService) legacyBlobStatus(ctx context.Context, userID string, dict *model.UserDictionary) string {
 	status := dict.VocabularyStatus
 	if status != "PENDING" || dict.VocabularyName == "" || s.transcribeClient == nil {
 		return status
@@ -134,7 +151,7 @@ func (s *DictionaryService) personalVocabularyStatus(ctx context.Context, userID
 func (s *DictionaryService) providerStatus(ctx context.Context, name string) (string, bool) {
 	result, err := s.transcribeClient.GetVocabulary(ctx, &transcribe.GetVocabularyInput{VocabularyName: aws.String(name)})
 	if err != nil {
-		if isVocabularyNotFoundError(err) {
+		if vocabularyMissing(err) {
 			return "FAILED", true
 		}
 		log.Printf("failed to get vocabulary status for %s: %v", name, err)
@@ -152,7 +169,7 @@ func (s *DictionaryService) providerStatus(ctx context.Context, name string) (st
 // syncVocabularyState refreshes a single-slot (legacy, in-place) build from
 // Transcribe under a version guard and returns the state to report.
 func (s *DictionaryService) syncVocabularyState(ctx context.Context, userID string, state *model.VocabularyState) *model.VocabularyState {
-	if state.Status != model.VocabStatusBuilding || state.ActiveName == "" || state.InactiveName != "" || s.transcribeClient == nil {
+	if state.Status != model.VocabStatusBuilding || state.ActiveName == "" || state.InactiveName != "" || state.BuildingFingerprint != "" || s.transcribeClient == nil {
 		return state
 	}
 	provider, ok := s.providerStatus(ctx, state.ActiveName)
@@ -183,8 +200,13 @@ func (s *DictionaryService) syncVocabularyState(ctx context.Context, userID stri
 	return &next
 }
 
-// legacyVocabularyStatus maps a VOCAB# build status to the legacy API value.
+// legacyVocabularyStatus maps a VOCAB# row to the legacy API value. A READY
+// active slot reports READY even while a newer build runs or failed, so the
+// legacy client keeps using it; per-build status is in vocabularies.
 func legacyVocabularyStatus(state *model.VocabularyState) string {
+	if state.ActiveReady && state.ActiveName != "" {
+		return "READY"
+	}
 	switch state.Status {
 	case model.VocabStatusReady:
 		return "READY"
@@ -276,16 +298,20 @@ func (s *DictionaryService) deleteLegacyBlobTerm(ctx context.Context, userID, ph
 	return err
 }
 
-// GetVocabularyForTranscription returns the personal ko-KR vocabulary name
-// when it is READY. The VOCAB# row is authoritative when present; the legacy
-// blob is the fallback for users without one. It never writes.
+// GetVocabularyForTranscription returns the personal ko-KR ActiveName when
+// it is READY, never a building slot. The VOCAB# row is authoritative when
+// present; the legacy blob is the fallback for users without one. It never
+// writes.
 func (s *DictionaryService) GetVocabularyForTranscription(ctx context.Context, userID string) (string, error) {
 	state, err := s.repo.GetVocabularyState(ctx, userID, model.VocabContextPersonal, model.VocabLangKo)
 	if err != nil {
 		return "", err
 	}
 	if state != nil {
-		return s.readyVocabulary(ctx, state.ActiveName, state.ActiveReady), nil
+		if !state.ActiveReady { // an emptied language is unmarked before deletion
+			return "", nil
+		}
+		return s.readyVocabulary(ctx, state.ActiveName, true), nil
 	}
 
 	dict, err := s.repo.GetDictionary(ctx, userID)
@@ -347,7 +373,7 @@ func (s *DictionaryService) buildTranscribeVocabulary(ctx context.Context, userI
 	})
 	if err != nil {
 		// If update fails (vocabulary doesn't exist), create new
-		if isVocabularyNotFoundError(err) {
+		if vocabularyMissing(err) {
 			_, err = s.transcribeClient.CreateVocabulary(ctx, &transcribe.CreateVocabularyInput{
 				VocabularyName: aws.String(vocabName),
 				LanguageCode:   transcribeTypes.LanguageCodeKoKr,
@@ -375,15 +401,6 @@ func (s *DictionaryService) deleteTranscribeVocabulary(ctx context.Context, voca
 	if err != nil {
 		log.Printf("failed to delete vocabulary %s: %v", vocabName, err)
 	}
-}
-
-func isVocabularyNotFoundError(err error) bool {
-	var apiErr smithy.APIError
-	if errors.As(err, &apiErr) {
-		code := apiErr.ErrorCode()
-		return code == "NotFoundException" || code == "BadRequestException"
-	}
-	return false
 }
 
 // legacyVocabularyName is the derived single-slot vocabulary name.

@@ -142,6 +142,8 @@ func init() {
 	userAdminHandler := handler.NewUserAdminHandler(userAdminService)
 	dictRepo := repository.NewDictionaryRepository(dynamoClient, tableName)
 	dictService := service.NewDictionaryService(dictRepo, transcribeClient)
+	// Only the API Lambda builds vocabularies (A/B slots, vocab/ table files).
+	dictService.SetVocabularyBuilder(s3Client, bucketName, service.ParseVocabRebuildMinInterval(os.Getenv("VOCAB_REBUILD_MIN_INTERVAL")))
 	dictHandler := handler.NewDictionaryHandler(dictService)
 	translateHandler := handler.NewTranslateHandler(translateService)
 	summarizeLiveHandler := handler.NewSummarizeLiveHandler(bedrockRuntimeClient2, meetingService)

@@ -137,6 +137,16 @@ type VocabularyStateChange struct {
 	ActiveReady *bool
 	FailureCode *string
 	TermCount   *int
+	// A/B builder fields (service/vocabulary_build.go).
+	InactiveName        *string
+	RetiredName         *string
+	ActiveFingerprint   *string
+	BuildingFingerprint *string
+	BuildStartedAt      *string
+	BuildSubmitted      *bool
+	BypassPending       *bool
+	FlippedAt           *string
+	EmptySince          *string
 }
 
 // DictWriteResult surfaces a failed best-effort observation cleanup after a
@@ -795,6 +805,10 @@ func vocabularyStateUpdate(change VocabularyStateChange, now string) expression.
 	return setPresent(update, map[string]interface{}{
 		"activeName": change.ActiveName, "status": change.Status, "failureCode": change.FailureCode,
 		"activeReady": change.ActiveReady, "termCount": change.TermCount,
+		"inactiveName": change.InactiveName, "retiredName": change.RetiredName,
+		"activeFingerprint": change.ActiveFingerprint, "buildingFingerprint": change.BuildingFingerprint,
+		"buildStartedAt": change.BuildStartedAt, "buildSubmitted": change.BuildSubmitted,
+		"bypassPending": change.BypassPending, "flippedAt": change.FlippedAt, "emptySince": change.EmptySince,
 	})
 }
 

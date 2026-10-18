@@ -152,6 +152,9 @@ Deploy Go/QA reader compatibility before writers (ADR-037).
 
 Whisper benchmark objects under bench-transcripts/ have current and noncurrent
 version expiry; a delete marker is not immediate physical deletion of all versions.
+Transcribe vocabulary table files under vocab/ (`vocab/{name}.tsv`) expire after
+one day, current and noncurrent; the API deletes each after READY or FAILED. The
+prefix is not in the OAC allowlist and is never served by CloudFront.
 Inspect exact lifecycle values in StorageStack when changing retention. The
 websocket Lambda has no current dedicated connections-table CRUD; old documentation
 for a separate ttobak-connections table described an obsolete design.
@@ -182,6 +185,15 @@ use Haiku 5.5. QA detection and Translate are separate service/model choices.
 The API Lambda's `BEDROCK_TRANSLATE_MODEL_ID` selects GPT-6 Luna for
 `/api/translate` `quality=high`; only the API role receives that exact
 model/profile grant (`InvokeInterpreterModel`), with Amazon Translate as fallback.
+
+Custom vocabularies: AiStack's API role statement `TranscribeVocabulary` allows
+Create/Update/Get/DeleteVocabulary only on
+`arn:{partition}:transcribe:{region}:{account}:vocabulary/ttobak-vocab-*`; the
+existing assets-bucket read/write grant covers vocab/ table writes, deletes and
+the caller-credential file read by Create/UpdateVocabulary. The transcribe role
+keeps `GetVocabulary` on `*` for batch jobs. GatewayStack does not set
+`VOCAB_REBUILD_MIN_INTERVAL` yet, so the API uses its 10m default. Operator
+checks before rollout (vocabulary quota, default 100 per account) are in ADR-008.
 
 The Go API also depends on the transcribe Lambda so recovered-copy event guards
 are installed before the recovery producer changes.
