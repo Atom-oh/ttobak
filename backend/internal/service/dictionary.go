@@ -25,10 +25,11 @@ type DictionaryStore interface {
 	UpdateLegacyVocabularyStatus(ctx context.Context, userID, vocabName, from, to string) error
 	MarkDictionaryMigrated(ctx context.Context, userID, now string, observedRevision int64, observedUpdatedAt string) error
 	ListDictTerms(ctx context.Context, pk string) ([]model.DictTerm, error)
-	PutDictTermsIfAbsent(ctx context.Context, terms []model.DictTerm) (int, error)
-	ReplaceLegacyMigratedTerm(ctx context.Context, pk, termKey string, expectedVersion int64, next *model.DictTerm) error
+	PutDictTermsIfAbsent(ctx context.Context, guard repository.LegacyBlobGuard, terms []model.DictTerm) (int, error)
+	ReplaceLegacyMigratedTerm(ctx context.Context, guard repository.LegacyBlobGuard, pk, termKey string, expectedVersion int64, next *model.DictTerm) error
 	GetVocabularyState(ctx context.Context, userID, vocabContext, lang string) (*model.VocabularyState, error)
-	CreateVocabularyStateIfAbsent(ctx context.Context, state *model.VocabularyState) error
+	CreateLegacyVocabularyState(ctx context.Context, guard repository.LegacyBlobGuard, state *model.VocabularyState) error
+	ReconcileLegacyVocabularyState(ctx context.Context, guard repository.LegacyBlobGuard, vocabContext, lang string, expectedVersion int64, change repository.VocabularyStateChange, now string) error
 	UpdateVocabularyState(ctx context.Context, userID, vocabContext, lang string, expectedVersion int64, change repository.VocabularyStateChange, now string) error
 }
 

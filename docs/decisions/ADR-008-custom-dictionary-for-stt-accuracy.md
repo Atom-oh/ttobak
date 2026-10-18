@@ -66,13 +66,19 @@ readers only: no extraction, term CRUD route, vocabulary builder or UI change.
 - **Non-destructive migration.** `MigrateLegacyDictionary` copies blob terms into
   `origin=manual` rows marked `legacyMigrated` (other existing rows and
   tombstones win), reconciles pristine copies left by an earlier partial run,
-  writes `VOCAB#personal#ko-KR` with the existing vocabulary name, then sets
-  `migratedAt` only if the blob still has the `blobRevision` and `updatedAt` it
-  copied; every legacy PUT bumps `blobRevision`, and a changed blob re-runs the
-  copy. Blobs whose distinct terms share a `termKey`, or have none, are refused
+  writes or reconciles `VOCAB#personal#ko-KR` with the existing vocabulary
+  name, then sets `migratedAt` only if the blob still has the `blobRevision`
+  and `updatedAt` it copied; every legacy PUT bumps `blobRevision`. Every row
+  create, refresh, delete and `VOCAB#` write shares a transaction with a
+  ConditionCheck on the legacy item requiring that same revision and no
+  `migratedAt` (at most 99 puts plus the check), so a run that copied a
+  superseded blob, or lost to a concurrent run that already migrated, writes
+  nothing further and re-reads (`ErrLegacyBlobChanged`). Concurrent and repeated
+  runs therefore leave pristine copies matching the blob that was marked. Blobs whose
+  distinct terms share a `termKey`, or have none, are refused
   with `ErrLegacyDictionaryConflict` and nothing is written; exact duplicates
   collapse. An empty legacy `displayAs` is still returned as empty. Migration
-  never removes blob fields and is safe to re-run. It has no caller yet; term
+  never removes blob fields. It has no caller yet; term
   CRUD must first move the legacy PUT/DELETE onto rows and resolve refused blobs.
 - **Readers.** `GetDictionary` keeps the legacy response: active rows plus blob
   terms (rows and tombstones win by `termKey`; pristine legacy copies are

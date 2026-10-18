@@ -211,9 +211,11 @@ func sameLegacyContent(a, b model.DictTerm) bool {
 // MigrateLegacyDictionary copies blob terms into pristine origin=manual rows
 // (other existing rows and tombstones win), reconciles copies left by an
 // earlier partial run, adopts the blob's vocabulary name in
-// VOCAB#personal#ko-KR, and sets migratedAt last, pinned to the blob revision
-// it copied. A blob change before the mark re-runs the copy. It never removes
-// blob fields and is safe to re-run.
+// VOCAB#personal#ko-KR, and sets migratedAt last. Every write is pinned to the
+// blob revision it copied by a ConditionCheck in the same transaction, so a
+// run that observed a superseded blob, or that lost to a run which already set
+// migratedAt, cannot create, refresh or delete a row afterwards; it re-reads
+// instead. It never removes blob fields.
 func (s *DictionaryService) MigrateLegacyDictionary(ctx context.Context, userID string) (LegacyMigrationResult, error) {
 	var result LegacyMigrationResult
 	for attempt := 0; attempt < legacyMigrationAttempts; attempt++ {
@@ -230,6 +232,9 @@ func (s *DictionaryService) MigrateLegacyDictionary(ctx context.Context, userID 
 			return result, nil
 		}
 		done, err := s.migrateLegacyOnce(ctx, userID, dict, &result)
+		if errors.Is(err, repository.ErrLegacyBlobChanged) {
+			continue // the blob changed or another run migrated it: re-read
+		}
 		if err != nil || done {
 			return result, err
 		}
@@ -237,10 +242,11 @@ func (s *DictionaryService) MigrateLegacyDictionary(ctx context.Context, userID 
 	return result, fmt.Errorf("legacy dictionary kept changing during migration: %w", repository.ErrConditionFailed)
 }
 
-// migrateLegacyOnce copies one observed blob; done is false when the blob
-// changed before the mark and the copy must be redone.
+// migrateLegacyOnce copies one observed blob; done is false (or the error is
+// ErrLegacyBlobChanged) when the blob changed and the copy must be redone.
 func (s *DictionaryService) migrateLegacyOnce(ctx context.Context, userID string, dict *model.UserDictionary, result *LegacyMigrationResult) (bool, error) {
 	pk := model.PrefixUser + userID
+	guard := repository.LegacyBlobGuard{UserID: userID, Revision: dict.BlobRevision, UpdatedAt: dict.UpdatedAt}
 	now := s.now()
 	rows, conflicts := legacyBlobRows(userID, dict, now)
 	if conflicts > 0 {
@@ -266,24 +272,41 @@ func (s *DictionaryService) migrateLegacyOnce(ctx context.Context, userID string
 		if pristineLegacyRow(prior) && !sameLegacyContent(prior, row) {
 			next := row
 			next.AddedAt = prior.AddedAt
-			if err := s.repo.ReplaceLegacyMigratedTerm(ctx, pk, row.TermKey, prior.Version, &next); err != nil {
+			if err := s.repo.ReplaceLegacyMigratedTerm(ctx, guard, pk, row.TermKey, prior.Version, &next); err != nil {
 				return false, fmt.Errorf("failed to refresh legacy term: %w", err)
 			}
 		}
 	}
-	created, err := s.repo.PutDictTermsIfAbsent(ctx, missing)
+	created, err := s.repo.PutDictTermsIfAbsent(ctx, guard, missing)
 	result.TermsCreated += created
 	if err != nil {
 		return false, fmt.Errorf("failed to copy legacy terms: %w", err)
 	}
 	for _, prior := range existing {
 		if pristineLegacyRow(prior) && !wanted[prior.TermKey] {
-			if err := s.repo.ReplaceLegacyMigratedTerm(ctx, pk, prior.TermKey, prior.Version, nil); err != nil {
+			if err := s.repo.ReplaceLegacyMigratedTerm(ctx, guard, pk, prior.TermKey, prior.Version, nil); err != nil {
 				return false, fmt.Errorf("failed to remove stale legacy term: %w", err)
 			}
 		}
 	}
 	stamp := now.Format(model.DictTimeLayout)
+	if err := s.migrateLegacyVocabulary(ctx, guard, dict, rows, stamp); err != nil {
+		return false, err
+	}
+	if err := s.repo.MarkDictionaryMigrated(ctx, userID, stamp, dict.BlobRevision, dict.UpdatedAt); err != nil {
+		if errors.Is(err, repository.ErrConditionFailed) {
+			return false, nil // blob changed or another run marked it: re-read
+		}
+		return false, fmt.Errorf("failed to mark dictionary migrated: %w", err)
+	}
+	return true, nil
+}
+
+// migrateLegacyVocabulary creates VOCAB#personal#ko-KR from the observed blob
+// or, when an earlier attempt already created it, reconciles that row to the
+// blob under its version guard. A row already naming the blob's vocabulary
+// keeps its status, which status sync may have advanced past the blob's.
+func (s *DictionaryService) migrateLegacyVocabulary(ctx context.Context, guard repository.LegacyBlobGuard, dict *model.UserDictionary, rows []model.DictTerm, stamp string) error {
 	status := legacyVocabStatus(dict.VocabularyStatus)
 	if dict.VocabularyName == "" {
 		status = model.VocabStatusNone
@@ -294,23 +317,45 @@ func (s *DictionaryService) migrateLegacyOnce(ctx context.Context, userID string
 			phrases++
 		}
 	}
+	failureCode := ""
+	if status == model.VocabStatusFailed {
+		failureCode = "UNKNOWN"
+	}
+	pk := model.PrefixUser + guard.UserID
 	state := &model.VocabularyState{
 		PK: pk, SK: model.VocabSK(model.VocabContextPersonal, model.VocabLangKo),
 		Context: model.VocabContextPersonal, Language: model.VocabLangKo,
 		ActiveName: dict.VocabularyName, Status: status, ActiveReady: status == model.VocabStatusReady,
-		TermCount: phrases, UpdatedAt: stamp, Version: 1, EntityType: model.EntityTypeVocabularyState,
+		FailureCode: failureCode, TermCount: phrases, UpdatedAt: stamp, Version: 1,
+		EntityType: model.EntityTypeVocabularyState,
 	}
-	if status == model.VocabStatusFailed {
-		state.FailureCode = "UNKNOWN"
+	err := s.repo.CreateLegacyVocabularyState(ctx, guard, state)
+	if err == nil {
+		return nil
 	}
-	if err := s.repo.CreateVocabularyStateIfAbsent(ctx, state); err != nil && !errors.Is(err, repository.ErrConditionFailed) {
-		return false, fmt.Errorf("failed to write vocabulary state: %w", err)
+	if !errors.Is(err, repository.ErrDictTermConflict) {
+		return fmt.Errorf("failed to write vocabulary state: %w", err)
 	}
-	if err := s.repo.MarkDictionaryMigrated(ctx, userID, stamp, dict.BlobRevision, dict.UpdatedAt); err != nil {
-		if errors.Is(err, repository.ErrConditionFailed) {
-			return false, nil // blob changed or another run marked it: re-read
+	prior, err := s.repo.GetVocabularyState(ctx, guard.UserID, model.VocabContextPersonal, model.VocabLangKo)
+	if err != nil {
+		return fmt.Errorf("failed to read vocabulary state: %w", err)
+	}
+	if prior == nil {
+		return fmt.Errorf("vocabulary state vanished during migration: %w", repository.ErrConditionFailed)
+	}
+	var change repository.VocabularyStateChange
+	if prior.ActiveName != state.ActiveName {
+		change = repository.VocabularyStateChange{
+			ActiveName: &state.ActiveName, Status: &state.Status, ActiveReady: &state.ActiveReady,
+			FailureCode: &state.FailureCode, TermCount: &state.TermCount,
 		}
-		return false, fmt.Errorf("failed to mark dictionary migrated: %w", err)
+	} else if prior.TermCount != state.TermCount {
+		change.TermCount = &state.TermCount
+	} else {
+		return nil
 	}
-	return true, nil
+	if err := s.repo.ReconcileLegacyVocabularyState(ctx, guard, model.VocabContextPersonal, model.VocabLangKo, prior.Version, change, stamp); err != nil {
+		return fmt.Errorf("failed to reconcile vocabulary state: %w", err)
+	}
+	return nil
 }

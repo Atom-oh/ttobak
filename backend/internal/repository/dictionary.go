@@ -18,13 +18,78 @@ import (
 // Dictionary v2 condition outcomes; each also matches ErrConditionFailed.
 // ErrDictTermConflict: the row exists (create) or a version/state/origin/
 // userEditedAt guard failed. ErrDictObservationExists: meeting already counted.
+// ErrLegacyBlobChanged: the legacy DICTIONARY item was migrated or no longer
+// has the observed blobRevision/updatedAt, so a migration write was refused.
 var (
 	ErrDictTermConflict      = errors.New("dictionary term guard failed")
 	ErrDictObservationExists = errors.New("dictionary observation already recorded")
+	ErrLegacyBlobChanged     = errors.New("legacy dictionary changed or was migrated")
 )
 
-// dictTransactItemLimit leaves headroom under DynamoDB's 100-item limit.
+// dictTransactItemLimit is the number of term puts per migration transaction;
+// with the legacy blob ConditionCheck it fills DynamoDB's 100-action limit.
 const dictTransactItemLimit = 99
+
+// LegacyBlobGuard pins a migration write to the legacy blob it copied: the
+// DICTIONARY item must still lack migratedAt and have the observed
+// blobRevision and updatedAt (absent when zero/empty, for pre-v2 blobs).
+type LegacyBlobGuard struct {
+	UserID    string
+	Revision  int64
+	UpdatedAt string
+}
+
+// condition is shared by MarkDictionaryMigrated and every migration
+// transaction's ConditionCheck.
+func (g LegacyBlobGuard) condition() expression.ConditionBuilder {
+	revision := expression.AttributeNotExists(expression.Name("blobRevision"))
+	if g.Revision != 0 {
+		revision = expression.Name("blobRevision").Equal(expression.Value(g.Revision))
+	}
+	updatedAt := expression.AttributeNotExists(expression.Name("updatedAt"))
+	if g.UpdatedAt != "" {
+		updatedAt = expression.Name("updatedAt").Equal(expression.Value(g.UpdatedAt))
+	}
+	return expression.AttributeExists(expression.Name("PK")).
+		And(expression.AttributeNotExists(expression.Name("migratedAt"))).
+		And(revision).And(updatedAt)
+}
+
+// legacyBlobCheck is the ConditionCheck that pins a transaction to the blob.
+func (r *DictionaryRepository) legacyBlobCheck(g LegacyBlobGuard) (types.TransactWriteItem, error) {
+	if g.UserID == "" {
+		return types.TransactWriteItem{}, fmt.Errorf("legacy blob guard requires a user")
+	}
+	expr, err := expression.NewBuilder().WithCondition(g.condition()).Build()
+	if err != nil {
+		return types.TransactWriteItem{}, err
+	}
+	return types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{
+		TableName: aws.String(r.tableName), Key: dictKey(model.PrefixUser+g.UserID, model.PrefixDictionary),
+		ConditionExpression: expr.Condition(), ExpressionAttributeNames: expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	}}, nil
+}
+
+// guardedLegacyWrite runs one migration write with the blob ConditionCheck
+// appended; a failed check maps to ErrLegacyBlobChanged ahead of the write's
+// own guard, which maps to ErrDictTermConflict.
+func (r *DictionaryRepository) guardedLegacyWrite(ctx context.Context, guard LegacyBlobGuard, write types.TransactWriteItem) error {
+	check, err := r.legacyBlobCheck(guard)
+	if err != nil {
+		return err
+	}
+	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: []types.TransactWriteItem{write, check}})
+	if err == nil {
+		return nil
+	}
+	var cancelled *types.TransactionCanceledException
+	if errors.As(err, &cancelled) && len(cancelled.CancellationReasons) > 1 &&
+		aws.ToString(cancelled.CancellationReasons[1].Code) == "ConditionalCheckFailed" {
+		return dictConditionError(ErrLegacyBlobChanged)
+	}
+	return dictTransactError(err, []error{ErrDictTermConflict})
+}
 
 // DictionaryRepository provides DynamoDB operations for user dictionaries
 type DictionaryRepository struct {
@@ -206,25 +271,19 @@ func (r *DictionaryRepository) UpdateLegacyVocabularyStatus(ctx context.Context,
 // at the revision and updatedAt that migration copied. It never removes blob
 // terms.
 func (r *DictionaryRepository) MarkDictionaryMigrated(ctx context.Context, userID, now string, observedRevision int64, observedUpdatedAt string) error {
-	revision := expression.AttributeNotExists(expression.Name("blobRevision"))
-	if observedRevision != 0 {
-		revision = expression.Name("blobRevision").Equal(expression.Value(observedRevision))
-	}
-	updatedAt := expression.AttributeNotExists(expression.Name("updatedAt"))
-	if observedUpdatedAt != "" {
-		updatedAt = expression.Name("updatedAt").Equal(expression.Value(observedUpdatedAt))
-	}
-	condition := expression.AttributeExists(expression.Name("PK")).
-		And(expression.AttributeNotExists(expression.Name("migratedAt"))).
-		And(revision).And(updatedAt)
+	guard := LegacyBlobGuard{UserID: userID, Revision: observedRevision, UpdatedAt: observedUpdatedAt}
 	return r.guardedUpdate(ctx, dictKey(model.PrefixUser+userID, model.PrefixDictionary),
-		expression.Set(expression.Name("migratedAt"), expression.Value(now)), condition)
+		expression.Set(expression.Name("migratedAt"), expression.Value(now)), guard.condition())
 }
 
 // ReplaceLegacyMigratedTerm rewrites (next != nil) or deletes (next == nil) a
-// pristine legacy-migrated row: active, manual, unedited, at expectedVersion.
-// Migration uses it to bring earlier copies back in line with the blob.
-func (r *DictionaryRepository) ReplaceLegacyMigratedTerm(ctx context.Context, pk, termKey string, expectedVersion int64, next *model.DictTerm) error {
+// pristine legacy-migrated row: active, manual, unedited, at expectedVersion,
+// in one transaction with the legacy blob ConditionCheck. Migration uses it to
+// bring earlier copies back in line with the observed blob.
+func (r *DictionaryRepository) ReplaceLegacyMigratedTerm(ctx context.Context, guard LegacyBlobGuard, pk, termKey string, expectedVersion int64, next *model.DictTerm) error {
+	if pk != model.PrefixUser+guard.UserID {
+		return fmt.Errorf("invalid legacy term replacement")
+	}
 	condition := expression.Name("legacyMigrated").Equal(expression.Value(true)).
 		And(expression.Name("version").Equal(expression.Value(expectedVersion))).
 		And(expression.Name("state").Equal(expression.Value(model.TermStateActive))).
@@ -235,12 +294,11 @@ func (r *DictionaryRepository) ReplaceLegacyMigratedTerm(ctx context.Context, pk
 		return err
 	}
 	if next == nil {
-		_, err = r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		return r.guardedLegacyWrite(ctx, guard, types.TransactWriteItem{Delete: &types.Delete{
 			TableName: aws.String(r.tableName), Key: dictKey(pk, model.DictTermSK(termKey)),
 			ConditionExpression: expr.Condition(), ExpressionAttributeNames: expr.Names(),
 			ExpressionAttributeValues: expr.Values(),
-		})
-		return dictSingleError(err, ErrDictTermConflict)
+		}})
 	}
 	if next.PK != pk || next.TermKey != termKey || next.SK != model.DictTermSK(termKey) || !next.LegacyMigrated {
 		return fmt.Errorf("invalid legacy term replacement")
@@ -251,12 +309,11 @@ func (r *DictionaryRepository) ReplaceLegacyMigratedTerm(ctx context.Context, pk
 	if err != nil {
 		return err
 	}
-	_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
+	return r.guardedLegacyWrite(ctx, guard, types.TransactWriteItem{Put: &types.Put{
 		TableName: aws.String(r.tableName), Item: av,
 		ConditionExpression: expr.Condition(), ExpressionAttributeNames: expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
-	})
-	return dictSingleError(err, ErrDictTermConflict)
+	}})
 }
 
 func (r *DictionaryRepository) queryPrefix(ctx context.Context, pk, prefix string, visit func(map[string]types.AttributeValue) error) error {
@@ -341,16 +398,28 @@ func (r *DictionaryRepository) GetDictTerm(ctx context.Context, pk, termKey stri
 	return &term, nil
 }
 
-// PutDictTermsIfAbsent creates missing rows in transactions of at most 99;
-// existing rows, including tombstones, are left untouched.
-func (r *DictionaryRepository) PutDictTermsIfAbsent(ctx context.Context, terms []model.DictTerm) (int, error) {
+// PutDictTermsIfAbsent creates missing migration rows in transactions of at
+// most 99 puts plus the legacy blob ConditionCheck; existing rows, including
+// tombstones, are left untouched. A failed check stops with
+// ErrLegacyBlobChanged, so a run that copied a superseded blob cannot create
+// rows after another run migrated the current one.
+func (r *DictionaryRepository) PutDictTermsIfAbsent(ctx context.Context, guard LegacyBlobGuard, terms []model.DictTerm) (int, error) {
+	check, err := r.legacyBlobCheck(guard)
+	if err != nil {
+		return 0, err
+	}
+	for i := range terms {
+		if terms[i].PK != model.PrefixUser+guard.UserID {
+			return 0, fmt.Errorf("invalid legacy term create")
+		}
+	}
 	created := 0
 	for start := 0; start < len(terms); start += dictTransactItemLimit {
 		end := start + dictTransactItemLimit
 		if end > len(terms) {
 			end = len(terms)
 		}
-		n, err := r.putChunkIfAbsent(ctx, append([]model.DictTerm(nil), terms[start:end]...))
+		n, err := r.putChunkIfAbsent(ctx, check, append([]model.DictTerm(nil), terms[start:end]...))
 		created += n
 		if err != nil {
 			return created, err
@@ -359,10 +428,10 @@ func (r *DictionaryRepository) PutDictTermsIfAbsent(ctx context.Context, terms [
 	return created, nil
 }
 
-func (r *DictionaryRepository) putChunkIfAbsent(ctx context.Context, pending []model.DictTerm) (int, error) {
+func (r *DictionaryRepository) putChunkIfAbsent(ctx context.Context, check types.TransactWriteItem, pending []model.DictTerm) (int, error) {
 	var lastErr error
 	for attempt := 0; attempt < 4 && len(pending) > 0; attempt++ {
-		items := make([]types.TransactWriteItem, len(pending))
+		items := make([]types.TransactWriteItem, len(pending), len(pending)+1)
 		for i := range pending {
 			item, err := r.putIfAbsent(&pending[i])
 			if err != nil {
@@ -370,12 +439,17 @@ func (r *DictionaryRepository) putChunkIfAbsent(ctx context.Context, pending []m
 			}
 			items[i] = item
 		}
+		items = append(items, check) // last: index len(pending)
 		_, lastErr = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
 		var cancelled *types.TransactionCanceledException
 		if lastErr == nil {
 			return len(pending), nil
 		} else if !errors.As(lastErr, &cancelled) {
 			return 0, fmt.Errorf("failed to create dictionary terms: %w", lastErr)
+		}
+		if len(cancelled.CancellationReasons) > len(pending) &&
+			aws.ToString(cancelled.CancellationReasons[len(pending)].Code) == "ConditionalCheckFailed" {
+			return 0, dictConditionError(ErrLegacyBlobChanged)
 		}
 		var remaining []model.DictTerm
 		for i, item := range pending {
@@ -608,28 +682,47 @@ func (r *DictionaryRepository) GetVocabularyState(ctx context.Context, userID, v
 	return &state, nil
 }
 
-// CreateVocabularyStateIfAbsent writes the initial VOCAB# row once.
-func (r *DictionaryRepository) CreateVocabularyStateIfAbsent(ctx context.Context, state *model.VocabularyState) error {
+// CreateLegacyVocabularyState writes the initial VOCAB# row once, pinned to
+// the observed legacy blob. An existing row fails with ErrDictTermConflict.
+func (r *DictionaryRepository) CreateLegacyVocabularyState(ctx context.Context, guard LegacyBlobGuard, state *model.VocabularyState) error {
+	if state == nil || state.PK != model.PrefixUser+guard.UserID {
+		return fmt.Errorf("invalid vocabulary state create")
+	}
 	put, err := r.putIfAbsent(state)
 	if err != nil {
 		return err
 	}
-	_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName: put.Put.TableName, Item: put.Put.Item,
-		ConditionExpression: put.Put.ConditionExpression, ExpressionAttributeNames: put.Put.ExpressionAttributeNames,
+	return r.guardedLegacyWrite(ctx, guard, put)
+}
+
+// ReconcileLegacyVocabularyState applies a migration change to an existing
+// VOCAB# row at the expected version, pinned to the observed legacy blob.
+func (r *DictionaryRepository) ReconcileLegacyVocabularyState(ctx context.Context, guard LegacyBlobGuard, vocabContext, lang string, expectedVersion int64, change VocabularyStateChange, now string) error {
+	update := vocabularyStateUpdate(change, now)
+	expr, err := expression.NewBuilder().WithUpdate(update).
+		WithCondition(expression.Name("version").Equal(expression.Value(expectedVersion))).Build()
+	if err != nil {
+		return err
+	}
+	return r.guardedLegacyWrite(ctx, guard, types.TransactWriteItem{Update: &types.Update{
+		TableName: aws.String(r.tableName), Key: dictKey(model.PrefixUser+guard.UserID, model.VocabSK(vocabContext, lang)),
+		UpdateExpression: expr.Update(), ConditionExpression: expr.Condition(),
+		ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(),
+	}})
+}
+
+func vocabularyStateUpdate(change VocabularyStateChange, now string) expression.UpdateBuilder {
+	update := expression.Set(expression.Name("updatedAt"), expression.Value(now)).
+		Set(expression.Name("version"), expression.Name("version").Plus(expression.Value(1)))
+	return setPresent(update, map[string]interface{}{
+		"activeName": change.ActiveName, "status": change.Status, "failureCode": change.FailureCode,
+		"activeReady": change.ActiveReady, "termCount": change.TermCount,
 	})
-	return dictSingleError(err, ErrDictTermConflict)
 }
 
 // UpdateVocabularyState applies a change to a VOCAB# row at the expected
 // version and bumps the version.
 func (r *DictionaryRepository) UpdateVocabularyState(ctx context.Context, userID, vocabContext, lang string, expectedVersion int64, change VocabularyStateChange, now string) error {
-	update := expression.Set(expression.Name("updatedAt"), expression.Value(now)).
-		Set(expression.Name("version"), expression.Name("version").Plus(expression.Value(1)))
-	update = setPresent(update, map[string]interface{}{
-		"activeName": change.ActiveName, "status": change.Status, "failureCode": change.FailureCode,
-		"activeReady": change.ActiveReady, "termCount": change.TermCount,
-	})
-	return r.guardedUpdate(ctx, dictKey(model.PrefixUser+userID, model.VocabSK(vocabContext, lang)), update,
+	return r.guardedUpdate(ctx, dictKey(model.PrefixUser+userID, model.VocabSK(vocabContext, lang)), vocabularyStateUpdate(change, now),
 		expression.Name("version").Equal(expression.Value(expectedVersion)))
 }
