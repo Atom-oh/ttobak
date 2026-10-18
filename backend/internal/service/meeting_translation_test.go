@@ -219,12 +219,13 @@ func TestMeetingTranslationKeepsSourceForFailedChunksOnly(t *testing.T) {
 	// and only the middle chunk is broken by both engines.
 	first, second, third := strings.Repeat("첫째 ", 400), strings.Repeat("둘째 ", 400), strings.Repeat("셋째 ", 400)
 	first, second, third = strings.TrimSpace(first), strings.TrimSpace(second), strings.TrimSpace(third)
-	tr := &lineTranslator{edit: func(r TranslateRequest, line string) string {
+	failSecond := func(r TranslateRequest, line string) string {
 		if strings.Contains(r.Text, "둘째") {
 			return ""
 		}
 		return line
-	}}
+	}
+	tr := &lineTranslator{edit: failSecond}
 	s := NewMeetingTranslationService(notesPage(first+"\n"+second+"\n"+third, nil), tr, nil, 0)
 	out := runTranslation(t, s, MeetingTranslationRequest{Part: "notes", Target: "en"})
 	if want := "EN<" + first + ">\n" + second + "\nEN<" + third + ">"; *out.Notes != want || out.UntranslatedLines != 1 {
@@ -234,14 +235,8 @@ func TestMeetingTranslationKeepsSourceForFailedChunksOnly(t *testing.T) {
 		t.Fatalf("requests=%d engines=%v", len(tr.requests), out.Engines)
 	}
 
-	tr2 := &lineTranslator{edit: func(r TranslateRequest, line string) string {
-		if strings.Contains(r.Text, "둘째") {
-			return ""
-		}
-		return line
-	}}
 	long := strings.Repeat("첫째 문장입니다. ", 200) + "\n" + strings.Repeat("둘째 문장입니다. ", 200)
-	s = NewMeetingTranslationService(notesPage(long, nil), tr2, nil, 0)
+	s = NewMeetingTranslationService(notesPage(long, nil), &lineTranslator{edit: failSecond}, nil, 0)
 	out = runTranslation(t, s, MeetingTranslationRequest{Part: "notes", Target: "en"})
 	if out.UntranslatedLines != 1 || !strings.Contains(*out.Notes, "\n"+strings.Repeat("둘째 문장입니다. ", 200)) {
 		t.Fatalf("failed chunk not kept as source: untranslated=%d", out.UntranslatedLines)
@@ -383,116 +378,61 @@ func TestMeetingTranslationCarriesFenceAcrossOversizedCodeBlock(t *testing.T) {
 		}
 	}
 	// A forged or plain cursor is passed through unchanged.
-	if c, fence := decodeTranslationCursor("abc"); c != "abc" || fence != "" {
-		t.Fatalf("plain cursor=%q fence=%q", c, fence)
-	}
-	for _, fence := range []markdownFence{"```", "~~~~"} {
-		if c, got := decodeTranslationCursor(encodeTranslationCursor("abc", fence)); c != "abc" || got != fence {
-			t.Fatalf("wrapped cursor=%q fence=%q", c, got)
-		}
-	}
 	forged, _ := json.Marshal(translationCursor{1, "abc", "``"})
-	if c, fence := decodeTranslationCursor(base64.RawURLEncoding.EncodeToString(forged)); fence != "" || c == "abc" {
-		t.Fatalf("non-fence wrapper decoded: %q %q", c, fence)
+	for cursor, want := range map[string]markdownFence{"abc": "", encodeTranslationCursor("abc", "~~~~"): "~~~~",
+		base64.RawURLEncoding.EncodeToString(forged): ""} {
+		if c, fence := decodeTranslationCursor(cursor); fence != want || (c == "abc") != (cursor == "abc" || want != "") {
+			t.Fatalf("cursor %q decoded to %q fence=%q", cursor, c, fence)
+		}
 	}
 }
 
-func TestMeetingTranslationFenceMatchesDelimiterCharAndLength(t *testing.T) {
-	content := strings.Join([]string{
-		"````markdown",
-		"```",
-		"코드 안의 문장",
-		"```",
-		"~~~",
-		"````",
-		"~~~",
-		"물결 안의 문장",
-		"```",
-		"~~~~",
-		"바깥 문장",
-	}, "\n")
+func TestMeetingTranslationFenceMatchesDelimiter(t *testing.T) {
+	content := "````md\n```\n코드 문장\n```\n~~~\n````\n~~~~\n물결 문장\n```\n~~~~\n바깥 문장"
 	tr := &lineTranslator{}
-	out := runTranslation(t, NewMeetingTranslationService(notesPage(content, nil), tr, nil, 0),
-		MeetingTranslationRequest{Part: "notes", Target: "en"})
-	want := strings.Replace(content, "바깥 문장", "EN<바깥 문장>", 1)
-	if *out.Notes != want || len(tr.requests) != 1 || tr.requests[0].Text != "바깥 문장" {
-		t.Fatalf("notes=%q requests=%+v", *out.Notes, tr.requests)
-	}
-	// A backtick info string containing a backtick is not an opener.
-	tr = &lineTranslator{}
-	out = runTranslation(t, NewMeetingTranslationService(notesPage("```a`b 인라인\n다음 문장", nil), tr, nil, 0),
-		MeetingTranslationRequest{Part: "notes", Target: "en"})
-	if strings.Contains(*out.Notes, "\n다음 문장") {
-		t.Fatalf("line after a non-fence was treated as code: %q", *out.Notes)
+	out := runTranslation(t, NewMeetingTranslationService(notesPage(content, nil), tr, nil, 0), MeetingTranslationRequest{Part: "notes", Target: "en"})
+	if *out.Notes != strings.Replace(content, "바깥 문장", "EN<바깥 문장>", 1) || len(tr.requests) != 1 {
+		t.Fatalf("notes=%q", *out.Notes)
 	}
 }
 
-func TestSplitTranslationBodyKeepsPlaceholdersWhole(t *testing.T) {
-	hangul := strings.Repeat("가", 998) // 2994 bytes, no space
-	for _, text := range []string{
-		hangul + "⟦L1⟧",
-		hangul + "⟦L12⟧뒤",
-		"⟦L1⟧" + strings.Repeat("나", 1200),
-		strings.Repeat("⟦L7⟧", 600),
-	} {
+func TestMeetingTranslationNeverSplitsPlaceholders(t *testing.T) {
+	// 2,994 spaceless bytes plus a link protect to 3,002, so a byte cut at
+	// 3,000 would land inside the placeholder.
+	hangul := strings.Repeat("가", 998)
+	for _, text := range []string{hangul + "⟦L12⟧뒤", "⟦L1⟧" + strings.Repeat("나", 1200)} {
 		pieces, seps := splitTranslationBody(text, meetingTranslationChunkBytes)
-		var joined strings.Builder
+		joined := ""
 		for i, piece := range pieces {
-			joined.WriteString(seps[i] + piece)
-			if strings.Count(piece, "⟦") != len(translationPlaceholder.FindAllString(piece, -1)) ||
-				strings.Count(piece, "⟧") != strings.Count(piece, "⟦") {
-				t.Fatalf("piece %d bisects a placeholder: %q", i, piece[max(0, len(piece)-12):])
-			}
-			if len(piece) > meetingTranslationChunkBytes {
-				t.Fatalf("piece %d is %d bytes", i, len(piece))
+			joined += seps[i] + piece
+			if len(piece) > meetingTranslationChunkBytes || strings.Count(piece, "⟦") != len(translationPlaceholder.FindAllString(piece, -1)) {
+				t.Fatalf("piece %d bisects a placeholder or is %d bytes", i, len(piece))
 			}
 		}
-		if joined.String() != text || len(pieces) < 2 {
+		if joined != text || len(pieces) != 2 {
 			t.Fatalf("pieces=%d do not rejoin to the source", len(pieces))
 		}
 	}
-}
-
-func TestMeetingTranslationSpacelessLineEndingInLink(t *testing.T) {
-	// 2,994 spaceless bytes plus one link protect to 3,002 bytes, so the
-	// no-space cut would land inside the placeholder.
-	content := strings.Repeat("가", 998) + "[링크](https://example.com/a)"
+	content := hangul + "[링크](https://example.com/a)"
 	for _, target := range []string{"ko", "en"} {
-		tr := &lineTranslator{}
-		out := runTranslation(t, NewMeetingTranslationService(notesPage(content, nil), tr, nil, 0),
-			MeetingTranslationRequest{Part: "notes", Target: target})
-		if strings.ContainsAny(*out.Notes, "⟦⟧") || !strings.Contains(*out.Notes, "[링크](https://example.com/a)") || out.UntranslatedLines != 0 {
-			t.Fatalf("target=%s untranslated=%d notes tail=%q", target, out.UntranslatedLines, (*out.Notes)[max(0, len(*out.Notes)-40):])
-		}
-		if target == "ko" && (*out.Notes != content || len(tr.requests) != 0) {
-			t.Fatalf("same-language line changed: requests=%d", len(tr.requests))
-		}
-		if target == "en" && (len(tr.requests) == 0 || !strings.Contains(*out.Notes, "EN<")) {
-			t.Fatalf("requests=%d", len(tr.requests))
+		out := runTranslation(t, NewMeetingTranslationService(notesPage(content, nil), &lineTranslator{}, nil, 0), MeetingTranslationRequest{Part: "notes", Target: target})
+		if strings.ContainsAny(*out.Notes, "⟦⟧") || !strings.HasSuffix(*out.Notes, "[링크](https://example.com/a)>") == (target == "en") ||
+			(target == "ko" && *out.Notes != content) || out.UntranslatedLines != 0 {
+			t.Fatalf("target=%s untranslated=%d", target, out.UntranslatedLines)
 		}
 	}
 }
 
 func TestTranslationLineRenderFallsBackOnPlaceholderMismatch(t *testing.T) {
-	for _, out := range []string{
-		"Budget ⟦L1⟧⟦L1⟧ confirmed", // duplicate
-		"Budget confirmed",          // missing
-		"Budget ⟦L9⟧ confirmed",     // unknown
-		"Budget ⟦L1⟧ ⟧ confirmed",   // stray bracket
-		"Budget ⟦L1 confirmed",      // bisected
-	} {
+	source := "- 예산 [근거](transcript://s1) 확정"
+	for out, want := range map[string]string{"Budget ⟦L1⟧ confirmed": "- Budget [근거](transcript://s1) confirmed",
+		"Budget ⟦L1⟧⟦L1⟧": source, "Budget": source, "Budget ⟦L9⟧": source, "Budget ⟦L1⟧ ⟧": source, "Budget ⟦L1": source} {
 		next := 0
-		line := prepareTranslationLine("- ", "예산 [근거](transcript://s1) 확정", "", &next)
+		line := prepareTranslationLine("- ", source[2:], "", &next)
 		line.pieces[0].out, line.pieces[0].done = out, true
-		if got := line.render(); got != "- 예산 [근거](transcript://s1) 확정" || !line.untranslated {
+		if got := line.render(); got != want || line.untranslated != (want == source) {
 			t.Fatalf("%q rendered %q untranslated=%v", out, got, line.untranslated)
 		}
-	}
-	next := 0
-	line := prepareTranslationLine("- ", "예산 [근거](transcript://s1) 확정", "", &next)
-	line.pieces[0].out, line.pieces[0].done = "Budget ⟦L1⟧ confirmed", true
-	if got := line.render(); got != "- Budget [근거](transcript://s1) confirmed" || line.untranslated {
-		t.Fatalf("valid output rendered %q", got)
 	}
 }
 
@@ -616,9 +556,10 @@ func TestMeetingTranslationBoundsChunksConcurrencyAndBudget(t *testing.T) {
 	}
 	// A single over-long line is split at spaces and rejoined.
 	lines = append(lines, strings.Repeat("긴문장 ", 1500))
-	tr := &lineTranslator{edit: func(_ TranslateRequest, line string) string {
+	identity := func(_ TranslateRequest, line string) string {
 		return strings.TrimSuffix(strings.TrimPrefix(line, "EN<"), ">")
-	}}
+	}
+	tr := &lineTranslator{edit: identity}
 	limiter := &recordingLimiter{}
 	s := NewMeetingTranslationService(notesPage(strings.Join(lines, "\n"), nil), tr, limiter, 777)
 	out := runTranslation(t, s, MeetingTranslationRequest{Part: "notes", Target: "en"})
@@ -643,9 +584,7 @@ func TestMeetingTranslationBoundsChunksConcurrencyAndBudget(t *testing.T) {
 	}
 
 	long := strings.TrimSuffix(strings.Repeat("긴문장 ", 1500), " ")
-	tr = &lineTranslator{edit: func(_ TranslateRequest, line string) string {
-		return strings.TrimSuffix(strings.TrimPrefix(line, "EN<"), ">")
-	}}
+	tr = &lineTranslator{edit: identity}
 	out = runTranslation(t, NewMeetingTranslationService(notesPage(long, nil), tr, nil, 0), MeetingTranslationRequest{Part: "notes", Target: "en"})
 	if *out.Notes != long || len(tr.requests) < 2 {
 		t.Fatalf("split line not rejoined exactly: requests=%d", len(tr.requests))

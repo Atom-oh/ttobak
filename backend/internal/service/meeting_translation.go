@@ -127,10 +127,9 @@ type translationPiece struct {
 	language string
 }
 
-// render restores placeholders over the whole joined line. If the joined
-// text does not hold every protected token exactly once and nothing else in
-// placeholder brackets, the line falls back to its source and is marked
-// untranslated: internal token text is never shown.
+// render restores placeholders over the joined line; unless every token
+// appears exactly once with no stray brackets, the line keeps its source and
+// is marked untranslated, so token text is never shown.
 func (l *translationLine) render() string {
 	source := l.prefix + l.body + l.suffix
 	if l.pieces == nil {
@@ -212,9 +211,8 @@ func prepareTranslationLine(prefix, body, suffix string, next *int) *translation
 
 // splitTranslationBody splits text into pieces of at most limit bytes,
 // preferring spaces. seps[i] restores what was removed before piece i.
-// Placeholders are atomic: they contain no space, and a cut without a space
-// moves before (or, for a leading placeholder, after) any placeholder it
-// would bisect.
+// Placeholders are atomic: they contain no space, and a byte cut moves
+// before (or, for a leading placeholder, after) one it would bisect.
 func splitTranslationBody(text string, limit int) (pieces, seps []string) {
 	sep := ""
 	for len(text) > limit {
@@ -329,14 +327,11 @@ type meetingReadingPage struct {
 	} `json:"page"`
 }
 
-// alignTranslationPage trims a non-final reading page back to a line (notes,
-// text-mode transcript) or whole-segment boundary and re-issues the reader's
-// own cursor at that offset, so no line, link or segment is translated as two
-// fragments. Notes never end inside a fenced block; text-mode transcript
-// pages prefer a speaker-header boundary so the next page knows its speaker.
-// A page with no usable boundary is kept whole; a notes page kept whole while
-// inside a fenced block (startFence is the fence carried into it) wraps the
-// next cursor so the following page starts with the fence still open.
+// alignTranslationPage trims a non-final page to a line (notes outside fences,
+// text transcript, preferring speaker headers) or whole-segment boundary and
+// re-issues the reader's cursor there, so nothing is translated as fragments.
+// A page without a boundary is kept whole; a notes page kept whole inside a
+// fence (startFence is the one carried in) wraps the cursor with that fence.
 func alignTranslationPage(page *meetingReadingPage, part string, startFence markdownFence) {
 	if page.Page.NextCursor == nil {
 		return
@@ -377,8 +372,7 @@ func alignTranslationPage(page *meetingReadingPage, part string, startFence mark
 }
 
 // notesPageCut returns the code-point offset of the last line start outside a
-// fenced block (0 when there is none) and the fence still open at the end of
-// text; fence is the one open at its start.
+// fence (0 when none) and the fence open at the end, given the one at start.
 func notesPageCut(text string, fence markdownFence) (int, markdownFence) {
 	cut, at := 0, 0
 	for i, line := range strings.Split(text, "\n") {
@@ -391,37 +385,28 @@ func notesPageCut(text string, fence markdownFence) (int, markdownFence) {
 	return cut, fence
 }
 
-// markdownFence is the opening run of an open fenced code block ("" when
-// none). As in CommonMark, only a run of the same character at least as long
-// as the opener, with nothing after it, closes the block, so a ```` block may
-// contain ``` lines.
+// markdownFence is the opening run of an open fenced block ("" when none).
+// As in CommonMark, only a bare run of the same character at least as long
+// closes it, so a ```` block may contain ``` lines.
 type markdownFence string
-
-const maxCarriedFence = 64
 
 var translationFenceRun = regexp.MustCompile("^(?:`{3,}|~{3,})")
 
-// step advances the fence over one line and reports whether the line is an
-// opening or closing delimiter.
+// step advances the fence over one line and reports a delimiter line.
 func (f *markdownFence) step(line string) bool {
 	trimmed := strings.TrimSpace(line)
 	run := translationFenceRun.FindString(trimmed)
-	if run == "" {
+	switch {
+	case run == "":
+		return false
+	case *f == "":
+		*f = markdownFence(run)
+	case run[0] == (*f)[0] && len(run) >= len(*f) && trimmed == run:
+		*f = ""
+	default:
 		return false
 	}
-	if *f == "" {
-		// A backtick fence's info string may not contain a backtick.
-		if run[0] == '`' && strings.Contains(trimmed[len(run):], "`") {
-			return false
-		}
-		*f = markdownFence(run)
-		return true
-	}
-	if run[0] == (*f)[0] && len(run) >= len(*f) && trimmed == run {
-		*f = ""
-		return true
-	}
-	return false
+	return true
 }
 
 // translationCursor wraps a reader cursor whose page begins inside a fenced
@@ -432,11 +417,8 @@ type translationCursor struct {
 	Fence   string `json:"fence"`
 }
 
-var translationCarriedFence = regexp.MustCompile("^(?:`{3,64}|~{3,64})$")
-
 func encodeTranslationCursor(reader string, fence markdownFence) string {
-	// An absurdly long opener is carried truncated; it can then only close early.
-	raw, _ := json.Marshal(translationCursor{1, reader, string(fence[:min(len(fence), maxCarriedFence)])})
+	raw, _ := json.Marshal(translationCursor{1, reader, string(fence)})
 	return base64.RawURLEncoding.EncodeToString(raw)
 }
 
@@ -448,7 +430,7 @@ func decodeTranslationCursor(cursor string) (string, markdownFence) {
 		return cursor, ""
 	}
 	var c translationCursor
-	if json.Unmarshal(raw, &c) != nil || c.Version != 1 || !translationCarriedFence.MatchString(c.Fence) || !readingCursorAlphabet.MatchString(c.Reader) {
+	if json.Unmarshal(raw, &c) != nil || c.Version != 1 || translationFenceRun.FindString(c.Fence) != c.Fence || c.Fence == "" || !readingCursorAlphabet.MatchString(c.Reader) {
 		return cursor, ""
 	}
 	if canonical, _ := json.Marshal(c); string(canonical) != string(raw) {

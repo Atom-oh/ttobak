@@ -111,30 +111,25 @@ rate in production; tune the timeout from the metering logs.
 
 ## Amendment 2026-10-18: on-demand meeting translation (G1)
 
-- Live translations are not persisted. Instead, a reader can translate the final
-  AI notes or selected transcript on demand with
-  `POST /api/meetings/{id}/translation`; the result exists only in the response and
-  client memory.
+- Live translations are not persisted. Readers translate the final AI notes or
+  selected transcript on demand with `POST /api/meetings/{id}/translation`; the
+  result exists only in the response and client memory.
 - Pages come only from `MeetingReadingService`, never full-meeting reads, so read
   authorization, restricted-summary projection and revision-bound cursors are the
-  reading endpoint's own. Continuation is the reading service's own cursor: a
-  non-final page is trimmed back to its last line outside a fenced block (notes),
-  speaker header or line (text transcript) or whole segment, and the reader's
-  cursor binding is re-issued at that offset; a page with no boundary is kept whole.
-  The translator never invents a binding or skips text.
+  reading endpoint's own. A non-final page is trimmed to a line, speaker header or
+  whole-segment boundary and the reader's cursor is re-issued there; a page without
+  one is kept whole. The translator never invents a binding or skips text.
 - Notes are translated per Markdown line with links, code, HTML and URLs behind
-  `⟦Ln⟧` placeholders that must round-trip exactly (splitting treats them as atomic,
-  and a line that fails the round trip renders its source); transcript text is sent without
-  speaker labels or timestamps. A chunk whose structure does not round-trip is
-  retried with Amazon Translate and otherwise kept as source and counted.
-- Cost bounds: at most 12 chunks of 3,000 bytes, concurrency 4, a 20 s budget,
-  a 64KB response and a daily per-user byte counter (`MEETING_TRANSLATE_DAILY_BYTES`).
-  `MEETING_TRANSLATION_ENABLED` defaults to false.
-- Lines are sent as Korean (≥30% Hangul), English (Latin only) or, for code-mixed
-  Hangul/Latin lines, the language that is not the target; other scripts stay source.
-  The byte counter is an abuse brake charged on attempt, including failed attempts.
-- Not included: the meeting glossary (not present on this branch), and single lines,
-  segments or fenced blocks longer than one page, which still split at the reader's cut.
+  atomic `⟦Ln⟧` placeholders that must round-trip exactly, or the line keeps its
+  source; transcript text is sent without speaker labels or timestamps. A chunk
+  that does not round-trip is retried with Amazon Translate, else kept and counted.
+- Lines are sent as Korean (≥30% Hangul), English (Latin only) or, if code-mixed,
+  the non-target language; other scripts stay source.
+- Cost bounds: at most 12 chunks of 3,000 bytes, concurrency 4, a 20 s budget, a
+  64KB response and a daily per-user byte counter (`MEETING_TRANSLATE_DAILY_BYTES`)
+  charged on attempt as an abuse brake. `MEETING_TRANSLATION_ENABLED` defaults off.
+- Not included: the meeting glossary (not on this branch); single lines or segments
+  longer than one page still split at the reader's cut.
 
 ## Evidence
 
