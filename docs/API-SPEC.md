@@ -698,7 +698,9 @@ never blocklisted (`terms_blocklist.txt`) or the term's own key; `phrase` at mos
   item that kept changing during migration.
 - Recognition-affecting manual changes rebuild the derived ko-KR vocabulary in
   place and record it in `VOCAB#personal#ko-KR`; `status` and `warnings` report
-  it. A/B builds and `vocabularyName` belong to the vocabulary builder.
+  it. A change made while the previous build is pending is deferred to the next
+  change, with a `warnings` entry. A/B builds and `vocabularyName` belong to the
+  vocabulary builder.
 
 ### Index status and automatic indexing rollout
 

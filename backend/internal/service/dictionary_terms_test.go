@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/service/transcribe"
+	transcribeTypes "github.com/aws/aws-sdk-go-v2/service/transcribe/types"
 
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
@@ -110,8 +111,9 @@ func (f *fakeDictStore) CreateMigratedVocabularyState(_ context.Context, _ strin
 // fakeVocabWriter records in-place vocabulary writes.
 type fakeVocabWriter struct {
 	fakeVocabClient
-	updates [][]string
-	deletes int
+	updates  [][]string
+	deletes  int
+	onDelete func() // one-shot, runs before the delete takes effect
 }
 
 func (c *fakeVocabWriter) UpdateVocabulary(_ context.Context, in *transcribe.UpdateVocabularyInput, _ ...func(*transcribe.Options)) (*transcribe.UpdateVocabularyOutput, error) {
@@ -119,6 +121,10 @@ func (c *fakeVocabWriter) UpdateVocabulary(_ context.Context, in *transcribe.Upd
 	return &transcribe.UpdateVocabularyOutput{}, nil
 }
 func (c *fakeVocabWriter) DeleteVocabulary(context.Context, *transcribe.DeleteVocabularyInput, ...func(*transcribe.Options)) (*transcribe.DeleteVocabularyOutput, error) {
+	if hook := c.onDelete; hook != nil {
+		c.onDelete = nil
+		hook()
+	}
 	c.deletes++
 	return &transcribe.DeleteVocabularyOutput{}, nil
 }
@@ -551,5 +557,104 @@ func TestConflictingBlobKeepsLegacyPathUntilResolved(t *testing.T) {
 	resp, err = svc.GetDictionaryWithTerms(ctx, "u1")
 	if err != nil || resp.MigrationPending || len(resp.Items) != 2 || resp.Items[0].TermID != TermKey("A.I") {
 		t.Fatalf("migrated items carry termIds: %+v %v", resp, err)
+	}
+}
+
+func personalState(store *fakeDictStore) model.VocabularyState {
+	return store.vocab[model.VocabSK(model.VocabContextPersonal, model.VocabLangKo)]
+}
+
+// A DELETE of the last phrase-bearing term that loses its version guard to a
+// concurrent POST must recompute from the POST's term, not record none.
+func TestRebuildConflictRecomputesFromFreshTerms(t *testing.T) {
+	ctx := context.Background()
+	store := migratedStore()
+	client := &fakeVocabWriter{}
+	svc := newTestDictService(store, client)
+	if _, err := svc.CreateTerm(ctx, "u1", model.CreateDictTermRequest{DisplayAs: "Alpha Grid"}); err != nil {
+		t.Fatal(err)
+	}
+	// The DELETE has listed no phrase-bearing terms when the POST commits.
+	client.onDelete = func() {
+		if _, err := svc.CreateTerm(ctx, "u1", model.CreateDictTermRequest{DisplayAs: "Beta Node"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resp, err := svc.TombstoneTerm(ctx, "u1", TermKey("Alpha Grid"), nil)
+	if err != nil || len(resp.Warnings) != 0 || resp.Status != "PENDING" {
+		t.Fatalf("tombstone = %+v %v", resp, err)
+	}
+	state := personalState(store)
+	if state.ActiveName == "" || state.Status != model.VocabStatusBuilding || state.TermCount != 1 {
+		t.Fatalf("stale DELETE must not clear the vocabulary of an active term: %+v", state)
+	}
+	if last := client.updates[len(client.updates)-1]; fmt.Sprint(last) != "[Beta Node]" {
+		t.Fatalf("the vocabulary must hold the latest snapshot: %v", client.updates)
+	}
+}
+
+// A rebuild recorded between this rebuild's listing and its state write
+// changes the version, so the stale listing is never recorded.
+func TestRebuildReadsStateBeforeListing(t *testing.T) {
+	ctx := context.Background()
+	store := migratedStore()
+	client := &fakeVocabWriter{}
+	svc := newTestDictService(store, client)
+	if _, err := svc.personalVocabularyState(ctx, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	store.hooks["list"] = func() {
+		if _, err := svc.CreateTerm(ctx, "u1", model.CreateDictTermRequest{DisplayAs: "Beta Node"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	status, warnings := svc.rebuildPersonalVocabulary(ctx, "u1")
+	state := personalState(store)
+	if status != "PENDING" || len(warnings) != 0 || state.ActiveName == "" || state.TermCount != 1 {
+		t.Fatalf("stale empty listing must be recomputed: %s %v %+v", status, warnings, state)
+	}
+}
+
+func TestRebuildConflictExhaustionWarnsWithoutWrite(t *testing.T) {
+	ctx := context.Background()
+	store := migratedStore()
+	store.seedRow("Alpha Grid", "Alpha Grid", model.TermOriginManual, model.TermStateActive, 1)
+	svc := newTestDictService(store, &fakeVocabWriter{})
+	if _, err := svc.personalVocabularyState(ctx, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	bump := func() {
+		s := personalState(store)
+		s.Version++
+		store.vocab[s.SK] = s
+	}
+	var rearm func()
+	rearm = func() { bump(); store.hooks["list"] = rearm }
+	store.hooks["list"] = rearm
+	status, warnings := svc.rebuildPersonalVocabulary(ctx, "u1")
+	delete(store.hooks, "list")
+	if state := personalState(store); state.Status != model.VocabStatusNone || state.ActiveName != "" || status != "" ||
+		fmt.Sprint(warnings) != fmt.Sprint([]string{vocabularyRebuildWarning}) {
+		t.Fatalf("exhausted retries must warn without a write: %s %v %+v", status, warnings, state)
+	}
+}
+
+func TestRebuildDefersWhileProviderPending(t *testing.T) {
+	ctx := context.Background()
+	store := migratedStore()
+	name := legacyVocabularyName("u1")
+	client := &fakeVocabWriter{fakeVocabClient: fakeVocabClient{states: map[string]transcribeTypes.VocabularyState{name: transcribeTypes.VocabularyStatePending}}}
+	svc := newTestDictService(store, client)
+	resp, err := svc.CreateTerm(ctx, "u1", model.CreateDictTermRequest{DisplayAs: "Alpha Grid"})
+	if err != nil || len(client.updates) != 0 || fmt.Sprint(resp.Warnings) != fmt.Sprint([]string{vocabularyRebuildDeferredWarning}) {
+		t.Fatalf("a pending build must defer the update with a warning: %+v %v %v", resp, err, client.updates)
+	}
+	if state := personalState(store); state.Version != 1 || state.Status != model.VocabStatusNone {
+		t.Fatalf("a deferred rebuild must not rewrite the state: %+v", state)
+	}
+	client.states[name] = transcribeTypes.VocabularyStateReady
+	if resp, err := svc.CreateTerm(ctx, "u1", model.CreateDictTermRequest{DisplayAs: "Beta Node"}); err != nil || len(resp.Warnings) != 0 ||
+		len(client.updates) != 1 || len(client.updates[0]) != 2 {
+		t.Fatalf("the next change must rebuild from all terms: %+v %v %v", resp, err, client.updates)
 	}
 }

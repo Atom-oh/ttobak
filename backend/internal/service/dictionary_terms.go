@@ -31,7 +31,10 @@ const (
 	MaxLegacyTerms = 1000
 )
 
-const vocabularyRebuildWarning = "vocabulary rebuild failed; recognition keeps the previous vocabulary"
+const (
+	vocabularyRebuildWarning         = "vocabulary rebuild failed; recognition keeps the previous vocabulary"
+	vocabularyRebuildDeferredWarning = "vocabulary rebuild deferred while the previous build is pending; recognition keeps the previous vocabulary until the next change"
+)
 
 func (s *DictionaryService) stamp() string { return s.now().Format(model.DictTimeLayout) }
 
@@ -644,22 +647,41 @@ func vocabularyPhrases(rows []model.DictTerm) []model.DictionaryTerm {
 	return phrases
 }
 
+// rebuildAttempts bounds full recomputations after a VOCAB# version conflict.
+const rebuildAttempts = 3
+
 // rebuildPersonalVocabulary keeps the pre-v2 in-place rebuild for manual
-// changes and records it in VOCAB#personal#ko-KR under its version guard.
+// changes and records it in VOCAB#personal#ko-KR. Each attempt reads the
+// state before listing terms, so any rebuild recorded after that listing
+// changes the version and fails this attempt's guarded write; a conflict
+// recomputes from a fresh state and term snapshot rather than reissuing the
+// stale change. Exhausted attempts surface a warning without a write.
 func (s *DictionaryService) rebuildPersonalVocabulary(ctx context.Context, userID string) (string, []string) {
-	pk := model.PrefixUser + userID
-	rows, err := s.repo.ListDictTerms(ctx, pk)
-	if err != nil {
-		log.Printf("vocabulary rebuild skipped for user %s: %v", userID, err)
-		return s.currentVocabularyStatus(ctx, userID), []string{vocabularyRebuildWarning}
+	for attempt := 0; attempt < rebuildAttempts; attempt++ {
+		status, warnings, err := s.rebuildPersonalVocabularyOnce(ctx, userID)
+		if !errors.Is(err, repository.ErrConditionFailed) {
+			return status, warnings
+		}
 	}
+	log.Printf("vocabulary rebuild for user %s not recorded after %d conflicting attempts", userID, rebuildAttempts)
+	return s.currentVocabularyStatus(ctx, userID), []string{vocabularyRebuildWarning}
+}
+
+// rebuildPersonalVocabularyOnce returns ErrConditionFailed only when its
+// guarded state write lost to a concurrent writer and must be recomputed.
+func (s *DictionaryService) rebuildPersonalVocabularyOnce(ctx context.Context, userID string) (string, []string, error) {
 	state, err := s.personalVocabularyState(ctx, userID)
 	if err != nil {
 		log.Printf("vocabulary rebuild skipped for user %s: %v", userID, err)
-		return "", []string{vocabularyRebuildWarning}
+		return "", []string{vocabularyRebuildWarning}, nil
 	}
 	if state.InactiveName != "" { // an A/B build owns this row
-		return legacyVocabularyStatus(state), nil
+		return legacyVocabularyStatus(state), nil, nil
+	}
+	rows, err := s.repo.ListDictTerms(ctx, model.PrefixUser+userID)
+	if err != nil {
+		log.Printf("vocabulary rebuild skipped for user %s: %v", userID, err)
+		return legacyVocabularyStatus(state), []string{vocabularyRebuildWarning}, nil
 	}
 	phrases := vocabularyPhrases(rows)
 	name := state.ActiveName
@@ -671,6 +693,10 @@ func (s *DictionaryService) rebuildPersonalVocabulary(ctx context.Context, userI
 	case len(phrases) == 0:
 		s.deleteTranscribeVocabulary(ctx, name)
 		status, name = model.VocabStatusNone, ""
+	case s.vocabularyPending(ctx, name):
+		// Transcribe rejects updates while a build is pending; leave the
+		// recorded build in place and let the next change rebuild.
+		return legacyVocabularyStatus(state), []string{vocabularyRebuildDeferredWarning}, nil
 	default:
 		if err := s.buildTranscribeVocabulary(ctx, userID, name, phrases); err != nil {
 			log.Printf("failed to build vocabulary for user %s: %v", userID, err)
@@ -679,20 +705,25 @@ func (s *DictionaryService) rebuildPersonalVocabulary(ctx context.Context, userI
 	}
 	notReady, count := false, len(phrases)
 	change := repository.VocabularyStateChange{ActiveName: &name, Status: &status, ActiveReady: &notReady, FailureCode: &failure, TermCount: &count}
-	for attempt := 0; attempt < 3; attempt++ {
-		err = s.repo.UpdateVocabularyState(ctx, userID, model.VocabContextPersonal, model.VocabLangKo, state.Version, change, s.stamp())
-		if !errors.Is(err, repository.ErrConditionFailed) {
-			break
-		}
-		if state, err = s.personalVocabularyState(ctx, userID); err != nil {
-			break
-		}
+	err = s.repo.UpdateVocabularyState(ctx, userID, model.VocabContextPersonal, model.VocabLangKo, state.Version, change, s.stamp())
+	if errors.Is(err, repository.ErrConditionFailed) {
+		return "", nil, err
 	}
 	if err != nil {
 		log.Printf("failed to record vocabulary build for user %s: %v", userID, err)
 		warnings = append(warnings, vocabularyRebuildWarning)
 	}
-	return legacyVocabularyStatus(&model.VocabularyState{Status: status}), warnings
+	return legacyVocabularyStatus(&model.VocabularyState{Status: status}), warnings, nil
+}
+
+// vocabularyPending reports whether Transcribe is still building name. An
+// unknown provider state does not block the rebuild.
+func (s *DictionaryService) vocabularyPending(ctx context.Context, name string) bool {
+	if s.transcribeClient == nil {
+		return false
+	}
+	provider, ok := s.providerStatus(ctx, name)
+	return ok && provider == "PENDING"
 }
 
 func (s *DictionaryService) personalVocabularyState(ctx context.Context, userID string) (*model.VocabularyState, error) {
