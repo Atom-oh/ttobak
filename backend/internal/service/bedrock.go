@@ -179,6 +179,12 @@ type speakerSegment struct {
 	Untimed   bool    `json:"untimed,omitempty"`
 }
 
+// maxAnchorSnapSeconds bounds how far a `[TS:NNN]` marker may sit from the
+// start of the segment it snaps to. Markers are integer seconds the model was
+// told to copy from a segment start, so a small rounding window is expected;
+// anything farther is treated as unresolvable rather than guessed (ADR-013).
+const maxAnchorSnapSeconds = 2.0
+
 // resolveTranscriptAnchors replaces `[TS:NNN]` markers Claude emitted in the
 // summary with proper markdown links pointing at the closest transcript
 // segment by start time. Per ADR-013 the protocol is `transcript://{segmentId}`;
@@ -186,11 +192,14 @@ type speakerSegment struct {
 // the markdown renderer, then attaches a smooth-scroll click handler.
 //
 // NNN is approximate seconds — Claude is told to emit the segment's start
-// time but may round, so we snap to the nearest segment instead of requiring
-// an exact match. If no segments exist, the markers are stripped.
+// time but may round, so we snap to the nearest timed segment within
+// maxAnchorSnapSeconds instead of requiring an exact match. A marker outside
+// that bound, or past the last timed segment's end, stays an unlinked plain
+// timestamp label: the note text is kept, only the deep link is withheld.
+// Without any timed segment the markers are stripped.
 func resolveTranscriptAnchors(content string, segments []speakerSegment) string {
 	re := regexp.MustCompile(`\[TS:(\d+)\]`)
-	if len(segments) == 0 {
+	if !hasTimedSegment(segments) {
 		return re.ReplaceAllString(content, "")
 	}
 	return re.ReplaceAllStringFunc(content, func(match string) string {
@@ -202,26 +211,10 @@ func resolveTranscriptAnchors(content string, segments []speakerSegment) string 
 		if err != nil {
 			return ""
 		}
-		// Snap to nearest segment by startTime.
-		bestIdx := -1
-		bestDiff := math.MaxFloat64
-		for i, seg := range segments {
-			if seg.Untimed {
-				continue
-			}
-			diff := math.Abs(seg.StartTime - float64(target))
-			if diff < bestDiff {
-				bestDiff = diff
-				bestIdx = i
-			}
-		}
-		if bestIdx < 0 {
-			return ""
-		}
-		seg := segments[bestIdx]
-		if seg.ID == "" {
-			// Without a stable ID we can't make a deep link. Fall back to
-			// a plain timestamp label so the line still reads correctly.
+		seg := nearestSegment(segments, float64(target))
+		if seg == nil || seg.ID == "" {
+			// Out of bound, or no stable ID to deep-link: keep a plain
+			// timestamp label so the line still reads correctly.
 			return fmt.Sprintf("(%s)", formatTSLabel(target))
 		}
 		// Markdown inline link. Frontend strips `transcript://` → `#ts-` so
@@ -229,6 +222,15 @@ func resolveTranscriptAnchors(content string, segments []speakerSegment) string 
 		// in MarkdownRenderer's `<a>` component takes over the click.
 		return fmt.Sprintf("[%s](transcript://%s)", formatTSLabel(target), seg.ID)
 	})
+}
+
+func hasTimedSegment(segments []speakerSegment) bool {
+	for _, seg := range segments {
+		if !seg.Untimed {
+			return true
+		}
+	}
+	return false
 }
 
 // formatTSLabel renders an integer-second offset as `MM:SS` (or `H:MM:SS` past
