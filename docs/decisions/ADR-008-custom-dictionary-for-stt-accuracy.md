@@ -4,7 +4,8 @@
   behavior. Automatic term extraction ships off by default (`AUTO_TERMS_MODE=off`).
 - Decision date: Not recorded; original rationale references the 2026-04-23 STT evaluation.
 - Implementation checked: 2026-09-13; v2 storage, term CRUD, filter, terms
-  run-state/merge and extraction job amendments checked 2026-10-18.
+  run-state/merge, extraction job and A/B vocabulary builder amendments checked
+  2026-10-18.
 
 ## Context and decision
 
@@ -23,7 +24,9 @@ and could not guarantee term recognition.
   `phrase`, `soundsLike`, and `displayAs`, plus vocabulary name/status.
 - Authenticated settings routes support GET/PUT `/api/settings/dictionary` and
   DELETE `/api/settings/dictionary/term`.
-- `DictionaryService` creates/updates a Korean Transcribe vocabulary using the
+- Superseded for migrated users by the A/B builder amendment below (four-column
+  table file, ko-KR builds). Originally, and still for an unmigratable legacy
+  item: `DictionaryService` creates/updates a Korean Transcribe vocabulary using the
   **`Phrases` list**. It does not upload the proposed four-column TSV, send
   `soundsLike`/`displayAs` mappings to Transcribe, or merge system base terms into
   that list. The resource name uses `vocabSuffix(userID)`, not the full literal
@@ -127,7 +130,8 @@ yet" note. Routes: [API-SPEC](../API-SPEC.md#personal-dictionary).
   oldest first, bounding the guessable-hash retention noted above. `termKey`
   stays unsalted: a salt in the same table does not stop a table reader, who can
   already read live terms and meetings.
-- **Vocabulary handoff.** Recognition-affecting manual changes keep the pre-v2
+- **Vocabulary handoff** (historical: superseded by the A/B builder amendment
+  below, which removed this in-place rebuild). Recognition-affecting manual changes keep the pre-v2
   in-place rebuild of the derived name, recorded in `VOCAB#personal#ko-KR`.
   Each attempt reads that row before listing terms and writes only if its
   version is unchanged, so any rebuild recorded since that read rejects the
@@ -294,6 +298,111 @@ is its caller.
   `personal` is a separate, explicit context change made after a deployment with
   `off`; synth is not deployment.
 
+## Amendment 2026-10-18: A/B vocabulary builder
+
+`EnsureVocabularies` ([vocabulary_build.go](../../backend/internal/service/vocabulary_build.go))
+replaces the in-place rebuild. Only the API Lambda enables it; the shared
+readers never build. Callers and response: [API-SPEC](../API-SPEC.md#personal-dictionary).
+
+- **Never in place.** `VOCAB#personal#{lang}` has `ActiveName`/`InactiveName`.
+  Builds target the inactive slot; a later call flips both by version and
+  fingerprint CAS only on READY. FAILED keeps the active slot.
+- **Languages.** Only ko-KR is built. en-US builds are deferred until a consumer
+  exists (batch uses ko-KR only; no response names a vocabulary for live
+  streams); the en-US table rules below stay, unused, and `vocabularies.en`
+  reports `NONE`.
+- **Table.** Active phrase terms, manual first, then hits, then oldest, deduped
+  by phrase; `vocab/{InactiveName}.{fingerprint}.tsv` (a stale submitter
+  writes its own key, never a different table; unlike ADR-037 keys it is not
+  attempt-unique, so retries of one table share it) with header
+  `Phrase\tSoundsLike\tIPA\tDisplayAs`, four fields per row, at most 1,500 rows
+  and 48 KB; invalid rows are dropped individually. The phrase validator is
+  minimal (spaces become `-`, AWS table rules), separate from `terms_filter.go`.
+  ko-KR drops dotted acronyms until acceptance item 2. en-US
+  needs five Latin-only phrases. The file is deleted after READY, FAILED or quota.
+- **Plan.** Every state-machine step reads the VOCAB# row and only then lists
+  the terms, so a step never acts on a listing older than the row it read; a
+  term deleted by a concurrent write is never built back in.
+- **Claims** need a changed fingerprint, no claimed build, and
+  `VOCAB_REBUILD_MIN_INTERVAL` (default 10m) since the last flip or build start;
+  each manual write grants one bypass (kept as `bypassPending` during a build).
+  A FAILED table is retried only after a change or a manual write. A claimed
+  build is resumed or polled whatever its age; it is never reclaimed or deleted
+  without its provider state.
+- **Submit.** After writing the table file, a submit claim CAS (version,
+  `buildingFingerprint`) sets `buildSubmitted` and `submittedAt`; only the
+  winner calls Transcribe. A poll accepts READY or FAILED only when the
+  provider's `LastModifiedTime` is at or after `submittedAt` (5 s tolerance);
+  an older result (a reused slot whose submission never ran) or a missing name
+  resubmits.
+- **Errors.** `GetVocabulary` first; NotFound or the unknown-name BadRequest
+  creates (a wrong guess fails safely with ConflictException), else update with
+  `VocabularyFileUri`. Conflict releases the submit claim for a later retry;
+  LimitExceeded is `QUOTA_EXCEEDED`; other BadRequest is FAILED; an ambiguous
+  error keeps the claim for the poll to verify. Classified by error code.
+- **Slots.** New names are `ttobak-vocab-{16 random hex}`. The demoted slot stays
+  inactive for 24 h after a flip (rebuildable in place, never advertised).
+  Retirement and deletion run only inside `EnsureVocabularies`, on the user's
+  next dictionary GET or write after the grace window (the GET each recording
+  start makes counts); there is no scheduled reclamation. Resting count per
+  user is therefore one ko-KR name after a first build, two after any later
+  flip until such a request, and up to three for a migrated legacy user (the
+  retired derived name waits for 24 h after the latest flip). Base used one.
+  A failed poll is a `warnings` entry.
+- **Flip opportunities.** Legacy `status` is `PENDING` while a build is in
+  flight, even over a READY active slot, so the shipped settings UI keeps
+  polling the GET, which flips. Each recording start also calls the GET.
+- **Batch** reads only: a submitted build verified READY (as in Submit) is used
+  before any flip, else `ActiveName` while `activeReady`; a pre-A/B in-place
+  build (no fingerprint) is still confirmed with Transcribe, as before, and no
+  A/B build is claimed until its result is recorded. A migration retry leaves
+  a row with A/B fields to the builder. Live streams receive no vocabulary
+  name (below).
+- **No vocabulary name in responses:** the live client would send it on a
+  ko-KR/en-US multi-language stream, which may fail; it waits for item 5.
+- **Empty language** stops advertising at once (`activeReady` false,
+  `emptySince` set), also while a build is claimed or submitted: the claim is
+  dropped and its provider result is never flipped or served. Both slots are
+  deleted after 24 h as in Slots.
+- **Not covered:** en-US builds, batch en-US `LanguageIdSettings`, scheduled
+  reclamation of inactive or retired names,
+  account contexts, live-config, client stream retry, and GatewayStack wiring
+  of `VOCAB_REBUILD_MIN_INTERVAL`. An unmigratable legacy item keeps the pre-v2
+  `Phrases` rebuild.
+
+## Amendment 2026-10-18: settings UI v2 and live vocabulary client
+
+- **UI** uses only the per-term routes; the legacy PUT stays for older clients.
+  Duplicates use the `termKey` normalization (the old lowercase-phrase check let
+  `Dynamo-DB` and `DynamoDB` coexist), checked against shared Go vectors (the JS
+  half runs in `npm run test:unit`, in CI only for `frontend/**` changes). An unmigratable legacy
+  item's terms cannot be edited; the UI marks the conflicting ones and deletes
+  them through the legacy DELETE-by-phrase, which retries migration.
+- **No live name.** The A/B amendment's wait for item 5 stands: there is no
+  live-config route and no response names a vocabulary, so the recording page
+  only calls the dictionary GET (a flip opportunity) and live streams send none.
+- **Client plumbing.** `liveVocabulary.ts` sends one name per `LanguageOptions`
+  language when given names; with one, a vocabulary BadRequest before the first
+  event retries once without it and any vocabulary rejection drops it for the
+  recording. Without names it adds no request fields and never retries.
+- Not covered: live-config, source meeting titles, account dictionaries, live
+  aliases, backfill.
+
+Rollout acceptance (record each with a date):
+
+1. Vocabulary quota usage (default 100 per account; up to three ko-KR names per
+   user at rest, as in Slots).
+2. A live Create from the four-column file reaches READY for ko-KR;
+   whether ko-KR accepts dotted acronyms and the `DisplayAs` characters used.
+3. Whether deleting or updating a vocabulary affects an active stream or job.
+4. Whether `StartStreamTranscriptionWebSocket` has a vocabulary resource type
+   (unverified). Until then the identity-pool `*` grant lets a user who learns a
+   vocabulary name bias their own stream; random names reduce that risk.
+5. Whether a multi-language stream with ko-KR-only or ko-KR plus en-US
+   `VocabularyNames` survives en-US speech.
+6. That `GetVocabulary` `LastModifiedTime` advances on each accepted Create
+   and Update, which the submit verification relies on.
+
 ## Consequences and risks
 
 Terms persist across meetings and customize both recognition paths. Transcribe
@@ -320,10 +429,17 @@ concerns. This feature does not remove the need to review transcripts.
   [repository terms_analysis.go](../../backend/internal/repository/terms_analysis.go)
   and [terms_merge.go](../../backend/internal/service/terms_merge.go): run state,
   CAS transitions and merge rules; tests beside each.
-- [dictionary.go](../../backend/internal/service/dictionary.go): resource naming,
-  status, and phrase-only vocabulary construction.
+- [dictionary.go](../../backend/internal/service/dictionary.go): legacy naming,
+  status, and the unmigratable-item phrase-only build;
+  [vocabulary_build.go](../../backend/internal/service/vocabulary_build.go): A/B
+  builder, tests beside it.
+- [ai-stack.ts](../../infra/lib/ai-stack.ts),
+  [storage-stack.ts](../../infra/lib/storage-stack.ts): vocabulary IAM scope and
+  vocab/ lifecycle; assertions in `infra/test/`.
 - [transcribe.go](../../backend/internal/service/transcribe.go),
   [main.go](../../backend/cmd/transcribe/main.go),
   [transcribe.py](../../backend/whisper/transcribe.py): vocabulary consumers.
-- [CustomDictionary.tsx](../../frontend/src/components/CustomDictionary.tsx): UI.
+- [CustomDictionary.tsx](../../frontend/src/components/CustomDictionary.tsx) and
+  [liveVocabulary.ts](../../frontend/src/lib/liveVocabulary.ts): UI and live
+  vocabulary plumbing; tests in `frontend/scripts/`.
 - [main.go](../../backend/cmd/api/main.go): registered settings routes.

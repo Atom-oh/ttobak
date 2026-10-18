@@ -181,7 +181,7 @@ Deploy Go/QA reader compatibility before writers (ADR-037).
 Whisper benchmark objects under bench-transcripts/ have current and noncurrent
 version expiry; a delete marker is not immediate physical deletion of all versions.
 Transcribe vocabulary table files under vocab/ (`vocab/{name}.{fingerprint}.tsv`) expire after
-one day, current and noncurrent (the ADR-008 A/B builder writes them). The
+one day, current and noncurrent; the API deletes each after READY, FAILED or quota rejection. The
 prefix is not in the OAC allowlist and is never served by CloudFront.
 Inspect exact lifecycle values in StorageStack when changing retention. The
 websocket Lambda has no current dedicated connections-table CRUD; old documentation
@@ -221,6 +221,11 @@ values that are not non-negative integers, and 0 disables a limit.
 bounds each interpreter call; synth rejects values outside 500–8000. Changing either
 changes the function configuration and publishes a new `live` alias version. The
 counters use the existing table grant and `pendingShareExpiresAt` TTL.
+`MEETING_TRANSLATION_ENABLED` (context `ttobak:meetingTranslationEnabled`, strict
+boolean, default `false`) enables on-demand meeting translation, and
+`MEETING_TRANSLATE_DAILY_BYTES` (context `ttobak:meetingTranslateDailyBytes`,
+default 2000000, 0 disables) bounds its daily per-user input bytes; synth rejects
+other values. Both are API-only and reuse the existing Translate/interpreter grants.
 
 Custom vocabularies: AiStack's API role statement `TranscribeVocabulary` allows
 Create/Update/Get/DeleteVocabulary only on
@@ -453,16 +458,20 @@ Invalid/missing config retains REST fallback.
 
 The default application behavior has CSP, one-year HSTS, nosniff, frame denial
 and no-referrer. Its cache policy enables gzip/Brotli compression and has a zero
-minimum TTL so origin `Cache-Control: no-cache` is honored; other public assets
-retain the previous one-day default TTL. Runtime config carries no-cache metadata.
-The ordered frontend publisher must supply HTML/RSC no-cache metadata before
-producer release. Immutable Next assets use a separate optimized caching behavior.
-Media/PDF policies remain separate; static bootstrap/native injection still
-requires inline scripts. These are source declarations, not live-header or device
-acceptance. The SPA router
-preserves segmented `__next.*.txt` filenames while mapping dynamic directories.
-Infrastructure publishes a nonsecret `staticRouterRevision: "segmented-rsc-v1"`
-after distribution update for producers that require the compatible consumer.
+minimum TTL so origin `Cache-Control: no-cache` is honored; objects without cache
+metadata retain the previous one-day default TTL. Infrastructure owns runtime
+config and its no-cache metadata; the ordered frontend publisher supplies
+HTML/RSC and mutable public-asset no-cache metadata before producer release.
+A separate `/_next/static/*` behavior caches immutable assets. The application
+CSP preserves Cognito/Transcribe, same-site WS, signed S3 fallback, blob
+workers/PDF frames, Tauri IPC and WASM; static bootstrap/native injection still
+require inline scripts. Media and PDF policies remain separate. These are source
+declarations, not a live-header or device acceptance claim. See the
+[frontend release contract](runbooks/frontend-release.md).
+The router preserves segmented `__next.*.txt` payload names and maps their route
+directories. Infrastructure publishes `staticRouterRevision: "segmented-rsc-v1"`
+after distribution update; the shared publisher checks it before segmented
+exports, preserving runtime config rather than manufacturing readiness.
 
 The StorageStack OAC custom resource reads the distribution ID and tightens the
 bucket policy. Its changing Timestamp deliberately forces re-invocation. The infra
@@ -471,7 +480,7 @@ removing that step/property breaks the tightening mechanism.
 
 Run synth and Jest before deployment. Deploy changed stacks individually with
 `--exclusively`, following the graph above, never `--all` or implicit dependencies.
-The workflow excludes KnowledgeStack. The local helper and test/deploy CI loops
+The workflow excludes KnowledgeStack. The build helper and test/deploy CI loops
 build all eight declared Go zip artifacts, including websocket/ws-authorizer, with
 ARM64 and lambda.norpc. convert-doc remains a separate container image. See the
 [deployment runbook](runbooks/deployment.md) and exact workflow before acting.
@@ -519,6 +528,17 @@ before any read, write or publish, so the rule stays idle. Set `personal` only i
 a deployment after one with `off` has delivered the rule and summarize code. Before
 merging, the worker migrates the owner's legacy dictionary blob through the
 summarize role's existing table grant. See ADR-008.
+
+## Summary privacy writer activation
+
+`SUMMARY_PRIVACY_WRITER_ENABLED=1` is read by `repository.SummaryPrivacyWritesEnabled`.
+GatewayStack sets neither it nor `SUMMARY_PRIVACY_READER_ENABLED`, so writers are
+off. Grant fences that would reject unsafe summaries (`summaryGrantFence`) are not
+yet called by the share, pending-invite or publication writers, and no API route or
+service requests an owner sharing-safe regeneration (`ResummaryState.SharingSafe`).
+Do not enable the writer flag in any deployment until both the fenced grant writers
+and that owner reset path ship; the handlers already map
+`ErrSummarySharingUnsafe` to 409 `SUMMARY_SHARING_UNSAFE` for when they do.
 
 ## Project invitation activation
 

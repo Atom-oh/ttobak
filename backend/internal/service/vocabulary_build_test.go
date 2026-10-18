@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -510,6 +511,32 @@ func TestSharedReadersNeverBuild(t *testing.T) {
 	plain.EnsureVocabularies(context.Background(), "u1", model.VocabContextPersonal, true)
 	if len(fx.tr.calls) != 0 || fx.store.vocabCalls != 0 || len(fx.store.vocab) != 0 || len(fx.objects.puts) != 0 {
 		t.Fatalf("shared readers must not write: %v", fx.tr.calls)
+	}
+}
+
+func TestDictionaryGetStartsBuildAndReportsVocabularies(t *testing.T) {
+	fx := newBuilderFixture(t, "a")
+	fx.add("Alpha Grid", "Alpha-Grid")
+	resp, err := fx.svc.GetDictionaryWithTerms(context.Background(), "u1")
+	if err != nil || resp.Vocabularies.Ko.Status != model.VocabStatusBuilding || resp.Status != "PENDING" {
+		t.Fatalf("GET builds: %+v %v", resp, err)
+	}
+	fx.tr.settle(tt.VocabularyStateReady)
+	resp, _ = fx.svc.GetDictionaryWithTerms(context.Background(), "u1")
+	raw, _ := json.Marshal(resp)
+	want := `"status":"READY","vocabularies":{"ko":{"status":"READY","activeReady":true,"termCount":1},"en":{"status":"NONE","activeReady":false,"termCount":0}}`
+	if !strings.Contains(string(raw), want) || strings.Contains(string(raw), "vocabularyName") {
+		t.Fatalf("response = %s", raw)
+	}
+	active := fx.ko().ActiveName
+	fx.add("Beta Node", "Beta-Node")
+	fx.ensure(true)
+	if resp, _ = fx.svc.GetDictionaryWithTerms(context.Background(), "u1"); resp.Status != "PENDING" || !resp.Vocabularies.Ko.ActiveReady || fx.batch(t) != active {
+		t.Fatalf("a replacement build reports PENDING so the legacy UI keeps polling: %+v", resp)
+	}
+	fx.tr.settle(tt.VocabularyStateReady)
+	if resp, _ = fx.svc.GetDictionaryWithTerms(context.Background(), "u1"); resp.Status != "READY" || fx.ko().ActiveName == active {
+		t.Fatalf("the polled GET flips the finished build: %+v", resp)
 	}
 }
 

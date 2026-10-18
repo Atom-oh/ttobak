@@ -121,6 +121,11 @@ unconsumed project invitation rows expire through their existing TTL field.
    Translate fallback, and the API applies per-user hourly request limits
    (ADR-005 amendments). Interpretation failures
    do not stop capture. This path does not change batch transcription or saved notes.
+   Live translations are not persisted. Readers can translate final AI notes or
+   the selected transcript on demand: one `MeetingReadingService` page goes,
+   placeholder-protected and without speaker labels or times, through the same
+   interpreter path to client memory only (`MEETING_TRANSLATION_ENABLED`, daily
+   byte budget).
 2. Upload audio to S3. EventBridge invokes the transcribe orchestrator, which uses
    configured Whisper ECS or AWS Transcribe fallback. Multipart completion and
    transcript uploads trigger summarization with concurrency/retry guards.
@@ -239,6 +244,13 @@ selected stacks with --exclusively. Public AOSS policy, optional origin verifica
 and unswept QA TTL fields are documented discrepancies, not claims of compliance.
 
 ## References
+
+Application HTML and immutable Next assets use distinct CloudFront caching
+behaviors. The application response policy preserves browser/native service
+integrations; media/PDF policies remain separate. Frontend publication uploads
+referenced assets before forced no-cache HTML/RSC replacement, retains old chunks
+and preserves infrastructure-owned runtime config. See the
+[frontend release contract](runbooks/frontend-release.md) for source and live gates.
 
 - [Project constraints and accepted limits](../CLAUDE.md)
 - [API contracts](API-SPEC.md)

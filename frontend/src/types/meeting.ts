@@ -277,6 +277,8 @@ export interface MeetingDetail extends Meeting {
   transcriptQuality?: TranscriptQuality;
   canRecoverRecording?: boolean;
   supportsAudioCrop?: boolean;
+  /** Server flag for POST /api/meetings/{id}/translation; absent means off. */
+  supportsMeetingTranslation?: boolean;
   audioCrop?: { sourceMeetingId: string; startSeconds: number; endSeconds: number; state: string };
   supportsNotesComparison?: boolean;
   notesRevision?: string;
@@ -623,12 +625,6 @@ export const INSIGHT_TYPES = [
   'trend', 'need', 'competitive', 'risk', 'opportunity', 'tech', 'stakeholder', 'action',
 ] as const;
 
-export interface DictionaryTerm {
-  phrase: string;
-  soundsLike: string;
-  displayAs: string;
-}
-
 export interface ChatSession {
   sessionId: string;
   title: string;
@@ -637,10 +633,20 @@ export interface ChatSession {
   messageCount: number;
 }
 
-export interface DictionaryTerm {
-  phrase: string;
-  soundsLike: string;
-  displayAs: string;
+/** One translated reading page; held in client memory only, never stored. */
+export interface MeetingTranslationPage {
+  meetingId: string;
+  part: 'notes' | 'transcript';
+  target: 'ko' | 'en';
+  revision: string;
+  mode?: 'segments' | 'text';
+  notes?: string;
+  segments?: { segmentId?: string; speaker?: string; startTime?: number; endTime?: number; partial?: boolean; text: string }[];
+  engines: Record<string, number>;
+  untranslatedLines: number;
+  nextCursor: string | null;
+  complete: boolean;
+  persisted: false;
 }
 
 /** Allowlisted values of the meeting noteLanguage field. */
