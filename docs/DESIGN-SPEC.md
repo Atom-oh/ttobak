@@ -329,6 +329,22 @@ summary and transcript requests.
 
 ## Personal dictionary
 
+Settings' dictionary (`CustomDictionary.tsx`, `DictionaryTable.tsx`; copy in those
+files and `lib/dictionary.ts`) uses only per-term routes. Columns: display form,
+recognized-as aliases, type, source (manual, automatic, or a source meeting link
+once the API returns it). Filters all / automatic / manual / suggested. Actions:
+edit (case, spacing or `- . _ ·` only), keep (`aliasMode=always`), delete (toast:
+never re-added automatically) and add on suggestions. Writes send `version`;
+conflicts and 404 reload the list. An open editor diffs and versions against the
+row snapshot taken when editing began; polled responses older than a mutation are
+dropped. Duplicates use `normalizeTermKey`, checked against Go's
+`backend/internal/service/testdata/term-key/vectors.json` by `npm run test:unit`
+(local only; CI runs just the Go half). Legacy terms without a row cannot be edited
+while `migrationPending`; terms that refuse migration are marked and can be deleted
+through the legacy DELETE-by-phrase, which retries migration. KO/EN badges show in use, preparing,
+"updating (current vocabulary in use)", failure codes in plain Korean, and off;
+the page polls every 10 seconds only during a build.
+
 Live captions fetch READY names from `GET .../live-config` once per recording page
 and send at most one per `LanguageOptions` language (`lib/liveVocabulary.ts`). A
 vocabulary BadRequest before the first stream event retries once without it; any

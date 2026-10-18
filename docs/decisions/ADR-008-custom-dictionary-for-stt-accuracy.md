@@ -187,6 +187,12 @@ readers never build. Callers and response: [API-SPEC](../API-SPEC.md#personal-di
 
 ## Amendment 2026-10-18: settings UI v2 and live vocabulary client
 
+- **UI** uses only the per-term routes; the legacy PUT stays for older clients.
+  Duplicates use the `termKey` normalization (the old lowercase-phrase check let
+  `Dynamo-DB` and `DynamoDB` coexist), checked against shared Go vectors (the JS
+  half runs only in local `npm run test:unit`, not CI). An unmigratable legacy
+  item's terms cannot be edited; the UI marks the conflicting ones and deletes
+  them through the legacy DELETE-by-phrase, which retries migration.
 - **Live-config** returns personal ko-KR/en-US names only when READY (ko-KR keeps
   the batch legacy fallback). The client sends one name per `LanguageOptions`
   language, so ko-KR alone when en-US is not ready. Until item 5, a vocabulary

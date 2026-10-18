@@ -1,73 +1,70 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { dictionaryApi } from '@/lib/api';
-import type { DictionaryTerm } from '@/types/meeting';
+import { ApiError, dictionaryApi } from '@/lib/api';
+import {
+  DICTIONARY_FILTERS, dictionaryErrorMessage, filterTerms, findDuplicateTerm, isBuilding,
+  isLegacyConflict, legacyOnlyTerms, normalizeTermKey, parseHeardAs, shouldReloadAfterError, vocabularyBadge,
+  type BadgeTone, type DictTermItem, type DictTermMutationResponse, type DictionaryFilter,
+  type LegacyDictionaryTerm, type TermPatch, type VocabularyViews,
+} from '@/lib/dictionary';
+import { DictionaryTable } from './DictionaryTable';
 
-type VocabStatus = 'READY' | 'PENDING' | 'FAILED' | '';
+const tone: Record<BadgeTone, string> = {
+  ok: 'bg-green-100 text-green-700 dark:bg-primary/10 dark:text-primary',
+  busy: 'bg-blue-100 text-blue-700 dark:bg-blue-500/10 dark:text-blue-400',
+  warn: 'bg-amber-100 text-amber-700 dark:bg-amber-500/10 dark:text-amber-400',
+  error: 'bg-red-100 text-red-700 dark:bg-red-500/10 dark:text-red-400',
+  muted: 'bg-slate-100 text-slate-600 dark:bg-white/5 dark:text-text-muted',
+};
 
-function StatusBadge({ status }: { status: VocabStatus }) {
-  if (!status) return null;
-
-  switch (status) {
-    case 'READY':
-      return (
-        <span className="text-xs font-semibold px-2 py-1 rounded-full bg-green-100 text-green-700 dark:bg-primary/10 dark:text-primary">
-          Ready
-        </span>
-      );
-    case 'PENDING':
-      return (
-        <span className="text-xs font-semibold px-2 py-1 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-500/10 dark:text-blue-400 animate-pulse">
-          Building...
-        </span>
-      );
-    case 'FAILED':
-      return (
-        <span className="text-xs font-semibold px-2 py-1 rounded-full bg-red-100 text-red-700 dark:bg-red-500/10 dark:text-red-400">
-          Failed
-        </span>
-      );
-    default:
-      return (
-        <span className="text-xs font-semibold px-2 py-1 rounded-full bg-slate-100 text-slate-600 dark:bg-white/5 dark:text-text-muted">
-          {status}
-        </span>
-      );
-  }
-}
-
+/** Settings "내 사전": the personal v2 dictionary through per-term routes. */
 export function CustomDictionary() {
-  const [terms, setTerms] = useState<DictionaryTerm[]>([]);
-  const [status, setStatus] = useState<VocabStatus>('');
+  const [items, setItems] = useState<DictTermItem[]>([]);
+  const [legacyTerms, setLegacyTerms] = useState<LegacyDictionaryTerm[]>([]);
+  const [legacyOnly, setLegacyOnly] = useState<LegacyDictionaryTerm[]>([]);
+  const [vocabularies, setVocabularies] = useState<VocabularyViews>();
+  const [warned, setWarned] = useState(false);
+  const [filter, setFilter] = useState<DictionaryFilter>('all');
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  // Per-row in-flight set; the ref guards synchronous double submits.
+  const [busyTermIds, setBusyTermIds] = useState<ReadonlySet<string>>(new Set());
+  const inFlight = useRef(new Set<string>());
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const [dirty, setDirty] = useState(false);
 
   // Add form
-  const [newPhrase, setNewPhrase] = useState('');
-  const [newSoundsLike, setNewSoundsLike] = useState('');
   const [newDisplayAs, setNewDisplayAs] = useState('');
+  const [newHeardAs, setNewHeardAs] = useState('');
 
-  // Edit state — tracked by phrase (not index)
-  const [editingPhrase, setEditingPhrase] = useState<string | null>(null);
-  const [editPhrase, setEditPhrase] = useState('');
-  const [editSoundsLike, setEditSoundsLike] = useState('');
-  const [editDisplayAs, setEditDisplayAs] = useState('');
+  const toastRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const toast = (message: string) => {
+    setSuccess(message);
+    clearTimeout(toastRef.current);
+    toastRef.current = setTimeout(() => setSuccess(null), 4000);
+  };
+  useEffect(() => () => clearTimeout(toastRef.current), []);
 
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const fetchTerms = useCallback(async () => {
+  // A GET applies only if it is the latest one and no mutation started or
+  // finished meanwhile; otherwise it could revert a row to an older version.
+  const fetchSeq = useRef(0);
+  const mutationEpoch = useRef(0);
+  const fetchTerms = useCallback(async (retry = true): Promise<void> => {
+    const seq = ++fetchSeq.current;
+    const epoch = mutationEpoch.current;
     try {
       const data = await dictionaryApi.get();
-      setTerms(data.terms || []);
-      setStatus((data.status || '') as VocabStatus);
-      return (data.status || '') as VocabStatus;
+      if (seq !== fetchSeq.current) return;
+      if (epoch !== mutationEpoch.current) return retry ? fetchTerms(false) : undefined;
+      const rows = data.items ?? [];
+      const legacy = data.migrationPending ? data.terms ?? [] : [];
+      setItems(rows);
+      setLegacyTerms(legacy);
+      setLegacyOnly(legacyOnlyTerms(legacy, rows));
+      setVocabularies(data.vocabularies);
+      setWarned(Boolean(data.warnings?.length));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load dictionary');
-      return '' as VocabStatus;
+      if (seq === fetchSeq.current) setError(err instanceof Error ? err.message : '사전을 불러오지 못했습니다.');
     }
   }, []);
 
@@ -79,109 +76,79 @@ export function CustomDictionary() {
     })();
   }, [fetchTerms]);
 
-  // Poll when PENDING
+  // GET advances builds (poll, flip), so poll only while one runs.
+  const building = isBuilding(vocabularies);
   useEffect(() => {
-    if (status === 'PENDING') {
-      pollRef.current = setInterval(async () => {
-        const newStatus = await fetchTerms();
-        if (newStatus !== 'PENDING' && pollRef.current) {
-          clearInterval(pollRef.current);
-          pollRef.current = null;
-        }
-      }, 5000);
-    }
-    return () => {
-      if (pollRef.current) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
-    };
-  }, [status, fetchTerms]);
+    if (!building) return;
+    const timer = setInterval(() => void fetchTerms(), 10_000);
+    return () => clearInterval(timer);
+  }, [building, fetchTerms]);
 
-  const isDuplicatePhrase = (phrase: string, excludePhrase?: string): boolean => {
-    const normalized = phrase.trim().toLowerCase();
-    return terms.some(
-      (t) => t.phrase.toLowerCase() === normalized && t.phrase !== excludePhrase
-    );
+  // Runs one row's mutation; conflicts reload the list.
+  const setBusy = (termId: string, on: boolean) => {
+    if (on) inFlight.current.add(termId);
+    else inFlight.current.delete(termId);
+    setBusyTermIds(new Set(inFlight.current));
   };
 
-  const handleAdd = () => {
-    const phrase = newPhrase.trim();
-    if (!phrase) return;
-
-    if (isDuplicatePhrase(phrase)) {
-      setError(`"${phrase}" already exists in the dictionary.`);
-      return;
-    }
-
-    setTerms((prev) => [
-      ...prev,
-      { phrase, soundsLike: newSoundsLike.trim(), displayAs: newDisplayAs.trim() || phrase },
-    ]);
-    setNewPhrase('');
-    setNewSoundsLike('');
-    setNewDisplayAs('');
-    setDirty(true);
+  const mutate = async (termId: string, run: () => Promise<DictTermMutationResponse | void>, done: (r: DictTermMutationResponse) => void) => {
+    if (inFlight.current.has(termId)) return false;
+    setBusy(termId, true);
+    mutationEpoch.current++;
     setError(null);
-  };
-
-  const handleDelete = (phrase: string) => {
-    setTerms((prev) => prev.filter((t) => t.phrase !== phrase));
-    setDirty(true);
-    if (editingPhrase === phrase) {
-      setEditingPhrase(null);
-    }
-  };
-
-  const startEditing = (term: DictionaryTerm) => {
-    setEditingPhrase(term.phrase);
-    setEditPhrase(term.phrase);
-    setEditSoundsLike(term.soundsLike);
-    setEditDisplayAs(term.displayAs);
-    setError(null);
-  };
-
-  const cancelEditing = () => {
-    setEditingPhrase(null);
-  };
-
-  const saveEditing = () => {
-    if (!editingPhrase) return;
-    const phrase = editPhrase.trim();
-    if (!phrase) return;
-
-    // Duplicate validation: check against all other terms (exclude the one being edited)
-    if (isDuplicatePhrase(phrase, editingPhrase)) {
-      setError(`"${phrase}" already exists in the dictionary.`);
-      return;
-    }
-
-    setTerms((prev) =>
-      prev.map((t) =>
-        t.phrase === editingPhrase
-          ? { phrase, soundsLike: editSoundsLike.trim(), displayAs: editDisplayAs.trim() || phrase }
-          : t
-      )
-    );
-    setEditingPhrase(null);
-    setDirty(true);
-    setError(null);
-  };
-
-  const handleSave = async () => {
-    setSaving(true);
-    setError(null);
-    setSuccess(null);
     try {
-      const data = await dictionaryApi.update(terms);
-      setStatus((data.status || 'PENDING') as VocabStatus);
-      setDirty(false);
-      setSuccess('Dictionary saved. Vocabulary is building...');
+      const resp = (await run()) ?? {};
+      mutationEpoch.current++;
+      done(resp);
+      if (resp.vocabularies) setVocabularies(resp.vocabularies);
+      setWarned(Boolean(resp.warnings?.length));
+      return true;
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save dictionary');
+      mutationEpoch.current++;
+      if (err instanceof ApiError && (shouldReloadAfterError(err.code) || err.code === 'LEGACY_DICTIONARY_CONFLICT')) await fetchTerms();
+      setError(err instanceof ApiError ? dictionaryErrorMessage(err.code, err.message) ?? err.message
+        : '요청을 처리하지 못했습니다. 다시 시도해 주세요.');
+      return false;
     } finally {
-      setSaving(false);
+      setBusy(termId, false);
     }
+  };
+
+  const handleUpdate = (item: DictTermItem, patch: TermPatch) =>
+    mutate(item.termId, () => dictionaryApi.updateTerm(item.termId, item.version, patch), ({ item: row }) => {
+      if (row) setItems((prev) => prev.map((t) => (t.termId === row.termId ? row : t)));
+      if (patch.state) toast('사전에 추가했습니다.');
+      else if (patch.aliasMode) toast('유지로 표시했습니다. 자동으로 바뀌지 않습니다.');
+    });
+
+  const handleDelete = (item: DictTermItem) =>
+    void mutate(item.termId, () => dictionaryApi.deleteTerm(item.termId, item.version), () => {
+      setItems((prev) => prev.filter((t) => t.termId !== item.termId));
+      toast('삭제했습니다. 다시 자동 등록되지 않습니다');
+    });
+
+  // Removes one unmigrated blob term through the legacy DELETE-by-phrase,
+  // the server's resolution path for LEGACY_DICTIONARY_CONFLICT; migration
+  // is retried server-side, so reload afterwards.
+  const handleLegacyDelete = (term: LegacyDictionaryTerm) =>
+    void mutate(`legacy:${term.phrase}`, () => dictionaryApi.deleteLegacyTerm(term.phrase), () => {
+      toast('이전 용어를 삭제했습니다.');
+      void fetchTerms();
+    });
+
+  const handleAdd = async () => {
+    if (inFlight.current.has('new')) return;
+    const displayAs = newDisplayAs.trim();
+    if (!normalizeTermKey(displayAs)) return setError('표기에는 글자나 숫자가 있어야 합니다.');
+    // Same identity as the server termKey (NFKC, case, spaces, - . _ ·).
+    const duplicate = findDuplicateTerm([...items, ...legacyOnly.map((t) => ({ displayAs: t.displayAs || t.phrase }))], displayAs);
+    if (duplicate) return setError(`이미 사전에 있는 용어입니다: ${duplicate.displayAs}`);
+    await mutate('new', () => dictionaryApi.createTerm({ displayAs, heardAs: parseHeardAs(newHeardAs) }), ({ item: row }) => {
+      if (row) setItems((prev) => [...prev.filter((t) => t.termId !== row.termId), row]);
+      setNewDisplayAs('');
+      setNewHeardAs('');
+      toast('추가했습니다.');
+    });
   };
 
   if (loading) {
@@ -204,175 +171,81 @@ export function CustomDictionary() {
           {success}
         </div>
       )}
+      {warned && (
+        <p className="p-3 bg-amber-50 dark:bg-amber-900/20 text-amber-800 dark:text-amber-200 text-xs rounded-lg">
+          음성 인식 사전 처리 일부가 실패했습니다. 기존 사전을 계속 쓰며 나중에 다시 시도합니다.
+        </p>
+      )}
 
       {/* Status */}
-      <div className="flex items-center gap-3">
-        <span className="text-sm font-medium text-slate-700 dark:text-text-secondary">
-          Vocabulary Status:
-        </span>
-        <StatusBadge status={status} />
+      {(['ko', 'en'] as const).map((lang) => {
+        const badge = vocabularyBadge(vocabularies?.[lang], lang);
+        return (
+          <div key={lang} className="flex flex-wrap items-center gap-3">
+            <span className="text-sm font-medium text-slate-700 dark:text-text-secondary">
+              {lang.toUpperCase()}
+            </span>
+            <span className={`text-xs font-semibold px-2 py-1 rounded-full ${tone[badge.tone]}`}>{badge.label}</span>
+            {badge.detail && <span className="text-xs text-slate-500 dark:text-text-muted">{badge.detail}</span>}
+          </div>
+        );
+      })}
+
+      <div role="tablist" aria-label="용어 필터" className="flex flex-wrap gap-2">
+        {DICTIONARY_FILTERS.map((f) => (
+          <button
+            key={f.id}
+            role="tab"
+            aria-selected={filter === f.id}
+            onClick={() => setFilter(f.id)}
+            className={`px-3 py-1.5 text-xs font-semibold rounded-full ${filter === f.id ? 'bg-primary text-white' : 'bg-slate-100 text-slate-600 dark:bg-white/5 dark:text-text-secondary'}`}
+          >
+            {f.label} {filterTerms(items, f.id).length}
+          </button>
+        ))}
       </div>
 
-      {/* Terms Table */}
-      {terms.length > 0 ? (
-        <div className="glass-panel rounded-xl overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-slate-50 dark:bg-surface-lowest border-b border-slate-200 dark:border-white/10">
-                  <th className="text-left px-4 py-3 font-semibold text-slate-700 dark:text-text-secondary">Phrase</th>
-                  <th className="text-left px-4 py-3 font-semibold text-slate-700 dark:text-text-secondary">Pronunciation</th>
-                  <th className="text-left px-4 py-3 font-semibold text-slate-700 dark:text-text-secondary">Display As</th>
-                  <th className="text-right px-4 py-3 font-semibold text-slate-700 dark:text-text-secondary">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {terms.map((term) => (
-                  <tr
-                    key={term.phrase}
-                    className="border-b border-slate-100 dark:border-white/5 last:border-b-0"
-                  >
-                    {editingPhrase === term.phrase ? (
-                      <>
-                        <td className="px-4 py-2">
-                          <input
-                            type="text"
-                            value={editPhrase}
-                            onChange={(e) => setEditPhrase(e.target.value)}
-                            className="w-full px-2 py-1.5 text-sm bg-slate-100 dark:bg-surface-lowest dark:border dark:border-white/10 dark:text-text-main border-none rounded-lg focus:ring-2 focus:ring-primary/20"
-                          />
-                        </td>
-                        <td className="px-4 py-2">
-                          <input
-                            type="text"
-                            value={editSoundsLike}
-                            onChange={(e) => setEditSoundsLike(e.target.value)}
-                            className="w-full px-2 py-1.5 text-sm bg-slate-100 dark:bg-surface-lowest dark:border dark:border-white/10 dark:text-text-main border-none rounded-lg focus:ring-2 focus:ring-primary/20"
-                          />
-                        </td>
-                        <td className="px-4 py-2">
-                          <input
-                            type="text"
-                            value={editDisplayAs}
-                            onChange={(e) => setEditDisplayAs(e.target.value)}
-                            className="w-full px-2 py-1.5 text-sm bg-slate-100 dark:bg-surface-lowest dark:border dark:border-white/10 dark:text-text-main border-none rounded-lg focus:ring-2 focus:ring-primary/20"
-                          />
-                        </td>
-                        <td className="px-4 py-2 text-right">
-                          <div className="flex items-center justify-end gap-1">
-                            <button
-                              onClick={saveEditing}
-                              className="p-1.5 text-green-600 hover:bg-green-50 dark:text-primary dark:hover:bg-primary/10 rounded-lg transition-colors"
-                              title="Save"
-                            >
-                              <span className="material-symbols-outlined text-lg">check</span>
-                            </button>
-                            <button
-                              onClick={cancelEditing}
-                              className="p-1.5 text-slate-400 hover:bg-slate-100 dark:text-text-muted dark:hover:bg-white/5 rounded-lg transition-colors"
-                              title="Cancel"
-                            >
-                              <span className="material-symbols-outlined text-lg">close</span>
-                            </button>
-                          </div>
-                        </td>
-                      </>
-                    ) : (
-                      <>
-                        <td className="px-4 py-3 text-slate-900 dark:text-text-main font-medium">
-                          {term.phrase}
-                        </td>
-                        <td className="px-4 py-3 text-slate-600 dark:text-text-secondary">
-                          {term.soundsLike || '-'}
-                        </td>
-                        <td className="px-4 py-3 text-slate-600 dark:text-text-secondary">
-                          {term.displayAs || term.phrase}
-                        </td>
-                        <td className="px-4 py-3 text-right">
-                          <div className="flex items-center justify-end gap-1">
-                            <button
-                              onClick={() => startEditing(term)}
-                              className="p-1.5 text-slate-400 hover:text-slate-600 dark:text-text-muted dark:hover:text-text-secondary rounded-lg hover:bg-slate-100 dark:hover:bg-white/5 transition-colors"
-                              title="Edit"
-                            >
-                              <span className="material-symbols-outlined text-lg">edit</span>
-                            </button>
-                            <button
-                              onClick={() => handleDelete(term.phrase)}
-                              className="p-1.5 text-slate-400 hover:text-red-500 dark:text-text-muted dark:hover:text-red-400 rounded-lg hover:bg-slate-100 dark:hover:bg-white/5 transition-colors"
-                              title="Delete"
-                            >
-                              <span className="material-symbols-outlined text-lg">delete</span>
-                            </button>
-                          </div>
-                        </td>
-                      </>
-                    )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      ) : (
-        <div className="glass-panel rounded-xl p-8 text-center">
-          <span className="material-symbols-outlined text-4xl text-slate-300 dark:text-text-muted mb-3 block">
-            dictionary
-          </span>
-          <p className="text-slate-500 dark:text-text-muted text-sm">
-            No custom terms configured.
-          </p>
-          <p className="text-slate-400 dark:text-text-muted/60 text-xs mt-1">
-            Add domain-specific terms to improve transcription accuracy.
-          </p>
+      <DictionaryTable
+        items={filterTerms(items, filter)}
+        busyTermIds={busyTermIds}
+        onUpdate={handleUpdate}
+        onDelete={handleDelete}
+        onError={setError}
+        emptyText={filter === 'all' ? '자주 틀리게 인식되는 이름이나 약어를 추가해 보세요.' : '해당하는 용어가 없습니다.'}
+      />
+
+      {legacyOnly.length > 0 && (
+        <div className="glass-panel rounded-xl p-4 text-sm text-slate-700 dark:text-text-secondary">
+          아래 이전 용어는 아직 옮기지 못해 편집할 수 없습니다. 겹침 표시된 용어를 삭제하면 사전을 다시 편집할 수 있습니다.
+          <ul className="mt-2 space-y-1">
+            {legacyOnly.map((t, i) => (
+              <li key={i} className="flex items-center gap-2">
+                <span>{t.displayAs || t.phrase || '(빈 표기)'}</span>
+                {isLegacyConflict(t, legacyTerms) && (
+                  <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-500/10 dark:text-amber-400">겹침</span>
+                )}
+                {t.phrase && (
+                  <button
+                    onClick={() => handleLegacyDelete(t)}
+                    disabled={busyTermIds.has(`legacy:${t.phrase}`)}
+                    className="px-2 py-1 text-xs font-medium rounded-lg hover:bg-slate-100 hover:text-red-500 dark:hover:bg-white/5 disabled:opacity-40"
+                  >삭제</button>
+                )}
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 
       {/* Add Term Form */}
       <div className="glass-panel rounded-xl p-5">
         <h4 className="text-sm font-semibold text-slate-900 dark:text-text-main mb-3">
-          Add Term
+          용어 추가
         </h4>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="block text-xs font-medium text-slate-500 dark:text-text-muted mb-1">
-              Phrase *
-            </label>
-            <input
-              type="text"
-              value={newPhrase}
-              onChange={(e) => setNewPhrase(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  handleAdd();
-                }
-              }}
-              placeholder="e.g. Kubernetes"
-              className="w-full px-3 py-2 text-sm bg-slate-100 dark:bg-surface-lowest dark:border dark:border-white/10 dark:text-text-main border-none rounded-lg focus:ring-2 focus:ring-primary/20 dark:placeholder:text-text-muted placeholder:text-slate-400"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-500 dark:text-text-muted mb-1">
-              Pronunciation
-            </label>
-            <input
-              type="text"
-              value={newSoundsLike}
-              onChange={(e) => setNewSoundsLike(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  handleAdd();
-                }
-              }}
-              placeholder="e.g. koo-ber-net-eez"
-              className="w-full px-3 py-2 text-sm bg-slate-100 dark:bg-surface-lowest dark:border dark:border-white/10 dark:text-text-main border-none rounded-lg focus:ring-2 focus:ring-primary/20 dark:placeholder:text-text-muted placeholder:text-slate-400"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-500 dark:text-text-muted mb-1">
-              Display As
+              표기 *
             </label>
             <input
               type="text"
@@ -388,37 +261,34 @@ export function CustomDictionary() {
               className="w-full px-3 py-2 text-sm bg-slate-100 dark:bg-surface-lowest dark:border dark:border-white/10 dark:text-text-main border-none rounded-lg focus:ring-2 focus:ring-primary/20 dark:placeholder:text-text-muted placeholder:text-slate-400"
             />
           </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 dark:text-text-muted mb-1">
+              인식된 표기 (쉼표로 구분)
+            </label>
+            <input
+              type="text"
+              value={newHeardAs}
+              onChange={(e) => setNewHeardAs(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handleAdd();
+                }
+              }}
+              placeholder="예: 쿠버네티스, 쿠베"
+              className="w-full px-3 py-2 text-sm bg-slate-100 dark:bg-surface-lowest dark:border dark:border-white/10 dark:text-text-main border-none rounded-lg focus:ring-2 focus:ring-primary/20 dark:placeholder:text-text-muted placeholder:text-slate-400"
+            />
+          </div>
         </div>
         <button
           onClick={handleAdd}
-          disabled={!newPhrase.trim()}
+          disabled={!newDisplayAs.trim() || busyTermIds.has('new')}
           className="mt-3 flex items-center gap-2 px-4 py-2 text-sm font-medium text-primary hover:bg-primary/10 rounded-lg transition-colors disabled:opacity-40"
         >
           <span className="material-symbols-outlined text-lg">add</span>
-          Add Term
+          추가
         </button>
       </div>
-
-      {/* Save Button */}
-      {dirty && (
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg font-semibold text-sm hover:bg-primary/90 disabled:opacity-50 transition-colors"
-        >
-          {saving ? (
-            <>
-              <span className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
-              Saving...
-            </>
-          ) : (
-            <>
-              <span className="material-symbols-outlined text-lg">save</span>
-              Save Dictionary
-            </>
-          )}
-        </button>
-      )}
     </div>
   );
 }
