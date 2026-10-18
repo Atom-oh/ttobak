@@ -105,3 +105,69 @@ func (r *DynamoDBRepository) putCurrentAccountInsights(ctx context.Context, insi
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}, noSummaryRetries)
 	return summaryWriteError(err)
 }
+
+// ClearAccountInsights removes an account's fanned-out rows after a validated
+// empty insight result. Each delete batch is conditioned on the captured meeting
+// (publication, account, generation, revision and the empty insights bytes), so
+// a stale run cannot delete rows that a newer nonempty publication fanned out.
+func (r *DynamoDBRepository) ClearAccountInsights(ctx context.Context, ownerID, meetingID, accountID, generation, revision string) error {
+	snapshot, err := r.CaptureSummaryPrivacy(ctx, ownerID, meetingID)
+	if err != nil {
+		return err
+	}
+	if snapshot == nil {
+		return ErrConditionFailed
+	}
+	meeting := snapshot.Meeting
+	if accountID == "" || !meeting.SharedToAccount || meeting.AccountID != accountID ||
+		meeting.SummaryGeneration() != generation || meeting.InsightsRevision != revision {
+		return ErrConditionFailed
+	}
+	if raw := strings.TrimSpace(meeting.Insights); raw != "" {
+		var canonical []model.MeetingInsight
+		if err := json.Unmarshal([]byte(raw), &canonical); err != nil || len(canonical) != 0 {
+			return ErrConditionFailed
+		}
+	}
+	prefix := model.PrefixInsight + meeting.Date.UTC().Format("2006-01-02T15:04:05Z07:00") + "#" + meetingID + "#"
+	query, err := expression.NewBuilder().WithKeyCondition(expression.Key("PK").Equal(expression.Value(model.PrefixAccount + accountID)).
+		And(expression.Key("SK").BeginsWith(prefix))).WithProjection(
+		expression.NamesList(expression.Name("PK"), expression.Name("SK"))).Build()
+	if err != nil {
+		return err
+	}
+	pages := dynamodb.NewQueryPaginator(r.client, &dynamodb.QueryInput{
+		TableName: aws.String(r.tableName), ConsistentRead: aws.Bool(true),
+		KeyConditionExpression: query.KeyCondition(), ProjectionExpression: query.Projection(),
+		ExpressionAttributeNames: query.Names(), ExpressionAttributeValues: query.Values(),
+	})
+	var deletes []types.TransactWriteItem
+	for pages.HasMorePages() {
+		page, err := pages.NextPage(ctx)
+		if err != nil {
+			return err
+		}
+		for _, existing := range page.Items {
+			deletes = append(deletes, types.TransactWriteItem{Delete: &types.Delete{
+				TableName: aws.String(r.tableName), Key: existing,
+			}})
+		}
+	}
+	for len(deletes) > 0 {
+		checks, err := r.summaryChecks(snapshot, 0)
+		if err != nil {
+			return err
+		}
+		n := min(len(deletes), 100-len(checks))
+		if n <= 0 {
+			return ErrSummaryLimit
+		}
+		_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+			TransactItems: append(checks, deletes[:n]...)}, noSummaryRetries)
+		if err != nil {
+			return summaryWriteError(err)
+		}
+		deletes = deletes[n:]
+	}
+	return nil
+}

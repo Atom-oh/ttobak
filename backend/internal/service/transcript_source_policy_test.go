@@ -204,7 +204,8 @@ func TestTranscriptSourcePolicy_NoAvailableTranscript(t *testing.T) {
 		t.Run(consumer.name, func(t *testing.T) {
 			request, result, writes, err := invokeNoteSourceFixture(t, meeting,
 				`{"content":[{"type":"text","text":"orphan metadata must not be used"}],"stop_reason":"end_turn"}`, consumer.invoke)
-			if (err != nil) != consumer.wantErr || result != "" || len(request.Messages) != 0 || writes != 0 {
+			noSource := consumer.name == "tags" || consumer.name == "sentiment"
+			if (err != nil) != (consumer.wantErr || noSource) || (noSource && !errors.Is(err, ErrNoAnalysisSource)) || result != "" || len(request.Messages) != 0 || writes != 0 {
 				t.Errorf("empty source used orphan metadata: result=%q err=%v request=%+v writes=%d", result, err, request, writes)
 			}
 		})

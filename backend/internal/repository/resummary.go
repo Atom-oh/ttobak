@@ -47,9 +47,25 @@ func (r *DynamoDBRepository) summaryRows(ctx context.Context, meetingID, prefix 
 // CaptureResummary performs metadata-only reads and records exact conditions
 // for the source plus current edit grant. No transcript S3 hydration occurs.
 func (r *DynamoDBRepository) CaptureResummary(ctx context.Context, ownerID, meetingID, requester string) (*model.SummarySnapshot, error) {
-	snapshot, err := r.captureMeetingSummaryMetadata(ctx, ownerID, meetingID, withSummaryClearanceFields(summaryMeetingFields))
+	fields := withSummaryClearanceFields(summaryMeetingFields)
+	if SummaryPrivacyWritesEnabled() {
+		fields = withSummaryPrivacyFields(fields)
+	}
+	snapshot, err := r.captureMeetingSummaryMetadata(ctx, ownerID, meetingID, fields)
 	if err != nil || snapshot == nil {
 		return nil, err
+	}
+	if SummaryPrivacyWritesEnabled() {
+		taskRow, err := r.summaryRow(ctx, model.PrefixMeeting+meetingID, model.ActionAnalysisSK)
+		if err != nil {
+			return nil, err
+		}
+		check, err := summaryCheck(model.PrefixMeeting+meetingID, model.ActionAnalysisSK, taskRow,
+			[]string{"runId", "status", "sourceHash", "summaryGeneration", "leaseUntil", "updatedAt"})
+		if err != nil {
+			return nil, err
+		}
+		snapshot.Checks = append(snapshot.Checks, check)
 	}
 	if requester != ownerID {
 		shareRow, err := r.summaryRow(ctx, model.PrefixUser+requester, model.PrefixShare+meetingID)
@@ -80,7 +96,8 @@ func (r *DynamoDBRepository) CaptureResummary(ctx context.Context, ownerID, meet
 			if len(member) == 0 {
 				return nil, ErrSummaryAccess
 			}
-			check, err := summaryCheck(model.PrefixAccount+meeting.AccountID, model.PrefixMember+requester, member, []string{"accountId", "userId"})
+			check, err := summaryCheck(model.PrefixAccount+meeting.AccountID, model.PrefixMember+requester, member,
+				[]string{"accountId", "userId", "addedAt", "summaryPrivacyVersion"})
 			if err != nil {
 				return nil, err
 			}
@@ -154,11 +171,18 @@ func (r *DynamoDBRepository) GetResummary(ctx context.Context, meetingID string)
 	return &state, nil
 }
 func summaryRunCondition(state *model.ResummaryState) expression.ConditionBuilder {
-	return analysisRunCondition(state.RunID, state.Status).
+	condition := analysisRunCondition(state.RunID, state.Status).
 		And(expression.Name("ownerId").Equal(expression.Value(state.OwnerID))).
 		And(expression.Name("requestedBy").Equal(expression.Value(state.RequestedBy))).
 		And(expression.Name("sourceHash").Equal(expression.Value(state.SourceHash))).
 		And(expression.Name("leaseUntil").Equal(expression.Value(state.LeaseUntil)))
+	if state.SharingSafe {
+		condition = condition.And(expression.Name("sharingSafe").Equal(expression.Value(true)))
+	} else {
+		condition = condition.And(expression.AttributeNotExists(expression.Name("sharingSafe")).Or(
+			expression.Name("sharingSafe").Equal(expression.Value(false))))
+	}
+	return condition
 }
 func (r *DynamoDBRepository) summaryChecks(snapshot *model.SummarySnapshot, start int) ([]types.TransactWriteItem, error) {
 	var items []types.TransactWriteItem
@@ -222,6 +246,7 @@ func (r *DynamoDBRepository) QueueResummary(ctx context.Context, snapshot *model
 		Set(expression.Name("status"), expression.Value(model.AnalysisQueued)).
 		Set(expression.Name("ownerId"), expression.Value(next.OwnerID)).
 		Set(expression.Name("requestedBy"), expression.Value(next.RequestedBy)).
+		Set(expression.Name("sharingSafe"), expression.Value(next.SharingSafe)).
 		Set(expression.Name("sourceHash"), expression.Value(next.SourceHash)).
 		Set(expression.Name("leaseUntil"), expression.Value(next.LeaseUntil)).
 		Set(expression.Name("updatedAt"), expression.Value(next.UpdatedAt)).
@@ -279,6 +304,19 @@ func (r *DynamoDBRepository) CompleteResummary(ctx context.Context, snapshot *mo
 	}
 	fields := map[string]interface{}{"content": content, "attachmentSummarySources": coverage, "status": model.StatusDone, "updatedAt": now.Format(time.RFC3339Nano),
 		"summaryRetryPending": false, "summaryConflictCode": ""}
+	if SummaryPrivacyWritesEnabled() {
+		if snapshot.SharingSafe != state.SharingSafe || (state.SharingSafe && state.RequestedBy != state.OwnerID) {
+			return ErrSummaryAccess
+		}
+		fields["summaryPrivacy"] = summaryPublicationPrivacy(snapshot, content)
+		if snapshot.SharingSafe {
+			continuity, err := summaryActionContinuity(snapshot.Meeting)
+			if err != nil {
+				return err
+			}
+			sharingSafeResetFields(fields, continuity)
+		}
+	}
 	stored := map[string]interface{}{}
 	for key, value := range snapshot.Stored {
 		stored[key] = value
@@ -325,7 +363,7 @@ func (r *DynamoDBRepository) CompleteResummary(ctx context.Context, snapshot *mo
 			update = update.Set(expression.Name(key), expression.Value(value))
 		}
 	}
-	update = invalidateSummaryClearance(update)
+	update = summaryContentRevisionUpdate(update, fields)
 	meeting, err := analysisUpdate(r.tableName, meetingKey(state.OwnerID, snapshot.Meeting.MeetingID), update, summaryCondition(snapshot.Checks[0]))
 	if err != nil {
 		return err
@@ -344,6 +382,27 @@ func (r *DynamoDBRepository) CompleteResummary(ctx context.Context, snapshot *mo
 		return err
 	}
 	items := append([]types.TransactWriteItem{{Update: meeting}, {Update: run}}, checks...)
+	if snapshot.SharingSafe && SummaryPrivacyWritesEnabled() {
+		found := false
+		for i := 2; i < len(items); i++ {
+			check := items[i].ConditionCheck
+			if sk, ok := summaryCheckSK(check); ok && sk == model.ActionAnalysisSK {
+				found = true
+				items[i] = types.TransactWriteItem{Delete: &types.Delete{
+					TableName: check.TableName, Key: check.Key, ConditionExpression: check.ConditionExpression,
+					ExpressionAttributeNames: check.ExpressionAttributeNames, ExpressionAttributeValues: check.ExpressionAttributeValues,
+				}}
+			}
+		}
+		if !found {
+			return ErrConditionFailed
+		}
+		// Go/Python run IDs reject late singleton recreation; new claims also
+		// fence canonical generation in PutSimRunIfNotRunning.
+		items = append(items, types.TransactWriteItem{Delete: &types.Delete{
+			TableName: aws.String(r.tableName), Key: simRunKey(snapshot.Meeting.MeetingID),
+		}})
+	}
 	if err := r.CheckResummaryObjects(ctx, snapshot.Meeting.MeetingID, snapshot.Objects); err != nil {
 		return errors.Join(ErrConditionFailed, err)
 	}
@@ -356,4 +415,15 @@ func (r *DynamoDBRepository) CompleteResummary(ctx context.Context, snapshot *mo
 func summaryKey(meetingID string) map[string]types.AttributeValue {
 	return map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
 		"SK": &types.AttributeValueMemberS{Value: model.ResummarySK}}
+}
+
+func summaryCheckSK(check *types.ConditionCheck) (string, bool) {
+	if check == nil {
+		return "", false
+	}
+	sk, ok := check.Key["SK"].(*types.AttributeValueMemberS)
+	if !ok {
+		return "", false
+	}
+	return sk.Value, true
 }

@@ -122,14 +122,27 @@ func (r *DynamoDBRepository) GetMeetingPublication(ctx context.Context, ownerID,
 }
 
 func (r *DynamoDBRepository) PutMember(ctx context.Context, member *model.AccountMember) error {
+	member = stampSummaryMembership(member)
 	item, err := attributevalue.MarshalMap(member)
 	if err != nil {
 		return fmt.Errorf("marshal member: %w", err)
 	}
-	if _, err := r.client.PutItem(ctx, &dynamodb.PutItemInput{
+	input := &dynamodb.PutItemInput{
 		TableName: aws.String(r.tableName),
 		Item:      item,
-	}); err != nil {
+	}
+	if SummaryPrivacyWritesEnabled() {
+		expr, err := expression.NewBuilder().WithCondition(expression.AttributeNotExists(expression.Name("PK"))).Build()
+		if err != nil {
+			return err
+		}
+		input.ConditionExpression, input.ExpressionAttributeNames = expr.Condition(), expr.Names()
+	}
+	if _, err := r.client.PutItem(ctx, input); err != nil {
+		var rejected *types.ConditionalCheckFailedException
+		if errors.As(err, &rejected) {
+			return ErrConditionFailed
+		}
 		return fmt.Errorf("put member: %w", err)
 	}
 	return nil
@@ -393,6 +406,9 @@ func (r *DynamoDBRepository) ListResearchRefsForAccount(ctx context.Context, acc
 func (r *DynamoDBRepository) PutAccountInsights(ctx context.Context, insights []model.AccountInsight) error {
 	if len(insights) == 0 {
 		return nil
+	}
+	if SummaryPrivacyWritesEnabled() || insights[0].SummaryGeneration != "" {
+		return r.putCurrentAccountInsights(ctx, insights)
 	}
 	pk := insights[0].PK
 	prefix := insights[0].SK

@@ -393,7 +393,11 @@ func handleSingleTranscript(ctx context.Context, bucket, key string, eventETags 
 	if err != nil || current == nil {
 		return err
 	}
-	return generateClaimedSummary(ctx, current, buildLinkedMeetingContext(ctx, current), false)
+	priorContext := ""
+	if !repository.SummaryPrivacyWritesEnabled() {
+		priorContext = buildLinkedMeetingContext(ctx, current)
+	}
+	return generateClaimedSummary(ctx, current, priorContext, false)
 }
 
 // handlePartTranscript increments the parts-ready counter and emits AllPartsTranscribed when all parts are done
@@ -543,7 +547,11 @@ func handleAllPartsTranscribed(ctx context.Context, detail *model.AllPartsTransc
 		log.Printf("Non-fatal: failed to archive merged transcript for meeting %s: %v", meetingID, archiveErr)
 	}
 
-	return generateClaimedSummary(ctx, current, buildLinkedMeetingContext(ctx, current), false)
+	priorContext := ""
+	if !repository.SummaryPrivacyWritesEnabled() {
+		priorContext = buildLinkedMeetingContext(ctx, current)
+	}
+	return generateClaimedSummary(ctx, current, priorContext, false)
 }
 
 // generateSummary runs the full Bedrock pipeline: summary, action items, tags, sentiment, KB export
@@ -620,55 +628,36 @@ func generateSummaryRun(ctx context.Context, meeting *model.Meeting, priorContex
 		log.Printf("Action item analysis could not finish: %v", err)
 	}
 
-	tags, err := bedrockService.ExtractTags(ctx, meetingID, userID)
-	if err != nil {
-		log.Printf("Failed to extract tags (non-fatal): %v", err)
-	} else if len(tags) > 0 {
-		if err := repo.UpdateMeetingFields(ctx, userID, meetingID, map[string]interface{}{
-			"tags": tags,
-		}); err != nil {
-			log.Printf("Failed to save tags: %v", err)
-		} else {
-			log.Printf("Extracted tags for meeting %s: %v", meetingID, tags)
+	for _, field := range []string{"tags", "sentiment", "insights"} {
+		if err := bedrockService.DeriveSummary(ctx, userID, meetingID, field); err != nil {
+			log.Printf("Failed to publish current %s (non-fatal): %v", field, err)
 		}
 	}
-
-	sentiment, err := bedrockService.ExtractSentiment(ctx, meetingID, userID)
+	// Copy saved insights; the transaction verifies canonical publication/generation/revision.
+	current, err := repo.MetadataView().GetMeeting(ctx, userID, meetingID)
 	if err != nil {
-		log.Printf("Failed to extract sentiment (non-fatal): %v", err)
-	} else if sentiment != "" {
-		if err := repo.UpdateMeetingFields(ctx, userID, meetingID, map[string]interface{}{
-			"sentiment": sentiment,
-		}); err != nil {
-			log.Printf("Failed to save sentiment: %v", err)
-		} else {
-			log.Printf("Extracted sentiment for meeting %s: %s", meetingID, sentiment)
-		}
-	}
-
-	insights, err := bedrockService.ExtractInsights(ctx, meetingID, userID)
-	if err != nil {
-		log.Printf("Failed to extract insights (non-fatal): %v", err)
-	} else if insights != "" && insights != "[]" {
-		if err := repo.UpdateMeetingFields(ctx, userID, meetingID, map[string]interface{}{
-			"insights": insights,
-		}); err != nil {
-			log.Printf("Failed to save insights: %v", err)
-		} else {
-			meeting.Insights = insights
-			// If already shared to an account, fan out now (covers share-before-summarize ordering).
-			if meeting.SharedToAccount && meeting.AccountID != "" {
-				if items, berr := service.BuildAccountInsights(meeting.AccountID, meeting); berr == nil && len(items) > 0 {
-					if perr := repo.PutAccountInsights(ctx, items); perr != nil {
-						log.Printf("Failed to fan out insights to account (non-fatal): %v", perr)
-					}
-				}
+		log.Printf("Failed to read current insights for fanout (non-fatal): %v", err)
+	} else if current != nil && current.SharedToAccount && current.AccountID != "" {
+		if items, err := service.BuildAccountInsights(current.AccountID, current); err != nil {
+			log.Printf("Failed to build account insights (non-fatal): %v", err)
+		} else if len(items) == 0 {
+			// A validated empty result must not leave the previous account copy readable.
+			if err := repo.ClearAccountInsights(ctx, userID, meetingID, current.AccountID,
+				current.SummaryGeneration(), current.InsightsRevision); err != nil {
+				log.Printf("Failed to clear stale account insights (non-fatal): %v", err)
 			}
+		} else if err := repo.PutAccountInsights(ctx, items); err != nil {
+			log.Printf("Failed to fan out current insights (non-fatal): %v", err)
 		}
 	}
-
 	// End of the post-summary analysis sequence: queue term extraction.
 	enqueueTerms(ctx, userID, meetingID, "summary")
+
+	if repository.SummaryPrivacyWritesEnabled() {
+		// Canonical stream/reconciliation owns immutable revision-checked exports.
+		// Drain legacy fixed objects; they can revive stale derivation after resets.
+		return nil
+	}
 
 	// KB Export: re-fetch meeting with all saved fields
 	updatedMeeting, err := repo.GetMeeting(ctx, userID, meetingID)

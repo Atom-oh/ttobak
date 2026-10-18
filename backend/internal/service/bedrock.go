@@ -307,16 +307,9 @@ const (
 // represented in the prompt -- only to people who can read the CURRENT
 // meeting's resulting summary.
 //
-// Mitigated at the call site: buildLinkedMeetingContext (cmd/summarize)
-// skips fetching linked content entirely -- via AnyNonOwnerShare below --
-// whenever this meeting has ANY non-owner collaborator, so priorContext
-// simply never carries cross-meeting content in a session where that
-// content could leak through this field. An owner-only meeting has no one
-// to exfiltrate to, so linking stays enabled there. This function itself
-// still can't tell a safe priorContext from an unsafe one -- the invariant
-// is enforced by the caller, not by FoldLiveSummary refusing anything -- so
-// a future priorContext source added without going through that same gate
-// would reopen this path.
+// Active writers bind parent ACL/publication/links and authorized predecessor
+// bytes, retain private ancestry and CAS-fence grant/source races. Legacy callers
+// keep buildLinkedMeetingContext's share gate. Formatting grants no authority or declassification.
 //
 // Write-time size is capped in UpdateMeeting; the rune cap here is a second
 // line for legacy oversized values.
@@ -741,6 +734,14 @@ func (s *BedrockService) summarizeTranscript(ctx context.Context, meetingID, use
 			return "", err
 		}
 		return meeting.Content, ErrSummaryHumanContentPreserved
+	}
+	if err := bindLinkedSummarySources(ctx, s.repo, snapshot); err != nil {
+		return "", err
+	}
+	if repository.SummaryPrivacyWritesEnabled() {
+		// Check claims/human content before predecessor/model evidence;
+		// legacy arguments grant no source authority.
+		priorContext = linkedSummaryContext(snapshot.LinkedSources)
 	}
 	conflict := func(cause error) (string, error) {
 		if !errors.Is(cause, repository.ErrConditionFailed) {
@@ -1997,7 +1998,7 @@ func parseMeetingInsights(raw string) ([]model.MeetingInsight, error) {
 }
 
 // ExtractInsights classifies a meeting into the 8 typed insights using Claude Haiku.
-// Retains its legacy JSON array contract ("[]" on parse failure).
+// ID calls propagate missing-source and invalid-output errors.
 func (s *BedrockService) ExtractInsights(ctx context.Context, meetingID string, userID ...string) (string, error) {
 	var meeting *model.Meeting
 	var err error
@@ -2012,13 +2013,20 @@ func (s *BedrockService) ExtractInsights(ctx context.Context, meetingID string, 
 	if meeting == nil {
 		return "", fmt.Errorf("meeting not found: %s", meetingID)
 	}
+	return s.ExtractInsightsForMeeting(ctx, meeting)
+}
+
+func (s *BedrockService) ExtractInsightsForMeeting(ctx context.Context, meeting *model.Meeting) (string, error) {
+	if meeting == nil {
+		return "", ErrNoAnalysisSource
+	}
 
 	source := meeting.Content
 	if source == "" {
 		source, _ = selectMeetingTranscript(meeting)
 	}
 	if source == "" {
-		return "[]", nil
+		return "", ErrNoAnalysisSource
 	}
 
 	systemPrompt := `회의 요약/트랜스크립트에서 영업·고객 인사이트를 추출해 분류하세요.
@@ -2068,13 +2076,17 @@ tsMarker는 입력에 정확한 [TS:NNN] 표식이 있을 때만 그대로 복�
 		return "", fmt.Errorf("failed to extract insights: %w", err)
 	}
 
+	var rawItems []model.MeetingInsight
+	if err := json.Unmarshal([]byte(stripCodeFences(response)), &rawItems); err != nil || rawItems == nil {
+		return "", ErrInvalidAnalysisResponse
+	}
 	items, err := parseMeetingInsights(response)
-	if err != nil {
-		return "[]", nil
+	if err != nil || len(items) != len(rawItems) {
+		return "", ErrInvalidAnalysisResponse
 	}
 	result, err := json.Marshal(items)
 	if err != nil {
-		return "[]", nil
+		return "", ErrInvalidAnalysisResponse
 	}
 	return string(result), nil
 }
@@ -2190,10 +2202,17 @@ func (s *BedrockService) ExtractTags(ctx context.Context, meetingID string, user
 	if meeting == nil {
 		return nil, fmt.Errorf("meeting not found: %s", meetingID)
 	}
+	return s.ExtractTagsForMeeting(ctx, meeting)
+}
+
+func (s *BedrockService) ExtractTagsForMeeting(ctx context.Context, meeting *model.Meeting) ([]string, error) {
+	if meeting == nil {
+		return nil, ErrNoAnalysisSource
+	}
 
 	transcript, _ := selectMeetingTranscript(meeting)
 	if transcript == "" {
-		return []string{}, nil
+		return nil, ErrNoAnalysisSource
 	}
 
 	systemPrompt := `You are an expert at categorizing meeting topics. Analyze the meeting transcript and extract 1-5 short tags that describe the main topics discussed.
@@ -2240,24 +2259,27 @@ Rules:
 
 	// Validate JSON response (strip code fences LLMs sometimes add)
 	response = stripCodeFences(response)
-	var tags []string
-	if err := json.Unmarshal([]byte(response), &tags); err != nil {
-		return []string{}, nil
+	var tags []*string
+	if err := json.Unmarshal([]byte(response), &tags); err != nil || tags == nil {
+		return nil, ErrInvalidAnalysisResponse
 	}
 
 	// Validate and normalize: max 5 tags, each max 30 chars, lowercase
 	var validated []string
 	for _, tag := range tags {
-		tag = strings.TrimSpace(strings.ToLower(tag))
-		if tag != "" && len(tag) <= 30 {
-			validated = append(validated, tag)
+		if tag == nil {
+			return nil, ErrInvalidAnalysisResponse
 		}
-		if len(validated) >= 5 {
-			break
+		value := strings.TrimSpace(strings.ToLower(*tag))
+		if value != "" && len(value) <= 30 && len(validated) < 5 {
+			validated = append(validated, value)
 		}
 	}
 
 	if len(validated) == 0 {
+		if len(tags) > 0 {
+			return nil, ErrInvalidAnalysisResponse
+		}
 		return []string{}, nil
 	}
 
@@ -2265,8 +2287,8 @@ Rules:
 }
 
 // ExtractSentiment classifies overall meeting tone using Claude Haiku.
-// Returns one of "positive" / "neutral" / "negative", or "" when the transcript
-// is missing or the model output cannot be classified.
+// Returns positive, neutral or negative, or an analysis error.
+// Missing source and invalid output return their sentinels.
 //
 // When userID is provided, uses a strongly-consistent base table read instead of GSI,
 // matching ExtractTags above.
@@ -2283,6 +2305,13 @@ func (s *BedrockService) ExtractSentiment(ctx context.Context, meetingID string,
 	}
 	if meeting == nil {
 		return "", fmt.Errorf("meeting not found: %s", meetingID)
+	}
+	return s.ExtractSentimentForMeeting(ctx, meeting)
+}
+
+func (s *BedrockService) ExtractSentimentForMeeting(ctx context.Context, meeting *model.Meeting) (string, error) {
+	if meeting == nil {
+		return "", ErrNoAnalysisSource
 	}
 
 	systemPrompt := `You classify the overall tone of a meeting.
@@ -2318,7 +2347,7 @@ Output the single word, lowercase, no punctuation, no quotes, no explanation.`
 		// Fallback path: summary not yet generated — use transcript directly.
 		transcript, _ := selectMeetingTranscript(meeting)
 		if transcript == "" {
-			return "", nil
+			return "", ErrNoAnalysisSource
 		}
 		userPrompt = fmt.Sprintf("Classify the overall tone of this meeting transcript:\n\n%s", transcript)
 		if segments := meetingTranscriptSegments(meeting, transcript); len(segments) > 0 {
@@ -2356,7 +2385,7 @@ Output the single word, lowercase, no punctuation, no quotes, no explanation.`
 	case "positive", "neutral", "negative":
 		return cleaned, nil
 	default:
-		return "", nil
+		return "", ErrInvalidAnalysisResponse
 	}
 }
 
