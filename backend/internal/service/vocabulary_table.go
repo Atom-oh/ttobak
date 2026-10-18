@@ -30,7 +30,6 @@ const (
 	koDottedAcronymsAccepted = false
 )
 
-func isASCIILetter(r rune) bool { return (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') }
 
 // TranscribePhrase is the minimal phrase derivation: NFKC, trimmed, and
 // space runs joined with "-" (Transcribe phrases cannot contain spaces).
