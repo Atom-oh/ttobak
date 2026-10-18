@@ -277,6 +277,12 @@ The user-scoped restriction changes the rendered source revision, so prior
 derived history cannot replay under the protected view. Account insight copies
 also bind current generation/revision and recheck before CompleteRead; omitted
 private insights carry an explicit restriction rather than an empty-evidence claim.
+Account public views and both model-facing formatters preserve this restriction,
+including in readonly fingerprints. Indexed meeting results retain the marker:
+withheld summary/task fields have `available=false`, the restriction reason and
+`partial=true`, without invented empty text or complete zero-character coverage.
+Permitted notes keep their normal coverage and detail continuation. A restriction
+does not become readable by following that continuation or constitute no tasks.
 `test_handler` loads `test_summary_privacy` and the account/source regression tests.
 
 Stamped memberships enforce this reader policy even in installation mode.

@@ -4,6 +4,7 @@ from decimal import Decimal
 import hashlib
 
 from source_revision import HEX_REVISION, IDENTIFIER
+from summary_privacy import RESTRICTION
 
 READONLY_TOOLS = frozenset(('list_meetings', 'list_accounts', 'get_account_insights', 'get_account_brief'))
 MAX_TOOL_DEPENDENCIES = 16
@@ -208,6 +209,8 @@ def _public_view(name, value):
     if name == 'list_accounts':
         return rows(value, ('accountId', 'name', 'role'))
     result = pick(value, ('account', 'accountId'))
+    if value.get('summaryReadRestriction') == RESTRICTION:
+        result['summaryReadRestriction'] = RESTRICTION
     if name == 'get_account_insights':
         result['insights'] = rows(value['insights'], ('insightId', 'type', 'text', 'occurredAt', 'entities'))
         return result

@@ -1,4 +1,5 @@
 import hashlib
+import json
 import unittest
 
 from summary_privacy import needs_summary_guard, project_meeting, safe_summary
@@ -91,6 +92,53 @@ class SummaryPrivacySourceTests(_SourceFixture, unittest.TestCase):
         self.assertEqual(len(raw), 1)
         self.assertIn('summaryReadRestriction', raw[0]['meeting'])
         self.assertNotIn('PRIVATE_PREDECESSOR_CANARY', str(raw))
+
+    def test_kb_tool_retains_restriction_and_distinguishes_withheld_from_empty_fields(self):
+        import tools
+        member = self.account_meeting()
+        candidate = self.indexed(sk='MEETING#meeting', filename='meeting.md', text='historical text')
+        member['summaryPrivacyVersion'] = 1
+        identity = resource_identity('USER#owner', 'MEETING#meeting')
+        rows = [{'uri': candidate['location']['s3Location']['uri'],
+                 'score': 0.9, 'metadata': candidate['metadata']}]
+        results = hydrate_candidates(self.source_reader, 'reader', 'raw note', rows,
+                                     {('USER#owner', 'MEETING#meeting'): identity}, 3)
+        self.assertEqual(len(results), 1)
+        # Even a malformed upstream projection must not publish withheld bytes.
+        results[0]['meeting'].update(content='PRIVATE_PREDECESSOR_CANARY',
+                                     actionItems='PRIVATE_TASK_CANARY')
+        text, sources = tools.execute_tool('search_knowledge_base', {'query': 'raw note'},
+                                          {'retrieve_from_kb': lambda *a, **kw: results})
+        snapshot = json.loads(text.split('\n')[-1])
+        self.assertEqual(snapshot['summaryReadRestriction'], 'SHARING_REGEN_REQUIRED')
+        self.assertEqual(snapshot['provenance'], results[0]['provenance'])
+        self.assertEqual(sources, [results[0]['uri']])
+        self.assertEqual(snapshot['notes']['text'], 'raw note')
+        self.assertFalse(snapshot['notes']['partial'])
+        self.assertIn('get_meeting_detail', text)
+        for field in ('content', 'actionItems'):
+            self.assertEqual(snapshot[field], {'available': False, 'reason': 'SHARING_REGEN_REQUIRED',
+                                               'partial': True})
+        self.assertNotIn('PRIVATE_PREDECESSOR_CANARY', text)
+        self.assertNotIn('PRIVATE_TASK_CANARY', text)
+        self.assertIn('발췌 또는 읽기 제한', text)
+        self.assertNotIn('partial=true는 일부 발췌입니다.', text)
+        self.s3.get_object.assert_not_called()
+        self.runtime.retrieve.assert_not_called()
+
+    def test_unrestricted_kb_empty_fields_keep_complete_empty_coverage(self):
+        import tools
+        result = {'uri': 'ttobak://source/synthetic', 'score': 0,
+                  'meeting': {'meetingId': 'meeting', 'updatedAt': None, 'notes': 'raw note'},
+                  'provenance': {'sourceRevision': 'a' * 64}}
+        text = tools.format_kb_results([result])
+        snapshot = json.loads(text.split('\n')[-1])
+        self.assertNotIn('summaryReadRestriction', snapshot)
+        for field in ('content', 'actionItems'):
+            self.assertEqual(snapshot[field], {'text': '', 'includedCharacters': 0,
+                                               'totalCharacters': 0, 'partial': False})
+        self.assertEqual(snapshot['notes']['text'], 'raw note')
+        self.assertNotIn('SHARING_REGEN_REQUIRED', text)
 
 
 if __name__ == '__main__':

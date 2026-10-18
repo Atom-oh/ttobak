@@ -7,6 +7,7 @@ import re
 
 from aws_docs import search_aws_docs, get_aws_recommendation
 from web_search import gateway_web_search, format_web_results
+from summary_privacy import RESTRICTION
 
 logger = logging.getLogger(__name__)
 
@@ -411,18 +412,30 @@ def format_accounts(accounts):
     return f"내 고객사 {len(accounts)}곳:\n\n" + "\n".join(lines)
 
 
+def _summary_restriction_notice(res):
+    if res.get('summaryReadRestriction') != RESTRICTION:
+        return ''
+    return ("공유 요약 기반 인사이트에 읽기 제한이 있습니다 "
+            f"(summaryReadRestriction: {RESTRICTION}). "
+            "읽기 제한으로 생략된 인사이트를 없다고 판단하지 마세요. "
+            "작성자가 공유 요약을 다시 생성해야 합니다.")
+
+
 def format_account_insights(res):
     """Format account insights grouped chronologically by type."""
     insights = res.get("insights", [])
     name = res.get("account", "")
+    notice = _summary_restriction_notice(res)
     if not insights:
-        return f"'{name}'에 해당 기간/유형의 인사이트가 없습니다."
+        return notice or f"'{name}'에 해당 기간/유형의 인사이트가 없습니다."
     lines = []
     for ins in insights:
         ent = f" [{', '.join(ins['entities'])}]" if ins.get("entities") else ""
         when = (ins.get("occurredAt", "") or "")[:10]
         lines.append(f"- ({ins.get('type', '')}{('/' + when) if when else ''}) {ins.get('text', '')}{ent}")
-    return f"'{name}' 인사이트 {len(insights)}건:\n\n" + "\n".join(lines)
+    label = '읽을 수 있는 인사이트' if notice else '인사이트'
+    rendered = f"'{name}' {label} {len(insights)}건:\n\n" + "\n".join(lines)
+    return notice + "\n\n" + rendered if notice else rendered
 
 
 def format_account_brief(res):
@@ -431,6 +444,9 @@ def format_account_brief(res):
     parts = [f"## {name} 브리프"]
     if res.get("industry"):
         parts.append(f"- 산업: {res['industry']}")
+    notice = _summary_restriction_notice(res)
+    if notice:
+        parts.append("\n" + notice)
     by_type = res.get("insightsByType", {})
     if by_type:
         parts.append("\n### 인사이트 (유형별)")
@@ -439,7 +455,7 @@ def format_account_brief(res):
             parts.append(f"\n**{t}** ({len(items)}건)")
             for ins in items:
                 parts.append(f"  - {ins.get('text', '')}")
-    else:
+    elif not notice:
         parts.append("\n인사이트 없음.")
     meetings = res.get("meetings", [])
     if meetings:

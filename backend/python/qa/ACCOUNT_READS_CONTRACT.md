@@ -103,5 +103,10 @@ When private/unknown insights are withheld, account insight/brief output contain
 `summaryReadRestriction: SHARING_REGEN_REQUIRED`. This is a restricted result,
 not proof of successful empty analysis. Owner and existing direct-meeting grants
 retain their separate access; an account membership does not inherit those grants.
+The known restriction survives ToolHistory's public projection and rendered-view
+fingerprint. Both account formatters explain withholding instead of reporting an
+ordinary empty result, while retaining any separately permitted insights and brief
+context. A marker-only change invalidates prior derived conversation in either
+direction; a stable restricted view may replay after current authorization checks.
 The installation/activation and remaining writer gates are documented in
 [the source contract](SOURCE_CONTRACT.md#staged-summary-privacy-scope).
