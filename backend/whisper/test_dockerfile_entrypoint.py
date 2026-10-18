@@ -111,10 +111,9 @@ class TestLegacyPinLockstep(unittest.TestCase):
         self.assertEqual(docker_rest, verified)
 
 
-
 class TestLegacyImageLogging(unittest.TestCase):
-    """The production image must flush stdout line by line: a block-buffered
-    worker killed mid-run left an empty log stream (ADR-031 amendment)."""
+    """The production image must run Python unbuffered: a block-buffered
+    worker killed mid-run left an empty log stream (ADR-009)."""
 
     def _legacy(self, name: str) -> list:
         with open(LEGACY_DOCKERFILE) as f:

@@ -30,7 +30,7 @@ Do not force a historic AZ list. Reused hosts require disk headroom and shortene
 stopped-task cleanup; do not remove those settings as arbitrary overprovisioning.
 
 Check that AZRebalance is still suspended and that no CDK drain hook exists
-(managed draining replaces it):
+(managed draining replaces it; ADR-009 host lifecycle amendment):
 
 ```bash
 aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names ttobak-whisper-asg \
@@ -40,8 +40,10 @@ aws autoscaling describe-lifecycle-hooks --auto-scaling-group-name ttobak-whispe
 
 `AZRebalance` must be listed. The only termination hook should be ECS's own
 `ecs-managed-draining-termination-hook`; a CDK `...DrainHook...` hook means the
-old InstanceDrainHook is back. A manual resume is
-drift; redeploy WhisperStack (idle cluster only) rather than editing it by hand.
+old InstanceDrainHook is back. A redeploy does not re-suspend after a manual resume
+(the custom resource has a constant physical ID), so an authorized operator
+re-suspends with `aws autoscaling suspend-processes --auto-scaling-group-name
+ttobak-whisper-asg --scaling-processes AZRebalance`.
 
 ## Scheduled STT recovery
 
@@ -132,8 +134,13 @@ the maintenance script requires an explicit meeting ID and previews by default:
 python3 scripts/whisper-rebatch.py <MEETING_ID>
 ```
 
-`--run` starts ECS work only for an `error`/`transcribing` meeting, after a
-conditional update on its observed status and `updatedAt`; it prints no titles. Do not fabricate an event with reserved `aws.s3` source via PutEvents or
+The scheduled `ttobak-stt-recovery` tick is the preferred automatic path for
+single-file meetings; the script is a manual fallback. It defaults to dry run and
+lists only error/transcribing meetings. `--run <MEETING_ID>` starts one ECS task;
+a bulk run needs `--run --all`; `--num-speakers` requires a single meeting ID. It
+claims each meeting with a conditional update, prints no titles, and starts a
+second task if one is still in flight, so check `list-tasks` first. Do not
+fabricate an event with reserved `aws.s3` source via PutEvents or
 blindly reset DynamoDB state. Preserve coherent ASR/pyannote image pins (ADR-035).
 
 For an operator-authorized saved-source recovery, `backend/cmd/resummary` defaults

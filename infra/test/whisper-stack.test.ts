@@ -222,7 +222,7 @@ describe('WhisperStack legacy task definition (ADR-035)', () => {
   });
 });
 
-describe('WhisperStack drain root-cause fix (ADR-031 amendment)', () => {
+describe('WhisperStack drain root-cause fix (ADR-009 host lifecycle amendment)', () => {
   test('uses ECS managed draining, so CDK adds no InstanceDrainHook', () => {
     const template = synth();
     template.resourceCountIs('AWS::AutoScaling::LifecycleHook', 0);
