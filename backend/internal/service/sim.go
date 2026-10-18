@@ -355,7 +355,7 @@ func nearestSegment(segments []speakerSegment, targetSeconds float64) *speakerSe
 			bestIdx = i
 		}
 	}
-	if bestIdx < 0 || bestDiff > maxAnchorSnapSeconds || targetSeconds > lastEnd {
+	if bestIdx < 0 || bestDiff > maxAnchorSnapSeconds || targetSeconds > lastEnd+anchorRoundingSlack {
 		return nil
 	}
 	return &segments[bestIdx]

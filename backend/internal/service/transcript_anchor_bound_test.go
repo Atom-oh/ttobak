@@ -56,7 +56,8 @@ func TestNearestSegmentDistanceBound(t *testing.T) {
 		{"nearest within bound", anchorBoundSegments, 21, "seg-b"},
 		{"inclusive bound", anchorBoundSegments, 8, "seg-a"},
 		{"outside bound is nil", anchorBoundSegments, 40, ""},
-		{"beyond last end is nil", anchorBoundSegments, 61.5, ""},
+		{"beyond last end is nil", anchorBoundSegments, 62, ""},
+		{"marker rounded up from the last end links", anchorBoundSegments, 61.5, "seg-c"},
 		{"at last end links", anchorBoundSegments, 61, "seg-c"},
 		{"untimed segment is skipped", []speakerSegment{
 			{ID: "untimed-1", Untimed: true},

@@ -185,6 +185,10 @@ type speakerSegment struct {
 // anything farther is treated as unresolvable rather than guessed (ADR-013).
 const maxAnchorSnapSeconds = 2.0
 
+// anchorRoundingSlack lets a marker rounded up from the last segment's end
+// (for example 59.6s emitted as 60) still resolve.
+const anchorRoundingSlack = 0.5
+
 // resolveTranscriptAnchors replaces `[TS:NNN]` markers Claude emitted in the
 // summary with proper markdown links pointing at the closest transcript
 // segment by start time. Per ADR-013 the protocol is `transcript://{segmentId}`;
