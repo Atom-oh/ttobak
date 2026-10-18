@@ -130,15 +130,17 @@ yet" note. Routes: [API-SPEC](../API-SPEC.md#personal-dictionary).
   oldest first, bounding the guessable-hash retention noted above. `termKey`
   stays unsalted: a salt in the same table does not stop a table reader, who can
   already read live terms and meetings.
-- **Vocabulary handoff** (historical; superseded by the A/B builder amendment
-  below, and the in-place rebuild code is removed). Recognition-affecting
-  manual changes kept the pre-v2 in-place rebuild of the derived name, recorded
-  in `VOCAB#personal#ko-KR` under its version guard; a row with an inactive slot
-  was left to the A/B builder. Before the builder, a later fix (#372) made each
-  attempt read that row before listing terms, recompute from a fresh snapshot on
-  a version conflict (three attempts, then a warning without a write), and skip
-  the update with a warning while Transcribe reported a pending build. The A/B
-  builder replaces that handling with its own claims and CAS.
+- **Vocabulary handoff** (historical: superseded by the A/B builder amendment
+  below, which removed this in-place rebuild). Recognition-affecting manual changes keep the pre-v2
+  in-place rebuild of the derived name, recorded in `VOCAB#personal#ko-KR`.
+  Each attempt reads that row before listing terms and writes only if its
+  version is unchanged, so any rebuild recorded since that read rejects the
+  stale write; a conflict recomputes from a fresh row and term listing (three
+  attempts, then a warning without a write). The Transcribe call precedes the
+  guarded write, so an exhausted or failed attempt can leave the provider ahead
+  of the record until the next change. While Transcribe reports a pending
+  build, the update is skipped with a warning and the next change rebuilds.
+  A row with an inactive slot is left to the A/B builder.
   When that row is missing (no legacy item ever existed), the rebuild creates
   it in a transaction whose ConditionCheck requires the legacy item to be
   absent or already migrated, so only migration creates it for an unmigrated
