@@ -640,7 +640,7 @@ func generateSummaryRun(ctx context.Context, meeting *model.Meeting, priorContex
 	} else if current != nil && current.SharedToAccount && current.AccountID != "" {
 		if items, err := service.BuildAccountInsights(current.AccountID, current); err != nil {
 			log.Printf("Failed to build account insights (non-fatal): %v", err)
-		} else if err := repo.PutAccountInsights(ctx, items); err != nil {
+		} else if err := repo.ReplaceMeetingAccountInsights(ctx, current, items); err != nil {
 			log.Printf("Failed to fan out current insights (non-fatal): %v", err)
 		}
 	}
