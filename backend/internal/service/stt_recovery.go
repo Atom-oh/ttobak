@@ -139,8 +139,9 @@ func SttRecoveryDeadline(row model.SttRecoveryRow, facts SttRecoveryFacts) time.
 // transcribing, updatedAt unless it is this tick's own summary re-drive claim
 // (that re-emits the transcript; it restarts nothing). A transcript older than this belongs to a superseded
 // run (for example a user rediarization still in progress) and must never be
-// re-published. It is truncated to whole seconds because S3 LastModified has
-// second precision while claims use RFC3339Nano.
+// re-published. It is not truncated: S3 LastModified has second precision, so
+// a transcript written in the same second as a restart compares as older and is
+// treated as superseded, which errs on the safe side.
 func SttPipelineRestartedAt(row model.SttRecoveryRow, facts SttRecoveryFacts) time.Time {
 	restart := facts.AudioModified
 	if facts.NewestAudioModified.After(restart) {
@@ -154,7 +155,7 @@ func SttPipelineRestartedAt(row model.SttRecoveryRow, facts SttRecoveryFacts) ti
 			restart = updated
 		}
 	}
-	return restart.Truncate(time.Second)
+	return restart
 }
 
 // ClassifySttRecovery is the pure candidate predicate. Order matters: every
@@ -221,9 +222,19 @@ func ClassifySttRecovery(row model.SttRecoveryRow, facts SttRecoveryFacts, now t
 	if row.SttRecoveryAudioKey == key {
 		attempts, summaryAttempts = row.SttRecoveryAttempts, row.SttSummaryRedriveAttempts
 	}
-	if facts.TranscriptFound && !facts.TranscriptModified.Before(SttPipelineRestartedAt(row, facts)) {
+	if model.IsRetryableSttFailure(row.SttFailureCode) && SttFailureMarkCurrent(row) {
+		if failed, ok := parseSttTime(row.SttFailedAt); ok && now.Before(failed.Add(SttRecoveryRetryDelay)) {
+			return skip("in_flight")
+		}
+	}
+	if facts.TranscriptFound && facts.TranscriptModified.After(SttPipelineRestartedAt(row, facts)) {
 		if now.Sub(facts.TranscriptModified) < SttSummaryRedriveMinAge {
 			return skip("transcript_fresh")
+		}
+		// An earlier re-drive may still be summarizing; give it the same window
+		// before spending another attempt on a duplicate run.
+		if claimed, ok := parseSttTime(row.SttSummaryRedriveClaimedAt); ok && now.Sub(claimed) < SttSummaryRedriveMinAge {
+			return skip("summary_redrive_in_flight")
 		}
 		if summaryAttempts >= model.MaxSttRecoveryAttempts {
 			return SttRecoveryDecision{Action: SttRecoveryReport, Reason: "summary_redrive_exhausted"}
