@@ -99,6 +99,18 @@ func TestClassifySttRecovery(t *testing.T) {
 			claim := sttNow.Add(-40 * time.Minute).Format(time.RFC3339Nano)
 			r.UpdatedAt, r.SttSummaryRedriveClaimedAt, r.SttSummaryRedriveAttempts, r.SttRecoveryAudioKey = claim, claim, 1, sttKey
 		}), sttFacts(transcriptAt(-2 * time.Hour)), SttRecoveryRedriveSummary, "transcript_unpublished", 2},
+		{"outstanding summary redrive claim is not reclaimed", sttRow(func(r *model.SttRecoveryRow) {
+			claim := sttNow.Add(-5 * time.Minute).Format(time.RFC3339Nano)
+			r.UpdatedAt, r.SttSummaryRedriveClaimedAt, r.SttSummaryRedriveAttempts, r.SttRecoveryAudioKey = claim, claim, 1, sttKey
+		}), sttFacts(transcriptAt(-2 * time.Hour)), SttRecoverySkip, "summary_redrive_in_flight", 0},
+		{"current REDRIVE_FAILED mark waits for its delay even with a transcript", sttRow(retryable(-5*time.Minute), func(r *model.SttRecoveryRow) {
+			r.SttFailureCode, r.SttSummaryRedriveAttempts, r.SttRecoveryAudioKey = model.SttFailureRedriveFailed, 1, sttKey
+		}), sttFacts(transcriptAt(-2 * time.Hour)), SttRecoverySkip, "in_flight", 0},
+		{"transcript stamped in the restart second is superseded", sttRow(func(r *model.SttRecoveryRow) { r.Status = model.StatusError }),
+			sttFacts(func(f *SttRecoveryFacts) {
+				f.TranscriptFound, f.TranscriptModified = true, sttNow.Add(-3*time.Hour).Truncate(time.Second)
+				f.NewestAudioModified = f.TranscriptModified.Add(400 * time.Millisecond)
+			}), SttRecoveryRedriveSTT, "stuck", 1},
 		{"released summary claim keeps the transcript", sttRow(retryable(-30*time.Minute), func(r *model.SttRecoveryRow) {
 			r.SttFailureCode, r.SttSummaryRedriveAttempts, r.SttRecoveryAudioKey = model.SttFailureRedriveFailed, 1, sttKey
 			r.SttSummaryRedriveClaimedAt = sttNow.Add(-31 * time.Minute).Format(time.RFC3339Nano)
