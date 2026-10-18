@@ -1,10 +1,11 @@
 # ADR-008: Per-User Dictionaries for Speech Recognition
 
-- Status: Accepted; phonetic TSV uploads and automatic suggestion ingestion remain
-  original plans, not current behavior.
+- Status: Accepted; phonetic TSV uploads remain an original plan, not current
+  behavior. Automatic term extraction ships off by default (`AUTO_TERMS_MODE=off`).
 - Decision date: Not recorded; original rationale references the 2026-04-23 STT evaluation.
-- Implementation checked: 2026-09-13; v2 storage, term CRUD and A/B vocabulary
-  builder amendments checked 2026-10-18.
+- Implementation checked: 2026-09-13; v2 storage, term CRUD, filter, terms
+  run-state/merge, extraction job and A/B vocabulary builder amendments checked
+  2026-10-18.
 
 ## Context and decision
 
@@ -24,7 +25,7 @@ and could not guarantee term recognition.
 - Authenticated settings routes support GET/PUT `/api/settings/dictionary` and
   DELETE `/api/settings/dictionary/term`.
 - Superseded for migrated users by the A/B builder amendment below (four-column
-  table file, ko-KR and en-US). Originally, and still for an unmigratable legacy
+  table file, ko-KR builds). Originally, and still for an unmigratable legacy
   item: `DictionaryService` creates/updates a Korean Transcribe vocabulary using the
   **`Phrases` list**. It does not upload the proposed four-column TSV, send
   `soundsLike`/`displayAs` mappings to Transcribe, or merge system base terms into
@@ -98,7 +99,8 @@ Migration now has callers; this replaces the previous amendment's "no caller
 yet" note. Routes: [API-SPEC](../API-SPEC.md#personal-dictionary).
 
 - **Validator.** `ValidateTermInput` applies to manual terms and the legacy PUT
-  now, and to automatic terms when extraction lands; its blocklist is a seed.
+  now, and to automatic terms when extraction lands; its blocklist is a seed
+  (grown by the automatic-term filters amendment below).
 - **User actions.** Delete tombstones any origin. Edit sets `userEditedAt` under
   the caller's `version` and keeps `origin`; keep is `aliasMode=always`;
   accepting a suggestion sets `state=active`. Renaming to another key is a new
@@ -110,7 +112,15 @@ yet" note. Routes: [API-SPEC](../API-SPEC.md#personal-dictionary).
   (possibly phrase-less) in legacy `terms`, so the PUT passes entries keyed to
   automatic or suggested rows through without validation, counts only manual
   entries toward the cap, and warns when it ignores a change to one; a GET
-  round-trip always saves. Legacy DELETE removes manual rows.
+  round-trip always saves. A legacy-empty `displayAs` is shown only while the
+  phrase still derives the term's key, so a v2 phrase edit does not make the
+  round trip replace the row. Legacy DELETE removes manual rows.
+- **Legacy PUT limits.** Reconciliation is per row, not one transaction; row
+  writes are version-conditioned and a retry converges. The whole list is last
+  writer wins: manual rows created after the client's GET, including by an
+  overlapping PUT, are deleted without a conflict. Fencing the legacy item
+  write on its observed `blobRevision` would serialize overlapping PUTs; it is
+  not implemented.
 - **Migration callers.** v2 writes and the legacy PUT migrate first; the API GET
   migrates best effort. The shared transcribe reader never writes. An
   unmigratable item blocks v2 writes (`LEGACY_DICTIONARY_CONFLICT`) and keeps the
@@ -120,10 +130,17 @@ yet" note. Routes: [API-SPEC](../API-SPEC.md#personal-dictionary).
   oldest first, bounding the guessable-hash retention noted above. `termKey`
   stays unsalted: a salt in the same table does not stop a table reader, who can
   already read live terms and meetings.
-- **Vocabulary handoff** (superseded by the A/B builder amendment below).
-  Recognition-affecting manual changes kept the pre-v2
-  in-place rebuild of the derived name, recorded in `VOCAB#personal#ko-KR` under
-  its version guard; a row with an inactive slot is left to the A/B builder.
+- **Vocabulary handoff** (historical: superseded by the A/B builder amendment
+  below, which removed this in-place rebuild). Recognition-affecting manual changes keep the pre-v2
+  in-place rebuild of the derived name, recorded in `VOCAB#personal#ko-KR`.
+  Each attempt reads that row before listing terms and writes only if its
+  version is unchanged, so any rebuild recorded since that read rejects the
+  stale write; a conflict recomputes from a fresh row and term listing (three
+  attempts, then a warning without a write). The Transcribe call precedes the
+  guarded write, so an exhausted or failed attempt can leave the provider ahead
+  of the record until the next change. While Transcribe reports a pending
+  build, the update is skipped with a warning and the next change rebuilds.
+  A row with an inactive slot is left to the A/B builder.
   When that row is missing (no legacy item ever existed), the rebuild creates
   it in a transaction whose ConditionCheck requires the legacy item to be
   absent or already migrated, so only migration creates it for an unmigrated
@@ -141,6 +158,146 @@ yet" note. Routes: [API-SPEC](../API-SPEC.md#personal-dictionary).
   older API would also read the legacy item's retained manual copies, including
   terms since deleted through v2.
 
+## Amendment 2026-10-18: automatic-term filters
+
+`FilterCandidates` in `service/terms_filter.go` is pure; the extraction job
+below calls it. A candidate failing a rule is dropped alone,
+and the per-rule drop counts (`TermFilterCounts`) hold numbers only, never text.
+Rules, in order:
+
+- **Confidence** at least the configured minimum (default 0.85; values outside
+  (0, 1] use the default).
+- **Blocklist.** The embedded `terms_blocklist.txt` (common Korean and English
+  meeting and function words plus fillers, about 550 entries) is matched on an
+  automatic candidate's term key and on every heardAs. For manual terms,
+  `ValidateTermInput` rejects a blocklisted heardAs, but the manual display form
+  is not blocklisted, because typing it is an explicit user act.
+- **Shape.** `ValidateTermInput`, then: no digits-only or punctuation-only
+  terms, dates or times (month names count only as whole names or
+  abbreviations, so `JUnit 5` is kept and `Oct 18` is not), emails, URLs with a
+  scheme or `www.`, all-lowercase bare domains (`ttobak.com`; `ASP.NET` and
+  `Socket.IO` are kept), runs of 7 or more digits (phone- or card-like), or more
+  than 6 words. Hangul-only terms need 2 syllables; Latin-only terms need 2
+  letters, and 3 unless all capitals.
+- **Grounding** after NFKC, lowercase and removal of the term-key separators,
+  with word boundaries for term matches: a match may not extend a Latin/digit
+  run (so `EKS` does not match `weeks`), and a Hangul match may not continue a
+  preceding Hangul syllable but may carry particles. At least one quote; every
+  quote is a substring of its named source (transcript, notes or an identified
+  document) and contains the term or a heardAs at boundaries judged in that
+  source, so a quote cut from inside a longer word does not count; every heardAs
+  occurs in the transcript; the display form occurs in notes or a document, or
+  twice in the transcript; notes-only terms must also occur in the transcript.
+  Source types come from where the term occurs, not from the model's labels.
+- **Transcribe phrase.** A model phrase is used only when it has the same term
+  key and passes the AWS phrase validator; otherwise `deriveTranscribePhrase`
+  joins words and camelCase or script boundaries with `-` and dots every 2-6
+  capital segment, whether a camelCase run or a standalone word (`DynamoDB` ->
+  `Dynamo-D.B.`, `EKS` -> `E.K.S.`, `Amazon EKS` -> `Amazon-E.K.S.`; an
+  all-caps word such as `NASA` is also spelled out). If the dotted form fails
+  validation, the undotted join is tried. The validator enforces ko-KR `[A-Za-z\-.]` plus Hangul syllables
+  (U+AC00-U+D7A3), en-US `[A-Za-z'\-.]`, no digits, at most 256 characters, no leading `.`/`'`/`-`, no trailing `'`/`-`, no
+  `--`/`..`, and periods only after single letters. Hangul-containing terms are
+  ko only; Latin-only terms are ko and en; other scripts get no phrase. Dotted
+  acronyms keep `TranscribeKo=false` until a live ko-KR build records that
+  Transcribe accepts them. A term without a phrase is still kept.
+- **Duplicates** by term key keep the best-ranked candidate.
+- **Cap.** At most 15 terms per run, ranked by confidence, then source-type count.
+
+## Amendment 2026-10-18: terms run state and merge rules
+
+Storage and merge code for automatic terms; the extraction job amendment below
+is its caller.
+
+- **Run state** `MEETING#{mid}/ANALYSIS#terms` (`model.TermsAnalysis`) follows the
+  action-items CAS: `runId`, `status` queued|running|succeeded|failed,
+  `sourceHash`, `summaryGeneration`, `leaseUntil` (ms), an enum `errorCode`
+  (shared analysis codes plus `DISABLED` and `TAINTED_SUGGEST_ONLY`), counters
+  and `acceptedTerms`. Queue requires the observed prior run/status/lease (an
+  expired lease when pending) and a `sourceHash` different from
+  `succeededSourceHash`, which only Complete sets. Queue, Start and RenewLease
+  carry a ConditionCheck that the owner's meeting exists and is done; Complete
+  matches run and lease and checks that the meeting exists; Fail is one
+  conditional update of the observed run, run by the caller with a detached
+  3-second context. The row stores hashes, enums and counts, never term text.
+- **acceptedTerms** holds at most 40 `{termKey, sourceTypes}` entries (32-hex
+  keys, `transcript|notes|document`). It lists every term this meeting has an
+  observation for and only grows, because the planned deletion cleanup
+  (design A8) can find a meeting's `DICTOBS#` rows only through it. The merger
+  writes a new key only while the list has room, checked per candidate so
+  skipped candidates take no slot, and returns the list even on failure so
+  Fail can record it. Deletion cleanup is in the extraction job amendment.
+- **Merge** (`TermsMerger.MergeExtractedTerms`, owner's personal scope only):
+  no row creates an auto term with hits 1 (`suggested` when the meeting is
+  tainted); tombstones, manual rows, rows with `userEditedAt` and unknown
+  states are skipped; an untainted run promotes a suggestion to `active` with
+  a version-CAS transaction that also records the observation
+  (`PromoteSuggestedTerm`) and merges into an active auto term
+  (`MergeAutoObservation`, which now also unions `sourceTypes`). Promotion
+  replaces the suggestion's heardAs, sourceTypes, displayAs, phrase, type,
+  confidence and recognition flags with the untainted run's values and sets
+  `hits` to 1, so nothing a non-owner planted becomes active or counts toward
+  `hits >= 2`. Tainted observations carry `tainted: true`. A tainted run never
+  reinforces an existing term. An alias whose key equals its own
+  term or another active or candidate term is dropped; heardAs stays at most
+  five. A version conflict or a `TransactionConflict` cancellation
+  (`ErrDictTransactionConflict`) re-reads and retries, three attempts in
+  total; an existing observation is a no-op, and a meeting whose
+  acceptedTerms already lists the key (its observation was pruned) records the
+  observation again without a hit, so re-running a meeting keeps `hits`. A
+  meeting whose earlier write failed ambiguously is also listed and so may be
+  undercounted, never double-counted. A
+  leftover observation without a term (failed eviction cleanup) is deleted
+  before the create is retried.
+- **Caps.** Unedited automatic terms (active or suggested) are capped at 300 per
+  scope; `EvictAutoTerm` (now also accepting `suggested`) removes the lowest
+  `hits*2 + (lastSeen within 30 days ? 1 : 0)` first, oldest `lastSeenAt` on
+  ties. When its version and `userEditedAt` guards fail, the row is re-read: a
+  row now gone, edited or tombstoned reduces the excess (a concurrent merge
+  may already have evicted it), and only a still-evictable newer row moves on
+  to the next candidate. Each term keeps its ten newest observations; `hits` is never
+  decremented. Cleanup failures are surfaced. Account scope is not implemented; the
+  manual 500-term cap and tombstone pruning belong to the term CRUD amendment.
+
+## Amendment 2026-10-18: extraction job (off by default)
+
+- **Provenance.** A non-owner write that changes content, transcriptA/B, the
+  selected transcript, saved notes (including the `expectedNotes`
+  compare-and-set path, marked before its write) or liveSummary sets sticky
+  `sourceEditedByNonOwnerAt`; notes and liveSummary feed the AI notes the job
+  reads (`TestSourceWriterAllowlist` classifies every writer). Attachments need
+  no marker: upload completion is owner-only. Tainted runs only suggest
+  (`TAINTED_SUGGEST_ONLY`); only owner-uploaded documents are direct evidence.
+- **Job.** `TermsAnalysisService.Enqueue` is `DISABLED` unless
+  `AUTO_TERMS_MODE=personal` and `AUTO_TERMS_USERS` is empty or lists the owner,
+  skips an unchanged `sourceHash` and publishes `TermsRequested` (triggers: end
+  of summarize analyses, preserved human content, re-summary; non-fatal). The
+  summarize dispatch runs it within min(300 s, deadline-30 s): at most three
+  90 s calls (Sonnet default, 3000 tokens, thinking off, strict JSON), then the
+  filters, `MigrateLegacyDictionary` for the owner and the merger. As for manual
+  v2 writes, migration runs first and a failure fails the run before any key is
+  reserved or row written, so an automatic row never claims an observed
+  unmigrated blob term's key; a blob first created by a legacy PUT during the
+  run is the same window manual writes have. Keys are reserved in
+  `acceptedTerms` before observation writes, which check that the meeting exists. An Enqueue during a live run is
+  `PENDING` and records nothing, so a run failing `SOURCE_CHANGED`, and every
+  successful run, calls Enqueue again for the current source.
+- **Deletion.** `SweepMeetingTerms` follows `DeleteMeeting`: it deletes the
+  meeting's `DICTOBS#` rows, unedited auto terms left without observations
+  (the term version is read before the observation count, so a concurrent
+  observation fails the version-guarded delete) and then the run state, which
+  records `ownerId`; only that owner is swept. A failed sweep keeps the state
+  and surfaces the error; the owner's retried DELETE of the gone meeting re-runs
+  it before returning 404, and a failed owner lookup is returned for retry.
+  There is no scheduled reconciliation, so an un-retried failure leaves the rows.
+  STT-failed deletions skip the sweep (they never reach `done` or queue a run).
+- **Infrastructure.** GatewayStack routes `TermsRequested` to summarize with a
+  DLQ and alarm, and renders `AUTO_TERMS_*`/`BEDROCK_TERMS_MODEL_ID` from
+  validated CDK context, `AUTO_TERMS_MODE=off` by default
+  ([INFRA-SPEC](../INFRA-SPEC.md#automatic-term-extraction-delivery)). Enabling
+  `personal` is a separate, explicit context change made after a deployment with
+  `off`; synth is not deployment.
+
 ## Amendment 2026-10-18: A/B vocabulary builder
 
 `EnsureVocabularies` ([vocabulary_build.go](../../backend/internal/service/vocabulary_build.go))
@@ -148,58 +305,88 @@ replaces the in-place rebuild. Only the API Lambda enables it; the shared
 readers never build. Callers and response: [API-SPEC](../API-SPEC.md#personal-dictionary).
 
 - **Never in place.** `VOCAB#personal#{lang}` has `ActiveName`/`InactiveName`.
-  Builds target the inactive slot; a later call flips both by version CAS only
-  on READY. Consumers use `ActiveName` only while `activeReady`. FAILED keeps it.
+  Builds target the inactive slot; a later call flips both by version and
+  fingerprint CAS only on READY. FAILED keeps the active slot.
+- **Languages.** Only ko-KR is built. en-US builds are deferred until a consumer
+  exists (batch uses ko-KR only; no response names a vocabulary for live
+  streams); the en-US table rules below stay, unused, and `vocabularies.en`
+  reports `NONE`.
 - **Table.** Active phrase terms, manual first, then hits, then oldest, deduped
-  by phrase; `vocab/{InactiveName}.tsv` with header
+  by phrase; `vocab/{InactiveName}.{fingerprint}.tsv` (a stale submitter
+  writes its own key, never a different table; unlike ADR-037 keys it is not
+  attempt-unique, so retries of one table share it) with header
   `Phrase\tSoundsLike\tIPA\tDisplayAs`, four fields per row, at most 1,500 rows
   and 48 KB; invalid rows are dropped individually. The phrase validator is
-  minimal (spaces become `-`, AWS table rules); `deriveTranscribePhrase` is not
-  in this branch. ko-KR drops dotted acronyms until acceptance item 2. en-US
+  minimal (spaces become `-`, AWS table rules), separate from `terms_filter.go`.
+  ko-KR drops dotted acronyms until acceptance item 2. en-US
   needs five Latin-only phrases. The file is deleted after READY, FAILED or quota.
-- **Claims** need a changed fingerprint, no build younger than 30 minutes, and
+- **Plan.** Every state-machine step reads the VOCAB# row and only then lists
+  the terms, so a step never acts on a listing older than the row it read; a
+  term deleted by a concurrent write is never built back in.
+- **Claims** need a changed fingerprint, no claimed build, and
   `VOCAB_REBUILD_MIN_INTERVAL` (default 10m) since the last flip or build start;
   each manual write grants one bypass (kept as `bypassPending` during a build).
-  A FAILED table is retried only after a change or a manual write.
+  A FAILED table is retried only after a change or a manual write. A claimed
+  build is resumed or polled whatever its age; it is never reclaimed or deleted
+  without its provider state.
+- **Submit.** After writing the table file, a submit claim CAS (version,
+  `buildingFingerprint`) sets `buildSubmitted` and `submittedAt`; only the
+  winner calls Transcribe. A poll accepts READY or FAILED only when the
+  provider's `LastModifiedTime` is at or after `submittedAt` (5 s tolerance);
+  an older result (a reused slot whose submission never ran) or a missing name
+  resubmits.
 - **Errors.** `GetVocabulary` first; NotFound or the unknown-name BadRequest
   creates (a wrong guess fails safely with ConflictException), else update with
-  `VocabularyFileUri`. Conflict keeps the claim; LimitExceeded is
-  `QUOTA_EXCEEDED`; other BadRequest is FAILED. Classified by error code.
+  `VocabularyFileUri`. Conflict releases the submit claim for a later retry;
+  LimitExceeded is `QUOTA_EXCEEDED`; other BadRequest is FAILED; an ambiguous
+  error keeps the claim for the poll to verify. Classified by error code.
 - **Slots.** New names are `ttobak-vocab-{16 random hex}`. The demoted slot stays
-  inactive for 24 h after a flip (rebuildable in place, never advertised), then
-  is retired and deleted with retries: one vocabulary per language at rest, two
-  at peak. The derived legacy name is retired at its first flip (never rebuilt)
-  and deleted 24 h after the latest flip, so the next build takes a fresh name
-  at once (three names at peak until then). A failed poll is a `warnings` entry.
-- **Batch** uses `ActiveName` while `activeReady`; a pre-A/B in-place build
-  (no fingerprint) is still confirmed with Transcribe, as before.
-- **No vocabulary name in responses** (the design added `vocabularyName`): the
-  existing live client would send it as `VocabularyNames` on an
-  `IdentifyMultipleLanguages` ko-KR/en-US stream, and a stream whose identified
-  language matches no listed vocabulary may fail. It waits for item 5 and the
-  live-config client.
-- **Empty language** stops advertising at once and is deleted after 24 h (the
-  design deferred both), so removed terms stop biasing recognition.
-- **Not covered:** batch en-US `LanguageIdSettings` (batch uses ko-KR only),
+  inactive for 24 h after a flip (rebuildable in place, never advertised).
+  Retirement and deletion run only inside `EnsureVocabularies`, on the user's
+  next dictionary GET or write after the grace window (the GET each recording
+  start makes counts); there is no scheduled reclamation. Resting count per
+  user is therefore one ko-KR name after a first build, two after any later
+  flip until such a request, and up to three for a migrated legacy user (the
+  retired derived name waits for 24 h after the latest flip). Base used one.
+  A failed poll is a `warnings` entry.
+- **Flip opportunities.** Legacy `status` is `PENDING` while a build is in
+  flight, even over a READY active slot, so the shipped settings UI keeps
+  polling the GET, which flips. Each recording start also calls the GET.
+- **Batch** reads only: a submitted build verified READY (as in Submit) is used
+  before any flip, else `ActiveName` while `activeReady`; a pre-A/B in-place
+  build (no fingerprint) is still confirmed with Transcribe, as before, and no
+  A/B build is claimed until its result is recorded. A migration retry leaves
+  a row with A/B fields to the builder. Live streams receive no vocabulary
+  name (below).
+- **No vocabulary name in responses:** the live client would send it on a
+  ko-KR/en-US multi-language stream, which may fail; it waits for item 5.
+- **Empty language** stops advertising at once (`activeReady` false,
+  `emptySince` set), also while a build is claimed or submitted: the claim is
+  dropped and its provider result is never flipped or served. Both slots are
+  deleted after 24 h as in Slots.
+- **Not covered:** en-US builds, batch en-US `LanguageIdSettings`, scheduled
+  reclamation of inactive or retired names,
   account contexts, live-config, client stream retry, and GatewayStack wiring
   of `VOCAB_REBUILD_MIN_INTERVAL`. An unmigratable legacy item keeps the pre-v2
   `Phrases` rebuild.
 
 ## Amendment 2026-10-18: settings UI v2 and live vocabulary client
 
-- **Live-config** returns personal ko-KR/en-US names only when READY (ko-KR keeps
-  the batch legacy fallback). The client sends one name per `LanguageOptions`
-  language, so ko-KR alone when en-US is not ready. Until item 5, a vocabulary
-  BadRequest before the first event retries once without vocabulary and any
-  vocabulary rejection drops it for the recording; a mid-stream rejection still
-  costs one reconnect. Item 4's identity-pool limit is unchanged.
-- Supersedes the A/B amendment's "no vocabulary name" wait for live-config.
-  Not covered: source meeting titles, account dictionaries, live aliases, backfill.
+- **No live name.** The A/B amendment's wait for item 5 stands: there is no
+  live-config route and no response names a vocabulary, so the recording page
+  only calls the dictionary GET (a flip opportunity) and live streams send none.
+- **Client plumbing.** `liveVocabulary.ts` sends one name per `LanguageOptions`
+  language when given names; with one, a vocabulary BadRequest before the first
+  event retries once without it and any vocabulary rejection drops it for the
+  recording. Without names it adds no request fields and never retries.
+- Not covered: live-config, source meeting titles, account dictionaries, live
+  aliases, backfill.
 
 Rollout acceptance (record each with a date):
 
-1. Vocabulary quota usage (default 100 per account; two per language per user at peak).
-2. A live Create from the four-column file reaches READY for ko-KR and en-US;
+1. Vocabulary quota usage (default 100 per account; up to three ko-KR names per
+   user at rest, as in Slots).
+2. A live Create from the four-column file reaches READY for ko-KR;
    whether ko-KR accepts dotted acronyms and the `DisplayAs` characters used.
 3. Whether deleting or updating a vocabulary affects an active stream or job.
 4. Whether `StartStreamTranscriptionWebSocket` has a vocabulary resource type
@@ -207,6 +394,8 @@ Rollout acceptance (record each with a date):
    vocabulary name bias their own stream; random names reduce that risk.
 5. Whether a multi-language stream with ko-KR-only or ko-KR plus en-US
    `VocabularyNames` survives en-US speech.
+6. That `GetVocabulary` `LastModifiedTime` advances on each accepted Create
+   and Update, which the submit verification relies on.
 
 ## Consequences and risks
 
@@ -226,6 +415,14 @@ concerns. This feature does not remove the need to review transcripts.
 - [dictionary_terms.go](../../backend/internal/service/dictionary_terms.go) and
   [dictionary_validate.go](../../backend/internal/service/dictionary_validate.go):
   term CRUD, legacy semantics and the shared validator; tests beside each.
+- [terms_analysis.go](../../backend/internal/service/terms_analysis.go) and
+  [terms_extract.go](../../backend/internal/service/terms_extract.go): extraction job;
+  [meeting_source_taint_test.go](../../backend/internal/service/meeting_source_taint_test.go):
+  `TestSourceWriterAllowlist`.
+- [terms_analysis.go](../../backend/internal/model/terms_analysis.go),
+  [repository terms_analysis.go](../../backend/internal/repository/terms_analysis.go)
+  and [terms_merge.go](../../backend/internal/service/terms_merge.go): run state,
+  CAS transitions and merge rules; tests beside each.
 - [dictionary.go](../../backend/internal/service/dictionary.go): legacy naming,
   status, and the unmigratable-item phrase-only build;
   [vocabulary_build.go](../../backend/internal/service/vocabulary_build.go): A/B
@@ -236,8 +433,7 @@ concerns. This feature does not remove the need to review transcripts.
 - [transcribe.go](../../backend/internal/service/transcribe.go),
   [main.go](../../backend/cmd/transcribe/main.go),
   [transcribe.py](../../backend/whisper/transcribe.py): vocabulary consumers.
-- [CustomDictionary.tsx](../../frontend/src/components/CustomDictionary.tsx),
-  [liveVocabulary.ts](../../frontend/src/lib/liveVocabulary.ts) and
-  [dictionary_live.go](../../backend/internal/service/dictionary_live.go): UI and
-  live vocabulary; tests in `frontend/scripts/` and beside the Go service.
+- [CustomDictionary.tsx](../../frontend/src/components/CustomDictionary.tsx) and
+  [liveVocabulary.ts](../../frontend/src/lib/liveVocabulary.ts): UI and live
+  vocabulary plumbing; tests in `frontend/scripts/`.
 - [main.go](../../backend/cmd/api/main.go): registered settings routes.

@@ -64,6 +64,63 @@ export interface GatewayStackProps extends cdk.StackProps {
   simCodeInterpreterId?: string;
 }
 
+/**
+ * Reads a non-negative integer limit from CDK context and renders it as a
+ * Lambda env string. A context value changes the function configuration, so
+ * the live alias publishes a new version; invalid values fail synth.
+ */
+export function rateLimitContext(scope: Construct, key: string, defaultValue: number): string {
+  const raw = scope.node.tryGetContext(key);
+  if (raw === undefined || raw === null || raw === '') return String(defaultValue);
+  const text = String(raw).trim();
+  if (!/^\d{1,9}$/.test(text)) {
+    throw new Error(`${key} must be a non-negative integer (0 disables the limit), got ${JSON.stringify(raw)}`);
+  }
+  return String(Number(text));
+}
+
+/** Reads an integer millisecond context value within [min, max]. */
+export function millisecondsContext(scope: Construct, key: string, defaultValue: number, min: number, max: number): string {
+  const raw = scope.node.tryGetContext(key);
+  if (raw === undefined || raw === null || raw === '') return String(defaultValue);
+  const text = String(raw).trim();
+  const value = Number(text);
+  if (!/^\d{1,9}$/.test(text) || value < min || value > max) {
+    throw new Error(`${key} must be an integer from ${min} to ${max} milliseconds, got ${JSON.stringify(raw)}`);
+  }
+  return String(value);
+}
+
+/**
+ * Automatic term extraction flags for the summarize Lambda (design A2.4).
+ * Every value is CDK context rendered into env, defaulting to off; invalid
+ * values fail synth. The model must be a Claude ID, which the summarize
+ * role's existing Bedrock grant covers.
+ */
+export function autoTermsEnvironment(scope: Construct): Record<string, string> {
+  const read = (key: string) => {
+    const raw = scope.node.tryGetContext(key);
+    return raw === undefined || raw === null ? '' : String(raw).trim();
+  };
+  const mode = read('ttobak:autoTermsMode') || 'off';
+  if (mode !== 'off' && mode !== 'personal') {
+    throw new Error(`ttobak:autoTermsMode must be off or personal, got ${JSON.stringify(mode)}`);
+  }
+  const users = read('ttobak:autoTermsUsers');
+  if (users && !/^[A-Za-z0-9-]{1,64}(,[A-Za-z0-9-]{1,64})*$/.test(users)) {
+    throw new Error('ttobak:autoTermsUsers must be a comma-separated list of Cognito subs');
+  }
+  const confidence = read('ttobak:autoTermsMinConfidence') || '0.85';
+  if (!/^(0(\.\d+)?|1(\.0+)?)$/.test(confidence) || Number(confidence) <= 0) {
+    throw new Error(`ttobak:autoTermsMinConfidence must be in (0, 1], got ${JSON.stringify(confidence)}`);
+  }
+  const model = read('ttobak:bedrockTermsModelId') || 'global.anthropic.claude-sonnet-5-5';
+  if (!/^(global|apac)\.anthropic\.claude-[a-z0-9.-]+$/.test(model)) {
+    throw new Error(`ttobak:bedrockTermsModelId must be a Claude inference profile, got ${JSON.stringify(model)}`);
+  }
+  return { AUTO_TERMS_MODE: mode, AUTO_TERMS_USERS: users, AUTO_TERMS_MIN_CONFIDENCE: confidence, BEDROCK_TERMS_MODEL_ID: model };
+}
+
 export class GatewayStack extends cdk.Stack {
   /** Present only when ttobak:mcpResourceAudience enables HTTP MCP. */
   public readonly mcpFunction?: lambda.Function;
@@ -106,7 +163,8 @@ export class GatewayStack extends cdk.Stack {
         throw new Error('ttobak:httpOriginReleaseCiRoleName must be an existing IAM role name or boolean false');
       }
       // Gateway owns this policy on the existing CI role. Initial secret
-      // creation remains an operator bootstrap; CI can rotate only this ARN.
+      // creation remains an operator bootstrap; CI can rotate only this ARN
+      // and invoke the four existing foundation-check function/alias targets.
       new iam.Policy(this, 'HttpOriginReleaseCiPolicy', {
         policyName: 'ttobak-http-origin-release',
         roles: [iam.Role.fromRoleName(this, 'HttpOriginReleaseCiRole', originReleaseCiRoleName)],
@@ -114,9 +172,23 @@ export class GatewayStack extends cdk.Stack {
           actions: ['secretsmanager:GetSecretValue', 'secretsmanager:PutSecretValue',
             'secretsmanager:UpdateSecretVersionStage'],
           resources: [this.httpOrigin.secret.secretArn],
+        }), new iam.PolicyStatement({
+          actions: ['lambda:InvokeFunction'],
+          resources: ['ttobak-api', 'ttobak-api:live', 'ttobak-qa', 'ttobak-mcp'].map(name =>
+            this.formatArn({
+              service: 'lambda', resource: 'function', resourceName: name,
+              arnFormat: cdk.ArnFormat.COLON_RESOURCE_NAME,
+            })),
         })],
       });
     }
+
+    // App clients whose tokens are TTOBAK credentials (API + WebSocket). The pool
+    // also issues companion-app tokens; those must be rejected everywhere.
+    const firstPartyClientIds = cdk.Fn.join(',', [...new Set([
+      props.userPoolClient.userPoolClientId,
+      (props.spaClient ?? props.userPoolClient).userPoolClientId,
+    ])]);
 
     // API Lambda function (Go runtime, arm64)
     this.apiFunction = new lambda.Function(this, 'ApiFunction', {
@@ -138,6 +210,8 @@ export class GatewayStack extends cdk.Stack {
         BUCKET_NAME: props.bucket.bucketName,
         COGNITO_USER_POOL_ID: props.userPool.userPoolId,
         COGNITO_CLIENT_ID: props.userPoolClient.userPoolClientId,
+        // first-party clients only; companion-app tokens never act as API credentials
+        API_ALLOWED_CLIENT_IDS: firstPartyClientIds,
         AUDIO_CROP_ENABLED: [true, 'true'].includes(this.node.tryGetContext('ttobak:audioCropEnabled')) ? '1' : '0',
         KB_BUCKET_NAME: props.kbBucket?.bucketName || '',
         // NOTE: api reads KB_DATASOURCE_ID (cmd/api/main.go), NOT the
@@ -153,6 +227,12 @@ export class GatewayStack extends cdk.Stack {
         // Live interpreter for /api/translate quality=high; must match AiStack's
         // InvokeInterpreterModel grant. Unset/blank means Amazon Translate only.
         BEDROCK_TRANSLATE_MODEL_ID: 'global.openai.gpt-6-luna',
+        // Per-user hourly /api/translate cost guard (0 disables a limit).
+        TRANSLATE_HOURLY_LIMIT: rateLimitContext(this, 'ttobak:translateHourlyLimit', 3000),
+        TRANSLATE_HIGH_HOURLY_LIMIT: rateLimitContext(this, 'ttobak:translateHighHourlyLimit', 1500),
+        // Interpreter call deadline; Amazon Translate fallback must still fit the
+        // browser's 10s abort. Bounds match ParseTranslateHighTimeout.
+        TRANSLATE_HIGH_TIMEOUT_MS: millisecondsContext(this, 'ttobak:translateHighTimeoutMs', 6000, 500, 8000),
         FRONTEND_BASE_URL: `https://${domainName}`,
         // Same-domain CloudFront-signed download URLs (ADR-027). Key material
         // comes from fixed-name SSM params (/ttobak/cloudfront/*) at runtime,
@@ -220,6 +300,10 @@ export class GatewayStack extends cdk.Stack {
         WHISPER_CLUSTER: WHISPER_CLUSTER_NAME,
         WHISPER_TASK_DEF: WHISPER_TASK_FAMILY,
         WHISPER_CONTAINER: WHISPER_CONTAINER_NAME,
+        // Scheduled STT recovery (ADR-031 amendment): off | report | active. Report
+        // logs decisions without writing; activate in a separate change.
+        STT_RECOVERY_MODE: 'report',
+        STT_RECOVERY_DELETE_MODE: 'report',
       },
       timeout: cdk.Duration.minutes(5),
       memorySize: 512,
@@ -246,6 +330,23 @@ export class GatewayStack extends cdk.Stack {
       })
     );
 
+    // Single-flight check for the recovery tick: list tasks of the Whisper
+    // cluster only. ListTasks authorizes against container-instance with the
+    // ecs:cluster condition key; RunTask/PassRole above stay unchanged.
+    (props.transcribeRole as iam.Role).addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'EcsListWhisperTasks',
+        effect: iam.Effect.ALLOW,
+        actions: ['ecs:ListTasks'],
+        // ListTasks without a containerInstance filter authorizes only against
+        // "*"; the ecs:cluster condition confines it to the Whisper cluster.
+        resources: ['*'],
+        conditions: {
+          ArnEquals: { 'ecs:cluster': `arn:aws:ecs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:cluster/${WHISPER_CLUSTER_NAME}` },
+        },
+      })
+    );
+
     // Summarize Lambda function - triggered by S3 transcript uploads via EventBridge
     this.summarizeFunction = new lambda.Function(this, 'SummarizeFunction', {
       functionName: 'ttobak-summarize',
@@ -260,6 +361,7 @@ export class GatewayStack extends cdk.Stack {
         BEDROCK_MODEL_ID: 'global.anthropic.claude-opus-5',
         BEDROCK_SUMMARY_MODEL_ID: 'global.openai.gpt-6.1-sol',
         BEDROCK_SONNET_MODEL_ID: 'global.anthropic.claude-sonnet-5-5',
+        ...autoTermsEnvironment(this),
         KB_BUCKET_NAME: props.kbBucket?.bucketName || '',
         KB_ID: props.knowledgeBaseId || '',
         DATA_SOURCE_ID: props.dataSourceId || '',
@@ -748,6 +850,19 @@ export class GatewayStack extends cdk.Stack {
       eventPattern: { source: ['ttobak.audio'], detailType: ['AudioCropRequested'] },
     });
     pipelineFailures.addTarget('AudioCrop', audioCropRule, this.transcribeFunction);
+    // Scheduled STT recovery tick (ADR-031 amendment). The input carries no parameters,
+    // so a forged tick can only start the same bounded sweep. A lost tick is
+    // harmless: no retries, no DLQ.
+    const sttRecoveryRule = new events.Rule(this, 'SttRecoveryTick', {
+      ruleName: 'ttobak-stt-recovery',
+      description: 'Bounded re-drive of stuck single-file STT meetings and failed-recording grace cleanup',
+      schedule: events.Schedule.rate(cdk.Duration.minutes(15)),
+    });
+    sttRecoveryRule.addTarget(new eventsTargets.LambdaFunction(this.transcribeFunction, {
+      event: events.RuleTargetInput.fromObject({ source: 'ttobak.recovery', 'detail-type': 'SttRecoveryTick', detail: {} }),
+      retryAttempts: 0,
+      maxEventAge: cdk.Duration.minutes(10),
+    }));
     const transcribePermissions = this.transcribeFunction.node.findAll()
       .filter(child => child instanceof lambda.CfnPermission);
     this.apiFunction.node.addDependency(this.transcribeFunction, audioCropRule, ...transcribePermissions);
@@ -850,12 +965,30 @@ export class GatewayStack extends cdk.Stack {
       retryAttempts: 3,
       deadLetterQueue: savedSummaryDlq,
     }));
+    // Automatic term extraction runs in its own summarize invocation (A2.4).
+    const termsDlq = new sqs.Queue(this, 'TermsDlq', {
+      queueName: 'ttobak-terms-dlq',
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      retentionPeriod: cdk.Duration.days(7),
+      redriveAllowPolicy: { redrivePermission: sqs.RedrivePermission.DENY_ALL },
+    });
+    const termsRequestedRule = new events.Rule(this, 'TermsRequestedRule', {
+      ruleName: 'ttobak-terms-requested',
+      description: 'Extract dictionary terms for the requested meeting analysis run',
+      eventPattern: { source: ['ttobak.analysis'], detailType: ['TermsRequested'] },
+    });
+    termsRequestedRule.addTarget(new eventsTargets.LambdaFunction(this.summarizeFunction, {
+      maxEventAge: cdk.Duration.minutes(5),
+      retryAttempts: 3,
+      deadLetterQueue: termsDlq,
+    }));
     pipelineFailures.watchQueue('ActionItems', actionItemsDlq);
     pipelineFailures.watchQueue('SavedSummary', savedSummaryDlq);
+    pipelineFailures.watchQueue('Terms', termsDlq);
     // Install the consumer, rule and invocation permission before API code
     // can acknowledge a newly published request during this stack update.
     // Private relinking must not precede QA's canonical publication reader.
-    this.apiFunction.node.addDependency(this.summarizeFunction, savedSummaryRule, this.qaFunction);
+    this.apiFunction.node.addDependency(this.summarizeFunction, savedSummaryRule, termsRequestedRule, this.qaFunction);
 
     // Convert Doc Lambda (container image w/ LibreOffice) + EventBridge rule
     // for PPTX/PPT slide uploads -> PDF sidecar conversion. Optional (like
@@ -943,6 +1076,8 @@ export class GatewayStack extends cdk.Stack {
         COGNITO_USER_POOL_ID: props.userPool.userPoolId,
         COGNITO_REGION: cdk.Aws.REGION,
         WS_ORIGIN_SECRET_ARN: this.websocketOrigin.secret.secretArn,
+        // first-party clients only; companion-app tokens are rejected on $connect
+        WS_ALLOWED_CLIENT_IDS: firstPartyClientIds,
       },
       timeout: cdk.Duration.seconds(10),
       memorySize: 128,

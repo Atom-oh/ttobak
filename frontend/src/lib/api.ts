@@ -5,7 +5,6 @@ import { getRuntimeConfig } from './runtimeConfig';
 import { triggerAuthFailure } from '@/components/auth/AuthProvider';
 import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory, Research, ResearchDetail, DictionaryTerm, ChatMessage, Account, AccountSummary, AccountMember, AccountMeetingRef, AccountInsight, AccountDocument, PutDocumentRequest, AccountResearchRef, Project, ProjectSummary, ProjectMember, ProjectMeetingRef, ProjectResearchRef, ProjectInsight, ProjectBrief } from '@/types/meeting';
 import type { CreateDictTermInput, DictTermMutationResponse, TermPatch } from '@/lib/dictionary';
-import type { LiveDictionaryConfigResponse } from '@/lib/liveVocabulary';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 const PROJECT_HINTS_KEY = 'ttobak:project-invitation-hints';
@@ -265,7 +264,7 @@ export const meetingsApi = {
     data: { requirements: import('@/types/meeting').SimRequirement[]; options: import('@/types/meeting').SimOption[] }
   ) => api.post<import('@/types/meeting').SimRun>(`/api/meetings/${meetingId}/sim`, data),
 
-  update: (id: string, data: { title?: string; content?: string; notes?: string; expectedNotes?: string; expectedNotesRevision?: string; liveSummary?: string; transcriptA?: string; selectedTranscript?: 'A' | 'B'; participants?: string[]; status?: string }, options?: FetchOptions) =>
+  update: (id: string, data: { title?: string; content?: string; notes?: string; expectedNotes?: string; expectedNotesRevision?: string; liveSummary?: string; transcriptA?: string; selectedTranscript?: 'A' | 'B'; noteLanguage?: import('@/types/meeting').NoteLanguage; participants?: string[]; status?: string }, options?: FetchOptions) =>
     api.put<{ meetingId: string; updatedAt: string; notesRevision?: string }>(`/api/meetings/${id}`, data, options),
 
   delete: (id: string) => api.delete(`/api/meetings/${id}`),
@@ -590,10 +589,19 @@ export interface AdminUserActionResponse {
 
 // Translation API
 export const translateApi = {
-  translate: (text: string, sourceLang: string, targetLang: string, signal?: AbortSignal) =>
-    api.post<{ translatedText: string; sourceLang: string; targetLang: string }>(
+  translate: (
+    text: string, sourceLang: string, targetLang: string, signal?: AbortSignal,
+    options?: { quality?: 'fast' | 'high'; context?: string[] },
+  ) =>
+    // quality defaults to fast (Amazon Translate). high asks the interpreter and the
+    // response engine says who answered. A 429 RATE_LIMITED rejects like any error.
+    api.post<{ translatedText: string; sourceLang: string; targetLang: string; quality?: string; engine?: string; limited?: boolean }>(
       '/api/translate',
-      { text, sourceLang, targetLang },
+      {
+        text, sourceLang, targetLang,
+        ...(options?.quality ? { quality: options.quality } : {}),
+        ...(options?.context?.length ? { context: options.context } : {}),
+      },
       { signal },
     ),
 };
@@ -672,7 +680,6 @@ const termPath = (termId: string) => `${DICT}/terms/${encodeURIComponent(termId)
 export const dictionaryApi = {
   get: () => api.get<{ terms: DictionaryTerm[]; status: string; vocabularyName?: string }>(DICT),
   update: (terms: DictionaryTerm[]) => api.put<{ terms: DictionaryTerm[]; status: string; vocabularyName?: string }>(DICT, { terms }),
-  liveConfig: () => api.get<LiveDictionaryConfigResponse>(`${DICT}/live-config`),
   createTerm: (input: CreateDictTermInput) => api.post<DictTermMutationResponse>(`${DICT}/terms`, input),
   updateTerm: (termId: string, version: number, patch: TermPatch) =>
     api.patch<DictTermMutationResponse>(termPath(termId), { ...patch, version }),

@@ -142,7 +142,8 @@ type guardCase struct {
 func TestDictionaryWriteGuards(t *testing.T) {
 	term, obs := sampleTerm()
 	key := term.TermKey
-	merge := DictMergeInput{PK: "USER#u1", TermKey: key, Observation: obs, HeardAs: []string{"알파"}, SeenAt: "now", ExpectedVersion: 3}
+	merge := DictMergeInput{PK: "USER#u1", TermKey: key, Observation: obs, HeardAs: []string{"알파"}, SourceTypes: []string{model.TermSourceTranscript}, SeenAt: "now", ExpectedVersion: 3}
+	promotion := DictPromotion{DisplayAs: "AlphaGrid", FirstSourceMeetingID: "m1"}
 	phrase, ready := "Alpha-Grid", model.VocabStatusReady
 	legacyGuard := []string{`legacyMigrated = {"BOOL":true}`, `version = {"N":"1"}`, `state = {"S":"active"}`, `origin = {"S":"manual"}`, "attribute_not_exists (userEditedAt)"}
 	blob := LegacyBlobGuard{UserID: "u1", Revision: 7, UpdatedAt: "2026-10-18T09:00:00Z"}
@@ -197,6 +198,12 @@ func TestDictionaryWriteGuards(t *testing.T) {
 				return r.UpdateVocabularyState(context.Background(), "u1", model.VocabContextPersonal, model.VocabLangKo, 3, VocabularyStateChange{Status: &ready}, "now")
 			},
 			ErrDictTermConflict, "", 0, []string{`version = {"N":"3"}`}, nil},
+		{"vocabulary submit claim also pins the build fingerprint", conditionalFailed,
+			func(r *DictionaryRepository) error {
+				fp := "0123456789abcdef0123456789abcdef"
+				return r.UpdateVocabularyState(context.Background(), "u1", model.VocabContextPersonal, model.VocabLangKo, 3, VocabularyStateChange{SubmittedAt: &fp, ExpectBuildingFingerprint: &fp}, "now")
+			},
+			ErrDictTermConflict, "", 0, []string{`version = {"N":"3"}`, `buildingFingerprint = {"S":"0123456789abcdef0123456789abcdef"}`, "AND"}, nil},
 		{"vocabulary state create is create-only", cancelled("ConditionalCheckFailed", "None"),
 			func(r *DictionaryRepository) error {
 				return r.CreateLegacyVocabularyState(context.Background(), blob, vocabState)
@@ -244,7 +251,17 @@ func TestDictionaryWriteGuards(t *testing.T) {
 				_, err := r.EvictAutoTerm(context.Background(), "USER#u1", key, 5)
 				return err
 			},
-			ErrDictTermConflict, "", 0, []string{`version = {"N":"5"}`, `origin = {"S":"auto"}`, "attribute_not_exists (userEditedAt)", `state = {"S":"active"}`}, nil},
+			ErrDictTermConflict, "", 0, []string{`version = {"N":"5"}`, `origin = {"S":"auto"}`, "attribute_not_exists (userEditedAt)", `state IN ({"S":"active"}, {"S":"suggested"})`}, nil},
+		{"promote: version, suggested state, origin or user edit", cancelled("None", "ConditionalCheckFailed"),
+			func(r *DictionaryRepository) error {
+				return r.PromoteSuggestedTerm(context.Background(), merge, promotion)
+			},
+			ErrDictTermConflict, "Update", 1, []string{`version = {"N":"3"}`, `state = {"S":"suggested"}`, `origin = {"S":"auto"}`, "attribute_not_exists (userEditedAt)"}, nil},
+		{"promote: meeting already counted", cancelled("ConditionalCheckFailed", "None"),
+			func(r *DictionaryRepository) error {
+				return r.PromoteSuggestedTerm(context.Background(), merge, promotion)
+			},
+			ErrDictObservationExists, "Put", 0, []string{"attribute_not_exists (PK)"}, nil},
 		{"user edit is version guarded", conditionalFailed,
 			func(r *DictionaryRepository) error {
 				return r.UpdateDictTerm(context.Background(), "USER#u1", key, DictTermChange{Phrase: &phrase}, "u1", "now", 9)
@@ -336,7 +353,31 @@ func TestDictionaryWriteEffects(t *testing.T) {
 	if err := repo.MergeAutoObservation(context.Background(), DictMergeInput{PK: "USER#u1", TermKey: key, Observation: obs, ExpectedVersion: 1}); err != nil {
 		t.Fatal(err)
 	}
-	requireAll(t, "merge", resolved(txItems(t, (*calls)[0])[1]["Update"].(map[string]any), "UpdateExpression"), "ADD hits", "heardAs", "lastSeenAt", "version")
+	mergeUpdate := resolved(txItems(t, (*calls)[0])[1]["Update"].(map[string]any), "UpdateExpression")
+	requireAll(t, "merge", mergeUpdate, "ADD hits", "heardAs", "lastSeenAt", "version")
+	if strings.Contains(mergeUpdate, "sourceTypes") || strings.Contains(mergeUpdate, "state") {
+		t.Fatalf("merge without source types must not touch them or the state: %s", mergeUpdate)
+	}
+	if err := repo.MergeAutoObservation(context.Background(), DictMergeInput{PK: "USER#u1", TermKey: key, Observation: obs, ExpectedVersion: 1, SkipHit: true}); err != nil {
+		t.Fatal(err)
+	}
+	if skip := resolved(txItems(t, (*calls)[1])[1]["Update"].(map[string]any), "UpdateExpression"); strings.Contains(skip, "hits") {
+		t.Fatalf("a re-recorded pruned observation must not add a hit: %s", skip)
+	}
+	promote := DictMergeInput{PK: "USER#u1", TermKey: key, Observation: obs, HeardAs: []string{"알파"}, SourceTypes: []string{model.TermSourceNotes}, ExpectedVersion: 2}
+	if err := repo.PromoteSuggestedTerm(context.Background(), promote, DictPromotion{DisplayAs: "AlphaGrid", Type: "product", FirstSourceMeetingID: "m1"}); err != nil {
+		t.Fatal(err)
+	}
+	promoteUpdate := resolved(txItems(t, (*calls)[2])[1]["Update"].(map[string]any), "UpdateExpression")
+	requireAll(t, "promote", promoteUpdate, `state = {"S":"active"}`, `hits = {"N":"1"}`, `heardAs = {"L":[{"S":"알파"}]}`,
+		`sourceTypes = {"L":[{"S":"notes"}]}`, `displayAs = {"S":"AlphaGrid"}`, `type = {"S":"product"}`, `firstSourceMeetingId = {"S":"m1"}`, "REMOVE phrase")
+	if strings.Contains(promoteUpdate, "ADD") {
+		t.Fatalf("promotion must reset hits, not add to the tainted count: %s", promoteUpdate)
+	}
+	if err := repo.PromoteSuggestedTerm(context.Background(), DictMergeInput{PK: "USER#u1", TermKey: key, Observation: obs}, DictPromotion{DisplayAs: "AlphaGrid"}); err == nil {
+		t.Fatal("a promotion must carry the untainted run's source types")
+	}
+	*calls = (*calls)[:1]
 	if err := repo.RestoreDictTerm(context.Background(), term, 4); err != nil {
 		t.Fatal(err)
 	}
@@ -410,5 +451,28 @@ func TestPutDictTermsIfAbsentStopsWhenTheBlobChanged(t *testing.T) {
 	}
 	if _, err := repo.PutDictTermsIfAbsent(context.Background(), LegacyBlobGuard{UserID: "u2"}, terms); err == nil {
 		t.Fatal("rows outside the guarded user's partition must be refused")
+	}
+}
+
+func TestDictTransactErrorSeparatesConflictsFromCancellations(t *testing.T) {
+	term, obs := sampleTerm()
+	for _, tc := range []struct {
+		name                string
+		resp                string
+		conflict, cancelled bool
+	}{
+		{"concurrent transaction", cancelled("None", "TransactionConflict"), true, true},
+		{"throttled", cancelled("ThrottlingError", "None"), false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo, _ := dictWire(t, func(int, string, map[string]any) (int, string) { return 400, tc.resp })
+			err := repo.CreateAutoTerm(context.Background(), term, obs)
+			if errors.Is(err, ErrDictTransactionConflict) != tc.conflict || errors.Is(err, ErrDictTransactionCancelled) != tc.cancelled {
+				t.Fatalf("unexpected mapping: %v", err)
+			}
+			if errors.Is(err, ErrConditionFailed) || errors.Is(err, ErrDictTermConflict) {
+				t.Fatalf("a cancellation without a failed condition is not a guard failure: %v", err)
+			}
+		})
 	}
 }

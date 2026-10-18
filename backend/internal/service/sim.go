@@ -333,25 +333,29 @@ func tsMarkerSeconds(marker string) int {
 	return n
 }
 
-// nearestSegment mirrors resolveTranscriptAnchors' snap-to-nearest logic
-// for evidence links found outside the markdown-anchor path.
+// nearestSegment returns the timed segment whose start is closest to
+// targetSeconds, shared by resolveTranscriptAnchors and simulator evidence.
+// Untimed segments never anchor. It returns nil when no timed segment starts
+// within maxAnchorSnapSeconds of the target or the target lies past the last
+// timed segment's end, so a far marker yields no link instead of a guess.
 func nearestSegment(segments []speakerSegment, targetSeconds float64) *speakerSegment {
-	if len(segments) == 0 {
+	if math.IsNaN(targetSeconds) || math.IsInf(targetSeconds, 0) {
 		return nil
 	}
 	bestIdx := -1
-	bestDiff := -1.0
+	bestDiff := math.MaxFloat64
+	lastEnd := math.Inf(-1)
 	for i, seg := range segments {
-		diff := seg.StartTime - targetSeconds
-		if diff < 0 {
-			diff = -diff
+		if seg.Untimed {
+			continue
 		}
-		if bestDiff < 0 || diff < bestDiff {
+		lastEnd = math.Max(lastEnd, math.Max(seg.StartTime, seg.EndTime))
+		if diff := math.Abs(seg.StartTime - targetSeconds); diff < bestDiff {
 			bestDiff = diff
 			bestIdx = i
 		}
 	}
-	if bestIdx < 0 {
+	if bestIdx < 0 || bestDiff > maxAnchorSnapSeconds || targetSeconds > lastEnd+anchorRoundingSlack {
 		return nil
 	}
 	return &segments[bestIdx]

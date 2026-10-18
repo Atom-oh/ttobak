@@ -50,7 +50,14 @@ type ResummaryService struct {
 	generator   resummaryGenerator
 	attachments *AttachmentTextService
 	publish     func(context.Context, model.SummaryRequested) error
+	terms       func(context.Context, string, string)
 	now         func() time.Time
+}
+
+// SetTermsEnqueuer runs after a successful saved-source re-summary; it must
+// be non-fatal (automatic term extraction, design A2.3 trigger 2).
+func (s *ResummaryService) SetTermsEnqueuer(enqueue func(ctx context.Context, ownerID, meetingID string)) {
+	s.terms = enqueue
 }
 
 func NewResummaryService(repo resummaryRepo, meetings *MeetingService, generator resummaryGenerator, attachments *AttachmentTextService, publish func(context.Context, model.SummaryRequested) error) *ResummaryService {
@@ -444,6 +451,9 @@ func (s *ResummaryService) Process(ctx context.Context, event model.SummaryReque
 			code = "OUTPUT_TOO_LARGE"
 		}
 		return errors.Join(err, failed(code))
+	}
+	if s.terms != nil {
+		s.terms(ctx, state.OwnerID, event.MeetingID)
 	}
 	return nil
 }

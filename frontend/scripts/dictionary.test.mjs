@@ -56,7 +56,7 @@ test('badges keep the existing vocabulary visible and explain failures', () => {
   assert.match(b('FAILED', true, 'PROVIDER').detail, /AWS가/);
   assert.match(b('QUOTA_EXCEEDED', false).detail, /한도/);
   assert.match(b('FAILED', false, 'NEW').detail, /알 수 없는/);
-  assert.match(b('NONE', false, undefined, 'en').detail, /5개/);
+  assert.match(b('NONE', false, undefined, 'en').detail, /아직/);
   assert.equal(d.isBuilding({ ko: { status: 'READY' }, en: { status: 'BUILDING' } }), true);
 });
 

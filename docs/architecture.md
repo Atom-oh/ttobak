@@ -115,7 +115,11 @@ unconsumed project invitation rows expire through their existing TTL field.
    Missing language metadata uses the current text's script, never the previous
    utterance's language. The shared translation scheduler bounds pending finals,
    concurrency, UTF-8 request/result sizes and request duration; it rejects stale
-   responses after finalization, setting changes or stop. Interpretation failures
+   responses after finalization, setting changes or stop. Partial-caption drafts
+   are translated only after an explicit opt-in (fast path); finals use the
+   validated high-quality interpreter with frozen source context and Amazon
+   Translate fallback, and the API applies per-user hourly request limits
+   (ADR-005 amendments). Interpretation failures
    do not stop capture. This path does not change batch transcription or saved notes.
 2. Upload audio to S3. EventBridge invokes the transcribe orchestrator, which uses
    configured Whisper ECS or AWS Transcribe fallback. Multipart completion and
@@ -127,6 +131,12 @@ unconsumed project invitation rows expire through their existing TTL field.
    a source-checked transaction, then dispatches the existing Whisper worker.
    The worker reads a pinned source revision, cuts the requested bytes and runs
    transcription on that file. Original audio and prior human edits remain intact.
+   A 15-minute scheduled tick on the same transcribe Lambda re-drives stuck
+   single-file Whisper meetings with conditional, two-attempt claims. It re-runs STT
+   only when the GPU cluster is idle, re-drives an unpublished transcript through
+   summarize, records `AUDIO_CORRUPT`/`NO_SPEECH`/`WORKER_FAILED` marks, and after
+   seven untouched days deletes marked meetings that hold no user data. Checkpoint-only
+   and multipart meetings are reported, not processed (ADR-031 amendment).
 3. Refine text while preserving acoustic speakers; summarize the selected source,
    saved notes and supported context into editable meeting content. Transcript
    spill objects are rehydrated by repository reads. Stale segments must not
@@ -165,6 +175,15 @@ pipeline runs it inline; authorized editor retries send ActionItemsRequested to
 the same summarize Lambda. Run/source/prior-item checks publish items and success
 together, preserving unchanged IDs/completion and prior results on failure.
 An empty array alone never establishes successful analysis.
+
+Automatic dictionary term extraction (ADR-008) has its own
+MEETING#/ANALYSIS#terms state. The end of summary analyses, a preserved-human-content
+summary and a saved-source re-summary call a non-fatal Enqueue, which publishes
+TermsRequested to the same summarize Lambda only when `AUTO_TERMS_MODE=personal`
+allows the owner (default `off`). The worker rereads the sources, calls the model
+within a bounded budget, filters candidates and merges them into the owner's
+personal dictionary; non-owner source edits make a run suggest only. Meeting
+deletion sweeps the meeting's observations and run state.
 
 The authenticated `/api/meetings/{id}/reading` route bounds JSON before Lambda
 serialization. Notes, summary and action sections use metadata views; transcript

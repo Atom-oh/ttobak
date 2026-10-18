@@ -326,10 +326,10 @@ func TestLegacyPutNeverTombstonesOrTouchesAutoRows(t *testing.T) {
 	if deleted != 0 || store.terms[model.DictTermSK(TermKey("Omega"))].Origin != model.TermOriginManual {
 		t.Fatalf("legacy PUT must create manual rows and never tombstone: %d tombstones", deleted)
 	}
-	table := fx.objects.puts["vocab/ttobak-vocab-a000000000000001.tsv"]
 	ko := fx.tr.vocabs["ttobak-vocab-a000000000000001"]
-	// Five Latin terms also qualify en-US, so two vocabularies are created.
-	if ko == nil || ko.lang != transcribeTypes.LanguageCodeKoKr || fx.tr.count("create:") != 2 || !strings.Contains(table, "Omega\t\t\tOmega\n") || resp.Status != "PENDING" {
+	table := fx.objects.puts[strings.TrimPrefix(ko.uri, "s3://assets/")]
+	// Five Latin terms would qualify en-US, but en-US builds are deferred.
+	if ko == nil || ko.lang != transcribeTypes.LanguageCodeKoKr || fx.tr.count("create:") != 1 || !strings.Contains(table, "Omega\t\t\tOmega\n") || resp.Status != "PENDING" {
 		t.Fatalf("legacy PUT must start an A/B build: %v %q %q", fx.tr.calls, table, resp.Status)
 	}
 	if len(resp.Terms) != 5 {
@@ -383,6 +383,46 @@ func TestLegacyPutRoundTripsGetOutput(t *testing.T) {
 	var input *TermInputError
 	if _, err := svc.UpdateDictionary(ctx, "u1", tooMany); !errors.As(err, &input) || input.Field != "terms" {
 		t.Fatalf("more than %d manual terms must be rejected: %v", MaxManualTermsPerScope, err)
+	}
+}
+
+// A term created through the legacy PUT with an empty displayAs, then given a
+// new phrase through v2, must survive an unchanged GET-to-PUT round trip with
+// its termId, version and v2 settings.
+func TestLegacyPutRoundTripKeepsDisplayEmptyRowAfterPhraseEdit(t *testing.T) {
+	ctx := context.Background()
+	store := migratedStore()
+	svc := newTestDictService(store, nil)
+	if _, err := svc.UpdateDictionary(ctx, "u1", []model.DictionaryTerm{{Phrase: "Kappa-One"}}); err != nil {
+		t.Fatal(err)
+	}
+	key := TermKey("Kappa-One")
+	row := store.terms[model.DictTermSK(key)]
+	if !row.LegacyDisplayEmpty {
+		t.Fatalf("legacy term without displayAs must record it: %+v", row)
+	}
+	phrase, typ := "Kappa-Two", "product"
+	if _, err := svc.UpdateTerm(ctx, "u1", key, model.UpdateDictTermRequest{Version: ver(row.Version), Phrase: &phrase, Type: &typ}); err != nil {
+		t.Fatal(err)
+	}
+	edited := store.terms[model.DictTermSK(key)]
+	got, err := svc.GetDictionaryWithTerms(ctx, "u1")
+	if err != nil || len(got.Terms) != 1 {
+		t.Fatalf("GET = %+v %v", got, err)
+	}
+	if got.Terms[0].Phrase != "Kappa-Two" || legacyTermKey(got.Terms[0]) != key {
+		t.Fatalf("legacy GET must keep naming the stored term after a phrase edit: %+v", got.Terms[0])
+	}
+	resp, err := svc.UpdateDictionary(ctx, "u1", got.Terms)
+	if err != nil || len(resp.Terms) != 1 || resp.Terms[0] != got.Terms[0] {
+		t.Fatalf("unchanged round trip = %+v %v", resp, err)
+	}
+	if len(store.terms) != 1 {
+		t.Fatalf("round trip must not create a second row: %d rows", len(store.terms))
+	}
+	after := store.terms[model.DictTermSK(key)]
+	if after.Version != edited.Version || after.Type != typ || after.Phrase != "Kappa-Two" || after.UserEditedAt != edited.UserEditedAt {
+		t.Fatalf("unchanged round trip must keep the stored row: before %+v after %+v", edited, after)
 	}
 }
 

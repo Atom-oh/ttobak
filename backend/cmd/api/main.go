@@ -120,6 +120,7 @@ func init() {
 	translateService := service.NewTranslateService(
 		translateClient,
 		service.WithInterpreterModel(bedrockRuntimeClient2, os.Getenv("BEDROCK_TRANSLATE_MODEL_ID")),
+		service.WithInterpreterTimeout(service.ParseTranslateHighTimeout(os.Getenv("TRANSLATE_HIGH_TIMEOUT_MS"))),
 	)
 	// Initialize handlers
 	healthHandler := handler.NewHealthHandler()
@@ -146,6 +147,14 @@ func init() {
 	dictService.SetVocabularyBuilder(s3Client, bucketName, service.ParseVocabRebuildMinInterval(os.Getenv("VOCAB_REBUILD_MIN_INTERVAL")))
 	dictHandler := handler.NewDictionaryHandler(dictService)
 	translateHandler := handler.NewTranslateHandler(translateService)
+	// Per-user hourly cost guard; 0 disables a limit, storage errors fail open.
+	translateHandler.SetRateLimits(
+		service.NewWindowCounter(repository.NewRateCounterRepository(dynamoClient, tableName)),
+		handler.TranslateLimits{
+			Hourly:     service.ParseRateLimit("TRANSLATE_HOURLY_LIMIT", os.Getenv("TRANSLATE_HOURLY_LIMIT"), handler.DefaultTranslateHourlyLimit),
+			HighHourly: service.ParseRateLimit("TRANSLATE_HIGH_HOURLY_LIMIT", os.Getenv("TRANSLATE_HIGH_HOURLY_LIMIT"), handler.DefaultTranslateHighHourlyLimit),
+		},
+	)
 	summarizeLiveHandler := handler.NewSummarizeLiveHandler(bedrockRuntimeClient2, meetingService)
 	crawlerRepo := repository.NewCrawlerRepository(dynamoClient, tableName)
 	crawlerService := service.NewCrawlerService(crawlerRepo)
@@ -361,7 +370,6 @@ func init() {
 
 		// Dictionary routes
 		r.Get("/api/settings/dictionary", dictHandler.GetDictionary)
-		r.Get("/api/settings/dictionary/live-config", dictHandler.GetLiveConfig)
 		r.Put("/api/settings/dictionary", dictHandler.UpdateDictionary)
 		r.Delete("/api/settings/dictionary/term", dictHandler.DeleteTerm)
 		r.Post("/api/settings/dictionary/terms", dictHandler.CreateTerm)

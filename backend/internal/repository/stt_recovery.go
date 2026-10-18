@@ -438,7 +438,19 @@ func (r *DynamoDBRepository) DeleteSttFailedMeeting(ctx context.Context, ownerID
 		}
 	}
 	if err != nil {
-		return fmt.Errorf("delete failed recording: %w", err)
+		// A lost response may hide a committed transaction. Resolve it with a
+		// consistent read of the meeting row instead of resending: absence
+		// means the delete committed, so the caller must run object cleanup and
+		// count it. An unreadable outcome stays a plain error, and object
+		// cleanup is never attempted while the row might still exist.
+		exists, readErr := r.sttMeetingRowExists(ctx, ownerID, meetingID)
+		if readErr != nil || exists {
+			return fmt.Errorf("delete failed recording: %w", errors.Join(err, readErr))
+		}
+		if cleanupErr := r.deleteAttachmentTextStates(ctx, meetingID); cleanupErr != nil {
+			err = errors.Join(err, cleanupErr)
+		}
+		return errors.Join(ErrSttDeletionPostCommit, err)
 	}
 	if err := r.deleteAttachmentTextStates(ctx, meetingID); err != nil {
 		return errors.Join(ErrSttDeletionPostCommit, err)
@@ -540,4 +552,17 @@ func (r *DynamoDBRepository) listSttObjectKeys(ctx context.Context, prefix strin
 		}
 	}
 	return keys, nil
+}
+
+// sttMeetingRowExists is a strongly consistent existence check used to resolve
+// an ambiguous grace-delete transaction.
+func (r *DynamoDBRepository) sttMeetingRowExists(ctx context.Context, ownerID, meetingID string) (bool, error) {
+	out, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(r.tableName), Key: meetingRowKey(ownerID, meetingID),
+		ConsistentRead: aws.Bool(true), ProjectionExpression: aws.String("PK"),
+	})
+	if err != nil {
+		return false, fmt.Errorf("read failed recording row: %w", err)
+	}
+	return len(out.Item) > 0, nil
 }

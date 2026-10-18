@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
@@ -24,6 +25,18 @@ var (
 	ErrDictTermConflict      = errors.New("dictionary term guard failed")
 	ErrDictObservationExists = errors.New("dictionary observation already recorded")
 	ErrLegacyBlobChanged     = errors.New("legacy dictionary changed or was migrated")
+	// ErrDictSourceMeetingGone: the observation's source meeting no longer
+	// exists, so nothing was written (deletion cleanup already ran or will).
+	ErrDictSourceMeetingGone = errors.New("dictionary observation source meeting is gone")
+)
+
+// Cancelled dictionary transactions with no failed condition. Neither matches
+// ErrConditionFailed. A cancelled transaction applied none of its items.
+// ErrDictTransactionConflict (which also matches ErrDictTransactionCancelled)
+// means a concurrent write touched an item; re-reading and retrying is safe.
+var (
+	ErrDictTransactionCancelled = errors.New("dictionary transaction cancelled")
+	ErrDictTransactionConflict  = errors.New("dictionary transaction conflicted with a concurrent write")
 )
 
 // dictTransactItemLimit is the number of term puts per migration transaction;
@@ -111,8 +124,25 @@ type DictMergeInput struct {
 	TermKey         string
 	Observation     *model.DictObservation
 	HeardAs         []string // deduped, trimmed union computed by the caller
+	SourceTypes     []string // union computed by the caller; nil leaves it as is
 	SeenAt          string
 	ExpectedVersion int64
+	// SkipHit records the observation without ADD hits: the meeting was
+	// already counted and only its observation row was pruned.
+	SkipHit bool
+}
+
+// DictPromotion is the untainted run's content that replaces a suggestion's
+// when it is promoted. Hits restarts at 1: the tainted run that created the
+// suggestion is never counted toward the active term.
+type DictPromotion struct {
+	DisplayAs            string
+	Phrase               string
+	Type                 string
+	Confidence           float64
+	TranscribeKo         bool
+	TranscribeEn         bool
+	FirstSourceMeetingID string
 }
 
 // DictTermChange lists the user-editable fields; nil leaves a field as is.
@@ -147,6 +177,10 @@ type VocabularyStateChange struct {
 	BypassPending       *bool
 	FlippedAt           *string
 	EmptySince          *string
+	SubmittedAt         *string
+	// ExpectBuildingFingerprint adds a buildingFingerprint condition to
+	// UpdateVocabularyState (submit claims and flips).
+	ExpectBuildingFingerprint *string
 }
 
 // DictWriteResult surfaces a failed best-effort observation cleanup after a
@@ -191,7 +225,12 @@ func dictTransactError(err error, kinds []error) error {
 				return dictConditionError(kinds[i])
 			}
 		}
-		return fmt.Errorf("dictionary transaction cancelled, retry: %w", err)
+		for _, reason := range cancelled.CancellationReasons {
+			if aws.ToString(reason.Code) == "TransactionConflict" {
+				return fmt.Errorf("%w: %w: %w", ErrDictTransactionConflict, ErrDictTransactionCancelled, err)
+			}
+		}
+		return fmt.Errorf("%w, retry: %w", ErrDictTransactionCancelled, err)
 	}
 	return err
 }
@@ -493,17 +532,58 @@ func (r *DictionaryRepository) CreateAutoTerm(ctx context.Context, term *model.D
 	if err != nil {
 		return err
 	}
-	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: []types.TransactWriteItem{termPut, obsPut}})
+	items, err := r.withSourceMeetingCheck([]types.TransactWriteItem{termPut, obsPut}, obs)
 	if err != nil {
-		return dictTransactError(err, []error{ErrDictTermConflict, ErrDictObservationExists})
+		return err
+	}
+	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
+	if err != nil {
+		return dictTransactError(err, []error{ErrDictTermConflict, ErrDictObservationExists, ErrDictSourceMeetingGone})
 	}
 	return nil
 }
 
+// withSourceMeetingCheck appends a ConditionCheck that the observation's
+// source meeting (USER#{owner}/MEETING#{meeting}) still exists, so a worker
+// that outlives a meeting deletion cannot leave observations behind (A8).
+func (r *DictionaryRepository) withSourceMeetingCheck(items []types.TransactWriteItem, obs *model.DictObservation) ([]types.TransactWriteItem, error) {
+	if obs.OwnerID == "" || obs.MeetingID == "" {
+		return items, nil
+	}
+	expr, err := expression.NewBuilder().WithCondition(expression.AttributeExists(expression.Name("PK"))).Build()
+	if err != nil {
+		return nil, err
+	}
+	return append(items, types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{
+		TableName: aws.String(r.tableName), Key: dictKey(model.PrefixUser+obs.OwnerID, model.PrefixMeeting+obs.MeetingID),
+		ConditionExpression: expr.Condition(), ExpressionAttributeNames: expr.Names(),
+	}}), nil
+}
+
 // MergeAutoObservation records a new observation and bumps the auto term in
-// one transaction. hits increases only when the observation row is new.
+// one transaction. hits increases only when the observation row is new and
+// SkipHit is false.
 func (r *DictionaryRepository) MergeAutoObservation(ctx context.Context, in DictMergeInput) error {
-	if in.Observation == nil || in.Observation.PK != in.PK || in.Observation.TermKey != in.TermKey {
+	return r.observeAutoTerm(ctx, in, model.TermStateActive, nil)
+}
+
+// PromoteSuggestedTerm turns an unedited suggested auto term active at the
+// expected version and records the observation in the same transaction (A4:
+// an untainted run confirms a suggestion). The suggestion's content came from
+// a tainted run, so heardAs, sourceTypes and the promotion fields are replaced
+// by the untainted run's values and hits is set to 1, not incremented.
+func (r *DictionaryRepository) PromoteSuggestedTerm(ctx context.Context, in DictMergeInput, content DictPromotion) error {
+	if strings.TrimSpace(content.DisplayAs) == "" || len(in.SourceTypes) == 0 {
+		return fmt.Errorf("invalid dictionary term promotion")
+	}
+	return r.observeAutoTerm(ctx, in, model.TermStateSuggested, &content)
+}
+
+// observeAutoTerm is the shared obs Put + guarded term Update. fromState is
+// the state the term must be in; promotion, when set, makes it active.
+func (r *DictionaryRepository) observeAutoTerm(ctx context.Context, in DictMergeInput, fromState string, promotion *DictPromotion) error {
+	if in.Observation == nil || in.Observation.PK != in.PK || in.Observation.TermKey != in.TermKey ||
+		in.Observation.SK != model.DictObsSK(in.TermKey, in.Observation.MeetingID) {
 		return fmt.Errorf("invalid dictionary observation merge")
 	}
 	obsPut, err := r.putIfAbsent(in.Observation)
@@ -511,26 +591,50 @@ func (r *DictionaryRepository) MergeAutoObservation(ctx context.Context, in Dict
 		return err
 	}
 	condition := expression.Name("version").Equal(expression.Value(in.ExpectedVersion)).
-		And(expression.Name("state").Equal(expression.Value(model.TermStateActive))).
+		And(expression.Name("state").Equal(expression.Value(fromState))).
 		And(expression.Name("origin").Equal(expression.Value(model.TermOriginAuto))).
 		And(expression.AttributeNotExists(expression.Name("userEditedAt")))
 	update := expression.Set(expression.Name("heardAs"), expression.Value(in.HeardAs)).
 		Set(expression.Name("lastSeenAt"), expression.Value(in.SeenAt)).
 		Set(expression.Name("updatedAt"), expression.Value(in.SeenAt)).
-		Set(expression.Name("version"), expression.Name("version").Plus(expression.Value(1))).
-		Add(expression.Name("hits"), expression.Value(1))
+		Set(expression.Name("version"), expression.Name("version").Plus(expression.Value(1)))
+	switch {
+	case promotion != nil:
+		update = update.Set(expression.Name("state"), expression.Value(model.TermStateActive)).
+			Set(expression.Name("displayAs"), expression.Value(strings.TrimSpace(promotion.DisplayAs))).
+			Set(expression.Name("confidence"), expression.Value(promotion.Confidence)).
+			Set(expression.Name("transcribeKo"), expression.Value(promotion.TranscribeKo)).
+			Set(expression.Name("transcribeEn"), expression.Value(promotion.TranscribeEn)).
+			Set(expression.Name("firstSourceMeetingId"), expression.Value(promotion.FirstSourceMeetingID)).
+			Set(expression.Name("hits"), expression.Value(1))
+		for _, field := range [][2]string{{"phrase", promotion.Phrase}, {"type", promotion.Type}} {
+			if field[1] != "" {
+				update = update.Set(expression.Name(field[0]), expression.Value(field[1]))
+			} else {
+				update = update.Remove(expression.Name(field[0]))
+			}
+		}
+	case !in.SkipHit:
+		update = update.Add(expression.Name("hits"), expression.Value(1))
+	}
+	if len(in.SourceTypes) > 0 {
+		update = update.Set(expression.Name("sourceTypes"), expression.Value(in.SourceTypes))
+	}
 	expr, err := expression.NewBuilder().WithUpdate(update).WithCondition(condition).Build()
 	if err != nil {
 		return err
 	}
-	items := []types.TransactWriteItem{obsPut, {Update: &types.Update{
+	items, err := r.withSourceMeetingCheck([]types.TransactWriteItem{obsPut, {Update: &types.Update{
 		TableName: aws.String(r.tableName), Key: dictKey(in.PK, model.DictTermSK(in.TermKey)),
 		UpdateExpression: expr.Update(), ConditionExpression: expr.Condition(),
 		ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(),
-	}}}
+	}}}, in.Observation)
+	if err != nil {
+		return err
+	}
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
 	if err != nil {
-		return dictTransactError(err, []error{ErrDictObservationExists, ErrDictTermConflict})
+		return dictTransactError(err, []error{ErrDictObservationExists, ErrDictTermConflict, ErrDictSourceMeetingGone})
 	}
 	return nil
 }
@@ -678,13 +782,14 @@ func (r *DictionaryRepository) conditionalDelete(ctx context.Context, pk, termKe
 	return dictSingleError(err, ErrDictTermConflict)
 }
 
-// EvictAutoTerm deletes an unedited active auto term at the expected version,
-// then deletes its observations best effort.
+// EvictAutoTerm deletes an unedited active or suggested auto term at the
+// expected version, then deletes its observations best effort. Both states
+// count toward the automatic-term cap.
 func (r *DictionaryRepository) EvictAutoTerm(ctx context.Context, pk, termKey string, expectedVersion int64) (DictWriteResult, error) {
 	condition := expression.Name("version").Equal(expression.Value(expectedVersion)).
 		And(expression.Name("origin").Equal(expression.Value(model.TermOriginAuto))).
 		And(expression.AttributeNotExists(expression.Name("userEditedAt"))).
-		And(expression.Name("state").Equal(expression.Value(model.TermStateActive)))
+		And(expression.Name("state").In(expression.Value(model.TermStateActive), expression.Value(model.TermStateSuggested)))
 	expr, err := expression.NewBuilder().WithCondition(condition).Build()
 	if err != nil {
 		return DictWriteResult{}, err
@@ -809,12 +914,16 @@ func vocabularyStateUpdate(change VocabularyStateChange, now string) expression.
 		"activeFingerprint": change.ActiveFingerprint, "buildingFingerprint": change.BuildingFingerprint,
 		"buildStartedAt": change.BuildStartedAt, "buildSubmitted": change.BuildSubmitted,
 		"bypassPending": change.BypassPending, "flippedAt": change.FlippedAt, "emptySince": change.EmptySince,
+		"submittedAt": change.SubmittedAt,
 	})
 }
 
 // UpdateVocabularyState applies a change to a VOCAB# row at the expected
 // version and bumps the version.
 func (r *DictionaryRepository) UpdateVocabularyState(ctx context.Context, userID, vocabContext, lang string, expectedVersion int64, change VocabularyStateChange, now string) error {
-	return r.guardedUpdate(ctx, dictKey(model.PrefixUser+userID, model.VocabSK(vocabContext, lang)), vocabularyStateUpdate(change, now),
-		expression.Name("version").Equal(expression.Value(expectedVersion)))
+	condition := expression.Name("version").Equal(expression.Value(expectedVersion))
+	if change.ExpectBuildingFingerprint != nil {
+		condition = condition.And(expression.Name("buildingFingerprint").Equal(expression.Value(*change.ExpectBuildingFingerprint)))
+	}
+	return r.guardedUpdate(ctx, dictKey(model.PrefixUser+userID, model.VocabSK(vocabContext, lang)), vocabularyStateUpdate(change, now), condition)
 }

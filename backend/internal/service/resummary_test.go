@@ -42,7 +42,7 @@ func (r *resummaryTestRepo) CaptureResummary(_ context.Context, owner, mid, requ
 	copy := *m
 	fields := map[string]model.SummaryValue{}
 	stored := map[string]interface{}{}
-	for k, v := range map[string]interface{}{"content": m.Content, "notes": m.Notes, "transcriptA": m.TranscriptA, "transcriptB": m.TranscriptB, "selectedTranscript": m.SelectedTranscript, "transcriptSegments": m.TranscriptSegments, "status": m.Status} {
+	for k, v := range map[string]interface{}{"content": m.Content, "notes": m.Notes, "transcriptA": m.TranscriptA, "transcriptB": m.TranscriptB, "selectedTranscript": m.SelectedTranscript, "transcriptSegments": m.TranscriptSegments, "status": m.Status, "noteLanguage": m.NoteLanguage} {
 		fields[k] = model.SummaryValue{Present: true, Value: v}
 		stored[k] = v
 	}
@@ -158,9 +158,14 @@ func TestResummarySelectedSnapshotAndAtomicCompletion(t *testing.T) {
 	if len(r.reads) != 0 {
 		t.Fatal("queue hydrated S3")
 	}
+	var enqueued []string
+	s.SetTermsEnqueuer(func(_ context.Context, owner, meeting string) { enqueued = append(enqueued, owner+"/"+meeting) })
 	event := model.SummaryRequested{MeetingID: "meeting", RunID: result.RunID}
 	if err := s.Process(context.Background(), event); err != nil {
 		t.Fatal(err)
+	}
+	if len(enqueued) != 1 || enqueued[0] != "owner/meeting" {
+		t.Fatalf("terms extraction must follow CompleteResummary once: %v", enqueued)
 	}
 	if r.completes != 1 || *calls != 1 || r.state.Status != model.AnalysisSucceeded || r.meetings[meetingKey("owner", "meeting")].Content != "새 요약" {
 		t.Fatalf("run %+v calls=%d", r.state, *calls)
@@ -173,7 +178,7 @@ func TestResummarySelectedSnapshotAndAtomicCompletion(t *testing.T) {
 	}
 }
 func TestResummarySourceChangesAndRevocationPreserveHumanContent(t *testing.T) {
-	for _, kind := range []string{"content", "notes", "transcript", "revoked", "deleted"} {
+	for _, kind := range []string{"content", "notes", "transcript", "noteLanguage", "revoked", "deleted"} {
 		t.Run(kind, func(t *testing.T) {
 			s, r, _ := newResummaryFixture(t)
 			requested, err := s.Request(context.Background(), "owner", "meeting")
@@ -189,6 +194,8 @@ func TestResummarySourceChangesAndRevocationPreserveHumanContent(t *testing.T) {
 					m.Notes = "new notes"
 				case "transcript":
 					m.TranscriptB = "changed selected text"
+				case "noteLanguage":
+					m.NoteLanguage = model.NoteLanguageEnglish
 				case "revoked":
 					r.revoked = true
 				case "deleted":
@@ -204,6 +211,9 @@ func TestResummarySourceChangesAndRevocationPreserveHumanContent(t *testing.T) {
 			}
 			if m := r.meetings[meetingKey("owner", "meeting")]; m != nil && m.Content == "stale generated text" {
 				t.Fatal("human content overwritten")
+			}
+			if kind == "noteLanguage" && r.state.ErrorCode != model.AnalysisSourceChanged {
+				t.Fatal(r.state.ErrorCode)
 			}
 			if kind == "revoked" && r.state.ErrorCode != "ACCESS_REVOKED" {
 				t.Fatal(r.state.ErrorCode)
@@ -299,6 +309,7 @@ func TestResummaryCompletionFailuresRemainObservable(t *testing.T) {
 				t.Fatal(err)
 			}
 			r.completeError = completion
+			s.SetTermsEnqueuer(func(context.Context, string, string) { t.Fatal("a failed publication must not enqueue terms") })
 			if failState {
 				r.failError = stateErr
 			}

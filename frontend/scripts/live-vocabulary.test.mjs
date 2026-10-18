@@ -18,11 +18,7 @@ function loadModule(name, deps = {}) {
 const live = loadModule('liveVocabulary');
 const plain = (v) => JSON.parse(JSON.stringify(v));
 
-test('only named (READY), well-formed vocabularies are selected, one per stream language in option order', () => {
-  assert.deepEqual(plain(live.selectLiveVocabularies({ vocabularies: { ko: { name: 'ttobak-vocab-0a', status: 'BUILDING' },
-    en: { status: 'BUILDING' } } })), { 'ko-KR': 'ttobak-vocab-0a' });
-  assert.deepEqual(plain(live.selectLiveVocabularies({ vocabularies: { ko: { name: 'bad,name' }, en: { name: 'v-en' } } })), { 'en-US': 'v-en' });
-  assert.deepEqual(plain(live.selectLiveVocabularies(null)), {});
+test('well-formed vocabularies are sent one per stream language in option order; none sends nothing', () => {
   const both = { 'en-US': 'v-en', 'ko-KR': 'v-ko' };
   for (const [opts, want] of [
     [{ vocabularies: both, multiLanguage: true, languageOptions: 'ko-KR,en-US' }, { VocabularyNames: 'v-ko,v-en' }],
@@ -30,6 +26,8 @@ test('only named (READY), well-formed vocabularies are selected, one per stream 
     [{ vocabularies: { 'ko-KR': 'v-ko' }, multiLanguage: true, languageOptions: 'ko-KR,en-US' }, { VocabularyNames: 'v-ko' }],
     [{ vocabularies: { 'en-US': 'v-en' }, multiLanguage: true, languageOptions: 'ko-KR,ja-JP' }, {}],
     [{ vocabularies: both, multiLanguage: false, languageCode: 'en-US' }, { VocabularyName: 'v-en' }],
+    [{ vocabularies: { 'ko-KR': 'bad,name' }, multiLanguage: true, languageOptions: 'ko-KR,en-US' }, {}],
+    [{ vocabularies: undefined, multiLanguage: true, languageOptions: 'ko-KR,en-US' }, {}],
   ]) assert.deepEqual(plain(live.vocabularyRequestFields(opts)), want, JSON.stringify(opts));
 });
 

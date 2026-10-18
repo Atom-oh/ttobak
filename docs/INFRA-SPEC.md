@@ -72,6 +72,27 @@ the client's listener before adding its callback, then verify the deployed
 Cognito callback list and actual OAuth completion separately. See the
 [client instructions](../mcp-server/README.md#http-mcp-from-code-server).
 
+The companion client (`ttobak-companion-client`, export `TtobakCompanionClientId`)
+lets companion apps such as per-customer insight dashboards sign users in through
+managed login with their TTOBAK identity. It is a public code-grant client
+without `USER_PASSWORD_AUTH`. Direct `USER_SRP_AUTH` stays enabled, as on the
+SPA client, but companion apps must use managed login, send an S256 PKCE
+challenge (Cognito cannot require it per client) and exchange the code
+server-side. Its ID tokens carry the companion client ID in `aud` and its access
+tokens in `client_id`. The HTTP API JWT authorizer, edge auth and identity pool
+accept only the SPA client. Behind them, the Go API middleware checks every
+token it verifies, on the `Authorization` and `x-amzn-oidc-data` paths alike,
+against `API_ALLOWED_CLIENT_IDS`, and the WebSocket authorizer against
+`WS_ALLOWED_CLIENT_IDS`; both lists hold the first-party app and SPA clients
+and fail closed when unset. Companion tokens therefore never act as TTOBAK API
+or live-QA credentials. Rollout: AuthStack deploys before GatewayStack, so a
+companion client can exist briefly before the gates; no companion app can hold
+tokens until it is configured with the new client ID after both deploy. Bootstrap the SSM StringLists
+`/ttobak/auth/companion-callback-urls` and `/ttobak/auth/companion-logout-urls`
+with each app's exact callback and sign-out URLs before deploying AuthStack;
+their absence fails deployment. Companion apps authorize by reading TTOBAK
+account membership themselves; this stack grants them no table access.
+
 The pre-signup trigger reads the configured domain allowlist. PostAuthentication
 writes a separate USER#/LOGIN item for lastLoginAt, with a short abort timeout,
 try/catch, no reserved concurrency and a DISABLED switch. It must fail open; it is
@@ -111,7 +132,14 @@ reader readiness and live proof agreement, seeds the same proof, then performs a
 bounded consumer-first rotation with cache drains and retired-proof rejection
 checks. Current source does not prove the live rotation completed: retain its
 redacted receipt. See the [HTTP proof migration contract](runbooks/http-origin-secret-migration.md).
-GatewayStack's optional `ttobak:httpOriginReleaseCiRoleName` context grants the existing CI role only `GetSecretValue`, `PutSecretValue` and `UpdateSecretVersionStage` on the exact `HttpOriginSecretArn` parameter; management-role bootstrap remains separate, and source does not prove deployed permissions or CI acceptance.
+GatewayStack's optional `ttobak:httpOriginReleaseCiRoleName` context keeps
+`GetSecretValue`, `PutSecretValue` and `UpdateSecretVersionStage` on the exact
+`HttpOriginSecretArn` parameter and adds `lambda:InvokeFunction` only on the four
+existing same-account, same-region coordinator targets: `ttobak-api`,
+`ttobak-api:live`, `ttobak-qa` and `ttobak-mcp`. These statements share the existing
+CI-role policy; missing context or boolean `false` omits it. Management-role
+bootstrap remains separate. Source does not prove deployed permissions, CI
+acceptance or completed release; see the [coordinator guide](../scripts/operations/HTTP_ORIGIN_RELEASE.md).
 This HTTP rollout is distinct from the required WS secret. Existing browser Cognito/Transcribe SDK calls, signed S3
 PUTs and IAM-signed server callback requests are separate service integrations,
 not newly approved public application origins.
@@ -152,8 +180,8 @@ Deploy Go/QA reader compatibility before writers (ADR-037).
 
 Whisper benchmark objects under bench-transcripts/ have current and noncurrent
 version expiry; a delete marker is not immediate physical deletion of all versions.
-Transcribe vocabulary table files under vocab/ (`vocab/{name}.tsv`) expire after
-one day, current and noncurrent; the API deletes each after READY or FAILED. The
+Transcribe vocabulary table files under vocab/ (`vocab/{name}.{fingerprint}.tsv`) expire after
+one day, current and noncurrent; the API deletes each after READY, FAILED or quota rejection. The
 prefix is not in the OAC allowlist and is never served by CloudFront.
 Inspect exact lifecycle values in StorageStack when changing retention. The
 websocket Lambda has no current dedicated connections-table CRUD; old documentation
@@ -185,6 +213,14 @@ use Haiku 5.5. QA detection and Translate are separate service/model choices.
 The API Lambda's `BEDROCK_TRANSLATE_MODEL_ID` selects GPT-6 Luna for
 `/api/translate` `quality=high`; only the API role receives that exact
 model/profile grant (`InvokeInterpreterModel`), with Amazon Translate as fallback.
+The API Lambda also receives `TRANSLATE_HOURLY_LIMIT` (default 3000) and
+`TRANSLATE_HIGH_HOURLY_LIMIT` (default 1500) from CDK context
+`ttobak:translateHourlyLimit` / `ttobak:translateHighHourlyLimit`; synth rejects
+values that are not non-negative integers, and 0 disables a limit.
+`TRANSLATE_HIGH_TIMEOUT_MS` (context `ttobak:translateHighTimeoutMs`, default 6000)
+bounds each interpreter call; synth rejects values outside 500–8000. Changing either
+changes the function configuration and publishes a new `live` alias version. The
+counters use the existing table grant and `pendingShareExpiresAt` TTL.
 
 Custom vocabularies: AiStack's API role statement `TranscribeVocabulary` allows
 Create/Update/Get/DeleteVocabulary only on
@@ -217,6 +253,7 @@ and [async contract](../backend/python/qa/ASYNC_CONTRACT.md).
 | Custom AllPartsTranscribed | summarize |
 | Custom ImageUploadCompleted | process-image |
 | Custom ActionItemsRequested, ttobak.analysis | summarize, action analysis only |
+| Custom TermsRequested, ttobak.analysis | summarize, automatic term extraction only |
 | Custom DocumentUploadCompleted, ttobak.upload | document-extract, queued canonical runs only |
 | S3 Object Created, docs/ slide suffix filter | convert-doc |
 | One-minute ttobak-kb-index-tick | kb; configured enabled by the checked-in CDK app, all mode |
@@ -300,6 +337,27 @@ configuration. Production DIARIZATION_S3_KEY is image-owned. The separate Whispe
 benchmark task has its own bundle variable; do not conflate the two. Its
 run_engine.py allowlisting entrypoint must not be overridden by CDK entryPoint or
 command. Engine selection uses ENGINE; image and CDK tests guard the boundary.
+
+The capacity provider enables ECS managed draining, so aws-cdk-lib adds no
+InstanceDrainHook lifecycle hook or drain Lambda; that hook could not drain a host
+that had not yet registered with ECS. The `WhisperAzRebalanceSuspended` custom
+resource suspends `AZRebalance` on `ttobak-whisper-asg` (its IAM is
+`autoscaling:SuspendProcesses`/`ResumeProcesses` on that group only), and deleting
+it resumes the process. Host user data sets `ECS_ENABLE_SPOT_INSTANCE_DRAINING=true`.
+The production image sets `PYTHONUNBUFFERED=1`. Every WhisperStack deploy also
+reapplies `desiredCapacity: 0`; deploy it only while the cluster is idle.
+
+GatewayStack's `ttobak-stt-recovery` rule (`rate(15 minutes)`, retry 0, 10-minute
+maximum age, no DLQ) sends the fixed input `{source: ttobak.recovery,
+detail-type: SttRecoveryTick, detail: {}}` to the existing transcribe Lambda.
+`STT_RECOVERY_MODE` and `STT_RECOVERY_DELETE_MODE` (`off|report|active`) default to
+`report`. The transcribe role adds only `ecs:ListTasks` on `Resource: "*"`
+confined by an `ArnEquals ecs:cluster` condition to the Whisper cluster (a
+cluster-only ListTasks call does not match a container-instance resource);
+RunTask and PassRole are unchanged. Existing AiStack table and bucket grants cover
+the scan, claims, transactional deletes, transcript self-copy and object deletes.
+Deletions leave noncurrent object versions in the versioned bucket. See the
+[ADR-031 amendment](decisions/ADR-031-summarize-timeout-resilience.md#amendment-2026-10-17-scheduled-stt-recovery-and-failed-recording-retention).
 
 Audio cropping uses the private `ttobak.audio` / `AudioCropRequested` EventBridge
 rule to the existing transcribe Lambda and production Whisper task. It adds no
@@ -436,6 +494,31 @@ dependencies so the producer cannot update ahead of delivery setup. The document
 worker from #208 must still be physically deployed before document upload
 producers. See [release order](runbooks/meeting-document-release.md); this code
 does not claim that deployment has happened.
+
+## Automatic term extraction delivery
+
+`TtobakGatewayStack` routes default-bus `ttobak.analysis` events with
+detail-type `TermsRequested` (rule `ttobak-terms-requested`) to the existing
+summarize Lambda. Detail contains only `{ownerId,meetingId,runId}`; the worker
+rereads every source. Delivery expires after five minutes, with three retry
+attempts and the SSE-SQS `ttobak-terms-dlq` (seven-day retention, redrive from
+other queues denied). Queue SendMessage and Lambda invocation are scoped to the
+exact rule ARN, and `PipelineFailures` watches the DLQ. The summarize role's
+existing default-bus `PutEvents` and Bedrock grants cover publication and the
+Claude model. The API function depends on the rule, as for saved summaries.
+
+Summarize receives `AUTO_TERMS_MODE` (`off` by default, or `personal`),
+`AUTO_TERMS_USERS` (comma-separated Cognito subs, empty means every owner),
+`AUTO_TERMS_MIN_CONFIDENCE` (default `0.85`, in (0, 1]) and
+`BEDROCK_TERMS_MODEL_ID` (default `global.anthropic.claude-sonnet-5-5`; a
+`global.`/`apac.` Claude profile) from CDK context `ttobak:autoTermsMode`,
+`ttobak:autoTermsUsers`, `ttobak:autoTermsMinConfidence` and
+`ttobak:bedrockTermsModelId`; invalid values fail synth. No other function
+receives these variables. With the default `off`, Enqueue returns `DISABLED`
+before any read, write or publish, so the rule stays idle. Set `personal` only in
+a deployment after one with `off` has delivered the rule and summarize code. Before
+merging, the worker migrates the owner's legacy dictionary blob through the
+summarize role's existing table grant. See ADR-008.
 
 ## Project invitation activation
 
