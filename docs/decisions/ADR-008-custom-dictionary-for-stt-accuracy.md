@@ -312,13 +312,17 @@ readers never build. Callers and response: [API-SPEC](../API-SPEC.md#personal-di
   streams); the en-US table rules below stay, unused, and `vocabularies.en`
   reports `NONE`.
 - **Table.** Active phrase terms, manual first, then hits, then oldest, deduped
-  by phrase; immutable `vocab/{InactiveName}.{fingerprint}.tsv` (ADR-037 style:
-  a stale submitter writes its own key, never a newer table) with header
+  by phrase; `vocab/{InactiveName}.{fingerprint}.tsv` (a stale submitter
+  writes its own key, never a different table; unlike ADR-037 keys it is not
+  attempt-unique, so retries of one table share it) with header
   `Phrase\tSoundsLike\tIPA\tDisplayAs`, four fields per row, at most 1,500 rows
   and 48 KB; invalid rows are dropped individually. The phrase validator is
   minimal (spaces become `-`, AWS table rules), separate from `terms_filter.go`.
   ko-KR drops dotted acronyms until acceptance item 2. en-US
   needs five Latin-only phrases. The file is deleted after READY, FAILED or quota.
+- **Plan.** Every state-machine step reads the VOCAB# row and only then lists
+  the terms, so a step never acts on a listing older than the row it read; a
+  term deleted by a concurrent write is never built back in.
 - **Claims** need a changed fingerprint, no claimed build, and
   `VOCAB_REBUILD_MIN_INTERVAL` (default 10m) since the last flip or build start;
   each manual write grants one bypass (kept as `bypassPending` during a build).
@@ -356,7 +360,10 @@ readers never build. Callers and response: [API-SPEC](../API-SPEC.md#personal-di
   name (below).
 - **No vocabulary name in responses:** the live client would send it on a
   ko-KR/en-US multi-language stream, which may fail; it waits for item 5.
-- **Empty language** stops advertising at once; deleted after 24 h as in Slots.
+- **Empty language** stops advertising at once (`activeReady` false,
+  `emptySince` set), also while a build is claimed or submitted: the claim is
+  dropped and its provider result is never flipped or served. Both slots are
+  deleted after 24 h as in Slots.
 - **Not covered:** en-US builds, batch en-US `LanguageIdSettings`, scheduled
   reclamation of inactive or retired names,
   account contexts, live-config, client stream retry, and GatewayStack wiring

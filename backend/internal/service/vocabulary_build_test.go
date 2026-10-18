@@ -539,3 +539,73 @@ func TestDictionaryGetStartsBuildAndReportsVocabularies(t *testing.T) {
 		t.Fatalf("the polled GET flips the finished build: %+v", resp)
 	}
 }
+
+// A request that listed a term before another request deleted it and emptied
+// the language must not build it back in from the stale listing.
+func TestEnsureVocabulariesRelistsAfterEachStateRead(t *testing.T) {
+	fx := newBuilderFixture(t, "a")
+	fx.add("Alpha Grid", "Alpha-Grid")
+	fx.ensure(true)
+	fx.tr.settle(tt.VocabularyStateReady)
+	fx.ensure(false)
+	active := fx.ko().ActiveName
+	fx.after(11 * time.Minute)
+	other := fx.newService("b")
+	fx.store.hooks["list"] = func() { // A has listed Alpha; B deletes it and empties
+		delete(fx.store.terms, model.DictTermSK(TermKey("Alpha Grid")))
+		other.EnsureVocabularies(context.Background(), "u1", model.VocabContextPersonal, true)
+	}
+	fx.ensure(true)
+	if ko := fx.ko(); ko.ActiveReady || ko.EmptySince == "" || ko.Status != model.VocabStatusNone || ko.InactiveName != "" ||
+		fx.tr.count("create:") != 1 || len(fx.objects.puts) != 0 || fx.batch(t) != "" || ko.ActiveName != active {
+		t.Fatalf("a deleted term is never rebuilt from a stale listing: %+v %v", ko, fx.tr.calls)
+	}
+}
+
+// Emptying the dictionary while a submitted build is PENDING stops serving at
+// once and the build's later READY result is never flipped or served.
+func TestEmptyingDuringSubmittedBuildDropsIt(t *testing.T) {
+	fx := newBuilderFixture(t, "a")
+	fx.add("Alpha Grid", "Alpha-Grid")
+	fx.ensure(true)
+	fx.tr.settle(tt.VocabularyStateReady)
+	fx.ensure(false)
+	active, pending := fx.ko().ActiveName, name("a", 2)
+	fx.add("Beta Node", "Beta-Node")
+	if fx.ensure(true); fx.ko().InactiveName != pending || !fx.ko().BuildSubmitted {
+		t.Fatalf("a submitted build is pending: %+v", fx.ko())
+	}
+	fx.store.terms = map[string]model.DictTerm{}
+	views, _ := fx.ensure(true)
+	if ko := fx.ko(); ko.ActiveReady || ko.EmptySince == "" || ko.Status != model.VocabStatusNone || ko.BuildSubmitted ||
+		ko.BuildingFingerprint != "" || views.Ko.ActiveReady || fx.batch(t) != "" {
+		t.Fatalf("an emptied language stops advertising during a build: %+v", ko)
+	}
+	fx.tr.settle(tt.VocabularyStateReady)
+	if fx.ensure(false); fx.ko().ActiveName != active || fx.ko().ActiveReady || fx.batch(t) != "" {
+		t.Fatalf("the obsolete READY result is ignored: %+v", fx.ko())
+	}
+	fx.after(25 * time.Hour)
+	fx.ensure(false)
+	if ko := fx.ko(); ko.ActiveName != "" || ko.InactiveName != "" || ko.RetiredName != "" || fx.tr.vocabs[active] != nil || fx.tr.vocabs[pending] != nil {
+		t.Fatalf("both slots are deleted after the grace window: %+v %v", ko, fx.tr.calls)
+	}
+}
+
+// A manual write that loses the claim race keeps its interval bypass.
+func TestLostClaimRaceKeepsBypass(t *testing.T) {
+	fx := newBuilderFixture(t, "a")
+	fx.add("Alpha Grid", "Alpha-Grid")
+	fx.ensure(true)
+	fx.tr.settle(tt.VocabularyStateReady)
+	fx.ensure(false)
+	fx.add("Beta Node", "Beta-Node")
+	fx.store.hooks["vocabUpdate"] = func() { // a concurrent no-op write moves the version
+		st := fx.ko()
+		st.Version++
+		fx.store.vocab[st.SK] = st
+	}
+	if fx.ensure(true); fx.ko().Status != model.VocabStatusBuilding || !fx.ko().BuildSubmitted {
+		t.Fatalf("the bypass survives a lost claim and the retry builds: %+v", fx.ko())
+	}
+}
