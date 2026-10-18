@@ -14,32 +14,8 @@ import (
 	"github.com/ttobak/backend/internal/model"
 )
 
-// ReplaceMeetingAccountInsights retains the source identity when a valid empty
-// result has no copy rows. Missing or invalid source results cannot delete copies.
-func (r *DynamoDBRepository) ReplaceMeetingAccountInsights(ctx context.Context, source *model.Meeting, insights []model.AccountInsight) error {
-	if len(insights) > 0 {
-		return r.PutAccountInsights(ctx, insights)
-	}
-	if source == nil || source.UserID == "" || source.MeetingID == "" ||
-		source.AccountID == "" || !source.SharedToAccount {
-		return ErrConditionFailed
-	}
-	var canonical []model.MeetingInsight
-	if json.Unmarshal([]byte(source.Insights), &canonical) != nil || canonical == nil || len(canonical) != 0 {
-		return ErrConditionFailed
-	}
-	first := model.AccountInsight{PK: model.PrefixAccount + source.AccountID,
-		SK:        model.PrefixInsight + source.Date.UTC().Format("2006-01-02T15:04:05Z07:00") + "#" + source.MeetingID + "#0",
-		AccountID: source.AccountID, SourceUserID: source.UserID, SourceID: source.MeetingID,
-		SummaryGeneration: source.SummaryGeneration(), InsightsRevision: source.InsightsRevision, OccurredAt: source.Date}
-	return r.replaceCurrentAccountInsights(ctx, first, insights)
-}
-
 func (r *DynamoDBRepository) putCurrentAccountInsights(ctx context.Context, insights []model.AccountInsight) error {
-	return r.replaceCurrentAccountInsights(ctx, insights[0], insights)
-}
-
-func (r *DynamoDBRepository) replaceCurrentAccountInsights(ctx context.Context, first model.AccountInsight, insights []model.AccountInsight) error {
+	first := insights[0]
 	snapshot, err := r.CaptureSummaryPrivacy(ctx, first.SourceUserID, first.SourceID)
 	if err != nil {
 		return err
@@ -49,12 +25,11 @@ func (r *DynamoDBRepository) replaceCurrentAccountInsights(ctx context.Context, 
 	}
 	meeting := snapshot.Meeting
 	if !meeting.SharedToAccount || meeting.AccountID != first.AccountID ||
-		meeting.SummaryGeneration() != first.SummaryGeneration || meeting.InsightsRevision != first.InsightsRevision ||
-		first.PK != model.PrefixAccount+meeting.AccountID || !first.OccurredAt.Equal(meeting.Date) {
+		meeting.SummaryGeneration() != first.SummaryGeneration || meeting.InsightsRevision != first.InsightsRevision {
 		return ErrConditionFailed
 	}
 	var canonical []model.MeetingInsight
-	if err := json.Unmarshal([]byte(meeting.Insights), &canonical); err != nil || canonical == nil || len(canonical) != len(insights) {
+	if err := json.Unmarshal([]byte(meeting.Insights), &canonical); err != nil || len(canonical) != len(insights) {
 		return ErrConditionFailed
 	}
 	keys := map[string]bool{}
@@ -98,9 +73,8 @@ func (r *DynamoDBRepository) replaceCurrentAccountInsights(ctx context.Context, 
 			return err
 		}
 		for _, existing := range page.Items {
-			pk, validPK := existing["PK"].(*types.AttributeValueMemberS)
 			sk, ok := existing["SK"].(*types.AttributeValueMemberS)
-			if !validPK || pk.Value != first.PK || !ok || !strings.HasPrefix(sk.Value, prefix) {
+			if !ok {
 				return ErrConditionFailed
 			}
 			if !keys[sk.Value] {
@@ -130,4 +104,70 @@ func (r *DynamoDBRepository) replaceCurrentAccountInsights(ctx context.Context, 
 	}
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}, noSummaryRetries)
 	return summaryWriteError(err)
+}
+
+// ClearAccountInsights removes an account's fanned-out rows after a validated
+// empty insight result. Each delete batch is conditioned on the captured meeting
+// (publication, account, generation, revision and the empty insights bytes), so
+// a stale run cannot delete rows that a newer nonempty publication fanned out.
+func (r *DynamoDBRepository) ClearAccountInsights(ctx context.Context, ownerID, meetingID, accountID, generation, revision string) error {
+	snapshot, err := r.CaptureSummaryPrivacy(ctx, ownerID, meetingID)
+	if err != nil {
+		return err
+	}
+	if snapshot == nil {
+		return ErrConditionFailed
+	}
+	meeting := snapshot.Meeting
+	if accountID == "" || !meeting.SharedToAccount || meeting.AccountID != accountID ||
+		meeting.SummaryGeneration() != generation || meeting.InsightsRevision != revision {
+		return ErrConditionFailed
+	}
+	if raw := strings.TrimSpace(meeting.Insights); raw != "" {
+		var canonical []model.MeetingInsight
+		if err := json.Unmarshal([]byte(raw), &canonical); err != nil || len(canonical) != 0 {
+			return ErrConditionFailed
+		}
+	}
+	prefix := model.PrefixInsight + meeting.Date.UTC().Format("2006-01-02T15:04:05Z07:00") + "#" + meetingID + "#"
+	query, err := expression.NewBuilder().WithKeyCondition(expression.Key("PK").Equal(expression.Value(model.PrefixAccount + accountID)).
+		And(expression.Key("SK").BeginsWith(prefix))).WithProjection(
+		expression.NamesList(expression.Name("PK"), expression.Name("SK"))).Build()
+	if err != nil {
+		return err
+	}
+	pages := dynamodb.NewQueryPaginator(r.client, &dynamodb.QueryInput{
+		TableName: aws.String(r.tableName), ConsistentRead: aws.Bool(true),
+		KeyConditionExpression: query.KeyCondition(), ProjectionExpression: query.Projection(),
+		ExpressionAttributeNames: query.Names(), ExpressionAttributeValues: query.Values(),
+	})
+	var deletes []types.TransactWriteItem
+	for pages.HasMorePages() {
+		page, err := pages.NextPage(ctx)
+		if err != nil {
+			return err
+		}
+		for _, existing := range page.Items {
+			deletes = append(deletes, types.TransactWriteItem{Delete: &types.Delete{
+				TableName: aws.String(r.tableName), Key: existing,
+			}})
+		}
+	}
+	for len(deletes) > 0 {
+		checks, err := r.summaryChecks(snapshot, 0)
+		if err != nil {
+			return err
+		}
+		n := min(len(deletes), 100-len(checks))
+		if n <= 0 {
+			return ErrSummaryLimit
+		}
+		_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+			TransactItems: append(checks, deletes[:n]...)}, noSummaryRetries)
+		if err != nil {
+			return summaryWriteError(err)
+		}
+		deletes = deletes[n:]
+	}
+	return nil
 }
