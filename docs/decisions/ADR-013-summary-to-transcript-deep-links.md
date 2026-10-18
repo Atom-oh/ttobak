@@ -1,6 +1,7 @@
 # ADR-013: Summary Links to Source Transcript Segments
 
-- Status: Accepted, including the source-fidelity addendum dated 2026-09-11.
+- Status: Accepted, including the source-fidelity addendum dated 2026-09-11 and
+  the anchor-distance addendum dated 2026-10-18.
 - Decision date: Original decision date not recorded.
 - Implementation checked: 2026-09-13.
 
@@ -19,8 +20,9 @@ the application's established custom-link pattern without a new entity schema.
 
 `SummarizeTranscript` selects the effective transcript, A or B, and verifies
 candidate segments against that source. The same verified segments feed the prompt
-and `resolveTranscriptAnchors`. The resolver chooses the closest segment start;
-it strips markers without segments and uses plain timestamps when IDs are absent.
+and `resolveTranscriptAnchors`. The resolver chooses the closest timed segment
+start within a bound (addendum below); it strips markers without timed segments
+and uses plain timestamps when IDs are absent or the marker is out of bound.
 The original function names and arbitrary time-range sketch were illustrative.
 
 The frontend resolves links to `#ts-{segmentId}`, scrolls the transcript, and
@@ -43,6 +45,26 @@ model's summary is semantically entailed by that segment.
   This strict parser contract does not silently extend to auxiliary image analysis
   or refinement paths.
 
+## Anchor-distance addendum, 2026-10-18
+
+Unbounded nearest-start snapping linked a marker to some segment however far the
+claimed time was from it, including times past the end of the recording. The
+shared `nearestSegment` helper now applies `maxAnchorSnapSeconds` (2.0 seconds)
+to both `resolveTranscriptAnchors` and simulator requirement evidence:
+
+- Untimed segments never anchor.
+- A marker more than the bound from every timed segment start, or later than
+  the last timed segment's end, gets no link. In notes it becomes a plain
+  `(MM:SS)` label; the surrounding text is kept. Simulator evidence stays empty
+  while the extracted requirement is retained.
+- The whole result is never rejected for an unresolvable marker. Publication and
+  retry remain governed by ADR-040.
+
+Distance-bounded resolution is still not entailment. A linked segment only proves
+that a real segment starts near the model's claimed time; it does not prove that
+the segment supports the claim. The bound removes far-off guesses, and the plain
+label still shows a model-reported time the transcript does not corroborate.
+
 ## Consequences and risks
 
 Readers can verify summary context without extra matching-model calls. Prompt and
@@ -54,6 +76,8 @@ necessary. Linked predecessor context has separate confidentiality rules in ADR-
 
 - [bedrock.go](../../backend/internal/service/bedrock.go): effective-source checks,
   `SummarizeTranscript`, `resolveTranscriptAnchors`, final-response parsing.
+- [sim.go](../../backend/internal/service/sim.go): shared `nearestSegment` bound;
+  [transcript_anchor_bound_test.go](../../backend/internal/service/transcript_anchor_bound_test.go).
 - [ai_note_source_test.go](../../backend/internal/service/ai_note_source_test.go),
   [transcript_source_policy_test.go](../../backend/internal/service/transcript_source_policy_test.go):
   source selection, notes, and response regression coverage.
