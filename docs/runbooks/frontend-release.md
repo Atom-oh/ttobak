@@ -39,8 +39,10 @@ publication contract tests and documentation checks.
 `FrontendStack` attaches the application response-header policy to the default
 application behavior and immutable Next assets. The default cache policy has a
 zero minimum TTL and enables gzip/Brotli compression. It honors origin cache
-metadata: the publisher writes HTML/RSC and mutable public assets with
-`no-cache,max-age=0,must-revalidate`; infrastructure-owned config has no-cache
+metadata: the publisher force-copies HTML/RSC with
+`no-cache,max-age=0,must-revalidate` and applies that metadata to mutable public
+uploads actually performed. Equal-size/mtime objects skipped by `aws s3 sync`
+retain their existing metadata. Infrastructure-owned config has no-cache
 metadata. Objects without cache metadata retain the one-day default TTL, bounded
 by a 365-day maximum. `/_next/static/*` uses the separate optimized policy.
 Application headers set one-year HSTS, nosniff, frame denial, no-referrer and CSP.
@@ -72,6 +74,12 @@ and prerequisite changes. Never deploy KnowledgeStack incidentally.
 
 ## Publication order
 
+Merging a change matching the workflow's main-push path filters automatically
+queues a frontend release. A manual `workflow_dispatch` also deploys only from
+`main`. The separate same-repository PR job named `test` runs publication
+contract tests, shell syntax, frontend unit tests, lint and build; PR events
+cannot run the deployment job, AWS CLI installation or publisher.
+
 The frontend workflow and frontend-only manual helper call
 `scripts/publish-frontend.sh`. Before any cloud write, its preflight requires
 `S3_BUCKET` and `CF_DISTRIBUTION` and checks their bucket/distribution-ID formats.
@@ -89,7 +97,8 @@ This marker is a deployment prerequisite, not authenticated consumer acceptance.
 The shared publisher performs:
 
 1. Upload hashed Next assets with `public,max-age=31536000,immutable`.
-2. Upload mutable public assets with `no-cache,max-age=0,must-revalidate`.
+2. Sync mutable public assets, applying
+   `no-cache,max-age=0,must-revalidate` to uploads actually performed.
 3. Force-copy every HTML and RSC `.txt` payload with the same no-cache metadata,
    even when sync would skip equal-size/mtime files.
 4. Invalidate the verified distribution only after successful publication.
@@ -100,6 +109,9 @@ publication; later failure stops invalidation. A retry converges on the same
 build. S3 page publication is not an atomic multi-object transaction, so partial
 HTML publication requires retry or an authorized rebuild of the last accepted
 revision. Its referenced assets remain available.
+Intentionally removed HTML, RSC and public assets remain served until a separate
+authorized deletion. This retention preserves old clients; removing a file from
+the export does not withdraw its previously published URL.
 
 For an authorized manual frontend release:
 
