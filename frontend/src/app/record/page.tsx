@@ -1014,6 +1014,10 @@ function RecordPageInner() {
         </div>
       )}
 
+      {session.vocabularyNotice && session.isRecording && (
+        <p role="status" className="mx-6 mt-2 text-xs text-slate-500 dark:text-text-muted">{session.vocabularyNotice}</p>
+      )}
+
       {/* Speech Recognition Error Banner */}
       {session.speechError && (
         <div className="mx-6 mt-2 px-4 py-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg flex items-start gap-3">

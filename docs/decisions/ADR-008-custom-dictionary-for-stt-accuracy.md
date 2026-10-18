@@ -370,6 +370,18 @@ readers never build. Callers and response: [API-SPEC](../API-SPEC.md#personal-di
   of `VOCAB_REBUILD_MIN_INTERVAL`. An unmigratable legacy item keeps the pre-v2
   `Phrases` rebuild.
 
+## Amendment 2026-10-18: settings UI v2 and live vocabulary client
+
+- **No live name.** The A/B amendment's wait for item 5 stands: there is no
+  live-config route and no response names a vocabulary, so the recording page
+  only calls the dictionary GET (a flip opportunity) and live streams send none.
+- **Client plumbing.** `liveVocabulary.ts` sends one name per `LanguageOptions`
+  language when given names; with one, a vocabulary BadRequest before the first
+  event retries once without it and any vocabulary rejection drops it for the
+  recording. Without names it adds no request fields and never retries.
+- Not covered: live-config, source meeting titles, account dictionaries, live
+  aliases, backfill.
+
 Rollout acceptance (record each with a date):
 
 1. Vocabulary quota usage (default 100 per account; up to three ko-KR names per
@@ -421,5 +433,7 @@ concerns. This feature does not remove the need to review transcripts.
 - [transcribe.go](../../backend/internal/service/transcribe.go),
   [main.go](../../backend/cmd/transcribe/main.go),
   [transcribe.py](../../backend/whisper/transcribe.py): vocabulary consumers.
-- [CustomDictionary.tsx](../../frontend/src/components/CustomDictionary.tsx): UI.
+- [CustomDictionary.tsx](../../frontend/src/components/CustomDictionary.tsx) and
+  [liveVocabulary.ts](../../frontend/src/lib/liveVocabulary.ts): UI and live
+  vocabulary plumbing; tests in `frontend/scripts/`.
 - [main.go](../../backend/cmd/api/main.go): registered settings routes.
