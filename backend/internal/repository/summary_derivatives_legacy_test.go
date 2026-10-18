@@ -2,7 +2,6 @@ package repository
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"regexp"
 	"strings"
@@ -11,16 +10,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/ttobak/backend/internal/model"
 )
-
-func derivativeSourceCondition(input map[string]any) string {
-	condition := regexp.MustCompile(`#\w+`).ReplaceAllStringFunc(input["ConditionExpression"].(string), func(alias string) string {
-		return input["ExpressionAttributeNames"].(map[string]any)[alias].(string)
-	})
-	return regexp.MustCompile(`:\w+`).ReplaceAllStringFunc(condition, func(alias string) string {
-		value, _ := json.Marshal(input["ExpressionAttributeValues"].(map[string]any)[alias])
-		return string(value)
-	})
-}
 
 func TestInsightRevisionFollowsCapturedGenerationAcrossWriterRollback(t *testing.T) {
 	for _, flag := range []string{"", "0", "1"} {
@@ -33,22 +22,17 @@ func TestInsightRevisionFollowsCapturedGenerationAcrossWriterRollback(t *testing
 				// an unreadable generation-zero row.
 				parent.InsightsRevision = "previous-insight"
 				if generation != "" {
-					parent.SummaryPrivacy = &model.SummaryPrivacy{Version: 1, State: model.SummaryPrivacySafe,
-						GenerationID: generation, ContentSHA256: model.SummaryPrivacyHash(parent.Content)}
+					privacyStamp(parent, model.SummaryPrivacySafe, generation)
 				}
 				writes := 0
-				repo := privacyWriterWire(t, map[string]interface{}{"USER#owner/MEETING#meeting": parent},
+				repo := privacyWriterWire(t, privacyParentRows(parent),
 					func(target string, input map[string]any) (int, string) {
 						writes++
 						if !strings.HasSuffix(target, ".UpdateItem") {
 							t.Fatal("insight identity must publish atomically with its source-fenced result")
 						}
-						condition := derivativeSourceCondition(input)
-						for _, field := range []string{"content", "summaryPrivacy", "authorizationRevision", "insightsRevision", "previous-insight"} {
-							if !strings.Contains(condition, field) {
-								t.Fatalf("insight publication lost %s source fence", field)
-							}
-						}
+						condition := resolved(input, "ConditionExpression")
+						privacyWriterFences(t, condition, "insight publication lost %s source fence", []string{"content", "summaryPrivacy", "authorizationRevision", "insightsRevision", "previous-insight"})
 						if generation != "" && !strings.Contains(condition, generation) {
 							t.Fatal("rollback lost the captured stamped generation")
 						}
@@ -101,14 +85,13 @@ func TestLegacyAndStampedInsightIdentityRetainConditionalWriteOutcomes(t *testin
 				parent := privacyParent()
 				parent.Content, parent.AuthorizationRevision, parent.InsightsRevision = "summary", 7, "observed-insight"
 				if generation != "" {
-					parent.SummaryPrivacy = &model.SummaryPrivacy{Version: 1, State: model.SummaryPrivacySafe,
-						GenerationID: generation, ContentSHA256: model.SummaryPrivacyHash(parent.Content)}
+					privacyStamp(parent, model.SummaryPrivacySafe, generation)
 				}
 				writes := 0
-				repo := privacyWriterWire(t, map[string]interface{}{"USER#owner/MEETING#meeting": parent},
+				repo := privacyWriterWire(t, privacyParentRows(parent),
 					func(_ string, body map[string]any) (int, string) {
 						writes++
-						condition := derivativeSourceCondition(body)
+						condition := resolved(body, "ConditionExpression")
 						field := map[string]string{"generation": "summaryPrivacy", "authorization": "authorizationRevision", "insight revision": "insightsRevision"}[rejection]
 						if rejection != "ambiguous" && !strings.Contains(condition, field) {
 							t.Fatal("changed source identity would not reject this write")

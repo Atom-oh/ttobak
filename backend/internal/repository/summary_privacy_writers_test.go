@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"regexp"
 	"strings"
@@ -46,8 +45,7 @@ func privacyWriterWire(t *testing.T, rows map[string]interface{}, write func(str
 			} else if write != nil {
 				status, reply = write(target, body)
 			}
-			return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": {"application/x-amz-json-1.0"}},
-				Body: io.NopCloser(strings.NewReader(reply))}, nil
+			return summaryHTTPResponse(status, reply, nil), nil
 		})})
 	return NewDynamoDBRepository(client, "privacy-test")
 }
@@ -66,6 +64,15 @@ func privacyWriterFences(t *testing.T, condition, format string, fields []string
 	}
 }
 
+func privacyStamp(parent *model.Meeting, state, generation string) {
+	parent.SummaryPrivacy = &model.SummaryPrivacy{Version: 1, State: state,
+		GenerationID: generation, ContentSHA256: model.SummaryPrivacyHash(parent.Content)}
+}
+
+func privacyParentRows(parent *model.Meeting) map[string]interface{} {
+	return map[string]interface{}{"USER#owner/MEETING#meeting": parent}
+}
+
 func privacyParent() *model.Meeting {
 	return &model.Meeting{PK: "USER#owner", SK: "MEETING#meeting", UserID: "owner",
 		MeetingID: "meeting", EntityType: "MEETING", Status: model.StatusDone}
@@ -79,8 +86,7 @@ func TestAllNewGrantPathsRejectUnknownAndPrivateDerivation(t *testing.T) {
 				parent := privacyParent()
 				parent.Content = "PRIVATE_PREDECESSOR_DERIVATION"
 				if private {
-					parent.SummaryPrivacy = &model.SummaryPrivacy{Version: 1, State: model.SummaryPrivacyPrivate,
-						GenerationID: "private", ContentSHA256: model.SummaryPrivacyHash(parent.Content)}
+					privacyStamp(parent, model.SummaryPrivacyPrivate, "private")
 				}
 				rows := map[string]interface{}{"USER#owner/MEETING#meeting": parent,
 					"ACCOUNT#account/MEMBER#owner": &model.AccountMember{AccountID: "account", UserID: "owner"}}
@@ -121,7 +127,7 @@ func TestEveryNewGrantFencesParentAndRetainsInviteOnParentRace(t *testing.T) {
 			parent := privacyParent()
 			parent.AccountID, parent.SharedToAccount = "account", path == "account-cache"
 			writes := 0
-			repo := privacyWriterWire(t, map[string]interface{}{"USER#owner/MEETING#meeting": parent},
+			repo := privacyWriterWire(t, privacyParentRows(parent),
 				func(target string, body map[string]any) (int, string) {
 					writes++
 					if !strings.HasSuffix(target, ".TransactWriteItems") {
@@ -232,9 +238,8 @@ func TestDerivativePublicationRejectsResetWithSameContent(t *testing.T) {
 	privacyWriterEnabled(t)
 	parent := privacyParent()
 	parent.Content = "same summary"
-	parent.SummaryPrivacy = &model.SummaryPrivacy{Version: 1, State: model.SummaryPrivacyPrivate,
-		GenerationID: "before", ContentSHA256: model.SummaryPrivacyHash(parent.Content)}
-	repo := privacyWriterWire(t, map[string]interface{}{"USER#owner/MEETING#meeting": parent}, func(target string, body map[string]any) (int, string) {
+	privacyStamp(parent, model.SummaryPrivacyPrivate, "before")
+	repo := privacyWriterWire(t, privacyParentRows(parent), func(target string, body map[string]any) (int, string) {
 		if !strings.HasSuffix(target, ".UpdateItem") {
 			t.Fatal("unexpected derivative write")
 		}
@@ -276,7 +281,7 @@ func TestSharingSafeModeAndResetArePersistedAtomically(t *testing.T) {
 	parent.Content, parent.Notes = "PRIVATE_OLD_SUMMARY", "saved human memo"
 	parent.ActionItems = `[{"id":"keep-completed-id","text":"PRIVATE_OLD_TASK","completed":true}]`
 	parent.LiveSummary, parent.Insights, parent.Sentiment, parent.Tags = "PRIVATE_DRAFT", "PRIVATE_INSIGHT", "private", []string{"private"}
-	rows := map[string]interface{}{"USER#owner/MEETING#meeting": parent}
+	rows := privacyParentRows(parent)
 	now := time.Now().UTC()
 	state := &model.ResummaryState{RunID: "run", OwnerID: "owner", RequestedBy: "owner",
 		Status: model.AnalysisQueued, SharingSafe: true, SourceHash: "hash", LeaseUntil: now.Add(time.Minute).UnixMilli()}
@@ -373,8 +378,7 @@ func TestAccountInsightCopyCannotRepublishOldGenerationOrRevision(t *testing.T) 
 			parent.AccountID, parent.SharedToAccount = "account", true
 			parent.Date = time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
 			parent.Content, parent.InsightsRevision = "summary", "current-insight"
-			parent.SummaryPrivacy = &model.SummaryPrivacy{Version: 1, State: model.SummaryPrivacySafe,
-				GenerationID: "current-generation", ContentSHA256: model.SummaryPrivacyHash(parent.Content)}
+			privacyStamp(parent, model.SummaryPrivacySafe, "current-generation")
 			parent.Insights = `[{"type":"risk","text":"current insight"}]`
 			insight := model.AccountInsight{PK: "ACCOUNT#account", SK: "INSIGHT#2026-10-13T12:00:00Z#meeting#0",
 				AccountID: "account", SourceType: "meeting", SourceID: "meeting", SourceUserID: "owner",
@@ -387,7 +391,7 @@ func TestAccountInsightCopyCannotRepublishOldGenerationOrRevision(t *testing.T) 
 				insight.InsightsRevision = "old-insight"
 			}
 			writes := 0
-			repo := privacyWriterWire(t, map[string]interface{}{"USER#owner/MEETING#meeting": parent},
+			repo := privacyWriterWire(t, privacyParentRows(parent),
 				func(target string, body map[string]any) (int, string) {
 					writes++
 					if race != "after-read" {
