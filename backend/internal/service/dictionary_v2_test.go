@@ -194,23 +194,36 @@ func (f *fakeDictStore) ReconcileLegacyVocabularyState(_ context.Context, g repo
 	return f.UpdateVocabularyState(context.Background(), "", c, l, v, repository.VocabularyStateChange{Status: ch.Status, ActiveReady: ch.ActiveReady, FailureCode: ch.FailureCode}, now)
 }
 func (f *fakeDictStore) UpdateVocabularyState(_ context.Context, _ string, c, l string, v int64, ch repository.VocabularyStateChange, _ string) error {
+	f.fire("vocabUpdate")
 	f.vocabCalls++
 	s, ok := f.vocab[model.VocabSK(c, l)]
-	if !ok || s.Version != v {
+	if !ok || s.Version != v || (ch.ExpectBuildingFingerprint != nil && s.BuildingFingerprint != *ch.ExpectBuildingFingerprint) {
 		return cond()
 	}
-	if ch.Status != nil {
-		s.Status = *ch.Status
+	setS := func(dst *string, src *string) {
+		if src != nil {
+			*dst = *src
+		}
 	}
-	if ch.ActiveReady != nil {
-		s.ActiveReady = *ch.ActiveReady
+	setB := func(dst *bool, src *bool) {
+		if src != nil {
+			*dst = *src
+		}
 	}
-	if ch.FailureCode != nil {
-		s.FailureCode = *ch.FailureCode
-	}
-	if ch.ActiveName != nil {
-		s.ActiveName = *ch.ActiveName
-	}
+	setS(&s.Status, ch.Status)
+	setS(&s.FailureCode, ch.FailureCode)
+	setS(&s.ActiveName, ch.ActiveName)
+	setS(&s.InactiveName, ch.InactiveName)
+	setS(&s.RetiredName, ch.RetiredName)
+	setS(&s.ActiveFingerprint, ch.ActiveFingerprint)
+	setS(&s.BuildingFingerprint, ch.BuildingFingerprint)
+	setS(&s.BuildStartedAt, ch.BuildStartedAt)
+	setS(&s.FlippedAt, ch.FlippedAt)
+	setS(&s.EmptySince, ch.EmptySince)
+	setS(&s.SubmittedAt, ch.SubmittedAt)
+	setB(&s.ActiveReady, ch.ActiveReady)
+	setB(&s.BuildSubmitted, ch.BuildSubmitted)
+	setB(&s.BypassPending, ch.BypassPending)
 	if ch.TermCount != nil {
 		s.TermCount = *ch.TermCount
 	}
@@ -617,5 +630,19 @@ func TestMigrationReconcilesAnEarlierVocabularyState(t *testing.T) {
 	}
 	if state := store.vocab[sk]; state.Status != model.VocabStatusReady || !state.ActiveReady || state.TermCount != 2 || state.Version != 6 {
 		t.Fatalf("a matching VOCAB# row keeps its status: %+v", state)
+	}
+
+	// A retry after the builder flipped (legacy retired) must not reset
+	// ActiveName to the legacy name, which step 1 would then delete.
+	store = newFakeDictStore()
+	store.blob = legacyBlob("READY")
+	flipped := model.VocabularyState{SK: sk, ActiveName: "ttobak-vocab-ab", ActiveFingerprint: "f1", RetiredName: store.blob.VocabularyName,
+		Status: model.VocabStatusReady, ActiveReady: true, TermCount: 9, Version: 7}
+	store.vocab[sk] = flipped
+	if _, err := newTestDictService(store, nil).MigrateLegacyDictionary(context.Background(), "u1"); err != nil || store.blob.MigratedAt == "" {
+		t.Fatal(err)
+	}
+	if state := store.vocab[sk]; state != flipped {
+		t.Fatalf("an A/B row is left to the builder: %+v", state)
 	}
 }
