@@ -30,7 +30,15 @@ type DictionaryStore interface {
 	GetVocabularyState(ctx context.Context, userID, vocabContext, lang string) (*model.VocabularyState, error)
 	CreateLegacyVocabularyState(ctx context.Context, guard repository.LegacyBlobGuard, state *model.VocabularyState) error
 	ReconcileLegacyVocabularyState(ctx context.Context, guard repository.LegacyBlobGuard, vocabContext, lang string, expectedVersion int64, change repository.VocabularyStateChange, now string) error
+	CreateMigratedVocabularyState(ctx context.Context, userID string, state *model.VocabularyState) error
 	UpdateVocabularyState(ctx context.Context, userID, vocabContext, lang string, expectedVersion int64, change repository.VocabularyStateChange, now string) error
+	GetDictTerm(ctx context.Context, pk, termKey string) (*model.DictTerm, error)
+	CreateDictTerm(ctx context.Context, term *model.DictTerm) error
+	UpdateDictTerm(ctx context.Context, pk, termKey string, change repository.DictTermChange, actor, now string, expectedVersion int64) error
+	TombstoneDictTerm(ctx context.Context, pk, termKey, actor, now string, expectedVersion int64) (repository.DictWriteResult, error)
+	RestoreDictTerm(ctx context.Context, term *model.DictTerm, expectedVersion int64) error
+	DeleteManualTerm(ctx context.Context, pk, termKey string, expectedVersion int64) error
+	DeleteTombstone(ctx context.Context, pk, termKey string, expectedVersion int64) error
 }
 
 // TranscribeVocabularyAPI is the subset of the Transcribe client used here.
@@ -67,18 +75,23 @@ func NewDictionaryServiceWithStore(store DictionaryStore, client TranscribeVocab
 // only. It never rewrites the blob; vocabulary status sync is a conditional
 // update of the VOCAB# row (or of the blob status field before migration).
 func (s *DictionaryService) GetDictionary(ctx context.Context, userID string) (*model.DictionaryResponse, error) {
+	resp, _, _, err := s.readDictionary(ctx, userID)
+	return resp, err
+}
+
+func (s *DictionaryService) readDictionary(ctx context.Context, userID string) (*model.DictionaryResponse, *model.UserDictionary, []model.DictTerm, error) {
 	dict, err := s.repo.GetDictionary(ctx, userID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get dictionary: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to get dictionary: %w", err)
 	}
 	rows, err := s.repo.ListDictTerms(ctx, model.PrefixUser+userID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get dictionary terms: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to get dictionary terms: %w", err)
 	}
 	return &model.DictionaryResponse{
 		Terms:  unionLegacyTerms(dict, rows),
 		Status: s.personalVocabularyStatus(ctx, userID, dict),
-	}, nil
+	}, dict, rows, nil
 }
 
 // personalVocabularyStatus reports the legacy status string for the personal
@@ -183,9 +196,10 @@ func legacyVocabularyStatus(state *model.VocabularyState) string {
 	return ""
 }
 
-// UpdateDictionary updates a user's custom dictionary and triggers vocabulary build
-func (s *DictionaryService) UpdateDictionary(ctx context.Context, userID string, terms []model.DictionaryTerm) (*model.DictionaryResponse, error) {
-	vocabName := fmt.Sprintf("ttobak-vocab-%s", vocabSuffix(userID))
+// saveLegacyBlob is the pre-v2 blob write and in-place rebuild, kept only for
+// a blob that migration refuses (ErrLegacyDictionaryConflict).
+func (s *DictionaryService) saveLegacyBlob(ctx context.Context, userID string, terms []model.DictionaryTerm) (*model.DictionaryResponse, error) {
+	vocabName := legacyVocabularyName(userID)
 
 	dict := &model.UserDictionary{
 		PK:               model.PrefixUser + userID,
@@ -231,8 +245,8 @@ func (s *DictionaryService) UpdateDictionary(ctx context.Context, userID string,
 	}, nil
 }
 
-// DeleteTerm removes a single term from the user's dictionary
-func (s *DictionaryService) DeleteTerm(ctx context.Context, userID, phrase string) error {
+// deleteLegacyBlobTerm is the pre-v2 delete for a blob that migration refuses.
+func (s *DictionaryService) deleteLegacyBlobTerm(ctx context.Context, userID, phrase string) error {
 	dict, err := s.repo.GetDictionary(ctx, userID)
 	if err != nil {
 		return fmt.Errorf("failed to get dictionary: %w", err)
@@ -258,7 +272,7 @@ func (s *DictionaryService) DeleteTerm(ctx context.Context, userID, phrase strin
 	}
 
 	// Update with remaining terms
-	_, err = s.UpdateDictionary(ctx, userID, remaining)
+	_, err = s.saveLegacyBlob(ctx, userID, remaining)
 	return err
 }
 
@@ -370,6 +384,11 @@ func isVocabularyNotFoundError(err error) bool {
 		return code == "NotFoundException" || code == "BadRequestException"
 	}
 	return false
+}
+
+// legacyVocabularyName is the derived single-slot vocabulary name.
+func legacyVocabularyName(userID string) string {
+	return fmt.Sprintf("ttobak-vocab-%s", vocabSuffix(userID))
 }
 
 // vocabSuffix returns a collision-resistant suffix for vocabulary naming.

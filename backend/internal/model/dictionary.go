@@ -40,10 +40,66 @@ type DeleteTermRequest struct {
 	Phrase string `json:"phrase"`
 }
 
-// DictionaryResponse represents the API response for dictionary operations
+// DictionaryResponse represents the API response for dictionary operations.
+// Terms and Status are the legacy fields; Items lists the v2 rows.
 type DictionaryResponse struct {
 	Terms  []DictionaryTerm `json:"terms"`
 	Status string           `json:"status"`
+	Items  []DictTermView   `json:"items,omitempty"`
+	// MigrationPending means the legacy list is not yet copied into rows, so
+	// some legacy terms have no termId; a legacy PUT resolves it.
+	MigrationPending bool     `json:"migrationPending,omitempty"`
+	Warnings         []string `json:"warnings,omitempty"`
+}
+
+// DictTermView is the API form of a v2 term row. Tombstones are never listed.
+type DictTermView struct {
+	TermID       string   `json:"termId"`
+	DisplayAs    string   `json:"displayAs"`
+	Phrase       string   `json:"phrase"`
+	HeardAs      []string `json:"heardAs"`
+	AliasMode    string   `json:"aliasMode"`
+	Type         string   `json:"type"`
+	Origin       string   `json:"origin"`
+	State        string   `json:"state"`
+	UserEdited   bool     `json:"userEdited"`
+	Version      int64    `json:"version"`
+	TranscribeKo bool     `json:"transcribeKo"`
+	TranscribeEn bool     `json:"transcribeEn"`
+	Hits         int      `json:"hits"`
+	AddedAt      string   `json:"addedAt"`
+	UpdatedAt    string   `json:"updatedAt"`
+}
+
+// DictTermMutationResponse answers a v2 term create, update or delete.
+type DictTermMutationResponse struct {
+	Item     *DictTermView `json:"item,omitempty"`
+	TermID   string        `json:"termId"`
+	State    string        `json:"state"`
+	Status   string        `json:"status"`
+	Warnings []string      `json:"warnings,omitempty"`
+}
+
+// CreateDictTermRequest is the body of POST /api/settings/dictionary/terms.
+// An omitted phrase defaults to displayAs, as the legacy list does.
+type CreateDictTermRequest struct {
+	DisplayAs string   `json:"displayAs"`
+	Phrase    *string  `json:"phrase,omitempty"`
+	HeardAs   []string `json:"heardAs,omitempty"`
+	Type      string   `json:"type,omitempty"`
+	AliasMode string   `json:"aliasMode,omitempty"`
+}
+
+// UpdateDictTermRequest is the body of PATCH .../terms/{termId}; omitted
+// fields stay as they are. State may only move a suggestion to active.
+type UpdateDictTermRequest struct {
+	Version   *int64    `json:"version"`
+	DisplayAs *string   `json:"displayAs,omitempty"`
+	Phrase    *string   `json:"phrase,omitempty"`
+	HeardAs   *[]string `json:"heardAs,omitempty"`
+	Type      *string   `json:"type,omitempty"`
+	AliasMode *string   `json:"aliasMode,omitempty"`
+	State     *string   `json:"state,omitempty"`
 }
 
 // Dictionary v2 keys. Terms (DICTTERM#{termKey}) and observations

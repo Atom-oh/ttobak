@@ -218,6 +218,16 @@ func TestDictionaryWriteGuards(t *testing.T) {
 				return r.ReconcileLegacyVocabularyState(context.Background(), blob, model.VocabContextPersonal, model.VocabLangKo, 4, VocabularyStateChange{ActiveName: &vocabName}, "now")
 			},
 			ErrLegacyBlobChanged, "ConditionCheck", 1, blobCheck, nil},
+		{"v2 vocabulary state create is create-only", cancelled("ConditionalCheckFailed", "None"),
+			func(r *DictionaryRepository) error {
+				return r.CreateMigratedVocabularyState(context.Background(), "u1", vocabState)
+			},
+			ErrDictTermConflict, "Put", 0, []string{"attribute_not_exists (PK)"}, nil},
+		{"v2 vocabulary state create requires an absent or migrated blob", cancelled("None", "ConditionalCheckFailed"),
+			func(r *DictionaryRepository) error {
+				return r.CreateMigratedVocabularyState(context.Background(), "u1", vocabState)
+			},
+			ErrLegacyBlobChanged, "ConditionCheck", 1, []string{"attribute_not_exists (PK)", "attribute_exists (migratedAt)", "OR"}, []string{"blobRevision"}},
 		{"tombstone or existing row blocks create", cancelled("ConditionalCheckFailed", "None"),
 			func(r *DictionaryRepository) error { return r.CreateAutoTerm(context.Background(), term, obs) },
 			ErrDictTermConflict, "Put", 0, []string{"attribute_not_exists (PK)"}, nil},
@@ -257,6 +267,21 @@ func TestDictionaryWriteGuards(t *testing.T) {
 				return err
 			},
 			ErrDictTermConflict, "", 0, []string{`version = {"N":"2"}`}, nil},
+		{"manual create is create-only", conditionalFailed,
+			func(r *DictionaryRepository) error {
+				manual := *term
+				manual.Origin = model.TermOriginManual
+				return r.CreateDictTerm(context.Background(), &manual)
+			},
+			ErrDictTermConflict, "", 0, []string{"attribute_not_exists (PK)"}, nil},
+		{"legacy hard delete only matches active manual rows", conditionalFailed,
+			func(r *DictionaryRepository) error {
+				return r.DeleteManualTerm(context.Background(), "USER#u1", key, 6)
+			},
+			ErrDictTermConflict, "", 0, []string{`version = {"N":"6"}`, `origin = {"S":"manual"}`, `state = {"S":"active"}`}, nil},
+		{"tombstone pruning only matches tombstones", conditionalFailed,
+			func(r *DictionaryRepository) error { return r.DeleteTombstone(context.Background(), "USER#u1", key, 3) },
+			ErrDictTermConflict, "", 0, []string{`version = {"N":"3"}`, `state = {"S":"deleted"}`}, nil},
 		{"restore requires the tombstone", conditionalFailed,
 			func(r *DictionaryRepository) error { return r.RestoreDictTerm(context.Background(), term, 4) },
 			ErrDictTermConflict, "", 0, []string{`state = {"S":"deleted"}`, `version = {"N":"4"}`}, nil},
