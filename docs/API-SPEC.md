@@ -633,7 +633,9 @@ revision-bound cursors match `/reading`: non-readers get 404, restricted derived
 content 409 `SHARING_REGEN_REQUIRED`, changed sources 409 `STALE_CURSOR`. A
 non-final page is trimmed to its last line outside a fenced block (notes), speaker
 header or line (text transcript) or whole segment, and `nextCursor` is the reader's
-cursor re-issued at that offset (a page without such a boundary is kept whole). Pass
+cursor re-issued at that offset (a page without such a boundary is kept whole; a
+notes page kept whole inside a fenced block returns a wrapper cursor that carries
+the open fence, so later code lines stay code). Pass
 `nextCursor` unchanged with the same `part`; concatenated pages cover the source.
 
 Notes are translated per Markdown line: heading/list/quote/checkbox markers stay

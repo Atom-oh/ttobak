@@ -344,6 +344,53 @@ func TestMeetingTranslationPagesEndAtLineAndFenceBoundaries(t *testing.T) {
 	}
 }
 
+func TestMeetingTranslationCarriesFenceAcrossOversizedCodeBlock(t *testing.T) {
+	// A fenced block longer than two reading pages that starts a page: those
+	// pages are kept whole, and the code lines on the following pages must
+	// stay code while the prose after the closing fence is translated.
+	for _, leading := range []int{0, 3} {
+		source, want := []string{}, []string{}
+		for i := 0; i < leading; i++ {
+			line := fmt.Sprintf("Intro %d says hello", i)
+			source, want = append(source, line), append(want, "EN<"+line+">")
+		}
+		block := []string{"```go"}
+		for k := 0; len(strings.Join(block, "\n")) < 9000; k++ {
+			block = append(block, fmt.Sprintf("// comment %04d should stay code", k))
+		}
+		block = append(block, "```")
+		source, want = append(source, block...), append(want, block...)
+		for i := 0; i < 30; i++ {
+			line := fmt.Sprintf("After %02d says hello there", i)
+			source, want = append(source, line), append(want, "EN<"+line+">")
+		}
+		tr := &lineTranslator{}
+		s := NewMeetingTranslationService(pagedReader(t, strings.Join(source, "\n"), ""), tr, nil, 0)
+		pages := translateAllPages(t, s, "notes")
+		var joined strings.Builder
+		untranslated := 0
+		for _, page := range pages {
+			joined.WriteString(*page.Notes)
+			untranslated += page.UntranslatedLines
+		}
+		if len(pages) < 3 || untranslated != 0 || joined.String() != strings.Join(want, "\n") {
+			t.Fatalf("leading=%d pages=%d untranslated=%d: joined translation differs", leading, len(pages), untranslated)
+		}
+		for _, req := range tr.requests {
+			if strings.Contains(req.Text, "comment") {
+				t.Fatalf("leading=%d: code sent for translation", leading)
+			}
+		}
+	}
+	// A forged or plain cursor is passed through unchanged.
+	if c, fenced := decodeTranslationCursor("abc"); c != "abc" || fenced {
+		t.Fatalf("plain cursor=%q fenced=%v", c, fenced)
+	}
+	if c, fenced := decodeTranslationCursor(encodeTranslationCursor("abc")); c != "abc" || !fenced {
+		t.Fatalf("wrapped cursor=%q fenced=%v", c, fenced)
+	}
+}
+
 func TestMeetingTranslationTextTranscriptPagesKeepSpeakers(t *testing.T) {
 	runs, speakers := []string{}, []string{}
 	for i := 0; i < 40; i++ {

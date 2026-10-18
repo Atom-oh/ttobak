@@ -245,9 +245,11 @@ func translationSourceLanguage(language, target string) string {
 
 // notesTranslationLines keeps fenced code, table rules and blank lines as
 // source and sends only the text after a line's Markdown markers.
-func notesTranslationLines(text string) []*translationLine {
+// fenced reports that text begins inside a fenced block carried from the
+// previous page.
+func notesTranslationLines(text string, fenced bool) []*translationLine {
 	lines := []*translationLine{}
-	next, fenced := 0, false
+	next := 0
 	for _, raw := range strings.Split(text, "\n") {
 		body, suffix := strings.CutSuffix(raw, "\r")
 		trimmed := strings.TrimSpace(body)
@@ -301,8 +303,10 @@ type meetingReadingPage struct {
 // own cursor at that offset, so no line, link or segment is translated as two
 // fragments. Notes never end inside a fenced block; text-mode transcript
 // pages prefer a speaker-header boundary so the next page knows its speaker.
-// A page with no usable boundary is kept whole.
-func alignTranslationPage(page *meetingReadingPage, part string) {
+// A page with no usable boundary is kept whole; a notes page kept whole while
+// inside a fenced block (startFenced is the state carried into it) wraps the
+// next cursor so the following page starts with the fence still open.
+func alignTranslationPage(page *meetingReadingPage, part string, startFenced bool) {
 	if page.Page.NextCursor == nil {
 		return
 	}
@@ -313,9 +317,13 @@ func alignTranslationPage(page *meetingReadingPage, part string) {
 	offset := -1
 	switch {
 	case part == "notes":
-		if cut := notesPageCut(page.Content); cut > 0 {
+		cut, endFenced := notesPageCut(page.Content, startFenced)
+		if cut > 0 {
 			page.Content = string([]rune(page.Content)[:cut])
 			offset = page.Page.StartOffset + cut
+		} else if endFenced {
+			next := encodeTranslationCursor(*page.Page.NextCursor)
+			page.Page.NextCursor = &next
 		}
 	case len(page.Chunks) > 1 && page.Chunks[len(page.Chunks)-1].Segment != nil:
 		// Earlier chunks end their segment, so a partial last one starts it.
@@ -338,9 +346,10 @@ func alignTranslationPage(page *meetingReadingPage, part string) {
 }
 
 // notesPageCut returns the code-point offset of the last line start outside a
-// fenced block, or 0 when there is none.
-func notesPageCut(text string) int {
-	cut, at, fenced := 0, 0, false
+// fenced block (0 when there is none) and whether text ends inside a fence;
+// fenced is the state at the start of text.
+func notesPageCut(text string, fenced bool) (int, bool) {
+	cut, at := 0, 0
 	for i, line := range strings.Split(text, "\n") {
 		if i > 0 && !fenced {
 			cut = at
@@ -351,7 +360,37 @@ func notesPageCut(text string) int {
 		}
 		at += utf8.RuneCountInString(line) + 1
 	}
-	return cut
+	return cut, fenced
+}
+
+// translationCursor wraps a reader cursor whose page begins inside a fenced
+// block. Plain reader cursors are passed through unchanged.
+type translationCursor struct {
+	Version int    `json:"tv"`
+	Reader  string `json:"reader"`
+	Fenced  bool   `json:"fenced"`
+}
+
+func encodeTranslationCursor(reader string) string {
+	raw, _ := json.Marshal(translationCursor{1, reader, true})
+	return base64.RawURLEncoding.EncodeToString(raw)
+}
+
+// decodeTranslationCursor returns the reader cursor and carried fence state.
+// Anything that is not a canonical wrapper is an opaque reader cursor.
+func decodeTranslationCursor(cursor string) (string, bool) {
+	raw, err := base64.RawURLEncoding.Strict().DecodeString(cursor)
+	if err != nil {
+		return cursor, false
+	}
+	var c translationCursor
+	if json.Unmarshal(raw, &c) != nil || c.Version != 1 || !c.Fenced || !readingCursorAlphabet.MatchString(c.Reader) {
+		return cursor, false
+	}
+	if canonical, _ := json.Marshal(c); string(canonical) != string(raw) {
+		return cursor, false
+	}
+	return c.Reader, true
 }
 
 // transcriptTextPageCut prefers the last "[speaker]" header that follows a
@@ -542,8 +581,13 @@ func (s *MeetingTranslationService) Translate(ctx context.Context, userID, meeti
 	if req.Part == "transcript" {
 		q = url.Values{"kind": {"transcript"}, "source": {"selected"}, "pageSize": {meetingTranslationPageSize}}
 	}
+	startFenced := false
 	if req.Cursor != "" {
-		q.Set("cursor", req.Cursor)
+		cursor := req.Cursor
+		if req.Part == "notes" {
+			cursor, startFenced = decodeTranslationCursor(cursor)
+		}
+		q.Set("cursor", cursor)
 	}
 	raw, err := s.reader.Read(ctx, userID, meetingID, q)
 	if err != nil {
@@ -553,13 +597,13 @@ func (s *MeetingTranslationService) Translate(ctx context.Context, userID, meeti
 	if err := json.Unmarshal(raw, &page); err != nil {
 		return nil, readingDataError(err)
 	}
-	alignTranslationPage(&page, req.Part)
+	alignTranslationPage(&page, req.Part, startFenced)
 
 	response := meetingTranslationResponse{MeetingID: meetingID, Part: req.Part, Target: req.Target,
 		Revision: page.Revision, Engines: map[string]int{}, NextCursor: page.Page.NextCursor, Complete: page.Page.Complete}
 	var lines []*translationLine
 	if req.Part == "notes" {
-		lines = notesTranslationLines(page.Content)
+		lines = notesTranslationLines(page.Content, startFenced)
 	} else {
 		response.Mode = page.Mode
 		response.Segments = transcriptTranslationSegments(&page)
