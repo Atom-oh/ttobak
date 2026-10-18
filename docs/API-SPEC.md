@@ -695,8 +695,9 @@ newlines anywhere, including the edges) and line separators rejected;
 never blocklisted (`terms_blocklist.txt`) or the term's own key; `phrase` at most
 256 runes. Errors are 400 `field: reason` and never echo input.
 
-- `GET /api/settings/dictionary` migrates the legacy item best effort, then
-  returns legacy `terms`/`status` plus `items` (non-tombstone rows: `termId`,
+- `GET /api/settings/dictionary` migrates the legacy item best effort, runs
+  `EnsureVocabularies` (see below), then returns legacy `terms`/`status`,
+  `vocabularies`, `warnings?` plus `items` (non-tombstone rows: `termId`,
   `displayAs`, `phrase`, `heardAs`, `aliasMode`, `type`, `origin`,
   `state` `active|suggested`, `userEdited`, `version`, flags, `hits`, times).
   `migrationPending` means the legacy item is not yet migrated: either it is
@@ -743,11 +744,22 @@ never blocklisted (`terms_blocklist.txt`) or the term's own key; `phrase` at mos
   `LEGACY_DICTIONARY_CONFLICT`. A manual row changed concurrently during a legacy
   PUT or DELETE is 409 `VERSION_CONFLICT`; 409 `CONFLICT` only reports a legacy
   item that kept changing during migration.
-- Recognition-affecting manual changes rebuild the derived ko-KR vocabulary in
-  place and record it in `VOCAB#personal#ko-KR`; `status` and `warnings` report
-  it. A change made while the previous build is pending is deferred to the next
-  change, with a `warnings` entry. A/B builds and `vocabularyName` belong to the
-  vocabulary builder.
+- Vocabularies (ADR-008 A/B builder amendment): the GET and every
+  recognition-affecting manual write (one interval bypass each) call
+  `EnsureVocabularies`, which polls, flips or starts the personal ko-KR build
+  (en-US is deferred and reports `NONE`); failures are `warnings` and the
+  active vocabulary keeps serving.
+  `vocabularies: {ko, en}` gives `{status, activeReady, failureCode?, termCount}`
+  per language (`status` `READY|BUILDING|FAILED|QUOTA_EXCEEDED|NONE` is the
+  latest build; `failureCode` `PROVIDER|QUOTA`). Legacy `status` is `PENDING`
+  while a ko-KR build is in flight (so the settings UI keeps polling the GET,
+  which flips it), otherwise `READY` whenever the active vocabulary is ready.
+  No response carries a
+  vocabulary name yet: the live client would send a ko-KR-only
+  `VocabularyNames` on its ko-KR/en-US stream (ADR-008 acceptance item 5).
+  The builder replaces the earlier in-place rebuild of the derived ko-KR
+  vocabulary, including its pending-build deferral warning and bounded
+  conflict recomputation; that path no longer exists.
 
 ### Index status and automatic indexing rollout
 

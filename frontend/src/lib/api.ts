@@ -4,6 +4,7 @@ import { getIdToken, refreshSession } from './auth';
 import { getRuntimeConfig } from './runtimeConfig';
 import { triggerAuthFailure } from '@/components/auth/AuthProvider';
 import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory, Research, ResearchDetail, DictionaryTerm, ChatMessage, Account, AccountSummary, AccountMember, AccountMeetingRef, AccountInsight, AccountDocument, PutDocumentRequest, AccountResearchRef, Project, ProjectSummary, ProjectMember, ProjectMeetingRef, ProjectResearchRef, ProjectInsight, ProjectBrief } from '@/types/meeting';
+import type { CreateDictTermInput, DictTermMutationResponse, TermPatch } from '@/lib/dictionary';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 const PROJECT_HINTS_KEY = 'ttobak:project-invitation-hints';
@@ -675,9 +676,21 @@ export const insightsApi = {
 };
 
 // Dictionary API
+// Per-term v2 routes, plus the legacy DELETE-by-phrase, which alone removes a
+// blob term that blocks migration. The legacy whole-list PUT is for old clients.
+const DICT = '/api/settings/dictionary';
+const termPath = (termId: string) => `${DICT}/terms/${encodeURIComponent(termId)}`;
+
 export const dictionaryApi = {
-  get: () => api.get<{ terms: DictionaryTerm[]; status: string; vocabularyName?: string }>('/api/settings/dictionary'),
-  update: (terms: DictionaryTerm[]) => api.put<{ terms: DictionaryTerm[]; status: string; vocabularyName?: string }>('/api/settings/dictionary', { terms }),
+  get: () => api.get<{ terms: DictionaryTerm[]; status: string; vocabularyName?: string }>(DICT),
+  update: (terms: DictionaryTerm[]) => api.put<{ terms: DictionaryTerm[]; status: string; vocabularyName?: string }>(DICT, { terms }),
+  createTerm: (input: CreateDictTermInput) => api.post<DictTermMutationResponse>(`${DICT}/terms`, input),
+  updateTerm: (termId: string, version: number, patch: TermPatch) =>
+    api.patch<DictTermMutationResponse>(termPath(termId), { ...patch, version }),
+  deleteTerm: (termId: string, version: number) =>
+    api.delete<DictTermMutationResponse>(`${termPath(termId)}?version=${version}`),
+  deleteLegacyTerm: (phrase: string) =>
+    api.delete<void>(`${DICT}/term`, { body: JSON.stringify({ phrase }) }),
 };
 
 // Research API
