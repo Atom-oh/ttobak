@@ -98,7 +98,7 @@ export default function SettingsPage() {
 
           {/* Custom Dictionary Section */}
           <section className="lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">
-            <h3 className="section-header mb-4">Custom Dictionary</h3>
+            <h3 className="section-header mb-4">사용자 사전</h3>
             <CustomDictionary />
           </section>
 
