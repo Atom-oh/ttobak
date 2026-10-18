@@ -206,14 +206,24 @@ func TestNonOwnerSourceEditsSetStickyTaint(t *testing.T) {
 
 type sweepingMeetingRepo struct {
 	*mockMeetingRepo
-	swept []string
-	err   error
+	swept     []string
+	err       error
+	lookupErr error
+}
+
+func (r *sweepingMeetingRepo) GetMeetingByID(ctx context.Context, meetingID string) (*model.Meeting, error) {
+	if r.lookupErr != nil {
+		return nil, r.lookupErr
+	}
+	return r.mockMeetingRepo.GetMeetingByID(ctx, meetingID)
 }
 
 func (r *sweepingMeetingRepo) SweepMeetingTerms(_ context.Context, ownerID, meetingID string) error {
 	r.swept = append(r.swept, ownerID+"/"+meetingID)
 	return r.err
 }
+
+var errLookupThrottled = errors.New("lookup throttled")
 
 // A failed post-delete term sweep leaves the meeting gone; the owner's retried
 // DELETE re-runs the sweep and surfaces its failure instead of a bare 404.
@@ -222,12 +232,16 @@ func TestDeleteMeetingRetryReRunsTermSweep(t *testing.T) {
 		name      string
 		existing  bool
 		sweepErr  error
+		lookupErr error
 		wantErr   error
 		wantSwept int
 	}{
-		{"gone meeting is swept again", false, nil, ErrNotFound, 1},
-		{"sweep failure surfaces", false, errors.New("throttled"), nil, 1},
-		{"another owner's meeting is not swept", true, nil, ErrForbidden, 0},
+		{"gone meeting is swept again", false, nil, nil, ErrNotFound, 1},
+		{"sweep failure surfaces", false, errors.New("throttled"), nil, nil, 1},
+		{"another owner's meeting is not swept", true, nil, nil, ErrForbidden, 0},
+		// A transient lookup error is returned (not 404) so the client retries
+		// and the next DELETE still reaches the re-sweep.
+		{"transient lookup error surfaces for retry", false, nil, errLookupThrottled, errLookupThrottled, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -236,7 +250,7 @@ func TestDeleteMeetingRetryReRunsTermSweep(t *testing.T) {
 				now := time.Now().UTC()
 				base.addMeeting(&model.Meeting{MeetingID: "m-1", UserID: "owner-2", Status: model.StatusDone, Date: now, CreatedAt: now, UpdatedAt: now})
 			}
-			repo := &sweepingMeetingRepo{mockMeetingRepo: base, err: tc.sweepErr}
+			repo := &sweepingMeetingRepo{mockMeetingRepo: base, err: tc.sweepErr, lookupErr: tc.lookupErr}
 			err := newMeetingServiceWithRepo(repo).DeleteMeeting(context.Background(), "owner-1", "m-1")
 			if tc.wantErr != nil && !errors.Is(err, tc.wantErr) || tc.wantErr == nil && !errors.Is(err, tc.sweepErr) {
 				t.Fatalf("err = %v", err)

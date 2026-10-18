@@ -253,9 +253,11 @@ or `DICTOBS#` row exists, so the sweep finds nothing.
   the merger surfaces without retrying. Queue records `ownerId`.
 - **Deletion.** `SweepMeetingTerms` follows `DeleteMeeting`: it deletes the
   meeting's `DICTOBS#` rows, unedited auto terms left without observations
-  (version-guarded) and then the run state; only the owner recorded on that
-  state is swept. A failed sweep keeps the state and surfaces the error; the
-  owner's retried DELETE of the gone meeting re-runs it before returning 404.
+  (the term version is read before the observation count, so a concurrent
+  observation fails the version-guarded delete) and then the run state; only
+  the owner recorded on that state is swept. A failed sweep keeps the state and
+  surfaces the error; the owner's retried DELETE of the gone meeting re-runs it
+  before returning 404, and a failed owner lookup is returned for retry.
   There is no scheduled reconciliation, so an un-retried failure leaves the rows.
 
 ## Consequences and risks
