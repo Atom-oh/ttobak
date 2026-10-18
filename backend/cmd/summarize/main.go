@@ -38,6 +38,11 @@ var (
 	s3Client           *s3.Client
 	ebClient           *eventbridge.Client
 	bucketName         string
+
+	// Automatic term extraction (design A2.3); package variables so the
+	// dispatch branch and triggers are testable without AWS.
+	processTermsRequested = func(context.Context, model.TermsRequested) error { return nil }
+	enqueueTerms          = func(context.Context, string, string, string) {}
 )
 
 func init() {
@@ -78,6 +83,16 @@ func init() {
 	bedrockService.SetAttachmentTextService(attachmentTextService)
 	resummaryService = service.NewResummaryService(metadata, service.NewMeetingService(metadata), bedrockService, attachmentTextService, nil)
 	actionItemsService = service.NewMetadataActionItemsAnalysisService(repo, bedrockService, nil)
+	dictionaryRepo := repository.NewDictionaryRepository(dynamoClient, tableName)
+	termsService := service.NewTermsAnalysisService(repo, service.NewTermsMerger(dictionaryRepo),
+		service.NewDictionaryService(dictionaryRepo, nil), bedrockService, attachmentTextService, service.TermsPublisher(ebClient), service.TermsConfigFromEnv())
+	processTermsRequested = termsService.Process
+	enqueueTerms = func(ctx context.Context, ownerID, meetingID, reason string) {
+		termsService.Enqueue(ctx, ownerID, meetingID, reason) // non-fatal; logs its outcome code
+	}
+	resummaryService.SetTermsEnqueuer(func(ctx context.Context, ownerID, meetingID string) {
+		enqueueTerms(ctx, ownerID, meetingID, "resummary")
+	})
 
 	// KB export service — gracefully skips if not configured
 	kbBucketName := os.Getenv("KB_BUCKET_NAME")
@@ -206,6 +221,17 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 			return fmt.Errorf("decode action items event: %w", err)
 		}
 		return actionItemsService.Process(ctx, event.Detail)
+	}
+
+	// Automatic term extraction runs in its own invocation, never on the S3 path.
+	if envelope.Source == "ttobak.analysis" && envelope.DetailType == "TermsRequested" {
+		var event struct {
+			Detail model.TermsRequested `json:"detail"`
+		}
+		if err := json.Unmarshal(raw, &event); err != nil {
+			return fmt.Errorf("decode terms event: %w", err)
+		}
+		return processTermsRequested(ctx, event.Detail)
 	}
 
 	// Custom event: all parts of a multi-file meeting have been transcribed
@@ -578,7 +604,7 @@ func generateSummaryRun(ctx context.Context, meeting *model.Meeting, priorContex
 	} else {
 		content, err = bedrockService.SummarizeTranscript(ctx, meetingID, userID, priorContext)
 	}
-	if errors.Is(err, service.ErrSummaryHumanContentPreserved) {
+	if humanContentPreserved(ctx, err, userID, meetingID) {
 		return nil
 	}
 	if err != nil {
@@ -619,6 +645,9 @@ func generateSummaryRun(ctx context.Context, meeting *model.Meeting, priorContex
 			log.Printf("Failed to fan out current insights (non-fatal): %v", err)
 		}
 	}
+	// End of the post-summary analysis sequence: queue term extraction.
+	enqueueTerms(ctx, userID, meetingID, "summary")
+
 	if repository.SummaryPrivacyWritesEnabled() {
 		// The canonical stream/reconciliation worker owns immutable, revision-
 		// checked index exports. The legacy fixed object can restore stale
@@ -642,6 +671,17 @@ func generateSummaryRun(ctx context.Context, meeting *model.Meeting, priorContex
 	}
 
 	return nil
+}
+
+// humanContentPreserved reports the preserved-human-content early return.
+// The meeting is done with owner or editor text, so term extraction is still
+// queued (the taint flag covers editor-authored text).
+func humanContentPreserved(ctx context.Context, err error, userID, meetingID string) bool {
+	if !errors.Is(err, service.ErrSummaryHumanContentPreserved) {
+		return false
+	}
+	enqueueTerms(ctx, userID, meetingID, "human-content-preserved")
+	return true
 }
 
 // truncateRunes returns at most `n` runes of `s` plus an ellipsis when truncated.

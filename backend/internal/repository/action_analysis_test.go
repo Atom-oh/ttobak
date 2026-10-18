@@ -139,7 +139,7 @@ func TestActionAnalysisMapsOnlyConditionalCancellation(t *testing.T) {
 }
 
 func TestActionAnalysisPinsGenerationOnQueueAndCompletion(t *testing.T) {
-	t.Setenv("SUMMARY_PRIVACY_WRITER_ENABLED", "1")
+	privacyWriterEnabled(t)
 	for _, phase := range []string{"queue", "complete"} {
 		t.Run(phase, func(t *testing.T) {
 			repo := actionAnalysisWire(t, func(_ string, body map[string]any) {
@@ -157,7 +157,7 @@ func TestActionAnalysisPinsGenerationOnQueueAndCompletion(t *testing.T) {
 				if phase == "complete" && !strings.Contains(analysisCondition(t, run), "summaryGeneration") {
 					t.Fatal("completion did not bind run to captured generation")
 				}
-			}, 400, `{"__type":"TransactionCanceledException","CancellationReasons":[{"Code":"ConditionalCheckFailed"},{"Code":"None"}]}`)
+			}, 400, projectCancellation(2, 0))
 			var err error
 			if phase == "queue" {
 				err = repo.QueueActionAnalysis(context.Background(), "owner", "meeting", "same-content", nil,
