@@ -850,3 +850,35 @@ func TestHandlerDeleteDocument_Forbidden(t *testing.T) {
 		t.Fatalf("expected 403, got %d (%s)", w.Code, w.Body.String())
 	}
 }
+
+// TestHandlerAddMember_UnregisteredEmailNeedsInvitation: an email with no
+// PROFILE row and no Cognito invite keeps the 404 status but carries the
+// INVITATION_REQUIRED code the frontend uses to offer an admin invite.
+func TestHandlerAddMember_UnregisteredEmailNeedsInvitation(t *testing.T) {
+	h, repo := newStubAccountHandler()
+	repo.accounts["acc-1"] = &model.Account{AccountID: "acc-1", Name: "하나은행", OwnerUserID: "owner-1"}
+	repo.members[acctMemberKey("acc-1", "owner-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleOwner}
+
+	body, _ := json.Marshal(model.AddMemberRequest{Email: "new@example.com", Role: model.RoleSSA})
+	r := httptest.NewRequest(http.MethodPost, "/api/accounts/acc-1/members", bytes.NewReader(body))
+	r = withUserEmailCtx(r, "owner-1", "o@x.com")
+	r = withChiParam(r, "accountId", "acc-1")
+	w := httptest.NewRecorder()
+
+	h.AddMember(w, r)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d (%s)", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Error.Code != model.ErrCodeInvitationRequired {
+		t.Errorf("code = %q, want %q", resp.Error.Code, model.ErrCodeInvitationRequired)
+	}
+}

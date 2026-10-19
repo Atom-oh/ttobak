@@ -5,7 +5,8 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
-import { accountApi, projectApi } from '@/lib/api';
+import { accountApi, projectApi, settingsApi } from '@/lib/api';
+import { addMemberWithInvite, planMemberOutcome } from '@/lib/accountInvite';
 import { uploadDocFile } from '@/lib/upload';
 import { MemberPicker } from '@/components/MemberPicker';
 import { FieldInsightsSection } from '@/components/FieldInsightsSection';
@@ -107,17 +108,24 @@ export default function AccountDetailClient() {
     setPendingNotice(null);
     setPendingNoticeEmail(null);
     try {
-      const result = await accountApi.addMember(accountId, { email: picked.email, role: inviteRole });
-      // Set the notice before fetchAll: addMember itself already succeeded
-      // (the invite is genuinely queued) at this point, so a THIS call
-      // failing afterward must not overwrite that with an unrelated
-      // "Failed to add member" error banner -- fetchAll failing is a
-      // separate, lower-priority problem than the invite itself failing.
-      if (result?.pending) {
-        setPendingNotice(`${picked.email}님의 계정 추가를 예약했습니다. 로그인과 이메일 인증 후 자동으로 추가됩니다. 이 작업으로 초대 이메일이 발송되지는 않습니다.`);
-        setPendingNoticeEmail(picked.email);
+      const outcome = await addMemberWithInvite({
+        isAdmin,
+        addMember: (email, role) => accountApi.addMember(accountId, { email, role }),
+        inviteUser: (email) => settingsApi.inviteUser({ email }),
+      }, picked.email, inviteRole);
+      const plan = planMemberOutcome(outcome);
+      // fetchAll clears the error banner on entry, so refresh first and show
+      // the outcome afterwards -- even if the refresh itself fails, the
+      // invite/add result is the more important message.
+      try {
+        if (plan.refresh) await fetchAll();
+      } finally {
+        if (plan.notice) {
+          setPendingNotice(plan.notice);
+          setPendingNoticeEmail(plan.noticeEmail ?? null);
+        }
+        if (plan.error) setError(plan.error);
       }
-      await fetchAll();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to add member');
     } finally {

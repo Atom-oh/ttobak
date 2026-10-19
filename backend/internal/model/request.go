@@ -392,6 +392,9 @@ const (
 	ErrCodeConflict      = "CONFLICT"
 	ErrCodeInternalError = "INTERNAL_ERROR"
 	ErrCodeRateLimited   = "RATE_LIMITED"
+	// ErrCodeInvitationRequired marks an add-member target with no TTOBAK
+	// profile and no Cognito invite yet; an admin must invite them first.
+	ErrCodeInvitationRequired = "INVITATION_REQUIRED"
 )
 
 // AskQuestionRequest represents the request body for asking a question about a meeting

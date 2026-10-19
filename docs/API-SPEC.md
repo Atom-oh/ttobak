@@ -403,7 +403,9 @@ transactional ancestry checks and retries protect concurrent moves. Conflicts
 return 409. Hierarchy is organization metadata, never authorization inheritance.
 
 Any current account member can add members or change assignable roles; `owner`
-is never assignable. Removal and pending-invite revocation remain owner-only
+is never assignable. Adding an email with no profile and no Cognito user returns
+404 `INVITATION_REQUIRED`; an invited-but-unregistered email returns
+`pending: true`. Creating the Cognito user remains admin-only. Removal and pending-invite revocation remain owner-only
 (ADR-034). Project permissions are separate: owner/direct member/member of a
 linked account. The service list unions those access paths; project deletion
 rejects remaining relationships. Canonical sets and reverse references change in

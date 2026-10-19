@@ -168,7 +168,9 @@ func (h *AccountHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, service.ErrForbidden):
 			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Only account members can add members")
 		case errors.Is(err, service.ErrUserNotFound):
-			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "No user with that email")
+			// Distinct code so clients can offer an admin invite instead of
+			// matching the message; the 404 status is unchanged.
+			writeError(w, http.StatusNotFound, model.ErrCodeInvitationRequired, "No user with that email; an admin must send an invitation first")
 		case errors.Is(err, service.ErrMemberExists):
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "User is already a member")
 		case errors.Is(err, service.ErrInvalidInput):
