@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
-import { accountApi } from '@/lib/api';
+import { accountApi, settingsApi } from '@/lib/api';
+import { addMemberWithInvite, summarizeMemberOutcomes, type MemberAddOutcome } from '@/lib/accountInvite';
 import { MemberPicker } from '@/components/MemberPicker';
 import { AccountHierarchyList } from '@/components/AccountHierarchyList';
 import { AccountParentSelect } from '@/components/AccountParentSelect';
@@ -16,11 +17,12 @@ interface PendingMember extends User {
 
 export default function AccountsClient() {
   const router = useRouter();
-  const { user, isAuthenticated, membershipRevision } = useAuth();
+  const { user, isAuthenticated, isAdmin, membershipRevision } = useAuth();
   const [accounts, setAccounts] = useState<AccountSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const requestGeneration = useRef(0);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState('');
@@ -57,6 +59,7 @@ export default function AccountsClient() {
     if (!name.trim()) return;
     setCreating(true);
     setError(null);
+    setNotice(null);
     try {
       const created = await accountApi.create({
         name: name.trim(),
@@ -64,28 +67,33 @@ export default function AccountsClient() {
         industry: industry.trim() || undefined,
         parentAccountId: parentAccountId || undefined,
       });
-      const failed: string[] = [];
+      // Unregistered emails get an admin invite (Cognito emails the temporary
+      // password) and a pending membership that materializes on first login.
+      const inviteDeps = {
+        isAdmin,
+        addMember: (email: string, role: string) => accountApi.addMember(created.accountId, { email, role }),
+        inviteUser: (email: string) => settingsApi.inviteUser({ email }),
+      };
+      const outcomes: MemberAddOutcome[] = [];
       for (const m of pendingMembers) {
-        try {
-          await accountApi.addMember(created.accountId, { email: m.email, role: m.role });
-        } catch {
-          failed.push(m.email);
-        }
+        outcomes.push(await addMemberWithInvite(inviteDeps, m.email, m.role));
       }
+      const summary = summarizeMemberOutcomes(outcomes);
       setShowForm(false);
       setName('');
       setAliases('');
       setIndustry('');
       setParentAccountId('');
       setPendingMembers([]);
-      if (failed.length > 0) {
-        // Stay on the accounts list so the error is actually visible -- the account
+      if (summary.error || summary.notice) {
+        // Stay on the accounts list so the result is actually visible -- the account
         // still exists and is reachable from the (refreshed) list below, where the
-        // owner can open it and retry adding the failed members from its detail page.
+        // owner can open it and retry adding any failed members from its detail page.
         // fetchAccounts() must run BEFORE setError(): it calls setError(null) on entry,
         // which would otherwise wipe this message in the same tick it was set.
         await fetchAccounts();
-        setError(`Account created, but failed to add: ${failed.join(', ')}. Open the account below and retry.`);
+        if (summary.notice) setNotice(`계정을 만들었습니다. ${summary.notice}`);
+        if (summary.error) setError(`계정은 만들었지만 일부 멤버를 추가하지 못했습니다. ${summary.error}`);
         return;
       }
       router.push(`/accounts/${created.accountId}`);
@@ -111,6 +119,11 @@ export default function AccountsClient() {
       {error && (
         <div className="bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-lg p-3 mb-4">
           {error}
+        </div>
+      )}
+      {notice && (
+        <div className="bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400 text-sm rounded-lg p-3 mb-4">
+          {notice}
         </div>
       )}
 
