@@ -409,6 +409,38 @@ linked account. The service list unions those access paths; project deletion
 rejects remaining relationships. Canonical sets and reverse references change in
 one transaction. See account/project handlers and services for each mutation gate.
 
+### Staged summary-sharing privacy
+
+Meeting detail adds `summarySharing`: `canCreateGrant`,
+`derivedReadRestricted`, `requiresRegeneration` and `canRegenerate`. These
+describe the current source view. Grant/publication and provenance writers are
+installed behind `SUMMARY_PRIVACY_WRITER_ENABLED=1`; any other value disables
+writer activation. `canRegenerate` requires activated writers, ownership and a
+terminal meeting state. Source wiring does not establish deployed acceptance.
+
+For a protected account membership, unknown/private meeting derivation withholds
+summary, tasks, insights, tags, sentiment and live draft context. Parent-owned
+notes and transcript remain available through their authorized bounded reads.
+Existing independent direct grants and owner access retain their scope.
+Restricted account insight/brief requests return 409 `SHARING_REGEN_REQUIRED`;
+they do not claim that there are no insights.
+
+Copied account insights must match the canonical summary generation and insight
+revision. Readers recheck publication and membership before returning a result.
+Stamped memberships are always protected. Enforcement for unmarked memberships
+requires `SUMMARY_PRIVACY_READER_ENABLED=1` and the fixed UTC
+`SUMMARY_PRIVACY_LEGACY_MEMBER_CUTOFF`; missing/invalid eligibility denies derived
+access after activation. The installation value `0` preserves unmarked legacy
+behavior and is not evidence that R1 or historical disclosure has been fixed.
+
+Activated direct/pending/materialized grants fence the canonical parent and
+advance `authorizationRevision`. Account publication additionally checks current
+owner membership in the same transaction, even for an account with no recipients.
+New/re-added memberships receive a server-minted time and privacy marker; role
+changes preserve them. Unknown/private derivation cannot create a new grant.
+Ordinary summary regeneration and content/live-draft edits retain private or
+unknown ancestry. Saved notes remain independent human input.
+
 ### Documents and shares
 
 Personal document writes and share mutations isolate the owner's partition; a
@@ -1159,15 +1191,25 @@ Deployment prerequisites and runtime acceptance are recorded in
 | Method | Path | Result |
 | --- | --- | --- |
 | GET | `/api/meetings/{meetingId}/resummary` | Current meeting readers; small status response |
-| POST | `/api/meetings/{meetingId}/resummary` | Owner/edit; empty body or `{}`; `202` with status |
+| POST | `/api/meetings/{meetingId}/resummary` | Owner/edit; empty body or `{}`; owner-only `{sharingSafe:true}` with activated privacy writers; `202` with status |
 
-Response: `{status, runId?, errorCode?, leaseUntil?, updatedAt?, resultHash?}`.
+Response: `{status, runId?, errorCode?, leaseUntil?, updatedAt?, resultHash?, sharingSafe?}`.
 Both routes reject query strings with 400. POST accepts no caller source fields
 and caps its body at 1 KiB.
 Status is `unknown`, `queued`, `running`, `succeeded`, or `failed`; lease is epoch
 milliseconds and updatedAt is RFC3339. An active run is reused. Expired work is
 persisted as `failed/INTERRUPTED`. A successful resultHash is the SHA-256 of the
 saved summary text.
+
+The explicit owner `sharingSafe` mode uses the selected saved transcript, saved
+notes and verified current DOCUMENT extraction. It excludes predecessor and prior
+generated/image/preview evidence. Mode is persisted and pinned through delivery.
+Success atomically publishes safe provenance, resets tasks/insights/tags/sentiment/
+live draft, and deletes action-analysis and simulator state. Source/edit-grant CAS
+preserves concurrent human edits; failures retain old content and provenance.
+Task continuity stores only bounded hashes, IDs and completion, never old task
+prose. Task and other model publications pin the generation/source they consumed;
+account insight copies also fence canonical publication and insight revision.
 
 This differs from POST `/summarize`, which is live, caller-text summarization.
 That route requires owner or `edit` access to `{meetingId}` before any model call

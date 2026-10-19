@@ -140,11 +140,16 @@ func TestTranscriptHandoffPreservesHumanEditsAndClaimsDurably(t *testing.T) {
 }
 
 func TestClaimedSummaryPreservesHumanContentWithoutModelEvidence(t *testing.T) {
+	t.Setenv("SUMMARY_PRIVACY_WRITER_ENABLED", "1")
 	calls, writes := 0, 0
-	row, _ := attributevalue.MarshalMap(model.Meeting{PK: "USER#owner", SK: "MEETING#m", UserID: "owner", MeetingID: "m", Status: model.StatusSummarizing, SummaryRetryPending: true, SummarizeRetryClaimedAt: "claim", Content: "human note", TranscriptA: "human correction", SummaryBatchContentHash: repository.SummaryContentHash(&model.SummarySnapshot{Stored: map[string]interface{}{"content": "prior note"}})})
+	row, _ := attributevalue.MarshalMap(model.Meeting{PK: "USER#owner", SK: "MEETING#m", UserID: "owner", MeetingID: "m", Status: model.StatusSummarizing, SummaryRetryPending: true, SummarizeRetryClaimedAt: "claim", Content: "human note", TranscriptA: "human correction", LinkedMeetingIDs: []string{"private-predecessor"}, SummaryBatchContentHash: repository.SummaryContentHash(&model.SummarySnapshot{Stored: map[string]interface{}{"content": "prior note"}})})
 	client := retryHTTP(func(request *http.Request) (*http.Response, error) {
 		switch request.Header.Get("X-Amz-Target") {
 		case "DynamoDB_20120810.GetItem":
+			raw, _ := io.ReadAll(request.Body)
+			if strings.Contains(string(raw), "private-predecessor") {
+				t.Fatal("private predecessor read before human-content preservation")
+			}
 			data, _ := attributevalue.MarshalMapJSON(row)
 			return transcriptFixtureResponse(200, `{"Item":`+string(data)+`}`, nil), nil
 		case "DynamoDB_20120810.Query":

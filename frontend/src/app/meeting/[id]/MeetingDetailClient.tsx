@@ -388,10 +388,14 @@ function MeetingDetailContent() {
     relationsRef.current = { ...relationsRef.current, projectIds };
     setMeeting((current) => current?.meetingId === meetingId ? { ...current, ...relationsRef.current } : current);
   }, [meetingId]);
-  const applyResummary = useCallback((content: string) => {
+  const applyResummary = useCallback((content: string, sharingSafe: boolean) => {
     if (isResummaryDirty()) return;
     summaryRevisionRef.current++;
-    setMeeting((current) => current?.meetingId === meetingId ? { ...current, content, summary: undefined } : current);
+    setMeeting((current) => current?.meetingId === meetingId ? {
+      ...current, content, summary: undefined,
+      ...(sharingSafe ? { actionItems: [], actionItemsAnalysis: undefined, insights: undefined, fieldInsights: [],
+        tags: [], sentiment: undefined, liveSummary: undefined, simRun: undefined, summarySharing: undefined } : {}),
+    } : current);
     setSummarySave((current) => ({ revision: (current?.revision ?? 0) + 1, hasContent: !!content.trim() }));
     setIndexRevision((value) => value + 1);
   }, [meetingId, isResummaryDirty]);
@@ -596,7 +600,7 @@ function MeetingDetailContent() {
           <IndexStatus target={{ kind: 'meeting', meetingId: meeting.meetingId }} savedRevision={indexRevision} dirty={summaryDirty || titleDirty || transcriptDirty || notesDirty} />
           <ResummaryControls
             status={resummary.status}
-            canRequest={canEdit && (meeting.status === 'done' || meeting.status === 'error')}
+            canRequest={canEdit && !meeting.summarySharing?.derivedReadRestricted && (meeting.status === 'done' || meeting.status === 'error')}
             dirty={summaryDirty || titleDirty || transcriptDirty || notesDirty}
             busy={!!resummary.action}
             error={resummary.error}
@@ -609,6 +613,8 @@ function MeetingDetailContent() {
               await meetingsApi.update(meeting.meetingId, { noteLanguage });
               setMeeting((current) => current?.meetingId === meeting.meetingId ? { ...current, noteLanguage } : current);
             } : undefined}
+            sharing={meeting.summarySharing}
+            onSharingSafe={() => { void resummary.request(true); }}
           />
 
           {/* Recovery banner for crashed recordings */}

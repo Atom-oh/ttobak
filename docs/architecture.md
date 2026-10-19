@@ -252,6 +252,18 @@ referenced assets before forced no-cache HTML/RSC replacement, retains old chunk
 and preserves infrastructure-owned runtime config. See the
 [frontend release contract](runbooks/frontend-release.md) for source and live gates.
 
+Summary-sharing privacy is staged across the Go readers/writers and Python QA.
+Protected account views retain raw parent-owned source and invalidate derived
+history when scope changes. Activated writers snapshot parent authorization/link
+state before predecessor reads, pin predecessor bytes through publication, fence
+every new grant, and stamp new memberships. Owner-confirmed regeneration uses
+current own sources and atomically clears prior model outputs; later derivatives,
+simulator claims and insight copies fence the captured generation. The canonical
+index worker retains immutable revision-checked publication; activated summarizers
+stop legacy fixed-object KB exports. Reader deployment, fixed cutoff, old-writer/
+queued-work drain and authorized consumer verification remain independent rollout
+gates; see the [implementation plan](superpowers/plans/2026-10-12-summary-sharing-privacy.md).
+
 - [Project constraints and accepted limits](../CLAUDE.md)
 - [API contracts](API-SPEC.md)
 - [Infrastructure](INFRA-SPEC.md)
