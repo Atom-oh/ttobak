@@ -6,7 +6,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { accountApi, projectApi, settingsApi } from '@/lib/api';
-import { addMemberWithInvite } from '@/lib/accountInvite';
+import { addMemberWithInvite, planMemberOutcome } from '@/lib/accountInvite';
 import { uploadDocFile } from '@/lib/upload';
 import { MemberPicker } from '@/components/MemberPicker';
 import { FieldInsightsSection } from '@/components/FieldInsightsSection';
@@ -113,26 +113,19 @@ export default function AccountDetailClient() {
         addMember: (email, role) => accountApi.addMember(accountId, { email, role }),
         inviteUser: (email) => settingsApi.inviteUser({ email }),
       }, picked.email, inviteRole);
-      // Set the notice before fetchAll: addMember itself already succeeded
-      // (the invite is genuinely queued) at this point, so a THIS call
-      // failing afterward must not overwrite that with an unrelated
-      // "Failed to add member" error banner -- fetchAll failing is a
-      // separate, lower-priority problem than the invite itself failing.
-      if (outcome.status === 'pending') {
-        setPendingNotice(outcome.invited
-          ? `${outcome.email}님에게 초대 메일을 보내고 계정 추가를 예약했습니다. 로그인과 이메일 인증 후 자동으로 추가됩니다. 메일이 보이지 않으면 스팸함을 확인하세요.`
-          : `${outcome.email}님의 계정 추가를 예약했습니다. 로그인과 이메일 인증 후 자동으로 추가됩니다. 이 작업으로 초대 이메일이 발송되지는 않습니다.`);
-        setPendingNoticeEmail(outcome.email);
-      } else if (outcome.status === 'needs-admin') {
-        setError(`${outcome.email}님은 아직 가입하지 않았습니다. 관리자에게 사용자 초대를 요청한 뒤 다시 추가하세요.`);
-        return;
-      } else if (outcome.status === 'failed') {
-        setError(outcome.invited
-          ? `${outcome.email}님에게 초대 메일은 보냈지만 계정 추가에 실패했습니다: ${outcome.message}. 다시 추가하세요.`
-          : outcome.message);
-        if (!outcome.invited) return;
+      const plan = planMemberOutcome(outcome);
+      // fetchAll clears the error banner on entry, so refresh first and show
+      // the outcome afterwards -- even if the refresh itself fails, the
+      // invite/add result is the more important message.
+      try {
+        if (plan.refresh) await fetchAll();
+      } finally {
+        if (plan.notice) {
+          setPendingNotice(plan.notice);
+          setPendingNoticeEmail(plan.noticeEmail ?? null);
+        }
+        if (plan.error) setError(plan.error);
       }
-      await fetchAll();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to add member');
     } finally {

@@ -14,7 +14,7 @@ function load() {
   return exports;
 }
 
-const { addMemberWithInvite, summarizeMemberOutcomes } = load();
+const { addMemberWithInvite, summarizeMemberOutcomes, planMemberOutcome } = load();
 
 const apiError = (status, code, message = code) => Object.assign(new Error(message), { status, code });
 
@@ -96,6 +96,22 @@ test('summary separates sent invites from emails that need attention', () => {
   assert.match(notice, /b@x\.com/);
   assert.doesNotMatch(notice, /a@x\.com/);
   assert.match(error, /c@x\.com/);
-  assert.match(error, /d@x\.com: 초대 메일은 보냈지만/);
+  assert.match(error, /d@x\.com: 초대 메일 발송은 요청했지만/);
   assert.deepEqual({ ...summarizeMemberOutcomes([{ email: 'a@x.com', status: 'added' }]) }, { notice: '', error: '' });
+});
+
+test('detail plan keeps a post-invite add failure visible after the refresh', () => {
+  const sentButFailed = planMemberOutcome({ email: 'd@x.com', status: 'failed', invited: true, message: 'boom' });
+  assert.equal(sentButFailed.refresh, true);
+  assert.match(sentButFailed.error, /d@x\.com.*boom/);
+
+  const plainFailure = planMemberOutcome({ email: 'd@x.com', status: 'failed', invited: false, message: 'boom' });
+  assert.deepEqual({ ...plainFailure }, { refresh: false, error: 'boom' });
+
+  const invited = planMemberOutcome({ email: 'b@x.com', status: 'pending', invited: true });
+  assert.equal(invited.noticeEmail, 'b@x.com');
+  assert.equal(invited.error, undefined);
+
+  assert.equal(planMemberOutcome({ email: 'c@x.com', status: 'needs-admin' }).refresh, false);
+  assert.deepEqual({ ...planMemberOutcome({ email: 'a@x.com', status: 'added' }) }, { refresh: true });
 });
