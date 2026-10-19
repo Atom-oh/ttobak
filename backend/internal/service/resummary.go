@@ -37,12 +37,13 @@ type resummaryGenerator interface {
 	GenerateResummary(context.Context, *model.Meeting, []model.Attachment) (string, error)
 }
 type ResummaryResponse struct {
-	Status     string     `json:"status"`
-	RunID      string     `json:"runId,omitempty"`
-	ErrorCode  string     `json:"errorCode,omitempty"`
-	LeaseUntil int64      `json:"leaseUntil,omitempty"`
-	UpdatedAt  *time.Time `json:"updatedAt,omitempty"`
-	ResultHash string     `json:"resultHash,omitempty"`
+	Status      string     `json:"status"`
+	RunID       string     `json:"runId,omitempty"`
+	ErrorCode   string     `json:"errorCode,omitempty"`
+	LeaseUntil  int64      `json:"leaseUntil,omitempty"`
+	UpdatedAt   *time.Time `json:"updatedAt,omitempty"`
+	ResultHash  string     `json:"resultHash,omitempty"`
+	SharingSafe bool       `json:"sharingSafe,omitempty"`
 }
 type ResummaryService struct {
 	repo        resummaryRepo
@@ -86,6 +87,7 @@ func summaryResponse(state *model.ResummaryState) *ResummaryResponse {
 		return &ResummaryResponse{Status: model.AnalysisUnknown}
 	}
 	result := &ResummaryResponse{Status: state.Status, RunID: state.RunID, ErrorCode: state.ErrorCode, LeaseUntil: state.LeaseUntil}
+	result.SharingSafe = state.SharingSafe
 	if !state.UpdatedAt.IsZero() {
 		updated := state.UpdatedAt
 		result.UpdatedAt = &updated
@@ -97,6 +99,9 @@ func summaryResponse(state *model.ResummaryState) *ResummaryResponse {
 }
 func resummaryHash(snapshot *model.SummarySnapshot) string {
 	body, _ := json.Marshal(snapshot.Checks)
+	if snapshot.SharingSafe {
+		body = append(body, []byte("\x00sharing-safe")...)
+	}
 	return actionSourceHash(string(body))
 }
 func (s *ResummaryService) authorized(ctx context.Context, userID, meetingID string, edit bool) (*model.Meeting, error) {
@@ -109,6 +114,9 @@ func (s *ResummaryService) authorized(ctx context.Context, userID, meetingID str
 	}
 	if meeting == nil {
 		return nil, ErrNotFound
+	}
+	if edit && meeting.SummaryReadRestricted {
+		return nil, ErrSummaryReadRestricted
 	}
 	if edit && permission != "owner" && permission != model.PermissionEdit {
 		return nil, ErrForbidden
@@ -157,7 +165,8 @@ func validateResummarySource(snapshot *model.SummarySnapshot) error {
 		return ErrResummaryBusy
 	}
 	transcript, _ := selectMeetingTranscript(m)
-	hasSource := strings.TrimSpace(transcript) != "" || strings.TrimSpace(m.Notes) != "" || strings.TrimSpace(m.Content) != ""
+	hasSource := strings.TrimSpace(transcript) != "" || strings.TrimSpace(m.Notes) != "" ||
+		(!snapshot.SharingSafe && strings.TrimSpace(m.Content) != "")
 	unavailableDocument := false
 	for _, att := range snapshot.Attachments {
 		if att.Type != model.AttachTypeDocument || attachmentFormat(att.OriginalKey) == "" {
@@ -179,29 +188,50 @@ func validateResummarySource(snapshot *model.SummarySnapshot) error {
 	return validateMeetingNotes(m.Notes)
 }
 func (s *ResummaryService) Request(ctx context.Context, userID, meetingID string) (*ResummaryResponse, error) {
+	return s.request(ctx, userID, meetingID, false)
+}
+
+func (s *ResummaryService) RequestSharingSafe(ctx context.Context, userID, meetingID string) (*ResummaryResponse, error) {
+	if !repository.SummaryPrivacyWritesEnabled() {
+		return nil, ErrInvalidInput
+	}
+	return s.request(ctx, userID, meetingID, true)
+}
+
+func (s *ResummaryService) request(ctx context.Context, userID, meetingID string, sharingSafe bool) (*ResummaryResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	meeting, err := s.authorized(ctx, userID, meetingID, true)
 	if err != nil {
 		return nil, err
 	}
+	if sharingSafe && meeting.UserID != userID {
+		return nil, ErrForbidden
+	}
 	prior, err := s.state(ctx, meetingID)
 	if err != nil {
 		return nil, err
 	}
 	if prior.Pending() {
+		if prior.SharingSafe != sharingSafe {
+			return nil, ErrResummaryBusy
+		}
 		return summaryResponse(prior), nil
 	}
 	snapshot, err := s.repo.CaptureResummary(ctx, meeting.UserID, meetingID, userID)
 	if err != nil {
 		return nil, err
 	}
+	if snapshot == nil {
+		return nil, ErrNotFound
+	}
+	snapshot.SharingSafe = sharingSafe
 	if err := validateResummarySource(snapshot); err != nil {
 		return nil, err
 	}
 	now := s.now().UTC()
 	next := &model.ResummaryState{RunID: uuid.NewString(), Status: model.AnalysisQueued, OwnerID: meeting.UserID, RequestedBy: userID,
-		SourceHash: resummaryHash(snapshot), LeaseUntil: now.Add(5 * time.Minute).UnixMilli(), UpdatedAt: now}
+		SourceHash: resummaryHash(snapshot), LeaseUntil: now.Add(5 * time.Minute).UnixMilli(), UpdatedAt: now, SharingSafe: sharingSafe}
 	if err := s.repo.QueueResummary(ctx, snapshot, prior, next); err != nil {
 		return nil, err
 	}
@@ -291,6 +321,10 @@ func boundResummaryDocument(att model.Attachment, result *model.AttachmentTextRe
 }
 func (s *ResummaryService) prepare(ctx context.Context, snapshot *model.SummarySnapshot) (*model.Meeting, []model.Attachment, []model.SummaryObject, error) {
 	meeting := *snapshot.Meeting
+	if snapshot.SharingSafe {
+		meeting.Content, meeting.ActionItems, meeting.Insights, meeting.LiveSummary, meeting.Sentiment = "", "", "", "", ""
+		meeting.Tags, meeting.LinkedMeetingIDs = nil, nil
+	}
 	raw, variant := selectMeetingTranscript(&meeting)
 	meeting.TranscriptA, meeting.TranscriptB, meeting.TranscriptSegments = "", "", ""
 	var bindings []model.SummaryObject
@@ -321,6 +355,9 @@ func (s *ResummaryService) prepare(ctx context.Context, snapshot *model.SummaryS
 	}
 	documents := 0
 	for _, att := range snapshot.Attachments {
+		if snapshot.SharingSafe && att.Type != model.AttachTypeDocument {
+			continue
+		}
 		if att.Type == model.AttachTypeDocument && attachmentFormat(att.OriginalKey) != "" &&
 			resummaryDocumentReady(snapshot.Meeting, &att, snapshot.TextStates[att.AttachmentID]) {
 			documents++
@@ -332,6 +369,12 @@ func (s *ResummaryService) prepare(ctx context.Context, snapshot *model.SummaryS
 	}
 	attachments := make([]model.Attachment, 0, len(snapshot.Attachments))
 	for _, att := range snapshot.Attachments {
+		if snapshot.SharingSafe {
+			if att.Type != model.AttachTypeDocument {
+				continue
+			}
+			att.ProcessedContent, att.Description, att.ExtractedText = "", "", nil
+		}
 		if att.Type == model.AttachTypeDocument && attachmentFormat(att.OriginalKey) != "" {
 			state := snapshot.TextStates[att.AttachmentID]
 			if s.attachments == nil || !resummaryDocumentReady(snapshot.Meeting, &att, state) {
@@ -355,6 +398,14 @@ func (s *ResummaryService) prepare(ctx context.Context, snapshot *model.SummaryS
 			att.ExtractedRevision = attachmentRevision(state)
 			bindings = append(bindings, model.SummaryObject{Bucket: result.Source.Bucket, Key: result.Source.Key, ETag: result.Source.ETag})
 		}
+		if snapshot.SharingSafe {
+			// Only the verified current DOCUMENT extraction is model
+			// evidence. Old image/preview summaries are not declassified.
+			att.ProcessedContent, att.Description = "", ""
+			if att.ExtractedText == nil {
+				att.SummaryOmitted = true
+			}
+		}
 		attachments = append(attachments, att)
 	}
 	return &meeting, attachments, bindings, nil
@@ -371,10 +422,19 @@ func (s *ResummaryService) Process(ctx context.Context, event model.SummaryReque
 	if state == nil || state.RunID != event.RunID || state.Status != model.AnalysisQueued {
 		return nil
 	}
+	if state.SharingSafe && !repository.SummaryPrivacyWritesEnabled() {
+		return s.fail(ctx, event.MeetingID, state, model.AnalysisInterrupted)
+	}
 	if state.LeaseUntil <= s.now().UnixMilli() {
 		return s.fail(ctx, event.MeetingID, state, model.AnalysisInterrupted)
 	}
 	snapshot, err := s.repo.CaptureResummary(ctx, state.OwnerID, event.MeetingID, state.RequestedBy)
+	if snapshot != nil {
+		snapshot.SharingSafe = state.SharingSafe
+	}
+	if state.SharingSafe && state.RequestedBy != state.OwnerID {
+		return s.fail(ctx, event.MeetingID, state, model.AnalysisSourceChanged)
+	}
 	if err == nil {
 		err = validateResummarySource(snapshot)
 	}
@@ -406,6 +466,9 @@ func (s *ResummaryService) Process(ctx context.Context, event model.SummaryReque
 		return failed(resummaryErrorCode(err))
 	}
 	fresh, err := s.repo.CaptureResummary(work, state.OwnerID, event.MeetingID, state.RequestedBy)
+	if fresh != nil {
+		fresh.SharingSafe = state.SharingSafe
+	}
 	if err != nil {
 		return failed(resummaryErrorCode(err))
 	}
@@ -431,6 +494,9 @@ func (s *ResummaryService) Process(ctx context.Context, event model.SummaryReque
 		return failed(model.AnalysisInvalidOutput)
 	}
 	fresh, err = s.repo.CaptureResummary(work, state.OwnerID, event.MeetingID, state.RequestedBy)
+	if fresh != nil {
+		fresh.SharingSafe = state.SharingSafe
+	}
 	if err != nil {
 		return failed(resummaryErrorCode(err))
 	}
@@ -441,7 +507,10 @@ func (s *ResummaryService) Process(ctx context.Context, event model.SummaryReque
 		return failed(resummaryErrorCode(err))
 	}
 	snapshot.Objects = bindings
-	err = s.repo.CompleteResummary(work, snapshot, &running, content, summaryAttachmentSnapshot(content, attachments), actionSourceHash(content), s.now().UTC())
+	completion, err := resummaryCompletionSnapshot(snapshot)
+	if err == nil {
+		err = s.repo.CompleteResummary(work, completion, &running, content, summaryAttachmentSnapshot(content, attachments), actionSourceHash(content), s.now().UTC())
+	}
 	if err != nil {
 		code := model.AnalysisPersistenceFail
 		if errors.Is(err, repository.ErrConditionFailed) {
@@ -456,4 +525,41 @@ func (s *ResummaryService) Process(ctx context.Context, event model.SummaryReque
 		s.terms(ctx, state.OwnerID, event.MeetingID)
 	}
 	return nil
+}
+
+// Normalize task identities only for hash-only continuity. Raw source checks and
+// model input retain their original bytes; private task prose is never republished.
+func resummaryCompletionSnapshot(snapshot *model.SummarySnapshot) (*model.SummarySnapshot, error) {
+	if !snapshot.SharingSafe {
+		return snapshot, nil
+	}
+	raw := snapshot.Meeting.ActionItems
+	if len(raw) > 256*1024 {
+		return nil, repository.ErrSummaryLimit
+	}
+	if strings.TrimSpace(raw) == "" {
+		raw = ""
+	} else {
+		var entries []json.RawMessage
+		if err := json.Unmarshal([]byte(raw), &entries); err != nil {
+			return nil, repository.ErrSummaryLimit
+		}
+		for _, entry := range entries {
+			if string(entry) == "null" {
+				return nil, repository.ErrSummaryLimit
+			}
+		}
+	}
+	items, err := storedActionItems(raw)
+	if err != nil || len(items) > 500 {
+		return nil, repository.ErrSummaryLimit
+	}
+	body, err := json.Marshal(items)
+	if err != nil || len(body) > 256*1024 {
+		return nil, repository.ErrSummaryLimit
+	}
+	completion, meeting := *snapshot, *snapshot.Meeting
+	meeting.ActionItems = string(body)
+	completion.Meeting = &meeting
+	return &completion, nil
 }

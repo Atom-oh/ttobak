@@ -39,7 +39,9 @@ func (h *ResummaryHandler) Request(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The source is exclusively the saved canonical data. Accept no caller text.
-	var request struct{}
+	var request struct {
+		SharingSafe bool `json:"sharingSafe,omitempty"`
+	}
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&request); err != nil && err != io.EOF {
@@ -50,13 +52,28 @@ func (h *ResummaryHandler) Request(w http.ResponseWriter, r *http.Request) {
 		writeResummary(w, 0, nil, service.ErrInvalidInput)
 		return
 	}
-	result, err := h.service.Request(r.Context(), middleware.GetUserID(r.Context()), chi.URLParam(r, "meetingId"))
+	var result *service.ResummaryResponse
+	var err error
+	if request.SharingSafe {
+		ownerService, ok := h.service.(interface {
+			RequestSharingSafe(context.Context, string, string) (*service.ResummaryResponse, error)
+		})
+		if !ok {
+			writeResummary(w, 0, nil, service.ErrInvalidInput)
+			return
+		}
+		result, err = ownerService.RequestSharingSafe(r.Context(), middleware.GetUserID(r.Context()), chi.URLParam(r, "meetingId"))
+	} else {
+		result, err = h.service.Request(r.Context(), middleware.GetUserID(r.Context()), chi.URLParam(r, "meetingId"))
+	}
 	writeResummary(w, http.StatusAccepted, result, err)
 }
 func writeResummary(w http.ResponseWriter, status int, result *service.ResummaryResponse, err error) {
 	switch {
 	case err == nil:
 		writeJSON(w, status, result)
+	case errors.Is(err, service.ErrSummaryReadRestricted):
+		writeError(w, http.StatusConflict, "SHARING_REGEN_REQUIRED", "소유자가 공유용 회의록을 먼저 재생성해야 합니다.")
 	case errors.Is(err, service.ErrInvalidInput):
 		writeError(w, 400, model.ErrCodeBadRequest, "Invalid re-summary request")
 	case errors.Is(err, service.ErrForbidden), errors.Is(err, repository.ErrSummaryAccess):

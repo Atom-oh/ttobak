@@ -156,6 +156,7 @@ export interface ResummaryStatus {
   leaseUntil?: number;
   updatedAt?: string;
   resultHash?: string;
+  sharingSafe?: boolean;
 }
 export interface SummaryReadingPage {
   meetingId: string;
@@ -274,6 +275,12 @@ export interface TranscriptQuality {
 }
 
 export interface MeetingDetail extends Meeting {
+  summarySharing?: {
+    canCreateGrant: boolean;
+    derivedReadRestricted: boolean;
+    requiresRegeneration: boolean;
+    canRegenerate: boolean;
+  };
   transcriptQuality?: TranscriptQuality;
   canRecoverRecording?: boolean;
   supportsAudioCrop?: boolean;

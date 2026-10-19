@@ -2,13 +2,18 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	ebtypes "github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
 	"github.com/ttobak/backend/internal/model"
@@ -126,6 +131,57 @@ func newResummaryFixture(t *testing.T) (*ResummaryService, *resummaryTestRepo, *
 	service := NewResummaryService(repo, &MeetingService{repo: repo}, generator, nil, func(context.Context, model.SummaryRequested) error { return nil })
 	service.now = func() time.Time { return time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC) }
 	return service, repo, &calls
+}
+
+func TestSharingSafeResummaryExcludesOldDerivationAndRetainsConcurrentNotes(t *testing.T) {
+	t.Setenv("SUMMARY_PRIVACY_WRITER_ENABLED", "1")
+	s, repo, _ := newResummaryFixture(t)
+	m := repo.meetings[meetingKey("owner", "meeting")]
+	m.LinkedMeetingIDs = []string{"PRIVATE_PREDECESSOR"}
+	m.ActionItems, m.Insights, m.LiveSummary, m.Sentiment = "PRIVATE_TASK", "PRIVATE_INSIGHT", "PRIVATE_DRAFT", "PRIVATE_SENTIMENT"
+	m.Tags = []string{"PRIVATE_TAG"}
+	s.generator = resummaryGenerateFunc(func(_ context.Context, snapshot *model.Meeting, _ []model.Attachment) (string, error) {
+		if snapshot.Content != "" || snapshot.ActionItems != "" || snapshot.Insights != "" || snapshot.LiveSummary != "" ||
+			snapshot.Sentiment != "" || len(snapshot.Tags) != 0 || len(snapshot.LinkedMeetingIDs) != 0 {
+			t.Fatal("sharing-safe model received previous private derivation")
+		}
+		if snapshot.Notes != "saved memo" || snapshot.TranscriptB != "resolved transcriptB" {
+			t.Fatal("sharing-safe model lost current own notes/transcript")
+		}
+		m.Notes = "human note written during generation"
+		return "late safe generation", nil
+	})
+	status, err := s.RequestSharingSafe(context.Background(), "owner", "meeting")
+	if err != nil || !status.SharingSafe {
+		t.Fatalf("explicit owner mode did not survive request: %+v %v", status, err)
+	}
+	if err := s.Process(context.Background(), model.SummaryRequested{MeetingID: "meeting", RunID: status.RunID}); err != nil {
+		t.Fatal(err)
+	}
+	if repo.completes != 0 || m.Content != "old summary" || m.Notes != "human note written during generation" ||
+		repo.state.Status != model.AnalysisFailed || repo.state.ErrorCode != model.AnalysisSourceChanged {
+		t.Fatalf("safe regeneration overwrote concurrent human source: completes=%d state=%+v", repo.completes, repo.state)
+	}
+}
+
+func TestSharingSafePreparationAllowsOnlyVerifiedDocuments(t *testing.T) {
+	s, _, _ := newResummaryFixture(t)
+	snapshot := &model.SummarySnapshot{Meeting: &model.Meeting{UserID: "owner", MeetingID: "meeting",
+		Status: model.StatusDone, Notes: "own note", Content: "PRIVATE_GENERATED"},
+		SharingSafe: true, TextStates: map[string]*model.AttachmentTextState{},
+		Attachments: []model.Attachment{
+			{AttachmentID: "image", Type: model.AttachTypePhoto, ProcessedContent: "PRIVATE_IMAGE", Description: "PRIVATE_DESCRIPTION"},
+			{AttachmentID: "document", Type: model.AttachTypeDocument, ProcessedContent: "PRIVATE_PREVIEW", Description: "PRIVATE_DESCRIPTION",
+				OriginalKey: "files/owner/meeting/unready.pdf"},
+		}}
+	m, attachments, _, err := s.prepare(context.Background(), snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Content != "" || len(attachments) != 1 || !attachments[0].SummaryOmitted ||
+		attachments[0].ProcessedContent != "" || attachments[0].Description != "" || attachments[0].ExtractedText != nil {
+		t.Fatalf("legacy attachment derivation entered safe evidence: %+v", attachments)
+	}
 }
 func TestResummaryOwnerEditAuthorizationAndDuplicateRequest(t *testing.T) {
 	s, r, _ := newResummaryFixture(t)
@@ -370,5 +426,228 @@ func TestResummaryPublisherAndVerifiedDocumentPreparation(t *testing.T) {
 	snapshot.Meeting.Content = ""
 	if err := validateResummarySource(snapshot); !errors.Is(err, ErrResummarySourcePending) {
 		t.Fatal("failed document alone became a valid source")
+	}
+}
+
+type ownerContinuityRepo struct {
+	*resummaryTestRepo
+	snapshots []*model.SummarySnapshot
+	complete  func(context.Context, *model.SummarySnapshot, *model.ResummaryState, string, string, string, time.Time) error
+}
+
+func (r *ownerContinuityRepo) CaptureResummary(ctx context.Context, owner, mid, requester string) (*model.SummarySnapshot, error) {
+	snapshot, err := r.resummaryTestRepo.CaptureResummary(ctx, owner, mid, requester)
+	if snapshot != nil {
+		snapshot.Checks[0].Fields["actionItems"] = model.SummaryValue{Present: true, Value: snapshot.Meeting.ActionItems}
+		snapshot.Stored["actionItems"] = snapshot.Meeting.ActionItems
+		snapshot.Checks = append(snapshot.Checks, model.SummaryCheck{PK: "MEETING#" + mid, SK: model.ActionAnalysisSK})
+		r.snapshots = append(r.snapshots, snapshot)
+	}
+	return snapshot, err
+}
+func (r *ownerContinuityRepo) CompleteResummary(ctx context.Context, snapshot *model.SummarySnapshot, state *model.ResummaryState, content, coverage, hash string, now time.Time) error {
+	if err := r.complete(ctx, snapshot, state, content, coverage, hash, now); err != nil {
+		return err
+	}
+	return r.resummaryTestRepo.CompleteResummary(ctx, snapshot, state, content, coverage, hash, now)
+}
+
+func TestSharingSafeOwnerLegacyTaskContinuity(t *testing.T) {
+	carried := map[string][]model.ActionItemContinuity{strings.Repeat("a", 64): make([]model.ActionItemContinuity, 500)}
+	for i := range carried[strings.Repeat("a", 64)] {
+		carried[strings.Repeat("a", 64)][i].ID = "existing"
+	}
+	for _, tc := range []struct {
+		name, prior string
+		carried     map[string][]model.ActionItemContinuity
+		rejected    bool
+		omitLast    bool
+	}{
+		{name: "legacy-done", prior: `[{"text":"PRIVATE_OLD_TASK","done":true}]`},
+		{name: "completed-overrides-done", prior: `[{"text":"PRIVATE_OLD_TASK","done":true,"completed":false}]`},
+		{name: "already-id", prior: `[{"id":"stable","text":"PRIVATE_OLD_TASK","completed":true}]`},
+		{name: "mixed-and-duplicate-index", prior: `[{"id":"stable","text":"known","done":true},{"text":"PRIVATE_OLD_TASK","done":true},{"text":"PRIVATE_OLD_TASK","completed":false}]`},
+		{name: "omitted-private-prior", prior: `[{"text":"returned","done":true},{"text":"PRIVATE_OMITTED","done":true}]`, omitLast: true},
+		{name: "oversized-id", prior: `[{"id":"` + strings.Repeat("a", 129) + `","text":"task"}]`, rejected: true},
+		{name: "malformed-carried-hash", prior: "[]", carried: map[string][]model.ActionItemContinuity{"bad": {{ID: "existing"}}}, rejected: true},
+		{name: "missing-carried-id", prior: "[]", carried: map[string][]model.ActionItemContinuity{strings.Repeat("a", 64): {{}}}, rejected: true},
+		{name: "combined-continuity-limit", prior: `[{"text":"task"}]`, carried: carried, rejected: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("SUMMARY_PRIVACY_WRITER_ENABLED", "1")
+			s, base, _ := newResummaryFixture(t)
+			parent := base.meetings[meetingKey("owner", "meeting")]
+			parent.SelectedTranscript, parent.TranscriptB, parent.ActionItems = "A", "", tc.prior
+			parent.ActionItemContinuity = tc.carried
+			old, err := storedActionItems(tc.prior)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := &ownerContinuityRepo{resummaryTestRepo: base}
+			var continuity map[string][]model.ActionItemContinuity
+			writes, modelCalls := 0, 0
+			db := dynamodb.New(dynamodb.Options{Region: "ap-northeast-2", Credentials: aws.AnonymousCredentials{}, HTTPClient: noteSourceHTTPClient(func(req *http.Request) (*http.Response, error) {
+				if req.Header.Get("X-Amz-Target") != "DynamoDB_20120810.TransactWriteItems" {
+					t.Fatal("unexpected synthetic operation")
+				}
+				var body struct {
+					TransactItems []struct {
+						Update *struct {
+							UpdateExpression          string
+							ConditionExpression       string
+							ExpressionAttributeNames  map[string]string
+							ExpressionAttributeValues json.RawMessage
+						}
+					}
+				}
+				if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				if len(body.TransactItems) != 4 {
+					t.Fatal("publication/reset was not one four-item transaction")
+				}
+				op := body.TransactItems[0].Update
+				values, err := attributevalue.UnmarshalMapJSON(op.ExpressionAttributeValues)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for alias, field := range op.ExpressionAttributeNames {
+					if field != "actionItemContinuity" {
+						continue
+					}
+					tokens := strings.Fields(strings.ReplaceAll(op.UpdateExpression, ",", " "))
+					for i := 0; i+2 < len(tokens); i++ {
+						if tokens[i] == alias && tokens[i+1] == "=" {
+							if err := attributevalue.Unmarshal(values[tokens[i+2]], &continuity); err != nil {
+								t.Fatal(err)
+							}
+						}
+					}
+				}
+				if continuity == nil {
+					t.Fatal("missing persisted continuity")
+				}
+				casRaw := false
+				for token, value := range values {
+					var text string
+					if attributevalue.Unmarshal(value, &text) == nil && text == tc.prior && strings.Contains(op.ConditionExpression, token) {
+						casRaw = true
+					}
+				}
+				encoded, err := json.Marshal(continuity)
+				if err != nil || strings.Contains(string(encoded), "PRIVATE_OLD_TASK") || !casRaw {
+					t.Fatal("continuity disclosed prior text or publication lost the raw task CAS")
+				}
+				writes++
+				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/x-amz-json-1.0"}}, Body: io.NopCloser(strings.NewReader(`{}`))}, nil
+			})})
+			wire := repository.NewDynamoDBRepository(db, "synthetic")
+			r.complete = func(ctx context.Context, snapshot *model.SummarySnapshot, state *model.ResummaryState, content, coverage, hash string, now time.Time) error {
+				if snapshot.Stored["actionItems"] != tc.prior || snapshot.Checks[0].Fields["actionItems"].Value != tc.prior {
+					t.Fatal("normalization changed raw stored/source CAS bytes")
+				}
+				return wire.CompleteResummary(ctx, snapshot, state, content, coverage, hash, now)
+			}
+			s.repo, s.meetings = r, &MeetingService{repo: r}
+			s.generator = resummaryGenerateFunc(func(_ context.Context, meeting *model.Meeting, _ []model.Attachment) (string, error) {
+				modelCalls++
+				if meeting.Content != "" || meeting.ActionItems != "" || meeting.TranscriptA != "source A" {
+					t.Fatal("private prior derivative reached model input")
+				}
+				return "new own evidence", nil
+			})
+			if _, err := s.RequestSharingSafe(context.Background(), "owner", "meeting"); err != nil {
+				t.Fatal(err)
+			}
+			err = s.Process(context.Background(), model.SummaryRequested{MeetingID: "meeting", RunID: base.state.RunID})
+			if tc.rejected {
+				if !errors.Is(err, repository.ErrSummaryLimit) || writes != 0 || base.completes != 0 || base.state.ErrorCode != "OUTPUT_TOO_LARGE" || parent.Content != "old summary" {
+					t.Fatal("normalization bypassed repository continuity limits", err)
+				}
+			} else if err != nil || writes != 1 {
+				t.Fatal("valid continuity was not published once", err)
+			}
+			if modelCalls != 1 {
+				t.Fatalf("writes=%d model=%d", writes, modelCalls)
+			}
+			if !tc.rejected {
+				retained := old
+				if tc.omitLast {
+					retained = retained[:len(retained)-1]
+				}
+				generated := make([]ActionItem, len(retained))
+				for i, item := range retained {
+					generated[i] = ActionItem{Text: item.Text, Assignee: item.Assignee, DueDate: item.DueDate}
+				}
+				body, err := json.Marshal(generated)
+				if err != nil {
+					t.Fatal(err)
+				}
+				result, err := reconcileActionItemsWithContinuity("[]", string(body), continuity)
+				if err != nil {
+					t.Fatal(err)
+				}
+				items, err := storedActionItems(result)
+				if err != nil || len(items) != len(retained) {
+					t.Fatal("omitted private prior task was resurrected", err)
+				}
+				for i, item := range items {
+					if item.ID != retained[i].ID || item.Completed != retained[i].Completed {
+						t.Errorf("task%d lost stable identity/completion", i)
+					}
+				}
+			}
+			for _, snapshot := range r.snapshots {
+				if snapshot.Meeting.ActionItems != tc.prior || snapshot.Stored["actionItems"] != tc.prior || snapshot.Checks[0].Fields["actionItems"].Value != tc.prior {
+					t.Fatal("normalization mutated captured caller snapshot")
+				}
+			}
+			if parent.ActionItems != tc.prior || !reflect.DeepEqual(parent.ActionItemContinuity, tc.carried) {
+				t.Fatal("normalization mutated caller meeting")
+			}
+		})
+	}
+}
+
+func TestSharingSafeCompletionTaskBounds(t *testing.T) {
+	for _, tc := range []struct {
+		name, prior string
+		rejected    bool
+	}{
+		{"empty", "", false}, {"whitespace", " \n", false}, {"empty-array", "[]", false}, {"null-collection", "null", false},
+		{"malformed", "[", true}, {"scalar", "true", true}, {"null-entry", "[null]", true},
+		{"invalid-completed", `[{"completed":"true"}]`, true},
+		{"oversized-whitespace", strings.Repeat(" ", 256*1024+1), true},
+		{"too-many", "[" + strings.Repeat(`{"text":"task"},`, 500) + `{"text":"task"}]`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, r, _ := newResummaryFixture(t)
+			meeting := r.meetings[meetingKey("owner", "meeting")]
+			meeting.ActionItems = tc.prior
+			meeting.SelectedTranscript, meeting.TranscriptB = "A", ""
+			modelCalls := 0
+			s.generator = resummaryGenerateFunc(func(_ context.Context, input *model.Meeting, _ []model.Attachment) (string, error) {
+				modelCalls++
+				if input.ActionItems != "" || input.Content != "" {
+					t.Fatal("prior derivative entered sharing-safe evidence")
+				}
+				return "new own evidence", nil
+			})
+			t.Setenv("SUMMARY_PRIVACY_WRITER_ENABLED", "1")
+			if _, err := s.RequestSharingSafe(context.Background(), "owner", "meeting"); err != nil {
+				t.Fatal(err)
+			}
+			err := s.Process(context.Background(), model.SummaryRequested{MeetingID: "meeting", RunID: r.state.RunID})
+			if tc.rejected {
+				if !errors.Is(err, repository.ErrSummaryLimit) || r.completes != 0 || r.state.ErrorCode != "OUTPUT_TOO_LARGE" || meeting.Content != "old summary" {
+					t.Fatal("invalid prior tasks bypassed fail-closed publication", err)
+				}
+			} else if err != nil || r.completes != 1 {
+				t.Fatal("valid empty prior tasks blocked publication", err)
+			}
+			if modelCalls != 1 || meeting.ActionItems != tc.prior {
+				t.Fatal("unexpected model calls or prior task mutation")
+			}
+		})
 	}
 }

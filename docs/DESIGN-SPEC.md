@@ -335,6 +335,14 @@ keep the previous value.
 
 Deploy attachment, saved-summary and index-status APIs before this UI.
 
+Protected account readers see an explicit sharing-regeneration status while
+retaining raw notes/transcript access. Owners can confirm sharing-safe regeneration
+when the API reports it available. The confirmation explains the current-source
+inputs, omitted predecessor/prior generated evidence, replacement of existing
+analysis/simulator output, failure preservation and task-completion continuity.
+Unsaved edits and active work disable the operation. Loading its verified result
+also clears obsolete generated fields from the displayed meeting.
+
 ## MCP client setup guides
 
 Settings' MCP guide has separate selectors for Claude Code, Codex, Kiro Crew,

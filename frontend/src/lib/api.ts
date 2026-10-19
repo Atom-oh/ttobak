@@ -219,6 +219,8 @@ export const meetingsApi = {
     api.get<import('@/types/meeting').ResummaryStatus>(`/api/meetings/${encodeURIComponent(id)}/resummary`, options),
   requestResummary: (id: string, options?: { signal?: AbortSignal }) =>
     api.post<import('@/types/meeting').ResummaryStatus>(`/api/meetings/${encodeURIComponent(id)}/resummary`, undefined, options),
+  requestSharingSafeResummary: (id: string, options?: { signal?: AbortSignal }) =>
+    api.post<import('@/types/meeting').ResummaryStatus>(`/api/meetings/${encodeURIComponent(id)}/resummary`, { sharingSafe: true }, options),
   readSummary: (id: string, cursor?: string, options?: { signal?: AbortSignal }) => {
     const query = new URLSearchParams({ kind: 'meeting', section: 'summary', pageSize: '8000' });
     if (cursor) query.set('cursor', cursor);
