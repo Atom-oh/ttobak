@@ -853,7 +853,8 @@ func (s *MeetingService) UpdateMeeting(ctx context.Context, userID, meetingID st
 	}, nil
 }
 
-// UpdateSpeakers replaces speaker labels with real names in all text fields
+// UpdateSpeakers allows every authorized meeting reader to rename known speakers.
+// This narrow collaboration permission does not grant general meeting editing.
 func (s *MeetingService) UpdateSpeakers(ctx context.Context, userID, meetingID string, req *model.UpdateSpeakersRequest) (*model.MeetingUpdateResponse, error) {
 	meeting, permission, err := s.checkAccess(ctx, userID, meetingID)
 	if err != nil {
@@ -862,8 +863,11 @@ func (s *MeetingService) UpdateSpeakers(ctx context.Context, userID, meetingID s
 	if meeting == nil {
 		return nil, ErrNotFound
 	}
-	if permission != "owner" && permission != model.PermissionEdit {
+	if permission != "owner" && permission != model.PermissionEdit && permission != model.PermissionRead {
 		return nil, ErrForbidden
+	}
+	if err := validateSpeakerMapping(meeting, req); err != nil {
+		return nil, err
 	}
 
 	before := *meeting
@@ -876,36 +880,60 @@ func (s *MeetingService) UpdateSpeakers(ctx context.Context, userID, meetingID s
 		qualities[variant] = q
 	}
 	// Apply replacements to all text fields. Plain-text fields use a
-	// word-boundary-aware replace (speaker.ReplaceLabel) so a label like
+	// word-boundary-aware replacement so a label like
 	// "spk_1" never partially matches a namespaced label like "spk_1000000"
 	// (multi-part meetings produce exactly that pair -- see ADR-019).
 	// TranscriptSegments is JSON, not prose, so it's updated structurally
 	// instead: parsing out the `speaker` field and comparing for exact
 	// equality has no substring-collision failure mode at all.
-	for label, name := range req.SpeakerMap {
-		if name == "" {
-			continue
+	proseMapping := req.SpeakerMap
+	if permission == model.PermissionRead {
+		// A custom speaker name can also be ordinary prose. Read recipients
+		// may change its attribution, but cannot globally replace that word.
+		proseMapping = make(map[string]string)
+		for label, name := range req.SpeakerMap {
+			if defaultSpeakerLabel.MatchString(label) {
+				proseMapping[label] = name
+			}
 		}
-		meeting.Content = speaker.ReplaceLabel(meeting.Content, label, name)
-		meeting.TranscriptA = speaker.ReplaceLabel(meeting.TranscriptA, label, name)
-		meeting.TranscriptB = speaker.ReplaceLabel(meeting.TranscriptB, label, name)
-		meeting.ActionItems = speaker.ReplaceLabel(meeting.ActionItems, label, name)
 	}
+	replacer := speaker.NewReplacer(proseMapping)
+	meeting.Content = replacer.Replace(meeting.Content)
+	if permission == model.PermissionRead {
+		meeting.TranscriptA = renameTranscriptSpeakerAttributions(meeting.TranscriptA, req.SpeakerMap, replacer)
+		meeting.TranscriptB = renameTranscriptSpeakerAttributions(meeting.TranscriptB, req.SpeakerMap, replacer)
+	} else {
+		meeting.TranscriptA = replacer.Replace(meeting.TranscriptA)
+		meeting.TranscriptB = replacer.Replace(meeting.TranscriptB)
+	}
+	meeting.ActionItems = renameActionItemSpeakers(meeting.ActionItems, replacer, req.SpeakerMap)
 	meeting.TranscriptSegments = renameSegmentSpeakers(meeting.TranscriptSegments, req.SpeakerMap)
 	for variant, text := range map[string]string{"A": meeting.TranscriptA, "B": meeting.TranscriptB} {
 		qualities[variant].TextSHA256 = model.TranscriptHash(text)
 		qualities[variant].SegmentsSHA256 = model.TranscriptHash(meeting.TranscriptSegments)
 	}
 
-	// Store the mapping for reference
-	meeting.SpeakerMap = req.SpeakerMap
+	// Retain unaffected speakers and compose corrections without accumulating
+	// every historical name as another speaker.
+	meeting.SpeakerMap = updateSpeakerMapping(meeting.SpeakerMap, req.SpeakerMap)
 
 	// Guard the original version: hydrated transcripts can differ from stored S3 refs.
 	updatedAt := time.Now().UTC()
 	fields := map[string]interface{}{
-		"content": meeting.Content, "transcriptA": meeting.TranscriptA, "transcriptB": meeting.TranscriptB,
-		"transcriptSegments": meeting.TranscriptSegments, "actionItems": meeting.ActionItems, "speakerMap": meeting.SpeakerMap,
+		"transcriptA": meeting.TranscriptA, "transcriptB": meeting.TranscriptB,
+		"transcriptSegments": meeting.TranscriptSegments, "speakerMap": meeting.SpeakerMap,
 		"transcriptQualityA": qualities["A"], "transcriptQualityB": qualities["B"],
+	}
+	// Account projections hide derived content. Even an unrestricted view must
+	// omit unchanged content: including it would invalidate safe summary
+	// provenance on a correction that only changes speaker attribution.
+	if !meeting.SummaryReadRestricted {
+		if meeting.Content != before.Content {
+			fields["content"] = meeting.Content
+		}
+		if meeting.ActionItems != before.ActionItems {
+			fields["actionItems"] = meeting.ActionItems
+		}
 	}
 	markNonOwnerSourceEdit(fields, userID, &before)
 	if err := s.repo.UpdateMeetingFieldsIfMatch(ctx, meeting.UserID, meetingID,

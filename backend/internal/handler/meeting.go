@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -499,8 +500,18 @@ func (h *MeetingHandler) UpdateSpeakers(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 128*1024))
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, model.ErrCodeBadRequest, "Speaker map request is too large")
+		} else {
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid request body")
+		}
+		return
+	}
 	var req model.UpdateSpeakersRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.Unmarshal(body, &req); err != nil {
 		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid request body")
 		return
 	}
@@ -512,6 +523,10 @@ func (h *MeetingHandler) UpdateSpeakers(w http.ResponseWriter, r *http.Request) 
 
 	result, err := h.meetingService.UpdateSpeakers(ctx, userID, meetingID, &req)
 	if err != nil {
+		if errors.Is(err, service.ErrInvalidInput) {
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "현재 미팅의 화자 이름을 1~100자로 입력해 주세요.")
+			return
+		}
 		if errors.Is(err, repository.ErrConditionFailed) {
 			writeError(w, http.StatusConflict, model.ErrCodeConflict, "회의록이 변경되었습니다. 새로고침 후 다시 시도해 주세요.")
 			return

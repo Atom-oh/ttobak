@@ -241,6 +241,27 @@ new objects because the write may have committed. Existing referenced objects
 remain intact. Go and QA readers accept strictly validated legacy and versioned
 keys; deploy compatible readers before writers (ADR-037).
 
+`PUT /api/meetings/{meetingId}/speakers` permits owners, direct read/edit
+recipients and current members of the published account team to correct speaker
+names. This does not grant general content/notes editing or re-diarization.
+Access is rechecked on each request; revoked publication/membership cannot rely
+on cached account shares. The JSON body is capped at 128 KiB and `speakerMap` at
+100 entries; labels must identify existing speakers and names must contain
+1–100 characters without control characters. Invalid mappings return 400,
+oversized bodies 413, inaccessible meetings 404 and concurrent writes 409.
+Read recipients can replace anonymous labels in prose; custom names update only
+structured speaker attribution, complete bracket-only transcript speaker lines,
+and exact action-item assignees. Repeated corrections remain available, including
+legacy meetings whose previous names are recorded in `speakerMap`. Custom-name
+occurrences in ordinary prose remain unchanged for readers; owner/editor
+custom-name prose replacement remains available. Partial corrections retain
+unaffected current speaker names without accumulating historical aliases.
+Restricted account views never write their hidden content/action fields.
+Unchanged derived fields are also omitted, preserving safe summary clearance
+for attribution-only corrections. Action-item updates target JSON text/assignee
+fields and preserve task IDs, completion and other metadata.
+See ADR-051.
+
 `GET /api/kb/files` retains its `{files: [...]}` contract and follows all S3
 continuation pages under the caller's `kb/{userId}/` prefix. Any page failure
 fails the request rather than returning a silently incomplete successful list.
@@ -380,6 +401,9 @@ remain subject to current meeting publication/membership checks; an explicit
 to 409 `CONFLICT` and a lapsed owner access or account membership to 403 when the
 service reports them; other failures stay 500. Which grant paths can raise them
 is defined by the summary-privacy writer state in INFRA-SPEC.
+The meeting-detail UI uses that publication endpoint directly for its single
+link-and-share action: no preliminary private link request is needed. Existing
+private links and recording preparation remain private until explicit publication.
 
 Account meeting lists and meeting-sourced insights, including the registered QA
 account insight/brief tools, revalidate the exact

@@ -214,7 +214,7 @@ func (m *mockHandlerMeetingRepo) UpdateMeetingFieldsWithNotesRevision(ctx contex
 
 func TestUpdateSpeakersConflict(t *testing.T) {
 	h, repo := newStubMeetingHandler()
-	repo.addMeeting(&model.Meeting{UserID: "owner", MeetingID: "meeting", Status: model.StatusDone})
+	repo.addMeeting(&model.Meeting{UserID: "owner", MeetingID: "meeting", Status: model.StatusDone, Content: "spk_0 summary"})
 	repo.conditionalWriteErr = errors.Join(errors.New("concurrent update"), repository.ErrConditionFailed)
 	r := withChiParam(withUserCtx(httptest.NewRequest(http.MethodPut, "/", bytes.NewBufferString(`{"speakerMap":{"spk_0":"Kim"}}`)), "owner"), "meetingId", "meeting")
 	w := httptest.NewRecorder()

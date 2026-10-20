@@ -659,7 +659,7 @@ function MeetingDetailContent() {
               }}
               sttProvider={meeting.sttProvider}
               audioPartCount={meeting.audioPartCount}
-              onRediarize={async (speakerCount) => {
+              onRediarize={canManageAssociations ? async (speakerCount) => {
                 await meetingsApi.rediarize(meeting.meetingId, speakerCount);
                 const summaryRevision = summaryRevisionRef.current;
                 const refreshed = await meetingsApi.get(meeting.meetingId);
@@ -679,7 +679,7 @@ function MeetingDetailContent() {
                   } : {}),
                   attachments: dirtyRef.current.summary ? current.attachments : normalizeAttachments(refreshed.attachments),
                 } : current);
-              }}
+              } : undefined}
             />
           )}
 
@@ -776,7 +776,7 @@ function MeetingDetailContent() {
             </h3>
             <AccountSection
               key={meeting.meetingId}
-              canManage={canManageAssociations && meeting.supportsPrivateAccountLink === true}
+              canManage={canManageAssociations}
               onChanged={onAccountChanged}
               meetingId={meeting.meetingId}
               initialAccountId={meeting.accountId}

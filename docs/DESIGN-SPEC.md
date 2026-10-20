@@ -261,7 +261,13 @@ Saved notes and generated content are separate. Respect active A/B transcript
 selection and source freshness when editing/displaying diarized segments. Explain
 processing/error states instead of hiding them behind a permanent spinner.
 Speaker-name edits retain entered values and show inline save errors, including
-409 concurrent changes. Saved notes are reference input, not proof of spoken
+409 concurrent changes. Direct read/edit recipients and current shared-account
+members can correct names. The editor explains that read recipients update speaker
+attribution and assignees while retaining custom names in ordinary prose and hidden
+summaries. Previous mapping values keep the editor available for repeated
+corrections on legacy meetings without segments. Names are limited to 100 characters.
+Re-diarization remains owner-only and is hidden from shared recipients.
+Saved notes are reference input, not proof of spoken
 statements or agreed tasks; note-only evidence must not receive transcript links.
 
 The action-item card distinguishes unknown legacy state, queued/running analysis,
@@ -426,8 +432,13 @@ Notes compare both text and a server-issued revision on explicit save. A conflic
 refreshing the comparison baseline is a separate user action. Background refresh
 must not silently advance a dirty editor's baseline. Dirty notes block re-summary.
 Delayed detail responses cannot roll back acknowledged notes or association
-changes. Editing and private relinking require server capability flags during
-mixed-version rollout. Recording notes share a comparison writer across autosave,
+changes. Notes editing requires server capability flags during mixed-version
+rollout. Meeting-detail account management is owner-only, with one explicit
+link-and-share button calling the existing team publication endpoint. The label
+and help text explain that the selected account team receives the meeting and
+its extracted insights. An already published account offers a share refresh;
+failures remain visible and retryable. Recording preparation and existing private
+links are not published automatically. Recording notes share a comparison writer across autosave,
 finalization and upload retry. After an uncertain write, even reverting to the
 previous text requires a version-changing save to fence late requests. Final
 submission locks before the autosave flush. Failed or oversized notes remain
