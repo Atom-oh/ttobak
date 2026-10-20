@@ -19,8 +19,9 @@ preparation → recording → follow-up.
   selection prepares a question; it does not claim to restrict the QA tool scope.
 - Edit saved notes with compare-and-set conflict handling; preserve drafts on
   errors. Unsaved notes participate in re-summary guards.
-- Guarded note editing and private relinking require explicit server capability
-  flags. Recording uses one serialized comparison writer for autosave and final
+- Guarded note editing requires explicit server capability flags.
+  Meeting-detail account linking explicitly publishes to the team in one action;
+  recording preparation remains private classification. Recording uses one serialized comparison writer for autosave and final
   notes; upload retries never resend an already acknowledged note. Oversized or
   failed final notes remain editable while the captured audio is retained.
   Revision comparisons fence delayed requests, including a same-text revert
@@ -54,7 +55,8 @@ model calls automatically. Q&A keeps its current server authorization and tools.
 4. Save notes, simulate a concurrent edit and retain the local draft on 409;
    re-summary remains disabled while an editor has unsaved changes.
 5. Read stored insight provenance, link a project, create a private follow-up
-   note and explicitly share to a team. Read-only viewers cannot mutate.
+   note and link/share to a team in one action. Shared readers can correct speaker
+   names; general content and notes still require edit permission.
 6. Go stdlib unit/wire tests, full Go tests/vet/ARM64 build, frontend lint/build,
    and temporary Playwright desktop/mobile fixtures. No customer data or model
    calls are needed for validation.

@@ -153,9 +153,14 @@ unconsumed project invitation rows expire through their existing TTL field.
    Final notes use the GPT-6.1 Sol summary override. Both providers retain bounded
    continuation after token exhaustion and publish only complete visible text.
    Refinement and auxiliary calls keep their independent model selection.
+   Authorized shared readers can correct known speaker names through the bounded
+   speaker endpoint with the existing version comparison. General editing and
+   owner-only re-diarization retain their separate permissions (ADR-051).
 4. Derive account/project material using explicit relations and current access.
    Hierarchy classifies accounts; it never grants membership. Project lists union
    owner, direct membership and linked-account access.
+   Meeting detail combines explicit account linking and team publication in one
+   existing share request; recording preparation remains private classification.
 5. Personal documents support independent account copies, read-only email
    references, PDF preview sidecars and token-revocable public links. These paths
    have different storage/access semantics and must not share meeting share keys.

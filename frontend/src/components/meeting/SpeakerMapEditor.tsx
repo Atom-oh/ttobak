@@ -124,7 +124,7 @@ export function SpeakerMapEditor({ transcription, content, speakerMap: existingS
       {isOpen && (
         <div className="mt-4 space-y-3">
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            화자 이름을 입력하면 요약, 트랜스크립트, 액션 아이템에서 일괄 변경됩니다.
+            공유받은 사람도 화자 이름을 변경할 수 있습니다. 변경한 이름은 요약, 트랜스크립트, 액션 아이템에 함께 반영됩니다.
           </p>
           {speakers.map((label, i) => (
             <div key={label} className="flex items-center gap-3">
@@ -138,10 +138,11 @@ export function SpeakerMapEditor({ transcription, content, speakerMap: existingS
               <span className="text-slate-400">→</span>
               <input
                 type="text"
+                maxLength={100}
                 value={mapping[label] || ''}
                 onChange={(e) => setMapping({ ...mapping, [label]: e.target.value })}
                 placeholder={existingSpeakerMap?.[label] || '새 이름 입력...'}
-                className="flex-1 text-sm px-3 py-1.5 border border-slate-200 dark:border-white/10 rounded-lg bg-white dark:bg-white/5 text-slate-900 dark:text-white placeholder:text-slate-400 focus:ring-2 focus:ring-primary/20 outline-none"
+                className="min-w-0 flex-1 text-sm px-3 py-1.5 border border-slate-200 dark:border-white/10 rounded-lg bg-white dark:bg-white/5 text-slate-900 dark:text-white placeholder:text-slate-400 focus:ring-2 focus:ring-primary/20 outline-none"
               />
             </div>
           ))}

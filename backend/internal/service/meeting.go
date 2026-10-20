@@ -853,7 +853,8 @@ func (s *MeetingService) UpdateMeeting(ctx context.Context, userID, meetingID st
 	}, nil
 }
 
-// UpdateSpeakers replaces speaker labels with real names in all text fields
+// UpdateSpeakers allows every authorized meeting reader to rename known speakers.
+// This narrow collaboration permission does not grant general meeting editing.
 func (s *MeetingService) UpdateSpeakers(ctx context.Context, userID, meetingID string, req *model.UpdateSpeakersRequest) (*model.MeetingUpdateResponse, error) {
 	meeting, permission, err := s.checkAccess(ctx, userID, meetingID)
 	if err != nil {
@@ -862,8 +863,11 @@ func (s *MeetingService) UpdateSpeakers(ctx context.Context, userID, meetingID s
 	if meeting == nil {
 		return nil, ErrNotFound
 	}
-	if permission != "owner" && permission != model.PermissionEdit {
+	if permission != "owner" && permission != model.PermissionEdit && permission != model.PermissionRead {
 		return nil, ErrForbidden
+	}
+	if err := validateSpeakerMapping(meeting, req); err != nil {
+		return nil, err
 	}
 
 	before := *meeting
@@ -876,21 +880,17 @@ func (s *MeetingService) UpdateSpeakers(ctx context.Context, userID, meetingID s
 		qualities[variant] = q
 	}
 	// Apply replacements to all text fields. Plain-text fields use a
-	// word-boundary-aware replace (speaker.ReplaceLabel) so a label like
+	// word-boundary-aware replacement so a label like
 	// "spk_1" never partially matches a namespaced label like "spk_1000000"
 	// (multi-part meetings produce exactly that pair -- see ADR-019).
 	// TranscriptSegments is JSON, not prose, so it's updated structurally
 	// instead: parsing out the `speaker` field and comparing for exact
 	// equality has no substring-collision failure mode at all.
-	for label, name := range req.SpeakerMap {
-		if name == "" {
-			continue
-		}
-		meeting.Content = speaker.ReplaceLabel(meeting.Content, label, name)
-		meeting.TranscriptA = speaker.ReplaceLabel(meeting.TranscriptA, label, name)
-		meeting.TranscriptB = speaker.ReplaceLabel(meeting.TranscriptB, label, name)
-		meeting.ActionItems = speaker.ReplaceLabel(meeting.ActionItems, label, name)
-	}
+	replacer := speaker.NewReplacer(req.SpeakerMap)
+	meeting.Content = replacer.Replace(meeting.Content)
+	meeting.TranscriptA = replacer.Replace(meeting.TranscriptA)
+	meeting.TranscriptB = replacer.Replace(meeting.TranscriptB)
+	meeting.ActionItems = renameActionItemSpeakers(meeting.ActionItems, replacer)
 	meeting.TranscriptSegments = renameSegmentSpeakers(meeting.TranscriptSegments, req.SpeakerMap)
 	for variant, text := range map[string]string{"A": meeting.TranscriptA, "B": meeting.TranscriptB} {
 		qualities[variant].TextSHA256 = model.TranscriptHash(text)

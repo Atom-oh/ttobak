@@ -6,6 +6,9 @@
 - Implementation checked: 2026-09-13.
 - Amendment (2026-09-13): the SA workflow's private relink supersedes the former preservation
   of team publication; see the current behavior below.
+- Amendment (2026-10-20): [ADR-051](ADR-051-shared-speaker-correction-and-account-publication.md)
+  supersedes the separate meeting-detail link/share controls with one explicit
+  publication action. Private classification API semantics remain unchanged.
 
 ## Context and original decision
 
