@@ -913,8 +913,9 @@ func (s *MeetingService) UpdateSpeakers(ctx context.Context, userID, meetingID s
 		qualities[variant].SegmentsSHA256 = model.TranscriptHash(meeting.TranscriptSegments)
 	}
 
-	// Store the mapping for reference
-	meeting.SpeakerMap = req.SpeakerMap
+	// Retain unaffected speakers and compose corrections without accumulating
+	// every historical name as another speaker.
+	meeting.SpeakerMap = updateSpeakerMapping(meeting.SpeakerMap, req.SpeakerMap)
 
 	// Guard the original version: hydrated transcripts can differ from stored S3 refs.
 	updatedAt := time.Now().UTC()
@@ -923,11 +924,16 @@ func (s *MeetingService) UpdateSpeakers(ctx context.Context, userID, meetingID s
 		"transcriptSegments": meeting.TranscriptSegments, "speakerMap": meeting.SpeakerMap,
 		"transcriptQualityA": qualities["A"], "transcriptQualityB": qualities["B"],
 	}
-	// Account projections hide derived content; those empty view fields must
-	// never replace the owner's stored summary or action items.
+	// Account projections hide derived content. Even an unrestricted view must
+	// omit unchanged content: including it would invalidate safe summary
+	// provenance on a correction that only changes speaker attribution.
 	if !meeting.SummaryReadRestricted {
-		fields["content"] = meeting.Content
-		fields["actionItems"] = meeting.ActionItems
+		if meeting.Content != before.Content {
+			fields["content"] = meeting.Content
+		}
+		if meeting.ActionItems != before.ActionItems {
+			fields["actionItems"] = meeting.ActionItems
+		}
 	}
 	markNonOwnerSourceEdit(fields, userID, &before)
 	if err := s.repo.UpdateMeetingFieldsIfMatch(ctx, meeting.UserID, meetingID,

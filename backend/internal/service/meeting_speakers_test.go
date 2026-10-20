@@ -242,6 +242,113 @@ func TestSharedSpeakerRepeatedRenameCannotReplaceOrdinaryProse(t *testing.T) {
 	}
 }
 
+type speakerPatchRepo struct {
+	*mockMeetingRepo
+	fields map[string]interface{}
+}
+
+func (r *speakerPatchRepo) UpdateMeetingFieldsIfMatch(ctx context.Context, userID, meetingID string, expected, fields map[string]interface{}) error {
+	r.fields = fields
+	return r.mockMeetingRepo.UpdateMeetingFieldsIfMatch(ctx, userID, meetingID, expected, fields)
+}
+
+func TestSpeakerAttributionOnlyCorrectionPreservesSafeSummary(t *testing.T) {
+	for _, label := range []string{"Kim", "spk_0"} {
+		t.Run(label, func(t *testing.T) {
+			repo := &speakerPatchRepo{mockMeetingRepo: newMockMeetingRepo()}
+			content := label + " agreed"
+			repo.addMeeting(&model.Meeting{
+				MeetingID: "meeting", UserID: "owner", AccountID: "account", SharedToAccount: true,
+				Content: content, TranscriptA: "[" + label + "]\nhello",
+				TranscriptSegments: `[{"speaker":"` + label + `","text":"hello"}]`,
+				SummaryPrivacy: &model.SummaryPrivacy{
+					Version: 1, State: model.SummaryPrivacySafe, GenerationID: "generation",
+					ContentSHA256: model.SummaryPrivacyHash(content),
+				},
+			})
+			repo.addMember("account", "reader", model.RoleTAM)
+			repo.members["account|reader"].SummaryPrivacyVersion = model.SummaryPrivacyVersion
+			svc := newMeetingServiceWithRepo(repo)
+			before, _, err := svc.checkAccess(context.Background(), "reader", "meeting")
+			if err != nil || before.SummaryReadRestricted || before.Content != content {
+				t.Fatalf("safe account summary was not initially readable: %+v %v", before, err)
+			}
+			_, err = svc.UpdateSpeakers(context.Background(), "reader", "meeting",
+				&model.UpdateSpeakersRequest{SpeakerMap: map[string]string{label: "Lee"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			value, writesContent := repo.fields["content"]
+			if label == "Kim" {
+				// Both repository provenance-writer modes invalidate clearance
+				// on the presence of content, even when its bytes are unchanged.
+				if writesContent {
+					t.Fatalf("attribution-only patch would invalidate safe provenance: %+v", repo.fields)
+				}
+				after, _, err := svc.checkAccess(context.Background(), "reader", "meeting")
+				if err != nil || after.SummaryReadRestricted || after.Content != content {
+					t.Fatalf("unchanged safe summary became unreadable: %+v %v", after, err)
+				}
+			} else if !writesContent || value != "Lee agreed" {
+				t.Fatalf("actual summary change omitted from persistence: %+v", repo.fields)
+			}
+			if _, writesActions := repo.fields["actionItems"]; writesActions {
+				t.Fatal("unchanged action items included in patch")
+			}
+			if repo.meetingsByID["meeting"].TranscriptA != "[Lee]\nhello" {
+				t.Fatal("speaker attribution was not corrected")
+			}
+		})
+	}
+}
+
+func TestSharedLegacyPartialSpeakerCorrectionRetainsOtherSpeakers(t *testing.T) {
+	repo := newMockMeetingRepo()
+	repo.addMeeting(&model.Meeting{
+		MeetingID: "meeting", UserID: "owner",
+		TranscriptA: "[spk_0]\nfirst\n[spk_1]\nsecond",
+		ActionItems: `[{"assignee":"spk_0"},{"assignee":"spk_1"}]`,
+	})
+	repo.shares[shareKey("reader", "meeting")] = &model.Share{Permission: model.PermissionRead}
+	svc := newMeetingServiceWithRepo(repo)
+	for _, mapping := range []map[string]string{
+		{"spk_0": "Kim", "spk_1": "Lee"}, {"Kim": "Park"}, {"Lee": "Choi"},
+		{"Park": "Choi", "Choi": "Park"}, {"Choi": "Kim"},
+	} {
+		if _, err := svc.UpdateSpeakers(context.Background(), "reader", "meeting",
+			&model.UpdateSpeakersRequest{SpeakerMap: mapping}); err != nil {
+			t.Fatal(err)
+		}
+		stored := repo.meetingsByID["meeting"]
+		if len(stored.SpeakerMap) != 2 {
+			t.Fatalf("partial correction lost an identity or accumulated aliases: %+v", stored.SpeakerMap)
+		}
+	}
+	stored := repo.meetingsByID["meeting"]
+	if !reflect.DeepEqual(stored.SpeakerMap, map[string]string{"Choi": "Kim", "Park": "Park"}) ||
+		stored.TranscriptA != "[Kim]\nfirst\n[Park]\nsecond" ||
+		stored.ActionItems != `[{"assignee":"Kim"},{"assignee":"Park"}]` {
+		t.Fatalf("partial correction did not preserve both current speakers: %+v", stored)
+	}
+	_, err := svc.UpdateSpeakers(context.Background(), "reader", "meeting",
+		&model.UpdateSpeakersRequest{SpeakerMap: map[string]string{"Lee": "Old alias"}})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("historical alias remained an accepted speaker: %v", err)
+	}
+}
+
+func TestUpdateSpeakerMappingPreservesInputs(t *testing.T) {
+	existing := map[string]string{"spk_0": "Kim", "spk_1": "Lee"}
+	corrections := map[string]string{"Kim": "Park", "spk_2": "Choi"}
+	got := updateSpeakerMapping(existing, corrections)
+	want := map[string]string{"Kim": "Park", "Lee": "Lee", "spk_2": "Choi"}
+	if !reflect.DeepEqual(got, want) ||
+		!reflect.DeepEqual(existing, map[string]string{"spk_0": "Kim", "spk_1": "Lee"}) ||
+		!reflect.DeepEqual(corrections, map[string]string{"Kim": "Park", "spk_2": "Choi"}) {
+		t.Fatalf("mapping composition or input preservation failed: %+v %+v %+v", got, existing, corrections)
+	}
+}
+
 func TestSpeakerCustomNameProseReplacementRetainsOwnerEditorBehavior(t *testing.T) {
 	for _, caller := range []string{"owner", "editor"} {
 		t.Run(caller, func(t *testing.T) {

@@ -14,6 +14,26 @@ import (
 
 var defaultSpeakerLabel = regexp.MustCompile(`^(spk_[0-9]+|화자[A-Z])$`)
 
+// Retain every current speaker name, including those omitted from a partial
+// correction. Only current names become keys, so old aliases do not accumulate
+// or collide with a speaker that is newly given an earlier anonymous label.
+// Apply corrections against the original values once so swaps cannot cascade.
+// Do not mutate either input map, which can belong to a read snapshot or caller.
+func updateSpeakerMapping(existing, corrections map[string]string) map[string]string {
+	updated := make(map[string]string, len(existing)+len(corrections))
+	for _, current := range existing {
+		if name, ok := corrections[current]; ok {
+			updated[current] = name
+		} else {
+			updated[current] = current
+		}
+	}
+	for label, name := range corrections {
+		updated[label] = name
+	}
+	return updated
+}
+
 // Accept recorded speakers, previous corrections or existing fallback labels.
 // UpdateSpeakers separately limits read-grant replacement to speaker attribution
 // and anonymous labels, so custom names never become arbitrary prose edit keys.

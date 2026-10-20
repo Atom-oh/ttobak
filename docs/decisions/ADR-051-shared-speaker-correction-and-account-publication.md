@@ -27,9 +27,13 @@ names can be corrected repeatedly in structured speaker fields, complete
 bracket-only transcript attribution lines and exact action-item assignees, without
 rewriting ordinary occurrences of those names. Previous mapping values retain
 legacy speaker identity when segments are absent. Owner/editor prose replacement
-keeps its existing behavior. When account access returns a restricted summary
+remains available. Partial corrections retain other current speaker names;
+compose against the original mapping values once, without accumulating historical
+aliases. Action-item updates target JSON text/assignee fields and preserve other
+metadata. When account access returns a restricted summary
 view, omit content and action items from the write entirely: hidden view fields
-are never canonical values.
+are never canonical values. Omit unchanged derived fields too, so attribution-only
+corrections do not invalidate a readable summary's safe provenance.
 
 Replace meeting-detail private-link/share controls with a single clearly labeled
 link-and-share action. Call `ShareMeetingToAccount` directly: it already links the

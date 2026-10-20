@@ -253,9 +253,13 @@ Read recipients can replace anonymous labels in prose; custom names update only
 structured speaker attribution, complete bracket-only transcript speaker lines,
 and exact action-item assignees. Repeated corrections remain available, including
 legacy meetings whose previous names are recorded in `speakerMap`. Custom-name
-occurrences in ordinary prose remain unchanged for readers; owner/editor behavior
-is unchanged. Restricted account views never write their hidden content/action
-fields. Action-item updates preserve task IDs, completion and other metadata.
+occurrences in ordinary prose remain unchanged for readers; owner/editor
+custom-name prose replacement remains available. Partial corrections retain
+unaffected current speaker names without accumulating historical aliases.
+Restricted account views never write their hidden content/action fields.
+Unchanged derived fields are also omitted, preserving safe summary clearance
+for attribution-only corrections. Action-item updates target JSON text/assignee
+fields and preserve task IDs, completion and other metadata.
 See ADR-051.
 
 `GET /api/kb/files` retains its `{files: [...]}` contract and follows all S3
