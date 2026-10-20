@@ -249,8 +249,14 @@ on cached account shares. The JSON body is capped at 128 KiB and `speakerMap` at
 100 entries; labels must identify existing speakers and names must contain
 1–100 characters without control characters. Invalid mappings return 400,
 oversized bodies 413, inaccessible meetings 404 and concurrent writes 409.
-Action-item text/assignees are updated as JSON strings, preserving task IDs,
-completion and other metadata. See ADR-051.
+Read recipients can replace anonymous labels in prose; custom names update only
+structured speaker attribution, complete bracket-only transcript speaker lines,
+and exact action-item assignees. Repeated corrections remain available, including
+legacy meetings whose previous names are recorded in `speakerMap`. Custom-name
+occurrences in ordinary prose remain unchanged for readers; owner/editor behavior
+is unchanged. Restricted account views never write their hidden content/action
+fields. Action-item updates preserve task IDs, completion and other metadata.
+See ADR-051.
 
 `GET /api/kb/files` retains its `{files: [...]}` contract and follows all S3
 continuation pages under the caller's `kb/{userId}/` prefix. Any page failure

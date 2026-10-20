@@ -140,11 +140,149 @@ func TestUpdateSpeakersCanCorrectExistingNameAndPreservesActionMetadata(t *testi
 		t.Fatalf("quoted name corrupted action JSON: %v", err)
 	}
 	want := map[string]interface{}{
-		"id": "Kim", "text": "Ask " + name, "assignee": name, "completed": true,
+		"id": "Kim", "text": "Ask Kim", "assignee": name, "completed": true,
 		"priority": "high", "dueDate": "2026-10-21", "custom": map[string]interface{}{"value": "Kim"},
 	}
 	if len(items) != 1 || !reflect.DeepEqual(items[0], want) {
 		t.Fatalf("rename changed action metadata: %+v", items)
+	}
+	stored := repo.meetingsByID["meeting"]
+	if stored.Content != "Kim agreed" || stored.TranscriptA != "["+name+"]\nhello" {
+		t.Fatalf("custom-name correction changed prose or missed attribution: %+v", stored)
+	}
+}
+
+func TestSharedSpeakerRenamePreservesRestrictedDerivedContent(t *testing.T) {
+	for _, cachedShare := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cached-share=%t", cachedShare), func(t *testing.T) {
+			repo := newMockMeetingRepo()
+			original := &model.Meeting{
+				MeetingID: "meeting", UserID: "owner", AccountID: "account", SharedToAccount: true,
+				Content: "Private spk_0 summary", ActionItems: `[{"id":"task","text":"Private task","assignee":"spk_0"}]`,
+				Insights: "Private insights", Sentiment: "Private sentiment", LiveSummary: "Private live summary",
+				Tags: []string{"private"}, LinkedMeetingIDs: []string{"private-link"},
+				TranscriptA: "[spk_0]\nhello", TranscriptB: "[spk_0]\nhello",
+				TranscriptSegments: `[{"speaker":"spk_0","text":"hello"}]`, UpdatedAt: time.Now().UTC(),
+			}
+			repo.addMeeting(original)
+			repo.addMember("account", "reader", model.RoleTAM)
+			repo.members["account|reader"].SummaryPrivacyVersion = model.SummaryPrivacyVersion
+			if cachedShare {
+				repo.shares[shareKey("reader", "meeting")] = &model.Share{
+					Permission: model.PermissionRead, Origin: model.ShareOriginAccount, AccountID: "account",
+				}
+			}
+			svc := newMeetingServiceWithRepo(repo)
+			view, _, err := svc.checkAccess(context.Background(), "reader", "meeting")
+			if err != nil || !view.SummaryReadRestricted || view.Content != "" || view.ActionItems != "" {
+				t.Fatalf("test did not exercise the restricted account projection: view=%+v err=%v", view, err)
+			}
+			_, err = svc.UpdateSpeakers(context.Background(), "reader", "meeting",
+				&model.UpdateSpeakersRequest{SpeakerMap: map[string]string{"spk_0": "Kim"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			stored := repo.meetingsByID["meeting"]
+			if stored.Content != original.Content || stored.ActionItems != original.ActionItems ||
+				stored.Insights != original.Insights || stored.Sentiment != original.Sentiment ||
+				stored.LiveSummary != original.LiveSummary || !reflect.DeepEqual(stored.Tags, original.Tags) ||
+				!reflect.DeepEqual(stored.LinkedMeetingIDs, original.LinkedMeetingIDs) {
+				t.Fatalf("projected fields were persisted over canonical derived content: %+v", stored)
+			}
+			if stored.TranscriptA != "[Kim]\nhello" || !strings.Contains(stored.TranscriptSegments, `"speaker":"Kim"`) {
+				t.Fatalf("restricted account member could not correct readable speaker attribution: %+v", stored)
+			}
+		})
+	}
+}
+
+func TestSharedSpeakerRepeatedRenameCannotReplaceOrdinaryProse(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("legacy=%t", legacy), func(t *testing.T) {
+			repo := newMockMeetingRepo()
+			meeting := &model.Meeting{
+				MeetingID: "meeting", UserID: "owner", Content: "spk_0 agreed on budget",
+				TranscriptA: "[spk_0]\nbudget remains", TranscriptB: "[spk_0]\r\nbudget remains\r\n",
+				ActionItems: `[{"id":"budget","text":"Ask spk_0 about budget","assignee":"spk_0","completed":true}]`,
+			}
+			if !legacy {
+				meeting.TranscriptSegments = `[{"id":"budget","speaker":"spk_0","text":"budget remains"}]`
+			}
+			repo.addMeeting(meeting)
+			repo.shares[shareKey("reader", "meeting")] = &model.Share{Permission: model.PermissionRead}
+			svc := newMeetingServiceWithRepo(repo)
+			const name = `Kim "TJ"`
+			for _, mapping := range []map[string]string{{"spk_0": "budget"}, {"budget": name}} {
+				if _, err := svc.UpdateSpeakers(context.Background(), "reader", "meeting",
+					&model.UpdateSpeakersRequest{SpeakerMap: mapping}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			stored := repo.meetingsByID["meeting"]
+			if stored.Content != "budget agreed on budget" || stored.TranscriptA != "["+name+"]\nbudget remains" ||
+				stored.TranscriptB != "["+name+"]\r\nbudget remains\r\n" || stored.SpeakerMap["budget"] != name {
+				t.Fatalf("repeated correction rewrote prose or missed attribution: %+v", stored)
+			}
+			var items []map[string]interface{}
+			if err := json.Unmarshal([]byte(stored.ActionItems), &items); err != nil {
+				t.Fatal(err)
+			}
+			if len(items) != 1 || items[0]["id"] != "budget" || items[0]["text"] != "Ask budget about budget" ||
+				items[0]["assignee"] != name || items[0]["completed"] != true {
+				t.Fatalf("repeated correction rewrote action text or metadata: %+v", items)
+			}
+			if !legacy {
+				var segments []segmentSpeakerField
+				if err := json.Unmarshal([]byte(stored.TranscriptSegments), &segments); err != nil ||
+					len(segments) != 1 || segments[0].Speaker != name || segments[0].Text != "budget remains" || segments[0].ID != "budget" {
+					t.Fatalf("repeated correction rewrote segment text/identity: %+v err=%v", segments, err)
+				}
+			}
+		})
+	}
+}
+
+func TestSpeakerCustomNameProseReplacementRetainsOwnerEditorBehavior(t *testing.T) {
+	for _, caller := range []string{"owner", "editor"} {
+		t.Run(caller, func(t *testing.T) {
+			repo := newMockMeetingRepo()
+			repo.addMeeting(&model.Meeting{
+				MeetingID: "meeting", UserID: "owner", Content: "Kim agreed", TranscriptA: "[Kim]\nAsk Kim",
+				TranscriptSegments: `[{"speaker":"Kim","text":"hello"}]`,
+				ActionItems:        `[{"text":"Ask Kim","assignee":"Kim"}]`,
+			})
+			repo.shares[shareKey("editor", "meeting")] = &model.Share{Permission: model.PermissionEdit}
+			_, err := newMeetingServiceWithRepo(repo).UpdateSpeakers(context.Background(), caller, "meeting",
+				&model.UpdateSpeakersRequest{SpeakerMap: map[string]string{"Kim": "Lee"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			stored := repo.meetingsByID["meeting"]
+			if stored.Content != "Lee agreed" || stored.TranscriptA != "[Lee]\nAsk Lee" ||
+				!strings.Contains(stored.ActionItems, `"text":"Ask Lee"`) {
+				t.Fatalf("owner/editor replacement behavior changed: %+v", stored)
+			}
+		})
+	}
+}
+
+func TestSharedSpeakerSwapsUseOriginalAttribution(t *testing.T) {
+	repo := newMockMeetingRepo()
+	repo.addMeeting(&model.Meeting{
+		MeetingID: "meeting", UserID: "owner", TranscriptA: "[spk_0]\nfirst\n[spk_1]\nsecond",
+		TranscriptSegments: `[{"speaker":"spk_0","text":"first"},{"speaker":"spk_1","text":"second"}]`,
+		ActionItems:        `[{"assignee":"spk_0"},{"assignee":"spk_1"}]`,
+	})
+	repo.shares[shareKey("reader", "meeting")] = &model.Share{Permission: model.PermissionRead}
+	_, err := newMeetingServiceWithRepo(repo).UpdateSpeakers(context.Background(), "reader", "meeting",
+		&model.UpdateSpeakersRequest{SpeakerMap: map[string]string{"spk_0": "spk_1", "spk_1": "spk_0"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := repo.meetingsByID["meeting"]
+	if stored.TranscriptA != "[spk_1]\nfirst\n[spk_0]\nsecond" ||
+		stored.ActionItems != `[{"assignee":"spk_1"},{"assignee":"spk_0"}]` {
+		t.Fatalf("speaker swap cascaded: %+v", stored)
 	}
 }
 

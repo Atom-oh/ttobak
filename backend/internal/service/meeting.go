@@ -886,11 +886,27 @@ func (s *MeetingService) UpdateSpeakers(ctx context.Context, userID, meetingID s
 	// TranscriptSegments is JSON, not prose, so it's updated structurally
 	// instead: parsing out the `speaker` field and comparing for exact
 	// equality has no substring-collision failure mode at all.
-	replacer := speaker.NewReplacer(req.SpeakerMap)
+	proseMapping := req.SpeakerMap
+	if permission == model.PermissionRead {
+		// A custom speaker name can also be ordinary prose. Read recipients
+		// may change its attribution, but cannot globally replace that word.
+		proseMapping = make(map[string]string)
+		for label, name := range req.SpeakerMap {
+			if defaultSpeakerLabel.MatchString(label) {
+				proseMapping[label] = name
+			}
+		}
+	}
+	replacer := speaker.NewReplacer(proseMapping)
 	meeting.Content = replacer.Replace(meeting.Content)
-	meeting.TranscriptA = replacer.Replace(meeting.TranscriptA)
-	meeting.TranscriptB = replacer.Replace(meeting.TranscriptB)
-	meeting.ActionItems = renameActionItemSpeakers(meeting.ActionItems, replacer)
+	if permission == model.PermissionRead {
+		meeting.TranscriptA = renameTranscriptSpeakerAttributions(meeting.TranscriptA, req.SpeakerMap, replacer)
+		meeting.TranscriptB = renameTranscriptSpeakerAttributions(meeting.TranscriptB, req.SpeakerMap, replacer)
+	} else {
+		meeting.TranscriptA = replacer.Replace(meeting.TranscriptA)
+		meeting.TranscriptB = replacer.Replace(meeting.TranscriptB)
+	}
+	meeting.ActionItems = renameActionItemSpeakers(meeting.ActionItems, replacer, req.SpeakerMap)
 	meeting.TranscriptSegments = renameSegmentSpeakers(meeting.TranscriptSegments, req.SpeakerMap)
 	for variant, text := range map[string]string{"A": meeting.TranscriptA, "B": meeting.TranscriptB} {
 		qualities[variant].TextSHA256 = model.TranscriptHash(text)
@@ -903,9 +919,15 @@ func (s *MeetingService) UpdateSpeakers(ctx context.Context, userID, meetingID s
 	// Guard the original version: hydrated transcripts can differ from stored S3 refs.
 	updatedAt := time.Now().UTC()
 	fields := map[string]interface{}{
-		"content": meeting.Content, "transcriptA": meeting.TranscriptA, "transcriptB": meeting.TranscriptB,
-		"transcriptSegments": meeting.TranscriptSegments, "actionItems": meeting.ActionItems, "speakerMap": meeting.SpeakerMap,
+		"transcriptA": meeting.TranscriptA, "transcriptB": meeting.TranscriptB,
+		"transcriptSegments": meeting.TranscriptSegments, "speakerMap": meeting.SpeakerMap,
 		"transcriptQualityA": qualities["A"], "transcriptQualityB": qualities["B"],
+	}
+	// Account projections hide derived content; those empty view fields must
+	// never replace the owner's stored summary or action items.
+	if !meeting.SummaryReadRestricted {
+		fields["content"] = meeting.Content
+		fields["actionItems"] = meeting.ActionItems
 	}
 	markNonOwnerSourceEdit(fields, userID, &before)
 	if err := s.repo.UpdateMeetingFieldsIfMatch(ctx, meeting.UserID, meetingID,

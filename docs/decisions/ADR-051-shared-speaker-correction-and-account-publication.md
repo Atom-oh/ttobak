@@ -22,6 +22,15 @@ only known speaker labels, bound request/name/map sizes, preserve action-item
 identity and completion, and retain conditional publication against the observed
 meeting version. Concurrent edits return a conflict rather than being overwritten.
 
+For read grants, only anonymous speaker labels may be replaced in prose. Custom
+names can be corrected repeatedly in structured speaker fields, complete
+bracket-only transcript attribution lines and exact action-item assignees, without
+rewriting ordinary occurrences of those names. Previous mapping values retain
+legacy speaker identity when segments are absent. Owner/editor prose replacement
+keeps its existing behavior. When account access returns a restricted summary
+view, omit content and action items from the write entirely: hidden view fields
+are never canonical values.
+
 Replace meeting-detail private-link/share controls with a single clearly labeled
 link-and-share action. Call `ShareMeetingToAccount` directly: it already links the
 meeting, publishes account access and writes discovery/insight/share projections.

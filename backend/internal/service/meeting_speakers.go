@@ -14,8 +14,9 @@ import (
 
 var defaultSpeakerLabel = regexp.MustCompile(`^(spk_[0-9]+|화자[A-Z])$`)
 
-// A read grant permits speaker correction, not arbitrary find/replace over the
-// owner's content. Accept only recorded speakers or existing fallback labels.
+// Accept recorded speakers, previous corrections or existing fallback labels.
+// UpdateSpeakers separately limits read-grant replacement to speaker attribution
+// and anonymous labels, so custom names never become arbitrary prose edit keys.
 func validateSpeakerMapping(meeting *model.Meeting, req *model.UpdateSpeakersRequest) error {
 	if req == nil || len(req.SpeakerMap) == 0 || len(req.SpeakerMap) > 100 {
 		return fmt.Errorf("%w: speakerMap must contain 1 to 100 speakers", ErrInvalidInput)
@@ -26,6 +27,9 @@ func validateSpeakerMapping(meeting *model.Meeting, req *model.UpdateSpeakersReq
 		for _, segment := range segments {
 			known[segment.Speaker] = true
 		}
+	}
+	for _, name := range meeting.SpeakerMap {
+		known[name] = true
 	}
 	for label, name := range req.SpeakerMap {
 		if label == "" || utf8.RuneCountInString(label) > 100 || strings.ContainsFunc(label, unicode.IsControl) ||
@@ -53,9 +57,32 @@ func validateSpeakerMapping(meeting *model.Meeting, req *model.UpdateSpeakersReq
 	return nil
 }
 
+// Bracket-only lines are transcript speaker attribution. Other text uses the
+// caller's restricted prose mapping. Inspect each original line once to avoid
+// cascading swaps or rewriting utterances that happen to contain a custom name.
+func renameTranscriptSpeakerAttributions(raw string, mapping map[string]string, prose *speaker.Replacer) string {
+	lines := strings.SplitAfter(raw, "\n")
+	for i, line := range lines {
+		header := strings.TrimSuffix(line, "\n")
+		ending := line[len(header):]
+		if strings.HasSuffix(header, "\r") {
+			header = strings.TrimSuffix(header, "\r")
+			ending = "\r" + ending
+		}
+		if len(header) >= 2 && header[0] == '[' && header[len(header)-1] == ']' {
+			if name, ok := mapping[header[1:len(header)-1]]; ok {
+				lines[i] = "[" + name + "]" + ending
+				continue
+			}
+		}
+		lines[i] = prose.Replace(line)
+	}
+	return strings.Join(lines, "")
+}
+
 // Rename only human-facing action fields. JSON encoding preserves quotes in
 // names, and IDs, completion flags and other metadata remain untouched.
-func renameActionItemSpeakers(raw string, replacer *speaker.Replacer) string {
+func renameActionItemSpeakers(raw string, replacer *speaker.Replacer, names map[string]string) string {
 	var items []map[string]json.RawMessage
 	if raw == "" || json.Unmarshal([]byte(raw), &items) != nil {
 		return raw
@@ -68,6 +95,11 @@ func renameActionItemSpeakers(raw string, replacer *speaker.Replacer) string {
 				continue
 			}
 			value := replacer.Replace(original)
+			if field == "assignee" {
+				if name, ok := names[original]; ok {
+					value = name
+				}
+			}
 			if value != original {
 				item[field], _ = json.Marshal(value)
 				changed = true

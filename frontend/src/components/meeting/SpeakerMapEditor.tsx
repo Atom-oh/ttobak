@@ -29,12 +29,13 @@ export function SpeakerMapEditor({ transcription, content, speakerMap: existingS
     transcription?.forEach((seg) => {
       if (seg.speaker) labels.add(seg.speaker);
     });
-    if (labels.size === 0 && content) {
-      const matches = content.match(/(?:spk_\d+|화자[A-Z])/g);
+    if (labels.size === 0) {
+      const matches = content?.match(/(?:spk_\d+|화자[A-Z])/g);
       matches?.forEach((m) => labels.add(m));
+      Object.values(existingSpeakerMap || {}).forEach((name) => labels.add(name));
     }
     return Array.from(labels).sort((a, b) => speakerSortKey(a) - speakerSortKey(b));
-  }, [transcription, content]);
+  }, [transcription, content, existingSpeakerMap]);
 
   const hasUnmapped = speakers.some((s) => UNMAPPED_PATTERN.test(s));
 
@@ -124,7 +125,7 @@ export function SpeakerMapEditor({ transcription, content, speakerMap: existingS
       {isOpen && (
         <div className="mt-4 space-y-3">
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            공유받은 사람도 화자 이름을 변경할 수 있습니다. 변경한 이름은 요약, 트랜스크립트, 액션 아이템에 함께 반영됩니다.
+            공유받은 사람도 화자 이름을 변경할 수 있습니다. 읽기 권한에서는 화자 표시와 담당자를 수정하며, 본문에 이미 쓰인 이름과 열람이 제한된 요약은 바꾸지 않습니다.
           </p>
           {speakers.map((label, i) => (
             <div key={label} className="flex items-center gap-3">

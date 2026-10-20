@@ -262,8 +262,10 @@ selection and source freshness when editing/displaying diarized segments. Explai
 processing/error states instead of hiding them behind a permanent spinner.
 Speaker-name edits retain entered values and show inline save errors, including
 409 concurrent changes. Direct read/edit recipients and current shared-account
-members can correct names; the editor explains that changes apply to everyone's
-summary, transcript and action items. Names are limited to 100 characters.
+members can correct names. The editor explains that read recipients update speaker
+attribution and assignees while retaining custom names in ordinary prose and hidden
+summaries. Previous mapping values keep the editor available for repeated
+corrections on legacy meetings without segments. Names are limited to 100 characters.
 Re-diarization remains owner-only and is hidden from shared recipients.
 Saved notes are reference input, not proof of spoken
 statements or agreed tasks; note-only evidence must not receive transcript links.
