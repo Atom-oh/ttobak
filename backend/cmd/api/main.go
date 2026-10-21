@@ -160,7 +160,7 @@ func init() {
 	summarizeLiveHandler := handler.NewSummarizeLiveHandler(bedrockRuntimeClient2, meetingService)
 	crawlerRepo := repository.NewCrawlerRepository(dynamoClient, tableName)
 	crawlerService := service.NewCrawlerService(crawlerRepo)
-	insightsService := service.NewInsightsService(crawlerRepo, s3Client, kbBucketName)
+	insightsService := service.NewInsightsService(crawlerRepo, s3Client, kbBucketName, bucketName)
 	crawlerHandler := handler.NewCrawlerHandler(crawlerService)
 	insightsHandler := handler.NewInsightsHandler(insightsService, kbService)
 	researchRepo := repository.NewResearchRepository(dynamoClient, tableName)
