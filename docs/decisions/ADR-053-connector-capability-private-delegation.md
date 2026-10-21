@@ -79,8 +79,19 @@ body selects this path. Existing services still check resource ownership and
 source revisions. The API's dedicated HTTP read boundary now receives the same
 atomic grant resolver. The private mutation callback remains unavailable.
 
-Subsequent reviewed stages must wire the other transports
-and supply private signing, the bounded QA consumer, approval management endpoints
+The private QA consumer now accepts only `qa.readonlyAsk`, with a question and
+optional meeting ID. It verifies the same signed delegation against the QA
+destination and current grants, then reads through the existing current-source
+boundary. One bounded model call runs without tools, sessions or research/job
+creation. Current source checks and grant checks precede result delivery.
+Only the pinned public key is cached; KMS and grant clients use bounded timeouts
+and one attempt. Dedicated HTTP detection now receives the same current-grant
+reader. Empty signing-key configuration leaves private execution unavailable.
+The deployment artifact must contain the pinned ARM64 cryptography wheel before
+key configuration is enabled; source installation does not prove deployment.
+
+Subsequent reviewed stages must wire MCP transport
+and supply private signing, approval management endpoints
 and the specifically available personal-note executor. Infrastructure must
 preserve existing pool/client identities and keep issuance disabled through
 deployment verification. Native migration, real provider tokens, audience and
