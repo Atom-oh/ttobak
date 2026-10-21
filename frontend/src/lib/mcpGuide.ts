@@ -216,7 +216,7 @@ export function mcpClientGuide(client: McpClient, transport: McpTransport, confi
     steps: [{
       title: 'HTTP 서버 등록',
       description: '명령이 표시하는 정확한 콜백 URL을 관리자에게 전달해 등록하세요. 콜백의 경로와 포트는 다른 클라이언트와 다를 수 있습니다.',
-      code: [block('등록 명령', `codex mcp add ttobak --url ${quote(httpUrl)} \\\n  --oauth-client-id ${quote(httpClientId)} --oauth-resource ${quote(httpUrl)}`, true)],
+      code: [block('등록 명령', `codex mcp add ttobak --url ${quote(httpUrl)} \\\n  --oauth-client-id ${quote(httpClientId)}`, true)],
     }, {
       title: '로그인',
       description: '콜백 등록 후 아래 명령으로 브라우저 로그인을 완료하세요.',

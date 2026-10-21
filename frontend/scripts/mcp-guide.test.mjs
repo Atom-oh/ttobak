@@ -49,7 +49,9 @@ test('private HTTP uses the dedicated read profile and resource-bound scopes', a
     assert.match(JSON.stringify(guide), new RegExp(read), client);
   }
   const codex = codeText(mcpClientGuide('codex', 'http', config));
-  assert.match(codex, /--oauth-resource 'https:\/\/ttobak\.example\.com\/api\/mcp'/);
+  assert.match(codex, /--url 'https:\/\/ttobak\.example\.com\/api\/mcp'/);
+  assert.match(codex, /--oauth-client-id 'dedicatedread123'/);
+  assert.doesNotMatch(codex, /--oauth-resource|oauth_resource/);
   assert.match(codex, /mcp login ttobak --scopes 'openid,email,profile,ttobak\.connector\/read'/);
   const kiro = JSON.parse(mcpClientGuide('kiro-cli', 'http', config).steps[0].code[0].text);
   assert.equal(kiro.mcpServers.ttobak.oauth.clientId, read);
@@ -74,6 +76,11 @@ test('explicit flag-off HTTP restores first-party client and base scopes', async
   assert.equal(config.httpUrl, `${origin}/api/mcp`);
   assert.match(codeText(mcpClientGuide('quick', 'http', config)), new RegExp(spa));
   assert.doesNotMatch(codeText(mcpClientGuide('quick', 'http', config)), /ttobak.connector/);
+  const codex = codeText(mcpClientGuide('codex', 'http', config));
+  assert.match(codex, /--url 'https:\/\/ttobak\.example\.com\/api\/mcp'/);
+  assert.match(codex, /--oauth-client-id 'firstpartyclient123'/);
+  assert.match(codex, /mcp login ttobak --scopes 'openid,email,profile'/);
+  assert.doesNotMatch(codex, /--oauth-resource|oauth_resource|ttobak.connector/);
 });
 
 test('missing mode, invalid dedicated binding and foreign URLs disable all HTTP steps', async () => {
