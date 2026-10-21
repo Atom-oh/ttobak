@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -321,13 +322,16 @@ func (s *InsightsService) publishedNewsDetail(ctx context.Context, sourceID, doc
 func decodeNewsDocument(row map[string]types.AttributeValue, sourceID, docHash string) (model.CrawledDocument, error) {
 	var document model.CrawledDocument
 	if err := attributevalue.UnmarshalMap(row, &document); err != nil {
-		return document, fmt.Errorf("decode current news metadata: %w", err)
+		return document, fmt.Errorf("%w: invalid current news metadata", ErrNotFound)
 	}
 	document.SourceID, document.DocHash = sourceID, docHash
 	if isVersionedNews(row) {
 		// Canonical validation uses raw stored bytes. The display projection
 		// removes producer-permitted outer padding without changing CAS identity.
 		document.Title = strings.TrimSpace(document.Title)
+		for i, tag := range document.Tags {
+			document.Tags[i] = strings.TrimSpace(tag)
+		}
 	}
 	texts := []string{document.Title, document.URL, document.Source, document.Summary, document.PubDate}
 	texts = append(texts, document.Tags...)
@@ -339,7 +343,7 @@ func decodeNewsDocument(row map[string]types.AttributeValue, sourceID, docHash s
 	}
 	encoded, err := json.Marshal(document)
 	if err != nil || len(encoded) > 24000 {
-		return model.CrawledDocument{}, fmt.Errorf("news metadata exceeds response budget")
+		return model.CrawledDocument{}, fmt.Errorf("%w: news metadata exceeds response budget", ErrNotFound)
 	}
 	return document, nil
 }
@@ -375,6 +379,9 @@ func (s *InsightsService) currentNewsList(ctx context.Context, docs []model.Craw
 			continue
 		}
 		current, err := decodeNewsDocument(row, doc.SourceID, doc.DocHash)
+		if errors.Is(err, ErrNotFound) {
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
