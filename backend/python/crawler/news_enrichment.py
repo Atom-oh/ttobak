@@ -80,6 +80,13 @@ def _object(value, fields, name):
     _require(isinstance(value, dict) and set(value) == set(fields), name)
 
 
+def _source_utf8(value, field):
+    try:
+        value.encode("utf-8")
+    except UnicodeError:
+        raise QualityRejected("INVALID_SOURCE", [field]) from None
+
+
 def _sources(article_bodies):
     _require(isinstance(article_bodies, list) and 1 <= len(article_bodies) <= MAX_SOURCES,
              "sources", "INVALID_SOURCE")
@@ -91,10 +98,13 @@ def _sources(article_bodies):
                  "source body", "INVALID_SOURCE")
         _require(isinstance(article.published_at, str) and len(article.published_at) <= 100,
                  "source date", "INVALID_SOURCE")
+        _source_utf8(article.body, "source body")
+        _source_utf8(article.published_at, "source date")
         try:
             url = canonicalize_url(article.final_url)
         except ValueError:
             raise QualityRejected("INVALID_SOURCE", ["source URL"]) from None
+        _source_utf8(article.final_url, "source URL")
         _require(url not in sources, "duplicate source URL", "INVALID_SOURCE")
         sources[url] = article
     return sources
@@ -150,7 +160,9 @@ def parse_json_object(text):
 
 def _has_long_verbatim_run(text, body):
     # Inspect every offset, including a quotation starting between the old
-    # 200-character sample boundaries. Limits bound both input lengths.
+    # 200-character sample boundaries. Match the renderer's whitespace collapse,
+    # so replacing source spaces with line breaks cannot hide displayed copying.
+    text, body = " ".join(text.split()), " ".join(body.split())
     return any(text[i:i + MAX_VERBATIM_RUN_CHARS] in body
                for i in range(len(text) - MAX_VERBATIM_RUN_CHARS + 1))
 
@@ -280,14 +292,19 @@ These target lengths leave room to finish the entire JSON object."""
 
 
 def build_prompt(candidate, article_bodies, require_relevance):
+    _require(isinstance(candidate, dict), "candidate", "INVALID_SOURCE")
     sources = _sources(article_bodies)
     context = {}
     for key in ("sourceName", "title"):
         value = candidate.get(key, "")
         _require(isinstance(value, str) and len(value) <= 500, key, "INVALID_SOURCE")
+        _source_utf8(value, key)
         context[key] = value
     for key in ("aliases", "keywords"):
-        context[key] = _strings(candidate.get(key) or [], key, maximum=32, item_max=200)
+        try:
+            context[key] = _strings(candidate.get(key) or [], key, maximum=32, item_max=200)
+        except QualityRejected:
+            raise QualityRejected("INVALID_SOURCE", [key]) from None
     value = {
         "context": context,
         "requireRelevance": bool(require_relevance),
@@ -325,6 +342,7 @@ def _response_text(response):
 
 
 def enrich_article(candidate, article_bodies, bedrock, require_relevance=None, *, model_id=None):
+    _require(isinstance(candidate, dict), "candidate", "INVALID_SOURCE")
     required = candidate.get("requireRelevance", True) if require_relevance is None else require_relevance
     _require(type(required) is bool, "requireRelevance", "INVALID_SOURCE")
     prompt = build_prompt(candidate, article_bodies, required)

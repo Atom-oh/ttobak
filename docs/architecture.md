@@ -203,6 +203,8 @@ same fetched source; facts reference validated evidence, and rejected attempts
 retain token accounting. One repair may reuse the complete original sources.
 An explicit negative or below-threshold relevance verdict ends the attempt even
 if other fields are malformed; the relevance gate requires a boolean.
+Prompt fields must encode as UTF-8 before any model request. The long-copy
+check collapses source and generated whitespace exactly as rendering does.
 Accepted citation links retain the exact fetched final URL. `news_renderer.py`
 escapes model prose and URL components, preserves retrieval query order and IPv6
 authorities, and never receives raw article bodies. Citation provenance checks do

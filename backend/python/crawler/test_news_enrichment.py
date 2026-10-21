@@ -3,6 +3,7 @@
 import json
 import html
 import unittest
+from dataclasses import replace
 from decimal import Decimal
 from unittest import mock
 
@@ -194,6 +195,19 @@ class TestStructuredQuality(unittest.TestCase):
         with self.assertRaises(enrichment.QualityRejected):
             enrichment.validate_enrichment(raw, [valid_body(source)])
 
+    def test_whitespace_changes_cannot_disguise_rendered_verbatim_copying(self):
+        source = " ".join(chr(0x4e00 + index) * 6 for index in range(200))
+        for separator in ("\n", "\t", "\r\n", "\u2003", " \n\t "):
+            raw = valid_enrichment_json(executive_summary=source[:700].replace(" ", separator))
+            raw["evidence"][0]["supportingExcerpt"] = source[:30]
+            with self.subTest(separator=separator), self.assertRaises(enrichment.QualityRejected):
+                enrichment.validate_enrichment(raw, [valid_body(source)])
+        body = source.replace(" ", "\n\t")
+        raw = valid_enrichment_json(executive_summary=source[:700])
+        raw["evidence"][0]["supportingExcerpt"] = body[:30]
+        with self.assertRaises(enrichment.QualityRejected):
+            enrichment.validate_enrichment(raw, [valid_body(body)])
+
     def test_custom_urls_skip_only_relevance(self):
         raw = valid_enrichment_json(relevant=False, relevanceConfidence=0.1)
         with self.assertRaisesRegex(enrichment.QualityRejected, "NOT_RELEVANT"):
@@ -211,6 +225,31 @@ class TestStructuredQuality(unittest.TestCase):
 
 
 class TestSynthesis(unittest.TestCase):
+    def test_invalid_unicode_prompt_inputs_are_rejected_before_model_calls(self):
+        client = mock.Mock()
+        candidates = [candidate_fixture(**{key: "\ud800"}) for key in ("sourceName", "title")]
+        candidates += [candidate_fixture(**{key: ["\udfff"]}) for key in ("aliases", "keywords")]
+        candidates += [None, [], "invalid"]
+        for candidate in candidates:
+            with self.subTest(candidate=candidate), self.assertRaisesRegex(
+                    enrichment.QualityRejected, "INVALID_SOURCE"):
+                enrichment.enrich_article(candidate, [valid_body()], client)
+        for body in (replace(valid_body(), body=valid_body().body + "\ud800"),
+                     replace(valid_body(), published_at="\udfff"),
+                     replace(valid_body(), final_url="https://example.com/\ud800"),
+                     replace(valid_body(), final_url="https://example.com/a#\udfff")):
+            with self.subTest(body_field="invalid UTF-8"), self.assertRaisesRegex(
+                    enrichment.QualityRejected, "INVALID_SOURCE"):
+                enrichment.enrich_article(candidate_fixture(), [body], client)
+        client.converse.assert_not_called()
+
+    def test_valid_unicode_prompt_context_remains_unchanged(self):
+        candidate = candidate_fixture(sourceName="우리은행", title="새 소식 😀",
+                                      aliases=["école-١"], keywords=["日本語"])
+        value = json.loads(enrichment.build_prompt(candidate, [valid_body()], True))
+        for key in ("sourceName", "title", "aliases", "keywords"):
+            self.assertEqual(value["context"][key], candidate[key])
+
     def test_strict_json_rejects_trailing_data_duplicate_fields_and_nonfinite_values(self):
         for text in ('{"a":1} trailing', '{"a":1} {"a":2}', '{"a":1,"a":2}',
                      '{"a":NaN}', '[]', "x" * (enrichment.MAX_RESPONSE_BYTES + 1),
