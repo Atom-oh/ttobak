@@ -180,6 +180,17 @@ reads before returning stored excerpts. See [workflow](features/sa-meeting-workf
 
 ## New processing and reading contracts
 
+The news enrichment replacement starts with staged, unused candidate and article
+modules in `backend/python/crawler/news_pipeline.py` and `article_fetcher.py`.
+Public-source query expansion and URL/event identity are bounded. The article
+reader pins validated public DNS addresses across HTTP/TLS requests and rechecks
+each redirect; credentials, private/transition addresses and non-web ports are
+rejected. Encoded/decoded byte limits, receive deadlines and complete-body checks
+reject oversized, partial, paywalled or script-only input instead of publishing
+snippet-based summaries. These modules do not activate a scheduler, change legacy
+news results or establish production acceptance. Enrichment, conditional
+publication and consumer rollout remain separate delivery stages.
+
 Action-item analysis has its own MEETING#/ANALYSIS#actionItems state. The summary
 pipeline runs it inline; authorized editor retries send ActionItemsRequested to
 the same summarize Lambda. Run/source/prior-item checks publish items and success
