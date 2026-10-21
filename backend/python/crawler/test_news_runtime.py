@@ -3,6 +3,8 @@
 import copy
 from decimal import Decimal
 from email.message import Message
+import http.client
+import io
 import json
 import os
 import unittest
@@ -134,6 +136,51 @@ class TestSearchAdapter(unittest.TestCase):
             self.assertEqual(self.make_search(30)("news", 25), ([], "SEARCH_DEADLINE"))
             opened.assert_not_called()
 
+    def test_chunked_sse_returns_matching_frame_without_waiting_for_stream_end(self):
+        value = {"jsonrpc": "2.0", "id": 1, "result": {"content": [{
+            "type": "text", "text": json.dumps({"results": [{"url": "https://example.com/한"}]},
+                                             ensure_ascii=False)}]}}
+        other = json.dumps({**value, "id": 2}).encode()
+        event = b"data: " + json.dumps(value, ensure_ascii=False).encode() + b"\r\n\r\n"
+        # Split a Korean code point and the final CRLF across real HTTP chunks.
+        split = event.index("한".encode()) + 1
+        chunks = [b"data: " + other + b"\n\n", event[:split], event[split:-3], event[-3:]]
+        wire = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n"
+        wire += b"Content-Type: text/event-stream; charset=utf-8\r\n\r\n"
+        wire += b"".join(f"{len(c):x}\r\n".encode() + c + b"\r\n" for c in chunks)
+
+        class OpenStream(io.BytesIO):
+            def readline(self, *args):
+                if self.tell() == len(wire):
+                    raise TimeoutError("Stream remains open after result")
+                return super().readline(*args)
+
+        stream = OpenStream(wire)
+        response = http.client.HTTPResponse(mock.Mock(makefile=mock.Mock(return_value=stream)))
+        response.begin()
+        connection = mock.Mock()
+        with mock.patch.object(search, "_target", return_value=(
+                urlsplit(ENV["WEB_SEARCH_GATEWAY_URL"]), [])), \
+                mock.patch.object(search, "_open_response", return_value=(connection, response)):
+            self.assertEqual(self.make_search()("public", 25),
+                             ([{"url": "https://example.com/한"}], None))
+        self.assertTrue(stream.closed)
+        connection.close.assert_called_once()
+
+    def test_sse_bound_deadline_and_unrelated_id_do_not_return_a_result(self):
+        message = Message()
+        message["Content-Type"] = "text/event-stream"
+        value = b'data: {"id":2,"result":{}}\n\n'
+        for chunks, limit in (([value, b""], 2000000), ([b"x" * 20], 10)):
+            response = mock.Mock(headers=message, read1=mock.Mock(side_effect=chunks))
+            with mock.patch.object(search, "MAX_RESPONSE_BYTES", limit), \
+                    self.assertRaises(ValueError):
+                search._read_payload(response, float("inf"), None)
+        response = mock.Mock(headers=message, read1=mock.Mock(return_value=b"data: {}\n\n"))
+        with mock.patch.object(search.time, "monotonic", side_effect=[0, 21]), \
+                self.assertRaises(ValueError):
+            search._read_payload(response, 20, None)
+
     def test_response_limits_and_header_ambiguity_fail_without_payload_logs(self):
         data = b'{"error":"private upstream text"}'
         cases = [
@@ -158,7 +205,8 @@ class TestRuntimeTransactions(unittest.TestCase):
         active = mock_aws()
         active.start()
         self.addCleanup(active.stop)
-        resource = boto3.Session().resource("dynamodb", region_name="ap-northeast-2")
+        self.session = boto3.Session(region_name="ap-northeast-2")
+        resource = self.session.resource("dynamodb")
         self.table = resource.create_table(
             TableName="synthetic-runtime",
             KeySchema=[{"AttributeName": "PK", "KeyType": "HASH"},
@@ -169,7 +217,7 @@ class TestRuntimeTransactions(unittest.TestCase):
         self.table.put_item(Item=copy.deepcopy(CONFIG))
         self.store = NewsStore(resource.meta.client, self.table.name)
         for patcher in (mock.patch.dict(os.environ, ENV, clear=True),
-                        mock.patch.object(runtime, "_store", return_value=self.store),
+                        mock.patch.object(runtime.boto3, "Session", return_value=self.session),
                         mock.patch.object(runtime.time, "time", return_value=NOW)):
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -206,6 +254,7 @@ class TestRuntimeTransactions(unittest.TestCase):
         s3 = mock.Mock()
         session = mock.Mock()
         session.client.return_value = s3
+        session.resource.side_effect = self.session.resource
         with mock.patch.object(runtime.boto3, "Session", return_value=session), \
                 mock.patch.object(runtime, "NewsModel", return_value=model), \
                 mock.patch.object(runtime, "WorkerDeps", side_effect=lambda **kwargs: WorkerDeps(
@@ -230,13 +279,71 @@ class TestRuntimeTransactions(unittest.TestCase):
         runs = NewsRuns(self.store)
         runs.begin(Run("source", "expired", source_revision(CONFIG)), NOW - 2000)
         runs.begin(Run("source", "live", source_revision(CONFIG)), NOW)
-        result = recovery.recover(self.store, lambda: 120, NOW, "synthetic-token")
+        result = recovery.handler({}, context())
         self.assertEqual(result["recovered"], 1)
         self.assertEqual(self.store._get("CRAWLER#source", "NEWSRUN#expired")["runState"], "FINALIZED")
         self.assertEqual(self.store._get("CRAWLER#source", "NEWSRUN#live")["runState"], "OPEN")
         checkpoint = self.store._get(**{"pk": recovery.CHECKPOINT["PK"], "sk": "RECOVERY"})
         self.assertNotIn("leaseToken", checkpoint)
         self.assertNotIn("scanCursor", checkpoint)
+
+    def test_invalid_endpoint_does_not_create_run(self):
+        with mock.patch.dict(os.environ, {"WEB_SEARCH_GATEWAY_URL": "https://evil.example/mcp"}), \
+                self.assertRaisesRegex(StateRejected, "INVALID_CONFIGURATION"):
+            runtime.discover_handler({"sourceId": "source", "runId": "bad-config"}, context())
+        self.assertIsNone(self.store._get("CRAWLER#source", "NEWSRUN#bad-config"))
+
+    def test_corrupt_cursor_releases_lease_and_preserves_cursor(self):
+        self.table.put_item(Item={**recovery.CHECKPOINT, "scanCursor": {"unexpected": "value"}})
+        with self.assertRaisesRegex(StateRejected, "INVALID_RECOVERY_CURSOR"):
+            recovery.recover(self.store, lambda: 900, NOW, "mine")
+        checkpoint = self.store._get(recovery.CHECKPOINT["PK"], "RECOVERY")
+        self.assertNotIn("leaseToken", checkpoint)
+        self.assertEqual(checkpoint["scanCursor"], {"unexpected": "value"})
+
+    def test_recovery_nested_calls_stop_within_lease_and_resume_same_page(self):
+        NewsRuns(self.store).begin(Run("source", "expired", source_revision(CONFIG)), NOW - 2000)
+        clock = [0]
+        original_get = self.store.client.get_item
+        original_finish = NewsRuns.finish
+        calls = []
+
+        def slow_get(**kwargs):
+            calls.append(clock[0])
+            clock[0] += 40
+            return original_get(**kwargs)
+
+        def slow_finish(runs, run, now, **kwargs):
+            # Model a long sequence of real native DynamoDB calls in finalization.
+            for _ in range(10):
+                runs.store._get(run.pk, run.sk)
+            return original_finish(runs, run, now, **kwargs)
+
+        with mock.patch.object(recovery.time, "monotonic", side_effect=lambda: clock[0]), \
+                mock.patch.object(self.store.client, "get_item", side_effect=slow_get), \
+                mock.patch.object(NewsRuns, "finish", slow_finish), \
+                self.assertRaisesRegex(StateRejected, "RUN_BUDGET"):
+            recovery.recover(self.store, lambda: 900, NOW, "mine")
+        self.assertEqual(calls, [0, 40, 80, 120, 160, 200])
+        checkpoint = self.store._get(recovery.CHECKPOINT["PK"], "RECOVERY")
+        self.assertNotIn("leaseToken", checkpoint)
+        self.assertNotIn("lastPageAt", checkpoint)
+        self.assertEqual(recovery.recover(self.store, lambda: 900, NOW, "next")["recovered"], 1)
+
+    def test_release_does_not_mask_failure_or_remove_replacement_lease(self):
+        NewsRuns(self.store).begin(Run("source", "expired", source_revision(CONFIG)), NOW - 2000)
+
+        def replaced(*args, **kwargs):
+            self.table.update_item(
+                Key=recovery.CHECKPOINT, UpdateExpression="SET leaseToken = :token",
+                ExpressionAttributeValues={":token": "replacement"})
+            raise StateRejected("INVALID_RUN_STATE")
+
+        with mock.patch.object(NewsRuns, "finish", side_effect=replaced), \
+                self.assertRaisesRegex(StateRejected, "INVALID_RUN_STATE"):
+            recovery.recover(self.store, lambda: 900, NOW, "mine")
+        self.assertEqual(self.store._get(recovery.CHECKPOINT["PK"], "RECOVERY")["leaseToken"],
+                         "replacement")
 
     def test_recovery_budget_before_first_page_defers_without_claiming_completion(self):
         NewsRuns(self.store).begin(Run("source", "expired", source_revision(CONFIG)), NOW - 2000)

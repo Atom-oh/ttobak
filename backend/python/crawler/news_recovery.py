@@ -5,6 +5,8 @@ is handled; interruption retries that page and finalization receipts are stable.
 No new table index, source-status mutation or speculative charge release occurs.
 """
 
+import logging
+import sys
 import time
 import uuid
 
@@ -12,13 +14,15 @@ import boto3
 from botocore.exceptions import ClientError
 
 from news_lifecycle import NewsRuns, Run
-from news_runtime import _event, _remaining, _result, _store
-from news_store import StateRejected
+from news_runtime import DeadlineClient, _event, _remaining, _result, _store
+from news_store import NewsStore, StateRejected
 
 CHECKPOINT = {"PK": "CRAWLER#__news_runtime__", "SK": "RECOVERY"}
 MAX_PAGES = 10
 PAGE_SIZE = 100
 LEASE_SECONDS = 300
+WORK_SECONDS = 240
+logger = logging.getLogger(__name__)
 
 
 def _cursor(value):
@@ -33,7 +37,13 @@ def _cursor(value):
 
 
 def recover(store, remaining, now, token):
-    client = store.client
+    started = time.monotonic()
+    deadline = started + min(WORK_SECONDS, remaining())
+    lease_remaining = lambda: min(remaining(), max(0, deadline - time.monotonic()))
+    original_client = store.client
+    client = DeadlineClient(original_client, lease_remaining)
+    # This also bounds every nested read/transaction inside NewsRuns.finish.
+    store = NewsStore(client, store.table_name)
     try:
         claimed = client.update_item(
             TableName=store.table_name, Key=CHECKPOINT,
@@ -45,12 +55,12 @@ def recover(store, remaining, now, token):
         if error.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
             return {"status": "BUSY", "pages": 0, "recovered": 0}
         raise
-    cursor = _cursor(claimed.get("scanCursor"))
     pages = recovered = busy = conflicts = 0
     complete = False
     try:
+        cursor = _cursor(claimed.get("scanCursor"))
         for _ in range(MAX_PAGES):
-            if remaining() < 30:
+            if lease_remaining() < 30:
                 break
             args = {
                 "TableName": store.table_name, "ConsistentRead": True, "Limit": PAGE_SIZE,
@@ -70,7 +80,7 @@ def recover(store, remaining, now, token):
             if following is not None and following == cursor:
                 raise StateRejected("STATE_UNAVAILABLE")
             for row in rows:
-                if remaining() < 20:
+                if lease_remaining() < 20:
                     # Leave this page's cursor unchanged. Already finalized rows
                     # disappear from the filter on replay.
                     raise StateRejected("RUN_BUDGET")
@@ -108,11 +118,21 @@ def recover(store, remaining, now, token):
     finally:
         # On timeout Lambda cannot execute finally; the short lease expires.
         # An ambiguous release never deletes state or another invocation's lease.
-        client.update_item(
-            TableName=store.table_name, Key=CHECKPOINT,
-            UpdateExpression="REMOVE leaseToken, leaseUntil",
-            ConditionExpression="leaseToken = :token",
-            ExpressionAttributeValues={":token": token})
+        primary_failure = sys.exc_info()[0] is not None
+        if remaining() >= 10 and time.monotonic() < started + LEASE_SECONDS - 10:
+            try:
+                original_client.update_item(
+                    TableName=store.table_name, Key=CHECKPOINT,
+                    UpdateExpression="REMOVE leaseToken, leaseUntil",
+                    ConditionExpression="leaseToken = :token",
+                    ExpressionAttributeValues={":token": token})
+            except Exception as error:
+                lost = isinstance(error, ClientError) and error.response.get(
+                    "Error", {}).get("Code") == "ConditionalCheckFailedException"
+                if not lost:
+                    if not primary_failure:
+                        raise
+                    logger.warning("News recovery lease release failed; original failure retained")
 
 
 def handler(event, context):

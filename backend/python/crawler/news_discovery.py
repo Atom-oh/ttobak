@@ -214,7 +214,9 @@ def discover(source, gateway, published_lookup, now, run_id, *, max_candidates=2
         item["corroboratingSources"] = item.get("corroboratingSources", [])[:2]
         item["sourceRevision"] = result["sourceRevision"]
         item["freshnessDays"] = result["freshnessDays"]
-        if len(result["candidates"]) >= max_candidates:
+        # Match the worker's complete candidate limit, including UTF-8 metadata.
+        if (len(result["candidates"]) >= max_candidates
+                or len(json.dumps(item, ensure_ascii=False).encode("utf-8")) > 64000):
             result["budgetRejected"] += 1
             continue
         result["candidates"].append(item)

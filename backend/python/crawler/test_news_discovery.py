@@ -56,6 +56,19 @@ class TestDiscovery(unittest.TestCase):
                 self.assertEqual(result["sourceRevision"], discovery.source_revision(config))
                 self.assertTrue(all(call.args[0] == identity for call in lookup.call_args_list))
 
+    def test_multilingual_candidate_must_fit_worker_limit(self):
+        config = source(
+            aliases=["𐐀" * 198 + str(i) for i in range(31)],
+            newsQueries=["𐐀" * 198 + str(i) for i in range(32)])
+        values = [article(i, title="same event", url="https://example.com/" + "𐐀" * 3500 + str(i))
+                  for i in range(3)]
+        result, _, _ = self.run_discovery(values, config=config)
+        self.assertEqual(result["candidates"], [])
+        self.assertGreater(result["budgetRejected"], 0)
+        small, _, _ = self.run_discovery([article()], config=source(aliases=["회사"]))
+        from news_worker import _candidate
+        _candidate(small["candidates"][0])
+
     def test_source_identity_rejects_unsafe_or_rewritten_forms(self):
         for identity in ("", "__reserved", " source", "source ", "우리 은행", "a/b",
                          "a\\b", "a#b", "a%b", ".", "a\nb", "\ud800", "a²", "가" * 129):
