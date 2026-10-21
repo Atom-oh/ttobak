@@ -1,13 +1,11 @@
 """Candidate contract, query expansion, canonicalization, and
 near-duplicate grouping for the knowledge-grade news pipeline.
 
-Pure functions only -- no boto3, no network, no filesystem. Discovery
-(news_discovery.py) and the worker (news_worker.py) both import this module
-so the URL/hash identity used to check for existing documents and the
-identity used to write new ones can never drift apart.
+Pure functions only -- no boto3, no network, no filesystem. Staged for a
+future discovery and publication worker to share URL/hash identity.
 
-Search snippets are discovery signals only; nothing in this module ever
-sees or forwards a snippet -- the candidate contract has no snippet field.
+Search snippets are discovery signals only. Group output forwards only
+candidate contract fields and reconstructs corroborating URLs.
 """
 
 import hashlib
@@ -20,6 +18,11 @@ MAX_QUERIES_PER_SOURCE = 12
 MAX_URL_CHARS = 4096
 MAX_CANDIDATES = 300
 TRACKING_PARAMS = {"gclid", "fbclid", "msclkid"}
+_CANDIDATE_FIELDS = frozenset({
+    "runId", "candidateId", "kind", "sourceId", "sourceName", "aliases", "keywords",
+    "title", "url", "canonicalUrl", "publishedAt", "discoveredAt", "queryClass",
+    "searchResultRank", "ingestSource", "requireRelevance",
+})
 
 # Jaccard similarity threshold (whitespace-tokenized title) for two
 # candidates to be considered the same underlying event.
@@ -275,7 +278,7 @@ def group_near_duplicates(candidates: list) -> list:
             (lead.get("sourceId", "") + "|" + "|".join(sorted_urls)).encode("utf-8")
         ).hexdigest()[:24]
 
-        merged = dict(lead)
+        merged = {key: value for key, value in lead.items() if key in _CANDIDATE_FIELDS}
         merged["eventGroupId"] = event_group_id
         merged["corroboratingSources"] = [
             {"url": m.get("url", ""), "sourceUrl": m.get("url", "")} for m in members[1:]

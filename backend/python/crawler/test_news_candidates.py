@@ -29,6 +29,16 @@ def candidate(title, url, published_at, source_id='woori', source_name='우리�
     }
 
 class TestCandidateDiscovery(unittest.TestCase):
+    def test_grouping_does_not_forward_search_snippets_or_nested_payloads(self):
+        lead = candidate("same title", "https://example.com/a", "2026-08-08")
+        lead.update(snippet="search snippet", body="not fetched", unexpected={"raw": "payload"})
+        lead["corroboratingSources"] = [{"url": "https://example.com/b", "snippet": "snippet"}]
+        group = news_pipeline.group_near_duplicates([lead])[0]
+        self.assertNotIn("snippet", group)
+        self.assertNotIn("body", group)
+        self.assertNotIn("unexpected", group)
+        self.assertEqual(group["corroboratingSources"], [])
+
     def test_unsafe_or_ambiguous_urls_are_rejected(self):
         for url in ("https://user:pass@example.com/x", "https://example.com/\nx",
                     "https://example.com:0/", "https://example.com:99999/",
