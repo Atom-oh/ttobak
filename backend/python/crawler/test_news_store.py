@@ -256,4 +256,3 @@ class TestNewsStoreTransactions(unittest.TestCase):
         with self.assertRaisesRegex(StateRejected, "STATE_CONFLICT"):
             self.reserve()
         self.assertIsNone(self.row(self.job.sk))
-
