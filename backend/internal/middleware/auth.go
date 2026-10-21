@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/ttobak/backend/internal/connector"
 )
 
 // ContextKey is a custom type for context keys
@@ -87,6 +88,7 @@ type ALBOIDCClaims struct {
 	TokenUse      string   `json:"token_use"`
 	Aud           []string `json:"aud"`       // ID tokens: the app client ID (string or list on the wire)
 	ClientID      string   `json:"client_id"` // access tokens: the app client ID
+	Scope         string   `json:"scope"`
 }
 
 // ParseClientIDs turns a comma-separated client ID list into an allowlist.
@@ -122,6 +124,10 @@ func (c *ALBOIDCClaims) IssuedToClient(allowed map[string]bool) bool {
 // 1. Authorization: Bearer <jwt> header (Cognito JWT via API Gateway/Lambda@Edge)
 // 2. x-amzn-oidc-data header (ALB OIDC) for backward compatibility
 func Auth(next http.Handler) http.Handler {
+	return AuthWithConnectorGrants(nil)(next)
+}
+
+func authWithConnectorPolicy(next http.Handler, policy *connector.ReadOnlyHTTPPolicy, resolve ConnectorGrantResolver) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var claims *ALBOIDCClaims
 		var err error
@@ -155,7 +161,17 @@ func Auth(next http.Handler) http.Handler {
 			return
 		}
 
-		if !claims.IssuedToClient(apiAllowedClients) {
+		dedicated, decision := policy.Authorize(claims.TokenUse, claims.ClientID, claims.Aud, claims.Scope, r.Method, r.URL.EscapedPath())
+		if decision != nil {
+			connectorDenied(w)
+			return
+		}
+		if dedicated {
+			if !currentConnectorRead(r.Context(), resolve, claims) {
+				connectorDenied(w)
+				return
+			}
+		} else if !claims.IssuedToClient(apiAllowedClients) {
 			http.Error(w, `{"error":"unauthorized","message":"token not issued to this application"}`, http.StatusUnauthorized)
 			return
 		}
@@ -174,6 +190,18 @@ func Auth(next http.Handler) http.Handler {
 		}
 		ctx = context.WithValue(ctx, UserNameKey, name)
 
+		if dedicated {
+			// Nothing reaches the caller until client disable/revocation and
+			// upstream expiry are checked again after the bounded reader.
+			result := newConnectorResponse()
+			next.ServeHTTP(result, r.WithContext(ctx))
+			if result.overflow || !currentConnectorRead(ctx, resolve, claims) {
+				connectorDenied(w)
+				return
+			}
+			result.publish(w)
+			return
+		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -246,6 +274,7 @@ func ParseVerifiedJWT(tokenStr string) (*ALBOIDCClaims, error) {
 		Groups:     getStringSliceClaim(mapClaims, "cognito:groups"),
 		TokenUse:   getStringClaim(mapClaims, "token_use"),
 		ClientID:   getStringClaim(mapClaims, "client_id"),
+		Scope:      getStringClaim(mapClaims, "scope"),
 		Aud:        getStringSliceClaim(mapClaims, "aud"),
 	}
 	if aud := getStringClaim(mapClaims, "aud"); aud != "" {

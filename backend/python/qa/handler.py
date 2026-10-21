@@ -17,6 +17,8 @@ from current_input import (
 )
 from delivery_proof import validate_delivery
 from origin_proof import OriginVerifier
+from connector_contract import ConnectorError
+from connector_ingress import ReadOnlyQAIngress
 
 from aws_docs import search_aws_docs
 from prompts import get_system_prompt, DETECT_QUESTIONS_PROMPT
@@ -436,7 +438,29 @@ def lambda_handler(event, context):
     return result
 
 
+# A configured dedicated client stays denied until the current grant store is
+# injected. Default-off rollout preserves the existing application boundary.
+_CONNECTOR_INGRESS = ReadOnlyQAIngress(
+    os.environ.get("CONNECTOR_READ_CLIENT_ID", ""),
+    os.environ.get("CONNECTOR_RESOURCE_AUDIENCE", ""),
+    tuple(filter(None, os.environ.get("CONNECTOR_WEB_CLIENT_IDS", "").split(","))),
+)
+_CONNECTOR_GRANTS = None
+
+
 def _handle_verified_http(event, context):
+    try:
+        verified_user_id = _CONNECTOR_INGRESS.authorize_http(event)
+        if _CONNECTOR_INGRESS.is_connector(event):
+            return _CONNECTOR_INGRESS.detection(event, handle_detect_questions, _CONNECTOR_GRANTS)
+    except ConnectorError as error:
+        status = {"INVALID_CONNECTOR_REQUEST": 400, "RESULT_TOO_LARGE": 413,
+                  "INVALID_CONNECTOR_RESULT": 502}.get(error.code, 403)
+        return response(status, {"error": {"code": error.code, "message": "Connector request not permitted"}})
+    return _handle_existing_verified_http(event, context, verified_user_id)
+
+
+def _handle_existing_verified_http(event, context, verified_user_id=None):
     http_method = event.get('requestContext', {}).get('http', {}).get('method', '')
     path = event.get('rawPath', '')
 
@@ -455,7 +479,7 @@ def _handle_verified_http(event, context):
         return response(400, {'error': {'code': 'BAD_REQUEST', 'message': 'Invalid JSON body'}})
 
     # Extract userId from JWT (Authorization header) — required for all endpoints
-    user_id = extract_user_id(event)
+    user_id = verified_user_id or extract_user_id(event)
     if not user_id:
         return response(401, {'error': {'code': 'UNAUTHORIZED', 'message': 'Authentication required'}})
 
