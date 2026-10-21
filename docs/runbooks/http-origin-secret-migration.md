@@ -13,12 +13,14 @@ not establish Secrets Manager permission or successful version binding.
 The coordinator reads the currently deployed API alias, latest API, QA and enabled
 HTTP MCP configurations, their code hashes/revisions, the API routes/integrations
 and CloudFront's HTTP origin. It uses existing content-free probes: a nonexistent
-public-document token returns 404, an unknown QA GET returns 405 before user/model
-handling, and existing MCP discovery returns 200. Every successful probe requires
-the marker; a missing proof must be rejected without it. No JWT is invented, no
-meeting is read, and no model is invoked. Function identity, code hash, configuration
-revision and alias version are rechecked immediately before mutations. Weighted
-aliases and unstable stacks are rejected.
+public-document token returns 404, and existing MCP discovery returns 200. The
+identity-free QA GET returns 405 with legacy ingress or 403 when configured identity
+validation denies it after origin verification. Both QA responses require the
+marker: they establish origin acceptance, not user authentication. Every accepted
+probe requires the marker; missing and retired proofs must return 403 without it.
+No JWT is invented, no meeting is read, and no model is invoked. Function identity,
+code hash, configuration revision and alias version are rechecked immediately
+before mutations. Weighted aliases and unstable stacks are rejected.
 
 Initial proofs must agree across the live consumers and CloudFront. The old CDK
 literal is never used as evidence of deployment. The new proof document requires
