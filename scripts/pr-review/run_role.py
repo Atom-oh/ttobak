@@ -160,6 +160,14 @@ def scrub(text):
     return process.stdout
 
 
+def rejected_review_object(rejection):
+    """The validator checks exact top-level keys before other PRE/POST failures."""
+    diagnostic = rejection.diagnostic
+    return (str(rejection) in SCHEMA_CODES - {"response_schema"}
+            and isinstance(diagnostic, dict)
+            and diagnostic.get("phase") in ("PRE_SCRUB", "POST_SCRUB"))
+
+
 def run(work, tag, kiro_startup=None):
     plan = load_plan(work)
     role = plan["roles"][tag]
@@ -245,8 +253,8 @@ def run(work, tag, kiro_startup=None):
                                 if str(rejection) not in SCHEMA_CODES:
                                     code, output, error = 1, "", str(rejection)
                                     break
-                                # Inspect terminal signals before masking, including
-                                # control-split diagnostics in otherwise invalid JSON.
+                                # CLI errors remain terminal, but words in a parsed
+                                # review's evidence must not suppress correction.
                                 normalized = strip_controls(output)
                                 normalized_error = strip_controls(error)
                                 try:
@@ -255,9 +263,11 @@ def run(work, tag, kiro_startup=None):
                                 except Invalid:
                                     code, output, error = 1, "", "output_byte_limit"
                                     break
+                                diagnostics = (error, normalized_error, clean_error)
+                                if not rejected_review_object(rejection):
+                                    diagnostics += (output, normalized, clean)
                                 if any(FAILURE.search(text) or diagnostic_failure(text)
-                                       for text in (output, normalized, clean,
-                                                    error, normalized_error, clean_error)):
+                                       for text in diagnostics):
                                     code = 1
                                     error = normalized_error + ("\n" if normalized_error else "") + normalized
                                     try:

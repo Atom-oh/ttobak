@@ -131,6 +131,110 @@ class RoleExecutionTests(unittest.TestCase):
     def test_whitespace_schema_retry_exhausts_with_history(self):
         self.assert_empty_schema_retry(" \t\n", False)
 
+    def assert_review_prose_schema_retry(self, phase, recover):
+        work, startup, response = self.prepared_kiro()
+        bad = json.loads(json.dumps(response))
+        bad["uncertainties"] = [
+            "The changed handler catches ServiceQuotaExceededException.",
+            "The log contains Falling back to user specified default.",
+            "The reviewed fixture contains using tool: REJECTED_PROSE_CANARY.",
+        ]
+        if phase == "PRE_SCRUB":
+            bad["checks"][0]["extra"] = "REJECTED_PROSE_CANARY"
+        else:
+            bad["checks"][0]["evidence"] = "\x1b[31m"
+        calls = []
+        def execute(command, cwd, environment, input_text, timeout):
+            receipt = json.loads((work / "slot/kiro-fable-request.json").read_text())
+            calls.append((list(command), receipt))
+            return 0, json.dumps(response if recover and len(calls) == 2 else bad), ""
+        with patch.dict(os.environ, PANEL_RETRIES="2"), \
+                patch.object(self.runner, "execute", side_effect=execute):
+            self.runner.run(work, "kiro-fable", startup)
+        self.assertEqual(len(calls), 2)
+        self.assertNotEqual(calls[0][1]["invocation_nonce"], calls[1][1]["invocation_nonce"])
+        self.assertIn(role_review.SCHEMA_REMINDER, calls[1][0][2])
+        self.assertNotIn("REJECTED_PROSE_CANARY", json.dumps(calls))
+        history = json.loads((work / "slot/kiro-fable-attempts.json").read_text())
+        self.assertEqual(len(history), 1)
+        self.assertEqual(history[0]["failure_codes"], ["invalid_check"])
+        self.assertEqual(history[0]["validation_diagnostic"]["phase"], phase)
+        self.assertIsNone(history[0]["response"])
+        self.assertEqual(history[0]["invocation_nonce"], calls[0][1]["invocation_nonce"])
+        result = json.loads((work / "slot/kiro-fable-result.json").read_text())
+        self.assertEqual(result["valid"], recover)
+        self.assertEqual(result["failure_codes"], [] if recover else ["invalid_check"])
+        self.assertEqual(result["response"], response if recover else None)
+        self.assertEqual(result["invocation_nonce"], calls[1][1]["invocation_nonce"])
+        self.assertFalse((work / "slot/kiro-fable-duplicate.flag").exists())
+        for path in work.rglob("*"):
+            if path.is_file():
+                self.assertNotIn(b"REJECTED_PROSE_CANARY", path.read_bytes(), str(path))
+
+    def test_pre_scrub_review_prose_schema_retry_recovers(self):
+        self.assert_review_prose_schema_retry("PRE_SCRUB", True)
+
+    def test_post_scrub_review_prose_schema_retry_recovers(self):
+        self.assert_review_prose_schema_retry("POST_SCRUB", True)
+
+    def test_pre_scrub_review_prose_schema_retry_exhausts(self):
+        self.assert_review_prose_schema_retry("PRE_SCRUB", False)
+
+    def test_post_scrub_review_prose_schema_retry_exhausts(self):
+        self.assert_review_prose_schema_retry("POST_SCRUB", False)
+
+    def test_review_shape_predicate_requires_validator_top_level_contract(self):
+        work, _, response = self.prepared_kiro()
+        plan = role_review.load_plan(work)
+        for phase in ("PRE_SCRUB", "POST_SCRUB"):
+            for body in (None, [], {}, dict(response, unexpected=True)):
+                with self.subTest(phase=phase, body=body):
+                    with self.assertRaises(role_review.Invalid) as failure:
+                        role_review.validate_response(body, plan, "kiro-fable", phase)
+                    self.assertEqual(str(failure.exception), "response_schema")
+                    self.assertFalse(self.runner.rejected_review_object(failure.exception))
+            for change in ({"head_sha": "wrong"}, {"scope_complete": False},
+                           {"reviewed_paths": []}, {"checks": [{}]},
+                           {"findings": [{}]}, {"uncertainties": [None]}):
+                with self.subTest(phase=phase, change=change):
+                    with self.assertRaises(role_review.Invalid) as failure:
+                        role_review.validate_response(dict(response, **change), plan, "kiro-fable", phase)
+                    self.assertTrue(self.runner.rejected_review_object(failure.exception))
+        for rejection in (
+            role_review.Invalid("invalid_check"),
+            role_review.schema_failure("malformed_json", "", "JSON_REQUIRED", "PARSE"),
+            role_review.Invalid("cli_nonzero_exit", {"phase": "PRE_SCRUB"}),
+        ):
+            self.assertFalse(self.runner.rejected_review_object(rejection))
+
+    def test_rejected_review_keeps_cli_stdout_and_stderr_terminal(self):
+        cases = [
+            ("ServiceQuotaExceededException", ""),
+            ('{"error":"ServiceQuotaExceededException"}', ""),
+            ("ServiceQuota\u200bExceededException", ""),
+            (None, "ServiceQuotaExceededException"),
+            (None, "ServiceQuota\u200bExceededException"),
+            (None, "Falling back to user specified default"),
+        ]
+        original_root = self.root
+        for index, (output, error) in enumerate(cases):
+            with self.subTest(index=index), patch.object(self, "root", original_root / str(index)):
+                self.root.mkdir()
+                work, startup, response = self.prepared_kiro()
+                response["checks"][0]["extra"] = "REJECTED_PROSE_CANARY"
+                with patch.dict(os.environ, PANEL_RETRIES="2"), \
+                        patch.object(self.runner, "execute", return_value=(
+                            0, json.dumps(response) if output is None else output, error)) as execute:
+                    self.runner.run(work, "kiro-fable", startup)
+                self.assertEqual(execute.call_count, 1)
+                result = json.loads((work / "slot/kiro-fable-result.json").read_text())
+                self.assertFalse(result["valid"])
+                self.assertIsNone(result["response"])
+                self.assertFalse((work / "slot/kiro-fable-attempts.json").exists())
+                for path in work.rglob("*"):
+                    if path.is_file():
+                        self.assertNotIn(b"REJECTED_PROSE_CANARY", path.read_bytes(), str(path))
+
     def test_schema_retry_retains_shared_deadline_and_corrected_request(self):
         work, startup, response = self.prepared_kiro()
         bad = dict(response, checks=[{"path":"UNKNOWN_SECRET_PATH", "evidence":"PRIVATE_CANARY"}])
