@@ -61,6 +61,7 @@ class MeteredModel:
         self.calls = 0
         self.usage = {"inputTokens": 0, "outputTokens": 0}
         self.complete = True
+        self.uncertain = False
 
     def converse(self, **request):
         if (self.calls >= 2 or request.get("modelId") != self.policy.model_id
@@ -80,7 +81,11 @@ class MeteredModel:
         # A failed request may have been billed. Only a complete valid usage
         # response can clear this uncertainty for the current invocation.
         self.complete = False
-        response = self.client.converse(**request)
+        try:
+            response = self.client.converse(**request)
+        except Exception:
+            self.uncertain = True
+            raise
         values = response.get("usage", {})
         valid = True
         overrun = False
@@ -91,7 +96,8 @@ class MeteredModel:
                 overrun |= value > cap
             else:
                 valid = False
-        self.complete = valid
+        self.uncertain |= not valid
+        self.complete = not self.uncertain
         if not valid:
             raise QualityRejected("USAGE_INVALID")
         if overrun:
@@ -141,9 +147,10 @@ def _candidate(value):
                 or source_id.startswith("__") or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", run_id)
                 or not re.fullmatch(r"[0-9a-f]{64}", revision)):
             raise ValueError()
-        url = canonicalize_url(value["url"])
+        url = value["url"]
+        canonical = canonicalize_url(url)
         # Activation uses authenticated TLS for publisher content too.
-        if not url.startswith("https://"):
+        if not canonical.startswith("https://"):
             raise ValueError()
         custom = value.get("ingestSource") == "custom"
         if value.get("ingestSource") not in ("custom", "search"):
@@ -159,14 +166,17 @@ def _candidate(value):
         related = value.get("corroboratingSources", [])
         if not isinstance(related, list) or len(related) > 2:
             raise ValueError()
-        urls = []
+        urls, warnings, seen = [], [], {canonical}
         for item in related:
-            target = canonicalize_url(item["url"])
-            if not target.startswith("https://"):
-                raise ValueError()
-            if target != url and target not in urls:
-                urls.append(target)
-        return source_id, run_id, revision, url, urls, custom
+            try:
+                target = canonicalize_url(item["url"])
+                if not target.startswith("https://") or target in seen:
+                    raise ValueError()
+                seen.add(target)
+                urls.append(item["url"])
+            except (KeyError, TypeError, ValueError, UnicodeError):
+                warnings.append("CORROBORATION_UNUSABLE")
+        return source_id, run_id, revision, url, urls, custom, warnings
     except (KeyError, TypeError, ValueError, UnicodeError, RecursionError):
         raise StateRejected("INVALID_CANDIDATE") from None
 
@@ -182,9 +192,10 @@ def _fresh(candidate, now, lead=None):
 
 
 def _configured_custom(config, url):
+    canonical = canonicalize_url(url)
     for value in config.get("customUrls", []):
         try:
-            if canonicalize_url(value) == url:
+            if canonicalize_url(value) == canonical:
                 return True
         except (ValueError, TypeError, UnicodeError):
             continue
@@ -192,7 +203,7 @@ def _configured_custom(config, url):
 
 
 def process_candidate(candidate, deps):
-    source_id, run_id, revision, url, related, custom = _candidate(candidate)
+    source_id, run_id, revision, url, related, custom, warnings = _candidate(candidate)
     config = deps.store.current_config(source_id, revision)
     if custom and not _configured_custom(config, url):
         raise StateRejected("SOURCE_CHANGED")
@@ -213,7 +224,6 @@ def process_candidate(candidate, deps):
     if deps.store.published_hashes(source_id, {doc_hash}):
         return _result("DUPLICATE", source_id, doc_hash)
     bodies = [lead]
-    warnings = []
     for index, other in enumerate(related):
         if deps.remaining() < FETCH_SECONDS + MODEL_SECONDS + SETTLEMENT_SECONDS:
             warnings.extend(["CORROBORATION_DEFERRED"] * (len(related) - index))
@@ -221,7 +231,10 @@ def process_candidate(candidate, deps):
         try:
             body = deps.fetch(other, https_only=True)
             if (isinstance(body, ArticleBody) and body.final_url.startswith("https://")
-                    and body.final_url not in {item.final_url for item in bodies}):
+                    and canonicalize_url(body.final_url)
+                    not in {canonicalize_url(item.final_url) for item in bodies}
+                    and canonicalize_url(body.canonical_url)
+                    not in {canonicalize_url(item.canonical_url) for item in bodies}):
                 bodies.append(body)
             else:
                 warnings.append("CORROBORATION_UNUSABLE")
@@ -281,6 +294,11 @@ def process_candidate(candidate, deps):
                                   markdown, "text/markdown; charset=utf-8")
     if deps.remaining() < SETTLEMENT_SECONDS:
         raise StateRejected("RUN_BUDGET")
+    if not _fresh(candidate, deps.now(), lead):
+        return deps.store.finish(
+            job, now=deps.now(), status="REJECTED", reason="STALE_ARTICLE",
+            known_cost=deps.policy.cost(model.usage), usage_complete=model.complete,
+            usage=model.usage, warnings=warnings)
     row = {
         "PK": job.pk, "SK": "DOC#" + doc_hash, "sourceId": source_id, "docHash": doc_hash,
         "schemaVersion": 1, "qualityStatus": "PUBLISHED", "type": "news",

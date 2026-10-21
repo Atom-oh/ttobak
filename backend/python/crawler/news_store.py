@@ -342,8 +342,9 @@ class NewsStore:
             "attemptToken": attempt.token, "chargedUsd": charged,
             "usageComplete": usage_complete, **clean_usage,
             "docsAdded": int(status == "PUBLISHED"), "docsUpdated": 0,
-            "fetchWarnings": list(warnings),
         }
+        if warnings:
+            receipt["fetchWarnings"] = list(warnings)
         identity = {
             "runId": attempt.run_id, "docHash": attempt.doc_hash, "month": attempt.month,
             "attemptToken": attempt.token, "sourceRevision": attempt.revision,

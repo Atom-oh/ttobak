@@ -238,13 +238,18 @@ The staged `news_worker.py` now joins current source checks, HTTPS-only article
 fetches, queued-candidate freshness checks, model accounting, immutable uploads
 and conditional publication. A failed lead is never replaced by a corroborating
 source; failed or deferred corroboration remains visible in the terminal receipt.
+Retrieval retains the original URL query bytes; canonicalization selects identity
+only. Unsupported or duplicate optional sources do not reject a valid lead.
+Freshness is checked again after the final immutable upload before publication.
 Search-provided dates are identified separately from dates extracted from articles.
 Renderer rejection settles known cost without uploading. An ambiguous upload or
 insufficient settlement time retains the reservation and immutable objects.
 Each invocation reserves both maximum input/output model calls before inference,
 requires positive caller-supplied rates and counts the actual prompt before each
 call. `news_model.py` signs the supported Opus 5 token-count request for the fixed
-US East (N. Virginia) Mantle endpoint, with no redirects or transport retries;
+US East (N. Virginia) Mantle endpoint, with no redirects or application retries.
+Isolated DNS resolution and every socket read share one 20-second monotonic
+deadline through the pinned-address transport;
 Converse remains on the injected regional runtime client. This is an explicit
 cross-region AWS service integration using public source material. The ordinary
 runtime CountTokens API does not support this model's inference profile; see the

@@ -6,11 +6,12 @@ client. No API key, external proxy, configurable endpoint or redirect is used.
 """
 
 import json
-import ssl
+import time
+from urllib.parse import urlsplit
 
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
-import urllib3
+from article_fetcher import _open_response, _target
 
 from news_enrichment import FINAL_MODEL_ID, MAX_REQUEST_BYTES, MAX_TOKENS, QualityRejected
 
@@ -18,6 +19,49 @@ MANTLE_REGION = "us-east-1"
 MANTLE_URL = "https://bedrock-mantle.us-east-1.api.aws/anthropic/v1/messages/count_tokens"
 MANTLE_MODEL = "anthropic.claude-opus-5"
 MAX_COUNT_RESPONSE = 4096
+COUNT_SECONDS = 20
+
+
+class _CountResponse:
+    def __init__(self, connection, response):
+        self.connection, self.response = connection, response
+        self.status = response.status
+
+    def read(self, size, decode_content=False):
+        headers = self.response.headers
+        length = headers.get("Content-Length")
+        transfer = (headers.get("Transfer-Encoding") or "").lower()
+        if (len(headers.get_all("Content-Length", [])) > 1
+                or len(headers.get_all("Transfer-Encoding", [])) > 1
+                or len(headers.get_all("Content-Encoding", [])) > 1
+                or (length is not None and transfer) or transfer not in ("", "chunked")
+                or (headers.get("Content-Encoding") or "identity").lower() != "identity"):
+            raise QualityRejected("TOKEN_COUNT_FAILED")
+        if length is not None and (
+                not length.isascii() or not length.isdigit() or len(length) > 10
+                or int(length) > MAX_COUNT_RESPONSE):
+            raise QualityRejected("TOKEN_COUNT_FAILED")
+        value = self.response.read(size)
+        if length is not None and len(value) != int(length):
+            raise QualityRejected("TOKEN_COUNT_FAILED")
+        return value
+
+    def close(self):
+        try:
+            self.response.close()
+        finally:
+            self.connection.close()
+
+
+class _CountTransport:
+    def request(self, method, url, *, body, headers):
+        if method != "POST" or url != MANTLE_URL:
+            raise QualityRejected("INVALID_COUNT_REQUEST")
+        deadline = time.monotonic() + COUNT_SECONDS
+        parsed, answers = _target(MANTLE_URL, deadline)
+        connection, response = _open_response(
+            parsed, answers, deadline, method="POST", body=body, headers=headers)
+        return _CountResponse(connection, response)
 
 
 def _text_blocks(blocks):
@@ -64,9 +108,7 @@ def count_body(request):
 class NewsModel:
     def __init__(self, runtime, credentials, *, transport=None):
         self.runtime, self.credentials = runtime, credentials
-        context = ssl.create_default_context()
-        context.minimum_version = ssl.TLSVersion.TLSv1_2
-        self.transport = transport or urllib3.PoolManager(ssl_context=context)
+        self.transport = transport or _CountTransport()
 
     def count_tokens(self, **request):
         payload = count_body(request)
@@ -78,13 +120,11 @@ class NewsModel:
             signed = AWSRequest(
                 method="POST", url=MANTLE_URL, data=payload,
                 headers={"content-type": "application/json", "anthropic-version": "2023-06-01",
-                         "accept-encoding": "identity"})
+                         "accept-encoding": "identity", "host": urlsplit(MANTLE_URL).netloc})
             SigV4Auth(credentials.get_frozen_credentials(), "bedrock-mantle",
                       MANTLE_REGION).add_auth(signed)
             response = self.transport.request(
-                "POST", MANTLE_URL, body=payload, headers=dict(signed.headers),
-                redirect=False, retries=False, preload_content=False,
-                timeout=urllib3.Timeout(connect=5, read=15, total=20))
+                "POST", MANTLE_URL, body=payload, headers=dict(signed.headers))
             if response.status != 200:
                 raise QualityRejected("TOKEN_COUNT_FAILED")
             data = response.read(MAX_COUNT_RESPONSE + 1, decode_content=False)

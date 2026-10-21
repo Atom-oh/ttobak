@@ -174,7 +174,7 @@ class TestArticleFetch(unittest.TestCase):
             returned, _ = fetcher._open_response(parsed, addresses, fetcher.time.monotonic() + 40)
         raw_socket.connect.assert_called_once_with(("93.184.216.34", 443))
         context.wrap_socket.assert_called_once_with(raw_socket, server_hostname="example.com")
-        self.assertIs(returned.sock, tls_socket)
+        self.assertIs(returned.sock.sock, tls_socket)
         self.assertEqual(context.minimum_version, fetcher.ssl.TLSVersion.TLSv1_2)
 
     def test_tls_failure_closes_socket_without_retrying_an_unchecked_host(self):
@@ -207,7 +207,7 @@ class TestArticleFetch(unittest.TestCase):
         first.connect.assert_called_once_with(addresses[0][4])
         first.close.assert_called_once()
         second.connect.assert_called_once_with(addresses[1][4])
-        self.assertIs(result.sock, tls)
+        self.assertIs(result.sock.sock, tls)
         context.wrap_socket.assert_called_once_with(second, server_hostname="example.com")
 
     def test_address_fallback_stops_at_overall_deadline(self):
@@ -233,6 +233,16 @@ class TestArticleFetch(unittest.TestCase):
         article, _ = self.fetch_with(item)
         self.assertEqual(len(article.blocks), 4)
         self.assertIn("기사 3", article.body)
+
+    def test_valueless_meta_content_and_duplicate_transfer_encoding(self):
+        raw = article_html(head='<meta http-equiv="content-type" content>')
+        article, _ = self.fetch_with(response(raw))
+        self.assertGreater(len(article.body), 800)
+        item = response()
+        item.headers["Transfer-Encoding"] = "chunked"
+        item.headers["Transfer-Encoding"] = "gzip"
+        with self.assertRaisesRegex(fetcher.FetchRejected, "INVALID_LENGTH"):
+            self.fetch_with(item)
 
     def test_incomplete_or_ambiguous_http_body_is_rejected(self):
         for headers in ({"Content-Length": "99999"}, {"Content-Length": "-1"},

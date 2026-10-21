@@ -67,6 +67,15 @@ class TestMeteredModel(unittest.TestCase):
         self.assertEqual(self.model.usage, {"inputTokens": 100, "outputTokens": 50})
         self.assertFalse(self.model.complete)
 
+    def test_unknown_first_call_stays_unknown_if_a_caller_later_invokes_again(self):
+        self.client.converse.side_effect = [
+            ReadTimeoutError(endpoint_url="https://synthetic.invalid"), bedrock_response()]
+        with self.assertRaises(ReadTimeoutError):
+            self.model.converse(**request())
+        self.model.converse(**request())
+        self.assertFalse(self.model.complete)
+        self.assertEqual(self.model.usage, {"inputTokens": 100, "outputTokens": 50})
+
     def test_partial_usage_keeps_known_tokens_but_cannot_claim_complete_accounting(self):
         self.client.converse.return_value = bedrock_response(usage={"inputTokens": 100})
         with self.assertRaisesRegex(QualityRejected, "USAGE_INVALID"):
@@ -177,6 +186,38 @@ class TestCandidateWorker(unittest.TestCase):
         self.assertEqual(result["status"], "PUBLISHED")
         self.assertEqual(result["fetchWarnings"], ["CORROBORATION_FETCH_FAILED"])
 
+    def test_retrieval_preserves_original_query_order_and_encoding(self):
+        url = "https://example.com/a?z=2&tag=b&tag=a&signed=x%2fy&utm_source=receipt"
+        result = process_candidate({**self.candidate, "url": url}, self.deps)
+        self.assertEqual(result["status"], "PUBLISHED")
+        self.fetch.assert_called_once_with(url, https_only=True)
+
+    def test_http_optional_source_does_not_discard_valid_https_lead(self):
+        value = {**self.candidate, "corroboratingSources": [{"url": "http://other.example/a"}]}
+        result = process_candidate(value, self.deps)
+        self.assertEqual(result["status"], "PUBLISHED")
+        self.assertEqual(result["fetchWarnings"], ["CORROBORATION_UNUSABLE"])
+        self.fetch.assert_called_once()
+
+    def test_optional_redirect_to_canonical_lead_is_ignored_with_warning(self):
+        other = replace(valid_body(), final_url="https://example.com/a?utm_source=copy")
+        self.fetch.side_effect = [valid_body(), other]
+        value = {**self.candidate, "corroboratingSources": [{"url": "https://other.example/a"}]}
+        result = process_candidate(value, self.deps)
+        self.assertEqual(result["status"], "PUBLISHED")
+        self.assertEqual(result["fetchWarnings"], ["CORROBORATION_UNUSABLE"])
+        self.client.converse.assert_called_once()
+
+    def test_optional_amp_copy_with_same_publisher_canonical_is_ignored(self):
+        other = replace(valid_body(), final_url="https://example.com/amp/a")
+        self.fetch.side_effect = [valid_body(), other]
+        value = {**self.candidate, "corroboratingSources": [{"url": other.final_url}]}
+        result = process_candidate(value, self.deps)
+        self.assertEqual(result["status"], "PUBLISHED")
+        self.assertEqual(result["fetchWarnings"], ["CORROBORATION_UNUSABLE"])
+        row = self.store.finish.call_args.kwargs["document"]
+        self.assertEqual(row["corroboratingSourceCount"], 0)
+
     def test_budget_or_duplicate_rejection_prevents_model_and_uploads(self):
         self.store.published_hashes.return_value = {"known"}
         self.assertEqual(process_candidate(self.candidate, self.deps)["status"], "DUPLICATE")
@@ -227,6 +268,23 @@ class TestCandidateWorker(unittest.TestCase):
             process_candidate(self.candidate, self.deps)
         self.assertEqual(self.deps.s3.put_object.call_count, 1)
         self.store.finish.assert_not_called()
+
+    def test_last_upload_crossing_freshness_window_settles_without_publication(self):
+        published = int(datetime(2026, 8, 8, 9, tzinfo=timezone.utc).timestamp())
+        current = [published + 7 * 86400 - 1]
+        self.deps.now = lambda: current[0]
+        uploads = []
+        def put(**kw):
+            uploads.append(kw["Key"])
+            if len(uploads) == 2:
+                current[0] += 2
+        self.deps.s3.put_object.side_effect = put
+        result = process_candidate(self.candidate, self.deps)
+        self.assertEqual(len(uploads), 2)
+        self.assertEqual(result["status"], "REJECTED")
+        self.assertEqual(result["reason"], "STALE_ARTICLE")
+        self.assertNotIn("document", self.store.finish.call_args.kwargs)
+        self.deps.s3.delete_object.assert_not_called()
 
 
 if __name__ == "__main__":
