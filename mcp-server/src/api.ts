@@ -202,6 +202,9 @@ export interface ApiRequestOptions {
   timeoutMs?: number;
   maxResponseBytes?: number;
   allowLocalFiles?: boolean;
+  privateTransport?: (request: {
+    method: string; path: string; body: unknown; signal?: AbortSignal; maxResponseBytes: number;
+  }) => Promise<unknown>;
 }
 
 export class TtobakApi {
@@ -240,6 +243,10 @@ export class TtobakApi {
   }
 
   async askQuestion(question: string, meetingId?: string, sessionId?: string) {
+    if (this.options.privateTransport) {
+      if (sessionId) throw new Error('Read-only questions do not use saved chat sessions.');
+      return this.post('/api/qa/readonly-ask', { question, ...(meetingId ? { meetingId } : {}) });
+    }
     const body: Record<string, string> = { question };
     if (sessionId) body.sessionId = sessionId;
 
@@ -723,6 +730,12 @@ export class TtobakApi {
 
   private async request(method: string, path: string, body?: unknown, maxResponseBytes?: number): Promise<unknown> {
     this.options.signal?.throwIfAborted();
+    if (this.options.privateTransport) {
+      return this.options.privateTransport({
+        method, path, body: body ?? null, signal: this.options.signal,
+        maxResponseBytes: Math.min(32_000, maxResponseBytes ?? this.options.maxResponseBytes ?? 32_000),
+      });
+    }
     const idToken = await this.auth.getIdToken();
     const url = new URL(path, this.baseUrl);
     // A tool argument must never replace the configured application origin.

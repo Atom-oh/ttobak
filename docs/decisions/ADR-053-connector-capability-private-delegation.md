@@ -93,8 +93,14 @@ reader. Empty signing-key configuration leaves private execution unavailable.
 The deployment artifact must contain the pinned ARM64 cryptography wheel before
 key configuration is enabled; source installation does not prove deployment.
 
-Subsequent reviewed stages must wire MCP transport
-and supply private signing, approval management endpoints
+The MCP HTTP adapter now has an opt-in private transport for the eight bounded
+API reads and `qa.readonlyAsk`. Request-scoped verified identity/scopes, atomic
+grant reads, exact-byte KMS signatures and service-IAM invocation replace bearer
+forwarding in this mode. It rechecks grants and expiry before returning bounded
+results, with one SDK attempt and bounded calls. The flag defaults off and a
+private failure never falls back to a legacy request. Stdio remains unchanged.
+
+Subsequent reviewed stages must supply private signing infrastructure, approval management endpoints
 and the specifically available personal-note executor. Infrastructure must
 preserve existing pool/client identities and keep issuance disabled through
 deployment verification. Native migration, real provider tokens, audience and

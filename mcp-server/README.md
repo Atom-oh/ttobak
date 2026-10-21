@@ -1,11 +1,14 @@
 # TTOBAK MCP adapter
 
 TypeScript MCP server with stdio and authenticated Streamable HTTP entry points.
-Both call TTOBAK HTTPS APIs through CloudFront; neither accesses DynamoDB/S3 with
-an AWS execution role. Stdio is the default. The HTTP server implementation does
-not, by itself, provision a hosted endpoint.
+The default transports call TTOBAK HTTPS APIs through CloudFront. Stdio remains
+the default. The staged private HTTP connector transport below uses service IAM
+for signed Lambda reads and atomic grant lookup. This implementation does not,
+by itself, provision a hosted endpoint.
 
 ## Build and configure
+
+Use Node.js 22 or newer for the installed package and its AWS SDK dependencies.
 
 ```bash
 npm ci
@@ -65,6 +68,26 @@ Refresh is attempted before another login; its lifetime depends on pool policy
 and revocation. Do not copy token files into documentation or diagnostics.
 
 ## Streamable HTTP
+
+The staged `TTOBAK_CONNECTOR_PRIVATE_BRIDGE=true` mode binds the verified HTTP
+subject, client, scopes and expiry to a short-lived KMS delegation. It supports
+the eight bounded API reads and the private read-only QA operation. Mutations,
+unknown operations and legacy QA sessions fail closed. It never forwards the
+bearer token to Lambda or falls back to HTTP after a private call fails.
+
+This mode additionally requires `AWS_REGION`, `TABLE_NAME`,
+`CONNECTOR_SIGNING_KEY_ARN` (an exact RSA KMS key ARN),
+`CONNECTOR_API_FUNCTION_ARN` and `CONNECTOR_QA_FUNCTION_ARN`. The execution role
+needs the separately reviewed Sign, private InvokeFunction and transactional
+grant-read permissions. Grant rows must bind the public MCP resource URL and
+Cognito issuer. Each request reads the current grants before signing and again
+before returning the result; no grant decision is cached. API bodies are limited
+to 14,000 bytes and original Lambda response bytes to 32,000.
+
+Omitting the flag or setting it to `false` selects the existing HTTP transport.
+Source tests cover that rollback selection; production KMS/IAM, provider-token
+and consumer acceptance remain prerequisites for enabling it. The private flag
+does not change stdio authentication or install OAuth clients.
 
 ```bash
 npm start                          # stdio (default)

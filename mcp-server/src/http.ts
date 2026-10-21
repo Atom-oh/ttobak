@@ -7,10 +7,12 @@ import {
   type HttpConfig, type HttpIdentity,
 } from './http-auth.js';
 import { MAX_HTTP_API_BYTES, MAX_HTTP_REQUEST_BYTES } from './remote-tools.js';
+import { environmentPrivateTransport } from './connector-runtime.js';
 
 interface Dependencies {
   authenticate?: (token: string) => Promise<HttpIdentity>;
   apiFactory?: (auth: ToolAuth, options: ApiRequestOptions) => TtobakApi;
+  privateTransport?: (identity: HttpIdentity) => NonNullable<ApiRequestOptions['privateTransport']>;
 }
 
 class HttpFailure extends Error {
@@ -66,9 +68,13 @@ export function createHttpServer(config: HttpConfig, dependencies: Dependencies 
   const verifier = dependencies.authenticate ? undefined : createTokenVerifier(config);
   const authenticate = dependencies.authenticate ?? (async (token: string) => {
     const payload = await verifier!.verify(token);
-    return { subject: payload.sub, expiresAt: payload.exp };
+    return Object.freeze({
+      subject: payload.sub, expiresAt: payload.exp, clientId: payload.client_id,
+      scopes: Object.freeze((payload.scope ?? '').split(' ').filter(Boolean)),
+    });
   });
   const apiFactory = dependencies.apiFactory ?? ((auth, options) => new TtobakApi(auth, config.apiUrl, options));
+  const privateTransport = dependencies.privateTransport ?? environmentPrivateTransport(process.env);
   let active = 0;
   const listener = async (req: IncomingMessage, res: ServerResponse) => {
     // IncomingMessage can emit an error after its aborted event. Body-reader
@@ -160,6 +166,7 @@ export function createHttpServer(config: HttpConfig, dependencies: Dependencies 
       const api = apiFactory(auth, {
         allowLocalFiles: false, signal: controller.signal,
         timeoutMs: config.deadlineMs, maxResponseBytes: MAX_HTTP_API_BYTES,
+        privateTransport: privateTransport?.(identity),
       });
       protocol = createMcpServer({
         mode: 'http', auth, api, apiUrl: config.apiUrl,

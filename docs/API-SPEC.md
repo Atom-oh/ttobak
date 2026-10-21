@@ -54,6 +54,14 @@ reader. Private key configuration remains empty until the reviewed KMS/IAM and
 OAuth deployment; the Python package must include the pinned ARM64 cryptography
 dependency before that activation.
 
+The staged MCP HTTP private transport signs only eight bounded API reads and
+`qa.readonlyAsk`. It derives identity and scopes from the verified request,
+checks atomic current grants before signing and before delivery, and invokes the
+configured API/QA Lambda through service IAM. It forwards no bearer token and
+never retries a rejected private request through the legacy HTTP transport.
+`TTOBAK_CONNECTOR_PRIVATE_BRIDGE` defaults off; deployment permissions and
+provider/consumer acceptance remain separate activation requirements.
+
 ## Contracts that require care
 
 ### Session bootstrap and project invitations
