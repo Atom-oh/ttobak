@@ -352,11 +352,18 @@ func decodeNewsDocument(row map[string]types.AttributeValue, sourceID, docHash s
 // filtering and pagination, including when an earlier legacy row was replaced.
 func (s *InsightsService) currentNewsList(ctx context.Context, docs []model.CrawledDocument) ([]model.CrawledDocument, error) {
 	keys := []repository.NewsReadKey{}
+	readable := make([]model.CrawledDocument, 0, len(docs))
 	for _, doc := range docs {
 		if doc.Type == "news" || strings.HasPrefix(doc.S3Key, "news/") {
-			keys = append(keys, newsKeys(doc.SourceID, doc.DocHash)...)
+			selection := newsKeys(doc.SourceID, doc.DocHash)
+			if !selection[0].Valid() || !selection[1].Valid() {
+				continue
+			}
+			keys = append(keys, selection...)
 		}
+		readable = append(readable, doc)
 	}
+	docs = readable
 	if len(keys) == 0 {
 		return docs, nil
 	}
