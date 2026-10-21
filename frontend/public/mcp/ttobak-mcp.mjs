@@ -23443,6 +23443,20 @@ var TtobakApi = class {
     return this.get("/api/vault/export");
   }
   async putDocument(accountId, doc) {
+    if (this.options.privateTransport) {
+      if (accountId !== void 0 || doc.path !== void 0 || doc.docType !== void 0 && doc.docType !== "note" || typeof doc.idempotencyKey !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(doc.idempotencyKey)) {
+        throw new Error("Private connector notes require a personal destination and a stable idempotencyKey.");
+      }
+      return this.post("/api/documents", {
+        title: doc.title,
+        markdown: doc.markdown,
+        docType: "note",
+        idempotencyKey: doc.idempotencyKey
+      });
+    }
+    if (doc.idempotencyKey !== void 0) {
+      throw new Error("Idempotent note creation requires the private connector transport.");
+    }
     return this.post(documentsPath(accountId), doc);
   }
   async listDocuments(accountId, docType) {
@@ -24805,7 +24819,7 @@ var registry2 = {
     },
     {
       name: "ttobak_put_document",
-      description: "Create a new Markdown note in TTOBAK. Omit accountId to save privately in your Document Hub; set accountId only to share with that account team. Always creates a new docId: use ttobak_update_document for revisions. Rejects TTOBAK export markers (loop guard).",
+      description: "Create a Markdown note. For private connector access, first obtain the user\u2019s one-hour write approval in TTOBAK settings, omit accountId/path, use docType note, and provide a unique idempotencyKey. Retry uncertain results with that same key and identical content for up to 30 days; the key cannot revise a note. Private connector notes are limited to 60,000 UTF-8 bytes and reject export markers. Legacy access without an idempotencyKey always creates a new document and supports explicit account destinations.",
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
       inputSchema: {
         type: "object",
@@ -24814,7 +24828,8 @@ var registry2 = {
           title: { type: "string", description: "Document title" },
           markdown: { type: "string", description: "Markdown content (<=300KB)" },
           docType: { type: "string", description: "Optional: prep | reference | ..." },
-          path: { type: "string", description: "Optional: original vault path" }
+          path: { type: "string", description: "Optional: original vault path" },
+          idempotencyKey: { type: "string", pattern: "^[A-Za-z0-9_-]{1,128}$", description: "Required for private connector notes: reuse this exact key and content after an uncertain result; use a new key for a new note. Not supported by legacy transports." }
         },
         required: ["title", "markdown"]
       }
@@ -25177,10 +25192,10 @@ Client: ${CLIENT_ID.slice(0, 8)}...`
         return text(JSON.stringify(result, null, 2));
       }
       case "ttobak_put_document": {
-        const { accountId, title, markdown, docType, path } = args;
+        const { accountId, title, markdown, docType, path, idempotencyKey } = args;
         if (typeof title !== "string" || !title.trim()) return error2("title is required");
         if (typeof markdown !== "string" || !markdown.trim()) return error2("markdown is required");
-        const result = await api.putDocument(accountId, { title, markdown, docType, path });
+        const result = await api.putDocument(accountId, { title, markdown, docType, path, idempotencyKey });
         return text(JSON.stringify(result, null, 2));
       }
       case "ttobak_list_documents": {
