@@ -4,7 +4,7 @@ const identifier = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const internalKey = /^(?:s3:\/\/|(?:USER|ACCOUNT|MEETING|DOC|ATTACH|ATTEXT)#|(?:canonical|files|transcripts|docs|docs-pdf|images|audio)\/)/i;
 const kindLabels: Record<string, string> = {
   meeting: '회의록', personalDocument: '개인 문서', accountDocument: '계정 문서',
-  meetingAttachment: '첨부 문서', legacyText: '참고 문서',
+  meetingAttachment: '첨부 문서', legacyText: '참고 문서', publishedNews: '뉴스 근거',
 };
 function id(value: string | undefined): value is string { return typeof value === 'string' && identifier.test(value); }
 function partition(value: string | undefined, prefix: string) {

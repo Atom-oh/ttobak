@@ -3,6 +3,7 @@
 import { useState, useCallback, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import { Marked } from 'marked';
+import { markdownLinkRenderer } from '@/lib/markdownHtml';
 import TurndownService from 'turndown';
 import { MarkdownRenderer } from '@/components/markdown/MarkdownRenderer';
 import { bindMeetingCitations, restoreMeetingCitations } from '@/lib/meetingCitations';
@@ -18,7 +19,7 @@ const MeetingEditor = dynamic(() => import('../MeetingEditor').then(m => ({ defa
 // An isolated `Marked` instance (rather than the shared default export) keeps
 // this renderer override from leaking into any other component that imports
 // `marked` for a different purpose.
-const marked = new Marked();
+const marked = new Marked({ renderer: markdownLinkRenderer });
 marked.use({ renderer: { checkbox({ checked }) { return checked ? '[x] ' : '[ ] '; } } });
 
 // The editor loads markdown as HTML (marked.parse above) and emits HTML on
