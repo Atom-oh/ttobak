@@ -854,6 +854,10 @@ def handler(event, context):
     Search results come from the AgentCore Web Search connector (snippet
     only). Custom URLs are still fetched directly and their body extracted.
     """
+    # Fail closed before search, model calls, object writes or history/status
+    # changes. Deployment drains the old revision before archiving legacy data.
+    if os.environ.get("NEWS_LEGACY_WRITES", "on") != "on":
+        return {"status": "DISABLED", "docsAdded": 0, "docsUpdated": 0, "errors": []}
     start_time = time.time()
     source_id = event.get('sourceId', 'unknown')
     source_name = event.get('sourceName', '')

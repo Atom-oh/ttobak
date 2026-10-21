@@ -66,6 +66,20 @@ describe('CrawlerStack', () => {
     });
   });
 
+  test('legacy news has a separate drain switch without disabling tech or recovery', () => {
+    template.hasParameter('NewsLegacyWrites', { Default: 'on', AllowedValues: ['on', 'off'] });
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'ttobak-crawler-news',
+      Environment: { Variables: { NEWS_LEGACY_WRITES: { Ref: 'NewsLegacyWrites' } } },
+    });
+    const functions = Object.values(template.findResources('AWS::Lambda::Function'));
+    for (const resource of functions) {
+      if (resource.Properties.FunctionName !== 'ttobak-crawler-news') {
+        expect(resource.Properties.Environment?.Variables?.NEWS_LEGACY_WRITES).toBeUndefined();
+      }
+    }
+  });
+
   test('exports state machine ARN', () => {
     template.hasOutput('StateMachineArn', {});
   });

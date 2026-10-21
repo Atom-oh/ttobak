@@ -156,7 +156,17 @@ candidates that the worker cannot consume. Search accepts only JSON-RPC 2.0
 responses for its exact integer request ID in both JSON and streaming transports.
 After readers deploy, an isolated synthetic canary may establish publication and
 QA acceptance. Normal source writers and `all` mode remain gated on that positive
-acceptance and completed legacy migration.
+acceptance and completed retained-legacy migration.
+
+The migration baseline preserves existing rows as explicitly legacy rather than
+regenerating or deleting every historical article. A bounded, resumable private
+archive must preserve typed metadata, exact source objects and source configuration
+and reconcile them against current storage after the old writer is disabled and
+drained. `RETAINED_LEGACY` never means quality-v1 acceptance or an inferred model
+rejection. No production row is replaced by this migration, so there is no
+migration write or cleanup CAS to race a current publication. Fresh publication
+continues to use the normal guarded writer and accounting contract above.
+Archive completion and later normal scheduling are separate release gates.
 
 The additive CDK workflow declares four private functions with separate roles,
 sequential candidate publication and bounded settlement input. Its configuration
@@ -164,9 +174,10 @@ permits only off/default or one explicit canary. Recovery is scheduled every fiv
 minutes regardless of writer mode; its timeout remains below the checkpoint lease.
 The legacy daily workflow is unchanged. These declarations still require actual
 deployment and service-role verification. QA's
-publication-aware `news_text.py` is wired to both transports and history replay
-but has no recorded deployed acceptance yet. Infrastructure acceptance, current-source
-QA/UI acceptance, migration and rollback remain required delivery work. See the
+publication-aware `news_text.py` is wired to both transports and history replay.
+The release contract records positive canary HTTP/WebSocket and UI acceptance
+on 2026-10-21, including source-change/disable rejection. Recovery completion,
+retained-legacy migration and normal scheduling remain required delivery work. See the
 [release contract](../runbooks/knowledge-grade-news-release.md) for price evidence
 and entry-point/payload limits.
 The activation gate must record positive end-to-end publication and QA evidence;
