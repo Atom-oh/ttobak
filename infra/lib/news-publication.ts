@@ -17,11 +17,12 @@ interface NewsPublicationProps {
   artifactBucket: s3.IBucket;
   webSearchGatewayUrl: string;
   webSearchGatewayArn: string;
+  legacyWrites: string;
 }
 
 /**
- * Additive, private publication workflow. Readers and live canary acceptance
- * precede a separate daily cutover; the legacy crawler is not replaced here.
+ * Private publication workflow with a separately gated daily cutover.
+ * Recorded reader, canary, recovery and retained-legacy acceptance precede all.
  */
 export class NewsPublication extends Construct {
   readonly stateMachine: sfn.StateMachine;
@@ -30,8 +31,8 @@ export class NewsPublication extends Construct {
     super(scope, id);
     const stack = cdk.Stack.of(this);
     const mode = new cdk.CfnParameter(stack, 'NewsPipelineMode', {
-      type: 'String', default: 'off', allowedValues: ['off', 'canary'],
-      description: 'Publication is off by default. All-source activation requires a later accepted release.',
+      type: 'String', default: 'off', allowedValues: ['off', 'canary', 'all'],
+      description: 'All-source activation requires recorded publication, recovery and legacy-archive acceptance.',
     });
     const canary = new cdk.CfnParameter(stack, 'NewsCanarySourceId', {
       type: 'String', default: '', maxLength: 128,
@@ -40,16 +41,26 @@ export class NewsPublication extends Construct {
     new cdk.CfnRule(stack, 'NewsCanaryRequiresSource', {
       assertions: [{
         assert: cdk.Fn.conditionOr(
-          cdk.Fn.conditionEquals(mode.valueAsString, 'off'),
+          cdk.Fn.conditionNot(cdk.Fn.conditionEquals(mode.valueAsString, 'canary')),
           cdk.Fn.conditionNot(cdk.Fn.conditionEquals(canary.valueAsString, '')),
         ),
         assertDescription: 'Canary mode requires an explicit source ID.',
+      }],
+    });
+    new cdk.CfnRule(stack, 'NewsAllRequiresLegacyOff', {
+      assertions: [{
+        assert: cdk.Fn.conditionOr(
+          cdk.Fn.conditionNot(cdk.Fn.conditionEquals(mode.valueAsString, 'all')),
+          cdk.Fn.conditionEquals(props.legacyWrites, 'off'),
+        ),
+        assertDescription: 'All-source publication requires the legacy news writer to remain disabled.',
       }],
     });
     const environment = {
       TABLE_NAME: props.table.tableName,
       NEWS_PIPELINE_MODE: mode.valueAsString,
       NEWS_CANARY_SOURCE_ID: canary.valueAsString,
+      NEWS_LEGACY_WRITES: props.legacyWrites,
       // Official AmazonBedrockFoundationModels Global on-demand price, Seoul,
       // effective 2026-09-01; verified 2026-10-21. No cache/batch discount.
       NEWS_INPUT_USD_PER_MTOK: '5',
@@ -194,6 +205,85 @@ export class NewsPublication extends Construct {
       definitionBody: sfn.DefinitionBody.fromChainable(discoverTask.next(choose)),
       timeout: cdk.Duration.minutes(45),
     });
+    const schedule = makeFunction('Schedule', 'news_schedule.handler', 120, 1);
+    schedule.role.addToPolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:Scan'], resources: [props.table.tableArn],
+      conditions: {
+        'ForAllValues:StringEquals': { 'dynamodb:Attributes': [
+          'PK', 'SK', 'sourceId', 'sourceName', 'aliases', 'newsQueries', 'customUrls', 'status', 'ownerId',
+        ] },
+        Null: { 'dynamodb:Attributes': 'false' },
+      },
+    }));
+    const listDaily = new tasks.LambdaInvoke(this, 'ListDailySources', {
+      lambdaFunction: schedule.fn, payload: sfn.TaskInput.fromObject({}),
+      payloadResponseOnly: true, retryOnServiceExceptions: false,
+    });
+    const dailySource = new tasks.StepFunctionsStartExecution(this, 'PublishDailySource', {
+      stateMachine: this.stateMachine,
+      integrationPattern: sfn.IntegrationPattern.RUN_JOB,
+      name: sfn.JsonPath.stringAt('$.executionName'),
+      input: sfn.TaskInput.fromObject({
+        sourceId: sfn.JsonPath.stringAt('$.sourceId'), runId: sfn.JsonPath.stringAt('$.runId'),
+      }),
+      resultPath: sfn.JsonPath.DISCARD,
+    });
+    // Retain a failure bit per source and continue subsequent sources. Child
+    // execution history retains details; the parent fails after the whole list.
+    const completed = new sfn.Pass(this, 'DailySourceCompleted', {
+      result: sfn.Result.fromBoolean(false),
+    });
+    const failed = new sfn.Pass(this, 'DailySourceFailed', {
+      result: sfn.Result.fromBoolean(true),
+    });
+    // Stable names prevent duplicate publication even after a child finishes.
+    // Its original execution and failure/timeout alarms remain authoritative.
+    const duplicate = new sfn.Pass(this, 'DailyAlreadyStarted', {
+      result: sfn.Result.fromBoolean(false),
+    });
+    dailySource.addCatch(duplicate, { errors: ['StepFunctions.ExecutionAlreadyExists'], resultPath: sfn.JsonPath.DISCARD });
+    dailySource.addCatch(failed, { errors: ['States.ALL'], resultPath: sfn.JsonPath.DISCARD });
+    const eachSource = new sfn.Map(this, 'DailySources', {
+      itemsPath: '$.sources', maxConcurrency: 1, resultPath: '$.failures',
+    }).itemProcessor(dailySource.next(completed));
+    const summarizeDaily = new sfn.Pass(this, 'SummarizeDailyResults', {
+      parameters: { 'failed.$': 'States.ArrayContains($.failures, true)' },
+    });
+    const dailyStatus = new sfn.Choice(this, 'DailySucceeded')
+      .when(sfn.Condition.booleanEquals('$.failed', true),
+        new sfn.Fail(this, 'DailyPublicationFailed', { error: 'NEWS_DAILY_SOURCE_FAILED' }))
+      .otherwise(new sfn.Succeed(this, 'DailyComplete'));
+    const daily = new sfn.StateMachine(this, 'DailyWorkflow', {
+      stateMachineName: 'ttobak-news-daily',
+      definitionBody: sfn.DefinitionBody.fromChainable(
+        listDaily.next(eachSource).next(summarizeDaily).next(dailyStatus)),
+      timeout: cdk.Duration.hours(23),
+    });
+    const normal = new cdk.CfnCondition(stack, 'NewsAllSourcesEnabled', {
+      expression: cdk.Fn.conditionEquals(mode.valueAsString, 'all'),
+    });
+    const dailyRule = new events.Rule(this, 'DailySchedule', {
+      ruleName: 'ttobak-news-daily',
+      schedule: events.Schedule.cron({ hour: '19', minute: '10' }),
+      targets: [new targets.SfnStateMachine(daily, {
+        input: events.RuleTargetInput.fromObject({}), retryAttempts: 0,
+      })],
+    });
+    (dailyRule.node.defaultChild as events.CfnRule).state = cdk.Fn.conditionIf(
+      normal.logicalId, 'ENABLED', 'DISABLED').toString();
+    new cloudwatch.Alarm(this, 'DailyFailureAlarm', {
+      metric: daily.metricFailed({ period: cdk.Duration.minutes(5) }),
+      threshold: 1, evaluationPeriods: 1,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      alarmDescription: 'Daily news discovery or a child publication failed; inspect private execution history.',
+    });
+    new cloudwatch.Alarm(this, 'DailyTimeoutAlarm', {
+      metric: daily.metricTimedOut({ period: cdk.Duration.minutes(5) }),
+      threshold: 1, evaluationPeriods: 1,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      alarmDescription: 'Daily news scheduling timed out; inspect unfinished sources and child recovery.',
+    });
+    new cdk.CfnOutput(stack, 'NewsDailyStateMachineArn', { value: daily.stateMachineArn });
     new cloudwatch.Alarm(this, 'WorkflowFailureAlarm', {
       metric: this.stateMachine.metricFailed({ period: cdk.Duration.minutes(5) }),
       threshold: 1, evaluationPeriods: 1,
