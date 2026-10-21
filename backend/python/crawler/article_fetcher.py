@@ -267,8 +267,12 @@ class _CharsetExtractor(HTMLParser):
 
 def _body_charset(raw, headers):
     declarations = []
-    if headers.get_content_charset():
-        declarations.append(headers.get_content_charset())
+    parameters = headers.get_params(header="content-type", failobj=[]) or []
+    http_charsets = [value for key, value in parameters[1:] if key.lower() == "charset"]
+    if len(http_charsets) > 1 or any(not isinstance(value, str) or not value.strip()
+                                   for value in http_charsets):
+        raise FetchRejected("DECODE_ERROR")
+    declarations.extend(http_charsets)
     if headers.get_content_type() != "text/plain":
         parser = _CharsetExtractor()
         parser.feed(raw[:4096].decode("ascii", errors="ignore"))
@@ -303,6 +307,10 @@ def _decode_body(raw, headers):
 
 _SKIP_TAGS = {"script", "style", "nav", "header", "footer", "aside", "form", "noscript"}
 _BLOCK_TAGS = {"p", "li", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote"}
+_VISIBLE_BREAKS = _BLOCK_TAGS | {
+    "br", "div", "article", "main", "section", "ul", "ol", "dl", "dt", "dd",
+    "table", "tr", "td", "th", "hr", "pre",
+}
 _VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input",
               "link", "meta", "param", "source", "track", "wbr"}
 _PAYWALL_MARKERS = (
@@ -351,6 +359,8 @@ class _ArticleExtractor(HTMLParser):
                   or "consent" in marker or "hidden" in attrs
                   or attrs.get("aria-hidden") == "true")
         scope = bool(self.stack and self.stack[-1][2]) or tag in ("article", "main")
+        if not hidden and tag in _VISIBLE_BREAKS:
+            self.visible_text.append(" ")
         if tag in ("article", "main") and not hidden:
             self.has_scope = True
         if tag in _BLOCK_TAGS and not hidden:
@@ -373,6 +383,8 @@ class _ArticleExtractor(HTMLParser):
         for index in range(len(self.stack) - 1, -1, -1):
             if self.stack[index][0] == tag:
                 closing = self.stack[index:]
+                if any(t in _VISIBLE_BREAKS and not hidden for t, hidden, _ in closing):
+                    self.visible_text.append(" ")
                 if self.active_block and any(t == self.active_block for t, _, _ in closing):
                     self._flush()
                 del self.stack[index:]

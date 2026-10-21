@@ -252,6 +252,12 @@ class TestArticleFetch(unittest.TestCase):
                                     url="https://example.com?utm_source=a#top")
         self.assertEqual(article.canonical_url, "https://example.com/")
 
+    def test_duplicate_http_charset_parameters_are_rejected(self):
+        for value in ("utf-8; charset=euc-kr", "euc-kr; charset=utf-8",
+                      "utf-8; charset=utf-8", ""):
+            with self.subTest(value=value), self.assertRaisesRegex(fetcher.FetchRejected, "DECODE_ERROR"):
+                self.fetch_with(response(**{"Content-Type": f"text/html; charset={value}"}))
+
     def test_malformed_redirect_has_bounded_rejection(self):
         with self.assertRaisesRegex(fetcher.FetchRejected, "^INVALID_REDIRECT$"):
             self.fetch_with(response(status=302, Location="https://[invalid/a"))
@@ -288,7 +294,10 @@ class TestArticleNormalization(unittest.TestCase):
     def test_visible_paywall_notice_outside_blocks_rejects_full_excerpt(self):
         for extra in ("<div>subscribe to continue reading</div>",
                       "<p>subscribe to continue reading</p>",
-                      "<div>subscribe <b>to continue</b> reading</div>"):
+                      "<div>subscribe <b>to continue</b> reading</div>",
+                      "<div>subscribe</div><div>to continue reading</div>",
+                      "<div>subscribe<br>to continue reading</div>",
+                      "<div><span>sub</span><span>scribe</span> to continue reading</div>"):
             with self.subTest(extra=extra), self.assertRaisesRegex(fetcher.FetchRejected, "PAYWALL"):
                 fetcher.normalize_html(article_html(extra=extra).decode(), "https://example.com/a")
         html = article_html(extra="<div hidden>subscribe to continue reading</div>").decode()
