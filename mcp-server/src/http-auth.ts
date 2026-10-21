@@ -57,7 +57,16 @@ export function httpConfig(env: NodeJS.ProcessEnv = process.env): HttpConfig {
     throw new Error('TTOBAK_MCP_SCOPES must include openid and valid OAuth scope names');
   }
   const connectors = connectorClientIds(env);
-  if (connectors && !scopes.includes('ttobak.connector/read')) scopes.push('ttobak.connector/read');
+  if (connectors) {
+    if (publicUrl.protocol !== 'https:' || publicUrl.pathname !== '/api/mcp') {
+      throw new Error('Private HTTP MCP requires the exact HTTPS MCP resource URL');
+    }
+    const readScope = `${publicUrl.href}/read`;
+    if (scopes.some(scope => !['openid', 'email', 'profile', readScope].includes(scope))) {
+      throw new Error('Private HTTP MCP scopes must belong to its resource URL');
+    }
+    if (!scopes.includes(readScope)) scopes.push(readScope);
+  }
   const host = env.TTOBAK_HTTP_HOST ?? '127.0.0.1';
   if (!['localhost', '127.0.0.1', '::1'].includes(host) && publicUrl.protocol !== 'https:') {
     throw new Error('Non-loopback listening requires an HTTPS public URL behind the trusted ingress');
@@ -92,6 +101,11 @@ export function createTokenVerifier(config: HttpConfig) {
       }
       const granted = new Set(typeof payload.scope === 'string' ? payload.scope.split(' ') : []);
       if (config.scopes.some((scope) => !granted.has(scope))) throw new InsufficientScopeError('Required scopes missing');
+      if (config.connectorClientIds) {
+        const allowed = new Set(['openid', 'email', 'profile', `${config.publicUrl}/read`,
+          ...(payload.client_id === config.connectorClientIds[1] ? [`${config.publicUrl}/write`] : [])]);
+        if ([...granted].some(scope => !allowed.has(scope))) throw new InsufficientScopeError('Unassigned connector scope');
+      }
     },
   }, {
     jwksCache: new SimpleJwksCache({
@@ -122,7 +136,7 @@ export function resourceMetadata(config: HttpConfig) {
     resource: config.publicUrl,
     resource_name: 'TTOBAK meetings and documents',
     authorization_servers: [CognitoJwtVerifier.parseUserPoolId(config.userPoolId).issuer],
-    scopes_supported: config.connectorClientIds ? [...new Set([...config.scopes, 'ttobak.connector/write'])] : config.scopes,
+    scopes_supported: config.connectorClientIds ? [...new Set([...config.scopes, `${config.publicUrl}/write`])] : config.scopes,
     bearer_methods_supported: ['header'],
   };
 }

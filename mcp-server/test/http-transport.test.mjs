@@ -41,17 +41,30 @@ test('connector cutover accepts only dedicated resource-bound clients with read 
   verifier.cacheJwks({ keys: [jwk] });
   for (const client of ['readclient', 'writeclient']) {
     assert.equal((await verifier.verify(jwt({ client_id: client,
-      scope: 'openid email profile ttobak.connector/read' }))).client_id, client);
+      scope: 'openid email profile https://ttobak.example.com/api/mcp/read' }))).client_id, client);
   }
   for (const overrides of [
-    { client_id: 'testclient', scope: 'openid email profile ttobak.connector/read' },
+    { client_id: 'testclient', scope: 'openid email profile https://ttobak.example.com/api/mcp/read' },
     { client_id: 'readclient' },
-    { client_id: 'writeclient', scope: 'openid email profile ttobak.connector/write' },
-    { client_id: 'readclient', aud: 'readclient', scope: 'openid email profile ttobak.connector/read' },
-    { client_id: 'readclient', token_use: 'id', scope: 'openid email profile ttobak.connector/read' },
+    { client_id: 'writeclient', scope: 'openid email profile https://ttobak.example.com/api/mcp/write' },
+    { client_id: 'readclient', aud: 'readclient', scope: 'openid email profile https://ttobak.example.com/api/mcp/read' },
+    { client_id: 'readclient', token_use: 'id', scope: 'openid email profile https://ttobak.example.com/api/mcp/read' },
+    { client_id: 'readclient', scope: 'openid email profile ttobak.connector/read' },
+    { client_id: 'readclient', scope: 'openid email profile https://foreign.example/api/mcp/read' },
+    { client_id: 'readclient', scope: 'openid email profile https://ttobak.example.com/api/mcp/read ttobak.connector/write' },
+    { client_id: 'readclient', scope: 'openid email profile https://ttobak.example.com/api/mcp/read https://ttobak.example.com/api/mcp/write' },
+    { client_id: 'writeclient', scope: 'openid email profile https://ttobak.example.com/api/mcp/read https://foreign.example/api/mcp/write' },
   ]) await assert.rejects(verifier.verify(jwt(overrides)));
-  assert.ok(resourceMetadata(config).scopes_supported.includes('ttobak.connector/write'));
-  assert.ok(!config.scopes.includes('ttobak.connector/write'));
+  assert.ok(resourceMetadata(config).scopes_supported.includes('https://ttobak.example.com/api/mcp/write'));
+  assert.ok(!config.scopes.includes('https://ttobak.example.com/api/mcp/write'));
+  for (const extra of ['ttobak.connector/read', 'https://foreign.example/api/mcp/read',
+    'https://ttobak.example.com/api/mcp/write']) {
+    assert.throws(() => httpConfig({ ...baseEnv, TTOBAK_CONNECTOR_PRIVATE_BRIDGE: 'true',
+      CONNECTOR_READ_CLIENT_ID: 'readclient', CONNECTOR_WRITE_CLIENT_ID: 'writeclient',
+      TTOBAK_MCP_SCOPES: `openid email profile ${extra}` }), /scopes must belong to its resource URL/);
+  }
+  assert.equal((await verifier.verify(jwt({ client_id: 'writeclient',
+    scope: 'openid email profile https://ttobak.example.com/api/mcp/read https://ttobak.example.com/api/mcp/write' }))).client_id, 'writeclient');
   for (const overrides of [
     { TTOBAK_CONNECTOR_PRIVATE_BRIDGE: 'yes' },
     { TTOBAK_CONNECTOR_PRIVATE_BRIDGE: 'true' },
@@ -169,7 +182,7 @@ test('private activation and flag-off rollback pair discovery, challenge and acc
     const config = httpConfig({ ...baseEnv, TTOBAK_CONNECTOR_PRIVATE_BRIDGE: String(active),
       CONNECTOR_READ_CLIENT_ID: 'readclient', CONNECTOR_WRITE_CLIENT_ID: 'writeclient' });
     const f = await fixture(t, undefined, config);
-    const scopes = ['openid', 'email', 'profile', ...(active ? ['ttobak.connector/read'] : [])];
+    const scopes = ['openid', 'email', 'profile', ...(active ? ['https://ttobak.example.com/api/mcp/read'] : [])];
     const challenge = await f.raw({ jsonrpc: '2.0', id: 1, method: 'tools/list' },
       { headers: { Authorization: '' } });
     assert.equal(challenge.status, 401);
@@ -178,11 +191,11 @@ test('private activation and flag-off rollback pair discovery, challenge and acc
       const response = await fetch(f.url.replace('/api/mcp', '/.well-known/oauth-protected-resource' + suffix));
       assert.equal(response.status, 200);
       assert.deepEqual((await response.json()).scopes_supported,
-        [...scopes, ...(active ? ['ttobak.connector/write'] : [])]);
+        [...scopes, ...(active ? ['https://ttobak.example.com/api/mcp/write'] : [])]);
     }
     for (const client of ['testclient', 'readclient', 'writeclient']) {
       const response = await f.raw({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, {
-        token: jwt({ client_id: client, scope: 'openid email profile ttobak.connector/read' }),
+        token: jwt({ client_id: client, scope: 'openid email profile https://ttobak.example.com/api/mcp/read' }),
       });
       assert.equal(response.status, (active ? client !== 'testclient' : client === 'testclient') ? 200 : 401);
     }
@@ -275,7 +288,7 @@ test('verified HTTP identity scopes private reads to each request and never forw
     const client = new Client({ name: 'private-test', version: '1' });
     await client.connect(new StreamableHTTPClientTransport(new URL(`http://${host}/api/mcp`), {
       requestInit: { headers: { Authorization: `Bearer ${jwt({ sub: subject,
-        scope: 'openid email profile ttobak.connector/read' })}` } },
+        scope: 'openid email profile https://ttobak.example.com/api/mcp/read' })}` } },
     }));
     try { return parsed(await client.callTool({ name: 'ttobak_get_meeting', arguments: { meetingId: 'notes' } })); }
     finally { await client.close(); }
@@ -284,7 +297,7 @@ test('verified HTTP identity scopes private reads to each request and never forw
   assert.equal(calls.length, 2);
   for (const { identity, input } of calls) {
     assert.equal(identity.clientId, 'testclient');
-    assert.ok(identity.scopes.includes('ttobak.connector/read'));
+    assert.ok(identity.scopes.includes('https://ttobak.example.com/api/mcp/read'));
     assert.ok(Object.isFrozen(identity));
     assert.match(input.path, /^\/api\/meetings\/notes\/reading\?/);
     assert.equal(input.method, 'GET');
