@@ -48,7 +48,8 @@ func (r *DynamoDBRepository) UpdateConnectorApproval(ctx context.Context, in Con
 	// Removing access must work after administrators disable or tighten a
 	// client; it must not revive an old approval if they later re-enable it.
 	if !in.Revoke && !in.Block {
-		policyCondition = policyCondition.And(expression.Name("enabled").Equal(expression.Value(true)))
+		policyCondition = policyCondition.And(expression.Name("enabled").Equal(expression.Value(true))).
+			And(expression.AttributeType(expression.Name("maximum"), expression.StringSet))
 		for _, cap := range in.Capabilities {
 			policyCondition = policyCondition.And(expression.Contains(expression.Name("maximum"), cap))
 		}
@@ -62,6 +63,14 @@ func (r *DynamoDBRepository) UpdateConnectorApproval(ctx context.Context, in Con
 		approvalCondition = expression.Name("userId").Equal(expression.Value(in.UserID)).
 			And(expression.Name("clientId").Equal(expression.Value(in.ClientID))).
 			And(expression.Name("generation").Equal(expression.Value(in.ExpectedGeneration)))
+	}
+	// A removal-only revoke cannot turn a permanent block into baseline read.
+	// A caller observing a block must keep Block=true, or explicitly re-approve
+	// through the elevation path (which checks the current enabled policy).
+	if in.Revoke && !in.Block {
+		approvalCondition = approvalCondition.And(
+			expression.AttributeNotExists(expression.Name("blocked")).
+				Or(expression.Name("blocked").Equal(expression.Value(false))))
 	}
 	approvalExpr, err := expression.NewBuilder().WithCondition(approvalCondition).Build()
 	if err != nil {
