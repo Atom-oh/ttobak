@@ -206,6 +206,38 @@ class TestNewsStoreTransactions(unittest.TestCase):
         self.assertEqual(self.row("NEWSBUDGET#2026-10")["unknownAttempts"], 1)
         self.assertFalse(self.row(self.job.sk)["receipt"]["usageComplete"])
 
+    def test_completion_cannot_refund_another_month_or_extend_the_recorded_lease(self):
+        self.reserve()
+        self.table.put_item(Item={"PK": self.job.pk, "SK": "NEWSBUDGET#2026-11",
+                                  "chargedUsd": Decimal("1")})
+        for job in (replace(self.job, month="2026-11"),
+                    replace(self.job, lease_until=self.job.lease_until + 100)):
+            with self.subTest(month=job.month, lease=job.lease_until):
+                with self.assertRaisesRegex(StateRejected, "STATE_CONFLICT"):
+                    self.finish(job, now=NOW + 101)
+        self.assertEqual(self.charge(), 1)
+        self.assertEqual(self.charge("NEWSBUDGET#2026-11"), 1)
+        self.assertEqual(self.row(self.job.sk)["state"], "RUNNING")
+
+    def test_completion_digest_preserves_number_type_but_normalizes_numeric_scale(self):
+        self.reserve()
+        first = self.finish(status="PUBLISHED", document=document(self.job), reason="")
+        replay = self.finish(status="PUBLISHED", document=document(self.job), reason="",
+                             known_cost="0.10")
+        self.assertEqual(first, replay)
+        changed = {**document(self.job), "qualityScore": "0.9"}
+        with self.assertRaisesRegex(StateRejected, "STATE_CONFLICT"):
+            self.finish(status="PUBLISHED", document=changed, reason="")
+        self.assertEqual(self.charge(), Decimal("0.1"))
+
+    def test_incomplete_schema_one_document_can_be_replaced_by_valid_publication(self):
+        self.table.put_item(Item={"PK": self.job.pk, "SK": "DOC#" + self.job.doc_hash,
+                                  "schemaVersion": 1})
+        self.assertEqual(self.store.published_hashes(self.job.source_id, {self.job.doc_hash}), set())
+        self.reserve()
+        self.finish(status="PUBLISHED", document=document(self.job), reason="")
+        self.assertEqual(self.row("DOC#" + self.job.doc_hash)["qualityStatus"], "PUBLISHED")
+
     def test_known_cost_overrun_is_recorded_and_blocks_further_reservations(self):
         self.reserve()
         self.finish(known_cost="1.2")

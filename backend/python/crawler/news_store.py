@@ -56,8 +56,30 @@ def _money(value):
 
 
 def _encoded(value):
-    return json.dumps(value, ensure_ascii=False, sort_keys=True,
-                      separators=(",", ":"), default=str).encode("utf-8")
+    """Hash native values without merging numeric values with string values."""
+    def typed(item):
+        if item is None:
+            return ["null"]
+        if isinstance(item, bool):
+            return ["bool", item]
+        if isinstance(item, (int, Decimal)):
+            number = Decimal(item)
+            if not number.is_finite():
+                raise StateRejected("INVALID_COMPLETION")
+            sign, digits, exponent = number.as_tuple()
+            digits = list(digits)
+            while digits and digits[-1] == 0:
+                digits.pop()
+                exponent += 1
+            return ["number", sign if digits else 0, "".join(map(str, digits)), exponent if digits else 0]
+        if isinstance(item, str):
+            return ["string", item]
+        if isinstance(item, (list, tuple)):
+            return ["list", [typed(member) for member in item]]
+        if isinstance(item, dict) and all(isinstance(key, str) for key in item):
+            return ["map", [[key, typed(item[key])] for key in sorted(item)]]
+        raise StateRejected("INVALID_COMPLETION")
+    return json.dumps(typed(value), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 
 def _native(value):
@@ -241,7 +263,7 @@ class NewsStore:
                 "TableName": self.table_name,
                 "Key": {"PK": attempt.pk, "SK": "DOC#" + attempt.doc_hash},
                 "ConditionExpression": "attribute_not_exists(#schema) OR #schema <> :one"
-                                       " OR #quality <> :published",
+                                       " OR attribute_not_exists(#quality) OR #quality <> :published",
                 "ExpressionAttributeNames": {"#schema": "schemaVersion", "#quality": "qualityStatus"},
                 "ExpressionAttributeValues": {":one": 1, ":published": "PUBLISHED"}}},
             {"Put": {
@@ -317,8 +339,16 @@ class NewsStore:
             "usageComplete": usage_complete, **clean_usage,
             "docsAdded": int(status == "PUBLISHED"), "docsUpdated": 0,
         }
-        digest = hashlib.sha256(_encoded({"receipt": receipt, "document": row})).hexdigest()
+        identity = {
+            "runId": attempt.run_id, "docHash": attempt.doc_hash, "month": attempt.month,
+            "attemptToken": attempt.token, "sourceRevision": attempt.revision,
+            "reservedUsd": attempt.reserved, "leaseUntil": attempt.lease_until,
+        }
+        digest = hashlib.sha256(_encoded(
+            {"identity": identity, "receipt": receipt, "document": row})).hexdigest()
         previous = self._get(attempt.pk, attempt.sk)
+        if previous and any(previous.get(key) != value for key, value in identity.items()):
+            raise StateRejected("STATE_CONFLICT")
         if previous and previous.get("state") != "RUNNING":
             if previous.get("completionDigest") != digest:
                 raise StateRejected("STATE_CONFLICT")
@@ -331,11 +361,15 @@ class NewsStore:
                 "UpdateExpression": "SET #state = :done, completionDigest = :digest,"
                                     " receipt = :receipt, chargedUsd = :charged, finishedAt = :now",
                 "ConditionExpression": "#state = :running AND attemptToken = :token"
-                                       " AND reservedUsd = :reserved AND sourceRevision = :revision",
-                "ExpressionAttributeNames": {"#state": "state"},
+                                       " AND reservedUsd = :reserved AND sourceRevision = :revision"
+                                       " AND #month = :month AND runId = :run AND docHash = :hash"
+                                       " AND leaseUntil = :lease",
+                "ExpressionAttributeNames": {"#state": "state", "#month": "month"},
                 "ExpressionAttributeValues": {
                     ":done": status, ":running": "RUNNING", ":token": attempt.token,
                     ":reserved": attempt.reserved, ":revision": attempt.revision,
+                    ":month": attempt.month, ":run": attempt.run_id, ":hash": attempt.doc_hash,
+                    ":lease": attempt.lease_until,
                     ":digest": digest, ":receipt": receipt, ":charged": charged, ":now": now}}},
             {"Delete": {
                 "TableName": self.table_name,
@@ -352,7 +386,7 @@ class NewsStore:
                 {"Put": {
                     "TableName": self.table_name, "Item": row,
                     "ConditionExpression": "attribute_not_exists(#schema) OR #schema <> :one"
-                                           " OR #quality <> :published",
+                                           " OR attribute_not_exists(#quality) OR #quality <> :published",
                     "ExpressionAttributeNames": {"#schema": "schemaVersion", "#quality": "qualityStatus"},
                     "ExpressionAttributeValues": {":one": 1, ":published": "PUBLISHED"}}},
             ])

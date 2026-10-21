@@ -37,6 +37,17 @@ Refunding unused reservation, storing the terminal receipt, deleting the owned
 claim, and publishing accepted metadata happen in one transaction. Exact
 completion retries return the saved receipt without another charge or refund.
 Conditional row state protects idempotency beyond AWS request-token retention.
+Settlement binds the stored run, document, month, lease, token, revision and
+reservation before selecting any budget row. A reconstructed completion cannot
+move a refund to a different month or extend its original lease. Completion
+digests preserve scalar types while treating equal numeric scales identically.
+
+The injected storage adapter takes `now` from its trusted caller. Callers must
+sample their current clock separately before reservation and settlement; they
+must not accept an external timestamp or reuse a pre-inference timestamp.
+Immutable recorded lease checks prevent lease reconstruction, while actual clock
+freshness remains a caller/deployment obligation. The staged worker samples its
+injected clock for each storage operation; no HTTP timestamp selects this clock.
 
 Store immutable objects at:
 
