@@ -113,7 +113,11 @@ Title and markdown limits are 512 and 60,000 UTF-8 bytes after trimming;
 the complete body is capped at 65,536 bytes. The retry key is 1–128 ASCII letters,
 digits, underscores or hyphens and must match the signed request ID. A transaction
 pins client policy and approval generations while creating the note and a
-30-day receipt. Retry with the same key and exact content after an uncertain
+30-day receipt. Each fresh creation uses a new random document UUID; a retry
+uses the identity stored in its receipt. An expired receipt that still exists
+conflicts. After TTL removes it, reusing the key creates a separate document, so
+orphaned shares of a deleted note cannot authorize the new note.
+Retry with the same key and exact content after an uncertain
 result. A replay returns the same document ID without changing later human edits;
 different bytes conflict, and a deleted document is never recreated by replay.
 Receipts confirm creation rather than returning current document content.

@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
 	"github.com/ttobak/backend/internal/connector"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
@@ -91,7 +92,10 @@ func (s *ConnectorNoteService) Create(ctx context.Context, principal connector.P
 		return empty, ErrForbidden
 	}
 	now := time.Now().UTC()
-	docID := model.ConnectorNoteID(principal.UserID(), principal.ClientID(), principal.RequestID())
+	// A fresh receipt must never reuse a deleted document identity: old email
+	// share rows may intentionally outlive that document. Replays use the
+	// stored receipt identity instead of this candidate.
+	docID := uuid.NewString()
 	digest := sha256.Sum256(raw)
 	return s.repo.CreateConnectorNote(ctx, repository.ConnectorNoteWrite{
 		Principal: principal, Audience: s.audience, Issuer: s.issuer, PolicyGeneration: view.PolicyGeneration,

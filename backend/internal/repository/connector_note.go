@@ -44,12 +44,13 @@ func (r *DynamoDBRepository) noteCondition(pk, sk string, condition expression.C
 func (r *DynamoDBRepository) CreateConnectorNote(ctx context.Context, in ConnectorNoteWrite) (model.ConnectorNoteReceipt, error) {
 	empty := model.ConnectorNoteReceipt{}
 	p, doc := in.Principal, in.Document
+	candidate, candidateErr := uuid.Parse(doc.DocID)
 	hash, err := hex.DecodeString(in.ArgumentsHash)
 	if err != nil || len(hash) != 32 || hex.EncodeToString(hash) != in.ArgumentsHash ||
 		p.Require("api.document.putDocument", "ttobak-api-bridge", time.Now().Unix()) != nil ||
 		p.ApprovalGeneration() <= 0 || !validConnectorBinding(in.Audience, in.Issuer) ||
 		in.PolicyGeneration <= 0 || in.PolicyGeneration > maxConnectorInteger ||
-		doc.PK != model.PrefixUser+p.UserID() || doc.DocID != model.ConnectorNoteID(p.UserID(), p.ClientID(), p.RequestID()) ||
+		doc.PK != model.PrefixUser+p.UserID() || candidateErr != nil || candidate.Version() != 4 || candidate.String() != doc.DocID ||
 		doc.SK != model.PrefixDoc+doc.DocID || doc.SourceUserID != p.UserID() || doc.AccountID != "" ||
 		doc.DocType != "note" || doc.EntityType != model.EntityTypeUserDoc || doc.FileKey != "" || doc.PublicShareToken != "" {
 		return empty, connector.ErrCapabilityDenied
@@ -90,13 +91,14 @@ func (r *DynamoDBRepository) CreateConnectorNote(ctx context.Context, in Connect
 			return empty, false, nil
 		}
 		expiry, expiryErr := connectorInteger(row.Item, "pendingShareExpiresAt")
+		receiptDocID := connectorText(row.Item, "docId")
 		if expiryErr != nil || expiry <= time.Now().Unix() || connectorText(row.Item, "PK") != doc.PK ||
 			connectorText(row.Item, "SK") != receiptSK || connectorText(row.Item, "operation") != p.Operation() ||
-			connectorText(row.Item, "argumentsHash") != in.ArgumentsHash || connectorText(row.Item, "docId") != doc.DocID {
+			connectorText(row.Item, "argumentsHash") != in.ArgumentsHash || !model.ValidConnectorNoteReceiptID(receiptDocID) {
 			return empty, true, ErrConditionFailed
 		}
-		docCheck, err := r.noteCondition(doc.PK, doc.SK,
-			expression.Name("docId").Equal(expression.Value(doc.DocID)).
+		docCheck, err := r.noteCondition(doc.PK, model.PrefixDoc+receiptDocID,
+			expression.Name("docId").Equal(expression.Value(receiptDocID)).
 				And(expression.Name("sourceUserId").Equal(expression.Value(p.UserID()))).
 				And(expression.Name("entityType").Equal(expression.Value(model.EntityTypeUserDoc))))
 		if err != nil {
@@ -104,7 +106,7 @@ func (r *DynamoDBRepository) CreateConnectorNote(ctx context.Context, in Connect
 		}
 		receiptCheck, err := r.noteCondition(doc.PK, receiptSK,
 			expression.Name("argumentsHash").Equal(expression.Value(in.ArgumentsHash)).
-				And(expression.Name("docId").Equal(expression.Value(doc.DocID))).
+				And(expression.Name("docId").Equal(expression.Value(receiptDocID))).
 				And(expression.Name("operation").Equal(expression.Value(p.Operation()))).
 				And(expression.Name("pendingShareExpiresAt").Equal(expression.Value(expiry))))
 		if err != nil {
@@ -120,7 +122,7 @@ func (r *DynamoDBRepository) CreateConnectorNote(ctx context.Context, in Connect
 		if err != nil {
 			return empty, true, connectorWriteError(err)
 		}
-		return model.ConnectorNoteReceipt{DocID: doc.DocID, Replayed: true}, true, nil
+		return model.ConnectorNoteReceipt{DocID: receiptDocID, Replayed: true}, true, nil
 	}
 	if receipt, found, err := replay(); found || err != nil {
 		return receipt, err
