@@ -2097,6 +2097,8 @@ def load_tests(loader, tests, pattern):
     tests.addTests(loader.loadTestsFromName("test_news_enrichment"))
     tests.addTests(loader.loadTestsFromName("test_news_discovery"))
     tests.addTests(loader.loadTestsFromName("test_news_store"))
+    tests.addTests(loader.loadTestsFromName("test_news_worker"))
+    tests.addTests(loader.loadTestsFromName("test_news_model"))
     return tests
 
 

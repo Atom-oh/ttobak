@@ -213,6 +213,7 @@ def discover(source, gateway, published_lookup, now, run_id, *, max_candidates=2
     for item in candidates:
         item["corroboratingSources"] = item.get("corroboratingSources", [])[:2]
         item["sourceRevision"] = result["sourceRevision"]
+        item["freshnessDays"] = result["freshnessDays"]
         if len(result["candidates"]) >= max_candidates:
             result["budgetRejected"] += 1
             continue
