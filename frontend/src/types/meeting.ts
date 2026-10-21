@@ -389,12 +389,15 @@ export interface ExportResponse {
 
 export interface CrawlerSource {
   sourceId: string;
+  ownerId?: string;
   sourceName: string;
   subscribers: string[];
   awsServices: string[];
   newsQueries: string[];
   newsSources: string[];
   customUrls: string[];
+  /** Public alternate names used only to widen news search coverage. */
+  aliases?: string[];
   schedule: string;
   lastCrawledAt: string;
   status: string;
@@ -436,6 +439,21 @@ export interface CrawlHistory {
   docsUpdated: number;
   errors: string[];
   duration: number;
+  // Optional publication diagnostics; absent from legacy/tech history.
+  runId?: string;
+  status?: string;
+  queryCount?: number;
+  invalidRejected?: number;
+  staleRejected?: number;
+  duplicateRejected?: number;
+  budgetRejected?: number;
+  attemptCount?: number;
+  expiredAttempts?: number;
+  unknownAttempts?: number;
+  chargedUsd?: string;
+  usageComplete?: boolean;
+  workerOutcomes?: Record<string, number>;
+  fetchWarnings?: string[];
 }
 
 export interface ChatMessage {
