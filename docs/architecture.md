@@ -180,8 +180,8 @@ reads before returning stored excerpts. See [workflow](features/sa-meeting-workf
 
 ## New processing and reading contracts
 
-The news enrichment replacement starts with staged, unused candidate and article
-modules in `backend/python/crawler/news_pipeline.py` and `article_fetcher.py`.
+The news enrichment replacement starts with staged, unused candidate, article
+and synthesis modules under `backend/python/crawler/`.
 Public-source query expansion and URL/event identity are bounded. The article
 identity rejects undecodable UTF-8 query octets instead of merging replacement
 characters; malformed group members are isolated. Canonical metadata must retain
@@ -197,9 +197,17 @@ reject oversized, partial, paywalled or script-only input instead of publishing
 snippet-based summaries. Scoped article/container text and nested trailing corrections
 are retained even without paragraph tags; the paywall scan is independent of body
 boilerplate exclusion. Nonrepresentable UTC dates remain unknown freshness.
-These modules do not activate a scheduler, change legacy
-news results or establish production acceptance. Enrichment, conditional
-publication and consumer rollout remain separate delivery stages.
+`news_enrichment.py` accepts only bounded schema-v1
+objects from complete model responses. Each evidence URL/excerpt/date binds to the
+same fetched source; facts reference validated evidence, and rejected attempts
+retain token accounting. One repair may reuse the complete original sources.
+`news_renderer.py` escapes model prose and link delimiters, and never receives
+raw article bodies. Citation provenance checks do not prove semantic correctness.
+Prices are caller-supplied estimates; absent rates do not mean zero cost.
+Terms/diagrams remain unavailable until their schema/rendering contracts land.
+These modules do not activate a scheduler, change legacy news results or establish
+production acceptance. Conditional publication and consumer rollout remain
+separate delivery stages.
 
 Action-item analysis has its own MEETING#/ANALYSIS#actionItems state. The summary
 pipeline runs it inline; authorized editor retries send ActionItemsRequested to
