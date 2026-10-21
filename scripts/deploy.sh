@@ -2,9 +2,6 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-BUCKET="ttobak-site-180294183052-ap-northeast-2"
-DIST_ID="E3BPV9VFNI1H2S"
-
 # Usage: ./deploy.sh [target...]
 # Target: frontend (default). Infrastructure uses reviewed, explicit stack deploys.
 # Options: --build  Run build before deploying
@@ -30,8 +27,21 @@ deploy_infra() {
 
 deploy_frontend() {
   echo "==> Deploying frontend to S3 + CloudFront..."
+  local deployment bucket distribution
+  deployment=$(aws cloudformation describe-stacks \
+    --stack-name TtobakFrontendStack --region "${AWS_REGION:-ap-northeast-2}" \
+    --query 'Stacks[0].Outputs' --output json | python3 -c '
+import json,re,sys
+rows=json.load(sys.stdin)
+values={row["OutputKey"]:row["OutputValue"] for row in rows}
+bucket=values.get("SiteBucketName","")
+distribution=values.get("DistributionId","")
+if not re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]",bucket) or not re.fullmatch(r"[A-Z0-9]+",distribution):
+    sys.exit("Frontend stack must expose valid SiteBucketName and DistributionId outputs")
+print(bucket,distribution)')
+  read -r bucket distribution <<< "$deployment"
   cd "$ROOT/frontend"
-  S3_BUCKET="$BUCKET" CF_DISTRIBUTION="$DIST_ID" bash "$ROOT/scripts/publish-frontend.sh" out
+  S3_BUCKET="$bucket" CF_DISTRIBUTION="$distribution" bash "$ROOT/scripts/publish-frontend.sh" out
   echo "  Frontend deploy complete"
 }
 
