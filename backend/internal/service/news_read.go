@@ -224,8 +224,27 @@ func validNewsPublication(row map[string]types.AttributeValue, sourceID, docHash
 			return false
 		}
 	}
-	if _, err := newsText(row["title"], "", 300, false); err != nil {
+	if !validNewsTitle(row["title"]) {
 		return false
+	}
+	return true
+}
+
+// Match news_enrichment._string's title contract without changing the stricter
+// source-fingerprint text contract: padded titles and line whitespace are valid.
+func validNewsTitle(value types.AttributeValue) bool {
+	title, ok := value.(*types.AttributeValueMemberS)
+	if !ok || !utf8.ValidString(title.Value) {
+		return false
+	}
+	length := utf8.RuneCountInString(strings.TrimSpace(title.Value))
+	if length < 1 || length > 300 {
+		return false
+	}
+	for _, char := range title.Value {
+		if char < 32 && char != '\n' && char != '\r' && char != '\t' {
+			return false
+		}
 	}
 	return true
 }
@@ -344,7 +363,7 @@ func (s *InsightsService) currentNewsList(ctx context.Context, docs []model.Craw
 		}
 		selection := newsKeys(doc.SourceID, doc.DocHash)
 		row, config := rows[selection[0]], rows[selection[1]]
-		if len(row) == 0 || len(config) == 0 || newsString(config, "status") == "disabled" {
+		if len(row) == 0 {
 			continue
 		}
 		if isVersionedNews(row) && !currentNewsPublication(row, config, doc.SourceID, doc.DocHash) {
