@@ -2,6 +2,12 @@ import copy
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import json
+import importlib.util
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import signal
+import threading
+import time
+from urllib.request import urlopen
 import os
 from pathlib import Path
 import tempfile
@@ -9,6 +15,7 @@ import unittest
 from unittest import mock
 
 import boto3
+from botocore.response import StreamingBody
 from moto import mock_aws
 
 import news_legacy_archive as archive
@@ -57,6 +64,53 @@ class LocalArchiveTests(unittest.TestCase):
         self.assertEqual(result["nested"]["L"][:2], [{"NULL": True}, {"BOOL": True}])
         self.assertEqual(archive.encode(result), archive.encode(archive.typed_row(value)))
 
+    def test_deadline_interrupts_live_dripping_http_body_and_releases_lock(self):
+        stop = threading.Event()
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Length", "10000")
+                self.end_headers()
+                try:
+                    while not stop.wait(0.01):
+                        self.wfile.write(b"x")
+                        self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+            def log_message(self, *_args):
+                pass
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        previous = signal.getsignal(signal.SIGALRM)
+        started = time.monotonic()
+        try:
+            with self.assertRaisesRegex(archive.ArchiveRejected, "RESUME_TIME_BUDGET"):
+                with archive.wall_deadline(0.2), self.store.lock():
+                    with urlopen(f"http://127.0.0.1:{server.server_port}", timeout=1) as response:
+                        with StreamingBody(response, 10000) as body:
+                            body.read(10000)
+            self.assertLess(time.monotonic() - started, 2)
+            self.assertEqual(signal.getsignal(signal.SIGALRM), previous)
+            self.assertEqual(signal.getitimer(signal.ITIMER_REAL), (0.0, 0.0))
+            with self.store.lock():
+                pass
+        finally:
+            stop.set()
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_existing_alarm_is_not_clobbered(self):
+        signal.setitimer(signal.ITIMER_REAL, 30)
+        try:
+            with self.assertRaisesRegex(archive.ArchiveRejected, "EXISTING_PROCESS_TIMER"):
+                with archive.wall_deadline(1):
+                    self.fail("existing timer was replaced")
+            self.assertGreater(signal.getitimer(signal.ITIMER_REAL)[0], 25)
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+
     def test_archive_directory_must_be_private(self):
         os.chmod(self.temp.name, 0o755)
         with self.assertRaises(archive.ArchiveRejected):
@@ -91,12 +145,13 @@ class MigrationTests(unittest.TestCase):
             for name in ("ttobak-crawler-news", "ttobak-news-worker", "ttobak-news-discover")}
         self.functions.get_function_configuration.side_effect = lambda FunctionName: copy.deepcopy(self.configs[FunctionName])
         self.binding = {"accountId": "123456789012", "region": "us-east-1", "table": "test-table",
-                        "sourceBucket": "legacy-news-test", "legacyWriterCodeSha256": "reviewed-code"}
+                        "sourceBucket": "legacy-news-test", "legacyWriterCodeSha256": "reviewed-code",
+                        "expectedLegacyCount": 1}
         self.local = archive.LocalArchive(self.temp.name)
         self.migration = self.new_migration()
         self.key = {"PK": "CRAWLER#은행", "SK": "DOC#0123456789abcdef"}
         self.object_key = "shared/news/은행/0123456789abcdef.md"
-        self.row = dict(self.key, docType="news", docHash="0123456789abcdef",
+        self.row = dict(self.key, type="news", docHash="0123456789abcdef",
                         s3Key=self.object_key, title="기존 뉴스", score=Decimal("0.5"))
         self.table.put_item(Item=self.row)
         self.table.put_item(Item={"PK": self.key["PK"], "SK": "CONFIG", "sourceId": "은행",
@@ -105,6 +160,89 @@ class MigrationTests(unittest.TestCase):
 
     def new_migration(self):
         return archive.Migration(self.table, self.s3, self.functions, self.local, self.binding, lambda: self.now)
+
+    def test_actual_legacy_producer_row_is_selected_and_preserved(self):
+        path = Path(__file__).resolve().parents[1] / "backend/python/crawler/news_crawler.py"
+        spec = importlib.util.spec_from_file_location("archive_test_news_producer", path)
+        producer = importlib.util.module_from_spec(spec)
+        with mock.patch.dict(os.environ, {"AWS_DEFAULT_REGION": "us-east-1"}):
+            spec.loader.exec_module(producer)
+        with mock.patch.object(producer, "table", self.table):
+            producer._write_metadata("은행", "0123456789abcdef", "https://example.test/news",
+                                     "기존 뉴스", "2026-10-20")
+        row = self.table.get_item(Key=self.key, ConsistentRead=True)["Item"]
+        self.assertEqual(row["type"], "news")
+        self.assertNotIn("docType", row)
+        self.assertEqual(self.migration.run(True)["legacyCount"], 1)
+        entry = self.local.resume()["entries"][0]
+        self.assertEqual(json.loads(self.local.get(entry["rowSha256"], 10000)), archive.typed_row(row))
+
+    def test_zero_and_mismatched_inventory_cannot_complete(self):
+        for expected in (0, -1, 10001, True, None):
+            with self.subTest(expected=expected), mock.patch.dict(self.binding, {"expectedLegacyCount": expected}):
+                with self.assertRaisesRegex(archive.ArchiveRejected, "INVALID_EXPECTED"):
+                    self.new_migration()
+        for expected in (2, 986):
+            with self.subTest(expected=expected), mock.patch.dict(self.binding, {"expectedLegacyCount": expected}):
+                with self.assertRaisesRegex(archive.ArchiveRejected, "COUNT_MISMATCH"):
+                    self.new_migration().run(True)
+        self.table.delete_item(Key=self.key)
+        with self.assertRaisesRegex(archive.ArchiveRejected, "COUNT_MISMATCH"):
+            self.migration.run(True)
+        self.assertIsNone(self.local.resume())
+
+    def test_declared_news_with_missing_canonical_type_is_not_silently_skipped(self):
+        row = dict(self.row, GSI4PK="DOC#news")
+        del row["type"]
+        self.table.put_item(Item=row)
+        with self.assertRaisesRegex(archive.ArchiveRejected, "INVALID_LEGACY_IDENTITY"):
+            self.migration.run(True)
+
+    def test_resumed_final_verification_rechecks_earlier_rows_and_archive_blobs(self):
+        # Interrupt an actual reconciliation checkpoint, then change a member of
+        # the verified prefix. Each independent mutation must prevent completion.
+        for number in range(25):
+            row = dict(self.row, SK=f"DOC#{number:016x}", docHash=f"{number:016x}",
+                       s3Key=f"shared/news/은행/{number:016x}.md")
+            self.table.put_item(Item=row)
+            self.s3.put_object(Bucket="legacy-news-test", Key=row["s3Key"], Body=f"row {number}".encode())
+        self.binding["expectedLegacyCount"] = 26
+        real_checkpoint = self.local.checkpoint
+        def interrupt(state):
+            sha = real_checkpoint(state)
+            if state["phase"] == "RECONCILE" and state["verifiedCount"] == 25:
+                raise OSError("interrupted after verified prefix")
+            return sha
+        with mock.patch.object(self.local, "checkpoint", side_effect=interrupt):
+            with self.assertRaisesRegex(OSError, "verified prefix"):
+                self.new_migration().run(True)
+        state = self.local.resume()
+        self.assertEqual(state["verifiedCount"], 25)
+        entry = state["entries"][0]
+        original_row = self.table.get_item(Key=entry["key"])["Item"]
+        original_body = self.local.get(entry["bodySha256"], 100)
+        body_path = Path(self.temp.name) / entry["bodySha256"]
+        for mutation in ("row", "object", "archive"):
+            with self.subTest(mutation=mutation):
+                self.local.checkpoint(state)
+                if mutation == "row":
+                    self.table.put_item(Item=dict(original_row, title="changed"))
+                elif mutation == "object":
+                    changed = self.s3.put_object(Bucket="legacy-news-test", Key=entry["sourceKey"], Body=b"changed")
+                else:
+                    body_path.unlink()
+                try:
+                    with self.assertRaises((archive.ArchiveRejected, FileNotFoundError)):
+                        self.new_migration().run(True)
+                    self.assertNotEqual(self.local.resume()["phase"], "COMPLETE")
+                finally:
+                    if mutation == "row":
+                        self.table.put_item(Item=original_row)
+                    elif mutation == "object":
+                        self.s3.delete_object(Bucket="legacy-news-test", Key=entry["sourceKey"], VersionId=changed["VersionId"])
+                    else:
+                        self.local.put(original_body)
+        self.assertEqual(self.new_migration().run(True)["legacyCount"], 26)
 
     def test_plan_has_no_archive_content_or_production_writes(self):
         result = self.migration.run()
@@ -160,13 +298,13 @@ class MigrationTests(unittest.TestCase):
         with self.assertRaisesRegex(archive.ArchiveRejected, "SNAPSHOT_CHANGED"):
             self.new_migration().run(True)
         self.table.delete_item(Key=self.key)
-        with self.assertRaisesRegex(archive.ArchiveRejected, "RESUME_BINDING_CHANGED"):
+        with self.assertRaisesRegex(archive.ArchiveRejected, "COUNT_MISMATCH"):
             self.new_migration().run(True)
 
     def test_versioned_tombstone_and_future_schema_are_never_reclassified(self):
         for number, fields in enumerate(({"schemaVersion": 1, "qualityStatus": "DELETED"},
                                         {"schemaVersion": 99}, {"qualityStatus": "PUBLISHED"})):
-            self.table.put_item(Item={"PK": self.key["PK"], "SK": f"DOC#{number:016x}", "docType": "news", **fields})
+            self.table.put_item(Item={"PK": self.key["PK"], "SK": f"DOC#{number:016x}", "type": "news", **fields})
         result = self.migration.run(True)
         self.assertEqual(result["legacyCount"], 1)
         self.assertEqual(result["protectedCount"], 3)

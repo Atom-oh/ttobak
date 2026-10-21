@@ -176,18 +176,26 @@ Use the actual deployed legacy code SHA and a private persistent directory:
 python3 scripts/news_legacy_archive.py \
   --account-id 180294183052 --region ap-northeast-2 --table ttobak-main \
   --source-bucket ttobak-kb-180294183052 \
+  --expected-legacy-count 986 \
   --legacy-writer-code-sha256 "$REVIEWED_LEGACY_CODE_SHA256" \
   --archive "$PERSISTENT_NEWS_ARCHIVE"
 # Repeat the same command with --apply to archive; rerun identically to resume.
 ```
 
 Selection uses bounded, strongly consistent table pages, not an eventually
-consistent GSI as authorization or completeness evidence. The command permits
+consistent GSI as authorization or completeness evidence. It selects the canonical
+`type: news` field and declared `GSI4PK: DOC#news` identities; malformed legacy
+identities fail validation. Bind the independently inventoried positive count
+with `--expected-legacy-count` (986 in the 2026-10-21 inventory). A zero or changed
+count cannot complete; investigate drift before starting a new archive.
+The command permits
 at most 10,000 news identities, 1,000 scan pages, 2 MiB per body, 1 MiB per typed
-metadata object, and ten minutes per invocation. Capture and reconciliation
-have separate resumable checkpoints. A final scan checks the selected identities;
-every captured canonical row/object and every current source configuration must
-still match. Changed, missing, corrupt or unreadable data stops completion.
+metadata object, and one hour per CLI invocation. Run on POSIX in the main thread;
+a process alarm bounds streaming network reads as well as the cooperative work
+checks. Capture checkpoints are resumable. Final reconciliation restarts from the
+first entry on every invocation and must finish in that invocation; it never trusts
+a previously verified prefix. It rechecks every local archive blob, canonical
+row/object and source configuration, then scans the selected identities again. Changed, missing, corrupt or unreadable data stops completion.
 Versioned, tombstoned and unknown-schema rows are protected and counted separately.
 The command makes no production write, model call, data deletion or mode change.
 

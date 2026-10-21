@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import stat
 import sys
 import tempfile
@@ -29,13 +30,30 @@ MAX_ROWS = 10000
 MAX_PAGES = 1000
 MAX_BODY = 2 * 1024 * 1024
 MAX_METADATA = 1024 * 1024
-MAX_SECONDS = 600
+MAX_SECONDS = 3600
 MAX_ARCHIVE = 16 * 1024 * 1024
 PREFIX = "shared/news/"
 
 
 class ArchiveRejected(Exception):
     pass
+
+
+@contextmanager
+def wall_deadline(seconds):
+    """Bound CLI network reads on POSIX, including continuously arriving bytes."""
+    if signal.getitimer(signal.ITIMER_REAL) != (0.0, 0.0):
+        raise ArchiveRejected("EXISTING_PROCESS_TIMER")
+    previous = signal.getsignal(signal.SIGALRM)
+    def expired(_signum, _frame):
+        raise ArchiveRejected("RESUME_TIME_BUDGET")
+    signal.signal(signal.SIGALRM, expired)
+    try:
+        signal.setitimer(signal.ITIMER_REAL, seconds)
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
 
 
 def encode(value):
@@ -75,7 +93,7 @@ def legacy_identity(row):
             or not isinstance(sk, str) or not re.fullmatch(r"DOC#[0-9a-f]{16}", sk)
             or row.get("docHash", sk[4:]) != sk[4:]
             or row.get("sourceId", source) != source
-            or row.get("docType") != "news"
+            or row.get("type") != "news"
             or "schemaVersion" in row or "qualityStatus" in row):
         raise ArchiveRejected("INVALID_LEGACY_IDENTITY")
     key = f"{PREFIX}{source}/{sk[4:]}.md"
@@ -181,6 +199,9 @@ class Migration:
     def __init__(self, table, s3, functions, archive, binding, now=None):
         self.table, self.s3, self.functions = table, s3, functions
         self.archive, self.binding = archive, binding
+        expected = binding.get("expectedLegacyCount")
+        if type(expected) is not int or not 1 <= expected <= MAX_ROWS:
+            raise ArchiveRejected("INVALID_EXPECTED_LEGACY_COUNT")
         self.now = now or (lambda: datetime.now(timezone.utc))
         self.deadline = time.monotonic() + MAX_SECONDS
 
@@ -217,7 +238,8 @@ class Migration:
         pages = self.table.meta.client.get_paginator("scan").paginate(
             TableName=self.table.name, ConsistentRead=True,
             FilterExpression=Attr("PK").begins_with("CRAWLER#")
-                             & Attr("SK").begins_with("DOC#") & Attr("docType").eq("news"),
+                             & Attr("SK").begins_with("DOC#")
+                             & (Attr("type").eq("news") | Attr("GSI4PK").eq("DOC#news")),
             ProjectionExpression="PK, SK, schemaVersion, qualityStatus",
             PaginationConfig={"PageSize": 100})
         for index, page in enumerate(pages, 1):
@@ -285,6 +307,8 @@ class Migration:
     def run(self, apply=False):
         writers = self.writer_state()
         keys, protected = self.scan()
+        if len(keys) != self.binding["expectedLegacyCount"]:
+            raise ArchiveRejected("EXPECTED_LEGACY_COUNT_MISMATCH")
         if not apply:
             return {"legacyCount": len(keys), "protectedCount": protected, "productionWrites": 0}
         state = self.archive.resume()
@@ -312,15 +336,13 @@ class Migration:
                 if state["phase"] == "CAPTURE":
                     self.archive.checkpoint(state)
                 print(f"Archived and checked {index + 1}/{len(keys)} legacy rows", flush=True)
-        if state["phase"] in ("CAPTURE", "COMPLETE"):
-            state.update(phase="RECONCILE", verifiedCount=0)
-            self.archive.checkpoint(state)
-        if (state["phase"] != "RECONCILE" or type(state["verifiedCount"]) is not int
-                or not 0 <= state["verifiedCount"] <= len(keys)):
+        if state["phase"] not in ("CAPTURE", "RECONCILE", "COMPLETE"):
             raise ArchiveRejected("INVALID_JOURNAL")
-        # Reconcile the complete selection and every object again. A change
-        # aborts completion; it never becomes a fabricated terminal rejection.
-        for index in range(state["verifiedCount"], len(keys)):
+        # Capture is resumable. Final verification must finish within ONE
+        # invocation; an earlier verified prefix grants no trust on resume.
+        state.update(phase="RECONCILE", verifiedCount=0)
+        self.archive.checkpoint(state)
+        for index in range(len(keys)):
             entry = state["entries"][index]
             for field, limit in (("rowSha256", MAX_METADATA), ("configSha256", MAX_METADATA),
                                  ("bodySha256", MAX_BODY)):
@@ -356,20 +378,28 @@ def main():
     parser.add_argument("--table", required=True)
     parser.add_argument("--source-bucket", required=True)
     parser.add_argument("--legacy-writer-code-sha256", required=True)
+    parser.add_argument("--expected-legacy-count", required=True, type=int)
     parser.add_argument("--archive", required=True)
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args()
-    session = boto3.Session(region_name=args.region)
-    config = Config(connect_timeout=3, read_timeout=10, retries={"total_max_attempts": 1})
-    if session.client("sts", config=config).get_caller_identity()["Account"] != args.account_id:
-        raise ArchiveRejected("WRONG_AWS_ACCOUNT")
-    binding = {"accountId": args.account_id, "region": args.region, "table": args.table,
-               "sourceBucket": args.source_bucket, "legacyWriterCodeSha256": args.legacy_writer_code_sha256}
-    archive = LocalArchive(args.archive)
-    with archive.lock():
-        result = Migration(session.resource("dynamodb", config=config).Table(args.table),
-                           session.client("s3", config=config), session.client("lambda", config=config),
-                           archive, binding).run(args.apply)
+    if not 1 <= args.expected_legacy_count <= MAX_ROWS:
+        raise ArchiveRejected("INVALID_EXPECTED_LEGACY_COUNT")
+    # SDK read_timeout only bounds inactivity. A POSIX process timer also
+    # interrupts a streaming response that continually sends small chunks.
+    with wall_deadline(MAX_SECONDS):
+        session = boto3.Session(region_name=args.region)
+        config = Config(connect_timeout=3, read_timeout=10, retries={"total_max_attempts": 1})
+        if session.client("sts", config=config).get_caller_identity()["Account"] != args.account_id:
+            raise ArchiveRejected("WRONG_AWS_ACCOUNT")
+        binding = {"accountId": args.account_id, "region": args.region, "table": args.table,
+                   "sourceBucket": args.source_bucket,
+                   "legacyWriterCodeSha256": args.legacy_writer_code_sha256,
+                   "expectedLegacyCount": args.expected_legacy_count}
+        archive = LocalArchive(args.archive)
+        with archive.lock():
+            result = Migration(session.resource("dynamodb", config=config).Table(args.table),
+                               session.client("s3", config=config), session.client("lambda", config=config),
+                               archive, binding).run(args.apply)
     print(json.dumps(result, sort_keys=True))
     return 0
 
