@@ -31,6 +31,7 @@ Markdown for English language and historical/current status.
 | [WebSocket runtime](runbooks/websocket-runtime.md) | CloudFront ingress, secret rotation, real acceptance | Frontend/Gateway stacks and ws-authorizer |
 | [Pipeline recovery](runbooks/pipeline-failure-recovery.md) | Failure queues, alarm routing and controlled replay | GatewayStack, failure construct and replay tool |
 | [HTTP origin proof migration](runbooks/http-origin-secret-migration.md) | Consumer contract and coordinated rotation gates | Go/QA/MCP origin verifiers and deployment configuration |
+| [Connector capabilities](decisions/ADR-053-connector-capability-private-delegation.md) | Staged operation policy and private-delegation delivery gates | Versioned inventory, generated tables and contract tests |
 
 ## Feature workflows
 
