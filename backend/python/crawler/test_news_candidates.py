@@ -146,6 +146,10 @@ class TestCandidateDiscovery(unittest.TestCase):
     def test_is_within_days_unparseable_fails_closed(self):
         now = datetime(2026, 8, 9, tzinfo=timezone.utc)
         self.assertFalse(news_pipeline.is_within_days("not-a-date", 7, now))
+        for value in ("0001-01-01T00:00:00+14:00", "9999-12-31T23:59:59-14:00"):
+            with self.subTest(value=value):
+                self.assertIsNone(news_pipeline.parse_published_at(value))
+                self.assertFalse(news_pipeline.is_within_days(value, 7, now))
 
     def test_exact_url_dedup_identity_is_stable_for_same_canonical_url(self):
         a = news_pipeline.document_hash(

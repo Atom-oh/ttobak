@@ -311,10 +311,13 @@ def _decode_body(raw, headers):
 
 
 _SKIP_TAGS = {"script", "style", "nav", "header", "footer", "aside", "form", "noscript"}
+_INVISIBLE_TAGS = {"script", "style", "noscript"}
 _BLOCK_TAGS = {"p", "li", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote"}
+_SCOPED_CONTAINERS = {"article", "main", "div", "section", "td", "th", "pre",
+                      "figcaption", "dt", "dd"}
 _VISIBLE_BREAKS = _BLOCK_TAGS | {
     "br", "div", "article", "main", "section", "ul", "ol", "dl", "dt", "dd",
-    "table", "tr", "td", "th", "hr", "pre",
+    "table", "tr", "td", "th", "hr", "pre", "form", "aside", "header", "footer", "nav",
 }
 _VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input",
               "link", "meta", "param", "source", "track", "wbr"}
@@ -328,7 +331,7 @@ _PAYWALL_MARKERS = (
 class _ArticleExtractor(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
-        self.stack = []  # (tag, hidden, article scope)
+        self.stack = []  # (tag, excluded from body, article scope, visually hidden)
         self.blocks = []  # (article scope, text)
         self.text = []
         self.block_scope = False
@@ -358,17 +361,18 @@ class _ArticleExtractor(HTMLParser):
         if tag == "meta" and (attrs.get("property") or attrs.get("name")) in (
                 "article:published_time", "datePublished"):
             self.published_at = attrs.get("content") or ""
-        parent_hidden = bool(self.stack and self.stack[-1][1])
         marker = f"{attrs.get('class', '')} {attrs.get('id', '')}".lower()
-        hidden = (parent_hidden or tag in _SKIP_TAGS or "cookie" in marker
-                  or "consent" in marker or "hidden" in attrs
-                  or attrs.get("aria-hidden") == "true")
+        excluded = ("cookie" in marker or "consent" in marker or "hidden" in attrs
+                    or attrs.get("aria-hidden") == "true")
+        hidden = bool(self.stack and self.stack[-1][1]) or tag in _SKIP_TAGS or excluded
+        visually_hidden = (bool(self.stack and self.stack[-1][3])
+                           or tag in _INVISIBLE_TAGS or excluded)
         scope = bool(self.stack and self.stack[-1][2]) or tag in ("article", "main")
-        if not hidden and tag in _VISIBLE_BREAKS:
+        if not visually_hidden and tag in _VISIBLE_BREAKS:
             self.visible_text.append(" ")
         if tag in ("article", "main") and not hidden:
             self.has_scope = True
-        if tag in _BLOCK_TAGS and not hidden:
+        if not hidden and (tag in _BLOCK_TAGS or scope and tag in _SCOPED_CONTAINERS):
             self._flush()
             self.active_block = tag
             self.block_scope = scope
@@ -377,7 +381,7 @@ class _ArticleExtractor(HTMLParser):
         if tag not in _VOID_TAGS:
             if len(self.stack) >= 256:
                 raise FetchRejected("HTML_TOO_DEEP")
-            self.stack.append((tag, hidden, scope))
+            self.stack.append((tag, hidden, scope, visually_hidden))
 
     def handle_startendtag(self, tag, attrs):
         self.handle_starttag(tag, attrs)
@@ -388,22 +392,24 @@ class _ArticleExtractor(HTMLParser):
         for index in range(len(self.stack) - 1, -1, -1):
             if self.stack[index][0] == tag:
                 closing = self.stack[index:]
-                if any(t in _VISIBLE_BREAKS and not hidden for t, hidden, _ in closing):
+                if any(t in _VISIBLE_BREAKS and not hidden for t, _, _, hidden in closing):
                     self.visible_text.append(" ")
-                if self.active_block and any(t == self.active_block for t, _, _ in closing):
+                if self.active_block and any(t == self.active_block for t, _, _, _ in closing):
                     self._flush()
                 del self.stack[index:]
                 if self.active_block is None:
-                    for parent, hidden, scope in reversed(self.stack):
-                        if parent in _BLOCK_TAGS and not hidden:
+                    for parent, hidden, scope, _ in reversed(self.stack):
+                        if not hidden and (parent in _BLOCK_TAGS
+                                           or scope and parent in _SCOPED_CONTAINERS):
                             self.active_block = parent
                             self.block_scope = scope
                             break
                 break
 
     def handle_data(self, data):
-        if self.stack and not self.stack[-1][1]:
+        if self.stack and not self.stack[-1][3]:
             self.visible_text.append(data)
+        if self.stack and not self.stack[-1][1]:
             if self.stack[-1][0] == "title":
                 self.title.append(data)
             if self.active_block:

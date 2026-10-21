@@ -320,6 +320,35 @@ class TestArticleNormalization(unittest.TestCase):
         body = fetcher.normalize_html(html, "https://example.com/a").body
         self.assertIn("Initial claim\n\nSupporting detail\n\nTrailing correction", body)
 
+    def test_boilerplate_containers_still_participate_in_paywall_detection(self):
+        for tag in ("form", "aside", "header", "footer", "nav"):
+            for notice in ("subscribe to continue reading", "로그인 후 이용"):
+                with self.subTest(tag=tag, notice=notice):
+                    extra = f"<{tag}><div>{notice}</div></{tag}>"
+                    with self.assertRaisesRegex(fetcher.FetchRejected, "PAYWALL"):
+                        fetcher.normalize_html(article_html(extra=extra).decode(),
+                                               "https://example.com/a")
+        for attr in ("hidden", 'aria-hidden="true"', 'class="cookie-banner"'):
+            extra = f"<form {attr}><div>subscribe to continue reading</div></form>"
+            self.assertIn("기사 3", fetcher.normalize_html(
+                article_html(extra=extra).decode(), "https://example.com/a").body)
+
+    def test_direct_scoped_text_and_container_corrections_are_preserved(self):
+        for container in ("div", "section", "td", "figcaption", "pre"):
+            correction = (f"Direct introduction<{container}>Correction before "
+                          "<span>inline detail</span><p>Nested paragraph</p>"
+                          f"Correction after</{container}>Direct closing statement")
+            html = article_html().decode().replace("</article>", correction + "</article>")
+            with self.subTest(container=container):
+                body = fetcher.normalize_html(html, "https://example.com/a").body
+                for text in ("Direct introduction", "Correction before inline detail",
+                             "Nested paragraph", "Correction after", "Direct closing statement"):
+                    self.assertIn(text, body)
+                positions = [body.index(text) for text in ("Direct introduction",
+                             "Correction before", "Nested paragraph",
+                             "Correction after", "Direct closing statement")]
+                self.assertEqual(positions, sorted(positions))
+
     def test_invalid_canonical_keeps_normalized_fallback_identity(self):
         for href in ("https://other.example/a", "javascript:alert(1)", "https://[invalid"):
             html = article_html(head=f'<link href="{href}" rel="canonical">').decode()
