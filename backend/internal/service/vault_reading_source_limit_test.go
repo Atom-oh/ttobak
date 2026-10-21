@@ -62,10 +62,10 @@ func TestVaultReadingBoundedSourcesThroughFallbackAndFreshness(t *testing.T) {
 			}, nil
 		}),
 	})
-	service := NewVaultReadingService(&vaultBoundedSourceRepo{
+	service := &VaultReadingService{repo: &vaultBoundedSourceRepo{
 		vaultReadingRepo: repo,
 		bounded:          repository.NewDynamoDBRepositoryWithS3(nil, "fixture", storage, "fixture"),
-	})
+	}}
 	source, err := service.source(context.Background(), "reader", "meeting", "", "m")
 	if err != nil {
 		t.Fatal(err)
