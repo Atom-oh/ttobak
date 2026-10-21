@@ -1,14 +1,20 @@
 package model
 
 import (
-	"crypto/sha256"
 	"encoding/hex"
+
+	"github.com/google/uuid"
 )
 
-// ConnectorNoteID isolates an idempotency key by both owner and client.
-func ConnectorNoteID(user, client, request string) string {
-	hash := sha256.Sum256([]byte(user + "\x00" + client + "\x00" + request))
-	return hex.EncodeToString(hash[:16])
+// ValidConnectorNoteReceiptID accepts existing legacy receipt identities and
+// canonical UUIDs. Receipt identity is server state, never caller input.
+func ValidConnectorNoteReceiptID(id string) bool {
+	if len(id) == 32 {
+		decoded, err := hex.DecodeString(id)
+		return err == nil && hex.EncodeToString(decoded) == id
+	}
+	parsed, err := uuid.Parse(id)
+	return err == nil && parsed != uuid.Nil && parsed.String() == id
 }
 
 // ConnectorNoteReceipt confirms creation, not a current read of note content.
