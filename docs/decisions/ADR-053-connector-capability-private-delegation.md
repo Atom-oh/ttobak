@@ -41,9 +41,23 @@ independent requirements.
 This revision supplies policy types, operation tables, deterministic generation,
 local RSA-PSS delegation verifiers and shared synthetic signature tests.
 The [wire contract](../security/connector-delegation-v1.md) defines exact bytes,
-key pinning and lifetime limits. No OAuth token verifier, live signer, grant store, private
-consumer, approval endpoint, OAuth client, IAM permission or scheduler is
-activated by this foundation. The API auth boundary now applies a dedicated
+key pinning and lifetime limits. Current grant readers now exist in Go and Python:
+client policy and user approval are read together with `TransactGetItems`, with
+strict identity, type and configured issuer/audience checks. Malformed existing
+approval rows reject rather than becoming a missing read-only approval.
+
+Policy and approval writers atomically publish the expected generation and a
+bounded audit receipt. Policy profiles are read or read/write. Grant elevation
+checks the enabled client maximum as a DynamoDB String Set; revocation and blocking remain possible after
+administrators disable or tighten that policy. Blocking has no TTL, while ordinary
+expired approvals and audit receipts retain the documented 30-day cleanup period.
+A removal-only revoke cannot clear an existing block: it returns a condition
+conflict unless the caller retains the block. Unblocking requires explicit
+re-approval through the enabled-policy and capability checks.
+SDK transaction retries carry a stable request token; a condition conflict is
+separate from an unknown transport outcome that requires generation inspection.
+No live signer, private consumer, approval endpoint, OAuth client, IAM permission
+or scheduler is activated by this foundation. The API auth boundary now applies a dedicated
 read-client policy when configured.
 Its default configuration is empty; without an injected current-grant resolver,
 every dedicated client is denied. Existing first-party client authorization remains
@@ -54,8 +68,8 @@ dedicated clients without a current-grant resolver. Both boundaries reject
 mutation-capable and unbounded routes before dispatch; QA does not decode caller
 headers to establish a configured client's identity.
 
-Subsequent reviewed stages must supply private signing
-and current grant resolution, bounded API/QA consumers, atomic approval/audit
+Subsequent reviewed stages must wire current grant resolution into the transports
+and supply private signing, bounded API/QA consumers, approval management endpoints
 and the specifically available personal-note executor. Infrastructure must
 preserve existing pool/client identities and keep issuance disabled through
 deployment verification. Native migration, real provider tokens, audience and
