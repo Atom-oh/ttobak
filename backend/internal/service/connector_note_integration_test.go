@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/google/uuid"
 	"github.com/ttobak/backend/internal/connector"
 	"github.com/ttobak/backend/internal/handler"
 	"github.com/ttobak/backend/internal/model"
@@ -36,6 +38,8 @@ type noteWire struct {
 	creates, confirms              int
 	loseCreate, rejectTransaction  bool
 	afterCreate                    func()
+	afterMissingReceipt            func()
+	share                          map[string]any
 }
 
 func noteString(value string) map[string]any { return map[string]any{"S": value} }
@@ -71,13 +75,45 @@ func (w *noteWire) Do(request *http.Request) (*http.Response, error) {
 			w.t.Fatal("receipt reconciliation must be strongly consistent")
 		}
 		key := body["Key"].(map[string]any)
-		if key["PK"].(map[string]any)["S"] != "USER#user" ||
-			key["SK"].(map[string]any)["S"] != "CONNECTOR_MUTATION#client#request" {
-			w.t.Fatal("receipt escaped the verified user/client/request")
+		pk, sk := key["PK"].(map[string]any)["S"].(string), key["SK"].(map[string]any)["S"].(string)
+		switch {
+		case pk == "USER#user" && sk == "CONNECTOR_MUTATION#client#request":
+			if w.receipt != nil {
+				result["Item"] = w.receipt
+			} else if w.afterMissingReceipt != nil {
+				after := w.afterMissingReceipt
+				w.afterMissingReceipt = nil
+				after()
+			}
+		case strings.HasPrefix(sk, "DOC#") && (pk == "USER#user" || pk == "USER#recipient"):
+			if w.doc != nil && w.doc["PK"].(map[string]any)["S"] == pk && w.doc["SK"].(map[string]any)["S"] == sk {
+				result["Item"] = w.doc
+			}
+		case pk == "USER#recipient" && strings.HasPrefix(sk, model.PrefixDocShare):
+			if w.share != nil && w.share["SK"].(map[string]any)["S"] == sk {
+				result["Item"] = w.share
+			}
+		default:
+			w.t.Fatalf("unexpected read scope: %s %s", pk, sk)
 		}
-		if w.receipt != nil {
-			result["Item"] = w.receipt
+	case "DynamoDB_20120810.Query":
+		values := body["ExpressionAttributeValues"].(map[string]any)
+		recipient, prefix := false, ""
+		for _, value := range values {
+			text, _ := value.(map[string]any)["S"].(string)
+			recipient = recipient || text == "USER#recipient"
+			if text == "DOC#" || text == model.PrefixDocShare {
+				prefix = text
+			}
 		}
+		if !recipient || prefix == "" {
+			w.t.Fatal("unexpected document query scope")
+		}
+		result["Items"] = []any{}
+		if prefix == model.PrefixDocShare && w.share != nil {
+			result["Items"] = []any{w.share}
+		}
+
 	case "DynamoDB_20120810.TransactWriteItems":
 		items := body["TransactItems"].([]any)
 		if len(items) != 4 {
@@ -100,7 +136,7 @@ func (w *noteWire) Do(request *http.Request) (*http.Response, error) {
 			}
 		}
 		put, create := items[2].(map[string]any)["Put"].(map[string]any)
-		if w.rejectTransaction || (!create && w.doc == nil) {
+		if w.rejectTransaction || (!create && w.doc == nil) || (create && (w.doc != nil || w.receipt != nil)) {
 			status = 400
 			result = map[string]any{"__type": "TransactionCanceledException",
 				"CancellationReasons": []any{map[string]any{"Code": "ConditionalCheckFailed"}}}
@@ -120,6 +156,20 @@ func (w *noteWire) Do(request *http.Request) (*http.Response, error) {
 			}
 		} else {
 			w.confirms++
+			check := items[2].(map[string]any)["ConditionCheck"].(map[string]any)
+			if check["Key"].(map[string]any)["SK"].(map[string]any)["S"] != w.doc["SK"].(map[string]any)["S"] {
+				w.t.Fatal("replay did not target the receipt document")
+			}
+			for _, index := range []int{2, 3} {
+				check := items[index].(map[string]any)["ConditionCheck"].(map[string]any)
+				pinned := false
+				for _, value := range check["ExpressionAttributeValues"].(map[string]any) {
+					pinned = pinned || value.(map[string]any)["S"] == w.receipt["docId"].(map[string]any)["S"]
+				}
+				if !pinned {
+					w.t.Fatal("replay condition omitted stored receipt identity")
+				}
+			}
 			if items[3].(map[string]any)["ConditionCheck"] == nil {
 				w.t.Fatal("replay omitted the exact receipt condition")
 			}
@@ -188,7 +238,7 @@ func TestConnectorNoteCreatesOnceAndReconcilesAmbiguousResponse(t *testing.T) {
 			}
 			var receipt model.ConnectorNoteReceipt
 			if json.Unmarshal([]byte(first.Body), &receipt) != nil ||
-				receipt.DocID != model.ConnectorNoteID("user", "client", "request") || receipt.Replayed != lost {
+				!model.ValidConnectorNoteReceiptID(receipt.DocID) || receipt.DocID != wire.doc["docId"].(map[string]any)["S"] || receipt.Replayed != lost {
 				t.Fatalf("wrong receipt: %+v", receipt)
 			}
 			for field, want := range map[string]string{"PK": "USER#user", "sourceUserId": "user", "entityType": model.EntityTypeUserDoc, "docType": "note", "title": "노트"} {
@@ -267,5 +317,103 @@ func TestConnectorNoteCurrentGrantAndAtomicConflictNeverPublish(t *testing.T) {
 				t.Fatalf("grant/receipt boundary: %+v creates=%d", got, wire.creates)
 			}
 		})
+	}
+}
+
+func noteRepository(wire *noteWire) *repository.DynamoDBRepository {
+	return repository.NewDynamoDBRepository(dynamodb.New(dynamodb.Options{Region: "ap-northeast-2", HTTPClient: wire,
+		Credentials: aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) {
+			return aws.Credentials{AccessKeyID: "test", SecretAccessKey: "test"}, nil
+		})}), "table")
+}
+
+func TestConnectorNoteExpiredReceiptRemovalCannotResurrectOrphanShare(t *testing.T) {
+	wire := newNoteWire(t)
+	bridge, sign := noteBridge(t, wire)
+	first := bridge.Invoke(context.Background(), sign(noteBody))
+	if first.StatusCode != 200 {
+		t.Fatalf("first create: %+v", first)
+	}
+	oldID := wire.doc["docId"].(map[string]any)["S"].(string)
+	wire.share = map[string]any{"PK": noteString("USER#recipient"), "SK": noteString(model.PrefixDocShare + oldID),
+		"meetingId": noteString(oldID), "ownerId": noteString("user"), "ownerEmail": noteString("owner@example.invalid"), "sharedToId": noteString("recipient"), "permission": noteString("read")}
+	repo := noteRepository(wire)
+	accounts := service.NewAccountService(repo, nil, "")
+	reading := service.NewDocumentReadingService(repo)
+	if doc, err := accounts.GetUserDocument(context.Background(), "recipient", oldID); err != nil || doc.Content == "" {
+		t.Fatalf("initial shared document missing: %v", err)
+	}
+	if _, err := reading.Read(context.Background(), "recipient", "", oldID, nil); err != nil {
+		t.Fatalf("initial bounded read failed: %v", err)
+	}
+	// The current deletion path intentionally leaves email-share rows behind.
+	// Simulate deletion and later DynamoDB TTL removal of the retry receipt.
+	wire.doc = nil
+	wire.receipt = nil
+	next := bridge.Invoke(context.Background(), sign(strings.Replace(noteBody, "본문", "new private body", 1)))
+	if next.StatusCode != 200 {
+		t.Fatalf("fresh post-TTL creation: %+v", next)
+	}
+	newID := wire.doc["docId"].(map[string]any)["S"].(string)
+	if newID == oldID {
+		t.Fatal("post-TTL creation reused the document ID protected by an orphan share")
+	}
+	for _, id := range []string{oldID, newID} {
+		if _, err := accounts.GetUserDocument(context.Background(), "recipient", id); !errors.Is(err, service.ErrNotFound) {
+			t.Fatalf("orphan detail read %s: %v", id, err)
+		}
+		if _, err := reading.Read(context.Background(), "recipient", "", id, nil); !errors.Is(err, service.ErrNotFound) {
+			t.Fatalf("orphan bounded read %s: %v", id, err)
+		}
+	}
+	if docs, err := accounts.ListUserDocuments(context.Background(), "recipient", ""); err != nil || len(docs) != 0 {
+		t.Fatalf("orphan appeared in list: %v %v", docs, err)
+	}
+}
+
+func TestConnectorNoteReplayUsesStoredIdentityAndRejectsExpiredReceipt(t *testing.T) {
+	for _, id := range []string{"00112233445566778899aabbccddeeff", uuid.NewString()} {
+		t.Run(id, func(t *testing.T) {
+			wire := newNoteWire(t)
+			bridge, sign := noteBridge(t, wire)
+			if got := bridge.Invoke(context.Background(), sign(noteBody)); got.StatusCode != 200 {
+				t.Fatalf("seed: %+v", got)
+			}
+			wire.doc["docId"] = noteString(id)
+			wire.doc["SK"] = noteString("DOC#" + id)
+			wire.receipt["docId"] = noteString(id)
+			wire.doc["content"] = noteString("human content retained")
+			got := bridge.Invoke(context.Background(), sign(noteBody))
+			var receipt model.ConnectorNoteReceipt
+			if got.StatusCode != 200 || json.Unmarshal([]byte(got.Body), &receipt) != nil || receipt.DocID != id || !receipt.Replayed {
+				t.Fatalf("stored identity replay: %+v", got)
+			}
+			wire.receipt["pendingShareExpiresAt"] = noteNumber(time.Now().Unix() - 1)
+			got = bridge.Invoke(context.Background(), sign(noteBody))
+			if got.StatusCode != 409 || wire.creates != 1 || wire.doc["content"].(map[string]any)["S"] != "human content retained" {
+				t.Fatalf("expired receipt accepted or edited content: %+v", got)
+			}
+		})
+	}
+}
+
+func TestConnectorNoteConcurrentWinnerReceiptOverridesLosingCandidate(t *testing.T) {
+	wire := newNoteWire(t)
+	bridge, sign := noteBridge(t, wire)
+	if got := bridge.Invoke(context.Background(), sign(noteBody)); got.StatusCode != 200 {
+		t.Fatalf("seed: %+v", got)
+	}
+	winnerDoc, winnerReceipt := wire.doc, wire.receipt
+	winnerID := uuid.NewString()
+	winnerDoc["docId"] = noteString(winnerID)
+	winnerDoc["SK"] = noteString("DOC#" + winnerID)
+	winnerReceipt["docId"] = noteString(winnerID)
+	wire.doc = nil
+	wire.receipt = nil
+	wire.afterMissingReceipt = func() { wire.doc = winnerDoc; wire.receipt = winnerReceipt }
+	got := bridge.Invoke(context.Background(), sign(noteBody))
+	var receipt model.ConnectorNoteReceipt
+	if got.StatusCode != 200 || json.Unmarshal([]byte(got.Body), &receipt) != nil || receipt.DocID != winnerID || !receipt.Replayed || wire.creates != 1 {
+		t.Fatalf("concurrent winner not reconciled: %+v", got)
 	}
 }

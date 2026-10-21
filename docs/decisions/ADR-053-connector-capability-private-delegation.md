@@ -110,7 +110,11 @@ routes remain nondelegable, so connector tokens cannot approve themselves.
 
 Personal-note creation requires matching OAuth read/write scopes and a current
 write-approval generation. The signed request ID doubles as a caller retry key;
-the server derives the personal document ID from user, client and key. Current
+the server generates a fresh random UUID for a new personal document. The
+user/client/key-scoped receipt remains authoritative for retries. Reusing a key
+after receipt removal creates a separate identity, keeping retained shares of a
+deleted note from authorizing new content. An expired but present receipt still
+conflicts. Current
 policy and approval conditions, a new document and its 30-day receipt share one
 DynamoDB transaction. Replays validate the receipt and existing note without
 overwriting edits or recreating deletions. Exact body bytes bind the receipt;
