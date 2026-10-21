@@ -293,6 +293,11 @@ Versioned detail reads require the current publication, exact immutable key and
 Markdown SHA-256 before returning at most 64,000 UTF-8 bytes. Missing metadata
 never falls back to an orphan object. Legacy reads retain only bounded `shared/`
 keys. Source revisions match the Python contract, including literal Unicode.
+The disabled-source and revision gates apply to versioned publications. Legacy
+news remains readable after its last subscriber leaves, and existing AWS technical
+articles retain the exact `__tech__` partition. Publication titles follow the
+producer's trimmed length and line-whitespace rules without relaxing source IDs
+or source-fingerprint validation.
 Owner/admin deletion transactionally marks a versioned publication `DELETED`
 before deleting its two immutable objects; retained tombstones support cleanup
 retries. The transaction checks current ownership and the observed publication.

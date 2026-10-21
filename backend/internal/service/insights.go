@@ -83,7 +83,7 @@ func NewInsightsService(repo *repository.CrawlerRepository, s3Client *s3.Client,
 
 // GetDocumentDetail reads metadata from DynamoDB and full content from S3.
 func (s *InsightsService) GetDocumentDetail(ctx context.Context, sourceID, docHash string) (*model.InsightDetailResponse, error) {
-	if !validNewsSourceID(sourceID) || !validNewsSourceID(docHash) {
+	if (sourceID != "__tech__" && !validNewsSourceID(sourceID)) || !validNewsSourceID(docHash) {
 		return nil, ErrNotFound
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
@@ -95,14 +95,17 @@ func (s *InsightsService) GetDocumentDetail(ctx context.Context, sourceID, docHa
 	if meta == nil {
 		return nil, ErrNotFound
 	}
+	if sourceID == "__tech__" && meta.Type != "tech" {
+		return nil, ErrNotFound
+	}
 	if meta.Type == "news" || meta.QualityStatus != "" || strings.HasPrefix(meta.S3Key, "news/") {
 		keys := newsKeys(sourceID, docHash)
 		rows, err := s.newsRows(ctx, keys)
 		if err != nil {
 			return nil, err
 		}
-		row, config := rows[keys[0]], rows[keys[1]]
-		if len(row) == 0 || len(config) == 0 || newsString(config, "status") == "disabled" {
+		row := rows[keys[0]]
+		if len(row) == 0 {
 			return nil, ErrNotFound
 		}
 		if isVersionedNews(row) {

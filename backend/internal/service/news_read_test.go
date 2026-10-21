@@ -147,6 +147,64 @@ func TestNewsSourceRevisionMatchesCrawlerVectors(t *testing.T) {
 	}
 }
 
+func TestPublishedNewsTitleMatchesProducerWhitespaceContract(t *testing.T) {
+	for _, title := range []string{"first\nsecond\r\nthird\tpart", "  " + strings.Repeat("가", 300) + "  ", "title" + string(rune(127))} {
+		svc, fixture, _, keys := newNewsReadFixture(t)
+		fixture.rows[keys[0]]["title"] = &types.AttributeValueMemberS{Value: title}
+		got, err := svc.GetDocumentDetail(context.Background(), keys[0].SourceID, strings.Repeat("a", 16))
+		if err != nil || got.Title != title {
+			t.Fatalf("producer-valid title rejected or changed: %q %v", title, err)
+		}
+	}
+	for _, title := range []string{" ", "title\x01", strings.Repeat("가", 301)} {
+		if validNewsTitle(&types.AttributeValueMemberS{Value: title}) {
+			t.Fatal("invalid producer title accepted")
+		}
+	}
+}
+
+func TestLegacyTechDetailKeepsReservedPartition(t *testing.T) {
+	repo := newMockCrawlerRepo()
+	repo.documents["__tech__"] = []model.CrawledDocument{{
+		SourceID: "__tech__", DocHash: "techhash", Type: "tech",
+		S3Key: "shared/aws-docs/lambda/techhash.md", Title: "Lambda",
+	}}
+	object := &newsS3Fixture{data: "# Lambda"}
+	svc := &InsightsService{repo: repo, s3: object, kbBucketName: "knowledge"}
+	if _, err := svc.GetDocumentDetail(context.Background(), "__tech__", "techhash"); err != nil {
+		t.Fatalf("legacy tech article no longer opens: %v", err)
+	}
+	if len(object.gets) != 1 || object.gets[0] != "shared/aws-docs/lambda/techhash.md" {
+		t.Fatal("tech detail used the wrong stored key")
+	}
+	for _, sourceID := range []string{"__other__", "../tech", "__tech__/other"} {
+		if _, err := svc.GetDocumentDetail(context.Background(), sourceID, "techhash"); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("unexpected reserved partition permitted: %q %v", sourceID, err)
+		}
+	}
+	repo.documents["__tech__"][0].Type = "news"
+	if _, err := svc.GetDocumentDetail(context.Background(), "__tech__", "techhash"); !errors.Is(err, ErrNotFound) {
+		t.Fatal("tech exception admitted reserved news source")
+	}
+}
+
+func TestLegacyNewsRemainsReadableAfterSourceDisabled(t *testing.T) {
+	doc := model.CrawledDocument{SourceID: "legacy", DocHash: "oldhash", Type: "news",
+		Title: "Retained legacy news", S3Key: "shared/news/legacy/oldhash.md"}
+	repo := newMockCrawlerRepo()
+	repo.documents["legacy"] = []model.CrawledDocument{doc}
+	fixture := legacyNewsRows(t, "legacy", []model.CrawledDocument{doc})
+	fixture.rows[repository.NewsReadKey{SourceID: "legacy", SortKey: "CONFIG"}]["status"] = &types.AttributeValueMemberS{Value: "disabled"}
+	svc := &InsightsService{repo: repo, news: fixture, s3: &newsS3Fixture{data: "# Retained legacy news"}, kbBucketName: "knowledge"}
+	list, err := svc.currentNewsList(context.Background(), []model.CrawledDocument{doc})
+	if err != nil || len(list) != 1 {
+		t.Fatalf("disabled legacy source hid existing news: %v", err)
+	}
+	if _, err := svc.GetDocumentDetail(context.Background(), "legacy", "oldhash"); err != nil {
+		t.Fatalf("disabled legacy source prevented detail: %v", err)
+	}
+}
+
 func TestPublishedNewsReadsCanonicalObjectAndRejectsChangedState(t *testing.T) {
 	for _, mutation := range []string{"none", "disabled", "owner", "unpublished", "title", "missing"} {
 		t.Run(mutation, func(t *testing.T) {
