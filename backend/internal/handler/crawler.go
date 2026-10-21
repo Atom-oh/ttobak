@@ -98,6 +98,10 @@ func (h *CrawlerHandler) UpdateSource(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Source subscription not found")
 			return
 		}
+		if errors.Is(err, service.ErrForbidden) {
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Only the source owner can remove saved aliases")
+			return
+		}
 		if errors.Is(err, service.ErrInvalidInput) {
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "invalid aliases")
 			return

@@ -75,6 +75,9 @@ func (m *mockCrawlerRepo) UpdateSourcePartial(_ context.Context, sourceID string
 	if !ok {
 		return fmt.Errorf("%w: source %s not found", repository.ErrConditionFailed, sourceID)
 	}
+	if fields.RequireOwnerID != nil && current.OwnerID != *fields.RequireOwnerID {
+		return repository.ErrConditionFailed
+	}
 	checkList := func(name string, currentVal, expectedVal []string) error {
 		if len(expectedVal) == 0 {
 			if len(currentVal) != 0 {

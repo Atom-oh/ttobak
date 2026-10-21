@@ -40,12 +40,16 @@ func TestSourceAliasUpdateRequiresExistingUnchangedRow(t *testing.T) {
 					update = strings.ReplaceAll(update, placeholder, name)
 				}
 				if !strings.Contains(condition, "attribute_exists (PK)") ||
-					!strings.Contains(condition, "aliases =") || !strings.Contains(update, "SET aliases =") ||
+					!strings.Contains(condition, "aliases =") || !strings.Contains(condition, "ownerId =") ||
+					!strings.Contains(update, "SET aliases =") ||
 					strings.Contains(update, "ownerId") {
 					t.Fatalf("missing source existence/alias CAS: condition %s update %s", condition, update)
 				}
-				sawOld, sawNew := false, false
+				sawOld, sawNew, sawOwner := false, false, false
 				for _, value := range input.ExpressionAttributeValues {
+					if raw, ok := value["S"]; ok {
+						sawOwner = sawOwner || string(raw) == `"owner"`
+					}
 					if raw, ok := value["L"]; ok {
 						var aliases []map[string]string
 						if err := json.Unmarshal(raw, &aliases); err != nil {
@@ -55,7 +59,7 @@ func TestSourceAliasUpdateRequiresExistingUnchangedRow(t *testing.T) {
 						sawNew = sawNew || len(aliases) == 2 && aliases[1]["S"] == "new"
 					}
 				}
-				if !sawOld || !sawNew {
+				if !sawOld || !sawNew || !sawOwner {
 					t.Fatal("alias values were not encoded as native DynamoDB string lists")
 				}
 				status, body := http.StatusOK, "{}"
@@ -67,8 +71,10 @@ func TestSourceAliasUpdateRequiresExistingUnchangedRow(t *testing.T) {
 			}),
 		})
 		aliases := []string{"saved", "new"}
+		owner := "owner"
 		err := NewCrawlerRepository(client, "news").UpdateSourcePartial(context.Background(), "source",
-			&model.CrawlerSource{Aliases: []string{"saved"}}, SourcePartialFields{Aliases: &aliases})
+			&model.CrawlerSource{Aliases: []string{"saved"}, OwnerID: owner},
+			SourcePartialFields{Aliases: &aliases, RequireOwnerID: &owner})
 		if calls != 1 || rejected && !errors.Is(err, ErrConditionFailed) || !rejected && err != nil {
 			t.Fatalf("conditional write result lost: calls %d rejected %v err %v", calls, rejected, err)
 		}

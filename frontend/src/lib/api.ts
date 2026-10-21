@@ -648,6 +648,7 @@ export const crawlerApi = {
     customUrls?: string[];
     newsQueries?: string[];
     aliases?: string[];
+    removeAliases?: string[];
   }) => api.put<{ status: string }>(`/api/crawler/sources/${sourceId}`, data),
   unsubscribe: (sourceId: string) =>
     api.delete(`/api/crawler/sources/${sourceId}`),

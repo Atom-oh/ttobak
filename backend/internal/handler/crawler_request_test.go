@@ -31,3 +31,28 @@ func TestCrawlerRequestBodyLimitsAndUnicode(t *testing.T) {
 		t.Fatalf("valid Unicode request rejected: %+v", target)
 	}
 }
+
+func TestCrawlerAliasRemovalRequiresOwner(t *testing.T) {
+	for _, owner := range []string{testUserID, "another-user"} {
+		repo := newMockCrawlerRepo()
+		repo.sources["source"] = &model.CrawlerSource{
+			SourceID: "source", SourceName: "Source", OwnerID: owner,
+			Subscribers: []string{testUserID}, Aliases: []string{"Saved"}, Status: "idle",
+		}
+		repo.subscriptions[subKey(testUserID, "source")] = &model.CrawlerSubscription{SourceID: "source"}
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPut, "/api/crawler/sources/source",
+			strings.NewReader(`{"removeAliases":["saved"]}`))
+		setupCrawlerRouter(repo).ServeHTTP(w, r)
+		expected := http.StatusForbidden
+		if owner == testUserID {
+			expected = http.StatusOK
+		}
+		if w.Code != expected {
+			t.Fatalf("owner %s: status %d, want %d: %s", owner, w.Code, expected, w.Body.String())
+		}
+		if owner != testUserID && len(repo.sources["source"].Aliases) != 1 {
+			t.Fatal("forbidden removal changed saved aliases")
+		}
+	}
+}

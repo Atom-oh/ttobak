@@ -149,6 +149,8 @@ type SourcePartialFields struct {
 	CustomUrls  *[]string
 	Aliases     *[]string
 	Status      *string
+	// RequireOwnerID constrains the current owner without updating ownership.
+	RequireOwnerID *string
 }
 
 // UpdateSourcePartial performs a partial UpdateItem for the crawler source at
@@ -197,6 +199,12 @@ func (r *CrawlerRepository) UpdateSourcePartial(ctx context.Context, sourceID st
 	}
 	// A concurrent source deletion must not turn an alias-only update into an upsert.
 	cond = cond.And(expression.AttributeExists(expression.Name("PK")))
+	if fields.RequireOwnerID != nil {
+		if *fields.RequireOwnerID == "" {
+			return fmt.Errorf("owner condition requires a user ID")
+		}
+		cond = cond.And(expression.Name("ownerId").Equal(expression.Value(*fields.RequireOwnerID)))
+	}
 
 	expr, err := expression.NewBuilder().WithUpdate(update).WithCondition(cond).Build()
 	if err != nil {

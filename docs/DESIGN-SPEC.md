@@ -293,8 +293,10 @@ only after user confirmation, with server-side validation and a polled status.
 
 Crawler settings accept public company aliases shared by source subscribers.
 Explain their use in external news searches and persistence after unsubscribing.
-Saved aliases have no remove control; only newly entered, unsaved additions can
-be cancelled. Enforce the 20-name and 100-code-point limits when adding names and
+Saved aliases have a remove control for the source owner; other subscribers can
+cancel their unsaved additions. Saving sends explicit removals separately from
+additions, preserving unrelated concurrent contributions.
+Enforce the 20-name and 100-code-point limits when adding names and
 surface server validation failures. History displays actual publication run
 status, attempts, exclusions and exact recorded cost; incomplete usage shows
 that the amount includes conservative estimates. Legacy history remains readable

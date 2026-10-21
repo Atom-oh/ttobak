@@ -112,3 +112,68 @@ func TestAliasUpdateMissingSourceDoesNotChangeSubscription(t *testing.T) {
 		t.Fatalf("missing source changed subscription: %v", err)
 	}
 }
+
+func TestOwnerRemovalFreesAliasCapacity(t *testing.T) {
+	repo := aliasFixture(20)
+	err := (&CrawlerService{repo: repo}).UpdateSource(context.Background(), "owner", "source", &model.UpdateCrawlerSourceRequest{
+		RemoveAliases: []string{"ALIAS 0"}, Aliases: []string{"replacement"},
+	})
+	aliases := repo.sources["source"].Aliases
+	if err != nil || len(aliases) != 20 || contains(aliases, "Alias 0") || !contains(aliases, "replacement") {
+		t.Fatalf("owner could not recover shared capacity: %v %v", aliases, err)
+	}
+	err = (&CrawlerService{repo: repo}).UpdateSource(context.Background(), "owner", "source", &model.UpdateCrawlerSourceRequest{
+		RemoveAliases: []string{"Alias 0"}, Aliases: []string{"replacement"},
+	})
+	if err != nil || len(repo.sources["source"].Aliases) != 20 {
+		t.Fatalf("removal retry failed: %v", err)
+	}
+}
+
+func TestSubscriberCannotRemoveSavedAliases(t *testing.T) {
+	repo := aliasFixture(2)
+	repo.subscriptions[subKey("member", "source")] = &model.CrawlerSubscription{SourceID: "source", NewsQueries: []string{"previous"}}
+	err := (&CrawlerService{repo: repo}).UpdateSource(context.Background(), "member", "source", &model.UpdateCrawlerSourceRequest{
+		RemoveAliases: []string{"Alias 0"}, Aliases: []string{"new"}, NewsQueries: []string{"changed"},
+	})
+	if !errors.Is(err, ErrForbidden) || len(repo.sources["source"].Aliases) != 2 ||
+		!strSliceEqual(repo.subscriptions[subKey("member", "source")].NewsQueries, []string{"previous"}) {
+		t.Fatalf("subscriber removal mutated source/subscription: %v", err)
+	}
+}
+
+func TestOwnerRemovalPreservesConcurrentContribution(t *testing.T) {
+	repo := &aliasRaceRepo{mockCrawlerRepo: aliasFixture(19)}
+	err := (&CrawlerService{repo: repo}).UpdateSource(context.Background(), "owner", "source", &model.UpdateCrawlerSourceRequest{
+		RemoveAliases: []string{"Alias 0"}, Aliases: []string{"replacement"},
+	})
+	aliases := repo.sources["source"].Aliases
+	if err != nil || !repo.raced || len(aliases) != 20 || contains(aliases, "Alias 0") ||
+		!contains(aliases, "replacement") || !contains(aliases, "concurrent alias") {
+		t.Fatalf("concurrent contribution lost: %v %v", aliases, err)
+	}
+}
+
+type aliasOwnerRaceRepo struct {
+	*mockCrawlerRepo
+	raced bool
+}
+
+func (m *aliasOwnerRaceRepo) UpdateSourcePartial(ctx context.Context, id string, expected *model.CrawlerSource, fields repository.SourcePartialFields) error {
+	if fields.Aliases != nil && !m.raced {
+		m.raced = true
+		m.sources[id].OwnerID = "new-owner"
+	}
+	return m.mockCrawlerRepo.UpdateSourcePartial(ctx, id, expected, fields)
+}
+
+func TestOwnerRemovalRechecksOwnershipAfterCASConflict(t *testing.T) {
+	repo := &aliasOwnerRaceRepo{mockCrawlerRepo: aliasFixture(2)}
+	err := (&CrawlerService{repo: repo}).UpdateSource(context.Background(), "owner", "source", &model.UpdateCrawlerSourceRequest{
+		RemoveAliases: []string{"Alias 0"}, NewsQueries: []string{"changed"},
+	})
+	if !errors.Is(err, ErrForbidden) || !repo.raced || len(repo.sources["source"].Aliases) != 2 ||
+		!strSliceEqual(repo.subscriptions[subKey("owner", "source")].NewsQueries, []string{"previous query"}) {
+		t.Fatalf("previous owner removed aliases after owner change: %v", err)
+	}
+}

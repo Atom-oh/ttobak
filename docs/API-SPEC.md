@@ -1079,10 +1079,15 @@ additions return 400 before changing the user's subscription.
 
 Aliases are shared by all subscribers, may enter external news searches, and
 remain after unsubscribing. PUT is additive: omitting aliases or sending an empty
-list leaves existing aliases unchanged. It does not delete names. Existing
-subscribers may add aliases; source ownership is unchanged. Subscription storage
+list leaves existing aliases unchanged. Optional PUT `removeAliases` removes only
+listed names and requires the current source owner; other subscribers receive 403.
+Removals use the same name validation and case-insensitive comparison, free the
+shared capacity, and preserve other names added concurrently. Both current owner
+and the observed alias list guard the conditional write; retries recheck ownership.
+The UI exposes saved-name deletion only to the owner. Existing subscribers may add
+aliases; source ownership is unchanged. Subscription storage
 and the shared alias update are separate operations: a storage failure is
-reported, and retrying the same additions is safe.
+reported, and retrying the same additions/removals is safe.
 
 News publication history optionally includes `runId`, `status`, `queryCount`,
 rejection/attempt counters, `workerOutcomes`, and `fetchWarnings`. `chargedUsd`

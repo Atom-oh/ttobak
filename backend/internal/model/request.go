@@ -505,11 +505,12 @@ type AddCrawlerSourceRequest struct {
 
 // UpdateCrawlerSourceRequest represents the request body for updating a crawler source
 type UpdateCrawlerSourceRequest struct {
-	AWSServices []string `json:"awsServices"`
-	NewsSources []string `json:"newsSources"`
-	NewsQueries []string `json:"newsQueries,omitempty"`
-	CustomUrls  []string `json:"customUrls,omitempty"`
-	Aliases     []string `json:"aliases,omitempty"`
+	AWSServices   []string `json:"awsServices"`
+	NewsSources   []string `json:"newsSources"`
+	NewsQueries   []string `json:"newsQueries,omitempty"`
+	CustomUrls    []string `json:"customUrls,omitempty"`
+	Aliases       []string `json:"aliases,omitempty"`
+	RemoveAliases []string `json:"removeAliases,omitempty"`
 }
 
 // CrawlerSourceResponse represents a single crawler source with its subscription

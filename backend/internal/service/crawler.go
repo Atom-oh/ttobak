@@ -74,14 +74,15 @@ func combinedAliases(existing, additions []string) ([]string, error) {
 	return validateAliases(current)
 }
 
-// mergeAliasesIntoSource unions newAliases into the source's existing
-// Aliases, never overwriting -- same condition+bounded-retry pattern as
-// AddSource's subscription-field merge. A no-op (returns the source
-// unchanged) when newAliases is empty, so UpdateSource callers that don't
-// touch aliases don't pay an extra round-trip.
-func mergeAliasesIntoSource(ctx context.Context, repo crawlerRepo, sourceID string, newAliases []string) error {
-	if len(newAliases) == 0 {
+// updateSourceAliases merges subscriber additions and owner-authorized removals.
+// Both aliases and current ownership are checked by the conditional write.
+func updateSourceAliases(ctx context.Context, repo crawlerRepo, sourceID, userID string, newAliases, removeAliases []string) error {
+	if len(newAliases) == 0 && len(removeAliases) == 0 {
 		return nil
+	}
+	removals := make(map[string]bool, len(removeAliases))
+	for _, alias := range removeAliases {
+		removals[strings.ToLower(alias)] = true
 	}
 	const maxAliasMergeAttempts = 3
 	for attempt := 1; ; attempt++ {
@@ -92,7 +93,20 @@ func mergeAliasesIntoSource(ctx context.Context, repo crawlerRepo, sourceID stri
 		if source == nil {
 			return ErrNotFound
 		}
-		merged, err := combinedAliases(source.Aliases, newAliases)
+		var requiredOwner *string
+		if len(removals) > 0 {
+			if userID == "" || source.OwnerID != userID {
+				return ErrForbidden
+			}
+			requiredOwner = &userID
+		}
+		retained := make([]string, 0, len(source.Aliases))
+		for _, alias := range source.Aliases {
+			if !removals[strings.ToLower(strings.TrimSpace(alias))] {
+				retained = append(retained, alias)
+			}
+		}
+		merged, err := combinedAliases(retained, newAliases)
 		if err != nil {
 			return err
 		}
@@ -100,7 +114,7 @@ func mergeAliasesIntoSource(ctx context.Context, repo crawlerRepo, sourceID stri
 			return nil // already contains every new alias
 		}
 		err = repo.UpdateSourcePartial(ctx, sourceID, source, repository.SourcePartialFields{
-			Aliases: &merged,
+			Aliases: &merged, RequireOwnerID: requiredOwner,
 		})
 		if err == nil {
 			return nil
@@ -337,6 +351,10 @@ func (s *CrawlerService) UpdateSource(ctx context.Context, userID, sourceID stri
 	if err != nil {
 		return err
 	}
+	validatedRemovals, err := validateAliases(req.RemoveAliases)
+	if err != nil {
+		return err
+	}
 
 	// Update the user's subscription
 	sub, err := s.repo.GetSubscription(ctx, userID, sourceID)
@@ -349,7 +367,7 @@ func (s *CrawlerService) UpdateSource(ctx context.Context, userID, sourceID stri
 
 	// Check the combined source limit before changing subscription settings.
 	// Public aliases remain on the source after a contributor unsubscribes.
-	if err := mergeAliasesIntoSource(ctx, s.repo, sourceID, validatedAliases); err != nil {
+	if err := updateSourceAliases(ctx, s.repo, sourceID, userID, validatedAliases, validatedRemovals); err != nil {
 		return err
 	}
 

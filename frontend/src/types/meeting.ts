@@ -389,6 +389,7 @@ export interface ExportResponse {
 
 export interface CrawlerSource {
   sourceId: string;
+  ownerId?: string;
   sourceName: string;
   subscribers: string[];
   awsServices: string[];

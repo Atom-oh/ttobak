@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { crawlerApi } from '@/lib/api';
+import { useAuth } from '@/components/auth/AuthProvider';
 import type { CrawlerSourceResponse, CrawlHistory } from '@/types/meeting';
 
 const AWS_SERVICE_PRESETS = [
@@ -62,6 +63,7 @@ interface AddEditModalProps {
     newsQueries: string[];
     customUrls: string[];
     aliases: string[];
+    removeAliases?: string[];
   }) => Promise<void>;
   initial?: {
     sourceName: string;
@@ -71,9 +73,10 @@ interface AddEditModalProps {
     aliases: string[];
   };
   isEdit?: boolean;
+  canRemoveAliases?: boolean;
 }
 
-function AddEditModal({ onClose, onSubmit, initial, isEdit }: AddEditModalProps) {
+function AddEditModal({ onClose, onSubmit, initial, isEdit, canRemoveAliases = false }: AddEditModalProps) {
   const [sourceName, setSourceName] = useState(initial?.sourceName || '');
   const [awsServices, setAwsServices] = useState<string[]>(initial?.awsServices || []);
   const [customServiceInput, setCustomServiceInput] = useState('');
@@ -133,7 +136,7 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit }: AddEditModalProps)
   };
 
   const removeAlias = (alias: string) => {
-    if (persistedAliases.has(alias.toLowerCase())) return;
+    if (persistedAliases.has(alias.toLowerCase()) && !canRemoveAliases) return;
     setAliases((prev) => prev.filter((a) => a !== alias));
   };
 
@@ -166,6 +169,9 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit }: AddEditModalProps)
         newsQueries,
         customUrls: customUrls.filter((u) => u.trim() !== ''),
         aliases: aliases.filter((alias) => !persistedAliases.has(alias.toLowerCase())),
+        removeAliases: canRemoveAliases
+          ? (initial?.aliases || []).filter((saved) => !aliases.some((alias) => alias.toLowerCase() === saved.toLowerCase()))
+          : undefined,
       });
       onClose();
     } catch (err) {
@@ -294,7 +300,7 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit }: AddEditModalProps)
             </label>
             <p id="crawler-alias-help" className="text-xs text-slate-600 dark:text-text-secondary mb-2">
               구독자들이 함께 사용할 공개 회사명·영문명을 추가합니다. 외부 뉴스 검색에 사용되므로 비공개 정보는 입력하지 마세요.
-              저장한 별칭은 구독을 취소해도 유지됩니다. 최대 {MAX_ALIASES}개, 각 {MAX_ALIAS_CHARS}자.
+              저장한 별칭은 구독을 취소해도 유지되며 소스 소유자가 삭제할 수 있습니다. 최대 {MAX_ALIASES}개, 각 {MAX_ALIAS_CHARS}자.
             </p>
             {aliases.length > 0 && (
               <div className="flex flex-wrap gap-1.5 mb-2">
@@ -304,10 +310,10 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit }: AddEditModalProps)
                     className="inline-flex max-w-full items-center gap-1 px-2.5 py-1 text-xs font-medium bg-primary/10 text-primary rounded-xl"
                   >
                     <span className="min-w-0 break-all">{alias}</span>
-                    {!persistedAliases.has(alias.toLowerCase()) && <button
+                    {(canRemoveAliases || !persistedAliases.has(alias.toLowerCase())) && <button
                       type="button"
                       onClick={() => removeAlias(alias)}
-                      aria-label={`${alias} 추가 취소`}
+                      aria-label={`${alias} ${persistedAliases.has(alias.toLowerCase()) ? '삭제' : '추가 취소'}`}
                       className="shrink-0 hover:text-red-500"
                     >
                       <span className="material-symbols-outlined text-sm">close</span>
@@ -589,6 +595,7 @@ function HistoryModal({ sourceName, sourceId, onClose }: HistoryModalProps) {
 }
 
 export function CrawlerSettings() {
+  const { user } = useAuth();
   const [sources, setSources] = useState<CrawlerSourceResponse[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -646,6 +653,7 @@ export function CrawlerSettings() {
     newsQueries: string[];
     customUrls: string[];
     aliases: string[];
+    removeAliases?: string[];
   }) => {
     if (!editingSource) return;
     await crawlerApi.updateSource(editingSource.source.sourceId, {
@@ -654,6 +662,7 @@ export function CrawlerSettings() {
       newsQueries: data.newsQueries,
       customUrls: data.customUrls.length > 0 ? data.customUrls : undefined,
       aliases: data.aliases.length > 0 ? data.aliases : undefined,
+      removeAliases: data.removeAliases?.length ? data.removeAliases : undefined,
     });
     setSuccess('Source updated successfully');
     setEditingSource(null);
@@ -845,6 +854,7 @@ export function CrawlerSettings() {
             aliases: editingSource.source.aliases || [],
           }}
           isEdit
+          canRemoveAliases={!!user?.userId && editingSource.source.ownerId === user.userId}
         />
       )}
 
