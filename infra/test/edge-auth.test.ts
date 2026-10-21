@@ -8,12 +8,13 @@ import { EdgeAuthStack } from '../lib/edge-auth-stack';
 // Runs the synthesized Lambda@Edge source with synthetic CloudFront events.
 const pair = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const jwk = { ...pair.publicKey.export({ format: 'jwk' }), kid: 'connector-test', alg: 'RS256', use: 'sig' };
-function edgeHandler(connectors = false): (event: unknown) => Promise<Record<string, any>> {
+function edgeHandler(connectors = false, privateBridge = false): (event: unknown) => Promise<Record<string, any>> {
   const app = new cdk.App();
   const stack = new EdgeAuthStack(app, 'TestEdgeAuth', {
     env: { region: 'us-east-1' }, userPoolId: 'ap-northeast-2_test', userPoolClientId: 'client', cognitoRegion: 'ap-northeast-2',
     ...(connectors ? { readConnectorClientId: 'readclient', writeConnectorClientId: 'writeclient',
       connectorAudience: 'https://ttobak.example.com/api/mcp' } : {}),
+    connectorPrivateBridgeEnabled: privateBridge,
   });
   const fn = Object.values(Template.fromStack(stack).findResources('AWS::Lambda::Function'))
     .find(resource => resource.Properties.FunctionName === 'ttobak-edge-auth')!;
@@ -94,6 +95,48 @@ describe('EdgeAuth 401 responses', () => {
     const res = await handler(event('/api/mcp', { host: 'ttobak.example.com', authorization: 'Bearer not-a-jwt' }));
     expect(res.status).toBe('401');
     expect(res.headers['www-authenticate'][0].value).toContain(`${metadata}, scope="openid email profile", error="invalid_token"`);
+  });
+
+  test('active private MCP challenges require read scope while staged and rollback mode retain first-party scopes', async () => {
+    for (const active of [true, false]) {
+      const configured = edgeHandler(true, active);
+      const scopes = `openid email profile${active ? ' ttobak.connector/read' : ''}`;
+      for (const authorization of [undefined, 'Bearer not-a-jwt']) {
+        const response = await configured(event('/api/mcp', {
+          host: 'ttobak.example.com', ...(authorization ? { authorization } : {}),
+        }));
+        expect(response.status).toBe('401');
+        const challenge = response.headers['www-authenticate'][0].value;
+        expect(challenge).toContain(`${metadata}, scope="${scopes}"`);
+        expect(challenge).not.toContain('ttobak.connector/write');
+      }
+    }
+  });
+
+  test('challenge-derived scopes permit signed first-party or dedicated tokens in their rollout mode', async () => {
+    for (const active of [false, true]) {
+      const configured = edgeHandler(true, active);
+      const response = await configured(event('/api/mcp', { host: 'ttobak.example.com' }));
+      const challenge = response.headers['www-authenticate'][0].value as string;
+      const scope = /(?:^|, )scope="([^"]+)"/.exec(challenge)![1];
+      expect(scope).toBe(`openid email profile${active ? ' ttobak.connector/read' : ''}`);
+      for (const clientId of active ? ['readclient', 'writeclient'] : ['client']) {
+        const payload = { iss: 'https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_test',
+          sub: 'alice', username: 'alice', token_use: 'access', client_id: clientId,
+          aud: 'https://ttobak.example.com/api/mcp', exp: Math.floor(Date.now() / 1000) + 120, scope };
+        const body = Buffer.from(JSON.stringify({ alg: 'RS256', kid: jwk.kid })).toString('base64url') + '.' +
+          Buffer.from(JSON.stringify(payload)).toString('base64url');
+        const token = body + '.' + sign('RSA-SHA256', Buffer.from(body), pair.privateKey).toString('base64url');
+        const authenticated = await configured(event('/api/mcp', {
+          host: 'ttobak.example.com', authorization: `Bearer ${token}`,
+        }));
+        expect(authenticated.uri).toBe('/api/mcp');
+      }
+    }
+  });
+
+  test('an active private challenge cannot be configured without both dedicated clients', () => {
+    expect(() => edgeHandler(false, true)).toThrow('Both connector clients and their exact audience are required');
   });
 
   test('other API paths keep the plain JSON 401', async () => {

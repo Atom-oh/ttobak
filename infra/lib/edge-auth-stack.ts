@@ -10,6 +10,7 @@ export interface EdgeAuthStackProps extends cdk.StackProps {
   readConnectorClientId?: string;
   writeConnectorClientId?: string;
   connectorAudience?: string;
+  connectorPrivateBridgeEnabled?: boolean;
 }
 
 export class EdgeAuthStack extends cdk.Stack {
@@ -17,7 +18,8 @@ export class EdgeAuthStack extends cdk.Stack {
 
   constructor(scope: Construct, id: string, props: EdgeAuthStackProps) {
     super(scope, id, props);
-    if ([props.readConnectorClientId, props.writeConnectorClientId, props.connectorAudience].some(Boolean) &&
+    if ((props.connectorPrivateBridgeEnabled ||
+        [props.readConnectorClientId, props.writeConnectorClientId, props.connectorAudience].some(Boolean)) &&
         ![props.readConnectorClientId, props.writeConnectorClientId, props.connectorAudience].every(Boolean)) {
       throw new Error('Both connector clients and their exact audience are required');
     }
@@ -186,7 +188,7 @@ async function validateToken(token, uri) {
 // plain JSON 401. The viewer Host is the site domain CloudFront accepted; it is
 // still restricted to hostname characters before entering a header.
 const MCP_PATH = '/api/mcp';
-const MCP_SCOPES = 'openid email profile';
+const MCP_SCOPES = 'openid email profile${props.connectorPrivateBridgeEnabled ? ' ttobak.connector/read' : ''}';
 function unauthorized(request, message, tokenPresented) {
   const headers = {
     'content-type': [{ key: 'Content-Type', value: 'application/json' }],

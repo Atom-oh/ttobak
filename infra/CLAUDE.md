@@ -10,6 +10,16 @@ npx cdk synth
 npm test
 ```
 
+Synth and connector gateway tests bundle the pinned ARM64/Python 3.12 crypto
+layer. The runner needs Python 3.12 with pip (`python3.12` or `python3`), or a
+Docker daemon that can run the Lambda Python 3.12 ARM64 build image using volume
+copy. The selected bundler needs access to the package index for the three
+hash-pinned wheels in `assets/connector-crypto/requirements.txt`; local pip may
+instead use a populated wheel directory via `PIP_FIND_LINKS` and `PIP_NO_INDEX=1`.
+An available Python 3.12 whose pip install fails stops synth without Docker
+fallback. Both PR tests and the deployment's `infra-tests` job rely on this
+runner prerequisite; Python setup in the later deploy job does not satisfy it.
+
 Deploy each changed stack individually with `--exclusively`, in dependency order.
 Never run `cdk deploy --all` or implicit dependency deployment: KnowledgeStack has
 a staged, undeployed teardown. Synth is not deployment evidence.
