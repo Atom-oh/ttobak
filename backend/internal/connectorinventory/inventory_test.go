@@ -2,9 +2,13 @@ package connectorinventory
 
 import (
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
-	"regexp"
+	"os/exec"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -29,6 +33,7 @@ func TestInventoryCoversCurrentHTTPRoutes(t *testing.T) {
 		t.Fatal("unexpected inventory schema")
 	}
 	bindings := map[string]string{}
+	tools := map[string]string{}
 	policies := map[string]string{}
 	for i, row := range inventory.Operations {
 		if len(row) != 6 {
@@ -62,6 +67,12 @@ func TestInventoryCoversCurrentHTTPRoutes(t *testing.T) {
 			t.Fatalf("inconsistent policy for %s", operation)
 		}
 		policies[operation] = policy
+		if method == "TOOL" {
+			if destination != "ttobak-qa-bridge" || tools[route] != "" {
+				t.Fatalf("invalid/duplicate QA binding: %s", route)
+			}
+			tools[route] = operation
+		}
 		if destination == "ttobak-api-bridge" {
 			binding := method + " " + route
 			if _, exists := bindings[binding]; exists {
@@ -70,18 +81,109 @@ func TestInventoryCoversCurrentHTTPRoutes(t *testing.T) {
 			bindings[binding] = operation
 		}
 	}
-	main, err := os.ReadFile("../../cmd/api/main.go")
+	file, err := parser.ParseFile(token.NewFileSet(), "../../cmd/api/main.go", nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	routes := regexp.MustCompile(`\b\w+\.(Get|Post|Put|Patch|Delete|Head|Options|Connect|Trace)\("([^"]+)"`).FindAllSubmatch(main, -1)
-	if len(routes) == 0 {
+	current := map[string]bool{}
+	ast.Inspect(file, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		selector, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		if !slices.Contains([]string{"Get", "Post", "Put", "Patch", "Delete", "Head", "Options", "Connect", "Trace"}, selector.Sel.Name) {
+			return true
+		}
+		if len(call.Args) == 0 {
+			t.Fatal("route method without arguments")
+		}
+		path, ok := call.Args[0].(*ast.BasicLit)
+		if !ok || path.Kind != token.STRING {
+			t.Fatal("route coverage requires a literal path")
+		}
+		route, err := strconv.Unquote(path.Value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Current chi routes are absolute literals. Fail if a new layout needs
+		// path composition rather than silently treating a relative route as complete.
+		if !strings.HasPrefix(route, "/api/") {
+			t.Fatalf("unexpected route prefix: %s", route)
+		}
+		binding := strings.ToUpper(selector.Sel.Name) + " " + route
+		if current[binding] {
+			t.Fatalf("duplicate registered HTTP route: %s", binding)
+		}
+		current[binding] = true
+		return true
+	})
+	if len(current) == 0 {
 		t.Fatal("no HTTP routes inspected")
 	}
-	for _, route := range routes {
-		binding := strings.ToUpper(string(route[1])) + " " + string(route[2])
+	for binding := range current {
 		if bindings[binding] == "" {
 			t.Errorf("HTTP route missing explicit policy: %s", binding)
+		}
+	}
+	for binding := range bindings {
+		if !current[binding] {
+			t.Errorf("inventory names unimplemented HTTP route: %s", binding)
+		}
+	}
+	// Parse only the literal registry and its explicit starred source-tool list.
+	// Do not import tools.py: importing would construct clients or execute code.
+	command := exec.Command("python3", "-c", `
+import ast, json, pathlib
+root = pathlib.Path('../../python/qa')
+def registry(filename, name, imports=None):
+    tree = ast.parse((root / filename).read_text())
+    if imports is not None:
+        assert any(isinstance(n, ast.ImportFrom) and n.module == 'source_tools'
+                   and any(a.name == 'SOURCE_TOOL_DEFINITIONS' and a.asname is None for a in n.names)
+                   for n in tree.body), 'source registry import changed'
+    values = [n.value for n in tree.body if isinstance(n, ast.Assign)
+              and any(isinstance(t, ast.Name) and t.id == name for t in n.targets)]
+    assert len(values) == 1 and isinstance(values[0], ast.List), 'registry shape changed'
+    result = []
+    for node in values[0].elts:
+        if isinstance(node, ast.Starred):
+            assert imports is not None and isinstance(node.value, ast.Name), 'unknown registry splice'
+            result.extend(imports[node.value.id])
+        else:
+            result.append(ast.literal_eval(node))
+    return result
+source = registry('source_tools.py', 'SOURCE_TOOL_DEFINITIONS')
+tools = registry('tools.py', 'TOOL_DEFINITIONS', {'SOURCE_TOOL_DEFINITIONS': source})
+print(json.dumps([tool['toolSpec']['name'] for tool in tools]))
+`)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("cannot inspect actual QA registry: %v: %s", err, output)
+	}
+	var names []string
+	if err := json.Unmarshal(output, &names); err != nil {
+		t.Fatal(err)
+	}
+	if len(names) == 0 {
+		t.Fatal("no QA tools inspected")
+	}
+	registered := map[string]bool{}
+	for _, name := range names {
+		if registered[name] {
+			t.Fatalf("duplicate registered QA tool: %s", name)
+		}
+		registered[name] = true
+		if tools[name] == "" {
+			t.Errorf("QA tool missing explicit policy: %s", name)
+		}
+	}
+	for name := range tools {
+		if !registered[name] {
+			t.Errorf("inventory names unimplemented QA tool: %s", name)
 		}
 	}
 }
