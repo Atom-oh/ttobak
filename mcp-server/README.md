@@ -513,23 +513,3 @@ Account/project discovery uses bounded navigation pages and canonical grants.
 Follow empty continuation pages; merge project entries by `projectId` when
 `overlapPossible` is true. Linked accounts do not authorize meeting content.
 Deploy both navigation API producers before this adapter.
-
-Project detail/brief/insight tools use `/api/projects/{projectId}/reading` with
-opaque cursors and the account JSON-group reconstruction contract above.
-Brief covers metadata, members, meetings, research and insights; `section` can
-select any one phase. Continue authorization-only pages without treating them
-as empty project data. All pages revalidate the selected current grant and
-source; stale continuation must restart. Duplicate legacy meeting references
-are explicit (`overlapPossible`): union meetings by `meetingId`, and replace
-repeated complete insight groups by `sourceId`, preserving each source's full
-insight list. Research summaries retain their existing preview semantics.
-Deploy and verify the API producer before publishing this consumer; no legacy
-full-brief fallback is used. Encoded API pages stay within 10,000 bytes, and
-original HTTP/tool output caps remain 32,000 bytes.
-
-Project updates that omit optional fields preserve them by reading only the
-paged project metadata selection. They never prefetch an unbounded member
-collection. The adapter requires continuous fragments from one revision and
-finishes that read before sending a write; stale, malformed, oversized or
-repeated continuations fail before any update. The original page/response caps
-remain in force, with a separate 3 MiB reconstructed metadata ceiling.

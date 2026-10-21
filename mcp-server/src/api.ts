@@ -1,4 +1,3 @@
-import { projectSectionResult, type ProjectSectionOptions } from './project-sections.js';
 import type { AccountSectionOptions } from './section-reading.js';
 import { createReadStream, readFileSync, statSync, realpathSync } from 'node:fs';
 import { request as httpsRequest } from 'node:https';
@@ -274,17 +273,6 @@ export class TtobakApi {
       undefined, MAX_READING_BYTES);
   }
 
-  async readProjectSection(options: ProjectSectionOptions) {
-    const query = new URLSearchParams({ section: options.section, pageSize: String(options.pageSize) });
-    if (options.cursor !== undefined) query.set('cursor', options.cursor);
-    if (options.from !== undefined) query.set('from', options.from);
-    if (options.to !== undefined) query.set('to', options.to);
-    if (options.types?.length) query.set('types', options.types.join(','));
-    return this.request('GET', `/api/projects/${identifier(options.projectId, 'projectId')}/reading?${query}`,
-      undefined, MAX_READING_BYTES);
-  }
-
-
   async getAccountMeetings(accountId: string) {
     return this.get(`/api/accounts/${accountId}/meetings`);
   }
@@ -355,43 +343,6 @@ export class TtobakApi {
     return this.get(`/api/projects/${encodeURIComponent(projectId)}/insights${qs ? '?' + qs : ''}`);
   }
 
-  // Preserving omitted fields only needs one metadata object, never all project
-  // members. Every original HTTP page remains bounded; the complete metadata
-  // object has an independent memory ceiling covering DynamoDB's item budget
-  // even when JSON escaping expands its string values.
-  private async projectUpdateMetadata(projectId: string): Promise<ProjectFields> {
-    identifier(projectId, 'projectId');
-    const options: ProjectSectionOptions = { projectId, section: 'metadata', pageSize: 8000 };
-    const parts: string[] = [], cursors = new Set<string>();
-    let bytes = 0, offset = 0, revision = '';
-    for (let calls = 0; calls < 4096; calls++) {
-      const response = await this.readProjectSection(options);
-      const page = JSON.parse(projectSectionResult(response, options).content[0].text);
-      if (!page.authorizationPending) {
-        if (page.fragment.startOffset !== offset || (revision && page.revision !== revision) ||
-            (page.fragment.complete && !page.page.complete)) throw new Error('STALE_CURSOR: project metadata source changed');
-        revision = page.revision;
-        offset = page.fragment.endOffset;
-        bytes += Buffer.byteLength(page.dataJson);
-        if (bytes > 3 * 1024 * 1024) throw new Error('READING_LIMIT: project metadata exceeds its source budget');
-        parts.push(page.dataJson);
-        if (page.page.complete) {
-          const current = JSON.parse(parts.join(''));
-          if (!current || current.projectId !== projectId || PROJECT_OPTIONAL_FIELDS.some(field =>
-              current[field] !== undefined && typeof current[field] !== 'string')) throw new Error('INVALID_READING_RESPONSE: invalid project update metadata');
-          return current as ProjectFields;
-        }
-      } else if (offset !== 0) {
-        throw new Error('INVALID_READING_RESPONSE: authorization restarted during metadata reading');
-      }
-      const cursor = page.page.nextCursor as string;
-      if (cursors.has(cursor)) throw new Error('INVALID_READING_RESPONSE: repeated project continuation');
-      cursors.add(cursor);
-      options.cursor = cursor;
-    }
-    throw new Error('READING_LIMIT: project metadata did not finish');
-  }
-
   /** `name` is required even when only changing e.g. stage -- the backend's
    * UpdateProjectRequest has no partial/omit-preserves semantics of its own
    * (plain string fields, unlike Meeting's *string pointer fields), so an
@@ -406,7 +357,7 @@ export class TtobakApi {
     stage?: string;
   }) {
     const needsMerge = PROJECT_OPTIONAL_FIELDS.some((f) => project[f] === undefined);
-    const current = needsMerge ? await this.projectUpdateMetadata(projectId) : undefined;
+    const current = needsMerge ? (await this.getProject(projectId)) as ProjectFields : undefined;
     const body = current ? mergeProjectUpdate(current, project) : project;
     return this.put(`/api/projects/${encodeURIComponent(projectId)}`, body);
   }
