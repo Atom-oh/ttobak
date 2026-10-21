@@ -95,6 +95,9 @@ func TestInventoryCoversCurrentHTTPRoutes(t *testing.T) {
 		if !ok {
 			return true
 		}
+		if slices.Contains([]string{"Method", "MethodFunc", "Handle", "HandleFunc", "Mount", "Route"}, selector.Sel.Name) {
+			t.Fatalf("unsupported route registration requires explicit coverage: %s", selector.Sel.Name)
+		}
 		if !slices.Contains([]string{"Get", "Post", "Put", "Patch", "Delete", "Head", "Options", "Connect", "Trace"}, selector.Sel.Name) {
 			return true
 		}
@@ -148,6 +151,22 @@ def registry(filename, name, imports=None):
     values = [n.value for n in tree.body if isinstance(n, ast.Assign)
               and any(isinstance(t, ast.Name) and t.id == name for t in n.targets)]
     assert len(values) == 1 and isinstance(values[0], ast.List), 'registry shape changed'
+    declarations = [n for n in tree.body if isinstance(n, ast.Assign)
+                    and any(isinstance(t, ast.Name) and t.id == name for t in n.targets)]
+    assert len(declarations[0].targets) == 1, 'registry alias declaration changed'
+    allowed = set(ast.walk(declarations[0]))
+    # The source module has one exact read-only name projection. All other
+    # registry references need an explicit inspection update, not execution.
+    projection = ast.parse("SOURCE_TOOL_NAMES = frozenset(tool['toolSpec']['name'] for tool in SOURCE_TOOL_DEFINITIONS)").body[0]
+    for node in tree.body:
+        if ast.dump(node) == ast.dump(projection):
+            allowed.update(ast.walk(node))
+    tracked = {name, *(imports or {})}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id in tracked:
+            assert node in allowed, 'unsupported registry reference or mutation'
+        if isinstance(node, ast.Attribute) and node.attr in tracked:
+            raise AssertionError('unsupported qualified registry reference')
     result = []
     for node in values[0].elts:
         if isinstance(node, ast.Starred):
