@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -44,6 +45,7 @@ func (m *mockCrawlerRepo) GetSource(_ context.Context, sourceID string) (*model.
 	cp.NewsQueries = append([]string(nil), src.NewsQueries...)
 	cp.NewsSources = append([]string(nil), src.NewsSources...)
 	cp.CustomUrls = append([]string(nil), src.CustomUrls...)
+	cp.Aliases = append([]string(nil), src.Aliases...)
 	return &cp, nil
 }
 
@@ -57,6 +59,7 @@ func (m *mockCrawlerRepo) PutSourceIfAbsent(_ context.Context, source *model.Cra
 	cp.NewsQueries = append([]string(nil), source.NewsQueries...)
 	cp.NewsSources = append([]string(nil), source.NewsSources...)
 	cp.CustomUrls = append([]string(nil), source.CustomUrls...)
+	cp.Aliases = append([]string(nil), source.Aliases...)
 	m.sources[source.SourceID] = &cp
 	return nil
 }
@@ -109,6 +112,11 @@ func (m *mockCrawlerRepo) UpdateSourcePartial(_ context.Context, sourceID string
 			return err
 		}
 	}
+	if fields.Aliases != nil {
+		if err := checkList("aliases", current.Aliases, expected.Aliases); err != nil {
+			return err
+		}
+	}
 	if fields.Status != nil && current.Status != expected.Status {
 		return fmt.Errorf("%w: source %s field status changed concurrently", repository.ErrConditionFailed, sourceID)
 	}
@@ -127,6 +135,9 @@ func (m *mockCrawlerRepo) UpdateSourcePartial(_ context.Context, sourceID string
 	}
 	if fields.CustomUrls != nil {
 		current.CustomUrls = append([]string(nil), (*fields.CustomUrls)...)
+	}
+	if fields.Aliases != nil {
+		current.Aliases = append([]string(nil), (*fields.Aliases)...)
 	}
 	if fields.Status != nil {
 		current.Status = *fields.Status
@@ -534,6 +545,171 @@ func TestAddSource_ExistingSource_NewSubscriber(t *testing.T) {
 	sub2 := repo.subscriptions[subKey("user2", "aws-blog")]
 	if sub2 == nil {
 		t.Fatal("user2 subscription not stored")
+	}
+}
+
+func TestAddSource_MergesPublicAliasesWithoutOverwritingOwner(t *testing.T) {
+	repo := newMockCrawlerRepo()
+	repo.sources["woori"] = &model.CrawlerSource{
+		SourceID: "woori", SourceName: "우리은행", OwnerID: "owner",
+		Subscribers: []string{"owner"}, Aliases: []string{"Woori Bank"},
+	}
+	svc := &CrawlerService{repo: repo}
+
+	_, err := svc.AddSource(context.Background(), "member", &model.AddCrawlerSourceRequest{
+		SourceName: "woori", Aliases: []string{"우리금융"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := repo.sources["woori"]
+	if got.OwnerID != "owner" {
+		t.Fatalf("owner changed: %q", got.OwnerID)
+	}
+	want := []string{"Woori Bank", "우리금융"}
+	if !strSliceEqual(got.Aliases, want) {
+		t.Fatalf("aliases=%v want=%v", got.Aliases, want)
+	}
+}
+
+func TestAddSource_NewSource_SetsAliases(t *testing.T) {
+	repo := newMockCrawlerRepo()
+	svc := &CrawlerService{repo: repo}
+
+	resp, err := svc.AddSource(context.Background(), "owner", &model.AddCrawlerSourceRequest{
+		SourceName: "우리은행", Aliases: []string{"Woori Bank", "우리금융"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strSliceEqual(resp.Source.Aliases, []string{"Woori Bank", "우리금융"}) {
+		t.Fatalf("aliases=%v", resp.Source.Aliases)
+	}
+}
+
+func TestAddSource_RejectsMoreThan20Aliases(t *testing.T) {
+	repo := newMockCrawlerRepo()
+	svc := &CrawlerService{repo: repo}
+
+	aliases := make([]string, 21)
+	for i := range aliases {
+		aliases[i] = fmt.Sprintf("alias-%d", i)
+	}
+	_, err := svc.AddSource(context.Background(), "owner", &model.AddCrawlerSourceRequest{
+		SourceName: "many-aliases", Aliases: aliases,
+	})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected ErrInvalidInput, got %v", err)
+	}
+}
+
+func TestAddSource_RejectsEmptyAliasAfterTrim(t *testing.T) {
+	repo := newMockCrawlerRepo()
+	svc := &CrawlerService{repo: repo}
+
+	_, err := svc.AddSource(context.Background(), "owner", &model.AddCrawlerSourceRequest{
+		SourceName: "blank-alias", Aliases: []string{"  ", "real"},
+	})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected ErrInvalidInput, got %v", err)
+	}
+}
+
+func TestAddSource_RejectsAliasOver100CodePoints(t *testing.T) {
+	repo := newMockCrawlerRepo()
+	svc := &CrawlerService{repo: repo}
+
+	long := make([]rune, 101)
+	for i := range long {
+		long[i] = 'a'
+	}
+	_, err := svc.AddSource(context.Background(), "owner", &model.AddCrawlerSourceRequest{
+		SourceName: "long-alias", Aliases: []string{string(long)},
+	})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected ErrInvalidInput, got %v", err)
+	}
+}
+
+func TestAddSource_RejectsAliasWithControlCharacter(t *testing.T) {
+	repo := newMockCrawlerRepo()
+	svc := &CrawlerService{repo: repo}
+
+	_, err := svc.AddSource(context.Background(), "owner", &model.AddCrawlerSourceRequest{
+		SourceName: "control-alias", Aliases: []string{"bad\x00alias"},
+	})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected ErrInvalidInput, got %v", err)
+	}
+}
+
+func TestAddSource_DeduplicatesAliasesCaseInsensitively(t *testing.T) {
+	repo := newMockCrawlerRepo()
+	svc := &CrawlerService{repo: repo}
+
+	resp, err := svc.AddSource(context.Background(), "owner", &model.AddCrawlerSourceRequest{
+		SourceName: "dedup-source", Aliases: []string{"Woori Bank", "woori bank", "WOORI BANK"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strSliceEqual(resp.Source.Aliases, []string{"Woori Bank"}) {
+		t.Fatalf("aliases=%v want [Woori Bank]", resp.Source.Aliases)
+	}
+}
+
+func TestUpdateSource_MergesAliasesWithoutOverwritingExisting(t *testing.T) {
+	repo := newMockCrawlerRepo()
+	repo.sources["woori"] = &model.CrawlerSource{
+		SourceID: "woori", SourceName: "우리은행", OwnerID: "owner",
+		Subscribers: []string{"owner"}, Aliases: []string{"Woori Bank"},
+	}
+	repo.subscriptions[subKey("owner", "woori")] = &model.CrawlerSubscription{SourceID: "woori"}
+	svc := &CrawlerService{repo: repo}
+
+	err := svc.UpdateSource(context.Background(), "owner", "woori", &model.UpdateCrawlerSourceRequest{
+		Aliases: []string{"우리금융"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := repo.sources["woori"]
+	if !strSliceEqual(got.Aliases, []string{"Woori Bank", "우리금융"}) {
+		t.Fatalf("aliases=%v", got.Aliases)
+	}
+}
+
+func TestUpdateSource_InvalidAliasesRejected(t *testing.T) {
+	repo := newMockCrawlerRepo()
+	repo.sources["woori"] = &model.CrawlerSource{SourceID: "woori", OwnerID: "owner", Subscribers: []string{"owner"}}
+	repo.subscriptions[subKey("owner", "woori")] = &model.CrawlerSubscription{SourceID: "woori"}
+	svc := &CrawlerService{repo: repo}
+
+	err := svc.UpdateSource(context.Background(), "owner", "woori", &model.UpdateCrawlerSourceRequest{
+		Aliases: []string{""},
+	})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected ErrInvalidInput, got %v", err)
+	}
+}
+
+func TestUpdateSourcePartial_AliasesIncludedInSameConditionalUpdate(t *testing.T) {
+	// Proves aliases ride the same conditional partial-update path as the
+	// other union fields (Task 7): a stale `expected` snapshot for Aliases
+	// must fail the update just like a stale NewsQueries snapshot would.
+	repo := newMockCrawlerRepo()
+	repo.sources["woori"] = &model.CrawlerSource{
+		SourceID: "woori", Subscribers: []string{"owner"}, Aliases: []string{"live-value"},
+	}
+	staleExpected := &model.CrawlerSource{
+		SourceID: "woori", Subscribers: []string{"owner"}, Aliases: []string{"stale-value"},
+	}
+	newAliases := []string{"live-value", "new-value"}
+	err := repo.UpdateSourcePartial(context.Background(), "woori", staleExpected, repository.SourcePartialFields{
+		Aliases: &newAliases,
+	})
+	if !errors.Is(err, repository.ErrConditionFailed) {
+		t.Fatalf("expected ErrConditionFailed on stale aliases snapshot, got %v", err)
 	}
 }
 

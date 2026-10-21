@@ -1,11 +1,79 @@
 package repository
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/ttobak/backend/internal/model"
 )
+
+func TestSourceAliasUpdateRequiresExistingUnchangedRow(t *testing.T) {
+	for _, rejected := range []bool{false, true} {
+		calls := 0
+		client := dynamodb.New(dynamodb.Options{
+			Region: "ap-northeast-2", Credentials: aws.AnonymousCredentials{}, RetryMaxAttempts: 1,
+			HTTPClient: meetingListHTTPClientFunc(func(req *http.Request) (*http.Response, error) {
+				calls++
+				if req.Header.Get("X-Amz-Target") != "DynamoDB_20120810.UpdateItem" {
+					t.Fatal("alias update must use conditional UpdateItem")
+				}
+				var input struct {
+					UpdateExpression          string
+					ConditionExpression       string
+					ExpressionAttributeNames  map[string]string
+					ExpressionAttributeValues map[string]map[string]json.RawMessage
+				}
+				if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
+					t.Fatal(err)
+				}
+				condition, update := input.ConditionExpression, input.UpdateExpression
+				for placeholder, name := range input.ExpressionAttributeNames {
+					condition = strings.ReplaceAll(condition, placeholder, name)
+					update = strings.ReplaceAll(update, placeholder, name)
+				}
+				if !strings.Contains(condition, "attribute_exists (PK)") ||
+					!strings.Contains(condition, "aliases =") || !strings.Contains(update, "SET aliases =") ||
+					strings.Contains(update, "ownerId") {
+					t.Fatalf("missing source existence/alias CAS: condition %s update %s", condition, update)
+				}
+				sawOld, sawNew := false, false
+				for _, value := range input.ExpressionAttributeValues {
+					if raw, ok := value["L"]; ok {
+						var aliases []map[string]string
+						if err := json.Unmarshal(raw, &aliases); err != nil {
+							t.Fatal(err)
+						}
+						sawOld = sawOld || len(aliases) == 1 && aliases[0]["S"] == "saved"
+						sawNew = sawNew || len(aliases) == 2 && aliases[1]["S"] == "new"
+					}
+				}
+				if !sawOld || !sawNew {
+					t.Fatal("alias values were not encoded as native DynamoDB string lists")
+				}
+				status, body := http.StatusOK, "{}"
+				if rejected {
+					status, body = http.StatusBadRequest, `{"__type":"ConditionalCheckFailedException","message":"changed"}`
+				}
+				return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": {"application/x-amz-json-1.0"}},
+					Body: io.NopCloser(strings.NewReader(body))}, nil
+			}),
+		})
+		aliases := []string{"saved", "new"}
+		err := NewCrawlerRepository(client, "news").UpdateSourcePartial(context.Background(), "source",
+			&model.CrawlerSource{Aliases: []string{"saved"}}, SourcePartialFields{Aliases: &aliases})
+		if calls != 1 || rejected && !errors.Is(err, ErrConditionFailed) || !rejected && err != nil {
+			t.Fatalf("conditional write result lost: calls %d rejected %v err %v", calls, rejected, err)
+		}
+	}
+}
 
 // TestSourceFieldUnchangedCondition_EmptyValueAcceptsAbsentAttribute is a
 // regression test: a legacy crawler source written before a given field

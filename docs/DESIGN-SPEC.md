@@ -291,6 +291,17 @@ only after user confirmation, with server-side validation and a polled status.
 
 ## Search status and source details
 
+Crawler settings accept public company aliases shared by source subscribers.
+Explain their use in external news searches and persistence after unsubscribing.
+Saved aliases have no remove control; only newly entered, unsaved additions can
+be cancelled. Enforce the 20-name and 100-code-point limits when adding names and
+surface server validation failures. History displays actual publication run
+status, attempts, exclusions and exact recorded cost; incomplete usage shows
+that the amount includes conservative estimates. Legacy history remains readable
+without invented counters or costs. Omit unavailable counters rather than
+displaying zero, preserve recorded numeric zero, and explain missing outcomes
+for recovered runs.
+
 DocDetailClient shows IndexStatus for personal/account documents. Unsaved changes
 override any indexed badge. Pending status polls at five-second intervals for at
 most 12 checks, then offers explicit refresh; unavailable/failed status never means

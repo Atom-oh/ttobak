@@ -147,6 +147,7 @@ type SourcePartialFields struct {
 	NewsQueries *[]string
 	NewsSources *[]string
 	CustomUrls  *[]string
+	Aliases     *[]string
 	Status      *string
 }
 
@@ -178,6 +179,9 @@ func (r *CrawlerRepository) UpdateSourcePartial(ctx context.Context, sourceID st
 	if fields.CustomUrls != nil {
 		entries = append(entries, entry{"customUrls", *fields.CustomUrls, expected.CustomUrls})
 	}
+	if fields.Aliases != nil {
+		entries = append(entries, entry{"aliases", *fields.Aliases, expected.Aliases})
+	}
 	if fields.Status != nil {
 		entries = append(entries, entry{"status", *fields.Status, expected.Status})
 	}
@@ -191,6 +195,8 @@ func (r *CrawlerRepository) UpdateSourcePartial(ctx context.Context, sourceID st
 		update = update.Set(expression.Name(e.name), expression.Value(e.value))
 		cond = cond.And(sourceFieldUnchangedCondition(e.name, e.current))
 	}
+	// A concurrent source deletion must not turn an alias-only update into an upsert.
+	cond = cond.And(expression.AttributeExists(expression.Name("PK")))
 
 	expr, err := expression.NewBuilder().WithUpdate(update).WithCondition(cond).Build()
 	if err != nil {

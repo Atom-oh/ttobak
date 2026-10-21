@@ -640,12 +640,14 @@ export const crawlerApi = {
     newsSources: string[];
     customUrls?: string[];
     newsQueries?: string[];
+    aliases?: string[];
   }) => api.post<CrawlerSourceResponse>('/api/crawler/sources', data),
   updateSource: (sourceId: string, data: {
     awsServices: string[];
     newsSources: string[];
     customUrls?: string[];
     newsQueries?: string[];
+    aliases?: string[];
   }) => api.put<{ status: string }>(`/api/crawler/sources/${sourceId}`, data),
   unsubscribe: (sourceId: string) =>
     api.delete(`/api/crawler/sources/${sourceId}`),
