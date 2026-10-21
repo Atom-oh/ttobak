@@ -66,6 +66,7 @@ python3 scripts/docs/check_docs.py
 - [Browser recording recovery and retention](decisions/ADR-048-browser-recording-backups.md)
 - [Private audio crop worker](../backend/whisper/AUDIO_CROP.md)
 - [Private audio crops and activation](decisions/ADR-047-private-audio-crops.md)
+- [Conditional news publication and cost reservations](decisions/ADR-052-conditional-news-publication.md)
 - [Shared speaker correction and account publication](decisions/ADR-051-shared-speaker-correction-and-account-publication.md)
 - [Versioned HTTP origin proof rotation](decisions/ADR-050-http-origin-proof-rotation.md)
 - [Summary sharing and source provenance](decisions/ADR-049-summary-sharing-source-provenance.md)

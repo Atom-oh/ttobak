@@ -225,8 +225,15 @@ Markdown parser serializes link destinations; valid Markdown alone does not
 establish a working rendered link.
 Prices are caller-supplied estimates; absent rates do not mean zero cost.
 Terms/diagrams remain unavailable until their schema/rendering contracts land.
+The staged `news_store.py` adapter transactionally reserves source/run/month
+budgets, acquires a unique attempt lease, and publishes accepted document state
+with its terminal receipt and cost settlement. Rejected usage remains charged;
+unknown or abandoned usage retains its reservation. Immutable attempt keys live
+outside the legacy shared-text prefix. New consumers must verify current
+publication state before those writers activate; see
+[ADR-052](decisions/ADR-052-conditional-news-publication.md).
 These modules do not activate a scheduler, change legacy news results or establish
-production acceptance. Conditional publication and consumer rollout remain
+production acceptance. Worker wiring, finalization and consumer rollout remain
 separate delivery stages.
 
 Action-item analysis has its own MEETING#/ANALYSIS#actionItems state. The summary
