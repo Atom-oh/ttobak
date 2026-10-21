@@ -1,6 +1,7 @@
 # ADR-053: Connector capabilities and private delegation
 
-Date: 2026-10-21  
+Date: 2026-10-21
+
 Status: Accepted design; staged policy foundation, activation pending
 
 ## Context
