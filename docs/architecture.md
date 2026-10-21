@@ -183,6 +183,9 @@ reads before returning stored excerpts. See [workflow](features/sa-meeting-workf
 The news enrichment replacement starts with staged, unused candidate and article
 modules in `backend/python/crawler/news_pipeline.py` and `article_fetcher.py`.
 Public-source query expansion and URL/event identity are bounded. The article
+identity rejects undecodable UTF-8 query octets instead of merging replacement
+characters; malformed group members are isolated. Canonical metadata must retain
+the normalized fetched origin, including scheme and effective port. The article
 reader resolves DNS in an isolated subprocess with a five-second timeout and
 reaps stalled children. It tries validated public addresses under the remaining
 attempt budget, retains TLS hostname verification (TLS 1.2 minimum), and rechecks

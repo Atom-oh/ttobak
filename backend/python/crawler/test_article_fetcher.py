@@ -36,6 +36,18 @@ def public_resolver(host, port, deadline):
 
 
 class TestBoundedDNS(unittest.TestCase):
+    def test_temporary_resolver_failure_is_distinct_and_retryable(self):
+        with mock.patch.object(fetcher.subprocess, "run",
+                               side_effect=subprocess.CalledProcessError(75, ["python"])):
+            with self.assertRaisesRegex(fetcher.FetchRejected, "DNS_TEMPORARY"):
+                fetcher._resolve_addresses("example.com", 443, fetcher.time.monotonic() + 5)
+        article = mock.Mock()
+        with mock.patch.object(fetcher, "_fetch_once",
+                               side_effect=[fetcher.FetchRejected("DNS_TEMPORARY"), article]) as once, \
+                mock.patch.object(fetcher.time, "sleep"):
+            self.assertIs(fetcher.fetch_article("https://example.com/a"), article)
+        self.assertEqual(once.call_count, 2)
+
     def test_child_retains_only_required_dynamic_loader_path(self):
         environment = {"LD_LIBRARY_PATH": "/runtime/lib", "AWS_SECRET_ACCESS_KEY": "fixture",
                        "PYTHONPATH": "/untrusted", "LD_PRELOAD": "/untrusted.so"}
@@ -301,6 +313,33 @@ class TestArticleFetch(unittest.TestCase):
 
 
 class TestArticleNormalization(unittest.TestCase):
+    def test_wrapped_plain_text_paywall_markers_are_rejected(self):
+        for separator in ("\n", "\t", "   ", "\n\n"):
+            blocks = ["A complete article paragraph " * 15] * 4
+            blocks.append("subscribe" + separator + "to continue reading")
+            with self.subTest(separator=separator), self.assertRaisesRegex(
+                    fetcher.FetchRejected, "PAYWALL"):
+                fetcher._quality_body(blocks)
+
+    def test_duplicate_content_encoding_is_rejected(self):
+        for encodings in (("identity", "gzip"), ("gzip", "identity"), ("identity", "identity")):
+            headers = Message()
+            for encoding in encodings:
+                headers["Content-Encoding"] = encoding
+            with self.assertRaisesRegex(fetcher.FetchRejected, "UNSUPPORTED_ENCODING"):
+                fetcher._decode_body(b"content", headers)
+
+    def test_canonical_metadata_requires_same_normalized_origin(self):
+        for fetched, href, expected in (
+                ("https://bücher.example/a", "https://xn--bcher-kva.example/b",
+                 "https://xn--bcher-kva.example/b"),
+                ("https://example.com./a", "https://example.com/b", "https://example.com/b"),
+                ("https://example.com/a", "http://example.com/b", "https://example.com/a"),
+                ("https://example.com/a", "https://example.com:444/b", "https://example.com/a")):
+            html = article_html(head=f'<link rel="canonical" href="{href}">').decode()
+            with self.subTest(fetched=fetched, href=href):
+                self.assertEqual(fetcher.normalize_html(html, fetched).canonical_url, expected)
+
     def test_visible_paywall_notice_outside_blocks_rejects_full_excerpt(self):
         for extra in ("<div>subscribe to continue reading</div>",
                       "<p>subscribe to continue reading</p>",

@@ -85,7 +85,8 @@ def canonicalize_url(url: str) -> str:
         raise ValueError("Invalid port")
     netloc = hostname if port in (None, _DEFAULT_PORTS[scheme]) else f"{hostname}:{port}"
     query_pairs = sorted(
-        (k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True, max_num_fields=100)
+        (k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True,
+                                    max_num_fields=100, errors="strict")
         if not k.lower().startswith("utm_") and k.lower() not in TRACKING_PARAMS
     )
     query = urlencode(query_pairs)
@@ -244,6 +245,24 @@ def group_near_duplicates(candidates: list) -> list:
     other group members, url only)."""
     if len(candidates) > MAX_CANDIDATES:
         raise ValueError("Too many news candidates")
+    valid = []
+    for candidate in candidates:
+        try:
+            if not isinstance(candidate, dict):
+                continue
+            canonical = canonicalize_url(candidate.get("url"))
+            if any(not isinstance(candidate.get(key, ""), str)
+                   or len(candidate.get(key, "")) > maximum
+                   for key, maximum in (("sourceId", 128), ("sourceName", 200), ("title", 500))):
+                continue
+            aliases = candidate.get("aliases") or []
+            if (not isinstance(aliases, list) or len(aliases) > 32
+                    or any(not isinstance(value, str) or len(value) > 200 for value in aliases)):
+                continue
+            valid.append({**candidate, "canonicalUrl": canonical})
+        except (ValueError, UnicodeError):
+            continue
+    candidates = valid
     used = [False] * len(candidates)
     groups = []
 

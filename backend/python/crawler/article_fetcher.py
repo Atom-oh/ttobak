@@ -52,7 +52,10 @@ _HEADERS = {
 # and reaps it on timeout, so stalled DNS cannot accumulate warm-worker threads.
 _DNS_SCRIPT = """
 import json, socket, sys
-answers = socket.getaddrinfo(sys.argv[1], int(sys.argv[2]), type=socket.SOCK_STREAM)
+try:
+    answers = socket.getaddrinfo(sys.argv[1], int(sys.argv[2]), type=socket.SOCK_STREAM)
+except socket.gaierror as error:
+    sys.exit(75 if error.errno == socket.EAI_AGAIN else 1)
 print(json.dumps(answers[:33]))
 """
 
@@ -92,8 +95,8 @@ def _resolve_addresses(host, port, deadline):
             timeout=min(DNS_TIMEOUT_SECONDS, remaining))
     except subprocess.TimeoutExpired:
         raise TimeoutError() from None
-    except subprocess.CalledProcessError:
-        raise FetchRejected("DNS_ERROR") from None
+    except subprocess.CalledProcessError as error:
+        raise FetchRejected("DNS_TEMPORARY" if error.returncode == 75 else "DNS_ERROR") from None
     if len(result.stdout) > 32768:
         raise FetchRejected("DNS_ERROR")
     try:
@@ -296,6 +299,8 @@ def _body_charset(raw, headers):
 
 
 def _decode_body(raw, headers):
+    if len(headers.get_all("Content-Encoding", [])) > 1:
+        raise FetchRejected("UNSUPPORTED_ENCODING")
     encoding = (headers.get("Content-Encoding") or "identity").lower().strip()
     if encoding not in ("identity", "gzip"):
         raise FetchRejected("UNSUPPORTED_ENCODING")
@@ -418,7 +423,7 @@ class _ArticleExtractor(HTMLParser):
 
 def _quality_body(blocks):
     body = "\n\n".join(blocks)
-    if any(marker in body.lower() for marker in _PAYWALL_MARKERS):
+    if any(marker in re.sub(r"\s+", " ", body).lower() for marker in _PAYWALL_MARKERS):
         raise FetchRejected("PAYWALL")
     if len(body) > MAX_BODY_CHARS:
         raise FetchRejected("BODY_TOO_LARGE")
@@ -446,8 +451,12 @@ def normalize_html(html, url):
     canonical = canonicalize_url(url)
     try:
         proposed = canonicalize_url(urljoin(url, parser.canonical))
-        # A page cannot claim another publisher's identity and overwrite it.
-        if urlsplit(proposed).hostname == urlsplit(url).hostname:
+        # Compare normalized origins, including scheme and effective port.
+        # IDNA/trailing-dot equivalents remain valid; other origins cannot
+        # redirect a document identity away from the fetched publisher.
+        fetched_origin, proposed_origin = urlsplit(canonical), urlsplit(proposed)
+        if (proposed_origin.scheme, proposed_origin.netloc) == (
+                fetched_origin.scheme, fetched_origin.netloc):
             canonical = proposed
     except ValueError:
         pass
@@ -503,7 +512,7 @@ def fetch_article(url):
             return _fetch_once(url)
         except FetchRejected as error:
             reason = error.reason
-            retry = reason == "HTTP_429" or reason.startswith("HTTP_5")
+            retry = reason in ("HTTP_429", "DNS_TEMPORARY") or reason.startswith("HTTP_5")
         except (TimeoutError, socket.timeout):
             reason, retry = "TIMEOUT", True
         except (OSError, http.client.HTTPException):

@@ -29,6 +29,25 @@ def candidate(title, url, published_at, source_id='woori', source_name='우리�
     }
 
 class TestCandidateDiscovery(unittest.TestCase):
+    def test_non_utf8_query_octets_never_collapse_into_replacement_identity(self):
+        for query in ("%B0%A1", "%B3%AA"):
+            with self.subTest(query=query), self.assertRaises(UnicodeError):
+                news_pipeline.canonicalize_url("https://example.com/article?id=" + query)
+        first = news_pipeline.canonicalize_url("https://example.com/article?id=%EA%B0%80")
+        second = news_pipeline.canonicalize_url("https://example.com/article?id=%EB%82%98")
+        self.assertNotEqual(first, second)
+        self.assertNotEqual(news_pipeline.document_hash(first), news_pipeline.document_hash(second))
+
+    def test_malformed_group_member_does_not_discard_valid_neighbor(self):
+        good = candidate("valid article", "https://example.com/a?utm_source=x", "2026-08-08")
+        for bad in (None, {**good, "url": "ftp://example.com"},
+                    {**good, "aliases": [3]}, {**good, "title": []},
+                    {**good, "url": "https://example.com/?id=%B0%A1"}):
+            with self.subTest(bad=bad):
+                groups = news_pipeline.group_near_duplicates([bad, good])
+                self.assertEqual(len(groups), 1)
+                self.assertEqual(groups[0]["canonicalUrl"], "https://example.com/a")
+
     def test_empty_root_and_slash_have_the_same_identity(self):
         bare = news_pipeline.canonicalize_url("https://example.com")
         slash = news_pipeline.canonicalize_url("https://example.com/")
