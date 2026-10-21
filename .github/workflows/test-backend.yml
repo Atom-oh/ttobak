@@ -19,6 +19,8 @@ on:
       # Re-run on workflow changes so PRs that only touch CI still trigger
       # the required `test` check (branch protection blocks otherwise).
       - '.github/workflows/test-backend.yml'
+      # Review-tool-only PRs also need the protected `test` check.
+      - 'scripts/pr-review/**'
 
 permissions:
   contents: read
