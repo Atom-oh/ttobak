@@ -46,6 +46,24 @@ class TestDiscovery(unittest.TestCase):
         self.assertLessEqual(gateway.call_count, 12)
         self.assertEqual(result["freshnessDays"], 7)
 
+    def test_existing_unicode_source_identity_is_preserved_through_discovery(self):
+        for identity in ("하나금융그룹", "우리은행", "école-١", "news_source"):
+            with self.subTest(identity=identity):
+                config = source(sourceId=identity)
+                result, _, lookup = self.run_discovery([article()], config=config)
+                self.assertEqual(result["sourceId"], identity)
+                self.assertEqual(result["candidates"][0]["sourceId"], identity)
+                self.assertEqual(result["sourceRevision"], discovery.source_revision(config))
+                self.assertTrue(all(call.args[0] == identity for call in lookup.call_args_list))
+
+    def test_source_identity_rejects_unsafe_or_rewritten_forms(self):
+        for identity in ("", "__reserved", " source", "source ", "우리 은행", "a/b",
+                         "a\\b", "a#b", "a%b", ".", "a\nb", "\ud800", "a²", "가" * 129):
+            with self.subTest(identity=repr(identity)):
+                self.assertFalse(discovery.valid_source_id(identity))
+                with self.assertRaisesRegex(discovery.DiscoveryRejected, "INVALID_CONFIG"):
+                    self.run_discovery([article()], config=source(sourceId=identity))
+
     def test_unknown_future_and_old_dates_never_claim_freshness(self):
         values = [article(1, publishedDate=""), article(2, publishedDate="2026-10-22"),
                   article(3, publishedDate="2026-08-01"), article(4)]

@@ -189,6 +189,9 @@ limited slots first and skip relevance filtering; their article fetch and
 quality checks still apply. Search snippets and raw transport errors are omitted.
 Source fingerprints cover configuration relevant to publication; the future
 worker must revalidate them against current configuration before publishing.
+Source IDs retain the stored Unicode letters and decimal digits used by the Go
+source creator, plus existing hyphens and underscores. Discovery never renames
+them and rejects whitespace, path delimiters and the reserved `__` prefix.
 Public-source query expansion and URL/event identity are bounded. The article
 identity rejects undecodable UTF-8 query octets instead of merging replacement
 characters; malformed group members are isolated. Canonical metadata must retain

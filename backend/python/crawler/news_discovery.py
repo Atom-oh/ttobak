@@ -43,11 +43,18 @@ def _terms(value):
     return list(dict.fromkeys(_text(item, 200, empty=False) for item in value))
 
 
+def valid_source_id(value):
+    """Keep stored Unicode identities without normalization or path delimiters."""
+    return (isinstance(value, str) and 1 <= len(value) <= 128
+            and not value.startswith("__")
+            and all(char.isalpha() or char.isdecimal() or char in "_-" for char in value))
+
+
 def source_snapshot(source):
     if not isinstance(source, dict):
         raise DiscoveryRejected("INVALID_CONFIG")
-    source_id = _text(source.get("sourceId"), 128, empty=False)
-    if not _IDENTIFIER.fullmatch(source_id) or source_id.startswith("__"):
+    source_id = source.get("sourceId")
+    if not valid_source_id(source_id):
         raise DiscoveryRejected("INVALID_CONFIG")
     urls = source.get("customUrls") or []
     if not isinstance(urls, list) or len(urls) > MAX_CUSTOM_URLS:
