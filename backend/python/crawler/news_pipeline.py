@@ -89,7 +89,7 @@ def canonicalize_url(url: str) -> str:
         if not k.lower().startswith("utm_") and k.lower() not in TRACKING_PARAMS
     )
     query = urlencode(query_pairs)
-    return urlunsplit((scheme, netloc, parts.path or "", query, ""))
+    return urlunsplit((scheme, netloc, parts.path or "/", query, ""))
 
 
 def document_hash(canonical_url: str) -> str:

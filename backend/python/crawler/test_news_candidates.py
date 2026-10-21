@@ -29,6 +29,14 @@ def candidate(title, url, published_at, source_id='woori', source_name='우리�
     }
 
 class TestCandidateDiscovery(unittest.TestCase):
+    def test_empty_root_and_slash_have_the_same_identity(self):
+        bare = news_pipeline.canonicalize_url("https://example.com")
+        slash = news_pipeline.canonicalize_url("https://example.com/")
+        self.assertEqual(bare, slash)
+        self.assertEqual(news_pipeline.document_hash(bare), news_pipeline.document_hash(slash))
+        self.assertEqual(news_pipeline.candidate_id("source", bare),
+                         news_pipeline.candidate_id("source", slash))
+
     def test_grouping_does_not_forward_search_snippets_or_nested_payloads(self):
         lead = candidate("same title", "https://example.com/a", "2026-08-08")
         lead.update(snippet="search snippet", body="not fetched", unexpected={"raw": "payload"})

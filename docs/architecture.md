@@ -183,9 +183,13 @@ reads before returning stored excerpts. See [workflow](features/sa-meeting-workf
 The news enrichment replacement starts with staged, unused candidate and article
 modules in `backend/python/crawler/news_pipeline.py` and `article_fetcher.py`.
 Public-source query expansion and URL/event identity are bounded. The article
-reader pins validated public DNS addresses across HTTP/TLS requests and rechecks
+reader resolves DNS in an isolated subprocess with a five-second timeout and
+reaps stalled children. It tries validated public addresses under the remaining
+attempt budget, retains TLS hostname verification (TLS 1.2 minimum), and rechecks
 each redirect; credentials, private/transition addresses and non-web ports are
-rejected. Encoded/decoded byte limits, receive deadlines and complete-body checks
+rejected. Explicit supported MIME, matching HTTP/meta charset declarations
+(UTF-8, ASCII, EUC-KR or CP949), visible paywall notices even outside article
+blocks, encoded/decoded byte limits, receive deadlines and complete-body checks
 reject oversized, partial, paywalled or script-only input instead of publishing
 snippet-based summaries. These modules do not activate a scheduler, change legacy
 news results or establish production acceptance. Enrichment, conditional

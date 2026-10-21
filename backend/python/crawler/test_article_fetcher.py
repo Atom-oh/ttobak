@@ -3,6 +3,9 @@
 import gzip
 import io
 import socket
+import subprocess
+import tempfile
+from pathlib import Path
 import unittest
 from email.message import Message
 from unittest import mock
@@ -28,15 +31,58 @@ def response(body=None, status=200, **headers):
     return value
 
 
-def public_resolver(host, port, **kwargs):
+def public_resolver(host, port, deadline):
     return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("93.184.216.34", port))]
 
 
+class TestBoundedDNS(unittest.TestCase):
+    def test_numeric_resolution_in_isolated_child_returns_socket_addresses(self):
+        answers = fetcher._resolve_addresses("93.184.216.34", 443,
+                                             fetcher.time.monotonic() + 5)
+        self.assertTrue(answers)
+        self.assertTrue(all(answer[4][:2] == ["93.184.216.34", 443] for answer in answers))
+
+    def test_stalled_resolver_child_is_killed_and_reaped_before_return(self):
+        with tempfile.TemporaryDirectory() as folder:
+            pid_file = Path(folder) / "resolver.pid"
+            script = ("import os, time\n"
+                      f"open({str(pid_file)!r}, 'w').write(str(os.getpid()))\n"
+                      "time.sleep(60)\n")
+            with mock.patch.object(fetcher, "_DNS_SCRIPT", script), \
+                    mock.patch.object(fetcher, "DNS_TIMEOUT_SECONDS", 0.5):
+                start = fetcher.time.monotonic()
+                with self.assertRaises(TimeoutError):
+                    fetcher._resolve_addresses("example.com", 443, start + 10)
+            self.assertLess(fetcher.time.monotonic() - start, 3)
+            pid = int(pid_file.read_text())
+            with self.assertRaises(ChildProcessError):
+                fetcher.subprocess.os.waitpid(pid, fetcher.subprocess.os.WNOHANG)
+            with self.assertRaises(ProcessLookupError):
+                fetcher.subprocess.os.kill(pid, 0)
+
+    def test_exhausted_budget_never_starts_resolver(self):
+        with mock.patch.object(fetcher.subprocess, "run") as run:
+            with self.assertRaises(TimeoutError):
+                fetcher._resolve_addresses("example.com", 443, 0)
+        run.assert_not_called()
+
+    def test_dns_failure_has_bounded_reason(self):
+        with mock.patch.object(fetcher.subprocess, "run",
+                               side_effect=subprocess.CalledProcessError(1, "resolver")):
+            with self.assertRaisesRegex(fetcher.FetchRejected, "^DNS_ERROR$"):
+                fetcher._resolve_addresses("example.com", 443, fetcher.time.monotonic() + 5)
+
+
 class TestArticleFetch(unittest.TestCase):
+    def setUp(self):
+        patcher = mock.patch.object(fetcher, "_resolve_addresses", side_effect=public_resolver)
+        self.resolve = patcher.start()
+        self.addCleanup(patcher.stop)
+
     def fetch_with(self, *responses, url="https://example.com/a"):
         pairs = [(mock.Mock(), item) for item in responses]
         with mock.patch.object(fetcher, "_open_response", side_effect=pairs) as opened:
-            article = fetcher.fetch_article(url, resolver=public_resolver)
+            article = fetcher.fetch_article(url)
         for connection, item in pairs:
             connection.close.assert_called_once()
             item.close.assert_called_once()
@@ -52,14 +98,15 @@ class TestArticleFetch(unittest.TestCase):
     def test_blocked_redirect_never_opens_second_connection(self):
         first = response(status=302, Location="http://127.0.0.1/private")
 
-        def resolve(host, port, **kwargs):
+        def resolve(host, port, deadline):
             ip = "127.0.0.1" if host == "127.0.0.1" else "93.184.216.34"
             return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, port))]
 
         connection = mock.Mock()
+        self.resolve.side_effect = resolve
         with mock.patch.object(fetcher, "_open_response", return_value=(connection, first)) as opened:
             with self.assertRaisesRegex(fetcher.FetchRejected, "BLOCKED_HOST"):
-                fetcher.fetch_article("https://example.com/a", resolver=resolve)
+                fetcher.fetch_article("https://example.com/a")
         opened.assert_called_once()
         connection.close.assert_called_once()
 
@@ -68,21 +115,22 @@ class TestArticleFetch(unittest.TestCase):
                           ["100.64.0.1"], ["224.0.0.1"], ["93.184.216.34", "10.0.0.1"],
                           ["::1"], ["64:ff9b::a00:1"], ["::ffff:127.0.0.1"],
                           ["2002:7f00:1::"], ["2001:0000:4136:e378:8000:63bf:3fff:fdd2"]):
-            def resolve(host, port, **kwargs):
+            def resolve(host, port, deadline):
                 return [(socket.AF_INET6 if ":" in ip else socket.AF_INET,
                          socket.SOCK_STREAM, 6, "", (ip, port)) for ip in addresses]
+            self.resolve.side_effect = resolve
             with self.subTest(addresses=addresses), self.assertRaisesRegex(
                     fetcher.FetchRejected, "BLOCKED_HOST"):
-                fetcher.validate_public_url("https://example.com/a", resolver=resolve)
+                fetcher.validate_public_url("https://example.com/a")
 
     def test_rejects_credential_urls_non_web_ports_and_bad_schemes(self):
         for url in ("ftp://example.com/a", "https://user@example.com/a",
                     "http://example.com:8080/a", "https://example.com/\r\nheader"):
             with self.subTest(url=url), self.assertRaisesRegex(fetcher.FetchRejected, "BLOCKED_HOST"):
-                fetcher.validate_public_url(url, resolver=public_resolver)
+                fetcher.validate_public_url(url)
 
     def test_numeric_connection_is_pinned_and_tls_uses_hostname(self):
-        parsed, addresses = fetcher._target("https://example.com/a", public_resolver)
+        parsed, addresses = fetcher._target("https://example.com/a", fetcher.time.monotonic() + 40)
         raw_socket, tls_socket, connection, http_response = (mock.Mock() for _ in range(4))
         context = mock.Mock()
         context.wrap_socket.return_value = tls_socket
@@ -95,9 +143,10 @@ class TestArticleFetch(unittest.TestCase):
         raw_socket.connect.assert_called_once_with(("93.184.216.34", 443))
         context.wrap_socket.assert_called_once_with(raw_socket, server_hostname="example.com")
         self.assertIs(returned.sock, tls_socket)
+        self.assertEqual(context.minimum_version, fetcher.ssl.TLSVersion.TLSv1_2)
 
     def test_tls_failure_closes_socket_without_retrying_an_unchecked_host(self):
-        parsed, addresses = fetcher._target("https://example.com/a", public_resolver)
+        parsed, addresses = fetcher._target("https://example.com/a", fetcher.time.monotonic() + 40)
         sock, context = mock.Mock(), mock.Mock()
         context.wrap_socket.side_effect = OSError("certificate failure")
         with mock.patch.object(fetcher.socket, "socket", return_value=sock), \
@@ -105,6 +154,37 @@ class TestArticleFetch(unittest.TestCase):
             with self.assertRaises(OSError):
                 fetcher._open_response(parsed, addresses, fetcher.time.monotonic() + 40)
         sock.close.assert_called_once()
+
+    def test_unreachable_ipv6_falls_back_to_validated_ipv4(self):
+        addresses = [
+            (socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("2606:4700:4700::1111", 443, 0, 0)),
+            public_resolver("example.com", 443, 0)[0],
+        ]
+        self.resolve.side_effect = None
+        self.resolve.return_value = addresses
+        parsed, checked = fetcher._target("https://example.com/a", fetcher.time.monotonic() + 40)
+        first, second, tls, connection, http_response = (mock.Mock() for _ in range(5))
+        first.connect.side_effect = OSError("IPv6 unreachable")
+        context = mock.Mock()
+        context.wrap_socket.return_value = tls
+        with mock.patch.object(fetcher.socket, "socket", side_effect=[first, second]), \
+                mock.patch.object(fetcher.ssl, "create_default_context", return_value=context), \
+                mock.patch.object(fetcher.http.client, "HTTPConnection", return_value=connection), \
+                mock.patch.object(fetcher.http.client, "HTTPResponse", return_value=http_response):
+            result, _ = fetcher._open_response(parsed, checked, fetcher.time.monotonic() + 40)
+        first.connect.assert_called_once_with(addresses[0][4])
+        first.close.assert_called_once()
+        second.connect.assert_called_once_with(addresses[1][4])
+        self.assertIs(result.sock, tls)
+        context.wrap_socket.assert_called_once_with(second, server_hostname="example.com")
+
+    def test_address_fallback_stops_at_overall_deadline(self):
+        parsed, addresses = fetcher._target("https://example.com/a", fetcher.time.monotonic() + 40)
+        with mock.patch.object(fetcher, "_open_address", side_effect=OSError("unreachable")) as opened, \
+                mock.patch.object(fetcher.time, "monotonic", return_value=11):
+            with self.assertRaises(TimeoutError):
+                fetcher._open_response(parsed, addresses * 3, deadline=10)
+        opened.assert_called_once()
 
     def test_slow_header_or_body_cannot_extend_receive_deadline(self):
         sock = mock.Mock()
@@ -146,6 +226,36 @@ class TestArticleFetch(unittest.TestCase):
             with self.subTest(reason=reason), self.assertRaisesRegex(fetcher.FetchRejected, reason):
                 self.fetch_with(item)
 
+    def test_missing_malformed_or_duplicate_mime_is_rejected(self):
+        items = [response(), response(**{"Content-Type": "broken"})]
+        del items[0].headers["Content-Type"]
+        duplicate = response()
+        duplicate.headers["Content-Type"] = "text/plain"
+        for item in items + [duplicate]:
+            with self.assertRaisesRegex(fetcher.FetchRejected, "UNSUPPORTED_CONTENT_TYPE"):
+                self.fetch_with(item)
+
+    def test_korean_meta_charset_is_respected_and_conflicts_are_rejected(self):
+        for charset in ("euc-kr", "cp949"):
+            raw = article_html(head=f'<meta charset="{charset}">').decode().encode(charset)
+            article, _ = self.fetch_with(response(raw, **{"Content-Type": "text/html"}))
+            self.assertIn("사실과 근거", article.body)
+            with self.assertRaisesRegex(fetcher.FetchRejected, "DECODE_ERROR"):
+                self.fetch_with(response(raw))  # UTF-8 header conflicts with meta.
+        with self.assertRaisesRegex(fetcher.FetchRejected, "UNSUPPORTED_CHARSET"):
+            self.fetch_with(response(article_html(),
+                                     **{"Content-Type": "text/html; charset=iso-8859-1"}))
+
+    def test_plain_text_identity_drops_tracking_and_fragment(self):
+        raw = "\n\n".join(["내용입니다. " * 60] * 4).encode()
+        article, _ = self.fetch_with(response(raw, **{"Content-Type": "text/plain"}),
+                                    url="https://example.com?utm_source=a#top")
+        self.assertEqual(article.canonical_url, "https://example.com/")
+
+    def test_malformed_redirect_has_bounded_rejection(self):
+        with self.assertRaisesRegex(fetcher.FetchRejected, "^INVALID_REDIRECT$"):
+            self.fetch_with(response(status=302, Location="https://[invalid/a"))
+
     def test_gzip_and_plain_text_keep_complete_body(self):
         article, _ = self.fetch_with(response(gzip.compress(article_html()), **{"Content-Encoding": "gzip"}))
         plain = article.body
@@ -175,6 +285,28 @@ class TestArticleFetch(unittest.TestCase):
 
 
 class TestArticleNormalization(unittest.TestCase):
+    def test_visible_paywall_notice_outside_blocks_rejects_full_excerpt(self):
+        for extra in ("<div>subscribe to continue reading</div>",
+                      "<p>subscribe to continue reading</p>",
+                      "<div>subscribe <b>to continue</b> reading</div>"):
+            with self.subTest(extra=extra), self.assertRaisesRegex(fetcher.FetchRejected, "PAYWALL"):
+                fetcher.normalize_html(article_html(extra=extra).decode(), "https://example.com/a")
+        html = article_html(extra="<div hidden>subscribe to continue reading</div>").decode()
+        self.assertIn("기사 3", fetcher.normalize_html(html, "https://example.com/a").body)
+
+    def test_nested_list_restores_outer_trailing_correction(self):
+        nested = ("<ul><li>Initial claim<ul><li>Supporting detail</li></ul>"
+                  "Trailing correction</li></ul>")
+        html = article_html().decode().replace("</article>", nested + "</article>")
+        body = fetcher.normalize_html(html, "https://example.com/a").body
+        self.assertIn("Initial claim\n\nSupporting detail\n\nTrailing correction", body)
+
+    def test_invalid_canonical_keeps_normalized_fallback_identity(self):
+        for href in ("https://other.example/a", "javascript:alert(1)", "https://[invalid"):
+            html = article_html(head=f'<link href="{href}" rel="canonical">').decode()
+            article = fetcher.normalize_html(html, "https://example.com?utm_source=a#top")
+            self.assertEqual(article.canonical_url, "https://example.com/")
+
     def test_cookie_container_void_tags_and_inline_markup_do_not_hide_article(self):
         html = article_html(extra="<div class='cookie-banner'><img src='x'><p>consent</p></div>")
         article = fetcher.normalize_html(html.decode(), "https://example.com/a")
