@@ -16,7 +16,6 @@ from botocore.exceptions import BotoCoreError, ClientError
 from article_fetcher import ArticleBody, MAX_BODY_CHARS, MIN_BODY_CHARS
 from news_pipeline import canonicalize_url
 
-FINAL_MODEL_REGION = os.environ.get("FINAL_MODEL_REGION", os.environ.get("AWS_REGION", "ap-northeast-2"))
 FINAL_MODEL_ID = os.environ.get("FINAL_MODEL_ID", "global.anthropic.claude-opus-5")
 PROMPT_VERSION = "news-v1"
 QUALITY_GATE_VERSION = "news-v1"
@@ -158,14 +157,23 @@ def _has_long_verbatim_run(text, body):
 
 def validate_enrichment(raw, article_bodies, require_relevance=True):
     sources = _sources(article_bodies)
+    _require(type(require_relevance) is bool, "requireRelevance", "INVALID_SOURCE")
+    _require(isinstance(raw, dict), "fields")
+    # A negative verdict is terminal even when other generated fields need
+    # repair. A paid formatting repair must not turn it into an accepted topic.
+    if require_relevance and raw.get("relevant") is False:
+        raise QualityRejected("NOT_RELEVANT", ["unrelated article"])
+    _require(type(raw.get("relevant")) is bool, "relevant")
+    _confidence(raw.get("relevanceConfidence"), "relevanceConfidence")
+    if require_relevance:
+        _require(raw["relevanceConfidence"] >= RELEVANCE_THRESHOLD,
+                 "unrelated article", "NOT_RELEVANT")
     _object(raw, _FIELDS, "fields")
     _require(type(raw["schemaVersion"]) is int and raw["schemaVersion"] == 1, "schemaVersion")
     _require(raw["kind"] == "news", "kind")
     _string(raw["title"], "title", maximum=300)
     _string(raw["executiveSummary"], "executiveSummary", MIN_SUMMARY_CHARS, 4000)
     _string(raw["context"], "context", maximum=2000)
-    _require(type(raw["relevant"]) is bool, "relevant")
-    _confidence(raw["relevanceConfidence"], "relevanceConfidence")
     _string(raw["relevanceRationale"], "relevanceRationale", maximum=500)
     _object(raw["impact"], ("business", "technical"), "impact")
     business = _strings(raw["impact"]["business"], "impact.business")
@@ -188,6 +196,7 @@ def validate_enrichment(raw, article_bodies, require_relevance=True):
     evidence = raw["evidence"]
     _require(isinstance(evidence, list) and 1 <= len(evidence) <= 12, "evidence")
     by_id = {}
+    verified_evidence = []
     total_excerpts = 0
     for item in evidence:
         _object(item, ("id", "sourceUrl", "supportingExcerpt", "publishedAt"), "evidence")
@@ -202,6 +211,9 @@ def validate_enrichment(raw, article_bodies, require_relevance=True):
         _require(article is not None, "evidence URL was not fetched", "EVIDENCE_NOT_FOUND")
         _require(excerpt in article.body, "excerpt does not match its URL", "EVIDENCE_NOT_FOUND")
         _require(item["publishedAt"] == article.published_at, "evidence.publishedAt")
+        # Canonical identity locates the fetched source; citations retain its
+        # actual final URL rather than a model-rewritten signed/query URL.
+        verified_evidence.append({**item, "sourceUrl": article.final_url})
         total_excerpts += len(excerpt)
         by_id[identifier] = item
     _require(total_excerpts <= MAX_TOTAL_EXCERPT_CHARS, "total excerpts")
@@ -231,11 +243,8 @@ def validate_enrichment(raw, article_bodies, require_relevance=True):
     for text in prose:
         _require(not any(_has_long_verbatim_run(text, article.body) for article in sources.values()),
                  "long verbatim source text")
-    encoded = json.dumps(raw, ensure_ascii=False, allow_nan=False)
+    encoded = json.dumps({**raw, "evidence": verified_evidence}, ensure_ascii=False, allow_nan=False)
     _require(len(encoded.encode("utf-8")) <= MAX_RESPONSE_BYTES, "artifact size")
-    if require_relevance:
-        _require(raw["relevant"] and raw["relevanceConfidence"] >= RELEVANCE_THRESHOLD,
-                 "unrelated article", "NOT_RELEVANT")
     # Detach nested caller-owned objects before the worker persists them.
     return json.loads(encoded)
 
@@ -317,6 +326,7 @@ def _response_text(response):
 
 def enrich_article(candidate, article_bodies, bedrock, require_relevance=None, *, model_id=None):
     required = candidate.get("requireRelevance", True) if require_relevance is None else require_relevance
+    _require(type(required) is bool, "requireRelevance", "INVALID_SOURCE")
     prompt = build_prompt(candidate, article_bodies, required)
     usage = {"inputTokens": 0, "outputTokens": 0, "repairCount": 0}
     last_error = None

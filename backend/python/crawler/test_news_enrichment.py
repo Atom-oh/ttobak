@@ -1,6 +1,7 @@
 """Structured news schema, citation, completion and rendering boundaries."""
 
 import json
+import html
 import unittest
 from decimal import Decimal
 from unittest import mock
@@ -307,6 +308,35 @@ class TestSynthesis(unittest.TestCase):
             enrichment.enrich_article(candidate_fixture(), [valid_body()], client)
         client.converse.assert_called_once()
 
+    def test_negative_or_low_confidence_verdict_survives_malformed_other_fields(self):
+        for raw in (valid_enrichment_json(relevant=False, executive_summary="short"),
+                    valid_enrichment_json(relevanceConfidence=0.1, executive_summary="short"),
+                    {"relevant": False}):
+            client = mock.Mock()
+            client.converse.side_effect = [bedrock_response(raw), bedrock_response()]
+            with self.subTest(raw=raw), self.assertRaisesRegex(
+                    enrichment.QualityRejected, "NOT_RELEVANT"):
+                enrichment.enrich_article(candidate_fixture(), [valid_body()], client)
+            client.converse.assert_called_once()
+
+    def test_relevance_gate_requires_an_actual_boolean_before_model_calls(self):
+        for flag in (None, 0, 1, "", "false", [], {}):
+            client = mock.Mock()
+            with self.subTest(flag=flag), self.assertRaisesRegex(
+                    enrichment.QualityRejected, "INVALID_SOURCE"):
+                enrichment.enrich_article(
+                    candidate_fixture(requireRelevance=flag), [valid_body()], client)
+            client.converse.assert_not_called()
+
+    def test_evidence_uses_exact_fetched_url_without_mutating_model_output(self):
+        url = "https://example.com/a?z=2&tag=b&tag=a&signed=x%2fy&utm_source=receipt"
+        body = article_body(valid_body().body, url)
+        raw = valid_enrichment_json()
+        raw["evidence"][0]["sourceUrl"] = enrichment.canonicalize_url(url)
+        accepted = enrichment.validate_enrichment(raw, [body])
+        self.assertEqual(accepted["evidence"][0]["sourceUrl"], url)
+        self.assertNotEqual(raw["evidence"][0]["sourceUrl"], url)
+
     def test_missing_usage_is_unknown_not_free(self):
         client = mock.Mock()
         client.converse.return_value = bedrock_response(usage={})
@@ -337,7 +367,7 @@ class TestRendering(unittest.TestCase):
                         "AWS 관련성", "다음 미팅 질문", "권장 액션", "근거 및 출처"):
             self.assertIn("## " + heading, output)
         self.assertIn("[S1]", output)
-        self.assertIn("[원문](https://example.com/a)", output)
+        self.assertIn("[원문](<https://example.com/a>)", output)
 
     def test_untrusted_prose_cannot_add_html_or_markdown_structure(self):
         raw = valid_enrichment_json(title="<img src=x onerror=alert(1)>",
@@ -348,7 +378,18 @@ class TestRendering(unittest.TestCase):
         self.assertNotIn("\n# injected", output)
         self.assertNotIn("[x](javascript:", output)
         self.assertNotIn("![x]", output)
-        self.assertIn("%29", output)
+        self.assertIn("[원문](<https://example.com/a)!%5Bx%5D(https://evil.example)>)", output)
+
+    def test_source_links_preserve_query_order_encoding_and_ipv6_authority(self):
+        for url in ("https://example.com/a?z=2&tag=b&tag=a&signed=x%2fy&utm_source=receipt",
+                    "https://[2606:4700:4700::1111]/a",
+                    "https://example.com/a?literal=&copy;&x=1"):
+            raw = valid_enrichment_json()
+            raw["evidence"][0]["sourceUrl"] = url
+            output = news_renderer.render_news_markdown(raw, candidate_fixture(), 1)
+            self.assertIn(f"[원문](<{url}>)", html.unescape(output))
+            if "&copy;" in url:
+                self.assertIn("literal=&amp;copy;&amp;x=1", output)
 
     def test_renderer_rejects_invalid_url_and_oversized_output(self):
         raw = valid_enrichment_json()

@@ -201,8 +201,16 @@ boilerplate exclusion. Nonrepresentable UTC dates remain unknown freshness.
 objects from complete model responses. Each evidence URL/excerpt/date binds to the
 same fetched source; facts reference validated evidence, and rejected attempts
 retain token accounting. One repair may reuse the complete original sources.
-`news_renderer.py` escapes model prose and link delimiters, and never receives
-raw article bodies. Citation provenance checks do not prove semantic correctness.
+An explicit negative or below-threshold relevance verdict ends the attempt even
+if other fields are malformed; the relevance gate requires a boolean.
+Accepted citation links retain the exact fetched final URL. `news_renderer.py`
+escapes model prose and URL components, preserves retrieval query order and IPv6
+authorities, and never receives raw article bodies. Citation provenance checks do
+not prove semantic correctness. The injected Bedrock client owns the invocation
+region; the model identifier remains explicit configuration.
+Frontend activation must also preserve literal IPv6 authority brackets when its
+Markdown parser serializes link destinations; valid Markdown alone does not
+establish a working rendered link.
 Prices are caller-supplied estimates; absent rates do not mean zero cost.
 Terms/diagrams remain unavailable until their schema/rendering contracts land.
 These modules do not activate a scheduler, change legacy news results or establish

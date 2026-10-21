@@ -2,7 +2,7 @@
 
 import html
 import re
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from news_pipeline import canonicalize_url
 
@@ -41,11 +41,21 @@ def render_news_markdown(artifact, candidate, source_count):
     ]
     evidence = []
     for item in artifact["evidence"]:
-        # Canonicalization rejects credential/non-HTTP URLs; encode Markdown
-        # link delimiters even for a source URL that was legitimately fetched.
-        url = quote(canonicalize_url(item["sourceUrl"]), safe="/:?&=%#@!$'*,;~+-._")
+        # Validate identity without sorting/removing query parameters. Match
+        # publisher transport component escaping and keep IPv6 authority brackets.
+        original = urlsplit(item["sourceUrl"])
+        authority = urlsplit(canonicalize_url(item["sourceUrl"])).netloc
+        url = original._replace(
+            netloc=authority,
+            path=quote(original.path or "/", safe="/%:@!$&'()*+,;=-._~"),
+            query=quote(original.query, safe="/?%:@!$&'()*+,;=-._~"),
+            fragment=quote(original.fragment, safe="/?%:@!$&'()*+,;=-._~"),
+        ).geturl()
+        # Markdown decodes character references inside destinations. Escape
+        # ampersands once so a literal query such as &copy; stays literal.
+        url = url.replace("&", "&amp;")
         evidence.append(f"- [{_text(item['id'])}] {_text(item['supportingExcerpt'])}"
-                        f" — [원문]({url})")
+                        f" — [원문](<{url}>)")
     sections.append("## 근거 및 출처\n\n" + "\n".join(evidence))
     if artifact["tags"]:
         sections.append("**태그:** " + ", ".join(_text(tag) for tag in artifact["tags"]))
