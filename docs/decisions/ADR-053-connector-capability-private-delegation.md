@@ -100,7 +100,15 @@ forwarding in this mode. It rechecks grants and expiry before returning bounded
 results, with one SDK attempt and bounded calls. The flag defaults off and a
 private failure never falls back to a legacy request. Stdio remains unchanged.
 
-Subsequent reviewed stages must supply private signing infrastructure, approval management endpoints
+The first-party settings page now manages the two configured connector profiles.
+Users can block their connection, restore baseline read access, approve personal
+note writing for one hour or revoke writing. Only verified administrators change
+global client enablement. Handler-to-service-to-repository calls pin the policy
+generation/binding, approval generation and audit record transactionally; an
+uncertain outcome is reconciled with a fresh view before resubmission. Management
+routes remain nondelegable, so connector tokens cannot approve themselves.
+
+Subsequent reviewed stages must supply private signing infrastructure
 and the specifically available personal-note executor. Infrastructure must
 preserve existing pool/client identities and keep issuance disabled through
 deployment verification. Native migration, real provider tokens, audience and

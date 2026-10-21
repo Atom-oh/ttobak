@@ -216,6 +216,7 @@ func init() {
 	actionItemsHandler := handler.NewActionItemsHandler(actionItemsService)
 	meetingHandler.SetActionItemsService(actionItemsService)
 	sessionHandler := handler.NewSessionHandler(meetingService)
+	connectorSettingsHandler := handler.NewConnectorSettingsHandler(service.NewConnectorSettingsService(repo, connectorSettingsConfig(cfg.Region, cognitoPoolID)))
 	// Setup router
 	r := chi.NewRouter()
 
@@ -364,6 +365,8 @@ func init() {
 
 		// Settings routes
 		r.Get("/api/settings/integrations", settingsHandler.GetIntegrations)
+		r.Get("/api/connectors", connectorSettingsHandler.List)
+		r.Put("/api/connectors/approval", connectorSettingsHandler.UpdateApproval)
 		r.Put("/api/settings/integrations/notion", settingsHandler.SaveNotionKey)
 		r.Delete("/api/settings/integrations/notion", settingsHandler.DeleteNotionKey)
 
@@ -373,6 +376,7 @@ func init() {
 		// Admin-only routes
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RequireAdmin)
+			r.Put("/api/settings/connector-policy", connectorSettingsHandler.UpdatePolicy)
 			r.Post("/api/settings/invite-user", settingsHandler.InviteUser)
 
 			// Admin user-management panel (list/delete/enable/disable/resend-invite/reset-password)

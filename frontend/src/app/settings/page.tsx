@@ -10,6 +10,7 @@ import { McpGuide } from '@/components/McpGuide';
 import { CustomDictionary } from '@/components/CustomDictionary';
 import { InviteUser } from '@/components/InviteUser';
 import { UserManagement } from '@/components/UserManagement';
+import { ConnectorSettings } from '@/components/ConnectorSettings';
 
 export default function SettingsPage() {
   const { user, isLoading, isAuthenticated, isAdmin } = useAuth();
@@ -109,6 +110,7 @@ export default function SettingsPage() {
           </section>
 
           {/* MCP client connection guides */}
+          <ConnectorSettings isAdmin={isAdmin} />
           <section>
             <h3 className="section-header mb-4">
               Developer Tools

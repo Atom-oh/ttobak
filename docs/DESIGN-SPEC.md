@@ -57,7 +57,7 @@ use CSS variants.
 | Projects | Project views: explicit members, linked accounts/meetings/research and computed insights |
 | QA/research | LiveQAPanel and research views: suggestions, streaming, citations, follow-ups |
 | Simulator | SimCard: extract, confirm/edit, compare options, poll result |
-| Settings | Integration settings, dictionary/domain administration, admin user management |
+| Settings | Integration settings, dictionary/domain administration, admin user management, personal AI connector approvals |
 
 Resolve exact paths under `frontend/src/` rather than treating this table as an
 exhaustive file inventory. New static pages need the CloudFront knownPages mapping.
@@ -350,6 +350,14 @@ Unsaved edits and active work disable the operation. Loading its verified result
 also clears obsolete generated fields from the displayed meeting.
 
 ## MCP client setup guides
+
+Settings' AI connector panel shows only configured read/write profiles. Users can
+block a connection, restore read access, approve personal-note writing for one hour
+or revoke writing. Verified administrators also see global enable/disable controls;
+the server enforces that role independently. Failed writes trigger a fresh state
+read and a visible warning instead of a blind retry. No configured profiles means
+the panel is absent; lookup failure remains visible. Writing expiry refreshes
+every 30 seconds and remains enforced by the server.
 
 Settings' MCP guide has separate selectors for Claude Code, Codex, Kiro Crew,
 Amazon Quick and Kiro CLI. Claude/Codex/Crew/Kiro CLI have local stdio and remote
