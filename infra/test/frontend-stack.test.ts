@@ -5,9 +5,12 @@ import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { FrontendStack } from '../lib/frontend-stack';
 import { applicationContentSecurityPolicy } from '../lib/frontend-policy';
 import * as vm from 'node:vm';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 
 describe('FrontendStack', () => {
   let template: Template;
+  let runtimeConfig: { cognito: { userPoolClientId: string }; mcp: Record<string, unknown> };
 
   beforeAll(() => {
     const app = new cdk.App({
@@ -35,10 +38,20 @@ describe('FrontendStack', () => {
       cognitoRegion: 'ap-northeast-2',
       userPoolId: 'ap-northeast-2_test',
       userPoolClientId: 'test-client-id',
+      connectorPrivateBridgeEnabled: true,
+      readConnectorClientId: 'read-client-id',
+      writeConnectorClientId: 'write-client-id',
       identityPoolId: 'ap-northeast-2:test-identity-pool',
     });
 
     template = Template.fromStack(stack);
+    const assembly = app.synth();
+    const configs = fs.readdirSync(assembly.directory, { withFileTypes: true })
+      .filter(entry => entry.isDirectory() && entry.name.startsWith('asset.'))
+      .map(entry => path.join(assembly.directory, entry.name, 'config.json'))
+      .filter(file => fs.existsSync(file));
+    expect(configs).toHaveLength(1);
+    runtimeConfig = JSON.parse(fs.readFileSync(configs[0], 'utf8'));
   });
 
   test('the HTTP origin resolves only the current field of an explicit secret version', () => {
@@ -276,5 +289,16 @@ describe('FrontendStack', () => {
     const distributionId = Object.keys(template.findResources('AWS::CloudFront::Distribution'))[0];
     const deployment = Object.values(template.findResources('Custom::CDKBucketDeployment'))[0];
     expect(deployment.DependsOn).toContain(distributionId);
+  });
+
+  test('the actual published config carries explicit private mode and separate public client IDs', () => {
+    expect(runtimeConfig.mcp).toEqual({
+      url: '/api/mcp', privateBridgeEnabled: true,
+      readClientId: 'read-client-id', writeClientId: 'write-client-id',
+    });
+    expect(runtimeConfig.cognito.userPoolClientId).toBe('test-client-id');
+    const deployment = Object.values(template.findResources('Custom::CDKBucketDeployment'))[0];
+    expect(deployment.Properties.Prune).toBe(false);
+    expect(deployment.Properties.DistributionPaths).toEqual(['/config.json']);
   });
 });

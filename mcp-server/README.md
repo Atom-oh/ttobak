@@ -2,7 +2,7 @@
 
 TypeScript MCP server with stdio and authenticated Streamable HTTP entry points.
 The default transports call TTOBAK HTTPS APIs through CloudFront. Stdio remains
-the default. The staged private HTTP connector transport below uses service IAM
+the default. The private HTTP connector transport below uses service IAM
 for signed Lambda reads and atomic grant lookup. This implementation does not,
 by itself, provision a hosted endpoint.
 
@@ -69,7 +69,7 @@ and revocation. Do not copy token files into documentation or diagnostics.
 
 ## Streamable HTTP
 
-The staged `TTOBAK_CONNECTOR_PRIVATE_BRIDGE=true` mode binds the verified HTTP
+The `TTOBAK_CONNECTOR_PRIVATE_BRIDGE=true` mode binds the verified HTTP
 subject, client, scopes and expiry to a short-lived KMS delegation. It supports
 the eight bounded API reads, private read-only QA and personal note creation.
 Other mutations, unknown operations and legacy QA sessions fail closed. It never forwards the
@@ -93,9 +93,21 @@ Omitting the flag or setting it to `false` selects the existing HTTP transport.
 Source tests cover that rollback selection; production KMS/IAM, provider-token
 and consumer acceptance remain prerequisites for enabling it. The private flag
 does not change stdio authentication or install OAuth clients.
-The staged CDK clients, exact IAM grants and ARM64 QA layer are documented in the
-[release runbook](../docs/runbooks/connector-release.md); production activation is
-separate from source configuration.
+The application CDK configuration enables dedicated OAuth issuance and the
+private bridge. Its edge challenge includes `https://ttobak.atomai.click/api/mcp/read`, matching the
+HTTP verifier and discovery document. The exact IAM grants, ARM64 QA layer and
+provider/rollback acceptance are documented in the
+[release runbook](../docs/runbooks/connector-release.md); source flags do not prove
+production activation.
+
+Private scope names are `{MCP_RESOURCE_URL}/read` and
+`{MCP_RESOURCE_URL}/write`, including the URL scheme. Cognito requires these
+custom scopes to be registered on the same resource server as the requested
+`resource` URL. AuthStack preserves that URL resource's identity and adds both
+scopes; the old `ttobak.connector` namespace is retained but is not issued.
+The 2026-10-21 old-namespace authorization failure occurred before credential
+submission. The corrected source still requires fresh provider and consumer
+acceptance after deployment.
 
 Private `ttobak_put_document` requires a personal destination, `docType: "note"`
 and an `idempotencyKey` of 1–128 ASCII letters, digits, underscores or hyphens.
@@ -149,7 +161,7 @@ pre-registered public OAuth client and register each host's exact callback.
 | `TTOBAK_HTTP_PORT` | `3000`; `0` prints an ephemeral port to stderr |
 | `TTOBAK_HTTP_ALLOWED_HOSTS` | Public host plus exact comma-separated proxy/local Host values; no wildcards |
 | `TTOBAK_HTTP_ALLOWED_ORIGINS` | Public origin plus exact browser origins; absent Origin is permitted |
-| `TTOBAK_MCP_SCOPES` | `openid email profile`; all required, including mandatory `openid` |
+| `TTOBAK_MCP_SCOPES` | `openid email profile`; all required, including mandatory `openid`; private mode also requires `https://ttobak.atomai.click/api/mcp/read` and advertises optional write |
 | `TTOBAK_HTTP_TIMEOUT_MS` | `55000`; configurable from 1000 to 55000 |
 
 The public resource and upstream API share the application CloudFront origin.
@@ -207,19 +219,21 @@ token is rejected at the CloudFront edge with a 401 whose `WWW-Authenticate` nam
 `/.well-known/oauth-protected-resource/api/mcp`. Cognito issues the required `aud` only through managed login
 with the MCP URL registered as a resource server (AuthStack does both). The pool's
 OIDC metadata omits `code_challenge_methods_supported`; PKCE S256 still works, but
-a client that insists on that field may refuse. Clients use the SPA public client
-and an exactly registered callback. The SPA client retains
+a client that insists on that field may refuse. Private HTTP uses the dedicated
+client and resource-derived scopes; flag-off HTTP uses the SPA public client
+and baseline scopes. Both require an exactly registered callback. The SPA client retains
 `http://localhost:9876/callback` and adds the configured Codex host's callback,
 `http://localhost:9876/callback/Z3RALQJi3TX1`. Codex appends this server-specific
 path because Cognito discovery does not advertise authorization-response `iss`.
 Use callback port `9876`, callback base `http://localhost:9876/callback`, and
-explicit login scopes `openid,email,profile`; the issuer also advertises `phone`,
-which this client does not grant. Compare the final redirect URI with the
+baseline login scopes `openid,email,profile`, adding the resource-derived read
+scope in private mode; the issuer also advertises `phone`, which these clients
+do not grant. Compare the final redirect URI with the
 deployed client's callback list before signing in. On a remote Codex host,
 forward the browser's localhost port to that host so the authorization code
 returns directly to the login process; never paste codes or tokens into chat.
-Publish `mcp: { "url": "/api/mcp" }` in runtime config only
-after deployment acceptance. Validate each client's exact callback, OIDC discovery,
+Publish the MCP URL, explicit `privateBridgeEnabled` mode and dedicated client
+IDs through FrontendStack after deployment acceptance. Validate each client's exact callback, OIDC discovery,
 resource binding, refresh and representative operations. Access tokens need not
 carry email/verified-email claims: do not fabricate them or weaken pending-invite
 checks. Source wiring and synthetic tests do not prove live client acceptance.
@@ -232,12 +246,18 @@ the remote host. Codex CLI and the Codex IDE extension share that configuration.
 Use your existing authenticated code-server HTTPS origin and the callback ID
 displayed for this exact MCP URL:
 
+For dedicated HTTP mode, replace `READ_CONNECTOR_CLIENT_ID` below with
+AuthStack's `ReadConnectorClientId` output. Use `WriteConnectorClientId` and add
+`https://ttobak.atomai.click/api/mcp/write` only when personal-note writing is needed; the user must
+also approve writing in Settings. Existing first-party HTTP sessions require a
+fresh dedicated-client login. Keep installed stdio client IDs and caches intact.
+
 ```toml
 [mcp_servers.ttobak]
 url = "https://ttobak.atomai.click/api/mcp"
 
 [mcp_servers.ttobak.oauth]
-client_id = "33rh85mv6l9n7tn3s5h16prfdr"
+client_id = "READ_CONNECTOR_CLIENT_ID"
 callback_port = 9876
 callback_url = "https://YOUR_CODE_SERVER_HOST/absproxy/9876/callback/YOUR_CALLBACK_ID"
 ```
@@ -252,7 +272,7 @@ The public client ID is deployment configuration, not a secret. Keep the
 code-server browser session signed in, then run this in its terminal:
 
 ```sh
-codex mcp login ttobak --scopes openid,email,profile
+codex mcp login ttobak --scopes openid,email,profile,https://ttobak.atomai.click/api/mcp/read
 ```
 
 Open the displayed authorization link in that browser and sign in to TTOBAK.
@@ -287,7 +307,7 @@ For Claude Code, register the public client in its user configuration:
 
 ```sh
 claude mcp add --transport http --scope user \
-  --client-id 33rh85mv6l9n7tn3s5h16prfdr --callback-port 9876 \
+  --client-id READ_CONNECTOR_CLIENT_ID --callback-port 9876 \
   ttobak https://ttobak.atomai.click/api/mcp
 claude mcp login ttobak --no-browser
 ```
@@ -308,9 +328,9 @@ in `~/.kiro/settings/mcp.json`, preserving other servers and file permissions:
     "ttobak": {
       "url": "https://ttobak.atomai.click/api/mcp",
       "oauth": {
-        "clientId": "33rh85mv6l9n7tn3s5h16prfdr",
+        "clientId": "READ_CONNECTOR_CLIENT_ID",
         "redirectUri": "http://localhost:9876/callback",
-        "oauthScopes": ["openid", "email", "profile"]
+        "oauthScopes": ["openid", "email", "profile", "https://ttobak.atomai.click/api/mcp/read"]
       }
     }
   }
