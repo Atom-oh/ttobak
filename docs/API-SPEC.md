@@ -559,6 +559,56 @@ their last returned resource/grant and any in-progress account scope. These
 are live catalogs, not collection-wide snapshots; concurrent changes can
 require a fresh read.
 
+Authenticated `GET /api/accounts/{accountId}/reading` returns full account data
+without a monolithic brief response. `section=detail` (default) traverses
+metadata and members; `brief` also traverses meetings and insights. Individual
+metadata/members/meetings/insights selections are supported. The brief's
+`from`/`to` RFC3339 and `types` filters apply to insights as before.
+
+Each physical collection window contains at most ten source rows. The existing
+AccountService authorization and canonical meeting-publication checks run on
+that window; raw insight Evidence is excluded. Results are serialized as JSON
+groups and split by Unicode code points (`pageSize` 1–8000, default 4000),
+with a 10,000-byte encoded response cap. Concatenate `dataJson` only within the
+same `phase`/`revision` until `fragment.complete=true`, then parse that complete
+object (metadata) or array (other phases). Continue the opaque `page.nextCursor`
+until `page.complete=true` to finish all groups/phases, including empty filtered
+groups. Group fragments are never silently truncated.
+
+Cursors bind the caller, account, selection/filters, account metadata and current
+membership. Fragment continuation also pins the exact authorized source window
+and its provider continuation. Membership, publication and payload are rechecked
+before returning bytes. `consistency=current_group` describes a live collection
+of individually pinned windows, not one atomic snapshot of every brief record.
+
+Authenticated `GET /api/projects/{projectId}/reading` uses the same JSON-group
+contract and limits. `detail` traverses metadata/members; `brief` traverses
+metadata/members/meetings/research/insights. Each phase can also be selected
+alone. Full descriptions, account IDs and member/meeting/insight text remain
+available across fragments; research summaries retain their existing preview
+semantics. Date/type filters apply only to brief/insights.
+
+Project authorization checks owner/direct membership first, then at most 50
+linked-account candidates per request. When more candidates remain without a
+verified grant, `phase=authorization` and `authorizationPending=true` return
+only identity/selection and an opaque continuation, with no project data.
+Continue until authorized data or a denial; transient membership failures
+retain the current scan window for retry. Once selected, the grant path is
+pinned and revalidated on every page. Project metadata changes invalidate
+continuation; set ordering alone does not. No account hint or cursor grants
+access.
+
+Project collections query at most ten consistent primary source rows per
+window. Meeting/research bodies use bounded consistent primary reads and
+canonical project-link checks; research owner mismatch, trash and stale links
+are omitted. Raw insight Evidence remains suppressed. A changed source window
+or grant fails continuation before returning bytes. Existing duplicate meeting
+references can span windows: `overlapPossible=true` explicitly requires union
+by `meetingId`, and replacing repeated complete insight groups by `sourceId`
+while preserving all insights for that source. This is a live set of pinned
+source windows, not a collection-wide snapshot.
+
+
 PPT/PPTX uploads trigger convert-doc and produce a docs-pdf/ sidecar. previewUrl
 points to the PDF while downloadUrl always points to the original. The converter
 records the actual GET's source ETag/version, rechecks the original, and replaces
@@ -877,6 +927,7 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | GET | `/api/navigation/accounts` | `accountCatalogHandler.Get` |
 | POST | `/api/accounts` | `accountHandler.CreateAccount` |
 | GET | `/api/accounts/{accountId}` | `accountHandler.GetAccount` |
+| GET | `/api/accounts/{accountId}/reading` | `accountReadingHandler.Get` |
 | PUT | `/api/accounts/{accountId}/parent` | `accountHandler.UpdateAccountParent` |
 | POST | `/api/accounts/{accountId}/members` | `accountHandler.AddMember` |
 | DELETE | `/api/accounts/{accountId}/members/pending` | `accountHandler.RevokePendingMember` |
@@ -992,6 +1043,7 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | GET | `/api/projects` | `projectHandler.ListMyProjects` |
 | GET | `/api/navigation/projects` | `projectCatalogHandler.Get` |
 | GET | `/api/projects/{projectId}` | `projectHandler.GetProject` |
+| GET | `/api/projects/{projectId}/reading` | `projectReadingHandler.Get` |
 | PUT | `/api/projects/{projectId}` | `projectHandler.UpdateProject` |
 | DELETE | `/api/projects/{projectId}` | `projectHandler.DeleteProject` |
 | POST | `/api/projects/{projectId}/members` | `projectHandler.AddMember` |
