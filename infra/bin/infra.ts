@@ -153,9 +153,11 @@ const crawlerStack = new CrawlerStack(app, 'TtobakCrawlerStack', {
   crawlerRole: aiStack.crawlerRole,
   table: storageStack.table,
   kbBucket: knowledgeStack.kbBucket,
+  artifactBucket: storageStack.bucket,
   knowledgeBaseId: knowledgeStack.knowledgeBaseId,
   dataSourceId: knowledgeStack.dataSourceId,
   webSearchGatewayUrl: webSearchGatewayStack.gatewayUrl,
+  webSearchGatewayArn: webSearchGatewayStack.gateway.gatewayArn,
 });
 crawlerStack.addDependency(aiStack);
 crawlerStack.addDependency(storageStack);

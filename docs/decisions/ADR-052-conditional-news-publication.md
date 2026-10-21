@@ -146,13 +146,29 @@ covering Korean, supplementary Unicode, U+2028/U+2029, literal escape sequences,
 optional legacy fields and numeric false-valued lists. This is code compatibility,
 not a claim that the API or the new writer has been deployed.
 
-`news_store.py`, `news_worker.py`, `news_model.py` and `news_lifecycle.py` are
-injected components without Lambda handlers. Model request bounds, immutable
-uploads and run accounting are implemented; no scheduler or IAM permission is
-activated. QA's publication-aware `news_text.py` is wired to both transports and
-history replay but has no recorded deployed acceptance yet. Verified pricing,
-bounded SDK client construction, scheduled recovery, current-source QA/UI
-acceptance, migration and rollback remain required delivery work.
+`news_runtime.py` supplies discovery, worker and finalization Lambda handlers
+around the injected store/model/lifecycle components. `news_recovery.py` supplies
+a bounded scan with a leased durable cursor; it remains usable after writer
+rollback. Dated positive pricing and no-retry bounded SDK clients are required at
+entry. Writers default off and canary mode restricts one configured source.
+Discovery counts non-HTTPS search/custom URLs as invalid instead of emitting
+candidates that the worker cannot consume. Search accepts only JSON-RPC 2.0
+responses for its exact integer request ID in both JSON and streaming transports.
+After readers deploy, an isolated synthetic canary may establish publication and
+QA acceptance. Normal source writers and `all` mode remain gated on that positive
+acceptance and completed legacy migration.
+
+The additive CDK workflow declares four private functions with separate roles,
+sequential candidate publication and bounded settlement input. Its configuration
+permits only off/default or one explicit canary. Recovery is scheduled every five
+minutes regardless of writer mode; its timeout remains below the checkpoint lease.
+The legacy daily workflow is unchanged. These declarations still require actual
+deployment and service-role verification. QA's
+publication-aware `news_text.py` is wired to both transports and history replay
+but has no recorded deployed acceptance yet. Infrastructure acceptance, current-source
+QA/UI acceptance, migration and rollback remain required delivery work. See the
+[release contract](../runbooks/knowledge-grade-news-release.md) for price evidence
+and entry-point/payload limits.
 The activation gate must record positive end-to-end publication and QA evidence;
 zero-result or rejected-only runs do not establish acceptance.
 
@@ -174,5 +190,11 @@ service concurrency, actual billing, or deployed acceptance.
 - `backend/python/crawler/news_model.py`
 - `backend/python/crawler/news_lifecycle.py`
 - `backend/python/crawler/test_news_lifecycle.py`
+- `backend/python/crawler/news_runtime.py`
+- `backend/python/crawler/news_search.py`
+- `backend/python/crawler/news_recovery.py`
+- `backend/python/crawler/test_news_runtime.py`
+- `infra/lib/news-publication.ts`
+- `infra/test/news-publication.test.ts`
 - `backend/python/qa/news_text.py`
 - `backend/python/qa/test_news_text.py`
