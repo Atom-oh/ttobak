@@ -8,7 +8,7 @@ import time
 import boto3
 from boto3.dynamodb.conditions import Attr
 
-from news_discovery import source_snapshot, valid_source_id
+from news_discovery import valid_source_id
 from news_runtime import SDK_CONFIG, _encode, _event, _policy, _remaining
 from news_store import StateRejected
 
@@ -28,9 +28,9 @@ def list_sources(table, mode, canary, now, remaining):
         ExpressionAttributeNames={"#s": "status"},
         PaginationConfig={"PageSize": 100})
     pages = iter(pages)
-    for number in range(MAX_PAGES + 1):
+    for _ in range(MAX_PAGES):
         # Check before advancing the lazy paginator: next() performs network IO.
-        if number == MAX_PAGES or remaining() < 10:
+        if remaining() < 10:
             raise StateRejected("SCHEDULE_SCAN_BUDGET")
         try:
             page = next(pages)
@@ -46,7 +46,8 @@ def list_sources(table, mode, canary, now, remaining):
             if (not valid_source_id(source_id) or row.get("SK") != "CONFIG"
                     or row.get("sourceId") != source_id):
                 raise StateRejected("INVALID_SCHEDULE_SOURCE")
-            source_snapshot(row)  # Reject malformed canonical configuration before dispatch.
+            # The child validates its current canonical configuration. API-accepted
+            # oversized unions fail that source, without suppressing healthy sources.
             if source_id in sources:
                 raise StateRejected("DUPLICATE_SCHEDULE_SOURCE")
             sources[source_id] = {
@@ -55,6 +56,10 @@ def list_sources(table, mode, canary, now, remaining):
             }
             if len(sources) > MAX_SOURCES:
                 raise StateRejected("SCHEDULE_SOURCE_LIMIT")
+        if not page.get("LastEvaluatedKey"):
+            break
+    else:
+        raise StateRejected("SCHEDULE_SCAN_BUDGET")
     result = {"mode": mode, "sources": [sources[key] for key in sorted(sources)]}
     if len(_encode(result)) > MAX_OUTPUT_BYTES:
         raise StateRejected("SCHEDULE_OUTPUT_LIMIT")

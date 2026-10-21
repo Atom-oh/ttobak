@@ -74,7 +74,8 @@ all mode unless legacy writes are off. See the dated activation contract below.
 Discovery, worker, finalization, recovery and scheduling each have a separate Lambda role
 and retained 30-day log group. DynamoDB item/transaction operations are confined
 to `CRAWLER#*` keys on the existing table. Recovery and source scheduling receive
-table Scan with separate projection attribute allowlists.
+exact-table Scan. Scheduling also has an IAM projection attribute allowlist;
+recovery bounds its projection in the request, without an IAM attribute condition.
 Only discovery can invoke the existing search gateway. Only the worker can
 write `news/v1/*` and `knowledge-artifacts/news/v1/*` objects, invoke the verified
 Opus 5 profile/model resources and count tokens on Mantle's default project.
@@ -269,10 +270,12 @@ only the configured canary source.
 
 The scheduler strongly scans canonical source configuration with 100 evaluated
 items per page, a 1,000-page limit and a deadline checked before each request.
-It excludes disabled/internal sources, validates configuration, and fails the
-whole dispatch on duplicate identities, malformed configuration or more than
-30 active sources. It never silently truncates the source list. Its output is
-capped at 64,000 bytes. Source configuration is revalidated by each child.
+It excludes disabled/internal sources, validates source identities, and fails the
+whole dispatch on duplicate or malformed identities or more than 30 active
+sources. It does not silently truncate coverage. Schedule output is capped at
+64,000 bytes. Each child validates its current source configuration; oversized
+subscription unions fail that source while later sources still run. The parent
+reports failure after processing all dispatched sources.
 
 One daily workflow processes sources sequentially, respecting the existing
 single-discovery concurrency. Thirty children at the 45-minute child timeout

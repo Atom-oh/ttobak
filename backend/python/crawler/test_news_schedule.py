@@ -10,7 +10,7 @@ import boto3
 import news_schedule as schedule
 import news_runtime as runtime
 from news_store import StateRejected
-from news_discovery import DiscoveryRejected
+from news_discovery import DiscoveryRejected, source_snapshot
 from test_news_runtime import ENV, context
 from test_news_store import CONFIG, NOW, mock_aws
 
@@ -70,7 +70,7 @@ class ScheduleBoundaries(unittest.TestCase):
         def pages():
             for i in range(3):
                 consumed.append(i)
-                yield {"Items": []}
+                yield {"Items": [], "LastEvaluatedKey": {"PK": str(i), "SK": "CONFIG"}}
         with self.assertRaisesRegex(StateRejected, "SCHEDULE_SCAN_BUDGET"):
             schedule.list_sources(self.table(pages()), "all", "", NOW, lambda: 9)
         self.assertEqual(consumed, [])
@@ -79,13 +79,12 @@ class ScheduleBoundaries(unittest.TestCase):
             schedule.list_sources(self.table(pages()), "all", "", NOW, remaining)
         self.assertEqual(consumed, [0])
 
-    def test_duplicate_and_malformed_canonical_sources_fail_closed(self):
+    def test_duplicate_and_malformed_source_identities_fail_closed(self):
         rows = [
             [source("source"), source("source")],
             [source("source", sourceId="different")],
             [source("source", SK="OTHER")],
             [source("../source")],
-            [source("source", aliases="invalid")],
         ]
         for items in rows:
             with self.subTest(items=items), self.assertRaises((StateRejected, DiscoveryRejected)):
@@ -97,8 +96,38 @@ class ScheduleBoundaries(unittest.TestCase):
             schedule.list_sources(self.table([{"Items": items}]), "all", "", NOW, lambda: 100)
         with mock.patch.object(schedule, "MAX_PAGES", 2), \
                 self.assertRaisesRegex(StateRejected, "SCHEDULE_SCAN_BUDGET"):
-            schedule.list_sources(self.table([{"Items": []}] * 3), "all", "", NOW, lambda: 100)
+            schedule.list_sources(self.table([{"Items": [], "LastEvaluatedKey": {"PK": "next", "SK": "CONFIG"}}] * 3), "all", "", NOW, lambda: 100)
         self.assertLessEqual(schedule.MAX_SOURCES * 45 * 60 + 120, 23 * 3600)
+
+    def test_invalid_configuration_is_dispatched_without_blocking_valid_sources(self):
+        # Subscription unions can exceed the child parser's per-source bounds.
+        for changes in ({"newsQueries": [f"query-{i}" for i in range(33)]},
+                        {"customUrls": [f"https://example.com/{i}" for i in range(21)]},
+                        {"sourceName": "Source", "aliases": [f"alias-{i}" for i in range(32)]},
+                        {"aliases": "invalid"}):
+            bad = source("bad", **changes)
+            with self.subTest(changes=changes):
+                with self.assertRaises(DiscoveryRejected):
+                    source_snapshot(bad)  # The child still rejects its current config.
+                result = schedule.list_sources(self.table([{"Items": [bad, source("good")]}]),
+                                               "all", "", NOW, lambda: 100)
+                self.assertEqual([item["sourceId"] for item in result["sources"]], ["bad", "good"])
+                self.assertTrue(all(set(item) == {"sourceId", "runId", "executionName"}
+                                    for item in result["sources"]))
+
+    def test_terminal_page_at_exact_cap_succeeds_without_another_network_request(self):
+        consumed = []
+
+        def pages():
+            consumed.append(1)
+            yield {"Items": [], "LastEvaluatedKey": {"PK": "next", "SK": "CONFIG"}}
+            consumed.append(2)
+            yield {"Items": [source("source")]}
+            raise AssertionError("EXTRA_PAGE_FETCH")
+        with mock.patch.object(schedule, "MAX_PAGES", 2):
+            result = schedule.list_sources(self.table(pages()), "all", "", NOW, lambda: 100)
+        self.assertEqual(consumed, [1, 2])
+        self.assertEqual([item["sourceId"] for item in result["sources"]], ["source"])
 
     def test_daily_names_are_stable_across_order_and_unique_per_source_and_utc_day(self):
         def run(items, now=NOW):
