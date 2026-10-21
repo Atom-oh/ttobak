@@ -280,7 +280,9 @@ reports failure after processing all dispatched sources.
 One daily workflow processes sources sequentially, respecting the existing
 single-discovery concurrency. Thirty children at the 45-minute child timeout
 fit within the 23-hour parent timeout. Source/day execution names and run IDs
-are deterministic in UTC; duplicate starts cannot create additional paid runs.
+are deterministic in UTC; duplicate starts cannot create additional paid runs. The
+optimized nested integration reports `StepFunctions.ExecutionAlreadyExistsException`;
+the duplicate catch accepts that observed name and the older suffix-free name.
 A failed child is recorded without skipping later sources, and the parent fails
 after all selected sources have been attempted. Existing child failure/timeout
 alarms and new parent failure/timeout alarms remain authoritative on replay.
@@ -296,3 +298,18 @@ Rollback disables new writers first and leaves readers, finalization and recover
 available. Do not delete immutable objects or ledger rows to free a budget.
 Deploy changed stacks individually with `--exclusively`; never deploy
 KnowledgeStack as a dependency or run an S3 sync with `--delete`.
+
+
+### Daily canary execution evidence (2026-10-21)
+
+The deployed scheduler's own role completed its strongly consistent projected
+Scan and selected exactly the configured canary; the daily rule remained disabled
+and recovery enabled. The first real daily parent and nested child succeeded at
+09:21 UTC with zero queries, model attempts, documents and charge. This verifies
+nested IAM and orchestration with empty synthetic search inputs, separately from
+the previously accepted article publication. A second parent exposed the actual
+`StepFunctions.ExecutionAlreadyExistsException` name and failed under the original
+catch. The corrected catch requires a fresh duplicate-only acceptance run; do not
+count the original successful child as a second publication. The synthetic source's
+original configuration was conditionally restored after both parents and their
+known child were confirmed terminal. All-source activation remains pending.
