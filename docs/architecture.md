@@ -294,13 +294,20 @@ at most 64,000 bytes with ETag/version conditions, checks canonical state again,
 and binds continuation and history replay to the combined publication/object
 revision. Indexed snippets never replace unavailable current bytes. These news
 sources are available to authenticated users; no public route is added. REST and
-WebSocket share this reader through source access. Positive deployed QA acceptance
-and legacy news migration are still required before enabling new writers.
+WebSocket share this reader through source access. An isolated synthetic canary
+may qualify publication and both QA transports after readers deploy. Positive
+deployed QA acceptance and legacy news migration remain required before enabling
+normal source writers or `all` mode.
 `news_recovery.py` supplies a private scheduled-recovery handler with a leased,
 durable scan cursor. Each invocation reads at most ten 100-item pages and advances
 the cursor only after a page is handled. Recovery survives writer rollback and
 does not release unknown charges. DynamoDB integer counters keep their JSON
 number shape on receipt replay; money is serialized as exact decimal strings.
+The web source list labels these results as news evidence and retains partial
+and restored-history caveats without exposing internal S3 links. Markdown views,
+editable document/meeting HTML and research exports restore valid IPv6 authority
+brackets after parser encoding. Query bytes, HTML escaping, URL protocol filtering
+and the existing HTML sanitization remain in place.
 These modules do not activate a scheduler, change legacy news results or establish
 production acceptance. Infrastructure wiring and consumer rollout remain separate
 delivery stages; see the [news release contract](runbooks/knowledge-grade-news-release.md).

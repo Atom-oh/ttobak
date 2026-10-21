@@ -21,9 +21,18 @@ SEARCH_SECONDS = 20
 logger = logging.getLogger(__name__)
 
 
+def _matching_response(value):
+    return (isinstance(value, dict) and value.get("jsonrpc") == "2.0"
+            and type(value.get("id")) is int and value["id"] == 1
+            and (("result" in value) != ("error" in value)))
+
+
 def _payload(text):
     if text.lstrip().startswith("{"):
-        return json.loads(text)
+        value = json.loads(text)
+        if not _matching_response(value):
+            raise ValueError("SEARCH_RESPONSE")
+        return value
     frames, lines = [], []
     for line in text.splitlines() + [""]:
         if line.startswith("data:"):
@@ -36,13 +45,62 @@ def _payload(text):
             value = json.loads(frame)
         except ValueError:
             continue
-        if isinstance(value, dict) and ("result" in value or "error" in value):
+        if _matching_response(value):
             return value
     raise ValueError("SEARCH_RESPONSE")
 
 
+def _read_payload(response, deadline, length):
+    content_type = (response.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+    if content_type != "text/event-stream":
+        raw = response.read(MAX_RESPONSE_BYTES + 1)
+        if len(raw) > MAX_RESPONSE_BYTES or (length is not None and len(raw) != int(length)):
+            raise ValueError("SEARCH_RESPONSE")
+        return _payload(raw.decode("utf-8"))
+
+    # read() fills its requested size or waits for EOF. A valid MCP event stream
+    # may remain open after the response, so consume available chunks instead.
+    total, line, data = 0, bytearray(), []
+    after_cr = False
+    while time.monotonic() < deadline:
+        chunk = response.read1(min(65536, MAX_RESPONSE_BYTES + 1 - total))
+        total += len(chunk)
+        if (total > MAX_RESPONSE_BYTES or time.monotonic() >= deadline
+                or (length is not None and total > int(length))):
+            raise ValueError("SEARCH_RESPONSE")
+        if not chunk:
+            # SSE dispatch requires an empty line, not just an EOF.
+            raise ValueError("SEARCH_RESPONSE")
+        for byte in chunk:
+            if byte == 10 and after_cr:
+                after_cr = False
+                continue
+            after_cr = byte == 13
+            if byte not in (10, 13):
+                line.append(byte)
+                continue
+            if line.startswith(b"data:"):
+                value = bytes(line[5:])
+                data.append(value[1:] if value.startswith(b" ") else value)
+            elif not line and data:
+                frame, data = b"\n".join(data), []
+                try:
+                    value = json.loads(frame.decode("utf-8"))
+                except (ValueError, UnicodeError):
+                    value = None
+                if _matching_response(value):
+                    return value
+            line.clear()
+    raise ValueError("SEARCH_DEADLINE")
+
+
 class NewsSearch:
     def __init__(self, url, credentials, remaining):
+        self.validate_url(url)
+        self.url, self.credentials, self.remaining = url, credentials, remaining
+
+    @staticmethod
+    def validate_url(url):
         parsed = urlsplit(url)
         if (parsed.scheme != "https" or parsed.port is not None
                 or parsed.username is not None or parsed.password is not None
@@ -51,7 +109,6 @@ class NewsSearch:
                     r"[a-z0-9-]+\.gateway\.bedrock-agentcore\.us-east-1\.amazonaws\.com",
                     parsed.hostname or "")):
             raise ValueError("INVALID_SEARCH_ENDPOINT")
-        self.url, self.credentials, self.remaining = url, credentials, remaining
 
     def __call__(self, query, maximum):
         if (not isinstance(query, str) or not 1 <= len(query) <= 200
@@ -96,10 +153,7 @@ class NewsSearch:
                     not length.isascii() or not length.isdigit() or len(length) > 10
                     or int(length) > MAX_RESPONSE_BYTES):
                 raise ValueError("SEARCH_RESPONSE")
-            raw = response.read(MAX_RESPONSE_BYTES + 1)
-            if len(raw) > MAX_RESPONSE_BYTES or (length is not None and len(raw) != int(length)):
-                raise ValueError("SEARCH_RESPONSE")
-            parsed = _payload(raw.decode("utf-8"))
+            parsed = _read_payload(response, deadline, length)
             if not isinstance(parsed, dict) or "error" in parsed:
                 raise ValueError("SEARCH_RESPONSE")
             result = parsed.get("result", parsed)

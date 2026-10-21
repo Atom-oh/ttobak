@@ -114,6 +114,13 @@ around the injected store/model/lifecycle components. `news_recovery.py` supplie
 a bounded scan with a leased durable cursor; it remains usable after writer
 rollback. Dated positive pricing and no-retry bounded SDK clients are required at
 entry. Writers default off and canary mode restricts one configured source.
+Discovery counts non-HTTPS search/custom URLs as invalid instead of emitting
+candidates that the worker cannot consume. Search accepts only JSON-RPC 2.0
+responses for its exact integer request ID in both JSON and streaming transports.
+After readers deploy, an isolated synthetic canary may establish publication and
+QA acceptance. Normal source writers and `all` mode remain gated on that positive
+acceptance and completed legacy migration.
+
 The additive CDK workflow declares four private functions with separate roles,
 sequential candidate publication and bounded settlement input. Its configuration
 permits only off/default or one explicit canary. Recovery is scheduled every five

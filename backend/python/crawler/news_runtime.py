@@ -145,6 +145,10 @@ def discover_handler(event, context):
     config = store._get("CRAWLER#" + source_id, "CONFIG")
     if not config or config.get("sourceId") != source_id:
         raise StateRejected("SOURCE_CHANGED")
+    try:
+        NewsSearch.validate_url(os.environ.get("WEB_SEARCH_GATEWAY_URL", ""))
+    except ValueError:
+        raise StateRejected("INVALID_CONFIGURATION") from None
     revision = source_revision(config)
     run = Run(source_id, run_id, revision)
     existing = NewsRuns(store).begin(run, now)

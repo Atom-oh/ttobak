@@ -35,14 +35,28 @@ Do not configure `all` before the acceptance record below is complete.
 `WEB_SEARCH_GATEWAY_URL` are deployment configuration. SDK operations use
 no application retries, finite connect/read timeouts and a monotonic invocation
 deadline. Discovery search has its own 20-second total transport deadline.
+SSE search returns when the matching response frame arrives, without waiting
+for the server to close the stream. Each candidate also has a 64,000-byte limit.
 
 The recovery checkpoint is `CRAWLER#__news_runtime__/RECOVERY`. It holds a
 five-minute lease and a native DynamoDB scan cursor, never meeting text.
+Its monotonic work budget is at most four minutes, including nested finalizer
+SDK calls; cleanup has a separate margin inside the lease. The schedule target
+must supply the constant empty object `{}`, not the default scheduled-event body.
 Each tick examines at most ten pages of 100 evaluated items. The cursor advances
 after every row on a page is handled; interrupted pages are replayed.
+Mid-page `RUN_BUDGET` is an expected failed invocation: the next tick retries
+that page without repeating settled charges. A malformed row requires repair.
 Do not expire the checkpoint or restart every tick at the first page.
 Schedule recovery frequently enough to sweep the table, and keep it enabled
 through rollback. Live admissions and live worker leases are not reclaimed.
+For a corrupt cursor or poison row, disable writers, pause the recovery schedule,
+wait for its lease to expire, and preserve the checkpoint and offending row in
+the private recovery manifest. Repair only the verified malformed fields; if
+the cursor cannot be recovered, conditionally remove only `scanCursor` from the
+observed unleased checkpoint, then resume recovery from the first page. Preserve
+all run, attempt, receipt and accounting records; finalized receipts make replay
+safe. Record the repair and restore the schedule before resuming writers.
 
 ## Private infrastructure
 
