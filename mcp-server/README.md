@@ -2,7 +2,7 @@
 
 TypeScript MCP server with stdio and authenticated Streamable HTTP entry points.
 The default transports call TTOBAK HTTPS APIs through CloudFront. Stdio remains
-the default. The staged private HTTP connector transport below uses service IAM
+the default. The private HTTP connector transport below uses service IAM
 for signed Lambda reads and atomic grant lookup. This implementation does not,
 by itself, provision a hosted endpoint.
 
@@ -69,7 +69,7 @@ and revocation. Do not copy token files into documentation or diagnostics.
 
 ## Streamable HTTP
 
-The staged `TTOBAK_CONNECTOR_PRIVATE_BRIDGE=true` mode binds the verified HTTP
+The `TTOBAK_CONNECTOR_PRIVATE_BRIDGE=true` mode binds the verified HTTP
 subject, client, scopes and expiry to a short-lived KMS delegation. It supports
 the eight bounded API reads, private read-only QA and personal note creation.
 Other mutations, unknown operations and legacy QA sessions fail closed. It never forwards the
@@ -93,9 +93,12 @@ Omitting the flag or setting it to `false` selects the existing HTTP transport.
 Source tests cover that rollback selection; production KMS/IAM, provider-token
 and consumer acceptance remain prerequisites for enabling it. The private flag
 does not change stdio authentication or install OAuth clients.
-The staged CDK clients, exact IAM grants and ARM64 QA layer are documented in the
-[release runbook](../docs/runbooks/connector-release.md); production activation is
-separate from source configuration.
+The application CDK configuration enables dedicated OAuth issuance and the
+private bridge. Its edge challenge includes `ttobak.connector/read`, matching the
+HTTP verifier and discovery document. The exact IAM grants, ARM64 QA layer and
+provider/rollback acceptance are documented in the
+[release runbook](../docs/runbooks/connector-release.md); source flags do not prove
+production activation.
 
 Private `ttobak_put_document` requires a personal destination, `docType: "note"`
 and an `idempotencyKey` of 1–128 ASCII letters, digits, underscores or hyphens.
@@ -149,7 +152,7 @@ pre-registered public OAuth client and register each host's exact callback.
 | `TTOBAK_HTTP_PORT` | `3000`; `0` prints an ephemeral port to stderr |
 | `TTOBAK_HTTP_ALLOWED_HOSTS` | Public host plus exact comma-separated proxy/local Host values; no wildcards |
 | `TTOBAK_HTTP_ALLOWED_ORIGINS` | Public origin plus exact browser origins; absent Origin is permitted |
-| `TTOBAK_MCP_SCOPES` | `openid email profile`; all required, including mandatory `openid` |
+| `TTOBAK_MCP_SCOPES` | `openid email profile`; all required, including mandatory `openid`; private mode also requires `ttobak.connector/read` and advertises optional write |
 | `TTOBAK_HTTP_TIMEOUT_MS` | `55000`; configurable from 1000 to 55000 |
 
 The public resource and upstream API share the application CloudFront origin.
@@ -232,12 +235,18 @@ the remote host. Codex CLI and the Codex IDE extension share that configuration.
 Use your existing authenticated code-server HTTPS origin and the callback ID
 displayed for this exact MCP URL:
 
+For dedicated HTTP mode, replace `READ_CONNECTOR_CLIENT_ID` below with
+AuthStack's `ReadConnectorClientId` output. Use `WriteConnectorClientId` and add
+`ttobak.connector/write` only when personal-note writing is needed; the user must
+also approve writing in Settings. Existing first-party HTTP sessions require a
+fresh dedicated-client login. Keep installed stdio client IDs and caches intact.
+
 ```toml
 [mcp_servers.ttobak]
 url = "https://ttobak.atomai.click/api/mcp"
 
 [mcp_servers.ttobak.oauth]
-client_id = "33rh85mv6l9n7tn3s5h16prfdr"
+client_id = "READ_CONNECTOR_CLIENT_ID"
 callback_port = 9876
 callback_url = "https://YOUR_CODE_SERVER_HOST/absproxy/9876/callback/YOUR_CALLBACK_ID"
 ```
@@ -252,7 +261,7 @@ The public client ID is deployment configuration, not a secret. Keep the
 code-server browser session signed in, then run this in its terminal:
 
 ```sh
-codex mcp login ttobak --scopes openid,email,profile
+codex mcp login ttobak --scopes openid,email,profile,ttobak.connector/read
 ```
 
 Open the displayed authorization link in that browser and sign in to TTOBAK.
@@ -287,7 +296,7 @@ For Claude Code, register the public client in its user configuration:
 
 ```sh
 claude mcp add --transport http --scope user \
-  --client-id 33rh85mv6l9n7tn3s5h16prfdr --callback-port 9876 \
+  --client-id READ_CONNECTOR_CLIENT_ID --callback-port 9876 \
   ttobak https://ttobak.atomai.click/api/mcp
 claude mcp login ttobak --no-browser
 ```
@@ -308,9 +317,9 @@ in `~/.kiro/settings/mcp.json`, preserving other servers and file permissions:
     "ttobak": {
       "url": "https://ttobak.atomai.click/api/mcp",
       "oauth": {
-        "clientId": "33rh85mv6l9n7tn3s5h16prfdr",
+        "clientId": "READ_CONNECTOR_CLIENT_ID",
         "redirectUri": "http://localhost:9876/callback",
-        "oauthScopes": ["openid", "email", "profile"]
+        "oauthScopes": ["openid", "email", "profile", "ttobak.connector/read"]
       }
     }
   }

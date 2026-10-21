@@ -8,12 +8,13 @@ import { EdgeAuthStack } from '../lib/edge-auth-stack';
 // Runs the synthesized Lambda@Edge source with synthetic CloudFront events.
 const pair = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const jwk = { ...pair.publicKey.export({ format: 'jwk' }), kid: 'connector-test', alg: 'RS256', use: 'sig' };
-function edgeHandler(connectors = false): (event: unknown) => Promise<Record<string, any>> {
+function edgeHandler(connectors = false, privateBridge = false): (event: unknown) => Promise<Record<string, any>> {
   const app = new cdk.App();
   const stack = new EdgeAuthStack(app, 'TestEdgeAuth', {
     env: { region: 'us-east-1' }, userPoolId: 'ap-northeast-2_test', userPoolClientId: 'client', cognitoRegion: 'ap-northeast-2',
     ...(connectors ? { readConnectorClientId: 'readclient', writeConnectorClientId: 'writeclient',
       connectorAudience: 'https://ttobak.example.com/api/mcp' } : {}),
+    connectorPrivateBridgeEnabled: privateBridge,
   });
   const fn = Object.values(Template.fromStack(stack).findResources('AWS::Lambda::Function'))
     .find(resource => resource.Properties.FunctionName === 'ttobak-edge-auth')!;
@@ -94,6 +95,26 @@ describe('EdgeAuth 401 responses', () => {
     const res = await handler(event('/api/mcp', { host: 'ttobak.example.com', authorization: 'Bearer not-a-jwt' }));
     expect(res.status).toBe('401');
     expect(res.headers['www-authenticate'][0].value).toContain(`${metadata}, scope="openid email profile", error="invalid_token"`);
+  });
+
+  test('active private MCP challenges require read scope while staged and rollback mode retain first-party scopes', async () => {
+    for (const active of [true, false]) {
+      const configured = edgeHandler(true, active);
+      const scopes = `openid email profile${active ? ' ttobak.connector/read' : ''}`;
+      for (const authorization of [undefined, 'Bearer not-a-jwt']) {
+        const response = await configured(event('/api/mcp', {
+          host: 'ttobak.example.com', ...(authorization ? { authorization } : {}),
+        }));
+        expect(response.status).toBe('401');
+        const challenge = response.headers['www-authenticate'][0].value;
+        expect(challenge).toContain(`${metadata}, scope="${scopes}"`);
+        expect(challenge).not.toContain('ttobak.connector/write');
+      }
+    }
+  });
+
+  test('an active private challenge cannot be configured without both dedicated clients', () => {
+    expect(() => edgeHandler(false, true)).toThrow('Both connector clients and their exact audience are required');
   });
 
   test('other API paths keep the plain JSON 401', async () => {

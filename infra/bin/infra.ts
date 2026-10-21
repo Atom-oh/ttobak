@@ -18,9 +18,10 @@ const knowledgeIndexingMode: 'manual-only' | 'all' = 'all';
 const knowledgeIndexScheduleEnabled = true;
 // Separate activation change only after deployed QA jobs pass acceptance.
 const qaAsyncJobsEnabled = true;
-// Issuance and transport remain off until deployed consumer and native acceptance.
-const connectorOAuthEnabled = false;
-const connectorPrivateBridgeEnabled = false;
+// Dedicated HTTP activation; preserve first-party stdio credentials on cutover.
+// Deployed provider, private consumer and rollback acceptance: connector-release.md.
+const connectorOAuthEnabled = true;
+const connectorPrivateBridgeEnabled = true;
 
 // Environment configuration (ap-northeast-2 recommended for Korean users)
 const env = {
@@ -103,6 +104,7 @@ const edgeAuthStack = new EdgeAuthStack(app, 'TtobakEdgeAuthStack', {
   readConnectorClientId: authStack.readConnectorClient.userPoolClientId,
   writeConnectorClientId: authStack.writeConnectorClient.userPoolClientId,
   connectorAudience: app.node.tryGetContext('ttobak:mcpResourceAudience'),
+  connectorPrivateBridgeEnabled,
 });
 edgeAuthStack.addDependency(authStack);
 

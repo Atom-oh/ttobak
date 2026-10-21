@@ -164,6 +164,32 @@ test('unauthorized discovery/calls fail closed; only metadata is anonymous', asy
   assert.equal((await f.raw(toolCall('ttobak_list_meetings'), { headers: { Cookie: 'token=pretend', Authorization: '' } })).status, 401);
 });
 
+test('private activation and flag-off rollback pair discovery, challenge and accepted client identities', async t => {
+  for (const active of [true, false]) {
+    const config = httpConfig({ ...baseEnv, TTOBAK_CONNECTOR_PRIVATE_BRIDGE: String(active),
+      CONNECTOR_READ_CLIENT_ID: 'readclient', CONNECTOR_WRITE_CLIENT_ID: 'writeclient' });
+    const f = await fixture(t, undefined, config);
+    const scopes = ['openid', 'email', 'profile', ...(active ? ['ttobak.connector/read'] : [])];
+    const challenge = await f.raw({ jsonrpc: '2.0', id: 1, method: 'tools/list' },
+      { headers: { Authorization: '' } });
+    assert.equal(challenge.status, 401);
+    assert.ok(challenge.headers.get('www-authenticate').includes(`scope="${scopes.join(' ')}"`));
+    for (const suffix of ['', '/api/mcp']) {
+      const response = await fetch(f.url.replace('/api/mcp', '/.well-known/oauth-protected-resource' + suffix));
+      assert.equal(response.status, 200);
+      assert.deepEqual((await response.json()).scopes_supported,
+        [...scopes, ...(active ? ['ttobak.connector/write'] : [])]);
+    }
+    for (const client of ['testclient', 'readclient', 'writeclient']) {
+      const response = await f.raw({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, {
+        token: jwt({ client_id: client, scope: 'openid email profile ttobak.connector/read' }),
+      });
+      assert.equal(response.status, (active ? client !== 'testclient' : client === 'testclient') ? 200 : 401);
+    }
+    assert.equal(f.calls.length, 0);
+  }
+});
+
 test('JWT verification rejects forged, expired, wrong-issuer/client/audience and non-user tokens', async t => {
   const f = await fixture(t);
   const bad = [

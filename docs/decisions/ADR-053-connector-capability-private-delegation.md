@@ -2,7 +2,7 @@
 
 Date: 2026-10-21
 
-Status: Accepted design; staged policy foundation, activation pending
+Status: Accepted design; activation source prepared, deployed acceptance required
 
 ## Context
 
@@ -123,15 +123,19 @@ reconcile through the receipt. The bounded response confirms creation only,
 and grants are checked again before its delivery. No account, file or sharing
 mutation is exposed by this executor.
 
-The staged infrastructure now supplies two dedicated public clients, a retained
+The infrastructure supplies two dedicated public clients, a retained
 RSA signing key, metadata-only transaction grants, private invocation to the API
 live alias and QA, and a hash-pinned ARM64 cryptography layer. Existing pool/client
-identities and first-party/WebSocket allowlists remain unchanged. Issuance and the
-private HTTP transport stay disabled in the application configuration.
+identities and first-party/WebSocket allowlists remain unchanged. Application
+configuration enables issuance and private HTTP transport together. The edge
+challenge follows that private flag and requires the same read scope as MCP;
+discovery also lists optional write. HTTP hosts must use a dedicated client and
+fresh login, while stdio keeps its existing first-party authentication.
 The [release runbook](../runbooks/connector-release.md) defines separate
 deployment verification. Native migration, real provider tokens, audience and
 scope checks, current-source reads, expiry/revocation/disable behavior, actual
-KMS/IAM execution and rollback require recorded acceptance before activation.
+KMS/IAM execution and rollback require recorded acceptance before declaring
+production activation complete.
 No additional external callback or unauthenticated route is approved here.
 
 ## Verification
