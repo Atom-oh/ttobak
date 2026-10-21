@@ -126,6 +126,22 @@ an isolated Python 3.12 environment for storage changes. Moto exercises
 conditional expressions and transaction state; it does not validate AWS IAM,
 service concurrency, actual billing, or deployed acceptance.
 
+## 2026-10-21 amendment: definitive storage rejection
+
+A definitive `PutObject` rejection after model processing settles the failed
+attempt through the existing conditional writer, preserving its actual known
+usage and completeness. The initial allowlist is `AccessDenied`/403,
+`NoSuchBucket`/404 and `KMS.AccessDeniedException`/400. The operation and status
+must match and SDK `RetryAttempts` must be the integer zero: a later rejection
+does not resolve an earlier ambiguous request. Sufficient settlement time and a
+valid owned lease remain required.
+
+Timeouts, 5xx responses, conditional conflicts, unknown or incomplete error
+metadata, and settlement failures retain their conservative behavior. A failed
+second write leaves the first immutable object unpublished and retained. This
+change introduces no upload/model retry, object deletion, or historical ledger
+refund. Local regression evidence does not establish deployed acceptance.
+
 ## Evidence
 
 - `backend/python/crawler/news_pipeline.py`
