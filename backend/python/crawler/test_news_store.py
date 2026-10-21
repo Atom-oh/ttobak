@@ -91,7 +91,7 @@ class TestNewsStoreBoundaries(unittest.TestCase):
         client.batch_get_item.return_value = {"Responses": {"table": [{
             "PK": "CRAWLER#source", "SK": "DOC#" + "a" * 16,
             "schemaVersion": True, "qualityStatus": "PUBLISHED"}]}}
-        self.assertEqual(store.published_hashes("source", {"a" * 16}), set())
+        self.assertEqual(store.published_hashes("source", {"a" * 16}), {"a" * 16})
         self.assertTrue(client.batch_get_item.call_args.kwargs[
             "RequestItems"]["table"]["ConsistentRead"])
 
@@ -268,6 +268,41 @@ class TestNewsStoreTransactions(unittest.TestCase):
         self.reserve()
         self.finish(status="PUBLISHED", document=document(self.job), reason="")
         self.assertEqual(self.row("DOC#" + self.job.doc_hash)["qualityStatus"], "PUBLISHED")
+
+    def test_unknown_or_malformed_publication_marker_prevents_reservation(self):
+        for marker in ({"schemaVersion": 2, "qualityStatus": "PUBLISHED"},
+                       {"schemaVersion": 2}, {"schemaVersion": "1"},
+                       {"schemaVersion": True}, {"qualityStatus": "PUBLISHED"}):
+            with self.subTest(marker=marker):
+                original = {"PK": self.job.pk, "SK": "DOC#" + self.job.doc_hash,
+                            "preserved": "future data", **marker}
+                self.table.put_item(Item=original)
+                self.assertEqual(self.store.published_hashes("source", {self.job.doc_hash}),
+                                 {self.job.doc_hash})
+                with self.assertRaisesRegex(StateRejected, "STATE_CONFLICT"):
+                    self.reserve()
+                self.assertEqual(self.row(original["SK"]), original)
+                self.assertIsNone(self.row(self.job.sk))
+                self.assertIsNone(self.row("NEWSCLAIM#" + self.job.doc_hash))
+                self.assertIsNone(self.row("NEWSBUDGET#2026-10"))
+
+    def test_new_schema_publication_race_preserves_document_and_pending_charge(self):
+        self.reserve()
+        for marker in ({"schemaVersion": 2, "qualityStatus": "PUBLISHED"},
+                       {"schemaVersion": 2}, {"schemaVersion": "1"},
+                       {"schemaVersion": True}, {"qualityStatus": "PUBLISHED"}):
+            with self.subTest(marker=marker):
+                original = {"PK": self.job.pk, "SK": "DOC#" + self.job.doc_hash,
+                            "preserved": "future data", **marker}
+                self.table.put_item(Item=original)
+                with self.assertRaisesRegex(StateRejected, "STATE_CONFLICT"):
+                    self.finish(status="PUBLISHED", document=document(self.job), reason="")
+                self.assertEqual(self.row(original["SK"]), original)
+                self.assertEqual(self.charge(), Decimal("1"))
+                self.assertEqual(self.row(self.job.sk)["state"], "RUNNING")
+                self.assertNotIn("receipt", self.row(self.job.sk))
+                self.assertEqual(self.row("NEWSCLAIM#" + self.job.doc_hash)["attemptToken"],
+                                 self.job.token)
 
     def test_known_cost_overrun_is_recorded_and_blocks_further_reservations(self):
         self.reserve()
