@@ -75,6 +75,17 @@ if tag == "kiro-fable":
         if (root / "kiro-expanding-stderr").exists():
             print(("xoxb-" + "a" * 10 + "\n") * 65000, file=sys.stderr)
         raise SystemExit(0)
+    nested = root / "kiro-invalid-nested"
+    emitted_nested = root / "kiro-invalid-nested-emitted"
+    if nested.exists() and (not emitted_nested.exists() or (root / "kiro-invalid-always").exists()):
+        emitted_nested.touch()
+        if nested.read_text() == "finding":
+            response["findings"] = [{"severity":"HIGH", "path":paths[0],
+                                     "condition":"Trigger", "evidence":"Evidence"}]
+        elif nested.read_text() == "post-scrub":
+            response["checks"][0]["evidence"] = "\x1b[31m"
+        else:
+            response["checks"][0]["REJECTED_CANARY_UNKNOWN_KEY"] = "REJECTED_CANARY_VALUE"
     if (root / "kiro-major").exists():
         response["findings"] = [{"severity":"MAJOR","path":paths[0],
                                 "condition":"When the branch runs",
@@ -353,6 +364,62 @@ class EndToEndRoleTests(unittest.TestCase):
         result = json.loads((self.work / "slot/kiro-fable-result.json").read_text())
         self.assertTrue(result["valid"])
         self.assertEqual(result["response"]["findings"][0]["severity"], "MAJOR")
+        self.assertTrue((self.work / "review.md").read_text().endswith("VERDICT: FAIL\n"))
+
+    def test_nested_check_retry_is_bound_and_does_not_persist_rejected_content(self):
+        (self.root / "kiro-invalid-nested").write_text("check")
+        self.environment["PANEL_RETRIES"] = "2"
+        calls = self.kiro_review_calls(self.run_pipeline("infra/lib/stack.ts"))
+        self.assertEqual(len(calls), 2)
+        self.assertNotIn("schema-contract-v1", calls[0]["args"][1])
+        self.assertIn("schema-contract-v1", calls[1]["args"][1])
+        self.assertNotEqual(calls[0]["args"][1], calls[1]["args"][1])
+        history = json.loads((self.work / "slot/kiro-fable-attempts.json").read_text())
+        self.assertEqual(len(history), 1)
+        self.assertFalse(history[0]["valid"])
+        self.assertIsNone(history[0]["response"])
+        self.assertEqual(history[0]["failure_codes"], ["invalid_check"])
+        self.assertEqual(history[0]["validation_diagnostic"], {
+            "pointer":"/checks/0", "reason":"EXACT_KEYS_REQUIRED", "phase":"PRE_SCRUB"})
+        for path in self.work.rglob("*"):
+            if path.is_file():
+                self.assertNotIn(b"REJECTED_CANARY", path.read_bytes(), str(path))
+        self.assertNotIn("REJECTED_CANARY", json.dumps(calls))
+        self.assertTrue((self.work / "review.md").read_text().endswith("VERDICT: PASS\n"))
+
+    def test_schema_invalid_after_structured_scrub_retries_and_records_phase(self):
+        (self.root / "kiro-invalid-nested").write_text("post-scrub")
+        self.environment["PANEL_RETRIES"] = "2"
+        calls = self.kiro_review_calls(self.run_pipeline("infra/lib/stack.ts"))
+        self.assertEqual(len(calls), 2)
+        history = json.loads((self.work / "slot/kiro-fable-attempts.json").read_text())
+        self.assertEqual(history[0]["validation_diagnostic"], {
+            "pointer":"/checks/0/evidence", "reason":"NONEMPTY_STRING_REQUIRED", "phase":"POST_SCRUB"})
+        self.assertTrue((self.work / "review.md").read_text().endswith("VERDICT: PASS\n"))
+
+    def test_nested_finding_failure_uses_two_attempts(self):
+        (self.root / "kiro-invalid-nested").write_text("finding")
+        self.environment["PANEL_RETRIES"] = "2"
+        calls = self.kiro_review_calls(self.run_pipeline("infra/lib/stack.ts"))
+        self.assertEqual(len(calls), 2)
+        self.assertTrue((self.work / "review.md").read_text().endswith("VERDICT: PASS\n"))
+
+    def test_nested_failure_exhaustion_keeps_required_role_blocked(self):
+        (self.root / "kiro-invalid-nested").write_text("check")
+        (self.root / "kiro-invalid-always").touch()
+        self.environment["PANEL_RETRIES"] = "2"
+        calls = self.kiro_review_calls(self.run_pipeline("infra/lib/stack.ts"))
+        self.assertEqual(len(calls), 2)
+        result = json.loads((self.work / "slot/kiro-fable-result.json").read_text())
+        self.assertFalse(result["valid"])
+        self.assertIsNone(result["response"])
+        self.assertEqual(result["failure_codes"], ["invalid_check"])
+        self.assertTrue((self.work / "review.md").read_text().endswith("VERDICT: FAIL\n"))
+
+    def test_nested_failure_one_attempt_does_not_retry(self):
+        (self.root / "kiro-invalid-nested").write_text("check")
+        calls = self.kiro_review_calls(self.run_pipeline("infra/lib/stack.ts"))
+        self.assertEqual(len(calls), 1)
         self.assertTrue((self.work / "review.md").read_text().endswith("VERDICT: FAIL\n"))
 
     def setUp(self):

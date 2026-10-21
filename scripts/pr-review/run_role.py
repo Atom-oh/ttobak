@@ -17,8 +17,9 @@ import subprocess
 import sys
 import tempfile
 import time
+from types import SimpleNamespace
 
-from role_review import diagnostic_failure, issue_request, issued_request, load_plan, digest, Invalid, MAX_REQUEST_BYTES, MAX_OUTPUT_BYTES, output_bytes, text_file, strict_json, canonical, parse_response, strip_controls
+from role_review import diagnostic_failure, issue_request, issued_request, load_plan, digest, Invalid, MAX_REQUEST_BYTES, MAX_OUTPUT_BYTES, output_bytes, text_file, strict_json, canonical, strip_controls, accepted_response, record, SCHEMA_CODES, SCHEMA_CORRECTION
 
 
 DIRECTORY = Path(__file__).resolve().parent
@@ -159,17 +160,6 @@ def scrub(text):
     return process.stdout
 
 
-def malformed_kiro_json(text):
-    """Return syntax status and the bounded text that record will parse."""
-    clean = scrub(text)
-    output_bytes(clean)
-    try:
-        parse_response(clean)
-    except Invalid as error:
-        return str(error) in ("malformed_json", "invalid_json_wrapper"), clean
-    return False, clean
-
-
 def run(work, tag, kiro_startup=None):
     plan = load_plan(work)
     role = plan["roles"][tag]
@@ -195,6 +185,8 @@ def run(work, tag, kiro_startup=None):
     output = ""
     error = ""
     code = 1
+    rejection_recorded = False
+    kiro_accepted = False
     nonce, framed_prompt, payload = issue_request(work, tag)
     with tempfile.TemporaryDirectory(prefix=f"{tag}-", dir=runtime) as temporary:
         cwd = Path(temporary)
@@ -221,10 +213,18 @@ def run(work, tag, kiro_startup=None):
                         "--legacy-ui", "--agent-engine", "v1",
                     ]
                     deadline = time.monotonic() + attempts * timeout
+                    correction_mode = None
                     for _ in range(attempts):
-                        nonce, framed_prompt, payload = issue_request(work, tag)
+                        nonce, framed_prompt, payload = (
+                            issue_request(work, tag) if correction_mode is None
+                            else issue_request(work, tag, correction_mode)
+                        )
+                        rejection_recorded = False
                         verify_kiro_startup(startup, work, plan, tag, nonce)
                         command[2] = framed_prompt + "\n" + payload
+                        if len(command[2].encode()) >= MAX_REQUEST_BYTES:
+                            code, output, error = 1, "", "Complete Kiro input exceeds argument limit."
+                            break
                         remaining = deadline - time.monotonic()
                         if remaining <= 0:
                             code, output, error = 124, "", "Review CLI budget exhausted."
@@ -238,31 +238,50 @@ def run(work, tag, kiro_startup=None):
                             break
                         if code == 0 and output.strip():
                             try:
-                                malformed, clean = malformed_kiro_json(output)
-                            except Invalid:
-                                code, output, error = 1, "", "output_byte_limit"
-                                break
-                            if not malformed:
-                                break
-                            # Normalize before masking too: masking may remove a
-                            # diagnostic inside a sensitive-looking assignment.
-                            normalized = strip_controls(output)
-                            normalized_error = strip_controls(error)
-                            try:
-                                clean_error = scrub(error)
-                                output_bytes(clean_error)
-                            except Invalid:
-                                code, output, error = 1, "", "output_byte_limit"
-                                break
-                            if any(FAILURE.search(text) or diagnostic_failure(text)
-                                   for text in (output, normalized, clean,
-                                                error, normalized_error, clean_error)):
-                                code = 1
-                                error = normalized_error + ("\n" if normalized_error else "") + normalized
+                                clean = scrub(output)
+                                output_bytes(clean)
+                                accepted_response(clean, plan, tag)
+                            except Invalid as rejection:
+                                if str(rejection) not in SCHEMA_CODES:
+                                    code, output, error = 1, "", str(rejection)
+                                    break
+                                # Inspect terminal signals before masking, including
+                                # control-split diagnostics in otherwise invalid JSON.
+                                normalized = strip_controls(output)
+                                normalized_error = strip_controls(error)
                                 try:
-                                    output_bytes(error)
+                                    clean_error = scrub(error)
+                                    output_bytes(clean_error)
                                 except Invalid:
-                                    output, error = "", "output_byte_limit"
+                                    code, output, error = 1, "", "output_byte_limit"
+                                    break
+                                if any(FAILURE.search(text) or diagnostic_failure(text)
+                                       for text in (output, normalized, clean,
+                                                    error, normalized_error, clean_error)):
+                                    code = 1
+                                    error = normalized_error + ("\n" if normalized_error else "") + normalized
+                                    try:
+                                        output_bytes(error)
+                                    except Invalid:
+                                        error = "output_byte_limit"
+                                    output = ""
+                                    break
+                                # Only fixed metadata is persisted for the rejected
+                                # body; the next issuer archives it under this nonce.
+                                if record(SimpleNamespace(work=work, tag=tag, nonce=nonce,
+                                                          exit_code=0), rejection=rejection) != 2:
+                                    raise RuntimeError("Schema rejection recording failed")
+                                saved = strict_json(text_file(slot / f"{tag}-result.json"))
+                                if (saved.get("valid") is not False or saved.get("response") is not None
+                                        or saved.get("invocation_nonce") != nonce
+                                        or saved.get("failure_codes") != [str(rejection)]
+                                        or saved.get("validation_diagnostic") != rejection.diagnostic):
+                                    raise RuntimeError("Schema rejection recording failed")
+                                rejection_recorded = True
+                                correction_mode = SCHEMA_CORRECTION
+                                output, error = "", ""
+                            else:
+                                kiro_accepted = True
                                 break
         else:
             environment.pop("KIRO_API_KEY", None)
@@ -348,19 +367,38 @@ def run(work, tag, kiro_startup=None):
                     break
                 if code == 0 and output.strip():
                     break
-    # Only scrubbed artifacts enter slot/. Runtime raw output is never uploaded.
-    output_path = runtime / f"{tag}.txt"
-    error_path = runtime / f"{tag}.err"
-    output_path.write_text(scrub(output))
-    error_path.write_text(scrub(error))
-    result = subprocess.run([
-        sys.executable, str(DIRECTORY / "role_review.py"), "record",
-        "--work", str(work), "--tag", tag, "--output", str(output_path),
-        "--stderr", str(error_path), "--exit-code", str(code),
-        "--nonce", nonce,
-    ])
-    if result.returncode not in (0, 2):
-        raise RuntimeError("Specialist result recording failed")
+    # A rejected Kiro response is never retained as runtime text, even when
+    # it also contains terminal diagnostics. Preserve only the static category.
+    if tag.startswith("kiro-") and not kiro_accepted and not rejection_recorded:
+        clean_error = scrub(error)
+        try:
+            output_bytes(clean_error)
+        except Invalid:
+            error = "output_byte_limit"
+        failure = diagnostic_failure(strip_controls(error)) or diagnostic_failure(clean_error)
+        error = {
+            "output_byte_limit": "output_byte_limit",
+            "scrub_nesting_limit": "scrub_nesting_limit",
+            "quota_diagnostic": "quota exceeded",
+            "model_selection_diagnostic": "Error: INVALID_MODEL_ID",
+            "model_fallback_diagnostic": "Falling back to another model",
+            "agent_preflight_diagnostic": "no agent with name inline-review found",
+        }.get(failure, "Review CLI failed.")
+        output = ""
+    if not rejection_recorded:
+        # Only scrubbed artifacts enter slot/. Runtime raw output is never uploaded.
+        output_path = runtime / f"{tag}.txt"
+        error_path = runtime / f"{tag}.err"
+        output_path.write_text(scrub(output))
+        error_path.write_text(scrub(error))
+        result = subprocess.run([
+            sys.executable, str(DIRECTORY / "role_review.py"), "record",
+            "--work", str(work), "--tag", tag, "--output", str(output_path),
+            "--stderr", str(error_path), "--exit-code", str(code),
+            "--nonce", nonce,
+        ])
+        if result.returncode not in (0, 2):
+            raise RuntimeError("Specialist result recording failed")
     (slot / f"{tag}-timing.json").write_text(json.dumps({
         "tag": tag, "elapsed_seconds": round(time.monotonic() - start, 3),
         "exit_code": code, "configured_model": role["model"],
