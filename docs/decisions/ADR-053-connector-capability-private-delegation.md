@@ -38,10 +38,13 @@ independent requirements.
 
 ## Current implementation and remaining delivery
 
-This revision supplies policy types, operation tables, deterministic generation
-and cross-language tests. No token verifier, signer, grant store, private
+This revision supplies policy types, operation tables, deterministic generation,
+local RSA-PSS delegation verifiers and shared synthetic signature tests.
+The [wire contract](../security/connector-delegation-v1.md) defines exact bytes,
+key pinning and lifetime limits. No OAuth token verifier, live signer, grant store, private
 consumer, approval endpoint, OAuth client, IAM permission or scheduler is
-activated by this foundation. Existing transports do not import the policy.
+activated by this foundation. Existing transports do not import the policy or
+delegation modules.
 
 Subsequent reviewed stages must supply dedicated-client ingress, private signing
 and current grant resolution, bounded API/QA consumers, atomic approval/audit
