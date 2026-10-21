@@ -108,7 +108,7 @@ func vaultReadingFixture() (*VaultReadingService, *vaultReadingRepo) {
 		id := fmt.Sprintf("%02d", i)
 		r.attachments["m"] = append(r.attachments["m"], model.Attachment{PK: "MEETING#m", SK: "ATTACH#" + id, AttachmentID: id, MeetingID: "m", FileName: "첨부 " + id, Type: "photo", Status: "done", Description: strings.Repeat("설명😀\"\\", 500)})
 	}
-	return NewVaultReadingService(r), r
+	return &VaultReadingService{repo: r}, r
 }
 func readVaultPage(t *testing.T, s *VaultReadingService, q url.Values) map[string]interface{} {
 	t.Helper()
