@@ -1,6 +1,7 @@
 # Knowledge-grade news release
 
-Status on 2026-10-21: the private workflow is deployed for one isolated canary.
+Historical staging snapshot on 2026-10-21, before daily activation: the private
+workflow is deployed for one isolated canary.
 Publication, charged usage, authenticated HTTP/WebSocket current-source QA,
 source-change/disable rejection, and rendered settings/history passed production
 acceptance. Scheduled recovery and the 986-item retained-legacy archive, including
@@ -18,7 +19,7 @@ and accounting semantics.
 | `news_runtime.worker_handler` | One discovered candidate | Reserves maximum model cost, fetches/validates sources, conditionally publishes immutable results |
 | `news_runtime.finalize_handler` | Exact `discovery`, `outcomes` object | Atomically writes final accounting/history; callable after disabling writers |
 | `news_recovery.handler` | Empty object | Recovers expired runs using a leased scan cursor; callable after disabling writers |
-| `news_schedule.handler` | Empty object | Lists current source identities with bounded strong pagination; no writes or model calls |
+| `news_schedule.handler` | `scheduledAt`, optionally `expectedSourcesSha256` | Lists current source identities with bounded strong pagination; pins the original UTC day and optionally the exact replay set; no writes or model calls |
 
 These functions require private IAM invocation. They must not be exposed through
 an unauthenticated function URL or a new public application route.
@@ -270,22 +271,83 @@ only the configured canary source.
 
 The scheduler strongly scans canonical source configuration with 100 evaluated
 items per page, a 1,000-page limit and a deadline checked before each request.
-It excludes disabled/internal sources, validates source identities, and fails the
-whole dispatch on duplicate or malformed identities or more than 30 active
-sources. It does not silently truncate coverage. Schedule output is capped at
-64,000 bytes. Each child validates its current source configuration; oversized
+It excludes disabled/internal sources and validates source identities. A malformed
+identity becomes an `INVALID_SCHEDULE_SOURCE` entry containing only the SHA256 of
+its canonical partition key. The parent records that source's failure and continues
+healthy sources; it never renames or publishes the invalid source. Rejected entries
+count toward the same 30-source limit. Duplicate rows, incomplete scans, capacity
+overflow and the 64,000-byte output limit still reject the whole dispatch without
+silently truncating coverage. Each child validates its current source configuration; oversized
 subscription unions fail that source while later sources still run. The parent
 reports failure after processing all dispatched sources.
 
 One daily workflow processes sources sequentially, respecting the existing
 single-discovery concurrency. Thirty children at the 45-minute child timeout
 fit within the 23-hour parent timeout. Source/day execution names and run IDs
-are deterministic in UTC; duplicate starts cannot create additional paid runs. The
+are deterministic from the original UTC schedule day, including on later replay.
+The child uses its execution name as the actual durable run ID; the scheduler's
+`daily-YYYYMMDD` field does not override that identity. Duplicate starts cannot
+create additional paid runs. The
 optimized nested integration reports `StepFunctions.ExecutionAlreadyExistsException`;
 the duplicate catch accepts that observed name and the older suffix-free name.
 A failed child is recorded without skipping later sources, and the parent fails
-after all selected sources have been attempted. Existing child failure/timeout
-alarms and new parent failure/timeout alarms remain authoritative on replay.
+after all selected sources have been attempted. Successful task execution alone
+is insufficient: a finalized `COMPLETED` or `PARTIAL` receipt must have the exact
+empty `errors` array and boolean `usageComplete=true`. Nonempty errors such as
+`SEARCH_FAILED`, incomplete usage and unknown outputs fail that source after
+durable finalization. Warning-only partial results and valid empty results remain
+successful. The short `FINALIZED` result and duplicate-start catch mean reuse of
+an existing execution, not proof that its historical crawl succeeded. Inspect the
+original history and child/parent failure or timeout alarms on replay.
+
+### Daily admission retention and bounded replay
+
+The daily EventBridge target forwards its original `time` as `scheduledAt`.
+Active scheduling requires exactly `YYYY-MM-DDTHH:MM:SSZ`, no future timestamp,
+and an age of at most 14 days. Unknown input fields fail before scanning.
+Current pricing and activation checks still use current time. Only the daily
+target has six delivery retries with a two-hour event age; the recovery target
+keeps its separate empty input and zero retries.
+
+Failed admission is retained for 14 days in the standard
+`ttobak-news-daily-delivery-dlq` queue. The queue and rotating customer-managed
+KMS key have retain policies. The queue grants only the exact daily rule
+`sqs:SendMessage`; the dedicated key grants the EventBridge service
+`kms:GenerateDataKey` and `kms:Decrypt` for this account. The stack outputs both
+ARNs. Alarms cover `AWS/Events` `FailedInvocations`,
+`InvocationsFailedToBeSentToDlq`, and visible queue messages. Metrics are
+best-effort signals, not complete delivery accounting.
+
+Before manual recovery, bind the exact queue, rule and target ARNs, retained
+message attributes and original timestamp. Inspect the original parent/child
+executions, current source identities/configuration revisions and ledger counters.
+Never replace the original timestamp with replay time. Recovery intended to do
+no new model work must verify that every expected deterministic child name already
+exists in the exact publication state machine and is terminal.
+
+Supply `expectedSourcesSha256` as 64 lowercase hexadecimal characters alongside
+`scheduledAt`. The scheduler hashes its actual scanned result before returning
+any entries. `sources_sha256` sorts every source/error entry by its JSON encoding,
+then hashes UTF-8 JSON of `{mode,sources}` with sorted object keys,
+`ensure_ascii=False`, compact comma/colon separators and no non-finite numbers.
+All identities, execution names, day fields and rejection entries participate.
+Addition, removal or identity change fails with `SCHEDULE_SOURCES_CHANGED` before
+any child starts. This guards the scan after operator preflight; a preflight
+snapshot alone does not prevent a newly added source from starting work.
+
+Record one uniquely named parent execution intent and its exact input. On an
+ambiguous response, reconcile that execution name before deciding anything else;
+do not automatically retry. Verify all original child names and accounting
+counters after completion. Delete only the bound DLQ message after its effect is
+confirmed; retain it on uncertainty. Do not bulk-drain, recreate source identities,
+clear ledger rows or change concurrency to force a replay.
+
+This repair's source tests and declared resources do not prove deployed recovery.
+After a targeted, exclusive CrawlerStack deployment, record actual service-role,
+queue/key, alarm and original-day replay checks. A same-day replay using already
+completed children must leave attempts, documents and charges unchanged. Actual
+EventBridge failure-to-DLQ delivery needs separate bounded service acceptance;
+do not label an operator-written queue fixture as proof of that service path.
 
 Before enabling all sources, verify the deployed scheduler role's actual scan,
 nested-workflow IAM, canary selection, duplicate execution behavior and failure
