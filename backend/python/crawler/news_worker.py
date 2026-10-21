@@ -13,6 +13,8 @@ import json
 import re
 import uuid
 
+from botocore.exceptions import ClientError
+
 from article_fetcher import ArticleBody, FetchRejected, fetch_article
 from news_discovery import valid_source_id
 from news_enrichment import (
@@ -135,6 +137,29 @@ def _put_immutable(deps, bucket, key, data, content_type):
         IfNoneMatch="*", ChecksumSHA256=base64.b64encode(digest).decode("ascii"),
         Metadata={"sha256": digest.hex()})
     return digest.hex()
+
+
+def _settle_storage_rejection(deps, job, model, warnings, error):
+    # A later rejection cannot resolve an earlier ambiguous SDK attempt.
+    metadata = error.response.get("ResponseMetadata")
+    detail = error.response.get("Error")
+    codes = {"AccessDenied": 403, "NoSuchBucket": 404, "KMS.AccessDeniedException": 400}
+    if (error.operation_name != "PutObject"
+            or not isinstance(metadata, dict) or not isinstance(detail, dict)
+            or type(metadata.get("RetryAttempts")) is not int
+            or metadata["RetryAttempts"] != 0
+            or not isinstance(detail.get("Code"), str)
+            or detail["Code"] not in codes
+            or type(metadata.get("HTTPStatusCode")) is not int
+            or metadata["HTTPStatusCode"] != codes[detail["Code"]]
+            or deps.remaining() < SETTLEMENT_SECONDS):
+        raise error
+    # The existing atomic writer checks ownership and lease freshness. Its own
+    # failure remains ambiguous; never fabricate a receipt or remove an object.
+    return deps.store.finish(
+        job, now=deps.now(), status="FAILED", reason="STORAGE_REJECTED",
+        known_cost=deps.policy.cost(model.usage), usage_complete=model.complete,
+        usage=model.usage, warnings=warnings)
 
 
 def _candidate(value):
@@ -282,8 +307,11 @@ def process_candidate(candidate, deps):
             job, now=deps.now(), status="REJECTED", reason="RENDER_REJECTED",
             known_cost=deps.policy.cost(model.usage), usage_complete=model.complete,
             usage=model.usage, warnings=warnings)
-    artifact_hash = _put_immutable(deps, deps.artifact_bucket, job.artifact_key,
-                                  artifact_bytes, "application/json; charset=utf-8")
+    try:
+        artifact_hash = _put_immutable(deps, deps.artifact_bucket, job.artifact_key,
+                                      artifact_bytes, "application/json; charset=utf-8")
+    except ClientError as error:
+        return _settle_storage_rejection(deps, job, model, warnings, error)
     if deps.remaining() < SETTLEMENT_SECONDS:
         raise StateRejected("RUN_BUDGET")
     if not _fresh(candidate, deps.now(), lead):
@@ -291,8 +319,11 @@ def process_candidate(candidate, deps):
             job, now=deps.now(), status="REJECTED", reason="STALE_ARTICLE",
             known_cost=deps.policy.cost(model.usage), usage_complete=model.complete,
             usage=model.usage, warnings=warnings)
-    markdown_hash = _put_immutable(deps, deps.kb_bucket, job.markdown_key,
-                                  markdown, "text/markdown; charset=utf-8")
+    try:
+        markdown_hash = _put_immutable(deps, deps.kb_bucket, job.markdown_key,
+                                      markdown, "text/markdown; charset=utf-8")
+    except ClientError as error:
+        return _settle_storage_rejection(deps, job, model, warnings, error)
     if deps.remaining() < SETTLEMENT_SECONDS:
         raise StateRejected("RUN_BUDGET")
     if not _fresh(candidate, deps.now(), lead):
