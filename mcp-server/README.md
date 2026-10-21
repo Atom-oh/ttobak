@@ -344,6 +344,13 @@ export, projects and links.
 - Project lists include owner, direct-member and linked-account membership paths.
   Link/mutation permissions remain server-enforced. Any existing account member
   can add another member to an assignable non-owner role (ADR-034).
+- Account detail, meeting, insight and brief tools use
+  `/api/accounts/{accountId}/reading`. Detail traverses metadata and members;
+  brief also traverses meetings and insights. Follow the opaque page cursor
+  through every phase. Concatenate `dataJson` within a single phase/revision
+  until `fragment.complete`, then parse that JSON group; `page.complete` ends the
+  whole selection. Source windows are bounded and individually revision-pinned,
+  while the overall collection remains live. Deploy the API producer first.
 - HTTP failures are tool errors, not success with error-shaped JSON. Streaming
   decoding must preserve UTF-8 across byte boundaries.
 
@@ -506,3 +513,23 @@ Account/project discovery uses bounded navigation pages and canonical grants.
 Follow empty continuation pages; merge project entries by `projectId` when
 `overlapPossible` is true. Linked accounts do not authorize meeting content.
 Deploy both navigation API producers before this adapter.
+
+Project detail/brief/insight tools use `/api/projects/{projectId}/reading` with
+opaque cursors and the account JSON-group reconstruction contract above.
+Brief covers metadata, members, meetings, research and insights; `section` can
+select any one phase. Continue authorization-only pages without treating them
+as empty project data. All pages revalidate the selected current grant and
+source; stale continuation must restart. Duplicate legacy meeting references
+are explicit (`overlapPossible`): union meetings by `meetingId`, and replace
+repeated complete insight groups by `sourceId`, preserving each source's full
+insight list. Research summaries retain their existing preview semantics.
+Deploy and verify the API producer before publishing this consumer; no legacy
+full-brief fallback is used. Encoded API pages stay within 10,000 bytes, and
+original HTTP/tool output caps remain 32,000 bytes.
+
+Project updates that omit optional fields preserve them by reading only the
+paged project metadata selection. They never prefetch an unbounded member
+collection. The adapter requires continuous fragments from one revision and
+finishes that read before sending a write; stale, malformed, oversized or
+repeated continuations fail before any update. The original page/response caps
+remain in force, with a separate 3 MiB reconstructed metadata ceiling.
