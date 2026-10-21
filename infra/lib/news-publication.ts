@@ -218,7 +218,7 @@ export class NewsPublication extends Construct {
       },
     }));
     const listDaily = new tasks.LambdaInvoke(this, 'ListDailySources', {
-      lambdaFunction: schedule.fn, payload: sfn.TaskInput.fromJsonPathAt('$'),
+      lambdaFunction: schedule.fn,
       payloadResponseOnly: true, retryOnServiceExceptions: false,
     });
     const dailySource = new tasks.StepFunctionsStartExecution(this, 'PublishDailySource', {

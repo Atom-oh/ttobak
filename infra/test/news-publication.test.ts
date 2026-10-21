@@ -22,7 +22,7 @@ function resolved(value: any): any {
 
 // Execute the synthesized, bounded daily subgraph, not a copy of its business
 // predicates. Task outputs are fixtures; unsupported ASL fails the test.
-function dailyResult(definition: any, sources: any[], outputs: any[]) {
+function dailyResult(definition: any, sources: any[], outputs: any[], input: any = {}) {
   let invoked = 0;
   const at = (data: any, path: string): any =>
     path === '$' ? data : path.slice(2).split('.').reduce((v, key) => v?.[key], data);
@@ -63,6 +63,14 @@ function dailyResult(definition: any, sources: any[], outputs: any[]) {
       }
       let result: any;
       if (state.Type === 'Task' && name === 'ListDailySources') {
+        const selected = state.InputPath === null ? {}
+          : state.InputPath ? at(data, state.InputPath) : data;
+        const payload = 'Parameters' in state
+          ? state.Parameters && typeof state.Parameters === 'object'
+            ? params(state.Parameters, selected) : state.Parameters
+          : selected;
+        // Verify the synthesized Lambda input before substituting its output.
+        expect(payload).toEqual(data);
         result = { mode: 'all', sources };
       } else if (state.Type === 'Task') {
         const output = outputs[invoked++];
@@ -89,7 +97,7 @@ function dailyResult(definition: any, sources: any[], outputs: any[]) {
     }
     throw new Error('Unbounded daily graph');
   };
-  return execute(definition, {});
+  return execute(definition, input);
 }
 
 describe('private news publication release', () => {
@@ -326,6 +334,17 @@ describe('private news publication release', () => {
     expect(dailyResult(daily, [{ schedulingError: 'INVALID_SCHEDULE_SOURCE',
       sourceKeySha256: 'a'.repeat(64) }, identity('b')], [receipt('b')]))
       .toEqual({ terminal: 'DailyPublicationFailed', invoked: 1 });
+  });
+
+  test.each([
+    {},
+    { scheduledAt: '2026-10-21T19:10:00Z' },
+    { scheduledAt: '2026-10-21T19:10:00Z', expectedSourcesSha256: 'a'.repeat(64) },
+  ])('daily scheduler receives the complete parent input: %j', (input) => {
+    const daily = JSON.parse(resolved(resources.find(r =>
+      r.Properties?.StateMachineName === 'ttobak-news-daily').Properties.DefinitionString));
+    expect(dailyResult(daily, [], [], input))
+      .toEqual({ terminal: 'DailyComplete', invoked: 0 });
   });
 
   test('daily delivery retains original time and has scoped encrypted recovery', () => {
