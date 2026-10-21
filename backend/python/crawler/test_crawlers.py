@@ -2090,5 +2090,12 @@ class TestSigv4PostHttpsGuard(unittest.TestCase):
             news_crawler.WEB_SEARCH_GATEWAY_URL = original
 
 
+def load_tests(loader, tests, pattern):
+    # Keep the established CI entry point complete as staged news modules land.
+    tests.addTests(loader.loadTestsFromName("test_news_candidates"))
+    tests.addTests(loader.loadTestsFromName("test_article_fetcher"))
+    return tests
+
+
 if __name__ == '__main__':
     unittest.main()
