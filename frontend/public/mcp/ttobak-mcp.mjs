@@ -23294,6 +23294,10 @@ var TtobakApi = class {
     return this.request("GET", `/api/meetings/${identifier(options.meetingId, "meetingId")}/reading?${query}`, void 0, MAX_READING_BYTES);
   }
   async askQuestion(question, meetingId, sessionId) {
+    if (this.options.privateTransport) {
+      if (sessionId) throw new Error("Read-only questions do not use saved chat sessions.");
+      return this.post("/api/qa/readonly-ask", { question, ...meetingId ? { meetingId } : {} });
+    }
     const body = { question };
     if (sessionId) body.sessionId = sessionId;
     if (meetingId) {
@@ -23701,6 +23705,15 @@ var TtobakApi = class {
   }
   async request(method, path, body, maxResponseBytes) {
     this.options.signal?.throwIfAborted();
+    if (this.options.privateTransport) {
+      return this.options.privateTransport({
+        method,
+        path,
+        body: body ?? null,
+        signal: this.options.signal,
+        maxResponseBytes: Math.min(32e3, maxResponseBytes ?? this.options.maxResponseBytes ?? 32e3)
+      });
+    }
     const idToken = await this.auth.getIdToken();
     const url2 = new URL2(path, this.baseUrl);
     if (url2.origin !== new URL2(this.baseUrl).origin) throw new Error("API origin cannot change");
