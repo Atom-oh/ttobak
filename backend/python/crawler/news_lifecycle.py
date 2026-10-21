@@ -24,6 +24,18 @@ def _integer(value, maximum=10000000):
     return int(value)
 
 
+def _aggregate_charge(value):
+    # Each settled attempt can report an overrun up to the per-attempt cap.
+    # A valid run total can therefore exceed the reservation-input money cap.
+    if isinstance(value, bool) or not isinstance(value, (int, Decimal)):
+        raise StateRejected("INVALID_RUN_STATE")
+    amount = Decimal(value)
+    if (not amount.is_finite() or not 0 <= amount <= MAX_RUN_ATTEMPTS * 100000
+            or amount.as_tuple().exponent < -12):
+        raise StateRejected("INVALID_RUN_STATE")
+    return amount
+
+
 @dataclass(frozen=True)
 class Run:
     source_id: str
@@ -118,7 +130,7 @@ class NewsRuns:
         started = _integer(row.get("startedAt"), now)
         count = _integer(row.get("attemptCount"), MAX_RUN_ATTEMPTS)
         finished = _integer(row.get("finishedCount"), count)
-        charged = _money(row.get("chargedUsd"))
+        charged = _aggregate_charge(row.get("chargedUsd"))
         unknown = _integer(row.get("unknownAttempts"), finished)
         attempts = self._attempts(run)
         if len(attempts) != count:

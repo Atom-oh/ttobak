@@ -8,12 +8,19 @@ from unittest import mock
 
 import boto3
 
-from news_lifecycle import ACCEPT_SECONDS, NewsRuns, Run
+from news_lifecycle import ACCEPT_SECONDS, NewsRuns, Run, _aggregate_charge
 from news_store import LEASE_SECONDS, NewsStore, StateRejected
 from test_news_store import CONFIG, NOW, attempt, document, mock_aws
 
 
 class TestRunBoundaries(unittest.TestCase):
+    def test_aggregate_charge_is_bounded_without_relaxing_attempt_inputs(self):
+        self.assertEqual(_aggregate_charge(Decimal("6000000")), Decimal("6000000"))
+        for value in (True, 1.0, "120000", Decimal("NaN"), Decimal("Infinity"),
+                      Decimal("-1"), Decimal("0.0000000000001"), Decimal("6000001")):
+            with self.subTest(value=value), self.assertRaises(StateRejected):
+                _aggregate_charge(value)
+
     def test_uninitialized_run_cannot_reserve(self):
         client = mock.Mock()
         store = NewsStore(client, "table")
@@ -88,6 +95,22 @@ class TestRunTransactions(unittest.TestCase):
         self.assertEqual(row["attemptCount"], 1)
         self.assertEqual(row["chargedUsd"], 1)
         self.assertEqual(row["acceptUntil"], NOW + ACCEPT_SECONDS)
+
+    def test_two_known_overruns_above_single_attempt_cap_finalize_once(self):
+        second = replace(self.job, doc_hash="b" * 16, token="c" * 32)
+        self.reserve()
+        self.reserve(second)
+        for job in (self.job, second):
+            self.store.finish(
+                job, now=NOW + 1, status="REJECTED", known_cost="60000",
+                usage_complete=True, usage={"inputTokens": 100, "outputTokens": 10})
+        receipt = self.runs.finish(self.run, NOW + 2)
+        self.assertEqual(receipt["chargedUsd"], Decimal("120000"))
+        self.assertEqual(receipt["attemptCount"], 2)
+        self.assertEqual(self.runs.finish(self.run, NOW + 3), receipt)
+        self.assertEqual(len(self.history()), 1)
+        self.assertEqual(self.item("NEWSBUDGET#" + self.job.month)["chargedUsd"], Decimal("120000"))
+        self.assertTrue(self.item("NEWSBUDGET#" + self.job.month)["blocked"])
 
     def test_uninitialized_mismatched_or_expired_run_cannot_reserve(self):
         for job, now in (
