@@ -580,6 +580,11 @@ export class AiStack extends cdk.Stack {
       actions: ['s3:GetObject', 's3:GetObjectVersion'],
       resources: ['kb/*', 'shared/*'].map((prefix) => props.kbBucket.arnForObjects(prefix)),
     }));
+    this.qaRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'ReadCurrentPublishedNews',
+      actions: ['s3:GetObject', 's3:GetObjectVersion'],
+      resources: [props.kbBucket.arnForObjects('news/v1/*')],
+    }));
     // Effective bucket-level ListBucket lets HEAD distinguish a missing
     // original/preview (404) from a denied source (403).
     this.qaRole.addToPolicy(new iam.PolicyStatement({
