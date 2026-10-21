@@ -102,6 +102,7 @@
     ["api.dict.updateDictionary", "ttobak-api-bridge", ["read", "write"], false, "PUT", "/api/settings/dictionary"],
     ["api.dict.deleteTerm", "ttobak-api-bridge", ["delete", "read"], false, "DELETE", "/api/settings/dictionary/term"],
     ["api.dict.createTerm", "ttobak-api-bridge", ["read", "write"], false, "POST", "/api/settings/dictionary/terms"],
+    ["api.dict.updateDictTerm", "ttobak-api-bridge", ["read", "write"], false, "PATCH", "/api/settings/dictionary/terms/{termId}"],
     ["api.dict.deleteDictTerm", "ttobak-api-bridge", ["delete", "read"], false, "DELETE", "/api/settings/dictionary/terms/{termId}"],
     ["api.translate.translate", "ttobak-api-bridge", ["read", "write"], true, "POST", "/api/translate"],
     ["api.meetingTranslation.post", "ttobak-api-bridge", ["read", "write"], true, "POST", "/api/meetings/{meetingId}/translation"],

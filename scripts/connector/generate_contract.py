@@ -28,7 +28,7 @@ def outputs():
             raise ValueError("invalid capability order")
         if not set(caps) <= {"read", "write", "share", "delete"}:
             raise ValueError("unknown capability")
-        if type(allowed) is not bool or method not in ("GET", "POST", "PUT", "DELETE", "TOOL", "INTERNAL"):
+        if type(allowed) is not bool or method not in ("GET", "POST", "PUT", "PATCH", "DELETE", "TOOL", "INTERNAL"):
             raise ValueError("invalid operation")
         value = (dest, ",".join(caps), allowed)
         if op in entries and entries[op] != value:

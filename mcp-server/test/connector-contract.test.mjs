@@ -15,7 +15,7 @@ test('every inventoried operation preserves its explicit policy and blocked stat
   const bindings = new Set(inventory.operations.filter(row => row[1] === 'ttobak-api-bridge')
     .map(row => `${row[4]} ${row[5]}`));
   const source = readFileSync(new URL('../../backend/cmd/api/main.go', import.meta.url), 'utf8');
-  for (const [, method, path] of source.matchAll(/r\.(Get|Post|Put|Delete)\("([^"\n]+)", [A-Za-z0-9_.]+\)/g)) {
+  for (const [, method, path] of source.matchAll(/r\.(Get|Post|Put|Patch|Delete|Head|Options|Connect|Trace)\("([^"\n]+)", [A-Za-z0-9_.]+\)/g)) {
     assert.ok(bindings.has(`${method.toUpperCase()} ${path}`), `uninventoried route: ${method} ${path}`);
   }
   for (const [op, dest, caps, allowed] of inventory.operations) {
