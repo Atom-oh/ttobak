@@ -236,7 +236,7 @@ def run(work, tag, kiro_startup=None):
                         if FAILURE.search(error) or diagnostic_failure(error):
                             code = code or 1
                             break
-                        if code == 0 and output.strip():
+                        if code == 0:
                             try:
                                 clean = scrub(output)
                                 output_bytes(clean)

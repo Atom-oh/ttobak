@@ -86,6 +86,51 @@ class RoleExecutionTests(unittest.TestCase):
                     "findings":[], "uncertainties":[]}
         return work, startup, response
 
+    def assert_empty_schema_retry(self, first_output, recover):
+        work, startup, response = self.prepared_kiro()
+        calls = []
+        def execute(command, cwd, environment, input_text, timeout):
+            receipt = json.loads((work / "slot/kiro-fable-request.json").read_text())
+            calls.append((list(command), receipt, timeout))
+            output = json.dumps(response) if recover and len(calls) == 2 else first_output
+            return 0, output, ""
+        with patch.dict(os.environ, PANEL_RETRIES="2", PANEL_TIMEOUT="10"), \
+                patch.object(self.runner, "execute", side_effect=execute), \
+                patch.object(self.runner.time, "monotonic", side_effect=[0,0,1,2,3,3]):
+            self.runner.run(work, "kiro-fable", startup)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual([call[2] for call in calls], [19,18])
+        self.assertNotIn(role_review.SCHEMA_REMINDER, calls[0][0][2])
+        self.assertIn(role_review.SCHEMA_REMINDER, calls[1][0][2])
+        self.assertNotEqual(calls[0][1]["invocation_nonce"], calls[1][1]["invocation_nonce"])
+        history_file = work / "slot/kiro-fable-attempts.json"
+        self.assertTrue(history_file.exists(), "The rejected empty attempt must be retained")
+        history = json.loads(history_file.read_text())
+        self.assertEqual(len(history), 1)
+        self.assertEqual(history[0]["failure_codes"], ["empty_response"])
+        self.assertEqual(history[0]["invocation_nonce"], calls[0][1]["invocation_nonce"])
+        self.assertIsNone(history[0]["response"])
+        self.assertEqual(history[0]["validation_diagnostic"], {
+            "pointer":"", "reason":"JSON_REQUIRED", "phase":"PARSE"})
+        result = json.loads((work / "slot/kiro-fable-result.json").read_text())
+        self.assertEqual(result["valid"], recover)
+        self.assertEqual(result["invocation_nonce"], calls[1][1]["invocation_nonce"])
+        self.assertEqual(result["failure_codes"], [] if recover else ["empty_response"])
+        self.assertEqual(result["response"], response if recover else None)
+        self.assertFalse((work / "slot/kiro-fable-duplicate.flag").exists())
+
+    def test_empty_schema_retry_recovers_with_history(self):
+        self.assert_empty_schema_retry("", True)
+
+    def test_whitespace_schema_retry_recovers_with_history(self):
+        self.assert_empty_schema_retry(" \t\n", True)
+
+    def test_empty_schema_retry_exhausts_with_history(self):
+        self.assert_empty_schema_retry("", False)
+
+    def test_whitespace_schema_retry_exhausts_with_history(self):
+        self.assert_empty_schema_retry(" \t\n", False)
+
     def test_schema_retry_retains_shared_deadline_and_corrected_request(self):
         work, startup, response = self.prepared_kiro()
         bad = dict(response, checks=[{"path":"UNKNOWN_SECRET_PATH", "evidence":"PRIVATE_CANARY"}])
