@@ -20,6 +20,8 @@ import { documentReadingOptions, documentReadingResult } from './document-readin
 import { documentCatalogOptions, documentCatalogResult } from './document-catalog.js';
 import { kbReadingOptions, kbReadingResult } from './kb-catalog.js';
 import { navigationOptions, navigationResult } from './navigation-catalog.js';
+import { meetingCatalogOptions, meetingCatalogResult } from './meeting-catalog.js';
+import { vaultReadingOptions, vaultReadingResult } from './vault-reading.js';
 import { Recorder, MAX_MAX_MINUTES, type UploadProgress } from './recorder.js';
 import { AppControlError, defaultAppSocketPath, sendAppRequest, type AppAction } from './app-control.js';
 
@@ -60,15 +62,18 @@ const registry: { tools: Tool[] } = {
     {
       name: 'ttobak_list_meetings',
       description:
-        'List meetings with title, date, status, and participants. Follow the returned cursor for remaining results. accountIds uses OR matching: to include a group, pass the group and all accessible descendant IDs from ttobak_list_accounts; parent selection alone does not expand descendants.',
+        'Read bounded pages of your existing meeting grants. Follow page.nextCursor with the same selection until complete; join dataJson fragments before parsing each group and deduplicate by meetingId across owned/direct/team groups. Discovery pages contain no records. Pending invitations are processed separately by signed-in session bootstrap. accountIds uses explicit OR matching without descendant expansion.',
+      annotations: { readOnlyHint: true },
       inputSchema: {
         type: 'object' as const,
         properties: {
-          limit: { type: 'number', description: 'Max results (default 20)' },
-          cursor: { type: 'string', description: 'Pagination cursor from previous response' },
+          limit: { type: 'integer', minimum: 1, maximum: 20, default: 20 },
+          pageSize: { type: 'integer', minimum: 1, maximum: 8000, default: 4000, description: 'Maximum Unicode code points; the byte budget may shorten a fragment' },
+          cursor: { type: 'string', maxLength: 2048, description: 'Opaque page.nextCursor; restart if stale' },
           tab: { type: 'string', enum: ['all', 'shared'], description: 'all (default) or shared-with-me' },
           accountIds: { type: 'array', minItems: 1, maxItems: 100, items: { type: 'string' }, description: 'Optional explicit account IDs. Omit for all accounts; retain the same IDs when paging.' },
         },
+        additionalProperties: false,
       },
     },
     {
@@ -298,8 +303,18 @@ const registry: { tools: Tool[] } = {
     },
     {
       name: 'ttobak_export_vault',
-      description: 'Export your meetings as Obsidian-ready markdown files [{path, markdown}], placed under Accounts/{name}/ (shared) or _Private/Meetings/. Write each to your local vault.',
-      inputSchema: { type: 'object' as const, properties: {} },
+      description: 'Read the bounded Vault manifest, then each file with section=file and its opaque fileId. Follow page.nextCursor without changing selection. Join dataJson manifest fragments before parsing a group; deduplicate entries by path. Join markdown file fragments until complete. Non-text documents return documentRead metadata, not invented Markdown. Reads do not write local files.',
+      annotations: { readOnlyHint: true },
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          section: { type: 'string', enum: ['manifest', 'file'], default: 'manifest' },
+          fileId: { type: 'string', maxLength: 2048, description: 'Opaque identifier from the manifest; required for section=file' },
+          cursor: { type: 'string', maxLength: 2048, description: 'Opaque continuation; restart if stale' },
+          pageSize: { type: 'integer', minimum: 1, maximum: 8000, default: 4000 },
+        },
+        additionalProperties: false,
+      },
     },
     {
       name: 'ttobak_put_document',
@@ -640,8 +655,8 @@ async function callTool(request: CallToolRequest, options: ServerOptions) {
       }
 
       case 'ttobak_list_meetings': {
-        const result = await api.listMeetings(args as Record<string, unknown>);
-        return text(JSON.stringify(result, null, 2));
+        const options = meetingCatalogOptions(args);
+        return meetingCatalogResult(await api.readMeetingCatalog(options));
       }
 
       case 'ttobak_get_meeting': {
@@ -740,8 +755,8 @@ async function callTool(request: CallToolRequest, options: ServerOptions) {
       }
 
       case 'ttobak_export_vault': {
-        const result = await api.exportVault();
-        return text(JSON.stringify(result, null, 2));
+        const options = vaultReadingOptions(args);
+        return vaultReadingResult(await api.readVault(options), options);
       }
 
       case 'ttobak_put_document': {
