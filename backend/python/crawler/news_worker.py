@@ -229,6 +229,12 @@ def _configured_custom(config, url):
 
 
 def process_candidate(candidate, deps):
+    source_id, run_id, *_ = _candidate(candidate)
+    result = _process_candidate(candidate, deps)
+    return {**result, "sourceId": source_id, "runId": run_id}
+
+
+def _process_candidate(candidate, deps):
     source_id, run_id, revision, url, related, custom, warnings = _candidate(candidate)
     config = deps.store.current_config(source_id, revision)
     if custom and not _configured_custom(config, url):
