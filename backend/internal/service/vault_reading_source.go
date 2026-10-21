@@ -27,8 +27,10 @@ type VaultReadingRepository interface {
 }
 type VaultReadingService struct{ repo VaultReadingRepository }
 
-func NewVaultReadingService(repo VaultReadingRepository) *VaultReadingService {
-	return &VaultReadingService{repo}
+func NewVaultReadingService(repo *repository.DynamoDBRepository) *VaultReadingService {
+	// Metadata and authorization reads must never eagerly hydrate spill fields.
+	// body applies the Vault-specific bound only to the selected source.
+	return &VaultReadingService{repo: repo.MetadataView()}
 }
 
 type vaultFileIdentity struct {
