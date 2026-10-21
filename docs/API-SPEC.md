@@ -40,6 +40,20 @@ Response bodies are capped at 14,000 bytes. Empty key configuration denies the
 private consumer, and its mutation callback remains unavailable in this stage.
 No OAuth issuance or IAM invocation permission is installed by the consumer code.
 
+The private QA companion accepts only the signed `qa.readonlyAsk` operation,
+whose argument DTO names `POST /api/qa/readonly-ask`; that path is not registered
+as an HTTP route. It permits a question and optional meeting ID, resolves current
+authorized source text, and makes one bounded model call without tools or
+session persistence. Source access and client/user grants are checked again
+before delivery. Argument bytes are capped at 32,000, question bytes at 4,096,
+combined transcript, notes and serialized verified attachment context at 24,000,
+and the serialized private result at 14,000. Attachment evidence preserves
+partial, retained and unavailable status, with page/slide/paragraph/line citations.
+The existing HTTP detection boundary now uses the same atomic current-grant
+reader. Private key configuration remains empty until the reviewed KMS/IAM and
+OAuth deployment; the Python package must include the pinned ARM64 cryptography
+dependency before that activation.
+
 ## Contracts that require care
 
 ### Session bootstrap and project invitations

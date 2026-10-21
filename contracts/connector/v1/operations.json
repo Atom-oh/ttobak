@@ -148,6 +148,7 @@
     ["api.researchChat.listSubPages", "ttobak-api-bridge", ["read"], true, "GET", "/api/research/{researchId}/subpages"],
     ["api.chat.listSessions", "ttobak-api-bridge", ["read"], true, "GET", "/api/chat/sessions"],
     ["api.chat.deleteSession", "ttobak-api-bridge", ["delete", "read"], true, "DELETE", "/api/chat/sessions/{sessionId}"],
+    ["qa.readonlyAsk", "ttobak-qa-bridge", ["read"], true, "INTERNAL", "_connector_readonly_answer"],
     ["qa.ask", "ttobak-qa-bridge", ["read", "write"], false, "POST", "/api/qa/ask"],
     ["qa.detectQuestions", "ttobak-qa-bridge", ["read"], true, "POST", "/api/qa/detect-questions"],
     ["qa.meetingAsk", "ttobak-qa-bridge", ["read", "write"], false, "POST", "/api/qa/meeting/{meetingId}"],
