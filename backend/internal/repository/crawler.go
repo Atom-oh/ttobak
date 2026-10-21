@@ -147,7 +147,10 @@ type SourcePartialFields struct {
 	NewsQueries *[]string
 	NewsSources *[]string
 	CustomUrls  *[]string
+	Aliases     *[]string
 	Status      *string
+	// RequireOwnerID constrains the current owner without updating ownership.
+	RequireOwnerID *string
 }
 
 // UpdateSourcePartial performs a partial UpdateItem for the crawler source at
@@ -178,6 +181,9 @@ func (r *CrawlerRepository) UpdateSourcePartial(ctx context.Context, sourceID st
 	if fields.CustomUrls != nil {
 		entries = append(entries, entry{"customUrls", *fields.CustomUrls, expected.CustomUrls})
 	}
+	if fields.Aliases != nil {
+		entries = append(entries, entry{"aliases", *fields.Aliases, expected.Aliases})
+	}
 	if fields.Status != nil {
 		entries = append(entries, entry{"status", *fields.Status, expected.Status})
 	}
@@ -190,6 +196,14 @@ func (r *CrawlerRepository) UpdateSourcePartial(ctx context.Context, sourceID st
 	for _, e := range entries[1:] {
 		update = update.Set(expression.Name(e.name), expression.Value(e.value))
 		cond = cond.And(sourceFieldUnchangedCondition(e.name, e.current))
+	}
+	// A concurrent source deletion must not turn an alias-only update into an upsert.
+	cond = cond.And(expression.AttributeExists(expression.Name("PK")))
+	if fields.RequireOwnerID != nil {
+		if *fields.RequireOwnerID == "" {
+			return fmt.Errorf("owner condition requires a user ID")
+		}
+		cond = cond.And(expression.Name("ownerId").Equal(expression.Value(*fields.RequireOwnerID)))
 	}
 
 	expr, err := expression.NewBuilder().WithUpdate(update).WithCondition(cond).Build()
@@ -322,14 +336,29 @@ func (r *CrawlerRepository) DeleteSubscription(ctx context.Context, userID, sour
 // Only deletes the DynamoDB item -- the caller is responsible for also
 // deleting the S3 KB object (service layer, which owns the S3 client).
 func (r *CrawlerRepository) DeleteDocument(ctx context.Context, sourceID, docHash string) error {
-	_, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+	// A legacy read/delete must not erase an immutable publication that replaced
+	// that row concurrently. Versioned publications use MarkNewsDeleted.
+	expr, err := expression.NewBuilder().WithCondition(
+		expression.Name("schemaVersion").AttributeNotExists().
+			And(expression.Name("qualityStatus").AttributeNotExists()).
+			And(expression.Name("attemptToken").AttributeNotExists()),
+	).Build()
+	if err != nil {
+		return err
+	}
+	_, err = r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 		TableName: aws.String(r.tableName),
 		Key: map[string]types.AttributeValue{
 			"PK": &types.AttributeValueMemberS{Value: model.PrefixCrawler + sourceID},
 			"SK": &types.AttributeValueMemberS{Value: model.PrefixDoc + docHash},
 		},
+		ConditionExpression: expr.Condition(), ExpressionAttributeNames: expr.Names(),
 	})
 	if err != nil {
+		var conflict *types.ConditionalCheckFailedException
+		if errors.As(err, &conflict) {
+			return fmt.Errorf("%w: document was replaced", ErrConditionFailed)
+		}
 		return fmt.Errorf("failed to delete document: %w", err)
 	}
 	return nil
@@ -368,6 +397,41 @@ func (r *CrawlerRepository) ListUserSubscriptions(ctx context.Context, userID st
 	return subs, nil
 }
 
+// ErrInvalidDocument identifies unreadable stored metadata, separately from an
+// AWS read failure. Consumers can make only this document unavailable.
+var ErrInvalidDocument = errors.New("invalid crawler document metadata")
+
+func decodeCrawlerDocument(row map[string]types.AttributeValue) (model.CrawledDocument, error) {
+	var item documentItem
+	if err := attributevalue.UnmarshalMap(row, &item); err != nil {
+		return model.CrawledDocument{}, fmt.Errorf("%w: %v", ErrInvalidDocument, err)
+	}
+	doc := item.CrawledDocument
+	if doc.DocHash == "" && strings.HasPrefix(item.SK, model.PrefixDoc) {
+		doc.DocHash = strings.TrimPrefix(item.SK, model.PrefixDoc)
+	}
+	if doc.SourceID == "" && strings.HasPrefix(item.PK, model.PrefixCrawler) {
+		doc.SourceID = strings.TrimPrefix(item.PK, model.PrefixCrawler)
+	}
+	return doc, nil
+}
+
+// decodeCrawlerDocuments isolates invalid metadata after a successful AWS read.
+// It does not catch transport failures or change pagination continuation keys.
+func decodeCrawlerDocuments(rows []map[string]types.AttributeValue) []model.CrawledDocument {
+	docs := make([]model.CrawledDocument, 0, len(rows))
+	for _, row := range rows {
+		if status, ok := row["qualityStatus"].(*types.AttributeValueMemberS); ok && status.Value == "DELETED" {
+			continue
+		}
+		doc, err := decodeCrawlerDocument(row)
+		if err == nil {
+			docs = append(docs, doc)
+		}
+	}
+	return docs
+}
+
 // GetDocument retrieves a single crawled document by sourceID and docHash.
 // PK=CRAWLER#{sourceID}, SK=DOC#{docHash}
 func (r *CrawlerRepository) GetDocument(ctx context.Context, sourceID, docHash string) (*model.CrawledDocument, error) {
@@ -385,11 +449,10 @@ func (r *CrawlerRepository) GetDocument(ctx context.Context, sourceID, docHash s
 		return nil, nil
 	}
 
-	var item documentItem
-	if err := attributevalue.UnmarshalMap(result.Item, &item); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal document: %w", err)
+	doc, err := decodeCrawlerDocument(result.Item)
+	if err != nil {
+		return nil, err
 	}
-	doc := item.CrawledDocument
 	if doc.DocHash == "" {
 		doc.DocHash = docHash
 	}
@@ -438,28 +501,22 @@ func (r *CrawlerRepository) ListDocuments(ctx context.Context, sourceID, docType
 		input.ExclusiveStartKey = lastKey
 	}
 
-	result, err := r.client.Query(ctx, input)
-	if err != nil {
-		return nil, nil, 0, fmt.Errorf("failed to query documents: %w", err)
-	}
-
-	var items []documentItem
-	if err := attributevalue.UnmarshalListOfMaps(result.Items, &items); err != nil {
-		return nil, nil, 0, fmt.Errorf("failed to unmarshal documents: %w", err)
-	}
-
-	docs := make([]model.CrawledDocument, len(items))
-	for i, item := range items {
-		docs[i] = item.CrawledDocument
-		if docs[i].DocHash == "" && strings.HasPrefix(item.SK, model.PrefixDoc) {
-			docs[i].DocHash = strings.TrimPrefix(item.SK, model.PrefixDoc)
+	docs := make([]model.CrawledDocument, 0, limit)
+	for {
+		input.Limit = aws.Int32(limit - int32(len(docs)))
+		result, err := r.client.Query(ctx, input)
+		if err != nil {
+			return nil, nil, 0, fmt.Errorf("failed to query documents: %w", err)
 		}
-		if docs[i].SourceID == "" && strings.HasPrefix(item.PK, model.PrefixCrawler) {
-			docs[i].SourceID = strings.TrimPrefix(item.PK, model.PrefixCrawler)
+		docs = append(docs, decodeCrawlerDocuments(result.Items)...)
+		lastKey = result.LastEvaluatedKey
+		if len(lastKey) == 0 || int32(len(docs)) >= limit {
+			return docs, lastKey, len(docs), nil
 		}
+		// DynamoDB Limit counts evaluated rows, including deleted and invalid
+		// metadata. Continue until the visible page is filled or exhausted.
+		input.ExclusiveStartKey = lastKey
 	}
-
-	return docs, result.LastEvaluatedKey, len(docs), nil
 }
 
 // QueryDocumentsByType queries GSI4 for documents by type, sorted by crawledAt descending.
@@ -497,21 +554,7 @@ func (r *CrawlerRepository) QueryDocumentsByType(ctx context.Context, docType st
 			return r.ListAllDocumentsByType(ctx, docType, limit, page)
 		}
 
-		var items []documentItem
-		if err := attributevalue.UnmarshalListOfMaps(result.Items, &items); err != nil {
-			return nil, 0, fmt.Errorf("failed to unmarshal documents: %w", err)
-		}
-
-		for _, item := range items {
-			doc := item.CrawledDocument
-			if doc.DocHash == "" && strings.HasPrefix(item.SK, model.PrefixDoc) {
-				doc.DocHash = strings.TrimPrefix(item.SK, model.PrefixDoc)
-			}
-			if doc.SourceID == "" && strings.HasPrefix(item.PK, model.PrefixCrawler) {
-				doc.SourceID = strings.TrimPrefix(item.PK, model.PrefixCrawler)
-			}
-			allDocs = append(allDocs, doc)
-		}
+		allDocs = append(allDocs, decodeCrawlerDocuments(result.Items)...)
 
 		lastKey = result.LastEvaluatedKey
 		if lastKey == nil {
@@ -570,21 +613,7 @@ func (r *CrawlerRepository) ListAllDocumentsByType(ctx context.Context, docType 
 			return nil, 0, fmt.Errorf("failed to scan documents: %w", err)
 		}
 
-		var items []documentItem
-		if err := attributevalue.UnmarshalListOfMaps(result.Items, &items); err != nil {
-			return nil, 0, fmt.Errorf("failed to unmarshal documents: %w", err)
-		}
-
-		for _, item := range items {
-			doc := item.CrawledDocument
-			if doc.DocHash == "" && strings.HasPrefix(item.SK, model.PrefixDoc) {
-				doc.DocHash = strings.TrimPrefix(item.SK, model.PrefixDoc)
-			}
-			if doc.SourceID == "" && strings.HasPrefix(item.PK, model.PrefixCrawler) {
-				doc.SourceID = strings.TrimPrefix(item.PK, model.PrefixCrawler)
-			}
-			allDocs = append(allDocs, doc)
-		}
+		allDocs = append(allDocs, decodeCrawlerDocuments(result.Items)...)
 
 		lastKey = result.LastEvaluatedKey
 		if lastKey == nil {

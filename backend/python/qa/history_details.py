@@ -52,6 +52,8 @@ def identity_detail(dependency, kb_bucket):
             detail['titleTruncated'] = True
     elif 'legacyURI' in dependency:
         detail.update(resourceKind='legacyText', uri=dependency['legacyURI'])
+    elif 'newsURI' in dependency:
+        detail.update(resourceKind='publishedNews', uri=dependency['newsURI'])
     elif 'readOnlyTool' in dependency:
         detail.update(resourceKind='historyToolResult', tool=dependency['readOnlyTool'])
     elif 'researchReceipt' in dependency:
@@ -94,6 +96,8 @@ def _matches(detail, dep, kb_bucket, assets_bucket):
                      else detail.get('ownerId') == owner and 'visibility' not in detail))
     if 'legacyURI' in dep:
         return detail.get('resourceKind') == 'legacyText' and uri == dep['legacyURI']
+    if 'newsURI' in dep:
+        return detail.get('resourceKind') == 'publishedNews' and uri == dep['newsURI']
     if 'sourcePK' not in dep:
         return False
     identity = resource_identity(dep['sourcePK'], dep['sourceSK'])

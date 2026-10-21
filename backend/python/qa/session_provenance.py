@@ -44,6 +44,10 @@ def valid_dependency(dependency):
         revision = dependency.get('sourceRevision')
         if not isinstance(revision, str) or HEX_REVISION.fullmatch(revision) is None:
             return False
+        if 'newsURI' in dependency:
+            return (set(dependency) == {'newsURI', 'sourceRevision'}
+                    and isinstance(dependency['newsURI'], str)
+                    and len(dependency['newsURI'].encode('utf-8')) <= 2048)
         if 'legacyURI' in dependency:
             return (set(dependency) == {'legacyURI', 'sourceRevision'} and
                     isinstance(dependency['legacyURI'], str) and len(dependency['legacyURI']) <= 2048)
@@ -68,6 +72,8 @@ def _dependency_key(dependency):
         return tool_dependency_key(dependency)
     if is_request_dependency(dependency):
         return request_key(dependency)
+    if 'newsURI' in dependency:
+        return ('news', dependency['newsURI'])
     if 'legacyURI' in dependency:
         return ('legacy', dependency['legacyURI'])
     if 'manualKey' in dependency:

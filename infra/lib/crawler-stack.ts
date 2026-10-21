@@ -9,14 +9,17 @@ import * as events from 'aws-cdk-lib/aws-events';
 import * as eventsTargets from 'aws-cdk-lib/aws-events-targets';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import { Construct } from 'constructs';
+import { NewsPublication } from './news-publication';
 
 export interface CrawlerStackProps extends cdk.StackProps {
   crawlerRole: iam.IRole;
   table: dynamodb.ITable;
   kbBucket: s3.IBucket;
+  artifactBucket: s3.IBucket;
   knowledgeBaseId?: string;
   dataSourceId?: string;
   webSearchGatewayUrl: string;
+  webSearchGatewayArn: string;
 }
 
 export class CrawlerStack extends cdk.Stack {
@@ -33,6 +36,10 @@ export class CrawlerStack extends cdk.Stack {
       WEB_SEARCH_GATEWAY_REGION: 'us-east-1',
       RELEVANCE_THRESHOLD: '0.7',
     };
+    const legacyWrites = new cdk.CfnParameter(this, 'NewsLegacyWrites', {
+      type: 'String', default: 'on', allowedValues: ['on', 'off'],
+      description: 'Disable and drain the legacy news writer before the retained-legacy migration.',
+    });
 
     const orchestrator = new lambda.Function(this, 'OrchestratorFunction', {
       functionName: 'ttobak-crawler-orchestrator',
@@ -65,7 +72,7 @@ export class CrawlerStack extends cdk.Stack {
       handler: 'news_crawler.handler',
       code: lambda.Code.fromAsset('../backend/python/crawler'),
       role: props.crawlerRole as iam.Role,
-      environment: commonEnv,
+      environment: { ...commonEnv, NEWS_LEGACY_WRITES: legacyWrites.valueAsString },
       timeout: cdk.Duration.minutes(14),
       memorySize: 512,
       // The app-wide `useCdkManagedLogGroup` feature flag makes CDK create an
@@ -163,6 +170,15 @@ export class CrawlerStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'StateMachineArn', {
       value: stateMachine.stateMachineArn,
       exportName: 'TtobakCrawlerStateMachineArn',
+    });
+
+    new NewsPublication(this, 'NewsPublication', {
+      table: props.table,
+      kbBucket: props.kbBucket,
+      artifactBucket: props.artifactBucket,
+      webSearchGatewayUrl: props.webSearchGatewayUrl,
+      webSearchGatewayArn: props.webSearchGatewayArn,
+      legacyWrites: legacyWrites.valueAsString,
     });
   }
 }

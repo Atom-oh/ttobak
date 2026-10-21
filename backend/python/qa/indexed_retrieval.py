@@ -72,7 +72,7 @@ def discovery_filters(user_id, bucket, identities, account_pks, shared_meetings)
                 {'equals': {'key': 'sourcePK', 'value': pk}},
                 {'equals': {'key': 'sourceSK', 'value': sk}},
             ]})
-    for prefix in (f'kb/{user_id}/', f'meetings/{user_id}/', 'shared/'):
+    for prefix in (f'kb/{user_id}/', f'meetings/{user_id}/', 'shared/', 'news/v1/'):
         filters.append({'startsWith': {'key': 'x-amz-bedrock-kb-source-uri',
                                        'value': f's3://{bucket}/{prefix}'}})
     for shared in shared_meetings:

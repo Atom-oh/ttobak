@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -13,6 +14,11 @@ from pathlib import Path
 a=sys.argv[1:]
 with open(os.environ['AWS_LOG'],'a') as log:log.write(json.dumps(a)+'\\n')
 if '--delete' in a:sys.exit(90)
+if a[:2]==['cloudformation','describe-stacks']:
+ if os.environ.get('FAIL_PHASE')=='stack':sys.exit(42)
+ print(json.dumps([] if os.environ.get('FAIL_PHASE')=='stack-outputs' else [
+  {'OutputKey':'SiteBucketName','OutputValue':'stack-site-bucket'},
+  {'OutputKey':'DistributionId','OutputValue':'ESTACK123'}]));sys.exit(0)
 if a[:2]==['cloudfront','create-invalidation']:print('TEST_INVALIDATION');sys.exit(0)
 if a[:2]==['s3','cp'] and a[2].startswith('s3://') and a[3]=='-':
  print(json.loads(Path(os.environ['FAKE_S3_STATE']).read_text())['config.json']['body']);sys.exit(0)
@@ -134,6 +140,28 @@ class FrontendPublicationTests(unittest.TestCase):
         self.assertEqual(len(calls), 5)
         self.assertEqual(state["accounts/__next.accounts.__PAGE__.txt"]["method"], "cp")
         self.assertEqual(state["config.json"]["body"], '{"staticRouterRevision":"segmented-rsc-v1"}')
+
+    def test_legacy_entrypoint_uses_current_stack_outputs_before_publication(self):
+        project = self.root / "project"
+        (project / "scripts").mkdir(parents=True)
+        shutil.copy(SCRIPT, project / "scripts/publish-frontend.sh")
+        shutil.copy(SCRIPT.parent / "deploy.sh", project / "scripts/deploy.sh")
+        shutil.copytree(self.export, project / "frontend/out")
+        for failure in ["stack", "stack-outputs", ""]:
+            with self.subTest(failure=failure):
+                if self.log.exists():
+                    self.log.unlink()
+                result = subprocess.run(["bash", str(project / "scripts/deploy.sh"), "frontend"],
+                                        env={**self.env, "FAIL_PHASE": failure}, capture_output=True, text=True)
+                calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+                self.assertEqual(calls[0][:2], ["cloudformation", "describe-stacks"])
+                if failure:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(len(calls), 1)
+                else:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(calls[1][3], "s3://stack-site-bucket/_next/static/")
+                    self.assertEqual(calls[-1][calls[-1].index("--distribution-id") + 1], "ESTACK123")
 
 
 if __name__ == "__main__":

@@ -25,20 +25,22 @@ describe('CrawlerStack', () => {
       crawlerRole,
       table,
       kbBucket,
+      artifactBucket: new s3.Bucket(mockStack, 'ArtifactBucket'),
       knowledgeBaseId: 'test-kb-id',
       dataSourceId: 'test-ds-id',
       webSearchGatewayUrl: 'https://test-gateway.gateway.bedrock-agentcore.us-east-1.api.aws/mcp',
+      webSearchGatewayArn: 'arn:aws:bedrock-agentcore:us-east-1:123456789012:gateway/test',
     });
 
     template = Template.fromStack(stack);
   });
 
-  test('creates 4 Lambda functions', () => {
-    template.resourceCountIs('AWS::Lambda::Function', 4);
+  test('creates 4 legacy and 5 private publication Lambda functions', () => {
+    template.resourceCountIs('AWS::Lambda::Function', 9);
   });
 
   test('creates Step Functions state machine', () => {
-    template.resourceCountIs('AWS::StepFunctions::StateMachine', 1);
+    template.resourceCountIs('AWS::StepFunctions::StateMachine', 3);
     template.hasResourceProperties('AWS::StepFunctions::StateMachine', {
       StateMachineName: 'ttobak-crawler-workflow',
     });
@@ -62,6 +64,23 @@ describe('CrawlerStack', () => {
       FunctionName: 'ttobak-crawler-orchestrator',
       Handler: 'orchestrator.handler',
     });
+  });
+
+  test('legacy news has a separate drain switch without disabling tech or recovery', () => {
+    template.hasParameter('NewsLegacyWrites', { Default: 'on', AllowedValues: ['on', 'off'] });
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'ttobak-crawler-news',
+      Environment: { Variables: { NEWS_LEGACY_WRITES: { Ref: 'NewsLegacyWrites' } } },
+    });
+    const functions = Object.values(template.findResources('AWS::Lambda::Function'));
+    for (const resource of functions) {
+      if (resource.Properties.FunctionName.startsWith('ttobak-news-')) {
+        expect(resource.Properties.Environment?.Variables?.NEWS_LEGACY_WRITES)
+          .toEqual({ Ref: 'NewsLegacyWrites' });
+      } else if (resource.Properties.FunctionName !== 'ttobak-crawler-news') {
+        expect(resource.Properties.Environment?.Variables?.NEWS_LEGACY_WRITES).toBeUndefined();
+      }
+    }
   });
 
   test('exports state machine ARN', () => {

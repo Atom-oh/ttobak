@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
+import { safeMarkdownUrl } from '@/lib/markdownUrlTransform';
 import remarkGfm from 'remark-gfm';
 import { researchChatApi } from '@/lib/api';
 import type { ChatMessage } from '@/types/meeting';
@@ -256,7 +257,7 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
             >
               {msg.role === 'agent' ? (
                 <div className="prose prose-sm prose-invert max-w-none [&_h1]:text-lg [&_h1]:font-bold [&_h1]:mb-2 [&_h2]:text-base [&_h2]:font-bold [&_h2]:mt-4 [&_h2]:mb-2 [&_h3]:text-sm [&_h3]:font-semibold [&_h3]:mt-3 [&_h3]:mb-1 [&_p]:text-sm [&_p]:leading-relaxed [&_p]:mb-2 [&_li]:text-sm [&_li]:leading-relaxed [&_strong]:text-text-main [&_ul]:pl-4 [&_ol]:pl-4 [&_code]:bg-white/10 [&_code]:px-1 [&_code]:rounded [&_code]:text-xs [&_hr]:border-white/10 [&_hr]:my-3">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} urlTransform={safeMarkdownUrl}>{msg.content}</ReactMarkdown>
                 </div>
               ) : (
                 <div className="text-sm whitespace-pre-wrap break-words">{msg.content}</div>

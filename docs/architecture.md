@@ -225,9 +225,120 @@ Markdown parser serializes link destinations; valid Markdown alone does not
 establish a working rendered link.
 Prices are caller-supplied estimates; absent rates do not mean zero cost.
 Terms/diagrams remain unavailable until their schema/rendering contracts land.
+The staged `news_store.py` adapter transactionally reserves source/run/month
+budgets, acquires a unique attempt lease, and publishes accepted document state
+with its terminal receipt and cost settlement. Attempts and lookups use
+discovery's exact Unicode source ID contract without normalization. Run IDs
+retain their separate ASCII constraint. Rejected usage remains charged;
+unknown or abandoned usage retains its reservation. Immutable attempt keys live
+outside the legacy shared-text prefix. New consumers must verify current
+publication state before those writers activate; see
+[ADR-052](decisions/ADR-052-conditional-news-publication.md).
+The staged `news_worker.py` now joins current source checks, HTTPS-only article
+fetches, queued-candidate freshness checks, model accounting, immutable uploads
+and conditional publication. Its input boundary uses the same exact Unicode
+source IDs as discovery and storage while retaining ASCII run IDs.
+A failed lead is never replaced by a corroborating
+source; failed or deferred corroboration remains visible in the terminal receipt.
+Retrieval retains the original URL query bytes; canonicalization selects identity
+only. Unsupported or duplicate optional sources do not reject a valid lead.
+Freshness is checked again after the final immutable upload before publication.
+Search-provided dates are identified separately from dates extracted from articles.
+Renderer rejection settles known cost without uploading. An ambiguous upload or
+insufficient settlement time retains the reservation and immutable objects.
+Each invocation reserves both maximum input/output model calls before inference,
+requires positive caller-supplied rates and counts the actual prompt before each
+call. `news_model.py` signs the supported Opus 5 token-count request for the fixed
+US East (N. Virginia) Mantle endpoint, with no redirects or application retries.
+Isolated DNS resolution and every socket read share one 20-second monotonic
+deadline through the pinned-address transport;
+Converse remains on the injected regional runtime client. This is an explicit
+cross-region AWS service integration using public source material. The ordinary
+runtime CountTokens API does not support this model's inference profile; see the
+[AWS token-counting contract](https://docs.aws.amazon.com/bedrock/latest/userguide/count-tokens.html).
+Activation still requires Mantle/Converse IAM and publication-aware consumers.
+`news_runtime.py` supplies private discovery, worker and finalization handlers,
+dated positive prices, no-retry SDK clients and invocation-local deadlines.
+Writers default off; canary mode accepts only the configured source. Finalization
+remains available when writers are disabled. The dedicated `news_search.py`
+adapter signs only the configured US East AgentCore Gateway, shares a 20-second
+deadline across DNS and socket operations, caps responses at two million bytes
+and logs only a query hash on failure. It does not change the three legacy
+gateway adapters. A successful token-count probe alone is not production acceptance.
+`infra/lib/news-publication.ts` declares an additive private Step Functions
+workflow with separate discovery/worker/finalizer/recovery roles, off-by-default
+canary configuration, sequential bounded candidate execution and a five-minute
+recovery schedule. Worker results retain only bounded identity/status fields;
+candidate data is removed before finalization. The legacy daily workflow remains
+separate until consumer acceptance and migration. No public route is added.
+The CDK declaration and passing tests do not establish live service-role access
+or positive QA acceptance; follow the dated news release runbook.
+The staged `news_lifecycle.py` starts each source run once, before discovery or
+reservation. Reservations require that open run, its exact source revision, a
+30-minute admission window and a maximum of 60 attempts. Run counters advance in
+the same transactions as reservations and settlements. Finalization strongly
+reads bounded attempt rows, rejects live leases, freezes expired attempts and
+writes one stable history row atomically with the run receipt. It preserves all
+charged cost and records unknown usage; it never increments cost again or updates
+source CONFIG. Pre-inference failures supplied by the completed workflow remain
+visible even when no model attempt was created. Recovery explicitly marks missing
+workflow outcomes and cannot finalize before the admission deadline, even when
+no attempt exists. The recovery transaction pins that deadline. Run identities
+retain the same exact Unicode source IDs as discovery and publication.
+New accounting/run/history rows use the existing table TTL
+attribute for 400-day retention; claims expire after seven days. Canonical
+published documents and objects have no automatic expiry in this stage.
+QA's `news_text.py` now authorizes new `news/v1/` objects against current strong
+document/configuration reads, exact immutable attempt keys and SHA-256. It reads
+at most 64,000 bytes with ETag/version conditions, checks canonical state again,
+and binds continuation and history replay to the combined publication/object
+revision. Indexed snippets never replace unavailable current bytes. These news
+sources are available to authenticated users; no public route is added. REST and
+WebSocket share this reader through source access. An isolated synthetic canary
+may qualify publication and both QA transports after readers deploy. Positive
+deployed QA acceptance and legacy news migration remain required before enabling
+normal source writers or `all` mode.
+`news_recovery.py` supplies a private scheduled-recovery handler with a leased,
+durable scan cursor. Each invocation reads at most ten 100-item pages and advances
+the cursor only after a page is handled. Recovery survives writer rollback and
+does not release unknown charges. DynamoDB integer counters keep their JSON
+number shape on receipt replay; money is serialized as exact decimal strings.
+The web source list labels these results as news evidence and retains partial
+and restored-history caveats without exposing internal S3 links. Markdown views,
+editable document/meeting HTML and research exports restore valid IPv6 authority
+brackets after parser encoding. Query bytes, HTML escaping, URL protocol filtering
+and the existing HTML sanitization remain in place.
+The Go insights API revalidates news list identities against complete, strongly
+consistent document/configuration batches before pagination, including cache hits.
+Versioned detail reads require the current publication, exact immutable key and
+Markdown SHA-256 before returning at most 64,000 UTF-8 bytes. Missing metadata
+never falls back to an orphan object. Legacy reads retain only bounded `shared/`
+keys. Source revisions match the Python contract, including literal Unicode.
+The disabled-source and revision gates apply to versioned publications. Legacy
+news remains readable after its last subscriber leaves, and existing AWS technical
+articles retain the exact `__tech__` partition. Publication titles follow the
+producer's trimmed length and line-whitespace rules without relaxing source IDs
+or source-fingerprint validation.
+Display metadata trims title and tag outer padding after canonical validation,
+preserving raw stored bytes for publication identity and delete conditions while
+keeping the 24,000-byte metadata response limit.
+Repository Query/Scan results decode document records individually, so a malformed
+record does not hide valid neighbors or discard the storage continuation key.
+Single-record decode errors have a distinct sentinel. Both legacy and versioned
+news details apply the bounded current metadata projection; malformed or oversized
+metadata is unavailable, and list projection omits only that record.
+Storage read failures still fail the service request, and deletion retains raw identity.
+Owner/admin deletion transactionally marks a versioned publication `DELETED`
+before deleting its two immutable objects; retained tombstones support cleanup
+retries. Both writer reservation and publication preserve deleted/unknown-schema
+rows. Discovery excludes tombstones before its visible count, following source
+Query continuation under the list service's 20-second deadline. The transaction
+checks current ownership and the observed publication.
+Legacy deletion cannot erase a versioned replacement. These API changes require
+deployed read/delete acceptance before writer activation.
 These modules do not activate a scheduler, change legacy news results or establish
-production acceptance. Conditional publication and consumer rollout remain
-separate delivery stages.
+production acceptance. Infrastructure wiring and consumer rollout remain separate
+delivery stages; see the [news release contract](runbooks/knowledge-grade-news-release.md).
 
 Action-item analysis has its own MEETING#/ANALYSIS#actionItems state. The summary
 pipeline runs it inline; authorized editor retries send ActionItemsRequested to

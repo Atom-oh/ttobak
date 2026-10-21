@@ -1148,6 +1148,35 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | DELETE | `/api/chat/sessions/{sessionId}` | `chatHandler.DeleteSession` |
 <!-- END GO ROUTES -->
 
+## Crawler aliases and publication history
+
+Crawler source POST and PUT bodies are limited to 64 KiB of valid UTF-8 JSON.
+Optional `aliases` add public company names to the shared source identity. Each
+trimmed name contains 1–100 Unicode code points, without control or format
+characters. Names are deduplicated case-insensitively, preserving the existing
+spelling; the combined source is limited to 20 aliases. Conditional updates
+re-read and enforce that combined limit after concurrent changes. Invalid
+additions return 400 before changing the user's subscription.
+
+Aliases are shared by all subscribers, may enter external news searches, and
+remain after unsubscribing. PUT is additive: omitting aliases or sending an empty
+list leaves existing aliases unchanged. Optional PUT `removeAliases` removes only
+listed names and requires the current source owner; other subscribers receive 403.
+Removals use the same name validation and case-insensitive comparison, free the
+shared capacity, and preserve other names added concurrently. Both current owner
+and the observed alias list guard the conditional write; retries recheck ownership.
+The UI exposes saved-name deletion only to the owner. Existing subscribers may add
+aliases; source ownership is unchanged. Subscription storage
+and the shared alias update are separate operations: a storage failure is
+reported, and retrying the same additions/removals is safe.
+
+News publication history optionally includes `runId`, `status`, `queryCount`,
+rejection/attempt counters, `workerOutcomes`, and `fetchWarnings`. `chargedUsd`
+is an exact decimal string, including conservative reservations for unknown
+usage; `usageComplete: false` distinguishes that case from a verified total.
+Legacy history omits these diagnostics. These fields describe recorded runs,
+not deployment or consumer acceptance.
+
 ## Python QA and WebSocket
 
 HTTP QA routes are registered in `infra/lib/gateway-stack.ts` and handled by

@@ -211,14 +211,24 @@ type UserLogin struct {
 // CrawlerSource represents a crawler source configuration
 // PK: USER#{userId}, SK: CRAWLER#{sourceId}
 type CrawlerSource struct {
-	SourceID      string   `dynamodbav:"sourceId" json:"sourceId"`
-	SourceName    string   `dynamodbav:"sourceName" json:"sourceName"`
-	OwnerID       string   `dynamodbav:"ownerId,omitempty" json:"ownerId,omitempty"` // creator; subscribing later never changes this
-	Subscribers   []string `dynamodbav:"subscribers" json:"subscribers"`
-	AWSServices   []string `dynamodbav:"awsServices" json:"awsServices"`
-	NewsQueries   []string `dynamodbav:"newsQueries" json:"newsQueries"`
-	NewsSources   []string `dynamodbav:"newsSources" json:"newsSources"`
-	CustomUrls    []string `dynamodbav:"customUrls" json:"customUrls"`
+	SourceID    string   `dynamodbav:"sourceId" json:"sourceId"`
+	SourceName  string   `dynamodbav:"sourceName" json:"sourceName"`
+	OwnerID     string   `dynamodbav:"ownerId,omitempty" json:"ownerId,omitempty"` // creator; subscribing later never changes this
+	Subscribers []string `dynamodbav:"subscribers" json:"subscribers"`
+	AWSServices []string `dynamodbav:"awsServices" json:"awsServices"`
+	NewsQueries []string `dynamodbav:"newsQueries" json:"newsQueries"`
+	NewsSources []string `dynamodbav:"newsSources" json:"newsSources"`
+	CustomUrls  []string `dynamodbav:"customUrls" json:"customUrls"`
+	// Aliases are public alternate names/spellings for the source (e.g.
+	// "Woori Bank" for "우리은행") used only to widen news search coverage
+	// (news_pipeline.expand_queries) -- never meeting, project, action-item,
+	// or opportunity data. Curated by any subscriber and merged (never
+	// overwritten) like the other union fields, but -- unlike
+	// NewsQueries/AWSServices -- not tracked per-subscription: an alias
+	// contributed by any one subscriber stays on the source across that
+	// subscriber unsubscribing, since it's public company-identity metadata,
+	// not a personal interest. See CrawlerService.AddSource/UpdateSource.
+	Aliases       []string `dynamodbav:"aliases,omitempty" json:"aliases,omitempty"`
 	Schedule      string   `dynamodbav:"schedule" json:"schedule"`
 	LastCrawledAt string   `dynamodbav:"lastCrawledAt" json:"lastCrawledAt"`
 	Status        string   `dynamodbav:"status" json:"status"`
@@ -239,19 +249,20 @@ type CrawlerSubscription struct {
 // CrawledDocument represents a document fetched by the crawler
 // PK: CRAWLER#{sourceId}, SK: DOC#{docHash}
 type CrawledDocument struct {
-	DocHash     string   `dynamodbav:"docHash,omitempty" json:"docHash"`
-	SourceID    string   `dynamodbav:"-" json:"sourceId,omitempty"`
-	Type        string   `dynamodbav:"type" json:"type"`
-	Title       string   `dynamodbav:"title" json:"title"`
-	URL         string   `dynamodbav:"url" json:"url"`
-	Source      string   `dynamodbav:"source,omitempty" json:"source"`
-	Summary     string   `dynamodbav:"summary,omitempty" json:"summary"`
-	AWSServices []string `dynamodbav:"awsServices,omitempty" json:"awsServices,omitempty"`
-	Tags        []string `dynamodbav:"tags,omitempty" json:"tags,omitempty"`
-	S3Key       string   `dynamodbav:"s3Key,omitempty" json:"s3Key"`
-	CrawledAt   int64    `dynamodbav:"crawledAt" json:"crawledAt"`
-	InKB        bool     `dynamodbav:"inKB,omitempty" json:"inKB"`
-	PubDate     string   `dynamodbav:"pubDate,omitempty" json:"pubDate,omitempty"`
+	DocHash       string   `dynamodbav:"docHash,omitempty" json:"docHash"`
+	SourceID      string   `dynamodbav:"-" json:"sourceId,omitempty"`
+	Type          string   `dynamodbav:"type" json:"type"`
+	Title         string   `dynamodbav:"title" json:"title"`
+	URL           string   `dynamodbav:"url" json:"url"`
+	Source        string   `dynamodbav:"source,omitempty" json:"source"`
+	Summary       string   `dynamodbav:"summary,omitempty" json:"summary"`
+	AWSServices   []string `dynamodbav:"awsServices,omitempty" json:"awsServices,omitempty"`
+	Tags          []string `dynamodbav:"tags,omitempty" json:"tags,omitempty"`
+	S3Key         string   `dynamodbav:"s3Key,omitempty" json:"s3Key"`
+	CrawledAt     int64    `dynamodbav:"crawledAt" json:"crawledAt"`
+	InKB          bool     `dynamodbav:"inKB,omitempty" json:"inKB"`
+	PubDate       string   `dynamodbav:"pubDate,omitempty" json:"pubDate,omitempty"`
+	QualityStatus string   `dynamodbav:"qualityStatus,omitempty" json:"qualityStatus,omitempty"`
 }
 
 // CrawlHistory represents a crawl execution history entry
@@ -262,6 +273,22 @@ type CrawlHistory struct {
 	DocsUpdated int      `dynamodbav:"docsUpdated" json:"docsUpdated"`
 	Errors      []string `dynamodbav:"errors" json:"errors"`
 	Duration    int      `dynamodbav:"duration" json:"duration"`
+	// Optional publication diagnostics written by news_lifecycle.py.
+	// Legacy/tech history omits these fields. Money remains an exact string.
+	RunID             string         `dynamodbav:"runId,omitempty" json:"runId,omitempty"`
+	Status            string         `dynamodbav:"status,omitempty" json:"status,omitempty"`
+	QueryCount        *int           `dynamodbav:"queryCount,omitempty" json:"queryCount,omitempty"`
+	InvalidRejected   *int           `dynamodbav:"invalidRejected,omitempty" json:"invalidRejected,omitempty"`
+	StaleRejected     *int           `dynamodbav:"staleRejected,omitempty" json:"staleRejected,omitempty"`
+	DuplicateRejected *int           `dynamodbav:"duplicateRejected,omitempty" json:"duplicateRejected,omitempty"`
+	BudgetRejected    *int           `dynamodbav:"budgetRejected,omitempty" json:"budgetRejected,omitempty"`
+	AttemptCount      *int           `dynamodbav:"attemptCount,omitempty" json:"attemptCount,omitempty"`
+	ExpiredAttempts   *int           `dynamodbav:"expiredAttempts,omitempty" json:"expiredAttempts,omitempty"`
+	UnknownAttempts   *int           `dynamodbav:"unknownAttempts,omitempty" json:"unknownAttempts,omitempty"`
+	ChargedUSD        string         `dynamodbav:"chargedUsd,omitempty" json:"chargedUsd,omitempty"`
+	UsageComplete     *bool          `dynamodbav:"usageComplete,omitempty" json:"usageComplete,omitempty"`
+	WorkerOutcomes    map[string]int `dynamodbav:"workerOutcomes,omitempty" json:"workerOutcomes,omitempty"`
+	FetchWarnings     []string       `dynamodbav:"fetchWarnings,omitempty" json:"fetchWarnings,omitempty"`
 }
 
 // Research represents a deep research task

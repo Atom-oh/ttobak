@@ -23,7 +23,7 @@ do not establish that the rule is deployed.
 | TtobakAiStack | Service roles/policies, research/simulator permissions | Storage, Knowledge, Auth, WebSearchGateway |
 | TtobakEdgeAuthStack | CloudFront viewer JWT validation, us-east-1 | Auth |
 | TtobakGatewayStack | HTTP/WebSocket APIs, Go/Python functions, conversion/events | Auth, Storage, AI, Knowledge, WebSearchGateway |
-| TtobakCrawlerStack | Crawling/ingestion workflow and workers | AI, Storage, Knowledge, WebSearchGateway |
+| TtobakCrawlerStack | Crawling/ingestion workflow and workers; separate legacy news drain switch | AI, Storage, Knowledge, WebSearchGateway |
 | TtobakResearchAgentStack | Legacy Bedrock Agent/tools and AgentCore spans log group | Storage, Knowledge |
 | TtobakWhisperStack | GPU Spot ECS, ECR, production/benchmark tasks | Storage |
 | TtobakFrontendStack | Static site, CloudFront, runtime config and media keys | Gateway, EdgeAuth, Auth |
@@ -431,12 +431,20 @@ and [source contract](../backend/internal/service/INDEX_SOURCE_CONTRACT.md).
 
 QA now receives separate assets and KB bucket names. AiStack grants read/version
 access to assets transcripts/*, docs/*, docs-pdf/*, files/* and KB kb/*, shared/*,
+news/v1/* (immutable published news only),
 plus account-conditioned listing to distinguish absence from denied reads. It adds
 no object writes/deletes. Handler registration and deployment acceptance status
 are tracked in the [QA source contract](../backend/python/qa/SOURCE_CONTRACT.md);
 IAM grants alone do not activate the consumer. Legacy cache variables remain
 injected. Strict QA cutover must follow binary snapshot verification and
 the [current-source rollout](runbooks/qa-current-source-rollout.md).
+
+Deploy AiStack's `ReadCurrentPublishedNews` grant before accepting the news QA
+reader. The 2026-10-21 public-source canary exposed a real `HeadObject` denial
+without this prefix; API publication/detail success did not establish QA access.
+Verify current-source HTTP and WebSocket answers after the grant is deployed.
+The local frontend deployment entrypoint resolves the site bucket and distribution
+from `TtobakFrontendStack` outputs before uploading; missing outputs stop publication.
 
 KnowledgeStack retains externally provisioned KB/data-source IDs and AOSS-related
 resources while a KB teardown remains staged and intentionally undeployed. Its

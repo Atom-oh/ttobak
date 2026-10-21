@@ -128,6 +128,19 @@ describe('AiStack', () => {
     });
   });
 
+  test('QA published news reads are confined to immutable knowledge objects', () => {
+    const grants = statementsOf('TtobakQaRole').filter(statement => statement.Sid === 'ReadCurrentPublishedNews');
+    expect(grants).toHaveLength(1);
+    expect(grants[0].Action).toEqual(['s3:GetObject', 's3:GetObjectVersion']);
+    const resources = JSON.stringify(grants[0].Resource);
+    expect(resources).toContain('/news/v1/*');
+    expect(resources).toContain('KbBucket');
+    expect(resources).not.toContain('knowledge-artifacts');
+    expect(grants[0].Resource).not.toEqual('*');
+    expect(statementsOf('TtobakQaRole').filter(statement =>
+      JSON.stringify(statement.Resource).includes('/news/'))).toEqual(grants);
+  });
+
   test('manual bootstrap can publish snapshots without changing originals or meeting projections', () => {
     const statements = Object.values(template.findResources('AWS::IAM::Policy'))
       .filter((policy) => JSON.stringify(policy.Properties.Roles).includes('TtobakKbRole'))
@@ -228,15 +241,15 @@ describe('AiStack', () => {
       .flatMap((policy) => policy.Properties.PolicyDocument.Statement);
     const s3Statements = statements.filter((statement) =>
       [statement.Action].flat().some((action: string) => action.startsWith('s3:')));
-    expect(s3Statements).toHaveLength(4);
+    expect(s3Statements).toHaveLength(5);
     const reads = s3Statements.filter((entry) => [entry.Action].flat().includes('s3:GetObject'));
-    expect(reads).toHaveLength(3);
+    expect(reads).toHaveLength(4);
     for (const entry of reads) {
       expect([entry.Action].flat()).toEqual(['s3:GetObject', 's3:GetObjectVersion']);
       expect([entry.Resource].flat()).not.toContain('*');
     }
     const resources = JSON.stringify(reads.map((entry) => entry.Resource));
-    for (const prefix of ['transcripts', 'docs', 'docs-pdf', 'files', 'kb', 'shared']) {
+    for (const prefix of ['transcripts', 'docs', 'docs-pdf', 'files', 'kb', 'shared', 'news/v1']) {
       expect(resources).toContain(`/${prefix}/*`);
     }
     expect(resources).not.toContain('/audio/*');
