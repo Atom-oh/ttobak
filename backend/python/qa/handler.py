@@ -454,7 +454,8 @@ def _handle_verified_http(event, context):
         if _CONNECTOR_INGRESS.is_connector(event):
             return _CONNECTOR_INGRESS.detection(event, handle_detect_questions, _CONNECTOR_GRANTS)
     except ConnectorError as error:
-        status = {"INVALID_CONNECTOR_REQUEST": 400, "RESULT_TOO_LARGE": 413}.get(error.code, 403)
+        status = {"INVALID_CONNECTOR_REQUEST": 400, "RESULT_TOO_LARGE": 413,
+                  "INVALID_CONNECTOR_RESULT": 502}.get(error.code, 403)
         return response(status, {"error": {"code": error.code, "message": "Connector request not permitted"}})
     return _handle_existing_verified_http(event, context, verified_user_id)
 
