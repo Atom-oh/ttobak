@@ -466,6 +466,8 @@ func init() {
 		connectorBridge = &connector.Bridge{
 			Verify: lazyConnectorVerifier(kmsClient, keyARN, connectorGrants),
 			Router: r,
+			Mutate: handler.NewConnectorNoteHandler(service.NewConnectorNoteService(repo,
+				os.Getenv("CONNECTOR_RESOURCE_AUDIENCE"), "https://cognito-idp."+cfg.Region+".amazonaws.com/"+cognitoPoolID)).Create,
 		}
 	}
 }

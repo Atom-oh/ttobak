@@ -163,3 +163,109 @@ test('API private calls never request bearer credentials and default-off rollbac
   assert.equal(environmentPrivateTransport({ TTOBAK_CONNECTOR_PRIVATE_BRIDGE: 'false' }), undefined);
   assert.throws(() => environmentPrivateTransport({ TTOBAK_CONNECTOR_PRIVATE_BRIDGE: 'true' }));
 });
+
+const noteRequest = { method: 'POST', path: '/api/documents', maxResponseBytes: 32000,
+  body: { title: '노트', markdown: '검증한 내용', docType: 'note', idempotencyKey: 'save-this-note' } };
+const writeIdentity = { ...identity, scopes: ['ttobak.connector/read', 'ttobak.connector/write'] };
+function writeGrants() {
+  return { ...grants(), clientMaximum: ['read', 'write'],
+    approval: { userId: 'alice', clientId: 'client', generation: 7,
+      capabilities: ['read', 'write'], expiresAt: 1800000045, revoked: false } };
+}
+function noteTransport(overrides = {}) {
+  const args = Buffer.from(JSON.stringify({ method: noteRequest.method, path: noteRequest.path, body: noteRequest.body }));
+  const raw = serializeDelegationPayload({ version: 1, protocol: 'ttobak.connector',
+    destination: 'ttobak-api-bridge', sub: 'alice', clientId: 'client', capabilities: ['read', 'write'],
+    approvalGeneration: 7, operation: 'api.document.putDocument',
+    argumentsSHA256: createHash('sha256').update(args).digest('hex'), requestId: 'save-this-note',
+    issuedAt: 1800000000, expiresAt: 1800000045, upstreamExpiresAt: identity.expiresAt });
+  const calls = [];
+  const dependencies = {
+    now: () => 1800000000, resolve: async () => writeGrants(),
+    requestId: () => { throw new Error('mutation must use the caller retry key'); },
+    kms: { send: async command => {
+      calls.push('sign');
+      assert.deepEqual(command.input.Message, createHash('sha256').update(raw).digest());
+      return { KeyId: key, SigningAlgorithm: 'RSASSA_PSS_SHA_256', Signature:
+        sign('sha256', raw, { key: pair.privateKey, padding: constants.RSA_PKCS1_PSS_PADDING, saltLength: 32 }) };
+    } },
+    lambda: { send: async command => {
+      calls.push('invoke');
+      assert.equal(command.input.FunctionName, apiARN);
+      const frame = JSON.parse(Buffer.from(command.input.Payload).toString());
+      assert.equal(frame.requestId, 'save-this-note');
+      const verifier = new DelegationVerifier(key, pair.publicKey.export({ format: 'der', type: 'spki' }),
+        'ttobak-api-bridge', async () => writeGrants(), () => 1800000000);
+      const principal = await verifier.verify(Buffer.from(frame.delegation, 'base64url'), {
+        operation: frame.operation, requestId: frame.requestId, arguments: Buffer.from(frame.arguments, 'base64url') });
+      assert.equal(principal.approvalGeneration, 7);
+      assert.deepEqual(Buffer.from(frame.arguments, 'base64url'), args);
+      return response({ docId: 'one-note', replayed: calls.length > 2 });
+    } },
+    ...overrides,
+  };
+  return { calls, transport: privateApiTransport(writeIdentity, key, apiARN, qaARN, dependencies) };
+}
+
+test('personal note delegates exact write approval, bounded lifetime and stable retry identity', async () => {
+  const f = noteTransport();
+  assert.deepEqual(await f.transport(noteRequest), { docId: 'one-note', replayed: false });
+  assert.deepEqual(await f.transport(noteRequest), { docId: 'one-note', replayed: true });
+  assert.deepEqual(f.calls, ['sign', 'invoke', 'sign', 'invoke']);
+});
+
+test('personal note scope, destination and input limits fail before signing', async () => {
+  for (const body of [
+    { ...noteRequest.body, accountId: 'foreign' }, { ...noteRequest.body, fileKey: 'docs/file' },
+    { ...noteRequest.body, docType: 'slide' }, { ...noteRequest.body, title: '한'.repeat(171) },
+    { ...noteRequest.body, markdown: '한'.repeat(20001) }, { ...noteRequest.body, idempotencyKey: '../escape' },
+    { ...noteRequest.body, idempotencyKey: '' }, { ...noteRequest.body, title: null },
+  ]) {
+    const f = noteTransport();
+    await assert.rejects(f.transport({ ...noteRequest, body }));
+    assert.deepEqual(f.calls, []);
+  }
+  const noWriteScope = privateApiTransport(identity, key, apiARN, qaARN, {
+    resolve: async () => { throw new Error('no grant lookup without OAuth write scope'); }, kms: {}, lambda: {} });
+  await assert.rejects(noWriteScope(noteRequest), { code: 'CAPABILITY_DENIED' });
+  for (const resolve of [
+    async () => grants(),
+    async () => ({ ...writeGrants(), approval: { ...writeGrants().approval, revoked: true } }),
+    async () => ({ ...writeGrants(), clientMaximum: ['read'] }),
+  ]) {
+    const f = noteTransport({ resolve });
+    await assert.rejects(f.transport(noteRequest));
+    assert.deepEqual(f.calls, []);
+  }
+});
+
+test('uncertain writes dispatch once and revocation after invocation discards the receipt', async () => {
+  let invokes = 0;
+  const uncertain = noteTransport({ lambda: { send: async () => { invokes++; throw new Error('private AWS detail'); } } });
+  await assert.rejects(uncertain.transport(noteRequest), error =>
+    error.message === 'PRIVATE_WRITE_UNCONFIRMED: retry the same idempotency key and content' && !error.cause);
+  assert.equal(invokes, 1);
+  let lookups = 0;
+  const revoked = noteTransport({ resolve: async () => ({
+    ...writeGrants(), approval: { ...writeGrants().approval, revoked: ++lookups > 1 },
+  }) });
+  await assert.rejects(revoked.transport(noteRequest));
+  assert.deepEqual(revoked.calls, ['sign', 'invoke']);
+});
+
+test('putDocument exposes private retry receipts and rejects unsupported legacy idempotency', async () => {
+  const calls = [];
+  const auth = { getIdToken: async () => { throw new Error('credentials must not be read'); } };
+  const api = new TtobakApi(auth, 'https://example.invalid', {
+    privateTransport: async request => { calls.push(request); return { docId: 'one-note', replayed: false }; },
+  });
+  assert.deepEqual(await api.putDocument(undefined, noteRequest.body), { docId: 'one-note', replayed: false });
+  assert.deepEqual(calls[0].body, noteRequest.body);
+  await assert.rejects(api.putDocument('foreign', noteRequest.body));
+  for (const change of [{ path: 'folder' }, { docType: 'blog' }, { idempotencyKey: undefined }]) {
+    await assert.rejects(api.putDocument(undefined, { ...noteRequest.body, ...change }));
+  }
+  const legacy = new TtobakApi(auth, 'https://example.invalid');
+  await assert.rejects(legacy.putDocument(undefined, noteRequest.body), /idempotent/i);
+  assert.equal(calls.length, 1);
+});

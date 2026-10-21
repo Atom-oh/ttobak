@@ -260,7 +260,10 @@ then invokes private API and QA consumers through service IAM. Atomic current cl
 policy and per-user approval reads bound both ingress and consumers. First-party
 settings expose self-blocking, one-hour write approval and administrator policy
 controls; their transactions pin observed policy and approval generations. These
-management routes never accept delegated principals. The private transport defaults
+management routes never accept delegated principals. The sole private mutation
+creates a personal note and durable retry receipt in the same transaction as
+current policy/approval checks. Replays verify the existing note and receipt
+without overwriting human edits. The private transport defaults
 off until provider, IAM and consumer acceptance; see
 [ADR-053](decisions/ADR-053-connector-capability-private-delegation.md).
 

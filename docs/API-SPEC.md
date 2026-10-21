@@ -37,7 +37,7 @@ public key and reads current client/user grants before and after one of the eigh
 bounded API read operations. Only the verified in-process principal reaches
 the existing router; caller headers and nested HTTP bodies cannot create it.
 Response bodies are capped at 14,000 bytes. Empty key configuration denies the
-private consumer, and its mutation callback remains unavailable in this stage.
+private consumer. Its only mutation is personal note creation as described below.
 No OAuth issuance or IAM invocation permission is installed by the consumer code.
 
 The private QA companion accepts only the signed `qa.readonlyAsk` operation,
@@ -54,8 +54,8 @@ reader. Private key configuration remains empty until the reviewed KMS/IAM and
 OAuth deployment; the Python package must include the pinned ARM64 cryptography
 dependency before that activation.
 
-The staged MCP HTTP private transport signs only eight bounded API reads and
-`qa.readonlyAsk`. It derives identity and scopes from the verified request,
+The staged MCP HTTP private transport signs eight bounded API reads,
+`qa.readonlyAsk` and personal note creation. It derives identity and scopes from the verified request,
 checks atomic current grants before signing and before delivery, and invokes the
 configured API/QA Lambda through service IAM. It forwards no bearer token and
 never retries a rejected private request through the legacy HTTP transport.
@@ -63,6 +63,27 @@ never retries a rejected private request through the legacy HTTP transport.
 provider/consumer acceptance remain separate activation requirements.
 
 ## Contracts that require care
+
+### Private connector notes
+
+The signed `api.document.putDocument` operation accepts exactly
+`{ title, markdown, docType: "note", idempotencyKey }` at the private bridge's
+`POST /api/documents` DTO. This reuses the existing route identity; ordinary HTTP
+document writes keep their existing behavior. The operation requires OAuth
+read/write scopes, enabled client policy and a current matching write approval.
+The server chooses the verified user's personal document partition.
+Account destinations, uploads, paths and other mutations are unavailable.
+
+Title and markdown limits are 512 and 60,000 UTF-8 bytes after trimming;
+the complete body is capped at 65,536 bytes. The retry key is 1–128 ASCII letters,
+digits, underscores or hyphens and must match the signed request ID. A transaction
+pins client policy and approval generations while creating the note and a
+30-day receipt. Retry with the same key and exact content after an uncertain
+result. A replay returns the same document ID without changing later human edits;
+different bytes conflict, and a deleted document is never recreated by replay.
+Receipts confirm creation rather than returning current document content.
+There is no automatic create retry. Revocation after a successful transaction can
+suppress the response; it does not undo the saved note.
 
 ### Connector settings
 

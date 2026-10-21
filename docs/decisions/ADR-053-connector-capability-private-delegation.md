@@ -77,7 +77,7 @@ then verifies again before releasing at most 14,000 body bytes. The router accep
 only its verifier-created in-process principal; no HTTP header or nested request
 body selects this path. Existing services still check resource ownership and
 source revisions. The API's dedicated HTTP read boundary now receives the same
-atomic grant resolver. The private mutation callback remains unavailable.
+atomic grant resolver. Its only private mutation is the personal-note executor below.
 
 The private QA consumer now accepts only `qa.readonlyAsk`, with a question and
 optional meeting ID. It verifies the same signed delegation against the QA
@@ -94,7 +94,7 @@ The deployment artifact must contain the pinned ARM64 cryptography wheel before
 key configuration is enabled; source installation does not prove deployment.
 
 The MCP HTTP adapter now has an opt-in private transport for the eight bounded
-API reads and `qa.readonlyAsk`. Request-scoped verified identity/scopes, atomic
+API reads, `qa.readonlyAsk` and personal note creation. Request-scoped verified identity/scopes, atomic
 grant reads, exact-byte KMS signatures and service-IAM invocation replace bearer
 forwarding in this mode. It rechecks grants and expiry before returning bounded
 results, with one SDK attempt and bounded calls. The flag defaults off and a
@@ -108,8 +108,19 @@ generation/binding, approval generation and audit record transactionally; an
 uncertain outcome is reconciled with a fresh view before resubmission. Management
 routes remain nondelegable, so connector tokens cannot approve themselves.
 
-Subsequent reviewed stages must supply private signing infrastructure
-and the specifically available personal-note executor. Infrastructure must
+Personal-note creation requires matching OAuth read/write scopes and a current
+write-approval generation. The signed request ID doubles as a caller retry key;
+the server derives the personal document ID from user, client and key. Current
+policy and approval conditions, a new document and its 30-day receipt share one
+DynamoDB transaction. Replays validate the receipt and existing note without
+overwriting edits or recreating deletions. Exact body bytes bind the receipt;
+different content conflicts. SDK create retries are disabled; uncertain results
+reconcile through the receipt. The bounded response confirms creation only,
+and grants are checked again before its delivery. No account, file or sharing
+mutation is exposed by this executor.
+
+Subsequent reviewed stages must supply private signing infrastructure.
+Infrastructure must
 preserve existing pool/client identities and keep issuance disabled through
 deployment verification. Native migration, real provider tokens, audience and
 scope checks, current-source reads, expiry/revocation/disable behavior, actual

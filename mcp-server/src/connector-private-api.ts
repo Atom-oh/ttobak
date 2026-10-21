@@ -67,10 +67,24 @@ export function privateApiTransport(
       throw new ConnectorError('REQUEST_MISMATCH');
     }
     const qa = request.method === 'POST' && request.path === '/api/qa/readonly-ask';
+    const note = request.method === 'POST' && request.path === '/api/documents';
     const operation = qa ? 'qa.readonlyAsk' : httpOperation(request.method, url.pathname);
     const destination = qa ? 'ttobak-qa-bridge' : 'ttobak-api-bridge';
-    if (!qa && (request.method !== 'GET' || !reads.has(operation) || request.body !== null)) {
+    if (!qa && !note && (request.method !== 'GET' || !reads.has(operation) || request.body !== null)) {
       throw new ConnectorError('CAPABILITY_DENIED');
+    }
+    let noteKey: string | undefined;
+    if (note) {
+      const body = request.body as Record<string, unknown> | null;
+      if (!body || Array.isArray(body) || Object.keys(body).length !== 4 ||
+          !Object.keys(body).every(key => ['title', 'markdown', 'docType', 'idempotencyKey'].includes(key)) ||
+          typeof body.title !== 'string' || !body.title.trim() || Buffer.byteLength(body.title.trim()) > 512 ||
+          typeof body.markdown !== 'string' || !body.markdown.trim() || Buffer.byteLength(body.markdown.trim()) > 60_000 ||
+          body.docType !== 'note' || typeof body.idempotencyKey !== 'string' ||
+          !/^[A-Za-z0-9_-]{1,128}$/.test(body.idempotencyKey) || Buffer.byteLength(JSON.stringify(body)) > 65_536) {
+        throw new ConnectorError('CAPABILITY_DENIED');
+      }
+      noteKey = body.idempotencyKey;
     }
     const required = requiredCapabilities(operation, destination);
     if (required.some(cap => !verified.scopes.includes(`ttobak.connector/${cap}`))) {
@@ -79,13 +93,15 @@ export function privateApiTransport(
     const args = Buffer.from(JSON.stringify({ method: request.method, path: request.path, body: request.body }));
     if (args.byteLength > (qa ? 32_000 : 512 * 1024)) throw new ConnectorError('REQUEST_MISMATCH');
     const grants = await dependencies.resolve(verified.subject, verified.clientId, signal);
-    const now = clock(), expiresAt = Math.min(now + MAX_LIFETIME_SECONDS, verified.expiresAt);
+    const now = clock(), expiresAt = Math.min(now + MAX_LIFETIME_SECONDS, verified.expiresAt,
+      note ? grants.approval?.expiresAt ?? 0 : verified.expiresAt);
+    const generation = note ? grants.approval?.generation ?? 0 : 0;
     if (!Number.isSafeInteger(now) || now <= 0 || expiresAt <= now) throw new ConnectorError('EXPIRED_DELEGATION');
-    effectiveCapabilities(verified.subject, verified.clientId, required, 0, expiresAt, grants, now);
-    const requestId = (dependencies.requestId ?? randomUUID)();
+    effectiveCapabilities(verified.subject, verified.clientId, required, generation, expiresAt, grants, now);
+    const requestId = noteKey ?? (dependencies.requestId ?? randomUUID)();
     const payload = serializeDelegationPayload({
       version: 1, protocol: PROTOCOL, destination, sub: verified.subject, clientId: verified.clientId,
-      capabilities: required, approvalGeneration: 0, operation,
+      capabilities: required, approvalGeneration: generation, operation,
       argumentsSHA256: createHash('sha256').update(args).digest('hex'), requestId,
       issuedAt: now, expiresAt, upstreamExpiresAt: verified.expiresAt,
     });
@@ -111,10 +127,12 @@ export function privateApiTransport(
       output = await dependencies.lambda.send(new InvokeCommand({
         FunctionName: qa ? qaARN : apiARN, InvocationType: 'RequestResponse', Payload: wire,
       }), { abortSignal: signal });
-    } catch { throw new Error('PRIVATE_READ_UNAVAILABLE'); }
+    } catch { throw new Error(note
+      ? 'PRIVATE_WRITE_UNCONFIRMED: retry the same idempotency key and content'
+      : 'PRIVATE_READ_UNAVAILABLE'); }
     if (clock() >= expiresAt) throw new ConnectorError('EXPIRED_DELEGATION');
     const current = await dependencies.resolve(verified.subject, verified.clientId, signal);
-    effectiveCapabilities(verified.subject, verified.clientId, required, 0, expiresAt, current, clock());
+    effectiveCapabilities(verified.subject, verified.clientId, required, generation, expiresAt, current, clock());
     if (clock() >= expiresAt) throw new ConnectorError('EXPIRED_DELEGATION');
     if (output.FunctionError || output.StatusCode !== 200 || !output.Payload ||
         output.Payload.byteLength > Math.min(32_000, request.maxResponseBytes)) throw new Error('PRIVATE_API_REJECTED');
@@ -125,7 +143,7 @@ export function privateApiTransport(
         Buffer.byteLength(result.body) > Math.min(14_000, request.maxResponseBytes)) {
       throw new Error('PRIVATE_API_INVALID_RESPONSE');
     }
-    if (result.statusCode < 200 || result.statusCode >= 300) throw new Error(`HTTP ${result.statusCode}: private read rejected`);
+    if (result.statusCode < 200 || result.statusCode >= 300) throw new Error(`HTTP ${result.statusCode}: private request rejected`);
     try { return JSON.parse(result.body); }
     catch { throw new Error('PRIVATE_API_INVALID_RESPONSE'); }
   };

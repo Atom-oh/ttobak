@@ -432,8 +432,21 @@ export class TtobakApi {
 
   async putDocument(
     accountId: string | undefined,
-    doc: { title: string; markdown: string; docType?: string; path?: string },
+    doc: { title: string; markdown: string; docType?: string; path?: string; idempotencyKey?: string },
   ) {
+    if (this.options.privateTransport) {
+      if (accountId !== undefined || doc.path !== undefined ||
+          (doc.docType !== undefined && doc.docType !== 'note') ||
+          typeof doc.idempotencyKey !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(doc.idempotencyKey)) {
+        throw new Error('Private connector notes require a personal destination and a stable idempotencyKey.');
+      }
+      return this.post('/api/documents', {
+        title: doc.title, markdown: doc.markdown, docType: 'note', idempotencyKey: doc.idempotencyKey,
+      });
+    }
+    if (doc.idempotencyKey !== undefined) {
+      throw new Error('Idempotent note creation requires the private connector transport.');
+    }
     return this.post(documentsPath(accountId), doc);
   }
 

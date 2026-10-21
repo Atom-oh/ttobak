@@ -178,7 +178,16 @@ func (b *Bridge) Invoke(ctx context.Context, raw []byte) InvokeResult {
 		if b.Mutate == nil || principal.Require(op, "ttobak-api-bridge", time.Now().Unix()) != nil {
 			return bridgeFailure(403, "CAPABILITY_DENIED")
 		}
-		return b.Mutate(ctx, principal, input.Body)
+		result := b.Mutate(ctx, principal, input.Body)
+		// The atomic executor controls whether a write can commit. Rechecking
+		// here separately controls publication of its receipt after revocation.
+		if _, err := b.Verify(ctx, wire, request); err != nil {
+			return bridgeFailure(403, "CAPABILITY_DENIED")
+		}
+		if len(result.Body) > MaxBridgeResponseBytes {
+			return bridgeFailure(413, "RESULT_TOO_LARGE")
+		}
+		return result
 	}
 	httpRequest, err := http.NewRequestWithContext(WithVerifiedPrincipal(ctx, principal),
 		input.Method, input.Path, strings.NewReader(""))

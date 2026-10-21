@@ -71,8 +71,8 @@ and revocation. Do not copy token files into documentation or diagnostics.
 
 The staged `TTOBAK_CONNECTOR_PRIVATE_BRIDGE=true` mode binds the verified HTTP
 subject, client, scopes and expiry to a short-lived KMS delegation. It supports
-the eight bounded API reads and the private read-only QA operation. Mutations,
-unknown operations and legacy QA sessions fail closed. It never forwards the
+the eight bounded API reads, private read-only QA and personal note creation.
+Other mutations, unknown operations and legacy QA sessions fail closed. It never forwards the
 bearer token to Lambda or falls back to HTTP after a private call fails.
 
 This mode additionally requires `AWS_REGION`, `TABLE_NAME`,
@@ -88,6 +88,15 @@ Omitting the flag or setting it to `false` selects the existing HTTP transport.
 Source tests cover that rollback selection; production KMS/IAM, provider-token
 and consumer acceptance remain prerequisites for enabling it. The private flag
 does not change stdio authentication or install OAuth clients.
+
+Private `ttobak_put_document` requires a personal destination, `docType: "note"`
+and an `idempotencyKey` of 1–128 ASCII letters, digits, underscores or hyphens.
+The title is limited to 512 UTF-8 bytes and markdown to 60,000 bytes after trimming.
+Writing requires the connector's OAuth read/write scopes and the user's current
+one-hour approval in Settings. After an uncertain result, retry the same key and
+exact content; the 30-day receipt returns the same document ID without overwriting
+human edits or recreating a deleted note. A changed body with the same key conflicts.
+The legacy transport rejects this key because it cannot provide that guarantee.
 
 ```bash
 npm start                          # stdio (default)
@@ -148,7 +157,8 @@ final tool result, 1 MiB general upstream response (reading retains its tighter
 32,000-byte wire cap). Compressed bodies are rejected. The absolute deadline
 includes auth/body/API work, and disconnects abort upstream HTTP. Writes never
 retry automatically: a timeout can leave an already-completed mutation. Inspect
-current state before retrying. Oversized reads fail without invented continuation.
+current state before retrying, except that private personal-note creation supports
+the explicit retry key described above. Oversized reads fail without invented continuation.
 Successful writes return a compact completion receipt with saved record IDs and
 an explicit omitted-response marker when the full response exceeds the bound.
 
