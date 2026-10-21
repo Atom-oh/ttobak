@@ -88,7 +88,7 @@ documents without the legacy 300-meeting cap. It does not hydrate transcripts.
 File pages expose exact Markdown fragments or explicit `non_text` entries for
 uploaded documents, never presigned links or public-share tokens. Paths include
 stable record IDs and sanitized Unicode names. Requested transcript spill reads
-are authorized, validated and capped at 64 MiB; excessive sources return
+are authorized, validated and capped at 1 MiB; excessive sources return
 `SOURCE_TOO_LARGE` without file text.
 
 Vault cursors bind the current source, grant, file identity, account path and
