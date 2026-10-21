@@ -129,6 +129,11 @@ func Auth(next http.Handler) http.Handler {
 
 func authWithConnectorPolicy(next http.Handler, policy *connector.ReadOnlyHTTPPolicy, resolve ConnectorGrantResolver) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if principal, private := connector.VerifiedReadRequest(r); private {
+			ctx := context.WithValue(r.Context(), UserIDKey, principal.UserID())
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
 		var claims *ALBOIDCClaims
 		var err error
 
