@@ -137,6 +137,36 @@ class ConnectorIngressTests(unittest.TestCase):
             self.assertEqual(result["statusCode"], 413)
             self.assertNotIn("한", result["body"])
 
+    def test_deep_bounded_json_returns_400_before_detection(self):
+        import test_handler
+        handler = test_handler.handler
+        self.event["requestContext"]["authorizer"]["jwt"]["claims"]["exp"] = "9007199254740991"
+        self.event["body"] = "[" * 15000 + "0" + "]" * 15000
+        self.assertLess(len(self.event["body"]), MAX_REQUEST_BYTES)
+        with mock.patch.object(handler, "_CONNECTOR_INGRESS", self.policy), \
+                mock.patch.object(handler, "_CONNECTOR_GRANTS",
+                                  lambda user, client: Grants(user, client, True, ("read",))), \
+                mock.patch.object(handler, "handle_detect_questions") as detect:
+            result = handler._handle_verified_http(self.event, None)
+        self.assertEqual(result["statusCode"], 400)
+        self.assertIn("INVALID_CONNECTOR_REQUEST", result["body"])
+        detect.assert_not_called()
+
+    def test_actual_model_surrogate_response_returns_closed_502(self):
+        import test_handler
+        handler = test_handler.handler
+        self.event["requestContext"]["authorizer"]["jwt"]["claims"]["exp"] = "9007199254740991"
+        self.event["body"] = '{"transcript":"synthetic"}'
+        model_output = {"output": {"message": {"content": [{"text": '["\\ud800"]'}]}}}
+        with mock.patch.object(handler, "_CONNECTOR_INGRESS", self.policy), \
+                mock.patch.object(handler, "_CONNECTOR_GRANTS",
+                                  lambda user, client: Grants(user, client, True, ("read",))), \
+                mock.patch.object(handler.bedrock_runtime, "converse", return_value=model_output):
+            result = handler._handle_verified_http(self.event, None)
+        self.assertEqual(result["statusCode"], 502)
+        self.assertIn("INVALID_CONNECTOR_RESULT", result["body"])
+        result["body"].encode("utf-8", errors="strict")
+
 
 if __name__ == "__main__":
     unittest.main()

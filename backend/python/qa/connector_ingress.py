@@ -136,12 +136,17 @@ class ReadOnlyQAIngress:
                 raw = base64.b64decode(raw, validate=True).decode("utf-8", errors="strict")
             body = json.loads(raw, object_pairs_hook=unique_object)
             validate_detection_body(body)
-        except (ValueError, UnicodeError, binascii.Error):
+        except (ValueError, UnicodeError, binascii.Error, RecursionError):
             raise ConnectorError("INVALID_CONNECTOR_REQUEST") from None
         result = executor(body)
         self.authorize_current(event, resolve)
-        if (not isinstance(result, dict) or not isinstance(result.get("body"), str)
-                or len(result["body"].encode("utf-8")) > MAX_RESPONSE_BYTES):
+        if not isinstance(result, dict) or not isinstance(result.get("body"), str):
+            raise ConnectorError("INVALID_CONNECTOR_RESULT")
+        try:
+            result_bytes = result["body"].encode("utf-8", errors="strict")
+        except UnicodeError:
+            raise ConnectorError("INVALID_CONNECTOR_RESULT") from None
+        if len(result_bytes) > MAX_RESPONSE_BYTES:
             raise ConnectorError("RESULT_TOO_LARGE")
         return result
 
