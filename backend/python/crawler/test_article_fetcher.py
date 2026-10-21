@@ -132,6 +132,16 @@ class TestArticleFetch(unittest.TestCase):
         opened.assert_called_once()
         connection.close.assert_called_once()
 
+    def test_https_only_rejects_downgrade_before_connecting_to_redirect(self):
+        first = response(status=302, Location="http://example.com/insecure")
+        connection = mock.Mock()
+        with mock.patch.object(fetcher, "_open_response", return_value=(connection, first)) as opened:
+            with self.assertRaisesRegex(fetcher.FetchRejected, "INSECURE_REDIRECT"):
+                fetcher.fetch_article("https://example.com/a", https_only=True)
+        opened.assert_called_once()
+        connection.close.assert_called_once()
+        self.resolve.assert_called_once()
+
     def test_rejects_private_mixed_empty_and_transition_dns_answers(self):
         for addresses in ([], ["127.0.0.1"], ["169.254.169.254"], ["10.1.1.1"],
                           ["100.64.0.1"], ["224.0.0.1"], ["93.184.216.34", "10.0.0.1"],

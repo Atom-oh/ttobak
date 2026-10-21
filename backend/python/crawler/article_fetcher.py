@@ -465,10 +465,12 @@ def normalize_html(html, url):
                        parser.published_at[:100], body, blocks)
 
 
-def _fetch_once(url):
+def _fetch_once(url, *, https_only=False):
     deadline = time.monotonic() + MAX_ATTEMPT_SECONDS
     current = url
     for redirect in range(MAX_REDIRECTS + 1):
+        if https_only and urlsplit(current).scheme != "https":
+            raise FetchRejected("INSECURE_REDIRECT")
         parsed, answers = _target(current, deadline)
         connection, response = _open_response(parsed, answers, deadline)
         try:
@@ -506,10 +508,10 @@ def _fetch_once(url):
     raise FetchRejected("REDIRECT_LIMIT")
 
 
-def fetch_article(url):
+def fetch_article(url, *, https_only=False):
     for attempt in range(MAX_ATTEMPTS):
         try:
-            return _fetch_once(url)
+            return _fetch_once(url, https_only=True) if https_only else _fetch_once(url)
         except FetchRejected as error:
             reason = error.reason
             retry = reason in ("HTTP_429", "DNS_TEMPORARY") or reason.startswith("HTTP_5")
