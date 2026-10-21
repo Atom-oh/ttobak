@@ -1,10 +1,12 @@
 # Knowledge-grade news release
 
-Status on 2026-10-21: private handlers, publication-aware readers and an additive
-private workflow are implemented. The workflow's deployment default is off.
-This record does not claim infrastructure deployment, positive consumer acceptance,
-or activation. [ADR-052](../decisions/ADR-052-conditional-news-publication.md) owns
-publication and accounting semantics.
+Status on 2026-10-21: the private workflow is deployed for one isolated canary.
+Publication, charged usage, authenticated HTTP/WebSocket current-source QA,
+source-change/disable rejection, and rendered settings/history passed production
+acceptance. Normal source activation, recovery completion and the retained-legacy
+archive remain pending. The deployment default remains off.
+[ADR-052](../decisions/ADR-052-conditional-news-publication.md) owns publication
+and accounting semantics.
 
 ## Runtime contract
 
@@ -137,8 +139,91 @@ These are model-token budgets, not total AWS/search costs.
 5. Verify positive current-source QA over both HTTP and WebSocket, the actual
    rendered UI and revocation/source-change rejection. A connected socket, empty
    search result or successful deployment is not consumer acceptance.
-6. Complete resumable legacy migration and dated acceptance before normal
+6. Complete the resumable retained-legacy archive below and dated acceptance before normal
    scheduling or `all` mode. Preserve the KB reconciliation schedule.
+
+## Retained-legacy migration
+
+Existing news remains explicitly legacy: retain every original row and object,
+including old, unverified and incomplete material. Do not call it schema-v1
+publication, infer a quality rejection from an old search date, or delete it.
+Fresh articles use the independently accepted native publication workflow.
+This policy migrates operation to the two supported reader formats; it does not
+claim that all historical articles have been regenerated.
+
+`scripts/news_legacy_archive.py` takes a resumable, private local archive outside
+disposable worktrees. It preserves every DynamoDB attribute with its type,
+exact bounded S3 bytes, ETag/version identity and current source configuration.
+Files are content-addressed, written with fsync before atomic publication, and
+checked against their hashes during reconciliation. Keep the archive in the
+persistent recovery directory during worktree/cache cleanup. It is a host-local
+recovery copy, not a replicated backup or an atomic whole-table snapshot.
+The original production rows and objects remain in place.
+
+Before running it, deploy `NewsLegacyWrites=off` to CrawlerStack and verify the
+reviewed legacy Lambda code hash. The switch returns before search, generation,
+object writes or history/status changes; unexpected flag values also stop work.
+Wait at least the function timeout plus 30 seconds after each writer revision
+changed. Both native writer functions must remain off or restricted to a canary
+source outside the legacy selection. The archive checks these conditions and
+pins the writer revision IDs, so a changed configuration cannot silently resume.
+Tech crawling, KB ingestion and recovery remain enabled.
+
+Run the following from the checkout that contains the reviewed archive tool.
+Use the actual deployed legacy code SHA and a private persistent directory:
+
+```bash
+python3 scripts/news_legacy_archive.py \
+  --account-id 180294183052 --region ap-northeast-2 --table ttobak-main \
+  --source-bucket ttobak-kb-180294183052 \
+  --legacy-writer-code-sha256 "$REVIEWED_LEGACY_CODE_SHA256" \
+  --archive "$PERSISTENT_NEWS_ARCHIVE"
+# Repeat the same command with --apply to archive; rerun identically to resume.
+```
+
+Selection uses bounded, strongly consistent table pages, not an eventually
+consistent GSI as authorization or completeness evidence. The command permits
+at most 10,000 news identities, 1,000 scan pages, 2 MiB per body, 1 MiB per typed
+metadata object, and ten minutes per invocation. Capture and reconciliation
+have separate resumable checkpoints. A final scan checks the selected identities;
+every captured canonical row/object and every current source configuration must
+still match. Changed, missing, corrupt or unreadable data stops completion.
+Versioned, tombstoned and unknown-schema rows are protected and counted separately.
+The command makes no production write, model call, data deletion or mode change.
+
+Completion means a `COMPLETE_RETAINED_LEGACY` manifest with a verified SHA-256,
+the full selected count and `RETAINED_LEGACY` dispositions. It is not established
+by a partial archive, a zero-candidate run or a successful deployment. Record
+its exact path/hash, source counts and replay result before normal activation.
+Keep the archive through acceptance and for 400 days afterwards; any later
+removal must target that dated archive explicitly and preserve required incident
+evidence. Do not include private archived rows in a PR or CI artifact.
+
+Validation requires Python 3.12, boto3 and moto:
+`(cd scripts && python3 -m unittest test_news_legacy_archive -v)`.
+
+## Recorded canary acceptance, 2026-10-21
+
+The accepted canary published one official AWS DynamoDB article with two
+hash-verified immutable objects, complete usage and a charged total of
+USD 0.190025. A finalized discovery replay admitted no new candidate.
+HTTP and WebSocket QA both read the current publication and returned its source.
+Changing the source configuration and disabling it each produced an API 404
+and no QA source; the WebSocket check reused the earlier conversation.
+Restoring configuration restored the exact original publication bytes.
+Desktop and 390-pixel mobile settings/history rendered without page errors or
+horizontal overflow, including the published count and exact charge.
+
+Minimum accepted API reader is Lambda version 223, package SHA-256
+`xjeZrUN0Xp9m004ge9gBrj6kvhMHV7dmKcgtTJjp1Fk=` (AWS base64 form).
+QA package SHA-256 is `wqMtWGmvWbh1V4LMuL1fBKVeG/SU0JIOnFye232POcA=`.
+The QA role required a narrowly scoped `news/v1/*` read grant; the earlier
+HTTP/WebSocket HeadObject 403 attempts are failed tests, not acceptance.
+Private detailed receipts remain in the dated release recovery archive.
+An abandoned zero-attempt discovery run is waiting for its real admission
+deadline and scheduled recovery; recovery acceptance is not yet claimed.
+
+## Rollback and retention
 
 Rollback disables new writers first and leaves readers, finalization and recovery
 available. Do not delete immutable objects or ledger rows to free a budget.
