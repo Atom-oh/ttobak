@@ -60,6 +60,15 @@ class TestDiscovery(unittest.TestCase):
         self.assertTrue(any("after:2026-10-14" in call.args[0] for call in gateway.call_args_list))
         self.assertTrue(any("after:2026-09-21" in call.args[0] for call in gateway.call_args_list))
 
+    def test_unrepresentable_utc_date_does_not_discard_valid_neighbor(self):
+        for published in ("0001-01-01T00:00:00+14:00", "9999-12-31T23:59:59-14:00"):
+            with self.subTest(published=published):
+                result, _, _ = self.run_discovery(
+                    [article(1, publishedDate=published), article(2)])
+                self.assertEqual([item["url"] for item in result["candidates"]],
+                                 ["https://example.com/2"])
+                self.assertGreater(result["invalidRejected"], 0)
+
     def test_already_published_primary_results_still_allow_fallback(self):
         def gateway(query, limit):
             return ([article()] if "2026-10-14" in query

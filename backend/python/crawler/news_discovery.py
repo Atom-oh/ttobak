@@ -155,10 +155,11 @@ def discover(source, gateway, published_lookup, now, run_id, *, max_candidates=2
                     canonical = pipeline.canonicalize_url(url)
                     title = _text(item.get("title", ""), 500)
                     published = _text(item.get("publishedDate", ""), 100)
-                except (ValueError, DiscoveryRejected):
+                    fresh = pipeline.is_within_days(published, freshness, now)
+                except (ValueError, OverflowError, DiscoveryRejected):
                     result["invalidRejected"] += 1
                     continue
-                if not pipeline.is_within_days(published, freshness, now):
+                if not fresh:
                     result["staleRejected"] += 1
                     continue
                 if canonical in seen:
