@@ -1,4 +1,5 @@
 import { accountSectionOptions, accountSectionResult } from './section-reading.js';
+import { projectSectionOptions, projectSectionResult } from './project-sections.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { fileURLToPath } from 'node:url';
@@ -208,39 +209,51 @@ const registry: { tools: Tool[] } = {
     },
     {
       name: 'ttobak_get_project',
-      description: 'Get project detail for an SFDC Oppty: metadata, linked accounts, and members.',
+      description: 'Read project detail through bounded JSON groups. Follow opaque page.nextCursor until page.complete, including authorizationPending pages which contain no data. Concatenate dataJson within phase/revision until fragment.complete, then parse. Brief includes metadata, members, meetings, research and insights; insight Evidence is omitted. Current access and source links are rechecked. Where overlapPossible is true, union meetings by meetingId and replace repeated complete insight groups by sourceId, preserving all insights for that source.',
       inputSchema: {
         type: 'object' as const,
-        properties: { projectId: { type: 'string', description: 'Project ID' } },
+        properties: { projectId: { type: 'string', description: 'Project ID' },
+          section: { type: 'string', enum: ['detail', 'metadata', 'members'], default: 'detail' },
+          pageSize: { type: 'integer', minimum: 1, maximum: 8000, default: 4000 },
+          cursor: { type: 'string', maxLength: 2048 },
+        },
         required: ['projectId'],
+        additionalProperties: false,
       },
     },
     {
       name: 'ttobak_get_project_brief',
-      description: 'Get bundled raw material for a project: meta + insights grouped by type + linked meetings + linked research.',
+      description: 'Read project brief through bounded JSON groups. Follow opaque page.nextCursor until page.complete, including authorizationPending pages which contain no data. Concatenate dataJson within phase/revision until fragment.complete, then parse. Brief includes metadata, members, meetings, research and insights; insight Evidence is omitted. Current access and source links are rechecked. Where overlapPossible is true, union meetings by meetingId and replace repeated complete insight groups by sourceId, preserving all insights for that source.',
       inputSchema: {
         type: 'object' as const,
         properties: {
           projectId: { type: 'string', description: 'Project ID' },
+          pageSize: { type: 'integer', minimum: 1, maximum: 8000, default: 4000 },
+          cursor: { type: 'string', maxLength: 2048 },
+          section: { type: 'string', enum: ['brief', 'metadata', 'members', 'meetings', 'research', 'insights'], default: 'brief' },
           from: { type: 'string', description: 'Optional start (RFC3339)' },
           to: { type: 'string', description: 'Optional end (RFC3339)' },
-          types: { type: 'array', items: { type: 'string' }, description: 'Optional insight types to include' },
+          types: { type: 'array', maxItems: 8, items: { type: 'string', enum: ['trend', 'need', 'competitive', 'risk', 'opportunity', 'tech', 'stakeholder', 'action'] }, description: 'Optional insight types to include' },
         },
         required: ['projectId'],
+        additionalProperties: false,
       },
     },
     {
       name: 'ttobak_get_project_insights',
-      description: 'Get typed field insights for a project. Filter by period and insight types (trend, need, competitive, risk, opportunity, tech, stakeholder, action).',
+      description: 'Read project insights through bounded JSON groups. Follow opaque page.nextCursor until page.complete, including authorizationPending pages which contain no data. Concatenate dataJson within phase/revision until fragment.complete, then parse. Brief includes metadata, members, meetings, research and insights; insight Evidence is omitted. Current access and source links are rechecked. Where overlapPossible is true, union meetings by meetingId and replace repeated complete insight groups by sourceId, preserving all insights for that source.',
       inputSchema: {
         type: 'object' as const,
         properties: {
           projectId: { type: 'string', description: 'Project ID' },
+          pageSize: { type: 'integer', minimum: 1, maximum: 8000, default: 4000 },
+          cursor: { type: 'string', maxLength: 2048 },
           from: { type: 'string', description: 'Optional start (RFC3339, e.g. 2026-05-01T00:00:00Z)' },
           to: { type: 'string', description: 'Optional end (RFC3339)' },
-          types: { type: 'array', items: { type: 'string' }, description: 'Optional insight types to include' },
+          types: { type: 'array', maxItems: 8, items: { type: 'string', enum: ['trend', 'need', 'competitive', 'risk', 'opportunity', 'tech', 'stakeholder', 'action'] }, description: 'Optional insight types to include' },
         },
         required: ['projectId'],
+        additionalProperties: false,
       },
     },
     {
@@ -684,34 +697,18 @@ async function callTool(request: CallToolRequest, options: ServerOptions) {
       }
 
       case 'ttobak_get_project': {
-        const { projectId } = args as { projectId: string };
-        if (!projectId) return error('projectId is required');
-        const result = await api.getProject(projectId);
-        return text(JSON.stringify(result, null, 2));
+        const options = projectSectionOptions(args, 'detail');
+        return projectSectionResult(await api.readProjectSection(options), options);
       }
 
       case 'ttobak_get_project_brief': {
-        const { projectId, from, to, types } = args as {
-          projectId: string;
-          from?: string;
-          to?: string;
-          types?: string[];
-        };
-        if (!projectId) return error('projectId is required');
-        const result = await api.getProjectBrief(projectId, { from, to, types });
-        return text(JSON.stringify(result, null, 2));
+        const options = projectSectionOptions(args, 'brief');
+        return projectSectionResult(await api.readProjectSection(options), options);
       }
 
       case 'ttobak_get_project_insights': {
-        const { projectId, from, to, types } = args as {
-          projectId: string;
-          from?: string;
-          to?: string;
-          types?: string[];
-        };
-        if (!projectId) return error('projectId is required');
-        const result = await api.getProjectInsights(projectId, { from, to, types });
-        return text(JSON.stringify(result, null, 2));
+        const options = projectSectionOptions(args, 'insights');
+        return projectSectionResult(await api.readProjectSection(options), options);
       }
 
       case 'ttobak_update_project': {
