@@ -255,6 +255,15 @@ readiness; see [ADR-045](decisions/ADR-045-dual-mcp-transports.md).
 Stdio alone can record the Mac microphone through a local ffmpeg child and upload
 the audio as a new meeting using the existing meeting, presign and upload-complete APIs.
 
+The staged connector transport signs verified request identities and exact arguments,
+then invokes private API and QA consumers through service IAM. Atomic current client
+policy and per-user approval reads bound both ingress and consumers. First-party
+settings expose self-blocking, one-hour write approval and administrator policy
+controls; their transactions pin observed policy and approval generations. These
+management routes never accept delegated principals. The private transport defaults
+off until provider, IAM and consumer acceptance; see
+[ADR-053](decisions/ADR-053-connector-capability-private-delegation.md).
+
 Attachment extraction supports bounded native text from PDF/PPTX/DOCX/Markdown.
 Canonical ATTACH#/ATTEXT# identities, run/lease and ETag checks bind immutable
 result JSON. Partial/failed attempts remain distinct from retained previous

@@ -31,6 +31,19 @@ type ConnectorApprovalUpdate struct {
 // accepted from the caller; a transaction pins the current enabled policy,
 // approval generation and audit receipt before any elevation/revocation succeeds.
 func (r *DynamoDBRepository) UpdateConnectorApproval(ctx context.Context, in ConnectorApprovalUpdate) (int64, error) {
+	return r.updateConnectorApproval(ctx, in, "", "", 0)
+}
+
+// UpdateConnectorApprovalBound pins the management view's policy revision and
+// deployment binding in the same transaction as the approval and audit receipt.
+func (r *DynamoDBRepository) UpdateConnectorApprovalBound(ctx context.Context, in ConnectorApprovalUpdate, audience, issuer string, policyGeneration int64) (int64, error) {
+	if !validConnectorBinding(audience, issuer) || policyGeneration <= 0 || policyGeneration > maxConnectorInteger {
+		return 0, connector.ErrInvalidGrant
+	}
+	return r.updateConnectorApproval(ctx, in, audience, issuer, policyGeneration)
+}
+
+func (r *DynamoDBRepository) updateConnectorApproval(ctx context.Context, in ConnectorApprovalUpdate, audience, issuer string, policyGeneration int64) (int64, error) {
 	now := time.Now().Unix()
 	if !connectorUserID.MatchString(in.UserID) || !connectorClientID.MatchString(in.ClientID) || in.ExpectedGeneration < 0 || in.ExpectedGeneration >= maxConnectorInteger ||
 		in.ExpiresAt <= now || in.ExpiresAt > now+86400 || len(in.Capabilities) == 0 ||
@@ -45,6 +58,11 @@ func (r *DynamoDBRepository) UpdateConnectorApproval(ctx context.Context, in Con
 	}
 	generation := in.ExpectedGeneration + 1
 	policyCondition := expression.Name("clientId").Equal(expression.Value(in.ClientID))
+	if policyGeneration > 0 {
+		policyCondition = policyCondition.And(expression.Name("generation").Equal(expression.Value(policyGeneration))).
+			And(expression.Name("audience").Equal(expression.Value(audience))).
+			And(expression.Name("issuer").Equal(expression.Value(issuer)))
+	}
 	// Removing access must work after administrators disable or tighten a
 	// client; it must not revive an old approval if they later re-enable it.
 	if !in.Revoke && !in.Block {

@@ -64,6 +64,30 @@ provider/consumer acceptance remain separate activation requirements.
 
 ## Contracts that require care
 
+### Connector settings
+
+The first-party settings UI uses `GET /api/connectors` to read at most the two
+server-configured connector profiles and the current user's own approval.
+Disabled client policy and blocked approval rows remain visible here; this
+management view never grants access. Missing rollout configuration returns an
+empty list, while failed or malformed stored lookups return an explicit error.
+
+`PUT /api/connectors/approval` accepts only `{ profile, action, expectedGeneration }`.
+Profiles are `read` or `write`; actions are `allow_read`, `approve_write`, `revoke`
+or `block`. The server chooses the client, verified user, capabilities and one-hour
+expiry. Writing can be approved only for the configured write profile. The
+transaction pins the observed client policy generation, resource audience and
+issuer, approval generation and audit receipt. Revocation preserves a prior
+permanent block and remains possible after global client disablement.
+
+`PUT /api/settings/connector-policy` additionally requires verified admin
+membership and accepts `{ profile, enabled, expectedGeneration }`. Maxima come
+from the server-owned profile (`read`, or `read` plus `write`). These routes are
+not delegable through MCP, including for an approved writing connector. Bodies
+are capped at 1,024 bytes; unknown fields and trailing JSON are rejected.
+Generation conflicts return 409. An ambiguous write must be reconciled by
+reloading state before another action; the UI does not blindly retry writes.
+
 ### Session bootstrap and project invitations
 
 Authenticated `POST /api/session/bootstrap` takes optional `{ projectCursor }`
@@ -1035,9 +1059,12 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | POST | `/api/meetings/{meetingId}/export` | `exportHandler.ExportMeeting` |
 | GET | `/api/meetings/{meetingId}/export/obsidian` | `exportHandler.ExportObsidian` |
 | GET | `/api/settings/integrations` | `settingsHandler.GetIntegrations` |
+| GET | `/api/connectors` | `connectorSettingsHandler.List` |
+| PUT | `/api/connectors/approval` | `connectorSettingsHandler.UpdateApproval` |
 | PUT | `/api/settings/integrations/notion` | `settingsHandler.SaveNotionKey` |
 | DELETE | `/api/settings/integrations/notion` | `settingsHandler.DeleteNotionKey` |
 | PUT | `/api/settings/allowed-domains` | `settingsHandler.SaveAllowedDomains` |
+| PUT | `/api/settings/connector-policy` | `connectorSettingsHandler.UpdatePolicy` |
 | POST | `/api/settings/invite-user` | `settingsHandler.InviteUser` |
 | GET | `/api/settings/users` | `userAdminHandler.ListUsers` |
 | DELETE | `/api/settings/users/{userId}` | `userAdminHandler.DeleteUser` |
