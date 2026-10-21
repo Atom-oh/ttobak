@@ -92,6 +92,13 @@ def bedrock_response(value=None, stop="end_turn", usage=None):
 
 
 class TestStructuredQuality(unittest.TestCase):
+    def test_invisible_format_and_control_characters_cannot_reach_publication(self):
+        for char in ("\u202e", "\u2066", "\u200b", "\x7f", "\x85"):
+            raw = valid_enrichment_json()
+            raw["title"] += char
+            with self.subTest(codepoint=ord(char)), self.assertRaises(enrichment.QualityRejected):
+                enrichment.validate_enrichment(raw, [valid_body()])
+
     def test_accepts_complete_source_bound_artifact_without_mutating_caller(self):
         raw = valid_enrichment_json()
         accepted = enrichment.validate_enrichment(raw, [valid_body()])

@@ -9,6 +9,7 @@ import json
 import math
 import os
 import re
+import unicodedata
 from decimal import Decimal
 
 from botocore.exceptions import BotoCoreError, ClientError
@@ -59,7 +60,8 @@ def _string(value, field, minimum=1, maximum=1000):
     length = len(value.strip())
     _require(minimum <= length <= maximum,
              f"{field}: characters={length}; required={minimum}..{maximum}")
-    _require(not any(ord(c) < 32 and c not in "\n\r\t" for c in value), field)
+    _require(not any(unicodedata.category(c) in ("Cc", "Cf")
+                     and c not in "\n\r\t" for c in value), field)
     try:
         value.encode("utf-8")
     except UnicodeError:
