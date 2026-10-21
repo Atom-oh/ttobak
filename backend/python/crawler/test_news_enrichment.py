@@ -5,6 +5,8 @@ import unittest
 from decimal import Decimal
 from unittest import mock
 
+from botocore.exceptions import ClientError, ReadTimeoutError
+
 import article_fetcher
 import news_enrichment as enrichment
 import news_renderer
@@ -215,6 +217,8 @@ class TestSynthesis(unittest.TestCase):
             with self.subTest(text=text[:40]), self.assertRaises(ValueError):
                 enrichment.parse_json_object(text)
         self.assertEqual(enrichment.parse_json_object('```json\n{"a":1}\n```'), {"a": 1})
+        self.assertEqual(enrichment.parse_json_object(json.dumps({"text": '["\\' * 100})),
+                         {"text": '["\\' * 100})
 
     def test_first_success_has_bounded_tokens_and_source_urls_in_prompt(self):
         client = mock.Mock()
@@ -247,6 +251,37 @@ class TestSynthesis(unittest.TestCase):
         enrichment.enrich_article(candidate_fixture(), [valid_body()], client)
         prompt = client.converse.call_args.kwargs["messages"][0]["content"][0]["text"]
         self.assertIn("characters=599; required=600..4000", prompt)
+
+    def test_oversized_repair_keeps_consumed_tokens_without_another_call(self):
+        client = mock.Mock()
+        client.converse.return_value = bedrock_response("🙂" * 8000)
+        candidate = candidate_fixture(
+            sourceName="가" * 500, title="가" * 500,
+            aliases=["가" * 200] * 28, keywords=["가" * 200] * 28)
+        sources = [valid_body("가" * 29000, f"https://example.com/{n}") for n in range(3)]
+        prompt = enrichment.build_prompt(candidate, sources, True)
+        self.assertLessEqual(len(prompt.encode()), enrichment.MAX_PROMPT_BYTES)
+        with self.assertRaisesRegex(enrichment.QualityRejected, "INVALID_SOURCE") as error:
+            enrichment.enrich_article(candidate, sources, client)
+        client.converse.assert_called_once()
+        self.assertEqual(error.exception.usage,
+                         {"inputTokens": 100, "outputTokens": 50, "repairCount": 1})
+
+    def test_failed_repair_call_retains_known_usage_and_marks_unknown_charge(self):
+        errors = [
+            ReadTimeoutError(endpoint_url="https://bedrock.invalid"),
+            ClientError({"Error": {"Code": "ThrottlingException", "Message": "fixture"}}, "Converse"),
+        ]
+        for failure in errors:
+            client = mock.Mock()
+            client.converse.side_effect = [bedrock_response("not JSON"), failure]
+            with self.subTest(failure=type(failure)), self.assertRaisesRegex(
+                    enrichment.QualityRejected, "MODEL_ERROR") as error:
+                enrichment.enrich_article(candidate_fixture(), [valid_body()], client)
+            self.assertEqual(client.converse.call_count, 2)
+            self.assertEqual(error.exception.usage,
+                             {"inputTokens": 100, "outputTokens": 50,
+                              "repairCount": 1, "usageComplete": False})
 
     def test_incomplete_responses_never_publish_even_when_json_looks_valid(self):
         for stop in ("max_tokens", "tool_use", "content_filtered", "stop_sequence", None):

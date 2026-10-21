@@ -11,6 +11,8 @@ import os
 import re
 from decimal import Decimal
 
+from botocore.exceptions import BotoCoreError, ClientError
+
 from article_fetcher import ArticleBody, MAX_BODY_CHARS, MIN_BODY_CHARS
 from news_pipeline import canonicalize_url
 
@@ -118,6 +120,26 @@ def parse_json_object(text):
     text = text.strip()
     if text.startswith("```json\n") and text.endswith("\n```"):
         text = text[8:-4]
+    # Enforce our own depth bound; CPython decoder recursion limits differ
+    # between supported runtimes. Brackets inside strings are ordinary text.
+    depth = 0
+    quoted = escaped = False
+    for char in text:
+        if quoted:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                quoted = False
+        elif char == '"':
+            quoted = True
+        elif char in "[{":
+            depth += 1
+            if depth > 32:
+                raise ValueError("JSON depth limit")
+        elif char in "]}":
+            depth -= 1
     try:
         value = json.loads(text, object_pairs_hook=_unique_object, parse_constant=_reject_constant)
     except (RecursionError, json.JSONDecodeError):
@@ -307,14 +329,21 @@ def enrich_article(candidate, article_bodies, bedrock, require_relevance=None, *
             # cannot ground a repair because this model has no browsing tool.
             request += "\n" + json.dumps({"repair": {
                 "errors": last_error.errors[:8], "invalidOutput": invalid[:8000]}}, ensure_ascii=False)
-        _require(len(request.encode("utf-8")) <= MAX_REQUEST_BYTES, "request size", "INVALID_SOURCE")
-        response = bedrock.converse(
-            modelId=model_id or FINAL_MODEL_ID,
-            system=[{"text": _SYSTEM}],
-            messages=[{"role": "user", "content": [{"text": request}]}],
-            inferenceConfig={"maxTokens": MAX_TOKENS},
-            additionalModelRequestFields={"thinking": {"type": "disabled"}},
-        )
+        if len(request.encode("utf-8")) > MAX_REQUEST_BYTES:
+            raise QualityRejected("INVALID_SOURCE", ["request size"], dict(usage))
+        try:
+            response = bedrock.converse(
+                modelId=model_id or FINAL_MODEL_ID,
+                system=[{"text": _SYSTEM}],
+                messages=[{"role": "user", "content": [{"text": request}]}],
+                inferenceConfig={"maxTokens": MAX_TOKENS},
+                additionalModelRequestFields={"thinking": {"type": "disabled"}},
+            )
+        except (BotoCoreError, ClientError):
+            # The failed call may have consumed tokens without returning usage.
+            # Keep earlier known charges and mark the aggregate incomplete.
+            raise QualityRejected("MODEL_ERROR", ["model request failed"],
+                                  {**usage, "usageComplete": False}) from None
         current = response.get("usage", {})
         for key in ("inputTokens", "outputTokens"):
             value = current.get(key)
