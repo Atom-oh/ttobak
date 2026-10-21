@@ -10,6 +10,7 @@ import { httpConfig, createTokenVerifier, resourceMetadata } from '../dist/http-
 import { TtobakApi } from '../dist/api.js';
 import { decodeUpload, MAX_HTTP_UPLOAD_BYTES } from '../dist/remote-tools.js';
 import { NOTES_PAGES } from './fixtures/reading-data.mjs';
+import { meetingCatalogPage } from './fixtures/meeting-catalog-data.mjs';
 
 const pair = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const jwk = { ...pair.publicKey.export({ format: 'jwk' }), kid: 'test-key', alg: 'RS256', use: 'sig' };
@@ -79,11 +80,11 @@ async function fixture(t, customize, configOverrides = {}) {
       // the stub. The server has already verified their signatures and claims.
       let currentToken;
       const authTokenPayload = () => currentToken.split('.')[1];
-      api.listMeetings = async (args) => {
+      api.readMeetingCatalog = async (args) => {
         currentToken = await auth.getIdToken();
         calls.push({ owner: owner(), args, options });
         await new Promise(resolve => setTimeout(resolve, owner() === 'alice' ? 20 : 2));
-        return { owner: owner(), meetings: [] };
+        return meetingCatalogPage({ owner: owner() });
       };
       if (customize) customize(api, auth, options, calls);
       return api;
@@ -370,9 +371,9 @@ test('chunked oversized and invalid UTF-8 requests fail without invoking tools',
 });
 
 test('large tool output is rejected rather than truncated with invented continuation', async t => {
-  const f = await fixture(t, api => { api.exportVault = async () => ({ notes: '가'.repeat(32_000) }); });
+  const f = await fixture(t, api => { api.askQuestion = async () => ({ answer: '가'.repeat(32_000) }); });
   const client = await f.connect();
-  const result = await client.callTool({ name: 'ttobak_export_vault', arguments: {} });
+  const result = await client.callTool({ name: 'ttobak_ask', arguments: { question: 'Synthetic oversized answer' } });
   assert.equal(result.isError, true);
   assert.match(result.content[0].text, /RESULT_TOO_LARGE/);
   assert.ok(Buffer.byteLength(JSON.stringify(result)) < 32000);

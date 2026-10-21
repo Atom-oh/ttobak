@@ -3,12 +3,14 @@
 // persisting any customer data.
 import { TtobakApi } from '../../dist/api.js';
 import { CognitoAuth } from '../../dist/auth.js';
+import { meetingCatalogPage } from './meeting-catalog-data.mjs';
 
 CognitoAuth.prototype.loadTokens = function () {};
 const saved = new Map();
 TtobakApi.prototype.request = async function (method, path, body) {
   if (path.endsWith('/shared-doc') && method === 'PUT') throw new Error('HTTP 404: NOT_FOUND');
   const request = { method, path, body: body === undefined ? undefined : JSON.parse(JSON.stringify(body)) };
+  if (path.startsWith('/api/meeting-catalog?')) return meetingCatalogPage({ request });
   if (path.startsWith('/api/document-catalog?')) {
     const documents = [...saved.values()].map(({ docId, title }) => ({
       docId, title, scope: 'personal', permission: 'owner', metadataRevision: 'a'.repeat(64),

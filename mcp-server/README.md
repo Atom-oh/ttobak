@@ -173,8 +173,20 @@ an explicit omitted-response marker when the full response exceeds the bound.
 Upload tools keep their names but accept `fileName` and `contentBase64` instead of
 `filePath`, with at most 512 KiB decoded. Document upload also requires `title`.
 Both dispatch and API adapters reject server filesystem access. Use stdio or the
-app for larger files. Vault export is already API-based but can exceed HTTP's
-result bound.
+app for larger files.
+
+`ttobak_list_meetings` reads the bounded meeting catalog. It accepts `tab`,
+`accountIds`, `limit` (1–20), `pageSize` (1–8,000 code points) and opaque `cursor`.
+Reassemble a group's `dataJson` fragments before parsing its records; union
+overlapping owned/direct/team paths by `meetingId`. Discovery pages contain no
+records. Listing does not accept pending invitations or write a user profile.
+
+`ttobak_export_vault` first returns a bounded manifest. Read each opaque `fileId`
+with `section: "file"` and follow its server cursor to obtain exact Markdown
+fragments. Uploaded documents are explicitly `non_text`. Neither tool falls back
+to an unbounded export. API pages are capped at 10,000 encoded bytes; MCP caps
+original HTTP bytes and serialized tool results at 32,000. On `STALE_CURSOR`,
+restart discovery because the source or current grant changed.
 
 Settings provides the client-specific instructions. Quick is remote-only, uses
 User OAuth/public PKCE, has a 60-second timeout and a 100-tool cap, and requires

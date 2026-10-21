@@ -22,7 +22,7 @@ interface Dependencies {
 }
 const reads = new Set(['api.reading.get', 'api.documentReading.get', 'api.accountReading.get',
   'api.projectReading.get', 'api.navigationCatalog.accounts', 'api.navigationCatalog.projects',
-  'api.documentCatalog.get', 'api.kb.readFiles']);
+  'api.documentCatalog.get', 'api.kb.readFiles', 'api.meetingCatalog.get', 'api.vaultReading.get']);
 const functionARN = /^arn:aws:lambda:[a-z0-9-]+:[0-9]{12}:function:[A-Za-z0-9_-]+(?::[A-Za-z0-9_-]+)?$/;
 
 export function httpOperation(method: string, path: string): string {
