@@ -2,7 +2,7 @@
 
 Date: 2026-10-21
 
-Status: Accepted design; activation source prepared, deployed acceptance required
+Status: Accepted design; main integration of enabled flags requires recorded production acceptance
 
 ## Context
 
@@ -28,10 +28,9 @@ Elevated requests bind the exact approval generation and cannot outlive its
 expiry. Revoked, missing, changed or foreign approvals reject the request rather
 than silently reducing its privileges. Generation zero is read-only.
 
-Inventory eligibility is not executor availability. The staged API reader
-allowlist names only the eight existing bounded reading families, including
-account and project reading. The planned
-private protocol will separately bind verified client identity, exact operation
+Inventory eligibility is not executor availability. The API reader allowlist
+names only the eight existing bounded reading families, including account and
+project reading. The private protocol separately binds verified client identity, exact operation
 and argument bytes, destination, request identity and expiry. Ordinary browser
 authorization, domain ownership and canonical source revalidation remain
 independent requirements.
@@ -134,8 +133,12 @@ fresh login, while stdio keeps its existing first-party authentication.
 The [release runbook](../runbooks/connector-release.md) defines separate
 deployment verification. Native migration, real provider tokens, audience and
 scope checks, current-source reads, expiry/revocation/disable behavior, actual
-KMS/IAM execution and rollback require recorded acceptance before declaring
-production activation complete.
+KMS/IAM execution and rollback require recorded acceptance before main
+integration of any revision that enables the connector flags. Keep that PR
+unmerged until the source/artifact-bound
+[dated acceptance record](../runbooks/connector-activation-2026-10-21.md) is
+complete and independently reviewed. An enabled source flag or separate
+documentation PR that would merge later does not satisfy this ordering.
 No additional external callback or unauthenticated route is approved here.
 
 ## Verification

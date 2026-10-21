@@ -19,10 +19,10 @@ On 2026-10-21, the dedicated authorization request using the old scope namespace
 failed before credential submission or code exchange. Cognito returned
 `invalid_request`: custom scopes requested for resource binding must belong to
 the requested resource. First-party PKCE had succeeded; no connector policy or
-note mutation had begun. This source repair still requires deployment and fresh
-dedicated PKCE, signed audience/scope, IAM/KMS, current-grant and rollback
-acceptance. Preserve the failed run and its pending authorization intent;
-record a separately bound successor run after deployment.
+note mutation had begun. Preserve that failed run and its pending authorization
+intent. The [dated activation record](connector-activation-2026-10-21.md) binds
+the separately deployed repair source, artifacts and successor acceptance.
+Main integration of enabled flags requires that record to be complete and reviewed.
 
 The [2026-10-21 disabled-staging record](connector-staging-2026-10-21.md) records
 the prerequisite four-stack rollout and first-party acceptance with both flags
@@ -124,8 +124,11 @@ main. The disabled-staging record is a prerequisite, not that completion result.
    deletion of the dedicated clients; OAuth-off alone is not credential revocation.
    Locally verified issued access/ID tokens can remain valid until expiry, so keep
    grant and transport denial in place. Restore the accepted configuration,
-   remove synthetic source/session/note fixtures and preserve audit receipts.
-   Record exact deployed versions and provider outcomes before main integration.
+   preserve audit receipts and record the exact fixture disposition. Remove
+   synthetic data only with deletion authorization; otherwise retain the exact
+   fixtures under a reviewed, bounded read-only inventory with fresh matching
+   before/after boundaries. Keep cleanup incomplete and do not infer token
+   revocation. Record deployed versions and provider outcomes before main integration.
 
 Reserve an HTTP MCP maintenance window for both activation and flag-off rollback.
 EdgeAuthStack and GatewayStack cannot switch atomically: edge-first activation
@@ -162,7 +165,7 @@ record boolean claim assertions, response status, byte counts and fixture IDs.
 | ID, unbound, expired and unknown-client tokens | Rejected before tool execution |
 | Direct write-client API and both WebSockets | Denied; no identity-pool or first-party allowlist membership |
 | Private flag rollback | Set it false in EdgeAuthStack, GatewayStack and FrontendStack, preserving OAuth while testing; discovery/challenge and the guide restore first-party scopes, first-party HTTP succeeds and dedicated HTTP is rejected |
-| Restore and cleanup | Restore reviewed flags, verify both client modes again, remove only synthetic source/session/note fixtures and revoke synthetic approvals/tokens; retain bounded audit receipts |
+| Restore and fixture disposition | Restore reviewed flags and verify both client modes. Keep pilot write approvals inactive and bounded audit receipts. Record authorized synthetic deletion or explicitly incomplete retained fixtures with fresh, equal before/after read-only proofs; token revocation requires separate evidence |
 
 When retiring dedicated issuance, set `connectorOAuthEnabled` false and deploy
 AuthStack separately. Disabling OAuth does not itself revoke already issued
@@ -183,6 +186,9 @@ does not guarantee its removal.
 
 The installed stdio adapter continues using `deployment-auth.ts` and its verified,
 deployment/profile-bound cache. It must not be replaced by the legacy `auth.ts`.
-Native host migration and actual cached-session/refresh behavior remain acceptance
-requirements. Never translate an existing first-party cache into dedicated-client
-credentials.
+The dated record distinguishes actual installed-bundle refresh from migration
+of each native host. Never translate an existing first-party cache into
+dedicated-client credentials. Use the canonical https://ttobak.atomai.click
+site when copying HTTP setup: the default CloudFront hostname is not a
+registered OAuth resource, and its origin-derived guide scopes are unsupported.
+This known guide limitation does not establish native-host migration.

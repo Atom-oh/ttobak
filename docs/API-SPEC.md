@@ -29,7 +29,7 @@ in unmatched or encoded URLs. Public-share cleanup failures also omit tokens
 and provider error text. Existing logs and previously exposed links require
 separate operational review; changing the logger does not revoke a public link.
 
-The staged connector API consumer (ADR-053) is a service-IAM Lambda invocation,
+The connector API consumer (ADR-053) is a service-IAM Lambda invocation,
 not an additional HTTP route. Its top-level `ttobak.connector.invoke.v1` frame
 binds the operation, request ID and exact argument bytes to a signed delegation.
 When `CONNECTOR_SIGNING_KEY_ARN` is configured, the consumer loads that exact
@@ -54,13 +54,15 @@ reader. Private key configuration remains empty until the reviewed KMS/IAM and
 OAuth deployment; the Python package must include the pinned ARM64 cryptography
 dependency before that activation.
 
-The staged MCP HTTP private transport signs ten bounded API reads,
+The MCP HTTP private transport signs ten bounded API reads,
 `qa.readonlyAsk` and personal note creation. It derives identity and scopes from the verified request,
 checks atomic current grants before signing and before delivery, and invokes the
 configured API/QA Lambda through service IAM. It forwards no bearer token and
 never retries a rejected private request through the legacy HTTP transport.
 `TTOBAK_CONNECTOR_PRIVATE_BRIDGE` defaults off; deployment permissions and
-provider/consumer acceptance remain separate activation requirements.
+provider/consumer acceptance remain separate activation requirements. The
+[dated connector record](runbooks/connector-activation-2026-10-21.md) binds
+actual deployed source and artifacts without changing these endpoint contracts.
 
 ## Contracts that require care
 

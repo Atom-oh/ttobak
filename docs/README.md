@@ -32,9 +32,10 @@ Markdown for English language and historical/current status.
 | [Pipeline recovery](runbooks/pipeline-failure-recovery.md) | Failure queues, alarm routing and controlled replay | GatewayStack, failure construct and replay tool |
 | [Knowledge-grade news release](runbooks/knowledge-grade-news-release.md) | Canary acceptance, retained-legacy archive, verified prices and rollback | News runtime/recovery, ADR-052 |
 | [HTTP origin proof migration](runbooks/http-origin-secret-migration.md) | Consumer contract and coordinated rotation gates | Go/QA/MCP origin verifiers and deployment configuration |
-| [Connector capabilities](decisions/ADR-053-connector-capability-private-delegation.md) | Staged operation policy and private-delegation delivery gates | Versioned inventory, generated tables and contract tests |
-| [Connector delegation wire](security/connector-delegation-v1.md) | Canonical signed bytes, key pinning and lifetime limits | Local Go/TypeScript/Python verifiers; activation pending |
-| [Connector release](runbooks/connector-release.md) | Staged clients, private IAM/KMS, ARM64 packaging and provider acceptance | Reviewed CDK artifacts and dated deployed evidence |
+| [Connector capabilities](decisions/ADR-053-connector-capability-private-delegation.md) | Operation policy and recorded private-delegation delivery gates | Versioned inventory, generated tables and contract tests |
+| [Connector delegation wire](security/connector-delegation-v1.md) | Canonical signed bytes, key pinning and lifetime limits | Go/TypeScript/Python verifiers and dated connector acceptance |
+| [Connector release](runbooks/connector-release.md) | Dedicated clients, private IAM/KMS, ARM64 packaging and provider acceptance | Reviewed CDK artifacts and dated deployed evidence |
+| [Connector activation acceptance](runbooks/connector-activation-2026-10-21.md) | Dated source/artifact-bound provider, grant, rollback, fixture disposition and guide evidence | Private receipt hashes; native-host limitations remain explicit |
 | [Summary privacy release](runbooks/summary-privacy-release.md) | Reader/writer targets, immutable cutoff, drain and cross-user acceptance | Exact deployed versions, parameters and dated acceptance evidence |
 
 ## Feature workflows

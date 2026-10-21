@@ -106,8 +106,13 @@ custom scopes to be registered on the same resource server as the requested
 `resource` URL. AuthStack preserves that URL resource's identity and adds both
 scopes; the old `ttobak.connector` namespace is retained but is not issued.
 The 2026-10-21 old-namespace authorization failure occurred before credential
-submission. The corrected source still requires fresh provider and consumer
-acceptance after deployment.
+submission. The [dated acceptance record](../docs/runbooks/connector-activation-2026-10-21.md)
+binds the corrected deployed source and provider/consumer results. Main
+integration of enabled flags waits for that record to be complete and reviewed.
+Installed stdio refresh is separately verified with a unique synthetic profile;
+it does not prove migration of existing HTTP connections or every native host.
+Copy HTTP setup from the canonical https://ttobak.atomai.click site; the default
+CloudFront hostname can produce unregistered origin-derived scopes.
 
 Private `ttobak_put_document` requires a personal destination, `docType: "note"`
 and an `idempotencyKey` of 1–128 ASCII letters, digits, underscores or hyphens.
