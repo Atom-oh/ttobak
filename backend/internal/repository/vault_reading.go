@@ -16,12 +16,12 @@ import (
 	"github.com/ttobak/backend/internal/model"
 )
 
-const MaxVaultTranscriptSourceBytes = 64 * 1024 * 1024
+const MaxVaultTranscriptSourceBytes = 1 * 1024 * 1024
 
-var ErrVaultSourceTooLarge = errors.New("vault transcript source exceeds 64 MiB")
+var ErrVaultSourceTooLarge = errors.New("vault transcript source exceeds 1 MiB")
 
-// A source ceiling bounds memory independently from encoded output pages. It
-// fails visibly and never substitutes a storage reference or clipped text.
+// Keep room in the 256 MiB API for markdown, rune pagination and the second
+// freshness read. Oversized sources fail without clipped or placeholder text.
 func (r *DynamoDBRepository) ReadVaultTranscriptField(ctx context.Context, id, field, value string) (string, error) {
 	if field != "transcriptA" && field != "transcriptB" && field != "transcriptSegments" {
 		return "", ErrInvalidTranscriptRef

@@ -35,7 +35,7 @@ func (h *VaultReadingHandler) Get(w http.ResponseWriter, r *http.Request) {
 		status, code, message := http.StatusInternalServerError, "READING_UNAVAILABLE", "Vault reading is unavailable"
 		switch {
 		case errors.Is(err, repository.ErrVaultSourceTooLarge):
-			status, code, message = http.StatusUnprocessableEntity, "SOURCE_TOO_LARGE", "A transcript source exceeds the 64 MiB export limit; no file text was returned"
+			status, code, message = http.StatusUnprocessableEntity, "SOURCE_TOO_LARGE", "A transcript source exceeds the 1 MiB export limit; no file text was returned"
 		case errors.Is(err, service.ErrForbidden):
 			status, code, message = http.StatusForbidden, "FORBIDDEN", "Access denied"
 		case errors.Is(err, service.ErrNotFound):
