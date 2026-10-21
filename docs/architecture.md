@@ -236,7 +236,9 @@ publication state before those writers activate; see
 [ADR-052](decisions/ADR-052-conditional-news-publication.md).
 The staged `news_worker.py` now joins current source checks, HTTPS-only article
 fetches, queued-candidate freshness checks, model accounting, immutable uploads
-and conditional publication. A failed lead is never replaced by a corroborating
+and conditional publication. Its input boundary uses the same exact Unicode
+source IDs as discovery and storage while retaining ASCII run IDs.
+A failed lead is never replaced by a corroborating
 source; failed or deferred corroboration remains visible in the terminal receipt.
 Retrieval retains the original URL query bytes; canonicalization selects identity
 only. Unsupported or duplicate optional sources do not reject a valid lead.

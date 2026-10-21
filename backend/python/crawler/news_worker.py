@@ -14,6 +14,7 @@ import re
 import uuid
 
 from article_fetcher import ArticleBody, FetchRejected, fetch_article
+from news_discovery import valid_source_id
 from news_enrichment import (
     QualityRejected, enrich_article, FINAL_MODEL_ID, MAX_TOKENS,
     QUALITY_GATE_VERSION, PROMPT_VERSION,
@@ -143,8 +144,8 @@ def _candidate(value):
         size = len(json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"))
         source_id, run_id, revision = (value[key] for key in ("sourceId", "runId", "sourceRevision"))
         if (size > 64000 or not all(isinstance(item, str) for item in (source_id, run_id, revision))
-                or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", source_id)
-                or source_id.startswith("__") or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", run_id)
+                or not valid_source_id(source_id)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", run_id)
                 or not re.fullmatch(r"[0-9a-f]{64}", revision)):
             raise ValueError()
         url = value["url"]

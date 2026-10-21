@@ -143,6 +143,33 @@ class TestCandidateWorker(unittest.TestCase):
             self.assertEqual(call.kwargs["IfNoneMatch"], "*")
         self.fetch.assert_called_once_with("https://example.com/a", https_only=True)
 
+    def test_unicode_source_identity_survives_the_full_worker(self):
+        for source_id in ("우리은행", "école-١", "news_source"):
+            with self.subTest(source_id=source_id):
+                config = dict(CONFIG, sourceId=source_id)
+                self.store.current_config.return_value = config
+                candidate = dict(self.candidate, sourceId=source_id,
+                                 sourceRevision=source_revision(config))
+                result = process_candidate(candidate, self.deps)
+                self.assertEqual(result["status"], "PUBLISHED")
+                job = self.store.reserve.call_args.args[0]
+                self.assertEqual(job.source_id, source_id)
+                published = self.store.finish.call_args.kwargs["document"]
+                self.assertEqual(published["sourceId"], source_id)
+                self.assertEqual(published["s3Key"], job.markdown_key)
+
+    def test_malformed_identity_never_reads_config_fetches_or_bills(self):
+        changes = [{"sourceId": value} for value in
+                   (" source", "source ", "source/name", "__tech__", "²",
+                    "a" * 129, "\ud800", "한#글", "")]
+        changes.append({"runId": "한글"})
+        for change in changes:
+            with self.subTest(change=change), self.assertRaisesRegex(StateRejected, "INVALID_CANDIDATE"):
+                process_candidate({**self.candidate, **change}, self.deps)
+        self.assertEqual(self.store.mock_calls, [])
+        self.fetch.assert_not_called()
+        self.assertEqual(self.client.mock_calls, [])
+
     def test_stale_candidate_or_contradictory_fetched_date_never_invokes_model(self):
         for candidate, body in (
             ({**self.candidate, "publishedAt": "2026-01-01"}, valid_body()),
