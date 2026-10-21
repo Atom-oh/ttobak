@@ -36,6 +36,16 @@ def public_resolver(host, port, deadline):
 
 
 class TestBoundedDNS(unittest.TestCase):
+    def test_child_retains_only_required_dynamic_loader_path(self):
+        environment = {"LD_LIBRARY_PATH": "/runtime/lib", "AWS_SECRET_ACCESS_KEY": "fixture",
+                       "PYTHONPATH": "/untrusted", "LD_PRELOAD": "/untrusted.so"}
+        with mock.patch.dict(fetcher.os.environ, environment, clear=True), \
+                mock.patch.object(fetcher.subprocess, "run",
+                                  return_value=mock.Mock(stdout=b"[]")) as run:
+            fetcher._resolve_addresses("example.com", 443, fetcher.time.monotonic() + 5)
+        self.assertEqual(run.call_args.kwargs["env"], {"LD_LIBRARY_PATH": "/runtime/lib"})
+        self.assertEqual(run.call_args.args[0][1:3], ["-I", "-S"])
+
     def test_numeric_resolution_in_isolated_child_returns_socket_addresses(self):
         answers = fetcher._resolve_addresses("93.184.216.34", 443,
                                              fetcher.time.monotonic() + 5)

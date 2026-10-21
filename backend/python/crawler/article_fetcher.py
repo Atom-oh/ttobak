@@ -11,6 +11,7 @@ import http.client
 import io
 import ipaddress
 import json
+import os
 import random
 import re
 import socket
@@ -83,7 +84,11 @@ def _resolve_addresses(host, port, deadline):
         result = subprocess.run(
             [sys.executable, "-I", "-S", "-c", _DNS_SCRIPT, host, str(port)],
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL, env={}, check=True,
+            stderr=subprocess.DEVNULL,
+            # Hosted Python and Lambda may dynamically link libpython outside
+            # the system loader path. Keep that path, not application secrets
+            # or PYTHONPATH/LD_PRELOAD hooks; -I -S also disables Python hooks.
+            env={"LD_LIBRARY_PATH": os.environ.get("LD_LIBRARY_PATH", "")}, check=True,
             timeout=min(DNS_TIMEOUT_SECONDS, remaining))
     except subprocess.TimeoutExpired:
         raise TimeoutError() from None
