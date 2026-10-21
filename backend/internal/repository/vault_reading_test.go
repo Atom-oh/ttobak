@@ -73,3 +73,81 @@ func TestVaultReadingTranscriptValidatesOwnershipAndRejectsOversizeWithoutClippi
 		t.Fatal("invalid key reached S3")
 	}
 }
+
+// Regression: an accepted source must fit the 256 MiB API after markdown,
+// Unicode pagination and the independent freshness read amplify its size.
+func TestVaultReadingTranscriptSourceMemoryBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		text     string
+		tooLarge bool
+	}{
+		{"exact_ascii", strings.Repeat("a", 1*1024*1024), false},
+		{"over_ascii", strings.Repeat("a", 1*1024*1024+1), true},
+		{"exact_unicode", strings.Repeat("😀", 256*1024), false},
+		{"over_unicode", strings.Repeat("😀", 256*1024+1), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := NewDynamoDBRepository(nil, "vault")
+			got, err := repo.ReadVaultTranscriptField(context.Background(), "m", "transcriptA", tc.text)
+			if tc.tooLarge {
+				if !errors.Is(err, ErrVaultSourceTooLarge) || got != "" {
+					t.Fatalf("oversized source returned %d bytes, err=%v", len(got), err)
+				}
+			} else if err != nil || got != tc.text {
+				t.Fatalf("boundary source was rejected or clipped: bytes=%d err=%v", len(got), err)
+			}
+		})
+	}
+}
+
+type vaultSourceReadCounter struct {
+	reader *strings.Reader
+	read   int
+	closed bool
+}
+
+func (r *vaultSourceReadCounter) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	r.read += n
+	return n, err
+}
+
+func (r *vaultSourceReadCounter) Close() error {
+	r.closed = true
+	return nil
+}
+
+func TestVaultReadingTranscriptRejectsOversizeBeforeUnboundedS3Read(t *testing.T) {
+	for _, advertised := range []bool{true, false} {
+		name := "unknown_length"
+		if advertised {
+			name = "advertised_length"
+		}
+		t.Run(name, func(t *testing.T) {
+			body := &vaultSourceReadCounter{reader: strings.NewReader(strings.Repeat("a", 2*1024*1024))}
+			client := s3.New(s3.Options{Region: "ap-northeast-2", Credentials: aws.AnonymousCredentials{}, RetryMaxAttempts: 1, HTTPClient: meetingListHTTPClientFunc(func(req *http.Request) (*http.Response, error) {
+				if !strings.HasSuffix(req.URL.Path, "/transcripts/m/transcriptA.txt") {
+					t.Fatal("unexpected source path")
+				}
+				response := &http.Response{StatusCode: 200, Header: http.Header{}, Body: body, ContentLength: -1}
+				if advertised {
+					response.Header.Set("Content-Length", "2097152")
+					response.ContentLength = 9 * 1024 * 1024
+				}
+				return response, nil
+			})})
+			repo := NewDynamoDBRepositoryWithS3(nil, "vault", client, "fixture-bucket")
+			got, err := repo.ReadVaultTranscriptField(context.Background(), "m", "transcriptA", "s3://fixture-bucket/transcripts/m/transcriptA.txt")
+			if !errors.Is(err, ErrVaultSourceTooLarge) || got != "" {
+				t.Fatalf("oversized source returned %d bytes, err=%v", len(got), err)
+			}
+			if !body.closed || body.read > 1*1024*1024+1 {
+				t.Fatalf("unbounded or unclosed source: consumed=%d closed=%v", body.read, body.closed)
+			}
+			if advertised && body.read != 0 {
+				t.Fatalf("advertised oversize was read: %d bytes", body.read)
+			}
+		})
+	}
+}
