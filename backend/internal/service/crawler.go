@@ -110,9 +110,8 @@ func updateSourceAliases(ctx context.Context, repo crawlerRepo, sourceID, userID
 		if err != nil {
 			return err
 		}
-		if strSliceEqualUnordered(merged, source.Aliases) {
-			return nil // already contains every new alias
-		}
+		// Even an apparent no-op must validate the snapshot: GetSource can
+		// return an older replica after a just-committed addition or removal.
 		err = repo.UpdateSourcePartial(ctx, sourceID, source, repository.SourcePartialFields{
 			Aliases: &merged, RequireOwnerID: requiredOwner,
 		})
@@ -126,22 +125,6 @@ func updateSourceAliases(ctx context.Context, repo crawlerRepo, sourceID, userID
 			return fmt.Errorf("failed to merge aliases: aliases field changed concurrently %d times, giving up", maxAliasMergeAttempts)
 		}
 	}
-}
-
-func strSliceEqualUnordered(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	set := make(map[string]struct{}, len(b))
-	for _, v := range b {
-		set[v] = struct{}{}
-	}
-	for _, v := range a {
-		if _, ok := set[v]; !ok {
-			return false
-		}
-	}
-	return true
 }
 
 // crawlerRepo defines the repository methods used by CrawlerService and InsightsService.
