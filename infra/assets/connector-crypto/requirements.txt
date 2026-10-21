@@ -1,0 +1,4 @@
+# CPython 3.12 / Linux aarch64 Lambda wheels; all transitive dependencies pinned.
+cryptography==50.0.2 --hash=sha256:79def8d059362e7831389ed3be0ecdf58a89386e1271e35dd9f5af84e81bffd0
+cffi==2.1.1 --hash=sha256:68e62fe11f30d5ca8289242866f0a5291402d8529ca2178ab8afc5c9694ae890
+pycparser==3.11 --hash=sha256:51d5a8ba2be0bbe440b99d2112604c95bbbc3c2748a64260186c541e1729cd80

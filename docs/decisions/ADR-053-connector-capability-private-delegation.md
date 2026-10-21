@@ -119,9 +119,12 @@ reconcile through the receipt. The bounded response confirms creation only,
 and grants are checked again before its delivery. No account, file or sharing
 mutation is exposed by this executor.
 
-Subsequent reviewed stages must supply private signing infrastructure.
-Infrastructure must
-preserve existing pool/client identities and keep issuance disabled through
+The staged infrastructure now supplies two dedicated public clients, a retained
+RSA signing key, metadata-only transaction grants, private invocation to the API
+live alias and QA, and a hash-pinned ARM64 cryptography layer. Existing pool/client
+identities and first-party/WebSocket allowlists remain unchanged. Issuance and the
+private HTTP transport stay disabled in the application configuration.
+The [release runbook](../runbooks/connector-release.md) defines separate
 deployment verification. Native migration, real provider tokens, audience and
 scope checks, current-source reads, expiry/revocation/disable behavior, actual
 KMS/IAM execution and rollback require recorded acceptance before activation.

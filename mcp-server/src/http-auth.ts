@@ -2,12 +2,14 @@ import { CognitoJwtVerifier } from 'aws-jwt-verify';
 import { SimpleJwksCache } from 'aws-jwt-verify/jwk';
 import { SimpleFetcher } from 'aws-jwt-verify/https';
 import type { ToolAuth } from './index.js';
+import { connectorClientIds } from './connector-clients.js';
 
 export interface HttpConfig {
   publicUrl: string;
   apiUrl: string;
   cognitoDomain: string;
   clientId: string;
+  connectorClientIds?: readonly string[];
   userPoolId: string;
   scopes: string[];
   host: string;
@@ -54,6 +56,8 @@ export function httpConfig(env: NodeJS.ProcessEnv = process.env): HttpConfig {
   if (!scopes.includes('openid') || scopes.some((scope) => !/^[\x21\x23-\x5b\x5d-\x7e]+$/.test(scope))) {
     throw new Error('TTOBAK_MCP_SCOPES must include openid and valid OAuth scope names');
   }
+  const connectors = connectorClientIds(env);
+  if (connectors && !scopes.includes('ttobak.connector/read')) scopes.push('ttobak.connector/read');
   const host = env.TTOBAK_HTTP_HOST ?? '127.0.0.1';
   if (!['localhost', '127.0.0.1', '::1'].includes(host) && publicUrl.protocol !== 'https:') {
     throw new Error('Non-loopback listening requires an HTTPS public URL behind the trusted ingress');
@@ -68,7 +72,7 @@ export function httpConfig(env: NodeJS.ProcessEnv = process.env): HttpConfig {
     })];
   return {
     publicUrl: publicUrl.href, apiUrl: apiUrl.origin, cognitoDomain: domain.origin,
-    clientId, userPoolId, scopes: [...new Set(scopes)], host, port,
+    clientId, connectorClientIds: connectors, userPoolId, scopes: [...new Set(scopes)], host, port,
     allowedHosts, allowedOrigins, deadlineMs,
   };
 }
@@ -77,7 +81,7 @@ export class InsufficientScopeError extends Error {}
 
 export function createTokenVerifier(config: HttpConfig) {
   return CognitoJwtVerifier.create({
-    userPoolId: config.userPoolId, clientId: config.clientId, tokenUse: 'access',
+    userPoolId: config.userPoolId, clientId: config.connectorClientIds ? [...config.connectorClientIds] : config.clientId, tokenUse: 'access',
     graceSeconds: 0,
     customJwtCheck: ({ header, payload }) => {
       if (header.alg !== 'RS256' || payload.aud !== config.publicUrl ||
@@ -118,7 +122,7 @@ export function resourceMetadata(config: HttpConfig) {
     resource: config.publicUrl,
     resource_name: 'TTOBAK meetings and documents',
     authorization_servers: [CognitoJwtVerifier.parseUserPoolId(config.userPoolId).issuer],
-    scopes_supported: config.scopes,
+    scopes_supported: config.connectorClientIds ? [...new Set([...config.scopes, 'ttobak.connector/write'])] : config.scopes,
     bearer_methods_supported: ['header'],
   };
 }

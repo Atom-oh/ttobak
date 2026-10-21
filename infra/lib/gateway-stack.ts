@@ -7,6 +7,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as kms from 'aws-cdk-lib/aws-kms';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as eventsTargets from 'aws-cdk-lib/aws-events-targets';
 import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
@@ -20,6 +21,7 @@ import { DocumentExtraction } from './document-extraction';
 import { WebSocketOriginVerification, WEBSOCKET_ORIGIN_HEADER, WEBSOCKET_STAGE } from './websocket-origin';
 import { PipelineFailures } from './pipeline-failures';
 import { HttpOrigin } from './http-origin';
+import { connectorCryptoLayer } from './connector-crypto';
 
 export const RESEARCH_SFN_NAME = 'ttobak-research-workflow';
 
@@ -38,6 +40,10 @@ export interface GatewayStackProps extends cdk.StackProps {
   userPoolClient: cognito.IUserPoolClient;
   kbBucket?: s3.IBucket;
   spaClient?: cognito.IUserPoolClient;
+  readConnectorClient?: cognito.IUserPoolClient;
+  writeConnectorClient?: cognito.IUserPoolClient;
+  /** Activate only after native OAuth and deployed consumers pass acceptance. */
+  connectorPrivateBridgeEnabled?: boolean;
   kmsKeyId?: string;
   knowledgeBaseId?: string;
   dataSourceId?: string;
@@ -666,6 +672,74 @@ export class GatewayStack extends cdk.Stack {
         },
       });
       this.httpOrigin.addReader('Mcp', this.mcpFunction, this.mcpFunction.role!);
+      if (props.readConnectorClient || props.writeConnectorClient || props.connectorPrivateBridgeEnabled) {
+        if (!props.readConnectorClient || !props.writeConnectorClient) {
+          throw new Error('Both dedicated connector clients are required');
+        }
+        const signingKey = new kms.Key(this, 'ConnectorDelegationKey', {
+          description: 'TTOBAK short-lived connector delegation signatures',
+          keySpec: kms.KeySpec.RSA_2048, keyUsage: kms.KeyUsage.SIGN_VERIFY,
+          removalPolicy: cdk.RemovalPolicy.RETAIN,
+          policy: new iam.PolicyDocument({ statements: [new iam.PolicyStatement({
+            actions: ['kms:*'], resources: ['*'],
+            principals: [new iam.AccountRootPrincipal()],
+            conditions: { StringEquals: { 'kms:CallerAccount': this.account } },
+          })] }),
+        });
+        // Keep this policy in GatewayStack: adding to the imported AiStack roles
+        // would introduce a cross-stack dependency cycle through the signing key.
+        const readers = new iam.Policy(this, 'ConnectorPublicKeyReaders', {
+          roles: [props.apiRole, props.qaRole],
+          statements: [new iam.PolicyStatement({
+            actions: ['kms:GetPublicKey'], resources: [signingKey.keyArn],
+          })],
+        });
+        const consumerEnv = {
+          CONNECTOR_READ_CLIENT_ID: props.readConnectorClient.userPoolClientId,
+          CONNECTOR_WRITE_CLIENT_ID: props.writeConnectorClient.userPoolClientId,
+          CONNECTOR_RESOURCE_AUDIENCE: mcpResourceAudience,
+          CONNECTOR_SIGNING_KEY_ARN: signingKey.keyArn,
+        };
+        for (const fn of [this.apiFunction, this.qaFunction]) {
+          for (const [name, value] of Object.entries(consumerEnv)) fn.addEnvironment(name, value);
+          fn.node.addDependency(readers);
+        }
+        this.qaFunction.addEnvironment('COGNITO_USER_POOL_ID', props.userPool.userPoolId);
+        this.qaFunction.addEnvironment('CONNECTOR_WEB_CLIENT_IDS', firstPartyClientIds);
+        this.qaFunction.addLayers(connectorCryptoLayer(this));
+        const privateEnv = {
+          TTOBAK_CONNECTOR_PRIVATE_BRIDGE: String(props.connectorPrivateBridgeEnabled === true),
+          CONNECTOR_READ_CLIENT_ID: props.readConnectorClient.userPoolClientId,
+          CONNECTOR_WRITE_CLIENT_ID: props.writeConnectorClient.userPoolClientId,
+          CONNECTOR_SIGNING_KEY_ARN: signingKey.keyArn,
+          CONNECTOR_API_FUNCTION_ARN: apiAlias.functionArn,
+          CONNECTOR_QA_FUNCTION_ARN: this.qaFunction.functionArn,
+          TABLE_NAME: props.table.tableName,
+        };
+        for (const [name, value] of Object.entries(privateEnv)) this.mcpFunction.addEnvironment(name, value);
+        this.mcpFunction.addToRolePolicy(new iam.PolicyStatement({
+          actions: ['kms:Sign'], resources: [signingKey.keyArn],
+          conditions: { StringEquals: { 'kms:SigningAlgorithm': 'RSASSA_PSS_SHA_256' } },
+        }));
+        this.mcpFunction.addToRolePolicy(new iam.PolicyStatement({
+          actions: ['lambda:InvokeFunction'], resources: [apiAlias.functionArn, this.qaFunction.functionArn],
+        }));
+        this.mcpFunction.addToRolePolicy(new iam.PolicyStatement({
+          actions: ['dynamodb:GetItem'], resources: [props.table.tableArn],
+          conditions: {
+            'ForAnyValue:StringEquals': { 'dynamodb:EnclosingOperation': ['TransactGetItems'] },
+            'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['CONNECTOR_CLIENT#*', 'USER#*'] },
+            'ForAllValues:StringEquals': { 'dynamodb:Attributes': [
+              'PK', 'SK', 'userId', 'clientId', 'enabled', 'maximum', 'audience', 'issuer',
+              'generation', 'capabilities', 'expiresAt', 'revoked', 'blocked',
+            ] },
+            Null: { 'dynamodb:Attributes': 'false', 'dynamodb:LeadingKeys': 'false' },
+          },
+        }));
+        new cdk.CfnOutput(this, 'ConnectorSigningKeyArn', { value: signingKey.keyArn });
+      }
+    } else if (props.readConnectorClient || props.writeConnectorClient || props.connectorPrivateBridgeEnabled) {
+      throw new Error('Connector clients require the registered HTTP MCP audience');
     }
 
     // JWT Authorizer for Cognito

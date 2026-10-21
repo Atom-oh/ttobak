@@ -18,6 +18,9 @@ const knowledgeIndexingMode: 'manual-only' | 'all' = 'all';
 const knowledgeIndexScheduleEnabled = true;
 // Separate activation change only after deployed QA jobs pass acceptance.
 const qaAsyncJobsEnabled = true;
+// Issuance and transport remain off until deployed consumer and native acceptance.
+const connectorOAuthEnabled = false;
+const connectorPrivateBridgeEnabled = false;
 
 // Environment configuration (ap-northeast-2 recommended for Korean users)
 const env = {
@@ -52,6 +55,7 @@ const authStack = new AuthStack(app, 'TtobakAuthStack', {
   terminationProtection: true,
   description: 'TTOBAK AI Meeting Assistant - Authentication (Cognito)',
   table: storageStack.table,
+  connectorOAuthEnabled,
 });
 authStack.addDependency(storageStack);
 
@@ -96,6 +100,9 @@ const edgeAuthStack = new EdgeAuthStack(app, 'TtobakEdgeAuthStack', {
   userPoolId: authStack.userPool.userPoolId,
   userPoolClientId: authStack.spaClient.userPoolClientId,
   cognitoRegion: env.region as string,
+  readConnectorClientId: authStack.readConnectorClient.userPoolClientId,
+  writeConnectorClientId: authStack.writeConnectorClient.userPoolClientId,
+  connectorAudience: app.node.tryGetContext('ttobak:mcpResourceAudience'),
 });
 edgeAuthStack.addDependency(authStack);
 
@@ -109,6 +116,9 @@ const gatewayStack = new GatewayStack(app, 'TtobakGatewayStack', {
   userPool: authStack.userPool,
   userPoolClient: authStack.userPoolClient,
   spaClient: authStack.spaClient,
+  readConnectorClient: authStack.readConnectorClient,
+  writeConnectorClient: authStack.writeConnectorClient,
+  connectorPrivateBridgeEnabled,
   apiRole: aiStack.apiRole,
   transcribeRole: aiStack.transcribeRole,
   summarizeRole: aiStack.summarizeRole,

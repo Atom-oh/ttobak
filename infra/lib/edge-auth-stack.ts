@@ -7,6 +7,9 @@ export interface EdgeAuthStackProps extends cdk.StackProps {
   userPoolId: string;
   userPoolClientId: string;
   cognitoRegion: string;
+  readConnectorClientId?: string;
+  writeConnectorClientId?: string;
+  connectorAudience?: string;
 }
 
 export class EdgeAuthStack extends cdk.Stack {
@@ -14,6 +17,10 @@ export class EdgeAuthStack extends cdk.Stack {
 
   constructor(scope: Construct, id: string, props: EdgeAuthStackProps) {
     super(scope, id, props);
+    if ([props.readConnectorClientId, props.writeConnectorClientId, props.connectorAudience].some(Boolean) &&
+        ![props.readConnectorClientId, props.writeConnectorClientId, props.connectorAudience].every(Boolean)) {
+      throw new Error('Both connector clients and their exact audience are required');
+    }
 
     // Lambda@Edge function for JWT validation
     // Note: Lambda@Edge cannot use environment variables, so we embed the config in code
@@ -29,6 +36,9 @@ const COGNITO_CLIENT_ID = '${props.userPoolClientId}';
 const COGNITO_REGION = '${props.cognitoRegion}';
 const COGNITO_ISSUER = 'https://cognito-idp.' + COGNITO_REGION + '.amazonaws.com/' + COGNITO_USER_POOL_ID;
 const JWKS_URL = COGNITO_ISSUER + '/.well-known/jwks.json';
+const CONNECTOR_READ_CLIENT_ID = '${props.readConnectorClientId ?? ''}';
+const CONNECTOR_WRITE_CLIENT_ID = '${props.writeConnectorClientId ?? ''}';
+const CONNECTOR_AUDIENCE = '${props.connectorAudience ?? ''}';
 
 // Cache for JWKS
 let jwksCache = null;
@@ -121,7 +131,7 @@ function verifySignature(token, pem) {
 }
 
 // Validate JWT
-async function validateToken(token) {
+async function validateToken(token, uri) {
   try {
     const parts = token.split('.');
     if (parts.length !== 3) return false;
@@ -131,7 +141,7 @@ async function validateToken(token) {
 
     // Check expiration
     const now = Math.floor(Date.now() / 1000);
-    if (payload.exp && payload.exp < now) return false;
+    if (header.alg !== 'RS256' || !Number.isSafeInteger(payload.exp) || payload.exp <= now) return false;
 
     // Check issuer
     if (payload.iss !== COGNITO_ISSUER) return false;
@@ -143,7 +153,20 @@ async function validateToken(token) {
     if (payload.token_use === 'id' && payload.aud !== COGNITO_CLIENT_ID) return false;
 
     // For access tokens, check client_id
-    if (payload.token_use === 'access' && payload.client_id !== COGNITO_CLIENT_ID) return false;
+    if (payload.token_use === 'access' && payload.client_id !== COGNITO_CLIENT_ID) {
+      const read = CONNECTOR_READ_CLIENT_ID && payload.client_id === CONNECTOR_READ_CLIENT_ID;
+      const write = CONNECTOR_WRITE_CLIENT_ID && payload.client_id === CONNECTOR_WRITE_CLIENT_ID;
+      if ((!read && !write) || !CONNECTOR_AUDIENCE || payload.aud !== CONNECTOR_AUDIENCE ||
+          typeof payload.scope !== 'string' || typeof payload.sub !== 'string' || !payload.sub ||
+          typeof payload.username !== 'string' || !payload.username) return false;
+      const scopes = payload.scope.split(' ');
+      if (!scopes.includes('ttobak.connector/read') ||
+          scopes.some(s => s.startsWith('ttobak.connector/') &&
+            s !== 'ttobak.connector/read' && !(write && s === 'ttobak.connector/write'))) return false;
+      // Only the dedicated reader may reach the separately constrained HTTP
+      // API. The writer always enters the signed, current-grant MCP bridge.
+      if (write && uri !== '/api/mcp') return false;
+    }
 
     // Fetch JWKS and verify signature
     const jwks = await fetchJwks();
@@ -191,15 +214,18 @@ exports.handler = async (event) => {
 
   // Extract Authorization header
   const authHeader = request.headers['authorization'];
-  if (!authHeader || !authHeader[0]) {
+  if (!authHeader || authHeader.length !== 1 || !authHeader[0]) {
     return unauthorized(request, 'Missing authorization header', false);
   }
 
   const authValue = authHeader[0].value;
+  if (typeof authValue !== 'string' || authValue.length > 16391) {
+    return unauthorized(request, 'Invalid or expired token', true);
+  }
   const token = authValue.startsWith('Bearer ') ? authValue.slice(7) : authValue;
 
   // Validate token
-  const isValid = await validateToken(token);
+  const isValid = await validateToken(token, request.uri);
 
   if (!isValid) {
     return unauthorized(request, 'Invalid or expired token', true);

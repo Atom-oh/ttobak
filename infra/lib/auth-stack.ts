@@ -10,6 +10,8 @@ import { Construct } from 'constructs';
 export interface AuthStackProps extends cdk.StackProps {
   cloudFrontDomain?: string;
   table?: dynamodb.ITable;
+  /** Enable only for the reviewed provider/consumer acceptance and rollout. */
+  connectorOAuthEnabled?: boolean;
 }
 
 export class AuthStack extends cdk.Stack {
@@ -17,6 +19,8 @@ export class AuthStack extends cdk.Stack {
   public readonly userPoolClient: cognito.UserPoolClient;
   public readonly spaClient: cognito.UserPoolClient;
   public readonly companionClient: cognito.UserPoolClient;
+  public readonly readConnectorClient: cognito.UserPoolClient;
+  public readonly writeConnectorClient: cognito.UserPoolClient;
   public readonly userPoolDomain: cognito.UserPoolDomain;
   public readonly identityPoolId: string;
 
@@ -287,10 +291,54 @@ export class AuthStack extends cdk.Stack {
       refreshTokenValidity: cdk.Duration.days(1),
     });
 
+    const connectorAudience = this.node.tryGetContext('ttobak:mcpResourceAudience');
+    if (props?.connectorOAuthEnabled && !connectorAudience) {
+      throw new Error('Connector issuance requires the registered MCP resource audience');
+    }
+    const connectorRead = new cognito.ResourceServerScope({
+      scopeName: 'read', scopeDescription: 'Read currently authorized sources',
+    });
+    const connectorWrite = new cognito.ResourceServerScope({
+      scopeName: 'write', scopeDescription: 'Create personal notes with current user approval',
+    });
+    const connectorResource = this.userPool.addResourceServer('ConnectorResourceServer', {
+      identifier: 'ttobak.connector', scopes: [connectorRead, connectorWrite],
+    });
+    const connectorClient = (id: string, name: string, write: boolean) => this.userPool.addClient(id, {
+      userPoolClientName: name,
+      generateSecret: false,
+      disableOAuth: props?.connectorOAuthEnabled !== true,
+      ...(props?.connectorOAuthEnabled === true ? {
+        oAuth: {
+          flows: { authorizationCodeGrant: true },
+          scopes: [
+            cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL, cognito.OAuthScope.PROFILE,
+            cognito.OAuthScope.resourceServer(connectorResource, connectorRead),
+            ...(write ? [cognito.OAuthScope.resourceServer(connectorResource, connectorWrite)] : []),
+          ],
+          // Existing approved MCP redirects; no new external callback is introduced.
+          callbackUrls: mcpCallbacks,
+          logoutUrls: ['http://localhost:9876'],
+        },
+      } : {}),
+      authFlows: { userPassword: false, userSrp: false, adminUserPassword: false, custom: false },
+      supportedIdentityProviders: [cognito.UserPoolClientIdentityProvider.COGNITO],
+      enableTokenRevocation: true,
+      preventUserExistenceErrors: true,
+      accessTokenValidity: cdk.Duration.minutes(15),
+      idTokenValidity: cdk.Duration.minutes(5),
+      refreshTokenValidity: cdk.Duration.days(7),
+    });
+    this.readConnectorClient = connectorClient('ReadConnectorClient', 'ttobak-read-connector', false);
+    this.writeConnectorClient = connectorClient('WriteConnectorClient', 'ttobak-write-connector', true);
+    new cdk.CfnOutput(this, 'ReadConnectorClientId', { value: this.readConnectorClient.userPoolClientId });
+    new cdk.CfnOutput(this, 'WriteConnectorClientId', { value: this.writeConnectorClient.userPoolClientId });
+
     // Managed login requires a branding record for every client that signs in
     // through the hosted pages (the MCP OAuth login uses the SPA client).
     // Cognito-provided values keep the default look; no custom assets.
-    [['AppClient', this.userPoolClient], ['SpaClient', this.spaClient], ['CompanionClient', this.companionClient]].forEach(([name, client]) => {
+    [['AppClient', this.userPoolClient], ['SpaClient', this.spaClient], ['CompanionClient', this.companionClient],
+      ['ReadConnectorClient', this.readConnectorClient], ['WriteConnectorClient', this.writeConnectorClient]].forEach(([name, client]) => {
       const branding = new cognito.CfnManagedLoginBranding(this, `ManagedLoginBranding${name as string}`, {
         userPoolId: this.userPool.userPoolId,
         clientId: (client as cognito.IUserPoolClient).userPoolClientId,
