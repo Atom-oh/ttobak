@@ -1,3 +1,4 @@
+import { accountSectionOptions, accountSectionResult } from './section-reading.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { fileURLToPath } from 'node:url';
@@ -116,50 +117,68 @@ const registry: { tools: Tool[] } = {
     },
     {
       name: 'ttobak_get_account',
-      description: 'Get account detail: name, aliases, domains, industry, members and roles.',
+      description: 'Read complete account detail in bounded JSON groups (metadata then members). Follow page.nextCursor with the same selection. Concatenate dataJson fragments with the same phase/revision until fragment.complete, then parse that JSON group. page.complete ends the whole selection. Restart stale cursors. Use section=metadata or members to narrow the read.',
       inputSchema: {
         type: 'object' as const,
-        properties: { accountId: { type: 'string', description: 'Account ID' } },
+        properties: {
+          accountId: { type: 'string', description: 'Account ID' },
+          section: { type: 'string', enum: ['detail', 'metadata', 'members'], default: 'detail' },
+          pageSize: { type: 'integer', minimum: 1, maximum: 8000, default: 4000 },
+          cursor: { type: 'string', maxLength: 2048 },
+        },
         required: ['accountId'],
+        additionalProperties: false,
       },
     },
     {
       name: 'ttobak_get_account_meetings',
-      description: 'List meetings shared into an account (meetingId, title, owner, date).',
+      description: 'Read meetings currently published to an account as bounded JSON-array groups. Follow page.nextCursor until page.complete. Concatenate dataJson within each phase/revision until fragment.complete before parsing; then append that group. Every page rechecks membership and current source publication.',
       inputSchema: {
         type: 'object' as const,
-        properties: { accountId: { type: 'string', description: 'Account ID' } },
+        properties: {
+          accountId: { type: 'string', description: 'Account ID' },
+          pageSize: { type: 'integer', minimum: 1, maximum: 8000, default: 4000 },
+          cursor: { type: 'string', maxLength: 2048 },
+        },
         required: ['accountId'],
+        additionalProperties: false,
       },
     },
     {
       name: 'ttobak_get_account_insights',
       description:
-        'Get typed field insights for an account (raw material for SIFT / 2by2). Filter by period and insight types (trend, need, competitive, risk, opportunity, tech, stakeholder, action).',
+        'Read complete typed account insights in bounded JSON-array groups. Filter by period and insight types. Follow page.nextCursor until page.complete, including empty groups. Concatenate dataJson for the same phase/revision until fragment.complete before parsing. Raw meeting Evidence is never exposed.',
       inputSchema: {
         type: 'object' as const,
         properties: {
           accountId: { type: 'string', description: 'Account ID' },
           from: { type: 'string', description: 'Optional start (RFC3339, e.g. 2026-05-01T00:00:00Z)' },
           to: { type: 'string', description: 'Optional end (RFC3339)' },
-          types: { type: 'array', items: { type: 'string' }, description: 'Optional insight types to include' },
+          types: { type: 'array', maxItems: 8, items: { type: 'string', enum: ['trend', 'need', 'competitive', 'risk', 'opportunity', 'tech', 'stakeholder', 'action'] }, description: 'Optional insight types to include' },
+          pageSize: { type: 'integer', minimum: 1, maximum: 8000, default: 4000 },
+          cursor: { type: 'string', maxLength: 2048 },
         },
         required: ['accountId'],
+        additionalProperties: false,
       },
     },
     {
       name: 'ttobak_get_account_brief',
       description:
-        'Get bundled raw material for an account in one call: meta + insights grouped by type + shared meetings. Best for preparing SFDC/SIFT/2by2/Player Card on the personal side.',
+        'Read the complete account brief through metadata, members, meetings and insights phases. Follow the same section/filters with page.nextCursor until page.complete. Concatenate dataJson within each phase/revision until fragment.complete, then parse that object/array group. Group insight rows by type when preparing SIFT/2by2. No phase is silently omitted.',
       inputSchema: {
         type: 'object' as const,
         properties: {
           accountId: { type: 'string', description: 'Account ID' },
           from: { type: 'string', description: 'Optional start (RFC3339)' },
           to: { type: 'string', description: 'Optional end (RFC3339)' },
-          types: { type: 'array', items: { type: 'string' }, description: 'Optional insight types to include' },
+          types: { type: 'array', maxItems: 8, items: { type: 'string', enum: ['trend', 'need', 'competitive', 'risk', 'opportunity', 'tech', 'stakeholder', 'action'] }, description: 'Optional insight types to include' },
+          section: { type: 'string', enum: ['brief', 'metadata', 'members', 'meetings', 'insights'], default: 'brief' },
+          pageSize: { type: 'integer', minimum: 1, maximum: 8000, default: 4000 },
+          cursor: { type: 'string', maxLength: 2048 },
         },
         required: ['accountId'],
+        additionalProperties: false,
       },
     },
     {
@@ -627,41 +646,23 @@ async function callTool(request: CallToolRequest, options: ServerOptions) {
       }
 
       case 'ttobak_get_account': {
-        const { accountId } = args as { accountId: string };
-        if (!accountId) return error('accountId is required');
-        const result = await api.getAccount(accountId);
-        return text(JSON.stringify(result, null, 2));
+        const options = accountSectionOptions(args, 'detail');
+        return accountSectionResult(await api.readAccountSection(options), options);
       }
 
       case 'ttobak_get_account_meetings': {
-        const { accountId } = args as { accountId: string };
-        if (!accountId) return error('accountId is required');
-        const result = await api.getAccountMeetings(accountId);
-        return text(JSON.stringify(result, null, 2));
+        const options = accountSectionOptions(args, 'meetings');
+        return accountSectionResult(await api.readAccountSection(options), options);
       }
 
       case 'ttobak_get_account_insights': {
-        const { accountId, from, to, types } = args as {
-          accountId: string;
-          from?: string;
-          to?: string;
-          types?: string[];
-        };
-        if (!accountId) return error('accountId is required');
-        const result = await api.getAccountInsights(accountId, { from, to, types });
-        return text(JSON.stringify(result, null, 2));
+        const options = accountSectionOptions(args, 'insights');
+        return accountSectionResult(await api.readAccountSection(options), options);
       }
 
       case 'ttobak_get_account_brief': {
-        const { accountId, from, to, types } = args as {
-          accountId: string;
-          from?: string;
-          to?: string;
-          types?: string[];
-        };
-        if (!accountId) return error('accountId is required');
-        const result = await api.getAccountBrief(accountId, { from, to, types });
-        return text(JSON.stringify(result, null, 2));
+        const options = accountSectionOptions(args, 'brief');
+        return accountSectionResult(await api.readAccountSection(options), options);
       }
 
       case 'ttobak_create_project': {

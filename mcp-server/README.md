@@ -344,6 +344,13 @@ export, projects and links.
 - Project lists include owner, direct-member and linked-account membership paths.
   Link/mutation permissions remain server-enforced. Any existing account member
   can add another member to an assignable non-owner role (ADR-034).
+- Account detail, meeting, insight and brief tools use
+  `/api/accounts/{accountId}/reading`. Detail traverses metadata and members;
+  brief also traverses meetings and insights. Follow the opaque page cursor
+  through every phase. Concatenate `dataJson` within a single phase/revision
+  until `fragment.complete`, then parse that JSON group; `page.complete` ends the
+  whole selection. Source windows are bounded and individually revision-pinned,
+  while the overall collection remains live. Deploy the API producer first.
 - HTTP failures are tool errors, not success with error-shaped JSON. Streaming
   decoding must preserve UTF-8 across byte boundaries.
 

@@ -1,3 +1,4 @@
+import type { AccountSectionOptions } from './section-reading.js';
 import { createReadStream, readFileSync, statSync, realpathSync } from 'node:fs';
 import { request as httpsRequest } from 'node:https';
 import { basename, extname, isAbsolute, sep } from 'node:path';
@@ -260,6 +261,16 @@ export class TtobakApi {
 
   async getAccount(accountId: string) {
     return this.get(`/api/accounts/${accountId}`);
+  }
+
+  async readAccountSection(options: AccountSectionOptions) {
+    const query = new URLSearchParams({ section: options.section, pageSize: String(options.pageSize) });
+    if (options.cursor !== undefined) query.set('cursor', options.cursor);
+    if (options.from !== undefined) query.set('from', options.from);
+    if (options.to !== undefined) query.set('to', options.to);
+    if (options.types?.length) query.set('types', options.types.join(','));
+    return this.request('GET', `/api/accounts/${identifier(options.accountId, 'accountId')}/reading?${query}`,
+      undefined, MAX_READING_BYTES);
   }
 
   async getAccountMeetings(accountId: string) {

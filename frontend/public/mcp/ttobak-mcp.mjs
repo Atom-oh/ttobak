@@ -7195,6 +7195,145 @@ var require_dist = __commonJS({
   }
 });
 
+// src/reading.ts
+var MAX_READING_BYTES = 32e3;
+function readingOptions(args, kind) {
+  const allowed = ["meetingId", "pageSize", "cursor", ...kind === "meeting" ? ["section"] : ["source", "startTime", "endTime"]];
+  if (Object.keys(args).some((key) => !allowed.includes(key))) throw new Error("INVALID_ARGUMENT: unknown reading option");
+  if (typeof args.meetingId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(args.meetingId)) {
+    throw new Error("INVALID_ARGUMENT: meetingId must be an ID of at most 128 characters");
+  }
+  const pageSize = args.pageSize === void 0 ? 4e3 : args.pageSize;
+  if (typeof pageSize !== "number" || !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 8e3) {
+    throw new Error("INVALID_ARGUMENT: pageSize must be an integer from 1 to 8000");
+  }
+  if (args.cursor !== void 0 && (typeof args.cursor !== "string" || !args.cursor.length || args.cursor.length > 2048)) {
+    throw new Error("INVALID_CURSOR: expected a nonempty cursor of at most 2048 characters");
+  }
+  const common = { meetingId: args.meetingId, pageSize, cursor: args.cursor };
+  if (kind === "meeting") {
+    const section = args.section === void 0 ? "notes" : args.section;
+    if (section !== "notes" && section !== "summary" && section !== "actionItems") {
+      throw new Error("INVALID_ARGUMENT: section must be notes, summary or actionItems");
+    }
+    return { ...common, kind, section };
+  }
+  const source = args.source === void 0 ? "selected" : args.source;
+  if (source !== "selected" && source !== "A" && source !== "B") throw new Error("INVALID_ARGUMENT: source must be selected, A or B");
+  if (args.startTime !== void 0 || args.endTime !== void 0) {
+    if (typeof args.startTime !== "number" || typeof args.endTime !== "number" || !Number.isFinite(args.startTime) || !Number.isFinite(args.endTime) || args.startTime < 0 || args.endTime <= args.startTime) {
+      throw new Error("INVALID_RANGE: supply finite seconds with 0 <= startTime < endTime");
+    }
+  }
+  return { ...common, kind, source, startTime: args.startTime, endTime: args.endTime };
+}
+function record(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+function readingResult(value, options) {
+  if (!record(value) || value.meetingId !== options.meetingId) {
+    throw new Error("INVALID_READING_RESPONSE: meeting identity does not match");
+  }
+  const page = value.page;
+  if (!record(page) || page.unit !== "unicode_code_points" || typeof page.complete !== "boolean" || (page.complete ? page.nextCursor !== null : typeof page.nextCursor !== "string" || !page.nextCursor.length || page.nextCursor.length > 2048)) {
+    throw new Error("INVALID_READING_RESPONSE: missing or invalid page continuation");
+  }
+  let result = value;
+  if (options.kind === "meeting") {
+    const field = options.section === "notes" ? "notes" : options.section === "summary" ? "content" : "actionItemsJson";
+    if (typeof value[field] !== "string") throw new Error("INVALID_READING_RESPONSE: missing section text");
+    if (value.actionItemsAnalysis === void 0 || value.actionItemsAnalysis === null) {
+      result = { ...value, actionItemsAnalysis: { status: "unknown" } };
+    } else if (!record(value.actionItemsAnalysis) || !["unknown", "queued", "running", "failed", "succeeded"].includes(value.actionItemsAnalysis.status)) {
+      throw new Error("INVALID_READING_RESPONSE: invalid action analysis state");
+    }
+  } else if (!Array.isArray(value.chunks)) {
+    throw new Error("INVALID_READING_RESPONSE: missing transcript chunks");
+  }
+  const output = { content: [{ type: "text", text: JSON.stringify(result) }] };
+  if (Buffer.byteLength(JSON.stringify(output), "utf8") > MAX_READING_BYTES) {
+    throw new Error("READING_LIMIT: wrapped reading response exceeds 32000 bytes");
+  }
+  return output;
+}
+function readingError(message) {
+  const points = Array.from(message);
+  const detail = points.slice(0, 1e3).join("") + (points.length > 1e3 ? " [error message truncated]" : "");
+  return { isError: true, content: [{ type: "text", text: `Error: ${detail}` }] };
+}
+
+// src/section-reading.ts
+var insightTypes = ["trend", "need", "competitive", "risk", "opportunity", "tech", "stakeholder", "action"];
+var phases = {
+  detail: ["metadata", "members"],
+  brief: ["metadata", "members", "meetings", "insights"],
+  metadata: ["metadata"],
+  members: ["members"],
+  meetings: ["meetings"],
+  insights: ["insights"]
+};
+function accountSectionOptions(args, fallback) {
+  if (Object.keys(args).some((key) => !["accountId", "section", "pageSize", "cursor", "from", "to", "types"].includes(key)) || typeof args.accountId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(args.accountId)) {
+    throw new Error("INVALID_ARGUMENT: invalid account reading identity/options");
+  }
+  const section = args.section === void 0 ? fallback : args.section;
+  const allowed = fallback === "brief" ? ["brief", "metadata", "members", "meetings", "insights"] : fallback === "detail" ? ["detail", "metadata", "members"] : [fallback];
+  if (typeof section !== "string" || !allowed.includes(section)) throw new Error("INVALID_ARGUMENT: unsupported account section");
+  const pageSize = args.pageSize === void 0 ? 4e3 : args.pageSize;
+  if (typeof pageSize !== "number" || !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 8e3) {
+    throw new Error("INVALID_ARGUMENT: pageSize must be 1\u20138000 Unicode code points");
+  }
+  if (args.cursor !== void 0 && (typeof args.cursor !== "string" || !args.cursor.length || args.cursor.length > 2048)) {
+    throw new Error("INVALID_CURSOR: invalid account continuation");
+  }
+  for (const name of ["from", "to"]) {
+    const value = args[name];
+    if (value !== void 0 && (typeof value !== "string" || value.length > 64 || !/^\d{4}-\d\d-\d\dT/.test(value) || !Number.isFinite(Date.parse(value)))) {
+      throw new Error(`INVALID_ARGUMENT: ${name} must be RFC3339`);
+    }
+  }
+  if (args.types !== void 0 && (!Array.isArray(args.types) || args.types.length > 8 || args.types.some((value) => typeof value !== "string" || !insightTypes.includes(value)))) {
+    throw new Error("INVALID_ARGUMENT: invalid insight types");
+  }
+  if (section !== "brief" && section !== "insights" && ["from", "to", "types"].some((key) => args[key] !== void 0)) {
+    throw new Error("INVALID_ARGUMENT: insight filters require brief or insights");
+  }
+  return {
+    accountId: args.accountId,
+    section,
+    pageSize,
+    cursor: args.cursor,
+    from: args.from,
+    to: args.to,
+    types: args.types
+  };
+}
+function record2(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+function accountSectionResult(value, options) {
+  if (!record2(value) || value.kind !== "account" || value.accountId !== options.accountId || value.consistency !== "current_group" || value.section !== options.section || !phases[options.section].includes(value.phase) || typeof value.revision !== "string" || !/^[a-f0-9]{64}$/.test(value.revision) || typeof value.dataJson !== "string") throw new Error("INVALID_READING_RESPONSE: invalid account source");
+  const fragment = value.fragment;
+  if (!record2(fragment) || fragment.unit !== "unicode_code_points" || typeof fragment.complete !== "boolean" || ![fragment.startOffset, fragment.endOffset, fragment.totalCodePoints].every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0) || fragment.endOffset <= fragment.startOffset || fragment.endOffset > fragment.totalCodePoints || Array.from(value.dataJson).length !== fragment.endOffset - fragment.startOffset || (fragment.complete ? fragment.endOffset !== fragment.totalCodePoints : fragment.endOffset >= fragment.totalCodePoints)) {
+    throw new Error("INVALID_READING_RESPONSE: invalid account JSON fragment");
+  }
+  if (fragment.startOffset === 0 && fragment.complete) {
+    try {
+      const parsed = JSON.parse(value.dataJson);
+      if (value.phase === "metadata" ? !record2(parsed) : !Array.isArray(parsed)) throw new Error("wrong JSON shape");
+    } catch {
+      throw new Error("INVALID_READING_RESPONSE: invalid completed account JSON group");
+    }
+  }
+  const page = value.page;
+  if (!record2(page) || typeof page.complete !== "boolean" || page.complete && (!fragment.complete || value.phase !== phases[options.section].at(-1)) || (page.complete ? page.nextCursor !== null : typeof page.nextCursor !== "string" || !page.nextCursor.length || page.nextCursor.length > 2048)) {
+    throw new Error("INVALID_READING_RESPONSE: invalid account continuation");
+  }
+  const result = { content: [{ type: "text", text: JSON.stringify(value) }] };
+  if (Buffer.byteLength(JSON.stringify(result)) > MAX_READING_BYTES) throw new Error("READING_LIMIT: account page exceeds 32000 bytes");
+  return result;
+}
+
 // node_modules/zod/v3/helpers/util.js
 var util;
 (function(util2) {
@@ -16681,7 +16820,7 @@ __export(schemas_exports3, {
   preprocess: () => preprocess,
   promise: () => promise,
   readonly: () => readonly,
-  record: () => record,
+  record: () => record3,
   refine: () => refine,
   set: () => set,
   strictObject: () => strictObject,
@@ -17467,7 +17606,7 @@ var ZodRecord2 = /* @__PURE__ */ $constructor("ZodRecord", (inst, def) => {
   inst.keyType = def.keyType;
   inst.valueType = def.valueType;
 });
-function record(keyType, valueType, params) {
+function record3(keyType, valueType, params) {
   return new ZodRecord2({
     type: "record",
     keyType,
@@ -17910,7 +18049,7 @@ var stringbool = (...args) => _stringbool({
 }, ...args);
 function json(params) {
   const jsonSchema = lazy(() => {
-    return union([string2(params), number2(), boolean2(), _null3(), array(jsonSchema), record(string2(), jsonSchema)]);
+    return union([string2(params), number2(), boolean2(), _null3(), array(jsonSchema), record3(string2(), jsonSchema)]);
   });
   return jsonSchema;
 }
@@ -18150,7 +18289,7 @@ var ImplementationSchema = BaseMetadataSchema.extend({
 });
 var FormElicitationCapabilitySchema = intersection(object2({
   applyDefaults: boolean2().optional()
-}), record(string2(), unknown()));
+}), record3(string2(), unknown()));
 var ElicitationCapabilitySchema = preprocess((value) => {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     if (Object.keys(value).length === 0) {
@@ -18161,7 +18300,7 @@ var ElicitationCapabilitySchema = preprocess((value) => {
 }, intersection(object2({
   form: FormElicitationCapabilitySchema.optional(),
   url: AssertObjectSchema.optional()
-}), record(string2(), unknown()).optional()));
+}), record3(string2(), unknown()).optional()));
 var ClientTasksCapabilitySchema = looseObject({
   /**
    * Present if the client supports listing tasks.
@@ -18214,7 +18353,7 @@ var ClientCapabilitiesSchema = object2({
   /**
    * Experimental, non-standard capabilities that the client supports.
    */
-  experimental: record(string2(), AssertObjectSchema).optional(),
+  experimental: record3(string2(), AssertObjectSchema).optional(),
   /**
    * Present if the client supports sampling from an LLM.
    */
@@ -18249,7 +18388,7 @@ var ClientCapabilitiesSchema = object2({
   /**
    * Extensions that the client supports. Keys are extension identifiers (vendor-prefix/extension-name).
    */
-  extensions: record(string2(), AssertObjectSchema).optional()
+  extensions: record3(string2(), AssertObjectSchema).optional()
 });
 var InitializeRequestParamsSchema = BaseRequestParamsSchema.extend({
   /**
@@ -18267,7 +18406,7 @@ var ServerCapabilitiesSchema = object2({
   /**
    * Experimental, non-standard capabilities that the server supports.
    */
-  experimental: record(string2(), AssertObjectSchema).optional(),
+  experimental: record3(string2(), AssertObjectSchema).optional(),
   /**
    * Present if the server supports sending log messages to the client.
    */
@@ -18314,7 +18453,7 @@ var ServerCapabilitiesSchema = object2({
   /**
    * Extensions that the server supports. Keys are extension identifiers (vendor-prefix/extension-name).
    */
-  extensions: record(string2(), AssertObjectSchema).optional()
+  extensions: record3(string2(), AssertObjectSchema).optional()
 });
 var InitializeResultSchema = ResultSchema.extend({
   /**
@@ -18452,7 +18591,7 @@ var ResourceContentsSchema = object2({
    * See [MCP specification](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/47339c03c143bb4ec01a26e721a1b8fe66634ebe/docs/specification/draft/basic/index.mdx#general-fields)
    * for notes on _meta usage.
    */
-  _meta: record(string2(), unknown()).optional()
+  _meta: record3(string2(), unknown()).optional()
 });
 var TextResourceContentsSchema = ResourceContentsSchema.extend({
   /**
@@ -18646,7 +18785,7 @@ var GetPromptRequestParamsSchema = BaseRequestParamsSchema.extend({
   /**
    * Arguments to use for templating the prompt.
    */
-  arguments: record(string2(), string2()).optional()
+  arguments: record3(string2(), string2()).optional()
 });
 var GetPromptRequestSchema = RequestSchema.extend({
   method: literal("prompts/get"),
@@ -18666,7 +18805,7 @@ var TextContentSchema = object2({
    * See [MCP specification](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/47339c03c143bb4ec01a26e721a1b8fe66634ebe/docs/specification/draft/basic/index.mdx#general-fields)
    * for notes on _meta usage.
    */
-  _meta: record(string2(), unknown()).optional()
+  _meta: record3(string2(), unknown()).optional()
 });
 var ImageContentSchema = object2({
   type: literal("image"),
@@ -18686,7 +18825,7 @@ var ImageContentSchema = object2({
    * See [MCP specification](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/47339c03c143bb4ec01a26e721a1b8fe66634ebe/docs/specification/draft/basic/index.mdx#general-fields)
    * for notes on _meta usage.
    */
-  _meta: record(string2(), unknown()).optional()
+  _meta: record3(string2(), unknown()).optional()
 });
 var AudioContentSchema = object2({
   type: literal("audio"),
@@ -18706,7 +18845,7 @@ var AudioContentSchema = object2({
    * See [MCP specification](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/47339c03c143bb4ec01a26e721a1b8fe66634ebe/docs/specification/draft/basic/index.mdx#general-fields)
    * for notes on _meta usage.
    */
-  _meta: record(string2(), unknown()).optional()
+  _meta: record3(string2(), unknown()).optional()
 });
 var ToolUseContentSchema = object2({
   type: literal("tool_use"),
@@ -18724,12 +18863,12 @@ var ToolUseContentSchema = object2({
    * Arguments to pass to the tool.
    * Must conform to the tool's inputSchema.
    */
-  input: record(string2(), unknown()),
+  input: record3(string2(), unknown()),
   /**
    * See [MCP specification](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/47339c03c143bb4ec01a26e721a1b8fe66634ebe/docs/specification/draft/basic/index.mdx#general-fields)
    * for notes on _meta usage.
    */
-  _meta: record(string2(), unknown()).optional()
+  _meta: record3(string2(), unknown()).optional()
 });
 var EmbeddedResourceSchema = object2({
   type: literal("resource"),
@@ -18742,7 +18881,7 @@ var EmbeddedResourceSchema = object2({
    * See [MCP specification](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/47339c03c143bb4ec01a26e721a1b8fe66634ebe/docs/specification/draft/basic/index.mdx#general-fields)
    * for notes on _meta usage.
    */
-  _meta: record(string2(), unknown()).optional()
+  _meta: record3(string2(), unknown()).optional()
 });
 var ResourceLinkSchema = ResourceSchema.extend({
   type: literal("resource_link")
@@ -18832,7 +18971,7 @@ var ToolSchema = object2({
    */
   inputSchema: object2({
     type: literal("object"),
-    properties: record(string2(), AssertObjectSchema).optional(),
+    properties: record3(string2(), AssertObjectSchema).optional(),
     required: array(string2()).optional()
   }).catchall(unknown()),
   /**
@@ -18842,7 +18981,7 @@ var ToolSchema = object2({
    */
   outputSchema: object2({
     type: literal("object"),
-    properties: record(string2(), AssertObjectSchema).optional(),
+    properties: record3(string2(), AssertObjectSchema).optional(),
     required: array(string2()).optional()
   }).catchall(unknown()).optional(),
   /**
@@ -18857,7 +18996,7 @@ var ToolSchema = object2({
    * See [MCP specification](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/47339c03c143bb4ec01a26e721a1b8fe66634ebe/docs/specification/draft/basic/index.mdx#general-fields)
    * for notes on _meta usage.
    */
-  _meta: record(string2(), unknown()).optional()
+  _meta: record3(string2(), unknown()).optional()
 });
 var ListToolsRequestSchema = PaginatedRequestSchema.extend({
   method: literal("tools/list")
@@ -18878,7 +19017,7 @@ var CallToolResultSchema = ResultSchema.extend({
    *
    * If the Tool defines an outputSchema, this field MUST be present in the result, and contain a JSON object that matches the schema.
    */
-  structuredContent: record(string2(), unknown()).optional(),
+  structuredContent: record3(string2(), unknown()).optional(),
   /**
    * Whether the tool call ended in an error.
    *
@@ -18906,7 +19045,7 @@ var CallToolRequestParamsSchema = TaskAugmentedRequestParamsSchema.extend({
   /**
    * Arguments to pass to the tool.
    */
-  arguments: record(string2(), unknown()).optional()
+  arguments: record3(string2(), unknown()).optional()
 });
 var CallToolRequestSchema = RequestSchema.extend({
   method: literal("tools/call"),
@@ -19008,7 +19147,7 @@ var ToolResultContentSchema = object2({
    * See [MCP specification](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/47339c03c143bb4ec01a26e721a1b8fe66634ebe/docs/specification/draft/basic/index.mdx#general-fields)
    * for notes on _meta usage.
    */
-  _meta: record(string2(), unknown()).optional()
+  _meta: record3(string2(), unknown()).optional()
 });
 var SamplingContentSchema = discriminatedUnion("type", [TextContentSchema, ImageContentSchema, AudioContentSchema]);
 var SamplingMessageContentBlockSchema = discriminatedUnion("type", [
@@ -19025,7 +19164,7 @@ var SamplingMessageSchema = object2({
    * See [MCP specification](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/47339c03c143bb4ec01a26e721a1b8fe66634ebe/docs/specification/draft/basic/index.mdx#general-fields)
    * for notes on _meta usage.
    */
-  _meta: record(string2(), unknown()).optional()
+  _meta: record3(string2(), unknown()).optional()
 });
 var CreateMessageRequestParamsSchema = TaskAugmentedRequestParamsSchema.extend({
   messages: array(SamplingMessageSchema),
@@ -19213,7 +19352,7 @@ var ElicitRequestFormParamsSchema = TaskAugmentedRequestParamsSchema.extend({
    */
   requestedSchema: object2({
     type: literal("object"),
-    properties: record(string2(), PrimitiveSchemaDefinitionSchema),
+    properties: record3(string2(), PrimitiveSchemaDefinitionSchema),
     required: array(string2()).optional()
   })
 });
@@ -19265,7 +19404,7 @@ var ElicitResultSchema = ResultSchema.extend({
    * Per MCP spec, content is "typically omitted" for decline/cancel actions.
    * We normalize null to undefined for leniency while maintaining type compatibility.
    */
-  content: preprocess((val) => val === null ? void 0 : val, record(string2(), union([string2(), number2(), boolean2(), array(string2())])).optional())
+  content: preprocess((val) => val === null ? void 0 : val, record3(string2(), union([string2(), number2(), boolean2(), array(string2())])).optional())
 });
 var ResourceTemplateReferenceSchema = object2({
   type: literal("ref/resource"),
@@ -19300,7 +19439,7 @@ var CompleteRequestParamsSchema = BaseRequestParamsSchema.extend({
     /**
      * Previously-resolved variables in a URI template or prompt.
      */
-    arguments: record(string2(), string2()).optional()
+    arguments: record3(string2(), string2()).optional()
   }).optional()
 });
 var CompleteRequestSchema = RequestSchema.extend({
@@ -19336,7 +19475,7 @@ var RootSchema = object2({
    * See [MCP specification](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/47339c03c143bb4ec01a26e721a1b8fe66634ebe/docs/specification/draft/basic/index.mdx#general-fields)
    * for notes on _meta usage.
    */
-  _meta: record(string2(), unknown()).optional()
+  _meta: record3(string2(), unknown()).optional()
 });
 var ListRootsRequestSchema = RequestSchema.extend({
   method: literal("roots/list"),
@@ -22364,7 +22503,7 @@ var MAX_TOKEN_LENGTH = 16 * 1024;
 var LOGIN_TIMEOUT_MS = 12e4;
 var NETWORK_TIMEOUT_MS = 1e4;
 var MAX_LOGOUT_ENTRIES = 256;
-function record2(value) {
+function record4(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 function origin(value, name) {
@@ -22383,7 +22522,7 @@ function tokenString(value) {
   return typeof value === "string" && value.length > 0 && value.length <= MAX_TOKEN_LENGTH && !/[\s\x00-\x1f\x7f]/.test(value);
 }
 function tokenData(value) {
-  return record2(value) && tokenString(value.id_token) && tokenString(value.access_token) && typeof value.refresh_token === "string" && (value.refresh_token === "" || tokenString(value.refresh_token)) && typeof value.expires_at === "number" && Number.isSafeInteger(value.expires_at) && value.expires_at > 0;
+  return record4(value) && tokenString(value.id_token) && tokenString(value.access_token) && typeof value.refresh_token === "string" && (value.refresh_token === "" || tokenString(value.refresh_token)) && typeof value.expires_at === "number" && Number.isSafeInteger(value.expires_at) && value.expires_at > 0;
 }
 function requestAuthJson(url2, body) {
   if (url2.protocol !== "https:" || url2.username || url2.password || url2.hash) {
@@ -22591,7 +22730,7 @@ var CognitoAuth = class {
         } finally {
           closeSync(fd);
         }
-        if (!record2(saved) || saved.version !== 1 || !record2(saved.deployment) || typeof saved.deployment.issuer !== "string") continue;
+        if (!record4(saved) || saved.version !== 1 || !record4(saved.deployment) || typeof saved.deployment.issuer !== "string") continue;
         const issuer = saved.deployment.issuer;
         try {
           if (CognitoJwtVerifier.parseUserPoolId(issuer.slice(issuer.lastIndexOf("/") + 1)).issuer !== issuer) continue;
@@ -22617,7 +22756,7 @@ var CognitoAuth = class {
   }
   async discover() {
     const runtime = await this.fetchJson(new URL("/config.json", this.config.apiUrl));
-    if (!record2(runtime) || !record2(runtime.cognito) || typeof runtime.cognito.userPoolId !== "string" || typeof runtime.cognito.region !== "string" || !runtime.cognito.userPoolId.startsWith(runtime.cognito.region + "_") || (this.config.userPoolId !== void 0 ? this.config.userPoolId !== runtime.cognito.userPoolId : runtime.cognito.userPoolClientId !== this.config.clientId)) {
+    if (!record4(runtime) || !record4(runtime.cognito) || typeof runtime.cognito.userPoolId !== "string" || typeof runtime.cognito.region !== "string" || !runtime.cognito.userPoolId.startsWith(runtime.cognito.region + "_") || (this.config.userPoolId !== void 0 ? this.config.userPoolId !== runtime.cognito.userPoolId : runtime.cognito.userPoolClientId !== this.config.clientId)) {
       throw new Error("Application login configuration does not match this MCP deployment");
     }
     const userPoolId = runtime.cognito.userPoolId;
@@ -22628,7 +22767,7 @@ var CognitoAuth = class {
       throw new Error("Invalid TTOBAK_USER_POOL_ID or application login configuration");
     }
     const metadata = await this.fetchJson(new URL(issuer + "/.well-known/openid-configuration"));
-    if (!record2(metadata) || metadata.issuer !== issuer || metadata.jwks_uri !== jwksUri || metadata.authorization_endpoint !== this.config.cognitoDomain + "/oauth2/authorize" || metadata.token_endpoint !== this.config.cognitoDomain + "/oauth2/token") {
+    if (!record4(metadata) || metadata.issuer !== issuer || metadata.jwks_uri !== jwksUri || metadata.authorization_endpoint !== this.config.cognitoDomain + "/oauth2/authorize" || metadata.token_endpoint !== this.config.cognitoDomain + "/oauth2/token") {
       throw new Error("Cognito issuer and Hosted UI configuration do not match");
     }
     this.deployment = this.binding(issuer);
@@ -22691,7 +22830,7 @@ var CognitoAuth = class {
       const saved = JSON.parse(readFileSync(fd, "utf8"));
       closeSync(fd);
       fd = void 0;
-      if (!record2(saved) || saved.version !== 1 || JSON.stringify(saved.deployment) !== JSON.stringify(this.deployment) || !tokenData(saved.tokens)) {
+      if (!record4(saved) || saved.version !== 1 || JSON.stringify(saved.deployment) !== JSON.stringify(this.deployment) || !tokenData(saved.tokens)) {
         throw new Error("Credential deployment mismatch");
       }
       const verified = await this.verifyTokens(saved.tokens, true);
@@ -22869,7 +23008,7 @@ var CognitoAuth = class {
     });
   }
   async acceptResponse(value, refreshToken, generation, expectedSubject) {
-    if (!record2(value) || value.token_type !== "Bearer" || !tokenString(value.id_token) || !tokenString(value.access_token) || value.error !== void 0 || typeof value.expires_in !== "number" || !Number.isSafeInteger(value.expires_in) || value.expires_in <= 0 || value.expires_in > 86400 || value.refresh_token !== void 0 && !tokenString(value.refresh_token)) {
+    if (!record4(value) || value.token_type !== "Bearer" || !tokenString(value.id_token) || !tokenString(value.access_token) || value.error !== void 0 || typeof value.expires_in !== "number" || !Number.isSafeInteger(value.expires_in) || value.expires_in <= 0 || value.expires_in > 86400 || value.refresh_token !== void 0 && !tokenString(value.refresh_token)) {
       throw new Error("Invalid Cognito token response");
     }
     await this.saveTokens({
@@ -22927,75 +23066,6 @@ import { request as httpsRequest2 } from "node:https";
 import { basename, extname, isAbsolute, sep } from "node:path";
 import { homedir as homedir2 } from "node:os";
 import { URL as URL2 } from "node:url";
-
-// src/reading.ts
-var MAX_READING_BYTES = 32e3;
-function readingOptions(args, kind) {
-  const allowed = ["meetingId", "pageSize", "cursor", ...kind === "meeting" ? ["section"] : ["source", "startTime", "endTime"]];
-  if (Object.keys(args).some((key) => !allowed.includes(key))) throw new Error("INVALID_ARGUMENT: unknown reading option");
-  if (typeof args.meetingId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(args.meetingId)) {
-    throw new Error("INVALID_ARGUMENT: meetingId must be an ID of at most 128 characters");
-  }
-  const pageSize = args.pageSize === void 0 ? 4e3 : args.pageSize;
-  if (typeof pageSize !== "number" || !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 8e3) {
-    throw new Error("INVALID_ARGUMENT: pageSize must be an integer from 1 to 8000");
-  }
-  if (args.cursor !== void 0 && (typeof args.cursor !== "string" || !args.cursor.length || args.cursor.length > 2048)) {
-    throw new Error("INVALID_CURSOR: expected a nonempty cursor of at most 2048 characters");
-  }
-  const common = { meetingId: args.meetingId, pageSize, cursor: args.cursor };
-  if (kind === "meeting") {
-    const section = args.section === void 0 ? "notes" : args.section;
-    if (section !== "notes" && section !== "summary" && section !== "actionItems") {
-      throw new Error("INVALID_ARGUMENT: section must be notes, summary or actionItems");
-    }
-    return { ...common, kind, section };
-  }
-  const source = args.source === void 0 ? "selected" : args.source;
-  if (source !== "selected" && source !== "A" && source !== "B") throw new Error("INVALID_ARGUMENT: source must be selected, A or B");
-  if (args.startTime !== void 0 || args.endTime !== void 0) {
-    if (typeof args.startTime !== "number" || typeof args.endTime !== "number" || !Number.isFinite(args.startTime) || !Number.isFinite(args.endTime) || args.startTime < 0 || args.endTime <= args.startTime) {
-      throw new Error("INVALID_RANGE: supply finite seconds with 0 <= startTime < endTime");
-    }
-  }
-  return { ...common, kind, source, startTime: args.startTime, endTime: args.endTime };
-}
-function record3(value) {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
-function readingResult(value, options) {
-  if (!record3(value) || value.meetingId !== options.meetingId) {
-    throw new Error("INVALID_READING_RESPONSE: meeting identity does not match");
-  }
-  const page = value.page;
-  if (!record3(page) || page.unit !== "unicode_code_points" || typeof page.complete !== "boolean" || (page.complete ? page.nextCursor !== null : typeof page.nextCursor !== "string" || !page.nextCursor.length || page.nextCursor.length > 2048)) {
-    throw new Error("INVALID_READING_RESPONSE: missing or invalid page continuation");
-  }
-  let result = value;
-  if (options.kind === "meeting") {
-    const field = options.section === "notes" ? "notes" : options.section === "summary" ? "content" : "actionItemsJson";
-    if (typeof value[field] !== "string") throw new Error("INVALID_READING_RESPONSE: missing section text");
-    if (value.actionItemsAnalysis === void 0 || value.actionItemsAnalysis === null) {
-      result = { ...value, actionItemsAnalysis: { status: "unknown" } };
-    } else if (!record3(value.actionItemsAnalysis) || !["unknown", "queued", "running", "failed", "succeeded"].includes(value.actionItemsAnalysis.status)) {
-      throw new Error("INVALID_READING_RESPONSE: invalid action analysis state");
-    }
-  } else if (!Array.isArray(value.chunks)) {
-    throw new Error("INVALID_READING_RESPONSE: missing transcript chunks");
-  }
-  const output = { content: [{ type: "text", text: JSON.stringify(result) }] };
-  if (Buffer.byteLength(JSON.stringify(output), "utf8") > MAX_READING_BYTES) {
-    throw new Error("READING_LIMIT: wrapped reading response exceeds 32000 bytes");
-  }
-  return output;
-}
-function readingError(message) {
-  const points = Array.from(message);
-  const detail = points.slice(0, 1e3).join("") + (points.length > 1e3 ? " [error message truncated]" : "");
-  return { isError: true, content: [{ type: "text", text: `Error: ${detail}` }] };
-}
-
-// src/api.ts
 var MIME_BY_EXT = {
   ".pdf": "application/pdf",
   ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -23163,6 +23233,19 @@ var TtobakApi = class {
   }
   async getAccount(accountId) {
     return this.get(`/api/accounts/${accountId}`);
+  }
+  async readAccountSection(options) {
+    const query = new URLSearchParams({ section: options.section, pageSize: String(options.pageSize) });
+    if (options.cursor !== void 0) query.set("cursor", options.cursor);
+    if (options.from !== void 0) query.set("from", options.from);
+    if (options.to !== void 0) query.set("to", options.to);
+    if (options.types?.length) query.set("types", options.types.join(","));
+    return this.request(
+      "GET",
+      `/api/accounts/${identifier(options.accountId, "accountId")}/reading?${query}`,
+      void 0,
+      MAX_READING_BYTES
+    );
   }
   async getAccountMeetings(accountId) {
     return this.get(`/api/accounts/${accountId}/meetings`);
@@ -23673,15 +23756,15 @@ function documentReadingOptions(args) {
     expectedRevision: args.expectedRevision
   };
 }
-function record4(value) {
+function record5(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 function documentReadingResult(value, options) {
-  if (!record4(value) || value.docId !== options.docId || value.accountId !== (options.accountId ?? "") || value.section !== options.section || typeof value.content !== "string" || typeof value.revision !== "string" || !/^[a-f0-9]{64}$/.test(value.revision) || options.expectedRevision !== void 0 && value.revision !== options.expectedRevision || !["owner", "edit", "read"].includes(value.permission) || !(options.accountId ? value.scope === "account" : ["personal", "shared"].includes(value.scope)) || !["text", "file"].includes(value.mode) || !["available", "empty", "not_available"].includes(value.textStatus) || "publicShareToken" in value || "fileKey" in value) {
+  if (!record5(value) || value.docId !== options.docId || value.accountId !== (options.accountId ?? "") || value.section !== options.section || typeof value.content !== "string" || typeof value.revision !== "string" || !/^[a-f0-9]{64}$/.test(value.revision) || options.expectedRevision !== void 0 && value.revision !== options.expectedRevision || !["owner", "edit", "read"].includes(value.permission) || !(options.accountId ? value.scope === "account" : ["personal", "shared"].includes(value.scope)) || !["text", "file"].includes(value.mode) || !["available", "empty", "not_available"].includes(value.textStatus) || "publicShareToken" in value || "fileKey" in value) {
     throw new Error("INVALID_READING_RESPONSE: document identity or source metadata is invalid");
   }
   const page = value.page;
-  if (!record4(page) || page.unit !== "unicode_code_points" || typeof page.complete !== "boolean" || ![page.startOffset, page.endOffset, page.totalCodePoints].every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0) || page.endOffset < page.startOffset || page.endOffset > page.totalCodePoints || Array.from(value.content).length !== page.endOffset - page.startOffset || (page.complete ? page.endOffset !== page.totalCodePoints : page.endOffset === page.startOffset || page.endOffset >= page.totalCodePoints) || (page.complete ? page.nextCursor !== null : typeof page.nextCursor !== "string" || !page.nextCursor.length || page.nextCursor.length > 2048)) {
+  if (!record5(page) || page.unit !== "unicode_code_points" || typeof page.complete !== "boolean" || ![page.startOffset, page.endOffset, page.totalCodePoints].every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0) || page.endOffset < page.startOffset || page.endOffset > page.totalCodePoints || Array.from(value.content).length !== page.endOffset - page.startOffset || (page.complete ? page.endOffset !== page.totalCodePoints : page.endOffset === page.startOffset || page.endOffset >= page.totalCodePoints) || (page.complete ? page.nextCursor !== null : typeof page.nextCursor !== "string" || !page.nextCursor.length || page.nextCursor.length > 2048)) {
     throw new Error("INVALID_READING_RESPONSE: document page continuation is invalid");
   }
   if (value.mode === "file" && (value.content !== "" || value.textStatus !== "not_available")) {
@@ -23719,20 +23802,20 @@ function documentCatalogOptions(args) {
     cursor: args.cursor
   };
 }
-function record5(value) {
+function record6(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 function documentCatalogResult(value, options) {
-  if (!record5(value) || value.accountId !== (options.accountId ?? "") || value.consistency !== "current_per_item" || !Array.isArray(value.documents) || value.documents.length > options.pageSize) {
+  if (!record6(value) || value.accountId !== (options.accountId ?? "") || value.consistency !== "current_per_item" || !Array.isArray(value.documents) || value.documents.length > options.pageSize) {
     throw new Error("INVALID_READING_RESPONSE: invalid document catalog identity");
   }
   for (const doc of value.documents) {
-    if (!record5(doc) || typeof doc.docId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(doc.docId) || typeof doc.title !== "string" || typeof doc.metadataRevision !== "string" || !/^[a-f0-9]{64}$/.test(doc.metadataRevision) || !["owner", "edit", "read"].includes(doc.permission) || !(options.accountId ? doc.scope === "account" : ["personal", "shared"].includes(doc.scope)) || "content" in doc || "publicShareToken" in doc || "fileKey" in doc) {
+    if (!record6(doc) || typeof doc.docId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(doc.docId) || typeof doc.title !== "string" || typeof doc.metadataRevision !== "string" || !/^[a-f0-9]{64}$/.test(doc.metadataRevision) || !["owner", "edit", "read"].includes(doc.permission) || !(options.accountId ? doc.scope === "account" : ["personal", "shared"].includes(doc.scope)) || "content" in doc || "publicShareToken" in doc || "fileKey" in doc) {
       throw new Error("INVALID_READING_RESPONSE: invalid document metadata");
     }
   }
   const page = value.page;
-  if (!record5(page) || page.unit !== "items" || page.returned !== value.documents.length || typeof page.complete !== "boolean" || (page.complete ? page.nextCursor !== null : typeof page.nextCursor !== "string" || !page.nextCursor.length || page.nextCursor.length > 2048)) {
+  if (!record6(page) || page.unit !== "items" || page.returned !== value.documents.length || typeof page.complete !== "boolean" || (page.complete ? page.nextCursor !== null : typeof page.nextCursor !== "string" || !page.nextCursor.length || page.nextCursor.length > 2048)) {
     throw new Error("INVALID_READING_RESPONSE: invalid catalog continuation");
   }
   const result = { content: [{ type: "text", text: JSON.stringify(value) }] };
@@ -23756,18 +23839,18 @@ function kbReadingOptions(args) {
   }
   return { pageSize, cursor: args.cursor };
 }
-function record6(value) {
+function record7(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 function kbReadingResult(value, options) {
-  if (!record6(value) || !Array.isArray(value.files) || value.files.length > options.pageSize || value.consistency !== "current_per_item") throw new Error("INVALID_READING_RESPONSE: invalid KB catalog");
+  if (!record7(value) || !Array.isArray(value.files) || value.files.length > options.pageSize || value.consistency !== "current_per_item") throw new Error("INVALID_READING_RESPONSE: invalid KB catalog");
   for (const file2 of value.files) {
-    if (!record6(file2) || typeof file2.fileId !== "string" || !file2.fileId || Buffer.byteLength(file2.fileId) > 1024 || /[/\\]/.test(file2.fileId) || typeof file2.fileName !== "string" || typeof file2.fileType !== "string" || typeof file2.size !== "number" || !Number.isSafeInteger(file2.size) || file2.size < 0 || typeof file2.lastModified !== "string" || typeof file2.metadataRevision !== "string" || !/^[a-f0-9]{64}$/.test(file2.metadataRevision)) {
+    if (!record7(file2) || typeof file2.fileId !== "string" || !file2.fileId || Buffer.byteLength(file2.fileId) > 1024 || /[/\\]/.test(file2.fileId) || typeof file2.fileName !== "string" || typeof file2.fileType !== "string" || typeof file2.size !== "number" || !Number.isSafeInteger(file2.size) || file2.size < 0 || typeof file2.lastModified !== "string" || typeof file2.metadataRevision !== "string" || !/^[a-f0-9]{64}$/.test(file2.metadataRevision)) {
       throw new Error("INVALID_READING_RESPONSE: invalid KB file metadata");
     }
   }
   const page = value.page;
-  if (!record6(page) || page.unit !== "items" || page.returned !== value.files.length || typeof page.complete !== "boolean" || (page.complete ? page.nextCursor !== null : typeof page.nextCursor !== "string" || !page.nextCursor.length || page.nextCursor.length > 2048)) {
+  if (!record7(page) || page.unit !== "items" || page.returned !== value.files.length || typeof page.complete !== "boolean" || (page.complete ? page.nextCursor !== null : typeof page.nextCursor !== "string" || !page.nextCursor.length || page.nextCursor.length > 2048)) {
     throw new Error("INVALID_READING_RESPONSE: invalid KB continuation");
   }
   const result = { content: [{ type: "text", text: JSON.stringify(value) }] };
@@ -23784,11 +23867,11 @@ function navigationOptions(args) {
   }
   return kbReadingOptions(args);
 }
-function record7(value) {
+function record8(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 function navigationResult(value, options, kind) {
-  if (!record7(value) || value.consistency !== "current_per_item" || !Array.isArray(value[kind]) || value[kind].length > options.pageSize) {
+  if (!record8(value) || value.consistency !== "current_per_item" || !Array.isArray(value[kind]) || value[kind].length > options.pageSize) {
     throw new Error("INVALID_READING_RESPONSE: invalid navigation catalog");
   }
   const items = value[kind];
@@ -23796,12 +23879,12 @@ function navigationResult(value, options, kind) {
     throw new Error("INVALID_READING_RESPONSE: missing project union contract");
   }
   for (const item of items) {
-    if (!record7(item) || typeof item[kind === "accounts" ? "accountId" : "projectId"] !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(item[kind === "accounts" ? "accountId" : "projectId"]) || typeof item.name !== "string" || typeof item.metadataRevision !== "string" || !/^[a-f0-9]{64}$/.test(item.metadataRevision)) {
+    if (!record8(item) || typeof item[kind === "accounts" ? "accountId" : "projectId"] !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(item[kind === "accounts" ? "accountId" : "projectId"]) || typeof item.name !== "string" || typeof item.metadataRevision !== "string" || !/^[a-f0-9]{64}$/.test(item.metadataRevision)) {
       throw new Error("INVALID_READING_RESPONSE: invalid navigation metadata");
     }
   }
   const page = value.page;
-  if (!record7(page) || page.unit !== "items" || page.returned !== items.length || typeof page.complete !== "boolean" || (page.complete ? page.nextCursor !== null : typeof page.nextCursor !== "string" || !page.nextCursor.length || page.nextCursor.length > 2048)) {
+  if (!record8(page) || page.unit !== "items" || page.returned !== items.length || typeof page.complete !== "boolean" || (page.complete ? page.nextCursor !== null : typeof page.nextCursor !== "string" || !page.nextCursor.length || page.nextCursor.length > 2048)) {
     throw new Error("INVALID_READING_RESPONSE: invalid navigation continuation");
   }
   const result = { content: [{ type: "text", text: JSON.stringify(value) }] };
@@ -24400,48 +24483,66 @@ var registry2 = {
     },
     {
       name: "ttobak_get_account",
-      description: "Get account detail: name, aliases, domains, industry, members and roles.",
+      description: "Read complete account detail in bounded JSON groups (metadata then members). Follow page.nextCursor with the same selection. Concatenate dataJson fragments with the same phase/revision until fragment.complete, then parse that JSON group. page.complete ends the whole selection. Restart stale cursors. Use section=metadata or members to narrow the read.",
       inputSchema: {
         type: "object",
-        properties: { accountId: { type: "string", description: "Account ID" } },
-        required: ["accountId"]
+        properties: {
+          accountId: { type: "string", description: "Account ID" },
+          section: { type: "string", enum: ["detail", "metadata", "members"], default: "detail" },
+          pageSize: { type: "integer", minimum: 1, maximum: 8e3, default: 4e3 },
+          cursor: { type: "string", maxLength: 2048 }
+        },
+        required: ["accountId"],
+        additionalProperties: false
       }
     },
     {
       name: "ttobak_get_account_meetings",
-      description: "List meetings shared into an account (meetingId, title, owner, date).",
+      description: "Read meetings currently published to an account as bounded JSON-array groups. Follow page.nextCursor until page.complete. Concatenate dataJson within each phase/revision until fragment.complete before parsing; then append that group. Every page rechecks membership and current source publication.",
       inputSchema: {
         type: "object",
-        properties: { accountId: { type: "string", description: "Account ID" } },
-        required: ["accountId"]
+        properties: {
+          accountId: { type: "string", description: "Account ID" },
+          pageSize: { type: "integer", minimum: 1, maximum: 8e3, default: 4e3 },
+          cursor: { type: "string", maxLength: 2048 }
+        },
+        required: ["accountId"],
+        additionalProperties: false
       }
     },
     {
       name: "ttobak_get_account_insights",
-      description: "Get typed field insights for an account (raw material for SIFT / 2by2). Filter by period and insight types (trend, need, competitive, risk, opportunity, tech, stakeholder, action).",
+      description: "Read complete typed account insights in bounded JSON-array groups. Filter by period and insight types. Follow page.nextCursor until page.complete, including empty groups. Concatenate dataJson for the same phase/revision until fragment.complete before parsing. Raw meeting Evidence is never exposed.",
       inputSchema: {
         type: "object",
         properties: {
           accountId: { type: "string", description: "Account ID" },
           from: { type: "string", description: "Optional start (RFC3339, e.g. 2026-05-01T00:00:00Z)" },
           to: { type: "string", description: "Optional end (RFC3339)" },
-          types: { type: "array", items: { type: "string" }, description: "Optional insight types to include" }
+          types: { type: "array", maxItems: 8, items: { type: "string", enum: ["trend", "need", "competitive", "risk", "opportunity", "tech", "stakeholder", "action"] }, description: "Optional insight types to include" },
+          pageSize: { type: "integer", minimum: 1, maximum: 8e3, default: 4e3 },
+          cursor: { type: "string", maxLength: 2048 }
         },
-        required: ["accountId"]
+        required: ["accountId"],
+        additionalProperties: false
       }
     },
     {
       name: "ttobak_get_account_brief",
-      description: "Get bundled raw material for an account in one call: meta + insights grouped by type + shared meetings. Best for preparing SFDC/SIFT/2by2/Player Card on the personal side.",
+      description: "Read the complete account brief through metadata, members, meetings and insights phases. Follow the same section/filters with page.nextCursor until page.complete. Concatenate dataJson within each phase/revision until fragment.complete, then parse that object/array group. Group insight rows by type when preparing SIFT/2by2. No phase is silently omitted.",
       inputSchema: {
         type: "object",
         properties: {
           accountId: { type: "string", description: "Account ID" },
           from: { type: "string", description: "Optional start (RFC3339)" },
           to: { type: "string", description: "Optional end (RFC3339)" },
-          types: { type: "array", items: { type: "string" }, description: "Optional insight types to include" }
+          types: { type: "array", maxItems: 8, items: { type: "string", enum: ["trend", "need", "competitive", "risk", "opportunity", "tech", "stakeholder", "action"] }, description: "Optional insight types to include" },
+          section: { type: "string", enum: ["brief", "metadata", "members", "meetings", "insights"], default: "brief" },
+          pageSize: { type: "integer", minimum: 1, maximum: 8e3, default: 4e3 },
+          cursor: { type: "string", maxLength: 2048 }
         },
-        required: ["accountId"]
+        required: ["accountId"],
+        additionalProperties: false
       }
     },
     {
@@ -24861,28 +24962,20 @@ Client: ${CLIENT_ID.slice(0, 8)}...`
         return navigationResult(await api.readNavigation("accounts", options2), options2, "accounts");
       }
       case "ttobak_get_account": {
-        const { accountId } = args;
-        if (!accountId) return error2("accountId is required");
-        const result = await api.getAccount(accountId);
-        return text(JSON.stringify(result, null, 2));
+        const options2 = accountSectionOptions(args, "detail");
+        return accountSectionResult(await api.readAccountSection(options2), options2);
       }
       case "ttobak_get_account_meetings": {
-        const { accountId } = args;
-        if (!accountId) return error2("accountId is required");
-        const result = await api.getAccountMeetings(accountId);
-        return text(JSON.stringify(result, null, 2));
+        const options2 = accountSectionOptions(args, "meetings");
+        return accountSectionResult(await api.readAccountSection(options2), options2);
       }
       case "ttobak_get_account_insights": {
-        const { accountId, from, to, types } = args;
-        if (!accountId) return error2("accountId is required");
-        const result = await api.getAccountInsights(accountId, { from, to, types });
-        return text(JSON.stringify(result, null, 2));
+        const options2 = accountSectionOptions(args, "insights");
+        return accountSectionResult(await api.readAccountSection(options2), options2);
       }
       case "ttobak_get_account_brief": {
-        const { accountId, from, to, types } = args;
-        if (!accountId) return error2("accountId is required");
-        const result = await api.getAccountBrief(accountId, { from, to, types });
-        return text(JSON.stringify(result, null, 2));
+        const options2 = accountSectionOptions(args, "brief");
+        return accountSectionResult(await api.readAccountSection(options2), options2);
       }
       case "ttobak_create_project": {
         const { name: name2, description, sfdcOpptyId, sfdcUrl, stage } = args;
