@@ -148,12 +148,20 @@ func TestNewsSourceRevisionMatchesCrawlerVectors(t *testing.T) {
 }
 
 func TestPublishedNewsTitleMatchesProducerWhitespaceContract(t *testing.T) {
-	for _, title := range []string{"first\nsecond\r\nthird\tpart", "  " + strings.Repeat("가", 300) + "  ", "title" + string(rune(127))} {
+	for _, title := range []string{"first\nsecond\r\nthird\tpart", "  " + strings.Repeat("가", 300) + "  ", "title" + string(rune(127)),
+		strings.Repeat(" ", 25000) + "Accepted title"} {
 		svc, fixture, _, keys := newNewsReadFixture(t)
 		fixture.rows[keys[0]]["title"] = &types.AttributeValueMemberS{Value: title}
 		got, err := svc.GetDocumentDetail(context.Background(), keys[0].SourceID, strings.Repeat("a", 16))
-		if err != nil || got.Title != title {
+		if err != nil || got.Title != strings.TrimSpace(title) {
 			t.Fatalf("producer-valid title rejected or changed: %q %v", title, err)
+		}
+		list, err := svc.currentNewsList(context.Background(), svc.repo.(*mockCrawlerRepo).documents[keys[0].SourceID])
+		if err != nil || len(list) != 1 || list[0].Title != strings.TrimSpace(title) {
+			t.Fatalf("producer-valid padding broke list: %v", err)
+		}
+		if newsString(fixture.rows[keys[0]], "title") != title {
+			t.Fatal("display projection changed canonical title")
 		}
 	}
 	for _, title := range []string{" ", "title\x01", strings.Repeat("가", 301)} {

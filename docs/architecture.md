@@ -298,6 +298,9 @@ news remains readable after its last subscriber leaves, and existing AWS technic
 articles retain the exact `__tech__` partition. Publication titles follow the
 producer's trimmed length and line-whitespace rules without relaxing source IDs
 or source-fingerprint validation.
+Display metadata trims only the title's outer padding after canonical validation,
+preserving raw stored bytes for publication identity and delete conditions while
+keeping the 24,000-byte metadata response limit.
 Owner/admin deletion transactionally marks a versioned publication `DELETED`
 before deleting its two immutable objects; retained tombstones support cleanup
 retries. The transaction checks current ownership and the observed publication.

@@ -79,7 +79,8 @@ func TestNewsDeleteUnpublishesBeforeCleanupAndRetriesTombstone(t *testing.T) {
 
 func TestNewsDeleteAcceptsProducerValidPaddedMultilineTitle(t *testing.T) {
 	svc, rows, object, keys := newNewsReadFixture(t)
-	rows.rows[keys[0]]["title"] = &types.AttributeValueMemberS{Value: " \n" + strings.Repeat("가", 298) + "\t나\r "}
+	rawTitle := strings.Repeat(" ", 25000) + "\n" + strings.Repeat("가", 298) + "\t나\r "
+	rows.rows[keys[0]]["title"] = &types.AttributeValueMemberS{Value: rawTitle}
 	state := &newsDeleteFixture{newsReadFixture: rows}
 	storage := &newsDeleteS3Fixture{newsS3Fixture: object, t: t, state: state, key: keys[0]}
 	svc.news, svc.s3, svc.artifactBucketName = state, storage, "assets"
@@ -89,6 +90,9 @@ func TestNewsDeleteAcceptsProducerValidPaddedMultilineTitle(t *testing.T) {
 	}
 	if state.writes != 1 || storage.deletes != 2 {
 		t.Fatal("producer-valid title prevented conditional delete")
+	}
+	if newsString(rows.rows[keys[0]], "title") != rawTitle {
+		t.Fatal("delete changed canonical title")
 	}
 }
 
