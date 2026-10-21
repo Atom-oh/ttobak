@@ -103,6 +103,7 @@ const edgeAuthStack = new EdgeAuthStack(app, 'TtobakEdgeAuthStack', {
   readConnectorClientId: authStack.readConnectorClient.userPoolClientId,
   writeConnectorClientId: authStack.writeConnectorClient.userPoolClientId,
   connectorAudience: app.node.tryGetContext('ttobak:mcpResourceAudience'),
+  connectorPrivateBridgeEnabled,
 });
 edgeAuthStack.addDependency(authStack);
 
