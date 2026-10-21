@@ -224,6 +224,8 @@ class NewsTextTests(_SourceFixture, unittest.TestCase):
         crawler = Path(__file__).resolve().parents[1] / 'crawler'
         configs = [dict(self.config, sourceId='source'), dict(self.config, sourceId='source',
                    aliases=[' Woori ', 'Woori'], newsQueries=[' AI ', 'AI'], status='active')]
+        configs += [dict(self.config, sourceId=value) for value in
+                    ('우리은행', 'école-١', '가', '가', '𠀀' * 128)]
         script = ('import json,sys;sys.path.insert(0,sys.argv[1]);'
                   'from news_discovery import source_revision;'
                   'print(json.dumps([source_revision(v) for v in json.load(sys.stdin)]))')
