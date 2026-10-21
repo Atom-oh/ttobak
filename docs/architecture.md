@@ -287,6 +287,17 @@ and restored-history caveats without exposing internal S3 links. Markdown views,
 editable document/meeting HTML and research exports restore valid IPv6 authority
 brackets after parser encoding. Query bytes, HTML escaping, URL protocol filtering
 and the existing HTML sanitization remain in place.
+The Go insights API revalidates news list identities against complete, strongly
+consistent document/configuration batches before pagination, including cache hits.
+Versioned detail reads require the current publication, exact immutable key and
+Markdown SHA-256 before returning at most 64,000 UTF-8 bytes. Missing metadata
+never falls back to an orphan object. Legacy reads retain only bounded `shared/`
+keys. Source revisions match the Python contract, including literal Unicode.
+Owner/admin deletion transactionally marks a versioned publication `DELETED`
+before deleting its two immutable objects; retained tombstones support cleanup
+retries. The transaction checks current ownership and the observed publication.
+Legacy deletion cannot erase a versioned replacement. These API changes require
+deployed read/delete acceptance before writer activation.
 These modules do not activate a scheduler, change legacy news results or establish
 production acceptance. Handler wiring, scheduled recovery and consumer rollout remain
 separate delivery stages.

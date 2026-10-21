@@ -109,6 +109,31 @@ This does not retrofit or delete historical rows from the legacy crawler.
 
 ## Delivery and acceptance
 
+The Go insights reader uses canonical strong batches for news discovered through
+lists and the cache. It fails on incomplete reads instead of hiding omitted keys.
+Selections are capped at 1,000 row keys, batches at 100 keys, projected responses
+at 8 MiB overall and read time at 15 seconds. Each returned news metadata record
+is limited to 24,000 encoded JSON bytes; a list page has at most 50 records.
+Versioned details read at most 64,000 UTF-8 bytes and verify the published SHA-256
+and current document/configuration again. Detail operations have a 20-second
+deadline. Legacy detail reads are capped at 2 MiB and constrained to exact
+`shared/news/` or `shared/aws-docs/` document paths. Missing metadata never grants
+an object read.
+
+Deletion checks current source ownership and the observed immutable publication
+in one transaction before marking it `DELETED`. Cleanup then removes the KB and
+artifact objects. The tombstone retains their identities if cleanup fails; retry
+still checks current ownership, including after source settings change. A
+concurrent publication or owner change returns a conflict without object cleanup.
+Legacy metadata deletion excludes versioned rows, preventing an older read from
+deleting a newly published replacement. Tombstones have no automatic expiry in
+this stage; migration/retention policy must account for them explicitly.
+
+The source fingerprint is repeated in Go with fixed crawler-produced vectors
+covering Korean, supplementary Unicode, U+2028/U+2029, literal escape sequences,
+optional legacy fields and numeric false-valued lists. This is code compatibility,
+not a claim that the API or the new writer has been deployed.
+
 `news_store.py`, `news_worker.py`, `news_model.py` and `news_lifecycle.py` are
 injected components without Lambda handlers. Model request bounds, immutable
 uploads and run accounting are implemented; no scheduler or IAM permission is

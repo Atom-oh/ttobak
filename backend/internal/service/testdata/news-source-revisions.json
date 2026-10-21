@@ -1,0 +1,88 @@
+[
+  {
+    "source": {
+      "sourceId": "우리은행",
+      "sourceName": "우리은행",
+      "aliases": [
+        "Woori Bank"
+      ],
+      "newsQueries": [
+        "AI"
+      ],
+      "customUrls": [],
+      "status": "idle",
+      "ownerId": "owner"
+    },
+    "revision": "5834b2462c6a54b0a27c6021085d9a1348cee2eca31b32d46ddfb858ee208153"
+  },
+  {
+    "source": {
+      "sourceId": "aws"
+    },
+    "revision": "eacbf5693d58c92277e55e5c982b64d29cecfd98d56bad9b7bc592c83da7d418"
+  },
+  {
+    "source": {
+      "sourceId": "우리은행",
+      "sourceName": " <>&    literal \\u2028 ",
+      "aliases": [
+        "Woori Bank"
+      ],
+      "newsQueries": [
+        "AI"
+      ],
+      "customUrls": [],
+      "status": "idle",
+      "ownerId": "owner"
+    },
+    "revision": "13e0861c1d53f30b0745c96cfcb8ce36d9cf1b7fe761bdfd6a4770fd42b8f86b"
+  },
+  {
+    "source": {
+      "sourceId": "𐐀١은행",
+      "sourceName": "우리은행",
+      "aliases": [
+        "  Bank  ",
+        "Bank",
+        "은행"
+      ],
+      "newsQueries": [
+        "AI"
+      ],
+      "customUrls": [],
+      "status": "idle",
+      "ownerId": "owner"
+    },
+    "revision": "f83835aa1b57235cdb4916cc656b8db2a5f4f7b71cfa910bb5c8d7cfac9435a2"
+  },
+  {
+    "source": {
+      "sourceId": "우리은행",
+      "sourceName": "우리은행",
+      "aliases": false,
+      "newsQueries": 0,
+      "customUrls": "",
+      "status": "idle",
+      "ownerId": "owner"
+    },
+    "revision": "24b43f743c0300ea94199f7a28c513b593c6d5e60604b8fe79e5da80edfdcfb9"
+  },
+  {
+    "source": {
+      "sourceId": "우리은행",
+      "sourceName": "우리은행",
+      "aliases": [
+        "Woori Bank"
+      ],
+      "newsQueries": [
+        "AI"
+      ],
+      "customUrls": [
+        " https://example.com/a?b=1&c=2 "
+      ],
+      "status": "error",
+      "ownerId": "owner"
+    },
+    "revision": "88b013af0611b304e74fbfeb2f38a239c25dcff81ccc367cf2cbdfed7e9f3776"
+  }
+]
