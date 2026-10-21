@@ -178,6 +178,7 @@ export class CrawlerStack extends cdk.Stack {
       artifactBucket: props.artifactBucket,
       webSearchGatewayUrl: props.webSearchGatewayUrl,
       webSearchGatewayArn: props.webSearchGatewayArn,
+      legacyWrites: legacyWrites.valueAsString,
     });
   }
 }

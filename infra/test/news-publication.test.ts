@@ -30,6 +30,9 @@ describe('private news publication release', () => {
     const stack = new cdk.Stack(app, 'NewsTest', {
       env: { account: '123456789012', region: 'ap-northeast-2' },
     });
+    const legacy = new cdk.CfnParameter(stack, 'NewsLegacyWrites', {
+      type: 'String', default: 'on', allowedValues: ['on', 'off'],
+    });
     new NewsPublication(stack, 'Publication', {
       table: dynamodb.Table.fromTableArn(stack, 'Table',
         'arn:aws:dynamodb:ap-northeast-2:123456789012:table/ttobak-main'),
@@ -37,29 +40,44 @@ describe('private news publication release', () => {
       artifactBucket: s3.Bucket.fromBucketName(stack, 'Artifacts', 'test-artifact-bucket'),
       webSearchGatewayUrl: 'https://test.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp',
       webSearchGatewayArn: 'arn:aws:bedrock-agentcore:us-east-1:123456789012:gateway/test',
+      legacyWrites: legacy.valueAsString,
     });
     json = Template.fromStack(stack).toJSON();
     resources = Object.values(json.Resources);
-    const machine = resources.find(r => r.Type === 'AWS::StepFunctions::StateMachine');
+    const machine = resources.find(r => r.Properties?.StateMachineName === 'ttobak-news-publication');
     definition = JSON.parse(resolved(machine.Properties.DefinitionString));
   });
 
-  test('deployment cannot activate all sources and requires an explicit canary', () => {
+  test('all-source activation requires legacy off while canary requires an exact source', () => {
     expect(json.Parameters.NewsPipelineMode).toMatchObject({
-      Default: 'off', AllowedValues: ['off', 'canary'],
+      Default: 'off', AllowedValues: ['off', 'canary', 'all'],
     });
     expect(json.Parameters.NewsCanarySourceId.Default).toBe('');
     expect(json.Rules.NewsCanaryRequiresSource.Assertions).toHaveLength(1);
+    expect(json.Rules.NewsAllRequiresLegacyOff.Assertions[0].Assert).toEqual({
+      'Fn::Or': [
+        { 'Fn::Not': [{ 'Fn::Equals': [{ Ref: 'NewsPipelineMode' }, 'all'] }] },
+        { 'Fn::Equals': [{ Ref: 'NewsLegacyWrites' }, 'off'] },
+      ],
+    });
     for (const fn of resources.filter(r => r.Type === 'AWS::Lambda::Function')) {
       expect(fn.Properties.Environment.Variables.NEWS_PIPELINE_MODE).toEqual({ Ref: 'NewsPipelineMode' });
+      expect(fn.Properties.Environment.Variables.NEWS_LEGACY_WRITES).toEqual({ Ref: 'NewsLegacyWrites' });
       expect(fn.Properties.Runtime).toBe('python3.12');
       expect(fn.Properties.Architectures).toEqual(['arm64']);
     }
     const rules = resources.filter(r => r.Type === 'AWS::Events::Rule');
-    expect(rules).toHaveLength(1);
-    expect(rules[0].Properties).toMatchObject({ ScheduleExpression: 'rate(5 minutes)' });
-    expect(rules[0].Properties.Targets[0].Input).toBe('{}');
-    expect(rules[0].Properties.Targets[0].RetryPolicy.MaximumRetryAttempts).toBe(0);
+    expect(rules).toHaveLength(2);
+    const daily = rules.find(r => r.Properties.Name === 'ttobak-news-daily');
+    expect(daily.Properties.ScheduleExpression).toBe('cron(10 19 * * ? *)');
+    expect(daily.Properties.State).toEqual({ 'Fn::If': ['NewsAllSourcesEnabled', 'ENABLED', 'DISABLED'] });
+    expect(json.Conditions.NewsAllSourcesEnabled).toEqual({
+      'Fn::Equals': [{ Ref: 'NewsPipelineMode' }, 'all'],
+    });
+    for (const rule of rules) {
+      expect(rule.Properties.Targets[0].Input).toBe('{}');
+      expect(rule.Properties.Targets[0].RetryPolicy.MaximumRetryAttempts).toBe(0);
+    }
   });
 
   test('recovery timeout is below its lease and stays scheduled with writers off', () => {
@@ -67,7 +85,8 @@ describe('private news publication release', () => {
     expect(fn.Properties.Timeout).toBe(120);
     expect(fn.Properties.Timeout).toBeLessThan(300);
     expect(fn.Properties.ReservedConcurrentExecutions).toBe(1);
-    const rule = resources.find(r => r.Type === 'AWS::Events::Rule');
+    const rule = resources.find(r => r.Type === 'AWS::Events::Rule'
+      && r.Properties.Name === 'ttobak-news-recovery');
     expect(rule.Condition).toBeUndefined();
     expect(rule.Properties.State).not.toBe('DISABLED');
     expect(rule.Properties.Targets[0].Arn).toEqual({
@@ -116,8 +135,12 @@ describe('private news publication release', () => {
       'arn:ref-AWS::Partition:s3:::test-artifact-bucket/knowledge-artifacts/news/v1/*',
     ]);
     const scan = all.filter(s => actions(s).includes('dynamodb:Scan'));
-    expect(scan).toHaveLength(1);
-    expect(scan[0].Resource).toBe('arn:aws:dynamodb:ap-northeast-2:123456789012:table/ttobak-main');
+    expect(scan).toHaveLength(2);
+    for (const statement of scan) {
+      expect(statement.Resource).toBe('arn:aws:dynamodb:ap-northeast-2:123456789012:table/ttobak-main');
+    }
+    expect(scan.filter(s => s.Condition?.['ForAllValues:StringEquals']?.['dynamodb:Attributes']
+      ?.includes('newsQueries'))).toHaveLength(1);
     const scoped = all.filter(s => actions(s).includes('dynamodb:UpdateItem'));
     expect(scoped).toHaveLength(4);
     for (const s of scoped) {
@@ -147,6 +170,41 @@ describe('private news publication release', () => {
     expect(resolved(model[0].Resource)).toHaveLength(3);
     expect(resolved(model[0].Resource).every((r: string) => r.endsWith('anthropic.claude-opus-5'))).toBe(true);
     expect(resolved(model[0].Resource).some((r: string) => r.includes('*'))).toBe(false);
+  });
+
+  test('daily children are serialized, deduplicated and isolated from sibling failures', () => {
+    const machine = resources.find(r => r.Properties?.StateMachineName === 'ttobak-news-daily');
+    const daily = JSON.parse(resolved(machine.Properties.DefinitionString));
+    expect(daily.TimeoutSeconds).toBe(23 * 3600);
+    const map = daily.States.DailySources;
+    expect(map).toMatchObject({
+      Type: 'Map', ItemsPath: '$.sources', MaxConcurrency: 1, ResultPath: '$.failures',
+    });
+    const child = map.ItemProcessor.States.PublishDailySource;
+    expect(child.Resource).toContain('states:startExecution.sync:2');
+    expect(child.Parameters).toMatchObject({
+      'Name.$': '$.executionName',
+      Input: { 'sourceId.$': '$.sourceId', 'runId.$': '$.runId' },
+    });
+    expect(Object.keys(child.Parameters.Input)).toHaveLength(2);
+    expect(child.Retry).toBeUndefined();
+    expect(child.Catch).toEqual([
+      { ErrorEquals: ['StepFunctions.ExecutionAlreadyExistsException', 'StepFunctions.ExecutionAlreadyExists'], ResultPath: null, Next: 'DailyAlreadyStarted' },
+      { ErrorEquals: ['States.ALL'], ResultPath: null, Next: 'DailySourceFailed' },
+    ]);
+    expect(map.ItemProcessor.States.DailySourceFailed.Result).toBe(true);
+    expect(map.ItemProcessor.States.DailySourceCompleted.Result).toBe(false);
+    expect(map.ItemProcessor.States.DailyAlreadyStarted.Result).toBe(false);
+    expect(daily.States.SummarizeDailyResults.Parameters).toEqual({
+      'failed.$': 'States.ArrayContains($.failures, true)',
+    });
+    expect(daily.States.DailyPublicationFailed.Type).toBe('Fail');
+    const schedule = resources.find(r => r.Properties?.Handler === 'news_schedule.handler');
+    const policies = resources.filter(r => r.Type === 'AWS::IAM::Policy'
+      && r.Properties.Roles.some((role: any) => role.Ref === schedule.Properties.Role['Fn::GetAtt'][0]));
+    const actions = policies.flatMap(p => p.Properties.PolicyDocument.Statement)
+      .flatMap(s => Array.isArray(s.Action) ? s.Action : [s.Action]);
+    expect(actions.filter(a => !a.startsWith('logs:'))).toEqual(['dynamodb:Scan']);
   });
 
   test('workflow bounds concurrent reservations and strips candidate bodies before settlement', () => {
