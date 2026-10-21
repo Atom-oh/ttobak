@@ -66,6 +66,21 @@ reservations or delete immutable objects based only on a missing acknowledgment.
 Strongly consistent published-identity batches fail on unprocessed or malformed
 responses instead of assuming absent documents.
 
+## Token counting and staged receipt compatibility
+
+Opus 5 counting uses the fixed US East (N. Virginia) Mantle endpoint and
+`bedrock-mantle` signing service because the ordinary Runtime CountTokens API
+does not support this model's inference profile. The adapter translates the
+complete public text, system instructions and disabled-thinking setting of the
+actual Converse request. It uses isolated DNS and a shared monotonic receive
+deadline, rejects redirects, and never passes credentials to the resolver child.
+This model protocol is separate from the three web-search gateway artifacts.
+
+All v1 publication writers remain inactive during these staged PRs. Activation
+must confirm no earlier v1 ledger exists and deploy a coherent store, worker and
+lifecycle version. Empty fetch warnings are omitted from receipts; this does not
+promise migration of a previously activated receipt digest.
+
 ## Delivery and acceptance
 
 `news_store.py` is an injected storage adapter without a Lambda handler. It does

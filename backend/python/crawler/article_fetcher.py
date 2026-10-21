@@ -165,12 +165,26 @@ class _ResponseSocket:
     def makefile(self, mode):
         return io.BufferedReader(_DeadlineReader(self.sock, self.deadline))
 
+    def sendall(self, data):
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError()
+        # HTTPConnection sends headers and body separately. Each write needs
+        # the remaining total budget, not the timeout of the first write.
+        self.sock.settimeout(min(CONNECT_TIMEOUT_SECONDS, remaining))
+        self.sock.sendall(data)
+        if time.monotonic() >= self.deadline:
+            raise TimeoutError()
 
-def _open_response(parsed, answers, deadline):
-    """No proxy, second DNS lookup, credential forwarding, or automatic redirect."""
+    def close(self):
+        self.sock.close()
+
+
+def _open_response(parsed, answers, deadline, **request):
+    """Pinned addresses and one deadline; no proxy or automatic redirects."""
     for index, answer in enumerate(answers):
         try:
-            return _open_address(parsed, answer, deadline)
+            return _open_address(parsed, answer, deadline, **request)
         except (OSError, http.client.HTTPException):
             if time.monotonic() >= deadline:
                 raise TimeoutError() from None
@@ -179,7 +193,7 @@ def _open_response(parsed, answers, deadline):
     raise FetchRejected("DNS_ERROR")
 
 
-def _open_address(parsed, answer, deadline):
+def _open_address(parsed, answer, deadline, *, method="GET", body=None, headers=None):
     sock = None
     connection = None
     try:
@@ -204,15 +218,15 @@ def _open_address(parsed, answer, deadline):
         sock.settimeout(min(CONNECT_TIMEOUT_SECONDS, remaining))
         connection = http.client.HTTPConnection(
             parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80))
-        connection.sock = sock
+        connection.sock = _ResponseSocket(sock, deadline)
         path = quote(parsed.path or "/", safe="/%:@!$&'()*+,;=-._~")
         if parsed.query:
             path += "?" + quote(parsed.query, safe="/?%:@!$&'()*+,;=-._~")
-        connection.request("GET", path, headers=_HEADERS)
+        connection.request(method, path, body=body, headers=_HEADERS if headers is None else headers)
         # HTTPResponse normally reads from a socket file without an overall
         # deadline. The adapter retains the stdlib header/chunk parser while
         # bounding slow headers and a body that arrives one byte at a time.
-        response = http.client.HTTPResponse(_ResponseSocket(sock, deadline))
+        response = http.client.HTTPResponse(connection.sock)
         response.begin()
         return connection, response
     except BaseException:
@@ -227,6 +241,7 @@ def _read_bounded(response):
     header = response.headers.get("Content-Length")
     transfer = (response.headers.get("Transfer-Encoding") or "").lower()
     if (len(response.headers.get_all("Content-Length", [])) > 1
+            or len(response.headers.get_all("Transfer-Encoding", [])) > 1
             or (header is not None and transfer)
             or transfer not in ("", "chunked")):
         raise FetchRejected("INVALID_LENGTH")
@@ -268,7 +283,7 @@ class _CharsetExtractor(HTMLParser):
             self.charsets.append(attrs["charset"])
         if (attrs.get("http-equiv") or "").lower() == "content-type":
             match = re.search(r"(?:^|;)\s*charset\s*=\s*['\"]?([^;'\"\s]+)",
-                              attrs.get("content", ""), re.I)
+                              attrs.get("content") or "", re.I)
             if match:
                 self.charsets.append(match.group(1))
 
@@ -465,10 +480,12 @@ def normalize_html(html, url):
                        parser.published_at[:100], body, blocks)
 
 
-def _fetch_once(url):
+def _fetch_once(url, *, https_only=False):
     deadline = time.monotonic() + MAX_ATTEMPT_SECONDS
     current = url
     for redirect in range(MAX_REDIRECTS + 1):
+        if https_only and urlsplit(current).scheme != "https":
+            raise FetchRejected("INSECURE_REDIRECT")
         parsed, answers = _target(current, deadline)
         connection, response = _open_response(parsed, answers, deadline)
         try:
@@ -506,10 +523,10 @@ def _fetch_once(url):
     raise FetchRejected("REDIRECT_LIMIT")
 
 
-def fetch_article(url):
+def fetch_article(url, *, https_only=False):
     for attempt in range(MAX_ATTEMPTS):
         try:
-            return _fetch_once(url)
+            return _fetch_once(url, https_only=True) if https_only else _fetch_once(url)
         except FetchRejected as error:
             reason = error.reason
             retry = reason in ("HTTP_429", "DNS_TEMPORARY") or reason.startswith("HTTP_5")

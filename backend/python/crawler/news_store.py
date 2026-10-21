@@ -301,7 +301,7 @@ class NewsStore:
             "ExpressionAttributeNames": names, "ExpressionAttributeValues": values}}
 
     def finish(self, attempt, *, now, status, known_cost, usage_complete, usage,
-               document=None, reason=""):
+               document=None, reason="", warnings=()):
         """Atomically settle usage, release the owned lease, and optionally publish.
 
         A retry returns the recorded receipt only for the same completion digest.
@@ -311,6 +311,9 @@ class NewsStore:
                 or status not in ("PUBLISHED", "REJECTED", "FAILED")
                 or type(usage_complete) is not bool
                 or not isinstance(reason, str) or not re.fullmatch(r"[A-Z0-9_]{0,64}", reason)
+                or not isinstance(warnings, (list, tuple)) or len(warnings) > 2
+                or any(value not in ("CORROBORATION_DEFERRED", "CORROBORATION_UNUSABLE",
+                                     "CORROBORATION_FETCH_FAILED") for value in warnings)
                 or not isinstance(usage, dict)
                 or any(type(usage.get(key, 0)) is not int
                        or not 0 <= usage.get(key, 0) <= 10000000
@@ -344,6 +347,8 @@ class NewsStore:
             "usageComplete": usage_complete, **clean_usage,
             "docsAdded": int(status == "PUBLISHED"), "docsUpdated": 0,
         }
+        if warnings:
+            receipt["fetchWarnings"] = list(warnings)
         identity = {
             "runId": attempt.run_id, "docHash": attempt.doc_hash, "month": attempt.month,
             "attemptToken": attempt.token, "sourceRevision": attempt.revision,

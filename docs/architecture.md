@@ -234,6 +234,31 @@ unknown or abandoned usage retains its reservation. Immutable attempt keys live
 outside the legacy shared-text prefix. New consumers must verify current
 publication state before those writers activate; see
 [ADR-052](decisions/ADR-052-conditional-news-publication.md).
+The staged `news_worker.py` now joins current source checks, HTTPS-only article
+fetches, queued-candidate freshness checks, model accounting, immutable uploads
+and conditional publication. Its input boundary uses the same exact Unicode
+source IDs as discovery and storage while retaining ASCII run IDs.
+A failed lead is never replaced by a corroborating
+source; failed or deferred corroboration remains visible in the terminal receipt.
+Retrieval retains the original URL query bytes; canonicalization selects identity
+only. Unsupported or duplicate optional sources do not reject a valid lead.
+Freshness is checked again after the final immutable upload before publication.
+Search-provided dates are identified separately from dates extracted from articles.
+Renderer rejection settles known cost without uploading. An ambiguous upload or
+insufficient settlement time retains the reservation and immutable objects.
+Each invocation reserves both maximum input/output model calls before inference,
+requires positive caller-supplied rates and counts the actual prompt before each
+call. `news_model.py` signs the supported Opus 5 token-count request for the fixed
+US East (N. Virginia) Mantle endpoint, with no redirects or application retries.
+Isolated DNS resolution and every socket read share one 20-second monotonic
+deadline through the pinned-address transport;
+Converse remains on the injected regional runtime client. This is an explicit
+cross-region AWS service integration using public source material. The ordinary
+runtime CountTokens API does not support this model's inference profile; see the
+[AWS token-counting contract](https://docs.aws.amazon.com/bedrock/latest/userguide/count-tokens.html).
+Activation still requires verified prices, Mantle/Converse IAM, bounded SDK clients,
+run finalization and publication-aware consumers. The worker has no Lambda entry
+point, and a successful token-count probe alone is not production acceptance.
 These modules do not activate a scheduler, change legacy news results or establish
 production acceptance. Worker wiring, finalization and consumer rollout remain
 separate delivery stages.
