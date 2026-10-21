@@ -20,6 +20,7 @@ record deployed consumer acceptance separately.
 | `indexed_retrieval.py` | Enumerate authorized identities, use current saved text, and require canonical revision/S3 bindings for binary excerpts. Legacy meeting exports supply identities only. |
 | `canonical_selection.py` | Resolve exact canonical resource IDs through current authorized discovery, filter provider candidates to the selected revision, and retain file-byte validation. IDs do not grant access. |
 | `manual_kb.py` | Validate private/shared binary snapshots and current originals; unbound old chunks are not evidence. Missing snapshots are pending; read errors propagate. |
+| `news_text.py` | Bind `news/v1/` to current schema-v1 PUBLISHED state, source configuration and exact immutable object; verify Markdown SHA-256 before retaining bytes. |
 | `source_access.py` | Compose injected readers/callbacks into source contexts/search with dependencies; create no AWS clients. |
 | `source_tools.py` | Define/format document, attachment and legacy-text tools for authenticated consumers. |
 | `session_provenance.py` | Recheck every dependency before replay; require an explicit replayable marker and known provenance version. |
@@ -30,6 +31,21 @@ Runtime integration must preserve the authenticated tool/error boundary and
 expose only allowlisted public source fields. `BUCKET_NAME`, `KB_BUCKET_NAME`
 and source-read permissions must match the worker. Private sources remain
 owner-only; `shared/` is authenticated-global, not a private tenant partition.
+Published `news/v1/` articles are also authenticated-global. They require strong
+canonical document/configuration reads around S3 HEAD, an exact attempt/key/hash,
+and at most 64,000 bytes read with ETag/version conditions. After reading, the
+publication and object revision are checked again. Unpublished objects, deleted or
+disabled sources and changed source fingerprints are unavailable; provider
+metadata and indexed snippets never supply fallback content. QA repeats the
+crawler's bounded seven-field source fingerprint because the Lambdas are separate
+artifacts; cross-artifact tests check compatibility.
+
+`publishedNews` results use the existing `get_legacy_text_detail` continuation
+tool, with the current source revision required after the first page. They retain
+their distinct provenance and `newsURI` dependency through REST, WebSocket and
+replay validation. No unauthenticated route is added. Reader wiring alone does not
+establish production acceptance or migrate old `shared/` news objects. Deploy and
+verify these consumers before enabling new publication writers (ADR-052).
 Never move private uploads there. Snapshot availability cannot replace current
 authorization, and a pending-only consumer cannot replace existing binary recall.
 
@@ -105,7 +121,7 @@ Checked-in configuration is not proof of the live source or successful ingestion
 
 ## Session proof and verification
 
-Dependencies identify canonical PK/SK plus revision, `legacyURI`, `manualKey`
+Dependencies identify canonical PK/SK plus revision, `legacyURI`, `newsURI`, `manualKey`
 or `sharedKey`. Attachments additionally bind an ID; `*` denotes the separately
 hashed inventory. Revalidate each source and authorization before replay and
 subsequent model use. Saved-text results without index objects use

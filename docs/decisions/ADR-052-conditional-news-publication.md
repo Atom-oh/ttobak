@@ -111,10 +111,11 @@ This does not retrofit or delete historical rows from the legacy crawler.
 
 `news_store.py`, `news_worker.py`, `news_model.py` and `news_lifecycle.py` are
 injected components without Lambda handlers. Model request bounds, immutable
-uploads and run accounting are implemented; no scheduler, IAM permission or
-consumer is activated. Verified pricing, bounded SDK client construction,
-scheduled recovery, current-source QA/UI reads, migration and rollback remain
-required delivery work.
+uploads and run accounting are implemented; no scheduler or IAM permission is
+activated. QA's publication-aware `news_text.py` is wired to both transports and
+history replay but has no recorded deployed acceptance yet. Verified pricing,
+bounded SDK client construction, scheduled recovery, current-source QA/UI
+acceptance, migration and rollback remain required delivery work.
 The activation gate must record positive end-to-end publication and QA evidence;
 zero-result or rejected-only runs do not establish acceptance.
 
@@ -136,3 +137,5 @@ service concurrency, actual billing, or deployed acceptance.
 - `backend/python/crawler/news_model.py`
 - `backend/python/crawler/news_lifecycle.py`
 - `backend/python/crawler/test_news_lifecycle.py`
+- `backend/python/qa/news_text.py`
+- `backend/python/qa/test_news_text.py`
