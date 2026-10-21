@@ -1,6 +1,7 @@
 """Invocation and recovery contracts; synthetic data only, no live services."""
 
 import copy
+from datetime import datetime, timezone
 from decimal import Decimal
 from email.message import Message
 import http.client
@@ -135,6 +136,35 @@ class TestSearchAdapter(unittest.TestCase):
         with mock.patch.object(search, "_open_response") as opened:
             self.assertEqual(self.make_search(30)("news", 25), ([], "SEARCH_DEADLINE"))
             opened.assert_not_called()
+
+    def test_plain_json_and_sse_require_matching_jsonrpc_envelope(self):
+        valid = {"jsonrpc": "2.0", "id": 1, "result": {"content": [{
+            "type": "text", "text": json.dumps({"results": [{"url": "https://example.com/a"}]})}]}}
+        invalid = [{key: value for key, value in valid.items() if key != "id"},
+                   {**valid, "id": None}, {**valid, "id": 2}, {**valid, "id": "1"},
+                   {**valid, "id": True}, {**valid, "jsonrpc": "1.0"},
+                   {key: value for key, value in valid.items() if key != "jsonrpc"},
+                   {**valid, "error": {"code": -1}}]
+        for value in invalid:
+            raw = json.dumps(value)
+            for streaming in (False, True):
+                with self.subTest(value=value, streaming=streaming):
+                    if streaming:
+                        headers = Message()
+                        headers["Content-Type"] = "text/event-stream"
+                        response = mock.Mock(status=200, headers=headers,
+                                             read1=mock.Mock(side_effect=[
+                                                 ("data: " + raw + "\n\n").encode(), b""]))
+                    else:
+                        response = self.response(raw.encode())
+                    connection = mock.Mock()
+                    with mock.patch.object(search, "_target", return_value=(
+                            urlsplit(ENV["WEB_SEARCH_GATEWAY_URL"]), [])), \
+                            mock.patch.object(search, "_open_response",
+                                              return_value=(connection, response)):
+                        self.assertEqual(self.make_search()("public", 25), ([], "SEARCH_FAILED"))
+                    response.close.assert_called_once()
+                    connection.close.assert_called_once()
 
     def test_chunked_sse_returns_matching_frame_without_waiting_for_stream_end(self):
         value = {"jsonrpc": "2.0", "id": 1, "result": {"content": [{
@@ -274,6 +304,21 @@ class TestRuntimeTransactions(unittest.TestCase):
                 {"discovery": discovery, "outcomes": [outcome]}, context())
         self.assertEqual(receipt["docsAdded"], 1)
         self.assertEqual(Decimal(receipt["chargedUsd"]), Decimal("0.00175"))
+
+    def test_http_discovery_rejections_finalize_without_model_or_fetch(self):
+        self.table.put_item(Item={**CONFIG, "customUrls": ["http://example.com/manual"]})
+        values = [{"url": "http://example.com/news", "title": "Public news",
+                   "publishedDate": datetime.fromtimestamp(NOW, timezone.utc).date().isoformat()}]
+        with mock.patch.object(runtime, "NewsSearch", return_value=lambda query, maximum: (values, None)), \
+                mock.patch.object(runtime, "WorkerDeps") as worker:
+            discovery = runtime.discover_handler({"sourceId": "source", "runId": "http"}, context())
+            self.assertEqual(discovery["candidates"], [])
+            self.assertGreater(discovery["invalidRejected"], 1)
+            receipt = runtime.finalize_handler({"discovery": discovery, "outcomes": []}, context())
+            worker.assert_not_called()
+        self.assertEqual(receipt["invalidRejected"], discovery["invalidRejected"])
+        self.assertEqual(receipt["attemptCount"], 0)
+        self.assertEqual(Decimal(receipt["chargedUsd"]), Decimal(0))
 
     def test_recovery_finishes_expired_runs_and_preserves_live_admission(self):
         runs = NewsRuns(self.store)

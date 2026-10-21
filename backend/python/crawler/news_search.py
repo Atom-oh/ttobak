@@ -21,9 +21,18 @@ SEARCH_SECONDS = 20
 logger = logging.getLogger(__name__)
 
 
+def _matching_response(value):
+    return (isinstance(value, dict) and value.get("jsonrpc") == "2.0"
+            and type(value.get("id")) is int and value["id"] == 1
+            and (("result" in value) != ("error" in value)))
+
+
 def _payload(text):
     if text.lstrip().startswith("{"):
-        return json.loads(text)
+        value = json.loads(text)
+        if not _matching_response(value):
+            raise ValueError("SEARCH_RESPONSE")
+        return value
     frames, lines = [], []
     for line in text.splitlines() + [""]:
         if line.startswith("data:"):
@@ -36,7 +45,7 @@ def _payload(text):
             value = json.loads(frame)
         except ValueError:
             continue
-        if isinstance(value, dict) and ("result" in value or "error" in value):
+        if _matching_response(value):
             return value
     raise ValueError("SEARCH_RESPONSE")
 
@@ -79,8 +88,7 @@ def _read_payload(response, deadline, length):
                     value = json.loads(frame.decode("utf-8"))
                 except (ValueError, UnicodeError):
                     value = None
-                if (isinstance(value, dict) and type(value.get("id")) is int
-                        and value["id"] == 1 and ("result" in value or "error" in value)):
+                if _matching_response(value):
                     return value
             line.clear()
     raise ValueError("SEARCH_DEADLINE")

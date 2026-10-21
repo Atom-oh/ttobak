@@ -69,6 +69,17 @@ class TestDiscovery(unittest.TestCase):
         from news_worker import _candidate
         _candidate(small["candidates"][0])
 
+    def test_http_search_and_custom_urls_are_counted_before_worker_selection(self):
+        config = source(customUrls=["http://example.com/manual", "https://example.com/secure"])
+        result, _, _ = self.run_discovery(
+            [article(1, url="http://example.com/insecure"), article(2)], config=config)
+        self.assertGreaterEqual(result["invalidRejected"], 2)
+        self.assertEqual({item["url"] for item in result["candidates"]},
+                         {"https://example.com/secure", "https://example.com/2"})
+        from news_worker import _candidate
+        for item in result["candidates"]:
+            _candidate(item)
+
     def test_source_identity_rejects_unsafe_or_rewritten_forms(self):
         for identity in ("", "__reserved", " source", "source ", "우리 은행", "a/b",
                          "a\\b", "a#b", "a%b", ".", "a\nb", "\ud800", "a²", "가" * 129):

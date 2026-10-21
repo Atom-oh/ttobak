@@ -286,8 +286,10 @@ at most 64,000 bytes with ETag/version conditions, checks canonical state again,
 and binds continuation and history replay to the combined publication/object
 revision. Indexed snippets never replace unavailable current bytes. These news
 sources are available to authenticated users; no public route is added. REST and
-WebSocket share this reader through source access. Positive deployed QA acceptance
-and legacy news migration are still required before enabling new writers.
+WebSocket share this reader through source access. An isolated synthetic canary
+may qualify publication and both QA transports after readers deploy. Positive
+deployed QA acceptance and legacy news migration remain required before enabling
+normal source writers or `all` mode.
 `news_recovery.py` supplies a private scheduled-recovery handler with a leased,
 durable scan cursor. Each invocation reads at most ten 100-item pages and advances
 the cursor only after a page is handled. Recovery survives writer rollback and
