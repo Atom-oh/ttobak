@@ -6,7 +6,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { discoverAuthorizationServerMetadata, startAuthorization, exchangeAuthorization } from '@modelcontextprotocol/sdk/client/auth.js';
 import { createHttpServer } from '../dist/http.js';
-import { httpConfig, createTokenVerifier } from '../dist/http-auth.js';
+import { httpConfig, createTokenVerifier, resourceMetadata } from '../dist/http-auth.js';
 import { TtobakApi } from '../dist/api.js';
 import { decodeUpload, MAX_HTTP_UPLOAD_BYTES } from '../dist/remote-tools.js';
 import { NOTES_PAGES } from './fixtures/reading-data.mjs';
@@ -32,6 +32,35 @@ function jwt(overrides = {}, privateKey = pair.privateKey, header = {}) {
     '.' + Buffer.from(JSON.stringify(payload)).toString('base64url');
   return content + '.' + sign('RSA-SHA256', Buffer.from(content), privateKey).toString('base64url');
 }
+
+test('connector cutover accepts only dedicated resource-bound clients with read scope', async () => {
+  const config = httpConfig({ ...baseEnv, TTOBAK_CONNECTOR_PRIVATE_BRIDGE: 'true',
+    CONNECTOR_READ_CLIENT_ID: 'readclient', CONNECTOR_WRITE_CLIENT_ID: 'writeclient' });
+  const verifier = createTokenVerifier(config);
+  verifier.cacheJwks({ keys: [jwk] });
+  for (const client of ['readclient', 'writeclient']) {
+    assert.equal((await verifier.verify(jwt({ client_id: client,
+      scope: 'openid email profile ttobak.connector/read' }))).client_id, client);
+  }
+  for (const overrides of [
+    { client_id: 'testclient', scope: 'openid email profile ttobak.connector/read' },
+    { client_id: 'readclient' },
+    { client_id: 'writeclient', scope: 'openid email profile ttobak.connector/write' },
+    { client_id: 'readclient', aud: 'readclient', scope: 'openid email profile ttobak.connector/read' },
+    { client_id: 'readclient', token_use: 'id', scope: 'openid email profile ttobak.connector/read' },
+  ]) await assert.rejects(verifier.verify(jwt(overrides)));
+  assert.ok(resourceMetadata(config).scopes_supported.includes('ttobak.connector/write'));
+  assert.ok(!config.scopes.includes('ttobak.connector/write'));
+  for (const overrides of [
+    { TTOBAK_CONNECTOR_PRIVATE_BRIDGE: 'yes' },
+    { TTOBAK_CONNECTOR_PRIVATE_BRIDGE: 'true' },
+    { TTOBAK_CONNECTOR_PRIVATE_BRIDGE: 'true', CONNECTOR_READ_CLIENT_ID: 'readclient', CONNECTOR_WRITE_CLIENT_ID: 'readclient' },
+    { TTOBAK_CONNECTOR_PRIVATE_BRIDGE: 'true', CONNECTOR_READ_CLIENT_ID: 'testclient', CONNECTOR_WRITE_CLIENT_ID: 'writeclient' },
+  ]) assert.throws(() => httpConfig({ ...baseEnv, ...overrides }));
+  const legacy = createTokenVerifier(httpConfig(baseEnv));
+  legacy.cacheJwks({ keys: [jwk] });
+  assert.equal((await legacy.verify(jwt())).client_id, 'testclient');
+});
 
 async function fixture(t, customize, configOverrides = {}) {
   const config = { ...httpConfig(baseEnv), ...configOverrides };

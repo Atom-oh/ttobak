@@ -18,7 +18,7 @@ describe('GatewayStack', () => {
       .filter(resource => JSON.stringify(resource.Properties.FunctionName).includes('KbFunction'));
   }
 
-  function buildTemplate(indexingMode: 'manual-only' | 'all' = 'manual-only', scheduleEnabled = false, mcpResourceAudience?: string, audioCropEnabled = false, cloudfrontDomain: string | null = 'd2olomx8td8txt.cloudfront.net', save?: (g: Template, r: Template) => void, originReleaseCiRoleName?: unknown, extraContext: Record<string, unknown> = {}): Template {
+  function buildTemplate(indexingMode: 'manual-only' | 'all' = 'manual-only', scheduleEnabled = false, mcpResourceAudience?: string, audioCropEnabled = false, cloudfrontDomain: string | null = 'd2olomx8td8txt.cloudfront.net', save?: (g: Template, r: Template) => void, originReleaseCiRoleName?: unknown, extraContext: Record<string, unknown> = {}, connectors = false): Template {
     const app = new cdk.App({
       context: {
         ...(cloudfrontDomain === null ? {} : { 'ttobak:cloudfrontDomain': cloudfrontDomain }),
@@ -59,6 +59,10 @@ describe('GatewayStack', () => {
       table,
       userPool,
       userPoolClient,
+      ...(connectors ? {
+        readConnectorClient: userPool.addClient('ReadConnector'),
+        writeConnectorClient: userPool.addClient('WriteConnector'),
+      } : {}),
       kbBucket,
       knowledgeBaseId: 'test-kb-id',
       indexingMode,
@@ -75,6 +79,43 @@ describe('GatewayStack', () => {
 
   beforeAll(() => {
     template = buildTemplate();
+  });
+
+  test('connector consumers use exact private grants, a retained signing key and ARM64 crypto', () => {
+    const t = buildTemplate(undefined, undefined, 'https://ttobak.example.com/api/mcp',
+      undefined, undefined, undefined, undefined, {}, true);
+    const fns = Object.values(t.findResources('AWS::Lambda::Function'));
+    const fn = (name: string) => fns.find(row => row.Properties.FunctionName === name)!.Properties;
+    const api = fn('ttobak-api'), qa = fn('ttobak-qa'), mcp = fn('ttobak-mcp');
+    expect(mcp.Environment.Variables.TTOBAK_CONNECTOR_PRIVATE_BRIDGE).toBe('false');
+    expect(JSON.stringify(mcp.Environment.Variables.CONNECTOR_API_FUNCTION_ARN)).toContain('ApiLiveAlias');
+    expect(api.Environment.Variables.CONNECTOR_SIGNING_KEY_ARN).toEqual(qa.Environment.Variables.CONNECTOR_SIGNING_KEY_ARN);
+    expect(qa.Environment.Variables.CONNECTOR_WEB_CLIENT_IDS).toEqual(api.Environment.Variables.API_ALLOWED_CLIENT_IDS);
+    expect(JSON.stringify(api.Environment.Variables.API_ALLOWED_CLIENT_IDS)).not.toContain('Connector');
+    expect(JSON.stringify(fn('ttobak-ws-authorizer').Environment.Variables.WS_ALLOWED_CLIENT_IDS)).not.toContain('Connector');
+    const keys = Object.values(t.findResources('AWS::KMS::Key'));
+    expect(keys).toHaveLength(1);
+    expect(keys[0]).toMatchObject({ DeletionPolicy: 'Retain', UpdateReplacePolicy: 'Retain',
+      Properties: { KeySpec: 'RSA_2048', KeyUsage: 'SIGN_VERIFY' } });
+    t.hasResourceProperties('AWS::Lambda::LayerVersion', {
+      CompatibleArchitectures: ['arm64'], CompatibleRuntimes: ['python3.12'],
+    });
+    expect(qa.Layers).toHaveLength(1);
+    const policies = Object.values(t.findResources('AWS::IAM::Policy'));
+    const statements = policies.filter(row => JSON.stringify(row.Properties.Roles).includes('McpFunctionServiceRole'))
+      .flatMap(row => row.Properties.PolicyDocument.Statement);
+    const grant = statements.find((row: any) => row.Action === 'dynamodb:GetItem');
+    expect(grant.Condition['ForAnyValue:StringEquals']['dynamodb:EnclosingOperation']).toEqual(['TransactGetItems']);
+    expect(grant.Condition['ForAllValues:StringEquals']['dynamodb:Attributes']).not.toContain('markdown');
+    expect(grant.Condition.Null).toEqual({ 'dynamodb:Attributes': 'false', 'dynamodb:LeadingKeys': 'false' });
+    expect(statements.find((row: any) => row.Action === 'kms:Sign').Condition).toEqual({
+      StringEquals: { 'kms:SigningAlgorithm': 'RSASSA_PSS_SHA_256' },
+    });
+    const invokes = statements.find((row: any) => row.Action === 'lambda:InvokeFunction').Resource;
+    expect(invokes).toHaveLength(2);
+    expect(JSON.stringify(invokes)).toContain('ApiLiveAlias');
+    expect(JSON.stringify(statements)).not.toContain('dynamodb:PutItem');
+    expect(JSON.stringify(statements)).not.toContain('s3:GetObject');
   });
 
   test('the API and WebSocket authorizer allowlist only the first-party app clients', () => {

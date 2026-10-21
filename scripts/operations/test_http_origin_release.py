@@ -37,6 +37,7 @@ class World:
         self.fail_frontend = False
         self.lose_promotion_reply = False
         self.foundation = True
+        self.qa_status = 405  # Legacy handler; configured identity ingress rejects this probe with 403.
         self.mutate_on_sleep = False
         self.marker_missing_for = ""
         self.templates_ready = True
@@ -89,7 +90,9 @@ class World:
         self.history.append(("invoke", FunctionName))
         self.assert_probe(event, FunctionName)
         accepted = self.accepts(FunctionName, event["headers"].get("x-origin-verify"))
-        status = Release.expected_status(FunctionName) if accepted else 403
+        # Model consumer behavior independently of the coordinator acceptance predicate.
+        status = (404 if FunctionName.startswith("ttobak-api") else
+                  self.qa_status if FunctionName == "ttobak-qa" else 200) if accepted else 403
         marker = accepted and self.foundation and self.marker_missing_for != FunctionName
         if FunctionName.startswith("ttobak-api"):
             response = {"statusCode": status, "headers": None,
@@ -264,6 +267,95 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(base_deploys, list(STACKS))
         self.assertNotIn("TtobakKnowledgeStack", base_deploys)
         self.assertGreaterEqual(sum(entry[1] for entry in world.history if entry[0] == "sleep"), 3 * CACHE_WAIT)
+
+    def test_rotation_accepts_qa_identity_denial_and_legacy_consumer_transition(self):
+        for initial_status, deployed_status in ((403, 403), (405, 403), (405, 405)):
+            with self.subTest(initial=initial_status, deployed=deployed_status):
+                world = World()
+                world.qa_status = initial_status
+                deploy = world.deploy
+
+                def consumer_transition(stack, parameters=None):
+                    deploy(stack, parameters)
+                    if stack == "TtobakGatewayStack":
+                        world.qa_status = deployed_status
+
+                with mock.patch.object(world, "deploy", side_effect=consumer_transition):
+                    result = self.quiet_run(world.release())
+                self.assertEqual(result["status"], "complete")
+                self.assertEqual(world.proof, NEW)
+                self.assertEqual(world.doc()["previous"], "")
+                self.assertTrue(all(not world.accepts(name, OLD) for name in world.functions))
+
+    def probe_phase(self, phase):
+        world = World()
+        if phase == "readers":
+            self.quiet_run(world.release())
+        release = world.release()
+        release.inspect()
+        if phase == "readers":
+            with redirect_stdout(io.StringIO()):
+                release.verify_foundation()
+            return world, release, lambda: release.verify_readers(retired=OLD)
+        return world, release, release.verify_foundation
+
+    def test_both_phases_reject_unproven_or_wrong_consumer_responses(self):
+        cases = (
+            ("ttobak-qa", 403, {}),
+            ("ttobak-qa", 403, {"headers": {"x-ttobak-origin-protocol": "2"}}),
+            ("ttobak-qa", 403, {"headers": {"x-ttobak-origin-protocol": "1"},
+                                 "multiValueHeaders": {"X-Ttobak-Origin-Protocol": ["2"]}}),
+            ("ttobak-qa", 200, {"headers": {"x-ttobak-origin-protocol": "1"}}),
+            ("ttobak-qa", 500, {"headers": {"x-ttobak-origin-protocol": "1"}}),
+            ("ttobak-api", 403, {"headers": {"x-ttobak-origin-protocol": "1"}}),
+            ("ttobak-api:live", 403, {"headers": {"x-ttobak-origin-protocol": "1"}}),
+            ("ttobak-mcp", 403, {"headers": {"x-ttobak-origin-protocol": "1"}}),
+        )
+        for phase in ("foundation", "readers"):
+            for name, status, headers in cases:
+                with self.subTest(phase=phase, consumer=name, status=status, headers=headers):
+                    world, release, verify = self.probe_phase(phase)
+                    invoke = world.invoke
+                    changes = world.secret_changes
+                    deployments = sum(row[0] == "deploy" for row in world.history)
+
+                    def response(**kwargs):
+                        result = invoke(**kwargs)
+                        event = json.loads(kwargs["Payload"])
+                        if kwargs["FunctionName"] == name and world.accepts(name, event["headers"].get("x-origin-verify")):
+                            result["Payload"].close()
+                            result["Payload"] = io.BytesIO(json.dumps({"statusCode": status, **headers}).encode())
+                        return result
+
+                    code = "READER_FOUNDATION_NOT_DEPLOYED" if phase == "foundation" else "CURRENT_PROOF_NOT_ACCEPTED"
+                    with mock.patch.object(world, "invoke", side_effect=response), redirect_stdout(io.StringIO()):
+                        with self.assertRaisesRegex(ReleaseError, "^" + code + "$"):
+                            verify()
+                    self.assertEqual(world.secret_changes, changes)
+                    self.assertEqual(sum(row[0] == "deploy" for row in world.history), deployments)
+
+    def test_qa_marked_denial_never_satisfies_missing_or_retired_proof_checks(self):
+        for phase, rejected_proof, code in (
+            ("foundation", None, "FOUNDATION_MISSING_PROOF_NOT_REJECTED"),
+            ("readers", None, "MISSING_PROOF_NOT_REJECTED"),
+            ("readers", OLD, "RETIRED_PROOF_STILL_ACCEPTED"),
+        ):
+            with self.subTest(phase=phase, rejected=rejected_proof is None):
+                world, release, verify = self.probe_phase(phase)
+                invoke = world.invoke
+
+                def response(**kwargs):
+                    result = invoke(**kwargs)
+                    event = json.loads(kwargs["Payload"])
+                    if kwargs["FunctionName"] == "ttobak-qa" and event["headers"].get("x-origin-verify") == rejected_proof:
+                        result["Payload"].close()
+                        result["Payload"] = io.BytesIO(json.dumps({"statusCode": 403,
+                            "headers": {"x-ttobak-origin-protocol": "1"}}).encode())
+                    return result
+
+                with mock.patch.object(world, "invoke", side_effect=response), redirect_stdout(io.StringIO()):
+                    with self.assertRaisesRegex(ReleaseError, "^" + code + "$"):
+                        verify()
 
     def test_missing_foundation_or_live_proof_disagreement_prevents_all_mutations(self):
         for mode in ("marker", "proof"):

@@ -121,19 +121,48 @@ describe('AuthStack', () => {
   });
 
   test('the HTTP MCP resource server exists only with the MCP resource context', () => {
-    expect(Object.keys(template.findResources('AWS::Cognito::UserPoolResourceServer'))).toHaveLength(0);
+    const baseline = Object.values(template.findResources('AWS::Cognito::UserPoolResourceServer'));
+    expect(baseline.map(row => row.Properties.Identifier)).toEqual(['ttobak.connector']);
     const app = new cdk.App({ context: {
       'ttobak:domainName': 'ttobak.example.com',
       'ttobak:mcpResourceAudience': 'https://ttobak.example.com/api/mcp',
     } });
     const enabled = Template.fromStack(new AuthStack(app, 'TestAuthStackMcp'));
-    enabled.resourceCountIs('AWS::Cognito::UserPoolResourceServer', 1);
+    enabled.resourceCountIs('AWS::Cognito::UserPoolResourceServer', 2);
     enabled.hasResourceProperties('AWS::Cognito::UserPoolResourceServer', {
       Identifier: 'https://ttobak.example.com/api/mcp',
     });
-    // Clients keep standard scopes only; the reserved scope is never granted.
+    // First-party clients keep their standard scopes; connector issuance is off.
     for (const client of Object.values(enabled.findResources('AWS::Cognito::UserPoolClient'))) {
-      expect([...(client.Properties.AllowedOAuthScopes ?? [])].sort()).toEqual(['email', 'openid', 'profile']);
+      if (['ttobak-read-connector', 'ttobak-write-connector'].includes(client.Properties.ClientName)) {
+        expect(client.Properties.AllowedOAuthScopes).toBeUndefined();
+        expect(client.Properties.AllowedOAuthFlowsUserPoolClient).toBe(false);
+      } else {
+        expect([...(client.Properties.AllowedOAuthScopes ?? [])].sort()).toEqual(['email', 'openid', 'profile']);
+      }
+    }
+  });
+
+  test('dedicated public connector clients issue only code-grant capabilities and never AWS identities', () => {
+    const app = new cdk.App({ context: {
+      'ttobak:domainName': 'ttobak.example.com',
+      'ttobak:mcpResourceAudience': 'https://ttobak.example.com/api/mcp',
+    } });
+    const active = Template.fromStack(new AuthStack(app, 'ConnectorAuth', { connectorOAuthEnabled: true }));
+    const clients = active.findResources('AWS::Cognito::UserPoolClient');
+    const identity = Object.values(active.findResources('AWS::Cognito::IdentityPool'))[0];
+    for (const [id, row] of Object.entries(clients)) {
+      if (!['ttobak-read-connector', 'ttobak-write-connector'].includes(row.Properties.ClientName)) continue;
+      expect(row.Properties.GenerateSecret).toBe(false);
+      expect(row.Properties.ExplicitAuthFlows).toEqual(['ALLOW_REFRESH_TOKEN_AUTH']);
+      expect(row.Properties.AllowedOAuthFlows).toEqual(['code']);
+      expect(row.Properties.AllowedOAuthFlowsUserPoolClient).toBe(true);
+      expect(row.Properties.EnableTokenRevocation).toBe(true);
+      expect(JSON.stringify(identity.Properties.CognitoIdentityProviders)).not.toContain(id);
+      const scopes = JSON.stringify(row.Properties.AllowedOAuthScopes);
+      expect(scopes).toContain('/read');
+      if (row.Properties.ClientName === 'ttobak-read-connector') expect(scopes).not.toContain('/write');
+      else expect(scopes).toContain('/write');
     }
   });
 

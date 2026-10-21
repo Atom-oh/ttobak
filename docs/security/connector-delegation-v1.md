@@ -84,10 +84,11 @@ wrong destinations/body/request, unknown operations/fields, duplicate fields,
 upstream expiry, wrong PSS salt, current approval revocation and lookup deadlines.
 These tests establish local interoperability, not live KMS or provider acceptance.
 
-The isolated Python verifier checks use exact `cryptography==50.0.2`. The current QA Lambda is Python
-3.12 ARM64 and uses `Code.fromAsset`; a requirements entry does not vendor its
-native wheel. Before activation, explicitly package the compatible wheel and
-verify imports in the deployed artifact. Preserve fail-closed behavior during
+The isolated Python verifier checks use exact `cryptography==50.0.2`. The QA Lambda
+is Python 3.12 ARM64. Staged GatewayStack now attaches a layer built from pinned
+versions and hashes for cryptography, cffi and pycparser; a source requirements
+entry alone does not prove the native artifact. Before activation, verify the
+deployed layer's imports and RSA-PSS execution. Preserve fail-closed behavior during
 producer-first rollout, including every alias that can receive traffic.
 No public or unauthenticated probe route is authorized for this purpose.
 

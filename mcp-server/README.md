@@ -77,7 +77,12 @@ bearer token to Lambda or falls back to HTTP after a private call fails.
 
 This mode additionally requires `AWS_REGION`, `TABLE_NAME`,
 `CONNECTOR_SIGNING_KEY_ARN` (an exact RSA KMS key ARN),
-`CONNECTOR_API_FUNCTION_ARN` and `CONNECTOR_QA_FUNCTION_ARN`. The execution role
+`CONNECTOR_API_FUNCTION_ARN`, `CONNECTOR_QA_FUNCTION_ARN`,
+`CONNECTOR_READ_CLIENT_ID` and `CONNECTOR_WRITE_CLIENT_ID`. The two dedicated IDs
+must be distinct from one another and the legacy `TTOBAK_CLIENT_ID`. In private
+mode only those two verified resource-bound clients are accepted; read scope is
+mandatory, while write scope and current approval are required per mutation.
+The execution role
 needs the separately reviewed Sign, private InvokeFunction and transactional
 grant-read permissions. Grant rows must bind the public MCP resource URL and
 Cognito issuer. Each request reads the current grants before signing and again
@@ -88,6 +93,9 @@ Omitting the flag or setting it to `false` selects the existing HTTP transport.
 Source tests cover that rollback selection; production KMS/IAM, provider-token
 and consumer acceptance remain prerequisites for enabling it. The private flag
 does not change stdio authentication or install OAuth clients.
+The staged CDK clients, exact IAM grants and ARM64 QA layer are documented in the
+[release runbook](../docs/runbooks/connector-release.md); production activation is
+separate from source configuration.
 
 Private `ttobak_put_document` requires a personal destination, `docType: "note"`
 and an `idempotencyKey` of 1–128 ASCII letters, digits, underscores or hyphens.
