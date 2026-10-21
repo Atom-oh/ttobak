@@ -90,6 +90,9 @@ there are at most 60 attempts including retries. Settlement advances the finishe
 counter in the same transaction. Finalization binds both counters and the charged
 total after strongly reading every bounded attempt, so concurrent reservations
 or settlements invalidate the snapshot. Live leases defer finalization.
+Recovery also requires the original admission deadline to have elapsed, including
+zero-attempt runs still doing discovery. The transaction binds the observed
+deadline and requires it to remain expired; normal completion may finish earlier.
 
 Expired attempts are marked expired while their full charges remain. Monthly
 unknown-usage counts, the frozen run receipt and one stable timestamp/run history

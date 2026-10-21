@@ -268,7 +268,10 @@ writes one stable history row atomically with the run receipt. It preserves all
 charged cost and records unknown usage; it never increments cost again or updates
 source CONFIG. Pre-inference failures supplied by the completed workflow remain
 visible even when no model attempt was created. Recovery explicitly marks missing
-workflow outcomes. New accounting/run/history rows use the existing table TTL
+workflow outcomes and cannot finalize before the admission deadline, even when
+no attempt exists. The recovery transaction pins that deadline. Run identities
+retain the same exact Unicode source IDs as discovery and publication.
+New accounting/run/history rows use the existing table TTL
 attribute for 400-day retention; claims expire after seven days. Canonical
 published documents and objects have no automatic expiry in this stage.
 These modules do not activate a scheduler, change legacy news results or establish

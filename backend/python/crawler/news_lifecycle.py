@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 import re
 
+from news_discovery import valid_source_id
 from news_store import (
     ACCOUNTING_RETENTION_SECONDS, MAX_RUN_ATTEMPTS, StateRejected, _ID, _REVISION, _match, _money,
 )
@@ -43,11 +44,10 @@ class Run:
     revision: str
 
     def __post_init__(self):
-        _match(self.source_id, _ID)
+        if not valid_source_id(self.source_id):
+            raise StateRejected("INVALID_IDENTITY")
         _match(self.run_id, _ID)
         _match(self.revision, _REVISION)
-        if self.source_id.startswith("__"):
-            raise StateRejected("INVALID_IDENTITY")
 
     @property
     def pk(self):
@@ -119,6 +119,8 @@ class NewsRuns:
         raise StateRejected("STATE_UNAVAILABLE")
 
     def finish(self, run, now, *, discovery=None, outcomes=(), recovery=False):
+        if type(recovery) is not bool:
+            raise StateRejected("INVALID_WORKER_RESULTS")
         now = _integer(now, 253402299599)
         row = self.store._get(run.pk, run.sk)
         if not row or row.get("sourceRevision") != run.revision:
@@ -128,6 +130,12 @@ class NewsRuns:
         if row.get("runState") != "OPEN":
             raise StateRejected("INVALID_RUN_STATE")
         started = _integer(row.get("startedAt"), now)
+        if recovery:
+            admission_deadline = _integer(row.get("acceptUntil"), 253402301399)
+            if admission_deadline != started + ACCEPT_SECONDS:
+                raise StateRejected("INVALID_RUN_STATE")
+            if now < admission_deadline:
+                raise StateRejected("RUN_BUSY")
         count = _integer(row.get("attemptCount"), MAX_RUN_ATTEMPTS)
         finished = _integer(row.get("finishedCount"), count)
         charged = _aggregate_charge(row.get("chargedUsd"))
@@ -174,7 +182,7 @@ class NewsRuns:
             raise StateRejected("INVALID_RUN_STATE")
         if expired:
             errors.append("EXPIRED_ATTEMPTS")
-        if type(recovery) is not bool or not isinstance(outcomes, (list, tuple)) or len(outcomes) > 20:
+        if not isinstance(outcomes, (list, tuple)) or len(outcomes) > 20:
             raise StateRejected("INVALID_WORKER_RESULTS")
         if recovery:
             errors.append("RECOVERED_WITHOUT_OUTCOMES")
@@ -266,5 +274,11 @@ class NewsRuns:
                               "schemaVersion": 1, "type": "news", **receipt,
                               "pendingShareExpiresAt": now + RETENTION_SECONDS},
                      "ConditionExpression": "attribute_not_exists(PK)"}}])
+        if recovery:
+            # Recovery cannot race a changed admission window or close a run
+            # which may still admit new candidates after the strong read.
+            update = operations[-2]["Update"]
+            update["ConditionExpression"] += " AND acceptUntil = :admission AND acceptUntil <= :now"
+            update["ExpressionAttributeValues"][":admission"] = admission_deadline
         self.store._transaction(operations)
         return receipt

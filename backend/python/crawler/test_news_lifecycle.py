@@ -9,11 +9,26 @@ from unittest import mock
 import boto3
 
 from news_lifecycle import ACCEPT_SECONDS, NewsRuns, Run, _aggregate_charge
+from news_discovery import source_revision
 from news_store import LEASE_SECONDS, NewsStore, StateRejected
 from test_news_store import CONFIG, NOW, attempt, document, mock_aws
 
 
 class TestRunBoundaries(unittest.TestCase):
+    def test_invalid_recovery_flag_and_source_identity_never_touch_storage(self):
+        store = mock.Mock()
+        job = attempt()
+        run = Run(job.source_id, job.run_id, job.revision)
+        for value in (1, 0, "true", None):
+            with self.subTest(value=value), self.assertRaisesRegex(StateRejected, "INVALID_WORKER_RESULTS"):
+                NewsRuns(store).finish(run, NOW, recovery=value)
+        self.assertEqual(store.mock_calls, [])
+        for source_id in ("__tech__", " source", "한/글", "²", "\ud800", "a" * 129):
+            with self.subTest(source_id=source_id), self.assertRaisesRegex(StateRejected, "INVALID_IDENTITY"):
+                Run(source_id, "run", job.revision)
+        with self.assertRaisesRegex(StateRejected, "INVALID_IDENTITY"):
+            Run("우리은행", "한글", job.revision)
+
     def test_aggregate_charge_is_bounded_without_relaxing_attempt_inputs(self):
         self.assertEqual(_aggregate_charge(Decimal("6000000")), Decimal("6000000"))
         for value in (True, 1.0, "120000", Decimal("NaN"), Decimal("Infinity"),
@@ -130,6 +145,55 @@ class TestRunTransactions(unittest.TestCase):
         self.assertEqual(len(self.history()), 1)
         self.assertEqual(self.history()[0]["duration"], 10000)
         self.assertEqual(self.item("CONFIG"), CONFIG)
+
+    def test_recovery_waits_for_admission_deadline_even_with_no_attempts(self):
+        for now in (NOW, NOW + ACCEPT_SECONDS - 1):
+            with self.subTest(now=now), self.assertRaisesRegex(StateRejected, "RUN_BUSY"):
+                self.runs.finish(self.run, now, recovery=True)
+            self.assertEqual(self.item(self.run.sk)["runState"], "OPEN")
+            self.assertEqual(self.history(), [])
+        receipt = self.runs.finish(self.run, NOW + ACCEPT_SECONDS, recovery=True)
+        self.assertIn("RECOVERED_WITHOUT_OUTCOMES", receipt["errors"])
+        self.assertEqual(receipt["chargedUsd"], 0)
+        self.assertEqual(self.runs.finish(self.run, NOW + ACCEPT_SECONDS + 1, recovery=True), receipt)
+        self.assertEqual(len(self.history()), 1)
+
+    def test_recovery_respects_a_live_lease_after_admission_closes(self):
+        now = NOW + ACCEPT_SECONDS - 1
+        job = replace(self.job, lease_until=now + LEASE_SECONDS)
+        self.reserve(job, now=now)
+        with self.assertRaisesRegex(StateRejected, "RUN_BUSY"):
+            self.runs.finish(self.run, NOW + ACCEPT_SECONDS, recovery=True)
+        self.assertEqual(self.history(), [])
+        receipt = self.runs.finish(self.run, job.lease_until, recovery=True)
+        self.assertEqual(receipt["expiredAttempts"], 1)
+        self.assertEqual(receipt["chargedUsd"], 1)
+
+    def test_changed_admission_deadline_aborts_recovery_atomically(self):
+        original = self.store._transaction
+        def change_deadline(operations):
+            self.table.update_item(
+                Key={"PK": self.run.pk, "SK": self.run.sk},
+                UpdateExpression="SET acceptUntil = :later",
+                ExpressionAttributeValues={":later": NOW + ACCEPT_SECONDS + 100})
+            return original(operations)
+        with mock.patch.object(self.store, "_transaction", side_effect=change_deadline):
+            with self.assertRaisesRegex(StateRejected, "STATE_CONFLICT"):
+                self.runs.finish(self.run, NOW + ACCEPT_SECONDS, recovery=True)
+        self.assertEqual(self.history(), [])
+        self.assertEqual(self.item(self.run.sk)["runState"], "OPEN")
+
+    def test_unicode_run_start_and_history_preserve_exact_source_identity(self):
+        for source_id in ("우리은행", "école-١", "news_source"):
+            with self.subTest(source_id=source_id):
+                config = dict(CONFIG, PK="CRAWLER#" + source_id, sourceId=source_id)
+                self.table.put_item(Item=config)
+                run = Run(source_id, "run", source_revision(config))
+                self.runs.begin(run, NOW)
+                receipt = self.runs.finish(run, NOW + 1)
+                self.assertEqual(receipt["sourceId"], source_id)
+                self.assertEqual(receipt["sourceRevision"], run.revision)
+                self.assertEqual(self.runs.finish(run, NOW + 2), receipt)
 
     def test_finalization_does_not_charge_again_and_published_count_is_canonical(self):
         self.reserve()
