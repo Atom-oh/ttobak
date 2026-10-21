@@ -282,6 +282,11 @@ revision. Indexed snippets never replace unavailable current bytes. These news
 sources are available to authenticated users; no public route is added. REST and
 WebSocket share this reader through source access. Positive deployed QA acceptance
 and legacy news migration are still required before enabling new writers.
+The web source list labels these results as news evidence and retains partial
+and restored-history caveats without exposing internal S3 links. Markdown views,
+editable document/meeting HTML and research exports restore valid IPv6 authority
+brackets after parser encoding. Query bytes, HTML escaping, URL protocol filtering
+and the existing HTML sanitization remain in place.
 These modules do not activate a scheduler, change legacy news results or establish
 production acceptance. Handler wiring, scheduled recovery and consumer rollout remain
 separate delivery stages.

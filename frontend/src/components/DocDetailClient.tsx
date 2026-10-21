@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import { Marked } from 'marked';
+import { markdownLinkRenderer } from '@/lib/markdownHtml';
 import TurndownService from 'turndown';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -20,7 +21,7 @@ const MeetingEditor = dynamic(() => import('./MeetingEditor').then(m => ({ defau
 // Same markdown<->HTML conversion as AISummaryCard.tsx -- keeps stored
 // `content` as canonical markdown (atx headings, `-` bullets) rather than
 // raw HTML, matching what the vault export / Obsidian side expects.
-const marked = new Marked();
+const marked = new Marked({ renderer: markdownLinkRenderer });
 const turndown = new TurndownService({ headingStyle: 'atx', bulletListMarker: '-', hr: '---' });
 
 function documentChanged(saved: { title: string; markdown: string }, title: string, markdown: string) {
