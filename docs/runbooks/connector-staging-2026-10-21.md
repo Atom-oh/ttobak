@@ -3,6 +3,10 @@
 **The flags-false staging prerequisite passed. Dedicated private connector
 acceptance remains pending.** This dated record accompanies the activation
 change and preserves the release runbook's separate live acceptance gate.
+The independently reviewed activation branch is deployed before its merge to
+main. Keep that integration pending until real private and rollback acceptance
+complete; then attach a separate dated public-safe acceptance result bound to the
+reviewed source and artifacts. This record does not claim those pending results.
 
 ## Staging scope and results
 

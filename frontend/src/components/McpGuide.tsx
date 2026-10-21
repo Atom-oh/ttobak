@@ -150,12 +150,13 @@ export function McpGuide() {
             <div className="flex items-start gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-white/10 dark:bg-surface-lowest">
               <span aria-hidden="true" className="material-symbols-outlined shrink-0 text-base text-primary">info</span>
               <div className="min-w-0 text-xs leading-relaxed text-slate-600 dark:text-text-secondary">
-                <p className="font-semibold text-slate-800 dark:text-text-main">{load.status === 'loading' ? 'HTTP 주소 확인 중' : load.status === 'error' ? 'HTTP 주소 확인 불가' : config?.httpUrl ? 'HTTP 주소 등록됨 · OAuth 설정 확인 필요' : 'HTTP 주소 미설정'}</p>
+                <p className="font-semibold text-slate-800 dark:text-text-main">{load.status === 'loading' ? 'HTTP 인증 설정 확인 중' : load.status === 'error' ? 'HTTP 인증 설정 확인 불가' : config?.httpUrl ? 'HTTP 연결 설정 준비됨 · 본인 로그인 필요' : 'HTTP 연결 설정 미완료'}</p>
                 <p className="mt-1">{load.status !== 'ready'
                   ? '사이트의 연결 설정을 확인한 뒤 HTTP 주소가 필요한 명령을 복사할 수 있습니다.'
                   : config?.httpUrl
                     ? '아래는 사이트에 등록된 주소입니다. 연결 전에 해당 클라이언트의 OAuth 콜백 등록과 본인 로그인을 확인하세요.'
-                    : '이 사이트에 공개 HTTP MCP 주소가 아직 등록되지 않았습니다. 아래는 설정 절차 안내이며, 주소가 필요한 명령의 복사는 비활성화됩니다. 관리자에게 서버 주소와 인증 설정을 확인해 주세요.'}</p>
+                    : 'HTTP 주소, 연결 모드 또는 전용 클라이언트 설정을 확인할 수 없어 HTTP 연결 안내와 복사를 비활성화했습니다. 관리자에게 사이트 설정을 확인해 주세요. 로컬 stdio 연결은 계속 사용할 수 있습니다.'}</p>
+                {config?.httpUrl && config.privateBridgeEnabled && <p className="mt-2">이 안내는 읽기 전용 연결입니다. 관리자가 해당 클라이언트를 활성화해야 합니다. 개인 노트 쓰기는 별도로 활성화된 쓰기 클라이언트 연결과 본인의 설정 → AI 연결 권한에서 유효한 1시간 쓰기 승인이 필요합니다. 읽기 로그인만으로 쓰기를 허용하지 않습니다.</p>}
               </div>
             </div>
           )}
@@ -174,12 +175,12 @@ export function McpGuide() {
           </ol>
 
           {guide.note && <p className="rounded-lg bg-primary/5 px-3 py-2.5 text-xs leading-relaxed text-slate-600 dark:text-text-secondary">{guide.note}</p>}
-          {client === 'kiro-cli' && (
+          {client === 'kiro-cli' && (transport === 'stdio' || config?.httpUrl) && (
             <CodeBlock code={{ title: '선택 사항 · Tool Search 활성화', text: 'kiro-cli settings toolSearch.enabled true' }} configured httpConfigured={Boolean(config?.httpUrl)} />
           )}
           <a href={selected.docs} target="_blank" rel="noopener noreferrer" className="inline-flex rounded text-xs font-semibold text-primary hover:underline focus-visible:outline-2 focus-visible:outline-primary">{selected.name} 공식 MCP 문서 ↗</a>
 
-          <div className="space-y-3 border-t border-slate-200 pt-4 dark:border-white/10">
+          {(transport === 'stdio' || config?.httpUrl) && <div className="space-y-3 border-t border-slate-200 pt-4 dark:border-white/10">
             <h4 className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-text-main"><span aria-hidden="true" className="material-symbols-outlined text-base text-primary">chat</span>연결 후 이렇게 요청하세요</h4>
             {[
               'TTOBAK에서 이번 주 내 회의 목록을 보여줘',
@@ -192,7 +193,7 @@ export function McpGuide() {
               </div>
             ))}
             <p className="text-xs leading-relaxed text-slate-500 dark:text-text-muted">회의 읽기는 저장된 노트를 우선 사용합니다. AI 요약이나 원문 녹취가 필요하면 구분해서 요청하세요. 접근 가능한 본인·공유 자료의 권한은 TTOBAK에서 확인합니다.</p>
-          </div>
+          </div>}
         </div>
       )}
     </div>

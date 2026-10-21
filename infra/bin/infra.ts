@@ -211,6 +211,9 @@ const frontendStack = new FrontendStack(app, 'TtobakFrontendStack', {
   cognitoRegion: env.region as string,
   userPoolId: authStack.userPool.userPoolId,
   userPoolClientId: authStack.spaClient.userPoolClientId,
+  connectorPrivateBridgeEnabled,
+  readConnectorClientId: authStack.readConnectorClient.userPoolClientId,
+  writeConnectorClientId: authStack.writeConnectorClient.userPoolClientId,
   identityPoolId: authStack.identityPoolId,
 });
 frontendStack.addDependency(gatewayStack);

@@ -18,6 +18,18 @@ or `WriteConnectorClientId` when personal-note writing is required, and perform 
 fresh PKCE login. A first-party HTTP token is rejected in this mode. Installed
 stdio keeps its existing client and deployment/profile-bound cache.
 
+FrontendStack publishes the same private flag and both dedicated public client
+IDs in `config.json.mcp`. The Settings guide defaults private HTTP to the read
+client and `openid email profile ttobak.connector/read`; personal-note writing
+requires a separate enabled write connection and the current user's one-hour
+approval in Settings → AI connection permissions. Stdio always uses the existing
+first-party client. Missing mode or invalid dedicated-client configuration
+disables HTTP instructions instead of selecting a first-party fallback.
+Static frontend publication preserves `config.json`; deploy the FrontendStack
+configuration companion and verify the actual Settings output before completing
+activation. A static-only intermediate release with the older URL-only config
+intentionally shows HTTP setup as unavailable.
+
 ## Resource boundaries
 
 AuthStack preserves the existing pool, first-party and companion client identities.
@@ -43,6 +55,12 @@ real RSA-PSS verification before enabling any producer.
 
 ## Deployment sequence
 
+Deploy the independently reviewed activation branch and frozen artifacts before
+merging that branch to main. Keep the PR unmerged while private acceptance is
+pending. After actual activation and rollback acceptance complete, attach a dated
+public-safe result bound to the reviewed source and artifacts, then integrate
+main. The disabled-staging record is a prerequisite, not that completion result.
+
 1. Capture current main, deployment activity, stack templates, Lambda code hashes,
    alias versions, feature parameters, grants and public config without credentials.
    Build all Go entry points and both MCP artifacts from the reviewed combined
@@ -63,7 +81,12 @@ real RSA-PSS verification before enabling any producer.
    loopback PKCE flow for a dedicated synthetic identity. Request the exact
    resource audience and read scope, plus write scope only for the write client.
    Capture provider claims as nonsecret assertions; keep tokens and verifier
-   material private.
+   material private. Publish the matching static guide and FrontendStack runtime
+   configuration, and check the rendered HTTP client ID and read scope, missing
+   configuration notice and unchanged stdio client. A reviewed static-only guide
+   update may precede Gateway activation to disable legacy HTTP instructions;
+   publish its runtime configuration companion after the coordinated backend
+   checks and flag-off/restore sequence, before declaring activation complete.
 5. Verify reads and personal-note creation through CloudFront and actual service
    IAM/KMS. Test the same-key replay, conflicting body, human edit and deletion,
    another user's source denial, source changes, expired/revoked/blocked approvals,
@@ -82,8 +105,10 @@ Gateway changes. Gateway-first activation makes MCP reject first-party clients
 while the old edge still advertises first-party scopes. Expect temporary
 authentication failures until both stacks converge and HTTP hosts complete their
 dedicated login. The reverse split occurs during rollback. Check both deployed
-flags, discovery/challenge and positive/negative client probes before ending the
-window; a single successful stack update is insufficient.
+flags, discovery/challenge, FrontendStack config and actual Settings instructions,
+and positive/negative client probes before ending the window; a single successful
+stack update is insufficient. Existing hosts and cached browser pages may retain
+their old settings during propagation and require refresh or reconfiguration.
 
 ## Activation and rollback checks
 
@@ -106,7 +131,7 @@ record boolean claim assertions, response status, byte counts and fixture IDs.
 | Grant expiry, revoke, block and disabled policy | Existing access tokens gain no stale privilege; re-approval uses the current generation |
 | ID, unbound, expired and unknown-client tokens | Rejected before tool execution |
 | Direct write-client API and both WebSockets | Denied; no identity-pool or first-party allowlist membership |
-| Private flag rollback | Set it false in both EdgeAuthStack and GatewayStack, preserving OAuth while testing; discovery/challenge restore first-party scopes, first-party HTTP succeeds and dedicated HTTP is rejected |
+| Private flag rollback | Set it false in EdgeAuthStack, GatewayStack and FrontendStack, preserving OAuth while testing; discovery/challenge and the guide restore first-party scopes, first-party HTTP succeeds and dedicated HTTP is rejected |
 | Restore and cleanup | Restore reviewed flags, verify both client modes again, remove only synthetic source/session/note fixtures and revoke synthetic approvals/tokens; retain bounded audit receipts |
 
 When retiring dedicated issuance, set `connectorOAuthEnabled` false and deploy
@@ -118,11 +143,13 @@ For flag-off first-party HTTP testing, resolve the existing SPA client from
 AuthStack's `SpaClientId` output and use its original scopes and resource audience.
 Do not substitute a dedicated client or rewrite a stdio cache.
 
-Prefer flag rollback with the reviewed API code retained. Rolling API code back
-to the older deterministic-note-ID implementation after fresh UUID receipts exist
-makes retries for those receipts return 409 for their retained lifetime; the
-receipt still prevents duplicate creation and preserves the existing note.
-Do not delete receipts or change idempotency keys to bypass that conflict.
+Use flag rollback with the reviewed UUID-based API code retained. Do not roll
+API code back to the older deterministic-note-ID implementation: after receipt
+expiry and eventual TTL removal, reusing a key could recreate an old document ID
+and make orphaned shares authorize the new note. Retained UUID receipts also
+conflict with that older implementation. Do not delete receipts or change keys
+to bypass a conflict. TTL cleanup is asynchronous; reaching a receipt's expiry
+does not guarantee its removal.
 
 The installed stdio adapter continues using `deployment-auth.ts` and its verified,
 deployment/profile-bound cache. It must not be replaced by the legacy `auth.ts`.

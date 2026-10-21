@@ -91,6 +91,20 @@ class FrontendPublicationTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(state["index.html"]["body"], "OLD_HTML")
 
+    def test_runtime_connector_profiles_survive_static_publication_unchanged(self):
+        state = json.loads(self.store.read_text())
+        config = json.dumps({
+            "staticRouterRevision": "segmented-rsc-v1",
+            "cognito": {"userPoolClientId": "firstparty123"},
+            "mcp": {"url": "/api/mcp", "privateBridgeEnabled": True,
+                    "readClientId": "readonly123", "writeClientId": "writer123"},
+        })
+        state["config.json"] = {"body": config, "cache": "no-cache"}
+        self.store.write_text(json.dumps(state))
+        result, _, installed = self.run_publish()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(installed["config.json"], state["config.json"])
+
     def test_html_failure_leaves_chunks_available_and_never_invalidates(self):
         result, calls, state = self.run_publish(FAIL_PHASE="html")
         self.assertNotEqual(result.returncode, 0)
