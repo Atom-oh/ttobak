@@ -175,11 +175,11 @@ def validate_enrichment(raw, article_bodies, require_relevance=True):
     # repair. A paid formatting repair must not turn it into an accepted topic.
     if require_relevance and raw.get("relevant") is False:
         raise QualityRejected("NOT_RELEVANT", ["unrelated article"])
-    _require(type(raw.get("relevant")) is bool, "relevant")
     _confidence(raw.get("relevanceConfidence"), "relevanceConfidence")
     if require_relevance:
         _require(raw["relevanceConfidence"] >= RELEVANCE_THRESHOLD,
                  "unrelated article", "NOT_RELEVANT")
+    _require(type(raw.get("relevant")) is bool, "relevant")
     _object(raw, _FIELDS, "fields")
     _require(type(raw["schemaVersion"]) is int and raw["schemaVersion"] == 1, "schemaVersion")
     _require(raw["kind"] == "news", "kind")

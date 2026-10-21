@@ -358,6 +358,21 @@ class TestSynthesis(unittest.TestCase):
                 enrichment.enrich_article(candidate_fixture(), [valid_body()], client)
             client.converse.assert_called_once()
 
+    def test_low_confidence_is_terminal_with_missing_or_malformed_relevant(self):
+        for flag in (None, "", "true", "false", 0, 1, [], {}):
+            for missing in (False, True):
+                raw = valid_enrichment_json(relevanceConfidence=0.1)
+                if missing:
+                    del raw["relevant"]
+                else:
+                    raw["relevant"] = flag
+                client = mock.Mock()
+                client.converse.side_effect = [bedrock_response(raw), bedrock_response()]
+                with self.subTest(flag=flag, missing=missing), self.assertRaisesRegex(
+                        enrichment.QualityRejected, "NOT_RELEVANT"):
+                    enrichment.enrich_article(candidate_fixture(), [valid_body()], client)
+                client.converse.assert_called_once()
+
     def test_relevance_gate_requires_an_actual_boolean_before_model_calls(self):
         for flag in (None, 0, 1, "", "false", [], {}):
             client = mock.Mock()

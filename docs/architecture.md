@@ -201,7 +201,7 @@ boilerplate exclusion. Nonrepresentable UTC dates remain unknown freshness.
 objects from complete model responses. Each evidence URL/excerpt/date binds to the
 same fetched source; facts reference validated evidence, and rejected attempts
 retain token accounting. One repair may reuse the complete original sources.
-An explicit negative or below-threshold relevance verdict ends the attempt even
+An explicit negative or valid below-threshold relevance verdict ends the attempt even
 if other fields are malformed; the relevance gate requires a boolean.
 Prompt fields must encode as UTF-8 before any model request. The long-copy
 check collapses source and generated whitespace exactly as rendering does.
