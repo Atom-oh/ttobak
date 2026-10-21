@@ -324,6 +324,11 @@ func decodeNewsDocument(row map[string]types.AttributeValue, sourceID, docHash s
 		return document, fmt.Errorf("decode current news metadata: %w", err)
 	}
 	document.SourceID, document.DocHash = sourceID, docHash
+	if isVersionedNews(row) {
+		// Canonical validation uses raw stored bytes. The display projection
+		// removes producer-permitted outer padding without changing CAS identity.
+		document.Title = strings.TrimSpace(document.Title)
+	}
 	texts := []string{document.Title, document.URL, document.Source, document.Summary, document.PubDate}
 	texts = append(texts, document.Tags...)
 	texts = append(texts, document.AWSServices...)
