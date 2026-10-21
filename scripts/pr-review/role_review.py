@@ -93,6 +93,64 @@ TERMINAL_CODES = {"model_selection_diagnostic", "model_fallback_diagnostic",
 class Invalid(Exception):
     """Static error codes only: never include external output in diagnostics."""
 
+    def __init__(self, code, diagnostic=None):
+        super().__init__(code)
+        self.diagnostic = diagnostic
+
+
+SCHEMA_CORRECTION = "schema-contract-v1"
+SCHEMA_REMINDER = (
+    "\nTrusted schema-contract-v1 correction: return the complete response again. "
+    "Each checks member must have exactly path and evidence keys. Each findings "
+    "member must have exactly severity, path, condition and evidence keys. "
+    "Allowed severity strings are CRITICAL, MAJOR, MINOR and INFO. Each path "
+    "must exactly equal an assigned path; path:line and extra keys are invalid. "
+    "Evidence and condition must be nonempty strings. Preserve the requested "
+    "head_sha, role, complete reviewed_paths and all other response requirements. "
+    "Do not infer that any previous review was correct.\n"
+)
+SCHEMA_CODES = {
+    "malformed_json", "duplicate_json_key", "nonfinite_json", "invalid_json_wrapper",
+    "empty_response", "response_schema", "response_identity", "scope_incomplete",
+    "reviewed_paths", "checks_missing", "invalid_check", "invalid_findings",
+    "invalid_finding", "invalid_uncertainties", "unsupported_review_format",
+}
+DIAGNOSTIC_REASONS = {
+    "JSON_REQUIRED", "OBJECT_REQUIRED", "EXACT_KEYS_REQUIRED", "IDENTITY_REQUIRED",
+    "TRUE_REQUIRED", "PATH_SET_REQUIRED", "NONEMPTY_LIST_REQUIRED", "LIST_REQUIRED",
+    "ASSIGNED_PATH_REQUIRED", "NONEMPTY_STRING_REQUIRED", "ALLOWED_SEVERITY_REQUIRED",
+    "SUPPORTED_PROSE_REQUIRED",
+}
+DIAGNOSTIC_POINTER = re.compile(
+    r"(?:|/(?:head_sha|role|scope_complete|reviewed_paths|checks|findings|uncertainties)"
+    r"|/checks/[0-9]{1,7}(?:/(?:path|evidence))?"
+    r"|/findings/[0-9]{1,7}(?:/(?:severity|path|condition|evidence))?)"
+)
+
+
+def safe_validation_diagnostic(value):
+    if (not isinstance(value, dict) or set(value) != {"pointer", "reason", "phase"}
+            or not isinstance(value["pointer"], str)
+            or not DIAGNOSTIC_POINTER.fullmatch(value["pointer"])
+            or not isinstance(value["reason"], str) or value["reason"] not in DIAGNOSTIC_REASONS
+            or value["phase"] not in ("PARSE", "PRE_SCRUB", "POST_SCRUB")):
+        raise Invalid("response_schema")
+    return dict(value)
+
+
+def schema_failure(code, pointer, reason, phase):
+    return Invalid(code, safe_validation_diagnostic({
+        "pointer": pointer, "reason": reason, "phase": phase,
+    }))
+
+
+def corrected_prompt(prompt, tag, correction_mode):
+    if correction_mode is None:
+        return prompt
+    if correction_mode != SCHEMA_CORRECTION or not tag.startswith("kiro-"):
+        raise Invalid("invalid_issued_request")
+    return prompt + SCHEMA_REMINDER
+
 
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -377,10 +435,16 @@ def frame_request(prompt_text, diff_text, nonce):
     return instruction, payload
 
 
-def invocation_digest(prepared_digest, nonce):
+def invocation_digest(prepared_digest, nonce, correction_mode=None, prompt_sha256=None):
     if not isinstance(nonce, str) or not re.fullmatch(r"[0-9a-f]{32}", nonce):
         raise Invalid("invalid_invocation_nonce")
-    return digest({"prepared_request_digest": prepared_digest, "invocation_nonce": nonce})
+    identity = {"prepared_request_digest": prepared_digest, "invocation_nonce": nonce}
+    if correction_mode is not None:
+        if (correction_mode != SCHEMA_CORRECTION or not isinstance(prompt_sha256, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", prompt_sha256)):
+            raise Invalid("invalid_issued_request")
+        identity.update(correction_mode=correction_mode, prompt_sha256=prompt_sha256)
+    return digest(identity)
 
 
 def excluded_only(provenance, policy_hash):
@@ -579,12 +643,12 @@ def role_lock(work, tag):
             fcntl.flock(lock, fcntl.LOCK_UN)
 
 
-def issue_request(work, tag):
+def issue_request(work, tag, correction_mode=None):
     with role_lock(work, tag):
-        return _issue_request(work, tag)
+        return _issue_request(work, tag, correction_mode)
 
 
-def _issue_request(work, tag):
+def _issue_request(work, tag, correction_mode=None):
     work = Path(work)
     plan = load_plan(work)
     role = plan["roles"][tag]
@@ -593,14 +657,16 @@ def _issue_request(work, tag):
     nonce = secrets.token_hex(16)
     prompt_text = (work / "roles" / f"{tag}.txt").read_bytes().decode("utf-8")
     diff_text = (work / "roles" / f"{tag}.diff").read_bytes().decode("utf-8")
-    instruction, payload = frame_request(prompt_text, diff_text, nonce)
+    instruction, payload = frame_request(corrected_prompt(prompt_text, tag, correction_mode), diff_text, nonce)
     receipt = {
         "schema_version": 1, "tag": tag, "head_sha": plan["head_sha"],
         "base_sha": plan["base_sha"], "plan_digest": plan["plan_digest"],
         "prepared_request_digest": role["request_digest"], "invocation_nonce": nonce,
-        "request_digest": invocation_digest(role["request_digest"], nonce),
+        "request_digest": invocation_digest(role["request_digest"], nonce, correction_mode, digest(instruction.encode())),
         "prompt_sha256": digest(instruction.encode()), "input_sha256": digest(payload.encode()),
     }
+    if correction_mode is not None:
+        receipt["correction_mode"] = correction_mode
     previous = work / "slot" / f"{tag}-result.json"
     if not previous.exists() and (work / "slot" / f"{tag}.record-claim").exists():
         raise Invalid("record_incomplete")
@@ -630,17 +696,23 @@ def issued_request(work, plan, tag):
         receipt = strict_json(text_file(work / "slot" / f"{tag}-request.json"))
         role = plan["roles"][tag]
         nonce = receipt["invocation_nonce"]
+        correction_mode = receipt.get("correction_mode")
         instruction, payload = frame_request(
-            (work / "roles" / f"{tag}.txt").read_bytes().decode("utf-8"),
+            corrected_prompt((work / "roles" / f"{tag}.txt").read_bytes().decode("utf-8"), tag, correction_mode),
             (work / "roles" / f"{tag}.diff").read_bytes().decode("utf-8"), nonce,
         )
         expected = {
             "schema_version": 1, "tag": tag, "head_sha": plan["head_sha"],
             "base_sha": plan["base_sha"], "plan_digest": plan["plan_digest"],
             "prepared_request_digest": role["request_digest"], "invocation_nonce": nonce,
-            "request_digest": invocation_digest(role["request_digest"], nonce),
+            "request_digest": invocation_digest(role["request_digest"], nonce, correction_mode, digest(instruction.encode())),
             "prompt_sha256": digest(instruction.encode()), "input_sha256": digest(payload.encode()),
         }
+        if correction_mode is not None:
+            expected["correction_mode"] = correction_mode
+            if (text_file(work / "requests" / f"{tag}.prompt", MAX_REQUEST_BYTES) != instruction
+                    or text_file(work / "requests" / f"{tag}.input", MAX_REQUEST_BYTES) != payload):
+                raise Invalid("invalid_issued_request")
         if receipt != expected:
             raise Invalid("invalid_issued_request")
         return receipt
@@ -652,44 +724,70 @@ def nonempty(value):
     return isinstance(value, str) and bool(value.strip())
 
 
-def validate_response(response, plan, tag):
+def validate_response(response, plan, tag, phase="PRE_SCRUB"):
     role = plan["roles"][tag]
     if not isinstance(response, dict) or set(response) != RESPONSE_KEYS:
-        raise Invalid("response_schema")
+        raise schema_failure("response_schema", "", "EXACT_KEYS_REQUIRED", phase)
     if response["head_sha"] != plan["head_sha"] or response["role"] != role["role"]:
-        raise Invalid("response_identity")
+        raise schema_failure("response_identity", "", "IDENTITY_REQUIRED", phase)
     if response["scope_complete"] is not True:
-        raise Invalid("scope_incomplete")
+        raise schema_failure("scope_incomplete", "/scope_complete", "TRUE_REQUIRED", phase)
     paths = response["reviewed_paths"]
     if not isinstance(paths, list) or any(not isinstance(p, str) for p in paths):
-        raise Invalid("reviewed_paths")
+        raise schema_failure("reviewed_paths", "/reviewed_paths", "PATH_SET_REQUIRED", phase)
     if len(paths) != len(set(paths)) or set(paths) != set(role["paths"]):
-        raise Invalid("reviewed_paths")
+        raise schema_failure("reviewed_paths", "/reviewed_paths", "PATH_SET_REQUIRED", phase)
     checks = response["checks"]
     if not isinstance(checks, list) or not checks:
-        raise Invalid("checks_missing")
-    for check in checks:
-        if (not isinstance(check, dict) or set(check) != {"path", "evidence"} or
-                check["path"] not in role["paths"] or not nonempty(check["evidence"])):
-            raise Invalid("invalid_check")
+        raise schema_failure("checks_missing", "/checks", "NONEMPTY_LIST_REQUIRED", phase)
+    for index, check in enumerate(checks):
+        pointer = f"/checks/{index}"
+        if not isinstance(check, dict):
+            raise schema_failure("invalid_check", pointer, "OBJECT_REQUIRED", phase)
+        if set(check) != {"path", "evidence"}:
+            raise schema_failure("invalid_check", pointer, "EXACT_KEYS_REQUIRED", phase)
+        if check["path"] not in role["paths"]:
+            raise schema_failure("invalid_check", pointer + "/path", "ASSIGNED_PATH_REQUIRED", phase)
+        if not nonempty(check["evidence"]):
+            raise schema_failure("invalid_check", pointer + "/evidence", "NONEMPTY_STRING_REQUIRED", phase)
     findings = response["findings"]
     if not isinstance(findings, list):
-        raise Invalid("invalid_findings")
-    for finding in findings:
-        if (not isinstance(finding, dict) or set(finding) !=
-                {"severity", "path", "condition", "evidence"}):
-            raise Invalid("invalid_finding")
-        if (finding["severity"] not in ("CRITICAL", "MAJOR", "MINOR", "INFO") or
-                finding["path"] not in role["paths"] or
-                not nonempty(finding["condition"]) or not nonempty(finding["evidence"])):
-            raise Invalid("invalid_finding")
+        raise schema_failure("invalid_findings", "/findings", "LIST_REQUIRED", phase)
+    for index, finding in enumerate(findings):
+        pointer = f"/findings/{index}"
+        if not isinstance(finding, dict):
+            raise schema_failure("invalid_finding", pointer, "OBJECT_REQUIRED", phase)
+        if set(finding) != {"severity", "path", "condition", "evidence"}:
+            raise schema_failure("invalid_finding", pointer, "EXACT_KEYS_REQUIRED", phase)
+        if finding["severity"] not in ("CRITICAL", "MAJOR", "MINOR", "INFO"):
+            raise schema_failure("invalid_finding", pointer + "/severity", "ALLOWED_SEVERITY_REQUIRED", phase)
+        if finding["path"] not in role["paths"]:
+            raise schema_failure("invalid_finding", pointer + "/path", "ASSIGNED_PATH_REQUIRED", phase)
+        for field in ("condition", "evidence"):
+            if not nonempty(finding[field]):
+                raise schema_failure("invalid_finding", pointer + "/" + field, "NONEMPTY_STRING_REQUIRED", phase)
     uncertainties = response["uncertainties"]
     if not isinstance(uncertainties, list) or any(not nonempty(x) for x in uncertainties):
-        raise Invalid("invalid_uncertainties")
+        raise schema_failure("invalid_uncertainties", "/uncertainties", "NONEMPTY_STRING_REQUIRED", phase)
     prose = [check["evidence"] for check in checks] + uncertainties
     prose += [finding[field] for finding in findings for field in ("condition", "evidence")]
     if any(format_violation(text, PROSE_SENSITIVE_KEY) for text in prose):
-        raise Invalid("unsupported_review_format")
+        raise schema_failure("unsupported_review_format", "", "SUPPORTED_PROSE_REQUIRED", phase)
+
+
+def accepted_response(text, plan, tag):
+    """The bounded acceptance pipeline shared by retry decisions and recording."""
+    output_bytes(text)
+    try:
+        response = parse_response(text)
+    except Invalid as exc:
+        if str(exc) in SCHEMA_CODES:
+            raise schema_failure(str(exc), "", "JSON_REQUIRED", "PARSE") from None
+        raise
+    validate_response(response, plan, tag)
+    response = scrub(response)
+    validate_response(response, plan, tag, phase="POST_SCRUB")
+    return response
 
 
 def parse_response(text):
@@ -706,8 +804,8 @@ def parse_response(text):
 
 def diagnostic_failure(stderr):
     """Match diagnostic forms, not general words in echoed code or prompts."""
-    if stderr.strip() == "output_byte_limit":
-        return "output_byte_limit"
+    if stderr.strip() in ("output_byte_limit", "scrub_nesting_limit"):
+        return stderr.strip()
     for raw in stderr.splitlines():
         line = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", raw).strip()
         if line.startswith(("+", "-", ">", "|", "```", "diff --git", "@@")):
@@ -1826,12 +1924,12 @@ def scrub(value, _remaining=None, _depth=0, _charge=True, _structured=True):
     return _redact_spans(value, spans)
 
 
-def record(args):
+def record(args, rejection=None):
     if args.tag not in ROLES:
         return 2
     try:
         with role_lock(args.work, args.tag):
-            return _record(args)
+            return _record(args, rejection)
     except Invalid as exc:
         if str(exc) != "role_busy":
             raise
@@ -1839,7 +1937,7 @@ def record(args):
         return 2
 
 
-def _record(args):
+def _record(args, rejection=None):
     work = Path(args.work)
     slot = work / "slot"
     slot.mkdir(parents=True, exist_ok=True)
@@ -1864,12 +1962,17 @@ def _record(args):
         result.update({k: role[k] for k in ("role", "family", "model")})
         result.update(
             invocation_nonce=args.nonce, prepared_request_digest=role["request_digest"],
-            request_digest=invocation_digest(role["request_digest"], args.nonce),
+            request_digest=receipt["request_digest"],
         )
         if not plan["input_complete"]:
             raise Invalid("plan_input_incomplete")
         if not role["required"]:
             raise Invalid("inactive_role")
+        if rejection is not None:
+            if not isinstance(rejection, Invalid) or str(rejection) not in SCHEMA_CODES:
+                raise Invalid("response_schema")
+            diagnostic = safe_validation_diagnostic(rejection.diagnostic)
+            raise Invalid(str(rejection), diagnostic)
         if args.exit_code != 0:
             result["failure_codes"].append("cli_nonzero_exit")
         streams = {}
@@ -1885,15 +1988,14 @@ def _record(args):
                 result["failure_codes"].append(failure)
         if result["failure_codes"]:
             raise Invalid(result["failure_codes"][0])
-        response = parse_response(streams["stdout"])
-        validate_response(response, plan, args.tag)
-        response = scrub(response)
-        validate_response(response, plan, args.tag)
+        response = accepted_response(streams["stdout"], plan, args.tag)
         complete = dict(result, valid=True, response=response, response_digest=digest(response))
         if len((canonical(complete) + "\n").encode()) > MAX_OUTPUT_BYTES + 4096:
             raise Invalid("output_byte_limit")
         result = complete
     except Invalid as exc:
+        if exc.diagnostic is not None:
+            result["validation_diagnostic"] = safe_validation_diagnostic(exc.diagnostic)
         if str(exc) not in result["failure_codes"]:
             result["failure_codes"].append(str(exc))
     write_json(result_path, result)
@@ -1942,7 +2044,7 @@ def aggregate(args):
                     k: plan[k] for k in ("head_sha", "base_sha", "plan_digest")
                 }, **{k: role[k] for k in ("role", "family", "model")},
                     "prepared_request_digest": role["request_digest"],
-                    "request_digest": invocation_digest(role["request_digest"], nonce)}
+                    "request_digest": receipt["request_digest"]}
                 if not isinstance(result, dict) or any(result.get(k) != v for k, v in expected.items()):
                     raise Invalid("stale_result_metadata")
                 if result.get("valid") is not True or result.get("failure_codes") != []:
