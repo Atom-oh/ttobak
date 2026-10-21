@@ -84,6 +84,9 @@ optional meeting ID. It verifies the same signed delegation against the QA
 destination and current grants, then reads through the existing current-source
 boundary. One bounded model call runs without tools, sessions or research/job
 creation. Current source checks and grant checks precede result delivery.
+Model evidence includes verified attachment text and its partial/retained/unavailable
+status; transcript, notes and serialized attachment context share the 24,000-byte
+limit. Attachment citations correspond to the evidence supplied to the model.
 Only the pinned public key is cached; KMS and grant clients use bounded timeouts
 and one attempt. Dedicated HTTP detection now receives the same current-grant
 reader. Empty signing-key configuration leaves private execution unavailable.

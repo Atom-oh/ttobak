@@ -46,7 +46,9 @@ as an HTTP route. It permits a question and optional meeting ID, resolves curren
 authorized source text, and makes one bounded model call without tools or
 session persistence. Source access and client/user grants are checked again
 before delivery. Argument bytes are capped at 32,000, question bytes at 4,096,
-source context at 24,000, and the serialized private result at 14,000.
+combined transcript, notes and serialized verified attachment context at 24,000,
+and the serialized private result at 14,000. Attachment evidence preserves
+partial, retained and unavailable status, with page/slide/paragraph/line citations.
 The existing HTTP detection boundary now uses the same atomic current-grant
 reader. Private key configuration remains empty until the reviewed KMS/IAM and
 OAuth deployment; the Python package must include the pinned ARM64 cryptography
