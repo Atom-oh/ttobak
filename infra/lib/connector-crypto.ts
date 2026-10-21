@@ -1,4 +1,5 @@
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import { BundlingFileAccess } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
@@ -18,6 +19,9 @@ export function connectorCryptoLayer(scope: Construct): lambda.LayerVersion {
       bundling: {
         image: lambda.Runtime.PYTHON_3_12.bundlingImage,
         platform: 'linux/arm64',
+        // The CI runner and Docker daemon do not share temporary bind paths.
+        // Volume copy supports both workspace and Jest temporary synth output.
+        bundlingFileAccess: BundlingFileAccess.VOLUME_COPY,
         command: ['python3', ...install, '-r', '/asset-input/requirements.txt', '-t', '/asset-output/python'],
         local: {
           tryBundle(outputDir: string) {
