@@ -1,6 +1,7 @@
 'use client';
 
 import ReactMarkdown from 'react-markdown';
+import { safeMarkdownUrl } from '@/lib/markdownUrlTransform';
 import remarkGfm from 'remark-gfm';
 import Link from 'next/link';
 import { qaSources } from '@/lib/qaSources';
@@ -87,7 +88,7 @@ export function QAChatMessage({ question, answer, sources, sourceDetails, usedKB
           ) : (
             <>
               <div className="text-sm text-slate-700 dark:text-slate-300 prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 prose-li:my-0.5 prose-table:my-2 prose-pre:my-2 prose-hr:my-2 prose-th:border prose-th:border-slate-300 dark:prose-th:border-slate-600 prose-th:px-2 prose-th:py-1 prose-td:border prose-td:border-slate-200 dark:prose-td:border-slate-700 prose-td:px-2 prose-td:py-1">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{answer}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm]} urlTransform={safeMarkdownUrl}>{answer}</ReactMarkdown>
                 {isStreaming && <span className="inline-block w-0.5 h-4 ml-0.5 bg-primary animate-pulse align-middle" />}
               </div>
 
@@ -138,7 +139,7 @@ export function QAChatMessage({ question, answer, sources, sourceDetails, usedKB
                           <a href={source.href} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline dark:text-blue-300">{source.label}</a>
                         ) : <Link href={source.href} className="text-blue-600 hover:underline dark:text-blue-300">{source.label}</Link>
                           : source.label}
-                        {source.kind && <span className="ml-1 text-slate-500 dark:text-slate-400">· {source.kind}</span>}
+                        {source.kind && source.kind !== source.label && <span className="ml-1 text-slate-500 dark:text-slate-400">· {source.kind}</span>}
                         {source.caveats.map((caveat) => <span key={caveat} className="ml-1 text-amber-800 dark:text-amber-200">· {caveat}</span>)}
                       </span>
                     ))}

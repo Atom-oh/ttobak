@@ -1,6 +1,6 @@
 'use client';
 
-import ReactMarkdown, { Components, defaultUrlTransform } from 'react-markdown';
+import ReactMarkdown, { Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
@@ -13,6 +13,7 @@ import { CodeBlock, InlineCode } from './CodeBlock';
 import { MermaidBlock } from './MermaidBlock';
 import { Callout } from './Callout';
 import { remarkCallout } from './remarkCallout';
+import { safeMarkdownUrl } from '@/lib/markdownUrlTransform';
 
 const customSchema = {
   ...defaultSchema,
@@ -174,7 +175,7 @@ interface MarkdownRendererProps {
 // it runs independently, so the ADR-013 "transcript://{segmentId}" deep link
 // would still be blanked out to "" without this override.
 function urlTransform(url: string): string {
-  return url.startsWith('transcript://') ? url : defaultUrlTransform(url);
+  return url.startsWith('transcript://') ? url : safeMarkdownUrl(url);
 }
 
 export function MarkdownRenderer({ content }: MarkdownRendererProps) {
