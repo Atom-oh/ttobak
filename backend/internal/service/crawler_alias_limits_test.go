@@ -177,3 +177,53 @@ func TestOwnerRemovalRechecksOwnershipAfterCASConflict(t *testing.T) {
 		t.Fatalf("previous owner removed aliases after owner change: %v", err)
 	}
 }
+
+type staleAliasSnapshotRepo struct {
+	*mockCrawlerRepo
+	stale     []string
+	remaining int
+	writes    int
+}
+
+func (r *staleAliasSnapshotRepo) GetSource(ctx context.Context, id string) (*model.CrawlerSource, error) {
+	source, err := r.mockCrawlerRepo.GetSource(ctx, id)
+	if err == nil && source != nil && r.remaining > 0 {
+		r.remaining--
+		source.Aliases = append([]string(nil), r.stale...)
+	}
+	return source, err
+}
+func (r *staleAliasSnapshotRepo) UpdateSourcePartial(ctx context.Context, id string, expected *model.CrawlerSource, fields repository.SourcePartialFields) error {
+	if fields.Aliases != nil {
+		r.writes++
+	}
+	return r.mockCrawlerRepo.UpdateSourcePartial(ctx, id, expected, fields)
+}
+func TestAliasApparentNoopRevalidatesStaleSnapshot(t *testing.T) {
+	for _, remove := range []bool{false, true} {
+		t.Run(fmt.Sprintf("remove=%t", remove), func(t *testing.T) {
+			repo := &staleAliasSnapshotRepo{mockCrawlerRepo: aliasFixture(0), remaining: 1}
+			add, removals := []string{"just changed"}, []string(nil)
+			repo.stale = []string{"just changed"}
+			if remove {
+				repo.sources["source"].Aliases = []string{"just changed"}
+				repo.stale = nil
+				add, removals = nil, []string{"just changed"}
+			}
+			err := updateSourceAliases(context.Background(), repo, "source", "owner", add, removals)
+			if err != nil || repo.writes != 2 || contains(repo.sources["source"].Aliases, "just changed") == remove {
+				t.Fatalf("stale snapshot acknowledged without applying mutation: remove=%t writes=%d aliases=%v err=%v", remove, repo.writes, repo.sources["source"].Aliases, err)
+			}
+		})
+	}
+}
+func TestPersistentlyStaleAliasSnapshotDoesNotAcknowledgeMutation(t *testing.T) {
+	repo := &staleAliasSnapshotRepo{mockCrawlerRepo: aliasFixture(1), remaining: 10}
+	err := (&CrawlerService{repo: repo}).UpdateSource(context.Background(), "owner", "source", &model.UpdateCrawlerSourceRequest{
+		RemoveAliases: []string{"Alias 0"}, NewsQueries: []string{"changed"},
+	})
+	if err == nil || repo.writes != 3 || !contains(repo.sources["source"].Aliases, "Alias 0") ||
+		!strSliceEqual(repo.subscriptions[subKey("owner", "source")].NewsQueries, []string{"previous query"}) {
+		t.Fatalf("stale snapshot silently succeeded or changed subscription: writes=%d err=%v", repo.writes, err)
+	}
+}
