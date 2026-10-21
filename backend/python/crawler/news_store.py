@@ -97,9 +97,9 @@ def _native(value):
 
 
 def protected_publication(row):
-    # Occupancy is conservative, not permission to read an unknown schema.
-    # A rolling upgrade must not let a v1 writer replace newer or malformed data.
-    return bool(row and (row.get("qualityStatus") == "PUBLISHED"
+    # Occupancy preserves cleanup identity; it never authorizes a document read.
+    # Unknown schemas and deleted publications cannot be replaced by this writer.
+    return bool(row and (row.get("qualityStatus") in ("PUBLISHED", "DELETED")
                 or ("schemaVersion" in row and not (
                     type(row["schemaVersion"]) in (int, Decimal)
                     and row["schemaVersion"] == 1))))
@@ -289,9 +289,11 @@ class NewsStore:
                 "Key": {"PK": attempt.pk, "SK": "DOC#" + attempt.doc_hash},
                 "ConditionExpression": "(attribute_not_exists(#schema)"
                                        " OR (attribute_type(#schema, :number) AND #schema = :one))"
-                                       " AND (attribute_not_exists(#quality) OR #quality <> :published)",
+                                       " AND (attribute_not_exists(#quality)"
+                                       " OR (#quality <> :published AND #quality <> :deleted))",
                 "ExpressionAttributeNames": {"#schema": "schemaVersion", "#quality": "qualityStatus"},
-                "ExpressionAttributeValues": {":one": 1, ":number": "N", ":published": "PUBLISHED"}}},
+                "ExpressionAttributeValues": {":one": 1, ":number": "N",
+                                              ":published": "PUBLISHED", ":deleted": "DELETED"}}},
             {"Put": {
                 "TableName": self.table_name,
                 "Item": {"PK": attempt.pk, "SK": "NEWSCLAIM#" + attempt.doc_hash,
@@ -426,9 +428,11 @@ class NewsStore:
                     "TableName": self.table_name, "Item": row,
                     "ConditionExpression": "(attribute_not_exists(#schema)"
                                            " OR (attribute_type(#schema, :number) AND #schema = :one))"
-                                           " AND (attribute_not_exists(#quality) OR #quality <> :published)",
+                                           " AND (attribute_not_exists(#quality)"
+                                           " OR (#quality <> :published AND #quality <> :deleted))",
                     "ExpressionAttributeNames": {"#schema": "schemaVersion", "#quality": "qualityStatus"},
-                    "ExpressionAttributeValues": {":one": 1, ":number": "N", ":published": "PUBLISHED"}}},
+                    "ExpressionAttributeValues": {":one": 1, ":number": "N",
+                                              ":published": "PUBLISHED", ":deleted": "DELETED"}}},
             ])
         self._transaction(operations)
         return receipt

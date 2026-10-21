@@ -510,6 +510,10 @@ func TestListInsights_SortsBeforePaginating_CrossSource(t *testing.T) {
 		{DocHash: "old3", Type: "news", Title: "Old Article 3", CrawledAt: 300},
 		{DocHash: "new1", Type: "news", Title: "Brand New Article", CrawledAt: 999},
 	}
+	for i := range repo.allDocuments {
+		repo.allDocuments[i].SourceID = "hanabank"
+	}
+	svc.news = legacyNewsRows(t, "hanabank", repo.allDocuments)
 
 	resp, err := svc.ListInsights(ctx, "news", "", "", nil, "", 1, 2)
 	if err != nil {
@@ -541,6 +545,7 @@ func TestListInsights_SortsBeforePaginating_WithSource(t *testing.T) {
 		{DocHash: "old3", Type: "news", Title: "Old Article 3", Source: "hanabank", CrawledAt: 300},
 		{DocHash: "new1", Type: "news", Title: "Brand New Article", Source: "hanabank", CrawledAt: 999},
 	}
+	svc.news = legacyNewsRows(t, "hanabank", repo.documents["hanabank"])
 
 	resp, err := svc.ListInsights(ctx, "news", "hanabank", "", nil, "", 1, 2)
 	if err != nil {

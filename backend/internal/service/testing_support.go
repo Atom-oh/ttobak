@@ -12,5 +12,9 @@ func NewCrawlerServiceWithRepo(repo CrawlerRepo) *CrawlerService {
 // NewInsightsServiceWithRepo creates an InsightsService with the given repo implementation.
 // Intended for testing in external packages (e.g. handler tests).
 func NewInsightsServiceWithRepo(repo CrawlerRepo) *InsightsService {
-	return &InsightsService{repo: repo}
+	svc := &InsightsService{repo: repo}
+	if reader, ok := repo.(newsStateReader); ok {
+		svc.news = reader
+	}
+	return svc
 }
