@@ -265,6 +265,14 @@ adapter signs only the configured US East AgentCore Gateway, shares a 20-second
 deadline across DNS and socket operations, caps responses at two million bytes
 and logs only a query hash on failure. It does not change the three legacy
 gateway adapters. A successful token-count probe alone is not production acceptance.
+`infra/lib/news-publication.ts` declares an additive private Step Functions
+workflow with separate discovery/worker/finalizer/recovery roles, off-by-default
+canary configuration, sequential bounded candidate execution and a five-minute
+recovery schedule. Worker results retain only bounded identity/status fields;
+candidate data is removed before finalization. The legacy daily workflow remains
+separate until consumer acceptance and migration. No public route is added.
+The CDK declaration and passing tests do not establish live service-role access
+or positive QA acceptance; follow the dated news release runbook.
 The staged `news_lifecycle.py` starts each source run once, before discovery or
 reservation. Reservations require that open run, its exact source revision, a
 30-minute admission window and a maximum of 60 attempts. Run counters advance in
