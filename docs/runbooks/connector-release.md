@@ -8,6 +8,10 @@ MCP discovery advertises that baseline and optional `ttobak.connector/write`.
 Source configuration is not live provider acceptance. Record the deployed flags,
 reviewed revision and acceptance evidence before claiming activation complete.
 
+The [2026-10-21 disabled-staging record](connector-staging-2026-10-21.md) records
+the prerequisite four-stack rollout and first-party acceptance with both flags
+false, including its artifact identities and remaining private-activation checks.
+
 Private HTTP mode accepts only the dedicated read and read/write client IDs.
 Reconfigure each HTTP host using the AuthStack `ReadConnectorClientId` output,
 or `WriteConnectorClientId` when personal-note writing is required, and perform a
@@ -70,6 +74,17 @@ real RSA-PSS verification before enabling any producer.
    remove synthetic source/session/note fixtures and preserve audit receipts.
    Record exact deployed versions and provider outcomes before main integration.
 
+Reserve an HTTP MCP maintenance window for both activation and flag-off rollback.
+EdgeAuthStack and GatewayStack cannot switch atomically: edge-first activation
+advertises a read scope unsupported by the first-party client while the old MCP
+still rejects dedicated clients; cached first-party sessions may continue until
+Gateway changes. Gateway-first activation makes MCP reject first-party clients
+while the old edge still advertises first-party scopes. Expect temporary
+authentication failures until both stacks converge and HTTP hosts complete their
+dedicated login. The reverse split occurs during rollback. Check both deployed
+flags, discovery/challenge and positive/negative client probes before ending the
+window; a single successful stack update is insufficient.
+
 ## Activation and rollback checks
 
 Use disposable identities and synthetic sources. Enable the two exact client
@@ -98,6 +113,16 @@ When retiring dedicated issuance, set `connectorOAuthEnabled` false and deploy
 AuthStack separately. Disabling OAuth does not itself revoke already issued
 access tokens; keep the private flag and current-grant deny checks in the
 rollback procedure. Do not alter installed first-party stdio credentials.
+
+For flag-off first-party HTTP testing, resolve the existing SPA client from
+AuthStack's `SpaClientId` output and use its original scopes and resource audience.
+Do not substitute a dedicated client or rewrite a stdio cache.
+
+Prefer flag rollback with the reviewed API code retained. Rolling API code back
+to the older deterministic-note-ID implementation after fresh UUID receipts exist
+makes retries for those receipts return 409 for their retained lifetime; the
+receipt still prevents duplicate creation and preserves the existing note.
+Do not delete receipts or change idempotency keys to bypass that conflict.
 
 The installed stdio adapter continues using `deployment-auth.ts` and its verified,
 deployment/profile-bound cache. It must not be replaced by the legacy `auth.ts`.
