@@ -241,7 +241,7 @@ export class NewsPublication extends Construct {
     const duplicate = new sfn.Pass(this, 'DailyAlreadyStarted', {
       result: sfn.Result.fromBoolean(false),
     });
-    dailySource.addCatch(duplicate, { errors: ['StepFunctions.ExecutionAlreadyExists'], resultPath: sfn.JsonPath.DISCARD });
+    dailySource.addCatch(duplicate, { errors: ['StepFunctions.ExecutionAlreadyExistsException', 'StepFunctions.ExecutionAlreadyExists'], resultPath: sfn.JsonPath.DISCARD });
     dailySource.addCatch(failed, { errors: ['States.ALL'], resultPath: sfn.JsonPath.DISCARD });
     const eachSource = new sfn.Map(this, 'DailySources', {
       itemsPath: '$.sources', maxConcurrency: 1, resultPath: '$.failures',

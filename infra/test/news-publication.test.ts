@@ -189,7 +189,7 @@ describe('private news publication release', () => {
     expect(Object.keys(child.Parameters.Input)).toHaveLength(2);
     expect(child.Retry).toBeUndefined();
     expect(child.Catch).toEqual([
-      { ErrorEquals: ['StepFunctions.ExecutionAlreadyExists'], ResultPath: null, Next: 'DailyAlreadyStarted' },
+      { ErrorEquals: ['StepFunctions.ExecutionAlreadyExistsException', 'StepFunctions.ExecutionAlreadyExists'], ResultPath: null, Next: 'DailyAlreadyStarted' },
       { ErrorEquals: ['States.ALL'], ResultPath: null, Next: 'DailySourceFailed' },
     ]);
     expect(map.ItemProcessor.States.DailySourceFailed.Result).toBe(true);
