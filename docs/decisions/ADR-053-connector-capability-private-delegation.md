@@ -43,10 +43,18 @@ local RSA-PSS delegation verifiers and shared synthetic signature tests.
 The [wire contract](../security/connector-delegation-v1.md) defines exact bytes,
 key pinning and lifetime limits. No OAuth token verifier, live signer, grant store, private
 consumer, approval endpoint, OAuth client, IAM permission or scheduler is
-activated by this foundation. Existing transports do not import the policy or
-delegation modules.
+activated by this foundation. The API auth boundary now applies a dedicated
+read-client policy when configured.
+Its default configuration is empty; without an injected current-grant resolver,
+every dedicated client is denied. Existing first-party client authorization remains
+in force. A successful dedicated read requires fresh enabled-client grants before
+execution and again before releasing its bounded response. The QA HTTP boundary
+similarly admits only bounded question detection and denies
+dedicated clients without a current-grant resolver. Both boundaries reject
+mutation-capable and unbounded routes before dispatch; QA does not decode caller
+headers to establish a configured client's identity.
 
-Subsequent reviewed stages must supply dedicated-client ingress, private signing
+Subsequent reviewed stages must supply private signing
 and current grant resolution, bounded API/QA consumers, atomic approval/audit
 and the specifically available personal-note executor. Infrastructure must
 preserve existing pool/client identities and keep issuance disabled through
