@@ -13,7 +13,7 @@ const spa = 'firstpartyclient123';
 const read = 'dedicatedread123';
 const write = 'dedicatedwrite123';
 const baseScopes = 'openid email profile';
-const readScopes = `${baseScopes} ttobak.connector/read`;
+const readScopes = `${baseScopes} ${origin}/api/mcp/read`;
 const privateMcp = { url: '/api/mcp', privateBridgeEnabled: true, readClientId: read, writeClientId: write };
 
 async function load(mcp) {
@@ -44,15 +44,16 @@ test('private HTTP uses the dedicated read profile and resource-bound scopes', a
   for (const client of ['claude', 'codex', 'kirocrew', 'quick', 'kiro-cli']) {
     const guide = mcpClientGuide(client, 'http', config);
     const text = codeText(guide);
-    assert.doesNotMatch(text, new RegExp(`${spa}|${write}|ttobak.connector/write`), client);
-    assert.match(JSON.stringify(guide), /ttobak\.connector\/read/, client);
+    assert.doesNotMatch(text, new RegExp(`${spa}|${write}|ttobak.connector`), client);
+    assert.ok(!text.includes(`${origin}/api/mcp/write`), client);
+    assert.ok(JSON.stringify(guide).includes(`${origin}/api/mcp/read`), client);
     assert.match(JSON.stringify(guide), new RegExp(read), client);
   }
   const codex = codeText(mcpClientGuide('codex', 'http', config));
   assert.match(codex, /--url 'https:\/\/ttobak\.example\.com\/api\/mcp'/);
   assert.match(codex, /--oauth-client-id 'dedicatedread123'/);
   assert.doesNotMatch(codex, /--oauth-resource|oauth_resource/);
-  assert.match(codex, /mcp login ttobak --scopes 'openid,email,profile,ttobak\.connector\/read'/);
+  assert.ok(codex.includes(`mcp login ttobak --scopes 'openid,email,profile,${origin}/api/mcp/read'`));
   const kiro = JSON.parse(mcpClientGuide('kiro-cli', 'http', config).steps[0].code[0].text);
   assert.equal(kiro.mcpServers.ttobak.oauth.clientId, read);
   assert.equal(kiro.mcpServers.ttobak.oauth.oauthScopes.join(' '), readScopes);
@@ -64,7 +65,7 @@ test('stdio keeps the first-party client in private and rollback modes', async (
     for (const client of ['claude', 'codex', 'kirocrew', 'kiro-cli']) {
       const text = codeText(mcpClientGuide(client, 'stdio', config));
       assert.match(text, new RegExp(spa));
-      assert.doesNotMatch(text, new RegExp(`${read}|${write}|ttobak.connector`));
+      assert.doesNotMatch(text, new RegExp(`${read}|${write}|ttobak.connector|/api/mcp/(read|write)`));
     }
   }
 });
@@ -73,6 +74,7 @@ test('explicit flag-off HTTP restores first-party client and base scopes', async
   const { config, mcpClientGuide } = await load({ url: '/api/mcp', privateBridgeEnabled: false });
   assert.equal(config.httpClientId, spa);
   assert.equal(config.httpScopes.join(' '), baseScopes);
+  assert.ok(!JSON.stringify(config.httpScopes).includes('/api/mcp/'));
   assert.equal(config.httpUrl, `${origin}/api/mcp`);
   assert.match(codeText(mcpClientGuide('quick', 'http', config)), new RegExp(spa));
   assert.doesNotMatch(codeText(mcpClientGuide('quick', 'http', config)), /ttobak.connector/);

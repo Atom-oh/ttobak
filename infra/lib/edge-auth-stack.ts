@@ -23,6 +23,13 @@ export class EdgeAuthStack extends cdk.Stack {
         ![props.readConnectorClientId, props.writeConnectorClientId, props.connectorAudience].every(Boolean)) {
       throw new Error('Both connector clients and their exact audience are required');
     }
+    if (props.connectorAudience) {
+      const resource = new URL(props.connectorAudience);
+      if (resource.protocol !== 'https:' || !resource.hostname || resource.username || resource.password ||
+          resource.pathname !== '/api/mcp' || resource.search || resource.hash || resource.href !== props.connectorAudience) {
+        throw new Error('Connector audience must be the exact HTTPS MCP resource URL');
+      }
+    }
 
     // Lambda@Edge function for JWT validation
     // Note: Lambda@Edge cannot use environment variables, so we embed the config in code
@@ -41,6 +48,8 @@ const JWKS_URL = COGNITO_ISSUER + '/.well-known/jwks.json';
 const CONNECTOR_READ_CLIENT_ID = '${props.readConnectorClientId ?? ''}';
 const CONNECTOR_WRITE_CLIENT_ID = '${props.writeConnectorClientId ?? ''}';
 const CONNECTOR_AUDIENCE = '${props.connectorAudience ?? ''}';
+const CONNECTOR_READ_SCOPE = CONNECTOR_AUDIENCE + '/read';
+const CONNECTOR_WRITE_SCOPE = CONNECTOR_AUDIENCE + '/write';
 
 // Cache for JWKS
 let jwksCache = null;
@@ -162,9 +171,9 @@ async function validateToken(token, uri) {
           typeof payload.scope !== 'string' || typeof payload.sub !== 'string' || !payload.sub ||
           typeof payload.username !== 'string' || !payload.username) return false;
       const scopes = payload.scope.split(' ');
-      if (!scopes.includes('ttobak.connector/read') ||
-          scopes.some(s => s.startsWith('ttobak.connector/') &&
-            s !== 'ttobak.connector/read' && !(write && s === 'ttobak.connector/write'))) return false;
+      if (!scopes.includes(CONNECTOR_READ_SCOPE) ||
+          scopes.some(s => !['openid', 'email', 'profile', CONNECTOR_READ_SCOPE].includes(s) &&
+            !(write && s === CONNECTOR_WRITE_SCOPE))) return false;
       // Only the dedicated reader may reach the separately constrained HTTP
       // API. The writer always enters the signed, current-grant MCP bridge.
       if (write && uri !== '/api/mcp') return false;
@@ -188,7 +197,7 @@ async function validateToken(token, uri) {
 // plain JSON 401. The viewer Host is the site domain CloudFront accepted; it is
 // still restricted to hostname characters before entering a header.
 const MCP_PATH = '/api/mcp';
-const MCP_SCOPES = 'openid email profile${props.connectorPrivateBridgeEnabled ? ' ttobak.connector/read' : ''}';
+const MCP_SCOPES = 'openid email profile'${props.connectorPrivateBridgeEnabled ? " + ' ' + CONNECTOR_READ_SCOPE" : ''};
 function unauthorized(request, message, tokenPresented) {
   const headers = {
     'content-type': [{ key: 'Content-Type', value: 'application/json' }],

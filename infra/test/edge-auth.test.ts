@@ -48,7 +48,7 @@ describe('Dedicated connector edge boundary', () => {
     const payload = { iss: 'https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_test',
       sub: 'alice', username: 'alice', token_use: 'access', client_id: 'readclient',
       aud: 'https://ttobak.example.com/api/mcp', exp: Math.floor(Date.now() / 1000) + 120,
-      scope: 'openid email profile ttobak.connector/read', ...overrides };
+      scope: 'openid email profile https://ttobak.example.com/api/mcp/read', ...overrides };
     const body = Buffer.from(JSON.stringify({ alg: algorithm, kid: jwk.kid })).toString('base64url') + '.' +
       Buffer.from(JSON.stringify(payload)).toString('base64url');
     return body + '.' + sign('RSA-SHA256', Buffer.from(body), pair.privateKey).toString('base64url');
@@ -62,19 +62,33 @@ describe('Dedicated connector edge boundary', () => {
       expect((await invoke(uri, { client_id: 'client', aud: undefined, scope: 'openid' })).uri).toBe(uri);
     }
     expect((await invoke('/api/mcp', { client_id: 'writeclient',
-      scope: 'openid ttobak.connector/read ttobak.connector/write' })).uri).toBe('/api/mcp');
+      scope: 'openid https://ttobak.example.com/api/mcp/read https://ttobak.example.com/api/mcp/write' })).uri).toBe('/api/mcp');
     expect((await invoke('/api/documents', { client_id: 'writeclient' })).status).toBe('401');
   });
   test('wrong client, resource, token type, scope, expiry and signature algorithm fail closed', async () => {
     for (const claims of [
       { client_id: 'other' }, { aud: 'readclient' }, { token_use: 'id', aud: 'readclient' },
-      { scope: 'openid' }, { scope: 'ttobak.connector/read ttobak.connector/write' },
-      { scope: 'ttobak.connector/read ttobak.connector/admin' }, { exp: undefined },
+      { scope: 'openid' }, { scope: 'https://ttobak.example.com/api/mcp/read https://ttobak.example.com/api/mcp/write' },
+      { scope: 'https://ttobak.example.com/api/mcp/read https://ttobak.example.com/api/mcp/admin' }, { exp: undefined },
+      { scope: 'openid email profile ttobak.connector/read' },
+      { scope: 'openid email profile https://foreign.example/api/mcp/read' },
+      { scope: 'https://ttobak.example.com/api/mcp/read ttobak.connector/write' },
+      { scope: 'https://ttobak.example.com/api/mcp/read https://foreign.example/api/mcp/write' },
       { exp: Math.floor(Date.now() / 1000) }, { username: undefined },
     ]) expect((await invoke('/api/mcp', claims)).status).toBe('401');
     expect((await invoke('/api/mcp', {}, 'none')).status).toBe('401');
     const disabled = edgeHandler();
     expect((await disabled(event('/api/mcp', { authorization: `Bearer ${token()}` }))).status).toBe('401');
+  });
+  test('the advertised private scope roundtrips through real signed token validation', async () => {
+    const active = edgeHandler(true, true);
+    const response = await active(event('/api/mcp', { host: 'ttobak.example.com' }));
+    const advertised = /scope="([^"]+)"/.exec(response.headers['www-authenticate'][0].value)![1];
+    expect(advertised).toBe('openid email profile https://ttobak.example.com/api/mcp/read');
+    const accepted = await active(event('/api/mcp', {
+      host: 'ttobak.example.com', authorization: `Bearer ${token({ scope: advertised })}`,
+    }));
+    expect(accepted.uri).toBe('/api/mcp');
   });
 });
 
@@ -100,7 +114,7 @@ describe('EdgeAuth 401 responses', () => {
   test('active private MCP challenges require read scope while staged and rollback mode retain first-party scopes', async () => {
     for (const active of [true, false]) {
       const configured = edgeHandler(true, active);
-      const scopes = `openid email profile${active ? ' ttobak.connector/read' : ''}`;
+      const scopes = `openid email profile${active ? ' https://ttobak.example.com/api/mcp/read' : ''}`;
       for (const authorization of [undefined, 'Bearer not-a-jwt']) {
         const response = await configured(event('/api/mcp', {
           host: 'ttobak.example.com', ...(authorization ? { authorization } : {}),
@@ -108,7 +122,7 @@ describe('EdgeAuth 401 responses', () => {
         expect(response.status).toBe('401');
         const challenge = response.headers['www-authenticate'][0].value;
         expect(challenge).toContain(`${metadata}, scope="${scopes}"`);
-        expect(challenge).not.toContain('ttobak.connector/write');
+        expect(challenge).not.toContain('https://ttobak.example.com/api/mcp/write');
       }
     }
   });

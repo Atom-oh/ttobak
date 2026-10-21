@@ -3,10 +3,26 @@
 The activation source sets `connectorOAuthEnabled` and
 `connectorPrivateBridgeEnabled` in `infra/bin/infra.ts` to true for the two
 dedicated clients and private HTTP transport. The edge receives the same private
-flag so its challenge requires `openid email profile ttobak.connector/read`;
-MCP discovery advertises that baseline and optional `ttobak.connector/write`.
+flag so its challenge requires `openid email profile https://ttobak.atomai.click/api/mcp/read`;
+MCP discovery advertises that baseline and optional `https://ttobak.atomai.click/api/mcp/write`.
 Source configuration is not live provider acceptance. Record the deployed flags,
 reviewed revision and acceptance evidence before claiming activation complete.
+
+The scope prefix is the configured MCP resource URL, including `https://`:
+`{MCP_RESOURCE_URL}/read` and `{MCP_RESOURCE_URL}/write`. AuthStack adds both to
+the existing URL-identified `McpResourceServer` and issues them through the
+dedicated clients. It retains the old `ttobak.connector` resource server without
+issuing its scopes to these clients. Resource, token audience and custom-scope
+resource-server identifier must match.
+
+On 2026-10-21, the dedicated authorization request using the old scope namespace
+failed before credential submission or code exchange. Cognito returned
+`invalid_request`: custom scopes requested for resource binding must belong to
+the requested resource. First-party PKCE had succeeded; no connector policy or
+note mutation had begun. This source repair still requires deployment and fresh
+dedicated PKCE, signed audience/scope, IAM/KMS, current-grant and rollback
+acceptance. Preserve the failed run and its pending authorization intent;
+record a separately bound successor run after deployment.
 
 The [2026-10-21 disabled-staging record](connector-staging-2026-10-21.md) records
 the prerequisite four-stack rollout and first-party acceptance with both flags
@@ -20,7 +36,7 @@ stdio keeps its existing client and deployment/profile-bound cache.
 
 FrontendStack publishes the same private flag and both dedicated public client
 IDs in `config.json.mcp`. The Settings guide defaults private HTTP to the read
-client and `openid email profile ttobak.connector/read`; personal-note writing
+client and `openid email profile https://ttobak.atomai.click/api/mcp/read`; personal-note writing
 requires a separate enabled write connection and the current user's one-hour
 approval in Settings → AI connection permissions. Stdio always uses the existing
 first-party client. Missing mode or invalid dedicated-client configuration

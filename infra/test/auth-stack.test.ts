@@ -150,19 +150,32 @@ describe('AuthStack', () => {
     } });
     const active = Template.fromStack(new AuthStack(app, 'ConnectorAuth', { connectorOAuthEnabled: true }));
     const clients = active.findResources('AWS::Cognito::UserPoolClient');
+    const resources = active.findResources('AWS::Cognito::UserPoolResourceServer');
+    const resource = Object.entries(resources).find(([, row]) =>
+      row.Properties.Identifier === 'https://ttobak.example.com/api/mcp')!;
+    expect(resource).toBeDefined();
+    const [resourceId, resourceRow] = resource;
+    expect(resourceRow.Properties.Scopes.map((scope: { ScopeName: string }) => scope.ScopeName).sort())
+      .toEqual(['access', 'read', 'write']);
+    // Cognito rejects resource-bound custom scopes belonging to another
+    // resource server, even when the client is allowed to request those scopes.
+    const scope = (name: string) => ({ 'Fn::Join': ['', [{ Ref: resourceId }, `/${name}`]] });
     const identity = Object.values(active.findResources('AWS::Cognito::IdentityPool'))[0];
     for (const [id, row] of Object.entries(clients)) {
-      if (!['ttobak-read-connector', 'ttobak-write-connector'].includes(row.Properties.ClientName)) continue;
+      if (!['ttobak-read-connector', 'ttobak-write-connector'].includes(row.Properties.ClientName)) {
+        expect([...row.Properties.AllowedOAuthScopes].sort()).toEqual(['email', 'openid', 'profile']);
+        continue;
+      }
       expect(row.Properties.GenerateSecret).toBe(false);
       expect(row.Properties.ExplicitAuthFlows).toEqual(['ALLOW_REFRESH_TOKEN_AUTH']);
       expect(row.Properties.AllowedOAuthFlows).toEqual(['code']);
       expect(row.Properties.AllowedOAuthFlowsUserPoolClient).toBe(true);
       expect(row.Properties.EnableTokenRevocation).toBe(true);
       expect(JSON.stringify(identity.Properties.CognitoIdentityProviders)).not.toContain(id);
-      const scopes = JSON.stringify(row.Properties.AllowedOAuthScopes);
-      expect(scopes).toContain('/read');
-      if (row.Properties.ClientName === 'ttobak-read-connector') expect(scopes).not.toContain('/write');
-      else expect(scopes).toContain('/write');
+      expect(row.Properties.AllowedOAuthScopes).toEqual([
+        'openid', 'email', 'profile', scope('read'),
+        ...(row.Properties.ClientName === 'ttobak-write-connector' ? [scope('write')] : []),
+      ]);
     }
   });
 

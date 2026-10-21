@@ -107,7 +107,7 @@ export async function loadMcpGuideConfig(origin: string, signal: AbortSignal): P
     apiUrl: site.origin, cognitoDomain: authorization.origin, clientId: userPoolClientId,
     httpUrl, httpClientId: httpUrl ? httpClientId : null, privateBridgeEnabled,
     httpScopes: httpUrl ? ['openid', 'email', 'profile',
-      ...(privateBridgeEnabled ? ['ttobak.connector/read'] : [])] : [],
+      ...(privateBridgeEnabled ? [`${httpUrl}/read`] : [])] : [],
   };
 }
 

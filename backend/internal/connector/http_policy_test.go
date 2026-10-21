@@ -5,6 +5,34 @@ import (
 	"testing"
 )
 
+const ReadScope = "https://example.invalid/api/mcp/read"
+
+func TestReadScopeBelongsToConfiguredResource(t *testing.T) {
+	for _, audience := range []string{"https://example.invalid/api/mcp", "https://second.example/api/mcp"} {
+		policy, err := NewReadOnlyHTTPPolicy("readclient", audience, "webclient")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, scopes := range []string{audience + "/read", "openid email profile " + audience + "/read"} {
+			dedicated, err := policy.Authorize("access", "readclient", []string{audience}, scopes, "GET", "/api/meetings/meeting/reading")
+			if !dedicated || err != nil {
+				t.Fatalf("configured resource scope rejected: %v", err)
+			}
+		}
+		for _, scopes := range []string{
+			"ttobak.connector/read", "https://foreign.example/api/mcp/read",
+			audience + "/read ttobak.connector/write",
+			audience + "/read https://foreign.example/api/mcp/write",
+			audience + "/read " + audience + "/write",
+			audience + "/read " + audience + "/admin",
+		} {
+			if _, err := policy.Authorize("access", "readclient", []string{audience}, scopes, "GET", "/api/meetings/meeting/reading"); !errors.Is(err, ErrCapabilityDenied) {
+				t.Fatalf("unassigned or escalated scopes accepted: %q (%v)", scopes, err)
+			}
+		}
+	}
+}
+
 func TestReadOnlyConnectorHTTPPolicy(t *testing.T) {
 	policy, err := NewReadOnlyHTTPPolicy("readclient", "https://example.invalid/api/mcp", "webclient")
 	if err != nil {
@@ -22,7 +50,7 @@ func TestReadOnlyConnectorHTTPPolicy(t *testing.T) {
 		{"connector ID token", "id", "", "readclient", "", "POST", "/api/meetings", true, false},
 		{"wrong audience", "access", "readclient", "https://other.invalid/api/mcp", ReadScope, "GET", "/api/meetings/meeting/reading", true, false},
 		{"identity-only scopes", "access", "readclient", "https://example.invalid/api/mcp", "openid email profile", "GET", "/api/meetings/meeting/reading", true, false},
-		{"escalated scope", "access", "readclient", "https://example.invalid/api/mcp", ReadScope + " ttobak.connector/write", "POST", "/api/meetings", true, false},
+		{"escalated scope", "access", "readclient", "https://example.invalid/api/mcp", ReadScope + " https://example.invalid/api/mcp/write", "POST", "/api/meetings", true, false},
 		{"ordinary create", "access", "readclient", "https://example.invalid/api/mcp", ReadScope, "POST", "/api/meetings", true, false},
 		{"share DELETE", "access", "readclient", "https://example.invalid/api/mcp", ReadScope, "DELETE", "/api/meetings/m/share/user", true, false},
 		{"implicit mutation GET", "access", "readclient", "https://example.invalid/api/mcp", ReadScope, "GET", "/api/meetings", true, false},
