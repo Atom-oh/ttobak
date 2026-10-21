@@ -1,6 +1,6 @@
 # ADR-052: Conditional News Publication and Cost Reservations
 
-- Status: Accepted design; storage implementation staged and inactive.
+- Status: Accepted design; storage, worker and lifecycle implementations staged and inactive.
 - Decision date: 2026-10-21.
 - Scope: Recovered knowledge-grade news pipeline; the legacy crawler stays active
   until consumer and production acceptance gates complete.
@@ -81,13 +81,37 @@ must confirm no earlier v1 ledger exists and deploy a coherent store, worker and
 lifecycle version. Empty fetch warnings are omitted from receipts; this does not
 promise migration of a previously activated receipt digest.
 
+## Run finalization and recovery
+
+Start a run before discovery, including runs that find zero candidates. The
+source revision, start time and 30-minute admission window are immutable.
+Reservations require an open run and advance its attempt counter atomically;
+there are at most 60 attempts including retries. Settlement advances the finished
+counter in the same transaction. Finalization binds both counters and the charged
+total after strongly reading every bounded attempt, so concurrent reservations
+or settlements invalidate the snapshot. Live leases defer finalization.
+
+Expired attempts are marked expired while their full charges remain. Monthly
+unknown-usage counts, the frozen run receipt and one stable timestamp/run history
+row publish atomically. Finalization never adds cost again or updates CONFIG.
+Completed receipts replay even after source deletion. Workflow-supplied bounded
+pre-inference outcomes distinguish failed fetches from successful zero-cost runs;
+recovery marks missing outcomes explicitly.
+
+New run, attempt, monthly-budget and history rows expire after 400 days using
+`pendingShareExpiresAt`, the table's existing TTL attribute. Claim rows expire
+after seven days; numeric lease checks remain synchronous. Canonical published
+documents and immutable objects do not expire automatically in this stage.
+This does not retrofit or delete historical rows from the legacy crawler.
+
 ## Delivery and acceptance
 
-`news_store.py` is an injected storage adapter without a Lambda handler. It does
-not upload S3 objects, start a scheduler, finalize a run, validate a generated
-article, grant an IAM permission, or activate consumers. Worker request limits,
-verified pricing, immutable object writes, run finalization, retention,
-current-source QA/UI reads, migration and rollback remain required delivery work.
+`news_store.py`, `news_worker.py`, `news_model.py` and `news_lifecycle.py` are
+injected components without Lambda handlers. Model request bounds, immutable
+uploads and run accounting are implemented; no scheduler, IAM permission or
+consumer is activated. Verified pricing, bounded SDK client construction,
+scheduled recovery, current-source QA/UI reads, migration and rollback remain
+required delivery work.
 The activation gate must record positive end-to-end publication and QA evidence;
 zero-result or rejected-only runs do not establish acceptance.
 
@@ -105,3 +129,7 @@ service concurrency, actual billing, or deployed acceptance.
 - `backend/python/crawler/news_enrichment.py`
 - `backend/python/crawler/news_store.py`
 - `backend/python/crawler/test_news_store.py`
+- `backend/python/crawler/news_worker.py`
+- `backend/python/crawler/news_model.py`
+- `backend/python/crawler/news_lifecycle.py`
+- `backend/python/crawler/test_news_lifecycle.py`

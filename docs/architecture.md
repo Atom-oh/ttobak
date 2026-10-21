@@ -259,8 +259,20 @@ runtime CountTokens API does not support this model's inference profile; see the
 Activation still requires verified prices, Mantle/Converse IAM, bounded SDK clients,
 run finalization and publication-aware consumers. The worker has no Lambda entry
 point, and a successful token-count probe alone is not production acceptance.
+The staged `news_lifecycle.py` starts each source run once, before discovery or
+reservation. Reservations require that open run, its exact source revision, a
+30-minute admission window and a maximum of 60 attempts. Run counters advance in
+the same transactions as reservations and settlements. Finalization strongly
+reads bounded attempt rows, rejects live leases, freezes expired attempts and
+writes one stable history row atomically with the run receipt. It preserves all
+charged cost and records unknown usage; it never increments cost again or updates
+source CONFIG. Pre-inference failures supplied by the completed workflow remain
+visible even when no model attempt was created. Recovery explicitly marks missing
+workflow outcomes. New accounting/run/history rows use the existing table TTL
+attribute for 400-day retention; claims expire after seven days. Canonical
+published documents and objects have no automatic expiry in this stage.
 These modules do not activate a scheduler, change legacy news results or establish
-production acceptance. Worker wiring, finalization and consumer rollout remain
+production acceptance. Handler wiring, scheduled recovery and consumer rollout remain
 separate delivery stages.
 
 Action-item analysis has its own MEETING#/ANALYSIS#actionItems state. The summary

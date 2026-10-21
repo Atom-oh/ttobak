@@ -17,6 +17,7 @@ from botocore.exceptions import EndpointConnectionError
 
 from news_discovery import source_revision
 from news_store import Attempt, LEASE_SECONDS, NewsStore, StateRejected
+from news_lifecycle import NewsRuns, Run
 
 try:
     from moto import mock_aws
@@ -152,6 +153,7 @@ class TestNewsStoreTransactions(unittest.TestCase):
         self.table.put_item(Item=copy.deepcopy(CONFIG))
         self.store = NewsStore(resource.meta.client, self.table.name)
         self.job = attempt()
+        NewsRuns(self.store).begin(Run(self.job.source_id, self.job.run_id, self.job.revision), NOW)
 
     def reserve(self, job=None, **changes):
         self.store.reserve(job or self.job, **{
