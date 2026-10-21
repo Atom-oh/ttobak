@@ -293,6 +293,11 @@ durable scan cursor. Each invocation reads at most ten 100-item pages and advanc
 the cursor only after a page is handled. Recovery survives writer rollback and
 does not release unknown charges. DynamoDB integer counters keep their JSON
 number shape on receipt replay; money is serialized as exact decimal strings.
+The web source list labels these results as news evidence and retains partial
+and restored-history caveats without exposing internal S3 links. Markdown views,
+editable document/meeting HTML and research exports restore valid IPv6 authority
+brackets after parser encoding. Query bytes, HTML escaping, URL protocol filtering
+and the existing HTML sanitization remain in place.
 These modules do not activate a scheduler, change legacy news results or establish
 production acceptance. Infrastructure wiring and consumer rollout remain separate
 delivery stages; see the [news release contract](runbooks/knowledge-grade-news-release.md).
