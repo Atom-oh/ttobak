@@ -122,21 +122,22 @@ type MeetingListResponse struct {
 
 // MeetingListItem represents a meeting in list view
 type MeetingListItem struct {
-	MeetingID    string   `json:"meetingId"`
-	AccountID    string   `json:"accountId,omitempty"`
-	Title        string   `json:"title"`
-	Date         string   `json:"date"`
-	Status       string   `json:"status"`
-	Summary      string   `json:"summary,omitempty"` // First 200 chars
-	Participants []string `json:"participants,omitempty"`
-	Tags         []string `json:"tags,omitempty"`
-	Sentiment    string   `json:"sentiment,omitempty"`
-	Duration     int      `json:"duration,omitempty"`
-	IsShared     bool     `json:"isShared"`
-	SharedBy     *string  `json:"sharedBy,omitempty"`   // owner email if shared
-	Permission   *string  `json:"permission,omitempty"` // "read" | "edit" if shared
-	CreatedAt    string   `json:"createdAt"`
-	UpdatedAt    string   `json:"updatedAt"`
+	SummaryReadRestriction string   `json:"summaryReadRestriction,omitempty"`
+	MeetingID              string   `json:"meetingId"`
+	AccountID              string   `json:"accountId,omitempty"`
+	Title                  string   `json:"title"`
+	Date                   string   `json:"date"`
+	Status                 string   `json:"status"`
+	Summary                string   `json:"summary,omitempty"` // First 200 chars
+	Participants           []string `json:"participants,omitempty"`
+	Tags                   []string `json:"tags,omitempty"`
+	Sentiment              string   `json:"sentiment,omitempty"`
+	Duration               int      `json:"duration,omitempty"`
+	IsShared               bool     `json:"isShared"`
+	SharedBy               *string  `json:"sharedBy,omitempty"`   // owner email if shared
+	Permission             *string  `json:"permission,omitempty"` // "read" | "edit" if shared
+	CreatedAt              string   `json:"createdAt"`
+	UpdatedAt              string   `json:"updatedAt"`
 }
 
 // MeetingDetailResponse represents a meeting in detail view
@@ -569,27 +570,32 @@ type ResearchListResponse struct {
 
 // ToMeetingListItem converts a Meeting to MeetingListItem
 func ToMeetingListItem(m *Meeting, isShared bool, sharedBy *string, permission *string) MeetingListItem {
+	restriction := ""
+	if m.SummaryReadRestricted {
+		restriction = "SHARING_REGEN_REQUIRED"
+	}
 	summary := m.Content
 	if len(summary) > 200 {
 		summary = summary[:200] + "..."
 	}
 
 	return MeetingListItem{
-		MeetingID:    m.MeetingID,
-		AccountID:    m.AccountID,
-		Title:        m.Title,
-		Date:         m.Date.Format(time.RFC3339),
-		Status:       m.Status,
-		Summary:      summary,
-		Participants: m.Participants,
-		Tags:         m.Tags,
-		Sentiment:    m.Sentiment,
-		Duration:     m.Duration,
-		IsShared:     isShared,
-		SharedBy:     sharedBy,
-		Permission:   permission,
-		CreatedAt:    m.CreatedAt.Format(time.RFC3339),
-		UpdatedAt:    m.UpdatedAt.Format(time.RFC3339),
+		SummaryReadRestriction: restriction,
+		MeetingID:              m.MeetingID,
+		AccountID:              m.AccountID,
+		Title:                  m.Title,
+		Date:                   m.Date.Format(time.RFC3339),
+		Status:                 m.Status,
+		Summary:                summary,
+		Participants:           m.Participants,
+		Tags:                   m.Tags,
+		Sentiment:              m.Sentiment,
+		Duration:               m.Duration,
+		IsShared:               isShared,
+		SharedBy:               sharedBy,
+		Permission:             permission,
+		CreatedAt:              m.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:              m.UpdatedAt.Format(time.RFC3339),
 	}
 }
 
