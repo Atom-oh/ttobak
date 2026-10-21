@@ -189,6 +189,57 @@ test('HTTP preserves bounded notes pages and backend continuation authorization'
   assert.equal(seen[2].subject, 'bob');
 });
 
+test('verified HTTP identity scopes private reads to each request and never forwards bearer credentials', async t => {
+  const config = httpConfig(baseEnv);
+  const verifier = createTokenVerifier(config);
+  verifier.cacheJwks({ keys: [jwk] });
+  const calls = [];
+  const server = createHttpServer(config, {
+    authenticate: async token => {
+      const payload = await verifier.verify(token);
+      return Object.freeze({ subject: payload.sub, expiresAt: payload.exp,
+        clientId: payload.client_id, scopes: Object.freeze(payload.scope.split(' ')) });
+    },
+    privateTransport: identity => async input => {
+      calls.push({ identity, input });
+      return { ...NOTES_PAGES[0], title: identity.subject };
+    },
+    apiFactory: (_auth, options) => new TtobakApi({
+      getIdToken: async () => { throw new Error('private request accessed bearer credentials'); },
+    }, config.apiUrl, options),
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const host = `127.0.0.1:${server.address().port}`;
+  config.allowedHosts.push(host);
+  t.after(async () => {
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+  });
+  const results = await Promise.all(['alice', 'bob'].map(async subject => {
+    const client = new Client({ name: 'private-test', version: '1' });
+    await client.connect(new StreamableHTTPClientTransport(new URL(`http://${host}/api/mcp`), {
+      requestInit: { headers: { Authorization: `Bearer ${jwt({ sub: subject,
+        scope: 'openid email profile ttobak.connector/read' })}` } },
+    }));
+    try { return parsed(await client.callTool({ name: 'ttobak_get_meeting', arguments: { meetingId: 'notes' } })); }
+    finally { await client.close(); }
+  }));
+  assert.deepEqual(results.map(result => result.title), ['alice', 'bob']);
+  assert.equal(calls.length, 2);
+  for (const { identity, input } of calls) {
+    assert.equal(identity.clientId, 'testclient');
+    assert.ok(identity.scopes.includes('ttobak.connector/read'));
+    assert.ok(Object.isFrozen(identity));
+    assert.match(input.path, /^\/api\/meetings\/notes\/reading\?/);
+    assert.equal(input.method, 'GET');
+    assert.equal(input.body, null);
+    assert.ok(input.signal instanceof AbortSignal);
+    assert.equal(input.maxResponseBytes, 32000);
+    assert.equal(input.token, undefined);
+    assert.equal(input.headers, undefined);
+  }
+});
+
 test('SDK OAuth discovery uses Cognito-shaped OIDC fallback and resource-bound PKCE', async () => {
   const issuer = 'https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_testpool';
   const visited = [];

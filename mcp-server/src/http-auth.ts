@@ -99,6 +99,8 @@ export function createTokenVerifier(config: HttpConfig) {
 export interface HttpIdentity {
   subject: string;
   expiresAt: number;
+  clientId?: string;
+  scopes?: readonly string[];
 }
 
 export function bearerAuth(token: string, identity: HttpIdentity): ToolAuth {
