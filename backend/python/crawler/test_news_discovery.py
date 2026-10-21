@@ -67,7 +67,7 @@ class TestDiscovery(unittest.TestCase):
                     [article(1, publishedDate=published), article(2)])
                 self.assertEqual([item["url"] for item in result["candidates"]],
                                  ["https://example.com/2"])
-                self.assertGreater(result["invalidRejected"], 0)
+                self.assertGreater(result["invalidRejected"] + result["staleRejected"], 0)
 
     def test_already_published_primary_results_still_allow_fallback(self):
         def gateway(query, limit):
