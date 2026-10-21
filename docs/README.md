@@ -20,6 +20,7 @@ Markdown for English language and historical/current status.
 | [UI](DESIGN-SPEC.md) | Current components and interaction rules | `frontend/src/` |
 | [Product](PRD.md) | Implemented product scope and remaining work | API/frontend and accepted decisions |
 | [Onboarding](onboarding.md) | Local setup | Dependency manifests and project guide |
+| [Connector inventory](../contracts/connector/v1/README.md) | Current operation classification; eligibility is not availability | API routes, assembled QA tool registry and coverage tests |
 | [MCP adapter](../mcp-server/README.md) | Stdio/HTTP transports, OAuth, local recording and Mac app control | `mcp-server/src/`, `mcp-server/test/` |
 | [Mac app](../mac-app/README.md) | Core Audio capture, permissions, MCP control socket | `mac-app/src-tauri/`, ADR-046 |
 | [PR review runbook](runbooks/pr-review.md) | Context delivery, evidence, latest-HEAD merge gate | Review scripts and workflow |
