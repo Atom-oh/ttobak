@@ -171,6 +171,54 @@ func TestPublishedNewsTitleMatchesProducerWhitespaceContract(t *testing.T) {
 	}
 }
 
+func TestPublishedNewsTagsTrimOnlyDisplayPadding(t *testing.T) {
+	svc, fixture, _, keys := newNewsReadFixture(t)
+	rawTag := strings.Repeat(" ", 25000) + "Accepted tag" + "\t\n"
+	fixture.rows[keys[0]]["tags"] = newsAV(t, map[string]any{"tags": []string{rawTag, " second "}})["tags"]
+	got, err := svc.GetDocumentDetail(context.Background(), keys[0].SourceID, strings.Repeat("a", 16))
+	if err != nil || len(got.Tags) != 2 || got.Tags[0] != "Accepted tag" || got.Tags[1] != "second" {
+		t.Fatalf("producer-valid padded tags broke detail: %v", err)
+	}
+	list, err := svc.currentNewsList(context.Background(), svc.repo.(*mockCrawlerRepo).documents[keys[0].SourceID])
+	if err != nil || len(list) != 1 || list[0].Tags[0] != "Accepted tag" {
+		t.Fatalf("producer-valid padded tags broke list: %v", err)
+	}
+	raw := fixture.rows[keys[0]]["tags"].(*types.AttributeValueMemberL).Value[0].(*types.AttributeValueMemberS).Value
+	if raw != rawTag {
+		t.Fatal("display tag projection changed canonical bytes")
+	}
+}
+
+func TestNewsListSkipsUnrenderableMetadataButPreservesReadFailures(t *testing.T) {
+	for _, badSummary := range []types.AttributeValue{
+		&types.AttributeValueMemberS{Value: strings.Repeat("x", 25000)},
+		&types.AttributeValueMemberM{Value: map[string]types.AttributeValue{}},
+		&types.AttributeValueMemberS{Value: string([]byte{0xff})},
+	} {
+		svc, fixture, _, keys := newNewsReadFixture(t)
+		badKey := repository.NewsReadKey{SourceID: keys[0].SourceID, SortKey: "DOC#" + strings.Repeat("b", 16)}
+		bad := newsAV(t, map[string]any{
+			"type": "news", "title": "Legacy item", "s3Key": "shared/news/source/legacy.md",
+		})
+		bad["summary"] = badSummary
+		fixture.rows[badKey] = bad
+		docs := append(svc.repo.(*mockCrawlerRepo).documents[keys[0].SourceID], model.CrawledDocument{
+			SourceID: badKey.SourceID, DocHash: strings.Repeat("b", 16), Type: "news",
+		})
+		list, err := svc.currentNewsList(context.Background(), docs)
+		if err != nil || len(list) != 1 || list[0].DocHash != strings.Repeat("a", 16) {
+			t.Fatalf("one invalid metadata projection broke valid news: %v", err)
+		}
+		if _, err := decodeNewsDocument(bad, badKey.SourceID, strings.Repeat("b", 16)); !errors.Is(err, ErrNotFound) {
+			t.Fatal("unrenderable detail was not unavailable")
+		}
+		fixture.fail = errors.New("synthetic current lookup failure")
+		if _, err := svc.currentNewsList(context.Background(), docs); !errors.Is(err, fixture.fail) {
+			t.Fatal("storage read failure was hidden")
+		}
+	}
+}
+
 func TestLegacyTechDetailKeepsReservedPartition(t *testing.T) {
 	repo := newMockCrawlerRepo()
 	repo.documents["__tech__"] = []model.CrawledDocument{{

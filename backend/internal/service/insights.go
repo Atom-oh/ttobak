@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -11,7 +12,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
@@ -89,6 +89,9 @@ func (s *InsightsService) GetDocumentDetail(ctx context.Context, sourceID, docHa
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	meta, err := s.repo.GetDocument(ctx, sourceID, docHash)
+	if errors.Is(err, repository.ErrInvalidDocument) {
+		return nil, ErrNotFound
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get document metadata: %w", err)
 	}
@@ -111,11 +114,11 @@ func (s *InsightsService) GetDocumentDetail(ctx context.Context, sourceID, docHa
 		if isVersionedNews(row) {
 			return s.publishedNewsDetail(ctx, sourceID, docHash)
 		}
-		meta = &model.CrawledDocument{}
-		if err := attributevalue.UnmarshalMap(row, meta); err != nil {
-			return nil, fmt.Errorf("decode current news metadata: %w", err)
+		current, err := decodeNewsDocument(row, sourceID, docHash)
+		if err != nil {
+			return nil, err
 		}
-		meta.SourceID, meta.DocHash = sourceID, docHash
+		meta = &current
 	}
 
 	// Read content from S3 — prefer stored s3Key from metadata
@@ -269,6 +272,8 @@ func (s *InsightsService) DeleteDocument(ctx context.Context, userID string, isA
 // ListInsights retrieves crawled documents with optional filtering by type, source, service, tags, and sort.
 // sortBy: "newest" (default), "oldest", "title"
 func (s *InsightsService) ListInsights(ctx context.Context, docType, source, service string, tags []string, sortBy string, page, limit int) (*model.InsightsResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
 	if page < 1 {
 		page = 1
 	}

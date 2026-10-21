@@ -128,6 +128,18 @@ concurrent publication or owner change returns a conflict without object cleanup
 Legacy metadata deletion excludes versioned rows, preventing an older read from
 deleting a newly published replacement. Tombstones have no automatic expiry in
 this stage; migration/retention policy must account for them explicitly.
+Both reservation and publication reject `DELETED`, `PUBLISHED`, and unknown-schema
+rows, so a recrawl cannot erase retained cleanup identity. A deletion also blocks
+automatic republication of that article; restoring it needs an explicit future
+retention/restore operation. Repository discovery skips tombstones before counting
+visible entries, follows source Query continuation across them, and caps the whole
+list service request at 20 seconds. The 500-document discovery bound still caps
+canonical lookup at 1,000 document/configuration keys.
+
+After activation, rollback must retain these publication-aware API/QA readers and
+the tombstone-preserving writer. Disable and drain writer executions before a
+writer rollback; never restore a reader that exposes `DELETED` rows. Record the
+minimum deployed reader/writer revisions in the activation acceptance record.
 
 The source fingerprint is repeated in Go with fixed crawler-produced vectors
 covering Korean, supplementary Unicode, U+2028/U+2029, literal escape sequences,

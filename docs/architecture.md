@@ -298,12 +298,21 @@ news remains readable after its last subscriber leaves, and existing AWS technic
 articles retain the exact `__tech__` partition. Publication titles follow the
 producer's trimmed length and line-whitespace rules without relaxing source IDs
 or source-fingerprint validation.
-Display metadata trims only the title's outer padding after canonical validation,
+Display metadata trims title and tag outer padding after canonical validation,
 preserving raw stored bytes for publication identity and delete conditions while
 keeping the 24,000-byte metadata response limit.
+Repository Query/Scan results decode document records individually, so a malformed
+record does not hide valid neighbors or discard the storage continuation key.
+Single-record decode errors have a distinct sentinel. Both legacy and versioned
+news details apply the bounded current metadata projection; malformed or oversized
+metadata is unavailable, and list projection omits only that record.
+Storage read failures still fail the service request, and deletion retains raw identity.
 Owner/admin deletion transactionally marks a versioned publication `DELETED`
 before deleting its two immutable objects; retained tombstones support cleanup
-retries. The transaction checks current ownership and the observed publication.
+retries. Both writer reservation and publication preserve deleted/unknown-schema
+rows. Discovery excludes tombstones before its visible count, following source
+Query continuation under the list service's 20-second deadline. The transaction
+checks current ownership and the observed publication.
 Legacy deletion cannot erase a versioned replacement. These API changes require
 deployed read/delete acceptance before writer activation.
 These modules do not activate a scheduler, change legacy news results or establish
