@@ -154,6 +154,11 @@ func (b *Bridge) Invoke(ctx context.Context, raw []byte) InvokeResult {
 	if !ok || len(input.Path) > 8192 {
 		return bridgeFailure(403, "CAPABILITY_DENIED")
 	}
+	// ParseRequestURI treats a literal '#' as part of the request target, while
+	// NewRequest treats it as a fragment. Reject it before either interpretation.
+	if strings.Contains(input.Path, "#") {
+		return bridgeFailure(400, "REQUEST_MISMATCH")
+	}
 	u, err := url.ParseRequestURI(input.Path)
 	if err != nil || u.IsAbs() || u.Host != "" || u.Fragment != "" || u.RawPath != "" {
 		return bridgeFailure(400, "REQUEST_MISMATCH")

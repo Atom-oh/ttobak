@@ -64,6 +64,25 @@ func TestSignedPrivateBridgeBindsSubjectRequestAndCurrentGrantBeforeBytes(t *tes
 		t.Fatal("trailing argument JSON reached reader")
 	}
 	frame.Arguments = EncodeBridgeBytes(args)
+	// Sign the ambiguous target itself: a mismatching signature would reject
+	// before testing the two URL parsers' different fragment interpretation.
+	fragmentArgs := []byte(`{"method":"GET","path":"/api/meetings/meeting/reading?section=notes#&section=transcript","body":null}`)
+	fragmentHash := sha256.Sum256(fragmentArgs)
+	fragmentPayload := p
+	fragmentPayload.ArgumentsSHA256 = hex.EncodeToString(fragmentHash[:])
+	fragmentRaw, _ := json.Marshal(fragmentPayload)
+	fragmentDigest := sha256.Sum256(fragmentRaw)
+	fragmentSignature, err := rsa.SignPSS(rand.Reader, key, crypto.SHA256, fragmentDigest[:], &rsa.PSSOptions{SaltLength: 32})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fragmentWire, _ := json.Marshal(envelope{keyID, SigningAlgorithm,
+		EncodeBridgeBytes(fragmentRaw), EncodeBridgeBytes(fragmentSignature)})
+	fragmentFrame := InvokeFrame{InvokeProtocol, "api.reading.get", "request",
+		EncodeBridgeBytes(fragmentWire), EncodeBridgeBytes(fragmentArgs)}
+	if got := bridge.Invoke(context.Background(), EncodeInvokeFrame(fragmentFrame)); got.StatusCode != 400 || calls != 1 {
+		t.Fatal("signed fragment target reached the reader")
+	}
 	bridge.Router = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		enabled = false
 		_, _ = w.Write([]byte(`{"text":"must not escape after revocation"}`))
