@@ -18,7 +18,7 @@ describe('GatewayStack', () => {
       .filter(resource => JSON.stringify(resource.Properties.FunctionName).includes('KbFunction'));
   }
 
-  function buildTemplate(indexingMode: 'manual-only' | 'all' = 'manual-only', scheduleEnabled = false, mcpResourceAudience?: string, audioCropEnabled = false, cloudfrontDomain: string | null = 'd2olomx8td8txt.cloudfront.net', save?: (g: Template, r: Template) => void, originReleaseCiRoleName?: unknown, extraContext: Record<string, unknown> = {}, connectors = false): Template {
+  function buildTemplate(indexingMode: 'manual-only' | 'all' = 'manual-only', scheduleEnabled = false, mcpResourceAudience?: string, audioCropEnabled = false, cloudfrontDomain: string | null = 'd2olomx8td8txt.cloudfront.net', save?: (g: Template, r: Template) => void, originReleaseCiRoleName?: unknown, extraContext: Record<string, unknown> = {}, connectors = false, connectorPrivateBridgeEnabled = false): Template {
     const app = new cdk.App({
       context: {
         ...(cloudfrontDomain === null ? {} : { 'ttobak:cloudfrontDomain': cloudfrontDomain }),
@@ -63,6 +63,7 @@ describe('GatewayStack', () => {
         readConnectorClient: userPool.addClient('ReadConnector'),
         writeConnectorClient: userPool.addClient('WriteConnector'),
       } : {}),
+      connectorPrivateBridgeEnabled,
       kbBucket,
       knowledgeBaseId: 'test-kb-id',
       indexingMode,
@@ -140,13 +141,13 @@ describe('GatewayStack', () => {
     }
   });
 
-  test('connector consumers use exact private grants, a retained signing key and ARM64 crypto', () => {
+  test.each([false, true])('connector consumers use exact private grants, a retained signing key and ARM64 crypto (private=%s)', (active) => {
     const t = buildTemplate(undefined, undefined, 'https://ttobak.example.com/api/mcp',
-      undefined, undefined, undefined, undefined, {}, true);
+      undefined, undefined, undefined, undefined, {}, true, active);
     const fns = Object.values(t.findResources('AWS::Lambda::Function'));
     const fn = (name: string) => fns.find(row => row.Properties.FunctionName === name)!.Properties;
     const api = fn('ttobak-api'), qa = fn('ttobak-qa'), mcp = fn('ttobak-mcp');
-    expect(mcp.Environment.Variables.TTOBAK_CONNECTOR_PRIVATE_BRIDGE).toBe('false');
+    expect(mcp.Environment.Variables.TTOBAK_CONNECTOR_PRIVATE_BRIDGE).toBe(String(active));
     expect(JSON.stringify(mcp.Environment.Variables.CONNECTOR_API_FUNCTION_ARN)).toContain('ApiLiveAlias');
     expect(api.Environment.Variables.CONNECTOR_SIGNING_KEY_ARN).toEqual(qa.Environment.Variables.CONNECTOR_SIGNING_KEY_ARN);
     expect(qa.Environment.Variables.CONNECTOR_WEB_CLIENT_IDS).toEqual(api.Environment.Variables.API_ALLOWED_CLIENT_IDS);

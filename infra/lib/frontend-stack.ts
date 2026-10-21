@@ -23,6 +23,9 @@ export interface FrontendStackProps extends cdk.StackProps {
   userPoolId: string;
   userPoolClientId: string;
   identityPoolId: string;
+  connectorPrivateBridgeEnabled?: boolean;
+  readConnectorClientId?: string;
+  writeConnectorClientId?: string;
   qaAsyncJobsEnabled?: boolean;
 }
 
@@ -494,6 +497,12 @@ function handler(event) {
           wsUrl: WEBSOCKET_PATH,
           staticRouterRevision: 'segmented-rsc-v1',
           qaAsyncJobs: props.qaAsyncJobsEnabled === true,
+          mcp: {
+            url: '/api/mcp',
+            privateBridgeEnabled: props.connectorPrivateBridgeEnabled === true,
+            readClientId: props.readConnectorClientId,
+            writeClientId: props.writeConnectorClientId,
+          },
           cognito: {
             region: props.cognitoRegion,
             userPoolId: props.userPoolId,

@@ -16,6 +16,9 @@ export interface McpGuideConfig {
   cognitoDomain: string;
   clientId: string;
   httpUrl: string | null;
+  httpClientId: string | null;
+  httpScopes: string[];
+  privateBridgeEnabled: boolean | null;
 }
 
 export interface GuideCode {
@@ -90,9 +93,21 @@ export async function loadMcpGuideConfig(origin: string, signal: AbortSignal): P
       authorization.pathname !== '/oauth2/authorize' || authorization.search || authorization.hash) {
     throw new Error('사이트의 로그인 주소가 올바르지 않습니다.');
   }
+  const privateBridgeEnabled = typeof config.mcp?.privateBridgeEnabled === 'boolean'
+    ? config.mcp.privateBridgeEnabled : null;
+  const { readClientId, writeClientId } = config.mcp ?? {};
+  const validClientId = (value: unknown): value is string =>
+    typeof value === 'string' && /^[a-zA-Z0-9]{1,128}$/.test(value);
+  const dedicatedClientsValid = validClientId(readClientId) && validClientId(writeClientId) &&
+    readClientId !== writeClientId && readClientId !== userPoolClientId && writeClientId !== userPoolClientId;
+  const httpClientId = privateBridgeEnabled === false ? userPoolClientId
+    : privateBridgeEnabled === true && dedicatedClientsValid ? readClientId : null;
+  const httpUrl = httpClientId ? configuredMcpUrl(config.mcp?.url, site.origin) : null;
   return {
     apiUrl: site.origin, cognitoDomain: authorization.origin, clientId: userPoolClientId,
-    httpUrl: configuredMcpUrl(config.mcp?.url, site.origin),
+    httpUrl, httpClientId: httpUrl ? httpClientId : null, privateBridgeEnabled,
+    httpScopes: httpUrl ? ['openid', 'email', 'profile',
+      ...(privateBridgeEnabled ? ['ttobak.connector/read'] : [])] : [],
   };
 }
 
@@ -102,10 +117,17 @@ const CHECK = 'TTOBAK에서 내 최근 회의 목록을 보여줘';
 const absolutePath = 'printf \'%s\\n\' "$HOME/.ttobak/server.mjs"';
 
 export function mcpClientGuide(client: McpClient, transport: McpTransport, config: McpGuideConfig | null): ClientGuide {
+  if (transport === 'http' && !config?.httpUrl) return {
+    introduction: '사이트의 HTTP 인증 설정이 준비되면 연결 방법을 표시합니다. 로컬 stdio 연결은 계속 사용할 수 있습니다.',
+    steps: [],
+  };
   const apiUrl = config?.apiUrl ?? 'YOUR_TTOBAK_SITE_URL';
   const cognitoDomain = config?.cognitoDomain ?? 'YOUR_COGNITO_DOMAIN';
   const clientId = config?.clientId ?? 'YOUR_CLIENT_ID';
   const httpUrl = config?.httpUrl ?? 'YOUR_HTTP_MCP_URL';
+  const httpClientId = config?.httpClientId ?? 'YOUR_HTTP_CLIENT_ID';
+  const httpScopes = config?.httpScopes ?? [];
+  const scopeNotice = `요청할 OAuth 범위: ${httpScopes.join(' ')}.`;
   const env = { TTOBAK_COGNITO_DOMAIN: cognitoDomain, TTOBAK_CLIENT_ID: clientId, TTOBAK_API_URL: apiUrl };
   const block = (title: string, text: string, needsHttp = false): GuideCode => ({
     title, text, needsConfig: true, needsHttp,
@@ -115,7 +137,7 @@ export function mcpClientGuide(client: McpClient, transport: McpTransport, confi
   } } }, null, 2);
   const remoteJson = JSON.stringify({ mcpServers: { ttobak: {
     url: httpUrl,
-    oauth: { clientId, redirectUri: 'http://localhost:9876/callback', oauthScopes: ['openid', 'email', 'profile'] },
+    oauth: { clientId: httpClientId, redirectUri: 'http://localhost:9876/callback', oauthScopes: httpScopes },
   } } }, null, 2);
   const download: GuideStep = {
     title: '서버 파일 다운로드',
@@ -181,8 +203,8 @@ export function mcpClientGuide(client: McpClient, transport: McpTransport, confi
     introduction: '등록된 HTTP 주소와 사용자별 OAuth 로그인으로 연결합니다. 로컬 서버 파일은 필요하지 않습니다.',
     steps: [{
       title: 'HTTP 서버 등록',
-      description: '공개 OAuth 클라이언트 기준입니다. 로그인 콜백 http://localhost:9876/callback이 등록되어 있어야 합니다.',
-      code: [block('등록 명령', `claude mcp add --transport http --scope user \\\n  --client-id ${quote(clientId)} --callback-port 9876 \\\n  ttobak ${quote(httpUrl)}`, true)],
+      description: `공개 OAuth 클라이언트 기준입니다. 로그인 콜백 http://localhost:9876/callback이 등록되어 있어야 합니다. 서버의 인증 안내에서 읽기 범위를 확인하세요. ${scopeNotice}`,
+      code: [block('등록 명령', `claude mcp add --transport http --scope user \\\n  --client-id ${quote(httpClientId)} --callback-port 9876 \\\n  ttobak ${quote(httpUrl)}`, true)],
     }, {
       title: 'OAuth 로그인 및 확인',
       description: 'Claude Code의 /mcp에서 ttobak 로그인을 진행한 뒤 회의를 조회하세요. HTTP에서는 ttobak_login 도구 대신 클라이언트가 로그인을 처리합니다.',
@@ -194,11 +216,11 @@ export function mcpClientGuide(client: McpClient, transport: McpTransport, confi
     steps: [{
       title: 'HTTP 서버 등록',
       description: '명령이 표시하는 정확한 콜백 URL을 관리자에게 전달해 등록하세요. 콜백의 경로와 포트는 다른 클라이언트와 다를 수 있습니다.',
-      code: [block('등록 명령', `codex mcp add ttobak --url ${quote(httpUrl)} \\\n  --oauth-client-id ${quote(clientId)}`, true)],
+      code: [block('등록 명령', `codex mcp add ttobak --url ${quote(httpUrl)} \\\n  --oauth-client-id ${quote(httpClientId)}`, true)],
     }, {
       title: '로그인',
       description: '콜백 등록 후 아래 명령으로 브라우저 로그인을 완료하세요.',
-      code: [{ title: 'OAuth 로그인', text: 'codex mcp login ttobak', needsHttp: true }],
+      code: [block('OAuth 로그인', `codex mcp login ttobak --scopes ${quote(httpScopes.join(','))}`, true)],
     }, check],
   };
   if (client === 'kirocrew') return {
@@ -209,7 +231,7 @@ export function mcpClientGuide(client: McpClient, transport: McpTransport, confi
       code: [block('서버 URL', httpUrl, true)],
     }, {
       title: '사용자 인증 헤더 설정',
-      description: '관리자가 안내한 사용자별 MCP OAuth 발급 절차를 먼저 완료하세요. 서버를 추가할 때 Authorization 헤더에 이 MCP 주소용 Cognito access token을 넣습니다. 웹 로그인 ID token은 사용할 수 없으며, 이 화면에서 토큰을 자동 발급하지는 않습니다.',
+      description: `관리자가 안내한 사용자별 MCP OAuth 발급 절차를 먼저 완료하세요. Client ID: ${httpClientId}. ${scopeNotice} 서버를 추가할 때 Authorization 헤더에 이 MCP 주소용 Cognito access token을 넣습니다. 웹 로그인 ID token은 사용할 수 없으며, 이 화면에서 토큰을 자동 발급하지는 않습니다.`,
       code: [{ title: '헤더 형식 — 자리표시를 실제 값으로 교체', text: 'Authorization: Bearer YOUR_RESOURCE_BOUND_ACCESS_TOKEN' }],
     }, {
       title: '연결 확인',
@@ -228,10 +250,10 @@ export function mcpClientGuide(client: McpClient, transport: McpTransport, confi
       title: '사용자별 OAuth 설정',
       description: 'User authentication (OAuth)를 선택하세요. 아래 Client ID는 공개 클라이언트이므로 Public OAuth client를 선택하고 비밀키를 입력하지 않습니다. 자동 발견이 실패하면 아래 주소를 직접 입력하세요.',
       code: [
-        block('Client ID', clientId),
+        block('Client ID', httpClientId, true),
         block('Authorization URL', cognitoDomain + '/oauth2/authorize'),
         block('Token URL', cognitoDomain + '/oauth2/token'),
-        { title: 'Scopes', text: 'openid email profile' },
+        block('Scopes', httpScopes.join(' '), true),
       ],
     }, {
       title: '콜백 등록 후 로그인',

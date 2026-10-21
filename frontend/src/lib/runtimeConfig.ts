@@ -11,8 +11,13 @@ export interface RuntimeConfig {
   wsUrl?: string;
   /** Enable only after deployed job routes/worker pass acceptance. Missing is off. */
   qaAsyncJobs?: boolean;
-  /** Publish a same-site HTTP MCP URL only after its deployment is ready. */
-  mcp?: { url?: string };
+  /** Public client IDs, never credentials. Missing mode disables HTTP setup. */
+  mcp?: {
+    url?: string;
+    privateBridgeEnabled?: boolean;
+    readClientId?: string;
+    writeClientId?: string;
+  };
 }
 
 let cached: Promise<RuntimeConfig> | null = null;

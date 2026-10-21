@@ -117,6 +117,8 @@ pins client policy and approval generations while creating the note and a
 uses the identity stored in its receipt. An expired receipt that still exists
 conflicts. After TTL removes it, reusing the key creates a separate document, so
 orphaned shares of a deleted note cannot authorize the new note.
+TTL removal is asynchronous and best-effort; expiry does not imply that the
+receipt has already been removed, and an expired retained receipt still conflicts.
 Retry with the same key and exact content after an uncertain
 result. A replay returns the same document ID without changing later human edits;
 different bytes conflict, and a deleted document is never recreated by replay.
