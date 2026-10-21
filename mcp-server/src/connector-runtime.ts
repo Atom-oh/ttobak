@@ -25,7 +25,7 @@ export function environmentPrivateTransport(env: NodeJS.ProcessEnv) {
     if (!identity.clientId || !clients.includes(identity.clientId) || !identity.scopes) throw new Error('VERIFIED_CONNECTOR_IDENTITY_REQUIRED');
     return privateApiTransport({
       subject: identity.subject, clientId: identity.clientId,
-      scopes: identity.scopes, expiresAt: identity.expiresAt,
+      audience, scopes: identity.scopes, expiresAt: identity.expiresAt,
     }, key, api, qa, { kms, lambda, resolve });
   };
 }
