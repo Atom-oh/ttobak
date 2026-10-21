@@ -28,6 +28,14 @@ Python 3.12 locally or its Lambda build image, explicitly selecting aarch64 whee
 An unsuccessful install stops synthesis. Check the deployed layer, import and
 real RSA-PSS verification before enabling any producer.
 
+Before synth or gateway tests, provide Python 3.12 with pip (`python3.12` or
+`python3`), or Docker capable of running the Lambda Python 3.12 ARM64 build image
+with volume copy. The bundler needs the package index for the three pinned wheels.
+Local pip can use an existing wheel directory with `PIP_FIND_LINKS` and
+`PIP_NO_INDEX=1`; hashes remain mandatory. A failed local install does not fall
+back to Docker. PR tests and the separate deployment `infra-tests` job need these
+prerequisites before the later deploy job's Python setup.
+
 ## Deployment sequence
 
 1. Capture current main, deployment activity, stack templates, Lambda code hashes,
@@ -41,7 +49,12 @@ real RSA-PSS verification before enabling any producer.
 3. With issuance still disabled, verify unchanged first-party login, API, WebSocket,
    HTTP MCP and stdio token-cache behavior. Check exact client IDs, disabled OAuth,
    retained key, deployed crypto layer and private rejection without grants.
-4. Review the separate activation revision. Use the approved loopback PKCE flow
+4. Review the separate activation revision. Pair the EdgeAuth private-bridge flag
+   with the MCP mode and protected-resource discovery scopes: active challenges
+   require `ttobak.connector/read`; staged and flag-off challenges retain
+   `openid email profile`. Both source flags remain false in this staging revision.
+   Verify the complete deployment sequence before consumer acceptance.
+   Use the approved loopback PKCE flow
    for a dedicated synthetic identity. Request the exact resource audience and
    read scope, plus write scope only for the write client. Capture provider claims
    as nonsecret assertions; keep tokens and verifier material private.
@@ -50,8 +63,12 @@ real RSA-PSS verification before enabling any producer.
    another user's source denial, source changes, expired/revoked/blocked approvals,
    disabled client policy and rejected ID/unbound/unknown-client tokens.
    Verify direct write-client API and both clients' WebSocket denial.
-6. Verify rollback of the private flag with existing first-party clients; disable
-   dedicated OAuth when retiring that path. Restore the accepted configuration,
+6. Verify rollback of the private flag with existing first-party clients. For
+   retirement, disable dedicated client policies, revoke remaining write approvals,
+   and disable dedicated OAuth. Revoke issued refresh tokens or separately review
+   deletion of the dedicated clients; OAuth-off alone is not credential revocation.
+   Locally verified issued access/ID tokens can remain valid until expiry, so keep
+   grant and transport denial in place. Restore the accepted configuration,
    remove synthetic source/session/note fixtures and preserve audit receipts.
    Record exact deployed versions and provider outcomes before main integration.
 
