@@ -24,6 +24,7 @@ import (
 	"github.com/awslabs/aws-lambda-go-api-proxy/chi"
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
+	"github.com/ttobak/backend/internal/connector"
 	"github.com/ttobak/backend/internal/handler"
 	"github.com/ttobak/backend/internal/middleware"
 	"github.com/ttobak/backend/internal/repository"
@@ -69,6 +70,8 @@ func init() {
 
 	// Initialize repository with S3 support for large transcript storage
 	repo := repository.NewDynamoDBRepositoryWithS3(dynamoClient, tableName, s3Client, bucketName)
+	connectorGrants := repo.ConnectorGrantResolver(os.Getenv("CONNECTOR_RESOURCE_AUDIENCE"),
+		"https://cognito-idp."+cfg.Region+".amazonaws.com/"+cognitoPoolID)
 
 	// Initialize services
 	meetingService := service.NewMeetingService(repo)
@@ -246,7 +249,7 @@ func init() {
 
 	// Authenticated routes
 	r.Group(func(r chi.Router) {
-		r.Use(middleware.Auth)
+		r.Use(middleware.AuthWithConnectorGrants(middleware.ConnectorGrantResolver(connectorGrants)))
 		r.Post("/api/session/bootstrap", sessionHandler.Bootstrap)
 
 		// Account routes
@@ -455,8 +458,14 @@ func init() {
 	})
 
 	chiLambda = chiadapter.New(r)
+	if keyARN := os.Getenv("CONNECTOR_SIGNING_KEY_ARN"); keyARN != "" {
+		connectorBridge = &connector.Bridge{
+			Verify: lazyConnectorVerifier(kmsClient, keyARN, connectorGrants),
+			Router: r,
+		}
+	}
 }
 
 func main() {
-	lambda.Start(chiLambda.ProxyWithContext)
+	lambda.Start(dispatchAPI)
 }

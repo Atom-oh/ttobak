@@ -13,6 +13,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
+	"github.com/ttobak/backend/internal/connector"
 )
 
 const originCacheTTL = time.Minute
@@ -186,6 +187,10 @@ func (v *OriginVerifier) allows(ctx context.Context, headers http.Header) bool {
 
 func (v *OriginVerifier) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, private := connector.VerifiedReadRequest(r); private {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if !v.allows(r.Context(), r.Header) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)

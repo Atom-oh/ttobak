@@ -56,7 +56,7 @@ conflict unless the caller retains the block. Unblocking requires explicit
 re-approval through the enabled-policy and capability checks.
 SDK transaction retries carry a stable request token; a condition conflict is
 separate from an unknown transport outcome that requires generation inspection.
-No live signer, private consumer, approval endpoint, OAuth client, IAM permission
+No live signer, approval endpoint, OAuth client, IAM permission
 or scheduler is activated by this foundation. The API auth boundary now applies a dedicated
 read-client policy when configured.
 Its default configuration is empty; without an injected current-grant resolver,
@@ -68,8 +68,19 @@ dedicated clients without a current-grant resolver. Both boundaries reject
 mutation-capable and unbounded routes before dispatch; QA does not decode caller
 headers to establish a configured client's identity.
 
-Subsequent reviewed stages must wire current grant resolution into the transports
-and supply private signing, bounded API/QA consumers, approval management endpoints
+The API Lambda now distinguishes a top-level private invoke frame from API
+Gateway payload 1.0. A configured exact KMS signing-key ARN enables a lazy,
+bounded public-key lookup and local signature verification; empty configuration
+keeps the private consumer unavailable. The bridge binds operation, exact argument
+bytes and current grants before calling only the eight bounded API read families,
+then verifies again before releasing at most 14,000 body bytes. The router accepts
+only its verifier-created in-process principal; no HTTP header or nested request
+body selects this path. Existing services still check resource ownership and
+source revisions. The API's dedicated HTTP read boundary now receives the same
+atomic grant resolver. The private mutation callback remains unavailable.
+
+Subsequent reviewed stages must wire the other transports
+and supply private signing, the bounded QA consumer, approval management endpoints
 and the specifically available personal-note executor. Infrastructure must
 preserve existing pool/client identities and keep issuance disabled through
 deployment verification. Native migration, real provider tokens, audience and

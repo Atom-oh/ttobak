@@ -29,6 +29,17 @@ in unmatched or encoded URLs. Public-share cleanup failures also omit tokens
 and provider error text. Existing logs and previously exposed links require
 separate operational review; changing the logger does not revoke a public link.
 
+The staged connector API consumer (ADR-053) is a service-IAM Lambda invocation,
+not an additional HTTP route. Its top-level `ttobak.connector.invoke.v1` frame
+binds the operation, request ID and exact argument bytes to a signed delegation.
+When `CONNECTOR_SIGNING_KEY_ARN` is configured, the consumer loads that exact
+public key and reads current client/user grants before and after one of the eight
+bounded API read operations. Only the verified in-process principal reaches
+the existing router; caller headers and nested HTTP bodies cannot create it.
+Response bodies are capped at 14,000 bytes. Empty key configuration denies the
+private consumer, and its mutation callback remains unavailable in this stage.
+No OAuth issuance or IAM invocation permission is installed by the consumer code.
+
 ## Contracts that require care
 
 ### Session bootstrap and project invitations
