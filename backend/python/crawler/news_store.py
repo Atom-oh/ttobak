@@ -94,10 +94,13 @@ def _native(value):
     return json.loads(data, parse_float=Decimal)
 
 
-def published(row):
-    return bool(row and type(row.get("schemaVersion")) in (int, Decimal)
-                and row.get("schemaVersion") == 1
-                and row.get("qualityStatus") == "PUBLISHED")
+def protected_publication(row):
+    # Occupancy is conservative, not permission to read an unknown schema.
+    # A rolling upgrade must not let a v1 writer replace newer or malformed data.
+    return bool(row and (row.get("qualityStatus") == "PUBLISHED"
+                or ("schemaVersion" in row and not (
+                    type(row["schemaVersion"]) in (int, Decimal)
+                    and row["schemaVersion"] == 1))))
 
 
 @dataclass(frozen=True)
@@ -185,7 +188,7 @@ class NewsStore:
             for row in rows:
                 if (row.get("PK"), row.get("SK")) not in requested:
                     raise StateRejected("STATE_UNAVAILABLE")
-                if published(row):
+                if protected_publication(row):
                     result.add(row["SK"][4:])
         return result
 
@@ -263,10 +266,11 @@ class NewsStore:
             {"ConditionCheck": {
                 "TableName": self.table_name,
                 "Key": {"PK": attempt.pk, "SK": "DOC#" + attempt.doc_hash},
-                "ConditionExpression": "attribute_not_exists(#schema) OR #schema <> :one"
-                                       " OR attribute_not_exists(#quality) OR #quality <> :published",
+                "ConditionExpression": "(attribute_not_exists(#schema)"
+                                       " OR (attribute_type(#schema, :number) AND #schema = :one))"
+                                       " AND (attribute_not_exists(#quality) OR #quality <> :published)",
                 "ExpressionAttributeNames": {"#schema": "schemaVersion", "#quality": "qualityStatus"},
-                "ExpressionAttributeValues": {":one": 1, ":published": "PUBLISHED"}}},
+                "ExpressionAttributeValues": {":one": 1, ":number": "N", ":published": "PUBLISHED"}}},
             {"Put": {
                 "TableName": self.table_name,
                 "Item": {"PK": attempt.pk, "SK": "NEWSCLAIM#" + attempt.doc_hash,
@@ -386,10 +390,11 @@ class NewsStore:
                 self._config_guard(attempt, config),
                 {"Put": {
                     "TableName": self.table_name, "Item": row,
-                    "ConditionExpression": "attribute_not_exists(#schema) OR #schema <> :one"
-                                           " OR attribute_not_exists(#quality) OR #quality <> :published",
+                    "ConditionExpression": "(attribute_not_exists(#schema)"
+                                           " OR (attribute_type(#schema, :number) AND #schema = :one))"
+                                           " AND (attribute_not_exists(#quality) OR #quality <> :published)",
                     "ExpressionAttributeNames": {"#schema": "schemaVersion", "#quality": "qualityStatus"},
-                    "ExpressionAttributeValues": {":one": 1, ":published": "PUBLISHED"}}},
+                    "ExpressionAttributeValues": {":one": 1, ":number": "N", ":published": "PUBLISHED"}}},
             ])
         self._transaction(operations)
         return receipt
