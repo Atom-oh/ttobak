@@ -73,6 +73,10 @@ class TestNewsStoreBoundaries(unittest.TestCase):
                 store.published_hashes("source", {"a" * 16})
         client.batch_get_item.return_value = {"Responses": {"table": []}}
         self.assertEqual(store.published_hashes("source", {"a" * 16}), set())
+        client.batch_get_item.return_value = {"Responses": {"table": [{
+            "PK": "CRAWLER#source", "SK": "DOC#" + "a" * 16,
+            "schemaVersion": True, "qualityStatus": "PUBLISHED"}]}}
+        self.assertEqual(store.published_hashes("source", {"a" * 16}), set())
         self.assertTrue(client.batch_get_item.call_args.kwargs[
             "RequestItems"]["table"]["ConsistentRead"])
 
@@ -102,9 +106,10 @@ class TestNewsStoreBoundaries(unittest.TestCase):
         store, job = NewsStore(client, "table"), attempt()
         good = dict(now=NOW + 1, status="PUBLISHED", known_cost="0.1",
                     usage_complete=True, usage={}, document=document(job))
-        for change in ({"now": NOW - 1}, {"now": job.lease_until}, {"usage_complete": 1},
+        for change in ({"now": NOW - 1}, {"usage_complete": 1},
                        {"usage": {"inputTokens": -1}}, {"usage": {"inputTokens": True}},
                        {"document": {**document(job), "s3Key": "shared/forged.md"}},
+                       {"document": {**document(job), "schemaVersion": True}},
                        {"document": {**document(job), "title": "a" * 128000}},
                        {"document": {**document(job), "qualityScore": float("nan")}}):
             with self.subTest(change=list(change)), self.assertRaises(StateRejected):
@@ -187,6 +192,9 @@ class TestNewsStoreTransactions(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(self.charge(), Decimal("0.1"))
         self.assertEqual(self.charge("NEWSRUN#run"), Decimal("0.1"))
+        expired_retry = self.finish(now=NOW + LEASE_SECONDS + 1)
+        self.assertEqual(first, expired_retry)
+        self.assertEqual(self.charge(), Decimal("0.1"))
         with self.assertRaisesRegex(StateRejected, "STATE_CONFLICT"):
             self.finish(known_cost="0.2")
         self.assertEqual(self.charge(), Decimal("0.1"))

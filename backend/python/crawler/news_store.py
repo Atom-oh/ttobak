@@ -73,7 +73,8 @@ def _native(value):
 
 
 def published(row):
-    return bool(row and row.get("schemaVersion") == 1
+    return bool(row and type(row.get("schemaVersion")) in (int, Decimal)
+                and row.get("schemaVersion") == 1
                 and row.get("qualityStatus") == "PUBLISHED")
 
 
@@ -279,7 +280,7 @@ class NewsStore:
         A retry returns the recorded receipt only for the same completion digest.
         Model errors with unknown usage keep at least the full reservation.
         """
-        if (type(now) is not int or not attempt.lease_until - LEASE_SECONDS <= now < attempt.lease_until
+        if (type(now) is not int or not attempt.lease_until - LEASE_SECONDS <= now <= 253402300799
                 or status not in ("PUBLISHED", "REJECTED", "FAILED")
                 or type(usage_complete) is not bool
                 or not isinstance(reason, str) or not re.fullmatch(r"[A-Z0-9_]{0,64}", reason)
@@ -295,7 +296,8 @@ class NewsStore:
             raise StateRejected("INVALID_COMPLETION")
         row = None
         if document is not None:
-            if not isinstance(document, dict):
+            if (not isinstance(document, dict) or type(document.get("schemaVersion")) is not int
+                    or document["schemaVersion"] != 1):
                 raise StateRejected("INVALID_COMPLETION")
             row = _native(document)
             required = {
@@ -321,6 +323,8 @@ class NewsStore:
             if previous.get("completionDigest") != digest:
                 raise StateRejected("STATE_CONFLICT")
             return previous["receipt"]
+        if now >= attempt.lease_until:
+            raise StateRejected("INVALID_COMPLETION")
         operations = [
             {"Update": {
                 "TableName": self.table_name, "Key": {"PK": attempt.pk, "SK": attempt.sk},
