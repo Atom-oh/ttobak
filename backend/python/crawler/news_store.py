@@ -26,6 +26,8 @@ CONFIG_FIELDS = ("sourceId", "sourceName", "aliases", "newsQueries",
                  "customUrls", "status", "ownerId")
 MAX_ITEM_BYTES = 128000
 LEASE_SECONDS = 1200
+MAX_RUN_ATTEMPTS = 60
+ACCOUNTING_RETENTION_SECONDS = 400 * 86400
 
 
 class StateRejected(Exception):
@@ -227,7 +229,7 @@ class NewsStore:
         limit = _money(limit)
         if limit < attempt.reserved:
             raise StateRejected("BUDGET_PAUSED")
-        return {"Update": {
+        operation = {"Update": {
             "TableName": self.table_name, "Key": {"PK": attempt.pk, "SK": sk},
             "UpdateExpression": "ADD #charge :reservation",
             "ConditionExpression": "(attribute_not_exists(#charge) OR #charge <= :remaining)"
@@ -237,6 +239,24 @@ class NewsStore:
                                         "#finalized": "finalizedAt"},
             "ExpressionAttributeValues": {
                 ":reservation": attempt.reserved, ":remaining": limit - attempt.reserved}}}
+        if sk == "NEWSRUN#" + attempt.run_id:
+            update = operation["Update"]
+            update["UpdateExpression"] += ", attemptCount :one"
+            update["ConditionExpression"] += (
+                " AND #runState = :open AND sourceRevision = :revision"
+                " AND acceptUntil > :now AND attemptCount < :maximum")
+            update["ExpressionAttributeNames"]["#runState"] = "runState"
+            update["ExpressionAttributeValues"].update({
+                ":one": 1, ":open": "OPEN", ":revision": attempt.revision,
+                ":now": attempt.lease_until - LEASE_SECONDS, ":maximum": MAX_RUN_ATTEMPTS})
+        else:
+            update = operation["Update"]
+            update["UpdateExpression"] = (
+                "SET pendingShareExpiresAt = if_not_exists(pendingShareExpiresAt, :expiry) "
+                + update["UpdateExpression"])
+            update["ExpressionAttributeValues"][":expiry"] = (
+                attempt.lease_until - LEASE_SECONDS + ACCOUNTING_RETENTION_SECONDS)
+        return operation
 
     def reserve(self, attempt, *, now, month_limit, run_limit):
         """Reserve once before model calls; each Lambda invocation has a new token.
@@ -257,6 +277,7 @@ class NewsStore:
             "sourceRevision": attempt.revision, "month": attempt.month,
             "reservedUsd": attempt.reserved, "chargedUsd": attempt.reserved,
             "leaseUntil": attempt.lease_until, "state": "RUNNING",
+            "pendingShareExpiresAt": now + ACCOUNTING_RETENTION_SECONDS,
         }
         self._transaction([
             self._config_guard(attempt, config),
@@ -270,7 +291,8 @@ class NewsStore:
             {"Put": {
                 "TableName": self.table_name,
                 "Item": {"PK": attempt.pk, "SK": "NEWSCLAIM#" + attempt.doc_hash,
-                         "attemptToken": attempt.token, "leaseUntil": attempt.lease_until},
+                         "attemptToken": attempt.token, "leaseUntil": attempt.lease_until,
+                         "pendingShareExpiresAt": now + 7 * 86400},
                 "ConditionExpression": "attribute_not_exists(PK) OR leaseUntil < :now",
                 "ExpressionAttributeValues": {":now": now}}},
             {"Put": {"TableName": self.table_name, "Item": row,
@@ -291,10 +313,17 @@ class NewsStore:
             names["#blocked"] = "blocked"
             values[":yes"] = True
             update = "SET #blocked = :yes " + update
-        return {"Update": {
+        operation = {"Update": {
             "TableName": self.table_name, "Key": {"PK": attempt.pk, "SK": sk},
             "UpdateExpression": update, "ConditionExpression": "#charge >= :reserved",
             "ExpressionAttributeNames": names, "ExpressionAttributeValues": values}}
+        if sk == "NEWSRUN#" + attempt.run_id:
+            update = operation["Update"]
+            update["UpdateExpression"] += ", finishedCount :finished"
+            update["ConditionExpression"] += " AND #runState = :open AND finishedCount < attemptCount"
+            names["#runState"] = "runState"
+            values.update({":finished": 1, ":open": "OPEN"})
+        return operation
 
     def finish(self, attempt, *, now, status, known_cost, usage_complete, usage,
                document=None, reason="", warnings=()):
