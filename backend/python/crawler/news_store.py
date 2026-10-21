@@ -15,7 +15,7 @@ from decimal import Decimal, InvalidOperation
 
 from botocore.exceptions import ClientError
 
-from news_discovery import source_revision
+from news_discovery import source_revision, valid_source_id
 
 _ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 _HASH = re.compile(r"[0-9a-f]{16}")
@@ -112,8 +112,7 @@ class Attempt:
     lease_until: int
 
     def __post_init__(self):
-        _match(self.source_id, _ID)
-        if self.source_id.startswith("__"):
+        if not valid_source_id(self.source_id):
             raise StateRejected("INVALID_IDENTITY")
         _match(self.doc_hash, _HASH)
         _match(self.run_id, _ID)
@@ -153,7 +152,8 @@ class NewsStore:
             ConsistentRead=True).get("Item")
 
     def current_config(self, source_id, revision):
-        _match(source_id, _ID)
+        if not valid_source_id(source_id):
+            raise StateRejected("INVALID_IDENTITY")
         _match(revision, _REVISION)
         row = self._get("CRAWLER#" + source_id, "CONFIG")
         if (not row or row.get("sourceId") != source_id
@@ -163,7 +163,8 @@ class NewsStore:
         return row
 
     def published_hashes(self, source_id, hashes):
-        _match(source_id, _ID)
+        if not valid_source_id(source_id):
+            raise StateRejected("INVALID_IDENTITY")
         if not isinstance(hashes, set) or len(hashes) > 300:
             raise StateRejected("INVALID_IDENTITY")
         for value in hashes:

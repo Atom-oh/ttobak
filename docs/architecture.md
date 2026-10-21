@@ -227,7 +227,9 @@ Prices are caller-supplied estimates; absent rates do not mean zero cost.
 Terms/diagrams remain unavailable until their schema/rendering contracts land.
 The staged `news_store.py` adapter transactionally reserves source/run/month
 budgets, acquires a unique attempt lease, and publishes accepted document state
-with its terminal receipt and cost settlement. Rejected usage remains charged;
+with its terminal receipt and cost settlement. Attempts and lookups use
+discovery's exact Unicode source ID contract without normalization. Run IDs
+retain their separate ASCII constraint. Rejected usage remains charged;
 unknown or abandoned usage retains its reservation. Immutable attempt keys live
 outside the legacy shared-text prefix. New consumers must verify current
 publication state before those writers activate; see

@@ -62,6 +62,21 @@ class TestNewsStoreBoundaries(unittest.TestCase):
         self.assertNotEqual(first.artifact_key, second.artifact_key)
         self.assertFalse(first.markdown_key.startswith("shared/"))
 
+    def test_invalid_source_ids_never_read_or_write_storage(self):
+        client = mock.Mock()
+        store = NewsStore(client, "table")
+        for source_id in (" source", "source ", "source/name", "__tech__", "²",
+                          "a" * 129, "\ud800", "한#글", ""):
+            with self.subTest(source_id=source_id):
+                for call in (lambda: attempt(source_id=source_id),
+                             lambda: store.current_config(source_id, "a" * 64),
+                             lambda: store.published_hashes(source_id, {"a" * 16})):
+                    with self.assertRaisesRegex(StateRejected, "INVALID_IDENTITY"):
+                        call()
+        self.assertEqual(client.mock_calls, [])
+        with self.assertRaisesRegex(StateRejected, "INVALID_IDENTITY"):
+            attempt(run_id="한글")
+
     def test_incomplete_published_batch_fails_closed_and_reads_are_strong(self):
         client = mock.Mock()
         store = NewsStore(client, "table")
@@ -161,6 +176,22 @@ class TestNewsStoreTransactions(unittest.TestCase):
             self.reserve(attempt(token="e" * 32))
         self.assertEqual(self.charge(), Decimal("1"))
         self.assertEqual(self.row("NEWSCLAIM#" + self.job.doc_hash)["attemptToken"], self.job.token)
+
+    def test_unicode_source_can_reserve_publish_and_deduplicate(self):
+        for source_id in ("우리은행", "école-١", "news_source"):
+            with self.subTest(source_id=source_id):
+                config = dict(CONFIG, PK="CRAWLER#" + source_id, sourceId=source_id)
+                self.table.put_item(Item=config)
+                job = attempt(source_id=source_id, revision=source_revision(config))
+                self.assertEqual(self.store.current_config(source_id, job.revision), config)
+                self.assertEqual(self.store.published_hashes(source_id, {job.doc_hash}), set())
+                self.reserve(job)
+                self.finish(job, status="PUBLISHED", reason="", document=document(job))
+                self.assertEqual(self.store.published_hashes(source_id, {job.doc_hash}), {job.doc_hash})
+                stored = self.table.get_item(
+                    Key={"PK": job.pk, "SK": "DOC#" + job.doc_hash},
+                    ConsistentRead=True)["Item"]
+                self.assertEqual(stored["s3Key"], job.markdown_key)
 
     def test_simultaneous_budget_reservations_cannot_cross_month_or_run_limit(self):
         self.reserve(month_limit="1")
