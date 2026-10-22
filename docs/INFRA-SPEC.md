@@ -23,7 +23,7 @@ do not establish that the rule is deployed.
 | TtobakAiStack | Service roles/policies, research/simulator permissions | Storage, Knowledge, Auth, WebSearchGateway |
 | TtobakEdgeAuthStack | CloudFront viewer JWT validation, us-east-1 | Auth |
 | TtobakGatewayStack | HTTP/WebSocket APIs, Go/Python functions, conversion/events | Auth, Storage, AI, Knowledge, WebSearchGateway |
-| TtobakCrawlerStack | Crawling/ingestion workflow and workers | AI, Storage, Knowledge, WebSearchGateway |
+| TtobakCrawlerStack | Crawling/ingestion workflow and workers; separate legacy news drain switch | AI, Storage, Knowledge, WebSearchGateway |
 | TtobakResearchAgentStack | Legacy Bedrock Agent/tools and AgentCore spans log group | Storage, Knowledge |
 | TtobakWhisperStack | GPU Spot ECS, ECR, production/benchmark tasks | Storage |
 | TtobakFrontendStack | Static site, CloudFront, runtime config and media keys | Gateway, EdgeAuth, Auth |

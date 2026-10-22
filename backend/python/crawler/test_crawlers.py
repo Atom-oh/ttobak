@@ -44,6 +44,19 @@ import news_crawler
 import ingest_trigger
 
 
+class TestLegacyNewsDrain(unittest.TestCase):
+    def test_disabled_or_invalid_flag_stops_before_event_or_dependencies(self):
+        for value in ("off", "", "invalid", "ON"):
+            with self.subTest(value=value), mock.patch.dict(os.environ, {"NEWS_LEGACY_WRITES": value}), \
+                    mock.patch.object(news_crawler, "_generate_search_queries") as search, \
+                    mock.patch.object(news_crawler, "_record_history") as history:
+                result = news_crawler.handler(None, None)
+                self.assertEqual(result, {"status": "DISABLED", "docsAdded": 0,
+                                          "docsUpdated": 0, "errors": []})
+                search.assert_not_called()
+                history.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # 1. orchestrator.handler
 # ---------------------------------------------------------------------------

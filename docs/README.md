@@ -30,7 +30,7 @@ Markdown for English language and historical/current status.
 | [Unverified account recovery](runbooks/unverified-account-recovery.md) | Identity-verified operator password recovery | Cognito and the authenticated verification flow |
 | [WebSocket runtime](runbooks/websocket-runtime.md) | CloudFront ingress, secret rotation, real acceptance | Frontend/Gateway stacks and ws-authorizer |
 | [Pipeline recovery](runbooks/pipeline-failure-recovery.md) | Failure queues, alarm routing and controlled replay | GatewayStack, failure construct and replay tool |
-| [Knowledge-grade news release](runbooks/knowledge-grade-news-release.md) | Private handlers, verified prices, staged acceptance and rollback | News runtime/recovery, ADR-052 |
+| [Knowledge-grade news release](runbooks/knowledge-grade-news-release.md) | Canary acceptance, retained-legacy archive, verified prices and rollback | News runtime/recovery, ADR-052 |
 | [HTTP origin proof migration](runbooks/http-origin-secret-migration.md) | Consumer contract and coordinated rotation gates | Go/QA/MCP origin verifiers and deployment configuration |
 | [Connector capabilities](decisions/ADR-053-connector-capability-private-delegation.md) | Staged operation policy and private-delegation delivery gates | Versioned inventory, generated tables and contract tests |
 | [Connector delegation wire](security/connector-delegation-v1.md) | Canonical signed bytes, key pinning and lifetime limits | Local Go/TypeScript/Python verifiers; activation pending |
