@@ -20,6 +20,86 @@ function resolved(value: any): any {
   return value;
 }
 
+// Execute the synthesized, bounded daily subgraph, not a copy of its business
+// predicates. Task outputs are fixtures; unsupported ASL fails the test.
+function dailyResult(definition: any, sources: any[], outputs: any[], input: any = {}) {
+  let invoked = 0;
+  const at = (data: any, path: string): any =>
+    path === '$' ? data : path.slice(2).split('.').reduce((v, key) => v?.[key], data);
+  const value = (expression: string, data: any): any => {
+    const intrinsic = /^(States.JsonToString|States.ArrayContains)\((.*)\)$/.exec(expression);
+    if (!intrinsic) return at(data, expression);
+    if (intrinsic[1] === 'States.JsonToString') return JSON.stringify(at(data, intrinsic[2]));
+    const [path, expected] = intrinsic[2].split(', ');
+    return at(data, path).includes(JSON.parse(expected));
+  };
+  const params = (input: any, data: any): any => Object.fromEntries(
+    Object.entries(input).map(([key, item]) => key.endsWith('.$')
+      ? [key.slice(0, -2), value(item as string, data)]
+      : [key, item && typeof item === 'object' ? params(item, data) : item]));
+  const matches = (condition: any, data: any): boolean => {
+    if (condition.And) return condition.And.every((c: any) => matches(c, data));
+    if (condition.Or) return condition.Or.some((c: any) => matches(c, data));
+    if (condition.Not) return !matches(condition.Not, data);
+    const actual = at(data, condition.Variable);
+    if ('IsPresent' in condition) return (actual !== undefined) === condition.IsPresent;
+    if ('IsString' in condition) return (typeof actual === 'string') === condition.IsString;
+    if ('IsBoolean' in condition) return (typeof actual === 'boolean') === condition.IsBoolean;
+    if ('BooleanEquals' in condition) return actual === condition.BooleanEquals;
+    if ('StringEquals' in condition) return actual === condition.StringEquals;
+    if ('StringEqualsPath' in condition) return actual === at(data, condition.StringEqualsPath);
+    throw new Error(`Unsupported condition: ${JSON.stringify(condition)}`);
+  };
+  const execute = (graph: any, input: any): any => {
+    let name = graph.StartAt;
+    let data = input;
+    for (let step = 0; step < 30; step++) {
+      const state = graph.States[name];
+      if (state.Type === 'Succeed') return { terminal: name, invoked };
+      if (state.Type === 'Fail') return { terminal: name, invoked };
+      if (state.Type === 'Choice') {
+        name = state.Choices.find((c: any) => matches(c, data))?.Next ?? state.Default;
+        continue;
+      }
+      let result: any;
+      if (state.Type === 'Task' && name === 'ListDailySources') {
+        const selected = state.InputPath === null ? {}
+          : state.InputPath ? at(data, state.InputPath) : data;
+        const payload = 'Parameters' in state
+          ? state.Parameters && typeof state.Parameters === 'object'
+            ? params(state.Parameters, selected) : state.Parameters
+          : selected;
+        // Verify the synthesized Lambda input before substituting its output.
+        expect(payload).toEqual(data);
+        result = { mode: 'all', sources };
+      } else if (state.Type === 'Task') {
+        const output = outputs[invoked++];
+        if (output instanceof Error) {
+          name = state.Catch.find((c: any) =>
+            c.ErrorEquals.includes(output.message) || c.ErrorEquals.includes('States.ALL')).Next;
+          continue;
+        }
+        result = state.ResultSelector ? params(state.ResultSelector, { Output: output }) : output;
+      } else if (state.Type === 'Map') {
+        result = at(data, state.ItemsPath).map((item: any) => execute(state.ItemProcessor, item));
+      } else if (state.Type === 'Pass') {
+        result = state.Parameters ? params(state.Parameters, data)
+          : 'Result' in state ? state.Result : data;
+      } else {
+        throw new Error(`Unsupported state: ${name}`);
+      }
+      if (state.ResultPath !== null) {
+        data = state.ResultPath && state.ResultPath !== '$'
+          ? { ...data, [state.ResultPath.slice(2)]: result } : result;
+      }
+      if (state.End) return data;
+      name = state.Next;
+    }
+    throw new Error('Unbounded daily graph');
+  };
+  return execute(definition, input);
+}
+
 describe('private news publication release', () => {
   let json: any;
   let resources: any[];
@@ -30,6 +110,9 @@ describe('private news publication release', () => {
     const stack = new cdk.Stack(app, 'NewsTest', {
       env: { account: '123456789012', region: 'ap-northeast-2' },
     });
+    const legacy = new cdk.CfnParameter(stack, 'NewsLegacyWrites', {
+      type: 'String', default: 'on', allowedValues: ['on', 'off'],
+    });
     new NewsPublication(stack, 'Publication', {
       table: dynamodb.Table.fromTableArn(stack, 'Table',
         'arn:aws:dynamodb:ap-northeast-2:123456789012:table/ttobak-main'),
@@ -37,29 +120,43 @@ describe('private news publication release', () => {
       artifactBucket: s3.Bucket.fromBucketName(stack, 'Artifacts', 'test-artifact-bucket'),
       webSearchGatewayUrl: 'https://test.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp',
       webSearchGatewayArn: 'arn:aws:bedrock-agentcore:us-east-1:123456789012:gateway/test',
+      legacyWrites: legacy.valueAsString,
     });
     json = Template.fromStack(stack).toJSON();
     resources = Object.values(json.Resources);
-    const machine = resources.find(r => r.Type === 'AWS::StepFunctions::StateMachine');
+    const machine = resources.find(r => r.Properties?.StateMachineName === 'ttobak-news-publication');
     definition = JSON.parse(resolved(machine.Properties.DefinitionString));
   });
 
-  test('deployment cannot activate all sources and requires an explicit canary', () => {
+  test('all-source activation requires legacy off while canary requires an exact source', () => {
     expect(json.Parameters.NewsPipelineMode).toMatchObject({
-      Default: 'off', AllowedValues: ['off', 'canary'],
+      Default: 'off', AllowedValues: ['off', 'canary', 'all'],
     });
     expect(json.Parameters.NewsCanarySourceId.Default).toBe('');
     expect(json.Rules.NewsCanaryRequiresSource.Assertions).toHaveLength(1);
+    expect(json.Rules.NewsAllRequiresLegacyOff.Assertions[0].Assert).toEqual({
+      'Fn::Or': [
+        { 'Fn::Not': [{ 'Fn::Equals': [{ Ref: 'NewsPipelineMode' }, 'all'] }] },
+        { 'Fn::Equals': [{ Ref: 'NewsLegacyWrites' }, 'off'] },
+      ],
+    });
     for (const fn of resources.filter(r => r.Type === 'AWS::Lambda::Function')) {
       expect(fn.Properties.Environment.Variables.NEWS_PIPELINE_MODE).toEqual({ Ref: 'NewsPipelineMode' });
+      expect(fn.Properties.Environment.Variables.NEWS_LEGACY_WRITES).toEqual({ Ref: 'NewsLegacyWrites' });
       expect(fn.Properties.Runtime).toBe('python3.12');
       expect(fn.Properties.Architectures).toEqual(['arm64']);
     }
     const rules = resources.filter(r => r.Type === 'AWS::Events::Rule');
-    expect(rules).toHaveLength(1);
-    expect(rules[0].Properties).toMatchObject({ ScheduleExpression: 'rate(5 minutes)' });
-    expect(rules[0].Properties.Targets[0].Input).toBe('{}');
-    expect(rules[0].Properties.Targets[0].RetryPolicy.MaximumRetryAttempts).toBe(0);
+    expect(rules).toHaveLength(2);
+    const daily = rules.find(r => r.Properties.Name === 'ttobak-news-daily');
+    expect(daily.Properties.ScheduleExpression).toBe('cron(10 19 * * ? *)');
+    expect(daily.Properties.State).toEqual({ 'Fn::If': ['NewsAllSourcesEnabled', 'ENABLED', 'DISABLED'] });
+    expect(json.Conditions.NewsAllSourcesEnabled).toEqual({
+      'Fn::Equals': [{ Ref: 'NewsPipelineMode' }, 'all'],
+    });
+    const recovery = rules.find(r => r.Properties.Name === 'ttobak-news-recovery');
+    expect(recovery.Properties.Targets[0].Input).toBe('{}');
+    expect(recovery.Properties.Targets[0].RetryPolicy.MaximumRetryAttempts).toBe(0);
   });
 
   test('recovery timeout is below its lease and stays scheduled with writers off', () => {
@@ -67,7 +164,8 @@ describe('private news publication release', () => {
     expect(fn.Properties.Timeout).toBe(120);
     expect(fn.Properties.Timeout).toBeLessThan(300);
     expect(fn.Properties.ReservedConcurrentExecutions).toBe(1);
-    const rule = resources.find(r => r.Type === 'AWS::Events::Rule');
+    const rule = resources.find(r => r.Type === 'AWS::Events::Rule'
+      && r.Properties.Name === 'ttobak-news-recovery');
     expect(rule.Condition).toBeUndefined();
     expect(rule.Properties.State).not.toBe('DISABLED');
     expect(rule.Properties.Targets[0].Arn).toEqual({
@@ -116,8 +214,12 @@ describe('private news publication release', () => {
       'arn:ref-AWS::Partition:s3:::test-artifact-bucket/knowledge-artifacts/news/v1/*',
     ]);
     const scan = all.filter(s => actions(s).includes('dynamodb:Scan'));
-    expect(scan).toHaveLength(1);
-    expect(scan[0].Resource).toBe('arn:aws:dynamodb:ap-northeast-2:123456789012:table/ttobak-main');
+    expect(scan).toHaveLength(2);
+    for (const statement of scan) {
+      expect(statement.Resource).toBe('arn:aws:dynamodb:ap-northeast-2:123456789012:table/ttobak-main');
+    }
+    expect(scan.filter(s => s.Condition?.['ForAllValues:StringEquals']?.['dynamodb:Attributes']
+      ?.includes('newsQueries'))).toHaveLength(1);
     const scoped = all.filter(s => actions(s).includes('dynamodb:UpdateItem'));
     expect(scoped).toHaveLength(4);
     for (const s of scoped) {
@@ -147,6 +249,157 @@ describe('private news publication release', () => {
     expect(resolved(model[0].Resource)).toHaveLength(3);
     expect(resolved(model[0].Resource).every((r: string) => r.endsWith('anthropic.claude-opus-5'))).toBe(true);
     expect(resolved(model[0].Resource).some((r: string) => r.includes('*'))).toBe(false);
+  });
+
+  test('daily children are serialized, deduplicated and isolated from sibling failures', () => {
+    const machine = resources.find(r => r.Properties?.StateMachineName === 'ttobak-news-daily');
+    const daily = JSON.parse(resolved(machine.Properties.DefinitionString));
+    expect(daily.TimeoutSeconds).toBe(23 * 3600);
+    const map = daily.States.DailySources;
+    expect(map).toMatchObject({
+      Type: 'Map', ItemsPath: '$.sources', MaxConcurrency: 1, ResultPath: '$.failures',
+    });
+    const child = map.ItemProcessor.States.PublishDailySource;
+    expect(child.Resource).toContain('states:startExecution.sync:2');
+    expect(child.Parameters).toMatchObject({
+      'Name.$': '$.executionName',
+      Input: { 'sourceId.$': '$.sourceId', 'runId.$': '$.runId' },
+    });
+    expect(Object.keys(child.Parameters.Input)).toHaveLength(2);
+    expect(child.Retry).toBeUndefined();
+    expect(child.Catch).toEqual([
+      { ErrorEquals: ['StepFunctions.ExecutionAlreadyExistsException', 'StepFunctions.ExecutionAlreadyExists'], ResultPath: null, Next: 'DailyAlreadyStarted' },
+      { ErrorEquals: ['States.ALL'], ResultPath: null, Next: 'DailySourceFailed' },
+    ]);
+    expect(map.ItemProcessor.States.DailySourceFailed.Result).toBe(true);
+    expect(map.ItemProcessor.States.DailySourceCompleted.Result).toBe(false);
+    expect(map.ItemProcessor.States.DailyAlreadyStarted.Result).toBe(false);
+    expect(daily.States.SummarizeDailyResults.Parameters).toEqual({
+      'failed.$': 'States.ArrayContains($.failures, true)',
+    });
+    expect(daily.States.DailyPublicationFailed.Type).toBe('Fail');
+    const schedule = resources.find(r => r.Properties?.Handler === 'news_schedule.handler');
+    const policies = resources.filter(r => r.Type === 'AWS::IAM::Policy'
+      && r.Properties.Roles.some((role: any) => role.Ref === schedule.Properties.Role['Fn::GetAtt'][0]));
+    const actions = policies.flatMap(p => p.Properties.PolicyDocument.Statement)
+      .flatMap(s => Array.isArray(s.Action) ? s.Action : [s.Action]);
+    expect(actions.filter(a => !a.startsWith('logs:'))).toEqual(['dynamodb:Scan']);
+  });
+
+  test('daily outcome follows actual receipt diagnostics and continues healthy sources', () => {
+    const machine = resources.find(r => r.Properties?.StateMachineName === 'ttobak-news-daily');
+    const daily = JSON.parse(resolved(machine.Properties.DefinitionString));
+    const identity = (id: string) => ({
+      sourceId: id, runId: 'daily-20261021', executionName: `news-20261021-${id}`,
+    });
+    const receipt = (id: string, extra: any = {}) => ({
+      sourceId: id, runId: identity(id).executionName, sourceRevision: 'a'.repeat(64),
+      status: 'COMPLETED', docsAdded: 0, errors: [], fetchWarnings: [],
+      usageComplete: true, ...extra,
+    });
+    // Python's actual discovery + transactional finalization test establishes
+    // this normal successful-task / failed-crawl receipt contract.
+    const failedSearch = receipt('a', { status: 'PARTIAL', errors: ['SEARCH_FAILED'] });
+    expect(dailyResult(daily, [identity('a'), identity('b')],
+      [failedSearch, receipt('b')])).toEqual({ terminal: 'DailyPublicationFailed', invoked: 2 });
+    for (const errors of [{}, null, '', '[]', undefined, ['QUERY_TOO_LONG']]) {
+      const output = receipt('a', { errors });
+      if (errors === undefined) delete output.errors;
+      expect(dailyResult(daily, [identity('a'), identity('b')], [output, receipt('b')]))
+        .toEqual({ terminal: 'DailyPublicationFailed', invoked: 2 });
+    }
+    for (const output of [null, {}, receipt('a', { status: 'UNKNOWN' }),
+      receipt('a', { status: undefined }), receipt('a', { sourceId: null }),
+      receipt('a', { usageComplete: 'true' }), receipt('a', { usageComplete: false }),
+      receipt('wrong')]) {
+      expect(dailyResult(daily, [identity('a'), identity('b')], [output, receipt('b')]))
+        .toEqual({ terminal: 'DailyPublicationFailed', invoked: 2 });
+    }
+    for (const output of [receipt('a'), receipt('a', {
+      status: 'PARTIAL', fetchWarnings: ['CORROBORATION_DEFERRED'],
+    })]) {
+      expect(dailyResult(daily, [identity('a')], [output]))
+        .toEqual({ terminal: 'DailyComplete', invoked: 1 });
+    }
+    const finalized = { sourceId: 'a', runId: identity('a').executionName,
+      sourceRevision: 'a'.repeat(64), candidates: [], status: 'FINALIZED' };
+    expect(dailyResult(daily, [identity('a')], [finalized]))
+      .toEqual({ terminal: 'DailyComplete', invoked: 1 });
+    // These branches reuse old executions; they do not prove old crawl success.
+    for (const code of ['StepFunctions.ExecutionAlreadyExistsException',
+      'StepFunctions.ExecutionAlreadyExists']) {
+      expect(dailyResult(daily, [identity('a')], [new Error(code)]))
+        .toEqual({ terminal: 'DailyComplete', invoked: 1 });
+    }
+    expect(dailyResult(daily, [{ schedulingError: 'INVALID_SCHEDULE_SOURCE',
+      sourceKeySha256: 'a'.repeat(64) }, identity('b')], [receipt('b')]))
+      .toEqual({ terminal: 'DailyPublicationFailed', invoked: 1 });
+  });
+
+  test.each([
+    {},
+    { scheduledAt: '2026-10-21T19:10:00Z' },
+    { scheduledAt: '2026-10-21T19:10:00Z', expectedSourcesSha256: 'a'.repeat(64) },
+  ])('daily scheduler receives the complete parent input: %j', (input) => {
+    const daily = JSON.parse(resolved(resources.find(r =>
+      r.Properties?.StateMachineName === 'ttobak-news-daily').Properties.DefinitionString));
+    expect(dailyResult(daily, [], [], input))
+      .toEqual({ terminal: 'DailyComplete', invoked: 0 });
+  });
+
+  test('daily delivery retains original time and has scoped encrypted recovery', () => {
+    const rule = resources.find(r => r.Properties?.Name === 'ttobak-news-daily');
+    const target = rule.Properties.Targets[0];
+    expect(target.InputTransformer).toEqual({
+      InputPathsMap: { time: '$.time' }, InputTemplate: '{"scheduledAt":<time>}',
+    });
+    expect(target.RetryPolicy).toEqual({
+      MaximumEventAgeInSeconds: 7200, MaximumRetryAttempts: 6,
+    });
+    const queueEntry = Object.entries<any>(json.Resources).find(([, r]) =>
+      r.Type === 'AWS::SQS::Queue' && r.Properties.QueueName === 'ttobak-news-daily-delivery-dlq')!;
+    expect(queueEntry).toBeDefined();
+    const [queueId, queue] = queueEntry;
+    expect(target.DeadLetterConfig.Arn).toEqual({ 'Fn::GetAtt': [queueId, 'Arn'] });
+    expect(queue.Properties.MessageRetentionPeriod).toBe(14 * 86400);
+    expect(queue.DeletionPolicy).toBe('Retain');
+    const keyId = queue.Properties.KmsMasterKeyId['Fn::GetAtt'][0];
+    const key = json.Resources[keyId];
+    expect(key.Type).toBe('AWS::KMS::Key');
+    expect(key.Properties.EnableKeyRotation).toBe(true);
+    expect(key.DeletionPolicy).toBe('Retain');
+    const serviceGrant = key.Properties.KeyPolicy.Statement.find((s: any) =>
+      s.Principal?.Service === 'events.amazonaws.com');
+    expect(key.Properties.KeyPolicy.Statement).toHaveLength(2);
+    expect(serviceGrant.Action.sort()).toEqual(['kms:Decrypt', 'kms:GenerateDataKey']);
+    expect(serviceGrant.Condition).toEqual({ StringEquals: { 'aws:SourceAccount': '123456789012' } });
+    expect(key.Properties.KeyPolicy.Statement.find((s: any) => s.Action === 'kms:*').Condition)
+      .toEqual({ StringEquals: { 'kms:CallerAccount': '123456789012' } });
+    for (const statement of key.Properties.KeyPolicy.Statement) {
+      expect(statement.Principal).not.toBe('*');
+      expect(statement.Principal?.AWS).not.toBe('*');
+      if (statement.Resource === '*') expect(statement.Condition).toBeDefined();
+    }
+    const queuePolicy = resources.find(r => r.Type === 'AWS::SQS::QueuePolicy'
+      && r.Properties.Queues.some((q: any) => q.Ref === queueId));
+    const grants = queuePolicy.Properties.PolicyDocument.Statement;
+    expect(grants).toHaveLength(1);
+    expect(grants[0]).toMatchObject({
+      Action: 'sqs:SendMessage', Principal: { Service: 'events.amazonaws.com' },
+      Resource: { 'Fn::GetAtt': [queueId, 'Arn'] },
+      Condition: { ArnEquals: { 'aws:SourceArn': { 'Fn::GetAtt': [
+        Object.keys(json.Resources).find(id => json.Resources[id] === rule), 'Arn',
+      ] } } },
+    });
+    const alarms = resources.filter(r => r.Type === 'AWS::CloudWatch::Alarm');
+    for (const metric of ['FailedInvocations', 'InvocationsFailedToBeSentToDlq']) {
+      expect(alarms.some(r => r.Properties.Namespace === 'AWS/Events'
+        && r.Properties.MetricName === metric
+        && r.Properties.Dimensions.some((d: any) => d.Name === 'RuleName'
+          && json.Resources[d.Value.Ref] === rule))).toBe(true);
+    }
+    expect(alarms.some(r => r.Properties.Namespace === 'AWS/SQS'
+      && r.Properties.MetricName === 'ApproximateNumberOfMessagesVisible')).toBe(true);
   });
 
   test('workflow bounds concurrent reservations and strips candidate bodies before settlement', () => {

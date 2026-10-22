@@ -1,10 +1,13 @@
 # Knowledge-grade news release
 
-Status on 2026-10-21: the private workflow is deployed for one isolated canary.
+Historical staging snapshot on 2026-10-21, before daily activation: the private
+workflow is deployed for one isolated canary.
 Publication, charged usage, authenticated HTTP/WebSocket current-source QA,
 source-change/disable rejection, and rendered settings/history passed production
-acceptance. Normal source activation, recovery completion and the retained-legacy
-archive remain pending. The deployment default remains off.
+acceptance. Scheduled recovery and the 986-item retained-legacy archive, including
+a complete second reconciliation, also passed. Daily scheduling and `all` mode
+are implemented but their production activation remains pending. The deployment
+default remains off.
 [ADR-052](../decisions/ADR-052-conditional-news-publication.md) owns publication
 and accounting semantics.
 
@@ -16,6 +19,7 @@ and accounting semantics.
 | `news_runtime.worker_handler` | One discovered candidate | Reserves maximum model cost, fetches/validates sources, conditionally publishes immutable results |
 | `news_runtime.finalize_handler` | Exact `discovery`, `outcomes` object | Atomically writes final accounting/history; callable after disabling writers |
 | `news_recovery.handler` | Empty object | Recovers expired runs using a leased scan cursor; callable after disabling writers |
+| `news_schedule.handler` | `scheduledAt`, optionally `expectedSourcesSha256` | Lists current source identities with bounded strong pagination; pins the original UTC day and optionally the exact replay set; no writes or model calls |
 
 These functions require private IAM invocation. They must not be exposed through
 an unauthenticated function URL or a new public application route.
@@ -62,14 +66,17 @@ safe. Record the repair and restore the schedule before resuming writers.
 
 ## Private infrastructure
 
-`infra/lib/news-publication.ts` adds `ttobak-news-publication` to CrawlerStack.
-It does not replace the legacy daily workflow. `NewsPipelineMode` permits only
-`off` and `canary`; CloudFormation rejects canary mode without a source ID.
-All-source activation needs a later accepted configuration change.
+`infra/lib/news-publication.ts` adds `ttobak-news-publication` and its
+`ttobak-news-daily` parent to CrawlerStack. The legacy daily workflow remains
+installed with news writes disabled. `NewsPipelineMode` permits `off`, `canary`
+and `all`; CloudFormation rejects canary mode without a source ID and rejects
+all mode unless legacy writes are off. See the dated activation contract below.
 
-Discovery, worker, finalization and recovery each have a separate Lambda role
+Discovery, worker, finalization, recovery and scheduling each have a separate Lambda role
 and retained 30-day log group. DynamoDB item/transaction operations are confined
-to `CRAWLER#*` keys on the existing table. Only recovery receives table Scan.
+to `CRAWLER#*` keys on the existing table. Recovery and source scheduling receive
+exact-table Scan. Scheduling also has an IAM projection attribute allowlist;
+recovery bounds its projection in the request, without an IAM attribute condition.
 Only discovery can invoke the existing search gateway. Only the worker can
 write `news/v1/*` and `knowledge-artifacts/news/v1/*` objects, invoke the verified
 Opus 5 profile/model resources and count tokens on Mantle's default project.
@@ -222,14 +229,130 @@ Restoring configuration restored the exact original publication bytes.
 Desktop and 390-pixel mobile settings/history rendered without page errors or
 horizontal overflow, including the published count and exact charge.
 
-Minimum accepted API reader is Lambda version 223, package SHA-256
-`xjeZrUN0Xp9m004ge9gBrj6kvhMHV7dmKcgtTJjp1Fk=` (AWS base64 form).
+Current accepted API reader is Lambda version 226, package SHA-256
+`cvS71Y1jqkbWaQ9QdpQH/PmpysSYOAy+Z2SLWlL28GM=` (AWS base64 form).
 QA package SHA-256 is `wqMtWGmvWbh1V4LMuL1fBKVeG/SU0JIOnFye232POcA=`.
 The QA role required a narrowly scoped `news/v1/*` read grant; the earlier
 HTTP/WebSocket HeadObject 403 attempts are failed tests, not acceptance.
 Private detailed receipts remain in the dated release recovery archive.
-An abandoned zero-attempt discovery run is waiting for its real admission
-deadline and scheduled recovery; recovery acceptance is not yet claimed.
+The abandoned zero-attempt discovery run retained its original admission deadline
+and was finalized by the scheduled recovery at 08:10:07 UTC. Its
+`PARTIAL / RECOVERED_WITHOUT_OUTCOMES` history has zero attempts, charge and
+documents. No manual recovery invocation was used; the prior publication charge
+was unchanged. The observed delay included cursor traversal and two interfering
+main deployments, which were subsequently paused.
+
+## Retained-legacy acceptance, 2026-10-21
+
+The reviewed legacy-off package SHA-256 (AWS base64)
+`LjTwOgeFmcZVszYfGsUUGhS+Yf56EtD85tlUfz/MURQ=` was deployed with
+`NewsLegacyWrites=off`, native publication restricted to the isolated canary,
+and recovery/tech/KB schedules preserved. All writer timeout-plus-30-second
+drain windows had ended at 08:44:23 UTC before capture started.
+The archive completed with 986 legacy rows, one protected v1 row, zero model
+calls and zero production writes. A second identical invocation independently
+reconciled all local blobs and current production identities again.
+
+Manifest SHA-256:
+`d40a2f8c6cb3089f3315eec4a751d853feb8da4f7e731dcc1e3f00271b9e6c7d`.
+The private persistent archive is
+`.worktree-archive/2026-10-21/news-legacy-retained`, outside disposable worktrees.
+Retain it for at least 400 days after acceptance; original rows and S3 objects
+remain in production. The successful replay is necessary archival evidence,
+not evidence that normal daily scheduling has been activated.
+
+## Daily activation contract
+
+CloudFormation permits `NewsPipelineMode=all` only with `NewsLegacyWrites=off`;
+both native writers check the same exact flag before working. The daily rule is
+enabled only in `all` mode and runs at 19:10 UTC (04:10 Korea time). Recovery
+remains enabled in every mode. Manual private invocation in canary mode selects
+only the configured canary source.
+
+The scheduler strongly scans canonical source configuration with 100 evaluated
+items per page, a 1,000-page limit and a deadline checked before each request.
+It excludes disabled/internal sources and validates source identities. A malformed
+identity becomes an `INVALID_SCHEDULE_SOURCE` entry containing only the SHA256 of
+its canonical partition key. The parent records that source's failure and continues
+healthy sources; it never renames or publishes the invalid source. Rejected entries
+count toward the same 30-source limit. Duplicate rows, incomplete scans, capacity
+overflow and the 64,000-byte output limit still reject the whole dispatch without
+silently truncating coverage. Each child validates its current source configuration; oversized
+subscription unions fail that source while later sources still run. The parent
+reports failure after processing all dispatched sources.
+
+One daily workflow processes sources sequentially, respecting the existing
+single-discovery concurrency. Thirty children at the 45-minute child timeout
+fit within the 23-hour parent timeout. Source/day execution names and run IDs
+are deterministic from the original UTC schedule day, including on later replay.
+The child uses its execution name as the actual durable run ID; the scheduler's
+`daily-YYYYMMDD` field does not override that identity. Duplicate starts cannot
+create additional paid runs. The
+optimized nested integration reports `StepFunctions.ExecutionAlreadyExistsException`;
+the duplicate catch accepts that observed name and the older suffix-free name.
+A failed child is recorded without skipping later sources, and the parent fails
+after all selected sources have been attempted. Successful task execution alone
+is insufficient: a finalized `COMPLETED` or `PARTIAL` receipt must have the exact
+empty `errors` array and boolean `usageComplete=true`. Nonempty errors such as
+`SEARCH_FAILED`, incomplete usage and unknown outputs fail that source after
+durable finalization. Warning-only partial results and valid empty results remain
+successful. The short `FINALIZED` result and duplicate-start catch mean reuse of
+an existing execution, not proof that its historical crawl succeeded. Inspect the
+original history and child/parent failure or timeout alarms on replay.
+
+### Daily admission retention and bounded replay
+
+The daily EventBridge target forwards its original `time` as `scheduledAt`.
+Active scheduling requires exactly `YYYY-MM-DDTHH:MM:SSZ`, no future timestamp,
+and an age of at most 14 days. Unknown input fields fail before scanning.
+Current pricing and activation checks still use current time. Only the daily
+target has six delivery retries with a two-hour event age; the recovery target
+keeps its separate empty input and zero retries.
+
+Failed admission is retained for 14 days in the standard
+`ttobak-news-daily-delivery-dlq` queue. The queue and rotating customer-managed
+KMS key have retain policies. The queue grants only the exact daily rule
+`sqs:SendMessage`; the dedicated key grants the EventBridge service
+`kms:GenerateDataKey` and `kms:Decrypt` for this account. The stack outputs both
+ARNs. Alarms cover `AWS/Events` `FailedInvocations`,
+`InvocationsFailedToBeSentToDlq`, and visible queue messages. Metrics are
+best-effort signals, not complete delivery accounting.
+
+Before manual recovery, bind the exact queue, rule and target ARNs, retained
+message attributes and original timestamp. Inspect the original parent/child
+executions, current source identities/configuration revisions and ledger counters.
+Never replace the original timestamp with replay time. Recovery intended to do
+no new model work must verify that every expected deterministic child name already
+exists in the exact publication state machine and is terminal.
+
+Supply `expectedSourcesSha256` as 64 lowercase hexadecimal characters alongside
+`scheduledAt`. The scheduler hashes its actual scanned result before returning
+any entries. `sources_sha256` sorts every source/error entry by its JSON encoding,
+then hashes UTF-8 JSON of `{mode,sources}` with sorted object keys,
+`ensure_ascii=False`, compact comma/colon separators and no non-finite numbers.
+All identities, execution names, day fields and rejection entries participate.
+Addition, removal or identity change fails with `SCHEDULE_SOURCES_CHANGED` before
+any child starts. This guards the scan after operator preflight; a preflight
+snapshot alone does not prevent a newly added source from starting work.
+
+Record one uniquely named parent execution intent and its exact input. On an
+ambiguous response, reconcile that execution name before deciding anything else;
+do not automatically retry. Verify all original child names and accounting
+counters after completion. Delete only the bound DLQ message after its effect is
+confirmed; retain it on uncertainty. Do not bulk-drain, recreate source identities,
+clear ledger rows or change concurrency to force a replay.
+
+This repair's source tests and declared resources do not prove deployed recovery.
+After a targeted, exclusive CrawlerStack deployment, record actual service-role,
+queue/key, alarm and original-day replay checks. A same-day replay using already
+completed children must leave attempts, documents and charges unchanged. Actual
+EventBridge failure-to-DLQ delivery needs separate bounded service acceptance;
+do not label an operator-written queue fixture as proof of that service path.
+
+Before enabling all sources, verify the deployed scheduler role's actual scan,
+nested-workflow IAM, canary selection, duplicate execution behavior and failure
+isolation, then record normal source counts and the enabled rule. Keep the
+publication, recovery and archive evidence above bound to the release.
 
 ## Rollback and retention
 
@@ -237,3 +360,18 @@ Rollback disables new writers first and leaves readers, finalization and recover
 available. Do not delete immutable objects or ledger rows to free a budget.
 Deploy changed stacks individually with `--exclusively`; never deploy
 KnowledgeStack as a dependency or run an S3 sync with `--delete`.
+
+
+### Daily canary execution evidence (2026-10-21)
+
+The deployed scheduler's own role completed its strongly consistent projected
+Scan and selected exactly the configured canary; the daily rule remained disabled
+and recovery enabled. The first real daily parent and nested child succeeded at
+09:21 UTC with zero queries, model attempts, documents and charge. This verifies
+nested IAM and orchestration with empty synthetic search inputs, separately from
+the previously accepted article publication. A second parent exposed the actual
+`StepFunctions.ExecutionAlreadyExistsException` name and failed under the original
+catch. The corrected catch requires a fresh duplicate-only acceptance run; do not
+count the original successful child as a second publication. The synthetic source's
+original configuration was conditionally restored after both parents and their
+known child were confirmed terminal. All-source activation remains pending.
