@@ -109,6 +109,43 @@ This does not retrofit or delete historical rows from the legacy crawler.
 
 ## Delivery and acceptance
 
+The Go insights reader uses canonical strong batches for news discovered through
+lists and the cache. It fails on incomplete reads instead of hiding omitted keys.
+Selections are capped at 1,000 row keys, batches at 100 keys, projected responses
+at 8 MiB overall and read time at 15 seconds. Each returned news metadata record
+is limited to 24,000 encoded JSON bytes; a list page has at most 50 records.
+Versioned details read at most 64,000 UTF-8 bytes and verify the published SHA-256
+and current document/configuration again. Detail operations have a 20-second
+deadline. Legacy detail reads are capped at 2 MiB and constrained to exact
+`shared/news/` or `shared/aws-docs/` document paths. Missing metadata never grants
+an object read.
+
+Deletion checks current source ownership and the observed immutable publication
+in one transaction before marking it `DELETED`. Cleanup then removes the KB and
+artifact objects. The tombstone retains their identities if cleanup fails; retry
+still checks current ownership, including after source settings change. A
+concurrent publication or owner change returns a conflict without object cleanup.
+Legacy metadata deletion excludes versioned rows, preventing an older read from
+deleting a newly published replacement. Tombstones have no automatic expiry in
+this stage; migration/retention policy must account for them explicitly.
+Both reservation and publication reject `DELETED`, `PUBLISHED`, and unknown-schema
+rows, so a recrawl cannot erase retained cleanup identity. A deletion also blocks
+automatic republication of that article; restoring it needs an explicit future
+retention/restore operation. Repository discovery skips tombstones before counting
+visible entries, follows source Query continuation across them, and caps the whole
+list service request at 20 seconds. The 500-document discovery bound still caps
+canonical lookup at 1,000 document/configuration keys.
+
+After activation, rollback must retain these publication-aware API/QA readers and
+the tombstone-preserving writer. Disable and drain writer executions before a
+writer rollback; never restore a reader that exposes `DELETED` rows. Record the
+minimum deployed reader/writer revisions in the activation acceptance record.
+
+The source fingerprint is repeated in Go with fixed crawler-produced vectors
+covering Korean, supplementary Unicode, U+2028/U+2029, literal escape sequences,
+optional legacy fields and numeric false-valued lists. This is code compatibility,
+not a claim that the API or the new writer has been deployed.
+
 `news_runtime.py` supplies discovery, worker and finalization Lambda handlers
 around the injected store/model/lifecycle components. `news_recovery.py` supplies
 a bounded scan with a leased durable cursor; it remains usable after writer

@@ -21,6 +21,12 @@ type NewsReadKey struct {
 	SortKey  string
 }
 
+// Valid reports whether this identity fits the bounded canonical read contract.
+func (key NewsReadKey) Valid() bool {
+	return key.SourceID != "" && len(key.SourceID) <= 512 &&
+		(key.SortKey == "CONFIG" || (strings.HasPrefix(key.SortKey, "DOC#") && len(key.SortKey) <= 132))
+}
+
 // ReadNewsItems completely reads a bounded selection. Missing rows are absent
 // from the result; unprocessed keys are never reported as missing publications.
 func (r *CrawlerRepository) ReadNewsItems(ctx context.Context, keys []NewsReadKey) (map[NewsReadKey]map[string]types.AttributeValue, error) {
@@ -30,8 +36,7 @@ func (r *CrawlerRepository) ReadNewsItems(ctx context.Context, keys []NewsReadKe
 	selection := make(map[NewsReadKey]bool, len(keys))
 	pending := make([]map[string]types.AttributeValue, 0, len(keys))
 	for _, key := range keys {
-		if key.SourceID == "" || len(key.SourceID) > 512 ||
-			(key.SortKey != "CONFIG" && (!strings.HasPrefix(key.SortKey, "DOC#") || len(key.SortKey) > 132)) {
+		if !key.Valid() {
 			return nil, fmt.Errorf("invalid news read key")
 		}
 		if selection[key] {
