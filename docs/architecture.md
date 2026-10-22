@@ -274,6 +274,19 @@ retain the same exact Unicode source IDs as discovery and publication.
 New accounting/run/history rows use the existing table TTL
 attribute for 400-day retention; claims expire after seven days. Canonical
 published documents and objects have no automatic expiry in this stage.
+QA's `news_text.py` now authorizes new `news/v1/` objects against current strong
+document/configuration reads, exact immutable attempt keys and SHA-256. It reads
+at most 64,000 bytes with ETag/version conditions, checks canonical state again,
+and binds continuation and history replay to the combined publication/object
+revision. Indexed snippets never replace unavailable current bytes. These news
+sources are available to authenticated users; no public route is added. REST and
+WebSocket share this reader through source access. Positive deployed QA acceptance
+and legacy news migration are still required before enabling new writers.
+The web source list labels these results as news evidence and retains partial
+and restored-history caveats without exposing internal S3 links. Markdown views,
+editable document/meeting HTML and research exports restore valid IPv6 authority
+brackets after parser encoding. Query bytes, HTML escaping, URL protocol filtering
+and the existing HTML sanitization remain in place.
 These modules do not activate a scheduler, change legacy news results or establish
 production acceptance. Handler wiring, scheduled recovery and consumer rollout remain
 separate delivery stages.

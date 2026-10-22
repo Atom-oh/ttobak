@@ -10,6 +10,7 @@ from manual_kb import (
 from session_provenance import remember_source, collect_detail, new_source_state
 from indexed_retrieval import discover_sources, discovery_filters, hydrate_candidates
 from legacy_text import legacy_page
+from news_text import current_news_source
 from request_history import is_request_dependency, request_is_current, remember_client_input
 from canonical_selection import selected_resource_ids, retrieve_selected
 
@@ -32,6 +33,9 @@ class SourceAccess:
     def _source_is_current(self, user_id, dependency, *, request_meeting_id=None):
         if is_request_dependency(dependency):
             return request_is_current(user_id, dependency, self.retrieve_from_kb, request_meeting_id)
+        if 'newsURI' in dependency:
+            source = current_news_source(self.reader, user_id, dependency['newsURI'])
+            return source is not None and source['sourceRevision'] == dependency['sourceRevision']
         if 'sharedKey' in dependency:
             source = current_shared_source(self.reader, user_id, dependency['sharedKey'])
             return source is not None and source['revision'] == dependency['sourceRevision']

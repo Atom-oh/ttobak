@@ -104,7 +104,7 @@ def build_tool_context(user_id, text, source_state, source_details, *, source_ac
             if result.get('volatile'):
                 source_state['replayable'] = False
             detail = dict(result.get('provenance') or {})
-            if detail.get('resourceKind') == 'legacyText':
+            if detail.get('resourceKind') in ('legacyText', 'publishedNews'):
                 detail['partial'] = detail.get('partial', False) or len(result.get('text', '')) > 2400
             collect_detail(source_details, detail)
             for detail in result.get('additionalSourceDetails', []):

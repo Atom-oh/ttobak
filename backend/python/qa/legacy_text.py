@@ -2,11 +2,14 @@
 import re
 
 from source_revision import HEX_REVISION, legacy_text_key, legacy_text_revision
+from news_text import read_news_text
 
 PAGE_CHARACTERS = 6000
 
 
 def read_legacy_text(reader, user_id, uri, expected_revision=None):
+    if isinstance(uri, str) and uri.startswith(f's3://{reader.kb_bucket}/news/'):
+        return read_news_text(reader, user_id, uri, expected_revision)
     key = legacy_text_key(uri, reader.kb_bucket, user_id)
     if key is None:
         return None
@@ -33,8 +36,9 @@ def coverage(start, end, total):
 
 
 def provenance(source, part, matched=False):
-    return {'uri': source['uri'], 'resourceKind': 'legacyText', 'title': source['title'],
-            'contentSource': 'current_legacy_text', 'sourceRevision': source['sourceRevision'],
+    return {'uri': source['uri'], 'resourceKind': source.get('resourceKind', 'legacyText'),
+            'title': source['title'], 'contentSource': source.get('contentSource', 'current_legacy_text'),
+            'sourceRevision': source['sourceRevision'],
             'partial': part['partial'], 'matchedIndexedText': matched}
 
 
@@ -63,7 +67,8 @@ def source_excerpt(source, question, candidates):
     part = coverage(start, end, len(text))
     return {'uri': source['uri'], 'score': score,
             'text': text[start:end], 'coverage': part,
-            'dependency': {'legacyURI': source['uri'], 'sourceRevision': source['sourceRevision']},
+            'dependency': {source.get('dependencyKey', 'legacyURI'): source['uri'],
+                           'sourceRevision': source['sourceRevision']},
             'provenance': provenance(source, part, matched)}
 
 
@@ -84,5 +89,6 @@ def legacy_page(reader, user_id, uri, offset=0, expected_revision=None):
     part = coverage(offset, end, len(source['text']))
     return {'uri': uri, 'title': source['title'], 'sourceRevision': source['sourceRevision'],
             'text': source['text'][offset:end], **part,
-            'dependency': {'legacyURI': uri, 'sourceRevision': source['sourceRevision']},
+            'dependency': {source.get('dependencyKey', 'legacyURI'): uri,
+                           'sourceRevision': source['sourceRevision']},
             'provenance': provenance(source, part)}

@@ -2,6 +2,7 @@
 
 import { memo, type ReactNode } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
+import { safeMarkdownUrl } from '@/lib/markdownUrlTransform';
 import remarkGfm from 'remark-gfm';
 
 function PreviewHeading({ children }: { children?: ReactNode }) {
@@ -50,7 +51,7 @@ export const MeetingSummaryPreview = memo(function MeetingSummaryPreview({ conte
       data-meeting-summary-preview
       className="mb-4 max-h-[3.25em] overflow-hidden text-sm leading-relaxed text-slate-600 [overflow-wrap:anywhere] line-clamp-2 lg:max-h-[4.875em] lg:line-clamp-3 dark:text-text-secondary"
     >
-      <ReactMarkdown remarkPlugins={remarkPlugins} components={components} skipHtml>
+      <ReactMarkdown remarkPlugins={remarkPlugins} components={components} urlTransform={safeMarkdownUrl} skipHtml>
         {content}
       </ReactMarkdown>
     </div>
