@@ -1,6 +1,6 @@
 # Connector activation acceptance — 2026-10-21
 
-**Bounded production acceptance completed on 2026-10-21 at 21:43:58 UTC, with synthetic fixtures retained and cleanup incomplete.** The actual results below bind the deployed connector source and artifacts. Native-host migration and final composed-tree/main verification retain the separate limits described here.
+**Bounded production acceptance completed on 2026-10-21 at 21:43:58 UTC. Approved synthetic fixture cleanup completed on 2026-10-22 at 01:11:58 UTC.** The actual results below bind the deployed connector source and artifacts. Native-host migration and final composed-tree/main verification retain the separate limits described here.
 
 The repaired deployment completed at 18:17:20 UTC from source
 `bf98ac72871664f2255085b483a882c594f2eb24`. Its receipt binds all 13 Lambda
@@ -37,7 +37,8 @@ operations archive.
 | Private flag off | Deployment completed at 19:13:47 UTC and consumer acceptance at 19:15:18 UTC. Fresh first-party HTTP initialize/list and the bounded current-source read succeeded; both dedicated profiles were rejected. Baseline discovery/challenge and the installed stdio flow passed, with OAuth still enabled. |
 | Private flag restored | Deployment completed at 19:30:05 UTC and consumer acceptance at 19:33:34 UTC. Private discovery/challenge returned, first-party HTTP was rejected, and both dedicated clients initialized/listed tools. Policies were still disabled during this check. |
 | Final policy enable | At 19:34:19 UTC, a complete bounded inventory found no active write approvals before enabling the two policies. The synthetic approval remained inactive, no other approvals were changed, and one bounded current-source read per dedicated client succeeded. No QA turn was added. |
-| Retained synthetic fixtures | At 21:37:31 UTC, a new bounded read-only observation matched the earlier 21:08:17 metadata: two retained meetings, one account and two synthetic users; five owned QA sessions were absent. Pilot write approvals remained inactive, the connector note remained absent, and audit/idempotency evidence remained retained. Cleanup is incomplete and refresh-token revocation is not claimed. |
+| Historical retained synthetic fixtures | At 21:37:31 UTC, a new bounded read-only observation matched the earlier 21:08:17 metadata: two retained meetings, one account and two synthetic users; five owned QA sessions were absent. Pilot write approvals remained inactive, the connector note remained absent, and audit/idempotency evidence remained retained. This was the historical retained disposition; refresh-token revocation is not claimed. |
+| Authorized synthetic fixture cleanup | Completed on 2026-10-22 at 01:11:58 UTC: two meetings, one account and two temporary identities removed; linked content/index absence and protected state verified. Deleted-user profile tombstones and audit evidence remain retained. |
 | Final private configuration and guide | After configuration deployment, the 21:42:34 UTC read-only check confirmed unchanged retained boundaries and backend functions/alias. At 21:43:58 UTC, the actual published guide passed five dedicated-read HTTP and four unchanged first-party stdio views, 43 clipboard checks and explicit per-user write-approval notices. Application APIs were intercepted; this does not claim native-host login or migration. |
 
 The note stage first stopped on a read-only origin failure before any note
@@ -66,11 +67,41 @@ The first cleanup inventory stopped on a collection-type error with no pending
 effects. Its stop remains preserved. A separately reviewed successor completed
 normal login, exact inventory and removal of five owned QA sessions. The later
 read-only disposition verified the exact remaining fixture identities and
-boundaries without credentials, model calls or mutations. Their deletion
-remains pending separate approval. This is point-in-time evidence, not a new
-global approval inventory or refresh-token revocation. Guide release may use
-this reviewed retained disposition with fresh equal before/after observations;
-it must continue to report cleanup as incomplete.
+boundaries without credentials, model calls or mutations. Those historical
+guide/configuration receipts retain `cleanupComplete: false` and the retained
+disposition; they are not rewritten by a later cleanup.
+
+The user subsequently approved deletion of the exact two synthetic meetings,
+one account and two temporary users with their linked content/index state.
+Six preflights stopped before deletion: missing adapter inputs, main advancing
+twice, an omitted read-only CloudFormation method, and an inline-code expression
+treated as a string, and an AWS read error that was not reproduced. Their
+original records remain preserved. The corrected
+full read-only runtime check passed at 23:45:58 UTC on 2026-10-21; main
+`396518f1` was its initial observation, not a constant revision throughout
+that run. API `live` 234, all 13 Gateway and nine Crawler functions, templates,
+parameters, packages and retained fixture boundaries were checked. A separate
+203-read diagnostic passed at 00:15:15 UTC on 2026-10-22; it does not identify
+the original AWS error cause or establish cleanup completion.
+
+The cleanup successor admits only the finite reviewed complete source trees,
+checks nondecreasing revisions before and after each stage, and separately
+verifies the deployed runtime and disabled deployment workflows. Its eight
+actual stages completed on 2026-10-22 at 01:11:58 UTC. The final check confirmed
+the approved fixture and linked content/index absence, four inactive pilot
+write approvals, preserved protected users and audit evidence. The five
+previously removed sessions remained absent; no session was deleted again.
+Deleted-user profiles retain tombstones with email lookup entries detached.
+Two index observation windows expired after the meeting/account deletions.
+The final continuation retained both stops and the five completed stages,
+required a successful read-only readiness check, then revalidated the index
+and completed users and verify.
+The scheduled indexer progressed normally. Current COMPLETE ingestions had
+unrelated document failures; exact current-revision DELETED jobs, empty key
+sets, absent S3 objects and exhaustive provider NOT_FOUND responses establish
+these fixtures' removal without claiming global ingestion success.
+No runtime deployment, QA/model turn or immediate issued-token revocation
+is claimed by this cleanup. Final composed-main attestation remains separate.
 
 A separate original-day news replay failed when the scheduler received the
 literal string `$` instead of the parent JSON object. Read-only history
@@ -123,6 +154,11 @@ material. The private receipt map supplies the exact archive paths.
 | Cleanup successor inventory | `009fb596eee439f88335e5a3122c39b56ae309d3c2c64be85f961409a2b59e6c` |
 | Five synthetic sessions removed | `2eea7783e2721db70116286632fffd8e6c58df2f67dcb06b29a73c5b997a70ca` |
 | Original cleanup inventory stop | `d7a8ff3b91aa93438e867e34ac01553ba01d2cc9f700a3923e22c00139e9a640` |
+| Preserved six-preflight cleanup binding | `6d7f2f86843ccfd0ba179e8b946de1b26031d81da46734bc8e3c2311da7ad112` |
+| Index continuation and completed-prefix binding | `c19f8cdbefcbf36d4423f94810149cfc8a4b18f454d82dc2cfa4e8bfae3352f9` |
+| Full read-only runtime preflight review | `49349acaaabfedcfe466e26148f789e53370e131916b3c72d63bab349444ef4d` |
+| Actual full read-only runtime preflight | `7286beddec6e749d29dc1fe1f3eff48ff9bc8c0be9dd13f3f8abe31dd30cf1e6` |
+| Actual eight-stage cleanup completion | `3f6710d556e7a7733fe1eda1b4896fe6ff796725f4077848f0a9a84e8da98d59` |
 | Retained fixture read-only observation | `fb23aeb4e3239ddcc09829e2f2ac3701da4350a2adfa20d16bddeb17c457c7c8` |
 | Fresh retained fixture re-observation | `403ee158c0f4f2eaf58063ff9c49f53bc46fbf6d2c35e7e4b8148c0c01805112` |
 | Failed original-day replay diagnosis | `12fd2773e5ebf51441474ac4ab2b1f228bb159a3298ac724d2e33b34e40ff1c9` |
@@ -155,6 +191,98 @@ ZIP/container contexts are byte-identical, or that artifacts were built from
 those integration commits. Final main composition requires a separate rebind
 and attestation. Original PR432/native-four history and prior review gates remain
 preserved; this evidence does not reset its review-iteration history.
+
+## Documentation commit rebind
+
+The independently reviewed documentation commit
+`1e2c626e5667ac217718959340b667f37bc7a7f2` has sole parent
+`4c061548bf16af6abc844518c26546b21373b47d`. It changes exactly these six
+reviewed documentation files:
+
+- `docs/API-SPEC.md`
+- `docs/README.md`
+- `docs/decisions/ADR-053-connector-capability-private-delegation.md`
+- `docs/runbooks/connector-activation-2026-10-21.md`
+- `docs/runbooks/connector-release.md`
+- `mcp-server/README.md`
+
+Every other tracked entry is identical: **1,388 paths, Git modes, object types
+and object IDs**. The source projection sorts these entries by path and hashes
+a UTF-8 JSON array of objects with keys `mode`, `objectId`, `path`, `type`,
+sorted object keys, compact separators, no ASCII escaping (`ensure_ascii=False`)
+and no trailing newline. Its SHA-256 is
+`ed30aa05bd7b4ab66a91eae055f74db815d9dd6f97c77c49d67e4835d0a04ef9`.
+The six committed document files also match the reviewed documentation
+projection byte for byte.
+
+| Rebind evidence | SHA-256 |
+|---|---|
+| Exact committed six-document source proof | `4ed1791e2266f44fc7a132db3a3f8cea36b8aa739304ff9471bae69d6027d154` |
+| Independent committed-source review, 100/100, no Critical/Major | `ecebf8e0f3a9536c673f8def9176102d538501d583dfd81b7539f4de2c59a7e2` |
+| Independent current-candidate source projection attestation | `726b025c2090a29a2c6c6039d16ebaa6bd9ca5a15c37803585f9448ee63413d7` |
+| Deployed-source-to-C1/C2 equivalence, including 19 runtime/build boundaries | `dccf2f7f3b42b77e80d6d8b677e9cede95fa9ecaff250439806c5458d9606993` |
+
+This rebind carries the recorded bounded connector acceptance from `4c061548`
+to the unchanged implementation in `1e2c626e`; it does not claim that artifacts
+were built from the documentation commit or that the complete integration tree
+was deployed. The separately inventoried news, packaged-test and composition
+limits above remain in force.
+
+A subsequent correction confined to the named documentation files retains this
+implementation identity only when an independent comparison of its actual
+commit reproduces the exact source-projection digest and checks every changed
+path. That documentation revision still requires independent content review
+and all applicable current-head CI, including complete required reviewer
+coverage. This is not a waiver of ADR-053's pre-integration gate or a reset of
+review iterations. Changes outside the named files require a new equivalence
+assessment; a document need not contain its own future commit hash. Final
+composed-main verification remains a separate obligation.
+
+The 1,388-entry digest is the historical `1e2c626e`–`4c061548` comparison,
+not a fingerprint for every later main composition. The separately reviewed
+composition to assess uses the exact news tree
+`b176ca2a15289aec865f51057d9cc7462c270631`, the six independently reviewed
+documentation paths above at their final recorded revision, and exactly these
+six CI-control paths from `33ac6b6029ed88fb753419f39a9478cd981ff3f0`:
+
+- `.github/workflows/test-backend.yml`
+- `scripts/pr-review/role_review.py`
+- `scripts/pr-review/run_role.py`
+- `scripts/pr-review/test_e2e_roles.py`
+- `scripts/pr-review/test_role_review.py`
+- `scripts/pr-review/test_run_role.py`
+
+The composition also includes exactly these three reviewed paths from
+`c426a17dd160cb6fcf32ae10be370c0d98f37c2f`, whose sole parent is
+`a85b8ec1c21aa62b804543f1a031559f0c631575`:
+
+- `scripts/operations/http_origin_release.py`
+- `scripts/operations/test_http_origin_release.py`
+- `docs/runbooks/http-origin-secret-migration.md`
+
+This coordinator correction accepts the identity-free QA probe's 403 only with
+origin-protocol marker `1`, alongside the legacy marked 405. Missing and retired
+proofs must still return an unmarked 403; API and MCP predicates are unchanged.
+Independent review `8112d64f5c55420abd55959f3e671d903d79314507803af3221302a0252a88f9`
+scored 100/100 with no Critical/Major findings. Its 52 tests, 12 real-handler
+compositions and 364 response-predicate cases passed; the committed three blobs
+match that reviewed source. This is coordinator source validation, not an actual
+production secret rotation or a new runtime acceptance. The exact candidate's
+assessment must include these three path/mode/object bindings explicitly; they
+are not added to the six-document historical exclusion set.
+
+The news source includes the separately accepted settlement/scheduler repairs;
+its actual deployment and replay receipts are recorded above. These named inputs
+are an assessment contract, not blanket exclusions or a claim that a future
+merge is already verified. Before enabled-flag integration, the independent
+assessment must bind the actual candidate and every path/mode/object to that
+composition, reproduce the 19 connector runtime/build boundary comparisons to
+accepted `bf98ac72` under the inventoried exceptions, and preserve the separate
+news, CI and coordinator source/review bindings. Any additional difference needs explicit
+assessment. The final merged candidate then requires its own exact-commit
+attestation and current checks; naming the component revisions alone does not
+satisfy those gates or turn unchanged compiled inputs into whole-package or
+new-build equivalence.
 
 ## Host migration and rollback limits
 
