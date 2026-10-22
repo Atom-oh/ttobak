@@ -54,7 +54,7 @@ reader. Private key configuration remains empty until the reviewed KMS/IAM and
 OAuth deployment; the Python package must include the pinned ARM64 cryptography
 dependency before that activation.
 
-The staged MCP HTTP private transport signs eight bounded API reads,
+The staged MCP HTTP private transport signs ten bounded API reads,
 `qa.readonlyAsk` and personal note creation. It derives identity and scopes from the verified request,
 checks atomic current grants before signing and before delivery, and invokes the
 configured API/QA Lambda through service IAM. It forwards no bearer token and
@@ -63,6 +63,41 @@ never retries a rejected private request through the legacy HTTP transport.
 provider/consumer acceptance remain separate activation requirements.
 
 ## Contracts that require care
+
+### Meeting catalog and vault pages
+
+`GET /api/meeting-catalog` lists owned, directly shared and account-shared
+meetings through bounded candidate queries. It accepts `tab=all|shared`,
+`limit=1..20`, optional comma-separated `accountIds`, `pageSize=1..8000`
+Unicode code points and opaque `cursor` (at most 2,048 characters).
+Account filters classify accessible meetings; they never grant access.
+Reads neither materialize invitations nor create or update user profiles.
+Account-derived previews apply summary privacy restrictions, including the
+`SHARING_REGEN_REQUIRED` marker; independent owner/direct grants retain access.
+
+Each response is at most 10,000 encoded JSON bytes. Reassemble `dataJson`
+fragments for the same revision before parsing the complete group. Discovery
+pages contain no records. Groups are current individually, not a collection-wide
+snapshot; different grant paths can overlap, so union by `meetingId`. Current
+grants and metadata are checked again before publication and continuation.
+
+`GET /api/vault/reading` defaults to `section=manifest`; `section=file` requires
+the opaque `fileId` returned by the manifest. Both accept `pageSize` and `cursor`
+with the same bounds. The manifest covers owned meetings and personal/account
+documents without the legacy 300-meeting cap. It does not hydrate transcripts.
+File pages expose exact Markdown fragments or explicit `non_text` entries for
+uploaded documents, never presigned links or public-share tokens. Paths include
+stable record IDs and sanitized Unicode names. Requested transcript spill reads
+are authorized, validated and capped at 1 MiB; excessive sources return
+`SOURCE_TOO_LARGE` without file text.
+
+Vault cursors bind the current source, grant, file identity, account path and
+attachment group. Source or continuation mismatches return 409 `STALE_CURSOR`;
+lost access or a deleted source can instead return 403 or 404. Restart without
+the old cursor and obtain a fresh manifest identity when needed.
+Both routes use `Cache-Control: no-store`. MCP forwards their opaque pages and
+enforces a separate 32,000-byte wire/result cap without a legacy fallback.
+The existing web list and vault export endpoints retain their separate contracts.
 
 ### Private connector notes
 
@@ -1038,9 +1073,11 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | POST | `/api/documents/{docId}/public-share` | `documentHandler.CreatePublicShare` |
 | DELETE | `/api/documents/{docId}/public-share` | `documentHandler.RevokePublicShare` |
 | GET | `/api/vault/export` | `vaultHandler.ExportVault` |
+| GET | `/api/vault/reading` | `vaultReadingHandler.Get` |
 | POST | `/api/meetings/{meetingId}/account` | `meetingHandler.LinkToAccount` |
 | POST | `/api/meetings/{meetingId}/share-account` | `shareHandler.ShareToAccount` |
 | GET | `/api/meetings` | `meetingHandler.ListMeetings` |
+| GET | `/api/meeting-catalog` | `meetingCatalogHandler.Get` |
 | POST | `/api/meetings` | `meetingHandler.CreateMeeting` |
 | GET | `/api/meetings/{meetingId}` | `meetingHandler.GetMeeting` |
 | GET | `/api/meetings/{meetingId}/reading` | `readingHandler.Get` |
