@@ -160,6 +160,8 @@ def discover(source, gateway, published_lookup, now, run_id, *, max_candidates=2
                 try:
                     url = _text(item.get("url"), pipeline.MAX_URL_CHARS, empty=False)
                     canonical = pipeline.canonicalize_url(url)
+                    if not canonical.startswith("https://"):
+                        raise ValueError("HTTPS_REQUIRED")
                     title = _text(item.get("title", ""), 500)
                     published = _text(item.get("publishedDate", ""), 100)
                     fresh = pipeline.is_within_days(published, freshness, now)
@@ -194,6 +196,8 @@ def discover(source, gateway, published_lookup, now, run_id, *, max_candidates=2
     for url in config["customUrls"]:
         try:
             item = pipeline.custom_url_candidate(config["sourceId"], config["sourceName"], url, run_id)
+            if not item["canonicalUrl"].startswith("https://"):
+                raise ValueError("HTTPS_REQUIRED")
         except ValueError:
             result["invalidRejected"] += 1
             continue
@@ -214,7 +218,9 @@ def discover(source, gateway, published_lookup, now, run_id, *, max_candidates=2
         item["corroboratingSources"] = item.get("corroboratingSources", [])[:2]
         item["sourceRevision"] = result["sourceRevision"]
         item["freshnessDays"] = result["freshnessDays"]
-        if len(result["candidates"]) >= max_candidates:
+        # Match the worker's complete candidate limit, including UTF-8 metadata.
+        if (len(result["candidates"]) >= max_candidates
+                or len(json.dumps(item, ensure_ascii=False).encode("utf-8")) > 64000):
             result["budgetRejected"] += 1
             continue
         result["candidates"].append(item)
