@@ -322,14 +322,29 @@ func (r *CrawlerRepository) DeleteSubscription(ctx context.Context, userID, sour
 // Only deletes the DynamoDB item -- the caller is responsible for also
 // deleting the S3 KB object (service layer, which owns the S3 client).
 func (r *CrawlerRepository) DeleteDocument(ctx context.Context, sourceID, docHash string) error {
-	_, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+	// A legacy read/delete must not erase an immutable publication that replaced
+	// that row concurrently. Versioned publications use MarkNewsDeleted.
+	expr, err := expression.NewBuilder().WithCondition(
+		expression.Name("schemaVersion").AttributeNotExists().
+			And(expression.Name("qualityStatus").AttributeNotExists()).
+			And(expression.Name("attemptToken").AttributeNotExists()),
+	).Build()
+	if err != nil {
+		return err
+	}
+	_, err = r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 		TableName: aws.String(r.tableName),
 		Key: map[string]types.AttributeValue{
 			"PK": &types.AttributeValueMemberS{Value: model.PrefixCrawler + sourceID},
 			"SK": &types.AttributeValueMemberS{Value: model.PrefixDoc + docHash},
 		},
+		ConditionExpression: expr.Condition(), ExpressionAttributeNames: expr.Names(),
 	})
 	if err != nil {
+		var conflict *types.ConditionalCheckFailedException
+		if errors.As(err, &conflict) {
+			return fmt.Errorf("%w: document was replaced", ErrConditionFailed)
+		}
 		return fmt.Errorf("failed to delete document: %w", err)
 	}
 	return nil
