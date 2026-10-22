@@ -171,6 +171,33 @@ export class GatewayStack extends cdk.Stack {
       type: 'String', default: 'false', allowedValues: ['false', 'true'],
       description: 'Enable only after the invitation API, rollback guard and clients are verified.',
     });
+    const summaryPrivacyWriter = new cdk.CfnParameter(this, 'SummaryPrivacyWriterEnabled', {
+      type: 'String', default: '0', allowedValues: ['0', '1'],
+      description: 'Enable after all privacy readers and canonical indexing pass deployed acceptance.',
+    });
+    const summaryPrivacyReader = new cdk.CfnParameter(this, 'SummaryPrivacyReaderEnabled', {
+      type: 'String', default: '0', allowedValues: ['0', '1'],
+      description: 'Enforce unmarked memberships only after the recorded old-writer and delivery drain.',
+    });
+    const summaryPrivacyCutoff = new cdk.CfnParameter(this, 'SummaryPrivacyLegacyMemberCutoff', {
+      type: 'String', default: '', maxLength: 30,
+      allowedPattern: String.raw`^$|^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\.[0-9]{1,9})?Z$`,
+      constraintDescription: 'Use an empty installation value or the fixed UTC RFC3339 rollout timestamp ending Z.',
+      description: 'Immutable operational cutoff: preserve the recorded value on every later deployment and rollback.',
+    });
+    new cdk.CfnRule(this, 'SummaryPrivacyReaderRequiresCutoff', {
+      assertions: [{
+        assert: cdk.Fn.conditionOr(
+          cdk.Fn.conditionEquals(summaryPrivacyReader.valueAsString, '0'),
+          cdk.Fn.conditionNot(cdk.Fn.conditionEquals(summaryPrivacyCutoff.valueAsString, '')),
+        ),
+        assertDescription: 'Unmarked-membership enforcement requires the recorded fixed UTC cutoff.',
+      }],
+    });
+    const summaryPrivacyReaderEnvironment = {
+      SUMMARY_PRIVACY_READER_ENABLED: summaryPrivacyReader.valueAsString,
+      SUMMARY_PRIVACY_LEGACY_MEMBER_CUTOFF: summaryPrivacyCutoff.valueAsString,
+    };
     const pipelineFailures = new PipelineFailures(this, 'PipelineFailures');
     this.httpOrigin = new HttpOrigin(this, 'HttpOrigin');
     const originReleaseCiRoleName = this.node.tryGetContext('ttobak:httpOriginReleaseCiRoleName');
@@ -215,7 +242,10 @@ export class GatewayStack extends cdk.Stack {
         // Description is create-only: parameter-only toggles must publish a
         // matching immutable version before the live alias can change behavior.
         description: cdk.Fn.join('', ['project-invitations=', projectInvitationsEnabled.valueAsString,
-          ';http-origin-version=', this.httpOrigin.versionId]),
+          ';http-origin-version=', this.httpOrigin.versionId,
+          ';summary-privacy-writer=', summaryPrivacyWriter.valueAsString,
+          ';reader=', summaryPrivacyReader.valueAsString,
+          ';cutoff=', summaryPrivacyCutoff.valueAsString]),
       },
       runtime: lambda.Runtime.PROVIDED_AL2023,
       architecture: lambda.Architecture.ARM_64,
@@ -224,6 +254,8 @@ export class GatewayStack extends cdk.Stack {
       role: props.apiRole as iam.Role,
       environment: {
         PROJECT_INVITATIONS_ENABLED: projectInvitationsEnabled.valueAsString,
+        SUMMARY_PRIVACY_WRITER_ENABLED: summaryPrivacyWriter.valueAsString,
+        ...summaryPrivacyReaderEnvironment,
         TABLE_NAME: props.table.tableName,
         BUCKET_NAME: props.bucket.bucketName,
         COGNITO_USER_POOL_ID: props.userPool.userPoolId,
@@ -378,6 +410,7 @@ export class GatewayStack extends cdk.Stack {
       code: lambda.Code.fromAsset('../backend/cmd/summarize'),
       role: props.summarizeRole as iam.Role,
       environment: {
+        SUMMARY_PRIVACY_WRITER_ENABLED: summaryPrivacyWriter.valueAsString,
         TABLE_NAME: props.table.tableName,
         BUCKET_NAME: props.bucket.bucketName,
         BEDROCK_MODEL_ID: 'global.anthropic.claude-opus-5',
@@ -543,6 +576,7 @@ export class GatewayStack extends cdk.Stack {
       code: lambda.Code.fromAsset('../backend/python/qa'),
       role: props.qaRole as iam.Role,
       environment: {
+        ...summaryPrivacyReaderEnvironment,
         TABLE_NAME: props.table.tableName,
         BUCKET_NAME: props.bucket.bucketName,
         KB_BUCKET_NAME: props.kbBucket?.bucketName || '',

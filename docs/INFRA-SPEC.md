@@ -539,14 +539,27 @@ summarize role's existing table grant. See ADR-008.
 
 ## Summary privacy writer activation
 
-`SUMMARY_PRIVACY_WRITER_ENABLED=1` is read by `repository.SummaryPrivacyWritesEnabled`.
-GatewayStack sets neither it nor `SUMMARY_PRIVACY_READER_ENABLED`, so writers are
-off. Grant fences that would reject unsafe summaries (`summaryGrantFence`) are not
-yet called by the share, pending-invite or publication writers, and no API route or
-service requests an owner sharing-safe regeneration (`ResummaryState.SharingSafe`).
-Do not enable the writer flag in any deployment until both the fenced grant writers
-and that owner reset path ship; the handlers already map
-`ErrSummarySharingUnsafe` to 409 `SUMMARY_SHARING_UNSAFE` for when they do.
+GatewayStack declares `SummaryPrivacyWriterEnabled` and
+`SummaryPrivacyReaderEnabled` (`0` or `1`, default `0`) plus
+`SummaryPrivacyLegacyMemberCutoff` (empty installation value or fixed UTC RFC3339
+timestamp ending `Z`). A CloudFormation rule rejects reader `1` with an empty
+cutoff. Runtime readers additionally reject invalid calendar timestamps.
+
+The writer parameter supplies `SUMMARY_PRIVACY_WRITER_ENABLED` only to API and
+summarize. The reader and cutoff parameters supply `SUMMARY_PRIVACY_READER_ENABLED`
+and `SUMMARY_PRIVACY_LEGACY_MEMBER_CUTOFF` only to API and QA. All three values
+enter the API version description so parameter changes replace the immutable
+version before the live alias uses the configuration. Defaults retain installation
+behavior; configuration wiring does not establish deployed activation.
+
+Grant fences, pending/publication guards, owner sharing-safe regeneration and its
+UI are installed. `ErrSummarySharingUnsafe` maps to 409 `SUMMARY_SHARING_UNSAFE`.
+Activation still requires verified readers, canonical indexing, old-writer and
+queued-delivery drain, and cross-user acceptance. Preserve the one recorded cutoff
+on later deployments and rollback. Writer `0` restores legacy grant/publication
+behavior, so rollback requires restricting those writes and draining legacy
+exporters first. No historical backfill or grant revocation is implied. See
+[the rollout contract](runbooks/summary-privacy-release.md).
 
 ## Project invitation activation
 

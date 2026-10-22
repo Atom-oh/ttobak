@@ -20,10 +20,10 @@ var ErrSummarySharingUnsafe = errors.New("sharing-safe summary regeneration requ
 
 // Readers are installed before these writers are enabled. This switch never
 // disables protection for an already-stamped membership.
-// Installation-only: SUMMARY_PRIVACY_WRITER_ENABLED must stay unset/0 in this revision.
-// Activation needs deployed readers, canonical KB export/permission, old-writer
-// drain/backfill, cross-user acceptance, and unadopted owner SharingSafe request/UI
-// plus SHARING_REGEN_REQUIRED mapping.
+// Defaults remain installation-only. Grant fences and owner SharingSafe request/UI
+// are installed; activation still needs deployed readers, canonical indexing,
+// old-writer/delivery drain and cross-user acceptance. No historical backfill is
+// implied. See docs/runbooks/summary-privacy-release.md.
 func SummaryPrivacyWritesEnabled() bool {
 	value := os.Getenv("SUMMARY_PRIVACY_WRITER_ENABLED")
 	return value == "1"
