@@ -1626,6 +1626,72 @@ VERDICT: PASS
                 self.assertFalse(self.record("codex", raw=raw, expected=2)["valid"])
                 self.assert_blocked()
 
+    def test_member_path_enum_comes_only_from_assignment_in_both_requests(self):
+        self.context.write_text("Reference: unchanged/context.py\n")
+        plan = self.prepare(patch("infra/lib/stack.ts", after="cite unchanged/diff.py")
+                            + patch("backend/handler.py"))
+        tag = "kiro-fable"
+        paths = plan["roles"][tag]["paths"]
+        enum = "Member path enum: " + role_review.canonical(paths)
+        example = "Path-only example: " + role_review.canonical({"path": paths[0]})
+        for mode, count in ((None, 1), (role_review.SCHEMA_CORRECTION, 2)):
+            with self.subTest(mode=mode):
+                _, prompt, payload = role_review.issue_request(self.work, tag, mode)
+                self.assertEqual(prompt.count(enum), count)
+                self.assertEqual(prompt.count(example), count)
+                entries = [json.loads(line.split(": ", 1)[1]) for line in prompt.splitlines()
+                           if line.startswith("Member path enum: ")]
+                self.assertEqual(entries, [paths] * count)
+                self.assertNotIn("unchanged/context.py", json.dumps(entries))
+                self.assertNotIn("unchanged/diff.py", json.dumps(entries))
+                receipt = role_review.issued_request(self.work, plan, tag)
+                self.assertEqual(receipt["prompt_sha256"], role_review.digest(prompt.encode()))
+                self.assertEqual(receipt["input_sha256"], role_review.digest(payload.encode()))
+
+    def test_member_path_contract_preserves_json_path_bytes_without_normalizing(self):
+        paths = ['infra/lib/한글"quoted.ts', "infra/lib/z.ts"]
+        text = role_review.member_path_contract(paths)
+        lines = dict(line.split(": ", 1) for line in text.splitlines() if ": " in line)
+        self.assertEqual(json.loads(lines["Member path enum"]), paths)
+        self.assertEqual(json.loads(lines["Path-only example"]), {"path": paths[0]})
+        self.assertIn("한글", text)
+        self.assertIn("not a complete check/finding", text)
+        self.assertIn("evidence or condition", text)
+        self.assertNotIn("Path-only example:", role_review.member_path_contract([]))
+
+    def test_member_path_contract_tampering_rejects_issued_request(self):
+        plan = self.prepare(patch("infra/lib/stack.ts"))
+        tag = "kiro-fable"
+        _, prompt, _ = role_review.issue_request(self.work, tag, role_review.SCHEMA_CORRECTION)
+        path = self.work / f"requests/{tag}.prompt"
+        for old in ('Member path enum: ["infra/lib/stack.ts"]',
+                    'Path-only example: {"path":"infra/lib/stack.ts"}'):
+            with self.subTest(field=old):
+                self.assertIn(old, prompt)
+                path.write_text(prompt.replace(old, old.replace("stack.ts", "other.ts")))
+                with self.assertRaisesRegex(role_review.Invalid, "^invalid_issued_request$"):
+                    role_review.issued_request(self.work, plan, tag)
+        path.write_text(prompt)
+        altered = json.loads(json.dumps(plan))
+        altered["roles"][tag]["paths"] = ["infra/lib/other.ts"]
+        with self.assertRaisesRegex(role_review.Invalid, "^invalid_issued_request$"):
+            role_review.issued_request(self.work, altered, tag)
+
+    def test_member_path_shapes_remain_strictly_rejected(self):
+        plan = self.prepare()
+        for member in ("checks", "findings"):
+            for path in ("unchanged.py", FRONTEND + ":12", "`" + FRONTEND + "`", [FRONTEND], None):
+                with self.subTest(member=member, path=path):
+                    response = self.response("codex")
+                    response[member] = [{"path": path, "evidence": "Concrete evidence"}]
+                    if member == "findings":
+                        response[member][0].update(severity="MINOR", condition="Concrete condition")
+                    with self.assertRaises(role_review.Invalid) as failed:
+                        role_review.validate_response(response, plan, "codex")
+                    self.assertEqual(failed.exception.diagnostic, {
+                        "pointer": f"/{member}/0/path", "reason": "ASSIGNED_PATH_REQUIRED",
+                        "phase": "PRE_SCRUB"})
+
     def test_correction_issuance_binds_fixed_prompt_mode_and_nonce(self):
         plan = self.prepare(patch("infra/lib/stack.ts"))
         tag = "kiro-fable"
