@@ -8,7 +8,7 @@ import json
 import unittest
 from unittest import mock
 
-from botocore.exceptions import ReadTimeoutError
+from botocore.exceptions import ClientError, ReadTimeoutError
 
 from article_fetcher import FetchRejected
 from news_discovery import source_revision
@@ -284,6 +284,90 @@ class TestCandidateWorker(unittest.TestCase):
         with self.assertRaises(ReadTimeoutError):
             process_candidate(self.candidate, self.deps)
         self.store.reserve.assert_called_once()
+        self.store.finish.assert_not_called()
+
+    def test_definitive_upload_rejection_settles_known_usage_without_publication(self):
+        for code, http_status in (("AccessDenied", 403), ("NoSuchBucket", 404),
+                                  ("KMS.AccessDeniedException", 400)):
+            for position in (1, 2):
+                with self.subTest(code=code, position=position):
+                    self.setUp()
+                    error = ClientError({
+                        "Error": {"Code": code, "Message": "synthetic"},
+                        "ResponseMetadata": {"HTTPStatusCode": http_status, "RetryAttempts": 0},
+                    }, "PutObject")
+                    self.deps.s3.put_object.side_effect = [None] * (position - 1) + [error]
+                    result = process_candidate(self.candidate, self.deps)
+                    self.assertEqual(result["status"], "FAILED")
+                    self.assertEqual(result["reason"], "STORAGE_REJECTED")
+                    self.store.finish.assert_called_once()
+                    completion = self.store.finish.call_args.kwargs
+                    self.assertEqual(completion["usage"], {"inputTokens": 100, "outputTokens": 50})
+                    self.assertTrue(completion["usage_complete"])
+                    self.assertEqual(completion["known_cost"], Decimal("0.001750000000"))
+                    self.assertNotIn("document", completion)
+                    self.assertEqual(self.client.converse.call_count, 1)
+                    self.assertEqual(self.deps.s3.put_object.call_count, position)
+                    self.deps.s3.delete_object.assert_not_called()
+
+    def test_uncertain_upload_responses_retain_reservation(self):
+        variants = [
+            ("InternalError", 500, 0, "PutObject"),
+            ("SlowDown", 503, 0, "PutObject"),
+            ("PreconditionFailed", 412, 0, "PutObject"),
+            ("ConditionalRequestConflict", 409, 0, "PutObject"),
+            ("UnrecognizedError", 403, 0, "PutObject"),
+            ("AccessDenied", 500, 0, "PutObject"),
+            ("AccessDenied", 403, 1, "PutObject"),
+            ("AccessDenied", 403, None, "PutObject"),
+            ("AccessDenied", 403, False, "PutObject"),
+            ("AccessDenied", 403, 0, "GetObject"),
+        ]
+        for code, http_status, retries, operation in variants:
+            with self.subTest(code=code, http_status=http_status, retries=retries,
+                              operation=operation):
+                self.setUp()
+                metadata = {"HTTPStatusCode": http_status}
+                if retries is not None:
+                    metadata["RetryAttempts"] = retries
+                error = ClientError({"Error": {"Code": code}, "ResponseMetadata": metadata},
+                                    operation)
+                self.deps.s3.put_object.side_effect = error
+                with self.assertRaises(ClientError) as caught:
+                    process_candidate(self.candidate, self.deps)
+                self.assertIs(caught.exception, error)
+                self.store.finish.assert_not_called()
+                self.deps.s3.delete_object.assert_not_called()
+                self.assertEqual(self.deps.s3.put_object.call_count, 1)
+
+    def test_definitive_upload_rejection_does_not_hide_failed_settlement(self):
+        error = ClientError({
+            "Error": {"Code": "AccessDenied"},
+            "ResponseMetadata": {"HTTPStatusCode": 403, "RetryAttempts": 0},
+        }, "PutObject")
+        self.deps.s3.put_object.side_effect = error
+        uncertain = ReadTimeoutError(endpoint_url="https://synthetic.invalid")
+        self.store.finish.side_effect = uncertain
+        with self.assertRaises(ReadTimeoutError) as caught:
+            process_candidate(self.candidate, self.deps)
+        self.assertIs(caught.exception, uncertain)
+        self.store.finish.assert_called_once()
+        self.deps.s3.delete_object.assert_not_called()
+
+    def test_upload_rejection_with_insufficient_time_preserves_claim(self):
+        error = ClientError({
+            "Error": {"Code": "NoSuchBucket"},
+            "ResponseMetadata": {"HTTPStatusCode": 404, "RetryAttempts": 0},
+        }, "PutObject")
+        time_left = [900]
+        self.deps = replace(self.deps, remaining=lambda: time_left[0])
+        def fail(**kwargs):
+            time_left[0] = 44
+            raise error
+        self.deps.s3.put_object.side_effect = fail
+        with self.assertRaises(ClientError) as caught:
+            process_candidate(self.candidate, self.deps)
+        self.assertIs(caught.exception, error)
         self.store.finish.assert_not_called()
         self.deps.s3.delete_object.assert_not_called()
 

@@ -1626,6 +1626,106 @@ VERDICT: PASS
                 self.assertFalse(self.record("codex", raw=raw, expected=2)["valid"])
                 self.assert_blocked()
 
+    def test_correction_issuance_binds_fixed_prompt_mode_and_nonce(self):
+        plan = self.prepare(patch("infra/lib/stack.ts"))
+        tag = "kiro-fable"
+        old_nonce, old_prompt, _ = role_review.issue_request(self.work, tag)
+        old_receipt = self.read(f"slot/{tag}-request.json")
+        self.assertNotIn("correction_mode", old_receipt)
+        self.assertEqual(old_receipt["request_digest"], role_review.invocation_digest(
+            plan["roles"][tag]["request_digest"], old_nonce))
+        nonce, prompt, payload = role_review.issue_request(self.work, tag, role_review.SCHEMA_CORRECTION)
+        self.assertNotEqual(old_nonce, nonce)
+        self.assertIn(role_review.SCHEMA_REMINDER, prompt)
+        self.assertNotIn(role_review.SCHEMA_REMINDER, old_prompt)
+        receipt = role_review.issued_request(self.work, plan, tag)
+        self.assertEqual(receipt["prompt_sha256"], role_review.digest(prompt.encode()))
+        self.assertEqual(receipt["input_sha256"], role_review.digest(payload.encode()))
+        self.assertNotEqual(receipt["request_digest"], role_review.invocation_digest(
+            plan["roles"][tag]["request_digest"], nonce))
+        path = self.work / f"slot/{tag}-request.json"
+        for changes in ({"correction_mode":"unknown"}, {"correction_mode":None},
+                        {"invocation_nonce":old_nonce}, {"prompt_sha256":"f" * 64}):
+            with self.subTest(changes=changes):
+                path.write_text(json.dumps(dict(receipt, **changes)))
+                with self.assertRaises(role_review.Invalid):
+                    role_review.issued_request(self.work, plan, tag)
+        path.write_text(json.dumps(receipt))
+        actual_prompt = self.work / f"requests/{tag}.prompt"
+        actual_prompt.write_text(prompt.replace(role_review.SCHEMA_REMINDER, ""))
+        with self.assertRaisesRegex(role_review.Invalid, "invalid_issued_request"):
+            role_review.issued_request(self.work, plan, tag)
+        actual_prompt.write_text(prompt)
+        with mock_patch.object(role_review, "SCHEMA_REMINDER", "different trusted reminder"):
+            with self.assertRaises(role_review.Invalid):
+                role_review.issued_request(self.work, plan, tag)
+        with self.assertRaises(role_review.Invalid):
+            role_review.issue_request(self.work, "codex", role_review.SCHEMA_CORRECTION)
+
+    def test_corrected_request_files_retain_read_byte_bounds(self):
+        plan = self.prepare(patch("infra/lib/stack.ts"))
+        role_review.issue_request(self.work, "kiro-fable", role_review.SCHEMA_CORRECTION)
+        (self.work / "requests/kiro-fable.prompt").write_bytes(b"x" * (role_review.MAX_REQUEST_BYTES + 1))
+        with self.assertRaisesRegex(role_review.Invalid, "^output_byte_limit$"):
+            role_review.issued_request(self.work, plan, "kiro-fable")
+
+    def test_shared_pipeline_revalidates_after_real_structured_scrub(self):
+        plan = self.prepare()
+        response = self.response("codex", checks=[{"path":FRONTEND,"evidence":"\x1b[31m"}])
+        role_review.validate_response(response, plan, "codex")
+        with self.assertRaises(role_review.Invalid) as failed:
+            role_review.accepted_response(scrub_raw(json.dumps(response)), plan, "codex")
+        self.assertEqual(str(failed.exception), "invalid_check")
+        self.assertEqual(failed.exception.diagnostic["phase"], "POST_SCRUB")
+        result = self.record("codex", raw=scrub_raw(json.dumps(response)), expected=2)
+        self.assertEqual(result["validation_diagnostic"], failed.exception.diagnostic)
+        self.assertIsNone(result["response"])
+
+    def test_diagnostic_allowlist_rejects_unknown_keys_values_and_pointers(self):
+        good = {"pointer":"/checks/0", "reason":"OBJECT_REQUIRED", "phase":"PRE_SCRUB"}
+        for bad in (dict(good, pointer="/checks/0/SECRET"), dict(good, reason="SECRET"),
+                    dict(good, phase="SECRET"), dict(good, secret="SECRET"),
+                    dict(good, pointer="/checks/12345678")):
+            with self.subTest(bad=bad):
+                with self.assertRaisesRegex(role_review.Invalid, "^response_schema$") as failure:
+                    role_review.safe_validation_diagnostic(bad)
+                self.assertNotIn("SECRET", str(failure.exception))
+
+    def test_nested_schema_rejections_have_only_fixed_diagnostics(self):
+        cases = [
+            ({"path": FRONTEND, "evidence": "ok", "SECRET_UNKNOWN_KEY": "SECRET_VALUE"}, "", "EXACT_KEYS_REQUIRED"),
+            ({"path": FRONTEND, "detail": "ok"}, "", "EXACT_KEYS_REQUIRED"),
+            ({"path": "SECRET_UNKNOWN_PATH", "evidence": "ok"}, "/path", "ASSIGNED_PATH_REQUIRED"),
+            ({"path": FRONTEND, "evidence": ["SECRET_VALUE"]}, "/evidence", "NONEMPTY_STRING_REQUIRED"),
+            ({"path": FRONTEND, "evidence": " "}, "/evidence", "NONEMPTY_STRING_REQUIRED"),
+            ("SECRET_VALUE", "", "OBJECT_REQUIRED"),
+        ]
+        for i, (check, suffix, reason) in enumerate(cases):
+            with self.subTest(case=i):
+                self.work = self.root / f"diagnostic-check-{i}"
+                self.prepare()
+                result = self.record("codex", self.response("codex", checks=[check]), expected=2)
+                self.assertEqual(result["failure_codes"], ["invalid_check"])
+                self.assertIsNone(result["response"])
+                self.assertEqual(result["validation_diagnostic"], {
+                    "pointer": "/checks/0" + suffix, "reason": reason, "phase": "PRE_SCRUB"})
+                self.assertNotIn("SECRET_", json.dumps(result))
+        good = {"severity": "MAJOR", "path": FRONTEND, "condition": "Trigger", "evidence": "Evidence"}
+        for i, (update, suffix, reason) in enumerate([
+            ({"SECRET_UNKNOWN_KEY":"SECRET_VALUE"}, "", "EXACT_KEYS_REQUIRED"),
+            ({"path":"SECRET_PATH"}, "/path", "ASSIGNED_PATH_REQUIRED"),
+            ({"severity":"HIGH"}, "/severity", "ALLOWED_SEVERITY_REQUIRED"),
+            ({"condition":""}, "/condition", "NONEMPTY_STRING_REQUIRED"),
+        ]):
+            with self.subTest(finding=i):
+                self.work = self.root / f"diagnostic-finding-{i}"
+                self.prepare()
+                result = self.record("codex", self.response("codex", findings=[dict(good, **update)]), expected=2)
+                self.assertEqual(result["failure_codes"], ["invalid_finding"])
+                self.assertEqual(result["validation_diagnostic"], {
+                    "pointer": "/findings/0" + suffix, "reason": reason, "phase": "PRE_SCRUB"})
+                self.assertNotIn("SECRET_", json.dumps(result))
+
     def test_missing_paths_false_scope_empty_checks_and_wrong_role_reject(self):
         changes = (
             {"reviewed_paths": []}, {"scope_complete": False}, {"scope_complete": "true"},

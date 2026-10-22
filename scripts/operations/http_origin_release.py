@@ -517,6 +517,13 @@ class Release:
     def expected_status(name):
         return 404 if name.startswith("ttobak-api") else 405 if name == "ttobak-qa" else 200
 
+    @classmethod
+    def accepted_canary(cls, name, result):
+        # Configured QA ingress denies this identity-free probe after origin
+        # verification. The marker proves origin acceptance, not authentication.
+        return result == (cls.expected_status(name), "1") or (
+            name == "ttobak-qa" and result == (403, "1"))
+
     def verify_foundation(self):
         self.mark("verifying_installed_reader_foundation")
         before = self.snapshot()
@@ -526,7 +533,7 @@ class Release:
                 self.state.document["current"], self.state.document["previous"]]
             accepted = False
             for proof in candidates:
-                if CONTRACT.valid_proof(proof) and self.canary(name, proof) == (self.expected_status(name), "1"):
+                if CONTRACT.valid_proof(proof) and self.accepted_canary(name, self.canary(name, proof)):
                     accepted = True
                     break
             require(accepted, "READER_FOUNDATION_NOT_DEPLOYED")
@@ -747,7 +754,7 @@ class Release:
         if not adopt:
             require(before == self.foundation_snapshot, "CONSUMER_CHANGED_AFTER_PREFLIGHT")
         for name in self.configs:
-            require(self.canary(name, self.state.document["current"]) == (self.expected_status(name), "1"),
+            require(self.accepted_canary(name, self.canary(name, self.state.document["current"])),
                     "CURRENT_PROOF_NOT_ACCEPTED")
             require(self.canary(name, None) == (403, None), "MISSING_PROOF_NOT_REJECTED")
             if retired is not None:
