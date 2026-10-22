@@ -144,12 +144,26 @@ def schema_failure(code, pointer, reason, phase):
     }))
 
 
-def corrected_prompt(prompt, tag, correction_mode):
+def member_path_contract(paths):
+    example = f"Path-only example: {canonical({'path': paths[0]})}\n" if paths else ""
+    return (
+        f"Member path enum: {canonical(paths)}\n"
+        "Every checks[].path and findings[].path must copy exactly one complete literal "
+        "entry from this enum. Do not add line numbers, formatting, globs, directories, "
+        "multiple paths, or unchanged files. Put line numbers and other-file citations "
+        "in evidence or condition.\n"
+        f"{example}"
+        "This path-only example is not a complete check/finding or evidence of review; "
+        "all existing response and coverage requirements still apply.\n"
+    )
+
+
+def corrected_prompt(prompt, tag, correction_mode, paths):
     if correction_mode is None:
         return prompt
     if correction_mode != SCHEMA_CORRECTION or not tag.startswith("kiro-"):
         raise Invalid("invalid_issued_request")
-    return prompt + SCHEMA_REMINDER
+    return prompt + SCHEMA_REMINDER + member_path_contract(paths)
 
 
 def canonical(value):
@@ -397,6 +411,7 @@ def prompt(tag, role, head, base, paths, context):
         "Report unresolved uncertainty explicitly. Do not claim to verify live deployment "
         "or which model weights executed.\n"
         f"Expected reviewed_paths: {canonical(paths)}\n"
+        f"{member_path_contract(paths)}"
         "Respond in English only. Return ONLY one JSON object with exactly these keys: head_sha, role, "
         "scope_complete, reviewed_paths, checks, findings, uncertainties. "
         f"head_sha must be {canonical(head)}; role must be {canonical(role['role'])}. "
@@ -657,7 +672,7 @@ def _issue_request(work, tag, correction_mode=None):
     nonce = secrets.token_hex(16)
     prompt_text = (work / "roles" / f"{tag}.txt").read_bytes().decode("utf-8")
     diff_text = (work / "roles" / f"{tag}.diff").read_bytes().decode("utf-8")
-    instruction, payload = frame_request(corrected_prompt(prompt_text, tag, correction_mode), diff_text, nonce)
+    instruction, payload = frame_request(corrected_prompt(prompt_text, tag, correction_mode, role["paths"]), diff_text, nonce)
     receipt = {
         "schema_version": 1, "tag": tag, "head_sha": plan["head_sha"],
         "base_sha": plan["base_sha"], "plan_digest": plan["plan_digest"],
@@ -698,7 +713,8 @@ def issued_request(work, plan, tag):
         nonce = receipt["invocation_nonce"]
         correction_mode = receipt.get("correction_mode")
         instruction, payload = frame_request(
-            corrected_prompt((work / "roles" / f"{tag}.txt").read_bytes().decode("utf-8"), tag, correction_mode),
+            corrected_prompt((work / "roles" / f"{tag}.txt").read_bytes().decode("utf-8"),
+                             tag, correction_mode, role["paths"]),
             (work / "roles" / f"{tag}.diff").read_bytes().decode("utf-8"), nonce,
         )
         expected = {

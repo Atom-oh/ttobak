@@ -131,6 +131,62 @@ class RoleExecutionTests(unittest.TestCase):
     def test_whitespace_schema_retry_exhausts_with_history(self):
         self.assert_empty_schema_retry(" \t\n", False)
 
+    def assert_member_path_retry(self, member, recover):
+        work, startup, response = self.prepared_kiro()
+        bad = json.loads(json.dumps(response))
+        bad[member] = [{"path": "REJECTED_PATH_CANARY:12", "evidence": "Concrete evidence"}]
+        if member == "findings":
+            bad[member][0].update(severity="MINOR", condition="Concrete condition")
+        calls = []
+        def execute(command, cwd, environment, input_text, timeout):
+            receipt = json.loads((work / "slot/kiro-fable-request.json").read_text())
+            prompt = (work / "requests/kiro-fable.prompt").read_text()
+            payload = (work / "requests/kiro-fable.input").read_text()
+            calls.append((list(command), receipt, prompt, payload))
+            return 0, json.dumps(response if recover and len(calls) == 2 else bad), ""
+        with patch.dict(os.environ, PANEL_RETRIES="2"), \
+                patch.object(self.runner, "execute", side_effect=execute):
+            self.runner.run(work, "kiro-fable", startup)
+        self.assertEqual(len(calls), 2)
+        self.assertNotEqual(calls[0][1]["invocation_nonce"], calls[1][1]["invocation_nonce"])
+        for i, (command, receipt, prompt, payload) in enumerate(calls):
+            self.assertEqual(command[2], prompt + "\n" + payload)
+            self.assertEqual(prompt.count('Member path enum: ["infra/lib/stack.ts"]'), i + 1)
+            self.assertEqual(prompt.count('Path-only example: {"path":"infra/lib/stack.ts"}'), i + 1)
+            self.assertEqual(receipt["prompt_sha256"], role_review.digest(prompt.encode()))
+            self.assertEqual(receipt["input_sha256"], role_review.digest(payload.encode()))
+        self.assertNotIn(role_review.SCHEMA_REMINDER, calls[0][2])
+        self.assertIn(role_review.SCHEMA_REMINDER, calls[1][2])
+        history = json.loads((work / "slot/kiro-fable-attempts.json").read_text())
+        self.assertEqual(len(history), 1)
+        failure_code = "invalid_check" if member == "checks" else "invalid_finding"
+        self.assertEqual(history[0]["failure_codes"], [failure_code])
+        self.assertEqual(history[0]["validation_diagnostic"], {
+            "pointer": f"/{member}/0/path", "reason": "ASSIGNED_PATH_REQUIRED", "phase": "PRE_SCRUB"})
+        self.assertEqual(history[0]["invocation_nonce"], calls[0][1]["invocation_nonce"])
+        self.assertIsNone(history[0]["response"])
+        result = json.loads((work / "slot/kiro-fable-result.json").read_text())
+        self.assertEqual(result["valid"], recover)
+        self.assertEqual(result["failure_codes"], [] if recover else [failure_code])
+        self.assertEqual(result["response"], response if recover else None)
+        self.assertEqual(result["invocation_nonce"], calls[1][1]["invocation_nonce"])
+        self.assertFalse((work / "slot/kiro-fable-duplicate.flag").exists())
+        for path in work.rglob("*"):
+            if path.is_file():
+                self.assertNotIn(b"REJECTED_PATH_CANARY", path.read_bytes(), str(path))
+
+    def test_check_member_path_retry_recovers(self):
+        self.assert_member_path_retry("checks", True)
+
+    def test_finding_member_path_retry_recovers(self):
+        self.assert_member_path_retry("findings", True)
+
+    def test_check_member_path_retry_exhausts(self):
+        self.assert_member_path_retry("checks", False)
+
+    def test_finding_member_path_retry_exhausts(self):
+        self.assert_member_path_retry("findings", False)
+
     def assert_review_prose_schema_retry(self, phase, recover):
         work, startup, response = self.prepared_kiro()
         bad = json.loads(json.dumps(response))
