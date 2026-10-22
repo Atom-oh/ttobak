@@ -10,6 +10,8 @@ import type { DocumentReadingOptions } from './document-reading.js';
 import type { DocumentCatalogOptions } from './document-catalog.js';
 import type { KBReadingOptions } from './kb-catalog.js';
 import type { NavigationKind } from './navigation-catalog.js';
+import type { MeetingCatalogOptions } from './meeting-catalog.js';
+import type { VaultReadingOptions } from './vault-reading.js';
 
 // Extension -> MIME type, shared by both upload tools for inference only --
 // each tool advertises its own narrower format list (kb_upload: pdf/md/pptx/
@@ -230,6 +232,13 @@ export class TtobakApi {
     return this.get(`/api/meetings${qs ? '?' + qs : ''}`);
   }
 
+  async readMeetingCatalog(options: MeetingCatalogOptions) {
+    const query = new URLSearchParams({ tab: options.tab, limit: String(options.limit), pageSize: String(options.pageSize) });
+    if (options.cursor !== undefined) query.set('cursor', options.cursor);
+    if (options.accountIds !== undefined) query.set('accountIds', [...new Set(options.accountIds)].join(','));
+    return this.request('GET', `/api/meeting-catalog?${query}`, undefined, MAX_READING_BYTES);
+  }
+
   async readMeeting(options: ReadingOptions) {
     const query = new URLSearchParams({ kind: options.kind, pageSize: String(options.pageSize) });
     if (options.kind === 'meeting') query.set('section', options.section);
@@ -428,6 +437,13 @@ export class TtobakApi {
 
   async exportVault() {
     return this.get('/api/vault/export');
+  }
+
+  async readVault(options: VaultReadingOptions) {
+    const query = new URLSearchParams({ section: options.section, pageSize: String(options.pageSize) });
+    if (options.cursor !== undefined) query.set('cursor', options.cursor);
+    if (options.fileId !== undefined) query.set('fileId', options.fileId);
+    return this.request('GET', `/api/vault/reading?${query}`, undefined, MAX_READING_BYTES);
   }
 
   async putDocument(

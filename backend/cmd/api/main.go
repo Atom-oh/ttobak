@@ -130,6 +130,8 @@ func init() {
 	meetingHandler := handler.NewMeetingHandler(meetingService, repo, uploadService)
 	accountHandler := handler.NewAccountHandler(accountService, uploadService)
 	accountReadingHandler := handler.NewAccountReadingHandler(service.NewAccountReadingService(repo.MetadataView()))
+	meetingCatalogHandler := handler.NewMeetingCatalogHandler(service.NewMeetingCatalogService(repo.MetadataView()))
+	vaultReadingHandler := handler.NewVaultReadingHandler(service.NewVaultReadingService(repo.MetadataView()))
 	projectReadingHandler := handler.NewProjectReadingHandler(service.NewProjectReadingService(repo.MetadataView()))
 	projectHandler := handler.NewProjectHandler(projectService)
 	documentHandler := handler.NewDocumentHandler(accountService, uploadService)
@@ -293,11 +295,13 @@ func init() {
 		r.Post("/api/documents/{docId}/public-share", documentHandler.CreatePublicShare)
 		r.Delete("/api/documents/{docId}/public-share", documentHandler.RevokePublicShare)
 		r.Get("/api/vault/export", vaultHandler.ExportVault)
+		r.Get("/api/vault/reading", vaultReadingHandler.Get)
 		r.Post("/api/meetings/{meetingId}/account", meetingHandler.LinkToAccount)
 		r.Post("/api/meetings/{meetingId}/share-account", shareHandler.ShareToAccount)
 
 		// Meeting routes
 		r.Get("/api/meetings", meetingHandler.ListMeetings)
+		r.Get("/api/meeting-catalog", meetingCatalogHandler.Get)
 		r.Post("/api/meetings", meetingHandler.CreateMeeting)
 		r.Get("/api/meetings/{meetingId}", meetingHandler.GetMeeting)
 		r.Get("/api/meetings/{meetingId}/reading", readingHandler.Get)

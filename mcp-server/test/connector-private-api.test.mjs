@@ -20,7 +20,7 @@ const response = value => ({ StatusCode: 200, Payload: Buffer.from(JSON.stringif
 
 function fixture(input = request, overrides = {}) {
   const qa = input.method === 'POST';
-  const operation = qa ? 'qa.readonlyAsk' : 'api.reading.get';
+  const operation = qa ? 'qa.readonlyAsk' : httpOperation(input.method, input.path.split('?')[0]);
   const destination = qa ? 'ttobak-qa-bridge' : 'ttobak-api-bridge';
   const args = Buffer.from(JSON.stringify({ method: input.method, path: input.path, body: input.body }));
   const raw = serializeDelegationPayload({
@@ -63,7 +63,10 @@ function fixture(input = request, overrides = {}) {
 }
 
 test('real RSA delegation binds API and read-only QA to exact bytes without forwarding a bearer', async () => {
-  for (const input of [request, { method: 'POST', path: '/api/qa/readonly-ask',
+  for (const input of [request,
+    { ...request, path: '/api/meeting-catalog?tab=shared&pageSize=17' },
+    { ...request, path: '/api/vault/reading?section=manifest&pageSize=17' },
+    { method: 'POST', path: '/api/qa/readonly-ask',
     body: { question: '첨부문서 내용은?', meetingId: 'm' }, maxResponseBytes: 32000 }]) {
     const f = fixture(input);
     assert.deepEqual(await f.transport(input), { content: '검증된 본문 ✅' });

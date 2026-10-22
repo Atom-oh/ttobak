@@ -1057,10 +1057,10 @@ var require_util = __commonJS({
     var codegen_1 = require_codegen();
     var code_1 = require_code();
     function toHash(arr) {
-      const hash2 = {};
+      const hash3 = {};
       for (const item of arr)
-        hash2[item] = true;
-      return hash2;
+        hash3[item] = true;
+      return hash3;
     }
     exports.toHash = toHash;
     function alwaysValidSchema(it, schema) {
@@ -3258,8 +3258,8 @@ var require_utils = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path) {
-      let input = path;
+    function removeDotSegments(path2) {
+      let input = path2;
       const output = [];
       let nextSlash = -1;
       let len = 0;
@@ -3668,8 +3668,8 @@ var require_schemes = __commonJS({
       }
       if (wsComponent.resourceName) {
         const queryIndex = wsComponent.resourceName.indexOf("?");
-        const path = queryIndex === -1 ? wsComponent.resourceName : wsComponent.resourceName.slice(0, queryIndex);
-        wsComponent.path = path && path !== "/" ? path : void 0;
+        const path2 = queryIndex === -1 ? wsComponent.resourceName : wsComponent.resourceName.slice(0, queryIndex);
+        wsComponent.path = path2 && path2 !== "/" ? path2 : void 0;
         wsComponent.query = queryIndex === -1 ? void 0 : wsComponent.resourceName.slice(queryIndex + 1);
         wsComponent.resourceName = void 0;
       }
@@ -7772,8 +7772,8 @@ function getErrorMap() {
 
 // node_modules/zod/v3/helpers/parseUtil.js
 var makeIssue = (params) => {
-  const { data, path, errorMaps, issueData } = params;
-  const fullPath = [...path, ...issueData.path || []];
+  const { data, path: path2, errorMaps, issueData } = params;
+  const fullPath = [...path2, ...issueData.path || []];
   const fullIssue = {
     ...issueData,
     path: fullPath
@@ -7888,11 +7888,11 @@ var errorUtil;
 
 // node_modules/zod/v3/types.js
 var ParseInputLazyPath = class {
-  constructor(parent, value, path, key) {
+  constructor(parent, value, path2, key) {
     this._cachedPath = [];
     this.parent = parent;
     this.data = value;
-    this._path = path;
+    this._path = path2;
     this._key = key;
   }
   get path() {
@@ -11536,10 +11536,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path) {
-  if (!path)
+function getElementAtPath(obj, path2) {
+  if (!path2)
     return obj;
-  return path.reduce((acc, key) => acc?.[key], obj);
+  return path2.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -11922,11 +11922,11 @@ function aborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path, issues) {
+function prefixIssues(path2, issues) {
   return issues.map((iss) => {
     var _a2;
     (_a2 = iss).path ?? (_a2.path = []);
-    iss.path.unshift(path);
+    iss.path.unshift(path2);
     return iss;
   });
 }
@@ -23282,6 +23282,12 @@ var TtobakApi = class {
     const qs = q.toString();
     return this.get(`/api/meetings${qs ? "?" + qs : ""}`);
   }
+  async readMeetingCatalog(options) {
+    const query = new URLSearchParams({ tab: options.tab, limit: String(options.limit), pageSize: String(options.pageSize) });
+    if (options.cursor !== void 0) query.set("cursor", options.cursor);
+    if (options.accountIds !== void 0) query.set("accountIds", [...new Set(options.accountIds)].join(","));
+    return this.request("GET", `/api/meeting-catalog?${query}`, void 0, MAX_READING_BYTES);
+  }
   async readMeeting(options) {
     const query = new URLSearchParams({ kind: options.kind, pageSize: String(options.pageSize) });
     if (options.kind === "meeting") query.set("section", options.section);
@@ -23442,6 +23448,12 @@ var TtobakApi = class {
   async exportVault() {
     return this.get("/api/vault/export");
   }
+  async readVault(options) {
+    const query = new URLSearchParams({ section: options.section, pageSize: String(options.pageSize) });
+    if (options.cursor !== void 0) query.set("cursor", options.cursor);
+    if (options.fileId !== void 0) query.set("fileId", options.fileId);
+    return this.request("GET", `/api/vault/reading?${query}`, void 0, MAX_READING_BYTES);
+  }
   async putDocument(accountId, doc) {
     if (this.options.privateTransport) {
       if (accountId !== void 0 || doc.path !== void 0 || doc.docType !== void 0 && doc.docType !== "note" || typeof doc.idempotencyKey !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(doc.idempotencyKey)) {
@@ -23579,12 +23591,12 @@ var TtobakApi = class {
   /** Validates a local meeting audio file before any meeting is created for it. */
   resolveMeetingAudio(filePath) {
     this.requireLocalFiles();
-    const { path, size } = guardUploadPath(filePath, MAX_AUDIO_UPLOAD_BYTES);
-    const ext = extname(path).toLowerCase();
+    const { path: path2, size } = guardUploadPath(filePath, MAX_AUDIO_UPLOAD_BYTES);
+    const ext = extname(path2).toLowerCase();
     const type = AUDIO_MIME_BY_EXT[ext];
     if (!type) throw new Error(`Unsupported audio format "${ext || "none"}"; use ${Object.keys(AUDIO_MIME_BY_EXT).join(", ")}`);
     if (!size) throw new Error("Refusing to upload an empty audio file");
-    return { path, size, ext, type };
+    return { path: path2, size, ext, type };
   }
   /** Issues an S3 upload for meeting audio. The PUT of the returned URL is
    * what starts transcription (S3 event under audio/). A fixed object name
@@ -23622,17 +23634,17 @@ var TtobakApi = class {
   async addAccountMember(accountId, email3, role) {
     return this.post(`/api/accounts/${encodeURIComponent(accountId)}/members`, { email: email3, role });
   }
-  async get(path) {
-    return this.request("GET", path);
+  async get(path2) {
+    return this.request("GET", path2);
   }
-  async post(path, body) {
-    return this.request("POST", path, body);
+  async post(path2, body) {
+    return this.request("POST", path2, body);
   }
-  async delete(path) {
-    return this.request("DELETE", path);
+  async delete(path2) {
+    return this.request("DELETE", path2);
   }
-  async put(path, body) {
-    return this.request("PUT", path, body);
+  async put(path2, body) {
+    return this.request("PUT", path2, body);
   }
   /** PUT a local file's bytes directly to a presigned S3 URL -- no TTOBAK
    * bearer token here, the URL's own signature is the auth. */
@@ -23717,19 +23729,19 @@ var TtobakApi = class {
       req.end();
     });
   }
-  async request(method, path, body, maxResponseBytes) {
+  async request(method, path2, body, maxResponseBytes) {
     this.options.signal?.throwIfAborted();
     if (this.options.privateTransport) {
       return this.options.privateTransport({
         method,
-        path,
+        path: path2,
         body: body ?? null,
         signal: this.options.signal,
         maxResponseBytes: Math.min(32e3, maxResponseBytes ?? this.options.maxResponseBytes ?? 32e3)
       });
     }
     const idToken = await this.auth.getIdToken();
-    const url2 = new URL2(path, this.baseUrl);
+    const url2 = new URL2(path2, this.baseUrl);
     if (url2.origin !== new URL2(this.baseUrl).origin) throw new Error("API origin cannot change");
     maxResponseBytes ??= this.options.maxResponseBytes;
     const data = body ? JSON.stringify(body) : void 0;
@@ -24047,6 +24059,87 @@ function navigationResult(value, options, kind) {
   return result;
 }
 
+// src/meeting-catalog.ts
+function meetingCatalogOptions(args) {
+  if (Object.keys(args).some((key) => !["tab", "limit", "pageSize", "cursor", "accountIds"].includes(key))) throw new Error("INVALID_ARGUMENT: unsupported meeting catalog option");
+  const tab = args.tab ?? "all", limit = args.limit ?? 20, pageSize = args.pageSize ?? 4e3;
+  if (!["all", "shared"].includes(tab) || !Number.isInteger(limit) || limit < 1 || limit > 20 || !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 8e3) throw new Error("INVALID_ARGUMENT: invalid meeting catalog selection");
+  if (args.cursor !== void 0 && (typeof args.cursor !== "string" || !args.cursor.length || args.cursor.length > 2048)) throw new Error("INVALID_CURSOR: invalid meeting catalog continuation");
+  if (args.accountIds !== void 0 && (!Array.isArray(args.accountIds) || !args.accountIds.length || args.accountIds.length > 100 || args.accountIds.some((id) => typeof id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(id)))) throw new Error("INVALID_ARGUMENT: invalid account IDs");
+  return {
+    tab,
+    limit,
+    pageSize,
+    cursor: args.cursor,
+    accountIds: args.accountIds
+  };
+}
+function record10(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+function meetingCatalogResult(value) {
+  if (!record10(value) || value.kind !== "meeting_catalog" || !record10(value.page) || typeof value.page.complete !== "boolean" || (value.page.complete ? value.page.nextCursor !== null : typeof value.page.nextCursor !== "string" || !value.page.nextCursor.length || value.page.nextCursor.length > 2048)) throw new Error("INVALID_READING_RESPONSE: invalid meeting catalog continuation");
+  if (value.discoveryPending === true) {
+    if (value.phase !== "discovery" || Object.keys(value).some((key) => !["kind", "phase", "discoveryPending", "page"].includes(key))) throw new Error("INVALID_READING_RESPONSE: discovery contains premature data");
+  } else {
+    if (!["owned", "direct", "team"].includes(value.phase) || value.consistency !== "current_group" || value.overlapPossible !== true || value.unionKey !== "meetingId" || typeof value.revision !== "string" || !/^[a-f0-9]{64}$/.test(value.revision) || typeof value.dataJson !== "string") throw new Error("INVALID_READING_RESPONSE: invalid meeting catalog source");
+    const f = value.fragment;
+    if (!record10(f) || f.unit !== "unicode_code_points" || typeof f.complete !== "boolean" || ![f.startOffset, f.endOffset, f.totalCodePoints].every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0) || f.endOffset <= f.startOffset || f.endOffset > f.totalCodePoints || Array.from(value.dataJson).length !== f.endOffset - f.startOffset || f.complete !== (f.endOffset === f.totalCodePoints) || value.page.complete && (!f.complete || value.phase !== "team")) throw new Error("INVALID_READING_RESPONSE: invalid meeting catalog fragment");
+    if (f.startOffset === 0 && f.complete) {
+      try {
+        if (!Array.isArray(JSON.parse(value.dataJson))) throw new Error("Expected array");
+      } catch {
+        throw new Error("INVALID_READING_RESPONSE: invalid completed meeting group");
+      }
+    }
+  }
+  const result = { content: [{ type: "text", text: JSON.stringify(value) }] };
+  if (Buffer.byteLength(JSON.stringify(result)) > MAX_READING_BYTES) throw new Error("READING_LIMIT: meeting catalog exceeds 32000 bytes");
+  return result;
+}
+
+// src/vault-reading.ts
+function vaultReadingOptions(args) {
+  if (Object.keys(args).some((key) => !["section", "fileId", "pageSize", "cursor"].includes(key))) throw new Error("INVALID_ARGUMENT: unsupported vault reading option");
+  const section = args.section ?? "manifest", pageSize = args.pageSize ?? 4e3;
+  if (!["manifest", "file"].includes(section) || !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 8e3 || (section === "file" ? typeof args.fileId !== "string" || !args.fileId.length || args.fileId.length > 2048 : args.fileId !== void 0)) throw new Error("INVALID_ARGUMENT: invalid vault reading selection");
+  if (args.cursor !== void 0 && (typeof args.cursor !== "string" || !args.cursor.length || args.cursor.length > 2048)) throw new Error("INVALID_CURSOR: invalid vault continuation");
+  return { section, fileId: args.fileId, pageSize, cursor: args.cursor };
+}
+function record11(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+function path(value) {
+  return typeof value === "string" && value.length <= 1024 && !/[\\\x00-\x1f\x7f]/.test(value) && value.split("/").every((part) => !!part && part !== "." && part !== "..") && !value.startsWith("/");
+}
+function hash2(value) {
+  return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+}
+function vaultReadingResult(value, options) {
+  if (!record11(value) || value.kind !== `vault_${options.section}` || !record11(value.page) || typeof value.page.complete !== "boolean" || (value.page.complete ? value.page.nextCursor !== null : typeof value.page.nextCursor !== "string" || !value.page.nextCursor.length || value.page.nextCursor.length > 2048)) throw new Error("INVALID_READING_RESPONSE: invalid vault continuation");
+  if (value.discoveryPending === true) {
+    if (options.section !== "manifest" || value.phase !== "discovery" || Object.keys(value).some((key) => !["kind", "phase", "discoveryPending", "page"].includes(key))) throw new Error("INVALID_READING_RESPONSE: discovery contains file data");
+  } else if (value.mode === "non_text") {
+    if (options.section !== "file" || value.fileId !== options.fileId || !path(value.path) || value.textStatus !== "not_available" || !value.page.complete || !record11(value.documentRead) || typeof value.documentRead.docId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(value.documentRead.docId) || value.markdown !== void 0) throw new Error("INVALID_READING_RESPONSE: invalid non-text document");
+  } else {
+    const manifest = options.section === "manifest";
+    if (!hash2(value.revision) || (manifest ? value.consistency !== "current_group" || value.unionKey !== "path" || !["meetings", "personal_docs", "account_docs"].includes(value.phase) : value.mode !== "text" || value.fileId !== options.fileId || !path(value.path) || !hash2(value.sourceRevision) || value.consistency !== "current_source_and_group" || !["meeting", "document"].includes(value.sourceKind) || !["body", "attachments"].includes(value.phase) || value.sourceKind === "document" && value.phase === "attachments" || value.sourceKind === "meeting" && value.phase === "body" && value.page.complete)) throw new Error("INVALID_READING_RESPONSE: invalid vault source");
+    const text2 = manifest ? value.dataJson : value.markdown, f = value.fragment;
+    if (typeof text2 !== "string" || !record11(f) || f.unit !== "unicode_code_points" || typeof f.complete !== "boolean" || ![f.startOffset, f.endOffset, f.totalCodePoints].every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0) || f.endOffset < f.startOffset || f.endOffset > f.totalCodePoints || Array.from(text2).length !== f.endOffset - f.startOffset || f.complete !== (f.endOffset === f.totalCodePoints) || !f.complete && f.endOffset === f.startOffset || value.page.complete && !f.complete) throw new Error("INVALID_READING_RESPONSE: invalid vault fragment");
+    if (manifest && f.startOffset === 0 && f.complete) {
+      try {
+        const files = JSON.parse(text2);
+        if (!Array.isArray(files) || files.some((file2) => !record11(file2) || typeof file2.fileId !== "string" || !file2.fileId.length || file2.fileId.length > 2048 || !path(file2.path) || !hash2(file2.sourceMetadataRevision) || !["text", "non_text"].includes(file2.mode))) throw new Error("bad manifest");
+      } catch {
+        throw new Error("INVALID_READING_RESPONSE: invalid completed vault manifest group");
+      }
+    }
+  }
+  const result = { content: [{ type: "text", text: JSON.stringify(value) }] };
+  if (Buffer.byteLength(JSON.stringify(result)) > MAX_READING_BYTES) throw new Error("READING_LIMIT: vault page exceeds 32000 bytes");
+  return result;
+}
+
 // src/recorder.ts
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -24103,9 +24196,9 @@ function parseMaxVolume(stderr) {
   if (!match) return null;
   return match[1] === "-inf" ? Number.NEGATIVE_INFINITY : Number(match[1]);
 }
-function fileSize(path) {
+function fileSize(path2) {
   try {
-    return statSync2(path).size;
+    return statSync2(path2).size;
   } catch {
     return null;
   }
@@ -24444,19 +24537,19 @@ ${err.message}`;
     return isProcessAlive(pid) ? pid : null;
   }
   /** Lock content, or null when missing, empty or unreadable. */
-  readLock(path) {
+  readLock(path2) {
     try {
-      return readFileSync3(path, "utf8") || null;
+      return readFileSync3(path2, "utf8") || null;
     } catch {
       return null;
     }
   }
   /** Atomically creates path holding content; false if it already exists. */
-  createExclusive(path, content) {
-    const tmp = `${path}.${randomUUID()}.tmp`;
+  createExclusive(path2, content) {
+    const tmp = `${path2}.${randomUUID()}.tmp`;
     writeFileSync2(tmp, content, { mode: 384 });
     try {
-      linkSync(tmp, path);
+      linkSync(tmp, path2);
       return true;
     } catch (e) {
       if (e.code === "EEXIST") return false;
@@ -24580,15 +24673,18 @@ var registry2 = {
     },
     {
       name: "ttobak_list_meetings",
-      description: "List meetings with title, date, status, and participants. Follow the returned cursor for remaining results. accountIds uses OR matching: to include a group, pass the group and all accessible descendant IDs from ttobak_list_accounts; parent selection alone does not expand descendants.",
+      description: "Read bounded pages of your existing meeting grants. Follow page.nextCursor with the same selection until complete; join dataJson fragments before parsing each group and deduplicate by meetingId across owned/direct/team groups. Discovery pages contain no records. Pending invitations are processed separately by signed-in session bootstrap. accountIds uses explicit OR matching without descendant expansion.",
+      annotations: { readOnlyHint: true },
       inputSchema: {
         type: "object",
         properties: {
-          limit: { type: "number", description: "Max results (default 20)" },
-          cursor: { type: "string", description: "Pagination cursor from previous response" },
+          limit: { type: "integer", minimum: 1, maximum: 20, default: 20 },
+          pageSize: { type: "integer", minimum: 1, maximum: 8e3, default: 4e3, description: "Maximum Unicode code points; the byte budget may shorten a fragment" },
+          cursor: { type: "string", maxLength: 2048, description: "Opaque page.nextCursor; restart if stale" },
           tab: { type: "string", enum: ["all", "shared"], description: "all (default) or shared-with-me" },
           accountIds: { type: "array", minItems: 1, maxItems: 100, items: { type: "string" }, description: "Optional explicit account IDs. Omit for all accounts; retain the same IDs when paging." }
-        }
+        },
+        additionalProperties: false
       }
     },
     {
@@ -24814,8 +24910,18 @@ var registry2 = {
     },
     {
       name: "ttobak_export_vault",
-      description: "Export your meetings as Obsidian-ready markdown files [{path, markdown}], placed under Accounts/{name}/ (shared) or _Private/Meetings/. Write each to your local vault.",
-      inputSchema: { type: "object", properties: {} }
+      description: "Read the bounded Vault manifest, then each file with section=file and its opaque fileId. Follow page.nextCursor without changing selection. Join dataJson manifest fragments before parsing a group; deduplicate entries by path. Join markdown file fragments until complete. Non-text documents return documentRead metadata, not invented Markdown. Reads do not write local files.",
+      annotations: { readOnlyHint: true },
+      inputSchema: {
+        type: "object",
+        properties: {
+          section: { type: "string", enum: ["manifest", "file"], default: "manifest" },
+          fileId: { type: "string", maxLength: 2048, description: "Opaque identifier from the manifest; required for section=file" },
+          cursor: { type: "string", maxLength: 2048, description: "Opaque continuation; restart if stale" },
+          pageSize: { type: "integer", minimum: 1, maximum: 8e3, default: 4e3 }
+        },
+        additionalProperties: false
+      }
     },
     {
       name: "ttobak_put_document",
@@ -25113,8 +25219,8 @@ Client: ${CLIENT_ID.slice(0, 8)}...`
         );
       }
       case "ttobak_list_meetings": {
-        const result = await api.listMeetings(args);
-        return text(JSON.stringify(result, null, 2));
+        const options2 = meetingCatalogOptions(args);
+        return meetingCatalogResult(await api.readMeetingCatalog(options2));
       }
       case "ttobak_get_meeting": {
         const options2 = readingOptions(args, "meeting");
@@ -25188,14 +25294,14 @@ Client: ${CLIENT_ID.slice(0, 8)}...`
         return text(`Unlinked account ${accountId} from project ${projectId}.`);
       }
       case "ttobak_export_vault": {
-        const result = await api.exportVault();
-        return text(JSON.stringify(result, null, 2));
+        const options2 = vaultReadingOptions(args);
+        return vaultReadingResult(await api.readVault(options2), options2);
       }
       case "ttobak_put_document": {
-        const { accountId, title, markdown, docType, path, idempotencyKey } = args;
+        const { accountId, title, markdown, docType, path: path2, idempotencyKey } = args;
         if (typeof title !== "string" || !title.trim()) return error2("title is required");
         if (typeof markdown !== "string" || !markdown.trim()) return error2("markdown is required");
-        const result = await api.putDocument(accountId, { title, markdown, docType, path, idempotencyKey });
+        const result = await api.putDocument(accountId, { title, markdown, docType, path: path2, idempotencyKey });
         return text(JSON.stringify(result, null, 2));
       }
       case "ttobak_list_documents": {
@@ -25207,10 +25313,10 @@ Client: ${CLIENT_ID.slice(0, 8)}...`
         return documentReadingResult(await api.readDocument(options2), options2);
       }
       case "ttobak_update_document": {
-        const { accountId, docId, title, markdown, docType, path } = args;
+        const { accountId, docId, title, markdown, docType, path: path2 } = args;
         if (typeof title !== "string" || !title.trim()) return error2("title is required");
         if (markdown !== void 0 && typeof markdown !== "string") return error2("markdown must be a string");
-        const result = await api.updateDocument(accountId, docId, { title, markdown, docType, path });
+        const result = await api.updateDocument(accountId, docId, { title, markdown, docType, path: path2 });
         return text(JSON.stringify(result, null, 2));
       }
       case "ttobak_ask": {
@@ -25259,7 +25365,7 @@ Retrieval is scoped to you -- only your own ttobak_ask queries can find this fil
           }
           return text(JSON.stringify(await api.uploadDocumentBytes(data, args.title, fileName2, args), null, 2));
         }
-        const { filePath, title, accountId, fileName, fileType, docType, path } = args;
+        const { filePath, title, accountId, fileName, fileType, docType, path: path2 } = args;
         if (!filePath) return error2("filePath is required");
         if (!title) return error2("title is required");
         const result = await api.uploadDocument(filePath, title, {
@@ -25267,7 +25373,7 @@ Retrieval is scoped to you -- only your own ttobak_ask queries can find this fil
           fileName,
           fileType,
           docType,
-          path
+          path: path2
         });
         return text(JSON.stringify(result, null, 2));
       }
@@ -25365,8 +25471,8 @@ Retrieval is scoped to you -- only your own ttobak_ask queries can find this fil
           }
         }
         if (previousUpload !== void 0) return error2("previousUpload applies only to a kept recordingId");
-        const { path } = api.resolveMeetingAudio(filePath);
-        const result = await uploadAudio(options, path, target, title ?? basename3(path, extname2(path)));
+        const { path: path2 } = api.resolveMeetingAudio(filePath);
+        const result = await uploadAudio(options, path2, target, title ?? basename3(path2, extname2(path2)));
         return text(JSON.stringify(result, null, 2));
       }
       case "ttobak_app_status":
@@ -25434,7 +25540,7 @@ function meetingTarget(args) {
 async function uploadAudio(options, file2, target, title, date4, recordingId, previousUpload) {
   const { api } = options;
   const rec = requireRecorder(options);
-  const { path, size, ext, type } = api.resolveMeetingAudio(file2);
+  const { path: path2, size, ext, type } = api.resolveMeetingAudio(file2);
   const saved = recordingId ? rec.getSaved(recordingId) : void 0;
   const save = (progress) => {
     if (recordingId) rec.saveProgress(recordingId, progress);
@@ -25478,7 +25584,7 @@ async function uploadAudio(options, file2, target, title, date4, recordingId, pr
       throw beforePut(message(e));
     }
     try {
-      await api.putMeetingAudio(uploadUrl, path, size, type);
+      await api.putMeetingAudio(uploadUrl, path2, size, type);
     } catch (e) {
       if (e instanceof UploadRejectedError) {
         try {

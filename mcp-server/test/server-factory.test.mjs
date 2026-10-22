@@ -9,12 +9,14 @@ import { tmpdir } from 'node:os';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { meetingCatalogPage } from './fixtures/meeting-catalog-data.mjs';
+
 test('server factory keeps each caller API and authentication context separate', async t => {
   const connect = async owner => {
     const [local, remote] = InMemoryTransport.createLinkedPair();
     const server = createMcpServer({
       auth: { getIdToken: async () => owner, isAuthenticated: () => true, logout() {} },
-      api: { listMeetings: async () => ({ owner }) },
+      api: { readMeetingCatalog: async () => meetingCatalogPage({ owner }) },
       apiUrl: `https://${owner}.example.com`, cognitoDomain: `https://${owner}.auth.example.com`, clientId: owner,
     });
     const client = new Client({ name: owner, version: '1' });
