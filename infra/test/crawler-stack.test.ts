@@ -25,20 +25,22 @@ describe('CrawlerStack', () => {
       crawlerRole,
       table,
       kbBucket,
+      artifactBucket: new s3.Bucket(mockStack, 'ArtifactBucket'),
       knowledgeBaseId: 'test-kb-id',
       dataSourceId: 'test-ds-id',
       webSearchGatewayUrl: 'https://test-gateway.gateway.bedrock-agentcore.us-east-1.api.aws/mcp',
+      webSearchGatewayArn: 'arn:aws:bedrock-agentcore:us-east-1:123456789012:gateway/test',
     });
 
     template = Template.fromStack(stack);
   });
 
-  test('creates 4 Lambda functions', () => {
-    template.resourceCountIs('AWS::Lambda::Function', 4);
+  test('creates 4 legacy and 4 private publication Lambda functions', () => {
+    template.resourceCountIs('AWS::Lambda::Function', 8);
   });
 
   test('creates Step Functions state machine', () => {
-    template.resourceCountIs('AWS::StepFunctions::StateMachine', 1);
+    template.resourceCountIs('AWS::StepFunctions::StateMachine', 2);
     template.hasResourceProperties('AWS::StepFunctions::StateMachine', {
       StateMachineName: 'ttobak-crawler-workflow',
     });
