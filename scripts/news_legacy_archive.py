@@ -102,6 +102,11 @@ def legacy_identity(row):
     return source, {"PK": pk, "SK": sk}, key
 
 
+def legacy_keys_digest(keys):
+    """Bind the exact selected identity set, not only its cardinality."""
+    return digest(encode(sorted(keys, key=lambda key: (key["PK"], key["SK"]))))
+
+
 def object_identity(response):
     etag, size = response.get("ETag"), response.get("ContentLength")
     version = response.get("VersionId")
@@ -202,6 +207,10 @@ class Migration:
         expected = binding.get("expectedLegacyCount")
         if type(expected) is not int or not 1 <= expected <= MAX_ROWS:
             raise ArchiveRejected("INVALID_EXPECTED_LEGACY_COUNT")
+        expected_keys = binding.get("expectedLegacyKeysSha256")
+        if expected_keys is not None and (not isinstance(expected_keys, str)
+                                          or not re.fullmatch("[0-9a-f]{64}", expected_keys)):
+            raise ArchiveRejected("INVALID_EXPECTED_LEGACY_KEYS")
         self.now = now or (lambda: datetime.now(timezone.utc))
         self.deadline = time.monotonic() + MAX_SECONDS
 
@@ -224,7 +233,7 @@ class Migration:
                 if (row["CodeSha256"] != self.binding["legacyWriterCodeSha256"]
                         or env.get("NEWS_LEGACY_WRITES") != "off"):
                     raise ArchiveRejected("LEGACY_WRITER_NOT_DISABLED")
-            elif (env.get("NEWS_PIPELINE_MODE") not in ("off", "canary")
+            elif (env.get("NEWS_PIPELINE_MODE", "off") not in ("off", "canary")
                   or (env.get("NEWS_PIPELINE_MODE") == "canary"
                       and not env.get("NEWS_CANARY_SOURCE_ID"))):
                 raise ArchiveRejected("NATIVE_WRITERS_NOT_RESTRICTED")
@@ -314,8 +323,16 @@ class Migration:
         keys, protected = self.scan()
         if len(keys) != self.binding["expectedLegacyCount"]:
             raise ArchiveRejected("EXPECTED_LEGACY_COUNT_MISMATCH")
+        # An equal-count replacement must not pass as the inventoried baseline.
+        keys_sha = legacy_keys_digest(keys)
+        expected_keys = self.binding.get("expectedLegacyKeysSha256")
+        if expected_keys is not None and keys_sha != expected_keys:
+            raise ArchiveRejected("EXPECTED_LEGACY_KEYS_MISMATCH")
         if not apply:
-            return {"legacyCount": len(keys), "protectedCount": protected, "productionWrites": 0}
+            return {"legacyCount": len(keys), "legacyKeysSha256": keys_sha,
+                    "protectedCount": protected, "productionWrites": 0}
+        if expected_keys is None:
+            raise ArchiveRejected("EXPECTED_LEGACY_KEYS_REQUIRED")
         state = self.archive.resume()
         if state is None:
             state = {"schemaVersion": 1, "binding": self.binding, "keys": keys,
@@ -386,6 +403,7 @@ def main():
     parser.add_argument("--source-bucket", required=True)
     parser.add_argument("--legacy-writer-code-sha256", required=True)
     parser.add_argument("--expected-legacy-count", required=True, type=int)
+    parser.add_argument("--expected-legacy-keys-sha256")
     parser.add_argument("--archive", required=True)
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args()
@@ -401,7 +419,8 @@ def main():
         binding = {"accountId": args.account_id, "region": args.region, "table": args.table,
                    "sourceBucket": args.source_bucket,
                    "legacyWriterCodeSha256": args.legacy_writer_code_sha256,
-                   "expectedLegacyCount": args.expected_legacy_count}
+                   "expectedLegacyCount": args.expected_legacy_count,
+                   "expectedLegacyKeysSha256": args.expected_legacy_keys_sha256}
         archive = LocalArchive(args.archive)
         with archive.lock():
             result = Migration(session.resource("dynamodb", config=config).Table(args.table),

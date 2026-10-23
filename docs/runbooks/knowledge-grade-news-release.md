@@ -179,7 +179,9 @@ python3 scripts/news_legacy_archive.py \
   --expected-legacy-count 986 \
   --legacy-writer-code-sha256 "$REVIEWED_LEGACY_CODE_SHA256" \
   --archive "$PERSISTENT_NEWS_ARCHIVE"
-# Repeat the same command with --apply to archive; rerun identically to resume.
+# Record the printed legacyKeysSha256 in the dated inventory, then repeat the
+# command with --expected-legacy-keys-sha256 "$RECORDED_KEYS_SHA256" --apply.
+# Rerun that apply command identically to resume.
 ```
 
 Selection uses bounded, strongly consistent table pages, not an eventually
@@ -188,6 +190,9 @@ consistent GSI as authorization or completeness evidence. It selects the canonic
 identities fail validation. Bind the independently inventoried positive count
 with `--expected-legacy-count` (986 in the 2026-10-21 inventory). A zero or changed
 count cannot complete; investigate drift before starting a new archive.
+The plan run also prints `legacyKeysSha256`, a digest of the exact selected
+identity set. `--apply` requires that recorded digest, so an equal-count removal
+and replacement after the inventory cannot complete either.
 The command permits
 at most 10,000 news identities, 1,000 scan pages, 2 MiB per body, 1 MiB per typed
 metadata object, and one hour per CLI invocation. Run on POSIX in the main thread;

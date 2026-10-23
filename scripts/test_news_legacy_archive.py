@@ -157,6 +157,7 @@ class MigrationTests(unittest.TestCase):
         self.table.put_item(Item={"PK": self.key["PK"], "SK": "CONFIG", "sourceId": "은행",
                                   "ownerId": "owner", "aliases": ["은행"]})
         self.s3.put_object(Bucket="legacy-news-test", Key=self.object_key, Body=b"Original legacy body")
+        self.binding["expectedLegacyKeysSha256"] = archive.legacy_keys_digest([self.key])
 
     def new_migration(self):
         return archive.Migration(self.table, self.s3, self.functions, self.local, self.binding, lambda: self.now)
@@ -214,7 +215,9 @@ class MigrationTests(unittest.TestCase):
                                 local = archive.LocalArchive(directory)
                                 migration = archive.Migration(
                                     self.table, self.s3, self.functions, local,
-                                    dict(self.binding, expectedLegacyCount=count), lambda: self.now)
+                                    dict(self.binding, expectedLegacyCount=count,
+                                         expectedLegacyKeysSha256=archive.legacy_keys_digest(
+                                             [self.key, key][:count])), lambda: self.now)
                                 with self.assertRaisesRegex(archive.ArchiveRejected, error):
                                     migration.run(True)
                                 self.assertNotEqual(
@@ -247,6 +250,8 @@ class MigrationTests(unittest.TestCase):
             self.table.put_item(Item=row)
             self.s3.put_object(Bucket="legacy-news-test", Key=row["s3Key"], Body=f"row {number}".encode())
         self.binding["expectedLegacyCount"] = 26
+        self.binding["expectedLegacyKeysSha256"] = archive.legacy_keys_digest(
+            [self.key] + [{"PK": self.key["PK"], "SK": f"DOC#{number:016x}"} for number in range(25)])
         real_checkpoint = self.local.checkpoint
         def interrupt(state):
             sha = real_checkpoint(state)
@@ -286,8 +291,33 @@ class MigrationTests(unittest.TestCase):
 
     def test_plan_has_no_archive_content_or_production_writes(self):
         result = self.migration.run()
-        self.assertEqual(result, {"legacyCount": 1, "protectedCount": 0, "productionWrites": 0})
+        self.assertEqual(result, {"legacyCount": 1, "legacyKeysSha256": archive.legacy_keys_digest([self.key]),
+                                  "protectedCount": 0, "productionWrites": 0})
         self.assertEqual(list(Path(self.temp.name).iterdir()), [])
+
+    def test_equal_count_identity_replacement_cannot_complete(self):
+        replacement = dict(self.row, SK="DOC#1111111111111111", docHash="1111111111111111",
+                           s3Key="shared/news/은행/1111111111111111.md")
+        self.table.delete_item(Key=self.key)
+        self.table.put_item(Item=replacement)
+        self.s3.put_object(Bucket="legacy-news-test", Key=replacement["s3Key"], Body=b"replacement")
+        for apply in (False, True):
+            with self.subTest(apply=apply), self.assertRaisesRegex(archive.ArchiveRejected, "KEYS_MISMATCH"):
+                self.new_migration().run(apply)
+        self.assertIsNone(self.local.resume())
+
+    def test_apply_requires_a_valid_recorded_identity_digest(self):
+        for value in ("", "A" * 64, "0" * 63, 1):
+            with self.subTest(value=value), mock.patch.dict(self.binding, {"expectedLegacyKeysSha256": value}):
+                with self.assertRaisesRegex(archive.ArchiveRejected, "INVALID_EXPECTED_LEGACY_KEYS"):
+                    self.new_migration()
+        with mock.patch.dict(self.binding, {"expectedLegacyKeysSha256": None}):
+            # A plan without the digest reports it for the dated inventory record.
+            self.assertEqual(self.new_migration().run()["legacyKeysSha256"],
+                             archive.legacy_keys_digest([self.key]))
+            with self.assertRaisesRegex(archive.ArchiveRejected, "KEYS_REQUIRED"):
+                self.new_migration().run(True)
+        self.assertIsNone(self.local.resume())
 
     def test_real_dynamodb_and_versioned_s3_archive_and_resume(self):
         before = self.s3.list_object_versions(Bucket="legacy-news-test")
@@ -389,6 +419,12 @@ class MigrationTests(unittest.TestCase):
                              {"NEWS_PIPELINE_MODE": "all"}):
             with self.assertRaisesRegex(archive.ArchiveRejected, "NOT_RESTRICTED"):
                 self.new_migration().run(True)
+        for name in ("ttobak-news-worker", "ttobak-news-discover"):
+            variables = self.configs[name]["Environment"]["Variables"]
+            variables.pop("NEWS_PIPELINE_MODE")
+            variables.pop("NEWS_CANARY_SOURCE_ID")
+        # An absent mode is the runtime's default off configuration.
+        self.assertEqual(self.new_migration().run(True)["status"], "COMPLETE_RETAINED_LEGACY")
 
     def test_canary_cannot_write_a_selected_legacy_source(self):
         with mock.patch.dict(self.configs["ttobak-news-worker"]["Environment"]["Variables"],
