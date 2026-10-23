@@ -51,7 +51,7 @@ prerequisites before the later deploy job's Python setup.
    retained key, deployed crypto layer and private rejection without grants.
 4. Review the separate activation revision. Pair the EdgeAuth private-bridge flag
    with the MCP mode and protected-resource discovery scopes: active challenges
-   require `ttobak.connector/read`; staged and flag-off challenges retain
+   require `https://ttobak.atomai.click/api/mcp/read`; staged and flag-off challenges retain
    `openid email profile`. Both source flags remain false in this staging revision.
    Verify the complete deployment sequence before consumer acceptance.
    Use the approved loopback PKCE flow

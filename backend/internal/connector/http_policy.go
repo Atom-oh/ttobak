@@ -7,8 +7,6 @@ import (
 	"strings"
 )
 
-const ReadScope = "ttobak.connector/read"
-
 var clientIDPattern = regexp.MustCompile(`^[A-Za-z0-9]{1,128}$`)
 var resourceIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
@@ -51,7 +49,7 @@ func (p *ReadOnlyHTTPPolicy) Authorize(tokenUse, clientID string, audiences []st
 	}
 	if clientID != p.clientID && !slices.Contains(audiences, p.clientID) {
 		for _, scope := range strings.Fields(scopes) {
-			if strings.HasPrefix(scope, "ttobak.connector/") {
+			if strings.HasPrefix(scope, p.audience+"/") || strings.HasPrefix(scope, "ttobak.connector/") {
 				return true, ErrCapabilityDenied
 			}
 		}
@@ -63,11 +61,12 @@ func (p *ReadOnlyHTTPPolicy) Authorize(tokenUse, clientID string, audiences []st
 		return true, ErrCapabilityDenied
 	}
 	granted := strings.Fields(scopes)
-	if !slices.Contains(granted, ReadScope) {
+	readScope := p.audience + "/read"
+	if !slices.Contains(granted, readScope) {
 		return true, ErrCapabilityDenied
 	}
 	for _, scope := range granted {
-		if strings.HasPrefix(scope, "ttobak.connector/") && scope != ReadScope {
+		if scope != readScope && scope != "openid" && scope != "email" && scope != "profile" {
 			return true, ErrCapabilityDenied
 		}
 	}

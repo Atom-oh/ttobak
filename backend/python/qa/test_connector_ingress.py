@@ -3,7 +3,10 @@ import unittest
 from unittest import mock
 
 from connector_contract import ConnectorError, Grants
-from connector_ingress import ReadOnlyQAIngress, READ_SCOPE, validate_detection_body, MAX_REQUEST_BYTES
+from connector_ingress import ReadOnlyQAIngress, validate_detection_body, MAX_REQUEST_BYTES
+
+
+READ_SCOPE = "https://example.invalid/api/mcp/read"
 
 
 class ConnectorIngressTests(unittest.TestCase):
@@ -40,13 +43,27 @@ class ConnectorIngressTests(unittest.TestCase):
 
     def test_identity_only_scopes_wrong_resource_and_expiry_reject(self):
         for field, value in (
-            ("scope", "openid email profile"), ("scope", READ_SCOPE + " ttobak.connector/write"),
+            ("scope", "openid email profile"), ("scope", READ_SCOPE + " https://example.invalid/api/mcp/write"),
+            ("scope", "ttobak.connector/read"),
+            ("scope", "https://foreign.example/api/mcp/read"),
+            ("scope", READ_SCOPE + " ttobak.connector/write"),
+            ("scope", READ_SCOPE + " https://foreign.example/api/mcp/write"),
             ("aud", "https://other.invalid/api/mcp"), ("exp", "100"),
         ):
             event = copy.deepcopy(self.event)
             event["requestContext"]["authorizer"]["jwt"]["claims"][field] = value
             with self.assertRaises(ConnectorError):
                 self.policy.authorize_http(event, now=100)
+
+    def test_scope_namespace_follows_the_configured_resource(self):
+        audience = "https://second.example/api/mcp"
+        policy = ReadOnlyQAIngress("readclient", audience, ("webclient",))
+        claims = self.event["requestContext"]["authorizer"]["jwt"]["claims"]
+        claims.update(aud=audience, scope="openid email profile " + audience + "/read")
+        self.assertEqual(policy.authorize_http(self.event, now=100), "verified-owner")
+        claims["scope"] = READ_SCOPE
+        with self.assertRaisesRegex(ConnectorError, "^CAPABILITY_DENIED$"):
+            policy.authorize_http(self.event, now=100)
 
     def test_missing_trusted_authorizer_cannot_fall_back_to_decoded_headers(self):
         del self.event["requestContext"]["authorizer"]

@@ -62,7 +62,7 @@ func TestAuthEnforcesReadClientAfterCryptographicVerification(t *testing.T) {
 			if tc.expired {
 				expires = time.Now().Add(-time.Minute).Unix()
 			}
-			scope := connector.ReadScope
+			scope := "https://example.invalid/api/mcp/read"
 			if tc.audience == "webclient" {
 				scope = "openid email profile"
 			}
@@ -129,7 +129,7 @@ func TestDedicatedReadRequiresCurrentGrantBeforeAndAfterBoundedReader(t *testing
 		{name: "oversized output", overflow: true, want: 403},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			claims := &ALBOIDCClaims{Sub: "user", TokenUse: "access", ClientID: "readclient", Aud: []string{"https://example.invalid/api/mcp"}, Scope: connector.ReadScope, Exp: time.Now().Add(time.Minute).Unix()}
+			claims := &ALBOIDCClaims{Sub: "user", TokenUse: "access", ClientID: "readclient", Aud: []string{"https://example.invalid/api/mcp"}, Scope: "https://example.invalid/api/mcp/read", Exp: time.Now().Add(time.Minute).Unix()}
 			verifyJWT = func(string) (*ALBOIDCClaims, error) { return claims, nil }
 			lookups, calls := 0, 0
 			var resolve ConnectorGrantResolver = func(_ context.Context, user, client string) (connector.Grants, error) {
@@ -190,7 +190,7 @@ func TestConfiguredConnectorCannotFallThroughFirstPartyOrOIDCPaths(t *testing.T)
 		oidc   bool
 		want   int
 	}{
-		{"dedicated token without current grant", ALBOIDCClaims{Sub: "user", TokenUse: "access", ClientID: "readclient", Aud: []string{"https://example.invalid/api/mcp"}, Scope: connector.ReadScope}, false, 403},
+		{"dedicated token without current grant", ALBOIDCClaims{Sub: "user", TokenUse: "access", ClientID: "readclient", Aud: []string{"https://example.invalid/api/mcp"}, Scope: "https://example.invalid/api/mcp/read"}, false, 403},
 		{"mixed client audience", ALBOIDCClaims{Sub: "user", TokenUse: "id", Aud: []string{"webclient", "readclient"}}, false, 403},
 		{"OIDC dedicated ID", ALBOIDCClaims{Sub: "user", TokenUse: "id", Aud: []string{"readclient"}}, true, 403},
 		{"foreign app", ALBOIDCClaims{Sub: "user", TokenUse: "id", Aud: []string{"foreign"}}, false, 401},
