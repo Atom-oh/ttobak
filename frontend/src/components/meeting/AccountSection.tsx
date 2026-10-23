@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { accountApi, meetingAccountApi } from '@/lib/api';
+import { shareFailureMessage } from '@/lib/accountShare';
 import type { AccountSummary } from '@/types/meeting';
 
 interface Props {
@@ -18,26 +19,27 @@ export default function AccountSection({ meetingId, initialAccountId, initialSha
   const selected = selection.baseline === (initialAccountId || '') ? selection.value : initialAccountId || '';
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const [listError, setListError] = useState('');
+  const [shareError, setShareError] = useState('');
   const active = useRef(true);
   const [retry, setRetry] = useState(0);
   useEffect(() => {
     let current = true; active.current = true;
     accountApi.list().then((response) => {
-      if (current) { setAccounts(response.accounts || []); setError(''); }
-    }).catch(() => { if (current) setError('고객 목록을 불러오지 못했습니다.'); })
+      if (current) { setAccounts(response.accounts || []); setListError(''); }
+    }).catch(() => { if (current) setListError('고객 목록을 불러오지 못했습니다.'); })
       .finally(() => { if (current) setLoading(false); });
     return () => { current = false; active.current = false; };
   }, [retry]);
 
   const linkAndShare = async () => {
     if (!selected || busy || !canManage) return;
-    setBusy(true); setError('');
+    setBusy(true); setShareError('');
     try {
       await meetingAccountApi.shareToAccount(meetingId, selected);
       if (active.current) onChanged?.(selected, true);
     } catch (failure) {
-      if (active.current) setError(failure instanceof Error ? failure.message : '고객 연결과 팀 공유를 완료하지 못했습니다. 다시 시도해 주세요.');
+      if (active.current) setShareError(shareFailureMessage(failure));
     } finally { if (active.current) setBusy(false); }
   };
   const linked = accounts.find((account) => account.accountId === initialAccountId);
@@ -57,7 +59,8 @@ export default function AccountSection({ meetingId, initialAccountId, initialSha
       </div> : <p className="text-sm text-slate-600 dark:text-text-muted">{linked?.name || (initialAccountId ? '고객 연결됨 · 고객 자료는 별도 권한이 필요합니다.' : '연결된 고객이 없습니다.')} · 연결과 팀 공유는 미팅 소유자가 관리합니다.</p>}
       <p className="mt-3 text-xs leading-5 text-slate-500 dark:text-text-muted">고객을 연결하면 미팅과 추출된 Insight가 해당 고객 팀에 함께 공유됩니다.</p>
       {linked && <a href={`/accounts/${encodeURIComponent(linked.accountId)}`} className="mt-2 inline-block text-xs font-semibold text-primary underline">{linked.name}의 누적 맥락 보기</a>}
-      {error && <p role="alert" className="mt-2 text-sm text-red-600 dark:text-red-300">{error} <button type="button" onClick={() => setRetry((value) => value + 1)} className="underline">목록 다시 불러오기</button></p>}
+      {shareError && <p role="alert" className="mt-2 text-sm text-red-600 dark:text-red-300">{shareError}</p>}
+      {listError && <p role="alert" className="mt-2 text-sm text-red-600 dark:text-red-300">{listError} <button type="button" onClick={() => setRetry((value) => value + 1)} className="underline">목록 다시 불러오기</button></p>}
     </div>
   );
 }

@@ -11,7 +11,8 @@ results feed aggregation and, when needed, the chair. See
 | kiro-sol | `gpt-5.6-sol` | Deployment/contracts/recovery |
 | claude-self | `global.anthropic.claude-fable-5-1` | Auth/data/API/ADR |
 
-`kiro-fable` means Opus. `ROLES` governs specialists; legacy files govern legacy
+Kiro tags run only with `ROLE_REVIEW_KIRO=1`; otherwise codex and claude-self
+absorb their scopes. `kiro-fable` means Opus. `ROLES` governs specialists; legacy files govern legacy
 execution. Kiro/Bedrock IDs differ. English is requested, not validated; configured
 IDs do not attest model weights.
 
@@ -176,16 +177,29 @@ inside a native result envelope improved from two calls/pass on base to one
 call/blocked on the implementation. The raw-stdout classification gap is
 pre-existing, not a native-envelope guarantee or a waiver of required coverage.
 
-Kiro's zero-exit JSON syntax retry checks recognized terminal diagnostics in
-non-JSON stdout with both existing stderr classifiers before retrying, including
-overage, quota-exception and tool-use signals. Raw, control-normalized and scrubbed
-text in both streams is checked; normalization precedes secret masking for
-diagnostic detection.
-It preserves the normalized diagnostic through the bounded stderr scrubber and
-records a nonzero exit. Post-scrub and combined-stderr size limits are checked
-before any retry. Successfully
-parsed review JSON is not scanned as logs. This check does not change the
-nonzero-exit policy described above.
+Kiro alone uses the existing bounded corrective retry after an eligible zero-exit
+schema rejection, including parsing, identity, coverage, member paths and prose
+validation before or after structured scrubbing. The current `schema-diagnostic-v2`
+request carries only the allowlisted reason and structural JSON pointer from the
+validated immediate rejection. It requests the entire response with the original
+scope and exact path enum. Actual rejected path values, review text and stderr
+never enter this feedback; rejected bodies remain erased.
+
+Under the role lock, issuance verifies the still-issued prior request and rejected
+result, archives that result in ordered attempt history, and binds its canonical
+SHA-256 in the new receipt and invocation digest. Verification reconstructs policy,
+feedback and full framing from that history. Missing, modified, reordered or stale
+history and legacy or omitted-mode downgrades fail current validation, even with
+recomputed prompt hashes. Historical `schema-contract-v1` rendering and digests
+remain available only for read-only replay bound to their actual old trusted source.
+
+Recognized terminal diagnostics in non-review stdout are checked with both existing
+stderr classifiers before correction. Raw, control-normalized and scrubbed streams
+are checked; normalization precedes secret masking. Successfully parsed review JSON
+is not scanned as logs. Post-scrub and combined-diagnostic overflow stays terminal.
+Valid reviews cannot be reissued. Non-schema transient retries and non-Kiro lanes
+retain their existing behavior. The default stays at most two Kiro calls within
+600 seconds total; exhaustion continues to block required coverage.
 
 Codex JSONL records split only at literal LF bytes; Unicode separators inside JSON
 strings remain payload. Terminal executor and final-file overflow are handled

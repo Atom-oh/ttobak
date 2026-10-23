@@ -5,9 +5,11 @@ import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as kms from 'aws-cdk-lib/aws-kms';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
+import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as tasks from 'aws-cdk-lib/aws-stepfunctions-tasks';
 import { Construct } from 'constructs';
 
@@ -216,7 +218,7 @@ export class NewsPublication extends Construct {
       },
     }));
     const listDaily = new tasks.LambdaInvoke(this, 'ListDailySources', {
-      lambdaFunction: schedule.fn, payload: sfn.TaskInput.fromObject({}),
+      lambdaFunction: schedule.fn,
       payloadResponseOnly: true, retryOnServiceExceptions: false,
     });
     const dailySource = new tasks.StepFunctionsStartExecution(this, 'PublishDailySource', {
@@ -226,7 +228,8 @@ export class NewsPublication extends Construct {
       input: sfn.TaskInput.fromObject({
         sourceId: sfn.JsonPath.stringAt('$.sourceId'), runId: sfn.JsonPath.stringAt('$.runId'),
       }),
-      resultPath: sfn.JsonPath.DISCARD,
+      resultSelector: { 'output.$': '$.Output' },
+      resultPath: '$.publication',
     });
     // Retain a failure bit per source and continue subsequent sources. Child
     // execution history retains details; the parent fails after the whole list.
@@ -243,9 +246,53 @@ export class NewsPublication extends Construct {
     });
     dailySource.addCatch(duplicate, { errors: ['StepFunctions.ExecutionAlreadyExistsException', 'StepFunctions.ExecutionAlreadyExists'], resultPath: sfn.JsonPath.DISCARD });
     dailySource.addCatch(failed, { errors: ['States.ALL'], resultPath: sfn.JsonPath.DISCARD });
+    const matchingIdentity = sfn.Condition.and(
+      sfn.Condition.isPresent('$.publication.output.sourceId'),
+      sfn.Condition.isString('$.publication.output.sourceId'),
+      sfn.Condition.stringEqualsJsonPath('$.publication.output.sourceId', '$.sourceId'),
+      sfn.Condition.isPresent('$.publication.output.runId'),
+      sfn.Condition.isString('$.publication.output.runId'),
+      // Discovery binds the native run to the child execution's name.
+      sfn.Condition.stringEqualsJsonPath('$.publication.output.runId', '$.executionName'),
+      sfn.Condition.isPresent('$.publication.output.sourceRevision'),
+      sfn.Condition.isString('$.publication.output.sourceRevision'),
+      sfn.Condition.isPresent('$.publication.output.status'),
+      sfn.Condition.isString('$.publication.output.status'),
+    );
+    const diagnostics = new sfn.Pass(this, 'ReadDailyDiagnostics', {
+      parameters: { 'errorsJson.$': 'States.JsonToString($.publication.output.errors)' },
+    });
+    diagnostics.next(new sfn.Choice(this, 'DailyDiagnosticsComplete')
+      // JSON serialization distinguishes [] from {}, null, and the string "[]".
+      .when(sfn.Condition.stringEquals('$.errorsJson', '[]'), completed)
+      .otherwise(failed));
+    const finalized = new sfn.Pass(this, 'ReadFinalizedIdentity', {
+      parameters: { 'candidatesJson.$': 'States.JsonToString($.publication.output.candidates)' },
+    });
+    finalized.next(new sfn.Choice(this, 'DailyFinalizedIdentity')
+      .when(sfn.Condition.stringEquals('$.candidatesJson', '[]'), duplicate)
+      .otherwise(failed));
+    const outcome = new sfn.Choice(this, 'DailyChildOutcome')
+      // This short shape means reuse, not proof the historical crawl succeeded.
+      .when(sfn.Condition.and(matchingIdentity,
+        sfn.Condition.stringEquals('$.publication.output.status', 'FINALIZED'),
+        sfn.Condition.isPresent('$.publication.output.candidates')), finalized)
+      .when(sfn.Condition.and(matchingIdentity,
+        sfn.Condition.or(
+          sfn.Condition.stringEquals('$.publication.output.status', 'COMPLETED'),
+          sfn.Condition.stringEquals('$.publication.output.status', 'PARTIAL')),
+        sfn.Condition.isPresent('$.publication.output.errors'),
+        sfn.Condition.isPresent('$.publication.output.usageComplete'),
+        sfn.Condition.isBoolean('$.publication.output.usageComplete'),
+        sfn.Condition.booleanEquals('$.publication.output.usageComplete', true)), diagnostics)
+      .otherwise(failed);
+    dailySource.next(outcome);
+    const schedulable = new sfn.Choice(this, 'DailySourceSchedulable')
+      .when(sfn.Condition.isPresent('$.schedulingError'), failed)
+      .otherwise(dailySource);
     const eachSource = new sfn.Map(this, 'DailySources', {
       itemsPath: '$.sources', maxConcurrency: 1, resultPath: '$.failures',
-    }).itemProcessor(dailySource.next(completed));
+    }).itemProcessor(schedulable);
     const summarizeDaily = new sfn.Pass(this, 'SummarizeDailyResults', {
       parameters: { 'failed.$': 'States.ArrayContains($.failures, true)' },
     });
@@ -262,15 +309,62 @@ export class NewsPublication extends Construct {
     const normal = new cdk.CfnCondition(stack, 'NewsAllSourcesEnabled', {
       expression: cdk.Fn.conditionEquals(mode.valueAsString, 'all'),
     });
+    const deliveryKey = new kms.Key(this, 'DailyDeliveryKey', {
+      description: 'Retained failed daily news admission events',
+      enableKeyRotation: true, removalPolicy: cdk.RemovalPolicy.RETAIN,
+      policy: new iam.PolicyDocument({ statements: [
+        new iam.PolicyStatement({
+          actions: ['kms:*'], resources: ['*'],
+          principals: [new iam.AccountRootPrincipal()],
+          conditions: { StringEquals: { 'kms:CallerAccount': stack.account } },
+        }),
+        new iam.PolicyStatement({
+          actions: ['kms:GenerateDataKey', 'kms:Decrypt'], resources: ['*'],
+          principals: [new iam.ServicePrincipal('events.amazonaws.com')],
+          conditions: { StringEquals: { 'aws:SourceAccount': stack.account } },
+        }),
+      ] }),
+    });
+    const deliveryQueue = new sqs.Queue(this, 'DailyDeliveryQueue', {
+      queueName: 'ttobak-news-daily-delivery-dlq',
+      encryption: sqs.QueueEncryption.KMS, encryptionMasterKey: deliveryKey,
+      retentionPeriod: cdk.Duration.days(14), removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
     const dailyRule = new events.Rule(this, 'DailySchedule', {
       ruleName: 'ttobak-news-daily',
       schedule: events.Schedule.cron({ hour: '19', minute: '10' }),
       targets: [new targets.SfnStateMachine(daily, {
-        input: events.RuleTargetInput.fromObject({}), retryAttempts: 0,
+        input: events.RuleTargetInput.fromObject({
+          scheduledAt: events.EventField.fromPath('$.time'),
+        }),
+        retryAttempts: 6, maxEventAge: cdk.Duration.hours(2),
+        deadLetterQueue: deliveryQueue,
       })],
     });
     (dailyRule.node.defaultChild as events.CfnRule).state = cdk.Fn.conditionIf(
       normal.logicalId, 'ENABLED', 'DISABLED').toString();
+    for (const metricName of ['FailedInvocations', 'InvocationsFailedToBeSentToDlq']) {
+      new cloudwatch.Alarm(this, `Daily${metricName}Alarm`, {
+        metric: new cloudwatch.Metric({
+          namespace: 'AWS/Events', metricName,
+          dimensionsMap: { RuleName: dailyRule.ruleName },
+          statistic: 'Sum', period: cdk.Duration.minutes(5),
+        }),
+        threshold: 1, evaluationPeriods: 1,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+        alarmDescription: 'Daily admission failed; inspect retained delivery event before replay.',
+      });
+    }
+    new cloudwatch.Alarm(this, 'DailyDeliveryPendingAlarm', {
+      metric: deliveryQueue.metricApproximateNumberOfMessagesVisible({
+        statistic: 'Maximum', period: cdk.Duration.minutes(5),
+      }),
+      threshold: 1, evaluationPeriods: 1,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      alarmDescription: 'Retained daily admission requires timestamp-bound manual recovery.',
+    });
+    new cdk.CfnOutput(stack, 'NewsDailyDeliveryQueueArn', { value: deliveryQueue.queueArn });
+    new cdk.CfnOutput(stack, 'NewsDailyDeliveryKeyArn', { value: deliveryKey.keyArn });
     new cloudwatch.Alarm(this, 'DailyFailureAlarm', {
       metric: daily.metricFailed({ period: cdk.Duration.minutes(5) }),
       threshold: 1, evaluationPeriods: 1,

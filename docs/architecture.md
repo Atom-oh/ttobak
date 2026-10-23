@@ -105,6 +105,13 @@ Existing account/meeting queue behavior and the project deletion residual storag
 race described in ADR-025 remain: deleted projects cannot materialize grants and
 unconsumed project invitation rows expire through their existing TTL field.
 
+The AWS Billing Insight companion is a separate stack and origin. A signed-in
+user's hand-off request makes the Go API write a hashed, 60-second `HANDOFF#`
+row bound to the verified sub and email and return the companion URL with the
+plaintext code. The companion shows whose account the code is for, deletes the
+row to redeem it once the user confirms, and authorizes from
+TTOBAK account membership itself; TTOBAK grants it no table access (API-SPEC).
+
 ## Data paths
 
 1. Capture microphone/tab/native system audio. Live captions use browser Transcribe

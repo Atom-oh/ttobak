@@ -1,6 +1,9 @@
 """Daily scheduling contracts using synthetic sources and actual SDK pagination."""
 
 import copy
+from datetime import datetime, timezone
+import hashlib
+import json
 import os
 import unittest
 from unittest import mock
@@ -51,7 +54,8 @@ class ScheduleBoundaries(unittest.TestCase):
                     mock.patch.object(schedule.time, "time", return_value=NOW), \
                     mock.patch.object(schedule.boto3, "Session") as session, \
                     self.assertRaises(StateRejected):
-                schedule.handler({}, context())
+                schedule.handler({"scheduledAt": datetime.fromtimestamp(
+                    NOW, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}, context())
             session.assert_not_called()
 
     def test_all_writers_reject_legacy_on_and_accept_only_exact_off(self):
@@ -79,16 +83,105 @@ class ScheduleBoundaries(unittest.TestCase):
             schedule.list_sources(self.table(pages()), "all", "", NOW, remaining)
         self.assertEqual(consumed, [0])
 
-    def test_duplicate_and_malformed_source_identities_fail_closed(self):
-        rows = [
-            [source("source"), source("source")],
-            [source("source", sourceId="different")],
-            [source("source", SK="OTHER")],
-            [source("../source")],
-        ]
-        for items in rows:
-            with self.subTest(items=items), self.assertRaises((StateRejected, DiscoveryRejected)):
-                schedule.list_sources(self.table([{"Items": items}]), "all", "", NOW, lambda: 100)
+    def test_duplicate_source_rows_still_fail_closed(self):
+        with self.assertRaisesRegex(StateRejected, "DUPLICATE_SCHEDULE_SOURCE"):
+            schedule.list_sources(self.table([{"Items": [source("source")] * 2}]),
+                                  "all", "", NOW, lambda: 100)
+
+    def test_bad_identity_is_reported_without_suppressing_healthy_sources(self):
+        for bad in (source("a" * 129), source("../source"),
+                    source("bad", sourceId="different"), source("bad", SK="OTHER")):
+            for items in ([bad, source("good")], [source("good"), bad]):
+                with self.subTest(items=items):
+                    try:
+                        result = schedule.list_sources(self.table([{"Items": items}]),
+                                                       "all", "", NOW, lambda: 100)
+                    except StateRejected as exc:
+                        self.fail(f"One malformed identity suppressed the healthy source: {exc}")
+                    good = [r for r in result["sources"] if "sourceId" in r]
+                    self.assertEqual([r["sourceId"] for r in good], ["good"])
+                    rejected = [r for r in result["sources"] if "schedulingError" in r]
+                    self.assertEqual(rejected, [{
+                        "schedulingError": "INVALID_SCHEDULE_SOURCE",
+                        "sourceKeySha256": hashlib.sha256(bad["PK"].encode()).hexdigest(),
+                    }])
+                    self.assertNotIn(bad["PK"], str(result))
+
+    def test_invalid_identities_count_against_the_same_capacity_limit(self):
+        items = [source(f"good-{i}") for i in range(schedule.MAX_SOURCES)]
+        items.append(source("x" * 129))
+        with self.assertRaisesRegex(StateRejected, "SCHEDULE_SOURCE_LIMIT"):
+            schedule.list_sources(self.table([{"Items": items}]),
+                                  "all", "", NOW, lambda: 100)
+
+    def test_original_scheduled_day_survives_next_day_replay(self):
+        scheduled = datetime.fromtimestamp(NOW, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        results = []
+        for replay_now in (NOW, NOW + 86400):
+            with mock.patch.dict(os.environ, {
+                    **ENV, "NEWS_PIPELINE_MODE": "all", "NEWS_LEGACY_WRITES": "off"},
+                    clear=True), mock.patch.object(schedule.time, "time", return_value=replay_now), \
+                    mock.patch.object(schedule.boto3, "Session") as session:
+                session.return_value.resource.return_value.Table.return_value = self.table(
+                    [{"Items": [source("good")]}])
+                try:
+                    results.append(schedule.handler({"scheduledAt": scheduled}, context()))
+                except StateRejected as exc:
+                    self.fail(f"Valid original schedule timestamp was rejected: {exc}")
+        self.assertEqual(results[0], results[1])
+        self.assertEqual(results[0]["sources"][0]["runId"], "daily-20261021")
+
+    def test_bad_schedule_timestamps_fail_before_sdk(self):
+        values = [None, True, 123, "", "2026-10-21", "2026-10-21T19:10:00+00:00",
+                  "2026-02-30T19:10:00Z", "2026-10-21T19:10:00.000Z",
+                  datetime.fromtimestamp(NOW + 1, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                  datetime.fromtimestamp(NOW - 14 * 86400 - 1, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")]
+        for value in values:
+            with self.subTest(value=value), mock.patch.dict(os.environ, {
+                    **ENV, "NEWS_PIPELINE_MODE": "all", "NEWS_LEGACY_WRITES": "off"},
+                    clear=True), mock.patch.object(schedule.time, "time", return_value=NOW), \
+                    mock.patch.object(schedule.boto3, "Session") as session, \
+                    self.assertRaisesRegex(StateRejected, "INVALID_SCHEDULE_TIME"):
+                schedule.handler({"scheduledAt": value}, context())
+            session.assert_not_called()
+
+    def test_manual_replay_hash_rejects_changed_scan_before_returning_sources(self):
+        scheduled = datetime.fromtimestamp(NOW, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        original = schedule.list_sources(self.table([{"Items": [source("a"), source("b")]}]),
+                                         "all", "", NOW, lambda: 100)
+        encode = lambda value: json.dumps(value, ensure_ascii=False, sort_keys=True,
+                                         separators=(",", ":"), allow_nan=False)
+        payload = {"mode": original["mode"], "sources": sorted(original["sources"], key=encode)}
+        expected = hashlib.sha256(encode(payload).encode()).hexdigest()
+        for items, accepted in (([source("b"), source("a")], True),
+                                ([source("a")], False),
+                                ([source("a"), source("b"), source("new")], False),
+                                ([source("a"), source("c")], False),
+                                ([source("a"), source("b", sourceId="wrong")], False)):
+            with self.subTest(accepted=accepted, items=items), mock.patch.dict(os.environ, {
+                    **ENV, "NEWS_PIPELINE_MODE": "all", "NEWS_LEGACY_WRITES": "off"},
+                    clear=True), mock.patch.object(schedule.time, "time", return_value=NOW), \
+                    mock.patch.object(schedule.boto3, "Session") as session:
+                session.return_value.resource.return_value.Table.return_value = self.table(
+                    [{"Items": items}])
+                event = {"scheduledAt": scheduled, "expectedSourcesSha256": expected}
+                if accepted:
+                    try:
+                        self.assertEqual(schedule.handler(event, context()), original)
+                    except StateRejected as exc:
+                        self.fail(f"Unchanged snapshot-bound replay was rejected: {exc}")
+                else:
+                    with self.assertRaisesRegex(StateRejected, "SCHEDULE_SOURCES_CHANGED"):
+                        schedule.handler(event, context())
+
+    def test_manual_replay_digest_requires_exact_lowercase_hex_before_sdk(self):
+        scheduled = datetime.fromtimestamp(NOW, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        for digest in (None, 1, True, "", "A" * 64, "0" * 63, "g" * 64):
+            with self.subTest(digest=digest), mock.patch.dict(os.environ, ENV, clear=True), \
+                    mock.patch.object(schedule.boto3, "Session") as session, \
+                    self.assertRaisesRegex(StateRejected, "INVALID_REQUEST"):
+                schedule.handler({"scheduledAt": scheduled, "expectedSourcesSha256": digest}, context())
+            session.assert_not_called()
 
     def test_capacity_and_page_bounds_reject_whole_dispatch_without_truncation(self):
         items = [source(f"source-{i}") for i in range(schedule.MAX_SOURCES + 1)]
@@ -180,9 +273,29 @@ class ScheduleDynamoDB(unittest.TestCase):
                 table.put_item(Item=row)
             before = table.scan(ConsistentRead=True)["Items"]
             with mock.patch.object(schedule.time, "time", return_value=NOW):
-                result = schedule.handler({}, context())
+                result = schedule.handler({"scheduledAt": datetime.fromtimestamp(
+                    NOW, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}, context())
             self.assertEqual([r["sourceId"] for r in result["sources"]], ["a", "z"])
             self.assertEqual(table.scan(ConsistentRead=True)["Items"], before)
+
+
+@unittest.skipUnless(mock_aws, "moto required for actual finalized child receipts")
+class DailyChildReceiptContract(unittest.TestCase):
+    def test_real_failed_search_finalizes_partial_with_complete_zero_charge(self):
+        from news_discovery import discover
+        from test_news_lifecycle import TestRunTransactions
+        case = TestRunTransactions()
+        case.setUp()
+        self.addCleanup(case.doCleanups)
+        discovery = discover(CONFIG, lambda *_: ([], True), lambda *_: set(),
+                             datetime.fromtimestamp(NOW, timezone.utc), case.run.run_id)
+        receipt = case.runs.finish(case.run, NOW + 1, discovery=discovery, outcomes=[])
+        self.assertEqual(receipt["status"], "PARTIAL")
+        self.assertEqual(receipt["errors"], ["SEARCH_FAILED"])
+        self.assertIs(receipt["usageComplete"], True)
+        self.assertEqual(receipt["docsAdded"], 0)
+        self.assertEqual(receipt["chargedUsd"], 0)
+        self.assertEqual(case.item(case.run.sk)["runState"], "FINALIZED")
 
 
 if __name__ == "__main__":

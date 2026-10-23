@@ -11,6 +11,8 @@ export interface RuntimeConfig {
   wsUrl?: string;
   /** Enable only after deployed job routes/worker pass acceptance. Missing is off. */
   qaAsyncJobs?: boolean;
+  /** Show the Billing Insight hand-off button. Missing is off; the URL comes from the API. */
+  billingInsight?: boolean;
   /** Public client IDs, never credentials. Missing mode disables HTTP setup. */
   mcp?: {
     url?: string;

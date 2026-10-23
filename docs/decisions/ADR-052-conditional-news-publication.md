@@ -183,12 +183,55 @@ and entry-point/payload limits.
 The activation gate must record positive end-to-end publication and QA evidence;
 zero-result or rejected-only runs do not establish acceptance.
 
+### Amendment — daily scheduling isolation and retained admission (2026-10-21)
+
+The daily parent must finish healthy sources even when another selected identity
+is invalid or a normally completed child reports a failed crawl. Invalid identities
+remain unpublishable and appear as bounded hashed failure entries within the same
+30-source/64,000-byte limits. Do not rename legacy identities or weaken native
+validation. After durable finalization, only an exact empty error array with
+boolean complete usage is a successful normal receipt; warning-only partial
+receipts remain allowed. Unknown output fails that source. Reusing a finalized or
+duplicate execution does not certify the old crawl's success.
+
+Daily delivery retains the original EventBridge timestamp, with six retries over
+at most two hours and a retained, KMS-encrypted 14-day DLQ. Scope queue sends to
+the exact daily rule and key use to the EventBridge service in the owning account.
+Keep recovery's independent retry policy unchanged. Delivery/queue alarms support
+investigation; they do not replace retained-event and workflow evidence.
+
+Manual replay validates the original UTC timestamp and optionally pins the complete
+canonical emitted source/error list with `expectedSourcesSha256`. A digest mismatch
+rejects admission before any child starts. No-model-work acceptance additionally
+requires the exact current source/configuration set and already existing terminal
+child execution names, plus unchanged attempt/publication/charge counters afterward.
+The [release contract](../runbooks/knowledge-grade-news-release.md#daily-admission-retention-and-bounded-replay)
+defines hashing, ambiguity handling and bounded recovery. These source changes
+require separate actual CrawlerStack and recovery-path acceptance; historical
+canary/publication evidence is preserved.
+
 Dependency-free boundary tests run through `test_crawlers`. Transaction
 integration cases in `test_news_store.py` additionally require
 `moto[dynamodb]>=5,<6`; they are explicitly skipped when it is absent. Run them in
 an isolated Python 3.12 environment for storage changes. Moto exercises
 conditional expressions and transaction state; it does not validate AWS IAM,
 service concurrency, actual billing, or deployed acceptance.
+
+## 2026-10-21 amendment: definitive storage rejection
+
+A definitive `PutObject` rejection after model processing settles the failed
+attempt through the existing conditional writer, preserving its actual known
+usage and completeness. The initial allowlist is `AccessDenied`/403,
+`NoSuchBucket`/404 and `KMS.AccessDeniedException`/400. The operation and status
+must match and SDK `RetryAttempts` must be the integer zero: a later rejection
+does not resolve an earlier ambiguous request. Sufficient settlement time and a
+valid owned lease remain required.
+
+Timeouts, 5xx responses, conditional conflicts, unknown or incomplete error
+metadata, and settlement failures retain their conservative behavior. A failed
+second write leaves the first immutable object unpublished and retained. This
+change introduces no upload/model retry, object deletion, or historical ledger
+refund. Local regression evidence does not establish deployed acceptance.
 
 ## Evidence
 

@@ -8,6 +8,7 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { WEBSOCKET_ORIGIN_HEADER, WEBSOCKET_PATH, WEBSOCKET_STAGE } from './websocket-origin';
+import { billingInsightUrlContext } from './billing-insight';
 import { applicationContentSecurityPolicy } from './frontend-policy';
 import { Construct } from 'constructs';
 import * as fs from 'fs';
@@ -497,6 +498,8 @@ function handler(event) {
           wsUrl: WEBSOCKET_PATH,
           staticRouterRevision: 'segmented-rsc-v1',
           qaAsyncJobs: props.qaAsyncJobsEnabled === true,
+          // Shows the Billing Insight hand-off button; only the API holds the URL.
+          ...(billingInsightUrlContext(this) ? { billingInsight: true } : {}),
           mcp: {
             url: '/api/mcp',
             privateBridgeEnabled: props.connectorPrivateBridgeEnabled === true,

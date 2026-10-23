@@ -477,6 +477,25 @@ for bad in ({'Ref':'OtherRole'}, {'Fn::ImportValue':'unknown'}, qa):
       { 'ttobak:meetingTranslateDailyBytes': '-5' })).toThrow(/ttobak:meetingTranslateDailyBytes must be a non-negative integer/);
   });
 
+  test('API Lambda carries BILLING_INSIGHT_URL only when the context origin is set', () => {
+    const apiEnv = (value: Template) => Object.values(value.findResources('AWS::Lambda::Function'))
+      .find(resource => resource.Properties.FunctionName === 'ttobak-api')!.Properties.Environment.Variables;
+    expect(apiEnv(template)).not.toHaveProperty('BILLING_INSIGHT_URL');
+    const configured = buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined,
+      { 'ttobak:billingInsightUrl': 'https://insight.example.net/' });
+    expect(apiEnv(configured)).toMatchObject({ BILLING_INSIGHT_URL: 'https://insight.example.net' });
+    const flagged = Object.values(configured.findResources('AWS::Lambda::Function'))
+      .filter(resource => resource.Properties.Environment?.Variables?.BILLING_INSIGHT_URL !== undefined);
+    expect(flagged.map(resource => resource.Properties.FunctionName)).toEqual(['ttobak-api']);
+    expect(apiEnv(buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined,
+      { 'ttobak:billingInsightUrl': '' }))).not.toHaveProperty('BILLING_INSIGHT_URL');
+    for (const bad of ['http://insight.example.net', 'https://insight.example.net/app', 'https://insight.example.net/?a=1',
+      'https://insight.example.net/#x', 'insight.example.net', ' https://insight.example.net', true]) {
+      expect(() => buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined,
+        { 'ttobak:billingInsightUrl': bad })).toThrow(/ttobak:billingInsightUrl must be an https origin/);
+    }
+  });
+
   test('recovery consumer is installed before the API producer', () => {
     const functions = template.findResources('AWS::Lambda::Function');
     const apiId = Object.keys(functions).find(id => functions[id].Properties.FunctionName === 'ttobak-api')!;
