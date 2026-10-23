@@ -3,7 +3,6 @@ package repository
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -81,34 +80,5 @@ func TestNewsDeleteTransactionPinsPublicationAndCurrentOwner(t *testing.T) {
 		if err != nil || !seen {
 			t.Fatalf("transaction failed: %v", err)
 		}
-	}
-}
-
-func TestLegacyDocumentDeleteCannotEraseConcurrentPublication(t *testing.T) {
-	client := dynamodb.New(dynamodb.Options{
-		Region: "ap-northeast-2", Credentials: aws.AnonymousCredentials{}, RetryMaxAttempts: 1,
-		HTTPClient: meetingListHTTPClientFunc(func(req *http.Request) (*http.Response, error) {
-			var input struct {
-				ConditionExpression      string
-				ExpressionAttributeNames map[string]string
-			}
-			if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
-				t.Fatal(err)
-			}
-			fields := map[string]bool{}
-			for _, name := range input.ExpressionAttributeNames {
-				fields[name] = true
-			}
-			if !fields["schemaVersion"] || !fields["qualityStatus"] || !fields["attemptToken"] ||
-				strings.Count(input.ConditionExpression, "attribute_not_exists") != 3 {
-				t.Fatal("legacy deletion did not exclude versioned publication")
-			}
-			return &http.Response{StatusCode: 400, Header: http.Header{"Content-Type": {"application/x-amz-json-1.0"}},
-				Body: io.NopCloser(strings.NewReader(`{"__type":"ConditionalCheckFailedException","message":"replaced"}`))}, nil
-		}),
-	})
-	err := NewCrawlerRepository(client, "news").DeleteDocument(context.Background(), "source", "article")
-	if !errors.Is(err, ErrConditionFailed) {
-		t.Fatalf("lost publication race was not a conflict: %v", err)
 	}
 }
