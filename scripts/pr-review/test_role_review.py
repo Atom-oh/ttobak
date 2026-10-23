@@ -1634,8 +1634,10 @@ VERDICT: PASS
         paths = plan["roles"][tag]["paths"]
         enum = "Member path enum: " + role_review.canonical(paths)
         example = "Path-only example: " + role_review.canonical({"path": paths[0]})
-        for mode, count in ((None, 1), (role_review.SCHEMA_CORRECTION, 2)):
+        for mode, count in ((None, 1), (role_review.CURRENT_SCHEMA_CORRECTION, 2)):
             with self.subTest(mode=mode):
+                if mode is not None:
+                    self.schema_rejection()
                 _, prompt, payload = role_review.issue_request(self.work, tag, mode)
                 self.assertEqual(prompt.count(enum), count)
                 self.assertEqual(prompt.count(example), count)
@@ -1662,7 +1664,8 @@ VERDICT: PASS
     def test_member_path_contract_tampering_rejects_issued_request(self):
         plan = self.prepare(patch("infra/lib/stack.ts"))
         tag = "kiro-fable"
-        _, prompt, _ = role_review.issue_request(self.work, tag, role_review.SCHEMA_CORRECTION)
+        self.schema_rejection()
+        _, prompt, _ = role_review.issue_request(self.work, tag, role_review.CURRENT_SCHEMA_CORRECTION)
         path = self.work / f"requests/{tag}.prompt"
         for old in ('Member path enum: ["infra/lib/stack.ts"]',
                     'Path-only example: {"path":"infra/lib/stack.ts"}'):
@@ -1700,7 +1703,8 @@ VERDICT: PASS
         self.assertNotIn("correction_mode", old_receipt)
         self.assertEqual(old_receipt["request_digest"], role_review.invocation_digest(
             plan["roles"][tag]["request_digest"], old_nonce))
-        nonce, prompt, payload = role_review.issue_request(self.work, tag, role_review.SCHEMA_CORRECTION)
+        self.schema_rejection()
+        nonce, prompt, payload = role_review.issue_request(self.work, tag, role_review.CURRENT_SCHEMA_CORRECTION)
         self.assertNotEqual(old_nonce, nonce)
         self.assertIn(role_review.SCHEMA_REMINDER, prompt)
         self.assertNotIn(role_review.SCHEMA_REMINDER, old_prompt)
@@ -1730,10 +1734,247 @@ VERDICT: PASS
 
     def test_corrected_request_files_retain_read_byte_bounds(self):
         plan = self.prepare(patch("infra/lib/stack.ts"))
-        role_review.issue_request(self.work, "kiro-fable", role_review.SCHEMA_CORRECTION)
+        self.schema_rejection()
+        role_review.issue_request(self.work, "kiro-fable", role_review.CURRENT_SCHEMA_CORRECTION)
         (self.work / "requests/kiro-fable.prompt").write_bytes(b"x" * (role_review.MAX_REQUEST_BYTES + 1))
         with self.assertRaisesRegex(role_review.Invalid, "^output_byte_limit$"):
             role_review.issued_request(self.work, plan, "kiro-fable")
+
+    def schema_rejection(self):
+        tag = "kiro-fable"
+        response = self.response(tag)
+        response["findings"] = [{"severity": "MINOR", "path": "REJECTED_CANARY:12",
+                                 "condition": "Concrete condition", "evidence": "Concrete evidence"}]
+        return self.record(tag, response=response, expected=2)
+
+    def test_diagnostic_correction_binds_safe_feedback_and_source_result(self):
+        plan = self.prepare(patch("infra/lib/stack.ts"))
+        prior = self.schema_rejection()
+        nonce, prompt, payload = role_review.issue_request(self.work, "kiro-fable", "schema-diagnostic-v2")
+        receipt = role_review.issued_request(self.work, plan, "kiro-fable")
+        feedback = {"reason": "ASSIGNED_PATH_REQUIRED", "pointer": "/findings/0/path"}
+        self.assertEqual(receipt["validation_feedback"], feedback)
+        self.assertEqual(receipt["source_result_sha256"], role_review.digest(prior))
+        self.assertIn("Validated rejection feedback: " + role_review.canonical(feedback), prompt)
+        self.assertNotIn("REJECTED_CANARY", prompt + payload + role_review.canonical(receipt))
+        self.assertNotIn("phase", role_review.canonical(feedback))
+        self.assertEqual(self.read("slot/kiro-fable-attempts.json"), [prior])
+        self.assertEqual(receipt["request_digest"], role_review.invocation_digest(
+            plan["roles"]["kiro-fable"]["request_digest"], nonce, "schema-diagnostic-v2",
+            receipt["prompt_sha256"], role_review.digest(prior)))
+        self.assertNotEqual(receipt["request_digest"], role_review.invocation_digest(
+            plan["roles"]["kiro-fable"]["request_digest"], nonce, "schema-diagnostic-v2",
+            receipt["prompt_sha256"], "f" * 64))
+
+    def test_current_issuer_rejects_legacy_and_omitted_correction_after_schema_rejection(self):
+        self.prepare(patch("infra/lib/stack.ts"))
+        prior = self.schema_rejection()
+        for mode in (None, "schema-contract-v1", "unknown"):
+            with self.subTest(mode=mode), self.assertRaises(role_review.Invalid):
+                role_review.issue_request(self.work, "kiro-fable", mode)
+            self.assertEqual(self.read("slot/kiro-fable-result.json"), prior)
+            self.assertFalse((self.work / "slot/kiro-fable-attempts.json").exists())
+
+    def test_correction_rejects_unbound_or_unsafe_predecessor_before_replacement(self):
+        self.prepare(patch("infra/lib/stack.ts"))
+        prior = self.schema_rejection()
+        path = self.work / "slot/kiro-fable-result.json"
+        changes = [{key: "wrong"} for key in ("head_sha", "base_sha", "plan_digest", "tag",
+                   "model", "family", "role", "invocation_nonce", "request_digest",
+                   "prepared_request_digest")]
+        changes += [{"response": {}}, {"valid": True}, {"failure_codes": ["cli_nonzero_exit"]},
+                    {"validation_diagnostic": None}, {"response_digest": "f" * 64}]
+        good = prior["validation_diagnostic"]
+        changes += [{"validation_diagnostic": dict(good, **change)} for change in (
+            {"reason": "UNSAFE_CANARY"}, {"pointer": "/findings/12345678/path"},
+            {"pointer": "/findings/0/REJECTED_CANARY"}, {"phase": "wrong"}, {"extra": "canary"})]
+        for change in changes:
+            with self.subTest(change=change):
+                path.write_text(role_review.canonical(dict(prior, **change)))
+                with self.assertRaises(role_review.Invalid):
+                    role_review.issue_request(self.work, "kiro-fable", "schema-diagnostic-v2")
+                self.assertFalse((self.work / "slot/kiro-fable-attempts.json").exists())
+        path.write_text(role_review.canonical(prior))
+        receipt_path = self.work / "slot/kiro-fable-request.json"
+        receipt = self.read("slot/kiro-fable-request.json")
+        receipt_path.write_text(role_review.canonical(dict(receipt, input_sha256="f" * 64)))
+        with self.assertRaises(role_review.Invalid):
+            role_review.issue_request(self.work, "kiro-fable", "schema-diagnostic-v2")
+        self.assertEqual(self.read("slot/kiro-fable-result.json"), prior)
+
+    def test_current_validator_rejects_recomputed_downgrade_and_history_tampering(self):
+        plan = self.prepare(patch("infra/lib/stack.ts"))
+        prior = self.schema_rejection()
+        role_review.issue_request(self.work, "kiro-fable", "schema-diagnostic-v2")
+        receipt_path = self.work / "slot/kiro-fable-request.json"
+        receipt = self.read("slot/kiro-fable-request.json")
+        prompt_path = self.work / "requests/kiro-fable.prompt"
+        original_prompt = prompt_path.read_text()
+        prepared = (self.work / "roles/kiro-fable.txt").read_text()
+        diff = (self.work / "roles/kiro-fable.diff").read_text()
+        for mode in (None, "schema-contract-v1"):
+            for null_mode in (False, True):
+                with self.subTest(mode=mode, explicit_null=null_mode):
+                    prompt, _ = role_review.frame_request(role_review.corrected_prompt(
+                        prepared, "kiro-fable", mode, plan["roles"]["kiro-fable"]["paths"]),
+                        diff, receipt["invocation_nonce"])
+                    forged = {k: v for k, v in receipt.items() if k not in
+                              ("correction_mode", "validation_feedback", "source_result_sha256")}
+                    if mode is not None or null_mode:
+                        forged["correction_mode"] = mode
+                    forged["prompt_sha256"] = role_review.digest(prompt.encode())
+                    forged["request_digest"] = role_review.invocation_digest(
+                        forged["prepared_request_digest"], forged["invocation_nonce"], mode,
+                        forged["prompt_sha256"])
+                    receipt_path.write_text(role_review.canonical(forged))
+                    prompt_path.write_text(prompt)
+                    with self.assertRaises(role_review.Invalid):
+                        role_review.issued_request(self.work, plan, "kiro-fable")
+        receipt_path.write_text(role_review.canonical(receipt))
+        prompt_path.write_text(original_prompt)
+        history_path = self.work / "slot/kiro-fable-attempts.json"
+        histories = [[], [dict(prior, head_sha="f" * 40)], [dict(prior,
+                     validation_diagnostic=dict(prior["validation_diagnostic"], reason="OBJECT_REQUIRED"))],
+                     [prior, prior], [dict(prior, response={})]]
+        for history in histories:
+            with self.subTest(history=history):
+                history_path.write_text(role_review.canonical(history))
+                with self.assertRaises(role_review.Invalid):
+                    role_review.issued_request(self.work, plan, "kiro-fable")
+        history_path.unlink()
+        with self.assertRaises(role_review.Invalid):
+            role_review.issued_request(self.work, plan, "kiro-fable")
+        history_path.write_text(role_review.canonical([prior]))
+        self.assertEqual(role_review.issued_request(self.work, plan, "kiro-fable"), receipt)
+
+    def test_current_correction_requires_rejection_and_fresh_nonce(self):
+        self.prepare(patch("infra/lib/stack.ts"))
+        for mode in ("schema-contract-v1", "schema-diagnostic-v2"):
+            with self.subTest(mode=mode), self.assertRaises(role_review.Invalid):
+                role_review.issue_request(self.work, "kiro-fable", mode)
+        prior = self.schema_rejection()
+        with mock_patch.object(role_review.secrets, "token_hex", return_value=prior["invocation_nonce"]):
+            with self.assertRaises(role_review.Invalid):
+                role_review.issue_request(self.work, "kiro-fable", "schema-diagnostic-v2")
+        self.assertEqual(self.read("slot/kiro-fable-result.json"), prior)
+
+    def test_current_correction_rejects_overflow_before_archiving(self):
+        self.prepare(patch("infra/lib/stack.ts"))
+        prior = self.schema_rejection()
+        with mock_patch.object(role_review, "MAX_REQUEST_BYTES", 64):
+            with self.assertRaisesRegex(role_review.Invalid, "output_byte_limit"):
+                role_review.issue_request(self.work, "kiro-fable", "schema-diagnostic-v2")
+        self.assertEqual(self.read("slot/kiro-fable-result.json"), prior)
+        self.assertFalse((self.work / "slot/kiro-fable-attempts.json").exists())
+
+    def test_feedback_renderer_rejects_extra_or_unsafe_projection(self):
+        good = {"reason": "ASSIGNED_PATH_REQUIRED", "pointer": "/findings/0/path"}
+        for feedback in (None, dict(good, phase="PRE_SCRUB"), dict(good, pointer="/secret"),
+                         dict(good, reason="canary"), dict(good, pointer="/findings/12345678/path")):
+            with self.subTest(feedback=feedback), self.assertRaises(role_review.Invalid):
+                role_review.corrected_prompt("prepared", "kiro-fable", "schema-diagnostic-v2",
+                                             ["infra/lib/stack.ts"], feedback)
+
+    def test_ordered_correction_history_rejects_reordering_and_modification(self):
+        plan = self.prepare(patch("infra/lib/stack.ts"))
+        first = self.schema_rejection()
+        role_review.issue_request(self.work, "kiro-fable", "schema-diagnostic-v2")
+        second = self.schema_rejection()
+        role_review.issue_request(self.work, "kiro-fable", "schema-diagnostic-v2")
+        path = self.work / "slot/kiro-fable-attempts.json"
+        self.assertEqual(self.read("slot/kiro-fable-attempts.json"), [first, second])
+        for history in ([second, first], [second], [first], [first, dict(second, model="wrong")]):
+            with self.subTest(history=history):
+                path.write_text(role_review.canonical(history))
+                with self.assertRaises(role_review.Invalid):
+                    role_review.issued_request(self.work, plan, "kiro-fable")
+
+    def test_current_requests_preserve_crlf_and_lone_cr_prepared_bytes(self):
+        original_work = self.work
+        for case, ending, mixed in (("crlf", "\r\n", False), ("cr", "\r", False),
+                                   ("mixed", "\r\n", True)):
+            with self.subTest(case=case):
+                self.work = original_work / case
+                plan = self.prepare(patch("infra/lib/stack.ts"))
+                # Pin deliberately non-LF prepared bytes to the same trusted plan.
+                for tag, role in plan["roles"].items():
+                    if role["required"]:
+                        prompt_path, diff_path = (self.work / f"roles/{tag}.txt",
+                                                  self.work / f"roles/{tag}.diff")
+                        body, raw = prompt_path.read_bytes(), diff_path.read_bytes()
+                        prompt_path.write_bytes(body.replace(b"\n", ending.encode(), 1) if mixed
+                                                else body.replace(b"\n", ending.encode()))
+                        if mixed:
+                            boundary = raw.index(b"@@")
+                            raw = raw[:boundary] + raw[boundary:].replace(b"\n", ending.encode())
+                        else:
+                            raw = raw.replace(b"\n", ending.encode())
+                        diff_path.write_bytes(raw)
+                raw = (self.work / "roles/kiro-fable.diff").read_bytes()
+                plan["diff_sha256"], plan["diff_bytes"] = role_review.digest(raw), len(raw)
+                for tag, role in plan["roles"].items():
+                    if role["required"]:
+                        role["request_digest"] = role_review.request_digest(plan, tag, role,
+                            (self.work / f"roles/{tag}.txt").read_bytes(),
+                            (self.work / f"roles/{tag}.diff").read_bytes())
+                plan["plan_digest"] = role_review.digest({k: v for k, v in plan.items()
+                                                        if k != "plan_digest"})
+                (self.work / "role-plan.json").write_text(role_review.canonical(plan))
+                role_review.load_plan(self.work)
+                prepared = (self.work / "roles/kiro-fable.txt").read_bytes().decode("utf-8")
+                nonce, prompt, payload = role_review.issue_request(self.work, "kiro-fable")
+                self.assertTrue(prompt.startswith(prepared))
+                self.assertEqual(payload, f"BEGIN DIFF {nonce}\n" + raw.decode("utf-8")
+                                 + f"\nEND DIFF {nonce}\n")
+                role_review.issued_request(self.work, plan, "kiro-fable")
+                self.schema_rejection()
+                nonce, prompt, payload = role_review.issue_request(self.work, "kiro-fable",
+                                                                   "schema-diagnostic-v2")
+                self.assertTrue(prompt.startswith(prepared))
+                self.assertEqual(payload, f"BEGIN DIFF {nonce}\n" + raw.decode("utf-8")
+                                 + f"\nEND DIFF {nonce}\n")
+                receipt = role_review.issued_request(self.work, plan, "kiro-fable")
+                for name, value in (("prompt", prompt), ("input", payload)):
+                    path = self.work / f"requests/kiro-fable.{name}"
+                    path.write_bytes(value.replace(ending, "\n").encode())
+                    with self.assertRaises(role_review.Invalid):
+                        role_review.issued_request(self.work, plan, "kiro-fable")
+                    path.write_bytes(value.encode())
+                self.assertEqual(role_review.issued_request(self.work, plan, "kiro-fable"), receipt)
+
+    def test_historical_v1_helpers_keep_original_render_and_digest(self):
+        paths = ["infra/lib/stack.ts"]
+        prompt = role_review.corrected_prompt("prepared", "kiro-fable", "schema-contract-v1", paths)
+        self.assertEqual(prompt, "prepared" + role_review.SCHEMA_REMINDER
+                         + role_review.member_path_contract(paths))
+        nonce, prepared, prompt_hash = "a" * 32, "b" * 64, "c" * 64
+        self.assertEqual(role_review.invocation_digest(prepared, nonce, "schema-contract-v1", prompt_hash),
+                         role_review.digest({"prepared_request_digest": prepared,
+                         "invocation_nonce": nonce, "correction_mode": "schema-contract-v1",
+                         "prompt_sha256": prompt_hash}))
+        self.assertEqual(role_review.invocation_digest(prepared, nonce), role_review.digest({
+                         "prepared_request_digest": prepared, "invocation_nonce": nonce}))
+        with self.assertRaises(role_review.Invalid):
+            role_review.invocation_digest(prepared, nonce, "schema-diagnostic-v2", prompt_hash)
+        with self.assertRaises(role_review.Invalid):
+            role_review.invocation_digest(prepared, nonce, "schema-contract-v1", prompt_hash, "d" * 64)
+
+    def test_current_non_schema_reissue_keeps_original_contract(self):
+        plan = self.prepare(patch("infra/lib/stack.ts"))
+        tag = "kiro-fable"
+        prior = self.record(tag, raw="", rc=7, expected=2)
+        nonce, prompt, _ = role_review.issue_request(self.work, tag)
+        receipt = role_review.issued_request(self.work, plan, tag)
+        self.assertNotIn("correction_mode", receipt)
+        self.assertNotIn("validation_feedback", receipt)
+        self.assertNotIn("source_result_sha256", receipt)
+        self.assertNotIn("Validated rejection feedback:", prompt)
+        self.assertEqual(receipt["request_digest"], role_review.invocation_digest(
+                         plan["roles"][tag]["request_digest"], nonce))
+        self.assertEqual(self.read("slot/kiro-fable-attempts.json"), [prior])
+        for mode in ("schema-contract-v1", "schema-diagnostic-v2"):
+            with self.assertRaises(role_review.Invalid):
+                role_review.issue_request(self.work, tag, mode)
 
     def test_shared_pipeline_revalidates_after_real_structured_scrub(self):
         plan = self.prepare()

@@ -19,7 +19,7 @@ import tempfile
 import time
 from types import SimpleNamespace
 
-from role_review import diagnostic_failure, issue_request, issued_request, load_plan, digest, Invalid, MAX_REQUEST_BYTES, MAX_OUTPUT_BYTES, output_bytes, text_file, strict_json, canonical, strip_controls, accepted_response, record, SCHEMA_CODES, SCHEMA_CORRECTION
+from role_review import diagnostic_failure, issue_request, issued_request, load_plan, digest, Invalid, MAX_REQUEST_BYTES, MAX_OUTPUT_BYTES, output_bytes, text_file, strict_json, canonical, strip_controls, accepted_response, record, SCHEMA_CODES, CURRENT_SCHEMA_CORRECTION
 
 
 DIRECTORY = Path(__file__).resolve().parent
@@ -223,10 +223,19 @@ def run(work, tag, kiro_startup=None):
                     deadline = time.monotonic() + attempts * timeout
                     correction_mode = None
                     for _ in range(attempts):
-                        nonce, framed_prompt, payload = (
-                            issue_request(work, tag) if correction_mode is None
-                            else issue_request(work, tag, correction_mode)
-                        )
+                        try:
+                            nonce, framed_prompt, payload = (
+                                issue_request(work, tag) if correction_mode is None
+                                else issue_request(work, tag, correction_mode)
+                            )
+                        except Invalid as rejection:
+                            if str(rejection) != "output_byte_limit" or not rejection_recorded:
+                                raise
+                            # The issuer keeps the erased rejection intact on overflow.
+                            # Retain the terminal condition without duplicating its record.
+                            (slot / f"role-{tag}-terminal.flag").write_text("output_byte_limit\n")
+                            code, output, error = 1, "", "output_byte_limit"
+                            break
                         rejection_recorded = False
                         verify_kiro_startup(startup, work, plan, tag, nonce)
                         command[2] = framed_prompt + "\n" + payload
@@ -288,7 +297,7 @@ def run(work, tag, kiro_startup=None):
                                         or saved.get("validation_diagnostic") != rejection.diagnostic):
                                     raise RuntimeError("Schema rejection recording failed")
                                 rejection_recorded = True
-                                correction_mode = SCHEMA_CORRECTION
+                                correction_mode = CURRENT_SCHEMA_CORRECTION
                                 output, error = "", ""
                             else:
                                 kiro_accepted = True
