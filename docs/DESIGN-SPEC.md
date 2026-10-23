@@ -185,7 +185,8 @@ AuthProvider completes initial profile bootstrap before mounting page content.
 Transient failures get three bounded backoff attempts and explicit retry/logout.
 Only a missing bootstrap route may fall back to the older authenticated meeting
 initializer; new project invitations stay disabled until server capabilities are
-available. Subsequent grant pages and verification refresh do not unmount active
+available; disabled invitations alone show no top banner, which appears only for
+pending grants, retries or a project continuation. Subsequent grant pages and verification refresh do not unmount active
 recordings/forms: membership revisions refresh affected lists after success.
 Project/account discovery hints remain identity-bound and are authorized on the
 server. Project UUID hints persist across reloads in the current browser tab,
