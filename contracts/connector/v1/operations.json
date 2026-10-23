@@ -10,6 +10,8 @@
     ["api.navigationCatalog.accounts", "ttobak-api-bridge", ["read"], true, "GET", "/api/navigation/accounts"],
     ["api.navigationCatalog.projects", "ttobak-api-bridge", ["read"], true, "GET", "/api/navigation/projects"],
     ["api.documentCatalog.get", "ttobak-api-bridge", ["read"], true, "GET", "/api/document-catalog"],
+    ["api.meetingCatalog.get", "ttobak-api-bridge", ["read"], true, "GET", "/api/meeting-catalog"],
+    ["api.vaultReading.get", "ttobak-api-bridge", ["read"], true, "GET", "/api/vault/reading"],
     ["api.kb.readFiles", "ttobak-api-bridge", ["read"], true, "GET", "/api/kb/files/reading"],
     ["api.account.listAccounts", "ttobak-api-bridge", ["read"], true, "GET", "/api/accounts"],
     ["api.account.createAccount", "ttobak-api-bridge", ["read", "write"], true, "POST", "/api/accounts"],

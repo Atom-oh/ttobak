@@ -10,6 +10,7 @@ import type { ApiRequestOptions } from './api.js';
 export interface VerifiedConnectorIdentity {
   readonly subject: string;
   readonly clientId: string;
+  readonly audience: string;
   readonly scopes: readonly string[];
   readonly expiresAt: number;
 }
@@ -22,7 +23,7 @@ interface Dependencies {
 }
 const reads = new Set(['api.reading.get', 'api.documentReading.get', 'api.accountReading.get',
   'api.projectReading.get', 'api.navigationCatalog.accounts', 'api.navigationCatalog.projects',
-  'api.documentCatalog.get', 'api.kb.readFiles']);
+  'api.documentCatalog.get', 'api.kb.readFiles', 'api.meetingCatalog.get', 'api.vaultReading.get']);
 const functionARN = /^arn:aws:lambda:[a-z0-9-]+:[0-9]{12}:function:[A-Za-z0-9_-]+(?::[A-Za-z0-9_-]+)?$/;
 
 export function httpOperation(method: string, path: string): string {
@@ -55,6 +56,13 @@ export function privateApiTransport(
       !/^[A-Za-z0-9_-]{1,128}$/.test(identity.subject) || !/^[A-Za-z0-9]{1,128}$/.test(identity.clientId) ||
       !Array.isArray(identity.scopes) || !identity.scopes.every(scope => typeof scope === 'string') ||
       !Number.isSafeInteger(identity.expiresAt)) throw new ConnectorError('INVALID_CONNECTOR_CONFIG');
+  let resource: URL;
+  try { resource = new URL(identity.audience); }
+  catch { throw new ConnectorError('INVALID_CONNECTOR_CONFIG'); }
+  if (resource.protocol !== 'https:' || !resource.hostname || resource.username || resource.password ||
+      resource.pathname !== '/api/mcp' || resource.search || resource.hash || resource.href !== identity.audience) {
+    throw new ConnectorError('INVALID_CONNECTOR_CONFIG');
+  }
   const verified = Object.freeze({ ...identity, scopes: Object.freeze([...identity.scopes]) });
   const clock = dependencies.now ?? (() => Math.floor(Date.now() / 1000));
   return async request => {
@@ -87,7 +95,9 @@ export function privateApiTransport(
       noteKey = body.idempotencyKey;
     }
     const required = requiredCapabilities(operation, destination);
-    if (required.some(cap => !verified.scopes.includes(`ttobak.connector/${cap}`))) {
+    const allowedScopes = ['openid', 'email', 'profile', `${verified.audience}/read`, `${verified.audience}/write`];
+    if (verified.scopes.some(scope => !allowedScopes.includes(scope)) ||
+        required.some(cap => !verified.scopes.includes(`${verified.audience}/${cap}`))) {
       throw new ConnectorError('CAPABILITY_DENIED');
     }
     const args = Buffer.from(JSON.stringify({ method: request.method, path: request.path, body: request.body }));

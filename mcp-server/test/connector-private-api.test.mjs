@@ -11,16 +11,34 @@ const key = 'arn:aws:kms:ap-northeast-2:123456789012:key/12345678-1234-1234-1234
 const apiARN = 'arn:aws:lambda:ap-northeast-2:123456789012:function:api:live';
 const qaARN = 'arn:aws:lambda:ap-northeast-2:123456789012:function:qa';
 const pair = generateKeyPairSync('rsa', { modulusLength: 2048 });
-const identity = { subject: 'alice', clientId: 'client', scopes: ['ttobak.connector/read'], expiresAt: 1800000400 };
+const identity = { subject: 'alice', clientId: 'client', audience: 'https://ttobak.example.com/api/mcp',
+  scopes: ['https://ttobak.example.com/api/mcp/read'], expiresAt: 1800000400 };
 const request = { method: 'GET', path: '/api/meetings/m/reading?section=notes', body: null, maxResponseBytes: 32000 };
 const grants = () => ({ userId: 'alice', clientId: 'client', clientEnabled: true, clientMaximum: ['read'] });
 const audience = 'https://ttobak.example.com/api/mcp';
 const issuer = 'https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_pool';
 const response = value => ({ StatusCode: 200, Payload: Buffer.from(JSON.stringify({ statusCode: 200, body: JSON.stringify(value) })) });
 
+test('private scopes bind the configured resource before grant lookup or signing', async () => {
+  const dependencies = { kms: {}, lambda: {}, resolve: async () => { throw new Error('unexpected grant lookup'); } };
+  for (const scopes of [
+    ['ttobak.connector/read'], ['https://foreign.example/api/mcp/read'],
+    [audience + '/read', 'ttobak.connector/write'],
+    [audience + '/read', 'https://foreign.example/api/mcp/write'],
+  ]) {
+    const transport = privateApiTransport({ ...identity, scopes }, key, apiARN, qaARN, dependencies);
+    await assert.rejects(transport(request), /CAPABILITY_DENIED/);
+  }
+  for (const resource of [undefined, '', 'http://example.com/api/mcp',
+    audience + '?other=1', 'https://example.com/other']) {
+    assert.throws(() => privateApiTransport({ ...identity, audience: resource },
+      key, apiARN, qaARN, dependencies), /INVALID_CONNECTOR_CONFIG/);
+  }
+});
+
 function fixture(input = request, overrides = {}) {
   const qa = input.method === 'POST';
-  const operation = qa ? 'qa.readonlyAsk' : 'api.reading.get';
+  const operation = qa ? 'qa.readonlyAsk' : httpOperation(input.method, input.path.split('?')[0]);
   const destination = qa ? 'ttobak-qa-bridge' : 'ttobak-api-bridge';
   const args = Buffer.from(JSON.stringify({ method: input.method, path: input.path, body: input.body }));
   const raw = serializeDelegationPayload({
@@ -63,7 +81,10 @@ function fixture(input = request, overrides = {}) {
 }
 
 test('real RSA delegation binds API and read-only QA to exact bytes without forwarding a bearer', async () => {
-  for (const input of [request, { method: 'POST', path: '/api/qa/readonly-ask',
+  for (const input of [request,
+    { ...request, path: '/api/meeting-catalog?tab=shared&pageSize=17' },
+    { ...request, path: '/api/vault/reading?section=manifest&pageSize=17' },
+    { method: 'POST', path: '/api/qa/readonly-ask',
     body: { question: '첨부문서 내용은?', meetingId: 'm' }, maxResponseBytes: 32000 }]) {
     const f = fixture(input);
     assert.deepEqual(await f.transport(input), { content: '검증된 본문 ✅' });
@@ -166,7 +187,7 @@ test('API private calls never request bearer credentials and default-off rollbac
 
 const noteRequest = { method: 'POST', path: '/api/documents', maxResponseBytes: 32000,
   body: { title: '노트', markdown: '검증한 내용', docType: 'note', idempotencyKey: 'save-this-note' } };
-const writeIdentity = { ...identity, scopes: ['ttobak.connector/read', 'ttobak.connector/write'] };
+const writeIdentity = { ...identity, scopes: ['https://ttobak.example.com/api/mcp/read', 'https://ttobak.example.com/api/mcp/write'] };
 function writeGrants() {
   return { ...grants(), clientMaximum: ['read', 'write'],
     approval: { userId: 'alice', clientId: 'client', generation: 7,
