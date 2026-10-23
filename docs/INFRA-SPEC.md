@@ -92,9 +92,9 @@ tokens until it is configured with the new client ID after both deploy. Bootstra
 with each app's exact callback and sign-out URLs before deploying AuthStack;
 their absence fails deployment. Companion apps authorize by reading TTOBAK
 account membership themselves; TTOBAK stacks grant them no table access. The
-AWS Billing Insight companion stack grants its own redeemer `dynamodb:DeleteItem`
-on `ttobak-main`, limited by `dynamodb:LeadingKeys` to `HANDOFF#*`, to consume
-the API's single-use hand-off rows (see API-SPEC "Billing Insight hand-off").
+AWS Billing Insight companion stack grants its own redeemer `dynamodb:GetItem`
+and `dynamodb:DeleteItem` on `ttobak-main`, limited by `dynamodb:LeadingKeys` to
+`HANDOFF#*`, to show and then consume the API's single-use hand-off rows (see API-SPEC "Billing Insight hand-off").
 
 The pre-signup trigger reads the configured domain allowlist. PostAuthentication
 writes a separate USER#/LOGIN item for lastLoginAt, with a short abort timeout,

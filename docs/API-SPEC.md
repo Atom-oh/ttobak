@@ -183,11 +183,15 @@ The code is 32 `crypto/rand` bytes in unpadded base64url (43 characters). The AP
 conditionally puts (`attribute_not_exists(PK)`) one `ttobak-main` row:
 `PK = HANDOFF#<lowercase hex sha256(code)>`, `SK = HANDOFF`, `target =
 "billing-insight"`, `sub`, `email` and `pendingShareExpiresAt = now + 60` seconds.
-Only the hash is stored and the row has no GSI keys. The companion redeems the
-code by deleting that row (condition `target = billing-insight`, returning the
-old item), rejects expired rows in code, and starts its own session only when the
-sub belongs to a registered account. Redemption is therefore single use and the
-code is valid for at most 60 seconds. The connector inventory marks the operation
+Only the hash is stored and the row has no GSI keys. Opening the link does not
+sign anyone in by itself (a code minted for one account could be sent to someone
+else): the companion first reads the row and shows whose account it is, and the
+user confirms with a same-origin POST. Only then does it redeem the code by
+deleting that row (condition `target = billing-insight`, returning the old item),
+reject expired rows in code, and start its own session when the sub belongs to a
+registered account. A browser already signed in to the companion as the same sub
+skips the confirmation. Redemption is therefore single use and the code is valid
+for at most 60 seconds, confirmation included. The connector inventory marks the operation
 write-capable and non-delegable, so connector tokens cannot mint codes. The web
 client validates the returned URL shape before navigating (`src/lib/billingInsight.ts`).
 

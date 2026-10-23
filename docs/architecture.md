@@ -108,7 +108,8 @@ unconsumed project invitation rows expire through their existing TTL field.
 The AWS Billing Insight companion is a separate stack and origin. A signed-in
 user's hand-off request makes the Go API write a hashed, 60-second `HANDOFF#`
 row bound to the verified sub and email and return the companion URL with the
-plaintext code. The companion deletes that row to redeem it and authorizes from
+plaintext code. The companion shows whose account the code is for, deletes the
+row to redeem it once the user confirms, and authorizes from
 TTOBAK account membership itself; TTOBAK grants it no table access (API-SPEC).
 
 ## Data paths
