@@ -15,12 +15,18 @@ The shared `kiro-fable` tag identifies the Opus slot. Kiro catalog aliases diffe
 from Bedrock inference-profile IDs. These are configured model identities, not
 attestation of the provider's internal routing or weights.
 
+Kiro slots are disabled unless `ROLE_REVIEW_KIRO=1`; the trusted workflow does
+not set it because Kiro responses repeatedly exhausted the shared slot budget.
+While disabled, routing records both Kiro slots as NOT_APPLICABLE
+(`kiro_disabled`), Codex also covers deployment, contracts, lifecycle and
+recovery, and Claude also covers AWS, IAM, network and service constraints.
+
 ## Routing and evidence
 
 Trusted code determines which roles apply. Codex and Claude review the full change
 boundary, retaining independent OpenAI/Anthropic checks for sensitive changes.
-Kiro roles run for applicable AWS and operational changes, including relevant
-documentation. Unfamiliar paths route conservatively. Only deterministic routing
+When enabled, Kiro roles run for applicable AWS and operational changes,
+including relevant documentation. Unfamiliar paths route conservatively. Only deterministic routing
 may record NOT_APPLICABLE; provider failures never do.
 
 `prepare_roles.py` verifies the pinned base checkout, resolves the immutable merge

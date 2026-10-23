@@ -2,6 +2,7 @@
 
 import unittest
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -12,6 +13,13 @@ import role_review
 import synthesize_roles
 import test_role_review
 import test_synthesize_roles
+
+
+def setUpModule():
+    # These cases exercise the optional Kiro slots, which CI leaves disabled.
+    environment = unittest.mock.patch.dict(os.environ, ROLE_REVIEW_KIRO="1")
+    environment.start()
+    unittest.addModuleCleanup(environment.stop)
 
 
 class ReviewFormatTests(unittest.TestCase):

@@ -6,6 +6,7 @@ import threading
 from types import SimpleNamespace
 from unittest.mock import patch as mock_patch
 import json
+import os
 import re
 import hashlib
 from pathlib import Path
@@ -68,6 +69,13 @@ def fenced_example(text):
     """Represent a source example without changing its bytes inside the fence."""
     fence = "`" * (max([2] + [len(run) for run in re.findall(r"`+", text)]) + 1)
     return fence + "text\n" + text + ("" if text.endswith("\n") else "\n") + fence
+
+
+def setUpModule():
+    # These cases exercise the optional Kiro slots, which CI leaves disabled.
+    environment = unittest.mock.patch.dict(os.environ, ROLE_REVIEW_KIRO="1")
+    environment.start()
+    unittest.addModuleCleanup(environment.stop)
 
 
 class RoleReviewTests(unittest.TestCase):
@@ -653,6 +661,21 @@ VERDICT: PASS
             with self.subTest(path=path):
                 plan = self.prepare(patch(path, "old policy", "ECS IAM role and recovery"))
                 self.assertTrue(all(role["required"] for role in plan["roles"].values()))
+
+    def test_disabled_kiro_moves_its_responsibilities_to_the_independent_roles(self):
+        with mock_patch.dict(os.environ):
+            os.environ.pop("ROLE_REVIEW_KIRO", None)
+            plan = self.prepare(patch("infra/network.tf", "old", "ECS IAM role and recovery"))
+        self.assertEqual({tag for tag, role in plan["roles"].items() if role["required"]},
+                         {"codex", "claude-self"})
+        for tag in ("kiro-fable", "kiro-sol"):
+            self.assertEqual(plan["roles"][tag]["reason"], "kiro_disabled")
+            self.assertFalse((self.work / f"roles/{tag}.txt").exists())
+        codex = (self.work / "roles/codex.txt").read_text()
+        claude = (self.work / "roles/claude-self.txt").read_text()
+        self.assertIn("also deployment, contracts, lifecycle and recovery", codex)
+        self.assertIn("also AWS, IAM, network and service constraints", claude)
+        self.assertEqual(self.finish()["mode"], "deterministic")
 
     def test_aws_semantics_in_frontend_and_unknown_paths_are_conservative(self):
         for raw in (
