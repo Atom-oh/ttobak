@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -68,29 +69,67 @@ type s3GetDeleter interface {
 
 // InsightsService handles document listing and insights for crawled content.
 type InsightsService struct {
-	repo         crawlerRepo
-	s3           s3GetDeleter
-	kbBucketName string
+	repo               crawlerRepo
+	news               newsStateReader
+	s3                 s3GetDeleter
+	kbBucketName       string
+	artifactBucketName string
 }
 
 // NewInsightsService creates a new InsightsService.
-func NewInsightsService(repo *repository.CrawlerRepository, s3Client *s3.Client, kbBucketName string) *InsightsService {
-	return &InsightsService{repo: repo, s3: s3Client, kbBucketName: kbBucketName}
+func NewInsightsService(repo *repository.CrawlerRepository, s3Client *s3.Client, kbBucketName, artifactBucketName string) *InsightsService {
+	return &InsightsService{repo: repo, news: repo, s3: s3Client, kbBucketName: kbBucketName, artifactBucketName: artifactBucketName}
 }
 
 // GetDocumentDetail reads metadata from DynamoDB and full content from S3.
 func (s *InsightsService) GetDocumentDetail(ctx context.Context, sourceID, docHash string) (*model.InsightDetailResponse, error) {
+	if (sourceID != "__tech__" && !validNewsSourceID(sourceID)) || !validNewsSourceID(docHash) {
+		return nil, ErrNotFound
+	}
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
 	meta, err := s.repo.GetDocument(ctx, sourceID, docHash)
+	if errors.Is(err, repository.ErrInvalidDocument) {
+		return nil, ErrNotFound
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get document metadata: %w", err)
+	}
+	if meta == nil {
+		return nil, ErrNotFound
+	}
+	if sourceID == "__tech__" && meta.Type != "tech" {
+		return nil, ErrNotFound
+	}
+	if meta.Type == "news" || meta.QualityStatus != "" || strings.HasPrefix(meta.S3Key, "news/") {
+		keys := newsKeys(sourceID, docHash)
+		rows, err := s.newsRows(ctx, keys)
+		if err != nil {
+			return nil, err
+		}
+		row := rows[keys[0]]
+		if len(row) == 0 {
+			return nil, ErrNotFound
+		}
+		if isVersionedNews(row) {
+			return s.publishedNewsDetail(ctx, sourceID, docHash)
+		}
+		current, err := decodeNewsDocument(row, sourceID, docHash)
+		if err != nil {
+			return nil, err
+		}
+		meta = &current
 	}
 
 	// Read content from S3 — prefer stored s3Key from metadata
 	var s3Key string
-	if meta != nil && meta.S3Key != "" {
+	if meta.S3Key != "" {
 		s3Key = meta.S3Key
 	} else {
 		s3Key = fmt.Sprintf("shared/news/%s/%s.md", sourceID, docHash)
+	}
+	if !validLegacyInsightKey(s3Key, sourceID, docHash) {
+		return nil, ErrNotFound
 	}
 
 	result, err := s.s3.GetObject(ctx, &s3.GetObjectInput{
@@ -119,22 +158,20 @@ func (s *InsightsService) GetDocumentDetail(ctx context.Context, sourceID, docHa
 			return nil, fmt.Errorf("document not found: %w", err)
 		}
 	}
+	if result == nil || result.Body == nil {
+		return nil, ErrNotFound
+	}
 	defer result.Body.Close()
 
-	body, err := io.ReadAll(result.Body)
+	body, err := io.ReadAll(io.LimitReader(result.Body, 2*1024*1024+1))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read content: %w", err)
 	}
-
-	resp := &model.InsightDetailResponse{Content: string(body)}
-	if meta != nil {
-		resp.CrawledDocument = *meta
-	} else {
-		resp.CrawledDocument = model.CrawledDocument{
-			DocHash:  docHash,
-			SourceID: sourceID,
-		}
+	if len(body) > 2*1024*1024 {
+		return nil, ErrNotFound
 	}
+
+	resp := &model.InsightDetailResponse{Content: string(body), CrawledDocument: *meta}
 	return resp, nil
 }
 
@@ -184,6 +221,11 @@ func (s *InsightsService) DeleteDocument(ctx context.Context, userID string, isA
 	if doc == nil {
 		return ErrNotFound
 	}
+	if doc.Type == "news" || doc.QualityStatus != "" || strings.HasPrefix(doc.S3Key, "news/") {
+		if handled, err := s.deletePublishedNews(ctx, userID, isAdmin, sourceID, docHash); handled {
+			return err
+		}
+	}
 
 	// S3 delete FIRST: if this fails, the DynamoDB metadata is still intact
 	// and the delete is safely retryable. Deleting DynamoDB first would risk
@@ -230,6 +272,8 @@ func (s *InsightsService) DeleteDocument(ctx context.Context, userID string, isA
 // ListInsights retrieves crawled documents with optional filtering by type, source, service, tags, and sort.
 // sortBy: "newest" (default), "oldest", "title"
 func (s *InsightsService) ListInsights(ctx context.Context, docType, source, service string, tags []string, sortBy string, page, limit int) (*model.InsightsResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
 	if page < 1 {
 		page = 1
 	}
@@ -273,6 +317,14 @@ func (s *InsightsService) listBySource(ctx context.Context, source, docType, ser
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to list documents for source %s: %w", source, err)
 	}
+	for i := range docs {
+		docs[i].SourceID = source
+	}
+	docs, err = s.currentNewsList(ctx, docs)
+	if err != nil {
+		return nil, 0, err
+	}
+	count = len(docs)
 
 	if service != "" {
 		docs = filterByService(docs, service)
@@ -315,7 +367,11 @@ func (s *InsightsService) scanAll(ctx context.Context, docType string, tags []st
 		scanCache.set(cacheKey, allDocs, total)
 	}
 
-	docs := allDocs
+	docs, err := s.currentNewsList(ctx, allDocs)
+	if err != nil {
+		return nil, 0, err
+	}
+	total = len(docs)
 	if len(tags) > 0 {
 		docs = filterByTags(docs, tags)
 		total = len(docs)

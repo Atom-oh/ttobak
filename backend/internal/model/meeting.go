@@ -239,19 +239,20 @@ type CrawlerSubscription struct {
 // CrawledDocument represents a document fetched by the crawler
 // PK: CRAWLER#{sourceId}, SK: DOC#{docHash}
 type CrawledDocument struct {
-	DocHash     string   `dynamodbav:"docHash,omitempty" json:"docHash"`
-	SourceID    string   `dynamodbav:"-" json:"sourceId,omitempty"`
-	Type        string   `dynamodbav:"type" json:"type"`
-	Title       string   `dynamodbav:"title" json:"title"`
-	URL         string   `dynamodbav:"url" json:"url"`
-	Source      string   `dynamodbav:"source,omitempty" json:"source"`
-	Summary     string   `dynamodbav:"summary,omitempty" json:"summary"`
-	AWSServices []string `dynamodbav:"awsServices,omitempty" json:"awsServices,omitempty"`
-	Tags        []string `dynamodbav:"tags,omitempty" json:"tags,omitempty"`
-	S3Key       string   `dynamodbav:"s3Key,omitempty" json:"s3Key"`
-	CrawledAt   int64    `dynamodbav:"crawledAt" json:"crawledAt"`
-	InKB        bool     `dynamodbav:"inKB,omitempty" json:"inKB"`
-	PubDate     string   `dynamodbav:"pubDate,omitempty" json:"pubDate,omitempty"`
+	DocHash       string   `dynamodbav:"docHash,omitempty" json:"docHash"`
+	SourceID      string   `dynamodbav:"-" json:"sourceId,omitempty"`
+	Type          string   `dynamodbav:"type" json:"type"`
+	Title         string   `dynamodbav:"title" json:"title"`
+	URL           string   `dynamodbav:"url" json:"url"`
+	Source        string   `dynamodbav:"source,omitempty" json:"source"`
+	Summary       string   `dynamodbav:"summary,omitempty" json:"summary"`
+	AWSServices   []string `dynamodbav:"awsServices,omitempty" json:"awsServices,omitempty"`
+	Tags          []string `dynamodbav:"tags,omitempty" json:"tags,omitempty"`
+	S3Key         string   `dynamodbav:"s3Key,omitempty" json:"s3Key"`
+	CrawledAt     int64    `dynamodbav:"crawledAt" json:"crawledAt"`
+	InKB          bool     `dynamodbav:"inKB,omitempty" json:"inKB"`
+	PubDate       string   `dynamodbav:"pubDate,omitempty" json:"pubDate,omitempty"`
+	QualityStatus string   `dynamodbav:"qualityStatus,omitempty" json:"qualityStatus,omitempty"`
 }
 
 // CrawlHistory represents a crawl execution history entry

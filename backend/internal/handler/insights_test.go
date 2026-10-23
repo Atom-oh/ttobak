@@ -7,10 +7,39 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/go-chi/chi/v5"
 	"github.com/ttobak/backend/internal/model"
+	"github.com/ttobak/backend/internal/repository"
 	"github.com/ttobak/backend/internal/service"
 )
+
+func (m *mockCrawlerRepo) ReadNewsItems(_ context.Context, keys []repository.NewsReadKey) (map[repository.NewsReadKey]map[string]types.AttributeValue, error) {
+	rows := map[repository.NewsReadKey]map[string]types.AttributeValue{}
+	for _, key := range keys {
+		if key.SortKey == "CONFIG" {
+			if source := m.sources[key.SourceID]; source != nil {
+				row, err := attributevalue.MarshalMap(source)
+				if err != nil {
+					return nil, err
+				}
+				rows[key] = row
+			}
+			continue
+		}
+		for _, doc := range m.allDocuments {
+			if doc.SourceID == key.SourceID && "DOC#"+doc.DocHash == key.SortKey {
+				row, err := attributevalue.MarshalMap(doc)
+				if err != nil {
+					return nil, err
+				}
+				rows[key] = row
+			}
+		}
+	}
+	return rows, nil
+}
 
 // mockKBSyncer records whether DeleteDocument's post-delete best-effort
 // KB sync was triggered.
@@ -63,10 +92,11 @@ func TestDeleteDocument_Forbidden_NoKBSync(t *testing.T) {
 func TestListInsights_200_News(t *testing.T) {
 	repo := newMockCrawlerRepo()
 	repo.allDocuments = []model.CrawledDocument{
-		{DocHash: "d1", Type: "news", Title: "Breaking news", Source: "reuters"},
-		{DocHash: "d2", Type: "news", Title: "Market update", Source: "reuters"},
+		{DocHash: "d1", SourceID: "reuters", Type: "news", Title: "Breaking news", Source: "reuters"},
+		{DocHash: "d2", SourceID: "reuters", Type: "news", Title: "Market update", Source: "reuters"},
 		{DocHash: "d3", Type: "blog", Title: "Tech blog", Source: "medium"},
 	}
+	repo.sources["reuters"] = &model.CrawlerSource{SourceID: "reuters", Status: "active"}
 
 	router := setupInsightsRouter(repo)
 	req := httptest.NewRequest(http.MethodGet, "/api/insights?type=news", nil)

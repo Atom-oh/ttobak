@@ -272,6 +272,36 @@ class TestNewsStoreTransactions(unittest.TestCase):
         self.finish(status="PUBLISHED", document=document(self.job), reason="")
         self.assertEqual(self.row("DOC#" + self.job.doc_hash)["qualityStatus"], "PUBLISHED")
 
+    def test_deleted_and_unknown_rows_remain_occupied_before_reservation(self):
+        for schema, status in ((1, "DELETED"), (2, "FAILED"), (True, "FAILED"),
+                               ("1", "FAILED"), (1, "PUBLISHED")):
+            with self.subTest(schema=schema, status=status):
+                row = {"PK": self.job.pk, "SK": "DOC#" + self.job.doc_hash,
+                       "schemaVersion": schema, "qualityStatus": status,
+                       "s3Key": "retained-markdown", "artifactKey": "retained-artifact"}
+                self.table.put_item(Item=row)
+                self.assertEqual(self.store.published_hashes(
+                    self.job.source_id, {self.job.doc_hash}), {self.job.doc_hash})
+                with self.assertRaisesRegex(StateRejected, "STATE_CONFLICT"):
+                    self.reserve()
+                self.assertEqual(self.row("DOC#" + self.job.doc_hash), row)
+                self.assertIsNone(self.row(self.job.sk))
+                self.assertIsNone(self.row("NEWSCLAIM#" + self.job.doc_hash))
+
+    def test_deleted_identity_cannot_be_overwritten_after_reservation(self):
+        self.reserve()
+        deleted = {**document(self.job), "PK": self.job.pk,
+                   "SK": "DOC#" + self.job.doc_hash, "qualityStatus": "DELETED",
+                   "attemptToken": "f" * 32, "qualityScore": Decimal("0.9"),
+                   "s3Key": "retained-markdown",
+                   "artifactKey": "retained-artifact"}
+        self.table.put_item(Item=deleted)
+        with self.assertRaisesRegex(StateRejected, "STATE_CONFLICT"):
+            self.finish(status="PUBLISHED", document=document(self.job), reason="")
+        self.assertEqual(self.row("DOC#" + self.job.doc_hash), deleted)
+        self.assertEqual(self.charge(), Decimal("1"))
+        self.assertEqual(self.row(self.job.sk)["state"], "RUNNING")
+
     def test_unknown_or_malformed_publication_marker_prevents_reservation(self):
         for marker in ({"schemaVersion": 2, "qualityStatus": "PUBLISHED"},
                        {"schemaVersion": 2}, {"schemaVersion": "1"},

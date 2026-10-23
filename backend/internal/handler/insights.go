@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/ttobak/backend/internal/middleware"
 	"github.com/ttobak/backend/internal/model"
+	"github.com/ttobak/backend/internal/repository"
 	"github.com/ttobak/backend/internal/service"
 )
 
@@ -127,6 +128,10 @@ func (h *InsightsHandler) DeleteDocument(w http.ResponseWriter, r *http.Request)
 
 	err := h.insightsService.DeleteDocument(ctx, userID, middleware.IsAdmin(ctx), sourceID, docHash)
 	if err != nil {
+		if errors.Is(err, repository.ErrConditionFailed) {
+			writeError(w, http.StatusConflict, model.ErrCodeConflict, "document or source access changed; retry")
+			return
+		}
 		if errors.Is(err, service.ErrForbidden) {
 			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "only the source owner or an admin can delete this document")
 			return
