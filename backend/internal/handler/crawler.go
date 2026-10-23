@@ -3,7 +3,9 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/ttobak/backend/internal/middleware"
@@ -14,6 +16,15 @@ import (
 // CrawlerHandler handles crawler source management requests
 type CrawlerHandler struct {
 	crawlerService *service.CrawlerService
+}
+
+func decodeCrawlerRequest(w http.ResponseWriter, r *http.Request, target any) bool {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 64*1024))
+	if err != nil || !utf8.Valid(body) || json.Unmarshal(body, target) != nil {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid request body")
+		return false
+	}
+	return true
 }
 
 // NewCrawlerHandler creates a new crawler handler
@@ -43,8 +54,7 @@ func (h *CrawlerHandler) AddSource(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.GetUserID(ctx)
 
 	var req model.AddCrawlerSourceRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid request body")
+	if !decodeCrawlerRequest(w, r, &req) {
 		return
 	}
 
@@ -55,6 +65,10 @@ func (h *CrawlerHandler) AddSource(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.crawlerService.AddSource(ctx, userID, &req)
 	if err != nil {
+		if errors.Is(err, service.ErrInvalidInput) {
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "invalid aliases")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "internal error")
 		return
 	}
@@ -74,8 +88,7 @@ func (h *CrawlerHandler) UpdateSource(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req model.UpdateCrawlerSourceRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid request body")
+	if !decodeCrawlerRequest(w, r, &req) {
 		return
 	}
 
@@ -83,6 +96,14 @@ func (h *CrawlerHandler) UpdateSource(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, service.ErrNotFound) {
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Source subscription not found")
+			return
+		}
+		if errors.Is(err, service.ErrForbidden) {
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Only the source owner can remove saved aliases")
+			return
+		}
+		if errors.Is(err, service.ErrInvalidInput) {
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "invalid aliases")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "internal error")

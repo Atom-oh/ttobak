@@ -7,11 +7,125 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 )
+
+const (
+	maxAliases         = 20
+	maxAliasCodePoints = 100
+)
+
+// validateAliases trims, validates, and case-insensitively deduplicates a
+// public alias list before it's persisted -- these convenience limits are
+// enforced server-side (not just in CrawlerSettings.tsx's UI) since aliases
+// feed directly into the news search query text (news_pipeline.py's
+// expand_queries). Returns ErrInvalidInput for any entry that's empty
+// after trimming, exceeds maxAliasCodePoints, contains a control character,
+// or if there are more than maxAliases entries.
+func validateAliases(aliases []string) ([]string, error) {
+	if len(aliases) > maxAliases {
+		return nil, ErrInvalidInput
+	}
+	seen := make(map[string]struct{}, len(aliases))
+	result := make([]string, 0, len(aliases))
+	for _, raw := range aliases {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" || !utf8.ValidString(trimmed) {
+			return nil, ErrInvalidInput
+		}
+		if utf8.RuneCountInString(trimmed) > maxAliasCodePoints {
+			return nil, ErrInvalidInput
+		}
+		for _, r := range trimmed {
+			if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+				return nil, ErrInvalidInput
+			}
+		}
+		key := strings.ToLower(trimmed)
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, trimmed)
+	}
+	return result, nil
+}
+
+func combinedAliases(existing, additions []string) ([]string, error) {
+	current, err := validateAliases(existing)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool, len(current))
+	for _, alias := range current {
+		seen[strings.ToLower(alias)] = true
+	}
+	for _, alias := range additions {
+		key := strings.ToLower(alias)
+		if !seen[key] {
+			current = append(current, alias)
+			seen[key] = true
+		}
+	}
+	return validateAliases(current)
+}
+
+// updateSourceAliases merges subscriber additions and owner-authorized removals.
+// Both aliases and current ownership are checked by the conditional write.
+func updateSourceAliases(ctx context.Context, repo crawlerRepo, sourceID, userID string, newAliases, removeAliases []string) error {
+	if len(newAliases) == 0 && len(removeAliases) == 0 {
+		return nil
+	}
+	removals := make(map[string]bool, len(removeAliases))
+	for _, alias := range removeAliases {
+		removals[strings.ToLower(alias)] = true
+	}
+	const maxAliasMergeAttempts = 3
+	for attempt := 1; ; attempt++ {
+		source, err := repo.GetSource(ctx, sourceID)
+		if err != nil {
+			return fmt.Errorf("failed to get source: %w", err)
+		}
+		if source == nil {
+			return ErrNotFound
+		}
+		var requiredOwner *string
+		if len(removals) > 0 {
+			if userID == "" || source.OwnerID != userID {
+				return ErrForbidden
+			}
+			requiredOwner = &userID
+		}
+		retained := make([]string, 0, len(source.Aliases))
+		for _, alias := range source.Aliases {
+			if !removals[strings.ToLower(strings.TrimSpace(alias))] {
+				retained = append(retained, alias)
+			}
+		}
+		merged, err := combinedAliases(retained, newAliases)
+		if err != nil {
+			return err
+		}
+		// Even an apparent no-op must validate the snapshot: GetSource can
+		// return an older replica after a just-committed addition or removal.
+		err = repo.UpdateSourcePartial(ctx, sourceID, source, repository.SourcePartialFields{
+			Aliases: &merged, RequireOwnerID: requiredOwner,
+		})
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, repository.ErrConditionFailed) {
+			return fmt.Errorf("failed to merge aliases: %w", err)
+		}
+		if attempt >= maxAliasMergeAttempts {
+			return fmt.Errorf("failed to merge aliases: aliases field changed concurrently %d times, giving up", maxAliasMergeAttempts)
+		}
+	}
+}
 
 // crawlerRepo defines the repository methods used by CrawlerService and InsightsService.
 type crawlerRepo interface {
@@ -44,6 +158,11 @@ func NewCrawlerService(repo *repository.CrawlerRepository) *CrawlerService {
 // If the source already exists, it adds the user as a subscriber and merges awsServices.
 // If not, it creates a new source with status="idle".
 func (s *CrawlerService) AddSource(ctx context.Context, userID string, req *model.AddCrawlerSourceRequest) (*model.CrawlerSourceResponse, error) {
+	validatedAliases, err := validateAliases(req.Aliases)
+	if err != nil {
+		return nil, err
+	}
+
 	sourceID := normalizeSourceID(req.SourceName)
 
 	// Retry once: a concurrent AddSource for the same not-yet-existing
@@ -71,6 +190,7 @@ func (s *CrawlerService) AddSource(ctx context.Context, userID string, req *mode
 			NewsQueries: req.NewsQueries,
 			NewsSources: req.NewsSources,
 			CustomUrls:  req.CustomUrls,
+			Aliases:     validatedAliases,
 			Schedule:    "daily",
 			Status:      "idle",
 		}
@@ -105,8 +225,8 @@ func (s *CrawlerService) AddSource(ctx context.Context, userID string, req *mode
 	// destructive-delete gate, silently erasing an admin's manual backfill
 	// is the same class of bug, not just a lost subscriber). Replaced with
 	// a partial UpdateItem (UpdateSourcePartial) that only ever touches the
-	// five subscription-merge fields -- structurally incapable of
-	// overwriting ownerId -- guarded by a condition asserting those five
+	// subscription and public-alias fields -- structurally incapable of
+	// overwriting ownerId -- guarded by a condition asserting those
 	// fields are still what this call read, with a bounded retry (re-read,
 	// re-merge, re-attempt) on a concurrent change instead of overwriting it.
 	if !justCreated {
@@ -120,6 +240,15 @@ func (s *CrawlerService) AddSource(ctx context.Context, userID string, req *mode
 			newsQueries := union(source.NewsQueries, req.NewsQueries)
 			newsSources := union(source.NewsSources, req.NewsSources)
 			customUrls := union(source.CustomUrls, req.CustomUrls)
+			aliases := source.Aliases
+			var aliasesField *[]string
+			if len(validatedAliases) > 0 {
+				aliases, err = combinedAliases(source.Aliases, validatedAliases)
+				if err != nil {
+					return nil, err
+				}
+				aliasesField = &aliases
+			}
 
 			err := s.repo.UpdateSourcePartial(ctx, sourceID, source, repository.SourcePartialFields{
 				Subscribers: &subscribers,
@@ -127,6 +256,7 @@ func (s *CrawlerService) AddSource(ctx context.Context, userID string, req *mode
 				NewsQueries: &newsQueries,
 				NewsSources: &newsSources,
 				CustomUrls:  &customUrls,
+				Aliases:     aliasesField,
 			})
 			if err == nil {
 				source.Subscribers = subscribers
@@ -134,6 +264,7 @@ func (s *CrawlerService) AddSource(ctx context.Context, userID string, req *mode
 				source.NewsQueries = newsQueries
 				source.NewsSources = newsSources
 				source.CustomUrls = customUrls
+				source.Aliases = aliases
 				break
 			}
 			if !errors.Is(err, repository.ErrConditionFailed) {
@@ -199,6 +330,15 @@ func (s *CrawlerService) ListSources(ctx context.Context, userID string) (*model
 
 // UpdateSource updates the user's subscription and rebuilds the source's union from all subscribers.
 func (s *CrawlerService) UpdateSource(ctx context.Context, userID, sourceID string, req *model.UpdateCrawlerSourceRequest) error {
+	validatedAliases, err := validateAliases(req.Aliases)
+	if err != nil {
+		return err
+	}
+	validatedRemovals, err := validateAliases(req.RemoveAliases)
+	if err != nil {
+		return err
+	}
+
 	// Update the user's subscription
 	sub, err := s.repo.GetSubscription(ctx, userID, sourceID)
 	if err != nil {
@@ -206,6 +346,12 @@ func (s *CrawlerService) UpdateSource(ctx context.Context, userID, sourceID stri
 	}
 	if sub == nil {
 		return ErrNotFound
+	}
+
+	// Check the combined source limit before changing subscription settings.
+	// Public aliases remain on the source after a contributor unsubscribes.
+	if err := updateSourceAliases(ctx, s.repo, sourceID, userID, validatedAliases, validatedRemovals); err != nil {
+		return err
 	}
 
 	sub.AWSServices = req.AWSServices
