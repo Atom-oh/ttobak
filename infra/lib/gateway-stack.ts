@@ -22,6 +22,7 @@ import { WebSocketOriginVerification, WEBSOCKET_ORIGIN_HEADER, WEBSOCKET_STAGE }
 import { PipelineFailures } from './pipeline-failures';
 import { HttpOrigin } from './http-origin';
 import { connectorCryptoLayer } from './connector-crypto';
+import { billingInsightUrlContext } from './billing-insight';
 
 export const RESEARCH_SFN_NAME = 'ttobak-research-workflow';
 
@@ -208,6 +209,8 @@ export class GatewayStack extends cdk.Stack {
       (props.spaClient ?? props.userPoolClient).userPoolClientId,
     ])]);
 
+    const billingInsightUrl = billingInsightUrlContext(this);
+
     // API Lambda function (Go runtime, arm64)
     this.apiFunction = new lambda.Function(this, 'ApiFunction', {
       functionName: 'ttobak-api',
@@ -260,6 +263,11 @@ export class GatewayStack extends cdk.Stack {
         // comes from fixed-name SSM params (/ttobak/cloudfront/*) at runtime,
         // not env — avoids a FrontendStack→GatewayStack reference.
         MEDIA_BASE_URL: `https://${domainName}/media`,
+        // Optional AWS Billing Insight companion origin for the single-use
+        // POST /api/billing-insight/handoff code. Omitted when unset, which
+        // keeps that route a 404. A context change alters the function
+        // configuration, so currentVersion publishes a new version.
+        ...(billingInsightUrl ? { BILLING_INSIGHT_URL: billingInsightUrl } : {}),
       },
       timeout: cdk.Duration.seconds(30),
       memorySize: 256,

@@ -6,6 +6,7 @@
     ["api.settings.getAllowedDomains", "ttobak-api-bridge", ["read"], false, "GET", "/api/auth/allowed-domains"],
     ["api.document.publicGetDoc", "ttobak-api-bridge", ["read"], false, "GET", "/api/public/docs/{token}"],
     ["api.session.bootstrap", "ttobak-api-bridge", ["read", "write"], true, "POST", "/api/session/bootstrap"],
+    ["api.billingInsightHandoff.create", "ttobak-api-bridge", ["read", "write"], false, "POST", "/api/billing-insight/handoff"],
     ["api.navigationCatalog.accounts", "ttobak-api-bridge", ["read"], true, "GET", "/api/navigation/accounts"],
     ["api.navigationCatalog.projects", "ttobak-api-bridge", ["read"], true, "GET", "/api/navigation/projects"],
     ["api.documentCatalog.get", "ttobak-api-bridge", ["read"], true, "GET", "/api/document-catalog"],

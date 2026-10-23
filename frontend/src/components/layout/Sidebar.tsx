@@ -4,6 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { useTheme } from '@/hooks/useTheme';
+import { BillingInsightButton } from '@/components/layout/BillingInsightButton';
 
 const mainNav = [
   { href: '/', icon: 'video_camera_front', label: 'Meetings' },
@@ -114,6 +115,9 @@ export function Sidebar({ activePath }: { activePath: string }) {
             </span>
             <span className="text-xs font-medium">{isDark ? 'Light Mode' : 'Dark Mode'}</span>
           </button>
+
+          {/* Billing Insight companion hand-off (runtime config opt-in) */}
+          <BillingInsightButton variant="sidebar" />
 
           {/* User Profile */}
           {user && (
