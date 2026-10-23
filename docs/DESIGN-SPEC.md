@@ -47,7 +47,7 @@ use CSS variants.
 | Area | Current responsibilities / code pointers |
 |---|---|
 | Authentication | auth/LoginForm, ForgotPasswordForm, AuthProvider: login, NEW_PASSWORD_REQUIRED, reset; no self-signup |
-| App layout | layout/Sidebar, MobileNav, DesktopHeader, AppLayout: responsive navigation, theme and active route |
+| App layout | layout/Sidebar, MobileNav, DesktopHeader, AppLayout: responsive navigation, theme and active route; layout/BillingInsightButton (sidebar and mobile profile menu, only with runtime `billingInsight: true`) opens a blank tab synchronously, then loads the validated hand-off URL, closing it and showing an inline alert on failure |
 | Meeting list | MeetingList: owned/shared/team streams, search, account selection and opaque pagination |
 | Recording | RecordButton, app/record/page, useRecordingSession, usePostRecording, PostRecordingBanner |
 | Meeting detail | MeetingDetailClient, meeting/ components: note, actions, transcript, attachments, account/project links |
