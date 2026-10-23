@@ -15,12 +15,18 @@ The shared `kiro-fable` tag identifies the Opus slot. Kiro catalog aliases diffe
 from Bedrock inference-profile IDs. These are configured model identities, not
 attestation of the provider's internal routing or weights.
 
+Kiro slots are disabled unless `ROLE_REVIEW_KIRO=1`; the trusted workflow does
+not set it because Kiro responses repeatedly exhausted the shared slot budget.
+While disabled, routing records both Kiro slots as NOT_APPLICABLE
+(`kiro_disabled`), Codex also covers deployment, contracts, lifecycle and
+recovery, and Claude also covers AWS, IAM, network and service constraints.
+
 ## Routing and evidence
 
 Trusted code determines which roles apply. Codex and Claude review the full change
 boundary, retaining independent OpenAI/Anthropic checks for sensitive changes.
-Kiro roles run for applicable AWS and operational changes, including relevant
-documentation. Unfamiliar paths route conservatively. Only deterministic routing
+When enabled, Kiro roles run for applicable AWS and operational changes,
+including relevant documentation. Unfamiliar paths route conservatively. Only deterministic routing
 may record NOT_APPLICABLE; provider failures never do.
 
 `prepare_roles.py` verifies the pinned base checkout, resolves the immutable merge
@@ -73,16 +79,24 @@ schema excludes backticks from prose fields before host validation; necessary
 examples can use top-level tilde fences. This generation constraint does not
 replace identity, coverage, confidentiality, or verdict checks. Chair output that
 ignores the common format guidance still fails closed.
-Kiro responses with malformed JSON or an invalid JSON wrapper use the existing
-bounded retry budget and a fresh request nonce. Exhaustion still blocks coverage;
-valid reviews, schema/identity failures, and terminal provider diagnostics are
-not retried by this syntax check. Before a zero-exit syntax retry, recognized
-terminal diagnostics in non-JSON stdout are preserved as failures. Successfully
-parsed review JSON is not scanned as a diagnostic stream. Both existing
-classifiers inspect raw, control-normalized and scrubbed text in both streams
-before a syntax retry, so terminal rendering or secret masking cannot hide a
-recognized signal.
-Post-scrub or combined-diagnostic overflow remains terminal.
+Kiro alone corrects eligible zero-exit schema rejections within the existing bounded
+retry budget, covering parsing, identity, coverage, member paths and prose validation
+before or after scrubbing. Each correction uses a fresh nonce and the original scope
+and exact path enum. Safe feedback contains only the validated allowlisted reason
+and structural JSON pointer; no rejected text, actual path value or stderr is reused.
+The current diagnostic correction receipt and invocation bind the canonical digest
+of the immediately preceding rejected result. Issuance verifies the prior request
+under the role lock before archiving it; acceptance reconstructs the policy and
+feedback from verified ordered history. Missing, stale, reordered or modified history
+and legacy or omitted correction modes fail current validation. Historical v1 replay
+remains bound to its original trusted source.
+
+Exhaustion blocks coverage. Valid reviews cannot be reissued, and terminal provider,
+output-limit and exhausted-budget failures remain blocking. Both existing classifiers
+inspect raw, control-normalized and scrubbed diagnostic streams before correction;
+successfully parsed review JSON is not scanned as logs. Post-scrub or combined-diagnostic
+overflow stays terminal. Non-schema transient retries and non-Kiro lanes keep their
+existing behavior.
 
 Kiro review attempts share the existing total time allowance instead of each
 restarting a slow response at the nominal timeout. The default remains 600

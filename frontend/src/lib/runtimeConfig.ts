@@ -11,6 +11,8 @@ export interface RuntimeConfig {
   wsUrl?: string;
   /** Enable only after deployed job routes/worker pass acceptance. Missing is off. */
   qaAsyncJobs?: boolean;
+  /** Show the Billing Insight hand-off button. Missing is off; the URL comes from the API. */
+  billingInsight?: boolean;
   /** Publish a same-site HTTP MCP URL only after its deployment is ready. */
   mcp?: { url?: string };
 }

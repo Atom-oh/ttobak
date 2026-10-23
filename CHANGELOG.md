@@ -6,6 +6,12 @@ current configuration belongs to the project guide and source manifests.
 
 ## Unreleased
 
+### Added
+
+- Billing Insight single-use hand-off button: `POST /api/billing-insight/handoff`
+  stores a 60-second hashed code and returns the AWS Billing Insight companion
+  redemption URL; gated by `ttobak:billingInsightUrl` and runtime `billingInsight`.
+
 ### Documentation and review
 
 - Consolidate current project guidance, generate one shared review extract and

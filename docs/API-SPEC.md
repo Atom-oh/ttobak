@@ -200,6 +200,36 @@ self-service flow rather than invoking the CONFIRMED-only admin reset again.
 Authenticated email verification uses Cognito SDK operations and refreshes JWT
 claims before bootstrap is retried; the app never silently sets verification.
 
+### Billing Insight hand-off
+
+Authenticated `POST /api/billing-insight/handoff` lets a signed-in web user open
+the separate AWS Billing Insight companion dashboard without a second sign-in.
+It takes no body (bodies over 1,024 bytes return 400) and reads identity only
+from verified middleware claims. Responses always carry `Cache-Control: no-store`.
+
+- 404 `NOT_FOUND`: `BILLING_INSIGHT_URL` is unset or not an https origin
+  (host only, optional trailing `/`, no query or fragment); the feature is off.
+- 401 `UNAUTHORIZED`: no caller sub. 403 `FORBIDDEN`: no email claim (for
+  example access tokens or the connector bridge) or `email_verified` is false.
+- 500 `INTERNAL_ERROR`: the conditional write failed, including a hash collision.
+- 200 `{ "url": "<origin>/login/ttobak?code=<code>" }`.
+
+The code is 32 `crypto/rand` bytes in unpadded base64url (43 characters). The API
+conditionally puts (`attribute_not_exists(PK)`) one `ttobak-main` row:
+`PK = HANDOFF#<lowercase hex sha256(code)>`, `SK = HANDOFF`, `target =
+"billing-insight"`, `sub`, `email` and `pendingShareExpiresAt = now + 60` seconds.
+Only the hash is stored and the row has no GSI keys. Opening the link does not
+sign anyone in by itself (a code minted for one account could be sent to someone
+else): the companion first reads the row and shows whose account it is, and the
+user confirms with a same-origin POST. Only then does it redeem the code by
+deleting that row (condition `target = billing-insight`, returning the old item),
+reject expired rows in code, and start its own session when the sub belongs to a
+registered account. A browser already signed in to the companion as the same sub
+skips the confirmation. Redemption is therefore single use and the code is valid
+for at most 60 seconds, confirmation included. The connector inventory marks the operation
+write-capable and non-delegable, so connector tokens cannot mint codes. The web
+client validates the returned URL shape before navigating (`src/lib/billingInsight.ts`).
+
 ### Meetings and pagination
 
 `GET /api/meetings` accepts `tab=all|shared`, `limit`, opaque `cursor`, and optional
@@ -1040,6 +1070,7 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | GET | `/api/auth/allowed-domains` | `settingsHandler.GetAllowedDomains` |
 | GET | `/api/public/docs/{token}` | `documentHandler.PublicGetDoc` |
 | POST | `/api/session/bootstrap` | `sessionHandler.Bootstrap` |
+| POST | `/api/billing-insight/handoff` | `billingInsightHandler.CreateHandoff` |
 | GET | `/api/accounts` | `accountHandler.ListAccounts` |
 | GET | `/api/navigation/accounts` | `accountCatalogHandler.Get` |
 | POST | `/api/accounts` | `accountHandler.CreateAccount` |

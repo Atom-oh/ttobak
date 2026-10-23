@@ -91,7 +91,10 @@ tokens until it is configured with the new client ID after both deploy. Bootstra
 `/ttobak/auth/companion-callback-urls` and `/ttobak/auth/companion-logout-urls`
 with each app's exact callback and sign-out URLs before deploying AuthStack;
 their absence fails deployment. Companion apps authorize by reading TTOBAK
-account membership themselves; this stack grants them no table access.
+account membership themselves; TTOBAK stacks grant them no table access. The
+AWS Billing Insight companion stack grants its own redeemer `dynamodb:GetItem`
+and `dynamodb:DeleteItem` on `ttobak-main`, limited by `dynamodb:LeadingKeys` to
+`HANDOFF#*`, to show and then consume the API's single-use hand-off rows (see API-SPEC "Billing Insight hand-off").
 
 The pre-signup trigger reads the configured domain allowlist. PostAuthentication
 writes a separate USER#/LOGIN item for lastLoginAt, with a short abort timeout,
@@ -560,6 +563,20 @@ on later deployments and rollback. Writer `0` restores legacy grant/publication
 behavior, so rollback requires restricting those writes and draining legacy
 exporters first. No historical backfill or grant revocation is implied. See
 [the rollout contract](runbooks/summary-privacy-release.md).
+
+## Billing Insight hand-off
+
+Optional context `ttobak:billingInsightUrl` (`infra/lib/billing-insight.ts`) names
+the companion dashboard origin; `infra/cdk.json` sets it. Unset or empty omits
+the API Lambda's `BILLING_INSIGHT_URL` and the `billingInsight` flag in
+`/config.json`, so the hand-off route returns 404 and no button renders. A set
+value must be an https origin (optional trailing `/`, no path, query or
+fragment) or synth fails; the API also revalidates it at startup. GatewayStack
+passes the origin only to `ttobak-api`; FrontendStack publishes only
+`billingInsight: true`, never the URL. The value is synth-time context, so a
+change alters the function configuration and publishes a new version for the
+`live` alias without the create-only description workaround. The API role's
+existing table read/write grant covers the conditional put; no new IAM is added.
 
 ## Project invitation activation
 
