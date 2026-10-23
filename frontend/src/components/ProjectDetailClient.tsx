@@ -345,7 +345,7 @@ export default function ProjectDetailClient() {
                 ))}
                 {isOwner && (
                   <div className="space-y-2 text-sm">
-                    {!onboardingAvailable && <p role="status">초대 기능의 서버 연결을 기다리고 있습니다. 상단에서 연결을 다시 시도할 수 있습니다.</p>}
+                    {!onboardingAvailable && <p role="status">새 사용자 초대는 아직 사용할 수 없습니다. 가입된 사용자는 계속 추가할 수 있습니다.</p>}
                     {inviteNotice && <p role="status" className="text-slate-600 dark:text-text-secondary">{inviteNotice}</p>}
                     {inviteCandidate && isAdmin && <button type="button" disabled={inviting || !onboardingAvailable} onClick={inviteNewUser} className="rounded bg-primary px-3 py-2 text-white disabled:opacity-50">초대 메일 발송 후 프로젝트 추가</button>}
                     {pendingError && <p role="alert" className="text-red-600">{pendingError}</p>}

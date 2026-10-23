@@ -5,6 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { AuthUser, getCurrentUser, signIn, signOut, completeNewPassword, isNewPasswordRequired, NewPasswordRequiredResult, SignInResult } from '@/lib/auth';
 import { EmailVerificationPanel } from './EmailVerificationPanel';
 import { proactiveSearchStore, resetProactiveClaims, setProactiveSearchUser } from '@/lib/proactiveSearch';
+import { inviteStatusMessage } from '@/lib/inviteStatus';
 
 interface AuthContextType {
   user: AuthUser | null;
@@ -184,6 +185,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     []
   );
 
+  const inviteStatus = inviteStatusMessage({ pendingGrants, retryPending, projectContinuation });
+
   const logout = useCallback(async () => {
     await signOut();
     setUser(null);
@@ -215,9 +218,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setUser(verified); setBootstrapAttempt(value => value + 1);
         }} />
       )}
-      {user && user.emailVerified && (pendingGrants > 0 || retryPending || projectContinuation || !onboardingAvailable) && (
+      {user && user.emailVerified && inviteStatus && (
         <div role="status" className="relative z-50 bg-amber-50 p-3 text-sm text-amber-900">
-          {onboardingAvailable ? '일부 초대가 아직 처리 중입니다.' : '새 초대 기능에 연결 중입니다. 기존 데이터는 계속 사용할 수 있습니다.'}
+          {inviteStatus}
           <button type="button" disabled={bootstrapBusy} className="ml-2 underline disabled:opacity-50" onClick={retryBootstrap}>초대 연결 다시 시도</button>
         </div>
       )}
