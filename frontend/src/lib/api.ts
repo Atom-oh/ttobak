@@ -885,6 +885,12 @@ export interface SessionBootstrapResult {
   joinedProjectIds?: string[];
   legacyBootstrap?: boolean;
 }
+/** Single-use hand-off to the AWS Billing Insight companion (POST, no body). */
+export const billingInsightApi = {
+  createHandoff: (expectedUserId?: string): Promise<{ url: string }> =>
+    apiFetch<{ url: string }>('/api/billing-insight/handoff', { method: 'POST', cache: 'no-store', expectedUserId }),
+};
+
 export const sessionApi = {
   bootstrap: async (expectedUserId: string, projectCursor = ''): Promise<SessionBootstrapResult> => {
     let result: SessionBootstrapResult;

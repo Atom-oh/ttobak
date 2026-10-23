@@ -216,6 +216,13 @@ func init() {
 	actionItemsHandler := handler.NewActionItemsHandler(actionItemsService)
 	meetingHandler.SetActionItemsService(actionItemsService)
 	sessionHandler := handler.NewSessionHandler(meetingService)
+	billingInsightOrigin, err := service.ParseBillingInsightOrigin(os.Getenv("BILLING_INSIGHT_URL"))
+	if err != nil {
+		// Fail closed: the hand-off route answers 404 until the value is fixed.
+		log.Printf("billing insight hand-off disabled: %v", err)
+	}
+	billingInsightHandler := handler.NewBillingInsightHandler(service.NewBillingInsightService(
+		repository.NewBillingHandoffRepository(dynamoClient, tableName), billingInsightOrigin))
 	connectorSettingsHandler := handler.NewConnectorSettingsHandler(service.NewConnectorSettingsService(repo, connectorSettingsConfig(cfg.Region, cognitoPoolID)))
 	// Setup router
 	r := chi.NewRouter()
@@ -252,6 +259,7 @@ func init() {
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.AuthWithConnectorGrants(middleware.ConnectorGrantResolver(connectorGrants)))
 		r.Post("/api/session/bootstrap", sessionHandler.Bootstrap)
+		r.Post("/api/billing-insight/handoff", billingInsightHandler.CreateHandoff)
 
 		// Account routes
 		r.Get("/api/accounts", accountHandler.ListAccounts)

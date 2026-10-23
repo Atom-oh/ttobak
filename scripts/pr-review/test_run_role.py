@@ -15,6 +15,13 @@ import role_review
 MODULE = Path(__file__).with_name("run_role.py")
 
 
+def setUpModule():
+    # These cases exercise the optional Kiro slots, which CI leaves disabled.
+    environment = unittest.mock.patch.dict(os.environ, ROLE_REVIEW_KIRO="1")
+    environment.start()
+    unittest.addModuleCleanup(environment.stop)
+
+
 class RoleExecutionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

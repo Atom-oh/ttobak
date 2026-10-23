@@ -14,6 +14,13 @@ import run_role
 import synthesize_roles
 
 
+def setUpModule():
+    # These cases exercise the optional Kiro slots, which CI leaves disabled.
+    environment = unittest.mock.patch.dict(os.environ, ROLE_REVIEW_KIRO="1")
+    environment.start()
+    unittest.addModuleCleanup(environment.stop)
+
+
 class IntegrityTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
