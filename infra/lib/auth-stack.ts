@@ -291,9 +291,16 @@ export class AuthStack extends cdk.Stack {
       refreshTokenValidity: cdk.Duration.days(1),
     });
 
-    const connectorAudience = this.node.tryGetContext('ttobak:mcpResourceAudience');
+    const connectorAudience = this.node.tryGetContext('ttobak:mcpResourceAudience') as string | undefined;
     if (props?.connectorOAuthEnabled && !connectorAudience) {
       throw new Error('Connector issuance requires the registered MCP resource audience');
+    }
+    if (connectorAudience) {
+      const resource = new URL(connectorAudience);
+      if (resource.protocol !== 'https:' || !resource.hostname || resource.username || resource.password ||
+          resource.pathname !== '/api/mcp' || resource.search || resource.hash || resource.href !== connectorAudience) {
+        throw new Error('Connector audience must be the exact HTTPS MCP resource URL');
+      }
     }
     const connectorRead = new cognito.ResourceServerScope({
       scopeName: 'read', scopeDescription: 'Read currently authorized sources',
@@ -301,9 +308,20 @@ export class AuthStack extends cdk.Stack {
     const connectorWrite = new cognito.ResourceServerScope({
       scopeName: 'write', scopeDescription: 'Create personal notes with current user approval',
     });
-    const connectorResource = this.userPool.addResourceServer('ConnectorResourceServer', {
+    this.userPool.addResourceServer('ConnectorResourceServer', {
       identifier: 'ttobak.connector', scopes: [connectorRead, connectorWrite],
     });
+    // Preserve both established resource identities. Resource-bound custom
+    // scopes must belong to the exact resource URL requested during OAuth.
+    // The old namespace remains registered but is not issued to these clients.
+    const mcpResource = connectorAudience ? this.userPool.addResourceServer('McpResourceServer', {
+      identifier: connectorAudience,
+      userPoolResourceServerName: 'ttobak-mcp',
+      scopes: [
+        new cognito.ResourceServerScope({ scopeName: 'access', scopeDescription: 'Reserved; HTTP MCP requests only openid, email and profile' }),
+        connectorRead, connectorWrite,
+      ],
+    }) : undefined;
     const connectorClient = (id: string, name: string, write: boolean) => this.userPool.addClient(id, {
       userPoolClientName: name,
       generateSecret: false,
@@ -313,8 +331,8 @@ export class AuthStack extends cdk.Stack {
           flows: { authorizationCodeGrant: true },
           scopes: [
             cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL, cognito.OAuthScope.PROFILE,
-            cognito.OAuthScope.resourceServer(connectorResource, connectorRead),
-            ...(write ? [cognito.OAuthScope.resourceServer(connectorResource, connectorWrite)] : []),
+            cognito.OAuthScope.resourceServer(mcpResource!, connectorRead),
+            ...(write ? [cognito.OAuthScope.resourceServer(mcpResource!, connectorWrite)] : []),
           ],
           // Existing approved MCP redirects; no new external callback is introduced.
           callbackUrls: mcpCallbacks,
@@ -346,21 +364,6 @@ export class AuthStack extends cdk.Stack {
       });
       branding.node.addDependency(this.userPoolDomain);
     });
-
-    // HTTP MCP resource server. With managed login, Cognito issues
-    // aud=<this URL> for `resource=<this URL>` only when the URL is registered
-    // as a resource server (verified: without it the code exchange fails with
-    // invalid_grant). No client requests the placeholder scope, so token scopes
-    // stay openid/email/profile. Enabled together with the Gateway Lambda by the
-    // same context value.
-    const mcpResourceAudience = this.node.tryGetContext('ttobak:mcpResourceAudience') as string | undefined;
-    if (mcpResourceAudience) {
-      this.userPool.addResourceServer('McpResourceServer', {
-        identifier: mcpResourceAudience,
-        userPoolResourceServerName: 'ttobak-mcp',
-        scopes: [new cognito.ResourceServerScope({ scopeName: 'access', scopeDescription: 'Reserved; HTTP MCP requests only openid, email and profile' })],
-      });
-    }
 
     // Cognito Identity Pool — enables browser-direct access to AWS services
     // (e.g., Amazon Transcribe Streaming for real-time STT)

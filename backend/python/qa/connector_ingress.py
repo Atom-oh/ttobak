@@ -13,7 +13,6 @@ from urllib.parse import urlsplit
 
 from connector_contract import ConnectorError, Grants, valid_capabilities
 
-READ_SCOPE = "ttobak.connector/read"
 MAX_REQUEST_BYTES = 32_000
 MAX_RESPONSE_BYTES = 14_000
 
@@ -54,7 +53,7 @@ class ReadOnlyQAIngress:
                 raise ConnectorError("INVALID_CONNECTOR_IDENTITY")
             scopes = claims.get("scope", "")
             if not isinstance(scopes, str) or any(
-                scope.startswith("ttobak.connector/") for scope in scopes.split()
+                scope.startswith((self.audience + "/", "ttobak.connector/")) for scope in scopes.split()
             ):
                 raise ConnectorError("CAPABILITY_DENIED")
             if (use == "id" and audience in self.web_clients or
@@ -67,8 +66,9 @@ class ReadOnlyQAIngress:
         if not isinstance(scopes, str):
             raise ConnectorError("CAPABILITY_DENIED")
         scopes = scopes.split()
-        if READ_SCOPE not in scopes or any(
-            scope.startswith("ttobak.connector/") and scope != READ_SCOPE for scope in scopes
+        read_scope = self.audience + "/read"
+        if read_scope not in scopes or any(
+            scope not in ("openid", "email", "profile", read_scope) for scope in scopes
         ):
             raise ConnectorError("CAPABILITY_DENIED")
         expiry = claims.get("exp")
