@@ -341,6 +341,8 @@ class Migration:
         # Capture is resumable. Final verification must finish within ONE
         # invocation; an earlier verified prefix grants no trust on resume.
         state.update(phase="RECONCILE", verifiedCount=0)
+        state.pop("status", None)
+        state.pop("completedAt", None)
         self.archive.checkpoint(state)
         for index in range(len(keys)):
             entry = state["entries"][index]

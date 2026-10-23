@@ -263,6 +263,32 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(before["Versions"], self.s3.list_object_versions(Bucket="legacy-news-test")["Versions"])
         self.assertEqual(self.new_migration().run(True)["manifestSha256"], result["manifestSha256"])
 
+    def test_failed_completed_archive_recheck_clears_current_success_markers(self):
+        self.migration.run(True)
+        completed = self.local.resume()
+        entry = completed["entries"][0]
+        body_path = Path(self.temp.name) / entry["bodySha256"]
+        original_body = body_path.read_bytes()
+        body_path.write_bytes(b"corrupt archived body")
+        self.now += timedelta(minutes=1)
+
+        with self.assertRaisesRegex(archive.ArchiveRejected, "ARCHIVE_HASH_MISMATCH"):
+            self.new_migration().run(True)
+
+        current = self.local.resume()
+        self.assertEqual(current["phase"], "RECONCILE")
+        self.assertEqual(current["verifiedCount"], 0)
+        self.assertNotIn("status", current)
+        self.assertNotIn("completedAt", current)
+        self.assertEqual(current["entries"], completed["entries"])
+        # Restoring the original bytes permits a newly verified completion.
+        body_path.write_bytes(original_body)
+        self.new_migration().run(True)
+        current = self.local.resume()
+        self.assertEqual(current["status"], "COMPLETE_RETAINED_LEGACY")
+        self.assertEqual(current["completedAt"], self.now.isoformat())
+        self.assertNotEqual(current["completedAt"], completed["completedAt"])
+
     def test_empty_legacy_bytes_are_preserved_without_claiming_quality(self):
         self.s3.put_object(Bucket="legacy-news-test", Key=self.object_key, Body=b"")
         self.migration.run(True)
