@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+import unittest.mock
 
 
 SOURCE = Path(__file__).resolve().parent
@@ -204,6 +205,13 @@ if (root / "failure").exists() and tag == "codex":
 if (root / "claude-nonzero").exists() and tag == "claude-self":
     raise SystemExit(9)
 '''
+
+
+def setUpModule():
+    # These cases exercise the optional Kiro slots, which CI leaves disabled.
+    environment = unittest.mock.patch.dict(os.environ, ROLE_REVIEW_KIRO="1")
+    environment.start()
+    unittest.addModuleCleanup(environment.stop)
 
 
 class EndToEndRoleTests(unittest.TestCase):
@@ -650,6 +658,15 @@ class EndToEndRoleTests(unittest.TestCase):
             if index < 2:
                 self.assertNotIn("BEGIN DIFF", call["args"][1])
                 self.assertNotIn("infra/network.tf", call["args"][1])
+        self.assertTrue((self.work / "review.md").read_text().endswith("VERDICT: PASS\n"))
+
+    def test_disabled_kiro_aws_change_uses_two_reviews_without_kiro(self):
+        self.environment.pop("ROLE_REVIEW_KIRO")
+        calls = self.run_pipeline("infra/network.tf")
+        self.assertEqual(sorted(call["name"] for call in calls), ["claude", "codex"])
+        summary = json.loads((self.work / "role-summary.json").read_text())
+        self.assertFalse(summary["roles"]["kiro-fable"]["required"])
+        self.assertFalse(summary["roles"]["kiro-sol"]["required"])
         self.assertTrue((self.work / "review.md").read_text().endswith("VERDICT: PASS\n"))
 
     def test_failed_second_kiro_probe_withholds_diff_from_both_roles(self):

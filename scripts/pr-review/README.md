@@ -11,7 +11,8 @@ results feed aggregation and, when needed, the chair. See
 | kiro-sol | `gpt-5.6-sol` | Deployment/contracts/recovery |
 | claude-self | `global.anthropic.claude-fable-5-1` | Auth/data/API/ADR |
 
-`kiro-fable` means Opus. `ROLES` governs specialists; legacy files govern legacy
+Kiro tags run only with `ROLE_REVIEW_KIRO=1`; otherwise codex and claude-self
+absorb their scopes. `kiro-fable` means Opus. `ROLES` governs specialists; legacy files govern legacy
 execution. Kiro/Bedrock IDs differ. English is requested, not validated; configured
 IDs do not attest model weights.
 

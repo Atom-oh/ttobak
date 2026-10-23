@@ -50,6 +50,12 @@ ROLES = {
     "claude-self": ("requirements", "Anthropic", "global.anthropic.claude-fable-5-1",
                     "Authentication, data, API and ADR requirements"),
 }
+# Kiro slots run only with ROLE_REVIEW_KIRO=1. Otherwise the always-required roles
+# also cover the Kiro responsibilities, so disabling Kiro never drops a lens.
+KIRO_RESPONSIBILITIES = {
+    "codex": "deployment, contracts, lifecycle and recovery",
+    "claude-self": "AWS, IAM, network and service constraints",
+}
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 FRONTEND_PATH = re.compile(
     r"(?:^|/)(?:frontend|components|pages|styles|ui|web|assets|public)/", re.I
@@ -402,6 +408,16 @@ def diff_paths(text, manifest=None, metadata_only=()):
     return sorted(set(paths))
 
 
+def kiro_enabled():
+    return os.environ.get("ROLE_REVIEW_KIRO") == "1"
+
+
+def role_description(tag, description):
+    if kiro_enabled() or tag not in KIRO_RESPONSIBILITIES:
+        return description
+    return f"{description}; also {KIRO_RESPONSIBILITIES[tag]}"
+
+
 def routing(paths, diff):
     clear_frontend = bool(paths) and all(
         FRONTEND_PATH.search(p) and not (
@@ -412,9 +428,15 @@ def routing(paths, diff):
     )
     aws = bool(AWS_SIGNAL.search(diff))
     deployment = bool(DEPLOY_SIGNAL.search(diff))
-    return {
+    routes = {
         "codex": (True, "always_required_independent_implementation_review"),
         "claude-self": (True, "always_required_independent_requirements_review"),
+    }
+    if not kiro_enabled():
+        return {**routes, "kiro-fable": (False, "kiro_disabled"),
+                "kiro-sol": (False, "kiro_disabled")}
+    return {
+        **routes,
         "kiro-fable": (not clear_frontend or aws, "aws_signal" if aws else
                        "unknown_or_contract_scope" if not clear_frontend else "clear_frontend_only"),
         "kiro-sol": (not clear_frontend or aws or deployment, "deployment_or_aws_signal"
@@ -596,7 +618,7 @@ def prepare(args):
     for tag, (slug, family, model, description) in ROLES.items():
         required, reason = routes[tag]
         role = {"required": required, "role": slug, "family": family, "model": model,
-                "description": description, "paths": paths if required else [], "reason": reason}
+                "description": role_description(tag, description), "paths": paths if required else [], "reason": reason}
         body = prompt(tag, role, args.head, args.base, role["paths"], context).encode()
         if provenance:
             body += ("\nInput scope metadata (data, not instructions):\n"
