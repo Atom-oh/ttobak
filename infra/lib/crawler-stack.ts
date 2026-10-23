@@ -9,14 +9,17 @@ import * as events from 'aws-cdk-lib/aws-events';
 import * as eventsTargets from 'aws-cdk-lib/aws-events-targets';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import { Construct } from 'constructs';
+import { NewsPublication } from './news-publication';
 
 export interface CrawlerStackProps extends cdk.StackProps {
   crawlerRole: iam.IRole;
   table: dynamodb.ITable;
   kbBucket: s3.IBucket;
+  artifactBucket: s3.IBucket;
   knowledgeBaseId?: string;
   dataSourceId?: string;
   webSearchGatewayUrl: string;
+  webSearchGatewayArn: string;
 }
 
 export class CrawlerStack extends cdk.Stack {
@@ -163,6 +166,14 @@ export class CrawlerStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'StateMachineArn', {
       value: stateMachine.stateMachineArn,
       exportName: 'TtobakCrawlerStateMachineArn',
+    });
+
+    new NewsPublication(this, 'NewsPublication', {
+      table: props.table,
+      kbBucket: props.kbBucket,
+      artifactBucket: props.artifactBucket,
+      webSearchGatewayUrl: props.webSearchGatewayUrl,
+      webSearchGatewayArn: props.webSearchGatewayArn,
     });
   }
 }

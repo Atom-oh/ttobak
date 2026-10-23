@@ -120,9 +120,15 @@ responses for its exact integer request ID in both JSON and streaming transports
 After readers deploy, an isolated synthetic canary may establish publication and
 QA acceptance. Normal source writers and `all` mode remain gated on that positive
 acceptance and completed legacy migration.
-No scheduler or IAM permission is activated by these modules. QA's
+
+The additive CDK workflow declares four private functions with separate roles,
+sequential candidate publication and bounded settlement input. Its configuration
+permits only off/default or one explicit canary. Recovery is scheduled every five
+minutes regardless of writer mode; its timeout remains below the checkpoint lease.
+The legacy daily workflow is unchanged. These declarations still require actual
+deployment and service-role verification. QA's
 publication-aware `news_text.py` is wired to both transports and history replay
-but has no recorded deployed acceptance yet. Infrastructure wiring, current-source
+but has no recorded deployed acceptance yet. Infrastructure acceptance, current-source
 QA/UI acceptance, migration and rollback remain required delivery work. See the
 [release contract](../runbooks/knowledge-grade-news-release.md) for price evidence
 and entry-point/payload limits.
@@ -167,5 +173,7 @@ refund. Local regression evidence does not establish deployed acceptance.
 - `backend/python/crawler/news_search.py`
 - `backend/python/crawler/news_recovery.py`
 - `backend/python/crawler/test_news_runtime.py`
+- `infra/lib/news-publication.ts`
+- `infra/test/news-publication.test.ts`
 - `backend/python/qa/news_text.py`
 - `backend/python/qa/test_news_text.py`
