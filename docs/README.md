@@ -35,6 +35,7 @@ Markdown for English language and historical/current status.
 | [Connector capabilities](decisions/ADR-053-connector-capability-private-delegation.md) | Staged operation policy and private-delegation delivery gates | Versioned inventory, generated tables and contract tests |
 | [Connector delegation wire](security/connector-delegation-v1.md) | Canonical signed bytes, key pinning and lifetime limits | Local Go/TypeScript/Python verifiers; activation pending |
 | [Connector release](runbooks/connector-release.md) | Staged clients, private IAM/KMS, ARM64 packaging and provider acceptance | Reviewed CDK artifacts and dated deployed evidence |
+| [Summary privacy release](runbooks/summary-privacy-release.md) | Reader/writer targets, immutable cutoff, drain and cross-user acceptance | Exact deployed versions, parameters and dated acceptance evidence |
 
 ## Feature workflows
 

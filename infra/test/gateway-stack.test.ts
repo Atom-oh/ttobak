@@ -81,6 +81,65 @@ describe('GatewayStack', () => {
     template = buildTemplate();
   });
 
+  test('privacy rollout targets only its writers/readers and binds every parameter to the API version', () => {
+    const functions = Object.values(template.findResources('AWS::Lambda::Function'));
+    const environments: Record<string, Record<string, unknown>> = Object.fromEntries(functions.map(fn =>
+      [fn.Properties.FunctionName, fn.Properties.Environment?.Variables ?? {}]));
+    const writer = { Ref: 'SummaryPrivacyWriterEnabled' };
+    const reader = { Ref: 'SummaryPrivacyReaderEnabled' };
+    const cutoff = { Ref: 'SummaryPrivacyLegacyMemberCutoff' };
+    for (const [name, environment] of Object.entries(environments)) {
+      expect(environment.SUMMARY_PRIVACY_WRITER_ENABLED).toEqual(
+        ['ttobak-api', 'ttobak-summarize'].includes(name) ? writer : undefined);
+      expect(environment.SUMMARY_PRIVACY_READER_ENABLED).toEqual(
+        ['ttobak-api', 'ttobak-qa'].includes(name) ? reader : undefined);
+      expect(environment.SUMMARY_PRIVACY_LEGACY_MEMBER_CUTOFF).toEqual(
+        ['ttobak-api', 'ttobak-qa'].includes(name) ? cutoff : undefined);
+    }
+    const version = Object.values(template.findResources('AWS::Lambda::Version'))
+      .find(value => JSON.stringify(value.Properties.FunctionName).includes('ApiFunction'))!;
+    const description = JSON.stringify(version.Properties.Description);
+    for (const name of ['SummaryPrivacyWriterEnabled', 'SummaryPrivacyReaderEnabled', 'SummaryPrivacyLegacyMemberCutoff']) {
+      expect(description).toContain(`"Ref":"${name}"`);
+    }
+    const parameters = template.toJSON().Parameters;
+    for (const name of ['SummaryPrivacyWriterEnabled', 'SummaryPrivacyReaderEnabled']) {
+      expect(parameters[name]).toMatchObject({ Default: '0', AllowedValues: ['0', '1'] });
+    }
+    expect(parameters.SummaryPrivacyLegacyMemberCutoff.Default).toBe('');
+  });
+
+  test('privacy reader activation rejects a missing cutoff while writer-off rollback can preserve enforcement', () => {
+    const json = template.toJSON();
+    const rule = json.Rules.SummaryPrivacyReaderRequiresCutoff.Assertions[0].Assert;
+    function evaluate(value: any, parameters: Record<string, string>): any {
+      if (typeof value !== 'object') return value;
+      if (value.Ref) return parameters[value.Ref];
+      if (value['Fn::Equals']) return evaluate(value['Fn::Equals'][0], parameters) === evaluate(value['Fn::Equals'][1], parameters);
+      if (value['Fn::Not']) return !evaluate(value['Fn::Not'][0], parameters);
+      if (value['Fn::Or']) return value['Fn::Or'].some((part: unknown) => evaluate(part, parameters));
+      throw new Error('Unexpected rule operator');
+    }
+    const cutoff = '2026-10-21T10:00:00.123456789Z';
+    for (const writer of ['0', '1']) {
+      for (const reader of ['0', '1']) {
+        for (const epoch of ['', cutoff]) {
+          expect(evaluate(rule, {
+            SummaryPrivacyWriterEnabled: writer,
+            SummaryPrivacyReaderEnabled: reader,
+            SummaryPrivacyLegacyMemberCutoff: epoch,
+          })).toBe(reader === '0' || epoch !== '');
+        }
+      }
+    }
+    const pattern = new RegExp(json.Parameters.SummaryPrivacyLegacyMemberCutoff.AllowedPattern);
+    expect(pattern.test(cutoff)).toBe(true);
+    expect(pattern.test('2026-10-21T10:00:00Z')).toBe(true);
+    for (const invalid of ['2026-10-21', '2026-10-21T10:00:00+00:00', '2026-13-21T10:00:00Z', '2026-10-21T24:00:00Z', 'now']) {
+      expect(pattern.test(invalid)).toBe(false);
+    }
+  });
+
   test('connector consumers use exact private grants, a retained signing key and ARM64 crypto', () => {
     const t = buildTemplate(undefined, undefined, 'https://ttobak.example.com/api/mcp',
       undefined, undefined, undefined, undefined, {}, true);
