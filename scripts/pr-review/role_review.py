@@ -98,7 +98,9 @@ class Invalid(Exception):
         self.diagnostic = diagnostic
 
 
+# Historical rendering stays byte-identical for source-bound read-only replay.
 SCHEMA_CORRECTION = "schema-contract-v1"
+CURRENT_SCHEMA_CORRECTION = "schema-diagnostic-v2"
 SCHEMA_REMINDER = (
     "\nTrusted schema-contract-v1 correction: return the complete response again. "
     "Each checks member must have exactly path and evidence keys. Each findings "
@@ -158,12 +160,34 @@ def member_path_contract(paths):
     )
 
 
-def corrected_prompt(prompt, tag, correction_mode, paths):
-    if correction_mode is None:
-        return prompt
-    if correction_mode != SCHEMA_CORRECTION or not tag.startswith("kiro-"):
+def safe_validation_feedback(value):
+    if not isinstance(value, dict) or set(value) != {"reason", "pointer"}:
         raise Invalid("invalid_issued_request")
-    return prompt + SCHEMA_REMINDER + member_path_contract(paths)
+    try:
+        diagnostic = safe_validation_diagnostic({**value, "phase": "PRE_SCRUB"})
+    except Invalid:
+        raise Invalid("invalid_issued_request") from None
+    return {key: diagnostic[key] for key in ("reason", "pointer")}
+
+
+def corrected_prompt(prompt, tag, correction_mode, paths, feedback=None):
+    if correction_mode is None:
+        if feedback is not None:
+            raise Invalid("invalid_issued_request")
+        return prompt
+    if not tag.startswith("kiro-"):
+        raise Invalid("invalid_issued_request")
+    if correction_mode == SCHEMA_CORRECTION and feedback is None:
+        return prompt + SCHEMA_REMINDER + member_path_contract(paths)
+    if correction_mode != CURRENT_SCHEMA_CORRECTION:
+        raise Invalid("invalid_issued_request")
+    feedback = safe_validation_feedback(feedback)
+    return (prompt + SCHEMA_REMINDER + member_path_contract(paths)
+            + f"Trusted {CURRENT_SCHEMA_CORRECTION} correction.\n"
+            + "Validated rejection feedback: " + canonical(feedback) + "\n"
+            + "The host rejected the structural field identified by pointer for the "
+              "allowlisted reason. Fix that requirement and return the complete response "
+              "again; all original scope and validation requirements still apply.\n")
 
 
 def canonical(value):
@@ -450,15 +474,24 @@ def frame_request(prompt_text, diff_text, nonce):
     return instruction, payload
 
 
-def invocation_digest(prepared_digest, nonce, correction_mode=None, prompt_sha256=None):
+def invocation_digest(prepared_digest, nonce, correction_mode=None, prompt_sha256=None,
+                      source_result_sha256=None):
     if not isinstance(nonce, str) or not re.fullmatch(r"[0-9a-f]{32}", nonce):
         raise Invalid("invalid_invocation_nonce")
     identity = {"prepared_request_digest": prepared_digest, "invocation_nonce": nonce}
     if correction_mode is not None:
-        if (correction_mode != SCHEMA_CORRECTION or not isinstance(prompt_sha256, str)
+        if (correction_mode not in (SCHEMA_CORRECTION, CURRENT_SCHEMA_CORRECTION)
+                or not isinstance(prompt_sha256, str)
                 or not re.fullmatch(r"[0-9a-f]{64}", prompt_sha256)):
             raise Invalid("invalid_issued_request")
         identity.update(correction_mode=correction_mode, prompt_sha256=prompt_sha256)
+    if correction_mode == CURRENT_SCHEMA_CORRECTION:
+        if (not isinstance(source_result_sha256, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", source_result_sha256)):
+            raise Invalid("invalid_issued_request")
+        identity["source_result_sha256"] = source_result_sha256
+    elif source_result_sha256 is not None:
+        raise Invalid("invalid_issued_request")
     return digest(identity)
 
 
@@ -663,39 +696,117 @@ def issue_request(work, tag, correction_mode=None):
         return _issue_request(work, tag, correction_mode)
 
 
+def correction_contract(tag, history):
+    """Current source, never receipt metadata, selects the next request policy."""
+    if history and tag.startswith("kiro-"):
+        prior = history[-1]
+        codes = prior["failure_codes"]
+        if len(codes) == 1 and codes[0] in SCHEMA_CODES:
+            diagnostic = safe_validation_diagnostic(prior.get("validation_diagnostic"))
+            return (CURRENT_SCHEMA_CORRECTION,
+                    {key: diagnostic[key] for key in ("reason", "pointer")}, digest(prior))
+    return None, None, None
+
+
+def request_contract(work, plan, tag, nonce, history):
+    role = plan["roles"][tag]
+    correction_mode, feedback, source_hash = correction_contract(tag, history)
+    instruction, payload = frame_request(
+        corrected_prompt((work / "roles" / f"{tag}.txt").read_bytes().decode("utf-8"),
+                         tag, correction_mode, role["paths"], feedback),
+        (work / "roles" / f"{tag}.diff").read_bytes().decode("utf-8"), nonce,
+    )
+    receipt = {
+        "schema_version": 1, "tag": tag, "head_sha": plan["head_sha"],
+        "base_sha": plan["base_sha"], "plan_digest": plan["plan_digest"],
+        "prepared_request_digest": role["request_digest"], "invocation_nonce": nonce,
+        "request_digest": invocation_digest(role["request_digest"], nonce, correction_mode,
+                                            digest(instruction.encode()), source_hash),
+        "prompt_sha256": digest(instruction.encode()), "input_sha256": digest(payload.encode()),
+    }
+    if correction_mode is not None:
+        receipt.update(correction_mode=correction_mode, validation_feedback=feedback,
+                       source_result_sha256=source_hash)
+    return receipt, instruction, payload
+
+
+def validate_rejected_result(result, plan, tag, receipt):
+    role = plan["roles"][tag]
+    expected = {"schema_version": 1, "tag": tag,
+                **{k: plan[k] for k in ("head_sha", "base_sha", "plan_digest")},
+                **{k: role[k] for k in ("role", "family", "model")},
+                **{k: receipt[k] for k in ("invocation_nonce", "prepared_request_digest", "request_digest")}}
+    required = set(expected) | {"valid", "failure_codes", "response"}
+    if (not isinstance(result, dict) or not required <= set(result)
+            or set(result) - required - {"validation_diagnostic"}
+            or any(result.get(k) != v for k, v in expected.items())
+            or result.get("valid") is not False or result.get("response") is not None):
+        raise Invalid("invalid_issued_request")
+    codes = result["failure_codes"]
+    if (not isinstance(codes, list) or not codes or any(
+            not isinstance(code, str) or code not in FAILURE_CODES for code in codes)
+            or len(codes) != len(set(codes))):
+        raise Invalid("invalid_issued_request")
+    if "validation_diagnostic" in result:
+        safe_validation_diagnostic(result["validation_diagnostic"])
+    if tag.startswith("kiro-") and len(codes) == 1 and codes[0] in SCHEMA_CODES:
+        safe_validation_diagnostic(result.get("validation_diagnostic"))
+
+
+def validated_attempt_history(work, plan, tag):
+    path = work / "slot" / f"{tag}-attempts.json"
+    history = strict_json(text_file(path, MAX_OUTPUT_BYTES)) if path.exists() else []
+    if not isinstance(history, list) or len(history) > 32:
+        raise Invalid("attempt_history_limit")
+    previous, nonces = [], set()
+    for result in history:
+        if not isinstance(result, dict):
+            raise Invalid("invalid_issued_request")
+        nonce = result.get("invocation_nonce")
+        if not isinstance(nonce, str) or not re.fullmatch(r"[0-9a-f]{32}", nonce):
+            raise Invalid("invalid_invocation_nonce")
+        if nonce in nonces:
+            raise Invalid("invalid_issued_request")
+        receipt, _, _ = request_contract(work, plan, tag, nonce, previous)
+        validate_rejected_result(result, plan, tag, receipt)
+        nonces.add(nonce)
+        previous.append(result)
+    return history
+
+
 def _issue_request(work, tag, correction_mode=None):
     work = Path(work)
     plan = load_plan(work)
     role = plan["roles"][tag]
     if not plan["input_complete"] or not role["required"]:
         raise Invalid("inactive_or_incomplete_request")
-    nonce = secrets.token_hex(16)
-    prompt_text = (work / "roles" / f"{tag}.txt").read_bytes().decode("utf-8")
-    diff_text = (work / "roles" / f"{tag}.diff").read_bytes().decode("utf-8")
-    instruction, payload = frame_request(corrected_prompt(prompt_text, tag, correction_mode, role["paths"]), diff_text, nonce)
-    receipt = {
-        "schema_version": 1, "tag": tag, "head_sha": plan["head_sha"],
-        "base_sha": plan["base_sha"], "plan_digest": plan["plan_digest"],
-        "prepared_request_digest": role["request_digest"], "invocation_nonce": nonce,
-        "request_digest": invocation_digest(role["request_digest"], nonce, correction_mode, digest(instruction.encode())),
-        "prompt_sha256": digest(instruction.encode()), "input_sha256": digest(payload.encode()),
-    }
-    if correction_mode is not None:
-        receipt["correction_mode"] = correction_mode
+    history = validated_attempt_history(work, plan, tag)
     previous = work / "slot" / f"{tag}-result.json"
+    prior = None
     if not previous.exists() and (work / "slot" / f"{tag}.record-claim").exists():
         raise Invalid("record_incomplete")
     if previous.exists():
         prior = strict_json(text_file(previous, MAX_OUTPUT_BYTES + 4096))
         if not isinstance(prior, dict) or prior.get("valid") is not False:
             raise Invalid("result_already_recorded")
-        history_file = work / "slot" / f"{tag}-attempts.json"
-        history = strict_json(text_file(history_file, MAX_OUTPUT_BYTES)) if history_file.exists() else []
-        if not isinstance(history, list) or len(history) >= 32:
+        # Verify the still-issued request and its result before replacing either.
+        receipt = issued_request(work, plan, tag)
+        validate_rejected_result(prior, plan, tag, receipt)
+        if len(history) >= 32:
             raise Invalid("attempt_history_limit")
-        history.append(prior)
-        write_json(history_file, history)
-        terminal = TERMINAL_CODES.intersection(prior.get("failure_codes", []))
+        history = [*history, prior]
+    required_mode, _, _ = correction_contract(tag, history)
+    if correction_mode != required_mode:
+        raise Invalid("invalid_issued_request")
+    nonce = secrets.token_hex(16)
+    if any(result["invocation_nonce"] == nonce for result in history):
+        raise Invalid("invalid_invocation_nonce")
+    receipt, instruction, payload = request_contract(work, plan, tag, nonce, history)
+    if required_mode is not None and len((instruction + "\n" + payload).encode()) >= MAX_REQUEST_BYTES:
+        raise Invalid("output_byte_limit")
+    if prior is not None:
+        write_json(work / "slot" / f"{tag}-attempts.json", history)
+        terminal = TERMINAL_CODES.intersection(prior["failure_codes"])
         if terminal:
             write(work / "slot" / f"role-{tag}-terminal.flag", "\n".join(sorted(terminal)) + "\n")
     remove(previous)
@@ -707,30 +818,21 @@ def _issue_request(work, tag, correction_mode=None):
 
 
 def issued_request(work, plan, tag):
+    work = Path(work)
     try:
         receipt = strict_json(text_file(work / "slot" / f"{tag}-request.json"))
-        role = plan["roles"][tag]
+        history = validated_attempt_history(work, plan, tag)
         nonce = receipt["invocation_nonce"]
-        correction_mode = receipt.get("correction_mode")
-        instruction, payload = frame_request(
-            corrected_prompt((work / "roles" / f"{tag}.txt").read_bytes().decode("utf-8"),
-                             tag, correction_mode, role["paths"]),
-            (work / "roles" / f"{tag}.diff").read_bytes().decode("utf-8"), nonce,
-        )
-        expected = {
-            "schema_version": 1, "tag": tag, "head_sha": plan["head_sha"],
-            "base_sha": plan["base_sha"], "plan_digest": plan["plan_digest"],
-            "prepared_request_digest": role["request_digest"], "invocation_nonce": nonce,
-            "request_digest": invocation_digest(role["request_digest"], nonce, correction_mode, digest(instruction.encode())),
-            "prompt_sha256": digest(instruction.encode()), "input_sha256": digest(payload.encode()),
-        }
-        if correction_mode is not None:
-            expected["correction_mode"] = correction_mode
-            if (text_file(work / "requests" / f"{tag}.prompt", MAX_REQUEST_BYTES) != instruction
-                    or text_file(work / "requests" / f"{tag}.input", MAX_REQUEST_BYTES) != payload):
-                raise Invalid("invalid_issued_request")
+        if any(result["invocation_nonce"] == nonce for result in history):
+            raise Invalid("invalid_invocation_nonce")
+        expected, instruction, payload = request_contract(work, plan, tag, nonce, history)
         if receipt != expected:
             raise Invalid("invalid_issued_request")
+        if (text_file(work / "requests" / f"{tag}.prompt", MAX_REQUEST_BYTES) != instruction
+                or text_file(work / "requests" / f"{tag}.input", MAX_REQUEST_BYTES) != payload):
+            raise Invalid("invalid_issued_request")
+        if expected.get("correction_mode") is not None and len((instruction + "\n" + payload).encode()) >= MAX_REQUEST_BYTES:
+            raise Invalid("output_byte_limit")
         return receipt
     except (KeyError, TypeError, OSError):
         raise Invalid("invalid_issued_request") from None

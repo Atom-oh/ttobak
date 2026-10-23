@@ -158,6 +158,10 @@ class RoleExecutionTests(unittest.TestCase):
         self.assertNotIn(role_review.SCHEMA_REMINDER, calls[0][2])
         self.assertIn(role_review.SCHEMA_REMINDER, calls[1][2])
         history = json.loads((work / "slot/kiro-fable-attempts.json").read_text())
+        feedback = {"reason": "ASSIGNED_PATH_REQUIRED", "pointer": f"/{member}/0/path"}
+        self.assertEqual(calls[1][1]["validation_feedback"], feedback)
+        self.assertEqual(calls[1][1]["source_result_sha256"], role_review.digest(history[0]))
+        self.assertIn("Validated rejection feedback: " + role_review.canonical(feedback), calls[1][2])
         self.assertEqual(len(history), 1)
         failure_code = "invalid_check" if member == "checks" else "invalid_finding"
         self.assertEqual(history[0]["failure_codes"], [failure_code])
@@ -365,6 +369,21 @@ class RoleExecutionTests(unittest.TestCase):
             self.runner.run(work, "kiro-fable", startup)
         self.assertEqual(execute.call_count, 1)
         self.assertFalse(json.loads((work / "slot/kiro-fable-result.json").read_text())["valid"])
+
+    def test_real_corrective_issuer_overflow_is_terminal_without_second_provider_call(self):
+        work, startup, response = self.prepared_kiro()
+        response["checks"] = [{}]
+        def execute(command, cwd, environment, input_text, timeout):
+            role_review.MAX_REQUEST_BYTES = len(command[2].encode()) + 1
+            return 0, json.dumps(response), ""
+        with patch.dict(os.environ, PANEL_RETRIES="2"), \
+                patch.object(role_review, "MAX_REQUEST_BYTES", role_review.MAX_REQUEST_BYTES), \
+                patch.object(self.runner, "execute", side_effect=execute) as provider:
+            self.runner.run(work, "kiro-fable", startup)
+        self.assertEqual(provider.call_count, 1)
+        self.assertFalse(json.loads((work / "slot/kiro-fable-result.json").read_text())["valid"])
+        self.assertEqual((work / "slot/role-kiro-fable-terminal.flag").read_text(), "output_byte_limit\n")
+        self.assertFalse((work / "slot/kiro-fable-attempts.json").exists())
 
     def test_kiro_environment_contains_no_cloud_or_repository_credentials(self):
         source = {
