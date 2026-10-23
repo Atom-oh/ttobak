@@ -75,6 +75,8 @@ def _identity(source_id, run_id=None):
 def _enabled(source_id):
     mode = os.environ.get("NEWS_PIPELINE_MODE", "off")
     if mode == "all":
+        if os.environ.get("NEWS_LEGACY_WRITES") != "off":
+            raise StateRejected("LEGACY_WRITER_ENABLED")
         return
     if mode == "canary" and source_id == os.environ.get("NEWS_CANARY_SOURCE_ID") and valid_source_id(source_id):
         return
