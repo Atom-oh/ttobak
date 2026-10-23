@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 import boto3
 from botocore.credentials import Credentials
 
+import news_recovery as recovery
 import news_runtime as runtime
 import news_search as search
 from news_discovery import source_revision
@@ -319,6 +320,17 @@ class TestRuntimeTransactions(unittest.TestCase):
         self.assertEqual(receipt["attemptCount"], 0)
         self.assertEqual(Decimal(receipt["chargedUsd"]), Decimal(0))
 
+    def test_recovery_finishes_expired_runs_and_preserves_live_admission(self):
+        runs = NewsRuns(self.store)
+        runs.begin(Run("source", "expired", source_revision(CONFIG)), NOW - 2000)
+        runs.begin(Run("source", "live", source_revision(CONFIG)), NOW)
+        result = recovery.handler({}, context())
+        self.assertEqual(result["recovered"], 1)
+        self.assertEqual(self.store._get("CRAWLER#source", "NEWSRUN#expired")["runState"], "FINALIZED")
+        self.assertEqual(self.store._get("CRAWLER#source", "NEWSRUN#live")["runState"], "OPEN")
+        checkpoint = self.store._get(**{"pk": recovery.CHECKPOINT["PK"], "sk": "RECOVERY"})
+        self.assertNotIn("leaseToken", checkpoint)
+        self.assertNotIn("scanCursor", checkpoint)
 
     def test_invalid_endpoint_does_not_create_run(self):
         with mock.patch.dict(os.environ, {"WEB_SEARCH_GATEWAY_URL": "https://evil.example/mcp"}), \
@@ -326,10 +338,85 @@ class TestRuntimeTransactions(unittest.TestCase):
             runtime.discover_handler({"sourceId": "source", "runId": "bad-config"}, context())
         self.assertIsNone(self.store._get("CRAWLER#source", "NEWSRUN#bad-config"))
 
+    def test_corrupt_cursor_releases_lease_and_preserves_cursor(self):
+        self.table.put_item(Item={**recovery.CHECKPOINT, "scanCursor": {"unexpected": "value"}})
+        with self.assertRaisesRegex(StateRejected, "INVALID_RECOVERY_CURSOR"):
+            recovery.recover(self.store, lambda: 900, NOW, "mine")
+        checkpoint = self.store._get(recovery.CHECKPOINT["PK"], "RECOVERY")
+        self.assertNotIn("leaseToken", checkpoint)
+        self.assertEqual(checkpoint["scanCursor"], {"unexpected": "value"})
 
+    def test_recovery_nested_calls_stop_within_lease_and_resume_same_page(self):
+        NewsRuns(self.store).begin(Run("source", "expired", source_revision(CONFIG)), NOW - 2000)
+        clock = [0]
+        original_get = self.store.client.get_item
+        original_finish = NewsRuns.finish
+        calls = []
 
+        def slow_get(**kwargs):
+            calls.append(clock[0])
+            clock[0] += 40
+            return original_get(**kwargs)
 
+        def slow_finish(runs, run, now, **kwargs):
+            # Model a long sequence of real native DynamoDB calls in finalization.
+            for _ in range(10):
+                runs.store._get(run.pk, run.sk)
+            return original_finish(runs, run, now, **kwargs)
 
+        with mock.patch.object(recovery.time, "monotonic", side_effect=lambda: clock[0]), \
+                mock.patch.object(self.store.client, "get_item", side_effect=slow_get), \
+                mock.patch.object(NewsRuns, "finish", slow_finish), \
+                self.assertRaisesRegex(StateRejected, "RUN_BUDGET"):
+            recovery.recover(self.store, lambda: 900, NOW, "mine")
+        self.assertEqual(calls, [0, 40, 80, 120, 160, 200])
+        checkpoint = self.store._get(recovery.CHECKPOINT["PK"], "RECOVERY")
+        self.assertNotIn("leaseToken", checkpoint)
+        self.assertNotIn("lastPageAt", checkpoint)
+        self.assertEqual(recovery.recover(self.store, lambda: 900, NOW, "next")["recovered"], 1)
+
+    def test_release_does_not_mask_failure_or_remove_replacement_lease(self):
+        NewsRuns(self.store).begin(Run("source", "expired", source_revision(CONFIG)), NOW - 2000)
+
+        def replaced(*args, **kwargs):
+            self.table.update_item(
+                Key=recovery.CHECKPOINT, UpdateExpression="SET leaseToken = :token",
+                ExpressionAttributeValues={":token": "replacement"})
+            raise StateRejected("INVALID_RUN_STATE")
+
+        with mock.patch.object(NewsRuns, "finish", side_effect=replaced), \
+                self.assertRaisesRegex(StateRejected, "INVALID_RUN_STATE"):
+            recovery.recover(self.store, lambda: 900, NOW, "mine")
+        self.assertEqual(self.store._get(recovery.CHECKPOINT["PK"], "RECOVERY")["leaseToken"],
+                         "replacement")
+
+    def test_recovery_budget_before_first_page_defers_without_claiming_completion(self):
+        NewsRuns(self.store).begin(Run("source", "expired", source_revision(CONFIG)), NOW - 2000)
+        with mock.patch.object(self.store.client, "scan", wraps=self.store.client.scan) as scan:
+            result = recovery.recover(self.store, lambda: 29, NOW, "mine")
+        self.assertEqual(result["status"], "CONTINUE")
+        self.assertEqual(result["pages"], 0)
+        self.assertEqual(result["recovered"], 0)
+        scan.assert_not_called()
+        self.assertEqual(self.store._get("CRAWLER#source", "NEWSRUN#expired")["runState"], "OPEN")
+        resumed = recovery.recover(self.store, lambda: 120, NOW, "next")
+        self.assertEqual(resumed["status"], "COMPLETE")
+        self.assertEqual(resumed["recovered"], 1)
+
+    def test_recovery_cursor_resumes_and_concurrent_lease_is_busy(self):
+        NewsRuns(self.store).begin(Run("source", "expired", source_revision(CONFIG)), NOW - 2000)
+        self.table.put_item(Item={**recovery.CHECKPOINT, "leaseToken": "other", "leaseUntil": NOW + 50})
+        self.assertEqual(recovery.recover(self.store, lambda: 120, NOW, "mine")["status"], "BUSY")
+        self.table.delete_item(Key=recovery.CHECKPOINT)
+        total = 0
+        with mock.patch.object(recovery, "PAGE_SIZE", 1), mock.patch.object(recovery, "MAX_PAGES", 1):
+            for _ in range(10):
+                result = recovery.recover(self.store, lambda: 120, NOW, "mine")
+                total += result["recovered"]
+                if result["status"] == "COMPLETE":
+                    break
+        self.assertEqual(total, 1)
+        self.assertEqual(result["status"], "COMPLETE")
 
 
 if __name__ == "__main__":

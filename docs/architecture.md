@@ -256,9 +256,15 @@ Converse remains on the injected regional runtime client. This is an explicit
 cross-region AWS service integration using public source material. The ordinary
 runtime CountTokens API does not support this model's inference profile; see the
 [AWS token-counting contract](https://docs.aws.amazon.com/bedrock/latest/userguide/count-tokens.html).
-Activation still requires verified prices, Mantle/Converse IAM, bounded SDK clients,
-run finalization and publication-aware consumers. The worker has no Lambda entry
-point, and a successful token-count probe alone is not production acceptance.
+Activation still requires Mantle/Converse IAM and publication-aware consumers.
+`news_runtime.py` supplies private discovery, worker and finalization handlers,
+dated positive prices, no-retry SDK clients and invocation-local deadlines.
+Writers default off; canary mode accepts only the configured source. Finalization
+remains available when writers are disabled. The dedicated `news_search.py`
+adapter signs only the configured US East AgentCore Gateway, shares a 20-second
+deadline across DNS and socket operations, caps responses at two million bytes
+and logs only a query hash on failure. It does not change the three legacy
+gateway adapters. A successful token-count probe alone is not production acceptance.
 The staged `news_lifecycle.py` starts each source run once, before discovery or
 reservation. Reservations require that open run, its exact source revision, a
 30-minute admission window and a maximum of 60 attempts. Run counters advance in
@@ -280,16 +286,23 @@ at most 64,000 bytes with ETag/version conditions, checks canonical state again,
 and binds continuation and history replay to the combined publication/object
 revision. Indexed snippets never replace unavailable current bytes. These news
 sources are available to authenticated users; no public route is added. REST and
-WebSocket share this reader through source access. Positive deployed QA acceptance
-and legacy news migration are still required before enabling new writers.
+WebSocket share this reader through source access. An isolated synthetic canary
+may qualify publication and both QA transports after readers deploy. Positive
+deployed QA acceptance and legacy news migration remain required before enabling
+normal source writers or `all` mode.
+`news_recovery.py` supplies a private scheduled-recovery handler with a leased,
+durable scan cursor. Each invocation reads at most ten 100-item pages and advances
+the cursor only after a page is handled. Recovery survives writer rollback and
+does not release unknown charges. DynamoDB integer counters keep their JSON
+number shape on receipt replay; money is serialized as exact decimal strings.
 The web source list labels these results as news evidence and retains partial
 and restored-history caveats without exposing internal S3 links. Markdown views,
 editable document/meeting HTML and research exports restore valid IPv6 authority
 brackets after parser encoding. Query bytes, HTML escaping, URL protocol filtering
 and the existing HTML sanitization remain in place.
 These modules do not activate a scheduler, change legacy news results or establish
-production acceptance. Handler wiring, scheduled recovery and consumer rollout remain
-separate delivery stages.
+production acceptance. Infrastructure wiring and consumer rollout remain separate
+delivery stages; see the [news release contract](runbooks/knowledge-grade-news-release.md).
 
 Action-item analysis has its own MEETING#/ANALYSIS#actionItems state. The summary
 pipeline runs it inline; authorized editor retries send ActionItemsRequested to
