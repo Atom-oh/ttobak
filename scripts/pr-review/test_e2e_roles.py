@@ -371,8 +371,8 @@ class EndToEndRoleTests(unittest.TestCase):
         self.environment["PANEL_RETRIES"] = "2"
         calls = self.kiro_review_calls(self.run_pipeline("infra/lib/stack.ts"))
         self.assertEqual(len(calls), 2)
-        self.assertNotIn("schema-contract-v1", calls[0]["args"][1])
-        self.assertIn("schema-contract-v1", calls[1]["args"][1])
+        self.assertNotIn("schema-diagnostic-v2", calls[0]["args"][1])
+        self.assertIn("schema-diagnostic-v2", calls[1]["args"][1])
         self.assertNotEqual(calls[0]["args"][1], calls[1]["args"][1])
         history = json.loads((self.work / "slot/kiro-fable-attempts.json").read_text())
         self.assertEqual(len(history), 1)
@@ -385,6 +385,14 @@ class EndToEndRoleTests(unittest.TestCase):
             if path.is_file():
                 self.assertNotIn(b"REJECTED_CANARY", path.read_bytes(), str(path))
         self.assertNotIn("REJECTED_CANARY", json.dumps(calls))
+        receipt = json.loads((self.work / "slot/kiro-fable-request.json").read_text())
+        feedback = {"pointer": "/checks/0", "reason": "EXACT_KEYS_REQUIRED"}
+        self.assertEqual(receipt["validation_feedback"], feedback)
+        self.assertIn('Validated rejection feedback: {"pointer":"/checks/0","reason":"EXACT_KEYS_REQUIRED"}',
+                      calls[1]["args"][1])
+        summary = json.loads((self.work / "role-summary.json").read_text())
+        self.assertEqual(summary["attempt_history"]["kiro-fable"], history)
+        self.assertEqual(summary["mode"], "deterministic")
         self.assertTrue((self.work / "review.md").read_text().endswith("VERDICT: PASS\n"))
 
     def test_schema_invalid_after_structured_scrub_retries_and_records_phase(self):
