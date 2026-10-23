@@ -198,6 +198,46 @@ class MigrationTests(unittest.TestCase):
         with self.assertRaisesRegex(archive.ArchiveRejected, "INVALID_LEGACY_IDENTITY"):
             self.migration.run(True)
 
+    def test_malformed_declared_news_outside_document_keys_cannot_complete(self):
+        for changed_key in ({"PK": "OTHER#은행"}, {"SK": "ARTICLE#0123456789abcdef"}):
+            for declaration in ("canonical", "index"):
+                row = dict(self.row, **changed_key)
+                if declaration == "index":
+                    row.pop("type")
+                    row["GSI4PK"] = "DOC#news"
+                key = {name: row[name] for name in ("PK", "SK")}
+                self.table.put_item(Item=row)
+                try:
+                    for count, error in ((1, "COUNT_MISMATCH"), (2, "INVALID_LEGACY_IDENTITY")):
+                        with self.subTest(key=key, declaration=declaration, count=count):
+                            with tempfile.TemporaryDirectory() as directory:
+                                local = archive.LocalArchive(directory)
+                                migration = archive.Migration(
+                                    self.table, self.s3, self.functions, local,
+                                    dict(self.binding, expectedLegacyCount=count), lambda: self.now)
+                                with self.assertRaisesRegex(archive.ArchiveRejected, error):
+                                    migration.run(True)
+                                self.assertNotEqual(
+                                    (local.resume() or {}).get("status"), "COMPLETE_RETAINED_LEGACY")
+                    self.assertEqual(self.table.get_item(Key=key)["Item"], row)
+                finally:
+                    self.table.delete_item(Key=key)
+
+    def test_native_news_history_is_excluded_while_documents_remain_protected(self):
+        history = {"PK": self.key["PK"], "SK": "HISTORY#2026-10-21T19:10:00Z",
+                   "type": "news", "schemaVersion": 1, "runId": "scheduled-history"}
+        protected = dict(self.row, SK="DOC#1111111111111111", schemaVersion=1,
+                         qualityStatus="PUBLISHED")
+        self.table.put_item(Item=history)
+        self.table.put_item(Item=protected)
+        self.assertEqual(self.migration.scan(), ([self.key], 1))
+        result = self.new_migration().run(True)
+        self.assertEqual(result["status"], "COMPLETE_RETAINED_LEGACY")
+        self.assertEqual(result["protectedCount"], 1)
+        for row in (history, protected):
+            self.assertEqual(self.table.get_item(
+                Key={name: row[name] for name in ("PK", "SK")})["Item"], row)
+
     def test_resumed_final_verification_rechecks_earlier_rows_and_archive_blobs(self):
         # Interrupt an actual reconciliation checkpoint, then change a member of
         # the verified prefix. Each independent mutation must prevent completion.

@@ -235,11 +235,16 @@ class Migration:
 
     def scan(self):
         keys, protected = [], 0
+        document_key = Attr("PK").begins_with("CRAWLER#") & Attr("SK").begins_with("DOC#")
+        # Versioned native HISTORY rows also use type=news, but are not documents.
+        # Unversioned news and explicit document-index declarations must reach
+        # identity validation even when their primary keys are malformed.
+        membership = (Attr("GSI4PK").eq("DOC#news")
+                      | (Attr("type").eq("news")
+                         & (document_key | Attr("schemaVersion").not_exists())))
         pages = self.table.meta.client.get_paginator("scan").paginate(
             TableName=self.table.name, ConsistentRead=True,
-            FilterExpression=Attr("PK").begins_with("CRAWLER#")
-                             & Attr("SK").begins_with("DOC#")
-                             & (Attr("type").eq("news") | Attr("GSI4PK").eq("DOC#news")),
+            FilterExpression=membership,
             ProjectionExpression="PK, SK, schemaVersion, qualityStatus",
             PaginationConfig={"PageSize": 100})
         for index, page in enumerate(pages, 1):
