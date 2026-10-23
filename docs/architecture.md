@@ -367,6 +367,14 @@ serialization. Notes, summary and action sections use metadata views; transcript
 reads hydrate only the authorized chosen source and eligible segments. Every page
 revalidates access/revision. The MCP adapter passes these pages through with its
 own byte ceiling; it no longer fetches full meeting detail for reading.
+Meeting discovery uses `/api/meeting-catalog` with bounded owned/direct/team
+queries, current-grant checks and summary privacy projection. It performs no
+profile writes or invitation materialization. Vault manifest/file reads use
+`/api/vault/reading`: metadata discovery precedes authorized text hydration,
+and continuations bind current source bytes, membership and attachment groups.
+Both return bounded Unicode fragments without silently truncating records or
+falling back to the legacy list/export. Collection groups are individually current;
+meeting consumers union overlapping access paths by meeting ID.
 The installed adapter also provides stateless, authenticated HTTP with caller-supplied
 file bytes. Remote hosting and OAuth client acceptance remain separate from code
 readiness; see [ADR-045](decisions/ADR-045-dual-mcp-transports.md).
