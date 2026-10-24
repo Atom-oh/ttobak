@@ -271,6 +271,11 @@ production secret rotation or a new runtime acceptance. The exact candidate's
 assessment must include these three path/mode/object bindings explicitly; they
 are not added to the six-document historical exclusion set.
 
+The main integration also changes documentation outside the six-document set:
+`docs/INFRA-SPEC.md`, `docs/architecture.md`, `docs/DESIGN-SPEC.md` and
+`docs/runbooks/connector-staging-2026-10-21.md`. Assess each as an explicit
+additional difference; none is a runtime or build input.
+
 The news source includes the separately accepted settlement/scheduler repairs;
 its actual deployment and replay receipts are recorded above. These named inputs
 are an assessment contract, not blanket exclusions or a claim that a future

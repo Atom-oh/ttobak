@@ -131,10 +131,13 @@ challenge follows that private flag and requires the same read scope as MCP;
 discovery also lists optional write. HTTP hosts must use a dedicated client and
 fresh login, while stdio keeps its existing first-party authentication.
 The [release runbook](../runbooks/connector-release.md) defines separate
-deployment verification. Native migration, real provider tokens, audience and
-scope checks, current-source reads, expiry/revocation/disable behavior, actual
-KMS/IAM execution and rollback require recorded acceptance before main
-integration of any revision that enables the connector flags. The
+deployment verification. Installed stdio bundle refresh, real provider tokens,
+audience and scope checks, current-source reads, expiry/revocation/disable
+behavior, actual KMS/IAM execution and rollback require recorded acceptance
+before main integration of any revision that enables the connector flags.
+Per-host native OAuth migration is not part of that gate: each HTTP host needs
+its own dedicated-client login, refresh and read verification, recorded only
+when that host's evidence exists, and the host guidance keeps that limit. The
 source/artifact-bound
 [dated acceptance record](../runbooks/connector-activation-2026-10-21.md) must be
 complete and land with, or before, that revision. An enabled source flag without

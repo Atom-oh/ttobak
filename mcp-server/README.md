@@ -166,7 +166,7 @@ pre-registered public OAuth client and register each host's exact callback.
 | `TTOBAK_HTTP_PORT` | `3000`; `0` prints an ephemeral port to stderr |
 | `TTOBAK_HTTP_ALLOWED_HOSTS` | Public host plus exact comma-separated proxy/local Host values; no wildcards |
 | `TTOBAK_HTTP_ALLOWED_ORIGINS` | Public origin plus exact browser origins; absent Origin is permitted |
-| `TTOBAK_MCP_SCOPES` | `openid email profile`; all required, including mandatory `openid`; private mode also requires `https://ttobak.atomai.click/api/mcp/read` and advertises optional write |
+| `TTOBAK_MCP_SCOPES` | `openid email profile`; all required, including mandatory `openid`; private mode also requires `{MCP_RESOURCE_URL}/read` (production: `https://ttobak.atomai.click/api/mcp/read`) and advertises optional write |
 | `TTOBAK_HTTP_TIMEOUT_MS` | `55000`; configurable from 1000 to 55000 |
 
 The public resource and upstream API share the application CloudFront origin.
