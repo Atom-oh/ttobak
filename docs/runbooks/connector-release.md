@@ -70,7 +70,9 @@ prerequisites before the later deploy job's Python setup.
    Locally verified issued access/ID tokens can remain valid until expiry, so keep
    grant and transport denial in place. Restore the accepted configuration,
    remove synthetic source/session/note fixtures and preserve audit receipts.
-   Record exact deployed versions and provider outcomes before main integration.
+   Record exact deployed versions and provider outcomes. Merging enabled flags to
+   main follows ADR-053's integration and activation order; deploying them from
+   main requires the exact-commit attestation first.
 
 The installed stdio adapter continues using `deployment-auth.ts` and its verified,
 deployment/profile-bound cache. It must not be replaced by the legacy `auth.ts`.

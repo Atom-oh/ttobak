@@ -134,6 +134,19 @@ scope checks, current-source reads, expiry/revocation/disable behavior, actual
 KMS/IAM execution and rollback require recorded acceptance before activation.
 No additional external callback or unauthenticated route is approved here.
 
+### Integration and activation order
+
+Merging a revision that sets the connector flags to true is source integration,
+not activation. Integration requires current-head review and required CI only
+while the push-triggered Deploy Infrastructure and Deploy Frontend workflows stay
+disabled. Activation is the separately authorized, individual `--exclusively`
+deployment of the changed stacks. Before that deployment, or before re-enabling
+either workflow, bind the exact main commit to the recorded production acceptance
+through an independent source/artifact comparison, and record the deployed
+versions. A missing exact-commit attestation for an unmerged candidate is a
+deployment precondition to report, not a merge blocker; a later attestation never
+waives the deploy-time comparison.
+
 ## Verification
 
 `scripts/connector/generate_contract.py --check` compares all generated files
