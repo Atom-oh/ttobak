@@ -61,6 +61,24 @@ function; `/api/mcp` keeps the `/api/*` edge client-ID check, whose 401 for that
 path carries `WWW-Authenticate` with the path-specific `resource_metadata` URL. The Lambda checks
 `x-origin-verify` and pins Host to the public host.
 
+The connector activation configuration enables the dedicated read and read/write
+public clients and private MCP transport. Both use authorization code with PKCE,
+the exact MCP resource audience and `https://ttobak.atomai.click/api/mcp/read`; only the write client
+can request `https://ttobak.atomai.click/api/mcp/write`. They never enter the identity pool, API
+first-party allowlist or WebSocket allowlist. Private HTTP MCP accepts only these
+clients. Its edge challenge follows `connectorPrivateBridgeEnabled` and includes
+the read scope; protected-resource discovery also advertises optional write.
+The retained RSA key, metadata-only transactional grant reads and private
+API-live/QA invocations remain unchanged. First-party stdio is independent.
+See the [connector release procedure](runbooks/connector-release.md) for provider,
+IAM/KMS, current-grant and rollback acceptance; source flags do not prove rollout.
+These examples use the production resource URL; another deployment derives
+`{MCP_RESOURCE_URL}/read` and `/write` from its exact configured URL. Both custom
+scopes belong to the existing URL-identified `McpResourceServer`, alongside its
+reserved `access` scope. The old `ConnectorResourceServer` is retained without
+being referenced by these clients' allowed scopes. Cognito rejects resource
+binding when custom scopes belong to a different resource-server identifier.
+
 The public SPA/MCP client retains its two local port-9876 callbacks and adds
 deployment-specific redirects from the SSM StringList
 `/ttobak/auth/mcp-callback-urls`. Bootstrap that parameter in the deployment
