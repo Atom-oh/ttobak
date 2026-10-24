@@ -18,10 +18,10 @@ const knowledgeIndexingMode: 'manual-only' | 'all' = 'all';
 const knowledgeIndexScheduleEnabled = true;
 // Separate activation change only after deployed QA jobs pass acceptance.
 const qaAsyncJobsEnabled = true;
-// Dedicated HTTP activation; preserve first-party stdio credentials on cutover.
-// Deployed provider, private consumer and rollback acceptance: connector-release.md.
-const connectorOAuthEnabled = true;
-const connectorPrivateBridgeEnabled = true;
+// Setup guidance only; activate separately after exact-source acceptance.
+// Preserve the enabling gate and historical evidence in connector-release.md.
+const connectorOAuthEnabled = false;
+const connectorPrivateBridgeEnabled = false;
 
 // Environment configuration (ap-northeast-2 recommended for Korean users)
 const env = {

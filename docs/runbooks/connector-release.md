@@ -1,9 +1,11 @@
 # Connector deployment and acceptance
 
-The activation source sets `connectorOAuthEnabled` and
-`connectorPrivateBridgeEnabled` in `infra/bin/infra.ts` to true for the two
-dedicated clients and private HTTP transport. The edge receives the same private
-flag so its challenge requires `openid email profile https://ttobak.atomai.click/api/mcp/read`;
+Current source keeps `connectorOAuthEnabled` and
+`connectorPrivateBridgeEnabled` in `infra/bin/infra.ts` false while delivering
+setup guidance and runtime configuration. A separately reviewed enabling revision
+sets both flags true for the two dedicated clients and private HTTP transport.
+In that mode, the edge receives the same private flag so its challenge requires
+`openid email profile https://ttobak.atomai.click/api/mcp/read`;
 MCP discovery advertises that baseline and optional `https://ttobak.atomai.click/api/mcp/write`.
 Source configuration is not live provider acceptance. Record the deployed flags,
 reviewed revision and acceptance evidence before claiming activation complete.
@@ -22,7 +24,10 @@ the requested resource. First-party PKCE had succeeded; no connector policy or
 note mutation had begun. Preserve that failed run and its pending authorization
 intent. The [dated activation record](connector-activation-2026-10-21.md) binds
 the separately deployed repair source, artifacts and successor acceptance.
-Main integration of enabled flags requires that record to be complete and reviewed.
+The record describes its named historical source and artifacts; it does not attest
+the current guide/configuration revision or a future enabling candidate. Main
+integration of enabled flags requires independent acceptance bound to that exact
+candidate and its artifacts, with a complete reviewed record.
 
 The [2026-10-21 disabled-staging record](connector-staging-2026-10-21.md) records
 the prerequisite four-stack rollout and first-party acceptance with both flags
@@ -35,11 +40,12 @@ fresh PKCE login. A first-party HTTP token is rejected in this mode. Installed
 stdio keeps its existing client and deployment/profile-bound cache.
 
 FrontendStack publishes the same private flag and both dedicated public client
-IDs in `config.json.mcp`. The Settings guide defaults private HTTP to the read
+IDs in `config.json.mcp`. In private mode, the Settings guide defaults HTTP to the read
 client and `openid email profile https://ttobak.atomai.click/api/mcp/read`; personal-note writing
 requires a separate enabled write connection and the current user's one-hour
 approval in Settings → AI connection permissions. Stdio always uses the existing
-first-party client. Missing mode or invalid dedicated-client configuration
+first-party client. With the private flag false, the guide shows first-party HTTP
+instructions instead. Missing mode or invalid dedicated-client configuration
 disables HTTP instructions instead of selecting a first-party fallback.
 Static frontend publication preserves `config.json`; deploy the FrontendStack
 configuration companion and verify the actual Settings output before completing
@@ -78,6 +84,9 @@ back to Docker. PR tests and the separate deployment `infra-tests` job need thes
 prerequisites before the later deploy job's Python setup.
 
 ## Deployment sequence
+
+The guide/configuration-only revision may integrate with both source flags false.
+The sequence below applies to the separate revision that enables them.
 
 Deploy the independently reviewed activation branch and frozen artifacts before
 merging that branch to main. Keep the PR unmerged while private acceptance is

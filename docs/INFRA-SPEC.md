@@ -61,12 +61,15 @@ function; `/api/mcp` keeps the `/api/*` edge client-ID check, whose 401 for that
 path carries `WWW-Authenticate` with the path-specific `resource_metadata` URL. The Lambda checks
 `x-origin-verify` and pins Host to the public host.
 
-The connector activation configuration enables the dedicated read and read/write
-public clients and private MCP transport. Both use authorization code with PKCE,
+Current CDK source keeps `connectorOAuthEnabled` and
+`connectorPrivateBridgeEnabled` false. This revision delivers setup guidance and
+runtime configuration; a separately reviewed revision enables dedicated issuance
+and private HTTP transport after exact-source acceptance. The dedicated read and
+read/write public clients use authorization code with PKCE,
 the exact MCP resource audience and `https://ttobak.atomai.click/api/mcp/read`; only the write client
 can request `https://ttobak.atomai.click/api/mcp/write`. They never enter the identity pool, API
-first-party allowlist or WebSocket allowlist. Private HTTP MCP accepts only these
-clients. Its edge challenge follows `connectorPrivateBridgeEnabled` and includes
+first-party allowlist or WebSocket allowlist. When enabled, private HTTP MCP accepts
+only these clients. Its edge challenge follows `connectorPrivateBridgeEnabled` and includes
 the read scope; protected-resource discovery also advertises optional write.
 The retained RSA key, metadata-only transactional grant reads and private
 API-live/QA invocations remain unchanged. First-party stdio is independent.

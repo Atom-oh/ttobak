@@ -389,11 +389,13 @@ controls; their transactions pin observed policy and approval generations. These
 management routes never accept delegated principals. The sole private mutation
 creates a personal note and durable retry receipt in the same transaction as
 current policy/approval checks. Replays verify the existing note and receipt
-without overwriting human edits. Application configuration enables dedicated
-OAuth issuance and private HTTP transport; HTTP hosts must sign in with a
-dedicated client, while stdio keeps its first-party credentials. Edge challenges
-and resource discovery require the same read scope. Deployed provider, IAM,
-consumer and rollback acceptance are separate from these source flags; see
+without overwriting human edits. Current CDK source keeps dedicated OAuth issuance
+and private HTTP transport disabled while delivering setup guidance and runtime
+configuration. A separate enabling revision requires independent acceptance bound
+to its exact source and artifacts. In private mode, HTTP hosts sign in with a
+dedicated client and edge challenges and resource discovery require the same read
+scope. Flag-off HTTP and stdio retain first-party authentication. Historical
+provider, IAM, consumer and rollback evidence does not attest this revision; see
 [ADR-053](decisions/ADR-053-connector-capability-private-delegation.md).
 
 Attachment extraction supports bounded native text from PDF/PPTX/DOCX/Markdown.

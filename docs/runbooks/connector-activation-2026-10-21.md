@@ -1,5 +1,11 @@
 # Connector activation acceptance — 2026-10-21
 
+This is a historical record for the exact sources and artifacts named below.
+The current guide/configuration revision keeps both connector source activation
+flags false. This record does not attest the current HEAD or composed main tree.
+A future revision enabling those flags requires independent acceptance bound to
+its exact candidate and artifacts; the historical receipts remain preserved.
+
 **Bounded production acceptance completed on 2026-10-21 at 21:43:58 UTC. Approved synthetic fixture cleanup completed on 2026-10-22 at 01:11:58 UTC.** The actual results below bind the deployed connector source and artifacts. Native-host migration and final composed-tree/main verification retain the separate limits described here.
 
 The repaired deployment completed at 18:17:20 UTC from source

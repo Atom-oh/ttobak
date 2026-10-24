@@ -2,7 +2,7 @@
 
 Date: 2026-10-21
 
-Status: Accepted design; main integration of enabled flags requires recorded production acceptance
+Status: Accepted design; source activation pending
 
 ## Context
 
@@ -126,10 +126,13 @@ The infrastructure supplies two dedicated public clients, a retained
 RSA signing key, metadata-only transaction grants, private invocation to the API
 live alias and QA, and a hash-pinned ARM64 cryptography layer. Existing pool/client
 identities and first-party/WebSocket allowlists remain unchanged. Application
-configuration enables issuance and private HTTP transport together. The edge
+configuration can enable issuance and private HTTP transport together. This
+guide/configuration revision keeps both source activation flags false; enabling
+them remains a separate, independently reviewed revision. The edge
 challenge follows that private flag and requires the same read scope as MCP;
-discovery also lists optional write. HTTP hosts must use a dedicated client and
-fresh login, while stdio keeps its existing first-party authentication.
+discovery also lists optional write. In private mode, HTTP hosts must use a
+dedicated client and fresh login. Flag-off HTTP and stdio keep first-party
+authentication.
 The [release runbook](../runbooks/connector-release.md) defines separate
 deployment verification. Native migration, real provider tokens, audience and
 scope checks, current-source reads, expiry/revocation/disable behavior, actual

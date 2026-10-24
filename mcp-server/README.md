@@ -93,9 +93,12 @@ Omitting the flag or setting it to `false` selects the existing HTTP transport.
 Source tests cover that rollback selection; production KMS/IAM, provider-token
 and consumer acceptance remain prerequisites for enabling it. The private flag
 does not change stdio authentication or install OAuth clients.
-The application CDK configuration enables dedicated OAuth issuance and the
-private bridge. Its edge challenge includes `https://ttobak.atomai.click/api/mcp/read`, matching the
-HTTP verifier and discovery document. The exact IAM grants, ARM64 QA layer and
+Current application CDK source keeps dedicated OAuth issuance and the private
+bridge disabled while delivering setup guidance and runtime configuration. A
+separate enabling revision requires independent acceptance bound to its exact
+source and artifacts. In private mode, the edge challenge includes
+`https://ttobak.atomai.click/api/mcp/read`, matching the HTTP verifier and discovery
+document. The exact IAM grants, ARM64 QA layer and
 provider/rollback acceptance are documented in the
 [release runbook](../docs/runbooks/connector-release.md); source flags do not prove
 production activation.
@@ -107,8 +110,9 @@ custom scopes to be registered on the same resource server as the requested
 scopes; the old `ttobak.connector` namespace is retained but is not issued.
 The 2026-10-21 old-namespace authorization failure occurred before credential
 submission. The [dated acceptance record](../docs/runbooks/connector-activation-2026-10-21.md)
-binds the corrected deployed source and provider/consumer results. Main
-integration of enabled flags waits for that record to be complete and reviewed.
+binds the corrected historical deployment and provider/consumer results, not the
+current guide revision. Main integration of enabled flags waits for a complete,
+independently reviewed record bound to the exact enabling candidate.
 Installed stdio refresh is separately verified with a unique synthetic profile;
 it does not prove migration of existing HTTP connections or every native host.
 Copy HTTP setup from the canonical https://ttobak.atomai.click site; the default
