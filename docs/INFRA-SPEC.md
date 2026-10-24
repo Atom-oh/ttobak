@@ -465,7 +465,10 @@ signing key setup and media behavior. Dynamic routes are mapped by knownPages;
 separately from next build. Both Chat and Live QA use its relative `wsUrl: "/ws"`;
 the client accepts only the same-site WS path. Local development defaults to REST;
 loopback WS validation needs an explicitly supplied config and local proxy.
-Invalid/missing config retains REST fallback.
+Invalid/missing config retains REST fallback. config.json also publishes
+`mcp.url: "/api/mcp"`, the `connectorPrivateBridgeEnabled` mode and the two
+dedicated public connector client IDs from AuthStack. These are nonsecret IDs;
+the source flags in `infra/bin/infra.ts` select the mode.
 
 The default application behavior has CSP, one-year HSTS, nosniff, frame denial
 and no-referrer. Its cache policy enables gzip/Brotli compression and has a zero

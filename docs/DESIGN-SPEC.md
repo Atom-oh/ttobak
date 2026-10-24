@@ -386,6 +386,11 @@ HTTPS `/api/mcp` resource. Its presence is described as a configured address, no
 proof of a successful client connection. Missing, loading and failed configuration
 are distinct; commands requiring an unknown HTTP URL cannot be copied.
 The guide does not invent an active endpoint from the site origin.
+HTTP instructions follow runtime `mcp.privateBridgeEnabled`: `false` keeps the
+first-party client and `openid email profile`; `true` uses the dedicated read
+client and adds the `{mcp.url}/read` scope. A missing mode or invalid, duplicate or
+first-party dedicated client ID shows HTTP setup as unavailable; stdio keeps the
+first-party client.
 
 Local setup documents the Node runtime, download, client registration, browser
 login and verification. JSON examples require an explicit absolute file path;
