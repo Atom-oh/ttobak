@@ -1,9 +1,51 @@
 # Connector deployment and acceptance
 
-The two connector clients, private consumers and signing infrastructure are staged.
-`connectorOAuthEnabled` and `connectorPrivateBridgeEnabled` in `infra/bin/infra.ts`
-remain false until separately reviewed activation. A passing source test is not
-live provider acceptance.
+The activation source sets `connectorOAuthEnabled` and
+`connectorPrivateBridgeEnabled` in `infra/bin/infra.ts` to true for the two
+dedicated clients and private HTTP transport. The edge receives the same private
+flag so its challenge requires `openid email profile https://ttobak.atomai.click/api/mcp/read`;
+MCP discovery advertises that baseline and optional `https://ttobak.atomai.click/api/mcp/write`.
+Source configuration is not live provider acceptance. Record the deployed flags,
+reviewed revision and acceptance evidence before claiming activation complete.
+
+The scope prefix is the configured MCP resource URL, including `https://`:
+`{MCP_RESOURCE_URL}/read` and `{MCP_RESOURCE_URL}/write`. AuthStack adds both to
+the existing URL-identified `McpResourceServer` and issues them through the
+dedicated clients. It retains the old `ttobak.connector` resource server without
+issuing its scopes to these clients. Resource, token audience and custom-scope
+resource-server identifier must match.
+
+On 2026-10-21, the dedicated authorization request using the old scope namespace
+failed before credential submission or code exchange. Cognito returned
+`invalid_request`: custom scopes requested for resource binding must belong to
+the requested resource. First-party PKCE had succeeded; no connector policy or
+note mutation had begun. Preserve that failed run and its pending authorization
+intent. The [dated activation record](connector-activation-2026-10-21.md) binds
+the separately deployed repair source, artifacts and successor acceptance.
+Main integration of enabled flags requires that record to be complete and reviewed;
+deployment from main then follows ADR-053's integration and activation order.
+
+The [2026-10-21 disabled-staging record](connector-staging-2026-10-21.md) records
+the prerequisite four-stack rollout and first-party acceptance with both flags
+false, including its artifact identities and remaining private-activation checks.
+
+Private HTTP mode accepts only the dedicated read and read/write client IDs.
+Reconfigure each HTTP host using the AuthStack `ReadConnectorClientId` output,
+or `WriteConnectorClientId` when personal-note writing is required, and perform a
+fresh PKCE login. A first-party HTTP token is rejected in this mode. Installed
+stdio keeps its existing client and deployment/profile-bound cache.
+
+FrontendStack publishes the same private flag and both dedicated public client
+IDs in `config.json.mcp`. The Settings guide defaults private HTTP to the read
+client and `openid email profile https://ttobak.atomai.click/api/mcp/read`; personal-note writing
+requires a separate enabled write connection and the current user's one-hour
+approval in Settings → AI connection permissions. Stdio always uses the existing
+first-party client. Missing mode or invalid dedicated-client configuration
+disables HTTP instructions instead of selecting a first-party fallback.
+Static frontend publication preserves `config.json`; deploy the FrontendStack
+configuration companion and verify the actual Settings output before completing
+activation. A static-only intermediate release with the older URL-only config
+intentionally shows HTTP setup as unavailable.
 
 ## Resource boundaries
 
@@ -38,26 +80,42 @@ prerequisites before the later deploy job's Python setup.
 
 ## Deployment sequence
 
+Deploy the independently reviewed activation branch and frozen artifacts before
+merging that branch to main. Keep the PR unmerged while private acceptance is
+pending. After actual activation and rollback acceptance complete, attach a dated
+public-safe result bound to the reviewed source and artifacts, then integrate
+main under ADR-053's integration and activation order; the exact merged commit
+is attested before any later deployment from main. The disabled-staging record
+is a prerequisite, not that completion result.
+
 1. Capture current main, deployment activity, stack templates, Lambda code hashes,
    alias versions, feature parameters, grants and public config without credentials.
    Build all Go entry points and both MCP artifacts from the reviewed combined
    revision, preserving already accepted news and current-source consumers.
-2. Obtain the required independent review, synth/diff each changed stack and check
-   resource identities, IAM and staged assets. Deploy AuthStack, EdgeAuthStack,
+2. For the prerequisite staging rollout, use a reviewed revision with both
+   connector flags false. Synth/diff each changed stack and check resource
+   identities, IAM and staged assets. Deploy AuthStack, EdgeAuthStack,
    GatewayStack and FrontendStack individually with `--exclusively`, respecting
    their cross-region references. Never deploy KnowledgeStack implicitly.
+   Preserve all deployed `SummaryPrivacy*` parameters with previous parameter
+   values; never reset or advance the legacy member cutoff during this release.
 3. With issuance still disabled, verify unchanged first-party login, API, WebSocket,
    HTTP MCP and stdio token-cache behavior. Check exact client IDs, disabled OAuth,
    retained key, deployed crypto layer and private rejection without grants.
-4. Review the separate activation revision. Pair the EdgeAuth private-bridge flag
-   with the MCP mode and protected-resource discovery scopes: active challenges
-   require `https://ttobak.atomai.click/api/mcp/read`; staged and flag-off challenges retain
-   `openid email profile`. Both source flags remain false in this staging revision.
-   Verify the complete deployment sequence before consumer acceptance.
-   Use the approved loopback PKCE flow
-   for a dedicated synthetic identity. Request the exact resource audience and
-   read scope, plus write scope only for the write client. Capture provider claims
-   as nonsecret assertions; keep tokens and verifier material private.
+4. Review the separate activation revision with both flags true and the matching
+   edge challenge. Active challenges require `https://ttobak.atomai.click/api/mcp/read`; staged
+   and flag-off challenges retain `openid email profile`. Repeat the resource/IAM
+   diff and deploy the same stacks
+   individually, preserving previous summary privacy parameters. Use the approved
+   loopback PKCE flow for a dedicated synthetic identity. Request the exact
+   resource audience and read scope, plus write scope only for the write client.
+   Capture provider claims as nonsecret assertions; keep tokens and verifier
+   material private. Publish the matching static guide and FrontendStack runtime
+   configuration, and check the rendered HTTP client ID and read scope, missing
+   configuration notice and unchanged stdio client. A reviewed static-only guide
+   update may precede Gateway activation to disable legacy HTTP instructions;
+   publish its runtime configuration companion after the coordinated backend
+   checks and flag-off/restore sequence, before declaring activation complete.
 5. Verify reads and personal-note creation through CloudFront and actual service
    IAM/KMS. Test the same-key replay, conflicting body, human edit and deletion,
    another user's source denial, source changes, expired/revoked/blocked approvals,
@@ -69,9 +127,12 @@ prerequisites before the later deploy job's Python setup.
    deletion of the dedicated clients; OAuth-off alone is not credential revocation.
    Locally verified issued access/ID tokens can remain valid until expiry, so keep
    grant and transport denial in place. Restore the accepted configuration,
-   remove synthetic source/session/note fixtures and preserve audit receipts.
-   Record exact deployed versions and provider outcomes. Merging enabled flags to
-   main follows ADR-053's integration and activation order.
+   preserve audit receipts and record the exact fixture disposition. Remove
+   synthetic data only with deletion authorization; otherwise retain the exact
+   fixtures under a reviewed, bounded read-only inventory with fresh matching
+   before/after boundaries. Keep cleanup incomplete and do not infer token
+   revocation. Record deployed versions and provider outcomes. Merging enabled
+   flags to main follows ADR-053's integration and activation order.
 
 Once main carries enabled flags, treat every AuthStack, EdgeAuthStack,
 GatewayStack or FrontendStack deployment from main as an activation, including
@@ -81,8 +142,65 @@ comparison of the exact main commit against the recorded acceptance, and record
 the workflow state, comparison result and deployed versions in a dated record.
 Do not re-enable either workflow until that record exists.
 
+Reserve an HTTP MCP maintenance window for both activation and flag-off rollback.
+EdgeAuthStack and GatewayStack cannot switch atomically: edge-first activation
+advertises a read scope unsupported by the first-party client while the old MCP
+still rejects dedicated clients; cached first-party sessions may continue until
+Gateway changes. Gateway-first activation makes MCP reject first-party clients
+while the old edge still advertises first-party scopes. Expect temporary
+authentication failures until both stacks converge and HTTP hosts complete their
+dedicated login. The reverse split occurs during rollback. Check both deployed
+flags, discovery/challenge, FrontendStack config and actual Settings instructions,
+and positive/negative client probes before ending the window; a single successful
+stack update is insufficient. Existing hosts and cached browser pages may retain
+their old settings during propagation and require refresh or reconfiguration.
+
+## Activation and rollback checks
+
+Use disposable identities and synthetic sources. Enable the two exact client
+policies through administrator settings and approve writing through the synthetic
+user's first-party settings, recording policy and approval generations. Read-only
+OAuth is not write approval. A missing or disabled policy must deny private reads.
+Keep captured tokens, PKCE verifiers and login callbacks in private files; receipts
+record boolean claim assertions, response status, byte counts and fixture IDs.
+
+| Check | Required result |
+|---|---|
+| Read and write client PKCE | Verified access token has the exact client, issuer, resource audience and requested scopes; read client cannot obtain write scope |
+| Both discovery paths and edge 401 | Read scope is advertised/required; write is supported but absent from the baseline challenge |
+| Bounded source read and private QA | Synthetic current source is returned/cited through actual service IAM and KMS; no bearer fallback |
+| First-party HTTP versus stdio | HTTP MCP rejects the first-party token; installed stdio still reads using its original cache/profile |
+| Note create and same-key replay | One fresh personal note ID; replay returns that ID without another note |
+| Conflicting body, human edit, deletion | Changed body conflicts; replay preserves human text; replay never recreates a deleted note |
+| Foreign source and changed continuation | Foreign source is denied; a continuation for old bytes is rejected after an authorized edit |
+| Grant expiry, revoke, block and disabled policy | Existing access tokens gain no stale privilege; re-approval uses the current generation |
+| ID, unbound, expired and unknown-client tokens | Rejected before tool execution |
+| Direct write-client API and both WebSockets | Denied; no identity-pool or first-party allowlist membership |
+| Private flag rollback | Set it false in EdgeAuthStack, GatewayStack and FrontendStack, preserving OAuth while testing; discovery/challenge and the guide restore first-party scopes, first-party HTTP succeeds and dedicated HTTP is rejected |
+| Restore and fixture disposition | Restore reviewed flags and verify both client modes. Keep pilot write approvals inactive and bounded audit receipts. Record authorized synthetic deletion or explicitly incomplete retained fixtures with fresh, equal before/after read-only proofs; token revocation requires separate evidence |
+
+When retiring dedicated issuance, set `connectorOAuthEnabled` false and deploy
+AuthStack separately. Disabling OAuth does not itself revoke already issued
+access tokens; keep the private flag and current-grant deny checks in the
+rollback procedure. Do not alter installed first-party stdio credentials.
+
+For flag-off first-party HTTP testing, resolve the existing SPA client from
+AuthStack's `SpaClientId` output and use its original scopes and resource audience.
+Do not substitute a dedicated client or rewrite a stdio cache.
+
+Use flag rollback with the reviewed UUID-based API code retained. Do not roll
+API code back to the older deterministic-note-ID implementation: after receipt
+expiry and eventual TTL removal, reusing a key could recreate an old document ID
+and make orphaned shares authorize the new note. Retained UUID receipts also
+conflict with that older implementation. Do not delete receipts or change keys
+to bypass a conflict. TTL cleanup is asynchronous; reaching a receipt's expiry
+does not guarantee its removal.
+
 The installed stdio adapter continues using `deployment-auth.ts` and its verified,
 deployment/profile-bound cache. It must not be replaced by the legacy `auth.ts`.
-Native host migration and actual cached-session/refresh behavior remain acceptance
-requirements. Never translate an existing first-party cache into dedicated-client
-credentials.
+The dated record distinguishes actual installed-bundle refresh from migration
+of each native host. Never translate an existing first-party cache into
+dedicated-client credentials. Use the canonical https://ttobak.atomai.click
+site when copying HTTP setup: the default CloudFront hostname is not a
+registered OAuth resource, and its origin-derived guide scopes are unsupported.
+This known guide limitation does not establish native-host migration.
