@@ -134,6 +134,24 @@ scope checks, current-source reads, expiry/revocation/disable behavior, actual
 KMS/IAM execution and rollback require recorded acceptance before activation.
 No additional external callback or unauthenticated route is approved here.
 
+### Integration and activation order
+
+Merging a revision that sets the connector flags to true is source integration,
+not activation. Such a merge is permitted only while the push-triggered Deploy
+Infrastructure and Deploy Frontend workflows are both disabled, and it still
+requires current-head review and required CI.
+
+The flags are plain source constants, so every deployment of AuthStack,
+EdgeAuthStack, GatewayStack or FrontendStack from a main commit carrying them is
+an activation, including an unrelated `--exclusively` hotfix. Before any such
+deployment, and before re-enabling either workflow, an independent source/artifact
+comparison must bind that exact main commit to the recorded production acceptance.
+Record the workflow state, the comparison result and the deployed versions in a
+dated connector activation record under `docs/runbooks/`, as the
+[release runbook](../runbooks/connector-release.md) describes. A missing exact-commit attestation for an unmerged
+candidate is a deployment precondition to report, not a merge blocker; it never
+waives the deploy-time comparison.
+
 ## Verification
 
 `scripts/connector/generate_contract.py --check` compares all generated files

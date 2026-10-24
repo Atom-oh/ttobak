@@ -24,6 +24,9 @@ export interface FrontendStackProps extends cdk.StackProps {
   userPoolId: string;
   userPoolClientId: string;
   identityPoolId: string;
+  connectorPrivateBridgeEnabled?: boolean;
+  readConnectorClientId?: string;
+  writeConnectorClientId?: string;
   qaAsyncJobsEnabled?: boolean;
 }
 
@@ -497,6 +500,12 @@ function handler(event) {
           qaAsyncJobs: props.qaAsyncJobsEnabled === true,
           // Shows the Billing Insight hand-off button; only the API holds the URL.
           ...(billingInsightUrlContext(this) ? { billingInsight: true } : {}),
+          mcp: {
+            url: '/api/mcp',
+            privateBridgeEnabled: props.connectorPrivateBridgeEnabled === true,
+            readClientId: props.readConnectorClientId,
+            writeClientId: props.writeConnectorClientId,
+          },
           cognito: {
             region: props.cognitoRegion,
             userPoolId: props.userPoolId,

@@ -70,7 +70,16 @@ prerequisites before the later deploy job's Python setup.
    Locally verified issued access/ID tokens can remain valid until expiry, so keep
    grant and transport denial in place. Restore the accepted configuration,
    remove synthetic source/session/note fixtures and preserve audit receipts.
-   Record exact deployed versions and provider outcomes before main integration.
+   Record exact deployed versions and provider outcomes. Merging enabled flags to
+   main follows ADR-053's integration and activation order.
+
+Once main carries enabled flags, treat every AuthStack, EdgeAuthStack,
+GatewayStack or FrontendStack deployment from main as an activation, including
+unrelated hotfixes. Before deploying, confirm both push-triggered deploy workflows
+are still disabled (`gh workflow list --all`), run the independent source/artifact
+comparison of the exact main commit against the recorded acceptance, and record
+the workflow state, comparison result and deployed versions in a dated record.
+Do not re-enable either workflow until that record exists.
 
 The installed stdio adapter continues using `deployment-auth.ts` and its verified,
 deployment/profile-bound cache. It must not be replaced by the legacy `auth.ts`.

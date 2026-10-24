@@ -13,8 +13,13 @@ export interface RuntimeConfig {
   qaAsyncJobs?: boolean;
   /** Show the Billing Insight hand-off button. Missing is off; the URL comes from the API. */
   billingInsight?: boolean;
-  /** Publish a same-site HTTP MCP URL only after its deployment is ready. */
-  mcp?: { url?: string };
+  /** Public client IDs, never credentials. Missing mode disables HTTP setup. */
+  mcp?: {
+    url?: string;
+    privateBridgeEnabled?: boolean;
+    readClientId?: string;
+    writeClientId?: string;
+  };
 }
 
 let cached: Promise<RuntimeConfig> | null = null;
