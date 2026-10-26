@@ -74,7 +74,9 @@ func TestPutCommonDictTermWritesAuditInSameTransaction(t *testing.T) {
 	}
 }
 
-func TestTrimDictTermLogKeepsNewest(t *testing.T) {
+// The oldest row (the term's create) is pinned; the trim takes the next
+// oldest so at most keep rows remain.
+func TestTrimDictTermLogKeepsNewestAndPinsFirst(t *testing.T) {
 	items := `{"Items":[` +
 		`{"PK":{"S":"DICT#COMMON"},"SK":{"S":"DICTLOG#k#2026-10-26T09:00:01.000000Z"},"termKey":{"S":"k"}},` +
 		`{"PK":{"S":"DICT#COMMON"},"SK":{"S":"DICTLOG#k#2026-10-26T09:00:03.000000Z"},"termKey":{"S":"k"}},` +
@@ -97,7 +99,7 @@ func TestTrimDictTermLogKeepsNewest(t *testing.T) {
 	if len(*calls) != 2 || (*calls)[1].op != "DeleteItem" {
 		t.Fatalf("one delete beyond keep: %+v", *calls)
 	}
-	if sk := (*calls)[1].body["Key"].(map[string]any)["SK"].(map[string]any)["S"]; sk != "DICTLOG#k#2026-10-26T09:00:01.000000Z" {
-		t.Fatalf("trimmed %v, want the oldest", sk)
+	if sk := (*calls)[1].body["Key"].(map[string]any)["SK"].(map[string]any)["S"]; sk != "DICTLOG#k#2026-10-26T09:00:02.000000Z" {
+		t.Fatalf("trimmed %v, want the oldest unpinned row", sk)
 	}
 }

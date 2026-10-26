@@ -201,6 +201,9 @@ func TestGlossaryScopedToMeetingAccount(t *testing.T) {
 	suggested := store.seed(model.PrefixDictCommon, "DeltaSuggested")
 	suggested.State = model.TermStateSuggested
 	store.put(suggested)
+	edited := store.seed(model.PrefixDictCommon, "SigmaEdited")
+	edited.UserEditedAt = "2026-10-26T00:00:00.000000Z"
+	store.put(edited)
 	heard := store.seed(model.PrefixAccount+"a1", "OmegaLink")
 	heard.HeardAs = []string{"오메가 링크"}
 	store.put(heard)
@@ -229,6 +232,9 @@ func TestGlossaryScopedToMeetingAccount(t *testing.T) {
 	}
 	if _, ok := got["DeltaSuggested"]; ok {
 		t.Fatal("a suggested term is not active")
+	}
+	if _, ok := got["SigmaEdited"]; ok {
+		t.Fatal("a user-edited Common term must not drive corrections (R17)")
 	}
 	if got["K-culture"].Layer != model.PrefixAccount+"a1" || got["AlphaGrid"].Layer != "USER#u1" || got["GammaWave"].Layer != model.PrefixDictCommon {
 		t.Fatalf("layer attribution: %+v", terms)

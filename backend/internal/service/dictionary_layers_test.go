@@ -177,8 +177,12 @@ func (l *layerStore) ListDictTermLog(_ context.Context, pk, key string) ([]model
 }
 func (l *layerStore) TrimDictTermLog(ctx context.Context, pk, key string, keep int) error {
 	rows, _ := l.ListDictTermLog(ctx, pk, key)
-	for i := keep; i < len(rows); i++ {
-		delete(l.logs[pk], rows[i].SK)
+	var sks []string
+	for _, row := range rows {
+		sks = append(sks, row.SK)
+	}
+	for _, sk := range model.DictLogTrimSKs(sks, keep) {
+		delete(l.logs[pk], sk)
 	}
 	return nil
 }
@@ -356,6 +360,9 @@ func TestCommonEditKeepsAuditAndRestores(t *testing.T) {
 	logs, _ = svc.ListTermLog(ctx, "common", key)
 	if len(logs) != model.MaxDictLogsPerTerm || decodeSnapshot(t, logs[0].After).Phrase != "K-culture 24" {
 		t.Fatalf("kept %d log rows, newest %+v", len(logs), logs[0])
+	}
+	if logs[len(logs)-1].SK != edit.SK {
+		t.Fatalf("the term's first audit row must stay pinned: oldest kept %s, want %s", logs[len(logs)-1].SK, edit.SK)
 	}
 
 	// The request-shaped route validates, writes and lists the editor.

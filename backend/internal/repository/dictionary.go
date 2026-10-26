@@ -1080,15 +1080,20 @@ func (r *DictionaryRepository) ListDictTermLog(ctx context.Context, pk, termKey 
 	return rows, nil
 }
 
-// TrimDictTermLog deletes a term's audit rows beyond the newest keep.
+// TrimDictTermLog deletes a term's audit rows so at most keep remain: the
+// newest keep-1 and the pinned oldest row (model.DictLogTrimSKs).
 func (r *DictionaryRepository) TrimDictTermLog(ctx context.Context, pk, termKey string, keep int) error {
 	rows, err := r.ListDictTermLog(ctx, pk, termKey)
 	if err != nil {
 		return err
 	}
+	sks := make([]string, 0, len(rows))
+	for _, row := range rows {
+		sks = append(sks, row.SK)
+	}
 	var errs []error
-	for i := keep; i < len(rows); i++ {
-		if _, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{TableName: aws.String(r.tableName), Key: dictKey(pk, rows[i].SK)}); err != nil {
+	for _, sk := range model.DictLogTrimSKs(sks, keep) {
+		if _, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{TableName: aws.String(r.tableName), Key: dictKey(pk, sk)}); err != nil {
 			errs = append(errs, fmt.Errorf("failed to delete dictionary term log: %w", err))
 		}
 	}

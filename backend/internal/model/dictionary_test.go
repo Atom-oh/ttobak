@@ -60,3 +60,29 @@ func TestDictSourceRefsCapped(t *testing.T) {
 		t.Errorf("kind distinct: %+v %+v", refs[0], refs[1])
 	}
 }
+
+func TestDictLogTrimSKsPinsOldest(t *testing.T) {
+	sk := func(i int) string { return DictLogSK("k", fmt.Sprintf("2026-10-%02dT00:00:00.000000Z", i)) }
+	var sks []string
+	for i := 25; i >= 1; i-- { // any order
+		sks = append(sks, sk(i))
+	}
+	trimmed := DictLogTrimSKs(sks, MaxDictLogsPerTerm)
+	if len(trimmed) != 5 {
+		t.Fatalf("trim %d rows, want 5: %v", len(trimmed), trimmed)
+	}
+	for _, got := range trimmed {
+		if got == sk(1) {
+			t.Fatal("the oldest row is pinned")
+		}
+		if got > sk(6) {
+			t.Fatalf("trimmed a row newer than the oldest unpinned ones: %s", got)
+		}
+	}
+	if got := DictLogTrimSKs(sks[:MaxDictLogsPerTerm], MaxDictLogsPerTerm); got != nil {
+		t.Fatalf("nothing to trim at the cap: %v", got)
+	}
+	if got := DictLogTrimSKs([]string{sk(2), sk(1), sk(3)}, 0); len(got) != 2 || got[0] != sk(3) || got[1] != sk(2) {
+		t.Fatalf("keep 0 still pins the oldest: %v", got)
+	}
+}

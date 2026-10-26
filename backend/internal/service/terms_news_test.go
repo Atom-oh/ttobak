@@ -546,7 +546,10 @@ func TestNewsCreateAuditTrimmedToTwenty(t *testing.T) {
 	if len(logs) != model.MaxDictLogsPerTerm {
 		t.Fatalf("audit rows %d, want %d", len(logs), model.MaxDictLogsPerTerm)
 	}
-	if _, ok := common.logs[model.DictLogSK(key, "2026-09-01T00:00:00.000000Z")]; ok {
-		t.Fatal("the oldest audit row should be trimmed")
+	if _, ok := common.logs[model.DictLogSK(key, "2026-09-01T00:00:00.000000Z")]; !ok {
+		t.Fatal("the oldest audit row is pinned (R17)")
+	}
+	if _, ok := common.logs[model.DictLogSK(key, "2026-09-02T00:00:00.000000Z")]; ok {
+		t.Fatal("the oldest unpinned audit row should be trimmed")
 	}
 }

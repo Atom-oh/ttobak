@@ -256,9 +256,11 @@ func rebaseCorrections(corrections []model.TranscriptCorrection, offset int) []m
 // GlossaryForMeeting returns the refinement glossary for one meeting owned
 // by ownerID: Personal, then the meeting's Account (only while the owner is
 // a current member), then Common; active rows only, first layer wins per
-// term key, at most MaxGlossaryTerms. An Account layer that cannot be
-// authorized or read is dropped and logged; a Personal or Common read error
-// is returned.
+// term key, at most MaxGlossaryTerms. Common rows a user edited
+// (userEditedAt set) are left out (R17): anyone may edit Common (L2), so an
+// edit may bias vocabulary and Whisper but never drives a silent correction.
+// An Account layer that cannot be authorized or read is dropped and logged; a
+// Personal or Common read error is returned.
 func (s *DictionaryService) GlossaryForMeeting(ctx context.Context, ownerID, accountID string) ([]GlossaryTerm, error) {
 	if ownerID == "" {
 		return nil, nil
@@ -299,7 +301,9 @@ func (s *DictionaryService) GlossaryForMeeting(ctx context.Context, ownerID, acc
 		return nil, fmt.Errorf("failed to get common dictionary terms: %w", err)
 	}
 	for _, row := range activeRows(common) {
-		add(glossaryTermOf(row))
+		if row.UserEditedAt == "" {
+			add(glossaryTermOf(row))
+		}
 	}
 	return out, nil
 }
