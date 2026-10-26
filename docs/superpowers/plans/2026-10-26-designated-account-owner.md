@@ -59,15 +59,15 @@ repository/account_creation.go and tests; existing account service/test seams.
 - Optional repository capability CreateAccountWithInitialMembers(ctx, account,
   owner, creator, requesterID, ancestors) atomically creates initial state.
 
-- [ ] Add failing service tests for a designated Owner and both checkbox states;
+- [x] Add failing service tests for a designated Owner and both checkbox states;
   assert canonical owner, membership count and no creator grant when unchecked.
-- [ ] Run focused Go tests and retain the expected missing-feature failure.
-- [ ] Implement DTOs, validated identity resolution and atomic transaction.
-- [ ] Add red/green tests for parent authorization before mail, transactional
+- [x] Run focused Go tests and retain the expected missing-feature failure.
+- [x] Implement DTOs, validated identity resolution and atomic transaction.
+- [x] Add red/green tests for parent authorization before mail, transactional
   requester checks, identity mismatch, domain/quota failures and privacy stamps.
-- [ ] Add request-ID/fingerprint replay tests including an ambiguous committed
+- [x] Add request-ID/fingerprint replay tests including an ambiguous committed
   transaction and a later removed creator; implement bounded receipt replay.
-- [ ] Run service/repository suites and commit the tested deliverable.
+- [x] Run service/repository suites and commit the tested deliverable.
 
 ## Task 2: Authenticated HTTP and invitation recovery
 
@@ -82,14 +82,14 @@ cmd/api/main.go; model response/error conventions.
 - ResendOwnerInvitation(ctx, requesterID, accountID) returns
   (*model.AccountMemberDTO, error).
 
-- [ ] Add failing handler tests for creator versus actual Owner and strict
+- [x] Add failing handler tests for creator versus actual Owner and strict
   bounded single-JSON decoding; implement and verify.
-- [ ] Add failing resend tests for a current member, opted-out initial creator
+- [x] Add failing resend tests for a current member, opted-out initial creator
   within 30 days, expired creator authority, foreign caller, confirmed user and
   changed identity; implement using existing resend guards.
-- [ ] Verify generic member endpoints still reject owner assignment.
-- [ ] Run all Go packages including cmd, vet and Linux ARM64 API build.
-- [ ] Commit the tested authenticated API behavior.
+- [x] Verify generic member endpoints still reject owner assignment.
+- [x] Run all Go packages including cmd, vet and Linux ARM64 API build.
+- [x] Commit the tested authenticated API behavior.
 
 ## Task 3: Owner picker and creator checkbox
 
@@ -100,23 +100,23 @@ lib/api.ts; types/meeting.ts; lib/accountCreation.ts; scripts/account-creation.t
 canonical-owner resend API from Task 2. Pure helpers normalize submission,
 create notices and determine whether to navigate/add members.
 
-- [ ] Add failing executable component/helper tests for Me/another Owner,
+- [x] Add failing executable component/helper tests for Me/another Owner,
   checked/unchecked creator membership and correct request fields.
-- [ ] Implement Owner picker and checkbox, clear hidden additional selections,
+- [x] Implement Owner picker and checkbox, clear hidden additional selections,
   keep one creation UUID through retries, and consume the truthful receipt.
-- [ ] Add red/green tests proving opt-out stays on the list and never requests
+- [x] Add red/green tests proving opt-out stays on the list and never requests
   Account detail or additional-member grants.
-- [ ] Add red/green tests for failed/ambiguous create, partial additional-member
+- [x] Add red/green tests for failed/ambiguous create, partial additional-member
   results, invitation recovery and stale navigation.
-- [ ] Run lint, all frontend unit tests, TypeScript and production build.
-- [ ] Commit the tested UI behavior.
+- [x] Run lint, all frontend unit tests, TypeScript and production build.
+- [x] Commit the tested UI behavior.
 
 ## Task 4: Review and production delivery
 
 **Files:** ADR-055; ADR-015/034/054; API/DESIGN/README and canonical review context.
 Operational evidence stays outside tracked source.
 
-- [ ] Document the narrow initial-owner exception and checkbox behavior; sync
+- [x] Document the narrow initial-owner exception and checkbox behavior; sync
   generated review context and run documentation checks.
 - [ ] Obtain independent whole-branch review; fix meaningful findings with
   regression tests. Preserve complete required Claude/Codex CI coverage.
