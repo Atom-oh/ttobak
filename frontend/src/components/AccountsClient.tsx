@@ -190,10 +190,15 @@ export default function AccountsClient() {
         </div>
       )}
       {creationReceipt?.creatorId === user?.userId && creationReceipt?.receipt.ownerInvitationPending && (
-        <button type="button" onClick={handleResendOwner} disabled={creating || resendingOwner}
-          className="text-sm text-primary hover:underline mb-4 disabled:opacity-50">
-          {resendingOwner ? '초대 요청 중…' : 'Owner 초대 메일 다시 보내기'}
-        </button>
+        <div className="mb-4">
+          <p className="text-xs text-slate-500 dark:text-text-muted mb-1 break-words">
+            {`Account: ${creationReceipt.receipt.name} · Owner: ${creationReceipt.email}`}
+          </p>
+          <button type="button" onClick={handleResendOwner} disabled={creating || resendingOwner}
+            className="text-sm text-primary hover:underline disabled:opacity-50">
+            {resendingOwner ? '초대 요청 중…' : 'Owner 초대 메일 다시 보내기'}
+          </button>
+        </div>
       )}
 
       {showForm && (

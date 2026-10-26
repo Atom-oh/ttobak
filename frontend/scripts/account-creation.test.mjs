@@ -179,7 +179,13 @@ test('the previous receipt remains recoverable when another creation fails', asy
   await page.start(); page.otherOwner(); await page.submit();
   page.button('New Account').props.onClick();
   page.find(n => n.type === 'input' && n.props.placeholder?.startsWith('Account name')).props.onChange({ target: { value: 'Second customer' } });
-  page.otherOwner(); await page.submit();
+  page.otherOwner();
+  page.find(n => n.props?.placeholder === 'Owner 이름 또는 이메일').props.onPick({ userId: '', email: 'second@example.com' });
+  await page.submit();
+  const receiptTarget = page.find(n => typeof n.props?.children === 'string' &&
+    n.props.children.includes('Account: Customer') && n.props.children.includes('Owner: colleague@example.com'));
+  assert.ok(receiptTarget, 'the earlier receipt must identify its Account and Owner even after a later creation fails');
+  assert.ok(!receiptTarget.props.children.includes('second@example.com'));
   const resend = page.button('Owner 초대 메일 다시 보내기');
   assert.ok(resend);
   assert.equal(resend.props.disabled, false);
