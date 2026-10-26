@@ -75,6 +75,9 @@ func (m *mockCrawlerRepo) UpdateSourcePartial(_ context.Context, sourceID string
 	if !ok {
 		return fmt.Errorf("%w: source %s not found", repository.ErrConditionFailed, sourceID)
 	}
+	if current.GlobalNewsSource {
+		return fmt.Errorf("%w: source %s", repository.ErrOperatorSource, sourceID)
+	}
 	if fields.RequireOwnerID != nil && current.OwnerID != *fields.RequireOwnerID {
 		return repository.ErrConditionFailed
 	}
@@ -144,6 +147,9 @@ func (m *mockCrawlerRepo) UpdateSourcePartial(_ context.Context, sourceID string
 	}
 	if fields.Status != nil {
 		current.Status = *fields.Status
+	}
+	if current.UserTiedAt == "" {
+		current.UserTiedAt = "tainted"
 	}
 	return nil
 }
