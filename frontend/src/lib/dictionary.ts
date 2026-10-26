@@ -39,6 +39,11 @@ export function resolveLayer(tab: LayerTab, accountId?: string): DictionaryLayer
   return accountId ? `account:${accountId}` : undefined;
 }
 
+/** A Common tombstone from `?deleted=1`: the last snapshot's display fields plus the deletion. */
+export interface DeletedCommonTerm {
+  termId: string; displayAs: string; phrase: string; type: string; deletedAt: string; deletedBy: string;
+}
+
 /** Common terms come from automatic sources only, so only the others take manual adds. */
 export const layerAllowsCreate = (layer: DictionaryLayer) => layer !== 'common';
 

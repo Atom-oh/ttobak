@@ -105,6 +105,23 @@ type DictLayerTermsResponse struct {
 	Items []DictTermView `json:"items"`
 }
 
+// DictDeletedTermView is one deleted Common term: the display fields of the
+// last snapshot before its deletion plus who deleted it and when.
+type DictDeletedTermView struct {
+	TermID    string `json:"termId"`
+	DisplayAs string `json:"displayAs"`
+	Phrase    string `json:"phrase"`
+	Type      string `json:"type"`
+	DeletedAt string `json:"deletedAt"`
+	DeletedBy string `json:"deletedBy"`
+}
+
+// DictDeletedTermsResponse answers GET .../layers/common/terms?deleted=1,
+// newest deletion first.
+type DictDeletedTermsResponse struct {
+	Items []DictDeletedTermView `json:"items"`
+}
+
 // DictTermLogView is the API form of a DictTermLog. LogID is the row's
 // timestamp; Before/After are the term snapshots (nil when absent).
 type DictTermLogView struct {
