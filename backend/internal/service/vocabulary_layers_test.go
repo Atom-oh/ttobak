@@ -7,10 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	tt "github.com/aws/aws-sdk-go-v2/service/transcribe/types"
-
 	"github.com/ttobak/backend/internal/model"
-	"github.com/ttobak/backend/internal/repository"
 )
 
 // Synthetic fixtures only.
@@ -162,11 +159,11 @@ func TestLayeredPlanSkipsAccountsUserLeft(t *testing.T) {
 	if got := phrases(svc); got != "Kilo" {
 		t.Fatalf("no membership reader: no Account layer, got %s", got)
 	}
-	// A failing order func skips the Account layer for the step.
+	// A failing order func is an error: the caller skips the step.
 	svc.SetMembershipReader(func(context.Context, string, string) (bool, error) { return true, nil })
 	svc.SetAccountOrder(func(context.Context, string) ([]string, error) { return nil, errors.New("synthetic") })
-	if got := phrases(svc); got != "Kilo" {
-		t.Fatalf("failing order: Account layer skipped, got %s", got)
+	if _, err := svc.vocabularyLayers(ctx, "u1"); err == nil {
+		t.Fatal("a failing order is an error, never a plan without the Account layer")
 	}
 	// A failing membership read fails the listing (no table missing a
 	// member's terms is built from a transient error).
@@ -177,59 +174,78 @@ func TestLayeredPlanSkipsAccountsUserLeft(t *testing.T) {
 	}
 }
 
-// The order is read once per ensure; a failing order still builds the
-// personal table.
-func TestEnsureVocabulariesLayeredOrderFailureStillBuilds(t *testing.T) {
+// The order is read once per ensure; a failing order skips the call with a
+// warning: no state row, no claim, no table file, no provider call.
+func TestEnsureVocabulariesLayeredOrderFailureSkips(t *testing.T) {
 	fx := newBuilderFixture(t, "a")
 	fx.add("Alpha Grid", "Alpha-Grid")
 	calls := 0
 	fx.svc.SetMembershipReader(func(context.Context, string, string) (bool, error) { return true, nil })
 	fx.svc.SetAccountOrder(func(context.Context, string) ([]string, error) { calls++; return nil, errors.New("synthetic") })
-	if _, warnings := fx.ensure(true); len(warnings) != 0 || calls != 1 {
+	_, warnings := fx.ensure(true)
+	if len(warnings) != 1 || warnings[0] != vocabularyRebuildWarning || calls != 1 {
 		t.Fatalf("warnings %v, order calls %d", warnings, calls)
 	}
-	fx.tr.settle(tt.VocabularyStateReady)
-	fx.ensure(false)
-	if ko := fx.ko(); ko.ActiveName != name("a", 1) || ko.TermCount != 1 {
-		t.Fatalf("the personal table builds without the Account layer: %+v", ko)
+	if len(fx.store.vocab) != 0 || len(fx.objects.puts) != 0 || len(fx.tr.calls) != 0 {
+		t.Fatalf("nothing is claimed or built: %v %v %v", fx.store.vocab, fx.objects.puts, fx.tr.calls)
+	}
+	// Once the order reads again, the build proceeds with the same call shape.
+	fx.svc.SetAccountOrder(func(context.Context, string) ([]string, error) { calls++; return nil, nil })
+	if _, warnings := fx.ensure(true); len(warnings) != 0 || fx.tr.count("create:") != 1 {
+		t.Fatalf("the build resumes: %v %v", warnings, fx.tr.calls)
 	}
 }
 
 type fakeRecencySource struct {
-	meetings []model.Meeting
-	accounts []model.AccountMember
-	params   repository.ListMeetingsParams
-	err      error
+	recent     []string
+	accounts   []model.AccountMember
+	userID     string
+	limit      int
+	recentRead int
+	err        error
+	accountErr error
 }
 
-func (f *fakeRecencySource) ListMeetings(_ context.Context, p repository.ListMeetingsParams) (*repository.ListMeetingsResult, error) {
-	f.params = p
-	return &repository.ListMeetingsResult{Meetings: f.meetings}, f.err
+func (f *fakeRecencySource) ListRecentMeetingAccountIDs(_ context.Context, userID string, limit int) ([]string, error) {
+	f.userID, f.limit = userID, limit
+	f.recentRead++
+	return f.recent, f.err
 }
 
 func (f *fakeRecencySource) ListAccountsForUser(context.Context, string) ([]model.AccountMember, error) {
-	return f.accounts, nil
+	return f.accounts, f.accountErr
 }
 
 func TestAccountRecencyOrder(t *testing.T) {
-	at := func(id string) model.Meeting { return model.Meeting{AccountID: id} }
 	src := &fakeRecencySource{
-		meetings: []model.Meeting{at("a2"), at(""), at("gone"), at("a1"), at("a2")},
+		recent:   []string{"a2", "gone", "a1", "a2"},
 		accounts: []model.AccountMember{{AccountID: "a1"}, {AccountID: "a4"}, {AccountID: "a2"}},
 	}
 	order := AccountRecencyOrder(src)
-	got, err := order(context.Background(), "u1")
+	ctx := context.Background()
+	got, err := order(ctx, "u1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Join(got, ",") != "a2,a1,a4" {
 		t.Fatalf("recent meetings first, then remaining memberships, never a left Account: %v", got)
 	}
-	if src.params.UserID != "u1" || src.params.Limit != accountOrderMeetingWindow || src.params.AccountIDs != nil || src.params.Cursor != "" {
-		t.Fatalf("newest meetings of the user: %+v", src.params)
+	if src.userID != "u1" || src.limit != accountOrderMeetingWindow {
+		t.Fatalf("newest meetings of the user: %s %d", src.userID, src.limit)
 	}
 	src.err = errors.New("synthetic")
-	if _, err := order(context.Background(), "u1"); err == nil {
-		t.Fatal("a meeting list error is returned")
+	if _, err := order(ctx, "u1"); err == nil {
+		t.Fatal("a meeting read error is returned")
+	}
+
+	// No memberships: no meeting read at all.
+	none := &fakeRecencySource{recent: []string{"a1"}}
+	if got, err := AccountRecencyOrder(none)(ctx, "u1"); err != nil || got != nil || none.recentRead != 0 {
+		t.Fatalf("zero memberships return early: %v %v reads=%d", got, err, none.recentRead)
+	}
+	// A membership list error is returned before any meeting read.
+	broken := &fakeRecencySource{accountErr: errors.New("synthetic")}
+	if _, err := AccountRecencyOrder(broken)(ctx, "u1"); err == nil || broken.recentRead != 0 {
+		t.Fatalf("membership list error: %v reads=%d", err, broken.recentRead)
 	}
 }
