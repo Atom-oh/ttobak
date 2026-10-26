@@ -963,6 +963,65 @@ func (r *DictionaryRepository) EvictAutoTerm(ctx context.Context, pk, termKey st
 	return DictWriteResult{CleanupErr: r.deleteTermObservations(ctx, pk, termKey)}, nil
 }
 
+// validCommonAudit checks an audit row written with a Common term change.
+func validCommonAudit(termKey string, entry *model.DictTermLog) bool {
+	return entry != nil && entry.PK == model.PrefixDictCommon && entry.TermKey == termKey &&
+		strings.HasPrefix(entry.SK, model.PrefixDictLog+termKey+"#") && entry.Actor != ""
+}
+
+// CreateCommonAutoTerm is CreateAutoTerm for DICT#COMMON with its audit row
+// in the same transaction (L2: system writes are audited too). An existing
+// term or audit SK cancels it with ErrDictTermConflict, an existing
+// observation with ErrDictObservationExists.
+func (r *DictionaryRepository) CreateCommonAutoTerm(ctx context.Context, term *model.DictTerm, obs *model.DictObservation, entry *model.DictTermLog) error {
+	if term == nil || obs == nil || term.PK != model.PrefixDictCommon || obs.PK != term.PK || obs.TermKey != term.TermKey ||
+		!validCommonAudit(term.TermKey, entry) {
+		return fmt.Errorf("%w: common auto term create needs a matching audit row", ErrInvalidInput)
+	}
+	items := make([]types.TransactWriteItem, 0, 3)
+	for _, row := range []interface{}{term, obs, entry} {
+		put, err := r.putIfAbsent(row)
+		if err != nil {
+			return err
+		}
+		items = append(items, put)
+	}
+	_, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
+	if err != nil {
+		return dictTransactError(err, []error{ErrDictTermConflict, ErrDictObservationExists, ErrDictTermConflict})
+	}
+	return nil
+}
+
+// EvictCommonAutoTerm is EvictAutoTerm for DICT#COMMON with its audit row in
+// the same transaction, then deletes the term's observations best effort.
+func (r *DictionaryRepository) EvictCommonAutoTerm(ctx context.Context, termKey string, expectedVersion int64, entry *model.DictTermLog) (DictWriteResult, error) {
+	if termKey == "" || !validCommonAudit(termKey, entry) {
+		return DictWriteResult{}, fmt.Errorf("%w: common eviction needs a matching audit row", ErrInvalidInput)
+	}
+	condition := expression.Name("version").Equal(expression.Value(expectedVersion)).
+		And(expression.Name("origin").Equal(expression.Value(model.TermOriginAuto))).
+		And(expression.AttributeNotExists(expression.Name("userEditedAt"))).
+		And(expression.Name("state").In(expression.Value(model.TermStateActive), expression.Value(model.TermStateSuggested)))
+	expr, err := expression.NewBuilder().WithCondition(condition).Build()
+	if err != nil {
+		return DictWriteResult{}, err
+	}
+	logPut, err := r.putIfAbsent(entry)
+	if err != nil {
+		return DictWriteResult{}, err
+	}
+	items := []types.TransactWriteItem{{Delete: &types.Delete{
+		TableName: aws.String(r.tableName), Key: dictKey(model.PrefixDictCommon, model.DictTermSK(termKey)),
+		ConditionExpression: expr.Condition(), ExpressionAttributeNames: expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	}}, logPut}
+	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
+		return DictWriteResult{}, dictTransactError(err, []error{ErrDictTermConflict, ErrDictTermConflict})
+	}
+	return DictWriteResult{CleanupErr: r.deleteTermObservations(ctx, model.PrefixDictCommon, termKey)}, nil
+}
+
 // PutCommonDictTerm writes a whole Common term row and its audit row in one
 // transaction. The term must be at expectedVersion (0: absent); the audit
 // SK must be new. A tombstone (state deleted) then deletes the term's

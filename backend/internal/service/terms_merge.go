@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -42,6 +43,10 @@ type TermsMergeStore interface {
 	PromoteSuggestedTerm(ctx context.Context, in repository.DictMergeInput, content repository.DictPromotion) error
 	EvictAutoTerm(ctx context.Context, pk, termKey string, expectedVersion int64) (repository.DictWriteResult, error)
 	DeleteDictObs(ctx context.Context, pk, sk string) error
+	// Common writes carry their audit row in the same transaction (L2).
+	CreateCommonAutoTerm(ctx context.Context, term *model.DictTerm, obs *model.DictObservation, entry *model.DictTermLog) error
+	EvictCommonAutoTerm(ctx context.Context, termKey string, expectedVersion int64, entry *model.DictTermLog) (repository.DictWriteResult, error)
+	TrimDictTermLog(ctx context.Context, pk, termKey string, keep int) error
 }
 
 var _ TermsMergeStore = (*repository.DictionaryRepository)(nil)
@@ -231,7 +236,7 @@ func (m *TermsMerger) MergeScoped(ctx context.Context, scope TermsScope, candida
 			return result, err
 		}
 	}
-	if err := m.enforceAutoCap(ctx, scopePK, result, &cleanup); err != nil {
+	if err := m.enforceAutoCap(ctx, scopePK, ref.OwnerID, result, &cleanup); err != nil {
 		result.CleanupErr = errors.Join(cleanup...)
 		return result, err
 	}
@@ -366,7 +371,20 @@ func (m *TermsMerger) mergeOne(ctx context.Context, scope TermsScope, c mergeCan
 		var err error
 		switch {
 		case term == nil:
-			err = m.store.CreateAutoTermChecked(ctx, newAutoTerm(pk, c, obsHeard, ref, source, now), obs, scope.Member)
+			row := newAutoTerm(pk, c, obsHeard, ref, source, now)
+			if pk == model.PrefixDictCommon {
+				// Only the news job writes Common automatically; its
+				// creations are audited like user edits.
+				var entry *model.DictTermLog
+				if entry, err = commonAudit(row.TermKey, ref.OwnerID, model.DictLogActionCreate, nil, row, now); err != nil {
+					return outcomeSkipped, err
+				}
+				if err = m.store.CreateCommonAutoTerm(ctx, row, obs, entry); err == nil {
+					m.trimCommonLog(ctx, row.TermKey, cleanup)
+				}
+			} else {
+				err = m.store.CreateAutoTermChecked(ctx, row, obs, scope.Member)
+			}
 			if err == nil {
 				counters.Created++
 				if ref.Tainted {
@@ -534,7 +552,7 @@ func termScore(t model.DictTerm, now time.Time) int {
 // guard fails the row is re-read: a row now gone, edited or tombstoned no
 // longer counts toward the cap (a concurrent merge may have evicted it), so
 // it reduces the excess; one that is merely newer is skipped for the next.
-func (m *TermsMerger) enforceAutoCap(ctx context.Context, pk string, result *TermsMergeResult, cleanup *[]error) error {
+func (m *TermsMerger) enforceAutoCap(ctx context.Context, pk, actor string, result *TermsMergeResult, cleanup *[]error) error {
 	rows, err := m.store.ListDictTerms(ctx, pk)
 	if err != nil {
 		return fmt.Errorf("failed to list dictionary terms for the cap: %w", err)
@@ -564,7 +582,7 @@ func (m *TermsMerger) enforceAutoCap(ctx context.Context, pk string, result *Ter
 		if excess == 0 {
 			break
 		}
-		res, err := m.store.EvictAutoTerm(ctx, pk, row.TermKey, row.Version)
+		res, err := m.evict(ctx, pk, actor, row, cleanup)
 		if errors.Is(err, repository.ErrDictTermConflict) {
 			result.Counters.Conflicts++
 			fresh, getErr := m.store.GetDictTerm(ctx, pk, row.TermKey)
@@ -586,4 +604,53 @@ func (m *TermsMerger) enforceAutoCap(ctx context.Context, pk string, result *Ter
 		excess--
 	}
 	return nil
+}
+
+// evict removes one automatic term; a Common eviction (by the news job) is
+// audited in the same transaction.
+func (m *TermsMerger) evict(ctx context.Context, pk, actor string, row model.DictTerm, cleanup *[]error) (repository.DictWriteResult, error) {
+	if pk != model.PrefixDictCommon {
+		return m.store.EvictAutoTerm(ctx, pk, row.TermKey, row.Version)
+	}
+	now := m.now().Format(model.DictTimeLayout)
+	entry, err := commonAudit(row.TermKey, actor, model.DictLogActionEvict, &row, nil, now)
+	if err != nil {
+		return repository.DictWriteResult{}, err
+	}
+	res, err := m.store.EvictCommonAutoTerm(ctx, row.TermKey, row.Version, entry)
+	if err == nil {
+		m.trimCommonLog(ctx, row.TermKey, cleanup)
+	}
+	return res, err
+}
+
+// commonAudit builds the audit row of a system write to a Common term, with
+// before/after snapshots as the Common edit audit keeps them.
+func commonAudit(termKey, actor, action string, before, after *model.DictTerm, now string) (*model.DictTermLog, error) {
+	entry := &model.DictTermLog{
+		PK: model.PrefixDictCommon, SK: model.DictLogSK(termKey, now), TermKey: termKey,
+		Actor: actor, Action: action, At: now,
+	}
+	for _, snap := range []struct {
+		term *model.DictTerm
+		dst  *string
+	}{{before, &entry.Before}, {after, &entry.After}} {
+		if snap.term == nil {
+			continue
+		}
+		raw, err := json.Marshal(snap.term)
+		if err != nil {
+			return nil, err
+		}
+		*snap.dst = string(raw)
+	}
+	return entry, nil
+}
+
+// trimCommonLog keeps the newest 20 audit rows of a Common term; a failure is
+// surfaced as cleanup and the next write trims again.
+func (m *TermsMerger) trimCommonLog(ctx context.Context, termKey string, cleanup *[]error) {
+	if err := m.store.TrimDictTermLog(ctx, model.PrefixDictCommon, termKey, model.MaxDictLogsPerTerm); err != nil {
+		*cleanup = append(*cleanup, fmt.Errorf("failed to trim common audit: %w", err))
+	}
 }

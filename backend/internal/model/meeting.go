@@ -281,6 +281,9 @@ type CrawledDocument struct {
 	InKB          bool     `dynamodbav:"inKB,omitempty" json:"inKB"`
 	PubDate       string   `dynamodbav:"pubDate,omitempty" json:"pubDate,omitempty"`
 	QualityStatus string   `dynamodbav:"qualityStatus,omitempty" json:"qualityStatus,omitempty"`
+	// IngestSource is "search" or "custom" (a URL a user configured) on
+	// versioned news rows; legacy rows omit it. Internal, never in the API.
+	IngestSource string `dynamodbav:"ingestSource,omitempty" json:"-"`
 }
 
 // CrawlHistory represents a crawl execution history entry

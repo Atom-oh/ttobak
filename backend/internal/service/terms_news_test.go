@@ -23,6 +23,9 @@ type newsStoreFake struct {
 	runs     map[string]model.TermsNewsRun
 	windows  [][2]int64
 	listErr  error
+	global   map[string]bool // global (operator) sources; others are not
+	lookups  map[string]int
+	lookErr  error
 	puts     int
 	histGets int
 }
@@ -39,6 +42,14 @@ func (f *newsStoreFake) ListDocumentsCrawledBetween(_ context.Context, from, to 
 		}
 	}
 	return out, nil
+}
+
+func (f *newsStoreFake) IsGlobalNewsSource(_ context.Context, sourceID string) (bool, error) {
+	f.lookups[sourceID]++
+	if f.lookErr != nil {
+		return false, f.lookErr
+	}
+	return f.global[sourceID], nil
 }
 
 func (f *newsStoreFake) GetTermsNewsHistory(_ context.Context, termKey string) (*model.TermsNewsHistory, error) {
@@ -83,9 +94,10 @@ func newsOn() TermsConfig {
 
 func newNewsTestEnv(cfg TermsConfig) *newsTestEnv {
 	env := &newsTestEnv{
-		dict:  partitionedDictStore{},
-		store: &newsStoreFake{history: map[string]model.TermsNewsHistory{}, runs: map[string]model.TermsNewsRun{}},
-		llm:   &termsModelFake{},
+		dict: partitionedDictStore{},
+		store: &newsStoreFake{history: map[string]model.TermsNewsHistory{}, runs: map[string]model.TermsNewsRun{},
+			global: map[string]bool{"srcA": true, "srcB": true}, lookups: map[string]int{}},
+		llm: &termsModelFake{},
 	}
 	merger := NewTermsMerger(env.dict)
 	merger.now = func() time.Time { return termsTestNow }
@@ -95,14 +107,33 @@ func newNewsTestEnv(cfg TermsConfig) *newsTestEnv {
 	return env
 }
 
-// doc adds a published news document crawled `minutes` after the window
-// opened.
+// doc adds a published, searched news document crawled `minutes` after the
+// window opened: bbbb2222 from global source srcB, any other from srcA.
 func (e *newsTestEnv) doc(hash, title, summary string, minutes int) *model.CrawledDocument {
+	source := "srcA"
+	if hash == "bbbb2222" {
+		source = "srcB"
+	}
+	return e.docFrom(source, hash, title, summary, minutes)
+}
+
+func (e *newsTestEnv) docFrom(source, hash, title, summary string, minutes int) *model.CrawledDocument {
 	e.store.docs = append(e.store.docs, model.CrawledDocument{
-		DocHash: hash, SourceID: "src", Type: "news", Title: title, Summary: summary, URL: "https://news.example/" + hash,
-		CrawledAt: newsTestWindowEnd - 24*3600 + int64(minutes)*60, QualityStatus: "PUBLISHED",
+		DocHash: hash, SourceID: source, Type: "news", Title: title, Summary: summary, URL: "https://news.example/" + hash,
+		CrawledAt: newsTestWindowEnd - 24*3600 + int64(minutes)*60, QualityStatus: "PUBLISHED", IngestSource: "search",
 	})
 	return &e.store.docs[len(e.store.docs)-1]
+}
+
+// logs returns termKey's Common audit rows.
+func (e *newsTestEnv) logs(display string) []model.DictTermLog {
+	var out []model.DictTermLog
+	for _, row := range e.dict.at(model.PrefixDictCommon).logs {
+		if row.TermKey == TermKey(display) {
+			out = append(out, row)
+		}
+	}
+	return out
 }
 
 func (e *newsTestEnv) common(display string) (model.DictTerm, bool) {
@@ -154,7 +185,7 @@ func TestNewsSingleMentionNotAdded(t *testing.T) {
 		t.Fatalf("window %v, want the UTC day ending at 21:00", env.store.windows)
 	}
 	h, ok := env.store.history[TermKey("AlphaGrid")]
-	if !ok || strings.Join(h.Days, ",") != newsTestDay || strings.Join(h.Docs, ",") != "aaaa1111" {
+	if !ok || strings.Join(h.Days, ",") != newsTestDay || strings.Join(h.Sources, ",") != newsTestDay+"#srcA" {
 		t.Fatalf("candidate history %+v", h)
 	}
 	if h.PK != model.PrefixDictCommon || h.SK != model.TermsNewsSK(TermKey("AlphaGrid")) {
@@ -184,6 +215,11 @@ func TestNewsTwoDocsAdded(t *testing.T) {
 	}
 	if term.CreatedBy != model.DictNewsActor || term.UpdatedBy != model.DictNewsActor {
 		t.Fatalf("news writes are system writes: createdBy=%q updatedBy=%q", term.CreatedBy, term.UpdatedBy)
+	}
+	// The creation is audited; the second document's merge is not (R14).
+	if logs := env.logs("AlphaGrid"); len(logs) != 1 || logs[0].Actor != model.DictNewsActor || logs[0].Action != model.DictLogActionCreate ||
+		logs[0].Before != "" || !strings.Contains(logs[0].After, `"DisplayAs":"AlphaGrid"`) {
+		t.Fatalf("create audit %+v", logs)
 	}
 	if len(term.Sources) != 2 {
 		t.Fatalf("sources %+v", term.Sources)
@@ -215,22 +251,24 @@ func TestNewsTwoDocsAdded(t *testing.T) {
 }
 
 func TestNewsTwoDaysAdded(t *testing.T) {
+	// Today the term is in one srcA document; prior sightings are day#source.
 	cases := []struct {
 		name  string
 		prior []string
 		want  bool
 	}{
-		{"seen three days ago", []string{"2026-10-15"}, true},
-		{"seen six days ago", []string{"2026-10-12"}, true},
-		{"seen eight days ago", []string{"2026-10-10"}, false},
-		{"seen only today before", []string{newsTestDay}, false},
-		{"seen only on a later day", []string{"2026-10-20"}, false},
+		{"another source three days ago", []string{"2026-10-15#srcB"}, true},
+		{"another source six days ago", []string{"2026-10-12#srcB"}, true},
+		{"another source eight days ago", []string{"2026-10-10#srcB"}, false},
+		{"the same source three days ago", []string{"2026-10-15#srcA"}, false},
+		{"another source only today before", []string{newsTestDay + "#srcB"}, false},
+		{"another source only on a later day", []string{"2026-10-20#srcB"}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			env := newNewsTestEnv(newsOn())
 			key := TermKey("AlphaGrid")
-			env.store.history[key] = model.TermsNewsHistory{PK: model.PrefixDictCommon, SK: model.TermsNewsSK(key), TermKey: key, Days: tc.prior, Docs: []string{"old0001"}}
+			env.store.history[key] = model.TermsNewsHistory{PK: model.PrefixDictCommon, SK: model.TermsNewsSK(key), TermKey: key, Sources: tc.prior}
 			env.doc("aaaa1111", "AlphaGrid 출시", "AlphaGrid 플랫폼이 공개되었습니다.", 10)
 			env.llm.outputs = []string{newsOutput("AlphaGrid", "AlphaGrid 플랫폼이", "news-1")}
 			env.run(t)
@@ -242,15 +280,15 @@ func TestNewsTwoDaysAdded(t *testing.T) {
 				t.Fatalf("term %+v", term)
 			}
 			h := env.store.history[key]
-			if !strings.Contains(strings.Join(h.Days, ","), newsTestDay) {
+			if !strings.Contains(strings.Join(h.Sources, ","), newsTestDay+"#srcA") {
 				t.Fatalf("today not recorded: %+v", h)
 			}
-			if tc.prior[0] > newsTestDay && strings.Join(h.Days, ",") != newsTestDay+","+tc.prior[0] {
-				t.Fatalf("a later day must survive a re-run of an earlier one: %+v", h.Days)
+			if tc.prior[0] > newsTestDay && strings.Join(h.Sources, ",") != newsTestDay+"#srcA,"+tc.prior[0] {
+				t.Fatalf("a later day must survive a re-run of an earlier one: %+v", h.Sources)
 			}
-			for _, d := range h.Days {
-				if d < "2026-10-12" {
-					t.Fatalf("days older than the 7-day window are dropped: %+v", h.Days)
+			for _, e := range h.Sources {
+				if e < "2026-10-12" {
+					t.Fatalf("days older than the 7-day window are dropped: %+v", h.Sources)
 				}
 			}
 			env.onlyCommon(t)
@@ -290,6 +328,10 @@ func TestNewsCommonCapEvictsOldestAuto(t *testing.T) {
 	if _, ok := common.term("EditedOld"); !ok {
 		t.Fatal("a user-edited Common term is never evicted")
 	}
+	if logs := env.logs("Seed007"); len(logs) != 1 || logs[0].Actor != model.DictNewsActor || logs[0].Action != model.DictLogActionEvict ||
+		!strings.Contains(logs[0].Before, `"DisplayAs":"Seed007"`) || logs[0].After != "" {
+		t.Fatalf("evict audit %+v", logs)
+	}
 	auto := 0
 	for _, row := range common.terms {
 		if evictable(row) {
@@ -323,18 +365,21 @@ func TestNewsSkipsUnpublishedDocuments(t *testing.T) {
 	for i, status := range []string{"REJECTED", "DELETED", "FAILED"} {
 		env.doc(fmt.Sprintf("rej%05d", i), "AlphaGrid 소식", "AlphaGrid 관련 기사입니다.", 20+i).QualityStatus = status
 	}
-	legacy := env.doc("legacy01", "AlphaGrid 이전", "AlphaGrid 이전 형식 기사입니다.", 30)
-	legacy.QualityStatus = "" // legacy rows carry no quality status
-	env.doc("bad/hash", "AlphaGrid 키", "AlphaGrid 잘못된 키입니다.", 40)
+	// Legacy rows carry neither a quality status nor an ingest source, so a
+	// custom URL cannot be ruled out.
+	legacy := env.docFrom("srcB", "legacy01", "AlphaGrid 이전", "AlphaGrid 이전 형식 기사입니다.", 30)
+	legacy.QualityStatus, legacy.IngestSource = "", ""
+	env.docFrom("srcB", "bad/hash", "AlphaGrid 키", "AlphaGrid 잘못된 키입니다.", 40)
+	env.doc("bbbb2222", "업계 동향", "여러 기업이 AlphaGrid 도입을 검토합니다.", 50)
 	env.llm.outputs = []string{newsOutput("AlphaGrid", "AlphaGrid", "news-1", "news-2")}
 	env.run(t)
 	req := fmt.Sprint(env.llm.requests)
-	if strings.Contains(req, "AlphaGrid 소식") || strings.Contains(req, "잘못된 키") || !strings.Contains(req, "AlphaGrid 이전") {
-		t.Fatalf("rejected or malformed documents reached the model: %s", req)
+	if strings.Contains(req, "AlphaGrid 소식") || strings.Contains(req, "잘못된 키") || strings.Contains(req, "AlphaGrid 이전") {
+		t.Fatalf("rejected, legacy or malformed documents reached the model: %s", req)
 	}
 	term, ok := env.common("AlphaGrid")
 	if !ok || term.Hits != 2 {
-		t.Fatalf("published and legacy documents count: %+v", term)
+		t.Fatalf("published documents of two sources count: %+v", term)
 	}
 }
 
@@ -427,5 +472,81 @@ func TestNewsTermsModeFromEnv(t *testing.T) {
 		if got := TermsConfigFromEnv().NewsMode; got != want {
 			t.Fatalf("NEWS_TERMS_MODE=%q gave %q", value, got)
 		}
+	}
+}
+
+func TestNewsSameSourceTwiceNotAdded(t *testing.T) {
+	env := newNewsTestEnv(newsOn())
+	env.docFrom("srcA", "aaaa1111", "AlphaGrid 출시", "AlphaGrid 플랫폼이 공개되었습니다.", 10)
+	env.docFrom("srcA", "aaaa2222", "업계 동향", "여러 기업이 AlphaGrid 도입을 검토합니다.", 20)
+	env.llm.outputs = []string{newsOutput("AlphaGrid", "AlphaGrid", "news-1", "news-2")}
+	env.run(t)
+	if _, ok := env.common("AlphaGrid"); ok {
+		t.Fatal("two documents of one source must not qualify a term")
+	}
+	if env.store.lookups["srcA"] != 1 {
+		t.Fatalf("a source is looked up once per run: %v", env.store.lookups)
+	}
+}
+
+// Documents from user-configured URLs or from a source users subscribe to
+// never feed Common (R15).
+func TestNewsCustomSourceExcluded(t *testing.T) {
+	env := newNewsTestEnv(newsOn())
+	env.doc("aaaa1111", "AlphaGrid 출시", "AlphaGrid 플랫폼이 공개되었습니다.", 10)
+	env.doc("bbbb2222", "고객 소식", "고객사 AlphaGrid 계약 내용입니다.", 20).IngestSource = "custom"
+	env.docFrom("userSrc", "cccc3333", "AlphaGrid 검토", "구독자가 찾은 AlphaGrid 기사입니다.", 30)
+	env.llm.outputs = []string{newsOutput("AlphaGrid", "AlphaGrid 플랫폼이", "news-1")}
+	env.run(t)
+	req := fmt.Sprint(env.llm.requests)
+	if strings.Contains(req, "계약 내용") || strings.Contains(req, "구독자가") {
+		t.Fatalf("custom or user-source text reached the model: %s", req)
+	}
+	if _, ok := env.common("AlphaGrid"); ok {
+		t.Fatal("only one global source named the term")
+	}
+	h := env.store.history[TermKey("AlphaGrid")]
+	if strings.Join(h.Sources, ",") != newsTestDay+"#srcA" {
+		t.Fatalf("history may hold global sources only: %+v", h.Sources)
+	}
+	env.onlyCommon(t)
+}
+
+func TestNewsUnknownSourceKindExcluded(t *testing.T) {
+	env := newNewsTestEnv(newsOn())
+	env.docFrom("srcX", "aaaa1111", "AlphaGrid 출시", "AlphaGrid 플랫폼이 공개되었습니다.", 10)
+	env.docFrom("srcY", "bbbb2222", "업계 동향", "여러 기업이 AlphaGrid 도입을 검토합니다.", 20)
+	env.run(t)
+	if len(env.llm.requests) != 0 || len(env.store.history) != 0 || len(env.dict.at(model.PrefixDictCommon).terms) != 0 {
+		t.Fatal("documents of sources that are not known to be global are excluded")
+	}
+
+	env.store.lookErr = errors.New("read failed")
+	if err := env.svc.ProcessNewsDaily(context.Background(), newsTestDay); err == nil {
+		t.Fatal("a source lookup failure is retryable, never a pass")
+	}
+	if len(env.llm.requests) != 0 {
+		t.Fatal("nothing runs before the sources are known")
+	}
+}
+
+func TestNewsCreateAuditTrimmedToTwenty(t *testing.T) {
+	env := newNewsTestEnv(newsOn())
+	common := env.dict.at(model.PrefixDictCommon)
+	key := TermKey("AlphaGrid")
+	for i := 0; i < model.MaxDictLogsPerTerm; i++ {
+		at := fmt.Sprintf("2026-09-%02dT00:00:00.000000Z", i+1)
+		common.logs[model.DictLogSK(key, at)] = model.DictTermLog{PK: model.PrefixDictCommon, SK: model.DictLogSK(key, at), TermKey: key, Actor: "u1", Action: model.DictLogActionDelete, At: at}
+	}
+	env.doc("aaaa1111", "AlphaGrid 출시", "AlphaGrid 플랫폼이 공개되었습니다.", 10)
+	env.doc("bbbb2222", "업계 동향", "여러 기업이 AlphaGrid 도입을 검토합니다.", 20)
+	env.llm.outputs = []string{newsOutput("AlphaGrid", "AlphaGrid", "news-1", "news-2")}
+	env.run(t)
+	logs := env.logs("AlphaGrid")
+	if len(logs) != model.MaxDictLogsPerTerm {
+		t.Fatalf("audit rows %d, want %d", len(logs), model.MaxDictLogsPerTerm)
+	}
+	if _, ok := common.logs[model.DictLogSK(key, "2026-09-01T00:00:00.000000Z")]; ok {
+		t.Fatal("the oldest audit row should be trimmed")
 	}
 }

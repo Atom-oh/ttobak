@@ -2,7 +2,7 @@ package model
 
 // Daily news terms (layered dictionary, Task 11). News is the only source of
 // automatic Common terms. The rows below live under DICT#COMMON, are read by
-// the news job only, and store day strings, public document hashes and a
+// the news job only, and store day strings, global crawler source IDs and a
 // content hash; never text or a user ID.
 const (
 	// DictNewsActor is the createdBy/updatedBy of rows the news job writes
@@ -16,14 +16,15 @@ const (
 )
 
 // TermsNewsHistory, DICT#COMMON / TERMS_NEWS#{termKey}, records the days
-// (YYYY-MM-DD, UTC) a term was a news candidate and the document hashes it was
-// seen in, for the two-day repeat threshold. It expires with the table TTL.
+// (YYYY-MM-DD, UTC) a term was a news candidate and, as "{day}#{sourceId}",
+// which global crawler sources named it on each, for the repeat threshold.
+// It expires with the table TTL.
 type TermsNewsHistory struct {
 	PK         string   `dynamodbav:"PK"`
 	SK         string   `dynamodbav:"SK"`
 	TermKey    string   `dynamodbav:"termKey"`
 	Days       []string `dynamodbav:"days"`
-	Docs       []string `dynamodbav:"docs,omitempty"`
+	Sources    []string `dynamodbav:"sources,omitempty"`
 	ExpiresAt  int64    `dynamodbav:"pendingShareExpiresAt"`
 	UpdatedAt  string   `dynamodbav:"updatedAt"`
 	EntityType string   `dynamodbav:"entityType"`
