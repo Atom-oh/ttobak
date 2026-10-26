@@ -171,6 +171,42 @@ func TestWhisperPromptLayersForMeetingAccount(t *testing.T) {
 	}
 }
 
+// failingCommonStore fails only the Common read.
+type failingCommonStore struct{ *layerStore }
+
+func (s failingCommonStore) ListDictTerms(ctx context.Context, pk string) ([]model.DictTerm, error) {
+	if pk == model.PrefixDictCommon {
+		return nil, fmt.Errorf("throttled")
+	}
+	return s.layerStore.ListDictTerms(ctx, pk)
+}
+
+// A Common read error skips that layer like an Account error: the prompt
+// keeps the Personal (and Account) terms instead of failing.
+func TestWhisperPromptSkipsCommonOnReadError(t *testing.T) {
+	store := failingCommonStore{&layerStore{rows: map[string][]model.DictTerm{
+		"USER#u1": {
+			promptRow("USER#u1", "PersonalAuto", model.TermOriginAuto, model.TermStateActive),
+			promptRow("USER#u1", "PersonalManual", model.TermOriginManual, model.TermStateActive),
+		},
+		"ACCOUNT#a1": {promptRow("ACCOUNT#a1", "AlphaGrid", model.TermOriginAuto, model.TermStateActive)},
+	}}}
+	svc := service.NewDictionaryServiceWithStore(store, nil)
+	svc.SetMembershipReader(func(context.Context, string, string) (bool, error) { return true, nil })
+	for accountID, want := range map[string]string{
+		"":   "PersonalManual, PersonalAuto",
+		"a1": "PersonalManual, AlphaGrid, PersonalAuto",
+	} {
+		got, err := svc.WhisperPromptTerms(context.Background(), "u1", accountID)
+		if err != nil {
+			t.Fatalf("account %q: a Common read error must not fail the prompt: %v", accountID, err)
+		}
+		if joinWhisperPrompt(got) != want {
+			t.Fatalf("account %q: prompt = %q, want %q", accountID, joinWhisperPrompt(got), want)
+		}
+	}
+}
+
 func TestWhisperPromptLegacyBlobCountsAsManual(t *testing.T) {
 	store := &layerStore{
 		blob: &model.UserDictionary{UserID: "u1", Terms: []model.DictionaryTerm{{Phrase: "LegacyTerm", DisplayAs: "LegacyTerm"}}},

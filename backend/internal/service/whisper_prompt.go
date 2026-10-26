@@ -15,8 +15,10 @@ import (
 // cuts the list at the prompt's rune cap, so the order decides what survives.
 //
 // Only active rows count. An Account read that cannot be authorized (no
-// membership reader, a membership read error) drops that layer and logs; it
-// never fails the transcription. A Personal or Common read error is returned.
+// membership reader, a membership read error) or read drops that layer and
+// logs, and so does a Common read error: neither fails the prompt, which then
+// keeps the Personal terms it had before the shared layers existed. A
+// Personal read error is returned.
 func (s *DictionaryService) WhisperPromptTerms(ctx context.Context, userID, accountID string) ([]string, error) {
 	if userID == "" {
 		return nil, nil
@@ -55,11 +57,11 @@ func (s *DictionaryService) WhisperPromptTerms(ctx context.Context, userID, acco
 			out = append(out, activeDisplays(rows)...)
 		}
 	}
-	common, err := s.repo.ListDictTerms(ctx, model.PrefixDictCommon)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get common dictionary terms: %w", err)
+	if common, err := s.repo.ListDictTerms(ctx, model.PrefixDictCommon); err != nil {
+		log.Printf("whisper prompt: skipping common layer for user %s: %v", userID, err)
+	} else {
+		out = append(out, activeDisplays(common)...)
 	}
-	out = append(out, activeDisplays(common)...)
 	return append(out, auto...), nil
 }
 
