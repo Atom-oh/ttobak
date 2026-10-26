@@ -147,15 +147,16 @@ export default function AccountDetailClient() {
   };
 
   const handleResendOwner = async () => {
-    if (activeAccountIdRef.current !== accountId || account?.accountId !== accountId || inviting
-      || !account.members.some((member) => member.userId === user?.userId)) return;
+    if (!user?.userId || activeAccountIdRef.current !== accountId || account?.accountId !== accountId || inviting
+      || !account.members.some((member) => member.userId === user.userId)) return;
     const myAccountId = accountId;
+    const initiatingUserId = user.userId;
     const generation = ++inviteGeneration.current;
     const isCurrent = () => activeAccountIdRef.current === myAccountId && inviteGeneration.current === generation;
     setInviting(true);
     setError(null);
     try {
-      await accountApi.resendOwnerInvitation(myAccountId);
+      await accountApi.resendOwnerInvitation(myAccountId, initiatingUserId);
       if (isCurrent()) {
         setPendingNotice('Owner 초대 메일 전송을 다시 요청했습니다.');
         setPendingNoticeEmail(null);

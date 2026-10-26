@@ -127,15 +127,17 @@ test('a queued invitation cannot be resent into a different Account after naviga
 
 test('an ordinary member can resend only the canonical Owner and stale navigation cannot resend', async () => {
   const calls = [];
-  const page = fixture(async () => ({}), async accountId => { calls.push(accountId); return { invited: true }; });
+  const page = fixture(async () => ({}), async (accountId, expectedUserId) => {
+    calls.push({ accountId, expectedUserId }); return { invited: true };
+  });
   await page.start();
   const stale = page.resendOwner();
   assert.ok(stale, 'a member needs invitation recovery for a prepared Account');
   await stale.props.onClick();
-  assert.deepEqual(calls, ['A']);
+  assert.deepEqual(calls, [{ accountId: 'A', expectedUserId: 'member' }]);
   await page.navigate('B');
   await stale.props.onClick();
-  assert.deepEqual(calls, ['A']);
+  assert.deepEqual(calls, [{ accountId: 'A', expectedUserId: 'member' }]);
 });
 
 test('an Account without an initial pending Owner invitation offers no recovery control', async () => {

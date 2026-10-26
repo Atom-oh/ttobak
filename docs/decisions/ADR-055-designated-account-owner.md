@@ -40,6 +40,9 @@ Removal, revocation and reparenting stay Owner-only.
 - Receipt replay returns original request fields and current creator membership.
   It never restores a removed creator, reveals later Account data, creates a
   second Account or resends mail. Legacy callers may omit the creation UUID.
+- Frontend creation and canonical Owner resend bind requests to the initiating
+  user. A session change during token refresh rejects the operation before an
+  HTTP retry can execute it as a different user.
 - Members, or the exact recorded creator for thirty days, may explicitly resend
   the canonical initial Owner invitation. The authenticated endpoint accepts no
   caller-selected identity, email or role; creator recovery is a delivery

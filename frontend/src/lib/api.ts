@@ -735,10 +735,10 @@ export const researchChatApi = {
 export const accountApi = {
   list: () => api.get<{ accounts: AccountSummary[] }>('/api/accounts'),
   get: (id: string) => api.get<Account>(`/api/accounts/${encodeURIComponent(id)}`),
-  create: (data: AccountCreationRequest) =>
-    api.post<AccountCreationResponse>('/api/accounts', data),
-  resendOwnerInvitation: (id: string) =>
-    api.post<AccountMember>(`/api/accounts/${encodeURIComponent(id)}/owner-invitation`, {}),
+  create: (data: AccountCreationRequest, expectedUserId: string) =>
+    api.post<AccountCreationResponse>('/api/accounts', data, { expectedUserId }),
+  resendOwnerInvitation: (id: string, expectedUserId: string) =>
+    api.post<AccountMember>(`/api/accounts/${encodeURIComponent(id)}/owner-invitation`, {}, { expectedUserId }),
   updateParent: (id: string, data: { parentAccountId: string }) =>
     api.put<{ accountId: string; parentAccountId?: string }>(`/api/accounts/${encodeURIComponent(id)}/parent`, data),
   addMember: (id: string, data: { email: string; role: string; resendInvitation?: boolean }) =>

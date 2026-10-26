@@ -103,7 +103,7 @@ export default function AccountsClient() {
       };
       const attempt = accountCreationAttempt(request, creationAttempt.current, () => crypto.randomUUID());
       creationAttempt.current = attempt;
-      const created = await accountApi.create({ ...request, requestId: attempt.requestId });
+      const created = await accountApi.create({ ...request, requestId: attempt.requestId }, user.userId);
       if (!isCurrent()) return;
       // Unregistered emails get a server invite (Cognito emails the temporary
       // password) and a pending membership that materializes on first login.
@@ -157,7 +157,7 @@ export default function AccountsClient() {
     setResendingOwner(true);
     setError(null);
     try {
-      await accountApi.resendOwnerInvitation(creationReceipt.receipt.accountId);
+      await accountApi.resendOwnerInvitation(creationReceipt.receipt.accountId, creationReceipt.creatorId);
       if (operationGeneration.current === generation) setNotice('Owner 초대 메일 전송을 다시 요청했습니다.');
     } catch (err) {
       if (operationGeneration.current === generation) setError(err instanceof Error ? err.message : '초대 메일을 다시 요청하지 못했습니다.');

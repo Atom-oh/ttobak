@@ -18,7 +18,7 @@ const loadHelper = name => {
 function fixture(overrides = {}) {
   const slots = [];
   let cursor = 0, effects = [], userId = 'creator', uuidCounter = 0;
-  const calls = { creates: [], members: [], resends: [], navigation: [] };
+  const calls = { creates: [], creationUsers: [], members: [], resends: [], resendUsers: [], navigation: [] };
   const same = (a, b) => a?.length === b?.length && a.every((v, i) => Object.is(v, b[i]));
   const react = {
     useState(initial) {
@@ -47,8 +47,9 @@ function fixture(overrides = {}) {
     '@/components/auth/AuthProvider': { useAuth: () => ({ user: { userId, email: `${userId}@example.com` }, isAuthenticated: true, membershipRevision: 0 }) },
     '@/lib/api': { accountApi: {
       list: async () => ({ accounts: [] }),
-      create: async request => {
+      create: async (request, expectedUserId) => {
         calls.creates.push(request);
+        calls.creationUsers.push(expectedUserId);
         if (overrides.create) return overrides.create(request);
         return { accountId: 'account', name: request.name, ownerUserId: request.ownerEmail ? 'colleague' : userId,
           members: [], creatorMember: !request.ownerEmail || request.keepCreatorAsMember,
@@ -58,8 +59,9 @@ function fixture(overrides = {}) {
         calls.members.push({ accountId, ...request });
         return overrides.addMember ? overrides.addMember(request) : { userId: 'member', ...request };
       },
-      resendOwnerInvitation: async accountId => {
+      resendOwnerInvitation: async (accountId, expectedUserId) => {
         calls.resends.push(accountId);
+        calls.resendUsers.push(expectedUserId);
         if (overrides.resendOwner) return overrides.resendOwner(accountId);
         return { userId: 'colleague', role: 'owner', invited: true };
       },
@@ -108,12 +110,14 @@ test('another Owner defaults to invite only and stays on creation receipt', asyn
   await page.submit();
   assert.equal(page.calls.creates[0].ownerEmail, 'colleague@example.com');
   assert.equal(page.calls.creates[0].keepCreatorAsMember, false);
+  assert.deepEqual(page.calls.creationUsers, ['creator']);
   assert.equal(page.calls.creates[0].requestId, '683c4994-ea73-40b9-85d7-14ca659fbc21');
   assert.deepEqual(page.calls.navigation, []);
   assert.deepEqual(page.calls.members, []);
   const resend = page.button('Owner 초대 메일 다시 보내기');
   assert.ok(resend); await resend.props.onClick();
   assert.deepEqual(page.calls.resends, ['account']);
+  assert.deepEqual(page.calls.resendUsers, ['creator']);
 });
 
 test('checked creator membership permits optional members and Account navigation', async () => {
