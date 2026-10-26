@@ -354,8 +354,8 @@ export const usersApi = {
 
 // KB API
 export const kbApi = {
-  upload: (data: { fileName: string; fileType: string }) =>
-    api.post<{ uploadUrl: string; key: string; expiresIn: number }>('/api/kb/upload', data),
+  upload: (data: { fileName: string; fileType: string; accountId?: string }) =>
+    api.post<{ uploadUrl: string; key: string; expiresIn: number; headers?: Record<string, string> }>('/api/kb/upload', data),
 
   sync: () => api.post<{ status: string }>('/api/kb/sync'),
 

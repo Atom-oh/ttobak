@@ -112,6 +112,10 @@ func init() {
 	}
 	kbService := service.NewKBService(s3Client, bedrockAgentClient, kbBucketName, kbID, kbDataSourceID)
 	kbService.SetAssetsBucketName(bucketName)
+	kbService.SetMembershipReader(func(ctx context.Context, accountID, userID string) (bool, error) {
+		member, err := repo.GetMember(ctx, accountID, userID)
+		return member != nil, err
+	})
 	var indexStatusEngine *service.IndexingService
 	if provider, err := service.NewIndexAWSProvider(s3Client, bedrockAgentClient, bucketName, kbBucketName, kbID, kbDataSourceID); err == nil {
 		indexStatusEngine = service.NewIndexingService(repo.MetadataView(), provider, provider, bucketName)
