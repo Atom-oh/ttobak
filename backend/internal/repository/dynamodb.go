@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -2887,6 +2888,24 @@ func (r *DynamoDBRepository) PutPendingShare(ctx context.Context, share *model.P
 	if err != nil {
 		return fmt.Errorf("failed to marshal pending share: %w", err)
 	}
+	if share.Kind == model.PendingShareKindAccount {
+		inviter, err := expression.NewBuilder().WithCondition(expression.AttributeExists(expression.Name("PK"))).Build()
+		if err != nil {
+			return err
+		}
+		_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: []types.TransactWriteItem{
+			{ConditionCheck: &types.ConditionCheck{
+				TableName: aws.String(r.tableName),
+				Key: map[string]types.AttributeValue{
+					"PK": &types.AttributeValueMemberS{Value: model.PrefixAccount + share.AccountID},
+					"SK": &types.AttributeValueMemberS{Value: model.PrefixMember + share.InvitedByUserID},
+				},
+				ConditionExpression: inviter.Condition(), ExpressionAttributeNames: inviter.Names(),
+			}},
+			{Put: &types.Put{TableName: aws.String(r.tableName), Item: item}},
+		}})
+		return analysisWriteError(err)
+	}
 	if share.Kind == model.PendingShareKindMeeting && SummaryPrivacyWritesEnabled() {
 		fence, _, err := r.summaryGrantFence(ctx, share.InvitedByUserID, share.MeetingID)
 		if err != nil {
@@ -3037,10 +3056,10 @@ func transactionItemFailed(err error, idx, wantLen int) (failed bool, ok bool) {
 }
 
 // MaterializePendingAccountGrant atomically re-verifies that
-// p.InvitedByUserID is still RoleOwner of p.AccountID, grants userID
+// p.InvitedByUserID is still a member of p.AccountID, grants userID
 // membership (only if they don't already have a row), and clears the
 // queued PendingShare -- all in one transaction, so nothing can observe
-// "inviter verified as owner" and "membership granted" as two separable
+// "inviter verified as member" and "membership granted" as two separable
 // steps (AGENTS.md's conditional-write rule; mirrors CreateShareIfMember's
 // existing pattern in this file). The transaction's own Delete condition
 // is inlined below, keyed on createdAt equality, so a concurrent
@@ -3049,13 +3068,17 @@ func transactionItemFailed(err error, idx, wantLen int) (failed bool, ok bool) {
 // (false, nil) so the caller retries with the fresh row next call.
 //
 // If instead the inviter-authority check or the membership Put is what
-// failed (inviter lost ownership, or userID already has a grant via
+// failed (inviter lost membership, or userID already has a grant via
 // another path), the queued row is genuinely dead -- rather than leaving
 // it queued (which could otherwise resurrect a deliberate LATER revocation
 // of that other-path grant, up to PendingShareTTL later), it's dropped
 // immediately via a separate versioned delete, and this still returns
 // (true, nil): "resolved," even though nothing was granted.
 func (r *DynamoDBRepository) MaterializePendingAccountGrant(ctx context.Context, p *model.PendingShare, userID, email string) (bool, error) {
+	if p.AccountID == "" || p.InvitedByUserID == "" || p.InvitedByUserID == userID ||
+		p.InvitedCognitoSub == "" || p.InvitedCognitoSub != userID || !slices.Contains(model.AssignableRoles, p.Role) {
+		return false, fmt.Errorf("invalid pending account grant")
+	}
 	member := &model.AccountMember{
 		PK:         model.PrefixAccount + p.AccountID,
 		SK:         model.PrefixMember + userID,
@@ -3075,12 +3098,10 @@ func (r *DynamoDBRepository) MaterializePendingAccountGrant(ctx context.Context,
 	}
 
 	inviterExpr, err := expression.NewBuilder().WithCondition(
-		expression.AttributeExists(expression.Name("PK")).And(
-			expression.Name("role").Equal(expression.Value(model.RoleOwner)),
-		),
+		expression.AttributeExists(expression.Name("PK")),
 	).Build()
 	if err != nil {
-		return false, fmt.Errorf("build inviter-owner condition: %w", err)
+		return false, fmt.Errorf("build inviter-membership condition: %w", err)
 	}
 	notExistsExpr, err := expression.NewBuilder().
 		WithCondition(expression.AttributeNotExists(expression.Name("PK"))).
@@ -3089,7 +3110,9 @@ func (r *DynamoDBRepository) MaterializePendingAccountGrant(ctx context.Context,
 		return false, fmt.Errorf("build not-exists condition: %w", err)
 	}
 	deleteExpr, err := expression.NewBuilder().WithCondition(
-		expression.Name("createdAt").Equal(expression.Value(p.CreatedAt)),
+		expression.Name("createdAt").Equal(expression.Value(p.CreatedAt)).
+			And(expression.Name("invitedCognitoSub").Equal(expression.Value(userID))).
+			And(expression.Name(model.PendingShareTTLAttribute).GreaterThan(expression.Value(time.Now().Unix()))),
 	).Build()
 	if err != nil {
 		return false, fmt.Errorf("build delete-version condition: %w", err)

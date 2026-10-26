@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -158,19 +159,36 @@ func (h *AccountHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req model.AddMemberRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if !middleware.GetEmailVerified(ctx) {
+		writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "이메일을 인증한 뒤 멤버를 초대하세요.")
+		return
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
+	if err := decoder.Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid request body")
+		return
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
 		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid request body")
 		return
 	}
 	dto, err := h.accountService.AddMember(ctx, userID, accountID, &req)
 	if err != nil {
 		switch {
+		case errors.Is(err, service.ErrInvalidInviteEmail):
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "유효한 이메일 주소를 입력하세요.")
+		case errors.Is(err, service.ErrInvitationRejected):
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "초대할 수 없는 이메일입니다. 허용된 이메일 도메인을 확인하세요.")
+		case errors.Is(err, service.ErrInvitationNotPending):
+			writeError(w, http.StatusConflict, model.ErrCodeBadRequest, "이미 가입한 사용자에게는 초대 메일을 재발송할 수 없습니다.")
+		case errors.Is(err, service.ErrInvitationRateLimited):
+			writeError(w, http.StatusTooManyRequests, model.ErrCodeRateLimited, "초대 요청이 많습니다. 한 시간 후 다시 시도하세요.")
+		case errors.Is(err, service.ErrInvitationGrantFailed):
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInvitationGrantFailed, "Account 연결을 예약하지 못했습니다. 다시 추가하세요.")
+		case errors.Is(err, service.ErrInvitationUnavailable):
+			writeError(w, http.StatusServiceUnavailable, model.ErrCodeInternalError, "초대 서비스를 사용할 수 없습니다. 잠시 후 다시 시도하세요.")
 		case errors.Is(err, service.ErrForbidden):
 			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Only account members can add members")
-		case errors.Is(err, service.ErrUserNotFound):
-			// Distinct code so clients can offer an admin invite instead of
-			// matching the message; the 404 status is unchanged.
-			writeError(w, http.StatusNotFound, model.ErrCodeInvitationRequired, "No user with that email; an admin must send an invitation first")
 		case errors.Is(err, service.ErrMemberExists):
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "User is already a member")
 		case errors.Is(err, service.ErrInvalidInput):

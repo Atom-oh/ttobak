@@ -43,18 +43,19 @@ test('registered users are added without an invite', async () => {
   assert.deepEqual(d.calls.invite, []);
 });
 
-test('admin invites an unregistered email and queues the pending add', async () => {
-  const d = deps({ adds: [apiError(404, 'INVITATION_REQUIRED'), { pending: true }] });
+test('ordinary members receive the server invitation receipt with one add request', async () => {
+  const d = deps({ isAdmin: false, adds: [{ pending: true, invited: true }] });
   const out = await addMemberWithInvite(d, ' New@X.com ', 'ssa');
   assert.deepEqual(JSON.parse(JSON.stringify(out)), { email: 'new@x.com', status: 'pending', invited: true });
-  assert.deepEqual(d.calls.invite, ['new@x.com']);
-  assert.deepEqual(d.calls.add[1], ['new@x.com', 'ssa']);
+  assert.deepEqual(d.calls.invite, []);
+  assert.deepEqual(d.calls.add, [['new@x.com', 'ssa']]);
 });
 
-test('non-admins are told to ask an admin and never call the invite endpoint', async () => {
+test('legacy invitation errors never invoke an administrator endpoint', async () => {
   const d = deps({ isAdmin: false, adds: [apiError(404, 'INVITATION_REQUIRED')] });
   const out = await addMemberWithInvite(d, 'new@x.com', 'tam');
-  assert.equal(out.status, 'needs-admin');
+  assert.equal(out.status, 'failed');
+  assert.doesNotMatch(planMemberOutcome(out).error, /관리자/);
   assert.deepEqual(d.calls.invite, []);
 });
 
@@ -66,21 +67,22 @@ test('other add errors, including a generic 404, do not trigger an invite', asyn
   assert.deepEqual(d.calls.invite, []);
 });
 
-test('an existing Cognito user (409) still retries the add without claiming an invite', async () => {
-  const d = deps({ adds: [apiError(404, 'INVITATION_REQUIRED'), { pending: true }], invite: async () => { throw apiError(409, 'BAD_REQUEST'); } });
+test('an existing Cognito identity is queued without claiming email delivery', async () => {
+  const d = deps({ adds: [{ pending: true }] });
   const out = await addMemberWithInvite(d, 'new@x.com', 'tam');
   assert.equal(out.status, 'pending');
   assert.equal(out.invited, false);
+  assert.deepEqual(d.calls.invite, []);
 });
 
 test('invite failures and post-invite add failures are reported separately', async () => {
-  const inviteFails = deps({ adds: [apiError(404, 'INVITATION_REQUIRED')], invite: async () => { throw apiError(500, 'INTERNAL_ERROR', 'Failed to invite user'); } });
+  const inviteFails = deps({ adds: [apiError(500, 'INTERNAL_ERROR', 'Failed to invite user')] });
   const a = await addMemberWithInvite(inviteFails, 'new@x.com', 'tam');
   assert.equal(a.status, 'failed');
   assert.equal(a.invited, false);
   assert.equal(inviteFails.calls.add.length, 1);
 
-  const addFails = deps({ adds: [apiError(404, 'INVITATION_REQUIRED'), apiError(500, 'INTERNAL_ERROR', 'boom')] });
+  const addFails = deps({ adds: [apiError(500, 'INVITATION_GRANT_FAILED', 'boom')] });
   const b = await addMemberWithInvite(addFails, 'new@x.com', 'tam');
   assert.equal(b.status, 'failed');
   assert.equal(b.invited, true);
@@ -90,7 +92,7 @@ test('summary separates sent invites from emails that need attention', () => {
   const { notice, error } = summarizeMemberOutcomes([
     { email: 'a@x.com', status: 'added' },
     { email: 'b@x.com', status: 'pending', invited: true },
-    { email: 'c@x.com', status: 'needs-admin' },
+    { email: 'c@x.com', status: 'failed', invited: false, message: 'Invitation unavailable' },
     { email: 'd@x.com', status: 'failed', invited: true, message: 'boom' },
   ]);
   assert.match(notice, /b@x\.com/);
@@ -112,6 +114,6 @@ test('detail plan keeps a post-invite add failure visible after the refresh', ()
   assert.equal(invited.noticeEmail, 'b@x.com');
   assert.equal(invited.error, undefined);
 
-  assert.equal(planMemberOutcome({ email: 'c@x.com', status: 'needs-admin' }).refresh, false);
+  assert.equal(planMemberOutcome({ email: 'c@x.com', status: 'failed', invited: false, message: 'Invitation unavailable' }).refresh, false);
   assert.deepEqual({ ...planMemberOutcome({ email: 'a@x.com', status: 'added' }) }, { refresh: true });
 });

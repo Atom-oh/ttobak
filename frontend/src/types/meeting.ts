@@ -523,6 +523,8 @@ export interface AccountMember {
   // becomes a real membership automatically on their first login. userId
   // is omitted in that case.
   pending?: boolean;
+  // The current member-add request asked Cognito to send an invitation.
+  invited?: boolean;
 }
 
 export interface Account {

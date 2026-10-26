@@ -84,8 +84,9 @@ type UpdateAccountParentResponse struct {
 }
 
 type AddMemberRequest struct {
-	Email string `json:"email"`
-	Role  string `json:"role"`
+	Email            string `json:"email"`
+	Role             string `json:"role"`
+	ResendInvitation bool   `json:"resendInvitation,omitempty"`
 }
 
 type UpdateMemberRequest struct {
@@ -100,6 +101,9 @@ type AccountMemberDTO struct {
 	// the invitee has an invited-but-not-yet-logged-in Cognito account and
 	// no DynamoDB PROFILE row exists yet; UserID is empty in that case.
 	Pending bool `json:"pending,omitempty"`
+	// Invited records that this request asked Cognito to deliver an email.
+	// It is not confirmation that the recipient's mailbox received it.
+	Invited bool `json:"invited,omitempty"`
 }
 
 type AccountResponse struct {

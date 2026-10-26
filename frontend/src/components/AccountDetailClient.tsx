@@ -1,11 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
-import { accountApi, projectApi, settingsApi } from '@/lib/api';
+import { accountApi, projectApi } from '@/lib/api';
 import { addMemberWithInvite, planMemberOutcome } from '@/lib/accountInvite';
 import { uploadDocFile } from '@/lib/upload';
 import { MemberPicker } from '@/components/MemberPicker';
@@ -18,7 +17,7 @@ export default function AccountDetailClient() {
   const pathname = usePathname();
   const router = useRouter();
   const accountId = decodeURIComponent(pathname.split('/').filter(Boolean).pop() || '');
-  const { user, isLoading, isAuthenticated, isAdmin, membershipRevision } = useAuth();
+  const { user, isLoading, isAuthenticated, membershipRevision } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [account, setAccount] = useState<Account | null>(null);
@@ -39,6 +38,7 @@ export default function AccountDetailClient() {
   // revokePendingMember without needing a listing feature -- the invite
   // was just queued in this exact call, so the email is already known here.
   const [pendingNoticeEmail, setPendingNoticeEmail] = useState<string | null>(null);
+  const [pendingNoticeRole, setPendingNoticeRole] = useState<string | null>(null);
   const [uploadingSlide, setUploadingSlide] = useState(false);
 
   const [inviteRole, setInviteRole] = useState('SSA');
@@ -102,17 +102,16 @@ export default function AccountDetailClient() {
     if (isAuthenticated) fetchAll();
   }, [isAuthenticated, fetchAll, membershipRevision]);
 
-  const handlePickMember = async (picked: User) => {
+  const handlePickMember = async (picked: Pick<User, 'email'>, role = inviteRole, resendInvitation = false) => {
     setInviting(true);
     setError(null);
     setPendingNotice(null);
     setPendingNoticeEmail(null);
+    setPendingNoticeRole(null);
     try {
       const outcome = await addMemberWithInvite({
-        isAdmin,
-        addMember: (email, role) => accountApi.addMember(accountId, { email, role }),
-        inviteUser: (email) => settingsApi.inviteUser({ email }),
-      }, picked.email, inviteRole);
+        addMember: (email, selectedRole) => accountApi.addMember(accountId, { email, role: selectedRole, resendInvitation }),
+      }, picked.email, role);
       const plan = planMemberOutcome(outcome);
       // fetchAll clears the error banner on entry, so refresh first and show
       // the outcome afterwards -- even if the refresh itself fails, the
@@ -123,6 +122,7 @@ export default function AccountDetailClient() {
         if (plan.notice) {
           setPendingNotice(plan.notice);
           setPendingNoticeEmail(plan.noticeEmail ?? null);
+          setPendingNoticeRole(role);
         }
         if (plan.error) setError(plan.error);
       }
@@ -139,6 +139,7 @@ export default function AccountDetailClient() {
       await accountApi.revokePendingMember(accountId, pendingNoticeEmail);
       setPendingNotice(null);
       setPendingNoticeEmail(null);
+      setPendingNoticeRole(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to revoke pending invite');
     }
@@ -250,21 +251,20 @@ export default function AccountDetailClient() {
           <div className="bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400 text-sm rounded-lg p-3 mb-4 flex items-center justify-between gap-3">
             <div className="min-w-0">
               <p>{pendingNotice}</p>
-              {isAdmin ? (
-                <Link href="/settings#user-management" className="mt-1 inline-block font-semibold underline hover:no-underline">
-                  사용자 관리에서 초대 메일 재발송
-                </Link>
-              ) : (
-                <p className="mt-1">초대 메일이 필요하면 관리자에게 재발송을 요청하세요.</p>
-              )}
+              <p className="mt-1">초대받은 분이 로그인하면 계정에 자동으로 연결됩니다.</p>
+              {pendingNoticeEmail && pendingNoticeRole && <button type="button" disabled={inviting}
+                onClick={() => handlePickMember({ email: pendingNoticeEmail }, pendingNoticeRole, true)}
+                className="mt-1 font-semibold underline disabled:opacity-50">
+                초대 메일 다시 보내기
+              </button>}
             </div>
-            <button
+            {user?.userId === account?.ownerUserId && <button
               type="button"
               onClick={handleRevokePendingMember}
               className="shrink-0 font-semibold underline hover:no-underline"
             >
               취소
-            </button>
+            </button>}
           </div>
         )}
         {loading || !account ? (

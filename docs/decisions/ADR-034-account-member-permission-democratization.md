@@ -3,6 +3,9 @@
 - Status: Accepted; supersedes owner-only authorization for these two operations. ADR-023's removal safeguards remain in force.
 - Decision date: 2026-08-25.
 - Code checked: 2026-09-13. [ADR-036](ADR-036-account-hierarchy-and-meeting-filters.md) adds separate owner-only reparenting, without inherited membership.
+- [ADR-054](ADR-054-self-service-account-invitations.md) supersedes the earlier
+  admin-only Cognito creation restriction for scoped Account invitations and
+  aligns pending Account materialization with current-member addition authority.
 
 ## Original decision and rationale
 
@@ -19,7 +22,11 @@ Owner-only additions and role changes blocked normal teamwork when the owner was
 
 Any existing member can extend the account team and change non-owner role labels. This is the intended authorization decision, including the resulting access to account-published content and Projects linked under ADR-025. It does not grant membership in a parent/child account, permission to reparent, or permission to remove members.
 
-This ADR does not authorize Cognito self-sign-up, automatic account creation for arbitrary emails, owner promotion, or relaxing PendingShare identity checks. The old non-owner-denial tests were replaced by member-success and non-member-denial cases.
+This ADR does not authorize Cognito self-sign-up, owner promotion, or relaxing
+PendingShare identity checks. Its original restriction against automatic Cognito
+creation is superseded narrowly by ADR-054's domain-limited, rate-limited Account
+invitations. The old non-owner-denial tests were replaced by member-success and
+non-member-denial cases.
 
 ## Evidence
 

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
-import { accountApi, settingsApi } from '@/lib/api';
+import { accountApi } from '@/lib/api';
 import { addMemberWithInvite, summarizeMemberOutcomes, type MemberAddOutcome } from '@/lib/accountInvite';
 import { MemberPicker } from '@/components/MemberPicker';
 import { AccountHierarchyList } from '@/components/AccountHierarchyList';
@@ -17,7 +17,7 @@ interface PendingMember extends User {
 
 export default function AccountsClient() {
   const router = useRouter();
-  const { user, isAuthenticated, isAdmin, membershipRevision } = useAuth();
+  const { user, isAuthenticated, membershipRevision } = useAuth();
   const [accounts, setAccounts] = useState<AccountSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const requestGeneration = useRef(0);
@@ -67,12 +67,10 @@ export default function AccountsClient() {
         industry: industry.trim() || undefined,
         parentAccountId: parentAccountId || undefined,
       });
-      // Unregistered emails get an admin invite (Cognito emails the temporary
+      // Unregistered emails get a server invite (Cognito emails the temporary
       // password) and a pending membership that materializes on first login.
       const inviteDeps = {
-        isAdmin,
         addMember: (email: string, role: string) => accountApi.addMember(created.accountId, { email, role }),
-        inviteUser: (email: string) => settingsApi.inviteUser({ email }),
       };
       const outcomes: MemberAddOutcome[] = [];
       for (const m of pendingMembers) {

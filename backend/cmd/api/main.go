@@ -83,6 +83,7 @@ func init() {
 	// Reuse the same cold-start Cognito client for AddMember's PendingShare
 	// invited-check (see AccountService.SetCognitoAdminAPI).
 	accountService.SetCognitoAdminAPI(cognitoClient, cognitoPoolID)
+	accountService.SetInvitationCounter(service.NewWindowCounter(repository.NewRateCounterRepository(dynamoClient, tableName)))
 	projectService := service.NewProjectService(repo)
 	projectService.SetCognitoAdminAPI(cognitoClient, cognitoPoolID)
 	vaultService := service.NewVaultService(repo)

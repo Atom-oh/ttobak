@@ -738,7 +738,7 @@ export const accountApi = {
     api.post<Account>('/api/accounts', data),
   updateParent: (id: string, data: { parentAccountId: string }) =>
     api.put<{ accountId: string; parentAccountId?: string }>(`/api/accounts/${encodeURIComponent(id)}/parent`, data),
-  addMember: (id: string, data: { email: string; role: string }) =>
+  addMember: (id: string, data: { email: string; role: string; resendInvitation?: boolean }) =>
     api.post<AccountMember>(`/api/accounts/${encodeURIComponent(id)}/members`, data),
   // Cancels a queued PendingShare invite (see `addMember`'s `pending: true`
   // response) before the target has ever logged in -- there's no userId

@@ -21,6 +21,7 @@ import (
 func withUserEmailCtx(r *http.Request, userID, email string) *http.Request {
 	ctx := context.WithValue(r.Context(), middleware.UserIDKey, userID)
 	ctx = context.WithValue(ctx, middleware.UserEmailKey, email)
+	ctx = context.WithValue(ctx, middleware.UserEmailVerifiedKey, true)
 	return r.WithContext(ctx)
 }
 
@@ -83,6 +84,10 @@ func (m *mockHandlerAccountRepo) DeleteDocShare(_ context.Context, sharedToID, d
 
 func (m *mockHandlerAccountRepo) PutPendingShare(_ context.Context, _ *model.PendingShare) error {
 	return nil
+}
+
+func (m *mockHandlerAccountRepo) GetAllowedDomains(context.Context) ([]string, error) {
+	return []string{"example.com", "x.com"}, nil
 }
 
 func (m *mockHandlerAccountRepo) GetPendingShare(_ context.Context, _, _ string) (*model.PendingShare, error) {
@@ -851,10 +856,9 @@ func TestHandlerDeleteDocument_Forbidden(t *testing.T) {
 	}
 }
 
-// TestHandlerAddMember_UnregisteredEmailNeedsInvitation: an email with no
-// PROFILE row and no Cognito invite keeps the 404 status but carries the
-// INVITATION_REQUIRED code the frontend uses to offer an admin invite.
-func TestHandlerAddMember_UnregisteredEmailNeedsInvitation(t *testing.T) {
+// An unwired Cognito client is a service failure, never an instruction to ask
+// an administrator to create the recipient.
+func TestHandlerAddMember_InvitationServiceUnavailable(t *testing.T) {
 	h, repo := newStubAccountHandler()
 	repo.accounts["acc-1"] = &model.Account{AccountID: "acc-1", Name: "하나은행", OwnerUserID: "owner-1"}
 	repo.members[acctMemberKey("acc-1", "owner-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleOwner}
@@ -867,8 +871,8 @@ func TestHandlerAddMember_UnregisteredEmailNeedsInvitation(t *testing.T) {
 
 	h.AddMember(w, r)
 
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("expected 404, got %d (%s)", w.Code, w.Body.String())
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d (%s)", w.Code, w.Body.String())
 	}
 	var resp struct {
 		Error struct {
@@ -878,7 +882,7 @@ func TestHandlerAddMember_UnregisteredEmailNeedsInvitation(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.Error.Code != model.ErrCodeInvitationRequired {
-		t.Errorf("code = %q, want %q", resp.Error.Code, model.ErrCodeInvitationRequired)
+	if resp.Error.Code != model.ErrCodeInternalError {
+		t.Errorf("code = %q, want %q", resp.Error.Code, model.ErrCodeInternalError)
 	}
 }
