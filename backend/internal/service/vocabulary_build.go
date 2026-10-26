@@ -189,11 +189,16 @@ type vocabStep struct {
 // sees this step's write; every step that could reach the provider relists,
 // so a deleted term is never built back in from a stale snapshot. The terms
 // are every layer's rows (vocabularyLayers); only the Account order is read
-// once per call, while membership and rows are re-read on every step.
+// once per call, while membership and rows are re-read on every step. An
+// order failure skips the whole call (no claim, no plan) with a warning.
 func (s *DictionaryService) ensureVocabulary(ctx context.Context, userID, lang string, manual bool) []string {
 	bypass := manual
 	var warnings []string
-	accountIDs := s.vocabularyAccountOrder(ctx, userID)
+	accountIDs, err := s.vocabularyAccountOrder(ctx, userID)
+	if err != nil {
+		log.Printf("vocabulary build skipped for user %s: %v", userID, err)
+		return append(warnings, vocabularyRebuildWarning)
+	}
 	for step := 0; step < vocabEnsureSteps; step++ {
 		st, err := s.repo.GetVocabularyState(ctx, userID, model.VocabContextPersonal, lang)
 		if err != nil {

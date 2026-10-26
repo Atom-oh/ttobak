@@ -3,11 +3,9 @@ package service
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 
 	"github.com/ttobak/backend/internal/model"
-	"github.com/ttobak/backend/internal/repository"
 )
 
 // accountOrderMeetingWindow is how many of the user's newest meetings rank
@@ -23,12 +21,13 @@ func (s *DictionaryService) SetAccountOrder(fn func(ctx context.Context, userID 
 
 // AccountRecencySource is the repository surface AccountRecencyOrder reads.
 type AccountRecencySource interface {
-	ListMeetings(ctx context.Context, params repository.ListMeetingsParams) (*repository.ListMeetingsResult, error)
+	ListRecentMeetingAccountIDs(ctx context.Context, userID string, limit int) ([]string, error)
 	ListAccountsForUser(ctx context.Context, userID string) ([]model.AccountMember, error)
 }
 
 // AccountRecencyOrder orders the user's current member Accounts by the
-// user's newest meetings (the newest accountOrderMeetingWindow), then the
+// user's newest meetings (the newest accountOrderMeetingWindow, read with a
+// projection-only query), then the
 // remaining memberships in ListAccountsForUser order. A meeting linked to an
 // Account the user is no longer a member of never adds it.
 func AccountRecencyOrder(src AccountRecencySource) func(ctx context.Context, userID string) ([]string, error) {
@@ -40,9 +39,9 @@ func AccountRecencyOrder(src AccountRecencySource) func(ctx context.Context, use
 		if len(members) == 0 {
 			return nil, nil
 		}
-		page, err := src.ListMeetings(ctx, repository.ListMeetingsParams{UserID: userID, Limit: accountOrderMeetingWindow})
+		recent, err := src.ListRecentMeetingAccountIDs(ctx, userID, accountOrderMeetingWindow)
 		if err != nil {
-			return nil, fmt.Errorf("list meetings: %w", err)
+			return nil, fmt.Errorf("list recent meeting accounts: %w", err)
 		}
 		member := make(map[string]bool, len(members))
 		for _, m := range members {
@@ -56,10 +55,8 @@ func AccountRecencyOrder(src AccountRecencySource) func(ctx context.Context, use
 				out = append(out, id)
 			}
 		}
-		if page != nil {
-			for _, m := range page.Meetings {
-				add(m.AccountID)
-			}
+		for _, id := range recent {
+			add(id)
 		}
 		for _, m := range members {
 			add(m.AccountID)
@@ -71,21 +68,26 @@ func AccountRecencyOrder(src AccountRecencySource) func(ctx context.Context, use
 // vocabularyLayers lists the plan's layers: Personal manual, the user's
 // Accounts in recency order, Personal auto, Common.
 func (s *DictionaryService) vocabularyLayers(ctx context.Context, userID string) ([]vocabLayer, error) {
-	return s.listVocabularyLayers(ctx, userID, s.vocabularyAccountOrder(ctx, userID))
+	ids, err := s.vocabularyAccountOrder(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	return s.listVocabularyLayers(ctx, userID, ids)
 }
 
-// vocabularyAccountOrder reads the Account order; a failure skips the
-// Account layer (logged) instead of failing the build.
-func (s *DictionaryService) vocabularyAccountOrder(ctx context.Context, userID string) []string {
+// vocabularyAccountOrder reads the Account order. Without an order func or a
+// membership reader there is no Account layer (nil, no error); an order
+// failure is an error, so the caller skips the step rather than building a
+// table without the Account terms.
+func (s *DictionaryService) vocabularyAccountOrder(ctx context.Context, userID string) ([]string, error) {
 	if s.accountOrder == nil || s.isMember == nil {
-		return nil
+		return nil, nil
 	}
 	ids, err := s.accountOrder(ctx, userID)
 	if err != nil {
-		log.Printf("vocabulary account layer skipped for user %s: %v", userID, err)
-		return nil
+		return nil, fmt.Errorf("read account order: %w", err)
 	}
-	return ids
+	return ids, nil
 }
 
 // listVocabularyLayers reads every layer's rows. Each Account's membership is
