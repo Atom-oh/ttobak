@@ -1,5 +1,7 @@
 # Layered Dictionary Implementation Plan
 
+> Status: historical implementation record. The current behavior is ADR-008 (amendment 2026-10-26).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add Common and Account dictionary layers fed by meetings, KB, deep research and news, use all layers for recognition, and silently correct mis-heard glossary terms in transcripts.
@@ -103,8 +105,8 @@
 
 **Interfaces:**
 - Consumes: Task 3 routes.
-- Produces: `type DictionaryLayer = 'personal' | 'common' | \`account:${string}\``; `dictionaryApi.listLayer(layer)`, `updateCommon(termId, patch, version)`, `deleteCommon(termId, version)`, `termLog(layer, termId)`, `restore(layer, termId, logId)`; `termSourceBadges(item): {kind, label}[]` (labels 미팅/KB/리서치/뉴스).
-- UI: tabs 개인 / 계정(select of the user's Accounts) / 공통; existing `DictionaryTable` reused per tab; Common rows show 편집·삭제 for everyone and a 기록 button opening `TermHistory` with 복원.
+- Produces: `type DictionaryLayer = 'personal' | 'common' | \`account:${string}\``; `dictionaryApi.listLayer(layer)`, `updateCommon(termId, patch, version)`, `deleteCommon(termId, version)`, `termLog(layer, termId)`, `restore(layer, termId, logId)`; `termSourceBadges(item): {kind, label}[]` (labels Meeting/KB/Research/News).
+- UI: tabs Personal / Account (select of the user's Accounts) / Common; existing `DictionaryTable` reused per tab; Common rows show Edit / Delete for everyone and a History button opening `TermHistory` with Restore.
 
 - [ ] **Step 1: Write failing tests** for `termSourceBadges` and for tab switching calling `listLayer` with `account:a1`.
 - [ ] **Step 2: Run** `cd frontend && npx vitest run src/lib/dictionary.test.ts src/components/DictionaryLayerTabs.test.tsx` → FAIL.
@@ -190,7 +192,7 @@
 - Test: `backend/internal/service/kb_account_test.go`, `frontend/src/components/KBFileList.test.tsx`
 
 **Interfaces:**
-- Produces: `KBUploadRequest.AccountID string \`json:"accountId,omitempty"\``; `GetPresignedURL(ctx, userID, fileName, fileType, accountID string)`; non-empty `accountID` requires membership (else `ErrForbidden`), and the presigned PUT sets `Metadata{"account-id": accountID}` (the client must send header `x-amz-meta-account-id`). UI: upload dialog with a required choice — the user's Accounts plus "없음(개인)".
+- Produces: `KBUploadRequest.AccountID string \`json:"accountId,omitempty"\``; `GetPresignedURL(ctx, userID, fileName, fileType, accountID string)`; non-empty `accountID` requires membership (else `ErrForbidden`), and the presigned PUT sets `Metadata{"account-id": accountID}` (the client must send header `x-amz-meta-account-id`). UI: upload dialog with a required choice — the user's Accounts plus "None (Personal)".
 
 - [ ] **Step 1: Write failing tests** `TestKBUploadRejectsForeignAccount`, `TestKBUploadSignsAccountMetadata`, UI test that upload is blocked until a choice is made.
 - [ ] **Step 2–4:** `go test ./internal/service -run KBUpload` and `npx vitest run src/components/KBFileList.test.tsx` FAIL → implement → PASS.

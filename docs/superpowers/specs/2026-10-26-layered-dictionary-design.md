@@ -1,6 +1,6 @@
 # Layered Dictionary (Common · Account · Personal) — Design
 
-> Status: Draft for review. Date: 2026-10-26. Author: Junseok Oh, with Claude.
+> Status: historical design record (implemented; current behavior is ADR-008, amendment 2026-10-26). Was: draft for review. Date: 2026-10-26. Author: Junseok Oh, with Claude.
 > Extends ADR-008 (custom dictionary for STT accuracy). Builds on automatic
 > personal terms, enabled in production on 2026-10-26 (PR #478).
 
