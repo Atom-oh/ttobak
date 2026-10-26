@@ -274,8 +274,8 @@ kind of insight. Proposed grouping by what the user is doing:
 | Group | Items | Route (unchanged unless noted) |
 |---|---|---|
 | Work | Meetings, Accounts, Projects, Docs | `/`, `/accounts`, `/projects`, `/docs` |
-| AI | Assistant, Deep Research | `/chat`, `/insights/research` |
-| Knowledge | Library, News & Updates, Custom Dictionary | `/kb` (Library), `/insights`, new `/dictionary` (moved out of Settings) |
+| AI | Assistant | `/chat` |
+| Knowledge | Library, Deep Research, News & Updates, Custom Dictionary | `/kb` (Library), `/insights/research`, `/insights`, new `/dictionary` (moved out of Settings) |
 | Customer Analytics | Billing (all my Accounts), per-Account Billing tab | new `/billing`, Account detail tab |
 | — | Settings | `/settings` |
 
@@ -285,11 +285,12 @@ kind of insight. Proposed grouping by what the user is doing:
   Q&A. Proposed: **Docs** (`/docs`) = what you write; **Library** (`/kb`) = every
   file that came in, filterable by source (meeting attachment / uploaded),
   type, and whether it is indexed for Q&A. `/files` redirects to
-  `/kb?source=meeting`. Open: index meeting attachments for Q&A automatically?
+  `/kb?source=meeting`. Decided (owner, 2026-10-26): meeting attachments are
+  indexed for Q&A automatically.
 - Existing `/insights/...` URLs keep working; only labels and grouping change.
 - The hand-off button is removed; Billing is a normal menu item, shown only to
   users who belong to at least one Account with billing data.
 - Mobile bottom bar stays at five items (Home, AI, Record, Knowledge, Profile);
   Billing is reached from Accounts and the menu sheet.
-- Open: whether Deep Research belongs under AI or Knowledge (it is started from
-  the assistant but its reports are reference material).
+- Decided (owner, 2026-10-26): Deep Research sits under Knowledge (its reports
+  are reference material); it can still be started from the Assistant.
