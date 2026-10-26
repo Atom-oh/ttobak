@@ -413,6 +413,16 @@ for attribution-only corrections. Action-item updates target JSON text/assignee
 fields and preserve task IDs, completion and other metadata.
 See ADR-051.
 
+`POST /api/kb/upload` `{fileName, fileType, accountId?}` returns `{uploadUrl,
+key, expiresIn, headers?}`. An empty `accountId` is a personal file and the
+request/response are unchanged (no `headers`). A non-empty `accountId` must have
+no `#` or `/` (else 400) and the caller must be a member of that Account (else
+403 `FORBIDDEN`; membership is read consistently). The presigned PUT then signs
+object metadata `account-id`, and `headers` is `{"x-amz-meta-account-id":
+"{accountId}"}`: the client must send exactly those headers (plus
+`Content-Type`) or S3 rejects the upload. The web upload dialog requires the
+user to choose an Account or "없음(개인)" before any file is sent.
+
 `GET /api/kb/files` retains its `{files: [...]}` contract and follows all S3
 continuation pages under the caller's `kb/{userId}/` prefix. Any page failure
 fails the request rather than returning a silently incomplete successful list.

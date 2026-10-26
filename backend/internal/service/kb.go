@@ -23,6 +23,12 @@ var ErrKBFileAmbiguous = errors.New("more than one KB file has this name")
 // final path segment.
 func kbFileID(key string) string { return path.Base(key) }
 
+// ErrKBAccountInvalid means the upload's accountId is not a usable Account ID.
+var ErrKBAccountInvalid = errors.New("invalid accountId")
+
+// kbAccountMetaHeader is the signed header carrying the upload's Account.
+const kbAccountMetaHeader = "x-amz-meta-account-id"
+
 // KBService handles Knowledge Base operations
 type KBService struct {
 	s3Client           *s3.Client
@@ -32,6 +38,8 @@ type KBService struct {
 	assetsBucketName   string // Source bucket for cross-bucket copy
 	kbID               string // Bedrock Knowledge Base ID
 	dataSourceID       string // Bedrock Data Source ID
+	// isMember reports Account membership; nil refuses every Account upload.
+	isMember func(ctx context.Context, accountID, userID string) (bool, error)
 }
 
 // NewKBService creates a new KB service
@@ -58,8 +66,31 @@ func (s *KBService) SetAssetsBucketName(name string) {
 	s.assetsBucketName = name
 }
 
-// GetPresignedURL generates a presigned URL for KB file upload
-func (s *KBService) GetPresignedURL(ctx context.Context, userID, fileName, fileType string) (*model.KBUploadResponse, error) {
+// SetMembershipReader sets the Account membership lookup used to authorize
+// Account-tagged uploads.
+func (s *KBService) SetMembershipReader(fn func(ctx context.Context, accountID, userID string) (bool, error)) {
+	s.isMember = fn
+}
+
+// GetPresignedURL generates a presigned URL for KB file upload. A non-empty
+// accountID (members only) is signed into the PUT as the account-id object
+// metadata; the client must send the returned headers.
+func (s *KBService) GetPresignedURL(ctx context.Context, userID, fileName, fileType, accountID string) (*model.KBUploadResponse, error) {
+	if accountID != "" {
+		if strings.ContainsAny(accountID, "#/") {
+			return nil, ErrKBAccountInvalid
+		}
+		if s.isMember == nil || userID == "" {
+			return nil, ErrForbidden
+		}
+		ok, err := s.isMember(ctx, accountID, userID)
+		if err != nil {
+			return nil, fmt.Errorf("check account membership: %w", err)
+		}
+		if !ok {
+			return nil, ErrForbidden
+		}
+	}
 	// Sanitize filename
 	safeName := strings.ReplaceAll(fileName, " ", "_")
 	safeName = strings.ReplaceAll(safeName, "/", "_")
@@ -70,11 +101,17 @@ func (s *KBService) GetPresignedURL(ctx context.Context, userID, fileName, fileT
 	s3Key := fmt.Sprintf("kb/%s/%d_%s", userID, timestamp, safeName)
 
 	expiresIn := 1 * time.Hour
-	presignedURL, err := s.presignClient.PresignPutObject(ctx, &s3.PutObjectInput{
+	input := &s3.PutObjectInput{
 		Bucket:      aws.String(s.kbBucketName),
 		Key:         aws.String(s3Key),
 		ContentType: aws.String(fileType),
-	}, s3.WithPresignExpires(expiresIn))
+	}
+	var headers map[string]string
+	if accountID != "" {
+		input.Metadata = map[string]string{"account-id": accountID}
+		headers = map[string]string{kbAccountMetaHeader: accountID}
+	}
+	presignedURL, err := s.presignClient.PresignPutObject(ctx, input, s3.WithPresignExpires(expiresIn))
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate presigned URL: %w", err)
 	}
@@ -83,6 +120,7 @@ func (s *KBService) GetPresignedURL(ctx context.Context, userID, fileName, fileT
 		UploadURL: presignedURL.URL,
 		Key:       s3Key,
 		ExpiresIn: int(expiresIn.Seconds()),
+		Headers:   headers,
 	}, nil
 }
 
