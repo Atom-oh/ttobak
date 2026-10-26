@@ -87,7 +87,7 @@ Browser ──► CloudFront (ttobak.atomai.click)
              └─ upload path (see D4)    S3 data bucket (presigned multipart)
 
 Insight BFF ──► S3 data bucket, platform table, ttobak-main (membership)   [AWS public endpoints]
-Upload  ──► jobs/*.json ──► EventBridge ──► ECS RunTask (Python worker)     [unchanged]
+Upload  ──► jobs/*.json ──► EventBridge ──► ECS RunTask (ingest) ──► agent Lambda (Bedrock, no VPC)
 MCP (/api/mcp, Go) ──► Insight BFF internal routes (SigV4, see §7)
 ```
 
@@ -128,23 +128,31 @@ Constraints to design for (from the Lambda Web Functions docs)
 - Outbound: without an egress network connector the function reaches public AWS
   endpoints directly, which is all the BFF needs (S3, DynamoDB, STS). No VPC.
 
-### 4.3 Worker compute: ECS Fargate vs EKS
+### 4.3 What runs where
 
-After the BFF leaves ECS, the only container workload left is the on-demand
-Python worker (one task per upload or rerun, minutes long, zero when idle).
+Principle (owner, 2026-10-26): move to Lambda whatever gains from it; nothing
+that only calls AWS APIs (Bedrock, S3, DynamoDB) needs to sit in a VPC.
 
-| | ECS Fargate RunTask (keep) | EKS |
-|---|---|---|
-| Trigger | EventBridge → RunTask, native | needs a controller (Lambda creating Jobs, Argo Events, KEDA) |
-| Idle cost | 0 | control plane ~$0.10/h plus nodes or Fargate profile |
-| Ops | none beyond task definition | version upgrades, add-ons, node/Karpenter, Pod Identity |
-| Account-scoped STS session | already implemented | same code, Pod Identity/IRSA for the base role |
-| Fit with TTOBAK | ECS already used (Whisper) | new platform for one batch job |
+| Workload | Today | Target | Why |
+|---|---|---|---|
+| BFF (Express API) | ECS Fargate ×2 + internal ALB | Lambda Web Function, no VPC | HTTP, Node, I/O-bound, scale to zero |
+| Agent stage (area agents, synthesis, verifier, FSI search, `rerun-agents` jobs) | inside the Fargate worker, Bedrock via VPC endpoint | Python Lambda Event Function, no VPC | Bedrock/S3/DDB only; observed runs ≤ 2.6 min (14 recent worker log streams), far under 15 min |
+| Ingest (unzip, parse COT xlsx / CUR, build datasets) | Fargate worker 4 vCPU / 16 GB / 100 GB disk | stays on ECS Fargate RunTask | CUR zips can exceed Lambda's 10 GB memory / 10 GB `/tmp` / 15 min |
+| What's New collector, FSI search | Lambda, no VPC | unchanged | already serverless |
+| OAuth exchange | Lambda | removed | TTOBAK sign-in replaces it |
 
-Recommendation: **keep ECS Fargate for the worker.** EKS becomes worth it only
-if TTOBAK standardises on Kubernetes for several services; the existing EKS
-clusters in the account are demo or other-project clusters and must not host
-customer billing data.
+Lambda Web Functions are not an option for the agent stage or ingest: they are
+Node.js only and every unit of work is bound to an HTTP request timeout.
+
+Flow: upload → `jobs/*.json` → EventBridge → Fargate ingest → writes the
+version's datasets → enqueues the agent job → agent Lambda → notes, sessions,
+market. A rerun skips ingest and invokes the agent Lambda directly.
+
+EKS was considered and rejected (owner, 2026-10-26): with the BFF and agents on
+Lambda, the only container left is one on-demand ingest task. EKS would add a
+control plane (~$0.10/h), upgrades and a job controller for that single task.
+The EKS clusters already in the account are demo or other-project clusters and
+must not host customer billing data.
 
 ## 5. Authentication and authorization
 
@@ -236,7 +244,8 @@ CloudFront behaviors.
   the Web Function endpoint is IAM-only behind CloudFront OAC with a resource
   policy scoped to the TTOBAK distribution ARN (+ MCP role). The owner approved
   this as an allowed pattern; `ApplicationManaged` endpoints remain forbidden.
-- **D2 Worker compute.** Keep ECS Fargate (recommended) or move to EKS.
+- **D2 Compute — resolved 2026-10-26.** BFF on a Lambda Web Function, agent
+  stage on a Python Lambda (no VPC), ingest stays on ECS Fargate; no EKS.
 - **D3 MCP identity.** SigV4 + asserted subject (above) vs forwarding a user
   token the BFF can verify (requires accepting the MCP client audience).
 - **D4 Upload path.** A new CloudFront prefix whose keys match the bucket
