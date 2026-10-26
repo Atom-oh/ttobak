@@ -95,6 +95,29 @@ func TestBootstrapPreservesFreshAccountDiscoveryWithoutGrantingFromHints(t *test
 	}
 }
 
+func TestBootstrapAccountInvitationFromMemberWithProjectInvitationsDisabled(t *testing.T) {
+	t.Setenv("PROJECT_INVITATIONS_ENABLED", "false")
+	repo, svc := publishedTeamMeeting(t)
+	repo.members["acc-a|inviter"] = &model.AccountMember{
+		AccountID: "acc-a", UserID: "inviter", Role: model.RoleSSA,
+	}
+	repo.pendingShares = append(repo.pendingShares, &model.PendingShare{
+		Email: "new@example.com", Kind: model.PendingShareKindAccount,
+		AccountID: "acc-a", Role: model.RoleSA, InvitedByUserID: "inviter",
+		InvitedCognitoSub: "new-member", TTL: time.Now().Add(time.Hour).Unix(),
+		SK: model.PrefixPendingAccount + "acc-a",
+	})
+	result, err := svc.BootstrapSession(context.Background(), "new-member", "new@example.com", "", true, "")
+	if err != nil || result.ProjectInvitationsEnabled || len(result.JoinedAccountIDs) != 1 ||
+		result.JoinedAccountIDs[0] != "acc-a" || result.PendingGrants != 0 {
+		t.Fatalf("Account invitation did not materialize independently: result=%+v err=%v", result, err)
+	}
+	member, err := repo.GetMember(context.Background(), "acc-a", "new-member")
+	if err != nil || member == nil || member.Role != model.RoleSA {
+		t.Fatalf("member=%+v err=%v", member, err)
+	}
+}
+
 func TestBootstrapInvitationFailureIsVisibleWithoutBlockingExistingProfile(t *testing.T) {
 	t.Setenv("PROJECT_INVITATIONS_ENABLED", "true")
 	for _, failedRead := range []bool{false, true} {
