@@ -451,7 +451,9 @@ func TestRecoveryOffModeDoesNotScan(t *testing.T) {
 func TestWhisperInputsParity(t *testing.T) {
 	original := loadDictionaryTerms
 	t.Cleanup(func() { loadDictionaryTerms = original })
-	loadDictionaryTerms = func(context.Context, string) ([]string, error) { return []string{"쿠버네티스", "EKS"}, nil }
+	loadDictionaryTerms = func(context.Context, string, string) ([]string, error) {
+		return []string{"쿠버네티스", "EKS"}, nil
+	}
 	prompt, speakers := whisperInputs(context.Background(), &model.Meeting{Participants: []string{"a", "b"}, DiarizationSpeakerHint: 5}, "u")
 	if prompt != "쿠버네티스, EKS" || speakers != 5 {
 		t.Fatalf("prompt=%q speakers=%d", prompt, speakers)
