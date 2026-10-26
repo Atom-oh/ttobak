@@ -137,6 +137,30 @@ func TestCreateAccount_PostInvitationReadFailuresPreservePartialDelivery(t *test
 	}
 }
 
+func TestCreateAccount_ConcurrentDifferentInputPreservesDeliveryWarning(t *testing.T) {
+	for _, invited := range []bool{false, true} {
+		t.Run(map[bool]string{false: "self-no-mail", true: "invited-owner"}[invited], func(t *testing.T) {
+			f, r := newCreationFixture(t)
+			req := creationRequest()
+			if !invited {
+				req.OwnerEmail = "creator@example.com"
+			}
+			r.before = func(a *model.Account, _ string, _ []repository.AccountParentLink) error {
+				other := *a
+				other.CreationRequestHash = "different-input"
+				r.accounts[a.AccountID] = &other
+				return repository.ErrConditionFailed
+			}
+			_, err := f.svc.CreateAccountWithOwner(context.Background(), "creator", "creator@example.com", req)
+			if !errors.Is(err, ErrAccountHierarchyConflict) ||
+				errors.Is(err, ErrInvitationGrantFailed) != invited ||
+				(len(f.client.createUserCalls) == 1) != invited {
+				t.Fatalf("lost competing request side effect: err=%v mail=%d", err, len(f.client.createUserCalls))
+			}
+		})
+	}
+}
+
 func TestCreateAccount_ParentAuthorizationPrecedesMail(t *testing.T) {
 	f, _ := newCreationFixture(t)
 	f.repo.accounts["parent"] = &model.Account{AccountID: "parent"}

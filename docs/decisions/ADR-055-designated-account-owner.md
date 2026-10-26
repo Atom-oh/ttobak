@@ -13,7 +13,10 @@ the domain-limited Cognito invitation described by ADR-054. Bind ownership to th
 current Cognito sub; an existing PROFILE email index must agree with that sub.
 Public self-signup and administrator-group grants remain disabled.
 
-The creation UI offers an unchecked "Keep me as a regular member (AM)" checkbox
+The backend supports this decision. The corresponding creation and resend UI is
+pending in companion PR #479. Its approved requirements are:
+
+The creation UI must offer an unchecked "Keep me as a regular member (AM)" checkbox
 when another Owner is selected. Checked creates a creator AM membership;
 unchecked creates none. An opted-out creator may receive separate explicit
 meeting/document shares, but creation grants no content reads or Account access.
@@ -34,7 +37,7 @@ Removal, revocation and reparenting stay Owner-only.
 - Resolve/authorize the creator's selected parent before Cognito side effects.
   The creation transaction rechecks that creator membership and observed ancestry.
   The designated Owner neither needs nor inherits parent access.
-- The frontend retains a creation UUID for the same normalized input across
+- The pending frontend must retain a creation UUID for the same normalized input across
   failed requests. Changed input gets a new UUID. The server records the exact
   creator and normalized request hash, and rereads after ambiguous transactions.
 - Receipt replay returns original request fields and current creator membership.
@@ -60,8 +63,9 @@ Removal, revocation and reparenting stay Owner-only.
 Service tests cover creator checkbox states, stale identities, parent loss,
 quota/dependency rejection, ambiguous committed transactions, safe replay and
 time-limited creator recovery. Wire tests inspect the atomic DynamoDB transaction
-and both privacy stamps. Executable component tests cover hidden selections,
-retry UUIDs, navigation and stale creation/resend controls.
+and both privacy stamps. Executable component tests for hidden selections,
+retry UUIDs, navigation and stale creation/resend controls are pending with
+the frontend in companion PR #479 and are not evidence at this revision.
 
 The creator can intentionally create an Account they cannot later administer.
 The colleague's first login must use the provisioned identity. These tests and

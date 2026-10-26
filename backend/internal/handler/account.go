@@ -81,10 +81,10 @@ func (h *AccountHandler) ResendOwnerInvitation(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "이메일을 인증한 뒤 초대를 재전송하세요.")
 		return
 	}
-	var body struct{}
+	var body *struct{}
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&body); err != nil {
+	if err := decoder.Decode(&body); err != nil || body == nil {
 		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid request body")
 		return
 	}
