@@ -232,13 +232,10 @@ CloudFront behaviors.
 
 ## 11. Decisions needed
 
-- **D1 Security exception.** The global rule is "CloudFront → internal LB via
-  VPC origin". A Web Function endpoint cannot be private; it is protected by
-  IAM (OAC) instead. TTOBAK's own API already uses a public HTTP API behind an
-  origin secret, so IAM-only access is stricter than the current TTOBAK API, but
-  it is still an exception to the written rule and needs explicit approval.
-  Alternative without the exception: keep the BFF on ECS behind the existing
-  internal ALB and add the ALB as a second VPC origin on the TTOBAK distribution.
+- **D1 Security exception — resolved 2026-10-26.** No load balancer is created;
+  the Web Function endpoint is IAM-only behind CloudFront OAC with a resource
+  policy scoped to the TTOBAK distribution ARN (+ MCP role). The owner approved
+  this as an allowed pattern; `ApplicationManaged` endpoints remain forbidden.
 - **D2 Worker compute.** Keep ECS Fargate (recommended) or move to EKS.
 - **D3 MCP identity.** SigV4 + asserted subject (above) vs forwarding a user
   token the BFF can verify (requires accepting the MCP client audience).
