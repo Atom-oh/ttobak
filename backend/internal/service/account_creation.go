@@ -234,6 +234,9 @@ func (s *AccountService) CreateAccountWithOwner(ctx context.Context, requesterID
 		}
 		if observed != nil {
 			if observed.CreatedByUserID != requesterID || observed.CreationRequestHash != fingerprint {
+				if invited {
+					return nil, errors.Join(ErrInvitationGrantFailed, ErrAccountHierarchyConflict)
+				}
 				return nil, ErrAccountHierarchyConflict
 			}
 			return s.creationReceipt(ctx, requesterID, req, observed, pending, invited)

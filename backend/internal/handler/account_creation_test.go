@@ -62,7 +62,7 @@ func TestAccountCreation_ActualOwnerAndCheckboxReceipt(t *testing.T) {
 }
 
 func TestOwnerInvitation_StrictBodyAndVerifiedCaller(t *testing.T) {
-	for _, body := range []string{`{"email":"chosen@example.com"}`, `{} {}`, `{}` + strings.Repeat(" ", 2048)} {
+	for _, body := range []string{`null`, `[]`, `"invalid"`, `{"email":"chosen@example.com"}`, `{} {}`, `{}` + strings.Repeat(" ", 2048)} {
 		h, _ := newStubAccountHandler()
 		req := withChiParam(withUserEmailCtx(httptest.NewRequest(http.MethodPost, "/api/accounts/account/owner-invitation", strings.NewReader(body)), "creator", "creator@example.com"), "accountId", "account")
 		out := httptest.NewRecorder()
