@@ -5,6 +5,7 @@ import { getRuntimeConfig } from './runtimeConfig';
 import { triggerAuthFailure } from '@/components/auth/AuthProvider';
 import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory, Research, ResearchDetail, ChatMessage, Account, AccountSummary, AccountMember, AccountMeetingRef, AccountInsight, AccountDocument, PutDocumentRequest, AccountResearchRef, Project, ProjectSummary, ProjectMember, ProjectMeetingRef, ProjectResearchRef, ProjectInsight, ProjectBrief } from '@/types/meeting';
 import type { CreateDictTermInput, DictionaryResponse, DictTermMutationResponse, TermPatch } from '@/lib/dictionary';
+import type { AccountCreationRequest, AccountCreationResponse } from '@/types/meeting';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 const PROJECT_HINTS_KEY = 'ttobak:project-invitation-hints';
@@ -734,8 +735,10 @@ export const researchChatApi = {
 export const accountApi = {
   list: () => api.get<{ accounts: AccountSummary[] }>('/api/accounts'),
   get: (id: string) => api.get<Account>(`/api/accounts/${encodeURIComponent(id)}`),
-  create: (data: { name: string; aliases?: string[]; domains?: string[]; industry?: string; parentAccountId?: string }) =>
-    api.post<Account>('/api/accounts', data),
+  create: (data: AccountCreationRequest, expectedUserId: string) =>
+    api.post<AccountCreationResponse>('/api/accounts', data, { expectedUserId }),
+  resendOwnerInvitation: (id: string, expectedUserId: string) =>
+    api.post<AccountMember>(`/api/accounts/${encodeURIComponent(id)}/owner-invitation`, {}, { expectedUserId }),
   updateParent: (id: string, data: { parentAccountId: string }) =>
     api.put<{ accountId: string; parentAccountId?: string }>(`/api/accounts/${encodeURIComponent(id)}/parent`, data),
   addMember: (id: string, data: { email: string; role: string; resendInvitation?: boolean }) =>

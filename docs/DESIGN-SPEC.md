@@ -239,11 +239,7 @@ All current account members may add members/change assignable non-owner roles.
 Removal/pending-invite revocation stay owner-only (ADR-034). UI
 visibility is not the authorization boundary.
 
-The designated-Owner Account API is implemented. The following creation and
-Owner-resend UI requirements remain pending in companion PR #479; they do not
-describe the frontend at this revision.
-
-Initial Account creation must allow selecting another Owner by colleague or email.
+Initial Account creation can select another Owner by colleague or email.
 Show an unchecked "Keep me as a regular member (AM)" checkbox for this choice.
 Checked retains AM membership; unchecked hides and clears extra member selections,
 shows a creation receipt and stays on the Account list. Separate explicit
@@ -252,7 +248,7 @@ creation UUID after a failed request, rotate it for edited input and reject stal
 results after an authentication change. Initial Owner assignment remains exclusive
 to creation; generic member operations never assign Owner (ADR-055).
 
-An initial pending Owner invitation must expose an explicit resend action on detail
+An initial pending Owner invitation exposes an explicit resend action on detail
 and the creator's receipt. Members or the recorded creator within thirty days can
 request delivery only to the current canonical Owner; no Account access is
 created. The server rechecks actual password status/identity at resend time.
