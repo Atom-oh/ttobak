@@ -50,6 +50,11 @@ var (
 	termsSourceBucket  string
 	requestTermsSource = func(context.Context, string, string) error { return nil }
 	processTermsSource = func(context.Context, model.TermsSourceRequested) error { return nil }
+
+	// Daily news terms into Common: the schedule's {"kind":"news-daily"}
+	// input runs the day ending at the last 21:00 UTC cutoff.
+	processNewsDaily = func(context.Context, string) error { return nil }
+	newsNow          = time.Now
 )
 
 func init() {
@@ -142,6 +147,12 @@ func init() {
 	termsSourceBucket = kbBucketName
 	requestTermsSource = termsService.RequestSourceFromObject
 	processTermsSource = termsService.ProcessSource
+	// News documents are read through GSI4 by crawl time; the candidate
+	// history and run rows live under DICT#COMMON. A news run does not
+	// refresh per-user vocabularies (it would fan out to every user); they
+	// take Common terms at their next scheduled ensure.
+	termsService.SetNewsReader(service.TermsNewsDeps{Documents: repository.NewCrawlerRepository(dynamoClient, tableName), Store: repo})
+	processNewsDaily = termsService.ProcessNewsDaily
 
 	// KB export service — gracefully skips if not configured
 	kbID := os.Getenv("KB_ID")
@@ -249,6 +260,16 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	var envelope model.EventEnvelope
 	if err := json.Unmarshal(raw, &envelope); err != nil {
 		return fmt.Errorf("failed to unmarshal event envelope: %w", err)
+	}
+
+	// The daily news schedule sends a bare {"kind":"news-daily"} object.
+	if envelope.Source == "" && envelope.DetailType == "" {
+		var scheduled struct {
+			Kind string `json:"kind"`
+		}
+		if json.Unmarshal(raw, &scheduled) == nil && scheduled.Kind == "news-daily" {
+			return processNewsDaily(ctx, service.NewsDayFor(newsNow()))
+		}
 	}
 
 	if envelope.Source == "ttobak.analysis" && envelope.DetailType == "SummaryRequested" {

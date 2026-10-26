@@ -574,6 +574,44 @@ func (r *CrawlerRepository) QueryDocumentsByType(ctx context.Context, docType st
 	return allDocs[start:end], total, nil
 }
 
+// ListDocumentsCrawledBetween returns every news document with from <=
+// crawledAt < to (Unix seconds), oldest first. It queries GSI4 (GSI4PK =
+// "DOC#news", GSI4SK = crawledAt, written by both news crawlers) with a
+// key-range condition, so it reads only the window, never the table; unlike
+// QueryDocumentsByType it has no scan fallback and returns the read error.
+// Deleted rows and unreadable metadata are dropped as in every listing.
+func (r *CrawlerRepository) ListDocumentsCrawledBetween(ctx context.Context, from, to int64) ([]model.CrawledDocument, error) {
+	if to <= from {
+		return nil, nil
+	}
+	keyEx := expression.Key("GSI4PK").Equal(expression.Value("DOC#news")).
+		And(expression.Key("GSI4SK").Between(expression.Value(from), expression.Value(to-1)))
+	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to build expression: %w", err)
+	}
+	input := &dynamodb.QueryInput{
+		TableName:                 aws.String(r.tableName),
+		IndexName:                 aws.String("GSI4"),
+		KeyConditionExpression:    expr.KeyCondition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+		ScanIndexForward:          aws.Bool(true),
+	}
+	var docs []model.CrawledDocument
+	for {
+		result, err := r.client.Query(ctx, input)
+		if err != nil {
+			return nil, fmt.Errorf("failed to query documents by crawl time: %w", err)
+		}
+		docs = append(docs, decodeCrawlerDocuments(result.Items)...)
+		if len(result.LastEvaluatedKey) == 0 {
+			return docs, nil
+		}
+		input.ExclusiveStartKey = result.LastEvaluatedKey
+	}
+}
+
 // ListAllDocumentsByType performs a table scan to find documents across all sources filtered by type.
 // This is used for cross-source queries. Uses pagination with limit and page offset.
 func (r *CrawlerRepository) ListAllDocumentsByType(ctx context.Context, docType string, limit int32, page int) ([]model.CrawledDocument, int, error) {

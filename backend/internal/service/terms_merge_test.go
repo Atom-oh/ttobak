@@ -129,6 +129,9 @@ func (s *memDictStore) observe(op, fromState string, in repository.DictMergeInpu
 	if len(in.Sources) > 0 {
 		t.Sources = in.Sources
 	}
+	if in.UpdatedBy != "" {
+		t.UpdatedBy = in.UpdatedBy
+	}
 	t.Version++
 	switch {
 	case promotion != nil:

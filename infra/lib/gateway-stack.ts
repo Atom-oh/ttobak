@@ -163,9 +163,10 @@ export function transcriptCorrectionEnvironment(scope: Construct): Record<string
 }
 
 /**
- * KB-document and research-report term extraction for the summarize Lambda
- * (layered dictionary 4.2). CDK context `ttobak:kbTermsMode` and
- * `ttobak:researchTermsMode` (off|on, default off); invalid values fail synth.
+ * KB-document, research-report and daily news term extraction for the
+ * summarize Lambda (layered dictionary 4.2). CDK context `ttobak:kbTermsMode`,
+ * `ttobak:researchTermsMode` and `ttobak:newsTermsMode` (off|on, default off);
+ * invalid values fail synth.
  */
 export function sourceTermsEnvironment(scope: Construct): Record<string, string> {
   const read = (key: string) => {
@@ -176,7 +177,11 @@ export function sourceTermsEnvironment(scope: Construct): Record<string, string>
     }
     return mode;
   };
-  return { KB_TERMS_MODE: read('ttobak:kbTermsMode'), RESEARCH_TERMS_MODE: read('ttobak:researchTermsMode') };
+  return {
+    KB_TERMS_MODE: read('ttobak:kbTermsMode'),
+    RESEARCH_TERMS_MODE: read('ttobak:researchTermsMode'),
+    NEWS_TERMS_MODE: read('ttobak:newsTermsMode'),
+  };
 }
 
 export class GatewayStack extends cdk.Stack {
@@ -1196,6 +1201,28 @@ export class GatewayStack extends cdk.Stack {
       }).addTarget(termsSourceTarget());
       pipelineFailures.watchQueue('TermsSource', termsSourceDlq);
     }
+    // Daily news terms into the Common layer (layered dictionary 4.2): at
+    // 21:00 UTC, after the 19:00 crawl, summarize processes the titles and
+    // summaries crawled in the UTC day ending then. The rule is always
+    // enabled; with ttobak:newsTermsMode off each run logs DISABLED.
+    const termsNewsDlq = new sqs.Queue(this, 'TermsNewsDlq', {
+      queueName: 'ttobak-terms-news-dlq',
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      retentionPeriod: cdk.Duration.days(7),
+      redriveAllowPolicy: { redrivePermission: sqs.RedrivePermission.DENY_ALL },
+    });
+    new events.Rule(this, 'TermsNewsDailyRule', {
+      ruleName: 'ttobak-terms-news-daily',
+      description: 'Extract dictionary terms from the day of crawled news into the common layer',
+      schedule: events.Schedule.expression('cron(0 21 * * ? *)'),
+    }).addTarget(new eventsTargets.LambdaFunction(this.summarizeFunction, {
+      event: events.RuleTargetInput.fromObject({ kind: 'news-daily' }),
+      maxEventAge: cdk.Duration.hours(1),
+      retryAttempts: 2,
+      deadLetterQueue: termsNewsDlq,
+    }));
+    pipelineFailures.watchQueue('TermsNews', termsNewsDlq);
+
     // Install the consumer, rule and invocation permission before API code
     // can acknowledge a newly published request during this stack update.
     // Private relinking must not precede QA's canonical publication reader.
