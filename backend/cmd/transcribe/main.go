@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -292,13 +293,46 @@ func dictionaryDisplayTerms(ctx context.Context, dict dictionaryReader, userID s
 	return phrases, nil
 }
 
+// whisperPromptMaxRunes bounds INITIAL_PROMPT. Whisper keeps only ~224 prompt
+// tokens and ECS rejects RunTask overrides over 8192 characters, so a long
+// dictionary is cut at whole terms instead of failing the task.
+const whisperPromptMaxRunes = 300
+
+// joinWhisperPrompt joins unique terms in order until the next one would pass
+// whisperPromptMaxRunes.
+func joinWhisperPrompt(phrases []string) string {
+	var b strings.Builder
+	seen := map[string]bool{}
+	n := 0
+	for _, p := range phrases {
+		p = strings.TrimSpace(p)
+		if p == "" || seen[p] {
+			continue
+		}
+		add := utf8.RuneCountInString(p)
+		if n > 0 {
+			add += 2 // ", "
+		}
+		if n+add > whisperPromptMaxRunes {
+			break
+		}
+		if n > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(p)
+		seen[p] = true
+		n += add
+	}
+	return b.String()
+}
+
 // whisperInitialPrompt joins the user's dictionary display forms.
 func whisperInitialPrompt(ctx context.Context, dict dictionaryReader, userID string) string {
 	phrases, err := dictionaryDisplayTerms(ctx, dict, userID)
 	if err != nil {
 		return ""
 	}
-	return strings.Join(phrases, ", ")
+	return joinWhisperPrompt(phrases)
 }
 
 // whisperTaskOptions distinguishes ordinary, crop and recovery runs. Only
@@ -320,7 +354,7 @@ func whisperInputs(ctx context.Context, meeting *model.Meeting, userID string) (
 	var initialPrompt string
 	if userID != "" && loadDictionaryTerms != nil {
 		if phrases, err := loadDictionaryTerms(ctx, userID); err == nil && len(phrases) > 0 {
-			initialPrompt = strings.Join(phrases, ", ")
+			initialPrompt = joinWhisperPrompt(phrases)
 			log.Printf("Whisper initial_prompt: %d terms for user %s", len(phrases), userID)
 		}
 	}

@@ -70,6 +70,16 @@ describe('AiStack', () => {
     expect(JSON.stringify(transcribe?.Action)).not.toContain('CreateVocabulary');
   });
 
+  test('summarize vocabulary refresh has the same ttobak-vocab-* scope as the API', () => {
+    const vocab = statementsOf('TtobakSummarizeRole').filter(statement => statement.Sid === 'TranscribeVocabulary');
+    expect(vocab).toHaveLength(1);
+    expect(vocab[0].Action).toEqual([
+      'transcribe:CreateVocabulary', 'transcribe:UpdateVocabulary', 'transcribe:GetVocabulary', 'transcribe:DeleteVocabulary',
+    ]);
+    expect(JSON.stringify(vocab[0].Resource)).toContain(':vocabulary/ttobak-vocab-*');
+    expect(vocab[0].Resource).not.toEqual('*');
+  });
+
   test('API role can write and delete vocab/ table files', () => {
     const actions = JSON.stringify(statementsOf('TtobakApiRole').map(statement => statement.Action));
     expect(actions).toContain('s3:PutObject');

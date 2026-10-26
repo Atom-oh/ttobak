@@ -262,6 +262,31 @@ func TestTermsProcessEditorTaintSuggestsOnly(t *testing.T) {
 	}
 }
 
+// A run that makes a term active refreshes the owner's vocabulary once; a
+// suggest-only run leaves it alone.
+func TestTermsProcessRefreshesVocabularyOnlyForActiveTerms(t *testing.T) {
+	for _, tainted := range []bool{false, true} {
+		meeting := termsTestMeeting()
+		if tainted {
+			meeting.SourceEditedByNonOwnerAt = "2026-10-18T08:00:00Z"
+		}
+		repo := &termsRepoFake{meeting: meeting, state: queuedTermsState(meeting)}
+		s, _ := newTermsTestService(repo, &termsModelFake{outputs: []string{termsGoodOutput}}, newTestMerger(newMemDictStore()), termsOn)
+		var refreshed []string
+		s.SetVocabularyRefresher(func(_ context.Context, owner string) { refreshed = append(refreshed, owner) })
+		if err := s.Process(context.Background(), model.TermsRequested{OwnerID: "owner", MeetingID: "m1", RunID: "run-1"}); err != nil {
+			t.Fatalf("tainted=%v: %v", tainted, err)
+		}
+		want := 1
+		if tainted {
+			want = 0
+		}
+		if len(refreshed) != want || (want == 1 && refreshed[0] != "owner") {
+			t.Fatalf("tainted=%v: refreshed %v", tainted, refreshed)
+		}
+	}
+}
+
 func TestTermsProcessGuards(t *testing.T) {
 	cases := []struct {
 		name   string
