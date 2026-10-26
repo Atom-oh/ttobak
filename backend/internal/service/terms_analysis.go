@@ -102,7 +102,7 @@ type termsAnalysisRepo interface {
 	RenewTermsAnalysisLease(context.Context, string, string, string, int64, time.Time, int64) error
 	ReserveTermsAccepted(context.Context, string, string, string, int64, time.Time, int64, []model.TermsAcceptedTerm) error
 	CompleteTermsAnalysis(context.Context, string, string, string, int64, repository.TermsCompletion, time.Time) error
-	RecordTermsAccount(context.Context, string, string, string, string) error
+	RecordTermsAccount(context.Context, string, string, string, string, []string) error
 	FailTermsAnalysis(context.Context, string, *model.TermsAnalysis, string, []model.TermsAcceptedTerm, time.Time) error
 }
 
@@ -418,7 +418,7 @@ func (s *TermsAnalysisService) Process(ctx context.Context, event model.TermsReq
 	if madeActive(c) {
 		refresh = append(refresh, event.OwnerID)
 	}
-	refresh = append(refresh, s.mergeAccountLayer(runCtx, event, fresh.AccountID, terms, source)...)
+	refresh = append(refresh, s.mergeAccountLayer(runCtx, event, fresh.AccountID, state.AccountAcceptedTerms, terms, source)...)
 	s.refreshVocabularies(ctx, event, refresh)
 	// An Enqueue during this run returned PENDING and queued nothing; a source
 	// that changed after the freshness check gets its own run now.
@@ -437,8 +437,10 @@ func madeActive(c model.TermsCounters) bool {
 // vocabularies should refresh, owner first. It runs after the personal run
 // completed, so it is best effort: every skip or failure is logged and the
 // run stays succeeded. The early member check saves the writes; the
-// transaction's ConditionCheck remains the authority.
-func (s *TermsAnalysisService) mergeAccountLayer(ctx context.Context, event model.TermsRequested, accountID string, terms []ExtractedTerm, source termsSource) []string {
+// transaction's ConditionCheck remains the authority. prior is the run
+// state's accountAcceptedTerms; a key that would push it past
+// MaxTermsAccountAccepted is not merged into the Account.
+func (s *TermsAnalysisService) mergeAccountLayer(ctx context.Context, event model.TermsRequested, accountID string, prior []string, terms []ExtractedTerm, source termsSource) []string {
 	if accountID == "" {
 		return nil
 	}
@@ -463,12 +465,35 @@ func (s *TermsAnalysisService) mergeAccountLayer(ctx context.Context, event mode
 	if !isMember {
 		return skip("NOT_MEMBER")
 	}
+	known := make(map[string]bool, len(prior))
+	for _, key := range prior {
+		known[key] = true
+	}
+	var keys []string
+	kept := make([]ExtractedTerm, 0, len(terms))
+	for _, t := range terms {
+		key := TermKey(t.DisplayAs)
+		if key == "" {
+			continue
+		}
+		if !known[key] {
+			if len(known) >= model.MaxTermsAccountAccepted {
+				continue
+			}
+			known[key] = true
+		}
+		keys = append(keys, key)
+		kept = append(kept, t)
+	}
+	terms = kept
 	if len(terms) == 0 {
 		return skip("NO_TERMS")
 	}
-	// Every key is already in acceptedTerms (reserved before the personal
-	// merge); recording the Account makes the deletion sweep clean it too.
-	if err := s.repo.RecordTermsAccount(ctx, event.OwnerID, event.MeetingID, event.RunID, accountID); err != nil {
+	// The personal merge may skip a key (a personal manual or tombstoned term)
+	// that the Account still observes, so acceptedTerms does not cover the
+	// Account: record the Account and every key it will observe first, so the
+	// deletion sweep cleans them there.
+	if err := s.repo.RecordTermsAccount(ctx, event.OwnerID, event.MeetingID, event.RunID, accountID, keys); err != nil {
 		return skip("RECORD_FAILED")
 	}
 	// No acceptedTerms: that list tracks the personal partition, and an Account
