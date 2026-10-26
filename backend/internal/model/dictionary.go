@@ -72,6 +72,54 @@ type DictTermView struct {
 	Hits         int      `json:"hits"`
 	AddedAt      string   `json:"addedAt"`
 	UpdatedAt    string   `json:"updatedAt"`
+	// Layer is personal, common or account:{accountId}.
+	Layer   string          `json:"layer"`
+	Sources []DictSourceRef `json:"sources"`
+	// UpdatedBy is the last editor; listed for Common terms only.
+	UpdatedBy string `json:"updatedBy,omitempty"`
+}
+
+// Dictionary layer names in API paths and DictTermView.Layer; an Account
+// layer is DictLayerAccountPrefix + accountId.
+const (
+	DictLayerPersonal      = "personal"
+	DictLayerCommon        = "common"
+	DictLayerAccountPrefix = "account:"
+)
+
+// DictLayerOf names the layer of a term partition key ("" if none).
+func DictLayerOf(pk string) string {
+	switch scope, accountID, _ := TermScopeOf(pk); scope {
+	case TermScopeUser:
+		return DictLayerPersonal
+	case TermScopeCommon:
+		return DictLayerCommon
+	case TermScopeAccount:
+		return DictLayerAccountPrefix + accountID
+	}
+	return ""
+}
+
+// DictLayerTermsResponse answers GET .../layers/{layer}/terms.
+type DictLayerTermsResponse struct {
+	Items []DictTermView `json:"items"`
+}
+
+// DictTermLogView is the API form of a DictTermLog. LogID is the row's
+// timestamp; Before/After are the term snapshots (nil when absent).
+type DictTermLogView struct {
+	LogID  string        `json:"logId"`
+	TermID string        `json:"termId"`
+	Actor  string        `json:"actor"`
+	Action string        `json:"action"`
+	At     string        `json:"at"`
+	Before *DictTermView `json:"before,omitempty"`
+	After  *DictTermView `json:"after,omitempty"`
+}
+
+// DictTermLogResponse answers GET .../terms/{termId}/log, newest first.
+type DictTermLogResponse struct {
+	Items []DictTermLogView `json:"items"`
 }
 
 // DictTermMutationResponse answers a v2 term create, update or delete.
@@ -220,6 +268,17 @@ func AppendDictSource(refs []DictSourceRef, ref DictSourceRef) []DictSourceRef {
 	}
 	return out
 }
+
+// Common audit actions and retention (L2).
+const (
+	DictLogActionUpdate  = "update"
+	DictLogActionDelete  = "delete"
+	DictLogActionRestore = "restore"
+	MaxDictLogsPerTerm   = 20
+)
+
+// DictLogSK returns the sort key of an audit row.
+func DictLogSK(termKey, at string) string { return PrefixDictLog + termKey + "#" + at }
 
 // DictTermLog is one Common-dictionary audit row: SK is
 // DICTLOG#{termKey}#{at}. Before/After hold the term JSON ("" when absent).
