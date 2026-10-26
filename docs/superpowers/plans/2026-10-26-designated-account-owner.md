@@ -94,7 +94,7 @@ cmd/api/main.go; model response/error conventions.
 ## Task 3: Owner picker and creator checkbox
 
 **Files:** components/AccountsClient.tsx; components/AccountDetailClient.tsx;
-lib/api.ts; types/meeting.ts; lib/accountCreation.ts; scripts/account-creation.test.mjs.
+lib/api.ts; types/meeting.ts; lib/accountCreation.ts; scripts/account-creation.test.mjs; frontend/package.json and lockfile (required Next.js security patch).
 
 **Interfaces:** Frontend creation request/receipt matches Task 1. Expose the
 canonical-owner resend API from Task 2. Pure helpers normalize submission,

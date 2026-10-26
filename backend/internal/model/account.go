@@ -16,7 +16,7 @@ const (
 	EntityTypeAccountMember = "ACCOUNT_MEMBER"
 )
 
-// Account member roles. owner is assigned only to the creator.
+// Owner is assigned only during initial creation, including a designated Owner.
 const (
 	RoleOwner     = "owner"
 	RoleAM        = "AM"
@@ -28,24 +28,28 @@ const (
 )
 
 // AssignableRoles is the allowlist for AddMember / UpdateMemberRole.
-// owner is deliberately absent — it is server-assigned to the creator only.
+// owner is deliberately absent — only initial creation can assign it.
 var AssignableRoles = []string{RoleAM, RoleTAM, RoleSSA, RoleSA, RoleSAManager, RoleAMManager}
 
 // Account is a first-class customer/company entity shared across a team.
 type Account struct {
-	PK              string    `dynamodbav:"PK"` // ACCOUNT#{accountId}
-	SK              string    `dynamodbav:"SK"` // META
-	AccountID       string    `dynamodbav:"accountId"`
-	ParentAccountID string    `dynamodbav:"parentAccountId,omitempty" json:"parentAccountId,omitempty"`
-	Name            string    `dynamodbav:"name"`
-	Aliases         []string  `dynamodbav:"aliases,omitempty"` // tag mapping e.g. ["하나은행","Hana Bank"]
-	Domains         []string  `dynamodbav:"domains,omitempty"`
-	Industry        string    `dynamodbav:"industry,omitempty"`
-	CrawlerSourceID string    `dynamodbav:"crawlerSourceId,omitempty"` // links CRAWLER#{sourceId} (Plan 3)
-	OwnerUserID     string    `dynamodbav:"ownerUserId"`
-	CreatedAt       time.Time `dynamodbav:"createdAt"`
-	UpdatedAt       time.Time `dynamodbav:"updatedAt"`
-	EntityType      string    `dynamodbav:"entityType"` // "ACCOUNT"
+	PK                            string    `dynamodbav:"PK"` // ACCOUNT#{accountId}
+	SK                            string    `dynamodbav:"SK"` // META
+	AccountID                     string    `dynamodbav:"accountId"`
+	ParentAccountID               string    `dynamodbav:"parentAccountId,omitempty" json:"parentAccountId,omitempty"`
+	Name                          string    `dynamodbav:"name"`
+	Aliases                       []string  `dynamodbav:"aliases,omitempty"` // tag mapping e.g. ["하나은행","Hana Bank"]
+	Domains                       []string  `dynamodbav:"domains,omitempty"`
+	Industry                      string    `dynamodbav:"industry,omitempty"`
+	CrawlerSourceID               string    `dynamodbav:"crawlerSourceId,omitempty"` // links CRAWLER#{sourceId} (Plan 3)
+	OwnerUserID                   string    `dynamodbav:"ownerUserId"`
+	CreatedByUserID               string    `dynamodbav:"createdByUserId,omitempty"`
+	CreationRequestHash           string    `dynamodbav:"creationRequestHash,omitempty"`
+	InitialOwnerEmail             string    `dynamodbav:"initialOwnerEmail,omitempty"`
+	InitialOwnerInvitationPending bool      `dynamodbav:"initialOwnerInvitationPending,omitempty"`
+	CreatedAt                     time.Time `dynamodbav:"createdAt"`
+	UpdatedAt                     time.Time `dynamodbav:"updatedAt"`
+	EntityType                    string    `dynamodbav:"entityType"` // "ACCOUNT"
 }
 
 // AccountMember binds a user (with a role) to an account.
@@ -66,11 +70,21 @@ type AccountMember struct {
 // --- Request / Response DTOs ---
 
 type CreateAccountRequest struct {
-	ParentAccountID string   `json:"parentAccountId,omitempty"`
-	Name            string   `json:"name"`
-	Aliases         []string `json:"aliases,omitempty"`
-	Domains         []string `json:"domains,omitempty"`
-	Industry        string   `json:"industry,omitempty"`
+	OwnerEmail          string   `json:"ownerEmail,omitempty"`
+	KeepCreatorAsMember bool     `json:"keepCreatorAsMember,omitempty"`
+	RequestID           string   `json:"requestId,omitempty"`
+	ParentAccountID     string   `json:"parentAccountId,omitempty"`
+	Name                string   `json:"name"`
+	Aliases             []string `json:"aliases,omitempty"`
+	Domains             []string `json:"domains,omitempty"`
+	Industry            string   `json:"industry,omitempty"`
+}
+
+// The receipt describes this creation input, never later private Account data.
+type AccountCreationResponse struct {
+	AccountResponse
+	CreatorMember            bool `json:"creatorMember"`
+	OwnerInvitationRequested bool `json:"ownerInvitationRequested"`
 }
 
 // ParentAccountID is required; an explicit empty string detaches the account.
@@ -107,15 +121,17 @@ type AccountMemberDTO struct {
 }
 
 type AccountResponse struct {
-	AccountID       string             `json:"accountId"`
-	ParentAccountID string             `json:"parentAccountId,omitempty"`
-	Name            string             `json:"name"`
-	Aliases         []string           `json:"aliases,omitempty"`
-	Domains         []string           `json:"domains,omitempty"`
-	Industry        string             `json:"industry,omitempty"`
-	OwnerUserID     string             `json:"ownerUserId"`
-	Members         []AccountMemberDTO `json:"members"`
-	CreatedAt       time.Time          `json:"createdAt"`
+	AccountID       string   `json:"accountId"`
+	ParentAccountID string   `json:"parentAccountId,omitempty"`
+	Name            string   `json:"name"`
+	Aliases         []string `json:"aliases,omitempty"`
+	Domains         []string `json:"domains,omitempty"`
+	Industry        string   `json:"industry,omitempty"`
+	OwnerUserID     string   `json:"ownerUserId"`
+	// Initial invitation hint only; explicit resend rechecks current status.
+	OwnerInvitationPending bool               `json:"ownerInvitationPending"`
+	Members                []AccountMemberDTO `json:"members"`
+	CreatedAt              time.Time          `json:"createdAt"`
 }
 
 // AccountSummary is the list-view item for "my accounts".

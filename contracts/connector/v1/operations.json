@@ -15,6 +15,7 @@
     ["api.kb.readFiles", "ttobak-api-bridge", ["read"], true, "GET", "/api/kb/files/reading"],
     ["api.account.listAccounts", "ttobak-api-bridge", ["read"], true, "GET", "/api/accounts"],
     ["api.account.createAccount", "ttobak-api-bridge", ["read", "write"], true, "POST", "/api/accounts"],
+    ["api.account.resendOwnerInvitation", "ttobak-api-bridge", ["read", "share"], false, "POST", "/api/accounts/{accountId}/owner-invitation"],
     ["api.account.getAccount", "ttobak-api-bridge", ["read"], false, "GET", "/api/accounts/{accountId}"],
     ["api.accountReading.get", "ttobak-api-bridge", ["read"], true, "GET", "/api/accounts/{accountId}/reading"],
     ["api.account.updateAccountParent", "ttobak-api-bridge", ["read", "write"], true, "PUT", "/api/accounts/{accountId}/parent"],

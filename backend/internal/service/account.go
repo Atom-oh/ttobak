@@ -176,15 +176,16 @@ func toAccountResponse(a *model.Account, members []model.AccountMember) *model.A
 		dtos = append(dtos, model.AccountMemberDTO{UserID: m.UserID, Email: m.Email, Role: m.Role})
 	}
 	return &model.AccountResponse{
-		AccountID:       a.AccountID,
-		ParentAccountID: a.ParentAccountID,
-		Name:            a.Name,
-		Aliases:         a.Aliases,
-		Domains:         a.Domains,
-		Industry:        a.Industry,
-		OwnerUserID:     a.OwnerUserID,
-		Members:         dtos,
-		CreatedAt:       a.CreatedAt,
+		AccountID:              a.AccountID,
+		ParentAccountID:        a.ParentAccountID,
+		Name:                   a.Name,
+		Aliases:                a.Aliases,
+		Domains:                a.Domains,
+		Industry:               a.Industry,
+		OwnerUserID:            a.OwnerUserID,
+		OwnerInvitationPending: a.InitialOwnerInvitationPending,
+		Members:                dtos,
+		CreatedAt:              a.CreatedAt,
 	}
 }
 

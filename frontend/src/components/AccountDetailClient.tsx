@@ -146,6 +146,29 @@ export default function AccountDetailClient() {
     }
   };
 
+  const handleResendOwner = async () => {
+    if (activeAccountIdRef.current !== accountId || account?.accountId !== accountId || inviting
+      || !account.members.some((member) => member.userId === user?.userId)) return;
+    const myAccountId = accountId;
+    const generation = ++inviteGeneration.current;
+    const isCurrent = () => activeAccountIdRef.current === myAccountId && inviteGeneration.current === generation;
+    setInviting(true);
+    setError(null);
+    try {
+      await accountApi.resendOwnerInvitation(myAccountId);
+      if (isCurrent()) {
+        setPendingNotice('Owner 초대 메일 전송을 다시 요청했습니다.');
+        setPendingNoticeEmail(null);
+        setPendingNoticeRole(null);
+        setPendingNoticeAccountId(myAccountId);
+      }
+    } catch (err) {
+      if (isCurrent()) setError(err instanceof Error ? err.message : 'Owner 초대 메일을 다시 요청하지 못했습니다.');
+    } finally {
+      if (isCurrent()) setInviting(false);
+    }
+  };
+
   const handleRevokePendingMember = async () => {
     if (!pendingNoticeEmail || pendingNoticeAccountId !== accountId
       || activeAccountIdRef.current !== accountId) return;
@@ -322,7 +345,16 @@ export default function AccountDetailClient() {
                     <div key={m.userId} className="flex items-center justify-between text-sm gap-2">
                       <span className="text-slate-700 dark:text-text-secondary truncate">{m.email || m.userId}</span>
                       {isOwnerRow ? (
-                        <span className="text-xs font-semibold px-2 py-1 rounded-full bg-primary/10 text-primary shrink-0">owner</span>
+                        <div className="flex items-center gap-2 shrink-0">
+                          {isMember && account.ownerInvitationPending && (
+                            <button type="button" disabled={inviting} onClick={handleResendOwner}
+                              title="초대 절차를 완료하지 않은 Owner에게만 전송됩니다."
+                              className="text-xs text-primary hover:underline disabled:opacity-50">
+                              Owner 초대 메일 다시 보내기
+                            </button>
+                          )}
+                          <span className="text-xs font-semibold px-2 py-1 rounded-full bg-primary/10 text-primary">owner</span>
+                        </div>
                       ) : isMember ? (
                         <div className="flex items-center gap-1 shrink-0">
                           <select

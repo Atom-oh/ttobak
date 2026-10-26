@@ -535,8 +535,28 @@ export interface Account {
   domains?: string[];
   industry?: string;
   ownerUserId: string;
+  // Initial invitation hint; resend verifies the current Cognito status.
+  ownerInvitationPending?: boolean;
   members: AccountMember[];
   createdAt: string;
+}
+
+export interface AccountCreationRequest {
+  name: string;
+  aliases?: string[];
+  domains?: string[];
+  industry?: string;
+  parentAccountId?: string;
+  ownerEmail?: string;
+  keepCreatorAsMember?: boolean;
+  requestId?: string;
+}
+
+export interface AccountCreationResponse extends Account {
+  creatorMember: boolean;
+  // Initial invitation state retained in this creation receipt.
+  ownerInvitationPending: boolean;
+  ownerInvitationRequested: boolean;
 }
 
 export interface AccountMeetingRef {
