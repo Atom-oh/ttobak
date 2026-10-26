@@ -188,6 +188,18 @@ func (r *DynamoDBRepository) CompleteTermsAnalysis(ctx context.Context, ownerID,
 	return r.checkedTermsWrite(ctx, ownerID, meetingID, false, update, condition)
 }
 
+// RecordTermsAccount adds accountID to the run state's accountIds before the
+// Account layer writes, so SweepMeetingTerms cleans that partition too. It
+// needs the observed run and the meeting item (a deleted meeting's sweep may
+// already have run, so nothing may be written for it).
+func (r *DynamoDBRepository) RecordTermsAccount(ctx context.Context, ownerID, meetingID, runID, accountID string) error {
+	if runID == "" || accountID == "" {
+		return fmt.Errorf("terms account record requires a run and an account")
+	}
+	update := expression.Add(expression.Name("accountIds"), expression.Value(&types.AttributeValueMemberSS{Value: []string{accountID}}))
+	return r.checkedTermsWrite(ctx, ownerID, meetingID, false, update, expression.Name("runId").Equal(expression.Value(runID)))
+}
+
 // FailTermsAnalysis ends the observed run with an enum error code. A
 // non-empty accepted list replaces acceptedTerms so observations written
 // before the failure stay discoverable by deletion cleanup.
@@ -227,8 +239,11 @@ func setAcceptedTerms(update expression.UpdateBuilder, accepted []model.TermsAcc
 }
 
 // SweepMeetingTerms runs after the meeting item is deleted (design A8): per
-// acceptedTerms key it deletes the owner-scope DICTOBS# row and an unedited
-// auto term left without observations (version-guarded). The run state goes
+// acceptedTerms key it deletes the meeting's DICTOBS# row and an unedited
+// auto term left without observations (version-guarded), in the owner's
+// personal scope and in every recorded ACCOUNT# partition (accountIds, not the
+// meeting's current link). These Account deletes are system cleanup of the
+// meeting's own evidence, so they carry no membership check. The run state goes
 // last, only when every step succeeded, so a retry still finds the keys. Only
 // the owner recorded on the run state is swept; the meeting service re-runs
 // this when the owner retries DELETE on an already-deleted meeting.
@@ -240,20 +255,27 @@ func (r *DynamoDBRepository) SweepMeetingTerms(ctx context.Context, ownerID, mee
 	if state.OwnerID != ownerID {
 		return nil // another owner's run state: a retried sweep never touches it
 	}
-	pk := model.PrefixUser + ownerID
+	pks := []string{model.PrefixUser + ownerID}
+	for _, accountID := range state.AccountIDs {
+		if accountID != "" {
+			pks = append(pks, model.PrefixAccount+accountID)
+		}
+	}
 	var errs []error
-	for _, accepted := range state.AcceptedTerms {
-		if !model.ValidTermKey(accepted.TermKey) {
-			continue
-		}
-		if _, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
-			TableName: aws.String(r.tableName), Key: dictKey(pk, model.DictObsSK(accepted.TermKey, meetingID)),
-		}); err != nil {
-			errs = append(errs, fmt.Errorf("delete term observation: %w", err))
-			continue
-		}
-		if err := r.deleteOrphanAutoTerm(ctx, pk, accepted.TermKey); err != nil {
-			errs = append(errs, err)
+	for _, pk := range pks {
+		for _, accepted := range state.AcceptedTerms {
+			if !model.ValidTermKey(accepted.TermKey) {
+				continue
+			}
+			if _, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+				TableName: aws.String(r.tableName), Key: dictKey(pk, model.DictObsSK(accepted.TermKey, meetingID)),
+			}); err != nil {
+				errs = append(errs, fmt.Errorf("delete term observation: %w", err))
+				continue
+			}
+			if err := r.deleteOrphanAutoTerm(ctx, pk, accepted.TermKey); err != nil {
+				errs = append(errs, err)
+			}
 		}
 	}
 	if len(errs) > 0 {

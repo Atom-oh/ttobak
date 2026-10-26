@@ -70,6 +70,11 @@ type TermsAnalysis struct {
 	ErrorCode           string              `dynamodbav:"errorCode" json:"errorCode,omitempty"`
 	Counters            TermsCounters       `dynamodbav:"counters" json:"counters"`
 	AcceptedTerms       []TermsAcceptedTerm `dynamodbav:"acceptedTerms,omitempty" json:"-"`
+	// AccountIDs are the Accounts this meeting's terms were merged into,
+	// recorded before each Account merge; the deletion sweep cleans each
+	// ACCOUNT# partition for the AcceptedTerms keys. The set only grows, so an
+	// Account the meeting was later unlinked from is still swept.
+	AccountIDs []string `dynamodbav:"accountIds,omitempty,stringset" json:"-"`
 }
 
 // TermsRequested is the ttobak.analysis/TermsRequested event detail. It
