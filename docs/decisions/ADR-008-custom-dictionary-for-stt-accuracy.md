@@ -412,7 +412,8 @@ are added next to the personal one, which stays the only layer a user owns.
   and Personal `USER#{userId}`. Term rows stay `DICTTERM#{termKey}` with the
   unchanged `termKey` rules. Caps per scope: 300 automatic terms
   (`MaxAutoTermsPerScope`), 500 manual terms (`MaxManualTermsPerScope`), 10
-  observations per term; Common keeps the last 20 audit rows per term.
+  observations per term; Common keeps at most 20 audit rows per term, the
+  oldest (create or first system) row pinned and the newest 19 others kept.
 - **Consumers.** One personal ko-KR vocabulary per user, at most 1500 rows and
   48 KiB, cut at whole terms in the order Personal manual, Account, Personal
   auto, Common. The Whisper prompt is at most 300 runes in the order Personal
@@ -431,6 +432,17 @@ are added next to the personal one, which stays the only layer a user owns.
   write records `updatedBy`/`updatedAt` and an audit row, and system writes
   (news creates and evictions, actor `system:news`) are audited too. Deletes
   are tombstones that can be restored from the audit snapshot.
+- **R17 (edited Common terms).** A Common term a user edited (`userEditedAt`
+  set) is left out of the transcript-correction glossary; vocabulary and the
+  Whisper prompt still include it (bias only). The oldest audit row of a Common
+  term is never trimmed. Together these keep L2 (anyone edits) from turning L3
+  (silent correction) into a vandalism path; the cost is that a user-improved
+  Common term does not drive corrections.
+- **Meeting deletion and the Account layer.** The run state records the
+  Accounts a meeting was merged into (`accountIds`) and the keys merged there
+  (`accountAcceptedTerms`, which can hold keys the personal merge skipped) in
+  one update before the Account merge; the deletion sweep cleans each recorded
+  Account for `acceptedTerms` plus `accountAcceptedTerms`.
 - **L3 (corrections).** Glossary corrections to the transcript are applied
   silently; the records are stored on the meeting and never shown in the UI. A
   refined segment in which a glossary form appears more often than in its source
@@ -457,7 +469,15 @@ are added next to the personal one, which stays the only layer a user owns.
   on KB file delete and research trash/delete, as the meeting sweep does. FU3:
   one-off backfill of `userTiedAt` on every existing non-reserved crawler CONFIG
   before an operator marks any source global; `fix-crawler-newsqueries.py` has no
-  marker guard.
+  marker guard. FU4: clean Account-layer contributions when a source is
+  unlinked from or relinked to an Account (a meeting's `accountId` change, a
+  research report's `accountIds` change, a KB object's `account-id` change):
+  remove that source's observations, its `sources` references on the term and
+  auto terms left without observations in the old Account. Today only meeting
+  deletion sweeps an Account. FU4 is required before `accountTermsMode`,
+  `kbTermsMode` or `researchTermsMode` is turned on. FU5: promote and demote
+  terms between Personal and Account (spec section 4.5); not implemented. FU6:
+  a vocabulary rows-by-layer metric (spec section 4.6); not implemented.
 
 ## Consequences and risks
 
