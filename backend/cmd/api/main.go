@@ -153,6 +153,10 @@ func init() {
 	dictService := service.NewDictionaryService(dictRepo, transcribeClient)
 	// Only the API Lambda builds vocabularies (A/B slots, vocab/ table files).
 	dictService.SetVocabularyBuilder(s3Client, bucketName, service.ParseVocabRebuildMinInterval(os.Getenv("VOCAB_REBUILD_MIN_INTERVAL")))
+	dictService.SetMembershipReader(func(ctx context.Context, accountID, userID string) (bool, error) {
+		member, err := repo.GetMember(ctx, accountID, userID)
+		return member != nil, err
+	})
 	dictHandler := handler.NewDictionaryHandler(dictService)
 	translateHandler := handler.NewTranslateHandler(translateService)
 	// Per-user hourly cost guard; 0 disables a limit, storage errors fail open.
@@ -408,6 +412,13 @@ func init() {
 		r.Post("/api/settings/dictionary/terms", dictHandler.CreateTerm)
 		r.Patch("/api/settings/dictionary/terms/{termId}", dictHandler.UpdateTerm)
 		r.Delete("/api/settings/dictionary/terms/{termId}", dictHandler.DeleteDictTerm)
+		// Layered dictionary: {layer} is personal, common or account:{accountId}.
+		r.Get("/api/settings/dictionary/layers/{layer}/terms", dictHandler.ListLayerTerms)
+		r.Post("/api/settings/dictionary/layers/{layer}/terms", dictHandler.CreateLayerTerm)
+		r.Patch("/api/settings/dictionary/layers/{layer}/terms/{termId}", dictHandler.UpdateLayerTerm)
+		r.Delete("/api/settings/dictionary/layers/{layer}/terms/{termId}", dictHandler.DeleteLayerTerm)
+		r.Get("/api/settings/dictionary/layers/{layer}/terms/{termId}/log", dictHandler.ListTermLog)
+		r.Post("/api/settings/dictionary/layers/{layer}/terms/{termId}/log/{logId}/restore", dictHandler.RestoreTerm)
 
 		// Translation route
 		r.Post("/api/translate", translateHandler.Translate)
