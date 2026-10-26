@@ -4,7 +4,7 @@ import { getIdToken, refreshSession } from './auth';
 import { getRuntimeConfig } from './runtimeConfig';
 import { triggerAuthFailure } from '@/components/auth/AuthProvider';
 import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory, Research, ResearchDetail, ChatMessage, Account, AccountSummary, AccountMember, AccountMeetingRef, AccountInsight, AccountDocument, PutDocumentRequest, AccountResearchRef, Project, ProjectSummary, ProjectMember, ProjectMeetingRef, ProjectResearchRef, ProjectInsight, ProjectBrief } from '@/types/meeting';
-import type { CreateDictTermInput, DictionaryResponse, DictTermMutationResponse, TermPatch } from '@/lib/dictionary';
+import type { CreateDictTermInput, DictionaryLayer, DictionaryResponse, DictTermItem, DictTermMutationResponse, TermLogEntry, TermPatch } from '@/lib/dictionary';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 const PROJECT_HINTS_KEY = 'ttobak:project-invitation-hints';
@@ -684,6 +684,9 @@ export const insightsApi = {
 // Per-term v2 routes, plus the legacy DELETE-by-phrase, which alone removes a
 // blob term that blocks migration. The legacy whole-list PUT is for old clients.
 const DICT = '/api/settings/dictionary';
+// The account id is encoded; the `account:` colon stays literal.
+const layerPath = (layer: DictionaryLayer) =>
+  `${DICT}/layers/${layer.startsWith('account:') ? `account:${encodeURIComponent(layer.slice(8))}` : layer}`;
 const termPath = (termId: string) => `${DICT}/terms/${encodeURIComponent(termId)}`;
 
 export const dictionaryApi = {
@@ -695,6 +698,25 @@ export const dictionaryApi = {
     api.delete<DictTermMutationResponse>(`${termPath(termId)}?version=${version}`),
   deleteLegacyTerm: (phrase: string) =>
     api.delete<void>(`${DICT}/term`, { body: JSON.stringify({ phrase }) }),
+
+  // Layer routes: `personal`, `common`, `account:{id}`.
+  listLayer: (layer: DictionaryLayer) =>
+    api.get<{ items: DictTermItem[] }>(`${layerPath(layer)}/terms`),
+  createLayerTerm: (layer: DictionaryLayer, input: CreateDictTermInput) =>
+    api.post<DictTermMutationResponse>(`${layerPath(layer)}/terms`, input),
+  updateLayerTerm: (layer: DictionaryLayer, termId: string, patch: TermPatch, version: number) =>
+    api.patch<DictTermMutationResponse>(`${layerPath(layer)}/terms/${encodeURIComponent(termId)}`, { ...patch, version }),
+  deleteLayerTerm: (layer: DictionaryLayer, termId: string, version: number) =>
+    api.delete<DictTermMutationResponse>(`${layerPath(layer)}/terms/${encodeURIComponent(termId)}?version=${version}`),
+  updateCommon: (termId: string, patch: TermPatch, version: number) =>
+    dictionaryApi.updateLayerTerm('common', termId, patch, version),
+  deleteCommon: (termId: string, version: number) =>
+    dictionaryApi.deleteLayerTerm('common', termId, version),
+  termLog: (layer: DictionaryLayer, termId: string) =>
+    api.get<{ items: TermLogEntry[] }>(`${layerPath(layer)}/terms/${encodeURIComponent(termId)}/log`),
+  restore: (layer: DictionaryLayer, termId: string, logId: string) =>
+    api.post<DictTermMutationResponse>(
+      `${layerPath(layer)}/terms/${encodeURIComponent(termId)}/log/${encodeURIComponent(logId)}/restore`, {}),
 };
 
 // Research API

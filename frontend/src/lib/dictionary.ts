@@ -15,6 +15,52 @@ export interface DictTermItem {
   /** Not served yet; linked once the API provides both. */
   sourceMeetingId?: string;
   sourceMeetingTitle?: string;
+  /** Layer routes only; the personal GET omits it on older servers. */
+  layer?: string;
+  /** Newest first, at most 10. */
+  sources?: TermSourceRef[];
+  /** Common rows only. */
+  updatedBy?: string;
+}
+
+export type TermSourceKind = 'meeting' | 'kb' | 'research' | 'news';
+export interface TermSourceRef { kind: TermSourceKind; ref: string; at: string }
+
+/** `personal`, `common`, or `account:{accountId}`. */
+export type DictionaryLayer = 'personal' | 'common' | `account:${string}`;
+export type LayerTab = 'personal' | 'account' | 'common';
+export const LAYER_TABS: ReadonlyArray<{ id: LayerTab; label: string }> = [
+  { id: 'personal', label: '개인' }, { id: 'account', label: '계정' }, { id: 'common', label: '공통' },
+];
+
+/** The layer a tab shows; the account tab needs a chosen Account. */
+export function resolveLayer(tab: LayerTab, accountId?: string): DictionaryLayer | undefined {
+  if (tab !== 'account') return tab;
+  return accountId ? `account:${accountId}` : undefined;
+}
+
+/** Common terms come from automatic sources only, so only the others take manual adds. */
+export const layerAllowsCreate = (layer: DictionaryLayer) => layer !== 'common';
+
+export interface TermLogEntry {
+  logId: string;
+  termId: string;
+  actor: string;
+  /** update, delete or restore. Typed loosely: bare icon-name literals would enter the bundled icon font. */
+  action: string;
+  at: string;
+  before?: DictTermItem;
+  after?: DictTermItem;
+}
+
+const SOURCE_LABELS: ReadonlyArray<{ kind: TermSourceKind; label: string }> = [
+  { kind: 'meeting', label: '미팅' }, { kind: 'kb', label: 'KB' }, { kind: 'research', label: '리서치' }, { kind: 'news', label: '뉴스' },
+];
+
+/** One badge per source kind present, in a fixed order; unknown kinds are skipped. */
+export function termSourceBadges(item: { sources?: readonly { kind: string }[] }): { kind: TermSourceKind; label: string }[] {
+  const present = new Set((item.sources ?? []).map((s) => s.kind));
+  return SOURCE_LABELS.filter((l) => present.has(l.kind));
 }
 
 export interface VocabularyView {

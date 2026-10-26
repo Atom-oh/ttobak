@@ -8,6 +8,7 @@ import {
   type BadgeTone, type DictTermItem, type DictTermMutationResponse, type DictionaryFilter,
   type LegacyDictionaryTerm, type TermPatch, type VocabularyViews,
 } from '@/lib/dictionary';
+import { DictionaryLayerTabs } from './DictionaryLayerTabs';
 import { DictionaryTable } from './DictionaryTable';
 
 const tone: Record<BadgeTone, string> = {
@@ -20,6 +21,10 @@ const tone: Record<BadgeTone, string> = {
 
 /** Settings "내 사전": the personal v2 dictionary through per-term routes. */
 export function CustomDictionary() {
+  return <DictionaryLayerTabs personal={<PersonalDictionary />} />;
+}
+
+function PersonalDictionary() {
   const [items, setItems] = useState<DictTermItem[]>([]);
   const [legacyTerms, setLegacyTerms] = useState<LegacyDictionaryTerm[]>([]);
   const [legacyOnly, setLegacyOnly] = useState<LegacyDictionaryTerm[]>([]);
