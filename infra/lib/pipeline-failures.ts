@@ -4,6 +4,7 @@ import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as logs from 'aws-cdk-lib/aws-logs';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import { Construct } from 'constructs';
 
@@ -90,13 +91,63 @@ export class PipelineFailures extends Construct {
     }), 15 * 60);
   }
 
-  private alarm(id: string, metric: cloudwatch.IMetric, threshold: number): void {
+  /**
+   * Dictionary layer metrics from the summarize Lambda's log lines (layered
+   * dictionary). Filters share one namespace; a metric fed by several filters
+   * sums them. Counts are observability only except TermsSourcesSilent.
+   * Alarm TermsSourcesSilent: a day is a breach when at least one source
+   * trigger was queued and no source run completed; it fires after 7
+   * consecutive such days. Triggers are logged QUEUED only while a source
+   * flag is on, so the alarm stays quiet with the flags off. CloudWatch
+   * cannot compare sums across a 7-day window in metric math, hence the
+   * per-day expression; a week with a quiet day (no triggers) resets it.
+   */
+  watchTermsLogs(logGroup: logs.ILogGroup): void {
+    const namespace = 'Ttobak/Dictionary';
+    const count = (id: string, metricName: string, filterPattern: string) =>
+      new logs.MetricFilter(this, id, {
+        logGroup, metricNamespace: namespace, metricName, metricValue: '1',
+        filterPattern: logs.FilterPattern.literal(filterPattern),
+      });
+    count('TermsLayerPersonal', 'TermsLayerPersonal', '"terms run:" "status=succeeded"');
+    count('TermsLayerAccount', 'TermsLayerAccount', '"layer=account" "outcome=MERGED"');
+    count('TermsLayerCommon', 'TermsLayerCommon', '"terms news:" "outcome=SUCCEEDED"');
+    // Failed Account merges are best effort and not retried (ruling R8).
+    for (const code of ['FAILED', 'MEMBERS_FAILED', 'RECORD_FAILED']) {
+      count(`TermsAccountFailures${code}`, 'TermsAccountFailures', `"layer=account" "outcome=${code}"`);
+    }
+    for (const outcome of ['SUCCEEDED', 'DISABLED', 'UNSUPPORTED', 'NOT_READY', 'NOT_FOUND', 'UNCHANGED']) {
+      const name = 'TermsSource' + outcome.split('_').map(w => w[0] + w.slice(1).toLowerCase()).join('');
+      count(name, name, `"terms source:" "outcome=${outcome}"`);
+    }
+    count('TermsSourceTriggered', 'TermsSourceTriggered', '"terms source trigger:" "outcome=QUEUED"');
+    count('TermsNewsRuns', 'TermsNewsRuns', '"terms news:" "outcome=SUCCEEDED"');
+    count('TermsNewsDisabled', 'TermsNewsDisabled', '"terms news:" "outcome=DISABLED"');
+    count('TermsNewsFailed', 'TermsNewsFailed', '"terms news:" "outcome=FAILED"');
+
+    const daily = (metricName: string) => new cloudwatch.Metric({
+      namespace, metricName, statistic: 'Sum', period: cdk.Duration.days(1),
+    });
+    this.alarm('TermsSourcesSilent', new cloudwatch.MathExpression({
+      expression: 'IF(FILL(triggered, 0) > 0 AND FILL(runs, 0) == 0, 1, 0)',
+      usingMetrics: { triggered: daily('TermsSourceTriggered'), runs: daily('TermsSourceSucceeded') },
+      period: cdk.Duration.days(1),
+      label: 'Source triggers queued without a completed run',
+    }), 1, {
+      alarmName: 'TermsSourcesSilent', evaluationPeriods: 7, datapointsToAlarm: 7,
+      description: 'Source term extraction was triggered for 7 days in a row but no run completed. Check the flag, the summarize logs (terms source: outcome=) and the terms-source DLQ.',
+    });
+  }
+
+  private alarm(id: string, metric: cloudwatch.IMetric, threshold: number, opts: {
+    alarmName?: string; evaluationPeriods?: number; datapointsToAlarm?: number; description?: string;
+  } = {}): void {
     const alarm = new cloudwatch.Alarm(this, `${id}Alarm`, {
-      metric, threshold,
+      metric, threshold, alarmName: opts.alarmName,
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
-      evaluationPeriods: 2, datapointsToAlarm: 1,
+      evaluationPeriods: opts.evaluationPeriods ?? 2, datapointsToAlarm: opts.datapointsToAlarm ?? 1,
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
-      alarmDescription: 'Inspect the pipeline recovery runbook. Do not blindly redrive retained events.',
+      alarmDescription: opts.description ?? 'Inspect the pipeline recovery runbook. Do not blindly redrive retained events.',
     });
     // No subscriptions or recipients are created. The imported topic's policy
     // and confirmed subscriber delivery are explicit live acceptance checks.
