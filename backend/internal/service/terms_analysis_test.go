@@ -32,6 +32,8 @@ type termsRepoFake struct {
 	failed    string
 	accepted  []model.TermsAcceptedTerm
 	calls     int
+	// recordedAccounts lists RecordTermsAccount calls, in order.
+	recordedAccounts []string
 }
 
 func (f *termsRepoFake) GetMeeting(context.Context, string, string) (*model.Meeting, error) {
@@ -71,6 +73,10 @@ func (f *termsRepoFake) CompleteTermsAnalysis(_ context.Context, _, _, _ string,
 		done.Status, done.SucceededSourceHash, done.LeaseUntil = model.AnalysisSucceeded, done.SourceHash, 0
 		f.state = &done
 	}
+	return nil
+}
+func (f *termsRepoFake) RecordTermsAccount(_ context.Context, _, _, _ string, accountID string) error {
+	f.recordedAccounts = append(f.recordedAccounts, accountID)
 	return nil
 }
 func (f *termsRepoFake) FailTermsAnalysis(_ context.Context, _ string, _ *model.TermsAnalysis, code string, accepted []model.TermsAcceptedTerm, _ time.Time) error {
@@ -574,8 +580,9 @@ func TestTermsProcessMigrationFailureWritesNothing(t *testing.T) {
 }
 
 // linkedTermsRun runs one Process for a meeting linked to Account a1 over a
-// partitioned store; members is what the member lister returns.
-func linkedTermsRun(t *testing.T, cfg TermsConfig, members []string) (partitionedDictStore, []string, string) {
+// partitioned store; members is what the member lister returns and prep, when
+// set, adjusts the store before the run.
+func linkedTermsRun(t *testing.T, cfg TermsConfig, members []string, prep func(partitionedDictStore)) (partitionedDictStore, *termsRepoFake, []string, string) {
 	t.Helper()
 	logs := capturePrivacyLogs(t)
 	meeting := termsTestMeeting()
@@ -585,6 +592,9 @@ func linkedTermsRun(t *testing.T, cfg TermsConfig, members []string) (partitione
 	store.at("ACCOUNT#a1").members = map[string]bool{}
 	for _, m := range members {
 		store.at("ACCOUNT#a1").members["a1/"+m] = true
+	}
+	if prep != nil {
+		prep(store)
 	}
 	s, _ := newTermsTestService(repo, &termsModelFake{outputs: []string{termsGoodOutput}}, newTestMerger(newMemDictStore()), cfg)
 	s.merger = NewTermsMerger(store)
@@ -601,7 +611,7 @@ func linkedTermsRun(t *testing.T, cfg TermsConfig, members []string) (partitione
 	if err := s.Process(ctx, model.TermsRequested{OwnerID: "owner", MeetingID: "m1", RunID: "run-1"}); err != nil || repo.completed == nil {
 		t.Fatalf("err=%v completed=%v failed=%s", err, repo.completed, repo.failed)
 	}
-	return store, refreshed, logs.String()
+	return store, repo, refreshed, logs.String()
 }
 
 var termsAccountOn = TermsConfig{Mode: AutoTermsModePersonal, AccountMode: AccountTermsModeOn, MinConfidence: 0.85, ModelID: "test-model"}
@@ -616,7 +626,10 @@ func TestTermsConfigAccountMode(t *testing.T) {
 }
 
 func TestProcessWritesAccountLayerWhenLinked(t *testing.T) {
-	store, refreshed, logs := linkedTermsRun(t, termsAccountOn, []string{"owner", "u2"})
+	store, repo, refreshed, logs := linkedTermsRun(t, termsAccountOn, []string{"owner", "u2"}, nil)
+	if strings.Join(repo.recordedAccounts, ",") != "a1" {
+		t.Fatalf("the Account must be recorded for the deletion sweep before it is written: %v", repo.recordedAccounts)
+	}
 	personal, ok := store.at("USER#owner").term("DynamoDB")
 	if !ok || personal.State != model.TermStateActive {
 		t.Fatalf("personal term %+v", personal)
@@ -658,7 +671,10 @@ func TestProcessAccountLayerDisabledLogs(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			store, refreshed, logs := linkedTermsRun(t, tc.cfg, tc.members)
+			store, repo, refreshed, logs := linkedTermsRun(t, tc.cfg, tc.members, nil)
+			if len(repo.recordedAccounts) != 0 {
+				t.Fatalf("a skipped Account layer records nothing: %v", repo.recordedAccounts)
+			}
 			if _, ok := store.at("USER#owner").term("DynamoDB"); !ok {
 				t.Fatal("the personal layer must still be written")
 			}
@@ -681,7 +697,7 @@ func TestProcessRefreshesAllMembersCapped(t *testing.T) {
 		members = append(members, fmt.Sprintf("u%02d", i))
 	}
 	members[30] = "owner" // the owner is refreshed first wherever it is listed
-	_, refreshed, logs := linkedTermsRun(t, termsAccountOn, members)
+	_, _, refreshed, logs := linkedTermsRun(t, termsAccountOn, members, nil)
 	if len(refreshed) != 50 || refreshed[0] != "owner" {
 		t.Fatalf("refreshed %d users, first %v", len(refreshed), refreshed[:1])
 	}
@@ -694,5 +710,24 @@ func TestProcessRefreshesAllMembersCapped(t *testing.T) {
 	}
 	if !strings.Contains(logs, "refresh=truncated members=60") {
 		t.Fatalf("truncation must be logged: %s", logs)
+	}
+}
+
+// A failed Account merge stays best effort (R8) but logs its partial counters.
+func TestProcessAccountLayerFailureLogsCounters(t *testing.T) {
+	store, repo, refreshed, logs := linkedTermsRun(t, termsAccountOn, []string{"owner"}, func(p partitionedDictStore) {
+		p.at("ACCOUNT#a1").failOn["create"] = errors.New("throttled")
+	})
+	if repo.completed == nil || repo.failed != "" || len(store.at("ACCOUNT#a1").terms) != 0 {
+		t.Fatalf("the run must stay succeeded: completed=%v failed=%s", repo.completed, repo.failed)
+	}
+	if !strings.Contains(logs, "layer=account outcome=FAILED created=0 suggested=0") {
+		t.Fatalf("the FAILED line must carry the counters: %s", logs)
+	}
+	if strings.Contains(logs, "outcome=MERGED") || strings.Contains(logs, "throttled") {
+		t.Fatalf("one outcome per run and no error text: %s", logs)
+	}
+	if strings.Join(refreshed, ",") != "owner" {
+		t.Fatalf("refreshed %v", refreshed)
 	}
 }

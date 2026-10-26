@@ -102,6 +102,7 @@ type termsAnalysisRepo interface {
 	RenewTermsAnalysisLease(context.Context, string, string, string, int64, time.Time, int64) error
 	ReserveTermsAccepted(context.Context, string, string, string, int64, time.Time, int64, []model.TermsAcceptedTerm) error
 	CompleteTermsAnalysis(context.Context, string, string, string, int64, repository.TermsCompletion, time.Time) error
+	RecordTermsAccount(context.Context, string, string, string, string) error
 	FailTermsAnalysis(context.Context, string, *model.TermsAnalysis, string, []model.TermsAcceptedTerm, time.Time) error
 }
 
@@ -465,6 +466,11 @@ func (s *TermsAnalysisService) mergeAccountLayer(ctx context.Context, event mode
 	if len(terms) == 0 {
 		return skip("NO_TERMS")
 	}
+	// Every key is already in acceptedTerms (reserved before the personal
+	// merge); recording the Account makes the deletion sweep clean it too.
+	if err := s.repo.RecordTermsAccount(ctx, event.OwnerID, event.MeetingID, event.RunID, accountID); err != nil {
+		return skip("RECORD_FAILED")
+	}
 	// No acceptedTerms: that list tracks the personal partition, and an Account
 	// observation that already exists makes a re-run a no-op on its own.
 	merged, err := s.merger.MergeScoped(ctx, TermsScope{
@@ -474,21 +480,21 @@ func (s *TermsAnalysisService) mergeAccountLayer(ctx context.Context, event mode
 		Kind: model.DictSourceMeeting, Ref: event.MeetingID, OwnerID: event.OwnerID,
 		NotesSafe: source.notesSafe, Tainted: source.tainted,
 	})
-	switch {
-	case errors.Is(err, repository.ErrNotAccountMember):
+	if errors.Is(err, repository.ErrNotAccountMember) {
 		return skip("NOT_MEMBER")
-	case err != nil:
-		skip("FAILED")
 	}
 	if merged == nil {
-		return nil
+		return skip("FAILED")
+	}
+	// A failure is not retried (R8); its partial counters are logged.
+	outcome := "MERGED"
+	if err != nil {
+		outcome = "FAILED"
 	}
 	c := merged.Counters
-	if err == nil {
-		log.Printf("terms run: meeting=%s run=%s layer=account outcome=MERGED created=%d suggested=%d merged=%d promoted=%d skipped=%d evicted=%d cleanup=%t",
-			event.MeetingID, event.RunID, c.Created, c.Suggested, c.Merged, c.Promoted,
-			c.SkippedTombstone+c.SkippedManual+c.SkippedTainted, c.Evicted, merged.CleanupErr == nil)
-	}
+	log.Printf("terms run: meeting=%s run=%s layer=account outcome=%s created=%d suggested=%d merged=%d promoted=%d skipped=%d evicted=%d cleanup=%t",
+		event.MeetingID, event.RunID, outcome, c.Created, c.Suggested, c.Merged, c.Promoted,
+		c.SkippedTombstone+c.SkippedManual+c.SkippedTainted, c.Evicted, merged.CleanupErr == nil)
 	// Terms written before a failure are live, so their members refresh too.
 	if !madeActive(c) {
 		return nil
