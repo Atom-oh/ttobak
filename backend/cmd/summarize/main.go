@@ -97,6 +97,13 @@ func init() {
 		return member != nil, err
 	})
 	dictService.SetAccountOrder(service.AccountRecencyOrder(repo))
+	// Silent transcript correction (TRANSCRIPT_CORRECTION_MODE): the meeting
+	// glossary for refinement, and heardAs feedback from repeated fixes.
+	dictService.SetCorrectionCounter(dictionaryRepo)
+	loadMeetingGlossary = dictService.GlossaryForMeeting
+	learnFromCorrections = func(ctx context.Context, meeting *model.Meeting, glossary []service.GlossaryTerm, corrections []model.TranscriptCorrection) {
+		dictService.LearnFromCorrections(ctx, meeting.UserID, meeting.AccountID, meeting.MeetingID, glossary, corrections)
+	}
 	termsService := service.NewTermsAnalysisService(repo, service.NewTermsMerger(dictionaryRepo),
 		dictService, bedrockService, attachmentTextService, service.TermsPublisher(ebClient), service.TermsConfigFromEnv())
 	termsService.SetVocabularyRefresher(func(ctx context.Context, ownerID string) {
@@ -385,7 +392,9 @@ func handleSingleTranscript(ctx context.Context, bucket, key string, eventETags 
 			return err
 		}
 	}
-	refineParsedTranscript(ctx, parsed)
+	glossary := meetingGlossary(ctx, meeting)
+	refineParsedTranscript(ctx, parsed, glossary)
+	logCorrectionOutcome(meetingID, parsed)
 	segments, whisperSegments, audioDuration := parsed.Segments, parsed.Whisper, parsed.Duration
 
 	// Same fallback chain as the multi-part merge path (merge.go): the raw
@@ -422,6 +431,7 @@ func handleSingleTranscript(ctx context.Context, bucket, key string, eventETags 
 	if err != nil || current == nil {
 		return err
 	}
+	learnFromCorrections(ctx, current, glossary, parsed.Corrections)
 	priorContext := ""
 	if !repository.SummaryPrivacyWritesEnabled() {
 		priorContext = buildLinkedMeetingContext(ctx, current)
@@ -554,10 +564,12 @@ func handleAllPartsTranscribed(ctx context.Context, detail *model.AllPartsTransc
 	if snapshot.Meeting.Status != meeting.Status {
 		return nil
 	}
-	parsed, err := mergePartTranscripts(ctx, detail.Bucket, meetingID, detail.PartCount)
+	glossary := meetingGlossary(ctx, meeting)
+	parsed, err := mergePartTranscripts(ctx, detail.Bucket, meetingID, detail.PartCount, glossary)
 	if err != nil {
 		return errors.Join(err, failTranscriptSnapshot(ctx, snapshot))
 	}
+	logCorrectionOutcome(meetingID, parsed)
 	if handled, err := handleNoSpeech(ctx, snapshot, parsed); handled {
 		return err
 	}
@@ -565,6 +577,7 @@ func handleAllPartsTranscribed(ctx context.Context, detail *model.AllPartsTransc
 	if err != nil || current == nil {
 		return err
 	}
+	learnFromCorrections(ctx, current, glossary, parsed.Corrections)
 	transcript, segments := parsed.Text, parsed.Segments
 
 	// Archive the merged transcript to S3 (ADR-014 design.md §5.1 step 7).
