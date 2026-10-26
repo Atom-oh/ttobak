@@ -55,7 +55,10 @@ Removal, revocation and reparenting stay Owner-only.
   twenty-attempts-per-caller-per-UTC-hour counter. A mail request followed by
   unconfirmed persistence is reported as partial success; mailbox delivery is
   never inferred.
-- The new resend operation is inventoried with delegation disabled. No new
+- Account creation requires `read`, `share` and `write` capabilities in the
+  connector inventory, matching its invitation and third-party ownership effects.
+  A delegated principal approved only for `read` and `write` cannot create an
+  Account. The new resend operation is inventoried with delegation disabled. No new
   unauthenticated route, origin, IAM permission or project rollout is introduced.
 
 ## Evidence and consequences
