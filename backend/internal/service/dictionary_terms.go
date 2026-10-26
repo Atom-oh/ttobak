@@ -168,7 +168,7 @@ func (s *DictionaryService) CreateTerm(ctx context.Context, userID string, in mo
 	}
 	row := newManualRow(userID, v, phrase, aliasMode, false, s.stamp())
 	if existing == nil {
-		if err := s.repo.CreateDictTerm(ctx, &row); err != nil {
+		if err := s.repo.CreateDictTerm(ctx, &row, nil); err != nil {
 			if errors.Is(err, repository.ErrConditionFailed) {
 				return nil, ErrDictionaryTermExists
 			}
@@ -211,7 +211,7 @@ func (s *DictionaryService) UpdateTerm(ctx context.Context, userID, termKey stri
 	if err != nil {
 		return nil, err
 	}
-	if err := s.repo.UpdateDictTerm(ctx, pk, termKey, change, userID, s.stamp(), *in.Version); err != nil {
+	if err := s.repo.UpdateDictTerm(ctx, pk, termKey, change, userID, s.stamp(), *in.Version, nil); err != nil {
 		return nil, versionConflict(err)
 	}
 	updated, err := s.repo.GetDictTerm(ctx, pk, termKey)
@@ -297,7 +297,7 @@ func (s *DictionaryService) TombstoneTerm(ctx context.Context, userID, termKey s
 	if version != nil && *version != row.Version {
 		return nil, ErrDictionaryVersionConflict
 	}
-	result, err := s.repo.TombstoneDictTerm(ctx, pk, termKey, userID, s.stamp(), row.Version)
+	result, err := s.repo.TombstoneDictTerm(ctx, pk, termKey, userID, s.stamp(), row.Version, nil)
 	if err != nil {
 		return nil, versionConflict(err)
 	}
@@ -554,7 +554,7 @@ func (s *DictionaryService) reconcileManualRows(ctx context.Context, userID stri
 			base.Add(time.Duration(i)*time.Microsecond).Format(model.DictTimeLayout))
 		switch {
 		case !ok:
-			err = s.repo.CreateDictTerm(ctx, &fresh)
+			err = s.repo.CreateDictTerm(ctx, &fresh, nil)
 		case row.State == model.TermStateDeleted:
 			err = s.repo.RestoreDictTerm(ctx, &fresh, row.Version)
 		case row.Origin != model.TermOriginManual || d.unchanged || legacyTermFromRow(row) == d.legacy:
@@ -565,7 +565,7 @@ func (s *DictionaryService) reconcileManualRows(ctx context.Context, userID stri
 			err = s.repo.UpdateDictTerm(ctx, pk, d.v.TermKey, repository.DictTermChange{
 				DisplayAs: &d.v.DisplayAs, LegacyDisplayEmpty: &d.displayEmpty,
 				Phrase: &d.phrase, HeardAs: &heard, TranscribeKo: &ko,
-			}, userID, s.stamp(), row.Version)
+			}, userID, s.stamp(), row.Version, nil)
 		}
 		if err != nil {
 			return versionConflict(err)

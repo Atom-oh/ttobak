@@ -264,12 +264,12 @@ func TestDictionaryWriteGuards(t *testing.T) {
 			ErrDictObservationExists, "Put", 0, []string{"attribute_not_exists (PK)"}, nil},
 		{"user edit is version guarded", conditionalFailed,
 			func(r *DictionaryRepository) error {
-				return r.UpdateDictTerm(context.Background(), "USER#u1", key, DictTermChange{Phrase: &phrase}, "u1", "now", 9)
+				return r.UpdateDictTerm(context.Background(), "USER#u1", key, DictTermChange{Phrase: &phrase}, "u1", "now", 9, nil)
 			},
 			ErrDictTermConflict, "", 0, []string{`version = {"N":"9"}`, `<> {"S":"deleted"}`}, nil},
 		{"tombstone is version guarded", conditionalFailed,
 			func(r *DictionaryRepository) error {
-				_, err := r.TombstoneDictTerm(context.Background(), "USER#u1", key, "u1", "now", 2)
+				_, err := r.TombstoneDictTerm(context.Background(), "USER#u1", key, "u1", "now", 2, nil)
 				return err
 			},
 			ErrDictTermConflict, "", 0, []string{`version = {"N":"2"}`}, nil},
@@ -277,7 +277,7 @@ func TestDictionaryWriteGuards(t *testing.T) {
 			func(r *DictionaryRepository) error {
 				manual := *term
 				manual.Origin = model.TermOriginManual
-				return r.CreateDictTerm(context.Background(), &manual)
+				return r.CreateDictTerm(context.Background(), &manual, nil)
 			},
 			ErrDictTermConflict, "", 0, []string{"attribute_not_exists (PK)"}, nil},
 		{"legacy hard delete only matches active manual rows", conditionalFailed,
@@ -343,7 +343,7 @@ func TestDictionaryWriteEffects(t *testing.T) {
 	requireAll(t, "obs query", resolved((*calls)[1].body, "KeyConditionExpression"), "begins_with", "DICTOBS#"+key+"#")
 
 	repo, calls = dictWire(t, obsQuery(true))
-	res, err := repo.TombstoneDictTerm(context.Background(), "USER#u1", key, "u1", "now", 2)
+	res, err := repo.TombstoneDictTerm(context.Background(), "USER#u1", key, "u1", "now", 2, nil)
 	if err != nil || res.CleanupErr == nil {
 		t.Fatalf("tombstone must commit and surface the cleanup failure: %v %v", err, res.CleanupErr)
 	}
@@ -385,7 +385,7 @@ func TestDictionaryWriteEffects(t *testing.T) {
 		t.Fatal("restore must bump the version")
 	}
 	phrase := "Alpha-Grid"
-	if err := repo.UpdateDictTerm(context.Background(), "USER#u1", key, DictTermChange{Phrase: &phrase}, "u1", "now", 9); err != nil {
+	if err := repo.UpdateDictTerm(context.Background(), "USER#u1", key, DictTermChange{Phrase: &phrase}, "u1", "now", 9, nil); err != nil {
 		t.Fatal(err)
 	}
 	requireAll(t, "edit", resolved((*calls)[2].body, "UpdateExpression"), "userEditedAt", "updatedBy", "phrase")

@@ -20,14 +20,14 @@ func (f *fakeDictStore) GetDictTerm(_ context.Context, _ string, key string) (*m
 	}
 	return &row, nil
 }
-func (f *fakeDictStore) CreateDictTerm(_ context.Context, term *model.DictTerm) error {
+func (f *fakeDictStore) CreateDictTerm(_ context.Context, term *model.DictTerm, _ *repository.MembershipCheck) error {
 	if _, ok := f.terms[term.SK]; ok {
 		return cond()
 	}
 	f.terms[term.SK] = *term
 	return nil
 }
-func (f *fakeDictStore) UpdateDictTerm(_ context.Context, _ string, key string, ch repository.DictTermChange, actor, now string, v int64) error {
+func (f *fakeDictStore) UpdateDictTerm(_ context.Context, _ string, key string, ch repository.DictTermChange, actor, now string, v int64, _ *repository.MembershipCheck) error {
 	row, ok := f.terms[model.DictTermSK(key)]
 	if !ok || row.Version != v || row.State == model.TermStateDeleted {
 		return cond()
@@ -58,7 +58,7 @@ func (f *fakeDictStore) UpdateDictTerm(_ context.Context, _ string, key string, 
 	}
 	return nil
 }
-func (f *fakeDictStore) TombstoneDictTerm(_ context.Context, _ string, key, actor, now string, v int64) (repository.DictWriteResult, error) {
+func (f *fakeDictStore) TombstoneDictTerm(_ context.Context, _ string, key, actor, now string, v int64, _ *repository.MembershipCheck) (repository.DictWriteResult, error) {
 	row, ok := f.terms[model.DictTermSK(key)]
 	if !ok || row.Version != v || row.State == model.TermStateDeleted {
 		return repository.DictWriteResult{}, cond()
