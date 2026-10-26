@@ -889,6 +889,16 @@ for bad in ({'Ref':'OtherRole'}, {'Fn::ImportValue':'unknown'}, qa):
     }
   });
 
+  test('autoTerms accountTermsMode: the Account layer is off by default and validated', () => {
+    const summarizeEnv = (value: Template) => Object.values(value.findResources('AWS::Lambda::Function'))
+      .find(resource => resource.Properties.FunctionName === 'ttobak-summarize')!.Properties.Environment.Variables;
+    expect(summarizeEnv(template).ACCOUNT_TERMS_MODE).toBe('off');
+    const on = buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined, { 'ttobak:accountTermsMode': 'on' });
+    expect(summarizeEnv(on).ACCOUNT_TERMS_MODE).toBe('on');
+    expect(() => buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined, { 'ttobak:accountTermsMode': 'all' }))
+      .toThrow(/ttobak:accountTermsMode/);
+  });
+
   test('action-item DLQ is encrypted, retains seven days, and accepts only this rule', () => {
     const queueId = resourceId('AWS::SQS::Queue', 'QueueName', 'ttobak-action-items-dlq');
     const ruleId = resourceId('AWS::Events::Rule', 'Name', 'ttobak-action-items-requested');

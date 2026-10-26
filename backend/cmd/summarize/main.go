@@ -97,6 +97,17 @@ func init() {
 			log.Printf("terms vocabulary refresh: owner=%s warnings=%d", ownerID, len(warnings))
 		}
 	})
+	termsService.SetAccountMemberLister(func(ctx context.Context, accountID string) ([]string, error) {
+		members, err := repo.ListAccountMembers(ctx, accountID)
+		if err != nil {
+			return nil, err
+		}
+		ids := make([]string, 0, len(members))
+		for _, m := range members {
+			ids = append(ids, m.UserID)
+		}
+		return ids, nil
+	})
 	processTermsRequested = termsService.Process
 	enqueueTerms = func(ctx context.Context, ownerID, meetingID, reason string) {
 		termsService.Enqueue(ctx, ownerID, meetingID, reason) // non-fatal; logs its outcome code
