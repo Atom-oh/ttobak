@@ -87,7 +87,7 @@ Browser ──► CloudFront (ttobak.atomai.click)
              └─ upload path (see D4)    S3 data bucket (presigned multipart)
 
 Insight BFF ──► S3 data bucket, platform table, ttobak-main (membership)   [AWS public endpoints]
-Upload  ──► jobs/*.json ──► EventBridge ──► ECS RunTask (ingest) ──► agent Lambda (Bedrock, no VPC)
+Upload  ──► jobs/*.json ──► EventBridge ──► ECS RunTask (ingest) ──► AgentCore Runtime (agents, no VPC)
 MCP (/api/mcp, Go) ──► Insight BFF internal routes (SigV4, see §7)
 ```
 
@@ -136,20 +136,30 @@ that only calls AWS APIs (Bedrock, S3, DynamoDB) needs to sit in a VPC.
 | Workload | Today | Target | Why |
 |---|---|---|---|
 | BFF (Express API) | ECS Fargate ×2 + internal ALB | Lambda Web Function, no VPC | HTTP, Node, I/O-bound, scale to zero |
-| Agent stage (area agents, synthesis, verifier, FSI search, `rerun-agents` jobs) | inside the Fargate worker, Bedrock via VPC endpoint | Python Lambda Event Function, no VPC | Bedrock/S3/DDB only; observed runs ≤ 2.6 min (14 recent worker log streams), far under 15 min |
+| Agent stage (area agents, synthesis, verifier, FSI search, `rerun-agents` jobs) | inside the Fargate worker, Bedrock via VPC endpoint | Bedrock AgentCore Runtime (Python container, ARM64, no VPC) | Bedrock/S3/DDB only; sessions up to 8 h leave room as stages are added (observed runs ≤ 2.6 min today); built-in agent tracing; same platform as the planned BI chatbot; FSI search calls the AgentCore Gateway directly |
 | Ingest (unzip, parse COT xlsx / CUR, build datasets) | Fargate worker 4 vCPU / 16 GB / 100 GB disk | stays on ECS Fargate RunTask | CUR zips can exceed Lambda's 10 GB memory / 10 GB `/tmp` / 15 min |
 | What's New collector, FSI search | Lambda, no VPC | unchanged | already serverless |
 | OAuth exchange | Lambda | removed | TTOBAK sign-in replaces it |
 
-Lambda Web Functions are not an option for the agent stage or ingest: they are
-Node.js only and every unit of work is bound to an HTTP request timeout.
+Options considered for the agent stage (owner chose AgentCore Runtime, 2026-10-26):
+- Lambda Web Function — Node.js only and request-bound; the agents are Python.
+- Lambda MicroVMs — built for isolating user/AI-generated code with
+  suspend/resume; the agents call Bedrock and verify, they run no foreign code.
+- Python Lambda — simplest, but the 15-minute ceiling limits future stages.
+- **AgentCore Runtime** — long sessions, agent observability, one platform with
+  the planned chatbot. Cost: an ECR image build and an async invoke contract.
 
 Flow: upload → `jobs/*.json` → EventBridge → Fargate ingest → writes the
-version's datasets → enqueues the agent job → agent Lambda → notes, sessions,
-market. A rerun skips ingest and invokes the agent Lambda directly.
+version's datasets → invokes the agent runtime asynchronously (Account,
+version, source) → the runtime reads the computed datasets, runs the stages,
+verifies, and writes notes, sessions and market back to the version, then
+updates job state in the platform table. A rerun skips ingest and invokes the
+runtime directly. The runtime role gets an Account-scoped session policy, as
+the worker has today. `AWS::BedrockAgentCore::Runtime` is available in
+ap-northeast-2.
 
-EKS was considered and rejected (owner, 2026-10-26): with the BFF and agents on
-Lambda, the only container left is one on-demand ingest task. EKS would add a
+EKS was considered and rejected (owner, 2026-10-26): with the BFF on a Web Function and
+the agents on AgentCore Runtime, the only container left is one on-demand ingest task. EKS would add a
 control plane (~$0.10/h), upgrades and a job controller for that single task.
 The EKS clusters already in the account are demo or other-project clusters and
 must not host customer billing data.
@@ -205,8 +215,8 @@ Responses are computed summaries; raw uploads never leave the data bucket.
   Only code moves; the old repository's design history and any customer-specific
   documents stay out.
 - New CDK stack `TtobakBillingStack` in the TTOBAK infra app: Web Function
-  (+ revision, endpoint, resource policy), worker task definition and
-  EventBridge rule, side Lambdas, IAM. Data bucket and platform table are
+  (+ revision, endpoint, resource policy), agent runtime (ECR image), ingest
+  task definition and EventBridge rule, side Lambdas, IAM. Data bucket and platform table are
   referenced by name (they are `RETAIN` today) — no copy, no import in phase 1.
 - `TtobakFrontendStack` gets the `/api/billing/*` behavior (before `/api/*`) and
   the upload behavior.
@@ -245,7 +255,7 @@ CloudFront behaviors.
   policy scoped to the TTOBAK distribution ARN (+ MCP role). The owner approved
   this as an allowed pattern; `ApplicationManaged` endpoints remain forbidden.
 - **D2 Compute — resolved 2026-10-26.** BFF on a Lambda Web Function, agent
-  stage on a Python Lambda (no VPC), ingest stays on ECS Fargate; no EKS.
+  stage on AgentCore Runtime (no VPC), ingest stays on ECS Fargate; no EKS.
 - **D3 MCP identity.** SigV4 + asserted subject (above) vs forwarding a user
   token the BFF can verify (requires accepting the MCP client audience).
 - **D4 Upload path.** A new CloudFront prefix whose keys match the bucket
