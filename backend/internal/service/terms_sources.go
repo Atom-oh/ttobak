@@ -7,16 +7,19 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/url"
 	"os"
 	"path"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	ebtypes "github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 )
@@ -207,10 +210,48 @@ func kbObjectAccounts(meta map[string]string) []string {
 	return nil
 }
 
+// s3ObjectMissing treats 404 and 403 as a missing object: without
+// s3:ListBucket, S3 answers a missing key with 403.
 func s3ObjectMissing(err error) bool {
+	if err == nil {
+		return false
+	}
 	var noKey *s3types.NoSuchKey
 	var notFound *s3types.NotFound
-	return errors.As(err, &noKey) || errors.As(err, &notFound)
+	if errors.As(err, &noKey) || errors.As(err, &notFound) {
+		return true
+	}
+	var resp *awshttp.ResponseError
+	if errors.As(err, &resp) && (resp.HTTPStatusCode() == 403 || resp.HTTPStatusCode() == 404) {
+		return true
+	}
+	var api smithy.APIError
+	if errors.As(err, &api) {
+		switch api.ErrorCode() {
+		case "NoSuchKey", "NotFound", "Forbidden", "AccessDenied":
+			return true
+		}
+	}
+	return false
+}
+
+// withKeyFallback runs read on key as delivered and, only when that object
+// is missing and the key looks URL-encoded (contains % or +), once more on
+// its url.QueryUnescape form. It returns the key that was read.
+func withKeyFallback[T any](key string, read func(string) (T, error)) (T, string, error) {
+	out, err := read(key)
+	if !s3ObjectMissing(err) || !strings.ContainsAny(key, "%+") {
+		return out, key, err
+	}
+	decoded, decodeErr := url.QueryUnescape(key)
+	if decodeErr != nil || decoded == key {
+		return out, key, err
+	}
+	out2, err2 := read(decoded)
+	if err2 != nil && s3ObjectMissing(err2) {
+		return out, key, err
+	}
+	return out2, decoded, err2
 }
 
 // RequestSourceFromObject maps an Object Created event on the KB bucket to a
@@ -261,14 +302,19 @@ func (s *TermsAnalysisService) sourceFromObject(ctx context.Context, bucket, key
 		case !supportedSourceText(key):
 			return nil, TermsSourceUnsupported, nil
 		}
-		head, err := s.sources.Objects.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(bucket), Key: aws.String(key)})
+		head, resolved, err := withKeyFallback(key, func(k string) (*s3.HeadObjectOutput, error) {
+			return s.sources.Objects.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(bucket), Key: aws.String(k)})
+		})
 		if s3ObjectMissing(err) {
 			return nil, TermsSourceNotFound, nil
 		}
 		if err != nil {
 			return nil, "HEAD_FAILED", fmt.Errorf("read KB object metadata: %w", err)
 		}
-		return &model.TermsSourceRequested{Kind: model.DictSourceKB, Ref: key, OwnerID: owner, AccountIDs: kbObjectAccounts(head.Metadata)}, "", nil
+		if o, ok := kbObjectOwner(resolved); !ok || o != owner {
+			return nil, TermsSourceSkipped, nil
+		}
+		return &model.TermsSourceRequested{Kind: model.DictSourceKB, Ref: resolved, OwnerID: owner, AccountIDs: kbObjectAccounts(head.Metadata)}, "", nil
 	}
 	id, ok := researchReportID(key)
 	if !ok {
@@ -405,8 +451,12 @@ func (s *TermsAnalysisService) loadSource(ctx context.Context, ev model.TermsSou
 	} else if !supportedSourceText(key) {
 		return termsSourceDoc{}, TermsSourceUnsupported, nil
 	}
-	out, err := s.sources.Objects.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(s.sources.Bucket), Key: aws.String(key), Range: aws.String(fmt.Sprintf("bytes=0-%d", termsSourceMaxBytes)),
+	// The mapper publishes the key that resolved; the fallback only matters
+	// for a hand-published event.
+	out, _, err := withKeyFallback(key, func(k string) (*s3.GetObjectOutput, error) {
+		return s.sources.Objects.GetObject(ctx, &s3.GetObjectInput{
+			Bucket: aws.String(s.sources.Bucket), Key: aws.String(k), Range: aws.String(fmt.Sprintf("bytes=0-%d", termsSourceMaxBytes)),
+		})
 	})
 	if s3ObjectMissing(err) {
 		return termsSourceDoc{}, TermsSourceNotFound, nil

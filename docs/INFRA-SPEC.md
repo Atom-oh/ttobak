@@ -577,7 +577,15 @@ nothing is published from the agent. The summarize role gains only
 `KB_TERMS_MODE` and `RESEARCH_TERMS_MODE` (`off` by default, or `on`) from CDK
 context `ttobak:kbTermsMode` and `ttobak:researchTermsMode`; invalid values fail
 synth, and with `off` the mapper and worker log `outcome=DISABLED` and do nothing
-else.
+else. The source flags are independent of `AUTO_TERMS_MODE` and
+`ACCOUNT_TERMS_MODE` (only the `AUTO_TERMS_USERS` canary list is shared): a
+source flag set to `on` writes the Account layer even with `ACCOUNT_TERMS_MODE`
+`off`. Only plain-text KB files (`.md`, `.markdown`, `.txt`) contribute terms
+today; any other type logs `outcome=UNSUPPORTED`. The mapper passes the S3 key as
+delivered and retries once with its `url.QueryUnescape` form only when the key
+contains `%` or `+` and the object is missing; an object still missing (404, or
+403 because the role has no `s3:ListBucket`) logs `outcome=NOT_FOUND` and is not
+retried.
 
 ## Summary privacy writer activation
 

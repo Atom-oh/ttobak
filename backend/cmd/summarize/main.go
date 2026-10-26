@@ -311,14 +311,16 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	bucket := event.Detail.Bucket.Name
 	key := event.Detail.Object.Key
 
-	if decoded, err := url.QueryUnescape(key); err == nil {
-		key = decoded
-	}
-
 	// KB bucket objects (kb/, shared/research/) only map to a term source
-	// request; they never reach the transcript path.
+	// request; they never reach the transcript path. The key goes as
+	// delivered: the mapper tries it first and the unescaped form only when
+	// the delivered one is missing, so raw and encoded keys both resolve.
 	if termsSourceBucket != "" && bucket == termsSourceBucket {
 		return requestTermsSource(ctx, bucket, key)
+	}
+
+	if decoded, err := url.QueryUnescape(key); err == nil {
+		key = decoded
 	}
 
 	log.Printf("Processing transcript: bucket=%s, key=%s", bucket, key)

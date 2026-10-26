@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
 	"github.com/ttobak/backend/internal/model"
 )
 
@@ -54,11 +55,19 @@ type sourceObject struct {
 type sourceObjectsFake struct {
 	objects     map[string]sourceObject
 	heads, gets int
+	// missing, when set, is returned for an absent key (S3 answers 403
+	// without s3:ListBucket); nil returns the typed 404 errors.
+	missing error
+	keys    []string // every key read, in order
 }
 
 func (f *sourceObjectsFake) HeadObject(_ context.Context, in *s3.HeadObjectInput, _ ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
 	f.heads++
+	f.keys = append(f.keys, aws.ToString(in.Key))
 	obj, ok := f.objects[aws.ToString(in.Bucket)+"/"+aws.ToString(in.Key)]
+	if !ok && f.missing != nil {
+		return nil, f.missing
+	}
 	if !ok {
 		return nil, &s3types.NotFound{}
 	}
@@ -67,7 +76,11 @@ func (f *sourceObjectsFake) HeadObject(_ context.Context, in *s3.HeadObjectInput
 
 func (f *sourceObjectsFake) GetObject(_ context.Context, in *s3.GetObjectInput, _ ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
 	f.gets++
+	f.keys = append(f.keys, aws.ToString(in.Key))
 	obj, ok := f.objects[aws.ToString(in.Bucket)+"/"+aws.ToString(in.Key)]
+	if !ok && f.missing != nil {
+		return nil, f.missing
+	}
 	if !ok {
 		return nil, &s3types.NoSuchKey{}
 	}
@@ -418,5 +431,69 @@ func TestTermsSourceModesFromEnv(t *testing.T) {
 	if !cfg.SourceEnabled(model.DictSourceKB, "owner") || !cfg.SourceEnabled(model.DictSourceResearch, "owner") ||
 		cfg.SourceEnabled(model.DictSourceNews, "owner") || cfg.SourceEnabled(model.DictSourceMeeting, "owner") || cfg.SourceEnabled(model.DictSourceKB, "") {
 		t.Fatal("SourceEnabled covers kb and research only")
+	}
+}
+
+// forbidden is S3's answer for a missing key without s3:ListBucket.
+var forbidden = &smithy.GenericAPIError{Code: "Forbidden", Message: "Forbidden"}
+
+// The delivered key is tried first; an encoded form (+ or %XX) falls back to
+// its unescaped key once, so raw and encoded deliveries both resolve.
+func TestRequestSourceFromObjectKeyEncoding(t *testing.T) {
+	cases := []struct {
+		name, stored, delivered string
+		missing                 error
+		wantKeys                []string
+	}{
+		{"raw key with a space", "kb/owner/1_a b.md", "kb/owner/1_a b.md", nil, []string{"kb/owner/1_a b.md"}},
+		{"encoded space as +", "kb/owner/1_a b.md", "kb/owner/1_a+b.md", forbidden, []string{"kb/owner/1_a+b.md", "kb/owner/1_a b.md"}},
+		{"encoded space as %20", "kb/owner/1_a b.md", "kb/owner/1_a%20b.md", nil, []string{"kb/owner/1_a%20b.md", "kb/owner/1_a b.md"}},
+		{"raw key with a plus", "kb/owner/1_a+b.md", "kb/owner/1_a+b.md", forbidden, []string{"kb/owner/1_a+b.md"}},
+		{"encoded plus as %2B", "kb/owner/1_a+b.md", "kb/owner/1_a%2Bb.md", nil, []string{"kb/owner/1_a%2Bb.md", "kb/owner/1_a+b.md"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newSourceTestEnv(sourcesOn())
+			env.objects.missing = tc.missing
+			env.put(tc.stored, sourceTestText, map[string]string{"account-id": "a1"})
+			logs := capturePrivacyLogs(t)
+			if err := env.svc.RequestSourceFromObject(context.Background(), sourceTestBucket, tc.delivered); err != nil {
+				t.Fatal(err)
+			}
+			if len(env.published) != 1 || env.published[0].Ref != tc.stored || strings.Join(env.published[0].AccountIDs, ",") != "a1" {
+				t.Fatalf("published %+v, logs %q", env.published, logs.String())
+			}
+			if strings.Join(env.objects.keys, "|") != strings.Join(tc.wantKeys, "|") {
+				t.Fatalf("read keys %q, want %q", env.objects.keys, tc.wantKeys)
+			}
+		})
+	}
+}
+
+// A missing object (404, or 403 without ListBucket), after the decoding
+// fallback, is NOT_FOUND and is not retried.
+func TestSourceMissingObjectIsNotFound(t *testing.T) {
+	for _, missing := range []error{nil, forbidden, &smithy.GenericAPIError{Code: "AccessDenied"}} {
+		env := newSourceTestEnv(sourcesOn())
+		env.objects.missing = missing
+		logs := capturePrivacyLogs(t)
+		if err := env.svc.RequestSourceFromObject(context.Background(), sourceTestBucket, "kb/owner/1_a+b.md"); err != nil {
+			t.Fatalf("mapper %v: %v", missing, err)
+		}
+		if len(env.published) != 0 || len(env.objects.keys) != 2 {
+			t.Fatalf("mapper %v: published %+v keys %q", missing, env.published, env.objects.keys)
+		}
+		if err := env.svc.ProcessSource(context.Background(), model.TermsSourceRequested{Kind: "kb", Ref: sourceTestKBKey, OwnerID: "owner"}); err != nil {
+			t.Fatalf("worker %v: %v", missing, err)
+		}
+		if strings.Count(logs.String(), "outcome=NOT_FOUND") != 2 || len(env.llm.requests) != 0 {
+			t.Fatalf("%v: %q", missing, logs.String())
+		}
+	}
+	// Any other read failure is still returned for redelivery.
+	env := newSourceTestEnv(sourcesOn())
+	env.objects.missing = &smithy.GenericAPIError{Code: "SlowDown"}
+	if err := env.svc.RequestSourceFromObject(context.Background(), sourceTestBucket, sourceTestKBKey); err == nil {
+		t.Fatal("a throttled HeadObject must be retried")
 	}
 }

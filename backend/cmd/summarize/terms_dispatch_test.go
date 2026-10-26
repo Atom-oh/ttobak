@@ -76,7 +76,8 @@ func TestHandlerRoutesTermsSources(t *testing.T) {
 		return nil
 	}
 	events := []string{
-		`{"source":"aws.s3","detail-type":"Object Created","detail":{"bucket":{"name":"kb-bucket"},"object":{"key":"kb/u1/1_a.md"}}}`,
+		// The key reaches the mapper as delivered, not unescaped.
+		`{"source":"aws.s3","detail-type":"Object Created","detail":{"bucket":{"name":"kb-bucket"},"object":{"key":"kb/u1/1_a+b%20c.md"}}}`,
 		// A KB key that also looks like a transcript must not reach the transcript path.
 		`{"source":"aws.s3","detail-type":"Object Created","detail":{"bucket":{"name":"kb-bucket"},"object":{"key":"transcripts/m1.json"}}}`,
 		`{"source":"ttobak.analysis","detail-type":"TermsSourceRequested","detail":{"kind":"research","ref":"r1","ownerId":"u1","accountIds":["a1"]}}`,
@@ -87,7 +88,7 @@ func TestHandlerRoutesTermsSources(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if len(mapped) != 2 || mapped[0] != "kb-bucket/kb/u1/1_a.md" || mapped[1] != "kb-bucket/transcripts/m1.json" {
+	if len(mapped) != 2 || mapped[0] != "kb-bucket/kb/u1/1_a+b%20c.md" || mapped[1] != "kb-bucket/transcripts/m1.json" {
 		t.Fatalf("mapped %v", mapped)
 	}
 	if len(processed) != 1 || processed[0].Kind != "research" || processed[0].Ref != "r1" || processed[0].OwnerID != "u1" || len(processed[0].AccountIDs) != 1 {
