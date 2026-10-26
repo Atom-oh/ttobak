@@ -274,7 +274,7 @@ kind of insight. Proposed grouping by what the user is doing:
 | Group | Items | Route (unchanged unless noted) |
 |---|---|---|
 | Work | Meetings, Accounts, Projects, Docs | `/`, `/accounts`, `/projects`, `/docs` |
-| AI | Assistant | `/chat` |
+| (top, no group) | Assistant | `/chat` |
 | Knowledge | Library, Deep Research, News & Updates, Custom Dictionary | `/kb` (Library), `/insights/research`, `/insights`, new `/dictionary` (moved out of Settings) |
 | Customer Analytics | Billing (all my Accounts), per-Account Billing tab | new `/billing`, Account detail tab |
 | — | Settings | `/settings` |
@@ -290,6 +290,7 @@ kind of insight. Proposed grouping by what the user is doing:
 - Existing `/insights/...` URLs keep working; only labels and grouping change.
 - The hand-off button is removed; Billing is a normal menu item, shown only to
   users who belong to at least one Account with billing data.
+- Assistant is a standalone item at the top of the sidebar (owner, 2026-10-26).
 - Mobile bottom bar stays at five items (Home, AI, Record, Knowledge, Profile);
   Billing is reached from Accounts and the menu sheet.
 - Decided (owner, 2026-10-26): Deep Research sits under Knowledge (its reports
