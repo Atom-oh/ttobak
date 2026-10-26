@@ -612,9 +612,20 @@ so deploy after the function has run once) publishing count-1 metrics to the
 | `TermsSourceSucceeded`, `Disabled`, `Unsupported`, `NotReady`, `NotFound`, `Unchanged` | `terms source:` with the matching `outcome=` |
 | `TermsSourceTriggered` | `terms source trigger:` with `outcome=QUEUED` |
 | `TermsNewsRuns`, `TermsNewsDisabled`, `TermsNewsFailed` | `terms news:` with `outcome=SUCCEEDED`, `DISABLED`, `FAILED` |
+| `TranscriptCorrectionApplied` | `transcript correction outcome=APPLIED` (one per corrected-path meeting) |
+| `TranscriptCorrectionNone` | `transcript correction outcome=APPLIED` with `corrections=0` |
+| `TranscriptCorrectionUnavailable` | `transcript correction outcome=GLOSSARY_UNAVAILABLE` |
+
+The correction line is `transcript correction outcome=APPLIED meeting=<id>
+corrections=<n>`. A metric filter cannot extract `<n>` from the
+`corrections=<n>` token, so the metrics count meetings, not corrections:
+meetings with at least one correction are `Applied - None`.
 
 Failed Account merges are not retried, so `TermsAccountFailures` is the signal
-that some linked meetings missed the Account layer; it has no alarm.
+that some linked meetings missed the Account layer. Alarms `TermsAccountFailures`
+and `TermsNewsFailed` fire when the daily sum of the metric of the same name is
+at least 1 (one daily period, `notBreaching` on missing data, same
+`PipelineAlarmTopicArn` action as the other alarms).
 
 Alarm `TermsSourcesSilent` uses metric math over three daily-sum metrics:
 `IF(FILL(triggered, 0) > 0 AND FILL(succeeded, 0) + FILL(unchanged, 0) == 0, 1, 0)`
