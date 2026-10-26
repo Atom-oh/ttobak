@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"math"
+	"os"
 	"reflect"
 	"sort"
 	"strings"
@@ -25,13 +26,69 @@ type parsedTranscript struct {
 	Duration float64
 	Quality  *model.TranscriptQuality
 	Objects  []model.SummaryObject
+	// Corrections are the verified glossary fixes (Segment indexes Segments);
+	// GlossaryApplied marks a run that used a glossary, so its (possibly
+	// empty) records replace a previous run's.
+	Corrections     []model.TranscriptCorrection
+	GlossaryApplied bool
 }
 
-func refineParsedTranscript(ctx context.Context, parsed *parsedTranscript) {
+// Silent transcript correction (layered dictionary L3). Package variables
+// so the flag gate and feedback are testable without AWS; init wires them.
+var (
+	loadMeetingGlossary  = func(context.Context, string, string) ([]service.GlossaryTerm, error) { return nil, nil }
+	learnFromCorrections = func(context.Context, *model.Meeting, []service.GlossaryTerm, []model.TranscriptCorrection) {}
+)
+
+// meetingGlossary returns the meeting's refinement glossary, or nil -- and
+// with it the unchanged refinement path -- when TRANSCRIPT_CORRECTION_MODE
+// is not "on", the glossary is empty or it cannot be read.
+func meetingGlossary(ctx context.Context, meeting *model.Meeting) []service.GlossaryTerm {
+	if meeting == nil {
+		return nil
+	}
+	if strings.TrimSpace(os.Getenv("TRANSCRIPT_CORRECTION_MODE")) != "on" {
+		log.Printf("transcript correction outcome=DISABLED meeting=%s reason=flag_off", meeting.MeetingID)
+		return nil
+	}
+	terms, err := loadMeetingGlossary(ctx, meeting.UserID, meeting.AccountID)
+	if err != nil {
+		log.Printf("transcript correction outcome=GLOSSARY_UNAVAILABLE meeting=%s", meeting.MeetingID)
+		return nil
+	}
+	if len(terms) == 0 {
+		log.Printf("transcript correction outcome=DISABLED meeting=%s reason=empty_glossary", meeting.MeetingID)
+		return nil
+	}
+	return terms
+}
+
+// logCorrectionOutcome reports a glossary run by count only; corrected
+// text never reaches logs.
+func logCorrectionOutcome(meetingID string, parsed *parsedTranscript) {
+	if parsed != nil && parsed.GlossaryApplied {
+		log.Printf("transcript correction outcome=APPLIED meeting=%s corrections=%d", meetingID, len(parsed.Corrections))
+	}
+}
+
+// refineParsedTranscript refines raw Whisper segments; a non-empty glossary
+// adds silent glossary correction, an empty one is the unchanged path.
+func refineParsedTranscript(ctx context.Context, parsed *parsedTranscript, glossary []service.GlossaryTerm) {
 	if len(parsed.Whisper) == 0 || len(parsed.Segments) > 0 {
 		return
 	}
-	text, segments, quality, err := bedrockService.RefineTranscriptWithQuality(ctx, parsed.Whisper)
+	var (
+		text        string
+		segments    []service.RefinedSegment
+		quality     *model.TranscriptQuality
+		corrections []model.TranscriptCorrection
+		err         error
+	)
+	if len(glossary) > 0 {
+		text, segments, quality, corrections, err = bedrockService.RefineTranscriptWithGlossary(ctx, parsed.Whisper, glossary)
+	} else {
+		text, segments, quality, err = bedrockService.RefineTranscriptWithQuality(ctx, parsed.Whisper)
+	}
 	quality.DiarizationEnabled, quality.DetectedSpeakers = parsed.Quality.DiarizationEnabled, parsed.Quality.DetectedSpeakers
 	parsed.Quality = quality
 	if err != nil {
@@ -39,6 +96,7 @@ func refineParsedTranscript(ctx context.Context, parsed *parsedTranscript) {
 		// fabricated timestamps. The fixed failure category is in Quality.
 		return
 	}
+	parsed.Corrections, parsed.GlossaryApplied = corrections, len(glossary) > 0
 	parsed.Text = text
 	parsed.Segments = make([]TranscriptSegmentOut, len(segments))
 	for i, segment := range segments {
@@ -165,6 +223,14 @@ func transcriptUpdateFields(parsed *parsedTranscript, isNova bool) (map[string]i
 	// segments written for the other one. The base writer skipped empty segments too.
 	if segments != "" {
 		fields["transcriptSegments"] = segments
+	}
+	// Silent (L3): stored for feedback and audit, never returned by the API.
+	if parsed.GlossaryApplied {
+		corrections := append([]model.TranscriptCorrection{}, parsed.Corrections...)
+		if len(corrections) > model.MaxTranscriptCorrections {
+			corrections = corrections[:model.MaxTranscriptCorrections]
+		}
+		fields["transcriptCorrections"] = corrections
 	}
 	if parsed.Duration > 0 && !math.IsInf(parsed.Duration, 0) && !math.IsNaN(parsed.Duration) {
 		fields["duration"] = int(math.Round(parsed.Duration))

@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -64,7 +66,7 @@ func TestMergedTranscriptRetainsDegradationProvenanceAndPartOffsets(t *testing.T
 			return nil, nil
 		}
 	}))
-	parsed, err := mergePartTranscripts(context.Background(), "bucket", "m", 2)
+	parsed, err := mergePartTranscripts(context.Background(), "bucket", "m", 2, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +114,7 @@ func TestMergedTranscribePartsKeepCanonicalPunctuation(t *testing.T) {
 			return nil, nil
 		}
 	}))
-	parsed, err := mergePartTranscripts(context.Background(), "bucket", "m", 2)
+	parsed, err := mergePartTranscripts(context.Background(), "bucket", "m", 2, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +149,7 @@ func TestInvalidRawTimingRemainsReadableWithoutFabricatedSegments(t *testing.T) 
 	}))
 	parsed := &parsedTranscript{Text: "preserved source text", Whisper: []service.WhisperSegment{{Start: 9999, End: -1, Text: "preserved source text"}},
 		Quality: &model.TranscriptQuality{Refinement: "not_requested", SpeakerProvenance: "unknown"}}
-	refineParsedTranscript(context.Background(), parsed)
+	refineParsedTranscript(context.Background(), parsed, nil)
 	fields, err := transcriptUpdateFields(parsed, false)
 	raw, hasSegments := fields["transcriptSegments"]
 	var preserved []TranscriptSegmentOut
@@ -171,5 +173,95 @@ func TestTranscriptUpdateOmitsSegmentsWhenNoneWereTimed(t *testing.T) {
 	}
 	if fields["transcriptB"] != "untimed text" {
 		t.Fatal("text was not published")
+	}
+}
+
+func captureSummarizeLog(t *testing.T) *strings.Builder {
+	t.Helper()
+	var out strings.Builder
+	prior := log.Writer()
+	log.SetOutput(&out)
+	t.Cleanup(func() { log.SetOutput(prior) })
+	return &out
+}
+
+func TestTranscriptCorrectionFlagGatesGlossary(t *testing.T) {
+	priorLoad := loadMeetingGlossary
+	t.Cleanup(func() { loadMeetingGlossary = priorLoad })
+	loads := 0
+	terms := []service.GlossaryTerm{{DisplayAs: "K-culture", TermKey: "k1", Layer: "ACCOUNT#a1"}}
+	loadMeetingGlossary = func(_ context.Context, ownerID, accountID string) ([]service.GlossaryTerm, error) {
+		loads++
+		if ownerID != "u1" || accountID != "a1" {
+			t.Fatalf("glossary for %s/%s", ownerID, accountID)
+		}
+		return terms, nil
+	}
+	meeting := &model.Meeting{MeetingID: "m1", UserID: "u1", AccountID: "a1"}
+
+	for _, mode := range []string{"", "off", "ON ", "yes"} {
+		t.Setenv("TRANSCRIPT_CORRECTION_MODE", mode)
+		logs := captureSummarizeLog(t)
+		if got := meetingGlossary(context.Background(), meeting); got != nil || loads != 0 {
+			t.Fatalf("mode %q loaded a glossary", mode)
+		}
+		if !strings.Contains(logs.String(), "transcript correction outcome=DISABLED") {
+			t.Fatalf("mode %q did not log DISABLED: %s", mode, logs.String())
+		}
+	}
+
+	t.Setenv("TRANSCRIPT_CORRECTION_MODE", "on")
+	if got := meetingGlossary(context.Background(), meeting); !reflect.DeepEqual(got, terms) || loads != 1 {
+		t.Fatalf("flag on: %+v", got)
+	}
+	terms = nil
+	logs := captureSummarizeLog(t)
+	if got := meetingGlossary(context.Background(), meeting); got != nil || !strings.Contains(logs.String(), "transcript correction outcome=DISABLED") {
+		t.Fatalf("empty glossary must run the unchanged path: %s", logs.String())
+	}
+}
+
+func TestRefineParsedTranscriptStoresCorrections(t *testing.T) {
+	var systems []string
+	reply := `{"segments":[{"speaker":"spk_0","text":"we love K-culture","startTime":0,"endTime":2,"sourceIds":[0]}],"corrections":[{"from":"gay culture","to":"K-culture","segment":0}]}`
+	installTranscriptFixture(t, retryHTTP(func(request *http.Request) (*http.Response, error) {
+		var input service.ClaudeRequest
+		if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+			t.Fatal(err)
+		}
+		systems = append(systems, input.System)
+		text := reply
+		if !strings.Contains(input.System, "Glossary") {
+			text = `[{"speaker":"spk_0","text":"we love gay culture","startTime":0,"endTime":2,"sourceIds":[0]}]`
+		}
+		body, _ := json.Marshal(map[string]any{"stop_reason": "end_turn", "content": []map[string]string{{"type": "text", "text": text}}})
+		return transcriptFixtureResponse(200, string(body), nil), nil
+	}))
+	newParsed := func() *parsedTranscript {
+		return &parsedTranscript{Whisper: []service.WhisperSegment{{Start: 0, End: 2, Text: "we love gay culture", Speaker: "spk_0"}},
+			Quality: &model.TranscriptQuality{Refinement: "not_requested", SpeakerProvenance: "unknown"}}
+	}
+
+	// No glossary: today's request and no corrections field.
+	parsed := newParsed()
+	refineParsedTranscript(context.Background(), parsed, nil)
+	fields, err := transcriptUpdateFields(parsed, false)
+	if err != nil || strings.Contains(systems[0], "Glossary") || len(parsed.Corrections) != 0 {
+		t.Fatalf("off path changed: %v", err)
+	}
+	if _, ok := fields["transcriptCorrections"]; ok {
+		t.Fatal("off path wrote corrections")
+	}
+
+	glossary := []service.GlossaryTerm{{DisplayAs: "K-culture", TermKey: "k1", Layer: "ACCOUNT#a1"}}
+	parsed = newParsed()
+	refineParsedTranscript(context.Background(), parsed, glossary)
+	fields, err = transcriptUpdateFields(parsed, false)
+	if err != nil || !strings.Contains(parsed.Text, "K-culture") {
+		t.Fatalf("correction not applied: %q %v", parsed.Text, err)
+	}
+	want := []model.TranscriptCorrection{{From: "gay culture", To: "K-culture", TermKey: "k1", Segment: 0}}
+	if got, _ := fields["transcriptCorrections"].([]model.TranscriptCorrection); !reflect.DeepEqual(got, want) {
+		t.Fatalf("stored corrections = %+v", fields["transcriptCorrections"])
 	}
 }

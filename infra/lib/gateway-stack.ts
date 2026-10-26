@@ -148,6 +148,20 @@ export function autoTermsEnvironment(scope: Construct): Record<string, string> {
   };
 }
 
+/**
+ * Silent glossary-based transcript correction for the summarize Lambda
+ * (layered dictionary, L3). CDK context `ttobak:transcriptCorrection`
+ * (off|on, default off); invalid values fail synth.
+ */
+export function transcriptCorrectionEnvironment(scope: Construct): Record<string, string> {
+  const raw = scope.node.tryGetContext('ttobak:transcriptCorrection');
+  const mode = raw === undefined || raw === null ? 'off' : String(raw).trim() || 'off';
+  if (mode !== 'off' && mode !== 'on') {
+    throw new Error(`ttobak:transcriptCorrection must be off or on, got ${JSON.stringify(mode)}`);
+  }
+  return { TRANSCRIPT_CORRECTION_MODE: mode };
+}
+
 export class GatewayStack extends cdk.Stack {
   /** Present only when ttobak:mcpResourceAudience enables HTTP MCP. */
   public readonly mcpFunction?: lambda.Function;
@@ -433,6 +447,7 @@ export class GatewayStack extends cdk.Stack {
         BEDROCK_SUMMARY_MODEL_ID: 'global.openai.gpt-6.1-sol',
         BEDROCK_SONNET_MODEL_ID: 'global.anthropic.claude-sonnet-5-5',
         ...autoTermsEnvironment(this),
+        ...transcriptCorrectionEnvironment(this),
         KB_BUCKET_NAME: props.kbBucket?.bucketName || '',
         KB_ID: props.knowledgeBaseId || '',
         DATA_SOURCE_ID: props.dataSourceId || '',
