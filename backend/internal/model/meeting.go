@@ -251,6 +251,13 @@ type CrawlerSource struct {
 	LastCrawledAt string   `dynamodbav:"lastCrawledAt" json:"lastCrawledAt"`
 	Status        string   `dynamodbav:"status" json:"status"`
 	DocumentCount int      `dynamodbav:"documentCount" json:"documentCount"`
+	// GlobalNewsSource marks an operator-curated source whose news may feed
+	// the Common dictionary layer; only operators set it, on the item
+	// directly, and user paths refuse such a source. UserTiedAt is the sticky
+	// taint every user write leaves (create, subscribe, query/URL/alias
+	// merge, unsubscribe); no user path clears it. Both are internal.
+	GlobalNewsSource bool   `dynamodbav:"globalNewsSource,omitempty" json:"-"`
+	UserTiedAt       string `dynamodbav:"userTiedAt,omitempty" json:"-"`
 }
 
 // CrawlerSubscription represents a user's subscription to a crawler source

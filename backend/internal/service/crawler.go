@@ -93,6 +93,9 @@ func updateSourceAliases(ctx context.Context, repo crawlerRepo, sourceID, userID
 		if source == nil {
 			return ErrNotFound
 		}
+		if source.GlobalNewsSource {
+			return ErrSourceUnavailable
+		}
 		var requiredOwner *string
 		if len(removals) > 0 {
 			if userID == "" || source.OwnerID != userID {
@@ -118,6 +121,9 @@ func updateSourceAliases(ctx context.Context, repo crawlerRepo, sourceID, userID
 		if err == nil {
 			return nil
 		}
+		if refused := operatorSourceError(err); refused != nil {
+			return refused
+		}
 		if !errors.Is(err, repository.ErrConditionFailed) {
 			return fmt.Errorf("failed to merge aliases: %w", err)
 		}
@@ -125,6 +131,18 @@ func updateSourceAliases(ctx context.Context, repo crawlerRepo, sourceID, userID
 			return fmt.Errorf("failed to merge aliases: aliases field changed concurrently %d times, giving up", maxAliasMergeAttempts)
 		}
 	}
+}
+
+// ErrSourceUnavailable refuses a user write to an operator-curated global
+// news source: users cannot subscribe to it, change it or unsubscribe it.
+var ErrSourceUnavailable = errors.New("source not available")
+
+// operatorSourceError maps the repository refusal to ErrSourceUnavailable.
+func operatorSourceError(err error) error {
+	if errors.Is(err, repository.ErrOperatorSource) {
+		return ErrSourceUnavailable
+	}
+	return nil
 }
 
 // crawlerRepo defines the repository methods used by CrawlerService and InsightsService.
@@ -213,6 +231,12 @@ func (s *CrawlerService) AddSource(ctx context.Context, userID string, req *mode
 		}
 	}
 
+	// An operator-curated global news source takes no subscribers: a user's
+	// queries or URLs would shape what feeds the Common layer (R16).
+	if source.GlobalNewsSource {
+		return nil, ErrSourceUnavailable
+	}
+
 	// Skip the merge below when we just created the source: its fields
 	// already match req exactly.
 	//
@@ -267,6 +291,9 @@ func (s *CrawlerService) AddSource(ctx context.Context, userID string, req *mode
 				source.Aliases = aliases
 				break
 			}
+			if refused := operatorSourceError(err); refused != nil {
+				return nil, refused
+			}
 			if !errors.Is(err, repository.ErrConditionFailed) {
 				return nil, fmt.Errorf("failed to update source: %w", err)
 			}
@@ -279,6 +306,9 @@ func (s *CrawlerService) AddSource(ctx context.Context, userID string, req *mode
 			}
 			if source == nil {
 				return nil, fmt.Errorf("source %s vanished during merge retry", sourceID)
+			}
+			if source.GlobalNewsSource {
+				return nil, ErrSourceUnavailable
 			}
 		}
 	}
@@ -393,6 +423,9 @@ func (s *CrawlerService) Unsubscribe(ctx context.Context, userID, sourceID strin
 		if source == nil {
 			return nil // Source already gone
 		}
+		if source.GlobalNewsSource {
+			return ErrSourceUnavailable // never wiped or disabled by a user
+		}
 
 		subscribers := remove(source.Subscribers, userID)
 		emptied = len(subscribers) == 0
@@ -416,6 +449,9 @@ func (s *CrawlerService) Unsubscribe(ctx context.Context, userID, sourceID strin
 		}
 		if updateErr == nil {
 			break
+		}
+		if refused := operatorSourceError(updateErr); refused != nil {
+			return refused
 		}
 		if !errors.Is(updateErr, repository.ErrConditionFailed) {
 			return fmt.Errorf("failed to update source: %w", updateErr)
@@ -457,6 +493,9 @@ func (s *CrawlerService) rebuildSourceUnion(ctx context.Context, sourceID string
 		if source == nil {
 			return nil
 		}
+		if source.GlobalNewsSource {
+			return ErrSourceUnavailable
+		}
 
 		var allAWS, allNewsSources, allNewsQueries, allURLs []string
 		for _, uid := range source.Subscribers {
@@ -481,6 +520,9 @@ func (s *CrawlerService) rebuildSourceUnion(ctx context.Context, sourceID string
 		})
 		if err == nil {
 			return nil
+		}
+		if refused := operatorSourceError(err); refused != nil {
+			return refused
 		}
 		if !errors.Is(err, repository.ErrConditionFailed) {
 			return fmt.Errorf("failed to update source union: %w", err)

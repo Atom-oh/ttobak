@@ -118,9 +118,10 @@ type newsDocument struct {
 }
 
 // newsDocuments keeps published, searched news documents with a well-formed
-// hash and source ID, once each, as title + summary capped at
-// newsDocumentMaxBytes, in crawl order. Legacy rows without an ingest
-// source cannot be told from custom-URL ones and are skipped.
+// hash and source ID as title + summary capped at newsDocumentMaxBytes, in
+// crawl order. Legacy rows without an ingest source cannot be told from
+// custom-URL ones and are skipped. One article crawled by several sources
+// stays once per source here; globalNewsDocuments dedups after filtering.
 func newsDocuments(rows []model.CrawledDocument) []newsDocument {
 	sort.SliceStable(rows, func(i, j int) bool {
 		if rows[i].CrawledAt != rows[j].CrawledAt {
@@ -128,11 +129,10 @@ func newsDocuments(rows []model.CrawledDocument) []newsDocument {
 		}
 		return rows[i].DocHash < rows[j].DocHash
 	})
-	seen := map[string]bool{}
 	var out []newsDocument
 	for _, row := range rows {
 		if row.QualityStatus != "PUBLISHED" || row.IngestSource != newsIngestSearch || (row.Type != "" && row.Type != "news") ||
-			!attachmentIdentifier.MatchString(row.DocHash) || !validNewsSourceID(row.SourceID) || seen[row.DocHash] {
+			!attachmentIdentifier.MatchString(row.DocHash) || !validNewsSourceID(row.SourceID) {
 			continue
 		}
 		text := strings.TrimSpace(strings.TrimSpace(row.Title) + "\n" + strings.TrimSpace(row.Summary))
@@ -140,16 +140,18 @@ func newsDocuments(rows []model.CrawledDocument) []newsDocument {
 		if text == "" || !utf8.ValidString(text) || strings.ContainsRune(text, 0) {
 			continue
 		}
-		seen[row.DocHash] = true
 		out = append(out, newsDocument{hash: row.DocHash, source: row.SourceID, text: text, match: newMatchText(text)})
 	}
 	return out
 }
 
 // globalNewsDocuments keeps the documents of global sources, looking each
-// distinct source up once. A lookup failure is returned (retryable).
+// distinct source up once, then keeps each article (hash) once. Filtering
+// first means a user source that crawled a shared URL earlier never hides
+// a global source's copy. A lookup failure is returned (retryable).
 func (s *TermsAnalysisService) globalNewsDocuments(ctx context.Context, docs []newsDocument) ([]newsDocument, int, error) {
 	global := map[string]bool{}
+	seen := map[string]bool{}
 	var out []newsDocument
 	excluded := 0
 	for _, d := range docs {
@@ -165,6 +167,10 @@ func (s *TermsAnalysisService) globalNewsDocuments(ctx context.Context, docs []n
 			excluded++
 			continue
 		}
+		if seen[d.hash] {
+			continue
+		}
+		seen[d.hash] = true
 		out = append(out, d)
 	}
 	return out, excluded, nil

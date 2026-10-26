@@ -116,10 +116,14 @@ func TestIsGlobalNewsSource(t *testing.T) {
 		{"no marker", map[string]any{"ownerId": map[string]string{"S": ""}}, false},
 		{"marker false", map[string]any{GlobalNewsSourceAttribute: bool_(false)}, false},
 		{"marker as a string", map[string]any{GlobalNewsSourceAttribute: map[string]string{"S": "true"}}, false},
-		{"marked, user-owned", map[string]any{GlobalNewsSourceAttribute: bool_(true), "ownerId": map[string]string{"S": "u1"}}, false},
-		{"marked, subscribed", map[string]any{GlobalNewsSourceAttribute: bool_(true), "subscribers": list("u1")}, false},
-		{"marked, custom URLs", map[string]any{GlobalNewsSourceAttribute: bool_(true), "customUrls": list("https://a.example")}, false},
-		{"marked operator source", map[string]any{GlobalNewsSourceAttribute: bool_(true), "subscribers": list(), "customUrls": list(), "newsQueries": list("AlphaGrid")}, true},
+		{"marked, user-owned", map[string]any{GlobalNewsSourceAttribute: bool_(true), "status": map[string]string{"S": "active"}, "ownerId": map[string]string{"S": "u1"}}, false},
+		{"marked, subscribed", map[string]any{GlobalNewsSourceAttribute: bool_(true), "status": map[string]string{"S": "active"}, "subscribers": list("u1")}, false},
+		{"marked, custom URLs", map[string]any{GlobalNewsSourceAttribute: bool_(true), "status": map[string]string{"S": "active"}, "customUrls": list("https://a.example")}, false},
+		{"marked operator source", map[string]any{GlobalNewsSourceAttribute: bool_(true), "status": map[string]string{"S": "active"}, "subscribers": list(), "customUrls": list(), "newsQueries": list("AlphaGrid")}, true},
+		{"marked idle operator source", map[string]any{GlobalNewsSourceAttribute: bool_(true), "status": map[string]string{"S": "idle"}}, true},
+		{"marked, disabled", map[string]any{GlobalNewsSourceAttribute: bool_(true), "status": map[string]string{"S": "disabled"}}, false},
+		{"marked, no status", map[string]any{GlobalNewsSourceAttribute: bool_(true)}, false},
+		{"marked, user-tied after unsubscribe", map[string]any{GlobalNewsSourceAttribute: bool_(true), "status": map[string]string{"S": "active"}, "subscribers": list(), "userTiedAt": map[string]string{"S": "2026-10-18T19:30:00Z"}}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -143,5 +147,61 @@ func TestIsGlobalNewsSource(t *testing.T) {
 				t.Fatalf("got %v err %v, want %v", got, err, tc.want)
 			}
 		})
+	}
+}
+
+// Every user CONFIG write refuses a marked source in its condition and sets
+// the sticky userTiedAt; a refusal on a marked item is ErrOperatorSource, not
+// a retryable conflict. A user-created source is tainted and never marked.
+func TestUserSourceWritesGuardAndTaint(t *testing.T) {
+	for _, marked := range []bool{false, true} {
+		var update, cond string
+		client := dynamodb.New(dynamodb.Options{
+			Region: "ap-northeast-2", Credentials: aws.AnonymousCredentials{}, RetryMaxAttempts: 1,
+			HTTPClient: meetingListHTTPClientFunc(func(req *http.Request) (*http.Response, error) {
+				var body map[string]any
+				if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				update, cond = resolved(body, "UpdateExpression"), resolved(body, "ConditionExpression")
+				if body["ReturnValuesOnConditionCheckFailure"] != "ALL_OLD" {
+					t.Fatal("the refusal must return the old item to tell a marked source apart")
+				}
+				item := `{}`
+				if marked {
+					item = `{"globalNewsSource":{"BOOL":true}}`
+				}
+				return &http.Response{StatusCode: 400, Header: http.Header{"Content-Type": {"application/x-amz-json-1.0"}},
+					Body: io.NopCloser(strings.NewReader(`{"__type":"com.amazonaws.dynamodb.v20120810#ConditionalCheckFailedException","message":"failed","Item":` + item + `}`))}, nil
+			}),
+		})
+		subs := []string{"u1"}
+		err := NewCrawlerRepository(client, "t").UpdateSourcePartial(context.Background(), "src", &model.CrawlerSource{}, SourcePartialFields{Subscribers: &subs})
+		requireAll(t, "guard", cond, "attribute_not_exists (globalNewsSource)")
+		requireAll(t, "taint", update, "userTiedAt", "if_not_exists")
+		if marked != errors.Is(err, ErrOperatorSource) || marked == errors.Is(err, ErrConditionFailed) {
+			t.Fatalf("marked=%v err=%v", marked, err)
+		}
+	}
+
+	var put map[string]any
+	client := dynamodb.New(dynamodb.Options{
+		Region: "ap-northeast-2", Credentials: aws.AnonymousCredentials{}, RetryMaxAttempts: 1,
+		HTTPClient: meetingListHTTPClientFunc(func(req *http.Request) (*http.Response, error) {
+			if err := json.NewDecoder(req.Body).Decode(&put); err != nil {
+				t.Fatal(err)
+			}
+			return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/x-amz-json-1.0"}}, Body: io.NopCloser(strings.NewReader(`{}`))}, nil
+		}),
+	})
+	if err := NewCrawlerRepository(client, "t").PutSourceIfAbsent(context.Background(), &model.CrawlerSource{SourceID: "src", GlobalNewsSource: true}); err != nil {
+		t.Fatal(err)
+	}
+	item := put["Item"].(map[string]any)
+	if _, ok := item["globalNewsSource"]; ok {
+		t.Fatal("a user-created source is never marked")
+	}
+	if _, ok := item["userTiedAt"]; !ok {
+		t.Fatal("a user-created source is tainted")
 	}
 }

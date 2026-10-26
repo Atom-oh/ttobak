@@ -587,3 +587,17 @@ func TestNewsTermSurvivesASaturatedCommonLayer(t *testing.T) {
 		t.Fatalf("the cap still holds: %d live terms", live)
 	}
 }
+
+// A user source that crawled a shared URL first must not hide the global
+// source's copy of the same article.
+func TestNewsUserCopyOfASharedArticleDoesNotHideTheGlobalCopy(t *testing.T) {
+	env := newNewsTestEnv(newsOn())
+	env.docFrom("userSrc", "aaaa1111", "AlphaGrid 출시", "AlphaGrid 플랫폼이 공개되었습니다.", 5)
+	env.docFrom("srcA", "aaaa1111", "AlphaGrid 출시", "AlphaGrid 플랫폼이 공개되었습니다.", 10)
+	env.docFrom("srcB", "bbbb2222", "업계 동향", "여러 기업이 AlphaGrid 도입을 검토합니다.", 20)
+	env.llm.outputs = []string{newsOutput("AlphaGrid", "AlphaGrid", "news-1", "news-2")}
+	env.run(t)
+	if _, ok := env.common("AlphaGrid"); !ok {
+		t.Fatal("two global sources named the term; the user copy must not veto it")
+	}
+}
