@@ -1,5 +1,7 @@
 package model
 
+import "strings"
+
 // DictionaryTerm represents a single term in a user's custom dictionary
 type DictionaryTerm struct {
 	Phrase     string `dynamodbav:"phrase" json:"phrase"`
@@ -111,6 +113,10 @@ const (
 	PrefixDictTerm = "DICTTERM#"
 	PrefixDictObs  = "DICTOBS#"
 	PrefixVocab    = "VOCAB#"
+	// PrefixDictCommon is the partition key of the shared Common dictionary;
+	// PrefixDictLog starts the SK of its per-term audit rows.
+	PrefixDictCommon = "DICT#COMMON"
+	PrefixDictLog    = "DICTLOG#"
 
 	TermOriginManual = "manual"
 	TermOriginAuto   = "auto"
@@ -121,6 +127,16 @@ const (
 
 	TermScopeUser    = "user"
 	TermScopeAccount = "account"
+	TermScopeCommon  = "common"
+
+	// Source kinds recorded on DictSourceRef and DictObservation.
+	DictSourceMeeting  = "meeting"
+	DictSourceKB       = "kb"
+	DictSourceResearch = "research"
+	DictSourceNews     = "news"
+
+	// MaxDictSources caps DictTerm.Sources.
+	MaxDictSources = 10
 
 	TermAliasHint   = "hint"
 	TermAliasAlways = "always"
@@ -166,10 +182,12 @@ type DictTerm struct {
 	UpdatedAt            string   `dynamodbav:"updatedAt"`
 	LastSeenAt           string   `dynamodbav:"lastSeenAt,omitempty"`
 	DeletedAt            string   `dynamodbav:"deletedAt,omitempty"`
-	CreatedBy            string   `dynamodbav:"createdBy,omitempty"`
-	UpdatedBy            string   `dynamodbav:"updatedBy,omitempty"`
-	Version              int64    `dynamodbav:"version"`
-	EntityType           string   `dynamodbav:"entityType"`
+	// Sources lists up to MaxDictSources evidence refs, newest first.
+	Sources    []DictSourceRef `dynamodbav:"sources,omitempty"`
+	CreatedBy  string          `dynamodbav:"createdBy,omitempty"`
+	UpdatedBy  string          `dynamodbav:"updatedBy,omitempty"`
+	Version    int64           `dynamodbav:"version"`
+	EntityType string          `dynamodbav:"entityType"`
 	// LegacyMigrated marks a row copied from the legacy blob. Until
 	// migratedAt such a row, while active and unedited, is only a copy: the
 	// blob stays authoritative and migration may rewrite or delete it.
@@ -179,13 +197,68 @@ type DictTerm struct {
 	LegacyDisplayEmpty bool `dynamodbav:"legacyDisplayEmpty,omitempty"`
 }
 
+// DictSourceRef points at one piece of evidence behind a term.
+type DictSourceRef struct {
+	Kind string `dynamodbav:"kind" json:"kind"`
+	Ref  string `dynamodbav:"ref" json:"ref"`
+	At   string `dynamodbav:"at" json:"at"`
+}
+
+// AppendDictSource puts ref first, drops an earlier entry with the same
+// Kind+Ref, and keeps at most MaxDictSources. It does not modify refs.
+func AppendDictSource(refs []DictSourceRef, ref DictSourceRef) []DictSourceRef {
+	out := make([]DictSourceRef, 0, MaxDictSources)
+	out = append(out, ref)
+	for _, r := range refs {
+		if len(out) == MaxDictSources {
+			break
+		}
+		if r.Kind == ref.Kind && r.Ref == ref.Ref {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// DictTermLog is one Common-dictionary audit row: SK is
+// DICTLOG#{termKey}#{at}. Before/After hold the term JSON ("" when absent).
+type DictTermLog struct {
+	PK      string `dynamodbav:"PK"`
+	SK      string `dynamodbav:"SK"`
+	TermKey string `dynamodbav:"termKey"`
+	Actor   string `dynamodbav:"actor"`
+	Action  string `dynamodbav:"action"`
+	Before  string `dynamodbav:"before,omitempty"`
+	After   string `dynamodbav:"after,omitempty"`
+	At      string `dynamodbav:"at"`
+}
+
+// TermScopeOf maps a term partition key to its scope and, for Account, the
+// account ID. ok is false for any other key.
+func TermScopeOf(pk string) (scope, accountID string, ok bool) {
+	switch {
+	case pk == PrefixDictCommon:
+		return TermScopeCommon, "", true
+	case strings.HasPrefix(pk, PrefixAccount) && len(pk) > len(PrefixAccount):
+		return TermScopeAccount, strings.TrimPrefix(pk, PrefixAccount), true
+	case strings.HasPrefix(pk, PrefixUser) && len(pk) > len(PrefixUser):
+		return TermScopeUser, "", true
+	}
+	return "", "", false
+}
+
 // DictObservation records that one meeting produced evidence for a term. It
 // is the unit of provenance; hits counts observation rows ever created.
 type DictObservation struct {
-	PK                string   `dynamodbav:"PK"`
-	SK                string   `dynamodbav:"SK"`
-	TermKey           string   `dynamodbav:"termKey"`
-	MeetingID         string   `dynamodbav:"meetingId"`
+	PK        string `dynamodbav:"PK"`
+	SK        string `dynamodbav:"SK"`
+	TermKey   string `dynamodbav:"termKey"`
+	MeetingID string `dynamodbav:"meetingId"`
+	// SourceKind/SourceRef name non-meeting evidence (kb, research, news);
+	// meeting rows keep meetingId.
+	SourceKind        string   `dynamodbav:"sourceKind,omitempty"`
+	SourceRef         string   `dynamodbav:"sourceRef,omitempty"`
 	OwnerID           string   `dynamodbav:"ownerId"`
 	HeardAs           []string `dynamodbav:"heardAs,omitempty"`
 	SourceTypes       []string `dynamodbav:"sourceTypes,omitempty"`
