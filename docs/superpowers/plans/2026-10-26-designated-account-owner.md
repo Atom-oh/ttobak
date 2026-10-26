@@ -116,6 +116,13 @@ create notices and determine whether to navigate/add members.
 **Files:** ADR-055; ADR-015/034/054; API/DESIGN/README and canonical review context.
 Operational evidence stays outside tracked source.
 
+Delivery is split into API/contract PR #480 and companion UI PR #479 to keep
+each complete required AI review within the existing input limits. Merge the
+API prerequisite first, then the UI; deploy the authenticated API before the
+static frontend. Local verification includes all Go packages, 136 frontend
+tests and 192 infrastructure tests. Whole-feature review found two recovery
+defects, both fixed with failing-then-passing regression tests.
+
 - [x] Document the narrow initial-owner exception and checkbox behavior; sync
   generated review context and run documentation checks.
 - [ ] Obtain independent whole-branch review; fix meaningful findings with
