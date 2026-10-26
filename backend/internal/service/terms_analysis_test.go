@@ -71,12 +71,21 @@ func (f *termsRepoFake) CompleteTermsAnalysis(_ context.Context, _, _, _ string,
 	if f.state != nil {
 		done := *f.state
 		done.Status, done.SucceededSourceHash, done.LeaseUntil = model.AnalysisSucceeded, done.SourceHash, 0
+		if len(result.AcceptedTerms) > 0 {
+			done.AcceptedTerms = result.AcceptedTerms
+		}
 		f.state = &done
 	}
 	return nil
 }
-func (f *termsRepoFake) RecordTermsAccount(_ context.Context, _, _, _ string, accountID string) error {
+func (f *termsRepoFake) RecordTermsAccount(_ context.Context, _, _, _ string, accountID string, keys []string) error {
 	f.recordedAccounts = append(f.recordedAccounts, accountID)
+	if f.state != nil {
+		next := *f.state
+		next.AccountIDs = append(append([]string(nil), next.AccountIDs...), accountID)
+		next.AccountAcceptedTerms = append(append([]string(nil), next.AccountAcceptedTerms...), keys...)
+		f.state = &next
+	}
 	return nil
 }
 func (f *termsRepoFake) FailTermsAnalysis(_ context.Context, _ string, _ *model.TermsAnalysis, code string, accepted []model.TermsAcceptedTerm, _ time.Time) error {
@@ -729,5 +738,55 @@ func TestProcessAccountLayerFailureLogsCounters(t *testing.T) {
 	}
 	if strings.Join(refreshed, ",") != "owner" {
 		t.Fatalf("refreshed %v", refreshed)
+	}
+}
+
+// A personal manual term K is skipped by the personal merge (not in
+// acceptedTerms) but still observed in the Account; K and the new J must both
+// be on the run state the deletion sweep reads for ACCOUNT# partitions.
+func TestProcessRecordsAccountKeysThePersonalMergeSkipped(t *testing.T) {
+	logs := capturePrivacyLogs(t)
+	meeting := termsTestMeeting()
+	meeting.AccountID = "a1"
+	meeting.TranscriptA += "spk_0: AlphaGrid 배포 일정도 확인합시다\nspk_1: AlphaGrid 담당은 제가 맡겠습니다\n"
+	repo := &termsRepoFake{meeting: meeting, state: queuedTermsState(meeting)}
+	output := `{"terms":[{"displayAs":"DynamoDB","heardAs":[],"type":"service","phrase":"","confidence":0.95,` +
+		`"evidence":[{"source":"transcript","documentId":"","quote":"DynamoDB 파티션 키는"}]},` +
+		`{"displayAs":"AlphaGrid","heardAs":[],"type":"product","phrase":"","confidence":0.95,` +
+		`"evidence":[{"source":"transcript","documentId":"","quote":"AlphaGrid 배포 일정도"}]}]}`
+	store := partitionedDictStore{}
+	store.at("ACCOUNT#a1").members = map[string]bool{"a1/owner": true}
+	store.at("USER#owner").seed(model.DictTerm{DisplayAs: "DynamoDB", Origin: model.TermOriginManual, State: model.TermStateActive})
+	s, _ := newTermsTestService(repo, &termsModelFake{outputs: []string{output}}, NewTermsMerger(store), termsAccountOn)
+	s.SetAccountMemberLister(func(context.Context, string) ([]string, error) { return []string{"owner"}, nil })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	if err := s.Process(ctx, model.TermsRequested{OwnerID: "owner", MeetingID: "m1", RunID: "run-1"}); err != nil || repo.completed == nil {
+		t.Fatalf("err=%v completed=%v failed=%s", err, repo.completed, repo.failed)
+	}
+	kK, kJ := TermKey("DynamoDB"), TermKey("AlphaGrid")
+	if acceptedIndex(repo.completed.AcceptedTerms, kK) >= 0 || acceptedIndex(repo.completed.AcceptedTerms, kJ) < 0 {
+		t.Fatalf("personal acceptedTerms must keep SkipHit semantics: %+v\n%s", repo.completed.AcceptedTerms, logs.String())
+	}
+	acct := store.at("ACCOUNT#a1")
+	for _, key := range []string{kK, kJ} {
+		if _, ok := acct.obs[model.DictObsSK(key, "m1")]; !ok {
+			t.Fatalf("the Account must observe %s", key)
+		}
+	}
+	sweep := strings.Join(repo.state.AccountSweepKeys(), ",")
+	if !strings.Contains(sweep, kK) || !strings.Contains(sweep, kJ) || strings.Join(repo.state.AccountIDs, ",") != "a1" {
+		t.Fatalf("the Account sweep must cover K and J: keys=%s accounts=%v", sweep, repo.state.AccountIDs)
+	}
+	// Simulate SweepMeetingTerms on the Account partition: every recorded
+	// key's observation goes and an auto term left without one goes too.
+	for _, key := range repo.state.AccountSweepKeys() {
+		delete(acct.obs, model.DictObsSK(key, "m1"))
+		if term, ok := acct.terms[model.DictTermSK(key)]; ok && term.Origin == model.TermOriginAuto {
+			delete(acct.terms, model.DictTermSK(key))
+		}
+	}
+	if len(acct.obs) != 0 || len(acct.terms) != 0 {
+		t.Fatalf("no Account observations or orphan auto terms may remain: obs=%d terms=%d", len(acct.obs), len(acct.terms))
 	}
 }
