@@ -11,6 +11,9 @@ An authenticated user can prepare a customer Account for a colleague by selectin
 that colleague's email as the initial Owner. If no login identity exists, request
 the domain-limited Cognito invitation described by ADR-054. Bind ownership to the
 current Cognito sub; an existing PROFILE email index must agree with that sub.
+Pre-existing identities must be enabled, have a verified current email, and be
+CONFIRMED or FORCE_CHANGE_PASSWORD before initial Owner membership is published.
+The same gate applies when another request concurrently creates the identity.
 Public self-signup and administrator-group grants remain disabled.
 
 The backend supports this decision. The corresponding creation and resend UI is

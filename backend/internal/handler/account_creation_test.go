@@ -21,6 +21,7 @@ func (creationCognito) AdminGetUser(context.Context, *idp.AdminGetUserInput, ...
 	return &idp.AdminGetUserOutput{Enabled: true, UserStatus: ct.UserStatusTypeConfirmed, UserAttributes: []ct.AttributeType{
 		{Name: aws.String("sub"), Value: aws.String("colleague-sub")},
 		{Name: aws.String("email"), Value: aws.String("colleague@example.com")},
+		{Name: aws.String("email_verified"), Value: aws.String("true")},
 	}}, nil
 }
 

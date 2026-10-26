@@ -108,6 +108,60 @@ func creationRequest() *model.CreateAccountRequest {
 	return &model.CreateAccountRequest{Name: "Customer", OwnerEmail: "new@example.com", RequestID: "683c4994-ea73-40b9-85d7-14ca659fbc21"}
 }
 
+func eligibleInitialOwner(sub string, status types.UserStatusType) *idp.AdminGetUserOutput {
+	user, _ := lookupInvitedIdentity(sub, status)(context.Background(), nil)
+	user.Enabled = true
+	user.UserAttributes = append(user.UserAttributes,
+		types.AttributeType{Name: aws.String("email_verified"), Value: aws.String("true")})
+	return user
+}
+
+func TestCreateAccount_ExistingOwnerIdentityEligibility(t *testing.T) {
+	for _, concurrent := range []bool{false, true} {
+		for _, kind := range []string{"confirmed", "pending", "unverified", "missing-verification", "disabled", "unconfirmed", "archived", "unknown-status"} {
+			t.Run(map[bool]string{false: "existing/", true: "concurrent/"}[concurrent]+kind, func(t *testing.T) {
+				f, r := newCreationFixture(t)
+				user := eligibleInitialOwner("colleague", types.UserStatusTypeConfirmed)
+				switch kind {
+				case "pending":
+					user.UserStatus = types.UserStatusTypeForceChangePassword
+				case "unverified":
+					user.UserAttributes[len(user.UserAttributes)-1].Value = aws.String("false")
+				case "missing-verification":
+					user.UserAttributes = user.UserAttributes[:len(user.UserAttributes)-1]
+				case "disabled":
+					user.Enabled = false
+				case "unconfirmed":
+					user.UserStatus = types.UserStatusTypeUnconfirmed
+				case "archived":
+					user.UserStatus = types.UserStatusTypeArchived
+				case "unknown-status":
+					user.UserStatus = ""
+				}
+				lookups := 0
+				f.client.adminGetUserFn = func(context.Context, *idp.AdminGetUserInput) (*idp.AdminGetUserOutput, error) {
+					lookups++
+					if concurrent && lookups == 1 {
+						return nil, &types.UserNotFoundException{}
+					}
+					return user, nil
+				}
+				a, err := f.svc.CreateAccountWithOwner(context.Background(), "creator", "creator@example.com", creationRequest())
+				if kind == "confirmed" || kind == "pending" {
+					if err != nil || a == nil || a.OwnerUserID != "colleague" || r.writes != 1 || a.OwnerInvitationPending != (kind == "pending") {
+						t.Fatalf("eligible owner rejected: account=%+v err=%v writes=%d", a, err, r.writes)
+					}
+				} else if !errors.Is(err, ErrInvitationUnavailable) || a != nil || r.writes != 0 {
+					t.Fatalf("ineligible owner gained account: account=%+v err=%v writes=%d", a, err, r.writes)
+				}
+				if len(f.client.createUserCalls) != 0 || len(f.repo.pendingShares) != 0 {
+					t.Fatal("existing identity eligibility check sent mail or queued membership")
+				}
+			})
+		}
+	}
+}
+
 func TestCreateAccount_PostInvitationReadFailuresPreservePartialDelivery(t *testing.T) {
 	for _, phase := range []string{"transaction-confirmation", "receipt-membership", "self-receipt"} {
 		t.Run(phase, func(t *testing.T) {
@@ -221,7 +275,9 @@ func TestCreateAccount_RetryReturnsReceiptWithoutRegrant(t *testing.T) {
 
 func TestCreateAccount_StaleProfileCannotReceiveOwner(t *testing.T) {
 	f, r := newCreationFixture(t)
-	f.client.adminGetUserFn = lookupInvitedIdentity("current-sub", types.UserStatusTypeConfirmed)
+	f.client.adminGetUserFn = func(context.Context, *idp.AdminGetUserInput) (*idp.AdminGetUserOutput, error) {
+		return eligibleInitialOwner("current-sub", types.UserStatusTypeConfirmed), nil
+	}
 	f.repo.users["new@example.com"] = &model.User{UserID: "old-sub", Email: "new@example.com"}
 	_, err := f.svc.CreateAccountWithOwner(context.Background(), "creator", "creator@example.com", creationRequest())
 	if !errors.Is(err, ErrInvitationUnavailable) || r.writes != 0 {

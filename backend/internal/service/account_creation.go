@@ -99,19 +99,24 @@ func (s *AccountService) resolveInitialOwner(ctx context.Context, requesterID, e
 		return "", false, invited, ErrInvitationUnavailable
 	}
 	if !invited {
-		if current == nil {
+		if current == nil || !current.Enabled ||
+			(current.UserStatus != ct.UserStatusTypeConfirmed &&
+				current.UserStatus != ct.UserStatusTypeForceChangePassword) {
 			return "", false, false, ErrInvitationUnavailable
 		}
 		actualEmail := ""
+		verified := false
 		for _, attr := range current.UserAttributes {
 			switch aws.ToString(attr.Name) {
 			case "sub":
 				sub = aws.ToString(attr.Value)
 			case "email":
 				actualEmail = strings.ToLower(strings.TrimSpace(aws.ToString(attr.Value)))
+			case "email_verified":
+				verified = aws.ToString(attr.Value) == "true"
 			}
 		}
-		if actualEmail != email {
+		if actualEmail != email || !verified {
 			return "", false, false, ErrInvitationUnavailable
 		}
 		pending = current.UserStatus == ct.UserStatusTypeForceChangePassword
