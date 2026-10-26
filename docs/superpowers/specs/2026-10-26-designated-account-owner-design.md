@@ -1,7 +1,7 @@
 # Design: Create an Account for another Owner
 
 - Date: 2026-10-26.
-- Status: Proposed historical design record; awaiting design approval.
+- Status: Historical design record; approved with creator-membership checkbox.
 
 ## Intent
 
@@ -23,14 +23,20 @@ the existing colleague picker or entered by email. The form clearly identifies
 the selected Owner and explains that a missing login account will be created
 and an invitation email requested.
 
-When another Owner is selected, the creator remains a regular AM member.
-This is the proposed default, not yet a confirmed user preference. Existing
-Account roles do not distinguish read-only and editing members; this feature
-does not introduce a new permission tier.
+When another Owner is selected, show a "Keep me as a regular member (AM)"
+checkbox. The user explicitly requested both checked and unchecked paths.
+Default it to unchecked as a builder choice: creation alone should not retain
+Account access. Checked creates an AM membership; unchecked creates no creator
+membership. Existing Account roles do not distinguish read-only and editing
+members; separate meeting/document shares remain independent of membership.
 
 Account creation returns the actual Owner and both initial memberships. The
 frontend must not label the creator as Owner. Optional additional members are
-added through the existing self-service member flow after creation.
+added through the existing self-service member flow only when the creator joins
+or is the Owner. Hide that picker and clear its selections when the creator opts
+out. In the opt-out path, remain on the Accounts list and show the creation
+receipt; do not navigate into an Account that the creator cannot read. Retain
+only that own-operation receipt, not access to later Account data.
 
 Report separately whether the Account was created, whether an invitation email
 was requested, and whether additional member operations failed. Ordinary retries
@@ -41,8 +47,10 @@ not been confirmed; preserve the creation request for a safe retry.
 
 An authenticated member can explicitly resend the current Owner's invitation
 from Account detail when the Owner is still in FORCE_CHANGE_PASSWORD. The
-operation cannot assign ownership, choose another recipient, or reset a
-confirmed user's password.
+recorded creator may recover that same initial invitation from the creation
+receipt for 30 days, even without membership. This narrow delivery capability
+does not grant Account reads, assign ownership, choose another recipient, or
+reset a confirmed user's password.
 
 ## Ownership and identity
 
@@ -78,8 +86,8 @@ invitations can be explicitly resent for the same current Owner identity.
 
 ## Atomic creation and hierarchy
 
-Create Account META, the initial Owner membership and, when distinct, the
-creator's AM membership in one conditional DynamoDB transaction. Set
+Create Account META, the initial Owner membership and, when distinct and the
+checkbox is checked, the creator's AM membership in one conditional DynamoDB transaction. Set
 OwnerUserID to the selected identity, and apply existing summary-privacy
 membership stamping to both rows. There must be exactly one initial Owner;
 creation must not leave an ownerless Account or a creator with accidental
@@ -107,7 +115,10 @@ or input returns a conflict before identity provisioning or mail.
 
 After a conditional or ambiguous transaction response, re-read the same
 Account ID and confirm its creator, input fingerprint and both expected
-memberships before reporting success. An unresolved outcome remains explicit;
+memberships before reporting a previously ambiguous creation as success. A
+later removed creator must never be re-added by replaying creation; return only
+the original caller's creation receipt, with current creator-access status.
+An unresolved outcome remains explicit;
 a retry does not allocate a different Account ID or silently create duplicates.
 Legacy callers that omit a request ID keep the existing generated-ID behavior.
 
@@ -117,7 +128,8 @@ sizes bounded. Field-specific limits and service result types are builder
 choices within this total limit and the existing API conventions.
 
 Explicit Owner-invitation resend requires verified requester email and current
-membership. Resolve the target from the canonical Account and Owner member;
+membership, or exact recorded creator identity within 30 days of creation.
+Resolve the target from the canonical Account and Owner member;
 require the member's owner role and matching OwnerUserID, email and current
 Cognito sub. Use the existing allowlist, rate counter and FORCE_CHANGE_PASSWORD
 checks. Do not accept a caller-selected destination, role or user ID.
@@ -125,13 +137,14 @@ checks. Do not accept a caller-selected destination, role or user ID.
 ## Evidence and delivery
 
 Tests must cover self-owner compatibility, an existing designated Owner, a
-newly invited Owner, one atomic initial-membership transaction, creator denial
+newly invited Owner, checked/unchecked atomic initial-membership transactions, creator denial
 for Owner-only actions, no general owner promotion, identity mismatch and
 same-email replacement, verified-email/domain/rate-limit failures, parent
 authorization before mail and concurrent membership loss, duplicate and
 ambiguous creation retries, partial delivery failure, and safe explicit resend.
 Frontend tests must execute the creation and detail behavior, including the
-actual Owner shown, retained request ID, partial outcomes and stale navigation.
+checkbox, actual Owner shown, opt-out receipt without forbidden navigation or
+member-add requests, retained request ID, partial outcomes and stale navigation.
 
 Document the narrow initial-ownership exception in a new ADR and supersede
 only the relevant creator-only assertions in ADR-015/034/054 and generated
@@ -158,11 +171,10 @@ are outside its scope.
 
 Keep Next.js/React, Go services and the existing DynamoDB/Cognito integrations.
 Endpoint naming, internal helper/result types and form styling are builder
-choices. The creator's proposed AM membership is the only remaining user
-preference; adjust the design if the user chooses a different membership
-policy before implementation.
+choices. The user resolved creator membership with an explicit checkbox.
 
 ## Builder check
 
-An independent read-only builder check found only the creator-membership
-preference above unresolved. No other important planning questions remained.
+An independent read-only builder check found only creator membership unresolved.
+The user subsequently specified the checkbox. No other important planning
+questions remained.
