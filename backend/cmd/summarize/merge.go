@@ -86,6 +86,7 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 	var qualities []*model.TranscriptQuality
 	var objects []model.SummaryObject
 	var corrections []model.TranscriptCorrection
+	glossaryApplied := false
 
 	for _, part := range parts {
 		parsed, parseErr := downloadAndParseTranscript(ctx, bucket, part.key)
@@ -145,7 +146,9 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 			log.Printf("Part %d: no usable duration source; using 0 (may cause timestamp drift)", part.index)
 		}
 
-		// Each part's corrections index its own segments.
+		// Each part's corrections index its own segments; nothing below
+		// drops or reorders them, so the part's offset is len(allSegments).
+		glossaryApplied = glossaryApplied || parsed.GlossaryApplied
 		for _, correction := range parsed.Corrections {
 			correction.Segment += len(allSegments)
 			corrections = append(corrections, correction)
@@ -173,7 +176,7 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 		len(parts), meetingID, len(mergedText), len(allSegments), cumulativeOffset)
 
 	return &parsedTranscript{Text: mergedText, Segments: allSegments, Duration: cumulativeOffset, Quality: mergeTranscriptQuality(qualities), Objects: objects,
-		Corrections: corrections, GlossaryApplied: len(glossary) > 0}, nil
+		Corrections: corrections, GlossaryApplied: glossaryApplied}, nil
 }
 
 // buildTranscriptText reassembles transcript body text from segments, using

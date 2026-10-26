@@ -63,11 +63,15 @@ func meetingGlossary(ctx context.Context, meeting *model.Meeting) []service.Glos
 	return terms
 }
 
-// logCorrectionOutcome reports a glossary run by count only; corrected
-// text never reaches logs.
-func logCorrectionOutcome(meetingID string, parsed *parsedTranscript) {
-	if parsed != nil && parsed.GlossaryApplied {
+// logCorrectionOutcome reports a glossary run by count only (corrected text
+// never reaches logs), or DISABLED when a glossary was loaded but the plain
+// path ran (no usable term, or no refinement needed).
+func logCorrectionOutcome(meetingID string, parsed *parsedTranscript, glossary []service.GlossaryTerm) {
+	switch {
+	case parsed != nil && parsed.GlossaryApplied:
 		log.Printf("transcript correction outcome=APPLIED meeting=%s corrections=%d", meetingID, len(parsed.Corrections))
+	case len(glossary) > 0:
+		log.Printf("transcript correction outcome=DISABLED meeting=%s reason=glossary_not_applied", meetingID)
 	}
 }
 
@@ -96,7 +100,8 @@ func refineParsedTranscript(ctx context.Context, parsed *parsedTranscript, gloss
 		// fabricated timestamps. The fixed failure category is in Quality.
 		return
 	}
-	parsed.Corrections, parsed.GlossaryApplied = corrections, len(glossary) > 0
+	// Non-nil corrections mean the glossary path actually ran.
+	parsed.Corrections, parsed.GlossaryApplied = corrections, corrections != nil
 	parsed.Text = text
 	parsed.Segments = make([]TranscriptSegmentOut, len(segments))
 	for i, segment := range segments {

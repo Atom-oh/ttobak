@@ -83,7 +83,9 @@ func promptSafeTerm(s string) bool {
 // glossary correction (L3): the model may replace clear mis-hearings of
 // glossary terms and lists each replacement, which Go verifies before
 // recording it (at most model.MaxTranscriptCorrections per meeting). An
-// empty glossary sends exactly the plain refinement requests.
+// empty glossary sends exactly the plain refinement requests and returns nil
+// corrections; a glossary run returns a non-nil slice, so callers can tell
+// which path ran.
 func (s *BedrockService) RefineTranscriptWithGlossary(ctx context.Context, segments []WhisperSegment, glossary []GlossaryTerm) (string, []RefinedSegment, *model.TranscriptQuality, []model.TranscriptCorrection, error) {
 	prepared := newRefineGlossary(glossary)
 	if prepared == nil {
@@ -167,24 +169,29 @@ func parseGlossaryRefinement(text string, input []WhisperSegment) ([]RefinedSegm
 // verify is the authority over the model's claimed corrections. A claim is
 // recorded only when From occurs in the original line it names, To is
 // exactly a glossary display form, and the refined segment covering that
-// line gained an occurrence of To. Anything else is dropped as a record.
+// line both lost an occurrence of From and gained one of To. Anything else
+// is dropped as a record. Segment in the result indexes refined.
 //
 // The model has already written its refined text, so a dropped claim can
 // leave its replacement behind. When From is a real original span but To is
 // not a glossary form, the replacement is reverted to From only if To occurs
 // exactly once in the refined segment and nowhere in the lines it covers
-// (so the span is located unambiguously and was introduced by the model);
-// otherwise, including when From never occurred, the model text is kept and
-// only the record is dropped. Segment in the result indexes refined.
-func (g *refineGlossary) verify(input []WhisperSegment, refined []RefinedSegment, counts []int, claimed []glossaryWireCorrection) []model.TranscriptCorrection {
+// (so the span is located unambiguously and was introduced by the model).
+//
+// Invented glossary terms never survive (R11): afterwards, every occurrence
+// of a glossary display form a refined segment gained over its source lines
+// must be backed by a kept record (each record backs as many occurrences as
+// its From lost). Otherwise invented is true and the caller re-runs the
+// chunk on the plain prompt.
+func (g *refineGlossary) verify(input []WhisperSegment, refined []RefinedSegment, counts []int, claimed []glossaryWireCorrection) (kept []model.TranscriptCorrection, invented bool) {
 	owner := make([]int, 0, len(input))
 	for out, n := range counts {
 		for k := 0; k < n; k++ {
 			owner = append(owner, out)
 		}
 	}
-	if len(owner) != len(input) || len(claimed) == 0 {
-		return nil
+	if len(owner) != len(input) {
+		return nil, true
 	}
 	covered := func(out int) string {
 		var sb strings.Builder
@@ -196,8 +203,8 @@ func (g *refineGlossary) verify(input []WhisperSegment, refined []RefinedSegment
 		}
 		return sb.String()
 	}
-	var kept []model.TranscriptCorrection
 	seen := map[model.TranscriptCorrection]bool{}
+	backed := map[int]map[string]int{} // refined index -> To -> occurrences
 	for _, claim := range claimed {
 		if claim.Segment == nil || *claim.Segment < 0 || *claim.Segment >= len(input) {
 			continue
@@ -211,17 +218,31 @@ func (g *refineGlossary) verify(input []WhisperSegment, refined []RefinedSegment
 		term, termOK := g.byDisplay[to]
 		original := covered(out)
 		switch {
-		case fromOK && termOK && strings.Count(refined[out].Text, to) > strings.Count(original, to):
+		case fromOK && termOK && strings.Count(refined[out].Text, to) > strings.Count(original, to) &&
+			strings.Count(refined[out].Text, from) < strings.Count(original, from):
 			record := model.TranscriptCorrection{From: from, To: to, TermKey: term.TermKey, Segment: out}
 			if !seen[record] {
 				seen[record] = true
 				kept = append(kept, record)
+				if backed[out] == nil {
+					backed[out] = map[string]int{}
+				}
+				backed[out][to] += strings.Count(original, from) - strings.Count(refined[out].Text, from)
 			}
 		case fromOK && !termOK && strings.Count(refined[out].Text, to) == 1 && !strings.Contains(original, to):
 			refined[out].Text = strings.Replace(refined[out].Text, to, from, 1)
 		}
 	}
-	return kept
+	for out := range refined {
+		original := covered(out)
+		for _, term := range g.terms {
+			gained := strings.Count(refined[out].Text, term.DisplayAs) - strings.Count(original, term.DisplayAs)
+			if gained > backed[out][term.DisplayAs] {
+				return nil, true
+			}
+		}
+	}
+	return kept, false
 }
 
 // rebaseCorrections shifts chunk-local Segment indexes by offset.
@@ -314,16 +335,19 @@ func splitSoundsLike(soundsLike string) []string {
 	return out
 }
 
-// TermCorrectionCounter records the distinct meetings in which one heard
-// form was corrected to one term (repository.DictionaryRepository).
-type TermCorrectionCounter interface {
+// TermCorrectionStore backs heardAs feedback (repository.DictionaryRepository):
+// a per-term counter of the distinct meetings in which one heard form was
+// corrected to the term, and an append that is not a user edit.
+type TermCorrectionStore interface {
 	RecordTermCorrection(ctx context.Context, pk, termKey, heardKey, meetingID string, expiresAt int64, member *repository.MembershipCheck) (int, error)
+	GetDictTerm(ctx context.Context, pk, termKey string) (*model.DictTerm, error)
+	AppendHeardAs(ctx context.Context, pk, termKey, phrase, now string, expectedVersion int64, member *repository.MembershipCheck) error
 }
 
-// SetCorrectionCounter enables heardAs feedback from transcript corrections;
+// SetCorrectionStore enables heardAs feedback from transcript corrections;
 // without it LearnFromCorrections does nothing.
-func (s *DictionaryService) SetCorrectionCounter(counter TermCorrectionCounter) {
-	s.correctionCounter = counter
+func (s *DictionaryService) SetCorrectionStore(store TermCorrectionStore) {
+	s.correctionStore = store
 }
 
 // correctionMinMeetings is how many distinct meetings must correct the same
@@ -333,12 +357,13 @@ const correctionMinMeetings = 2
 // LearnFromCorrections counts each (term, heard form) of one meeting's
 // corrections in the term's own partition and, once correctionMinMeetings
 // distinct meetings agree, appends the heard form to the term's heardAs
-// (an Account term under the owner's membership check). Common is counted
-// but never written automatically: it is news-only and visible to every
-// user (ruling R6). Failures are logged and never fail the caller. It
-// returns how many heardAs entries were added.
+// (an Account term under the owner's membership check). The append is not a
+// user edit, so automatic merges keep applying to the term. Common terms are
+// skipped entirely, with no counter row: Common is news-only and visible to
+// every user (rulings R6, R12). Failures are logged and never fail the
+// caller. It returns how many heardAs entries were added.
 func (s *DictionaryService) LearnFromCorrections(ctx context.Context, ownerID, accountID, meetingID string, glossary []GlossaryTerm, corrections []model.TranscriptCorrection) int {
-	if s.correctionCounter == nil || ownerID == "" || meetingID == "" || len(corrections) == 0 {
+	if s.correctionStore == nil || ownerID == "" || meetingID == "" || len(corrections) == 0 {
 		return 0
 	}
 	byKey := make(map[string]GlossaryTerm, len(glossary))
@@ -353,7 +378,7 @@ func (s *DictionaryService) LearnFromCorrections(ctx context.Context, ownerID, a
 	for _, correction := range corrections {
 		term, ok := byKey[correction.TermKey]
 		heardKey := NormalizeTermKey(correction.From)
-		if !ok || heardKey == "" || seen[term.Layer+"#"+term.TermKey+"#"+heardKey] {
+		if !ok || heardKey == "" || term.Layer == model.PrefixDictCommon || seen[term.Layer+"#"+term.TermKey+"#"+heardKey] {
 			continue
 		}
 		seen[term.Layer+"#"+term.TermKey+"#"+heardKey] = true
@@ -365,12 +390,12 @@ func (s *DictionaryService) LearnFromCorrections(ctx context.Context, ownerID, a
 			skipped++
 			continue
 		}
-		meetings, err := s.correctionCounter.RecordTermCorrection(ctx, term.Layer, term.TermKey, heardKey, meetingID, expiresAt, member)
+		meetings, err := s.correctionStore.RecordTermCorrection(ctx, term.Layer, term.TermKey, heardKey, meetingID, expiresAt, member)
 		if err != nil {
 			log.Printf("transcript correction feedback: counter write failed for user %s: %v", ownerID, err)
 			continue
 		}
-		if meetings < correctionMinMeetings || term.Layer == model.PrefixDictCommon {
+		if meetings < correctionMinMeetings {
 			continue
 		}
 		if s.appendHeardAs(ctx, term.Layer, term.TermKey, correction.From, heardKey, ownerID, member) {
@@ -384,11 +409,10 @@ func (s *DictionaryService) LearnFromCorrections(ctx context.Context, ownerID, a
 }
 
 // correctionMember authorizes feedback for one term partition: the owner's
-// own Personal layer, the meeting's Account while the owner is a member, or
-// Common (counter only).
+// own Personal layer, or the meeting's Account while the owner is a member.
 func (s *DictionaryService) correctionMember(ctx context.Context, pk, ownerID, accountID string) (*repository.MembershipCheck, error) {
 	switch {
-	case pk == model.PrefixUser+ownerID, pk == model.PrefixDictCommon:
+	case pk == model.PrefixUser+ownerID:
 		return nil, nil
 	case accountID != "" && pk == model.PrefixAccount+accountID:
 		if err := s.requireMember(ctx, accountID, ownerID); err != nil {
@@ -411,15 +435,15 @@ func knownHeardAs(heardAs []string, heardKey string) bool {
 // appendHeardAs adds from to an active term's heardAs under its version
 // guard, unless it is already there or the aliases would fail validation.
 func (s *DictionaryService) appendHeardAs(ctx context.Context, pk, termKey, from, heardKey, ownerID string, member *repository.MembershipCheck) bool {
-	row, err := s.repo.GetDictTerm(ctx, pk, termKey)
+	row, err := s.correctionStore.GetDictTerm(ctx, pk, termKey)
 	if err != nil || row == nil || row.State != model.TermStateActive || knownHeardAs(row.HeardAs, heardKey) {
 		return false
 	}
 	next, err := validateHeardAs(append(append([]string(nil), row.HeardAs...), from), NormalizeTermKey(termDisplay(row.DisplayAs, row.Phrase)))
-	if err != nil {
+	if err != nil || len(next) == 0 || NormalizeTermKey(next[len(next)-1]) != heardKey {
 		return false
 	}
-	if err := s.repo.UpdateDictTerm(ctx, pk, termKey, repository.DictTermChange{HeardAs: &next}, ownerID, s.stamp(), row.Version, member); err != nil {
+	if err := s.correctionStore.AppendHeardAs(ctx, pk, termKey, next[len(next)-1], s.stamp(), row.Version, member); err != nil {
 		log.Printf("transcript correction feedback: heardAs update failed for user %s: %v", ownerID, err)
 		return false
 	}

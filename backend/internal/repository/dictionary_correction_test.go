@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/ttobak/backend/internal/model"
@@ -70,5 +71,45 @@ func TestRecordTermCorrectionCountsDistinctMeetings(t *testing.T) {
 	}
 	if _, err := repo.RecordTermCorrection(ctx, "USER#u1", acctKey, "", "m1", 1800000000, nil); !errors.Is(err, ErrInvalidInput) || len(*calls) != 0 {
 		t.Fatalf("empty heard key: %v", err)
+	}
+}
+
+func TestAppendHeardAsIsNotAUserEdit(t *testing.T) {
+	ctx := context.Background()
+	now := "2026-10-26T09:00:00.000000Z"
+	repo, calls := dictWire(t, nil)
+	if err := repo.AppendHeardAs(ctx, "USER#u1", acctKey, "gay culture", now, 3, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(*calls) != 1 || (*calls)[0].op != "UpdateItem" {
+		t.Fatalf("one guarded update: %+v", *calls)
+	}
+	body := (*calls)[0].body
+	update := resolved(body, "UpdateExpression")
+	requireAll(t, "update", update, "list_append", "if_not_exists(heardAs", `{"L":[{"S":"gay culture"}]}`, `updatedAt = {"S":"`+now+`"}`, "version = version +")
+	for _, field := range []string{"userEditedAt", "updatedBy", "origin"} {
+		if strings.Contains(update, field) {
+			t.Fatalf("automatic append wrote %s: %s", field, update)
+		}
+	}
+	requireAll(t, "condition", resolved(body, "ConditionExpression"), `version = {"N":"3"}`, `state = {"S":"active"}`)
+
+	// A stale version is a term conflict.
+	repo, _ = dictWire(t, func(int, string, map[string]any) (int, string) { return 400, conditionalFailed })
+	if err := repo.AppendHeardAs(ctx, "USER#u1", acctKey, "gay culture", now, 3, nil); !errors.Is(err, ErrDictTermConflict) {
+		t.Fatalf("stale version: %v", err)
+	}
+
+	// Account: membership ConditionCheck in the same transaction.
+	repo, calls = dictWire(t, nil)
+	if err := repo.AppendHeardAs(ctx, "ACCOUNT#a1", acctKey, "gay culture", now, 3, &MembershipCheck{AccountID: "a1", UserID: "u1"}); err != nil {
+		t.Fatal(err)
+	}
+	if items := txItems(t, (*calls)[0]); len(items) != 2 || items[1]["ConditionCheck"] == nil {
+		t.Fatalf("account append must be membership-checked: %+v", items)
+	}
+	repo, calls = dictWire(t, nil)
+	if err := repo.AppendHeardAs(ctx, "ACCOUNT#a1", acctKey, "gay culture", now, 3, nil); !errors.Is(err, ErrInvalidInput) || len(*calls) != 0 {
+		t.Fatalf("unchecked account append: %v", err)
 	}
 }

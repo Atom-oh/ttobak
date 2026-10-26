@@ -265,3 +265,83 @@ func TestRefineParsedTranscriptStoresCorrections(t *testing.T) {
 		t.Fatalf("stored corrections = %+v", fields["transcriptCorrections"])
 	}
 }
+
+func TestUnusableGlossaryRunsPlainPathWithoutRecords(t *testing.T) {
+	installTranscriptFixture(t, retryHTTP(func(request *http.Request) (*http.Response, error) {
+		var input service.ClaudeRequest
+		if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(input.System, "Glossary") {
+			t.Fatal("an unusable glossary reached the prompt")
+		}
+		body, _ := json.Marshal(map[string]any{"stop_reason": "end_turn", "content": []map[string]string{{"type": "text",
+			"text": `[{"speaker":"spk_0","text":"we love gay culture","startTime":0,"endTime":2,"sourceIds":[0]}]`}}})
+		return transcriptFixtureResponse(200, string(body), nil), nil
+	}))
+	parsed := &parsedTranscript{Whisper: []service.WhisperSegment{{Start: 0, End: 2, Text: "we love gay culture", Speaker: "spk_0"}},
+		Quality: &model.TranscriptQuality{Refinement: "not_requested", SpeakerProvenance: "unknown"}}
+	// A term key-less entry is not prompt-usable, so the plain path runs.
+	glossary := []service.GlossaryTerm{{DisplayAs: "K-culture"}}
+	logs := captureSummarizeLog(t)
+	refineParsedTranscript(context.Background(), parsed, glossary)
+	logCorrectionOutcome("m1", parsed, glossary)
+	fields, err := transcriptUpdateFields(parsed, false)
+	if err != nil || parsed.GlossaryApplied {
+		t.Fatalf("plain run marked as glossary run: %v", err)
+	}
+	if _, ok := fields["transcriptCorrections"]; ok {
+		t.Fatal("a plain run wrote transcriptCorrections")
+	}
+	if !strings.Contains(logs.String(), "transcript correction outcome=DISABLED") || strings.Contains(logs.String(), "outcome=APPLIED") {
+		t.Fatalf("plain run must log DISABLED: %s", logs.String())
+	}
+}
+
+// Merge-path offsets: each part's correction indexes the merged segments.
+func TestMergedCorrectionsIndexMergedSegments(t *testing.T) {
+	installTranscriptFixture(t, retryHTTP(func(request *http.Request) (*http.Response, error) {
+		switch {
+		case request.URL.Query().Get("list-type") == "2":
+			return transcriptFixtureResponse(200, `<ListBucketResult><Contents><Key>transcripts/m_part_000.json</Key></Contents><Contents><Key>transcripts/m_part_001.json</Key></Contents></ListBucketResult>`, nil), nil
+		case request.Method == "GET":
+			index := 0
+			if strings.Contains(request.URL.Path, "_001") {
+				index = 1
+			}
+			body := fmt.Sprintf(`{"results":{"transcripts":[{"transcript":"raw"}]},"whisper_metadata":{"duration_seconds":10,"segments":[`+
+				`{"speaker":"spk_0","start":0,"end":2,"text":"part %d opening"},{"speaker":"spk_1","start":2,"end":4,"text":"part %d gay culture"}]}}`, index, index)
+			return transcriptFixtureResponse(200, body, http.Header{"Etag": {fmt.Sprintf(`"part-%d"`, index)}}), nil
+		case request.Method == "POST":
+			var input service.ClaudeRequest
+			if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+				t.Fatal(err)
+			}
+			index := 0
+			if strings.Contains(input.Messages[0].Content[0].Text, "part 1") {
+				index = 1
+			}
+			text := fmt.Sprintf(`{"segments":[{"speaker":"spk_0","text":"part %d opening","startTime":0,"endTime":2,"sourceIds":[0]},`+
+				`{"speaker":"spk_1","text":"part %d K-culture","startTime":2,"endTime":4,"sourceIds":[1]}],"corrections":[{"from":"gay culture","to":"K-culture","segment":1}]}`, index, index)
+			body, _ := json.Marshal(map[string]any{"stop_reason": "end_turn", "content": []map[string]string{{"type": "text", "text": text}}})
+			return transcriptFixtureResponse(200, string(body), nil), nil
+		default:
+			t.Fatal("unexpected fixture request")
+			return nil, nil
+		}
+	}))
+	glossary := []service.GlossaryTerm{{DisplayAs: "K-culture", TermKey: "k1", Layer: "USER#u1"}}
+	parsed, err := mergePartTranscripts(context.Background(), "bucket", "m", 2, glossary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !parsed.GlossaryApplied || len(parsed.Corrections) != 2 || len(parsed.Segments) != 4 {
+		t.Fatalf("merged corrections: %+v segments=%d", parsed.Corrections, len(parsed.Segments))
+	}
+	for part, correction := range parsed.Corrections {
+		segment := parsed.Segments[correction.Segment]
+		if correction.Segment != 2*part+1 || segment.Text != fmt.Sprintf("part %d K-culture", part) {
+			t.Fatalf("part %d correction points at %d (%q)", part, correction.Segment, segment.Text)
+		}
+	}
+}

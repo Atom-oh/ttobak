@@ -1101,7 +1101,8 @@ func (s *BedrockService) RefineTranscriptWithQuality(ctx context.Context, segmen
 }
 
 // refineTranscript is the shared refinement run; a nil glossary sends exactly
-// the plain refinement requests and returns no corrections.
+// the plain refinement requests and returns nil corrections, a glossary run
+// returns a non-nil (possibly empty) slice.
 func (s *BedrockService) refineTranscript(ctx context.Context, segments []WhisperSegment, glossary *refineGlossary) (string, []RefinedSegment, *model.TranscriptQuality, []model.TranscriptCorrection, error) {
 	originalCount := len(segments)
 	segments = normalizeRefinementInput(segments)
@@ -1124,6 +1125,10 @@ func (s *BedrockService) refineTranscript(ctx context.Context, segments []Whispe
 	// keeps its text.
 	if len(corrections) > model.MaxTranscriptCorrections {
 		corrections = corrections[:model.MaxTranscriptCorrections]
+	}
+	// Non-nil marks that the glossary path ran, even with no records.
+	if glossary != nil && corrections == nil {
+		corrections = []model.TranscriptCorrection{}
 	}
 
 	var sb strings.Builder
@@ -1530,7 +1535,14 @@ func (s *BedrockService) refineChunkWith(ctx context.Context, segments []Whisper
 	}
 
 	if glossary != nil {
-		corrections = glossary.verify(segments, refined, sourceCounts, claimed)
+		var invented bool
+		if corrections, invented = glossary.verify(segments, refined, sourceCounts, claimed); invented {
+			// A glossary term the post-check cannot account for must not
+			// survive (R11): redo this chunk on the plain prompt; a failure
+			// there takes the caller's raw fallback like any chunk error.
+			log.Printf("refinement glossary rerun chunk=%d total_chunks=%d", chunkIdx+1, totalChunks)
+			return s.refineChunkWith(ctx, segments, chunkIdx, totalChunks, prevTail, nil)
+		}
 	}
 	return refined, corrections, nil
 }

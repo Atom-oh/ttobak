@@ -88,3 +88,21 @@ func correctionMeetingCount(item map[string]types.AttributeValue) int {
 	}
 	return 0
 }
+
+// AppendHeardAs appends phrase to an active term's heardAs under its version
+// guard, as automatic feedback rather than a user edit: userEditedAt,
+// updatedBy and origin are left untouched, so later automatic merges still
+// apply to the term. An ACCOUNT# term is written in a transaction with the
+// membership ConditionCheck. The caller validates the resulting alias list.
+func (r *DictionaryRepository) AppendHeardAs(ctx context.Context, pk, termKey, phrase, now string, expectedVersion int64, member *MembershipCheck) error {
+	if pk == "" || termKey == "" || phrase == "" {
+		return ErrInvalidInput
+	}
+	heard := expression.Name("heardAs")
+	update := expression.Set(heard, expression.ListAppend(expression.IfNotExists(heard, expression.Value([]string{})), expression.Value([]string{phrase}))).
+		Set(expression.Name("updatedAt"), expression.Value(now)).
+		Set(expression.Name("version"), expression.Name("version").Plus(expression.Value(1)))
+	condition := expression.Name("version").Equal(expression.Value(expectedVersion)).
+		And(expression.Name("state").Equal(expression.Value(model.TermStateActive)))
+	return r.updateTerm(ctx, pk, termKey, update, condition, member)
+}

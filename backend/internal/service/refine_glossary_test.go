@@ -20,9 +20,21 @@ import (
 // request bodies it received.
 func glossaryModel(t *testing.T, reply string, bodies *[]string) *BedrockService {
 	t.Helper()
+	return glossaryModelBy(t, reply, reply, bodies)
+}
+
+// glossaryModelBy answers glossary-prompt calls with glossaryReply and
+// plain-prompt calls (including a re-run) with plainReply.
+func glossaryModelBy(t *testing.T, glossaryReply, plainReply string, bodies *[]string) *BedrockService {
+	t.Helper()
 	return summaryTestService(noteSourceHTTPClient(func(r *http.Request) (*http.Response, error) {
 		raw, _ := io.ReadAll(r.Body)
 		*bodies = append(*bodies, string(raw))
+		reply := plainReply
+		var request ClaudeRequest
+		if json.Unmarshal(raw, &request) == nil && strings.Contains(request.System, glossaryRefineRule) {
+			reply = glossaryReply
+		}
 		return indexHTTPResponse(200, refinementResponse(reply, "end_turn"), nil), nil
 	}))
 }
@@ -68,39 +80,68 @@ func TestRefineGlossaryFixesMishearing(t *testing.T) {
 }
 
 func TestRefineGlossaryNoSpanNoChange(t *testing.T) {
-	input := []WhisperSegment{{Start: 0, End: 2, Text: "we discussed the weather", Speaker: "spk_0"}}
+	weather := []WhisperSegment{{Start: 0, End: 2, Text: "we discussed the weather", Speaker: "spk_0"}}
+	love := []WhisperSegment{{Start: 0, End: 2, Text: "we love gay culture", Speaker: "spk_0"}}
 	segment := func(text string) string {
 		return fmt.Sprintf(`{"speaker":"spk_0","text":%q,"startTime":0,"endTime":2,"sourceIds":[0]}`, text)
 	}
+	object := func(text, corrections string) string {
+		return `{"segments":[` + segment(text) + `],"corrections":[` + corrections + `]}`
+	}
+	plainWeather, plainLove := "["+segment("we discussed the weather")+"]", "["+segment("we love gay culture")+"]"
 	tests := []struct {
-		name, reply, wantText string
+		name         string
+		input        []WhisperSegment
+		reply, plain string
+		rerun        bool
+		refinement   string
 	}{
 		// The model claims a fix for a span the original never had: the
-		// record is dropped and the text is exactly the model's text.
-		{"absent-from", `{"segments":[` + segment("we discussed the weather") + `],"corrections":[{"from":"gay culture","to":"K-culture","segment":0}]}`, "[spk_0]\nwe discussed the weather"},
+		// record is dropped and the unchanged model text stands.
+		{"absent-from", weather, object("we discussed the weather", `{"from":"gay culture","to":"K-culture","segment":0}`), plainWeather, false, "validated"},
 		// A replacement to a form that is not a glossary display form is
 		// reverted where it can be located once.
-		{"not-glossary", `{"segments":[` + segment("we discussed the Weather Inc") + `],"corrections":[{"from":"weather","to":"Weather Inc","segment":0}]}`, "[spk_0]\nwe discussed the weather"},
+		{"not-glossary", weather, object("we discussed the Weather Inc", `{"from":"weather","to":"Weather Inc","segment":0}`), plainWeather, false, "validated"},
 		// Claimed but never applied: no record, text untouched.
-		{"not-applied", `{"segments":[` + segment("we discussed the weather") + `],"corrections":[{"from":"weather","to":"K-culture","segment":0}]}`, "[spk_0]\nwe discussed the weather"},
+		{"not-applied", weather, object("we discussed the weather", `{"from":"weather","to":"K-culture","segment":0}`), plainWeather, false, "validated"},
 		// Out-of-range source IDs cannot be checked.
-		{"foreign-segment", `{"segments":[` + segment("we discussed the weather") + `],"corrections":[{"from":"weather","to":"K-culture","segment":7}]}`, "[spk_0]\nwe discussed the weather"},
+		{"foreign-segment", weather, object("we discussed the weather", `{"from":"weather","to":"K-culture","segment":7}`), plainWeather, false, "validated"},
 		// A bare array keeps the old contract: no corrections.
-		{"bare-array", `[` + segment("we discussed the weather") + `]`, "[spk_0]\nwe discussed the weather"},
+		{"bare-array", weather, plainWeather, plainWeather, false, "validated"},
+		// R11: an invented glossary term never survives, with or without a
+		// claim: the chunk is re-run on the plain prompt.
+		{"invented-with-claim", weather, object("we discussed K-culture", `{"from":"gay culture","to":"K-culture","segment":0}`), plainWeather, true, "validated"},
+		{"invented-unclaimed", weather, object("we discussed K-culture", ""), plainWeather, true, "validated"},
+		// A claimed From that was not actually replaced backs nothing.
+		{"from-not-replaced", love, object("we love K-culture", `{"from":"we","to":"K-culture","segment":0}`), plainLove, true, "validated"},
+		// A failed re-run takes the raw fallback.
+		{"rerun-fails", weather, object("we discussed K-culture", ""), "not json", true, "raw"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			var bodies []string
-			svc := glossaryModel(t, test.reply, &bodies)
-			text, _, quality, corrections, err := svc.RefineTranscriptWithGlossary(context.Background(), input, kCultureGlossary())
-			if err != nil || quality.Refinement != "validated" {
-				t.Fatalf("refinement failed: %v %+v", err, quality)
+			var bodies, plainBodies []string
+			text, _, quality, corrections, err := glossaryModelBy(t, test.reply, test.plain, &bodies).RefineTranscriptWithGlossary(context.Background(), test.input, kCultureGlossary())
+			if err != nil || quality.Refinement != test.refinement {
+				t.Fatalf("refinement: %v %+v", err, quality)
 			}
-			if text != test.wantText {
-				t.Fatalf("text = %q, want %q", text, test.wantText)
+			wantText, _, _, err := glossaryModel(t, test.plain, &plainBodies).RefineTranscriptWithQuality(context.Background(), test.input)
+			if err != nil {
+				t.Fatal(err)
 			}
-			if len(corrections) != 0 {
-				t.Fatalf("unverified correction kept: %+v", corrections)
+			if !test.rerun {
+				wantText = "[spk_0]\n" + test.input[0].Text
+			}
+			if text != wantText {
+				t.Fatalf("text = %q, want %q", text, wantText)
+			}
+			if len(corrections) != 0 || corrections == nil {
+				t.Fatalf("unverified correction kept (or glossary path not marked): %#v", corrections)
+			}
+			if wantCalls := map[bool]int{false: 1, true: 2}[test.rerun]; len(bodies) != wantCalls {
+				t.Fatalf("model calls = %d, want %d", len(bodies), wantCalls)
+			}
+			if test.rerun && (systemPromptOf(t, bodies[1]) != buildRefineSystemPrompt(true) || bodies[1] != plainBodies[0]) {
+				t.Fatal("the re-run must be exactly the plain refinement request")
 			}
 		})
 	}
@@ -216,14 +257,39 @@ func TestGlossaryScopedToMeetingAccount(t *testing.T) {
 	}
 }
 
-// memCorrectionCounter mirrors RecordTermCorrection: a set of meeting IDs
-// per counter row, capped, and an ACCOUNT# row only with a membership check.
-type memCorrectionCounter struct {
+// memCorrectionStore mirrors the repository's feedback writes: a capped set
+// of meeting IDs per counter row and a non-editing heardAs append over a
+// term store, both membership-checked on ACCOUNT#.
+type memCorrectionStore struct {
 	rows    map[string]map[string]bool
 	members map[string]bool
+	terms   interface {
+		GetDictTerm(context.Context, string, string) (*model.DictTerm, error)
+	}
+	put func(model.DictTerm)
 }
 
-func (c *memCorrectionCounter) RecordTermCorrection(_ context.Context, pk, termKey, heardKey, meetingID string, expiresAt int64, member *repository.MembershipCheck) (int, error) {
+func (c *memCorrectionStore) GetDictTerm(ctx context.Context, pk, key string) (*model.DictTerm, error) {
+	return c.terms.GetDictTerm(ctx, pk, key)
+}
+
+func (c *memCorrectionStore) AppendHeardAs(ctx context.Context, pk, key, phrase, now string, v int64, member *repository.MembershipCheck) error {
+	scope, accountID, _ := model.TermScopeOf(pk)
+	if scope == model.TermScopeAccount && (member == nil || member.AccountID != accountID || !c.members[accountID+"/"+member.UserID]) {
+		return repository.ErrNotAccountMember
+	}
+	row, _ := c.terms.GetDictTerm(ctx, pk, key)
+	if row == nil || row.Version != v || row.State != model.TermStateActive {
+		return conflict()
+	}
+	next := *row
+	next.HeardAs = append(append([]string(nil), row.HeardAs...), phrase)
+	next.UpdatedAt, next.Version = now, v+1
+	c.put(next)
+	return nil
+}
+
+func (c *memCorrectionStore) RecordTermCorrection(_ context.Context, pk, termKey, heardKey, meetingID string, expiresAt int64, member *repository.MembershipCheck) (int, error) {
 	scope, accountID, _ := model.TermScopeOf(pk)
 	if scope == model.TermScopeAccount && (member == nil || member.AccountID != accountID || !c.members[accountID+"/"+member.UserID]) {
 		return 0, repository.ErrNotAccountMember
@@ -248,8 +314,8 @@ func TestRepeatedCorrectionAddsHeardAs(t *testing.T) {
 	common := store.seed(model.PrefixDictCommon, "GammaWave")
 	store.members["a1/u1"] = true
 	svc := newLayerService(store)
-	counter := &memCorrectionCounter{rows: map[string]map[string]bool{}, members: store.members}
-	svc.SetCorrectionCounter(counter)
+	counter := &memCorrectionStore{rows: map[string]map[string]bool{}, members: store.members, terms: store, put: store.put}
+	svc.SetCorrectionStore(counter)
 	ctx := context.Background()
 
 	glossary, err := svc.GlossaryForMeeting(ctx, "u1", "a1")
@@ -279,12 +345,18 @@ func TestRepeatedCorrectionAddsHeardAs(t *testing.T) {
 	if got := heard(personal.PK, personal.TermKey); !reflect.DeepEqual(got, []string{"Alpha Great"}) {
 		t.Fatalf("personal heardAs = %v", got)
 	}
-	// Common is never written automatically (R6); the counter still counts.
+	// Common is never written automatically and gets no counter row (R6, R12).
 	if got := heard(common.PK, common.TermKey); len(got) != 0 {
 		t.Fatalf("common heardAs written: %v", got)
 	}
-	if n := len(counter.rows[common.PK+"|"+common.TermKey+"|"+NormalizeTermKey("Gamma Wade")]); n != 2 {
-		t.Fatalf("common counter = %d", n)
+	for key := range counter.rows {
+		if strings.HasPrefix(key, model.PrefixDictCommon+"|") {
+			t.Fatalf("common counter row written: %s", key)
+		}
+	}
+	// The append is not a user edit.
+	if row, _ := store.row(account.PK, account.TermKey); row.UserEditedAt != "" || row.UpdatedBy != "" || row.Origin != model.TermOriginAuto {
+		t.Fatalf("automatic heardAs marked the term edited: %+v", row)
 	}
 
 	// Idempotent: a third meeting adds nothing new.
@@ -302,5 +374,53 @@ func TestRepeatedCorrectionAddsHeardAs(t *testing.T) {
 	svc.LearnFromCorrections(ctx, "u1", "a1", "m5", stale, lost)
 	if got := heard(other.PK, other.TermKey); len(got) != 0 {
 		t.Fatalf("non-member wrote account heardAs: %v", got)
+	}
+}
+
+// memMergeCorrections adapts the merger's single-partition store for feedback.
+type memMergeCorrections struct {
+	*memDictStore
+	rows map[string]map[string]bool
+}
+
+func (m *memMergeCorrections) RecordTermCorrection(_ context.Context, pk, termKey, heardKey, meetingID string, _ int64, _ *repository.MembershipCheck) (int, error) {
+	key := pk + "|" + termKey + "|" + heardKey
+	if m.rows[key] == nil {
+		m.rows[key] = map[string]bool{}
+	}
+	m.rows[key][meetingID] = true
+	return len(m.rows[key]), nil
+}
+
+func (m *memMergeCorrections) AppendHeardAs(_ context.Context, _, key, phrase, now string, v int64, _ *repository.MembershipCheck) error {
+	row, ok := m.terms[model.DictTermSK(key)]
+	if !ok || row.Version != v || row.State != model.TermStateActive {
+		return memConflict()
+	}
+	row.HeardAs, row.UpdatedAt, row.Version = append(append([]string(nil), row.HeardAs...), phrase), now, v+1
+	m.terms[row.SK] = row
+	return nil
+}
+
+func TestLearnedHeardAsKeepsAutomaticMerges(t *testing.T) {
+	store := newMemDictStore()
+	store.seed(model.DictTerm{DisplayAs: "AlphaGrid", Origin: model.TermOriginAuto, State: model.TermStateActive, Hits: 1})
+	svc := newTestDictService(newFakeDictStore(), nil)
+	svc.SetCorrectionStore(&memMergeCorrections{memDictStore: store, rows: map[string]map[string]bool{}})
+	key := TermKey("AlphaGrid")
+	glossary := []GlossaryTerm{{DisplayAs: "AlphaGrid", TermKey: key, Layer: "USER#owner"}}
+	fix := []model.TranscriptCorrection{{From: "Alpha Great", To: "AlphaGrid", TermKey: key}}
+	svc.LearnFromCorrections(context.Background(), "owner", "", "m1", glossary, fix)
+	if added := svc.LearnFromCorrections(context.Background(), "owner", "", "m2", glossary, fix); added != 1 {
+		t.Fatalf("added = %d", added)
+	}
+	row, _ := store.term("AlphaGrid")
+	if row.UserEditedAt != "" || !reflect.DeepEqual(row.HeardAs, []string{"Alpha Great"}) {
+		t.Fatalf("append: %+v", row)
+	}
+	res := mustMerge(t, newTestMerger(store), ref("C"), cand("AlphaGrid"))
+	row, _ = store.term("AlphaGrid")
+	if res.Counters.Merged != 1 || row.Hits != 2 || res.Counters.SkippedManual != 0 {
+		t.Fatalf("a later automatic merge must still apply: %+v %+v", res.Counters, row)
 	}
 }

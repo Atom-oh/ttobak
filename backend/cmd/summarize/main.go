@@ -99,7 +99,7 @@ func init() {
 	dictService.SetAccountOrder(service.AccountRecencyOrder(repo))
 	// Silent transcript correction (TRANSCRIPT_CORRECTION_MODE): the meeting
 	// glossary for refinement, and heardAs feedback from repeated fixes.
-	dictService.SetCorrectionCounter(dictionaryRepo)
+	dictService.SetCorrectionStore(dictionaryRepo)
 	loadMeetingGlossary = dictService.GlossaryForMeeting
 	learnFromCorrections = func(ctx context.Context, meeting *model.Meeting, glossary []service.GlossaryTerm, corrections []model.TranscriptCorrection) {
 		dictService.LearnFromCorrections(ctx, meeting.UserID, meeting.AccountID, meeting.MeetingID, glossary, corrections)
@@ -394,7 +394,7 @@ func handleSingleTranscript(ctx context.Context, bucket, key string, eventETags 
 	}
 	glossary := meetingGlossary(ctx, meeting)
 	refineParsedTranscript(ctx, parsed, glossary)
-	logCorrectionOutcome(meetingID, parsed)
+	logCorrectionOutcome(meetingID, parsed, glossary)
 	segments, whisperSegments, audioDuration := parsed.Segments, parsed.Whisper, parsed.Duration
 
 	// Same fallback chain as the multi-part merge path (merge.go): the raw
@@ -569,7 +569,7 @@ func handleAllPartsTranscribed(ctx context.Context, detail *model.AllPartsTransc
 	if err != nil {
 		return errors.Join(err, failTranscriptSnapshot(ctx, snapshot))
 	}
-	logCorrectionOutcome(meetingID, parsed)
+	logCorrectionOutcome(meetingID, parsed, glossary)
 	if handled, err := handleNoSpeech(ctx, snapshot, parsed); handled {
 		return err
 	}

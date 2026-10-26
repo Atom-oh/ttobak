@@ -62,9 +62,9 @@ type DictionaryService struct {
 	// accountOrder lists the user's Account IDs in recency order for the
 	// vocabulary plan; nil plans no Account layer.
 	accountOrder func(ctx context.Context, userID string) ([]string, error)
-	// correctionCounter counts transcript corrections for heardAs feedback;
+	// correctionStore backs heardAs feedback from transcript corrections;
 	// nil disables the feedback.
-	correctionCounter TermCorrectionCounter
+	correctionStore TermCorrectionStore
 }
 
 // NewDictionaryService creates a new dictionary service
