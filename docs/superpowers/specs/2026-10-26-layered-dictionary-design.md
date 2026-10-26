@@ -66,7 +66,7 @@ Anti-goals
 
 | Layer | Partition | Written by | Read by |
 |---|---|---|---|
-| Common | `DICT#COMMON` | news extraction job; admins | everyone |
+| Common | `DICT#COMMON` | news extraction job; any signed-in user | everyone |
 | Account | `ACCOUNT#{id}` | KB/research/meeting extraction for that Account; members (manual) | members of the Account |
 | Personal | `USER#{id}` | as today | the user |
 
@@ -75,6 +75,10 @@ tombstones, `userEditedAt`). New field `sources` (bounded list of
 `{kind: meeting|kb|research|news, ref, at}`) replaces meeting-only
 observations, so every term shows where it came from. Caps per layer:
 Common 300 auto, Account 300 auto + 500 manual, Personal unchanged.
+
+Because every user may edit and delete Common terms (L2), each Common write
+keeps `updatedBy`/`updatedAt`, deletes stay tombstones, and the last 20 changes
+per term are kept in an audit list so a bad edit can be traced and restored.
 
 Writes to `ACCOUNT#` require membership (ConditionCheck on the membership
 item), as ADR-008 anticipated. Automatic writes into an Account come only from
@@ -88,7 +92,7 @@ merge rules; only the input text and target layer differ.
 | Source | Trigger | Input | Target |
 |---|---|---|---|
 | Meeting (today) | summary done | notes + transcript | Personal; also Account when `accountId` set |
-| KB document | KB ingestion success | extracted text (first N KB) | Account when the document is linked to an Account, else Personal of the owner |
+| KB document | KB ingestion success | extracted text (first N KB) | the Account chosen at upload (L4), else Personal of the owner |
 | Deep research | research completed | final report | each Account in `accountIds`, else Personal of the owner |
 | News | daily after crawl | titles + summaries of the day's documents | Common, only terms seen in ≥ 2 documents or ≥ 2 days |
 
@@ -117,8 +121,9 @@ correction step below is scoped to the meeting's own Account.
 `RefineTranscript` receives a glossary: the meeting's Account terms + Personal
 terms + Common terms with their `heardAs` aliases. The prompt asks it to fix
 only clear mis-hearings of glossary terms (sound-alike, in context), never to
-paraphrase. Each fix is recorded (`from`, `to`, position) and shown in the
-transcript view as a highlighted correction that can be reverted. Repeated
+paraphrase. Fixes are applied silently (L3): the transcript shows the corrected
+text with no highlight. Each fix is still recorded on the meeting (`from`, `to`,
+position, term) for audit and debugging, not shown in the UI. Repeated
 fixes of the same `from` add it to that term's `heardAs`, which also feeds
 Transcribe as an alias.
 
@@ -131,8 +136,12 @@ used for that Account's meetings.
 Custom Dictionary (Knowledge menu) gets layer tabs — Personal / Account
 (selector of the user's Accounts) / Common — with source badges (meeting, KB,
 research, news), the "auto/suggested" filters that exist today, and promote /
-demote between Personal and Account for members. Common is read-only except
-for admins.
+demote between Personal and Account for members. Common is editable by every
+signed-in user (L2), with its change history visible per term.
+
+KB upload asks which Account the document belongs to (L4): a picker of the
+user's Accounts plus "none (personal)"; the choice is stored on the KB object
+and decides the target layer.
 
 ### 4.6 Observability
 
@@ -151,13 +160,11 @@ days while its trigger ran.
 
 Each step behind its own flag, logged when off.
 
-## 6. Decisions needed
+## 6. Decisions (owner, 2026-10-26)
 
-- **L1** Account terms from meetings: automatic, or "suggested" until a member
-  approves? (Proposal: automatic when the meeting owner is a member and the
-  meeting is not tainted; suggested otherwise.)
-- **L2** Common layer admins: who can edit and delete Common terms?
-- **L3** Correction step visibility: show corrections inline with revert
-  (proposal), or apply silently?
-- **L4** KB documents not linked to any Account: Personal only (proposal), or
-  ask at upload time?
+- **L1** Account terms from meetings are **activated automatically** (still
+  suggested-only for tainted meetings, as for Personal today).
+- **L2** **Every signed-in user** can edit and delete Common terms (audit list
+  and tombstones above).
+- **L3** Corrections are **applied silently**; records kept on the meeting only.
+- **L4** KB upload **asks for the Account** (or none = Personal).
