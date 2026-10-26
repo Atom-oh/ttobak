@@ -50,6 +50,9 @@ type MembershipCheck struct {
 // account partition with a nil or mismatching member is ErrInvalidInput.
 func (r *DictionaryRepository) memberCheck(pk string, member *MembershipCheck) (*types.TransactWriteItem, error) {
 	scope, accountID, _ := model.TermScopeOf(pk)
+	if strings.HasPrefix(pk, model.PrefixAccount) && scope != model.TermScopeAccount {
+		return nil, fmt.Errorf("%w: malformed account partition", ErrInvalidInput)
+	}
 	if scope != model.TermScopeAccount {
 		return nil, nil
 	}
@@ -392,6 +395,9 @@ func (r *DictionaryRepository) MarkDictionaryMigrated(ctx context.Context, userI
 // in one transaction with the legacy blob ConditionCheck. Migration uses it to
 // bring earlier copies back in line with the observed blob.
 func (r *DictionaryRepository) ReplaceLegacyMigratedTerm(ctx context.Context, guard LegacyBlobGuard, pk, termKey string, expectedVersion int64, next *model.DictTerm) error {
+	if strings.HasPrefix(pk, model.PrefixAccount) || (next != nil && strings.HasPrefix(next.PK, model.PrefixAccount)) {
+		return fmt.Errorf("%w: legacy migration is personal-only", ErrInvalidInput)
+	}
 	if pk != model.PrefixUser+guard.UserID {
 		return fmt.Errorf("invalid legacy term replacement")
 	}
@@ -520,6 +526,9 @@ func (r *DictionaryRepository) PutDictTermsIfAbsent(ctx context.Context, guard L
 		return 0, err
 	}
 	for i := range terms {
+		if strings.HasPrefix(terms[i].PK, model.PrefixAccount) {
+			return 0, fmt.Errorf("%w: legacy migration is personal-only", ErrInvalidInput)
+		}
 		if terms[i].PK != model.PrefixUser+guard.UserID {
 			return 0, fmt.Errorf("invalid legacy term create")
 		}
@@ -806,7 +815,7 @@ func (r *DictionaryRepository) TombstoneDictTerm(ctx context.Context, pk, termKe
 
 // RestoreDictTerm replaces a tombstone with the supplied term content. The
 // stored version becomes expectedVersion+1.
-func (r *DictionaryRepository) RestoreDictTerm(ctx context.Context, term *model.DictTerm, expectedVersion int64) error {
+func (r *DictionaryRepository) RestoreDictTerm(ctx context.Context, term *model.DictTerm, expectedVersion int64, member *MembershipCheck) error {
 	if term == nil || term.State == model.TermStateDeleted {
 		return fmt.Errorf("invalid dictionary term restore")
 	}
@@ -823,12 +832,32 @@ func (r *DictionaryRepository) RestoreDictTerm(ctx context.Context, term *model.
 	if err != nil {
 		return err
 	}
-	_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
+	put := types.TransactWriteItem{Put: &types.Put{
 		TableName: aws.String(r.tableName), Item: av,
 		ConditionExpression: expr.Condition(), ExpressionAttributeNames: expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
+	}}
+	items, memberIdx, err := r.withMemberCheck([]types.TransactWriteItem{put}, term.PK, member)
+	if err != nil {
+		return err
+	}
+	if memberIdx >= 0 {
+		return r.transactChecked(ctx, items, memberIdx)
+	}
+	_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: put.Put.TableName, Item: put.Put.Item,
+		ConditionExpression: put.Put.ConditionExpression, ExpressionAttributeNames: put.Put.ExpressionAttributeNames,
+		ExpressionAttributeValues: put.Put.ExpressionAttributeValues,
 	})
 	return dictSingleError(err, ErrDictTermConflict)
+}
+
+// transactChecked runs a one-write transaction plus its membership check.
+func (r *DictionaryRepository) transactChecked(ctx context.Context, items []types.TransactWriteItem, memberIdx int) error {
+	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
+		return dictMemberTransactError(err, memberIdx, []error{ErrDictTermConflict})
+	}
+	return nil
 }
 
 // CreateDictTerm creates one term row; any existing row, including a
@@ -862,23 +891,35 @@ func (r *DictionaryRepository) CreateDictTerm(ctx context.Context, term *model.D
 // DeleteManualTerm hard-deletes an active manual term at the expected
 // version. Auto, suggested and tombstoned rows never match, so the legacy
 // whole-list PUT and legacy DELETE cannot remove or tombstone them.
-func (r *DictionaryRepository) DeleteManualTerm(ctx context.Context, pk, termKey string, expectedVersion int64) error {
-	return r.conditionalDelete(ctx, pk, termKey, expression.Name("version").Equal(expression.Value(expectedVersion)).
+func (r *DictionaryRepository) DeleteManualTerm(ctx context.Context, pk, termKey string, expectedVersion int64, member *MembershipCheck) error {
+	return r.conditionalDelete(ctx, pk, termKey, member, expression.Name("version").Equal(expression.Value(expectedVersion)).
 		And(expression.Name("origin").Equal(expression.Value(model.TermOriginManual))).
 		And(expression.Name("state").Equal(expression.Value(model.TermStateActive))))
 }
 
 // DeleteTombstone hard-deletes a tombstone at the expected version; used to
 // prune the oldest tombstones beyond the per-scope cap.
-func (r *DictionaryRepository) DeleteTombstone(ctx context.Context, pk, termKey string, expectedVersion int64) error {
-	return r.conditionalDelete(ctx, pk, termKey, expression.Name("version").Equal(expression.Value(expectedVersion)).
+func (r *DictionaryRepository) DeleteTombstone(ctx context.Context, pk, termKey string, expectedVersion int64, member *MembershipCheck) error {
+	return r.conditionalDelete(ctx, pk, termKey, member, expression.Name("version").Equal(expression.Value(expectedVersion)).
 		And(expression.Name("state").Equal(expression.Value(model.TermStateDeleted))))
 }
 
-func (r *DictionaryRepository) conditionalDelete(ctx context.Context, pk, termKey string, condition expression.ConditionBuilder) error {
+func (r *DictionaryRepository) conditionalDelete(ctx context.Context, pk, termKey string, member *MembershipCheck, condition expression.ConditionBuilder) error {
 	expr, err := expression.NewBuilder().WithCondition(condition).Build()
 	if err != nil {
 		return err
+	}
+	del := types.TransactWriteItem{Delete: &types.Delete{
+		TableName: aws.String(r.tableName), Key: dictKey(pk, model.DictTermSK(termKey)),
+		ConditionExpression: expr.Condition(), ExpressionAttributeNames: expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	}}
+	items, memberIdx, err := r.withMemberCheck([]types.TransactWriteItem{del}, pk, member)
+	if err != nil {
+		return err
+	}
+	if memberIdx >= 0 {
+		return r.transactChecked(ctx, items, memberIdx)
 	}
 	_, err = r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 		TableName: aws.String(r.tableName), Key: dictKey(pk, model.DictTermSK(termKey)),

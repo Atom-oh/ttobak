@@ -67,7 +67,7 @@ func (f *fakeDictStore) TombstoneDictTerm(_ context.Context, _ string, key, acto
 		State: model.TermStateDeleted, DeletedAt: now, UpdatedBy: actor, Version: v + 1, AddedAt: row.AddedAt}
 	return repository.DictWriteResult{CleanupErr: f.cleanupErr}, nil
 }
-func (f *fakeDictStore) RestoreDictTerm(_ context.Context, term *model.DictTerm, v int64) error {
+func (f *fakeDictStore) RestoreDictTerm(_ context.Context, term *model.DictTerm, v int64, _ *repository.MembershipCheck) error {
 	row, ok := f.terms[term.SK]
 	if !ok || row.State != model.TermStateDeleted || row.Version != v {
 		return cond()
@@ -77,7 +77,7 @@ func (f *fakeDictStore) RestoreDictTerm(_ context.Context, term *model.DictTerm,
 	f.terms[term.SK] = next
 	return nil
 }
-func (f *fakeDictStore) DeleteManualTerm(_ context.Context, _ string, key string, v int64) error {
+func (f *fakeDictStore) DeleteManualTerm(_ context.Context, _ string, key string, v int64, _ *repository.MembershipCheck) error {
 	row, ok := f.terms[model.DictTermSK(key)]
 	if !ok || row.Version != v || row.Origin != model.TermOriginManual || row.State != model.TermStateActive {
 		return cond()
@@ -85,7 +85,7 @@ func (f *fakeDictStore) DeleteManualTerm(_ context.Context, _ string, key string
 	delete(f.terms, row.SK)
 	return nil
 }
-func (f *fakeDictStore) DeleteTombstone(_ context.Context, _ string, key string, v int64) error {
+func (f *fakeDictStore) DeleteTombstone(_ context.Context, _ string, key string, v int64, _ *repository.MembershipCheck) error {
 	row, ok := f.terms[model.DictTermSK(key)]
 	if !ok || row.Version != v || row.State != model.TermStateDeleted {
 		return cond()

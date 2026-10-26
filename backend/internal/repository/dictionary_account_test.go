@@ -54,6 +54,17 @@ func acctWrites() []acctWrite {
 			_, err := r.TombstoneDictTerm(ctx, pk, acctKey, "u1", "now", 1, m)
 			return err
 		}, false},
+		{"RestoreDictTerm", func(r *DictionaryRepository, pk string, m *MembershipCheck) error {
+			term, _ := acctTerm(pk)
+			term.Origin = model.TermOriginManual
+			return r.RestoreDictTerm(ctx, term, 2, m)
+		}, false},
+		{"DeleteManualTerm", func(r *DictionaryRepository, pk string, m *MembershipCheck) error {
+			return r.DeleteManualTerm(ctx, pk, acctKey, 2, m)
+		}, false},
+		{"DeleteTombstone", func(r *DictionaryRepository, pk string, m *MembershipCheck) error {
+			return r.DeleteTombstone(ctx, pk, acctKey, 2, m)
+		}, false},
 	}
 }
 
@@ -162,5 +173,41 @@ func TestPersonalAndCommonWritesNeedNoMember(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestLegacyMigrationWritesRejectAccountScope(t *testing.T) {
+	ctx := context.Background()
+	guard := LegacyBlobGuard{UserID: "u1"}
+	term, _ := acctTerm("ACCOUNT#a1")
+	term.LegacyMigrated = true
+	mixed, _ := acctTerm("USER#u1")
+	repo, calls := dictWire(t, nil)
+	if _, err := repo.PutDictTermsIfAbsent(ctx, guard, []model.DictTerm{*mixed, *term}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("PutDictTermsIfAbsent: want ErrInvalidInput, got %v", err)
+	}
+	if err := repo.ReplaceLegacyMigratedTerm(ctx, guard, "ACCOUNT#a1", acctKey, 1, term); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("ReplaceLegacyMigratedTerm (replace): want ErrInvalidInput, got %v", err)
+	}
+	if err := repo.ReplaceLegacyMigratedTerm(ctx, guard, "ACCOUNT#a1", acctKey, 1, nil); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("ReplaceLegacyMigratedTerm (delete): want ErrInvalidInput, got %v", err)
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("nothing may be written: %+v", *calls)
+	}
+}
+
+func TestMalformedAccountPartitionFailsClosed(t *testing.T) {
+	for _, w := range acctWrites() {
+		t.Run(w.name, func(t *testing.T) {
+			repo, calls := dictWire(t, nil)
+			err := w.run(repo, "ACCOUNT#", &MembershipCheck{AccountID: "", UserID: "u1"})
+			if !errors.Is(err, ErrInvalidInput) {
+				t.Fatalf("want ErrInvalidInput, got %v", err)
+			}
+			if len(*calls) != 0 {
+				t.Fatalf("nothing may be written: %+v", *calls)
+			}
+		})
 	}
 }

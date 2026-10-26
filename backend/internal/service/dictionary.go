@@ -35,9 +35,9 @@ type DictionaryStore interface {
 	CreateDictTerm(ctx context.Context, term *model.DictTerm, member *repository.MembershipCheck) error
 	UpdateDictTerm(ctx context.Context, pk, termKey string, change repository.DictTermChange, actor, now string, expectedVersion int64, member *repository.MembershipCheck) error
 	TombstoneDictTerm(ctx context.Context, pk, termKey, actor, now string, expectedVersion int64, member *repository.MembershipCheck) (repository.DictWriteResult, error)
-	RestoreDictTerm(ctx context.Context, term *model.DictTerm, expectedVersion int64) error
-	DeleteManualTerm(ctx context.Context, pk, termKey string, expectedVersion int64) error
-	DeleteTombstone(ctx context.Context, pk, termKey string, expectedVersion int64) error
+	RestoreDictTerm(ctx context.Context, term *model.DictTerm, expectedVersion int64, member *repository.MembershipCheck) error
+	DeleteManualTerm(ctx context.Context, pk, termKey string, expectedVersion int64, member *repository.MembershipCheck) error
+	DeleteTombstone(ctx context.Context, pk, termKey string, expectedVersion int64, member *repository.MembershipCheck) error
 }
 
 // TranscribeVocabularyAPI is the subset of the Transcribe client used here.
