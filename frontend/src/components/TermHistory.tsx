@@ -11,7 +11,7 @@ const summary = (t?: DictTermItem) => (t ? [t.displayAs, t.heardAs.length ? `(${
 
 interface Props {
   layer: DictionaryLayer;
-  term: DictTermItem;
+  term: Pick<DictTermItem, 'termId' | 'displayAs'>;
   onClose: () => void;
   /** Called after a successful restore so the list can reload. */
   onRestored: () => void;
@@ -36,6 +36,7 @@ export function TermHistory({ layer, term, onClose, onRestored }: Props) {
 
   const restore = async (entry: TermLogEntry) => {
     if (restoring) return;
+    if (!window.confirm(`'${term.displayAs}' 용어를 이 변경 이전 상태로 복원할까요?`)) return;
     setRestoring(entry.logId);
     setError(null);
     try {

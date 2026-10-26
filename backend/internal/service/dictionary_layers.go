@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 
 	"github.com/ttobak/backend/internal/model"
@@ -109,6 +110,42 @@ func (s *DictionaryService) ListLayer(ctx context.Context, userID, layer string)
 		return nil, fmt.Errorf("failed to get dictionary terms: %w", err)
 	}
 	return termViews(dict, rows), nil
+}
+
+// ListDeletedCommon lists Common tombstones so a deleted term can be found
+// and restored. Each carries the display fields of the term as it was before
+// its latest audited change (not the cleared tombstone) plus the deletion's
+// time and actor. A tombstone with no audited earlier state cannot be
+// restored and is left out. Newest deletion first.
+func (s *DictionaryService) ListDeletedCommon(ctx context.Context) ([]model.DictDeletedTermView, error) {
+	rows, err := s.repo.ListDictTerms(ctx, model.PrefixDictCommon)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get dictionary terms: %w", err)
+	}
+	out := []model.DictDeletedTermView{}
+	for _, row := range rows {
+		if row.State != model.TermStateDeleted {
+			continue
+		}
+		logs, err := s.repo.ListDictTermLog(ctx, model.PrefixDictCommon, row.TermKey)
+		if err != nil {
+			return nil, err
+		}
+		// Rows are newest first; the latest one with a live earlier state wins.
+		for _, entry := range logs {
+			prev := snapshotView(entry.Before)
+			if prev == nil || prev.State == model.TermStateDeleted {
+				continue
+			}
+			out = append(out, model.DictDeletedTermView{
+				TermID: row.TermKey, DisplayAs: prev.DisplayAs, Phrase: prev.Phrase, Type: prev.Type,
+				DeletedAt: row.DeletedAt, DeletedBy: row.UpdatedBy,
+			})
+			break
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].DeletedAt > out[j].DeletedAt })
+	return out, nil
 }
 
 // CreateLayerTerm creates a manual term in the personal or an Account layer.
