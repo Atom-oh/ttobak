@@ -40,12 +40,14 @@ export default function AccountsClient() {
   const [resendingOwner, setResendingOwner] = useState(false);
   const creationAttempt = useRef<CreationAttempt | null>(null);
   const operationGeneration = useRef(0);
+  const receiptGeneration = useRef(0);
 
   const invalidateRequests = useCallback(() => {
     requestGeneration.current++;
   }, []);
   const invalidateOperations = useCallback(() => {
     operationGeneration.current++;
+    receiptGeneration.current++;
     creationAttempt.current = null;
   }, []);
 
@@ -127,7 +129,7 @@ export default function AccountsClient() {
       setSelectedOwner(null);
       setKeepCreatorAsMember(false);
       creationAttempt.current = null;
-      setCreationReceipt({ creatorId: user.userId, generation, receipt: created, email: request.ownerEmail || '' });
+      setCreationReceipt({ creatorId: user.userId, generation: ++receiptGeneration.current, receipt: created, email: request.ownerEmail || '' });
       if (!created.creatorMember || summary.error || summary.notice) {
         // Stay on the accounts list so the result is actually visible -- the account
         // still exists and is reachable from the (refreshed) list below, where the
@@ -150,7 +152,7 @@ export default function AccountsClient() {
 
   const handleResendOwner = async () => {
     if (!creationReceipt || creationReceipt.creatorId !== user?.userId
-      || creationReceipt.generation !== operationGeneration.current || creating || resendingOwner) return;
+      || creationReceipt.generation !== receiptGeneration.current || creating || resendingOwner) return;
     const generation = operationGeneration.current;
     setResendingOwner(true);
     setError(null);

@@ -140,6 +140,9 @@ func initialAccountMember(accountID, userID, email, role string, at time.Time) *
 func (s *AccountService) creationReceipt(ctx context.Context, requesterID string, req *model.CreateAccountRequest, account *model.Account, pending, invited bool) (*model.AccountCreationResponse, error) {
 	member, err := s.repo.GetMember(ctx, account.AccountID, requesterID)
 	if err != nil {
+		if invited {
+			return nil, errors.Join(ErrInvitationGrantFailed, err)
+		}
 		return nil, err
 	}
 	members := []model.AccountMemberDTO{{UserID: account.OwnerUserID, Email: account.InitialOwnerEmail, Role: model.RoleOwner}}
@@ -224,6 +227,9 @@ func (s *AccountService) CreateAccountWithOwner(ctx context.Context, requesterID
 		// Read after ANY failed response: the transaction may have committed.
 		observed, readErr := s.repo.GetAccount(ctx, id)
 		if readErr != nil {
+			if invited {
+				return nil, errors.Join(ErrInvitationGrantFailed, readErr)
+			}
 			return nil, readErr
 		}
 		if observed != nil {

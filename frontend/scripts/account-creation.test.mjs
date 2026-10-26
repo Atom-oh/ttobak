@@ -170,6 +170,23 @@ test('a stale receipt resend control cannot target an older creation', async () 
   assert.deepEqual(page.calls.resends, [], 'old receipt must not issue a resend after a newer operation');
 });
 
+test('the previous receipt remains recoverable when another creation fails', async () => {
+  let attempts = 0;
+  const page = fixture({ create: async request => {
+    if (++attempts === 2) throw new Error('second creation failed');
+    return { accountId: 'first-account', name: request.name, creatorMember: false, ownerInvitationPending: true };
+  } });
+  await page.start(); page.otherOwner(); await page.submit();
+  page.button('New Account').props.onClick();
+  page.find(n => n.type === 'input' && n.props.placeholder?.startsWith('Account name')).props.onChange({ target: { value: 'Second customer' } });
+  page.otherOwner(); await page.submit();
+  const resend = page.button('Owner 초대 메일 다시 보내기');
+  assert.ok(resend);
+  assert.equal(resend.props.disabled, false);
+  await resend.props.onClick();
+  assert.deepEqual(page.calls.resends, ['first-account']);
+});
+
 test('edited creation input uses a new request ID after a failed request', async () => {
   const page = fixture({ create: async () => { throw new Error('request failed'); } });
   await page.start(); page.otherOwner(); await page.submit();

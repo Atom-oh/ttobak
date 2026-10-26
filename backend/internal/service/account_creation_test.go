@@ -54,9 +54,27 @@ func TestCreateAccount_DesignatedOwnerCreatorCheckbox(t *testing.T) {
 
 type creationTestRepo struct {
 	*mockAccountRepo
-	before func(*model.Account, string, []repository.AccountParentLink) error
-	after  error
-	writes int
+	before         func(*model.Account, string, []repository.AccountParentLink) error
+	after          error
+	writes         int
+	accountReads   int
+	accountReadErr error
+	memberReadErr  error
+}
+
+func (r *creationTestRepo) GetAccount(ctx context.Context, accountID string) (*model.Account, error) {
+	r.accountReads++
+	if r.accountReads > 1 && r.accountReadErr != nil {
+		return nil, r.accountReadErr
+	}
+	return r.mockAccountRepo.GetAccount(ctx, accountID)
+}
+
+func (r *creationTestRepo) GetMember(ctx context.Context, accountID, userID string) (*model.AccountMember, error) {
+	if r.memberReadErr != nil {
+		return nil, r.memberReadErr
+	}
+	return r.mockAccountRepo.GetMember(ctx, accountID, userID)
 }
 
 func (r *creationTestRepo) CreateAccountWithInitialMembers(ctx context.Context, a *model.Account, owner, creator *model.AccountMember, requester string, ancestors []repository.AccountParentLink) error {
@@ -88,6 +106,35 @@ func newCreationFixture(t *testing.T) (*inviteFixture, *creationTestRepo) {
 
 func creationRequest() *model.CreateAccountRequest {
 	return &model.CreateAccountRequest{Name: "Customer", OwnerEmail: "new@example.com", RequestID: "683c4994-ea73-40b9-85d7-14ca659fbc21"}
+}
+
+func TestCreateAccount_PostInvitationReadFailuresPreservePartialDelivery(t *testing.T) {
+	for _, phase := range []string{"transaction-confirmation", "receipt-membership", "self-receipt"} {
+		t.Run(phase, func(t *testing.T) {
+			f, r := newCreationFixture(t)
+			readErr := errors.New("confirmation unavailable")
+			req := creationRequest()
+			switch phase {
+			case "transaction-confirmation":
+				r.after = errors.New("transaction response lost")
+				r.accountReadErr = readErr
+			case "receipt-membership":
+				r.memberReadErr = readErr
+			case "self-receipt":
+				req.OwnerEmail = "creator@example.com"
+				r.memberReadErr = readErr
+			}
+			_, err := f.svc.CreateAccountWithOwner(context.Background(), "creator", "creator@example.com", req)
+			if !errors.Is(err, readErr) {
+				t.Fatalf("lost confirmation cause: %v", err)
+			}
+			invited := phase != "self-receipt"
+			if errors.Is(err, ErrInvitationGrantFailed) != invited ||
+				(len(f.client.createUserCalls) == 1) != invited {
+				t.Fatalf("partial-delivery warning disagrees with mail: err=%v mail=%d", err, len(f.client.createUserCalls))
+			}
+		})
+	}
 }
 
 func TestCreateAccount_ParentAuthorizationPrecedesMail(t *testing.T) {
