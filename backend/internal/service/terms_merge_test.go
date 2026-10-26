@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -132,7 +131,8 @@ func (s *memDictStore) EvictCommonAutoTerm(ctx context.Context, termKey string, 
 	return res, err
 }
 
-// TrimDictTermLog keeps the newest keep rows of termKey (SKs sort by time).
+// TrimDictTermLog keeps the newest keep-1 rows of termKey and the pinned
+// oldest one, like the repository (SKs sort by time).
 func (s *memDictStore) TrimDictTermLog(_ context.Context, _ string, termKey string, keep int) error {
 	if err := s.before("trimLog"); err != nil {
 		return err
@@ -143,9 +143,8 @@ func (s *memDictStore) TrimDictTermLog(_ context.Context, _ string, termKey stri
 			sks = append(sks, sk)
 		}
 	}
-	sort.Sort(sort.Reverse(sort.StringSlice(sks)))
-	for i := keep; i < len(sks); i++ {
-		delete(s.logs, sks[i])
+	for _, sk := range model.DictLogTrimSKs(sks, keep) {
+		delete(s.logs, sk)
 	}
 	return nil
 }

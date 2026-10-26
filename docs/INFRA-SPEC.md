@@ -619,11 +619,11 @@ that some linked meetings missed the Account layer; it has no alarm.
 Alarm `TermsSourcesSilent` uses metric math over three daily-sum metrics:
 `IF(FILL(triggered, 0) > 0 AND FILL(succeeded, 0) + FILL(unchanged, 0) == 0, 1, 0)`
 with `triggered = TermsSourceTriggered`, `succeeded = TermsSourceSucceeded` and
-`unchanged = TermsSourceUnchanged` (an unchanged re-run is a healthy run). It needs
-7 of 7 daily breaches, so it fires when source triggers were queued every day
-for a week and no source run completed. A day without any trigger breaks the
-streak, so sparse uploads will not raise it; this is accepted because CloudWatch
-metric math cannot compare sums over a seven-day window. Triggers are logged
+`unchanged = TermsSourceUnchanged` (an unchanged re-run is a healthy run). It
+evaluates one daily period, so it fires when source triggers were queued on a
+UTC day and no source run completed that day (a run follows its trigger within
+minutes). CloudWatch caps period times evaluation periods at one day, so a
+longer streak cannot be one alarm. Triggers are logged
 `QUEUED` only while `KB_TERMS_MODE` or `RESEARCH_TERMS_MODE` is `on`, so the
 alarm stays quiet with both off. Missing data is `notBreaching`, and the alarm
 action follows the `PipelineAlarmTopicArn` convention of the other alarms.

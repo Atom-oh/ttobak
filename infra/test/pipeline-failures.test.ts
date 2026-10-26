@@ -135,16 +135,20 @@ describe('pipeline failure retention and alarm routing', () => {
       expect(byMetric('TermsNewsFailed')).toEqual(['"terms news:" "outcome=FAILED"']);
     });
 
-    test('TermsSourcesSilent alarms when triggers are queued for 7 days without a completed run', () => {
+    test('TermsSourcesSilent alarms when triggers are queued for a day without a completed run', () => {
       const template = termsFixture();
       const alarm = Object.values(template.findResources('AWS::CloudWatch::Alarm'))
         .map(a => a.Properties).find(a => a.AlarmName === 'TermsSourcesSilent')!;
       expect(alarm).toMatchObject({
-        EvaluationPeriods: 7, DatapointsToAlarm: 7, TreatMissingData: 'notBreaching',
+        EvaluationPeriods: 1, DatapointsToAlarm: 1, TreatMissingData: 'notBreaching',
         ComparisonOperator: 'GreaterThanOrEqualToThreshold', Threshold: 1,
       });
       const exprs = alarm.Metrics.filter((m: any) => m.Expression);
       expect(exprs).toHaveLength(1);
+      // CloudWatch rejects period x evaluationPeriods above one day.
+      for (const m of alarm.Metrics.filter((m: any) => m.MetricStat)) {
+        expect(m.MetricStat.Period * alarm.EvaluationPeriods).toBeLessThanOrEqual(86400);
+      }
       expect(exprs[0].Expression).toContain('triggered');
       expect(exprs[0].Expression).toContain('succeeded');
       expect(exprs[0].Expression).toContain('unchanged');

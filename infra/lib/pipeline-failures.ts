@@ -134,8 +134,10 @@ export class PipelineFailures extends Construct {
       period: cdk.Duration.days(1),
       label: 'Source triggers queued without a completed run',
     }), 1, {
-      alarmName: 'TermsSourcesSilent', evaluationPeriods: 7, datapointsToAlarm: 7,
-      description: 'Source term extraction was triggered for 7 days in a row but no run completed. Check the flag, the summarize logs (terms source: outcome=) and the terms-source DLQ.',
+      // CloudWatch caps period x evaluationPeriods at one day, so the window
+      // is one UTC day: triggers queued and no run completed that day.
+      alarmName: 'TermsSourcesSilent', evaluationPeriods: 1, datapointsToAlarm: 1,
+      description: 'Source term extraction was triggered today but no run completed. Check the flag, the summarize logs (terms source: outcome=) and the terms-source DLQ.',
     });
   }
 
