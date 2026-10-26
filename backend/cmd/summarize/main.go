@@ -44,6 +44,12 @@ var (
 	// dispatch branch and triggers are testable without AWS.
 	processTermsRequested = func(context.Context, model.TermsRequested) error { return nil }
 	enqueueTerms          = func(context.Context, string, string, string) {}
+
+	// KB/research term sources: Object Created on the KB bucket is mapped to
+	// TermsSourceRequested, which runs in its own invocation.
+	termsSourceBucket  string
+	requestTermsSource = func(context.Context, string, string) error { return nil }
+	processTermsSource = func(context.Context, model.TermsSourceRequested) error { return nil }
 )
 
 func init() {
@@ -129,9 +135,15 @@ func init() {
 	resummaryService.SetTermsEnqueuer(func(ctx context.Context, ownerID, meetingID string) {
 		enqueueTerms(ctx, ownerID, meetingID, "resummary")
 	})
+	kbBucketName := os.Getenv("KB_BUCKET_NAME")
+	termsService.SetSourceReader(service.TermsSourceDeps{
+		Store: repo, Objects: s3Client, Bucket: kbBucketName, Publish: service.TermsSourcePublisher(ebClient),
+	})
+	termsSourceBucket = kbBucketName
+	requestTermsSource = termsService.RequestSourceFromObject
+	processTermsSource = termsService.ProcessSource
 
 	// KB export service — gracefully skips if not configured
-	kbBucketName := os.Getenv("KB_BUCKET_NAME")
 	kbID := os.Getenv("KB_ID")
 	dataSourceID := os.Getenv("DATA_SOURCE_ID")
 	var bedrockAgentClient *bedrockagent.Client
@@ -270,6 +282,17 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 		return processTermsRequested(ctx, event.Detail)
 	}
 
+	// KB/research term extraction likewise runs in its own invocation.
+	if envelope.Source == "ttobak.analysis" && envelope.DetailType == "TermsSourceRequested" {
+		var event struct {
+			Detail model.TermsSourceRequested `json:"detail"`
+		}
+		if err := json.Unmarshal(raw, &event); err != nil {
+			return fmt.Errorf("decode terms source event: %w", err)
+		}
+		return processTermsSource(ctx, event.Detail)
+	}
+
 	// Custom event: all parts of a multi-file meeting have been transcribed
 	if envelope.Source == "ttobak.transcribe" && envelope.DetailType == "AllPartsTranscribed" {
 		var event model.AllPartsTranscribedEvent
@@ -290,6 +313,12 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 
 	if decoded, err := url.QueryUnescape(key); err == nil {
 		key = decoded
+	}
+
+	// KB bucket objects (kb/, shared/research/) only map to a term source
+	// request; they never reach the transcript path.
+	if termsSourceBucket != "" && bucket == termsSourceBucket {
+		return requestTermsSource(ctx, bucket, key)
 	}
 
 	log.Printf("Processing transcript: bucket=%s, key=%s", bucket, key)

@@ -154,3 +154,31 @@ func TestMergeScopedPersonalWrapperRecordsSource(t *testing.T) {
 		t.Fatal("a personal write carries no membership check")
 	}
 }
+
+// KB and research documents write the owner's Personal scope or a member
+// Account, never Common (R6), and carry no meeting ID.
+func TestMergeScopedAcceptsDocumentSources(t *testing.T) {
+	for _, kind := range []string{model.DictSourceKB, model.DictSourceResearch} {
+		src := TermsSourceRef{Kind: kind, Ref: "kb/owner/1_a.md", OwnerID: "owner"}
+		for _, scope := range []TermsScope{{PK: "USER#owner"}, accountScope("a1", "owner")} {
+			store := newMemDictStore()
+			res, err := newTestMerger(store).MergeScoped(context.Background(), scope, []ExtractedTerm{cand("AlphaGrid")}, src)
+			if err != nil || res.Counters.Created != 1 {
+				t.Fatalf("%s into %s: err=%v counters=%+v", kind, scope.PK, err, res.Counters)
+			}
+			term, _ := store.term("AlphaGrid")
+			if term.FirstSourceMeetingID != "" || term.Sources[0].Kind != kind {
+				t.Fatalf("%s term %+v", kind, term)
+			}
+			obs, ok := store.obs[model.DictObsSK(term.TermKey, model.DictObsSourceID(kind, src.Ref))]
+			if !ok || obs.MeetingID != "" || obs.SourceKind != kind || obs.SourceRef != src.Ref {
+				t.Fatalf("%s observation %+v", kind, store.obs)
+			}
+		}
+		for _, scope := range []TermsScope{{PK: model.PrefixDictCommon}, {PK: "USER#someone-else"}, {PK: "ACCOUNT#a1"}} {
+			if _, err := newTestMerger(newMemDictStore()).MergeScoped(context.Background(), scope, []ExtractedTerm{cand("AlphaGrid")}, src); !errors.Is(err, ErrInvalidInput) {
+				t.Fatalf("%s into %s must be refused: %v", kind, scope.PK, err)
+			}
+		}
+	}
+}
