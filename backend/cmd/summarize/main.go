@@ -23,6 +23,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	ebtypes "github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/transcribe"
 	"github.com/ttobak/backend/internal/duration"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
@@ -84,8 +85,18 @@ func init() {
 	resummaryService = service.NewResummaryService(metadata, service.NewMeetingService(metadata), bedrockService, attachmentTextService, nil)
 	actionItemsService = service.NewMetadataActionItemsAnalysisService(repo, bedrockService, nil)
 	dictionaryRepo := repository.NewDictionaryRepository(dynamoClient, tableName)
+	// The vocabulary state row is version-guarded, so this builder and the API
+	// Lambda's can both advance it; running it here gets new auto terms into
+	// batch Transcribe without a dictionary page visit.
+	dictService := service.NewDictionaryService(dictionaryRepo, transcribe.NewFromConfig(cfg))
+	dictService.SetVocabularyBuilder(s3Client, bucketName, service.ParseVocabRebuildMinInterval(os.Getenv("VOCAB_REBUILD_MIN_INTERVAL")))
 	termsService := service.NewTermsAnalysisService(repo, service.NewTermsMerger(dictionaryRepo),
-		service.NewDictionaryService(dictionaryRepo, nil), bedrockService, attachmentTextService, service.TermsPublisher(ebClient), service.TermsConfigFromEnv())
+		dictService, bedrockService, attachmentTextService, service.TermsPublisher(ebClient), service.TermsConfigFromEnv())
+	termsService.SetVocabularyRefresher(func(ctx context.Context, ownerID string) {
+		if _, warnings := dictService.EnsureVocabularies(ctx, ownerID, model.VocabContextPersonal, false); len(warnings) > 0 {
+			log.Printf("terms vocabulary refresh: owner=%s warnings=%d", ownerID, len(warnings))
+		}
+	})
 	processTermsRequested = termsService.Process
 	enqueueTerms = func(ctx context.Context, ownerID, meetingID, reason string) {
 		termsService.Enqueue(ctx, ownerID, meetingID, reason) // non-fatal; logs its outcome code

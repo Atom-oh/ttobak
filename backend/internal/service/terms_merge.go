@@ -12,9 +12,8 @@ import (
 	"github.com/ttobak/backend/internal/repository"
 )
 
-// Automatic dictionary merge (design A4). Nothing calls MergeExtractedTerms
-// yet; the extraction service (PR 6c) will run it after the deterministic
-// filters. It writes the personal scope only: account writes need membership
+// Automatic dictionary merge (design A4). TermsAnalysisService.Process runs
+// MergeExtractedTerms after the deterministic filters. It writes the personal scope only: account writes need membership
 // ConditionChecks and publication gates that arrive with the account
 // dictionary.
 const (
