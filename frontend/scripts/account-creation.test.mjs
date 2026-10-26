@@ -235,6 +235,21 @@ test('normalized input retries preserve a UUID and edited checkbox requests rota
   assert.equal(calls,2);
 });
 
+test('replayed creation notices use current creator membership roles', () => {
+  const helper = loadHelper('accountCreation');
+  for (const role of ['AM', 'SSA', 'TAM', undefined]) {
+    const receipt = {
+      name: 'Customer', ownerUserId: 'colleague', creatorMember: true,
+      members: role ? [{ userId: 'creator', role }] : [],
+      ownerInvitationPending: false, ownerInvitationRequested: false,
+    };
+    const notice = helper.accountCreationNotice(receipt, 'colleague@example.com', 'creator');
+    assert.ok(notice.includes(role === 'AM' ? '생성자는 일반 멤버(AM)로 참여합니다.'
+      : role ? `생성자는 멤버(${role})로 참여합니다.` : '생성자는 멤버로 참여합니다.'), notice);
+    if (role !== 'AM') assert.ok(!notice.includes('일반 멤버(AM)'), notice);
+  }
+});
+
 test('a pending Owner resend prevents starting a different creation', async () => {
   let finish;
   const page=fixture({resendOwner:()=>new Promise(resolve=>{finish=resolve;})});
