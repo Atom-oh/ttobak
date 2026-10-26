@@ -10,84 +10,117 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	cognitoidp "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider"
-	cognitotypes "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider/types"
+	idp "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider"
+	ct "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider/types"
 	"github.com/ttobak/backend/internal/model"
 )
 
-func invitedIdentity(sub string) *cognitotypes.UserType {
-	return &cognitotypes.UserType{
-		Username: aws.String(sub),
-		Attributes: []cognitotypes.AttributeType{
-			{Name: aws.String("sub"), Value: aws.String(sub)},
-		},
-	}
+func invitedIdentity(sub string) *ct.UserType {
+	return &ct.UserType{Username: aws.String(sub), Attributes: []ct.AttributeType{
+		{Name: aws.String("sub"), Value: aws.String(sub)},
+	}}
 }
 
-func TestAddMember_OrdinaryMemberInvitesNewEmail(t *testing.T) {
-	repo := newMockAccountRepo()
-	svc := newAccountServiceWithRepo(repo)
-	account, err := svc.CreateAccount(context.Background(), "owner", "owner@example.com", &model.CreateAccountRequest{Name: "Customer"})
+// Cases override the default missing identity and successful delivery.
+type inviteFixture struct {
+	svc     *AccountService
+	repo    *mockAccountRepo
+	client  *fakeCognitoAdminAPI
+	counter *fakeRateStore
+	id      string
+}
+
+func newInviteFixture(t *testing.T) *inviteFixture {
+	t.Helper()
+	f := &inviteFixture{repo: newMockAccountRepo(), counter: &fakeRateStore{}}
+	f.svc = newAccountServiceWithRepo(f.repo)
+	account, err := f.svc.CreateAccount(context.Background(), "owner", "owner@example.com", &model.CreateAccountRequest{Name: "Customer"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	repo.members[memberKey(account.AccountID, "member")] = &model.AccountMember{
-		AccountID: account.AccountID, UserID: "member", Email: "member@example.com", Role: model.RoleSSA,
-	}
-	client := &fakeCognitoAdminAPI{
-		adminGetUserFn: func(context.Context, *cognitoidp.AdminGetUserInput) (*cognitoidp.AdminGetUserOutput, error) {
-			return nil, &cognitotypes.UserNotFoundException{}
+	f.id = account.AccountID
+	f.client = &fakeCognitoAdminAPI{
+		adminGetUserFn: func(context.Context, *idp.AdminGetUserInput) (*idp.AdminGetUserOutput, error) {
+			return nil, &ct.UserNotFoundException{}
 		},
-		adminCreateUserFn: func(_ context.Context, input *cognitoidp.AdminCreateUserInput) (*cognitoidp.AdminCreateUserOutput, error) {
-			if aws.ToString(input.Username) != "new@example.com" || input.MessageAction != "" ||
-				len(input.DesiredDeliveryMediums) != 1 || input.DesiredDeliveryMediums[0] != cognitotypes.DeliveryMediumTypeEmail {
-				t.Fatalf("unexpected invitation input: %+v", input)
-			}
-			return &cognitoidp.AdminCreateUserOutput{User: invitedIdentity("invitee-sub")}, nil
+		adminCreateUserFn: func(context.Context, *idp.AdminCreateUserInput) (*idp.AdminCreateUserOutput, error) {
+			return &idp.AdminCreateUserOutput{User: invitedIdentity("invitee")}, nil
 		},
-		adminAddUserToGroupFn: func(context.Context, *cognitoidp.AdminAddUserToGroupInput) (*cognitoidp.AdminAddUserToGroupOutput, error) {
+		adminAddUserToGroupFn: func(context.Context, *idp.AdminAddUserToGroupInput) (*idp.AdminAddUserToGroupOutput, error) {
 			t.Fatal("member invitations must not grant group membership")
 			return nil, nil
 		},
 	}
-	svc.SetCognitoAdminAPI(client, "pool")
-	svc.SetInvitationCounter(NewWindowCounter(&fakeRateStore{}))
-	dto, err := svc.AddMember(context.Background(), "member", account.AccountID, &model.AddMemberRequest{Email: " New@Example.com ", Role: model.RoleTAM})
+	f.svc.SetCognitoAdminAPI(f.client, "pool")
+	f.svc.SetInvitationCounter(NewWindowCounter(f.counter))
+	return f
+}
+
+func (f *inviteFixture) add(requester, email, role string, resend bool) (*model.AccountMemberDTO, error) {
+	return f.svc.AddMember(context.Background(), requester, f.id, &model.AddMemberRequest{
+		Email: email, Role: role, ResendInvitation: resend,
+	})
+}
+
+func (f *inviteFixture) requireNoInvite(t *testing.T, err, want error) {
+	t.Helper()
+	if !errors.Is(err, want) || len(f.client.createUserCalls) != 0 || len(f.repo.pendingShares) != 0 {
+		t.Fatalf("unexpected invite side effects: %v", err)
+	}
+}
+
+func (f *inviteFixture) rejectLookup(t *testing.T) {
+	f.client.adminGetUserFn = func(context.Context, *idp.AdminGetUserInput) (*idp.AdminGetUserOutput, error) {
+		t.Fatal("rejected request reached Cognito")
+		return nil, nil
+	}
+}
+
+func lookupInvitedIdentity(sub string, status ct.UserStatusType) func(context.Context, *idp.AdminGetUserInput) (*idp.AdminGetUserOutput, error) {
+	return func(context.Context, *idp.AdminGetUserInput) (*idp.AdminGetUserOutput, error) {
+		return &idp.AdminGetUserOutput{
+			Username: aws.String("generated-username"), UserStatus: status,
+			UserAttributes: append(invitedIdentity(sub).Attributes,
+				ct.AttributeType{Name: aws.String("email"), Value: aws.String("new@example.com")}),
+		}, nil
+	}
+}
+
+func TestAddMember_OrdinaryMemberInvitesNewEmail(t *testing.T) {
+	f := newInviteFixture(t)
+	f.repo.members[memberKey(f.id, "member")] = &model.AccountMember{
+		AccountID: f.id, UserID: "member", Email: "member@example.com", Role: model.RoleSSA,
+	}
+	f.client.adminCreateUserFn = func(_ context.Context, in *idp.AdminCreateUserInput) (*idp.AdminCreateUserOutput, error) {
+		if aws.ToString(in.Username) != "new@example.com" || in.MessageAction != "" ||
+			len(in.DesiredDeliveryMediums) != 1 || in.DesiredDeliveryMediums[0] != ct.DeliveryMediumTypeEmail {
+			t.Fatalf("unexpected invitation: %+v", in)
+		}
+		return &idp.AdminCreateUserOutput{User: invitedIdentity("invitee-sub")}, nil
+	}
+	dto, err := f.add("member", " New@Example.com ", model.RoleTAM, false)
 	if err != nil {
-		t.Fatalf("ordinary member invitation failed: %v", err)
+		t.Fatal(err)
 	}
 	data, _ := json.Marshal(dto)
 	var receipt map[string]any
 	_ = json.Unmarshal(data, &receipt)
 	if receipt["pending"] != true || receipt["invited"] != true || dto.Email != "new@example.com" {
-		t.Fatalf("expected normalized pending invitation receipt, got %s", data)
+		t.Fatalf("invalid receipt: %s", data)
 	}
-	if len(client.createUserCalls) != 1 || len(repo.pendingShares) != 1 ||
-		repo.pendingShares[0].InvitedCognitoSub != "invitee-sub" || repo.pendingShares[0].InvitedByUserID != "member" {
-		t.Fatalf("identity-bound grant missing: creates=%d pending=%+v", len(client.createUserCalls), repo.pendingShares)
+	if len(f.client.createUserCalls) != 1 || len(f.repo.pendingShares) != 1 ||
+		f.repo.pendingShares[0].InvitedCognitoSub != "invitee-sub" || f.repo.pendingShares[0].InvitedByUserID != "member" {
+		t.Fatalf("identity-bound grant missing: %+v", f.repo.pendingShares)
 	}
 }
 
 func TestAddMember_InvalidEmailDoesNotInvite(t *testing.T) {
 	for _, email := range []string{"", "not-an-email", "Name <new@example.com>", strings.Repeat("a", 255) + "@example.com"} {
 		t.Run(email, func(t *testing.T) {
-			repo := newMockAccountRepo()
-			svc := newAccountServiceWithRepo(repo)
-			account, _ := svc.CreateAccount(context.Background(), "owner", "owner@example.com", &model.CreateAccountRequest{Name: "Customer"})
-			client := &fakeCognitoAdminAPI{
-				adminGetUserFn: func(context.Context, *cognitoidp.AdminGetUserInput) (*cognitoidp.AdminGetUserOutput, error) {
-					t.Fatal("invalid email reached Cognito")
-					return nil, nil
-				},
-			}
-			svc.SetCognitoAdminAPI(client, "pool")
-			_, err := svc.AddMember(context.Background(), "owner", account.AccountID, &model.AddMemberRequest{Email: email, Role: model.RoleSSA})
-			if err == nil {
-				t.Fatal("invalid email was accepted")
-			}
-			if len(client.createUserCalls) != 0 || len(repo.pendingShares) != 0 {
-				t.Fatal("invalid email caused side effects")
-			}
+			f := newInviteFixture(t)
+			f.rejectLookup(t)
+			_, err := f.add("owner", email, model.RoleSSA, false)
+			f.requireNoInvite(t, err, ErrInvalidInviteEmail)
 		})
 	}
 }
@@ -101,49 +134,33 @@ func TestAddMember_DeniedRequestsDoNotInvite(t *testing.T) {
 		{"owner-role", "owner", model.RoleOwner, ErrInvalidInput},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			repo := newMockAccountRepo()
-			svc := newAccountServiceWithRepo(repo)
-			account, _ := svc.CreateAccount(context.Background(), "owner", "owner@example.com", &model.CreateAccountRequest{Name: "Customer"})
-			client := &fakeCognitoAdminAPI{
-				adminGetUserFn: func(context.Context, *cognitoidp.AdminGetUserInput) (*cognitoidp.AdminGetUserOutput, error) {
-					t.Fatal("unauthorized request reached Cognito")
-					return nil, nil
-				},
-			}
-			svc.SetCognitoAdminAPI(client, "pool")
-			_, err := svc.AddMember(context.Background(), test.requester, account.AccountID, &model.AddMemberRequest{Email: "new@example.com", Role: test.role})
-			if !errors.Is(err, test.want) || len(client.createUserCalls) != 0 {
-				t.Fatalf("error=%v creates=%d", err, len(client.createUserCalls))
-			}
+			f := newInviteFixture(t)
+			f.rejectLookup(t)
+			_, err := f.add(test.requester, "new@example.com", test.role, false)
+			f.requireNoInvite(t, err, test.want)
 		})
 	}
 }
 
 func TestAddMember_ConcurrentIdentityCreationReusesWinner(t *testing.T) {
-	repo := newMockAccountRepo()
-	svc := newAccountServiceWithRepo(repo)
-	account, _ := svc.CreateAccount(context.Background(), "owner", "owner@example.com", &model.CreateAccountRequest{Name: "Customer"})
+	f := newInviteFixture(t)
 	reads := 0
-	client := &fakeCognitoAdminAPI{
-		adminGetUserFn: func(context.Context, *cognitoidp.AdminGetUserInput) (*cognitoidp.AdminGetUserOutput, error) {
-			reads++
-			if reads == 1 {
-				return nil, &cognitotypes.UserNotFoundException{}
-			}
-			return &cognitoidp.AdminGetUserOutput{UserAttributes: invitedIdentity("winner-sub").Attributes}, nil
-		},
-		adminCreateUserFn: func(context.Context, *cognitoidp.AdminCreateUserInput) (*cognitoidp.AdminCreateUserOutput, error) {
-			return nil, &cognitotypes.UsernameExistsException{}
-		},
+	f.client.adminGetUserFn = func(context.Context, *idp.AdminGetUserInput) (*idp.AdminGetUserOutput, error) {
+		reads++
+		if reads == 1 {
+			return nil, &ct.UserNotFoundException{}
+		}
+		return &idp.AdminGetUserOutput{UserAttributes: invitedIdentity("winner-sub").Attributes}, nil
 	}
-	svc.SetCognitoAdminAPI(client, "pool")
-	svc.SetInvitationCounter(NewWindowCounter(&fakeRateStore{}))
-	dto, err := svc.AddMember(context.Background(), "owner", account.AccountID, &model.AddMemberRequest{Email: "new@example.com", Role: model.RoleSSA})
-	if err != nil || !dto.Pending || dto.Invited || repo.pendingShares[0].InvitedCognitoSub != "winner-sub" {
-		t.Fatalf("receipt=%+v error=%v pending=%+v", dto, err, repo.pendingShares)
+	f.client.adminCreateUserFn = func(context.Context, *idp.AdminCreateUserInput) (*idp.AdminCreateUserOutput, error) {
+		return nil, &ct.UsernameExistsException{}
 	}
-	if len(client.createUserCalls) != 1 || client.createUserCalls[0].MessageAction != "" {
-		t.Fatal("concurrent creation must not send another email")
+	dto, err := f.add("owner", "new@example.com", model.RoleSSA, false)
+	if err != nil || !dto.Pending || dto.Invited || f.repo.pendingShares[0].InvitedCognitoSub != "winner-sub" {
+		t.Fatalf("receipt=%+v error=%v", dto, err)
+	}
+	if len(f.client.createUserCalls) != 1 || f.client.createUserCalls[0].MessageAction != "" {
+		t.Fatal("duplicate email")
 	}
 }
 
@@ -154,149 +171,78 @@ func (r *failingAccountQueue) PutPendingShare(context.Context, *model.PendingSha
 }
 
 func TestAddMember_InvitationQueueFailureIsPartialSuccess(t *testing.T) {
-	repo := &failingAccountQueue{newMockAccountRepo()}
-	svc := newAccountServiceWithRepo(repo)
-	account, _ := svc.CreateAccount(context.Background(), "owner", "owner@example.com", &model.CreateAccountRequest{Name: "Customer"})
-	svc.SetCognitoAdminAPI(&fakeCognitoAdminAPI{
-		adminGetUserFn: func(context.Context, *cognitoidp.AdminGetUserInput) (*cognitoidp.AdminGetUserOutput, error) {
-			return nil, &cognitotypes.UserNotFoundException{}
-		},
-		adminCreateUserFn: func(context.Context, *cognitoidp.AdminCreateUserInput) (*cognitoidp.AdminCreateUserOutput, error) {
-			return &cognitoidp.AdminCreateUserOutput{User: invitedIdentity("invitee")}, nil
-		},
-	}, "pool")
-	svc.SetInvitationCounter(NewWindowCounter(&fakeRateStore{}))
-	_, err := svc.AddMember(context.Background(), "owner", account.AccountID, &model.AddMemberRequest{Email: "new@example.com", Role: model.RoleSSA})
+	f := newInviteFixture(t)
+	f.svc.repo = &failingAccountQueue{f.repo}
+	_, err := f.add("owner", "new@example.com", model.RoleSSA, false)
 	if !errors.Is(err, ErrInvitationGrantFailed) {
-		t.Fatalf("sent invitation was not reported as partial success: %v", err)
+		t.Fatalf("missing partial success: %v", err)
 	}
 }
 
 func TestAddMember_InvitationCounterStopsBeforeMail(t *testing.T) {
 	for _, unavailable := range []bool{false, true} {
 		t.Run(fmt.Sprintf("unavailable=%v", unavailable), func(t *testing.T) {
-			repo := newMockAccountRepo()
-			svc := newAccountServiceWithRepo(repo)
-			account, _ := svc.CreateAccount(context.Background(), "owner", "owner@example.com", &model.CreateAccountRequest{Name: "Customer"})
-			client := &fakeCognitoAdminAPI{
-				adminGetUserFn: func(context.Context, *cognitoidp.AdminGetUserInput) (*cognitoidp.AdminGetUserOutput, error) {
-					return nil, &cognitotypes.UserNotFoundException{}
-				},
-			}
-			svc.SetCognitoAdminAPI(client, "pool")
-			store := &fakeRateStore{}
-			counter := NewWindowCounter(store)
-			if unavailable {
-				store.err = errors.New("storage unavailable")
-			} else {
-				_, _, key, _ := rateWindow(counter.now(), time.Hour)
-				store.counts = map[string]int64{"owner|RATE#account-invite#" + key: 20}
-			}
-			svc.SetInvitationCounter(counter)
-			_, err := svc.AddMember(context.Background(), "owner", account.AccountID, &model.AddMemberRequest{Email: "new@example.com", Role: model.RoleSSA})
+			f := newInviteFixture(t)
 			want := ErrInvitationRateLimited
 			if unavailable {
+				f.counter.err = errors.New("storage unavailable")
 				want = ErrInvitationUnavailable
+			} else {
+				_, _, key, _ := rateWindow(f.svc.invitationCounter.now(), time.Hour)
+				f.counter.counts = map[string]int64{"owner|RATE#account-invite#" + key: 20}
 			}
-			if !errors.Is(err, want) || len(client.createUserCalls) != 0 {
-				t.Fatalf("error=%v creates=%d", err, len(client.createUserCalls))
-			}
+			_, err := f.add("owner", "new@example.com", model.RoleSSA, false)
+			f.requireNoInvite(t, err, want)
 		})
 	}
 }
 
 func TestAddMember_ExplicitResendUsesCurrentEmailForEmailOnlyPool(t *testing.T) {
-	repo := newMockAccountRepo()
-	svc := newAccountServiceWithRepo(repo)
-	account, _ := svc.CreateAccount(context.Background(), "owner", "owner@example.com", &model.CreateAccountRequest{Name: "Customer"})
-	client := &fakeCognitoAdminAPI{
-		adminGetUserFn: func(context.Context, *cognitoidp.AdminGetUserInput) (*cognitoidp.AdminGetUserOutput, error) {
-			return &cognitoidp.AdminGetUserOutput{
-				Username:   aws.String("immutable-username"),
-				UserStatus: cognitotypes.UserStatusTypeForceChangePassword,
-				UserAttributes: append(invitedIdentity("invitee").Attributes,
-					cognitotypes.AttributeType{Name: aws.String("email"), Value: aws.String("new@example.com")}),
-			}, nil
-		},
-		adminCreateUserFn: func(_ context.Context, in *cognitoidp.AdminCreateUserInput) (*cognitoidp.AdminCreateUserOutput, error) {
-			if in.MessageAction != cognitotypes.MessageActionTypeResend {
-				t.Fatal("explicit resend must use Cognito RESEND")
-			}
-			if aws.ToString(in.Username) != "new@example.com" {
-				return nil, &cognitotypes.InvalidParameterException{
-					Message: aws.String("Username should be an email."),
-				}
-			}
-			user := invitedIdentity("invitee")
-			user.Attributes = append(user.Attributes, cognitotypes.AttributeType{Name: aws.String("email"), Value: aws.String("new@example.com")})
-			return &cognitoidp.AdminCreateUserOutput{User: user}, nil
-		},
+	f := newInviteFixture(t)
+	f.client.adminGetUserFn = lookupInvitedIdentity("invitee", ct.UserStatusTypeForceChangePassword)
+	f.client.adminCreateUserFn = func(_ context.Context, in *idp.AdminCreateUserInput) (*idp.AdminCreateUserOutput, error) {
+		if in.MessageAction != ct.MessageActionTypeResend {
+			t.Fatal("missing RESEND")
+		}
+		if aws.ToString(in.Username) != "new@example.com" {
+			return nil, &ct.InvalidParameterException{Message: aws.String("Username should be an email.")}
+		}
+		user := invitedIdentity("invitee")
+		user.Attributes = append(user.Attributes, ct.AttributeType{Name: aws.String("email"), Value: aws.String("new@example.com")})
+		return &idp.AdminCreateUserOutput{User: user}, nil
 	}
-	svc.SetCognitoAdminAPI(client, "pool")
-	svc.SetInvitationCounter(NewWindowCounter(&fakeRateStore{}))
 	var request model.AddMemberRequest
 	_ = json.Unmarshal([]byte(`{"email":"new@example.com","role":"SSA","resendInvitation":true}`), &request)
-	dto, err := svc.AddMember(context.Background(), "owner", account.AccountID, &request)
-	if err != nil || !dto.Pending || !dto.Invited || len(client.createUserCalls) != 1 {
-		t.Fatalf("resend receipt=%+v error=%v calls=%d", dto, err, len(client.createUserCalls))
+	dto, err := f.svc.AddMember(context.Background(), "owner", f.id, &request)
+	if err != nil || !dto.Pending || !dto.Invited || len(f.client.createUserCalls) != 1 {
+		t.Fatalf("receipt=%+v error=%v", dto, err)
 	}
 }
 
 func TestAddMember_ResendIdentityChangedDuringDelivery(t *testing.T) {
-	repo := newMockAccountRepo()
-	svc := newAccountServiceWithRepo(repo)
-	account, _ := svc.CreateAccount(context.Background(), "owner", "owner@example.com", &model.CreateAccountRequest{Name: "Customer"})
-	client := &fakeCognitoAdminAPI{
-		adminGetUserFn: func(context.Context, *cognitoidp.AdminGetUserInput) (*cognitoidp.AdminGetUserOutput, error) {
-			return &cognitoidp.AdminGetUserOutput{
-				Username: aws.String("immutable-username"), UserStatus: cognitotypes.UserStatusTypeForceChangePassword,
-				UserAttributes: append(invitedIdentity("original-sub").Attributes,
-					cognitotypes.AttributeType{Name: aws.String("email"), Value: aws.String("new@example.com")}),
-			}, nil
-		},
-		adminCreateUserFn: func(context.Context, *cognitoidp.AdminCreateUserInput) (*cognitoidp.AdminCreateUserOutput, error) {
-			return &cognitoidp.AdminCreateUserOutput{User: invitedIdentity("replacement-sub")}, nil
-		},
+	f := newInviteFixture(t)
+	f.client.adminGetUserFn = lookupInvitedIdentity("original-sub", ct.UserStatusTypeForceChangePassword)
+	f.client.adminCreateUserFn = func(context.Context, *idp.AdminCreateUserInput) (*idp.AdminCreateUserOutput, error) {
+		return &idp.AdminCreateUserOutput{User: invitedIdentity("replacement-sub")}, nil
 	}
-	svc.SetCognitoAdminAPI(client, "pool")
-	svc.SetInvitationCounter(NewWindowCounter(&fakeRateStore{}))
-	_, err := svc.AddMember(context.Background(), "owner", account.AccountID, &model.AddMemberRequest{Email: "new@example.com", Role: model.RoleSSA, ResendInvitation: true})
-	if !errors.Is(err, ErrInvitationGrantFailed) || len(repo.pendingShares) != 0 {
-		t.Fatalf("changed identity queued: error=%v grants=%+v", err, repo.pendingShares)
+	_, err := f.add("owner", "new@example.com", model.RoleSSA, true)
+	if !errors.Is(err, ErrInvitationGrantFailed) || len(f.repo.pendingShares) != 0 {
+		t.Fatalf("changed identity queued: %v", err)
 	}
 }
 
 func TestAddMember_DomainAllowlistRunsBeforeMail(t *testing.T) {
-	repo := newMockAccountRepo()
-	svc := newAccountServiceWithRepo(repo)
-	account, _ := svc.CreateAccount(context.Background(), "owner", "owner@example.com", &model.CreateAccountRequest{Name: "Customer"})
-	client := &fakeCognitoAdminAPI{
-		adminGetUserFn: func(context.Context, *cognitoidp.AdminGetUserInput) (*cognitoidp.AdminGetUserOutput, error) {
-			return nil, &cognitotypes.UserNotFoundException{}
-		},
-	}
-	svc.SetCognitoAdminAPI(client, "pool")
-	store := &fakeRateStore{}
-	svc.SetInvitationCounter(NewWindowCounter(store))
-	_, err := svc.AddMember(context.Background(), "owner", account.AccountID, &model.AddMemberRequest{Email: "new@unapproved.invalid", Role: model.RoleSSA})
-	if !errors.Is(err, ErrInvitationRejected) || len(client.createUserCalls) != 0 || store.calls != 0 {
-		t.Fatalf("unapproved domain caused mail: error=%v mail=%d counter=%d", err, len(client.createUserCalls), store.calls)
+	f := newInviteFixture(t)
+	_, err := f.add("owner", "new@unapproved.invalid", model.RoleSSA, false)
+	f.requireNoInvite(t, err, ErrInvitationRejected)
+	if f.counter.calls != 0 {
+		t.Fatal("domain check consumed the counter")
 	}
 }
 
 func TestAddMember_ConfirmedIdentityCannotBeReset(t *testing.T) {
-	repo := newMockAccountRepo()
-	svc := newAccountServiceWithRepo(repo)
-	account, _ := svc.CreateAccount(context.Background(), "owner", "owner@example.com", &model.CreateAccountRequest{Name: "Customer"})
-	client := &fakeCognitoAdminAPI{
-		adminGetUserFn: func(context.Context, *cognitoidp.AdminGetUserInput) (*cognitoidp.AdminGetUserOutput, error) {
-			return &cognitoidp.AdminGetUserOutput{UserStatus: cognitotypes.UserStatusTypeConfirmed, UserAttributes: invitedIdentity("invitee").Attributes}, nil
-		},
-	}
-	svc.SetCognitoAdminAPI(client, "pool")
-	svc.SetInvitationCounter(NewWindowCounter(&fakeRateStore{}))
-	_, err := svc.AddMember(context.Background(), "owner", account.AccountID, &model.AddMemberRequest{Email: "new@example.com", Role: model.RoleSSA, ResendInvitation: true})
-	if !errors.Is(err, ErrInvitationNotPending) || len(client.createUserCalls) != 0 || len(repo.pendingShares) != 0 {
-		t.Fatalf("confirmed identity affected: error=%v mail=%d grants=%d", err, len(client.createUserCalls), len(repo.pendingShares))
-	}
+	f := newInviteFixture(t)
+	f.client.adminGetUserFn = lookupInvitedIdentity("invitee", ct.UserStatusTypeConfirmed)
+	_, err := f.add("owner", "new@example.com", model.RoleSSA, true)
+	f.requireNoInvite(t, err, ErrInvitationNotPending)
 }

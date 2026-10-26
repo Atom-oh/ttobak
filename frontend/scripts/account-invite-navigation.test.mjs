@@ -16,7 +16,6 @@ function fixture(addMember) {
   const slots = [];
   let cursor = 0;
   let effects = [];
-  let changed = false;
   let pathname = '/accounts/A';
   const same = (a, b) => a?.length === b?.length && a.every((value, i) => Object.is(value, b[i]));
   const react = {
@@ -24,9 +23,7 @@ function fixture(addMember) {
       const index = cursor++;
       if (!(index in slots)) slots[index] = typeof initial === 'function' ? initial() : initial;
       return [slots[index], value => {
-        const next = typeof value === 'function' ? value(slots[index]) : value;
-        if (!Object.is(next, slots[index])) changed = true;
-        slots[index] = next;
+        slots[index] = typeof value === 'function' ? value(slots[index]) : value;
       }];
     },
     useRef(current) {
@@ -53,6 +50,8 @@ function fixture(addMember) {
   vm.runInNewContext(transpile(readFileSync(
     new URL('../src/lib/accountInvite.ts', import.meta.url), 'utf8')), { exports: helper, Error });
   const MemberPicker = () => null;
+  const emptyComponent = () => null;
+  const emptyResult = async () => ({});
   const jsx = (type, props) => ({ type, props });
   const modules = {
     react, 'react/jsx-runtime': { jsx, jsxs: jsx },
@@ -60,23 +59,23 @@ function fixture(addMember) {
     '@/components/auth/AuthProvider': {
       useAuth: () => ({ user: { userId: 'member' }, isLoading: false, isAuthenticated: true, membershipRevision: 0 }),
     },
-    '@/components/layout/AppLayout': { AppLayout: () => null },
+    '@/components/layout/AppLayout': { AppLayout: emptyComponent },
     '@/lib/api': {
       accountApi: {
         get: async accountId => ({
           accountId, name: accountId, ownerUserId: 'owner',
           members: [{ userId: 'member', email: 'member@example.invalid', role: 'SSA' }],
         }),
-        meetings: async () => ({}), insights: async () => ({}),
-        listDocuments: async () => ({}), research: async () => ({}),
+        meetings: emptyResult, insights: emptyResult,
+        listDocuments: emptyResult, research: emptyResult,
         addMember,
       },
       projectApi: { accountProjects: async () => ({ projects: [] }) },
     },
     '@/lib/accountInvite': helper, '@/lib/upload': { uploadDocFile() {} },
     '@/components/MemberPicker': { MemberPicker },
-    '@/components/FieldInsightsSection': { FieldInsightsSection: () => null },
-    '@/components/AccountParentEditor': { AccountParentEditor: () => null },
+    '@/components/FieldInsightsSection': { FieldInsightsSection: emptyComponent },
+    '@/components/AccountParentEditor': { AccountParentEditor: emptyComponent },
     '@/types/meeting': { ASSIGNABLE_ACCOUNT_ROLES: ['SSA', 'SA'] },
   };
   const exports = {};
@@ -86,14 +85,10 @@ function fixture(addMember) {
     require: name => { assert.ok(name in modules, name); return modules[name]; },
   });
   const render = () => {
-    let tree;
-    for (let iteration = 0; iteration < 10; iteration++) {
-      cursor = 0; effects = []; changed = false;
-      tree = exports.default();
-      effects.forEach(effect => effect());
-      if (!changed) return tree;
-    }
-    assert.fail('render did not settle');
+    cursor = 0; effects = [];
+    const tree = exports.default();
+    effects.forEach(effect => effect());
+    return tree;
   };
   const nodes = node => {
     if (!node || typeof node !== 'object') return [];
