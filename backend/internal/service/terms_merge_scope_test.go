@@ -44,6 +44,15 @@ func (p partitionedDictStore) EvictAutoTerm(ctx context.Context, pk, key string,
 func (p partitionedDictStore) DeleteDictObs(ctx context.Context, pk, sk string) error {
 	return p.at(pk).DeleteDictObs(ctx, pk, sk)
 }
+func (p partitionedDictStore) CreateCommonAutoTerm(ctx context.Context, term *model.DictTerm, obs *model.DictObservation, entry *model.DictTermLog) error {
+	return p.at(term.PK).CreateCommonAutoTerm(ctx, term, obs, entry)
+}
+func (p partitionedDictStore) EvictCommonAutoTerm(ctx context.Context, key string, v int64, entry *model.DictTermLog) (repository.DictWriteResult, error) {
+	return p.at(model.PrefixDictCommon).EvictCommonAutoTerm(ctx, key, v, entry)
+}
+func (p partitionedDictStore) TrimDictTermLog(ctx context.Context, pk, key string, keep int) error {
+	return p.at(pk).TrimDictTermLog(ctx, pk, key, keep)
+}
 
 func accountScope(accountID, userID string) TermsScope {
 	return TermsScope{PK: model.PrefixAccount + accountID, Member: &repository.MembershipCheck{AccountID: accountID, UserID: userID}}

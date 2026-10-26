@@ -48,7 +48,7 @@ func TestListDocumentsCrawledBetweenQueriesTheWindow(t *testing.T) {
 			body := map[string]any{"Items": []map[string]any{{
 				"PK": map[string]string{"S": "CRAWLER#src"}, "SK": map[string]string{"S": "DOC#d" + string(rune('0'+calls))},
 				"type": map[string]string{"S": "news"}, "title": map[string]string{"S": "t"}, "url": map[string]string{"S": "u"},
-				"crawledAt": map[string]string{"N": "1500"},
+				"crawledAt": map[string]string{"N": "1500"}, "ingestSource": map[string]string{"S": "search"},
 			}}}
 			if calls == 1 {
 				body["LastEvaluatedKey"] = map[string]any{"PK": map[string]string{"S": "CRAWLER#src"}, "SK": map[string]string{"S": "DOC#d1"}}
@@ -61,7 +61,7 @@ func TestListDocumentsCrawledBetweenQueriesTheWindow(t *testing.T) {
 		}),
 	})
 	docs, err := NewCrawlerRepository(client, "t").ListDocumentsCrawledBetween(context.Background(), 1000, 2000)
-	if err != nil || len(docs) != 2 || docs[0].DocHash != "d1" || docs[1].SourceID != "src" {
+	if err != nil || len(docs) != 2 || docs[0].DocHash != "d1" || docs[1].SourceID != "src" || docs[0].IngestSource != "search" {
 		t.Fatalf("docs=%+v err=%v", docs, err)
 	}
 	for _, target := range targets {

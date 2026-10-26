@@ -87,6 +87,63 @@ func (r *CrawlerRepository) GetSource(ctx context.Context, sourceID string) (*mo
 	return &item.CrawlerSource, nil
 }
 
+// GlobalNewsSourceAttribute marks an operator-curated crawler source whose
+// news may feed the Common dictionary layer. Only operators set it, directly
+// on the CONFIG item; no API path writes it (CrawlerSource has no such field).
+const GlobalNewsSourceAttribute = "globalNewsSource"
+
+// IsGlobalNewsSource reports whether sourceID is an operator-curated global
+// news source: its CONFIG item carries globalNewsSource = true and has no
+// owner, no subscribers and no custom URLs, so no user's subscription,
+// query or URL shapes what it crawls. A missing item, a missing or non-true
+// marker, or any user tie is false (fail closed); only a read failure is an
+// error.
+func (r *CrawlerRepository) IsGlobalNewsSource(ctx context.Context, sourceID string) (bool, error) {
+	result, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixCrawler + sourceID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixConfig},
+		},
+		ConsistentRead: aws.Bool(true),
+	})
+	if err != nil {
+		return false, fmt.Errorf("failed to get crawler source: %w", err)
+	}
+	item := result.Item
+	if item == nil {
+		return false, nil
+	}
+	marker, ok := item[GlobalNewsSourceAttribute].(*types.AttributeValueMemberBOOL)
+	if !ok || !marker.Value {
+		return false, nil
+	}
+	if owner, ok := item["ownerId"]; ok {
+		if s, isS := owner.(*types.AttributeValueMemberS); !isS || s.Value != "" {
+			return false, nil
+		}
+	}
+	for _, name := range []string{"subscribers", "customUrls"} {
+		if v, ok := item[name]; ok && !emptyAttributeList(v) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// emptyAttributeList is true for an empty list or set and for NULL.
+func emptyAttributeList(v types.AttributeValue) bool {
+	switch t := v.(type) {
+	case *types.AttributeValueMemberL:
+		return len(t.Value) == 0
+	case *types.AttributeValueMemberSS:
+		return len(t.Value) == 0
+	case *types.AttributeValueMemberNULL:
+		return true
+	}
+	return false
+}
+
 // PutSourceIfAbsent creates a brand-new crawler source, conditioned on the
 // PK not already existing -- AddSource's new-source branch uses this
 // instead of PutSource's unconditional overwrite, since a concurrent

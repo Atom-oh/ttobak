@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, dictionaryApi } from '@/lib/api';
 import { dictionaryErrorMessage, isRestorable, type DictionaryLayer, type DictTermItem, type TermLogEntry, type TermLogSnapshot } from '@/lib/dictionary';
 
-const ACTION_LABELS: Record<string, string> = { update: '수정', delete: '삭제', restore: '복원' };
+const ACTION_LABELS: Record<string, string> = { update: '수정', delete: '삭제', restore: '복원', create: '추가', evict: '정리' };
 const btn = 'px-2 py-1 text-xs font-medium rounded-lg hover:bg-slate-100 dark:hover:bg-white/5 disabled:opacity-40';
 
 const summary = (t?: TermLogSnapshot) => (t ? [t.displayAs, t.heardAs.length ? `(${t.heardAs.join(', ')})` : ''].filter(Boolean).join(' ') : '-');
