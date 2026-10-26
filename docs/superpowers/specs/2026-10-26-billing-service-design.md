@@ -273,12 +273,19 @@ kind of insight. Proposed grouping by what the user is doing:
 
 | Group | Items | Route (unchanged unless noted) |
 |---|---|---|
-| Work | Meetings, Accounts, Projects, Documents, Files | `/`, `/accounts`, `/projects`, `/docs`, `/files` |
+| Work | Meetings, Accounts, Projects, Docs | `/`, `/accounts`, `/projects`, `/docs` |
 | AI | Assistant, Deep Research | `/chat`, `/insights/research` |
-| Knowledge | Knowledge Base, News & Updates, Custom Dictionary | `/kb`, `/insights`, new `/dictionary` (moved out of Settings) |
+| Knowledge | Library, News & Updates, Custom Dictionary | `/kb` (Library), `/insights`, new `/dictionary` (moved out of Settings) |
 | Customer Analytics | Billing (all my Accounts), per-Account Billing tab | new `/billing`, Account detail tab |
 | — | Settings | `/settings` |
 
+- Documents vs Files vs Knowledge Base overlapped: `/docs` holds documents
+  written in TTOBAK (markdown, slides); `/files` is a read-only roll-up of
+  meeting attachments (with its own "Documents" filter); `/kb` holds uploads for
+  Q&A. Proposed: **Docs** (`/docs`) = what you write; **Library** (`/kb`) = every
+  file that came in, filterable by source (meeting attachment / uploaded),
+  type, and whether it is indexed for Q&A. `/files` redirects to
+  `/kb?source=meeting`. Open: index meeting attachments for Q&A automatically?
 - Existing `/insights/...` URLs keep working; only labels and grouping change.
 - The hand-off button is removed; Billing is a normal menu item, shown only to
   users who belong to at least one Account with billing data.
