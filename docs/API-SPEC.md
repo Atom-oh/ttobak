@@ -421,7 +421,7 @@ no `#` or `/` (else 400) and the caller must be a member of that Account (else
 object metadata `account-id`, and `headers` is `{"x-amz-meta-account-id":
 "{accountId}"}`: the client must send exactly those headers (plus
 `Content-Type`) or S3 rejects the upload. The web upload dialog requires the
-user to choose an Account or "None (Personal)" before any file is sent.
+user to choose an Account or the personal (no Account) option, which the UI labels in Korean, before any file is sent.
 
 `GET /api/kb/files` retains its `{files: [...]}` contract and follows all S3
 continuation pages under the caller's `kb/{userId}/` prefix. Any page failure

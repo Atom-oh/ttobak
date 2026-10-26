@@ -105,8 +105,8 @@
 
 **Interfaces:**
 - Consumes: Task 3 routes.
-- Produces: `type DictionaryLayer = 'personal' | 'common' | \`account:${string}\``; `dictionaryApi.listLayer(layer)`, `updateCommon(termId, patch, version)`, `deleteCommon(termId, version)`, `termLog(layer, termId)`, `restore(layer, termId, logId)`; `termSourceBadges(item): {kind, label}[]` (labels Meeting/KB/Research/News).
-- UI: tabs Personal / Account (select of the user's Accounts) / Common; existing `DictionaryTable` reused per tab; Common rows show Edit / Delete for everyone and a History button opening `TermHistory` with Restore.
+- Produces: `type DictionaryLayer = 'personal' | 'common' | \`account:${string}\``; `dictionaryApi.listLayer(layer)`, `updateCommon(termId, patch, version)`, `deleteCommon(termId, version)`, `termLog(layer, termId)`, `restore(layer, termId, logId)`; `termSourceBadges(item): {kind, label}[]` (Korean labels for meeting/KB/research/news; source of truth `frontend/src/lib/dictionary.ts`).
+- UI: Korean-labelled tabs for Personal, Account (select of the user's Accounts) and Common (source of truth `frontend/src/lib/dictionary.ts`); existing `DictionaryTable` reused per tab; Common rows show Korean-labelled edit and delete actions for everyone and a history button opening `TermHistory` with a restore action (labels in `frontend/src/components/TermHistory.tsx`).
 
 - [ ] **Step 1: Write failing tests** for `termSourceBadges` and for tab switching calling `listLayer` with `account:a1`.
 - [ ] **Step 2: Run** `cd frontend && npx vitest run src/lib/dictionary.test.ts src/components/DictionaryLayerTabs.test.tsx` → FAIL.
@@ -192,7 +192,7 @@
 - Test: `backend/internal/service/kb_account_test.go`, `frontend/src/components/KBFileList.test.tsx`
 
 **Interfaces:**
-- Produces: `KBUploadRequest.AccountID string \`json:"accountId,omitempty"\``; `GetPresignedURL(ctx, userID, fileName, fileType, accountID string)`; non-empty `accountID` requires membership (else `ErrForbidden`), and the presigned PUT sets `Metadata{"account-id": accountID}` (the client must send header `x-amz-meta-account-id`). UI: upload dialog with a required choice — the user's Accounts plus "None (Personal)".
+- Produces: `KBUploadRequest.AccountID string \`json:"accountId,omitempty"\``; `GetPresignedURL(ctx, userID, fileName, fileType, accountID string)`; non-empty `accountID` requires membership (else `ErrForbidden`), and the presigned PUT sets `Metadata{"account-id": accountID}` (the client must send header `x-amz-meta-account-id`). UI: upload dialog with a required choice — the user's Accounts plus a personal (no Account) option, labelled in Korean in `frontend/src/components/KBFileList.tsx`.
 
 - [ ] **Step 1: Write failing tests** `TestKBUploadRejectsForeignAccount`, `TestKBUploadSignsAccountMetadata`, UI test that upload is blocked until a choice is made.
 - [ ] **Step 2–4:** `go test ./internal/service -run KBUpload` and `npx vitest run src/components/KBFileList.test.tsx` FAIL → implement → PASS.

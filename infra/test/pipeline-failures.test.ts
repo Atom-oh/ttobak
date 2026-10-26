@@ -146,10 +146,11 @@ describe('pipeline failure retention and alarm routing', () => {
       const exprs = alarm.Metrics.filter((m: any) => m.Expression);
       expect(exprs).toHaveLength(1);
       expect(exprs[0].Expression).toContain('triggered');
-      expect(exprs[0].Expression).toContain('runs');
+      expect(exprs[0].Expression).toContain('succeeded');
+      expect(exprs[0].Expression).toContain('unchanged');
       const used = alarm.Metrics.filter((m: any) => m.MetricStat)
         .map((m: any) => m.MetricStat.Metric.MetricName).sort();
-      expect(used).toEqual(['TermsSourceSucceeded', 'TermsSourceTriggered']);
+      expect(used).toEqual(['TermsSourceSucceeded', 'TermsSourceTriggered', 'TermsSourceUnchanged']);
       for (const m of alarm.Metrics.filter((m: any) => m.MetricStat)) expect(m.MetricStat.Period).toBe(86400);
       expect(alarm.AlarmActions['Fn::If'][1]).toEqual([{ Ref: 'PipelineAlarmTopicArn' }]);
     });

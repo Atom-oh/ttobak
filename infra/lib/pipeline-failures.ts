@@ -96,7 +96,7 @@ export class PipelineFailures extends Construct {
    * dictionary). Filters share one namespace; a metric fed by several filters
    * sums them. Counts are observability only except TermsSourcesSilent.
    * Alarm TermsSourcesSilent: a day is a breach when at least one source
-   * trigger was queued and no source run completed; it fires after 7
+   * trigger was queued and no source run completed (succeeded or unchanged); it fires after 7
    * consecutive such days. Triggers are logged QUEUED only while a source
    * flag is on, so the alarm stays quiet with the flags off. CloudWatch
    * cannot compare sums across a 7-day window in metric math, hence the
@@ -129,8 +129,8 @@ export class PipelineFailures extends Construct {
       namespace, metricName, statistic: 'Sum', period: cdk.Duration.days(1),
     });
     this.alarm('TermsSourcesSilent', new cloudwatch.MathExpression({
-      expression: 'IF(FILL(triggered, 0) > 0 AND FILL(runs, 0) == 0, 1, 0)',
-      usingMetrics: { triggered: daily('TermsSourceTriggered'), runs: daily('TermsSourceSucceeded') },
+      expression: 'IF(FILL(triggered, 0) > 0 AND FILL(succeeded, 0) + FILL(unchanged, 0) == 0, 1, 0)',
+      usingMetrics: { triggered: daily('TermsSourceTriggered'), succeeded: daily('TermsSourceSucceeded'), unchanged: daily('TermsSourceUnchanged') },
       period: cdk.Duration.days(1),
       label: 'Source triggers queued without a completed run',
     }), 1, {
