@@ -508,8 +508,13 @@ func sourceDocumentTexts(text string) []TermSourceDocumentText {
 
 // extractSource runs one model call with the document text and no transcript.
 func (s *TermsAnalysisService) extractSource(ctx context.Context, text string) ([]TermCandidate, termsRunStats, string) {
+	return s.extractDocuments(ctx, sourceDocuments(text), 1, 1)
+}
+
+// extractDocuments runs call of calls with docs as the only input.
+func (s *TermsAnalysisService) extractDocuments(ctx context.Context, docs []termsDocumentText, call, calls int) ([]TermCandidate, termsRunStats, string) {
 	var stats termsRunStats
-	request, err := buildTermsRequest(termsCallInput{Task: "extract_terms", Call: 1, Calls: 1, Documents: sourceDocuments(text)})
+	request, err := buildTermsRequest(termsCallInput{Task: "extract_terms", Call: call, Calls: calls, Documents: docs})
 	if err != nil {
 		return nil, stats, model.AnalysisInvalidOutput
 	}

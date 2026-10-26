@@ -17,7 +17,8 @@ import (
 // filters, then MergeScoped into the meeting's Account when that layer is on.
 // Account writes carry the owner's membership ConditionCheck; Common is never
 // written from meetings, KB documents or research (it takes news terms only).
-// ProcessSource merges KB/research terms through MergeScoped.
+// ProcessSource merges KB/research terms and ProcessNewsDaily news terms
+// through MergeScoped.
 const (
 	// MaxAutoTermsPerScope caps unedited automatic (active or suggested)
 	// terms; the lowest-scoring are evicted after a merge.
@@ -81,8 +82,9 @@ type TermsScope struct {
 
 // TermsSourceRef is the evidence of a scoped merge: Kind/Ref name the source
 // (DictSourceMeeting with Ref = meeting ID, DictSourceKB with Ref = object
-// key, DictSourceResearch with Ref = research ID) and OwnerID the user whose
-// content it is. NotesSafe, Tainted, Accepted and SummaryGeneration are as on
+// key, DictSourceResearch with Ref = research ID, DictSourceNews with Ref =
+// crawled document hash) and OwnerID the user whose content it is
+// (model.DictNewsActor for news). NotesSafe, Tainted, Accepted and SummaryGeneration are as on
 // TermsMeetingRef.
 type TermsSourceRef struct {
 	Kind, Ref, OwnerID string
@@ -151,10 +153,18 @@ func (m *TermsMerger) MergeExtractedTerms(ctx context.Context, scopePK string, c
 
 // validateScope accepts the source owner's personal scope, or an Account scope
 // whose membership check names that owner, for a meeting, KB or research
-// source. Common is refused: none of these sources write it (R6).
+// source, and Common for a news source only: written by the news system
+// actor, without a membership check, with a public document hash as the ref
+// (R6: Common rows are visible to every user).
 func validateScope(scope TermsScope, ref TermsSourceRef) error {
 	switch ref.Kind {
 	case model.DictSourceMeeting, model.DictSourceKB, model.DictSourceResearch:
+	case model.DictSourceNews:
+		if scope.PK != model.PrefixDictCommon || scope.Member != nil || ref.OwnerID != model.DictNewsActor ||
+			!attachmentIdentifier.MatchString(ref.Ref) || ref.Tainted || len(ref.Accepted) != 0 {
+			return fmt.Errorf("%w: news terms merge writes only Common, as the news job, from a document hash", ErrInvalidInput)
+		}
+		return nil
 	default:
 		return fmt.Errorf("%w: terms merge does not take this source kind", ErrInvalidInput)
 	}
@@ -390,7 +400,7 @@ func (m *TermsMerger) mergeOne(ctx context.Context, scope TermsScope, c mergeCan
 			in := repository.DictMergeInput{
 				PK: pk, TermKey: c.key, Observation: obs, SeenAt: now, ExpectedVersion: term.Version,
 				HeardAs: obsHeard, SourceTypes: c.SourceTypes, Sources: []model.DictSourceRef{source},
-				Member: scope.Member,
+				Member: scope.Member, UpdatedBy: systemActor(ref),
 			}
 			err = m.store.PromoteSuggestedTerm(ctx, in, repository.DictPromotion{
 				DisplayAs: strings.TrimSpace(c.DisplayAs), Phrase: c.Phrase, Type: c.Type,
@@ -414,6 +424,7 @@ func (m *TermsMerger) mergeOne(ctx context.Context, scope TermsScope, c mergeCan
 				Sources:     model.AppendDictSource(term.Sources, source),
 				SkipHit:     acceptedIndex(ref.Accepted, c.key) >= 0,
 				Member:      scope.Member,
+				UpdatedBy:   systemActor(ref),
 			}
 			err = m.store.MergeAutoObservation(ctx, in)
 			if err == nil {
@@ -444,6 +455,15 @@ func (m *TermsMerger) mergeOne(ctx context.Context, scope TermsScope, c mergeCan
 	}
 	counters.Conflicts++
 	return outcomeSkipped, nil
+}
+
+// systemActor is the updatedBy a merge records: the news job's actor for a
+// news source; user-sourced merges leave updatedBy as it is.
+func systemActor(ref TermsSourceRef) string {
+	if ref.Kind == model.DictSourceNews {
+		return model.DictNewsActor
+	}
+	return ""
 }
 
 func newAutoTerm(pk string, c mergeCandidate, heard []string, ref TermsSourceRef, source model.DictSourceRef, now string) *model.DictTerm {
