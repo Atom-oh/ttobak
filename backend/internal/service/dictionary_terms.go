@@ -175,7 +175,7 @@ func (s *DictionaryService) CreateTerm(ctx context.Context, userID string, in mo
 			return nil, err
 		}
 	} else {
-		if err := s.repo.RestoreDictTerm(ctx, &row, existing.Version); err != nil {
+		if err := s.repo.RestoreDictTerm(ctx, &row, existing.Version, nil); err != nil {
 			return nil, versionConflict(err)
 		}
 		row.Version = existing.Version + 1
@@ -337,7 +337,7 @@ func (s *DictionaryService) pruneTombstones(ctx context.Context, pk string) erro
 	})
 	var errs []error
 	for _, tomb := range tombs[:len(tombs)-MaxTombstonesPerScope] {
-		if err := s.repo.DeleteTombstone(ctx, pk, tomb.TermKey, tomb.Version); err != nil && !errors.Is(err, repository.ErrConditionFailed) {
+		if err := s.repo.DeleteTombstone(ctx, pk, tomb.TermKey, tomb.Version, nil); err != nil && !errors.Is(err, repository.ErrConditionFailed) {
 			errs = append(errs, err)
 		}
 	}
@@ -556,7 +556,7 @@ func (s *DictionaryService) reconcileManualRows(ctx context.Context, userID stri
 		case !ok:
 			err = s.repo.CreateDictTerm(ctx, &fresh, nil)
 		case row.State == model.TermStateDeleted:
-			err = s.repo.RestoreDictTerm(ctx, &fresh, row.Version)
+			err = s.repo.RestoreDictTerm(ctx, &fresh, row.Version, nil)
 		case row.Origin != model.TermOriginManual || d.unchanged || legacyTermFromRow(row) == d.legacy:
 			continue // auto and suggested rows are never touched
 		default:
@@ -573,7 +573,7 @@ func (s *DictionaryService) reconcileManualRows(ctx context.Context, userID stri
 	}
 	for _, row := range rows {
 		if row.Origin == model.TermOriginManual && row.State == model.TermStateActive && !want[row.TermKey] {
-			if err := s.repo.DeleteManualTerm(ctx, pk, row.TermKey, row.Version); err != nil {
+			if err := s.repo.DeleteManualTerm(ctx, pk, row.TermKey, row.Version, nil); err != nil {
 				return versionConflict(err)
 			}
 		}
@@ -613,7 +613,7 @@ func (s *DictionaryService) DeleteTerm(ctx context.Context, userID, phrase strin
 			other = true
 			continue
 		}
-		if err := s.repo.DeleteManualTerm(ctx, pk, row.TermKey, row.Version); err != nil {
+		if err := s.repo.DeleteManualTerm(ctx, pk, row.TermKey, row.Version, nil); err != nil {
 			return versionConflict(err)
 		}
 		matched++
