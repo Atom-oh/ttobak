@@ -138,7 +138,7 @@ export default function AccountsClient() {
         // which would otherwise wipe this message in the same tick it was set.
         await fetchAccounts();
         if (!isCurrent()) return;
-        setNotice(`${request.ownerEmail ? accountCreationNotice(created, request.ownerEmail) : '계정을 만들었습니다.'}${summary.notice ? ` ${summary.notice}` : ''}`);
+        setNotice(`${request.ownerEmail ? accountCreationNotice(created, request.ownerEmail, user.userId) : '계정을 만들었습니다.'}${summary.notice ? ` ${summary.notice}` : ''}`);
         if (summary.error) setError(`계정은 만들었지만 일부 멤버를 추가하지 못했습니다. ${summary.error}`);
         return;
       }

@@ -204,6 +204,27 @@ test('successful additional-member outcomes stay visible after partial failure',
   assert.ok(page.find(n => n.props?.children?.includes?.('계정은 만들었지만 일부 멤버를 추가하지 못했습니다.')));
 });
 
+test('a self-email Owner receipt uses the actual Owner role after a partial member failure', async () => {
+  const page = fixture({
+    create: async request => ({
+      accountId: 'account', name: request.name, ownerUserId: 'creator',
+      creatorMember: true, ownerInvitationPending: false, ownerInvitationRequested: false,
+    }),
+    addMember: async () => { throw new Error('member could not be added'); },
+  });
+  await page.start(); page.otherOwner();
+  page.find(n => n.props?.placeholder === 'Owner 이름 또는 이메일').props.onPick({
+    userId: 'creator', email: 'creator@example.com',
+  });
+  page.checkbox().props.onChange({ target: { checked: true } }); page.pickMember();
+  await page.submit();
+  const notice = page.find(n => typeof n.props?.children === 'string' &&
+    n.props.children.includes('Account를 만들었습니다.')).props.children;
+  assert.ok(notice.includes('생성자는 Owner로 참여합니다.'), notice);
+  assert.ok(!notice.includes('생성자는 일반 멤버(AM)'), notice);
+  assert.deepEqual(page.calls.navigation, []);
+});
+
 test('normalized input retries preserve a UUID and edited checkbox requests rotate it', () => {
   const helper=loadHelper('accountCreation');
   let calls=0;
