@@ -29,11 +29,11 @@
 
 ## Review Focus
 
-1. A user removed from an Account must stop contributing to and receiving that Account's terms — Task 2 test `TestAccountTermWriteRequiresMembership`, Task 4 test `TestLayeredPlanSkipsAccountsUserLeft`.
+1. A user removed from an Account must stop contributing to and receiving that Account's terms — Task 2 test `TestAccountTermWriteRequiresMembership`, Task 6 test `TestLayeredPlanSkipsAccountsUserLeft`.
 2. A Common vandal edit (rename to an offensive term, mass delete) must be traceable and restorable — Task 3 test `TestCommonEditKeepsAuditAndRestores`.
-3. The correction step must not invent terms: a transcript with no sound-alike span stays byte-identical — Task 6 test `TestRefineGlossaryNoSpanNoChange`.
-4. An Account glossary must never be used on another Account's meeting — Task 6 test `TestGlossaryScopedToMeetingAccount`.
-5. A KB upload with an Account the user does not belong to is rejected, not silently stored as Personal — Task 7 test `TestKBUploadRejectsForeignAccount`.
+3. The correction step must not invent terms: a transcript with no sound-alike span stays byte-identical — Task 8 test `TestRefineGlossaryNoSpanNoChange`.
+4. An Account glossary must never be used on another Account's meeting — Task 8 test `TestGlossaryScopedToMeetingAccount`.
+5. A KB upload with an Account the user does not belong to is rejected, not silently stored as Personal — Task 9 test `TestKBUploadRejectsForeignAccount`.
 
 ---
 
@@ -94,7 +94,7 @@
 - [ ] **Step 4: Run** the same → PASS.
 - [ ] **Step 5: Commit** `feat(dict): layered dictionary reads and audited common edits`.
 
-### Task 4 (frontend part of Phase 1): Dictionary layer tabs
+### Task 4: Dictionary layer tabs (frontend)
 
 **Files:**
 - Modify: `frontend/src/components/CustomDictionary.tsx`, `frontend/src/lib/dictionary.ts`, `frontend/src/lib/api.ts` (`dictionaryApi` :689)
@@ -131,7 +131,7 @@
 - [ ] **Step 4: Run** `go test ./internal/service/... ./cmd/summarize/...` → PASS; infra `npx jest test/gateway-stack.test.ts -t autoTerms` covers the new env var.
 - [ ] **Step 5: Commit** `feat(terms): account layer from linked meetings`.
 
-### Task 4b: Layered vocabulary plan
+### Task 6: Layered vocabulary plan
 
 **Files:**
 - Modify: `backend/internal/service/vocabulary_table.go` (`planVocabulary` :144), `backend/internal/service/vocabulary_build.go` (`ensureVocabulary` :191 reads rows)
@@ -146,7 +146,7 @@
 - [ ] **Step 4: Run** `go test ./internal/service/...` → PASS (existing builder tests must still pass: a user with no Accounts/Common gets the same fingerprint as before).
 - [ ] **Step 5: Commit** `feat(vocab): layered vocabulary plan`.
 
-### Task 4c: Per-meeting Whisper prompt
+### Task 7: Per-meeting Whisper prompt
 
 **Files:**
 - Modify: `backend/cmd/transcribe/main.go` (`whisperInputs` :319, `loadDictionaryTerms` :342)
@@ -161,7 +161,7 @@
 
 ## Phase 3 — Silent transcript correction
 
-### Task 6: Glossary in RefineTranscript
+### Task 8: Glossary in RefineTranscript
 
 **Files:**
 - Modify: `backend/internal/service/bedrock.go` (`RefineTranscriptWithQuality` :1098, `buildRefineSystemPrompt` :1319, `refineChunk` :1361), `backend/cmd/summarize/transcript_quality.go` (`refineParsedTranscript` :30), `backend/internal/model/meeting.go`, `infra/lib/gateway-stack.ts`
@@ -183,7 +183,7 @@
 
 ## Phase 4 — KB and research sources
 
-### Task 7: KB upload asks for an Account
+### Task 9: KB upload asks for an Account
 
 **Files:**
 - Modify: `backend/internal/model/request.go` (`KBUploadRequest` :462), `backend/internal/service/kb.go` (`GetPresignedURL` :62), `backend/internal/handler/kb.go` (:28), `frontend/src/lib/api.ts` (:357), `frontend/src/components/KBFileList.tsx`
@@ -196,7 +196,7 @@
 - [ ] **Step 2–4:** `go test ./internal/service -run KBUpload` and `npx vitest run src/components/KBFileList.test.tsx` FAIL → implement → PASS.
 - [ ] **Step 5: Commit** `feat(kb): upload asks for the account`.
 
-### Task 8: Generic source extraction (KB, research)
+### Task 10: Generic source extraction (KB, research)
 
 **Files:**
 - Create: `backend/internal/service/terms_sources.go`
@@ -217,7 +217,7 @@
 
 ## Phase 5 — News feeds Common
 
-### Task 9: Daily news terms with repeat threshold
+### Task 11: Daily news terms with repeat threshold
 
 **Files:**
 - Modify: `backend/internal/service/terms_sources.go`, `backend/cmd/summarize/main.go`, `infra/lib/gateway-stack.ts` (schedule)
@@ -231,7 +231,7 @@
 - [ ] **Step 2–4:** `go test ./internal/service -run News` FAIL → implement → PASS.
 - [ ] **Step 5: Commit** `feat(terms): daily news terms into the common layer`.
 
-### Task 10: Observability and docs
+### Task 12: Observability and docs
 
 **Files:**
 - Modify: `infra/lib/pipeline-failures.ts`, `docs/decisions/ADR-008-custom-dictionary-for-stt-accuracy.md` (new amendment), `docs/INFRA-SPEC.md`, `docs/API-SPEC.md`
