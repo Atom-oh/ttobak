@@ -553,3 +553,20 @@ func TestListLayerPersonalMigratesLegacyBlob(t *testing.T) {
 		t.Fatalf("personal list must migrate the legacy blob first: %v migrated=%q items=%+v", err, store.blob.MigratedAt, items)
 	}
 }
+
+func TestTermViewOmitsSharedLayerSourceRefs(t *testing.T) {
+	kb := model.DictSourceRef{Kind: model.DictSourceKB, Ref: "kb/user-1/plan.md", At: "2026-10-26T00:00:00Z"}
+	for _, pk := range []string{model.PrefixAccount + "acc-1", model.PrefixDictCommon} {
+		view := termView(model.DictTerm{PK: pk, Sources: []model.DictSourceRef{kb}})
+		if len(view.Sources) != 1 || view.Sources[0].Kind != kb.Kind || view.Sources[0].At != kb.At {
+			t.Fatalf("%s: sources = %+v", pk, view.Sources)
+		}
+		if ref := view.Sources[0].Ref; ref != "" {
+			t.Fatalf("%s: shared view must not carry a source ref: %q", pk, ref)
+		}
+	}
+	personal := termView(model.DictTerm{PK: model.PrefixUser + "user-1", Sources: []model.DictSourceRef{kb}})
+	if personal.Sources[0].Ref != kb.Ref {
+		t.Fatalf("personal ref = %q, want raw", personal.Sources[0].Ref)
+	}
+}
