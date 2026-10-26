@@ -6,7 +6,9 @@ Create Account link. Those elements are not current product requirements.
 
 Current tokens use a unified indigo/violet brand in
 `frontend/src/app/globals.css`. Current Cognito UI supports administrator-created
-accounts, login, password challenges and reset; self-signup remains forbidden.
+or scoped invitation-created identities, login, password challenges and reset;
+self-signup remains forbidden. Current Account setup supports a designated Owner
+and optional creator AM membership (ADR-055).
 Do not reintroduce mockup auth flows or CDN Tailwind configuration into the app.
 
 See [current UI reference](docs/DESIGN-SPEC.md) and

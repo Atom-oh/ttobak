@@ -4,6 +4,9 @@
 - Decision date: 2026-10-26.
 - Supersedes ADR-034's restriction against automatic Cognito creation for account
   invitations and the owner-only account materialization condition.
+- [ADR-055](ADR-055-designated-account-owner.md) extends initial Account creation
+  with a designated canonical Owner and optional creator membership; existing
+  non-owner pending grants retain this ADR's rules.
 
 ## Decision
 

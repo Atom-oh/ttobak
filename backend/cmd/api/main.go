@@ -268,6 +268,7 @@ func init() {
 		r.Get("/api/accounts", accountHandler.ListAccounts)
 		r.Get("/api/navigation/accounts", accountCatalogHandler.Get)
 		r.Post("/api/accounts", accountHandler.CreateAccount)
+		r.Post("/api/accounts/{accountId}/owner-invitation", accountHandler.ResendOwnerInvitation)
 		r.Get("/api/accounts/{accountId}", accountHandler.GetAccount)
 		r.Get("/api/accounts/{accountId}/reading", accountReadingHandler.Get)
 		r.Put("/api/accounts/{accountId}/parent", accountHandler.UpdateAccountParent)

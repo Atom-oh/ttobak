@@ -34,6 +34,13 @@ func (r *handlerHierarchyRepo) CreateAccountWithParent(ctx context.Context, a *m
 	return r.CreateAccount(ctx, a, owner)
 }
 
+func (r *handlerHierarchyRepo) CreateAccountWithInitialMembers(ctx context.Context, a *model.Account, owner, creator *model.AccountMember, requester string, ancestors []repository.AccountParentLink) error {
+	if r.writeErr != nil {
+		return r.writeErr
+	}
+	return r.mockHandlerAccountRepo.CreateAccountWithInitialMembers(ctx, a, owner, creator, requester, ancestors)
+}
+
 func newHierarchyHandler() (*AccountHandler, *handlerHierarchyRepo) {
 	r := &handlerHierarchyRepo{mockHandlerAccountRepo: newMockHandlerAccountRepo()}
 	r.accounts["child"] = &model.Account{AccountID: "child", OwnerUserID: "owner"}
