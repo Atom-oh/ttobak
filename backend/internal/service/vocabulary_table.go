@@ -84,9 +84,21 @@ type vocabPlan struct {
 	empty       bool
 }
 
+// vocabLayer is one dictionary layer's rows in vocabulary priority order.
+type vocabLayer struct {
+	name string
+	rows []model.DictTerm
+}
+
 // vocabularyEntries orders eligible active terms (manual, hits, oldest),
 // dedupes by Phrase (first DisplayAs wins) and drops invalid rows singly.
 func vocabularyEntries(rows []model.DictTerm, lang string) []vocabEntry {
+	return layeredVocabularyEntries([]vocabLayer{{rows: rows}}, lang)
+}
+
+// eligibleVocabularyRows keeps active rows with the language's recognition
+// flag, ordered manual first, then hits, then oldest.
+func eligibleVocabularyRows(rows []model.DictTerm, lang string) []model.DictTerm {
 	eligible := make([]model.DictTerm, 0, len(rows))
 	for _, row := range rows {
 		if row.State != model.TermStateActive || row.Phrase == "" {
@@ -109,17 +121,32 @@ func vocabularyEntries(rows []model.DictTerm, lang string) []vocabEntry {
 		}
 		return a.SK < b.SK
 	})
-	seen := map[string]bool{}
+	return eligible
+}
+
+// layeredVocabularyEntries concatenates the layers' eligible rows in layer
+// order; an eligible termKey (then Phrase) already taken by an earlier layer
+// is skipped, so the first layer wins.
+func layeredVocabularyEntries(layers []vocabLayer, lang string) []vocabEntry {
+	seenKey, seen := map[string]bool{}, map[string]bool{}
 	var out []vocabEntry
-	for _, row := range eligible {
-		phrase := TranscribePhrase(row.Phrase)
-		display := strings.TrimSpace(row.DisplayAs)
-		key := strings.ToLower(phrase)
-		if seen[key] || !ValidTranscribePhrase(phrase, lang) || !validVocabDisplay(display) {
-			continue
+	for _, layer := range layers {
+		for _, row := range eligibleVocabularyRows(layer.rows, lang) {
+			if row.TermKey != "" && seenKey[row.TermKey] {
+				continue
+			}
+			phrase := TranscribePhrase(row.Phrase)
+			display := strings.TrimSpace(row.DisplayAs)
+			key := strings.ToLower(phrase)
+			if seen[key] || !ValidTranscribePhrase(phrase, lang) || !validVocabDisplay(display) {
+				continue
+			}
+			seen[key] = true
+			if row.TermKey != "" {
+				seenKey[row.TermKey] = true
+			}
+			out = append(out, vocabEntry{Phrase: phrase, DisplayAs: display})
 		}
-		seen[key] = true
-		out = append(out, vocabEntry{Phrase: phrase, DisplayAs: display})
 	}
 	return out
 }
@@ -142,7 +169,14 @@ func RenderVocabularyTSV(entries []vocabEntry) (string, int) {
 }
 
 func planVocabulary(rows []model.DictTerm, lang string) vocabPlan {
-	body, n := RenderVocabularyTSV(vocabularyEntries(rows, lang))
+	return planVocabularyLayers([]vocabLayer{{rows: rows}}, lang)
+}
+
+// planVocabularyLayers renders the merged table (Personal manual, Accounts,
+// Personal auto, Common), cut at whole rows under VocabMaxRows and
+// VocabMaxBytes; the fingerprint covers the merged table.
+func planVocabularyLayers(layers []vocabLayer, lang string) vocabPlan {
+	body, n := RenderVocabularyTSV(layeredVocabularyEntries(layers, lang))
 	min := 1
 	if lang == model.VocabLangEn {
 		min = VocabEnMinTerms
