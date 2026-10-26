@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { accountApi, ApiError, dictionaryApi } from '@/lib/api';
 import {
   claimInFlight, dictionaryErrorMessage, findDuplicateTerm, LAYER_TABS, layerAllowsCreate, normalizeTermKey, parseHeardAs,
-  resolveLayer, shouldReloadAfterError, type DeletedCommonTerm, type DictionaryLayer, type DictTermItem, type LayerTab, type TermPatch,
+  resolveLayer, settleLayerLoad, shouldReloadAfterError, type DeletedCommonTerm, type DictionaryLayer, type DictTermItem, type LayerTab, type TermPatch,
 } from '@/lib/dictionary';
 import type { AccountSummary } from '@/types/meeting';
 import { DictionaryTable } from './DictionaryTable';
@@ -22,21 +22,24 @@ function LayerDictionary({ layer }: { layer: DictionaryLayer }) {
   // Common only: the 삭제된 항목 view lists tombstones that 기록 can restore.
   const [showDeleted, setShowDeleted] = useState(false);
   const [deleted, setDeleted] = useState<DeletedCommonTerm[]>([]);
+  const [deletedError, setDeletedError] = useState<string | null>(null);
   const [newDisplayAs, setNewDisplayAs] = useState('');
   const [newHeardAs, setNewHeardAs] = useState('');
   const seq = useRef(0);
 
   const load = useCallback(async () => {
     const mine = ++seq.current;
-    try {
-      const [{ items: rows }, gone] = await Promise.all([
-        dictionaryApi.listLayer(layer),
-        layer === 'common' ? dictionaryApi.listDeletedCommon() : Promise.resolve({ items: [] as DeletedCommonTerm[] }),
-      ]);
-      if (mine === seq.current) { setItems(rows ?? []); setDeleted(gone.items ?? []); setError(null); }
-    } catch (err) {
-      if (mine === seq.current) { setItems((prev) => prev ?? []); setError(err instanceof Error ? err.message : '사전을 불러오지 못했습니다.'); }
-    }
+    // Independent loads: a failed tombstone list must not hide the live list.
+    const [live, gone] = await Promise.allSettled([
+      dictionaryApi.listLayer(layer),
+      layer === 'common' ? dictionaryApi.listDeletedCommon() : Promise.resolve({ items: [] as DeletedCommonTerm[] }),
+    ]);
+    if (mine !== seq.current) return;
+    const next = settleLayerLoad(live, gone);
+    setItems((prev) => next.items ?? prev ?? []);
+    setError(next.error ?? null);
+    if (next.deleted) setDeleted(next.deleted);
+    setDeletedError(next.deletedError ?? null);
   }, [layer]);
 
   useEffect(() => {
@@ -101,11 +104,13 @@ function LayerDictionary({ layer }: { layer: DictionaryLayer }) {
       {isCommon && (
         <button onClick={() => { setShowDeleted((v) => !v); setHistory(null); }} aria-pressed={showDeleted}
           className="px-3 py-1.5 text-xs font-semibold rounded-full bg-slate-100 text-slate-600 dark:bg-white/5 dark:text-text-secondary">
-          삭제된 항목 {deleted.length}
+          삭제된 항목{deletedError ? '' : ` ${deleted.length}`}
         </button>
       )}
       {isCommon && showDeleted ? (
-        deleted.length === 0
+        deletedError
+          ? <div role="alert" className="glass-panel rounded-xl p-4 text-center text-xs text-red-600 dark:text-red-400">{deletedError}</div>
+          : deleted.length === 0
           ? <div className="glass-panel rounded-xl p-8 text-center text-sm text-slate-500 dark:text-text-muted">삭제된 용어가 없습니다.</div>
           : (
             <ul className="glass-panel rounded-xl divide-y divide-slate-100 dark:divide-white/5">

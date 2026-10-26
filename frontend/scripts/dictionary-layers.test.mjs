@@ -17,7 +17,7 @@ function loadModule(path) {
 // vm-realm arrays differ in prototype; compare by value.
 const same = (a, b) => assert.deepEqual(JSON.parse(JSON.stringify(a)), b);
 
-const { termSourceBadges, resolveLayer, layerAllowsCreate, LAYER_TABS } = loadModule('lib/dictionary.ts');
+const { termSourceBadges, resolveLayer, layerAllowsCreate, LAYER_TABS, settleLayerLoad, DELETED_LOAD_ERROR } = loadModule('lib/dictionary.ts');
 
 test('termSourceBadges: one badge per kind, fixed order, Korean labels', () => {
   const sources = [
@@ -48,4 +48,16 @@ test('only Common refuses manual adds; tabs read 개인/계정/공통', () => {
   assert.equal(layerAllowsCreate('personal'), true);
   assert.equal(layerAllowsCreate('account:a1'), true);
   same(LAYER_TABS.map((t) => t.label), ['개인', '계정', '공통']);
+});
+
+test('settleLayerLoad: a failed deleted list never hides the live list', () => {
+  const ok = (value) => ({ status: 'fulfilled', value });
+  const fail = (message) => ({ status: 'rejected', reason: { message } });
+  const live = [{ termId: 't1', displayAs: 'K-culture' }];
+  const gone = [{ termId: 't2', displayAs: 'AlphaGrid', deletedBy: 'u1', deletedAt: '2026-10-26T00:00:00Z' }];
+  same(settleLayerLoad(ok({ items: live }), ok({ items: gone })), { items: live, deleted: gone });
+  same(settleLayerLoad(ok({ items: live }), fail('down')), { items: live, deletedError: DELETED_LOAD_ERROR });
+  same(settleLayerLoad(fail('throttled'), ok({ items: gone })), { error: 'throttled', deleted: gone });
+  same(settleLayerLoad(fail(''), fail('x')), { error: '사전을 불러오지 못했습니다.', deletedError: DELETED_LOAD_ERROR });
+  same(settleLayerLoad(ok({}), ok({})), { items: [], deleted: [] });
 });

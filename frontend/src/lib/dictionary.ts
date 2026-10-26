@@ -200,6 +200,28 @@ export const isBuilding = (v?: VocabularyViews) => v?.ko.status === 'BUILDING' |
 
 export const shouldReloadAfterError = (code: string) => ['VERSION_CONFLICT', 'NOT_FOUND', 'CONFLICT'].includes(code);
 
+export const DELETED_LOAD_ERROR = '삭제된 항목을 불러오지 못했습니다.';
+
+/**
+ * Settles a shared layer's two independent loads (live list, Common tombstones):
+ * a failed tombstone list sets only deletedError and never hides the live list.
+ * A field is absent when its load failed, so callers keep what they had.
+ */
+export function settleLayerLoad(
+  live: PromiseSettledResult<{ items?: DictTermItem[] }>,
+  gone: PromiseSettledResult<{ items?: DeletedCommonTerm[] }>,
+): { items?: DictTermItem[]; error?: string; deleted?: DeletedCommonTerm[]; deletedError?: string } {
+  const out: { items?: DictTermItem[]; error?: string; deleted?: DeletedCommonTerm[]; deletedError?: string } = {};
+  if (live.status === 'fulfilled') out.items = live.value.items ?? [];
+  else {
+    const message = (live.reason as { message?: unknown } | null)?.message;
+    out.error = typeof message === 'string' && message ? message : '사전을 불러오지 못했습니다.';
+  }
+  if (gone.status === 'fulfilled') out.deleted = gone.value.items ?? [];
+  else out.deletedError = DELETED_LOAD_ERROR;
+  return out;
+}
+
 const ERROR_MESSAGES: Record<string, string> = {
   VERSION_CONFLICT: '용어가 바뀌어 목록을 새로 불러왔습니다. 다시 시도해 주세요.',
   CONFLICT: '사전이 바뀌어 목록을 새로 불러왔습니다. 다시 시도해 주세요.',
