@@ -93,7 +93,7 @@ MCP (/api/mcp, Go) ──► Insight BFF internal routes (SigV4, see §7)
 
 ### 4.1 Frontend / backend split
 
-- **Frontend** moves into the TTOBAK Next.js app as an `/billing` route (and an
+- **Frontend** moves into the TTOBAK Next.js app as a `/billing` route (and a
   billing tab or summary card on the Account detail page). First step: host the
   existing dashboard markup and scripts inside a client component; the fetch
   shim attaches the TTOBAK Bearer token and calls `/api/billing/...`. The page
