@@ -167,15 +167,16 @@ func (s *AccountService) resendAccountInvite(ctx context.Context, requesterID, e
 			currentEmail = strings.ToLower(aws.ToString(attribute.Value))
 		}
 	}
-	currentUsername := aws.ToString(current.Username)
-	if currentUsername == "" || currentSub != sub || currentEmail != email {
+	if currentSub != sub || currentEmail != email {
 		return "", false, ErrInvitationUnavailable
 	}
 	if err := s.takeInvitationAttempt(ctx, requesterID); err != nil {
 		return "", false, err
 	}
+	// The email-only pool requires the resolved email for RESEND, even when
+	// AdminGetUser returns a generated UUID username.
 	out, err := s.cognito.AdminCreateUser(ctx, &cognitoidp.AdminCreateUserInput{
-		UserPoolId: aws.String(s.cognitoPoolID), Username: aws.String(currentUsername),
+		UserPoolId: aws.String(s.cognitoPoolID), Username: aws.String(currentEmail),
 		MessageAction:          cognitotypes.MessageActionTypeResend,
 		DesiredDeliveryMediums: []cognitotypes.DeliveryMediumType{cognitotypes.DeliveryMediumTypeEmail},
 	}, func(options *cognitoidp.Options) { options.RetryMaxAttempts = 1 })

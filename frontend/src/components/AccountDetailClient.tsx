@@ -39,21 +39,25 @@ export default function AccountDetailClient() {
   // was just queued in this exact call, so the email is already known here.
   const [pendingNoticeEmail, setPendingNoticeEmail] = useState<string | null>(null);
   const [pendingNoticeRole, setPendingNoticeRole] = useState<string | null>(null);
+  const [pendingNoticeAccountId, setPendingNoticeAccountId] = useState<string | null>(null);
   const [uploadingSlide, setUploadingSlide] = useState(false);
 
   const [inviteRole, setInviteRole] = useState('SSA');
   const [inviting, setInviting] = useState(false);
 
-  // Written ONLY by the accountId-change effect below, never by fetchAll --
-  // see ProjectDetailClient's identical guard for why fetchAll must not be
-  // able to overwrite this with its own (possibly superseded) accountId.
-  // Scoped to the projects section specifically: the other sections here
-  // share the same single-static-route staleness risk, but it's a
-  // pre-existing pattern across this whole component, not something this
-  // PR's new accountProjects fetch should take on fixing wholesale.
+  // Navigation owns this ref so an older fetch or invitation cannot restore
+  // its Account ID. The generation also rejects results after an A -> B -> A
+  // navigation or a newer invitation request.
   const activeAccountIdRef = useRef(accountId);
+  const inviteGeneration = useRef(0);
   useEffect(() => {
     activeAccountIdRef.current = accountId;
+    inviteGeneration.current++;
+    setPendingNotice(null);
+    setPendingNoticeEmail(null);
+    setPendingNoticeRole(null);
+    setPendingNoticeAccountId(null);
+    setInviting(false);
     // Reset so account A's linked projects (and its stale error flag)
     // don't stay visible under account B's URL while B's fetch is in
     // flight -- the guard in fetchAll only stops A's *response* from
@@ -103,15 +107,23 @@ export default function AccountDetailClient() {
   }, [isAuthenticated, fetchAll, membershipRevision]);
 
   const handlePickMember = async (picked: Pick<User, 'email'>, role = inviteRole, resendInvitation = false) => {
+    if (activeAccountIdRef.current !== accountId
+      || (resendInvitation && pendingNoticeAccountId !== accountId)) return;
+    const myAccountId = accountId;
+    const generation = ++inviteGeneration.current;
+    const isCurrent = () => activeAccountIdRef.current === myAccountId
+      && inviteGeneration.current === generation;
     setInviting(true);
     setError(null);
     setPendingNotice(null);
     setPendingNoticeEmail(null);
     setPendingNoticeRole(null);
+    setPendingNoticeAccountId(null);
     try {
       const outcome = await addMemberWithInvite({
-        addMember: (email, selectedRole) => accountApi.addMember(accountId, { email, role: selectedRole, resendInvitation }),
+        addMember: (email, selectedRole) => accountApi.addMember(myAccountId, { email, role: selectedRole, resendInvitation }),
       }, picked.email, role);
+      if (!isCurrent()) return;
       const plan = planMemberOutcome(outcome);
       // fetchAll clears the error banner on entry, so refresh first and show
       // the outcome afterwards -- even if the refresh itself fails, the
@@ -119,29 +131,37 @@ export default function AccountDetailClient() {
       try {
         if (plan.refresh) await fetchAll();
       } finally {
-        if (plan.notice) {
+        if (isCurrent() && plan.notice) {
           setPendingNotice(plan.notice);
           setPendingNoticeEmail(plan.noticeEmail ?? null);
           setPendingNoticeRole(role);
+          setPendingNoticeAccountId(myAccountId);
         }
-        if (plan.error) setError(plan.error);
+        if (isCurrent() && plan.error) setError(plan.error);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to add member');
+      if (isCurrent()) setError(err instanceof Error ? err.message : 'Failed to add member');
     } finally {
-      setInviting(false);
+      if (isCurrent()) setInviting(false);
     }
   };
 
   const handleRevokePendingMember = async () => {
-    if (!pendingNoticeEmail) return;
+    if (!pendingNoticeEmail || pendingNoticeAccountId !== accountId
+      || activeAccountIdRef.current !== accountId) return;
+    const myAccountId = accountId;
+    const generation = inviteGeneration.current;
     try {
-      await accountApi.revokePendingMember(accountId, pendingNoticeEmail);
+      await accountApi.revokePendingMember(myAccountId, pendingNoticeEmail);
+      if (activeAccountIdRef.current !== myAccountId || inviteGeneration.current !== generation) return;
       setPendingNotice(null);
       setPendingNoticeEmail(null);
       setPendingNoticeRole(null);
+      setPendingNoticeAccountId(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to revoke pending invite');
+      if (activeAccountIdRef.current === myAccountId && inviteGeneration.current === generation) {
+        setError(err instanceof Error ? err.message : 'Failed to revoke pending invite');
+      }
     }
   };
 
@@ -247,7 +267,7 @@ export default function AccountDetailClient() {
             {error}
           </div>
         )}
-        {pendingNotice && (
+        {pendingNotice && pendingNoticeAccountId === accountId && (
           <div className="bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400 text-sm rounded-lg p-3 mb-4 flex items-center justify-between gap-3">
             <div className="min-w-0">
               <p>{pendingNotice}</p>

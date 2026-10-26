@@ -205,14 +205,14 @@ func TestAddMember_InvitationCounterStopsBeforeMail(t *testing.T) {
 	}
 }
 
-func TestAddMember_ExplicitResendUsesPendingIdentity(t *testing.T) {
+func TestAddMember_ExplicitResendUsesCurrentEmailForEmailOnlyPool(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := newAccountServiceWithRepo(repo)
 	account, _ := svc.CreateAccount(context.Background(), "owner", "owner@example.com", &model.CreateAccountRequest{Name: "Customer"})
 	client := &fakeCognitoAdminAPI{
 		adminGetUserFn: func(context.Context, *cognitoidp.AdminGetUserInput) (*cognitoidp.AdminGetUserOutput, error) {
 			return &cognitoidp.AdminGetUserOutput{
-				Username: aws.String("immutable-username"),
+				Username:   aws.String("immutable-username"),
 				UserStatus: cognitotypes.UserStatusTypeForceChangePassword,
 				UserAttributes: append(invitedIdentity("invitee").Attributes,
 					cognitotypes.AttributeType{Name: aws.String("email"), Value: aws.String("new@example.com")}),
@@ -222,8 +222,10 @@ func TestAddMember_ExplicitResendUsesPendingIdentity(t *testing.T) {
 			if in.MessageAction != cognitotypes.MessageActionTypeResend {
 				t.Fatal("explicit resend must use Cognito RESEND")
 			}
-			if aws.ToString(in.Username) != "immutable-username" {
-				t.Fatal("resend must use the current immutable username")
+			if aws.ToString(in.Username) != "new@example.com" {
+				return nil, &cognitotypes.InvalidParameterException{
+					Message: aws.String("Username should be an email."),
+				}
 			}
 			user := invitedIdentity("invitee")
 			user.Attributes = append(user.Attributes, cognitotypes.AttributeType{Name: aws.String("email"), Value: aws.String("new@example.com")})
