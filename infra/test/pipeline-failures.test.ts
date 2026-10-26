@@ -133,6 +133,21 @@ describe('pipeline failure retention and alarm routing', () => {
       expect(byMetric('TermsNewsRuns')).toEqual(['"terms news:" "outcome=SUCCEEDED"']);
       expect(byMetric('TermsNewsDisabled')).toEqual(['"terms news:" "outcome=DISABLED"']);
       expect(byMetric('TermsNewsFailed')).toEqual(['"terms news:" "outcome=FAILED"']);
+      // The exact backend/cmd/summarize/transcript_quality.go log format.
+      expect(byMetric('TranscriptCorrectionApplied')).toEqual(['"transcript correction outcome=APPLIED"']);
+      expect(byMetric('TranscriptCorrectionNone')).toEqual(['"transcript correction outcome=APPLIED" "corrections=0"']);
+      expect(byMetric('TranscriptCorrectionUnavailable')).toEqual(['"transcript correction outcome=GLOSSARY_UNAVAILABLE"']);
+    });
+
+    test.each(['TermsNewsFailed', 'TermsAccountFailures'])('%s alarms on any failure in a day', name => {
+      const alarm = Object.values(termsFixture().findResources('AWS::CloudWatch::Alarm'))
+        .map(a => a.Properties).find(a => a.AlarmName === name)!;
+      expect(alarm).toMatchObject({
+        Namespace: 'Ttobak/Dictionary', MetricName: name, Statistic: 'Sum', Period: 86400,
+        EvaluationPeriods: 1, DatapointsToAlarm: 1, TreatMissingData: 'notBreaching',
+        ComparisonOperator: 'GreaterThanOrEqualToThreshold', Threshold: 1,
+      });
+      expect(alarm.AlarmActions['Fn::If'][1]).toEqual([{ Ref: 'PipelineAlarmTopicArn' }]);
     });
 
     test('TermsSourcesSilent alarms when triggers are queued for a day without a completed run', () => {

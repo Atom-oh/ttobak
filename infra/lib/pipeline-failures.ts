@@ -124,6 +124,12 @@ export class PipelineFailures extends Construct {
     count('TermsNewsRuns', 'TermsNewsRuns', '"terms news:" "outcome=SUCCEEDED"');
     count('TermsNewsDisabled', 'TermsNewsDisabled', '"terms news:" "outcome=DISABLED"');
     count('TermsNewsFailed', 'TermsNewsFailed', '"terms news:" "outcome=FAILED"');
+    // Transcript corrections (L3) log counts only: "transcript correction
+    // outcome=APPLIED meeting=<id> corrections=<n>". A filter cannot extract n
+    // from "corrections=<n>", so meetings corrected are Applied minus None.
+    count('TranscriptCorrectionApplied', 'TranscriptCorrectionApplied', '"transcript correction outcome=APPLIED"');
+    count('TranscriptCorrectionNone', 'TranscriptCorrectionNone', '"transcript correction outcome=APPLIED" "corrections=0"');
+    count('TranscriptCorrectionUnavailable', 'TranscriptCorrectionUnavailable', '"transcript correction outcome=GLOSSARY_UNAVAILABLE"');
 
     const daily = (metricName: string) => new cloudwatch.Metric({
       namespace, metricName, statistic: 'Sum', period: cdk.Duration.days(1),
@@ -138,6 +144,14 @@ export class PipelineFailures extends Construct {
       // is one UTC day: triggers queued and no run completed that day.
       alarmName: 'TermsSourcesSilent', evaluationPeriods: 1, datapointsToAlarm: 1,
       description: 'Source term extraction was triggered today but no run completed. Check the flag, the summarize logs (terms source: outcome=) and the terms-source DLQ.',
+    });
+    this.alarm('TermsNewsFailed', daily('TermsNewsFailed'), 1, {
+      alarmName: 'TermsNewsFailed', evaluationPeriods: 1, datapointsToAlarm: 1,
+      description: 'The daily news-to-Common terms job failed. Check the summarize logs (terms news: outcome=FAILED); the next daily run retries.',
+    });
+    this.alarm('TermsAccountFailures', daily('TermsAccountFailures'), 1, {
+      alarmName: 'TermsAccountFailures', evaluationPeriods: 1, datapointsToAlarm: 1,
+      description: 'An Account-layer terms merge failed and is not retried (R8). Check the summarize logs (layer=account outcome=); the affected meetings missed the Account layer until their next run.',
     });
   }
 
