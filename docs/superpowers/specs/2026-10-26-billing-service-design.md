@@ -23,6 +23,12 @@ and the assistant cannot use it while preparing for a meeting.
 Goal in one line: **an SA opens an Account in TTOBAK and sees, or asks about,
 its billing insight without a second login or a second site.**
 
+Naming: TTOBAK already has an **Insights** area (curated news crawling, deep
+research agent, custom dictionary). To avoid two "insights", this service is
+called **Billing** inside TTOBAK (`/billing`, `/api/billing/*`,
+`TtobakBillingStack`, `services/billing/`, MCP tools `billing_*`). See §12 for
+the menu reorganisation.
+
 ## 2. Goals, non-goals, anti-goals
 
 Goals
@@ -41,7 +47,7 @@ Non-goals
 Anti-goals (a result that "works" but fails the intent)
 - Any path where a user sees an Account they are not a member of, through the
   UI, the API, or MCP.
-- A TTOBAK deploy failure blocking an insight deploy, or the reverse.
+- A TTOBAK deploy failure blocking a billing deploy, or the reverse.
 - Customer names or customer-specific content in TTOBAK code or docs.
 
 ## 3. Current state (facts)
@@ -75,8 +81,8 @@ TTOBAK today
 
 ```
 Browser ──► CloudFront (ttobak.atomai.click)
-             ├─ /*                      S3: Next.js static (incl. /insight route)
-             ├─ /api/insight/*          Lambda@Edge JWT ──► OAC(SigV4) ──► Insight BFF (Lambda Web Function, IamAuth)
+             ├─ /*                      S3: Next.js static (incl. /billing route)
+             ├─ /api/billing/*          Lambda@Edge JWT ──► OAC(SigV4) ──► Insight BFF (Lambda Web Function, IamAuth)
              ├─ /api/*                  Lambda@Edge JWT ──► HTTP API (Go)  [unchanged]
              └─ upload path (see D4)    S3 data bucket (presigned multipart)
 
@@ -87,16 +93,16 @@ MCP (/api/mcp, Go) ──► Insight BFF internal routes (SigV4, see §7)
 
 ### 4.1 Frontend / backend split
 
-- **Frontend** moves into the TTOBAK Next.js app as an `/insight` route (and an
-  insight tab or summary card on the Account detail page). First step: host the
+- **Frontend** moves into the TTOBAK Next.js app as an `/billing` route (and an
+  billing tab or summary card on the Account detail page). First step: host the
   existing dashboard markup and scripts inside a client component; the fetch
-  shim attaches the TTOBAK Bearer token and calls `/api/insight/...`. The page
+  shim attaches the TTOBAK Bearer token and calls `/api/billing/...`. The page
   build tool (`build_page.py`) keeps producing the body; React porting is optional
   later work.
 - **Backend for frontend (BFF)** is the current Express server minus pages and
   minus cookie/OAuth login, deployed as a **Lambda Web Function**
   (`nodejs24.x`, Express unchanged, no adapter). It serves only JSON and
-  presign responses under `/api/insight/*`.
+  presign responses under `/api/billing/*`.
 
 ### 4.2 Why a Lambda Web Function for the BFF
 
@@ -143,7 +149,7 @@ customer billing data.
 ## 5. Authentication and authorization
 
 1. Browser sends the TTOBAK ID/access token as `Authorization: Bearer`.
-2. CloudFront `/api/insight/*` runs the same Lambda@Edge JWT check as `/api/*`.
+2. CloudFront `/api/billing/*` runs the same Lambda@Edge JWT check as `/api/*`.
 3. CloudFront signs the origin request with OAC (origin type `lambda`,
    `always-amz-auth`); Lambda accepts it only because the function's resource
    policy allows `cloudfront.amazonaws.com` with `aws:SourceArn` = the TTOBAK
@@ -171,12 +177,12 @@ answered only for Accounts the caller belongs to.
 
 | Tool | Returns |
 |---|---|
-| `insight_accounts` | Accounts with insight data, current version, period |
-| `insight_briefing` | ranked actions (what, $, owner, evidence) for an Account |
-| `insight_business_signals` | new/surging tag items and verified hypotheses |
-| `insight_sessions` | proposed SA sessions (type, why, audience, agenda) |
-| `insight_savings` | optimisation opportunities with $ estimates |
-| `insight_query` | bounded explore query over a raw dataset (filter, group, top N) |
+| `billing_accounts` | Accounts with billing data, current version, period |
+| `billing_briefing` | ranked actions (what, $, owner, evidence) for an Account |
+| `billing_business_signals` | new/surging tag items and verified hypotheses |
+| `billing_sessions` | proposed SA sessions (type, why, audience, agenda) |
+| `billing_savings` | optimisation opportunities with $ estimates |
+| `billing_query` | bounded explore query over a raw dataset (filter, group, top N) |
 
 Call path: MCP Lambda → BFF internal route signed with SigV4 by the MCP role
 (`lambda:InvokeWebFunctionEndpoint`), user identity passed as the verified
@@ -186,29 +192,29 @@ Responses are computed summaries; raw uploads never leave the data bucket.
 
 ## 8. Repository and deployment
 
-- Code moves to `services/insight/` in the TTOBAK repo: `bff/` (Express),
+- Code moves to `services/billing/` in the TTOBAK repo: `bff/` (Express),
   `worker/` (Python analysis), `page/` (dashboard body + build tool), tests.
   Only code moves; the old repository's design history and any customer-specific
   documents stay out.
-- New CDK stack `TtobakInsightStack` in the TTOBAK infra app: Web Function
+- New CDK stack `TtobakBillingStack` in the TTOBAK infra app: Web Function
   (+ revision, endpoint, resource policy), worker task definition and
   EventBridge rule, side Lambdas, IAM. Data bucket and platform table are
   referenced by name (they are `RETAIN` today) — no copy, no import in phase 1.
-- `TtobakFrontendStack` gets the `/api/insight/*` behavior (before `/api/*`) and
+- `TtobakFrontendStack` gets the `/api/billing/*` behavior (before `/api/*`) and
   the upload behavior.
-- CI: a separate job that deploys `TtobakInsightStack` only when
-  `services/insight/**` or its stack file changes, so a failing TTOBAK deploy
-  does not block insight and vice versa.
+- CI: a separate job that deploys `TtobakBillingStack` only when
+  `services/billing/**` or its stack file changes, so a failing TTOBAK deploy
+  does not block billing and vice versa.
 
 ## 9. Migration and cut-over
 
-1. Deploy `TtobakInsightStack` alongside the existing insight stack (both read
+1. Deploy `TtobakBillingStack` alongside the existing insight stack (both read
    the same bucket/table; the old worker keeps running until step 5).
-2. Add `/api/insight/*` and the upload path on the TTOBAK distribution.
-3. Ship the `/insight` route; verify per-Account visibility with two test users.
-4. Switch the TTOBAK entry button from hand-off to the internal route.
+2. Add `/api/billing/*` and the upload path on the TTOBAK distribution.
+3. Ship the `/billing` route; verify per-Account visibility with two test users.
+4. Switch the TTOBAK entry button from hand-off to the internal route (`/billing`).
 5. Move the worker EventBridge rule to the new stack (one owner at a time).
-6. `insight.atomai.click` redirects to `ttobak.atomai.click/insight` for a while.
+6. `insight.atomai.click` redirects to `ttobak.atomai.click/billing` for a while.
 7. Remove the old web service, ALB, VPC origin, OAuth exchange, hand-off code.
 
 Rollback: until step 7 the old site still works; revert the button and the
@@ -240,3 +246,27 @@ CloudFront behaviors.
   layout (key prefix change for new uploads) vs presigning against the S3
   regional endpoint directly.
 - **D5 Old domain.** Redirect period for `insight.atomai.click`, then delete.
+
+## 12. Navigation reorganisation
+
+Today the sidebar is one flat list (Meetings, Accounts, Projects, Documents,
+Assistant, Files, Knowledge Base, Insights, Settings) plus a separate
+"Billing Insight" hand-off button; the custom dictionary sits inside Settings.
+"Insights" mixes news crawling and deep research, and billing would be a third
+kind of insight. Proposed grouping by what the user is doing:
+
+| Group | Items | Route (unchanged unless noted) |
+|---|---|---|
+| Work | Meetings, Accounts, Projects, Documents, Files | `/`, `/accounts`, `/projects`, `/docs`, `/files` |
+| AI | Assistant, Deep Research | `/chat`, `/insights/research` |
+| Knowledge | Knowledge Base, News & Updates, Custom Dictionary | `/kb`, `/insights`, new `/dictionary` (moved out of Settings) |
+| Customer Analytics | Billing (all my Accounts), per-Account Billing tab | new `/billing`, Account detail tab |
+| — | Settings | `/settings` |
+
+- Existing `/insights/...` URLs keep working; only labels and grouping change.
+- The hand-off button is removed; Billing is a normal menu item, shown only to
+  users who belong to at least one Account with billing data.
+- Mobile bottom bar stays at five items (Home, AI, Record, Knowledge, Profile);
+  Billing is reached from Accounts and the menu sheet.
+- Open: whether Deep Research belongs under AI or Knowledge (it is started from
+  the assistant but its reports are reference material).
