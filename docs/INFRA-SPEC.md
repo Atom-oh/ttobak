@@ -616,9 +616,10 @@ so deploy after the function has run once) publishing count-1 metrics to the
 Failed Account merges are not retried, so `TermsAccountFailures` is the signal
 that some linked meetings missed the Account layer; it has no alarm.
 
-Alarm `TermsSourcesSilent` uses metric math over two daily-sum metrics:
-`IF(FILL(triggered, 0) > 0 AND FILL(runs, 0) == 0, 1, 0)` with
-`triggered = TermsSourceTriggered` and `runs = TermsSourceSucceeded`. It needs
+Alarm `TermsSourcesSilent` uses metric math over three daily-sum metrics:
+`IF(FILL(triggered, 0) > 0 AND FILL(succeeded, 0) + FILL(unchanged, 0) == 0, 1, 0)`
+with `triggered = TermsSourceTriggered`, `succeeded = TermsSourceSucceeded` and
+`unchanged = TermsSourceUnchanged` (an unchanged re-run is a healthy run). It needs
 7 of 7 daily breaches, so it fires when source triggers were queued every day
 for a week and no source run completed. A day without any trigger breaks the
 streak, so sparse uploads will not raise it; this is accepted because CloudWatch
