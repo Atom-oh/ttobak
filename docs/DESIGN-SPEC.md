@@ -239,17 +239,16 @@ All current account members may add members/change assignable roles. Nobody can
 assign owner. Removal/pending-invite revocation stay owner-only (ADR-034). UI
 visibility is not the authorization boundary.
 
-Adding an existing invited user queues account membership; it does not send an
-email. For an email with no profile and no Cognito user (404
-`INVITATION_REQUIRED`), an admin caller automatically sends the invitation
-through `/api/settings/invite-user` and retries, queuing the pending membership
-(`lib/accountInvite.ts`); account creation and the detail page share this path.
-Non-admins are told to ask an administrator. The member picker says "add member", and the pending notice distinguishes
-the queued grant from mail delivery. Admins get a link to
-`/settings#user-management` for the explicit resend action; other members are
-directed to an administrator. New-user invitation and resend confirmations
+Account creation and the detail page use the authorized add-member API directly
+(`lib/accountInvite.ts`). A current member can invite a missing user: the server
+requests Cognito email delivery and queues identity-bound membership. Reusing an
+existing invited user queues membership without sending another email. The
+pending notice distinguishes grant queuing from mail delivery and offers an
+explicit "resend invitation" action to members; cancellation remains owner-only.
+New-user invitation and resend confirmations
 acknowledge a mail request, not inbox delivery. The configured invitation includes
-the login link and temporary password.
+the login link and temporary password. Domain allowlisting, verified requester
+email and the hourly invitation counter apply (ADR-054).
 
 Account document sharing creates a copy. Email sharing is a read-only reference,
 with no permission toggle. A public link is separately revocable. previewUrl is

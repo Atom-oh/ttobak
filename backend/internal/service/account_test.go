@@ -139,6 +139,10 @@ func (m *mockAccountRepo) PutPendingShare(_ context.Context, share *model.Pendin
 	return nil
 }
 
+func (m *mockAccountRepo) GetAllowedDomains(context.Context) ([]string, error) {
+	return []string{"example.com", "x.com"}, nil
+}
+
 func (m *mockAccountRepo) GetPendingShare(_ context.Context, email, sk string) (*model.PendingShare, error) {
 	for _, p := range m.pendingShares {
 		if p.Email == email && p.SK == sk {
@@ -715,8 +719,8 @@ func TestAddMember_UnknownEmail(t *testing.T) {
 	svc := newAccountServiceWithRepo(repo)
 	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
 	_, err := svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "ghost@x.com", Role: model.RoleSSA})
-	if !errors.Is(err, ErrUserNotFound) {
-		t.Errorf("expected ErrUserNotFound, got %v", err)
+	if !errors.Is(err, ErrInvitationUnavailable) {
+		t.Errorf("expected ErrInvitationUnavailable, got %v", err)
 	}
 }
 
@@ -860,7 +864,7 @@ func TestAddMember_PendingSelfInviteRejected(t *testing.T) {
 	}
 }
 
-func TestAddMember_UnknownEmail_NotInvited_StillErrUserNotFound(t *testing.T) {
+func TestAddMember_UnknownEmail_WithoutCounterDoesNotInvite(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := newAccountServiceWithRepo(repo)
 	svc.SetCognitoAdminAPI(&fakeCognitoAdminAPI{
@@ -871,8 +875,8 @@ func TestAddMember_UnknownEmail_NotInvited_StillErrUserNotFound(t *testing.T) {
 	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
 
 	_, err := svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "ghost@x.com", Role: model.RoleSSA})
-	if !errors.Is(err, ErrUserNotFound) {
-		t.Errorf("expected ErrUserNotFound, got %v", err)
+	if !errors.Is(err, ErrInvitationUnavailable) {
+		t.Errorf("expected ErrInvitationUnavailable, got %v", err)
 	}
 	if len(repo.pendingShares) != 0 {
 		t.Errorf("expected no pending share for a never-invited email, got %d", len(repo.pendingShares))
@@ -898,8 +902,8 @@ func TestAddMember_RejectsQueuingWithEmptyCognitoSub(t *testing.T) {
 	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
 
 	_, err := svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "invited@x.com", Role: model.RoleSSA})
-	if !errors.Is(err, ErrUserNotFound) {
-		t.Errorf("expected ErrUserNotFound when the invite resolves to an empty sub, got %v", err)
+	if !errors.Is(err, ErrInvitationUnavailable) {
+		t.Errorf("expected ErrInvitationUnavailable when the invite resolves to an empty sub, got %v", err)
 	}
 	if len(repo.pendingShares) != 0 {
 		t.Errorf("expected no pending share to be queued with an empty sub, got %d", len(repo.pendingShares))

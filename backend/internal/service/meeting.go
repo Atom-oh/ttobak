@@ -1381,7 +1381,7 @@ func (s *MeetingService) MaterializePendingShares(ctx context.Context, userID, e
 }
 
 // materializeOne atomically re-verifies one queued grant's inviter (still
-// owns the account as RoleOwner / still owns the meeting) and the absence
+// is an account member / still owns the meeting) and the absence
 // of an existing row for userID, then writes the real grant and clears the
 // queued one -- all in a single transaction (MaterializePendingAccountGrant/
 // MaterializePendingMeetingGrant), closing the check-then-write race a

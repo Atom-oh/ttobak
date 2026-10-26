@@ -408,13 +408,12 @@ func (m *mockMeetingRepo) deletePendingShareLocked(email, sk string) {
 }
 
 // MaterializePendingAccountGrant mirrors the real repo's transactional
-// condition checks (inviter must still be RoleOwner; recipient must not
+// condition checks (inviter must still be a member; recipient must not
 // already be a member) so tests exercise the same decision logic --
 // success clears the matching pending share too, matching the real
 // all-in-one transaction.
 func (m *mockMeetingRepo) MaterializePendingAccountGrant(_ context.Context, p *model.PendingShare, userID, email string) (bool, error) {
-	inviter, ok := m.members[p.AccountID+"|"+p.InvitedByUserID]
-	if !ok || inviter.Role != model.RoleOwner {
+	if _, ok := m.members[p.AccountID+"|"+p.InvitedByUserID]; !ok {
 		return false, nil
 	}
 	if _, exists := m.members[p.AccountID+"|"+userID]; exists {
@@ -1613,12 +1612,12 @@ func TestMaterializePendingShares_SkipsWhenInviterNoLongerAccountMember(t *testi
 	}
 }
 
-func TestMaterializePendingShares_SkipsWhenInviterDemotedFromOwner(t *testing.T) {
+func TestMaterializePendingShares_AllowsInviterWhoRemainsMemberAfterDemotion(t *testing.T) {
 	repo := newMockMeetingRepo()
 	svc := newMeetingServiceWithRepo(repo)
 	repo.accounts["acc-1"] = &model.Account{AccountID: "acc-1", Name: "Test Account"}
-	// owner-1 queued this grant while owner, but is now a regular member --
-	// AddMember requires RoleOwner specifically, not just any membership.
+	// ADR-054 allows any current member to invite: demotion from owner does
+	// not invalidate a grant while the inviter's membership remains present.
 	repo.members["acc-1|owner-1"] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleSSA}
 	repo.pendingShares = append(repo.pendingShares, &model.PendingShare{
 		Email: "invited@test.com", Kind: model.PendingShareKindAccount,
@@ -1635,8 +1634,8 @@ func TestMaterializePendingShares_SkipsWhenInviterDemotedFromOwner(t *testing.T)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if mem != nil {
-		t.Errorf("expected no membership to be materialized once the inviter was demoted from owner, got %+v", mem)
+	if mem == nil || mem.Role != model.RoleTAM {
+		t.Errorf("expected the queued role while the inviter remains a member, got %+v", mem)
 	}
 }
 

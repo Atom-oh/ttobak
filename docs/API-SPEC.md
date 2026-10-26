@@ -578,10 +578,18 @@ transactional ancestry checks and retries protect concurrent moves. Conflicts
 return 409. Hierarchy is organization metadata, never authorization inheritance.
 
 Any current account member can add members or change assignable roles; `owner`
-is never assignable. Adding an email with no profile and no Cognito user returns
-404 `INVITATION_REQUIRED`; an invited-but-unregistered email returns
-`pending: true`. Creating the Cognito user remains admin-only. Removal and pending-invite revocation remain owner-only
-(ADR-034). Project permissions are separate: owner/direct member/member of a
+is never assignable. Member addition requires a verified requester email and a
+single JSON body capped at 1,024 bytes. A missing Cognito identity is invited and
+queued, returning `pending: true, invited: true`. An existing invited identity is
+queued with `pending: true` without resending mail. Optional `resendInvitation:
+true` explicitly requests resend only for a `FORCE_CHANGE_PASSWORD` identity.
+New invitations and resends enforce the current domain allowlist and 20 attempts
+per caller per UTC hour; counter failure returns 503 and limit exhaustion 429.
+`INVITATION_GRANT_FAILED` (500) records requested delivery followed by queue
+failure. Account materialization transactionally revalidates current inviter
+membership, the invited sub, expiry and pending-row version. Removal and
+pending-invite revocation remain owner-only (ADR-034/054).
+Project permissions are separate: owner/direct member/member of a
 linked account. The service list unions those access paths; project deletion
 rejects remaining relationships. Canonical sets and reverse references change in
 one transaction. See account/project handlers and services for each mutation gate.

@@ -80,6 +80,7 @@ type accountRepo interface {
 	ListAccountMembers(ctx context.Context, accountID string) ([]model.AccountMember, error)
 	ListAccountsForUser(ctx context.Context, userID string) ([]model.AccountMember, error)
 	GetUserByEmail(ctx context.Context, email string) (*model.User, error)
+	GetAllowedDomains(ctx context.Context) ([]string, error)
 	ListMeetingRefsForAccount(ctx context.Context, accountID string) ([]model.MeetingRef, error)
 	GetMeetingByID(ctx context.Context, meetingID string) (*model.Meeting, error)
 	GetMeetingPublication(ctx context.Context, ownerID, meetingID string) (*model.Meeting, error)
@@ -125,31 +126,24 @@ type AccountService struct {
 	s3         s3ObjectDeleter
 	bucketName string
 
-	// cognito/cognitoPoolID back AddMember's PendingShare invited-check (see
-	// emailHasPendingInvite in meeting.go). Left unset, AddMember treats every
-	// unresolved email as plainly unknown -- SetCognitoAdminAPI is what
-	// cmd/api/main.go calls to wire the real client.
-	cognito       cognitoAdminAPI
-	cognitoPoolID string
+	// Cognito creates or resolves invitation identities. Missing configuration
+	// fails closed for unknown recipients; main.go wires the cold-start client.
+	cognito           cognitoAdminAPI
+	cognitoPoolID     string
+	invitationCounter *WindowCounter
 }
 
 func NewAccountService(repo *repository.DynamoDBRepository, s3Client *s3.Client, bucketName string) *AccountService {
 	return &AccountService{repo: repo, s3: s3Client, bucketName: bucketName}
 }
 
-// SetCognitoAdminAPI wires a Cognito client for AddMember's PendingShare
-// invited-check to use. Mirrors MeetingService.SetCognitoAdminAPI.
+// SetCognitoAdminAPI wires a Cognito client for identity-bound member invitations.
 func (s *AccountService) SetCognitoAdminAPI(client cognitoAdminAPI, poolID string) {
 	s.cognito = client
 	s.cognitoPoolID = poolID
 }
 
-// resolveCognitoPoolID intentionally has no os.Getenv fallback, unlike
-// MeetingService's namesake: main.go always calls SetCognitoAdminAPI on
-// this service (there's no legacy caller that constructs it without
-// wiring one), and emailHasPendingInvite's own contract is "explicitly
-// wired or skip the check" -- a silent env-var fallback here would
-// contradict that and was dead code in practice anyway.
+// resolveCognitoPoolID uses only the explicitly wired pool.
 func (s *AccountService) resolveCognitoPoolID() string {
 	return s.cognitoPoolID
 }
@@ -313,22 +307,18 @@ func (s *AccountService) AddMember(ctx context.Context, requesterUserID, account
 	if !isAssignableRole(req.Role) {
 		return nil, ErrInvalidInput
 	}
-	user, err := s.repo.GetUserByEmail(ctx, req.Email)
+	email, err := normalizeAccountInviteEmail(req.Email)
+	if err != nil {
+		return nil, err
+	}
+	user, err := s.repo.GetUserByEmail(ctx, email)
 	if err != nil {
 		return nil, err
 	}
 	if user == nil {
-		invited, sub, err := emailHasPendingInvite(ctx, s.cognito, s.resolveCognitoPoolID(), req.Email)
+		sub, invited, err := s.prepareAccountInvite(ctx, requesterUserID, email, req.ResendInvitation)
 		if err != nil {
 			return nil, err
-		}
-		if !invited || sub == "" {
-			// Fail-closed: without a sub, materializeOne has no identity to
-			// bind the grant to. AdminGetUserOutput.Username is a required
-			// response field, so this should never actually be empty --
-			// treat it the same as "not invited" rather than queuing an
-			// unclaimable grant.
-			return nil, ErrUserNotFound
 		}
 		// requesterUserID has a PROFILE row (it's already resolved to a
 		// member via GetMember above), so a self-invite here means the
@@ -346,7 +336,7 @@ func (s *AccountService) AddMember(ctx context.Context, requesterUserID, account
 			return nil, ErrSelfShare
 		}
 		if err := s.repo.PutPendingShare(ctx, &model.PendingShare{
-			Email:             req.Email,
+			Email:             email,
 			Kind:              model.PendingShareKindAccount,
 			AccountID:         accountID,
 			Role:              req.Role,
@@ -354,9 +344,15 @@ func (s *AccountService) AddMember(ctx context.Context, requesterUserID, account
 			InvitedByEmail:    requester.Email,
 			InvitedCognitoSub: sub,
 		}); err != nil {
+			if invited {
+				return nil, fmt.Errorf("%w: %v", ErrInvitationGrantFailed, err)
+			}
+			if errors.Is(err, repository.ErrConditionFailed) {
+				return nil, ErrForbidden
+			}
 			return nil, err
 		}
-		return &model.AccountMemberDTO{Email: req.Email, Role: req.Role, Pending: true}, nil
+		return &model.AccountMemberDTO{Email: email, Role: req.Role, Pending: true, Invited: invited}, nil
 	}
 	existing, err := s.repo.GetMember(ctx, accountID, user.UserID)
 	if err != nil {
