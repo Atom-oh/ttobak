@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/aws/aws-sdk-go-v2/service/transcribe"
 	transcribeTypes "github.com/aws/aws-sdk-go-v2/service/transcribe/types"
@@ -67,5 +70,28 @@ func TestMigratedUserStillGetsPromptAndVocabulary(t *testing.T) {
 	}
 	if transcriptionVocabulary(context.Background(), svc, "") != "" || whisperInitialPrompt(context.Background(), svc, "") != "" {
 		t.Fatal("an unknown owner must not get dictionary inputs")
+	}
+}
+
+// A large dictionary is cut at whole terms within whisperPromptMaxRunes, so
+// INITIAL_PROMPT never pushes the RunTask override past the ECS limit.
+func TestJoinWhisperPromptCapsAtWholeTerms(t *testing.T) {
+	var phrases []string
+	for i := 0; i < 400; i++ {
+		phrases = append(phrases, fmt.Sprintf("케이컬처용어%03d", i))
+	}
+	phrases = append([]string{"K-culture", " ", "K-culture"}, phrases...)
+	got := joinWhisperPrompt(phrases)
+	if n := utf8.RuneCountInString(got); n == 0 || n > whisperPromptMaxRunes {
+		t.Fatalf("prompt length %d runes", n)
+	}
+	if !strings.HasPrefix(got, "K-culture, 케이컬처용어000") || strings.Count(got, "K-culture") != 1 {
+		t.Fatalf("order or dedupe broken: %q", got[:40])
+	}
+	if strings.HasSuffix(got, ", ") || strings.Contains(got, ", ,") {
+		t.Fatalf("a term was cut: %q", got[len(got)-20:])
+	}
+	if joinWhisperPrompt([]string{"AlphaGrid", "Beta-Node"}) != "AlphaGrid, Beta-Node" {
+		t.Fatal("a small dictionary must pass through unchanged")
 	}
 }

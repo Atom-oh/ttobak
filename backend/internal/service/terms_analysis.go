@@ -119,6 +119,15 @@ type TermsAnalysisService struct {
 	publish     func(context.Context, model.TermsRequested) error
 	cfg         TermsConfig
 	now         func() time.Time
+	// refreshVocabulary, when set, advances the owner's Transcribe vocabulary
+	// after a run made terms active, so batch recognition picks them up
+	// without waiting for a dictionary page visit.
+	refreshVocabulary func(ctx context.Context, ownerID string)
+}
+
+// SetVocabularyRefresher installs the post-run vocabulary hook; nil disables it.
+func (s *TermsAnalysisService) SetVocabularyRefresher(fn func(ctx context.Context, ownerID string)) {
+	s.refreshVocabulary = fn
 }
 
 // NewTermsAnalysisService wires the job; attachments may be nil. A nil
@@ -173,9 +182,8 @@ func newTermsSource(meeting *model.Meeting) termsSource {
 // outcome as non-fatal.
 func (s *TermsAnalysisService) Enqueue(ctx context.Context, ownerID, meetingID, reason string) string {
 	outcome := s.enqueue(ctx, ownerID, meetingID)
-	if outcome != TermsEnqueueDisabled {
-		log.Printf("terms enqueue: meeting=%s reason=%s outcome=%s", meetingID, reason, outcome)
-	}
+	// DISABLED is logged too: a silent no-op hid a switched-off rollout.
+	log.Printf("terms enqueue: meeting=%s reason=%s outcome=%s", meetingID, reason, outcome)
 	return outcome
 }
 
@@ -379,6 +387,10 @@ func (s *TermsAnalysisService) Process(ctx context.Context, event model.TermsReq
 	log.Printf("terms run: meeting=%s run=%s status=succeeded code=%s calls=%d inputTokens=%d outputTokens=%d filter=%s created=%d suggested=%d merged=%d promoted=%d skipped=%d",
 		event.MeetingID, event.RunID, completion.ErrorCode, stats.calls, stats.inputTokens, stats.outputTokens, counts,
 		c.Created, c.Suggested, c.Merged, c.Promoted, c.SkippedTombstone+c.SkippedManual+c.SkippedTainted)
+	// Created counts suggested rows too; only active ones reach a vocabulary.
+	if s.refreshVocabulary != nil && c.Created-c.Suggested+c.Promoted > 0 {
+		s.refreshVocabulary(ctx, event.OwnerID)
+	}
 	// An Enqueue during this run returned PENDING and queued nothing; a source
 	// that changed after the freshness check gets its own run now.
 	s.Enqueue(ctx, event.OwnerID, event.MeetingID, "post-run")

@@ -347,6 +347,22 @@ export class AiStack extends cdk.Stack {
       })
     );
 
+    // Transcribe vocabulary A/B builder after automatic term runs: same scope
+    // as the API Lambda's; vocab/ table files use the bucket grant above.
+    this.summarizeRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'TranscribeVocabulary',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'transcribe:CreateVocabulary',
+          'transcribe:UpdateVocabulary',
+          'transcribe:GetVocabulary',
+          'transcribe:DeleteVocabulary',
+        ],
+        resources: [`arn:${cdk.Aws.PARTITION}:transcribe:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:vocabulary/ttobak-vocab-*`],
+      })
+    );
+
     // KB bucket write (for exporting meeting context documents)
     props.kbBucket.grantWrite(this.summarizeRole);
 
