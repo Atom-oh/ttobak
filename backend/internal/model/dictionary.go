@@ -1,6 +1,9 @@
 package model
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 // DictionaryTerm represents a single term in a user's custom dictionary
 type DictionaryTerm struct {
@@ -303,6 +306,22 @@ const (
 
 // DictLogSK returns the sort key of an audit row.
 func DictLogSK(termKey, at string) string { return PrefixDictLog + termKey + "#" + at }
+
+// DictLogTrimSKs returns the audit sort keys to delete so that at most keep
+// rows remain: the newest keep-1 plus the oldest row, which is pinned (the
+// term's first create or system row, R17) so a run of edits never erases how
+// the term began. sks may be in any order; keep below 1 counts as 1.
+func DictLogTrimSKs(sks []string, keep int) []string {
+	if keep < 1 {
+		keep = 1
+	}
+	if len(sks) <= keep {
+		return nil
+	}
+	sorted := append([]string(nil), sks...)
+	sort.Sort(sort.Reverse(sort.StringSlice(sorted)))
+	return sorted[keep-1 : len(sorted)-1]
+}
 
 // DictTermLog is one Common-dictionary audit row: SK is
 // DICTLOG#{termKey}#{at}. Before/After hold the term JSON ("" when absent).

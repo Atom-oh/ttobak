@@ -1,5 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as logs from 'aws-cdk-lib/aws-logs';
 import * as lambdaSources from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
@@ -513,6 +514,9 @@ export class GatewayStack extends cdk.Stack {
     });
     pipelineFailures.watchFunction('Transcribe', this.transcribeFunction, props.transcribeRole);
     pipelineFailures.watchFunction('Summarize', this.summarizeFunction, props.summarizeRole);
+    // Dictionary layer metrics and the TermsSourcesSilent alarm read the
+    // summarize log group by name (Lambda creates it on first invocation).
+    pipelineFailures.watchTermsLogs(logs.LogGroup.fromLogGroupName(this, 'SummarizeLogGroup', `/aws/lambda/${this.summarizeFunction.functionName}`));
     pipelineFailures.watchFunction('Image', this.processImageFunction, props.processImageRole);
 
     // KB Lambda function (for Knowledge Base sync operations)

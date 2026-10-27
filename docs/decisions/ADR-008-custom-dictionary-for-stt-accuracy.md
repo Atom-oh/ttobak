@@ -5,7 +5,7 @@
 - Decision date: Not recorded; original rationale references the 2026-04-23 STT evaluation.
 - Implementation checked: 2026-09-13; v2 storage, term CRUD, filter, terms
   run-state/merge, extraction job and A/B vocabulary builder amendments checked
-  2026-10-18.
+  2026-10-18; layered dictionary amendment 2026-10-26.
 
 ## Context and decision
 
@@ -403,6 +403,62 @@ Rollout acceptance (record each with a date):
 6. That `GetVocabulary` `LastModifiedTime` advances on each accepted Create
    and Update, which the submit verification relies on.
 
+## Amendment 2026-10-26: layered dictionary
+
+This partly supersedes the rejection of a shared dictionary above: shared layers
+are added next to the personal one, which stays the only layer a user owns.
+
+- **Layers and partitions.** Common `DICT#COMMON`, Account `ACCOUNT#{accountId}`
+  and Personal `USER#{userId}`. Term rows stay `DICTTERM#{termKey}` with the
+  unchanged `termKey` rules. Caps per scope: 300 automatic terms
+  (`MaxAutoTermsPerScope`), 500 manual terms (`MaxManualTermsPerScope`), 10
+  observations per term; Common keeps the last 20 audit rows per term.
+- **Consumers.** One personal ko-KR vocabulary per user, at most 1500 rows and
+  48 KiB, cut at whole terms in the order Personal manual, Account, Personal
+  auto, Common. The Whisper prompt is at most 300 runes in the order Personal
+  manual, the meeting's Account, Common, Personal auto. A personal row that is
+  inactive or switched off does not shadow the same key from Account or Common.
+  A failing Account-order lookup skips the vocabulary step with a warning rather
+  than rebuilding without Account terms.
+- **L1 (Account).** Terms from a member's meeting run are written to the
+  meeting's Account: `active` from an untainted meeting, `suggested` from a
+  tainted one. Every Account write carries a membership ConditionCheck on
+  `ACCOUNT#{id}` / `MEMBER#{userId}` in the same transaction; the early member
+  check only saves writes. Legacy migration writes reject `ACCOUNT#` keys. A
+  failed Account merge is best effort and not retried (the personal run is the
+  unit of retry); it logs `layer=account outcome=<code>` and is counted.
+- **L2 (Common).** Any signed-in user may edit or delete Common terms; every
+  write records `updatedBy`/`updatedAt` and an audit row, and system writes
+  (news creates and evictions, actor `system:news`) are audited too. Deletes
+  are tombstones that can be restored from the audit snapshot.
+- **L3 (corrections).** Glossary corrections to the transcript are applied
+  silently; the records are stored on the meeting and never shown in the UI. A
+  refined segment in which a glossary form appears more often than in its source
+  lines without a kept record explaining it is re-run on the plain prompt, then
+  falls back to the raw text, so a correction pass cannot invent terms. Automatic
+  `heardAs` appends do not set `userEditedAt`; Common counters are not written.
+- **L4 (sources).** A KB upload asks for an Account (none means Personal); the
+  choice is stored as S3 object metadata `account-id`. KB documents (plain text
+  only: `.md`, `.markdown`, `.txt`) and research reports feed the owner's
+  Account or Personal layer. Daily news feeds Common only, and only from crawler
+  sources an operator marked global and that carry no sticky `userTiedAt`; the
+  repeat threshold counts distinct sources, and Common sources are public news
+  references, never meeting or KB references.
+- **Flags.** `ttobak:accountTermsMode`, `ttobak:transcriptCorrection`,
+  `ttobak:kbTermsMode`, `ttobak:researchTermsMode` and `ttobak:newsTermsMode`
+  (`off|on`) all default off; a run skipped by a flag logs `outcome=DISABLED`.
+  Rollout is one flag per deployment, each after a deployment with it off.
+- **Observability.** Metric filters on the summarize log group and the
+  `TermsSourcesSilent` alarm are described in
+  [INFRA-SPEC](../INFRA-SPEC.md#dictionary-layer-metrics).
+- **Follow-ups (not in this change).** FU1: route KB PDF and Office files
+  through the document-extraction Lambda and use the extracted text, since only
+  plain text yields terms today. FU2: sweep `DICTOBS#...#{kind}:{digest}` rows
+  on KB file delete and research trash/delete, as the meeting sweep does. FU3:
+  one-off backfill of `userTiedAt` on every existing non-reserved crawler CONFIG
+  before an operator marks any source global; `fix-crawler-newsqueries.py` has no
+  marker guard.
+
 ## Consequences and risks
 
 Terms persist across meetings and customize both recognition paths. Transcribe
@@ -443,3 +499,6 @@ concerns. This feature does not remove the need to review transcripts.
   [liveVocabulary.ts](../../frontend/src/lib/liveVocabulary.ts): UI and live
   vocabulary plumbing; tests in `frontend/scripts/`.
 - [main.go](../../backend/cmd/api/main.go): registered settings routes.
+- [pipeline-failures.ts](../../infra/lib/pipeline-failures.ts) and
+  [pipeline-failures.test.ts](../../infra/test/pipeline-failures.test.ts): layer
+  metric filters and the `TermsSourcesSilent` alarm.

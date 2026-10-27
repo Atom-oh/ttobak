@@ -3,6 +3,7 @@ import { Template } from 'aws-cdk-lib/assertions';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as logs from 'aws-cdk-lib/aws-logs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { PipelineFailures } from '../lib/pipeline-failures';
@@ -14,7 +15,7 @@ describe('pipeline failure retention and alarm routing', () => {
     });
   });
 
-  function fixture() {
+  function fixture(extend?: (stack: cdk.Stack, failures: PipelineFailures) => void) {
     const app = new cdk.App();
     const roles = new cdk.Stack(app, 'Roles');
     const role = new iam.Role(roles, 'Worker', { assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com') });
@@ -27,6 +28,7 @@ describe('pipeline failure retention and alarm routing', () => {
     const rule = new events.Rule(stack, 'Rule', { eventPattern: { source: ['synthetic'] } });
     failures.watchFunction('Worker', worker, role);
     failures.addTarget('Worker', rule, worker);
+    extend?.(stack, failures);
     return { app, stack, roles, template: Template.fromStack(stack) };
   }
 
@@ -98,5 +100,63 @@ describe('pipeline failure retention and alarm routing', () => {
     }
     template.resourceCountIs('AWS::SNS::Subscription', 0);
     template.resourceCountIs('AWS::SNS::Topic', 0);
+  });
+  describe('dictionary layer metrics', () => {
+    function termsFixture() {
+      return fixture((stack, failures) => failures.watchTermsLogs(
+        logs.LogGroup.fromLogGroupName(stack, 'SummarizeLogs', '/aws/lambda/ttobak-summarize'))).template;
+    }
+    const filters = (template: Template) => Object.values(template.findResources('AWS::Logs::MetricFilter'))
+      .map(f => f.Properties);
+
+    test('metric filters count each layer, Account failures, source outcomes and news runs', () => {
+      const all = filters(termsFixture());
+      const byMetric = (name: string) => all.filter(f => f.MetricTransformations[0].MetricName === name)
+        .map(f => f.FilterPattern).sort();
+      for (const f of all) {
+        expect(f.LogGroupName).toBe('/aws/lambda/ttobak-summarize');
+        expect(f.MetricTransformations[0]).toMatchObject({ MetricNamespace: 'Ttobak/Dictionary', MetricValue: '1' });
+      }
+      expect(byMetric('TermsLayerPersonal')).toEqual(['"terms run:" "status=succeeded"']);
+      expect(byMetric('TermsLayerAccount')).toEqual(['"layer=account" "outcome=MERGED"']);
+      expect(byMetric('TermsLayerCommon')).toEqual(['"terms news:" "outcome=SUCCEEDED"']);
+      // Ruling R8: failed Account merges are not retried, so they must be visible.
+      expect(byMetric('TermsAccountFailures')).toEqual([
+        '"layer=account" "outcome=FAILED"', '"layer=account" "outcome=MEMBERS_FAILED"',
+        '"layer=account" "outcome=RECORD_FAILED"',
+      ]);
+      for (const outcome of ['SUCCEEDED', 'DISABLED', 'UNSUPPORTED', 'NOT_READY', 'NOT_FOUND', 'UNCHANGED']) {
+        const name = 'TermsSource' + outcome.split('_').map(w => w[0] + w.slice(1).toLowerCase()).join('');
+        expect(byMetric(name)).toEqual([`"terms source:" "outcome=${outcome}"`]);
+      }
+      expect(byMetric('TermsSourceTriggered')).toEqual(['"terms source trigger:" "outcome=QUEUED"']);
+      expect(byMetric('TermsNewsRuns')).toEqual(['"terms news:" "outcome=SUCCEEDED"']);
+      expect(byMetric('TermsNewsDisabled')).toEqual(['"terms news:" "outcome=DISABLED"']);
+      expect(byMetric('TermsNewsFailed')).toEqual(['"terms news:" "outcome=FAILED"']);
+    });
+
+    test('TermsSourcesSilent alarms when triggers are queued for a day without a completed run', () => {
+      const template = termsFixture();
+      const alarm = Object.values(template.findResources('AWS::CloudWatch::Alarm'))
+        .map(a => a.Properties).find(a => a.AlarmName === 'TermsSourcesSilent')!;
+      expect(alarm).toMatchObject({
+        EvaluationPeriods: 1, DatapointsToAlarm: 1, TreatMissingData: 'notBreaching',
+        ComparisonOperator: 'GreaterThanOrEqualToThreshold', Threshold: 1,
+      });
+      const exprs = alarm.Metrics.filter((m: any) => m.Expression);
+      expect(exprs).toHaveLength(1);
+      // CloudWatch rejects period x evaluationPeriods above one day.
+      for (const m of alarm.Metrics.filter((m: any) => m.MetricStat)) {
+        expect(m.MetricStat.Period * alarm.EvaluationPeriods).toBeLessThanOrEqual(86400);
+      }
+      expect(exprs[0].Expression).toContain('triggered');
+      expect(exprs[0].Expression).toContain('succeeded');
+      expect(exprs[0].Expression).toContain('unchanged');
+      const used = alarm.Metrics.filter((m: any) => m.MetricStat)
+        .map((m: any) => m.MetricStat.Metric.MetricName).sort();
+      expect(used).toEqual(['TermsSourceSucceeded', 'TermsSourceTriggered', 'TermsSourceUnchanged']);
+      for (const m of alarm.Metrics.filter((m: any) => m.MetricStat)) expect(m.MetricStat.Period).toBe(86400);
+      expect(alarm.AlarmActions['Fn::If'][1]).toEqual([{ Ref: 'PipelineAlarmTopicArn' }]);
+    });
   });
 });

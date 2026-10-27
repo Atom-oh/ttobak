@@ -600,6 +600,47 @@ contains `%` or `+` and the object is missing; an object still missing (404, or
 403 because the role has no `s3:ListBucket`) logs `outcome=NOT_FOUND` and is not
 retried.
 
+Daily news terms feed the Common layer. Rule `ttobak-terms-news-daily`
+(`cron(0 21 * * ? *)`, after the 19:00 crawl) invokes summarize with
+`{"kind":"news-daily"}`; two retries and a one-hour event age lead into the
+SSE-SQS `ttobak-terms-news-dlq`, which `PipelineFailures` watches. Summarize
+receives `NEWS_TERMS_MODE` from `ttobak:newsTermsMode` (`off` by default); with
+`off` each run logs `outcome=DISABLED`. The same pattern applies to
+`ttobak:accountTermsMode` (`ACCOUNT_TERMS_MODE`) and `ttobak:transcriptCorrection`
+(`TRANSCRIPT_CORRECTION_MODE`).
+
+### Dictionary layer metrics
+
+`PipelineFailures.watchTermsLogs` adds metric filters on the summarize log group
+(`/aws/lambda/<summarize function name>`, which Lambda creates on first invocation,
+so deploy after the function has run once) publishing count-1 metrics to the
+`Ttobak/Dictionary` namespace:
+
+| Metric | Log line matched |
+| --- | --- |
+| `TermsLayerPersonal` | `terms run:` with `status=succeeded` |
+| `TermsLayerAccount` | `layer=account` with `outcome=MERGED` (runs and sources) |
+| `TermsLayerCommon` | `terms news:` with `outcome=SUCCEEDED` |
+| `TermsAccountFailures` | `layer=account` with `outcome=FAILED`, `MEMBERS_FAILED` or `RECORD_FAILED` (three filters, summed) |
+| `TermsSourceSucceeded`, `Disabled`, `Unsupported`, `NotReady`, `NotFound`, `Unchanged` | `terms source:` with the matching `outcome=` |
+| `TermsSourceTriggered` | `terms source trigger:` with `outcome=QUEUED` |
+| `TermsNewsRuns`, `TermsNewsDisabled`, `TermsNewsFailed` | `terms news:` with `outcome=SUCCEEDED`, `DISABLED`, `FAILED` |
+
+Failed Account merges are not retried, so `TermsAccountFailures` is the signal
+that some linked meetings missed the Account layer; it has no alarm.
+
+Alarm `TermsSourcesSilent` uses metric math over three daily-sum metrics:
+`IF(FILL(triggered, 0) > 0 AND FILL(succeeded, 0) + FILL(unchanged, 0) == 0, 1, 0)`
+with `triggered = TermsSourceTriggered`, `succeeded = TermsSourceSucceeded` and
+`unchanged = TermsSourceUnchanged` (an unchanged re-run is a healthy run). It
+evaluates one daily period, so it fires when source triggers were queued on a
+UTC day and no source run completed that day (a run follows its trigger within
+minutes). CloudWatch caps period times evaluation periods at one day, so a
+longer streak cannot be one alarm. Triggers are logged
+`QUEUED` only while `KB_TERMS_MODE` or `RESEARCH_TERMS_MODE` is `on`, so the
+alarm stays quiet with both off. Missing data is `notBreaching`, and the alarm
+action follows the `PipelineAlarmTopicArn` convention of the other alarms.
+
 ## Summary privacy writer activation
 
 GatewayStack declares `SummaryPrivacyWriterEnabled` and

@@ -1098,8 +1098,11 @@ most 10, `kind` `meeting|kb|research|news`); Common items also carry
 - Common audit (L2): every Common PATCH, DELETE and restore records
   `updatedBy`/`updatedAt` on the term and writes a `DICTLOG#{termKey}#{at}` row
   `{actor, action update|delete|restore, before, after, at}` in the same
-  transaction. A term keeps its newest 20 rows; older ones are trimmed best
-  effort after each write. Account and personal writes are not audited.
+  transaction. A term keeps at most 20 rows: its oldest row (the create or
+  first system row) is pinned and the newest 19 others are kept; the rest are
+  trimmed best effort after each write. Account and personal writes are not
+  audited. A user-edited Common term still feeds vocabulary and the Whisper
+  prompt but not the transcript-correction glossary.
 - `GET .../layers/{layer}/terms/{termId}/log` → 200 `{items: [{logId, termId,
   actor, action, at, before?, after?}]}` newest first, `before`/`after` being
   term items. Only `common` has a log; other layers are 404.
