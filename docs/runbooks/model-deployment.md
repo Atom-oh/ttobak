@@ -137,6 +137,11 @@ creation time does not establish when the alias moved.
 The summary's model, role and revision remain pinned through the IAM cutover;
 only this release's successful Gateway update refreshes that pin. A concurrent
 summary change fails with `SUMMARY_CHANGED_AFTER_PREFLIGHT`.
+Before adopting a completed Gateway update, the coordinator also requires the
+observed summary and API `live`/latest model IDs, retained IDs, roles and timeouts
+to match the reviewed assembly exactly. A mismatch fails with
+`MODEL_TARGET_CHANGED_AFTER_DEPLOY`; a successful stack operation alone cannot
+authorize a concurrent configuration change.
 Keep grants longer when old API versions remain deliberate invocation targets;
 the preflight checks current `live`/latest, not every historical published version.
 Do not bypass this preflight with an ad hoc AiStack deployment.

@@ -55,6 +55,7 @@ class World:
             "State": "Active", "LastUpdateStatus": "Successful",
             "Environment": {"Variables": {"BEDROCK_SUMMARY_MODEL_ID": "global.openai.gpt-6.1-sol"}},
         }
+        self.summary_target = copy.deepcopy(self.summary)
         for name in ("ttobak-api", "ttobak-api:live", "ttobak-qa", "ttobak-mcp"):
             self.functions[name] = {
                 "FunctionName": name.split(":")[0],
@@ -64,6 +65,10 @@ class World:
                 "State": "Active", "LastUpdateStatus": "Successful",
                 "Environment": {"Variables": {"ORIGIN_VERIFY_SECRET": OLD}},
             }
+            if name.startswith("ttobak-api"):
+                self.functions[name]["Role"] = f"arn:aws:iam::{ACCOUNT}:role/ttobak-api-role"
+                self.functions[name]["Timeout"] = 30
+                self.functions[name]["Environment"]["Variables"]["BEDROCK_TRANSLATE_MODEL_ID"] = "global.openai.gpt-6-luna"
         self.ready_at = 0
         self.previous_document = {"current": OLD, "previous": "", "previousExpiresAt": 0}
 
@@ -213,6 +218,16 @@ class World:
         if not self.templates_ready:
             raise ReleaseError("MODEL_TRANSITION_GRANT_MISSING")
 
+    def validate_model_targets(self, configurations):
+        summary = configurations["ttobak-summarize"]
+        fields = ("BEDROCK_SUMMARY_MODEL_ID", "BEDROCK_SUMMARY_RETAIN_MODEL_IDS")
+        if (any(summary.get(key) != self.summary_target.get(key) for key in ("Role", "Timeout"))
+                or any(summary["Environment"]["Variables"].get(key, "") !=
+                       self.summary_target["Environment"]["Variables"].get(key, "") for key in fields)
+                or any(configurations[name]["Environment"]["Variables"].get("BEDROCK_TRANSLATE_MODEL_ID") !=
+                       "global.openai.gpt-6-luna" for name in ("ttobak-api", "ttobak-api:live"))):
+            raise ReleaseError("MODEL_TARGET_CHANGED_AFTER_DEPLOY")
+
     def deploy(self, stack, parameters=None):
         self.history.append(("deploy", stack))
         if stack == "TtobakGatewayStack":
@@ -232,7 +247,9 @@ class World:
                 self.alias_version = str(self.sequence)
                 self.alias_revision = f"alias-{self.sequence}"
                 for name, config in self.functions.items():
-                    config["Environment"]["Variables"] = {"ORIGIN_VERIFY_SECRET_ARN": ARN,
+                    models = {key: value for key, value in config["Environment"]["Variables"].items()
+                              if key.startswith("BEDROCK")}
+                    config["Environment"]["Variables"] = {**models, "ORIGIN_VERIFY_SECRET_ARN": ARN,
                                                           "ORIGIN_VERIFY_SECRET_VERSION_ID": self.current}
                     config["RevisionId"] = f"revision-{self.sequence}"
                     if name.endswith(":live"):
@@ -355,6 +372,56 @@ class ReleaseTests(unittest.TestCase):
             deploy(stack, parameters)
             if stack == "TtobakGatewayStack":
                 world.summary["RevisionId"] = f"summary-revision-{len(world.history)}"
+
+        with mock.patch.object(world, "deploy", side_effect=own_update):
+            self.assertEqual(self.quiet_run(world.release())["status"], "complete")
+        self.assertNotIn(("invoke", "ttobak-summarize"), world.history)
+
+    def test_summary_change_during_gateway_completion_cannot_be_adopted(self):
+        for field, value in (("BEDROCK_SUMMARY_MODEL_ID", "global.openai.gpt-6-luna"),
+                             ("Role", f"arn:aws:iam::{ACCOUNT}:role/OtherRole"),
+                             ("Timeout", 30)):
+            with self.subTest(field=field):
+                world = World()
+                deploy = world.deploy
+
+                def concurrent_change(stack, parameters=None):
+                    deploy(stack, parameters)
+                    if stack == "TtobakGatewayStack":
+                        if field.startswith("BEDROCK"):
+                            world.summary["Environment"]["Variables"][field] = value
+                        else:
+                            world.summary[field] = value
+
+                with mock.patch.object(world, "deploy", side_effect=concurrent_change):
+                    with self.assertRaisesRegex(ReleaseError, "MODEL_TARGET_CHANGED_AFTER_DEPLOY"):
+                        self.quiet_run(world.release())
+                self.assertEqual(world.proof, OLD)
+
+    def test_translation_change_during_gateway_completion_cannot_be_adopted(self):
+        world = World()
+        deploy = world.deploy
+
+        def concurrent_change(stack, parameters=None):
+            deploy(stack, parameters)
+            if stack == "TtobakGatewayStack":
+                world.functions["ttobak-api:live"]["Environment"]["Variables"][
+                    "BEDROCK_TRANSLATE_MODEL_ID"] = "global.openai.gpt-6.1-terra"
+
+        with mock.patch.object(world, "deploy", side_effect=concurrent_change):
+            with self.assertRaisesRegex(ReleaseError, "MODEL_TARGET_CHANGED_AFTER_DEPLOY"):
+                self.quiet_run(world.release())
+        self.assertEqual(world.proof, OLD)
+
+    def test_own_selected_summary_model_update_can_be_adopted(self):
+        world = World()
+        world.summary_target["Environment"]["Variables"]["BEDROCK_SUMMARY_MODEL_ID"] = "global.openai.gpt-6.1-terra"
+        deploy = world.deploy
+
+        def own_update(stack, parameters=None):
+            deploy(stack, parameters)
+            if stack == "TtobakGatewayStack":
+                world.summary = copy.deepcopy(world.summary_target)
 
         with mock.patch.object(world, "deploy", side_effect=own_update):
             self.assertEqual(self.quiet_run(world.release())["status"], "complete")

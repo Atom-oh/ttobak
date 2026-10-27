@@ -47,6 +47,7 @@ class ModelCutoverTests(unittest.TestCase):
             }
             gateway[role + "Function"] = {"Type": "AWS::Lambda::Function", "Properties": {
                 "FunctionName": name, "Role": {"Fn::ImportValue": role},
+                "Timeout": timeout,
                 "Environment": {"Variables": {field: target, metadata: ",".join(retained_models)}},
             }}
             configurations[name] = {
@@ -143,6 +144,48 @@ class ModelCutoverTests(unittest.TestCase):
         configs["ttobak-summarize"]["LastModified"] = datetime.fromtimestamp(
             NOW - 1000, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000%z")
         self.assertEqual(cdk.validate_model_cutover(configs, NOW), 90)
+
+    def deployed_target(self):
+        cdk, configs = self.fixture()
+        cdk.validate_model_cutover(configs, NOW)
+        configs["ttobak-summarize"]["Environment"]["Variables"] = {
+            "BEDROCK_SUMMARY_MODEL_ID": TERRA, "BEDROCK_SUMMARY_RETAIN_MODEL_IDS": SOL,
+        }
+        return cdk, configs
+
+    def test_expected_models_roles_retention_and_timeouts_allow_pin_adoption(self):
+        cdk, configs = self.deployed_target()
+        cdk.validate_model_targets(configs)
+
+    def test_unreviewed_target_cannot_be_adopted(self):
+        cdk, configs = self.fixture()
+        with self.assertRaisesRegex(ReleaseError, "MODEL_TARGET_NOT_REVIEWED"):
+            cdk.validate_model_targets(configs)
+
+    def test_post_deploy_summary_mismatch_cannot_be_adopted(self):
+        for field, value in (("BEDROCK_SUMMARY_MODEL_ID", LUNA),
+                             ("BEDROCK_SUMMARY_RETAIN_MODEL_IDS", ""),
+                             ("Role", f"arn:aws:iam::{ACCOUNT}:role/OtherRole"),
+                             ("Timeout", 30)):
+            with self.subTest(field=field):
+                cdk, configs = self.deployed_target()
+                config = configs["ttobak-summarize"]
+                if field.startswith("BEDROCK"):
+                    config["Environment"]["Variables"][field] = value
+                else:
+                    config[field] = value
+                with self.assertRaisesRegex(ReleaseError, "MODEL_TARGET_CHANGED_AFTER_DEPLOY"):
+                    cdk.validate_model_targets(configs)
+
+    def test_post_deploy_translation_mismatch_cannot_be_adopted(self):
+        for name in ("ttobak-api", "ttobak-api:live"):
+            with self.subTest(function=name):
+                cdk, configs = self.deployed_target()
+                configs[name] = {
+                    **configs[name], "Environment": {"Variables": {"BEDROCK_TRANSLATE_MODEL_ID": TERRA}},
+                }
+                with self.assertRaisesRegex(ReleaseError, "MODEL_TARGET_CHANGED_AFTER_DEPLOY"):
+                    cdk.validate_model_targets(configs)
 
 
 if __name__ == "__main__":

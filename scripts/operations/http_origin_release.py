@@ -90,6 +90,7 @@ class Cdk:
         self.revision = None
         self.assembly_digest = None
         self.reviewed_stacks = None
+        self.model_targets = None
 
     def command(self, arguments, *, from_assembly=False):
         # Even `cdk diff` can print the OLD plaintext proof when removing it.
@@ -353,6 +354,7 @@ class Cdk:
                      for item in gateway.get("Resources", {}).values() if item.get("Type") == "AWS::Lambda::Function"}
         account = self.env["CDK_DEFAULT_ACCOUNT"]
         api_drain_seconds = 0
+        targets = {}
 
         def arn(value):
             if isinstance(value, str):
@@ -407,8 +409,8 @@ class Cdk:
             role_properties = templates[role[0]]["Resources"][role[1]].get("Properties", {})
             role_name = role_properties.get("RoleName")
             role_path = role_properties.get("Path", "/").lstrip("/")
-            require(isinstance(role_name, str) and
-                    config.get("Role") == f"arn:aws:iam::{account}:role/{role_path}{role_name}",
+            role_arn = f"arn:aws:iam::{account}:role/{role_path}{role_name}"
+            require(isinstance(role_name, str) and config.get("Role") == role_arn,
                     "MODEL_DEPLOYED_ROLE_CHANGED")
             env = config.get("Environment", {}).get("Variables", {})
             old = env.get(field)
@@ -418,6 +420,13 @@ class Cdk:
             require(not old or granted(old), "MODEL_TRANSITION_GRANT_MISSING")
             require(granted(target.get("Environment", {}).get("Variables", {}).get(field)),
                     "MODEL_TARGET_GRANT_MISSING")
+            target_env = target.get("Environment", {}).get("Variables", {})
+            retained_field = ("BEDROCK_SUMMARY_RETAIN_MODEL_IDS" if base == "ttobak-summarize"
+                              else "BEDROCK_TRANSLATE_RETAIN_MODEL_IDS")
+            targets[name] = {
+                "Role": role_arn, "Timeout": target.get("Timeout"),
+                field: target_env[field], retained_field: target_env.get(retained_field, ""),
+            }
             # Rollback restores the old environment, including its retention
             # metadata. Do not use that metadata as invocation history.
             try:
@@ -440,7 +449,18 @@ class Cdk:
                 api_drain_seconds = max(api_drain_seconds, timeout + 60)
             else:
                 require(now >= modified + timeout + 60, "MODEL_RETENTION_DRAIN_PENDING")
+        self.model_targets = targets
         return api_drain_seconds
+
+    def validate_model_targets(self, configurations):
+        """Bind post-Gateway adoption to exact reviewed model settings."""
+        require(self.model_targets is not None, "MODEL_TARGET_NOT_REVIEWED")
+        for name, target in self.model_targets.items():
+            config = configurations.get(name, {})
+            env = config.get("Environment", {}).get("Variables", {})
+            observed = {key: env.get(key, "") if key.startswith("BEDROCK") else config.get(key)
+                        for key in target}
+            require(observed == target, "MODEL_TARGET_CHANGED_AFTER_DEPLOY")
 
     def validate_activation_templates(self):
         # The coordinator can be reviewed and shipped before activation. Refuse
@@ -928,10 +948,12 @@ class Release:
         self.accept_consumer_transition()
 
     def accept_consumer_transition(self):
-        if self.summary_pin is not None:
-            self.summary_pin = self.summary_snapshot(self.summary_configuration())
         self.arn_only()
         staged = self.snapshot()
+        if self.summary_pin is not None:
+            summary = self.summary_configuration()
+            self.cdk.validate_model_targets({**self.configs, "ttobak-summarize": summary})
+            self.summary_pin = self.summary_snapshot(summary)
         self.wait_cache()
         self.verify_readers(adopt=True, expected=staged)
 
