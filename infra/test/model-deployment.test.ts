@@ -96,4 +96,26 @@ describe('model deployment wiring', () => {
     ]);
     expect(JSON.stringify(grants)).not.toContain('openai.gpt-6-luna');
   });
+
+  test('staged transition retains only explicitly named old models and publishes retention metadata', () => {
+    const { ai, gateway } = deployment({
+      MODEL_MEETING_SUMMARY: 'anthropic.claude-sonnet-4-20250514-v1:0',
+      MODEL_RETAIN_MEETING_SUMMARY: 'openai.gpt-6.1-sol',
+    });
+    const summary = Object.values(gateway.findResources('AWS::Lambda::Function'))
+      .find(fn => fn.Properties.FunctionName === 'ttobak-summarize')!;
+    expect(summary.Properties.Environment.Variables.BEDROCK_SUMMARY_MODEL_ID)
+      .toBe('global.anthropic.claude-sonnet-4-20250514-v1:0');
+    expect(summary.Properties.Environment.Variables.BEDROCK_SUMMARY_RETAIN_MODEL_IDS)
+      .toBe('global.openai.gpt-6.1-sol');
+    const grants = Object.values(ai.findResources('AWS::IAM::Policy'))
+      .flatMap(policy => policy.Properties.PolicyDocument.Statement)
+      .find(statement => statement.Sid === 'InvokeFinalSummaryModel');
+    expect(grants.Resource).toEqual([
+      arn(':bedrock:*::foundation-model/anthropic.claude-sonnet-4-20250514-v1:0'),
+      arn(':bedrock:*:111111111111:inference-profile/global.anthropic.claude-sonnet-4-20250514-v1:0'),
+      arn(':bedrock:*::foundation-model/openai.gpt-6.1-sol'),
+      arn(':bedrock:*:111111111111:inference-profile/global.openai.gpt-6.1-sol'),
+    ]);
+  });
 });

@@ -21,6 +21,16 @@ on:
         required: false
         type: string
         default: ''
+      model_retain_meeting_summary:
+        description: 'Exact outgoing note model IDs to retain during cutover, comma-separated'
+        required: false
+        type: string
+        default: ''
+      model_retain_translation:
+        description: 'Exact outgoing translation model IDs to retain during cutover, comma-separated'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -31,6 +41,8 @@ env:
   MODEL_DEPLOYMENT_MODE: ${{ inputs.model_deployment_mode || vars.MODEL_DEPLOYMENT_MODE }}
   MODEL_MEETING_SUMMARY: ${{ inputs.model_meeting_summary || vars.MODEL_MEETING_SUMMARY }}
   MODEL_TRANSLATION: ${{ inputs.model_translation || vars.MODEL_TRANSLATION }}
+  MODEL_RETAIN_MEETING_SUMMARY: ${{ inputs.model_retain_meeting_summary || vars.MODEL_RETAIN_MEETING_SUMMARY }}
+  MODEL_RETAIN_TRANSLATION: ${{ inputs.model_retain_translation || vars.MODEL_RETAIN_TRANSLATION }}
 
 concurrency:
   group: deploy-infra

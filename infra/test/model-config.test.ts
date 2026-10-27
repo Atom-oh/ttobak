@@ -101,6 +101,39 @@ describe('deployment model configuration', () => {
     })).toThrow(/model/i);
   });
 
+  test('versioned Bedrock Claude IDs normalize without losing their numeric suffix', () => {
+    expect(resolve({}, { MODEL_MEETING_SUMMARY: 'anthropic.claude-sonnet-4-20250514-v1:0' }).meetingSummary)
+      .toBe('global.anthropic.claude-sonnet-4-20250514-v1:0');
+  });
+
+  test('explicit retained models normalize and deduplicate for a staged cutover', () => {
+    expect(resolve({}, {
+      MODEL_DEPLOYMENT_MODE: 'terra',
+      MODEL_RETAIN_MEETING_SUMMARY: 'openai.gpt-6.1-sol, global.openai.gpt-6.1-sol',
+      MODEL_RETAIN_TRANSLATION: 'openai.gpt-6.1-terra',
+    })).toEqual({
+      meetingSummary: 'global.openai.gpt-6.1-terra', translation: 'global.openai.gpt-6-luna',
+      retainedMeetingSummary: ['global.openai.gpt-6.1-sol'],
+      retainedTranslation: ['global.openai.gpt-6.1-terra'],
+    });
+  });
+
+  test.each([
+    'openai.*', 'openai.gpt-6-luna,', 'a,b,c,d,e',
+  ])('retained IDs are bounded exact models: %s', (models) => {
+    expect(() => resolve({}, { MODEL_RETAIN_MEETING_SUMMARY: models })).toThrow(/model/i);
+  });
+
+  test('retained translation IDs cannot bypass its native codec validation', () => {
+    expect(() => resolve({}, { MODEL_RETAIN_TRANSLATION: 'anthropic.claude-sonnet-5-5' })).toThrow(/OpenAI/i);
+  });
+
+  test('version suffix cannot introduce an IAM ARN segment or wildcard', () => {
+    for (const suffix of [':*', ':0:other', ':abc']) {
+      expect(() => resolve({}, { MODEL_MEETING_SUMMARY: `anthropic.claude-sonnet-4-v1${suffix}` })).toThrow(/model/i);
+    }
+  });
+
   test('resolved configuration cannot be mutated between stack constructors', () => {
     expect(Object.isFrozen(resolve())).toBe(true);
   });

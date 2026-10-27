@@ -80,6 +80,8 @@ class World:
             self.mutate_on_sleep = False
 
     def get_function_configuration(self, FunctionName):
+        if FunctionName == "ttobak-summarize":
+            return {"Environment": {"Variables": {"BEDROCK_SUMMARY_MODEL_ID": "global.openai.gpt-6.1-sol"}}}
         return copy.deepcopy(self.functions[FunctionName])
 
     def get_alias(self, **kwargs):
@@ -196,6 +198,11 @@ class World:
         if not self.templates_ready:
             raise ReleaseError("ACTIVATION_TEMPLATE_NOT_READY")
 
+    def validate_model_cutover(self, configurations, now):
+        self.history.append(("model_cutover_preflight",))
+        if not self.templates_ready:
+            raise ReleaseError("MODEL_TRANSITION_GRANT_MISSING")
+
     def deploy(self, stack, parameters=None):
         self.history.append(("deploy", stack))
         if stack == "TtobakGatewayStack":
@@ -267,6 +274,32 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(base_deploys, list(STACKS))
         self.assertNotIn("TtobakKnowledgeStack", base_deploys)
         self.assertGreaterEqual(sum(entry[1] for entry in world.history if entry[0] == "sleep"), 3 * CACHE_WAIT)
+
+    def test_model_preflight_failure_precedes_secret_and_stack_writes(self):
+        world = World()
+        with mock.patch.object(world, "validate_model_cutover",
+                               side_effect=ReleaseError("MODEL_TRANSITION_GRANT_MISSING")):
+            with self.assertRaisesRegex(ReleaseError, "MODEL_TRANSITION_GRANT_MISSING"):
+                self.quiet_run(world.release())
+        self.assertEqual(world.secret_changes, 0)
+        self.assertFalse(any(entry[0] == "deploy" for entry in world.history))
+
+    def test_api_model_cleanup_waits_for_stable_alias_before_mutations(self):
+        world = World()
+        with mock.patch.object(world, "validate_model_cutover", return_value=90):
+            self.quiet_run(world.release())
+        sleep_index = world.history.index(("sleep", 90))
+        write_index = next(i for i, item in enumerate(world.history) if item[0] in ("create_secret", "deploy"))
+        self.assertLess(sleep_index, write_index)
+
+    def test_alias_change_during_model_cleanup_stops_before_mutations(self):
+        world = World()
+        world.mutate_on_sleep = True
+        with mock.patch.object(world, "validate_model_cutover", return_value=90):
+            with self.assertRaisesRegex(ReleaseError, "MODEL_API_DRAIN_CHANGED"):
+                self.quiet_run(world.release())
+        self.assertEqual(world.secret_changes, 0)
+        self.assertFalse(any(item[0] == "deploy" for item in world.history))
 
     def test_rotation_accepts_qa_identity_denial_and_legacy_consumer_transition(self):
         for initial_status, deployed_status in ((403, 403), (405, 403), (405, 405)):

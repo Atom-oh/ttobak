@@ -235,7 +235,7 @@ export class AiStack extends cdk.Stack {
         sid: 'InvokeInterpreterModel',
         effect: iam.Effect.ALLOW,
         actions: ['bedrock:InvokeModel'],
-        resources: modelResources(models.translation),
+        resources: [...new Set([models.translation, ...(models.retainedTranslation ?? [])])].flatMap(modelResources),
       })
     );
 
@@ -332,7 +332,7 @@ export class AiStack extends cdk.Stack {
       sid: 'InvokeFinalSummaryModel',
       effect: iam.Effect.ALLOW,
       actions: ['bedrock:InvokeModel'],
-      resources: modelResources(models.meetingSummary),
+      resources: [...new Set([models.meetingSummary, ...(models.retainedMeetingSummary ?? [])])].flatMap(modelResources),
     }));
 
     this.summarizeRole.addToPolicy(

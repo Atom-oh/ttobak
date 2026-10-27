@@ -11,6 +11,8 @@ test('both synthesis gate and deploy inherit the same validated model selections
     ['MODEL_DEPLOYMENT_MODE', 'model_deployment_mode'],
     ['MODEL_MEETING_SUMMARY', 'model_meeting_summary'],
     ['MODEL_TRANSLATION', 'model_translation'],
+    ['MODEL_RETAIN_MEETING_SUMMARY', 'model_retain_meeting_summary'],
+    ['MODEL_RETAIN_TRANSLATION', 'model_retain_translation'],
   ]) {
     // Blank manual inputs inherit persistent repository variables; the same
     // workflow-level environment reaches tests and the release coordinator.
@@ -22,7 +24,7 @@ test('both synthesis gate and deploy inherit the same validated model selections
   }
   // No job may shadow the verified model choice before deployment.
   const jobs = code.slice(code.indexOf('\njobs:'));
-  expect(jobs).not.toMatch(/\bMODEL_(?:DEPLOYMENT_MODE|MEETING_SUMMARY|TRANSLATION):/);
+  expect(jobs).not.toMatch(/\bMODEL_(?:DEPLOYMENT_MODE|MEETING_SUMMARY|TRANSLATION|RETAIN_MEETING_SUMMARY|RETAIN_TRANSLATION):/);
   // Bind user input through environment variables, never shell interpolation.
   expect(jobs).not.toContain('inputs.model_');
 });

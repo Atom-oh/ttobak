@@ -2,6 +2,7 @@
 """Coordinate an existing deployment's HTTP origin migration without printing proofs."""
 import argparse
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 import hmac
 import hashlib
 import importlib.util
@@ -337,6 +338,101 @@ class Cdk:
         return (isinstance(statement, dict) and statement.get("Effect") == "Allow"
                 and "secretsmanager:GetSecretValue" in Cdk.listed(statement.get("Action"))
                 and {"Ref": "HttpOriginSecretArn"} in Cdk.listed(statement.get("Resource")))
+
+    def validate_model_cutover(self, configurations, now):
+        """Keep exact outgoing grants until all calls can finish; never log env."""
+        templates = {path.name: json.loads(path.read_text()) for path in self.assembly.glob("*.template.json")}
+        gateway = templates["TtobakGatewayStack.template.json"]
+        exports = {}
+        for stack, template in templates.items():
+            for output in template.get("Outputs", {}).values():
+                name = output.get("Export", {}).get("Name")
+                if isinstance(name, str):
+                    exports.setdefault(name, []).append((stack, output.get("Value")))
+        functions = {item["Properties"].get("FunctionName"): item["Properties"]
+                     for item in gateway.get("Resources", {}).values() if item.get("Type") == "AWS::Lambda::Function"}
+        account = self.env["CDK_DEFAULT_ACCOUNT"]
+        api_drain_seconds = 0
+
+        def arn(value):
+            if isinstance(value, str):
+                return value
+            if not isinstance(value, dict) or set(value) != {"Fn::Join"}:
+                return ""
+            join = value["Fn::Join"]
+            if not isinstance(join, list) or len(join) != 2 or join[0] != "" or not isinstance(join[1], list):
+                return ""
+            result = ""
+            for piece in join[1]:
+                if isinstance(piece, str):
+                    result += piece
+                elif piece == {"Ref": "AWS::Partition"}:
+                    result += "aws"
+                elif piece == {"Ref": "AWS::AccountId"}:
+                    result += account
+                else:
+                    return ""
+            return result
+
+        for name, field, retained_field, sid in (
+            ("ttobak-summarize", "BEDROCK_SUMMARY_MODEL_ID", "BEDROCK_SUMMARY_RETAIN_MODEL_IDS", "InvokeFinalSummaryModel"),
+            ("ttobak-api", "BEDROCK_TRANSLATE_MODEL_ID", "BEDROCK_TRANSLATE_RETAIN_MODEL_IDS", "InvokeInterpreterModel"),
+            ("ttobak-api:live", "BEDROCK_TRANSLATE_MODEL_ID", "BEDROCK_TRANSLATE_RETAIN_MODEL_IDS", "InvokeInterpreterModel"),
+        ):
+            base = name.split(":")[0]
+            target = functions.get(base, {})
+            role = self.role_identity(target.get("Role"), "TtobakGatewayStack.template.json", templates, exports, arn=True)
+            require(role is not None, "MODEL_ROLE_NOT_BOUND")
+            resources = set()
+            for stack, template in templates.items():
+                for item in template.get("Resources", {}).values():
+                    if item.get("Type") != "AWS::IAM::Policy":
+                        continue
+                    policy = item.get("Properties", {})
+                    if not any(self.role_identity(value, stack, templates, exports, arn=False) == role
+                               for value in self.listed(policy.get("Roles"))):
+                        continue
+                    for statement in self.listed(policy.get("PolicyDocument", {}).get("Statement")):
+                        if (statement.get("Sid") == sid and statement.get("Effect") == "Allow"
+                                and "bedrock:InvokeModel" in self.listed(statement.get("Action"))
+                                and "Condition" not in statement):
+                            resources.update(arn(value) for value in self.listed(statement.get("Resource")))
+
+            def granted(profile):
+                return (isinstance(profile, str) and profile.startswith("global.")
+                        and f"arn:aws:bedrock:*::foundation-model/{profile[7:]}" in resources
+                        and f"arn:aws:bedrock:*:{account}:inference-profile/{profile}" in resources)
+
+            config = configurations[name]
+            role_properties = templates[role[0]]["Resources"][role[1]].get("Properties", {})
+            role_name = role_properties.get("RoleName")
+            role_path = role_properties.get("Path", "/").lstrip("/")
+            require(isinstance(role_name, str) and
+                    config.get("Role") == f"arn:aws:iam::{account}:role/{role_path}{role_name}",
+                    "MODEL_DEPLOYED_ROLE_CHANGED")
+            env = config.get("Environment", {}).get("Variables", {})
+            old = env.get(field)
+            # Empty translation means no LLM; an unknown summary fallback cannot
+            # be assumed to equal the new deployment's chosen model.
+            require(base != "ttobak-summarize" or bool(old), "MODEL_ACTIVE_CONFIGURATION_MISSING")
+            require(not old or granted(old), "MODEL_TRANSITION_GRANT_MISSING")
+            require(granted(target.get("Environment", {}).get("Variables", {}).get(field)),
+                    "MODEL_TARGET_GRANT_MISSING")
+            retired = [model for model in env.get(retained_field, "").split(",") if model and not granted(model)]
+            if retired:
+                try:
+                    modified = datetime.fromisoformat(config["LastModified"]).astimezone(timezone.utc).timestamp()
+                    timeout = int(config["Timeout"])
+                except (KeyError, ValueError, TypeError, OverflowError):
+                    raise ReleaseError("MODEL_RETENTION_DRAIN_UNVERIFIED") from None
+                require(0 < timeout <= 900, "MODEL_RETENTION_DRAIN_UNVERIFIED")
+                if base == "ttobak-api":
+                    # Version creation time does not prove when live moved.
+                    # The caller waits while both alias and latest stay pinned.
+                    api_drain_seconds = max(api_drain_seconds, timeout + 60)
+                else:
+                    require(now >= modified + timeout + 60, "MODEL_RETENTION_DRAIN_PENDING")
+        return api_drain_seconds
 
     def validate_activation_templates(self):
         # The coordinator can be reviewed and shipped before activation. Refuse
@@ -835,6 +931,22 @@ class Release:
         self.recovered_expired_cutover = self.expired_cutover_interrupted(live)
         self.mark("reviewing_stack_diff")
         self.cdk.diff()
+        self.mark("verifying_model_cutover")
+        model_configs = dict(self.configuration())
+        summary = self.clients["lambda"].get_function_configuration(FunctionName="ttobak-summarize")
+        require(summary.get("State", "Active") == "Active" and
+                summary.get("LastUpdateStatus", "Successful") == "Successful", "MODEL_UPDATE_IN_PROGRESS")
+        model_configs["ttobak-summarize"] = summary
+        api_drain = self.cdk.validate_model_cutover(model_configs, self.now())
+        if api_drain:
+            before = self.snapshot()
+            self.mark("draining_retired_api_models")
+            self.sleep(api_drain)
+            require(self.snapshot() == before, "MODEL_API_DRAIN_CHANGED")
+            model_configs = dict(self.configs)
+            model_configs["ttobak-summarize"] = self.clients["lambda"].get_function_configuration(
+                FunctionName="ttobak-summarize")
+            self.cdk.validate_model_cutover(model_configs, self.now())
         self.bootstrap(live)
         self.transition_window(live)
         for stack in STACKS[:-1]:

@@ -291,6 +291,8 @@ export class GatewayStack extends cdk.Stack {
         // Live interpreter for /api/translate quality=high; must match AiStack's
         // InvokeInterpreterModel grant. Unset/blank means Amazon Translate only.
         BEDROCK_TRANSLATE_MODEL_ID: models.translation,
+        // Deployment metadata: retained IAM grants, not additional runtime calls.
+        BEDROCK_TRANSLATE_RETAIN_MODEL_IDS: (models.retainedTranslation ?? []).join(','),
         // Per-user hourly /api/translate cost guard (0 disables a limit).
         TRANSLATE_HOURLY_LIMIT: rateLimitContext(this, 'ttobak:translateHourlyLimit', 3000),
         TRANSLATE_HIGH_HOURLY_LIMIT: rateLimitContext(this, 'ttobak:translateHighHourlyLimit', 1500),
@@ -434,6 +436,7 @@ export class GatewayStack extends cdk.Stack {
         BUCKET_NAME: props.bucket.bucketName,
         BEDROCK_MODEL_ID: 'global.anthropic.claude-opus-5',
         BEDROCK_SUMMARY_MODEL_ID: models.meetingSummary,
+        BEDROCK_SUMMARY_RETAIN_MODEL_IDS: (models.retainedMeetingSummary ?? []).join(','),
         BEDROCK_SONNET_MODEL_ID: 'global.anthropic.claude-sonnet-5-5',
         ...autoTermsEnvironment(this),
         KB_BUCKET_NAME: props.kbBucket?.bucketName || '',

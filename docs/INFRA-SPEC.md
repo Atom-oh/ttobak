@@ -232,6 +232,10 @@ and AiStack. Presets are `standard` (default Sol/Luna), `terra` (Terra/Luna) and
 `sonnet` (Sonnet/Luna); individual IDs override presets. See
 [model deployment](runbooks/model-deployment.md) for precedence, workflow inputs,
 IAM cutover and rollback.
+`MODEL_RETAIN_MEETING_SUMMARY` / `MODEL_RETAIN_TRANSLATION` keep bounded exact
+outgoing grants during a staged transition. The release coordinator checks
+deployed and selected model permissions before mutations and prevents premature
+retained-grant removal using deployed function timeout/last-modified metadata.
 `gateway-stack.ts` defaults to GPT-6.1 Sol for final notes via
 `BEDROCK_SUMMARY_MODEL_ID`, while auxiliary Opus calls remain on `BEDROCK_MODEL_ID`.
 Only the summary role receives the selected final-note model/profile grant.

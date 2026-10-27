@@ -17,6 +17,7 @@
 - Grant exact model/profile resources; reject wildcards, ARNs, paths and unsupported request formats before synthesis.
 - Preserve release coordinator, prerequisite checks, explicit deployment order and KnowledgeStack exclusion.
 - Do not automatically activate a new model or enable disabled deployment workflows.
+- During model transitions, retain exact outgoing grants; the coordinator must fail before mutations if an active model would lose permission.
 - Documentation is English; never log credentials or private meeting data.
 
 ## Review Focus
@@ -50,3 +51,15 @@ their measured evidence and recording limitations.
 - [x] Document examples, precedence, persistent selections, verification, rollback and pricing evidence limits.
 - [x] Run full infra tests/build, complete-app synth for each preset and documentation checks.
 - [ ] Commit and request one fresh-context code/IAM/workflow review; address material findings and rerun affected checks.
+
+### Review fix: Versioned IDs and safe model cutover
+
+**Files:** Model configuration/stacks/tests above; `scripts/operations/http_origin_release.py`,
+`scripts/operations/test_model_cutover.py`, `scripts/operations/test_http_origin_release.py`,
+the infrastructure workflows and model runbook.
+
+- [x] Reproduce rejection of valid numeric version suffixes and missing outgoing model grants.
+- [x] Add bounded explicit retained-model selections and deployment metadata.
+- [x] Gate release before mutations on exact active/target grants bound to the correct roles; block premature grant cleanup.
+- [x] Correct API alias versus unqualified summary verification instructions.
+- [ ] Rerun full checks and ask the same independent reviewer to verify the fix.

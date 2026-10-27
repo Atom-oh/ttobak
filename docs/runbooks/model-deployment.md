@@ -11,6 +11,8 @@ Lambda environments and AiStack's exact model/profile IAM grants.
 | `MODEL_DEPLOYMENT_MODE` | `model-deployment-mode` | `standard` |
 | `MODEL_MEETING_SUMMARY` | `model-meeting-summary` | Selected preset |
 | `MODEL_TRANSLATION` | `model-translation` | `openai.gpt-6-luna` |
+| `MODEL_RETAIN_MEETING_SUMMARY` | `model-retain-meeting-summary` | None |
+| `MODEL_RETAIN_TRANSLATION` | `model-retain-translation` | None |
 
 | Preset | Final meeting notes | High-quality translation |
 |---|---|---|
@@ -31,6 +33,9 @@ requires a separate backend adapter and cannot be enabled with this setting.
 An unknown preset, unsupported format, ARN, resource wildcard or path fails
 before synthesis. Syntactic validation does not prove that a new model exists,
 has a global profile, or is accessible in the invocation region.
+Versioned IDs such as `anthropic.claude-sonnet-4-20250514-v1:0` retain their
+numeric suffix. Retention settings accept at most four comma-separated exact IDs,
+with the same family validation and precedence as primary selections.
 
 The selected IDs become `BEDROCK_SUMMARY_MODEL_ID` on `ttobak-summarize` and
 `BEDROCK_TRANSLATE_MODEL_ID` on `ttobak-api`. These deployment variables do not
@@ -61,7 +66,8 @@ npm --prefix infra run cdk -- synth \
 Before selecting a model, verify its Bedrock global inference profile and access
 in the configured invocation region. Review the synthesized Gateway Lambda IDs
 and the AiStack `InvokeFinalSummaryModel` / `InvokeInterpreterModel` resources.
-Both resources name the exact chosen foundation model and global profile;
+Resources name the exact chosen foundation model/global profile and any explicit
+retained models required for a staged transition;
 region wildcards support cross-region routing, not additional model families.
 Other pre-existing auxiliary model grants retain their separate scope.
 
@@ -69,6 +75,8 @@ Other pre-existing auxiliary model grants retain their separate scope.
 
 `Deploy Infrastructure` exposes optional manual inputs:
 `model_deployment_mode`, `model_meeting_summary` and `model_translation`.
+Optional `model_retain_meeting_summary` / `model_retain_translation` inputs
+retain exact outgoing model grants during migration.
 Empty inputs inherit the corresponding repository variables, then CDK defaults.
 Nonempty manual inputs override repository variables for that run only.
 The same workflow-level environment reaches the synth/test prerequisite and the
@@ -76,6 +84,8 @@ release coordinator; deployment cannot bypass the prerequisite job.
 
 For persistent selection across push deployments, set GitHub repository variables
 `MODEL_DEPLOYMENT_MODE`, `MODEL_MEETING_SUMMARY`, and/or `MODEL_TRANSLATION`.
+Persist retention selections in `MODEL_RETAIN_MEETING_SUMMARY` and
+`MODEL_RETAIN_TRANSLATION` while a migration is in progress.
 For example, set the mode to `terra` and leave individual variables unset to
 use Terra/Luna. An existing explicit `MODEL_MEETING_SUMMARY` continues to override
 a new mode; clear it if the preset should control final notes.
@@ -91,20 +101,51 @@ disabled workflows or itself constitute a deployment authorization.
 
 ## Runtime acceptance and rollback
 
-Changing models updates function configuration and publishes a new live version.
-AiStack and GatewayStack updates are not atomic. Before changing persistent
-selection, drain active summaries/translation calls and use the normal controlled
-release window: IAM grants change before the new Lambda configuration is applied.
+Changing models updates function configuration. API configuration publishes a new
+version behind `live`; summary delivery targets the unqualified function.
+AiStack and GatewayStack updates are not atomic, and new jobs can arrive while
+they deploy. Preserve the exact outgoing model grant until the new configuration
+is active and all calls using the old configuration can finish.
+
+For Sol-to-Terra notes, deploy with both settings:
+
+```bash
+MODEL_DEPLOYMENT_MODE=terra \
+MODEL_RETAIN_MEETING_SUMMARY=global.openai.gpt-6.1-sol \
+python3 scripts/operations/http_origin_release.py release
+```
+
+Use the established dependency/artifact preparation and content/release gates
+before running that command. The release coordinator validates the reviewed
+IAM policies against the deployed summary function and API `live`/latest
+configurations before any secret or stack writes. A missing outgoing grant fails
+with `MODEL_TRANSITION_GRANT_MISSING`; add that exact model to its retention
+setting and review the new assembly. The same check verifies target grants and
+binds each permission to the function's actual role.
+
+Retained selections are recorded in `BEDROCK_SUMMARY_RETAIN_MODEL_IDS` /
+`BEDROCK_TRANSLATE_RETAIN_MODEL_IDS` as deployment metadata. After acceptance,
+clear the retention variables in a later controlled deployment. The coordinator
+blocks summary removal until the deployed function's `LastModified` plus its
+timeout and a 60-second margin; the default requires at least 16 minutes.
+API cleanup waits for its timeout plus a 60-second margin with unchanged
+`live`/latest revisions and alias, since version creation time does not establish
+when the alias moved. A concurrent change aborts before deployment mutations.
+Keep grants longer when old API versions remain deliberate invocation targets;
+the preflight checks current `live`/latest, not every historical published version.
+Do not bypass this preflight with an ad hoc AiStack deployment.
 Keep the prior exact selection and source revision for recovery.
 
-Verify the deployed `live` versions and their model variables, then use synthetic
+Verify the API `live` version and summary function configuration/model variables,
+then use synthetic
 current-source notes and translation requests to check completion, attribution,
 negation, deadlines, fallback and account-sharing safety. Successful synthesis or
 a model benchmark is not deployed acceptance. Existing summary publication and
 privacy guards remain required.
 
-Rollback restores the previous environment selections or repository variables
-and reruns the same controlled deployment path. Restore both IAM and Lambda
+Rollback restores the previous primary selections, retains the outgoing candidate
+model until its calls finish, and reruns the same controlled deployment path.
+Restore both IAM and Lambda
 configuration together; do not roll back only one function's environment.
 Clearing all selections restores Sol/Luna defaults.
 

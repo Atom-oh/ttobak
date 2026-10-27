@@ -3,6 +3,8 @@ import { Construct } from 'constructs';
 export interface ModelConfiguration {
   readonly meetingSummary: string;
   readonly translation: string;
+  readonly retainedMeetingSummary?: readonly string[];
+  readonly retainedTranslation?: readonly string[];
 }
 
 export const DEFAULT_MODEL_CONFIGURATION: ModelConfiguration = Object.freeze({
@@ -24,7 +26,7 @@ function optionalText(value: unknown, label: string): string | undefined {
 
 /** Accept only native request families already implemented by the backend. */
 function modelId(value: string, purpose: 'meeting summary' | 'translation'): string {
-  const supported = /^(?:global\.)?(?:openai\.gpt-[a-z0-9][a-z0-9.-]*|anthropic\.claude-[a-z0-9][a-z0-9.-]*)$/;
+  const supported = /^(?:global\.)?(?:openai\.gpt-[a-z0-9][a-z0-9.-]*|anthropic\.claude-[a-z0-9][a-z0-9.-]*)(?::\d{1,3})?$/;
   if (value.length > 128 || !supported.test(value)) {
     throw new Error(`${purpose} model must be an exact OpenAI GPT or Anthropic Claude ID, with an optional global. prefix`);
   }
@@ -37,9 +39,18 @@ function modelId(value: string, purpose: 'meeting summary' | 'translation'): str
 
 /** Stack constructors validate too, so direct callers cannot widen IAM via an ID. */
 export function validateModelConfiguration(config: ModelConfiguration): ModelConfiguration {
+  const retained = (values: readonly string[] | undefined, purpose: 'meeting summary' | 'translation') => {
+    if (!values?.length) return undefined;
+    if (!Array.isArray(values) || values.length > 4) throw new Error(`retained ${purpose} models must be a list of at most four exact IDs`);
+    return Object.freeze([...new Set(values.map(value => modelId(value, purpose)))]);
+  };
+  const retainedMeetingSummary = retained(config.retainedMeetingSummary, 'meeting summary');
+  const retainedTranslation = retained(config.retainedTranslation, 'translation');
   return Object.freeze({
     meetingSummary: modelId(config.meetingSummary, 'meeting summary'),
     translation: modelId(config.translation, 'translation'),
+    ...(retainedMeetingSummary ? { retainedMeetingSummary } : {}),
+    ...(retainedTranslation ? { retainedTranslation } : {}),
   });
 }
 
@@ -69,5 +80,7 @@ export function resolveModelConfiguration(
   return validateModelConfiguration({
     meetingSummary: summary ?? summaryAlias ?? env('MODEL_MEETING_SUMMARY') ?? summaryPresets[mode],
     translation: context('model-translation') ?? env('MODEL_TRANSLATION') ?? DEFAULT_MODEL_CONFIGURATION.translation,
+    retainedMeetingSummary: (context('model-retain-meeting-summary') ?? env('MODEL_RETAIN_MEETING_SUMMARY'))?.split(',').map(value => value.trim()),
+    retainedTranslation: (context('model-retain-translation') ?? env('MODEL_RETAIN_TRANSLATION'))?.split(',').map(value => value.trim()),
   });
 }
