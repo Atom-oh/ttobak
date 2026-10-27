@@ -38,6 +38,9 @@ type DictionaryStore interface {
 	RestoreDictTerm(ctx context.Context, term *model.DictTerm, expectedVersion int64, member *repository.MembershipCheck) error
 	DeleteManualTerm(ctx context.Context, pk, termKey string, expectedVersion int64, member *repository.MembershipCheck) error
 	DeleteTombstone(ctx context.Context, pk, termKey string, expectedVersion int64, member *repository.MembershipCheck) error
+	PutCommonDictTerm(ctx context.Context, term *model.DictTerm, expectedVersion int64, entry *model.DictTermLog) (repository.DictWriteResult, error)
+	ListDictTermLog(ctx context.Context, pk, termKey string) ([]model.DictTermLog, error)
+	TrimDictTermLog(ctx context.Context, pk, termKey string, keep int) error
 }
 
 // TranscribeVocabularyAPI is the subset of the Transcribe client used here.
@@ -54,6 +57,8 @@ type DictionaryService struct {
 	transcribeClient TranscribeVocabularyAPI
 	builder          *vocabularyBuilder // API Lambda only; nil never builds
 	now              func() time.Time
+	// isMember reports Account membership; nil refuses every Account layer.
+	isMember func(ctx context.Context, accountID, userID string) (bool, error)
 }
 
 // NewDictionaryService creates a new dictionary service

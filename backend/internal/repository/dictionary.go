@@ -952,6 +952,79 @@ func (r *DictionaryRepository) EvictAutoTerm(ctx context.Context, pk, termKey st
 	return DictWriteResult{CleanupErr: r.deleteTermObservations(ctx, pk, termKey)}, nil
 }
 
+// PutCommonDictTerm writes a whole Common term row and its audit row in one
+// transaction. The term must be at expectedVersion (0: absent); the audit
+// SK must be new. A tombstone (state deleted) then deletes the term's
+// observations best effort. Only DICT#COMMON rows are accepted.
+func (r *DictionaryRepository) PutCommonDictTerm(ctx context.Context, term *model.DictTerm, expectedVersion int64, entry *model.DictTermLog) (DictWriteResult, error) {
+	if term == nil || entry == nil || term.PK != model.PrefixDictCommon || entry.PK != model.PrefixDictCommon ||
+		term.SK != model.DictTermSK(term.TermKey) || entry.TermKey != term.TermKey ||
+		!strings.HasPrefix(entry.SK, model.PrefixDictLog+term.TermKey+"#") {
+		return DictWriteResult{}, fmt.Errorf("%w: common term write needs a matching common audit row", ErrInvalidInput)
+	}
+	av, err := attributevalue.MarshalMap(term)
+	if err != nil {
+		return DictWriteResult{}, err
+	}
+	condition := expression.AttributeNotExists(expression.Name("PK"))
+	if expectedVersion != 0 {
+		condition = expression.Name("version").Equal(expression.Value(expectedVersion))
+	}
+	expr, err := expression.NewBuilder().WithCondition(condition).Build()
+	if err != nil {
+		return DictWriteResult{}, err
+	}
+	logPut, err := r.putIfAbsent(entry)
+	if err != nil {
+		return DictWriteResult{}, err
+	}
+	items := []types.TransactWriteItem{{Put: &types.Put{
+		TableName: aws.String(r.tableName), Item: av,
+		ConditionExpression: expr.Condition(), ExpressionAttributeNames: expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	}}, logPut}
+	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
+		return DictWriteResult{}, dictTransactError(err, []error{ErrDictTermConflict, ErrDictTermConflict})
+	}
+	if term.State != model.TermStateDeleted {
+		return DictWriteResult{}, nil
+	}
+	return DictWriteResult{CleanupErr: r.deleteTermObservations(ctx, term.PK, term.TermKey)}, nil
+}
+
+// ListDictTermLog returns a term's audit rows, newest first.
+func (r *DictionaryRepository) ListDictTermLog(ctx context.Context, pk, termKey string) ([]model.DictTermLog, error) {
+	var rows []model.DictTermLog
+	err := r.queryPrefix(ctx, pk, model.PrefixDictLog+termKey+"#", func(item map[string]types.AttributeValue) error {
+		var row model.DictTermLog
+		if err := attributevalue.UnmarshalMap(item, &row); err != nil {
+			return err
+		}
+		rows = append(rows, row)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list dictionary term log: %w", err)
+	}
+	sort.SliceStable(rows, func(i, j int) bool { return rows[i].SK > rows[j].SK })
+	return rows, nil
+}
+
+// TrimDictTermLog deletes a term's audit rows beyond the newest keep.
+func (r *DictionaryRepository) TrimDictTermLog(ctx context.Context, pk, termKey string, keep int) error {
+	rows, err := r.ListDictTermLog(ctx, pk, termKey)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for i := keep; i < len(rows); i++ {
+		if _, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{TableName: aws.String(r.tableName), Key: dictKey(pk, rows[i].SK)}); err != nil {
+			errs = append(errs, fmt.Errorf("failed to delete dictionary term log: %w", err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // DeleteDictObs deletes one observation row.
 func (r *DictionaryRepository) DeleteDictObs(ctx context.Context, pk, sk string) error {
 	_, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{TableName: aws.String(r.tableName), Key: dictKey(pk, sk)})
