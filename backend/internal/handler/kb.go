@@ -44,8 +44,16 @@ func (h *KBHandler) GetPresignedURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.kbService.GetPresignedURL(ctx, userID, req.FileName, req.FileType)
+	result, err := h.kbService.GetPresignedURL(ctx, userID, req.FileName, req.FileType, req.AccountID)
 	if err != nil {
+		if errors.Is(err, service.ErrKBAccountInvalid) {
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid accountId")
+			return
+		}
+		if errors.Is(err, service.ErrForbidden) {
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Not a member of this account")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
 		return
 	}

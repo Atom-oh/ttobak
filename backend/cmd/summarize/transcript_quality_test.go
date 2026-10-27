@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -64,7 +66,7 @@ func TestMergedTranscriptRetainsDegradationProvenanceAndPartOffsets(t *testing.T
 			return nil, nil
 		}
 	}))
-	parsed, err := mergePartTranscripts(context.Background(), "bucket", "m", 2)
+	parsed, err := mergePartTranscripts(context.Background(), "bucket", "m", 2, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +114,7 @@ func TestMergedTranscribePartsKeepCanonicalPunctuation(t *testing.T) {
 			return nil, nil
 		}
 	}))
-	parsed, err := mergePartTranscripts(context.Background(), "bucket", "m", 2)
+	parsed, err := mergePartTranscripts(context.Background(), "bucket", "m", 2, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +149,7 @@ func TestInvalidRawTimingRemainsReadableWithoutFabricatedSegments(t *testing.T) 
 	}))
 	parsed := &parsedTranscript{Text: "preserved source text", Whisper: []service.WhisperSegment{{Start: 9999, End: -1, Text: "preserved source text"}},
 		Quality: &model.TranscriptQuality{Refinement: "not_requested", SpeakerProvenance: "unknown"}}
-	refineParsedTranscript(context.Background(), parsed)
+	refineParsedTranscript(context.Background(), parsed, nil)
 	fields, err := transcriptUpdateFields(parsed, false)
 	raw, hasSegments := fields["transcriptSegments"]
 	var preserved []TranscriptSegmentOut
@@ -171,5 +173,175 @@ func TestTranscriptUpdateOmitsSegmentsWhenNoneWereTimed(t *testing.T) {
 	}
 	if fields["transcriptB"] != "untimed text" {
 		t.Fatal("text was not published")
+	}
+}
+
+func captureSummarizeLog(t *testing.T) *strings.Builder {
+	t.Helper()
+	var out strings.Builder
+	prior := log.Writer()
+	log.SetOutput(&out)
+	t.Cleanup(func() { log.SetOutput(prior) })
+	return &out
+}
+
+func TestTranscriptCorrectionFlagGatesGlossary(t *testing.T) {
+	priorLoad := loadMeetingGlossary
+	t.Cleanup(func() { loadMeetingGlossary = priorLoad })
+	loads := 0
+	terms := []service.GlossaryTerm{{DisplayAs: "K-culture", TermKey: "k1", Layer: "ACCOUNT#a1"}}
+	loadMeetingGlossary = func(_ context.Context, ownerID, accountID string) ([]service.GlossaryTerm, error) {
+		loads++
+		if ownerID != "u1" || accountID != "a1" {
+			t.Fatalf("glossary for %s/%s", ownerID, accountID)
+		}
+		return terms, nil
+	}
+	meeting := &model.Meeting{MeetingID: "m1", UserID: "u1", AccountID: "a1"}
+
+	for _, mode := range []string{"", "off", "ON ", "yes"} {
+		t.Setenv("TRANSCRIPT_CORRECTION_MODE", mode)
+		logs := captureSummarizeLog(t)
+		if got := meetingGlossary(context.Background(), meeting); got != nil || loads != 0 {
+			t.Fatalf("mode %q loaded a glossary", mode)
+		}
+		if !strings.Contains(logs.String(), "transcript correction outcome=DISABLED") {
+			t.Fatalf("mode %q did not log DISABLED: %s", mode, logs.String())
+		}
+	}
+
+	t.Setenv("TRANSCRIPT_CORRECTION_MODE", "on")
+	if got := meetingGlossary(context.Background(), meeting); !reflect.DeepEqual(got, terms) || loads != 1 {
+		t.Fatalf("flag on: %+v", got)
+	}
+	terms = nil
+	logs := captureSummarizeLog(t)
+	if got := meetingGlossary(context.Background(), meeting); got != nil || !strings.Contains(logs.String(), "transcript correction outcome=DISABLED") {
+		t.Fatalf("empty glossary must run the unchanged path: %s", logs.String())
+	}
+}
+
+func TestRefineParsedTranscriptStoresCorrections(t *testing.T) {
+	var systems []string
+	reply := `{"segments":[{"speaker":"spk_0","text":"we love K-culture","startTime":0,"endTime":2,"sourceIds":[0]}],"corrections":[{"from":"gay culture","to":"K-culture","segment":0}]}`
+	installTranscriptFixture(t, retryHTTP(func(request *http.Request) (*http.Response, error) {
+		var input service.ClaudeRequest
+		if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+			t.Fatal(err)
+		}
+		systems = append(systems, input.System)
+		text := reply
+		if !strings.Contains(input.System, "Glossary") {
+			text = `[{"speaker":"spk_0","text":"we love gay culture","startTime":0,"endTime":2,"sourceIds":[0]}]`
+		}
+		body, _ := json.Marshal(map[string]any{"stop_reason": "end_turn", "content": []map[string]string{{"type": "text", "text": text}}})
+		return transcriptFixtureResponse(200, string(body), nil), nil
+	}))
+	newParsed := func() *parsedTranscript {
+		return &parsedTranscript{Whisper: []service.WhisperSegment{{Start: 0, End: 2, Text: "we love gay culture", Speaker: "spk_0"}},
+			Quality: &model.TranscriptQuality{Refinement: "not_requested", SpeakerProvenance: "unknown"}}
+	}
+
+	// No glossary: today's request and no corrections field.
+	parsed := newParsed()
+	refineParsedTranscript(context.Background(), parsed, nil)
+	fields, err := transcriptUpdateFields(parsed, false)
+	if err != nil || strings.Contains(systems[0], "Glossary") || len(parsed.Corrections) != 0 {
+		t.Fatalf("off path changed: %v", err)
+	}
+	if _, ok := fields["transcriptCorrections"]; ok {
+		t.Fatal("off path wrote corrections")
+	}
+
+	glossary := []service.GlossaryTerm{{DisplayAs: "K-culture", TermKey: "k1", Layer: "ACCOUNT#a1"}}
+	parsed = newParsed()
+	refineParsedTranscript(context.Background(), parsed, glossary)
+	fields, err = transcriptUpdateFields(parsed, false)
+	if err != nil || !strings.Contains(parsed.Text, "K-culture") {
+		t.Fatalf("correction not applied: %q %v", parsed.Text, err)
+	}
+	want := []model.TranscriptCorrection{{From: "gay culture", To: "K-culture", TermKey: "k1", Segment: 0}}
+	if got, _ := fields["transcriptCorrections"].([]model.TranscriptCorrection); !reflect.DeepEqual(got, want) {
+		t.Fatalf("stored corrections = %+v", fields["transcriptCorrections"])
+	}
+}
+
+func TestUnusableGlossaryRunsPlainPathWithoutRecords(t *testing.T) {
+	installTranscriptFixture(t, retryHTTP(func(request *http.Request) (*http.Response, error) {
+		var input service.ClaudeRequest
+		if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(input.System, "Glossary") {
+			t.Fatal("an unusable glossary reached the prompt")
+		}
+		body, _ := json.Marshal(map[string]any{"stop_reason": "end_turn", "content": []map[string]string{{"type": "text",
+			"text": `[{"speaker":"spk_0","text":"we love gay culture","startTime":0,"endTime":2,"sourceIds":[0]}]`}}})
+		return transcriptFixtureResponse(200, string(body), nil), nil
+	}))
+	parsed := &parsedTranscript{Whisper: []service.WhisperSegment{{Start: 0, End: 2, Text: "we love gay culture", Speaker: "spk_0"}},
+		Quality: &model.TranscriptQuality{Refinement: "not_requested", SpeakerProvenance: "unknown"}}
+	// A term key-less entry is not prompt-usable, so the plain path runs.
+	glossary := []service.GlossaryTerm{{DisplayAs: "K-culture"}}
+	logs := captureSummarizeLog(t)
+	refineParsedTranscript(context.Background(), parsed, glossary)
+	logCorrectionOutcome("m1", parsed, glossary)
+	fields, err := transcriptUpdateFields(parsed, false)
+	if err != nil || parsed.GlossaryApplied {
+		t.Fatalf("plain run marked as glossary run: %v", err)
+	}
+	if _, ok := fields["transcriptCorrections"]; ok {
+		t.Fatal("a plain run wrote transcriptCorrections")
+	}
+	if !strings.Contains(logs.String(), "transcript correction outcome=DISABLED") || strings.Contains(logs.String(), "outcome=APPLIED") {
+		t.Fatalf("plain run must log DISABLED: %s", logs.String())
+	}
+}
+
+// Merge-path offsets: each part's correction indexes the merged segments.
+func TestMergedCorrectionsIndexMergedSegments(t *testing.T) {
+	installTranscriptFixture(t, retryHTTP(func(request *http.Request) (*http.Response, error) {
+		switch {
+		case request.URL.Query().Get("list-type") == "2":
+			return transcriptFixtureResponse(200, `<ListBucketResult><Contents><Key>transcripts/m_part_000.json</Key></Contents><Contents><Key>transcripts/m_part_001.json</Key></Contents></ListBucketResult>`, nil), nil
+		case request.Method == "GET":
+			index := 0
+			if strings.Contains(request.URL.Path, "_001") {
+				index = 1
+			}
+			body := fmt.Sprintf(`{"results":{"transcripts":[{"transcript":"raw"}]},"whisper_metadata":{"duration_seconds":10,"segments":[`+
+				`{"speaker":"spk_0","start":0,"end":2,"text":"part %d opening"},{"speaker":"spk_1","start":2,"end":4,"text":"part %d gay culture"}]}}`, index, index)
+			return transcriptFixtureResponse(200, body, http.Header{"Etag": {fmt.Sprintf(`"part-%d"`, index)}}), nil
+		case request.Method == "POST":
+			var input service.ClaudeRequest
+			if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+				t.Fatal(err)
+			}
+			index := 0
+			if strings.Contains(input.Messages[0].Content[0].Text, "part 1") {
+				index = 1
+			}
+			text := fmt.Sprintf(`{"segments":[{"speaker":"spk_0","text":"part %d opening","startTime":0,"endTime":2,"sourceIds":[0]},`+
+				`{"speaker":"spk_1","text":"part %d K-culture","startTime":2,"endTime":4,"sourceIds":[1]}],"corrections":[{"from":"gay culture","to":"K-culture","segment":1}]}`, index, index)
+			body, _ := json.Marshal(map[string]any{"stop_reason": "end_turn", "content": []map[string]string{{"type": "text", "text": text}}})
+			return transcriptFixtureResponse(200, string(body), nil), nil
+		default:
+			t.Fatal("unexpected fixture request")
+			return nil, nil
+		}
+	}))
+	glossary := []service.GlossaryTerm{{DisplayAs: "K-culture", TermKey: "k1", Layer: "USER#u1"}}
+	parsed, err := mergePartTranscripts(context.Background(), "bucket", "m", 2, glossary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !parsed.GlossaryApplied || len(parsed.Corrections) != 2 || len(parsed.Segments) != 4 {
+		t.Fatalf("merged corrections: %+v segments=%d", parsed.Corrections, len(parsed.Segments))
+	}
+	for part, correction := range parsed.Corrections {
+		segment := parsed.Segments[correction.Segment]
+		if correction.Segment != 2*part+1 || segment.Text != fmt.Sprintf("part %d K-culture", part) {
+			t.Fatalf("part %d correction points at %d (%q)", part, correction.Segment, segment.Text)
+		}
 	}
 }
