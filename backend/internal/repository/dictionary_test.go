@@ -264,12 +264,12 @@ func TestDictionaryWriteGuards(t *testing.T) {
 			ErrDictObservationExists, "Put", 0, []string{"attribute_not_exists (PK)"}, nil},
 		{"user edit is version guarded", conditionalFailed,
 			func(r *DictionaryRepository) error {
-				return r.UpdateDictTerm(context.Background(), "USER#u1", key, DictTermChange{Phrase: &phrase}, "u1", "now", 9)
+				return r.UpdateDictTerm(context.Background(), "USER#u1", key, DictTermChange{Phrase: &phrase}, "u1", "now", 9, nil)
 			},
 			ErrDictTermConflict, "", 0, []string{`version = {"N":"9"}`, `<> {"S":"deleted"}`}, nil},
 		{"tombstone is version guarded", conditionalFailed,
 			func(r *DictionaryRepository) error {
-				_, err := r.TombstoneDictTerm(context.Background(), "USER#u1", key, "u1", "now", 2)
+				_, err := r.TombstoneDictTerm(context.Background(), "USER#u1", key, "u1", "now", 2, nil)
 				return err
 			},
 			ErrDictTermConflict, "", 0, []string{`version = {"N":"2"}`}, nil},
@@ -277,19 +277,21 @@ func TestDictionaryWriteGuards(t *testing.T) {
 			func(r *DictionaryRepository) error {
 				manual := *term
 				manual.Origin = model.TermOriginManual
-				return r.CreateDictTerm(context.Background(), &manual)
+				return r.CreateDictTerm(context.Background(), &manual, nil)
 			},
 			ErrDictTermConflict, "", 0, []string{"attribute_not_exists (PK)"}, nil},
 		{"legacy hard delete only matches active manual rows", conditionalFailed,
 			func(r *DictionaryRepository) error {
-				return r.DeleteManualTerm(context.Background(), "USER#u1", key, 6)
+				return r.DeleteManualTerm(context.Background(), "USER#u1", key, 6, nil)
 			},
 			ErrDictTermConflict, "", 0, []string{`version = {"N":"6"}`, `origin = {"S":"manual"}`, `state = {"S":"active"}`}, nil},
 		{"tombstone pruning only matches tombstones", conditionalFailed,
-			func(r *DictionaryRepository) error { return r.DeleteTombstone(context.Background(), "USER#u1", key, 3) },
+			func(r *DictionaryRepository) error {
+				return r.DeleteTombstone(context.Background(), "USER#u1", key, 3, nil)
+			},
 			ErrDictTermConflict, "", 0, []string{`version = {"N":"3"}`, `state = {"S":"deleted"}`}, nil},
 		{"restore requires the tombstone", conditionalFailed,
-			func(r *DictionaryRepository) error { return r.RestoreDictTerm(context.Background(), term, 4) },
+			func(r *DictionaryRepository) error { return r.RestoreDictTerm(context.Background(), term, 4, nil) },
 			ErrDictTermConflict, "", 0, []string{`state = {"S":"deleted"}`, `version = {"N":"4"}`}, nil},
 	}
 	for _, tc := range cases {
@@ -343,7 +345,7 @@ func TestDictionaryWriteEffects(t *testing.T) {
 	requireAll(t, "obs query", resolved((*calls)[1].body, "KeyConditionExpression"), "begins_with", "DICTOBS#"+key+"#")
 
 	repo, calls = dictWire(t, obsQuery(true))
-	res, err := repo.TombstoneDictTerm(context.Background(), "USER#u1", key, "u1", "now", 2)
+	res, err := repo.TombstoneDictTerm(context.Background(), "USER#u1", key, "u1", "now", 2, nil)
 	if err != nil || res.CleanupErr == nil {
 		t.Fatalf("tombstone must commit and surface the cleanup failure: %v %v", err, res.CleanupErr)
 	}
@@ -378,14 +380,14 @@ func TestDictionaryWriteEffects(t *testing.T) {
 		t.Fatal("a promotion must carry the untainted run's source types")
 	}
 	*calls = (*calls)[:1]
-	if err := repo.RestoreDictTerm(context.Background(), term, 4); err != nil {
+	if err := repo.RestoreDictTerm(context.Background(), term, 4, nil); err != nil {
 		t.Fatal(err)
 	}
 	if (*calls)[1].body["Item"].(map[string]any)["version"].(map[string]any)["N"] != "5" {
 		t.Fatal("restore must bump the version")
 	}
 	phrase := "Alpha-Grid"
-	if err := repo.UpdateDictTerm(context.Background(), "USER#u1", key, DictTermChange{Phrase: &phrase}, "u1", "now", 9); err != nil {
+	if err := repo.UpdateDictTerm(context.Background(), "USER#u1", key, DictTermChange{Phrase: &phrase}, "u1", "now", 9, nil); err != nil {
 		t.Fatal(err)
 	}
 	requireAll(t, "edit", resolved((*calls)[2].body, "UpdateExpression"), "userEditedAt", "updatedBy", "phrase")

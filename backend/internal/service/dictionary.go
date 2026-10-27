@@ -32,12 +32,12 @@ type DictionaryStore interface {
 	CreateMigratedVocabularyState(ctx context.Context, userID string, state *model.VocabularyState) error
 	UpdateVocabularyState(ctx context.Context, userID, vocabContext, lang string, expectedVersion int64, change repository.VocabularyStateChange, now string) error
 	GetDictTerm(ctx context.Context, pk, termKey string) (*model.DictTerm, error)
-	CreateDictTerm(ctx context.Context, term *model.DictTerm) error
-	UpdateDictTerm(ctx context.Context, pk, termKey string, change repository.DictTermChange, actor, now string, expectedVersion int64) error
-	TombstoneDictTerm(ctx context.Context, pk, termKey, actor, now string, expectedVersion int64) (repository.DictWriteResult, error)
-	RestoreDictTerm(ctx context.Context, term *model.DictTerm, expectedVersion int64) error
-	DeleteManualTerm(ctx context.Context, pk, termKey string, expectedVersion int64) error
-	DeleteTombstone(ctx context.Context, pk, termKey string, expectedVersion int64) error
+	CreateDictTerm(ctx context.Context, term *model.DictTerm, member *repository.MembershipCheck) error
+	UpdateDictTerm(ctx context.Context, pk, termKey string, change repository.DictTermChange, actor, now string, expectedVersion int64, member *repository.MembershipCheck) error
+	TombstoneDictTerm(ctx context.Context, pk, termKey, actor, now string, expectedVersion int64, member *repository.MembershipCheck) (repository.DictWriteResult, error)
+	RestoreDictTerm(ctx context.Context, term *model.DictTerm, expectedVersion int64, member *repository.MembershipCheck) error
+	DeleteManualTerm(ctx context.Context, pk, termKey string, expectedVersion int64, member *repository.MembershipCheck) error
+	DeleteTombstone(ctx context.Context, pk, termKey string, expectedVersion int64, member *repository.MembershipCheck) error
 }
 
 // TranscribeVocabularyAPI is the subset of the Transcribe client used here.
