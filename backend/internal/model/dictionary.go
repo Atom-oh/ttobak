@@ -294,7 +294,11 @@ const (
 	DictLogActionUpdate  = "update"
 	DictLogActionDelete  = "delete"
 	DictLogActionRestore = "restore"
-	MaxDictLogsPerTerm   = 20
+	// DictLogActionCreate and DictLogActionEvict audit the news job's
+	// system writes: a new automatic term and a cap eviction.
+	DictLogActionCreate = "create"
+	DictLogActionEvict  = "evict"
+	MaxDictLogsPerTerm  = 20
 )
 
 // DictLogSK returns the sort key of an audit row.

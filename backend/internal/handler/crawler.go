@@ -65,6 +65,10 @@ func (h *CrawlerHandler) AddSource(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.crawlerService.AddSource(ctx, userID, &req)
 	if err != nil {
+		if errors.Is(err, service.ErrSourceUnavailable) {
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Source not available")
+			return
+		}
 		if errors.Is(err, service.ErrInvalidInput) {
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "invalid aliases")
 			return
@@ -94,6 +98,10 @@ func (h *CrawlerHandler) UpdateSource(w http.ResponseWriter, r *http.Request) {
 
 	err := h.crawlerService.UpdateSource(ctx, userID, sourceID, &req)
 	if err != nil {
+		if errors.Is(err, service.ErrSourceUnavailable) {
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Source not available")
+			return
+		}
 		if errors.Is(err, service.ErrNotFound) {
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Source subscription not found")
 			return
@@ -126,6 +134,10 @@ func (h *CrawlerHandler) Unsubscribe(w http.ResponseWriter, r *http.Request) {
 
 	err := h.crawlerService.Unsubscribe(ctx, userID, sourceID)
 	if err != nil {
+		if errors.Is(err, service.ErrSourceUnavailable) {
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Source not available")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "internal error")
 		return
 	}

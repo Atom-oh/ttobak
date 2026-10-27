@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
@@ -87,6 +88,70 @@ func (r *CrawlerRepository) GetSource(ctx context.Context, sourceID string) (*mo
 	return &item.CrawlerSource, nil
 }
 
+// GlobalNewsSourceAttribute marks an operator-curated crawler source whose
+// news may feed the Common dictionary layer. Only operators set it, directly
+// on the CONFIG item; no API path writes it (CrawlerSource has no such field).
+const GlobalNewsSourceAttribute = "globalNewsSource"
+
+// IsGlobalNewsSource reports whether sourceID is an operator-curated global
+// news source: its CONFIG item carries globalNewsSource = true, was never
+// written by a user (no userTiedAt), is enabled (status active or idle; the
+// versioned news pipeline never writes status, so an operator source may stay
+// idle) and has no owner, no subscribers and no custom URLs, so no user's
+// subscription, query or URL shapes what it crawls. Anything else, including
+// a missing item, is false (fail closed); only a read failure is an error.
+func (r *CrawlerRepository) IsGlobalNewsSource(ctx context.Context, sourceID string) (bool, error) {
+	result, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixCrawler + sourceID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixConfig},
+		},
+		ConsistentRead: aws.Bool(true),
+	})
+	if err != nil {
+		return false, fmt.Errorf("failed to get crawler source: %w", err)
+	}
+	item := result.Item
+	if item == nil {
+		return false, nil
+	}
+	marker, ok := item[GlobalNewsSourceAttribute].(*types.AttributeValueMemberBOOL)
+	if !ok || !marker.Value {
+		return false, nil
+	}
+	if _, tainted := item["userTiedAt"]; tainted {
+		return false, nil
+	}
+	if status, ok := item["status"].(*types.AttributeValueMemberS); !ok || (status.Value != "active" && status.Value != "idle") {
+		return false, nil
+	}
+	if owner, ok := item["ownerId"]; ok {
+		if s, isS := owner.(*types.AttributeValueMemberS); !isS || s.Value != "" {
+			return false, nil
+		}
+	}
+	for _, name := range []string{"subscribers", "customUrls"} {
+		if v, ok := item[name]; ok && !emptyAttributeList(v) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// emptyAttributeList is true for an empty list or set and for NULL.
+func emptyAttributeList(v types.AttributeValue) bool {
+	switch t := v.(type) {
+	case *types.AttributeValueMemberL:
+		return len(t.Value) == 0
+	case *types.AttributeValueMemberSS:
+		return len(t.Value) == 0
+	case *types.AttributeValueMemberNULL:
+		return true
+	}
+	return false
+}
+
 // PutSourceIfAbsent creates a brand-new crawler source, conditioned on the
 // PK not already existing -- AddSource's new-source branch uses this
 // instead of PutSource's unconditional overwrite, since a concurrent
@@ -101,6 +166,12 @@ func (r *CrawlerRepository) PutSourceIfAbsent(ctx context.Context, source *model
 		SK:            model.PrefixConfig,
 		EntityType:    "CRAWLER_SOURCE",
 		CrawlerSource: *source,
+	}
+	// Only AddSource creates sources: a user-created source is never global
+	// and carries the user taint from the start.
+	item.GlobalNewsSource = false
+	if item.UserTiedAt == "" {
+		item.UserTiedAt = time.Now().UTC().Format(time.RFC3339)
 	}
 
 	av, err := attributevalue.MarshalMap(item)
@@ -153,8 +224,15 @@ type SourcePartialFields struct {
 	RequireOwnerID *string
 }
 
+// ErrOperatorSource refuses a user write to an operator-curated global news
+// source (globalNewsSource set on its CONFIG item).
+var ErrOperatorSource = errors.New("operator-curated crawler source")
+
 // UpdateSourcePartial performs a partial UpdateItem for the crawler source at
-// sourceID, SETting exactly the non-nil fields in `fields`. Guarded by a
+// sourceID, SETting exactly the non-nil fields in `fields`. Every caller is a
+// user path, so the update also requires attribute_not_exists(globalNewsSource)
+// (a marked source fails with ErrOperatorSource, never ErrConditionFailed, so
+// callers do not retry) and sets the sticky userTiedAt taint if absent. Guarded by a
 // ConditionExpression asserting each of those same fields still equals its
 // value in `expected` (a snapshot read immediately before this call) --
 // callers get ErrConditionFailed on a lost race and are expected to re-read,
@@ -199,6 +277,11 @@ func (r *CrawlerRepository) UpdateSourcePartial(ctx context.Context, sourceID st
 	}
 	// A concurrent source deletion must not turn an alias-only update into an upsert.
 	cond = cond.And(expression.AttributeExists(expression.Name("PK")))
+	// Operator sources are never modified by user paths, even in a race with
+	// the operator marking them; every user write taints the source for good.
+	cond = cond.And(expression.AttributeNotExists(expression.Name("globalNewsSource")))
+	update = update.Set(expression.Name("userTiedAt"),
+		expression.IfNotExists(expression.Name("userTiedAt"), expression.Value(time.Now().UTC().Format(time.RFC3339))))
 	if fields.RequireOwnerID != nil {
 		if *fields.RequireOwnerID == "" {
 			return fmt.Errorf("owner condition requires a user ID")
@@ -217,14 +300,18 @@ func (r *CrawlerRepository) UpdateSourcePartial(ctx context.Context, sourceID st
 			"PK": &types.AttributeValueMemberS{Value: model.PrefixCrawler + sourceID},
 			"SK": &types.AttributeValueMemberS{Value: model.PrefixConfig},
 		},
-		UpdateExpression:          expr.Update(),
-		ConditionExpression:       expr.Condition(),
-		ExpressionAttributeNames:  expr.Names(),
-		ExpressionAttributeValues: expr.Values(),
+		UpdateExpression:                    expr.Update(),
+		ConditionExpression:                 expr.Condition(),
+		ExpressionAttributeNames:            expr.Names(),
+		ExpressionAttributeValues:           expr.Values(),
+		ReturnValuesOnConditionCheckFailure: types.ReturnValuesOnConditionCheckFailureAllOld,
 	})
 	if err != nil {
 		var ccfe *types.ConditionalCheckFailedException
 		if errors.As(err, &ccfe) {
+			if _, marked := ccfe.Item["globalNewsSource"]; marked {
+				return fmt.Errorf("%w: source %s", ErrOperatorSource, sourceID)
+			}
 			return fmt.Errorf("%w: source %s fields changed concurrently", ErrConditionFailed, sourceID)
 		}
 		return fmt.Errorf("failed to update crawler source: %w", err)

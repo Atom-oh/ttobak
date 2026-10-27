@@ -18,11 +18,15 @@ import (
 // {"kind":"news-daily"}; ProcessNewsDaily reads the titles and summaries of
 // the news documents crawled in the UTC day ending then, runs the source
 // extraction prompt, and merges into DICT#COMMON only the terms seen in at
-// least two documents that day or on at least two distinct days of the last
-// seven. Common rows are visible to every user (R6), so the only evidence they
-// carry is the public document hash, the writer is model.DictNewsActor, and
-// user-edited Common terms are left alone by the merge rules. Logs carry the
-// day, codes and counts only.
+// least two distinct crawler sources that day, or on at least two distinct
+// days of the last seven with at least two distinct sources among them: one
+// source alone never qualifies a term. Common rows are visible to every user
+// (R6, R15), so only searched (not custom-URL) documents of operator-curated
+// global sources are read (repository.IsGlobalNewsSource; anything unknown is
+// excluded), the only evidence on a term is the public document hash, the
+// writer is model.DictNewsActor, creations and evictions are audited (R14),
+// and user-edited Common terms are left alone by the merge rules. Logs carry
+// the day, codes and counts only.
 const (
 	// newsDayCutoffHour is the UTC hour the daily run fires and its day ends.
 	newsDayCutoffHour = 21
@@ -37,20 +41,25 @@ const (
 	newsMaxCalls = 4
 	// newsRepeatDays is the window of the distinct-days threshold.
 	newsRepeatDays = 7
-	// newsMinRepeats is the threshold for both documents and days.
+	// newsMinRepeats is the threshold for both sources and days.
 	newsMinRepeats = 2
 	// newsHistoryTTL is how long candidate history and run rows are kept.
 	newsHistoryTTL = 14 * 24 * time.Hour
-	// newsHistoryMaxDocs keeps the newest document hashes of a candidate.
-	newsHistoryMaxDocs = 20
+	// newsHistoryMaxSightings bounds a candidate's day#source entries.
+	newsHistoryMaxSightings = 50
+	// newsIngestSearch marks a document found by the source's searches; a
+	// "custom" one came from a URL a user configured and is never read.
+	newsIngestSearch = "search"
 
 	newsDayLayout = "2006-01-02"
 )
 
-// TermsNewsDocuments lists crawled news documents by crawl time;
-// *repository.CrawlerRepository implements it.
+// TermsNewsDocuments lists crawled news documents by crawl time and tells
+// operator-curated global sources apart; *repository.CrawlerRepository
+// implements it.
 type TermsNewsDocuments interface {
 	ListDocumentsCrawledBetween(ctx context.Context, from, to int64) ([]model.CrawledDocument, error)
+	IsGlobalNewsSource(ctx context.Context, sourceID string) (bool, error)
 }
 
 var _ TermsNewsDocuments = (*repository.CrawlerRepository)(nil)
@@ -102,14 +111,17 @@ func newsWindow(day string) (int64, int64, bool) {
 }
 
 type newsDocument struct {
-	hash  string
-	text  string
-	match matchText
+	hash   string
+	source string // crawler source ID (from the item's partition key)
+	text   string
+	match  matchText
 }
 
-// newsDocuments keeps published (or legacy, status-less) news documents with
-// a well-formed hash, once each, as title + summary capped at
-// newsDocumentMaxBytes, in crawl order.
+// newsDocuments keeps published, searched news documents with a well-formed
+// hash and source ID as title + summary capped at newsDocumentMaxBytes, in
+// crawl order. Legacy rows without an ingest source cannot be told from
+// custom-URL ones and are skipped. One article crawled by several sources
+// stays once per source here; globalNewsDocuments dedups after filtering.
 func newsDocuments(rows []model.CrawledDocument) []newsDocument {
 	sort.SliceStable(rows, func(i, j int) bool {
 		if rows[i].CrawledAt != rows[j].CrawledAt {
@@ -117,11 +129,10 @@ func newsDocuments(rows []model.CrawledDocument) []newsDocument {
 		}
 		return rows[i].DocHash < rows[j].DocHash
 	})
-	seen := map[string]bool{}
 	var out []newsDocument
 	for _, row := range rows {
-		if (row.QualityStatus != "" && row.QualityStatus != "PUBLISHED") || (row.Type != "" && row.Type != "news") ||
-			!attachmentIdentifier.MatchString(row.DocHash) || seen[row.DocHash] {
+		if row.QualityStatus != "PUBLISHED" || row.IngestSource != newsIngestSearch || (row.Type != "" && row.Type != "news") ||
+			!attachmentIdentifier.MatchString(row.DocHash) || !validNewsSourceID(row.SourceID) {
 			continue
 		}
 		text := strings.TrimSpace(strings.TrimSpace(row.Title) + "\n" + strings.TrimSpace(row.Summary))
@@ -129,11 +140,44 @@ func newsDocuments(rows []model.CrawledDocument) []newsDocument {
 		if text == "" || !utf8.ValidString(text) || strings.ContainsRune(text, 0) {
 			continue
 		}
-		seen[row.DocHash] = true
-		out = append(out, newsDocument{hash: row.DocHash, text: text, match: newMatchText(text)})
+		out = append(out, newsDocument{hash: row.DocHash, source: row.SourceID, text: text, match: newMatchText(text)})
 	}
 	return out
 }
+
+// globalNewsDocuments keeps the documents of global sources, looking each
+// distinct source up once, then keeps each article (hash) once. Filtering
+// first means a user source that crawled a shared URL earlier never hides
+// a global source's copy. A lookup failure is returned (retryable).
+func (s *TermsAnalysisService) globalNewsDocuments(ctx context.Context, docs []newsDocument) ([]newsDocument, int, error) {
+	global := map[string]bool{}
+	seen := map[string]bool{}
+	var out []newsDocument
+	excluded := 0
+	for _, d := range docs {
+		ok, cached := global[d.source]
+		if !cached {
+			var err error
+			if ok, err = s.news.Documents.IsGlobalNewsSource(ctx, d.source); err != nil {
+				return nil, 0, err
+			}
+			global[d.source] = ok
+		}
+		if !ok {
+			excluded++
+			continue
+		}
+		if seen[d.hash] {
+			continue
+		}
+		seen[d.hash] = true
+		out = append(out, d)
+	}
+	return out, excluded, nil
+}
+
+// newsSighting is one history entry: a day and a source that named the term.
+func newsSighting(day, source string) string { return day + "#" + source }
 
 // newsBatches packs documents into at most newsMaxCalls calls of at most
 // termsSourceMaxBytes; documents past the last call are dropped (counted).
@@ -157,6 +201,8 @@ func newsBatches(docs []newsDocument) ([][]termsDocumentText, int) {
 func newsContentHash(docs []newsDocument) string {
 	var b strings.Builder
 	for _, d := range docs {
+		b.WriteString(d.source)
+		b.WriteByte(0)
 		b.WriteString(d.hash)
 		b.WriteByte(0)
 		b.WriteString(d.text)
@@ -166,8 +212,9 @@ func newsContentHash(docs []newsDocument) string {
 }
 
 type newsCandidate struct {
-	term FilteredTerm
-	docs []string // hashes of today's documents naming the term
+	term    FilteredTerm
+	docs    []string // hashes of today's documents naming the term
+	sources []string // their distinct source IDs
 }
 
 // ProcessNewsDaily extracts terms from the news documents of day (YYYY-MM-DD,
@@ -199,7 +246,13 @@ func (s *TermsAnalysisService) ProcessNewsDaily(ctx context.Context, day string)
 	if err != nil {
 		return done("READ_FAILED", fmt.Errorf("list news documents: %w", err))
 	}
-	docs := newsDocuments(rows)
+	docs, excluded, err := s.globalNewsDocuments(ctx, newsDocuments(rows))
+	if err != nil {
+		return done("SOURCE_READ_FAILED", fmt.Errorf("read news source: %w", err))
+	}
+	if excluded > 0 {
+		log.Printf("%s excludedNonGlobal=%d", label, excluded)
+	}
 	if len(docs) == 0 {
 		return done("NO_DOCUMENTS", nil)
 	}
@@ -254,10 +307,10 @@ func (s *TermsAnalysisService) ProcessNewsDaily(ctx context.Context, day string)
 		}
 	}
 
-	// Count today's documents naming each candidate, then apply the repeat
-	// threshold against the candidate history: days within the seven ending
-	// at day count; days after it (a re-run of an older day) are kept, older
-	// ones dropped.
+	// Count today's documents and sources naming each candidate, then apply
+	// the repeat threshold against the candidate history. Sightings within
+	// the seven days ending at day count; later ones (a re-run of an older
+	// day) are kept, older ones dropped.
 	now := s.now().UTC()
 	start, _ := time.Parse(newsDayLayout, day) // validated by newsWindow
 	oldest := start.AddDate(0, 0, -(newsRepeatDays - 1)).Format(newsDayLayout)
@@ -268,6 +321,7 @@ func (s *TermsAnalysisService) ProcessNewsDaily(ctx context.Context, day string)
 		for _, d := range docs {
 			if d.match.count(display, true) > 0 {
 				c.docs = append(c.docs, d.hash)
+				c.sources = unionStrings(c.sources, []string{d.source})
 			}
 		}
 		if len(c.docs) == 0 {
@@ -278,34 +332,38 @@ func (s *TermsAnalysisService) ProcessNewsDaily(ctx context.Context, day string)
 		if err != nil {
 			return done("HISTORY_FAILED", fmt.Errorf("read news history: %w", err))
 		}
-		next := &model.TermsNewsHistory{
-			PK: model.PrefixDictCommon, SK: model.TermsNewsSK(c.term.TermKey), TermKey: c.term.TermKey,
-			Days: []string{day}, ExpiresAt: now.Add(newsHistoryTTL).Unix(), UpdatedAt: now.Format(model.DictTimeLayout),
-		}
+		var sightings []string
 		if h != nil {
-			for _, d := range h.Days {
-				if d >= oldest {
-					next.Days = append(next.Days, d)
+			for _, e := range h.Sources {
+				if d, src, ok := strings.Cut(e, "#"); ok && d >= oldest && validNewsSourceID(src) {
+					sightings = append(sightings, e)
 				}
 			}
-			next.Docs = h.Docs
 		}
-		next.Days = unionStrings(nil, next.Days)
-		sort.Strings(next.Days)
-		next.Docs = unionStrings(next.Docs, c.docs)
-		if len(next.Docs) > newsHistoryMaxDocs {
-			next.Docs = next.Docs[len(next.Docs)-newsHistoryMaxDocs:]
+		for _, src := range c.sources {
+			sightings = append(sightings, newsSighting(day, src))
+		}
+		sightings = unionStrings(nil, sightings)
+		sort.Strings(sightings)
+		if len(sightings) > newsHistoryMaxSightings {
+			sightings = sightings[len(sightings)-newsHistoryMaxSightings:]
+		}
+		next := &model.TermsNewsHistory{
+			PK: model.PrefixDictCommon, SK: model.TermsNewsSK(c.term.TermKey), TermKey: c.term.TermKey,
+			Sources: sightings, ExpiresAt: now.Add(newsHistoryTTL).Unix(), UpdatedAt: now.Format(model.DictTimeLayout),
+		}
+		windowDays, windowSources := map[string]bool{}, map[string]bool{}
+		for _, e := range sightings {
+			d, src, _ := strings.Cut(e, "#")
+			next.Days = unionStrings(next.Days, []string{d})
+			if d <= day {
+				windowDays[d], windowSources[src] = true, true
+			}
 		}
 		if err := s.news.Store.PutTermsNewsHistory(ctx, next); err != nil {
 			return done("HISTORY_FAILED", fmt.Errorf("write news history: %w", err))
 		}
-		days := 0
-		for _, d := range next.Days {
-			if d <= day {
-				days++
-			}
-		}
-		if len(c.docs) >= newsMinRepeats || days >= newsMinRepeats {
+		if len(c.sources) >= newsMinRepeats || (len(windowDays) >= newsMinRepeats && len(windowSources) >= newsMinRepeats) {
 			kept = append(kept, c)
 		}
 	}

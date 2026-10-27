@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -25,10 +26,11 @@ type memDictStore struct {
 	// ConditionCheck passes; nil lets every matching check pass.
 	members    map[string]bool
 	lastMember *repository.MembershipCheck
+	logs       map[string]model.DictTermLog // Common audit rows, SK -> row
 }
 
 func newMemDictStore() *memDictStore {
-	return &memDictStore{terms: map[string]model.DictTerm{}, obs: map[string]model.DictObservation{}, hooks: map[string]func(){}, calls: map[string]int{}, failOn: map[string]error{}}
+	return &memDictStore{terms: map[string]model.DictTerm{}, obs: map[string]model.DictObservation{}, hooks: map[string]func(){}, calls: map[string]int{}, failOn: map[string]error{}, logs: map[string]model.DictTermLog{}}
 }
 
 func (s *memDictStore) before(op string) error {
@@ -105,6 +107,46 @@ func (s *memDictStore) CreateAutoTermChecked(_ context.Context, term *model.Dict
 		return memObsExists()
 	}
 	s.terms[term.SK], s.obs[obs.SK] = *term, *obs
+	return nil
+}
+
+func (s *memDictStore) CreateCommonAutoTerm(ctx context.Context, term *model.DictTerm, obs *model.DictObservation, entry *model.DictTermLog) error {
+	if _, ok := s.logs[entry.SK]; ok || entry.TermKey != term.TermKey {
+		return memConflict()
+	}
+	if err := s.CreateAutoTermChecked(ctx, term, obs, nil); err != nil {
+		return err
+	}
+	s.logs[entry.SK] = *entry
+	return nil
+}
+
+func (s *memDictStore) EvictCommonAutoTerm(ctx context.Context, termKey string, v int64, entry *model.DictTermLog) (repository.DictWriteResult, error) {
+	if _, ok := s.logs[entry.SK]; ok || entry.TermKey != termKey {
+		return repository.DictWriteResult{}, memConflict()
+	}
+	res, err := s.EvictAutoTerm(ctx, model.PrefixDictCommon, termKey, v)
+	if err == nil {
+		s.logs[entry.SK] = *entry
+	}
+	return res, err
+}
+
+// TrimDictTermLog keeps the newest keep rows of termKey (SKs sort by time).
+func (s *memDictStore) TrimDictTermLog(_ context.Context, _ string, termKey string, keep int) error {
+	if err := s.before("trimLog"); err != nil {
+		return err
+	}
+	var sks []string
+	for sk, row := range s.logs {
+		if row.TermKey == termKey {
+			sks = append(sks, sk)
+		}
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(sks)))
+	for i := keep; i < len(sks); i++ {
+		delete(s.logs, sks[i])
+	}
 	return nil
 }
 
