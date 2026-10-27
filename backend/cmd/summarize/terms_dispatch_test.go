@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/service"
@@ -93,5 +94,35 @@ func TestHandlerRoutesTermsSources(t *testing.T) {
 	}
 	if len(processed) != 1 || processed[0].Kind != "research" || processed[0].Ref != "r1" || processed[0].OwnerID != "u1" || len(processed[0].AccountIDs) != 1 {
 		t.Fatalf("processed %+v", processed)
+	}
+}
+
+// The daily schedule's {"kind":"news-daily"} input reaches the news worker
+// with the day ending at the last 21:00 UTC cutoff, and nothing else does.
+func TestHandlerRoutesNewsDaily(t *testing.T) {
+	restoreProcess, restoreNow := processNewsDaily, newsNow
+	defer func() { processNewsDaily, newsNow = restoreProcess, restoreNow }()
+	newsNow = func() time.Time { return time.Date(2026, 10, 19, 1, 30, 0, 0, time.UTC) } // a late retry
+	var days []string
+	processNewsDaily = func(_ context.Context, day string) error {
+		days = append(days, day)
+		return nil
+	}
+	if err := Handler(context.Background(), json.RawMessage(`{"kind":"news-daily"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if len(days) != 1 || days[0] != "2026-10-18" {
+		t.Fatalf("news days %v", days)
+	}
+	for _, raw := range []string{
+		`{"kind":"other"}`,
+		`{"source":"aws.s3","detail-type":"Object Created","kind":"news-daily","detail":{"bucket":{"name":"b"},"object":{"key":"images/x.png"}}}`,
+	} {
+		if err := Handler(context.Background(), json.RawMessage(raw)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(days) != 1 {
+		t.Fatalf("only the bare schedule input runs the news job: %v", days)
 	}
 }

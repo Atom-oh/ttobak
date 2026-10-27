@@ -17,7 +17,8 @@ import (
 // filters, then MergeScoped into the meeting's Account when that layer is on.
 // Account writes carry the owner's membership ConditionCheck; Common is never
 // written from meetings, KB documents or research (it takes news terms only).
-// ProcessSource merges KB/research terms through MergeScoped.
+// ProcessSource merges KB/research terms and ProcessNewsDaily news terms
+// through MergeScoped.
 const (
 	// MaxAutoTermsPerScope caps unedited automatic (active or suggested)
 	// terms; the lowest-scoring are evicted after a merge.
@@ -81,8 +82,9 @@ type TermsScope struct {
 
 // TermsSourceRef is the evidence of a scoped merge: Kind/Ref name the source
 // (DictSourceMeeting with Ref = meeting ID, DictSourceKB with Ref = object
-// key, DictSourceResearch with Ref = research ID) and OwnerID the user whose
-// content it is. NotesSafe, Tainted, Accepted and SummaryGeneration are as on
+// key, DictSourceResearch with Ref = research ID, DictSourceNews with Ref =
+// crawled document hash) and OwnerID the user whose content it is
+// (model.DictNewsActor for news). NotesSafe, Tainted, Accepted and SummaryGeneration are as on
 // TermsMeetingRef.
 type TermsSourceRef struct {
 	Kind, Ref, OwnerID string
@@ -151,10 +153,18 @@ func (m *TermsMerger) MergeExtractedTerms(ctx context.Context, scopePK string, c
 
 // validateScope accepts the source owner's personal scope, or an Account scope
 // whose membership check names that owner, for a meeting, KB or research
-// source. Common is refused: none of these sources write it (R6).
+// source, and Common for a news source only: written by the news system
+// actor, without a membership check, with a public document hash as the ref
+// (R6: Common rows are visible to every user).
 func validateScope(scope TermsScope, ref TermsSourceRef) error {
 	switch ref.Kind {
 	case model.DictSourceMeeting, model.DictSourceKB, model.DictSourceResearch:
+	case model.DictSourceNews:
+		if scope.PK != model.PrefixDictCommon || scope.Member != nil || ref.OwnerID != model.DictNewsActor ||
+			!attachmentIdentifier.MatchString(ref.Ref) || ref.Tainted || len(ref.Accepted) != 0 {
+			return fmt.Errorf("%w: news terms merge writes only Common, as the news job, for one day", ErrInvalidInput)
+		}
+		return nil
 	default:
 		return fmt.Errorf("%w: terms merge does not take this source kind", ErrInvalidInput)
 	}
@@ -175,7 +185,11 @@ func validateScope(scope TermsScope, ref TermsSourceRef) error {
 
 // MergeScoped is MergeExtractedTerms for any scope validateScope accepts. An
 // Account write the membership check refuses ends the merge with
-// repository.ErrNotAccountMember. The auto cap applies per partition.
+// repository.ErrNotAccountMember. The auto cap applies per partition. A news
+// merge is one call per day: it keeps no acceptedTerms (its per-day
+// observation already makes a replay a no-op), and the cap never evicts a
+// term this call observed, so a term confirmed by the day's news is not
+// dropped by the same merge that adds it.
 func (m *TermsMerger) MergeScoped(ctx context.Context, scope TermsScope, candidates []ExtractedTerm, ref TermsSourceRef) (*TermsMergeResult, error) {
 	if err := validateScope(scope, ref); err != nil {
 		return nil, err
@@ -204,24 +218,33 @@ func (m *TermsMerger) MergeScoped(ctx context.Context, scope TermsScope, candida
 		termKeys[c.key] = true
 	}
 
+	news := ref.Kind == model.DictSourceNews
+	observed := map[string]bool{}
 	var cleanup []error
 	for _, c := range merged {
 		// Only a written observation takes an acceptedTerms slot, so the
 		// room check runs per candidate, after earlier skips freed theirs.
-		if acceptedIndex(result.Accepted, c.key) < 0 && len(result.Accepted) >= model.MaxTermsAccepted {
+		if !news && acceptedIndex(result.Accepted, c.key) < 0 && len(result.Accepted) >= model.MaxTermsAccepted {
 			result.Counters.Capped++
 			continue
 		}
 		outcome, err := m.mergeOne(ctx, scope, c, byKey[c.key], termKeys, ref, result, &cleanup)
 		if outcome == outcomeObserved {
-			addAccepted(result, c.key, c.SourceTypes)
+			observed[c.key] = true
+			if !news {
+				addAccepted(result, c.key, c.SourceTypes)
+			}
 		}
 		if err != nil {
 			result.CleanupErr = errors.Join(cleanup...)
 			return result, err
 		}
 	}
-	if err := m.enforceAutoCap(ctx, scopePK, result, &cleanup); err != nil {
+	protect := map[string]bool(nil)
+	if news {
+		protect = observed
+	}
+	if err := m.enforceAutoCap(ctx, scopePK, protect, result, &cleanup); err != nil {
 		result.CleanupErr = errors.Join(cleanup...)
 		return result, err
 	}
@@ -390,7 +413,7 @@ func (m *TermsMerger) mergeOne(ctx context.Context, scope TermsScope, c mergeCan
 			in := repository.DictMergeInput{
 				PK: pk, TermKey: c.key, Observation: obs, SeenAt: now, ExpectedVersion: term.Version,
 				HeardAs: obsHeard, SourceTypes: c.SourceTypes, Sources: []model.DictSourceRef{source},
-				Member: scope.Member,
+				Member: scope.Member, UpdatedBy: systemActor(ref),
 			}
 			err = m.store.PromoteSuggestedTerm(ctx, in, repository.DictPromotion{
 				DisplayAs: strings.TrimSpace(c.DisplayAs), Phrase: c.Phrase, Type: c.Type,
@@ -414,6 +437,7 @@ func (m *TermsMerger) mergeOne(ctx context.Context, scope TermsScope, c mergeCan
 				Sources:     model.AppendDictSource(term.Sources, source),
 				SkipHit:     acceptedIndex(ref.Accepted, c.key) >= 0,
 				Member:      scope.Member,
+				UpdatedBy:   systemActor(ref),
 			}
 			err = m.store.MergeAutoObservation(ctx, in)
 			if err == nil {
@@ -444,6 +468,15 @@ func (m *TermsMerger) mergeOne(ctx context.Context, scope TermsScope, c mergeCan
 	}
 	counters.Conflicts++
 	return outcomeSkipped, nil
+}
+
+// systemActor is the updatedBy a merge records: the news job's actor for a
+// news source; user-sourced merges leave updatedBy as it is.
+func systemActor(ref TermsSourceRef) string {
+	if ref.Kind == model.DictSourceNews {
+		return model.DictNewsActor
+	}
+	return ""
 }
 
 func newAutoTerm(pk string, c mergeCandidate, heard []string, ref TermsSourceRef, source model.DictSourceRef, now string) *model.DictTerm {
@@ -514,18 +547,24 @@ func termScore(t model.DictTerm, now time.Time) int {
 // guard fails the row is re-read: a row now gone, edited or tombstoned no
 // longer counts toward the cap (a concurrent merge may have evicted it), so
 // it reduces the excess; one that is merely newer is skipped for the next.
-func (m *TermsMerger) enforceAutoCap(ctx context.Context, pk string, result *TermsMergeResult, cleanup *[]error) error {
+func (m *TermsMerger) enforceAutoCap(ctx context.Context, pk string, protect map[string]bool, result *TermsMergeResult, cleanup *[]error) error {
 	rows, err := m.store.ListDictTerms(ctx, pk)
 	if err != nil {
 		return fmt.Errorf("failed to list dictionary terms for the cap: %w", err)
 	}
 	var auto []model.DictTerm
+	protected := 0
 	for _, row := range rows {
-		if evictable(row) {
-			auto = append(auto, row)
+		if !evictable(row) {
+			continue
 		}
+		if protect[row.TermKey] {
+			protected++ // counts toward the cap, never evicted by this call
+			continue
+		}
+		auto = append(auto, row)
 	}
-	excess := len(auto) - MaxAutoTermsPerScope
+	excess := len(auto) + protected - MaxAutoTermsPerScope
 	if excess <= 0 {
 		return nil
 	}

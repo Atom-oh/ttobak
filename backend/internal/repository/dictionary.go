@@ -193,6 +193,9 @@ type DictMergeInput struct {
 	SkipHit bool
 	// Member is required when PK is an ACCOUNT# partition and ignored otherwise.
 	Member *MembershipCheck
+	// UpdatedBy, when set, is written as the row's updatedBy (the news job's
+	// system actor); empty leaves it as is.
+	UpdatedBy string
 }
 
 // DictPromotion is the untainted run's content that replaces a suggestion's
@@ -702,6 +705,9 @@ func (r *DictionaryRepository) observeAutoTerm(ctx context.Context, in DictMerge
 	}
 	if len(in.Sources) > 0 {
 		update = update.Set(expression.Name("sources"), expression.Value(in.Sources))
+	}
+	if in.UpdatedBy != "" {
+		update = update.Set(expression.Name("updatedBy"), expression.Value(in.UpdatedBy))
 	}
 	expr, err := expression.NewBuilder().WithUpdate(update).WithCondition(condition).Build()
 	if err != nil {

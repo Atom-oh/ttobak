@@ -53,7 +53,8 @@ const (
 // subs; empty means everyone), AUTO_TERMS_MIN_CONFIDENCE, BEDROCK_TERMS_MODEL_ID,
 // ACCOUNT_TERMS_MODE (off|on; needs AUTO_TERMS_MODE on), KB_TERMS_MODE and
 // RESEARCH_TERMS_MODE (off|on; KB documents and research reports, see
-// ProcessSource).
+// ProcessSource), NEWS_TERMS_MODE (off|on; daily news into Common, see
+// ProcessNewsDaily; independent of AUTO_TERMS_MODE and the canary list).
 type TermsConfig struct {
 	Mode          string
 	Users         map[string]bool
@@ -62,12 +63,13 @@ type TermsConfig struct {
 	AccountMode   string
 	KBMode        string
 	ResearchMode  string
+	NewsMode      string
 }
 
 // TermsConfigFromEnv parses the flags; unknown modes are off.
 func TermsConfigFromEnv() TermsConfig {
 	cfg := TermsConfig{Mode: AutoTermsModeOff, AccountMode: AccountTermsModeOff, MinConfidence: DefaultAutoTermsMinConfidence, ModelID: getEnvOrDefault("BEDROCK_TERMS_MODEL_ID", ClaudeSonnetModelID),
-		KBMode: sourceTermsMode("KB_TERMS_MODE"), ResearchMode: sourceTermsMode("RESEARCH_TERMS_MODE")}
+		KBMode: sourceTermsMode("KB_TERMS_MODE"), ResearchMode: sourceTermsMode("RESEARCH_TERMS_MODE"), NewsMode: sourceTermsMode("NEWS_TERMS_MODE")}
 	if strings.TrimSpace(os.Getenv("AUTO_TERMS_MODE")) == AutoTermsModePersonal {
 		cfg.Mode = AutoTermsModePersonal
 	}
@@ -151,6 +153,8 @@ type TermsAnalysisService struct {
 	listAccountMembers func(ctx context.Context, accountID string) ([]string, error)
 	// sources reads KB documents and research reports (ProcessSource).
 	sources TermsSourceDeps
+	// news reads crawled news documents and the news rows (ProcessNewsDaily).
+	news TermsNewsDeps
 }
 
 // SetVocabularyRefresher installs the post-run vocabulary hook; nil disables it.

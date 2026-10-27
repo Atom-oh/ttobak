@@ -940,6 +940,39 @@ for bad in ({'Ref':'OtherRole'}, {'Fn::ImportValue':'unknown'}, qa):
     }
   });
 
+  test('daily news terms run on a 21:00 UTC schedule into summarize, off by default and validated', () => {
+    const summarizeId = resourceId('AWS::Lambda::Function', 'FunctionName', 'ttobak-summarize');
+    const queueId = resourceId('AWS::SQS::Queue', 'QueueName', 'ttobak-terms-news-dlq');
+    const ruleId = resourceId('AWS::Events::Rule', 'Name', 'ttobak-terms-news-daily');
+    const rule = template.findResources('AWS::Events::Rule')[ruleId].Properties;
+    expect(rule.ScheduleExpression).toBe('cron(0 21 * * ? *)');
+    expect(rule.State).toBe('ENABLED');
+    expect(rule.Targets).toEqual([{
+      Arn: { 'Fn::GetAtt': [summarizeId, 'Arn'] },
+      Id: expect.any(String),
+      Input: JSON.stringify({ kind: 'news-daily' }),
+      DeadLetterConfig: { Arn: { 'Fn::GetAtt': [queueId, 'Arn'] } },
+      RetryPolicy: { MaximumEventAgeInSeconds: 3600, MaximumRetryAttempts: 2 },
+    }]);
+    const queue = template.findResources('AWS::SQS::Queue')[queueId].Properties;
+    expect(queue.SqsManagedSseEnabled).toBe(true);
+    expect(queue.RedriveAllowPolicy).toEqual({ redrivePermission: 'denyAll' });
+    const alarms = Object.values(template.findResources('AWS::CloudWatch::Alarm'))
+      .filter((alarm) => JSON.stringify(alarm.Properties.Dimensions ?? []).includes(queueId));
+    expect(alarms.length).toBeGreaterThan(0);
+
+    const summarizeEnv = (value: Template) => Object.values(value.findResources('AWS::Lambda::Function'))
+      .find(resource => resource.Properties.FunctionName === 'ttobak-summarize')!.Properties.Environment.Variables;
+    expect(summarizeEnv(template).NEWS_TERMS_MODE).toBe('off');
+    const withFlag = Object.values(template.findResources('AWS::Lambda::Function'))
+      .filter(resource => resource.Properties.Environment?.Variables?.NEWS_TERMS_MODE !== undefined);
+    expect(withFlag.map(resource => resource.Properties.FunctionName)).toEqual(['ttobak-summarize']);
+    const on = buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined, { 'ttobak:newsTermsMode': 'on' });
+    expect(summarizeEnv(on).NEWS_TERMS_MODE).toBe('on');
+    expect(() => buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined, { 'ttobak:newsTermsMode': 'true' }))
+      .toThrow(/ttobak:newsTermsMode/);
+  });
+
   test('transcriptCorrection: silent glossary correction is off by default and validated', () => {
     const summarizeEnv = (value: Template) => Object.values(value.findResources('AWS::Lambda::Function'))
       .find(resource => resource.Properties.FunctionName === 'ttobak-summarize')!.Properties.Environment.Variables;
