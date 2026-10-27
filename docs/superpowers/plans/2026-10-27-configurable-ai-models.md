@@ -41,8 +41,12 @@
 
 **Files:** `.github/workflows/deploy-infra.yml`, `infra/test/model-deployment-workflow.test.ts`, `docs/runbooks/model-deployment.md`, `docs/INFRA-SPEC.md`, `docs/README.md`.
 
-- [ ] Add failing workflow contract tests for shared model environment and preserved deployment gates.
-- [ ] Observe RED; add optional dispatch inputs and shared repository-variable configuration.
-- [ ] Document examples, precedence, persistent selections, verification, rollback and pricing evidence limits.
-- [ ] Run full infra tests/build, complete-app synth for each preset and documentation checks.
+Retain the completed synthetic cost/quality comparison unchanged under
+`docs/research/evaluations/2026-10-27-model-candidates/` so pricing claims link to
+their measured evidence and recording limitations.
+
+- [x] Add failing workflow contract tests for shared model environment and preserved deployment gates.
+- [x] Observe RED; add optional dispatch inputs and shared repository-variable configuration.
+- [x] Document examples, precedence, persistent selections, verification, rollback and pricing evidence limits.
+- [x] Run full infra tests/build, complete-app synth for each preset and documentation checks.
 - [ ] Commit and request one fresh-context code/IAM/workflow review; address material findings and rerun affected checks.
