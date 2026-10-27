@@ -625,6 +625,7 @@ func (r *DictionaryRepository) CreateAutoTermChecked(ctx context.Context, term *
 // withSourceMeetingCheck appends a ConditionCheck that the observation's
 // source meeting (USER#{owner}/MEETING#{meeting}) still exists, so a worker
 // that outlives a meeting deletion cannot leave observations behind (A8).
+// KB and research observations carry no meetingId and get no check.
 func (r *DictionaryRepository) withSourceMeetingCheck(items []types.TransactWriteItem, obs *model.DictObservation) ([]types.TransactWriteItem, error) {
 	if obs.OwnerID == "" || obs.MeetingID == "" {
 		return items, nil
@@ -662,7 +663,7 @@ func (r *DictionaryRepository) PromoteSuggestedTerm(ctx context.Context, in Dict
 // the state the term must be in; promotion, when set, makes it active.
 func (r *DictionaryRepository) observeAutoTerm(ctx context.Context, in DictMergeInput, fromState string, promotion *DictPromotion) error {
 	if in.Observation == nil || in.Observation.PK != in.PK || in.Observation.TermKey != in.TermKey ||
-		in.Observation.SK != model.DictObsSK(in.TermKey, in.Observation.MeetingID) {
+		in.Observation.SK != in.Observation.ObservationSK() {
 		return fmt.Errorf("invalid dictionary observation merge")
 	}
 	obsPut, err := r.putIfAbsent(in.Observation)
@@ -684,9 +685,9 @@ func (r *DictionaryRepository) observeAutoTerm(ctx context.Context, in DictMerge
 			Set(expression.Name("confidence"), expression.Value(promotion.Confidence)).
 			Set(expression.Name("transcribeKo"), expression.Value(promotion.TranscribeKo)).
 			Set(expression.Name("transcribeEn"), expression.Value(promotion.TranscribeEn)).
-			Set(expression.Name("firstSourceMeetingId"), expression.Value(promotion.FirstSourceMeetingID)).
 			Set(expression.Name("hits"), expression.Value(1))
-		for _, field := range [][2]string{{"phrase", promotion.Phrase}, {"type", promotion.Type}} {
+		// A KB or research promotion has no source meeting.
+		for _, field := range [][2]string{{"phrase", promotion.Phrase}, {"type", promotion.Type}, {"firstSourceMeetingId", promotion.FirstSourceMeetingID}} {
 			if field[1] != "" {
 				update = update.Set(expression.Name(field[0]), expression.Value(field[1]))
 			} else {

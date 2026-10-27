@@ -16,7 +16,8 @@ import (
 // MergeExtractedTerms (the owner's personal scope) after the deterministic
 // filters, then MergeScoped into the meeting's Account when that layer is on.
 // Account writes carry the owner's membership ConditionCheck; Common is never
-// written from meetings (it takes news terms only).
+// written from meetings, KB documents or research (it takes news terms only).
+// ProcessSource merges KB/research terms through MergeScoped.
 const (
 	// MaxAutoTermsPerScope caps unedited automatic (active or suggested)
 	// terms; the lowest-scoring are evicted after a merge.
@@ -79,9 +80,10 @@ type TermsScope struct {
 }
 
 // TermsSourceRef is the evidence of a scoped merge: Kind/Ref name the source
-// (only DictSourceMeeting, Ref = meeting ID, is merged today) and OwnerID the
-// user whose content it is. NotesSafe, Tainted, Accepted and
-// SummaryGeneration are as on TermsMeetingRef.
+// (DictSourceMeeting with Ref = meeting ID, DictSourceKB with Ref = object
+// key, DictSourceResearch with Ref = research ID) and OwnerID the user whose
+// content it is. NotesSafe, Tainted, Accepted and SummaryGeneration are as on
+// TermsMeetingRef.
 type TermsSourceRef struct {
 	Kind, Ref, OwnerID string
 	NotesSafe, Tainted bool
@@ -148,11 +150,16 @@ func (m *TermsMerger) MergeExtractedTerms(ctx context.Context, scopePK string, c
 }
 
 // validateScope accepts the source owner's personal scope, or an Account scope
-// whose membership check names that owner. Common is refused: meetings never
-// write it.
+// whose membership check names that owner, for a meeting, KB or research
+// source. Common is refused: none of these sources write it (R6).
 func validateScope(scope TermsScope, ref TermsSourceRef) error {
-	if ref.OwnerID == "" || ref.Kind != model.DictSourceMeeting || ref.Ref == "" {
-		return fmt.Errorf("%w: terms merge needs an owner and a meeting source", ErrInvalidInput)
+	switch ref.Kind {
+	case model.DictSourceMeeting, model.DictSourceKB, model.DictSourceResearch:
+	default:
+		return fmt.Errorf("%w: terms merge does not take this source kind", ErrInvalidInput)
+	}
+	if ref.OwnerID == "" || ref.Ref == "" {
+		return fmt.Errorf("%w: terms merge needs an owner and a source ref", ErrInvalidInput)
 	}
 	kind, accountID, ok := model.TermScopeOf(scope.PK)
 	switch {
@@ -320,7 +327,13 @@ func cleanHeardAs(ownKey string, termKeys map[string]bool, aliases []string, dro
 }
 
 func (m *TermsMerger) mergeOne(ctx context.Context, scope TermsScope, c mergeCandidate, term *model.DictTerm, termKeys map[string]bool, ref TermsSourceRef, result *TermsMergeResult, cleanup *[]error) (termOutcome, error) {
+	// A meeting observation is keyed by and checked against its meeting; a
+	// KB/research one has no meeting and is keyed by a digest of its ref.
 	pk, meetingID := scope.PK, ref.Ref
+	if ref.Kind != model.DictSourceMeeting {
+		meetingID = ""
+	}
+	obsSource := model.DictObsSourceID(ref.Kind, ref.Ref)
 	counters := &result.Counters
 	obsHeard := cleanHeardAs(c.key, termKeys, c.HeardAs, &counters.AliasesDropped)
 	for attempt := 0; attempt < termMergeAttempts; attempt++ {
@@ -334,7 +347,7 @@ func (m *TermsMerger) mergeOne(ctx context.Context, scope TermsScope, c mergeCan
 		now := m.now().Format(model.DictTimeLayout)
 		source := model.DictSourceRef{Kind: ref.Kind, Ref: ref.Ref, At: now}
 		obs := &model.DictObservation{
-			PK: pk, SK: model.DictObsSK(c.key, meetingID), TermKey: c.key, MeetingID: meetingID,
+			PK: pk, SK: model.DictObsSK(c.key, obsSource), TermKey: c.key, MeetingID: meetingID,
 			SourceKind: ref.Kind, SourceRef: ref.Ref,
 			OwnerID: ref.OwnerID, HeardAs: obsHeard, SourceTypes: c.SourceTypes,
 			SummaryGeneration: ref.SummaryGeneration, NotesSafe: ref.NotesSafe, Tainted: ref.Tainted,
@@ -439,11 +452,15 @@ func newAutoTerm(pk string, c mergeCandidate, heard []string, ref TermsSourceRef
 		state = model.TermStateSuggested
 	}
 	scope, _, _ := model.TermScopeOf(pk)
+	firstMeeting := ""
+	if ref.Kind == model.DictSourceMeeting {
+		firstMeeting = ref.Ref
+	}
 	return &model.DictTerm{
 		PK: pk, SK: model.DictTermSK(c.key), TermKey: c.key, Scope: scope, State: state,
 		DisplayAs: strings.TrimSpace(c.DisplayAs), Phrase: c.Phrase, HeardAs: heard,
 		AliasMode: model.TermAliasHint, Type: c.Type, Origin: model.TermOriginAuto,
-		SourceTypes: c.SourceTypes, FirstSourceMeetingID: ref.Ref, Hits: 1, Sources: []model.DictSourceRef{source},
+		SourceTypes: c.SourceTypes, FirstSourceMeetingID: firstMeeting, Hits: 1, Sources: []model.DictSourceRef{source},
 		Confidence: c.Confidence, TranscribeKo: c.TranscribeKo, TranscribeEn: c.TranscribeEn,
 		AddedAt: now, UpdatedAt: now, LastSeenAt: now, CreatedBy: ref.OwnerID, UpdatedBy: ref.OwnerID,
 		Version: 1, EntityType: model.EntityTypeDictTerm,
