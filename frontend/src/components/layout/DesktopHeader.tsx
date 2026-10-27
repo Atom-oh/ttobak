@@ -6,15 +6,16 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 const pathLabels: Record<string, string> = {
   '/': 'Meetings',
   '/chat': 'Assistant',
-  '/files': 'Files',
-  '/kb': 'Knowledge Base',
+  '/kb': 'Library',
   '/insights': 'Insights',
+  '/insights/research': 'Deep Research',
+  '/dictionary': 'Custom Dictionary',
   '/projects': 'Projects',
   '/settings': 'Settings',
   '/record': 'Recording',
   '/profile': 'Profile',
   '/accounts': 'Accounts',
-  '/docs': 'Documents',
+  '/docs': 'Docs',
 };
 
 interface DesktopHeaderProps {

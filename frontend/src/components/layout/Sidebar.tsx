@@ -1,22 +1,12 @@
 'use client';
 
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { useTheme } from '@/hooks/useTheme';
 import { BillingInsightButton } from '@/components/layout/BillingInsightButton';
-
-const mainNav = [
-  { href: '/', icon: 'video_camera_front', label: 'Meetings' },
-  { href: '/accounts', icon: 'corporate_fare', label: 'Accounts' },
-  { href: '/projects', icon: 'work', label: 'Projects' },
-  { href: '/docs', icon: 'article', label: 'Documents' },
-  { href: '/chat', icon: 'smart_toy', label: 'Assistant' },
-  { href: '/files', icon: 'description', label: 'Files' },
-  { href: '/kb', icon: 'library_books', label: 'Knowledge Base' },
-  { href: '/insights', icon: 'insights', label: 'Insights' },
-  { href: '/settings', icon: 'settings', label: 'Settings' },
-];
+import { NAV_GROUPS, SETTINGS_ITEM, isNavActive } from '@/lib/navigation';
 
 function NavItem({ href, icon, label, isActive }: { href: string; icon: string; label: string; isActive: boolean }) {
   const activeClasses = isActive
@@ -34,14 +24,47 @@ function NavItem({ href, icon, label, isActive }: { href: string; icon: string; 
   );
 }
 
+function GroupLabel({ name }: { name: string }) {
+  return (
+    <p className="px-3 pb-1 text-[11px] font-bold tracking-wider text-slate-500 dark:text-text-muted">{name}</p>
+  );
+}
+
+function SidebarNav({ activePath, tab }: { activePath: string; tab: string | null }) {
+  return (
+    <nav aria-label="주 메뉴" className="flex flex-col gap-4">
+      {NAV_GROUPS.map((group) => (
+        <div key={group.name || 'top'} className="flex flex-col gap-1">
+          {group.name && <GroupLabel name={group.name} />}
+          {group.items.map((item) => (
+            <NavItem key={item.href} {...item} isActive={isNavActive(item.href, activePath, tab)} />
+          ))}
+        </div>
+      ))}
+      {/* Billing Insight companion hand-off (runtime config opt-in) */}
+      <BillingInsightButton variant="sidebar" groupLabel={<GroupLabel name="고객 분석" />} />
+      <div className="flex flex-col gap-1">
+        <NavItem {...SETTINGS_ITEM} isActive={activePath === SETTINGS_ITEM.href} />
+      </div>
+    </nav>
+  );
+}
+
+// Deep Research and News share /insights; the ?tab= query picks between
+// them. useSearchParams needs a Suspense boundary in the static export.
+function SidebarNavWithTab({ activePath }: { activePath: string }) {
+  const tab = useSearchParams().get('tab');
+  return <SidebarNav activePath={activePath} tab={tab} />;
+}
+
 export function Sidebar({ activePath }: { activePath: string }) {
   const { user, logout } = useAuth();
   const { isDark, toggle: toggleDark } = useTheme();
   const [showNewMenu, setShowNewMenu] = useState(false);
 
   return (
-    <aside className="w-64 border-r border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest/80 dark:backdrop-blur-xl flex flex-col justify-between p-4 shrink-0 h-screen sticky top-0">
-      <div className="flex flex-col gap-6">
+    <aside className="w-64 border-r border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest/80 dark:backdrop-blur-xl flex flex-col justify-between gap-4 p-4 shrink-0 h-screen sticky top-0">
+      <div className="flex flex-col gap-6 min-h-0 overflow-y-auto">
         {/* Workspace Identity */}
         <div className="flex items-center gap-3 px-2">
           <div className="bg-primary/10 rounded-lg p-2 flex items-center justify-center">
@@ -54,11 +77,9 @@ export function Sidebar({ activePath }: { activePath: string }) {
         </div>
 
         {/* Navigation Links */}
-        <nav className="flex flex-col gap-1">
-          {mainNav.map((item) => (
-            <NavItem key={item.href} {...item} isActive={activePath === item.href} />
-          ))}
-        </nav>
+        <Suspense fallback={<SidebarNav activePath={activePath} tab={null} />}>
+          <SidebarNavWithTab activePath={activePath} />
+        </Suspense>
       </div>
 
       {/* Action Area */}
@@ -115,9 +136,6 @@ export function Sidebar({ activePath }: { activePath: string }) {
             </span>
             <span className="text-xs font-medium">{isDark ? 'Light Mode' : 'Dark Mode'}</span>
           </button>
-
-          {/* Billing Insight companion hand-off (runtime config opt-in) */}
-          <BillingInsightButton variant="sidebar" />
 
           {/* User Profile */}
           {user && (

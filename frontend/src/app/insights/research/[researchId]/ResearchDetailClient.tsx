@@ -301,7 +301,7 @@ export default function ResearchDetailPage() {
   const displayContent = activeContent?.content || research?.content;
 
   return (
-    <AppLayout activePath="/insights">
+    <AppLayout activePath="/insights/research">
       {/* Mobile Header */}
       <header className="lg:hidden flex items-center bg-white dark:bg-[var(--surface)] px-4 py-3 gap-3 border-b border-slate-100 dark:border-white/10 sticky top-0 z-10">
         <button

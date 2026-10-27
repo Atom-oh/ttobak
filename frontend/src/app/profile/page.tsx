@@ -70,15 +70,15 @@ export default function ProfilePage() {
             className="flex items-center gap-3 px-4 py-3.5 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
           >
             <span className="material-symbols-outlined text-slate-500">library_books</span>
-            <span className="text-sm font-medium text-slate-900 dark:text-white flex-1">Knowledge Base</span>
+            <span className="text-sm font-medium text-slate-900 dark:text-white flex-1">Library</span>
             <span className="material-symbols-outlined text-slate-400 text-lg">chevron_right</span>
           </Link>
           <Link
-            href="/files"
+            href="/dictionary"
             className="flex items-center gap-3 px-4 py-3.5 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
           >
-            <span className="material-symbols-outlined text-slate-500">description</span>
-            <span className="text-sm font-medium text-slate-900 dark:text-white flex-1">Files</span>
+            <span className="material-symbols-outlined text-slate-500">dictionary</span>
+            <span className="text-sm font-medium text-slate-900 dark:text-white flex-1">Custom Dictionary</span>
             <span className="material-symbols-outlined text-slate-400 text-lg">chevron_right</span>
           </Link>
           <BillingInsightButton variant="profile" />

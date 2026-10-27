@@ -277,6 +277,7 @@ describe('FrontendStack', () => {
       ['/__next._tree.txt', '/__next._tree.txt'],
       ['/meeting/abc.txt', '/meeting/_.txt'],
       ['/meeting/abc', '/meeting/_.html'],
+      ['/dictionary', '/dictionary.html'],
       ['/_next/static/chunks/test.js', '/_next/static/chunks/test.js'],
       ['/api/meetings/abc', '/api/meetings/abc'],
     ]) {

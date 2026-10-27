@@ -1,13 +1,13 @@
 'use client';
 
 import { useEffect } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { IntegrationSettings } from '@/components/IntegrationSettings';
 import { CrawlerSettings } from '@/components/CrawlerSettings';
 import { McpGuide } from '@/components/McpGuide';
-import { CustomDictionary } from '@/components/CustomDictionary';
 import { InviteUser } from '@/components/InviteUser';
 import { UserManagement } from '@/components/UserManagement';
 import { ConnectorSettings } from '@/components/ConnectorSettings';
@@ -97,10 +97,12 @@ export default function SettingsPage() {
             </section>
           )}
 
-          {/* Custom Dictionary Section */}
+          {/* Custom Dictionary moved to /dictionary (지식 group) */}
           <section className="lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">
             <h3 className="section-header mb-4">사용자 사전</h3>
-            <CustomDictionary />
+            <p className="text-sm text-slate-600 dark:text-text-muted">
+              사용자 사전은 <Link href="/dictionary" className="font-semibold text-primary hover:underline">지식 › Custom Dictionary</Link>로 옮겼습니다.
+            </p>
           </section>
 
           {/* Crawler Sources Section */}
