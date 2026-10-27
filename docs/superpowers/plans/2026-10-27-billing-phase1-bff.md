@@ -43,7 +43,7 @@ AWS SDK v3), AWS CDK 2.273.0 L1 `CfnWebFunction*`, CloudFront Functions
 - The BFF sends `Cache-Control: private, no-store` on every response.
 - Identity comes only from `Authorization: Bearer <JWT>`, verified by the BFF:
   issuer, signature, expiry, `token_use`, and client allowlist
-  `BILLING_ALLOWED_CLIENT_IDS` (phase 1: the web client only).
+  `BILLING_ALLOWED_CLIENT_IDS` (phase 1: the SPA client `authStack.spaClient` only).
 - Access is the canonical `PK=ACCOUNT#{id}`, `SK=MEMBER#{sub}` item only. Hierarchy and `PENDING_*` rows grant nothing.
 - Uploads keep `accounts/{id}/uploads/*` keys. The viewer prefix is `/billing-upload`.
 - No new VPC, no security-group ingress, no public IP, no new unauthenticated API route.
@@ -386,7 +386,7 @@ infra/test/billing-stack.test.ts, infra/test/billing-frontend.test.ts
   - `CfnWebFunctionRevision`:
     - runtime `nodejs24.x`; code from `s3_assets.Asset(services/billing/bff/dist)`.
     - `timeoutSeconds: 60`, `maxConcurrencyPerEnvironment: 8`.
-    - env from Task 5, with `BILLING_ALLOWED_CLIENT_IDS` = web client ID.
+    - env from Task 5, with `BILLING_ALLOWED_CLIENT_IDS` = `authStack.spaClient.userPoolClientId`.
   - `CfnWebFunctionEndpoint`: `endpointName: 'prod'`, `HomeRegion`, `IamAuth`,
     100% weight to the revision, `scalingConfig.maxEnvironments: 10`.
 - Execution role grants (copied from the companion web task, minus OAuth invoke):
@@ -437,9 +437,13 @@ infra/test/billing-stack.test.ts, infra/test/billing-frontend.test.ts
 **Interfaces:**
 - `FrontendStack` props gain an optional
   `billing?: { endpointDomain: string; functionArn: string; endpointArn: string; dataBucketName: string }`.
-  - `infra.ts` builds it from `ttobak:billingEndpointDomain`, `ttobak:billingFunctionArn`,
-    `ttobak:billingEndpointArn` and `ttobak:billingDataBucket`.
-  - It throws when only some of the four are set.
+  - `infra.ts` builds it only when all three endpoint keys
+    (`ttobak:billingEndpointDomain`, `ttobak:billingFunctionArn`,
+    `ttobak:billingEndpointArn`) are set; `dataBucketName` comes from
+    `ttobak:billingDataBucket`.
+  - It throws when only some of the three endpoint keys are set, or when they
+    are set without `ttobak:billingDataBucket`. The Task 10 bootstrap state
+    (bucket and table keys only) is valid and yields no Billing behaviors.
 - The three behaviors and the custom resource exist only when `billing` is set.
   All are ordered before `/api/*`.
   - `/api/billing/*`:
@@ -496,7 +500,10 @@ infra/test/billing-stack.test.ts, infra/test/billing-frontend.test.ts
     policy JSON has one statement with principal `cloudfront.amazonaws.com` and a
     `StringEquals aws:SourceArn` distribution ARN.
   - `absent_without_billing_props`
-  - `partial_billing_context_throws`
+  - `partial_endpoint_context_throws`
+  - `bootstrap_context_has_no_billing_behaviors`: only `billingDataBucket` and
+    `billingPlatformTable` set; synth succeeds, `TtobakBillingStack` exists and
+    FrontendStack has no `/api/billing/*`.
 - [ ] **Step 4: Run** `cd infra && npm test -- billing`. Expected: FAIL.
 - [ ] **Step 5: Implement**, then run `npx cdk synth` (with and without billing context) and `npm test`. Expected: PASS.
 - [ ] **Step 6: Commit** `feat(infra): Billing behaviors and Web Function resource policy`.

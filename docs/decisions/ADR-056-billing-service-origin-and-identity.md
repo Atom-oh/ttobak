@@ -47,8 +47,10 @@ the TTOBAK rule that hierarchy grants no access (ADR-036/055).
   dedicated header is needed.
 - The BFF verifies that JWT itself: RS256 signature against the TTOBAK pool JWKS,
   issuer, expiry and `token_use`. ID tokens must have `aud`, and access tokens
-  `client_id`, in an explicit allowlist. Phase 1 allows the first-party web
-  client only, the same set as the Go API's `API_ALLOWED_CLIENT_IDS`.
+  `client_id`, in an explicit allowlist. Phase 1 allows only the SPA client
+  (`authStack.spaClient`), the client the edge check and the browser use. This
+  is a deliberate subset of the Go API's `API_ALLOWED_CLIENT_IDS`, which also
+  includes `userPoolClient`.
 - MCP billing tools will call `/api/billing/*` through CloudFront with the
   caller's own token, exactly as the MCP server calls the Go API today. They
   will not use a SigV4 path or an asserted-identity header.
@@ -61,6 +63,8 @@ the TTOBAK rule that hierarchy grants no access (ADR-036/055).
 - Only canonical direct membership grants access: the item
   `PK=ACCOUNT#{accountId}`, `SK=MEMBER#{sub}` in `ttobak-main`.
 - Parent or child Accounts grant nothing, and `PENDING_ACCOUNT#` rows never count.
+- Any member role grants Billing access, including read, upload and rerun. The
+  member's `role` attribute is not consulted, as in the companion today.
 - Account-scoped routes (dataset reads of a version, report, every upload
   mutation) re-read the canonical item on every request, with no cache.
 - The Account list may enumerate candidates from GSI1
