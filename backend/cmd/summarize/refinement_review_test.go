@@ -98,7 +98,8 @@ func TestTranscriptHandoffPreservesHumanEditsAndClaimsDurably(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			parsed := &parsedTranscript{Text: "new refined output", Quality: &model.TranscriptQuality{Refinement: "validated", Timing: "unavailable"}}
+			parsed := &parsedTranscript{Text: "new refined output", Quality: &model.TranscriptQuality{Refinement: "validated", Timing: "unavailable"},
+				Corrections: []model.TranscriptCorrection{{From: "alfa grid", To: "AlphaGrid", TermKey: "k1"}}}
 			current, err := beginTranscriptSummary(context.Background(), snapshot, parsed, false)
 			if scenario == "handoff-read-failure" {
 				_, claimed := row["summarizeRetryClaimedAt"]
@@ -128,6 +129,11 @@ func TestTranscriptHandoffPreservesHumanEditsAndClaimsDurably(t *testing.T) {
 				if rejected < 1 || stored.TranscriptA != "human correction" || stored.Content != "human note" || stored.TranscriptQualityA != nil || stored.TranscriptRevisionA != "human-revision" {
 					t.Fatal("human source replaced or re-attested")
 				}
+				if parsed.Corrections != nil {
+					t.Fatal("discarded output's corrections must not feed the dictionary")
+				}
+			} else if len(parsed.Corrections) != 1 {
+				t.Fatal("published corrections were dropped")
 			} else if stored.TranscriptA != "new refined output" || stored.TranscriptRevisionA == "" || stored.TranscriptQualityA.ProcessingRunID != stored.SummarizeRetryClaimedAt {
 				t.Fatal("publication was not atomic with claim")
 			}
