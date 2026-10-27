@@ -47,7 +47,7 @@ use CSS variants.
 | Area | Current responsibilities / code pointers |
 |---|---|
 | Authentication | auth/LoginForm, ForgotPasswordForm, AuthProvider: login, NEW_PASSWORD_REQUIRED, reset; no self-signup |
-| App layout | layout/Sidebar, MobileNav, DesktopHeader, AppLayout: responsive navigation, theme and active route; layout/BillingInsightButton (sidebar and mobile profile menu, only with runtime `billingInsight: true`) opens a blank tab synchronously, then loads the validated hand-off URL, closing it and showing an inline alert on failure |
+| App layout | layout/Sidebar, MobileNav, DesktopHeader, AppLayout: responsive navigation, theme and active route. Menu groups come from `lib/navigation.ts`: Assistant on top; Work (Meetings, Accounts, Projects, Docs); Knowledge (Library `/kb`, Deep Research `/insights?tab=research`, News & Updates `/insights`, Custom Dictionary `/dictionary`); Customer Analytics (Billing); Settings. Mobile keeps five bottom tabs; the Knowledge tab opens the grouped menu sheet. `/files` redirects to `/kb?source=meeting` (Library's meeting-attachment source). layout/BillingInsightButton is the Customer Analytics › Billing item (sidebar, menu sheet and profile menu, only with runtime `billingInsight: true`): it opens a blank tab synchronously, then loads the validated hand-off URL, closing it and showing an inline alert on failure |
 | Meeting list | MeetingList: owned/shared/team streams, search, account selection and opaque pagination |
 | Recording | RecordButton, app/record/page, useRecordingSession, usePostRecording, PostRecordingBanner |
 | Meeting detail | MeetingDetailClient, meeting/ components: note, actions, transcript, attachments, account/project links |
@@ -57,7 +57,7 @@ use CSS variants.
 | Projects | Project views: explicit members, linked accounts/meetings/research and computed insights |
 | QA/research | LiveQAPanel and research views: suggestions, streaming, citations, follow-ups |
 | Simulator | SimCard: extract, confirm/edit, compare options, poll result |
-| Settings | Integration settings, dictionary/domain administration, admin user management, personal AI connector approvals |
+| Settings | Integration settings, domain administration, admin user management, personal AI connector approvals; the custom dictionary is its own `/dictionary` page |
 
 Resolve exact paths under `frontend/src/` rather than treating this table as an
 exhaustive file inventory. New static pages need the CloudFront knownPages mapping.

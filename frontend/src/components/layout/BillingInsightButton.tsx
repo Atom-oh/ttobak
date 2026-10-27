@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { ApiError, billingInsightApi } from '@/lib/api';
 import { openBillingInsightHandoff } from '@/lib/billingInsight';
@@ -17,9 +17,11 @@ function handoffErrorMessage(error: unknown): string {
 
 /**
  * Opens the AWS Billing Insight companion through a single-use hand-off.
- * Rendered only when runtime config sets `billingInsight: true`.
+ * Rendered only when runtime config sets `billingInsight: true`. In the
+ * sidebar and the mobile menu sheet it is the "고객 분석 › Billing" item, with
+ * `groupLabel` rendered above it so the group heading disappears with it.
  */
-export function BillingInsightButton({ variant }: { variant: 'sidebar' | 'profile' }) {
+export function BillingInsightButton({ variant, groupLabel }: { variant: 'sidebar' | 'sheet' | 'profile'; groupLabel?: ReactNode }) {
   const { user } = useAuth();
   const [enabled, setEnabled] = useState(false);
   const [pending, setPending] = useState(false);
@@ -74,17 +76,40 @@ export function BillingInsightButton({ variant }: { variant: 'sidebar' | 'profil
     );
   }
 
+  if (variant === 'sheet') {
+    return (
+      <div className="flex flex-col gap-1.5">
+        {groupLabel}
+        <button
+          type="button"
+          onClick={handleClick}
+          disabled={pending}
+          aria-busy={pending}
+          className="self-start min-h-11 px-3.5 rounded-lg border border-slate-200 dark:border-white/10 text-sm text-slate-700 dark:text-text-secondary flex items-center gap-2 disabled:opacity-60"
+        >
+          {icon}
+          <span>Billing</span>
+          <span className="material-symbols-outlined text-base text-slate-400">open_in_new</span>
+        </button>
+        {message}
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-1">
+      {groupLabel}
       <button
         type="button"
         onClick={handleClick}
         disabled={pending}
         aria-busy={pending}
-        className="flex items-center gap-3 px-2 py-1.5 rounded-lg text-sm text-slate-600 dark:text-text-secondary/70 hover:bg-slate-100 dark:hover:bg-white/5 dark:hover:text-primary transition-colors disabled:opacity-60"
+        title={LABEL}
+        className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium text-slate-600 dark:text-text-secondary hover:bg-slate-100 dark:hover:bg-white/5 dark:hover:text-text-main transition-colors disabled:opacity-60"
       >
-        {icon}
-        <span className="text-xs font-medium">{LABEL}</span>
+        <span className="material-symbols-outlined text-xl">{pending ? 'progress_activity' : 'monitoring'}</span>
+        <span className="flex-1 text-left">Billing</span>
+        <span className="material-symbols-outlined text-base text-slate-400">open_in_new</span>
       </button>
       {message}
     </div>

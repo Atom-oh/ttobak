@@ -24,10 +24,9 @@ function formatDate(value: string | number): string {
 export function InsightsList() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const initialTab = (searchParams.get('tab') as TabType) || 'news';
-  const [activeTab, setActiveTab] = useState<TabType>(
-    ['news', 'tech', 'research'].includes(initialTab) ? initialTab : 'news'
-  );
+  const rawTab = searchParams.get('tab') as TabType | null;
+  const urlTab: TabType = rawTab && ['news', 'tech', 'research'].includes(rawTab) ? rawTab : 'news';
+  const [activeTab, setActiveTab] = useState<TabType>(urlTab);
   const [documents, setDocuments] = useState<CrawledDocument[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -42,6 +41,23 @@ export function InsightsList() {
   const [sortBy, setSortBy] = useState('newest');
   const [viewMode, setViewMode] = useState<'card' | 'table'>('card');
   const limit = 20;
+
+  // The sidebar's News & Updates and Deep Research items both point at this
+  // page and differ only in ?tab=, so a click between them changes the URL
+  // without remounting. Follow external tab changes ("adjust state during
+  // render"); our own router.replace in handleTabChange already matches.
+  const [seenTab, setSeenTab] = useState(urlTab);
+  if (seenTab !== urlTab) {
+    setSeenTab(urlTab);
+    if (urlTab !== activeTab) {
+      setActiveTab(urlTab);
+      setPage(1);
+      setCrawlerFilter('');
+      setServiceFilter('');
+      setSelectedTags([]);
+      setSortBy('newest');
+    }
+  }
 
   // Research tab state
   const [researchJobs, setResearchJobs] = useState<Research[]>([]);
