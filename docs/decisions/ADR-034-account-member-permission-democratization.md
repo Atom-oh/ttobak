@@ -6,6 +6,8 @@
 - [ADR-054](ADR-054-self-service-account-invitations.md) supersedes the earlier
   admin-only Cognito creation restriction for scoped Account invitations and
   aligns pending Account materialization with current-member addition authority.
+- [ADR-055](ADR-055-designated-account-owner.md) permits another initial Owner and
+  optional creator AM membership only during creation; member role rules remain.
 
 ## Original decision and rationale
 
