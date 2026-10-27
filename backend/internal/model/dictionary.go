@@ -1,5 +1,7 @@
 package model
 
+import "strings"
+
 // DictionaryTerm represents a single term in a user's custom dictionary
 type DictionaryTerm struct {
 	Phrase     string `dynamodbav:"phrase" json:"phrase"`
@@ -70,6 +72,71 @@ type DictTermView struct {
 	Hits         int      `json:"hits"`
 	AddedAt      string   `json:"addedAt"`
 	UpdatedAt    string   `json:"updatedAt"`
+	// Layer is personal, common or account:{accountId}.
+	Layer   string          `json:"layer"`
+	Sources []DictSourceRef `json:"sources"`
+	// UpdatedBy is the last editor; listed for Common terms only.
+	UpdatedBy string `json:"updatedBy,omitempty"`
+}
+
+// Dictionary layer names in API paths and DictTermView.Layer; an Account
+// layer is DictLayerAccountPrefix + accountId.
+const (
+	DictLayerPersonal      = "personal"
+	DictLayerCommon        = "common"
+	DictLayerAccountPrefix = "account:"
+)
+
+// DictLayerOf names the layer of a term partition key ("" if none).
+func DictLayerOf(pk string) string {
+	switch scope, accountID, _ := TermScopeOf(pk); scope {
+	case TermScopeUser:
+		return DictLayerPersonal
+	case TermScopeCommon:
+		return DictLayerCommon
+	case TermScopeAccount:
+		return DictLayerAccountPrefix + accountID
+	}
+	return ""
+}
+
+// DictLayerTermsResponse answers GET .../layers/{layer}/terms.
+type DictLayerTermsResponse struct {
+	Items []DictTermView `json:"items"`
+}
+
+// DictDeletedTermView is one deleted Common term: the display fields of the
+// last snapshot before its deletion plus who deleted it and when.
+type DictDeletedTermView struct {
+	TermID    string `json:"termId"`
+	DisplayAs string `json:"displayAs"`
+	Phrase    string `json:"phrase"`
+	Type      string `json:"type"`
+	DeletedAt string `json:"deletedAt"`
+	DeletedBy string `json:"deletedBy"`
+}
+
+// DictDeletedTermsResponse answers GET .../layers/common/terms?deleted=1,
+// newest deletion first.
+type DictDeletedTermsResponse struct {
+	Items []DictDeletedTermView `json:"items"`
+}
+
+// DictTermLogView is the API form of a DictTermLog. LogID is the row's
+// timestamp; Before/After are the term snapshots (nil when absent).
+type DictTermLogView struct {
+	LogID  string        `json:"logId"`
+	TermID string        `json:"termId"`
+	Actor  string        `json:"actor"`
+	Action string        `json:"action"`
+	At     string        `json:"at"`
+	Before *DictTermView `json:"before,omitempty"`
+	After  *DictTermView `json:"after,omitempty"`
+}
+
+// DictTermLogResponse answers GET .../terms/{termId}/log, newest first.
+type DictTermLogResponse struct {
+	Items []DictTermLogView `json:"items"`
 }
 
 // DictTermMutationResponse answers a v2 term create, update or delete.
@@ -111,6 +178,10 @@ const (
 	PrefixDictTerm = "DICTTERM#"
 	PrefixDictObs  = "DICTOBS#"
 	PrefixVocab    = "VOCAB#"
+	// PrefixDictCommon is the partition key of the shared Common dictionary;
+	// PrefixDictLog starts the SK of its per-term audit rows.
+	PrefixDictCommon = "DICT#COMMON"
+	PrefixDictLog    = "DICTLOG#"
 
 	TermOriginManual = "manual"
 	TermOriginAuto   = "auto"
@@ -121,6 +192,16 @@ const (
 
 	TermScopeUser    = "user"
 	TermScopeAccount = "account"
+	TermScopeCommon  = "common"
+
+	// Source kinds recorded on DictSourceRef and DictObservation.
+	DictSourceMeeting  = "meeting"
+	DictSourceKB       = "kb"
+	DictSourceResearch = "research"
+	DictSourceNews     = "news"
+
+	// MaxDictSources caps DictTerm.Sources.
+	MaxDictSources = 10
 
 	TermAliasHint   = "hint"
 	TermAliasAlways = "always"
@@ -166,10 +247,12 @@ type DictTerm struct {
 	UpdatedAt            string   `dynamodbav:"updatedAt"`
 	LastSeenAt           string   `dynamodbav:"lastSeenAt,omitempty"`
 	DeletedAt            string   `dynamodbav:"deletedAt,omitempty"`
-	CreatedBy            string   `dynamodbav:"createdBy,omitempty"`
-	UpdatedBy            string   `dynamodbav:"updatedBy,omitempty"`
-	Version              int64    `dynamodbav:"version"`
-	EntityType           string   `dynamodbav:"entityType"`
+	// Sources lists up to MaxDictSources evidence refs, newest first.
+	Sources    []DictSourceRef `dynamodbav:"sources,omitempty"`
+	CreatedBy  string          `dynamodbav:"createdBy,omitempty"`
+	UpdatedBy  string          `dynamodbav:"updatedBy,omitempty"`
+	Version    int64           `dynamodbav:"version"`
+	EntityType string          `dynamodbav:"entityType"`
 	// LegacyMigrated marks a row copied from the legacy blob. Until
 	// migratedAt such a row, while active and unedited, is only a copy: the
 	// blob stays authoritative and migration may rewrite or delete it.
@@ -179,13 +262,79 @@ type DictTerm struct {
 	LegacyDisplayEmpty bool `dynamodbav:"legacyDisplayEmpty,omitempty"`
 }
 
+// DictSourceRef points at one piece of evidence behind a term.
+type DictSourceRef struct {
+	Kind string `dynamodbav:"kind" json:"kind"`
+	Ref  string `dynamodbav:"ref" json:"ref"`
+	At   string `dynamodbav:"at" json:"at"`
+}
+
+// AppendDictSource puts ref first, drops an earlier entry with the same
+// Kind+Ref, and keeps at most MaxDictSources. It does not modify refs.
+func AppendDictSource(refs []DictSourceRef, ref DictSourceRef) []DictSourceRef {
+	out := make([]DictSourceRef, 0, MaxDictSources)
+	out = append(out, ref)
+	for _, r := range refs {
+		if len(out) == MaxDictSources {
+			break
+		}
+		if r.Kind == ref.Kind && r.Ref == ref.Ref {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// Common audit actions and retention (L2).
+const (
+	DictLogActionUpdate  = "update"
+	DictLogActionDelete  = "delete"
+	DictLogActionRestore = "restore"
+	MaxDictLogsPerTerm   = 20
+)
+
+// DictLogSK returns the sort key of an audit row.
+func DictLogSK(termKey, at string) string { return PrefixDictLog + termKey + "#" + at }
+
+// DictTermLog is one Common-dictionary audit row: SK is
+// DICTLOG#{termKey}#{at}. Before/After hold the term JSON ("" when absent).
+type DictTermLog struct {
+	PK      string `dynamodbav:"PK"`
+	SK      string `dynamodbav:"SK"`
+	TermKey string `dynamodbav:"termKey"`
+	Actor   string `dynamodbav:"actor"`
+	Action  string `dynamodbav:"action"`
+	Before  string `dynamodbav:"before,omitempty"`
+	After   string `dynamodbav:"after,omitempty"`
+	At      string `dynamodbav:"at"`
+}
+
+// TermScopeOf maps a term partition key to its scope and, for Account, the
+// account ID. ok is false for any other key.
+func TermScopeOf(pk string) (scope, accountID string, ok bool) {
+	switch {
+	case pk == PrefixDictCommon:
+		return TermScopeCommon, "", true
+	case strings.HasPrefix(pk, PrefixAccount) && len(pk) > len(PrefixAccount):
+		return TermScopeAccount, strings.TrimPrefix(pk, PrefixAccount), true
+	case strings.HasPrefix(pk, PrefixUser) && len(pk) > len(PrefixUser):
+		return TermScopeUser, "", true
+	}
+	return "", "", false
+}
+
 // DictObservation records that one meeting produced evidence for a term. It
 // is the unit of provenance; hits counts observation rows ever created.
 type DictObservation struct {
-	PK                string   `dynamodbav:"PK"`
-	SK                string   `dynamodbav:"SK"`
-	TermKey           string   `dynamodbav:"termKey"`
-	MeetingID         string   `dynamodbav:"meetingId"`
+	PK        string `dynamodbav:"PK"`
+	SK        string `dynamodbav:"SK"`
+	TermKey   string `dynamodbav:"termKey"`
+	MeetingID string `dynamodbav:"meetingId"`
+	// SourceKind/SourceRef name the evidence (meeting, kb, research, news);
+	// meeting rows also keep meetingId.
+	SourceKind        string   `dynamodbav:"sourceKind,omitempty"`
+	SourceRef         string   `dynamodbav:"sourceRef,omitempty"`
 	OwnerID           string   `dynamodbav:"ownerId"`
 	HeardAs           []string `dynamodbav:"heardAs,omitempty"`
 	SourceTypes       []string `dynamodbav:"sourceTypes,omitempty"`

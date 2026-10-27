@@ -13,9 +13,10 @@ import (
 )
 
 // Automatic dictionary merge (design A4). TermsAnalysisService.Process runs
-// MergeExtractedTerms after the deterministic filters. It writes the personal scope only: account writes need membership
-// ConditionChecks and publication gates that arrive with the account
-// dictionary.
+// MergeExtractedTerms (the owner's personal scope) after the deterministic
+// filters, then MergeScoped into the meeting's Account when that layer is on.
+// Account writes carry the owner's membership ConditionCheck; Common is never
+// written from meetings (it takes news terms only).
 const (
 	// MaxAutoTermsPerScope caps unedited automatic (active or suggested)
 	// terms; the lowest-scoring are evicted after a merge.
@@ -34,7 +35,7 @@ type TermsMergeStore interface {
 	ListDictTerms(ctx context.Context, pk string) ([]model.DictTerm, error)
 	GetDictTerm(ctx context.Context, pk, termKey string) (*model.DictTerm, error)
 	ListDictObs(ctx context.Context, pk, termKey string) ([]model.DictObservation, error)
-	CreateAutoTerm(ctx context.Context, term *model.DictTerm, obs *model.DictObservation) error
+	CreateAutoTermChecked(ctx context.Context, term *model.DictTerm, obs *model.DictObservation, member *repository.MembershipCheck) error
 	MergeAutoObservation(ctx context.Context, in repository.DictMergeInput) error
 	PromoteSuggestedTerm(ctx context.Context, in repository.DictMergeInput, content repository.DictPromotion) error
 	EvictAutoTerm(ctx context.Context, pk, termKey string, expectedVersion int64) (repository.DictWriteResult, error)
@@ -68,6 +69,24 @@ type TermsMeetingRef struct {
 	NotesSafe         bool
 	Tainted           bool
 	Accepted          []model.TermsAcceptedTerm
+}
+
+// TermsScope is the partition a merge writes. Member is required for an
+// ACCOUNT# partition and must name the source owner; it is ignored otherwise.
+type TermsScope struct {
+	PK     string
+	Member *repository.MembershipCheck
+}
+
+// TermsSourceRef is the evidence of a scoped merge: Kind/Ref name the source
+// (only DictSourceMeeting, Ref = meeting ID, is merged today) and OwnerID the
+// user whose content it is. NotesSafe, Tainted, Accepted and
+// SummaryGeneration are as on TermsMeetingRef.
+type TermsSourceRef struct {
+	Kind, Ref, OwnerID string
+	NotesSafe, Tainted bool
+	Accepted           []model.TermsAcceptedTerm
+	SummaryGeneration  int64
 }
 
 // TermsMergeResult reports a merge. Accepted is the union of the prior list
@@ -105,7 +124,7 @@ const (
 
 // MergeExtractedTerms merges candidates into scopePK for one meeting:
 //
-//	none                    -> CreateAutoTerm (active, or suggested when tainted), hits=1
+//	none                    -> CreateAutoTermChecked (active, or suggested when tainted), hits=1
 //	tombstone               -> skip
 //	manual or userEditedAt  -> skip
 //	suggested, untainted    -> PromoteSuggestedTerm (version CAS) + observation;
@@ -122,9 +141,42 @@ func (m *TermsMerger) MergeExtractedTerms(ctx context.Context, scopePK string, c
 	if ref.OwnerID == "" || ref.MeetingID == "" || scopePK != model.PrefixUser+ref.OwnerID {
 		return nil, fmt.Errorf("%w: terms merge supports only the owner's personal scope", ErrInvalidInput)
 	}
+	return m.MergeScoped(ctx, TermsScope{PK: scopePK}, candidates, TermsSourceRef{
+		Kind: model.DictSourceMeeting, Ref: ref.MeetingID, OwnerID: ref.OwnerID, NotesSafe: ref.NotesSafe,
+		Tainted: ref.Tainted, Accepted: ref.Accepted, SummaryGeneration: ref.SummaryGeneration,
+	})
+}
+
+// validateScope accepts the source owner's personal scope, or an Account scope
+// whose membership check names that owner. Common is refused: meetings never
+// write it.
+func validateScope(scope TermsScope, ref TermsSourceRef) error {
+	if ref.OwnerID == "" || ref.Kind != model.DictSourceMeeting || ref.Ref == "" {
+		return fmt.Errorf("%w: terms merge needs an owner and a meeting source", ErrInvalidInput)
+	}
+	kind, accountID, ok := model.TermScopeOf(scope.PK)
+	switch {
+	case !ok || kind == model.TermScopeCommon:
+		return fmt.Errorf("%w: terms merge does not write this scope", ErrInvalidInput)
+	case kind == model.TermScopeUser && scope.PK != model.PrefixUser+ref.OwnerID:
+		return fmt.Errorf("%w: terms merge writes only the owner's personal scope", ErrInvalidInput)
+	case kind == model.TermScopeAccount && (scope.Member == nil || scope.Member.AccountID != accountID || scope.Member.UserID != ref.OwnerID):
+		return fmt.Errorf("%w: account terms merge needs the owner's membership check", ErrInvalidInput)
+	}
+	return nil
+}
+
+// MergeScoped is MergeExtractedTerms for any scope validateScope accepts. An
+// Account write the membership check refuses ends the merge with
+// repository.ErrNotAccountMember. The auto cap applies per partition.
+func (m *TermsMerger) MergeScoped(ctx context.Context, scope TermsScope, candidates []ExtractedTerm, ref TermsSourceRef) (*TermsMergeResult, error) {
+	if err := validateScope(scope, ref); err != nil {
+		return nil, err
+	}
 	if err := model.ValidateTermsAccepted(ref.Accepted); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidInput, err)
 	}
+	scopePK := scope.PK
 	result := &TermsMergeResult{Accepted: append([]model.TermsAcceptedTerm(nil), ref.Accepted...)}
 	result.Counters.Candidates = len(candidates)
 	merged := m.prepare(candidates, result)
@@ -153,7 +205,7 @@ func (m *TermsMerger) MergeExtractedTerms(ctx context.Context, scopePK string, c
 			result.Counters.Capped++
 			continue
 		}
-		outcome, err := m.mergeOne(ctx, scopePK, c, byKey[c.key], termKeys, ref, result, &cleanup)
+		outcome, err := m.mergeOne(ctx, scope, c, byKey[c.key], termKeys, ref, result, &cleanup)
 		if outcome == outcomeObserved {
 			addAccepted(result, c.key, c.SourceTypes)
 		}
@@ -267,7 +319,8 @@ func cleanHeardAs(ownKey string, termKeys map[string]bool, aliases []string, dro
 	return out
 }
 
-func (m *TermsMerger) mergeOne(ctx context.Context, pk string, c mergeCandidate, term *model.DictTerm, termKeys map[string]bool, ref TermsMeetingRef, result *TermsMergeResult, cleanup *[]error) (termOutcome, error) {
+func (m *TermsMerger) mergeOne(ctx context.Context, scope TermsScope, c mergeCandidate, term *model.DictTerm, termKeys map[string]bool, ref TermsSourceRef, result *TermsMergeResult, cleanup *[]error) (termOutcome, error) {
+	pk, meetingID := scope.PK, ref.Ref
 	counters := &result.Counters
 	obsHeard := cleanHeardAs(c.key, termKeys, c.HeardAs, &counters.AliasesDropped)
 	for attempt := 0; attempt < termMergeAttempts; attempt++ {
@@ -279,8 +332,10 @@ func (m *TermsMerger) mergeOne(ctx context.Context, pk string, c mergeCandidate,
 			term = fresh
 		}
 		now := m.now().Format(model.DictTimeLayout)
+		source := model.DictSourceRef{Kind: ref.Kind, Ref: ref.Ref, At: now}
 		obs := &model.DictObservation{
-			PK: pk, SK: model.DictObsSK(c.key, ref.MeetingID), TermKey: c.key, MeetingID: ref.MeetingID,
+			PK: pk, SK: model.DictObsSK(c.key, meetingID), TermKey: c.key, MeetingID: meetingID,
+			SourceKind: ref.Kind, SourceRef: ref.Ref,
 			OwnerID: ref.OwnerID, HeardAs: obsHeard, SourceTypes: c.SourceTypes,
 			SummaryGeneration: ref.SummaryGeneration, NotesSafe: ref.NotesSafe, Tainted: ref.Tainted,
 			CreatedAt: now, EntityType: model.EntityTypeDictObservation,
@@ -288,7 +343,7 @@ func (m *TermsMerger) mergeOne(ctx context.Context, pk string, c mergeCandidate,
 		var err error
 		switch {
 		case term == nil:
-			err = m.store.CreateAutoTerm(ctx, newAutoTerm(pk, c, obsHeard, ref, now), obs)
+			err = m.store.CreateAutoTermChecked(ctx, newAutoTerm(pk, c, obsHeard, ref, source, now), obs, scope.Member)
 			if err == nil {
 				counters.Created++
 				if ref.Tainted {
@@ -321,12 +376,13 @@ func (m *TermsMerger) mergeOne(ctx context.Context, pk string, c mergeCandidate,
 			// a tainted run; only this untainted run's evidence survives.
 			in := repository.DictMergeInput{
 				PK: pk, TermKey: c.key, Observation: obs, SeenAt: now, ExpectedVersion: term.Version,
-				HeardAs: obsHeard, SourceTypes: c.SourceTypes,
+				HeardAs: obsHeard, SourceTypes: c.SourceTypes, Sources: []model.DictSourceRef{source},
+				Member: scope.Member,
 			}
 			err = m.store.PromoteSuggestedTerm(ctx, in, repository.DictPromotion{
 				DisplayAs: strings.TrimSpace(c.DisplayAs), Phrase: c.Phrase, Type: c.Type,
 				Confidence: c.Confidence, TranscribeKo: c.TranscribeKo, TranscribeEn: c.TranscribeEn,
-				FirstSourceMeetingID: ref.MeetingID,
+				FirstSourceMeetingID: meetingID,
 			})
 			if err == nil {
 				counters.Promoted++
@@ -342,7 +398,9 @@ func (m *TermsMerger) mergeOne(ctx context.Context, pk string, c mergeCandidate,
 				PK: pk, TermKey: c.key, Observation: obs, SeenAt: now, ExpectedVersion: term.Version,
 				HeardAs:     cleanHeardAs(c.key, termKeys, append(append([]string(nil), term.HeardAs...), obsHeard...), new(int)),
 				SourceTypes: unionStrings(term.SourceTypes, c.SourceTypes),
+				Sources:     model.AppendDictSource(term.Sources, source),
 				SkipHit:     acceptedIndex(ref.Accepted, c.key) >= 0,
+				Member:      scope.Member,
 			}
 			err = m.store.MergeAutoObservation(ctx, in)
 			if err == nil {
@@ -362,8 +420,9 @@ func (m *TermsMerger) mergeOne(ctx context.Context, pk string, c mergeCandidate,
 		if errors.Is(err, repository.ErrDictTermConflict) || errors.Is(err, repository.ErrDictTransactionConflict) {
 			continue // re-read and retry
 		}
-		if errors.Is(err, repository.ErrDictTransactionCancelled) || errors.Is(err, repository.ErrDictSourceMeetingGone) {
-			// A cancelled transaction applied nothing.
+		if errors.Is(err, repository.ErrDictTransactionCancelled) || errors.Is(err, repository.ErrDictSourceMeetingGone) ||
+			errors.Is(err, repository.ErrNotAccountMember) || errors.Is(err, repository.ErrInvalidInput) {
+			// A cancelled or refused transaction applied nothing.
 			return outcomeSkipped, fmt.Errorf("failed to merge dictionary term: %w", err)
 		}
 		// Any other failure may have committed (an ambiguous response), so
@@ -374,16 +433,17 @@ func (m *TermsMerger) mergeOne(ctx context.Context, pk string, c mergeCandidate,
 	return outcomeSkipped, nil
 }
 
-func newAutoTerm(pk string, c mergeCandidate, heard []string, ref TermsMeetingRef, now string) *model.DictTerm {
+func newAutoTerm(pk string, c mergeCandidate, heard []string, ref TermsSourceRef, source model.DictSourceRef, now string) *model.DictTerm {
 	state := model.TermStateActive
 	if ref.Tainted {
 		state = model.TermStateSuggested
 	}
+	scope, _, _ := model.TermScopeOf(pk)
 	return &model.DictTerm{
-		PK: pk, SK: model.DictTermSK(c.key), TermKey: c.key, Scope: model.TermScopeUser, State: state,
+		PK: pk, SK: model.DictTermSK(c.key), TermKey: c.key, Scope: scope, State: state,
 		DisplayAs: strings.TrimSpace(c.DisplayAs), Phrase: c.Phrase, HeardAs: heard,
 		AliasMode: model.TermAliasHint, Type: c.Type, Origin: model.TermOriginAuto,
-		SourceTypes: c.SourceTypes, FirstSourceMeetingID: ref.MeetingID, Hits: 1,
+		SourceTypes: c.SourceTypes, FirstSourceMeetingID: ref.Ref, Hits: 1, Sources: []model.DictSourceRef{source},
 		Confidence: c.Confidence, TranscribeKo: c.TranscribeKo, TranscribeEn: c.TranscribeEn,
 		AddedAt: now, UpdatedAt: now, LastSeenAt: now, CreatedBy: ref.OwnerID, UpdatedBy: ref.OwnerID,
 		Version: 1, EntityType: model.EntityTypeDictTerm,

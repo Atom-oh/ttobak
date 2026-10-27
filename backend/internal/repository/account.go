@@ -262,6 +262,57 @@ func (r *DynamoDBRepository) ListAccountsForUser(ctx context.Context, userID str
 	return members, nil
 }
 
+// ListRecentMeetingAccountIDs returns the accountId of the user's newest
+// limit meetings (GSI1 newest first, entityType=MEETING), in order, skipping
+// meetings without one. The projection is SK and accountId only.
+func (r *DynamoDBRepository) ListRecentMeetingAccountIDs(ctx context.Context, userID string, limit int) ([]string, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	keyEx := expression.Key("GSI1PK").Equal(expression.Value(model.PrefixUser + userID))
+	filterEx := expression.Name("entityType").Equal(expression.Value("MEETING"))
+	proj := expression.NamesList(expression.Name("SK"), expression.Name("accountId"))
+	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).WithFilter(filterEx).WithProjection(proj).Build()
+	if err != nil {
+		return nil, fmt.Errorf("build recent meeting accounts query: %w", err)
+	}
+	var ids []string
+	seen := 0
+	var start map[string]types.AttributeValue
+	const maxPages = 25 // same work bound as ListMeetings
+	for page := 0; page < maxPages; page++ {
+		out, err := r.client.Query(ctx, &dynamodb.QueryInput{
+			TableName:                 aws.String(r.tableName),
+			IndexName:                 aws.String("GSI1"),
+			KeyConditionExpression:    expr.KeyCondition(),
+			FilterExpression:          expr.Filter(),
+			ProjectionExpression:      expr.Projection(),
+			ExpressionAttributeNames:  expr.Names(),
+			ExpressionAttributeValues: expr.Values(),
+			Limit:                     aws.Int32(int32(limit)),
+			ExclusiveStartKey:         start,
+			ScanIndexForward:          aws.Bool(false),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("query recent meeting accounts: %w", err)
+		}
+		for _, item := range out.Items {
+			if seen == limit {
+				return ids, nil
+			}
+			seen++
+			if v, ok := item["accountId"].(*types.AttributeValueMemberS); ok && v.Value != "" {
+				ids = append(ids, v.Value)
+			}
+		}
+		if seen == limit || out.LastEvaluatedKey == nil {
+			return ids, nil
+		}
+		start = out.LastEvaluatedKey
+	}
+	return ids, nil
+}
+
 // PutMeetingRef writes a MeetingRef item (caller builds PK/SK).
 func (r *DynamoDBRepository) PutMeetingRef(ctx context.Context, ref *model.MeetingRef) error {
 	item, err := attributevalue.MarshalMap(ref)

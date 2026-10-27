@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { startTermEdit, termEditPatch, termSource, termTypeLabel, type DictTermItem, type TermEdit, type TermPatch } from '@/lib/dictionary';
+import { startTermEdit, termEditPatch, termSource, termSourceBadges, termTypeLabel, type DictTermItem, type TermEdit, type TermPatch } from '@/lib/dictionary';
 
 const input = 'w-full px-2 py-1.5 text-sm bg-slate-100 dark:bg-surface-lowest dark:border dark:border-white/10 dark:text-text-main border-none rounded-lg';
 const btn = 'px-2 py-1 text-xs font-medium rounded-lg hover:bg-slate-100 dark:hover:bg-white/5 disabled:opacity-40';
@@ -15,11 +15,13 @@ interface Props {
   onUpdate: (item: DictTermItem, patch: TermPatch) => Promise<boolean>;
   onDelete: (item: DictTermItem) => void;
   onError: (message: string) => void;
+  /** Shows a 기록 button (Common rows). */
+  onHistory?: (item: DictTermItem) => void;
   emptyText: string;
 }
 
 /** v2 term list: 표기 / 인식된 표기 / 유형 / 출처 plus row actions. */
-export function DictionaryTable({ items, busyTermIds, onUpdate, onDelete, onError, emptyText }: Props) {
+export function DictionaryTable({ items, busyTermIds, onUpdate, onDelete, onError, onHistory, emptyText }: Props) {
   // The snapshot, not the polled row, is what save() diffs and versions.
   const [edit, setEdit] = useState<TermEdit | null>(null);
 
@@ -49,13 +51,17 @@ export function DictionaryTable({ items, busyTermIds, onUpdate, onDelete, onErro
           {items.map((item) => {
             const busy = busyTermIds.has(item.termId);
             const source = termSource(item);
+            const badges = termSourceBadges(item);
+            const badgeChips = badges.map((b) => (
+              <span key={b.kind} className={`${chip} bg-slate-100 text-slate-600 dark:bg-white/5 dark:text-text-muted`}>{b.label}</span>
+            ));
             if (edit && edit.base.termId === item.termId) {
               return (
                 <tr key={item.termId} className="border-b border-slate-100 dark:border-white/5 last:border-b-0">
                   <td className="px-4 py-2"><input aria-label="표기" value={edit.displayAs} onChange={(e) => setEdit({ ...edit, displayAs: e.target.value })} className={input} /></td>
                   <td className="px-4 py-2"><input aria-label="인식된 표기 (쉼표로 구분)" value={edit.heardAs} onChange={(e) => setEdit({ ...edit, heardAs: e.target.value })} className={input} /></td>
                   <td className={cell}>{item.type ? termTypeLabel(item.type) : '-'}</td>
-                  <td className={cell}>{source.label}</td>
+                  <td className={cell}>{source.label}{badgeChips}</td>
                   <td className="px-4 py-2 text-right whitespace-nowrap">
                     <button onClick={() => save(edit)} disabled={busy} className={`${btn} text-primary`}>저장</button>
                     <button onClick={() => setEdit(null)} disabled={busy} className={btn}>취소</button>
@@ -76,6 +82,7 @@ export function DictionaryTable({ items, busyTermIds, onUpdate, onDelete, onErro
                   {source.meetingId
                     ? <Link href={`/meeting/${encodeURIComponent(source.meetingId)}`} className="text-primary hover:underline">{source.label}</Link>
                     : source.label}
+                  {badgeChips}
                 </td>
                 <td className="px-4 py-3 text-right whitespace-nowrap">
                   {item.state === 'suggested' && (
@@ -89,6 +96,7 @@ export function DictionaryTable({ items, busyTermIds, onUpdate, onDelete, onErro
                     disabled={busy}
                     className={btn}
                   >편집</button>
+                  {onHistory && <button onClick={() => onHistory(item)} className={btn}>기록</button>}
                   <button onClick={() => onDelete(item)} disabled={busy} className={`${btn} hover:text-red-500`}>삭제</button>
                 </td>
               </tr>

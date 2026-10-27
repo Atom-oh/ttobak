@@ -40,13 +40,22 @@ func termView(row model.DictTerm) model.DictTermView {
 	if heard == nil {
 		heard = []string{}
 	}
-	return model.DictTermView{
+	sources := row.Sources
+	if sources == nil {
+		sources = []model.DictSourceRef{}
+	}
+	view := model.DictTermView{
 		TermID: row.TermKey, DisplayAs: row.DisplayAs, Phrase: row.Phrase, HeardAs: heard,
 		AliasMode: row.AliasMode, Type: row.Type, Origin: row.Origin, State: row.State,
 		UserEdited: row.UserEditedAt != "", Version: row.Version,
 		TranscribeKo: row.TranscribeKo, TranscribeEn: row.TranscribeEn, Hits: row.Hits,
 		AddedAt: row.AddedAt, UpdatedAt: row.UpdatedAt,
+		Layer: model.DictLayerOf(row.PK), Sources: sources,
 	}
+	if row.PK == model.PrefixDictCommon {
+		view.UpdatedBy = row.UpdatedBy // L2: Common edits are attributed
+	}
+	return view
 }
 
 func sortRowsByAdded(rows []model.DictTerm) {
@@ -132,6 +141,11 @@ func newManualRow(userID string, v ValidatedTerm, phrase, aliasMode string, disp
 
 // CreateTerm creates a manual term or restores a tombstone as manual.
 func (s *DictionaryService) CreateTerm(ctx context.Context, userID string, in model.CreateDictTermRequest) (*model.DictTermMutationResponse, error) {
+	return s.createTerm(ctx, userID, personalTarget(userID), in)
+}
+
+// createTerm is CreateTerm in a personal or Account partition.
+func (s *DictionaryService) createTerm(ctx context.Context, userID string, t dictTarget, in model.CreateDictTermRequest) (*model.DictTermMutationResponse, error) {
 	v, err := ValidateTermInput(in.DisplayAs, in.HeardAs, in.Type)
 	if err != nil {
 		return nil, err
@@ -146,11 +160,10 @@ func (s *DictionaryService) CreateTerm(ctx context.Context, userID string, in mo
 	if err != nil {
 		return nil, err
 	}
-	if err := s.ensureMigrated(ctx, userID); err != nil {
+	if err := s.ensureTargetMigrated(ctx, userID, t); err != nil {
 		return nil, err
 	}
-	pk := model.PrefixUser + userID
-	rows, err := s.repo.ListDictTerms(ctx, pk)
+	rows, err := s.repo.ListDictTerms(ctx, t.pk)
 	if err != nil {
 		return nil, err
 	}
@@ -167,36 +180,42 @@ func (s *DictionaryService) CreateTerm(ctx context.Context, userID string, in mo
 		return nil, ErrDictionaryFull
 	}
 	row := newManualRow(userID, v, phrase, aliasMode, false, s.stamp())
+	row.PK, row.Scope = t.pk, t.scope
 	if existing == nil {
-		if err := s.repo.CreateDictTerm(ctx, &row); err != nil {
+		if err := s.repo.CreateDictTerm(ctx, &row, t.member); err != nil {
 			if errors.Is(err, repository.ErrConditionFailed) {
 				return nil, ErrDictionaryTermExists
 			}
 			return nil, err
 		}
 	} else {
-		if err := s.repo.RestoreDictTerm(ctx, &row, existing.Version); err != nil {
+		if err := s.repo.RestoreDictTerm(ctx, &row, existing.Version, t.member); err != nil {
 			return nil, versionConflict(err)
 		}
 		row.Version = existing.Version + 1
 	}
-	return s.mutationResult(ctx, userID, &row, phrase != ""), nil
+	return s.targetResult(ctx, userID, t, &row, phrase != ""), nil
 }
 
 // UpdateTerm applies a user edit under the caller's version. Every edit sets
 // userEditedAt, which blocks all later automatic writes; aliasMode=always is
 // the "keep" action, and state=active accepts a suggestion.
 func (s *DictionaryService) UpdateTerm(ctx context.Context, userID, termKey string, in model.UpdateDictTermRequest) (*model.DictTermMutationResponse, error) {
+	return s.updateTerm(ctx, userID, personalTarget(userID), termKey, in)
+}
+
+// updateTerm is UpdateTerm in a personal or Account partition.
+func (s *DictionaryService) updateTerm(ctx context.Context, userID string, t dictTarget, termKey string, in model.UpdateDictTermRequest) (*model.DictTermMutationResponse, error) {
 	if in.Version == nil {
 		return nil, termInputError("version", "is required")
 	}
 	if in.DisplayAs == nil && in.Phrase == nil && in.HeardAs == nil && in.Type == nil && in.AliasMode == nil && in.State == nil {
 		return nil, termInputError("body", "no changes")
 	}
-	if err := s.ensureMigrated(ctx, userID); err != nil {
+	if err := s.ensureTargetMigrated(ctx, userID, t); err != nil {
 		return nil, err
 	}
-	pk := model.PrefixUser + userID
+	pk := t.pk
 	row, err := s.repo.GetDictTerm(ctx, pk, termKey)
 	if err != nil {
 		return nil, err
@@ -211,7 +230,7 @@ func (s *DictionaryService) UpdateTerm(ctx context.Context, userID, termKey stri
 	if err != nil {
 		return nil, err
 	}
-	if err := s.repo.UpdateDictTerm(ctx, pk, termKey, change, userID, s.stamp(), *in.Version); err != nil {
+	if err := s.repo.UpdateDictTerm(ctx, pk, termKey, change, userID, s.stamp(), *in.Version, t.member); err != nil {
 		return nil, versionConflict(err)
 	}
 	updated, err := s.repo.GetDictTerm(ctx, pk, termKey)
@@ -222,7 +241,7 @@ func (s *DictionaryService) UpdateTerm(ctx context.Context, userID, termKey stri
 		// Committed, then removed concurrently: report the current state.
 		return nil, ErrNotFound
 	}
-	return s.mutationResult(ctx, userID, updated, in.Phrase != nil || in.State != nil || in.DisplayAs != nil), nil
+	return s.targetResult(ctx, userID, t, updated, in.Phrase != nil || in.State != nil || in.DisplayAs != nil), nil
 }
 
 func termChange(row model.DictTerm, in model.UpdateDictTermRequest) (repository.DictTermChange, error) {
@@ -283,10 +302,15 @@ func termChange(row model.DictTerm, in model.UpdateDictTermRequest) (repository.
 // TombstoneTerm deletes a term of any origin by leaving a tombstone, so it is
 // never added automatically again. A nil version uses the current row.
 func (s *DictionaryService) TombstoneTerm(ctx context.Context, userID, termKey string, version *int64) (*model.DictTermMutationResponse, error) {
-	if err := s.ensureMigrated(ctx, userID); err != nil {
+	return s.tombstoneTerm(ctx, userID, personalTarget(userID), termKey, version)
+}
+
+// tombstoneTerm is TombstoneTerm in a personal or Account partition.
+func (s *DictionaryService) tombstoneTerm(ctx context.Context, userID string, t dictTarget, termKey string, version *int64) (*model.DictTermMutationResponse, error) {
+	if err := s.ensureTargetMigrated(ctx, userID, t); err != nil {
 		return nil, err
 	}
-	pk := model.PrefixUser + userID
+	pk := t.pk
 	row, err := s.repo.GetDictTerm(ctx, pk, termKey)
 	if err != nil {
 		return nil, err
@@ -297,7 +321,7 @@ func (s *DictionaryService) TombstoneTerm(ctx context.Context, userID, termKey s
 	if version != nil && *version != row.Version {
 		return nil, ErrDictionaryVersionConflict
 	}
-	result, err := s.repo.TombstoneDictTerm(ctx, pk, termKey, userID, s.stamp(), row.Version)
+	result, err := s.repo.TombstoneDictTerm(ctx, pk, termKey, userID, s.stamp(), row.Version, t.member)
 	if err != nil {
 		return nil, versionConflict(err)
 	}
@@ -306,16 +330,19 @@ func (s *DictionaryService) TombstoneTerm(ctx context.Context, userID, termKey s
 		log.Printf("dictionary observation cleanup failed for user %s: %v", userID, result.CleanupErr)
 		resp.Warnings = append(resp.Warnings, "term observation cleanup incomplete")
 	}
-	if err := s.pruneTombstones(ctx, pk); err != nil {
+	if err := s.pruneTombstones(ctx, pk, t.member); err != nil {
 		log.Printf("dictionary tombstone pruning failed for user %s: %v", userID, err)
 		resp.Warnings = append(resp.Warnings, "tombstone pruning incomplete")
+	}
+	if !t.personal() {
+		return resp, nil // only personal writes rebuild the personal vocabulary here
 	}
 	views, warnings := s.ensureAfterWrite(ctx, userID, row.State == model.TermStateActive && row.TranscribeKo && row.Phrase != "")
 	resp.Status, resp.Vocabularies, resp.Warnings = s.currentVocabularyStatus(ctx, userID), views, append(resp.Warnings, warnings...)
 	return resp, nil
 }
 
-func (s *DictionaryService) pruneTombstones(ctx context.Context, pk string) error {
+func (s *DictionaryService) pruneTombstones(ctx context.Context, pk string, member *repository.MembershipCheck) error {
 	rows, err := s.repo.ListDictTerms(ctx, pk)
 	if err != nil {
 		return err
@@ -337,7 +364,7 @@ func (s *DictionaryService) pruneTombstones(ctx context.Context, pk string) erro
 	})
 	var errs []error
 	for _, tomb := range tombs[:len(tombs)-MaxTombstonesPerScope] {
-		if err := s.repo.DeleteTombstone(ctx, pk, tomb.TermKey, tomb.Version); err != nil && !errors.Is(err, repository.ErrConditionFailed) {
+		if err := s.repo.DeleteTombstone(ctx, pk, tomb.TermKey, tomb.Version, member); err != nil && !errors.Is(err, repository.ErrConditionFailed) {
 			errs = append(errs, err)
 		}
 	}
@@ -554,9 +581,9 @@ func (s *DictionaryService) reconcileManualRows(ctx context.Context, userID stri
 			base.Add(time.Duration(i)*time.Microsecond).Format(model.DictTimeLayout))
 		switch {
 		case !ok:
-			err = s.repo.CreateDictTerm(ctx, &fresh)
+			err = s.repo.CreateDictTerm(ctx, &fresh, nil)
 		case row.State == model.TermStateDeleted:
-			err = s.repo.RestoreDictTerm(ctx, &fresh, row.Version)
+			err = s.repo.RestoreDictTerm(ctx, &fresh, row.Version, nil)
 		case row.Origin != model.TermOriginManual || d.unchanged || legacyTermFromRow(row) == d.legacy:
 			continue // auto and suggested rows are never touched
 		default:
@@ -565,7 +592,7 @@ func (s *DictionaryService) reconcileManualRows(ctx context.Context, userID stri
 			err = s.repo.UpdateDictTerm(ctx, pk, d.v.TermKey, repository.DictTermChange{
 				DisplayAs: &d.v.DisplayAs, LegacyDisplayEmpty: &d.displayEmpty,
 				Phrase: &d.phrase, HeardAs: &heard, TranscribeKo: &ko,
-			}, userID, s.stamp(), row.Version)
+			}, userID, s.stamp(), row.Version, nil)
 		}
 		if err != nil {
 			return versionConflict(err)
@@ -573,7 +600,7 @@ func (s *DictionaryService) reconcileManualRows(ctx context.Context, userID stri
 	}
 	for _, row := range rows {
 		if row.Origin == model.TermOriginManual && row.State == model.TermStateActive && !want[row.TermKey] {
-			if err := s.repo.DeleteManualTerm(ctx, pk, row.TermKey, row.Version); err != nil {
+			if err := s.repo.DeleteManualTerm(ctx, pk, row.TermKey, row.Version, nil); err != nil {
 				return versionConflict(err)
 			}
 		}
@@ -613,7 +640,7 @@ func (s *DictionaryService) DeleteTerm(ctx context.Context, userID, phrase strin
 			other = true
 			continue
 		}
-		if err := s.repo.DeleteManualTerm(ctx, pk, row.TermKey, row.Version); err != nil {
+		if err := s.repo.DeleteManualTerm(ctx, pk, row.TermKey, row.Version, nil); err != nil {
 			return versionConflict(err)
 		}
 		matched++

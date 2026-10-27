@@ -1053,6 +1053,53 @@ never blocklisted (`terms_blocklist.txt`) or the term's own key; `phrase` at mos
   vocabulary, including its pending-build deferral warning and bounded
   conflict recomputation; that path no longer exists.
 
+### Layered dictionary
+
+Routes under `/api/settings/dictionary/layers/{layer}` act on one layer:
+`personal` (the caller's `USER#` partition), `common` (`DICT#COMMON`, every
+signed-in user) or `account:{accountId}` (`ACCOUNT#{accountId}`, members only).
+Any other `layer` is 400. An Account layer first checks the caller's
+`MEMBER#` row (403 `FORBIDDEN` when absent); every Account write also carries
+a membership ConditionCheck in its transaction, so a membership removed after
+that check is still 403. `termId` is the 32-hex `termKey`, validated as in the
+personal routes, and request bodies have the same bounds and validation.
+Term items (here and in the personal GET `items`) gain `layer` and `sources` (`[{kind, ref, at}]`, newest first, at
+most 10, `kind` `meeting|kb|research|news`); Common items also carry
+`updatedBy`. These routes do not rebuild vocabularies, except personal writes
+(which behave as the personal routes above).
+
+- `GET .../layers/{layer}/terms` → 200 `{items}` (non-tombstone rows, oldest
+  first; the personal layer hides unmigrated legacy copies like the GET above).
+- `GET .../layers/common/terms?deleted=1` → 200 `{items: [{termId, displayAs,
+  phrase, type, deletedAt, deletedBy}]}`: the newest 50 Common tombstones,
+  newest deletion first. The display fields are the term as it was before its latest audited
+  change (the stored tombstone is cleared); a tombstone with no audited
+  earlier state cannot be restored and is omitted. Restore through the log
+  routes below. `deleted=1` on any other layer, or any other value, is 400.
+- `POST .../layers/{layer}/terms` `{displayAs, phrase?, heardAs?, type?,
+  aliasMode?}` creates a manual term in the personal or an Account layer (201,
+  same 409s as `POST .../terms`). `common` is 400: Common terms come from
+  automatic sources only.
+- `PATCH .../layers/{layer}/terms/{termId}` takes the personal PATCH body
+  (`version` required; stale 409 `VERSION_CONFLICT`). 200 `{item, termId, state}`.
+- `DELETE .../layers/{layer}/terms/{termId}[?version=]` tombstones the term.
+  200 `{termId, state: "deleted", warnings?}`; observation cleanup and
+  tombstone pruning are best effort, and a failure is a `warnings` entry.
+- Common audit (L2): every Common PATCH, DELETE and restore records
+  `updatedBy`/`updatedAt` on the term and writes a `DICTLOG#{termKey}#{at}` row
+  `{actor, action update|delete|restore, before, after, at}` in the same
+  transaction. A term keeps its newest 20 rows; older ones are trimmed best
+  effort after each write. Account and personal writes are not audited.
+- `GET .../layers/{layer}/terms/{termId}/log` → 200 `{items: [{logId, termId,
+  actor, action, at, before?, after?}]}` newest first, `before`/`after` being
+  term items. Only `common` has a log; other layers are 404.
+- `POST .../layers/common/terms/{termId}/log/{logId}/restore` puts the term
+  back as it was before that change (`before`), whether it is now live or a
+  tombstone, and audits the restore as a new row. `logId` is the row's `at`
+  (`2006-01-02T15:04:05.000000Z` form, other shapes 404). 200 `{item, termId,
+  state}`; unknown log row or another layer 404; a row with no `before` 400;
+  a concurrent change 409 `VERSION_CONFLICT`.
+
 ### Index status and automatic indexing rollout
 
 Authenticated GET index-status routes cover meetings, personal/shared documents,
@@ -1204,6 +1251,12 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | POST | `/api/settings/dictionary/terms` | `dictHandler.CreateTerm` |
 | PATCH | `/api/settings/dictionary/terms/{termId}` | `dictHandler.UpdateTerm` |
 | DELETE | `/api/settings/dictionary/terms/{termId}` | `dictHandler.DeleteDictTerm` |
+| GET | `/api/settings/dictionary/layers/{layer}/terms` | `dictHandler.ListLayerTerms` |
+| POST | `/api/settings/dictionary/layers/{layer}/terms` | `dictHandler.CreateLayerTerm` |
+| PATCH | `/api/settings/dictionary/layers/{layer}/terms/{termId}` | `dictHandler.UpdateLayerTerm` |
+| DELETE | `/api/settings/dictionary/layers/{layer}/terms/{termId}` | `dictHandler.DeleteLayerTerm` |
+| GET | `/api/settings/dictionary/layers/{layer}/terms/{termId}/log` | `dictHandler.ListTermLog` |
+| POST | `/api/settings/dictionary/layers/{layer}/terms/{termId}/log/{logId}/restore` | `dictHandler.RestoreTerm` |
 | POST | `/api/translate` | `translateHandler.Translate` |
 | POST | `/api/meetings/{meetingId}/summarize` | `summarizeLiveHandler.SummarizeLive` |
 | GET | `/api/crawler/sources` | `crawlerHandler.ListSources` |
