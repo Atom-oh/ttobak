@@ -1,6 +1,8 @@
 # Billing Insight as a TTOBAK Service — Design
 
-> Status: Draft for review. Date: 2026-10-26. Author: Junseok Oh, with Claude.
+> Historical design record. Status: Draft; owner decisions D1–D5 recorded
+> 2026-10-26/27, implementation not started. Date: 2026-10-26. Author: Junseok Oh,
+> with Claude. This is design intent, not proof of delivery or deployment.
 > Scope: move the AWS Billing Insight companion (today a separate app at
 > `insight.atomai.click`) into the TTOBAK project as its own service, served
 > from the TTOBAK domain with TTOBAK sign-in, and expose its results to the
@@ -84,11 +86,11 @@ Browser ──► CloudFront (ttobak.atomai.click)
              ├─ /*                      S3: Next.js static (incl. /billing route)
              ├─ /api/billing/*          Lambda@Edge JWT ──► OAC(SigV4) ──► Insight BFF (Lambda Web Function, IamAuth)
              ├─ /api/*                  Lambda@Edge JWT ──► HTTP API (Go)  [unchanged]
-             └─ upload path (see D4)    S3 data bucket (presigned multipart)
+             └─ /billing-upload/*       CloudFront Function strips the prefix ──► S3 data bucket (presigned multipart, no OAC; §6)
 
 Insight BFF ──► S3 data bucket, platform table, ttobak-main (membership)   [AWS public endpoints]
 Upload  ──► jobs/*.json ──► EventBridge ──► ECS RunTask (ingest) ──► AgentCore Runtime (agents, no VPC)
-MCP (/api/mcp, Go) ──► Insight BFF internal routes (SigV4, see §7)
+MCP (ttobak-mcp) ──► Insight BFF (SigV4 by the MCP role + the caller's TTOBAK token, see §7)
 ```
 
 ### 4.1 Frontend / backend split
@@ -124,7 +126,7 @@ Constraints to design for (from the Lambda Web Functions docs)
   (`AllViewerExceptHostHeader` or an explicit header list).
 - CloudFormation types exist in ap-northeast-2 (`AWS::Lambda::WebFunction`,
   `WebFunctionRevision`, `WebFunctionEndpoint`); CDK has L1 constructs from
-  aws-cdk-lib 2.273 (TTOBAK infra is on 2.261 → bump needed).
+  aws-cdk-lib 2.273 (TTOBAK infra is on 2.273.0 as of 2026-10-27; no bump needed).
 - Outbound: without an egress network connector the function reaches public AWS
   endpoints directly, which is all the BFF needs (S3, DynamoDB, STS). No VPC.
 
@@ -172,9 +174,12 @@ must not host customer billing data.
    `always-amz-auth`); Lambda accepts it only because the function's resource
    policy allows `cloudfront.amazonaws.com` with `aws:SourceArn` = the TTOBAK
    distribution. The viewer `Authorization` header is forwarded to the app.
-4. The BFF verifies the JWT itself (issuer = TTOBAK pool, allowed client IDs =
-   TTOBAK web client), then resolves Account membership from `ttobak-main` and
-   filters every dataset by Account, exactly as today.
+4. The BFF verifies the JWT itself (signature, issuer = TTOBAK pool, expiry;
+   allowed audiences = the TTOBAK web client and the existing MCP resource
+   audience, the same pair the Go API accepts), then resolves Account membership
+   from `ttobak-main` and filters every dataset by Account, exactly as today.
+   Browser and MCP calls run this one verifier; no path trusts an asserted
+   identity (D3).
 5. Cookie session, OAuth exchange Lambda, companion client usage and the
    hand-off endpoint are removed after cut-over.
 
@@ -184,9 +189,24 @@ distribution), JWT + membership in the app (the actual authorization).
 ## 6. Uploads
 
 The browser uploads multipart parts with presigned URLs. Today they go through
-a CloudFront `accounts/*` behavior that maps 1:1 to bucket keys. On the TTOBAK
-distribution `/accounts/*` is already a Next.js page route, so the path must
-change (decision D4).
+a CloudFront `accounts/*` behavior that maps 1:1 to bucket keys, with no OAC
+because the parts are already SigV4-presigned. On the TTOBAK distribution
+`/accounts/*` is already a Next.js page route, so the literal path cannot move.
+
+Decision D4 (owner, 2026-10-27): keep the mechanism and the bucket layout; change
+only the browser-facing prefix.
+- New behavior `/billing-upload/*` on the TTOBAK distribution, ordered before
+  the default page behavior: S3 data-bucket origin, no OAC, all query strings,
+  no cookies, no viewer headers, standard logging off (query strings carry
+  `X-Amz-Security-Token`), ETag returned to the browser.
+- A viewer-request CloudFront Function removes the `/billing-upload` prefix, so
+  S3 receives `/accounts/{id}/uploads/...`, the exact path the BFF presigned.
+  The signature covers the S3 key and the bucket host, not the viewer URL, so it
+  stays valid. The function rejects any path that is not
+  `/billing-upload/accounts/*` after normalization.
+- The BFF builds part URLs as TTOBAK origin + `/billing-upload/` + key + presigned
+  query. Keys, the multipart flow, size checks, `jobs/*.json` and the worker
+  stay unchanged; existing data needs no migration.
 
 ## 7. MCP tools
 
@@ -202,11 +222,18 @@ answered only for Accounts the caller belongs to.
 | `billing_savings` | optimisation opportunities with $ estimates |
 | `billing_query` | bounded explore query over a raw dataset (filter, group, top N) |
 
-Call path: MCP Lambda → BFF internal route signed with SigV4 by the MCP role
-(`lambda:InvokeWebFunctionEndpoint`), user identity passed as the verified
-subject in a dedicated header. The BFF trusts that header only on the internal
-route, and only because IAM authenticated the caller as the MCP role (decision D3).
-Responses are computed summaries; raw uploads never leave the data bucket.
+Decision D3 (owner, 2026-10-27): the user is identified by their TTOBAK sign-in.
+Call path: the MCP Lambda signs the request with SigV4 as the MCP role
+(`lambda:InvokeWebFunctionEndpoint`) only to pass the endpoint's `IamAuth`, and
+forwards the caller's own TTOBAK access token, which the MCP server already
+receives for the user (resource-bound HTTP token or stdio session token). Because
+SigV4 occupies `Authorization`, the token travels in a dedicated header; the
+implementation plan fixes its name after checking which header OAC leaves
+intact on the CloudFront path, so both paths read the token the same way. The
+BFF runs the §5 verifier on it; the MCP role's IAM permission grants transport
+only, never identity or Account access. An expired or missing token fails the
+tool call. Responses are computed summaries; raw uploads never leave the data
+bucket.
 
 ## 8. Repository and deployment
 
@@ -228,12 +255,15 @@ Responses are computed summaries; raw uploads never leave the data bucket.
 
 1. Deploy `TtobakBillingStack` alongside the existing insight stack (both read
    the same bucket/table; the old worker keeps running until step 5).
-2. Add `/api/billing/*` and the upload path on the TTOBAK distribution.
+2. Add `/api/billing/*` and `/billing-upload/*` on the TTOBAK distribution.
 3. Ship the `/billing` route; verify per-Account visibility with two test users.
 4. Switch the TTOBAK entry button from hand-off to the internal route (`/billing`).
 5. Move the worker EventBridge rule to the new stack (one owner at a time).
-6. `insight.atomai.click` redirects to `ttobak.atomai.click/billing` for a while.
-7. Remove the old web service, ALB, VPC origin, OAuth exchange, hand-off code.
+6. `insight.atomai.click` redirects to `ttobak.atomai.click/billing` for two
+   weeks (D5). Uploads in flight on the old domain finish there; new uploads
+   use `/billing-upload/*`.
+7. Remove the old web service, ALB, VPC origin, OAuth exchange, hand-off code,
+   then the old distribution and the `insight.atomai.click` DNS record.
 
 Rollback: until step 7 the old site still works; revert the button and the
 CloudFront behaviors.
@@ -246,6 +276,11 @@ CloudFront behaviors.
   distribution ARN (+ MCP role). Never `ApplicationManaged`.
 - Self sign-up stays disabled on the pool.
 - Per-Account filtering on every route, covered by tests for UI, API and MCP.
+- BFF accepts only a verified TTOBAK JWT for identity on every path; the MCP
+  role's IAM grant is transport, never authorization.
+- `/billing-upload/*` reaches S3 only with a presigned request for
+  `accounts/*/uploads/*`; the CloudFront Function rejects other paths, and the
+  bucket stays Block Public Access.
 - No customer names in code, tests or docs.
 
 ## 11. Decisions needed
@@ -256,12 +291,12 @@ CloudFront behaviors.
   this as an allowed pattern; `ApplicationManaged` endpoints remain forbidden.
 - **D2 Compute — resolved 2026-10-26.** BFF on a Lambda Web Function, agent
   stage on AgentCore Runtime (no VPC), ingest stays on ECS Fargate; no EKS.
-- **D3 MCP identity.** SigV4 + asserted subject (above) vs forwarding a user
-  token the BFF can verify (requires accepting the MCP client audience).
-- **D4 Upload path.** A new CloudFront prefix whose keys match the bucket
-  layout (key prefix change for new uploads) vs presigning against the S3
-  regional endpoint directly.
-- **D5 Old domain.** Redirect period for `insight.atomai.click`, then delete.
+- **D3 MCP identity — resolved 2026-10-27.** The caller's TTOBAK sign-in token
+  is forwarded and verified by the BFF (§5, §7); no asserted-subject header.
+- **D4 Upload path — resolved 2026-10-27.** Keep presigned multipart through
+  CloudFront and the `accounts/*` bucket keys; only the viewer prefix changes to
+  `/billing-upload/*` (§6).
+- **D5 Old domain — resolved 2026-10-27.** Two-week redirect, then delete (§9).
 
 ## 12. Navigation reorganisation
 
