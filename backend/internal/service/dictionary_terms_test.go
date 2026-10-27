@@ -542,3 +542,14 @@ func TestConflictingBlobKeepsLegacyPathUntilResolved(t *testing.T) {
 		t.Fatalf("migrated items carry termIds: %+v %v", resp, err)
 	}
 }
+
+func TestListLayerPersonalMigratesLegacyBlob(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeDictStore()
+	store.blob = legacyBlob("READY")
+	svc := newTestDictService(store, nil)
+	items, err := svc.ListLayer(ctx, "u1", model.DictLayerPersonal)
+	if err != nil || store.blob.MigratedAt == "" || len(items) != len(store.blob.Terms) {
+		t.Fatalf("personal list must migrate the legacy blob first: %v migrated=%q items=%+v", err, store.blob.MigratedAt, items)
+	}
+}
