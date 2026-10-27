@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { BillingInsightButton } from '@/components/layout/BillingInsightButton';
 import { NAV_GROUPS, SETTINGS_ITEM } from '@/lib/navigation';
@@ -33,10 +33,17 @@ function SheetLink({ href, icon, label, onNavigate }: { href: string; icon: stri
 
 /** Full menu, grouped like the desktop sidebar, opened from the 지식 tab. */
 function MenuSheet({ onClose }: { onClose: () => void }) {
+  const sheetRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
+    // Move focus into the sheet and give it back to the opener on close.
+    const opener = document.activeElement as HTMLElement | null;
+    sheetRef.current?.querySelector<HTMLElement>('a, button')?.focus();
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      opener?.focus();
+    };
   }, [onClose]);
 
   return (
@@ -48,6 +55,7 @@ function MenuSheet({ onClose }: { onClose: () => void }) {
         className="fixed inset-0 z-20 bg-slate-900/35 lg:hidden"
       />
       <div
+        ref={sheetRef}
         role="dialog"
         aria-modal="true"
         aria-label="전체 메뉴"
@@ -85,7 +93,9 @@ export function MobileNav({ activePath }: { activePath: string }) {
   return (
     <>
       {sheetOpen && <MenuSheet onClose={() => setSheetOpen(false)} />}
-      <nav className="fixed bottom-0 left-0 right-0 flex gap-2 border-t border-slate-100 dark:border-white/5 bg-white/90 dark:bg-background-dark/90 dark:backdrop-blur-xl backdrop-blur-md px-4 pb-6 pb-safe pt-2 z-40 lg:hidden">
+      {/* z-10 as before so page sheets (e.g. the recording Q&A sheet at z-40)
+          still cover the bar; it rises above its own menu sheet only while open. */}
+      <nav className={`fixed bottom-0 left-0 right-0 flex gap-2 border-t border-slate-100 dark:border-white/5 bg-white/90 dark:bg-background-dark/90 dark:backdrop-blur-xl backdrop-blur-md px-4 pb-6 pb-safe pt-2 lg:hidden ${sheetOpen ? 'z-40' : 'z-10'}`}>
         {navItems.map((item) => (
           <Link key={item.href} href={item.href} className={tabClass(isOn(item.href))}>
             <div className="flex h-8 items-center justify-center">

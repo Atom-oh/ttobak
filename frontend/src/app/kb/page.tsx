@@ -85,7 +85,7 @@ export default function KnowledgeBasePage() {
               Library
             </h2>
             <p className="text-slate-600 dark:text-text-muted mt-2">
-              Every file that came in: uploads for Q&amp;A and meeting attachments.
+              Files uploaded for Q&amp;A and attachments from your meetings.
             </p>
           </div>
           <div className="lg:hidden mb-8">
@@ -93,7 +93,7 @@ export default function KnowledgeBasePage() {
               Library
             </h2>
             <p className="text-slate-500 dark:text-text-muted mt-1">
-              Every file that came in: uploads for Q&amp;A and meeting attachments.
+              Files uploaded for Q&amp;A and attachments from your meetings.
             </p>
           </div>
 
