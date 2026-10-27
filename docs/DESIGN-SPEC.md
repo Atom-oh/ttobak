@@ -235,9 +235,23 @@ client-side and retain normalized selection across pagination; reset cursor on
 change. Empty pages with nextCursor can still have later matches. Hierarchy and
 classification never grant access to private content (ADR-036).
 
-All current account members may add members/change assignable roles. Nobody can
-assign owner. Removal/pending-invite revocation stay owner-only (ADR-034). UI
+All current account members may add members/change assignable non-owner roles.
+Removal/pending-invite revocation stay owner-only (ADR-034). UI
 visibility is not the authorization boundary.
+
+Initial Account creation can select another Owner by colleague or email.
+Show an unchecked "Keep me as a regular member (AM)" checkbox for this choice.
+Checked retains AM membership; unchecked hides and clears extra member selections,
+shows a creation receipt and stays on the Account list. Separate explicit
+meeting/document shares remain possible without Account membership. Reuse one
+creation UUID after a failed request, rotate it for edited input and reject stale
+results after an authentication change. Initial Owner assignment remains exclusive
+to creation; generic member operations never assign Owner (ADR-055).
+
+An initial pending Owner invitation exposes an explicit resend action on detail
+and the creator's receipt. Members or the recorded creator within thirty days can
+request delivery only to the current canonical Owner; no Account access is
+created. The server rechecks actual password status/identity at resend time.
 
 Account creation and the detail page use the authorized add-member API directly
 (`lib/accountInvite.ts`). A current member can invite a missing user: the server
