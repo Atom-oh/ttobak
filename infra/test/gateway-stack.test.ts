@@ -899,6 +899,19 @@ for bad in ({'Ref':'OtherRole'}, {'Fn::ImportValue':'unknown'}, qa):
       .toThrow(/ttobak:accountTermsMode/);
   });
 
+  test('transcriptCorrection: silent glossary correction is off by default and validated', () => {
+    const summarizeEnv = (value: Template) => Object.values(value.findResources('AWS::Lambda::Function'))
+      .find(resource => resource.Properties.FunctionName === 'ttobak-summarize')!.Properties.Environment.Variables;
+    expect(summarizeEnv(template).TRANSCRIPT_CORRECTION_MODE).toBe('off');
+    const on = buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined, { 'ttobak:transcriptCorrection': 'on' });
+    expect(summarizeEnv(on).TRANSCRIPT_CORRECTION_MODE).toBe('on');
+    const withFlag = Object.values(on.findResources('AWS::Lambda::Function'))
+      .filter(resource => resource.Properties.Environment?.Variables?.TRANSCRIPT_CORRECTION_MODE !== undefined);
+    expect(withFlag.map(resource => resource.Properties.FunctionName)).toEqual(['ttobak-summarize']);
+    expect(() => buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined, { 'ttobak:transcriptCorrection': 'true' }))
+      .toThrow(/ttobak:transcriptCorrection/);
+  });
+
   test('action-item DLQ is encrypted, retains seven days, and accepts only this rule', () => {
     const queueId = resourceId('AWS::SQS::Queue', 'QueueName', 'ttobak-action-items-dlq');
     const ruleId = resourceId('AWS::Events::Rule', 'Name', 'ttobak-action-items-requested');
