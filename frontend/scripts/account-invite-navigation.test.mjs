@@ -12,7 +12,7 @@ const transpile = (source) => ts.transpileModule(source, {
 }).outputText;
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
-function fixture(addMember) {
+function fixture(addMember, resendOwnerInvitation = async () => ({}), ownerInvitationPending = true) {
   const slots = [];
   let cursor = 0;
   let effects = [];
@@ -63,12 +63,16 @@ function fixture(addMember) {
     '@/lib/api': {
       accountApi: {
         get: async accountId => ({
-          accountId, name: accountId, ownerUserId: 'owner',
-          members: [{ userId: 'member', email: 'member@example.invalid', role: 'SSA' }],
+          accountId, name: accountId, ownerUserId: 'owner', ownerInvitationPending,
+          members: [
+            { userId: 'owner', email: 'owner@example.invalid', role: 'owner' },
+            { userId: 'member', email: 'member@example.invalid', role: 'SSA' },
+          ],
         }),
         meetings: emptyResult, insights: emptyResult,
         listDocuments: emptyResult, research: emptyResult,
         addMember,
+        resendOwnerInvitation,
       },
       projectApi: { accountProjects: async () => ({ projects: [] }) },
     },
@@ -100,6 +104,7 @@ function fixture(addMember) {
     async navigate(accountId) { pathname = `/accounts/${accountId}`; render(); await tick(); render(); },
     pick: email => find(node => node.type === MemberPicker).props.onPick({ email }),
     resend: () => find(node => node.type === 'button' && node.props.children === '초대 메일 다시 보내기'),
+    resendOwner: () => find(node => node.type === 'button' && node.props.children === 'Owner 초대 메일 다시 보내기'),
   };
 }
 
@@ -118,6 +123,26 @@ test('a queued invitation cannot be resent into a different Account after naviga
   await oldButton.props.onClick();
   assert.equal(calls.length, 1, 'a stale captured control must not issue another grant');
   assert.equal(calls[0].accountId, 'A');
+});
+
+test('an ordinary member can resend only the canonical Owner and stale navigation cannot resend', async () => {
+  const calls = [];
+  const page = fixture(async () => ({}), async (accountId, expectedUserId) => {
+    calls.push({ accountId, expectedUserId }); return { invited: true };
+  });
+  await page.start();
+  const stale = page.resendOwner();
+  assert.ok(stale, 'a member needs invitation recovery for a prepared Account');
+  await stale.props.onClick();
+  assert.deepEqual(calls, [{ accountId: 'A', expectedUserId: 'member' }]);
+  await page.navigate('B');
+  await stale.props.onClick();
+  assert.deepEqual(calls, [{ accountId: 'A', expectedUserId: 'member' }]);
+});
+
+test('an Account without an initial pending Owner invitation offers no recovery control', async () => {
+  const page = fixture(async () => ({}), async () => ({}), false);
+  await page.start(); assert.equal(page.resendOwner(), undefined);
 });
 
 test('a late Account A invitation result does not replace Account B invitation state', async () => {

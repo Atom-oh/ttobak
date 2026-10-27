@@ -161,10 +161,10 @@ capture. Report that limit instead of claiming a Mac build passed.
   min. The ADR-031 `ttobak-stt-recovery` tick re-drives only untranscribed
   single-file audio via two conditional claims, never via `GetMeetingDetail` or
   checkpoints; marked-failure deletion spares user data.
-- **Accounts:** any existing member may add members or change assignable roles;
-  nobody may assign `owner` (ADR-034). Removal and pending-invite revocation remain
-  owner-only. Account parent changes are owner-only; hierarchy never inherits
-  access. Meeting account filters classify results, not share them (ADR-036).
+- **Accounts:** members may add/change non-owner roles (ADR-034/054). Initial
+  creation may designate another Owner; creator AM membership is optional
+  (ADR-055). Removal, pending revocation and reparenting stay owner-only.
+  Hierarchy grants no access. Meeting filters classify, not share (ADR-036).
 - **Projects/research:** multi-account String Sets plus transactional reverse refs;
   project access is owner, direct member, or member of a linked account.
   `ProjectService.ListMyProjects` unions all three; its repository primitive only

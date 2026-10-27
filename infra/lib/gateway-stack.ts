@@ -24,10 +24,12 @@ import { PipelineFailures } from './pipeline-failures';
 import { HttpOrigin } from './http-origin';
 import { connectorCryptoLayer } from './connector-crypto';
 import { billingInsightUrlContext } from './billing-insight';
+import { DEFAULT_MODEL_CONFIGURATION, ModelConfiguration, validateModelConfiguration } from './model-config';
 
 export const RESEARCH_SFN_NAME = 'ttobak-research-workflow';
 
 export interface GatewayStackProps extends cdk.StackProps {
+  modelConfiguration?: ModelConfiguration;
   apiRole: iam.IRole;
   transcribeRole: iam.IRole;
   summarizeRole: iam.IRole;
@@ -204,6 +206,7 @@ export class GatewayStack extends cdk.Stack {
   public convertDocFunction?: lambda.DockerImageFunction;
   constructor(scope: Construct, id: string, props: GatewayStackProps) {
     super(scope, id, props);
+    const models = validateModelConfiguration(props.modelConfiguration ?? DEFAULT_MODEL_CONFIGURATION);
 
     // ttobak:domainName (cdk.json context) is a bare domain, e.g.
     // "ttobak.atomai.click" — fail synth early rather than deploying an api
@@ -324,7 +327,9 @@ export class GatewayStack extends cdk.Stack {
         AWS_REGION_NAME: cdk.Aws.REGION,
         // Live interpreter for /api/translate quality=high; must match AiStack's
         // InvokeInterpreterModel grant. Unset/blank means Amazon Translate only.
-        BEDROCK_TRANSLATE_MODEL_ID: 'global.openai.gpt-6-luna',
+        BEDROCK_TRANSLATE_MODEL_ID: models.translation,
+        // Deployment metadata: retained IAM grants, not additional runtime calls.
+        BEDROCK_TRANSLATE_RETAIN_MODEL_IDS: (models.retainedTranslation ?? []).join(','),
         // Per-user hourly /api/translate cost guard (0 disables a limit).
         TRANSLATE_HOURLY_LIMIT: rateLimitContext(this, 'ttobak:translateHourlyLimit', 3000),
         TRANSLATE_HIGH_HOURLY_LIMIT: rateLimitContext(this, 'ttobak:translateHighHourlyLimit', 1500),
@@ -467,7 +472,8 @@ export class GatewayStack extends cdk.Stack {
         TABLE_NAME: props.table.tableName,
         BUCKET_NAME: props.bucket.bucketName,
         BEDROCK_MODEL_ID: 'global.anthropic.claude-opus-5',
-        BEDROCK_SUMMARY_MODEL_ID: 'global.openai.gpt-6.1-sol',
+        BEDROCK_SUMMARY_MODEL_ID: models.meetingSummary,
+        BEDROCK_SUMMARY_RETAIN_MODEL_IDS: (models.retainedMeetingSummary ?? []).join(','),
         BEDROCK_SONNET_MODEL_ID: 'global.anthropic.claude-sonnet-5-5',
         ...autoTermsEnvironment(this),
         ...transcriptCorrectionEnvironment(this),

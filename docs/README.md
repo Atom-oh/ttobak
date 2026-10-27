@@ -26,6 +26,7 @@ Markdown for English language and historical/current status.
 | [PR review runbook](runbooks/pr-review.md) | Context delivery, evidence, latest-HEAD merge gate | Review scripts and workflow |
 | [Specialist review](pr-review-specialists.md) | Current role assignment, coverage and synthesis contract | Trusted workflow and review scripts |
 | [Deployment runbook](runbooks/deployment.md) | Build/deploy/rollback constraints | Deployment workflows |
+| [Model deployment](runbooks/model-deployment.md) | Environment/preset selection, exact model grants, acceptance and rollback | Model configuration, AI/Gateway stacks and infrastructure workflow |
 | [Frontend release](runbooks/frontend-release.md) | Dependency acceptance, CSP/cache, ordered publication and recovery | FrontendStack, npm lockfiles and shared publisher |
 | [Unverified account recovery](runbooks/unverified-account-recovery.md) | Identity-verified operator password recovery | Cognito and the authenticated verification flow |
 | [WebSocket runtime](runbooks/websocket-runtime.md) | CloudFront ingress, secret rotation, real acceptance | Frontend/Gateway stacks and ws-authorizer |
@@ -38,6 +39,7 @@ Markdown for English language and historical/current status.
 | [Connector activation acceptance](runbooks/connector-activation-2026-10-21.md) | Dated source/artifact-bound provider, grant, rollback, fixture disposition and guide evidence | Private receipt hashes; native-host limitations remain explicit |
 | [Summary privacy release](runbooks/summary-privacy-release.md) | Reader/writer targets, immutable cutoff, drain and cross-user acceptance | Exact deployed versions, parameters and dated acceptance evidence |
 | [Self-service Account invitations](decisions/ADR-054-self-service-account-invitations.md) | Member-authorized email invitation and identity-bound Account grants | Account service/handler, pending transactions and frontend invitation receipts |
+| [Designated initial Account Owner](decisions/ADR-055-designated-account-owner.md) | Owner invitation, optional creator AM membership and bounded creation receipts | Atomic creation, authenticated Owner resend and creator checkbox |
 
 ## Feature workflows
 

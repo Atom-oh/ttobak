@@ -54,27 +54,69 @@ func (h *AccountHandler) CreateAccount(w http.ResponseWriter, r *http.Request) {
 	email := middleware.GetUserEmail(ctx)
 
 	var req model.CreateAccountRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16*1024))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid request body")
 		return
 	}
-	acc, err := h.accountService.CreateAccount(ctx, userID, email, &req)
-	if err != nil {
-		writeAccountHierarchyError(w, err)
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid request body")
 		return
 	}
-	// Return the freshly-created account as a response (owner is the only member).
-	writeJSON(w, http.StatusCreated, model.AccountResponse{
-		AccountID:       acc.AccountID,
-		ParentAccountID: acc.ParentAccountID,
-		Name:            acc.Name,
-		Aliases:         acc.Aliases,
-		Domains:         acc.Domains,
-		Industry:        acc.Industry,
-		OwnerUserID:     acc.OwnerUserID,
-		Members:         []model.AccountMemberDTO{{UserID: userID, Email: email, Role: model.RoleOwner}},
-		CreatedAt:       acc.CreatedAt,
-	})
+	if req.OwnerEmail != "" && !middleware.GetEmailVerified(ctx) {
+		writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "이메일을 인증한 뒤 Owner를 초대하세요.")
+		return
+	}
+	acc, err := h.accountService.CreateAccountWithOwner(ctx, userID, email, &req)
+	if err != nil {
+		writeAccountCreationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, acc)
+}
+
+func (h *AccountHandler) ResendOwnerInvitation(w http.ResponseWriter, r *http.Request) {
+	if !middleware.GetEmailVerified(r.Context()) {
+		writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "이메일을 인증한 뒤 초대를 재전송하세요.")
+		return
+	}
+	var body *struct{}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil || body == nil {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid request body")
+		return
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid request body")
+		return
+	}
+	member, err := h.accountService.ResendOwnerInvitation(r.Context(), middleware.GetUserID(r.Context()), chi.URLParam(r, "accountId"))
+	if err != nil {
+		writeAccountCreationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, member)
+}
+
+func writeAccountCreationError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, service.ErrInvalidInviteEmail):
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "유효한 이메일 주소를 입력하세요.")
+	case errors.Is(err, service.ErrInvitationGrantFailed):
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInvitationGrantFailed, "초대 메일이 이미 요청되었을 수 있지만 Account 생성 또는 연결을 확인하지 못했습니다. 같은 입력으로 다시 시도하세요.")
+	case errors.Is(err, service.ErrInvitationRejected):
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "초대할 수 없는 이메일입니다. 허용된 이메일 도메인을 확인하세요.")
+	case errors.Is(err, service.ErrInvitationRateLimited):
+		writeError(w, http.StatusTooManyRequests, model.ErrCodeRateLimited, "초대 요청이 많습니다. 한 시간 후 다시 시도하세요.")
+	case errors.Is(err, service.ErrInvitationNotPending):
+		writeError(w, http.StatusConflict, model.ErrCodeConflict, "이미 가입한 사용자에게는 초대 메일을 재발송할 수 없습니다.")
+	case errors.Is(err, service.ErrInvitationUnavailable):
+		writeError(w, http.StatusServiceUnavailable, model.ErrCodeInternalError, "초대 서비스를 사용할 수 없습니다. 잠시 후 다시 시도하세요.")
+	default:
+		writeAccountHierarchyError(w, err)
+	}
 }
 
 func (h *AccountHandler) UpdateAccountParent(w http.ResponseWriter, r *http.Request) {
