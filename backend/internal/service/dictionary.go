@@ -59,6 +59,9 @@ type DictionaryService struct {
 	now              func() time.Time
 	// isMember reports Account membership; nil refuses every Account layer.
 	isMember func(ctx context.Context, accountID, userID string) (bool, error)
+	// accountOrder lists the user's Account IDs in recency order for the
+	// vocabulary plan; nil plans no Account layer.
+	accountOrder func(ctx context.Context, userID string) ([]string, error)
 }
 
 // NewDictionaryService creates a new dictionary service

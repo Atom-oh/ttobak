@@ -95,3 +95,109 @@ func TestJoinWhisperPromptCapsAtWholeTerms(t *testing.T) {
 		t.Fatal("a small dictionary must pass through unchanged")
 	}
 }
+
+// layerStore serves dictionary rows per partition.
+type layerStore struct {
+	service.DictionaryStore
+	blob *model.UserDictionary
+	rows map[string][]model.DictTerm
+}
+
+func (s *layerStore) GetDictionary(context.Context, string) (*model.UserDictionary, error) {
+	return s.blob, nil
+}
+func (s *layerStore) ListDictTerms(_ context.Context, pk string) ([]model.DictTerm, error) {
+	return s.rows[pk], nil
+}
+
+func promptRow(pk, display, origin, state string) model.DictTerm {
+	key := service.TermKey(display)
+	return model.DictTerm{PK: pk, SK: "DICTTERM#" + key, TermKey: key, DisplayAs: display, Phrase: display, Origin: origin, State: state, AddedAt: "2026-10-18T00:00:00.000001Z"}
+}
+
+func layerPromptFixture(members map[string]bool, memberErr error) *service.DictionaryService {
+	store := &layerStore{rows: map[string][]model.DictTerm{
+		"USER#u1": {
+			promptRow("USER#u1", "PersonalAuto", model.TermOriginAuto, model.TermStateActive),
+			promptRow("USER#u1", "PersonalManual", model.TermOriginManual, model.TermStateActive),
+			promptRow("USER#u1", "PersonalSuggested", model.TermOriginAuto, model.TermStateSuggested),
+		},
+		"ACCOUNT#a1": {
+			promptRow("ACCOUNT#a1", "AlphaGrid", model.TermOriginAuto, model.TermStateActive),
+			promptRow("ACCOUNT#a1", "AccountSuggested", model.TermOriginAuto, model.TermStateSuggested),
+			promptRow("ACCOUNT#a1", "AccountGone", model.TermOriginManual, model.TermStateDeleted),
+		},
+		"DICT#COMMON": {
+			promptRow("DICT#COMMON", "K-culture", model.TermOriginManual, model.TermStateActive),
+			promptRow("DICT#COMMON", "CommonGone", model.TermOriginManual, model.TermStateDeleted),
+		},
+	}}
+	svc := service.NewDictionaryServiceWithStore(store, nil)
+	svc.SetMembershipReader(func(_ context.Context, accountID, userID string) (bool, error) {
+		return members[accountID+"/"+userID], memberErr
+	})
+	return svc
+}
+
+func TestWhisperPromptLayersForMeetingAccount(t *testing.T) {
+	ctx := context.Background()
+	svc := layerPromptFixture(map[string]bool{"a1/u1": true}, nil)
+	got, err := svc.WhisperPromptTerms(ctx, "u1", "a1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "PersonalManual, AlphaGrid, K-culture, PersonalAuto"; joinWhisperPrompt(got) != want {
+		t.Fatalf("member prompt = %q, want %q", joinWhisperPrompt(got), want)
+	}
+
+	// A non-member, a meeting without an Account and a failed membership read
+	// all drop the Account layer and keep the rest.
+	rest := "PersonalManual, K-culture, PersonalAuto"
+	for name, tc := range map[string]struct {
+		svc       *service.DictionaryService
+		accountID string
+	}{
+		"non-member": {layerPromptFixture(nil, nil), "a1"},
+		"no account": {svc, ""},
+		"read error": {layerPromptFixture(map[string]bool{"a1/u1": true}, fmt.Errorf("throttled")), "a1"},
+	} {
+		got, err := tc.svc.WhisperPromptTerms(ctx, "u1", tc.accountID)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if joinWhisperPrompt(got) != rest {
+			t.Fatalf("%s prompt = %q, want %q", name, joinWhisperPrompt(got), rest)
+		}
+	}
+}
+
+func TestWhisperPromptLegacyBlobCountsAsManual(t *testing.T) {
+	store := &layerStore{
+		blob: &model.UserDictionary{UserID: "u1", Terms: []model.DictionaryTerm{{Phrase: "LegacyTerm", DisplayAs: "LegacyTerm"}}},
+		rows: map[string][]model.DictTerm{
+			"USER#u1":     {promptRow("USER#u1", "PersonalAuto", model.TermOriginAuto, model.TermStateActive)},
+			"DICT#COMMON": {promptRow("DICT#COMMON", "K-culture", model.TermOriginManual, model.TermStateActive)},
+		},
+	}
+	got, err := service.NewDictionaryServiceWithStore(store, nil).WhisperPromptTerms(context.Background(), "u1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "LegacyTerm, K-culture, PersonalAuto"; joinWhisperPrompt(got) != want {
+		t.Fatalf("prompt = %q, want %q", joinWhisperPrompt(got), want)
+	}
+}
+
+func TestWhisperInputsPassesMeetingAccount(t *testing.T) {
+	original := loadDictionaryTerms
+	t.Cleanup(func() { loadDictionaryTerms = original })
+	var gotUser, gotAccount string
+	loadDictionaryTerms = func(_ context.Context, userID, accountID string) ([]string, error) {
+		gotUser, gotAccount = userID, accountID
+		return []string{"AlphaGrid"}, nil
+	}
+	prompt, _ := whisperInputs(context.Background(), &model.Meeting{AccountID: "a1"}, "u1")
+	if prompt != "AlphaGrid" || gotUser != "u1" || gotAccount != "a1" {
+		t.Fatalf("prompt=%q user=%q account=%q", prompt, gotUser, gotAccount)
+	}
+}

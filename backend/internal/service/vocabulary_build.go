@@ -187,22 +187,30 @@ type vocabStep struct {
 // step. A term write committed after the listing is followed by its writer's
 // own ensure, which either moves the row first (failing this step's CAS) or
 // sees this step's write; every step that could reach the provider relists,
-// so a deleted term is never built back in from a stale snapshot.
+// so a deleted term is never built back in from a stale snapshot. The terms
+// are every layer's rows (vocabularyLayers); only the Account order is read
+// once per call, while membership and rows are re-read on every step. An
+// order failure skips the whole call (no claim, no plan) with a warning.
 func (s *DictionaryService) ensureVocabulary(ctx context.Context, userID, lang string, manual bool) []string {
 	bypass := manual
 	var warnings []string
+	accountIDs, err := s.vocabularyAccountOrder(ctx, userID)
+	if err != nil {
+		log.Printf("vocabulary build skipped for user %s: %v", userID, err)
+		return append(warnings, vocabularyRebuildWarning)
+	}
 	for step := 0; step < vocabEnsureSteps; step++ {
 		st, err := s.repo.GetVocabularyState(ctx, userID, model.VocabContextPersonal, lang)
 		if err != nil {
 			log.Printf("vocabulary state read failed for user %s: %v", userID, err)
 			return append(warnings, vocabularyRebuildWarning)
 		}
-		rows, err := s.repo.ListDictTerms(ctx, model.PrefixUser+userID)
+		layers, err := s.listVocabularyLayers(ctx, userID, accountIDs)
 		if err != nil {
 			log.Printf("vocabulary build skipped for user %s: %v", userID, err)
 			return append(warnings, vocabularyRebuildWarning)
 		}
-		plan := planVocabulary(rows, lang)
+		plan := planVocabularyLayers(layers, lang)
 		if st == nil {
 			if plan.empty {
 				return warnings

@@ -157,6 +157,8 @@ func init() {
 		member, err := repo.GetMember(ctx, accountID, userID)
 		return member != nil, err
 	})
+	// Account terms join the personal vocabulary in meeting-recency order.
+	dictService.SetAccountOrder(service.AccountRecencyOrder(repo))
 	dictHandler := handler.NewDictionaryHandler(dictService)
 	translateHandler := handler.NewTranslateHandler(translateService)
 	// Per-user hourly cost guard; 0 disables a limit, storage errors fail open.

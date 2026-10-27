@@ -90,6 +90,13 @@ func init() {
 	// batch Transcribe without a dictionary page visit.
 	dictService := service.NewDictionaryService(dictionaryRepo, transcribe.NewFromConfig(cfg))
 	dictService.SetVocabularyBuilder(s3Client, bucketName, service.ParseVocabRebuildMinInterval(os.Getenv("VOCAB_REBUILD_MIN_INTERVAL")))
+	// The vocabulary plan re-checks each Account's membership (consistent
+	// read) before adding its terms, in meeting-recency order.
+	dictService.SetMembershipReader(func(ctx context.Context, accountID, userID string) (bool, error) {
+		member, err := repo.GetMember(ctx, accountID, userID)
+		return member != nil, err
+	})
+	dictService.SetAccountOrder(service.AccountRecencyOrder(repo))
 	termsService := service.NewTermsAnalysisService(repo, service.NewTermsMerger(dictionaryRepo),
 		dictService, bedrockService, attachmentTextService, service.TermsPublisher(ebClient), service.TermsConfigFromEnv())
 	termsService.SetVocabularyRefresher(func(ctx context.Context, ownerID string) {
