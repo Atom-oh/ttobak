@@ -137,7 +137,15 @@ export function autoTermsEnvironment(scope: Construct): Record<string, string> {
   if (!/^(global|apac)\.anthropic\.claude-[a-z0-9.-]+$/.test(model)) {
     throw new Error(`ttobak:bedrockTermsModelId must be a Claude inference profile, got ${JSON.stringify(model)}`);
   }
-  return { AUTO_TERMS_MODE: mode, AUTO_TERMS_USERS: users, AUTO_TERMS_MIN_CONFIDENCE: confidence, BEDROCK_TERMS_MODEL_ID: model };
+  // Account layer from linked meetings (layered dictionary); needs mode on.
+  const accountMode = read('ttobak:accountTermsMode') || 'off';
+  if (accountMode !== 'off' && accountMode !== 'on') {
+    throw new Error(`ttobak:accountTermsMode must be off or on, got ${JSON.stringify(accountMode)}`);
+  }
+  return {
+    AUTO_TERMS_MODE: mode, AUTO_TERMS_USERS: users, AUTO_TERMS_MIN_CONFIDENCE: confidence, BEDROCK_TERMS_MODEL_ID: model,
+    ACCOUNT_TERMS_MODE: accountMode,
+  };
 }
 
 export class GatewayStack extends cdk.Stack {

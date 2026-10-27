@@ -97,6 +97,20 @@ func TestTermsAnalysisTransitions(t *testing.T) {
 			[]string{"attribute_exists (PK)"},
 			[]string{`runId = {"S":"run-1"}`, `status = {"S":"running"}`, `leaseUntil = {"N":"5000"}`, `leaseUntil > {"N":"1800000000000"}`},
 			[]string{`status = {"S":"succeeded"}`, "succeededSourceHash = sourceHash", `"TAINTED_SUGGEST_ONLY"`, "acceptedTerms", acceptedKey, `leaseUntil = {"N":"0"}`}, nil},
+		{"record account adds to the swept set for the observed run while the meeting exists",
+			func(r *DynamoDBRepository) error {
+				return r.RecordTermsAccount(context.Background(), "owner", "m1", "run-1", "a1", nil)
+			},
+			[]string{"attribute_exists (PK)"},
+			[]string{`runId = {"S":"run-1"}`},
+			[]string{`ADD accountIds {"SS":["a1"]}`}, []string{"status", "acceptedTerms", "SET"}},
+		{"record account adds the Account keys in the same update",
+			func(r *DynamoDBRepository) error {
+				return r.RecordTermsAccount(context.Background(), "owner", "m1", "run-1", "a1", []string{acceptedKey, acceptedKey})
+			},
+			[]string{"attribute_exists (PK)"},
+			[]string{`runId = {"S":"run-1"}`},
+			[]string{`accountIds {"SS":["a1"]}`, `accountAcceptedTerms {"SS":["` + acceptedKey + `"]}`}, []string{"status", "SET"}},
 		{"fail matches the observed run and keeps accepted terms",
 			func(r *DynamoDBRepository) error {
 				return r.FailTermsAnalysis(context.Background(), "m1", prior, model.AnalysisPersistenceFail, accepted, now)
@@ -173,6 +187,15 @@ func TestTermsAnalysisRejectsInvalidStateWithoutWriting(t *testing.T) {
 		},
 		"queue without a source hash": func(r *DynamoDBRepository) error {
 			return r.QueueTermsAnalysis(context.Background(), "o", "m1", nil, &model.TermsAnalysis{RunID: "r"})
+		},
+		"record without an account": func(r *DynamoDBRepository) error {
+			return r.RecordTermsAccount(context.Background(), "o", "m1", "r", "", nil)
+		},
+		"record text instead of a key": func(r *DynamoDBRepository) error {
+			return r.RecordTermsAccount(context.Background(), "o", "m1", "r", "a1", []string{"AlphaGrid"})
+		},
+		"record more Account keys than the cap": func(r *DynamoDBRepository) error {
+			return r.RecordTermsAccount(context.Background(), "o", "m1", "r", "a1", make([]string, model.MaxTermsAccountAccepted+1))
 		},
 		"queue without an owner": func(r *DynamoDBRepository) error {
 			return r.QueueTermsAnalysis(context.Background(), "", "m1", nil, &model.TermsAnalysis{RunID: "r", SourceHash: "h"})
@@ -354,5 +377,135 @@ func TestDeleteOrphanAutoTermLosesToConcurrentObservation(t *testing.T) {
 	last := (*calls)[len(*calls)-1]
 	if cond := resolved(last.body, "ConditionExpression"); !strings.Contains(cond, `version = {"N":"4"}`) {
 		t.Fatalf("delete must bind the version read before the count: %s", cond)
+	}
+}
+
+// A meeting merged into an Account (accountIds on the run state) is swept
+// there too, by the recorded ID, with the personal rules: its observation
+// goes, an orphaned auto term goes, and a term another meeting still
+// supports, a manual term and an edited auto term stay.
+func TestSweepMeetingTermsCleansRecordedAccountLayer(t *testing.T) {
+	k1, k2, k3, k4 := strings.Repeat("a", 32), strings.Repeat("b", 32), strings.Repeat("c", 32), strings.Repeat("e", 32)
+	keys := ""
+	for i, k := range []string{k1, k2, k3, k4} {
+		if i > 0 {
+			keys += ","
+		}
+		keys += `{"M":{"termKey":{"S":"` + k + `"}}}`
+	}
+	state := `{"Item":{"PK":{"S":"MEETING#m1"},"SK":{"S":"ANALYSIS#terms"},"ownerId":{"S":"owner"},"runId":{"S":"r"},"status":{"S":"succeeded"},` +
+		`"accountIds":{"SS":["a1"]},"acceptedTerms":{"L":[` + keys + `]}}}`
+	acctTermItem := func(key, origin, edited string) string {
+		extra := ""
+		if edited != "" {
+			extra = `,"userEditedAt":{"S":"` + edited + `"}`
+		}
+		return `{"Item":{"PK":{"S":"ACCOUNT#a1"},"SK":{"S":"DICTTERM#` + key + `"},"termKey":{"S":"` + key + `"},"origin":{"S":"` + origin +
+			`"},"state":{"S":"active"},"version":{"N":"7"}` + extra + `}}`
+	}
+	dict, calls := dictWire(t, func(_ int, op string, body map[string]any) (int, string) {
+		encoded, _ := json.Marshal(body)
+		text := string(encoded)
+		inAccount := strings.Contains(text, "ACCOUNT#a1")
+		switch {
+		case op == "GetItem" && strings.Contains(text, "ANALYSIS#terms"):
+			return 200, state
+		case op == "Query" && inAccount && strings.Contains(text, k2):
+			return 200, `{"Count":1}` // another meeting still supports k2
+		case op == "Query":
+			return 200, `{"Count":0}`
+		case op == "GetItem" && inAccount && strings.Contains(text, k1):
+			return 200, acctTermItem(k1, model.TermOriginAuto, "")
+		case op == "GetItem" && inAccount && strings.Contains(text, k2):
+			return 200, acctTermItem(k2, model.TermOriginAuto, "")
+		case op == "GetItem" && inAccount && strings.Contains(text, k3):
+			return 200, acctTermItem(k3, model.TermOriginManual, "")
+		case op == "GetItem" && inAccount && strings.Contains(text, k4):
+			return 200, acctTermItem(k4, model.TermOriginAuto, "2026-10-20T00:00:00Z")
+		}
+		return 200, `{}`
+	})
+	if err := NewDynamoDBRepository(dict.client, "dict-test").SweepMeetingTerms(context.Background(), "owner", "m1"); err != nil {
+		t.Fatal(err)
+	}
+	var personal, account []string
+	for _, c := range *calls {
+		if c.op != "DeleteItem" {
+			continue
+		}
+		key := c.body["Key"].(map[string]any)
+		pk, sk := key["PK"].(map[string]any)["S"].(string), key["SK"].(map[string]any)["S"].(string)
+		switch pk {
+		case "USER#owner":
+			personal = append(personal, sk)
+		case "ACCOUNT#a1":
+			account = append(account, sk)
+			if strings.HasPrefix(sk, "DICTTERM#") {
+				requireAll(t, "account orphan delete", resolved(c.body, "ConditionExpression"), `version = {"N":"7"}`, `origin = {"S":"auto"}`, "attribute_not_exists (userEditedAt)")
+			}
+		}
+	}
+	if len(personal) != 4 {
+		t.Fatalf("the personal sweep must still run: %v", personal)
+	}
+	want := "DICTOBS#" + k1 + "#m1,DICTTERM#" + k1 + ",DICTOBS#" + k2 + "#m1,DICTOBS#" + k3 + "#m1,DICTOBS#" + k4 + "#m1"
+	if got := strings.Join(account, ","); got != want {
+		t.Fatalf("account sweep:\n got %s\nwant %s", got, want)
+	}
+	last := (*calls)[len(*calls)-1]
+	if last.op != "DeleteItem" || !strings.Contains(fmtKey(last), "ANALYSIS#terms") {
+		t.Fatal("the run state goes last, after both partitions are swept")
+	}
+}
+
+func fmtKey(c dictCall) string {
+	encoded, _ := json.Marshal(c.body["Key"])
+	return string(encoded)
+}
+
+// Account keys the personal merge skipped (a personal manual K) are recorded
+// only in accountAcceptedTerms; the Account sweep covers them and J, while
+// the personal sweep keeps to acceptedTerms.
+func TestSweepMeetingTermsCleansAccountOnlyKeys(t *testing.T) {
+	kJ, kK := strings.Repeat("a", 32), strings.Repeat("b", 32)
+	state := `{"Item":{"PK":{"S":"MEETING#m1"},"SK":{"S":"ANALYSIS#terms"},"ownerId":{"S":"owner"},"runId":{"S":"r"},"status":{"S":"succeeded"},` +
+		`"accountIds":{"SS":["a1"]},"accountAcceptedTerms":{"SS":["` + kK + `","` + kJ + `"]},"acceptedTerms":{"L":[{"M":{"termKey":{"S":"` + kJ + `"}}}]}}}`
+	dict, calls := dictWire(t, func(_ int, op string, body map[string]any) (int, string) {
+		encoded, _ := json.Marshal(body)
+		text := string(encoded)
+		switch {
+		case op == "GetItem" && strings.Contains(text, "ANALYSIS#terms"):
+			return 200, state
+		case op == "Query":
+			return 200, `{"Count":0}`
+		case op == "GetItem" && strings.Contains(text, "ACCOUNT#a1"):
+			key := kJ
+			if strings.Contains(text, kK) {
+				key = kK
+			}
+			return 200, `{"Item":{"PK":{"S":"ACCOUNT#a1"},"SK":{"S":"DICTTERM#` + key + `"},"termKey":{"S":"` + key + `"},"origin":{"S":"auto"},"state":{"S":"active"},"version":{"N":"2"}}}`
+		}
+		return 200, `{}`
+	})
+	if err := NewDynamoDBRepository(dict.client, "dict-test").SweepMeetingTerms(context.Background(), "owner", "m1"); err != nil {
+		t.Fatal(err)
+	}
+	deleted := map[string][]string{}
+	for _, c := range *calls {
+		if c.op != "DeleteItem" {
+			continue
+		}
+		key := c.body["Key"].(map[string]any)
+		pk, sk := key["PK"].(map[string]any)["S"].(string), key["SK"].(map[string]any)["S"].(string)
+		deleted[pk] = append(deleted[pk], sk)
+	}
+	if got := strings.Join(deleted["USER#owner"], ","); got != "DICTOBS#"+kJ+"#m1" {
+		t.Fatalf("personal sweep: %s", got)
+	}
+	got := strings.Join(deleted["ACCOUNT#a1"], ",")
+	for _, want := range []string{"DICTOBS#" + kJ + "#m1", "DICTTERM#" + kJ, "DICTOBS#" + kK + "#m1", "DICTTERM#" + kK} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("account sweep must delete %s: %s", want, got)
+		}
 	}
 }

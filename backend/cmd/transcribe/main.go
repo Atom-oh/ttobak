@@ -63,6 +63,12 @@ func init() {
 
 	dictRepo := repository.NewDictionaryRepository(dynamoClient, tableName)
 	dictService = service.NewDictionaryService(dictRepo, transcribeClient)
+	// An Account's terms enter the prompt only for a current member
+	// (consistent read of the membership row).
+	dictService.SetMembershipReader(func(ctx context.Context, accountID, userID string) (bool, error) {
+		member, err := repo.GetMember(ctx, accountID, userID)
+		return member != nil, err
+	})
 
 	ecsClient = ecs.NewFromConfig(cfg)
 	s3Client, outputBucketName = s3Client0, outputBucket
@@ -353,7 +359,11 @@ type ecsAPI interface {
 func whisperInputs(ctx context.Context, meeting *model.Meeting, userID string) (string, int) {
 	var initialPrompt string
 	if userID != "" && loadDictionaryTerms != nil {
-		if phrases, err := loadDictionaryTerms(ctx, userID); err == nil && len(phrases) > 0 {
+		accountID := ""
+		if meeting != nil {
+			accountID = meeting.AccountID
+		}
+		if phrases, err := loadDictionaryTerms(ctx, userID, accountID); err == nil && len(phrases) > 0 {
 			initialPrompt = joinWhisperPrompt(phrases)
 			log.Printf("Whisper initial_prompt: %d terms for user %s", len(phrases), userID)
 		}
@@ -373,8 +383,10 @@ func whisperInputs(ctx context.Context, meeting *model.Meeting, userID string) (
 	return initialPrompt, numSpeakers
 }
 
-var loadDictionaryTerms = func(ctx context.Context, userID string) ([]string, error) {
-	return dictionaryDisplayTerms(ctx, dictService, userID)
+// loadDictionaryTerms returns the prompt terms for a meeting in layer order:
+// Personal manual, the meeting's Account (members only), Common, Personal auto.
+var loadDictionaryTerms = func(ctx context.Context, userID, accountID string) ([]string, error) {
+	return dictService.WhisperPromptTerms(ctx, userID, accountID)
 }
 
 func whisperRunTaskInput(meetingID, userID, audioKey, initialPrompt, outputKey string, numSpeakers int, opts whisperTaskOptions) *ecs.RunTaskInput {

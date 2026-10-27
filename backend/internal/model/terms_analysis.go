@@ -27,6 +27,10 @@ const (
 	// creates must be listed there, because deletion cleanup finds the
 	// meeting's DICTOBS rows only through it.
 	MaxTermsAccepted = 40
+
+	// MaxTermsAccountAccepted bounds accountAcceptedTerms, the keys a meeting
+	// merged into Accounts; a key that does not fit is not merged there.
+	MaxTermsAccountAccepted = 200
 )
 
 // TermsAcceptedTerm identifies one term this meeting has an observation for.
@@ -70,6 +74,40 @@ type TermsAnalysis struct {
 	ErrorCode           string              `dynamodbav:"errorCode" json:"errorCode,omitempty"`
 	Counters            TermsCounters       `dynamodbav:"counters" json:"counters"`
 	AcceptedTerms       []TermsAcceptedTerm `dynamodbav:"acceptedTerms,omitempty" json:"-"`
+	// AccountIDs are the Accounts this meeting's terms were merged into,
+	// recorded before each Account merge; the deletion sweep cleans each
+	// ACCOUNT# partition for AccountSweepKeys. The set only grows, so an
+	// Account the meeting was later unlinked from is still swept.
+	AccountIDs []string `dynamodbav:"accountIds,omitempty,stringset" json:"-"`
+	// AccountAcceptedTerms are the term keys merged into those Accounts,
+	// recorded with AccountIDs before the merge. The personal merge can skip
+	// a key (a personal manual or tombstoned term) that the Account merge
+	// still observes, so AcceptedTerms alone does not cover the Account.
+	AccountAcceptedTerms []string `dynamodbav:"accountAcceptedTerms,omitempty,stringset" json:"-"`
+}
+
+// AccountSweepKeys is the union of AcceptedTerms and AccountAcceptedTerms in
+// first-seen order: every key that may have an observation in an ACCOUNT#
+// partition recorded in AccountIDs.
+func (a *TermsAnalysis) AccountSweepKeys() []string {
+	if a == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var keys []string
+	add := func(key string) {
+		if key != "" && !seen[key] {
+			seen[key] = true
+			keys = append(keys, key)
+		}
+	}
+	for _, t := range a.AcceptedTerms {
+		add(t.TermKey)
+	}
+	for _, key := range a.AccountAcceptedTerms {
+		add(key)
+	}
+	return keys
 }
 
 // TermsRequested is the ttobak.analysis/TermsRequested event detail. It
