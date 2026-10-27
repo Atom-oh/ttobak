@@ -17,7 +17,7 @@ function loadModule(path) {
 // vm-realm arrays differ in prototype; compare by value.
 const same = (a, b) => assert.deepEqual(JSON.parse(JSON.stringify(a)), b);
 
-const { termSourceBadges, resolveLayer, layerAllowsCreate, LAYER_TABS } = loadModule('lib/dictionary.ts');
+const { termSourceBadges, resolveLayer, layerAllowsCreate, LAYER_TABS, isRestorable } = loadModule('lib/dictionary.ts');
 
 test('termSourceBadges: one badge per kind, fixed order, Korean labels', () => {
   const sources = [
@@ -48,4 +48,10 @@ test('only Common refuses manual adds; tabs read 개인/계정/공통', () => {
   assert.equal(layerAllowsCreate('personal'), true);
   assert.equal(layerAllowsCreate('account:a1'), true);
   same(LAYER_TABS.map((t) => t.label), ['개인', '계정', '공통']);
+});
+
+test('only a change with a live earlier state offers restore', () => {
+  assert.equal(isRestorable({ before: { state: 'active' } }), true);
+  assert.equal(isRestorable({ before: { state: 'deleted' } }), false);
+  assert.equal(isRestorable({}), false);
 });

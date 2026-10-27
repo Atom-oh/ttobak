@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/ttobak/backend/internal/model"
@@ -47,5 +48,23 @@ func TestListLayerPersonalReportsFailedMigration(t *testing.T) {
 	items, err := svc.ListLayer(context.Background(), "u1", model.DictLayerPersonal)
 	if err != nil || len(items) != len(store.blob.Terms) {
 		t.Fatalf("the next list retries the migration: %+v %v", items, err)
+	}
+}
+
+func TestListDeletedCommonListsOnlyTheNewestDeletions(t *testing.T) {
+	store := newLayerStore()
+	svc := newLayerService(store)
+	ctx := context.Background()
+	var keys []string
+	for i := 0; i <= MaxDeletedCommonListed; i++ {
+		key := store.seed(model.PrefixDictCommon, fmt.Sprintf("Term %03d", i)).TermKey
+		if err := svc.DeleteCommonTerm(ctx, "u1", key, nil); err != nil {
+			t.Fatal(err)
+		}
+		keys = append(keys, key)
+	}
+	got, err := svc.ListDeletedCommon(ctx)
+	if err != nil || len(got) != MaxDeletedCommonListed || got[0].TermID != keys[len(keys)-1] || got[len(got)-1].TermID != keys[1] {
+		t.Fatalf("want the newest %d deletions, newest first: %d %v", MaxDeletedCommonListed, len(got), err)
 	}
 }

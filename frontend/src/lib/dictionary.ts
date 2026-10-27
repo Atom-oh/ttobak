@@ -54,8 +54,16 @@ export interface TermLogEntry {
   /** update, delete or restore. Typed loosely: bare icon-name literals would enter the bundled icon font. */
   action: string;
   at: string;
-  before?: DictTermItem;
-  after?: DictTermItem;
+  before?: TermLogSnapshot;
+  after?: TermLogSnapshot;
+}
+
+/** A term as an audit row stored it; a delete's `after` is a tombstone. */
+export type TermLogSnapshot = Omit<DictTermItem, 'state'> & { state: DictTermItem['state'] | 'deleted' };
+
+/** Only a change with a live earlier state can be restored (the server rejects the rest). */
+export function isRestorable(entry: Pick<TermLogEntry, 'before'>): boolean {
+  return entry.before !== undefined && entry.before.state !== 'deleted';
 }
 
 const SOURCE_LABELS: ReadonlyArray<{ kind: TermSourceKind; label: string }> = [

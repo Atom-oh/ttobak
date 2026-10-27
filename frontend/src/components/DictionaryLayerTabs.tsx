@@ -10,6 +10,10 @@ import type { AccountSummary } from '@/types/meeting';
 import { DictionaryTable } from './DictionaryTable';
 import { TermHistory } from './TermHistory';
 
+const hasWarnings = (result: unknown): boolean =>
+  typeof result === 'object' && result !== null && Array.isArray((result as { warnings?: unknown }).warnings)
+  && (result as { warnings: unknown[] }).warnings.length > 0;
+
 const field = 'w-full px-3 py-2 text-sm bg-slate-100 dark:bg-surface-lowest dark:border dark:border-white/10 dark:text-text-main border-none rounded-lg focus:ring-2 focus:ring-primary/20';
 
 /** One shared (Account or Common) layer: list, edit, delete, and for Common its history. */
@@ -21,37 +25,55 @@ function LayerDictionary({ layer }: { layer: DictionaryLayer }) {
   const [history, setHistory] = useState<Pick<DictTermItem, 'termId' | 'displayAs'> | null>(null);
   // Common only: the 삭제된 항목 view lists tombstones that 기록 can restore.
   const [showDeleted, setShowDeleted] = useState(false);
-  const [deleted, setDeleted] = useState<DeletedCommonTerm[]>([]);
+  // null until first opened: the deleted view costs an audit read per term.
+  const [deleted, setDeleted] = useState<DeletedCommonTerm[] | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [newDisplayAs, setNewDisplayAs] = useState('');
   const [newHeardAs, setNewHeardAs] = useState('');
   const seq = useRef(0);
+  const deletedSeq = useRef(0);
 
   const load = useCallback(async () => {
     const mine = ++seq.current;
     try {
-      const [{ items: rows }, gone] = await Promise.all([
-        dictionaryApi.listLayer(layer),
-        layer === 'common' ? dictionaryApi.listDeletedCommon() : Promise.resolve({ items: [] as DeletedCommonTerm[] }),
-      ]);
-      if (mine === seq.current) { setItems(rows ?? []); setDeleted(gone.items ?? []); setError(null); }
+      const { items: rows } = await dictionaryApi.listLayer(layer);
+      if (mine === seq.current) { setItems(rows ?? []); setError(null); }
     } catch (err) {
       if (mine === seq.current) { setItems((prev) => prev ?? []); setError(err instanceof Error ? err.message : '사전을 불러오지 못했습니다.'); }
     }
   }, [layer]);
 
+  const loadDeleted = useCallback(async () => {
+    const mine = ++deletedSeq.current;
+    try {
+      const { items: gone } = await dictionaryApi.listDeletedCommon();
+      if (mine === deletedSeq.current) setDeleted(gone ?? []);
+    } catch (err) {
+      if (mine === deletedSeq.current) { setDeleted((prev) => prev ?? []); setError(err instanceof Error ? err.message : '삭제된 항목을 불러오지 못했습니다.'); }
+    }
+  }, []);
+
+  // LayerDictionary is keyed by layer, so a layer change remounts it fresh.
   useEffect(() => {
-    setItems(null); setHistory(null); setError(null);
     void load();
     const counter = seq;
-    return () => { counter.current++; };
+    const deletedCounter = deletedSeq;
+    return () => { counter.current++; deletedCounter.current++; };
   }, [load]);
+
+  const refreshDeleted = () => {
+    if (showDeleted) void loadDeleted();
+    else setDeleted(null);
+  };
 
   const mutate = async (key: string, run: () => Promise<unknown>, done: () => void) => {
     if (!claimInFlight(inFlight.current, key)) return false;
     setBusyTermIds(new Set(inFlight.current));
     setError(null);
+    setNotice(null);
     try {
-      await run();
+      const result = await run();
+      if (hasWarnings(result)) setNotice('변경은 저장됐지만 일부 정리 작업이 끝나지 않았습니다.');
       done();
       return true;
     } catch (err) {
@@ -71,7 +93,7 @@ function LayerDictionary({ layer }: { layer: DictionaryLayer }) {
     void mutate(item.termId, () => dictionaryApi.deleteLayerTerm(layer, item.termId, item.version), () => {
       setItems((prev) => prev?.filter((t) => t.termId !== item.termId) ?? prev);
       setHistory((h) => (h?.termId === item.termId ? null : h));
-      if (layer === 'common') void load(); // the tombstone joins 삭제된 항목
+      if (layer === 'common') refreshDeleted(); // the tombstone joins 삭제된 항목
     });
   };
 
@@ -93,19 +115,27 @@ function LayerDictionary({ layer }: { layer: DictionaryLayer }) {
   return (
     <div className="space-y-6">
       {error && <div className="p-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-lg">{error}</div>}
+      {notice && <div className="p-4 bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 text-sm rounded-lg">{notice}</div>}
       {isCommon && (
         <p className="text-xs text-slate-500 dark:text-text-muted">
           공통 사전은 모든 사용자가 함께 쓰며, 누구나 편집·삭제할 수 있습니다. 변경은 기록되고 복원할 수 있습니다.
         </p>
       )}
       {isCommon && (
-        <button onClick={() => { setShowDeleted((v) => !v); setHistory(null); }} aria-pressed={showDeleted}
+        <button
+          onClick={() => {
+            if (!showDeleted) void loadDeleted();
+            setShowDeleted(!showDeleted); setHistory(null);
+          }}
+          aria-pressed={showDeleted}
           className="px-3 py-1.5 text-xs font-semibold rounded-full bg-slate-100 text-slate-600 dark:bg-white/5 dark:text-text-secondary">
-          삭제된 항목 {deleted.length}
+          삭제된 항목{deleted !== null && ` ${deleted.length}`}
         </button>
       )}
       {isCommon && showDeleted ? (
-        deleted.length === 0
+        deleted === null
+          ? <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" /></div>
+          : deleted.length === 0
           ? <div className="glass-panel rounded-xl p-8 text-center text-sm text-slate-500 dark:text-text-muted">삭제된 용어가 없습니다.</div>
           : (
             <ul className="glass-panel rounded-xl divide-y divide-slate-100 dark:divide-white/5">
@@ -132,7 +162,7 @@ function LayerDictionary({ layer }: { layer: DictionaryLayer }) {
       />
       )}
       {history && (
-        <TermHistory layer={layer} term={history} onClose={() => setHistory(null)} onRestored={() => { setShowDeleted(false); void load(); }} />
+        <TermHistory key={history.termId} layer={layer} term={history} onClose={() => setHistory(null)} onRestored={() => { setShowDeleted(false); setDeleted(null); void load(); }} />
       )}
       {layerAllowsCreate(layer) && (
         <div className="glass-panel rounded-xl p-5">

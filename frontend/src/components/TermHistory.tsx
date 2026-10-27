@@ -1,13 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, dictionaryApi } from '@/lib/api';
-import { dictionaryErrorMessage, type DictionaryLayer, type DictTermItem, type TermLogEntry } from '@/lib/dictionary';
+import { dictionaryErrorMessage, isRestorable, type DictionaryLayer, type DictTermItem, type TermLogEntry, type TermLogSnapshot } from '@/lib/dictionary';
 
 const ACTION_LABELS: Record<string, string> = { update: '수정', delete: '삭제', restore: '복원' };
 const btn = 'px-2 py-1 text-xs font-medium rounded-lg hover:bg-slate-100 dark:hover:bg-white/5 disabled:opacity-40';
 
-const summary = (t?: DictTermItem) => (t ? [t.displayAs, t.heardAs.length ? `(${t.heardAs.join(', ')})` : ''].filter(Boolean).join(' ') : '-');
+const summary = (t?: TermLogSnapshot) => (t ? [t.displayAs, t.heardAs.length ? `(${t.heardAs.join(', ')})` : ''].filter(Boolean).join(' ') : '-');
 
 interface Props {
   layer: DictionaryLayer;
@@ -23,16 +23,22 @@ export function TermHistory({ layer, term, onClose, onRestored }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [restoring, setRestoring] = useState<string | null>(null);
 
+  const seq = useRef(0);
   const load = useCallback(async () => {
+    const mine = ++seq.current;
     try {
       const { items } = await dictionaryApi.termLog(layer, term.termId);
-      setEntries(items ?? []);
+      if (mine === seq.current) setEntries(items ?? []);
     } catch (err) {
-      setError(err instanceof Error ? err.message : '기록을 불러오지 못했습니다.');
+      if (mine === seq.current) setError(err instanceof Error ? err.message : '기록을 불러오지 못했습니다.');
     }
   }, [layer, term.termId]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+    const counter = seq;
+    return () => { counter.current++; };
+  }, [load]);
 
   const restore = async (entry: TermLogEntry) => {
     if (restoring) return;
@@ -66,7 +72,7 @@ export function TermHistory({ layer, term, onClose, onRestored }: Props) {
             <span>{new Date(e.at).toLocaleString('ko-KR')}</span>
             <span className="text-slate-500 dark:text-text-muted">{e.actor}</span>
             <span className="flex-1 min-w-[8rem]">{summary(e.before)} → {summary(e.after)}</span>
-            {e.before && (
+            {isRestorable(e) && (
               <button onClick={() => restore(e)} disabled={restoring !== null} className={`${btn} text-primary`}>복원</button>
             )}
           </li>
