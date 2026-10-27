@@ -1,0 +1,174 @@
+{
+  "scope": "Historical synthetic candidate experiment; no production model change",
+  "date": "2026-10-27",
+  "sourceCommit": "2196ede863f4d9dac79112a7368e9fc8aa1640da",
+  "summary": {
+    "global.anthropic.claude-sonnet-5-5": {
+      "attempts": 14,
+      "completed": 14,
+      "medianWallSeconds": 8.046255067,
+      "meanWallSeconds": 11.532414814714286,
+      "maxWallSeconds": 24.476588366,
+      "inputTokens": 38660,
+      "outputTokens": 23034,
+      "automatedCasesPassed": 12,
+      "automatedChecksPassed": 86,
+      "automatedChecksTotal": 88,
+      "automatedFailures": [
+        {
+          "id": "quoted-instruction-is-not-a-decision",
+          "repetition": 1,
+          "findings": [
+            {
+              "id": "no-approval",
+              "passed": false,
+              "detail": "required fact not found: 미승인|승인하지|승인되지"
+            }
+          ]
+        },
+        {
+          "id": "quoted-instruction-is-not-a-decision",
+          "repetition": 2,
+          "findings": [
+            {
+              "id": "no-approval",
+              "passed": false,
+              "detail": "required fact not found: 미승인|승인하지|승인되지"
+            }
+          ]
+        }
+      ]
+    },
+    "global.openai.gpt-6.1-sol": {
+      "attempts": 14,
+      "completed": 14,
+      "medianWallSeconds": 13.5731747275,
+      "meanWallSeconds": 18.55311436192857,
+      "maxWallSeconds": 52.178065928,
+      "inputTokens": 22758,
+      "outputTokens": 15558,
+      "automatedCasesPassed": 12,
+      "automatedChecksPassed": 86,
+      "automatedChecksTotal": 88,
+      "automatedFailures": [
+        {
+          "id": "quoted-instruction-is-not-a-decision",
+          "repetition": 1,
+          "findings": [
+            {
+              "id": "no-approval",
+              "passed": false,
+              "detail": "required fact not found: 미승인|승인하지|승인되지"
+            }
+          ]
+        },
+        {
+          "id": "quoted-instruction-is-not-a-decision",
+          "repetition": 2,
+          "findings": [
+            {
+              "id": "no-approval",
+              "passed": false,
+              "detail": "required fact not found: 미승인|승인하지|승인되지"
+            }
+          ]
+        }
+      ]
+    },
+    "global.openai.gpt-6.1-terra": {
+      "attempts": 14,
+      "completed": 14,
+      "medianWallSeconds": 4.4547390765,
+      "meanWallSeconds": 5.0658563766428575,
+      "maxWallSeconds": 9.384496541,
+      "inputTokens": 22758,
+      "outputTokens": 12382,
+      "automatedCasesPassed": 12,
+      "automatedChecksPassed": 86,
+      "automatedChecksTotal": 88,
+      "automatedFailures": [
+        {
+          "id": "quoted-instruction-is-not-a-decision",
+          "repetition": 1,
+          "findings": [
+            {
+              "id": "no-approval",
+              "passed": false,
+              "detail": "required fact not found: 미승인|승인하지|승인되지"
+            }
+          ]
+        },
+        {
+          "id": "quoted-instruction-is-not-a-decision",
+          "repetition": 2,
+          "findings": [
+            {
+              "id": "no-approval",
+              "passed": false,
+              "detail": "required fact not found: 미승인|승인하지|승인되지"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "translation": {
+    "global.anthropic.claude-sonnet-5-5": {
+      "attempts": 24,
+      "completed": 24,
+      "medianWallSeconds": 1.039402596,
+      "meanWallSeconds": 1.1716764697083333,
+      "maxWallSeconds": 2.327541302,
+      "inputTokens": 5068,
+      "outputTokens": 943,
+      "validated": 24,
+      "deadlineSeconds": 6,
+      "profile": "experimental Anthropic adaptation; thinking=between_tools",
+      "observedMeaningErrors": []
+    },
+    "global.openai.gpt-6-luna": {
+      "attempts": 24,
+      "completed": 24,
+      "medianWallSeconds": 0.4884378045,
+      "meanWallSeconds": 0.5049521627083333,
+      "maxWallSeconds": 0.811561453,
+      "inputTokens": 3346,
+      "outputTokens": 648,
+      "validated": 24,
+      "deadlineSeconds": 6,
+      "profile": "production OpenAI chat; reasoning_effort=low",
+      "observedMeaningErrors": []
+    },
+    "global.openai.gpt-6.1-terra": {
+      "attempts": 24,
+      "completed": 24,
+      "medianWallSeconds": 0.7866115810000001,
+      "meanWallSeconds": 0.8585788048333334,
+      "maxWallSeconds": 1.3645459,
+      "inputTokens": 3346,
+      "outputTokens": 827,
+      "validated": 24,
+      "deadlineSeconds": 6,
+      "profile": "production OpenAI chat; reasoning_effort=low",
+      "observedMeaningErrors": [
+        {
+          "id": "ko-context",
+          "repetition": 1,
+          "text": "I’ll take care of that through Friday.",
+          "reason": "Deadline by Friday changed to duration through Friday"
+        },
+        {
+          "id": "ko-context",
+          "repetition": 2,
+          "text": "I’ll take care of that through Friday.",
+          "reason": "Deadline by Friday changed to duration through Friday"
+        }
+      ]
+    }
+  },
+  "excludedTranslationAttempts": {
+    "count": 24,
+    "modelId": "global.anthropic.claude-sonnet-5-5",
+    "reason": "Unsupported thinking=disabled rejected with HTTP 400; superseded by thinking=between_tools experiment"
+  }
+}
