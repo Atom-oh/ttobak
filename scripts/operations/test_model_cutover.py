@@ -138,6 +138,12 @@ class ModelCutoverTests(unittest.TestCase):
         with self.assertRaisesRegex(ReleaseError, "MODEL_RETENTION_DRAIN_UNVERIFIED"):
             cdk.validate_model_cutover(configs, NOW)
 
+    def test_lambda_native_timestamp_with_compact_utc_offset_is_supported(self):
+        cdk, configs = self.fixture()
+        configs["ttobak-summarize"]["LastModified"] = datetime.fromtimestamp(
+            NOW - 1000, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000%z")
+        self.assertEqual(cdk.validate_model_cutover(configs, NOW), 90)
+
 
 if __name__ == "__main__":
     unittest.main()

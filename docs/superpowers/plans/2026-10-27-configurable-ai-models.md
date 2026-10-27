@@ -50,7 +50,7 @@ their measured evidence and recording limitations.
 - [x] Observe RED; add optional dispatch inputs and shared repository-variable configuration.
 - [x] Document examples, precedence, persistent selections, verification, rollback and pricing evidence limits.
 - [x] Run full infra tests/build, complete-app synth for each preset and documentation checks.
-- [ ] Commit and request one fresh-context code/IAM/workflow review; address material findings and rerun affected checks.
+- [x] Commit and request one fresh-context code/IAM/workflow review; address material findings and rerun affected checks.
 
 ### Review fix: Versioned IDs and safe model cutover
 
@@ -62,4 +62,14 @@ the infrastructure workflows and model runbook.
 - [x] Add bounded explicit retained-model selections and deployment metadata.
 - [x] Gate release before mutations on exact active/target grants bound to the correct roles; block premature grant cleanup.
 - [x] Correct API alias versus unqualified summary verification instructions.
-- [ ] Rerun full checks and ask the same independent reviewer to verify the fix.
+- [x] Rerun full checks and ask the same independent reviewer to verify the fix.
+
+### Follow-up verification
+
+- [x] Reproduce rollback losing retention metadata and concurrent summary changes outside the origin-consumer snapshot.
+- [x] Conservatively drain calls independent of metadata and separately pin summary identity through IAM cutover.
+- [x] Verify real Lambda metadata read-only; reproduce and support AWS timestamps on Python 3.10.
+- [x] Rerun 234 infrastructure tests, 71 focused Python tests, compilation and documentation checks.
+
+This implementation and its review do not constitute production deployment or
+model acceptance. Sol/Luna defaults and the disabled deployment workflow remain.

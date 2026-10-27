@@ -423,7 +423,12 @@ class Cdk:
             try:
                 timeout = int(config["Timeout"])
                 if base == "ttobak-summarize":
-                    modified_time = datetime.fromisoformat(config["LastModified"])
+                    try:
+                        modified_time = datetime.fromisoformat(config["LastModified"])
+                    except ValueError:
+                        # Lambda emits +0000; Python 3.10's ISO parser only
+                        # accepts +00:00. strptime supports both offsets.
+                        modified_time = datetime.strptime(config["LastModified"], "%Y-%m-%dT%H:%M:%S.%f%z")
                     require(modified_time.tzinfo is not None, "MODEL_RETENTION_DRAIN_UNVERIFIED")
                     modified = modified_time.timestamp()
             except (KeyError, ValueError, TypeError, OverflowError):
