@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { BillingInsightButton } from '@/components/layout/BillingInsightButton';
 import { NAV_GROUPS, SETTINGS_ITEM } from '@/lib/navigation';
@@ -83,6 +83,9 @@ function MenuSheet({ onClose }: { onClose: () => void }) {
 
 export function MobileNav({ activePath }: { activePath: string }) {
   const [sheetOpen, setSheetOpen] = useState(false);
+  // Stable so MenuSheet's focus effect runs once per open, not on every
+  // re-render of a polling page.
+  const closeSheet = useCallback(() => setSheetOpen(false), []);
   const knowledgeActive = sheetOpen || KNOWLEDGE_PATHS.includes(activePath);
   const isOn = (href: string) => !sheetOpen && activePath === href;
   const tabClass = (active: boolean) =>
@@ -92,7 +95,7 @@ export function MobileNav({ activePath }: { activePath: string }) {
 
   return (
     <>
-      {sheetOpen && <MenuSheet onClose={() => setSheetOpen(false)} />}
+      {sheetOpen && <MenuSheet onClose={closeSheet} />}
       {/* z-10 as before so page sheets (e.g. the recording Q&A sheet at z-40)
           still cover the bar; it rises above its own menu sheet only while open. */}
       <nav className={`fixed bottom-0 left-0 right-0 flex gap-2 border-t border-slate-100 dark:border-white/5 bg-white/90 dark:bg-background-dark/90 dark:backdrop-blur-xl backdrop-blur-md px-4 pb-6 pb-safe pt-2 lg:hidden ${sheetOpen ? 'z-40' : 'z-10'}`}>
