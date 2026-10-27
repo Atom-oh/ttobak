@@ -27,8 +27,10 @@ validate ScreenCaptureKit. Install each module's locked dependencies:
 ```
 
 Use the runtime `/config.json` for Cognito/API configuration; do not move those
-values into build-time environment variables. Accounts are admin-created; there
-is no self-signup flow.
+values into build-time environment variables. Login identities are provisioned
+through administrator or scoped Account invitations; self-signup stays disabled.
+Customer Account creation can designate another initial Owner and optionally
+retain the creator as an AM member using a checkbox (ADR-055).
 
 The [project guide](CLAUDE.md) lists exact build and validation commands.
 [Onboarding](docs/onboarding.md) covers local setup. Start documentation navigation

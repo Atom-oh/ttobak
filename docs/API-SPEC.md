@@ -580,8 +580,28 @@ Malformed legacy projection identities are omitted with a successful response,
 not treated as grants. Deploy the guarded QA consumers before enabling private
 relinking in the API; code checks alone do not establish live revocation.
 
-Account creation creates owner membership atomically. Optional parentAccountId
-requires current membership in the parent. Parent updates require child ownership
+Account creation accepts optional `ownerEmail`, `keepCreatorAsMember` and a UUID
+`requestId` in a single JSON object capped at 16 KiB. Without another Owner,
+the creator remains Owner. A different Owner is resolved to the current Cognito
+sub; missing identities use ADR-054's invitation gates. Create META, the canonical
+Owner and optional creator AM atomically. `keepCreatorAsMember: false` creates no
+creator membership or read grant. The response returns the actual `ownerUserId`,
+initial members, `creatorMember`, `ownerInvitationPending` (an initial invitation
+hint) and `ownerInvitationRequested` (delivery requested, not inbox confirmation).
+Same-creator/same-input `requestId` retries return a bounded creation receipt,
+never later private Account fields or restored membership; changed input or a
+foreign creator returns 409. Legacy callers can omit `requestId`.
+
+`POST /api/accounts/{accountId}/owner-invitation` requires verified email and a
+single empty JSON object capped at 1,024 bytes. Current members or the exact
+recorded creator within thirty days may resend only the canonical initial Owner
+invitation. Recheck the current Cognito email/sub, pending password status,
+allowlist and shared hourly counter. Confirmed users return 409; identity or
+delivery dependency failures return 503. Non-members gain no Account read access.
+The operation's connector inventory disables delegation (ADR-055).
+
+Optional parentAccountId requires the creator's current membership in the parent
+before mail and transactionally before creation. Parent updates require child ownership
 and new-parent membership; the required field uses an empty string to detach,
 not omitted/null. Self/cyclic/deep ancestry (over 64 nodes) is rejected;
 transactional ancestry checks and retries protect concurrent moves. Conflicts
@@ -1146,6 +1166,7 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | GET | `/api/accounts` | `accountHandler.ListAccounts` |
 | GET | `/api/navigation/accounts` | `accountCatalogHandler.Get` |
 | POST | `/api/accounts` | `accountHandler.CreateAccount` |
+| POST | `/api/accounts/{accountId}/owner-invitation` | `accountHandler.ResendOwnerInvitation` |
 | GET | `/api/accounts/{accountId}` | `accountHandler.GetAccount` |
 | GET | `/api/accounts/{accountId}/reading` | `accountReadingHandler.Get` |
 | PUT | `/api/accounts/{accountId}/parent` | `accountHandler.UpdateAccountParent` |
