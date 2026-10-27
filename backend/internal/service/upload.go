@@ -227,6 +227,9 @@ func (s *UploadService) CompleteUpload(ctx context.Context, userID string, req *
 	if req.Category == "audio" && meeting.AudioCrop != nil {
 		return fmt.Errorf("%w: cropped audio is immutable", ErrInvalidInput)
 	}
+	if (req.Category == "audio" || req.Category == "image") && !validMeetingUploadKey(req.Category, userID, req.MeetingID, req.Key) {
+		return ErrInvalidInput
+	}
 
 	switch req.Category {
 	case "audio":
@@ -446,6 +449,28 @@ func isCheckpointFileName(fileName string) bool {
 		return false
 	}
 	return recordingCheckpointExtensions[strings.TrimPrefix(fileName, prefix)]
+}
+
+// meetingUploadPrefixes maps a CompleteUpload category to the key prefix
+// GeneratePresignedUploadURL mints for it.
+var meetingUploadPrefixes = map[string]string{"audio": "audio", "image": "images"}
+
+// validMeetingUploadKey reports whether a client-echoed key has exactly the
+// {prefix}/{userID}/{meetingID}/{name} shape GeneratePresignedUploadURL mints.
+// CompleteUpload binds the key to the meeting and later reads presign it, so
+// a key outside the caller's own meeting prefix would expose another user's
+// object.
+func validMeetingUploadKey(category, userID, meetingID, key string) bool {
+	prefix, ok := meetingUploadPrefixes[category]
+	if !ok {
+		return false
+	}
+	owner, err := privateFileKeyOwner(key, prefix)
+	if err != nil || owner != userID {
+		return false
+	}
+	parts := strings.Split(key, "/")
+	return len(parts) == 4 && parts[2] == meetingID
 }
 
 // sanitizeFileName removes or replaces invalid characters from filenames
