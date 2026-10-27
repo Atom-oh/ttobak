@@ -561,6 +561,32 @@ a deployment after one with `off` has delivered the rule and summarize code. Bef
 merging, the worker migrates the owner's legacy dictionary blob through the
 summarize role's existing table grant. See ADR-008.
 
+KB documents and research reports are term sources too (layered dictionary).
+Rule `ttobak-terms-source-object` sends KB-bucket `Object Created` events for
+keys under `kb/` and `shared/research/` (the bucket already has EventBridge
+notifications on) to summarize, which maps `kb/{uid}/{name}` (Account from the
+signed `account-id` metadata) and `shared/research/{id}.md` (owner and Accounts
+from the research item) to a default-bus `ttobak.analysis`
+`TermsSourceRequested` event; rule `ttobak-terms-source-requested` runs the
+extraction in its own summarize invocation. Both targets expire after five
+minutes with three retries into the SSE-SQS `ttobak-terms-source-dlq`, which
+`PipelineFailures` watches. The research agent's execution role is imported, so
+nothing is published from the agent. The summarize role gains only
+`s3:GetObject` on `kb/*` and `shared/research/*` of the KB bucket (statement
+`TermsSourceRead`, which also covers HeadObject). Summarize receives
+`KB_TERMS_MODE` and `RESEARCH_TERMS_MODE` (`off` by default, or `on`) from CDK
+context `ttobak:kbTermsMode` and `ttobak:researchTermsMode`; invalid values fail
+synth, and with `off` the mapper and worker log `outcome=DISABLED` and do nothing
+else. The source flags are independent of `AUTO_TERMS_MODE` and
+`ACCOUNT_TERMS_MODE` (only the `AUTO_TERMS_USERS` canary list is shared): a
+source flag set to `on` writes the Account layer even with `ACCOUNT_TERMS_MODE`
+`off`. Only plain-text KB files (`.md`, `.markdown`, `.txt`) contribute terms
+today; any other type logs `outcome=UNSUPPORTED`. The mapper passes the S3 key as
+delivered and retries once with its `url.QueryUnescape` form only when the key
+contains `%` or `+` and the object is missing; an object still missing (404, or
+403 because the role has no `s3:ListBucket`) logs `outcome=NOT_FOUND` and is not
+retried.
+
 ## Summary privacy writer activation
 
 GatewayStack declares `SummaryPrivacyWriterEnabled` and

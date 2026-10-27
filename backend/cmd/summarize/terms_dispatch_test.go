@@ -56,3 +56,42 @@ func TestHumanContentPreservedStillQueuesTerms(t *testing.T) {
 		t.Fatalf("queued %v", queued)
 	}
 }
+
+// KB bucket objects reach only the source mapper, and TermsSourceRequested
+// only the source worker.
+func TestHandlerRoutesTermsSources(t *testing.T) {
+	restoreBucket, restoreRequest, restoreProcess := termsSourceBucket, requestTermsSource, processTermsSource
+	defer func() {
+		termsSourceBucket, requestTermsSource, processTermsSource = restoreBucket, restoreRequest, restoreProcess
+	}()
+	termsSourceBucket = "kb-bucket"
+	var mapped []string
+	requestTermsSource = func(_ context.Context, bucket, key string) error {
+		mapped = append(mapped, bucket+"/"+key)
+		return nil
+	}
+	var processed []model.TermsSourceRequested
+	processTermsSource = func(_ context.Context, ev model.TermsSourceRequested) error {
+		processed = append(processed, ev)
+		return nil
+	}
+	events := []string{
+		// The key reaches the mapper as delivered, not unescaped.
+		`{"source":"aws.s3","detail-type":"Object Created","detail":{"bucket":{"name":"kb-bucket"},"object":{"key":"kb/u1/1_a+b%20c.md"}}}`,
+		// A KB key that also looks like a transcript must not reach the transcript path.
+		`{"source":"aws.s3","detail-type":"Object Created","detail":{"bucket":{"name":"kb-bucket"},"object":{"key":"transcripts/m1.json"}}}`,
+		`{"source":"ttobak.analysis","detail-type":"TermsSourceRequested","detail":{"kind":"research","ref":"r1","ownerId":"u1","accountIds":["a1"]}}`,
+		`{"source":"aws.s3","detail-type":"Object Created","detail":{"bucket":{"name":"assets"},"object":{"key":"images/x.png"}}}`,
+	}
+	for _, raw := range events {
+		if err := Handler(context.Background(), json.RawMessage(raw)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(mapped) != 2 || mapped[0] != "kb-bucket/kb/u1/1_a+b%20c.md" || mapped[1] != "kb-bucket/transcripts/m1.json" {
+		t.Fatalf("mapped %v", mapped)
+	}
+	if len(processed) != 1 || processed[0].Kind != "research" || processed[0].Ref != "r1" || processed[0].OwnerID != "u1" || len(processed[0].AccountIDs) != 1 {
+		t.Fatalf("processed %+v", processed)
+	}
+}
