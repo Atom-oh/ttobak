@@ -374,10 +374,10 @@ class Cdk:
                     return ""
             return result
 
-        for name, field, retained_field, sid in (
-            ("ttobak-summarize", "BEDROCK_SUMMARY_MODEL_ID", "BEDROCK_SUMMARY_RETAIN_MODEL_IDS", "InvokeFinalSummaryModel"),
-            ("ttobak-api", "BEDROCK_TRANSLATE_MODEL_ID", "BEDROCK_TRANSLATE_RETAIN_MODEL_IDS", "InvokeInterpreterModel"),
-            ("ttobak-api:live", "BEDROCK_TRANSLATE_MODEL_ID", "BEDROCK_TRANSLATE_RETAIN_MODEL_IDS", "InvokeInterpreterModel"),
+        for name, field, sid in (
+            ("ttobak-summarize", "BEDROCK_SUMMARY_MODEL_ID", "InvokeFinalSummaryModel"),
+            ("ttobak-api", "BEDROCK_TRANSLATE_MODEL_ID", "InvokeInterpreterModel"),
+            ("ttobak-api:live", "BEDROCK_TRANSLATE_MODEL_ID", "InvokeInterpreterModel"),
         ):
             base = name.split(":")[0]
             target = functions.get(base, {})
@@ -418,20 +418,23 @@ class Cdk:
             require(not old or granted(old), "MODEL_TRANSITION_GRANT_MISSING")
             require(granted(target.get("Environment", {}).get("Variables", {}).get(field)),
                     "MODEL_TARGET_GRANT_MISSING")
-            retired = [model for model in env.get(retained_field, "").split(",") if model and not granted(model)]
-            if retired:
-                try:
-                    modified = datetime.fromisoformat(config["LastModified"]).astimezone(timezone.utc).timestamp()
-                    timeout = int(config["Timeout"])
-                except (KeyError, ValueError, TypeError, OverflowError):
-                    raise ReleaseError("MODEL_RETENTION_DRAIN_UNVERIFIED") from None
-                require(0 < timeout <= 900, "MODEL_RETENTION_DRAIN_UNVERIFIED")
-                if base == "ttobak-api":
-                    # Version creation time does not prove when live moved.
-                    # The caller waits while both alias and latest stay pinned.
-                    api_drain_seconds = max(api_drain_seconds, timeout + 60)
-                else:
-                    require(now >= modified + timeout + 60, "MODEL_RETENTION_DRAIN_PENDING")
+            # Rollback restores the old environment, including its retention
+            # metadata. Do not use that metadata as invocation history.
+            try:
+                timeout = int(config["Timeout"])
+                if base == "ttobak-summarize":
+                    modified_time = datetime.fromisoformat(config["LastModified"])
+                    require(modified_time.tzinfo is not None, "MODEL_RETENTION_DRAIN_UNVERIFIED")
+                    modified = modified_time.timestamp()
+            except (KeyError, ValueError, TypeError, OverflowError):
+                raise ReleaseError("MODEL_RETENTION_DRAIN_UNVERIFIED") from None
+            require(0 < timeout <= 900, "MODEL_RETENTION_DRAIN_UNVERIFIED")
+            if base == "ttobak-api":
+                # Version creation time does not prove when live moved.
+                # Always drain while both alias and latest stay pinned.
+                api_drain_seconds = max(api_drain_seconds, timeout + 60)
+            else:
+                require(now >= modified + timeout + 60, "MODEL_RETENTION_DRAIN_PENDING")
         return api_drain_seconds
 
     def validate_activation_templates(self):
@@ -530,6 +533,7 @@ class Release:
         self.configs = {}
         self.alias = {}
         self.foundation_snapshot = None
+        self.summary_pin = None
         self.live_proof = None
         self.api_url = self.site_url = self.distribution = ""
         self.checks = {}
@@ -585,7 +589,39 @@ class Release:
             "alias": {key: self.alias[key] for key in ("FunctionVersion", "RevisionId")},
         }
 
+    def summary_configuration(self):
+        value = self.clients["lambda"].get_function_configuration(FunctionName="ttobak-summarize")
+        require(value.get("State", "Active") == "Active" and
+                value.get("LastUpdateStatus", "Successful") == "Successful", "MODEL_UPDATE_IN_PROGRESS")
+        require(value.get("FunctionName") == "ttobak-summarize" and
+                value.get("FunctionArn") ==
+                f"arn:aws:lambda:{self.region}:{self.account}:function:ttobak-summarize" and
+                value.get("Version") == "$LATEST", "MODEL_SUMMARY_IDENTITY_MISMATCH")
+        require(all(isinstance(value.get(field), str) and value[field]
+                    for field in ("RevisionId", "CodeSha256", "Role")), "MODEL_SUMMARY_REVISION_MISSING")
+        return value
+
+    @staticmethod
+    def summary_snapshot(configuration):
+        # Summary is not an HTTP-origin consumer. Pin its identity separately
+        # without invoking it or retaining/logging unrelated environment values.
+        result = {key: configuration.get(key) for key in (
+            "FunctionName", "FunctionArn", "Version", "RevisionId", "CodeSha256",
+            "Role", "Timeout", "LastModified",
+        )}
+        env = configuration.get("Environment", {}).get("Variables", {})
+        result["models"] = {key: env.get(key) for key in (
+            "BEDROCK_SUMMARY_MODEL_ID", "BEDROCK_SUMMARY_RETAIN_MODEL_IDS",
+        )}
+        return result
+
+    def guard_summary(self):
+        if self.summary_pin is not None:
+            require(self.summary_snapshot(self.summary_configuration()) == self.summary_pin,
+                    "SUMMARY_CHANGED_AFTER_PREFLIGHT")
+
     def guard(self):
+        self.guard_summary()
         require(self.foundation_snapshot is not None and self.snapshot() == self.foundation_snapshot,
                 "CONSUMER_CHANGED_AFTER_PREFLIGHT")
         if self.state:
@@ -887,6 +923,8 @@ class Release:
         self.accept_consumer_transition()
 
     def accept_consumer_transition(self):
+        if self.summary_pin is not None:
+            self.summary_pin = self.summary_snapshot(self.summary_configuration())
         self.arn_only()
         staged = self.snapshot()
         self.wait_cache()
@@ -933,19 +971,18 @@ class Release:
         self.cdk.diff()
         self.mark("verifying_model_cutover")
         model_configs = dict(self.configuration())
-        summary = self.clients["lambda"].get_function_configuration(FunctionName="ttobak-summarize")
-        require(summary.get("State", "Active") == "Active" and
-                summary.get("LastUpdateStatus", "Successful") == "Successful", "MODEL_UPDATE_IN_PROGRESS")
+        summary = self.summary_configuration()
+        self.summary_pin = self.summary_snapshot(summary)
         model_configs["ttobak-summarize"] = summary
         api_drain = self.cdk.validate_model_cutover(model_configs, self.now())
         if api_drain:
             before = self.snapshot()
             self.mark("draining_retired_api_models")
             self.sleep(api_drain)
+            self.guard_summary()
             require(self.snapshot() == before, "MODEL_API_DRAIN_CHANGED")
             model_configs = dict(self.configs)
-            model_configs["ttobak-summarize"] = self.clients["lambda"].get_function_configuration(
-                FunctionName="ttobak-summarize")
+            model_configs["ttobak-summarize"] = self.summary_configuration()
             self.cdk.validate_model_cutover(model_configs, self.now())
         self.bootstrap(live)
         self.transition_window(live)

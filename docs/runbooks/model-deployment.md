@@ -125,12 +125,18 @@ binds each permission to the function's actual role.
 
 Retained selections are recorded in `BEDROCK_SUMMARY_RETAIN_MODEL_IDS` /
 `BEDROCK_TRANSLATE_RETAIN_MODEL_IDS` as deployment metadata. After acceptance,
-clear the retention variables in a later controlled deployment. The coordinator
-blocks summary removal until the deployed function's `LastModified` plus its
-timeout and a 60-second margin; the default requires at least 16 minutes.
-API cleanup waits for its timeout plus a 60-second margin with unchanged
-`live`/latest revisions and alias, since version creation time does not establish
-when the alias moved. A concurrent change aborts before deployment mutations.
+clear the retention variables in a later controlled deployment. Rollback can
+restore an environment without that metadata, so it cannot prove that no old
+calls remain. Every controlled release conservatively requires the summary
+function's last update to be older than its timeout plus a 60-second margin;
+the default requires at least 16 minutes. A recent summary update or rollback
+fails with `MODEL_RETENTION_DRAIN_PENDING`; retry after that interval.
+Every release also waits for the API timeout plus a 60-second margin with
+unchanged `live`/latest revisions and alias (normally 90 seconds), since version
+creation time does not establish when the alias moved.
+The summary's model, role and revision remain pinned through the IAM cutover;
+only this release's successful Gateway update refreshes that pin. A concurrent
+summary change fails with `SUMMARY_CHANGED_AFTER_PREFLIGHT`.
 Keep grants longer when old API versions remain deliberate invocation targets;
 the preflight checks current `live`/latest, not every historical published version.
 Do not bypass this preflight with an ad hoc AiStack deployment.
@@ -145,6 +151,8 @@ privacy guards remain required.
 
 Rollback restores the previous primary selections, retains the outgoing candidate
 model until its calls finish, and reruns the same controlled deployment path.
+CloudFormation rollback does not bypass the conservative drain checks on the
+next attempt.
 Restore both IAM and Lambda
 configuration together; do not roll back only one function's environment.
 Clearing all selections restores Sol/Luna defaults.

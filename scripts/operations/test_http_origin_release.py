@@ -45,6 +45,16 @@ class World:
         self.fail_active_consumers = False
         self.mutate_final_public = False
         self.secret_changes = 0
+        self.summary = {
+            "FunctionName": "ttobak-summarize",
+            "FunctionArn": f"arn:aws:lambda:{REGION}:{ACCOUNT}:function:ttobak-summarize",
+            "Version": "$LATEST", "RevisionId": "summary-revision-1",
+            "CodeSha256": "synthetic-reviewed-summary-code",
+            "Role": f"arn:aws:iam::{ACCOUNT}:role/ttobak-summarize-role",
+            "Timeout": 900, "LastModified": "2026-10-01T00:00:00+00:00",
+            "State": "Active", "LastUpdateStatus": "Successful",
+            "Environment": {"Variables": {"BEDROCK_SUMMARY_MODEL_ID": "global.openai.gpt-6.1-sol"}},
+        }
         for name in ("ttobak-api", "ttobak-api:live", "ttobak-qa", "ttobak-mcp"):
             self.functions[name] = {
                 "FunctionName": name.split(":")[0],
@@ -81,7 +91,7 @@ class World:
 
     def get_function_configuration(self, FunctionName):
         if FunctionName == "ttobak-summarize":
-            return {"Environment": {"Variables": {"BEDROCK_SUMMARY_MODEL_ID": "global.openai.gpt-6.1-sol"}}}
+            return copy.deepcopy(self.summary)
         return copy.deepcopy(self.functions[FunctionName])
 
     def get_alias(self, **kwargs):
@@ -300,6 +310,55 @@ class ReleaseTests(unittest.TestCase):
                 self.quiet_run(world.release())
         self.assertEqual(world.secret_changes, 0)
         self.assertFalse(any(item[0] == "deploy" for item in world.history))
+
+    def test_summary_change_during_api_drain_stops_before_mutations(self):
+        world = World()
+        sleep = world.sleep
+
+        def concurrent_change(seconds):
+            sleep(seconds)
+            world.summary["RevisionId"] = "concurrent-summary-revision"
+
+        with mock.patch.object(world, "sleep", side_effect=concurrent_change), \
+                mock.patch.object(world, "validate_model_cutover", return_value=90):
+            with self.assertRaisesRegex(ReleaseError, "SUMMARY_CHANGED_AFTER_PREFLIGHT"):
+                self.quiet_run(world.release())
+        self.assertEqual(world.secret_changes, 0)
+        self.assertFalse(any(item[0] == "deploy" for item in world.history))
+
+    def test_summary_change_before_iam_cutover_cannot_be_adopted(self):
+        for field, value in (("RevisionId", "concurrent-revision"),
+                             ("Role", f"arn:aws:iam::{ACCOUNT}:role/OtherRole"),
+                             ("BEDROCK_SUMMARY_MODEL_ID", "global.openai.gpt-6.1-terra")):
+            with self.subTest(field=field):
+                world = World()
+                deploy = world.deploy
+
+                def concurrent_change(stack, parameters=None):
+                    deploy(stack, parameters)
+                    if stack == "TtobakAuthStack":
+                        if field.startswith("BEDROCK"):
+                            world.summary["Environment"]["Variables"][field] = value
+                        else:
+                            world.summary[field] = value
+
+                with mock.patch.object(world, "deploy", side_effect=concurrent_change):
+                    with self.assertRaisesRegex(ReleaseError, "SUMMARY_CHANGED_AFTER_PREFLIGHT"):
+                        self.quiet_run(world.release())
+                self.assertNotIn(("deploy", "TtobakAiStack"), world.history)
+
+    def test_own_gateway_update_refreshes_summary_pin_without_invoking_summary(self):
+        world = World()
+        deploy = world.deploy
+
+        def own_update(stack, parameters=None):
+            deploy(stack, parameters)
+            if stack == "TtobakGatewayStack":
+                world.summary["RevisionId"] = f"summary-revision-{len(world.history)}"
+
+        with mock.patch.object(world, "deploy", side_effect=own_update):
+            self.assertEqual(self.quiet_run(world.release())["status"], "complete")
+        self.assertNotIn(("invoke", "ttobak-summarize"), world.history)
 
     def test_rotation_accepts_qa_identity_denial_and_legacy_consumer_transition(self):
         for initial_status, deployed_status in ((403, 403), (405, 403), (405, 405)):

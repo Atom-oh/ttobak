@@ -121,6 +121,23 @@ class ModelCutoverTests(unittest.TestCase):
         with self.assertRaisesRegex(ReleaseError, "MODEL_DEPLOYED_ROLE_CHANGED"):
             cdk.validate_model_cutover(configs, NOW)
 
+    def test_recent_rollback_without_retention_metadata_still_requires_drain(self):
+        cdk, configs = self.fixture(retained=(), age=1)
+        configs["ttobak-summarize"]["Environment"]["Variables"] = {"BEDROCK_SUMMARY_MODEL_ID": TERRA}
+        with self.assertRaisesRegex(ReleaseError, "MODEL_RETENTION_DRAIN_PENDING"):
+            cdk.validate_model_cutover(configs, NOW)
+
+    def test_api_rollback_without_retention_metadata_still_requires_alias_drain(self):
+        cdk, configs = self.fixture(retained=(), age=1000)
+        configs["ttobak-summarize"]["Environment"]["Variables"] = {"BEDROCK_SUMMARY_MODEL_ID": TERRA}
+        self.assertEqual(cdk.validate_model_cutover(configs, NOW), 90)
+
+    def test_unknown_summary_change_time_cannot_establish_drain(self):
+        cdk, configs = self.fixture()
+        configs["ttobak-summarize"].pop("LastModified")
+        with self.assertRaisesRegex(ReleaseError, "MODEL_RETENTION_DRAIN_UNVERIFIED"):
+            cdk.validate_model_cutover(configs, NOW)
+
 
 if __name__ == "__main__":
     unittest.main()
