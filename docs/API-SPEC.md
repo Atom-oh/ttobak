@@ -1507,7 +1507,9 @@ Single-file audio completion is idempotent per key: completing the key a meeting
 already holds succeeds without changing its status, so a retry after a lost
 response never moves a transcribed or finished meeting back to `transcribing`. A
 different key still replaces the audio and restarts transcription. The key check
-is part of the conditional write (`BindMeetingAudioKey`).
+is part of the conditional write (`BindMeetingAudioKey`). Audio, image and file keys
+must be exactly `{audio|images|files}/{callerUserId}/{meetingId}/{name}`, the shape
+the presign route mints; any other key returns 400 before a write or image event.
 
 ### GET /api/meetings/{meetingId}/attachments/{attachmentId}/text/status
 
