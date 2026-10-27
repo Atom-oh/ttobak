@@ -136,6 +136,17 @@ func (m *mockHandlerAccountRepo) CreateAccount(_ context.Context, a *model.Accou
 	m.members[acctMemberKey(owner.AccountID, owner.UserID)] = &oc
 	return nil
 }
+
+func (m *mockHandlerAccountRepo) CreateAccountWithInitialMembers(ctx context.Context, a *model.Account, owner, creator *model.AccountMember, requester string, ancestors []repository.AccountParentLink) error {
+	if err := m.CreateAccount(ctx, a, owner); err != nil {
+		return err
+	}
+	if creator != nil {
+		copy := *creator
+		m.members[acctMemberKey(a.AccountID, creator.UserID)] = &copy
+	}
+	return nil
+}
 func (m *mockHandlerAccountRepo) GetAccount(_ context.Context, id string) (*model.Account, error) {
 	a, ok := m.accounts[id]
 	if !ok {
