@@ -115,6 +115,24 @@ type Meeting struct {
 	// than the owner writes transcriptA/B, the selected transcript or content.
 	// Automatic term extraction then only suggests terms (design A2.1).
 	SourceEditedByNonOwnerAt string `dynamodbav:"sourceEditedByNonOwnerAt,omitempty" json:"-"`
+
+	// TranscriptCorrections records the glossary fixes the summarize Lambda
+	// applied silently during refinement (L3, at most MaxTranscriptCorrections).
+	// Never part of an API response.
+	TranscriptCorrections []TranscriptCorrection `dynamodbav:"transcriptCorrections,omitempty" json:"-"`
+}
+
+// MaxTranscriptCorrections caps the correction records kept per meeting.
+const MaxTranscriptCorrections = 50
+
+// TranscriptCorrection is one verified glossary replacement: From is the
+// original span, To the glossary display form, TermKey the glossary term and
+// Segment the index of the refined transcript segment that carries To.
+type TranscriptCorrection struct {
+	From    string `dynamodbav:"from" json:"-"`
+	To      string `dynamodbav:"to" json:"-"`
+	TermKey string `dynamodbav:"termKey" json:"-"`
+	Segment int    `dynamodbav:"segment" json:"-"`
 }
 
 // Attachment represents a file attachment for a meeting

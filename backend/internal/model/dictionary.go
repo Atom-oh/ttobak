@@ -182,6 +182,9 @@ const (
 	// PrefixDictLog starts the SK of its per-term audit rows.
 	PrefixDictCommon = "DICT#COMMON"
 	PrefixDictLog    = "DICTLOG#"
+	// PrefixTermsCorrection starts the SK of a transcript-correction counter
+	// (TERMS_CORRECTION#{termKey}#{heardKey}) under the term's own partition.
+	PrefixTermsCorrection = "TERMS_CORRECTION#"
 
 	TermOriginManual = "manual"
 	TermOriginAuto   = "auto"
@@ -400,6 +403,19 @@ const DictTimeLayout = "2006-01-02T15:04:05.000000Z"
 
 // DictTermSK returns the sort key of a term row.
 func DictTermSK(termKey string) string { return PrefixDictTerm + termKey }
+
+// TermsCorrectionSK returns the sort key of the counter that lists the
+// meetings in which heardKey was corrected to termKey.
+func TermsCorrectionSK(termKey, heardKey string) string {
+	return PrefixTermsCorrection + termKey + "#" + heardKey
+}
+
+// Transcript-correction counters keep at most MaxTermCorrectionMeetings
+// meeting IDs and expire TermCorrectionTTLSeconds after their last update.
+const (
+	MaxTermCorrectionMeetings = 10
+	TermCorrectionTTLSeconds  = 180 * 86400
+)
 
 // DictObsSK returns the sort key of an observation row.
 func DictObsSK(termKey, meetingID string) string {
