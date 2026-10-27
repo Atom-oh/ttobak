@@ -51,18 +51,23 @@ const (
 
 // TermsConfig: AUTO_TERMS_MODE (off|personal), AUTO_TERMS_USERS (canary
 // subs; empty means everyone), AUTO_TERMS_MIN_CONFIDENCE, BEDROCK_TERMS_MODEL_ID,
-// ACCOUNT_TERMS_MODE (off|on; needs AUTO_TERMS_MODE on).
+// ACCOUNT_TERMS_MODE (off|on; needs AUTO_TERMS_MODE on), KB_TERMS_MODE and
+// RESEARCH_TERMS_MODE (off|on; KB documents and research reports, see
+// ProcessSource).
 type TermsConfig struct {
 	Mode          string
 	Users         map[string]bool
 	MinConfidence float64
 	ModelID       string
 	AccountMode   string
+	KBMode        string
+	ResearchMode  string
 }
 
 // TermsConfigFromEnv parses the flags; unknown modes are off.
 func TermsConfigFromEnv() TermsConfig {
-	cfg := TermsConfig{Mode: AutoTermsModeOff, AccountMode: AccountTermsModeOff, MinConfidence: DefaultAutoTermsMinConfidence, ModelID: getEnvOrDefault("BEDROCK_TERMS_MODEL_ID", ClaudeSonnetModelID)}
+	cfg := TermsConfig{Mode: AutoTermsModeOff, AccountMode: AccountTermsModeOff, MinConfidence: DefaultAutoTermsMinConfidence, ModelID: getEnvOrDefault("BEDROCK_TERMS_MODEL_ID", ClaudeSonnetModelID),
+		KBMode: sourceTermsMode("KB_TERMS_MODE"), ResearchMode: sourceTermsMode("RESEARCH_TERMS_MODE")}
 	if strings.TrimSpace(os.Getenv("AUTO_TERMS_MODE")) == AutoTermsModePersonal {
 		cfg.Mode = AutoTermsModePersonal
 	}
@@ -144,6 +149,8 @@ type TermsAnalysisService struct {
 	// listAccountMembers returns an Account's member user IDs; unset, the
 	// Account layer is skipped.
 	listAccountMembers func(ctx context.Context, accountID string) ([]string, error)
+	// sources reads KB documents and research reports (ProcessSource).
+	sources TermsSourceDeps
 }
 
 // SetVocabularyRefresher installs the post-run vocabulary hook; nil disables it.
@@ -419,7 +426,7 @@ func (s *TermsAnalysisService) Process(ctx context.Context, event model.TermsReq
 		refresh = append(refresh, event.OwnerID)
 	}
 	refresh = append(refresh, s.mergeAccountLayer(runCtx, event, fresh.AccountID, state.AccountAcceptedTerms, terms, source)...)
-	s.refreshVocabularies(ctx, event, refresh)
+	s.refreshVocabularies(ctx, fmt.Sprintf("terms run: meeting=%s run=%s", event.MeetingID, event.RunID), refresh)
 	// An Enqueue during this run returned PENDING and queued nothing; a source
 	// that changed after the freshness check gets its own run now.
 	s.Enqueue(ctx, event.OwnerID, event.MeetingID, "post-run")
@@ -529,7 +536,8 @@ func (s *TermsAnalysisService) mergeAccountLayer(ctx context.Context, event mode
 
 // refreshVocabularies runs the vocabulary hook once per distinct user, at most
 // termsRefreshCap per run; the rest pick the terms up on their next refresh.
-func (s *TermsAnalysisService) refreshVocabularies(ctx context.Context, event model.TermsRequested, users []string) {
+// label prefixes the truncation log line.
+func (s *TermsAnalysisService) refreshVocabularies(ctx context.Context, label string, users []string) {
 	if s.refreshVocabulary == nil {
 		return
 	}
@@ -542,7 +550,7 @@ func (s *TermsAnalysisService) refreshVocabularies(ctx context.Context, event mo
 		}
 	}
 	if len(distinct) > termsRefreshCap {
-		log.Printf("terms run: meeting=%s run=%s layer=account refresh=truncated members=%d", event.MeetingID, event.RunID, len(distinct))
+		log.Printf("%s layer=account refresh=truncated members=%d", label, len(distinct))
 		distinct = distinct[:termsRefreshCap]
 	}
 	for _, u := range distinct {
