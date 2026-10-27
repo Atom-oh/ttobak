@@ -27,6 +27,12 @@ const (
 	AutoTermsModeOff      = "off"
 	AutoTermsModePersonal = "personal"
 
+	// ACCOUNT_TERMS_MODE: also merge a linked meeting's terms into its Account.
+	AccountTermsModeOff = "off"
+	AccountTermsModeOn  = "on"
+	// termsRefreshCap bounds the vocabulary refreshes one run triggers.
+	termsRefreshCap = 50
+
 	termsLease          = 5 * time.Minute
 	termsRunBudget      = 300 * time.Second
 	termsDeadlineMargin = 30 * time.Second
@@ -44,19 +50,24 @@ const (
 )
 
 // TermsConfig: AUTO_TERMS_MODE (off|personal), AUTO_TERMS_USERS (canary
-// subs; empty means everyone), AUTO_TERMS_MIN_CONFIDENCE, BEDROCK_TERMS_MODEL_ID.
+// subs; empty means everyone), AUTO_TERMS_MIN_CONFIDENCE, BEDROCK_TERMS_MODEL_ID,
+// ACCOUNT_TERMS_MODE (off|on; needs AUTO_TERMS_MODE on).
 type TermsConfig struct {
 	Mode          string
 	Users         map[string]bool
 	MinConfidence float64
 	ModelID       string
+	AccountMode   string
 }
 
 // TermsConfigFromEnv parses the flags; unknown modes are off.
 func TermsConfigFromEnv() TermsConfig {
-	cfg := TermsConfig{Mode: AutoTermsModeOff, MinConfidence: DefaultAutoTermsMinConfidence, ModelID: getEnvOrDefault("BEDROCK_TERMS_MODEL_ID", ClaudeSonnetModelID)}
+	cfg := TermsConfig{Mode: AutoTermsModeOff, AccountMode: AccountTermsModeOff, MinConfidence: DefaultAutoTermsMinConfidence, ModelID: getEnvOrDefault("BEDROCK_TERMS_MODEL_ID", ClaudeSonnetModelID)}
 	if strings.TrimSpace(os.Getenv("AUTO_TERMS_MODE")) == AutoTermsModePersonal {
 		cfg.Mode = AutoTermsModePersonal
+	}
+	if strings.TrimSpace(os.Getenv("ACCOUNT_TERMS_MODE")) == AccountTermsModeOn {
+		cfg.AccountMode = AccountTermsModeOn
 	}
 	for _, user := range strings.Split(os.Getenv("AUTO_TERMS_USERS"), ",") {
 		if user = strings.TrimSpace(user); user != "" {
@@ -78,6 +89,11 @@ func (c TermsConfig) Enabled(ownerID string) bool {
 	return c.Mode == AutoTermsModePersonal && ownerID != "" && (len(c.Users) == 0 || c.Users[ownerID])
 }
 
+// AccountEnabled reports whether a run also writes the meeting's Account layer.
+func (c TermsConfig) AccountEnabled() bool {
+	return c.AccountMode == AccountTermsModeOn
+}
+
 type termsAnalysisRepo interface {
 	GetMeeting(context.Context, string, string) (*model.Meeting, error)
 	GetTermsAnalysis(context.Context, string) (*model.TermsAnalysis, error)
@@ -86,11 +102,13 @@ type termsAnalysisRepo interface {
 	RenewTermsAnalysisLease(context.Context, string, string, string, int64, time.Time, int64) error
 	ReserveTermsAccepted(context.Context, string, string, string, int64, time.Time, int64, []model.TermsAcceptedTerm) error
 	CompleteTermsAnalysis(context.Context, string, string, string, int64, repository.TermsCompletion, time.Time) error
+	RecordTermsAccount(context.Context, string, string, string, string, []string) error
 	FailTermsAnalysis(context.Context, string, *model.TermsAnalysis, string, []model.TermsAcceptedTerm, time.Time) error
 }
 
 type termsMergeRunner interface {
 	MergeExtractedTerms(context.Context, string, []ExtractedTerm, TermsMeetingRef) (*TermsMergeResult, error)
+	MergeScoped(context.Context, TermsScope, []ExtractedTerm, TermsSourceRef) (*TermsMergeResult, error)
 }
 
 // termsLegacyMigrator makes the owner's term rows authoritative before a
@@ -123,11 +141,20 @@ type TermsAnalysisService struct {
 	// after a run made terms active, so batch recognition picks them up
 	// without waiting for a dictionary page visit.
 	refreshVocabulary func(ctx context.Context, ownerID string)
+	// listAccountMembers returns an Account's member user IDs; unset, the
+	// Account layer is skipped.
+	listAccountMembers func(ctx context.Context, accountID string) ([]string, error)
 }
 
 // SetVocabularyRefresher installs the post-run vocabulary hook; nil disables it.
 func (s *TermsAnalysisService) SetVocabularyRefresher(fn func(ctx context.Context, ownerID string)) {
 	s.refreshVocabulary = fn
+}
+
+// SetAccountMemberLister installs the Account member lookup the Account layer
+// uses for its early membership check and its vocabulary refreshes.
+func (s *TermsAnalysisService) SetAccountMemberLister(fn func(ctx context.Context, accountID string) ([]string, error)) {
+	s.listAccountMembers = fn
 }
 
 // NewTermsAnalysisService wires the job; attachments may be nil. A nil
@@ -387,14 +414,140 @@ func (s *TermsAnalysisService) Process(ctx context.Context, event model.TermsReq
 	log.Printf("terms run: meeting=%s run=%s status=succeeded code=%s calls=%d inputTokens=%d outputTokens=%d filter=%s created=%d suggested=%d merged=%d promoted=%d skipped=%d",
 		event.MeetingID, event.RunID, completion.ErrorCode, stats.calls, stats.inputTokens, stats.outputTokens, counts,
 		c.Created, c.Suggested, c.Merged, c.Promoted, c.SkippedTombstone+c.SkippedManual+c.SkippedTainted)
-	// Created counts suggested rows too; only active ones reach a vocabulary.
-	if s.refreshVocabulary != nil && c.Created-c.Suggested+c.Promoted > 0 {
-		s.refreshVocabulary(ctx, event.OwnerID)
+	var refresh []string
+	if madeActive(c) {
+		refresh = append(refresh, event.OwnerID)
 	}
+	refresh = append(refresh, s.mergeAccountLayer(runCtx, event, fresh.AccountID, state.AccountAcceptedTerms, terms, source)...)
+	s.refreshVocabularies(ctx, event, refresh)
 	// An Enqueue during this run returned PENDING and queued nothing; a source
 	// that changed after the freshness check gets its own run now.
 	s.Enqueue(ctx, event.OwnerID, event.MeetingID, "post-run")
 	return nil
+}
+
+// madeActive reports whether a merge made a term active. Created counts
+// suggested rows too; only active ones reach a vocabulary.
+func madeActive(c model.TermsCounters) bool {
+	return c.Created-c.Suggested+c.Promoted > 0
+}
+
+// mergeAccountLayer writes the run's filtered terms into the meeting's Account
+// (L1: active unless the meeting is tainted) and returns the members whose
+// vocabularies should refresh, owner first. It runs after the personal run
+// completed, so it is best effort: every skip or failure is logged and the
+// run stays succeeded. The early member check saves the writes; the
+// transaction's ConditionCheck remains the authority. prior is the run
+// state's accountAcceptedTerms; a key that would push it past
+// MaxTermsAccountAccepted is not merged into the Account.
+func (s *TermsAnalysisService) mergeAccountLayer(ctx context.Context, event model.TermsRequested, accountID string, prior []string, terms []ExtractedTerm, source termsSource) []string {
+	if accountID == "" {
+		return nil
+	}
+	skip := func(outcome string) []string {
+		log.Printf("terms run: meeting=%s run=%s layer=account outcome=%s", event.MeetingID, event.RunID, outcome)
+		return nil
+	}
+	if !s.cfg.AccountEnabled() {
+		return skip(model.TermsErrorDisabled)
+	}
+	if s.listAccountMembers == nil {
+		return skip("NOT_CONFIGURED")
+	}
+	members, err := s.listAccountMembers(ctx, accountID)
+	if err != nil {
+		return skip("MEMBERS_FAILED")
+	}
+	isMember := false
+	for _, m := range members {
+		isMember = isMember || m == event.OwnerID
+	}
+	if !isMember {
+		return skip("NOT_MEMBER")
+	}
+	known := make(map[string]bool, len(prior))
+	for _, key := range prior {
+		known[key] = true
+	}
+	var keys []string
+	kept := make([]ExtractedTerm, 0, len(terms))
+	for _, t := range terms {
+		key := TermKey(t.DisplayAs)
+		if key == "" {
+			continue
+		}
+		if !known[key] {
+			if len(known) >= model.MaxTermsAccountAccepted {
+				continue
+			}
+			known[key] = true
+		}
+		keys = append(keys, key)
+		kept = append(kept, t)
+	}
+	terms = kept
+	if len(terms) == 0 {
+		return skip("NO_TERMS")
+	}
+	// The personal merge may skip a key (a personal manual or tombstoned term)
+	// that the Account still observes, so acceptedTerms does not cover the
+	// Account: record the Account and every key it will observe first, so the
+	// deletion sweep cleans them there.
+	if err := s.repo.RecordTermsAccount(ctx, event.OwnerID, event.MeetingID, event.RunID, accountID, keys); err != nil {
+		return skip("RECORD_FAILED")
+	}
+	// No acceptedTerms: that list tracks the personal partition, and an Account
+	// observation that already exists makes a re-run a no-op on its own.
+	merged, err := s.merger.MergeScoped(ctx, TermsScope{
+		PK:     model.PrefixAccount + accountID,
+		Member: &repository.MembershipCheck{AccountID: accountID, UserID: event.OwnerID},
+	}, terms, TermsSourceRef{
+		Kind: model.DictSourceMeeting, Ref: event.MeetingID, OwnerID: event.OwnerID,
+		NotesSafe: source.notesSafe, Tainted: source.tainted,
+	})
+	if errors.Is(err, repository.ErrNotAccountMember) {
+		return skip("NOT_MEMBER")
+	}
+	if merged == nil {
+		return skip("FAILED")
+	}
+	// A failure is not retried (R8); its partial counters are logged.
+	outcome := "MERGED"
+	if err != nil {
+		outcome = "FAILED"
+	}
+	c := merged.Counters
+	log.Printf("terms run: meeting=%s run=%s layer=account outcome=%s created=%d suggested=%d merged=%d promoted=%d skipped=%d evicted=%d cleanup=%t",
+		event.MeetingID, event.RunID, outcome, c.Created, c.Suggested, c.Merged, c.Promoted,
+		c.SkippedTombstone+c.SkippedManual+c.SkippedTainted, c.Evicted, merged.CleanupErr == nil)
+	// Terms written before a failure are live, so their members refresh too.
+	if !madeActive(c) {
+		return nil
+	}
+	return append([]string{event.OwnerID}, members...)
+}
+
+// refreshVocabularies runs the vocabulary hook once per distinct user, at most
+// termsRefreshCap per run; the rest pick the terms up on their next refresh.
+func (s *TermsAnalysisService) refreshVocabularies(ctx context.Context, event model.TermsRequested, users []string) {
+	if s.refreshVocabulary == nil {
+		return
+	}
+	seen := map[string]bool{}
+	var distinct []string
+	for _, u := range users {
+		if u != "" && !seen[u] {
+			seen[u] = true
+			distinct = append(distinct, u)
+		}
+	}
+	if len(distinct) > termsRefreshCap {
+		log.Printf("terms run: meeting=%s run=%s layer=account refresh=truncated members=%d", event.MeetingID, event.RunID, len(distinct))
+		distinct = distinct[:termsRefreshCap]
+	}
+	for _, u := range distinct {
+		s.refreshVocabulary(ctx, u)
+	}
 }
 
 // migrateLegacy runs the legacy dictionary migration for ownerID; a missing

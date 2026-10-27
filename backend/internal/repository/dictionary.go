@@ -183,8 +183,9 @@ type DictMergeInput struct {
 	PK              string
 	TermKey         string
 	Observation     *model.DictObservation
-	HeardAs         []string // deduped, trimmed union computed by the caller
-	SourceTypes     []string // union computed by the caller; nil leaves it as is
+	HeardAs         []string              // deduped, trimmed union computed by the caller
+	SourceTypes     []string              // union computed by the caller; nil leaves it as is
+	Sources         []model.DictSourceRef // new evidence list computed by the caller; nil leaves it as is
 	SeenAt          string
 	ExpectedVersion int64
 	// SkipHit records the observation without ADD hits: the meeting was
@@ -697,6 +698,9 @@ func (r *DictionaryRepository) observeAutoTerm(ctx context.Context, in DictMerge
 	}
 	if len(in.SourceTypes) > 0 {
 		update = update.Set(expression.Name("sourceTypes"), expression.Value(in.SourceTypes))
+	}
+	if len(in.Sources) > 0 {
+		update = update.Set(expression.Name("sources"), expression.Value(in.Sources))
 	}
 	expr, err := expression.NewBuilder().WithUpdate(update).WithCondition(condition).Build()
 	if err != nil {

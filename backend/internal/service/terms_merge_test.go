@@ -21,6 +21,10 @@ type memDictStore struct {
 	hooks  map[string]func()                // run before the named write; return to keep
 	calls  map[string]int
 	failOn map[string]error
+	// members, when set, lists the "account/user" pairs whose membership
+	// ConditionCheck passes; nil lets every matching check pass.
+	members    map[string]bool
+	lastMember *repository.MembershipCheck
 }
 
 func newMemDictStore() *memDictStore {
@@ -71,8 +75,27 @@ func (s *memDictStore) ListDictObs(_ context.Context, _ string, key string) ([]m
 	return out, nil
 }
 
-func (s *memDictStore) CreateAutoTerm(_ context.Context, term *model.DictTerm, obs *model.DictObservation) error {
+// checkMember mirrors the repository's membership ConditionCheck.
+func (s *memDictStore) checkMember(pk string, member *repository.MembershipCheck) error {
+	scope, accountID, _ := model.TermScopeOf(pk)
+	if scope != model.TermScopeAccount {
+		return nil
+	}
+	if member == nil || member.UserID == "" || member.AccountID != accountID {
+		return repository.ErrInvalidInput
+	}
+	s.lastMember = member
+	if s.members != nil && !s.members[accountID+"/"+member.UserID] {
+		return repository.ErrNotAccountMember
+	}
+	return nil
+}
+
+func (s *memDictStore) CreateAutoTermChecked(_ context.Context, term *model.DictTerm, obs *model.DictObservation, member *repository.MembershipCheck) error {
 	if err := s.before("create"); err != nil {
+		return err
+	}
+	if err := s.checkMember(term.PK, member); err != nil {
 		return err
 	}
 	if _, ok := s.terms[term.SK]; ok {
@@ -89,6 +112,9 @@ func (s *memDictStore) observe(op, fromState string, in repository.DictMergeInpu
 	if err := s.before(op); err != nil {
 		return err
 	}
+	if err := s.checkMember(in.PK, in.Member); err != nil {
+		return err
+	}
 	if _, ok := s.obs[in.Observation.SK]; ok {
 		return memObsExists()
 	}
@@ -99,6 +125,9 @@ func (s *memDictStore) observe(op, fromState string, in repository.DictMergeInpu
 	t.State, t.HeardAs, t.LastSeenAt, t.UpdatedAt = model.TermStateActive, in.HeardAs, in.SeenAt, in.SeenAt
 	if len(in.SourceTypes) > 0 {
 		t.SourceTypes = in.SourceTypes
+	}
+	if len(in.Sources) > 0 {
+		t.Sources = in.Sources
 	}
 	t.Version++
 	switch {

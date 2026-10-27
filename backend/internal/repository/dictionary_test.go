@@ -357,8 +357,8 @@ func TestDictionaryWriteEffects(t *testing.T) {
 	}
 	mergeUpdate := resolved(txItems(t, (*calls)[0])[1]["Update"].(map[string]any), "UpdateExpression")
 	requireAll(t, "merge", mergeUpdate, "ADD hits", "heardAs", "lastSeenAt", "version")
-	if strings.Contains(mergeUpdate, "sourceTypes") || strings.Contains(mergeUpdate, "state") {
-		t.Fatalf("merge without source types must not touch them or the state: %s", mergeUpdate)
+	if strings.Contains(mergeUpdate, "sourceTypes") || strings.Contains(mergeUpdate, "state") || strings.Contains(mergeUpdate, "sources") {
+		t.Fatalf("merge without source types or sources must not touch them or the state: %s", mergeUpdate)
 	}
 	if err := repo.MergeAutoObservation(context.Background(), DictMergeInput{PK: "USER#u1", TermKey: key, Observation: obs, ExpectedVersion: 1, SkipHit: true}); err != nil {
 		t.Fatal(err)
@@ -366,12 +366,13 @@ func TestDictionaryWriteEffects(t *testing.T) {
 	if skip := resolved(txItems(t, (*calls)[1])[1]["Update"].(map[string]any), "UpdateExpression"); strings.Contains(skip, "hits") {
 		t.Fatalf("a re-recorded pruned observation must not add a hit: %s", skip)
 	}
-	promote := DictMergeInput{PK: "USER#u1", TermKey: key, Observation: obs, HeardAs: []string{"알파"}, SourceTypes: []string{model.TermSourceNotes}, ExpectedVersion: 2}
+	promote := DictMergeInput{PK: "USER#u1", TermKey: key, Observation: obs, HeardAs: []string{"알파"}, SourceTypes: []string{model.TermSourceNotes}, ExpectedVersion: 2,
+		Sources: []model.DictSourceRef{{Kind: model.DictSourceMeeting, Ref: "m1", At: "now"}}}
 	if err := repo.PromoteSuggestedTerm(context.Background(), promote, DictPromotion{DisplayAs: "AlphaGrid", Type: "product", FirstSourceMeetingID: "m1"}); err != nil {
 		t.Fatal(err)
 	}
 	promoteUpdate := resolved(txItems(t, (*calls)[2])[1]["Update"].(map[string]any), "UpdateExpression")
-	requireAll(t, "promote", promoteUpdate, `state = {"S":"active"}`, `hits = {"N":"1"}`, `heardAs = {"L":[{"S":"알파"}]}`,
+	requireAll(t, "promote", promoteUpdate, `sources = {"L":[{"M":{"at":{"S":"now"},"kind":{"S":"meeting"},"ref":{"S":"m1"}}}]}`, `state = {"S":"active"}`, `hits = {"N":"1"}`, `heardAs = {"L":[{"S":"알파"}]}`,
 		`sourceTypes = {"L":[{"S":"notes"}]}`, `displayAs = {"S":"AlphaGrid"}`, `type = {"S":"product"}`, `firstSourceMeetingId = {"S":"m1"}`, "REMOVE phrase")
 	if strings.Contains(promoteUpdate, "ADD") {
 		t.Fatalf("promotion must reset hits, not add to the tainted count: %s", promoteUpdate)

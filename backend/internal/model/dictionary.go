@@ -331,8 +331,8 @@ type DictObservation struct {
 	SK        string `dynamodbav:"SK"`
 	TermKey   string `dynamodbav:"termKey"`
 	MeetingID string `dynamodbav:"meetingId"`
-	// SourceKind/SourceRef name non-meeting evidence (kb, research, news);
-	// meeting rows keep meetingId.
+	// SourceKind/SourceRef name the evidence (meeting, kb, research, news);
+	// meeting rows also keep meetingId.
 	SourceKind        string   `dynamodbav:"sourceKind,omitempty"`
 	SourceRef         string   `dynamodbav:"sourceRef,omitempty"`
 	OwnerID           string   `dynamodbav:"ownerId"`

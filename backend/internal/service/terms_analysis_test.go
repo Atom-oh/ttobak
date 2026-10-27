@@ -32,6 +32,8 @@ type termsRepoFake struct {
 	failed    string
 	accepted  []model.TermsAcceptedTerm
 	calls     int
+	// recordedAccounts lists RecordTermsAccount calls, in order.
+	recordedAccounts []string
 }
 
 func (f *termsRepoFake) GetMeeting(context.Context, string, string) (*model.Meeting, error) {
@@ -69,7 +71,20 @@ func (f *termsRepoFake) CompleteTermsAnalysis(_ context.Context, _, _, _ string,
 	if f.state != nil {
 		done := *f.state
 		done.Status, done.SucceededSourceHash, done.LeaseUntil = model.AnalysisSucceeded, done.SourceHash, 0
+		if len(result.AcceptedTerms) > 0 {
+			done.AcceptedTerms = result.AcceptedTerms
+		}
 		f.state = &done
+	}
+	return nil
+}
+func (f *termsRepoFake) RecordTermsAccount(_ context.Context, _, _, _ string, accountID string, keys []string) error {
+	f.recordedAccounts = append(f.recordedAccounts, accountID)
+	if f.state != nil {
+		next := *f.state
+		next.AccountIDs = append(append([]string(nil), next.AccountIDs...), accountID)
+		next.AccountAcceptedTerms = append(append([]string(nil), next.AccountAcceptedTerms...), keys...)
+		f.state = &next
 	}
 	return nil
 }
@@ -570,5 +585,208 @@ func TestTermsProcessMigrationFailureWritesNothing(t *testing.T) {
 				t.Fatalf("no key may be reserved or merged: reserved=%v terms=%d calls=%v", repo.reserved, len(mem.terms), mem.calls)
 			}
 		})
+	}
+}
+
+// linkedTermsRun runs one Process for a meeting linked to Account a1 over a
+// partitioned store; members is what the member lister returns and prep, when
+// set, adjusts the store before the run.
+func linkedTermsRun(t *testing.T, cfg TermsConfig, members []string, prep func(partitionedDictStore)) (partitionedDictStore, *termsRepoFake, []string, string) {
+	t.Helper()
+	logs := capturePrivacyLogs(t)
+	meeting := termsTestMeeting()
+	meeting.AccountID = "a1"
+	repo := &termsRepoFake{meeting: meeting, state: queuedTermsState(meeting)}
+	store := partitionedDictStore{}
+	store.at("ACCOUNT#a1").members = map[string]bool{}
+	for _, m := range members {
+		store.at("ACCOUNT#a1").members["a1/"+m] = true
+	}
+	if prep != nil {
+		prep(store)
+	}
+	s, _ := newTermsTestService(repo, &termsModelFake{outputs: []string{termsGoodOutput}}, newTestMerger(newMemDictStore()), cfg)
+	s.merger = NewTermsMerger(store)
+	s.SetAccountMemberLister(func(_ context.Context, accountID string) ([]string, error) {
+		if accountID != "a1" {
+			t.Errorf("listed members of %q", accountID)
+		}
+		return members, nil
+	})
+	var refreshed []string
+	s.SetVocabularyRefresher(func(_ context.Context, user string) { refreshed = append(refreshed, user) })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	if err := s.Process(ctx, model.TermsRequested{OwnerID: "owner", MeetingID: "m1", RunID: "run-1"}); err != nil || repo.completed == nil {
+		t.Fatalf("err=%v completed=%v failed=%s", err, repo.completed, repo.failed)
+	}
+	return store, repo, refreshed, logs.String()
+}
+
+var termsAccountOn = TermsConfig{Mode: AutoTermsModePersonal, AccountMode: AccountTermsModeOn, MinConfidence: 0.85, ModelID: "test-model"}
+
+func TestTermsConfigAccountMode(t *testing.T) {
+	for mode, want := range map[string]bool{"": false, "off": false, "bogus": false, "on": true, " on ": true} {
+		t.Setenv("ACCOUNT_TERMS_MODE", mode)
+		if got := TermsConfigFromEnv().AccountEnabled(); got != want {
+			t.Errorf("ACCOUNT_TERMS_MODE=%q: enabled=%v want %v", mode, got, want)
+		}
+	}
+}
+
+func TestProcessWritesAccountLayerWhenLinked(t *testing.T) {
+	store, repo, refreshed, logs := linkedTermsRun(t, termsAccountOn, []string{"owner", "u2"}, nil)
+	if strings.Join(repo.recordedAccounts, ",") != "a1" {
+		t.Fatalf("the Account must be recorded for the deletion sweep before it is written: %v", repo.recordedAccounts)
+	}
+	personal, ok := store.at("USER#owner").term("DynamoDB")
+	if !ok || personal.State != model.TermStateActive {
+		t.Fatalf("personal term %+v", personal)
+	}
+	acct := store.at("ACCOUNT#a1")
+	term, ok := acct.term("DynamoDB")
+	if !ok || term.PK != "ACCOUNT#a1" || term.Scope != model.TermScopeAccount || term.State != model.TermStateActive {
+		t.Fatalf("account term %+v", term)
+	}
+	if len(term.Sources) != 1 || term.Sources[0].Kind != model.DictSourceMeeting || term.Sources[0].Ref != "m1" {
+		t.Fatalf("account sources %+v", term.Sources)
+	}
+	if obs := acct.obs[model.DictObsSK(term.TermKey, "m1")]; obs.SourceKind != model.DictSourceMeeting || obs.SourceRef != "m1" {
+		t.Fatalf("account observation %+v", obs)
+	}
+	if acct.lastMember == nil || *acct.lastMember != (repository.MembershipCheck{AccountID: "a1", UserID: "owner"}) {
+		t.Fatalf("membership check %+v", acct.lastMember)
+	}
+	if strings.Join(refreshed, ",") != "owner,u2" {
+		t.Fatalf("every member refreshes once, owner first: %v", refreshed)
+	}
+	if !strings.Contains(logs, "layer=account outcome=MERGED") || !strings.Contains(logs, "created=1") {
+		t.Fatalf("account counters must be logged separately: %s", logs)
+	}
+	if strings.Contains(logs, "DynamoDB") {
+		t.Fatal("logs must not carry term text")
+	}
+}
+
+func TestProcessAccountLayerDisabledLogs(t *testing.T) {
+	cases := []struct {
+		name    string
+		cfg     TermsConfig
+		members []string
+		outcome string
+	}{
+		{"flag off", termsOn, []string{"owner"}, "outcome=DISABLED"},
+		{"owner is not a member", termsAccountOn, []string{"u2"}, "outcome=NOT_MEMBER"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store, repo, refreshed, logs := linkedTermsRun(t, tc.cfg, tc.members, nil)
+			if len(repo.recordedAccounts) != 0 {
+				t.Fatalf("a skipped Account layer records nothing: %v", repo.recordedAccounts)
+			}
+			if _, ok := store.at("USER#owner").term("DynamoDB"); !ok {
+				t.Fatal("the personal layer must still be written")
+			}
+			if acct := store.at("ACCOUNT#a1"); len(acct.terms) != 0 || len(acct.obs) != 0 || acct.calls["list"] != 0 {
+				t.Fatalf("no account rows may be read or written: %d terms, calls %v", len(acct.terms), acct.calls)
+			}
+			if !strings.Contains(logs, "layer=account "+tc.outcome) {
+				t.Fatalf("missing %q in %s", tc.outcome, logs)
+			}
+			if strings.Join(refreshed, ",") != "owner" {
+				t.Fatalf("only the owner's vocabulary refreshes: %v", refreshed)
+			}
+		})
+	}
+}
+
+func TestProcessRefreshesAllMembersCapped(t *testing.T) {
+	members := []string{"u00"}
+	for i := 1; i < 60; i++ {
+		members = append(members, fmt.Sprintf("u%02d", i))
+	}
+	members[30] = "owner" // the owner is refreshed first wherever it is listed
+	_, _, refreshed, logs := linkedTermsRun(t, termsAccountOn, members, nil)
+	if len(refreshed) != 50 || refreshed[0] != "owner" {
+		t.Fatalf("refreshed %d users, first %v", len(refreshed), refreshed[:1])
+	}
+	seen := map[string]bool{}
+	for _, u := range refreshed {
+		if seen[u] {
+			t.Fatalf("%s refreshed twice", u)
+		}
+		seen[u] = true
+	}
+	if !strings.Contains(logs, "refresh=truncated members=60") {
+		t.Fatalf("truncation must be logged: %s", logs)
+	}
+}
+
+// A failed Account merge stays best effort (R8) but logs its partial counters.
+func TestProcessAccountLayerFailureLogsCounters(t *testing.T) {
+	store, repo, refreshed, logs := linkedTermsRun(t, termsAccountOn, []string{"owner"}, func(p partitionedDictStore) {
+		p.at("ACCOUNT#a1").failOn["create"] = errors.New("throttled")
+	})
+	if repo.completed == nil || repo.failed != "" || len(store.at("ACCOUNT#a1").terms) != 0 {
+		t.Fatalf("the run must stay succeeded: completed=%v failed=%s", repo.completed, repo.failed)
+	}
+	if !strings.Contains(logs, "layer=account outcome=FAILED created=0 suggested=0") {
+		t.Fatalf("the FAILED line must carry the counters: %s", logs)
+	}
+	if strings.Contains(logs, "outcome=MERGED") || strings.Contains(logs, "throttled") {
+		t.Fatalf("one outcome per run and no error text: %s", logs)
+	}
+	if strings.Join(refreshed, ",") != "owner" {
+		t.Fatalf("refreshed %v", refreshed)
+	}
+}
+
+// A personal manual term K is skipped by the personal merge (not in
+// acceptedTerms) but still observed in the Account; K and the new J must both
+// be on the run state the deletion sweep reads for ACCOUNT# partitions.
+func TestProcessRecordsAccountKeysThePersonalMergeSkipped(t *testing.T) {
+	logs := capturePrivacyLogs(t)
+	meeting := termsTestMeeting()
+	meeting.AccountID = "a1"
+	meeting.TranscriptA += "spk_0: AlphaGrid 배포 일정도 확인합시다\nspk_1: AlphaGrid 담당은 제가 맡겠습니다\n"
+	repo := &termsRepoFake{meeting: meeting, state: queuedTermsState(meeting)}
+	output := `{"terms":[{"displayAs":"DynamoDB","heardAs":[],"type":"service","phrase":"","confidence":0.95,` +
+		`"evidence":[{"source":"transcript","documentId":"","quote":"DynamoDB 파티션 키는"}]},` +
+		`{"displayAs":"AlphaGrid","heardAs":[],"type":"product","phrase":"","confidence":0.95,` +
+		`"evidence":[{"source":"transcript","documentId":"","quote":"AlphaGrid 배포 일정도"}]}]}`
+	store := partitionedDictStore{}
+	store.at("ACCOUNT#a1").members = map[string]bool{"a1/owner": true}
+	store.at("USER#owner").seed(model.DictTerm{DisplayAs: "DynamoDB", Origin: model.TermOriginManual, State: model.TermStateActive})
+	s, _ := newTermsTestService(repo, &termsModelFake{outputs: []string{output}}, NewTermsMerger(store), termsAccountOn)
+	s.SetAccountMemberLister(func(context.Context, string) ([]string, error) { return []string{"owner"}, nil })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	if err := s.Process(ctx, model.TermsRequested{OwnerID: "owner", MeetingID: "m1", RunID: "run-1"}); err != nil || repo.completed == nil {
+		t.Fatalf("err=%v completed=%v failed=%s", err, repo.completed, repo.failed)
+	}
+	kK, kJ := TermKey("DynamoDB"), TermKey("AlphaGrid")
+	if acceptedIndex(repo.completed.AcceptedTerms, kK) >= 0 || acceptedIndex(repo.completed.AcceptedTerms, kJ) < 0 {
+		t.Fatalf("personal acceptedTerms must keep SkipHit semantics: %+v\n%s", repo.completed.AcceptedTerms, logs.String())
+	}
+	acct := store.at("ACCOUNT#a1")
+	for _, key := range []string{kK, kJ} {
+		if _, ok := acct.obs[model.DictObsSK(key, "m1")]; !ok {
+			t.Fatalf("the Account must observe %s", key)
+		}
+	}
+	sweep := strings.Join(repo.state.AccountSweepKeys(), ",")
+	if !strings.Contains(sweep, kK) || !strings.Contains(sweep, kJ) || strings.Join(repo.state.AccountIDs, ",") != "a1" {
+		t.Fatalf("the Account sweep must cover K and J: keys=%s accounts=%v", sweep, repo.state.AccountIDs)
+	}
+	// Simulate SweepMeetingTerms on the Account partition: every recorded
+	// key's observation goes and an auto term left without one goes too.
+	for _, key := range repo.state.AccountSweepKeys() {
+		delete(acct.obs, model.DictObsSK(key, "m1"))
+		if term, ok := acct.terms[model.DictTermSK(key)]; ok && term.Origin == model.TermOriginAuto {
+			delete(acct.terms, model.DictTermSK(key))
+		}
+	}
+	if len(acct.obs) != 0 || len(acct.terms) != 0 {
+		t.Fatalf("no Account observations or orphan auto terms may remain: obs=%d terms=%d", len(acct.obs), len(acct.terms))
 	}
 }
