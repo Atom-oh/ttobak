@@ -173,7 +173,11 @@ must not host customer billing data.
 3. CloudFront signs the origin request with OAC (origin type `lambda`,
    `always-amz-auth`); Lambda accepts it only because the function's resource
    policy allows `cloudfront.amazonaws.com` with `aws:SourceArn` = the TTOBAK
-   distribution. The viewer `Authorization` header is forwarded to the app.
+   distribution. The OAC SigV4 signature occupies the origin request's
+   `Authorization`, so the viewer token reaches the app in the dedicated token
+   header of §7 (copied there at the edge after the JWT check). The
+   implementation plan fixes the header name and the edge mechanism after
+   verifying OAC's header behavior; the browser keeps sending `Authorization`.
 4. The BFF verifies the JWT itself (signature, issuer = TTOBAK pool, expiry;
    allowed audiences = the TTOBAK web client and the existing MCP resource
    audience, the same pair the Go API accepts), then resolves Account membership
@@ -197,13 +201,17 @@ Decision D4 (owner, 2026-10-27): keep the mechanism and the bucket layout; chang
 only the browser-facing prefix.
 - New behavior `/billing-upload/*` on the TTOBAK distribution, ordered before
   the default page behavior: S3 data-bucket origin, no OAC, all query strings,
-  no cookies, no viewer headers, standard logging off (query strings carry
-  `X-Amz-Security-Token`), ETag returned to the browser.
+  no cookies, no viewer headers, ETag returned to the browser.
+- Access logging is a distribution-level setting. The TTOBAK distribution
+  declares none in `infra/lib/frontend-stack.ts` today; any future logging must
+  use a v2 field selection that omits the query string, which carries
+  `X-Amz-Security-Token`.
 - A viewer-request CloudFront Function removes the `/billing-upload` prefix, so
   S3 receives `/accounts/{id}/uploads/...`, the exact path the BFF presigned.
   The signature covers the S3 key and the bucket host, not the viewer URL, so it
   stays valid. The function rejects any path that is not
-  `/billing-upload/accounts/*` after normalization.
+  `/billing-upload/accounts/{id}/uploads/...` after normalization (no `..`,
+  encoded separators or empty segments), with tests.
 - The BFF builds part URLs as TTOBAK origin + `/billing-upload/` + key + presigned
   query. Keys, the multipart flow, size checks, `jobs/*.json` and the worker
   stay unchanged; existing data needs no migration.
@@ -226,7 +234,9 @@ Decision D3 (owner, 2026-10-27): the user is identified by their TTOBAK sign-in.
 Call path: the MCP Lambda signs the request with SigV4 as the MCP role
 (`lambda:InvokeWebFunctionEndpoint`) only to pass the endpoint's `IamAuth`, and
 forwards the caller's own TTOBAK access token, which the MCP server already
-receives for the user (resource-bound HTTP token or stdio session token). Because
+receives for the user as a resource-bound HTTP access token. Billing tools are
+offered only by the hosted HTTP MCP server: the stdio server runs locally with
+the user's ID token and holds no MCP role to sign with. Because
 SigV4 occupies `Authorization`, the token travels in a dedicated header; the
 implementation plan fixes its name after checking which header OAC leaves
 intact on the CloudFront path, so both paths read the token the same way. The
@@ -294,9 +304,23 @@ CloudFront behaviors.
 - **D3 MCP identity — resolved 2026-10-27.** The caller's TTOBAK sign-in token
   is forwarded and verified by the BFF (§5, §7); no asserted-subject header.
 - **D4 Upload path — resolved 2026-10-27.** Keep presigned multipart through
-  CloudFront and the `accounts/*` bucket keys; only the viewer prefix changes to
-  `/billing-upload/*` (§6).
+  CloudFront and the `accounts/*/uploads/*` bucket keys; only the viewer prefix
+  changes to `/billing-upload/*` (§6).
 - **D5 Old domain — resolved 2026-10-27.** Two-week redirect, then delete (§9).
+
+Before any infra or BFF PR (from the PR #505 review):
+- Record D1 and the D3 token-forwarding boundary in an ADR; this spec is a
+  historical record, not an approved exception by itself.
+- Membership: count only canonical `ACCOUNT#`/`MEMBER#` rows, never
+  `PENDING_ACCOUNT#`, and revalidate on every request; apply connector grant
+  checks to MCP calls as the Go API does.
+- Add `/billing` (and `/dictionary`) to FrontendStack `knownPages`; a static
+  export cannot redirect, so the `/files` and old-domain redirects need a
+  CloudFront Function or client-side redirect.
+- Confirm KMS encryption and retention/TTL for the reused data bucket and
+  platform table.
+- If the worker keeps calling the web-search gateway, add it to the aligned
+  SigV4/MCP transport list (QA search invariant).
 
 ## 12. Navigation reorganisation
 
@@ -320,8 +344,9 @@ kind of insight. Proposed grouping by what the user is doing:
   Q&A. Proposed: **Docs** (`/docs`) = what you write; **Library** (`/kb`) = every
   file that came in, filterable by source (meeting attachment / uploaded),
   type, and whether it is indexed for Q&A. `/files` redirects to
-  `/kb?source=meeting`. Decided (owner, 2026-10-26): meeting attachments are
-  indexed for Q&A automatically.
+  `/kb?source=meeting`. Owner intent (2026-10-26): meeting attachments are
+  indexed for Q&A automatically, subject to the ADR-038/039 indexing and
+  extraction rollout gates; this spec does not activate it.
 - Existing `/insights/...` URLs keep working; only labels and grouping change.
 - The hand-off button is removed; Billing is a normal menu item, shown only to
   users who belong to at least one Account with billing data.
