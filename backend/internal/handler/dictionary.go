@@ -231,8 +231,24 @@ func (h *DictionaryHandler) DeleteDictTerm(w http.ResponseWriter, r *http.Reques
 
 // ListLayerTerms handles GET /api/settings/dictionary/layers/{layer}/terms
 // (layer personal, common or account:{id}; an Account needs membership).
+//
+// With ?deleted=1 (common only; any other layer or value is 400) it lists
+// Common tombstones with their last snapshot instead.
 func (h *DictionaryHandler) ListLayerTerms(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	if v, present := r.URL.Query()["deleted"]; present {
+		if len(v) != 1 || v[0] != "1" || chi.URLParam(r, "layer") != model.DictLayerCommon {
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "deleted=1 is supported on the common layer only")
+			return
+		}
+		items, err := h.dictService.ListDeletedCommon(ctx)
+		if err != nil {
+			writeDictionaryError(w, err, "Failed to list deleted terms")
+			return
+		}
+		writeJSON(w, http.StatusOK, model.DictDeletedTermsResponse{Items: items})
+		return
+	}
 	items, err := h.dictService.ListLayer(ctx, middleware.GetUserID(ctx), chi.URLParam(r, "layer"))
 	if err != nil {
 		writeDictionaryError(w, err, "Failed to list terms")

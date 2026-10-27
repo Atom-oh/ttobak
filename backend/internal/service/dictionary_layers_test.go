@@ -369,3 +369,38 @@ func TestCommonEditKeepsAuditAndRestores(t *testing.T) {
 		t.Fatalf("personal log: %v, want ErrNotFound", err)
 	}
 }
+
+func TestListCommonDeletedIncludesLastSnapshot(t *testing.T) {
+	store := newLayerStore()
+	gone := store.seed(model.PrefixDictCommon, "K-culture")
+	store.seed(model.PrefixDictCommon, "AlphaGrid") // stays live
+	svc := newLayerService(store)
+	ctx := context.Background()
+
+	phrase := "케이컬처"
+	if err := svc.UpdateCommonTerm(ctx, "u1", gone.TermKey, repository.DictTermChange{Phrase: &phrase}, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.DeleteCommonTerm(ctx, "u2", gone.TermKey, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.ListDeletedCommon(ctx)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("deleted list: %+v %v", got, err)
+	}
+	row, _ := store.row(model.PrefixDictCommon, gone.TermKey)
+	d := got[0]
+	// The snapshot is the term before the delete (with the edited phrase), not the cleared tombstone.
+	if d.TermID != gone.TermKey || d.DisplayAs != "K-culture" || d.Phrase != phrase || d.DeletedBy != "u2" || d.DeletedAt != row.DeletedAt || d.DeletedAt == "" {
+		t.Fatalf("deleted item: %+v (tombstone %+v)", d, row)
+	}
+
+	// Restoring brings it back to the live list and empties the deleted list.
+	logs, _ := svc.ListTermLog(ctx, "common", gone.TermKey)
+	if err := svc.RestoreCommonTerm(ctx, "u3", gone.TermKey, logs[0].SK); err != nil {
+		t.Fatal(err)
+	}
+	if got, err = svc.ListDeletedCommon(ctx); err != nil || len(got) != 0 {
+		t.Fatalf("after restore: %+v %v", got, err)
+	}
+}

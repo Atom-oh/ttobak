@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
+	"sync"
 
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
@@ -121,6 +123,79 @@ func (s *DictionaryService) ListLayer(ctx context.Context, userID, layer string)
 		return nil, fmt.Errorf("failed to get dictionary terms: %w", err)
 	}
 	return termViews(dict, rows), nil
+}
+
+// MaxDeletedCommonListed bounds the deleted-term view: each listed tombstone
+// costs one audit query, so only the newest deletions are resolved.
+const MaxDeletedCommonListed = 50
+
+// deletedCommonReaders is how many audit queries the deleted view runs at once.
+const deletedCommonReaders = 8
+
+// ListDeletedCommon lists the newest MaxDeletedCommonListed Common tombstones
+// so a deleted term can be found and restored. Each carries the display
+// fields of the term as it was before its latest audited change (not the
+// cleared tombstone) plus the deletion's time and actor. A tombstone with no
+// audited earlier state cannot be restored and is left out. Newest deletion
+// first.
+func (s *DictionaryService) ListDeletedCommon(ctx context.Context) ([]model.DictDeletedTermView, error) {
+	rows, err := s.repo.ListDictTerms(ctx, model.PrefixDictCommon)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get dictionary terms: %w", err)
+	}
+	var tombs []model.DictTerm
+	for _, row := range rows {
+		if row.State == model.TermStateDeleted {
+			tombs = append(tombs, row)
+		}
+	}
+	sort.SliceStable(tombs, func(i, j int) bool { return tombs[i].DeletedAt > tombs[j].DeletedAt })
+	if len(tombs) > MaxDeletedCommonListed {
+		tombs = tombs[:MaxDeletedCommonListed]
+	}
+	views := make([]*model.DictDeletedTermView, len(tombs))
+	errs := make([]error, len(tombs))
+	sem := make(chan struct{}, deletedCommonReaders)
+	var wg sync.WaitGroup
+	for i := range tombs {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int) {
+			defer func() { <-sem; wg.Done() }()
+			views[i], errs[i] = s.deletedCommonView(ctx, tombs[i])
+		}(i)
+	}
+	wg.Wait()
+	out := []model.DictDeletedTermView{}
+	for i, view := range views {
+		if errs[i] != nil {
+			return nil, errs[i]
+		}
+		if view != nil {
+			out = append(out, *view)
+		}
+	}
+	return out, nil
+}
+
+// deletedCommonView resolves one tombstone from its audit rows (newest
+// first): the latest row with a live earlier state wins; nil when none has.
+func (s *DictionaryService) deletedCommonView(ctx context.Context, row model.DictTerm) (*model.DictDeletedTermView, error) {
+	logs, err := s.repo.ListDictTermLog(ctx, model.PrefixDictCommon, row.TermKey)
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range logs {
+		prev := snapshotView(entry.Before)
+		if prev == nil || prev.State == model.TermStateDeleted {
+			continue
+		}
+		return &model.DictDeletedTermView{
+			TermID: row.TermKey, DisplayAs: prev.DisplayAs, Phrase: prev.Phrase, Type: prev.Type,
+			DeletedAt: row.DeletedAt, DeletedBy: row.UpdatedBy,
+		}, nil
+	}
+	return nil, nil
 }
 
 // CreateLayerTerm creates a manual term in the personal or an Account layer.

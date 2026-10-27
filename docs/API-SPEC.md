@@ -1050,6 +1050,12 @@ most 10, `kind` `meeting|kb|research|news`); Common items also carry
 
 - `GET .../layers/{layer}/terms` → 200 `{items}` (non-tombstone rows, oldest
   first; the personal layer hides unmigrated legacy copies like the GET above).
+- `GET .../layers/common/terms?deleted=1` → 200 `{items: [{termId, displayAs,
+  phrase, type, deletedAt, deletedBy}]}`: the newest 50 Common tombstones,
+  newest deletion first. The display fields are the term as it was before its latest audited
+  change (the stored tombstone is cleared); a tombstone with no audited
+  earlier state cannot be restored and is omitted. Restore through the log
+  routes below. `deleted=1` on any other layer, or any other value, is 400.
 - `POST .../layers/{layer}/terms` `{displayAs, phrase?, heardAs?, type?,
   aliasMode?}` creates a manual term in the personal or an Account layer (201,
   same 409s as `POST .../terms`). `common` is 400: Common terms come from
@@ -1057,8 +1063,8 @@ most 10, `kind` `meeting|kb|research|news`); Common items also carry
 - `PATCH .../layers/{layer}/terms/{termId}` takes the personal PATCH body
   (`version` required; stale 409 `VERSION_CONFLICT`). 200 `{item, termId, state}`.
 - `DELETE .../layers/{layer}/terms/{termId}[?version=]` tombstones the term.
-  200 `{termId, state: "deleted"}`; observation cleanup and tombstone pruning
-  are best effort.
+  200 `{termId, state: "deleted", warnings?}`; observation cleanup and
+  tombstone pruning are best effort, and a failure is a `warnings` entry.
 - Common audit (L2): every Common PATCH, DELETE and restore records
   `updatedBy`/`updatedAt` on the term and writes a `DICTLOG#{termKey}#{at}` row
   `{actor, action update|delete|restore, before, after, at}` in the same
