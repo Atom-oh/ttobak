@@ -5,9 +5,44 @@ on:
     branches: [main]
     paths: ['infra/**', 'backend/cmd/**', 'backend/internal/**', 'backend/go.*', 'backend/python/qa/**', 'backend/python/crawler/**', 'backend/python/document-extract/**', 'mcp-server/**', 'scripts/operations/http_origin_release.py', '.github/workflows/deploy-infra.yml']
   workflow_dispatch:
+    inputs:
+      model_deployment_mode:
+        description: 'Model preset: standard, terra or sonnet; blank inherits repository variable'
+        required: false
+        type: string
+        default: ''
+      model_meeting_summary:
+        description: 'Final-note model ID; blank inherits repository variable or preset'
+        required: false
+        type: string
+        default: ''
+      model_translation:
+        description: 'High-quality translation OpenAI model ID; blank inherits repository variable or Luna'
+        required: false
+        type: string
+        default: ''
+      model_retain_meeting_summary:
+        description: 'Exact outgoing note model IDs to retain during cutover, comma-separated'
+        required: false
+        type: string
+        default: ''
+      model_retain_translation:
+        description: 'Exact outgoing translation model IDs to retain during cutover, comma-separated'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
+
+# Both the synth/test gate and release coordinator must consume the same choice.
+# Repository variables persist on push; dispatch inputs override them for one run.
+env:
+  MODEL_DEPLOYMENT_MODE: ${{ inputs.model_deployment_mode || vars.MODEL_DEPLOYMENT_MODE }}
+  MODEL_MEETING_SUMMARY: ${{ inputs.model_meeting_summary || vars.MODEL_MEETING_SUMMARY }}
+  MODEL_TRANSLATION: ${{ inputs.model_translation || vars.MODEL_TRANSLATION }}
+  MODEL_RETAIN_MEETING_SUMMARY: ${{ inputs.model_retain_meeting_summary || vars.MODEL_RETAIN_MEETING_SUMMARY }}
+  MODEL_RETAIN_TRANSLATION: ${{ inputs.model_retain_translation || vars.MODEL_RETAIN_TRANSLATION }}
 
 concurrency:
   group: deploy-infra

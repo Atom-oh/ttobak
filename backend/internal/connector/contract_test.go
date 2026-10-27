@@ -91,3 +91,23 @@ func TestCurrentGrantIntersection(t *testing.T) {
 		t.Fatal("zero principal allowed")
 	}
 }
+
+func TestAccountCreationRequiresSharingApproval(t *testing.T) {
+	const operation = "api.account.createAccount"
+	const destination = "ttobak-api-bridge"
+	required, err := RequiredCapabilities(operation, destination)
+	if err != nil || !slices.Equal(required, []string{"read", "share", "write"}) {
+		t.Fatalf("creation can invite a designated Owner: required=%v err=%v", required, err)
+	}
+	principal := Principal{
+		userID: "creator", operation: operation, expiresAt: 200,
+		capabilities: []string{"read", "write"},
+	}
+	if err := principal.Require(operation, destination, 100); !errors.Is(err, ErrCapabilityDenied) {
+		t.Fatalf("creation without sharing approval allowed: %v", err)
+	}
+	principal.capabilities = []string{"read", "share", "write"}
+	if err := principal.Require(operation, destination, 100); err != nil {
+		t.Fatalf("fully approved creation rejected: %v", err)
+	}
+}

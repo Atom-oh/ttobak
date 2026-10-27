@@ -6,6 +6,7 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as agentcore from 'aws-cdk-lib/aws-bedrockagentcore';
 import { Construct } from 'constructs';
 import { RESEARCH_SFN_NAME } from './gateway-stack';
+import { DEFAULT_MODEL_CONFIGURATION, ModelConfiguration, validateModelConfiguration } from './model-config';
 
 export interface AiStackProps extends cdk.StackProps {
   bucket: s3.IBucket;
@@ -18,6 +19,7 @@ export interface AiStackProps extends cdk.StackProps {
   /** Bedrock Knowledge Base ID — scopes the api role's StartIngestionJob grant to this KB's ARN. */
   knowledgeBaseId?: string;
   indexingMode?: 'manual-only' | 'all';
+  modelConfiguration?: ModelConfiguration;
 }
 
 export class AiStack extends cdk.Stack {
@@ -42,6 +44,11 @@ export class AiStack extends cdk.Stack {
 
   constructor(scope: Construct, id: string, props: AiStackProps) {
     super(scope, id, props);
+    const models = validateModelConfiguration(props.modelConfiguration ?? DEFAULT_MODEL_CONFIGURATION);
+    const modelResources = (profile: string): string[] => [
+      `arn:${this.partition}:bedrock:*::foundation-model/${profile.slice('global.'.length)}`,
+      `arn:${this.partition}:bedrock:*:${this.account}:inference-profile/${profile}`,
+    ];
 
     // Helper to create a Lambda role with basic execution policy
     const createLambdaRole = (id: string, roleName: string, description: string): iam.Role => {
@@ -222,17 +229,13 @@ export class AiStack extends cdk.Stack {
     );
 
     // Live interpreter model for /api/translate quality=high. Exact model and
-    // global profile only; GatewayStack's BEDROCK_TRANSLATE_MODEL_ID must name
-    // this model (other IDs are denied and /api/translate falls back to Translate).
+    // global profile only, resolved together with GatewayStack's environment.
     this.apiRole.addToPolicy(
       new iam.PolicyStatement({
         sid: 'InvokeInterpreterModel',
         effect: iam.Effect.ALLOW,
         actions: ['bedrock:InvokeModel'],
-        resources: [
-          `arn:aws:bedrock:*::foundation-model/openai.gpt-6-luna`,
-          `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/global.openai.gpt-6-luna`,
-        ],
+        resources: [...new Set([models.translation, ...(models.retainedTranslation ?? [])])].flatMap(modelResources),
       })
     );
 
@@ -329,10 +332,7 @@ export class AiStack extends cdk.Stack {
       sid: 'InvokeFinalSummaryModel',
       effect: iam.Effect.ALLOW,
       actions: ['bedrock:InvokeModel'],
-      resources: [
-        `arn:aws:bedrock:*::foundation-model/openai.gpt-6.1-sol`,
-        `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/global.openai.gpt-6.1-sol`,
-      ],
+      resources: [...new Set([models.meetingSummary, ...(models.retainedMeetingSummary ?? [])])].flatMap(modelResources),
     }));
 
     this.summarizeRole.addToPolicy(
