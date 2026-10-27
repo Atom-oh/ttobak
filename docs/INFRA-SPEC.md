@@ -226,14 +226,27 @@ for a separate ttobak-connections table described an obsolete design.
 | convert-doc | Go/LibreOffice ARM64 container | 5m | 3008MB |
 
 Model/environment selection belongs to each function, not one repo-wide model.
-`gateway-stack.ts` selects GPT-6.1 Sol for final notes via `BEDROCK_SUMMARY_MODEL_ID`,
-while auxiliary Opus calls remain on `BEDROCK_MODEL_ID`. Only the summary role
-receives the exact GPT-6.1 Sol model/profile grant. Images use Opus 4.8, Sonnet 5.5 is used
+`model-config.ts` resolves `MODEL_DEPLOYMENT_MODE`, `MODEL_MEETING_SUMMARY` and
+`MODEL_TRANSLATION` (or explicit `model-*` CDK context), shared by GatewayStack
+and AiStack. Presets are `standard` (default Sol/Luna), `terra` (Terra/Luna) and
+`sonnet` (Sonnet/Luna); individual IDs override presets. See
+[model deployment](runbooks/model-deployment.md) for precedence, workflow inputs,
+IAM cutover and rollback.
+`MODEL_RETAIN_MEETING_SUMMARY` / `MODEL_RETAIN_TRANSLATION` keep bounded exact
+outgoing grants during a staged transition. The release coordinator checks
+deployed and selected model permissions before mutations and prevents premature
+retained-grant removal using deployed function timeout/last-modified metadata.
+`gateway-stack.ts` defaults to GPT-6.1 Sol for final notes via
+`BEDROCK_SUMMARY_MODEL_ID`, while auxiliary Opus calls remain on `BEDROCK_MODEL_ID`.
+Only the summary role receives the selected final-note model/profile grant.
+Images use Opus 4.8, Sonnet 5.5 is used
 for QA/simulator; Go refinement uses its Sonnet configuration and lightweight Go tasks
 use Haiku 5.5. QA detection and Translate are separate service/model choices.
-The API Lambda's `BEDROCK_TRANSLATE_MODEL_ID` selects GPT-6 Luna for
-`/api/translate` `quality=high`; only the API role receives that exact
+The API Lambda's `BEDROCK_TRANSLATE_MODEL_ID` defaults to GPT-6 Luna for
+`/api/translate` `quality=high`; only the API role receives the selected exact
 model/profile grant (`InvokeInterpreterModel`), with Amazon Translate as fallback.
+Unsupported translation request families fail synthesis; currently only OpenAI GPT
+IDs are accepted. Unknown presets and unsafe model IDs fail synthesis as well.
 The API Lambda also receives `TRANSLATE_HOURLY_LIMIT` (default 3000) and
 `TRANSLATE_HIGH_HOURLY_LIMIT` (default 1500) from CDK context
 `ttobak:translateHourlyLimit` / `ttobak:translateHighHourlyLimit`; synth rejects
