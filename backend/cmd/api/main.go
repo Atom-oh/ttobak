@@ -112,6 +112,10 @@ func init() {
 	}
 	kbService := service.NewKBService(s3Client, bedrockAgentClient, kbBucketName, kbID, kbDataSourceID)
 	kbService.SetAssetsBucketName(bucketName)
+	kbService.SetMembershipReader(func(ctx context.Context, accountID, userID string) (bool, error) {
+		member, err := repo.GetMember(ctx, accountID, userID)
+		return member != nil, err
+	})
 	var indexStatusEngine *service.IndexingService
 	if provider, err := service.NewIndexAWSProvider(s3Client, bedrockAgentClient, bucketName, kbBucketName, kbID, kbDataSourceID); err == nil {
 		indexStatusEngine = service.NewIndexingService(repo.MetadataView(), provider, provider, bucketName)
@@ -274,6 +278,7 @@ func init() {
 		r.Get("/api/accounts", accountHandler.ListAccounts)
 		r.Get("/api/navigation/accounts", accountCatalogHandler.Get)
 		r.Post("/api/accounts", accountHandler.CreateAccount)
+		r.Post("/api/accounts/{accountId}/owner-invitation", accountHandler.ResendOwnerInvitation)
 		r.Get("/api/accounts/{accountId}", accountHandler.GetAccount)
 		r.Get("/api/accounts/{accountId}/reading", accountReadingHandler.Get)
 		r.Put("/api/accounts/{accountId}/parent", accountHandler.UpdateAccountParent)

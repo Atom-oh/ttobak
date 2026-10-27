@@ -3,7 +3,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
-import { kbApi } from '@/lib/api';
+import { accountApi, kbApi } from '@/lib/api';
+import { KB_PERSONAL_CHOICE, kbUploadAccountId, kbUploadPutHeaders, kbUploadReady } from '@/lib/kbUpload';
+import type { AccountSummary } from '@/types/meeting';
 import type { KBFile } from '@/types/meeting';
 
 function formatFileSize(bytes?: number): string {
@@ -47,6 +49,14 @@ export function KBFileList() {
   const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [accounts, setAccounts] = useState<AccountSummary[]>([]);
+  // Required choice: an Account, or KB_PERSONAL_CHOICE; empty until picked.
+  const [accountChoice, setAccountChoice] = useState('');
+  const uploadReady = kbUploadReady(accountChoice);
+
+  useEffect(() => {
+    accountApi.list().then((res) => setAccounts(res.accounts || [])).catch(() => setAccounts([]));
+  }, []);
 
   const fetchFiles = useCallback(async () => {
     try {
@@ -71,6 +81,10 @@ export function KBFileList() {
 
   const handleUpload = async (selectedFiles: FileList | null) => {
     if (!selectedFiles || selectedFiles.length === 0) return;
+    if (!uploadReady) {
+      setError('업로드할 Account를 선택하세요. 개인 자료는 "없음(개인)"을 선택합니다.');
+      return;
+    }
 
     setUploading(true);
     setError(null);
@@ -78,19 +92,19 @@ export function KBFileList() {
     try {
       for (const file of Array.from(selectedFiles)) {
         // Get presigned URL
-        const { uploadUrl } = await kbApi.upload({
+        const { uploadUrl, headers } = await kbApi.upload({
           fileName: file.name,
           fileType: file.type,
+          accountId: kbUploadAccountId(accountChoice),
         });
 
-        // Upload to S3
-        await fetch(uploadUrl, {
+        // Upload to S3, sending every header the server signed
+        const put = await fetch(uploadUrl, {
           method: 'PUT',
           body: file,
-          headers: {
-            'Content-Type': file.type,
-          },
+          headers: kbUploadPutHeaders(file.type, headers),
         });
+        if (!put.ok) throw new Error(`Upload failed (${put.status})`);
       }
 
       // Refresh file list
@@ -156,6 +170,23 @@ export function KBFileList() {
           <a className="ml-2 font-semibold text-primary underline" href="/kb">내 KB 목록 보기</a>
         </div>
       )}
+      <div className="flex items-center gap-3">
+        <label htmlFor="kb-upload-account" className="text-sm font-semibold text-slate-900 dark:text-text-main">
+          업로드 Account
+        </label>
+        <select
+          id="kb-upload-account"
+          value={accountChoice}
+          onChange={(e) => setAccountChoice(e.target.value)}
+          className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm dark:border-white/10 dark:bg-transparent"
+        >
+          <option value="" disabled>선택하세요</option>
+          <option value={KB_PERSONAL_CHOICE}>없음(개인)</option>
+          {accounts.map((a) => (
+            <option key={a.accountId} value={a.accountId}>{a.name}</option>
+          ))}
+        </select>
+      </div>
       {/* Upload Area */}
       <div
         className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors ${
@@ -183,7 +214,7 @@ export function KBFileList() {
         <p className="text-xs text-slate-400 dark:text-text-muted mb-4">Supports: Markdown, PDF, Word, PowerPoint, Excel, TXT, JSON, CSV</p>
         <button
           onClick={() => fileInputRef.current?.click()}
-          disabled={uploading}
+          disabled={uploading || !uploadReady}
           className="px-4 py-2 bg-primary text-white rounded-lg font-semibold text-sm hover:bg-primary/90 disabled:opacity-50 transition-colors"
         >
           {uploading ? (

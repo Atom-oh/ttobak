@@ -460,8 +460,9 @@ type UpdateAllowedDomainsRequest struct {
 
 // KBUploadRequest represents the request body for KB file upload
 type KBUploadRequest struct {
-	FileName string `json:"fileName"`
-	FileType string `json:"fileType"`
+	FileName  string `json:"fileName"`
+	FileType  string `json:"fileType"`
+	AccountID string `json:"accountId,omitempty"` // empty = personal KB file
 }
 
 // KBUploadResponse represents the response for KB upload presigned URL
@@ -469,6 +470,9 @@ type KBUploadResponse struct {
 	UploadURL string `json:"uploadUrl"`
 	Key       string `json:"key"`
 	ExpiresIn int    `json:"expiresIn"`
+	// Headers are the signed headers the PUT must send beyond Content-Type
+	// (x-amz-meta-account-id for an Account upload); absent for personal files.
+	Headers map[string]string `json:"headers,omitempty"`
 }
 
 // KBFileResponse represents a file in the knowledge base

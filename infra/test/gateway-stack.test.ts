@@ -899,6 +899,60 @@ for bad in ({'Ref':'OtherRole'}, {'Fn::ImportValue':'unknown'}, qa):
       .toThrow(/ttobak:accountTermsMode/);
   });
 
+  test('KB and research term sources reach only summarize, off by default and validated', () => {
+    const summarizeId = resourceId('AWS::Lambda::Function', 'FunctionName', 'ttobak-summarize');
+    const queueId = resourceId('AWS::SQS::Queue', 'QueueName', 'ttobak-terms-source-dlq');
+    const objectRuleId = resourceId('AWS::Events::Rule', 'Name', 'ttobak-terms-source-object');
+    const requestRuleId = resourceId('AWS::Events::Rule', 'Name', 'ttobak-terms-source-requested');
+    const rules = template.findResources('AWS::Events::Rule');
+    const objectPattern = rules[objectRuleId].Properties.EventPattern;
+    expect(objectPattern.source).toEqual(['aws.s3']);
+    expect(objectPattern['detail-type']).toEqual(['Object Created']);
+    expect(objectPattern.detail.object).toEqual({ key: [{ prefix: 'kb/' }, { prefix: 'shared/research/' }] });
+    expect(JSON.stringify(objectPattern.detail.bucket)).toContain('KbBucket');
+    expect(rules[requestRuleId].Properties.EventPattern).toEqual({ source: ['ttobak.analysis'], 'detail-type': ['TermsSourceRequested'] });
+    for (const ruleId of [objectRuleId, requestRuleId]) {
+      expect(rules[ruleId].Properties.Targets).toEqual([{
+        Arn: { 'Fn::GetAtt': [summarizeId, 'Arn'] },
+        Id: expect.any(String),
+        DeadLetterConfig: { Arn: { 'Fn::GetAtt': [queueId, 'Arn'] } },
+        RetryPolicy: { MaximumEventAgeInSeconds: 300, MaximumRetryAttempts: 3 },
+      }]);
+    }
+    // No other rule watches the KB bucket.
+    const kbRules = Object.entries(rules).filter(([, rule]) => JSON.stringify(rule.Properties.EventPattern ?? {}).includes('KbBucket'));
+    expect(kbRules.map(([id]) => id)).toEqual([objectRuleId]);
+    const queue = template.findResources('AWS::SQS::Queue')[queueId].Properties;
+    expect(queue.SqsManagedSseEnabled).toBe(true);
+    expect(queue.RedriveAllowPolicy).toEqual({ redrivePermission: 'denyAll' });
+
+    const summarizeEnv = (value: Template) => Object.values(value.findResources('AWS::Lambda::Function'))
+      .find(resource => resource.Properties.FunctionName === 'ttobak-summarize')!.Properties.Environment.Variables;
+    expect(summarizeEnv(template)).toMatchObject({ KB_TERMS_MODE: 'off', RESEARCH_TERMS_MODE: 'off' });
+    const withFlag = Object.values(template.findResources('AWS::Lambda::Function'))
+      .filter(resource => resource.Properties.Environment?.Variables?.KB_TERMS_MODE !== undefined);
+    expect(withFlag.map(resource => resource.Properties.FunctionName)).toEqual(['ttobak-summarize']);
+    const on = buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined, { 'ttobak:kbTermsMode': 'on', 'ttobak:researchTermsMode': 'on' });
+    expect(summarizeEnv(on)).toMatchObject({ KB_TERMS_MODE: 'on', RESEARCH_TERMS_MODE: 'on' });
+    for (const key of ['ttobak:kbTermsMode', 'ttobak:researchTermsMode']) {
+      expect(() => buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined, { [key]: 'true' }))
+        .toThrow(new RegExp(key));
+    }
+  });
+
+  test('transcriptCorrection: silent glossary correction is off by default and validated', () => {
+    const summarizeEnv = (value: Template) => Object.values(value.findResources('AWS::Lambda::Function'))
+      .find(resource => resource.Properties.FunctionName === 'ttobak-summarize')!.Properties.Environment.Variables;
+    expect(summarizeEnv(template).TRANSCRIPT_CORRECTION_MODE).toBe('off');
+    const on = buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined, { 'ttobak:transcriptCorrection': 'on' });
+    expect(summarizeEnv(on).TRANSCRIPT_CORRECTION_MODE).toBe('on');
+    const withFlag = Object.values(on.findResources('AWS::Lambda::Function'))
+      .filter(resource => resource.Properties.Environment?.Variables?.TRANSCRIPT_CORRECTION_MODE !== undefined);
+    expect(withFlag.map(resource => resource.Properties.FunctionName)).toEqual(['ttobak-summarize']);
+    expect(() => buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined, { 'ttobak:transcriptCorrection': 'true' }))
+      .toThrow(/ttobak:transcriptCorrection/);
+  });
+
   test('action-item DLQ is encrypted, retains seven days, and accepts only this rule', () => {
     const queueId = resourceId('AWS::SQS::Queue', 'QueueName', 'ttobak-action-items-dlq');
     const ruleId = resourceId('AWS::Events::Rule', 'Name', 'ttobak-action-items-requested');

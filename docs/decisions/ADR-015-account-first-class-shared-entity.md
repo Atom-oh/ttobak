@@ -18,13 +18,14 @@ GSI while supporting the sharing and knowledge workflows of ADR-016 through ADR-
   `SK=MEMBER#{userId}`, with `GSI1PK=USER#{userId}` and
   `GSI1SK=ACCOUNT#{accountId}`. Account lists must retain the `ACCOUNT#` prefix
   condition so they do not mix with meeting date-index rows.
-- Creation writes metadata and the creator's owner membership transactionally.
+- **ADR-055 supersedes creator-only initial ownership:** creation atomically
+  writes metadata, the selected initial Owner and optional creator AM membership.
   Detail reads check membership consistently, deliberately distinguishing missing
   accounts (`ErrNotFound`) from existing inaccessible accounts (`ErrForbidden`).
   Listing/alias lookup uses paginated membership queries and per-account reads;
   alias ambiguity is rejected rather than guessed.
 - `model.AssignableRoles` contains `AM`, `TAM`, `SSA`, `SA`, `SA Manager`, and
-  `AM Manager`. `owner` is creator-assigned and cannot be granted by member APIs.
+  `AM Manager`. `owner` is assigned only during creation and cannot be granted by member APIs.
 - **ADR-034 supersedes owner-only addition/role changes:** any current member may
   add members or change a non-owner's assignable role. Removing a member or
   revoking a pending invite remains owner-only. These labels do not introduce

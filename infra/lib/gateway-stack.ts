@@ -150,6 +150,37 @@ export function autoTermsEnvironment(scope: Construct): Record<string, string> {
   };
 }
 
+/**
+ * Silent glossary-based transcript correction for the summarize Lambda
+ * (layered dictionary, L3). CDK context `ttobak:transcriptCorrection`
+ * (off|on, default off); invalid values fail synth.
+ */
+export function transcriptCorrectionEnvironment(scope: Construct): Record<string, string> {
+  const raw = scope.node.tryGetContext('ttobak:transcriptCorrection');
+  const mode = raw === undefined || raw === null ? 'off' : String(raw).trim() || 'off';
+  if (mode !== 'off' && mode !== 'on') {
+    throw new Error(`ttobak:transcriptCorrection must be off or on, got ${JSON.stringify(mode)}`);
+  }
+  return { TRANSCRIPT_CORRECTION_MODE: mode };
+}
+
+/**
+ * KB-document and research-report term extraction for the summarize Lambda
+ * (layered dictionary 4.2). CDK context `ttobak:kbTermsMode` and
+ * `ttobak:researchTermsMode` (off|on, default off); invalid values fail synth.
+ */
+export function sourceTermsEnvironment(scope: Construct): Record<string, string> {
+  const read = (key: string) => {
+    const raw = scope.node.tryGetContext(key);
+    const mode = raw === undefined || raw === null ? 'off' : String(raw).trim() || 'off';
+    if (mode !== 'off' && mode !== 'on') {
+      throw new Error(`${key} must be off or on, got ${JSON.stringify(mode)}`);
+    }
+    return mode;
+  };
+  return { KB_TERMS_MODE: read('ttobak:kbTermsMode'), RESEARCH_TERMS_MODE: read('ttobak:researchTermsMode') };
+}
+
 export class GatewayStack extends cdk.Stack {
   /** Present only when ttobak:mcpResourceAudience enables HTTP MCP. */
   public readonly mcpFunction?: lambda.Function;
@@ -439,6 +470,8 @@ export class GatewayStack extends cdk.Stack {
         BEDROCK_SUMMARY_RETAIN_MODEL_IDS: (models.retainedMeetingSummary ?? []).join(','),
         BEDROCK_SONNET_MODEL_ID: 'global.anthropic.claude-sonnet-5-5',
         ...autoTermsEnvironment(this),
+        ...transcriptCorrectionEnvironment(this),
+        ...sourceTermsEnvironment(this),
         KB_BUCKET_NAME: props.kbBucket?.bucketName || '',
         KB_ID: props.knowledgeBaseId || '',
         DATA_SOURCE_ID: props.dataSourceId || '',
@@ -1131,6 +1164,44 @@ export class GatewayStack extends cdk.Stack {
     pipelineFailures.watchQueue('ActionItems', actionItemsDlq);
     pipelineFailures.watchQueue('SavedSummary', savedSummaryDlq);
     pipelineFailures.watchQueue('Terms', termsDlq);
+
+    // KB documents and research reports as term sources (layered dictionary
+    // 4.2). The KB bucket already sends S3 events to EventBridge; summarize
+    // maps kb/{uid}/... and shared/research/{id}.md to TermsSourceRequested
+    // (logging DISABLED while the flags are off) and runs the extraction in
+    // its own invocation. The research agent's role is managed outside CDK,
+    // so the report object's event is the trigger, not a publish from Python.
+    if (props.kbBucket) {
+      const termsSourceDlq = new sqs.Queue(this, 'TermsSourceDlq', {
+        queueName: 'ttobak-terms-source-dlq',
+        encryption: sqs.QueueEncryption.SQS_MANAGED,
+        retentionPeriod: cdk.Duration.days(7),
+        redriveAllowPolicy: { redrivePermission: sqs.RedrivePermission.DENY_ALL },
+      });
+      const termsSourceTarget = () => new eventsTargets.LambdaFunction(this.summarizeFunction, {
+        maxEventAge: cdk.Duration.minutes(5),
+        retryAttempts: 3,
+        deadLetterQueue: termsSourceDlq,
+      });
+      new events.Rule(this, 'TermsSourceObjectRule', {
+        ruleName: 'ttobak-terms-source-object',
+        description: 'Map KB uploads and research reports to dictionary term source requests',
+        eventPattern: {
+          source: ['aws.s3'],
+          detailType: ['Object Created'],
+          detail: {
+            bucket: { name: [props.kbBucket.bucketName] },
+            object: { key: [{ prefix: 'kb/' }, { prefix: 'shared/research/' }] },
+          },
+        },
+      }).addTarget(termsSourceTarget());
+      new events.Rule(this, 'TermsSourceRequestedRule', {
+        ruleName: 'ttobak-terms-source-requested',
+        description: 'Extract dictionary terms from the requested KB document or research report',
+        eventPattern: { source: ['ttobak.analysis'], detailType: ['TermsSourceRequested'] },
+      }).addTarget(termsSourceTarget());
+      pipelineFailures.watchQueue('TermsSource', termsSourceDlq);
+    }
     // Install the consumer, rule and invocation permission before API code
     // can acknowledge a newly published request during this stack update.
     // Private relinking must not precede QA's canonical publication reader.

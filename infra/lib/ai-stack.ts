@@ -366,6 +366,17 @@ export class AiStack extends cdk.Stack {
     // KB bucket write (for exporting meeting context documents)
     props.kbBucket.grantWrite(this.summarizeRole);
 
+    // Dictionary term sources: HeadObject (account-id metadata) and GetObject
+    // of KB uploads and research reports only.
+    this.summarizeRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'TermsSourceRead',
+        effect: iam.Effect.ALLOW,
+        actions: ['s3:GetObject'],
+        resources: [props.kbBucket.arnForObjects('kb/*'), props.kbBucket.arnForObjects('shared/research/*')],
+      })
+    );
+
     // Bedrock KB ingestion (for auto-triggering ingestion after export)
     this.summarizeRole.addToPolicy(
       new iam.PolicyStatement({

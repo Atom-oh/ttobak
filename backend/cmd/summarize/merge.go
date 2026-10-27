@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/ttobak/backend/internal/duration"
 	"github.com/ttobak/backend/internal/model"
+	"github.com/ttobak/backend/internal/service"
 	"github.com/ttobak/backend/internal/speaker"
 )
 
@@ -20,7 +21,7 @@ var partKeyPattern = regexp.MustCompile(`_part_(\d{3})\.json$`)
 
 // mergePartTranscripts downloads all part transcripts, refines each, offsets timestamps, and concatenates them.
 // It also returns the total merged duration in seconds (the cumulative timestamp offset across all parts).
-func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCount int) (*parsedTranscript, error) {
+func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCount int, glossary []service.GlossaryTerm) (*parsedTranscript, error) {
 	prefix := fmt.Sprintf("transcripts/%s_part_", meetingID)
 
 	result, err := s3Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
@@ -84,6 +85,8 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 	var cumulativeOffset float64
 	var qualities []*model.TranscriptQuality
 	var objects []model.SummaryObject
+	var corrections []model.TranscriptCorrection
+	glossaryApplied := false
 
 	for _, part := range parts {
 		parsed, parseErr := downloadAndParseTranscript(ctx, bucket, part.key)
@@ -93,7 +96,7 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 		// AWS Transcribe speaker-label segments keep only pronunciation items. Their
 		// canonical text retains punctuation and carries no labels to namespace.
 		transcribeSegments := len(parsed.Segments) > 0
-		refineParsedTranscript(ctx, parsed)
+		refineParsedTranscript(ctx, parsed, glossary)
 		qualities, objects = append(qualities, parsed.Quality), append(objects, parsed.Objects...)
 		transcript, segments, whisperSegments, audioDuration := parsed.Text, parsed.Segments, parsed.Whisper, parsed.Duration
 		if len(segments) == 0 && strings.TrimSpace(transcript) != "" {
@@ -143,6 +146,14 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 			log.Printf("Part %d: no usable duration source; using 0 (may cause timestamp drift)", part.index)
 		}
 
+		// Each part's corrections index its own segments; nothing below
+		// drops or reorders them, so the part's offset is len(allSegments).
+		glossaryApplied = glossaryApplied || parsed.GlossaryApplied
+		for _, correction := range parsed.Corrections {
+			correction.Segment += len(allSegments)
+			corrections = append(corrections, correction)
+		}
+
 		// Offset segment timestamps and append to merged list
 		for _, seg := range segments {
 			if !seg.Untimed {
@@ -164,7 +175,8 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 	log.Printf("Merged %d parts for meeting %s: %d chars, %d segments, total duration %.0fs",
 		len(parts), meetingID, len(mergedText), len(allSegments), cumulativeOffset)
 
-	return &parsedTranscript{Text: mergedText, Segments: allSegments, Duration: cumulativeOffset, Quality: mergeTranscriptQuality(qualities), Objects: objects}, nil
+	return &parsedTranscript{Text: mergedText, Segments: allSegments, Duration: cumulativeOffset, Quality: mergeTranscriptQuality(qualities), Objects: objects,
+		Corrections: corrections, GlossaryApplied: glossaryApplied}, nil
 }
 
 // buildTranscriptText reassembles transcript body text from segments, using

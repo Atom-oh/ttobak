@@ -44,6 +44,12 @@ var (
 	// dispatch branch and triggers are testable without AWS.
 	processTermsRequested = func(context.Context, model.TermsRequested) error { return nil }
 	enqueueTerms          = func(context.Context, string, string, string) {}
+
+	// KB/research term sources: Object Created on the KB bucket is mapped to
+	// TermsSourceRequested, which runs in its own invocation.
+	termsSourceBucket  string
+	requestTermsSource = func(context.Context, string, string) error { return nil }
+	processTermsSource = func(context.Context, model.TermsSourceRequested) error { return nil }
 )
 
 func init() {
@@ -97,6 +103,13 @@ func init() {
 		return member != nil, err
 	})
 	dictService.SetAccountOrder(service.AccountRecencyOrder(repo))
+	// Silent transcript correction (TRANSCRIPT_CORRECTION_MODE): the meeting
+	// glossary for refinement, and heardAs feedback from repeated fixes.
+	dictService.SetCorrectionStore(dictionaryRepo)
+	loadMeetingGlossary = dictService.GlossaryForMeeting
+	learnFromCorrections = func(ctx context.Context, meeting *model.Meeting, glossary []service.GlossaryTerm, corrections []model.TranscriptCorrection) {
+		dictService.LearnFromCorrections(ctx, meeting.UserID, meeting.AccountID, meeting.MeetingID, glossary, corrections)
+	}
 	termsService := service.NewTermsAnalysisService(repo, service.NewTermsMerger(dictionaryRepo),
 		dictService, bedrockService, attachmentTextService, service.TermsPublisher(ebClient), service.TermsConfigFromEnv())
 	termsService.SetVocabularyRefresher(func(ctx context.Context, ownerID string) {
@@ -122,9 +135,15 @@ func init() {
 	resummaryService.SetTermsEnqueuer(func(ctx context.Context, ownerID, meetingID string) {
 		enqueueTerms(ctx, ownerID, meetingID, "resummary")
 	})
+	kbBucketName := os.Getenv("KB_BUCKET_NAME")
+	termsService.SetSourceReader(service.TermsSourceDeps{
+		Store: repo, Objects: s3Client, Bucket: kbBucketName, Publish: service.TermsSourcePublisher(ebClient),
+	})
+	termsSourceBucket = kbBucketName
+	requestTermsSource = termsService.RequestSourceFromObject
+	processTermsSource = termsService.ProcessSource
 
 	// KB export service — gracefully skips if not configured
-	kbBucketName := os.Getenv("KB_BUCKET_NAME")
 	kbID := os.Getenv("KB_ID")
 	dataSourceID := os.Getenv("DATA_SOURCE_ID")
 	var bedrockAgentClient *bedrockagent.Client
@@ -263,6 +282,17 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 		return processTermsRequested(ctx, event.Detail)
 	}
 
+	// KB/research term extraction likewise runs in its own invocation.
+	if envelope.Source == "ttobak.analysis" && envelope.DetailType == "TermsSourceRequested" {
+		var event struct {
+			Detail model.TermsSourceRequested `json:"detail"`
+		}
+		if err := json.Unmarshal(raw, &event); err != nil {
+			return fmt.Errorf("decode terms source event: %w", err)
+		}
+		return processTermsSource(ctx, event.Detail)
+	}
+
 	// Custom event: all parts of a multi-file meeting have been transcribed
 	if envelope.Source == "ttobak.transcribe" && envelope.DetailType == "AllPartsTranscribed" {
 		var event model.AllPartsTranscribedEvent
@@ -280,6 +310,14 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 
 	bucket := event.Detail.Bucket.Name
 	key := event.Detail.Object.Key
+
+	// KB bucket objects (kb/, shared/research/) only map to a term source
+	// request; they never reach the transcript path. The key goes as
+	// delivered: the mapper tries it first and the unescaped form only when
+	// the delivered one is missing, so raw and encoded keys both resolve.
+	if termsSourceBucket != "" && bucket == termsSourceBucket {
+		return requestTermsSource(ctx, bucket, key)
+	}
 
 	if decoded, err := url.QueryUnescape(key); err == nil {
 		key = decoded
@@ -385,7 +423,9 @@ func handleSingleTranscript(ctx context.Context, bucket, key string, eventETags 
 			return err
 		}
 	}
-	refineParsedTranscript(ctx, parsed)
+	glossary := meetingGlossary(ctx, meeting)
+	refineParsedTranscript(ctx, parsed, glossary)
+	logCorrectionOutcome(meetingID, parsed, glossary)
 	segments, whisperSegments, audioDuration := parsed.Segments, parsed.Whisper, parsed.Duration
 
 	// Same fallback chain as the multi-part merge path (merge.go): the raw
@@ -422,6 +462,7 @@ func handleSingleTranscript(ctx context.Context, bucket, key string, eventETags 
 	if err != nil || current == nil {
 		return err
 	}
+	learnFromCorrections(ctx, current, glossary, parsed.Corrections)
 	priorContext := ""
 	if !repository.SummaryPrivacyWritesEnabled() {
 		priorContext = buildLinkedMeetingContext(ctx, current)
@@ -554,10 +595,12 @@ func handleAllPartsTranscribed(ctx context.Context, detail *model.AllPartsTransc
 	if snapshot.Meeting.Status != meeting.Status {
 		return nil
 	}
-	parsed, err := mergePartTranscripts(ctx, detail.Bucket, meetingID, detail.PartCount)
+	glossary := meetingGlossary(ctx, meeting)
+	parsed, err := mergePartTranscripts(ctx, detail.Bucket, meetingID, detail.PartCount, glossary)
 	if err != nil {
 		return errors.Join(err, failTranscriptSnapshot(ctx, snapshot))
 	}
+	logCorrectionOutcome(meetingID, parsed, glossary)
 	if handled, err := handleNoSpeech(ctx, snapshot, parsed); handled {
 		return err
 	}
@@ -565,6 +608,7 @@ func handleAllPartsTranscribed(ctx context.Context, detail *model.AllPartsTransc
 	if err != nil || current == nil {
 		return err
 	}
+	learnFromCorrections(ctx, current, glossary, parsed.Corrections)
 	transcript, segments := parsed.Text, parsed.Segments
 
 	// Archive the merged transcript to S3 (ADR-014 design.md §5.1 step 7).

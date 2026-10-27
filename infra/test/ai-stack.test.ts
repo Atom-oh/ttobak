@@ -80,6 +80,22 @@ describe('AiStack', () => {
     expect(vocab[0].Resource).not.toEqual('*');
   });
 
+  test('summarize reads only the KB term-source prefixes of the KB bucket', () => {
+    const statements = statementsOf('TtobakSummarizeRole');
+    const read = statements.filter(statement => statement.Sid === 'TermsSourceRead');
+    expect(read).toHaveLength(1);
+    expect(read[0].Action).toEqual('s3:GetObject');
+    const resources = read[0].Resource as unknown[];
+    expect(resources).toHaveLength(2);
+    expect(JSON.stringify(resources[0])).toContain('KbBucket');
+    expect(JSON.stringify(resources[0])).toContain('/kb/*');
+    expect(JSON.stringify(resources[1])).toContain('/shared/research/*');
+    // No other summarize statement reads KB bucket objects.
+    const otherReads = statements.filter(statement => statement.Sid !== 'TermsSourceRead'
+      && JSON.stringify(statement.Action).includes('s3:GetObject') && JSON.stringify(statement.Resource).includes('KbBucket'));
+    expect(otherReads).toHaveLength(0);
+  });
+
   test('API role can write and delete vocab/ table files', () => {
     const actions = JSON.stringify(statementsOf('TtobakApiRole').map(statement => statement.Action));
     expect(actions).toContain('s3:PutObject');
