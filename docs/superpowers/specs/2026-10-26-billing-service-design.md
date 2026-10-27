@@ -3,6 +3,9 @@
 > Historical design record. Status: Draft; owner decisions D1–D5 recorded
 > 2026-10-26/27, implementation not started. Date: 2026-10-26. Author: Junseok Oh,
 > with Claude. This is design intent, not proof of delivery or deployment.
+> Successor: [ADR-056](../../decisions/ADR-056-billing-service-origin-and-identity.md)
+> replaces §5 step 3, §7's token transport and the "exactly as today" Account
+> filtering (direct membership only).
 > Scope: move the AWS Billing Insight companion (today a separate app at
 > `insight.atomai.click`) into the TTOBAK project as its own service, served
 > from the TTOBAK domain with TTOBAK sign-in, and expose its results to the
