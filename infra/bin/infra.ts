@@ -11,8 +11,11 @@ import { CrawlerStack } from '../lib/crawler-stack';
 import { ResearchAgentStack } from '../lib/research-agent-stack';
 import { WhisperStack } from '../lib/whisper-stack';
 import { WebSearchGatewayStack } from '../lib/web-search-gateway-stack';
+import { resolveModelConfiguration } from '../lib/model-config';
 
 const app = new cdk.App();
+// Share one selection between exact IAM grants and runtime Lambda model IDs.
+const modelConfiguration = resolveModelConfiguration(app);
 // Activate canonical sources after snapshot acceptance and current-source QA.
 const knowledgeIndexingMode: 'manual-only' | 'all' = 'all';
 const knowledgeIndexScheduleEnabled = true;
@@ -87,6 +90,7 @@ const aiStack = new AiStack(app, 'TtobakAiStack', {
   researchAgentExecutionRoleArn,
   knowledgeBaseId: knowledgeStack.knowledgeBaseId,
   indexingMode: knowledgeIndexingMode,
+  modelConfiguration,
 });
 aiStack.addDependency(storageStack);
 aiStack.addDependency(knowledgeStack);
@@ -122,6 +126,7 @@ const gatewayStack = new GatewayStack(app, 'TtobakGatewayStack', {
   writeConnectorClient: authStack.writeConnectorClient,
   connectorPrivateBridgeEnabled,
   apiRole: aiStack.apiRole,
+  modelConfiguration,
   transcribeRole: aiStack.transcribeRole,
   summarizeRole: aiStack.summarizeRole,
   processImageRole: aiStack.processImageRole,
