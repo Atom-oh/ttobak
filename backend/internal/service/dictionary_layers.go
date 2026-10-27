@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -91,8 +92,12 @@ func (s *DictionaryService) resolveLayer(ctx context.Context, userID, layer stri
 	return dictTarget{}, termInputError("layer", "must be personal, common or account:{id}")
 }
 
-// ListLayer lists one layer's non-tombstone terms, oldest first. The
-// personal layer hides pristine legacy copies until migration, as GET does.
+// ListLayer lists one layer's non-tombstone terms, oldest first. Like GET,
+// the personal layer first migrates a legacy blob (best effort) and hides
+// pristine legacy copies while the blob stays unmigrated. A migration that
+// fails while the blob still holds unmigrated terms is returned as its error
+// (ErrLegacyDictionaryConflict for a blob that cannot migrate) rather than a
+// silently empty or partial list; GET still serves the legacy terms.
 func (s *DictionaryService) ListLayer(ctx context.Context, userID, layer string) ([]model.DictTermView, error) {
 	t, err := s.resolveLayer(ctx, userID, layer)
 	if err != nil {
@@ -100,8 +105,15 @@ func (s *DictionaryService) ListLayer(ctx context.Context, userID, layer string)
 	}
 	var dict *model.UserDictionary
 	if t.personal() {
+		_, migrateErr := s.MigrateLegacyDictionary(ctx, userID)
 		if dict, err = s.repo.GetDictionary(ctx, userID); err != nil {
 			return nil, fmt.Errorf("failed to get dictionary: %w", err)
+		}
+		if migrateErr != nil && dict != nil && dict.MigratedAt == "" && len(dict.Terms) > 0 {
+			if errors.Is(migrateErr, ErrLegacyDictionaryConflict) {
+				return nil, migrateErr
+			}
+			return nil, fmt.Errorf("dictionary migration pending: %w", migrateErr)
 		}
 	}
 	rows, err := s.repo.ListDictTerms(ctx, t.pk)
@@ -162,10 +174,11 @@ func (s *DictionaryService) DeleteLayerTerm(ctx context.Context, userID, layer, 
 	if t.scope != model.TermScopeCommon {
 		return s.tombstoneTerm(ctx, userID, t, termKey, version)
 	}
-	if err := s.DeleteCommonTerm(ctx, userID, termKey, version); err != nil {
+	warnings, err := s.deleteCommon(ctx, userID, termKey, version)
+	if err != nil {
 		return nil, err
 	}
-	return &model.DictTermMutationResponse{TermID: termKey, State: model.TermStateDeleted}, nil
+	return &model.DictTermMutationResponse{TermID: termKey, State: model.TermStateDeleted, Warnings: warnings}, nil
 }
 
 // RestoreLayerTerm restores a Common term from one of its audit rows; logID
@@ -223,26 +236,36 @@ func (s *DictionaryService) UpdateCommonTerm(ctx context.Context, userID, termID
 // DeleteCommonTerm tombstones a Common term (a nil version uses the current
 // row) with an audit row; observation cleanup and pruning are best effort.
 func (s *DictionaryService) DeleteCommonTerm(ctx context.Context, userID, termID string, version *int64) error {
+	_, err := s.deleteCommon(ctx, userID, termID, version)
+	return err
+}
+
+// deleteCommon is DeleteCommonTerm plus the warnings of its best-effort
+// steps, which the layer DELETE response carries like a personal delete.
+func (s *DictionaryService) deleteCommon(ctx context.Context, userID, termID string, version *int64) ([]string, error) {
 	row, err := s.liveCommonTerm(ctx, termID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if version != nil && *version != row.Version {
-		return ErrDictionaryVersionConflict
+		return nil, ErrDictionaryVersionConflict
 	}
 	now := s.stamp()
 	next := tombstoneOf(*row, userID, now)
 	result, err := s.writeCommon(ctx, userID, model.DictLogActionDelete, row, &next, now)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	var warnings []string
 	if result.CleanupErr != nil {
 		log.Printf("common dictionary observation cleanup failed for term %s: %v", termID, result.CleanupErr)
+		warnings = append(warnings, "term observation cleanup incomplete")
 	}
 	if err := s.pruneTombstones(ctx, model.PrefixDictCommon, nil); err != nil {
 		log.Printf("common dictionary tombstone pruning failed: %v", err)
+		warnings = append(warnings, "tombstone pruning incomplete")
 	}
-	return nil
+	return warnings, nil
 }
 
 // RestoreCommonTerm puts back the term as it was before the change recorded
