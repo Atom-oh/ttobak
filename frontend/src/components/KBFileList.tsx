@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { accountApi, kbApi } from '@/lib/api';
-import { KB_PERSONAL_CHOICE, kbUploadAccountId, kbUploadPutHeaders, kbUploadReady } from '@/lib/kbUpload';
+import { KB_PERSONAL_CHOICE, kbAccountListNotice, kbUploadAccountId, kbUploadPutHeaders, kbUploadReady } from '@/lib/kbUpload';
 import type { AccountSummary } from '@/types/meeting';
 import type { KBFile } from '@/types/meeting';
 
@@ -50,12 +50,15 @@ export function KBFileList() {
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [accounts, setAccounts] = useState<AccountSummary[]>([]);
+  const [accountsLoad, setAccountsLoad] = useState<'loading' | 'loaded' | 'failed'>('loading');
   // Required choice: an Account, or KB_PERSONAL_CHOICE; empty until picked.
   const [accountChoice, setAccountChoice] = useState('');
   const uploadReady = kbUploadReady(accountChoice);
 
   useEffect(() => {
-    accountApi.list().then((res) => setAccounts(res.accounts || [])).catch(() => setAccounts([]));
+    accountApi.list()
+      .then((res) => { setAccounts(res.accounts || []); setAccountsLoad('loaded'); })
+      .catch(() => { setAccounts([]); setAccountsLoad('failed'); });
   }, []);
 
   const fetchFiles = useCallback(async () => {
@@ -187,6 +190,9 @@ export function KBFileList() {
           ))}
         </select>
       </div>
+      {kbAccountListNotice(accountsLoad) && (
+        <p role="alert" className="text-xs text-red-600 dark:text-red-400">{kbAccountListNotice(accountsLoad)}</p>
+      )}
       {/* Upload Area */}
       <div
         className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors ${

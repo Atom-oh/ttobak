@@ -1074,7 +1074,8 @@ a membership ConditionCheck in its transaction, so a membership removed after
 that check is still 403. `termId` is the 32-hex `termKey`, validated as in the
 personal routes, and request bodies have the same bounds and validation.
 Term items (here and in the personal GET `items`) gain `layer` and `sources` (`[{kind, ref, at}]`, newest first, at
-most 10, `kind` `meeting|kb|research|news`); Common items also carry
+most 10, `kind` `meeting|kb|research|news`; `ref` is empty on Account and
+Common items, which name other users' content); Common items also carry
 `updatedBy`. These routes do not rebuild vocabularies, except personal writes
 (which behave as the personal routes above).
 

@@ -40,10 +40,7 @@ func termView(row model.DictTerm) model.DictTermView {
 	if heard == nil {
 		heard = []string{}
 	}
-	sources := row.Sources
-	if sources == nil {
-		sources = []model.DictSourceRef{}
-	}
+	sources := sharedLayerSources(row)
 	view := model.DictTermView{
 		TermID: row.TermKey, DisplayAs: row.DisplayAs, Phrase: row.Phrase, HeardAs: heard,
 		AliasMode: row.AliasMode, Type: row.Type, Origin: row.Origin, State: row.State,
@@ -56,6 +53,25 @@ func termView(row model.DictTerm) model.DictTermView {
 		view.UpdatedBy = row.UpdatedBy // L2: Common edits are attributed
 	}
 	return view
+}
+
+// sharedLayerSources returns the row's sources for a view. On Account and
+// Common rows the refs name other users' content (a KB key carries its
+// owner's ID and file name), and even a digest of one can be confirmed by
+// guessing, so those views carry only each source's kind and time; only the
+// owner's Personal rows keep refs.
+func sharedLayerSources(row model.DictTerm) []model.DictSourceRef {
+	if len(row.Sources) == 0 {
+		return []model.DictSourceRef{}
+	}
+	if !strings.HasPrefix(row.PK, model.PrefixAccount) && row.PK != model.PrefixDictCommon {
+		return row.Sources
+	}
+	out := make([]model.DictSourceRef, len(row.Sources))
+	for i, src := range row.Sources {
+		out[i] = model.DictSourceRef{Kind: src.Kind, At: src.At}
+	}
+	return out
 }
 
 func sortRowsByAdded(rows []model.DictTerm) {

@@ -15,7 +15,7 @@ function loadModule(path) {
 }
 
 const same = (a, b) => assert.deepEqual(JSON.parse(JSON.stringify(a)), b);
-const { KB_PERSONAL_CHOICE, kbUploadReady, kbUploadAccountId, kbUploadPutHeaders } = loadModule('lib/kbUpload.ts');
+const { KB_PERSONAL_CHOICE, KB_ACCOUNTS_LOAD_ERROR, kbAccountListNotice, kbUploadReady, kbUploadAccountId, kbUploadPutHeaders } = loadModule('lib/kbUpload.ts');
 
 test('kbUploadReady: blocked until an Account or the personal choice is made', () => {
   assert.equal(kbUploadReady(''), false);
@@ -35,4 +35,11 @@ test('kbUploadPutHeaders: content type plus every header the server signed', () 
     kbUploadPutHeaders('application/pdf', { 'x-amz-meta-account-id': 'acct-a' }),
     { 'Content-Type': 'application/pdf', 'x-amz-meta-account-id': 'acct-a' },
   );
+});
+
+test('kbAccountListNotice: a failed Account list is reported, not hidden behind the personal option', () => {
+  assert.equal(kbAccountListNotice('loading'), undefined);
+  assert.equal(kbAccountListNotice('loaded'), undefined);
+  assert.equal(kbAccountListNotice('failed'), KB_ACCOUNTS_LOAD_ERROR);
+  assert.match(KB_ACCOUNTS_LOAD_ERROR, /Account 목록을 불러오지 못했습니다/);
 });

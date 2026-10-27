@@ -90,7 +90,8 @@ func (r *CrawlerRepository) GetSource(ctx context.Context, sourceID string) (*mo
 
 // GlobalNewsSourceAttribute marks an operator-curated crawler source whose
 // news may feed the Common dictionary layer. Only operators set it, directly
-// on the CONFIG item; no API path writes it (CrawlerSource has no such field).
+// on the CONFIG item; no API path sets it true (CrawlerSource.GlobalNewsSource
+// is json:"-", and PutSourceIfAbsent forces it false on user-created sources).
 const GlobalNewsSourceAttribute = "globalNewsSource"
 
 // IsGlobalNewsSource reports whether sourceID is an operator-curated global

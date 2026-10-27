@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { accountApi, ApiError, dictionaryApi } from '@/lib/api';
 import {
   claimInFlight, dictionaryErrorMessage, findDuplicateTerm, LAYER_TABS, layerAllowsCreate, normalizeTermKey, parseHeardAs,
-  resolveLayer, shouldReloadAfterError, type DeletedCommonTerm, type DictionaryLayer, type DictTermItem, type LayerTab, type TermPatch,
+  DELETED_LOAD_ERROR, resolveLayer, shouldReloadAfterError, type DeletedCommonTerm, type DictionaryLayer, type DictTermItem, type LayerTab, type TermPatch,
 } from '@/lib/dictionary';
 import type { AccountSummary } from '@/types/meeting';
 import { DictionaryTable } from './DictionaryTable';
@@ -27,6 +27,7 @@ function LayerDictionary({ layer }: { layer: DictionaryLayer }) {
   const [showDeleted, setShowDeleted] = useState(false);
   // null until first opened: the deleted view costs an audit read per term.
   const [deleted, setDeleted] = useState<DeletedCommonTerm[] | null>(null);
+  const [deletedError, setDeletedError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [newDisplayAs, setNewDisplayAs] = useState('');
   const [newHeardAs, setNewHeardAs] = useState('');
@@ -47,9 +48,10 @@ function LayerDictionary({ layer }: { layer: DictionaryLayer }) {
     const mine = ++deletedSeq.current;
     try {
       const { items: gone } = await dictionaryApi.listDeletedCommon();
-      if (mine === deletedSeq.current) setDeleted(gone ?? []);
-    } catch (err) {
-      if (mine === deletedSeq.current) { setDeleted((prev) => prev ?? []); setError(err instanceof Error ? err.message : '삭제된 항목을 불러오지 못했습니다.'); }
+      if (mine === deletedSeq.current) { setDeleted(gone ?? []); setDeletedError(null); }
+    } catch {
+      // Its own small error: a failed tombstone list never hides the live list.
+      if (mine === deletedSeq.current) { setDeleted((prev) => prev ?? []); setDeletedError(DELETED_LOAD_ERROR); }
     }
   }, []);
 
@@ -129,11 +131,13 @@ function LayerDictionary({ layer }: { layer: DictionaryLayer }) {
           }}
           aria-pressed={showDeleted}
           className="px-3 py-1.5 text-xs font-semibold rounded-full bg-slate-100 text-slate-600 dark:bg-white/5 dark:text-text-secondary">
-          삭제된 항목{deleted !== null && ` ${deleted.length}`}
+          삭제된 항목{deleted !== null && !deletedError && ` ${deleted.length}`}
         </button>
       )}
       {isCommon && showDeleted ? (
-        deleted === null
+        deletedError
+          ? <div role="alert" className="glass-panel rounded-xl p-4 text-center text-xs text-red-600 dark:text-red-400">{deletedError}</div>
+          : deleted === null
           ? <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" /></div>
           : deleted.length === 0
           ? <div className="glass-panel rounded-xl p-8 text-center text-sm text-slate-500 dark:text-text-muted">삭제된 용어가 없습니다.</div>
