@@ -48,8 +48,21 @@ AWS SDK v3), AWS CDK 2.273.0 L1 `CfnWebFunction*`, CloudFront Functions
 - Uploads keep `accounts/{id}/uploads/*` keys. The viewer prefix is `/billing-upload`.
 - No new VPC, no security-group ingress, no public IP, no new unauthenticated API route.
 - Runtime `nodejs24.x`; the entry listens on `AWS_LAMBDA_HTTP_ENDPOINT` (`host:port`).
-- Reuse the data bucket and platform table by name from CDK context
-  (`ttobak:billingDataBucket`, `ttobak:billingPlatformTable`). Never create, import or delete them.
+- Reuse the data bucket and platform table by name. Never create, import or delete them.
+- Billing context lives in the checked-in `infra/cdk.json`, like every other
+  durable `ttobak:` key:
+  - `ttobak:billingDataBucket` and `ttobak:billingPlatformTable` enable
+    `TtobakBillingStack`.
+  - `ttobak:billingEndpointDomain`, `ttobak:billingEndpointArn` and
+    `ttobak:billingFunctionArn` enable the FrontendStack behaviors.
+  - FrontendStack reads Billing values only from context strings, never
+    CloudFormation exports. The HTTP-origin release coordinator
+    (`scripts/operations/http_origin_release.py`) deploys a fixed stack list and
+    must keep deploying FrontendStack whether or not Billing exists.
+  - The endpoint keys are committed only after Task 10 deploys `TtobakBillingStack`.
+- Every workflow that synthesizes the app must build `services/billing/bff/dist`
+  and the resource-policy bundle first: `test-infra.yml` and both jobs of
+  `deploy-infra.yml`.
 - No customer names in code, tests, fixtures or docs.
 - Never `cdk deploy --all`. Deploy changed stacks individually with
   `--exclusively` in dependency order: Billing, then Frontend. Each deploy needs
@@ -140,9 +153,10 @@ infra/test/billing-stack.test.ts, infra/test/billing-frontend.test.ts
 - Produces: `createApp({ s3, ddb, env, authenticate, presign, now }) -> express.Application`.
   - `authenticate` is Express middleware that sets `req.sub` and `req.user` or answers 401.
   - `env` keys: `DATA_BUCKET, ACCOUNT_TABLE, PLATFORM_TABLE, PUBLIC_URL, AWS_REGION`.
-- Routes: `GET /api/billing/health` (no auth), `GET /api/billing/accounts`,
+- Routes, every one behind `authenticate`: `GET /api/billing/accounts`,
   `GET /api/billing/data/:id.json`, `GET /api/billing/accounts/:acct/report`,
-  and the upload router at `/api/billing/accounts`.
+  and the upload router at `/api/billing/accounts`. There is no health route; a
+  Web Function needs no load-balancer probe.
 
 - [ ] **Step 1: Copy the sources and drop what Phase 1 removes.**
   - Copy `lib/store.js`, `lib/uploads.js`, `lib/access.js` and `tests/dom/fake-ddb.js`.
@@ -154,8 +168,8 @@ infra/test/billing-stack.test.ts, infra/test/billing-frontend.test.ts
   - `req.accounts` is now resolved after `authenticate` by `access.visible(req.sub)`.
 - [ ] **Step 2: Write the failing tests in `test/app.test.js`.**
   - `routes_live_only_under_api_billing`: `GET /api/accounts` gives 404; `GET /` gives 404.
-  - `health_needs_no_auth`: `GET /api/billing/health` gives 200 `ok` with an `authenticate` stub that always 401s.
-  - `data_requires_auth`: with that stub, `GET /api/billing/data/kpis.json` gives 401.
+  - `every_route_requires_auth`: with an `authenticate` stub that always 401s,
+    every route above (and `GET /api/billing/health`) gives 401.
   - Port `tests/dom/data.test.js` and `scope.test.js` cases to the new paths,
     using an `authenticate` stub that sets `req.sub = 'u1'`.
   - Port the store and upload suites unchanged except for paths.
@@ -165,7 +179,7 @@ infra/test/billing-stack.test.ts, infra/test/billing-frontend.test.ts
   - Triggers: `pull_request` and `push` to `main`, paths `services/billing/**` and the workflow itself.
   - Runner `ttobak-arm` with the same fork guard as `test-backend.yml`.
   - Steps: `setup-node` 24, then in `services/billing/bff` run `npm ci && npm test`,
-    then in `services/billing/page` run `python3 -m unittest test_build_page -v`.
+    then in `services/billing/page` run `npm ci && python3 -m unittest test_build_page -v`.
 - [ ] **Step 5: Customer-name check.** `git grep -niE "<customer names from the companion repo>" services/billing`
   returns nothing. The implementer gets the list from the owner; it is not written into the repo.
 - [ ] **Step 6: Commit** `feat(billing): import BFF core under /api/billing`.
@@ -208,7 +222,8 @@ infra/test/billing-stack.test.ts, infra/test/billing-frontend.test.ts
 **Interfaces:**
 - Produces: `createAccess({ ddb, ttobakTable, now }) -> { canAct(sub, acct): Promise<boolean>, visible(sub): Promise<Array<{id,name,parentId,member:true,canAct:true}>> }`.
   - `canAct`: `GetItem` `PK=ACCOUNT#{acct}`, `SK=MEMBER#{sub}`, `ProjectionExpression: PK`,
-    with no cache. False for an invalid `ACCT_ID` without calling DynamoDB.
+    `ConsistentRead: true`, with no cache. False for an invalid `ACCT_ID` without
+    calling DynamoDB.
   - `visible`: paginated GSI1 query (`GSI1PK=USER#{sub}`, `begins_with(GSI1SK,'ACCOUNT#')`).
     For each candidate it runs `canAct` and reads `META` `name, parentAccountId` for
     display; it returns confirmed rows only, sorted by name then id. No ancestors,
@@ -226,6 +241,7 @@ infra/test/billing-stack.test.ts, infra/test/billing-frontend.test.ts
   - `visible_paginates`: three memberships across pages.
   - `no_memberships_returns_empty`
   - `removed_member_loses_access_immediately`: delete the canonical item; the next `canAct` is false.
+  - `can_act_reads_consistently`: the recorded `GetItem` input has `ConsistentRead: true`.
 - [ ] **Step 2: Run** `npm test -- --test-name-pattern=access`. Expected: FAIL.
 - [ ] **Step 3: Implement.** In `app.js`, when `visible` returns `[]`,
   `GET /api/billing/accounts` answers `200 []` (Review Focus 2) instead of the
@@ -275,9 +291,10 @@ infra/test/billing-stack.test.ts, infra/test/billing-frontend.test.ts
 
 - [ ] **Step 1: Write the failing tests in `entry.test.js`.**
   - `listens_on_lambda_endpoint`: spawn `node index.js` with
-    `AWS_LAMBDA_HTTP_ENDPOINT=127.0.0.1:<free port>` and stub env. `GET /api/billing/health` gives 200.
+    `AWS_LAMBDA_HTTP_ENDPOINT=127.0.0.1:<free port>` and stub env.
+    `GET /api/billing/accounts` without a token gives the 401 JSON body.
   - `missing_env_exits_nonzero`
-  - `no_store_on_every_response`: health, 401 and 404 all carry `private, no-store`.
+  - `no_store_on_every_response`: 401, 404 and a stubbed 200 all carry `private, no-store`.
 - [ ] **Step 2: Run, implement, run.** Expected: FAIL, then PASS.
 - [ ] **Step 3: Run** `npm run package && ls dist/node_modules/express`. Expected: present, and no `test/` directory.
 - [ ] **Step 4: Commit** `feat(billing): Web Function entry and package`.
@@ -329,7 +346,9 @@ infra/test/billing-stack.test.ts, infra/test/billing-frontend.test.ts
 - `installBillingBridge(win, { getToken, refresh, onSignedOut }) -> () => void` sets
   `win.ttobakBilling = { token, refresh, signedOut }` and returns an uninstaller.
   - `getToken` is `getIdToken` from `src/lib/auth.ts`, and `refresh` is `refreshSession`.
-  - `onSignedOut` routes to `/` (sign-in).
+  - `onSignedOut` is `triggerAuthFailure` from `src/components/auth/AuthProvider.tsx`,
+    the same teardown `src/lib/api.ts` uses on a failed refresh. It does not just
+    navigate.
 - `page.tsx` renders inside the app shell an `<iframe src="/billing-app/index.html">`
   (`upload.html` when `?view=upload`) with `title="Billing"`, full height, no `sandbox`
   (same origin is required).
@@ -351,14 +370,17 @@ infra/test/billing-stack.test.ts, infra/test/billing-frontend.test.ts
 
 **Files:**
 - Create `infra/lib/billing-stack.ts`, `infra/test/billing-stack.test.ts`.
-- Modify `infra/bin/infra.ts`, `.github/workflows/test-infra.yml` (build
-  `services/billing/bff` with `npm ci && npm run package` before synth, like the
-  MCP bundle), and `docs/INFRA-SPEC.md`.
+- Modify `infra/bin/infra.ts` and `docs/INFRA-SPEC.md`.
+- Modify `.github/workflows/test-infra.yml` and both jobs of
+  `.github/workflows/deploy-infra.yml`: build `services/billing/bff` with
+  `npm ci && npm run package` before synth, next to the MCP bundle step.
 
 **Interfaces:**
 - `new BillingStack(scope, 'TtobakBillingStack', { userPoolId, webClientId, dataBucketName, platformTableName, ttobakTableName, publicUrl })`.
   - It is instantiated only when `ttobak:billingDataBucket` and `ttobak:billingPlatformTable` context are set.
-  - Exposes `functionArn: string`, `endpointDomain: string`, `endpointArn: string`, `dataBucketName: string`.
+  - `CfnOutput`s `FunctionArn`, `EndpointArn` and `EndpointDomain` have no
+    `exportName`. The operator copies them into `cdk.json` in Task 10; no other
+    stack imports them.
 - Resources:
   - `CfnWebFunction` `ttobak-billing`.
   - `CfnWebFunctionRevision`:
@@ -375,9 +397,10 @@ infra/test/billing-stack.test.ts, infra/test/billing-frontend.test.ts
   - `s3:PutObject` on `jobs/*`.
   - Platform table read/write.
   - `dynamodb:Query` on `ttobak-main` `index/GSI1`.
-  - `dynamodb:GetItem` on `ttobak-main` with `LeadingKeys ACCOUNT#*`.
-    `dynamodb:Attributes` must allow `PK, SK, name, parentAccountId`; the
-    canonical member read projects `PK` only.
+  - `dynamodb:GetItem` on `ttobak-main` with `ForAllValues:StringLike dynamodb:LeadingKeys ACCOUNT#*`.
+    LeadingKeys is the real bound. Every BFF `GetItem` sends a
+    `ProjectionExpression` (`PK` for membership; `PK, SK, name, parentAccountId`
+    for META), but do not claim a `dynamodb:Attributes` condition enforces that.
 
 - [ ] **Step 1: Look up the Web Function execution-role trust principal** in the
   Lambda Developer Guide ("Web Function execution role"). Record the URL in a code comment.
@@ -389,9 +412,14 @@ infra/test/billing-stack.test.ts, infra/test/billing-frontend.test.ts
   - `role_has_no_resource_star`
   - `no_vpc_no_security_group`
   - `stack_absent_without_context`: `infra.ts` synth without context has no `TtobakBillingStack`.
+  - `outputs_are_not_exported`: no `Export` on any output.
 - [ ] **Step 3: Run** `cd infra && npm test -- billing-stack`. Expected: FAIL.
 - [ ] **Step 4: Implement**, then run `npx cdk synth` (with and without the context) and `npm test`. Expected: PASS.
-- [ ] **Step 5: Commit** `feat(infra): TtobakBillingStack with an IamAuth Web Function`.
+- [ ] **Step 5: Confirm the release coordinator ignores the extra stack.**
+  - Run `python3 -m unittest discover -s scripts/operations -p 'test_http_origin_release.py' -v`
+    and the coordinator's template checks against a synth that includes `TtobakBillingStack`.
+  - If it rejects the unknown stack, stop and ask the owner. Do not edit the coordinator under this plan.
+- [ ] **Step 6: Commit** `feat(infra): TtobakBillingStack with an IamAuth Web Function`.
 
 ### Task 9: TTOBAK distribution behaviors and the resource policy
 
@@ -400,14 +428,20 @@ infra/test/billing-stack.test.ts, infra/test/billing-frontend.test.ts
   (pins `@aws-sdk/client-lambda-web` 3.1158.0; `npm run bundle` with esbuild to `dist/index.mjs`),
   and `infra/test/billing-frontend.test.ts`.
 - Modify `infra/lib/frontend-stack.ts`, `infra/lib/frontend-policy.ts`,
-  `infra/bin/infra.ts`, `.github/workflows/test-infra.yml` (bundle step), and
-  `docs/INFRA-SPEC.md`.
+  `infra/bin/infra.ts`, and `docs/INFRA-SPEC.md`.
+- Modify `.github/workflows/test-infra.yml` and both `deploy-infra.yml` jobs: add the policy bundle step.
+- Modify `CLAUDE.md`: an accepted-limits row for ADR-056's internet-reachable
+  IamAuth endpoint and no-OAC upload behavior. Then run
+  `python3 scripts/docs/sync_review_context.py`.
 
 **Interfaces:**
 - `FrontendStack` props gain an optional
   `billing?: { endpointDomain: string; functionArn: string; endpointArn: string; dataBucketName: string }`.
-  The three behaviors and the custom resource exist only when it is set. All are
-  ordered before `/api/*`.
+  - `infra.ts` builds it from `ttobak:billingEndpointDomain`, `ttobak:billingFunctionArn`,
+    `ttobak:billingEndpointArn` and `ttobak:billingDataBucket`.
+  - It throws when only some of the four are set.
+- The three behaviors and the custom resource exist only when `billing` is set.
+  All are ordered before `/api/*`.
   - `/api/billing/*`:
     - Origin: `HttpOrigin(endpointDomain)` with a `CfnOriginAccessControl`
       (`originAccessControlOriginType: 'lambda'`, `signingBehavior: 'always-amz-auth'`, `signingProtocol: 'sigv4'`).
@@ -435,8 +469,8 @@ infra/test/billing-stack.test.ts, infra/test/billing-frontend.test.ts
 - The custom resource (`cr.Provider` + `lambda.Function` with the bundle) runs on
   Create/Update. It gets the current policy, replaces the whole statement list
   with the single OAC statement, and calls `PutResourcePolicy` with the returned
-  `revisionId`; on Delete it calls `DeleteResourcePolicy`. Its role allows only the two policy actions on
-  `functionArn`.
+  `revisionId`; on Delete it calls `DeleteResourcePolicy`. Its role allows only
+  the Get, Put and Delete resource-policy actions on `functionArn`.
 
 - [ ] **Step 1: Look up the IAM action names** for `PutResourcePolicy`,
   `GetResourcePolicy` and `DeleteResourcePolicy` in the Service Authorization
@@ -462,6 +496,7 @@ infra/test/billing-stack.test.ts, infra/test/billing-frontend.test.ts
     policy JSON has one statement with principal `cloudfront.amazonaws.com` and a
     `StringEquals aws:SourceArn` distribution ARN.
   - `absent_without_billing_props`
+  - `partial_billing_context_throws`
 - [ ] **Step 4: Run** `cd infra && npm test -- billing`. Expected: FAIL.
 - [ ] **Step 5: Implement**, then run `npx cdk synth` (with and without billing context) and `npm test`. Expected: PASS.
 - [ ] **Step 6: Commit** `feat(infra): Billing behaviors and Web Function resource policy`.
@@ -475,10 +510,14 @@ tokens or customer data). Modify `docs/README.md` (runbook row).
   - List users who see an Account today only through a parent: compare companion
     `visible()` with direct membership for every member sub.
   - Have the owner add the needed direct memberships before anyone uses `/billing`.
-- [ ] **Step 2: Deploy, with approval per stack.**
-  1. `npx cdk deploy TtobakBillingStack --exclusively` with the billing context.
-  2. `npx cdk deploy TtobakFrontendStack --exclusively`.
-  3. Run the frontend release workflow: it preserves `config.json`, re-uploads HTML no-cache, and invalidates.
+- [ ] **Step 2: Deploy, with approval per step.**
+  1. Merge a PR adding `ttobak:billingDataBucket` and `ttobak:billingPlatformTable` to `infra/cdk.json`.
+  2. Deploy with `npx cdk deploy TtobakBillingStack --exclusively`. The release
+     coordinator does not deploy this stack.
+  3. Merge a second PR adding the three endpoint/function keys from the stack
+     outputs to `infra/cdk.json`. The normal deploy-infra run then deploys
+     FrontendStack through the coordinator.
+  4. Run the frontend release workflow: it preserves `config.json`, re-uploads HTML no-cache, and invalidates.
   - Keep `billingService` false.
 - [ ] **Step 3: Acceptance (record results in the runbook).**
   - The endpoint has no other auth type:
