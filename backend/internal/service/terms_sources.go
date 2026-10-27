@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -210,6 +211,13 @@ func kbObjectAccounts(meta map[string]string) []string {
 	return nil
 }
 
+// s3InvalidRange reports S3's InvalidRange error, which a ranged GetObject of
+// an empty object returns.
+func s3InvalidRange(err error) bool {
+	var apiErr smithy.APIError
+	return errors.As(err, &apiErr) && apiErr.ErrorCode() == "InvalidRange"
+}
+
 // s3ObjectMissing treats 404 and 403 as a missing object: without
 // s3:ListBucket, S3 answers a missing key with 403.
 func s3ObjectMissing(err error) bool {
@@ -396,7 +404,14 @@ func (s *TermsAnalysisService) ProcessSource(ctx context.Context, ev model.Terms
 			Confidence: f.Confidence, TranscribeKo: f.TranscribeKo, TranscribeEn: f.TranscribeEn,
 		})
 	}
-	refresh, err := s.mergeSource(ctx, label, ev, doc.accounts, terms)
+	// The model call can take minutes: a report trashed or unlinked, or a KB
+	// file deleted or re-tagged meanwhile, must not still publish terms to
+	// the Accounts read before it, so the source is read again here.
+	accounts, outcome, err := s.currentSourceAccounts(ctx, ev, doc.accounts)
+	if outcome != "" {
+		return done(outcome, err)
+	}
+	refresh, err := s.mergeSource(ctx, label, ev, accounts, terms)
 	if err != nil {
 		s.refreshVocabularies(ctx, label, refresh) // terms written before the failure are live
 		return done("FAILED", err)
@@ -425,6 +440,42 @@ func validSourceEvent(ev model.TermsSourceRequested) bool {
 		return attachmentIdentifier.MatchString(ev.Ref)
 	}
 	return false
+}
+
+// currentSourceAccounts re-reads the source after extraction and returns the
+// Accounts it is linked to now, limited to those it was read with (a link
+// added during the run waits for the next run); a non-empty outcome ends
+// the run without merging.
+func (s *TermsAnalysisService) currentSourceAccounts(ctx context.Context, ev model.TermsSourceRequested, read []string) ([]string, string, error) {
+	var now []string
+	if ev.Kind == model.DictSourceResearch {
+		research, err := s.sources.Store.GetResearchByID(ctx, ev.Ref)
+		switch {
+		case err != nil:
+			return nil, "LOOKUP_FAILED", fmt.Errorf("read research: %w", err)
+		case research == nil || research.UserID != ev.OwnerID:
+			return nil, TermsSourceNotFound, nil
+		case research.TrashedAt != "":
+			return nil, TermsSourceSkipped, nil
+		}
+		now = validSourceAccounts(research.AccountIDs)
+	} else {
+		head, err := s.sources.Objects.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(s.sources.Bucket), Key: aws.String(ev.Ref)})
+		if s3ObjectMissing(err) {
+			return nil, TermsSourceNotFound, nil
+		}
+		if err != nil {
+			return nil, "READ_FAILED", fmt.Errorf("head source object: %w", err)
+		}
+		now = kbObjectAccounts(head.Metadata)
+	}
+	kept := make([]string, 0, len(read))
+	for _, id := range read {
+		if slices.Contains(now, id) {
+			kept = append(kept, id)
+		}
+	}
+	return kept, "", nil
 }
 
 // loadSource reads the source text; a non-empty outcome ends the run.
@@ -460,6 +511,9 @@ func (s *TermsAnalysisService) loadSource(ctx context.Context, ev model.TermsSou
 	})
 	if s3ObjectMissing(err) {
 		return termsSourceDoc{}, TermsSourceNotFound, nil
+	}
+	if s3InvalidRange(err) {
+		return termsSourceDoc{}, "NO_TEXT", nil // a ranged read of an empty object
 	}
 	if err != nil {
 		return termsSourceDoc{}, "READ_FAILED", fmt.Errorf("read source object: %w", err)
@@ -578,6 +632,9 @@ func (s *TermsAnalysisService) mergeSource(ctx context.Context, label string, ev
 		if res != nil && madeActive(res.Counters) {
 			refresh = append(append(refresh, ev.OwnerID), members...)
 		}
+		if res != nil && res.CleanupErr != nil {
+			log.Printf("%s layer=%s cleanup=failed: %v", label, layer, res.CleanupErr)
+		}
 		if err != nil {
 			if res != nil {
 				logMerge(layer, "FAILED", res.Counters)
@@ -597,6 +654,9 @@ func (s *TermsAnalysisService) mergeSource(ctx context.Context, label string, ev
 	res, err := s.merger.MergeScoped(ctx, TermsScope{PK: model.PrefixUser + ev.OwnerID}, terms, ref)
 	if res != nil && madeActive(res.Counters) {
 		refresh = append(refresh, ev.OwnerID)
+	}
+	if res != nil && res.CleanupErr != nil {
+		log.Printf("%s layer=personal cleanup=failed: %v", label, res.CleanupErr)
 	}
 	if err != nil {
 		if res != nil {
