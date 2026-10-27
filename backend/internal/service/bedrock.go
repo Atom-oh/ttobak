@@ -1096,6 +1096,14 @@ func (s *BedrockService) RefineTranscript(ctx context.Context, segments []Whispe
 }
 
 func (s *BedrockService) RefineTranscriptWithQuality(ctx context.Context, segments []WhisperSegment) (string, []RefinedSegment, *model.TranscriptQuality, error) {
+	text, refined, quality, _, err := s.refineTranscript(ctx, segments, nil)
+	return text, refined, quality, err
+}
+
+// refineTranscript is the shared refinement run; a nil glossary sends exactly
+// the plain refinement requests and returns nil corrections, a glossary run
+// returns a non-nil (possibly empty) slice.
+func (s *BedrockService) refineTranscript(ctx context.Context, segments []WhisperSegment, glossary *refineGlossary) (string, []RefinedSegment, *model.TranscriptQuality, []model.TranscriptCorrection, error) {
 	originalCount := len(segments)
 	segments = normalizeRefinementInput(segments)
 	blankCount := originalCount - len(segments)
@@ -1103,14 +1111,24 @@ func (s *BedrockService) RefineTranscriptWithQuality(ctx context.Context, segmen
 	// One bad segment must not disable refinement for the whole meeting: refineChunk
 	// validates each chunk and falls back to raw text for that chunk alone.
 	if len(chunks) == 0 {
-		return "", nil, &model.TranscriptQuality{Refinement: "raw", Degraded: true, SpeakerProvenance: "unknown", Reasons: []string{"invalid_input"}}, errRefinementInput
+		return "", nil, &model.TranscriptQuality{Refinement: "raw", Degraded: true, SpeakerProvenance: "unknown", Reasons: []string{"invalid_input"}}, nil, errRefinementInput
 	}
 
 	var allRefined []RefinedSegment
+	var corrections []model.TranscriptCorrection
 	if len(chunks) <= 5 {
-		allRefined = s.refineSequential(ctx, chunks)
+		allRefined, corrections = s.refineSequentialWith(ctx, chunks, glossary)
 	} else {
-		allRefined = s.refineParallel(ctx, chunks)
+		allRefined, corrections = s.refineParallelWith(ctx, chunks, glossary)
+	}
+	// Only the records are capped: a verified correction beyond the cap
+	// keeps its text.
+	if len(corrections) > model.MaxTranscriptCorrections {
+		corrections = corrections[:model.MaxTranscriptCorrections]
+	}
+	// Non-nil marks that the glossary path ran, even with no records.
+	if glossary != nil && corrections == nil {
+		corrections = []model.TranscriptCorrection{}
 	}
 
 	var sb strings.Builder
@@ -1130,15 +1148,23 @@ func (s *BedrockService) RefineTranscriptWithQuality(ctx context.Context, segmen
 
 	quality := refinementQuality(allRefined, len(chunks))
 	quality.BlankSegments = blankCount
-	return sb.String(), allRefined, quality, nil
+	return sb.String(), allRefined, quality, corrections, nil
 }
 
 func (s *BedrockService) refineSequential(ctx context.Context, chunks [][]WhisperSegment) []RefinedSegment {
+	refined, _ := s.refineSequentialWith(ctx, chunks, nil)
+	return refined
+}
+
+// refineSequentialWith also returns the chunks' corrections, with Segment
+// rebased onto the meeting's refined segment list.
+func (s *BedrockService) refineSequentialWith(ctx context.Context, chunks [][]WhisperSegment, glossary *refineGlossary) ([]RefinedSegment, []model.TranscriptCorrection) {
 	var allRefined []RefinedSegment
+	var allCorrections []model.TranscriptCorrection
 	var prevChunkTail []RefinedSegment
 
 	for i, chunk := range chunks {
-		refined, err := s.refineChunk(ctx, chunk, i, len(chunks), prevChunkTail)
+		refined, corrections, err := s.refineChunkWith(ctx, chunk, i, len(chunks), prevChunkTail, glossary)
 		if err != nil || len(refined) == 0 {
 			logRefinementFallback(i, len(chunks), err)
 			lastSpeaker := lastSpeakerLabel(allRefined)
@@ -1148,6 +1174,7 @@ func (s *BedrockService) refineSequential(ctx context.Context, chunks [][]Whispe
 		for j := range refined {
 			refined[j].ChunkIndex = i
 		}
+		allCorrections = append(allCorrections, rebaseCorrections(corrections, len(allRefined))...)
 		allRefined = append(allRefined, refined...)
 		if len(refined) >= 3 {
 			prevChunkTail = refined[len(refined)-3:]
@@ -1155,7 +1182,7 @@ func (s *BedrockService) refineSequential(ctx context.Context, chunks [][]Whispe
 			prevChunkTail = refined
 		}
 	}
-	return allRefined
+	return allRefined, allCorrections
 }
 
 // refineParallel processes chunks concurrently (max 4) to stay within Lambda timeout.
@@ -1166,8 +1193,9 @@ func (s *BedrockService) refineSequential(ctx context.Context, chunks [][]Whispe
 // 3. Sequential mode (≤5 chunks, ~25 min) covers most meetings with full consistency
 // chunkResult carries one parallel refinement result back to its collector.
 type chunkResult struct {
-	index    int
-	segments []RefinedSegment
+	index       int
+	segments    []RefinedSegment
+	corrections []model.TranscriptCorrection
 }
 
 // recoverRefineChunk turns a panicking parallel refinement into that chunk's
@@ -1181,9 +1209,14 @@ func recoverRefineChunk(idx, total int, done chan<- chunkResult, c []WhisperSegm
 }
 
 func (s *BedrockService) refineParallel(ctx context.Context, chunks [][]WhisperSegment) []RefinedSegment {
+	refined, _ := s.refineParallelWith(ctx, chunks, nil)
+	return refined
+}
+
+func (s *BedrockService) refineParallelWith(ctx context.Context, chunks [][]WhisperSegment, glossary *refineGlossary) ([]RefinedSegment, []model.TranscriptCorrection) {
 
 	// Run first chunk synchronously to establish baseline speaker labels
-	firstResult, err := s.refineChunk(ctx, chunks[0], 0, len(chunks), nil)
+	firstResult, firstCorrections, err := s.refineChunkWith(ctx, chunks[0], 0, len(chunks), nil, glossary)
 	if err != nil || len(firstResult) == 0 {
 		logRefinementFallback(0, len(chunks), err)
 		firstResult = refinementFallback(chunks[0], "spk_0", 0, err)
@@ -1193,7 +1226,8 @@ func (s *BedrockService) refineParallel(ctx context.Context, chunks [][]WhisperS
 	firstTail := buildSpeakerHintTail(firstResult)
 
 	results := make([][]RefinedSegment, len(chunks))
-	results[0] = firstResult
+	corrections := make([][]model.TranscriptCorrection, len(chunks))
+	results[0], corrections[0] = firstResult, firstCorrections
 
 	sem := make(chan struct{}, 4)
 	done := make(chan chunkResult, len(chunks)-1)
@@ -1205,29 +1239,31 @@ func (s *BedrockService) refineParallel(ctx context.Context, chunks [][]WhisperS
 			// A panic here would kill the Lambda (recovery middleware does not
 			// cover goroutines); fall back to raw segments like any chunk failure.
 			defer recoverRefineChunk(idx, len(chunks), done, c, tail)
-			refined, err := s.refineChunk(ctx, c, idx, len(chunks), tail)
+			refined, fixes, err := s.refineChunkWith(ctx, c, idx, len(chunks), tail, glossary)
 			if err != nil || len(refined) == 0 {
 				logRefinementFallback(idx, len(chunks), err)
 				done <- chunkResult{index: idx, segments: refinementFallback(c, lastSpeakerLabel(tail), idx, err)}
 				return
 			}
-			done <- chunkResult{index: idx, segments: refined}
+			done <- chunkResult{index: idx, segments: refined, corrections: fixes}
 		}(i, chunks[i], firstTail)
 	}
 
 	for i := 1; i < len(chunks); i++ {
 		r := <-done
-		results[r.index] = r.segments
+		results[r.index], corrections[r.index] = r.segments, r.corrections
 	}
 
 	var allRefined []RefinedSegment
+	var allCorrections []model.TranscriptCorrection
 	for index, segs := range results {
 		for i := range segs {
 			segs[i].ChunkIndex = index
 		}
+		allCorrections = append(allCorrections, rebaseCorrections(corrections[index], len(allRefined))...)
 		allRefined = append(allRefined, segs...)
 	}
-	return allRefined
+	return allRefined, allCorrections
 }
 
 func refinementFallback(chunk []WhisperSegment, speaker string, index int, err error) []RefinedSegment {
@@ -1313,22 +1349,33 @@ func hasAcousticSpeakers(segments []WhisperSegment) bool {
 	return false
 }
 
+// Speaker task 4 of the refinement prompt: keep acoustic labels, or infer them.
+const (
+	refinePreserveSpeakerTask = `4. **Preserve speaker labels**: Each input line is prefixed with its speaker label (e.g. "spk_2:"), assigned by acoustic diarization on the audio. These labels are AUTHORITATIVE — copy each one to its output segment exactly as given, do not relabel, merge, or reassign it based on what the text seems to say.
+   - You may merge consecutive input lines into one output segment ONLY if they have the same speaker label.
+   - Never combine text from two different speaker labels into a single output segment.`
+	refineInferSpeakerTask = `4. **Infer speaker turns**: Based on conversation flow, assign speaker labels "spk_0", "spk_1", "spk_2", "spk_3", "spk_4", "spk_5", etc.
+   - **Meetings typically have 3-8 participants.** Do NOT assume only 2-3 speakers. Pay close attention to: different speaking styles, distinct viewpoints, question-answer patterns, self-introductions, role references, and turn-taking pauses.
+   - **When uncertain, prefer splitting into a new speaker over merging.** It is better to over-estimate speaker count than to conflate different people into one label.
+   - If previous context is provided, reuse the same speaker labels for the same speakers.`
+)
+
 // buildRefineSystemPrompt returns the refineChunk system prompt for the
 // given mode. Split out from refineChunk so the preserve-vs-infer branching
 // is testable without a Bedrock client.
 func buildRefineSystemPrompt(preserveSpeakers bool) string {
+	return refineSystemPromptTasks(preserveSpeakers) + "\n\n" + refineSourceIDNote + "\n" + refineArrayOutputSpec
+}
+
+// refineSystemPromptTasks is the editor role and numbered tasks 1-6 shared
+// by the plain and glossary refinement prompts.
+func refineSystemPromptTasks(preserveSpeakers bool) string {
 	var speakerTask string
 	if preserveSpeakers {
-		speakerTask = `4. **Preserve speaker labels**: Each input line is prefixed with its speaker label (e.g. "spk_2:"), assigned by acoustic diarization on the audio. These labels are AUTHORITATIVE — copy each one to its output segment exactly as given, do not relabel, merge, or reassign it based on what the text seems to say.
-   - You may merge consecutive input lines into one output segment ONLY if they have the same speaker label.
-   - Never combine text from two different speaker labels into a single output segment.`
+		speakerTask = refinePreserveSpeakerTask
 	} else {
-		speakerTask = `4. **Infer speaker turns**: Based on conversation flow, assign speaker labels "spk_0", "spk_1", "spk_2", "spk_3", "spk_4", "spk_5", etc.
-   - **Meetings typically have 3-8 participants.** Do NOT assume only 2-3 speakers. Pay close attention to: different speaking styles, distinct viewpoints, question-answer patterns, self-introductions, role references, and turn-taking pauses.
-   - **When uncertain, prefer splitting into a new speaker over merging.** It is better to over-estimate speaker count than to conflate different people into one label.
-   - If previous context is provided, reuse the same speaker labels for the same speakers.`
+		speakerTask = refineInferSpeakerTask
 	}
-
 	return fmt.Sprintf(`You are a Korean meeting transcript editor. You receive raw Whisper STT segments with timestamps and must produce clean, readable transcript segments.
 
 Your tasks:
@@ -1337,12 +1384,14 @@ Your tasks:
 3. **Remove hallucinations**: Whisper sometimes repeats words/phrases (e.g. "법인으로 법인으로 법인으로"). Keep only one instance.
 %s
 5. **Preserve timestamps and source identity**: Each input line has a source ID. List the consecutive source IDs represented by each output segment in sourceIds. Include every source ID exactly once, in input order; never omit an input line, even if it is only a filler. Each output segment must start at its first source segment's exact start time and end at the maximum end time of its listed source segments. Preserve overlapping speech.
-6. **Remove filler words**: Clean up meaningless fillers ("음", "어", "그") but keep discourse markers that carry meaning.
-
-Source IDs show structural coverage only; keep all meaningful speech, numbers, negations and corrections. Never replace several utterances with a summary.
-Output ONLY a JSON array. Each element: {"speaker":"spk_0","text":"정제된 문장","startTime":0.0,"endTime":6.5,"sourceIds":[0,1]}
-Do NOT include any text outside the JSON array. No markdown fences.`, speakerTask)
+6. **Remove filler words**: Clean up meaningless fillers ("음", "어", "그") but keep discourse markers that carry meaning.`, speakerTask)
 }
+
+const (
+	refineSourceIDNote    = `Source IDs show structural coverage only; keep all meaningful speech, numbers, negations and corrections. Never replace several utterances with a summary.`
+	refineArrayOutputSpec = `Output ONLY a JSON array. Each element: {"speaker":"spk_0","text":"정제된 문장","startTime":0.0,"endTime":6.5,"sourceIds":[0,1]}
+Do NOT include any text outside the JSON array. No markdown fences.`
+)
 
 // buildRefineSegmentLines renders the raw-segment block of the user prompt,
 // prefixing each line with its acoustic speaker label in preserve mode.
@@ -1358,28 +1407,38 @@ func buildRefineSegmentLines(segments []WhisperSegment, preserveSpeakers bool) s
 	return sb.String()
 }
 
-func (s *BedrockService) refineChunk(ctx context.Context, segments []WhisperSegment, chunkIdx, totalChunks int, prevTail []RefinedSegment) (refined []RefinedSegment, err error) {
+func (s *BedrockService) refineChunk(ctx context.Context, segments []WhisperSegment, chunkIdx, totalChunks int, prevTail []RefinedSegment) ([]RefinedSegment, error) {
+	refined, _, err := s.refineChunkWith(ctx, segments, chunkIdx, totalChunks, prevTail, nil)
+	return refined, err
+}
+
+// refineChunkWith refines one chunk; with a glossary it also returns the
+// verified corrections, Segment indexing this chunk's refined segments.
+func (s *BedrockService) refineChunkWith(ctx context.Context, segments []WhisperSegment, chunkIdx, totalChunks int, prevTail []RefinedSegment, glossary *refineGlossary) (refined []RefinedSegment, corrections []model.TranscriptCorrection, err error) {
 	// Cover synchronous chunks too: otherwise a provider panic can reach
 	// the Lambda runtime, which logs its value before failing the invocation.
 	defer func() {
 		if recover() != nil {
-			refined, err = nil, errRefinementPanic
+			refined, corrections, err = nil, nil, errRefinementPanic
 		}
 	}()
 	if !validRefinementInput(segments) {
-		return nil, errRefinementInput
+		return nil, nil, errRefinementInput
 	}
 	inputBytes := 0
 	for _, segment := range segments {
 		inputBytes += len(segment.Text)
 	}
 	if len(segments) > 2048 || inputBytes > 128*1024 {
-		return nil, errRefinementInput
+		return nil, nil, errRefinementInput
 	}
 	preserveSpeakers := hasAcousticSpeakers(segments)
 	sb := strings.Builder{}
 	sb.WriteString(buildRefineSegmentLines(segments, preserveSpeakers))
 	systemPrompt := buildRefineSystemPrompt(preserveSpeakers)
+	if glossary != nil {
+		systemPrompt = buildGlossaryRefineSystemPrompt(preserveSpeakers, glossary)
+	}
 
 	var userPrompt string
 	if len(prevTail) > 0 {
@@ -1403,7 +1462,7 @@ func (s *BedrockService) refineChunk(ctx context.Context, segments []WhisperSegm
 		userPrompt = fmt.Sprintf("다음은 Whisper STT 원본 세그먼트입니다 (파트 %d/%d). 위 규칙에 따라 정제해주세요:\n\n%s", chunkIdx+1, totalChunks, sb.String())
 	}
 	if len(userPrompt) > 256*1024 {
-		return nil, errRefinementInput
+		return nil, nil, errRefinementInput
 	}
 
 	request := ClaudeRequest{
@@ -1420,16 +1479,22 @@ func (s *BedrockService) refineChunk(ctx context.Context, segments []WhisperSegm
 
 	body, err := s.invokeClaudeResponseBody(ctx, request, ClaudeSonnetModelID)
 	if err != nil {
-		return nil, sanitizedRefinementModelError(err)
+		return nil, nil, sanitizedRefinementModelError(err)
 	}
 
 	result, err := refinementCompletion(body)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	refined, err = validateRefinementJSON(result, segments)
+	var sourceCounts []int
+	var claimed []glossaryWireCorrection
+	if glossary != nil {
+		refined, sourceCounts, claimed, err = parseGlossaryRefinement(result, segments)
+	} else {
+		refined, err = validateRefinementJSON(result, segments)
+	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	if preserveSpeakers {
@@ -1441,7 +1506,7 @@ func (s *BedrockService) refineChunk(ctx context.Context, segments []WhisperSegm
 			// misattributing the other's words). Fail the chunk so the
 			// caller's existing rawFallbackSegments path takes over, which
 			// preserves each original segment's own acoustic Speaker exactly.
-			return nil, errRefinementSpeakerMerge
+			return nil, nil, errRefinementSpeakerMerge
 		}
 		// The prompt tells the model acoustic labels are AUTHORITATIVE, but a
 		// set-equality check on the model's returned `speaker` field still
@@ -1453,7 +1518,7 @@ func (s *BedrockService) refineChunk(ctx context.Context, segments []WhisperSegm
 	} else {
 		for _, segment := range refined {
 			if !validInferredSpeaker(segment.Speaker) {
-				return nil, errRefinementSchema
+				return nil, nil, errRefinementSchema
 			}
 		}
 	}
@@ -1469,7 +1534,17 @@ func (s *BedrockService) refineChunk(ctx context.Context, segments []WhisperSegm
 		}
 	}
 
-	return refined, nil
+	if glossary != nil {
+		var invented bool
+		if corrections, invented = glossary.verify(segments, refined, sourceCounts, claimed); invented {
+			// A glossary term the post-check cannot account for must not
+			// survive (R11): redo this chunk on the plain prompt; a failure
+			// there takes the caller's raw fallback like any chunk error.
+			log.Printf("refinement glossary rerun chunk=%d total_chunks=%d", chunkIdx+1, totalChunks)
+			return s.refineChunkWith(ctx, segments, chunkIdx, totalChunks, prevTail, nil)
+		}
+	}
+	return refined, corrections, nil
 }
 
 // significantOverlap reports whether overlap between an output segment and
