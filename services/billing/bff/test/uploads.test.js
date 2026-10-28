@@ -4,10 +4,14 @@ const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const { createFakeDdb } = require('./fake-ddb');
 const { createApp } = require('../app.js');
+const { UploadPartCommand } = require('@aws-sdk/client-s3');
 const { makePresigner } = require('../lib/uploads.js');
 
 const TT = 'ttobak'; const PT = 'platform'; const BUCKET = 'bkt';
-const PUBLIC_URL = 'https://dash.example.test';
+const PUBLIC_URL = 'https://ttobak.atomai.click';
+const PREFIX = '/billing-upload';
+// what the CloudFront Function accepts once /billing-upload is stripped
+const ROUTER_RE = /^\/billing-upload\/accounts\/[A-Za-z0-9_-]{1,64}\/uploads\/u\d{14}[0-9a-f]{6}\/source\.zip$/;
 const PART = 33554432;
 const COT_MAX = 209715200; const CUR_MAX = 5368709120;
 const S = (s) => ({ S: s });
@@ -94,7 +98,9 @@ function createFakeS3() {
 }
 
 // real presigner (local signing, no network) against a client with static synthetic credentials
-const presign = makePresigner({ region: 'ap-northeast-2', credentials: { accessKeyId: 'AKIDEXAMPLE', secretAccessKey: 'secret' } });
+const realPresign = makePresigner({ region: 'ap-northeast-2', credentials: { accessKeyId: 'AKIDEXAMPLE', secretAccessKey: 'secret' } });
+const presignedKeys = []; // Key of every UploadPartCommand handed to the presigner
+const presign = (cmd, opts) => { presignedKeys.push(cmd.input.Key); return realPresign(cmd, opts); };
 
 const servers = [];
 after(() => Promise.all(servers.map((s) => new Promise((r) => s.close(r)))));
@@ -284,7 +290,7 @@ test('created upload: UP record, R4 META/INDEX upsert, sanitized file name, no s
   assert.equal(JSON.stringify(hist).includes('uploaderSub'), false);
 });
 
-test('presigned urls are on PUBLIC_URL host and path accounts/{acct}/uploads/{id}/source.zip', async () => {
+test('presigned urls are on PUBLIC_URL host under /billing-upload and accounts/{acct}/uploads/{id}/source.zip', async () => {
   const t = await member();
   const { j } = await create(t);
   assert.equal(j.urls.length, 4);
@@ -292,7 +298,7 @@ test('presigned urls are on PUBLIC_URL host and path accounts/{acct}/uploads/{id
   j.urls.forEach((s, i) => {
     const u = new URL(s);
     assert.equal(u.origin, PUBLIC_URL);
-    assert.equal(u.pathname, `/accounts/acct-a/uploads/${j.uploadId}/source.zip`);
+    assert.equal(u.pathname, `${PREFIX}/accounts/acct-a/uploads/${j.uploadId}/source.zip`);
     assert.equal(u.searchParams.get('partNumber'), String(i + 1));
     assert.equal(u.searchParams.get('uploadId'), mpuId);
     assert.equal(u.searchParams.get('X-Amz-Expires'), '10800');
@@ -300,6 +306,49 @@ test('presigned urls are on PUBLIC_URL host and path accounts/{acct}/uploads/{id
     // a checksum signed at presign time (of an empty body) would make S3 reject the real part
     assert.deepEqual([...u.searchParams.keys()].filter((k) => /checksum/i.test(k)), []);
   });
+});
+
+test('part_urls_use_prefix', async () => {
+  const t = await member();
+  const { j } = await create(t);
+  for (const s of j.urls) {
+    assert.ok(s.startsWith(`${PUBLIC_URL}${PREFIX}/accounts/acct-a/uploads/`), s);
+    assert.ok(new URL(s).searchParams.get('X-Amz-Signature'), 'signature query kept');
+  }
+});
+
+test('part url paths match the CloudFront Function router regex, and stripping the prefix gives the presigned key', async () => {
+  const t = await member();
+  const { j } = await create(t);
+  for (const s of j.urls) {
+    const { pathname } = new URL(s);
+    assert.match(pathname, ROUTER_RE);
+    assert.equal(pathname.slice(PREFIX.length), `/accounts/acct-a/uploads/${j.uploadId}/source.zip`);
+  }
+});
+
+test('presigner_is_regional_virtual_hosted', async () => {
+  const signed = await realPresign(new UploadPartCommand({ Bucket: BUCKET, Key: 'accounts/acct-a/uploads/u1/source.zip', UploadId: 'x', PartNumber: 1 }), { expiresIn: 60 });
+  const u = new URL(signed);
+  assert.equal(u.host, `${BUCKET}.s3.ap-northeast-2.amazonaws.com`);
+  assert.equal(u.pathname, '/accounts/acct-a/uploads/u1/source.zip');
+});
+
+test('presigned_key_unchanged', async () => {
+  const t = await member();
+  presignedKeys.length = 0;
+  const { j } = await create(t);
+  assert.equal(presignedKeys.length, j.urls.length);
+  for (const k of presignedKeys) assert.equal(k, `accounts/acct-a/uploads/${j.uploadId}/source.zip`);
+});
+
+test('foreign_origin_rejected', async () => {
+  const t = await member();
+  const r = await fetch(`${t.base}/api/billing/accounts/acct-a/uploads`, {
+    method: 'POST', body: JSON.stringify({ source: 'cot', fileName: 'cot.zip', size: 10 }),
+    headers: { ...caller('u1'), 'content-type': 'application/json', 'x-tb': '1', origin: 'https://insight.atomai.click' },
+  });
+  assert.equal(r.status, 403);
 });
 
 test('second upload while locked → 409', async () => {

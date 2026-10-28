@@ -1,5 +1,5 @@
 'use strict';
-// Upload, status, discard, rollback and rerun routes under /api/accounts (mounted after authentication: req.sub, req.user).
+// Upload, status, discard, rollback and rerun routes under /api/billing/accounts (mounted after authentication: req.sub, req.user).
 // Every POST passes the CSRF gate (JSON content type, X-TB: 1, Origin = PUBLIC_URL) and re-checks membership fresh.
 // Responses never carry S3 keys, multipart ids or other users' subs.
 const crypto = require('crypto');
@@ -14,8 +14,8 @@ const { ACCT_ID, UPLOAD_ID } = require('./store.js');
 const PART_SIZE = 33554432; // 32 MiB
 const LIMITS = { cot: 209715200, cur: 5368709120 }; // COT ≤ 200 MB, CUR ≤ 5 GB
 // A 5 GB CUR upload over a slow link. A presigned URL stops working when the credentials that signed it expire, so the
-// effective validity is min(10800 s, remaining lifetime of the ECS task-role session at presign time); the SDK refreshes
-// task-role credentials well before expiry, but a URL signed late in a session lives only as long as that session.
+// effective validity is min(10800 s, remaining lifetime of the Lambda execution-role session at presign time); the SDK
+// refreshes the credentials before expiry, but a URL signed late in a session lives only as long as that session.
 const PRESIGN_SECONDS = 10800;
 const RERUN_WINDOW_S = 600;
 // a job queued this long without a claim was never started; one claimed longer ago than the worker's JOB_TIMEOUT_S
@@ -46,8 +46,9 @@ function newUploadId(d = new Date()) {
 }
 // Presigned UploadPart URLs for the browser. The default checksum mode would sign an x-amz-checksum-crc32 of the
 // empty presign-time body into every URL, and S3 would then reject the real part, so checksums are only added when required.
+// Virtual-hosted addressing (forcePathStyle: false) keeps the key as the whole URL path, which the CloudFront origin relies on.
 function makePresigner(config = {}) {
-  const client = new S3Client({ ...config, requestChecksumCalculation: 'WHEN_REQUIRED' });
+  const client = new S3Client({ ...config, forcePathStyle: false, requestChecksumCalculation: 'WHEN_REQUIRED' });
   return (cmd, opts) => getSignedUrl(client, cmd, opts);
 }
 const bareEtag = (e) => { const m = ETAG.exec(String(e || '')); return m ? m[1] : null; };
@@ -62,7 +63,7 @@ function view(rec, stale = false) {
   return out;
 }
 
-function createUploadRoutes({ s3, store, access, bucket, publicUrl, presign, onCurrentChange = () => {}, now = Date.now }) {
+function createUploadRoutes({ s3, store, access, bucket, publicUrl, uploadPrefix = '/billing-upload', presign, onCurrentChange = () => {}, now = Date.now }) {
   const origin = new URL(publicUrl).origin;
   const sourceKey = (acct, id) => `accounts/${acct}/uploads/${id}/source.zip`;
   const nowSec = () => Math.floor(now() / 1000);
@@ -156,7 +157,8 @@ function createUploadRoutes({ s3, store, access, bucket, publicUrl, presign, onC
       for (let p = 1; p <= n; p++) {
         const signed = await presign(new UploadPartCommand({ Bucket: bucket, Key: key, UploadId: mpuId, PartNumber: p }), { expiresIn: PRESIGN_SECONDS });
         const u = new URL(signed);
-        urls.push(origin + u.pathname + u.search); // same-origin: CloudFront forwards the path to the bucket
+        // same-origin: CloudFront strips uploadPrefix (a page route owns /accounts/*) and forwards the key path to the bucket
+        urls.push(origin + uploadPrefix + u.pathname + u.search);
       }
       res.json({ uploadId, partSize: PART_SIZE, urls });
     } catch (e) {
