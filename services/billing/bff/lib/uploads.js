@@ -34,6 +34,8 @@ const PUBLIC_FIELDS = ['uploadId', 'accountId', 'source', 'fileName', 'size', 'u
 const LOCKED = '이미 처리 중인 업로드가 있습니다';
 const SIZE_MISMATCH = '업로드 크기가 선언과 다릅니다';
 const NOT_COMPLETED = '업로드를 완료하지 못했습니다';
+const NOT_VERIFIED = '업로드를 확인하지 못했습니다. 다시 시도하세요';
+const STATE_CHANGED = '업로드 상태가 바뀌었습니다';
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 const isSource = (s) => s === 'cot' || s === 'cur';
@@ -211,14 +213,18 @@ function createUploadRoutes({ s3, store, access, bucket, publicUrl, uploadPrefix
       console.warn('unlock failed', e.name); // the lock expires on its own (ttl)
     }
   }
-  // size mismatch: the upload is failed for good, its bytes removed and the account unlocked
+  // size mismatch: the upload is failed for good, its bytes removed and the account unlocked. The transition goes
+  // first: a request that loses it (another complete already queued the upload, or a discard won) touches nothing,
+  // since unlock is conditioned only on the uploadId and would release a queued upload's lock.
   async function rejectSize(res, acct, rec, { key, mpuId, object }) {
+    const steps = { ...(rec.steps && typeof rec.steps === 'object' ? rec.steps : {}), validate: 'failed' };
+    if (!(await store.patchUploadIf(acct, rec.uploadId, ['uploading'], { status: 'failed', reason: SIZE_MISMATCH, steps }))) {
+      return res.status(409).json({ error: STATE_CHANGED });
+    }
     if (mpuId) await abort(key, mpuId);
     if (object) {
       try { await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: key })); } catch (e) { console.warn('source delete failed', e.name); }
     }
-    const steps = { ...(rec.steps && typeof rec.steps === 'object' ? rec.steps : {}), validate: 'failed' };
-    await store.patchUploadIf(acct, rec.uploadId, ['uploading'], { status: 'failed', reason: SIZE_MISMATCH, steps });
     await safeUnlock(acct, rec.source, rec.uploadId);
     return res.status(400).json({ error: SIZE_MISMATCH });
   }
@@ -271,15 +277,37 @@ function createUploadRoutes({ s3, store, access, bucket, publicUrl, uploadPrefix
       }
     }
     if (done && done.status !== 'continue') return res.json({ status: done.status });
-    // a 403 here (no s3:ListBucket: missing key) is handled like line 239's recovery check: not the declared size
-    const have = await headSize(key).catch((e) => { console.warn('head after complete failed', e.name); return null; });
+    // Only a HEAD that succeeds with another ContentLength rejects the upload. Any HEAD error (throttle, timeout, 5xx,
+    // 403, or a NotFound right after Complete) is inconclusive: the record stays uploading with its lock and object,
+    // and the client retries complete, which then takes the NoSuchUpload recovery path above.
+    let have;
+    try {
+      have = Number((await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: key }))).ContentLength);
+    } catch (e) {
+      console.warn('head after complete failed', e.name);
+      return res.status(503).json({ error: NOT_VERIFIED });
+    }
     if (have !== size) return rejectSize(res, acct, rec, { key, object: true });
-    await s3.send(new PutObjectCommand({
-      Bucket: bucket, Key: `jobs/${id}.json`, ContentType: 'application/json',
-      Body: JSON.stringify({ kind: 'analyze', accountId: acct, uploadId: id, source: rec.source }),
-    }));
-    // job, then queued (ruling): the worker claims only queued uploads, so a duplicate job write cannot start a second run
-    await store.patchUploadIf(acct, id, ['uploading'], { status: 'queued', queuedAt: new Date(now()).toISOString() });
+    // queued, then the job: only the request that wins the transition writes a job, so there is never a second one,
+    // and a discard that won first leaves no job behind. The worker claims only queued uploads.
+    if (!(await store.patchUploadIf(acct, id, ['uploading'], { status: 'queued', queuedAt: new Date(now()).toISOString() }))) {
+      const cur = await store.upload(acct, id);
+      // a concurrent complete queued it: same answer as the idempotent retry above
+      if (cur && ['queued', 'running', 'done', 'needs_review'].includes(cur.status)) return res.json({ status: cur.status });
+      return res.status(409).json({ error: STATE_CHANGED });
+    }
+    try {
+      await s3.send(new PutObjectCommand({
+        Bucket: bucket, Key: `jobs/${id}.json`, ContentType: 'application/json',
+        Body: JSON.stringify({ kind: 'analyze', accountId: acct, uploadId: id, source: rec.source }),
+      }));
+    } catch (e) {
+      // no job: a queued row would only wait to go stale. Fail it while it is still queued (never a claimed run).
+      if (await store.patchUploadIf(acct, id, ['queued'], { status: 'failed', reason: NOT_COMPLETED }).catch(() => false)) {
+        await safeUnlock(acct, rec.source, id);
+      }
+      throw e;
+    }
     res.json({ status: 'queued' });
   }));
 
