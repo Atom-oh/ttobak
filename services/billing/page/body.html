@@ -710,8 +710,8 @@
       </div>
     </div>
     <div class="tb-card" id="card-whatsnew">
-      <h3>관심 서비스 What's New 피드</h3>
-      <p class="tb-note">매일 AWS What's New RSS를 수집해 이 법인의 증가·신규 워크로드 키워드와 맞는 발표만 남깁니다. 마지막 수집: <span id="wn-updated">—</span></p>
+      <h3>AWS What's New 피드</h3>
+      <p class="tb-note">매일 수집하는 AWS What's New 최신 발표입니다. 모든 계정에 같은 목록이 보입니다(검증 목록 우선, RSS 최신 20건). 마지막 수집: <span id="wn-updated">—</span></p>
       <div class="tb-tablebox">
         <table class="tb-table" id="tbl-whatsnew" data-source="whats_new_feed" data-row-key="url">
           <thead><tr>
@@ -2390,6 +2390,10 @@ dash.ready(function () {
       document.getElementById('br-tiles').replaceChildren(...tiles.map(([lab, num, d]) => {
         const c = el('div', 'tb-card tb-tile'); c.append(el('div', 'tb-lab', lab), el('div', 'tb-num', num), el('div', 'tb-delta tb-neutral', d)); return c;
       }));
+    } else {
+      // no KPI row for this account: never leave another account's name and spend on screen
+      document.getElementById('br-head').textContent = kp.status === 'loading' ? '불러오는 중…' : '—';
+      document.getElementById('br-tiles').replaceChildren();
     }
     drawSignals(e, items);
     const notes = agentNotes(e, items);
@@ -2674,8 +2678,9 @@ dash.ready(function () {
     }
     const wn = dash.data('whats_new_feed');
     if (wn.status === 'ok') {
-      const mine = wn.data.filter((r) => (r.entities || []).includes(e)).sort((a, b) => String(b.date).localeCompare(String(a.date)));
-      const rows = mine.filter((r) => r.source === 'curated').concat(mine.filter((r) => r.source !== 'curated').slice(0, 20));
+      // the feed is global: the BFF strips per-account entities, so every account sees the same latest items
+      const all = wn.data.slice().sort((a, b) => String(b.date).localeCompare(String(a.date)));
+      const rows = all.filter((r) => r.source === 'curated').concat(all.filter((r) => r.source !== 'curated').slice(0, 20));
       document.getElementById('wn-updated').textContent = d3.max(wn.data, (r) => r.fetched_at) || '—';
       fillTable(document.getElementById('tbl-whatsnew'), rows, [
         { f: 'date', render: (td, r) => { td.textContent = String(r.date).slice(0, 10); td.closest('tr').dataset.key = r.url; } },
