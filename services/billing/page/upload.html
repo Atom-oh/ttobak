@@ -305,6 +305,21 @@
     failedUpload = { acct: acct, uploadId: uploadId };
     $('up-discard').hidden = false;
   }
+  // statuses that mean the upload was accepted for analysis
+  var COMPLETE_OK = ['queued', 'running', 'done'];
+  // the server answers 503 when it cannot yet verify a completed object and expects the same
+  // complete to be retried; transient failures retry with backoff before discard is offered
+  var COMPLETE_RETRY_MS = [2000, 4000, 8000, 16000, 30000];
+  async function completeWithRetry(acct, uploadId, parts) {
+    for (var i = 0; ; i++) {
+      var c = null;
+      try { c = await api(base(acct) + '/uploads/' + encodeURIComponent(uploadId) + '/complete', 'POST', { parts: parts }); } catch (e) { c = null; }
+      var transient = !c || c.status === 429 || c.status === 502 || c.status === 503 || c.status === 504;
+      if (!transient || i >= COMPLETE_RETRY_MS.length) return c || { ok: false, status: 0, data: null };
+      say('up-msg', '업로드 확인을 다시 시도하는 중입니다 (' + (i + 1) + '/' + COMPLETE_RETRY_MS.length + ')');
+      await new Promise(function (r) { setTimeout(r, COMPLETE_RETRY_MS[i]); });
+    }
+  }
   async function startUpload() {
     var a = selected && accountById(selected);
     var file = $('up-file').files && $('up-file').files[0];
@@ -333,8 +348,12 @@
       var etags = await putAll(file, r.data.urls, ps);
       var parts = etags.map(function (etag, i) { return { n: i + 1, etag: etag }; }).sort(function (x, y) { return x.n - y.n; });
       say('up-msg', '업로드를 마무리하는 중입니다');
-      var c = await api(base(acct) + '/uploads/' + encodeURIComponent(uploadId) + '/complete', 'POST', { parts: parts });
-      if (!c.ok) {
+      var c = await completeWithRetry(acct, uploadId, parts);
+      var st = c.ok && c.data ? c.data.status : null;
+      if (c.ok && (st === 'discarded' || st === 'failed')) {
+        return say('up-msg', st === 'discarded' ? '이 업로드는 이미 폐기되었습니다. 파일을 다시 업로드하세요' : '이 업로드는 실패로 처리되었습니다. 파일을 다시 업로드하세요', 'err');
+      }
+      if (!c.ok || COMPLETE_OK.indexOf(st) < 0) {
         offerDiscard(acct, uploadId);
         return say('up-msg', errText(c, '업로드를 완료하지 못했습니다') + ' 이 업로드를 폐기하고 다시 시도할 수 있습니다', 'err');
       }
