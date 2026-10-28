@@ -729,12 +729,23 @@ test('completed object of the wrong size → deleted, failed, unlocked, no job',
   assert.equal(t.s3.objects.has(key), false);
 });
 
-test('HeadObject 403 after a successful complete (no s3:ListBucket) → size-mismatch rejection, not 500', async () => {
+test('HeadObject 403 after a successful complete (no s3:ListBucket) is inconclusive → 503, upload kept', async () => {
   const t = await member();
   const { j } = await create(t, { source: 'cot', fileName: 'cot.zip', size: 2 * PART });
   const parts = sendParts(t, j.uploadId, 2 * PART);
+  const key = `accounts/acct-a/uploads/${j.uploadId}/source.zip`;
   t.s3.headForbidden = true;
-  await failedBySize(t, j.uploadId, await t.post(`/api/billing/accounts/acct-a/uploads/${j.uploadId}/complete`, { parts }));
+  const r = await t.post(`/api/billing/accounts/acct-a/uploads/${j.uploadId}/complete`, { parts });
+  assert.equal(r.status, 503);
+  const body = await r.json();
+  assert.equal(typeof body.error, 'string');
+  assert.ok(body.error.length > 0);
+  assert.notEqual(body.error, SIZE_MISMATCH);
+  assert.equal(t.upRow('acct-a', j.uploadId).status.S, 'uploading', 'record kept');
+  assert.notEqual(t.lockRow('acct-a', 'cot'), undefined, 'lock still held');
+  assert.equal(t.s3.objects.has(key), true, 'source object kept');
+  assert.equal(t.s3.inputs('PutObjectCommand').filter((i) => i.Key.startsWith('jobs/')).length, 0, 'no job');
+  assert.equal(t.s3.inputs('DeleteObjectCommand').length, 0, 'no delete');
 });
 
 test('complete retry after NoSuchUpload: object present with the right size → queued once; absent → 400', async () => {
