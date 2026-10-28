@@ -782,6 +782,11 @@ the same way with or without Billing:
   and the endpoint ARN that function's `/endpoint/prod`.
 - Billing enabled with no endpoint key is the bootstrap state.
   `TtobakBillingStack` exists, and FrontendStack has no Billing behaviors.
+- `ttobak:billingService` (`"true"`, only with the behaviors) adds
+  `billingService: true` to `config.json`: the Billing entry links to `/billing`
+  instead of the companion hand-off. Unset keeps the hand-off; any other value,
+  or the flag without the behaviors, fails synth. Rollback is removing the key
+  and redeploying FrontendStack.
 
 The three behaviors come after the discovery paths and before `/api/public/*`
 and `/api/*`, so `/api/billing/*` wins over `/api/*`.

@@ -29,6 +29,7 @@
     "ttobak:billingEndpointDomain": "kj5dmy0qgq0qfvk3.z48.lambda-web.ap-northeast-2.on.aws",
     "ttobak:billingFunctionArn": "arn:aws:lambda:ap-northeast-2:180294183052:web-function/ttobak-billing",
     "ttobak:billingEndpointArn": "arn:aws:lambda:ap-northeast-2:180294183052:web-function/ttobak-billing/endpoint/prod",
+    "ttobak:billingService": "true",
     "ttobak:autoTermsMode": "personal",
     "@aws-cdk/aws-signer:signingProfileNamePassedToCfn": true,
     "@aws-cdk/aws-ecs-patterns:secGroupsDisablesImplicitOpenListener": true,
