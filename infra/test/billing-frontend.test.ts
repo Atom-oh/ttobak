@@ -15,7 +15,8 @@ import { billingFrontendContext, FrontendStack } from '../lib/frontend-stack';
 const ACCOUNT = '111111111111';
 const FUNCTION_ARN = `arn:aws:lambda:ap-northeast-2:${ACCOUNT}:web-function/ttobak-billing`;
 const ENDPOINT_ARN = `${FUNCTION_ARN}/endpoint/prod`;
-const ENDPOINT_DOMAIN = 'abc123def456.lambda-web.ap-northeast-2.on.aws';
+// The endpoint domain is <id>.<cell>.lambda-web.<region>.on.aws.
+const ENDPOINT_DOMAIN = 'abc123def456.z48.lambda-web.ap-northeast-2.on.aws';
 const ENDPOINT_CONTEXT = {
   'ttobak:billingEndpointDomain': ENDPOINT_DOMAIN,
   'ttobak:billingFunctionArn': FUNCTION_ARN,
@@ -390,11 +391,13 @@ describe('Billing context gate', () => {
     const ok = billingFrontendContext(new cdk.App({ context: { 'ttobak:billingEnabled': 'true', ...ENDPOINT_CONTEXT } }));
     expect(ok).toEqual({ endpointDomain: ENDPOINT_DOMAIN, functionArn: FUNCTION_ARN, endpointArn: ENDPOINT_ARN });
     const bad: Array<[keyof typeof ENDPOINT_CONTEXT, unknown]> = [
-      ['ttobak:billingEndpointDomain', 'abc.lambda-web.us-east-1.on.aws'],
-      ['ttobak:billingEndpointDomain', 'https://abc.lambda-web.ap-northeast-2.on.aws'],
-      ['ttobak:billingEndpointDomain', 'abc.lambda-web.ap-northeast-2.on.aws.evil.com'],
-      ['ttobak:billingEndpointDomain', 'ABC.lambda-web.ap-northeast-2.on.aws'],
-      ['ttobak:billingEndpointDomain', 'a.b.lambda-web.ap-northeast-2.on.aws'],
+      ['ttobak:billingEndpointDomain', 'abc.z48.lambda-web.us-east-1.on.aws'],
+      ['ttobak:billingEndpointDomain', 'https://abc.z48.lambda-web.ap-northeast-2.on.aws'],
+      ['ttobak:billingEndpointDomain', 'abc.z48.lambda-web.ap-northeast-2.on.aws.evil.com'],
+      ['ttobak:billingEndpointDomain', 'ABC.z48.lambda-web.ap-northeast-2.on.aws'],
+      ['ttobak:billingEndpointDomain', 'abc.lambda-web.ap-northeast-2.on.aws'],
+      ['ttobak:billingEndpointDomain', 'a.b.c.lambda-web.ap-northeast-2.on.aws'],
+      ['ttobak:billingEndpointDomain', 'a-b.z48.lambda-web.ap-northeast-2.on.aws'],
       ['ttobak:billingEndpointDomain', ''],
       ['ttobak:billingEndpointDomain', 42],
       ['ttobak:billingFunctionArn', 'arn:aws:lambda:ap-northeast-2:111111111111:web-function/other'],

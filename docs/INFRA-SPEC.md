@@ -777,7 +777,7 @@ the same way with or without Billing:
   `ttobak:billingEndpointArn` (the `TtobakBillingStack` outputs) turn them on.
 - `billingFrontendContext` (`infra/lib/frontend-stack.ts`) fails synth when only
   some endpoint keys are set, or when any is set without Billing enabled. It
-  also checks the shapes: the domain must be `<id>.lambda-web.ap-northeast-2.on.aws`,
+  also checks the shapes: the domain must be `<id>.<cell>.lambda-web.ap-northeast-2.on.aws`,
   the function ARN `arn:aws:lambda:ap-northeast-2:<account>:web-function/ttobak-billing`,
   and the endpoint ARN that function's `/endpoint/prod`.
 - Billing enabled with no endpoint key is the bootstrap state.

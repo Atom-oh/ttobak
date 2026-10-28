@@ -33,7 +33,7 @@ const BILLING_ENABLED_CONTEXT = 'ttobak:billingEnabled';
 const BILLING_ENDPOINT_CONTEXT = {
   endpointDomain: {
     key: 'ttobak:billingEndpointDomain',
-    pattern: /^[a-z0-9-]+\.lambda-web\.ap-northeast-2\.on\.aws$/,
+    pattern: /^[a-z0-9]+\.[a-z0-9]+\.lambda-web\.ap-northeast-2\.on\.aws$/,
   },
   functionArn: {
     key: 'ttobak:billingFunctionArn',
