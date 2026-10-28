@@ -1,0 +1,84 @@
+/* Theme tokens consumed by the dashboard page (light first, dark via media query). */
+:root {
+  color-scheme: light;
+  --color-bg: #f6f7f9;
+  --color-panel: #ffffff;
+  --color-fg: #17202b;
+  --color-fg-muted: #5b6676;
+  --color-border-line: #dde2e8;
+  --color-ok: #1d7a46;
+  --color-warn: #a35f00;
+  --color-bad: #c0392b;
+  --series-1: #2f6fdf; --series-2: #e07b39; --series-3: #2a9d8f; --series-4: #8e5bd8;
+  --series-5: #d6457f; --series-6: #6c8a1f; --series-7: #b08900; --series-8: #5a7896;
+  --cds-chart-muted: #b9c1cc;
+  --cds-chart-grid: #e8ecf1;
+  --cds-chart-axis: #9aa5b3;
+  --cds-chart-reference: #7d8896;
+  --cds-chart-status-critical: #c0392b;
+  --cds-surface-popover: #ffffff;
+  --cds-border: #d3d9e0;
+  --cds-shadow-popover: 0 6px 20px rgba(23, 32, 43, .14);
+  --cds-text-secondary: #5b6676;
+  --cds-font-size-caption: .875rem;
+  --cds-font-size-body: .9375rem;
+  --cds-font-size-input: 1rem;
+  --cds-font-size-heading: 1.125rem;
+  --cds-font-size-title: clamp(1.75rem, 1.4rem + 1.2vw, 2.25rem);
+  --cds-font-size-metric: clamp(1.75rem, 1.5rem + .8vw, 2rem);
+  --cds-line-height-body: 1.65;
+  --cds-line-height-heading: 1.4;
+  --cds-line-height-control: 1.4;
+  --cds-line-height-table: 1.5;
+  --cds-font-weight-medium: 600;
+  --cds-gap-xs: 4px; --cds-gap-sm: 8px; --cds-gap-md: 14px; --cds-gap-lg: 22px; --cds-gap-xl: 32px;
+  --cds-pad-xs: 4px; --cds-pad-sm: 8px; --cds-pad-md: 12px; --cds-pad-lg: 18px; --cds-pad-xl: 28px;
+  --cds-radius: 8px;
+  --cds-dur-slow: .35s;
+  --cds-ease-out: cubic-bezier(.2, .8, .2, 1);
+  /* Pretendard is self-hosted (vendor/pretendard, linked before this file); the rest are fallbacks while it loads */
+  --font-anthropic-sans: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --font-anthropic-serif: var(--font-anthropic-sans); /* display text uses Pretendard too, set heavier where it was the serif */
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --color-bg: #10151c;
+    --color-panel: #171e27;
+    --color-fg: #e6ebf1;
+    --color-fg-muted: #9aa6b5;
+    --color-border-line: #2a3440;
+    --color-ok: #4cc38a;
+    --color-warn: #f0a24b;
+    --color-bad: #ff7466;
+    --series-1: #6c9cff; --series-2: #ff9d5c; --series-3: #4fc2b4; --series-4: #b38cf0;
+    --series-5: #f27aa8; --series-6: #a3c45a; --series-7: #e3c04f; --series-8: #8fa9c4;
+    --cds-chart-muted: #4a5664;
+    --cds-chart-grid: #232c37;
+    --cds-chart-axis: #5d6a79;
+    --cds-chart-status-critical: #ff7466;
+    --cds-surface-popover: #1d2530;
+    --cds-border: #334050;
+    --cds-shadow-popover: 0 6px 20px rgba(0, 0, 0, .5);
+    --cds-text-secondary: #9aa6b5;
+  }
+}
+html, body { margin: 0; background: var(--color-bg); color: var(--color-fg); font-family: var(--font-anthropic-sans); }
+body { font-size: var(--cds-font-size-body); line-height: var(--cds-line-height-body); letter-spacing: -.01em; font-kerning: normal; font-synthesis: none; }
+:where(h1, h2, h3) { line-height: var(--cds-line-height-heading); letter-spacing: -.025em; word-break: keep-all; overflow-wrap: anywhere; }
+:where(p, li) { word-break: keep-all; overflow-wrap: anywhere; }
+:where(button, input, select, textarea) { font-family: inherit; letter-spacing: inherit; }
+:where(button, input, select) { line-height: var(--cds-line-height-control); }
+code, pre { font-family: var(--font-mono); letter-spacing: 0; }
+.app-bar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px 12px; padding: 10px max(16px, env(safe-area-inset-left, 0px)); border-bottom: 1px solid var(--color-border-line); background: var(--color-panel); font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
+.app-bar a { color: var(--color-fg); }
+#dash-root { max-width: 1440px; margin-inline: auto; padding: 24px max(16px, env(safe-area-inset-right, 0px)) 48px max(16px, env(safe-area-inset-left, 0px)); }
+#dash-root a { color: var(--series-1); }
+.dash-skeleton { position: relative; color: transparent !important; }
+.dash-skeleton::after { content: ""; position: absolute; inset: 8px 0; border-radius: var(--cds-radius); background: var(--cds-chart-grid); }
+@media (prefers-reduced-motion: no-preference) {
+  .dash-skeleton::after { animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .5; } }
+}
+.app-link { font: inherit; color: inherit; background: none; border: 0; padding: 0; text-decoration: underline; cursor: pointer; }
