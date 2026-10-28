@@ -24,6 +24,7 @@ on:
       # this, a PR editing/neutering this gate would merge unverified.
       - '.github/workflows/test-infra.yml'
       - '.github/workflows/deploy-infra.yml'
+      - '.github/workflows/deploy-billing.yml'
   # No push trigger: deploy-infra.yml runs the same synth+test suite as its
   # own pre-deploy gate on push-to-main, so a push trigger here would just
   # run the suite twice. This workflow is the PR-time counterpart only.

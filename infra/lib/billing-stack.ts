@@ -2,13 +2,22 @@ import * as path from 'path';
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as logs from 'aws-cdk-lib/aws-logs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
+import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
 
 const FUNCTION_NAME = 'ttobak-billing';
-const DATA_BUCKET_CONTEXT = 'ttobak:billingDataBucket';
-const PLATFORM_TABLE_CONTEXT = 'ttobak:billingPlatformTable';
+const ENABLED_CONTEXT = 'ttobak:billingEnabled';
+// The data bucket and platform table names are operator-created SSM String
+// parameters resolved by CloudFormation at deploy, so the physical names are
+// never committed.
+export const DATA_BUCKET_PARAMETER = '/ttobak/billing/data-bucket-name';
+export const PLATFORM_TABLE_PARAMETER = '/ttobak/billing/platform-table-name';
+// The ttobak-main attributes the BFF may read (lib/access.js).
+const GSI1_ATTRIBUTES = ['PK', 'SK', 'GSI1PK', 'GSI1SK', 'accountId'];
+const ACCOUNT_ITEM_ATTRIBUTES = ['PK', 'SK', 'name', 'parentAccountId'];
 // Built by `cd services/billing/bff && npm run package` (gitignored).
 const BFF_DIST = path.join(__dirname, '../../services/billing/bff/dist');
 
@@ -16,9 +25,6 @@ export interface BillingStackProps extends cdk.StackProps {
   userPoolId: string;
   // The only client whose tokens the BFF accepts (phase 1: the SPA client).
   webClientId: string;
-  // Reused by name; this stack never creates, imports or deletes them.
-  dataBucketName: string;
-  platformTableName: string;
   ttobakTableName: string;
   publicUrl: string;
 }
@@ -32,6 +38,9 @@ export class BillingStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: BillingStackProps) {
     super(scope, id, props);
     const { region, account, partition } = cdk.Stack.of(this);
+    // Reused by name; this stack never creates, imports or deletes them.
+    const dataBucketName = ssm.StringParameter.valueForStringParameter(this, DATA_BUCKET_PARAMETER);
+    const platformTableName = ssm.StringParameter.valueForStringParameter(this, PLATFORM_TABLE_PARAMETER);
 
     // Dedicated code bucket. The CDK asset bucket cannot hold Web Function code:
     // its objects use the AWS managed aws/s3 key (Lambda cannot decrypt) and it
@@ -65,6 +74,15 @@ export class BillingStack extends cdk.Stack {
       prune: false,
       retainOnDelete: true,
     });
+    // The upload handler may overwrite objects but never delete a version a
+    // revision is pinned to.
+    codeBucket.addToResourcePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.DENY,
+      principals: [new iam.AnyPrincipal()],
+      actions: ['s3:DeleteObjectVersion'],
+      resources: [codeBucket.arnForObjects('*')],
+      conditions: { ArnEquals: { 'aws:PrincipalArn': code.handlerRole.roleArn } },
+    }));
 
     // Trust and log permissions per
     // https://docs.aws.amazon.com/lambda/latest/dg/web-functions-permissions.html
@@ -72,20 +90,21 @@ export class BillingStack extends cdk.Stack {
       assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
       description: 'TTOBAK Billing BFF (Lambda Web Function) execution role',
     });
-    const logGroup = (logRegion: string, name: string) =>
-      `arn:${partition}:logs:${logRegion}:${account}:log-group:${name}`;
-    const homeLogs = `/aws/lambda/web/${FUNCTION_NAME}`;
-    const localLogs = `/aws/lambda/web/${FUNCTION_NAME}.local`;
+    // Both log groups exist in-stack with retention, so the role never creates
+    // one. A HomeRegion endpoint writes .local only in the stack Region.
+    const logGroups = [`/aws/lambda/web/${FUNCTION_NAME}`, `/aws/lambda/web/${FUNCTION_NAME}.local`]
+      .map((logGroupName, i) => new logs.LogGroup(this, i === 0 ? 'LogGroup' : 'LocalLogGroup', {
+        logGroupName,
+        retention: logs.RetentionDays.THREE_MONTHS,
+        removalPolicy: cdk.RemovalPolicy.RETAIN,
+      }));
     role.addToPolicy(new iam.PolicyStatement({
-      actions: ['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents'],
-      resources: [
-        logGroup(region, homeLogs), logGroup(region, `${homeLogs}:*`),
-        // The .local group may be written from any Region.
-        logGroup('*', localLogs), logGroup('*', `${localLogs}:*`),
-      ],
+      actions: ['logs:CreateLogStream', 'logs:PutLogEvents'],
+      resources: logGroups.flatMap(group => [group.logGroupArn,
+        `arn:${partition}:logs:${region}:${account}:log-group:${group.logGroupName}:log-stream:*`]),
     }));
 
-    const dataObjects = (key: string) => `arn:${partition}:s3:::${props.dataBucketName}/${key}`;
+    const dataObjects = (key: string) => `arn:${partition}:s3:::${dataBucketName}/${key}`;
     role.addToPolicy(new iam.PolicyStatement({
       actions: ['s3:GetObject'],
       resources: [
@@ -109,18 +128,30 @@ export class BillingStack extends cdk.Stack {
     role.addToPolicy(new iam.PolicyStatement({
       actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem',
         'dynamodb:DeleteItem', 'dynamodb:Query'],
-      resources: [table(props.platformTableName)],
+      resources: [table(platformTableName)],
     }));
+    // GSI1 projects ALL and is shared with meeting and project rows: only the
+    // caller-candidate lookup (USER# keys, membership attributes) is allowed.
     role.addToPolicy(new iam.PolicyStatement({
       actions: ['dynamodb:Query'],
       resources: [`${table(props.ttobakTableName)}/index/GSI1`],
+      conditions: {
+        'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['USER#*'] },
+        'ForAllValues:StringEquals': { 'dynamodb:Attributes': GSI1_ATTRIBUTES },
+        'StringEquals': { 'dynamodb:Select': 'SPECIFIC_ATTRIBUTES' },
+        'Null': { 'dynamodb:LeadingKeys': 'false', 'dynamodb:Attributes': 'false' },
+      },
     }));
-    // LeadingKeys is the real bound. Every BFF GetItem also sends a
-    // ProjectionExpression, but no dynamodb:Attributes condition enforces it.
+    // Membership and META reads: ACCOUNT# partitions and their projected
+    // attributes only. The Null check refuses a GetItem without a projection.
     role.addToPolicy(new iam.PolicyStatement({
       actions: ['dynamodb:GetItem'],
       resources: [table(props.ttobakTableName)],
-      conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['ACCOUNT#*'] } },
+      conditions: {
+        'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['ACCOUNT#*'] },
+        'ForAllValues:StringEquals': { 'dynamodb:Attributes': ACCOUNT_ITEM_ATTRIBUTES },
+        'Null': { 'dynamodb:Attributes': 'false' },
+      },
     }));
 
     const webFunction = new lambda.CfnWebFunction(this, 'WebFunction', { functionName: FUNCTION_NAME });
@@ -141,9 +172,9 @@ export class BillingStack extends cdk.Stack {
         maxConcurrencyPerEnvironment: 8,
         // AWS_REGION is set by the platform; index.js falls back to ap-northeast-2.
         environmentVariables: {
-          DATA_BUCKET: props.dataBucketName,
+          DATA_BUCKET: dataBucketName,
           ACCOUNT_TABLE: props.ttobakTableName,
-          PLATFORM_TABLE: props.platformTableName,
+          PLATFORM_TABLE: platformTableName,
           PUBLIC_URL: props.publicUrl,
           USER_POOL_ID: props.userPoolId,
           BILLING_ALLOWED_CLIENT_IDS: props.webClientId,
@@ -157,6 +188,7 @@ export class BillingStack extends cdk.Stack {
     revision.node.addDependency(code);
     revision.node.addDependency(codeBucket.policy!);
     revision.node.addDependency(role);
+    revision.node.addDependency(...logGroups);
 
     const endpoint = new lambda.CfnWebFunctionEndpoint(this, 'Endpoint', {
       functionName: FUNCTION_NAME,
@@ -165,6 +197,7 @@ export class BillingStack extends cdk.Stack {
       authType: 'IamAuth',
       revisionWeights: [{ revisionId: revision.attrRevisionId, weight: 100 }],
       scalingConfig: { maxEnvironments: 10 },
+      throttleConfig: { rateLimit: 500 },
     });
     endpoint.node.addDependency(webFunction);
 
@@ -183,16 +216,22 @@ export class BillingStack extends cdk.Stack {
   }
 }
 
-/** Creates TtobakBillingStack only when both billing context keys are set. */
-export function addBillingStack(
-  app: Construct,
-  props: Omit<BillingStackProps, 'dataBucketName' | 'platformTableName'>,
-): BillingStack | undefined {
-  const dataBucketName = app.node.tryGetContext(DATA_BUCKET_CONTEXT);
-  const platformTableName = app.node.tryGetContext(PLATFORM_TABLE_CONTEXT);
-  if (!dataBucketName && !platformTableName) return undefined;
-  if (!dataBucketName || !platformTableName) {
-    throw new Error(`${DATA_BUCKET_CONTEXT} and ${PLATFORM_TABLE_CONTEXT} must be set together`);
+const HOSTNAME = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/i;
+
+/** `https://<domainName>`; throws unless domainName is a bare hostname. */
+export function billingPublicUrl(domainName: unknown): string {
+  if (typeof domainName !== 'string' || !HOSTNAME.test(domainName)) {
+    throw new Error('ttobak:domainName must be a non-empty hostname when ttobak:billingEnabled is true');
   }
-  return new BillingStack(app, 'TtobakBillingStack', { ...props, dataBucketName, platformTableName });
+  return `https://${domainName}`;
+}
+
+/**
+ * Creates TtobakBillingStack only when context ttobak:billingEnabled is the
+ * string 'true'. props is evaluated only then, so its validation (e.g.
+ * billingPublicUrl) never affects an app without Billing.
+ */
+export function addBillingStack(app: Construct, props: () => BillingStackProps): BillingStack | undefined {
+  if (app.node.tryGetContext(ENABLED_CONTEXT) !== 'true') return undefined;
+  return new BillingStack(app, 'TtobakBillingStack', props());
 }

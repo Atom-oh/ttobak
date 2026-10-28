@@ -1,8 +1,10 @@
 # Deploys TtobakBillingStack on its own (spec: a failing TTOBAK deploy must not
 # block Billing and vice versa). deploy-infra.yml's release coordinator never
 # deploys this stack. The stack exists only when infra/cdk.json sets
-# ttobak:billingDataBucket and ttobak:billingPlatformTable; until then this
-# workflow builds and tests, then skips the deploy.
+# ttobak:billingEnabled to "true"; until then this workflow builds and tests,
+# then skips the deploy. Before the first deploy the operator creates the SSM
+# String parameters /ttobak/billing/data-bucket-name and
+# /ttobak/billing/platform-table-name.
 name: Deploy Billing
 
 on:
@@ -11,6 +13,10 @@ on:
     paths:
       - 'services/billing/**'
       - 'infra/lib/billing-stack.ts'
+      - 'infra/bin/infra.ts'
+      - 'infra/cdk.json'
+      - 'infra/package.json'
+      - 'infra/package-lock.json'
       - '.github/workflows/deploy-billing.yml'
   workflow_dispatch:
 
@@ -41,11 +47,11 @@ jobs:
         run: |
           enabled=$(node -e '
             const c = require("./infra/cdk.json").context || {};
-            process.stdout.write(c["ttobak:billingDataBucket"] && c["ttobak:billingPlatformTable"] ? "true" : "false");
+            process.stdout.write(c["ttobak:billingEnabled"] === "true" ? "true" : "false");
           ')
           echo "enabled=${enabled}" >> "$GITHUB_OUTPUT"
           if [ "${enabled}" != "true" ]; then
-            echo "::notice::ttobak:billingDataBucket/ttobak:billingPlatformTable not set in infra/cdk.json; TtobakBillingStack is not part of the app, skipping deploy."
+            echo "::notice::ttobak:billingEnabled is not \"true\" in infra/cdk.json; TtobakBillingStack is not part of the app, skipping deploy."
           fi
 
       - name: Test and package Billing BFF

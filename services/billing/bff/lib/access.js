@@ -46,7 +46,9 @@ function createAccess({ ddb, ttobakTable, now = Date.now }) {
         TableName: ttobakTable, IndexName: 'GSI1',
         KeyConditionExpression: 'GSI1PK = :u AND begins_with(GSI1SK, :a)',
         ExpressionAttributeValues: { ':u': { S: `USER#${sub}` }, ':a': { S: 'ACCOUNT#' } },
-        ProjectionExpression: 'accountId', ExclusiveStartKey,
+        // The execution role allows this Query only with Select SPECIFIC_ATTRIBUTES and attributes
+        // from PK, SK, GSI1PK, GSI1SK and accountId (GSI1 projects ALL, and meeting rows share it).
+        Select: 'SPECIFIC_ATTRIBUTES', ProjectionExpression: 'accountId', ExclusiveStartKey,
       }));
       for (const it of r.Items || []) if (valid(it.accountId?.S)) ids.add(it.accountId.S);
       ExclusiveStartKey = r.LastEvaluatedKey;

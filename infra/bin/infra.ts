@@ -12,7 +12,7 @@ import { CrawlerStack } from '../lib/crawler-stack';
 import { ResearchAgentStack } from '../lib/research-agent-stack';
 import { WhisperStack } from '../lib/whisper-stack';
 import { WebSearchGatewayStack } from '../lib/web-search-gateway-stack';
-import { addBillingStack } from '../lib/billing-stack';
+import { addBillingStack, billingPublicUrl } from '../lib/billing-stack';
 import { resolveModelConfiguration } from '../lib/model-config';
 
 const app = new cdk.App();
@@ -228,9 +228,9 @@ frontendStack.addDependency(edgeAuthStack);
 frontendStack.addDependency(authStack);
 
 // Stack 9 (optional): Billing BFF (IamAuth Lambda Web Function). Exists only
-// when ttobak:billingDataBucket and ttobak:billingPlatformTable are set; it is
-// deployed by deploy-billing.yml, not by the HTTP-origin release coordinator.
-const billingStack = addBillingStack(app, {
+// when context ttobak:billingEnabled is 'true'; it is deployed by
+// deploy-billing.yml, not by the HTTP-origin release coordinator.
+const billingStack = addBillingStack(app, () => ({
   env,
   description: 'TTOBAK AI Meeting Assistant - Billing BFF (Lambda Web Function)',
   userPoolId: authStack.userPool.userPoolId,
@@ -238,8 +238,8 @@ const billingStack = addBillingStack(app, {
   // The literal physical name, not a token: a token would add a new
   // StorageStack export that the separate Billing deploy cannot publish.
   ttobakTableName: (storageStack.table.node.defaultChild as dynamodb.CfnTable).tableName!,
-  publicUrl: `https://${app.node.tryGetContext('ttobak:domainName')}`,
-});
+  publicUrl: billingPublicUrl(app.node.tryGetContext('ttobak:domainName')),
+}));
 billingStack?.addDependency(authStack);
 
 // Tags for all resources

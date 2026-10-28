@@ -107,3 +107,29 @@ test('every_get_item_carries_a_projection_and_meta_grants_nothing', async () => 
   assert.equal(await t.access.canAct('u1', 'acct-a'), false);
   for (const c of t.ddb.inputs.filter((x) => x.name === 'GetItemCommand')) assert.ok(c.input.ProjectionExpression);
 });
+
+// Mirrors the execution role's dynamodb:Attributes / dynamodb:Select conditions (infra/lib/billing-stack.ts).
+test('ttobak_reads_stay_inside_the_iam_attribute_allowlists', async () => {
+  const t = setup();
+  t.acct('acct-a', 'Alpha', 'acct-p'); t.acct('acct-b', 'Bravo');
+  t.member('u1', 'acct-a'); t.member('u1', 'acct-b');
+  await t.access.visible('u1');
+  const attrs = (c) => c.input.ProjectionExpression.split(',').map((a) => a.trim())
+    .map((a) => (c.input.ExpressionAttributeNames || {})[a] || a);
+  const queries = t.ddb.inputs.filter((c) => c.name === 'QueryCommand');
+  assert.ok(queries.length >= 2);
+  for (const q of queries) {
+    assert.equal(q.input.IndexName, 'GSI1');
+    assert.equal(q.input.Select, 'SPECIFIC_ATTRIBUTES');
+    assert.equal(q.input.ProjectionExpression, 'accountId');
+    assert.ok(q.input.ExpressionAttributeValues[':u'].S.startsWith('USER#'));
+    for (const a of attrs(q)) assert.ok(['PK', 'SK', 'GSI1PK', 'GSI1SK', 'accountId'].includes(a), a);
+  }
+  const gets = t.ddb.inputs.filter((c) => c.name === 'GetItemCommand');
+  assert.ok(gets.some((g) => g.input.Key.SK.S === 'META') && gets.some((g) => g.input.Key.SK.S.startsWith('MEMBER#')));
+  for (const g of gets) {
+    assert.equal(g.input.Select, undefined);
+    assert.ok(g.input.Key.PK.S.startsWith('ACCOUNT#'));
+    for (const a of attrs(g)) assert.ok(['PK', 'SK', 'name', 'parentAccountId'].includes(a), a);
+  }
+});
