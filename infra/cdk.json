@@ -25,6 +25,7 @@
     "ttobak:knowledgeBaseId": "BJJLVLFTOR",
     "ttobak:dataSourceId": "3AVMMT3RF3",
     "ttobak:billingInsightUrl": "https://insight.atomai.click",
+    "ttobak:billingEnabled": "true",
     "ttobak:autoTermsMode": "personal",
     "@aws-cdk/aws-signer:signingProfileNamePassedToCfn": true,
     "@aws-cdk/aws-ecs-patterns:secGroupsDisablesImplicitOpenListener": true,
