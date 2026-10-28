@@ -2673,7 +2673,7 @@ dash.ready(function () {
   }
 
   // only http(s) links to known publishers are rendered as anchors
-  const SAFE = /^https:\/\/(aws\.amazon\.com|docs\.aws\.amazon\.com|repost\.aws|regional-front\.cointelegraph\.com)\//;
+  const SAFE = /^https:\/\/(aws\.amazon\.com|docs\.aws\.amazon\.com|repost\.aws)\//;
   function link(url, text, anyHttps = false) {
     if (!(SAFE.test(url) || (anyHttps && /^https:\/\/[^\s"'<>]+$/.test(url)))) return el('span', null, text);
     const a = el('a', null, text); a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer'; return a;
