@@ -11,6 +11,7 @@ function createFakeDdb({ tables, pageSize = 100 }) {
   const data = {};
   for (const t of Object.keys(tables)) data[t] = new Map();
   const calls = [];
+  const inputs = []; // { name, input } for every command, so tests can assert request shape
   const keyOf = (t, item) => `${item[tables[t].pk].S}\u0000${item[tables[t].sk].S}`;
   const num = (a) => Number(a.N);
   const names = (cmd) => cmd.input.ExpressionAttributeNames || {};
@@ -98,9 +99,9 @@ function createFakeDdb({ tables, pageSize = 100 }) {
     },
   };
   return {
-    calls,
+    calls, inputs,
     async send(cmd) {
-      const n = cmd.constructor.name; calls.push(n);
+      const n = cmd.constructor.name; calls.push(n); inputs.push({ name: n, input: cmd.input });
       if (!handlers[n]) throw new Error(`fake: unsupported command ${n}`);
       return handlers[n](cmd);
     },

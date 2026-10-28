@@ -22,7 +22,6 @@ const RERUN_DATASETS = new Set(['agent_notes', 'sessions', 'market', 'tag_signal
 // BI explorer: one normalized file per COT sheet (raw_<sheet>.json) plus raw_catalog.json
 const RAW_ID = /^raw_[a-z0-9_]{1,60}$/;
 const VERSION_ID = /^v\d{14}[0-9a-f]{6}$/;
-const ACCESS_TTL_MS = 5 * 60e3;
 const HAND_TTL_MS = 5 * 60e3;
 const META_TTL_MS = 60e3;
 const RERUN_TTL_MS = 60e3;
@@ -108,19 +107,8 @@ function createApp({ s3, ddb, env, authenticate, now = Date.now, presign = makeP
   const { DATA_BUCKET, PUBLIC_URL, ACCOUNT_TABLE, PLATFORM_TABLE } = env;
 
   const store = createStore({ ddb, table: PLATFORM_TABLE });
-  // INDEX is read on every visibility check; cache it briefly and drop the cache when this process adds an account
-  let knownCache = null;
-  const accessStore = {
-    async known() {
-      if (knownCache && Date.now() - knownCache.at < META_TTL_MS) return knownCache.value;
-      const value = await store.known();
-      knownCache = { at: Date.now(), value };
-      return value;
-    },
-  };
-  store.addKnown = ((addKnown) => async (...a) => { knownCache = null; return addKnown(...a); })(store.addKnown);
-  // TTOBAK membership and account tree: a member of an account or any ancestor may act on it
-  const access = createAccess({ ddb, ttobakTable: ACCOUNT_TABLE, store: accessStore, ttlMs: ACCESS_TTL_MS });
+  // TTOBAK membership: direct canonical membership only (ADR-056), no hierarchy and no INDEX involvement
+  const access = createAccess({ ddb, ttobakTable: ACCOUNT_TABLE, now });
 
   // ---------- S3 reads ----------
   // the body is read only after its ContentLength passed the cap
@@ -208,17 +196,10 @@ function createApp({ s3, ddb, env, authenticate, now = Date.now, presign = makeP
     return typeof v === 'string' && VERSION_ID.test(v) ? v : null;
   };
 
-  // Accounts this user sees: TTOBAK membership (and descendants) that are in the PlatformTable INDEX, plus ancestors for tree context.
-  // canAct marks the accounts whose data may be read; ancestors shown for tree context have canAct false.
+  // Accounts this user sees: confirmed direct memberships. Every visible account can act (canAct is true).
   async function accountsFor(sub) {
     const vis = await access.visible(sub);
-    const acts = await Promise.all(vis.map((a) => access.canAct(sub, a.id)));
-    const out = await Promise.all(vis.map(async (a, i) => {
-      const platform = acts[i] ? await platformMeta(a.id) : {};
-      return { id: a.id, name: a.name, parentId: a.parentId, member: a.member, canAct: acts[i], platform };
-    }));
-    const lt = (x, y) => (x < y ? -1 : x > y ? 1 : 0);
-    return out.sort((x, y) => lt(x.name, y.name) || lt(x.id, y.id));
+    return Promise.all(vis.map(async (a) => ({ ...a, platform: await platformMeta(a.id) })));
   }
   // GET /api/accounts and window.TB_ACCOUNTS
   function accountEntries(accounts) {

@@ -123,23 +123,21 @@ test('?acct&v of needs_review version → 404', async () => {
   assert.equal((await t.get('/api/billing/data/kpis.json?acct=acct-a&v=v20261020000009ffffff')).status, 404, 'no upload record');
 });
 
-test('/api/billing/accounts lists member + known child with sources', async () => {
+test('/api/billing/accounts lists direct memberships only, with sources', async () => {
   const t = await setup();
   t.acct('acct-p', '지주'); t.acct('acct-a', '한빛금융', 'acct-p'); t.acct('acct-c', '한빛증권', 'acct-a'); t.acct('acct-x', '누리증권');
-  t.member('u1', 'acct-a');
-  t.index('acct-c', '한빛증권', 'acct-a'); t.index('acct-x', '누리증권');
+  t.member('u1', 'acct-a'); t.member('u1', 'acct-c');
+  t.index('acct-x', '누리증권'); // an INDEX row never grants visibility
   t.meta('acct-a', { current_cot: V1, period_cot: PERIOD, ai_cot: 'ok' });
   t.meta('acct-c', { current_cur: V2, period_cur: PERIOD, ai_cur: 'none' });
   t.meta('acct-p', { current_cot: V3, period_cot: PERIOD, ai_cot: 'ok' });
   const list = await t.json('/api/billing/accounts');
   const by = Object.fromEntries(list.map((a) => [a.id, a]));
-  assert.deepEqual(Object.keys(by).sort(), ['acct-a', 'acct-c', 'acct-p']);
+  assert.deepEqual(Object.keys(by).sort(), ['acct-a', 'acct-c']);
   assert.deepEqual(by['acct-a'], { id: 'acct-a', name: '한빛금융', parentId: 'acct-p', member: true, canUpload: true,
     sources: { cot: { versionId: V1, period: PERIOD, ai: 'ok' }, cur: null } });
-  assert.deepEqual(by['acct-c'], { id: 'acct-c', name: '한빛증권', parentId: 'acct-a', member: false, canUpload: true,
+  assert.deepEqual(by['acct-c'], { id: 'acct-c', name: '한빛증권', parentId: 'acct-a', member: true, canUpload: true,
     sources: { cot: null, cur: { versionId: V2, period: PERIOD, ai: 'none' } } });
-  // the parent is shown for context only: the access rule does not let a child's member act on (or read) it
-  assert.deepEqual(by['acct-p'], { id: 'acct-p', name: '지주', parentId: '', member: false, canUpload: false, sources: { cot: null, cur: null } });
   t.version('acct-p', V3, 'kpis', [{ entity: 'acct-p', x: 1 }]);
   t.version('acct-a', V1, 'kpis', [{ entity: 'acct-a', x: 2 }]);
   assert.deepEqual(await t.json('/api/billing/data/kpis.json'), [{ entity: 'acct-a', x: 2 }], 'parent data not served to a child member');
@@ -402,8 +400,25 @@ test('responses are private, no-store', async () => {
   }
 });
 
-test('a user with no direct or inherited access gets an empty list, not 401', async () => {
+test('a user with no membership gets an empty list, not 401', async () => {
   const t = await setup();
   t.acct('acct-a', 'Alpha'); t.member('u1', 'acct-a');
   assert.deepEqual(await t.json('/api/billing/accounts', 'stranger'), []);
+});
+
+test('a parent-account member cannot read or upload to a child account', async () => {
+  const t = await setup();
+  t.acct('acct-p', '지주'); t.acct('acct-c', '한빛증권', 'acct-p'); t.member('u1', 'acct-p');
+  t.meta('acct-c', { current_cot: V1 });
+  t.upload('acct-c', V1, 'done');
+  t.version('acct-c', V1, 'kpis', [{ entity: 'acct-c', x: 1 }]);
+  t.s3.put(`accounts/acct-c/versions/${V1}/report.md`, '# child\n');
+  assert.equal((await t.get(`/api/billing/data/kpis.json?acct=acct-c&v=${V1}`)).status, 404);
+  assert.equal((await t.get('/api/billing/accounts/acct-c/report?source=cot')).status, 404);
+  const up = await t.get('/api/billing/accounts/acct-c/uploads', 'u1', {
+    method: 'POST', headers: { 'x-test-sub': 'u1', 'content-type': 'application/json', 'x-tb': '1', origin: 'https://dash.example.test' },
+    body: JSON.stringify({ source: 'cot', fileName: 'a.zip', size: 10 }),
+  });
+  assert.equal(up.status, 403, 'upload denied by membership, not by the CSRF gate');
+  assert.deepEqual(await t.json('/api/billing/data/kpis.json'), [], 'child data not in the merged read either');
 });

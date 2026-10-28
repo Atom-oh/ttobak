@@ -105,7 +105,7 @@ function createUploadRoutes({ s3, store, access, bucket, publicUrl, presign, onC
   router.post('/known', wrap(async (req, res) => {
     const acct = req.body.accountId;
     if (!(await allowed(req, acct, true))) return forbidden(res);
-    const m = await access.meta(acct);
+    const m = (await access.meta(acct)) || { name: acct, parentId: '' };
     await store.addKnown(acct, { name: m.name, parentId: m.parentId });
     res.json({ id: acct, name: m.name, parentId: m.parentId });
   }));
@@ -122,7 +122,7 @@ function createUploadRoutes({ s3, store, access, bucket, publicUrl, presign, onC
     if (!name) return res.status(400).json({ error: 'invalid file name' });
 
     // R4: INDEX and META name/parentId exist before the worker reads them
-    const m = await access.meta(acct);
+    const m = (await access.meta(acct)) || { name: acct, parentId: '' };
     await store.addKnown(acct, { name: m.name, parentId: m.parentId });
 
     const uploadId = newUploadId(new Date(now()));
