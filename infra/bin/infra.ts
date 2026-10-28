@@ -7,7 +7,7 @@ import { AiStack } from '../lib/ai-stack';
 import { GatewayStack } from '../lib/gateway-stack';
 import { EdgeAuthStack } from '../lib/edge-auth-stack';
 import { KnowledgeStack } from '../lib/knowledge-stack';
-import { FrontendStack } from '../lib/frontend-stack';
+import { billingFrontendContext, FrontendStack } from '../lib/frontend-stack';
 import { CrawlerStack } from '../lib/crawler-stack';
 import { ResearchAgentStack } from '../lib/research-agent-stack';
 import { WhisperStack } from '../lib/whisper-stack';
@@ -222,6 +222,9 @@ const frontendStack = new FrontendStack(app, 'TtobakFrontendStack', {
   readConnectorClientId: authStack.readConnectorClient.userPoolClientId,
   writeConnectorClientId: authStack.writeConnectorClient.userPoolClientId,
   identityPoolId: authStack.identityPoolId,
+  // Billing behaviors and the Web Function resource policy: only with
+  // ttobak:billingEnabled 'true' and all three endpoint context keys.
+  billing: billingFrontendContext(app),
 });
 frontendStack.addDependency(gatewayStack);
 frontendStack.addDependency(edgeAuthStack);
