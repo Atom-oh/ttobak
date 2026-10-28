@@ -30,6 +30,8 @@ build_mcp() {
 
 build_frontend() {
   echo "==> Building frontend..."
+  # prebuild generates public/billing-app/ from the Billing page vendor sources.
+  npm ci --prefix "$ROOT/services/billing/page" --no-audit --no-fund
   cd "$ROOT/frontend"
   npm run build
   echo "  Frontend build complete: frontend/out/"
