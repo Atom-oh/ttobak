@@ -27,6 +27,7 @@ do not establish that the rule is deployed.
 | TtobakResearchAgentStack | Legacy Bedrock Agent/tools and AgentCore spans log group | Storage, Knowledge |
 | TtobakWhisperStack | GPU Spot ECS, ECR, production/benchmark tasks | Storage |
 | TtobakFrontendStack | Static site, CloudFront, runtime config and media keys | Gateway, EdgeAuth, Auth |
+| TtobakBillingStack (optional) | Billing BFF Lambda Web Function, code bucket, execution role | Auth |
 
 Most resources use the application region (configured as ap-northeast-2).
 Cross-region producers/consumers use the settings in the app; do not replace
@@ -689,6 +690,168 @@ passes the origin only to `ttobak-api`; FrontendStack publishes only
 change alters the function configuration and publishes a new version for the
 `live` alias without the create-only description workaround. The API role's
 existing table read/write grant covers the conditional put; no new IAM is added.
+
+## Billing BFF stack
+
+`TtobakBillingStack` (`infra/lib/billing-stack.ts`) is optional. `addBillingStack`
+creates it only when context `ttobak:billingEnabled` is the string `"true"`;
+then `ttobak:domainName` must be a bare hostname or synth fails. The key is not
+checked in yet, so the default app has eleven stacks.
+
+The data bucket and platform table physical names are never committed. The
+stack reads them from SSM String parameters `/ttobak/billing/data-bucket-name`
+and `/ttobak/billing/platform-table-name`, resolved by CloudFormation at
+deploy. The operator creates both parameters before the first deploy. The
+stack never creates, imports or deletes the bucket or the table.
+
+Resources:
+
+- `AWS::Lambda::WebFunction` `ttobak-billing`, one `WebFunctionRevision`
+  (`nodejs24.x`, timeout 60 s, `maxConcurrencyPerEnvironment` 8) and the
+  `WebFunctionEndpoint` `prod` (`HomeRegion`, `IamAuth`, 100% to the revision,
+  `maxEnvironments` 10, `rateLimit` 500 requests per second). No VPC, network
+  connector or security group; the BFF reaches S3 and DynamoDB over public AWS
+  endpoints.
+- Revision environment: `DATA_BUCKET` and `PLATFORM_TABLE` (from SSM),
+  `ACCOUNT_TABLE` (`ttobak-main`), `PUBLIC_URL` (`https://` +
+  `ttobak:domainName`), `USER_POOL_ID`, `BILLING_ALLOWED_CLIENT_IDS` (the SPA
+  client only) and `NODE_OPTIONS=--max-old-space-size=1536`. No secrets.
+- Log groups `/aws/lambda/web/ttobak-billing` and
+  `/aws/lambda/web/ttobak-billing.local`, 90-day retention, retained on delete.
+- Execution role trusted by `lambda.amazonaws.com`. It has no
+  `Resource: *` statement and no `logs:CreateLogGroup`. It may:
+  - write log streams and events in the two log groups (stack Region only);
+  - read `accounts/*/versions/*`, `accounts/*/handwritten/*`,
+    `accounts/*/uploads/*` and `data/whats_new_feed.json`;
+  - manage uploads under `accounts/*/uploads/*` and write `jobs/*`;
+  - get, put, update, delete and query items in the platform table.
+- `ttobak-main` access is bound by IAM conditions that `lib/access.js` matches:
+  - `GetItem` only for `ACCOUNT#*` partition keys and only for the attributes
+    `PK`, `SK`, `name` and `parentAccountId`. A request without a projection is
+    refused.
+  - `Query` on `index/GSI1` only for `USER#*` partition keys, with
+    `Select: SPECIFIC_ATTRIBUTES` and attributes limited to `PK`, `SK`, `GSI1PK`,
+    `GSI1SK` and `accountId`. GSI1 projects all attributes and is shared with
+    meeting and project rows.
+- Dedicated code bucket: versioned, SSE-S3, TLS-only, all public access
+  blocked, retained on delete, no lifecycle rule.
+  - Its policy lets `lambda.amazonaws.com` read objects and object versions
+    only for `web-function/ttobak-billing/revision/*`.
+  - It denies `s3:DeleteObjectVersion` to the upload handler role.
+  - A `BucketDeployment` (`extract: false`, `prune: false`,
+    `retainOnDelete: true`) uploads the packaged `services/billing/bff/dist` as
+    one content-hashed zip. It excludes `node_modules/.bin` symlinks, which the
+    HTTP-origin release coordinator rejects in an assembly.
+  - The revision depends on that upload, the bucket policy, the role and the
+    log groups.
+
+The CDK asset bucket cannot hold Web Function code. It encrypts objects with
+the AWS managed `aws/s3` key, which Lambda cannot use, and it expires
+noncurrent versions. Lambda pins each revision to an object version, and a
+revision whose pinned version disappears fails permanently.
+
+The `ttobak-main` name is passed as a literal, not a StorageStack export. The
+stack imports only the existing AuthStack exports for the user pool and SPA
+client IDs.
+
+Outputs `FunctionArn`, `EndpointArn` and `EndpointDomain` have no export. The
+operator copies them into `infra/cdk.json` for FrontendStack.
+
+Deployment: `.github/workflows/deploy-billing.yml` runs on pushes to `main` that
+touch `services/billing/**`, the Billing stack, the infra app, `cdk.json`, the
+infra package files or the workflow, and on manual dispatch. It tests and
+packages the BFF, then runs `cdk deploy TtobakBillingStack --exclusively` only
+when `ttobak:billingEnabled` is `"true"`; otherwise it skips the deploy. The
+HTTP-origin release coordinator's `STACKS` list does not include this stack.
+Every workflow that synthesizes the app (`test-infra.yml` and both
+`deploy-infra.yml` jobs) builds the BFF package first.
+
+### Billing behaviors on the TTOBAK distribution
+
+FrontendStack gains the Billing behaviors (ADR-056) only through context
+strings, never stack exports, so the HTTP-origin release coordinator deploys it
+the same way with or without Billing:
+
+- `ttobak:billingEnabled` (`"true"`) plus all three of
+  `ttobak:billingEndpointDomain`, `ttobak:billingFunctionArn` and
+  `ttobak:billingEndpointArn` (the `TtobakBillingStack` outputs) turn them on.
+- `billingFrontendContext` (`infra/lib/frontend-stack.ts`) fails synth when only
+  some endpoint keys are set, or when any is set without Billing enabled. It
+  also checks the shapes: the domain must be `<id>.lambda-web.ap-northeast-2.on.aws`,
+  the function ARN `arn:aws:lambda:ap-northeast-2:<account>:web-function/ttobak-billing`,
+  and the endpoint ARN that function's `/endpoint/prod`.
+- Billing enabled with no endpoint key is the bootstrap state.
+  `TtobakBillingStack` exists, and FrontendStack has no Billing behaviors.
+
+The three behaviors come after the discovery paths and before `/api/public/*`
+and `/api/*`, so `/api/billing/*` wins over `/api/*`.
+
+- `/api/billing/*`:
+  - Origin: the endpoint domain over HTTPS, with an origin access control of
+    type `lambda`, `always-amz-auth` and `sigv4`. It carries no `x-origin-verify`
+    header; that proof stays on the API and WebSocket origins.
+  - Viewer HTTPS only, all methods, compression on. CloudFront compresses only
+    1 to 10 MB bodies, so the BFF compresses larger ones itself.
+  - Cache policy `BillingAuthKeyed`: `Authorization` header, all query strings,
+    no cookies, TTL 0/0/1 s. Without the header in the key, CloudFront would
+    strip it on GET and HEAD. With it, one user's response is never served to
+    another.
+  - Origin request policy `AllViewerExceptHostHeader`. A viewer `Host` makes
+    Lambda answer 404.
+  - The existing edge JWT function at viewer request only. Origin-request and
+    origin-response triggers are not allowed on a Web Function origin.
+- `/billing-upload/*`:
+  - Origin: `{{resolve:ssm:/ttobak/billing/data-bucket-name}}.s3.ap-northeast-2.amazonaws.com`,
+    over HTTPS with a 60 s read timeout. CloudFormation resolves the SSM dynamic
+    reference at deploy, so the bucket name is never committed and no stack
+    parameter is added.
+  - No origin access control: CloudFront adds no signature, and sends `Host` as
+    the regional bucket domain each part URL was presigned for. The presign is
+    the authorization.
+  - Viewer HTTPS only, all methods, `CachingDisabled`. The origin request
+    policy forwards all query strings, no headers and no cookies. A response
+    headers policy adds `nosniff`, HSTS (the same values as the application
+    policy) and `Referrer-Policy: no-referrer`, with no CSP.
+  - The CloudFront Function `billing-upload-router` (`infra/lib/billing-upload-router.js`,
+    `cloudfront-js-2.0`, viewer request) accepts only
+    `/billing-upload/accounts/{ACCT_ID}/uploads/{UPLOAD_ID}/source.zip`, with the
+    BFF's `ACCT_ID` and `UPLOAD_ID` patterns, and strips the prefix. Anything else,
+    including `%`-encoded, `..` and `//` paths, gets 403.
+- `/billing-app/*`:
+  - The static Billing pages from the site bucket, with the application cache
+    policy and no SPA router.
+  - The pages are not committed. The frontend build generates them from
+    `services/billing/page` into `public/billing-app/`, and
+    `deploy-frontend.yml` fails unless `out/billing-app/index.html` and
+    `upload.html` exist before publishing.
+  - Response headers: `frame-ancestors 'self'` and `X-Frame-Options:
+    SAMEORIGIN`, so only `/billing` can frame them. Every other path keeps
+    `frame-ancestors 'none'` and `DENY`, and the default CSP's `frame-src 'self'`
+    lets `/billing` frame them.
+  - `script-src` is `'self'` only: no `'unsafe-inline'`, no hashes and no
+    `'wasm-unsafe-eval'`. `services/billing/page/build_page.py` moves each
+    page's inline scripts to `index.page.N.js` and `upload.page.N.js`, loaded by
+    classic `<script src>` tags at the same positions. Its tests reject an
+    inline script or event-handler attribute. Styles keep the application
+    `style-src 'self' 'unsafe-inline'`.
+
+`AWS::Lambda::ResourcePolicy` on the function ARN holds the Web Function's whole
+resource policy. It has one statement: `cloudfront.amazonaws.com` may call
+`lambda:InvokeWebFunctionEndpoint` on the `prod` endpoint ARN, with
+`StringEquals aws:SourceArn` equal to this distribution's ARN.
+
+- `PutResourcePolicy` replaces the whole policy, so nothing else may manage it.
+- CDK's bundled schema predates Web Function ARNs. The two schema warnings are
+  acknowledged; the live ap-northeast-2 schema accepts the ARN.
+
+The endpoint domain itself stays reachable from the internet. Only a SigV4
+call signed by this distribution, or by an account principal granted
+`lambda:InvokeWebFunctionEndpoint`, gets through. A direct SigV4 call carries no Bearer token, so the BFF answers 401.
+CLAUDE.md lists this and the no-OAC upload behavior as accepted limits.
+
+Billing uploads and POSTs work only on the custom domain (`PUBLIC_URL`), not on
+the raw CloudFront domain. The `config.json` deployment waits for this policy,
+so the runtime config never advertises Billing before it exists.
 
 ## Project invitation activation
 
