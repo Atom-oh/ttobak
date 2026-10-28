@@ -1,0 +1,80 @@
+# Deploys TtobakBillingStack on its own (spec: a failing TTOBAK deploy must not
+# block Billing and vice versa). deploy-infra.yml's release coordinator never
+# deploys this stack. The stack exists only when infra/cdk.json sets
+# ttobak:billingEnabled to "true"; until then this workflow builds and tests,
+# then skips the deploy. Before the first deploy the operator creates the SSM
+# String parameters /ttobak/billing/data-bucket-name and
+# /ttobak/billing/platform-table-name.
+name: Deploy Billing
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'services/billing/**'
+      - 'infra/lib/billing-stack.ts'
+      - 'infra/bin/infra.ts'
+      - 'infra/cdk.json'
+      - 'infra/package.json'
+      - 'infra/package-lock.json'
+      - '.github/workflows/deploy-billing.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-billing
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+
+jobs:
+  deploy:
+    # push and workflow_dispatch only: no pull_request trigger, so no fork code
+    # runs on this self-hosted runner (see test-infra.yml's guard).
+    runs-on: ttobak-arm
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Check Billing context
+        id: context
+        run: |
+          enabled=$(node -e '
+            const c = require("./infra/cdk.json").context || {};
+            process.stdout.write(c["ttobak:billingEnabled"] === "true" ? "true" : "false");
+          ')
+          echo "enabled=${enabled}" >> "$GITHUB_OUTPUT"
+          if [ "${enabled}" != "true" ]; then
+            echo "::notice::ttobak:billingEnabled is not \"true\" in infra/cdk.json; TtobakBillingStack is not part of the app, skipping deploy."
+          fi
+
+      - name: Test and package Billing BFF
+        working-directory: services/billing/bff
+        run: |
+          npm ci --no-audit --no-fund
+          npm test
+          npm run package
+
+      - name: Build HTTP MCP Lambda bundle
+        # The full app synthesizes GatewayStack, whose ttobak-mcp function uses
+        # Code.fromAsset on this gitignored output; cdk synth fails without it.
+        if: steps.context.outputs.enabled == 'true'
+        working-directory: mcp-server
+        run: |
+          npm ci
+          npm run bundle:lambda
+
+      - name: Deploy TtobakBillingStack
+        if: steps.context.outputs.enabled == 'true'
+        working-directory: infra
+        run: |
+          npm ci
+          npx jest billing-stack
+          npx cdk synth --quiet
+          npx cdk deploy TtobakBillingStack --exclusively --require-approval never

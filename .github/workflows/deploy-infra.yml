@@ -67,6 +67,14 @@ jobs:
         run: |
           npm ci
           npm run bundle:lambda
+      - name: Build Billing BFF package
+        # TtobakBillingStack stages this gitignored output (BucketDeployment
+        # Source.asset); synth and billing-stack.test.ts fail without it.
+        working-directory: services/billing/bff
+        run: |
+          npm ci --no-audit --no-fund
+          npm run package
+
       - name: Infra synth + unit tests (gate before any deploy)
         # Security invariants live in these jest assertions (e.g.
         # whisper-stack.test.ts's "no EntryPoint/Command on the whisperx
@@ -123,6 +131,14 @@ jobs:
         run: |
           npm ci
           npm run bundle:lambda
+
+      - name: Build Billing BFF package
+        # TtobakBillingStack stages this gitignored output (BucketDeployment
+        # Source.asset); synth and billing-stack.test.ts fail without it.
+        working-directory: services/billing/bff
+        run: |
+          npm ci --no-audit --no-fund
+          npm run package
 
       - name: Set up release Python
         id: release-python
