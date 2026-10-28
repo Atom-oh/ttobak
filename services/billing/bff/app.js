@@ -255,7 +255,7 @@ function createApp({ s3, ddb, env, authenticate, now = Date.now, presign = makeP
       req.accounts = await accountsFor(req.sub); // membership re-checked every few minutes, so removed members lose access
     } catch (e) {
       console.error('access lookup failed', e.name);
-      return res.status(503).type('text').send('access check unavailable');
+      return res.status(503).json({ error: 'access check unavailable' });
     }
     next();
   }));
@@ -321,12 +321,13 @@ function createApp({ s3, ddb, env, authenticate, now = Date.now, presign = makeP
   }));
 
   app.use('/api/billing', api);
+  app.use((req, res) => res.status(404).json({ error: 'not found' })); // never Express's HTML 404
 
   // last-resort handlers: a bad request must never take the single process down
   app.use((err, req, res, next) => {
     console.error('unhandled', err && err.name);
     if (res.headersSent) return next(err);
-    res.status(500).type('text').send('error');
+    res.status(500).json({ error: 'internal error' });
   });
   return app;
 }

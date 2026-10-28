@@ -261,7 +261,8 @@ grant nothing.
 
 A missing or invalid token returns 401 with
 `{ "error": { "code": "UNAUTHORIZED", "message": "..." } }`. Every other error
-body is Billing-specific: `{ "error": "<string>" }`. Every response carries
+(including 404, 500 and 503) has a Billing-specific JSON body:
+`{ "error": "<string>" }`. Every response carries
 `Cache-Control: private, no-store`. POST requests require a JSON content type,
 `X-TB: 1` and a same-origin `Origin`, otherwise they return 403.
 

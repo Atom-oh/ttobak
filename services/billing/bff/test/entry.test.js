@@ -92,6 +92,20 @@ test('buildDeps_wires_ap_northeast_2_region_by_default', async () => {
   assert.deepEqual(parseClientIds(' a, b ,,c'), ['a', 'b', 'c']);
   const d = buildDeps({ ...STUB_ENV });
   assert.equal(await d.s3.config.region(), 'ap-northeast-2');
+  assert.equal(await d.ddb.config.region(), 'ap-northeast-2');
   const d2 = buildDeps({ ...STUB_ENV, AWS_REGION: 'us-east-1' });
   assert.equal(await d2.s3.config.region(), 'us-east-1');
+  assert.equal(await d2.ddb.config.region(), 'us-east-1');
+  // the presigner is a closure: its region shows in the presigned host
+  const { GetObjectCommand } = require('@aws-sdk/client-s3');
+  const cmd = new GetObjectCommand({ Bucket: 'bkt', Key: 'k' });
+  const creds = { AWS_ACCESS_KEY_ID: 'AKIATESTTESTTESTTEST', AWS_SECRET_ACCESS_KEY: 'secretsecretsecretsecret' };
+  const saved = Object.fromEntries(Object.keys(creds).map((k) => [k, process.env[k]]));
+  Object.assign(process.env, creds);
+  try {
+    assert.equal(new URL(await d.presign(cmd, { expiresIn: 60 })).host, 'bkt.s3.ap-northeast-2.amazonaws.com');
+    assert.equal(new URL(await d2.presign(cmd, { expiresIn: 60 })).host, 'bkt.s3.us-east-1.amazonaws.com');
+  } finally {
+    for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  }
 });

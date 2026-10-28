@@ -422,3 +422,30 @@ test('a parent-account member cannot read or upload to a child account', async (
   assert.equal(up.status, 403, 'upload denied by membership, not by the CSRF gate');
   assert.deepEqual(await t.json('/api/billing/data/kpis.json'), [], 'child data not in the merged read either');
 });
+
+test('errors are JSON {error: string} with the same status and no-store: 503, 500, 404', async () => {
+  const check = async (r, status, body) => {
+    assert.equal(r.status, status);
+    assert.equal(r.headers.get('cache-control'), 'private, no-store');
+    assert.match(r.headers.get('content-type'), /application\/json/);
+    assert.deepEqual(await r.json(), body);
+  };
+  // 503: the access lookup throws
+  const a = await setup();
+  a.ddb.send = async () => { throw new Error('ddb down'); };
+  await check(await a.get('/api/billing/accounts'), 503, { error: 'access check unavailable' });
+  // 500: a wrapped route throws after the access check passed (second platform META read fails)
+  const b = await setup();
+  b.acct('acct-a', 'Alpha'); b.member('u1', 'acct-a');
+  const send = b.ddb.send.bind(b.ddb);
+  let metaReads = 0;
+  b.ddb.send = async (cmd) => {
+    if (cmd.constructor.name === 'GetItemCommand' && cmd.input.TableName === PT && cmd.input.Key.sk.S === 'META' && ++metaReads > 1) throw new Error('boom');
+    return send(cmd);
+  };
+  await check(await b.get('/api/billing/accounts/acct-a/report?source=cot'), 500, { error: 'internal error' });
+  // 404: authenticated unknown path under /api/billing, and a path outside it
+  const c = await setup();
+  await check(await c.get('/api/billing/no/such/path'), 404, { error: 'not found' });
+  await check(await c.get('/elsewhere'), 404, { error: 'not found' });
+});
