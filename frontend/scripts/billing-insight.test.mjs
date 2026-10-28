@@ -14,7 +14,7 @@ function load() {
   return exports;
 }
 
-const { validateBillingInsightUrl, openBillingInsightHandoff, BILLING_INSIGHT_INVALID_RESPONSE } = load();
+const { validateBillingInsightUrl, openBillingInsightHandoff, billingEntryMode, BILLING_INSIGHT_INVALID_RESPONSE } = load();
 const code = 'A'.repeat(40) + '-_9';
 const good = `https://insight.example.net/login/ttobak?code=${code}`;
 
@@ -105,4 +105,12 @@ test('never navigates the current tab when the user already closed the opened ta
   });
   assert.deepEqual(navigated, []);
   assert.equal(tab.location.href, 'about:blank');
+});
+
+test('billingService wins and renders a link; otherwise the hand-off, else hidden', () => {
+  assert.equal(billingEntryMode({ billingService: true }), 'link');
+  assert.equal(billingEntryMode({ billingService: true, billingInsight: true }), 'link');
+  assert.equal(billingEntryMode({ billingInsight: true }), 'handoff');
+  assert.equal(billingEntryMode({ billingService: false, billingInsight: true }), 'handoff');
+  assert.equal(billingEntryMode({}), 'hidden');
 });

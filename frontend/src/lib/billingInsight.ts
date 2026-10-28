@@ -83,3 +83,12 @@ export async function openBillingInsightHandoff(deps: HandoffDeps): Promise<void
     throw error;
   }
 }
+
+/**
+ * How the Billing entry behaves: `link` goes to the in-app /billing page (runtime
+ * `billingService`), `handoff` opens the companion, `hidden` renders nothing.
+ */
+export function billingEntryMode(cfg: { billingService?: boolean; billingInsight?: boolean }): 'link' | 'handoff' | 'hidden' {
+  if (cfg.billingService === true) return 'link';
+  return cfg.billingInsight === true ? 'handoff' : 'hidden';
+}
