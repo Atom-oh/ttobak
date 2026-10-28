@@ -19,16 +19,16 @@ function freePort() {
     s.on('error', reject);
   });
 }
-function run(env) {
-  const child = spawn(process.execPath, [ENTRY], { env: { PATH: process.env.PATH, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+function run(env, args = [ENTRY]) {
+  const child = spawn(process.execPath, args, { env: { PATH: process.env.PATH, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
   let stderr = '';
   child.stderr.on('data', (d) => { stderr += d; });
   const exited = new Promise((resolve) => child.on('exit', (code, signal) => resolve({ code, signal, stderr })));
   return { child, exited };
 }
-async function started() {
+async function started(args) {
   const port = await freePort();
-  const { child, exited } = run({ ...STUB_ENV, AWS_LAMBDA_HTTP_ENDPOINT: `127.0.0.1:${port}` });
+  const { child, exited } = run({ ...STUB_ENV, AWS_LAMBDA_HTTP_ENDPOINT: `127.0.0.1:${port}` }, args);
   const base = `http://127.0.0.1:${port}`;
   for (let i = 0; i < 100; i++) {
     try { await fetch(`${base}/api/billing/accounts`); break; } catch { await new Promise((r) => setTimeout(r, 50)); }
@@ -42,6 +42,15 @@ test('listens_on_lambda_endpoint', async () => {
     const res = await fetch(`${base}/api/billing/accounts`);
     assert.equal(res.status, 401);
     assert.deepEqual(await res.json(), { error: { code: 'UNAUTHORIZED', message: 'Authentication required' } });
+  } finally { child.kill('SIGTERM'); await exited; }
+});
+
+test('listens_when_required_by_a_bootstrap', async () => {
+  // The managed runtime may load index.js from its own bootstrap (require.main !== module).
+  const { base, child, exited } = await started(['-e', `require(${JSON.stringify(ENTRY)})`]);
+  try {
+    const res = await fetch(`${base}/api/billing/accounts`);
+    assert.equal(res.status, 401);
   } finally { child.kill('SIGTERM'); await exited; }
 });
 
@@ -88,7 +97,7 @@ test('empty_client_id_list_exits_nonzero', async () => {
 });
 
 test('buildDeps_wires_ap_northeast_2_region_by_default', async () => {
-  const { buildDeps, parseClientIds } = require('../index.js');
+  const { buildDeps, parseClientIds } = require('../lib/server.js');
   assert.deepEqual(parseClientIds(' a, b ,,c'), ['a', 'b', 'c']);
   const d = buildDeps({ ...STUB_ENV });
   assert.equal(await d.s3.config.region(), 'ap-northeast-2');
