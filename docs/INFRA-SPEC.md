@@ -766,6 +766,82 @@ HTTP-origin release coordinator's `STACKS` list does not include this stack.
 Every workflow that synthesizes the app (`test-infra.yml` and both
 `deploy-infra.yml` jobs) builds the BFF package first.
 
+### Billing behaviors on the TTOBAK distribution
+
+FrontendStack gains the Billing behaviors (ADR-056) only through context
+strings, never stack exports, so the HTTP-origin release coordinator deploys it
+the same way with or without Billing:
+
+- `ttobak:billingEnabled` (`"true"`) plus all three of
+  `ttobak:billingEndpointDomain`, `ttobak:billingFunctionArn` and
+  `ttobak:billingEndpointArn` (the `TtobakBillingStack` outputs) turn them on.
+- `billingFrontendContext` (`infra/lib/frontend-stack.ts`) fails synth when only
+  some endpoint keys are set, or when any is set without Billing enabled. It
+  also checks the shapes: the domain must be `<id>.lambda-web.ap-northeast-2.on.aws`,
+  the function ARN `arn:aws:lambda:ap-northeast-2:<account>:web-function/ttobak-billing`,
+  and the endpoint ARN that function's `/endpoint/prod`.
+- Billing enabled with no endpoint key is the bootstrap state.
+  `TtobakBillingStack` exists, and FrontendStack has no Billing behaviors.
+
+The three behaviors come after the discovery paths and before `/api/public/*`
+and `/api/*`, so `/api/billing/*` wins over `/api/*`.
+
+- `/api/billing/*`:
+  - Origin: the endpoint domain over HTTPS, with an origin access control of
+    type `lambda`, `always-amz-auth` and `sigv4`. It carries no `x-origin-verify`
+    header; that proof stays on the API and WebSocket origins.
+  - Viewer HTTPS only, all methods, compression on. CloudFront compresses only
+    1 to 10 MB bodies, so the BFF compresses larger ones itself.
+  - Cache policy `BillingAuthKeyed`: `Authorization` header, all query strings,
+    no cookies, TTL 0/0/1 s. Without the header in the key, CloudFront would
+    strip it on GET and HEAD. With it, one user's response is never served to
+    another.
+  - Origin request policy `AllViewerExceptHostHeader`. A viewer `Host` makes
+    Lambda answer 404.
+  - The existing edge JWT function at viewer request only. Origin-request and
+    origin-response triggers are not allowed on a Web Function origin.
+- `/billing-upload/*`:
+  - Origin: `{{resolve:ssm:/ttobak/billing/data-bucket-name}}.s3.ap-northeast-2.amazonaws.com`,
+    over HTTPS with a 60 s read timeout. CloudFormation resolves the SSM dynamic
+    reference at deploy, so the bucket name is never committed and no stack
+    parameter is added.
+  - No origin access control: CloudFront adds no signature, and sends `Host` as
+    the regional bucket domain each part URL was presigned for. The presign is
+    the authorization.
+  - Viewer HTTPS only, all methods, `CachingDisabled`. The origin request
+    policy forwards all query strings, no headers and no cookies.
+  - The CloudFront Function `billing-upload-router` (`infra/lib/billing-upload-router.js`,
+    `cloudfront-js-2.0`, viewer request) accepts only
+    `/billing-upload/accounts/{ACCT_ID}/uploads/{UPLOAD_ID}/source.zip`, with the
+    BFF's `ACCT_ID` and `UPLOAD_ID` patterns, and strips the prefix. Anything else,
+    including `%`-encoded, `..` and `//` paths, gets 403.
+- `/billing-app/*`:
+  - The static Billing pages from the site bucket, with the application cache
+    policy and no SPA router.
+  - Response headers: `frame-ancestors 'self'` and `X-Frame-Options:
+    SAMEORIGIN`, so only `/billing` can frame them. Every other path keeps
+    `frame-ancestors 'none'` and `DENY`, and the default CSP's `frame-src 'self'`
+    lets `/billing` frame them.
+  - `script-src` is `'self'` plus the SHA-256 hash of each inline script in
+    `frontend/public/billing-app/index.html` and `upload.html`, computed at
+    synth. There is no `'unsafe-inline'`. A change to those inline scripts needs
+    a FrontendStack deploy before, or with, the frontend publish. Until then the
+    browser blocks the changed scripts.
+
+`AWS::Lambda::ResourcePolicy` on the function ARN holds the Web Function's whole
+resource policy. It has one statement: `cloudfront.amazonaws.com` may call
+`lambda:InvokeWebFunctionEndpoint` on the `prod` endpoint ARN, with
+`StringEquals aws:SourceArn` equal to this distribution's ARN.
+
+- `PutResourcePolicy` replaces the whole policy, so nothing else may manage it.
+- CDK's bundled schema predates Web Function ARNs. The two schema warnings are
+  acknowledged; the live ap-northeast-2 schema accepts the ARN.
+
+The endpoint domain itself stays reachable from the internet. Only a SigV4
+call signed by this distribution, or by an account principal granted
+`lambda:InvokeWebFunctionEndpoint`, gets through. A direct SigV4 call carries no Bearer token, so the BFF answers 401.
+CLAUDE.md lists this and the no-OAC upload behavior as accepted limits.
+
 ## Project invitation activation
 
 GatewayStack declares `ProjectInvitationsEnabled` with allowed values `false` and

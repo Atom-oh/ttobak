@@ -9,10 +9,64 @@ import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { WEBSOCKET_ORIGIN_HEADER, WEBSOCKET_PATH, WEBSOCKET_STAGE } from './websocket-origin';
 import { billingInsightUrlContext } from './billing-insight';
-import { applicationContentSecurityPolicy } from './frontend-policy';
+import { applicationContentSecurityPolicy, inlineScriptHashes } from './frontend-policy';
 import { Construct } from 'constructs';
 import * as fs from 'fs';
 import * as path from 'path';
+
+// The Billing BFF endpoint (TtobakBillingStack outputs, copied into cdk.json
+// after that stack is deployed). Context strings only, never stack exports, so
+// FrontendStack deploys the same way whether or not Billing exists.
+export interface BillingFrontendProps {
+  endpointDomain: string;
+  functionArn: string;
+  endpointArn: string;
+}
+
+const BILLING_ENABLED_CONTEXT = 'ttobak:billingEnabled';
+const BILLING_ENDPOINT_CONTEXT = {
+  endpointDomain: {
+    key: 'ttobak:billingEndpointDomain',
+    pattern: /^[a-z0-9-]+\.lambda-web\.ap-northeast-2\.on\.aws$/,
+  },
+  functionArn: {
+    key: 'ttobak:billingFunctionArn',
+    pattern: /^arn:aws:lambda:ap-northeast-2:\d{12}:web-function\/ttobak-billing$/,
+  },
+  endpointArn: {
+    key: 'ttobak:billingEndpointArn',
+    pattern: /^arn:aws:lambda:ap-northeast-2:\d{12}:web-function\/ttobak-billing\/endpoint\/prod$/,
+  },
+} as const;
+
+/**
+ * The Billing behaviors' props from context, or undefined when they are off.
+ * They need ttobak:billingEnabled 'true' and all three endpoint keys. Billing
+ * enabled with no endpoint key is the bootstrap state: TtobakBillingStack
+ * exists, FrontendStack has no Billing behaviors. Anything else throws.
+ */
+export function billingFrontendContext(scope: Construct): BillingFrontendProps | undefined {
+  const entries = Object.entries(BILLING_ENDPOINT_CONTEXT) as Array<
+    [keyof BillingFrontendProps, { key: string; pattern: RegExp }]>;
+  const values = entries.map(([, { key }]) => scope.node.tryGetContext(key));
+  const set = values.filter(value => value !== undefined);
+  if (set.length === 0) return undefined;
+  const keys = entries.map(([, { key }]) => key).join(', ');
+  if (scope.node.tryGetContext(BILLING_ENABLED_CONTEXT) !== 'true') {
+    throw new Error(`${keys} require context ${BILLING_ENABLED_CONTEXT} to be the string "true"`);
+  }
+  if (set.length !== entries.length) throw new Error(`Set all three of ${keys}, or none`);
+  const props = {} as BillingFrontendProps;
+  entries.forEach(([name, { key, pattern }], i) => {
+    const value = values[i];
+    if (typeof value !== 'string' || !pattern.test(value)) throw new Error(`${key} must match ${pattern}`);
+    props[name] = value;
+  });
+  if (props.endpointArn !== `${props.functionArn}/endpoint/prod`) {
+    throw new Error(`${BILLING_ENDPOINT_CONTEXT.endpointArn.key} must be the prod endpoint of ${BILLING_ENDPOINT_CONTEXT.functionArn.key}`);
+  }
+  return props;
+}
 
 export interface FrontendStackProps extends cdk.StackProps {
   httpApiUrl: string;
@@ -28,6 +82,7 @@ export interface FrontendStackProps extends cdk.StackProps {
   readConnectorClientId?: string;
   writeConnectorClientId?: string;
   qaAsyncJobsEnabled?: boolean;
+  billing?: BillingFrontendProps;
 }
 
 export class FrontendStack extends cdk.Stack {
@@ -414,6 +469,9 @@ function handler(event) {
           cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
           originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
         },
+        // Billing (ADR-056), before '/api/public/*' and '/api/*' so
+        // '/api/billing/*' wins over '/api/*'. Empty without Billing props.
+        ...this.billingBehaviors(props, s3Origin, applicationCache, dataBucket.bucketName),
         // Public slide-share redirects — MUST be defined before '/api/*'
         // below: CloudFront evaluates additionalBehaviors path patterns in
         // insertion order (first match wins), so this more-specific pattern
@@ -446,6 +504,8 @@ function handler(event) {
       },
       priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
     });
+
+    if (props.billing) this.billingResourcePolicy(props.billing);
 
     // The CloudFront-generated key-pair id is only known post-deploy; publish
     // it under a fixed name so the api Lambda can read it at runtime without
@@ -521,5 +581,163 @@ function handler(event) {
     });
     // Publish the consumer revision only after distribution/router update.
     configDeployment.node.addDependency(this.distribution);
+  }
+
+  // The three Billing behaviors (ADR-056), or none without props.billing.
+  private billingBehaviors(
+    props: FrontendStackProps, siteOrigin: cloudfront.IOrigin, siteCache: cloudfront.ICachePolicy,
+    assetsBucketName: string,
+  ): Record<string, cloudfront.BehaviorOptions> {
+    const billing = props.billing;
+    if (!billing) return {};
+
+    // /api/billing/*: the IamAuth Web Function endpoint. CloudFront signs every
+    // origin request with OAC (the only allowed signing behavior); the viewer's
+    // Bearer JWT still reaches the BFF because Lambda strips only AWS4-
+    // Authorization values. No x-origin-verify header: SigV4 plus the endpoint
+    // resource policy is the origin proof.
+    const bffOac = new cloudfront.CfnOriginAccessControl(this, 'BillingBffOac', {
+      originAccessControlConfig: {
+        name: `ttobak-billing-bff-${cdk.Aws.REGION}`,
+        description: 'TTOBAK Billing BFF Lambda Web Function endpoint',
+        originAccessControlOriginType: 'lambda',
+        signingBehavior: 'always-amz-auth',
+        signingProtocol: 'sigv4',
+      },
+    });
+    const bffOrigin = new origins.HttpOrigin(billing.endpointDomain, {
+      protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
+      originAccessControlId: bffOac.attrId,
+    });
+    // CloudFront strips Authorization on GET/HEAD unless it is in the cache
+    // key. Keyed by it, one user's response is never served to another; the
+    // BFF also sends no-store, and maxTtl is 1 s.
+    const billingAuthKeyed = new cloudfront.CachePolicy(this, 'BillingAuthKeyed', {
+      comment: 'TTOBAK Billing BFF: keyed by Authorization, effectively uncached',
+      minTtl: cdk.Duration.seconds(0),
+      defaultTtl: cdk.Duration.seconds(0),
+      maxTtl: cdk.Duration.seconds(1),
+      headerBehavior: cloudfront.CacheHeaderBehavior.allowList('Authorization'),
+      queryStringBehavior: cloudfront.CacheQueryStringBehavior.all(),
+      cookieBehavior: cloudfront.CacheCookieBehavior.none(),
+      enableAcceptEncodingGzip: true,
+      enableAcceptEncodingBrotli: true,
+    });
+
+    // /billing-upload/*: presigned multipart part PUTs to the data bucket. The
+    // name is never committed: CloudFormation resolves it from SSM at deploy.
+    // No OAC, so CloudFront adds no signature and sends Host = this regional
+    // bucket domain, the host each URL was presigned for.
+    const uploadOrigin = new origins.HttpOrigin(
+      '{{resolve:ssm:/ttobak/billing/data-bucket-name}}.s3.ap-northeast-2.amazonaws.com', {
+        protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
+        readTimeout: cdk.Duration.seconds(60),
+      });
+    const uploadRequest = new cloudfront.OriginRequestPolicy(this, 'BillingUploadRequestPolicy', {
+      comment: 'TTOBAK Billing uploads: presign query only',
+      queryStringBehavior: cloudfront.OriginRequestQueryStringBehavior.all(),
+      headerBehavior: cloudfront.OriginRequestHeaderBehavior.none(),
+      cookieBehavior: cloudfront.OriginRequestCookieBehavior.none(),
+    });
+    const uploadRouter = new cloudfront.Function(this, 'BillingUploadRouter', {
+      functionName: `ttobak-billing-upload-router-${cdk.Aws.REGION}`,
+      runtime: cloudfront.FunctionRuntime.JS_2_0,
+      code: cloudfront.FunctionCode.fromFile({ filePath: path.join(__dirname, 'billing-upload-router.js') }),
+    });
+
+    // /billing-app/*: the static Billing pages, framed by /billing only. Their
+    // inline scripts are allowed by hash, computed here from the same files
+    // the site build copies (frontend/public/billing-app).
+    const billingAppDir = path.join(__dirname, '../../frontend/public/billing-app');
+    const billingAppHeaders = new cloudfront.ResponseHeadersPolicy(this, 'BillingAppResponseHeadersPolicy', {
+      responseHeadersPolicyName: `ttobak-billing-app-headers-${cdk.Aws.REGION}`,
+      securityHeadersBehavior: {
+        contentSecurityPolicy: {
+          contentSecurityPolicy: applicationContentSecurityPolicy(
+            props.cognitoRegion, this.node.tryGetContext('ttobak:domainName'), assetsBucketName,
+            `ttobak-kb-${cdk.Aws.ACCOUNT_ID}`, this.node.tryGetContext('ttobak:cloudfrontDomain'), {
+              frameAncestors: "'self'",
+              scriptHashes: inlineScriptHashes(['index.html', 'upload.html'].map(f => path.join(billingAppDir, f))),
+            }),
+          override: true,
+        },
+        contentTypeOptions: { override: true },
+        frameOptions: { frameOption: cloudfront.HeadersFrameOption.SAMEORIGIN, override: true },
+        referrerPolicy: { referrerPolicy: cloudfront.HeadersReferrerPolicy.NO_REFERRER, override: true },
+        strictTransportSecurity: {
+          accessControlMaxAge: cdk.Duration.days(365), includeSubdomains: true, override: true,
+        },
+      },
+    });
+
+    return {
+      '/api/billing/*': {
+        origin: bffOrigin,
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.HTTPS_ONLY,
+        allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+        cachePolicy: billingAuthKeyed,
+        // The viewer Host must not reach the endpoint (404 Platform.InvalidEndpoint).
+        originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+        // CloudFront compresses only 1-10 MB bodies; the BFF compresses large ones.
+        compress: true,
+        // Viewer request only: origin-request/response triggers are not
+        // allowed on a Web Function origin.
+        edgeLambdas: [{
+          functionVersion: props.edgeFunctionVersion,
+          eventType: cloudfront.LambdaEdgeEventType.VIEWER_REQUEST,
+        }],
+      },
+      '/billing-upload/*': {
+        origin: uploadOrigin,
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.HTTPS_ONLY,
+        allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+        cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+        originRequestPolicy: uploadRequest,
+        compress: false,
+        functionAssociations: [{ function: uploadRouter, eventType: cloudfront.FunctionEventType.VIEWER_REQUEST }],
+      },
+      '/billing-app/*': {
+        origin: siteOrigin,
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
+        cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD_OPTIONS,
+        cachePolicy: siteCache,
+        responseHeadersPolicy: billingAppHeaders,
+        compress: true,
+      },
+    };
+  }
+
+  // The Web Function's whole resource policy: only this distribution may
+  // invoke the prod endpoint. AWS::Lambda::ResourcePolicy owns the policy
+  // (PutResourcePolicy replaces it), so nothing else may manage it. Its
+  // handlers use lambda:GetResourcePolicy, lambda:PutResourcePolicy and
+  // lambda:DeleteResourcePolicy on the function ARN; AddPermission and
+  // GetPolicy do not apply to Web Functions. Sources:
+  // https://docs.aws.amazon.com/lambda/latest/dg/web-functions-permissions.html
+  // https://docs.aws.amazon.com/lambda/latest/dg/web-functions-endpoint-access-control.html
+  // https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-lambda-resourcepolicy.html
+  private billingResourcePolicy(billing: BillingFrontendProps) {
+    const policy = new lambda.CfnResourcePolicy(this, 'BillingEndpointResourcePolicy', {
+      resourceArn: billing.functionArn,
+      policyDocument: {
+        Version: '2012-10-17',
+        Statement: [{
+          Sid: 'AllowTtobakDistribution',
+          Effect: 'Allow',
+          Principal: { Service: 'cloudfront.amazonaws.com' },
+          Action: 'lambda:InvokeWebFunctionEndpoint',
+          Resource: billing.endpointArn,
+          Condition: { StringEquals: { 'aws:SourceArn': this.distribution.distributionArn } },
+        }],
+      },
+    });
+    // CDK's bundled schema allows only function: ARNs here; the live
+    // ap-northeast-2 schema also accepts web-function/ ARNs.
+    for (const id of ['CloudFormation-Validate::F3017', 'CloudFormation-Validate::F3031']) {
+      cdk.Validations.of(policy).acknowledge({
+        id, reason: 'ResourceArn is a Web Function ARN, newer than the CDK-bundled schema',
+      });
+    }
   }
 }
