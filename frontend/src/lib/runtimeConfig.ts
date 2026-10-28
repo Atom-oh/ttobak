@@ -13,6 +13,8 @@ export interface RuntimeConfig {
   qaAsyncJobs?: boolean;
   /** Show the Billing Insight hand-off button. Missing is off; the URL comes from the API. */
   billingInsight?: boolean;
+  /** Host the Billing dashboard at /billing (same-origin iframe). Missing is off. */
+  billingService?: boolean;
   /** Public client IDs, never credentials. Missing mode disables HTTP setup. */
   mcp?: {
     url?: string;

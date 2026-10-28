@@ -3,10 +3,12 @@ name: Deploy Frontend
 on:
   push:
     branches: [main]
-    paths: ['frontend/**', 'scripts/publish-frontend.sh', 'scripts/test_publish_frontend.py', '.github/workflows/deploy-frontend.yml']
+    paths: ['frontend/**', 'services/billing/page/**', 'scripts/publish-frontend.sh', 'scripts/test_publish_frontend.py', '.github/workflows/deploy-frontend.yml']
   pull_request:
     paths:
       - 'frontend/**'
+      # The frontend build generates public/billing-app/ from these sources.
+      - 'services/billing/page/**'
       - '.github/workflows/deploy-frontend.yml'
       - 'docs/INFRA-SPEC.md'
       - 'docs/README.md'
@@ -43,6 +45,11 @@ jobs:
         run: |
           python3 -m unittest discover -s scripts -p 'test_publish_frontend.py' -v
           bash -n scripts/publish-frontend.sh scripts/deploy.sh
+      - name: Install Billing page vendor sources
+        # frontend prebuild runs services/billing/page/build_page.py to generate
+        # the uncommitted public/billing-app/, which next build exports.
+        working-directory: services/billing/page
+        run: npm ci --no-audit --no-fund
       - name: Test, lint and build frontend
         working-directory: frontend
         run: |
@@ -50,6 +57,8 @@ jobs:
           npm run test:unit
           npm run lint
           npm run build
+      - name: Verify Billing pages in the export
+        run: test -f frontend/out/billing-app/index.html && test -f frontend/out/billing-app/upload.html
 
   build-and-deploy:
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
@@ -66,6 +75,12 @@ jobs:
           unzip -q /tmp/awscli.zip -d /tmp && /tmp/aws/install --install-dir $HOME/.local/aws-cli --bin-dir $HOME/.local/bin --update
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
+      - name: Install Billing page vendor sources
+        # frontend prebuild runs services/billing/page/build_page.py to generate
+        # the uncommitted public/billing-app/, which next build exports.
+        working-directory: services/billing/page
+        run: npm ci --no-audit --no-fund
+
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
@@ -77,6 +92,9 @@ jobs:
       - name: Lint and build frontend
         working-directory: frontend
         run: npm run lint && npm run build
+
+      - name: Verify Billing pages in the export
+        run: test -f frontend/out/billing-app/index.html && test -f frontend/out/billing-app/upload.html
 
       - name: Verify publication contract
         run: python3 -m unittest discover -s scripts -p 'test_publish_frontend.py' -v

@@ -1,9 +1,10 @@
 'use client';
 
+import Link from 'next/link';
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { ApiError, billingInsightApi } from '@/lib/api';
-import { openBillingInsightHandoff } from '@/lib/billingInsight';
+import { billingEntryMode, openBillingInsightHandoff } from '@/lib/billingInsight';
 import { getRuntimeConfig } from '@/lib/runtimeConfig';
 
 const LABEL = '빌링 인사이트 열기';
@@ -17,24 +18,66 @@ function handoffErrorMessage(error: unknown): string {
 
 /**
  * Opens the AWS Billing Insight companion through a single-use hand-off.
- * Rendered only when runtime config sets `billingInsight: true`. In the
+ * Rendered only when runtime config sets `billingInsight: true`; with
+ * `billingService: true` it is instead a plain link to the in-app /billing page. In the
  * sidebar and the mobile menu sheet it is the "고객 분석 › Billing" item, with
  * `groupLabel` rendered above it so the group heading disappears with it.
  */
 export function BillingInsightButton({ variant, groupLabel }: { variant: 'sidebar' | 'sheet' | 'profile'; groupLabel?: ReactNode }) {
   const { user } = useAuth();
-  const [enabled, setEnabled] = useState(false);
+  const [mode, setMode] = useState<'link' | 'handoff' | 'hidden'>('hidden');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const errorTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   useEffect(() => {
     let active = true;
-    getRuntimeConfig().then(cfg => { if (active) setEnabled(cfg.billingInsight === true); });
+    getRuntimeConfig().then(cfg => { if (active) setMode(billingEntryMode(cfg)); });
     return () => { active = false; clearTimeout(errorTimer.current); };
   }, []);
 
-  if (!enabled || !user) return null;
+  if (mode === 'hidden' || !user) return null;
+
+  if (mode === 'link') {
+    if (variant === 'profile') {
+      return (
+        <Link
+          href="/billing"
+          className="w-full flex items-center gap-3 px-4 py-3.5 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors text-left"
+        >
+          <span className="material-symbols-outlined text-slate-500">monitoring</span>
+          <span className="text-sm font-medium text-slate-900 dark:text-white flex-1">Billing</span>
+          <span className="material-symbols-outlined text-slate-400 text-lg">chevron_right</span>
+        </Link>
+      );
+    }
+    if (variant === 'sheet') {
+      return (
+        <div className="flex flex-col gap-1.5">
+          {groupLabel}
+          <Link
+            href="/billing"
+            className="self-start min-h-11 px-3.5 rounded-lg border border-slate-200 dark:border-white/10 text-sm text-slate-700 dark:text-text-secondary flex items-center gap-2"
+          >
+            <span className="material-symbols-outlined text-lg">monitoring</span>
+            <span>Billing</span>
+          </Link>
+        </div>
+      );
+    }
+    return (
+      <div className="flex flex-col gap-1">
+        {groupLabel}
+        <Link
+          href="/billing"
+          className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium text-slate-600 dark:text-text-secondary hover:bg-slate-100 dark:hover:bg-white/5 dark:hover:text-text-main transition-colors"
+        >
+          <span className="material-symbols-outlined text-xl">monitoring</span>
+          <span className="flex-1 text-left">Billing</span>
+        </Link>
+      </div>
+    );
+  }
 
   const handleClick = () => {
     if (pending) return;

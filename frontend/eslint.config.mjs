@@ -15,6 +15,9 @@ const eslintConfig = defineConfig([
     // Generated Node download, including bundled dependencies. Its authored
     // source and reproducible bundle are validated by mcp-server's test suite.
     "public/mcp/ttobak-mcp.mjs",
+    // Generated Billing pages and vendored d3 (services/billing/page/build_page.py).
+    // dash-shim.js is tested by services/billing/bff/test/shim.test.js.
+    "public/billing-app/**",
   ]),
 ]);
 
