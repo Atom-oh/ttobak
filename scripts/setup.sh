@@ -27,6 +27,8 @@ fi
 echo ""
 echo "Installing frontend dependencies..."
 cd frontend && npm install && cd ..
+# Billing page vendor sources: the frontend prebuild generates public/billing-app/ from them
+npm ci --prefix services/billing/page --no-audit --no-fund
 
 # Install infra dependencies
 echo ""
