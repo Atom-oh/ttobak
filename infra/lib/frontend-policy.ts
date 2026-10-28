@@ -1,7 +1,15 @@
+export interface ContentSecurityPolicyOptions {
+  // Default "'none'". The Billing pages use "'self'" so /billing can frame them.
+  frameAncestors?: string;
+  // Pages without inline scripts or WASM (the Billing pages): script-src 'self' only.
+  scriptSelfOnly?: boolean;
+}
+
 // The remote Tauri window consumes these HTTP headers too. Its local config
 // CSP does not replace the CloudFront policy.
 export function applicationContentSecurityPolicy(
   region: string, domain: string, assetsBucket: string, kbBucket: string, cloudfrontDomain?: string,
+  options: ContentSecurityPolicyOptions = {},
 ): string {
   const assets = [
     `https://${assetsBucket}.s3.${region}.amazonaws.com`,
@@ -17,11 +25,11 @@ export function applicationContentSecurityPolicy(
     "default-src 'self'",
     "base-uri 'self'",
     "object-src 'none'",
-    "frame-ancestors 'none'",
+    `frame-ancestors ${options.frameAncestors ?? "'none'"}`,
     "form-action 'self'",
     // Static Next exports include hydration/bootstrap inline scripts. Tauri
     // injects its bridge, and Shiki compiles WASM. No general JS eval is allowed.
-    "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'",
+    options.scriptSelfOnly ? "script-src 'self'" : "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'",
     "style-src 'self' 'unsafe-inline'",
     "font-src 'self' data:",
     "img-src 'self' data: blob: https:",
@@ -41,3 +49,4 @@ export function applicationContentSecurityPolicy(
     ].join(' '),
   ].join('; ');
 }
+

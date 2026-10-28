@@ -1,5 +1,7 @@
 *.js
 !jest.config.js
+# CloudFront Function source, loaded by FunctionCode.fromFile (not compiled output)
+!lib/billing-upload-router.js
 *.d.ts
 node_modules
 
