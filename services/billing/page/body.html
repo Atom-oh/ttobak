@@ -2237,8 +2237,10 @@ dash.ready(function () {
     const cs = dash.data('cur_tag_signals'), ts = dash.data('tag_signals');
     const tbl = document.getElementById('tbl-signals');
     const loading = cs.status === 'loading' || ts.status === 'loading';
+    // a dataset that failed to load is reported as an error, never as "no signals"
+    const unavailable = !loading && (cs.status !== 'ok' || ts.status !== 'ok');
     const of = (d) => (d.status === 'ok' ? d.data.filter((r) => r && r.entity === e && has(r.tag_value)) : []);
-    const all = loading ? [] : of(cs).concat(of(ts));
+    const all = loading || unavailable ? [] : of(cs).concat(of(ts));
     const hyps = businessNotes(e, items);
     const byTag = new Map();
     for (const h of hyps) if (has(h.tag)) (byTag.get(String(h.tag)) || byTag.set(String(h.tag), []).get(String(h.tag))).push(h);
@@ -2272,6 +2274,7 @@ dash.ready(function () {
       ...SIG_KINDS.map((k) => { const n = base.filter((r) => (r.kinds || []).includes(k)).length;
         return tile(k, n, st.kind === k, () => { st.kind = st.kind === k ? '' : k; st.sel = null; draw(); }, !n && st.kind !== k); }),
       tile('AI 가설 연결', all.filter((r) => linked(r).length).length, st.hypOnly, () => { st.hypOnly = !st.hypOnly; st.sel = null; draw(); }, !byTag.size && !st.hypOnly));
+    if (unavailable) kpis.replaceChildren();
     const qi = document.getElementById('sg-q');
     if (document.activeElement !== qi && qi.value !== st.q) qi.value = st.q;
     document.getElementById('sg-src').value = st.src;
@@ -2280,9 +2283,10 @@ dash.ready(function () {
     document.getElementById('sg-reset').disabled = !filtered;
     document.getElementById('sg-csv').disabled = !shown.length;
     document.getElementById('sg-csv').onclick = () => signalsCsv(e, shown, linked);
-    document.getElementById('sg-count').textContent = loading ? '' : `신호 ${shown.length} / ${all.length}`;
+    document.getElementById('sg-count').textContent = loading || unavailable ? '' : `신호 ${shown.length} / ${all.length}`;
 
     if (loading) noteRow(tbl, '불러오는 중…');
+    else if (unavailable) noteRow(tbl, '신호 데이터를 불러오지 못했습니다.');
     else if (!shown.length && all.length) noteRow(tbl, '조건에 맞는 신호가 없습니다. 필터를 바꾸거나 초기화하세요.');
     else {
       fillTable(tbl, shown, [
@@ -2377,11 +2381,12 @@ dash.ready(function () {
     const k = kp.status === 'ok' ? kp.data.find((r) => r.entity === e) : null;
     const items = br.status === 'ok' ? br.data.filter((r) => r.entity === e).sort((a, b) => a.rank - b.rank) : [];
     const sigs = ['cur_tag_signals', 'tag_signals'].flatMap((n) => { const d = dash.data(n); return d.status === 'ok' ? d.data.filter((r) => r && r.entity === e) : []; });
+    const sigsReady = ['cur_tag_signals', 'tag_signals'].every((n) => dash.data(n).status === 'ok');
     if (k) {
       document.getElementById('br-head').textContent = `${KO[e]} · ${PER.L} ${compact(k.last_spend)} (전월 대비 ${signed(k.mom_pct)}) · 실행 항목 ${items.length}개`;
       const sav = items.filter((x) => x.kind === '절감'), risk = items.filter((x) => x.kind === '위험'), grow = items.filter((x) => x.kind === '성장' && x.impact > 0);
       const tiles = [
-        ['서비스 태그 신호', String(sigs.length), sigs.length ? sigs.slice(0, 3).map((r) => r.tag_value).join(' · ') : '—'],
+        ['서비스 태그 신호', sigsReady ? String(sigs.length) : '—', !sigsReady ? '불러오지 못함' : sigs.length ? sigs.slice(0, 3).map((r) => r.tag_value).join(' · ') : '—'],
         ['가장 큰 절감 레버 (월)', sav.length ? compact(sav[0].impact) : '—', sav.length ? sav[0].title.split(':')[0] : '해당 없음'],
         ['약정·커버리지 위험 (월)', risk.length ? compact(d3.sum(risk, (x) => x.impact)) : '—', risk.length ? risk.length + '건' : '해당 없음'],
         ['COH 권고 (중복 제거, 월)', k.coh_dedup ? compact(k.coh_dedup) : '—', k.coh_dedup ? 'COT360 Total Dedup Savings' : 'COH 미활성'],
@@ -2766,7 +2771,8 @@ dash.ready(function () {
     legend(legendNode, keys.map((k, i) => ({ name: k, color: colors[i] })));
     const W = Math.max(280, node.clientWidth), H = 300;
     const svg = d3.select(node).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`);
-    const rows = periods.map((p) => Object.assign({ p }, ...keys.map((k) => ({ [k]: pv.val(p, k) }))));
+    const P = Symbol('period'); // tag values become string keys; a symbol cannot collide with them
+    const rows = periods.map((p) => Object.assign({ [P]: p }, ...keys.map((k) => ({ [k]: pv.val(p, k) }))));
     const layers = d3.stack().keys(keys).offset(d3.stackOffsetDiverging)(rows);
     const ends = layers.flatMap((l) => l.flatMap((d) => [d[0], d[1]]));
     const lo = d3.min(ends) || 0, hi = d3.max(ends) || 0;
@@ -2783,7 +2789,7 @@ dash.ready(function () {
         svg.append('rect').attr('class', 'cur-area').attr('x', x(periods[0]) - 16).attr('width', 32).attr('y', y(d[1])).attr('height', Math.max(0, y(d[0]) - y(d[1]))).attr('fill', colors[i]);
       } else {
         svg.append('path').attr('class', 'cur-area').attr('fill', colors[i]).attr('fill-opacity', 0.9)
-          .attr('d', d3.area().x((d) => x(d.data.p)).y0((d) => y(d[0])).y1((d) => y(d[1]))(layer));
+          .attr('d', d3.area().x((d) => x(d.data[P])).y0((d) => y(d[0])).y1((d) => y(d[1]))(layer));
       }
     });
     const t = tip(node.closest('.tb-card'));
