@@ -14,6 +14,8 @@ on:
       - 'infra/**'
       # GatewayStack bundles the HTTP MCP Lambda from mcp-server.
       - 'mcp-server/**'
+      # TtobakBillingStack stages the Billing BFF package.
+      - 'services/billing/bff/**'
       - 'scripts/operations/http_origin_release.py'
       - 'scripts/operations/test_http_origin_release.py'
       - 'scripts/operations/test_model_cutover.py'
@@ -22,6 +24,7 @@ on:
       # this, a PR editing/neutering this gate would merge unverified.
       - '.github/workflows/test-infra.yml'
       - '.github/workflows/deploy-infra.yml'
+      - '.github/workflows/deploy-billing.yml'
   # No push trigger: deploy-infra.yml runs the same synth+test suite as its
   # own pre-deploy gate on push-to-main, so a push trigger here would just
   # run the suite twice. This workflow is the PR-time counterpart only.
@@ -49,6 +52,14 @@ jobs:
         run: |
           npm ci
           npm run bundle:lambda
+
+      - name: Build Billing BFF package
+        # TtobakBillingStack stages this gitignored output (BucketDeployment
+        # Source.asset); synth and billing-stack.test.ts fail without it.
+        working-directory: services/billing/bff
+        run: |
+          npm ci --no-audit --no-fund
+          npm run package
 
       - name: Infra synth + unit tests
         # `cdk synth` is part of the documented verification (CLAUDE.md:
