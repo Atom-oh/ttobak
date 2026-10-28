@@ -74,3 +74,6 @@ graphify-out/
 
 # Local linked Git worktrees
 .worktrees/
+
+# Billing BFF package output
+services/billing/bff/dist/
