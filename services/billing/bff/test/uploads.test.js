@@ -729,13 +729,124 @@ test('completed object of the wrong size → deleted, failed, unlocked, no job',
   assert.equal(t.s3.objects.has(key), false);
 });
 
-test('HeadObject 403 after a successful complete (no s3:ListBucket) → size-mismatch rejection, not 500', async () => {
+test('HeadObject 403 after successful complete retains the upload for retry', async () => {
   const t = await member();
   const { j } = await create(t, { source: 'cot', fileName: 'cot.zip', size: 2 * PART });
   const parts = sendParts(t, j.uploadId, 2 * PART);
   t.s3.headForbidden = true;
-  await failedBySize(t, j.uploadId, await t.post(`/api/billing/accounts/acct-a/uploads/${j.uploadId}/complete`, { parts }));
+  const path = `/api/billing/accounts/acct-a/uploads/${j.uploadId}/complete`;
+  const r = await t.post(path, { parts });
+  assert.equal(r.status, 503);
+  assert.equal(t.upRow('acct-a', j.uploadId).status.S, 'uploading');
+  assert.equal(t.lockRow('acct-a', 'cot').uploadId.S, j.uploadId);
+  assert.ok(t.s3.objects.has(`accounts/acct-a/uploads/${j.uploadId}/source.zip`));
+  assert.equal(t.s3.count('DeleteObjectCommand'), 0);
+  assert.equal(t.s3.count('PutObjectCommand'), 0);
+  t.s3.headForbidden = false;
+  const retried = await t.post(path, { parts });
+  assert.equal(retried.status, 200);
+  assert.deepEqual(await retried.json(), { status: 'queued' });
 });
+
+for (const name of ['TimeoutError', 'SlowDown', 'InternalError']) {
+  test(`HeadObject ${name} preserves completed bytes and permits completion retry`, async () => {
+    const t = await member();
+    const { j } = await create(t, { source: 'cot', fileName: 'cot.zip', size: 2 * PART });
+    const parts = sendParts(t, j.uploadId, 2 * PART);
+    const send = t.s3.send.bind(t.s3);
+    let failures = 2; // post-completion HEAD, then NoSuchUpload recovery HEAD
+    t.s3.send = async (cmd) => {
+      if (cmd.constructor.name === 'HeadObjectCommand' && failures-- > 0) {
+        const e = new Error('synthetic temporary HEAD failure');
+        e.name = name;
+        e.$metadata = { httpStatusCode: 503 };
+        throw e;
+      }
+      return send(cmd);
+    };
+    const path = `/api/billing/accounts/acct-a/uploads/${j.uploadId}/complete`;
+    for (let i = 0; i < 2; i++) {
+      const r = await t.post(path, { parts });
+      assert.ok(r.status >= 500, 'inconclusive HEAD must be retryable');
+      assert.equal(t.upRow('acct-a', j.uploadId).status.S, 'uploading');
+      assert.equal(t.lockRow('acct-a', 'cot').uploadId.S, j.uploadId);
+      assert.ok(t.s3.objects.has(`accounts/acct-a/uploads/${j.uploadId}/source.zip`));
+      assert.equal(t.s3.count('DeleteObjectCommand'), 0);
+      assert.equal(t.s3.count('AbortMultipartUploadCommand'), 0);
+      assert.equal(t.s3.count('PutObjectCommand'), 0);
+    }
+    const r = await t.post(path, { parts });
+    assert.equal(r.status, 200);
+    assert.deepEqual(await r.json(), { status: 'queued' });
+    assert.equal(t.upRow('acct-a', j.uploadId).status.S, 'queued');
+    assert.equal(t.lockRow('acct-a', 'cot').uploadId.S, j.uploadId);
+    assert.equal(t.s3.count('CompleteMultipartUploadCommand'), 1);
+    assert.equal(t.s3.count('PutObjectCommand'), 1);
+  });
+}
+
+test('a size rejection losing to queued completion preserves its object and lock', async () => {
+  const t = await member();
+  const { j } = await create(t, { source: 'cot', fileName: 'cot.zip', size: 2 * PART });
+  const parts = sendParts(t, j.uploadId, 2 * PART);
+  const badParts = parts.map((p, i) => i ? p : { ...p, etag: ETAG });
+  let release;
+  let entered;
+  const held = new Promise((r) => { release = r; });
+  const started = new Promise((r) => { entered = r; });
+  const send = t.s3.send.bind(t.s3);
+  let first = true;
+  t.s3.send = async (cmd) => {
+    const result = await send(cmd);
+    if (cmd.constructor.name === 'ListPartsCommand' && first) {
+      first = false;
+      entered();
+      await held;
+    }
+    return result;
+  };
+  const path = `/api/billing/accounts/acct-a/uploads/${j.uploadId}/complete`;
+  const stale = t.post(path, { parts: badParts });
+  await started;
+  try {
+    const good = await t.post(path, { parts });
+    assert.equal(good.status, 200);
+    assert.deepEqual(await good.json(), { status: 'queued' });
+  } finally {
+    release();
+  }
+  const late = await stale;
+  assert.equal(late.status, 200);
+  assert.deepEqual(await late.json(), { status: 'queued' });
+  assert.equal(t.upRow('acct-a', j.uploadId).status.S, 'queued');
+  assert.equal(t.lockRow('acct-a', 'cot').uploadId.S, j.uploadId);
+  assert.ok(t.s3.objects.has(`accounts/acct-a/uploads/${j.uploadId}/source.zip`));
+  assert.equal(t.s3.count('AbortMultipartUploadCommand'), 0);
+  assert.equal(t.s3.count('DeleteObjectCommand'), 0);
+});
+
+for (const removed of [false, true]) {
+  test(`complete reports ${removed ? 'missing' : 'discarded'} when the queue transition loses`, async () => {
+    const t = await member();
+    const { j } = await create(t, { source: 'cot', fileName: 'cot.zip', size: 2 * PART });
+    const parts = sendParts(t, j.uploadId, 2 * PART);
+    const send = t.s3.send.bind(t.s3);
+    t.s3.send = async (cmd) => {
+      const result = await send(cmd);
+      if (cmd.constructor.name === 'PutObjectCommand' && cmd.input.Key === `jobs/${j.uploadId}.json`) {
+        if (removed) t.ddb.del(PT, { pk: S('ACCT#acct-a'), sk: S(`UP#${j.uploadId}`) });
+        else t.upRow('acct-a', j.uploadId).status = S('discarded');
+      }
+      return result;
+    };
+    const r = await t.post(`/api/billing/accounts/acct-a/uploads/${j.uploadId}/complete`, { parts });
+    assert.equal(r.status, removed ? 404 : 200);
+    if (!removed) {
+      assert.deepEqual(await r.json(), { status: 'discarded' });
+      assert.equal(t.upRow('acct-a', j.uploadId).status.S, 'discarded');
+    }
+  });
+}
 
 test('complete retry after NoSuchUpload: object present with the right size → queued once; absent → 400', async () => {
   const t = await member();

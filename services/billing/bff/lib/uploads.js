@@ -211,14 +211,20 @@ function createUploadRoutes({ s3, store, access, bucket, publicUrl, uploadPrefix
       console.warn('unlock failed', e.name); // the lock expires on its own (ttl)
     }
   }
+  async function currentStatus(res, acct, id) {
+    const current = await store.upload(acct, id);
+    return current ? res.json({ status: current.status }) : notFound(res);
+  }
   // size mismatch: the upload is failed for good, its bytes removed and the account unlocked
   async function rejectSize(res, acct, rec, { key, mpuId, object }) {
+    const steps = { ...(rec.steps && typeof rec.steps === 'object' ? rec.steps : {}), validate: 'failed' };
+    if (!(await store.patchUploadIf(acct, rec.uploadId, ['uploading'], { status: 'failed', reason: SIZE_MISMATCH, steps }))) {
+      return currentStatus(res, acct, rec.uploadId);
+    }
     if (mpuId) await abort(key, mpuId);
     if (object) {
       try { await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: key })); } catch (e) { console.warn('source delete failed', e.name); }
     }
-    const steps = { ...(rec.steps && typeof rec.steps === 'object' ? rec.steps : {}), validate: 'failed' };
-    await store.patchUploadIf(acct, rec.uploadId, ['uploading'], { status: 'failed', reason: SIZE_MISMATCH, steps });
     await safeUnlock(acct, rec.source, rec.uploadId);
     return res.status(400).json({ error: SIZE_MISMATCH });
   }
@@ -243,8 +249,9 @@ function createUploadRoutes({ s3, store, access, bucket, publicUrl, uploadPrefix
     const recovered = async () => {
       const cur = await store.upload(acct, id);
       if (cur && cur.status !== 'uploading') return { status: cur.status };
-      // without s3:ListBucket a missing key answers 403, not 404: any HEAD error means "not recovered"
-      const have = await headSize(key).catch((e) => { console.warn('head after NoSuchUpload failed', e.name); return null; });
+      // A timeout, throttle or 403 is inconclusive, not proof that the completed bytes are absent.
+      // Propagate it as a retryable error while retaining the uploading row and lock.
+      const have = await headSize(key);
       return have === size ? { status: 'continue' } : null;
     };
     let listed = null;
@@ -271,15 +278,22 @@ function createUploadRoutes({ s3, store, access, bucket, publicUrl, uploadPrefix
       }
     }
     if (done && done.status !== 'continue') return res.json({ status: done.status });
-    // a 403 here (no s3:ListBucket: missing key) is handled like line 239's recovery check: not the declared size
-    const have = await headSize(key).catch((e) => { console.warn('head after complete failed', e.name); return null; });
+    let have;
+    try {
+      have = await headSize(key);
+    } catch (e) {
+      console.warn('head after complete failed', e.name);
+      return res.status(503).json({ error: '업로드 상태를 확인하지 못했습니다. 다시 시도하세요' });
+    }
     if (have !== size) return rejectSize(res, acct, rec, { key, object: true });
     await s3.send(new PutObjectCommand({
       Bucket: bucket, Key: `jobs/${id}.json`, ContentType: 'application/json',
       Body: JSON.stringify({ kind: 'analyze', accountId: acct, uploadId: id, source: rec.source }),
     }));
     // job, then queued (ruling): the worker claims only queued uploads, so a duplicate job write cannot start a second run
-    await store.patchUploadIf(acct, id, ['uploading'], { status: 'queued', queuedAt: new Date(now()).toISOString() });
+    if (!(await store.patchUploadIf(acct, id, ['uploading'], { status: 'queued', queuedAt: new Date(now()).toISOString() }))) {
+      return currentStatus(res, acct, id);
+    }
     res.json({ status: 'queued' });
   }));
 
