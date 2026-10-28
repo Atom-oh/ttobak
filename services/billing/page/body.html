@@ -1591,6 +1591,9 @@ dash.ready(function () {
     sel.onchange = () => dash.setParams({ account: sel.value });
     const a = rows.find((r) => r.account === acct);
     const set = (k, v, cls) => { const n = document.querySelector(`#tiles-acct [data-k="${k}"]`); n.textContent = v; if (cls != null) n.className = 'tb-delta ' + cls; };
+    // tiles and chart show only this entity's account: clear them so another entity's values never remain
+    for (const n of document.querySelectorAll('#tiles-acct [data-k]')) { n.textContent = '—'; if (n.classList.contains('tb-delta')) n.className = 'tb-delta'; }
+    document.getElementById('chart-acct').replaceChildren();
     if (a) {
       set('last', compact(a.last)); set('d', '월평균 ' + signedUsd(a.d_h2_h1) + (a.pct_h2_h1 == null ? '' : ` (${signed(a.pct_h2_h1)})`), a.d_h2_h1 > 0 ? 'tb-up' : a.d_h2_h1 < 0 ? 'tb-down' : 'tb-neutral');
       set('share', (a.share_last * 100).toFixed(1) + '%'); set('kind', a.kind);
@@ -1985,11 +1988,20 @@ dash.ready(function () {
     for (const e of ends.slice(0, 12)) svg.append('text').attr('x', x(ms[ms.length - 1]) + 7).attr('y', e.y + 4).attr('fill', e.s.color).attr('pointer-events', 'none').style('font-size', 'var(--cds-font-size-caption)').text(compactNum(val(e.s, ms[ms.length - 1])));
   }
   const compactNum = (v) => new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(v);
+  // never leave a previous dataset's rows on screen or behind the CSV button
+  function exClear(message) {
+    document.getElementById('ex-sum').textContent = message;
+    const t = document.getElementById('ex-table'); t.tHead.replaceChildren(); t.tBodies[0].replaceChildren();
+    document.getElementById('ex-chartbox').hidden = true;
+    document.getElementById('ex-more').hidden = true;
+    document.getElementById('ex-csv').onclick = null;
+  }
+
   function drawExplore() {
     const cat = dash.data('raw_catalog'), sel = document.getElementById('ex-ds');
-    if (cat.status !== 'ok') return;
+    if (cat.status !== 'ok') { exClear(cat.status === 'error' ? '데이터를 불러오지 못했습니다.' : '불러오는 중…'); return; }
     const items = cat.data.slice().sort((a, b) => String(a.title_ko).localeCompare(String(b.title_ko)));
-    if (!items.length) { document.getElementById('ex-sum').textContent = '탐색할 원본 데이터가 없습니다.'; return; }
+    if (!items.length) { exClear('탐색할 원본 데이터가 없습니다.'); return; }
     if (!items.some((c) => c.id === ex.ds)) ex.ds = (items.find((c) => c.id === 'raw_service_costs') || items[0]).id;
     opt(sel, items.map((c) => [c.id, `${c.title_ko} (${d3.format(',')(Object.values(c.rows_by_entity).reduce((a, b) => a + b, 0))}행)`]), ex.ds);
     sel.onchange = () => { ex.ds = sel.value; ex.filters = {}; ex.g1 = ex.g2 = ex.m = ex.fcol = ''; ex.hidden.clear(); ex.sort = null; ex.limit = 200; drawExplore(); };
@@ -1999,15 +2011,7 @@ dash.ready(function () {
     q.oninput = () => { ex.q = q.value; ex.limit = 200; clearTimeout(q._t); q._t = setTimeout(drawExplore, 200); };
     const ae = document.getElementById('ex-allent'); ae.checked = ex.allEnt; ae.onchange = () => { ex.allEnt = ae.checked; drawExplore(); };
     const raw = dash.data(ex.ds);
-    if (raw.status !== 'ok') {
-      // never leave the previous dataset's rows on screen or behind the CSV button
-      document.getElementById('ex-sum').textContent = raw.status === 'error' ? '데이터를 불러오지 못했습니다.' : '불러오는 중…';
-      const t = document.getElementById('ex-table'); t.tHead.replaceChildren(); t.tBodies[0].replaceChildren();
-      document.getElementById('ex-chartbox').hidden = true;
-      document.getElementById('ex-more').hidden = true;
-      document.getElementById('ex-csv').onclick = null;
-      return;
-    }
+    if (raw.status !== 'ok') { exClear(raw.status === 'error' ? '데이터를 불러오지 못했습니다.' : '불러오는 중…'); return; }
     const cols = exColumns(meta, raw.data), strCols = cols.filter((c) => c.type !== 'num'), numCols = cols.filter((c) => c.type === 'num');
     const hasMonth = cols.some((c) => c.name === 'month');
     if (!ex.g1) ex.g1 = (cols.find((c) => c.name === 'dim') || strCols.find((c) => c.name !== 'month') || {}).name || ''; // month is the pivot, not a group
