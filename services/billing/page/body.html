@@ -1539,6 +1539,8 @@ dash.ready(function () {
         return Number((r && r[field][k]) || 0);
       });
     }
+    // tiles show only this entity's values: clear them first so another entity's numbers never remain
+    for (const n of document.querySelectorAll('#tiles-ec2 [data-k]')) { n.textContent = '—'; if (n.classList.contains('tb-delta')) n.className = 'tb-delta'; }
     if (mx.status === 'ok') {
       const rows = mx.data.filter((r) => r.entity === e);
       const a = rows.find((r) => r.month === PER.first), z = rows.find((r) => r.month === PER.last);
@@ -1997,7 +1999,15 @@ dash.ready(function () {
     q.oninput = () => { ex.q = q.value; ex.limit = 200; clearTimeout(q._t); q._t = setTimeout(drawExplore, 200); };
     const ae = document.getElementById('ex-allent'); ae.checked = ex.allEnt; ae.onchange = () => { ex.allEnt = ae.checked; drawExplore(); };
     const raw = dash.data(ex.ds);
-    if (raw.status !== 'ok') { document.getElementById('ex-sum').textContent = raw.status === 'error' ? '데이터를 불러오지 못했습니다.' : '불러오는 중…'; return; }
+    if (raw.status !== 'ok') {
+      // never leave the previous dataset's rows on screen or behind the CSV button
+      document.getElementById('ex-sum').textContent = raw.status === 'error' ? '데이터를 불러오지 못했습니다.' : '불러오는 중…';
+      const t = document.getElementById('ex-table'); t.tHead.replaceChildren(); t.tBodies[0].replaceChildren();
+      document.getElementById('ex-chartbox').hidden = true;
+      document.getElementById('ex-more').hidden = true;
+      document.getElementById('ex-csv').onclick = null;
+      return;
+    }
     const cols = exColumns(meta, raw.data), strCols = cols.filter((c) => c.type !== 'num'), numCols = cols.filter((c) => c.type === 'num');
     const hasMonth = cols.some((c) => c.name === 'month');
     if (!ex.g1) ex.g1 = (cols.find((c) => c.name === 'dim') || strCols.find((c) => c.name !== 'month') || {}).name || ''; // month is the pivot, not a group
