@@ -71,3 +71,13 @@ test('uninstall_removes_bridge', () => {
   uninstall();
   assert.equal(win.ttobakBilling, undefined);
 });
+
+test('refresh_after_uninstall_does_not_sign_out', async () => {
+  let release;
+  const { win, calls, uninstall } = setup({ refresh: () => new Promise((r) => { release = r; }) });
+  const pending = win.ttobakBilling.refresh();
+  uninstall();
+  release(null);
+  await assert.rejects(pending);
+  assert.equal(calls.signedOut, 0);
+});

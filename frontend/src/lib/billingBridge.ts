@@ -21,8 +21,10 @@ export type BillingBridgeHost = { ttobakBilling?: BillingBridge };
 
 export function installBillingBridge(win: BillingBridgeHost, deps: BillingBridgeDeps): () => void {
   let signedOutCalled = false;
+  // a refresh still in flight after uninstall must not sign out a newer session
+  let active = true;
   const signedOut = () => {
-    if (signedOutCalled) return;
+    if (!active || signedOutCalled) return;
     signedOutCalled = true;
     deps.onSignedOut();
   };
@@ -43,6 +45,7 @@ export function installBillingBridge(win: BillingBridgeHost, deps: BillingBridge
   const bridge: BillingBridge = { token, refresh, signedOut };
   win.ttobakBilling = bridge;
   return () => {
+    active = false;
     if (win.ttobakBilling === bridge) delete win.ttobakBilling;
   };
 }
