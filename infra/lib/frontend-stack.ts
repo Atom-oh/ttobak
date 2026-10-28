@@ -30,6 +30,7 @@ export interface BillingFrontendProps {
 }
 
 const BILLING_ENABLED_CONTEXT = 'ttobak:billingEnabled';
+const BILLING_SERVICE_CONTEXT = 'ttobak:billingService';
 const BILLING_ENDPOINT_CONTEXT = {
   endpointDomain: {
     key: 'ttobak:billingEndpointDomain',
@@ -51,6 +52,19 @@ const BILLING_ENDPOINT_CONTEXT = {
  * enabled with no endpoint key is the bootstrap state: TtobakBillingStack
  * exists, FrontendStack has no Billing behaviors. Anything else throws.
  */
+/**
+ * Whether config.json advertises the in-app Billing service (billingService),
+ * which turns the Billing entry into a link to /billing. Absent is off; the
+ * string "true" needs the Billing behaviors; anything else throws.
+ */
+export function billingServiceContext(scope: Construct, billing: BillingFrontendProps | undefined): boolean {
+  const value = scope.node.tryGetContext(BILLING_SERVICE_CONTEXT);
+  if (value === undefined) return false;
+  if (value !== 'true') throw new Error(`${BILLING_SERVICE_CONTEXT} must be the string "true" or unset`);
+  if (!billing) throw new Error(`${BILLING_SERVICE_CONTEXT} requires the Billing behaviors (ttobak:billingEnabled and the endpoint keys)`);
+  return true;
+}
+
 export function billingFrontendContext(scope: Construct): BillingFrontendProps | undefined {
   const entries = Object.entries(BILLING_ENDPOINT_CONTEXT) as Array<
     [keyof BillingFrontendProps, { key: string; pattern: RegExp }]>;
@@ -564,6 +578,8 @@ function handler(event) {
           qaAsyncJobs: props.qaAsyncJobsEnabled === true,
           // Shows the Billing Insight hand-off button; only the API holds the URL.
           ...(billingInsightUrlContext(this) ? { billingInsight: true } : {}),
+          // Links the Billing entry to /billing instead of the hand-off.
+          ...(billingServiceContext(this, props.billing) ? { billingService: true } : {}),
           mcp: {
             url: '/api/mcp',
             privateBridgeEnabled: props.connectorPrivateBridgeEnabled === true,

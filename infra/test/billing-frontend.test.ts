@@ -2,13 +2,14 @@ import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as vm from 'node:vm';
 import { addBillingStack } from '../lib/billing-stack';
-import { billingFrontendContext, FrontendStack } from '../lib/frontend-stack';
+import { billingFrontendContext, billingServiceContext, FrontendStack } from '../lib/frontend-stack';
 
 // Synthetic endpoint values; the real ones are copied from TtobakBillingStack
 // outputs into cdk.json only after it is deployed.
@@ -412,6 +413,31 @@ describe('Billing context gate', () => {
       const context = { 'ttobak:billingEnabled': 'true', ...ENDPOINT_CONTEXT, [key]: value };
       expect(() => billingFrontendContext(new cdk.App({ context }))).toThrow(key);
     }
+  });
+
+  test('billing_service_flag_needs_billing_behaviors', () => {
+    const props = billingFrontendContext(new cdk.App({ context: { 'ttobak:billingEnabled': 'true', ...ENDPOINT_CONTEXT } }));
+    expect(billingServiceContext(new cdk.App(), props)).toBe(false);
+    expect(billingServiceContext(new cdk.App({ context: { 'ttobak:billingService': 'true' } }), props)).toBe(true);
+    expect(() => billingServiceContext(new cdk.App({ context: { 'ttobak:billingService': 'true' } }), undefined))
+      .toThrow(/requires the Billing behaviors/);
+    for (const value of [true, 'TRUE', 'false', '']) {
+      expect(() => billingServiceContext(new cdk.App({ context: { 'ttobak:billingService': value } }), props))
+        .toThrow(/ttobak:billingService must be/);
+    }
+  });
+
+  test('config_json_advertises_billing_service_only_when_flagged', () => {
+    const configOf = (context: Record<string, unknown>) => {
+      const jsonData = jest.spyOn(s3deploy.Source, 'jsonData');
+      try {
+        frontend(context);
+        return jsonData.mock.calls.find(([name]) => name === 'config.json')?.[1] as Record<string, unknown>;
+      } finally { jsonData.mockRestore(); }
+    };
+    const on = { 'ttobak:billingEnabled': 'true', ...ENDPOINT_CONTEXT };
+    expect(configOf(on)).not.toHaveProperty('billingService');
+    expect(configOf({ ...on, 'ttobak:billingService': 'true' }).billingService).toBe(true);
   });
 
   test('bootstrap_context_has_no_billing_behaviors', () => {
