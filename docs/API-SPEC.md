@@ -234,6 +234,39 @@ for at most 60 seconds, confirmation included. The connector inventory marks the
 write-capable and non-delegable, so connector tokens cannot mint codes. The web
 client validates the returned URL shape before navigating (`src/lib/billingInsight.ts`).
 
+### Billing service
+
+The Billing routes under `/api/billing/*` are served by the separate Billing BFF
+(`services/billing/bff`, a Lambda Web Function) through CloudFront, not by the Go
+API, so they are not part of the Go route inventory above. Identity comes only
+from `Authorization: Bearer <JWT>`, verified by the BFF (issuer, signature,
+expiry and client allowlist; see
+[ADR-056](decisions/ADR-056-billing-service-origin-and-identity.md)). Access
+is direct canonical membership of the account only; hierarchy and pending rows
+grant nothing. Billing uploads and POSTs work only on the custom domain
+(`PUBLIC_URL`), not on the raw CloudFront domain.
+
+| Route | Notes |
+|---|---|
+| `GET /api/billing/accounts` | Accounts the caller is a member of, with the current version of each source. |
+| `GET /api/billing/data/{id}.json` | One dataset. Optional `acct` and `v` (both required together) select one published version of one account. |
+| `GET /api/billing/accounts/{acct}/report` | Markdown report. `source=cot\|cur` is required, `v` is optional. |
+| `POST /api/billing/accounts/{acct}/uploads` | Create an upload. |
+| `POST /api/billing/accounts/{acct}/uploads/{id}/complete` | Complete an upload. |
+| `GET /api/billing/accounts/{acct}/uploads` | Upload history. |
+| `GET /api/billing/accounts/{acct}/uploads/{id}` | A single upload. |
+| `POST /api/billing/accounts/{acct}/uploads/{id}/discard` | Discard an upload. |
+| `POST /api/billing/accounts/{acct}/current` | Change the current version. |
+| `POST /api/billing/accounts/{acct}/rerun-agents` | Re-run the agents on a version. |
+| `POST /api/billing/accounts/known` | Record a known account. |
+
+A missing or invalid token returns 401 with
+`{ "error": { "code": "UNAUTHORIZED", "message": "..." } }`. Every other error
+(including 404, 500 and 503) has a Billing-specific JSON body:
+`{ "error": "<string>" }`. Every response carries
+`Cache-Control: private, no-store`. POST requests require a JSON content type,
+`X-TB: 1` and a same-origin `Origin`, otherwise they return 403.
+
 ### Meetings and pagination
 
 `GET /api/meetings` accepts `tab=all|shared`, `limit`, opaque `cursor`, and optional
