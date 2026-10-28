@@ -33,3 +33,9 @@ jobs:
         run: |
           npm ci --no-audit --no-fund
           npm test
+
+      - name: Run page build tests
+        working-directory: services/billing/page
+        run: |
+          npm ci --no-audit --no-fund
+          python3 -m unittest test_build_page -v
