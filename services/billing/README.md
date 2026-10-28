@@ -37,16 +37,23 @@ once on a 401 and calls `signedOut()` on a second one. It loads
 loads it with `data-auth-only` for the same authenticated fetch; upload part PUTs go
 to the presigned URLs without the header.
 
-Build (never edit `frontend/public/billing-app/` by hand):
+The output is not committed. The frontend `prebuild`
+(`frontend/scripts/build-billing-app.mjs`) generates it into
+`frontend/public/billing-app/` (gitignored), so `next build` exports it to
+`out/billing-app/`. The script runs offline but fails if the vendor sources are
+missing, so install them first:
 
 ```
 cd services/billing/page
 npm ci
-python3 -I build_page.py
 python3 -m unittest test_build_page -v
+python3 -I build_page.py            # optional; frontend prebuild does the same
 ```
 
-Output in `frontend/public/billing-app/` (committed):
+The tests build twice into temp dirs and require byte-identical output. CI
+installs these dependencies before every frontend build (`deploy-frontend.yml`)
+and before the infra Jest suite, whose `billing-frontend.test.ts` generates the
+pages into a temp dir. Output files:
 
 | File | Kind |
 |---|---|

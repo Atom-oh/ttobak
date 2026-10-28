@@ -74,6 +74,12 @@ jobs:
         run: |
           npm ci --no-audit --no-fund
           npm run package
+      - name: Install Billing page vendor sources
+        # billing-frontend.test.ts generates the uncommitted Billing pages into
+        # a temp dir with services/billing/page/build_page.py.
+        working-directory: services/billing/page
+        run: npm ci --no-audit --no-fund
+
       - name: Infra synth + unit tests (gate before any deploy)
         # Security invariants live in these jest assertions (e.g.
         # whisper-stack.test.ts's "no EntryPoint/Command on the whisperx

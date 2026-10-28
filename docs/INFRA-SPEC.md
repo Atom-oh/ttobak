@@ -820,6 +820,10 @@ and `/api/*`, so `/api/billing/*` wins over `/api/*`.
 - `/billing-app/*`:
   - The static Billing pages from the site bucket, with the application cache
     policy and no SPA router.
+  - The pages are not committed. The frontend build generates them from
+    `services/billing/page` into `public/billing-app/`, and
+    `deploy-frontend.yml` fails unless `out/billing-app/index.html` and
+    `upload.html` exist before publishing.
   - Response headers: `frame-ancestors 'self'` and `X-Frame-Options:
     SAMEORIGIN`, so only `/billing` can frame them. Every other path keeps
     `frame-ancestors 'none'` and `DENY`, and the default CSP's `frame-src 'self'`

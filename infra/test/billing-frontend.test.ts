@@ -2,7 +2,9 @@ import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
-import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as vm from 'node:vm';
 import { addBillingStack } from '../lib/billing-stack';
@@ -24,7 +26,17 @@ const BASE_CONTEXT = {
   'ttobak:domainName': 'ttobak.example.com',
   'ttobak:cloudfrontDomain': 'test-site.cloudfront.net',
 };
-const BILLING_APP_DIR = join(__dirname, '../../frontend/public/billing-app');
+// The Billing pages are not committed: generate them into a temp dir with
+// services/billing/page/build_page.py (needs `npm ci` in services/billing/page).
+const BUILD_PAGE = join(__dirname, '../../services/billing/page/build_page.py');
+let BILLING_APP_DIR = '';
+beforeAll(() => {
+  BILLING_APP_DIR = join(mkdtempSync(join(tmpdir(), 'billing-app-')), 'billing-app');
+  execFileSync('python3', ['-I', BUILD_PAGE, '--out', BILLING_APP_DIR], { stdio: 'pipe' });
+});
+afterAll(() => {
+  if (BILLING_APP_DIR) rmSync(join(BILLING_APP_DIR, '..'), { recursive: true, force: true });
+});
 const BFF_LIB = join(__dirname, '../../services/billing/bff/lib');
 
 type Behavior = Record<string, any> & { PathPattern: string };
