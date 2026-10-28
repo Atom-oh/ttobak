@@ -27,14 +27,14 @@ const META_TTL_MS = 60e3;
 const RERUN_TTL_MS = 60e3;
 const VERSION_CACHE_MAX = 200;
 // Cache budgets in characters of JSON text (parsed objects take a few times more heap). Together they stay at
-// 88 MiB of text on the task: version 64 + rerun 16 + handwritten 4 + feed 4.
+// 88 MiB of text in the Web Function process: version 64 + rerun 16 + handwritten 4 + feed 4.
 const VERSION_CACHE_BYTES = 64 * 2 ** 20; // raw_* files run to several MB each
 const RERUN_CACHE_BYTES = 16 * 2 ** 20;
 const HAND_CACHE_BYTES = 4 * 2 ** 20;
 const FEED_CACHE_BYTES = 4 * 2 ** 20;
 const FEED_TTL_MS = 5 * 60e3;
 const FEED_KEY = 'data/whats_new_feed.json'; // public AWS news shared by every account (also read by the worker)
-// no single file this process reads may exceed this: its text and parsed form must fit the 1 GB web task
+// no single file this process reads may exceed this: its text and parsed form must fit the Web Function's memory
 const MAX_FILE_BYTES = 48 * 2 ** 20;
 const TOO_LARGE_TTL_MS = 60e3;
 class TooLarge extends Error { constructor() { super('object too large'); this.name = 'TooLarge'; } }
@@ -96,7 +96,7 @@ function mergeCatalog(rows) {
 }
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 const isMissing = (e) => e && (e.name === 'NoSuchKey' || e.name === 'NotFound');
-// Without s3:ListBucket (the web role has none), S3 answers GetObject on a key that does not exist with 403 instead of
+// Without s3:ListBucket (the function execution role has none), S3 answers GetObject on a key that does not exist with 403 instead of
 // 404. Reads that probe files which may legitimately be absent (version data, handwritten, the feed) therefore treat a
 // 403 as "missing", but only briefly cached and always logged (a real policy failure must not hide as empty data).
 const isDenied = (e) => e && (e.name === 'AccessDenied' || e.name === 'Forbidden' || (e.$metadata && e.$metadata.httpStatusCode === 403));
@@ -137,7 +137,7 @@ function createApp({ s3, ddb, env, authenticate, now = Date.now, presign = makeP
       ({ value: rows, bytes } = await getJson(FEED_KEY));
     } catch (e) {
       if (isDenied(e)) {
-        // the web role is granted this exact key: 403 here is a policy failure, not an absent file
+        // the function execution role is granted this exact key: 403 here is a policy failure, not an absent file
         console.error(JSON.stringify({ event: 's3_denied', class: 'feed', policyFailure: true }));
         deniedCache.set(FEED_KEY, true);
         return [];
@@ -252,7 +252,7 @@ function createApp({ s3, ddb, env, authenticate, now = Date.now, presign = makeP
   api.use(authenticate); // sets req.sub and req.user, or answers 401
   api.use(wrap(async (req, res, next) => {
     try {
-      req.accounts = await accountsFor(req.sub); // membership re-checked every few minutes, so removed members lose access
+      req.accounts = await accountsFor(req.sub); // membership is re-read on every request (ADR-056), so removed members lose access at once
     } catch (e) {
       console.error('access lookup failed', e.name);
       return res.status(503).json({ error: 'access check unavailable' });

@@ -34,6 +34,7 @@ function load(responders, { authOnly = false } = {}) {
     parent,
     console: { error: (...a) => errors.push(a.map(String).join(' ')), warn() {}, log() {} },
     URLSearchParams,
+    Headers,
     innerWidth: 1000,
     addEventListener() {},
     requestAnimationFrame: (fn) => setImmediate(fn),
@@ -46,7 +47,8 @@ function load(responders, { authOnly = false } = {}) {
       getElementById: () => null,
     },
     fetch: async (url, init = {}) => {
-      calls.push({ url, auth: (init.headers || {}).Authorization || null, headers: init.headers || {} });
+      const headers = Object.fromEntries(new Headers(init.headers || {})); // lower-cased names
+      calls.push({ url, auth: headers.authorization || null, headers });
       const list = responders[url];
       if (!list) return json(404, { error: 'not found' });
       const i = Math.min(served[url] || 0, list.length - 1);
@@ -174,5 +176,13 @@ test('auth-only mode exposes withAuth without the dashboard runtime', async () =
   const r = await win.__billingShim.withAuth('/x', { method: 'POST', headers: { 'X-TB': '1' } });
   assert.equal(r.status, 200);
   assert.equal(calls[0].auth, 'Bearer t0');
-  assert.equal(calls[0].headers['X-TB'], '1');
+  assert.equal(calls[0].headers['x-tb'], '1');
+});
+
+test('withAuth keeps the caller headers when given a Headers instance', async () => {
+  const { win, calls } = load({ '/x': [json(200, {})] }, { authOnly: true });
+  const r = await win.__billingShim.withAuth('/x', { method: 'POST', headers: new Headers({ 'X-TB': '2', Authorization: 'Bearer stale' }) });
+  assert.equal(r.status, 200);
+  assert.equal(calls[0].headers['x-tb'], '2');
+  assert.equal(calls[0].auth, 'Bearer t0');
 });

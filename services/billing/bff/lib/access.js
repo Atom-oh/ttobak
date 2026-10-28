@@ -7,6 +7,16 @@ const { ACCT_ID } = require('./store.js');
 
 const META_TTL_MS = 60e3;
 const CACHE_MAX = 1000;
+const VISIBLE_CONCURRENCY = 8; // at most this many accounts are confirmed at once
+
+// map with a bounded number of in-flight calls; results keep input order
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  const worker = async () => { while (next < items.length) { const i = next++; out[i] = await fn(items[i]); } };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
 
 function createAccess({ ddb, ttobakTable, now = Date.now }) {
   const metas = new Map(); // acct -> { at, value }, display only, never consulted for authorization
@@ -59,11 +69,11 @@ function createAccess({ ddb, ttobakTable, now = Date.now }) {
   // confirmed memberships only, sorted by name then id
   async function visible(sub) {
     if (typeof sub !== 'string' || !sub) return [];
-    const rows = await Promise.all((await candidates(sub)).map(async (id) => {
+    const rows = await mapLimit(await candidates(sub), VISIBLE_CONCURRENCY, async (id) => {
       if (!(await canAct(sub, id))) return null;
       const m = await meta(id);
       return { id, name: m?.name || id, parentId: m?.parentId || '', member: true, canAct: true };
-    }));
+    });
     const lt = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
     return rows.filter(Boolean).sort((a, b) => lt(a.name, b.name) || lt(a.id, b.id));
   }

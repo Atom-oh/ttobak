@@ -243,7 +243,8 @@ from `Authorization: Bearer <JWT>`, verified by the BFF (issuer, signature,
 expiry and client allowlist; see
 [ADR-056](decisions/ADR-056-billing-service-origin-and-identity.md)). Access
 is direct canonical membership of the account only; hierarchy and pending rows
-grant nothing.
+grant nothing. Billing uploads and POSTs work only on the custom domain
+(`PUBLIC_URL`), not on the raw CloudFront domain.
 
 | Route | Notes |
 |---|---|

@@ -109,3 +109,14 @@ test('buildDeps_wires_ap_northeast_2_region_by_default', async () => {
     for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
   }
 });
+
+test('packaged dist/package.json main is index.js', { timeout: 300000 }, async () => {
+  const { execFileSync } = require('node:child_process');
+  const fs = require('node:fs');
+  const root = path.join(__dirname, '..');
+  assert.equal(require(path.join(root, 'package.json')).main, 'index.js');
+  execFileSync(process.execPath, [path.join(root, 'scripts', 'package.mjs')], { cwd: root, stdio: 'ignore' });
+  const dist = path.join(root, 'dist');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dist, 'package.json'), 'utf8')).main, 'index.js');
+  assert.ok(fs.existsSync(path.join(dist, 'index.js')));
+});

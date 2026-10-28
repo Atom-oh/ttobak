@@ -622,6 +622,11 @@ test('rerun: done version only, job id matches the worker regex, one per version
 test('known accounts: a direct member gets {id,name,parentId} and an INDEX row; a non-member and a parent member get 403', async () => {
   const t = await member();
   t.acct('acct-c', '한빛증권', 'acct-a'); t.acct('acct-b', '누리증권'); t.member('u1', 'acct-c');
+  // u1 is a member of the parent acct-a, not of its child acct-d
+  t.acct('acct-d', '새벽증권', 'acct-a');
+  assert.equal((await t.post('/api/billing/accounts/known', { accountId: 'acct-d' })).status, 403);
+  assert.equal((await t.post('/api/billing/accounts/acct-d/uploads', { source: 'cot', fileName: 'x.zip', size: 10 })).status, 403);
+  assert.equal(t.ddb.get(PT, { pk: S('INDEX'), sk: S('ACCT#acct-d') }), undefined);
   assert.equal((await t.post('/api/billing/accounts/known', { accountId: 'acct-b' })).status, 403);
   const r = await t.post('/api/billing/accounts/known', { accountId: 'acct-c' });
   assert.equal(r.status, 200);
@@ -629,7 +634,6 @@ test('known accounts: a direct member gets {id,name,parentId} and an INDEX row; 
   assert.equal(t.ddb.get(PT, { pk: S('INDEX'), sk: S('ACCT#acct-c') }).parentId.S, 'acct-a');
   assert.equal(t.metaRow('acct-c').name.S, '한빛증권');
   assert.ok((await (await t.get('/api/billing/accounts')).json()).some((a) => a.id === 'acct-c'));
-  assert.equal((await t.post('/api/billing/accounts/known', { accountId: 'acct-b' })).status, 403);
   assert.equal((await t.post('/api/billing/accounts/known', { accountId: '../x' })).status, 403);
   assert.equal((await t.post('/api/billing/accounts/known', {})).status, 403);
   assert.equal(t.ddb.get(PT, { pk: S('INDEX'), sk: S('ACCT#acct-b') }), undefined);

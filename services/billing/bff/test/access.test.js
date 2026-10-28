@@ -133,3 +133,25 @@ test('ttobak_reads_stay_inside_the_iam_attribute_allowlists', async () => {
     for (const a of attrs(g)) assert.ok(['PK', 'SK', 'name', 'parentAccountId'].includes(a), a);
   }
 });
+
+test('visible_bounds_concurrent_reads', async () => {
+  const t = setup();
+  for (let i = 0; i < 30; i++) {
+    const id = `acct-${String(i).padStart(2, '0')}`;
+    t.acct(id, `Name ${String(i).padStart(2, "0")}`); t.member('u1', id);
+  }
+  let inflight = 0; let peak = 0;
+  const slow = {
+    async send(cmd) {
+      if (cmd.constructor.name !== 'GetItemCommand') return t.ddb.send(cmd);
+      inflight++; peak = Math.max(peak, inflight);
+      await new Promise((r) => setImmediate(r));
+      try { return await t.ddb.send(cmd); } finally { inflight--; }
+    },
+  };
+  const access = createAccess({ ddb: slow, ttobakTable: TT });
+  const v = await access.visible('u1');
+  assert.equal(v.length, 30);
+  assert.deepEqual(v.map((a) => a.id), [...v.map((a) => a.id)].sort());
+  assert.ok(peak > 1 && peak <= 8, `peak in-flight GetItems was ${peak}`);
+});

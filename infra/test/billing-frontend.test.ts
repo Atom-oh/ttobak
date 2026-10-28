@@ -239,6 +239,23 @@ describe('FrontendStack Billing behaviors', () => {
     expect(fn.Properties.FunctionCode).toBe(readFileSync(join(__dirname, '../lib/billing-upload-router.js'), 'utf8'));
   });
 
+  test('upload_behavior_has_security_headers', () => {
+    const upload = behavior('/billing-upload/*');
+    const cfg = resourceOf(upload.ResponseHeadersPolicyId).Properties.ResponseHeadersPolicyConfig.SecurityHeadersConfig;
+    const app = resourceOf(config.DefaultCacheBehavior.ResponseHeadersPolicyId).Properties
+      .ResponseHeadersPolicyConfig.SecurityHeadersConfig;
+    expect(cfg.ContentTypeOptions).toEqual({ Override: true });
+    expect(cfg.ReferrerPolicy).toEqual({ ReferrerPolicy: 'no-referrer', Override: true });
+    expect(cfg.StrictTransportSecurity).toEqual(app.StrictTransportSecurity);
+    expect(cfg.ContentSecurityPolicy).toBeUndefined();
+  });
+
+  test('config_deployment_waits_for_resource_policy', () => {
+    const [, deployment] = Object.entries(resources).find(([id]) => id.startsWith('ConfigDeployment'))!;
+    const [policyId] = Object.entries(resources).find(([, r]) => r.Type === 'AWS::Lambda::ResourcePolicy')!;
+    expect(deployment.DependsOn).toContain(policyId);
+  });
+
   test('billing_app_frame_ancestors_self_only', () => {
     const app = behavior('/billing-app/*');
     expect(app.TargetOriginId).toBe(config.DefaultCacheBehavior.TargetOriginId);

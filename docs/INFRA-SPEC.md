@@ -809,7 +809,9 @@ and `/api/*`, so `/api/billing/*` wins over `/api/*`.
     the regional bucket domain each part URL was presigned for. The presign is
     the authorization.
   - Viewer HTTPS only, all methods, `CachingDisabled`. The origin request
-    policy forwards all query strings, no headers and no cookies.
+    policy forwards all query strings, no headers and no cookies. A response
+    headers policy adds `nosniff`, HSTS (the same values as the application
+    policy) and `Referrer-Policy: no-referrer`, with no CSP.
   - The CloudFront Function `billing-upload-router` (`infra/lib/billing-upload-router.js`,
     `cloudfront-js-2.0`, viewer request) accepts only
     `/billing-upload/accounts/{ACCT_ID}/uploads/{UPLOAD_ID}/source.zip`, with the
@@ -842,6 +844,10 @@ The endpoint domain itself stays reachable from the internet. Only a SigV4
 call signed by this distribution, or by an account principal granted
 `lambda:InvokeWebFunctionEndpoint`, gets through. A direct SigV4 call carries no Bearer token, so the BFF answers 401.
 CLAUDE.md lists this and the no-OAC upload behavior as accepted limits.
+
+Billing uploads and POSTs work only on the custom domain (`PUBLIC_URL`), not on
+the raw CloudFront domain. The `config.json` deployment waits for this policy,
+so the runtime config never advertises Billing before it exists.
 
 ## Project invitation activation
 

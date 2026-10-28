@@ -1,9 +1,10 @@
 # ADR-056: Billing service origin, identity and Account access
 
-- Status: Accepted for implementation; not implemented or deployed.
+- Status: Accepted; implemented on the Billing phase 1 branch, not yet deployed.
 - Decision date: 2026-10-27 (owner decisions D1 on 2026-10-26, D3–D5 and the
   membership rule on 2026-10-27).
-- Implementation checked: not applicable; no code exists yet.
+- Implementation checked: 2026-10-28, against the Billing phase 1 branch (`services/billing/bff`,
+  `infra/lib/billing-stack.ts`, `infra/lib/frontend-stack.ts`); not deployed.
 - Refines the [Billing service design](../superpowers/specs/2026-10-26-billing-service-design.md):
   it replaces that record's §5 step 3 and §7 token transport (a dedicated header
   and an MCP SigV4 path) and its "exactly as today" Account filtering.
@@ -88,7 +89,18 @@ weeks; then the old distribution and DNS record are deleted.
 
 ## Current implementation
 
-None. The companion still runs on ECS Fargate behind its own distribution.
+Implemented on the Billing phase 1 branch, not yet deployed. The companion still
+runs on ECS Fargate behind its own distribution until cutover.
+
+- The BFF is `services/billing/bff`, packaged by `npm run package` and run as a
+  Lambda Web Function by `TtobakBillingStack` (`infra/lib/billing-stack.ts`).
+- `infra/lib/frontend-stack.ts` adds the `/api/billing/*`, `/billing-upload/*` and
+  `/billing-app/*` behaviors and the endpoint resource policy, only when
+  `ttobak:billingEnabled` and the three endpoint context keys are set.
+- The data bucket and platform table names are never committed. They come from
+  the SSM String parameters `/ttobak/billing/data-bucket-name` and
+  `/ttobak/billing/platform-table-name`, resolved by CloudFormation at deploy and
+  used only when `ttobak:billingEnabled` is `"true"`.
 
 ## Alternatives and consequences
 
@@ -119,10 +131,10 @@ None. The companion still runs on ECS Fargate behind its own distribution.
 - CloudFront Developer Guide, "Restrict access to an AWS Lambda Web Function
   origin": the `Authorization` cache-policy requirement,
   `AllViewerExceptHostHeader`, and the Lambda@Edge origin-trigger limitation.
-- The resource policy is set with the `lambda-web` `PutResourcePolicy` API.
-  aws-cdk-lib 2.273.0 exposes `CfnWebFunction`, `CfnWebFunctionRevision` and
-  `CfnWebFunctionEndpoint`, but no resource-policy construct. The Billing phase 1
-  plan verifies the API and SDK client before relying on a custom resource.
+- The resource policy is the native `AWS::Lambda::ResourcePolicy`
+  (`lambda.CfnResourcePolicy`) in FrontendStack, not a custom resource. It owns
+  the function's whole policy. aws-cdk-lib 2.273.0 also exposes `CfnWebFunction`,
+  `CfnWebFunctionRevision` and `CfnWebFunctionEndpoint`.
 - Related: ADR-022 (public routes), ADR-036/055 (Account hierarchy), ADR-045
   (MCP resource-bound tokens), `backend/internal/middleware/auth.go`
   (`ParseVerifiedJWT`, `API_ALLOWED_CLIENT_IDS`), `infra/lib/edge-auth-stack.ts`.

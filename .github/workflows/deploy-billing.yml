@@ -76,4 +76,5 @@ jobs:
         run: |
           npm ci
           npx jest billing-stack
+          npx cdk synth --quiet
           npx cdk deploy TtobakBillingStack --exclusively --require-approval never

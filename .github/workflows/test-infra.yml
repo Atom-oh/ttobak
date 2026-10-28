@@ -16,7 +16,7 @@ on:
       - 'mcp-server/**'
       # TtobakBillingStack stages the Billing BFF package.
       - 'services/billing/bff/**'
-      # FrontendStack hashes the Billing pages' inline scripts into their CSP.
+      # billing-frontend.test.ts reads the generated Billing pages (no inline scripts).
       - 'frontend/public/billing-app/**'
       - 'scripts/operations/http_origin_release.py'
       - 'scripts/operations/test_http_origin_release.py'

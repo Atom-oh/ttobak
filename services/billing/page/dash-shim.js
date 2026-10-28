@@ -17,7 +17,8 @@
   let signedOut = false;
   async function send(tb, url, init) {
     const token = await tb.token();
-    const headers = Object.assign({}, init && init.headers, { Authorization: 'Bearer ' + token });
+    const headers = new Headers(init && init.headers); // also accepts a Headers instance or an entries array
+    headers.set('Authorization', 'Bearer ' + token);
     return fetch(url, Object.assign({}, init, { headers }));
   }
   function signOut(tb) {

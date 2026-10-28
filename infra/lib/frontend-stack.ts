@@ -10,6 +10,7 @@ import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { WEBSOCKET_ORIGIN_HEADER, WEBSOCKET_PATH, WEBSOCKET_STAGE } from './websocket-origin';
 import { billingInsightUrlContext } from './billing-insight';
 import { applicationContentSecurityPolicy } from './frontend-policy';
+import { DATA_BUCKET_PARAMETER } from './billing-stack';
 import { Construct } from 'constructs';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -17,6 +18,11 @@ import * as path from 'path';
 // The Billing BFF endpoint (TtobakBillingStack outputs, copied into cdk.json
 // after that stack is deployed). Context strings only, never stack exports, so
 // FrontendStack deploys the same way whether or not Billing exists.
+// Shared by the application and Billing response headers policies.
+const HSTS: cloudfront.ResponseHeadersStrictTransportSecurity = {
+  accessControlMaxAge: cdk.Duration.days(365), includeSubdomains: true, override: true,
+};
+
 export interface BillingFrontendProps {
   endpointDomain: string;
   functionArn: string;
@@ -348,9 +354,7 @@ function handler(event) {
         contentTypeOptions: { override: true },
         frameOptions: { frameOption: cloudfront.HeadersFrameOption.DENY, override: true },
         referrerPolicy: { referrerPolicy: cloudfront.HeadersReferrerPolicy.NO_REFERRER, override: true },
-        strictTransportSecurity: {
-          accessControlMaxAge: cdk.Duration.days(365), includeSubdomains: true, override: true,
-        },
+        strictTransportSecurity: HSTS,
       },
     });
 
@@ -505,7 +509,7 @@ function handler(event) {
       priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
     });
 
-    if (props.billing) this.billingResourcePolicy(props.billing);
+    const billingPolicy = props.billing ? this.billingResourcePolicy(props.billing) : undefined;
 
     // The CloudFront-generated key-pair id is only known post-deploy; publish
     // it under a fixed name so the api Lambda can read it at runtime without
@@ -581,6 +585,8 @@ function handler(event) {
     });
     // Publish the consumer revision only after distribution/router update.
     configDeployment.node.addDependency(this.distribution);
+    // config.json must never advertise Billing before the endpoint policy exists.
+    if (billingPolicy) configDeployment.node.addDependency(billingPolicy);
   }
 
   // The three Billing behaviors (ADR-056), or none without props.billing.
@@ -629,7 +635,7 @@ function handler(event) {
     // No OAC, so CloudFront adds no signature and sends Host = this regional
     // bucket domain, the host each URL was presigned for.
     const uploadOrigin = new origins.HttpOrigin(
-      '{{resolve:ssm:/ttobak/billing/data-bucket-name}}.s3.ap-northeast-2.amazonaws.com', {
+      `{{resolve:ssm:${DATA_BUCKET_PARAMETER}}}.s3.ap-northeast-2.amazonaws.com`, {
         protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
         readTimeout: cdk.Duration.seconds(60),
       });
@@ -638,6 +644,14 @@ function handler(event) {
       queryStringBehavior: cloudfront.OriginRequestQueryStringBehavior.all(),
       headerBehavior: cloudfront.OriginRequestHeaderBehavior.none(),
       cookieBehavior: cloudfront.OriginRequestCookieBehavior.none(),
+    });
+    const uploadHeaders = new cloudfront.ResponseHeadersPolicy(this, 'BillingUploadResponseHeadersPolicy', {
+      responseHeadersPolicyName: `ttobak-billing-upload-headers-${cdk.Aws.REGION}`,
+      securityHeadersBehavior: {
+        contentTypeOptions: { override: true },
+        referrerPolicy: { referrerPolicy: cloudfront.HeadersReferrerPolicy.NO_REFERRER, override: true },
+        strictTransportSecurity: HSTS,
+      },
     });
     const uploadRouter = new cloudfront.Function(this, 'BillingUploadRouter', {
       functionName: `ttobak-billing-upload-router-${cdk.Aws.REGION}`,
@@ -662,9 +676,7 @@ function handler(event) {
         contentTypeOptions: { override: true },
         frameOptions: { frameOption: cloudfront.HeadersFrameOption.SAMEORIGIN, override: true },
         referrerPolicy: { referrerPolicy: cloudfront.HeadersReferrerPolicy.NO_REFERRER, override: true },
-        strictTransportSecurity: {
-          accessControlMaxAge: cdk.Duration.days(365), includeSubdomains: true, override: true,
-        },
+        strictTransportSecurity: HSTS,
       },
     });
 
@@ -691,6 +703,7 @@ function handler(event) {
         allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
         cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
         originRequestPolicy: uploadRequest,
+        responseHeadersPolicy: uploadHeaders,
         compress: false,
         functionAssociations: [{ function: uploadRouter, eventType: cloudfront.FunctionEventType.VIEWER_REQUEST }],
       },
@@ -709,13 +722,14 @@ function handler(event) {
   // The Web Function's whole resource policy: only this distribution may
   // invoke the prod endpoint. AWS::Lambda::ResourcePolicy owns the policy
   // (PutResourcePolicy replaces it), so nothing else may manage it. Its
-  // handlers use lambda:GetResourcePolicy, lambda:PutResourcePolicy and
-  // lambda:DeleteResourcePolicy on the function ARN; AddPermission and
-  // GetPolicy do not apply to Web Functions. Sources:
+  // handlers act on the function ARN with lambda:GetResourcePolicy,
+  // PutResourcePolicy and DeleteResourcePolicy (its permission list also
+  // names AddPermission/RemovePermission/GetPolicy), so this resource must
+  // be the only owner of the policy. Sources:
   // https://docs.aws.amazon.com/lambda/latest/dg/web-functions-permissions.html
   // https://docs.aws.amazon.com/lambda/latest/dg/web-functions-endpoint-access-control.html
   // https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-lambda-resourcepolicy.html
-  private billingResourcePolicy(billing: BillingFrontendProps) {
+  private billingResourcePolicy(billing: BillingFrontendProps): lambda.CfnResourcePolicy {
     const policy = new lambda.CfnResourcePolicy(this, 'BillingEndpointResourcePolicy', {
       resourceArn: billing.functionArn,
       policyDocument: {
@@ -737,5 +751,6 @@ function handler(event) {
         id, reason: 'ResourceArn is a Web Function ARN, newer than the CDK-bundled schema',
       });
     }
+    return policy;
   }
 }

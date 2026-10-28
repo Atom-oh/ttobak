@@ -2,7 +2,7 @@
   "name": "billing-bff",
   "version": "1.0.0",
   "private": true,
-  "main": "app.js",
+  "main": "index.js",
   "engines": {
     "node": ">=24"
   },
