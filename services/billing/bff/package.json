@@ -1,0 +1,21 @@
+{
+  "name": "billing-bff",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.js",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "package": "node scripts/package.mjs"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "3.1152.0",
+    "@aws-sdk/client-s3": "3.1152.0",
+    "@aws-sdk/s3-request-presigner": "3.1152.0",
+    "aws-jwt-verify": "5.2.1",
+    "compression": "1.8.2",
+    "express": "4.22.3"
+  }
+}
