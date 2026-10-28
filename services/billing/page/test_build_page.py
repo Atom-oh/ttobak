@@ -80,14 +80,14 @@ class BuildPageTest(unittest.TestCase):
             self.assertTrue(tags, k)
             for tag in tags:
                 self.assertRegex(tag, r'\ssrc="[^"]+"', "%s: inline %s" % (k, tag))
-            self.assertEqual(re.findall(r"<script\b[^>]*>([\s\S]*?)</script>", self.own[k], re.I),
+            self.assertEqual(re.findall(r"<script\b[^>]*>([\s\S]*?)</script\s*>", self.own[k], re.I),
                              [""] * len(tags), k)
             self.assertNotRegex(self.own[k], r"\son[a-z]+\s*=", "%s: inline event handler" % k)
 
     def test_page_scripts_keep_source_order(self):
         def inline(src):
             with open(os.path.join(HERE, src), encoding="utf-8") as fh:
-                return re.findall(r"<script>([\s\S]*?)</script>", fh.read())
+                return re.findall(r"<script>([\s\S]*?)</script\s*>", fh.read(), re.I)
         for page, src in (("index", "body.html"), ("upload", "upload.html")):
             bodies = inline(src)
             names = ["%s.page.%d.js" % (page, i + 1) for i in range(len(bodies))]
@@ -132,6 +132,18 @@ class BuildPageTest(unittest.TestCase):
             self.assertIn("vendor/pretendard/" + f, self.files)
         extra = [k for k in self.files if k.endswith(".woff2") and k[len("vendor/pretendard/"):] not in fonts]
         self.assertEqual(extra, [], "only fonts referenced by the dynamic-subset CSS are copied")
+
+    def test_externalize_is_case_insensitive(self):
+        sys.path.insert(0, HERE)
+        try:
+            import build_page
+        finally:
+            sys.path.remove(HERE)
+        body, scripts = build_page.externalize("x", "<SCRIPT>a()</SCRIPT ><p></p>")
+        self.assertEqual(body, '<script src="x.page.1.js"></script><p></p>')
+        self.assertIn(b"a()", scripts["x.page.1.js"])
+        with self.assertRaises(SystemExit):
+            build_page.externalize("x", '<SCRIPT type="module">b()</SCRIPT>')
 
     def test_vendor_files_are_unmodified(self):
         nm = os.path.join(HERE, "node_modules")

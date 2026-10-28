@@ -44,7 +44,7 @@ HEAD = """<!-- %s -->
 <div id="dash-root">
 """
 TAIL = "\n</div></body></html>\n"
-INLINE_SCRIPT = re.compile(r"<script>(.*?)</script>", re.S)
+INLINE_SCRIPT = re.compile(r"<script>(.*?)</script\s*>", re.S | re.I)
 
 
 def externalize(stem, body):
@@ -58,7 +58,7 @@ def externalize(stem, body):
         return '<script src="%s"></script>' % name
 
     body = INLINE_SCRIPT.sub(move, body)
-    if re.search(r"<script(?![^>]*\ssrc=)[^>]*>", body):
+    if re.search(r"<script(?![^>]*\ssrc=)[^>]*>", body, re.I):
         raise SystemExit("%s: unsupported inline <script> form" % stem)
     return body, scripts
 
