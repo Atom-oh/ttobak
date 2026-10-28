@@ -2042,4 +2042,916 @@ dash.ready(function () {
     document.getElementById('ex-csv').onclick = () => exCsv(exSort(outRows, outCols), outCols);
   }
 
-  // BILLING-STAGED-FRAGMENT: this inline script continues in billing-p1/06-page-body-script-b. body.html has no consumer until build_page.py exists; test/page-body.test.js enforces both.
+  // ---------- 브리핑 ----------
+  const TAB_KO = Object.fromEntries(tabs.map((t) => [t.dataset.tab, t.textContent]));
+  const KIND = { 절감: 'saving', 위험: 'critical', 가격: 'warn', 변화: '', 성장: 'new' };
+  const BENCH = [ // field, label, format, worse direction (+1: higher is worse)
+    ['ec2_vcpu_hr', 'EC2 vCPU시간당 비용', (v) => '$' + v.toFixed(4), 1],
+    ['ec2_coverage', 'EC2 약정 커버리지', (v) => v.toFixed(1) + '%', -1],
+    ['od_share', 'EC2 온디맨드 비중', (v) => v.toFixed(1) + '%', 1],
+    ['graviton_share', 'EC2 Graviton 비중', (v) => v.toFixed(1) + '%', -1],
+    ['elasticity_ec2', 'EC2 주말 탄력성', (v) => v.toFixed(1) + '%', -1],
+    ['rds_coverage', 'RDS 약정 커버리지', (v) => v.toFixed(1) + '%', -1],
+    ['expiring_at_risk', '120일 내 만료 영향(월)', (v) => usd(v), 1],
+  ];
+  function benchInsights(rows) {
+    if (rows.length < 2) return [el('li', 'tb-empty', '비교하려면 2개 이상 법인을 볼 수 있어야 합니다.')];
+    const out = [];
+    const ok = (f) => rows.filter((r) => r[f] != null);
+    const vc = ok('ec2_vcpu_hr');
+    if (vc.length >= 2) {
+      const lo = vc.reduce((a, b) => (b.ec2_vcpu_hr < a.ec2_vcpu_hr ? b : a)), hi = vc.reduce((a, b) => (b.ec2_vcpu_hr > a.ec2_vcpu_hr ? b : a));
+      const gap = hi.ec2_last * (1 - lo.ec2_vcpu_hr / hi.ec2_vcpu_hr);
+      out.push(`EC2 vCPU시간당 비용은 ${KO[lo.entity]} $${lo.ec2_vcpu_hr.toFixed(4)}로 가장 낮고 ${KO[hi.entity]} $${hi.ec2_vcpu_hr.toFixed(4)}로 가장 높습니다(${((hi.ec2_vcpu_hr / lo.ec2_vcpu_hr - 1) * 100).toFixed(0)}% 차이). ${KO[hi.entity]}가 ${KO[lo.entity]} 단가로 같은 vCPU를 쓰면 월 ${compact(gap)} 차이입니다. 온디맨드 비중 ${hi.od_share}% vs ${lo.od_share}%, Graviton 비중 ${hi.graviton_share}% vs ${lo.graviton_share}%가 차이의 근거입니다.`);
+    }
+    const el2 = ok('elasticity_ec2');
+    if (el2.length >= 2) {
+      const lo = el2.reduce((a, b) => (b.elasticity_ec2 < a.elasticity_ec2 ? b : a)), hi = el2.reduce((a, b) => (b.elasticity_ec2 > a.elasticity_ec2 ? b : a));
+      if (hi.elasticity_ec2 - lo.elasticity_ec2 >= 10) out.push(`주말 탄력성은 ${KO[hi.entity]} ${hi.elasticity_ec2}%인데 ${KO[lo.entity]}는 ${lo.elasticity_ec2}%입니다. ${KO[hi.entity]}의 주말 축소 방식(스케줄러·Auto Scaling)을 그룹 내 모범 사례로 공유할 수 있습니다.`);
+    }
+    const rd = ok('rds_coverage').filter((r) => r.rds_coverage_first != null && r.rds_coverage_first - r.rds_coverage >= 5);
+    if (rd.length) out.push(`RDS 약정 커버리지가 ${PER.F}보다 5%p 이상 떨어진 법인: ` + rd.map((r) => `${KO[r.entity]} ${r.rds_coverage_first}% → ${r.rds_coverage}%`).join(', ') + '. DB 노드는 늘었는데 RI를 추가하지 않았습니다.');
+    const ex = rows.filter((r) => r.expiring_n > 0).sort((a, b) => b.expiring_at_risk - a.expiring_at_risk);
+    if (ex.length) out.push('120일 안에 만료되는 약정: ' + ex.map((r) => `${KO[r.entity]} ${r.expiring_n}건(미갱신 시 월 ${usd(r.expiring_at_risk)}, 첫 만료 ${r.next_expiry})`).join(', ') + '.');
+    const sp = rows.filter((r) => r.sp_buy_1y > 0).sort((a, b) => b.sp_buy_1y - a.sp_buy_1y);
+    if (sp.length) out.push('AWS가 계산한 Savings Plans 추가 구매 절감(1년·선결제 없음): ' + sp.map((r) => `${KO[r.entity]} 월 ${usd(r.sp_buy_1y)}`).join(', ') + '. 그룹 합계 월 ' + usd(d3.sum(sp, (r) => r.sp_buy_1y)) + '.');
+    return out.map((t) => { const li = el('li'); li.append(el('span', 'who', '비교'), el('span', null, t)); return li; });
+  }
+  // agent_notes holds the rows of both current versions; a CUR run's meta lists the cur area (COT runs never do)
+  const isCurMeta = (r) => Array.isArray(r.areas) && r.areas.includes('cur');
+  // verified agent notes for one entity, only when they were generated from the briefing on screen
+  function agentNotes(e, items) {
+    const out = { meta: null, headline: null, actions: new Map(), links: [] };
+    const an = dash.data('agent_notes');
+    if (an.status !== 'ok') return out;
+    const mine = an.data.filter((r) => r.entity === e);
+    const meta = mine.find((r) => r.kind === 'meta' && !isCurMeta(r));
+    const ids = items.map((x) => x.id).sort();
+    if (!meta || !Array.isArray(meta.source_ids) || meta.source_ids.join() !== ids.join()) return out;
+    out.meta = meta;
+    for (const r of mine) {
+      if (r.source_fp !== meta.source_fp) continue;
+      if (r.kind === 'headline') out.headline = r.text;
+      else if (r.kind === 'action' && ids.includes(r.action_id)) out.actions.set(r.action_id, r);
+      else if (r.kind === 'link') out.links.push(r);
+    }
+    return out;
+  }
+  // business findings of the fresh COT meta and of the CUR meta (each run writes its own), deduplicated by title
+  function businessNotes(e, items) {
+    const an = dash.data('agent_notes');
+    if (an.status !== 'ok') return [];
+    const mine = an.data.filter((r) => r && r.entity === e);
+    const cot = agentNotes(e, items).meta, cur = mine.find((r) => r.kind === 'meta' && isCurMeta(r));
+    const fps = [cot, cur].filter(Boolean).map((m) => m.source_fp);
+    const seen = new Set();
+    return mine.filter((r) => r.kind === 'finding' && r.area === 'business' && fps.includes(r.source_fp) && has(r.title))
+      .sort((x, y) => (Number(x.index) || 0) - (Number(y.index) || 0))
+      .filter((r) => !seen.has(r.title) && seen.add(r.title));
+  }
+  const SIG_PILL = { '신규': 'new', '급증': 'growth', '신규 서비스': 'new', '증가 계정': 'warn' };
+  const SIG_KINDS = ['신규', '급증', '신규 서비스', '증가 계정'];
+  const SIG_SRC = { cur: 'CUR 월별 추이', cot: 'COT 리소스 스냅샷' };
+  const sigKey = (r) => [r.source, r.tag_key, r.tag_value].join(',');
+  const sigNow = (r) => Number(r.source === 'cur' ? r.run_rate_last : r.est_monthly_cost) || 0;
+  const sigText = (r) => [r.tag_value, r.tag_key, ...(r.services || []).map((x) => x && x.service), ...(r.new_services || []),
+    ...Object.keys(r.resource_kinds || {}), ...(r.accounts || []), ...(r.account_trend || []).map((t) => t && (t.name || t.account))].filter(has).join(' ').toLowerCase();
+  const bizText = (h) => [h.title, h.tag, h.detail, h.so_what, h.help, ...(Array.isArray(h.questions) ? h.questions : [])].filter(has).join(' ').toLowerCase();
+  // the signals card is a small cross-filter: KPI kind, source, help type and a search box narrow both the signal table
+  // and the hypothesis cards; a picked row opens its detail and scopes the cards to its tag. Reset per account.
+  function sgState(e) {
+    if (!state.sg || state.sgEnt !== e) { state.sgEnt = e; /* !state.sg: with no account e is undefined, like the initial sgEnt */ state.sg = { q: '', kind: '', src: '', help: '', hypOnly: false, sort: 'delta', sel: null }; }
+    return state.sg;
+  }
+  const SG_SORT = {
+    delta: (a, b) => (a.source === 'cur' ? 0 : 1) - (b.source === 'cur' ? 0 : 1) || (Number(b.delta) || 0) - (Number(a.delta) || 0) || sigNow(b) - sigNow(a),
+    now: (a, b) => sigNow(b) - sigNow(a),
+    name: (a, b) => String(a.tag_value).localeCompare(String(b.tag_value)),
+  };
+  function spark(node, pts) {
+    const ys = pts.map((p) => Number(p.cost) || 0), W = 84, H = 22;
+    const svg = d3.select(node).append('svg').attr('class', 'tb-spark').attr('viewBox', `0 0 ${W} ${H}`).attr('role', 'img')
+      .attr('aria-label', pts.map((p) => `${p.month} ${usd(Number(p.cost) || 0)}`).join(', '));
+    const x = d3.scaleLinear([0, Math.max(1, ys.length - 1)], [3, W - 3]), y = d3.scaleLinear([0, d3.max(ys) || 1], [H - 3, 3]);
+    svg.append('path').attr('fill', 'none').attr('stroke', dash.colors[0]).attr('stroke-width', 1.5).attr('stroke-linejoin', 'round')
+      .attr('d', d3.line().x((_, i) => x(i)).y((v) => y(v))(ys));
+    svg.append('circle').attr('cx', x(ys.length - 1)).attr('cy', y(ys[ys.length - 1])).attr('r', 2.5).attr('fill', dash.colors[0]);
+  }
+  // monthly bars of one signal on its own months (a CUR signal's months need not match the COT period on screen)
+  function miniBars(node, pts, box) {
+    const ms = pts.map((p) => String(p.month)), labs = monthLabels(ms), W = Math.max(240, node.clientWidth), H = 130;
+    const svg = d3.select(node).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`);
+    const y = d3.scaleLinear([0, d3.max(pts, (p) => Number(p.cost) || 0) || 1], [H - 22, 8]).nice();
+    const ml = axisWidth(svg, y, compact);
+    const x = d3.scaleBand(ms, [ml, W - 4]).padding(0.3);
+    svg.append('g').attr('transform', `translate(${ml},0)`).call(d3.axisLeft(y).ticks(3).tickSize(-(W - ml - 4)).tickFormat(compact)).call(axisStyle);
+    svg.append('g').attr('transform', `translate(0,${H - 22})`).call(d3.axisBottom(x).tickSize(0).tickPadding(6).tickFormat((m) => labs[ms.indexOf(m)] || m)).call(axisStyle);
+    const t = tip(box);
+    svg.append('g').selectAll('rect').data(pts).join('rect').attr('fill', dash.colors[0])
+      .attr('x', (p) => x(String(p.month))).attr('width', x.bandwidth())
+      .attr('y', (p) => y(Number(p.cost) || 0)).attr('height', (p) => Math.max(0, y(0) - y(Number(p.cost) || 0)))
+      .on('mousemove', (ev, p) => t.show(ev, labs[ms.indexOf(String(p.month))] || String(p.month), [{ name: '월 비용', value: usd(Number(p.cost) || 0) }]))
+      .on('mouseleave', () => t.hide());
+  }
+  function barList(items) { // [{name, value, label, isNew}] -> inline bar list
+    const mx = d3.max(items, (x) => x.value) || 1, ul = el('ul', 'tb-bars');
+    for (const x of items) {
+      const li = el('li'), bar = el('span', 'bar'), i = el('i', x.isNew ? 'new' : null);
+      i.style.width = Math.max(2, (x.value / mx) * 100) + '%'; bar.appendChild(i);
+      const nm = el('span', 'nm', x.name); nm.title = x.name;
+      li.append(nm, el('span', 'v', x.label), bar); ul.appendChild(li);
+    }
+    return ul;
+  }
+  function drawSignalDetail(box, r, links, visible) {
+    box.classList.toggle('picked', !!r);
+    if (!r) {
+      box.replaceChildren(el('h4', null, '신호 요약'), el('p', 'sub', '표에서 행을 고르면 월 추이, 서비스 구성, 연결된 AI 가설·세션·FSI 사례가 여기 나옵니다.'));
+      if (visible.length) {
+        box.append(el('p', 'lab', '최근 월 비용 상위 (보이는 신호)'),
+          barList(visible.slice().sort(SG_SORT.now).slice(0, 8).map((x) => ({ name: String(x.tag_value), value: sigNow(x), label: compact(sigNow(x)) + (x.source === 'cur' ? '' : '*') }))));
+        if (visible.some((x) => x.source !== 'cur')) box.appendChild(el('p', 'sub', '* COT 권고 리소스 추정치'));
+      }
+      return;
+    }
+    const head = el('div');
+    head.append(el('h4', null, String(r.tag_value)), el('div', 'sub', `${r.tag_key} · ${SIG_SRC[r.source] || r.source}`));
+    const pills = el('div');
+    for (const k of r.kinds || []) pills.appendChild(el('span', 'tb-pill ' + (SIG_PILL[k] || ''), k));
+    const close = el('button', 'tb-btn', '선택 해제'); close.type = 'button';
+    close.addEventListener('click', () => { sgState(ent()).sel = null; draw(); });
+    pills.appendChild(close);
+    const dl = el('dl', 'tb-mets');
+    const met = (k, v) => { if (v == null || v === '') return; const d = el('div'); d.append(el('dt', null, k), el('dd', null, v)); dl.appendChild(d); };
+    if (r.source === 'cur') {
+      met('최근 월 (일평균 환산)', usd(Number(r.run_rate_last) || 0));
+      met('직전 평균', r.base > 0 ? usd(r.base) : '없음');
+      met('변화', signedUsd(Number(r.delta) || 0) + (r.growth_pct == null ? '' : ` (${signed(r.growth_pct)})`));
+      met('계정 내 비중', r.share_pct == null ? null : r.share_pct.toFixed(1) + '%');
+      met('처음 보인 달', has(r.first_month) ? String(r.first_month) : null);
+    } else {
+      met('추정 월 비용', usd(Number(r.est_monthly_cost) || 0) + ' (추정)');
+      met('권고 리소스', r.resources == null ? null : d3.format(',')(r.resources) + '개');
+      met('최근 생성 비율', r.created_recent_pct == null ? null : r.created_recent_pct + '%');
+      met('생성 기간', has(r.first_created) ? `${String(r.first_created).slice(0, 10)} ~ ${String(r.last_created || '').slice(0, 10)}` : null);
+    }
+    // a picked signal reads as a small dashboard: header row, then metric / trend / composition / context panes
+    const hd = el('div', 'hd'); hd.append(head, pills);
+    const sec = () => el('section');
+    const s1 = sec(); s1.appendChild(dl);
+    box.replaceChildren(hd, s1);
+    const pts = (r.cost_by_month || []).filter((p) => p && has(p.month));
+    if (pts.length) {
+      const c = el('div', 'tb-mini'), s2 = sec();
+      s2.append(el('p', 'lab', '월 비용 (CUR, 부분 월은 있는 날짜만)'), c);
+      box.appendChild(s2);
+      miniBars(c, pts, box);
+    }
+    const s3 = sec(), s4 = sec();
+    box.append(s3, s4);
+    if (r.source === 'cur' && (r.services || []).length) {
+      s3.append(el('p', 'lab', '서비스 구성 (최근 월, 초록 = 새 서비스)'),
+        barList(r.services.filter(Boolean).map((x) => ({ name: String(x.service), value: Number(x.cost_last) || 0, label: compact(Number(x.cost_last) || 0), isNew: !!x.is_new }))));
+    } else if (r.source !== 'cur' && Object.keys(r.resource_kinds || {}).length) {
+      s3.append(el('p', 'lab', '권고 리소스 종류'),
+        barList(Object.entries(r.resource_kinds).map(([k, v]) => ({ name: k, value: Number(v) || 0, label: d3.format(',')(Number(v) || 0) + '개' }))));
+    }
+    const where = r.source === 'cur'
+      ? [...(r.accounts || []), ...(r.regions || [])].filter(has).map(String)
+      : [...(r.account_trend || []).filter(Boolean).map((t) => `${t.name || t.account} ${t.kind}`), ...(r.regions || []).filter(has).map(String), ...(r.top_instance_types || []).map((t) => (t && typeof t === 'object' ? t.instance_type || t.type : t)).filter(has).map(String)];
+    if (where.length) s4.append(el('p', 'lab', r.source === 'cur' ? '계정·리전' : '계정 추이·리전·인스턴스'), el('p', 'sub', where.join(' · ')));
+    s4.append(el('p', 'lab', '연결된 AI 해석'), el('p', 'sub', `가설 ${links.hyps}건 · 세션 제안 ${links.sessions}건 · FSI 사례 ${links.cases}건`));
+  }
+  function signalsCsv(e, rows, linked) {
+    const head = ['source', 'tag_key', 'tag_value', 'kinds', 'latest_month_usd', 'delta_usd', 'growth_pct', 'services', 'hypotheses', 'help'];
+    const lines = rows.map((r) => {
+      const hs = linked(r);
+      return [SIG_SRC[r.source] || r.source, r.tag_key, r.tag_value, (r.kinds || []).join(' '), sigNow(r).toFixed(2), r.source === 'cur' ? (Number(r.delta) || 0).toFixed(2) : '',
+        r.growth_pct == null ? '' : r.growth_pct, (r.source === 'cur' ? (r.services || []).map((x) => x && x.service) : Object.keys(r.resource_kinds || {})).filter(has).join(' | '),
+        hs.map((h) => h.title).join(' | '), [...new Set(hs.map((h) => h.help).filter(has))].join(' | ')].map((v) => curCsvCell(v, true)).join(',');
+    });
+    csvDownload([head.join(','), ...lines], `signals_${e}.csv`.replace(/[^A-Za-z0-9_.-]/g, '_'));
+  }
+  function drawSignals(e, items) {
+    const st = sgState(e);
+    const cs = dash.data('cur_tag_signals'), ts = dash.data('tag_signals');
+    const tbl = document.getElementById('tbl-signals');
+    const loading = cs.status === 'loading' || ts.status === 'loading';
+    const of = (d) => (d.status === 'ok' ? d.data.filter((r) => r && r.entity === e && has(r.tag_value)) : []);
+    const all = loading ? [] : of(cs).concat(of(ts));
+    const hyps = businessNotes(e, items);
+    const byTag = new Map();
+    for (const h of hyps) if (has(h.tag)) (byTag.get(String(h.tag)) || byTag.set(String(h.tag), []).get(String(h.tag))).push(h);
+    const linked = (r) => byTag.get(String(r.tag_value)) || [];
+    // sessions and FSI cases name the hypothesis they serve by its title (only while the notes are fresh)
+    const fresh = notesFresh(e), ss = dash.data('sessions'), mk = dash.data('market');
+    const bySignal = (d, pred) => {
+      const m = new Map();
+      if (fresh && d.status === 'ok') for (const x of d.data) if (x && x.entity === e && x.origin === 'generated' && pred(x) && has(x.signal)) m.set(String(x.signal), (m.get(String(x.signal)) || 0) + 1);
+      return m;
+    };
+    const nSess = bySignal(ss, (x) => has(x.title)), nCase = bySignal(mk, (x) => x.kind === 'peer_case' && has(x.title));
+    const q = st.q.trim().toLowerCase();
+    const hypMatch = (h) => !q || bizText(h).includes(q);
+    const sigOk = (r, ignoreKind) => (ignoreKind || !st.kind || (r.kinds || []).includes(st.kind)) && (!st.src || r.source === st.src)
+      && (!st.hypOnly || linked(r).length > 0) && (!st.help || linked(r).some((h) => h.help === st.help))
+      && (!q || sigText(r).includes(q) || linked(r).some(hypMatch));
+    const shown = all.filter((r) => sigOk(r)).sort(st.sort === 'hyp' ? (a, b) => linked(b).length - linked(a).length || SG_SORT.delta(a, b) : SG_SORT[st.sort] || SG_SORT.delta);
+    let sel = st.sel ? shown.find((r) => sigKey(r) === st.sel) : null;
+    if (st.sel && !sel && !loading) st.sel = null;
+
+    // KPI tiles double as the kind filter; counts ignore the kind filter itself so every tile stays reachable
+    const base = all.filter((r) => sigOk(r, true));
+    const kpis = document.getElementById('sg-kpis');
+    const tile = (lab, n, on, click, disabled) => {
+      const b = el('button', 'tb-kpi'); b.type = 'button'; b.setAttribute('aria-pressed', String(on)); b.disabled = !!disabled;
+      b.append(el('b', null, String(n)), el('span', null, lab)); b.addEventListener('click', click); return b;
+    };
+    kpis.replaceChildren(
+      tile('전체 신호', base.length, !st.kind && !st.hypOnly, () => { st.kind = ''; st.hypOnly = false; st.sel = null; draw(); }),
+      ...SIG_KINDS.map((k) => { const n = base.filter((r) => (r.kinds || []).includes(k)).length;
+        return tile(k, n, st.kind === k, () => { st.kind = st.kind === k ? '' : k; st.sel = null; draw(); }, !n && st.kind !== k); }),
+      tile('AI 가설 연결', all.filter((r) => linked(r).length).length, st.hypOnly, () => { st.hypOnly = !st.hypOnly; st.sel = null; draw(); }, !byTag.size && !st.hypOnly));
+    const qi = document.getElementById('sg-q');
+    if (document.activeElement !== qi && qi.value !== st.q) qi.value = st.q;
+    document.getElementById('sg-src').value = st.src;
+    document.getElementById('sg-sort').value = st.sort;
+    const filtered = !!(st.q || st.kind || st.src || st.help || st.hypOnly || st.sel);
+    document.getElementById('sg-reset').disabled = !filtered;
+    document.getElementById('sg-csv').disabled = !shown.length;
+    document.getElementById('sg-csv').onclick = () => signalsCsv(e, shown, linked);
+    document.getElementById('sg-count').textContent = loading ? '' : `신호 ${shown.length} / ${all.length}`;
+
+    if (loading) noteRow(tbl, '불러오는 중…');
+    else if (!shown.length && all.length) noteRow(tbl, '조건에 맞는 신호가 없습니다. 필터를 바꾸거나 초기화하세요.');
+    else {
+      fillTable(tbl, shown, [
+        { f: 'tag_value', cls: 'l wrap', render: (td, r) => {
+          const tr = td.closest('tr'), k = sigKey(r);
+          tr.dataset.key = k; tr.className = 'pick'; tr.tabIndex = 0; tr.setAttribute('aria-selected', String(st.sel === k));
+          const pick = () => { st.sel = st.sel === k ? null : k; draw(); };
+          tr.addEventListener('click', pick);
+          tr.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); pick(); } });
+          td.append(el('b', null, String(r.tag_value)), el('br'), el('span', 'tb-note', `${r.tag_key} · ${SIG_SRC[r.source] || r.source}`));
+        } },
+        { f: 'kinds', cls: 'l', render: (td, r) => { for (const k of r.kinds || []) td.appendChild(el('span', 'tb-pill ' + (SIG_PILL[k] || ''), k)); } },
+        { f: 'trend', cls: 'l', render: (td, r) => {
+          const pts = (r.cost_by_month || []).filter((p) => p && has(p.month));
+          if (pts.length > 1) spark(td, pts); else { td.textContent = '—'; td.classList.add('tb-neutral'); td.title = r.source === 'cur' ? '한 달뿐' : 'COT는 월 추이가 없음'; }
+        } },
+        { f: 'now', fmt: (_, r) => (r.source === 'cur' ? usd(r.run_rate_last) : usd(r.est_monthly_cost) + ' (추정)') },
+        { f: 'delta', fmt: (_, r) => {
+          if (r.source === 'cur') return (r.delta >= 0 ? '+' : '−') + usd(Math.abs(r.delta)) + (r.growth_pct == null ? ` · ${r.first_month}부터` : ` (${signed(r.growth_pct)})`);
+          const t = (r.account_trend || [])[0];
+          return t ? `${t.name || t.account} ${t.kind}` : (r.created_recent_pct == null ? '' : `최근 생성 ${r.created_recent_pct}%`);
+        } },
+        { f: 'hyp', render: (td, r) => { const n = linked(r).length; td.className = 'hyp' + (n ? '' : ' tb-neutral'); if (n) td.appendChild(el('b', null, n + '건')); else td.textContent = '—'; } },
+        { f: 'services', cls: 'l svc', fmt: (_, r) => {
+          if (r.source !== 'cur') return Object.keys(r.resource_kinds || {}).join(', ');
+          const nw = r.new_services || [];
+          return (nw.length ? '새: ' + nw.join(', ') + ' · ' : '') + (r.services || []).filter((x) => !nw.includes(x.service)).slice(0, 3).map((x) => x.service).join(', ');
+        } },
+      ]);
+    }
+    const hl = (r) => { const hs = linked(r); return { hyps: hs.length, sessions: d3.sum(hs, (h) => nSess.get(String(h.title)) || 0), cases: d3.sum(hs, (h) => nCase.get(String(h.title)) || 0) }; };
+    drawSignalDetail(document.getElementById('sg-detail'), sel, sel ? hl(sel) : null, shown);
+
+    // hypothesis cards: same filters; a kind/source filter keeps the cards whose tag is among the visible signals
+    const visTags = new Set(shown.map((r) => String(r.tag_value)));
+    const narrowed = !!(st.kind || st.src || st.hypOnly);
+    const scoped = hyps.filter((h) => (!st.help || h.help === st.help)
+      && (!q || hypMatch(h) || (has(h.tag) && visTags.has(String(h.tag))))
+      && (!narrowed || (has(h.tag) && visTags.has(String(h.tag))))
+      && (!sel || String(h.tag) === String(sel.tag_value)));
+    document.getElementById('br-biz').hidden = !hyps.length;
+    const helpBox = document.getElementById('br-biz-help');
+    const helps = [...new Set(hyps.map((h) => h.help).filter(has).map(String))];
+    helpBox.replaceChildren(el('span', null, '도울 일'), ...['', ...helps].map((hp) => {
+      const n = hp ? hyps.filter((h) => h.help === hp).length : hyps.length;
+      const b = el('button', null, `${hp || '전체'} ${n}`); b.type = 'button'; b.setAttribute('aria-pressed', String(st.help === hp));
+      b.addEventListener('click', () => { st.help = hp; draw(); }); return b;
+    }));
+    const scope = document.getElementById('br-biz-scope');
+    scope.replaceChildren(document.createTextNode(`가설 ${scoped.length} / ${hyps.length}` + (sel ? ` · '${sel.tag_value}' 신호만` : '')));
+    if (sel) { const b = el('button', 'tb-chipbtn', '전체 보기'); b.type = 'button'; b.addEventListener('click', () => { st.sel = null; draw(); }); scope.append(' ', b); }
+    const list = document.getElementById('br-biz-list');
+    if (!scoped.length) { list.replaceChildren(el('li', 'tb-empty', sel ? '이 신호에 연결된 AI 가설이 없습니다.' : '조건에 맞는 가설이 없습니다.')); return; }
+    list.replaceChildren(...scoped.map((h) => {
+      const li = el('li', sel && String(h.tag) === String(sel.tag_value) ? 'on' : null);
+      const pills = el('div', 'pills');
+      if (has(h.help)) pills.appendChild(el('span', 'tb-pill new', String(h.help)));
+      if (has(h.confidence)) pills.appendChild(el('span', 'tb-pill', '확신 ' + String(h.confidence)));
+      const target = has(h.tag) ? all.find((r) => String(r.tag_value) === String(h.tag)) : null;
+      if (target) {
+        const b = el('button', 'tb-chipbtn', String(h.tag)); b.type = 'button'; b.title = '이 신호 보기';
+        b.addEventListener('click', () => { Object.assign(st, { kind: '', src: '', hypOnly: false, sel: sigKey(target) }); draw(); });
+        pills.appendChild(b);
+      } else if (has(h.tag)) pills.appendChild(el('span', 'tb-pill owner', String(h.tag)));
+      li.append(pills, el('div', 'tt', String(h.title)));
+      const sec = (lab, v) => { li.append(el('span', 'k', lab), el('p', null, String(v))); };
+      if (has(h.detail)) sec('근거', h.detail);
+      if (has(h.so_what)) sec('도울 일', h.so_what);
+      const qs = (Array.isArray(h.questions) ? h.questions : []).filter(has);
+      if (qs.length) { const ol = el('ol'); for (const x of qs) ol.appendChild(el('li', null, String(x))); li.append(el('span', 'k', '확인 질문'), ol); }
+      const ns = nSess.get(String(h.title)) || 0, nc = nCase.get(String(h.title)) || 0;
+      if (ns || nc) {
+        const lk = el('div', 'links');
+        const go = (lab, tab) => { const b = el('button', 'tb-btn', lab); b.type = 'button'; b.addEventListener('click', () => showTab(tab)); return b; };
+        if (ns) lk.appendChild(go(`세션 제안 ${ns}건 →`, 'sa'));
+        if (nc) lk.appendChild(go(`FSI 사례 ${nc}건 →`, 'market'));
+        li.appendChild(lk);
+      }
+      return li;
+    }));
+  }
+  {
+    const st = () => sgState(ent());
+    document.getElementById('sg-q').addEventListener('input', (ev) => { st().q = ev.target.value; st().sel = null; draw(); });
+    document.getElementById('sg-src').addEventListener('change', (ev) => { st().src = ev.target.value; st().sel = null; draw(); });
+    document.getElementById('sg-sort').addEventListener('change', (ev) => { st().sort = ev.target.value; draw(); });
+    document.getElementById('sg-reset').addEventListener('click', () => { Object.assign(st(), { q: '', kind: '', src: '', help: '', hypOnly: false, sel: null }); draw(); });
+  }
+  function drawBrief() {
+    const e = ent();
+    const kp = dash.data('kpis'), br = dash.data('briefing'), bm = dash.data('benchmark');
+    const k = kp.status === 'ok' ? kp.data.find((r) => r.entity === e) : null;
+    const items = br.status === 'ok' ? br.data.filter((r) => r.entity === e).sort((a, b) => a.rank - b.rank) : [];
+    const sigs = ['cur_tag_signals', 'tag_signals'].flatMap((n) => { const d = dash.data(n); return d.status === 'ok' ? d.data.filter((r) => r && r.entity === e) : []; });
+    if (k) {
+      document.getElementById('br-head').textContent = `${KO[e]} · ${PER.L} ${compact(k.last_spend)} (전월 대비 ${signed(k.mom_pct)}) · 실행 항목 ${items.length}개`;
+      const sav = items.filter((x) => x.kind === '절감'), risk = items.filter((x) => x.kind === '위험'), grow = items.filter((x) => x.kind === '성장' && x.impact > 0);
+      const tiles = [
+        ['서비스 태그 신호', String(sigs.length), sigs.length ? sigs.slice(0, 3).map((r) => r.tag_value).join(' · ') : '—'],
+        ['가장 큰 절감 레버 (월)', sav.length ? compact(sav[0].impact) : '—', sav.length ? sav[0].title.split(':')[0] : '해당 없음'],
+        ['약정·커버리지 위험 (월)', risk.length ? compact(d3.sum(risk, (x) => x.impact)) : '—', risk.length ? risk.length + '건' : '해당 없음'],
+        ['COH 권고 (중복 제거, 월)', k.coh_dedup ? compact(k.coh_dedup) : '—', k.coh_dedup ? 'COT360 Total Dedup Savings' : 'COH 미활성'],
+        ['성장 신호', String(grow.length + items.filter((x) => x.kind === '성장' && x.impact === 0).length), grow.length ? grow.map((x) => x.title.split(':')[0]).join(' · ') : '—'],
+      ];
+      document.getElementById('br-tiles').replaceChildren(...tiles.map(([lab, num, d]) => {
+        const c = el('div', 'tb-card tb-tile'); c.append(el('div', 'tb-lab', lab), el('div', 'tb-num', num), el('div', 'tb-delta tb-neutral', d)); return c;
+      }));
+    }
+    drawSignals(e, items);
+    const notes = agentNotes(e, items);
+    const ai = document.getElementById('br-ai');
+    ai.hidden = !notes.headline;
+    if (notes.headline) {
+      const m = notes.meta;
+      document.getElementById('br-ai-lab').textContent = `AI 해석 · 숫자는 데이터셋과 대조해 통과한 문장만 (통과 ${m.checked - m.dropped} / 검사 ${m.checked})`
+        + (m.errors && m.errors.length ? ` · 일부 영역 실패 ${m.errors.length}건` : '');
+      document.getElementById('br-ai-text').textContent = notes.headline;
+    }
+    document.getElementById('card-links').hidden = !notes.links.length;
+    document.getElementById('br-links').replaceChildren(...notes.links.map((l) => {
+      const li = el('li'); li.append(el('span', 'who', l.title), el('span', null, l.text)); return li;
+    }));
+    const owners = ['전체', 'SA', 'TAM', 'AM'];
+    const keys = document.getElementById('br-owner');
+    if (keys.children.length === 1) for (const o of owners) {
+      const b = el('button', null, o); b.type = 'button'; b.addEventListener('click', () => { state.owner = o; draw(); }); keys.appendChild(b);
+    }
+    const own = state.owner || '전체';
+    for (const b of keys.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.textContent === own));
+    const list = document.getElementById('br-acts');
+    if (br.status === 'ok') {
+      const shown = items.filter((x) => own === '전체' || x.owner.split('·').includes(own));
+      if (!shown.length) list.replaceChildren(el('li', 'tb-empty', '이 담당의 실행 항목이 없습니다.'));
+      else list.replaceChildren(...shown.map((x) => {
+        const li = el('li');
+        const head = el('div', 'tt');
+        head.append(el('span', 'tb-pill ' + (KIND[x.kind] ?? ''), x.kind), el('span', 'tb-pill owner', x.owner), document.createTextNode(' ' + x.title));
+        const imp = el('div', 'imp');
+        if (x.impact > 0) imp.append(el('b', null, x.impact < 1000 ? usd(x.impact) : compact(x.impact)), el('span', null, x.impact_label));
+        const ul = el('ul'); for (const t of x.evidence) ul.appendChild(el('li', null, t));
+        const n = notes.actions.get(x.id);
+        const nx = el('div', 'nx');
+        if (n && n.next_step) nx.append(el('b', null, '구체적 다음 행동'), el('span', 'tb-pill', 'AI 해석'), el('span', null, n.next_step));
+        else nx.append(el('b', null, '다음 행동'), el('span', null, x.next_step));
+        if (x.tab && TAB_KO[x.tab]) { const a = el('button', 'tb-btn', '근거: ' + TAB_KO[x.tab] + ' →'); a.type = 'button'; a.addEventListener('click', () => showTab(x.tab)); nx.appendChild(a); }
+        li.append(el('div', 'rk', String(x.rank)), head, imp, ul, nx);
+        if (n && n.questions && n.questions.length) {
+          const qs = el('div', 'qs'); const ql = el('ul');
+          for (const q of n.questions) ql.appendChild(el('li', null, q));
+          qs.append(el('b', null, '고객에게 물을 질문 (AI 해석)'), ql);
+          li.appendChild(qs);
+        }
+        return li;
+      }));
+    }
+    if (bm.status === 'ok') {
+      const rows = peers().map((x) => bm.data.find((r) => r.entity === x)).filter(Boolean);
+      document.getElementById('br-bench-ins').replaceChildren(...benchInsights(rows));
+      const worst = {};
+      if (rows.length >= 2) for (const [f, , , dir] of BENCH) {
+        const v = rows.filter((r) => r[f] != null); if (v.length < 2) continue;
+        worst[f] = v.reduce((a, b) => (dir * (b[f] - a[f]) > 0 ? b : a)).entity;
+      }
+      const cell = (f, fmt) => (td, r) => { td.textContent = r[f] == null ? '—' : fmt(r[f]); if (worst[f] === r.entity) td.className = 'tb-up'; };
+      fillTable(document.getElementById('tbl-bench'), rows, [
+        { f: 'entity', render: (td, r) => { td.textContent = KO[r.entity]; td.closest('tr').dataset.key = r.entity; if (r.entity === e) td.style.fontWeight = '600'; } },
+        { f: 'ec2_last', fmt: money },
+        ...BENCH.map(([f, , fmt]) => ({ f, render: cell(f, fmt) })),
+        { f: 'sp_buy_1y', fmt: (v) => (v ? usd(v) : '—') }, { f: 'graviton_savings', fmt: money },
+      ]);
+    }
+  }
+
+  // ---------- 단위 지표 ----------
+  function drawUnit() {
+    const e = ent();
+    const um = dash.data('unit_metrics');
+    if (um.status === 'ok') {
+      const mine = um.data.filter((r) => r.entity === e);
+      const svcs = [...new Set(mine.map((r) => r.service))];
+      if (!svcs.includes(state.umSvc)) state.umSvc = svcs[0];
+      const keys = document.getElementById('um-svc');
+      keys.replaceChildren(el('span', null, '서비스'), ...svcs.map((s) => {
+        const b = el('button', null, s); b.type = 'button'; b.setAttribute('aria-pressed', String(s === state.umSvc));
+        b.addEventListener('click', () => { state.umSvc = s; draw(); }); return b;
+      }));
+      const rows = MONTHS.map((m) => mine.find((r) => r.service === state.umSvc && r.month === m)).filter(Boolean);
+      const ins = document.getElementById('um-ins');
+      const full = rows.length === MONTHS.length && rows.length >= 2;
+      if (full) {
+        const a = rows[0], z = rows[rows.length - 1], y = rows[rows.length - 2];
+        const pc = (p, q) => ((q / p - 1) * 100);
+        const lines = [
+          [pc(a.cost, z.cost) > 0 ? 'growth' : '', `비용 ${usd(a.cost)} → ${usd(z.cost)} (${signed(pc(a.cost, z.cost))}), vCPU시간 ${signed(pc(a.vcpu_hours, z.vcpu_hours))}. vCPU시간당 비용 ${signed(pc(a.cost_per_vcpu_hr, z.cost_per_vcpu_hr))} (${PER.F} $${a.cost_per_vcpu_hr.toFixed(4)} → ${PER.L} $${z.cost_per_vcpu_hr.toFixed(4)}).`],
+          [z.coverage_pct < a.coverage_pct - 3 ? 'warn' : '', `약정 커버리지 ${a.coverage_pct}% → ${z.coverage_pct}%. ${PER.L} 약정 없이 쓴 비용은 약 ${usd(z.cost * (1 - z.coverage_pct / 100))}입니다.`],
+          ['', `Graviton/최신 세대 비율 ${a.modern_pct}% → ${z.modern_pct}%.`],
+        ];
+        if (Math.abs(pc(y.cost_per_vcpu_hr, z.cost_per_vcpu_hr)) >= 5) lines.push(['warn', `${PER.L} vCPU시간당 비용이 전월 대비 ${signed(pc(y.cost_per_vcpu_hr, z.cost_per_vcpu_hr))} 움직였습니다. 같은 달 커버리지 ${y.coverage_pct}% → ${z.coverage_pct}%이므로 ${z.coverage_pct < y.coverage_pct ? '약정 커버리지 하락(온디맨드 증가)이 주원인입니다.' : '인스턴스 구성(크기·GPU·세대) 변화를 확인하세요.'}`]);
+        ins.replaceChildren(...lines.map(([cls, t]) => { const li = el('li'); const w = el('span', 'who'); w.appendChild(el('span', 'tb-pill ' + cls, cls === 'warn' ? '주의' : cls === 'growth' ? '증가' : '참고')); li.append(w, el('span', null, t)); return li; }));
+      } else ins.replaceChildren();
+      const n1 = document.getElementById('chart-um-vcpu');
+      if (!failed(n1, um.status) && full) lineChart(n1, [{ name: 'vCPU시간당', color: dash.colors[0], values: rows.map((r) => ({ m: r.month, y: r.cost_per_vcpu_hr })) }], { endLabels: true, fmt: (v) => '$' + v.toFixed(3), fmtTip: (v) => '$' + v.toFixed(4) });
+      const n2 = document.getElementById('chart-um-pct');
+      if (!failed(n2, um.status) && full) {
+        legend(document.getElementById('legend-um-pct'), [{ name: '커버리지', color: dash.colors[0] }, { name: 'Graviton/최신', color: dash.colors[1] }]);
+        lineChart(n2, [{ name: '커버리지', color: dash.colors[0], values: rows.map((r) => ({ m: r.month, y: r.coverage_pct })) }, { name: 'Graviton/최신', color: dash.colors[1], values: rows.map((r) => ({ m: r.month, y: r.modern_pct })) }],
+          { endLabels: true, max: 100, fmt: (v) => v.toFixed(0) + '%', fmtTip: (v) => v.toFixed(1) + '%' });
+      }
+      const n0 = (v) => d3.format(',.0f')(v);
+      fillTable(document.getElementById('tbl-um'), rows, [
+        { f: 'month', render: (td, r) => { td.textContent = r.month; td.closest('tr').dataset.key = [r.entity, r.service, r.month].map(encodeURIComponent).join(','); } },
+        { f: 'cost', fmt: money }, { f: 'instance_hours', fmt: n0 }, { f: 'vcpu_hours', fmt: n0 },
+        { f: 'cost_per_inst_hr', fmt: (v) => '$' + v.toFixed(4) }, { f: 'cost_per_vcpu_hr', fmt: (v) => '$' + v.toFixed(4) },
+        { f: 'coverage_pct', fmt: (v) => v.toFixed(1) + '%' }, { f: 'modern_pct', fmt: (v) => v.toFixed(1) + '%' },
+      ]);
+    }
+    const ea = dash.data('elasticity');
+    if (ea.status === 'ok') {
+      const rows = ea.data.filter((r) => r.entity === e).sort((a, b) => a.service.localeCompare(b.service) || a.month.localeCompare(b.month));
+      fillTable(document.getElementById('tbl-elast'), rows, [
+        { f: 'service', render: (td, r) => { td.textContent = r.service; td.closest('tr').dataset.key = [r.entity, r.service, r.month].map(encodeURIComponent).join(','); } },
+        { f: 'month' }, { f: 'weekday_avg', fmt: money }, { f: 'weekend_avg', fmt: money },
+        { f: 'elasticity_pct', render: (td, r) => { td.textContent = r.elasticity_pct.toFixed(1) + '%'; if (r.elasticity_pct < 20) td.className = 'tb-up'; } },
+        { f: 'savings_at_goal', fmt: money },
+      ]);
+    }
+    const st = dash.data('storage_tiers');
+    if (st.status === 'ok') {
+      const by = new Map();
+      for (const r of st.data.filter((x) => x.entity === e)) {
+        const k = r.service + '|' + r.tier;
+        if (!by.has(k)) by.set(k, { entity: e, service: r.service, tier: r.tier, first: 0, last: 0 });
+        if (r.month === PER.first) by.get(k).first = r.cost;
+        if (r.month === PER.last) by.get(k).last = r.cost;
+      }
+      const rows = [...by.values()].filter((r) => r.first || r.last).map((r) => ({ ...r, d: r.last - r.first })).sort((a, b) => a.service.localeCompare(b.service) || b.last - a.last);
+      fillTable(document.getElementById('tbl-storage'), rows, [
+        { f: 'service', render: (td, r) => { td.textContent = r.service; td.closest('tr').dataset.key = [r.entity, r.service, r.tier].map(encodeURIComponent).join(','); } },
+        { f: 'tier', cls: 'l', render: (td, r) => { td.textContent = r.tier; if (/^gp2/.test(r.tier) && r.last > 0) td.appendChild(el('span', 'tb-pill warn', 'gp3 전환')); } },
+        { f: 'first', fmt: money }, { f: 'last', fmt: money }, { f: 'd', render: deltaCell('d') },
+      ]);
+    }
+  }
+
+  // the COT run date of the selected account (period.json as_of, from the worker's AS_OF)
+  function asOf(e) {
+    const pd = dash.data('period');
+    const r = pd.status === 'ok' ? pd.data.find((x) => x && x.entity === e && (x.source || 'cot') === 'cot') : null;
+    return r && typeof r.as_of === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(r.as_of) ? r.as_of : '—';
+  }
+  function drawSavings() {
+    document.getElementById('cm-asof').textContent = asOf(ent());
+    const e = ent();
+    const cm = dash.data('commitments');
+    if (cm.status === 'ok') {
+      const kinds = ['전체', 'SP', 'RI', '120일 내'];
+      const box = document.getElementById('cm-kind');
+      if (box.children.length === 1) for (const k of kinds) { const b = el('button', null, k); b.type = 'button'; b.addEventListener('click', () => { state.cmKind = k; draw(); }); box.appendChild(b); }
+      const kk = state.cmKind || '120일 내';
+      for (const b of box.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.textContent === kk));
+      const rows = cm.data.filter((r) => r.entity === e && r.days_left >= 0 && (kk === '전체' || (kk === '120일 내' ? r.days_left <= 120 : r.kind === kk))).sort((a, b) => a.days_left - b.days_left);
+      fillTable(document.getElementById('tbl-commit'), rows, [
+        { f: 'end', render: (td, r) => { td.textContent = r.end; td.closest('tr').dataset.key = [r.entity, r.kind, r.end, r.detail, r.account_name].map(encodeURIComponent).join(','); if (r.days_left <= 120) td.className = 'tb-up'; } },
+        { f: 'days_left', fmt: (v) => v + '일' }, { f: 'kind', cls: 'l' }, { f: 'type', cls: 'l' }, { f: 'detail', cls: 'l' }, { f: 'account_name', cls: 'l' }, { f: 'region', cls: 'l' },
+        { f: 'hourly', fmt: (v) => '$' + d3.format(',.3f')(v) }, { f: 'count', fmt: (v) => (v == null ? '' : d3.format(',')(v)) },
+        { f: 'monthly_commit', fmt: money }, { f: 'monthly_net_savings', fmt: (v) => (v == null ? '' : usd(v)), missing: 'RI는 순절감 데이터가 없음' },
+        { f: 'utilization_pct', fmt: (v) => (v == null ? '' : v.toFixed(0) + '%') },
+      ]);
+    }
+    const sb = dash.data('sp_purchase');
+    if (sb.status === 'ok') {
+      const TERM = { ONE_YEAR: '1년', THREE_YEARS: '3년' }, PAY = { NO_UPFRONT: '선결제 없음', PARTIAL_UPFRONT: '부분 선결제', ALL_UPFRONT: '전액 선결제' };
+      const PLAN = { COMPUTE_SP: 'Compute SP', EC2_INSTANCE_SP: 'EC2 Instance SP', DATABASE_SP: 'Database SP' };
+      const rows = sb.data.filter((r) => r.entity === e).sort((a, b) => a.plan.localeCompare(b.plan) || a.term.localeCompare(b.term) || b.monthly_savings - a.monthly_savings);
+      const mx = d3.max(rows, (r) => r.monthly_savings) || 1;
+      fillTable(document.getElementById('tbl-spbuy'), rows, [
+        { f: 'plan', render: (td, r) => { td.textContent = PLAN[r.plan] || r.plan; td.closest('tr').dataset.key = [r.entity, r.plan, r.term, r.payment].map(encodeURIComponent).join(','); } },
+        { f: 'term', cls: 'l', fmt: (v) => TERM[v] || v }, { f: 'payment', cls: 'l', fmt: (v) => PAY[v] || v },
+        { f: 'hourly_commit', fmt: (v) => '$' + d3.format(',.2f')(v) }, { f: 'upfront', fmt: money },
+        { f: 'monthly_savings', render: (td, r) => { td.textContent = usd(r.monthly_savings); const b = el('span', 'tb-inbar'); b.style.width = Math.round(56 * r.monthly_savings / mx) + 'px'; td.appendChild(b); } },
+      ]);
+    }
+    const md = dash.data('modernization');
+    if (md.status === 'ok') {
+      const PATH = { 'Immediately Migratable': '즉시 전환', 'Requires Commitment Wait': '약정 대기', Upgrade: '구세대 교체' };
+      const box = document.getElementById('md-path');
+      if (box.children.length === 1) for (const k of ['즉시 전환', '약정 대기', '구세대 교체']) { const b = el('button', null, k); b.type = 'button'; b.addEventListener('click', () => { state.mdPath = k; draw(); }); box.appendChild(b); }
+      const kk = state.mdPath || '즉시 전환';
+      for (const b of box.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.textContent === kk));
+      const mine = md.data.filter((r) => r.entity === e);
+      const rows = mine.filter((r) => PATH[r.path] === kk).sort((a, b) => b.est_savings - a.est_savings || b.monthly_cost - a.monthly_cost);
+      const sum = (p) => mine.filter((r) => PATH[r.path] === p);
+      document.getElementById('md-sum').textContent = ['즉시 전환', '약정 대기', '구세대 교체'].map((p) => `${p}: ${sum(p).length}개 유형, 월 비용 ${compact(d3.sum(sum(p), (r) => r.monthly_cost))}, 절감 ${compact(d3.sum(sum(p), (r) => r.est_savings))}`).join(' · ');
+      fillTable(document.getElementById('tbl-modern'), rows.slice(0, 200), [
+        { f: 'instance_type', render: (td, r) => { td.textContent = r.instance_type; td.closest('tr').dataset.key = [r.entity, r.kind, r.instance_type].map(encodeURIComponent).join(','); } },
+        { f: 'service', cls: 'l' }, { f: 'target', cls: 'l' }, { f: 'path', cls: 'l', fmt: (v) => PATH[v] || v },
+        { f: 'monthly_cost', fmt: money }, { f: 'est_savings', fmt: money },
+      ]);
+    }
+    const cw = dash.data('coh_by_workload');
+    if (cw.status === 'ok') {
+      const rows = cw.data.filter((r) => r.entity === e && r.est_savings > 0).sort((a, b) => b.est_savings - a.est_savings);
+      fillTable(document.getElementById('tbl-cohwl'), rows.slice(0, 100), [
+        { f: 'workload', render: (td, r) => { td.textContent = r.workload; td.closest('tr').dataset.key = [r.entity, r.workload, r.action].map(encodeURIComponent).join(','); } },
+        { f: 'action_ko', cls: 'l' }, { f: 'recs', fmt: (v) => d3.format(',')(v) }, { f: 'est_cost', fmt: money }, { f: 'est_savings', fmt: money },
+        { f: 'top_changes', cls: 'l wrap', fmt: (v) => (v || []).join(', ') },
+      ]);
+    }
+    const op = dash.data('opportunities');
+    if (op.status === 'ok') {
+      const rows = op.data.filter((r) => r.entity === e).sort((a, b) => b.monthly_savings - a.monthly_savings);
+      const mx = rows.length ? rows[0].monthly_savings : 1;
+      fillTable(document.getElementById('tbl-opps'), rows, [
+        { f: 'lever', render: (td, r) => { td.textContent = r.lever; td.closest('tr').dataset.key = encodeURIComponent(r.entity) + ',' + encodeURIComponent(r.lever); } },
+        { f: 'monthly_savings', render: (td, r) => { td.textContent = usd(r.monthly_savings); const b = el('span', 'tb-inbar'); b.style.width = Math.round(56 * r.monthly_savings / (mx || 1)) + 'px'; td.appendChild(b); } },
+        { f: 'basis', cls: 'l wrap' },
+      ]);
+    }
+    const se = dash.data('sp_expiry');
+    const n = document.getElementById('chart-sp');
+    if (!failed(n, se.status)) {
+      const rows = se.data.filter((r) => r.entity === e).sort((a, b) => a.month.localeCompare(b.month));
+      if (!rows.length) { n.appendChild(el('div', 'tb-empty', `${PER.last ? koMonth(shift(PER.last, 15)) : '내후년 말'}까지 만료되는 SP가 없습니다.`)); return; }
+      const W = Math.max(280, n.clientWidth), H = 260;
+      const svg = d3.select(n).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`);
+      const y = d3.scaleLinear([0, d3.max(rows, (r) => r.hourly) || 1], [H - 24, 10]).nice();
+      const fmtH = (v) => '$' + d3.format(',.0f')(v) + '/h';
+      const ml = axisWidth(svg, y, fmtH);
+      const x = d3.scaleBand(rows.map((r) => r.month), [ml, W - 8]).padding(0.3);
+      svg.append('g').attr('transform', `translate(${ml},0)`).call(d3.axisLeft(y).ticks(4).tickSize(-(W - ml - 8)).tickFormat(fmtH)).call(axisStyle);
+      const every = Math.ceil(rows.length / Math.max(1, Math.floor((W - ml) / 56)));
+      svg.append('g').attr('transform', `translate(0,${H - 24})`).call(d3.axisBottom(x).tickSize(0).tickPadding(8).tickValues(rows.map((r) => r.month).filter((_, i) => i % every === 0)).tickFormat((m) => m.slice(2).replace('-', '.'))).call(axisStyle);
+      const t = tip(n.closest('.tb-card'));
+      svg.append('g').selectAll('rect').data(rows).join('rect')
+        .attr('x', (d) => x(d.month) + Math.max(0, (x.bandwidth() - 32) / 2)).attr('width', Math.min(32, x.bandwidth()))
+        .attr('y', (d) => y(d.hourly)).attr('height', (d) => y(0) - y(d.hourly)).attr('rx', 4)
+        .attr('fill', (d) => (PER.last && d.month <= shift(PER.last, 6) ? 'var(--cds-chart-status-critical)' : dash.colors[0]))
+        .on('mousemove', (ev, d) => t.show(ev, d.month + ' 만료', [{ name: '시간당 약정', value: '$' + d3.format(',.2f')(d.hourly) }, { name: '월 환산', value: usd(d.hourly * 730) }]))
+        .on('mouseleave', () => t.hide());
+    }
+  }
+
+  function drawSA() {
+    const e = ent();
+    const fo = dash.data('focus');
+    if (fo.status === 'ok') {
+      fillTable(document.getElementById('tbl-focus'), fo.data.filter((r) => r.entity === e), [
+        { f: 'focus', render: (td, r) => { td.textContent = r.focus; td.className = 'l wrap'; td.closest('tr').dataset.key = r.id; } },
+        { f: 'confidence', cls: 'l', render: (td, r) => td.appendChild(el('span', 'tb-pill ' + (r.confidence === '높음' ? 'new' : 'warn'), r.confidence)) },
+        { f: 'evidence', cls: 'l wrap' },
+      ]);
+    }
+    const ss = dash.data('sessions'), gl = document.getElementById('sa-gen');
+    const fresh = notesFresh(e);
+    if (ss.status === 'error') gl.replaceChildren(el('li', 'tb-empty', '데이터를 불러오지 못했습니다.'));
+    else if (ss.status !== 'ok' || fresh === null) gl.replaceChildren(el('li', 'tb-empty', '불러오는 중…'));
+    else {
+      const rows = fresh ? ss.data.filter((r) => r && r.entity === e && r.origin === 'generated' && has(r.title)).sort((x, y) => (Number(x.rank) || 0) - (Number(y.rank) || 0)) : [];
+      if (!rows.length) gl.replaceChildren(el('li', 'tb-empty', 'AI가 만든 세션 제안이 없습니다.'));
+      else gl.replaceChildren(...rows.map((r, i) => {
+        const li = el('li');
+        const tt = el('div', 'tt');
+        if (has(r.type)) tt.appendChild(el('span', 'tb-pill new', String(r.type)));
+        tt.appendChild(document.createTextNode((has(r.type) ? ' ' : '') + String(r.title)));
+        li.append(el('div', 'rk', String(Number(r.rank) || i + 1)), tt);
+        const line = (cls, lab, v) => { const p = el('p', cls); p.append(el('b', null, lab), document.createTextNode(String(v))); return p; };
+        if (has(r.signal)) li.appendChild(line('sig', '돕는 사업 신호', r.signal));
+        if (has(r.why)) li.appendChild(line('why', '왜 지금', r.why));
+        if (has(r.audience)) li.appendChild(line('aud', '대상', r.audience));
+        const ag = (Array.isArray(r.agenda) ? r.agenda : []).filter(has);
+        if (ag.length) { const ul = el('ul'); for (const t of ag) ul.appendChild(el('li', null, String(t))); li.appendChild(ul); }
+        return li;
+      }));
+    }
+    const hand = handRowsOf(e, 'sessions_hand');
+    document.getElementById('sa-hand').hidden = !hand.length;
+    if (hand.length) {
+      const order = { '1차 FinOps 기본': 0, '2차 관심 세션': 1, '3차 전문가 섭외·신사업': 2 };
+      const rows = hand.slice().sort((a, b) => (order[a.track] ?? 9) - (order[b.track] ?? 9) || (Number(a.priority) || 0) - (Number(b.priority) || 0));
+      fillTable(document.getElementById('tbl-sessions-hand'), rows, [
+        { f: 'track', render: (td, r) => { td.closest('tr').dataset.key = has(r.id) ? String(r.id) : ''; td.appendChild(el('span', 'tb-pill ' + (r.kind === 'expert' ? 'critical' : order[r.track] === 0 ? 'warn' : 'new'), has(r.track) ? String(r.track) : '—')); } },
+        { f: 'topic', cls: 'l wrap' }, { f: 'evidence', cls: 'l wrap' }, { f: 'offer', cls: 'l wrap' }, { f: 'next_action', cls: 'l wrap' },
+        { f: 'verification', cls: 'l wrap', render: (td, r) => {
+          const v = has(r.verification) ? String(r.verification) : '';
+          td.appendChild(el('span', 'tb-pill ' + (v.startsWith('What') ? 'new' : v.startsWith('공개') ? 'warn' : v.startsWith('가설') ? 'critical' : ''), v));
+          if (has(r.source_url)) { td.appendChild(document.createElement('br')); td.appendChild(link(String(r.source_url), (has(r.source_date) ? r.source_date + ' · ' : '') + (has(r.source_title) ? r.source_title : r.source_url))); }
+        } },
+      ]);
+    }
+    const wn = dash.data('whats_new_feed');
+    if (wn.status === 'ok') {
+      const mine = wn.data.filter((r) => (r.entities || []).includes(e)).sort((a, b) => String(b.date).localeCompare(String(a.date)));
+      const rows = mine.filter((r) => r.source === 'curated').concat(mine.filter((r) => r.source !== 'curated').slice(0, 20));
+      document.getElementById('wn-updated').textContent = d3.max(wn.data, (r) => r.fetched_at) || '—';
+      fillTable(document.getElementById('tbl-whatsnew'), rows, [
+        { f: 'date', render: (td, r) => { td.textContent = String(r.date).slice(0, 10); td.closest('tr').dataset.key = r.url; } },
+        { f: 'title', cls: 'l wrap', render: (td, r) => td.appendChild(link(r.url, r.title)) },
+        { f: 'topics', cls: 'l wrap', fmt: (v) => (v || []).join(', ') },
+        { f: 'source', cls: 'l', fmt: (v) => (v === 'curated' ? '검증 목록' : 'RSS') },
+      ]);
+    }
+  }
+
+  // only http(s) links to known publishers are rendered as anchors
+  const SAFE = /^https:\/\/(aws\.amazon\.com|docs\.aws\.amazon\.com|repost\.aws)\//;
+  function link(url, text, anyHttps = false) {
+    if (!(SAFE.test(url) || (anyHttps && /^https:\/\/[^\s"'<>]+$/.test(url)))) return el('span', null, text);
+    const a = el('a', null, text); a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer'; return a;
+  }
+
+  // ---------- 분석 방법: the selected account's periods ----------
+  function drawMethod() {
+    const e = ent(), a = ACCT[e];
+    const ms = e ? monthsOf(e) : [];
+    document.getElementById('lim-cot').textContent = ms.length ? `COT 기간: ${spanText({ months: ms })} (${ms.length}개월)` : 'COT 기간: 없음';
+    const cs = dash.data('cur_summary'), pd = dash.data('period');
+    const s = cs.status === 'ok' ? cs.data.find((r) => r && r.entity === e) : null;
+    const pr = pd.status === 'ok' ? pd.data.find((r) => r && r.entity === e && r.source === 'cur') : null;
+    const cm = [s && s.months, pr && pr.months].find((x) => Array.isArray(x) && x.length);
+    const span = cm ? spanText({ months: cm.filter((m) => typeof m === 'string').sort() }) : a && a.sources.cur ? spanText(a.sources.cur.period) : '';
+    const days = s && has(s.first_day) && has(s.last_day) ? ` (${s.first_day} ~ ${s.last_day}${has(s.format) ? ', ' + s.format : ''})` : '';
+    document.getElementById('lim-cur').textContent = span
+      ? `CUR: ${span}${days}. 리소스·태그 단위 비용은 CUR 기간에만 있습니다.`
+      : 'CUR: 없음. CUR 업로드 필요: 리소스·태그 단위 비용과 계정 × 서비스 교차 추이는 CUR이 있어야 볼 수 있습니다.';
+  }
+
+  // ---------- 비용 추이(CUR) ----------
+  const CUR_DIMS = { service: '서비스', usage_type: '사용 유형', region: '리전', linked_account: '연결 계정' };
+  const curDimLabel = (d) => (d.startsWith('tag:') ? '태그: ' + d.slice(4) : CUR_DIMS[d] || d);
+  const curKey = (k) => (k == null || k === '' ? '(없음)' : String(k));
+  const fmt2 = d3.format(',.2f');
+  const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+  function curCsvCell(v, guard) {
+    let s = v == null ? '' : String(v);
+    if (guard && /^[=+\-@\t\r]/.test(s)) s = "'" + s; // spreadsheet formula injection
+    return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+  function curDownload(rows, name) {
+    csvDownload(['period,key,cost', ...rows.map((r) => [curCsvCell(r.period, true), curCsvCell(r.key, true), r.cost.toFixed(2)].join(','))], name);
+  }
+  function csvDownload(lines, name) { // lines: already escaped CSV rows (curCsvCell)
+    const text = lines.join('\n');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob(['﻿', text], { type: 'text/csv;charset=utf-8' }));
+    a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+  function curSelect(sel, items, cur, onChange) {
+    sel.replaceChildren(...items.map(([v, lab, off]) => { const o = el('option', null, lab); o.value = v; o.selected = v === cur; if (off) o.disabled = true; return o; }));
+    sel.value = cur;
+    sel.onchange = () => onChange(sel.value);
+  }
+  // rows of one (grain, dim[, service]) -> {periods, keys, val(period,key)}; the top 20 keys stay, the rest fold into 기타
+  function curPivot(rows) {
+    const by = new Map(), tot = new Map(), periods = new Set();
+    for (const r of rows) {
+      const k = curKey(r.key), p = String(r.period);
+      periods.add(p); tot.set(k, (tot.get(k) || 0) + Number(r.cost));
+      by.set(p + '\u0000' + k, (by.get(p + '\u0000' + k) || 0) + Number(r.cost));
+    }
+    const ranked = [...tot.keys()].filter((k) => k !== '기타').sort((a, b) => tot.get(b) - tot.get(a) || cmp(a, b));
+    const keep = new Set(ranked.slice(0, 20));
+    const cells = new Map();
+    for (const [pk, v] of by) {
+      const [p, k0] = pk.split('\u0000');
+      const k = keep.has(k0) ? k0 : '기타';
+      cells.set(p + '\u0000' + k, (cells.get(p + '\u0000' + k) || 0) + v);
+    }
+    const keys = ranked.slice(0, 20).concat(cells.size && [...cells.keys()].some((c) => c.endsWith('\u0000기타')) ? ['기타'] : []);
+    return { periods: [...periods].sort(), keys, val: (p, k) => cells.get(p + '\u0000' + k) || 0, has: (p, k) => cells.has(p + '\u0000' + k) };
+  }
+  function curChart(node, legendNode, pv, grain) {
+    const { periods, keys } = pv;
+    let ci = 0;
+    const colors = keys.map((k) => (k === '기타' ? 'var(--cds-chart-muted)' : k === '(태그 없음)' ? 'var(--cds-chart-reference)' : dash.colors[ci++ % dash.colors.length]));
+    legend(legendNode, keys.map((k, i) => ({ name: k, color: colors[i] })));
+    const W = Math.max(280, node.clientWidth), H = 300;
+    const svg = d3.select(node).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`);
+    const rows = periods.map((p) => Object.assign({ p }, ...keys.map((k) => ({ [k]: pv.val(p, k) }))));
+    const layers = d3.stack().keys(keys).offset(d3.stackOffsetDiverging)(rows);
+    const ends = layers.flatMap((l) => l.flatMap((d) => [d[0], d[1]]));
+    const lo = d3.min(ends) || 0, hi = d3.max(ends) || 0;
+    const y = d3.scaleLinear([Math.min(0, lo), hi > 0 ? hi : lo < 0 ? 0 : 1], [H - 24, 10]).nice();
+    const ml = axisWidth(svg, y, compactNum);
+    const x = d3.scalePoint(periods, [ml + 8, W - 12]).padding(periods.length === 1 ? 0.5 : 0);
+    svg.append('g').attr('transform', `translate(${ml},0)`).call(d3.axisLeft(y).ticks(4).tickSize(-(W - ml - 8)).tickFormat(compactNum)).call(axisStyle);
+    const every = Math.ceil(periods.length / Math.max(1, Math.floor((W - ml) / 56)));
+    const lab = (p) => (grain === 'day' ? p.slice(5) : p.slice(2).replace('-', '.'));
+    svg.append('g').attr('transform', `translate(0,${H - 24})`).call(d3.axisBottom(x).tickSize(0).tickPadding(8).tickValues(periods.filter((_, i) => i % every === 0)).tickFormat(lab)).call(axisStyle);
+    layers.forEach((layer, i) => {
+      if (periods.length === 1) {
+        const d = layer[0];
+        svg.append('rect').attr('class', 'cur-area').attr('x', x(periods[0]) - 16).attr('width', 32).attr('y', y(d[1])).attr('height', Math.max(0, y(d[0]) - y(d[1]))).attr('fill', colors[i]);
+      } else {
+        svg.append('path').attr('class', 'cur-area').attr('fill', colors[i]).attr('fill-opacity', 0.9)
+          .attr('d', d3.area().x((d) => x(d.data.p)).y0((d) => y(d[0])).y1((d) => y(d[1]))(layer));
+      }
+    });
+    const t = tip(node.closest('.tb-card'));
+    svg.append('rect').attr('x', ml).attr('y', 0).attr('width', W - ml).attr('height', H - 24).attr('fill', 'transparent')
+      .on('mousemove', (ev) => {
+        const [px] = d3.pointer(ev);
+        const p = periods.reduce((a, b) => (Math.abs(x(b) - px) < Math.abs(x(a) - px) ? b : a));
+        t.show(ev, p, keys.map((k, i) => ({ name: k, color: colors[i], value: fmt2(pv.val(p, k)) })).filter((r) => num0(r.value) !== 0).reverse());
+      })
+      .on('mouseleave', () => t.hide());
+  }
+  const num0 = (s) => Number(String(s).replace(/,/g, ''));
+  function drawCurResources(e, svc) {
+    const t = document.getElementById('cur-res');
+    const cr = dash.data('cur_resources');
+    if (cr.status !== 'ok') return noteRow(t, cr.status === 'error' ? '데이터를 불러오지 못했습니다.' : '불러오는 중…');
+    const rows = cr.data.filter((r) => r && r.entity === e && (!svc || r.service === svc))
+      .sort((a, b) => (Number(b.cost_last) || 0) - (Number(a.cost_last) || 0)).slice(0, 20);
+    const clip = (v) => { const s = String(v); return s.length > 40 ? s.slice(0, 39) + '…' : s; };
+    fillTable(t, rows, [
+      { f: 'resource_id', cls: 'l wrap', fmt: clip }, { f: 'service', cls: 'l' }, { f: 'region', cls: 'l' },
+      { f: 'cost_last', fmt: (v) => fmt2(Number(v) || 0) }, { f: 'cost_prev', fmt: (v) => fmt2(Number(v) || 0) },
+      { f: 'cost_last', render: (td, r) => { const d = (Number(r.cost_last) || 0) - (Number(r.cost_prev) || 0); td.textContent = (d > 0 ? '+' : '') + fmt2(d); td.className = d > 0 ? 'tb-up' : d < 0 ? 'tb-down' : 'tb-neutral'; } },
+      { f: 'tags', cls: 'l wrap', render: (td, r) => {
+        const kv = Object.entries(r.tags && typeof r.tags === 'object' ? r.tags : {});
+        td.textContent = kv.slice(0, 5).map(([k, v]) => clip(`${k}=${v}`)).join(', ') + (kv.length > 5 ? ` 외 ${kv.length - 5}` : '');
+        if (!kv.length) { td.textContent = '—'; td.classList.add('tb-neutral'); }
+      } },
+    ]);
+  }
+  // the CUR run's verified area-cur findings (rows of the run its meta describes)
+  function drawCurNotes(e) {
+    const a = ACCT[e], cur = a && a.sources.cur;
+    const box = document.getElementById('cur-ai'), list = document.getElementById('cur-notes');
+    const none = !!cur && cur.ai === 'none';
+    document.getElementById('cur-ai-none').hidden = !none;
+    const an = dash.data('agent_notes');
+    const mine = !cur || none || an.status !== 'ok' ? [] : an.data.filter((r) => r && r.entity === e);
+    const meta = mine.find((r) => r.kind === 'meta' && isCurMeta(r));
+    const rows = meta ? mine.filter((r) => r.kind === 'finding' && r.area === 'cur' && r.source_fp === meta.source_fp && has(r.title))
+      .sort((x, y) => (Number(x.index) || 0) - (Number(y.index) || 0)) : [];
+    box.hidden = !rows.length;
+    list.replaceChildren(...rows.map((r) => {
+      const li = el('li');
+      const body = el('div');
+      body.append(el('span', 'tb-pill', 'AI 해석'), document.createTextNode(' ' + String(r.detail ?? '')));
+      if (has(r.so_what)) body.append(el('br'), el('span', 'tb-note', String(r.so_what)));
+      li.append(el('div', 'who', String(r.title)), body);
+      return li;
+    }));
+  }
+  function drawCur() {
+    const e = ent(), P = dash.params();
+    const body = document.getElementById('cur-body'), empty = document.getElementById('cur-empty');
+    document.getElementById('cur-vernote').hidden = !P.version;
+    const a = ACCT[e], rep = document.getElementById('cur-report');
+    rep.hidden = !(a && a.sources.cur);
+    if (!rep.hidden) rep.setAttribute('href', reportHref(e, 'cur'));
+    drawCurNotes(e);
+    const cs = dash.data('cur_summary');
+    const s = cs.status === 'ok' ? cs.data.find((r) => r && r.entity === e) : null;
+    if (!s) {
+      body.hidden = true; empty.hidden = false;
+      if (cs.status === 'loading') empty.replaceChildren(el('p', 'tb-note', '불러오는 중…'));
+      else if (cs.status === 'error' && cs.code !== 404) empty.replaceChildren(el('p', 'tb-note', '데이터를 불러오지 못했습니다.'));
+      else {
+        const p = el('p', null, 'CUR 업로드 필요');
+        const a = el('a', null, '업로드 화면으로'); a.href = 'upload.html?acct=' + encodeURIComponent(e || '');
+        empty.replaceChildren(p, a);
+      }
+      return;
+    }
+    empty.hidden = true; body.hidden = false;
+    document.getElementById('cur-sum').textContent = `CUR ${s.first_day}~${s.last_day} · ${s.currency} · 행 ${s.rows}` + (Number(s.dropped_rows) > 0 ? ` · 제외된 행 ${s.dropped_rows}` : '')
+      + (s.truncated === true ? ' · 행이 많아 일부 추이(일별 우선)를 생략했습니다' : '');
+
+    const tr = dash.data('cur_trend');
+    const chart = document.getElementById('cur-chart'), table = document.getElementById('cur-table'), legNode = document.getElementById('cur-legend');
+    chart.replaceChildren(); legNode.replaceChildren();
+    if (failed(chart, tr.status)) { noteRow(table, tr.status === 'error' ? '데이터를 불러오지 못했습니다.' : '불러오는 중…'); drawCurResources(e, ''); return; }
+    const all = tr.data.filter((r) => r && r.entity === e && Number.isFinite(Number(r.cost)));
+    const present = new Set(all.map((r) => r.dim));
+    const dims = [...present].filter((d) => !d.startsWith('tag:')).sort((a, b) => Object.keys(CUR_DIMS).indexOf(a) - Object.keys(CUR_DIMS).indexOf(b))
+      .concat([...present].filter((d) => d.startsWith('tag:')).sort());
+    const notice = document.getElementById('cur-notice');
+    notice.hidden = dims.some((d) => d.startsWith('tag:'));
+    notice.textContent = notice.hidden ? '' : '태그 데이터가 없습니다. 고객 payer 계정에서 비용 할당 태그가 활성화됐는지 확인하세요.';
+    const hasDay = all.some((r) => r.grain === 'day');
+    const dim = dims.includes(P.curdim) ? P.curdim : dims.includes('service') ? 'service' : dims[0];
+    const csvBtn = document.getElementById('cur-csv');
+    if (!dim) { // summary without any trend rows: say so, keep the resources table, nothing to export
+      for (const id of ['cur-dim', 'cur-svc']) document.getElementById(id).replaceChildren();
+      document.getElementById('cur-cov').hidden = true;
+      chart.appendChild(el('div', 'tb-empty', '이 조합의 추이 데이터가 없습니다.'));
+      table.querySelector('thead').replaceChildren(el('tr'));
+      noteRow(table, table.dataset.empty);
+      csvBtn.disabled = true; csvBtn.onclick = null;
+      drawCurResources(e, '');
+      return;
+    }
+    const grain = P.curgrain === 'day' && hasDay ? 'day' : 'month';
+    const dimRows = all.filter((r) => r.dim === dim);
+    const svcs = [...new Set(dimRows.map((r) => r.service).filter((v) => v != null && v !== ''))].sort();
+    const svc = svcs.includes(P.cursvc) ? P.cursvc : '';
+    curSelect(document.getElementById('cur-dim'), dims.map((d) => [d, curDimLabel(d)]), dim, (v) => dash.setParams({ curdim: v }));
+    curSelect(document.getElementById('cur-svc'), [['', '전체'], ...svcs.map((v) => [v, v])], svc, (v) => dash.setParams({ cursvc: v }));
+    curSelect(document.getElementById('cur-grain'), [['month', '월'], ['day', '일', !hasDay]], grain, (v) => dash.setParams({ curgrain: v }));
+
+    const cov = document.getElementById('cur-cov');
+    const cc = dash.data('cur_tag_coverage');
+    const crow = dim.startsWith('tag:') && cc.status === 'ok'
+      ? cc.data.filter((r) => r && r.entity === e && r.tag_key === dim.slice(4)).sort((a, b) => cmp(String(b.month), String(a.month)))[0] : null;
+    cov.hidden = !crow;
+    if (crow) cov.textContent = `태그 적용률 ${Number(crow.pct).toFixed(1)}% (${crow.month}, 비용 기준)`;
+
+    drawCurResources(e, svc);
+    const sel = dimRows.filter((r) => r.grain === grain && (!svc || r.service === svc));
+    table.querySelector('thead').replaceChildren(el('tr'));
+    if (!sel.length) { chart.appendChild(el('div', 'tb-empty', '이 조합의 추이 데이터가 없습니다.')); noteRow(table, table.dataset.empty); csvBtn.disabled = true; csvBtn.onclick = null; return; }
+    const pv = curPivot(sel);
+    curChart(chart, legNode, pv, grain);
+    const head = el('tr');
+    head.append(el('th', 'l', '기간'), ...pv.keys.map((k) => el('th', null, k)), el('th', null, '합계'));
+    table.querySelector('thead').replaceChildren(head);
+    table.querySelector('tbody').replaceChildren(...pv.periods.map((p) => {
+      const row = el('tr');
+      row.appendChild(el('td', 'l', p));
+      for (const k of pv.keys) row.appendChild(el('td', null, fmt2(pv.val(p, k))));
+      row.appendChild(el('td', null, fmt2(d3.sum(pv.keys, (k) => pv.val(p, k)))));
+      return row;
+    }));
+    csvBtn.disabled = false;
+    csvBtn.onclick = () => {
+      const out = [];
+      for (const p of pv.periods) for (const k of pv.keys) if (pv.has(p, k)) out.push({ period: p, key: k, cost: pv.val(p, k) });
+      out.sort((a, b) => cmp(a.period, b.period) || cmp(a.key, b.key));
+      curDownload(out, `cur_${e}_${dim}_${grain}.csv`.replace(/[^A-Za-z0-9_.-]/g, '_'));
+    };
+  }
+
+  function draw() {
+    if (versionGone()) return;
+    const e = ent();
+    setPeriod(state.tab === 'overview' ? null : e);
+    syncTree();
+    drawMeta();
+    if (drawCotNeed()) return;
+    tableStates(document.querySelector(`[data-page="${state.tab}"]`));
+    if (state.tab === 'brief') drawBrief();
+    else if (state.tab === 'unit') drawUnit();
+    else if (state.tab === 'overview') drawOverview();
+    else if (state.tab === 'entity') drawEntity();
+    else if (state.tab === 'workload') drawWorkload();
+    else if (state.tab === 'market') drawMarket();
+    else if (state.tab === 'explore') drawExplore();
+    else if (state.tab === 'method') drawMethod();
+    else if (state.tab === 'cur') drawCur();
+    else if (state.tab === 'accounts') drawAccounts();
+    else if (state.tab === 'bedrock') drawBedrock();
+    else if (state.tab === 'tags') drawTags();
+    else if (state.tab === 'savings') drawSavings();
+    else if (state.tab === 'sa') drawSA();
+  }
+
+  let first = true;
+  dash.onData(() => {
+    if (first) {
+      first = false;
+      const named = location.hash.slice(1);
+      if (tabs.some((t) => t.dataset.tab === named)) { showTab(named, false); return; }
+      showTab('brief', false); return;
+    }
+    draw();
+  });
+});
+</script>
