@@ -27,6 +27,7 @@ do not establish that the rule is deployed.
 | TtobakResearchAgentStack | Legacy Bedrock Agent/tools and AgentCore spans log group | Storage, Knowledge |
 | TtobakWhisperStack | GPU Spot ECS, ECR, production/benchmark tasks | Storage |
 | TtobakFrontendStack | Static site, CloudFront, runtime config and media keys | Gateway, EdgeAuth, Auth |
+| TtobakBillingStack (optional) | Billing BFF Lambda Web Function, code bucket, execution role | Auth |
 
 Most resources use the application region (configured as ap-northeast-2).
 Cross-region producers/consumers use the settings in the app; do not replace
@@ -689,6 +690,64 @@ passes the origin only to `ttobak-api`; FrontendStack publishes only
 change alters the function configuration and publishes a new version for the
 `live` alias without the create-only description workaround. The API role's
 existing table read/write grant covers the conditional put; no new IAM is added.
+
+## Billing BFF stack
+
+`TtobakBillingStack` (`infra/lib/billing-stack.ts`) is optional. `addBillingStack`
+creates it only when both `ttobak:billingDataBucket` and
+`ttobak:billingPlatformTable` are set in context; one without the other fails
+synth. Neither key is checked in yet, so the default app has eleven stacks.
+
+Resources:
+
+- `AWS::Lambda::WebFunction` `ttobak-billing`, one `WebFunctionRevision`
+  (`nodejs24.x`, timeout 60 s, `maxConcurrencyPerEnvironment` 8) and the
+  `WebFunctionEndpoint` `prod` (`HomeRegion`, `IamAuth`, 100% to the revision,
+  `maxEnvironments` 10). No VPC, network connector or security group; the BFF
+  reaches S3 and DynamoDB over public AWS endpoints.
+- Revision environment: `DATA_BUCKET`, `ACCOUNT_TABLE` (`ttobak-main`),
+  `PLATFORM_TABLE`, `PUBLIC_URL` (`https://` + `ttobak:domainName`),
+  `USER_POOL_ID`, `BILLING_ALLOWED_CLIENT_IDS` (the SPA client only) and
+  `NODE_OPTIONS=--max-old-space-size=1536`. No secrets.
+- Execution role trusted by `lambda.amazonaws.com`. It writes logs to
+  `/aws/lambda/web/ttobak-billing` and `/aws/lambda/web/ttobak-billing.local`,
+  reads `accounts/*/versions/*`, `accounts/*/handwritten/*`,
+  `accounts/*/uploads/*` and `data/whats_new_feed.json`, manages uploads under
+  `accounts/*/uploads/*`, writes `jobs/*`, reads and writes the platform table,
+  queries `ttobak-main` `index/GSI1`, and gets `ttobak-main` items only for
+  `ACCOUNT#*` partition keys (`dynamodb:LeadingKeys`). No statement uses
+  `Resource: *`.
+- Dedicated code bucket: versioned, SSE-S3, TLS-only, all public access
+  blocked, retained on delete, no lifecycle rule. Its policy lets
+  `lambda.amazonaws.com` read objects and object versions only for
+  `web-function/ttobak-billing/revision/*`. A `BucketDeployment`
+  (`extract: false`, `prune: false`, `retainOnDelete: true`) uploads the
+  packaged `services/billing/bff/dist` as one content-hashed zip, excluding
+  `node_modules/.bin` symlinks, which the HTTP-origin release coordinator
+  rejects in an assembly. The revision depends on that upload, the bucket
+  policy and the role.
+
+The CDK asset bucket cannot hold Web Function code. It encrypts objects with
+the AWS managed `aws/s3` key, which Lambda cannot use, and it expires
+noncurrent versions. Lambda pins each revision to an object version, and a
+revision whose pinned version disappears fails permanently.
+
+The data bucket and platform table are referenced by name only; the stack never
+creates, imports or deletes them. The `ttobak-main` name is passed as a literal,
+not a StorageStack export. The stack imports only the existing AuthStack exports
+for the user pool and SPA client IDs.
+
+Outputs `FunctionArn`, `EndpointArn` and `EndpointDomain` have no export. The
+operator copies them into `infra/cdk.json` for FrontendStack.
+
+Deployment: `.github/workflows/deploy-billing.yml` runs on pushes to `main` that
+touch `services/billing/**`, `infra/lib/billing-stack.ts` or the workflow, and on
+manual dispatch. It tests and packages the BFF, then runs
+`cdk deploy TtobakBillingStack --exclusively` only when both context keys are
+set; otherwise it skips the deploy. The HTTP-origin release coordinator's
+`STACKS` list does not include this stack. Every workflow that synthesizes the
+app (`test-infra.yml` and both `deploy-infra.yml` jobs) builds the BFF package
+first.
 
 ## Project invitation activation
 

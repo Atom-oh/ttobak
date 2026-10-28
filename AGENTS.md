@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 06104f61e596 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 3aa00178776f · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
 # TTOBAK review context
 
 Shared by Codex, Kiro, and the CI review panel. Extracted from the
@@ -37,7 +37,7 @@ canonical CLAUDE.md; delivery procedures and historical records are omitted.
 | Python | QA, crawler, simulator and document-extraction Lambdas; separate research-agent container | `backend/python/`, each requirements/Dockerfile |
 | Batch STT | GPU Spot ECS; production faster-whisper and separate benchmark engines | `backend/whisper/`, `infra/lib/whisper-stack.ts` |
 | Desktop | Tauri 2/Rust, macOS Core Audio process tap + microphone | `mac-app/src-tauri/` |
-| Infra | CDK TypeScript, eleven stacks | `infra/bin/infra.ts`, `infra/lib/` |
+| Infra | CDK TypeScript, eleven stacks + optional Billing | `infra/bin/infra.ts`, `infra/lib/` |
 | MCP | TypeScript stdio/HTTP adapter of authenticated APIs | `mcp-server/src/`, `mcp-server/package.json` |
 
 Model IDs are function configuration. Go uses `BEDROCK_MODEL_ID` for auxiliary

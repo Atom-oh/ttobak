@@ -14,6 +14,8 @@ on:
       - 'infra/**'
       # GatewayStack bundles the HTTP MCP Lambda from mcp-server.
       - 'mcp-server/**'
+      # TtobakBillingStack stages the Billing BFF package.
+      - 'services/billing/bff/**'
       - 'scripts/operations/http_origin_release.py'
       - 'scripts/operations/test_http_origin_release.py'
       - 'scripts/operations/test_model_cutover.py'
@@ -49,6 +51,14 @@ jobs:
         run: |
           npm ci
           npm run bundle:lambda
+
+      - name: Build Billing BFF package
+        # TtobakBillingStack stages this gitignored output (BucketDeployment
+        # Source.asset); synth and billing-stack.test.ts fail without it.
+        working-directory: services/billing/bff
+        run: |
+          npm ci --no-audit --no-fund
+          npm run package
 
       - name: Infra synth + unit tests
         # `cdk synth` is part of the documented verification (CLAUDE.md:
