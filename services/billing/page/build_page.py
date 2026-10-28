@@ -2,6 +2,8 @@
 Usage (after `npm ci` in this directory): python3 -I build_page.py [--out DIR]
 Writes DIR (default frontend/public/billing-app/, served at /billing-app/):
   index.html, upload.html  body.html / upload.html wrapped in a standalone shell (generated)
+  index.page.N.js, upload.page.N.js  each page's inline <script> blocks, moved out in order
+                           so the CSP needs no inline script (script-src 'self')
   dash-shim.js, tokens.css copied from this directory with a GENERATED header
   vendor/                  d3 and the Pretendard dynamic-subset CSS + its fonts, copied unchanged
 The pages run inside the TTOBAK /billing page's iframe: no cookies, no server-injected
@@ -42,6 +44,23 @@ HEAD = """<!-- %s -->
 <div id="dash-root">
 """
 TAIL = "\n</div></body></html>\n"
+INLINE_SCRIPT = re.compile(r"<script>(.*?)</script>", re.S)
+
+
+def externalize(stem, body):
+    """Move each inline <script> of body into stem.page.N.js, referenced by a classic
+    <script src> at the same position (same order, same parser-blocking execution)."""
+    scripts = {}
+
+    def move(m):
+        name = "%s.page.%d.js" % (stem, len(scripts) + 1)
+        scripts[name] = ("// %s\n" % GENERATED + m.group(1)).encode("utf-8")
+        return '<script src="%s"></script>' % name
+
+    body = INLINE_SCRIPT.sub(move, body)
+    if re.search(r"<script(?![^>]*\ssrc=)[^>]*>", body):
+        raise SystemExit("%s: unsupported inline <script> form" % stem)
+    return body, scripts
 
 
 def read(path, mode="r"):
@@ -53,8 +72,10 @@ def outputs():
     """{relative path: bytes} of the whole output directory."""
     out = {}
     for name, (src, title, extra, link) in PAGES.items():
-        page = HEAD % (GENERATED, html.escape(title), SUBSET_CSS, extra, link) + read(os.path.join(HERE, src)) + TAIL
+        body, scripts = externalize(name[:-len(".html")], read(os.path.join(HERE, src)))
+        page = HEAD % (GENERATED, html.escape(title), SUBSET_CSS, extra, link) + body + TAIL
         out[name] = page.encode("utf-8")
+        out.update(scripts)
     out["dash-shim.js"] = ("// %s\n" % GENERATED + read(os.path.join(HERE, "dash-shim.js"))).encode("utf-8")
     out["tokens.css"] = ("/* %s */\n" % GENERATED + read(os.path.join(HERE, "tokens.css"))).encode("utf-8")
     out["vendor/d3.min.js"] = read(os.path.join(NM, "d3", "dist", "d3.min.js"), "rb")

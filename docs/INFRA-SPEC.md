@@ -822,11 +822,12 @@ and `/api/*`, so `/api/billing/*` wins over `/api/*`.
     SAMEORIGIN`, so only `/billing` can frame them. Every other path keeps
     `frame-ancestors 'none'` and `DENY`, and the default CSP's `frame-src 'self'`
     lets `/billing` frame them.
-  - `script-src` is `'self'` plus the SHA-256 hash of each inline script in
-    `frontend/public/billing-app/index.html` and `upload.html`, computed at
-    synth. There is no `'unsafe-inline'`. A change to those inline scripts needs
-    a FrontendStack deploy before, or with, the frontend publish. Until then the
-    browser blocks the changed scripts.
+  - `script-src` is `'self'` only: no `'unsafe-inline'`, no hashes and no
+    `'wasm-unsafe-eval'`. `services/billing/page/build_page.py` moves each
+    page's inline scripts to `index.page.N.js` and `upload.page.N.js`, loaded by
+    classic `<script src>` tags at the same positions. Its tests reject an
+    inline script or event-handler attribute. Styles keep the application
+    `style-src 'self' 'unsafe-inline'`.
 
 `AWS::Lambda::ResourcePolicy` on the function ARN holds the Web Function's whole
 resource policy. It has one statement: `cloudfront.amazonaws.com` may call

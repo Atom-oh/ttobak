@@ -9,7 +9,7 @@ import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { WEBSOCKET_ORIGIN_HEADER, WEBSOCKET_PATH, WEBSOCKET_STAGE } from './websocket-origin';
 import { billingInsightUrlContext } from './billing-insight';
-import { applicationContentSecurityPolicy, inlineScriptHashes } from './frontend-policy';
+import { applicationContentSecurityPolicy } from './frontend-policy';
 import { Construct } from 'constructs';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -645,10 +645,9 @@ function handler(event) {
       code: cloudfront.FunctionCode.fromFile({ filePath: path.join(__dirname, 'billing-upload-router.js') }),
     });
 
-    // /billing-app/*: the static Billing pages, framed by /billing only. Their
-    // inline scripts are allowed by hash, computed here from the same files
-    // the site build copies (frontend/public/billing-app).
-    const billingAppDir = path.join(__dirname, '../../frontend/public/billing-app');
+    // /billing-app/*: the static Billing pages, framed by /billing only. They
+    // have no inline scripts (build_page.py moves them to *.page.N.js), so
+    // script-src is 'self' alone.
     const billingAppHeaders = new cloudfront.ResponseHeadersPolicy(this, 'BillingAppResponseHeadersPolicy', {
       responseHeadersPolicyName: `ttobak-billing-app-headers-${cdk.Aws.REGION}`,
       securityHeadersBehavior: {
@@ -656,8 +655,7 @@ function handler(event) {
           contentSecurityPolicy: applicationContentSecurityPolicy(
             props.cognitoRegion, this.node.tryGetContext('ttobak:domainName'), assetsBucketName,
             `ttobak-kb-${cdk.Aws.ACCOUNT_ID}`, this.node.tryGetContext('ttobak:cloudfrontDomain'), {
-              frameAncestors: "'self'",
-              scriptHashes: inlineScriptHashes(['index.html', 'upload.html'].map(f => path.join(billingAppDir, f))),
+              frameAncestors: "'self'", scriptSelfOnly: true,
             }),
           override: true,
         },

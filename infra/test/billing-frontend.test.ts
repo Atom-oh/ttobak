@@ -2,7 +2,6 @@ import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
-import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as vm from 'node:vm';
@@ -248,19 +247,20 @@ describe('FrontendStack Billing behaviors', () => {
     expect(headers.FrameOptions).toEqual({ FrameOption: 'SAMEORIGIN', Override: true });
     const csp = directives(cspOf(app));
     expect(csp['frame-ancestors']).toEqual(["'self'"]);
-    // Inline scripts are allowed by exact hash only.
-    expect(csp['script-src']).not.toContain("'unsafe-inline'");
-    expect(csp['script-src']).not.toContain("'wasm-unsafe-eval'");
-    const hashes: string[] = [];
+    // The pages have no inline script (build_page.py externalizes them), so
+    // script-src is 'self' only: no 'unsafe-inline', no hashes, no WASM eval.
+    expect(csp['script-src']).toEqual(["'self'"]);
+    expect(JSON.stringify(cspOf(app))).not.toContain('sha256-');
     for (const file of ['index.html', 'upload.html']) {
       const html = readFileSync(join(BILLING_APP_DIR, file), 'utf8');
-      for (const m of html.matchAll(/<script(\s[^>]*)?>([\s\S]*?)<\/script>/gi)) {
-        if (/\ssrc\s*=/i.test(m[1] ?? '')) continue;
-        hashes.push(`'sha256-${createHash('sha256').update(m[2]).digest('base64')}'`);
+      const tags = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)];
+      expect(tags.length).toBeGreaterThan(0);
+      for (const [, attrs, body] of tags) {
+        expect(attrs).toMatch(/\ssrc="[^"]+"/);
+        expect(body).toBe('');
       }
+      expect(html).not.toMatch(/\son[a-z]+\s*=/);
     }
-    expect(hashes.length).toBeGreaterThan(0);
-    expect(csp['script-src']).toEqual(["'self'", ...hashes]);
     // The rest of the policy is the application one.
     expect(csp['connect-src']).toContain("'self'");
     expect(csp['object-src']).toEqual(["'none'"]);
