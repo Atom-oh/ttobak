@@ -11,6 +11,34 @@ from fileutil import jdump, jload  # noqa: E402
 E = "acct-a"
 
 
+class HtmlKpis(unittest.TestCase):
+    def page(self, d, html):
+        os.makedirs(os.path.join(d, E), exist_ok=True)
+        with open(os.path.join(d, E, "COT_%s_COT360.html" % E), "w", encoding="utf-8") as fh:
+            fh.write(html)
+
+    def test_strip_blocks_keeps_text_and_drops_scripts_and_styles(self):
+        import build_data
+        self.assertEqual(build_data.strip_blocks("a<SCRIPT x>b</script>c<style>d</STYLE>e<script>f"), "ace")
+
+    def test_figures_are_read(self):
+        import build_data
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as d:
+            self.page(d, "<div>Past Month Spend</div> <b>$1,234</b> Amortized <script>Past Month Spend $9 Amortized"
+                         "</script><p>Total Dedup Savings / mo</p> $56 COH")
+            self.assertEqual(build_data.html_kpis(d, E), {"html_last_spend": 1234, "html_coh_dedup": 56})
+
+    def test_untrusted_page_is_read_in_linear_time(self):
+        import time, build_data
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as d:
+            for html in ("<script>" * 100000 + "x", "Past Month Spend " * 100000 + "$1 x",
+                         "Total Dedup Savings / mo " * 100000 + "$1 x"):
+                self.page(d, html)
+                t = time.monotonic()
+                build_data.html_kpis(d, E)
+                self.assertLess(time.monotonic() - t, 2.0, html[:30])
+
+
 class BedrockTags(unittest.TestCase):
     def test_empty_resource_summary(self):
         import bedrock_tags

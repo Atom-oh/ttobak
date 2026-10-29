@@ -79,12 +79,31 @@ def sp_best(sprec, term, pay):
             "savings_pct": round(sav / covered * 100, 1) if covered else 0.0}
 
 
+def strip_blocks(h):
+    """The page without <script>/<style> elements, in one pass (the page is untrusted: a lazy regex rescans to the end
+    for every unclosed opener). An unclosed element drops the rest of the page, as a browser would not render it."""
+    low, out, i = h.lower(), [], 0
+    while True:
+        s = min((p for p in (low.find("<script", i), low.find("<style", i)) if p >= 0), default=-1)
+        if s < 0:
+            out.append(h[i:])
+            return "".join(out)
+        out.append(h[i:s])
+        close = "</script>" if low.startswith("<script", s) else "</style>"
+        c = low.find(close, s)
+        if c < 0:
+            return "".join(out)
+        i = c + len(close)
+
+
 def html_kpis(root, e):
     h = open(os.path.join(root, e, f"COT_{e}_COT360.html"), encoding="utf-8").read()
-    t = re.sub(r"<script.*?</script>|<style.*?</style>", "", h, flags=re.S)
+    t = strip_blocks(h)
     t = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", t))
-    spend = re.search(r"Past Month Spend.*?\$([\d,]+) Amortized", t)
-    coh = re.search(r"Total Dedup Savings / mo.*?(\$[\d,]+|—) COH", t)
+    # bounded gaps: the label and its figure sit together on the page, and an unbounded lazy gap is quadratic
+    # when the label repeats without the figure
+    spend = re.search(r"Past Month Spend.{0,200}?\$([\d,]+) Amortized", t)
+    coh = re.search(r"Total Dedup Savings / mo.{0,200}?(\$[\d,]+|—) COH", t)
     return {"html_last_spend": int(spend.group(1).replace(",", "")) if spend else None,
             "html_coh_dedup": int(coh.group(1)[1:].replace(",", "")) if coh and coh.group(1) != "—" else None}
 
