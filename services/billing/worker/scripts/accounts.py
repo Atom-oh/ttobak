@@ -11,7 +11,7 @@ import collections, csv, datetime, json, math, os, re, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # -I drops the script dir
 from entities import ENTITIES  # noqa: E402
 from period import H1, H2, LAST, MONTHS, PRESENT  # noqa: E402
-from tag_services import norm_name, precedence_for  # noqa: E402  one naming rule for accounts and services
+from tag_services import first_index, norm_name, precedence_for  # noqa: E402  one naming rule for accounts and services
 import tagkeys as TK  # noqa: E402
 MK = ["m%d" % (i + 1) for i in range(len(MONTHS))]  # m1..m6, m6 = latest; a slot with no month is null
 SIZED = {"Ec2Instance", "Ec2AutoScalingGroup"}  # currentResourceSummary is the instance type
@@ -95,23 +95,24 @@ def coh_resources(base, e):
     if s is None:
         return []
     hdr, rows, _ = s
-    col = {n: first_col(hdr, n) for n in ["accountId", "actionType", "currentResourceType", "estimatedMonthlyCost",
-                                          "region", "tags", "currentResourceSummary", "resourceArn"]}
+    ix = first_index(hdr)
     prec = precedence_for(base, e)
     best = {}
     for r in rows:
-        if len(r) <= col["resourceArn"] or r[1].strip() != e or r[col["actionType"]].strip() in COMMITMENT_ACTIONS:
+        # as tag_services.resources: an absent column (older or trimmed export) or a short row's cut-off trailing
+        # cells (an untagged resource ends before tags) read as empty
+        cell = lambda n: r[ix[n]] if n in ix and ix[n] < len(r) else ""  # noqa: E731
+        if len(r) < 2 or r[1].strip() != e or cell("actionType").strip() in COMMITMENT_ACTIONS:
             continue
-        r = r + [""] * (len(hdr) - len(r))  # a short row's missing trailing cells (e.g. no tags) are empty
-        arn = r[col["resourceArn"]].strip() or r[col["accountId"]] + "/" + str(len(best))
-        kind = r[col["currentResourceType"]].strip()
+        arn = cell("resourceArn").strip() or cell("accountId") + "/" + str(len(best))
+        kind = cell("currentResourceType").strip()
         rec = {
-            "account": unwrap(r[col["accountId"]]),
+            "account": unwrap(cell("accountId")),
             "resource_kind": kind,
-            "instance_type": r[col["currentResourceSummary"]].strip() if kind in SIZED else "—",
-            "region": r[col["region"]].strip() or "—",
-            "tag_service": tag_service(r[col["tags"]], prec),
-            "cost": num(r[col["estimatedMonthlyCost"]]),
+            "instance_type": cell("currentResourceSummary").strip() if kind in SIZED else "—",
+            "region": cell("region").strip() or "—",
+            "tag_service": tag_service(cell("tags"), prec),
+            "cost": num(cell("estimatedMonthlyCost")),
         }
         if arn not in best or rec["cost"] > best[arn]["cost"]:
             best[arn] = rec

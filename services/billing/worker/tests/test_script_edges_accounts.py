@@ -197,6 +197,26 @@ class ShortCohRows(unittest.TestCase):
         self.assertEqual([(r["recs"], r["est_savings"], r["est_cost"], r["top_changes"]) for r in rs],
                          [(1, 2.0, 10.0, ["m5.large→m5.small×1"])])
 
+    def produce(self, hdr, rows):
+        import accounts, cot360_metrics
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as d:
+            os.makedirs(os.path.join(d, E))
+            with open(os.path.join(d, E, "Data_COH_All.csv"), "w", newline="", encoding="utf-8") as f:
+                csv.writer(f).writerows([hdr] + rows)
+            return accounts.coh_resources(d, E), cot360_metrics.coh_by_workload(d, E)
+
+    def test_export_without_a_tags_column(self):
+        # an older or trimmed export has no tags column (raw_export and tag_services accept it too)
+        res, wl = self.produce(COH_HDR[:-1], [SHORT_COH])
+        self.assertEqual([(r["account"], r["tag_service"], r["cost"]) for r in res], [("111111111111", "—", 10.0)])
+        self.assertEqual([(r["recs"], r["est_cost"]) for r in wl], [(1, 10.0)])
+
+    def test_row_cut_before_the_resource_arn(self):
+        # an ARN-less recommendation without tags ends after its savings cell: it still counts
+        res, wl = self.produce(COH_HDR, [SHORT_COH[:-1]])
+        self.assertEqual([(r["account"], r["cost"]) for r in res], [("111111111111", 10.0)])
+        self.assertEqual([(r["recs"], r["est_savings"], r["est_cost"]) for r in wl], [(1, 2.0, 10.0)])
+
 
 def strict_json(path):
     """Parse as the BFF's JSON.parse would: NaN/Infinity tokens are an error."""

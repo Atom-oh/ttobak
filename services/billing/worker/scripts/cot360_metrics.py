@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # -I drops the s
 from entities import ENTITIES  # noqa: E402
 import period as P  # noqa: E402
 import tagkeys as TK  # noqa: E402
-from tag_services import service_of, precedence_for  # noqa: E402
+from tag_services import first_index, service_of, precedence_for  # noqa: E402
 
 UNIT = {"um_ec2": "EC2", "um_rds": "RDS", "um_elasticache": "ElastiCache", "um_opensearch": "OpenSearch"}
 # COT360 writes months as "September 2026": map every month of the period's years (and the year around them)
@@ -144,23 +144,23 @@ def coh_by_workload(base, e):
     hi = next((i for i, r in enumerate(rows[:10]) if len(r) > 2 and r[1] == "Report Name"), None)
     if hi is None:
         return []
-    ix = {}
-    for j, h in enumerate(rows[hi]):
-        ix.setdefault(h.strip(), j)
+    ix = first_index(rows[hi])
     agg = collections.defaultdict(lambda: [0, 0.0, 0.0, collections.Counter()])
     prec = precedence_for(base, e)
     for r in rows[hi + 1:]:
-        if len(r) <= ix["resourceArn"] or r[1].strip() != e or not r[ix["recommendationId"]].strip():
+        # as tag_services.resources: an absent column or a short row's cut-off trailing cells read as empty
+        cell = lambda n: r[ix[n]] if n in ix and ix[n] < len(r) else ""  # noqa: E731
+        if len(r) < 2 or r[1].strip() != e or not cell("recommendationId").strip():
             continue
-        r = r + [""] * (len(rows[hi]) - len(r))  # a short row's missing trailing cells (e.g. no tags) are empty
-        tags = TK.parse_cell(r[ix["tags"]])
-        svc, _ = service_of({"type": r[ix["currentResourceType"]], "tags": tags}, prec)
-        a = agg[(svc, r[ix["actionType"]])]
+        tags = TK.parse_cell(cell("tags"))
+        kind, summary = cell("currentResourceType"), cell("currentResourceSummary")
+        svc, _ = service_of({"type": kind, "tags": tags}, prec)
+        a = agg[(svc, cell("actionType"))]
         a[0] += 1
-        a[1] += num(r[ix["estimatedMonthlySavings"]])
-        a[2] += num(r[ix["estimatedMonthlyCost"]])
-        if r[ix["currentResourceSummary"]] and r[ix["currentResourceType"]] in ("Ec2Instance", "Ec2AutoScalingGroup"):
-            a[3][f'{r[ix["currentResourceSummary"]]}→{r[ix["recommendedResourceSummary"]]}'] += 1
+        a[1] += num(cell("estimatedMonthlySavings"))
+        a[2] += num(cell("estimatedMonthlyCost"))
+        if summary and kind in ("Ec2Instance", "Ec2AutoScalingGroup"):
+            a[3][f'{summary}→{cell("recommendedResourceSummary")}'] += 1
     return [{"entity": e, "workload": s, "action": act, "action_ko": ACTION_KO.get(act, act), "recs": n,
              "est_savings": round(sv, 2), "est_cost": round(c, 2), "top_changes": [f"{k}×{v}" for k, v in moves.most_common(3)]}
             for (s, act), (n, sv, c, moves) in sorted(agg.items(), key=lambda kv: -kv[1][1])]
