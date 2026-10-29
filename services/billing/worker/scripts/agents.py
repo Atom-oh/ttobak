@@ -234,8 +234,13 @@ def source_fp(D, e):
 
 
 def digest_fp(D, e, areas=None):
-    """Fingerprint of the digests one run read; LEGACY_AREAS for notes written before areas were recorded."""
-    return fp({a: digest(D, e, a) for a in (areas or LEGACY_AREAS)})
+    """Fingerprint of the digests one run read; LEGACY_AREAS for notes written before areas were recorded. A non-USD
+    CUR currency is part of it (its digests are not sent), so a relabel alone makes the notes stale; USD adds nothing."""
+    d = {a: digest(D, e, a) for a in (areas or LEGACY_AREAS)}
+    code = unsupported_currency(D, e)
+    if code is not None:
+        d["_unsupported_currency"] = code
+    return fp(d)
 
 
 def area_index(D, e, a):
@@ -728,15 +733,31 @@ def _compact(s):
     return re.sub(r"[^0-9a-z가-힣]+", "", _norm(s))
 
 
+def _joins_to(low, ct):
+    """Some run of adjacent whole words of low, joined without separators, is ct ("q pay" for "qpay")."""
+    words = [w for w in re.split(r"[^0-9a-z가-힣]+", low) if w]
+    for i in range(len(words)):
+        acc = ""
+        for w in words[i:]:
+            acc += w
+            if acc == ct:
+                return True
+            if len(acc) >= len(ct) or not ct.startswith(acc):
+                break
+    return False
+
+
 def _has_term(low, t):
-    # short ASCII names only as whole words (a tag "pay" must not block "payments"); every name also with spaces and
-    # punctuation removed on both sides ("acme pay" for "acme-pay"), and longer names and Korean anywhere. A Korean
-    # name is compared compacted at any length: a short one spelled with a space ("카드 은행") is still that name
+    # short ASCII names only as whole words (a tag "pay" must not block "payments"), also split or respelled across
+    # adjacent words ("Q Pay", "q-pay" for "qpay"); every name also with spaces and punctuation removed on both sides
+    # ("acme pay" for "acme-pay"), and longer names and Korean anywhere. A Korean name is compared compacted at any
+    # length: a short one spelled with a space ("카드 은행") is still that name
     ct = _compact(t)
     if (len(ct) >= 5 or not t.isascii()) and ct and ct in _compact(low):
         return True
     if len(t) < 5 and t.isascii():
-        return re.search(r"(?<![a-z0-9])" + re.escape(t) + r"(?![a-z0-9])", low) is not None
+        return bool(ct) and (re.search(r"(?<![a-z0-9])" + re.escape(t) + r"(?![a-z0-9])", low) is not None
+                             or _joins_to(low, ct))
     return t in low
 
 
@@ -958,7 +979,8 @@ def generate(D, invoke, cache, model_id=MODEL, workers=6, areas=None, synth=True
     order = {"meta": 0, "headline": 1, "action": 2, "link": 3, "finding": 4}
     notes.sort(key=lambda r: (ents.index(r["entity"]), order[r["kind"]], r.get("rank", 0), r.get("area", ""), r.get("index", 0)))
     return {"notes": notes, "sessions": sessions, "market": market,
-            "ai": "none" if calls["failed"] and not calls["ok"] else "ok"}
+            # no successful call (all failed, or none attempted because every digest was withheld): no analysis
+            "ai": "none" if not calls["ok"] else "ok"}
 
 
 def _fsi(D, ents, signals, findings, ex, call, collect, search, stats):
@@ -1048,7 +1070,7 @@ def _foreign_rows(path):
 def run(d, areas=None, synth=True, extras=True, invoke=None, cache=None, model_id=MODEL, workers=6, feed_path=None, search=None):
     """Agents over one data dir. Writes agent_notes.json, and with extras sessions.json and market.json.
     COT jobs: run(d); CUR jobs: run(d, areas=CUR_AREAS, synth=False, extras=False). Missing datasets count as empty.
-    Returns {"ai": "none"} when every model call failed, else {"ai": "ok"}."""
+    Returns {"ai": "none"} when no model call succeeded (all failed or none was made), else {"ai": "ok"}."""
     D = load(d)
     feed = load_feed(feed_path or os.path.join(d, "whats_new_feed.json")) if extras else None
     out = generate(D, invoke if invoke is not None else bedrock_invoke(model_id=model_id), cache if cache is not None else cache_dir(),
