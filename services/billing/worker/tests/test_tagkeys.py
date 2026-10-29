@@ -69,5 +69,41 @@ class TagKeys(unittest.TestCase):
                 self.assertEqual(jload(os.path.join(out, fn)), [])
 
 
+class NormName(unittest.TestCase):
+    LEGACY = r"(-[0-9a-f]{6,}|-\d+|-asg|-node(group)?s?)+$"
+
+    def legacy(self, v):
+        import re
+        return re.sub(r"^eks-", "", re.sub(self.LEGACY, "", v.strip(), flags=re.I))
+
+    def test_known_outputs(self):
+        from tag_services import norm_name
+        cases = {"web-asg": "web", "eks-api-nodegroup-1a2b3c4d": "api", "batch-Nodes-12": "batch",
+                 "db-01": "db", " svc-ABCDEF0-asg ": "svc", "eks-x": "x", "a--1": "a-", "-123": "",
+                 "name-12ab": "name-12ab", "node": "node", "my-app": "my-app", "app-node-x": "app-node-x",
+                 "eks-eks-1": "eks", "v-nodegroups-NODE-7": "v"}
+        for v, want in cases.items():
+            self.assertEqual(norm_name(v), want, v)
+            self.assertEqual(self.legacy(v), want, v)
+
+    def test_matches_legacy_regex_on_short_inputs(self):
+        import random
+        from tag_services import norm_name
+        rnd = random.Random(7)
+        parts = ["-", "1", "a", "f", "A", "g", "0", "-asg", "-node", "-nodegroup", "s", "eks-", " ", "x", "-123456"]
+        for _ in range(5000):
+            v = "".join(rnd.choice(parts) for _ in range(rnd.randint(0, 8)))
+            self.assertEqual(norm_name(v), self.legacy(v), repr(v))
+
+    def test_adversarial_value_is_linear(self):
+        import time
+        from tag_services import norm_name
+        # every "-123456" segment matches two alternatives; the legacy regex backtracked 2**n times on the "!"
+        for v in ("svc" + "-123456" * 40 + "!", "-1" * 500000 + "x"):
+            t = time.monotonic()
+            self.assertEqual(norm_name(v), v)
+            self.assertLess(time.monotonic() - t, 1.0)
+
+
 if __name__ == "__main__":
     unittest.main()
