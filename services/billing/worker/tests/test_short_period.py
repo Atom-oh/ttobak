@@ -131,6 +131,25 @@ class ShortPeriod(unittest.TestCase):
         self.assertNotIn("None", text)
         self.assertNotIn("%)", text)
 
+    def test_bedrock_kpis_match_the_chart_series(self):
+        # native Bedrock service lines count in the chart series, so the KPIs must count them too (SageMaker is not Bedrock)
+        months = ["2026-07", "2026-08", "2026-09"]
+        svc = {"Amazon EC2": [100, 100, 100], "Amazon Bedrock": [5, 6, 30], "Amazon SageMaker": [9, 9, 9]}
+        mkt = [("Claude Sonnet 4 (Amazon Bedrock Edition)", [40, 50, 120])]
+        csvd, root = fixture(self.d, months, svc, mkt, [40.0, 50.0, 60.0])
+        _, load = run(self.d, months, csvd, root)
+        k = load("kpis")[0]
+        chart = [r["bedrock"] for r in load("spend_monthly")]
+        self.assertEqual(chart, [45, 56, 150])
+        self.assertEqual((k["bedrock_first"], k["bedrock_last"], k["bedrock_6m"]), (chart[0], chart[-1], sum(chart)))
+
+    def test_native_only_bedrock_kpi_not_zero(self):
+        months = ["2026-08", "2026-09"]
+        csvd, root = fixture(self.d, months, {"Amazon EC2": [100, 100], "Amazon Bedrock": [7, 8]}, [], [40.0, 50.0])
+        _, load = run(self.d, months, csvd, root)
+        k = load("kpis")[0]
+        self.assertEqual((k["bedrock_first"], k["bedrock_last"], k["bedrock_6m"]), (7, 8, 15))
+
 
 if __name__ == "__main__":
     unittest.main()
