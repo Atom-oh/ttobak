@@ -1,6 +1,6 @@
 """Account, tag-service and COT360 metric scripts on edge-shaped inputs (short COH rows, NaN cells, dashboard merge).
 Synthetic data only."""
-import csv, json, os, subprocess, sys, tempfile, unittest
+import collections, csv, json, os, subprocess, sys, tempfile, unittest
 from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -97,6 +97,13 @@ class TagServices(unittest.TestCase):
             self.odd_coh(d)
             got = {r["workload"]: r["recs"] for r in cot360_metrics.coh_by_workload(d, E)}
             self.assertEqual(got, {"svc": 1, "(태그 없음)": len(self.ODD_TAGS)})
+
+    def test_odd_tag_cells_in_account_resources(self):
+        import accounts
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as d:
+            self.odd_coh(d)
+            got = collections.Counter(r["tag_service"] for r in accounts.coh_resources(d, E))
+            self.assertEqual(got, {"svc": 1, "—": len(self.ODD_TAGS)}, "the tag_services parser: no crash, odd items skipped")
 
     def test_new_workload_needs_most_resources_recent(self):
         import tag_services

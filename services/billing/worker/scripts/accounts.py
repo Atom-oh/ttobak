@@ -5,13 +5,14 @@ Usage: python3 -I accounts.py <csv_out_dir> <dashboard_data_dir>
 Writes accounts.json and account_resources.json into dashboard_data_dir.
 COH costs are a monthly estimate snapshot of resources with recommendations, not a trend.
 """
-import ast, collections, csv, datetime, json, math, os, re, sys
+import collections, csv, datetime, json, math, os, re, sys
 
 # tag key precedence for a "service name" (shared with the tag analysis)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # -I drops the script dir
 from entities import ENTITIES  # noqa: E402
 from period import H1, H2, LAST, MONTHS, PRESENT  # noqa: E402
 from tag_services import norm_name, precedence_for  # noqa: E402  one naming rule for accounts and services
+import tagkeys as TK  # noqa: E402
 MK = ["m%d" % (i + 1) for i in range(len(MONTHS))]  # m1..m6, m6 = latest; a slot with no month is null
 SIZED = {"Ec2Instance", "Ec2AutoScalingGroup"}  # currentResourceSummary is the instance type
 # commitment purchases (RI/SP) are not running resources
@@ -58,10 +59,7 @@ def unwrap(k):
 
 
 def tag_service(tags_raw, precedence):
-    try:
-        tags = {t["key"]: t["value"] for t in ast.literal_eval(tags_raw or "[]")}
-    except Exception:
-        tags = {}
+    tags = TK.parse_cell(tags_raw)  # the parser precedence_for uses: string key/value pairs, odd items skipped
     for k in precedence:
         v = (tags.get(k) or "").strip()
         if v:
