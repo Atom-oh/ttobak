@@ -107,6 +107,12 @@ export class AuthStack extends cdk.Stack {
       autoVerify: {
         email: true,
       },
+      // A changed email takes effect only after the user verifies it, so an unverified
+      // address never becomes the sign-in identity (pool shared with cc-on-bedrock, whose
+      // own ADR-016 covers that; see ADR-057 here).
+      keepOriginal: {
+        email: true,
+      },
       standardAttributes: {
         email: {
           required: true,
@@ -199,11 +205,14 @@ export class AuthStack extends cdk.Stack {
       ? [`https://${props.cloudFrontDomain}`, 'http://localhost:3000']
       : ['http://localhost:3000'];
 
-    // Every client may write only `name`. Unset WriteAttributes would let any signed-in
-    // user call UpdateUserAttributes on every mutable attribute, including the
-    // custom:* attributes cc-on-bedrock uses for authorization (department budgets,
-    // IAM role naming). Those are set through Admin* APIs only.
-    const clientWriteAttributes = new cognito.ClientAttributes().withStandardAttributes({ fullname: true });
+    // Every client may write only `name` and `email`. Unset WriteAttributes lets any
+    // signed-in user call UpdateUserAttributes on every mutable attribute, including the
+    // custom:* attributes cc-on-bedrock uses for authorization (department budgets, IAM
+    // role naming); those are set through Admin* APIs only. `email` must stay writable
+    // because it is a required attribute (Cognito rejects a client that cannot write a
+    // required attribute); keepOriginal below holds an email change until it is verified.
+    // The remaining self-service email change is an accepted risk (ADR-057).
+    const clientWriteAttributes = new cognito.ClientAttributes().withStandardAttributes({ fullname: true, email: true });
 
     this.userPoolClient = this.userPool.addClient('TtobakAppClient', {
       userPoolClientName: 'ttobak-app-client',
