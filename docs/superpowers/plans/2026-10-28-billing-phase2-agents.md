@@ -127,9 +127,12 @@ linux/arm64 on the `ttobak-arm` runner.
    `test_simultaneous_sessions_same_job_one_runs`, `test_delayed_retry_after_start_no_writes`,
    `test_replay_after_session_end_no_writes`.
 3. **An ambiguous handoff aborts accepted work.** Only a definitive rejection fails
-   and unlocks. An uncertain result is resolved by the `RUN#` item or by fencing it.
+   and unlocks, and a rejection that follows a timed-out, disconnected or 5xx attempt
+   is not definitive. An uncertain result is resolved by the `RUN#` item or by fencing it.
    Tests in Task 3: `test_ambiguous_invoke_with_run_item_hands_off`,
-   `test_ambiguous_invoke_fenced_then_fails`.
+   `test_ambiguous_invoke_fenced_then_fails`,
+   `test_ambiguous_then_rejected_resolves_through_run_item`; Task 6:
+   `test_rejected_after_lost_acceptance_hands_off`.
 4. **The runtime reads another Account's data.** Checks:
    - the session policy (Task 4, `test_runtime_data_session_is_account_scoped`);
    - a live denial canary on every job (Task 4, `test_cross_account_list_canary_fail_closed`);
@@ -266,9 +269,16 @@ UNVERIFIED (each is checked at the start of the task that needs it):
   - **Accepted:** HTTP 200 `{"status": "accepted" | "duplicate"}`. Ingest exits 0
     and keeps the lock.
   - **Definitive rejection:** `AccessDeniedException`, `ValidationException`,
-    `ResourceNotFoundException`, or HTTP 400 `{"status": "rejected"}`. The app
+    `ResourceNotFoundException`, or HTTP 400 `{"status": "rejected"}`, but only
+    when it is the outcome of the **first** attempt of this handoff. The app
     rejects before acquiring. Ingest marks `agents` failed, finishes failed and
     releases the lock.
+  - **Rejection after a non-definitive attempt is ambiguous.** If an earlier attempt
+    with the same session ID timed out, lost its connection or returned 5xx, that
+    attempt may have been accepted: the runtime may already own `RUN#{jobId}` and
+    will publish or `fail_running` later. Such a rejection never takes the failure
+    path directly. It is resolved exactly like an ambiguous result (below): the
+    `RUN#` re-read, then the fence. Test: `test_ambiguous_then_rejected_resolves_through_run_item`.
   - **Ambiguous:** timeout, connection error or 5xx after bounded retries with the
     same session ID. Ingest polls `RUN#{jobId}` (consistent read, 5 s interval, 60 s).
     - If the item is present, the job was handed off: exit 0.
@@ -463,6 +473,9 @@ docs/runbooks/billing-phase2-release.md   acceptance evidence + Phase 4 cut-over
   - `test_definitive_rejection_marks_agents_failed_and_releases_lock`
   - `test_ambiguous_invoke_with_run_item_hands_off`: no failure write; the lock is kept.
   - `test_ambiguous_invoke_fenced_then_fails`: the fence is written, then the failure path runs.
+  - `test_ambiguous_then_rejected_resolves_through_run_item`: attempt 1 times out after the
+    fake runtime acquired `RUN#`, attempt 2 raises `AccessDeniedException`; no failure write,
+    the lock is kept and the job is handed off.
   - `test_fence_lost_to_runtime_hands_off`
   - `test_invoke_retries_keep_session_id`
   - `test_session_id_length_and_determinism`
@@ -602,13 +615,18 @@ modify `Dockerfile.ingest` and `.dockerignore`.
   with a prefix in `prefixes`. Otherwise it raises `ValueError`.
 - `handler(event, context) -> {"status": str}`:
   - `ACCEPTED` returns.
-  - `REJECTED` raises `ValueError`, which goes to the DLQ after retries.
+  - `REJECTED` first re-reads `RUN#{jobId}` (consistent read). Present means an earlier
+    async attempt (a retried invocation, or the client's second request) was accepted:
+    return handed off. Absent raises `ValueError`, which goes to the DLQ after retries.
+    The dispatcher role gets `dynamodb:GetItem` on that table for `ACCT#*` keys only.
   - `AMBIGUOUS` raises `RuntimeError` so the async retry re-invokes with the same session.
 - Client: `botocore.config.Config(connect_timeout=3, read_timeout=10, retries={"total_max_attempts": 2, "mode": "standard"})`; `invoke_agents(..., attempts=1)`; function timeout 30 s.
 - `package.sh` builds `dispatch/dist/` from `index.py`, `../worker/handoff.py` and
   `pip install --target dist boto3==1.42.97` (U5). Workflows run it before synth.
 
 - [ ] **Step 1: Failing tests:**
+  - `test_rejected_after_lost_acceptance_hands_off`: a prior attempt was accepted (fake
+    `RUN#` present), this attempt is `REJECTED`; the handler returns without raising.
   - `test_rerun_key_accepted`
   - `test_analyze_key_rejected`
   - `test_other_bucket_rejected`
