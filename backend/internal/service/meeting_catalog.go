@@ -117,20 +117,22 @@ func regularMeetingPhase(tab string) string {
 	}
 	return "owned"
 }
-func (s *MeetingCatalogService) member(ctx context.Context, user, account string) (*accountReadGrant, error) {
-	grant, err := resolveAccountReadGrant(ctx, s.repo, account, user)
+func (s *MeetingCatalogService) member(ctx context.Context, user, account string) (*model.AccountMember, error) {
+	m, err := s.repo.GetMember(ctx, account, user)
 	if err != nil {
 		return nil, err
 	}
-	if grant != nil && !grant.inherited() && (grant.Member.AccountID != account || grant.Member.UserID != user) {
+	if m == nil {
+		return nil, nil
+	}
+	if m.AccountID != account || m.UserID != user {
 		return nil, ErrReadingData
 	}
-	return grant, nil
+	return m, nil
 }
 func (s *MeetingCatalogService) item(ctx context.Context, user, tab, phase, account string, row repository.MeetingCatalogCandidate) (*model.MeetingListItem, string, string, error) {
 	var share *model.Share
 	var accountMember *model.AccountMember
-	var accountAccess *accountReadGrant
 	var err error
 	owner := row.OwnerID
 	if phase == "direct" {
@@ -177,9 +179,8 @@ func (s *MeetingCatalogService) item(ctx context.Context, user, tab, phase, acco
 		if member == nil {
 			return nil, "", "", nil
 		}
-		grant = member.fingerprint()
-		accountAccess = member
-		accountMember = member.privacyMember()
+		grant = accountReadingGrant(member)
+		accountMember = member
 		// Prefer a present direct/edit share without suppressing this actual emitted
 		// path merely because another index might eventually contain the meeting.
 		share, err = s.repo.GetShare(ctx, user, m.MeetingID)
@@ -202,16 +203,12 @@ func (s *MeetingCatalogService) item(ctx context.Context, user, tab, phase, acco
 			if member == nil {
 				return nil, "", "", nil
 			}
-			grant = readingHash([]interface{}{share, member.fingerprint()})
-			accountAccess = member
-			accountMember = member.privacyMember()
+			grant = readingHash([]interface{}{share, accountReadingGrant(member)})
+			accountMember = member
 		} else {
 			grant = readingHash(share)
 		}
 		permission = share.Permission
-		if share.Origin == model.ShareOriginAccount && accountAccess != nil && accountAccess.inherited() {
-			permission = model.PermissionRead
-		}
 		sharedBy = &share.OwnerEmail
 	}
 	if owner == user && tab == "shared" {
@@ -300,7 +297,7 @@ func (s *MeetingCatalogService) discovery(ctx context.Context, id MeetingCatalog
 		c.Index++
 		c.NavDone = c.Index == len(o.accounts)
 	} else {
-		page, err := queryReadableAccountCandidates(ctx, s.repo, id.UserID, c.NavAfter, 1)
+		page, err := s.repo.QueryNavigationCandidates(ctx, id.UserID, "accounts", "", c.NavAfter, 1)
 		if err != nil {
 			return false, err
 		}
@@ -318,7 +315,7 @@ func (s *MeetingCatalogService) discovery(ctx context.Context, id MeetingCatalog
 			return false, err
 		}
 		if m != nil {
-			c.Account, c.Grant, c.Phase = account, m.fingerprint(), "team"
+			c.Account, c.Grant, c.Phase = account, accountReadingGrant(m), "team"
 			return false, nil
 		}
 	}
@@ -385,7 +382,7 @@ func (s *MeetingCatalogService) Read(ctx context.Context, id MeetingCatalogIdent
 		if err != nil {
 			return err
 		}
-		if m == nil || m.fingerprint() != c.Grant {
+		if m == nil || accountReadingGrant(m) != c.Grant {
 			return ErrStaleReadingCursor
 		}
 		return nil
