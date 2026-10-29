@@ -143,7 +143,7 @@ func (s *VaultReadingService) source(ctx context.Context, user, kind, account, i
 		if err != nil {
 			return nil, err
 		}
-		if access != nil {
+		if validAccountReadIdentity(access, accountID, user) {
 			accountData, err = s.repo.GetAccount(ctx, accountID)
 			if err != nil {
 				return nil, err

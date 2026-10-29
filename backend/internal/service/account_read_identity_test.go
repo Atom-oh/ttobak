@@ -20,8 +20,11 @@ func TestDocumentCatalogAndVaultRejectMalformedDirectMemberIdentity(t *testing.T
 			}
 			vault, vrepo := vaultReadingFixture()
 			vrepo.members["a|reader"] = &bad
-			if source, err := vault.source(ctx, "reader", "document", "d", "a"); source != nil || !errors.Is(err, ErrForbidden) {
+			if source, err := vault.source(ctx, "reader", "document", "a", "d"); source != nil || !errors.Is(err, ErrForbidden) {
 				t.Fatalf("vault source accepted mismatched direct identity: %+v/%v", source, err)
+			}
+			if source, err := vault.source(ctx, "reader", "meeting", "", "m"); err != nil || source == nil || source.accountName != "" {
+				t.Fatalf("owned meeting exposed an unauthorized Account name: %+v/%v", source, err)
 			}
 			grant, err := resolveAccountReadGrant(ctx, vrepo, "a", "reader")
 			if err != nil {
