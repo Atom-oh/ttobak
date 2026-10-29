@@ -55,13 +55,13 @@ def ec2(e, growth, mix):
     L, F = p["lab"](p["last"]), p["lab"](p["first"])
     first, last = m[p["first"]], m[p["last"]]
     d_total = last["total"] - first["total"]
-    # a short period has no earlier half: d_h2_h1 is then the later-half level, not a change
-    up = sorted((r for r in g if r["d_h2_h1"] > 0), key=lambda r: -r["d_h2_h1"])[:3] if p["h1"] else []
+    # a short period has no earlier half: d_h2_h1 is null there (no change to report)
+    up = sorted((r for r in g if (r["d_h2_h1"] or 0) > 0), key=lambda r: -r["d_h2_h1"])[:3] if p["h1"] else []
     if up:
         items = ", ".join(f"{r['instance_type']}(+{usd(r['d_h2_h1'])}/월, {top_purchase(r['purchase_mix_last'])})" for r in up)
         out.append(("growth", f"EC2 사용액은 {F} {usd(first['total'])} → {L} {usd(last['total'])}({'+' if d_total >= 0 else ''}{usd(d_total)}). "
                               f"최근 3개월 월평균이 가장 많이 늘어난 유형은 {items}."))
-    down = sorted((r for r in g if r["d_h2_h1"] < 0), key=lambda r: r["d_h2_h1"])[:2] if p["h1"] else []
+    down = sorted((r for r in g if (r["d_h2_h1"] or 0) < 0), key=lambda r: r["d_h2_h1"])[:2] if p["h1"] else []
     if down:
         out.append(("info", "가장 많이 줄어든 유형은 " + ", ".join(f"{r['instance_type']}({usd(r['d_h2_h1'])}/월)" for r in down)
                     + ". 같은 계열의 다른 크기·세대가 함께 늘었다면 교체(리사이징·세대 전환)로 볼 수 있습니다."))
@@ -93,7 +93,8 @@ def accounts(e, accts, svcs):
     top3 = a[:3]
     out.append(("info", f"연결 계정 {len(a)}개 중 상위 3개({', '.join(r['name'] for r in top3)})가 {L} 지출의 "
                         f"{sum(r['share_last'] for r in top3) * 100:.1f}%를 차지합니다."))
-    hot = sorted((r for r in a if r["kind"] in ("신규", "급증")), key=lambda r: -r["d_h2_h1"])
+    # a null change (short period) sorts as none; ties keep the latest-month order of a
+    hot = sorted((r for r in a if r["kind"] in ("신규", "급증")), key=lambda r: -(r["d_h2_h1"] or 0))
     for r in hot[:4]:
         svc = [s for s in r.get("services_by_tag") or [] if s != "—"]
         where = (f" 태그로 보면 {', '.join(svc)} 워크로드" if svc else

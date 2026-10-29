@@ -53,12 +53,21 @@ class ShortPeriodGrowth(unittest.TestCase):
         ms = SHORT[0]["months"]
         mix = [{"entity": E, "month": m, "total": 5000.0, "by_arch": {}, "by_generation": {}, "by_purchase": {"OD": 5000.0},
                 "gpu_cost": 0.0} for m in ms]
-        # trend.stats with an empty earlier half: h1 averages to 0, so d_h2_h1 equals the later-half level
-        growth = [{"entity": E, "instance_type": "m6i.large", "d_h2_h1": 5000.0, "purchase_mix_last": {"OD": 1.0},
-                   "is_new": False, "last": 5000.0}]
+        for d in (None, 5000.0):  # ec2_types writes null; a level read as a change must not be reported either
+            growth = [{"entity": E, "instance_type": "m6i.large", "d_h2_h1": d, "purchase_mix_last": {"OD": 1.0},
+                       "is_new": False, "last": 5000.0}]
+            with mock.patch.object(insights, "PERIODS", SHORT):
+                out = insights.ec2(E, growth, mix)
+            self.assertFalse([t for _, t in out if "가장 많이 늘어난" in t], out)
+
+    def test_new_account_without_a_change(self):
+        def acct(n, last):
+            return {"entity": E, "account": n * 12, "name": "a" + n, "kind": "신규", "last": last, "share_last": 0.1,
+                    "m4": 0.0, "m5": 0.0, "m6": last, "d_h2_h1": None, "pct_h2_h1": None}
         with mock.patch.object(insights, "PERIODS", SHORT):
-            out = insights.ec2(E, growth, mix)
-        self.assertFalse([t for _, t in out if "가장 많이 늘어난" in t], out)
+            out = insights.accounts(E, [acct("1", 100.0), acct("2", 900.0)], [])
+        self.assertEqual([t.split(":")[0] for sev, t in out if sev == "new"], ["신규 계정 a2(222222222222)",
+                                                                              "신규 계정 a1(111111111111)"])
 
 
 if __name__ == "__main__":
