@@ -618,13 +618,23 @@ modify `Dockerfile.ingest` and `.dockerignore`.
   - `REJECTED` first re-reads `RUN#{jobId}` (consistent read). Present means an earlier
     async attempt (a retried invocation, or the client's second request) was accepted:
     return handed off. Absent raises `ValueError`, which goes to the DLQ after retries.
-    The dispatcher role gets `dynamodb:GetItem` on that table for `ACCT#*` keys only.
+  - The account for that key is not in the event or the job key (the BFF names rerun
+    jobs by version and time, `services/billing/bff/lib/uploads.js`). Before invoking,
+    the handler reads the job object once: `GetObject` on the exact key, at most 16 KiB
+    (`Range: bytes=0-16383`, rejected if `ContentLength` is larger), parsed as JSON and
+    validated (`acct` matches `ACCT_ID`, `kind == "rerun"`, `version` matches `VERSION_ID`).
+    Invalid objects raise `ValueError` without invoking. The validated `acct` builds both
+    the session payload and the `ACCT#{acct}` / `RUN#{jobId}` key.
+  - Dispatcher role: `s3:GetObject` on `jobs/r*.json` (plus `billing-acceptance/r*.json`
+    only with acceptance context) and `dynamodb:GetItem` with `LeadingKeys` `ACCT#*`.
   - `AMBIGUOUS` raises `RuntimeError` so the async retry re-invokes with the same session.
 - Client: `botocore.config.Config(connect_timeout=3, read_timeout=10, retries={"total_max_attempts": 2, "mode": "standard"})`; `invoke_agents(..., attempts=1)`; function timeout 30 s.
 - `package.sh` builds `dispatch/dist/` from `index.py`, `../worker/handoff.py` and
   `pip install --target dist boto3==1.42.97` (U5). Workflows run it before synth.
 
 - [ ] **Step 1: Failing tests:**
+  - `test_job_object_read_is_bounded_and_validated`: over 16 KiB, bad `acct`, wrong `kind`
+    each raise `ValueError` with no invoke.
   - `test_rejected_after_lost_acceptance_hands_off`: a prior attempt was accepted (fake
     `RUN#` present), this attempt is `REJECTED`; the handler returns without raising.
   - `test_rerun_key_accepted`
@@ -700,9 +710,12 @@ modify `Dockerfile.ingest` and `.dockerignore`.
   - `IngestSg`: no ingress; egress 443 to the VPC CIDR and the S3/DDB prefix lists.
   - Dispatcher:
     - Python 3.12 ARM64, no VPC, 30 s, asset `dispatch/dist`;
-    - an explicit role with logs only on its own log group and `InvokeAgentRuntime`
-      on the runtime (no `AWSLambdaBasicExecutionRole`);
-    - async retries 2, on-failure `SqsDestination(JobDlq)`.
+    - an explicit role with logs only on its own log group, `InvokeAgentRuntime`
+      on the runtime, and the two Task 6 reads (`s3:GetObject` on rerun job keys,
+      `dynamodb:GetItem` on `ACCT#*`); no `AWSLambdaBasicExecutionRole`;
+    - async retries 2 and `maxEventAge` 15 min, on-failure `SqsDestination(JobDlq)`;
+      the EventBridge target also sets `maxEventAge` 15 min, so every delivery of a job
+      ends within a known window (used by the Task 8 rollback).
   - `JobDlq` plus `JobDlqAlarm`.
   - `IngestJobRule` (`jobs/u`, EcsTask on the `Isolated` group, `JOB_KEY` from
     `$.detail.object.key`, retries 2, DLQ) and `RerunJobRule` (`jobs/r`,
@@ -742,7 +755,8 @@ modify `Dockerfile.ingest` and `.dockerignore`.
   - `runtime_role_bedrock_model_scope`
   - `gateway_grant_only_with_web_search`
   - `web_search_context_consistency`: region and gateway-ID mismatch throw.
-  - `dispatcher_not_in_vpc_and_only_invokes_runtime`
+  - `dispatcher_not_in_vpc_and_scoped`: invoke on the runtime, `GetObject` only on rerun
+    job keys, `GetItem` only on `ACCT#*`; `maxEventAge` 15 min on the function and target.
   - `bucket_and_table_not_created`
   - `outputs_are_not_exported`
   - `asset_paths_resolve_from_dirname`: synth from a different `cwd` succeeds.
@@ -785,7 +799,9 @@ modify `Dockerfile.ingest` and `.dockerignore`.
     disposition:
     - every `jobs/` object with `LastModified ≥ T0 − 4 h` whose UP row is not
       terminal (`done`, `needs_review`, `failed`, `discarded`);
-    - every `jobs/r*` object after T0 whose META `ai_<src>` is unchanged;
+    - every `jobs/r*` object after T0 whose own `RUN#{jobId}` is absent or `running`
+      (job-specific evidence; META `ai_<src>` is shared state that other versions and
+      rollbacks rewrite, so it is never used as completion evidence);
     - every UP row `queued`/`running`.
   - **Activate:** merge `ttobak:billingJobsEnabled: "true"`, deploy, confirm the
     rules are `ENABLED` and record T1 (confirmed activation).
@@ -796,9 +812,19 @@ modify `Dockerfile.ingest` and `.dockerignore`.
   - **Replay:** for each final-manifest item still unresolved, copy the job object onto
     itself, which emits an Object Created event. `RUN#` and the claim make a replay
     of anything already owned a no-op.
-  - **Rollback:** disable the new rules, then drain the new side (no running ingest
-    tasks, no `RUN#` in `running` younger than the job timeout). Re-enable the
-    companion rule and replay the new side's manifest the same way.
+  - **Rollback:** disable the new rules, then drain the new side:
+    1. **Fence every outstanding job first.** For each item of the new side's manifest
+       whose `RUN#{jobId}` is absent, write the fence (`state = fenced`,
+       `attribute_not_exists`). A queued Lambda async retry or a late EventBridge
+       delivery that arrives later finds `fenced` and returns without running, so
+       nothing can acquire after this point.
+    2. Wait until there are no running ingest tasks, no `RUN#` in `running` younger
+       than the job timeout, and at least the 15 min `maxEventAge` has passed since the
+       rules were disabled.
+    3. Re-enable the companion rule and replay the fenced items through the companion
+       the same way. A fenced job is never replayed to the new side.
+    - Test (Phase 4 tool): `test_rollback_fences_before_reenable`: a dispatcher retry
+      delivered after the fence does not acquire `RUN#`.
 
 - [ ] **Step 1: Failing `scripts/ci/test_billing_workflows.py`** (unittest, parses YAML):
   - `test_every_self_hosted_job_has_fork_guard`: every job in `test-billing.yml`
