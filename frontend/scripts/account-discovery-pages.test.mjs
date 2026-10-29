@@ -56,6 +56,16 @@ test('Account discovery consumes an empty page with an advancing cursor', async 
   assert.equal(new URL(f.requests[2], 'https://example.invalid').searchParams.get('cursor'), 'later');
 });
 
+test('Account discovery unions declared overlapping routes and keeps current permissions', async () => {
+  const direct = { ...child, role: 'am', accessPermission: 'edit', inheritedFromAccountId: undefined };
+  const f = fixture([
+    { accounts: [parent, direct], nextCursor: 'next', overlapPossible: true, unionKey: 'accountId' },
+    { accounts: [child], overlapPossible: true, unionKey: 'accountId' },
+  ]);
+  assert.deepEqual(JSON.parse(JSON.stringify(await f.api.list())), { accounts: [parent, child] });
+  assert.equal(f.requests.length, 2);
+});
+
 for (const [name, pages] of [
   ['repeated cursor', [{ accounts: [parent], nextCursor: 'again' }, { accounts: [child], nextCursor: 'again' }]],
   ['duplicate Account on a later page', [{ accounts: [parent], nextCursor: 'next' }, { accounts: [parent] }]],
@@ -63,6 +73,8 @@ for (const [name, pages] of [
   ['malformed cursor', [{ accounts: [parent], nextCursor: '../private' }]],
   ['oversized cursor', [{ accounts: [parent], nextCursor: 'x'.repeat(2049) }]],
   ['malformed Account list', [{ accounts: null }]],
+  ['unsupported overlap key', [{ accounts: [parent], overlapPossible: true, unionKey: 'email' }]],
+  ['malformed overlap marker', [{ accounts: [parent], overlapPossible: 'yes', unionKey: 'accountId' }]],
 ]) {
   test(`Account discovery fails explicitly for ${name}`, async () => {
     const f = fixture(pages);
