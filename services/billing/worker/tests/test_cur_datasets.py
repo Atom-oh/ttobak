@@ -107,6 +107,18 @@ class Datasets(Tmp):
         self.assertAlmostEqual(sig["ledger"]["base"], 400.0)
         self.assertNotIn("small", sig)  # $40/month stays under the $50 floor; 30x inflation would have made it a surge
 
+    def test_daily_history_then_monthly_latest_bill_is_not_inflated(self):
+        # earlier bills carried over at daily granularity, the latest bill exported monthly (dated on the 1st)
+        import datetime
+        rows = []
+        d = datetime.date(2026, 7, 1)
+        while d <= datetime.date(2026, 8, 31):
+            rows.append(nrow(d.isoformat(), cost=10.0, tags={"user:Service": "flat"}))
+            d += datetime.timedelta(days=1)
+        rows.append(nrow("2026-09-01", cost=300.0, tags={"user:Service": "flat"}))  # the same ~$300/month, monthly
+        sig = self.signals(rows)
+        self.assertNotIn("flat", sig)  # 1/30 coverage on the monthly month would read a 30x surge
+
     def test_daily_partial_edge_months(self):
         # daily rows from 2026-08-21 to 2026-10-10: the first and last months are partial, September is full
         import datetime
