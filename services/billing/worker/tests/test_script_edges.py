@@ -23,6 +23,20 @@ class BedrockTags(unittest.TestCase):
         self.assertEqual(out["gpu_instances"], [["g5.xlarge", 7]])
         self.assertEqual(out["keys"]["app"]["values"][0]["gpu_cost"], 7)
 
+    def test_one_row_per_resource(self):
+        import bedrock_tags
+        arn = "arn:aws:ec2:ap-northeast-2:111111111111:instance/i-1"
+        rec = lambda rid, a, cost: {"recommendationId": rid, "resourceArn": a, "currentResourceType": "Ec2Instance",  # noqa: E731
+                                    "currentResourceSummary": "g5.xlarge", "_cost": cost, "_tags": {"app": "a"}}
+        recs = [rec("r1", arn, 100.0), rec("r2", arn, 120.0), rec("r3", "", 10.0), rec("r4", "", 10.0)]
+        with mock.patch.object(bedrock_tags.C, "recs", return_value=recs):
+            out = bedrock_tags.tags(E)
+        self.assertEqual((out["resources"], out["tagged"], out["cost"]), (3, 3, 140), "highest cost per ARN; no-ARN rows stand alone")
+        v = out["keys"]["app"]["values"][0]
+        self.assertEqual((v["n"], v["cost"], v["by_type"], v["gpu_cost"]), (3, 140, {"EC2": 140}, 140))
+        self.assertEqual(out["keys"]["app"]["n"], 3)
+        self.assertEqual(out["gpu_instances"], [["g5.xlarge", 140]])
+
 
 class SpPurchase(unittest.TestCase):
     def test_compute_sp_lever_ignores_other_plan_types(self):
