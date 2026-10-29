@@ -372,7 +372,6 @@ func (s *MeetingCatalogService) Read(ctx context.Context, id MeetingCatalogIdent
 			}
 		}
 		return json.Marshal(readingObject{"kind": "meeting_catalog", "phase": "discovery", "discoveryPending": true,
-			"overlapPossible": true, "unionKey": "meetingId",
 			"page": readingObject{"complete": complete, "nextCursor": cursor}})
 	}
 	if c.Phase != "owned" && c.Phase != "direct" && c.Phase != "team" {
