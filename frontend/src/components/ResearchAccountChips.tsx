@@ -26,8 +26,8 @@ export default function ResearchAccountChips({ researchId, accountIds, onChange 
   if (accounts.length === 0) return null;
 
   const toggle = async (accountId: string) => {
-    if (!accounts.some(account => account.accountId === accountId && isEditableAccount(account))) return;
     const linked = accountIds.includes(accountId);
+    if (!linked && !accounts.some(account => account.accountId === accountId && isEditableAccount(account))) return;
     setBusyId(accountId);
     setError(null);
     try {
@@ -55,7 +55,7 @@ export default function ResearchAccountChips({ researchId, accountIds, onChange 
             <button
               key={a.accountId}
               onClick={() => toggle(a.accountId)}
-              disabled={busyId === a.accountId || !isEditableAccount(a)}
+              disabled={busyId === a.accountId || (!linked && !isEditableAccount(a))}
               className={`inline-flex items-center gap-1 text-xs font-medium px-3 py-1.5 rounded-full border transition-colors disabled:opacity-50 ${
                 linked
                   ? 'bg-primary text-white border-primary'
