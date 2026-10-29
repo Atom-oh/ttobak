@@ -229,3 +229,25 @@ test('parent mutation selector excludes inherited-only Accounts', () => {
   assert.match(html, /<option value="parent">Direct Account<\/option>/);
   assert.doesNotMatch(html, /<option value="child">/);
 });
+
+test('SA preparation offers only direct Accounts for private meeting binding', () => {
+  const { html } = render('record/SAPreparation', {
+    states: { 0: accessibleAccounts }, pathname: '/record',
+    props: { value: '', title: '', accountId: 'child', onChange() {}, onTitleChange() {}, onAccountChange() {} },
+  });
+  assert.match(html, /<option value="parent">Direct Account<\/option>/);
+  assert.doesNotMatch(html, /<option value="child"/);
+});
+
+test('ReferencePanel retains inherited Account browsing and readable catalog entries', () => {
+  const { html } = render('ReferencePanel', {
+    states: {
+      2: accessibleAccounts, 3: false,
+      6: { items: [{ id: 'child-document', title: 'Inherited reference', href: '/accounts/child/docs/document' }], loading: false, loaded: true, limited: false },
+    },
+    pathname: '/record', props: { accountId: 'child', onAccountChange() {} },
+  });
+  assert.match(html, /<option value="child" selected="">/);
+  assert.match(html, /href="\/accounts\/child\/docs\/document"/);
+  assert.match(html, /Inherited reference/);
+});
