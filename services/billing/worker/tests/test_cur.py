@@ -16,7 +16,7 @@ normalize.THREADS = 1
 CUR2 = {
     "line_item_line_item_type": "VARCHAR", "line_item_unblended_cost": "DOUBLE",
     "line_item_usage_start_date": "TIMESTAMP", "line_item_currency_code": "VARCHAR",
-    "line_item_product_code": "VARCHAR", "product_servicecode": "VARCHAR", "line_item_usage_type": "VARCHAR",
+    "bill_billing_period_start_date": "TIMESTAMP", "line_item_product_code": "VARCHAR", "product_servicecode": "VARCHAR", "line_item_usage_type": "VARCHAR",
     "product_region_code": "VARCHAR", "line_item_resource_id": "VARCHAR", "bill_payer_account_id": "VARCHAR",
     "line_item_usage_account_id": "VARCHAR", "reservation_effective_cost": "DOUBLE",
     "savings_plan_savings_plan_effective_cost": "DOUBLE",
@@ -34,6 +34,9 @@ def row(**kw):
             "line_item_resource_id": "i-0abc", "bill_payer_account_id": "111111111111",
             "line_item_usage_account_id": "222222222222"}
     base.update(kw)
+    day = base["line_item_usage_start_date"]
+    if "bill_billing_period_start_date" not in kw and day is not None:  # the usage month's bill unless a test says
+        base["bill_billing_period_start_date"] = str(day)[:7] + "-01 00:00:00"
     return base
 
 
@@ -136,7 +139,8 @@ class Normalize(Tmp):
     def test_service_falls_back_to_product_code_and_optional_columns(self):
         cols = {k: v for k, v in CUR2.items() if k in (
             "line_item_line_item_type", "line_item_unblended_cost", "line_item_usage_start_date",
-            "line_item_currency_code", "line_item_product_code", "product_servicecode")}
+            "line_item_currency_code", "bill_billing_period_start_date", "line_item_product_code",
+            "product_servicecode")}
         rows = [row(product_servicecode=""), row(product_servicecode=None, line_item_product_code="AmazonS3")]
         s = normalize.run([write_file(self.f("a.parquet"), rows, cols)], self.out)
         got = read_out(self.out)
@@ -147,12 +151,14 @@ class Normalize(Tmp):
     def test_legacy_columns_mapped(self):
         cols = {"lineItem/LineItemType": "VARCHAR", "lineItem/UnblendedCost": "VARCHAR",
                 "lineItem/UsageStartDate": "VARCHAR", "lineItem/CurrencyCode": "VARCHAR",
+                "bill/BillingPeriodStartDate": "VARCHAR",
                 "lineItem/ProductCode": "VARCHAR", "product/servicecode": "VARCHAR", "product/region": "VARCHAR",
                 "lineItem/UsageType": "VARCHAR", "lineItem/ResourceId": "VARCHAR", "bill/PayerAccountId": "VARCHAR",
                 "lineItem/UsageAccountId": "VARCHAR", "resourceTags/user:Team": "VARCHAR",
                 "resourceTags/user:Env": "VARCHAR"}
         rows = [{"lineItem/LineItemType": "Usage", "lineItem/UnblendedCost": "2.5",
                  "lineItem/UsageStartDate": "2026-08-05T01:00:00Z", "lineItem/CurrencyCode": "USD",
+                 "bill/BillingPeriodStartDate": "2026-08-01T00:00:00Z",
                  "lineItem/ProductCode": "AmazonEC2", "product/servicecode": "", "product/region": "us-east-1",
                  "lineItem/UsageType": "BoxUsage", "lineItem/ResourceId": "i-1", "bill/PayerAccountId": "111",
                  "lineItem/UsageAccountId": "222", "resourceTags/user:Team": "pay", "resourceTags/user:Env": ""}]
@@ -162,8 +168,8 @@ class Normalize(Tmp):
         r = read_out(self.out)[0]
         self.assertEqual(s["format"], "legacy-csv")
         self.assertEqual(r["tags"], {"user:Team": "pay"})
-        self.assertEqual((r["service"], r["region"], r["month"], r["payer_account"], r["linked_account"]),
-                         ("AmazonEC2", "us-east-1", "2026-08", "111", "222"))
+        self.assertEqual((r["service"], r["region"], r["month"], r["payer_account"], r["linked_account"],
+                          r["billing_period"]), ("AmazonEC2", "us-east-1", "2026-08", "111", "222", "2026-08"))
         self.assertAlmostEqual(r["cost"], 2.5)
 
     def test_cur2_map_tags(self):
@@ -218,6 +224,74 @@ class Normalize(Tmp):
             tot[r["month"]] = tot.get(r["month"], 0) + r["cost"]
         self.assertAlmostEqual(tot["2026-08"], 2.0)
         self.assertAlmostEqual(tot["2026-07"], 5.0)
+
+    def _month_totals(self):
+        tot = {}
+        for r in read_out(self.out):
+            tot[r["month"]] = tot.get(r["month"], 0) + r["cost"]
+        return tot
+
+    def test_merge_late_rows_of_next_bill_keep_carried_month(self):
+        prev = os.path.join(self.d, "prev")
+        normalize.run([write_file(self.f("old.parquet"), [
+            row(line_item_usage_start_date="2026-08-%02d 00:00:00" % d, line_item_unblended_cost=10.0,
+                line_item_resource_id="aug-%d" % d) for d in range(1, 11)], CUR2)], prev)
+        new = write_file(self.f("new.parquet"), [
+            row(line_item_usage_start_date="2026-09-02 00:00:00", line_item_unblended_cost=4.0, line_item_resource_id="sep"),
+            # dated in August, billed in September: late line items of the September bill
+            row(line_item_usage_start_date="2026-08-31 00:00:00", bill_billing_period_start_date="2026-09-01 00:00:00",
+                line_item_unblended_cost=1.5, line_item_resource_id="late")], CUR2)
+        s = normalize.run([new], self.out, prev_dir=prev)
+        self.assertEqual(s["months"], ["2026-08", "2026-09"])
+        self.assertEqual(s["rows"], 12)
+        tot = self._month_totals()
+        self.assertAlmostEqual(tot["2026-08"], 101.5)
+        self.assertAlmostEqual(tot["2026-09"], 4.0)
+
+    def test_merge_redelivered_bill_replaces_its_rows(self):
+        prev = os.path.join(self.d, "prev")
+        normalize.run([write_file(self.f("old.parquet"), [
+            row(line_item_usage_start_date="2026-08-10 00:00:00", line_item_unblended_cost=7.0, line_item_resource_id="a"),
+            row(line_item_usage_start_date="2026-09-03 00:00:00", line_item_unblended_cost=3.0, line_item_resource_id="b"),
+            row(line_item_usage_start_date="2026-08-31 00:00:00", bill_billing_period_start_date="2026-09-01 00:00:00",
+                line_item_unblended_cost=1.0, line_item_resource_id="late-v1")], CUR2)], prev)
+        new = write_file(self.f("new.parquet"), [
+            row(line_item_usage_start_date="2026-09-04 00:00:00", line_item_unblended_cost=5.0, line_item_resource_id="c"),
+            row(line_item_usage_start_date="2026-08-31 00:00:00", bill_billing_period_start_date="2026-09-01 00:00:00",
+                line_item_unblended_cost=2.0, line_item_resource_id="late-v2")], CUR2)
+        normalize.run([new], self.out, prev_dir=prev)
+        self.assertEqual(sorted(r["resource_id"] for r in read_out(self.out)), ["a", "c", "late-v2"])
+        tot = self._month_totals()
+        self.assertAlmostEqual(tot["2026-08"], 9.0)
+        self.assertAlmostEqual(tot["2026-09"], 5.0)
+
+    def test_merge_carried_file_without_billing_period_uses_its_months(self):
+        prev = os.path.join(self.d, "prev")
+        os.makedirs(prev)
+        c = duckdb.connect()
+        c.execute("COPY (SELECT DATE '2026-07-10' AS usage_date, '2026-07' AS month, 5.0 AS cost, 'a' AS resource_id "
+                  "UNION ALL SELECT DATE '2026-08-10', '2026-08', 7.0, 'b') TO '%s' (FORMAT parquet)"
+                  % os.path.join(prev, "part-0.parquet"))
+        c.close()
+        new = write_file(self.f("new.parquet"), [
+            row(line_item_usage_start_date="2026-08-11 00:00:00", line_item_unblended_cost=2.0, line_item_resource_id="c"),
+            row(line_item_usage_start_date="2026-07-31 00:00:00", bill_billing_period_start_date="2026-08-01 00:00:00",
+                line_item_unblended_cost=1.0, line_item_resource_id="late")], CUR2)
+        normalize.run([new], self.out, prev_dir=prev)
+        self.assertEqual(sorted(r["resource_id"] for r in read_out(self.out)), ["a", "c", "late"])
+
+    def test_billing_period_column_required(self):
+        cols = {k: v for k, v in CUR2.items() if k != "bill_billing_period_start_date"}
+        with self.assertRaises(normalize.CurRejected) as cm:
+            normalize.run([write_file(self.f("a.parquet"), [row()], cols)], self.out)
+        self.assertEqual(cm.exception.reason, "필수 열 누락: bill_billing_period_start_date")
+
+    def test_unreadable_billing_period_is_a_bad_row(self):
+        cols = {k: "VARCHAR" for k in CUR2 if k != "resource_tags"}
+        rows = [row(line_item_unblended_cost="1") for _ in range(2000)]
+        rows.append(row(bill_billing_period_start_date="soon", line_item_resource_id="bad"))
+        s = normalize.run([write_file(self.f("a.csv.gz"), rows, cols, kind="csv")], self.out)
+        self.assertEqual((s["rows"], s["dropped_rows"]), (2000, 1))
 
     def test_merge_currency_mismatch_rejected(self):
         prev = os.path.join(self.d, "prev")
