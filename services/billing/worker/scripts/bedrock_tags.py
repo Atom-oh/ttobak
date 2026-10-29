@@ -60,11 +60,23 @@ def ec2_type(r):
     return w[0] if w and r["currentResourceType"] == "Ec2Instance" else ""
 
 
+def per_resource(rs):
+    """One row per resource (a resource can carry several recommendations; keep its highest cost, as
+    tag_services.resources and accounts.coh_resources do). A row without a resourceArn stands for itself, keyed by
+    its recommendationId."""
+    best = {}
+    for i, r in enumerate(rs):
+        k = str(r.get("resourceArn") or "").strip() or "rec:" + (str(r.get("recommendationId") or "").strip() or str(i))
+        if k not in best or r["_cost"] > best[k]["_cost"]:
+            best[k] = r
+    return list(best.values())
+
+
 def tags(e):
     rs = C.recs(e)
     if not rs:
         return None
-    cost_rs = [r for r in rs if r["currentResourceType"] not in ("ComputeSavingsPlans", "RdsReservedInstances", "DynamoDbReservedCapacity")]
+    cost_rs = per_resource([r for r in rs if r["currentResourceType"] not in ("ComputeSavingsPlans", "RdsReservedInstances", "DynamoDbReservedCapacity")])
     tot_cost = sum(r["_cost"] for r in cost_rs)
     tagged = [r for r in cost_rs if r["_tags"]]
     out = {"resources": len(cost_rs), "tagged": len(tagged), "cost": round(tot_cost),
