@@ -121,13 +121,15 @@ type AccountMemberDTO struct {
 }
 
 type AccountResponse struct {
-	AccountID       string   `json:"accountId"`
-	ParentAccountID string   `json:"parentAccountId,omitempty"`
-	Name            string   `json:"name"`
-	Aliases         []string `json:"aliases,omitempty"`
-	Domains         []string `json:"domains,omitempty"`
-	Industry        string   `json:"industry,omitempty"`
-	OwnerUserID     string   `json:"ownerUserId"`
+	AccessPermission       string   `json:"accessPermission,omitempty"`
+	InheritedFromAccountID string   `json:"inheritedFromAccountId,omitempty"`
+	AccountID              string   `json:"accountId"`
+	ParentAccountID        string   `json:"parentAccountId,omitempty"`
+	Name                   string   `json:"name"`
+	Aliases                []string `json:"aliases,omitempty"`
+	Domains                []string `json:"domains,omitempty"`
+	Industry               string   `json:"industry,omitempty"`
+	OwnerUserID            string   `json:"ownerUserId"`
 	// Initial invitation hint only; explicit resend rechecks current status.
 	OwnerInvitationPending bool               `json:"ownerInvitationPending"`
 	Members                []AccountMemberDTO `json:"members"`
@@ -136,10 +138,12 @@ type AccountResponse struct {
 
 // AccountSummary is the list-view item for "my accounts".
 type AccountSummary struct {
-	AccountID       string `json:"accountId"`
-	ParentAccountID string `json:"parentAccountId,omitempty"`
-	Name            string `json:"name"`
-	Role            string `json:"role"`
+	AccessPermission       string `json:"accessPermission,omitempty"`
+	InheritedFromAccountID string `json:"inheritedFromAccountId,omitempty"`
+	AccountID              string `json:"accountId"`
+	ParentAccountID        string `json:"parentAccountId,omitempty"`
+	Name                   string `json:"name"`
+	Role                   string `json:"role"`
 }
 
 const (
@@ -359,13 +363,15 @@ type PutDocumentRequest struct {
 }
 
 type AccountDocumentDTO struct {
-	DocID        string   `json:"docId"`
-	Title        string   `json:"title"`
-	DocType      string   `json:"docType,omitempty"`
-	Path         string   `json:"path,omitempty"`
-	Links        []string `json:"links,omitempty"`
-	FileName     string   `json:"fileName,omitempty"`
-	SourceUserID string   `json:"sourceUserId"`
+	AccessPermission       string   `json:"accessPermission,omitempty"`
+	InheritedFromAccountID string   `json:"inheritedFromAccountId,omitempty"`
+	DocID                  string   `json:"docId"`
+	Title                  string   `json:"title"`
+	DocType                string   `json:"docType,omitempty"`
+	Path                   string   `json:"path,omitempty"`
+	Links                  []string `json:"links,omitempty"`
+	FileName               string   `json:"fileName,omitempty"`
+	SourceUserID           string   `json:"sourceUserId"`
 	// SharedBy is set only on a document the caller received via a per-user
 	// share (see PrefixDocShare) -- it carries the owner's email and doubles
 	// as the frontend's "this is read-only, not mine" marker.

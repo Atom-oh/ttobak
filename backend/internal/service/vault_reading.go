@@ -213,7 +213,7 @@ func (s *VaultReadingService) manifest(ctx context.Context, user string, o vault
 		if c.Offset != 0 || c.Revision != "" || c.After != "" || (c.NavAfter != "" && !readingID.MatchString(c.NavAfter)) {
 			return nil, ErrInvalidReadingCursor
 		}
-		page, err := s.repo.QueryNavigationCandidates(ctx, user, "accounts", "", c.NavAfter, 1)
+		page, err := queryReadableAccountCandidates(ctx, s.repo, user, c.NavAfter, 1)
 		if err != nil {
 			return nil, err
 		}
@@ -224,12 +224,12 @@ func (s *VaultReadingService) manifest(ctx context.Context, user string, o vault
 		complete := c.NavDone
 		if len(page.IDs) > 0 {
 			account := page.IDs[0]
-			m, err := s.repo.GetMember(ctx, account, user)
+			access, err := resolveAccountReadGrant(ctx, s.repo, account, user)
 			if err != nil {
 				return nil, err
 			}
-			if m != nil && m.AccountID == account && m.UserID == user {
-				c.Account, c.Grant, c.Phase = account, accountReadingGrant(m), "account_docs"
+			if access != nil {
+				c.Account, c.Grant, c.Phase = account, access.fingerprint(), "account_docs"
 				complete = false
 			}
 		}
@@ -255,11 +255,11 @@ func (s *VaultReadingService) manifest(ctx context.Context, user string, o vault
 		if !readingID.MatchString(c.Account) {
 			return ErrInvalidReadingCursor
 		}
-		m, err := s.repo.GetMember(ctx, c.Account, user)
+		access, err := resolveAccountReadGrant(ctx, s.repo, c.Account, user)
 		if err != nil {
 			return err
 		}
-		if m == nil || m.AccountID != c.Account || m.UserID != user || accountReadingGrant(m) != c.Grant {
+		if access == nil || access.fingerprint() != c.Grant {
 			return ErrStaleReadingCursor
 		}
 		return nil

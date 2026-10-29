@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -895,5 +897,40 @@ func TestHandlerAddMember_InvitationServiceUnavailable(t *testing.T) {
 	}
 	if resp.Error.Code != model.ErrCodeInternalError {
 		t.Errorf("code = %q, want %q", resp.Error.Code, model.ErrCodeInternalError)
+	}
+}
+
+func TestHandlerListAccountsPaginationAndLegacyContract(t *testing.T) {
+	h, repo := newStubAccountHandler()
+	for _, id := range []string{"a", "b"} {
+		repo.accounts[id] = &model.Account{AccountID: id, Name: id}
+		repo.members[acctMemberKey(id, "reader")] = &model.AccountMember{AccountID: id, UserID: "reader", Role: model.RoleAM}
+	}
+	request := func(query string) *httptest.ResponseRecorder {
+		r := withUserEmailCtx(httptest.NewRequest(http.MethodGet, "/api/accounts"+query, nil), "reader", "reader@example.com")
+		w := httptest.NewRecorder()
+		h.ListAccounts(w, r)
+		return w
+	}
+	legacy := request("")
+	if legacy.Code != http.StatusOK || strings.Contains(legacy.Body.String(), "nextCursor") {
+		t.Fatalf("legacy contract: %d/%s", legacy.Code, legacy.Body.String())
+	}
+	first := request("?pageSize=1")
+	var page struct {
+		Accounts   []model.AccountSummary `json:"accounts"`
+		NextCursor string                 `json:"nextCursor"`
+	}
+	if first.Code != http.StatusOK || json.Unmarshal(first.Body.Bytes(), &page) != nil || len(page.Accounts) != 1 || page.NextCursor == "" {
+		t.Fatalf("first account page: %d/%s", first.Code, first.Body.String())
+	}
+	second := request("?pageSize=1&cursor=" + url.QueryEscape(page.NextCursor))
+	page.NextCursor = ""
+	if second.Code != http.StatusOK || json.Unmarshal(second.Body.Bytes(), &page) != nil || len(page.Accounts) != 1 || page.Accounts[0].AccountID != "b" || page.NextCursor != "" {
+		t.Fatalf("last account page: %d/%s", second.Code, second.Body.String())
+	}
+	invalid := request("?pageSize=0")
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("invalid list size: %d/%s", invalid.Code, invalid.Body.String())
 	}
 }
