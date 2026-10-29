@@ -276,6 +276,27 @@ class DescendantReadsTests(unittest.TestCase):
         insights = handler.get_account_insights_for_chat('reader', 'grandchild')
         self.assertEqual(insights['accessPermission'], 'read')
 
+    def test_direct_child_discovered_outside_gsi_keeps_its_grant_and_visibility(self):
+        self.member('grandchild')
+        member_key = ('ACCOUNT#grandchild', 'MEMBER#reader')
+        self.table.items[member_key]['role'] = 'TAM'
+        for index_state in ('missing', 'malformed', 'present'):
+            with self.subTest(index_state=index_state):
+                self.table.index_rows = copy.deepcopy(list(self.table.items.values()))
+                if index_state == 'missing':
+                    self.table.index_rows = [r for r in self.table.index_rows if r.get('SK') != 'MEMBER#reader' or r.get('accountId') != 'grandchild']
+                elif index_state == 'malformed':
+                    next(r for r in self.table.index_rows if r.get('SK') == 'MEMBER#reader' and r.get('accountId') == 'grandchild')['userId'] = 'stale'
+                reader = StrictAccountReader(self.table)
+                rows = [r for r in reader.list_accounts('reader').value if r['accountId'] == 'grandchild']
+                self.assertEqual(len(rows), 1)
+                self.assertEqual(rows[0]['role'], 'TAM')
+                self.assertNotIn('inheritedFromAccountId', rows[0])
+                self.assertEqual(reader.get_account_brief('reader', 'grandchild').value['meetings'][0]['meetingId'], 'm')
+                self.assertEqual(reader.get_account_insights('reader', 'grandchild').value['accountId'], 'grandchild')
+                _, accounts = discover_sources(handler._source_reader(), 'reader', handler._query_all, [])
+                self.assertIn('ACCOUNT#grandchild', accounts)
+
     def test_account_tool_history_rejects_reparenting_even_with_identical_visible_text(self):
         reader = StrictAccountReader(self.table)
         history = ToolHistory('reader', {'get_account_brief': reader.get_account_brief})

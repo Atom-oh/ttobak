@@ -145,17 +145,25 @@ class StrictAccountReader:
         if os.environ.get(FLAG, '') == '1':
             grants = AccountReadAccess(self.table).discover(
                 user_id, [account['accountId'] for account, _ in accounts])
+            included = {account['accountId'] for account, _ in accounts}
             for account_id, grant in sorted(grants.items()):
-                if not grant.inherited:
+                if account_id in included:
                     continue
                 meta = self._get('ACCOUNT#' + account_id, 'META', ACCOUNT_FIELDS)
                 if meta is None or meta.get('accountId') != account_id:
                     raise PermissionError('Descendant Account changed during discovery')
                 _text(meta, 'name')
                 _strings(meta.get('aliases'))
-                member = grant.privacy_member()
-                member.update(role='read', _accountReadGrant=grant)
+                if grant.inherited:
+                    member = grant.privacy_member()
+                    member.update(role='read', _accountReadGrant=grant)
+                else:
+                    member = self._member(account_id, user_id)
+                    if member is None:
+                        raise PermissionError('Direct Account membership changed during discovery')
                 accounts.append((meta, member))
+                if len(accounts) > MAX_READABLE_ACCOUNTS:
+                    raise ValueError('Readable Account limit exceeded (1000)')
         return accounts
 
     def _resolve(self, user_id, query):
