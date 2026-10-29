@@ -272,16 +272,26 @@ func resolveSharedAccess(ctx context.Context, repo shareAccessRepo, userID, meet
 		return nil, "", err
 	}
 	if byID != nil && byID.SharedToAccount && byID.AccountID != "" {
-		member, err := repo.GetMember(ctx, byID.AccountID, userID)
+		grant, err := resolveAccountReadGrant(ctx, repo, byID.AccountID, userID)
 		if err != nil {
 			return nil, "", err
 		}
-		if member != nil {
+		if grant != nil {
+			valid, err := revalidateAccountReadGrant(ctx, repo, grant, userID)
+			if err != nil {
+				return nil, "", err
+			}
+			if !valid {
+				return nil, "", nil
+			}
 			permission := model.PermissionRead
-			if share != nil {
+			if share != nil && !grant.inherited() {
 				permission = share.Permission
 			}
-			return projectAccountMeeting(byID, member), permission, nil
+			projected := projectAccountMeeting(byID, grant.privacyMember())
+			copy := *projected
+			copy.AccountReadInherited = grant.inherited()
+			return &copy, permission, nil
 		}
 	}
 
@@ -862,6 +872,9 @@ func (s *MeetingService) UpdateSpeakers(ctx context.Context, userID, meetingID s
 	}
 	if meeting == nil {
 		return nil, ErrNotFound
+	}
+	if meeting.AccountReadInherited {
+		return nil, ErrForbidden
 	}
 	if permission != "owner" && permission != model.PermissionEdit && permission != model.PermissionRead {
 		return nil, ErrForbidden

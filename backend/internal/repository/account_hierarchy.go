@@ -16,7 +16,7 @@ import (
 )
 
 // AccountHierarchyMaxAncestors bounds reads and keeps transactions below the
-// 100-item limit (at most 64 ancestors + child/owner/parent-member = 67).
+// 100-item limit (at most 64 ancestors + child/owner/parent-member + two refs = 69).
 const AccountHierarchyMaxAncestors = 64
 
 // AccountParentLink is a strongly consistent observation, checked again in the
@@ -54,7 +54,7 @@ func (r *DynamoDBRepository) hierarchyCheck(accountID, sk string, condition expr
 }
 
 // hierarchyParentChecks requires a complete, simple path from parent to root.
-// It never checks ancestor membership: the hierarchy carries no access grants.
+// Mutation authority remains exact: only immediate-parent membership qualifies.
 func (r *DynamoDBRepository) hierarchyParentChecks(childID, userID, parentID string, ancestors []AccountParentLink) ([]types.TransactWriteItem, error) {
 	if len(ancestors) > AccountHierarchyMaxAncestors {
 		return nil, fmt.Errorf("account hierarchy exceeds ancestor limit")
@@ -125,6 +125,18 @@ func (r *DynamoDBRepository) UpdateAccountParent(ctx context.Context, accountID,
 		ownerCheck,
 	}
 	items = append(items, parentChecks...)
+	if expectedParentID != "" && expectedParentID != parentID {
+		items = append(items, types.TransactWriteItem{Delete: &types.Delete{
+			TableName: aws.String(r.tableName), Key: accountHierarchyKey(expectedParentID, accountChildPrefix+accountID),
+		}})
+	}
+	if parentID != "" {
+		ref, err := r.childReferencePut(accountID, parentID)
+		if err != nil {
+			return err
+		}
+		items = append(items, ref)
+	}
 	return r.writeAccountHierarchy(ctx, items)
 }
 
@@ -143,6 +155,13 @@ func (r *DynamoDBRepository) accountCreationItems(account *model.Account, owner 
 			TableName: aws.String(r.tableName), Item: item,
 			ConditionExpression: condition.Condition(), ExpressionAttributeNames: condition.Names(), ExpressionAttributeValues: condition.Values(),
 		}})
+	}
+	if account.ParentAccountID != "" {
+		ref, err := r.childReferencePut(account.AccountID, account.ParentAccountID)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, ref)
 	}
 	return items, nil
 }

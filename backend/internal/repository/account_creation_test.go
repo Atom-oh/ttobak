@@ -18,7 +18,7 @@ func TestCreateAccountInitialMembers_AtomicPrivacyStamped(t *testing.T) {
 				creator = &model.AccountMember{PK: a.PK, SK: "MEMBER#creator", AccountID: "child", UserID: "creator", Role: model.RoleAM}
 			}
 			r := hierarchyWireRepo(t, func(items []hierarchyWireItem) {
-				want := 4
+				want := 5 // account, owner, child reference and two parent checks
 				if keep {
 					want++
 				}
