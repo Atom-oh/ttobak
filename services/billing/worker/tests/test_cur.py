@@ -857,6 +857,15 @@ class EffectiveCostColumns(Tmp):
         self.assertEqual(rc, 3, out)
         self.assertEqual(json.loads(out)["reason"], "CUR 행 중 날짜·금액을 읽을 수 없는 행이 많습니다: 1")
 
+    def test_unblended_cost_missing_in_one_file_is_a_bad_row(self):
+        # the same union read: a Usage row of the file without line_item_unblended_cost must not publish as zero
+        a = write_file(self.f("a.parquet"), [row(line_item_unblended_cost=4.0)], CUR2)
+        b = write_file(self.f("b.parquet"), [row(line_item_resource_id="b")],
+                       {k: v for k, v in CUR2.items() if k != "line_item_unblended_cost"})
+        rc, out = self.stage(make_zip(self.f("up.zip"), {"a.parquet": a, "b.parquet": b}))
+        self.assertEqual(rc, 3, out)
+        self.assertEqual(json.loads(out)["reason"], "CUR 행 중 날짜·금액을 읽을 수 없는 행이 많습니다: 1")
+
 
 class PlainCsvBudget(Tmp):
     def files(self):
