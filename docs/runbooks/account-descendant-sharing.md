@@ -46,6 +46,12 @@ references and reachable reparenting invalidating continuation/history. Do not
 change the reported meeting or invite users merely to obtain acceptance. Without
 a real authenticated consumer session, record the limit; an IAM metadata check
 does not prove browser or authenticated HTTP acceptance.
+For Account discovery, verify declared overlapping pages are combined by
+`accountId` with current permissions, including a reader with both ancestor and
+direct child memberships. A missing ancestor index candidate or unreadable
+intermediate Account must not suppress an independently authorized direct root.
+Inherited-only meeting details return `canCorrectSpeakers: false`; the editor
+must be hidden and a speaker mutation must still be rejected by the API.
 
 Rollback: deploy `AccountDescendantReadsEnabled=0` on GatewayStack with the same
 reviewed source, origin/summary parameters and exclusivity. Verify API live

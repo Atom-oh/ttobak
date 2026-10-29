@@ -647,7 +647,13 @@ private meeting links, mutations and Billing continue to require direct grants.
 `GET /api/accounts` retains `{accounts: [...]}` for callers without pagination.
 Optional `pageSize=1..100` and opaque `cursor` return `{accounts, nextCursor}`.
 Discovery validates canonical ancestry and membership, including empty advancing
-pages, and fails explicitly beyond the documented 1,000-account bound.
+pages. Each paged request performs at most four discovery steps. With descendant
+reads enabled, responses declare `overlapPossible: true, unionKey: "accountId"`:
+independent direct roots can overlap descendant traversal. Clients combine those
+declared pages by Account ID, replacing a duplicate with its current response
+and permissions. Undeclared duplicates remain invalid. Cursorless compatibility
+collection fails explicitly beyond 1,000 Accounts; paged clients must finish
+continuation or report their page limit, never silently return a partial list.
 Account/doc/project responses may include `accessPermission: "read"` and
 `inheritedFromAccountId` for ancestor-only access; no synthetic member is created.
 
