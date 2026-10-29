@@ -1,5 +1,6 @@
 """Fresh, complete account views for readonly tool history; no AWS client setup."""
 from datetime import datetime, timezone
+import os
 import re
 
 from boto3.dynamodb.conditions import Key
@@ -7,6 +8,7 @@ from boto3.dynamodb.conditions import Key
 from source_revision import IDENTIFIER
 from tool_history import CompleteRead, normalize_input
 from summary_privacy import enforce_summary_guard, safe_summary
+from account_read_access import AccountReadAccess, FLAG, MAX_READABLE_ACCOUNTS
 
 MEMBER_FIELDS = ('PK', 'SK', 'accountId', 'userId', 'role', 'addedAt', 'summaryPrivacyVersion')
 ACCOUNT_FIELDS = ('PK', 'SK', 'accountId', 'name', 'aliases', 'industry')
@@ -95,8 +97,21 @@ class StrictAccountReader:
         return row
 
     def _recheck_member(self, user_id, before):
+        grant = before.get('_accountReadGrant')
+        if grant is not None:
+            if not AccountReadAccess(self.table).revalidate(grant, user_id):
+                raise PermissionError('Account read grant changed; retry with current access')
+            return
         if self._member(before['accountId'], user_id) != before:
             raise PermissionError('Account membership changed; retry with current access')
+
+    @staticmethod
+    def _access_fields(member):
+        grant = member.get('_accountReadGrant')
+        if grant is None:
+            return {}
+        return {'accessPermission': 'read', 'inheritedFromAccountId': grant.granting_account_id,
+                '_accountReadGrantFingerprint': grant.fingerprint()}
 
     def _accounts(self, user_id):
         self._user(user_id)
@@ -112,6 +127,8 @@ class StrictAccountReader:
                     or candidate.get('GSI1SK') != 'ACCOUNT#' + account_id):
                 continue
             ids.add(account_id)
+            if len(ids) > MAX_READABLE_ACCOUNTS:
+                raise ValueError('Readable Account limit exceeded (1000)')
         accounts = []
         for account_id in sorted(ids):
             member = self._member(account_id, user_id)
@@ -125,6 +142,28 @@ class StrictAccountReader:
             _text(meta, 'name')
             _strings(meta.get('aliases'))
             accounts.append((meta, member))
+        if os.environ.get(FLAG, '') == '1':
+            grants = AccountReadAccess(self.table).discover(
+                user_id, [account['accountId'] for account, _ in accounts])
+            included = {account['accountId'] for account, _ in accounts}
+            for account_id, grant in sorted(grants.items()):
+                if account_id in included:
+                    continue
+                meta = self._get('ACCOUNT#' + account_id, 'META', ACCOUNT_FIELDS)
+                if meta is None or meta.get('accountId') != account_id:
+                    raise PermissionError('Descendant Account changed during discovery')
+                _text(meta, 'name')
+                _strings(meta.get('aliases'))
+                if grant.inherited:
+                    member = grant.privacy_member()
+                    member.update(role='read', _accountReadGrant=grant)
+                else:
+                    member = self._member(account_id, user_id)
+                    if member is None:
+                        raise PermissionError('Direct Account membership changed during discovery')
+                accounts.append((meta, member))
+                if len(accounts) > MAX_READABLE_ACCOUNTS:
+                    raise ValueError('Readable Account limit exceeded (1000)')
         return accounts
 
     def _resolve(self, user_id, query):
@@ -140,7 +179,8 @@ class StrictAccountReader:
     def list_accounts(self, user_id):
         accounts = self._accounts(user_id)
         result = [{'accountId': account['accountId'], 'name': _text(account, 'name'),
-                   'role': _text(member, 'role')} for account, member in accounts]
+                   'role': _text(member, 'role'), **self._access_fields(member)}
+                  for account, member in accounts]
         for _, member in accounts:
             self._recheck_member(user_id, member)
         return CompleteRead(sorted(result, key=lambda row: (row['name'].casefold(), row['accountId'])))
@@ -226,6 +266,7 @@ class StrictAccountReader:
         self._recheck_publications(account['accountId'], guards, member)
         self._recheck_member(user_id, member)
         value = {'accountId': account['accountId'], 'account': _text(account, 'name'), 'insights': insights}
+        value.update(self._access_fields(member))
         if restricted:
             value['summaryReadRestriction'] = 'SHARING_REGEN_REQUIRED'
         return CompleteRead(value)
@@ -348,6 +389,7 @@ class StrictAccountReader:
         value = {'accountId': account_id, 'account': _text(account, 'name'),
                  'industry': _text(account, 'industry'), 'insightsByType': by_type,
                  'meetings': meetings, 'research': research}
+        value.update(self._access_fields(member))
         if restricted:
             value['summaryReadRestriction'] = 'SHARING_REGEN_REQUIRED'
         return CompleteRead(value)

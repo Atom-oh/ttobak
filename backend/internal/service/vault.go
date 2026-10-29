@@ -28,9 +28,11 @@ type VaultService struct {
 	repo vaultRepo
 }
 
-func NewVaultService(repo *repository.DynamoDBRepository) *VaultService { return &VaultService{repo: repo} }
-func newVaultServiceWithRepo(repo vaultRepo) *VaultService            { return &VaultService{repo: repo} }
-func NewVaultServiceForTest(repo VaultRepo) *VaultService             { return &VaultService{repo: repo} }
+func NewVaultService(repo *repository.DynamoDBRepository) *VaultService {
+	return &VaultService{repo: repo}
+}
+func newVaultServiceWithRepo(repo vaultRepo) *VaultService { return &VaultService{repo: repo} }
+func NewVaultServiceForTest(repo VaultRepo) *VaultService  { return &VaultService{repo: repo} }
 
 var fnameReplacer = strings.NewReplacer("/", "-", "\\", "-", ":", "-", "*", "-", "?", "", "\"", "'", "<", "(", ">", ")", "|", "-", "\n", " ")
 
@@ -146,6 +148,7 @@ func docVaultPath(doc *model.AccountDocument, accountName string, seen map[strin
 // docScope is one PK to sweep for documents: personal (accountName == "") or
 // one account membership.
 type docScope struct {
+	grant       *accountReadGrant
 	pk          string
 	accountName string
 }
@@ -156,40 +159,81 @@ type docScope struct {
 func (s *VaultService) exportDocuments(ctx context.Context, userID string, nameCache map[string]string) ([]model.VaultFile, error) {
 	files := []model.VaultFile{}
 	scopes := []docScope{{pk: model.PrefixUser + userID}}
-	memberships, err := s.repo.ListAccountsForUser(ctx, userID)
-	if err != nil {
-		return nil, err
+	var ids []string
+	readRepo, canResolve := s.repo.(accountReadMembershipRepo)
+	if canResolve {
+		var err error
+		ids, err = listReadableAccountIDs(ctx, readRepo, userID, nil)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		// Narrow repositories expose their already enumerated direct memberships.
+		// Production also supplies the canonical read capability.
+		members, err := s.repo.ListAccountsForUser(ctx, userID)
+		if err != nil {
+			return nil, err
+		}
+		for _, member := range members {
+			ids = append(ids, member.AccountID)
+		}
 	}
-	for _, m := range memberships {
-		name, ok := nameCache[m.AccountID]
-		if !ok {
-			acc, err := s.repo.GetAccount(ctx, m.AccountID)
+	for _, id := range ids {
+		var grant *accountReadGrant
+		if canResolve {
+			var err error
+			grant, err = resolveAccountReadGrant(ctx, readRepo, id, userID)
 			if err != nil {
-				// A transient read error must fail the whole export loudly
-				// (AGENTS.md: no silent failures) -- swallowing it here
-				// would produce an export that looks complete but is
-				// silently missing this account's documents entirely.
 				return nil, err
 			}
-			if acc == nil {
-				// Membership row outlived a deleted account -- skip just
-				// this account's documents rather than falling through
-				// with accountName == "", which docVaultPath reads as
-				// "personal" and would mis-file a shared account's
-				// documents under _Private/Docs/.
+			if grant == nil {
+				return nil, ErrForbidden
+			}
+		}
+		name, ok := nameCache[id]
+		if !ok {
+			account, err := s.repo.GetAccount(ctx, id)
+			if err != nil {
+				return nil, err
+			}
+			if account == nil {
 				continue
 			}
-			name = acc.Name
-			nameCache[m.AccountID] = name
+			name = account.Name
+			nameCache[id] = name
 		}
 		if name == "" {
 			continue
 		}
-		scopes = append(scopes, docScope{pk: model.PrefixAccount + m.AccountID, accountName: name})
+		scopes = append(scopes, docScope{pk: model.PrefixAccount + id, accountName: name, grant: grant})
+	}
+	checkScope := func(scope docScope) error {
+		if scope.grant == nil {
+			return nil
+		}
+		valid, err := revalidateAccountReadGrant(ctx, readRepo, scope.grant, userID)
+		if err != nil {
+			return err
+		}
+		if !valid {
+			return ErrForbidden
+		}
+		return nil
+	}
+	checkGrants := func() error {
+		for _, scope := range scopes {
+			if err := checkScope(scope); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 
 	seenPaths := map[string]bool{}
 	for _, scope := range scopes {
+		if err := checkScope(scope); err != nil {
+			return nil, err
+		}
 		stubs, err := s.repo.ListAccountDocuments(ctx, scope.pk)
 		if err != nil {
 			return nil, err
@@ -201,8 +245,17 @@ func (s *VaultService) exportDocuments(ctx context.Context, userID string, nameC
 			if stub.FileKey != "" {
 				continue // slide -- no markdown content to export
 			}
+			if err := checkScope(scope); err != nil {
+				return nil, err
+			}
 			full, err := s.repo.GetAccountDocument(ctx, scope.pk, stub.DocID)
 			if err != nil {
+				return nil, err
+			}
+			if full != nil && full.Content != "" && (full.PK != scope.pk || full.DocID != stub.DocID) {
+				return nil, ErrReadingData
+			}
+			if err := checkScope(scope); err != nil {
 				return nil, err
 			}
 			if full == nil || full.Content == "" {
@@ -211,6 +264,9 @@ func (s *VaultService) exportDocuments(ctx context.Context, userID string, nameC
 			md := buildDocFrontmatter(full) + full.Content
 			files = append(files, model.VaultFile{Path: docVaultPath(full, scope.accountName, seenPaths), Markdown: md})
 		}
+	}
+	if err := checkGrants(); err != nil {
+		return nil, err
 	}
 	return files, nil
 }

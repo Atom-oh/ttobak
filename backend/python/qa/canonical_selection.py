@@ -30,11 +30,12 @@ def retrieve_selected(reader, user_id, query, selected, identities, lookup):
         if rid not in targets:
             continue  # Missing and unauthorized selections expose no content.
         key, identity, before = targets[rid]
+        index_revision = before.get('indexRevision', before['revision'])
         source_filter = {'andAll': [
             {'equals': {'key': 'indexSchema', 'value': 'canonical-v1'}},
             {'equals': {'key': 'sourcePK', 'value': key[0]}},
             {'equals': {'key': 'sourceSK', 'value': key[1]}},
-            {'equals': {'key': 'sourceRevision', 'value': before['revision']}},
+            {'equals': {'key': 'sourceRevision', 'value': index_revision}},
         ]}
         candidates = []
         for candidate in lookup(source_filter):
@@ -42,7 +43,7 @@ def retrieve_selected(reader, user_id, query, selected, identities, lookup):
                                             candidate.get('metadata'), reader.kb_bucket)
             if (projected is not None and projected['sourcePK'] == key[0]
                     and projected['sourceSK'] == key[1]
-                    and projected['indexRevision'] == before['revision']
+                    and projected['indexRevision'] == index_revision
                     and projected['filename'] in before['filenames']
                     and projected['bindings'] == normalize_bindings(before['objects'])):
                 candidates.append(candidate)

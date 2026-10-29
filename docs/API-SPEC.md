@@ -289,7 +289,9 @@ meeting account/sharedToAccount state; account classification/hierarchy alone
 never grants a private meeting. Direct share permissions take precedence.
 
 Clients expand selected visible account groups to accessible descendants and send
-the resulting IDs. The API filters explicit IDs, without inheriting parent access.
+the resulting IDs. With ADR-058 activated, canonical ancestor membership gives
+read-only access to explicitly published descendant content; account filters
+remain classification. Independent direct grants retain their permissions.
 Accounts added after team publication can discover existing shared meetings;
 pending invitees do so only after verified materialization.
 
@@ -638,7 +640,22 @@ before mail and transactionally before creation. Parent updates require child ow
 and new-parent membership; the required field uses an empty string to detach,
 not omitted/null. Self/cyclic/deep ancestry (over 64 nodes) is rejected;
 transactional ancestry checks and retries protect concurrent moves. Conflicts
-return 409. Hierarchy is organization metadata, never authorization inheritance.
+return 409. Canonical child references change in the same transaction. ADR-058
+adds read-only descendant access when `ACCOUNT_DESCENDANT_READS_ENABLED=1`;
+private meeting links, mutations and Billing continue to require direct grants.
+
+`GET /api/accounts` retains `{accounts: [...]}` for callers without pagination.
+Optional `pageSize=1..100` and opaque `cursor` return `{accounts, nextCursor}`.
+Discovery validates canonical ancestry and membership, including empty advancing
+pages. Each paged request performs at most four discovery steps. With descendant
+reads enabled, responses declare `overlapPossible: true, unionKey: "accountId"`:
+independent direct roots can overlap descendant traversal. Clients combine those
+declared pages by Account ID, replacing a duplicate with its current response
+and permissions. Undeclared duplicates remain invalid. Cursorless compatibility
+collection fails explicitly beyond 1,000 Accounts; paged clients must finish
+continuation or report their page limit, never silently return a partial list.
+Account/doc/project responses may include `accessPermission: "read"` and
+`inheritedFromAccountId` for ancestor-only access; no synthetic member is created.
 
 Any current account member can add members or change assignable roles; `owner`
 is never assignable. Member addition requires a verified requester email and a
@@ -764,7 +781,8 @@ Authenticated `GET /api/navigation/accounts` and `/api/navigation/projects`
 provide bounded metadata catalogs (`pageSize` 1–50, default 20; opaque `cursor`;
 10,000 encoded bytes). GSI candidates are revalidated against consistent
 canonical membership/resource reads; indexes never grant access. Account
-hierarchy remains classification only. Project pages visit ownership, direct
+hierarchy discovery includes validated descendant read grants under ADR-058.
+Project pages visit ownership, direct
 membership and linked-account membership. Deduplication uses only exact IDs
 already emitted, never an inferred earlier path: membership/ref indexes can lag.
 The cursor retains up to 32 emitted IDs while staying within 2048 characters.
@@ -798,7 +816,8 @@ until `page.complete=true` to finish all groups/phases, including empty filtered
 groups. Group fragments are never silently truncated.
 
 Cursors bind the caller, account, selection/filters, account metadata and current
-membership. Fragment continuation also pins the exact authorized source window
+membership and the complete ancestor path for inherited grants. Fragment
+continuation also pins the exact authorized source window
 and its provider continuation. Membership, publication and payload are rechecked
 before returning bytes. `consistency=current_group` describes a live collection
 of individually pinned windows, not one atomic snapshot of every brief record.

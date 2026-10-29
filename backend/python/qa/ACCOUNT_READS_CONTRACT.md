@@ -25,8 +25,9 @@ membership checks. Values match the existing formatters:
   Hidden summary suffixes are not attested as visible output.
 
 Consume every GSI discovery page, then strongly read exact
-`ACCOUNT#{id}/MEMBER#{currentUser}` before current META. GSI rows and parent
-account membership grant no access. ID/name/alias must resolve exactly one
+`ACCOUNT#{id}/MEMBER#{currentUser}` before current META. GSI rows are discovery
+only. With descendant reads disabled, parent membership grants no access.
+ID/name/alias must resolve exactly one
 accessible account. No discovery/negative cache hides newly visible GSI entries.
 
 Insights consume every strong base-table query page with an identity-only
@@ -79,7 +80,9 @@ the entire prior source-derived conversation.
 
 These reads are not a cross-item transactional snapshot. Revalidate before
 subsequent model rounds and final output; the host owns SDK timeouts.
-Enumeration has no silent row/page cutoff. ToolHistory's separate tracking
+Enumeration has no silent row/page cutoff: Account compatibility views reject
+more than 1,000 Account candidates explicitly; descendant query traversal rejects
+more than 10,000 pages. ToolHistory's separate tracking
 budget preserves a valid current result while marking oversized history
 untracked. This helper has no S3, model, mutation or general tool dispatch.
 
@@ -110,3 +113,27 @@ context. A marker-only change invalidates prior derived conversation in either
 direction; a stable restricted view may replay after current authorization checks.
 The installation/activation and remaining writer gates are documented in
 [the source contract](SOURCE_CONTRACT.md#staged-summary-privacy-scope).
+
+## Flag-gated descendant grants
+
+When `ACCOUNT_DESCENDANT_READS_ENABLED=1`, the strict reader expands its verified
+direct Account candidates through `AccountReadAccess` and canonical child
+references. The complete target-to-root path is strongly validated, with at most
+64 ancestors, and rechecked before `CompleteRead`. Stale references never grant
+access or expose a moved child. Missing/malformed nodes, cycles or excessive
+depth deny inheritance; SDK failures abort the complete view.
+
+An inherited list row has `role: read`, `accessPermission: read` and
+`inheritedFromAccountId`; it is a read-access view, not an actual child member.
+Insight/brief views include the latter two fields. Ancestor Owner membership
+does not confer child mutation authority. An inherited privacy view always uses
+`summaryPrivacyVersion=1`; ancestor membership age never grants legacy generated
+summary eligibility. Meeting refs still require canonical publication, insight
+copies still require current safe generation, and research refs still require
+current canonical Account linkage.
+
+Inherited views carry `_accountReadGrantFingerprint`, a hidden stable identity
+field retained by ToolHistory but omitted by the model-facing formatters. A
+reparenting or membership change invalidates the prior read even if every visible
+field stays identical and a new current path still grants access. The handler's
+exported compatibility Account callbacks also delegate to these strict readers.

@@ -5,6 +5,7 @@
 // A 401 refreshes through the parent once and retries; a second 401 hands over to parent.signedOut().
 // The account list comes from /api/billing/accounts (it replaces the shell-injected window.TB_ACCOUNTS);
 // page scripts run in dash.ready(fn), after it has loaded.
+// ?acct=<id> preselects a listed account as the default entity.
 // params.version (with params.entity) pins every load to one published version: /api/billing/data/<id>.json?acct=&v=.
 // <script src="dash-shim.js" data-auth-only> (the upload page) sets up withAuth only.
 (function () {
@@ -121,8 +122,11 @@
     .then((rows) => {
       const accts = Array.isArray(rows) ? rows : [];
       window.TB_ACCOUNTS = accts;
-      // default entity: the first account with COT data, else the first with CUR data
-      const first = accts.find((a) => a && a.sources && a.sources.cot) || accts.find((a) => a && a.sources && a.sources.cur);
+      // default entity: ?acct=<id> when it names a listed account (even one without data),
+      // else the first account with COT data, else the first with CUR data
+      const wanted = new URLSearchParams(location.search).get('acct');
+      const picked = wanted ? accts.find((a) => a && a.id === wanted) : null;
+      const first = picked || accts.find((a) => a && a.sources && a.sources.cot) || accts.find((a) => a && a.sources && a.sources.cur);
       DEFAULTS.entity = (first && first.id) || null;
       params = Object.assign({}, DEFAULTS);
     });

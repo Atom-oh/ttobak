@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/ttobak/backend/internal/model"
@@ -117,24 +116,11 @@ func (s *MeetingService) newTeamMeetingCursor(ctx context.Context, userID, tab s
 		cursor.Accounts = slices.Clone(filter.AccountIDs)
 		return cursor, nil
 	}
-	memberships, err := s.repo.ListAccountsForUser(ctx, userID)
+	ids, err := listReadableAccountIDs(ctx, s.repo, userID, joinedAccountIDs)
 	if err != nil {
 		return cursor, fmt.Errorf("list team memberships: %w", err)
 	}
-	ids := make(map[string]bool)
-	for _, membership := range memberships {
-		ids[membership.AccountID] = true
-	}
-	// The handler just materialized these memberships in this request.
-	// Include them even while the reverse GSI has not caught up.
-	for _, id := range joinedAccountIDs {
-		ids[id] = true
-	}
-	delete(ids, "")
-	for id := range ids {
-		cursor.Accounts = append(cursor.Accounts, id)
-	}
-	sort.Strings(cursor.Accounts)
+	cursor.Accounts = ids
 	return cursor, nil
 }
 
@@ -166,11 +152,11 @@ func (s *MeetingService) listTeamSharedMeetingsForFilter(ctx context.Context, us
 			cursor.RefCursor = ""
 			continue
 		}
-		member, err := s.repo.GetMember(ctx, id, userID)
+		grant, err := resolveAccountReadGrant(ctx, s.repo, id, userID)
 		if err != nil {
 			return nil, fmt.Errorf("check team membership: %w", err)
 		}
-		if member == nil {
+		if grant == nil {
 			cursor.Index++
 			cursor.RefCursor = ""
 			continue
@@ -212,6 +198,12 @@ func (s *MeetingService) listTeamSharedMeetingsForFilter(ctx context.Context, us
 		}
 		for _, key := range keys {
 			meeting := byID[key.MeetingID]
+			if meeting != nil {
+				meeting, err = s.currentListMeeting(ctx, key.OwnerID, key.MeetingID)
+				if err != nil {
+					return nil, err
+				}
+			}
 			// A reference is an index, not a grant or trusted title.
 			if meeting == nil || listed[meeting.MeetingID] || meeting.UserID == userID || !meeting.SharedToAccount || meeting.AccountID != id {
 				continue
@@ -224,9 +216,15 @@ func (s *MeetingService) listTeamSharedMeetingsForFilter(ctx context.Context, us
 				continue
 			} // covered by the owned/individual-share stream
 			permission := model.PermissionRead
-			meeting = projectAccountMeeting(meeting, member)
+			meeting = projectAccountReadMeeting(meeting, grant)
 			response.Meetings = append(response.Meetings, model.ToMeetingListItem(meeting, true, nil, &permission))
 			listed[meeting.MeetingID] = true
+		}
+		if valid, err := revalidateAccountReadGrant(ctx, s.repo, grant, userID); err != nil || !valid {
+			if err != nil {
+				return nil, err
+			}
+			return nil, ErrForbidden
 		}
 	}
 	if cursor.Index < len(cursor.Accounts) {

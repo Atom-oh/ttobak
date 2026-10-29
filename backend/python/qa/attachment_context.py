@@ -80,7 +80,12 @@ class AttachmentReader:
         identity = resource_identity(pk, 'MEETING#' + meeting_id)
         if identity['resourceKind'] != 'meeting':
             raise ValueError('Invalid parent meeting')
-        return identity if self.reader.record(user_id, pk, identity['sourceSK']) is not None else None
+        fields = self.reader.record(user_id, pk, identity['sourceSK'])
+        if fields is None:
+            return None
+        if fields.get('_accountReadGrantFingerprint'):
+            identity['_accountReadGrantFingerprint'] = fields['_accountReadGrantFingerprint']
+        return identity
 
     def metadata(self, user_id, pk, meeting_id, attachment_id, *, heads=True):
         identity = self._authorized(user_id, pk, meeting_id)
@@ -154,7 +159,10 @@ class AttachmentReader:
             if metadata:
                 entries.append(metadata)
         entries.sort(key=lambda entry: entry['attachment']['attachmentId'])
-        revision = _fingerprint([entry['revision'] for entry in entries])
+        bindings = [entry['revision'] for entry in entries]
+        if identity.get('_accountReadGrantFingerprint'):
+            bindings.append(identity['_accountReadGrantFingerprint'])
+        revision = _fingerprint(bindings)
         return {'entries': entries, 'dependency': {
             'sourcePK': pk, 'sourceSK': 'MEETING#' + meeting_id, 'attachmentId': '*',
             'sourceRevision': revision,

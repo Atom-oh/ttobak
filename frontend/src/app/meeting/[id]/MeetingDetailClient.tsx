@@ -628,7 +628,7 @@ function MeetingDetailContent() {
           </div>}
 
           {/* Speaker Name Mapping — show when transcript exists (done or error with partial data) */}
-          {(meeting.status === 'done' || displayedSegments.length > 0) && (
+          {meeting.canCorrectSpeakers !== false && (meeting.status === 'done' || displayedSegments.length > 0) && (
             <SpeakerMapEditor
               transcription={displayedSegments}
               content={meeting.content}

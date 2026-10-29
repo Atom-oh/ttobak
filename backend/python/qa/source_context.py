@@ -30,7 +30,7 @@ class SourceReader:
         # Identity and authorization metadata only, before notes/transcripts.
         metadata = self.table.get_item(
             Key=key, ConsistentRead=True,
-            ProjectionExpression='PK, SK, meetingId, userId, accountId, sharedToAccount, summaryPrivacy',
+            ProjectionExpression='PK, SK, entityType, meetingId, userId, accountId, sharedToAccount, summaryPrivacy',
         ).get('Item')
         metadata = dict(metadata) if metadata else metadata
         if not self._meeting_identity(metadata, key, owner, meeting_id):
@@ -39,7 +39,7 @@ class SourceReader:
             return None
         request = {'Key': key, 'ConsistentRead': True}
         if metadata.get('_summaryReadRestricted'):
-            raw_fields = ('PK', 'SK', 'meetingId', 'userId', 'accountId', 'sharedToAccount',
+            raw_fields = ('PK', 'SK', 'entityType', 'meetingId', 'userId', 'accountId', 'sharedToAccount',
                           'summaryPrivacy', 'title', 'date', 'status', 'notes',
                           'selectedTranscript', 'transcriptA', 'transcriptB', 'updatedAt')
             request['ExpressionAttributeNames'] = {f'#raw{i}': field for i, field in enumerate(raw_fields)}
@@ -50,8 +50,13 @@ class SourceReader:
             return None
         if not self.meeting_access(user_id, owner, meeting_id, record):
             return None
+        grant_fingerprint = metadata.get('_accountReadGrantFingerprint')
+        if grant_fingerprint != record.get('_accountReadGrantFingerprint'):
+            return None
         restricted = bool(metadata.get('_summaryReadRestricted') or record.get('_summaryReadRestricted'))
         fields = source_fields(identity, project_meeting(record,restricted))
+        if grant_fingerprint:
+            fields['_accountReadGrantFingerprint'] = grant_fingerprint
         if restricted:
             # User-scoped revision changes invalidate earlier derived history
             # even when a prior rendered field happened to be empty.
@@ -162,8 +167,14 @@ class SourceReader:
                 outcome, error = 'WAITING_SOURCE', 'EMPTY_DOCUMENT'
         if outcome != 'INDEXED':
             filenames = []
+        # The index describes canonical bytes; replay additionally binds the
+        # current hierarchy grant. Keep both identities for binary hydration.
+        index_revision = source_revision(
+            identity, {name: value for name, value in fields.items()
+                       if name != '_accountReadGrantFingerprint'}, objects, outcome)
         revision = source_revision(identity, fields, objects, outcome)
         return {'identity': identity, 'fields': fields, 'objects': objects, 'revision': revision,
+                'indexRevision': index_revision,
                 'outcome': outcome, 'error': error, 'filenames': filenames}
 
     def meeting_text(self, snapshot, include_notes=True):

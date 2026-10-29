@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { accountApi, kbApi } from '@/lib/api';
+import { isEditableAccount } from '@/lib/accountAccess';
 import { KB_PERSONAL_CHOICE, kbAccountListNotice, kbUploadAccountId, kbUploadPutHeaders, kbUploadReady } from '@/lib/kbUpload';
 import type { AccountSummary } from '@/types/meeting';
 import type { KBFile } from '@/types/meeting';
@@ -53,11 +54,12 @@ export function KBFileList() {
   const [accountsLoad, setAccountsLoad] = useState<'loading' | 'loaded' | 'failed'>('loading');
   // Required choice: an Account, or KB_PERSONAL_CHOICE; empty until picked.
   const [accountChoice, setAccountChoice] = useState('');
-  const uploadReady = kbUploadReady(accountChoice);
+  const uploadReady = kbUploadReady(accountChoice) && (accountChoice === KB_PERSONAL_CHOICE
+    || accounts.some(account => account.accountId === accountChoice && isEditableAccount(account)));
 
   useEffect(() => {
     accountApi.list()
-      .then((res) => { setAccounts(res.accounts || []); setAccountsLoad('loaded'); })
+      .then((res) => { setAccounts((res.accounts || []).filter(isEditableAccount)); setAccountsLoad('loaded'); })
       .catch(() => { setAccounts([]); setAccountsLoad('failed'); });
   }, []);
 
@@ -185,7 +187,7 @@ export function KBFileList() {
         >
           <option value="" disabled>선택하세요</option>
           <option value={KB_PERSONAL_CHOICE}>없음(개인)</option>
-          {accounts.map((a) => (
+          {accounts.filter(isEditableAccount).map((a) => (
             <option key={a.accountId} value={a.accountId}>{a.name}</option>
           ))}
         </select>

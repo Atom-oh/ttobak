@@ -164,14 +164,14 @@ func (s *DocumentCatalogService) Read(ctx context.Context, userID string, q url.
 	}
 	accountGrant := ""
 	if o.accountID != "" {
-		member, err := s.repo.GetMember(ctx, o.accountID, userID)
+		access, err := resolveAccountReadGrant(ctx, s.repo, o.accountID, userID)
 		if err != nil {
 			return nil, err
 		}
-		if member == nil || member.AccountID != o.accountID || member.UserID != userID {
+		if !validAccountReadIdentity(access, o.accountID, userID) {
 			return nil, ErrForbidden
 		}
-		accountGrant = readingHash(member)
+		accountGrant = access.fingerprint()
 	}
 	binding := readingHash([]string{"document-catalog-v1", userID, o.accountID, o.docType, accountGrant})
 	c := documentCatalogCursor{Version: 1, Binding: binding, Phase: "own"}
@@ -282,11 +282,11 @@ func (s *DocumentCatalogService) Read(ctx context.Context, userID string, q url.
 		}
 	}
 	if o.accountID != "" {
-		member, err := s.repo.GetMember(ctx, o.accountID, userID)
+		access, err := resolveAccountReadGrant(ctx, s.repo, o.accountID, userID)
 		if err != nil {
 			return nil, err
 		}
-		if member == nil || readingHash(member) != accountGrant {
+		if !validAccountReadIdentity(access, o.accountID, userID) || access.fingerprint() != accountGrant {
 			return nil, ErrStaleReadingCursor
 		}
 	}

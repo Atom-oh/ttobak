@@ -1,13 +1,40 @@
 package repository
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
+
+func TestResearchAuthorizationReadsCurrentCanonicalConfig(t *testing.T) {
+	client := dynamodb.New(dynamodb.Options{Region: "ap-northeast-2", Credentials: aws.AnonymousCredentials{}, RetryMaxAttempts: 1,
+		HTTPClient: meetingListHTTPClientFunc(func(req *http.Request) (*http.Response, error) {
+			var input struct {
+				ConsistentRead bool
+				Key            map[string]map[string]string
+			}
+			if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
+				t.Fatal(err)
+			}
+			if !input.ConsistentRead || input.Key["PK"]["S"] != "RESEARCH#r" || input.Key["SK"]["S"] != "CONFIG" {
+				t.Fatal("research authorization must observe current canonical links")
+			}
+			return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"Item":{"researchId":{"S":"r"},"userId":{"S":"owner"}}}`))}, nil
+		})})
+	research, err := NewResearchRepository(client, "test").GetResearch(context.Background(), "r")
+	if err != nil || research == nil || research.ResearchID != "r" {
+		t.Fatalf("canonical read: %+v/%v", research, err)
+	}
+}
 
 // TestAccountLinkExpression_EmitsStringSetOperand verifies, without any AWS
 // network call, that the exact expression.Value(&types.AttributeValueMemberSS{...})

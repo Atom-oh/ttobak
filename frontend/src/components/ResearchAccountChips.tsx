@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { accountApi, researchApi } from '@/lib/api';
+import { isEditableAccount } from '@/lib/accountAccess';
 import type { AccountSummary } from '@/types/meeting';
 
 interface Props {
@@ -26,6 +27,7 @@ export default function ResearchAccountChips({ researchId, accountIds, onChange 
 
   const toggle = async (accountId: string) => {
     const linked = accountIds.includes(accountId);
+    if (!linked && !accounts.some(account => account.accountId === accountId && isEditableAccount(account))) return;
     setBusyId(accountId);
     setError(null);
     try {
@@ -47,13 +49,13 @@ export default function ResearchAccountChips({ researchId, accountIds, onChange 
     <div className="mt-4">
       <p className="text-xs font-semibold text-slate-500 dark:text-text-muted mb-2">연결된 어카운트</p>
       <div className="flex flex-wrap gap-2">
-        {accounts.map((a) => {
+        {accounts.filter(a => isEditableAccount(a) || accountIds.includes(a.accountId)).map((a) => {
           const linked = accountIds.includes(a.accountId);
           return (
             <button
               key={a.accountId}
               onClick={() => toggle(a.accountId)}
-              disabled={busyId === a.accountId}
+              disabled={busyId === a.accountId || (!linked && !isEditableAccount(a))}
               className={`inline-flex items-center gap-1 text-xs font-medium px-3 py-1.5 rounded-full border transition-colors disabled:opacity-50 ${
                 linked
                   ? 'bg-primary text-white border-primary'

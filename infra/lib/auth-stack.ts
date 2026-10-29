@@ -7,6 +7,12 @@ import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as path from 'path';
 import { Construct } from 'constructs';
 
+/** Custom attributes cc-on-bedrock requires on a shared pool (append-only). */
+export const CC_ON_BEDROCK_ATTRIBUTES = [
+  'subdomain', 'container_os', 'resource_tier', 'security_policy', 'container_id',
+  'department', 'budget_exceeded', 'storage_type', 'dept_manager_sub',
+] as const;
+
 export interface AuthStackProps extends cdk.StackProps {
   cloudFrontDomain?: string;
   table?: dynamodb.ITable;
@@ -101,12 +107,25 @@ export class AuthStack extends cdk.Stack {
       autoVerify: {
         email: true,
       },
+      // A changed email takes effect only after the user verifies it, so an unverified
+      // address never becomes the sign-in identity (pool shared with cc-on-bedrock, whose
+      // own ADR-016 covers that; see ADR-057 here).
+      keepOriginal: {
+        email: true,
+      },
       standardAttributes: {
         email: {
           required: true,
           mutable: true,
         },
       },
+      // Attributes read and written by cc-on-bedrock, which shares this pool for
+      // sign-in (its ADR-016). Cognito cannot delete or rename a custom attribute
+      // once added, so this list only grows. cc admins set them through Admin* APIs;
+      // cc's app clients do not let users write them.
+      customAttributes: Object.fromEntries(CC_ON_BEDROCK_ATTRIBUTES.map(
+        (name) => [name, new cognito.StringAttribute({ mutable: true })],
+      )),
       passwordPolicy: {
         minLength: 8,
         requireLowercase: true,
@@ -186,8 +205,18 @@ export class AuthStack extends cdk.Stack {
       ? [`https://${props.cloudFrontDomain}`, 'http://localhost:3000']
       : ['http://localhost:3000'];
 
+    // Every client may write only `name` and `email`. Unset WriteAttributes lets any
+    // signed-in user call UpdateUserAttributes on every mutable attribute, including the
+    // custom:* attributes cc-on-bedrock uses for authorization (department budgets, IAM
+    // role naming); those are set through Admin* APIs only. `email` must stay writable
+    // because it is a required attribute (Cognito rejects a client that cannot write a
+    // required attribute); keepOriginal below holds an email change until it is verified.
+    // The remaining self-service email change is an accepted risk (ADR-057).
+    const clientWriteAttributes = new cognito.ClientAttributes().withStandardAttributes({ fullname: true, email: true });
+
     this.userPoolClient = this.userPool.addClient('TtobakAppClient', {
       userPoolClientName: 'ttobak-app-client',
+      writeAttributes: clientWriteAttributes,
       generateSecret: true,
       oAuth: {
         flows: {
@@ -228,6 +257,7 @@ export class AuthStack extends cdk.Stack {
     // Public SPA client (no secret — safe for browser-based auth + MCP OAuth PKCE)
     this.spaClient = this.userPool.addClient('TtobakSpaClient', {
       userPoolClientName: 'ttobak-spa-client',
+      writeAttributes: clientWriteAttributes,
       generateSecret: false,
       oAuth: {
         flows: {
@@ -266,6 +296,7 @@ export class AuthStack extends cdk.Stack {
     // private SSM StringLists, bootstrapped before deploy like the MCP callbacks.
     this.companionClient = this.userPool.addClient('TtobakCompanionClient', {
       userPoolClientName: 'ttobak-companion-client',
+      writeAttributes: clientWriteAttributes,
       generateSecret: false,
       oAuth: {
         flows: {
@@ -324,6 +355,7 @@ export class AuthStack extends cdk.Stack {
     }) : undefined;
     const connectorClient = (id: string, name: string, write: boolean) => this.userPool.addClient(id, {
       userPoolClientName: name,
+      writeAttributes: clientWriteAttributes,
       generateSecret: false,
       disableOAuth: props?.connectorOAuthEnabled !== true,
       ...(props?.connectorOAuthEnabled === true ? {

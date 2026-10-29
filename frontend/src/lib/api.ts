@@ -90,13 +90,13 @@ function assertRequestUser(expectedUserId: string, token = getIdToken()) {
 // Mutex for token refresh — prevents concurrent refreshSession() race conditions
 let refreshPromise: Promise<string | null> | null = null;
 
-function refreshTokenOnce(): Promise<string | null> {
+export function refreshTokenOnce(): Promise<string | null> {
   if (refreshPromise) return refreshPromise;
   refreshPromise = refreshSession().finally(() => { refreshPromise = null; });
   return refreshPromise;
 }
 
-async function getAuthHeaders(): Promise<Record<string, string>> {
+export async function getAuthHeaders(): Promise<Record<string, string>> {
   let token = getIdToken();
 
   if (!token || isTokenExpired(token)) {
@@ -758,9 +758,43 @@ export const researchChatApi = {
 };
 
 // Account API
+async function getAccounts(): Promise<{ accounts: AccountSummary[] }> {
+  const accounts: AccountSummary[] = [];
+  const accountIds = new Map<string, number>();
+  const cursors = new Set<string>();
+  let cursor = '';
+  const invalid = () => new ApiError(502, 'ACCOUNT_DISCOVERY_INVALID', '어카운트 목록을 완전히 불러오지 못했습니다. 다시 시도해 주세요.');
+  for (let pageIndex = 0; pageIndex < 1000; pageIndex++) {
+    const query = new URLSearchParams({ pageSize: '100' });
+    if (cursor) query.set('cursor', cursor);
+    const page = await api.get<{ accounts: AccountSummary[]; nextCursor?: string; overlapPossible?: boolean; unionKey?: string }>(`/api/accounts?${query}`);
+    if (!page || !Array.isArray(page.accounts)) throw invalid();
+    if (page.overlapPossible !== undefined && typeof page.overlapPossible !== 'boolean') throw invalid();
+    if (page.overlapPossible && page.unionKey !== 'accountId') throw invalid();
+    for (const account of page.accounts) {
+      if (!account || typeof account.accountId !== 'string' || !account.accountId) throw invalid();
+      const previousIndex = accountIds.get(account.accountId);
+      if (previousIndex !== undefined) {
+        if (!page.overlapPossible) throw invalid();
+        accounts[previousIndex] = account;
+        continue;
+      }
+      accountIds.set(account.accountId, accounts.length);
+      accounts.push(account);
+    }
+    const next = page.nextCursor;
+    if (next === undefined || next === '') return { accounts };
+    if (typeof next !== 'string' || next.length > 2048 || !/^[A-Za-z0-9_-]+$/.test(next)
+      || cursors.has(next)) throw invalid();
+    cursors.add(next);
+    cursor = next;
+  }
+  throw new ApiError(502, 'ACCOUNT_DISCOVERY_LIMIT', '어카운트 목록이 너무 커서 완전히 불러오지 못했습니다.');
+}
+
 export const accountApi = {
-  list: () => api.get<{ accounts: AccountSummary[] }>('/api/accounts'),
-  get: (id: string) => api.get<Account>(`/api/accounts/${encodeURIComponent(id)}`),
+  list: getAccounts,
+  get: (id: string, options?: FetchOptions) => api.get<Account>(`/api/accounts/${encodeURIComponent(id)}`, options),
   create: (data: AccountCreationRequest, expectedUserId: string) =>
     api.post<AccountCreationResponse>('/api/accounts', data, { expectedUserId }),
   resendOwnerInvitation: (id: string, expectedUserId: string) =>
@@ -897,8 +931,8 @@ export const docApi = {
 };
 
 export const meetingAccountApi = {
-  link: (meetingId: string, accountId: string) =>
-    api.post<{ accountId: string }>(`/api/meetings/${encodeURIComponent(meetingId)}/account`, { accountId }),
+  link: (meetingId: string, accountId: string, options?: FetchOptions) =>
+    api.post<{ accountId: string }>(`/api/meetings/${encodeURIComponent(meetingId)}/account`, { accountId }, options),
   shareToAccount: (meetingId: string, accountId: string) =>
     api.post<{ accountId: string; sharedWith: number }>(
       `/api/meetings/${encodeURIComponent(meetingId)}/share-account`, { accountId }),

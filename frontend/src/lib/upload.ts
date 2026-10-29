@@ -13,6 +13,10 @@ export interface UploadResult {
   url: string;
 }
 
+interface UploadIdentity {
+  expectedUserId: string;
+}
+
 export async function uploadToS3(
   file: File,
   category: 'audio' | 'image' | 'file' | 'doc',
@@ -20,6 +24,7 @@ export async function uploadToS3(
   meetingId?: string,
   partIndex?: number,
   totalParts?: number,
+  identity?: UploadIdentity,
 ): Promise<UploadResult> {
   // Browsers can leave Office/Markdown File.type blank. Keep the presigned
   // request and PUT content type identical; extraction still validates bytes.
@@ -38,7 +43,7 @@ export async function uploadToS3(
     meetingId,
     partIndex,
     totalParts,
-  });
+  }, identity);
 
   // Upload directly to S3
   return new Promise((resolve, reject) => {
@@ -208,8 +213,9 @@ export async function notifyUploadComplete(
   key: string,
   category: 'audio' | 'image' | 'file',
   metadata?: { fileName?: string; fileSize?: number; mimeType?: string; partIndex?: number; totalParts?: number },
+  identity?: UploadIdentity,
 ): Promise<void> {
-  await uploadsApi.notifyComplete({ meetingId, key, category, ...metadata });
+  await uploadsApi.notifyComplete({ meetingId, key, category, ...metadata }, identity);
 }
 
 export function formatFileSize(bytes: number): string {

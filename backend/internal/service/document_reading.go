@@ -106,11 +106,11 @@ type documentReadingSource struct {
 func (s *DocumentReadingService) source(ctx context.Context, userID, accountID, docID string) (*documentReadingSource, error) {
 	pk, scope, permission, grant := model.PrefixUser+userID, "personal", "owner", readingHash(userID)
 	if accountID != "" {
-		member, err := s.repo.GetMember(ctx, accountID, userID)
+		accessGrant, err := resolveAccountReadGrant(ctx, s.repo, accountID, userID)
 		if err != nil {
 			return nil, err
 		}
-		if member == nil {
+		if accessGrant == nil {
 			account, err := s.repo.GetAccount(ctx, accountID)
 			if err != nil {
 				return nil, err
@@ -120,10 +120,10 @@ func (s *DocumentReadingService) source(ctx context.Context, userID, accountID, 
 			}
 			return nil, ErrForbidden
 		}
-		if member.AccountID != accountID || member.UserID != userID {
+		if !accessGrant.inherited() && (accessGrant.Member.AccountID != accountID || accessGrant.Member.UserID != userID) {
 			return nil, ErrForbidden
 		}
-		pk, scope, permission, grant = model.PrefixAccount+accountID, "account", "edit", readingHash(member)
+		pk, scope, permission, grant = model.PrefixAccount+accountID, "account", accessGrant.permission(), accessGrant.fingerprint()
 	}
 	doc, err := s.repo.GetAccountDocument(ctx, pk, docID)
 	if err != nil {

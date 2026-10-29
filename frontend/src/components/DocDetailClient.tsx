@@ -9,6 +9,7 @@ import TurndownService from 'turndown';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { accountApi, docApi } from '@/lib/api';
+import { canEditDocument, isEditableAccount } from '@/lib/accountAccess';
 import { uploadDocFile } from '@/lib/upload';
 import { DocumentShareButton } from '@/components/ShareButton';
 import { IndexStatus } from '@/components/IndexStatus';
@@ -51,6 +52,7 @@ function DocDetailContent({ accountScoped }: DocDetailClientProps) {
   const { isLoading, isAuthenticated } = useAuth();
 
   const [doc, setDoc] = useState<AccountDocument | null>(null);
+  const canEdit = canEditDocument(doc);
   const [titles, setTitles] = useState<string[]>([]);
   const [title, setTitle] = useState('');
   const [loading, setLoading] = useState(true);
@@ -127,7 +129,7 @@ function DocDetailContent({ accountScoped }: DocDetailClientProps) {
   }, [accountScoped, isAuthenticated]);
 
   const handleShareToAccount = useCallback(async () => {
-    if (!shareAccountId) return;
+    if (!canEdit || !shareAccountId || !accounts.some(account => account.accountId === shareAccountId && isEditableAccount(account))) return;
     setSharing(true);
     setShareMsg(null);
     try {
@@ -138,9 +140,10 @@ function DocDetailContent({ accountScoped }: DocDetailClientProps) {
     } finally {
       setSharing(false);
     }
-  }, [docId, shareAccountId]);
+  }, [docId, shareAccountId, canEdit, accounts]);
 
   const handleTogglePublicShare = useCallback(async () => {
+    if (!canEdit) return;
     setPublicBusy(true);
     try {
       if (publicToken) {
@@ -155,7 +158,7 @@ function DocDetailContent({ accountScoped }: DocDetailClientProps) {
     } finally {
       setPublicBusy(false);
     }
-  }, [docId, publicToken]);
+  }, [docId, publicToken, canEdit]);
 
   const handleCopyPublicLink = useCallback(() => {
     if (!publicToken || typeof window === 'undefined') return;
@@ -174,7 +177,7 @@ function DocDetailContent({ accountScoped }: DocDetailClientProps) {
   // to omitting markdown for that save instead of sending "" (which would
   // trip updateDoc's slide-destructive-conversion guard).
   const saveContent = useCallback(async (markdown: string, nextTitle?: string) => {
-    if (!doc) return;
+    if (!doc || !canEdit) return;
     if (saveInFlightRef.current) {
       // A save is already in flight -- queue this one instead of firing a
       // second concurrent PUT (latest markdown wins). nextTitle falls back
@@ -224,7 +227,7 @@ function DocDetailContent({ accountScoped }: DocDetailClientProps) {
         saveContent(pending.markdown, pending.nextTitle);
       }
     }
-  }, [accountId, docId, doc]);
+  }, [accountId, docId, doc, canEdit]);
 
   const handleChange = useCallback((html: string) => {
     latestMarkdownRef.current = turndown.turndown(html);
@@ -244,7 +247,7 @@ function DocDetailContent({ accountScoped }: DocDetailClientProps) {
   const handleReplaceFile = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
-    if (!file || !doc) return;
+    if (!file || !doc || !canEdit) return;
     setReplacing(true);
     setError(null);
     try {
@@ -277,7 +280,7 @@ function DocDetailContent({ accountScoped }: DocDetailClientProps) {
     } finally {
       setReplacing(false);
     }
-  }, [doc, accountId, docId, fetchAll]);
+  }, [doc, accountId, docId, fetchAll, canEdit]);
 
   if (isLoading) {
     return (
@@ -336,6 +339,9 @@ function DocDetailContent({ accountScoped }: DocDetailClientProps) {
             <span>{doc.sharedBy} 님이 공유한 문서입니다 — 읽기 전용</span>
           </div>
         )}
+        {doc.inheritedFromAccountId && !canEdit && (
+          <p className="mb-4 text-sm text-slate-500 dark:text-text-muted">상위 어카운트에서 공유됨 · 읽기 전용</p>
+        )}
         <div className="flex items-center gap-3 mb-6">
           {/* disabled for slides so handleTitleBlur (and its saveContent
               call sending markdown: "") can never fire on one -- see the
@@ -348,7 +354,7 @@ function DocDetailContent({ accountScoped }: DocDetailClientProps) {
               setDirty(documentChanged(savedContentRef.current, e.target.value, latestMarkdownRef.current));
             }}
             onBlur={handleTitleBlur}
-            disabled={isSlide || isReceivedShare}
+            disabled={isSlide || !canEdit}
             className="flex-1 text-2xl font-bold bg-transparent border-none outline-none focus:ring-0 text-slate-900 dark:text-text-main disabled:text-slate-500"
           />
           {doc.docType && (
@@ -365,13 +371,13 @@ function DocDetailContent({ accountScoped }: DocDetailClientProps) {
           dirty={dirty || saving || replacing}
         />
 
-        {!accountScoped && !isReceivedShare && (
+        {!accountScoped && canEdit && (
           <div className="mb-6">
             <DocumentShareButton docId={docId} />
           </div>
         )}
 
-        {!accountScoped && !isReceivedShare && accounts.length > 0 && (
+        {!accountScoped && canEdit && accounts.some(isEditableAccount) && (
           <div className="flex flex-col sm:flex-row sm:items-center gap-2 mb-6">
             <select
               value={shareAccountId}
@@ -379,7 +385,7 @@ function DocDetailContent({ accountScoped }: DocDetailClientProps) {
               className="flex-1 px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest text-sm"
             >
               <option value="">어카운트 선택…</option>
-              {accounts.map((a) => (
+              {accounts.filter(isEditableAccount).map((a) => (
                 <option key={a.accountId} value={a.accountId}>{a.name}</option>
               ))}
             </select>
@@ -440,14 +446,14 @@ function DocDetailContent({ accountScoped }: DocDetailClientProps) {
                 <span>{doc.fileName}</span>
               </div>
               <div className="flex items-center gap-2">
-                <input
+                {canEdit && <input
                   ref={fileInputRef}
                   type="file"
                   accept=".pdf,.pptx,.ppt"
                   className="hidden"
                   onChange={handleReplaceFile}
-                />
-                {!isReceivedShare && (
+                />}
+                {canEdit && (
                 <button
                   onClick={() => fileInputRef.current?.click()}
                   disabled={replacing}
@@ -468,7 +474,7 @@ function DocDetailContent({ accountScoped }: DocDetailClientProps) {
               </div>
             </div>
 
-            {!accountScoped && !isReceivedShare && (
+            {!accountScoped && canEdit && (
               <div className="flex items-center gap-2 glass-panel rounded-xl p-4">
                 <button
                   onClick={handleTogglePublicShare}
@@ -494,7 +500,7 @@ function DocDetailContent({ accountScoped }: DocDetailClientProps) {
             onChange={handleChange}
             onAutoSave={handleAutoSave}
             autoSaveDelay={2000}
-            readOnly={isReceivedShare}
+            readOnly={!canEdit}
             wikilinkTitles={titles}
           />
         )}

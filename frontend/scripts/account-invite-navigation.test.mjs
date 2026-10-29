@@ -49,13 +49,22 @@ function fixture(addMember, resendOwnerInvitation = async () => ({}), ownerInvit
   const helper = {};
   vm.runInNewContext(transpile(readFileSync(
     new URL('../src/lib/accountInvite.ts', import.meta.url), 'utf8')), { exports: helper, Error });
+  const accountTabs = {};
+  vm.runInNewContext(transpile(readFileSync(
+    new URL('../src/lib/accountTabs.ts', import.meta.url), 'utf8')), { exports: accountTabs, URLSearchParams });
+  const accountAccess = {};
+  vm.runInNewContext(transpile(readFileSync(
+    new URL('../src/lib/accountAccess.ts', import.meta.url), 'utf8')), { exports: accountAccess });
   const MemberPicker = () => null;
   const emptyComponent = () => null;
   const emptyResult = async () => ({});
   const jsx = (type, props) => ({ type, props });
   const modules = {
     react, 'react/jsx-runtime': { jsx, jsxs: jsx },
-    'next/navigation': { usePathname: () => pathname, useRouter: () => ({ push() {} }) },
+    'next/navigation': {
+      usePathname: () => pathname, useRouter: () => ({ push() {}, replace() {} }),
+      useSearchParams: () => new URLSearchParams(),
+    },
     '@/components/auth/AuthProvider': {
       useAuth: () => ({ user: { userId: 'member' }, isLoading: false, isAuthenticated: true, membershipRevision: 0 }),
     },
@@ -76,10 +85,15 @@ function fixture(addMember, resendOwnerInvitation = async () => ({}), ownerInvit
       },
       projectApi: { accountProjects: async () => ({ projects: [] }) },
     },
-    '@/lib/accountInvite': helper, '@/lib/upload': { uploadDocFile() {} },
+    '@/lib/accountInvite': helper, '@/lib/accountTabs': accountTabs, '@/lib/upload': { uploadDocFile() {} },
+    '@/lib/accountAccess': accountAccess,
     '@/components/MemberPicker': { MemberPicker },
     '@/components/FieldInsightsSection': { FieldInsightsSection: emptyComponent },
     '@/components/AccountParentEditor': { AccountParentEditor: emptyComponent },
+    '@/components/AccountBillingTab': { AccountBillingTab: emptyComponent },
+    '@/lib/runtimeConfig': { getRuntimeConfig: async () => ({}) },
+    '@/lib/billingApi': { fetchBillingAccounts: async () => [] },
+    '@/lib/billingSummary': { billingEntryFor: () => null },
     '@/types/meeting': { ASSIGNABLE_ACCOUNT_ROLES: ['SSA', 'SA'] },
   };
   const exports = {};
