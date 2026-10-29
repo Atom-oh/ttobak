@@ -15,6 +15,14 @@ TEAM_RE = re.compile(r"(?i)(?<![a-z])(%s)(?![a-z])" % "|".join(TEAM_WORDS))
 MANAGED_NS = ("kubernetes.io/", "k8s.io/")  # controller-owned labels, not the customer's own tags
 MANAGED_VALUES = {"owned", "shared"}
 CREATED_RE = re.compile(r"(?i)created[-_]?(at|date|on)")
+CREATED_DATE_RE = re.compile(r"(\d{4}-(0[1-9]|1[0-2])(-(0[1-9]|[12]\d|3[01]))?)(?!\d)")
+
+
+def created_date(value):
+    """The YYYY-MM[-DD] prefix of a created-at tag value, or None for a placeholder (unknown, N/A, TBD, ...):
+    such a value is undated, never a month, so it cannot count as recent or open a cohort."""
+    m = CREATED_DATE_RE.match(value.strip()) if isinstance(value, str) else None
+    return m.group(1) if m else None
 
 
 def parse_cell(raw):
