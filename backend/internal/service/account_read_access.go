@@ -59,6 +59,14 @@ func (g *accountReadGrant) fingerprint() string {
 	return readingHash([]interface{}{g, g.Member.SummaryPrivacyVersion})
 }
 
+func projectAccountReadMeeting(meeting *model.Meeting, grant *accountReadGrant) *model.Meeting {
+	projected := projectAccountMeeting(meeting, grant.privacyMember())
+	copy := *projected
+	copy.AccountReadGrantRevision = grant.fingerprint()
+	copy.AccountReadInherited = grant.inherited()
+	return &copy
+}
+
 func descendantReadsEnabled() bool { return os.Getenv(accountDescendantReadsEnv) == "1" }
 
 func canonicalReadAccount(account *model.Account, id string) bool {

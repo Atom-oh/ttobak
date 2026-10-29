@@ -107,7 +107,11 @@ func TestInheritedReaderCannotCorrectSpeakers(t *testing.T) {
 	meeting.Content = "spk_0 summary"
 	meeting.TranscriptA = "[spk_0]\nhello"
 	r.addMeeting(&meeting)
-	_, err := newMeetingServiceWithRepo(r).UpdateSpeakers(context.Background(), "reader", "meeting",
+	detail, err := newMeetingServiceWithRepo(r).GetMeetingDetail(context.Background(), "reader", "meeting")
+	if err != nil || detail == nil || detail.CanCorrectSpeakers {
+		t.Fatalf("inherited speaker capability: %+v/%v", detail, err)
+	}
+	_, err = newMeetingServiceWithRepo(r).UpdateSpeakers(context.Background(), "reader", "meeting",
 		&model.UpdateSpeakersRequest{SpeakerMap: map[string]string{"spk_0": "name"}})
 	if !errors.Is(err, ErrForbidden) || r.meetingsByID["meeting"].Content != "spk_0 summary" {
 		t.Fatalf("inherited reader changed speakers: %v", err)

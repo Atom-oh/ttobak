@@ -52,7 +52,19 @@ func (s *MeetingReadingService) Read(ctx context.Context, userID, meetingID stri
 		return nil, ErrNotFound
 	}
 	if o.Kind == "transcript" {
-		return s.transcript(ctx, meeting, meetingID, o)
+		body, err := s.transcript(ctx, meeting, meetingID, o)
+		if err != nil {
+			return nil, err
+		}
+		current, _, err := s.access.checkAccess(ctx, userID, meetingID)
+		if err != nil {
+			return nil, err
+		}
+		if current == nil || current.AccountReadGrantRevision != meeting.AccountReadGrantRevision ||
+			current.AuthorizationRevision != meeting.AuthorizationRevision {
+			return nil, ErrStaleReadingCursor
+		}
+		return body, nil
 	}
 	if meeting.SummaryReadRestricted && o.Section != "notes" {
 		return nil, ErrSummaryReadRestricted
@@ -190,7 +202,7 @@ func (s *MeetingReadingService) transcript(ctx context.Context, m *model.Meeting
 		}
 	}
 	revision := readingHash([]interface{}{source, text, m.SttProvider, segments})
-	binding := readingHash([]interface{}{1, "transcript", meetingID, o.Source, selected, source, timeRange, revision})
+	binding := readingHash([]interface{}{1, "transcript", meetingID, o.Source, selected, source, timeRange, revision, m.AccountReadGrantRevision})
 	truncated := []string{}
 	base := readingObject{
 		"meetingId": meetingID, "title": readingLimit(m.Title, 256, "title", &truncated),
@@ -230,7 +242,7 @@ func renderMeetingReading(m *model.Meeting, permission string, state *model.Acti
 	if o.Section == "notes" {
 		revision = readingHash([]string{field, text, m.NotesRevision})
 	}
-	binding := readingHash([]interface{}{1, "meeting", m.MeetingID, o.Section, revision})
+	binding := readingHash([]interface{}{1, "meeting", m.MeetingID, o.Section, revision, m.AccountReadGrantRevision})
 	truncated := []string{}
 	base := readingObject{"meetingId": m.MeetingID, "source": o.Section, "revision": revision,
 		"title":               readingLimit(m.Title, 256, "title", &truncated),

@@ -627,6 +627,7 @@ func TestListMyProjects_IncludesAccountInheritedProjects(t *testing.T) {
 	project := seedProject(repo, "p1", "owner")
 	project.AccountIDs = []string{"acc1"}
 	repo.accountMembers[projectAccountMemberKey("acc1", "carol")] = &model.AccountMember{AccountID: "acc1", UserID: "carol"}
+	repo.accounts["acc1"] = &model.Account{AccountID: "acc1"}
 	repo.projectRefs["acc1"] = []model.ProjectRef{{ProjectID: "p1", AccountID: "acc1"}}
 
 	projects, err := newProjectServiceWithRepo(repo).ListMyProjects(context.Background(), "carol")
@@ -646,6 +647,7 @@ func TestListMyProjects_AccountInheritedFailsClosedOnUnlinkedAccount(t *testing.
 	project := seedProject(repo, "p1", "owner")
 	project.AccountIDs = []string{} // unlinked -- canonical set no longer contains acc1
 	repo.accountMembers[projectAccountMemberKey("acc1", "carol")] = &model.AccountMember{AccountID: "acc1", UserID: "carol"}
+	repo.accounts["acc1"] = &model.Account{AccountID: "acc1"}
 	repo.projectRefs["acc1"] = []model.ProjectRef{{ProjectID: "p1", AccountID: "acc1"}} // stale ref left behind by the unlink
 
 	projects, err := newProjectServiceWithRepo(repo).ListMyProjects(context.Background(), "carol")

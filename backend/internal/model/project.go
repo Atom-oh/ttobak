@@ -120,17 +120,19 @@ type UpdateProjectRequest struct {
 }
 
 type ProjectResponse struct {
-	ProjectID   string             `json:"projectId"`
-	Name        string             `json:"name"`
-	Description string             `json:"description,omitempty"`
-	SfdcOpptyID string             `json:"sfdcOpptyId,omitempty"`
-	SfdcURL     string             `json:"sfdcUrl,omitempty"`
-	Stage       string             `json:"stage,omitempty"`
-	OwnerUserID string             `json:"ownerUserId"`
-	AccountIDs  []string           `json:"accountIds"`
-	Members     []ProjectMemberDTO `json:"members"`
-	CreatedAt   time.Time          `json:"createdAt"`
-	UpdatedAt   time.Time          `json:"updatedAt"`
+	AccessPermission       string             `json:"accessPermission"`
+	InheritedFromAccountID string             `json:"inheritedFromAccountId,omitempty"`
+	ProjectID              string             `json:"projectId"`
+	Name                   string             `json:"name"`
+	Description            string             `json:"description,omitempty"`
+	SfdcOpptyID            string             `json:"sfdcOpptyId,omitempty"`
+	SfdcURL                string             `json:"sfdcUrl,omitempty"`
+	Stage                  string             `json:"stage,omitempty"`
+	OwnerUserID            string             `json:"ownerUserId"`
+	AccountIDs             []string           `json:"accountIds"`
+	Members                []ProjectMemberDTO `json:"members"`
+	CreatedAt              time.Time          `json:"createdAt"`
+	UpdatedAt              time.Time          `json:"updatedAt"`
 }
 
 type ProjectSummary struct {
