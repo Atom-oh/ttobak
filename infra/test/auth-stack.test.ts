@@ -3,7 +3,7 @@ import { Template } from 'aws-cdk-lib/assertions';
 import * as ts from 'typescript';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { AuthStack } from '../lib/auth-stack';
+import { AuthStack, CC_ON_BEDROCK_ATTRIBUTES } from '../lib/auth-stack';
 
 describe('AuthStack', () => {
   let template: Template;
@@ -27,6 +27,24 @@ describe('AuthStack', () => {
       UpdateReplacePolicy: 'Retain',
       Properties: { DeletionProtection: 'ACTIVE' },
     });
+  });
+
+  test('the pool defines the mutable custom attributes cc-on-bedrock reads', () => {
+    const pool = Object.values(template.findResources('AWS::Cognito::UserPool'))[0] as {
+      Properties: { Schema?: { Name: string; AttributeDataType: string; Mutable: boolean }[] };
+    };
+    const custom = (pool.Properties.Schema ?? []).filter(a => a.Name !== 'email');
+    expect(custom.map(a => a.Name).sort()).toEqual([...CC_ON_BEDROCK_ATTRIBUTES].sort());
+    for (const a of custom) expect(a).toMatchObject({ AttributeDataType: 'String', Mutable: true });
+  });
+
+  test('no app client lets users write custom attributes', () => {
+    const clients = Object.values(template.findResources('AWS::Cognito::UserPoolClient')) as {
+      Properties: { WriteAttributes?: string[] };
+    }[];
+    expect(clients.length).toBeGreaterThanOrEqual(5);
+    // Unset WriteAttributes means every mutable attribute is user-writable.
+    for (const c of clients) expect(c.Properties.WriteAttributes).toEqual(['name']);
   });
 
   test('the deployed AuthStack enables termination protection in its assembly', () => {
