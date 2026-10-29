@@ -145,6 +145,7 @@ type MeetingDetailResponse struct {
 	SupportsAudioCrop          bool                  `json:"supportsAudioCrop"`
 	SupportsMeetingTranslation bool                  `json:"supportsMeetingTranslation"`
 	CanRecoverRecording        bool                  `json:"canRecoverRecording"`
+	CanCorrectSpeakers         bool                  `json:"canCorrectSpeakers"`
 	AudioCrop                  *AudioCrop            `json:"audioCrop,omitempty"`
 	Duration                   int                   `json:"duration,omitempty"`
 	SupportsNotesComparison    bool                  `json:"supportsNotesComparison"`

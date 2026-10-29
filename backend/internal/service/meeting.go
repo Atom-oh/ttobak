@@ -697,6 +697,7 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 
 	return &model.MeetingDetailResponse{
 		CanRecoverRecording:        permission == "owner" && CanRecoverRecording(meeting),
+		CanCorrectSpeakers:         !meeting.AccountReadInherited && (permission == "owner" || permission == model.PermissionEdit || permission == model.PermissionRead),
 		AudioCrop:                  meeting.AudioCrop,
 		Duration:                   meeting.Duration,
 		SupportsNotesComparison:    true,
