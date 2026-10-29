@@ -1,6 +1,7 @@
 # ADR-036: Account hierarchy and multi-account meeting filters
 
 - Status: Accepted; extends flat account organization and single-account filtering. ADR-034's member permissions and ADR-025's explicit Project-account links remain unchanged.
+- Superseded in part by [ADR-058](ADR-058-descendant-account-read-sharing.md): the no-inheritance policy is replaced by descendant read grants. Filtering and hierarchy mutation rules remain applicable.
 - Decision date: 2026-09-11.
 - Code checked: 2026-09-13. Backend and UI exist in this checkout; deployment order/status is not established by source.
 

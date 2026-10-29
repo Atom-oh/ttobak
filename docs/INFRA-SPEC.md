@@ -655,6 +655,14 @@ action follows the `PipelineAlarmTopicArn` convention of the other alarms.
 
 ## Summary privacy writer activation
 
+GatewayStack also declares `AccountDescendantReadsEnabled` (`0` or `1`, default
+`0`). It supplies `ACCOUNT_DESCENDANT_READS_ENABLED` only to API and QA and binds
+the API immutable version description. Deploy reviewed readers and transactional
+child-reference writers disabled, bootstrap/verify metadata-only `CHILDREF#`
+rows, then activate using previous values for every other parameter. References
+never authorize alone. See [the release runbook](runbooks/account-descendant-sharing.md)
+and ADR-058; configuration alone does not prove deployed acceptance.
+
 GatewayStack declares `SummaryPrivacyWriterEnabled` and
 `SummaryPrivacyReaderEnabled` (`0` or `1`, default `0`) plus
 `SummaryPrivacyLegacyMemberCutoff` (empty installation value or fixed UTC RFC3339

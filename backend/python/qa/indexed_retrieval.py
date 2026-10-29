@@ -7,6 +7,7 @@ from source_revision import (
 )
 from manual_kb import discovery_filter as manual_discovery_filter, hydrate_manual_candidates
 from legacy_text import read_legacy_text, source_excerpt
+from account_read_access import AccountReadAccess
 
 
 def discover_sources(reader, user_id, query_all, shared_meetings):
@@ -41,19 +42,8 @@ def discover_sources(reader, user_id, query_all, shared_meetings):
                 and share.get('SK') == 'SHAREDDOC#' + doc_id and isinstance(owner, str)):
             add('USER#' + owner, 'DOC#' + doc_id)
     accounts = set()
-    memberships = query_all(
-        IndexName='GSI1',
-        KeyConditionExpression=Key('GSI1PK').eq(own_pk) & Key('GSI1SK').begins_with('ACCOUNT#'),
-        ProjectionExpression='accountId',
-    )
-    for account_id in sorted({row['accountId'] for row in memberships
-                              if isinstance(row.get('accountId'), str) and IDENTIFIER.fullmatch(row['accountId'])}):
-        member = reader.table.get_item(
-            Key={'PK': 'ACCOUNT#' + account_id, 'SK': 'MEMBER#' + user_id},
-            ConsistentRead=True,
-        ).get('Item') or {}
-        if member.get('accountId') != account_id or member.get('userId') != user_id:
-            continue
+    grants = AccountReadAccess(reader.table, query_all).discover(user_id)
+    for account_id in sorted(grants):
         accounts.add('ACCOUNT#' + account_id)
         for row in query_all(
             KeyConditionExpression=Key('PK').eq('ACCOUNT#' + account_id) & Key('SK').begins_with('DOC#'),
@@ -155,7 +145,7 @@ def hydrate_candidates(reader, user_id, question, candidates, identities, limit,
             continue  # never reuse indexed/cached meeting text
         if identity and identity['filename'].startswith('file.'):
             verified = (snapshot['outcome'] == 'INDEXED' and identity['filename'] in snapshot['filenames']
-                        and identity['indexRevision'] == snapshot['revision']
+                        and identity['indexRevision'] == snapshot.get('indexRevision', snapshot['revision'])
                         and identity['bindings'] == normalize_bindings(snapshot['objects']))
             if verified:
                 text = candidate.get('_provider', {}).get('content', {}).get('text')

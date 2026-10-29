@@ -56,6 +56,13 @@ bounded inputs/hash, not result text. Include formatter-consumed and stable
 identity fields; research summary is limited to its visible first 200
 characters. Preserve all requested meeting rows, without silent truncation.
 
+Flag-gated inherited Account and meeting views retain
+`_accountReadGrantFingerprint` alongside stable identities. Formatters do not
+render it, but the revision includes it so reparenting, grant replacement and
+revocation invalidate replay even when visible text remains identical.
+Account views also retain `accessPermission` and `inheritedFromAccountId`.
+Direct views retain their existing shape and permissions.
+
 Encoding preserves list order, sorts map keys, distinguishes null/missing and
 bool/number, and equates exact int/Decimal values across boto3 serialization.
 Do not coerce floats, stringify unsupported types or normalize Unicode.

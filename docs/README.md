@@ -26,6 +26,7 @@ Markdown for English language and historical/current status.
 | [PR review runbook](runbooks/pr-review.md) | Context delivery, evidence, latest-HEAD merge gate | Review scripts and workflow |
 | [Specialist review](pr-review-specialists.md) | Current role assignment, coverage and synthesis contract | Trusted workflow and review scripts |
 | [Deployment runbook](runbooks/deployment.md) | Build/deploy/rollback constraints | Deployment workflows |
+| [Descendant Account sharing](runbooks/account-descendant-sharing.md) | Read-only inheritance, conditional relation bootstrap, activation and rollback | ADR-058, API/QA feature parameter |
 | [Model deployment](runbooks/model-deployment.md) | Environment/preset selection, exact model grants, acceptance and rollback | Model configuration, AI/Gateway stacks and infrastructure workflow |
 | [Frontend release](runbooks/frontend-release.md) | Dependency acceptance, CSP/cache, ordered publication and recovery | FrontendStack, npm lockfiles and shared publisher |
 | [Unverified account recovery](runbooks/unverified-account-recovery.md) | Identity-verified operator password recovery | Cognito and the authenticated verification flow |
@@ -75,6 +76,7 @@ python3 scripts/docs/check_docs.py
 ```
 
 - [Cognito app client write attributes and self-service email change](decisions/ADR-057-cognito-client-write-attributes.md)
+- [Descendant Account read sharing](decisions/ADR-058-descendant-account-read-sharing.md)
 - [Browser recording recovery and retention](decisions/ADR-048-browser-recording-backups.md)
 - [Private audio crop worker](../backend/whisper/AUDIO_CROP.md)
 - [Private audio crops and activation](decisions/ADR-047-private-audio-crops.md)
@@ -82,5 +84,3 @@ python3 scripts/docs/check_docs.py
 - [Shared speaker correction and account publication](decisions/ADR-051-shared-speaker-correction-and-account-publication.md)
 - [Versioned HTTP origin proof rotation](decisions/ADR-050-http-origin-proof-rotation.md)
 - [Summary sharing and source provenance](decisions/ADR-049-summary-sharing-source-provenance.md)
-
-- [Descendant Account read sharing](decisions/ADR-058-descendant-account-read-sharing.md) — staged policy replacing ADR-036 inheritance rule.
