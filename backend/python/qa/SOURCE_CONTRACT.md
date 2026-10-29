@@ -323,6 +323,9 @@ the root, including nodes above the nearest qualifying membership. Inherited
 META/member rows require exact partition/sort keys, entity type and Account/user
 identity. Missing/malformed nodes, cycles and more than 64 ancestors deny the
 inherited grant; storage failures propagate. No upward or sibling grant exists.
+Before a qualifying membership is selected, an existing malformed ancestor
+membership denies the chain; only a missing membership may fall through to a
+higher ancestor.
 The grant fingerprint binds the target, granting Account, full parent path and
 current membership identity/privacy fields.
 

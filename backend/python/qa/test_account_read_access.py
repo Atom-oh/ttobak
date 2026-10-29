@@ -84,6 +84,27 @@ class DescendantReadsTests(unittest.TestCase):
         with mock.patch.dict('os.environ', {'ACCOUNT_DESCENDANT_READS_ENABLED': '0'}):
             self.assertIsNone(self.resolver().resolve('grandchild', 'reader'))
 
+    def test_malformed_nearer_membership_denies_instead_of_using_valid_higher_grant(self):
+        # A missing child membership may use root, but an existing malformed
+        # canonical row must deny the chain even while root remains valid.
+        self.assertEqual(self.resolver().resolve('grandchild', 'reader').granting_account_id, 'root')
+        self.member('child')
+        key = ('ACCOUNT#child', 'MEMBER#reader')
+        canonical = copy.deepcopy(self.table.items[key])
+        for field, bad in (
+            ('entityType', 'OTHER'), ('accountId', 'wrong'), ('userId', 'wrong'),
+            ('PK', 'ACCOUNT#wrong'), ('SK', 'MEMBER#wrong'), ('role', ''),
+            ('role', None), ('role', []),
+        ):
+            with self.subTest(field=field, bad=bad):
+                self.table.items[key] = dict(canonical, **{field: bad})
+                self.assertIn(('ACCOUNT#root', 'MEMBER#reader'), self.table.items)
+                self.assertIsNone(self.resolver().resolve('grandchild', 'reader'))
+                self.assertIsNone(read_current_document(self.table, 'reader', 'ACCOUNT#grandchild', 'doc'))
+        self.table.fail_key = key
+        with self.assertRaises(RuntimeError):
+            self.resolver().resolve('grandchild', 'reader')
+
     def test_full_chain_identity_depth_cycle_and_storage_failure(self):
         self.member('child')
         baseline = copy.deepcopy(self.table.items)
@@ -96,8 +117,6 @@ class DescendantReadsTests(unittest.TestCase):
             with self.subTest(field=field, bad=bad):
                 self.table.items = copy.deepcopy(baseline)
                 self.table.items[key][field] = bad
-                if field == 'entityType' and key[1].startswith('MEMBER'):
-                    del self.table.items[('ACCOUNT#root', 'MEMBER#reader')]
                 self.assertIsNone(self.resolver().resolve('grandchild', 'reader'))
         self.table.items = baseline
         self.table.fail_key = ('ACCOUNT#root', 'META')

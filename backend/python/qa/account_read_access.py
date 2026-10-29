@@ -26,6 +26,10 @@ def projection(fields):
     return {'ProjectionExpression': ', '.join(names), 'ExpressionAttributeNames': names}
 
 
+class _MalformedInheritedMember(ValueError):
+    """An existing canonical-key row cannot be treated as missing membership."""
+
+
 @dataclass(frozen=True)
 class AccountReadGrant:
     account_id: str
@@ -72,14 +76,18 @@ class AccountReadAccess:
 
     def _member(self, account_id, user_id, *, strict=False):
         member = self._get(account_id, 'MEMBER#' + user_id, MEMBER_FIELDS)
-        if not member or member.get('accountId') != account_id or member.get('userId') != user_id:
+        if member is None:
             return None
         # Preserve the preexisting direct-grant contract. New inherited grants
         # additionally require the canonical storage and entity identities.
         if strict and (member.get('PK') != 'ACCOUNT#' + account_id
                        or member.get('SK') != 'MEMBER#' + user_id
+                       or member.get('accountId') != account_id
+                       or member.get('userId') != user_id
                        or member.get('entityType') != 'ACCOUNT_MEMBER'
                        or type(member.get('role')) is not str or not member['role']):
+            raise _MalformedInheritedMember('Invalid canonical inherited membership')
+        if not member or member.get('accountId') != account_id or member.get('userId') != user_id:
             return None
         return member
 
@@ -113,7 +121,10 @@ class AccountReadAccess:
             parent = meta.get('parentAccountId', '')
             path.append((current, parent))
             if current != account_id and selected is None:
-                member = self._member(current, user_id, strict=True)
+                try:
+                    member = self._member(current, user_id, strict=True)
+                except _MalformedInheritedMember:
+                    return None
                 if member:
                     selected = (current, member)
             current = parent
