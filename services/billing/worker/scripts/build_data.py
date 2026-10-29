@@ -7,6 +7,8 @@ import trend as T
 import cohtags as C
 import period as P
 from entities import ENTITIES
+import htmltext as HT
+from htmltext import strip_blocks, strip_tags  # noqa: F401 (re-exported for callers of build_data)
 
 M = T.MONTHS
 AI_RE = re.compile(r"(?i)claude|bedrock|gpt|openai|llama|mistral|cohere|anthropic")
@@ -79,55 +81,11 @@ def sp_best(sprec, term, pay):
             "savings_pct": round(sav / covered * 100, 1) if covered else 0.0}
 
 
-MAX_HTML = 64 * 2 ** 20  # as html2json.py: a larger page yields no figures (spend_check reports it)
-
-
-def strip_blocks(h):
-    """The page without <script>/<style> elements, in one linear pass (the page is untrusted). The next opener of
-    each kind is searched once and reused until passed. An unclosed element drops the rest of the page."""
-    low, out, i = h.lower(), [], 0
-    nxt = {"<script": low.find("<script"), "<style": low.find("<style")}
-    while True:
-        for k in nxt:
-            if 0 <= nxt[k] < i:
-                nxt[k] = low.find(k, i)
-        hits = [p for p in nxt.values() if p >= 0]
-        if not hits:
-            out.append(h[i:])
-            return "".join(out)
-        s = min(hits)
-        out.append(h[i:s])
-        close = "</script>" if low.startswith("<script", s) else "</style>"
-        c = low.find(close, s)
-        if c < 0:
-            return "".join(out)
-        i = c + len(close)
-
-
-def strip_tags(t):
-    """Markup replaced by a space, in one linear pass: a tag is "<" up to the next ">" (no ">" left: plain text)."""
-    out, i = [], 0
-    while True:
-        lt = t.find("<", i)
-        if lt < 0:
-            out.append(t[i:])
-            return "".join(out)
-        gt = t.find(">", lt + 1)
-        if gt < 0:
-            out.append(t[i:])
-            return "".join(out)
-        out.append(t[i:lt])
-        out.append(" ")
-        i = gt + 1
-
-
 def html_kpis(root, e):
-    path = os.path.join(root, e, f"COT_{e}_COT360.html")
-    if os.path.getsize(path) > MAX_HTML:
+    t = HT.page_text(os.path.join(root, e, f"COT_{e}_COT360.html"))
+    if t is None:  # over the size cap: no figures (spend_check reports it)
         return {"html_last_spend": None, "html_coh_dedup": None}
-    with open(path, encoding="utf-8") as fh:
-        h = fh.read()
-    t = re.sub(r"\s+", " ", strip_tags(strip_blocks(h)))
+    t = re.sub(r"\s+", " ", t)
     # bounded gaps: the label and its figure sit together on the page, and an unbounded lazy gap is quadratic
     # when the label repeats without the figure
     spend = re.search(r"Past Month Spend.{0,200}?\$([\d,]+) Amortized", t)

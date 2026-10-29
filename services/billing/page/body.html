@@ -1470,7 +1470,7 @@ dash.ready(function () {
         { f: 'service', render: (td, r) => { td.textContent = r.service; td.closest('tr').dataset.key = encodeURIComponent(r.entity) + ',' + encodeURIComponent(r.service); } },
         { f: 'signals', cls: 'l', render: (td, r) => { for (const s of r.signals.split(',')) if (s !== 'top') td.appendChild(el('span', 'tb-pill ' + s, { growth: '증가', decline: '감소', new: '신규' }[s])); } },
         ...MK.map((f) => ({ f, fmt: money })),
-        { f: 'd_h2_h1', render: (td, r) => { td.textContent = (r.d_h2_h1 > 0 ? '+' : '') + usd(r.d_h2_h1); td.className = r.d_h2_h1 > 0 ? 'tb-up' : r.d_h2_h1 < 0 ? 'tb-down' : ''; } },
+        { f: 'd_h2_h1', render: deltaCell('d_h2_h1') },
         { f: 'pct_h2_h1', render: pctCell('pct_h2_h1') },
       ]);
     }
@@ -1481,7 +1481,7 @@ dash.ready(function () {
         { f: 'account', render: (td, r) => { td.textContent = r.account; td.closest('tr').dataset.key = encodeURIComponent(r.entity) + ',' + encodeURIComponent(r.account); } },
         { f: 'kind', cls: 'l', render: (td, r) => td.appendChild(el('span', 'tb-pill ' + (r.kind === '신규' ? 'new' : 'growth'), r.kind)) },
         ...MK.map((f) => ({ f, fmt: money })),
-        { f: 'd_h2_h1', render: (td, r) => { td.textContent = (r.d_h2_h1 > 0 ? '+' : '') + usd(r.d_h2_h1); td.className = r.d_h2_h1 > 0 ? 'tb-up' : r.d_h2_h1 < 0 ? 'tb-down' : ''; } },
+        { f: 'd_h2_h1', render: deltaCell('d_h2_h1') },
         ...['regions', 'eks_clusters', 'map_tag', 'team'].map((f) => ({ f, cls: 'l', missing: 'COH 권고 리소스 태그에 값이 없음' })),
       ]);
     }
@@ -1539,7 +1539,8 @@ dash.ready(function () {
   const GEN = ['<=5', '6', '7', '8'];
   const GEN_KO = { '<=5': '5세대 이하', 6: '6세대', 7: '7세대', 8: '8세대' };
   const signedUsd = (v) => (v > 0 ? '+' : v < 0 ? '−' : '') + usd(Math.abs(v));
-  const deltaCell = (f) => (td, r) => { td.textContent = signedUsd(r[f]); td.className = r[f] > 0 ? 'tb-up' : r[f] < 0 ? 'tb-down' : ''; };
+  // null: a short period has no earlier half, so there is no change to show
+  const deltaCell = (f) => (td, r) => { const v = r[f]; td.textContent = v == null ? '—' : signedUsd(v); td.className = v > 0 ? 'tb-up' : v < 0 ? 'tb-down' : ''; };
   const list = (v, n = 3) => (Array.isArray(v) ? v.slice(0, n).join(', ') : v || '');
 
   // ---------- 워크로드(EC2) ----------
@@ -1616,7 +1617,7 @@ dash.ready(function () {
     for (const n of document.querySelectorAll('#tiles-acct [data-k]')) { n.textContent = '—'; if (n.classList.contains('tb-delta')) n.className = 'tb-delta'; }
     document.getElementById('chart-acct').replaceChildren();
     if (a) {
-      set('last', compact(a.last)); set('d', '월평균 ' + signedUsd(a.d_h2_h1) + (a.pct_h2_h1 == null ? '' : ` (${signed(a.pct_h2_h1)})`), a.d_h2_h1 > 0 ? 'tb-up' : a.d_h2_h1 < 0 ? 'tb-down' : 'tb-neutral');
+      set('last', compact(a.last)); set('d', a.d_h2_h1 == null ? '월평균 —' : '월평균 ' + signedUsd(a.d_h2_h1) + (a.pct_h2_h1 == null ? '' : ` (${signed(a.pct_h2_h1)})`), a.d_h2_h1 > 0 ? 'tb-up' : a.d_h2_h1 < 0 ? 'tb-down' : 'tb-neutral');
       set('share', (a.share_last * 100).toFixed(1) + '%'); set('kind', a.kind);
       set('coh', String(a.coh_resources || 0)); set('coh_est', a.coh_resources ? '월 추정 ' + compact(a.coh_est_monthly) : 'COH 리소스 없음');
       const node = document.getElementById('chart-acct'); node.replaceChildren();
