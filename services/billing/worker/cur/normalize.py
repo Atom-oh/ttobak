@@ -52,7 +52,7 @@ TYPE_COLS = {"DiscountedUsage": ("reservation_effective_cost",),
              "RIFee": ("reservation_unused_amortized_upfront_fee_for_billing_period", "reservation_unused_recurring_fee"),
              "SavingsPlanRecurringFee": ("savings_plan_total_commitment_to_date", "savings_plan_used_commitment")}
 # always populated on rows of that type: a blank one (a file without the column, read in a union) is a bad row
-ROW_COST = {"DiscountedUsage": "reservation_effective_cost",
+ROW_COST = {"Usage": "line_item_unblended_cost", "DiscountedUsage": "reservation_effective_cost",
             "SavingsPlanCoveredUsage": "savings_plan_savings_plan_effective_cost"}
 MEMORY_LIMIT = "8GB"  # tests lower these
 THREADS = 4
