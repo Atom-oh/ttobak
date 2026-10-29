@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/ttobak/backend/internal/model"
-
+	"github.com/ttobak/backend/internal/repository"
 	"net/url"
 	"reflect"
 	"strings"
@@ -179,6 +179,36 @@ func TestDescendantInsightsNeverGrandfatherLegacy(t *testing.T) {
 	}
 }
 
+func TestDescendantAccountsOptionalPagination(t *testing.T) {
+	t.Setenv(accountDescendantReadsEnv, "1")
+	r := descendantContentFixture()
+	s := newAccountServiceWithRepo(r)
+	ctx := context.Background()
+	first, err := s.ListAccountsPage(ctx, "reader", url.Values{"pageSize": {"1"}})
+	if err != nil || len(first.Accounts) != 1 || first.NextCursor == "" {
+		t.Fatalf("first page: %+v/%v", first, err)
+	}
+	second, err := s.ListAccountsPage(ctx, "reader", url.Values{"pageSize": {"1"}, "cursor": {first.NextCursor}})
+	if err != nil || len(second.Accounts) != 1 || second.NextCursor == "" || second.Accounts[0].AccountID == first.Accounts[0].AccountID {
+		t.Fatalf("second page: %+v/%v", second, err)
+	}
+	cursor := second.NextCursor
+	for pages := 0; cursor != ""; pages++ {
+		if pages > 10 {
+			t.Fatal("account discovery never completes")
+		}
+		page, err := s.ListAccountsPage(ctx, "reader", url.Values{"pageSize": {"1"}, "cursor": {cursor}})
+		if err != nil || len(page.Accounts) != 0 {
+			t.Fatalf("terminal bounded discovery: %+v/%v", page, err)
+		}
+		cursor = page.NextCursor
+	}
+	r.accounts["child"].ParentAccountID = "sibling"
+	if _, err := s.ListAccountsPage(ctx, "reader", url.Values{"pageSize": {"1"}, "cursor": {second.NextCursor}}); !errors.Is(err, ErrStaleReadingCursor) {
+		t.Fatalf("moved child account list cursor: %v", err)
+	}
+}
+
 type descendantNavigationRepo struct {
 	*navigationRepo
 	hierarchy *descendantContentRepo
@@ -192,6 +222,41 @@ func (r *descendantNavigationRepo) GetMember(ctx context.Context, id, user strin
 }
 func (r *descendantNavigationRepo) ListChildAccountIDsPage(ctx context.Context, id, cursor string, limit int32) ([]string, *string, error) {
 	return r.hierarchy.ListChildAccountIDsPage(ctx, id, cursor, limit)
+}
+func TestDescendantNavigationCatalog(t *testing.T) {
+	t.Setenv(accountDescendantReadsEnv, "1")
+	_, base := navigationFixture()
+	r := &descendantNavigationRepo{base, descendantContentFixture()}
+	r.accountIndex = []string{"parent"}
+	s := NewNavigationCatalogService(r)
+	q := url.Values{}
+	foundChild := false
+	for pages := 0; ; pages++ {
+		page := navigationPage(t, s, "accounts", q)
+		for _, raw := range page["accounts"].([]interface{}) {
+			row := raw.(map[string]interface{})
+			if row["accountId"] == "child" {
+				foundChild = row["accessPermission"] == model.PermissionRead
+			}
+		}
+		info := page["page"].(map[string]interface{})
+		if info["complete"] == true {
+			break
+		}
+		if pages > 10 {
+			t.Fatal("descendant navigation never completes")
+		}
+		q.Set("cursor", info["nextCursor"].(string))
+	}
+	if !foundChild {
+		t.Fatal("descendant navigation omitted the read-only child")
+	}
+	base.project("project", "owner", "child")
+	base.refs["child"] = []string{"project"}
+	item, _, err := s.project(context.Background(), "reader", "project", "accounts", "child")
+	if err != nil || item == nil || item.row["accessPermission"] != "read" {
+		t.Fatalf("descendant linked project: %+v/%v", item, err)
+	}
 }
 
 type descendantDocCatalogRepo struct {
@@ -213,6 +278,63 @@ func TestDescendantDocumentCatalog(t *testing.T) {
 	raw, err := NewDocumentCatalogService(r).Read(context.Background(), "reader", url.Values{"accountId": {"child"}})
 	if err != nil || !strings.Contains(string(raw), `"docId":"doc"`) || !strings.Contains(string(raw), `"permission":"read"`) {
 		t.Fatalf("descendant document catalog: %s/%v", raw, err)
+	}
+}
+
+type descendantMeetingCatalogRepo struct {
+	*catalogMeetingRepo
+	hierarchy *descendantContentRepo
+}
+
+func (r *descendantMeetingCatalogRepo) GetAccount(ctx context.Context, id string) (*model.Account, error) {
+	return r.hierarchy.GetAccount(ctx, id)
+}
+func (r *descendantMeetingCatalogRepo) GetMember(ctx context.Context, id, user string) (*model.AccountMember, error) {
+	return r.hierarchy.GetMember(ctx, id, user)
+}
+func (r *descendantMeetingCatalogRepo) ListChildAccountIDsPage(ctx context.Context, id, cursor string, limit int32) ([]string, *string, error) {
+	return r.hierarchy.ListChildAccountIDsPage(ctx, id, cursor, limit)
+}
+func TestDescendantMeetingCatalogNeverEscalates(t *testing.T) {
+	t.Setenv(accountDescendantReadsEnv, "1")
+	t.Setenv(SummaryPrivacyReaderEnv, "0")
+	r := &descendantMeetingCatalogRepo{&catalogMeetingRepo{mockMeetingRepo: newMockMeetingRepo()}, descendantContentFixture()}
+	r.meetings["owner|meeting"] = &model.Meeting{UserID: "owner", MeetingID: "meeting", AccountID: "child", SharedToAccount: true, Title: "Published", Content: "unsafe", Insights: "unsafe"}
+	r.shares["reader|meeting"] = &model.Share{OwnerID: "owner", SharedToID: "reader", MeetingID: "meeting", Permission: model.PermissionEdit, Origin: model.ShareOriginAccount}
+	item, _, _, err := NewMeetingCatalogService(r).item(context.Background(), "reader", "all", "team", "child", repository.MeetingCatalogCandidate{OwnerID: "owner", MeetingID: "meeting"})
+	if err != nil || item == nil || item.Permission == nil || *item.Permission != "read" || item.Summary != "" {
+		t.Fatalf("inherited catalog privacy/permission: %+v/%v", item, err)
+	}
+}
+
+type descendantVaultRepo struct {
+	*vaultReadingRepo
+	hierarchy *descendantContentRepo
+}
+
+func (r *descendantVaultRepo) GetAccount(ctx context.Context, id string) (*model.Account, error) {
+	return r.hierarchy.GetAccount(ctx, id)
+}
+func (r *descendantVaultRepo) GetMember(ctx context.Context, id, user string) (*model.AccountMember, error) {
+	return r.hierarchy.GetMember(ctx, id, user)
+}
+func (r *descendantVaultRepo) ListChildAccountIDsPage(ctx context.Context, id, cursor string, limit int32) ([]string, *string, error) {
+	return r.hierarchy.ListChildAccountIDsPage(ctx, id, cursor, limit)
+}
+func TestDescendantVaultSourceReparentInvalidates(t *testing.T) {
+	t.Setenv(accountDescendantReadsEnv, "1")
+	_, base := vaultReadingFixture()
+	r := &descendantVaultRepo{base, descendantContentFixture()}
+	base.docs["ACCOUNT#child"] = map[string]*model.AccountDocument{"doc": {PK: "ACCOUNT#child", DocID: "doc", Content: "Shared"}}
+	s := &VaultReadingService{repo: r}
+	source, err := s.source(context.Background(), "reader", "document", "child", "doc")
+	if err != nil || source == nil {
+		t.Fatalf("descendant vault source: %v", err)
+	}
+	token := encodeVaultFile(source.token)
+	r.hierarchy.accounts["child"].ParentAccountID = "sibling"
+	if err := s.checkManifestAnchor(context.Background(), "reader", token); !errors.Is(err, ErrStaleReadingCursor) {
+		t.Fatalf("moved vault anchor: %v", err)
 	}
 }
 
@@ -290,5 +412,16 @@ func TestDescendantAccountMeetingPublicationRace(t *testing.T) {
 	r.afterPublication = func() { r.meetings["meeting"].SharedToAccount = false }
 	if _, err := newAccountServiceWithRepo(r).ListAccountMeetings(context.Background(), "reader", "child"); !errors.Is(err, ErrForbidden) && !errors.Is(err, ErrStaleReadingCursor) {
 		t.Fatalf("unpublished source leaked metadata: %v", err)
+	}
+}
+func TestDescendantNavigationIndependentProjectGrantRemainsEditable(t *testing.T) {
+	t.Setenv(accountDescendantReadsEnv, "1")
+	_, base := navigationFixture()
+	r := &descendantNavigationRepo{base, descendantContentFixture()}
+	base.project("project", "owner", "child")
+	base.direct["project/reader"] = &model.ProjectMember{ProjectID: "project", UserID: "reader"}
+	item, _, err := NewNavigationCatalogService(r).project(context.Background(), "reader", "project", "accounts", "child")
+	if err != nil || item == nil || item.row["accessPermission"] != "edit" || item.row["inheritedFromAccountId"] != nil {
+		t.Fatalf("independent grant downgraded: %+v/%v", item, err)
 	}
 }

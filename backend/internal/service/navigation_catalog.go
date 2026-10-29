@@ -34,17 +34,18 @@ type navigationAnchor struct {
 	Grant    string `json:"g"`
 }
 type navigationCursor struct {
-	Version      int              `json:"v"`
-	Binding      string           `json:"b"`
-	Phase        string           `json:"p"`
-	After        string           `json:"s,omitempty"`
-	Account      string           `json:"a,omitempty"`
-	AccountGrant string           `json:"g,omitempty"`
-	AccountDone  bool             `json:"d,omitempty"`
-	LastAccount  bool             `json:"l,omitempty"`
-	Emitted      []string         `json:"e,omitempty"`
-	Overlap      bool             `json:"x,omitempty"`
-	Anchor       navigationAnchor `json:"n"`
+	Discovery    *accountDiscoveryCursor `json:"z,omitempty"`
+	Version      int                     `json:"v"`
+	Binding      string                  `json:"b"`
+	Phase        string                  `json:"p"`
+	After        string                  `json:"s,omitempty"`
+	Account      string                  `json:"a,omitempty"`
+	AccountGrant string                  `json:"g,omitempty"`
+	AccountDone  bool                    `json:"d,omitempty"`
+	LastAccount  bool                    `json:"l,omitempty"`
+	Emitted      []string                `json:"e,omitempty"`
+	Overlap      bool                    `json:"x,omitempty"`
+	Anchor       navigationAnchor        `json:"n"`
 }
 
 func decodeNavigationCursor(raw string) (navigationCursor, error) {
@@ -87,13 +88,14 @@ type navigationItem struct {
 }
 
 func (s *NavigationCatalogService) account(ctx context.Context, user, id string) (*navigationItem, error) {
-	member, err := s.repo.GetMember(ctx, id, user)
+	access, err := resolveAccountReadGrant(ctx, s.repo, id, user)
 	if err != nil {
 		return nil, err
 	}
-	if member == nil || member.AccountID != id || member.UserID != user {
+	if access == nil || (!access.inherited() && (access.Member.AccountID != id || access.Member.UserID != user)) {
 		return nil, ErrNotFound
 	}
+	member := access.Member
 	account, err := s.repo.GetAccount(ctx, id)
 	if err != nil {
 		return nil, err
@@ -105,11 +107,16 @@ func (s *NavigationCatalogService) account(ctx context.Context, user, id string)
 		return nil, ErrReadingData
 	}
 	truncated := []string{}
-	revision, grant := readingHash(account), readingHash(member)
+	revision, grant := readingHash(account), access.fingerprint()
 	row := readingObject{"accountId": id, "name": readingLimit(account.Name, 128, "name", &truncated),
 		"parentAccountId": readingLimit(account.ParentAccountID, 128, "parentAccountId", &truncated),
 		"role":            readingLimit(member.Role, 64, "role", &truncated), "metadataRevision": revision}
 	row["metadataTruncated"] = truncated
+	row["accessPermission"] = access.permission()
+	if access.inherited() {
+		row["role"] = ""
+		row["inheritedFromAccountId"] = access.InheritedFromAccountID
+	}
 	return &navigationItem{row, navigationAnchor{ID: id, Via: "account", Revision: revision, Grant: grant}}, nil
 }
 
@@ -141,6 +148,7 @@ func (s *NavigationCatalogService) project(ctx context.Context, user, id, via, a
 		return nil, nil, ErrReadingData
 	}
 	grant := ""
+	var accountAccess *accountReadGrant
 	switch via {
 	case "owned":
 		if project.OwnerUserID != user {
@@ -157,14 +165,44 @@ func (s *NavigationCatalogService) project(ctx context.Context, user, id, via, a
 		}
 		grant = readingHash(member)
 	case "accounts":
-		member, err := s.repo.GetMember(ctx, account, user)
+		access, err := resolveAccountReadGrant(ctx, s.repo, account, user)
 		if err != nil {
 			return nil, nil, err
 		}
-		if member == nil || member.AccountID != account || member.UserID != user || !contains(project.AccountIDs, account) {
+		if access == nil || !contains(project.AccountIDs, account) {
 			return nil, nil, ErrNotFound
 		}
-		grant = readingHash(member)
+		grant = access.fingerprint()
+		accountAccess = access
+		// Discovery via an inherited account must preserve an independent
+		// current project owner/member or direct linked-account grant.
+		if access.inherited() {
+			if project.OwnerUserID == user {
+				grant = readingHash(user)
+				accountAccess = nil
+			} else {
+				member, err := s.repo.GetProjectMember(ctx, id, user)
+				if err != nil {
+					return nil, nil, err
+				}
+				if member != nil && member.ProjectID == id && member.UserID == user {
+					grant = readingHash(member)
+					accountAccess = nil
+				} else {
+					for _, linked := range project.AccountIDs {
+						direct, err := s.repo.GetMember(ctx, linked, user)
+						if err != nil {
+							return nil, nil, err
+						}
+						if direct != nil && direct.AccountID == linked && direct.UserID == user {
+							grant = readingHash([]interface{}{linked, direct, direct.SummaryPrivacyVersion})
+							accountAccess = nil
+							break
+						}
+					}
+				}
+			}
+		}
 	default:
 		return nil, nil, ErrInvalidReadingCursor
 	}
@@ -176,6 +214,13 @@ func (s *NavigationCatalogService) project(ctx context.Context, user, id, via, a
 		"accessVia":   via, "metadataRevision": revision}
 	if via == "accounts" {
 		row["accountId"] = account
+		row["accessPermission"] = model.PermissionEdit
+		if accountAccess != nil {
+			row["accessPermission"] = accountAccess.permission()
+		}
+		if accountAccess != nil && accountAccess.inherited() {
+			row["inheritedFromAccountId"] = accountAccess.InheritedFromAccountID
+		}
 	}
 	row["metadataTruncated"] = truncated
 	return &navigationItem{row, navigationAnchor{ID: id, Via: via, Account: account, Revision: revision, Grant: grant}}, project, nil
@@ -220,7 +265,11 @@ func (s *NavigationCatalogService) Read(ctx context.Context, user, kind string, 
 	if err != nil {
 		return nil, err
 	}
-	binding := readingHash([]string{"navigation-v1", user, kind})
+	mode := "navigation-v1"
+	if descendantReadsEnabled() {
+		mode = "navigation-descendant-v2"
+	}
+	binding := readingHash([]string{mode, user, kind})
 	c := navigationCursor{Version: 1, Binding: binding, Phase: "owned"}
 	if kind == "accounts" {
 		c.Phase = "accounts"
@@ -294,11 +343,11 @@ func (s *NavigationCatalogService) Read(ctx context.Context, user, kind string, 
 			}
 		}
 		if kind == "projects" && c.Phase == "accounts" && c.Account != "" && c.AccountGrant != "" {
-			member, err := s.repo.GetMember(ctx, c.Account, user)
+			access, err := resolveAccountReadGrant(ctx, s.repo, c.Account, user)
 			if err != nil {
 				return nil, err
 			}
-			if member == nil || readingHash(member) != c.AccountGrant {
+			if access == nil || access.fingerprint() != c.AccountGrant {
 				return nil, ErrStaleReadingCursor
 			}
 		}
@@ -315,7 +364,7 @@ func (s *NavigationCatalogService) Read(ctx context.Context, user, kind string, 
 			if c.AccountDone && c.LastAccount {
 				return finish(false)
 			}
-			page, err := s.repo.QueryNavigationCandidates(ctx, user, "accounts", "", c.Account, 1)
+			page, err := queryReadableAccountCandidates(ctx, s.repo, user, c.Account, 1, &c.Discovery)
 			if err != nil {
 				return nil, err
 			}
@@ -326,7 +375,7 @@ func (s *NavigationCatalogService) Read(ctx context.Context, user, kind string, 
 				if page.NextID == "" {
 					return finish(false)
 				}
-				if !readingID.MatchString(page.NextID) || page.NextID == c.Account {
+				if !readingID.MatchString(page.NextID) || (!descendantReadsEnabled() && page.NextID == c.Account) {
 					return nil, ErrReadingData
 				}
 				c.Account, c.AccountDone, c.AccountGrant = page.NextID, true, ""
@@ -337,21 +386,21 @@ func (s *NavigationCatalogService) Read(ctx context.Context, user, kind string, 
 			}
 			c.Account, c.AccountDone, c.LastAccount, c.After = page.IDs[0], false, page.NextID == "", ""
 			c.AccountGrant = ""
-			member, err := s.repo.GetMember(ctx, c.Account, user)
+			access, err := resolveAccountReadGrant(ctx, s.repo, c.Account, user)
 			if err != nil {
 				return nil, err
 			}
-			if member == nil || member.UserID != user || member.AccountID != c.Account {
+			if access == nil || (!access.inherited() && (access.Member.UserID != user || access.Member.AccountID != c.Account)) {
 				c.AccountDone = true
 				return finish(!c.LastAccount)
 			}
-			c.AccountGrant = readingHash(member)
+			c.AccountGrant = access.fingerprint()
 		}
-		member, err := s.repo.GetMember(ctx, c.Account, user)
+		access, err := resolveAccountReadGrant(ctx, s.repo, c.Account, user)
 		if err != nil {
 			return nil, err
 		}
-		if member == nil || readingHash(member) != c.AccountGrant {
+		if access == nil || access.fingerprint() != c.AccountGrant {
 			return nil, ErrStaleReadingCursor
 		}
 	}
@@ -360,19 +409,24 @@ func (s *NavigationCatalogService) Read(ctx context.Context, user, kind string, 
 		queryKind, account = "account-projects", c.Account
 	}
 	queryAfter := c.After
-	page, err := s.repo.QueryNavigationCandidates(ctx, user, queryKind, account, c.After, o.pageSize)
+	var page *repository.NavigationCandidatePage
+	if kind == "accounts" {
+		page, err = queryReadableAccountCandidates(ctx, s.repo, user, c.After, o.pageSize, &c.Discovery)
+	} else {
+		page, err = s.repo.QueryNavigationCandidates(ctx, user, queryKind, account, c.After, o.pageSize)
+	}
 	if err != nil {
 		return nil, err
 	}
 	if page == nil || len(page.IDs) > o.pageSize {
 		return nil, ErrReadingData
 	}
-	if page.NextID != "" && page.NextID == queryAfter {
+	if page.NextID != "" && !(kind == "accounts" && descendantReadsEnabled()) && page.NextID == queryAfter {
 		return nil, ErrReadingData
 	}
 	processed := 0
 	for _, id := range page.IDs {
-		if !readingID.MatchString(id) || id <= c.After {
+		if !readingID.MatchString(id) || (!(kind == "accounts" && descendantReadsEnabled()) && id <= c.After) {
 			return nil, ErrReadingData
 		}
 		if kind == "projects" && contains(c.Emitted, id) {

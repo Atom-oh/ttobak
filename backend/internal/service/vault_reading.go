@@ -88,17 +88,18 @@ func (s *VaultReadingService) Read(ctx context.Context, user string, q url.Value
 }
 
 type vaultManifestCursor struct {
-	Version  int    `json:"v"`
-	Binding  string `json:"b"`
-	Phase    string `json:"p"`
-	After    string `json:"k"`
-	Offset   int    `json:"o"`
-	Revision string `json:"r"`
-	Account  string `json:"a"`
-	Grant    string `json:"g"`
-	NavAfter string `json:"n"`
-	NavDone  bool   `json:"d"`
-	Anchor   string `json:"h"`
+	Version   int                     `json:"v"`
+	Binding   string                  `json:"b"`
+	Phase     string                  `json:"p"`
+	After     string                  `json:"k"`
+	Offset    int                     `json:"o"`
+	Revision  string                  `json:"r"`
+	Account   string                  `json:"a"`
+	Grant     string                  `json:"g"`
+	Discovery *accountDiscoveryCursor `json:"z,omitempty"`
+	NavAfter  string                  `json:"n"`
+	NavDone   bool                    `json:"d"`
+	Anchor    string                  `json:"h"`
 }
 
 func (s *VaultReadingService) checkManifestAnchor(ctx context.Context, user, raw string) error {
@@ -193,7 +194,11 @@ func (s *VaultReadingService) manifestPayload(ctx context.Context, user string, 
 	return string(raw), next, anchor, err
 }
 func (s *VaultReadingService) manifest(ctx context.Context, user string, o vaultReadingOptions) ([]byte, error) {
-	binding := compactReadingHash([]string{"vault-manifest-v1", user})
+	mode := "vault-manifest-v1"
+	if descendantReadsEnabled() {
+		mode = "vault-manifest-descendant-v2"
+	}
+	binding := compactReadingHash([]string{mode, user})
 	c := vaultManifestCursor{Version: 1, Binding: binding, Phase: "meetings"}
 	if o.cursor != "" {
 		if err := decodeVaultCursor(o.cursor, &c); err != nil {
@@ -213,7 +218,7 @@ func (s *VaultReadingService) manifest(ctx context.Context, user string, o vault
 		if c.Offset != 0 || c.Revision != "" || c.After != "" || (c.NavAfter != "" && !readingID.MatchString(c.NavAfter)) {
 			return nil, ErrInvalidReadingCursor
 		}
-		page, err := s.repo.QueryNavigationCandidates(ctx, user, "accounts", "", c.NavAfter, 1)
+		page, err := queryReadableAccountCandidates(ctx, s.repo, user, c.NavAfter, 1, &c.Discovery)
 		if err != nil {
 			return nil, err
 		}
@@ -224,12 +229,12 @@ func (s *VaultReadingService) manifest(ctx context.Context, user string, o vault
 		complete := c.NavDone
 		if len(page.IDs) > 0 {
 			account := page.IDs[0]
-			m, err := s.repo.GetMember(ctx, account, user)
+			access, err := resolveAccountReadGrant(ctx, s.repo, account, user)
 			if err != nil {
 				return nil, err
 			}
-			if m != nil && m.AccountID == account && m.UserID == user {
-				c.Account, c.Grant, c.Phase = account, accountReadingGrant(m), "account_docs"
+			if validAccountReadIdentity(access, account, user) {
+				c.Account, c.Grant, c.Phase = account, access.fingerprint(), "account_docs"
 				complete = false
 			}
 		}
@@ -255,11 +260,11 @@ func (s *VaultReadingService) manifest(ctx context.Context, user string, o vault
 		if !readingID.MatchString(c.Account) {
 			return ErrInvalidReadingCursor
 		}
-		m, err := s.repo.GetMember(ctx, c.Account, user)
+		access, err := resolveAccountReadGrant(ctx, s.repo, c.Account, user)
 		if err != nil {
 			return err
 		}
-		if m == nil || m.AccountID != c.Account || m.UserID != user || accountReadingGrant(m) != c.Grant {
+		if !validAccountReadIdentity(access, c.Account, user) || access.fingerprint() != c.Grant {
 			return ErrStaleReadingCursor
 		}
 		return nil

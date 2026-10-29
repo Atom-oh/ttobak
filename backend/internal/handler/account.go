@@ -160,6 +160,22 @@ func writeAccountHierarchyError(w http.ResponseWriter, err error) {
 func (h *AccountHandler) ListAccounts(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	userID := middleware.GetUserID(ctx)
+	if len(r.URL.Query()) > 0 {
+		page, err := h.accountService.ListAccountsPage(ctx, userID, r.URL.Query())
+		if err != nil {
+			switch {
+			case errors.Is(err, service.ErrInvalidReadingOptions), errors.Is(err, service.ErrInvalidReadingCursor):
+				writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid account list options")
+			case errors.Is(err, service.ErrStaleReadingCursor):
+				writeError(w, http.StatusConflict, model.ErrCodeConflict, "Account access changed; restart the list")
+			default:
+				writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+			}
+			return
+		}
+		writeJSON(w, http.StatusOK, page)
+		return
+	}
 	list, err := h.accountService.ListAccounts(ctx, userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
