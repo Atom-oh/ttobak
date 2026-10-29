@@ -3,7 +3,7 @@ import { Template } from 'aws-cdk-lib/assertions';
 import * as ts from 'typescript';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { AuthStack } from '../lib/auth-stack';
+import { AuthStack, CC_ON_BEDROCK_ATTRIBUTES } from '../lib/auth-stack';
 
 describe('AuthStack', () => {
   let template: Template;
@@ -27,6 +27,15 @@ describe('AuthStack', () => {
       UpdateReplacePolicy: 'Retain',
       Properties: { DeletionProtection: 'ACTIVE' },
     });
+  });
+
+  test('the pool defines the mutable custom attributes cc-on-bedrock reads', () => {
+    const pool = Object.values(template.findResources('AWS::Cognito::UserPool'))[0] as {
+      Properties: { Schema?: { Name: string; AttributeDataType: string; Mutable: boolean }[] };
+    };
+    const custom = (pool.Properties.Schema ?? []).filter(a => a.Name !== 'email');
+    expect(custom.map(a => a.Name).sort()).toEqual([...CC_ON_BEDROCK_ATTRIBUTES].sort());
+    for (const a of custom) expect(a).toMatchObject({ AttributeDataType: 'String', Mutable: true });
   });
 
   test('the deployed AuthStack enables termination protection in its assembly', () => {

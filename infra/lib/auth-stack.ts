@@ -7,6 +7,12 @@ import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as path from 'path';
 import { Construct } from 'constructs';
 
+/** Custom attributes cc-on-bedrock requires on a shared pool (append-only). */
+export const CC_ON_BEDROCK_ATTRIBUTES = [
+  'subdomain', 'container_os', 'resource_tier', 'security_policy', 'container_id',
+  'department', 'budget_exceeded', 'storage_type', 'dept_manager_sub',
+] as const;
+
 export interface AuthStackProps extends cdk.StackProps {
   cloudFrontDomain?: string;
   table?: dynamodb.ITable;
@@ -107,6 +113,13 @@ export class AuthStack extends cdk.Stack {
           mutable: true,
         },
       },
+      // Attributes read and written by cc-on-bedrock, which shares this pool for
+      // sign-in (its ADR-016). Cognito cannot delete or rename a custom attribute
+      // once added, so this list only grows. cc admins set them through Admin* APIs;
+      // cc's app clients do not let users write them.
+      customAttributes: Object.fromEntries(CC_ON_BEDROCK_ATTRIBUTES.map(
+        (name) => [name, new cognito.StringAttribute({ mutable: true })],
+      )),
       passwordPolicy: {
         minLength: 8,
         requireLowercase: true,
