@@ -32,6 +32,12 @@ parameter. Verify the **live alias version's** API environment and QA environmen
 the bootstrap receipt, deployed code hashes and revision. Normal releases must
 retain the parameter using previous values.
 
+Parameter-only activation may instead create an UPDATE change set using the
+already reviewed deployed Gateway template (`UsePreviousTemplate: true`).
+Set only `AccountDescendantReadsEnabled=1`; use previous values for every other
+parameter. Verify its API/QA configuration, immutable version and alias changes
+and the operation's `DescribeEvents` validation results before execution.
+
 Exercise a parent-only reader against the reported published Hana Securities
 meeting and a descendant list, Account/doc read and AI/MCP paths. Verify no child
 member row was created. Negative checks cover a private link-only meeting,
