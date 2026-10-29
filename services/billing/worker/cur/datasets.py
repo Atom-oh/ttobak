@@ -166,20 +166,24 @@ def _tag_signals(con, acct, ranked_keys, months):
     """cur_tag_signals: new or fast-growing tag values (tag_signals.classify) over the signal keys of the top tag keys."""
     if len(months) < 2:
         return []
-    # Coverage comes from each month's own span, not from the dates present, so it does not depend on the export's
-    # time granularity: a month covers its first..last usage day. A monthly-granularity month dates (nearly) every line
-    # item on the 1st, so it is read as a whole month instead (a month in progress is then understated, never
-    # inflated). Granularity is decided per month: carried-over earlier bills can be daily while the latest is monthly.
-    cov = {}
+    # Coverage per month: rule 1 of the spec in scripts/tag_signals.py. Only the month's own bill counts (a late line
+    # item of a later bill dated in an earlier month does not cover that month); a carried file without
+    # billing_period stands its usage months in for its bills, as normalize.run does. Granularity is decided per
+    # month: carried-over earlier bills can be daily while the latest is monthly. A monthly month dates (nearly) every
+    # line item on the 1st and is a whole month (a month in progress is then understated, never inflated); a daily
+    # month is whole except the first covered month starts on its first usage day and the last ends on its last.
+    own = ("COALESCE(billing_period, month) = month"
+           if "billing_period" in {c for (c, *_) in con.execute("DESCRIBE n").fetchall()} else "TRUE")
     span = {m: (lo, hi, monthly) for m, lo, hi, monthly in con.execute(
         "SELECT month, min(usage_date), max(usage_date), count(*) FILTER (WHERE day(usage_date) = 1) * 2 > count(*) "
-        "FROM n GROUP BY month").fetchall()}
-    first, last_m = months[0], months[-1]
-    for m in months:
+        "FROM n WHERE %s GROUP BY month" % own).fetchall()}
+    covered = [m for m in months if m in span]
+    cov = {m: 0.0 for m in months}  # a month without its own bill is not covered (rule 2)
+    for m in covered:
         days = calendar.monthrange(int(m[:4]), int(m[5:7]))[1]
-        lo, hi, monthly = span.get(m, (None, None, True))
-        start = lo.day if m == first and lo is not None and not monthly else 1
-        end = hi.day if m == last_m and hi is not None and not monthly else days
+        lo, hi, monthly = span[m]
+        start = lo.day if m == covered[0] and not monthly else 1
+        end = hi.day if m == covered[-1] and not monthly else days
         cov[m] = (end - start + 1) / days
     last = months[-1]
     total = (con.execute("SELECT sum(cost) FROM n WHERE month = %s" % _lit(last)).fetchone()[0] or 0.0) / (cov.get(last) or 1)

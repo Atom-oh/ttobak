@@ -132,6 +132,64 @@ class Datasets(Tmp):
         self.assertAlmostEqual(sig["jump"]["run_rate_last"], 40.0 * 31)  # 10 days of $40 scaled to the whole month
         self.assertNotIn("steady", sig)  # constant daily spend is not growth after edge scaling
 
+    def billed_signals(self, rows):
+        """Like signals(), with billing_period written as normalize.run does: the usage month unless a row says
+        bill= (a late line item of a later bill); late rows are matched by their resource_id."""
+        import datasets
+        write_norm(self.norm, rows)
+        p = os.path.join(self.norm, "part-0.parquet")
+        c = duckdb.connect()
+        c.execute("CREATE TABLE b AS SELECT *, month AS billing_period FROM read_parquet('%s')" % p)
+        for r in rows:
+            if "bill" in r:
+                c.execute("UPDATE b SET billing_period = ? WHERE resource_id = ?", [r["bill"], r["resource_id"]])
+        c.execute("COPY b TO '%s' (FORMAT parquet)" % p)
+        c.close()
+        datasets.main(self.norm, self.data, "acct-a")
+        with open(os.path.join(self.data, "cur_tag_signals.json"), encoding="utf-8") as fh:
+            return {r["tag_value"]: r for r in json.load(fh)}
+
+    @staticmethod
+    def daily(lo, hi, cost, tag, **kw):
+        import datetime
+        d, out = datetime.date.fromisoformat(lo), []
+        while d <= datetime.date.fromisoformat(hi):
+            out.append(nrow(d.isoformat(), cost=cost(d) if callable(cost) else cost, tags={"user:Service": tag}, **kw))
+            d += datetime.timedelta(days=1)
+        return out
+
+    def test_covered_empty_months_count_as_zero_daily_history_monthly_latest(self):
+        # daily June-August bills carried over, the latest September bill monthly; "x" has no rows in July and August
+        rows = self.daily("2026-06-01", "2026-08-31", 10.0, "bg") + self.daily("2026-06-01", "2026-06-30", 10.0, "x")
+        rows += [nrow("2026-09-01", cost=310.0, tags={"user:Service": "bg"}),
+                 nrow("2026-09-01", cost=300.0, tags={"user:Service": "x"})]
+        sig = self.signals(rows)
+        self.assertEqual(set(sig), {"x"})  # bg is flat; the monthly September is not read as 1/30 of a month
+        self.assertEqual((sig["x"]["kinds"], sig["x"]["run_rate_last"], sig["x"]["base"], sig["x"]["growth_pct"]),
+                         (["급증"], 300.0, 100.0, 200.0))
+        self.assertEqual([c["cost"] for c in sig["x"]["cost_by_month"]], [300.0, 0.0, 0.0, 300.0])
+
+    def test_late_items_do_not_cover_a_month_and_edges_are_partial(self):
+        # the export starts with the August bill on 2026-08-21 and ends on 2026-10-10 (both edges partial); July holds
+        # only a late line item of the August bill, so July is not covered and August is the first covered month
+        late = nrow("2026-07-31", cost=300.0, tags={"user:Service": "jump"}, resource_id="late-1")
+        late["bill"] = "2026-08"
+        rows = [late] + self.daily("2026-08-21", "2026-10-10", 10.0, "steady")
+        rows += self.daily("2026-08-21", "2026-10-10", lambda d: 25.0 if d.month == 10 else 10.0, "jump")
+        sig = self.billed_signals(rows)
+        self.assertEqual(set(sig), {"jump"})  # steady: August read as 11 of 31 days would call flat spend growth
+        self.assertEqual((sig["jump"]["kinds"], sig["jump"]["run_rate_last"], sig["jump"]["base"]),
+                         (["급증"], 775.0, 305.0))  # base = (310 + 300) / 2, not the late item scaled 31x
+        self.assertEqual(sig["jump"]["cost_by_month"][0], {"month": "2026-07", "cost": 300.0})
+
+    def test_late_items_alone_do_not_make_a_value_new(self):
+        # only the September bill is in the export; its late items dated August cover nothing, so "x" has one
+        # covered month and cannot be new
+        late = nrow("2026-08-31", cost=5.0, tags={"user:Service": "bg"}, resource_id="late-1")
+        late["bill"] = "2026-09"
+        rows = [late] + self.daily("2026-09-01", "2026-09-30", 50.0, "x")
+        self.assertEqual(self.billed_signals(rows), {})
+
     def test_tag_coverage_and_top10_keys(self):
         rows = [nrow("2026-08-03", cost=4.0, tags={"k%02d" % i: "v"}) for i in range(12)]
         rows.append(nrow("2026-08-04", cost=6.0, tags={"k00": "v", "k01": "w"}))
