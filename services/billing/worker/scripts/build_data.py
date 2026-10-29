@@ -87,6 +87,18 @@ def html_kpis(root, e):
             "html_coh_dedup": int(coh.group(1)[1:].replace(",", "")) if coh and coh.group(1) != "—" else None}
 
 
+SPEND_TOLERANCE = 1.0  # the HTML figure is whole dollars
+
+
+def spend_check(e, last, html):
+    """Reconcile the last month's service total with the COT360 page's Past Month Spend. A mismatch or a missing
+    page figure is reported (stderr and the dataset), not fatal: it must not withhold every entity's dashboard."""
+    ok = html is not None and abs(last - html) <= SPEND_TOLERANCE
+    if not ok:
+        print(f"{e}: last-month spend {last:.2f} does not reconcile with the COT360 page ({html})", file=sys.stderr)
+    return {"ok": ok, "computed_last": round(last, 2), "html_last_spend": html}
+
+
 def family(k):
     return ".".join(k.split(".")[:2]) if k.startswith(("db.", "cache.")) else k.split(".")[0]
 
@@ -94,9 +106,11 @@ def family(k):
 def entity(root, e):
     out = {"name": e}
     out.update(html_kpis(root, e))
-    svc = T.table(T.pivot(e, "Data_Service_Costs"))
-    tot = [sum(s["months"][i] for s in svc.values()) for i in range(6)]
-    assert round(tot[-1]) == out["html_last_spend"], (e, tot[-1], out["html_last_spend"])
+    piv = T.pivot(e, "Data_Service_Costs")
+    svc = T.table(piv)
+    # unrounded sums: the per-service stats are cent-rounded, and that drift accumulates over many services
+    tot = [sum(s[m] for s in piv.values()) if m else 0.0 for m in M]
+    out["spend_check"] = spend_check(e, tot[-1], out["html_last_spend"])
     out["monthly_total"] = r0(tot)
     out["h1_avg"], out["h2_avg"] = half_avg(tot, P.H1), half_avg(tot, P.H2)
     out["six_month_total"] = round(sum(tot))

@@ -79,6 +79,7 @@ def linked_accounts(base, e):
     for r in rows:
         if len(r) <= it or r[1].strip() != e:
             continue
+        r = r + [""] * (len(hdr) - len(r))  # a short row's missing trailing cells (keys, cost, name) are empty
         if r[ik].strip():
             m = month(r[it])
             if m in PRESENT:

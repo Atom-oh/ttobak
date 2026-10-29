@@ -6,7 +6,7 @@ COH covers only resources that have a savings recommendation, and estimatedMonth
 monthly estimate snapshot (no trend). Commitment purchase recommendations (RI/SP) carry no tags
 and are reported as their own bucket so per-entity totals still reconcile.
 """
-import ast, collections, csv, json, math, os, re, sys
+import collections, csv, json, math, os, re, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # -I drops the script dir
 import tagkeys as TK  # noqa: E402
@@ -71,11 +71,7 @@ def resources(base, entity):
         cell = lambda n: r[ix[n]] if ix[n] < len(r) else ""  # noqa: E731  a short row's missing cells are empty
         if not cell("recommendationId").strip():
             continue
-        raw = cell("tags")
-        try:
-            tags = {t["key"]: t["value"] for t in ast.literal_eval(raw)} if raw not in ("", "[]", "nan") else {}
-        except (ValueError, SyntaxError):
-            tags = {}
+        tags = TK.parse_cell(cell("tags"))
         out.append({"account": cell("accountId"), "type": cell("currentResourceType"), "region": cell("region"),
                     "summary": cell("currentResourceSummary"), "cost": num(cell("estimatedMonthlyCost")), "tags": tags})
     return out

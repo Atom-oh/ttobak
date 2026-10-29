@@ -6,11 +6,12 @@ Usage: python3 -I cot360_metrics.py <out dir with <Entity>/html/json_*.json and 
 Writes unit_metrics, modernization, elasticity, commitments, sp_purchase, storage_tiers, coh_actions,
 coh_by_workload (.json). as_of is the COT run date; expiry windows count from it.
 """
-import ast, collections, csv, datetime, glob, json, os, re, sys
+import collections, csv, datetime, glob, json, os, re, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # -I drops the script dir
 from entities import ENTITIES  # noqa: E402
 import period as P  # noqa: E402
+import tagkeys as TK  # noqa: E402
 from tag_services import service_of, precedence_for  # noqa: E402
 
 UNIT = {"um_ec2": "EC2", "um_rds": "RDS", "um_elasticache": "ElastiCache", "um_opensearch": "OpenSearch"}
@@ -150,10 +151,7 @@ def coh_by_workload(base, e):
         if len(r) <= ix["resourceArn"] or r[1].strip() != e or not r[ix["recommendationId"]].strip():
             continue
         r = r + [""] * (len(rows[hi]) - len(r))  # a short row's missing trailing cells (e.g. no tags) are empty
-        try:
-            tags = {t["key"]: t["value"] for t in ast.literal_eval(r[ix["tags"]] or "[]")}
-        except (ValueError, SyntaxError):
-            tags = {}
+        tags = TK.parse_cell(r[ix["tags"]])
         svc, _ = service_of({"type": r[ix["currentResourceType"]], "tags": tags}, prec)
         a = agg[(svc, r[ix["actionType"]])]
         a[0] += 1
