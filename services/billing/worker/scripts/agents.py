@@ -343,9 +343,7 @@ def _walk(obj, key, ix):
         ix["bare"].append((v, 0.0))
         k = key or ""
         if PCT_KEY.search(k):
-            ix["pct"].append((v, 0.0))
-            if abs(v) <= 1 and "share" in k and not k.endswith("_pct"):  # a fraction, not share_pct (already percent)
-                ix["pct"].append((v * 100, 0.0))
+            ix["pct"].append((v, 0.0))  # every *share* field in the digests is already a percent (briefing.py benchmark)
         elif MONEY_KEY.search(k) and not COUNT_KEY.match(k):  # accounts_last matches _last but is a count
             ix["money"].append((v, 0.0))
         if k == "days_left":
