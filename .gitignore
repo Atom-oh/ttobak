@@ -82,3 +82,9 @@ services/billing/bff/dist/
 # (frontend prebuild). Ignored so the HTTP-origin release coordinator's
 # clean-checkout check never sees them.
 frontend/public/billing-app/
+
+# Billing worker (services/billing/worker): local runs and the agent cache
+services/billing/worker/datasets/
+services/billing/worker/out/
+services/billing/worker/.agent_cache/
+services/billing/worker/dispatch/dist/

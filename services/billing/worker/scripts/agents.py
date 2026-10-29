@@ -242,12 +242,18 @@ SIGN = r"([+\-−]?)"
 NUM = r"(\d[\d,]*(?:\.\d+)?)"
 # lookarounds, not \b: Korean particles are word characters ("YYYY-MM-DD에")
 RE_DATE = re.compile(r"(?<![\d-])\d{4}-\d{2}(?:-\d{2})?(?![\d-])")
-RE_KMONEY = re.compile(r"\d(?:천|만|억)(?!료)")
+# glued or spaced ("1.2 억"): a Korean scale word is never folded into the amount
+RE_KMONEY = re.compile(r"\d\s?(?:천|만|억)(?!료)")
 # money in any other form than $ ("52달러", "30,100원", "USD 84", "₩"): not typed as money, so a percent or count
 # would match it as a bare number; rejected (RULES ask for $ only)
 RE_CURWORD = re.compile(r"\d\s?(?:달러|원(?!인|칙)|usd|krw|eur|jpy|dollars?)(?![A-Za-z])|(?<![A-Za-z])(?:usd|krw|eur|jpy|us\$)\s?\d|[₩€£¥]",
                         re.I)
 RE_MONEY = re.compile(SIGN + r"\$" + NUM + r"([A-Za-z]*)")
+# a Latin scale word after a space ("$1.2 million", "$1.2 K", "1.2 billion"): only a glued K/M/B is folded, so the
+# amount alone would match a source value 10^3-10^12 times smaller; rejected
+SCALE_WORDS = r"(?:thousand|million|billion|trillion)"
+RE_SCALEWORD = re.compile(r"(?:\$" + NUM + r"[A-Za-z]*\s+(?:[kmbt]|mm|mn|bn|" + SCALE_WORDS + r")|\d\s*" + SCALE_WORDS + r")(?![A-Za-z0-9])",
+                          re.I)
 RE_PCT = re.compile(SIGN + NUM + r"\s?%p?")
 COUNT_UNITS = "개월|건|개|대|일|년"
 RE_RANGE = re.compile(NUM + r"\s?[~∼]\s?" + NUM + r"\s?(" + COUNT_UNITS + r")")
@@ -299,6 +305,8 @@ def _scan(text):
         toks.append(("bad", "korean-money"))
     if RE_CURWORD.search(s):
         toks.append(("bad", "currency-form"))
+    if RE_SCALEWORD.search(s):
+        toks.append(("bad", "money-scale"))
     take(RE_MONEY, lambda m: ("money", m.group(1), _num(m.group(2)) * SCALE[m.group(3)], _tol(m.group(2), SCALE[m.group(3)]))
          if m.group(3) in SCALE else ("bad", "money-suffix"))
     if "$" in s:  # a currency sign the money pattern did not take ("$ 59", "$+59")
