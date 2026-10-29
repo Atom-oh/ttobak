@@ -166,9 +166,18 @@ def _tag_signals(con, acct, ranked_keys, months):
     """cur_tag_signals: new or fast-growing tag values (tag_signals.classify) over the signal keys of the top tag keys."""
     if len(months) < 2:
         return []
+    # Coverage comes from the export's span, not from the dates present, so it does not depend on the export's time
+    # granularity: interior months are full, the first and last months cover first_day.. and ..last_day. A monthly
+    # export dates (nearly) every line item on the 1st, so its span ends on the last month's 1st: it is read as whole
+    # months instead (a month in progress is then understated, never inflated).
+    lo, hi, monthly = con.execute("SELECT min(usage_date), max(usage_date), "
+                                  "count(*) FILTER (WHERE day(usage_date) = 1) * 2 > count(*) FROM n").fetchone()
     cov = {}
-    for m, days in con.execute("SELECT month, count(DISTINCT usage_date) FROM n GROUP BY month").fetchall():
-        cov[m] = days / calendar.monthrange(int(m[:4]), int(m[5:7]))[1]
+    for m in months:
+        days = calendar.monthrange(int(m[:4]), int(m[5:7]))[1]
+        start = lo.day if m == lo.strftime("%Y-%m") and not monthly else 1
+        end = hi.day if m == hi.strftime("%Y-%m") and not monthly else days
+        cov[m] = (end - start + 1) / days
     last = months[-1]
     total = (con.execute("SELECT sum(cost) FROM n WHERE month = %s" % _lit(last)).fetchone()[0] or 0.0) / (cov.get(last) or 1)
     # ordered before the cap: the sample decides the signal keys, so it must not depend on scan order

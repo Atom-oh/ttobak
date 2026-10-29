@@ -64,7 +64,7 @@ class Datasets(Tmp):
         ms = ["2026-04", "2026-05", "2026-06", "2026-07", "2026-08", "2026-09"]
         rows = []
         for i, m in enumerate(ms):
-            day = m + "-10"
+            day = m + "-01"  # one line item per month, dated like a monthly-granularity export
             rows.append(nrow(day, cost=1000.0, tags={"user:Service": "pay-core", "env": "prod"}, linked_account="333333333333"))
             rows.append(nrow(day, cost=1200.0 if m == ms[-1] else 400.0, tags={"user:Service": "ledger"}))
             if i >= 4:
@@ -87,6 +87,38 @@ class Datasets(Tmp):
         self.assertTrue(all(r["entity"] == "acct-a" and r["source"] == "cur" and r["tag_key"] == "user:Service" for r in sig.values()))
         self.assertEqual([c["month"] for c in sig["ledger"]["cost_by_month"]], ms)
         self.assertEqual(datasets.TS.classify("acct-a", ms[:1], {}, [], 0), [])
+
+    def signals(self, rows):
+        self.build(rows)
+        with open(os.path.join(self.data, "cur_tag_signals.json"), encoding="utf-8") as fh:
+            return {r["tag_value"]: r for r in json.load(fh)}
+
+    def test_monthly_granularity_is_not_inflated(self):
+        # a monthly export dates each line item on the 1st: one usage_date per month must not read as 1/30 coverage
+        ms = ["2026-04", "2026-05", "2026-06", "2026-07", "2026-08", "2026-09"]
+        rows = []
+        for m in ms:
+            last = m == ms[-1]
+            rows.append(nrow(m + "-01", cost=1000.0, tags={"user:Service": "pay-core"}))
+            rows.append(nrow(m + "-01", cost=1200.0 if last else 400.0, tags={"user:Service": "ledger"}))
+            rows.append(nrow(m + "-01", cost=40.0 if last else 10.0, tags={"user:Service": "small"}))
+        sig = self.signals(rows)
+        self.assertAlmostEqual(sig["ledger"]["run_rate_last"], 1200.0)
+        self.assertAlmostEqual(sig["ledger"]["base"], 400.0)
+        self.assertNotIn("small", sig)  # $40/month stays under the $50 floor; 30x inflation would have made it a surge
+
+    def test_daily_partial_edge_months(self):
+        # daily rows from 2026-08-21 to 2026-10-10: the first and last months are partial, September is full
+        import datetime
+        rows = []
+        d = datetime.date(2026, 8, 21)
+        while d <= datetime.date(2026, 10, 10):
+            rows.append(nrow(d.isoformat(), cost=10.0, tags={"user:Service": "steady"}))
+            rows.append(nrow(d.isoformat(), cost=40.0 if d.month == 10 else 10.0, tags={"user:Service": "jump"}))
+            d += datetime.timedelta(days=1)
+        sig = self.signals(rows)
+        self.assertAlmostEqual(sig["jump"]["run_rate_last"], 40.0 * 31)  # 10 days of $40 scaled to the whole month
+        self.assertNotIn("steady", sig)  # constant daily spend is not growth after edge scaling
 
     def test_tag_coverage_and_top10_keys(self):
         rows = [nrow("2026-08-03", cost=4.0, tags={"k%02d" % i: "v"}) for i in range(12)]
