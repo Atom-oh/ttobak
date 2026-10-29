@@ -74,7 +74,7 @@ python3 -I "$S/briefing.py" "$OUT" >&2
 step datasets done
 
 step check running
-rc=0; python3 -I "$S/cot360_check.py" "$OUT" "$X" >&2 || rc=$?
+rc=0; python3 -I "$S/cot360_check.py" "$OUT" "$X" "$CSV" >&2 || rc=$?
 # checks.json is written only when every check ran; exit 1 without it is a crash, not a mismatch
 if [ $rc -eq 0 ]; then step check done; exit 0; fi
 if [ $rc -eq 1 ] && [ -f "$OUT/checks.json" ]; then step check needs_review; exit 1; fi

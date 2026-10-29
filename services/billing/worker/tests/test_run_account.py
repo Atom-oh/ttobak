@@ -8,6 +8,17 @@ def run_account(*args, env=None):
     return subprocess.run(["bash", RUN_ACCOUNT, *args], capture_output=True, text=True, env=e)
 
 
+class ScriptCalls(unittest.TestCase):
+    def test_check_reads_the_csv_dir_accounts_reads(self):
+        # no end-to-end fixture reaches the check step: pin the call to cot360_check's usage instead
+        sh = rd(RUN_ACCOUNT, "r")
+        acc = re.search(r'"\$S/accounts\.py" (\S+) ', sh).group(1)
+        args = re.search(r'"\$S/cot360_check\.py" ((?:"\$\w+" )+)>&2', sh).group(1).split()
+        self.assertEqual(args, ['"$OUT"', '"$X"', acc])
+        import cot360_check
+        self.assertIn("<data_dir> <extracted_dir> <csv_dir>", cot360_check.__doc__)
+
+
 class RunAccount(Tmp):
     def steps(self, p):
         return [l for l in p.stdout.splitlines() if l.startswith("STEP ")]
