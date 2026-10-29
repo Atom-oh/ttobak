@@ -510,6 +510,8 @@ export interface AccountSummary {
   name: string;
   role: string;
   parentAccountId?: string;
+  accessPermission?: 'read' | 'edit';
+  inheritedFromAccountId?: string;
 }
 
 export interface AccountMember {
@@ -531,6 +533,8 @@ export interface Account {
   accountId: string;
   name: string;
   parentAccountId?: string;
+  accessPermission?: 'read' | 'edit';
+  inheritedFromAccountId?: string;
   aliases?: string[];
   domains?: string[];
   industry?: string;
@@ -603,6 +607,8 @@ export interface Project {
   sfdcUrl?: string;
   stage?: string;
   ownerUserId: string;
+  accessPermission?: 'read' | 'edit';
+  inheritedFromAccountId?: string;
   accountIds: string[];
   members: ProjectMember[];
   createdAt: string;
@@ -636,6 +642,8 @@ export interface ProjectBrief {
 
 export interface AccountDocument {
   docId: string;
+  accessPermission?: 'read' | 'edit';
+  inheritedFromAccountId?: string;
   title: string;
   docType?: string;
   path?: string;

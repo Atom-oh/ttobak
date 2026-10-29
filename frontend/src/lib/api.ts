@@ -758,8 +758,35 @@ export const researchChatApi = {
 };
 
 // Account API
+async function getAccounts(): Promise<{ accounts: AccountSummary[] }> {
+  const accounts: AccountSummary[] = [];
+  const accountIds = new Set<string>();
+  const cursors = new Set<string>();
+  let cursor = '';
+  const invalid = () => new ApiError(502, 'ACCOUNT_DISCOVERY_INVALID', '어카운트 목록을 완전히 불러오지 못했습니다. 다시 시도해 주세요.');
+  for (let pageIndex = 0; pageIndex < 1000; pageIndex++) {
+    const query = new URLSearchParams({ pageSize: '100' });
+    if (cursor) query.set('cursor', cursor);
+    const page = await api.get<{ accounts: AccountSummary[]; nextCursor?: string }>(`/api/accounts?${query}`);
+    if (!page || !Array.isArray(page.accounts)) throw invalid();
+    for (const account of page.accounts) {
+      if (!account || typeof account.accountId !== 'string' || !account.accountId
+        || accountIds.has(account.accountId)) throw invalid();
+      accountIds.add(account.accountId);
+      accounts.push(account);
+    }
+    const next = page.nextCursor;
+    if (next === undefined || next === '') return { accounts };
+    if (typeof next !== 'string' || next.length > 2048 || !/^[A-Za-z0-9_-]+$/.test(next)
+      || cursors.has(next) || page.accounts.length === 0) throw invalid();
+    cursors.add(next);
+    cursor = next;
+  }
+  throw new ApiError(502, 'ACCOUNT_DISCOVERY_LIMIT', '어카운트 목록이 너무 커서 완전히 불러오지 못했습니다.');
+}
+
 export const accountApi = {
-  list: () => api.get<{ accounts: AccountSummary[] }>('/api/accounts'),
+  list: getAccounts,
   get: (id: string) => api.get<Account>(`/api/accounts/${encodeURIComponent(id)}`),
   create: (data: AccountCreationRequest, expectedUserId: string) =>
     api.post<AccountCreationResponse>('/api/accounts', data, { expectedUserId }),

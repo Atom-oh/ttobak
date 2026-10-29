@@ -41,7 +41,7 @@ export function AccountParentEditor({ account, canEdit, onUpdated }: {
   }, [load]);
 
   const save = async () => {
-    if (saving || loading) return;
+    if (!canEdit || saving || loading) return;
     setSaving(true);
     setError(null);
     setSaved(false);
@@ -82,6 +82,7 @@ export function AccountParentEditor({ account, canEdit, onUpdated }: {
           </button>
         </div>
       )}
+      <p className="mt-2 text-xs text-slate-500 dark:text-text-muted">상위 어카운트 멤버는 이 어카운트와 하위 어카운트에 공유된 자료를 읽을 수 있습니다. 상위 어카운트를 변경하면 자료를 읽을 수 있는 멤버도 변경됩니다.</p>
       {saved && <p role="status" className="mt-2 text-xs text-primary">상위 어카운트를 저장했습니다.</p>}
       {error && <div role="alert" className="mt-2 text-sm text-red-600 dark:text-red-400">{error}
         <button type="button" onClick={load} disabled={loading || saving} className="ml-2 font-semibold underline">목록 다시 불러오기</button>

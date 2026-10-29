@@ -25,7 +25,9 @@ export function AccountHierarchyList({ accounts }: { accounts: AccountSummary[] 
             <span className="truncate font-medium text-slate-900 dark:text-text-main">{node.name}</span>
             {node.children.length > 0 && <span className="shrink-0 text-xs text-slate-400">{node.children.length}</span>}
           </Link>
-          <span className="shrink-0 rounded-full bg-primary/10 px-2 py-1 text-xs font-semibold text-primary">{node.role}</span>
+          <span className="shrink-0 rounded-full bg-primary/10 px-2 py-1 text-xs font-semibold text-primary">
+            {node.inheritedFromAccountId && node.accessPermission === 'read' ? '상위 공유 · 읽기 전용' : node.role}
+          </span>
         </div>
       ))}
     </div>

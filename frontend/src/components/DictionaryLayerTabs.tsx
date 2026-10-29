@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { accountApi, ApiError, dictionaryApi } from '@/lib/api';
+import { isEditableAccount } from '@/lib/accountAccess';
 import {
   claimInFlight, dictionaryErrorMessage, findDuplicateTerm, LAYER_TABS, layerAllowsCreate, normalizeTermKey, parseHeardAs,
   DELETED_LOAD_ERROR, resolveLayer, shouldReloadAfterError, type DeletedCommonTerm, type DictionaryLayer, type DictTermItem, type LayerTab, type TermPatch,
@@ -200,8 +201,9 @@ export function DictionaryLayerTabs({ personal }: { personal: ReactNode }) {
     accountApi.list()
       .then(({ accounts: list }) => {
         if (cancelled) return;
-        setAccounts(list ?? []);
-        setAccountId((cur) => cur || list?.[0]?.accountId || '');
+        const directAccounts = (list ?? []).filter(isEditableAccount);
+        setAccounts(directAccounts);
+        setAccountId((cur) => directAccounts.some(account => account.accountId === cur) ? cur : directAccounts[0]?.accountId || '');
       })
       .catch(() => { if (!cancelled) { setAccounts([]); setAccountsError(true); } });
     return () => { cancelled = true; };
@@ -228,7 +230,7 @@ export function DictionaryLayerTabs({ personal }: { personal: ReactNode }) {
             onChange={(e) => setAccountId(e.target.value)}
             className="px-3 py-2 text-sm rounded-lg bg-slate-100 dark:bg-surface-lowest dark:text-text-main border-none"
           >
-            {accounts.map((a) => <option key={a.accountId} value={a.accountId}>{a.name}</option>)}
+            {accounts.filter(isEditableAccount).map((a) => <option key={a.accountId} value={a.accountId}>{a.name}</option>)}
           </select>
         )}
       </div>

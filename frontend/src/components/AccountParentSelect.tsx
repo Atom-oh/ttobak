@@ -3,6 +3,7 @@
 import { useId, useMemo } from 'react';
 import type { AccountSummary } from '@/types/meeting';
 import { accountDescendantIds, buildAccountTree, flattenAccountTree } from '@/lib/accountTree';
+import { isEditableAccount } from '@/lib/accountAccess';
 
 export function AccountParentSelect({ accounts, value, onChange, accountId, disabled }: {
   accounts: AccountSummary[];
@@ -14,7 +15,7 @@ export function AccountParentSelect({ accounts, value, onChange, accountId, disa
   const id = useId();
   const rows = useMemo(() => flattenAccountTree(buildAccountTree(accounts)), [accounts]);
   const excluded = useMemo(() => new Set(accountId ? accountDescendantIds(accounts, accountId) : []), [accounts, accountId]);
-  const options = rows.filter(row => !excluded.has(row.node.accountId));
+  const options = rows.filter(row => !excluded.has(row.node.accountId) && isEditableAccount(row.node));
   return (
     <div className="min-w-0 space-y-1.5">
       <label htmlFor={id} className="block text-xs font-semibold text-slate-500 dark:text-text-muted">상위 어카운트</label>
