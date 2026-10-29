@@ -577,7 +577,10 @@ func (m *mockMeetingRepo) ClearAccountInsights(_ context.Context, _, meetingID, 
 // --- Tests ---
 
 func (m *mockMeetingRepo) addMember(accountID, userID, role string) {
-	m.members[accountID+"|"+userID] = &model.AccountMember{AccountID: accountID, UserID: userID, Role: role}
+	m.members[accountID+"|"+userID] = &model.AccountMember{PK: "ACCOUNT#" + accountID, SK: "MEMBER#" + userID, EntityType: model.EntityTypeAccountMember, AccountID: accountID, UserID: userID, Role: role}
+	if m.accounts[accountID] == nil {
+		m.accounts[accountID] = &model.Account{PK: "ACCOUNT#" + accountID, SK: "META", EntityType: model.EntityTypeAccount, AccountID: accountID}
+	}
 }
 
 func TestLinkMeetingToAccount_OwnerMember(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"testing"
 	"time"
 
@@ -27,6 +28,35 @@ func publishedTeamMeeting(t *testing.T) (*mockMeetingRepo, *MeetingService) {
 	return repo, svc
 }
 
+type descendantMeetingListRepo struct{ *mockMeetingRepo }
+
+func (r *descendantMeetingListRepo) ListChildAccountIDsPage(_ context.Context, parent, _ string, _ int32) ([]string, *string, error) {
+	ids := []string{}
+	for id, account := range r.accounts {
+		if account.ParentAccountID == parent {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids, nil, nil
+}
+
+func TestListMeetings_ParentOnlyMemberFindsDescendantPublishedMeeting(t *testing.T) {
+	t.Setenv(accountDescendantReadsEnv, "1")
+	repo, svc := publishedTeamMeeting(t)
+	repo.accounts["acc-a"] = &model.Account{PK: "ACCOUNT#acc-a", SK: "META", EntityType: model.EntityTypeAccount, AccountID: "acc-a", ParentAccountID: "parent"}
+	repo.accounts["parent"] = &model.Account{PK: "ACCOUNT#parent", SK: "META", EntityType: model.EntityTypeAccount, AccountID: "parent"}
+	repo.members["parent|reader"] = &model.AccountMember{PK: "ACCOUNT#parent", SK: "MEMBER#reader", EntityType: model.EntityTypeAccountMember, AccountID: "parent", UserID: "reader", Role: model.RoleOwner}
+	svc = newMeetingServiceWithRepo(&descendantMeetingListRepo{repo})
+	for _, tab := range []string{"shared", "all"} {
+		for _, account := range []string{"", "acc-a"} {
+			got, err := svc.ListMeetings(context.Background(), "reader", tab, "", account, 20)
+			if err != nil || len(got.Meetings) != 1 || aws.ToString(got.Meetings[0].Permission) != model.PermissionRead {
+				t.Fatalf("parent-only team list: %+v/%v", got, err)
+			}
+		}
+	}
+}
 func TestListMeetings_LaterTeamMemberAutomaticallySeesPublishedMeetings(t *testing.T) {
 	for _, tab := range []string{"all", "shared"} {
 		for _, accountID := range []string{"", "acc-a"} {

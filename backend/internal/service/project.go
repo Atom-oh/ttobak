@@ -152,7 +152,8 @@ func projectResponse(project *model.Project, members []model.ProjectMember) *mod
 	}
 	accountIDs := append([]string{}, project.AccountIDs...)
 	return &model.ProjectResponse{
-		ProjectID: project.ProjectID, Name: project.Name, Description: project.Description,
+		AccessPermission: model.PermissionEdit,
+		ProjectID:        project.ProjectID, Name: project.Name, Description: project.Description,
 		SfdcOpptyID: project.SfdcOpptyID, SfdcURL: project.SfdcURL, Stage: project.Stage,
 		OwnerUserID: project.OwnerUserID, AccountIDs: accountIDs, Members: memberDTOs,
 		CreatedAt: project.CreatedAt, UpdatedAt: project.UpdatedAt,
@@ -160,7 +161,7 @@ func projectResponse(project *model.Project, members []model.ProjectMember) *mod
 }
 
 func (s *ProjectService) GetProject(ctx context.Context, userID, projectID string) (*model.ProjectResponse, error) {
-	project, err := s.requireProjectAccess(ctx, userID, projectID)
+	project, inherited, err := s.requireProjectReadAccess(ctx, userID, projectID)
 	if err != nil {
 		return nil, err
 	}
@@ -168,7 +169,20 @@ func (s *ProjectService) GetProject(ctx context.Context, userID, projectID strin
 	if err != nil {
 		return nil, err
 	}
-	return projectResponse(project, members), nil
+	if inherited != nil {
+		if valid, err := revalidateAccountReadGrant(ctx, s.repo, inherited, userID); err != nil || !valid {
+			if err != nil {
+				return nil, err
+			}
+			return nil, ErrForbidden
+		}
+	}
+	response := projectResponse(project, members)
+	if inherited != nil {
+		response.AccessPermission = model.PermissionRead
+		response.InheritedFromAccountID = inherited.InheritedFromAccountID
+	}
+	return response, nil
 }
 
 // ListMyProjects unions the project's three hybrid-access discovery paths:
@@ -206,7 +220,7 @@ func (s *ProjectService) ListMyProjects(ctx context.Context, userID string, join
 		if seen[id] {
 			continue
 		}
-		project, err := s.requireProjectAccess(ctx, userID, id)
+		project, _, err := s.requireProjectReadAccess(ctx, userID, id)
 		if errors.Is(err, ErrNotFound) || errors.Is(err, ErrForbidden) {
 			continue
 		}
@@ -216,7 +230,7 @@ func (s *ProjectService) ListMyProjects(ctx context.Context, userID string, join
 		seen[id] = true
 		out = append(out, model.ProjectSummary{ProjectID: project.ProjectID, Name: project.Name, Stage: project.Stage, SfdcOpptyID: project.SfdcOpptyID})
 	}
-	accountMemberships, err := s.repo.ListAccountsForUser(ctx, userID)
+	readableAccounts, err := listReadableAccountIDs(ctx, s.repo, userID, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -224,8 +238,8 @@ func (s *ProjectService) ListMyProjects(ctx context.Context, userID string, join
 	// the fail-closed check below can accept it if ANY of them is still a
 	// canonical link, not just the first one found.
 	candidateAccountIDs := make(map[string][]string)
-	for _, accountMember := range accountMemberships {
-		refs, err := s.repo.ListProjectRefsForAccount(ctx, accountMember.AccountID)
+	for _, accountID := range readableAccounts {
+		refs, err := s.repo.ListProjectRefsForAccount(ctx, accountID)
 		if err != nil {
 			return nil, err
 		}
@@ -233,7 +247,7 @@ func (s *ProjectService) ListMyProjects(ctx context.Context, userID string, join
 			if seen[ref.ProjectID] {
 				continue
 			}
-			candidateAccountIDs[ref.ProjectID] = append(candidateAccountIDs[ref.ProjectID], accountMember.AccountID)
+			candidateAccountIDs[ref.ProjectID] = append(candidateAccountIDs[ref.ProjectID], accountID)
 		}
 	}
 	for projectID, accountIDs := range candidateAccountIDs {
@@ -263,6 +277,12 @@ func (s *ProjectService) ListMyProjects(ctx context.Context, userID string, join
 		}
 		if !linked {
 			continue
+		}
+		if _, _, err := s.requireProjectReadAccess(ctx, userID, projectID); err != nil {
+			if errors.Is(err, ErrForbidden) || errors.Is(err, ErrNotFound) {
+				continue
+			}
+			return nil, err
 		}
 		seen[projectID] = true
 		out = append(out, model.ProjectSummary{ProjectID: project.ProjectID, Name: project.Name, Stage: project.Stage, SfdcOpptyID: project.SfdcOpptyID})
@@ -744,7 +764,8 @@ func (s *ProjectService) projectMeetings(ctx context.Context, projectID string) 
 }
 
 func (s *ProjectService) ListProjectMeetings(ctx context.Context, userID, projectID string) ([]model.ProjectMeetingRefDTO, error) {
-	if _, err := s.requireProjectAccess(ctx, userID, projectID); err != nil {
+	_, inherited, err := s.requireProjectReadAccess(ctx, userID, projectID)
+	if err != nil {
 		return nil, err
 	}
 	refs, byID, err := s.projectMeetings(ctx, projectID)
@@ -764,11 +785,28 @@ func (s *ProjectService) ListProjectMeetings(ctx context.Context, userID, projec
 		if !ok || !contains(meeting.ProjectIDs, projectID) || seen[meeting.MeetingID] {
 			continue
 		}
+		if inherited != nil {
+			meeting, err = s.independentlyReadableMeeting(ctx, userID, meeting)
+			if err != nil {
+				return nil, err
+			}
+			if meeting == nil {
+				continue
+			}
+		}
 		seen[meeting.MeetingID] = true
 		out = append(out, model.ProjectMeetingRefDTO{
 			MeetingID: meeting.MeetingID, OwnerUserID: ref.OwnerUserID,
 			Title: meeting.Title, Date: meeting.Date,
 		})
+	}
+	if inherited != nil {
+		if valid, err := revalidateAccountReadGrant(ctx, s.repo, inherited, userID); err != nil || !valid {
+			if err != nil {
+				return nil, err
+			}
+			return nil, ErrForbidden
+		}
 	}
 	return out, nil
 }
@@ -804,7 +842,8 @@ func (s *ProjectService) hasLinkedResearch(ctx context.Context, projectID string
 }
 
 func (s *ProjectService) ListProjectResearch(ctx context.Context, userID, projectID string) ([]model.ProjectResearchDTO, error) {
-	if _, err := s.requireProjectAccess(ctx, userID, projectID); err != nil {
+	_, inherited, err := s.requireProjectReadAccess(ctx, userID, projectID)
+	if err != nil {
 		return nil, err
 	}
 	refs, err := s.repo.ListProjectResearchRefsForProject(ctx, projectID)
@@ -833,17 +872,35 @@ func (s *ProjectService) ListProjectResearch(ctx context.Context, userID, projec
 		if !ok || research.TrashedAt != "" || !contains(research.ProjectIDs, projectID) {
 			continue
 		}
+		if inherited != nil {
+			allowed, err := s.independentlyReadableResearch(ctx, userID, research)
+			if err != nil {
+				return nil, err
+			}
+			if !allowed {
+				continue
+			}
+		}
 		out = append(out, model.ProjectResearchDTO{
 			ResearchID: research.ResearchID, Topic: research.Topic,
 			Summary: truncateRunes(research.Summary, summaryPreviewMaxLen), Status: research.Status,
 			OwnerUserID: research.UserID, CreatedAt: research.CreatedAt,
 		})
 	}
+	if inherited != nil {
+		if valid, err := revalidateAccountReadGrant(ctx, s.repo, inherited, userID); err != nil || !valid {
+			if err != nil {
+				return nil, err
+			}
+			return nil, ErrForbidden
+		}
+	}
 	return out, nil
 }
 
 func (s *ProjectService) GetProjectInsights(ctx context.Context, userID, projectID string, from, to time.Time, types []string) ([]model.ProjectInsightDTO, error) {
-	if _, err := s.requireProjectAccess(ctx, userID, projectID); err != nil {
+	_, inherited, err := s.requireProjectReadAccess(ctx, userID, projectID)
+	if err != nil {
 		return nil, err
 	}
 	refs, byID, err := s.projectMeetings(ctx, projectID)
@@ -863,6 +920,15 @@ func (s *ProjectService) GetProjectInsights(ctx context.Context, userID, project
 		// meeting, not just list the meeting twice.
 		if !ok || !contains(meeting.ProjectIDs, projectID) || seen[meeting.MeetingID] {
 			continue
+		}
+		if inherited != nil {
+			meeting, err = s.independentlyReadableMeeting(ctx, userID, meeting)
+			if err != nil {
+				return nil, err
+			}
+			if meeting == nil || meeting.SummaryReadRestricted {
+				continue
+			}
 		}
 		seen[meeting.MeetingID] = true
 		if !from.IsZero() && meeting.Date.Before(from) {
@@ -894,6 +960,14 @@ func (s *ProjectService) GetProjectInsights(ctx context.Context, userID, project
 			})
 		}
 	}
+	if inherited != nil {
+		if valid, err := revalidateAccountReadGrant(ctx, s.repo, inherited, userID); err != nil || !valid {
+			if err != nil {
+				return nil, err
+			}
+			return nil, ErrForbidden
+		}
+	}
 	return out, nil
 }
 
@@ -922,11 +996,11 @@ func (s *ProjectService) GetProjectBrief(ctx context.Context, userID, projectID 
 }
 
 func (s *ProjectService) ListAccountProjects(ctx context.Context, userID, accountID string) ([]model.ProjectSummary, error) {
-	member, err := s.repo.GetMember(ctx, accountID, userID)
+	grant, err := resolveAccountReadGrant(ctx, s.repo, accountID, userID)
 	if err != nil {
 		return nil, err
 	}
-	if member == nil {
+	if grant == nil {
 		return nil, ErrForbidden
 	}
 	refs, err := s.repo.ListProjectRefsForAccount(ctx, accountID)
@@ -944,6 +1018,12 @@ func (s *ProjectService) ListAccountProjects(ctx context.Context, userID, accoun
 			continue
 		}
 		out = append(out, model.ProjectSummary{ProjectID: project.ProjectID, Name: project.Name, Stage: project.Stage, SfdcOpptyID: project.SfdcOpptyID})
+	}
+	if valid, err := revalidateAccountReadGrant(ctx, s.repo, grant, userID); err != nil || !valid {
+		if err != nil {
+			return nil, err
+		}
+		return nil, ErrForbidden
 	}
 	return out, nil
 }

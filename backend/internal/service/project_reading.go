@@ -76,12 +76,12 @@ func (s *ProjectReadingService) grant(ctx context.Context, user string, p *model
 		if !contains(p.AccountIDs, c.Account) {
 			return "", ErrForbidden
 		}
-		m, err := s.repo.GetMember(ctx, c.Account, user)
+		grant, err := resolveAccountReadGrant(ctx, s.repo, c.Account, user)
 		if err != nil {
 			return "", err
 		}
-		if m != nil && m.AccountID == c.Account && m.UserID == user {
-			return accountReadingGrant(m), nil
+		if grant != nil && grant.Member.UserID == user {
+			return grant.fingerprint(), nil
 		}
 	default:
 		return "", ErrInvalidReadingCursor
@@ -121,12 +121,12 @@ func (s *ProjectReadingService) authorize(ctx context.Context, user string, p *m
 		}
 		var lookupErr error
 		for _, id := range p.AccountIDs[c.Scan:end] {
-			m, err := s.repo.GetMember(ctx, id, user)
+			grant, err := resolveAccountReadGrant(ctx, s.repo, id, user)
 			if err != nil {
 				lookupErr = err
 				continue
 			}
-			if m != nil && m.AccountID == id && m.UserID == user {
+			if grant != nil && grant.Member.UserID == user {
 				c.GrantKind = "account"
 				c.Account = id
 				break
@@ -161,6 +161,15 @@ type projectReadingView struct {
 	project *model.Project
 	cursor  projectReadingCursor
 	page    *repository.ProjectReadingPage
+}
+
+func (v *projectReadingView) GetShare(ctx context.Context, user, id string) (*model.Share, error) {
+	if shares, ok := v.projectRepo.(interface {
+		GetShare(context.Context, string, string) (*model.Share, error)
+	}); ok {
+		return shares.GetShare(ctx, user, id)
+	}
+	return nil, nil
 }
 
 func (v *projectReadingView) GetProject(_ context.Context, id string) (*model.Project, error) {

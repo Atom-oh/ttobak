@@ -21,6 +21,23 @@ type projectReadingRepo struct {
 	afterQuery                                        func()
 }
 
+func TestProjectReadingDescendantGrantInvalidatesAfterReachableReparent(t *testing.T) {
+	t.Setenv(accountDescendantReadsEnv, "1")
+	s, r := projectReadingFixture()
+	r.projects["p"].OwnerUserID = "owner"
+	r.projects["p"].AccountIDs = []string{"child"}
+	access := newDescendantAccessRepo()
+	r.accounts = access.accounts
+	r.accountMembers = map[string]*model.AccountMember{"parent|reader": access.members["parent/reader"]}
+	q := url.Values{"section": {"metadata"}, "pageSize": {"10"}}
+	page := readProjectPage(t, s, q)
+	q.Set("cursor", page["page"].(map[string]interface{})["nextCursor"].(string))
+	r.accounts["child"].ParentAccountID = "root"
+	r.accountMembers["root|reader"] = &model.AccountMember{PK: "ACCOUNT#root", SK: "MEMBER#reader", EntityType: model.EntityTypeAccountMember, AccountID: "root", UserID: "reader"}
+	if body, err := s.Read(context.Background(), "reader", "p", q); body != nil || !errors.Is(err, ErrStaleReadingCursor) {
+		t.Fatalf("reparented current grant continued old read: %s/%v", body, err)
+	}
+}
 func (r *projectReadingRepo) ListProjectMembers(context.Context, string) ([]model.ProjectMember, error) {
 	return nil, errors.New("unbounded members")
 }

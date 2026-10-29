@@ -223,6 +223,7 @@ func (s *ResearchService) GetResearchDetail(ctx context.Context, researchId, use
 	}
 
 	isOwner := research.UserID == userId
+	var accountGrant *accountReadGrant
 	if !isOwner {
 		share, err := s.repo.GetResearchShare(ctx, userId, researchId)
 		if err != nil {
@@ -230,14 +231,17 @@ func (s *ResearchService) GetResearchDetail(ctx context.Context, researchId, use
 		}
 		if share != nil {
 			research.IsShared = true
-		} else if s.mainRepo != nil && s.hasAccountAccess(ctx, research.AccountIDs, userId) {
-			// Not shared directly, but the caller is a member of an account
-			// this research is linked to -- grant read access. IsShared=true
-			// keeps the owner-only UI (account chips, share button) hidden
-			// for this viewer, same as a direct share would.
-			research.IsShared = true
 		} else {
-			return nil, ErrForbidden
+			if s.mainRepo != nil {
+				accountGrant, err = s.researchAccountReadGrant(ctx, research.AccountIDs, userId)
+				if err != nil {
+					return nil, err
+				}
+			}
+			if accountGrant == nil {
+				return nil, ErrForbidden
+			}
+			research.IsShared = true
 		}
 	}
 
@@ -253,6 +257,21 @@ func (s *ResearchService) GetResearchDetail(ctx context.Context, researchId, use
 			fmt.Printf("warn: failed to read research content from S3: %v\n", err)
 		} else {
 			resp.Content = content
+		}
+	}
+	if accountGrant != nil {
+		current, err := s.repo.GetResearch(ctx, researchId)
+		if err != nil {
+			return nil, err
+		}
+		if current == nil || current.TrashedAt != "" || !contains(current.AccountIDs, accountGrant.AccountID) {
+			return nil, ErrForbidden
+		}
+		if valid, err := revalidateAccountReadGrant(ctx, s.mainRepo, accountGrant, userId); err != nil || !valid {
+			if err != nil {
+				return nil, err
+			}
+			return nil, ErrForbidden
 		}
 	}
 
@@ -555,19 +574,19 @@ func (s *ResearchService) RevokeResearchShare(ctx context.Context, ownerID, rese
 	return s.repo.DeleteResearchShare(ctx, sharedToID, researchId)
 }
 
-// hasAccountAccess reports whether userId is a member of any account in accountIDs.
-func (s *ResearchService) hasAccountAccess(ctx context.Context, accountIDs []string, userId string) bool {
+func (s *ResearchService) researchAccountReadGrant(ctx context.Context, accountIDs []string, userId string) (*accountReadGrant, error) {
+	var lookupErr error
 	for _, accID := range accountIDs {
-		member, err := s.mainRepo.GetMember(ctx, accID, userId)
+		grant, err := resolveAccountReadGrant(ctx, s.mainRepo, accID, userId)
 		if err != nil {
-			log.Printf("warn: failed to check account membership %s for research access: %v", accID, err)
+			lookupErr = err
 			continue
 		}
-		if member != nil {
-			return true
+		if grant != nil {
+			return grant, nil
 		}
 	}
-	return false
+	return nil, lookupErr
 }
 
 // LinkAccount links a research (owner only) to an account the caller is a
@@ -701,11 +720,11 @@ func (s *ResearchService) ListAccountResearch(ctx context.Context, userID, accou
 	if s.mainRepo == nil {
 		return nil, fmt.Errorf("account linking not configured")
 	}
-	member, err := s.mainRepo.GetMember(ctx, accountID, userID)
+	grant, err := resolveAccountReadGrant(ctx, s.mainRepo, accountID, userID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to check account membership: %w", err)
 	}
-	if member == nil {
+	if grant == nil {
 		return nil, ErrForbidden
 	}
 
@@ -760,6 +779,12 @@ func (s *ResearchService) ListAccountResearch(ctx context.Context, userID, accou
 			OwnerUserID: r.UserID,
 			CreatedAt:   r.CreatedAt,
 		})
+	}
+	if valid, err := revalidateAccountReadGrant(ctx, s.mainRepo, grant, userID); err != nil || !valid {
+		if err != nil {
+			return nil, err
+		}
+		return nil, ErrForbidden
 	}
 	return dtos, nil
 }
