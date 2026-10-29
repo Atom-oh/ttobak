@@ -20,8 +20,9 @@ const transpile = source => ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText;
 
-function fixture(account, { firstCreateFails = false, preparationApplied = true, lookupGate } = {}) {
+function fixture(account, { firstCreateFails = false, firstLookupFails = false, preparationApplied = true, lookupGate } = {}) {
   const creates = [];
+  const lookups = [];
   const links = [];
   const navigations = [];
   const states = [];
@@ -41,8 +42,10 @@ function fixture(account, { firstCreateFails = false, preparationApplied = true,
     update: async () => ({ notesRevision: 'r2' }),
   };
   const accountApi = { get: async id => {
+    lookups.push(id);
     await lookupGate;
     assert.equal(id, currentAccount.accountId, 'binding lookup must use the requested Account');
+    if (firstLookupFails && lookups.length === 1) throw new Error('Temporary Account lookup failure');
     return currentAccount;
   } };
   const meetingAccountApi = { link: async (meetingId, accountId) => { links.push({ meetingId, accountId }); } };
@@ -108,7 +111,7 @@ function fixture(account, { firstCreateFails = false, preparationApplied = true,
     });
     return exports.upload([{ name: 'recording.webm', type: 'audio/webm', size: 5 }]);
   }
-  return { hook, creates, links, navigations, upload, switchAccount: account => { currentAccount = account; } };
+  return { hook, creates, lookups, links, navigations, upload, switchAccount: account => { currentAccount = account; } };
 }
 
 test('an inherited reference selection cannot bind the recording draft', async () => {
@@ -156,6 +159,33 @@ test('retry creation revalidates a previously direct Account before binding', as
   assert.equal(f.creates.length, 2);
   assert.equal(f.creates[0].accountId, 'parent');
   assert.equal(f.creates[1].accountId, undefined);
+  assert.deepEqual(f.navigations, ['/meeting/draft']);
+});
+
+test('retry after initial Account lookup failure retains and validates the direct selection', async () => {
+  const f = fixture(direct, { firstLookupFails: true });
+  assert.equal(await f.hook.createDraftMeeting(), null);
+  assert.equal(f.creates.length, 0, 'lookup failure must not send an unvalidated creation payload');
+  f.hook.handleBlobReady(new Blob(['audio']), 'audio/webm');
+  await f.hook.handleNotesSubmit('Prepared notes');
+  assert.deepEqual(f.lookups, ['parent', 'parent']);
+  assert.equal(f.creates.length, 1);
+  assert.equal(f.creates[0].accountId, 'parent');
+  assert.match(f.creates[0].notes, /Prepared notes/);
+  assert.equal(f.creates[0].sharedToAccount, undefined);
+  assert.deepEqual(f.navigations, ['/meeting/draft']);
+});
+
+test('retry validates a retained candidate without binding an inherited Account', async () => {
+  const f = fixture(inherited, { firstLookupFails: true, preparationApplied: false });
+  assert.equal(await f.hook.createDraftMeeting(), null);
+  assert.equal(f.creates.length, 0);
+  f.hook.handleBlobReady(new Blob(['audio']), 'audio/webm');
+  await f.hook.handleNotesSubmit('Prepared notes');
+  assert.deepEqual(f.lookups, ['child', 'child']);
+  assert.equal(f.creates.length, 1);
+  assert.equal(f.creates[0].accountId, undefined);
+  assert.deepEqual(f.links, []);
   assert.deepEqual(f.navigations, ['/meeting/draft']);
 });
 
