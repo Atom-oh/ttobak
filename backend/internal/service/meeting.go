@@ -898,6 +898,9 @@ func (s *MeetingService) UpdateSpeakers(ctx context.Context, userID, meetingID s
 	if meeting == nil {
 		return nil, ErrNotFound
 	}
+	if meeting.AccountReadInherited {
+		return nil, ErrForbidden
+	}
 	if permission != "owner" && permission != model.PermissionEdit && permission != model.PermissionRead {
 		return nil, ErrForbidden
 	}

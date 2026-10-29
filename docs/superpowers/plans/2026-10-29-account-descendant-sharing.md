@@ -76,7 +76,7 @@ Account discovery API, owned by the Account worker:
   ([]string, error)` returns validated direct and descendant IDs, with a
   documented explicit 1,000-Account compatibility limit rather than truncation.
 - Optional paged list requests return `{accounts, nextCursor}`; legacy requests
-  retain the array contract. Pagination candidates remain untrusted.
+  retain `{accounts: [...]}`. Pagination candidates remain untrusted.
 - Account responses and summaries add `accessPermission: "read" | "edit"` and
   optional `inheritedFromAccountId`. Direct member arrays remain canonical.
 
@@ -108,7 +108,7 @@ create `backend/internal/repository/account_children.go` and tests; modify
   document read, bounded reads, stale grant continuation and denied mutations.
 - [ ] Implement Account discovery using the shared resolver and child pages,
   consuming empty advancing pages and rejecting malformed/non-advancing cursors.
-- [ ] Add the paged list contract and maintain legacy-array compatibility.
+- [ ] Add the paged list contract and maintain legacy-envelope compatibility.
 - [ ] Adopt read grants only on reads/alias discovery; preserve exact direct
   membership on invitation, linking and document mutation methods.
 - [ ] Bind bounded reads to the full read-grant fingerprint, recheck before

@@ -82,3 +82,5 @@ python3 scripts/docs/check_docs.py
 - [Shared speaker correction and account publication](decisions/ADR-051-shared-speaker-correction-and-account-publication.md)
 - [Versioned HTTP origin proof rotation](decisions/ADR-050-http-origin-proof-rotation.md)
 - [Summary sharing and source provenance](decisions/ADR-049-summary-sharing-source-provenance.md)
+
+- [Descendant Account read sharing](decisions/ADR-058-descendant-account-read-sharing.md) — staged policy replacing ADR-036 inheritance rule.

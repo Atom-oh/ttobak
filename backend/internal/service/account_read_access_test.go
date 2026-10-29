@@ -87,6 +87,33 @@ func TestDescendantMeetingReadAccess(t *testing.T) {
 	}
 }
 
+type inheritedSpeakerRepo struct {
+	*mockMeetingRepo
+	hierarchy *descendantAccessRepo
+}
+
+func (r *inheritedSpeakerRepo) GetAccount(ctx context.Context, id string) (*model.Account, error) {
+	return r.hierarchy.GetAccount(ctx, id)
+}
+
+func (r *inheritedSpeakerRepo) GetMember(ctx context.Context, id, user string) (*model.AccountMember, error) {
+	return r.hierarchy.GetMember(ctx, id, user)
+}
+
+func TestInheritedReaderCannotCorrectSpeakers(t *testing.T) {
+	t.Setenv(accountDescendantReadsEnv, "1")
+	r := &inheritedSpeakerRepo{mockMeetingRepo: newMockMeetingRepo(), hierarchy: newDescendantAccessRepo()}
+	meeting := *r.hierarchy.meeting
+	meeting.Content = "spk_0 summary"
+	meeting.TranscriptA = "[spk_0]\nhello"
+	r.addMeeting(&meeting)
+	_, err := newMeetingServiceWithRepo(r).UpdateSpeakers(context.Background(), "reader", "meeting",
+		&model.UpdateSpeakersRequest{SpeakerMap: map[string]string{"spk_0": "name"}})
+	if !errors.Is(err, ErrForbidden) || r.meetingsByID["meeting"].Content != "spk_0 summary" {
+		t.Fatalf("inherited reader changed speakers: %v", err)
+	}
+}
+
 func TestAccountReadGrantRejectsPrivacyVersionChange(t *testing.T) {
 	r := newDescendantAccessRepo()
 	r.member("child", "reader", model.RoleAM)
