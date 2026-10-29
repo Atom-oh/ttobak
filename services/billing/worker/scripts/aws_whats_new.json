@@ -1,0 +1,50 @@
+{
+ "dx_flat": {
+  "date": "2026-09-15",
+  "title": "AWS Direct Connect announces flat-rate pricing for dedicated connections",
+  "url": "https://aws.amazon.com/about-aws/whats-new/2026/09/aws-direct-connect-announces-flat-rate-pricing/",
+  "summary": "10/100 Gbps 전용 연결에 GB당 DTO 없이 고정 시간 요금. 포트페어 두 번째 포트 무료, 5개 지리 티어, 종량제와 병행."
+ },
+ "bedrock_openai": {
+  "date": "2026-06",
+  "title": "GPT-5.5, GPT-5.4, and Codex from OpenAI are now generally available on Amazon Bedrock",
+  "url": "https://aws.amazon.com/about-aws/whats-new/2026/06/amazon-bedrock-openai-models-codex-generally-available/",
+  "summary": "GPT-5.5/5.4 GA, Codex를 Bedrock 추론으로 사용. 요금은 OpenAI 1st-party와 동일하고 AWS 약정 소진에 반영."
+ },
+ "bedrock_openai_agents": {
+  "date": "2026-04",
+  "title": "Amazon Bedrock now offers OpenAI models, Codex, and Managed Agents (Limited Preview)",
+  "url": "https://aws.amazon.com/about-aws/whats-new/2026/04/bedrock-openai-models-codex-managed-agents/",
+  "summary": "OpenAI 기반 Managed Agents(프리뷰), AgentCore와 연동, IAM·PrivateLink·Guardrails 적용."
+ },
+ "lambda_web": {
+  "date": "2026-10",
+  "title": "AWS Lambda announces Lambda Web Functions",
+  "url": "https://aws.amazon.com/about-aws/whats-new/2026/10/aws-lambda-web-functions/",
+  "summary": "HTTP 요청을 직접 처리하는 새 Lambda 프리미티브. Express/Hono 그대로, 활성 CPU만 과금, 한 실행 환경에서 동시 요청 처리, 스트리밍, 멀티 리전. Node.js."
+ },
+ "cf_lambda_web": {
+  "date": "2026-10",
+  "title": "Amazon CloudFront now supports AWS Lambda Web Functions as an origin",
+  "url": "https://aws.amazon.com/about-aws/whats-new/2026/10/cloudfront-lambda-web-functions-origin/",
+  "summary": "CloudFront 오리진으로 Lambda Web Functions, OAC·WAF 적용, 추가 요금 없음."
+ },
+ "cf_flat": {
+  "date": "2025-11",
+  "title": "AWS announces flat-rate pricing plans for website delivery and security",
+  "url": "https://aws.amazon.com/about-aws/whats-new/2025/11/aws-flat-rate-pricing-plans/",
+  "summary": "CloudFront+WAF+DDoS+Route 53+로그를 월 정액(Free/Pro $15/Business $200/Premium $1,000), 초과 요금 없음, 배포별 종량제와 병행."
+ },
+ "agentcore_pay": {
+  "date": "2026-08",
+  "title": "AgentCore payments is now generally available in Amazon Bedrock AgentCore",
+  "url": "https://aws.amazon.com/about-aws/whats-new/2026/08/bedrock-agentcore-payments-ga/",
+  "summary": "에이전트가 x402·MPP로 API·콘텐츠에 스테이블코인 결제. Coinbase CDP·Stripe Privy 지갑, 지출 한도, 관측성."
+ },
+ "bedrock_tags": {
+  "date": "-",
+  "title": "How do I add cost allocation tags when I invoke Amazon Bedrock on-demand models?",
+  "url": "https://repost.aws/knowledge-center/bedrock-add-cost-allocation-tags",
+  "summary": "애플리케이션 추론 프로파일에 비용 할당 태그(MAP 태그 포함)를 붙여 팀·프로젝트별 Bedrock 비용 귀속."
+ }
+}
