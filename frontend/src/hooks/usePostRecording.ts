@@ -189,6 +189,7 @@ export function usePostRecording({
       // Retain the selection for a failed-lookup retry; mutation payloads below
       // replace this candidate with the freshly validated Account ID.
       preparationRef.current = { notes: preparationNotes(preparationContext || ''), accountId: accountId || undefined };
+      setPendingAccountValue(preparationRef.current.accountId || null);
       const creationAccountId = await withTimeout(
         resolveRecordingAccountId(accountId, notesUserIdRef.current), 15000, 'Validate preparation account',
       );

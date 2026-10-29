@@ -20,7 +20,7 @@ const transpile = source => ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText;
 
-function fixture(account, { firstCreateFails = false, firstLookupFails = false, preparationApplied = true, lookupGate } = {}) {
+function fixture(account, { firstCreateFails = false, firstLookupFails = false, persistentLookupStatus, preparationApplied = true, lookupGate } = {}) {
   const creates = [];
   const lookups = [];
   const links = [];
@@ -46,6 +46,7 @@ function fixture(account, { firstCreateFails = false, firstLookupFails = false, 
     await lookupGate;
     assert.equal(id, currentAccount.accountId, 'binding lookup must use the requested Account');
     if (firstLookupFails && lookups.length === 1) throw new Error('Temporary Account lookup failure');
+    if (persistentLookupStatus) throw new ApiError(persistentLookupStatus, 'FORBIDDEN', 'Account access is unavailable');
     return currentAccount;
   } };
   const meetingAccountApi = { link: async (meetingId, accountId) => { links.push({ meetingId, accountId }); } };
@@ -111,9 +112,27 @@ function fixture(account, { firstCreateFails = false, firstLookupFails = false, 
     });
     return exports.upload([{ name: 'recording.webm', type: 'audio/webm', size: 5 }]);
   }
-  return { hook, creates, lookups, links, navigations, upload, switchAccount: account => { currentAccount = account; } };
+  return { hook, creates, lookups, links, navigations, states, upload, switchAccount: account => { currentAccount = account; } };
 }
 
+test('persistent Account rejection can be skipped while preserving pending audio and notes', async () => {
+  for (const persistentLookupStatus of [403, 404]) {
+    const f = fixture(direct, { persistentLookupStatus });
+    assert.equal(await f.hook.createDraftMeeting(), null);
+    assert.equal(f.creates.length, 0);
+    assert.ok(f.states.includes('parent'), 'the recovery banner must retain the rejected Account candidate');
+    f.hook.handleBlobReady(new Blob(['audio']), 'audio/webm');
+    await f.hook.handleNotesSubmit('Prepared notes');
+    assert.equal(f.creates.length, 0);
+    f.hook.skipAccountRetry();
+    for (let n = 0; n < 30 && f.navigations.length === 0; n++) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.equal(f.creates.length, 1);
+    assert.equal(f.creates[0].accountId, undefined);
+    assert.match(f.creates[0].notes, /Prepared notes/);
+    assert.deepEqual(f.links, []);
+    assert.deepEqual(f.navigations, ['/meeting/draft']);
+  }
+});
 test('an inherited reference selection cannot bind the recording draft', async () => {
   const f = fixture(inherited);
   assert.equal(await f.hook.createDraftMeeting(), 'draft');

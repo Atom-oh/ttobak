@@ -38,8 +38,8 @@ pages and fails explicitly at compatibility limits rather than truncating.
 Bounded discovery retains independently indexed direct roots even when an
 ancestor traversal cannot reach them. Account pages declare overlapping results
 with `overlapPossible` and `unionKey: "accountId"`; clients union by ID and use
-the latest returned permissions. Account/project/meeting/vault catalogs likewise
-declare their stable union key. Canonical grants authorize every result;
+the latest returned permissions. Account/project/meeting/vault catalog data pages
+likewise declare their stable union key. Canonical grants authorize every result;
 candidate-index presence and cursor state never establish access.
 
 Go/API, bounded MCP readers, Account/documents, meeting discovery, projects,

@@ -25,7 +25,7 @@ const document = {
 
 // Exercise real component renders with fetched state, without browser-only
 // editor/layout effects or network calls. Editor props are its input contract.
-function render(component, { states, pathname, userId = ancestorReader, tab = 'general', props = { accountScoped: true } }) {
+function render(component, { states, pathname, userId = ancestorReader, tab = 'general', props = { accountScoped: true }, researchApi = {} }) {
   let stateIndex = 0;
   const editorInputs = [];
   const hooks = {
@@ -33,6 +33,7 @@ function render(component, { states, pathname, userId = ancestorReader, tab = 'g
     useState: initial => [stateIndex in states ? states[stateIndex++] : (stateIndex++, typeof initial === 'function' ? initial() : initial), () => {}],
     useRef: initial => ({ current: initial }), useEffect() {},
     useCallback: callback => callback, useMemo: callback => callback(),
+    useId: () => 'account-control',
   };
   const jsx = jsxRuntime;
   const passthrough = ({ children }) => children;
@@ -45,7 +46,7 @@ function render(component, { states, pathname, userId = ancestorReader, tab = 'g
     marked: { Marked }, turndown: { default: TurndownService },
     '@/components/auth/AuthProvider': { useAuth: () => ({ user: { userId }, isLoading: false, isAuthenticated: true, membershipRevision: 0 }) },
     '@/components/layout/AppLayout': { AppLayout: passthrough },
-    '@/lib/api': { accountApi: {}, docApi: {}, projectApi: {}, settingsApi: {} },
+    '@/lib/api': { accountApi: {}, docApi: {}, projectApi: {}, settingsApi: {}, researchApi },
     '@/lib/upload': { uploadDocFile() { throw new Error('Unexpected upload'); } },
     '@/components/MemberPicker': { MemberPicker: none },
     '@/components/FieldInsightsSection': { FieldInsightsSection: none },
@@ -76,7 +77,8 @@ function render(component, { states, pathname, userId = ancestorReader, tab = 'g
   }
   const loaded = load(`@/components/${component}`);
   const Component = loaded.default || loaded[component.split('/').at(-1)];
-  return { html: renderToStaticMarkup(React.createElement(Component, props)), editorInputs };
+  const tree = Component(props);
+  return { html: renderToStaticMarkup(tree), tree, editorInputs };
 }
 
 function accountStates(value, billing = null) {
@@ -195,14 +197,35 @@ test('independent project Owner keeps management but cannot link an inherited Ac
   assert.doesNotMatch(html, /<option value="child">/);
 });
 
-test('research link chips offer direct Accounts and keep inherited linked names read-only', () => {
-  const { html } = render('ResearchAccountChips', {
+test('research owner can revoke an inherited Account link without gaining new-link permission', async () => {
+  const unlinks = [], changes = [];
+  const { html, tree } = render('ResearchAccountChips', {
     states: { 0: accessibleAccounts }, pathname: '/research/report',
-    props: { researchId: 'report', accountIds: ['child'], onChange() {} },
+    props: { researchId: 'report', accountIds: ['child'], onChange: ids => changes.push(ids) },
+    researchApi: {
+      unlinkAccount: async (...args) => { unlinks.push(args); },
+      linkAccount: async () => { assert.fail('inherited Account must not be newly linked'); },
+    },
   });
   assert.match(html, /Direct Account/);
   assert.match(html, /Inherited Account/);
-  assert.match(html, /<button[^>]*disabled=""[^>]*>.*Inherited Account/);
+  function findButton(node) {
+    if (Array.isArray(node)) return node.map(findButton).find(Boolean);
+    if (!node || typeof node !== 'object') return;
+    if (node.type === 'button' && node.key === 'child') return node;
+    return findButton(node.props?.children);
+  }
+  const button = findButton(tree);
+  assert.ok(button);
+  assert.equal(button.props.disabled, false, 'report owner can remove an existing link');
+  await button.props.onClick();
+  assert.deepEqual(unlinks, [['report', 'child']]);
+  assert.deepEqual(changes, [[]]);
+  const unlinked = render('ResearchAccountChips', {
+    states: { 0: accessibleAccounts }, pathname: '/research/report',
+    props: { researchId: 'report', accountIds: [], onChange() {} },
+  });
+  assert.doesNotMatch(unlinked.html, /Inherited Account/);
 });
 
 test('KB upload Account selector excludes inherited Accounts', () => {
