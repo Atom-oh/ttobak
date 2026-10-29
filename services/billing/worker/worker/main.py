@@ -994,9 +994,15 @@ class Job:
                               ConditionExpression="attribute_not_exists(pk) OR expiresAt < :now",
                               ExpressionAttributeValues={":now": {"N": str(now)}})
         except Exception as e:
-            if err_code(e) == "ConditionalCheckFailedException":
+            if err_code(e) != "ConditionalCheckFailedException":
+                raise
+            # an SDK retry of a put that committed (its response lost) fails the condition: the lease carries our token
+            r = self.ddb.get_item(TableName=self.table, Key=self.lease_key(), ConsistentRead=True)
+            it = r.get("Item") or {}
+            if (it.get("owner") or {}).get("S") != self.token:
                 return False
-            raise
+            exp = int((it.get("expiresAt") or {}).get("N") or exp)
+            log("lease", retried=True)
         self.lease_exp = exp
         return True
 
