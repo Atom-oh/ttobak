@@ -283,6 +283,7 @@ export interface MeetingDetail extends Meeting {
   };
   transcriptQuality?: TranscriptQuality;
   canRecoverRecording?: boolean;
+  canCorrectSpeakers?: boolean;
   supportsAudioCrop?: boolean;
   /** Server flag for POST /api/meetings/{id}/translation; absent means off. */
   supportsMeetingTranslation?: boolean;
