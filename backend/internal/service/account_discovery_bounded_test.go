@@ -102,8 +102,8 @@ func (r *boundedDiscoveryRepo) ListChildAccountIDsPage(_ context.Context, parent
 func TestAccountCatalogDiscoveryTraversesWideTreeInBoundedPages(t *testing.T) {
 	t.Setenv(accountDescendantReadsEnv, "1")
 	r := boundedDiscoveryFixture(1001)
-	// Direct membership in a descendant preserves its edit grant, but does not
-	// duplicate that subtree when the direct-membership index reaches it.
+	// Independent roots may overlap a traversed subtree. Every row keeps its
+	// current direct permission and the response declares union semantics.
 	r.accountIndex = append(r.accountIndex, "child-0001")
 	r.hierarchy.members[memberKey("child-0001", "reader")] = &model.AccountMember{
 		PK: "ACCOUNT#child-0001", SK: "MEMBER#reader", AccountID: "child-0001",
@@ -121,8 +121,8 @@ func TestAccountCatalogDiscoveryTraversesWideTreeInBoundedPages(t *testing.T) {
 		for _, raw := range page["accounts"].([]interface{}) {
 			row := raw.(map[string]interface{})
 			id := row["accountId"].(string)
-			if seen[id] {
-				t.Fatalf("duplicate account %s", id)
+			if page["overlapPossible"] != true || page["unionKey"] != "accountId" {
+				t.Fatal("overlapping account roots lack explicit union semantics")
 			}
 			seen[id] = true
 			if id == "child-0001" && row["accessPermission"] != model.PermissionEdit {
@@ -144,6 +144,35 @@ func TestAccountCatalogDiscoveryTraversesWideTreeInBoundedPages(t *testing.T) {
 	}
 	if len(seen) != 1002 {
 		t.Fatalf("lost accounts: %d", len(seen))
+	}
+}
+
+func TestAccountCatalogStaticOneRootDoesNotOverlapRows(t *testing.T) {
+	t.Setenv(accountDescendantReadsEnv, "1")
+	r := boundedDiscoveryFixture(10)
+	s := NewNavigationCatalogService(r)
+	q := url.Values{"pageSize": {"1"}}
+	seen := map[string]bool{}
+	for n := 0; ; n++ {
+		page := navigationPage(t, s, "accounts", q)
+		for _, raw := range page["accounts"].([]interface{}) {
+			id := raw.(map[string]interface{})["accountId"].(string)
+			if seen[id] {
+				t.Fatalf("static one-root traversal duplicated %s", id)
+			}
+			seen[id] = true
+		}
+		info := page["page"].(map[string]interface{})
+		if info["complete"] == true {
+			break
+		}
+		if n > 40 {
+			t.Fatal("static one-root traversal did not finish")
+		}
+		q.Set("cursor", info["nextCursor"].(string))
+	}
+	if len(seen) != 11 {
+		t.Fatalf("static one-root traversal lost accounts: %d", len(seen))
 	}
 }
 
@@ -224,6 +253,159 @@ func TestAccountDiscoveryKeepsDirectGrantWithBrokenAncestry(t *testing.T) {
 				t.Fatalf("ancestor de-duplication removed an independent direct grant: %v/%v", ids, err)
 			}
 		})
+	}
+}
+
+func TestAccountDiscoveryKeepsDirectGrantAcrossSkippedAncestorRoutes(t *testing.T) {
+	t.Setenv(accountDescendantReadsEnv, "1")
+	for _, barrier := range []string{"malformed-member", "missing-index-candidate"} {
+		t.Run(barrier, func(t *testing.T) {
+			r := boundedDiscoveryFixture(0)
+			for id, parent := range map[string]string{"a": "", "b": "a", "c": "b"} {
+				r.hierarchy.accounts[id] = &model.Account{PK: "ACCOUNT#" + id, SK: "META", AccountID: id,
+					ParentAccountID: parent, EntityType: model.EntityTypeAccount}
+			}
+			for _, id := range []string{"a", "c"} {
+				r.hierarchy.members[memberKey(id, "reader")] = &model.AccountMember{
+					PK: "ACCOUNT#" + id, SK: "MEMBER#reader", AccountID: id, UserID: "reader",
+					EntityType: model.EntityTypeAccountMember, Role: model.RoleAM,
+				}
+			}
+			r.accountIndex = []string{"a", "c"}
+			if barrier == "malformed-member" {
+				r.hierarchy.members[memberKey("b", "reader")] = &model.AccountMember{
+					PK: "ACCOUNT#b", SK: "MEMBER#reader", AccountID: "b", UserID: "other",
+					EntityType: model.EntityTypeAccountMember, Role: model.RoleAM,
+				}
+			} else {
+				r.accountIndex = []string{"c"}
+			}
+			c := &accountDiscoveryCursor{}
+			found := false
+			for n := 0; ; n++ {
+				ids, done, err := nextReadableAccountCandidate(context.Background(), r, "reader", c)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, id := range ids {
+					found = found || id == "c"
+				}
+				if done {
+					break
+				}
+				if n > 20 {
+					t.Fatal("independent grant discovery never completed")
+				}
+			}
+			if !found {
+				t.Fatal("ancestor de-duplication hid the independently-held c grant")
+			}
+			assertIndependentRouteCollections(t, r)
+		})
+	}
+}
+
+type routeMeetingCatalogRepo struct {
+	*descendantMeetingCatalogRepo
+	discovery *boundedDiscoveryRepo
+}
+
+func (r *routeMeetingCatalogRepo) QueryNavigationCandidates(ctx context.Context, user, kind, account, after string, limit int) (*repository.NavigationCandidatePage, error) {
+	return r.discovery.QueryNavigationCandidates(ctx, user, kind, account, after, limit)
+}
+
+type routeVaultRepo struct {
+	*descendantVaultRepo
+	discovery *boundedDiscoveryRepo
+}
+
+func (r *routeVaultRepo) QueryNavigationCandidates(ctx context.Context, user, kind, account, after string, limit int) (*repository.NavigationCandidatePage, error) {
+	return r.discovery.QueryNavigationCandidates(ctx, user, kind, account, after, limit)
+}
+
+func assertIndependentRouteCollections(t *testing.T, r *boundedDiscoveryRepo) {
+	t.Helper()
+	api := newAccountServiceWithRepo(&boundedAccountListRepo{r.hierarchy.mockAccountRepo, r})
+	q := url.Values{"pageSize": {"100"}}
+	found := false
+	for n := 0; ; n++ {
+		page, err := api.ListAccountsPage(context.Background(), "reader", q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !page.OverlapPossible || page.UnionKey != "accountId" {
+			t.Fatal("account API omitted independent-root union contract")
+		}
+		for _, a := range page.Accounts {
+			if a.AccountID == "c" {
+				found = a.AccessPermission == model.PermissionEdit
+			}
+		}
+		if page.NextCursor == "" {
+			break
+		}
+		if n > 20 {
+			t.Fatal("account API did not complete independent route")
+		}
+		q.Set("cursor", page.NextCursor)
+	}
+	if !found {
+		t.Fatal("account API lost independent direct permission")
+	}
+	r.project("independent", "owner", "c")
+	r.refs["c"] = []string{"independent"}
+	navigation := NewNavigationCatalogService(r)
+	for _, kind := range []string{"accounts", "projects"} {
+		q, found = url.Values{"pageSize": {"1"}}, false
+		for n := 0; ; n++ {
+			page := navigationPage(t, navigation, kind, q)
+			if page["overlapPossible"] != true {
+				t.Fatal("navigation catalog omitted independent-root overlap")
+			}
+			for _, raw := range page[kind].([]interface{}) {
+				row := raw.(map[string]interface{})
+				if row["accountId"] == "c" || row["projectId"] == "independent" {
+					found = row["accessPermission"] == model.PermissionEdit
+				}
+			}
+			info := page["page"].(map[string]interface{})
+			if info["complete"] == true {
+				break
+			}
+			if n > 30 {
+				t.Fatal("navigation catalog did not complete independent route")
+			}
+			q.Set("cursor", info["nextCursor"].(string))
+		}
+		if !found {
+			t.Fatalf("%s catalog lost independent direct permission", kind)
+		}
+	}
+	meetings := &catalogMeetingRepo{mockMeetingRepo: newMockMeetingRepo()}
+	meetings.meetings["owner|independent"] = &model.Meeting{UserID: "owner", MeetingID: "independent",
+		AccountID: "c", SharedToAccount: true, Title: "Shared"}
+	meetings.meetingRefs["c"] = []model.MeetingRef{{MeetingID: "independent", OwnerUserID: "owner"}}
+	mrepo := &routeMeetingCatalogRepo{&descendantMeetingCatalogRepo{meetings, r.hierarchy}, r}
+	rows := collectCatalogMeetings(t, NewMeetingCatalogService(mrepo), meetings, MeetingCatalogIdentity{UserID: "reader"}, url.Values{})
+	if _, ok := rows["independent"]; !ok {
+		t.Fatal("meeting catalog lost independent direct route")
+	}
+	_, vault := vaultReadingFixture()
+	vault.meetings = map[string]*model.Meeting{}
+	vault.docs = map[string]map[string]*model.AccountDocument{
+		"ACCOUNT#c": {"independent": {PK: "ACCOUNT#c", SK: "DOC#independent", AccountID: "c",
+			DocID: "independent", Title: "Shared", Content: "Shared"}},
+	}
+	vrepo := &routeVaultRepo{&descendantVaultRepo{vault, r.hierarchy}, r}
+	manifest := collectVaultManifest(t, &VaultReadingService{repo: vrepo})
+	found = false
+	for _, row := range manifest {
+		if strings.Contains(row["path"].(string), "--c/") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("vault manifest lost independent direct route")
 	}
 }
 

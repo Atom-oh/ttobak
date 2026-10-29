@@ -310,8 +310,11 @@ func (s *NavigationCatalogService) Read(ctx context.Context, user, kind string, 
 		}
 		result := readingObject{kind: items, "consistency": "current_per_item",
 			"page": readingObject{"unit": "items", "returned": len(items), "complete": !more, "nextCursor": next}}
+		if kind == "accounts" && descendantReadsEnabled() {
+			result["overlapPossible"], result["unionKey"] = true, "accountId"
+		}
 		if kind == "projects" {
-			result["overlapPossible"], result["unionKey"] = c.Overlap, "projectId"
+			result["overlapPossible"], result["unionKey"] = c.Overlap || descendantReadsEnabled(), "projectId"
 		}
 		return readingJSON(result)
 	}

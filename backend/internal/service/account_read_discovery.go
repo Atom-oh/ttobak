@@ -174,8 +174,10 @@ func listReadableAccountIDs(ctx context.Context, repo accountReadMembershipRepo,
 }
 
 type AccountListPage struct {
-	Accounts   []model.AccountSummary `json:"accounts"`
-	NextCursor string                 `json:"nextCursor,omitempty"`
+	Accounts        []model.AccountSummary `json:"accounts"`
+	NextCursor      string                 `json:"nextCursor,omitempty"`
+	OverlapPossible bool                   `json:"overlapPossible,omitempty"`
+	UnionKey        string                 `json:"unionKey,omitempty"`
 }
 
 type accountListCursor struct {
@@ -304,7 +306,7 @@ func (s *AccountService) listAccountsDiscoveryPage(ctx context.Context, user str
 	if err := recheckAccount(c.Anchor, c.Revision); err != nil {
 		return nil, err
 	}
-	page := &AccountListPage{Accounts: []model.AccountSummary{}}
+	page := &AccountListPage{Accounts: []model.AccountSummary{}, OverlapPossible: true, UnionKey: "accountId"}
 	observed := [][2]string{}
 	done := false
 	// A fixed four-step budget is independent of total tree width. Batching
@@ -462,46 +464,6 @@ func setDiscoveryNode(ctx context.Context, repo accountReadMembershipRepo, user 
 	return nil
 }
 
-// A directly held account beneath another directly held account is visited
-// through the ancestor's subtree, preventing duplicates without an unbounded
-// emitted-ID list. Each ancestor is canonical and the chain is depth bounded.
-func discoveryHasDirectAncestor(ctx context.Context, repo accountReadMembershipRepo, user, root string) (bool, error) {
-	hierarchy, ok := repo.(accountReadHierarchyRepo)
-	if !ok {
-		return false, nil
-	}
-	seen := map[string]bool{root: true}
-	id := root
-	found := false
-	for depth := 0; depth <= repository.AccountHierarchyMaxAncestors; depth++ {
-		a, err := hierarchy.GetAccount(ctx, id)
-		if err != nil {
-			return false, err
-		}
-		if !canonicalReadAccount(a, id) {
-			return false, nil
-		}
-		if id != root {
-			m, err := repo.GetMember(ctx, id, user)
-			if err != nil {
-				return false, err
-			}
-			if canonicalReadMember(m, id, user) {
-				found = true
-			}
-		}
-		id = a.ParentAccountID
-		if id == "" {
-			return found, nil
-		}
-		if !readingID.MatchString(id) || seen[id] {
-			return false, nil
-		}
-		seen[id] = true
-	}
-	return false, nil
-}
-
 func directDiscoveryPage(ctx context.Context, repo accountReadMembershipRepo, user, after string) (*repository.NavigationCandidatePage, error) {
 	if nav, ok := repo.(accountReadNavigationRepo); ok {
 		return nav.QueryNavigationCandidates(ctx, user, "accounts", "", after, 1)
@@ -571,13 +533,6 @@ func nextReadableAccountCandidate(ctx context.Context, repo accountReadMembershi
 			return nil, false, err
 		}
 		if !validAccountReadIdentity(g, root, user) || g.inherited() {
-			return []string{}, false, nil
-		}
-		duplicate, err := discoveryHasDirectAncestor(ctx, repo, user, root)
-		if err != nil {
-			return nil, false, err
-		}
-		if duplicate {
 			return []string{}, false, nil
 		}
 		c.Root = root

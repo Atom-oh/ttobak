@@ -245,7 +245,9 @@ func (s *VaultReadingService) manifest(ctx context.Context, user string, o vault
 				return nil, err
 			}
 		}
-		return json.Marshal(readingObject{"kind": "vault_manifest", "phase": "discovery", "discoveryPending": true, "page": readingObject{"complete": complete, "nextCursor": next}})
+		return json.Marshal(readingObject{"kind": "vault_manifest", "phase": "discovery", "discoveryPending": true,
+			"overlapPossible": descendantReadsEnabled(), "unionKey": "path",
+			"page": readingObject{"complete": complete, "nextCursor": next}})
 	}
 	if c.Phase != "meetings" && c.Phase != "personal_docs" && c.Phase != "account_docs" {
 		return nil, ErrInvalidReadingCursor
@@ -280,7 +282,7 @@ func (s *VaultReadingService) manifest(ctx context.Context, user string, o vault
 	if c.Revision != "" && c.Revision != group {
 		return nil, ErrStaleReadingCursor
 	}
-	body, err := renderCollectionReading("vault_manifest", c.Phase, text, binding, group, c.Offset, o.size, readingObject{"unionKey": "path"}, func(done bool, end int) (string, bool, error) {
+	body, err := renderCollectionReading("vault_manifest", c.Phase, text, binding, group, c.Offset, o.size, readingObject{"unionKey": "path", "overlapPossible": descendantReadsEnabled()}, func(done bool, end int) (string, bool, error) {
 		next := c
 		next.Anchor = anchor
 		if !done {
