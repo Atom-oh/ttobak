@@ -543,9 +543,16 @@ docs/runbooks/billing-phase2-release.md   acceptance evidence + Phase 4 cut-over
 modify `Dockerfile.ingest` and `.dockerignore`.
 
 **Interfaces:**
-- `class SessionJob(run: Callable[[str, str | None, threading.Event], str], clock=time.time)`:
-  - `bind(job_key, claim) -> Literal["accepted", "duplicate", "busy"]`.
-    - The first call binds the session and starts one daemon thread.
+- `class SessionJob(prepare: Callable[[str, str | None], Prepared], run: Callable[[Prepared, threading.Event], str], clock=time.time)`:
+  - `bind(job_key, claim) -> Literal["accepted", "duplicate", "busy", "rejected", "retry"]`.
+    - The first call runs `prepare` **synchronously** before answering: read and
+      validate the job object, check the UP claim (analyze) and acquire `RUN#`
+      (Task 4 steps 1–3; bounded, seconds). Only a durable `RUN#` owned by this
+      session yields `accepted`, and only then does one daemon thread start `run`.
+    - A definitive rejection from `prepare` gives `rejected`; a transient failure
+      (S3/DynamoDB retries exhausted, throttling) gives `retry` and binds nothing,
+      so the caller's retry with the same session ID can try again. `RUN#` already
+      owned by this session (lost response) counts as `accepted`/`duplicate`.
     - The same `(job_key, claim)` gives `duplicate`; any other pair gives `busy`.
   - `status() -> Literal["Healthy", "HealthyBusy"]`.
   - `last_status_change() -> int`.
@@ -554,7 +561,13 @@ modify `Dockerfile.ingest` and `.dockerignore`.
   - `POST /invocations`:
     - 400 `{"status": "rejected"}` for a bad key or claim format;
     - 409 `{"status": "busy"}` for a second job in the session;
-    - 200 `{"status": "accepted" | "duplicate"}` otherwise. It never blocks.
+    - 503 `{"status": "retry"}` for a transient `prepare` failure (ingest and the
+      dispatcher treat it as ambiguous and retry with the same session ID; the
+      dispatcher's final failure goes to `JobDlq`);
+    - 200 `{"status": "accepted" | "duplicate"}` otherwise. Only `prepare` runs
+      before the answer; the agent stages never block it.
+  - Tests add `test_prepare_failure_before_acquire_returns_retry` and
+    `test_accepted_only_after_run_item_acquired`.
   - `GET /ping` returns `{"status", "time_of_last_update"}`. `time_of_last_update`
     changes only when the status changes.
   - A lifespan shutdown calls `job.cancel()`.
@@ -757,8 +770,12 @@ modify `Dockerfile.ingest` and `.dockerignore`.
     - every `jobs/r*` object after T0 whose META `ai_<src>` is unchanged;
     - every UP row `queued`/`running`.
   - **Activate:** merge `ttobak:billingJobsEnabled: "true"`, deploy, confirm the
-    rules are `ENABLED`.
-  - **Replay:** for each manifest item still unresolved, copy the job object onto
+    rules are `ENABLED` and record T1 (confirmed activation).
+  - **Final manifest:** collect the manifest again **after** T1 with the window
+    `LastModified ≥ T0 − 4 h` through `T1 + 5 min`, so jobs written while neither
+    rule was active (between the drain and T1) are included. Replay works from this
+    final manifest, not the first one.
+  - **Replay:** for each final-manifest item still unresolved, copy the job object onto
     itself, which emits an Object Created event. `RUN#` and the claim make a replay
     of anything already owned a no-op.
   - **Rollback:** disable the new rules, then drain the new side (no running ingest
