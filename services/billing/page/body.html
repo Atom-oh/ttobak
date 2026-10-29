@@ -102,6 +102,8 @@
   .tb-grp::before { content: '▾'; display: inline-block; width: 1em; }
   .tb-grp[aria-expanded="false"]::before { content: '▸'; }
   .tb-ent .tb-nodata { color: var(--color-fg-muted); font-size: var(--cds-font-size-caption); }
+  .tb-ent .tb-nodata[aria-current="true"] { padding: var(--cds-pad-xs) var(--cds-pad-sm); border-radius: var(--cds-radius); border: 1px solid var(--color-fg); box-shadow: inset 0 0 0 1px var(--color-fg); }
+  .tb-ent .tb-grp[aria-current="true"] { border-color: var(--color-fg); box-shadow: inset 0 0 0 1px var(--color-fg); }
   .tb-notice { margin: 0; padding: var(--cds-pad-sm) var(--cds-pad-md); border-left: 3px solid var(--color-warn); background: var(--color-bg); font-size: var(--cds-font-size-body); }
   .tb-notice[hidden] { display: none; }
   .tb-sess { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--cds-gap-md); }
@@ -1187,6 +1189,7 @@ dash.ready(function () {
         const t = el('button', 'tb-grp', selectable ? null : KO[a.id]); t.type = 'button';
         t.dataset.grp = a.id; t.setAttribute('aria-controls', sub.id); t.setAttribute('aria-expanded', 'true');
         if (selectable) t.setAttribute('aria-label', KO[a.id] + ' 하위 계정');
+        else t.dataset.nodata = a.id;
         t.addEventListener('click', () => { if (collapsed.has(a.id)) collapsed.delete(a.id); else collapsed.add(a.id); syncTree(); });
         li.appendChild(t);
       }
@@ -1194,7 +1197,7 @@ dash.ready(function () {
         const b = el('button', null, KO[a.id]); b.type = 'button'; b.dataset.ent = a.id;
         b.addEventListener('click', () => dash.setParams({ entity: a.id, version: null }));
         li.appendChild(b);
-      } else if (!sub) li.appendChild(el('span', 'tb-nodata', KO[a.id] + ' · 데이터 없음'));
+      } else if (!sub) { const s = el('span', 'tb-nodata', KO[a.id] + ' · 데이터 없음'); s.dataset.nodata = a.id; li.appendChild(s); }
       if (sub) { for (const c of ch) { const x = item(c); if (x) sub.appendChild(x); } li.appendChild(sub); }
       return li;
     };
@@ -1208,6 +1211,10 @@ dash.ready(function () {
     }
     const e = ent();
     for (const b of tree.querySelectorAll('button[data-ent]')) b.setAttribute('aria-pressed', String(b.dataset.ent === e));
+    // an account without data selected through ?acct= is marked current (it has no button to press)
+    for (const n of tree.querySelectorAll('[data-nodata]')) {
+      if (n.dataset.nodata === e) n.setAttribute('aria-current', 'true'); else n.removeAttribute('aria-current');
+    }
   }
   buildTree();
   const tabs = [...document.querySelectorAll('.tb-tab')];
@@ -1220,26 +1227,39 @@ dash.ready(function () {
   }
   for (const t of tabs) t.addEventListener('click', () => showTab(t.dataset.tab));
 
-  const ent = () => (ENTS.includes(dash.params().entity) ? dash.params().entity : ENTS[0]);
+  // a listed account without data stays selected (it gets the upload prompt) instead of showing another account
+  const ent = () => { const e = dash.params().entity; return ENTS.includes(e) || ACCTS.some((a) => a.id === e) ? e : ENTS[0]; };
   // accounts compared with the selected one: its siblings with COT data under its parent, or every account with COT
   // data when its parent is not in the list. A pinned version serves only that account's rows, so it compares nothing.
   function peers() {
     if (dash.params().version) return COTS.includes(ent()) ? [ent()] : [];
     const a = ACCT[ent()];
+    if (a && !a.sources.cot && !a.sources.cur) return []; // an account without data compares nothing
     if (a && a.parentId && ACCT[a.parentId] && a.parentId !== a.id) return COTS.filter((x) => ACCT[x].parentId === a.parentId);
     return COTS.slice();
   }
   // tabs that read COT datasets of the selected account: a CUR-only account sees "COT 업로드 필요" there
   const NOT_COT_TABS = new Set(['overview', 'cur', 'method']);
   const needsCot = () => { const a = ACCT[ent()]; return !!a && !a.sources.cot && !NOT_COT_TABS.has(state.tab); };
+  // an account without COT or CUR data (e.g. preselected by ?acct=) shows only the upload prompt, on every tab
+  const noData = () => { const a = ACCT[ent()]; return !!a && !a.sources.cot && !a.sources.cur; };
   function drawCotNeed() {
-    const box = document.getElementById('cot-need'), need = needsCot();
+    const box = document.getElementById('cot-need'), empty = noData(), need = empty || needsCot();
     box.hidden = !need;
     for (const p of document.querySelectorAll('.tb-page')) p.hidden = need || p.dataset.page !== state.tab;
-    if (need && box.dataset.ent !== ent()) {
-      box.dataset.ent = ent();
-      const a = el('a', null, 'COT 업로드 화면으로'); a.href = 'upload.html?acct=' + encodeURIComponent(ent() || '');
-      box.replaceChildren(el('p', null, 'COT 업로드 필요'), el('p', 'tb-note', '이 계정에는 CUR 데이터만 있습니다. 이 화면은 COT 업로드 후에 볼 수 있습니다.'), a);
+    const key = (empty ? 'none|' : 'cot|') + ent();
+    if (need && box.dataset.ent !== key) {
+      box.dataset.ent = key;
+      const href = 'upload.html?acct=' + encodeURIComponent(ent() || '');
+      if (empty) {
+        if (ACCT[ent()].canUpload) {
+          const a = el('a', null, '업로드 화면으로'); a.href = href;
+          box.replaceChildren(el('p', null, '업로드 필요'), el('p', 'tb-note', '이 계정에는 아직 COT·CUR 데이터가 없습니다. 데이터를 업로드한 뒤에 볼 수 있습니다.'), a);
+        } else box.replaceChildren(el('p', 'tb-note', '이 계정에는 아직 COT·CUR 데이터가 없습니다. 데이터가 올라오면 볼 수 있습니다.'));
+      } else {
+        const a = el('a', null, 'COT 업로드 화면으로'); a.href = href;
+        box.replaceChildren(el('p', null, 'COT 업로드 필요'), el('p', 'tb-note', '이 계정에는 CUR 데이터만 있습니다. 이 화면은 COT 업로드 후에 볼 수 있습니다.'), a);
+      }
     }
     return need;
   }
