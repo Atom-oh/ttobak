@@ -37,9 +37,10 @@ class HtmlKpis(unittest.TestCase):
         import build_data
         with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as d:
             self.page(d, "Past Month Spend $1,234 Amortized" + " " * 100)
-            old = build_data.MAX_HTML
-            self.addCleanup(setattr, build_data, "MAX_HTML", old)
-            build_data.MAX_HTML = 50
+            import htmltext
+            old = htmltext.MAX_HTML
+            self.addCleanup(setattr, htmltext, "MAX_HTML", old)
+            htmltext.MAX_HTML = 50
             self.assertEqual(build_data.html_kpis(d, E), {"html_last_spend": None, "html_coh_dedup": None})
 
     def test_untrusted_page_is_read_in_linear_time(self):
