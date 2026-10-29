@@ -117,7 +117,7 @@ func (s *VaultReadingService) source(ctx context.Context, user, kind, account, i
 			if err != nil {
 				return nil, err
 			}
-			if access == nil {
+			if !validAccountReadIdentity(access, account, user) {
 				return nil, ErrForbidden
 			}
 			grant = access.fingerprint()

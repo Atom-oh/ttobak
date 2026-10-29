@@ -168,7 +168,7 @@ func (s *DocumentCatalogService) Read(ctx context.Context, userID string, q url.
 		if err != nil {
 			return nil, err
 		}
-		if access == nil {
+		if !validAccountReadIdentity(access, o.accountID, userID) {
 			return nil, ErrForbidden
 		}
 		accountGrant = access.fingerprint()
@@ -286,7 +286,7 @@ func (s *DocumentCatalogService) Read(ctx context.Context, userID string, q url.
 		if err != nil {
 			return nil, err
 		}
-		if access == nil || access.fingerprint() != accountGrant {
+		if !validAccountReadIdentity(access, o.accountID, userID) || access.fingerprint() != accountGrant {
 			return nil, ErrStaleReadingCursor
 		}
 	}

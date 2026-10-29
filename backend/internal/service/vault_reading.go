@@ -228,7 +228,7 @@ func (s *VaultReadingService) manifest(ctx context.Context, user string, o vault
 			if err != nil {
 				return nil, err
 			}
-			if access != nil {
+			if validAccountReadIdentity(access, account, user) {
 				c.Account, c.Grant, c.Phase = account, access.fingerprint(), "account_docs"
 				complete = false
 			}
@@ -259,7 +259,7 @@ func (s *VaultReadingService) manifest(ctx context.Context, user string, o vault
 		if err != nil {
 			return err
 		}
-		if access == nil || access.fingerprint() != c.Grant {
+		if !validAccountReadIdentity(access, c.Account, user) || access.fingerprint() != c.Grant {
 			return ErrStaleReadingCursor
 		}
 		return nil
