@@ -106,6 +106,46 @@ class TestWorker(Base):
                            timeout=60)
         self.assertEqual(r.stdout.split(), ["True", "0"], r.stderr[-300:])
 
+    def test_worker_ignores_shared_aws_files_before_any_client_or_child(self):
+        # the untrusted children share the worker's uid and could plant ~/.aws/config (endpoint_url, region,
+        # credential_process): the worker's own clients must never read it, including those created later
+        self.job()
+        ddb = self.ddb()
+        seen = []
+        files = ("AWS_CONFIG_FILE", "AWS_SHARED_CREDENTIALS_FILE")
+
+        def snap(what):
+            seen.append((what, tuple(os.environ.get(k) for k in files)))
+
+        def client(name, **kw):
+            snap("client:" + name)
+            return {"s3": self.task_s3, "dynamodb": ddb, "sts": self.sts}[name]
+
+        def factory(creds):
+            snap("factory")
+            return self.factory(creds)
+
+        def any_child(cmd, kw):
+            snap("child")
+        runner = Runner(hooks={t: any_child for t in ("run_account.sh", "agents", "report")})
+        with mock.patch.dict(os.environ, {"AWS_CONFIG_FILE": "/home/worker/.aws/config"}), \
+                mock.patch("boto3.client", side_effect=client):
+            os.environ.pop("AWS_SHARED_CREDENTIALS_FILE", None)
+            rc = W.main(env=self.env(), runner=runner, s3_factory=factory, harden=lambda: True)
+        self.assertEqual(rc, 0)
+        self.assertEqual([w for w, _ in seen][:3], ["client:s3", "client:dynamodb", "client:sts"])
+        self.assertIn("factory", [w for w, _ in seen])
+        self.assertIn("child", [w for w, _ in seen])
+        for what, vals in seen:
+            self.assertEqual(vals, (os.devnull, os.devnull), what)
+
+    def test_image_env_ignores_shared_aws_files(self):
+        with open(os.path.join(os.path.dirname(os.path.dirname(W.__file__)), "Dockerfile.ingest"), encoding="utf-8") as f:
+            lines = f.read().replace("\\\n", " ").splitlines()  # join continuation lines
+        env = " ".join(l for l in lines if l.startswith("ENV ")).split()
+        self.assertIn("AWS_CONFIG_FILE=/dev/null", env)
+        self.assertIn("AWS_SHARED_CREDENTIALS_FILE=/dev/null", env)
+
     def test_session_policy_scoped_to_account(self):
         self.job()
         ddb = self.ddb()
@@ -637,6 +677,43 @@ class TestWorker(Base):
         self.assertEqual(self.run_main(ddb, runner), 0)
         self.assertEqual(len(runner.cmds[0]), 6)
         self.assertEqual(len(runner.cmds[2]), 6)
+
+    def test_cur_publish_requires_the_predecessor_it_consumed(self):
+        # a concurrent CUR run (e.g. after the source lock expired) published an older-id version mid-run: this run
+        # merged months onto a predecessor that is no longer current, so it must not publish over the other one
+        prev, other = "v20260901000000aaaaaa", "v20261001000000cccccc"
+        self.assertLess(other, VID)  # the version-order check alone would let this run replace it
+        for before in (prev, None):
+            with self.subTest(before=before):
+                self.job(src="cur")
+                if before:
+                    self.store["accounts/acct-a/cur/%s/normalized/part-0.parquet" % before] = b"PAR1old"
+                ddb = self.ddb(src="cur", meta=meta_item(**({"current_cur": before} if before else {})))
+
+                def race(cmd, kw):
+                    ddb.items[("ACCT#acct-a", "META")]["current_cur"] = {"S": other}
+                self.assertEqual(self.run_main(ddb, Runner(hooks={"report": race})), 1)
+                meta = ddb.py(("ACCT#acct-a", "META"))
+                self.assertEqual(meta["current_cur"], other)
+                self.assertNotIn("period_cur", meta)
+                self.assertNotIn("ai_cur", meta)
+                up = self.up(ddb)
+                self.assertEqual(up["status"], "failed")
+                self.assertEqual(up["reason"], "내부 오류: StaleVersion")
+                self.assertEqual(up["steps"]["publish"], "failed")
+                self.assertNotIn("published", up)
+                self.assertNotIn(("ACCT#acct-a", "LOCK#cur"), ddb.items)
+
+    def test_cur_publish_condition_names_the_predecessor(self):
+        prev = "v20260901000000aaaaaa"
+        self.job(src="cur")
+        ddb = self.ddb(src="cur", meta=meta_item(current_cur=prev))
+        self.assertEqual(self.run_main(ddb, Runner()), 0)
+        meta_tx = [c for c in self.meta_updates(ddb) if c[0] == "tx-update"]
+        self.assertEqual(len(meta_tx), 1)
+        self.assertIn("current_cur = :prev", meta_tx[0][5])
+        self.assertEqual(meta_tx[0][3][":prev"], {"S": prev})
+        self.assertEqual(ddb.py(("ACCT#acct-a", "META"))["current_cur"], VID)
 
     def test_cur_check_failure_needs_review(self):
         self.job(src="cur")
