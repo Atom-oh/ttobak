@@ -45,9 +45,19 @@ test('Account discovery accepts the legacy complete response', async () => {
   assert.equal(f.requests.length, 1);
 });
 
+test('Account discovery consumes an empty page with an advancing cursor', async () => {
+  const f = fixture([
+    { accounts: [parent], nextCursor: 'next' },
+    { accounts: [], nextCursor: 'later' },
+    { accounts: [child] },
+  ]);
+  assert.deepEqual(JSON.parse(JSON.stringify(await f.api.list())), { accounts: [parent, child] });
+  assert.equal(f.requests.length, 3);
+  assert.equal(new URL(f.requests[2], 'https://example.invalid').searchParams.get('cursor'), 'later');
+});
+
 for (const [name, pages] of [
   ['repeated cursor', [{ accounts: [parent], nextCursor: 'again' }, { accounts: [child], nextCursor: 'again' }]],
-  ['nonadvancing page', [{ accounts: [parent], nextCursor: 'next' }, { accounts: [], nextCursor: 'later' }]],
   ['duplicate Account on a later page', [{ accounts: [parent], nextCursor: 'next' }, { accounts: [parent] }]],
   ['nonstring cursor', [{ accounts: [parent], nextCursor: 7 }]],
   ['malformed cursor', [{ accounts: [parent], nextCursor: '../private' }]],

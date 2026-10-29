@@ -778,7 +778,7 @@ async function getAccounts(): Promise<{ accounts: AccountSummary[] }> {
     const next = page.nextCursor;
     if (next === undefined || next === '') return { accounts };
     if (typeof next !== 'string' || next.length > 2048 || !/^[A-Za-z0-9_-]+$/.test(next)
-      || cursors.has(next) || page.accounts.length === 0) throw invalid();
+      || cursors.has(next)) throw invalid();
     cursors.add(next);
     cursor = next;
   }
