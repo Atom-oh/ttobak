@@ -2074,7 +2074,7 @@ dash.ready(function () {
     ['graviton_share', 'EC2 Graviton 비중', (v) => v.toFixed(1) + '%', -1],
     ['elasticity_ec2', 'EC2 주말 탄력성', (v) => v.toFixed(1) + '%', -1],
     ['rds_coverage', 'RDS 약정 커버리지', (v) => v.toFixed(1) + '%', -1],
-    ['expiring_at_risk', '120일 내 만료 영향(월)', (v) => usd(v), 1],
+    ['expiring_at_risk', '120일 내 만료 영향(월)', (v) => (v == null ? '—' : usd(v)), 1],
   ];
   function benchInsights(rows) {
     if (rows.length < 2) return [el('li', 'tb-empty', '비교하려면 2개 이상 법인을 볼 수 있어야 합니다.')];
@@ -2093,8 +2093,9 @@ dash.ready(function () {
     }
     const rd = ok('rds_coverage').filter((r) => r.rds_coverage_first != null && r.rds_coverage_first - r.rds_coverage >= 5);
     if (rd.length) out.push(`RDS 약정 커버리지가 ${PER.F}보다 5%p 이상 떨어진 법인: ` + rd.map((r) => `${KO[r.entity]} ${r.rds_coverage_first}% → ${r.rds_coverage}%`).join(', ') + '. DB 노드는 늘었는데 RI를 추가하지 않았습니다.');
-    const ex = rows.filter((r) => r.expiring_n > 0).sort((a, b) => b.expiring_at_risk - a.expiring_at_risk);
-    if (ex.length) out.push('120일 안에 만료되는 약정: ' + ex.map((r) => `${KO[r.entity]} ${r.expiring_n}건(미갱신 시 월 ${usd(r.expiring_at_risk)}, 첫 만료 ${r.next_expiry})`).join(', ') + '.');
+    // null: an expiring RI has no net-savings figure, so the impact is unknown (sorted last, shown as —)
+    const ex = rows.filter((r) => r.expiring_n > 0).sort((a, b) => (b.expiring_at_risk ?? -1) - (a.expiring_at_risk ?? -1));
+    if (ex.length) out.push('120일 안에 만료되는 약정: ' + ex.map((r) => `${KO[r.entity]} ${r.expiring_n}건(미갱신 시 월 ${r.expiring_at_risk == null ? '— (RI 절감액 미상)' : usd(r.expiring_at_risk)}, 첫 만료 ${r.next_expiry})`).join(', ') + '.');
     const sp = rows.filter((r) => r.sp_buy_1y > 0).sort((a, b) => b.sp_buy_1y - a.sp_buy_1y);
     if (sp.length) out.push('AWS가 계산한 Savings Plans 추가 구매 절감(1년·선결제 없음): ' + sp.map((r) => `${KO[r.entity]} 월 ${usd(r.sp_buy_1y)}`).join(', ') + '. 그룹 합계 월 ' + usd(d3.sum(sp, (r) => r.sp_buy_1y)) + '.');
     return out.map((t) => { const li = el('li'); li.append(el('span', 'who', '비교'), el('span', null, t)); return li; });
