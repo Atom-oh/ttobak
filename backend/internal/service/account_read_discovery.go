@@ -1,13 +1,8 @@
 package service
 
 import (
-	"bytes"
 	"context"
-	"encoding/base64"
-	"encoding/json"
-	"net/url"
 	"sort"
-	"strconv"
 
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
@@ -171,117 +166,4 @@ func listReadableAccountIDs(ctx context.Context, repo accountReadMembershipRepo,
 	}
 	sort.Strings(ids)
 	return ids, nil
-}
-
-type AccountListPage struct {
-	Accounts   []model.AccountSummary `json:"accounts"`
-	NextCursor string                 `json:"nextCursor,omitempty"`
-}
-
-type accountListCursor struct {
-	Version int    `json:"v"`
-	Binding string `json:"b"`
-	After   string `json:"a"`
-}
-
-func (s *AccountService) ListAccountsPage(ctx context.Context, user string, q url.Values) (*AccountListPage, error) {
-	size := 50
-	rawCursor := ""
-	for key, values := range q {
-		if len(values) != 1 {
-			return nil, ErrInvalidReadingOptions
-		}
-		switch key {
-		case "pageSize":
-			n, err := strconv.Atoi(values[0])
-			if err != nil || n < 1 || n > 100 {
-				return nil, ErrInvalidReadingOptions
-			}
-			size = n
-		case "cursor":
-			rawCursor = values[0]
-			if rawCursor == "" || len(rawCursor) > 2048 {
-				return nil, ErrInvalidReadingCursor
-			}
-		default:
-			return nil, ErrInvalidReadingOptions
-		}
-	}
-	accounts, err := s.ListAccounts(ctx, user)
-	if err != nil {
-		return nil, err
-	}
-	fingerprints := []string{}
-	for _, account := range accounts {
-		g, err := s.requireReadGrant(ctx, user, account.AccountID)
-		if err != nil {
-			return nil, err
-		}
-		fingerprints = append(fingerprints, g.fingerprint())
-	}
-	binding := readingHash([]interface{}{"account-list-v1", user, accounts, fingerprints})
-	cursor := accountListCursor{Version: 1, Binding: binding}
-	if rawCursor != "" {
-		data, err := base64.RawURLEncoding.Strict().DecodeString(rawCursor)
-		if err != nil || json.Unmarshal(data, &cursor) != nil || cursor.Version != 1 || !readingID.MatchString(cursor.After) {
-			return nil, ErrInvalidReadingCursor
-		}
-		canonical, _ := json.Marshal(cursor)
-		if !bytes.Equal(data, canonical) {
-			return nil, ErrInvalidReadingCursor
-		}
-		if cursor.Binding != binding {
-			return nil, ErrStaleReadingCursor
-		}
-	}
-	start := sort.Search(len(accounts), func(i int) bool { return accounts[i].AccountID > cursor.After })
-	end := start + size
-	if end > len(accounts) {
-		end = len(accounts)
-	}
-	page := &AccountListPage{Accounts: accounts[start:end]}
-	if end < len(accounts) {
-		cursor.After = accounts[end-1].AccountID
-		data, _ := json.Marshal(cursor)
-		page.NextCursor = base64.RawURLEncoding.EncodeToString(data)
-	}
-	for i, account := range accounts {
-		g, err := s.requireReadGrant(ctx, user, account.AccountID)
-		if err != nil {
-			return nil, err
-		}
-		if g.fingerprint() != fingerprints[i] {
-			return nil, ErrStaleReadingCursor
-		}
-	}
-	return page, nil
-}
-
-// queryReadableAccountCandidates preserves narrow legacy catalog repositories
-// while using the same canonical descendant discovery when the rollout is on.
-func queryReadableAccountCandidates(ctx context.Context, repo accountReadMembershipRepo, user, after string, limit int) (*repository.NavigationCandidatePage, error) {
-	if !descendantReadsEnabled() {
-		nav, ok := repo.(accountReadNavigationRepo)
-		if !ok {
-			return nil, ErrReadingData
-		}
-		return nav.QueryNavigationCandidates(ctx, user, "accounts", "", after, limit)
-	}
-	ids, err := listReadableAccountIDs(ctx, repo, user, nil)
-	if err != nil {
-		return nil, err
-	}
-	start := sort.SearchStrings(ids, after)
-	for start < len(ids) && ids[start] <= after {
-		start++
-	}
-	end := start + limit
-	if end > len(ids) {
-		end = len(ids)
-	}
-	page := &repository.NavigationCandidatePage{IDs: ids[start:end]}
-	if end < len(ids) && end > start {
-		page.NextID = ids[end-1]
-	}
-	return page, nil
 }

@@ -113,14 +113,14 @@ func (s *VaultReadingService) source(ctx context.Context, user, kind, account, i
 		}
 		// Account grant is checked before fetching any document bytes.
 		if account != "" {
-			access, err := resolveAccountReadGrant(ctx, s.repo, account, user)
+			m, err := s.repo.GetMember(ctx, account, user)
 			if err != nil {
 				return nil, err
 			}
-			if !validAccountReadIdentity(access, account, user) {
+			if m == nil || m.AccountID != account || m.UserID != user {
 				return nil, ErrForbidden
 			}
-			grant = access.fingerprint()
+			grant = accountReadingGrant(m)
 		}
 		doc, err := s.repo.GetAccountDocument(ctx, pk, id)
 		if err != nil {
@@ -139,11 +139,11 @@ func (s *VaultReadingService) source(ctx context.Context, user, kind, account, i
 		return nil, ErrInvalidReadingOptions
 	}
 	if accountID != "" {
-		access, err := resolveAccountReadGrant(ctx, s.repo, accountID, user)
+		member, err := s.repo.GetMember(ctx, accountID, user)
 		if err != nil {
 			return nil, err
 		}
-		if validAccountReadIdentity(access, accountID, user) {
+		if member != nil && member.AccountID == accountID && member.UserID == user {
 			accountData, err = s.repo.GetAccount(ctx, accountID)
 			if err != nil {
 				return nil, err
@@ -154,7 +154,7 @@ func (s *VaultReadingService) source(ctx context.Context, user, kind, account, i
 				}
 				source.accountName = accountData.Name
 				accountPath = "Accounts/" + vaultSafeName(accountData.Name, 60) + "--" + accountID
-				grant = access.fingerprint()
+				grant = accountReadingGrant(member)
 			}
 		}
 		if kind == "document" && accountData == nil {
