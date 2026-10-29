@@ -117,7 +117,6 @@ test('?acct&v of needs_review version → 404', async () => {
   assert.equal((await t.get(`/api/billing/data/kpis.json?acct=acct-a&v=${V2}`)).status, 404);
   assert.deepEqual(await t.json(`/api/billing/data/kpis.json?acct=acct-a&v=${V3}`), [{ entity: 'acct-a', v: 3 }], 'done, non-current version');
   assert.equal((await t.get('/api/billing/data/kpis.json?acct=acct-a&v=v1')).status, 404, 'malformed version');
-  assert.equal((await t.get(`/api/billing/data/kpis.json?acct=acct-a`)).status, 404, 'acct without v');
   assert.equal((await t.get(`/api/billing/data/kpis.json?v=${V3}`)).status, 404, 'v without acct');
   assert.equal((await t.get(`/api/billing/data/kpis.json?acct=a%2Fb&v=${V3}`)).status, 404, 'malformed account');
   assert.equal((await t.get('/api/billing/data/kpis.json?acct=acct-a&v=v20261020000009ffffff')).status, 404, 'no upload record');
@@ -448,4 +447,81 @@ test('errors are JSON {error: string} with the same status and no-store: 503, 50
   const c = await setup();
   await check(await c.get('/api/billing/no/such/path'), 404, { error: 'not found' });
   await check(await c.get('/elsewhere'), 404, { error: 'not found' });
+});
+
+// ---------- ?acct= alone: current rows of one account ----------
+function twoAccounts(t) {
+  t.acct('acct-a', '한빛금융'); t.acct('acct-b', '누리증권'); t.member('u1', 'acct-a'); t.member('u1', 'acct-b'); t.member('u2', 'acct-b');
+  t.meta('acct-a', { current_cot: V1 }); t.meta('acct-b', { current_cot: V2 });
+  t.version('acct-a', V1, 'kpis', [{ entity: 'acct-a', x: 1 }, { entity: 'acct-b', x: 9 }]);
+  t.version('acct-b', V2, 'kpis', [{ entity: 'acct-b', x: 2 }]);
+}
+
+test('acct_only_returns_that_account_rows', async () => {
+  const t = await setup();
+  twoAccounts(t);
+  assert.deepEqual(await t.json('/api/billing/data/kpis.json?acct=acct-a', 'u1'), [{ entity: 'acct-a', x: 1 }]);
+  assert.deepEqual(await t.json('/api/billing/data/kpis.json?acct=acct-b', 'u1'), [{ entity: 'acct-b', x: 2 }]);
+  assert.equal(t.s3.gets.includes(`accounts/acct-b/versions/${V2}/data/kpis.json`), true);
+  assert.equal((await t.json('/api/billing/data/kpis.json', 'u1')).length, 2, 'no param still spans all accounts');
+});
+
+test('acct_only_nonmember_404_without_read', async () => {
+  const t = await setup();
+  twoAccounts(t);
+  t.acct('acct-c', '미래증권'); t.member('u3', 'acct-c'); t.meta('acct-c', { current_cot: V3 });
+  t.version('acct-c', V3, 'kpis', [{ entity: 'acct-c', x: 3 }]);
+  const before = t.s3.gets.length;
+  assert.equal((await t.get('/api/billing/data/kpis.json?acct=acct-c', 'u2')).status, 404);
+  assert.equal((await t.get('/api/billing/data/kpis.json?acct=acct-c', 'nobody')).status, 404);
+  assert.equal((await t.get('/api/billing/data/kpis.json?acct=acct-unknown', 'u2')).status, 404);
+  assert.equal(t.s3.gets.length, before, 'no S3 GetObject for a non-member');
+});
+
+test('acct_only_invalid_id_404', async () => {
+  const t = await setup();
+  twoAccounts(t);
+  for (const q of ['acct=a%2Fb', 'acct=', 'acct=..%2Facct-a', 'acct=acct-a&acct=acct-b', 'acct[]=acct-a', 'acct[x]=acct-a']) {
+    assert.equal((await t.get(`/api/billing/data/kpis.json?${q}`, 'u1')).status, 404, q);
+  }
+  assert.equal(t.s3.gets.filter((k) => k.endsWith('/data/kpis.json')).length, 0);
+});
+
+test('v_only_404', async () => {
+  const t = await setup();
+  twoAccounts(t);
+  t.upload('acct-a', V1, 'done');
+  assert.equal((await t.get(`/api/billing/data/kpis.json?v=${V1}`, 'u1')).status, 404);
+  assert.equal((await t.get(`/api/billing/data/kpis.json?v=${V1}&v=${V2}`, 'u1')).status, 404);
+  assert.equal((await t.get(`/api/billing/data/kpis.json?acct=acct-a&v=${V1}&v=${V2}`, 'u1')).status, 404);
+});
+
+test('acct_and_version_unchanged', async () => {
+  const t = await setup();
+  twoAccounts(t);
+  t.upload('acct-a', V1, 'done'); t.upload('acct-a', V3, 'done'); t.upload('acct-a', V2, 'needs_review');
+  t.version('acct-a', V3, 'kpis', [{ entity: 'acct-a', v: 3 }]);
+  t.version('acct-a', V2, 'kpis', [{ entity: 'acct-a', v: 2 }]);
+  assert.deepEqual(await t.json(`/api/billing/data/kpis.json?acct=acct-a&v=${V3}`, 'u1'), [{ entity: 'acct-a', v: 3 }], 'done non-current version');
+  assert.deepEqual(await t.json(`/api/billing/data/kpis.json?acct=acct-a&v=${V1}`, 'u1'), [{ entity: 'acct-a', x: 1 }]);
+  assert.equal((await t.get(`/api/billing/data/kpis.json?acct=acct-a&v=${V2}`, 'u1')).status, 404, 'needs_review');
+  assert.equal((await t.get(`/api/billing/data/kpis.json?acct=acct-a&v=v1`, 'u1')).status, 404, 'malformed version');
+  assert.equal((await t.get(`/api/billing/data/kpis.json?acct=acct-b&v=${V3}`, 'u3')).status, 404, 'non-member');
+  assert.equal((await t.get(`/api/billing/data/kpis.json?acct=acct-a&v=v20261020000009ffffff`, 'u1')).status, 404, 'no upload record');
+});
+
+test('acct_only_respects_cur_and_handwritten_sources', async () => {
+  const t = await setup();
+  t.acct('acct-a', '한빛금융'); t.acct('acct-b', '누리증권'); t.member('u1', 'acct-a'); t.member('u1', 'acct-b');
+  t.meta('acct-a', { current_cot: V1 }); t.meta('acct-b', { current_cur: V3 });
+  t.version('acct-a', V1, 'cur_trend', [{ entity: 'acct-a', c: 1 }]);
+  t.version('acct-b', V3, 'cur_trend', [{ entity: 'acct-b', c: 3 }]);
+  t.version('acct-a', V1, 'kpis', [{ entity: 'acct-a', x: 1 }]);
+  t.version('acct-b', V3, 'kpis', [{ entity: 'acct-b', x: 3 }]);
+  t.s3.put('accounts/acct-a/handwritten/sessions.json', [{ entity: 'acct-a', title: 's' }, { entity: 'acct-b', title: 'x' }]);
+  assert.deepEqual(await t.json('/api/billing/data/cur_trend.json?acct=acct-a', 'u1'), [], 'COT-only account has no CUR rows');
+  assert.deepEqual(await t.json('/api/billing/data/cur_trend.json?acct=acct-b', 'u1'), [{ entity: 'acct-b', c: 3 }]);
+  assert.deepEqual(await t.json('/api/billing/data/kpis.json?acct=acct-b', 'u1'), [], 'CUR-only account has no COT rows');
+  assert.deepEqual(await t.json('/api/billing/data/sessions_hand.json?acct=acct-a', 'u1'), [{ entity: 'acct-a', title: 's', origin: 'handwritten' }]);
+  assert.deepEqual(await t.json('/api/billing/data/sessions_hand.json?acct=acct-b', 'u1'), []);
 });

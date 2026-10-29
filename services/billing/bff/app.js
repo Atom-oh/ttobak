@@ -273,6 +273,15 @@ function createApp({ s3, ddb, env, authenticate, now = Date.now, presign = makeP
     const { acct, v } = req.query;
     try {
       if (id === 'whats_new_feed') return res.json(await globalFeed()); // public news, the same for every account
+      if (acct !== undefined && v === undefined) {
+        // the current version(s) of one account: membership checked fresh, rows scoped exactly like the all-accounts read
+        if (typeof acct !== 'string' || !ACCT_ID.test(acct)) return notFound();
+        if (!(await access.canAct(req.sub, acct, { fresh: true }))) return notFound();
+        const entry = req.accounts.find((a) => a.canAct && a.id === acct);
+        if (!entry) return notFound();
+        const rows = await currentRows(entry, id);
+        return res.json(id === 'raw_catalog' ? mergeCatalog(rows) : rows);
+      }
       if (acct !== undefined || v !== undefined) {
         // one published version of one account: membership checked fresh, and the version must be a done upload
         if (typeof acct !== 'string' || !ACCT_ID.test(acct) || typeof v !== 'string' || !VERSION_ID.test(v)) return notFound();
