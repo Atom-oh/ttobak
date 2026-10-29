@@ -1,0 +1,21 @@
+# Upload worker: one Fargate task per job object (worker/main.py). Build context is services/billing/worker:
+#   docker build --platform linux/arm64 -f Dockerfile.ingest .
+# No unzip/git: uploads are opened only by stage_cot.py / stage_cur.py (zipfile), the agent cache is passed explicitly.
+FROM public.ecr.aws/docker/library/python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 WORK_ROOT=/work HOME=/home/worker
+
+COPY requirements-ingest.txt /app/requirements-ingest.txt
+RUN pip install --no-cache-dir -r /app/requirements-ingest.txt \
+ && useradd --create-home --home-dir /home/worker --uid 10001 --user-group --shell /usr/sbin/nologin worker \
+ && mkdir -p /work && chown worker:worker /work && chmod 0700 /work
+
+COPY scripts /app/scripts
+COPY cur /app/cur
+COPY worker /app/worker
+COPY run_account.sh /app/run_account.sh
+RUN chmod 0755 /app/run_account.sh && chmod -R a+rX,go-w /app
+
+USER worker
+WORKDIR /work
+CMD ["python3", "-I", "/app/worker/main.py"]

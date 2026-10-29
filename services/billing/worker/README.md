@@ -1,0 +1,42 @@
+# Billing analysis worker
+
+Python worker that turns uploaded cost exports (COT zips and CUR files) into the datasets the Billing dashboard reads, plus the Bedrock agent notes and the insights report.
+
+Imported from the companion repo at commit dd540f5. This is a faithful code import; later changes split and extend it.
+
+## Layout
+
+- `scripts/` - dataset builders, agents, report, merge helpers; `aws_whats_new.json` is the public What's New seed.
+- `cur/` - CUR staging, normalization and checks.
+- `worker/` - Fargate entry point (`main.py`) and the AI step (`ai_step.py`).
+- `run_account.sh` - per-account pipeline run by the worker (validate, extract, datasets, check).
+- `tests/` - unit tests (synthetic data only), including `test_contract.py` for the import contract.
+- `Dockerfile.ingest`, `.dockerignore` - image for the upload worker; the build context is this directory.
+- `requirements-ingest.txt` (duckdb, boto3), `requirements-agents.txt` (boto3, fastapi, uvicorn), `requirements-dev.txt` (test-only).
+
+Image build:
+
+    docker build --platform linux/arm64 -f Dockerfile.ingest .
+
+Git-ignored local output: `datasets/`, `out/`, `.agent_cache/`, `dispatch/dist/`.
+
+## Run the tests locally
+
+Python 3.12 is what CI uses.
+
+    python3.12 -m venv ~/.tmp/billing-worker-venv
+    ~/.tmp/billing-worker-venv/bin/pip install -r requirements-ingest.txt -r requirements-agents.txt -r requirements-dev.txt
+    cd services/billing/worker
+    ~/.tmp/billing-worker-venv/bin/python -m unittest discover -s tests -v
+
+Two worker smoke tests run the real pipelines and are skipped unless `WORKER_SMOKE=1` is set.
+
+## Retired companion tests
+
+- `test_fsisearch.py` (whole file): tested a companion-only search function; replaced by a later task.
+- `test_pipeline_wiring.py::test_wrapper_runs_accounts_then_merges`, `test_entity_discovery`, `test_entity_discovery_rejects_bad_names_and_empty`, `test_agents_guarded_and_report_after_briefing`: read or ran the local multi-account wrapper script, which is not imported.
+- `test_pipeline_wiring.py::test_pipeline_wiring`: only its `run_account.sh` assertions are kept, as `RunAccountWiring` (step order, no agents/report, script order); `run_account.sh` is the production per-account script.
+- `test_generic.py::test_no_customer_name_outside_docs`: scanned companion paths; replaced by a CI-time grep of this tree.
+- `test_generic.py::Compare` (`test_renamed_fields_match`, `test_value_change_reported_without_values`, `test_dataset_missing_on_one_side_is_a_difference`): exercised a companion-only comparison tool that is not imported.
+
+Retargeted rather than retired: `test_server_allows_agent_notes` now reads the Billing BFF dataset sets, `test_generated_outputs_ignored` checks this repo's `.gitignore`, and the report rebuild hint points to the Billing upload page (AI rerun).
