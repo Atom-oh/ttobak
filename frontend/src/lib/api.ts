@@ -794,7 +794,7 @@ async function getAccounts(): Promise<{ accounts: AccountSummary[] }> {
 
 export const accountApi = {
   list: getAccounts,
-  get: (id: string) => api.get<Account>(`/api/accounts/${encodeURIComponent(id)}`),
+  get: (id: string, options?: FetchOptions) => api.get<Account>(`/api/accounts/${encodeURIComponent(id)}`, options),
   create: (data: AccountCreationRequest, expectedUserId: string) =>
     api.post<AccountCreationResponse>('/api/accounts', data, { expectedUserId }),
   resendOwnerInvitation: (id: string, expectedUserId: string) =>
@@ -931,8 +931,8 @@ export const docApi = {
 };
 
 export const meetingAccountApi = {
-  link: (meetingId: string, accountId: string) =>
-    api.post<{ accountId: string }>(`/api/meetings/${encodeURIComponent(meetingId)}/account`, { accountId }),
+  link: (meetingId: string, accountId: string, options?: FetchOptions) =>
+    api.post<{ accountId: string }>(`/api/meetings/${encodeURIComponent(meetingId)}/account`, { accountId }, options),
   shareToAccount: (meetingId: string, accountId: string) =>
     api.post<{ accountId: string; sharedWith: number }>(
       `/api/meetings/${encodeURIComponent(meetingId)}/share-account`, { accountId }),
