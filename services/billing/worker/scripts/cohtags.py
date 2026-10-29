@@ -1,5 +1,5 @@
 """COH recommendation resources -> tag inventory, creation-date cohorts, new-account attribution."""
-import ast, collections, json, os, sys
+import collections, json, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import cotload as L
 import period as P
@@ -15,14 +15,8 @@ def recs(entity):
     for r in rs:
         if not r.get("recommendationId"):
             continue
-        raw = r.get("tags", "")
-        try:
-            tg = ast.literal_eval(raw) if raw not in ("", "nan", "[]") else []
-        except Exception:
-            tg = []
-        # a cell that is not a list of {key, value} is untagged (an odd item is skipped), never a crash
-        r["_tags"] = {t["key"]: t["value"] for t in (tg if isinstance(tg, list) else [])
-                      if isinstance(t, dict) and isinstance(t.get("key"), str) and "value" in t}
+        # a cell that is not a list of string {key, value} dicts is untagged (an odd item is skipped), never a crash
+        r["_tags"] = TK.parse_cell(r.get("tags", ""))
         r["_cost"] = L.num(r.get("estimatedMonthlyCost"))
         r["_sav"] = L.num(r.get("estimatedMonthlySavings"))
         out.append(r)
