@@ -86,6 +86,8 @@ def elasticity(base, e):
 def commitments(base, e, as_of):
     out = []
     for r in rows_of(base, e, "shared_SP_Inventory_Raw"):
+        if str(r.get("Status")).lower() != "active":  # queued, returned or retired plans are no obligation (as build_data)
+            continue
         end = str(r["End Date"])[:10]
         out.append({"entity": e, "kind": "SP", "type": r["SP Type"], "account": str(r["Account ID"]), "account_name": r["Account Name"],
                     "detail": r["Instance Family"] or "Any", "region": r["Region"], "hourly": num(r["Hourly Commitment"]),

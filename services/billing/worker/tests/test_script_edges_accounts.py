@@ -1,6 +1,6 @@
 """Account, tag-service and COT360 metric scripts on edge-shaped inputs (short COH rows, NaN cells, dashboard merge).
 Synthetic data only."""
-import collections, csv, json, os, subprocess, sys, tempfile, unittest
+import collections, csv, datetime, json, os, subprocess, sys, tempfile, unittest
 from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -288,6 +288,20 @@ class NonFiniteCells(unittest.TestCase):
         self.assertEqual([(r["cost"], r["instance_hours"], r["cost_per_inst_hr"], r["coverage_pct"]) for r in rows],
                          [(0.0, 0.0, 0.0, 0.0)])
         json.dumps(rows, allow_nan=False)
+
+    def test_commitments_list_active_plans_only(self):
+        import cot360_metrics
+        hdr = ["SP Type", "Account ID", "Account Name", "Instance Family", "Region", "Hourly Commitment", "Term",
+               "Payment", "Start Date", "End Date", "Utilization %", "Net Savings", "Status"]
+        plan = lambda end, status: ["Compute", "111111111111", "dev", "", "", 2, "1yr", "No Upfront", "2026-01-01",
+                                    end, 99, 60, status]  # noqa: E731
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as d:
+            os.makedirs(os.path.join(d, E, "html"))
+            jdump({"headers": hdr, "rows": [plan("2027-03-01", "active"), plan("2026-11-01", "queued"),
+                                            plan("2026-12-01", "Returned"), plan("2027-06-01", "Active")]},
+                  os.path.join(d, E, "html", "json_shared_SP_Inventory_Raw.json"), "w")
+            rows = cot360_metrics.commitments(d, E, datetime.date(2026, 10, 1))
+        self.assertEqual([r["end"] for r in rows], ["2027-03-01", "2027-06-01"])
 
 
 class ShortPeriodGrowth(unittest.TestCase):

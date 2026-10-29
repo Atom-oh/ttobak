@@ -92,7 +92,7 @@ def main(data_dir, extracted_dir, csv_dir):
         got, want = (min(sp) if sp else "—"), _after(lines, "Next SP Expiry")
         checks.append(_row(e, "next SP expiry", got, want, got == want))
     with open(os.path.join(data_dir, "checks.json"), "w", encoding="utf-8") as f:
-        json.dump(checks, f, ensure_ascii=False, indent=1)
+        json.dump(checks, f, ensure_ascii=False, indent=1, allow_nan=False)
     for c in checks:
         fmt = (lambda v: f"{v:>14,.2f}" if isinstance(v, float) else f"{'—' if v is None else v:>14}")
         print(f"  {c['name']:18} {c['entity']:15} {fmt(c['got'])} vs {fmt(c['want'])} {'OK' if c['ok'] else 'MISMATCH'}")
