@@ -292,5 +292,29 @@ class GeneratedSections(unittest.TestCase):
         self.assertIn("| 2026-09 | 1.2K KRW |", md)
 
 
+    def test_cur_top_services_rank_the_latest_month_in_full(self):
+        # a service small over the period but largest in the latest month is outside the digest's top services
+        from test_agents import cur
+        D = {n: [] for n in agents.SOURCES}
+        cur(D, A)
+        for i in range(20):
+            D["cur_trend"].append({"entity": A, "grain": "month", "period": "2026-08", "dim": "service", "key": f"S{i:02d}",
+                                   "service": f"S{i:02d}", "cost": 5000.0})
+        D["cur_trend"].append({"entity": A, "grain": "month", "period": "2026-09", "dim": "service", "key": "AmazonBedrock",
+                               "service": "AmazonBedrock", "cost": 3000.0})
+        D["agent_notes"] = []
+        line = next(x for x in self.render(D).splitlines() if x.startswith("**상위 서비스 (최근 월)**"))
+        self.assertTrue(line.startswith("**상위 서비스 (최근 월)**: AmazonBedrock $3.0K, AmazonEC2 $900"), line)
+
+    def test_cur_signal_change_is_the_whole_value(self):
+        # declining value with one new service: delta is the new service's +120, the value fell by 100
+        from test_agents import cur
+        D = {n: [] for n in agents.SOURCES}
+        cur(D, A)
+        D["cur_tag_signals"][0].update(kinds=["신규 서비스"], run_rate_last=500.0, base=600.0, delta=120.0, growth_pct=-16.7)
+        D["agent_notes"] = []
+        self.assertIn("| team | team-acct-a | 신규 서비스 | $500 | -$100 | -17% | AmazonBedrock |", self.render(D))
+
+
 if __name__ == "__main__":
     unittest.main()

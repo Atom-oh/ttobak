@@ -184,8 +184,9 @@ def signals_section(D, ents, no):
             for r in dg["cur_tag_signals"]:
                 svcs = r.get("new_services") or [x["service"] for x in r.get("services") or []][:3]
                 g = "신규" if r.get("growth_pct") is None else f"{r['growth_pct']:+.0f}%"
+                # the whole value's change, as growth_pct: delta is only the new services' part on a new-service row
                 out.append(f"| {esc(r['tag_key'])} | {esc(r['tag_value'])} | {esc(', '.join(r['kinds']))} | {money(r['run_rate_last'])} | "
-                           f"{_signed_usd(r['delta'], money)} | {g} | {esc(', '.join(svcs))} |")
+                           f"{_signed_usd(round(r['run_rate_last'] - r['base'], 2), money)} | {g} | {esc(', '.join(svcs))} |")
             out.append("")
         if dg["tag_signals"]:
             out += ["**COT 태그 항목 (COH 리소스 스냅샷)**", "", "| 태그 키 | 항목 | 구분 | 월 추정 | 리소스 | 최근 생성 비중 | 증가 계정 |",
@@ -296,7 +297,10 @@ def cur_section(D, ents, no):
                 f"읽지 못해 제외한 행 {s.get('dropped_rows') or 0:,}", "", "| 월 | 비용 |", "|---|---:|"]
         out += [f"| {esc(m['month'])} | {money(m['cost'])} |" for m in s["cost_by_month"]]
         last = dg["months"][-1] if dg["months"] else None
-        top = sorted((r for r in dg["cur_trend"] if r["dim"] == "service" and r["period"] == last), key=lambda r: -r["cost"])[:5]
+        # ranked from the entity's full monthly rows: the digest keeps the services largest over all months, so a
+        # service new and largest in the latest month would be missing from it
+        top = sorted((r for r in D.get("cur_trend", []) if r.get("entity") == e and r.get("grain") == "month"
+                      and r["dim"] == "service" and r["period"] == last), key=lambda r: (-r["cost"], r["service"]))[:5]
         if top:
             out += ["", "**상위 서비스 (최근 월)**: " + ", ".join(f"{esc(r['service'])} {money(r['cost'])}" for r in top)]
         if dg["cur_tag_coverage"]:
