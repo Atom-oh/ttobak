@@ -64,7 +64,7 @@ def act(kind, owner, title, impact, evidence, next_step, tab, impact_label):
 
 
 # the option's own term: sp_purchase carries whatever terms the export has, not always a three-year row
-TERM_KO = {"ONE_YEAR": "1년", "THREE_YEAR": "3년"}
+TERM_KO = {"ONE_YEAR": "1년", "THREE_YEAR": "3년", "ONE_YEARS": "1년", "THREE_YEARS": "3년"}  # both spellings occur
 PAYMENT_KO = {"ALL_UPFRONT": "전액 선결제", "PARTIAL_UPFRONT": "부분 선결제", "NO_UPFRONT": "선결제 없음"}
 
 

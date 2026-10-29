@@ -18,8 +18,10 @@ RE_MONEY = re.compile(SIGN + r"\$" + NUM + r"([A-Za-z]*)")
 # a Latin scale word after a space ("$1.2 million", "$1.2 K", "1.2 billion"): only a glued K/M/B is folded, so the
 # amount alone would match a source value 10^3-10^12 times smaller; rejected
 SCALE_WORDS = r"(?:thousand|million|billion|trillion)"
-RE_SCALEWORD = re.compile(r"(?:\$" + NUM + r"[A-Za-z]*\s+(?:[kmbt]|mm|mn|bn|" + SCALE_WORDS + r")|\d\s*" + SCALE_WORDS + r")(?![A-Za-z0-9])",
-                          re.I)
+# also after a money range's second endpoint ("$100–200 K"), which carries no "$" of its own
+SCALE_ABBR = r"(?:[kmbt]|mm|mn|bn|" + SCALE_WORDS + r")"
+RE_SCALEWORD = re.compile(r"(?:\$" + NUM + r"[A-Za-z]*(?:\s?[~∼–—\-]\s?[+\-−]?\$?" + NUM + r"[A-Za-z]*)?\s+" + SCALE_ABBR
+                          + r"|\d\s*" + SCALE_WORDS + r")(?![A-Za-z0-9])", re.I)
 # a spelled-out percent ("25퍼센트", "25프로", "3포인트", "25 percent", "25％") is a percent, typed like "%": left to the
 # bare-number pass it would verify against any unrelated number in the input (a count of 25 recs)
 PCT_UNIT = (r"(?:[%％]p?|퍼센트(?:\s?포인트)?|포인트|프로(?!젝|그|비|모|파|세|덕|토|필|듀|미|시|페|포|브|스)"

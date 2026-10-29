@@ -66,6 +66,13 @@ class MoneyRange(unittest.TestCase):
     def test_money_minus_percent_is_not_a_range(self):
         ok(self, {"cost": 100, "coverage_pct": 20}, "$100 - 20%")
 
+    def test_spaced_scale_after_the_range(self):
+        # a spaced scale word on the second endpoint multiplies both: never verified at unit scale
+        for t in ("$100–200 K", "$100-200 K", "$100~$200 M", "$100 – 200 million", "$1.2–1.5 bn"):
+            bad(self, {"cost": [100, 200, 1.2, 1.5]}, t)
+        bad(self, {"cost": [100, 200]}, "$200 K")
+        ok(self, {"cost": [1e5, 2e5]}, "$100–200K")
+
     def test_sentence_final_period(self):
         # a period ending the sentence is not a longer number: the range still types both endpoints
         bad(self, {"cost": 100, "recs": 200}, "월 $100–200.")

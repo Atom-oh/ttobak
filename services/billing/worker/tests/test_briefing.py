@@ -104,6 +104,9 @@ class SpTerm(unittest.TestCase):
         ds["sp_purchase"][1]["term"] = "THREE_YEAR"
         line = next(x for x in briefing.sp_purchase_action(E, D_of(ds))["evidence"] if "까지" in x)
         self.assertTrue(line.startswith("3년·전액 선결제이면"), line)
+        ds["sp_purchase"][1]["term"] = "THREE_YEARS"  # the spelling build_data filters on
+        line = next(x for x in briefing.sp_purchase_action(E, D_of(ds))["evidence"] if "까지" in x)
+        self.assertTrue(line.startswith("3년·전액 선결제이면"), line)
 
 
 class ExpiringAtRisk(unittest.TestCase):
