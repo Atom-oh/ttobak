@@ -198,6 +198,12 @@ func (s *MeetingService) listTeamSharedMeetingsForFilter(ctx context.Context, us
 		}
 		for _, key := range keys {
 			meeting := byID[key.MeetingID]
+			if meeting != nil {
+				meeting, err = s.currentListMeeting(ctx, key.OwnerID, key.MeetingID)
+				if err != nil {
+					return nil, err
+				}
+			}
 			// A reference is an index, not a grant or trusted title.
 			if meeting == nil || listed[meeting.MeetingID] || meeting.UserID == userID || !meeting.SharedToAccount || meeting.AccountID != id {
 				continue

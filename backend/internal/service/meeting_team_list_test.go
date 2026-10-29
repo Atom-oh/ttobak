@@ -30,6 +30,46 @@ func publishedTeamMeeting(t *testing.T) (*mockMeetingRepo, *MeetingService) {
 
 type descendantMeetingListRepo struct{ *mockMeetingRepo }
 
+type staleDescendantMeetingListRepo struct {
+	*descendantMeetingListRepo
+	stale *model.Meeting
+}
+
+func (r *staleDescendantMeetingListRepo) BatchGetMeetings(context.Context, []repository.MeetingKey) ([]*model.Meeting, error) {
+	copy := *r.stale
+	return []*model.Meeting{&copy}, nil
+}
+
+func TestInheritedMeetingListsRejectStalePublicationSnapshots(t *testing.T) {
+	t.Setenv(accountDescendantReadsEnv, "1")
+	for _, cachedShare := range []bool{false, true} {
+		for _, change := range []string{"unpublish", "move"} {
+			t.Run(fmt.Sprintf("cached=%v/%s", cachedShare, change), func(t *testing.T) {
+				repo, _ := publishedTeamMeeting(t)
+				repo.accounts["acc-a"].ParentAccountID = "parent"
+				repo.addMember("parent", "reader", model.RoleOwner)
+				meeting := repo.meetings[meetingKey("owner", "published")]
+				stale := *meeting
+				if change == "unpublish" {
+					meeting.SharedToAccount = false
+				} else {
+					meeting.AccountID = "other"
+				}
+				if cachedShare {
+					repo.shares[shareKey("reader", "published")] = &model.Share{
+						MeetingID: "published", OwnerID: "owner", SharedToID: "reader", Origin: model.ShareOriginAccount, Permission: model.PermissionEdit,
+					}
+				}
+				service := newMeetingServiceWithRepo(&staleDescendantMeetingListRepo{&descendantMeetingListRepo{repo}, &stale})
+				got, err := service.ListMeetings(context.Background(), "reader", "shared", "", "", 20)
+				if err != nil || len(got.Meetings) != 0 {
+					t.Fatalf("stale account publication returned metadata: %+v/%v", got, err)
+				}
+			})
+		}
+	}
+}
+
 func (r *descendantMeetingListRepo) ListChildAccountIDsPage(_ context.Context, parent, _ string, _ int32) ([]string, *string, error) {
 	ids := []string{}
 	for id, account := range r.accounts {
