@@ -34,17 +34,18 @@ type navigationAnchor struct {
 	Grant    string `json:"g"`
 }
 type navigationCursor struct {
-	Version      int              `json:"v"`
-	Binding      string           `json:"b"`
-	Phase        string           `json:"p"`
-	After        string           `json:"s,omitempty"`
-	Account      string           `json:"a,omitempty"`
-	AccountGrant string           `json:"g,omitempty"`
-	AccountDone  bool             `json:"d,omitempty"`
-	LastAccount  bool             `json:"l,omitempty"`
-	Emitted      []string         `json:"e,omitempty"`
-	Overlap      bool             `json:"x,omitempty"`
-	Anchor       navigationAnchor `json:"n"`
+	Discovery    *accountDiscoveryCursor `json:"z,omitempty"`
+	Version      int                     `json:"v"`
+	Binding      string                  `json:"b"`
+	Phase        string                  `json:"p"`
+	After        string                  `json:"s,omitempty"`
+	Account      string                  `json:"a,omitempty"`
+	AccountGrant string                  `json:"g,omitempty"`
+	AccountDone  bool                    `json:"d,omitempty"`
+	LastAccount  bool                    `json:"l,omitempty"`
+	Emitted      []string                `json:"e,omitempty"`
+	Overlap      bool                    `json:"x,omitempty"`
+	Anchor       navigationAnchor        `json:"n"`
 }
 
 func decodeNavigationCursor(raw string) (navigationCursor, error) {
@@ -264,7 +265,11 @@ func (s *NavigationCatalogService) Read(ctx context.Context, user, kind string, 
 	if err != nil {
 		return nil, err
 	}
-	binding := readingHash([]string{"navigation-v1", user, kind})
+	mode := "navigation-v1"
+	if descendantReadsEnabled() {
+		mode = "navigation-descendant-v2"
+	}
+	binding := readingHash([]string{mode, user, kind})
 	c := navigationCursor{Version: 1, Binding: binding, Phase: "owned"}
 	if kind == "accounts" {
 		c.Phase = "accounts"
@@ -305,8 +310,11 @@ func (s *NavigationCatalogService) Read(ctx context.Context, user, kind string, 
 		}
 		result := readingObject{kind: items, "consistency": "current_per_item",
 			"page": readingObject{"unit": "items", "returned": len(items), "complete": !more, "nextCursor": next}}
+		if kind == "accounts" && descendantReadsEnabled() {
+			result["overlapPossible"], result["unionKey"] = true, "accountId"
+		}
 		if kind == "projects" {
-			result["overlapPossible"], result["unionKey"] = c.Overlap, "projectId"
+			result["overlapPossible"], result["unionKey"] = c.Overlap || descendantReadsEnabled(), "projectId"
 		}
 		return readingJSON(result)
 	}
@@ -359,7 +367,7 @@ func (s *NavigationCatalogService) Read(ctx context.Context, user, kind string, 
 			if c.AccountDone && c.LastAccount {
 				return finish(false)
 			}
-			page, err := queryReadableAccountCandidates(ctx, s.repo, user, c.Account, 1)
+			page, err := queryReadableAccountCandidates(ctx, s.repo, user, c.Account, 1, &c.Discovery)
 			if err != nil {
 				return nil, err
 			}
@@ -370,7 +378,7 @@ func (s *NavigationCatalogService) Read(ctx context.Context, user, kind string, 
 				if page.NextID == "" {
 					return finish(false)
 				}
-				if !readingID.MatchString(page.NextID) || page.NextID == c.Account {
+				if !readingID.MatchString(page.NextID) || (!descendantReadsEnabled() && page.NextID == c.Account) {
 					return nil, ErrReadingData
 				}
 				c.Account, c.AccountDone, c.AccountGrant = page.NextID, true, ""
@@ -406,7 +414,7 @@ func (s *NavigationCatalogService) Read(ctx context.Context, user, kind string, 
 	queryAfter := c.After
 	var page *repository.NavigationCandidatePage
 	if kind == "accounts" {
-		page, err = queryReadableAccountCandidates(ctx, s.repo, user, c.After, o.pageSize)
+		page, err = queryReadableAccountCandidates(ctx, s.repo, user, c.After, o.pageSize, &c.Discovery)
 	} else {
 		page, err = s.repo.QueryNavigationCandidates(ctx, user, queryKind, account, c.After, o.pageSize)
 	}
@@ -416,12 +424,12 @@ func (s *NavigationCatalogService) Read(ctx context.Context, user, kind string, 
 	if page == nil || len(page.IDs) > o.pageSize {
 		return nil, ErrReadingData
 	}
-	if page.NextID != "" && page.NextID == queryAfter {
+	if page.NextID != "" && !(kind == "accounts" && descendantReadsEnabled()) && page.NextID == queryAfter {
 		return nil, ErrReadingData
 	}
 	processed := 0
 	for _, id := range page.IDs {
-		if !readingID.MatchString(id) || id <= c.After {
+		if !readingID.MatchString(id) || (!(kind == "accounts" && descendantReadsEnabled()) && id <= c.After) {
 			return nil, ErrReadingData
 		}
 		if kind == "projects" && contains(c.Emitted, id) {

@@ -189,11 +189,22 @@ func TestDescendantAccountsOptionalPagination(t *testing.T) {
 		t.Fatalf("first page: %+v/%v", first, err)
 	}
 	second, err := s.ListAccountsPage(ctx, "reader", url.Values{"pageSize": {"1"}, "cursor": {first.NextCursor}})
-	if err != nil || len(second.Accounts) != 1 || second.NextCursor != "" || second.Accounts[0].AccountID == first.Accounts[0].AccountID {
+	if err != nil || len(second.Accounts) != 1 || second.NextCursor == "" || second.Accounts[0].AccountID == first.Accounts[0].AccountID {
 		t.Fatalf("second page: %+v/%v", second, err)
 	}
+	cursor := second.NextCursor
+	for pages := 0; cursor != ""; pages++ {
+		if pages > 10 {
+			t.Fatal("account discovery never completes")
+		}
+		page, err := s.ListAccountsPage(ctx, "reader", url.Values{"pageSize": {"1"}, "cursor": {cursor}})
+		if err != nil || len(page.Accounts) != 0 {
+			t.Fatalf("terminal bounded discovery: %+v/%v", page, err)
+		}
+		cursor = page.NextCursor
+	}
 	r.accounts["child"].ParentAccountID = "sibling"
-	if _, err := s.ListAccountsPage(ctx, "reader", url.Values{"pageSize": {"1"}, "cursor": {first.NextCursor}}); !errors.Is(err, ErrStaleReadingCursor) {
+	if _, err := s.ListAccountsPage(ctx, "reader", url.Values{"pageSize": {"1"}, "cursor": {second.NextCursor}}); !errors.Is(err, ErrStaleReadingCursor) {
 		t.Fatalf("moved child account list cursor: %v", err)
 	}
 }
@@ -218,9 +229,27 @@ func TestDescendantNavigationCatalog(t *testing.T) {
 	r := &descendantNavigationRepo{base, descendantContentFixture()}
 	r.accountIndex = []string{"parent"}
 	s := NewNavigationCatalogService(r)
-	raw, err := s.Read(context.Background(), "reader", "accounts", url.Values{})
-	if err != nil || !strings.Contains(string(raw), `"accountId":"child"`) || !strings.Contains(string(raw), `"accessPermission":"read"`) {
-		t.Fatalf("descendant navigation: %s/%v", raw, err)
+	q := url.Values{}
+	foundChild := false
+	for pages := 0; ; pages++ {
+		page := navigationPage(t, s, "accounts", q)
+		for _, raw := range page["accounts"].([]interface{}) {
+			row := raw.(map[string]interface{})
+			if row["accountId"] == "child" {
+				foundChild = row["accessPermission"] == model.PermissionRead
+			}
+		}
+		info := page["page"].(map[string]interface{})
+		if info["complete"] == true {
+			break
+		}
+		if pages > 10 {
+			t.Fatal("descendant navigation never completes")
+		}
+		q.Set("cursor", info["nextCursor"].(string))
+	}
+	if !foundChild {
+		t.Fatal("descendant navigation omitted the read-only child")
 	}
 	base.project("project", "owner", "child")
 	base.refs["child"] = []string{"project"}
