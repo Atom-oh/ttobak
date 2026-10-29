@@ -1,0 +1,12 @@
+# Build context is services/billing/worker (docker build -f Dockerfile.ingest .): send only the code the worker runs.
+# Everything else (datasets/, out/, .agent_cache/, notes) stays out of the image and out of the build context.
+*
+!requirements-ingest.txt
+!run_account.sh
+!scripts/
+!cur/
+!worker/
+!Dockerfile.ingest
+**/__pycache__
+**/*.pyc
+# Dockerfile.ingest is re-included above: CDK stages the context with these rules, then builds with --file Dockerfile.ingest from the staged copy.
