@@ -194,6 +194,9 @@ Companion source at `dd540f5` (`git show`, tracked files only):
   - `test_fsisearch.py:6` loads `dashboard-app/lambda/fsisearch/index.py`.
 - Rerun guards (`worker/main.py:947`, `:953`): UP `SET ai` with `attribute_exists(pk)`;
   META `SET ai_<src>` with `current_<src> = :v`; no claim.
+  - Added with the import (after review): a per-version rerun lease
+    `ACCT#{acct}` / `RERUN#{src}#{version}` (owner, `expiresAt`, `ttl`) so two reruns of one
+    version never interleave their writes; the runtime keeps this lease in Task 4.
 - `main.py:449` generates a fresh claim token per `Job`; `:626` sets `agents`
   running inside `ai_steps`; `:152` sweeps all direct children; `:963` installs
   SIGTERM only on the main thread.
@@ -272,9 +275,17 @@ UNVERIFIED (each is checked at the start of the task that needs it):
     - If it is absent, ingest **fences** with a conditional put
       `state = fenced, owner = ingest token` (`attribute_not_exists`).
       - On success no runtime can ever acquire, so the failure path is safe.
-      - On condition failure the runtime won the race: handed off.
-- Dispatcher (rerun): bounded client timeouts (connect 3 s, read 10 s, 2 attempts,
-  inside a 30 s function). An ambiguous result raises, Lambda's async retry
+      - On condition failure, or when the fence write's own result is lost, ingest
+        re-reads `RUN#{jobId}` (consistent). `state = fenced` with `owner` = its own
+        token means its fence committed: take the failure path. Any other owner means
+        the runtime won the race: handed off. The runtime's `acquire` reconciles a
+        lost acquisition response the same way (re-read, compare `owner`).
+      - Tests: `test_fence_committed_response_lost_fails_job`,
+        `test_acquire_committed_response_lost_runs_once`.
+- Dispatcher (rerun): one retry budget inside a 30 s function: botocore
+  `connect_timeout=3`, `read_timeout=10`, `retries={"total_max_attempts": 2, "mode": "standard"}`
+  (two requests in total, at most 2 × (3 + 10) s plus backoff ≤ 28 s), and no outer
+  retry loop in the dispatcher (`invoke_agents(..., attempts=1)`). An ambiguous result raises, Lambda's async retry
   re-invokes with the same session ID, and `RUN#` deduplicates. The final failure
   goes to the on-failure destination (`JobDlq`).
 
@@ -416,8 +427,9 @@ docs/runbooks/billing-phase2-release.md   acceptance evidence + Phase 4 cut-over
   - `class JobState(env, job, ddb, data, *, token: str, steps: dict[str, str])`
     holds the UP/META/LOCK helpers. The token and steps are always passed in, never
     generated inside.
-  - `JobState.hydrate(ddb, table, acct, upload_id) -> tuple[str, dict]` returns the
-    persisted `claim` and `steps` (consistent read).
+  - `JobState.hydrate(ddb, table, acct, upload_id) -> Hydrated` returns the persisted
+    `claim`, `status`, `claimedAt` and `steps` in one consistent read
+    (`Hydrated` is a small dataclass with those four fields).
   - `class ProcessScope(cancel: threading.Event, killpg=os.killpg)` provides
     `spawn(cmd, env, cwd, deadline, on_line=None) -> (rc, stdout)` and `close()`.
     - It tracks only the process groups it created.
@@ -579,7 +591,7 @@ modify `Dockerfile.ingest` and `.dockerignore`.
   - `ACCEPTED` returns.
   - `REJECTED` raises `ValueError`, which goes to the DLQ after retries.
   - `AMBIGUOUS` raises `RuntimeError` so the async retry re-invokes with the same session.
-- Client: `botocore.config.Config(connect_timeout=3, read_timeout=10, retries={"max_attempts": 2, "mode": "standard"})`; function timeout 30 s.
+- Client: `botocore.config.Config(connect_timeout=3, read_timeout=10, retries={"total_max_attempts": 2, "mode": "standard"})`; `invoke_agents(..., attempts=1)`; function timeout 30 s.
 - `package.sh` builds `dispatch/dist/` from `index.py`, `../worker/handoff.py` and
   `pip install --target dist boto3==1.42.97` (U5). Workflows run it before synth.
 
@@ -685,9 +697,10 @@ modify `Dockerfile.ingest` and `.dockerignore`.
     inline policy in the stack template. `Resource: "*"` is allowed only for:
     - `ecr:GetAuthorizationToken` with `aws:RequestedRegion` (our role);
     - `cloudwatch:PutMetricData` with `cloudwatch:namespace`;
-    - the CDK-generated `ecr:GetAuthorizationToken` on the ECS task execution role
-      (from `ContainerImage.fromDockerImageAsset`; the API supports no resource
-      scoping; listed in `docs/INFRA-SPEC.md`).
+    - nothing else: the ECS task execution role is authored explicitly (`IngestExecutionRole`)
+      with `ecr:GetAuthorizationToken` on `*` conditioned on `aws:RequestedRegion`, ECR pulls
+      on the asset repository ARN and logs on its own log group, and is passed as
+      `executionRole` so CDK generates no unconditioned grant.
   - `no_xray_permissions`
   - `ingest_task_uses_isolated_group_only`
   - `ingest_sg_has_no_ingress_and_no_public_egress`
@@ -769,7 +782,14 @@ tokens, real Account names or customer data) and `docs/README.md`.
 
 - [ ] **Step 1: Preflight (read-only).**
   - Identity is account 180294183052.
-  - The required endpoints exist (Pre-flight list).
+  - The required endpoints exist (Pre-flight list), and the `logs` interface
+    endpoint's security groups admit 443 from the Isolated subnets or from
+    `IngestSg` (`describe-security-groups` on the endpoint's SGs). If not, stop:
+    the owner decides between a rule on the endpoint SG (outside this plan) and
+    pulling gate G1 forward.
+  - The platform table's TTL is enabled on attribute `ttl`
+    (`aws dynamodb describe-time-to-live`). If not, stop and ask the owner; `RUN#`
+    and `RERUN#` rows rely on it.
   - The companion `JobCreated` rule is `ENABLED` and its pattern is `jobs/` (unchanged).
   - U1: sizes of the largest `accounts/*/versions/*/data/` prefixes (`aws s3 ls --summarize`; sizes only).
   - `npx cdk diff TtobakBillingStack` (U3).
@@ -794,7 +814,7 @@ tokens, real Account names or customer data) and `docs/README.md`.
     1. Upload a synthetic COT zip to `accounts/SYN-A/uploads/<id>/source.zip`.
     2. Create the `UP#` row (`queued`) and the `LOCK#cot` row exactly as the BFF's
        `complete` would, using the runbook's JSON.
-    3. Write `billing-acceptance/<id>.json`.
+    3. Write `billing-acceptance/u<id>.json` (the `u` analyze discriminator).
     4. Check that the `/billing?view=upload` page shows the same step progression,
        the version becomes current with `ai` set, the lock is gone, and there is one
        `RUN#` row, `done`.
