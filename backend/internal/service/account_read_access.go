@@ -54,7 +54,9 @@ func (g *accountReadGrant) fingerprint() string {
 	if g == nil {
 		return ""
 	}
-	return readingHash(g)
+	// AccountMember hides privacy eligibility from public JSON, so bind it
+	// explicitly rather than relying on the member's JSON representation.
+	return readingHash([]interface{}{g, g.Member.SummaryPrivacyVersion})
 }
 
 func descendantReadsEnabled() bool { return os.Getenv(accountDescendantReadsEnv) == "1" }

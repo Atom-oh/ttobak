@@ -87,6 +87,20 @@ func TestDescendantMeetingReadAccess(t *testing.T) {
 	}
 }
 
+func TestAccountReadGrantRejectsPrivacyVersionChange(t *testing.T) {
+	r := newDescendantAccessRepo()
+	r.member("child", "reader", model.RoleAM)
+	grant, err := resolveAccountReadGrant(context.Background(), r, "child", "reader")
+	if err != nil || grant == nil {
+		t.Fatalf("initial grant: %v/%v", grant, err)
+	}
+	r.members["child/reader"].SummaryPrivacyVersion = model.SummaryPrivacyVersion
+	valid, err := revalidateAccountReadGrant(context.Background(), r, grant, "reader")
+	if err != nil || valid {
+		t.Fatalf("privacy version changed but grant remained valid: %v/%v", valid, err)
+	}
+}
+
 func TestDescendantShareNeverEscalatesOrGrandfathers(t *testing.T) {
 	t.Setenv("ACCOUNT_DESCENDANT_READS_ENABLED", "1")
 	t.Setenv(SummaryPrivacyReaderEnv, "0")
