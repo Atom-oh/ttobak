@@ -9,7 +9,7 @@ after a gap, Excel helper columns. Row-aligned helper columns (e.g. account Name
 Data Transfer Type, Family/Size/Generation) are kept; summary tables that only fill a
 few rows are not. Rows: {entity, month?, dim, cost?, usage?, usage_unit?, <source columns>}.
 """
-import ast, collections, csv, datetime, json, os, re, sys
+import ast, collections, csv, datetime, json, math, os, re, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # -I drops the script dir
 from entities import ENTITIES  # noqa: E402
@@ -129,9 +129,18 @@ def load(base, entity, sheet):
 def to_num(v):
     try:
         f = float(v)
-        return int(f) if f.is_integer() and abs(f) < 1e15 and "." not in v else f
     except ValueError:
         return None
+    if not math.isfinite(f):  # COT cells can read "nan"/"inf": JSON has no such number
+        return None
+    return int(f) if f.is_integer() and abs(f) < 1e15 and "." not in v else f
+
+
+def non_finite(v):
+    try:
+        return not math.isfinite(float(v))
+    except ValueError:
+        return False
 
 
 def export_sheet(base, sheet):
@@ -203,7 +212,7 @@ def export_sheet(base, sheet):
                     row[n] = serial_to_date(v)
                 else:
                     x = to_num(v)
-                    row[n] = x if x is not None else v
+                    row[n] = x if x is not None else (None if non_finite(v) else v)
             if tag_keys:
                 tg = tags_of(cells.get("tags", ""))
                 for k in tag_keys:
@@ -221,7 +230,8 @@ def columns(rows):
             if k not in kinds:
                 order.append(k)
                 kinds[k] = collections.Counter()
-            kinds[k]["num" if isinstance(v, (int, float)) else "str"] += 1
+            if v is not None:  # null (unreadable or non-finite) says nothing about the type
+                kinds[k]["num" if isinstance(v, (int, float)) else "str"] += 1
     cols = []
     for k in order:
         t = "month" if k == "month" else ("num" if kinds[k]["num"] >= kinds[k]["str"] else "str")
@@ -244,10 +254,10 @@ def main(base, out_dir):
         for c in cols:
             if c["type"] == "str":
                 for r in rows:
-                    if c["name"] in r and not isinstance(r[c["name"]], str):
+                    if r.get(c["name"]) is not None and not isinstance(r[c["name"]], str):
                         r[c["name"]] = str(r[c["name"]])
         path = os.path.join(out_dir, rid + ".json")
-        body = json.dumps(rows, ensure_ascii=False, separators=(",", ":"))
+        body = json.dumps(rows, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
         if len(body.encode()) > MAX_BYTES:
             raise SystemExit(f"{rid} is {len(body.encode())} bytes > {MAX_BYTES}")
         open(path, "w", encoding="utf-8").write(body)
@@ -258,7 +268,8 @@ def main(base, out_dir):
         if dropped_tags:
             note += " dropped_tags=" + json.dumps({k: len(v) for k, v in dropped_tags.items()})
         report.append(f"{rid}: {len(rows)} rows, {len(body.encode())} B, {len(cols)} cols{note}")
-    json.dump(catalog, open(os.path.join(out_dir, "raw_catalog.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+    json.dump(catalog, open(os.path.join(out_dir, "raw_catalog.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1,
+              allow_nan=False)
     print("\n".join(report))
     print("total bytes", sum(c["bytes"] for c in catalog))
 

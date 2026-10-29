@@ -100,7 +100,7 @@ def summary(D, ents, no):
         b = [r for r in D["briefing"] if r["entity"] == e]
         top = lambda kind: max((r for r in b if r["kind"] == kind), key=lambda r: r["impact"], default=None)
         cell = lambda r: f"{esc(r['title'].split(':')[0])} {usd(r['impact'])}" if r else "—"
-        out.append(f"| {esc(ko(D, e))} | {usd(k['last_spend'])} | {k.get('mom_pct', 0):+.1f}% | {cell(top('절감'))} | {cell(top('위험'))} | {len(b)} |")
+        out.append(f"| {esc(ko(D, e))} | {usd(k['last_spend'])} | {'—' if k.get('mom_pct') is None else f"{k['mom_pct']:+.1f}%"} | {cell(top('절감'))} | {cell(top('위험'))} | {len(b)} |")
     return out
 
 
