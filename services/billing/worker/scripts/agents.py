@@ -752,13 +752,14 @@ def _has_term(low, t):
     # adjacent words ("Q Pay", "q-pay" for "qpay"); every name also with spaces and punctuation removed on both sides
     # ("acme pay" for "acme-pay"), and longer names and Korean anywhere. A Korean name is compared compacted at any
     # length: a short one spelled with a space ("카드 은행") is still that name
+    # "short" is the compacted length: "q-pay" and "q pay" are the 4-letter name qpay
     ct = _compact(t)
-    if (len(ct) >= 5 or not t.isascii()) and ct and ct in _compact(low):
-        return True
-    if len(t) < 5 and t.isascii():
-        return bool(ct) and (re.search(r"(?<![a-z0-9])" + re.escape(t) + r"(?![a-z0-9])", low) is not None
-                             or _joins_to(low, ct))
-    return t in low
+    if not ct:
+        return False
+    if len(ct) >= 5 or not t.isascii():
+        return ct in _compact(low) or t in low
+    return (re.search(r"(?<![a-z0-9])" + re.escape(ct) + r"(?![a-z0-9])", low) is not None
+            or _joins_to(low, ct))
 
 
 def safe_query(q, private, vocab=FSI_VOCAB):

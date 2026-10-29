@@ -16,6 +16,16 @@ class SafeQuery(unittest.TestCase):
         for q in ("AWS Q Pay bank case study", "q-pay bank case study", "Q.Pay bank case study", "qpay bank case study"):
             self.assertFalse(agents.safe_query(q, {"qpay"}), q)
 
+    def test_punctuated_or_spaced_private_names(self):
+        # the source name itself carries a separator: compacted it is still a short name
+        for name in ("q-pay", "q pay", "q.pay", "k-pay", "t pay"):
+            word = name.replace("-", " ").replace(".", " ")
+            for q in (f"AWS {word} bank case study", f"{name} bank case study", f"{word.replace(' ', '')} bank case study"):
+                self.assertFalse(agents.safe_query(q, {name}), (name, q))
+        D = ds()
+        D["accounts"] = [{"entity": A, "account": "111111111111", "name": "Q-Pay"}]
+        self.assertFalse(agents.safe_query("AWS Q Pay bank case study", agents.private_terms(D)))
+
     def test_short_name_does_not_block_longer_words(self):
         # a tag "pay" is a whole word only: "payments" and "pay" glued to a neighbour stay allowed
         self.assertTrue(agents.safe_query("bank payments case study", {"pay"}))
