@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { accountApi, projectApi } from '@/lib/api';
@@ -10,6 +10,7 @@ import { uploadDocFile } from '@/lib/upload';
 import { MemberPicker } from '@/components/MemberPicker';
 import { FieldInsightsSection } from '@/components/FieldInsightsSection';
 import { AccountParentEditor } from '@/components/AccountParentEditor';
+import { ACCOUNT_TAB_LABELS, accountTabHref, parseAccountTab, visibleAccountTabs, type AccountTab } from '@/lib/accountTabs';
 import { ASSIGNABLE_ACCOUNT_ROLES } from '@/types/meeting';
 import type { Account, AccountInsight, AccountMeetingRef, AccountDocument, AccountResearchRef, ProjectSummary, User, AccountMember } from '@/types/meeting';
 
@@ -19,6 +20,26 @@ export default function AccountDetailClient() {
   const accountId = decodeURIComponent(pathname.split('/').filter(Boolean).pop() || '');
   const { user, isLoading, isAuthenticated, membershipRevision } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const searchParams = useSearchParams();
+  // Hidden until the Billing panel lands; it then comes from runtime config and Billing membership.
+  const billingVisible = false;
+  const tabs = visibleAccountTabs(billingVisible);
+  const tab = parseAccountTab(searchParams.get('tab'), billingVisible);
+  const selectTab = (next: AccountTab) => {
+    router.replace(`${pathname}${accountTabHref(searchParams.toString(), next)}`, { scroll: false });
+  };
+  const handleTabKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const index = tabs.indexOf(tab);
+    const target = e.key === 'ArrowRight' ? (index + 1) % tabs.length
+      : e.key === 'ArrowLeft' ? (index - 1 + tabs.length) % tabs.length
+      : e.key === 'Home' ? 0
+      : e.key === 'End' ? tabs.length - 1
+      : -1;
+    if (target < 0) return;
+    e.preventDefault();
+    e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')[target]?.focus();
+    selectTab(tabs[target]);
+  };
 
   const [account, setAccount] = useState<Account | null>(null);
   const [meetings, setMeetings] = useState<AccountMeetingRef[]>([]);
@@ -327,209 +348,247 @@ export default function AccountDetailClient() {
               </div>
             </div>
 
-            {account.accountId === accountId && (
-              <AccountParentEditor key={accountId} account={account} canEdit={user?.userId === account.ownerUserId}
-                onUpdated={parentAccountId => setAccount(prev => prev?.accountId === accountId ? { ...prev, parentAccountId: parentAccountId || undefined } : prev)} />
-            )}
+            <div role="tablist" aria-label="Account 섹션" onKeyDown={handleTabKeyDown}
+              className="flex gap-1 mb-6 overflow-x-auto border-b border-slate-200 dark:border-white/10">
+              {tabs.map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  role="tab"
+                  id={`account-tab-${t}`}
+                  aria-selected={tab === t}
+                  aria-controls={tab === t ? `account-panel-${t}` : undefined}
+                  tabIndex={tab === t ? 0 : -1}
+                  onClick={() => selectTab(t)}
+                  className={`min-h-11 px-4 shrink-0 whitespace-nowrap flex items-center text-sm -mb-px border-b-2 transition-colors ${
+                    tab === t
+                      ? 'border-primary text-primary font-bold'
+                      : 'border-transparent text-slate-600 dark:text-text-muted hover:text-slate-900 dark:hover:text-text-main font-medium'
+                  }`}
+                >
+                  {ACCOUNT_TAB_LABELS[t]}
+                </button>
+              ))}
+            </div>
 
-            {/* Members */}
-            <section className="mb-8">
-              <h3 className="text-base font-bold mb-3 text-slate-900 dark:text-text-main">Members</h3>
-              <div className="glass-panel rounded-xl p-4 space-y-2">
-                {account.members.filter((m): m is AccountMember & { userId: string } => !!m.userId).map((m) => {
-                  const isOwnerRow = m.userId === account.ownerUserId;
-                  const isOwner = user?.userId === account.ownerUserId;
-                  // Any member (not just the owner) may change another
-                  // member's role -- removal stays owner-only (ADR-034).
-                  const isMember = account.members.some((mm) => mm.userId === user?.userId);
-                  return (
-                    <div key={m.userId} className="flex items-center justify-between text-sm gap-2">
-                      <span className="text-slate-700 dark:text-text-secondary truncate">{m.email || m.userId}</span>
-                      {isOwnerRow ? (
-                        <div className="flex items-center gap-2 shrink-0">
-                          {isMember && account.ownerInvitationPending && (
-                            <button type="button" disabled={inviting} onClick={handleResendOwner}
-                              title="초대 절차를 완료하지 않은 Owner에게만 전송됩니다."
-                              className="text-xs text-primary hover:underline disabled:opacity-50">
-                              Owner 초대 메일 다시 보내기
-                            </button>
-                          )}
-                          <span className="text-xs font-semibold px-2 py-1 rounded-full bg-primary/10 text-primary">owner</span>
-                        </div>
-                      ) : isMember ? (
-                        <div className="flex items-center gap-1 shrink-0">
+            <div role="tabpanel" id={`account-panel-${tab}`} aria-labelledby={`account-tab-${tab}`} tabIndex={0}>
+              {tab === 'general' && (
+                <>
+                  {account.accountId === accountId && (
+                    <AccountParentEditor key={accountId} account={account} canEdit={user?.userId === account.ownerUserId}
+                      onUpdated={parentAccountId => setAccount(prev => prev?.accountId === accountId ? { ...prev, parentAccountId: parentAccountId || undefined } : prev)} />
+                  )}
+
+                  {/* Members */}
+                  <section className="mb-8">
+                    <h3 className="text-base font-bold mb-3 text-slate-900 dark:text-text-main">Members</h3>
+                    <div className="glass-panel rounded-xl p-4 space-y-2">
+                      {account.members.filter((m): m is AccountMember & { userId: string } => !!m.userId).map((m) => {
+                        const isOwnerRow = m.userId === account.ownerUserId;
+                        const isOwner = user?.userId === account.ownerUserId;
+                        // Any member (not just the owner) may change another
+                        // member's role -- removal stays owner-only (ADR-034).
+                        const isMember = account.members.some((mm) => mm.userId === user?.userId);
+                        return (
+                          <div key={m.userId} className="flex items-center justify-between text-sm gap-2">
+                            <span className="text-slate-700 dark:text-text-secondary truncate">{m.email || m.userId}</span>
+                            {isOwnerRow ? (
+                              <div className="flex items-center gap-2 shrink-0">
+                                {isMember && account.ownerInvitationPending && (
+                                  <button type="button" disabled={inviting} onClick={handleResendOwner}
+                                    title="초대 절차를 완료하지 않은 Owner에게만 전송됩니다."
+                                    className="text-xs text-primary hover:underline disabled:opacity-50">
+                                    Owner 초대 메일 다시 보내기
+                                  </button>
+                                )}
+                                <span className="text-xs font-semibold px-2 py-1 rounded-full bg-primary/10 text-primary">owner</span>
+                              </div>
+                            ) : isMember ? (
+                              <div className="flex items-center gap-1 shrink-0">
+                                <select
+                                  value={m.role}
+                                  onChange={(e) => handleRoleChange(m.userId, e.target.value)}
+                                  className="text-xs px-2 py-1 rounded-full border border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest text-primary font-semibold"
+                                >
+                                  {ASSIGNABLE_ACCOUNT_ROLES.map((r) => (
+                                    <option key={r} value={r}>{r}</option>
+                                  ))}
+                                </select>
+                                {isOwner && (
+                                  <button
+                                    onClick={() => handleRemoveMember(m.userId)}
+                                    className="text-slate-400 hover:text-red-500"
+                                    title="Remove member"
+                                  >
+                                    <span className="material-symbols-outlined text-lg">close</span>
+                                  </button>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-xs font-semibold px-2 py-1 rounded-full bg-primary/10 text-primary shrink-0">{m.role}</span>
+                            )}
+                          </div>
+                        );
+                      })}
+                      {account.members.some((m) => m.userId === user?.userId) && (
+                        <div className="flex gap-2 pt-2">
+                          <div className="flex-1">
+                            <MemberPicker
+                              excludeUserIds={account.members.map((m) => m.userId).filter((id): id is string => !!id)}
+                              onPick={handlePickMember}
+                              placeholder="Search colleague by name or email"
+                            />
+                          </div>
                           <select
-                            value={m.role}
-                            onChange={(e) => handleRoleChange(m.userId, e.target.value)}
-                            className="text-xs px-2 py-1 rounded-full border border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest text-primary font-semibold"
+                            value={inviteRole}
+                            onChange={(e) => setInviteRole(e.target.value)}
+                            disabled={inviting}
+                            className="px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest text-sm h-fit"
                           >
                             {ASSIGNABLE_ACCOUNT_ROLES.map((r) => (
                               <option key={r} value={r}>{r}</option>
                             ))}
                           </select>
-                          {isOwner && (
-                            <button
-                              onClick={() => handleRemoveMember(m.userId)}
-                              className="text-slate-400 hover:text-red-500"
-                              title="Remove member"
-                            >
-                              <span className="material-symbols-outlined text-lg">close</span>
-                            </button>
-                          )}
                         </div>
-                      ) : (
-                        <span className="text-xs font-semibold px-2 py-1 rounded-full bg-primary/10 text-primary shrink-0">{m.role}</span>
                       )}
                     </div>
-                  );
-                })}
-                {account.members.some((m) => m.userId === user?.userId) && (
-                  <div className="flex gap-2 pt-2">
-                    <div className="flex-1">
-                      <MemberPicker
-                        excludeUserIds={account.members.map((m) => m.userId).filter((id): id is string => !!id)}
-                        onPick={handlePickMember}
-                        placeholder="Search colleague by name or email"
-                      />
-                    </div>
-                    <select
-                      value={inviteRole}
-                      onChange={(e) => setInviteRole(e.target.value)}
-                      disabled={inviting}
-                      className="px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest text-sm h-fit"
-                    >
-                      {ASSIGNABLE_ACCOUNT_ROLES.map((r) => (
-                        <option key={r} value={r}>{r}</option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-              </div>
-            </section>
+                  </section>
 
-            <FieldInsightsSection insights={insights} />
+                  <FieldInsightsSection insights={insights} />
+                </>
+              )}
+              {tab === 'meetings' && (
+                <>
+                  {/* Shared meetings */}
+                  <section className="mb-8">
+                    <h3 className="text-base font-bold mb-3 text-slate-900 dark:text-text-main">Shared Meetings</h3>
+                    {meetings.length === 0 ? (
+                      <p className="text-sm text-slate-400 dark:text-text-muted">No shared meetings.</p>
+                    ) : (
+                      <div className="glass-panel rounded-xl divide-y divide-slate-200 dark:divide-white/5">
+                        {meetings.map((m) => (
+                          <a key={m.meetingId} href={`/meeting/${m.meetingId}`} className="block p-3 hover:bg-slate-50 dark:hover:bg-white/5">
+                            <div className="text-sm font-medium text-slate-900 dark:text-text-main">{m.title || m.meetingId}</div>
+                            <div className="text-xs text-slate-400 dark:text-text-muted">{new Date(m.date).toLocaleDateString()}</div>
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                  </section>
+                </>
+              )}
+              {tab === 'projects' && (
+                <>
+                  {/* Linked projects */}
+                  <section className="mb-8">
+                    <h3 className="text-base font-bold mb-3 text-slate-900 dark:text-text-main">연결된 프로젝트</h3>
+                    {projectsError ? (
+                      <p className="text-sm text-red-500">프로젝트를 불러오지 못했습니다.</p>
+                    ) : projects.length === 0 ? (
+                      <p className="text-sm text-slate-400 dark:text-text-muted">연결된 프로젝트가 없습니다.</p>
+                    ) : (
+                      <div className="glass-panel rounded-xl divide-y divide-slate-200 dark:divide-white/5">
+                        {projects.map((project) => (
+                          <a
+                            key={project.projectId}
+                            href={`/projects/${encodeURIComponent(project.projectId)}`}
+                            className="block p-3 hover:bg-slate-50 dark:hover:bg-white/5"
+                          >
+                            <div className="flex items-center gap-2">
+                              <span className="material-symbols-outlined text-primary text-lg">work</span>
+                              <span className="text-sm font-medium text-slate-900 dark:text-text-main">{project.name}</span>
+                              {project.stage && (
+                                <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-primary/10 text-primary">
+                                  {project.stage}
+                                </span>
+                              )}
+                            </div>
+                            {project.sfdcOpptyId && (
+                              <p className="text-xs text-slate-400 dark:text-text-muted mt-1">{project.sfdcOpptyId}</p>
+                            )}
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                  </section>
 
-            {/* Linked projects */}
-            <section className="mb-8">
-              <h3 className="text-base font-bold mb-3 text-slate-900 dark:text-text-main">연결된 프로젝트</h3>
-              {projectsError ? (
-                <p className="text-sm text-red-500">프로젝트를 불러오지 못했습니다.</p>
-              ) : projects.length === 0 ? (
-                <p className="text-sm text-slate-400 dark:text-text-muted">연결된 프로젝트가 없습니다.</p>
-              ) : (
-                <div className="glass-panel rounded-xl divide-y divide-slate-200 dark:divide-white/5">
-                  {projects.map((project) => (
-                    <a
-                      key={project.projectId}
-                      href={`/projects/${encodeURIComponent(project.projectId)}`}
-                      className="block p-3 hover:bg-slate-50 dark:hover:bg-white/5"
-                    >
+                  {/* Linked research */}
+                  <section className="mb-8">
+                    <h3 className="text-base font-bold mb-3 text-slate-900 dark:text-text-main">리서치</h3>
+                    {research.length === 0 ? (
+                      <p className="text-sm text-slate-400 dark:text-text-muted">연결된 리서치가 없습니다.</p>
+                    ) : (
+                      <div className="glass-panel rounded-xl divide-y divide-slate-200 dark:divide-white/5">
+                        {research.map((r) => (
+                          <a
+                            key={r.researchId}
+                            href={`/insights/research/${r.researchId}`}
+                            className="block p-3 hover:bg-slate-50 dark:hover:bg-white/5"
+                          >
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="material-symbols-outlined text-primary text-lg">neurology</span>
+                              <span className="text-sm font-medium text-slate-900 dark:text-text-main">{r.topic}</span>
+                            </div>
+                            {r.summary && (
+                              <p className="text-xs text-slate-500 dark:text-text-muted line-clamp-2">{r.summary}</p>
+                            )}
+                            <div className="text-xs text-slate-400 dark:text-text-muted mt-1">
+                              {new Date(r.createdAt).toLocaleDateString()}
+                            </div>
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                  </section>
+                </>
+              )}
+              {tab === 'docs' && (
+                <>
+                  {/* Documents */}
+                  <section className="mb-8">
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-base font-bold text-slate-900 dark:text-text-main">Documents</h3>
                       <div className="flex items-center gap-2">
-                        <span className="material-symbols-outlined text-primary text-lg">work</span>
-                        <span className="text-sm font-medium text-slate-900 dark:text-text-main">{project.name}</span>
-                        {project.stage && (
-                          <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-primary/10 text-primary">
-                            {project.stage}
-                          </span>
-                        )}
+                        <input ref={fileInputRef} type="file" accept=".pdf,.pptx,.ppt" className="hidden" onChange={handleSlideUpload} />
+                        <button
+                          onClick={() => fileInputRef.current?.click()}
+                          disabled={uploadingSlide}
+                          className="text-xs border border-slate-200 dark:border-white/10 text-slate-600 dark:text-text-secondary rounded-lg px-2.5 py-1.5 flex items-center gap-1 disabled:opacity-50"
+                        >
+                          <span className="material-symbols-outlined text-sm">upload_file</span>
+                          {uploadingSlide ? 'Uploading…' : 'Slide'}
+                        </button>
+                        <button
+                          onClick={handleCreateNote}
+                          className="text-xs bg-primary hover:bg-primary-hover text-white rounded-lg px-2.5 py-1.5 flex items-center gap-1"
+                        >
+                          <span className="material-symbols-outlined text-sm">add</span>Note
+                        </button>
                       </div>
-                      {project.sfdcOpptyId && (
-                        <p className="text-xs text-slate-400 dark:text-text-muted mt-1">{project.sfdcOpptyId}</p>
-                      )}
-                    </a>
-                  ))}
-                </div>
-              )}
-            </section>
-
-            {/* Linked research */}
-            <section className="mb-8">
-              <h3 className="text-base font-bold mb-3 text-slate-900 dark:text-text-main">리서치</h3>
-              {research.length === 0 ? (
-                <p className="text-sm text-slate-400 dark:text-text-muted">연결된 리서치가 없습니다.</p>
-              ) : (
-                <div className="glass-panel rounded-xl divide-y divide-slate-200 dark:divide-white/5">
-                  {research.map((r) => (
-                    <a
-                      key={r.researchId}
-                      href={`/insights/research/${r.researchId}`}
-                      className="block p-3 hover:bg-slate-50 dark:hover:bg-white/5"
-                    >
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="material-symbols-outlined text-primary text-lg">neurology</span>
-                        <span className="text-sm font-medium text-slate-900 dark:text-text-main">{r.topic}</span>
+                    </div>
+                    {documents.length === 0 ? (
+                      <p className="text-sm text-slate-400 dark:text-text-muted">No documents.</p>
+                    ) : (
+                      <div className="glass-panel rounded-xl divide-y divide-slate-200 dark:divide-white/5">
+                        {documents.map((d) => (
+                          <a
+                            key={d.docId}
+                            href={`/accounts/${accountId}/docs/${d.docId}`}
+                            className="flex items-center gap-2 p-3 text-sm hover:bg-slate-50 dark:hover:bg-white/5"
+                          >
+                            <span className="material-symbols-outlined text-primary text-lg">
+                              {d.docType === 'slide' ? 'slideshow' : 'description'}
+                            </span>
+                            <span className="text-slate-700 dark:text-text-secondary">{d.title}</span>
+                            {d.docType && <span className="text-xs text-slate-400 dark:text-text-muted">({d.docType})</span>}
+                          </a>
+                        ))}
                       </div>
-                      {r.summary && (
-                        <p className="text-xs text-slate-500 dark:text-text-muted line-clamp-2">{r.summary}</p>
-                      )}
-                      <div className="text-xs text-slate-400 dark:text-text-muted mt-1">
-                        {new Date(r.createdAt).toLocaleDateString()}
-                      </div>
-                    </a>
-                  ))}
-                </div>
+                    )}
+                  </section>
+                </>
               )}
-            </section>
-
-            {/* Shared meetings */}
-            <section className="mb-8">
-              <h3 className="text-base font-bold mb-3 text-slate-900 dark:text-text-main">Shared Meetings</h3>
-              {meetings.length === 0 ? (
-                <p className="text-sm text-slate-400 dark:text-text-muted">No shared meetings.</p>
-              ) : (
-                <div className="glass-panel rounded-xl divide-y divide-slate-200 dark:divide-white/5">
-                  {meetings.map((m) => (
-                    <a key={m.meetingId} href={`/meeting/${m.meetingId}`} className="block p-3 hover:bg-slate-50 dark:hover:bg-white/5">
-                      <div className="text-sm font-medium text-slate-900 dark:text-text-main">{m.title || m.meetingId}</div>
-                      <div className="text-xs text-slate-400 dark:text-text-muted">{new Date(m.date).toLocaleDateString()}</div>
-                    </a>
-                  ))}
-                </div>
-              )}
-            </section>
-
-            {/* Documents */}
-            <section className="mb-8">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-base font-bold text-slate-900 dark:text-text-main">Documents</h3>
-                <div className="flex items-center gap-2">
-                  <input ref={fileInputRef} type="file" accept=".pdf,.pptx,.ppt" className="hidden" onChange={handleSlideUpload} />
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={uploadingSlide}
-                    className="text-xs border border-slate-200 dark:border-white/10 text-slate-600 dark:text-text-secondary rounded-lg px-2.5 py-1.5 flex items-center gap-1 disabled:opacity-50"
-                  >
-                    <span className="material-symbols-outlined text-sm">upload_file</span>
-                    {uploadingSlide ? 'Uploading…' : 'Slide'}
-                  </button>
-                  <button
-                    onClick={handleCreateNote}
-                    className="text-xs bg-primary hover:bg-primary-hover text-white rounded-lg px-2.5 py-1.5 flex items-center gap-1"
-                  >
-                    <span className="material-symbols-outlined text-sm">add</span>Note
-                  </button>
-                </div>
-              </div>
-              {documents.length === 0 ? (
-                <p className="text-sm text-slate-400 dark:text-text-muted">No documents.</p>
-              ) : (
-                <div className="glass-panel rounded-xl divide-y divide-slate-200 dark:divide-white/5">
-                  {documents.map((d) => (
-                    <a
-                      key={d.docId}
-                      href={`/accounts/${accountId}/docs/${d.docId}`}
-                      className="flex items-center gap-2 p-3 text-sm hover:bg-slate-50 dark:hover:bg-white/5"
-                    >
-                      <span className="material-symbols-outlined text-primary text-lg">
-                        {d.docType === 'slide' ? 'slideshow' : 'description'}
-                      </span>
-                      <span className="text-slate-700 dark:text-text-secondary">{d.title}</span>
-                      {d.docType && <span className="text-xs text-slate-400 dark:text-text-muted">({d.docType})</span>}
-                    </a>
-                  ))}
-                </div>
-              )}
-            </section>
+            </div>
           </>
         )}
       </div>
