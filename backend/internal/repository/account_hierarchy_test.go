@@ -28,7 +28,7 @@ type hierarchyWireOperation struct {
 }
 
 type hierarchyWireItem struct {
-	Update, Put, ConditionCheck *hierarchyWireOperation
+	Update, Put, Delete, ConditionCheck *hierarchyWireOperation
 }
 
 func hierarchyWireRepo(t *testing.T, inspect func([]hierarchyWireItem), status int, body string) *DynamoDBRepository {
@@ -80,11 +80,29 @@ func TestAccountHierarchyTransactionGuards(t *testing.T) {
 	for _, old := range []string{"", "old-parent"} {
 		t.Run("old="+old, func(t *testing.T) {
 			r := hierarchyWireRepo(t, func(items []hierarchyWireItem) {
-				if len(items) != 5 {
-					t.Fatalf("items=%d, want child + owner + parent membership + two ancestors", len(items))
+				want := 6
+				if old != "" {
+					want++
+				}
+				if len(items) != want {
+					t.Fatalf("items=%d, want guarded hierarchy plus atomic child references (%d)", len(items), want)
 				}
 				seen := map[string]bool{}
 				for _, item := range items {
+					if item.Put != nil {
+						if item.Put.Item["PK"].(map[string]any)["S"] != "ACCOUNT#parent" ||
+							item.Put.Item["SK"].(map[string]any)["S"] != "CHILDREF#child" {
+							t.Fatal("reparent wrote an unrelated item")
+						}
+						continue
+					}
+					if item.Delete != nil {
+						if old == "" || item.Delete.Key["PK"]["S"] != "ACCOUNT#"+old ||
+							item.Delete.Key["SK"]["S"] != "CHILDREF#child" {
+							t.Fatal("reparent removed an unrelated item")
+						}
+						continue
+					}
 					op := item.ConditionCheck
 					if item.Update != nil {
 						op = item.Update
@@ -142,8 +160,9 @@ func TestAccountHierarchyTransactionGuards(t *testing.T) {
 
 func TestAccountHierarchyDetachRemovesAttribute(t *testing.T) {
 	r := hierarchyWireRepo(t, func(items []hierarchyWireItem) {
-		if len(items) != 2 {
-			t.Fatalf("detach should guard child and owner only: %+v", items)
+		if len(items) != 3 || items[2].Delete == nil ||
+			items[2].Delete.Key["PK"]["S"] != "ACCOUNT#old-parent" || items[2].Delete.Key["SK"]["S"] != "CHILDREF#child" {
+			t.Fatalf("detach should guard child and owner and remove old child reference: %+v", items)
 		}
 		op := items[0].Update
 		if op == nil {
@@ -169,7 +188,7 @@ func TestAccountHierarchyCreateConditionalAtomic(t *testing.T) {
 			r := hierarchyWireRepo(t, func(items []hierarchyWireItem) {
 				want := 2
 				if parent != "" {
-					want = 4
+					want = 5
 				}
 				if len(items) != want {
 					t.Fatalf("items=%d, want %d", len(items), want)
@@ -185,6 +204,12 @@ func TestAccountHierarchyCreateConditionalAtomic(t *testing.T) {
 						t.Fatal("parent not part of creation transaction")
 					}
 					for _, item := range items[2:] {
+						if item.Put != nil {
+							if item.Put.Item["SK"].(map[string]any)["S"] != "CHILDREF#child" {
+								t.Fatal("unexpected additional creation row")
+							}
+							continue
+						}
 						op := item.ConditionCheck
 						if op == nil || op.Key["PK"]["S"] != "ACCOUNT#parent" {
 							t.Fatalf("missing parent guards: %+v", item)
@@ -290,8 +315,8 @@ func TestAccountHierarchyTransactionDepthLimit(t *testing.T) {
 				if count == 65 {
 					t.Fatal("over-limit ancestry reached DynamoDB")
 				}
-				if len(items) != 67 {
-					t.Fatalf("64 ancestors should produce 67 operations, got %d", len(items))
+				if len(items) != 68 {
+					t.Fatalf("64 ancestors plus guarded child reference should produce 68 operations, got %d", len(items))
 				}
 			}, 200, `{}`)
 			err := r.UpdateAccountParent(context.Background(), "child", "owner", "", "a0", ancestors)
