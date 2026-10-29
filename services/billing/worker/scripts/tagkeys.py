@@ -5,7 +5,7 @@ breakdowns) are the ranked keys playing a known role (cluster, service, project,
 key is called, not by its namespace; an account with none of those uses its six most used keys instead.
 Records are dicts with their tags under "tags" or "_tags".
 """
-import collections, re
+import ast, collections, re
 
 TOP = 6
 KEEP_AWS = "aws:eks:cluster-name"
@@ -15,6 +15,19 @@ TEAM_RE = re.compile(r"(?i)(?<![a-z])(%s)(?![a-z])" % "|".join(TEAM_WORDS))
 MANAGED_NS = ("kubernetes.io/", "k8s.io/")  # controller-owned labels, not the customer's own tags
 MANAGED_VALUES = {"owned", "shared"}
 CREATED_RE = re.compile(r"(?i)created[-_]?(at|date|on)")
+
+
+def parse_cell(raw):
+    """A COH tags cell ("[{'key': .., 'value': ..}, ..]") as {key: value}. A cell that is not a list of string
+    key/value dicts is untagged and an odd item is skipped (as cohtags.recs), never a crash."""
+    if raw in ("", "[]", "nan", None):
+        return {}
+    try:
+        tg = ast.literal_eval(raw)
+    except Exception:  # any malformed literal (ValueError, SyntaxError, TypeError, RecursionError, ...)
+        return {}
+    return {t["key"]: t["value"] for t in (tg if isinstance(tg, list) else [])
+            if isinstance(t, dict) and isinstance(t.get("key"), str) and isinstance(t.get("value"), str)}
 
 
 def _tags(r):

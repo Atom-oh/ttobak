@@ -3,7 +3,9 @@
 detect(files) -> "cur2-parquet" | "cur2-csv" | "legacy-csv"
 run(files, out_dir, prev_dir=None) -> {format, currency, first_day, last_day, months, rows}
 Writes out_dir/part-0.parquet: usage_date, month, payer_account, linked_account, service, usage_type, region,
-resource_id, line_item_type, cost (amortized), unblended, currency, tags MAP(VARCHAR,VARCHAR).
+resource_id, line_item_type, cost (amortized), unblended, currency, tags MAP(VARCHAR,VARCHAR), billing_period
+(YYYY-MM of the bill the row came from; it can differ from month for late-arriving line items). With prev_dir, the
+billing periods the new files cover replace the carried-over rows of those periods; other carried rows are kept.
 Files are explicit paths (never globs). DuckDB runs in memory, limited to the directories involved, with no
 extension autoinstall/autoload. Raises CurRejected(reason) for input that cannot be used.
 """
@@ -18,14 +20,17 @@ except Exception:  # not glibc: nothing to do
 import duckdb  # noqa: E402
 from safezip import show  # noqa: E402
 
+# bill_billing_period_start_date binds rows to the delivery that covers them (see run()); AWS writes it in every
+# CUR 2.0 and legacy CUR export, so an export without it is rejected rather than merged by usage month
 REQUIRED = ("line_item_line_item_type", "line_item_unblended_cost", "line_item_usage_start_date",
-            "line_item_currency_code")
+            "line_item_currency_code", "bill_billing_period_start_date")
 # CUR 2.0 name -> alternative spellings (legacy CUR CSV, legacy Parquet); the CUR 2.0 name is tried first.
 ALIASES = {
     "line_item_line_item_type": ["lineItem/LineItemType"],
     "line_item_unblended_cost": ["lineItem/UnblendedCost"],
     "line_item_usage_start_date": ["lineItem/UsageStartDate"],
     "line_item_currency_code": ["lineItem/CurrencyCode"],
+    "bill_billing_period_start_date": ["bill/BillingPeriodStartDate"],
     "line_item_product_code": ["lineItem/ProductCode"],
     "product_servicecode": ["product/servicecode"],
     "line_item_usage_type": ["lineItem/UsageType"],
@@ -261,6 +266,8 @@ def _parts(cols, src):
                 n("reservation_unused_amortized_upfront_fee_for_billing_period"), n("reservation_unused_recurring_fee"),
                 n("savings_plan_total_commitment_to_date"), n("savings_plan_used_commitment")))
     day = "TRY_CAST(substr(CAST(%s AS VARCHAR), 1, 10) AS DATE)" % _q(res["line_item_usage_start_date"])
+    period = ("strftime(TRY_CAST(substr(CAST(%s AS VARCHAR), 1, 10) AS DATE), '%%Y-%%m')"
+              % _q(res["bill_billing_period_start_date"]))
     badcost = " OR ".join(["(%(c)s IS NOT NULL AND TRIM(CAST(%(c)s AS VARCHAR)) <> '' AND TRY_CAST(%(c)s AS DOUBLE) IS NULL)"
                            % {"c": _q(res[c])} for c in COST_COLS if c in res]
                           + ["(%s = %s AND NULLIF(TRIM(CAST(%s AS VARCHAR)), '') IS NULL)" % (ltype, _lit(t), _q(res[c]))
@@ -271,13 +278,13 @@ def _parts(cols, src):
         SELECT %(day)s AS usage_date, %(payer)s AS payer_account, %(linked)s AS linked_account,
                %(service)s AS service, %(utype)s AS usage_type, %(region)s AS region, %(rid)s AS resource_id,
                %(ltype)s AS line_item_type, %(cost)s AS cost, %(unb)s AS unblended,
-               %(cur)s AS currency, %(tags)s AS tags,
-               (%(day)s IS NULL OR %(badcost)s) AS bad,
+               %(cur)s AS currency, %(tags)s AS tags, %(period)s AS billing_period,
+               (%(day)s IS NULL OR %(period)s IS NULL OR %(badcost)s) AS bad,
                %(iid)s AS ident_id, %(iiv)s AS ident_iv, file_index AS ident_file, %(frow)s AS ident_row
         FROM %(src)s
         WHERE %(ltype)s IN ('Usage', 'DiscountedUsage', 'SavingsPlanCoveredUsage', 'RIFee', 'SavingsPlanRecurringFee')
           AND NOT (%(product)s LIKE 'AWSSupport%%' OR %(product)s = 'OCBPremiumSupport')
-    """ % {"day": day, "payer": s("bill_payer_account_id"), "linked": s("line_item_usage_account_id"),
+    """ % {"day": day, "period": period, "payer": s("bill_payer_account_id"), "linked": s("line_item_usage_account_id"),
            "service": service, "utype": s("line_item_usage_type"), "region": s("product_region_code"),
            "rid": s("line_item_resource_id"), "ltype": ltype, "cost": cost, "unb": n("line_item_unblended_cost"),
            "cur": trim_ws(s("line_item_currency_code")), "tags": _tags_expr(cols, res), "src": src, "product": product,
@@ -290,7 +297,7 @@ def _parts(cols, src):
 
 
 OUT_COLS = ("usage_date, strftime(usage_date, '%Y-%m') AS month, payer_account, linked_account, service, usage_type, "
-            "region, resource_id, line_item_type, cost, unblended, currency, tags")
+            "region, resource_id, line_item_type, cost, unblended, currency, tags, billing_period")
 
 
 def _normalized_sql(cols, src):
@@ -376,15 +383,20 @@ def run(files, out_dir, prev_dir=None, labels=None, groups=None):
             total, bad = con.execute(stats).fetchone()
             if bad * 1000 > total * BAD_ROW_PERMILLE:
                 raise CurRejected("CUR 행 중 날짜·금액을 읽을 수 없는 행이 많습니다: %d" % bad)
-            new_months = [r[0] for r in con.execute("SELECT DISTINCT month FROM (%s)" % sql).fetchall()]
+            # the bills this delivery covers, not its usage months: a late line item dated in an earlier month
+            # belongs to the later bill and must not displace the earlier bill's carried-over rows
+            periods = [r[0] for r in con.execute("SELECT DISTINCT billing_period FROM (%s)" % sql).fetchall()]
         except duckdb.Error:
             raise CurRejected(unreadable)
-        if not new_months:
+        if not periods:
             raise CurRejected("집계할 CUR 행이 없습니다")
         full = "SELECT * FROM (%s)" % sql
         if prev_file:
-            full += (" UNION ALL BY NAME SELECT * FROM read_parquet(%s) WHERE month NOT IN (%s)"
-                     % (_lit(os.path.abspath(prev_file)), ", ".join(_lit(m) for m in new_months)))
+            prev_src = "read_parquet(%s)" % _lit(os.path.abspath(prev_file))
+            # a carried file written before billing_period existed: its usage months stand in for its bills
+            key = "billing_period" if "billing_period" in _columns(con, prev_src) else "month"
+            full += (" UNION ALL BY NAME SELECT * FROM %s WHERE %s NOT IN (%s)"
+                     % (prev_src, key, ", ".join(_lit(m) for m in periods)))
         cur = [r[0] for r in con.execute("SELECT DISTINCT %s AS c FROM (%s) WHERE NULLIF(%s, '') IS NOT NULL"
                                          % (trim_ws("currency"), full, trim_ws("currency"))).fetchall()]
         if len(cur) > 1:

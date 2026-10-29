@@ -1,8 +1,8 @@
 """Stage one uploaded CUR zip (untrusted) for one account and normalize it to Parquet.
 
 Usage: python3 -I stage_cur.py <zip> <work_dir> <acct> [prev_dir]
-Extracts to <work>/cur_raw, renames data files to generated names in <work>/cur_in (both removed afterwards), writes <work>/cur_norm/part-0.parquet; months in prev_dir (an
-earlier cur_norm) that the new files do not cover are carried over, overlapping months take the new files.
+Extracts to <work>/cur_raw, renames data files to generated names in <work>/cur_in (both removed afterwards), writes <work>/cur_norm/part-0.parquet; rows in prev_dir (an
+earlier cur_norm) whose billing period the new files do not cover are carried over, covered periods take the new files.
 Exit 0 and a one-line JSON summary on stdout; 3 with {"reason": ...} when the upload is invalid; 2 for a bad account id.
 """
 import gzip, json, os, re, shutil, sys, zipfile, zlib
