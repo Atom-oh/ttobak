@@ -194,6 +194,19 @@ class Verify(unittest.TestCase):
         for t in ("원인을 확인합니다.", "RDS 커버리지 52%의 원인", "시간당 $84 약정"):
             self.ok(t)
 
+    def test_spaced_scale_words_rejected(self):
+        # a scale word after the amount is not folded: "$1.2 million" must not verify as $1.2 (nor as 1.2M)
+        ix = agents.index({"cost": 1.2, "commitments": [{"est_monthly": 1200000.0}], "note": "1.2"})
+        self.assertTrue(agents.verify("월 $1.2", ix))
+        self.assertTrue(agents.verify("월 $1.2M", ix))
+        for t in ("월 $1.2 million", "월 $1.2 Million", "월 $1.2 K", "월 $1.2 k", "월 $1.2 M", "월 $1.2 B", "월 $1.2 bn",
+                  "월 $1.2 thousand", "월 $1.2M million", "월 1.2 million", "월 $1.2 억", "월 1.2 억원", "월 1.2 만",
+                  "월 1.2 천", "월 $1.2\t억"):
+            self.assertFalse(agents.verify(t, ix), t)
+        for t in ("$1.2 Savings Plans", "$1.2 만료", "1.2 만료"):  # a following word that is not a scale
+            self.assertTrue(agents.verify(t, ix), t)
+        self.assertNotIn(("bad", "money-scale"), agents._scan("$1.2 T3 인스턴스"))  # an instance family, not a scale
+
     def test_korean_calendar_year_from_an_iso_month(self):
         ix = agents.index({"months": ["2026-08", "2026-09"], "commitments": [{"days_left": 3}]})
         self.assertTrue(agents.verify("2026년 9월 기준", ix))
