@@ -88,17 +88,18 @@ func (s *VaultReadingService) Read(ctx context.Context, user string, q url.Value
 }
 
 type vaultManifestCursor struct {
-	Version  int    `json:"v"`
-	Binding  string `json:"b"`
-	Phase    string `json:"p"`
-	After    string `json:"k"`
-	Offset   int    `json:"o"`
-	Revision string `json:"r"`
-	Account  string `json:"a"`
-	Grant    string `json:"g"`
-	NavAfter string `json:"n"`
-	NavDone  bool   `json:"d"`
-	Anchor   string `json:"h"`
+	Version   int                     `json:"v"`
+	Binding   string                  `json:"b"`
+	Phase     string                  `json:"p"`
+	After     string                  `json:"k"`
+	Offset    int                     `json:"o"`
+	Revision  string                  `json:"r"`
+	Account   string                  `json:"a"`
+	Grant     string                  `json:"g"`
+	Discovery *accountDiscoveryCursor `json:"z,omitempty"`
+	NavAfter  string                  `json:"n"`
+	NavDone   bool                    `json:"d"`
+	Anchor    string                  `json:"h"`
 }
 
 func (s *VaultReadingService) checkManifestAnchor(ctx context.Context, user, raw string) error {
@@ -193,7 +194,11 @@ func (s *VaultReadingService) manifestPayload(ctx context.Context, user string, 
 	return string(raw), next, anchor, err
 }
 func (s *VaultReadingService) manifest(ctx context.Context, user string, o vaultReadingOptions) ([]byte, error) {
-	binding := compactReadingHash([]string{"vault-manifest-v1", user})
+	mode := "vault-manifest-v1"
+	if descendantReadsEnabled() {
+		mode = "vault-manifest-descendant-v2"
+	}
+	binding := compactReadingHash([]string{mode, user})
 	c := vaultManifestCursor{Version: 1, Binding: binding, Phase: "meetings"}
 	if o.cursor != "" {
 		if err := decodeVaultCursor(o.cursor, &c); err != nil {
@@ -213,7 +218,7 @@ func (s *VaultReadingService) manifest(ctx context.Context, user string, o vault
 		if c.Offset != 0 || c.Revision != "" || c.After != "" || (c.NavAfter != "" && !readingID.MatchString(c.NavAfter)) {
 			return nil, ErrInvalidReadingCursor
 		}
-		page, err := queryReadableAccountCandidates(ctx, s.repo, user, c.NavAfter, 1)
+		page, err := queryReadableAccountCandidates(ctx, s.repo, user, c.NavAfter, 1, &c.Discovery)
 		if err != nil {
 			return nil, err
 		}
@@ -240,7 +245,9 @@ func (s *VaultReadingService) manifest(ctx context.Context, user string, o vault
 				return nil, err
 			}
 		}
-		return json.Marshal(readingObject{"kind": "vault_manifest", "phase": "discovery", "discoveryPending": true, "page": readingObject{"complete": complete, "nextCursor": next}})
+		return json.Marshal(readingObject{"kind": "vault_manifest", "phase": "discovery", "discoveryPending": true,
+			"overlapPossible": descendantReadsEnabled(), "unionKey": "path",
+			"page": readingObject{"complete": complete, "nextCursor": next}})
 	}
 	if c.Phase != "meetings" && c.Phase != "personal_docs" && c.Phase != "account_docs" {
 		return nil, ErrInvalidReadingCursor
@@ -275,7 +282,7 @@ func (s *VaultReadingService) manifest(ctx context.Context, user string, o vault
 	if c.Revision != "" && c.Revision != group {
 		return nil, ErrStaleReadingCursor
 	}
-	body, err := renderCollectionReading("vault_manifest", c.Phase, text, binding, group, c.Offset, o.size, readingObject{"unionKey": "path"}, func(done bool, end int) (string, bool, error) {
+	body, err := renderCollectionReading("vault_manifest", c.Phase, text, binding, group, c.Offset, o.size, readingObject{"unionKey": "path", "overlapPossible": descendantReadsEnabled()}, func(done bool, end int) (string, bool, error) {
 		next := c
 		next.Anchor = anchor
 		if !done {

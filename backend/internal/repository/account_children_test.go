@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -111,5 +112,23 @@ func TestChildBootstrapPinsCanonicalParent(t *testing.T) {
 	}, 200, "{}")
 	if err := r.EnsureAccountChildReference(context.Background(), "child", "parent"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAccountChildCursorAfterKeepsRepositoryScope(t *testing.T) {
+	cursor, err := AccountChildCursorAfter("parent", "visited-child")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := base64.RawURLEncoding.Strict().DecodeString(cursor)
+	var position accountChildCursor
+	if err != nil || json.Unmarshal(raw, &position) != nil ||
+		position.Parent != "parent" || position.After != "CHILDREF#visited-child" {
+		t.Fatalf("subtree continuation lost key identity: %s/%v", raw, err)
+	}
+	for _, pair := range [][2]string{{"", "child"}, {"parent", "../child"}, {"parent", "parent"}} {
+		if _, err := AccountChildCursorAfter(pair[0], pair[1]); err == nil {
+			t.Fatalf("accepted invalid selection: %v", pair)
+		}
 	}
 }

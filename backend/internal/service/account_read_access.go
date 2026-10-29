@@ -63,6 +63,7 @@ func projectAccountReadMeeting(meeting *model.Meeting, grant *accountReadGrant) 
 	projected := projectAccountMeeting(meeting, grant.privacyMember())
 	copy := *projected
 	copy.AccountReadGrantRevision = grant.fingerprint()
+	copy.AccountReadInherited = grant.inherited()
 	return &copy
 }
 

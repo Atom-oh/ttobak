@@ -757,6 +757,16 @@ func (s *ResearchService) ListAccountResearch(ctx context.Context, userID, accou
 	dtos := make([]model.AccountResearchDTO, 0, len(items))
 	for _, id := range ids {
 		r, ok := byID[id]
+		if grant.inherited() {
+			current, err := s.repo.GetResearch(ctx, id)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read current research: %w", err)
+			}
+			if current == nil || current.ResearchID != id {
+				continue
+			}
+			r, ok = *current, true
+		}
 		if !ok || r.TrashedAt != "" {
 			continue
 		}

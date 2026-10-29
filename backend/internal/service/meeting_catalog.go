@@ -45,18 +45,19 @@ type meetingCatalogAnchor struct {
 	Revision string `json:"r"`
 }
 type meetingCatalogCursor struct {
-	Version  int                  `json:"v"`
-	Binding  string               `json:"b"`
-	Phase    string               `json:"p"`
-	After    string               `json:"k"`
-	Offset   int                  `json:"o"`
-	Revision string               `json:"r"`
-	Account  string               `json:"a"`
-	Grant    string               `json:"g"`
-	NavAfter string               `json:"n"`
-	NavDone  bool                 `json:"d"`
-	Index    int                  `json:"i"`
-	Anchor   meetingCatalogAnchor `json:"h"`
+	Version   int                     `json:"v"`
+	Binding   string                  `json:"b"`
+	Phase     string                  `json:"p"`
+	After     string                  `json:"k"`
+	Offset    int                     `json:"o"`
+	Revision  string                  `json:"r"`
+	Account   string                  `json:"a"`
+	Grant     string                  `json:"g"`
+	Discovery *accountDiscoveryCursor `json:"z,omitempty"`
+	NavAfter  string                  `json:"n"`
+	NavDone   bool                    `json:"d"`
+	Index     int                     `json:"i"`
+	Anchor    meetingCatalogAnchor    `json:"h"`
 }
 
 func parseMeetingCatalog(q url.Values) (meetingCatalogOptions, error) {
@@ -300,7 +301,7 @@ func (s *MeetingCatalogService) discovery(ctx context.Context, id MeetingCatalog
 		c.Index++
 		c.NavDone = c.Index == len(o.accounts)
 	} else {
-		page, err := queryReadableAccountCandidates(ctx, s.repo, id.UserID, c.NavAfter, 1)
+		page, err := queryReadableAccountCandidates(ctx, s.repo, id.UserID, c.NavAfter, 1, &c.Discovery)
 		if err != nil {
 			return false, err
 		}
@@ -332,7 +333,11 @@ func (s *MeetingCatalogService) Read(ctx context.Context, id MeetingCatalogIdent
 	if err != nil {
 		return nil, err
 	}
-	binding := compactReadingHash([]interface{}{"meeting-catalog-v1", id.UserID, strings.ToLower(id.Email), id.EmailVerified, o.tab, o.accounts, o.limit})
+	mode := "meeting-catalog-v1"
+	if descendantReadsEnabled() {
+		mode = "meeting-catalog-descendant-v2"
+	}
+	binding := compactReadingHash([]interface{}{mode, id.UserID, strings.ToLower(id.Email), id.EmailVerified, o.tab, o.accounts, o.limit})
 	c := meetingCatalogCursor{Version: 1, Binding: binding, Phase: regularMeetingPhase(o.tab)}
 	if o.cursor != "" {
 		raw, err := base64.RawURLEncoding.Strict().DecodeString(o.cursor)
@@ -366,7 +371,9 @@ func (s *MeetingCatalogService) Read(ctx context.Context, id MeetingCatalogIdent
 				return nil, err
 			}
 		}
-		return json.Marshal(readingObject{"kind": "meeting_catalog", "phase": "discovery", "discoveryPending": true, "page": readingObject{"complete": complete, "nextCursor": cursor}})
+		return json.Marshal(readingObject{"kind": "meeting_catalog", "phase": "discovery", "discoveryPending": true,
+			"overlapPossible": true, "unionKey": "meetingId",
+			"page": readingObject{"complete": complete, "nextCursor": cursor}})
 	}
 	if c.Phase != "owned" && c.Phase != "direct" && c.Phase != "team" {
 		return nil, ErrInvalidReadingCursor

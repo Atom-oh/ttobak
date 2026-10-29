@@ -34,6 +34,20 @@ type accountChildCursor struct {
 	After  string `json:"after"`
 }
 
+// AccountChildCursorAfter resumes scoped discovery after a visited subtree.
+// The repository owns the key format; consumers still validate canonical META
+// links and current grants before treating a returned reference as readable.
+func AccountChildCursorAfter(parentID, childID string) (string, error) {
+	if !accountChildID.MatchString(parentID) || !accountChildID.MatchString(childID) || parentID == childID {
+		return "", fmt.Errorf("invalid account child selection")
+	}
+	raw, err := json.Marshal(accountChildCursor{Parent: parentID, After: accountChildPrefix + childID})
+	if err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
 func (r *DynamoDBRepository) childReferencePut(childID, parentID string) (types.TransactWriteItem, error) {
 	if !accountChildID.MatchString(childID) || !accountChildID.MatchString(parentID) || childID == parentID {
 		return types.TransactWriteItem{}, fmt.Errorf("invalid account child relation")

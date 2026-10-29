@@ -93,6 +93,7 @@ type Meeting struct {
 	SummaryPrivacy           *SummaryPrivacy                   `dynamodbav:"summaryPrivacy,omitempty" json:"-"`
 	ActionItemContinuity     map[string][]ActionItemContinuity `dynamodbav:"actionItemContinuity,omitempty" json:"-"`
 	SummaryReadRestricted    bool                              `dynamodbav:"-" json:"-"`
+	AccountReadInherited     bool                              `dynamodbav:"-" json:"-"`
 	AccountReadGrantRevision string                            `dynamodbav:"-" json:"-"`
 	InsightsRevision         string                            `dynamodbav:"insightsRevision,omitempty" json:"-"`
 	Status                   string                            `dynamodbav:"status"` // recording, transcribing, summarizing, done, error

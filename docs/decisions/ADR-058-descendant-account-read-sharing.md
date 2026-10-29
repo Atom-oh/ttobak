@@ -3,6 +3,8 @@
 - Status: Accepted on 2026-10-29 following explicit user authorization.
 - Supersedes ADR-036's no-inheritance policy only. Its meeting classification,
   explicit multi-filter semantics and owner-only hierarchy writes remain.
+- Narrows ADR-051's reader speaker-correction permission: inherited-only readers
+  cannot correct speakers. Its direct-member and independent-share grants remain.
 - Deployment is a separate gate in [the release runbook](../runbooks/account-descendant-sharing.md).
 
 Members of an Account may read its descendants' published content, including
@@ -10,6 +12,11 @@ grandchildren. An ancestor Owner receives read-only access. Direct memberships
 and independent resource shares retain their permissions; inheritance never
 creates child member rows or authorizes edits, invitations, roles, billing,
 publication, linking or hierarchy changes.
+
+This is a staged, disabled policy at the foundation release. The Go environment
+gate `ACCOUNT_DESCENDANT_READS_ENABLED` accepts exactly `1` to activate; an absent
+or different value keeps inheritance disabled. The companion CDK parameter and
+all consumers must land before activation. No deployed acceptance is claimed here.
 
 Resolve authorization from current canonical META parent links and the nearest
 ancestor membership, validating the complete chain to root. Missing, malformed,
@@ -28,6 +35,12 @@ Canonical parent changes and `ACCOUNT#{parent}/CHILDREF#{child}` discovery rows
 share a transaction. References are indexes, never authorization. Bootstrap
 repairs use an observed-parent condition. Discovery consumes empty advancing
 pages and fails explicitly at compatibility limits rather than truncating.
+Bounded discovery retains independently indexed direct roots even when an
+ancestor traversal cannot reach them. Account pages declare overlapping results
+with `overlapPossible` and `unionKey: "accountId"`; clients union by ID and use
+the latest returned permissions. Account/project/meeting/vault catalogs likewise
+declare their stable union key. Canonical grants authorize every result;
+candidate-index presence and cursor state never establish access.
 
 Go/API, bounded MCP readers, Account/documents, meeting discovery, projects,
 research and both QA transports use the policy. Frontend responses distinguish
