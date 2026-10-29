@@ -2,6 +2,7 @@
 import re
 
 from source_revision import resource_identity, source_fields
+from account_read_access import AccountReadAccess, AccountReadGrant
 
 _IDENTIFIER = re.compile(r'[A-Za-z0-9][A-Za-z0-9_-]{0,127}')
 
@@ -24,10 +25,7 @@ def _document_access(table, requester_id, source_pk, document_id):
             and grant.get('ownerId') == scope_id and grant.get('sharedToId') == requester_id
             and grant.get('permission') == 'read'
         )
-    member = table.get_item(
-        Key={'PK': source_pk, 'SK': f'MEMBER#{requester_id}'}, ConsistentRead=True,
-    ).get('Item') or {}
-    return member.get('accountId') == scope_id and member.get('userId') == requester_id
+    return AccountReadAccess(table).resolve(scope_id, requester_id)
 
 
 def read_current_document(table, requester_id, source_pk, document_id, *, raw=False):
@@ -43,7 +41,8 @@ def read_current_document(table, requester_id, source_pk, document_id, *, raw=Fa
     prefix, separator, scope_id = source_pk.partition('#')
     if not separator or prefix not in ('USER', 'ACCOUNT') or not _id(scope_id):
         raise ValueError('Invalid document scope')
-    if not _document_access(table, requester_id, source_pk, document_id):
+    grant = _document_access(table, requester_id, source_pk, document_id)
+    if not grant:
         return None
     key = {'PK': source_pk, 'SK': f'DOC#{document_id}'}
     item = table.get_item(Key=key, ConsistentRead=True).get('Item')
@@ -57,12 +56,18 @@ def read_current_document(table, requester_id, source_pk, document_id, *, raw=Fa
         return None
     if prefix == 'ACCOUNT' and item.get('accountId') != scope_id:
         return None
-    if not _document_access(table, requester_id, source_pk, document_id):
+    current_grant = _document_access(table, requester_id, source_pk, document_id)
+    if not current_grant:
+        return None
+    if isinstance(grant, AccountReadGrant) and grant.fingerprint() != current_grant.fingerprint():
         return None
     if raw:
         # Internal revision input only: retain present/null fields; never return
         # tokens, emails or unrelated metadata alongside source content.
-        return source_fields(resource_identity(source_pk, key['SK']), item)
+        fields = source_fields(resource_identity(source_pk, key['SK']), item)
+        if isinstance(grant, AccountReadGrant) and grant.inherited:
+            fields['_accountReadGrantFingerprint'] = grant.fingerprint()
+        return fields
     content = item.get('content') or ''
     if not isinstance(content, str):
         raise ValueError('Document content is not text')

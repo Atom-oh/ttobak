@@ -13,7 +13,8 @@ record deployed consumer acceptance separately.
 
 | Module | Contract |
 |---|---|
-| `document_context.py` | Authorize personal, direct-share and exact account documents before retaining contents. |
+| `account_read_access.py` | Resolve current direct or flag-gated descendant read grants; strongly validate ancestry and recheck bounded child-reference discovery. |
+| `document_context.py` | Authorize personal, direct-share and readable Account documents before retaining contents; pin inherited grant identity around body reads. |
 | `source_revision.py` | Bind canonical identity, exact present fields and S3 metadata; missing/null/empty stay distinct. Go/QA fixtures pin revisions. |
 | `source_context.py` | Fresh metadata authorization before bounded S3 reads pinned to ETag/version. |
 | `attachment_context.py` | Authorize ATTACH/ATTEXT; verify immutable result identity, original ETag, limits and continuation. Partial/retained results stay explicit, without audio timestamps. |
@@ -307,3 +308,49 @@ fence as Go. Go provenance, grant transactions and owner regeneration are
 implemented behind `SUMMARY_PRIVACY_WRITER_ENABLED=1`. Coordinated activation,
 old API/worker/queued-work drain and reader/consumer acceptance remain
 outstanding; this source wiring is not R1 completion or deployed acceptance.
+
+## Descendant Account reads
+
+`ACCOUNT_DESCENDANT_READS_ENABLED` defaults off. Only the exact value `1`
+enables inheritance. An ancestor's current membership grants read-only access
+to descendant Account content, without a fabricated child membership or
+per-user share row. Existing direct memberships, ownership and independent
+individual shares retain their existing behavior. Billing and mutations do
+not use this helper.
+
+`AccountReadAccess` validates every canonical Account META from the target to
+the root, including nodes above the nearest qualifying membership. Inherited
+META/member rows require exact partition/sort keys, entity type and Account/user
+identity. Missing/malformed nodes, cycles and more than 64 ancestors deny the
+inherited grant; storage failures propagate. No upward or sibling grant exists.
+The grant fingerprint binds the target, granting Account, full parent path and
+current membership identity/privacy fields.
+
+Discovery follows `ACCOUNT#{parent}/CHILDREF#{child}` pages after direct GSI
+membership discovery. Every child reference requires its current canonical
+parent and current grant. Empty advancing pages are consumed; repeated/malformed
+cursors fail. More than 1,000 readable Accounts or 10,000 pages in one query
+fails explicitly instead of producing truncated discovery.
+
+Both REST and WebSocket share `_source_access`, `_tool_history` and
+`build_tool_context`. The same readers cover meeting detail/request context,
+documents, attachments, indexed search/exact selection, async delivery and
+history replay. Meeting content requires current Account publication; private
+linked meetings remain absent. Inherited readers always enforce sharing-safe
+summary eligibility, including when the ancestor is an old member or the
+summary-reader installation flag is off. Unsafe derived summaries/tasks/insight
+copies remain withheld while permitted raw notes/transcripts remain usable.
+
+Current-source revisions bind inherited grant fingerprints. Binary document
+hydration separately uses the canonical `indexRevision`, so grant binding does
+not invalidate a verified canonical file index. Attachment metadata and even
+empty inventories bind the grant; continuations and replay reject a changed
+hierarchy even if content remains readable through another path. Read-only
+Account/meeting tool fingerprints retain the same hidden grant identity without
+rendering it as source content.
+
+`test_account_read_access` exercises hierarchy/grant identities, privacy, bounded
+pagination, source and attachment revisions, binary retrieval and both actual
+transports. `test_handler` includes it. Production activation still requires
+child-reference bootstrap, configuration verification and deployed consumer
+acceptance; these synthetic tests do not establish deployment.

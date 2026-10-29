@@ -28,6 +28,7 @@ from transcript_storage import resolve_transcript
 from source_context import SourceReader
 from source_access import SourceAccess
 from account_reads import StrictAccountReader
+from account_read_access import AccountReadAccess
 from tool_history import CompleteRead, ToolHistory
 from tool_context import (
     build_tool_context, track_tool_history as _track_tool_history, CLIENT_LIVE_NOTE,
@@ -718,21 +719,14 @@ def _list_shared_meetings_raw(user_id):
 
 
 def _account_meeting_candidates(user_id):
-    """Discover published-meeting identities through direct account memberships.
+    """Discover published-meeting identities through live direct/descendant grants.
 
     GSI1 and MEETINGREF rows are discovery indexes, not grants. Do not cache
     them: a member joining after share fan-out must discover existing meetings.
     All pages are consumed, including empty pages carrying LastEvaluatedKey.
     """
     from boto3.dynamodb.conditions import Key
-    memberships = _query_all(
-        IndexName='GSI1',
-        KeyConditionExpression=Key('GSI1PK').eq(f'USER#{user_id}') & Key('GSI1SK').begins_with('ACCOUNT#'),
-        ProjectionExpression='accountId',
-    )
-    for account_id in sorted({m['accountId'] for m in memberships if m.get('accountId')}):
-        if not _is_account_member(account_id, user_id):
-            continue
+    for account_id in sorted(AccountReadAccess(table, _query_all).discover(user_id)):
         for ref in _query_all(
             KeyConditionExpression=Key('PK').eq(f'ACCOUNT#{account_id}') & Key('SK').begins_with('MEETINGREF#'),
             ProjectionExpression='meetingId, ownerUserId',
@@ -748,6 +742,7 @@ def _has_meeting_access(user_id, owner_id, meeting_id, meeting, source_account_i
     if not user_id or not meeting:
         return False
     meeting['_summaryReadRestricted'] = False
+    meeting.pop('_accountReadGrantFingerprint', None)
     if user_id == owner_id:
         return True
     share = table.get_item(
@@ -762,11 +757,18 @@ def _has_meeting_access(user_id, owner_id, meeting_id, meeting, source_account_i
         return False
     if source_account_id and account_id != source_account_id:
         return False  # stale/misplaced account reference
-    member = _current_account_member(account_id,user_id)
-    if member is None:
+    grant = AccountReadAccess(table).resolve(account_id, user_id)
+    if grant is None:
+        return False
+    if grant.inherited and (
+            meeting.get('PK') != 'USER#' + owner_id or meeting.get('SK') != 'MEETING#' + meeting_id
+            or meeting.get('meetingId') != meeting_id or meeting.get('userId') != owner_id
+            or meeting.get('entityType') != 'MEETING'):
         return False
     from summary_privacy import enforce_summary_guard, safe_summary
-    meeting['_summaryReadRestricted'] = enforce_summary_guard(member) and not safe_summary(meeting)
+    meeting['_summaryReadRestricted'] = enforce_summary_guard(grant.privacy_member()) and not safe_summary(meeting)
+    if grant.inherited:
+        meeting['_accountReadGrantFingerprint'] = grant.fingerprint()
     return True
 
 
@@ -788,7 +790,7 @@ def _list_shared_meetings(user_id):
             continue
         meeting = table.get_item(
             Key={'PK': f'USER#{owner_id}', 'SK': f'MEETING#{meeting_id}'},
-            ProjectionExpression='meetingId, accountId, sharedToAccount, summaryPrivacy',
+            ProjectionExpression='PK, SK, entityType, meetingId, userId, accountId, sharedToAccount, summaryPrivacy',
             ConsistentRead=True,
         ).get('Item')
         if _has_meeting_access(user_id, owner_id, meeting_id, meeting, entry.get('sourceAccountId')):
@@ -806,7 +808,7 @@ def list_meetings_for_user(user_id, date_from=None, date_to=None, tag=None, keyw
     limit = limit or 20
     if not user_id:
         raise ValueError('Authenticated user is required for meeting retrieval')
-    projection = 'meetingId, title, createdAt, tags, #s, accountId, sharedToAccount, summaryPrivacy'
+    projection = 'PK, SK, entityType, userId, meetingId, title, createdAt, tags, #s, accountId, sharedToAccount, summaryPrivacy'
     expr_names = {'#s': 'status'}
     meetings = []
 
@@ -855,6 +857,8 @@ def list_meetings_for_user(user_id, date_from=None, date_to=None, tag=None, keyw
                         'status': item.get('status', ''),
                         'isShared': True,
                         'sharedBy': s['ownerId'],
+                        **({'_accountReadGrantFingerprint': item['_accountReadGrantFingerprint']}
+                           if item.get('_accountReadGrantFingerprint') else {}),
                     })
             except Exception as e:
                 logger.warning(f"Failed to get shared meeting {s['meetingId']}: {e}")
@@ -1016,15 +1020,18 @@ def save_session(session_id, messages, user_id=None, source_state=None, source_d
 
 
 # ── Account-aware chat tools ───────────────────────────────────────────────
-# These query the Account feature data directly via DynamoDB, scoped to the
-# caller's OWN memberships (GSI1 keyed by USER#{userId}) — so resolving an
-# account from the user's membership list IS the authorization gate; a user
-# can never reach an account they aren't a member of.
+# Both transports and these compatibility callbacks use strict live Account
+# read grants. Membership indexes and child references discover identities only.
 
 def _query_all(**kwargs):
     """table.query following LastEvaluatedKey across all pages (no 1MB silent cap)."""
-    items = []
+    from account_read_access import MAX_DISCOVERY_PAGES
+    from tool_history import fingerprint
+    items, seen_tokens, pages = [], set(), 0
     while True:
+        pages += 1
+        if pages > MAX_DISCOVERY_PAGES:
+            raise RuntimeError('Source listing page limit exceeded')
         resp = table.query(**kwargs)
         if not isinstance(resp, dict) or not isinstance(resp.get('Items', []), list):
             raise RuntimeError('Invalid source listing response')
@@ -1032,46 +1039,28 @@ def _query_all(**kwargs):
         lek = resp.get('LastEvaluatedKey')
         if not lek:
             break
-        if not isinstance(lek, dict) or lek == kwargs.get('ExclusiveStartKey'):
+        if not isinstance(lek, dict):
+            raise RuntimeError('Invalid source listing cursor')
+        token = fingerprint(lek)
+        if token in seen_tokens or lek == kwargs.get('ExclusiveStartKey'):
             raise RuntimeError('Source listing did not advance')
+        seen_tokens.add(token)
         kwargs['ExclusiveStartKey'] = lek
     return items
 
 
 def _user_account_metas(user_id):
-    """Return [(meta_item, role)] for the user's accounts — one META read each."""
-    from boto3.dynamodb.conditions import Key
-    try:
-        members = _query_all(
-            IndexName='GSI1',
-            KeyConditionExpression=Key('GSI1PK').eq(f'USER#{user_id}') & Key('GSI1SK').begins_with('ACCOUNT#'),
-        )
-    except Exception as e:
-        logger.warning(f"account membership query failed: {e}")
-        return []
-    out = []
-    for m in members:
-        acc_id = m.get('accountId')
-        if not acc_id:
-            continue
-        if not _is_account_member(acc_id, user_id):
-            continue
-        try:
-            meta = table.get_item(Key={'PK': f'ACCOUNT#{acc_id}', 'SK': 'META'}).get('Item')
-        except Exception as e:
-            logger.warning(f"account META read failed for {acc_id}: {e}")
-            continue
-        if meta:
-            out.append((meta, m.get('role', '')))
-    return out
+    """Current authorized metadata for compatibility selectors."""
+    reader = StrictAccountReader(table)
+    accounts = reader._accounts(user_id)
+    for _, member in accounts:
+        reader._recheck_member(user_id, member)
+    return [(meta, member.get('role', '')) for meta, member in accounts]
 
 
 def list_accounts_for_user(user_id):
-    """Return [{accountId, name, role}] for accounts the user is a member of."""
-    return [
-        {'accountId': meta.get('accountId', ''), 'name': meta.get('name', ''), 'role': role}
-        for meta, role in _user_account_metas(user_id)
-    ]
+    """Compatibility entrypoint; identical current grant policy to ToolHistory."""
+    return StrictAccountReader(table).list_accounts(user_id).value
 
 
 def _resolve_account(user_id, query):
@@ -1116,46 +1105,19 @@ def _account_insights(acc_id, date_from=None, date_to=None, types=None):
 
 def get_account_insights_for_chat(user_id, account_query, date_from=None, date_to=None, types=None):
     """Return account insights filtered by period [from,to] (RFC3339) and types."""
-    matches = _resolve_account(user_id, account_query)
-    if len(matches) != 1:
-        return _resolve_error(user_id, account_query, matches)
-    acc = matches[0]
     try:
-        insights = _account_insights(acc.get('accountId', ''), date_from, date_to, types)
-    except Exception as e:
-        logger.warning(f"account insights query failed: {e}")
-        return {'error': '인사이트 조회 중 오류가 발생했습니다.'}
-    return {'account': acc.get('name', ''), 'insights': insights}
+        return StrictAccountReader(table).get_account_insights(
+            user_id, account_query, date_from, date_to, types).value
+    except LookupError:
+        return _resolve_error(user_id, account_query, _resolve_account(user_id, account_query))
 
 
 def get_account_brief_for_chat(user_id, account_query):
     """Bundle: account meta + insights grouped by type + shared meeting titles."""
-    from boto3.dynamodb.conditions import Key
-    matches = _resolve_account(user_id, account_query)
-    if len(matches) != 1:
-        return _resolve_error(user_id, account_query, matches)
-    acc = matches[0]
-    acc_id = acc.get('accountId', '')
     try:
-        insights = _account_insights(acc_id)
-    except Exception as e:
-        logger.warning(f"account brief insights failed: {e}")
-        insights = []
-    by_type = {}
-    for ins in insights:
-        by_type.setdefault(ins['type'], []).append(ins)
-    meetings = []
-    try:
-        for r in _query_all(
-            KeyConditionExpression=Key('PK').eq(f'ACCOUNT#{acc_id}') & Key('SK').begins_with('MEETINGREF#'),
-            ScanIndexForward=False,
-        ):
-            meetings.append({'meetingId': r.get('meetingId', ''), 'title': r.get('title', ''), 'date': r.get('date', '')})
-    except Exception as e:
-        logger.warning(f"account meeting refs query failed: {e}")
-    research = _account_research(acc_id)
-    return {'account': acc.get('name', ''), 'industry': acc.get('industry', ''),
-            'insightsByType': by_type, 'meetings': meetings, 'research': research}
+        return StrictAccountReader(table).get_account_brief(user_id, account_query).value
+    except LookupError:
+        return _resolve_error(user_id, account_query, _resolve_account(user_id, account_query))
 
 
 def _account_research(acc_id):
