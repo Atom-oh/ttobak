@@ -246,7 +246,6 @@ func (s *VaultReadingService) manifest(ctx context.Context, user string, o vault
 			}
 		}
 		return json.Marshal(readingObject{"kind": "vault_manifest", "phase": "discovery", "discoveryPending": true,
-			"overlapPossible": descendantReadsEnabled(), "unionKey": "path",
 			"page": readingObject{"complete": complete, "nextCursor": next}})
 	}
 	if c.Phase != "meetings" && c.Phase != "personal_docs" && c.Phase != "account_docs" {
