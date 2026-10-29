@@ -154,7 +154,7 @@ def main(base, out_dir):
                              "used_for_service": k in used})
         ck = TK.created_key(TK.rank(rs))
         for (s, k), g in sorted(groups.items(), key=lambda x: -sum(r["cost"] for r in x[1])):
-            created = sorted(r["tags"][ck][:10] for r in g if ck and r["tags"].get(ck))
+            created = sorted(d for d in (TK.created_date(r["tags"].get(ck)) for r in g if ck) if d)
             recent = sum(1 for c in created if NEW_SINCE and c[:7] >= NEW_SINCE)
             # share of all the workload's resources (an undated resource is not counted as recent), so a few dated
             # recent resources cannot mark a large workload new

@@ -46,10 +46,12 @@ def analyze(entity, new_accounts=()):
         g = _group([r for r in rs if d in r["_tags"]], lambda r: r["_tags"][d])
         res["dims"][d] = sorted(([k, n, round(c)] for k, (n, c) in _group_cost(rs, d).items()), key=lambda x: -x[2])[:20]
     # creation cohorts from the detected created-at style tag; "recent" = the last 4 months of the period
-    created = [r for r in rs if created_key in r["_tags"]]
-    res["created_by_month"] = dict(sorted(collections.Counter(r["_tags"][created_key][:7] for r in created).items()))
+    # a placeholder (unknown, N/A, ...) is undated: it opens no month bucket and is never recent
+    created = [r for r in rs if TK.created_date(r["_tags"].get(created_key))]
+    res["created_by_month"] = dict(sorted(collections.Counter(TK.created_date(r["_tags"][created_key])[:7]
+                                                               for r in created).items()))
     since = P.PRESENT[-4] if len(P.PRESENT) >= 4 else P.FIRST
-    recent = [r for r in created if since and r["_tags"][created_key][:7] >= since]
+    recent = [r for r in created if since and TK.created_date(r["_tags"][created_key])[:7] >= since]
     res["recent_n"] = len(recent)
     res["recent_cost"] = round(sum(r["_cost"] for r in recent))
     res["recent"] = {}

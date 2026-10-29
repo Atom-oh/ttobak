@@ -69,6 +69,17 @@ class TagKeys(unittest.TestCase):
                 self.assertEqual(jload(os.path.join(out, fn)), [])
 
 
+class CreatedDate(unittest.TestCase):
+    def test_only_a_year_month_prefix_is_a_date(self):
+        ok = {"2026-08-01T10:00:00Z": "2026-08-01", "2026-08-01": "2026-08-01", "2026-08": "2026-08",
+              " 2026-12-31 ": "2026-12-31"}
+        for v, want in ok.items():
+            self.assertEqual(tagkeys.created_date(v), want, v)
+        for v in ("unknown", "none", "N/A", "TBD", "", "2026-13", "2026-00-01", "20260801", "2026-8", "z2026-08",
+                  None, 202608, ["2026-08"]):
+            self.assertIsNone(tagkeys.created_date(v), v)
+
+
 class NormName(unittest.TestCase):
     LEGACY = r"(-[0-9a-f]{6,}|-\d+|-asg|-node(group)?s?)+$"
 

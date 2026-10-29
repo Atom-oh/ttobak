@@ -31,6 +31,19 @@ class Recs(unittest.TestCase):
             res = cohtags.analyze("acct-a", ["111111111111"])
         self.assertEqual(res["n"], 3)
 
+    def test_placeholder_creation_dates_are_undated(self):
+        # "unknown" sorts after any YYYY-MM, so it used to count as a recent cohort and open its own month bucket
+        def row(i, created):
+            return dict(rec(i, "[{'key': 'CreatedAt', 'value': '%s'}]" % created), actionType="Stop",
+                        currentResourceType="Ec2Instance", currentResourceSummary="", accountId="111111111111",
+                        region="r")
+        rows = [row(0, "2026-08-03"), row(1, "unknown"), row(2, "N/A"), row(3, "TBD"), row(4, "2025-01-10")]
+        with mock.patch.object(cohtags.L, "load", return_value=rows), \
+                mock.patch.object(cohtags.P, "PRESENT", ["2026-05", "2026-06", "2026-07", "2026-08"]):
+            res = cohtags.analyze("acct-a", ["111111111111"])
+        self.assertEqual(res["created_by_month"], {"2025-01": 1, "2026-08": 1})
+        self.assertEqual(res["recent_n"], 1)
+
     def test_missing_cost_columns_count_as_zero(self):
         with mock.patch.object(cohtags.L, "load", return_value=[{"recommendationId": "r0", "tags": "[]"}]):
             got = cohtags.recs("acct-a")
