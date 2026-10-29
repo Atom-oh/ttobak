@@ -28,10 +28,26 @@ class HtmlKpis(unittest.TestCase):
                          "</script><p>Total Dedup Savings / mo</p> $56 COH")
             self.assertEqual(build_data.html_kpis(d, E), {"html_last_spend": 1234, "html_coh_dedup": 56})
 
+    def test_strip_tags_matches_the_markup_rule(self):
+        import build_data
+        self.assertEqual(build_data.strip_tags("a<b>c</b>d<e"), "a c d<e")
+        self.assertEqual(build_data.strip_tags("x < y and z > w"), "x   w")
+
+    def test_oversized_page_has_no_figures(self):
+        import build_data
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as d:
+            self.page(d, "Past Month Spend $1,234 Amortized" + " " * 100)
+            old = build_data.MAX_HTML
+            self.addCleanup(setattr, build_data, "MAX_HTML", old)
+            build_data.MAX_HTML = 50
+            self.assertEqual(build_data.html_kpis(d, E), {"html_last_spend": None, "html_coh_dedup": None})
+
     def test_untrusted_page_is_read_in_linear_time(self):
         import time, build_data
         with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as d:
-            for html in ("<script>" * 100000 + "x", "Past Month Spend " * 100000 + "$1 x",
+            for html in ("<script>" * 100000 + "x", "<script>x</script>" * 100000 + "<p>y",
+                         "<style>x</style>" * 50000 + "<script>x</script>" * 50000, "<" * 400000 + "x",
+                         "<a" * 200000 + ">", "Past Month Spend " * 100000 + "$1 x",
                          "Total Dedup Savings / mo " * 100000 + "$1 x"):
                 self.page(d, html)
                 t = time.monotonic()
