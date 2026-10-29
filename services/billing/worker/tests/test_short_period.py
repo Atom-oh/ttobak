@@ -107,8 +107,18 @@ class ShortPeriod(unittest.TestCase):
         self.assertEqual(k["h2_vs_h1_pct"], round((110 / 90 - 1) * 100, 1))
         self.assertEqual(k["bedrock_first"], 10)
         self.assertEqual(k["ec2_coverage_first"], 10.0)
+        self.assertEqual([s["name"] for s in x["growth_services"]], ["Amazon EC2"], "an earlier-half month was observed")
         self.assertEqual(x["unit"]["ec2"]["coverage"], [0.0, 0.0, 10.0, 20.0, 30.0, 40.0])
         self.assertEqual(x["bedrock"]["models"][0]["months"], [0, 0, 10, 20, 30, 15])
+
+    def test_flat_spend_without_an_earlier_half_is_not_growth(self):
+        months = ["2026-07", "2026-08", "2026-09"]
+        csvd, root = fixture(self.d, months, {"Amazon EC2": [100, 100, 100]}, [], None)
+        x, load = run(self.d, months, csvd, root)
+        for lst in ("growth_services", "decline_services", "growth_accounts", "growth_families"):
+            self.assertEqual(x[lst], [], lst + ": no earlier half observed, so no change")
+        self.assertNotIn("증가 워크로드", {r["area"] for r in load("findings")})
+        self.assertFalse([a for a in load("new_accounts") if a["kind"] == "증가"])
 
     def test_no_ec2_unit_metrics(self):
         months = ["2026-07", "2026-08", "2026-09"]
