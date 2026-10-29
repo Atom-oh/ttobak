@@ -66,12 +66,33 @@ class MoneyRange(unittest.TestCase):
     def test_money_minus_percent_is_not_a_range(self):
         ok(self, {"cost": 100, "coverage_pct": 20}, "$100 - 20%")
 
+    def test_sentence_final_period(self):
+        # a period ending the sentence is not a longer number: the range still types both endpoints
+        bad(self, {"cost": 100, "recs": 200}, "월 $100–200.")
+        ok(self, {"cost": [100, 200]}, "월 $100–200.")
+        ok(self, {"cost": [1.2e6, 1.5e6]}, "$1.2–1.5M.")
+        ok(self, {"cost": [1.2e6, 1.5e6]}, "$1.2–1.5M, 검토 필요")
+        bad(self, {"hourly": 1.2, "cost": 1.5e6}, "$1.2–1.5M.")
 
-class CountRangeUnchanged(unittest.TestCase):
+
+class CountRange(unittest.TestCase):
     def test_count_range(self):
         src = {"recs": [3, 5]}
         ok(self, src, "3~5건")
         bad(self, {"recs": 3, "coverage_pct": 5}, "3~5건")
+
+    def test_dash_separators(self):
+        # the first endpoint is a count too: a monetary 3 must not authorize it through the bare pool
+        for t in ("3–5건", "3—5건", "3-5건", "3 – 5건"):
+            ok(self, {"recs": [3, 5]}, t)
+            bad(self, {"cost": 3, "recs": 5}, t)
+
+
+class LeadingDecimal(unittest.TestCase):
+    def test_leading_point_is_rejected(self):
+        bad(self, {"coverage_pct": 5}, "커버리지 .5%")
+        ok(self, {"coverage_pct": 0.5}, "커버리지 0.5%")
+        ok(self, {"instance_type": "c7i.8xlarge"}, "c7i.8xlarge 유형")
 
 
 if __name__ == "__main__":

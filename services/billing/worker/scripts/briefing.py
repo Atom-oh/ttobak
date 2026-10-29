@@ -63,6 +63,11 @@ def act(kind, owner, title, impact, evidence, next_step, tab, impact_label):
             "evidence": [x for x in evidence if x], "next_step": next_step, "tab": tab}
 
 
+# the option's own term: sp_purchase carries whatever terms the export has, not always a three-year row
+TERM_KO = {"ONE_YEAR": "1년", "THREE_YEAR": "3년"}
+PAYMENT_KO = {"ALL_UPFRONT": "전액 선결제", "PARTIAL_UPFRONT": "부분 선결제", "NO_UPFRONT": "선결제 없음"}
+
+
 def sp_purchase_action(e, D):
     recs = [r for r in D["sp_purchase"][e] if r["plan"] == "COMPUTE_SP"]
     base = next((r for r in recs if r["term"] == "ONE_YEAR" and r["payment"] == "NO_UPFRONT"), None)
@@ -83,7 +88,7 @@ def sp_purchase_action(e, D):
                [f"AWS 권고 약정 시간당 ${base['hourly_commit']:,.2f}. 현재 온디맨드 평균 시간당 ${base['od_hourly']:,.2f}.",
                 f"{L} EC2 비용 중 온디맨드 {pct(od_share)}, EC2 약정 커버리지 {pct(um[p['last']]['coverage_pct'], 1)} ({F} {pct(um[p['first']]['coverage_pct'], 1)})."
                 if od_share is not None and p["last"] in um and p["first"] in um else "",
-                f"3년·{ {'ALL_UPFRONT': '전액 선결제', 'PARTIAL_UPFRONT': '부분 선결제', 'NO_UPFRONT': '선결제 없음'}[top['payment']] }이면 월 {usd(top['monthly_savings'])}까지 (선결제 {usd(top['upfront'])})."
+                f"{TERM_KO.get(top['term'], top['term'])}·{PAYMENT_KO.get(top['payment'], top['payment'])}이면 월 {usd(top['monthly_savings'])}까지 (선결제 {usd(top['upfront'])})."
                 if top is not base else "", renew],
                "약정 기간·선결제 여력을 고객 재무팀과 확인하고, 만료 예정 약정과 묶어 한 번에 구매 계획을 잡습니다.", "savings", "월 절감")
 
@@ -331,7 +336,9 @@ def benchmark(e, D):
             "elasticity_ec2": el["EC2"]["elasticity_pct"] if "EC2" in el else None,
             "coh_dedup": k["coh_dedup"], "sp_buy_1y": sp1["monthly_savings"] if sp1 else 0,
             "graviton_savings": round(grav, 2),
-            "expiring_n": len(soon), "expiring_at_risk": round(sum(r["monthly_net_savings"] or 0 for r in soon), 2),
+            # an RI has no net-savings figure (commitments): unknown, not $0, when any expiring plan lacks one
+            "expiring_n": len(soon), "expiring_at_risk": round(sum(r["monthly_net_savings"] for r in soon), 2)
+            if all(r["monthly_net_savings"] is not None for r in soon) else None,
             "next_expiry": min((r["end"] for r in soon), default=None),
             "top_service": k["top_service"], "top_share": round(k["top_service_last"] / k["last_spend"] * 100, 1) if (k["last_spend"] or 0) > 0 else None,
             "bedrock_last": k["bedrock_last"], "gpu_ec2_last": k["gpu_ec2_last"]}

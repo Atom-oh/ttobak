@@ -94,6 +94,37 @@ class Overlap(unittest.TestCase):
         self.assertFalse(any("합산하지 않습니다" in x for x in gr["evidence"]))
 
 
+class SpTerm(unittest.TestCase):
+    def test_alternative_option_names_its_own_term(self):
+        ds = datasets()
+        ds["sp_purchase"].append({**ds["sp_purchase"][0], "payment": "ALL_UPFRONT", "monthly_savings": 3600, "upfront": 20000})
+        a = briefing.sp_purchase_action(E, D_of(ds))
+        line = next(x for x in a["evidence"] if "까지" in x)
+        self.assertTrue(line.startswith("1년·전액 선결제이면 월 $3.6K까지"), line)
+        ds["sp_purchase"][1]["term"] = "THREE_YEAR"
+        line = next(x for x in briefing.sp_purchase_action(E, D_of(ds))["evidence"] if "까지" in x)
+        self.assertTrue(line.startswith("3년·전액 선결제이면"), line)
+
+
+class ExpiringAtRisk(unittest.TestCase):
+    def bench(self, commitments):
+        with tempfile.TemporaryDirectory() as d:
+            for n, rows in datasets(commitments).items():
+                jdump(rows, os.path.join(d, n + ".json"), "w", encoding="utf-8")
+            briefing.main(d)
+            return jload(os.path.join(d, "benchmark.json"), encoding="utf-8")[0]
+
+    def test_ri_without_net_savings_is_unknown(self):
+        b = self.bench([commit("RI", 40, 1.0, count=4, detail="db.r6g.large Aurora", typ="RDS")])
+        self.assertEqual((b["expiring_n"], b["expiring_at_risk"]), (1, None))
+        b = self.bench([commit("SP", 30, 2.0, net=1500.0), commit("RI", 40, 1.0, count=4, typ="RDS")])
+        self.assertEqual((b["expiring_n"], b["expiring_at_risk"]), (2, None))
+
+    def test_sp_only_is_summed(self):
+        b = self.bench([commit("SP", 30, 2.0, net=1500.0), commit("SP", 60, 1.0, net=500.0)])
+        self.assertEqual((b["expiring_n"], b["expiring_at_risk"]), (2, 2000.0))
+
+
 class ZeroSpend(unittest.TestCase):
     def test_zero_latest_spend_keeps_the_run(self):
         ds = datasets()

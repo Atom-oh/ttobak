@@ -128,6 +128,11 @@ def services(e, svcs):
     return out
 
 
+def pct1(v):
+    """A percent with one decimal; None (no EC2 unit-metrics block) is unknown, not 0.0%."""
+    return "—" if v is None else f"{v:.1f}%"
+
+
 def pct_val(v):
     """kpis store shares either as a fraction (0.585) or a percentage (58.5); return percent."""
     v = float(v or 0)
@@ -215,7 +220,7 @@ def finops_area(e, kp, ops, sp):
         until = P.ko_month(P.shift(p["last"], 6)) if p["last"] else "—"
         out.append(("warn" if (k.get("sp_expiring_pct") or 0) >= 50 else "info",
                     f"Savings Plans 약정 시간당 ${k.get('sp_hourly') or 0:,.2f} 중 {k.get('sp_expiring_pct') or 0:.1f}%가 {until}까지 만료. "
-                    f"EC2 약정 커버리지 {p['lab'](p['first'])} {k.get('ec2_coverage_first') or 0:.1f}% → {p['lab'](p['last'])} {k.get('ec2_coverage_last') or 0:.1f}%."))
+                    f"EC2 약정 커버리지 {p['lab'](p['first'])} {pct1(k.get('ec2_coverage_first'))} → {p['lab'](p['last'])} {pct1(k.get('ec2_coverage_last'))}."))
     top = sorted((r for r in ops if r["entity"] == e), key=lambda r: -r["monthly_savings"])[:3]
     if top:
         out.append(("info", "월 절감 여지 상위: " + ", ".join(f"{r['lever']} {usd(r['monthly_savings'])}" for r in top) + "."))

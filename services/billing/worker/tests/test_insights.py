@@ -70,5 +70,14 @@ class ShortPeriodGrowth(unittest.TestCase):
                                                                               "신규 계정 a1(111111111111)"])
 
 
+
+class FinopsCoverage(unittest.TestCase):
+    def test_unknown_coverage_is_not_zero(self):
+        kp = [{"entity": E, "sp_hourly": 10.0, "sp_expiring_pct": 25.0, "ec2_coverage_first": None, "ec2_coverage_last": 55.0}]
+        with mock.patch.object(insights, "PERIODS", PERIOD):
+            t = insights.finops_area(E, kp, [], [])[0][1]
+        self.assertIn("4월 — → 9월 55.0%", t)
+        self.assertNotIn("0.0%", t)
+
 if __name__ == "__main__":
     unittest.main()

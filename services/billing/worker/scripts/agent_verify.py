@@ -31,14 +31,15 @@ RANGE_SEP = r"\s?[~∼–—\-]\s?"
 RE_PCT_RANGE = re.compile(SIGN + NUM + r"(?:\s?" + PCT_UNIT + r")?" + RANGE_SEP + SIGN + NUM + r"\s?" + PCT_UNIT)
 COUNT_UNITS = "개월|건|개|대|일|년"
 RE_MONEY_RANGE = re.compile(SIGN + r"\$" + NUM + r"([A-Za-z]*)" + RANGE_SEP + SIGN + r"\$?" + NUM + r"([A-Za-z]*)"
-                            + r"(?![\d.,A-Za-z]|\s?(?:" + PCT_UNIT + "|" + COUNT_UNITS + "))")
-RE_RANGE = re.compile(NUM + r"\s?[~∼]\s?" + NUM + r"\s?(" + COUNT_UNITS + r")")
+                            + r"(?![\dA-Za-z]|[.,]\d|\s?(?:" + PCT_UNIT + "|" + COUNT_UNITS + "))")
+RE_RANGE = re.compile(NUM + RANGE_SEP + NUM + r"\s?(" + COUNT_UNITS + r")")
 RE_COUNT = re.compile(SIGN + NUM + r"\s?(" + COUNT_UNITS + r")")
 RE_CAL = re.compile(r"(?<![\d.,])(\d{1,2})\s?(월|분기)|(?<![\d.,])(20[2-3]\d)\s?년")
 # a calendar year ("2026년"), taken before durations: 년 is also a count unit ("3년 약정")
 RE_CALYEAR = re.compile(r"(?<![\d.,])20[2-3]\d\s?년")
 RE_IDENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/\-]*")
 RE_BARE = re.compile(SIGN + NUM)
+RE_LEADDOT = re.compile(r"(?<![\w.])\.\d")  # not inside an identifier ("c7i.8xlarge")
 # a plain Latin word naming a customer account/workload/cluster ("phantom 계정") must also come from the input
 RE_NAMED = re.compile(r"(?<![A-Za-z0-9._-])([A-Za-z][A-Za-z0-9]*)\s?(?:계정|워크로드|클러스터)")
 SCALE = {"": 1, "K": 1e3, "M": 1e6, "B": 1e9}
@@ -93,6 +94,8 @@ def _scan(text):
         toks.append(("bad", "currency-form"))
     if RE_SCALEWORD.search(s):
         toks.append(("bad", "money-scale"))
+    if RE_LEADDOT.search(s):
+        toks.append(("bad", "leading-decimal"))
     take(RE_MONEY_RANGE, _money_range)
     take(RE_MONEY, lambda m: ("money", m.group(1), _num(m.group(2)) * SCALE[m.group(3)], _tol(m.group(2), SCALE[m.group(3)]))
          if m.group(3) in SCALE else ("bad", "money-suffix"))
