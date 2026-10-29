@@ -478,6 +478,14 @@ class Business(unittest.TestCase):
         self.assertTrue(agents.verify("계정 비용의 0.35%", ix))
         self.assertFalse(agents.verify("계정 비용의 35%", ix))  # share_pct is already a percent
 
+    def test_benchmark_share_is_a_percent_not_a_fraction(self):
+        D = ds()
+        for r in D["benchmark"]:
+            r["graviton_share"] = 0.8  # 0.8% Graviton, as briefing.py emits it
+        ix = agents.area_index(D, A, "spend")
+        self.assertTrue(agents.verify("Graviton 비중 0.8%", ix))
+        self.assertFalse(agents.verify("Graviton 비중 80%", ix))  # not scaled by 100
+
     def test_service_changes_new_and_growing(self):
         D = ds()
         D["services"] += [{"entity": A, "service": "Amazon Bedrock", "m1": None, "m2": 0, "m3": None, "m4": 50.0, "m5": 80.0, "m6": 120.0},
