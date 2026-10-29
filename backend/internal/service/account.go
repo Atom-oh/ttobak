@@ -236,21 +236,39 @@ func (s *AccountService) CreateAccount(ctx context.Context, ownerUserID, ownerEm
 	return account, nil
 }
 
-func (s *AccountService) GetAccount(ctx context.Context, userID, accountID string) (*model.AccountResponse, error) {
-	member, err := s.repo.GetMember(ctx, accountID, userID)
+func (s *AccountService) requireReadGrant(ctx context.Context, userID, accountID string) (*accountReadGrant, error) {
+	grant, err := resolveAccountReadGrant(ctx, s.repo, accountID, userID)
 	if err != nil {
 		return nil, err
 	}
-	if member == nil {
-		// Distinguish "no such account" (NotFound) from "exists but not a member" (Forbidden).
-		account, err := s.repo.GetAccount(ctx, accountID)
-		if err != nil {
-			return nil, err
-		}
-		if account == nil {
-			return nil, ErrNotFound
-		}
-		return nil, ErrForbidden
+	if grant != nil {
+		return grant, nil
+	}
+	account, err := s.repo.GetAccount(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	if account == nil {
+		return nil, ErrNotFound
+	}
+	return nil, ErrForbidden
+}
+
+func (s *AccountService) recheckReadGrant(ctx context.Context, userID string, grant *accountReadGrant) error {
+	valid, err := revalidateAccountReadGrant(ctx, s.repo, grant, userID)
+	if err != nil {
+		return err
+	}
+	if !valid {
+		return ErrForbidden
+	}
+	return nil
+}
+
+func (s *AccountService) GetAccount(ctx context.Context, userID, accountID string) (*model.AccountResponse, error) {
+	grant, err := s.requireReadGrant(ctx, userID, accountID)
+	if err != nil {
+		return nil, err
 	}
 	account, err := s.repo.GetAccount(ctx, accountID)
 	if err != nil {
@@ -263,24 +281,44 @@ func (s *AccountService) GetAccount(ctx context.Context, userID, accountID strin
 	if err != nil {
 		return nil, err
 	}
-	return toAccountResponse(account, members), nil
+	if err := s.recheckReadGrant(ctx, userID, grant); err != nil {
+		return nil, err
+	}
+	response := toAccountResponse(account, members)
+	response.AccessPermission, response.InheritedFromAccountID = grant.permission(), grant.InheritedFromAccountID
+	return response, nil
 }
 
 func (s *AccountService) ListAccounts(ctx context.Context, userID string) ([]model.AccountSummary, error) {
-	memberships, err := s.repo.ListAccountsForUser(ctx, userID)
+	ids, err := listReadableAccountIDs(ctx, s.repo, userID, nil)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]model.AccountSummary, 0, len(memberships))
-	for _, m := range memberships {
-		account, err := s.repo.GetAccount(ctx, m.AccountID)
+	out := make([]model.AccountSummary, 0, len(ids))
+	grants := make([]*accountReadGrant, 0, len(ids))
+	for _, id := range ids {
+		grant, err := s.requireReadGrant(ctx, userID, id)
+		if err != nil {
+			return nil, err
+		}
+		account, err := s.repo.GetAccount(ctx, id)
 		if err != nil {
 			return nil, err
 		}
 		if account == nil {
-			continue // membership dangling after account deletion
+			continue
 		}
-		out = append(out, model.AccountSummary{AccountID: account.AccountID, ParentAccountID: account.ParentAccountID, Name: account.Name, Role: m.Role})
+		role := grant.Member.Role
+		if grant.inherited() {
+			role = ""
+		}
+		out = append(out, model.AccountSummary{AccountID: id, ParentAccountID: account.ParentAccountID, Name: account.Name, Role: role, AccessPermission: grant.permission(), InheritedFromAccountID: grant.InheritedFromAccountID})
+		grants = append(grants, grant)
+	}
+	for _, grant := range grants {
+		if err := s.recheckReadGrant(ctx, userID, grant); err != nil {
+			return nil, err
+		}
 	}
 	return out, nil
 }
@@ -718,19 +756,9 @@ func accountMeetingInsightAllowed(meeting *model.Meeting, member *model.AccountM
 // ListAccountMeetings returns only still-published shared-meeting references.
 // Only members may read; non-members get ErrForbidden, missing account ErrNotFound.
 func (s *AccountService) ListAccountMeetings(ctx context.Context, userID, accountID string) ([]model.MeetingRefDTO, error) {
-	member, err := s.repo.GetMember(ctx, accountID, userID)
+	grant, err := s.requireReadGrant(ctx, userID, accountID)
 	if err != nil {
 		return nil, err
-	}
-	if member == nil {
-		account, err := s.repo.GetAccount(ctx, accountID)
-		if err != nil {
-			return nil, err
-		}
-		if account == nil {
-			return nil, ErrNotFound
-		}
-		return nil, ErrForbidden
 	}
 	refs, err := s.repo.ListMeetingRefsForAccount(ctx, accountID)
 	if err != nil {
@@ -752,6 +780,18 @@ func (s *AccountService) ListAccountMeetings(ctx context.Context, userID, accoun
 		}
 		out = append(out, model.MeetingRefDTO{MeetingID: r.MeetingID, OwnerUserID: r.OwnerUserID, Title: r.Title, Date: r.Date})
 	}
+	for _, ref := range out {
+		published, err := s.isMeetingPublishedToAccount(ctx, accountID, ref.OwnerUserID, ref.MeetingID)
+		if err != nil {
+			return nil, fmt.Errorf("recheck account meeting source: %w", err)
+		}
+		if !published {
+			return nil, ErrForbidden
+		}
+	}
+	if err := s.recheckReadGrant(ctx, userID, grant); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 
@@ -759,20 +799,11 @@ func (s *AccountService) ListAccountMeetings(ctx context.Context, userID, accoun
 // optional period [from,to] and optional types. Member-gated. (spec §6.3: filter
 // client-side for v1.)
 func (s *AccountService) ListAccountInsights(ctx context.Context, userID, accountID string, from, to time.Time, types []string) ([]model.AccountInsightDTO, error) {
-	member, err := s.repo.GetMember(ctx, accountID, userID)
+	grant, err := s.requireReadGrant(ctx, userID, accountID)
 	if err != nil {
 		return nil, err
 	}
-	if member == nil {
-		account, err := s.repo.GetAccount(ctx, accountID)
-		if err != nil {
-			return nil, err
-		}
-		if account == nil {
-			return nil, ErrNotFound
-		}
-		return nil, ErrForbidden
-	}
+	member := grant.privacyMember()
 	insights, err := s.repo.ListInsightsForAccount(ctx, accountID)
 	if err != nil {
 		return nil, err
@@ -846,14 +877,10 @@ func (s *AccountService) ListAccountInsights(ctx context.Context, userID, accoun
 			Entities:    ins.Entities,
 		})
 	}
-	currentMember, err := s.repo.GetMember(ctx, accountID, userID)
-	if err != nil {
+	if err := s.recheckReadGrant(ctx, userID, grant); err != nil {
 		return nil, err
 	}
-	if currentMember == nil || !currentMember.AddedAt.Equal(member.AddedAt) ||
-		currentMember.SummaryPrivacyVersion != member.SummaryPrivacyVersion {
-		return nil, ErrForbidden
-	}
+	currentMember := grant.privacyMember()
 	for _, ins := range consumed {
 		current, err := s.repo.GetMeetingPublication(ctx, ins.SourceUserID, ins.SourceID)
 		if err != nil {
@@ -863,6 +890,9 @@ func (s *AccountService) ListAccountInsights(ctx context.Context, userID, accoun
 			return nil, ErrForbidden
 		}
 	}
+	if err := s.recheckReadGrant(ctx, userID, grant); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 
@@ -870,6 +900,10 @@ func (s *AccountService) ListAccountInsights(ctx context.Context, userID, accoun
 // meetings into one payload. Access is enforced by the composed methods
 // (GetAccount gates membership first).
 func (s *AccountService) GetAccountBrief(ctx context.Context, userID, accountID string, from, to time.Time, types []string) (*model.AccountBrief, error) {
+	grant, err := s.requireReadGrant(ctx, userID, accountID)
+	if err != nil {
+		return nil, err
+	}
 	account, err := s.GetAccount(ctx, userID, accountID)
 	if err != nil {
 		return nil, err
@@ -886,6 +920,9 @@ func (s *AccountService) GetAccountBrief(ctx context.Context, userID, accountID 
 	for _, ins := range insights {
 		byType[ins.Type] = append(byType[ins.Type], ins)
 	}
+	if err := s.recheckReadGrant(ctx, userID, grant); err != nil {
+		return nil, err
+	}
 	return &model.AccountBrief{Account: account, InsightsByType: byType, Meetings: meetings}, nil
 }
 
@@ -893,14 +930,14 @@ func (s *AccountService) GetAccountBrief(ctx context.Context, userID, accountID 
 // (or name) match the given tag. Returns ErrNotFound if none, ErrAmbiguousAlias
 // if more than one (never auto-pick).
 func (s *AccountService) ResolveAccountByAlias(ctx context.Context, userID, alias string) (*model.Account, error) {
-	memberships, err := s.repo.ListAccountsForUser(ctx, userID)
+	ids, err := listReadableAccountIDs(ctx, s.repo, userID, nil)
 	if err != nil {
 		return nil, err
 	}
 	target := strings.ToLower(strings.TrimSpace(alias))
 	var matches []*model.Account
-	for _, m := range memberships {
-		account, err := s.repo.GetAccount(ctx, m.AccountID)
+	for _, id := range ids {
+		account, err := s.repo.GetAccount(ctx, id)
 		if err != nil {
 			return nil, err
 		}
@@ -1279,28 +1316,42 @@ func (s *AccountService) PutDocument(ctx context.Context, userID, accountID stri
 }
 
 func (s *AccountService) ListAccountDocuments(ctx context.Context, userID, accountID, docType string) ([]model.AccountDocumentDTO, error) {
-	if err := s.requireMember(ctx, userID, accountID); err != nil {
+	grant, err := s.requireReadGrant(ctx, userID, accountID)
+	if err != nil {
 		return nil, err
 	}
-	return s.listDocs(ctx, model.PrefixAccount+accountID, docType)
+	docs, err := s.listDocs(ctx, model.PrefixAccount+accountID, docType)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.recheckReadGrant(ctx, userID, grant); err != nil {
+		return nil, err
+	}
+	for i := range docs {
+		docs[i].AccessPermission, docs[i].InheritedFromAccountID = grant.permission(), grant.InheritedFromAccountID
+	}
+	return docs, nil
 }
 
 func (s *AccountService) GetAccountDocument(ctx context.Context, userID, accountID, docID string) (*model.AccountDocumentDetail, error) {
-	if err := s.requireMember(ctx, userID, accountID); err != nil {
+	grant, err := s.requireReadGrant(ctx, userID, accountID)
+	if err != nil {
 		return nil, err
 	}
 	doc, err := s.getDoc(ctx, model.PrefixAccount+accountID, docID)
 	if err != nil {
 		return nil, err
 	}
+	if err := s.recheckReadGrant(ctx, userID, grant); err != nil {
+		return nil, err
+	}
 	dto := toDocumentDTO(doc)
-	// PublicShareToken must come from doc directly, not toDocumentDTO -- it
-	// lives on AccountDocumentDetail (json:"publicShareToken"), not the
-	// embedded AccountDocumentDTO. Without it, DocDetailClient.tsx's
-	// setPublicToken(detail.publicShareToken) always sees undefined on
-	// load, so an already-shared slide shows "공개 링크 만들기" (create) again
-	// after a refresh instead of "공개 링크 해제" (revoke) + the copy button.
-	return &model.AccountDocumentDetail{AccountDocumentDTO: dto, Content: doc.Content, FileKey: doc.FileKey, PublicShareToken: doc.PublicShareToken}, nil
+	dto.AccessPermission, dto.InheritedFromAccountID = grant.permission(), grant.InheritedFromAccountID
+	token := doc.PublicShareToken
+	if grant.inherited() {
+		token = ""
+	}
+	return &model.AccountDocumentDetail{AccountDocumentDTO: dto, Content: doc.Content, FileKey: doc.FileKey, PublicShareToken: token}, nil
 }
 
 func (s *AccountService) UpdateAccountDocument(ctx context.Context, userID, accountID, docID string, req *model.PutDocumentRequest) (*model.AccountDocumentDTO, error) {

@@ -233,13 +233,11 @@ func (s *AccountReadingService) Read(ctx context.Context, user, accountID string
 	if err != nil {
 		return nil, err
 	}
-	member, err := s.repo.GetMember(ctx, accountID, user)
+	accessGrant, err := resolveAccountReadGrant(ctx, s.repo, accountID, user)
 	if err != nil {
 		return nil, err
 	}
-	if member == nil || member.AccountID != accountID || member.UserID != user ||
-		member.PK != model.PrefixAccount+accountID || member.SK != model.PrefixMember+user ||
-		member.EntityType != model.EntityTypeAccountMember {
+	if accessGrant == nil || (!accessGrant.inherited() && !canonicalReadMember(accessGrant.Member, accountID, user)) {
 		return nil, ErrForbidden
 	}
 	account, err := s.repo.GetAccount(ctx, accountID)
@@ -254,7 +252,7 @@ func (s *AccountReadingService) Read(ctx context.Context, user, accountID string
 		return nil, ErrReadingData
 	}
 	accountRevision := readingHash(account)
-	grant := accountReadingGrant(member)
+	grant := accessGrant.fingerprint()
 	phases := accountReadingPhases(o.section)
 	binding := compactReadingHash([]interface{}{"account-reading-v1", user, accountID, o.section,
 		o.from, o.to, o.types, grant, accountRevision})
@@ -338,11 +336,11 @@ func (s *AccountReadingService) Read(ctx context.Context, user, accountID string
 	if renderError != nil {
 		return nil, renderError
 	}
-	current, err := s.repo.GetMember(ctx, accountID, user)
+	valid, err := revalidateAccountReadGrant(ctx, s.repo, accessGrant, user)
 	if err != nil {
 		return nil, err
 	}
-	if current == nil || accountReadingGrant(current) != grant {
+	if !valid {
 		return nil, ErrStaleReadingCursor
 	}
 	fresh, freshNext, err := s.payload(ctx, user, accountID, c.Phase, string(after), o)
@@ -362,11 +360,11 @@ func (s *AccountReadingService) Read(ctx context.Context, user, accountID string
 	if latest == nil || readingHash(latest) != accountRevision {
 		return nil, ErrStaleReadingCursor
 	}
-	current, err = s.repo.GetMember(ctx, accountID, user)
+	valid, err = revalidateAccountReadGrant(ctx, s.repo, accessGrant, user)
 	if err != nil {
 		return nil, err
 	}
-	if current == nil || accountReadingGrant(current) != grant {
+	if !valid {
 		return nil, ErrStaleReadingCursor
 	}
 	return body, nil

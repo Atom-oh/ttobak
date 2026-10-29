@@ -220,6 +220,10 @@ export class GatewayStack extends cdk.Stack {
       type: 'String', default: 'false', allowedValues: ['false', 'true'],
       description: 'Enable only after the invitation API, rollback guard and clients are verified.',
     });
+    const accountDescendantReads = new cdk.CfnParameter(this, 'AccountDescendantReadsEnabled', {
+      type: 'String', default: '0', allowedValues: ['0', '1'],
+      description: 'Enable descendant read-only sharing after relation bootstrap and deployed consumer verification.',
+    });
     const summaryPrivacyWriter = new cdk.CfnParameter(this, 'SummaryPrivacyWriterEnabled', {
       type: 'String', default: '0', allowedValues: ['0', '1'],
       description: 'Enable after all privacy readers and canonical indexing pass deployed acceptance.',
@@ -296,7 +300,8 @@ export class GatewayStack extends cdk.Stack {
           ';http-origin-version=', this.httpOrigin.versionId,
           ';summary-privacy-writer=', summaryPrivacyWriter.valueAsString,
           ';reader=', summaryPrivacyReader.valueAsString,
-          ';cutoff=', summaryPrivacyCutoff.valueAsString]),
+          ';cutoff=', summaryPrivacyCutoff.valueAsString,
+          ';account-descendant-reads=', accountDescendantReads.valueAsString]),
       },
       runtime: lambda.Runtime.PROVIDED_AL2023,
       architecture: lambda.Architecture.ARM_64,
@@ -304,6 +309,7 @@ export class GatewayStack extends cdk.Stack {
       code: lambda.Code.fromAsset('../backend/cmd/api'),
       role: props.apiRole as iam.Role,
       environment: {
+        ACCOUNT_DESCENDANT_READS_ENABLED: accountDescendantReads.valueAsString,
         PROJECT_INVITATIONS_ENABLED: projectInvitationsEnabled.valueAsString,
         SUMMARY_PRIVACY_WRITER_ENABLED: summaryPrivacyWriter.valueAsString,
         ...summaryPrivacyReaderEnvironment,
@@ -640,6 +646,7 @@ export class GatewayStack extends cdk.Stack {
       code: lambda.Code.fromAsset('../backend/python/qa'),
       role: props.qaRole as iam.Role,
       environment: {
+        ACCOUNT_DESCENDANT_READS_ENABLED: accountDescendantReads.valueAsString,
         ...summaryPrivacyReaderEnvironment,
         TABLE_NAME: props.table.tableName,
         BUCKET_NAME: props.bucket.bucketName,

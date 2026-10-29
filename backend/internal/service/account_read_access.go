@@ -72,6 +72,13 @@ func canonicalReadMember(member *model.AccountMember, id, user string) bool {
 		member.EntityType == model.EntityTypeAccountMember
 }
 
+// Bounded consumers that already checked embedded direct identity retain that
+// stricter contract. Inherited members belong to the granting ancestor.
+func validAccountReadIdentity(g *accountReadGrant, account, user string) bool {
+	return g != nil && g.Member != nil && g.AccountID == account && g.Member.UserID == user &&
+		(g.inherited() || g.Member.AccountID == account)
+}
+
 func resolveAccountReadGrant(ctx context.Context, repo accountReadMembershipRepo, accountID, userID string) (*accountReadGrant, error) {
 	if !readingID.MatchString(accountID) || !readingID.MatchString(userID) {
 		return nil, nil

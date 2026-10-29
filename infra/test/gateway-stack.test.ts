@@ -82,6 +82,19 @@ describe('GatewayStack', () => {
     template = buildTemplate();
   });
 
+  test('descendant reads remain off until bootstrap and publish matching API/QA configuration', () => {
+    const json = template.toJSON();
+    expect(json.Parameters.AccountDescendantReadsEnabled).toMatchObject({ Default: '0', AllowedValues: ['0', '1'] });
+    const functions = Object.values(template.findResources('AWS::Lambda::Function'));
+    for (const fn of functions) {
+      expect(fn.Properties.Environment?.Variables?.ACCOUNT_DESCENDANT_READS_ENABLED).toEqual(
+        ['ttobak-api', 'ttobak-qa'].includes(fn.Properties.FunctionName) ? { Ref: 'AccountDescendantReadsEnabled' } : undefined);
+    }
+    const version = Object.values(template.findResources('AWS::Lambda::Version'))
+      .find(value => JSON.stringify(value.Properties.FunctionName).includes('ApiFunction'))!;
+    expect(JSON.stringify(version.Properties.Description)).toContain('"Ref":"AccountDescendantReadsEnabled"');
+  });
+
   test('privacy rollout targets only its writers/readers and binds every parameter to the API version', () => {
     const functions = Object.values(template.findResources('AWS::Lambda::Function'));
     const environments: Record<string, Record<string, unknown>> = Object.fromEntries(functions.map(fn =>
