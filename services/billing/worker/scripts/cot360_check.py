@@ -15,6 +15,12 @@ def _page_lines(path):
     return [x.strip() for x in html.unescape(re.sub(r"<[^>]+>", "\n", s)).split("\n") if x.strip()]
 
 
+def _cost(r):
+    """A raw row's cost: raw_export writes null for a nan/inf cell and omits an empty one; both count as 0."""
+    v = r.get("cost")
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else 0.0
+
+
 def _row(entity, name, got, want, ok):
     return {"entity": entity, "name": name, "got": got, "want": want, "ok": bool(ok)}
 
@@ -35,7 +41,7 @@ def main(data_dir, extracted_dir):
         checks.append(_row(e, "kpis", "missing", "present", False))
     if not kp and not checks:  # nothing to reconcile is not a pass
         checks.append(_row("", "kpis", 0, "≥1 entity", False))
-    for name, got_of in (("raw_service_costs", lambda e: sum(r["cost"] for r in raw if r["entity"] == e and r["month"] == last)),
+    for name, got_of in (("raw_service_costs", lambda e: sum(_cost(r) for r in raw if r.get("entity") == e and r.get("month") == last)),
                          ("accounts", lambda e: sum(r["last"] for r in acc if r["entity"] == e))):
         for e, want in kp.items():
             got = got_of(e)

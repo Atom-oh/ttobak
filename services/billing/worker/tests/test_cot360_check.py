@@ -65,6 +65,23 @@ class Cot360Check(unittest.TestCase):
         self.assertFalse(next(r for r in rows if r["name"] == "elasticity")["ok"])
         self.assertTrue(all(r["ok"] for r in rows if r["name"] != "elasticity"))
 
+    def test_null_or_missing_raw_cost_counts_as_zero(self):
+        # raw_export writes null for a nan/inf cost cell and omits an empty cost or month cell
+        raw = jload(os.path.join(self.data, "raw_service_costs.json"), encoding="utf-8")
+        extra = [{"entity": "acct-a", "month": MONTH, "cost": None}, {"entity": "acct-a", "month": MONTH},
+                 {"entity": "acct-a", "cost": 5.0}]
+        jdump(raw + extra, os.path.join(self.data, "raw_service_costs.json"), "w", encoding="utf-8")
+        rc, rows = self.run_check("50.00")
+        self.assertEqual(rc, 0)
+        self.assertEqual(next(r for r in rows if r["name"] == "raw_service_costs")["got"], 1000.0)
+        # a real shortfall stays a visible mismatch
+        jdump([{"entity": "acct-a", "month": MONTH, "cost": None}, {"entity": "acct-a", "month": MONTH, "cost": 600.0}],
+              os.path.join(self.data, "raw_service_costs.json"), "w", encoding="utf-8")
+        rc, rows = self.run_check("50.00")
+        self.assertEqual(rc, 1)
+        bad = [r for r in rows if not r["ok"]]
+        self.assertEqual([(r["name"], r["got"]) for r in bad], [("raw_service_costs", 600.0)])
+
     def test_entity_without_kpis_fails(self):
         # an input entity (raw costs, or a run entity) with no KPI row must not pass with no checks
         jdump([], os.path.join(self.data, "kpis.json"), "w", encoding="utf-8")
