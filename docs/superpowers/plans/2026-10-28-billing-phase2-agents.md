@@ -622,9 +622,14 @@ modify `Dockerfile.ingest` and `.dockerignore`.
     jobs by version and time, `services/billing/bff/lib/uploads.js`). Before invoking,
     the handler reads the job object once: `GetObject` on the exact key, at most 16 KiB
     (`Range: bytes=0-16383`, rejected if `ContentLength` is larger), parsed as JSON and
-    validated (`acct` matches `ACCT_ID`, `kind == "rerun"`, `version` matches `VERSION_ID`).
-    Invalid objects raise `ValueError` without invoking. The validated `acct` builds both
-    the session payload and the `ACCT#{acct}` / `RUN#{jobId}` key.
+    validated against the producer's contract, the body the BFF writes in
+    `services/billing/bff/lib/uploads.js` (`rerun-agents` route):
+    `{"kind": "rerun-agents", "accountId", "uploadId", "source", "versionId"}`.
+    `kind` must equal `rerun-agents`; `accountId` matches `ACCT_ID`; `uploadId` matches
+    `UPLOAD_ID`; `source` is `cot` or `cur`; `versionId` matches `VERSION_ID` and equals the
+    version encoded in the job key. Invalid objects raise `ValueError` without invoking.
+    The validated `accountId` builds both the session payload and the
+    `ACCT#{accountId}` / `RUN#{jobId}` key.
   - Dispatcher role: `s3:GetObject` on `jobs/r*.json` (plus `billing-acceptance/r*.json`
     only with acceptance context) and `dynamodb:GetItem` with `LeadingKeys` `ACCT#*`.
   - `AMBIGUOUS` raises `RuntimeError` so the async retry re-invokes with the same session.
@@ -633,8 +638,11 @@ modify `Dockerfile.ingest` and `.dockerignore`.
   `pip install --target dist boto3==1.42.97` (U5). Workflows run it before synth.
 
 - [ ] **Step 1: Failing tests:**
-  - `test_job_object_read_is_bounded_and_validated`: over 16 KiB, bad `acct`, wrong `kind`
-    each raise `ValueError` with no invoke.
+  - `test_job_object_read_is_bounded_and_validated`: over 16 KiB, bad `accountId`, wrong
+    `kind`, a `versionId` that differs from the job key each raise `ValueError` with no invoke.
+  - `test_accepts_the_bff_rerun_payload`: the exact body pinned by
+    `services/billing/bff/test/uploads.test.js` (the rerun-agents producer test) is accepted
+    and invokes once; the dispatcher test imports that fixture shape rather than restating it.
   - `test_rejected_after_lost_acceptance_hands_off`: a prior attempt was accepted (fake
     `RUN#` present), this attempt is `REJECTED`; the handler returns without raising.
   - `test_rerun_key_accepted`
