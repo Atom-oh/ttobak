@@ -792,7 +792,8 @@ class TestWorker(Base):
         self.assertEqual(self.data_s3.calls, [])
         self.assertEqual(self.sts.calls, [])
         self.assertEqual(self.writes(ddb), [])
-        self.assertEqual([c[0] for c in ddb.calls], ["put"], "only the refused acquire")
+        self.assertEqual([c[0] for c in ddb.calls], ["put", "get"], "only the refused acquire and its owner check")
+        self.assertEqual(ddb.calls[1][1:], (LEASE, {"ConsistentRead": True}))
         self.assertEqual(ddb.py(LEASE)["owner"], "other")
         self.assertEqual(ddb.py(("ACCT#acct-a", "META"))["ai_cot"], "none")
 
@@ -813,6 +814,25 @@ class TestWorker(Base):
         rel = [c for c in ddb.calls if c[0] == "delete" and c[1] == LEASE]
         self.assertEqual(len(rel), 1)
         self.assertEqual(rel[0][2:], ("#o = :o", {":o": {"S": seen[0]["owner"]}}))
+
+    def test_lease_put_committed_with_lost_response_is_ours(self):
+        """The lease put commits, its response is lost and the SDK retry fails the condition: the stored owner is ours."""
+        ddb, base = self.rerun_setup()
+        put = ddb.put_item
+
+        def committed_then_retried(**kw):
+            r = put(**kw)
+            if kw["Item"]["sk"]["S"] == LEASE[1]:
+                raise FakeClientError("ConditionalCheckFailedException")
+            return r
+        ddb.put_item = committed_then_retried
+        runner = Runner()
+        self.assertEqual(self.run_main(ddb, runner), 0)
+        self.assertTrue(runner.cmds, "the rerun ran")
+        self.assertEqual(ddb.py(("ACCT#acct-a", "META"))["ai_cot"], "ok")
+        self.assertNotIn(LEASE, ddb.items, "released on success")
+        reads = [c for c in ddb.calls if c[0] == "get" and c[1] == LEASE]
+        self.assertEqual(reads[0][2], {"ConsistentRead": True})
 
     def test_lease_released_on_failure(self):
         for kw in ({"raise_on": "agents"}, {"ai": "bad"}):

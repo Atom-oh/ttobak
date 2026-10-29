@@ -151,5 +151,44 @@ class ShortPeriod(unittest.TestCase):
         self.assertEqual((k["bedrock_first"], k["bedrock_last"], k["bedrock_6m"]), (7, 8, 15))
 
 
+class SpendReconcile(unittest.TestCase):
+    """The last month's service total against the COT360 page figure: reported, never an abort of the whole build."""
+    months = ["2026-08", "2026-09"]
+
+    def setUp(self):
+        self._d = tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR"))
+        self.d = self._d.name
+
+    def tearDown(self):
+        self._d.cleanup()
+
+    def html(self, root, body):
+        with open(os.path.join(root, E, "COT_%s_COT360.html" % E), "w", encoding="utf-8") as f:
+            f.write("<html><body>%s</body></html>" % body)
+
+    def test_cent_rounding_drift_over_many_services_reconciles(self):
+        # 200 lines of $0.004 each: per-service stats round each to $0.00, the true total is $100.80 -> page $101
+        svc = {"Amazon EC2": [100, 100]}
+        svc.update({"Svc %03d" % i: [0.004, 0.004] for i in range(200)})
+        csvd, root = fixture(self.d, self.months, svc, [], [40.0, 50.0])
+        x, _ = run(self.d, self.months, csvd, root)
+        self.assertEqual(x["spend_check"], {"ok": True, "computed_last": 100.8, "html_last_spend": 101})
+        self.assertEqual(x["monthly_total"][-1], 101)
+
+    def test_missing_page_figure_is_reported(self):
+        csvd, root = fixture(self.d, self.months, {"Amazon EC2": [100, 120]}, [], [40.0, 50.0])
+        self.html(root, "<div>no spend figure</div>")
+        x, load = run(self.d, self.months, csvd, root)
+        self.assertEqual(x["spend_check"], {"ok": False, "computed_last": 120.0, "html_last_spend": None})
+        self.assertEqual(x["monthly_total"][-2:], [100, 120])
+        self.assertTrue(load("kpis"), "downstream datasets are still written")
+
+    def test_real_mismatch_stays_visible(self):
+        csvd, root = fixture(self.d, self.months, {"Amazon EC2": [100, 120]}, [], [40.0, 50.0])
+        self.html(root, "<div>Past Month Spend</div><div>$150 Amortized</div>")
+        x, _ = run(self.d, self.months, csvd, root)
+        self.assertEqual(x["spend_check"], {"ok": False, "computed_last": 120.0, "html_last_spend": 150})
+
+
 if __name__ == "__main__":
     unittest.main()
