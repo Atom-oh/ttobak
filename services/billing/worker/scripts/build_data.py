@@ -113,6 +113,14 @@ def optional_sheet(e, sheet, missing, read):
         return {}  # empty for a pivot and for a row list alike
 
 
+def changed(t, n, sign):
+    """The n items moving most in one direction (sign +1 growth, -1 decline) between the half averages. A short
+    period without an earlier-half month has no change to report: d_h2_h1 is then the later-half level."""
+    if not P.H1:
+        return []
+    return [(k, s) for k, s in sorted(t.items(), key=lambda x: -sign * x[1]["d_h2_h1"])[:n] if sign * s["d_h2_h1"] > 0]
+
+
 def family(k):
     return ".".join(k.split(".")[:2]) if k.startswith(("db.", "cache.")) else k.split(".")[0]
 
@@ -131,8 +139,8 @@ def entity(root, e):
     keep = lambda k, s: {"name": k, "months": r0(s["months"]), "last": round(s["last"]),
                          "d_h2_h1": round(s["d_h2_h1"]), "pct_h2_h1": s["pct_h2_h1"]}
     out["top_services"] = [keep(k, s) for k, s in sorted(svc.items(), key=lambda x: -x[1]["last"])[:12]]
-    out["growth_services"] = [keep(k, s) for k, s in sorted(svc.items(), key=lambda x: -x[1]["d_h2_h1"])[:10] if s["d_h2_h1"] > 0]
-    out["decline_services"] = [keep(k, s) for k, s in sorted(svc.items(), key=lambda x: x[1]["d_h2_h1"])[:6] if s["d_h2_h1"] < 0]
+    out["growth_services"] = [keep(k, s) for k, s in changed(svc, 10, 1)]
+    out["decline_services"] = [keep(k, s) for k, s in changed(svc, 6, -1)]
     out["new_services"] = [keep(k, s) for k, s in T.new_items(svc, 20, 5)]
     missing = out["missing_sheets"] = []
     opt = lambda sheet, **kw: T.table(optional_sheet(e, sheet, missing, lambda: T.pivot(e, sheet, **kw)))  # noqa: E731
@@ -141,7 +149,7 @@ def entity(root, e):
     la = opt("Data_Linked_Account_Costs")
     out["accounts_active"] = [sum(1 for s in la.values() if s["months"][i] > 1) for i in range(6)]
     out["new_accounts"] = [keep(k, s) for k, s in T.new_items(la, 200, 5)]
-    out["growth_accounts"] = [keep(k, s) for k, s in sorted(la.items(), key=lambda x: -x[1]["d_h2_h1"])[:6] if s["d_h2_h1"] > 0]
+    out["growth_accounts"] = [keep(k, s) for k, s in changed(la, 6, 1)]
 
     # marketplace: GenAI vs SaaS
     ai, saas, ai_models, saas_items = [0.0] * 6, [0.0] * 6, [], []
@@ -168,7 +176,7 @@ def entity(root, e):
                 tc[family(k)][L.month(r)] += L.num(r["metrics.AmortizedCost.amount"])
     ft = T.table(tc)
     out["new_families"] = [keep(k, s) for k, s in T.new_items(ft, 200, 20)]
-    out["growth_families"] = [keep(k, s) for k, s in sorted(ft.items(), key=lambda x: -x[1]["d_h2_h1"])[:8] if s["d_h2_h1"] > 0]
+    out["growth_families"] = [keep(k, s) for k, s in changed(ft, 8, 1)]
     gpu = [0.0] * 6
     for k, s in ft.items():
         if GPU_RE.match(k):
