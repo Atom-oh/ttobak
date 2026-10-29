@@ -1389,8 +1389,9 @@ dash.ready(function () {
         { f: 'entity', render: (td, r) => { td.textContent = r.entity; td.title = KO[r.entity]; } },
         { f: 'last_spend', fmt: money }, { f: 'mom_pct', render: pctCell('mom_pct') }, { f: 'h2_vs_h1_pct', render: pctCell('h2_vs_h1_pct') },
         { f: 'accounts_last', fmt: (v) => d3.format(',')(v) }, { f: 'bedrock_last', fmt: money }, { f: 'gpu_ec2_last', fmt: money },
-        { f: 'ec2_coverage_last', fmt: (v) => v.toFixed(1) + '%' },
-        { f: 'sp_expiring_pct', render: (td, r) => { td.textContent = r.sp_expiring_pct.toFixed(1) + '%'; if (r.sp_expiring_pct >= 30) td.className = 'tb-up'; } },
+        // null means the page has no such block (e.g. an S3-only account): show a dash, never throw in the table
+        { f: 'ec2_coverage_last', fmt: (v) => (v == null ? '—' : v.toFixed(1) + '%') },
+        { f: 'sp_expiring_pct', render: (td, r) => { const v = r.sp_expiring_pct; td.textContent = v == null ? '—' : v.toFixed(1) + '%'; if (v != null && v >= 30) td.className = 'tb-up'; } },
         { f: 'best_lever', cls: 'l' }, { f: 'best_lever_savings', fmt: money },
       ]);
     }
