@@ -169,12 +169,13 @@ def mom_driver_action(e, D):
     dv = lambda r: (r["m6"] or 0) - (r["m5"] or 0)  # noqa: E731  last − previous month
     d = sorted(((r["service"], dv(r)) for r in sv), key=lambda x: -abs(x[1]))
     total = k["last_spend"] - k["prev_spend"]
-    if abs(total) < 0.02 * k["prev_spend"]:
+    p = per(e, D)
+    if abs(total) < 0.02 * k["prev_spend"] or not p["prev"]:  # no previous month: nothing to compare
         return None
     same = [x for x in d if (x[1] > 0) == (total > 0)][:3]
-    p = per(e, D)
     L = p["lab"](p["last"])
-    ev = [f"{p['lab'](p['prev'])} {usd(k['prev_spend'])} → {L} {usd(k['last_spend'])} ({'+' if total > 0 else ''}{usd(total)}, {k['mom_pct']:+.1f}%).",
+    ev = [f"{p['lab'](p['prev'])} {usd(k['prev_spend'])} → {L} {usd(k['last_spend'])} ({'+' if total > 0 else ''}{usd(total)}"
+          + (f", {k['mom_pct']:+.1f}%" if k["mom_pct"] is not None else "") + ").",  # null: the previous month was zero
           "변화가 큰 서비스: " + ", ".join(f"{short(s)} {'+' if v > 0 else ''}{usd(v)}" for s, v in same) + "."]
     if same and same[0][0] == EC2:
         ty = sorted(D["ec2_type_growth"][e], key=lambda r: -dv(r) * (1 if total > 0 else -1))[:3]
