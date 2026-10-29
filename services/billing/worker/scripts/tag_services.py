@@ -56,9 +56,18 @@ def account_names(base, entity):
     return out
 
 
+# one trailing "-" segment that norm_name strips (an ID, a counter, an ASG or node-group suffix)
+_SUFFIX = re.compile(r"[0-9a-f]{6,}|\d+|asg|node(group)?s?", re.I)
+
+
 def norm_name(v):
-    v = re.sub(r"(-[0-9a-f]{6,}|-\d+|-asg|-node(group)?s?)+$", "", v.strip(), flags=re.I)
-    return re.sub(r"^eks-", "", v)
+    """Strip trailing ID/ASG/node-group segments and a leading "eks-". Segment by segment rather than one
+    repeated regex, whose overlapping alternatives backtracked exponentially on an untrusted Name tag."""
+    parts = v.strip().split("-")
+    n = len(parts)
+    while n > 1 and _SUFFIX.fullmatch(parts[n - 1]):
+        n -= 1
+    return re.sub(r"^eks-", "", "-".join(parts[:n]))
 
 
 def resources(base, entity):
