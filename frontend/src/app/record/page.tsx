@@ -911,6 +911,12 @@ function RecordPageInner() {
     // A recording (including a remote start) owns the page's meeting flow.
     if (isMeetingFlowBusy()) return;
     if (files.length === 0) return;
+    const initiatingUserId = user?.userId;
+    if (!initiatingUserId) {
+      session.setSpeechError('로그인 상태를 확인한 뒤 다시 업로드해 주세요.');
+      return;
+    }
+    const identity = { expectedUserId: initiatingUserId };
     const audioExtensions = ['.m4a', '.mp3', '.wav', '.webm', '.ogg', '.flac', '.aac', '.mp4', '.caf'];
     const isAudio = (f: File) =>
       f.type.startsWith('audio/') ||
@@ -925,20 +931,20 @@ function RecordPageInner() {
     try {
       const title = meetingTitle || files[0].name.replace(/\.[^.]+$/, '');
       const creationAccountId = await withTimeout(
-        resolveRecordingAccountId(referenceAccountId, user?.userId), 15000, 'Validate preparation account',
+        resolveRecordingAccountId(referenceAccountId, initiatingUserId), 15000, 'Validate preparation account',
       );
-      const meeting = await meetingsApi.create({ title, notes: preparationNotes(contextText), accountId: creationAccountId });
+      const meeting = await meetingsApi.create({ title, notes: preparationNotes(contextText), accountId: creationAccountId }, identity);
       const meetingId = meeting.meetingId;
       if (!meeting.preparationApplied) {
         const initialNotes = preparationNotes(contextText);
-        const capabilities = await meetingsApi.get(meetingId);
+        const capabilities = await meetingsApi.get(meetingId, identity);
         if (initialNotes) {
           if (!capabilities.supportsNotesComparison) throw new Error('준비 메모 저장 기능을 업데이트 중입니다. 잠시 후 다시 업로드해 주세요.');
-          if (capabilities.notes !== initialNotes) await meetingsApi.update(meetingId, { notes: initialNotes, expectedNotes: '', expectedNotesRevision: capabilities.notesRevision || '' });
+          if (capabilities.notes !== initialNotes) await meetingsApi.update(meetingId, { notes: initialNotes, expectedNotes: '', expectedNotesRevision: capabilities.notesRevision || '' }, identity);
         }
         if (creationAccountId) {
           if (!capabilities.supportsPrivateAccountLink) throw new Error('고객 연결 기능을 업데이트 중입니다. 잠시 후 다시 업로드해 주세요.');
-          await meetingAccountApi.link(meetingId, creationAccountId);
+          await meetingAccountApi.link(meetingId, creationAccountId, identity);
         }
       }
 
@@ -960,6 +966,7 @@ function RecordPageInner() {
           meetingId,
           partIndex,
           isMulti ? totalParts : undefined,
+          identity,
         );
 
         await notifyUploadComplete(meetingId, key, 'audio', {
@@ -968,7 +975,7 @@ function RecordPageInner() {
           mimeType: file.type || 'audio/mp4',
           partIndex,
           totalParts: isMulti ? totalParts : undefined,
-        });
+        }, identity);
       }
 
       setUploadProgress('전사 처리 시작...');
