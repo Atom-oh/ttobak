@@ -6,6 +6,7 @@ import { triggerAuthFailure, useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { getIdToken, refreshSession } from '@/lib/auth';
 import { installBillingBridge, type BillingBridgeHost } from '@/lib/billingBridge';
+import { billingFrameSrc } from '@/lib/billingFrame';
 import { getRuntimeConfig } from '@/lib/runtimeConfig';
 
 // Hosts the static Billing dashboard (public/billing-app) in a same-origin
@@ -57,13 +58,14 @@ export default function BillingPage() {
   }
 
   // Only reached after the auth gate (client side), so window is available.
-  const upload = new URLSearchParams(window.location.search).get('view') === 'upload';
+  // ?view=upload picks the upload page; a valid ?acct=<id> preselects that Account.
+  const src = billingFrameSrc(window.location.search);
 
   return (
     <AppLayout activePath="/billing">
       <iframe
         title="Billing"
-        src={upload ? '/billing-app/upload.html' : '/billing-app/index.html'}
+        src={src}
         className="flex-1 w-full min-h-0 border-0 bg-transparent"
       />
     </AppLayout>

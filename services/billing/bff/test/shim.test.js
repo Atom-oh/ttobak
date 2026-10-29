@@ -17,7 +17,7 @@ const json = (status, body, headers = {}) => ({
 });
 
 // responders: url -> array of responses served in order (the last one repeats)
-function load(responders, { authOnly = false } = {}) {
+function load(responders, { authOnly = false, search = '' } = {}) {
   const calls = [];
   const errors = [];
   const host = { tokens: 0, refreshes: 0, signedOut: 0 };
@@ -40,7 +40,7 @@ function load(responders, { authOnly = false } = {}) {
     requestAnimationFrame: (fn) => setImmediate(fn),
     getComputedStyle: () => ({ getPropertyValue: () => '' }),
     history: { replaceState() {} },
-    location: { hash: '', search: '' },
+    location: { hash: '', search },
     document: {
       documentElement: {},
       currentScript: { hasAttribute: (n) => authOnly && n === 'data-auth-only' },
@@ -126,6 +126,35 @@ test('accounts replace TB_ACCOUNTS and pick the first COT account', async () => 
   await win.dash.ready(() => {});
   assert.deepEqual(win.TB_ACCOUNTS.map((a) => a.id), ['B', 'A']);
   assert.equal(win.dash.params().entity, 'A');
+});
+
+test('shim_preselects_listed_account', async () => {
+  const rows = [{ id: 'B', sources: { cur: {} } }, { id: 'A', sources: { cot: {} } }, { id: 'C', sources: {} }];
+  for (const [search, want] of [['?acct=B', 'B'], ['?acct=C', 'C'], ['?x=1&acct=A', 'A']]) {
+    const { win, calls } = load({ [ACCOUNTS]: [json(200, rows)] }, { search });
+    await win.dash.ready(() => {});
+    assert.equal(win.dash.params().entity, want, search); // C has no data and is still preselected
+    win.dash.data('kpis');
+    await new Promise((r) => setImmediate(r));
+    const data = calls.filter((c) => c.url.startsWith('/api/billing/data/'));
+    assert.ok(data.length > 0, search);
+    assert.ok(data.every((c) => !c.url.includes('acct=')), search); // the preselect pins no account in data reads
+    win.dash.setParams({ entity: 'A' });
+    win.dash.resetParams();
+    assert.equal(win.dash.params().entity, want, search);
+  }
+});
+
+test('shim_ignores_unlisted_account', async () => {
+  const rows = [{ id: 'B', sources: { cur: {} } }, { id: 'A', sources: { cot: {} } }];
+  for (const search of ['?acct=Z', '?acct=', '?acct=a%2Fb', '?acct=__proto__', '?acct=constructor', '']) {
+    const { win } = load({ [ACCOUNTS]: [json(200, rows)] }, { search });
+    await win.dash.ready(() => {});
+    assert.equal(win.dash.params().entity, 'A', search);
+  }
+  const { win } = load({ [ACCOUNTS]: [json(200, [])] }, { search: '?acct=A' });
+  await win.dash.ready(() => {});
+  assert.equal(win.dash.params().entity, null);
 });
 
 test('accounts error still initializes with no accounts', async () => {
