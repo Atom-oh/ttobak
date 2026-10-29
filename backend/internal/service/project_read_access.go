@@ -40,7 +40,32 @@ func (s *ProjectService) requireProjectReadAccess(ctx context.Context, user, id 
 	return nil, nil, ErrForbidden
 }
 
-func (s *ProjectService) independentlyReadableMeeting(ctx context.Context, user string, meeting *model.Meeting) (*model.Meeting, error) {
+func (s *ProjectService) revalidateInheritedProjectGrant(ctx context.Context, user, projectID string, grant *accountReadGrant) (bool, error) {
+	current, err := s.repo.GetProject(ctx, projectID)
+	if err != nil {
+		return false, err
+	}
+	if current == nil || !contains(current.AccountIDs, grant.AccountID) {
+		return false, nil
+	}
+	return revalidateAccountReadGrant(ctx, s.repo, grant, user)
+}
+
+func (s *ProjectService) independentlyReadableMeeting(ctx context.Context, user, projectID string, meeting *model.Meeting) (*model.Meeting, error) {
+	current, err := s.repo.GetMeeting(ctx, meeting.UserID, meeting.MeetingID)
+	if err != nil {
+		return nil, err
+	}
+	if current == nil {
+		return nil, nil
+	}
+	if current.UserID != meeting.UserID || current.MeetingID != meeting.MeetingID {
+		return nil, ErrReadingData
+	}
+	if !contains(current.ProjectIDs, projectID) {
+		return nil, nil
+	}
+	meeting = current
 	if meeting.UserID == user {
 		return meeting, nil
 	}

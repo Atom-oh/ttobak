@@ -6,8 +6,10 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ttobak/backend/internal/model"
+	"github.com/ttobak/backend/internal/repository"
 )
 
 func descendantProjectFixture() *mockProjectRepo {
@@ -44,6 +46,47 @@ func (r *descendantProjectListRepo) ListChildAccountIDsPage(_ context.Context, p
 	return ids, nil, nil
 }
 
+type staleDescendantProjectRepo struct {
+	*mockProjectRepo
+	stale               []*model.Meeting
+	unlinkDuringMembers bool
+}
+
+func (r *staleDescendantProjectRepo) BatchGetMeetings(context.Context, []repository.MeetingKey) ([]*model.Meeting, error) {
+	return r.stale, nil
+}
+func (r *staleDescendantProjectRepo) ListProjectMembers(ctx context.Context, id string) ([]model.ProjectMember, error) {
+	if r.unlinkDuringMembers {
+		r.projects[id].AccountIDs = nil
+	}
+	return r.mockProjectRepo.ListProjectMembers(ctx, id)
+}
+
+func TestInheritedProjectRejectsStalePublicationAndRemovedGrantLink(t *testing.T) {
+	t.Setenv(accountDescendantReadsEnv, "1")
+	t.Run("unpublished source", func(t *testing.T) {
+		base := descendantProjectFixture()
+		stale := cloneProjectMeeting(base.meetings[projectMeetingKey("owner", "published")])
+		base.meetings[projectMeetingKey("owner", "published")].SharedToAccount = false
+		base.meetingRefs["project"] = []model.ProjectMeetingRef{{MeetingID: "published", OwnerUserID: "owner"}}
+		s := newProjectServiceWithRepo(&staleDescendantProjectRepo{mockProjectRepo: base, stale: []*model.Meeting{stale}})
+		meetings, err := s.ListProjectMeetings(context.Background(), "reader", "project")
+		if err != nil || len(meetings) != 0 {
+			t.Fatalf("stale published title exposed: %+v/%v", meetings, err)
+		}
+		insights, err := s.GetProjectInsights(context.Background(), "reader", "project", time.Time{}, time.Time{}, nil)
+		if err != nil || len(insights) != 0 {
+			t.Fatalf("stale published insight exposed: %+v/%v", insights, err)
+		}
+	})
+	t.Run("project account removed", func(t *testing.T) {
+		base := descendantProjectFixture()
+		s := newProjectServiceWithRepo(&staleDescendantProjectRepo{mockProjectRepo: base, unlinkDuringMembers: true})
+		if result, err := s.GetProject(context.Background(), "reader", "project"); result != nil || !errors.Is(err, ErrForbidden) {
+			t.Fatalf("removed project account grant exposed metadata: %+v/%v", result, err)
+		}
+	})
+}
 func TestDescendantProjectReadFiltersPrivateSourcesAndDeniesMutation(t *testing.T) {
 	t.Setenv(accountDescendantReadsEnv, "1")
 	r := descendantProjectFixture()

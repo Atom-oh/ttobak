@@ -68,7 +68,9 @@ type ProjectService struct {
 }
 
 func NewProjectService(repo *repository.DynamoDBRepository) *ProjectService {
-	return &ProjectService{repo: repo}
+	// Project metadata/insight reads never need transcript hydration. Inherited
+	// source candidates must not load private spill bytes before authorization.
+	return &ProjectService{repo: repo.MetadataView()}
 }
 
 func newProjectServiceWithRepo(repo projectRepo) *ProjectService {
@@ -170,7 +172,7 @@ func (s *ProjectService) GetProject(ctx context.Context, userID, projectID strin
 		return nil, err
 	}
 	if inherited != nil {
-		if valid, err := revalidateAccountReadGrant(ctx, s.repo, inherited, userID); err != nil || !valid {
+		if valid, err := s.revalidateInheritedProjectGrant(ctx, userID, projectID, inherited); err != nil || !valid {
 			if err != nil {
 				return nil, err
 			}
@@ -786,7 +788,7 @@ func (s *ProjectService) ListProjectMeetings(ctx context.Context, userID, projec
 			continue
 		}
 		if inherited != nil {
-			meeting, err = s.independentlyReadableMeeting(ctx, userID, meeting)
+			meeting, err = s.independentlyReadableMeeting(ctx, userID, projectID, meeting)
 			if err != nil {
 				return nil, err
 			}
@@ -801,7 +803,7 @@ func (s *ProjectService) ListProjectMeetings(ctx context.Context, userID, projec
 		})
 	}
 	if inherited != nil {
-		if valid, err := revalidateAccountReadGrant(ctx, s.repo, inherited, userID); err != nil || !valid {
+		if valid, err := s.revalidateInheritedProjectGrant(ctx, userID, projectID, inherited); err != nil || !valid {
 			if err != nil {
 				return nil, err
 			}
@@ -873,6 +875,14 @@ func (s *ProjectService) ListProjectResearch(ctx context.Context, userID, projec
 			continue
 		}
 		if inherited != nil {
+			current, err := s.repo.GetResearchByID(ctx, id)
+			if err != nil {
+				return nil, err
+			}
+			if current == nil || current.TrashedAt != "" || !contains(current.ProjectIDs, projectID) {
+				continue
+			}
+			research = *current
 			allowed, err := s.independentlyReadableResearch(ctx, userID, research)
 			if err != nil {
 				return nil, err
@@ -888,7 +898,7 @@ func (s *ProjectService) ListProjectResearch(ctx context.Context, userID, projec
 		})
 	}
 	if inherited != nil {
-		if valid, err := revalidateAccountReadGrant(ctx, s.repo, inherited, userID); err != nil || !valid {
+		if valid, err := s.revalidateInheritedProjectGrant(ctx, userID, projectID, inherited); err != nil || !valid {
 			if err != nil {
 				return nil, err
 			}
@@ -922,7 +932,7 @@ func (s *ProjectService) GetProjectInsights(ctx context.Context, userID, project
 			continue
 		}
 		if inherited != nil {
-			meeting, err = s.independentlyReadableMeeting(ctx, userID, meeting)
+			meeting, err = s.independentlyReadableMeeting(ctx, userID, projectID, meeting)
 			if err != nil {
 				return nil, err
 			}
@@ -961,7 +971,7 @@ func (s *ProjectService) GetProjectInsights(ctx context.Context, userID, project
 		}
 	}
 	if inherited != nil {
-		if valid, err := revalidateAccountReadGrant(ctx, s.repo, inherited, userID); err != nil || !valid {
+		if valid, err := s.revalidateInheritedProjectGrant(ctx, userID, projectID, inherited); err != nil || !valid {
 			if err != nil {
 				return nil, err
 			}

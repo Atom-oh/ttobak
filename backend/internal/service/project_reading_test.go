@@ -233,6 +233,42 @@ func TestProjectReadingAuthorizationScansBoundedWindowsAndPinsSelectedGrant(t *t
 	}
 }
 
+func TestProjectReadingDirectLinkedAccountWinsOverEarlierInheritedGrant(t *testing.T) {
+	t.Setenv(accountDescendantReadsEnv, "1")
+	for _, acrossPages := range []bool{false, true} {
+		t.Run(fmt.Sprint(acrossPages), func(t *testing.T) {
+			s, r := projectReadingFixture()
+			r.projects["p"].OwnerUserID = "owner"
+			r.projects["p"].AccountIDs = []string{"child"}
+			if acrossPages {
+				for i := 0; i < 55; i++ {
+					r.projects["p"].AccountIDs = append(r.projects["p"].AccountIDs, fmt.Sprintf("unrelated-%02d", i))
+				}
+			}
+			r.projects["p"].AccountIDs = append(r.projects["p"].AccountIDs, "direct")
+			access := newDescendantAccessRepo()
+			r.accounts = access.accounts
+			r.accountMembers = map[string]*model.AccountMember{"parent|reader": access.members["parent/reader"], "direct|reader": {AccountID: "direct", UserID: "reader", Role: model.RoleAM}}
+			q := url.Values{"section": {"meetings"}, "pageSize": {"8000"}}
+			for n := 0; n < 4; n++ {
+				page := readProjectPage(t, s, q)
+				if page["authorizationPending"] == true {
+					q.Set("cursor", page["page"].(map[string]interface{})["nextCursor"].(string))
+					continue
+				}
+				var meetings []model.ProjectMeetingRefDTO
+				if err := json.Unmarshal([]byte(page["dataJson"].(string)), &meetings); err != nil {
+					t.Fatal(err)
+				}
+				if len(meetings) != 10 {
+					t.Fatalf("stronger direct project grant lost its independently permitted source metadata: %+v", meetings)
+				}
+				return
+			}
+			t.Fatal("direct grant scan failed to complete")
+		})
+	}
+}
 func TestProjectReadingPinsAccountPrivacyVersion(t *testing.T) {
 	for _, duringQuery := range []bool{false, true} {
 		t.Run(fmt.Sprintf("during_query_%t", duringQuery), func(t *testing.T) {

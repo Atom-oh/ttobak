@@ -29,10 +29,11 @@ func NewProjectReadingService(repo ProjectReadingRepository) *ProjectReadingServ
 
 type projectReadingCursor struct {
 	sectionReadingCursor
-	GrantKind string `json:"g"`
-	Account   string `json:"a"`
-	Grant     string `json:"h"`
-	Scan      int    `json:"s"`
+	GrantKind          string `json:"g"`
+	Account            string `json:"a"`
+	Grant              string `json:"h"`
+	Scan               int    `json:"s"`
+	InheritedCandidate string `json:"i,omitempty"`
 }
 
 func projectReadingPhases(section string) []string {
@@ -91,6 +92,9 @@ func (s *ProjectReadingService) grant(ctx context.Context, user string, p *model
 
 func (s *ProjectReadingService) authorize(ctx context.Context, user string, p *model.Project, c *projectReadingCursor) (bool, error) {
 	if c.GrantKind != "" {
+		if c.InheritedCandidate != "" {
+			return false, ErrInvalidReadingCursor
+		}
 		grant, err := s.grant(ctx, user, p, *c)
 		if err != nil {
 			return false, err
@@ -101,6 +105,9 @@ func (s *ProjectReadingService) authorize(ctx context.Context, user string, p *m
 		return true, nil
 	}
 	if c.Grant != "" || c.Account != "" || c.Scan < 0 || c.Scan > len(p.AccountIDs) || c.Offset != 0 || c.After != "" || c.Revision != "" {
+		return false, ErrInvalidReadingCursor
+	}
+	if c.InheritedCandidate != "" && !contains(p.AccountIDs[:c.Scan], c.InheritedCandidate) {
 		return false, ErrInvalidReadingCursor
 	}
 	if p.OwnerUserID == user {
@@ -126,7 +133,13 @@ func (s *ProjectReadingService) authorize(ctx context.Context, user string, p *m
 				lookupErr = err
 				continue
 			}
-			if grant != nil && grant.Member.UserID == user {
+			if validAccountReadIdentity(grant, id, user) {
+				if grant.inherited() {
+					if c.InheritedCandidate == "" {
+						c.InheritedCandidate = id
+					}
+					continue
+				}
 				c.GrantKind = "account"
 				c.Account = id
 				break
@@ -137,10 +150,14 @@ func (s *ProjectReadingService) authorize(ctx context.Context, user string, p *m
 				return false, lookupErr
 			}
 			c.Scan = end
-			if end == len(p.AccountIDs) {
+			if end < len(p.AccountIDs) {
+				return false, nil
+			}
+			if c.InheritedCandidate == "" {
 				return false, ErrForbidden
 			}
-			return false, nil
+			c.GrantKind = "account"
+			c.Account = c.InheritedCandidate
 		}
 	}
 	grant, err := s.grant(ctx, user, p, *c)
@@ -149,6 +166,7 @@ func (s *ProjectReadingService) authorize(ctx context.Context, user string, p *m
 	}
 	c.Grant = grant
 	c.Scan = 0
+	c.InheritedCandidate = ""
 	return true, nil
 }
 
@@ -262,7 +280,21 @@ func (s *ProjectReadingService) payload(ctx context.Context, user string, p *mod
 	var value interface{}
 	switch c.Phase {
 	case "metadata":
-		raw, _ := json.Marshal(projectResponse(p, nil))
+		response := projectResponse(p, nil)
+		if c.GrantKind == "account" {
+			grant, err := resolveAccountReadGrant(ctx, s.repo, c.Account, user)
+			if err != nil {
+				return "", "", err
+			}
+			if !validAccountReadIdentity(grant, c.Account, user) {
+				return "", "", ErrForbidden
+			}
+			if grant.inherited() {
+				response.AccessPermission = model.PermissionRead
+				response.InheritedFromAccountID = grant.InheritedFromAccountID
+			}
+		}
+		raw, _ := json.Marshal(response)
 		var metadata map[string]interface{}
 		if json.Unmarshal(raw, &metadata) != nil {
 			return "", "", ErrReadingData

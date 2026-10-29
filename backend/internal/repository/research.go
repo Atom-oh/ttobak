@@ -103,7 +103,8 @@ func (r *ResearchRepository) CreateResearch(ctx context.Context, research *model
 // PK: RESEARCH#{researchId}, SK: CONFIG
 func (r *ResearchRepository) GetResearch(ctx context.Context, researchId string) (*model.Research, error) {
 	result, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
-		TableName: aws.String(r.tableName),
+		TableName:      aws.String(r.tableName),
+		ConsistentRead: aws.Bool(true),
 		Key: map[string]types.AttributeValue{
 			"PK": &types.AttributeValueMemberS{Value: model.PrefixResearch + researchId},
 			"SK": &types.AttributeValueMemberS{Value: model.PrefixConfig},
