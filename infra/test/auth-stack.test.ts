@@ -44,7 +44,14 @@ describe('AuthStack', () => {
     }[];
     expect(clients.length).toBeGreaterThanOrEqual(5);
     // Unset WriteAttributes means every mutable attribute is user-writable.
-    for (const c of clients) expect(c.Properties.WriteAttributes).toEqual(['name']);
+    // `email` is required in the pool, so Cognito rejects a client that cannot write it.
+    for (const c of clients) expect([...(c.Properties.WriteAttributes ?? [])].sort()).toEqual(['email', 'name']);
+  });
+
+  test('an email change waits for verification before it applies', () => {
+    template.hasResourceProperties('AWS::Cognito::UserPool', {
+      UserAttributeUpdateSettings: { AttributesRequireVerificationBeforeUpdate: ['email'] },
+    });
   });
 
   test('the deployed AuthStack enables termination protection in its assembly', () => {

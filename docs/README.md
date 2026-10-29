@@ -74,6 +74,7 @@ python3 scripts/docs/sync_review_context.py
 python3 scripts/docs/check_docs.py
 ```
 
+- [Cognito app client write attributes and self-service email change](decisions/ADR-057-cognito-client-write-attributes.md)
 - [Browser recording recovery and retention](decisions/ADR-048-browser-recording-backups.md)
 - [Private audio crop worker](../backend/whisper/AUDIO_CROP.md)
 - [Private audio crops and activation](decisions/ADR-047-private-audio-crops.md)
