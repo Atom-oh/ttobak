@@ -39,3 +39,19 @@ jobs:
         run: |
           npm ci --no-audit --no-fund
           python3 -m unittest test_build_page -v
+
+  worker:
+    runs-on: ttobak-arm
+    # Same fork guard as the `test` job: never run fork-PR code on this runner.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Run worker tests
+        working-directory: services/billing/worker
+        run: |
+          python3 -m pip install -r requirements-ingest.txt -r requirements-agents.txt -r requirements-dev.txt
+          python3 -m unittest discover -s tests -v

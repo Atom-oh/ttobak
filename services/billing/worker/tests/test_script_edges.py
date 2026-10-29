@@ -1,0 +1,207 @@
+"""Dataset scripts on edge-shaped inputs (empty summaries, missing sheets, NaN cells, mixed plan types, short tables,
+mismatched periods). Synthetic data only."""
+import csv, os, sys, tempfile, unittest
+from unittest import mock
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "..", "scripts"))
+
+from fileutil import jdump, jload  # noqa: E402
+
+E = "acct-a"
+COH_HDR = ["", "Report Name", "recommendationId", "accountId", "actionType", "currentResourceType", "region",
+           "currentResourceSummary", "recommendedResourceSummary", "estimatedMonthlyCost", "estimatedMonthlySavings",
+           "resourceArn", "tags"]
+
+
+def coh_csv(path, rows):
+    """rows: dicts over COH_HDR names (missing cells empty); a row given as a list is written as is."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(COH_HDR)
+        for r in rows:
+            w.writerow(r if isinstance(r, list) else [r.get(h, E if h == "Report Name" else "") for h in COH_HDR])
+
+
+class BedrockTags(unittest.TestCase):
+    def test_empty_resource_summary(self):
+        import bedrock_tags
+        recs = [{"currentResourceType": "NatGateway", "currentResourceSummary": "", "_cost": 5.0, "_tags": {"app": "a"}},
+                {"currentResourceType": "NatGateway", "currentResourceSummary": "  ", "_cost": 3.0, "_tags": {}},
+                {"currentResourceType": "Ec2Instance", "currentResourceSummary": "", "_cost": 2.0, "_tags": {"app": "a"}},
+                {"currentResourceType": "Ec2Instance", "currentResourceSummary": "g5.xlarge", "_cost": 7.0, "_tags": {"app": "a"}}]
+        with mock.patch.object(bedrock_tags.C, "recs", return_value=recs):
+            out = bedrock_tags.tags(E)
+        self.assertEqual(out["gpu_instances"], [["g5.xlarge", 7]])
+        self.assertEqual(out["keys"]["app"]["values"][0]["gpu_cost"], 7)
+
+
+class SpPurchase(unittest.TestCase):
+    def test_compute_sp_lever_ignores_other_plan_types(self):
+        import build_data
+        rec = lambda t, s, h, p: {"savingsPlansType": t, "termInYears": "THREE_YEARS", "paymentOption": "ALL_UPFRONT",  # noqa: E731
+                                  "estimatedMonthlySavingsAmount": s, "hourlyCommitmentToPurchase": h,
+                                  "estimatedSavingsPercentage": p}
+        rows = [rec("COMPUTE_SP", "100", "1.5", "20"), rec("EC2_INSTANCE_SP", "200", "3", "40")]
+        self.assertEqual(build_data.sp_best(rows, "THREE_YEARS", "ALL_UPFRONT"),
+                         {"monthly_savings": 100, "hourly": 1.5, "savings_pct": 20.0})
+        # per-account Compute SP rows: one purchase, summed; the rate is savings over the covered on-demand cost
+        rows.append(rec("COMPUTE_SP", "300", "2.5", "30"))
+        self.assertEqual(build_data.sp_best(rows, "THREE_YEARS", "ALL_UPFRONT"),
+                         {"monthly_savings": 400, "hourly": 4.0, "savings_pct": round(400 / (500 + 1000) * 100, 1)})
+        self.assertIsNone(build_data.sp_best(rows[1:2], "THREE_YEARS", "ALL_UPFRONT"))
+        self.assertIsNone(build_data.sp_best(rows, "ONE_YEAR", "NO_UPFRONT"))
+
+
+class Accounts(unittest.TestCase):
+    def test_missing_linked_account_sheet(self):
+        import accounts
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as d:
+            os.makedirs(os.path.join(d, E))
+            self.assertEqual(accounts.linked_accounts(d, E), ({}, {}))
+            with mock.patch.object(accounts, "ENTITIES", [E]):
+                accounts.main(d, d)
+            self.assertEqual(jload(os.path.join(d, "accounts.json")), [])
+
+
+    def test_linked_account_short_rows(self):
+        import accounts
+        hdr = ["", "Report Name", "timePeriod.start", "keys", "metrics.AmortizedCost.amount", "Linked Account", "Name"]
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as d:
+            os.makedirs(os.path.join(d, E))
+            with open(os.path.join(d, E, "Data_Linked_Account_Costs.csv"), "w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                w.writerow(hdr)
+                w.writerow(["", E, "2026-09-01", "['111111111111']", "5", "['111111111111']", "dev"])
+                w.writerow(["", E, "2026-09-01", "['222222222222']"])  # cut after keys: no cost cell
+                w.writerow(["", E, "2026-09-01", "['111111111111']", "2", "['111111111111']"])  # no name cell
+            with mock.patch.object(accounts, "PRESENT", ["2026-09"]):
+                cost, names = accounts.linked_accounts(d, E)
+        self.assertEqual({k: dict(v) for k, v in cost.items()},
+                         {"111111111111": {"2026-09": 7.0}, "222222222222": {"2026-09": 0.0}})
+        self.assertEqual(names, {"111111111111": "dev"})
+
+
+class TagServices(unittest.TestCase):
+    def test_nan_cost_and_short_row(self):
+        import tag_services
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as d:
+            coh_csv(os.path.join(d, E, "Data_COH_All.csv"), [
+                {"recommendationId": "r1", "currentResourceType": "Ec2Instance", "estimatedMonthlyCost": "nan", "tags": "nan"},
+                {"recommendationId": "r2", "currentResourceType": "EbsVolume", "estimatedMonthlyCost": "4.5"},
+                ["", E, "r3", "111111111111"]])  # a short trailing row
+            rs = tag_services.resources(d, E)
+            self.assertEqual([r["cost"] for r in rs], [0.0, 4.5, 0.0])
+            with mock.patch.object(tag_services, "ENTITIES", [E]):
+                tag_services.main(d, d)  # the reconciliation holds (no NaN)
+            with open(os.path.join(d, "tag_services.json"), encoding="utf-8") as f:
+                self.assertNotIn("NaN", f.read())
+
+    ODD_TAGS = ["{'key': 'app', 'value': 'a'}", "7", "None", "[1, 'x', None]", "[{'value': 'v'}]", "[{'key': 'app'}]",
+                "[{'key': 3, 'value': 'v'}]", "[{'key': 'app', 'value': 5}]", "[{'key': 'app'", "{'a': [1, 2]",
+                "[" * 5000 + "]" * 5000]
+
+    def odd_coh(self, d):
+        rows = [{"recommendationId": "r%d" % i, "currentResourceType": "Ec2Instance", "actionType": "Rightsize",
+                 "resourceArn": "arn:x", "estimatedMonthlyCost": "1", "tags": t} for i, t in enumerate(self.ODD_TAGS)]
+        rows.append({"recommendationId": "ok", "currentResourceType": "Ec2Instance", "actionType": "Rightsize",
+                     "resourceArn": "arn:x", "estimatedMonthlyCost": "2",
+                     "tags": repr([{"key": "app", "value": "svc"}, {"key": "bad"}, "junk"])})
+        coh_csv(os.path.join(d, E, "Data_COH_All.csv"), rows)
+
+    def test_odd_tag_cells_are_untagged(self):
+        import tag_services
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as d:
+            self.odd_coh(d)
+            rs = tag_services.resources(d, E)
+            self.assertEqual([r["tags"] for r in rs], [{}] * len(self.ODD_TAGS) + [{"app": "svc"}],
+                             "a non-list cell is untagged; an odd item is skipped")
+            with mock.patch.object(tag_services, "ENTITIES", [E]):
+                tag_services.main(d, d)
+            got = {s["service"]: s["resources"] for s in jload(os.path.join(d, "tag_services.json"), encoding="utf-8")}
+            self.assertEqual(got, {"svc": 1, "(태그 없음)": len(self.ODD_TAGS)})
+
+    def test_odd_tag_cells_in_coh_by_workload(self):
+        import cot360_metrics
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as d:
+            self.odd_coh(d)
+            got = {r["workload"]: r["recs"] for r in cot360_metrics.coh_by_workload(d, E)}
+            self.assertEqual(got, {"svc": 1, "(태그 없음)": len(self.ODD_TAGS)})
+
+    def test_new_workload_needs_most_resources_recent(self):
+        import tag_services
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as d:
+            tg = lambda created=None: repr([{"key": "app", "value": "svc"}]  # noqa: E731
+                                           + ([{"key": "x/created-at", "value": created}] if created else []))
+            coh_csv(os.path.join(d, E, "Data_COH_All.csv"), [
+                {"recommendationId": "r%d" % i, "currentResourceType": "Ec2Instance", "estimatedMonthlyCost": "1",
+                 "tags": tg("2026-09-01" if i == 0 else None)} for i in range(3)])
+            with mock.patch.object(tag_services, "ENTITIES", [E]), mock.patch.object(tag_services, "NEW_SINCE", "2026-07"):
+                tag_services.main(d, d)
+            s = jload(os.path.join(d, "tag_services.json"), encoding="utf-8")[0]
+            self.assertEqual(s["service"], "svc")
+            self.assertEqual(s["created_recent_pct"], 33.3, "share of all the workload's resources")
+            self.assertFalse(s["is_new"])
+
+    def test_account_names_short_row(self):
+        import tag_services
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as d:
+            os.makedirs(os.path.join(d, E))
+            with open(os.path.join(d, E, "Data_Linked_Account_Costs.csv"), "w", newline="", encoding="utf-8") as f:
+                csv.writer(f).writerows([["", "Report Name", "keys", "Linked Account", "Name"],
+                                         ["", E, "x", "111111111111", "acct one"],
+                                         ["", E, "x", "222222222222"]])  # trailing empty Name cell dropped
+            self.assertEqual(tag_services.account_names(d, E), {"111111111111": "acct one"})
+
+
+# xlsx2csv pads a row only to its last present cell: an untagged resource's row ends before the tags column
+SHORT_COH = ["", E, "r1", "111111111111", "Rightsize", "Ec2Instance", "", "m5.large", "m5.small", "10", "2", "arn:r1"]
+
+
+class ShortCohRows(unittest.TestCase):
+    def test_coh_resources_short_row(self):
+        import accounts
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as d:
+            coh_csv(os.path.join(d, E, "Data_COH_All.csv"), [SHORT_COH])
+            rs = accounts.coh_resources(d, E)
+        self.assertEqual([(r["account"], r["instance_type"], r["region"], r["cost"]) for r in rs],
+                         [("111111111111", "m5.large", "—", 10.0)])
+
+    def test_coh_by_workload_short_row(self):
+        import cot360_metrics
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as d:
+            coh_csv(os.path.join(d, E, "Data_COH_All.csv"), [SHORT_COH])
+            rs = cot360_metrics.coh_by_workload(d, E)
+        self.assertEqual([(r["recs"], r["est_savings"], r["est_cost"], r["top_changes"]) for r in rs],
+                         [(1, 2.0, 10.0, ["m5.large→m5.small×1"])])
+
+
+class Sessions(unittest.TestCase):
+    def test_lambda_dt_reads_month_columns(self):
+        import build_data, sessions
+        months = [None, None, None, None, "2026-08", "2026-09"]
+        j = {"headers": ["keys", "2026-08", "2026-09", "Rank"],
+             "rows": [["APN2-DataTransfer-Out-Bytes", 3, 4, 1], ["APN2-Request", 9, 9, 2]]}
+        with mock.patch.object(build_data, "M", months), mock.patch.object(sessions, "hj", return_value=j):
+            self.assertEqual(sessions.lambda_dt(E), [0, 0, 0, 0, 3, 4])
+
+
+class MergeDashboard(unittest.TestCase):
+    def test_different_periods_refused(self):
+        import merge_datasets
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as t:
+            ins = []
+            for e, m in (("acct-a", "2026-03"), ("acct-b", "2026-04")):
+                p = os.path.join(t, e + ".json")
+                jdump({"months": [m], "entities": {e: {"k": 1}}}, p, "w")
+                ins.append(p)
+            out = os.path.join(t, "all.json")
+            with self.assertRaises(SystemExit) as cm:
+                merge_datasets.merge_dashboard(out, ins)
+            self.assertNotEqual(cm.exception.code, 0)
+            self.assertFalse(os.path.exists(out))
+
+
+if __name__ == "__main__":
+    unittest.main()
