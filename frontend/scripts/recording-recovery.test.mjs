@@ -182,6 +182,11 @@ function recoveryHook(meeting, apiOverrides = {}) {
         '@/lib/api': { ApiError, meetingsApi: { get: async (...args) => { requests.push(args); if (meeting instanceof Error) throw meeting; return typeof meeting === 'function' ? meeting() : meeting; }, ...apiOverrides } },
         '@/lib/meetingReferences': { codePointLength: value => [...value].length, MAX_MEETING_NOTES: 32000 },
         '@/lib/recordingNotes': { RecordingNotes: class { initialize() {} reset() {} async persist() {} conflict() { return null; } } },
+        '@/lib/recordingAccount': load('recordingAccount', { require(dependency) {
+          if (dependency === './api') return { accountApi: { get: () => assert.fail('Recovery without an Account must not request one') } };
+          if (dependency === './accountAccess') return load('accountAccess');
+          assert.fail(dependency);
+        } }),
         '@/lib/meetingNotes': {}, '@/lib/upload': {}, '@/lib/tauri': { isCommandNotFound: () => false },
         '@/lib/browserRecordingBackup': {},
       };

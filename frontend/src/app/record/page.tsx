@@ -30,6 +30,7 @@ import { useAudioDevices } from '@/hooks/useAudioDevices';
 import { useRecordingSession } from '@/hooks/useRecordingSession';
 import { useLiveSummary } from '@/hooks/useLiveSummary';
 import { usePostRecording, withTimeout } from '@/hooks/usePostRecording';
+import { resolveRecordingAccountId } from '@/lib/recordingAccount';
 import { uploadsApi, meetingsApi, meetingAccountApi, kbApi } from '@/lib/api';
 import { uploadToS3, notifyUploadComplete, formatFileSize, putWithProgress } from '@/lib/upload';
 import { registerNativeControlHandler } from '@/lib/nativeControl';
@@ -923,7 +924,10 @@ function RecordPageInner() {
     setUploadProgress('미팅 생성 중...');
     try {
       const title = meetingTitle || files[0].name.replace(/\.[^.]+$/, '');
-      const meeting = await meetingsApi.create({ title, notes: preparationNotes(contextText), accountId: referenceAccountId || undefined });
+      const creationAccountId = await withTimeout(
+        resolveRecordingAccountId(referenceAccountId, user?.userId), 15000, 'Validate preparation account',
+      );
+      const meeting = await meetingsApi.create({ title, notes: preparationNotes(contextText), accountId: creationAccountId });
       const meetingId = meeting.meetingId;
       if (!meeting.preparationApplied) {
         const initialNotes = preparationNotes(contextText);
@@ -932,9 +936,9 @@ function RecordPageInner() {
           if (!capabilities.supportsNotesComparison) throw new Error('준비 메모 저장 기능을 업데이트 중입니다. 잠시 후 다시 업로드해 주세요.');
           if (capabilities.notes !== initialNotes) await meetingsApi.update(meetingId, { notes: initialNotes, expectedNotes: '', expectedNotesRevision: capabilities.notesRevision || '' });
         }
-        if (referenceAccountId) {
+        if (creationAccountId) {
           if (!capabilities.supportsPrivateAccountLink) throw new Error('고객 연결 기능을 업데이트 중입니다. 잠시 후 다시 업로드해 주세요.');
-          await meetingAccountApi.link(meetingId, referenceAccountId);
+          await meetingAccountApi.link(meetingId, creationAccountId);
         }
       }
 

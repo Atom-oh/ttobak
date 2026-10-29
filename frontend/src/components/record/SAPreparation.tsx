@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { accountApi, docApi } from '@/lib/api';
+import { isEditableAccount } from '@/lib/accountAccess';
 import { appendMeetingNotes, codePointLength, preparationNotes, SA_PREPARATION_TEMPLATE } from '@/lib/meetingReferences';
 import type { AccountDocument, AccountSummary } from '@/types/meeting';
 
@@ -38,7 +39,7 @@ export function SAPreparation({ value, onChange, title, onTitleChange, accountId
 
   const loadCatalog = useCallback(async () => {
     const results = await Promise.allSettled([accountApi.list(), docApi.list('prep')]);
-    setAccounts(results[0].status === 'fulfilled' ? results[0].value.accounts || [] : []);
+    setAccounts(results[0].status === 'fulfilled' ? (results[0].value.accounts || []).filter(isEditableAccount) : []);
     setDocuments(results[1].status === 'fulfilled' ? results[1].value.documents || [] : []);
     setCatalogError(results.some((result) => result.status === 'rejected') ? '고객 또는 준비 문서 목록을 불러오지 못했습니다.' : '');
   }, []);
@@ -98,10 +99,10 @@ export function SAPreparation({ value, onChange, title, onTitleChange, accountId
       </div>
       <label className="mt-4 block text-xs font-semibold text-slate-600 dark:text-text-muted">
         고객 연결 · 팀 공유는 별도
-        <select aria-label="준비할 고객" value={accountId} onChange={(event) => onAccountChange(event.target.value)} disabled={disabled}
+        <select aria-label="준비할 고객" value={accounts.some(account => account.accountId === accountId && isEditableAccount(account)) ? accountId : ''} onChange={(event) => onAccountChange(event.target.value)} disabled={disabled}
           className="mt-1.5 w-full rounded-lg border border-slate-200 bg-transparent px-3 py-2 text-sm dark:border-white/10 dark:text-text-main">
           <option value="">고객 선택 없이 준비</option>
-          {accounts.map((account) => <option key={account.accountId} value={account.accountId}>{account.name}</option>)}
+          {accounts.filter(isEditableAccount).map((account) => <option key={account.accountId} value={account.accountId}>{account.name}</option>)}
         </select>
       </label>
       <textarea aria-label="SA 사전 준비 메모" value={value} onChange={(event) => onChange(event.target.value)} disabled={disabled} maxLength={30000}
