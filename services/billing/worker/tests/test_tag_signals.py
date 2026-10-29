@@ -75,6 +75,12 @@ class SignalRules(unittest.TestCase):
          [val("x", mo(1000, 1000, 1000, 1300, 1000, 1600),
               {EC2: mo(*[1000.0] * 6), BR: mo(None, None, None, 300, None, 600)})], 10000.0,
          {"x": {"kinds": ["신규 서비스"], "delta": 500.0, "new_services": [BR], "growth_pct": 45.45}}, None),
+        # rule 6: an earlier large negative month (credit, true-up) is prior activity, not absence
+        ("an earlier large credit is not absence", MS, FULL, [val("x", mo(-100000, None, None, None, None, 1000))],
+         10000.0, {}, None),
+        ("an earlier large service credit is not a new service", MS, FULL,
+         [val("x", mo(1000, 1000, 1000, 1000, 1000, 1300),
+              {EC2: mo(*[1000.0] * 6), BR: mo(-50000, None, None, None, None, 300)})], 10000.0, {}, None),
         # rule 2: a month without coverage is removed, never read as 0 or as absence
         ("uncovered early months are not absence", MS, NOCOV, [val("x", mo(None, None, None, 1000, 1000, 1000))],
          10000.0, {}, None),

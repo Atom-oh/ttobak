@@ -23,7 +23,8 @@ it never inflates the current run rate and never reads flat spend as growth.
    delta = now - base; growth_pct = (now / base - 1) * 100 when base > 0 and the value is not 신규, else None.
    share_pct = now / total_last * 100 when total_last > 0, else None.
 5. floor = max(MIN_ABS, MIN_SHARE * total_last), compared with rates (after coverage scaling), never raw costs.
-6. 신규 (new): now >= floor and every early covered month has rate <= NEW_EPS * now, where early = the covered months
+6. 신규 (new): now >= floor and every early covered month has |rate| <= NEW_EPS * now (an earlier large credit is
+   prior activity, not absence), where early = the covered months
    before the last RECENT covered ones (with RECENT or fewer covered months: the first covered month). At least one
    early month is needed, so a single covered month is never new.
 7. 급증 (surge), only if not 신규: now >= floor, base > 0, now >= base * (1 + SURGE) and now - base >= floor. A value
@@ -58,7 +59,8 @@ def _finite(x):
 def _absent_before(rate, months, last_rate):
     """Rule 6: no meaningful cost in the early covered months (months: the covered months, rate: their rates)."""
     early = months[:-RECENT] if len(months) > RECENT else months[:1] if len(months) > 1 else []
-    return bool(early) and all(rate[m] <= NEW_EPS * last_rate for m in early)
+    # magnitude, not sign: a large credit or true-up earlier is prior activity, not absence
+    return bool(early) and all(abs(rate[m]) <= NEW_EPS * last_rate for m in early)
 
 
 def classify(entity, months, coverage, values, total_last):
