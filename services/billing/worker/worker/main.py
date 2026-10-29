@@ -81,7 +81,7 @@ class MissingAccount(Exception):
 
 
 class StaleVersion(Exception):
-    """META already points at a newer version."""
+    """META already points at a newer version (CUR: no longer at the predecessor this run merged onto)."""
 
 
 class ClaimLost(Exception):
@@ -486,6 +486,7 @@ class Job:
         self.prefix = "accounts/%s/" % self.acct
         self.token = uuid.uuid4().hex
         self.lease_exp = 0  # the rerun lease's expiresAt (epoch s) while we hold it
+        self.cur_prev = None  # CUR: (present, value) of current_cur in the META this run read its inputs from
 
     # ---------- children ----------
 
@@ -864,6 +865,7 @@ class Job:
     def cur_inputs(self, s3, meta):
         prev = cot_spend = None
         cur = meta.get("current_cur")
+        self.cur_prev = ("current_cur" in meta, cur)
         if isinstance(cur, str) and VERSION_RE.fullmatch(cur):
             private_dir(self.path("prev"))
             if s3_download(s3, self.bucket, self.s3_key("cur/%s/normalized/part-0.parquet" % cur),
@@ -945,10 +947,19 @@ class Job:
         period = self.period()
         s = self.src
         # one transaction: META points at the version only if UP is still ours and running (no discarded version
-        # ever becomes current); <= keeps a redelivered publish of the same version idempotent
+        # ever becomes current); <= (or = :v) keeps a redelivered publish of the same version idempotent
+        vals = {":v": self.version_id, ":p": period, ":a": ai, ":nm": name}
+        cond = "attribute_exists(pk) AND (attribute_not_exists(current_%s) OR current_%s <= :v)" % (s, s)
+        if s == "cur":
+            # a CUR version merges the months of its predecessor: publish only over exactly the predecessor this run
+            # read (a concurrent run, e.g. after the source lock expired, may have published since), never by id order
+            present, prev = self.cur_prev or (False, None)
+            if present:
+                vals[":prev"] = prev
+            cond = "attribute_exists(pk) AND (current_cur = :v OR %s)" % (
+                "current_cur = :prev" if present else "attribute_not_exists(current_cur)")
         meta = self.req("META", "SET current_%s = :v, period_%s = :p, ai_%s = :a, #nm = if_not_exists(#nm, :nm)" % (s, s, s),
-                        {":v": self.version_id, ":p": period, ":a": ai, ":nm": name}, {"#nm": "name"},
-                        "attribute_exists(pk) AND (attribute_not_exists(current_%s) OR current_%s <= :v)" % (s, s))
+                        vals, {"#nm": "name"}, cond)
         up = self.up_req("SET #st = :st, published = :t, versionId = :v, period = :p, ai = :a, steps.#n = :done",
                          {":st": "done", ":t": True, ":v": self.version_id, ":p": period, ":a": ai, ":done": "done"},
                          {"#n": "publish"})
@@ -1133,7 +1144,15 @@ def _install_sigterm():
         return None
 
 
+def ignore_shared_aws_files():
+    """The untrusted children run as the worker's uid and could write its HOME: a planted ~/.aws/config (endpoint_url,
+    region, credential_process) or credentials file must never configure the worker's own clients, including the data
+    client re-created near credential expiry. The image ENV sets the same; this holds without it."""
+    os.environ["AWS_CONFIG_FILE"] = os.environ["AWS_SHARED_CREDENTIALS_FILE"] = os.devnull
+
+
 def main(env=os.environ, s3=None, ddb=None, sts=None, runner=subprocess.Popen, s3_factory=None, harden=harden_process):
+    ignore_shared_aws_files()  # before any client or child
     if not harden():
         return 2  # nothing read or written
     key = env.get("JOB_KEY") or ""
