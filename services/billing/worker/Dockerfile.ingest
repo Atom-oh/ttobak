@@ -3,7 +3,9 @@
 # No unzip/git: uploads are opened only by stage_cot.py / stage_cur.py (zipfile), the agent cache is passed explicitly.
 FROM public.ecr.aws/docker/library/python:3.12-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 WORK_ROOT=/work HOME=/home/worker
+# HOME is writable by the untrusted children (same uid): no shared AWS config or credentials file is ever read
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 WORK_ROOT=/work HOME=/home/worker \
+    AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null
 
 COPY requirements-ingest.txt /app/requirements-ingest.txt
 RUN pip install --no-cache-dir -r /app/requirements-ingest.txt \
