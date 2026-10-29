@@ -80,12 +80,14 @@ class RunAccount(Tmp):
         self.assertEqual(r.returncode, 4, r.stderr[-500:])
         self.assertEqual(self.steps(r)[-1], "STEP extract failed")
 
-    def test_crash_is_exit_4(self):
+    def test_malformed_cot360_html_is_an_invalid_upload(self):
+        # html2json reads the untrusted page like the other converters: a broken table is exit 3 with a reason
         self.upload([HDR, ["", "OrigCo", "['EC2']", "2026-03-01", "5"]],
                     b'<script id="json-x" type="application/json">{not json</script>')
         p = run_account(self.zip, self.work, os.path.join(self.work, "out"), "acct-a")
-        self.assertEqual(p.returncode, 4, p.stderr[-500:])
+        self.assertEqual(p.returncode, 3, p.stderr[-500:])
         self.assertEqual(self.steps(p)[-1], "STEP extract failed")
+        self.assertIn('"reason": "COT360 HTML을 읽을 수 없습니다"', p.stdout)
 
     def test_entry_count_includes_skipped(self):
         make_zip(self.zip, {**five(), **{f"__MACOSX/._{i}": b"" for i in range(10)}})
@@ -95,7 +97,7 @@ class RunAccount(Tmp):
     def test_stdout_carries_only_steps_and_reasons(self):
         sh = rd(RUN_ACCOUNT, encoding="utf-8")
         for line in sh.splitlines():
-            if re.search(r'python3 -I "\$S/', line) and not re.search(r"period\.py|stage_cot\.py|xlsx2csv\.py", line):
+            if re.search(r'python3 -I "\$S/', line) and not re.search(r"period\.py|stage_cot\.py|xlsx2csv\.py|html2json\.py", line):
                 self.assertRegex(line, r">&2|>\s*/dev/null", line)
 
 

@@ -43,7 +43,9 @@ mkdir -p "$CSV/$ACCT/html"
 # xlsx2csv: sheet stats on stderr, only an invalid-upload reason on stdout
 rc=0; python3 -I "$S/xlsx2csv.py" "$X/$ACCT/COT_${ACCT}_Template.xlsx" "$CSV/$ACCT" Data "$ACCT" || rc=$?
 [ $rc -eq 0 ] || invalid_or_fail $rc
-python3 -I "$S/html2json.py" "$X/$ACCT/COT_${ACCT}_COT360.html" "$CSV/$ACCT/html" >&2
+# html2json: table stats on stderr, only an invalid-upload reason on stdout
+rc=0; python3 -I "$S/html2json.py" "$X/$ACCT/COT_${ACCT}_COT360.html" "$CSV/$ACCT/html" || rc=$?
+[ $rc -eq 0 ] || invalid_or_fail $rc
 # the billing period every later step uses: the last 6 months in this account's service costs
 # period.py crashing is a failure (4); running fine but finding no months is an invalid upload (3)
 rc=0; COT_MONTHS=$(python3 -I "$S/period.py" "$ACCT") || rc=$?
