@@ -101,6 +101,7 @@ def coh_resources(base, e):
     for r in rows:
         if len(r) <= col["resourceArn"] or r[1].strip() != e or r[col["actionType"]].strip() in COMMITMENT_ACTIONS:
             continue
+        r = r + [""] * (len(hdr) - len(r))  # a short row's missing trailing cells (e.g. no tags) are empty
         arn = r[col["resourceArn"]].strip() or r[col["accountId"]] + "/" + str(len(best))
         kind = r[col["currentResourceType"]].strip()
         rec = {

@@ -33,12 +33,16 @@ def main(src, outdir):
                           "new_accounts", "opportunities", "sp_expiry", "data_transfer", "findings", "period"]}
     for e, x in d["entities"].items():
         b = x["bedrock"]
+        # Bedrock spend per slot, one basis for the chart series and the KPIs: Marketplace models plus the native
+        # Bedrock service lines (SageMaker is listed with them but is not Bedrock)
+        bed = [b["marketplace_total"][i] + sum(n["months"][i] for n in b["native"] if n["service"] != "Amazon SageMaker")
+               for i in range(len(M))]
         ds["period"].append(dict(P.row(e, [m for m in M if m]), **({"as_of": AS_OF} if AS_OF else {})))
         for i, m in enumerate(M):
             if not m:
                 continue
             ds["spend_monthly"].append({"entity": e, "month": m, "spend": x["monthly_total"][i],
-                                        "bedrock": b["marketplace_total"][i] + sum(n["months"][i] for n in b["native"] if n["service"] != "Amazon SageMaker"),
+                                        "bedrock": bed[i],
                                         "gpu_ec2": x["gpu_ec2"][i], "saas_marketplace": x["marketplace_saas"]["months"][i]})
         o = x["opportunities"]
         levers = []
@@ -68,7 +72,7 @@ def main(src, outdir):
             "mom_pct": pct(x["monthly_total"][-1], x["monthly_total"][-2]), "h1_avg": x["h1_avg"], "h2_avg": x["h2_avg"],
             "h2_vs_h1_pct": pct(x["h2_avg"], x["h1_avg"]), "six_month": x["six_month_total"],
             "accounts_first": x["accounts_active"][FI], "accounts_last": x["accounts_active"][-1],
-            "bedrock_6m": b["six_month_total"], "bedrock_last": b["marketplace_total"][-1], "bedrock_first": b["marketplace_total"][FI],
+            "bedrock_6m": sum(bed), "bedrock_last": bed[-1], "bedrock_first": bed[FI],
             "bedrock_models_last": b["active_models_last"], "bedrock_top_model": b["top_model_last"], "bedrock_top_share": b["top_model_last_share"],
             "gpu_ec2_last": x["gpu_ec2"][-1], "coh_dedup": o["coh_dedup"], "sp_hourly": x["sp"]["hourly"],
             "sp_expiring_pct": x["sp"]["expiring_pct"], "ec2_coverage_last": ec2cov[-1] if ec2cov else None, "ec2_coverage_first": ec2cov[FI] if ec2cov else None,

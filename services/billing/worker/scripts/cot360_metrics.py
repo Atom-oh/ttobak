@@ -149,6 +149,7 @@ def coh_by_workload(base, e):
     for r in rows[hi + 1:]:
         if len(r) <= ix["resourceArn"] or r[1].strip() != e or not r[ix["recommendationId"]].strip():
             continue
+        r = r + [""] * (len(rows[hi]) - len(r))  # a short row's missing trailing cells (e.g. no tags) are empty
         try:
             tags = {t["key"]: t["value"] for t in ast.literal_eval(r[ix["tags"]] or "[]")}
         except (ValueError, SyntaxError):

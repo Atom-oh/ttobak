@@ -51,7 +51,7 @@ def account_names(base, entity):
     out = {}
     for r in rows:
         acct = re.findall(r"\d{12}", r[la]) if la < len(r) else []
-        if acct and r[nm].strip():
+        if acct and nm < len(r) and r[nm].strip():
             out[acct[0]] = r[nm].strip()
     return out
 
