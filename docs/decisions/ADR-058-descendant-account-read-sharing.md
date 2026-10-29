@@ -5,7 +5,8 @@
   explicit multi-filter semantics and owner-only hierarchy writes remain.
 - Narrows ADR-051's reader speaker-correction permission: inherited-only readers
   cannot correct speakers. Its direct-member and independent-share grants remain.
-- Deployment is a separate gate in [the release runbook](../runbooks/account-descendant-sharing.md).
+- Deployment is a separate gate in `docs/runbooks/account-descendant-sharing.md`,
+  delivered with the final QA and rollout companion.
 
 Members of an Account may read its descendants' published content, including
 grandchildren. An ancestor Owner receives read-only access. Direct memberships
@@ -51,5 +52,5 @@ the flag restores exact direct-membership semantics without deleting references.
 Evidence: [design](../superpowers/specs/2026-10-29-account-descendant-sharing-design.md),
 [plan](../superpowers/plans/2026-10-29-account-descendant-sharing.md),
 [Go resolver](../../backend/internal/service/account_read_access.go),
-[Python resolver](../../backend/python/qa/account_read_access.py),
+Python resolver `backend/python/qa/account_read_access.py` (final QA companion),
 [relation writes](../../backend/internal/repository/account_hierarchy.go).
