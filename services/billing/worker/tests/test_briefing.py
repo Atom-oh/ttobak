@@ -108,6 +108,30 @@ class ZeroSpend(unittest.TestCase):
         self.assertIsNone(bench[0]["top_share"])
 
 
+class NullMom(unittest.TestCase):
+    def test_zero_previous_month_omits_the_percentage(self):
+        ds = datasets()
+        ds["kpis"][0].update(prev_spend=0, mom_pct=None)
+        a = briefing.mom_driver_action(E, D_of(ds))
+        self.assertEqual(a["evidence"][0], "8월 $0 → 9월 $100.0K (+$100.0K).")
+        self.assertTrue(run_main(ds))
+
+    def test_one_month_period_has_no_mom_action(self):
+        ds = datasets()
+        ds["kpis"][0].update(prev_spend=0, mom_pct=None)
+        ds["period"][0]["months"] = ["2026-09"]
+        self.assertIsNone(briefing.mom_driver_action(E, D_of(ds)))
+        self.assertTrue(run_main(ds))
+
+    def test_non_null_unchanged(self):
+        a = briefing.mom_driver_action(E, D_of(datasets()))
+        self.assertIsNone(a)  # +1% is under the 2% bar
+        ds = datasets()
+        ds["kpis"][0].update(prev_spend=80000, mom_pct=25.0)
+        self.assertEqual(briefing.mom_driver_action(E, D_of(ds))["evidence"][0],
+                         "8월 $80.0K → 9월 $100.0K (+$20.0K, +25.0%).")
+
+
 class Ids(unittest.TestCase):
     def test_id_format_and_sensitivity(self):
         a = run_main(datasets())

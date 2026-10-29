@@ -34,6 +34,8 @@ Two worker smoke tests run the real pipelines and are skipped unless `WORKER_SMO
 ## Changes since the companion import
 
 - Agents child: fresh per-job HOME, and `AWS_CONFIG_FILE` / `AWS_SHARED_CREDENTIALS_FILE` set to `/dev/null`.
+- CUR publish: the META update requires `current_cur` to equal the predecessor the run read its inputs from (or be absent when there was none), not just `<=` the new version id; a mismatch fails the run with `StaleVersion` and leaves META unchanged.
+- Worker process: `AWS_CONFIG_FILE` / `AWS_SHARED_CREDENTIALS_FILE` are `/dev/null` in the image ENV and set again at startup, before any client or child, so a config planted in the shared HOME never configures its own clients.
 - `cur/datasets.py`: `cur_trend` is also capped at `MAX_TREND_BYTES` (40 MiB as written, under the BFF's 48 MiB file limit); the cut is reported in `cur_summary` `truncated` / `dropped` like the row cap.
 - Rerun lease: `ACCT#{acct}` / `RERUN#{src}#{version}` (`owner`, `expiresAt`, `ttl`) by conditional PutItem; a rerun that finds it held exits 0 without writing, checks it is still the owner before publishing, and releases it in a finally. Rerun deadline from `RERUN_TIMEOUT_S` (default 3600); the lease lasts that plus 120 s.
 - Normalized CUR Parquet goes up by managed multipart transfer (`upload_fileobj`, 64 MiB parts); the session policy adds `s3:AbortMultipartUpload` on the same `accounts/{acct}/*` resource as PutObject.
