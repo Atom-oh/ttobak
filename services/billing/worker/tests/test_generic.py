@@ -30,6 +30,25 @@ class Generic(unittest.TestCase):
         hits = [(os.path.basename(p), i + 1) for p in files for i, l in enumerate(rd(p, encoding="utf-8").splitlines()) if FIXED.search(l)]
         self.assertEqual(hits, [])
 
+    @unittest.skipUnless(sys.version_info >= (3, 12), "older interpreters reject these at compile time")
+    def test_no_pep701_same_quote_fstrings(self):
+        """A string inside an f-string replacement field may not reuse the enclosing quote: Python 3.9-3.11 reject it."""
+        import tokenize
+        files = [p for p in glob(ROOT + "/**/*.py", recursive=True) if "__pycache__" not in p]
+        quote = lambda t: t.lstrip("rRbBuUfF")
+        hits = []
+        for p in files:
+            stack = []
+            with open(p, "rb") as f:
+                for t in tokenize.tokenize(f.readline):
+                    if t.type in (tokenize.STRING, tokenize.FSTRING_START) and any(quote(t.string).startswith(q) for q in stack):
+                        hits.append((os.path.relpath(p, ROOT), t.start[0]))
+                    if t.type == tokenize.FSTRING_START:
+                        stack.append(quote(t.string))
+                    elif t.type == tokenize.FSTRING_END:
+                        stack.pop()
+        self.assertEqual(hits, [])
+
     def test_insights_have_no_curated_keyword_rules(self):
         src = rd(os.path.join(SCRIPTS, "insights.py"), encoding="utf-8")
         for kw in ("blockchain", "vibe", '"jp-"', '"br-"', "financial"):

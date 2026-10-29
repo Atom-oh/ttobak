@@ -65,6 +65,24 @@ class Accounts(unittest.TestCase):
             self.assertEqual(jload(os.path.join(d, "accounts.json")), [])
 
 
+    def test_linked_account_short_rows(self):
+        import accounts
+        hdr = ["", "Report Name", "timePeriod.start", "keys", "metrics.AmortizedCost.amount", "Linked Account", "Name"]
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as d:
+            os.makedirs(os.path.join(d, E))
+            with open(os.path.join(d, E, "Data_Linked_Account_Costs.csv"), "w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                w.writerow(hdr)
+                w.writerow(["", E, "2026-09-01", "['111111111111']", "5", "['111111111111']", "dev"])
+                w.writerow(["", E, "2026-09-01", "['222222222222']"])  # cut after keys: no cost cell
+                w.writerow(["", E, "2026-09-01", "['111111111111']", "2", "['111111111111']"])  # no name cell
+            with mock.patch.object(accounts, "PRESENT", ["2026-09"]):
+                cost, names = accounts.linked_accounts(d, E)
+        self.assertEqual({k: dict(v) for k, v in cost.items()},
+                         {"111111111111": {"2026-09": 7.0}, "222222222222": {"2026-09": 0.0}})
+        self.assertEqual(names, {"111111111111": "dev"})
+
+
 class TagServices(unittest.TestCase):
     def test_nan_cost_and_short_row(self):
         import tag_services
@@ -79,6 +97,37 @@ class TagServices(unittest.TestCase):
                 tag_services.main(d, d)  # the reconciliation holds (no NaN)
             with open(os.path.join(d, "tag_services.json"), encoding="utf-8") as f:
                 self.assertNotIn("NaN", f.read())
+
+    ODD_TAGS = ["{'key': 'app', 'value': 'a'}", "7", "None", "[1, 'x', None]", "[{'value': 'v'}]", "[{'key': 'app'}]",
+                "[{'key': 3, 'value': 'v'}]", "[{'key': 'app', 'value': 5}]", "[{'key': 'app'", "{'a': [1, 2]",
+                "[" * 5000 + "]" * 5000]
+
+    def odd_coh(self, d):
+        rows = [{"recommendationId": "r%d" % i, "currentResourceType": "Ec2Instance", "actionType": "Rightsize",
+                 "resourceArn": "arn:x", "estimatedMonthlyCost": "1", "tags": t} for i, t in enumerate(self.ODD_TAGS)]
+        rows.append({"recommendationId": "ok", "currentResourceType": "Ec2Instance", "actionType": "Rightsize",
+                     "resourceArn": "arn:x", "estimatedMonthlyCost": "2",
+                     "tags": repr([{"key": "app", "value": "svc"}, {"key": "bad"}, "junk"])})
+        coh_csv(os.path.join(d, E, "Data_COH_All.csv"), rows)
+
+    def test_odd_tag_cells_are_untagged(self):
+        import tag_services
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as d:
+            self.odd_coh(d)
+            rs = tag_services.resources(d, E)
+            self.assertEqual([r["tags"] for r in rs], [{}] * len(self.ODD_TAGS) + [{"app": "svc"}],
+                             "a non-list cell is untagged; an odd item is skipped")
+            with mock.patch.object(tag_services, "ENTITIES", [E]):
+                tag_services.main(d, d)
+            got = {s["service"]: s["resources"] for s in jload(os.path.join(d, "tag_services.json"), encoding="utf-8")}
+            self.assertEqual(got, {"svc": 1, "(태그 없음)": len(self.ODD_TAGS)})
+
+    def test_odd_tag_cells_in_coh_by_workload(self):
+        import cot360_metrics
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as d:
+            self.odd_coh(d)
+            got = {r["workload"]: r["recs"] for r in cot360_metrics.coh_by_workload(d, E)}
+            self.assertEqual(got, {"svc": 1, "(태그 없음)": len(self.ODD_TAGS)})
 
     def test_new_workload_needs_most_resources_recent(self):
         import tag_services
