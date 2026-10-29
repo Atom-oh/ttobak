@@ -135,7 +135,10 @@ type meetingRepo interface {
 
 // MeetingService handles meeting business logic
 type MeetingService struct {
-	repo meetingRepo
+	repo         meetingRepo
+	listMetadata interface {
+		GetMeeting(context.Context, string, string) (*model.Meeting, error)
+	}
 
 	// cognito/cognitoPoolID back InviteUser/SearchUsers. When unset, both
 	// methods fall back to building a client inline via
@@ -149,7 +152,22 @@ type MeetingService struct {
 
 // NewMeetingService creates a new meeting service
 func NewMeetingService(repo *repository.DynamoDBRepository) *MeetingService {
-	return &MeetingService{repo: repo}
+	return &MeetingService{repo: repo, listMetadata: repo.MetadataView()}
+}
+
+func (s *MeetingService) currentListMeeting(ctx context.Context, owner, id string) (*model.Meeting, error) {
+	reader := s.listMetadata
+	if reader == nil {
+		reader = s.repo
+	}
+	meeting, err := reader.GetMeeting(ctx, owner, id)
+	if err != nil || meeting == nil {
+		return nil, err
+	}
+	if meeting.UserID != owner || meeting.MeetingID != id {
+		return nil, ErrReadingData
+	}
+	return meeting, nil
 }
 
 // SetCognitoAdminAPI wires a Cognito client for InviteUser/SearchUsers to use
@@ -481,10 +499,6 @@ func (s *MeetingService) listMeetingsFilteredPage(ctx context.Context, params re
 				if !ok {
 					continue
 				}
-				if !filter.matches(meeting.AccountID) || listed[meeting.MeetingID] ||
-					params.AccountIDs != nil && meeting.UserID == userID {
-					continue
-				}
 				// Same read-time re-verification as checkAccess/resolveSharedAccess
 				// (meeting.go): an account-origin Share row is a membership cache,
 				// not an independent grant, so a removed member's title/summary
@@ -496,6 +510,13 @@ func (s *MeetingService) listMeetingsFilteredPage(ctx context.Context, params re
 				// its title/summary here despite checkAccess correctly blocking
 				// the detail view for the same row.
 				if share.Origin == model.ShareOriginAccount {
+					meeting, err = s.currentListMeeting(ctx, share.OwnerID, share.MeetingID)
+					if err != nil {
+						return nil, err
+					}
+					if meeting == nil {
+						continue
+					}
 					if !meeting.SharedToAccount || meeting.AccountID == "" {
 						continue
 					}
@@ -521,6 +542,10 @@ func (s *MeetingService) listMeetingsFilteredPage(ctx context.Context, params re
 						continue
 					}
 					meeting = projectAccountReadMeeting(meeting, member)
+				}
+				if !filter.matches(meeting.AccountID) || listed[meeting.MeetingID] ||
+					params.AccountIDs != nil && meeting.UserID == userID {
+					continue
 				}
 				perm := share.Permission
 				if grant := memberCache[meeting.AccountID]; share.Origin == model.ShareOriginAccount && grant != nil && grant.inherited() {
