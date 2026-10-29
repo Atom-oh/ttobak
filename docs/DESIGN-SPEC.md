@@ -235,6 +235,12 @@ client-side and retain normalized selection across pagination; reset cursor on
 change. Empty pages with nextCursor can still have later matches. Hierarchy and
 classification never grant access to private content (ADR-036).
 
+Activated ancestor access displays a read-only label and its granting Account
+(ADR-058). Suppress inherited-only mutation controls and keep invitation,
+publication, upload/link, dictionary and Billing selectors restricted to direct
+membership. Preserve independently granted editing controls. Account discovery
+consumes bounded pages with explicit cursor-loop and size errors.
+
 All current account members may add members/change assignable non-owner roles.
 Removal/pending-invite revocation stay owner-only (ADR-034). UI
 visibility is not the authorization boundary.

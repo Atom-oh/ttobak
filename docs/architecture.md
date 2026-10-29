@@ -86,6 +86,14 @@ deployed activation or completed public acceptance.
 
 ## Identity onboarding
 
+Account hierarchy read access follows ADR-058: current canonical ancestor
+membership grants descendant reads, with full-path fingerprints invalidating
+continuations and QA history on membership or parent changes. Canonical child
+references support discovery and change transactionally with parent metadata;
+they do not authorize. API/QA share a disabled-by-default activation parameter.
+Private linked meetings require independent publication or a separate grant;
+mutations and Billing remain direct-only.
+
 Cognito identity, the app PROFILE and resource membership are separate states.
 The authenticated session bootstrap coordinates profile creation and eligible
 pending grants without relying on a meeting-page visit. Project invitations have
