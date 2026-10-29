@@ -47,6 +47,14 @@ class Report(unittest.TestCase):
         self.assertIn("SA", sec)
         self.assertIn("PoC 제안", sec)  # rule-based next step when no note
 
+    def test_null_mom_pct_renders_a_dash(self):
+        D = ds()
+        k = next(r for r in D["kpis"] if r["entity"] == A)
+        k["mom_pct"] = None
+        rows = [l for l in report.summary(D, [A, B], 1) if l.startswith("| ") and not l.startswith("| 법인")]
+        self.assertEqual(rows[0].split(" | ")[2], "—")
+        self.assertRegex(rows[1].split(" | ")[2], r"^[+-]\d+\.\d%$")  # a non-null value keeps its format
+
     def test_note_replaces_next_step_only_on_id_match(self):
         D = ds()
         aid = next(r["id"] for r in D["briefing"] if r["entity"] == A and r["rank"] == 1)
