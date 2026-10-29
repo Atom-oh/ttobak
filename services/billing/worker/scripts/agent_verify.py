@@ -25,7 +25,13 @@ RE_SCALEWORD = re.compile(r"(?:\$" + NUM + r"[A-Za-z]*\s+(?:[kmbt]|mm|mn|bn|" + 
 PCT_UNIT = (r"(?:[%％]p?|퍼센트(?:\s?포인트)?|포인트|프로(?!젝|그|비|모|파|세|덕|토|필|듀|미|시|페|포|브|스)"
             r"|(?i:percent(?:age)?(?:\s?points?)?|pct|pp)(?![A-Za-z]))")
 RE_PCT = re.compile(SIGN + NUM + r"\s?" + PCT_UNIT)
+# a percent or money range ("20–30%", "20~30 퍼센트", "$1.2–1.5M"): the unit is written once, on the second endpoint,
+# so both endpoints are typed by it; left to the single-token passes the first endpoint would reach the bare pool
+RANGE_SEP = r"\s?[~∼–—\-]\s?"
+RE_PCT_RANGE = re.compile(SIGN + NUM + r"(?:\s?" + PCT_UNIT + r")?" + RANGE_SEP + SIGN + NUM + r"\s?" + PCT_UNIT)
 COUNT_UNITS = "개월|건|개|대|일|년"
+RE_MONEY_RANGE = re.compile(SIGN + r"\$" + NUM + r"([A-Za-z]*)" + RANGE_SEP + SIGN + r"\$?" + NUM + r"([A-Za-z]*)"
+                            + r"(?![\d.,A-Za-z]|\s?(?:" + PCT_UNIT + "|" + COUNT_UNITS + "))")
 RE_RANGE = re.compile(NUM + r"\s?[~∼]\s?" + NUM + r"\s?(" + COUNT_UNITS + r")")
 RE_COUNT = re.compile(SIGN + NUM + r"\s?(" + COUNT_UNITS + r")")
 RE_CAL = re.compile(r"(?<![\d.,])(\d{1,2})\s?(월|분기)|(?<![\d.,])(20[2-3]\d)\s?년")
@@ -58,6 +64,16 @@ def _signed(sign, v):
     return -v if sign in ("-", "−") else v
 
 
+def _money_range(m):
+    """Both endpoints of "$1.2–1.5M" as money; a scale written on one endpoint only applies to both."""
+    a, b = m.group(3), m.group(6)
+    a, b = a or b, b or a
+    if a not in SCALE or b not in SCALE:
+        return ("bad", "money-suffix")
+    return [("money", m.group(1), _num(m.group(2)) * SCALE[a], _tol(m.group(2), SCALE[a])),
+            ("money", m.group(4), _num(m.group(5)) * SCALE[b], _tol(m.group(5), SCALE[b]))]
+
+
 def _scan(text):
     """Typed tokens of a text, plus the leftover (digits there make a claim unparseable)."""
     toks = []
@@ -69,7 +85,7 @@ def _scan(text):
         for m in rx.finditer(s):
             out.append(fn(m))
         s = rx.sub(lambda m: " " * len(m.group(0)), s)
-        toks.extend(x for x in out if x)
+        toks.extend(y for x in out if x for y in (x if isinstance(x, list) else [x]))
 
     if RE_KMONEY.search(s):
         toks.append(("bad", "korean-money"))
@@ -77,10 +93,13 @@ def _scan(text):
         toks.append(("bad", "currency-form"))
     if RE_SCALEWORD.search(s):
         toks.append(("bad", "money-scale"))
+    take(RE_MONEY_RANGE, _money_range)
     take(RE_MONEY, lambda m: ("money", m.group(1), _num(m.group(2)) * SCALE[m.group(3)], _tol(m.group(2), SCALE[m.group(3)]))
          if m.group(3) in SCALE else ("bad", "money-suffix"))
     if "$" in s:  # a currency sign the money pattern did not take ("$ 59", "$+59")
         toks.append(("bad", "money-form"))
+    take(RE_PCT_RANGE, lambda m: [("pct", m.group(1), _num(m.group(2)), _tol(m.group(2))),
+                                  ("pct", m.group(3), _num(m.group(4)), _tol(m.group(4)))])
     take(RE_PCT, lambda m: ("pct", m.group(1), _num(m.group(2)), _tol(m.group(2))))
     idents = []
     for m in RE_IDENT.finditer(s):
