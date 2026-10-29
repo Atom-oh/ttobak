@@ -90,13 +90,13 @@ function assertRequestUser(expectedUserId: string, token = getIdToken()) {
 // Mutex for token refresh — prevents concurrent refreshSession() race conditions
 let refreshPromise: Promise<string | null> | null = null;
 
-function refreshTokenOnce(): Promise<string | null> {
+export function refreshTokenOnce(): Promise<string | null> {
   if (refreshPromise) return refreshPromise;
   refreshPromise = refreshSession().finally(() => { refreshPromise = null; });
   return refreshPromise;
 }
 
-async function getAuthHeaders(): Promise<Record<string, string>> {
+export async function getAuthHeaders(): Promise<Record<string, string>> {
   let token = getIdToken();
 
   if (!token || isTokenExpired(token)) {

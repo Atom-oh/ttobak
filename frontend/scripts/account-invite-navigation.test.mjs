@@ -86,6 +86,10 @@ function fixture(addMember, resendOwnerInvitation = async () => ({}), ownerInvit
     '@/components/MemberPicker': { MemberPicker },
     '@/components/FieldInsightsSection': { FieldInsightsSection: emptyComponent },
     '@/components/AccountParentEditor': { AccountParentEditor: emptyComponent },
+    '@/components/AccountBillingTab': { AccountBillingTab: emptyComponent },
+    '@/lib/runtimeConfig': { getRuntimeConfig: async () => ({}) },
+    '@/lib/billingApi': { fetchBillingAccounts: async () => [] },
+    '@/lib/billingSummary': { billingEntryFor: () => null },
     '@/types/meeting': { ASSIGNABLE_ACCOUNT_ROLES: ['SSA', 'SA'] },
   };
   const exports = {};

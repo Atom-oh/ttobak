@@ -10,6 +10,10 @@ import { uploadDocFile } from '@/lib/upload';
 import { MemberPicker } from '@/components/MemberPicker';
 import { FieldInsightsSection } from '@/components/FieldInsightsSection';
 import { AccountParentEditor } from '@/components/AccountParentEditor';
+import { AccountBillingTab } from '@/components/AccountBillingTab';
+import { getRuntimeConfig } from '@/lib/runtimeConfig';
+import { fetchBillingAccounts } from '@/lib/billingApi';
+import { billingEntryFor, type BillingAccountEntry } from '@/lib/billingSummary';
 import { ACCOUNT_TAB_LABELS, accountTabHref, parseAccountTab, visibleAccountTabs, type AccountTab } from '@/lib/accountTabs';
 import { ASSIGNABLE_ACCOUNT_ROLES } from '@/types/meeting';
 import type { Account, AccountInsight, AccountMeetingRef, AccountDocument, AccountResearchRef, ProjectSummary, User, AccountMember } from '@/types/meeting';
@@ -21,8 +25,24 @@ export default function AccountDetailClient() {
   const { user, isLoading, isAuthenticated, membershipRevision } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const searchParams = useSearchParams();
-  // Hidden until the Billing panel lands; it then comes from runtime config and Billing membership.
-  const billingVisible = false;
+  // Billing tab: runtime config billingService and Billing membership of this Account.
+  // Read once per Account; an entry for a previous Account never counts.
+  const [billing, setBilling] = useState<{ accountId: string; entry: BillingAccountEntry } | null>(null);
+  useEffect(() => {
+    if (!isAuthenticated || !accountId || accountId === '_') return;
+    let active = true;
+    (async () => {
+      const config = await getRuntimeConfig();
+      if (!active || config.billingService !== true) return;
+      const entry = billingEntryFor(await fetchBillingAccounts(), accountId);
+      if (active && entry) setBilling({ accountId, entry });
+    })().catch(() => {
+      // Billing unavailable: the tab stays hidden.
+    });
+    return () => { active = false; };
+  }, [isAuthenticated, accountId]);
+  const billingEntry = billing?.accountId === accountId ? billing.entry : null;
+  const billingVisible = billingEntry !== null;
   const tabs = visibleAccountTabs(billingVisible);
   const tab = parseAccountTab(searchParams.get('tab'), billingVisible);
   const selectTab = (next: AccountTab) => {
@@ -587,6 +607,9 @@ export default function AccountDetailClient() {
                     )}
                   </section>
                 </>
+              )}
+              {tab === 'billing' && billingEntry && (
+                <AccountBillingTab key={accountId} accountId={accountId} entry={billingEntry} />
               )}
             </div>
           </>
