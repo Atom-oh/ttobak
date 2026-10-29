@@ -460,7 +460,12 @@ class Job:
         """keep_aws only for the agents child (Bedrock via the task role). Every other child reads untrusted data:
         no AWS_* variable at all (credentials, container credential URIs, region) and an empty per-job HOME."""
         if keep_aws:
+            # the untrusted children ran as the same uid and could write the image HOME: a planted ~/.aws/config
+            # (credential_process) would outrank the container credentials, so this child gets a fresh HOME and
+            # no shared config or credentials files
             e = dict(os.environ)
+            e["HOME"] = private_dir(self.path("agents_home"))
+            e["AWS_CONFIG_FILE"] = e["AWS_SHARED_CREDENTIALS_FILE"] = os.devnull
         else:
             e = {k: v for k, v in os.environ.items() if not k.startswith("AWS_")}
             e["HOME"] = self.path("home")

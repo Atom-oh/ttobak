@@ -745,9 +745,13 @@ class TestWorker(Base):
             seen["cache_before"] = os.path.lexists(os.path.join(kw["cwd"], "agent_cache"))
             os.symlink(outside, os.path.join(kw["cwd"], "agent_cache"))  # planted by a hostile upload
             os.symlink(outside, os.path.join(kw["cwd"], "report.md"))
+            os.symlink(outside, os.path.join(kw["cwd"], "agents_home"))
 
         def agents(cmd, kw):
             seen["agents_aws"] = sorted(k for k in kw["env"] if k.startswith("AWS_"))
+            seen["agents_home"] = kw["env"]["HOME"]
+            seen["agents_home_empty"] = os.path.isdir(kw["env"]["HOME"]) and os.listdir(kw["env"]["HOME"]) == []
+            seen["agents_config"] = (kw["env"]["AWS_CONFIG_FILE"], kw["env"]["AWS_SHARED_CREDENTIALS_FILE"])
             c = cmd[7]
             seen["cache_real"] = os.path.isdir(c) and not os.path.islink(c) and os.listdir(c) == []
 
@@ -766,6 +770,10 @@ class TestWorker(Base):
         self.assertFalse(seen["cache_before"])
         self.assertLessEqual({"AWS_ACCESS_KEY_ID", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_REGION"}, set(seen["agents_aws"]))
         self.assertTrue(seen["cache_real"])
+        self.assertNotIn(seen["agents_home"], ("/home/parent", seen["home"]))
+        self.assertTrue(seen["agents_home"].startswith(self.work_root))
+        self.assertTrue(seen["agents_home_empty"])
+        self.assertEqual(seen["agents_config"], (os.devnull, os.devnull))
         self.assertEqual(seen["report_aws"], [])
         self.assertFalse(seen["report_md_link"])
         self.assertEqual(os.listdir(outside), [])
