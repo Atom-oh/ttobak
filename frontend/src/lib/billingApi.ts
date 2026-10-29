@@ -1,14 +1,15 @@
 'use client';
 
 import { ApiError, getAuthHeaders, refreshTokenOnce } from '@/lib/api';
-import { triggerAuthFailure } from '@/components/auth/AuthProvider';
 import type { BillingAccountEntry, BillingDatasetId } from '@/lib/billingSummary';
 
 const DATASET_IDS: ReadonlySet<string> = new Set<BillingDatasetId>(['kpis', 'period', 'briefing', 'sessions', 'tag_signals', 'cur_tag_signals']);
 
 /**
  * Same-origin Billing BFF reads (/api/billing/...), never API_BASE_URL. Bearer
- * token and one refresh-and-retry on 401 as apiFetch; the BFF's flat
+ * token and one refresh-and-retry on 401 as apiFetch, but a Billing 401 never
+ * signs the user out of the app (no global auth failure): it is ApiError(401,
+ * 'BILLING') and the Billing UI hides or shows its error state. The BFF's flat
  * `{ error: string }` bodies become ApiError(status, 'BILLING', message).
  */
 export async function billingFetch<T>(path: string, signal?: AbortSignal): Promise<T> {
@@ -22,15 +23,9 @@ export async function billingFetch<T>(path: string, signal?: AbortSignal): Promi
   let response = await request(authHeaders);
   if (response.status === 401) {
     const freshToken = await refreshTokenOnce();
-    if (!freshToken) {
-      triggerAuthFailure();
-      throw new ApiError(401, 'UNAUTHORIZED', 'Authentication required');
-    }
+    if (!freshToken) throw new ApiError(401, 'BILLING', 'Billing authentication failed');
     response = await request({ ...authHeaders, Authorization: `Bearer ${freshToken}` });
-    if (response.status === 401) {
-      triggerAuthFailure();
-      throw new ApiError(401, 'UNAUTHORIZED', 'Authentication required');
-    }
+    if (response.status === 401) throw new ApiError(401, 'BILLING', 'Billing authentication failed');
   }
 
   if (!response.ok) {

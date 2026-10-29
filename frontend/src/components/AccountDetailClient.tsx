@@ -26,7 +26,8 @@ export default function AccountDetailClient() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const searchParams = useSearchParams();
   // Billing tab: runtime config billingService and Billing membership of this Account.
-  // Read once per Account; an entry for a previous Account never counts.
+  // Read once per Account lookup; an entry for a previous Account never counts, and
+  // leaving an Account clears its entry so A -> B -> A waits for a fresh lookup of A.
   const [billing, setBilling] = useState<{ accountId: string; entry: BillingAccountEntry } | null>(null);
   useEffect(() => {
     if (!isAuthenticated || !accountId || accountId === '_') return;
@@ -39,7 +40,10 @@ export default function AccountDetailClient() {
     })().catch(() => {
       // Billing unavailable: the tab stays hidden.
     });
-    return () => { active = false; };
+    return () => {
+      active = false;
+      setBilling(null);
+    };
   }, [isAuthenticated, accountId]);
   const billingEntry = billing?.accountId === accountId ? billing.entry : null;
   const billingVisible = billingEntry !== null;

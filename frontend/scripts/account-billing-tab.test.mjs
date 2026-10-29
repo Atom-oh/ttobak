@@ -98,9 +98,10 @@ function hooksRuntime() {
     effects.forEach((effect) => effect());
     return tree;
   };
+  // cleanups run as part of unmounting; any setState after that is a late update
   const unmount = () => {
-    unmounted = true;
     for (const slot of slots) if (slot && typeof slot.cleanup === 'function') slot.cleanup();
+    unmounted = true;
   };
   return { react, render, unmount, lateSets: () => lateSets };
 }
@@ -250,7 +251,6 @@ test('fetches_with_acct_param_only_when_open', async () => {
       getAuthHeaders: async () => ({ Authorization: 'Bearer t1' }),
       refreshTokenOnce: async () => 't2',
     },
-    '@/components/auth/AuthProvider': { triggerAuthFailure() {} },
   }, {
     fetch: async (url, init) => {
       requests.push({ url, auth: init.headers.Authorization });
@@ -438,7 +438,6 @@ test('billing_api_rejects_unknown_dataset_and_dot_segments', async () => {
   let fetched = 0;
   const api = load('../src/lib/billingApi.ts', {
     '@/lib/api': { ApiError: Error, getAuthHeaders: async () => ({}), refreshTokenOnce: async () => null },
-    '@/components/auth/AuthProvider': { triggerAuthFailure() {} },
   }, { fetch: async () => { fetched++; return { status: 200, ok: true, json: async () => [] }; } });
   await assert.rejects(api.fetchAccountDataset('raw_catalog', 'acct-1'));
   await assert.rejects(api.fetchAccountDataset('../accounts', 'acct-1'));
@@ -498,4 +497,48 @@ test('unmount_mid_flight_does_not_set_state', async () => {
   resolveAccounts([entryOf('acct-1')]);
   await tick();
   assert.equal(page.lateSets(), 0);
+});
+
+test('billing_401_does_not_sign_out', async () => {
+  const ApiError = class ApiError extends Error { constructor(status, code, message) { super(message); this.status = status; this.code = code; } };
+  const run = async (refreshed) => {
+    let fetched = 0;
+    // no AuthProvider module is provided: requiring it (to sign out) fails the load
+    const api = load('../src/lib/billingApi.ts', {
+      '@/lib/api': { ApiError, getAuthHeaders: async () => ({ Authorization: 'Bearer t1' }), refreshTokenOnce: async () => refreshed },
+    }, { fetch: async () => { fetched++; return { status: 401, ok: false, json: async () => ({ error: 'unauthorized' }) }; } });
+    await assert.rejects(api.fetchBillingAccounts(), (e) => e.status === 401 && e.code === 'BILLING');
+    return fetched;
+  };
+  assert.equal(await run('t2'), 2, 'one refresh-and-retry, then a Billing error');
+  assert.equal(await run(null), 1, 'a failed refresh is a Billing error too');
+  assert.doesNotMatch(read('../src/lib/billingApi.ts'), /triggerAuthFailure/);
+
+  // the visibility probe hides the tab on a Billing 401
+  const page = detailPage({ search: 'tab=billing', loadAccounts: async () => { throw new ApiError(401, 'BILLING', 'unauthorized'); } });
+  await page.start();
+  assert.deepEqual(page.tabLabels(), ['개요', '미팅', '프로젝트', '문서']);
+  // the open tab shows its error state on a Billing 401
+  const tab = billingTab(async () => { throw new ApiError(401, 'BILLING', 'unauthorized'); });
+  assert.ok(texts(await tab.show({ accountId: 'acct-1', entry: entryOf('acct-1') })).includes('Billing 데이터를 불러오지 못했습니다.'));
+});
+
+test('returning_to_account_waits_for_fresh_lookup', async () => {
+  const pending = [];
+  const page = detailPage({ search: 'tab=billing', loadAccounts: () => new Promise((resolve) => pending.push(resolve)) });
+  await page.start();
+  pending.shift()([entryOf('acct-1')]);
+  await tick();
+  assert.equal(page.billingPanel()?.props.accountId, 'acct-1');
+  await page.navigate('acct-2');
+  pending.shift()([entryOf('acct-1')]);
+  await tick();
+  // back to acct-1: the earlier acct-1 entry must not show before the new lookup answers
+  await page.navigate('acct-1');
+  assert.deepEqual(page.tabLabels(), ['개요', '미팅', '프로젝트', '문서']);
+  assert.equal(page.billingPanel(), undefined);
+  // the new lookup says the membership is gone: the tab stays hidden
+  pending.shift()([entryOf('acct-1', { member: false })]);
+  await tick();
+  assert.deepEqual(page.tabLabels(), ['개요', '미팅', '프로젝트', '문서']);
 });
