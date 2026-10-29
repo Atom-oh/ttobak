@@ -95,6 +95,38 @@ class TagServices(unittest.TestCase):
             self.assertEqual(s["created_recent_pct"], 33.3, "share of all the workload's resources")
             self.assertFalse(s["is_new"])
 
+    def test_account_names_short_row(self):
+        import tag_services
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as d:
+            os.makedirs(os.path.join(d, E))
+            with open(os.path.join(d, E, "Data_Linked_Account_Costs.csv"), "w", newline="", encoding="utf-8") as f:
+                csv.writer(f).writerows([["", "Report Name", "keys", "Linked Account", "Name"],
+                                         ["", E, "x", "111111111111", "acct one"],
+                                         ["", E, "x", "222222222222"]])  # trailing empty Name cell dropped
+            self.assertEqual(tag_services.account_names(d, E), {"111111111111": "acct one"})
+
+
+# xlsx2csv pads a row only to its last present cell: an untagged resource's row ends before the tags column
+SHORT_COH = ["", E, "r1", "111111111111", "Rightsize", "Ec2Instance", "", "m5.large", "m5.small", "10", "2", "arn:r1"]
+
+
+class ShortCohRows(unittest.TestCase):
+    def test_coh_resources_short_row(self):
+        import accounts
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as d:
+            coh_csv(os.path.join(d, E, "Data_COH_All.csv"), [SHORT_COH])
+            rs = accounts.coh_resources(d, E)
+        self.assertEqual([(r["account"], r["instance_type"], r["region"], r["cost"]) for r in rs],
+                         [("111111111111", "m5.large", "—", 10.0)])
+
+    def test_coh_by_workload_short_row(self):
+        import cot360_metrics
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as d:
+            coh_csv(os.path.join(d, E, "Data_COH_All.csv"), [SHORT_COH])
+            rs = cot360_metrics.coh_by_workload(d, E)
+        self.assertEqual([(r["recs"], r["est_savings"], r["est_cost"], r["top_changes"]) for r in rs],
+                         [(1, 2.0, 10.0, ["m5.large→m5.small×1"])])
+
 
 class Sessions(unittest.TestCase):
     def test_lambda_dt_reads_month_columns(self):

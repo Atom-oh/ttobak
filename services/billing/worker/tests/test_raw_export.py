@@ -1,5 +1,5 @@
 """raw_export.py: date columns and COH sheets without a tags column. Synthetic data only."""
-import csv, os, sys, tempfile, unittest
+import csv, json, os, sys, tempfile, unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
@@ -46,6 +46,27 @@ class Export(unittest.TestCase):
         self.assertEqual([r["recommendationId"] for r in rows], ["rec-1"])
         self.assertFalse(any(k.startswith("tag:") for k in rows[0]))
         self.assertEqual(dropped, {E: []})
+
+    def test_non_finite_cells_export_as_strict_json_null(self):
+        # COT exports carry literal "nan" cells; bare NaN/Infinity in the JSON breaks a strict parser
+        hdr = ["", "Report Name", "", "", "", "timePeriod.start", "keys", "metrics.AmortizedCost.amount",
+               "metrics.UsageQuantity.amount", "ratio"]
+        sheet(self.base, "Data_Service_Costs", hdr,
+              [["", E, "", "", "", "46000", "['svc-a']", "nan", "inf", "-Infinity"],
+               ["", E, "", "", "", "46000", "['svc-b']", "2", "3", "0.5"]])
+        out = os.path.join(self.base, "out")
+        os.makedirs(out)
+        with mock.patch("builtins.print"):
+            raw_export.main(self.base, out)
+
+        def strict(c):
+            raise ValueError("non-finite constant " + c)
+        with open(os.path.join(out, "raw_service_costs.json"), encoding="utf-8") as f:
+            rows = json.loads(f.read(), parse_constant=strict)
+        self.assertEqual([(r["cost"], r["usage"], r["ratio"]) for r in rows], [(None, None, None), (2, 3, 0.5)])
+        with open(os.path.join(out, "raw_catalog.json"), encoding="utf-8") as f:
+            cols = {c["name"]: c["type"] for c in json.loads(f.read(), parse_constant=strict)[0]["columns"]}
+        self.assertEqual((cols["cost"], cols["usage"], cols["ratio"]), ("num", "num", "num"))
 
 
 if __name__ == "__main__":
