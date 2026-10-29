@@ -38,6 +38,15 @@ describe('AuthStack', () => {
     for (const a of custom) expect(a).toMatchObject({ AttributeDataType: 'String', Mutable: true });
   });
 
+  test('no app client lets users write custom attributes', () => {
+    const clients = Object.values(template.findResources('AWS::Cognito::UserPoolClient')) as {
+      Properties: { WriteAttributes?: string[] };
+    }[];
+    expect(clients.length).toBeGreaterThanOrEqual(5);
+    // Unset WriteAttributes means every mutable attribute is user-writable.
+    for (const c of clients) expect(c.Properties.WriteAttributes).toEqual(['name']);
+  });
+
   test('the deployed AuthStack enables termination protection in its assembly', () => {
     // Read the real app binding so testing a protected throwaway stack cannot
     // conceal an unprotected production stack.

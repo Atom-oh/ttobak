@@ -199,8 +199,15 @@ export class AuthStack extends cdk.Stack {
       ? [`https://${props.cloudFrontDomain}`, 'http://localhost:3000']
       : ['http://localhost:3000'];
 
+    // Every client may write only `name`. Unset WriteAttributes would let any signed-in
+    // user call UpdateUserAttributes on every mutable attribute, including the
+    // custom:* attributes cc-on-bedrock uses for authorization (department budgets,
+    // IAM role naming). Those are set through Admin* APIs only.
+    const clientWriteAttributes = new cognito.ClientAttributes().withStandardAttributes({ fullname: true });
+
     this.userPoolClient = this.userPool.addClient('TtobakAppClient', {
       userPoolClientName: 'ttobak-app-client',
+      writeAttributes: clientWriteAttributes,
       generateSecret: true,
       oAuth: {
         flows: {
@@ -241,6 +248,7 @@ export class AuthStack extends cdk.Stack {
     // Public SPA client (no secret — safe for browser-based auth + MCP OAuth PKCE)
     this.spaClient = this.userPool.addClient('TtobakSpaClient', {
       userPoolClientName: 'ttobak-spa-client',
+      writeAttributes: clientWriteAttributes,
       generateSecret: false,
       oAuth: {
         flows: {
@@ -279,6 +287,7 @@ export class AuthStack extends cdk.Stack {
     // private SSM StringLists, bootstrapped before deploy like the MCP callbacks.
     this.companionClient = this.userPool.addClient('TtobakCompanionClient', {
       userPoolClientName: 'ttobak-companion-client',
+      writeAttributes: clientWriteAttributes,
       generateSecret: false,
       oAuth: {
         flows: {
@@ -337,6 +346,7 @@ export class AuthStack extends cdk.Stack {
     }) : undefined;
     const connectorClient = (id: string, name: string, write: boolean) => this.userPool.addClient(id, {
       userPoolClientName: name,
+      writeAttributes: clientWriteAttributes,
       generateSecret: false,
       disableOAuth: props?.connectorOAuthEnabled !== true,
       ...(props?.connectorOAuthEnabled === true ? {
