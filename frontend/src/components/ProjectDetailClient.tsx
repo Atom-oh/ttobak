@@ -7,6 +7,7 @@ import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { FieldInsightsSection } from '@/components/FieldInsightsSection';
 import { accountApi, projectApi, settingsApi, ApiError } from '@/lib/api';
+import { isEditableAccount } from '@/lib/accountAccess';
 import type {
   AccountSummary,
   Project,
@@ -21,6 +22,7 @@ export default function ProjectDetailClient() {
   const { user, isLoading, isAuthenticated, isAdmin, membershipRevision, onboardingAvailable } = useAuth();
 
   const [project, setProject] = useState<Project | null>(null);
+  const isOwner = !!project && user?.userId === project.ownerUserId && project.accessPermission !== 'read';
   const [meetings, setMeetings] = useState<ProjectMeetingRef[]>([]);
   const [research, setResearch] = useState<ProjectResearchRef[]>([]);
   const [insights, setInsights] = useState<ProjectInsight[]>([]);
@@ -156,7 +158,7 @@ export default function ProjectDetailClient() {
   const accountNameById = new Map(accounts.map((a) => [a.accountId, a.name]));
 
   const fetchPending = useCallback(async (cursor = '') => {
-    if (project?.ownerUserId !== user?.userId || activeProjectIdRef.current !== projectId) return;
+    if (!isOwner || activeProjectIdRef.current !== projectId) return;
     const generation = ++pendingGeneration.current;
     setPendingLoading(true); setPendingError('');
     try {
@@ -166,10 +168,11 @@ export default function ProjectDetailClient() {
     } catch (error) {
       if (activeProjectIdRef.current === projectId && generation === pendingGeneration.current) setPendingError(error instanceof Error ? error.message : '대기 중인 초대를 불러오지 못했습니다.');
     } finally { if (activeProjectIdRef.current === projectId && generation === pendingGeneration.current) setPendingLoading(false); }
-  }, [projectId, project?.ownerUserId, user?.userId]);
+  }, [projectId, isOwner]);
   useEffect(() => { if (isAuthenticated) void fetchPending(); }, [isAuthenticated, fetchPending, membershipRevision]);
 
   const addMember = async (email: string) => {
+    if (!isOwner) return;
     const result = await projectApi.addMember(projectId, { email, allowPending: onboardingAvailable });
     if (activeProjectIdRef.current !== projectId) return;
     setInviteCandidate(null); setInviteEmail('');
@@ -182,7 +185,7 @@ export default function ProjectDetailClient() {
   const handleInvite = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const email = inviteEmail.trim().toLowerCase();
-    if (!email || inviting) return;
+    if (!isOwner || !email || inviting) return;
     setInviting(true); setError(null); setInviteCandidate(null); setInviteNotice('');
     try { await addMember(email); }
     catch (error) {
@@ -195,7 +198,7 @@ export default function ProjectDetailClient() {
   };
   const inviteNewUser = async () => {
     const email = inviteCandidate;
-    if (!email || !isAdmin || inviting || !onboardingAvailable) return;
+    if (!isOwner || !email || !isAdmin || inviting || !onboardingAvailable) return;
     setInviting(true); setError(null);
     let mailRequested = false;
     try {
@@ -210,7 +213,7 @@ export default function ProjectDetailClient() {
     } finally { if (activeProjectIdRef.current === projectId) setInviting(false); }
   };
   const revokePending = async (email: string) => {
-    if (pendingLoading) return;
+    if (!isOwner || pendingLoading) return;
     setPendingLoading(true); setPendingError('');
     try { await projectApi.revokePendingMember(projectId, email); await fetchPending(); }
     catch (error) { if (activeProjectIdRef.current === projectId) setPendingError(error instanceof Error ? error.message : '초대 취소에 실패했습니다.'); }
@@ -218,6 +221,7 @@ export default function ProjectDetailClient() {
   };
 
   const handleRemoveMember = async (userId: string) => {
+    if (!isOwner) return;
     if (!confirm('Remove this member?')) return;
     setError(null);
     try {
@@ -231,7 +235,7 @@ export default function ProjectDetailClient() {
   const handleLinkAccount = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const linkedAccountId = accountId.trim();
-    if (!linkedAccountId) return;
+    if (!isOwner || !accounts.some(account => account.accountId === linkedAccountId && isEditableAccount(account))) return;
     setLinkingAccount(true);
     setError(null);
     try {
@@ -246,6 +250,7 @@ export default function ProjectDetailClient() {
   };
 
   const handleUnlinkAccount = async (linkedAccountId: string) => {
+    if (!isOwner) return;
     if (!confirm('Unlink this account? Its members will lose inherited access to this project.')) return;
     setError(null);
     try {
@@ -267,8 +272,6 @@ export default function ProjectDetailClient() {
     if (typeof window !== 'undefined') window.location.href = '/';
     return null;
   }
-
-  const isOwner = project ? user?.userId === project.ownerUserId : false;
 
   return (
     <AppLayout activePath="/projects">
@@ -300,6 +303,9 @@ export default function ProjectDetailClient() {
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <h2 className="text-xl font-bold text-slate-900 dark:text-text-main">{project.name}</h2>
+                  {project.inheritedFromAccountId && project.accessPermission === 'read' && (
+                    <span className="text-xs text-slate-500 dark:text-text-muted">상위 어카운트에서 공유됨 · 읽기 전용</span>
+                  )}
                   {project.stage && (
                     <span className="text-xs font-semibold px-2 py-1 rounded-full bg-primary/10 text-primary">
                       {project.stage}
@@ -422,7 +428,7 @@ export default function ProjectDetailClient() {
                 )}
                 {isOwner && !accountsLoading && !accountsError && (() => {
                   const linkableAccounts = accounts
-                    .filter((a) => !project.accountIds.includes(a.accountId))
+                    .filter((a) => isEditableAccount(a) && !project.accountIds.includes(a.accountId))
                     .sort((a, b) => a.name.localeCompare(b.name, 'ko'));
                   return (
                     <form onSubmit={handleLinkAccount} className="flex gap-2 pt-2">

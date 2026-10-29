@@ -5,6 +5,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { accountApi, projectApi } from '@/lib/api';
+import { accountCapabilities } from '@/lib/accountAccess';
 import { addMemberWithInvite, planMemberOutcome } from '@/lib/accountInvite';
 import { uploadDocFile } from '@/lib/upload';
 import { MemberPicker } from '@/components/MemberPicker';
@@ -24,6 +25,8 @@ export default function AccountDetailClient() {
   const accountId = decodeURIComponent(pathname.split('/').filter(Boolean).pop() || '');
   const { user, isLoading, isAuthenticated, membershipRevision } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [account, setAccount] = useState<Account | null>(null);
+  const { canEdit, isOwner, directMember } = accountCapabilities(account?.accountId === accountId ? account : null, user?.userId);
   const searchParams = useSearchParams();
   // Billing tab: runtime config billingService and Billing membership of this Account.
   // Read once per Account lookup; an entry for a previous Account never counts, and
@@ -46,7 +49,7 @@ export default function AccountDetailClient() {
     };
   }, [isAuthenticated, accountId]);
   const billingEntry = billing?.accountId === accountId ? billing.entry : null;
-  const billingVisible = billingEntry !== null;
+  const billingVisible = directMember && billingEntry !== null;
   const tabs = visibleAccountTabs(billingVisible);
   const tab = parseAccountTab(searchParams.get('tab'), billingVisible);
   const selectTab = (next: AccountTab) => {
@@ -65,7 +68,6 @@ export default function AccountDetailClient() {
     selectTab(tabs[target]);
   };
 
-  const [account, setAccount] = useState<Account | null>(null);
   const [meetings, setMeetings] = useState<AccountMeetingRef[]>([]);
   const [insights, setInsights] = useState<AccountInsight[]>([]);
   const [documents, setDocuments] = useState<AccountDocument[]>([]);
@@ -152,7 +154,7 @@ export default function AccountDetailClient() {
   }, [isAuthenticated, fetchAll, membershipRevision]);
 
   const handlePickMember = async (picked: Pick<User, 'email'>, role = inviteRole, resendInvitation = false) => {
-    if (activeAccountIdRef.current !== accountId
+    if (!canEdit || activeAccountIdRef.current !== accountId
       || (resendInvitation && pendingNoticeAccountId !== accountId)) return;
     const myAccountId = accountId;
     const generation = ++inviteGeneration.current;
@@ -192,7 +194,7 @@ export default function AccountDetailClient() {
   };
 
   const handleResendOwner = async () => {
-    if (!user?.userId || activeAccountIdRef.current !== accountId || account?.accountId !== accountId || inviting
+    if (!canEdit || !user?.userId || activeAccountIdRef.current !== accountId || account?.accountId !== accountId || inviting
       || !account.members.some((member) => member.userId === user.userId)) return;
     const myAccountId = accountId;
     const initiatingUserId = user.userId;
@@ -216,7 +218,7 @@ export default function AccountDetailClient() {
   };
 
   const handleRevokePendingMember = async () => {
-    if (!pendingNoticeEmail || pendingNoticeAccountId !== accountId
+    if (!isOwner || !pendingNoticeEmail || pendingNoticeAccountId !== accountId
       || activeAccountIdRef.current !== accountId) return;
     const myAccountId = accountId;
     const generation = inviteGeneration.current;
@@ -235,6 +237,7 @@ export default function AccountDetailClient() {
   };
 
   const handleRoleChange = async (userId: string, role: string) => {
+    if (!canEdit) return;
     setError(null);
     try {
       await accountApi.updateMember(accountId, userId, { role });
@@ -245,6 +248,7 @@ export default function AccountDetailClient() {
   };
 
   const handleRemoveMember = async (userId: string) => {
+    if (!isOwner) return;
     if (!confirm('Remove this member?')) return;
     setError(null);
     try {
@@ -282,6 +286,7 @@ export default function AccountDetailClient() {
   };
 
   const handleCreateNote = async () => {
+    if (!canEdit) return;
     try {
       const created = await accountApi.putDocument(accountId, {
         title: '새 노트', docType: 'note', markdown: '# 새 노트\n\n',
@@ -295,7 +300,7 @@ export default function AccountDetailClient() {
   const handleSlideUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
-    if (!file) return;
+    if (!file || !canEdit) return;
     setUploadingSlide(true);
     setError(null);
     try {
@@ -336,7 +341,7 @@ export default function AccountDetailClient() {
             {error}
           </div>
         )}
-        {pendingNotice && pendingNoticeAccountId === accountId && (
+        {canEdit && pendingNotice && pendingNoticeAccountId === accountId && (
           <div className="bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400 text-sm rounded-lg p-3 mb-4 flex items-center justify-between gap-3">
             <div className="min-w-0">
               <p>{pendingNotice}</p>
@@ -347,7 +352,7 @@ export default function AccountDetailClient() {
                 초대 메일 다시 보내기
               </button>}
             </div>
-            {user?.userId === account?.ownerUserId && <button
+            {isOwner && <button
               type="button"
               onClick={handleRevokePendingMember}
               className="shrink-0 font-semibold underline hover:no-underline"
@@ -366,6 +371,9 @@ export default function AccountDetailClient() {
               <span className="material-symbols-outlined text-primary text-3xl">corporate_fare</span>
               <div>
                 <h2 className="text-xl font-bold text-slate-900 dark:text-text-main">{account.name}</h2>
+                {account.inheritedFromAccountId && account.accessPermission === 'read' && (
+                  <p className="mt-1 text-xs text-slate-500 dark:text-text-muted">상위 어카운트에서 공유됨 · 읽기 전용</p>
+                )}
                 {account.industry && (
                   <p className="text-sm text-slate-500 dark:text-text-muted">{account.industry}</p>
                 )}
@@ -399,7 +407,7 @@ export default function AccountDetailClient() {
               {tab === 'general' && (
                 <>
                   {account.accountId === accountId && (
-                    <AccountParentEditor key={accountId} account={account} canEdit={user?.userId === account.ownerUserId}
+                    <AccountParentEditor key={accountId} account={account} canEdit={isOwner}
                       onUpdated={parentAccountId => setAccount(prev => prev?.accountId === accountId ? { ...prev, parentAccountId: parentAccountId || undefined } : prev)} />
                   )}
 
@@ -409,10 +417,9 @@ export default function AccountDetailClient() {
                     <div className="glass-panel rounded-xl p-4 space-y-2">
                       {account.members.filter((m): m is AccountMember & { userId: string } => !!m.userId).map((m) => {
                         const isOwnerRow = m.userId === account.ownerUserId;
-                        const isOwner = user?.userId === account.ownerUserId;
                         // Any member (not just the owner) may change another
                         // member's role -- removal stays owner-only (ADR-034).
-                        const isMember = account.members.some((mm) => mm.userId === user?.userId);
+                        const isMember = canEdit;
                         return (
                           <div key={m.userId} className="flex items-center justify-between text-sm gap-2">
                             <span className="text-slate-700 dark:text-text-secondary truncate">{m.email || m.userId}</span>
@@ -454,7 +461,7 @@ export default function AccountDetailClient() {
                           </div>
                         );
                       })}
-                      {account.members.some((m) => m.userId === user?.userId) && (
+                      {canEdit && (
                         <div className="flex gap-2 pt-2">
                           <div className="flex-1">
                             <MemberPicker
@@ -572,7 +579,7 @@ export default function AccountDetailClient() {
                   <section className="mb-8">
                     <div className="flex items-center justify-between mb-3">
                       <h3 className="text-base font-bold text-slate-900 dark:text-text-main">Documents</h3>
-                      <div className="flex items-center gap-2">
+                      {canEdit && <div className="flex items-center gap-2">
                         <input ref={fileInputRef} type="file" accept=".pdf,.pptx,.ppt" className="hidden" onChange={handleSlideUpload} />
                         <button
                           onClick={() => fileInputRef.current?.click()}
@@ -588,7 +595,7 @@ export default function AccountDetailClient() {
                         >
                           <span className="material-symbols-outlined text-sm">add</span>Note
                         </button>
-                      </div>
+                      </div>}
                     </div>
                     {documents.length === 0 ? (
                       <p className="text-sm text-slate-400 dark:text-text-muted">No documents.</p>

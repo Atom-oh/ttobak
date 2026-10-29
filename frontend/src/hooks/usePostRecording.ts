@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { ApiError, meetingAccountApi, meetingsApi, uploadsApi } from '@/lib/api';
 import { preparationNotes, codePointLength, MAX_MEETING_NOTES } from '@/lib/meetingReferences';
 import { RecordingNotes } from '@/lib/recordingNotes';
+import { resolveRecordingAccountId } from '@/lib/recordingAccount';
 import { readSavedMeetingNotes } from '@/lib/meetingNotes';
 import { putWithProgress, type UploadProgress } from '@/lib/upload';
 import { uploadRecordingWithRetry, onNativeUploadProgress, cleanupRecording, releaseRecordingPower, isCommandNotFound, VERSION_SKEW_MESSAGE } from '@/lib/tauri';
@@ -185,7 +186,15 @@ export function usePostRecording({
     flowGenerationRef.current++;
     const generation = flowGenerationRef.current;
     try {
-      const prepared = { notes: preparationNotes(preparationContext || ''), accountId: accountId || undefined };
+      // Retain the selection for a failed-lookup retry; mutation payloads below
+      // replace this candidate with the freshly validated Account ID.
+      preparationRef.current = { notes: preparationNotes(preparationContext || ''), accountId: accountId || undefined };
+      setPendingAccountValue(preparationRef.current.accountId || null);
+      const creationAccountId = await withTimeout(
+        resolveRecordingAccountId(accountId, notesUserIdRef.current), 15000, 'Validate preparation account',
+      );
+      if (!mountedRef.current || flowGenerationRef.current !== generation) return null;
+      const prepared = { ...preparationRef.current, accountId: creationAccountId };
       preparationRef.current = prepared;
       setPendingAccountValue(prepared.accountId || null);
       const result = await withTimeout(
@@ -238,6 +247,12 @@ export function usePostRecording({
         setStep('creating');
         const notes = submittedNotesRef.current ?? preparationRef.current.notes;
         if (codePointLength(notes) > MAX_MEETING_NOTES) throw new Error('메모를 줄여 다시 저장해 주세요.');
+        const creationAccountId = await withTimeout(
+          resolveRecordingAccountId(preparationRef.current.accountId, identity.expectedUserId), 15000, 'Validate preparation account',
+        );
+        if (!isCurrent()) return;
+        preparationRef.current = { ...preparationRef.current, accountId: creationAccountId };
+        setPendingAccountValue(creationAccountId || null);
         const result = await withTimeout(meetingsApi.create({
           title: meetingTitle || formatDefaultTitle(new Date()), ...preparationRef.current, notes,
         }, identity), 15000, 'Create meeting');

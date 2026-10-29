@@ -5,8 +5,8 @@
   explicit multi-filter semantics and owner-only hierarchy writes remain.
 - Narrows ADR-051's reader speaker-correction permission: inherited-only readers
   cannot correct speakers. Its direct-member and independent-share grants remain.
-- Deployment requires companion consumers, conditional reference bootstrap and
-  an explicit flag activation. This foundation PR remains disabled.
+- Deployment is a separate gate in `docs/runbooks/account-descendant-sharing.md`,
+  delivered with the final QA and rollout companion.
 
 Members of an Account may read its descendants' published content, including
 grandchildren. An ancestor Owner receives read-only access. Direct memberships
@@ -36,6 +36,12 @@ Canonical parent changes and `ACCOUNT#{parent}/CHILDREF#{child}` discovery rows
 share a transaction. References are indexes, never authorization. Bootstrap
 repairs use an observed-parent condition. Discovery consumes empty advancing
 pages and fails explicitly at compatibility limits rather than truncating.
+Bounded discovery retains independently indexed direct roots even when an
+ancestor traversal cannot reach them. Account pages declare overlapping results
+with `overlapPossible` and `unionKey: "accountId"`; clients union by ID and use
+the latest returned permissions. Account/project/meeting/vault catalog data pages
+likewise declare their stable union key. Canonical grants authorize every result;
+candidate-index presence and cursor state never establish access.
 
 Go/API, bounded MCP readers, Account/documents, meeting discovery, projects,
 research and both QA transports use the policy. Frontend responses distinguish
@@ -46,5 +52,5 @@ the flag restores exact direct-membership semantics without deleting references.
 Evidence: [design](../superpowers/specs/2026-10-29-account-descendant-sharing-design.md),
 [plan](../superpowers/plans/2026-10-29-account-descendant-sharing.md),
 [Go resolver](../../backend/internal/service/account_read_access.go),
-Python resolver (companion PR),
+Python resolver `backend/python/qa/account_read_access.py` (final QA companion),
 [relation writes](../../backend/internal/repository/account_hierarchy.go).

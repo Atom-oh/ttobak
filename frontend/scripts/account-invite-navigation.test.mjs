@@ -52,6 +52,9 @@ function fixture(addMember, resendOwnerInvitation = async () => ({}), ownerInvit
   const accountTabs = {};
   vm.runInNewContext(transpile(readFileSync(
     new URL('../src/lib/accountTabs.ts', import.meta.url), 'utf8')), { exports: accountTabs, URLSearchParams });
+  const accountAccess = {};
+  vm.runInNewContext(transpile(readFileSync(
+    new URL('../src/lib/accountAccess.ts', import.meta.url), 'utf8')), { exports: accountAccess });
   const MemberPicker = () => null;
   const emptyComponent = () => null;
   const emptyResult = async () => ({});
@@ -83,6 +86,7 @@ function fixture(addMember, resendOwnerInvitation = async () => ({}), ownerInvit
       projectApi: { accountProjects: async () => ({ projects: [] }) },
     },
     '@/lib/accountInvite': helper, '@/lib/accountTabs': accountTabs, '@/lib/upload': { uploadDocFile() {} },
+    '@/lib/accountAccess': accountAccess,
     '@/components/MemberPicker': { MemberPicker },
     '@/components/FieldInsightsSection': { FieldInsightsSection: emptyComponent },
     '@/components/AccountParentEditor': { AccountParentEditor: emptyComponent },
