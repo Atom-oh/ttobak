@@ -288,7 +288,10 @@ func resolveSharedAccess(ctx context.Context, repo shareAccessRepo, userID, meet
 			if share != nil && !grant.inherited() {
 				permission = share.Permission
 			}
-			return projectAccountMeeting(byID, grant.privacyMember()), permission, nil
+			projected := projectAccountMeeting(byID, grant.privacyMember())
+			copy := *projected
+			copy.AccountReadInherited = grant.inherited()
+			return &copy, permission, nil
 		}
 	}
 
@@ -869,6 +872,9 @@ func (s *MeetingService) UpdateSpeakers(ctx context.Context, userID, meetingID s
 	}
 	if meeting == nil {
 		return nil, ErrNotFound
+	}
+	if meeting.AccountReadInherited {
+		return nil, ErrForbidden
 	}
 	if permission != "owner" && permission != model.PermissionEdit && permission != model.PermissionRead {
 		return nil, ErrForbidden

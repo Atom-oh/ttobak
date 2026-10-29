@@ -1,14 +1,14 @@
 # Descendant Account sharing
 
-> Historical design record. Proposed behavior; this is not evidence of
+> Historical design record. Approved behavior; this is not evidence of
 > implementation or deployment.
 
-- Status: Proposed; product code and production configuration are unchanged.
+- Status: Approved for implementation and deployment on 2026-10-29.
 - Date: 2026-10-29.
 - Source inspected: `6147a43ea2fdfe9471a5baf8c1f77331848124da`.
 - User requirement: members of an upper Account group should receive access to
   content shared with its descendant Accounts.
-- Scope assumption pending user confirmation: inherited access is read-only.
+- Approved scope: inherited access is read-only.
 
 ## Observed problem
 
@@ -55,7 +55,7 @@ published meetings and attachments, Account documents, Account insights,
 linked research, and read access to linked projects and their shared resources.
 Web, authenticated MCP, and both QA transports must agree.
 
-The builder's proposed permission choice is read-only inheritance. Direct
+The approved permission choice is read-only inheritance. Direct
 Account and project memberships retain their existing permissions. Inherited
 read access does not authorize document writes, meeting edits, linking or
 publishing resources, invitations, role updates, removals, ownership changes,
@@ -232,11 +232,9 @@ mutation or external-message authorization.
 
 ## Approval boundary
 
-The diagnosis is verified. This document proposes the read-only permission scope
-and cross-component implementation. Product code, relation bootstrap, feature
-activation and deployment have not been performed for this change.
-
-A fresh builder review raised two material questions. Read-only inheritance,
-including ancestor Owners, remains the single user scope confirmation. Project
-resource exposure is settled above: new inherited-only readers must independently
+The user authorized the read-only design, implementation and deployment on
+2026-10-29. The builder review's permission question is settled: ancestor Owners
+also inherit only reads. New inherited-only project readers must independently
 qualify for each resource before its metadata or derived content is returned.
+Actual bootstrap, feature activation and deployed acceptance belong to the dated
+release record; this design does not establish their completion.
