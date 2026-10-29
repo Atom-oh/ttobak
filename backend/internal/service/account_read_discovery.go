@@ -400,38 +400,34 @@ func (c *accountDiscoveryCursor) validate() error {
 
 // discoveryProof validates the entire current path back to the directly held
 // root. Cursor-supplied nodes/references do not themselves authorize traversal.
-func discoveryProof(ctx context.Context, repo accountReadMembershipRepo, user, root, node string) (string, string, string, error) {
+func discoveryProof(ctx context.Context, repo accountReadMembershipRepo, user, root, node string) (string, string, []repository.AccountParentLink, error) {
 	hierarchy, ok := repo.(accountReadHierarchyRepo)
 	if !ok {
-		return "", "", "", ErrReadingData
+		return "", "", nil, ErrReadingData
 	}
 	rootGrant, err := resolveAccountReadGrant(ctx, repo, root, user)
 	if err != nil {
-		return "", "", "", err
+		return "", "", nil, err
 	}
 	if !validAccountReadIdentity(rootGrant, root, user) || rootGrant.inherited() {
-		return "", "", "", ErrStaleReadingCursor
+		return "", "", nil, ErrStaleReadingCursor
 	}
 	path := []repository.AccountParentLink{}
 	seen := map[string]bool{}
-	parent := ""
 	var rootAccount *model.Account
 	for id := node; ; {
 		if !readingID.MatchString(id) || seen[id] || len(path) > repository.AccountHierarchyMaxAncestors {
-			return "", "", "", ErrStaleReadingCursor
+			return "", "", nil, ErrStaleReadingCursor
 		}
 		seen[id] = true
 		a, err := hierarchy.GetAccount(ctx, id)
 		if err != nil {
-			return "", "", "", err
+			return "", "", nil, err
 		}
 		// Legacy direct records retain their existing identity contract. A
 		// descendant traversal always requires canonical records throughout.
 		if a == nil || a.AccountID != id || (node != root && !canonicalReadAccount(a, id)) {
-			return "", "", "", ErrStaleReadingCursor
-		}
-		if id == node {
-			parent = a.ParentAccountID
+			return "", "", nil, ErrStaleReadingCursor
 		}
 		path = append(path, repository.AccountParentLink{AccountID: id, ParentAccountID: a.ParentAccountID})
 		if id == root {
@@ -442,14 +438,14 @@ func discoveryProof(ctx context.Context, repo accountReadMembershipRepo, user, r
 	}
 	grant, err := resolveAccountReadGrant(ctx, repo, node, user)
 	if err != nil {
-		return "", "", "", err
+		return "", "", nil, err
 	}
 	if !validAccountReadIdentity(grant, node, user) {
-		return "", "", "", ErrStaleReadingCursor
+		return "", "", nil, ErrStaleReadingCursor
 	}
 	rootProof := readingHash([]interface{}{"account-discovery-root-v1", rootAccount, rootGrant.fingerprint()})
 	nodeProof := readingHash([]interface{}{"account-discovery-node-v1", rootProof, path, grant.fingerprint()})
-	return rootProof, nodeProof, parent, nil
+	return rootProof, nodeProof, path, nil
 }
 
 func setDiscoveryNode(ctx context.Context, repo accountReadMembershipRepo, user string, c *accountDiscoveryCursor, node, after string) error {
@@ -541,7 +537,7 @@ func nextReadableAccountCandidate(ctx context.Context, repo accountReadMembershi
 		}
 		return []string{root}, false, nil
 	}
-	rootProof, nodeProof, parent, err := discoveryProof(ctx, repo, user, c.Root, c.Node)
+	rootProof, nodeProof, path, err := discoveryProof(ctx, repo, user, c.Root, c.Node)
 	if err != nil {
 		return nil, false, err
 	}
@@ -574,7 +570,16 @@ func nextReadableAccountCandidate(ctx context.Context, repo accountReadMembershi
 		if err != nil {
 			return nil, false, err
 		}
-		if canonicalReadAccount(a, child) && a.ParentAccountID == c.Node {
+		// A direct grant remains valid independently of malformed ancestry,
+		// but traversal must not revisit its current path or exceed the bound.
+		canDescend := len(path) <= repository.AccountHierarchyMaxAncestors
+		for _, link := range path {
+			if link.AccountID == child {
+				canDescend = false
+				break
+			}
+		}
+		if canDescend && canonicalReadAccount(a, child) && a.ParentAccountID == c.Node {
 			g, err := resolveAccountReadGrant(ctx, repo, child, user)
 			if err != nil {
 				return nil, false, err
@@ -596,11 +601,11 @@ func nextReadableAccountCandidate(ctx context.Context, repo accountReadMembershi
 		c.Done = c.DirectDone
 		return []string{}, c.Done, nil
 	}
-	after, err := repository.AccountChildCursorAfter(parent, c.Node)
+	after, err := repository.AccountChildCursorAfter(path[0].ParentAccountID, c.Node)
 	if err != nil {
 		return nil, false, ErrReadingData
 	}
-	if err := setDiscoveryNode(ctx, repo, user, c, parent, after); err != nil {
+	if err := setDiscoveryNode(ctx, repo, user, c, path[0].ParentAccountID, after); err != nil {
 		return nil, false, err
 	}
 	return []string{}, false, nil
