@@ -23,7 +23,7 @@ def _load(p):
 
 
 def _dump(p, rows, compact=False):
-    body = json.dumps(rows, ensure_ascii=False, separators=(",", ":") if compact else None)
+    body = json.dumps(rows, ensure_ascii=False, separators=(",", ":") if compact else None, allow_nan=False)
     with open(p, "w", encoding="utf-8") as f:
         f.write(body)
     return len(body.encode())
@@ -50,10 +50,10 @@ def _catalog(parts, out_dir):
         p = os.path.join(out_dir, c["id"] + ".json")
         rows = _load(p) if os.path.exists(p) else []
         cols = raw_export.columns(rows)
-        for col in cols:  # as raw_export: a string column holds strings only
+        for col in cols:  # as raw_export: a string column holds strings or null
             if col["type"] == "str":
                 for r in rows:
-                    if col["name"] in r and not isinstance(r[col["name"]], str):
+                    if r.get(col["name"]) is not None and not isinstance(r[col["name"]], str):
                         r[col["name"]] = str(r[col["name"]])
         size = _dump(p, rows, compact=True)
         if size > raw_export.MAX_BYTES:

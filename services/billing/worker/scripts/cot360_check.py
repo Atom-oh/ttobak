@@ -1,11 +1,13 @@
 """Cross-check the computed datasets against the KPIs and the COT360 page totals; write checks.json.
 
-Usage: cot360_check.py <data_dir> <extracted_dir>
-Exit 0 when every check is ok, 1 otherwise (a failed check blocks publishing).
+Usage: cot360_check.py <data_dir> <extracted_dir> <csv_dir>
+Exit 0 when every check is ok, 1 otherwise (a failed check blocks publishing). The linked-account sheet is optional
+(build_data.optional_sheet): without it the accounts reconciliation is reported as not applicable, not as a $0 total.
 """
 import html, json, os, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # -I drops the script dir
+import accounts  # noqa: E402
 import entities  # noqa: E402
 import period  # noqa: E402
 import htmltext as HT  # noqa: E402
@@ -17,13 +19,26 @@ def _page_lines(path):
     return [] if t is None else [x.strip() for x in html.unescape(t).split("\n") if x.strip()]
 
 
+LABELS = ("Total Modernization Savings Est.", "Potential Monthly Savings", "Next SP Expiry")
+
+
 def _after(lines, label, pick=lambda x: True):
-    """The first line after label that pick accepts, or None when the label or such a line is missing."""
+    """The first line after label that pick accepts, within the label's own block: the scan stops at the next KPI
+    label, so a missing figure is None and never a neighbouring KPI's figure."""
     try:
         i = lines.index(label)
     except ValueError:
         return None
-    return next((x for x in lines[i + 1:] if pick(x)), None)
+    for x in lines[i + 1:]:
+        if x in LABELS:
+            return None
+        if pick(x):
+            return x
+    return None
+
+
+def _has_accounts_sheet(csv_dir, e):
+    return accounts.sheet(os.path.join(csv_dir, e, "Data_Linked_Account_Costs.csv"), e) is not None
 
 
 def _cost(r):
@@ -36,7 +51,7 @@ def _row(entity, name, got, want, ok):
     return {"entity": entity, "name": name, "got": got, "want": want, "ok": bool(ok)}
 
 
-def main(data_dir, extracted_dir):
+def main(data_dir, extracted_dir, csv_dir):
     last = period.LAST
     if not last:
         print("no billing period (COT_MONTHS unset)", file=sys.stderr)
@@ -55,6 +70,9 @@ def main(data_dir, extracted_dir):
     for name, got_of in (("raw_service_costs", lambda e: sum(_cost(r) for r in raw if r.get("entity") == e and r.get("month") == last)),
                          ("accounts", lambda e: sum(r["last"] for r in acc if r["entity"] == e))):
         for e, want in kp.items():
+            if name == "accounts" and not _has_accounts_sheet(csv_dir, e):
+                checks.append(_row(e, name, "n/a", "no Data_Linked_Account_Costs sheet", True))
+                continue
             got = got_of(e)
             checks.append(_row(e, name, got, want, abs(got - want) <= max(1.0, want * 0.001)))
     for e in sorted(kp):
@@ -82,6 +100,6 @@ def main(data_dir, extracted_dir):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        sys.exit("usage: cot360_check.py <data_dir> <extracted_dir>")
-    sys.exit(main(sys.argv[1], sys.argv[2]))
+    if len(sys.argv) != 4:
+        sys.exit("usage: cot360_check.py <data_dir> <extracted_dir> <csv_dir>")
+    sys.exit(main(*sys.argv[1:]))

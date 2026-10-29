@@ -11,7 +11,7 @@ from entities import ENTITIES  # noqa: E402
 from period import H1, H2, LAST, MONTHS, PRESENT  # noqa: E402
 SHEETS = {"OD": "Data_On_Demand_Usage.csv", "SP": "Data_Savings_Plan_Usage.csv",
           "RI": "Data_Reserved_Instance_Usage.csv", "Spot": "Data_Spot_Usage.csv"}
-ACCEL = ("g", "p", "inf", "trn", "dl", "vt", "f")
+ACCEL = ("g", "gr", "p", "inf", "trn", "dl", "vt", "f")  # gr6 is a GPU family too (build_data.GPU_RE)
 
 
 def rows(path, entity):

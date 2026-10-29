@@ -22,8 +22,12 @@ class Cot360Check(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR"))
         self.data = os.path.join(self.tmp.name, "data")
         self.ex = os.path.join(self.tmp.name, "extracted")
+        self.csv = os.path.join(self.tmp.name, "csv")
         os.makedirs(self.data)
         os.makedirs(os.path.join(self.ex, "acct-a"))
+        os.makedirs(os.path.join(self.csv, "acct-a"))
+        self.accounts_sheet = os.path.join(self.csv, "acct-a", "Data_Linked_Account_Costs.csv")
+        wr(",Report Name,timePeriod.start,keys\n", self.accounts_sheet, "w", encoding="utf-8")
         tables = {
             "kpis": [{"entity": "acct-a", "last_spend": 1000.0}],
             "raw_service_costs": [{"entity": "acct-a", "month": MONTH, "cost": 600.0},
@@ -48,7 +52,7 @@ class Cot360Check(unittest.TestCase):
     def run_check(self, savings, run_entities=()):
         wr(page(savings), os.path.join(self.ex, "acct-a", "COT_acct-a_COT360.html"), "w", encoding="utf-8")
         with mock.patch.object(period, "LAST", MONTH), mock.patch.object(entities, "ENTITIES", list(run_entities)):
-            rc = cot360_check.main(self.data, self.ex)
+            rc = cot360_check.main(self.data, self.ex, self.csv)
         return rc, jload(os.path.join(self.data, "checks.json"), encoding="utf-8")
 
     def test_match_returns_0(self):
@@ -78,10 +82,35 @@ class Cot360Check(unittest.TestCase):
         wr(page("50.00").replace("Potential Monthly Savings", "Something else"),
            os.path.join(self.ex, "acct-a", "COT_acct-a_COT360.html"), "w", encoding="utf-8")
         with mock.patch.object(period, "LAST", MONTH), mock.patch.object(entities, "ENTITIES", []):
-            rc = cot360_check.main(self.data, self.ex)
+            rc = cot360_check.main(self.data, self.ex, self.csv)
         rows = jload(os.path.join(self.data, "checks.json"), encoding="utf-8")
         el = next(r for r in rows if r["name"] == "elasticity")
         self.assertEqual((rc, el["ok"], el["want"]), (1, False, None))
+
+    def test_missing_figure_does_not_borrow_the_next_kpi(self):
+        # modernization's own figure is missing: the next dollar line belongs to elasticity, and equals the
+        # computed modernization total (130), so borrowing it would pass
+        html = page("130.00").replace("<b>$130.00</b><div>Potential", "<div>Potential")
+        wr(html, os.path.join(self.ex, "acct-a", "COT_acct-a_COT360.html"), "w", encoding="utf-8")
+        with mock.patch.object(period, "LAST", MONTH), mock.patch.object(entities, "ENTITIES", []):
+            rc = cot360_check.main(self.data, self.ex, self.csv)
+        rows = {r["name"]: r for r in jload(os.path.join(self.data, "checks.json"), encoding="utf-8")}
+        self.assertEqual((rc, rows["modernization"]["want"], rows["modernization"]["ok"]), (1, None, False))
+        self.assertEqual(rows["elasticity"]["want"], 130.0)
+
+    def test_missing_linked_account_sheet_is_not_a_mismatch(self):
+        # the sheet is optional (build_data.optional_sheet): accounts.json is then empty for the entity
+        os.remove(self.accounts_sheet)
+        jdump([], os.path.join(self.data, "accounts.json"), "w", encoding="utf-8")
+        rc, rows = self.run_check("50.00")
+        self.assertEqual(rc, 0)
+        acc = next(r for r in rows if r["name"] == "accounts")
+        self.assertEqual((acc["got"], acc["ok"]), ("n/a", True))
+        # with the sheet present, no account rows is a real shortfall
+        wr(",Report Name,timePeriod.start,keys\n", self.accounts_sheet, "w", encoding="utf-8")
+        rc, rows = self.run_check("50.00")
+        self.assertEqual(rc, 1)
+        self.assertEqual([(r["name"], r["got"]) for r in rows if not r["ok"]], [("accounts", 0)])
 
     def test_oversized_page_is_a_mismatch(self):
         import htmltext

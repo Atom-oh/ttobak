@@ -341,6 +341,21 @@ class MergeDashboard(unittest.TestCase):
             self.assertNotEqual(cm.exception.code, 0)
             self.assertFalse(os.path.exists(out))
 
+    def test_catalog_keeps_null_in_string_columns(self):
+        import merge_datasets
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as t:
+            jdump([{"k": "x"}, {"k": "y"}, {"k": None}, {"k": 5}], os.path.join(t, "raw_x.json"), "w")
+            cat = merge_datasets._catalog([[{"id": "raw_x", "sheet": "S", "rows_by_entity": {E: 3}}]], t)
+            self.assertEqual([c["type"] for c in cat[0]["columns"]], ["str"])
+            self.assertEqual(strict_json(os.path.join(t, "raw_x.json")), [{"k": "x"}, {"k": "y"}, {"k": None}, {"k": "5"}])
+
+
+class Ec2Classify(unittest.TestCase):
+    def test_gr6_is_a_gpu_family(self):
+        import ec2_types
+        self.assertEqual(ec2_types.classify("gr6.4xlarge")[4], "gpu/accel")
+        self.assertEqual(ec2_types.classify("m7g.large")[4], "graviton")
+
 
 if __name__ == "__main__":
     unittest.main()
