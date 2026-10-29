@@ -207,17 +207,23 @@ func (s *VaultService) exportDocuments(ctx context.Context, userID string, nameC
 		}
 		scopes = append(scopes, docScope{pk: model.PrefixAccount + id, accountName: name, grant: grant})
 	}
+	checkScope := func(scope docScope) error {
+		if scope.grant == nil {
+			return nil
+		}
+		valid, err := revalidateAccountReadGrant(ctx, readRepo, scope.grant, userID)
+		if err != nil {
+			return err
+		}
+		if !valid {
+			return ErrForbidden
+		}
+		return nil
+	}
 	checkGrants := func() error {
 		for _, scope := range scopes {
-			if scope.grant == nil {
-				continue
-			}
-			valid, err := revalidateAccountReadGrant(ctx, readRepo, scope.grant, userID)
-			if err != nil {
+			if err := checkScope(scope); err != nil {
 				return err
-			}
-			if !valid {
-				return ErrForbidden
 			}
 		}
 		return nil
@@ -225,6 +231,9 @@ func (s *VaultService) exportDocuments(ctx context.Context, userID string, nameC
 
 	seenPaths := map[string]bool{}
 	for _, scope := range scopes {
+		if err := checkScope(scope); err != nil {
+			return nil, err
+		}
 		stubs, err := s.repo.ListAccountDocuments(ctx, scope.pk)
 		if err != nil {
 			return nil, err
@@ -236,21 +245,21 @@ func (s *VaultService) exportDocuments(ctx context.Context, userID string, nameC
 			if stub.FileKey != "" {
 				continue // slide -- no markdown content to export
 			}
-			if err := checkGrants(); err != nil {
+			if err := checkScope(scope); err != nil {
 				return nil, err
 			}
 			full, err := s.repo.GetAccountDocument(ctx, scope.pk, stub.DocID)
 			if err != nil {
 				return nil, err
 			}
-			if full == nil || full.Content == "" {
-				continue
-			}
-			if full.PK != scope.pk || full.DocID != stub.DocID {
+			if full != nil && full.Content != "" && (full.PK != scope.pk || full.DocID != stub.DocID) {
 				return nil, ErrReadingData
 			}
-			if err := checkGrants(); err != nil {
+			if err := checkScope(scope); err != nil {
 				return nil, err
+			}
+			if full == nil || full.Content == "" {
+				continue
 			}
 			md := buildDocFrontmatter(full) + full.Content
 			files = append(files, model.VaultFile{Path: docVaultPath(full, scope.accountName, seenPaths), Markdown: md})
