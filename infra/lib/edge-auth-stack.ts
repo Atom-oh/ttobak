@@ -263,7 +263,7 @@ exports.handler = async (event) => {
     // Lambda@Edge function
     const fn = new lambda.Function(this, 'EdgeAuthFunction', {
       functionName: 'ttobak-edge-auth',
-      runtime: lambda.Runtime.NODEJS_20_X,
+      runtime: lambda.Runtime.NODEJS_24_X,
       handler: 'index.handler',
       code: lambda.Code.fromInline(edgeFunctionCode),
       role: edgeRole,

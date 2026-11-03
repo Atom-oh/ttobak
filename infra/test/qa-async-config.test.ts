@@ -39,7 +39,7 @@ test('the explicit app opt-in produces boolean true in the deployed config asset
   } });
   const dependencies = new cdk.Stack(app, 'Dependencies');
   const edge = new lambda.Function(dependencies, 'Edge', {
-    runtime: lambda.Runtime.NODEJS_20_X,
+    runtime: lambda.Runtime.NODEJS_24_X,
     handler: 'index.handler',
     code: lambda.Code.fromInline('exports.handler = async event => event;'),
   });
