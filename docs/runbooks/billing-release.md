@@ -48,8 +48,9 @@ Billing API request must remain unauthorized.
    Assert exact equality after restoring that single property. Validate schema
    and review the security boundary, then create an UPDATE change set with every
    existing parameter set to `UsePreviousValue: true`. Inspect pre-deployment
-   validation results. Reject any change outside the worker task definition and
-   the EventBridge target that references it.
+   validation results. Reject changes outside the worker task definition, its
+   referencing EventBridge target and the existing EventBridge invoke policy's
+   task-ARN reference update. The policy statement itself must remain unchanged.
 4. Execute the reviewed change set. Wait for `UPDATE_COMPLETE`, then verify the
    live task definition's image digest and the `JobCreated` rule's target refer
    to the new task revision. Preserve the prior image and template for rollback.
