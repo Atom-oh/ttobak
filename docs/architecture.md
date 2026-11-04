@@ -120,6 +120,16 @@ plaintext code. The companion shows whose account the code is for, deletes the
 row to redeem it once the user confirms, and authorizes from
 TTOBAK account membership itself; TTOBAK grants it no table access (API-SPEC).
 
+The Billing service (ADR-056, `services/billing/`) is part of TTOBAK, distinct
+from that companion. CloudFront routes `/api/billing/*` to the Billing BFF, an
+IAM-authenticated Lambda Web Function behind OAC, which verifies the forwarded
+TTOBAK JWT and allows an account only to its direct members. `/billing` frames the
+static `/billing-app/` pages. Uploads go by presigned URL through
+`/billing-upload/*`, rewritten to the Billing data bucket. The Python worker
+(`services/billing/worker`, `run_account.sh`: validate, extract, datasets, check;
+then agents and report) builds the datasets the BFF serves. Its code is on main,
+but no CDK resource runs it yet (INFRA-SPEC "Billing BFF stack").
+
 ## Data paths
 
 1. Capture microphone/tab/native system audio. Live captions use browser Transcribe
