@@ -241,6 +241,8 @@ class StrictAccountReader:
                     restricted = True
                     continue
                 if not self._insight_allowed(parent, member, row, owner, meeting_id, account_id):
+                    if self._published(parent, owner, meeting_id, account_id):
+                        restricted = True
                     continue
                 source = (*source, self._generation(parent), _text(parent, 'insightsRevision'),
                           account_summary_approval_fingerprint(parent))
