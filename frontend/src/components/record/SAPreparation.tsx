@@ -34,8 +34,8 @@ export function SAPreparation({ value, onChange, title, onTitleChange, accountId
   const generation = useRef(0);
   const activeLoad = useRef(0);
   const loadedInitial = useRef('');
-  const callbacks = useRef({ value, title, onChange, onTitleChange });
-  useEffect(() => { callbacks.current = { value, title, onChange, onTitleChange }; }, [value, title, onChange, onTitleChange]);
+  const callbacks = useRef({ value, title, onChange, onTitleChange, userId, catalogKey });
+  useEffect(() => { callbacks.current = { value, title, onChange, onTitleChange, userId, catalogKey }; }, [value, title, onChange, onTitleChange, userId, catalogKey]);
   useEffect(() => {
     // A request epoch, not a DOM ref: cleanup invalidates pending callbacks.
     const epoch = generation;
@@ -107,11 +107,13 @@ export function SAPreparation({ value, onChange, title, onTitleChange, accountId
     try {
       preparationNotes(value);
       const document = await docApi.put({ title: title.trim() || 'SA 미팅 준비', docType: 'prep', markdown: value });
+      const current = callbacks.current;
+      if (current.userId !== userId) return;
       setSaved({ id: document.docId, text: value });
-      setDocuments((current) => [document, ...(documentStatus.key === catalogKey ? current : []).filter((item) => item.docId !== document.docId)]);
-      setDocumentStatus({ key: catalogKey, error: '' });
+      setDocuments((documents) => [document, ...documents.filter((item) => item.docId !== document.docId)]);
+      setDocumentStatus({ key: current.catalogKey, error: '' });
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : '준비 문서를 저장하지 못했습니다.');
+      if (callbacks.current.userId === userId) setError(failure instanceof Error ? failure.message : '준비 문서를 저장하지 못했습니다.');
     } finally {
       setBusy(false);
     }
