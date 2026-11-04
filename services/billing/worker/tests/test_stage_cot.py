@@ -5,6 +5,35 @@ from cot_fixtures import *  # noqa: E402,F401,F403 (shared COT upload fixtures a
 
 
 class StageCot(Tmp):
+    def test_valid_three_core_files(self):
+        make_zip(self.zip, three())
+        self.assertEqual(self.stage(), (0, None))
+        got = sorted(os.listdir(os.path.join(self.work, "extracted", "acct-a")))
+        self.assertEqual(got, ["COT_acct-a_COH_Template.xlsx", "COT_acct-a_COT360.html",
+                               "COT_acct-a_Current_State_Template.xlsx"])
+
+    def test_optional_workbook_and_presentation_are_independent(self):
+        for optional in ("Template.xlsx", "PPT_Companion.pptx"):
+            make_zip(self.zip, {**three(), "COT_OrigCo_" + optional: b"optional"})
+            self.assertEqual(self.stage(), (0, None), optional)
+            dest = os.path.join(self.work, "extracted", "acct-a")
+            self.assertEqual(len(os.listdir(dest)), 4)
+            self.assertEqual(rd(os.path.join(dest, "COT_acct-a_" + optional), "rb"), b"optional")
+
+    def test_each_core_file_is_required_without_optional_files(self):
+        for missing in ("Current_State_Template.xlsx", "COH_Template.xlsx", "COT360.html"):
+            make_zip(self.zip, {n: v for n, v in three().items() if not n.endswith("_" + missing)})
+            rc, reason = self.stage()
+            self.assertEqual(rc, 3)
+            self.assertEqual(reason, "필수 COT 파일 누락: " + missing)
+
+    def test_duplicate_optional_kind_is_rejected(self):
+        for optional in ("Template.xlsx", "PPT_Companion.pptx"):
+            make_zip(self.zip, {**three(), "COT_OrigCo_" + optional: b"x", "COT_Other_" + optional: b"y"})
+            rc, reason = self.stage()
+            self.assertEqual(rc, 3)
+            self.assertIn("여러 개", reason)
+
     def test_valid_five_files(self):
         make_zip(self.zip, five())
         self.assertEqual(self.stage(), (0, None))
@@ -108,7 +137,7 @@ class StageCot(Tmp):
         make_zip(self.zip, m)
         rc, reason = self.stage()
         self.assertEqual(rc, 3)
-        self.assertTrue(reason.startswith("COT 파일 5종 중 누락: "), reason)
+        self.assertTrue(reason.startswith("필수 COT 파일 누락: "), reason)
         self.assertIn("COH_Template.xlsx", reason)
         self.assertIn("COT360.html", reason)
 
@@ -188,6 +217,55 @@ class StageCot(Tmp):
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(stage_cot.main(self.zip, self.work, "../x"), 2)
         self.assertFalse(os.path.exists(os.path.join(self.d, "x")))
+
+
+class CombinedWorkbooks(Tmp):
+    def make_workbooks(self):
+        paths = [os.path.join(self.d, n + ".xlsx") for n in ("current", "coh")]
+        for path, sheet in zip(paths, ("Data Current", "Data COH")):
+            xlsx(path, {sheet: [["1"], ["1"]]})
+        return paths
+
+    def convert_pair(self, paths, **caps):
+        code = ("import json, sys; sys.path.insert(0, sys.argv[1]); import xlsx2csv; "
+                "xlsx2csv.main(sys.argv[3:5], sys.argv[2], 'Data', 'acct-a', **json.loads(sys.argv[5]))")
+        return subprocess.run([sys.executable, "-I", "-c", code, SCRIPTS, os.path.join(self.d, "csv"),
+                               *paths, json.dumps(caps)], capture_output=True, text=True)
+
+    def test_pair_shares_row_cell_output_and_sheet_limits(self):
+        paths = self.make_workbooks()
+        for cap, value, reason in (("max_rows", 3, "COT 엑셀 시트가 너무 큽니다"),
+                                   ("max_cells", 3, "COT 엑셀 시트가 너무 큽니다"),
+                                   ("max_out", 10, "COT 엑셀 변환 결과가 너무 큽니다"),
+                                   ("max_sheets", 1, "COT 엑셀 시트가 너무 많습니다")):
+            with self.subTest(cap=cap):
+                result = self.convert_pair(paths, **{cap: value})
+                self.assertEqual(result.returncode, 3, result.stderr[-500:])
+                self.assertEqual(json.loads(result.stdout), {"reason": reason})
+
+    def test_pair_archive_size_limit_is_shared(self):
+        paths = self.make_workbooks()
+        sizes = []
+        for path in paths:
+            with zipfile.ZipFile(path) as archive:
+                sizes.append(sum(i.file_size for i in archive.infolist()))
+        code = ("import sys; sys.path.insert(0, sys.argv[1]); import xlsx2csv; "
+                "xlsx2csv.MAX_UNZIPPED = int(sys.argv[5]); "
+                "xlsx2csv.main(sys.argv[3:5], sys.argv[2], 'Data', 'acct-a')")
+        result = subprocess.run([sys.executable, "-I", "-c", code, SCRIPTS, os.path.join(self.d, "csv"),
+                                 *paths, str(max(sizes) + 1)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 3, result.stderr[-500:])
+        self.assertIn("너무 큽니다", json.loads(result.stdout)["reason"])
+
+    def test_pair_cli_extracts_disjoint_data_sheets(self):
+        paths = self.make_workbooks()
+        result = subprocess.run([sys.executable, "-I", os.path.join(SCRIPTS, "xlsx2csv.py"), "--combine",
+                                 os.path.join(self.d, "csv"), "Data", "acct-a", *paths],
+                                capture_output=True, text=True)
+        self.assertEqual((result.returncode, result.stdout), (0, ""), result.stderr[-500:])
+        self.assertEqual(sorted(os.listdir(os.path.join(self.d, "csv"))), ["Data_COH.csv", "Data_Current.csv"])
+        for sheet in ("Data_COH.csv", "Data_Current.csv"):
+            self.assertEqual(rd(os.path.join(self.d, "csv", sheet)), "1\n1\n")
 
 
 class Relabel(Tmp):

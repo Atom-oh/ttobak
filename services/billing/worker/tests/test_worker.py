@@ -784,6 +784,15 @@ class TestWorker(Base):
             ddb.items[LEASE] = lease
         return ddb, base
 
+    def test_rerun_succeeds_without_put_item_permission(self):
+        ddb, base = self.rerun_setup()
+        runner = Runner()
+        with mock.patch.object(ddb, "put_item", side_effect=FakeClientError("AccessDeniedException")):
+            self.assertEqual(self.run_main(ddb, runner), 0)
+        self.assertTrue(runner.cmds)
+        self.assertEqual(ddb.py(("ACCT#acct-a", "META"))["ai_cot"], "ok")
+        self.assertNotIn(LEASE, ddb.items, "lease released on success")
+
     def test_rerun_while_lease_live_writes_nothing(self):
         ddb, base = self.rerun_setup(lease_item("other", time.time() + 900))
         runner = Runner()
@@ -791,8 +800,8 @@ class TestWorker(Base):
         self.assertEqual(runner.cmds, [])
         self.assertEqual(self.data_s3.calls, [])
         self.assertEqual(self.sts.calls, [])
-        self.assertEqual(self.writes(ddb), [])
-        self.assertEqual([c[0] for c in ddb.calls], ["put", "get"], "only the refused acquire and its owner check")
+        self.assertEqual(self.writes(ddb), [ddb.calls[0]], "only the refused lease acquisition was attempted")
+        self.assertEqual([c[0] for c in ddb.calls], ["update", "get"], "only the refused acquire and its owner check")
         self.assertEqual(ddb.calls[1][1:], (LEASE, {"ConsistentRead": True}))
         self.assertEqual(ddb.py(LEASE)["owner"], "other")
         self.assertEqual(ddb.py(("ACCT#acct-a", "META"))["ai_cot"], "none")
@@ -803,8 +812,8 @@ class TestWorker(Base):
         runner = Runner(hooks={"agents": lambda cmd, kw: seen.append(ddb.py(LEASE))})
         t0 = int(time.time())
         self.assertEqual(self.run_main(ddb, runner, env=self.env(RERUN_TIMEOUT_S="600")), 0)
-        put = [c for c in ddb.calls if c[0] == "put"][0]
-        self.assertEqual(put[3], "attribute_not_exists(pk) OR expiresAt < :now")
+        acquire = [c for c in ddb.calls if c[0] == "update" and c[1] == LEASE][0]
+        self.assertEqual(acquire[5], "attribute_not_exists(pk) OR expiresAt < :now")
         self.assertNotEqual(seen[0]["owner"], "other")
         self.assertTrue(re.fullmatch(r"[0-9a-f]{32}", seen[0]["owner"]))
         self.assertTrue(t0 + 600 + W.LEASE_GRACE_S <= seen[0]["expiresAt"] <= t0 + 600 + W.LEASE_GRACE_S + 3)
@@ -815,17 +824,17 @@ class TestWorker(Base):
         self.assertEqual(len(rel), 1)
         self.assertEqual(rel[0][2:], ("#o = :o", {":o": {"S": seen[0]["owner"]}}))
 
-    def test_lease_put_committed_with_lost_response_is_ours(self):
-        """The lease put commits, its response is lost and the SDK retry fails the condition: the stored owner is ours."""
+    def test_lease_update_committed_with_lost_response_is_ours(self):
+        """The lease update commits, response is lost and SDK retry fails the condition: the stored owner is ours."""
         ddb, base = self.rerun_setup()
-        put = ddb.put_item
+        update = ddb.update_item
 
         def committed_then_retried(**kw):
-            r = put(**kw)
-            if kw["Item"]["sk"]["S"] == LEASE[1]:
+            r = update(**kw)
+            if kw.get("ConditionExpression") == "attribute_not_exists(pk) OR expiresAt < :now":
                 raise FakeClientError("ConditionalCheckFailedException")
             return r
-        ddb.put_item = committed_then_retried
+        ddb.update_item = committed_then_retried
         runner = Runner()
         self.assertEqual(self.run_main(ddb, runner), 0)
         self.assertTrue(runner.cmds, "the rerun ran")
@@ -901,7 +910,7 @@ class TestWorker(Base):
             self.assertEqual(ddb.py(("ACCT#acct-a", "META"))["ai_cot"], "none", after)
             self.assertEqual(ddb.py(LEASE)["owner"], "successor")
             # every publish write ran under a renewal conditioned on our unexpired lease
-            renews = [c for c in ddb.calls if c[0] in ("update", "tx-update") and c[1] == LEASE]
+            renews = [c for c in ddb.calls if c[0] in ("update", "tx-update") and c[1] == LEASE][1:]
             self.assertTrue(renews)
             for c in renews:
                 self.assertEqual(c[5], "#o = :o AND expiresAt > :now")
@@ -922,7 +931,7 @@ class TestWorker(Base):
         tx = [c[1] for c in ddb.calls if c[0] == "transact"]
         self.assertEqual(tx, [[LEASE, ("ACCT#acct-a", "UP#" + UP)], [LEASE, ("ACCT#acct-a", "META")]])
         self.assertEqual(ddb.py(("ACCT#acct-a", "META"))["ai_cot"], "ok")
-        renews = [c for c in ddb.calls if c[0] in ("update", "tx-update") and c[1] == LEASE]
+        renews = [c for c in ddb.calls if c[0] in ("update", "tx-update") and c[1] == LEASE][1:]
         for c in renews:  # pushed out to at least the grace from now, never shortened
             self.assertGreaterEqual(int(c[3][":e"]["N"]), t0 + W.LEASE_GRACE_S)
             self.assertEqual(c[4], {"#o": "owner", "#t": "ttl"})

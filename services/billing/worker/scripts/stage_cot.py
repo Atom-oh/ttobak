@@ -1,8 +1,9 @@
 """Stage one uploaded COT zip (untrusted) for one account under canonical file names.
 
 Usage: python3 -I stage_cot.py <zip> <work_dir> <acct>
-Writes <work>/extracted/<acct>/COT_<acct>_{Template.xlsx, Current_State_Template.xlsx, COH_Template.xlsx,
-PPT_Companion.pptx, COT360.html}, replacing an earlier stage there. Files are recognised by suffix (case-insensitive), whatever the customer
+Writes the three core files (Current_State_Template.xlsx, COH_Template.xlsx, COT360.html) and optional
+Template.xlsx / PPT_Companion.pptx under <work>/extracted/<acct>/COT_<acct>_<kind>, replacing an earlier stage.
+Files are recognised by suffix (case-insensitive), whatever the customer
 name in front; '_Template.xlsx' is the workbook left after the more specific suffixes.
 Exit 0 when staged; 3 with {"reason": ...} on stdout when the upload is invalid; 2 for a bad account id.
 """
@@ -15,6 +16,7 @@ ACCT = re.compile(r"[A-Za-z0-9_-]{1,64}")
 ALLOWED = {".xlsx", ".pptx", ".html"}
 # most specific first: '_Template.xlsx' also ends the COH and Current State workbooks
 KINDS = ("COT360.html", "COH_Template.xlsx", "Current_State_Template.xlsx", "PPT_Companion.pptx", "Template.xlsx")
+REQUIRED = ("Current_State_Template.xlsx", "COH_Template.xlsx", "COT360.html")
 
 
 def classify(names):
@@ -26,11 +28,10 @@ def classify(names):
             raise safezip.ZipRejected(f"같은 종류의 COT 파일이 여러 개입니다: {kind}")
         if hits:
             found[kind] = hits[0]
-        else:
+        elif kind in REQUIRED:
             missing.append(kind)
     if missing:
-        order = ["Template.xlsx", "Current_State_Template.xlsx", "COH_Template.xlsx", "PPT_Companion.pptx", "COT360.html"]
-        raise safezip.ZipRejected("COT 파일 5종 중 누락: " + ", ".join(k for k in order if k in missing))
+        raise safezip.ZipRejected("필수 COT 파일 누락: " + ", ".join(k for k in REQUIRED if k in missing))
     extra = [n for n in names if n not in found.values()]
     if extra:
         raise safezip.ZipRejected(f"허용되지 않은 파일: {safezip.show(extra[0])}")

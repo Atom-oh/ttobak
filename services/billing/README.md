@@ -12,8 +12,10 @@ Billing Insight inside TTOBAK (ADR-056). Three parts:
 - `page/`: dashboard and upload pages, served at `/billing-app/` (below).
 - `worker/`: Python pipeline that turns uploaded COT/CUR exports into dashboard
   datasets, agent notes and the report. See [worker/README.md](worker/README.md).
-  The worker code and its image definition are in the repository; no CDK resource
-  runs it yet.
+  The worker code and its image definition are in the repository. TTOBAK CDK
+  does not create a worker; production uses the existing companion ECS task
+  against the shared bucket. Its image rollout is separate:
+  [Billing release](../../docs/runbooks/billing-release.md).
 
 ## Provenance
 

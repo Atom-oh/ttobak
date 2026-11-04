@@ -748,6 +748,12 @@ Resources:
     `Select: SPECIFIC_ATTRIBUTES` and attributes limited to `PK`, `SK`, `GSI1PK`,
     `GSI1SK` and `accountId`. GSI1 projects all attributes and is shared with
     meeting and project rows.
+  - Base-table `Query` for `ACCOUNT#*` partitions, `SPECIFIC_ATTRIBUTES` and only
+    `PK` / `SK`, discovers `CHILDREF#` candidates. IAM cannot constrain the sort-key
+    prefix; the application's bounded query selects it and canonical reads grant
+    access. The limited ability to enumerate opaque membership keys is recorded in
+    ADR-060. Inherited grants receive a `TransactGetItems` confirmation using the
+    existing projected `GetItem` permissions.
 - Dedicated code bucket: versioned, SSE-S3, TLS-only, all public access
   blocked, retained on delete, no lifecycle rule.
   - Its policy lets `lambda.amazonaws.com` read objects and object versions
@@ -780,6 +786,12 @@ when `ttobak:billingEnabled` is `"true"`; otherwise it skips the deploy. The
 HTTP-origin release coordinator's `STACKS` list does not include this stack.
 Every workflow that synthesizes the app (`test-infra.yml` and both
 `deploy-infra.yml` jobs) builds the BFF package first.
+
+The processing worker is separate from this stack. Production's existing
+`TossBillingDashboard` companion stack runs the shared bucket's `jobs/` objects
+in Fargate. A Billing worker release changes only that existing task definition's
+image, through a reviewed CloudFormation change set; it does not add a public
+origin or modify its IAM/network settings. See [Billing release](runbooks/billing-release.md).
 
 ### Billing behaviors on the TTOBAK distribution
 

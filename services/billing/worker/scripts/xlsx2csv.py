@@ -1,4 +1,5 @@
 """Stdlib-only xlsx -> CSV dumper. Usage: python -I xlsx2csv.py <xlsx> <outdir> [sheet-prefix] [report-name]
+Or: python -I xlsx2csv.py --combine <outdir> <sheet-prefix> <report-name> <xlsx> <xlsx>
 
 report-name: the account id written into the 'Report Name' column of every raw-data row, so loaders that
 select rows by entity find an uploaded workbook's rows under the account id (a sheet holding more than one
@@ -9,7 +10,8 @@ they are parsed and detached from the tree; the workbook is capped in sheets, ro
 (so a shared string repeated in many cells cannot amplify either); a row's CSV size is bounded from cached value
 lengths before the row is built, and sharedStrings.xml is streamed with its own caps. The CLI also lowers the
 address-space limit (RLIMIT_AS, ~3 GiB) so any remaining amplification ends as exit 3, not a host-wide OOM.
-Per-sheet stats go to stderr; stdout carries only the reason line.
+Combined workbooks share archive, sheet, row, cell and CSV byte limits; colliding CSV names are rejected
+before the later sheet can overwrite the earlier one. Per-sheet stats go to stderr; stdout carries only the reason line.
 """
 import csv, json, os, posixpath, re, sys, zipfile, zlib
 import xml.etree.ElementTree as ET
@@ -90,19 +92,25 @@ def ulen(s):
 def main(path, outdir, prefix="", report_name="", max_ratio=200, **caps):
     """caps: max_rows, max_cells, max_out, max_sheets, max_row_bytes, max_str, max_shared (tests pass small ones)."""
     os.makedirs(outdir, exist_ok=True)
+    paths = [path] if isinstance(path, (str, bytes, os.PathLike)) else path
+    budget, files, unzipped = Budget(**caps), set(), 0
     try:
-        z = zipfile.ZipFile(path)
-        safezip.check(z.infolist(), max_entries=5000, max_total=MAX_UNZIPPED, max_ratio=max_ratio)
+        for workbook_path in paths:
+            with zipfile.ZipFile(workbook_path) as z:
+                infos = z.infolist()
+                safezip.check(infos, max_entries=5000, max_total=MAX_UNZIPPED, max_ratio=max_ratio)
+                unzipped += sum(info.file_size for info in infos)
+                if unzipped > MAX_UNZIPPED:
+                    raise Rejected("COT 엑셀 파일이 너무 큽니다")
+                convert(z, outdir, prefix, report_name, budget, files)
     except safezip.ZipRejected as e:
         reject(e.reason)
-    except (zipfile.BadZipFile, OSError):
-        reject("COT 엑셀 파일을 읽을 수 없습니다")
-    try:
-        convert(z, outdir, prefix, report_name, Budget(**caps))
     except Rejected as e:
         reject(str(e))
     except MemoryError:
         reject("COT 엑셀 파일이 너무 큽니다")
+    except OSError:
+        reject("COT 엑셀 파일을 읽을 수 없습니다")
     except (KeyError, IndexError, TypeError, AttributeError, ValueError, NotImplementedError, ET.ParseError,
             zipfile.BadZipFile, zlib.error) as e:
         print(f"xlsx2csv: {type(e).__name__}", file=sys.stderr)  # the type only: messages can quote cell data
@@ -110,13 +118,13 @@ def main(path, outdir, prefix="", report_name="", max_ratio=200, **caps):
 
 
 class Budget:
-    """Workbook-wide totals against the caps; any overrun is an invalid upload."""
+    """Conversion-wide totals against the caps; any overrun is an invalid upload."""
 
     def __init__(self, max_rows=MAX_ROWS, max_cells=MAX_CELLS, max_out=MAX_OUT, max_sheets=MAX_SHEETS,
                  max_row_bytes=MAX_ROW_BYTES, max_str=MAX_STR, max_shared=MAX_SHARED):
         self.max_rows, self.max_cells, self.max_out, self.max_sheets = int(max_rows), int(max_cells), int(max_out), int(max_sheets)
         self.max_row_bytes, self.max_str, self.max_shared = int(max_row_bytes), int(max_str), int(max_shared)
-        self.rows = self.cells = self.out = 0
+        self.rows = self.cells = self.out = self.sheets = 0
 
     def row_bytes(self, n):
         """n: an upper bound of the next row's CSV bytes; refused past the row cap or the bytes left."""
@@ -242,16 +250,18 @@ def rows_of(z, member, shared, budget):
             stack[-1].remove(el)
 
 
-def convert(z, outdir, prefix, report_name, budget=None):
+def convert(z, outdir, prefix, report_name, budget=None, files=None):
     budget = budget or Budget()
     shared = shared_strings(z, budget)
     wb = ET.fromstring(z.read("xl/workbook.xml"))
     rels = ET.fromstring(z.read("xl/_rels/workbook.xml.rels"))
     target = {r.get("Id"): r.get("Target") for r in rels}
     sheets = list(wb.find("m:sheets", NS))
-    if len(sheets) > budget.max_sheets:
+    budget.sheets += len(sheets)
+    if budget.sheets > budget.max_sheets:
         raise Rejected("COT 엑셀 시트가 너무 많습니다")
-    parts, files = set(), set()
+    parts = set()
+    files = set() if files is None else files
     for sh in sheets:
         name = sh.get("name")
         if prefix and not name.startswith(prefix):
@@ -289,11 +299,16 @@ def limit_memory(n=MAX_AS):
 
 
 if __name__ == "__main__":
-    if not 2 <= len(sys.argv) - 1 <= 4:
-        print("usage: xlsx2csv.py <xlsx> <outdir> [sheet-prefix] [report-name]", file=sys.stderr)
+    combine = len(sys.argv) > 1 and sys.argv[1] == "--combine"
+    if (combine and len(sys.argv) != 7) or (not combine and not 2 <= len(sys.argv) - 1 <= 4):
+        print("usage: xlsx2csv.py <xlsx> <outdir> [sheet-prefix] [report-name]\n"
+              "or: xlsx2csv.py --combine <outdir> <sheet-prefix> <report-name> <xlsx> <xlsx>", file=sys.stderr)
         sys.exit(2)
     limit_memory()
     try:
-        main(*sys.argv[1:])
+        if combine:
+            main(sys.argv[5:], *sys.argv[2:5])
+        else:
+            main(*sys.argv[1:])
     except MemoryError:
         reject("COT 엑셀 파일이 너무 큽니다")

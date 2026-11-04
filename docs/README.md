@@ -10,7 +10,7 @@ Markdown for English language and historical/current status.
 
 ## Current references
 
-Billing team access: [ADR-060](decisions/ADR-060-billing-shared-team-access.md) supersedes the direct-membership-only Billing policy.
+Billing team access: [ADR-060](decisions/ADR-060-billing-shared-team-access.md) supersedes the direct-membership-only Billing policy. [Billing release](runbooks/billing-release.md) covers the BFF, static pages and separate companion worker image.
 
 | Reference | Purpose | Verify against |
 |---|---|---|
@@ -43,7 +43,7 @@ Billing team access: [ADR-060](decisions/ADR-060-billing-shared-team-access.md) 
 | [Summary privacy release](runbooks/summary-privacy-release.md) | Reader/writer targets, immutable cutoff, drain and cross-user acceptance | Exact deployed versions, parameters and dated acceptance evidence |
 | [Self-service Account invitations](decisions/ADR-054-self-service-account-invitations.md) | Member-authorized email invitation and identity-bound Account grants | Account service/handler, pending transactions and frontend invitation receipts |
 | [Designated initial Account Owner](decisions/ADR-055-designated-account-owner.md) | Owner invitation, optional creator AM membership and bounded creation receipts | Atomic creation, authenticated Owner resend and creator checkbox |
-| [Billing service origin and identity](decisions/ADR-056-billing-service-origin-and-identity.md) | IamAuth Web Function behind OAC, BFF-verified TTOBAK JWT, direct/ancestor membership access (ADR-060), upload prefix | On main: BFF, `TtobakBillingStack`, CloudFront behaviors and the Phase 2 worker code (no CDK resource runs the worker yet); plans in `superpowers/plans/2026-10-27-billing-phase1-bff.md` and `2026-10-28-billing-phase2-agents.md` |
+| [Billing service origin and identity](decisions/ADR-056-billing-service-origin-and-identity.md) | IamAuth Web Function behind OAC, BFF-verified TTOBAK JWT, direct/ancestor membership access (ADR-060), upload prefix | On main: BFF, `TtobakBillingStack`, CloudFront behaviors and Phase 2 worker code; production's separate companion ECS image uses the [Billing release](runbooks/billing-release.md) procedure |
 
 ## Feature workflows
 

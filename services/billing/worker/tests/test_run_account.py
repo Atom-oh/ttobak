@@ -60,6 +60,53 @@ class RunAccount(Tmp):
         m["COT_OrigCo_COT360.html"] = html
         make_zip(self.zip, m)
 
+    def upload_separate_workbooks(self, current_sheets, coh_sheets, combined_sheets=None):
+        members = three()
+        for kind, sheets in (("Current_State_Template.xlsx", current_sheets), ("COH_Template.xlsx", coh_sheets)):
+            path = os.path.join(self.d, kind)
+            xlsx(path, sheets)
+            members["COT_OrigCo_" + kind] = rd(path, "rb")
+        if combined_sheets is not None:
+            path = os.path.join(self.d, "combined.xlsx")
+            xlsx(path, combined_sheets)
+            members["COT_OrigCo_Template.xlsx"] = rd(path, "rb")
+        members["COT_OrigCo_COT360.html"] = b"<html></html>"
+        make_zip(self.zip, members)
+
+    def test_three_file_run_extracts_both_workbooks_before_empty_period_rejection(self):
+        self.upload_separate_workbooks({"Data Service Costs": [HDR]},
+                                       {"Data COH All": [["", "Report Name", "recommendationId"], ["", "OrigCo", "rec-1"]]})
+        p = run_account(self.zip, self.work, os.path.join(self.work, "out"), "acct-a")
+        self.assertEqual(p.returncode, 3, p.stderr[-500:])
+        self.assertEqual(self.steps(p), ["STEP validate running", "STEP validate done",
+                                        "STEP extract running", "STEP extract failed"])
+        self.assertIn('"reason": "COT 기간을 찾지 못했습니다"', p.stdout)
+        csv_dir = os.path.join(self.work, "csv", "acct-a")
+        self.assertEqual(sorted(n for n in os.listdir(csv_dir) if n.endswith(".csv")),
+                         ["Data_COH_All.csv", "Data_Service_Costs.csv"])
+        self.assertIn("acct-a,rec-1", rd(os.path.join(csv_dir, "Data_COH_All.csv")))
+        self.assertNotIn("OrigCo", rd(os.path.join(csv_dir, "Data_COH_All.csv")))
+
+    def test_combined_workbook_remains_authoritative_when_present(self):
+        self.upload_separate_workbooks({"Data Service Costs": [HDR]},
+                                       {"Data COH All": [HDR]},
+                                       {"Data Service Costs": [HDR], "Data Combined Only": [HDR]})
+        p = run_account(self.zip, self.work, os.path.join(self.work, "out"), "acct-a")
+        self.assertEqual(p.returncode, 3, p.stderr[-500:])
+        self.assertIn('"reason": "COT 기간을 찾지 못했습니다"', p.stdout)
+        csv_dir = os.path.join(self.work, "csv", "acct-a")
+        self.assertEqual(sorted(n for n in os.listdir(csv_dir) if n.endswith(".csv")),
+                         ["Data_Combined_Only.csv", "Data_Service_Costs.csv"])
+
+    def test_cross_workbook_sanitized_name_collision_is_invalid_without_overwrite(self):
+        self.upload_separate_workbooks({"Data Service Costs": [HDR]},
+                                       {"Data-Service-Costs": [HDR, ["", "OrigCo", "['EC2']", "2026-03-01", "99"]]})
+        p = run_account(self.zip, self.work, os.path.join(self.work, "out"), "acct-a")
+        self.assertEqual(p.returncode, 3, p.stderr[-500:])
+        self.assertIn('"reason": "COT 엑셀 시트 이름이 겹칩니다"', p.stdout)
+        self.assertEqual(rd(os.path.join(self.work, "csv", "acct-a", "Data_Service_Costs.csv")),
+                         ",Report Name,keys,timePeriod.start,metrics.AmortizedCost.amount\n")
+
     def test_empty_period_exit_3(self):
         self.upload([HDR], b"<html></html>")
         p = run_account(self.zip, self.work, os.path.join(self.work, "out"), "acct-a")
