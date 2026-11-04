@@ -65,8 +65,9 @@ exhaustive file inventory. New static pages need the CloudFront knownPages mappi
 Recording `SAPreparation` requests `scope=direct` customer pages, independently
 of personal preparation documents. It excludes inherited read-only customers
 because selecting a recording customer creates a private account link.
-`PreparationReferences` mounts reference catalogs only while its details section
-is expanded; the reference picker continues browsing inherited customers.
+`PreparationReferences` mounts reference catalogs on the first expansion of
+its details section, then retains panel state on collapse so question drafts
+and answers survive reopening. The picker continues browsing inherited customers.
 During an independent frontend/API rollout, an initial unsupported-option 400
 uses the existing listing and its edit filter. Authorization failures and later
 continuation failures never trigger that compatibility fallback.

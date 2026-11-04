@@ -145,7 +145,7 @@ test('recording preparation requests direct customers instead of descendant disc
   assert.match(f.html(), /<option value="direct">Direct Account<\/option>/);
 });
 
-test('preparation reference catalogs mount only while their disclosure is expanded', async () => {
+test('preparation references load on first expansion and retain opened state on collapse', async () => {
   const f = fixture('disclosure', {});
   await f.start();
   assert.doesNotMatch(f.html(), /Reference catalog/);
@@ -154,7 +154,10 @@ test('preparation reference catalogs mount only while their disclosure is expand
   assert.match(f.html(), /Reference catalog/);
   f.find(node => node.type === 'details').props.onToggle({ currentTarget: { open: false } });
   await f.flush();
-  assert.doesNotMatch(f.html(), /Reference catalog/);
+  assert.match(f.html(), /Reference catalog/);
+  f.find(node => node.type === 'details').props.onToggle({ currentTarget: { open: true } });
+  await f.flush();
+  assert.match(f.html(), /Reference catalog/);
 });
 
 test('recording Accounts refresh when invitation processing adds a direct membership', async () => {

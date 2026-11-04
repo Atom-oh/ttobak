@@ -22,7 +22,8 @@ with continuation preserved even for empty pages. Legacy direct metadata retains
 the existing exact-key identity contract. Default account listing and inherited
 read access keep their existing discovery and continuation behavior.
 
-Load reference preparation only when its details section is expanded. The
+Load reference preparation on its first expansion, and retain the mounted
+panels when collapsed so question drafts and answers survive reopening. The
 reference picker continues including inherited customers. Personal preparation
 documents remain independent of customer requests, and membership changes,
 retries and user changes retain their existing request-generation guards.

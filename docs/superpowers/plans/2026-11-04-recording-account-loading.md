@@ -11,7 +11,8 @@ for descendant discovery or requests from collapsed reference preparation.
 
 **Architecture:** Add a bounded direct-membership scope to the existing account
 listing API, use it from recording preparation, and mount reference preparation
-on expansion. Preserve canonical authorization and default descendant listing.
+on first expansion, retaining opened panel state after collapse. Preserve
+canonical authorization and default descendant listing.
 
 **Tech Stack:** Go, DynamoDB repository primitives, React, Next.js, node:test.
 
@@ -31,7 +32,8 @@ on expansion. Preserve canonical authorization and default descendant listing.
 - Stale index membership must never become inherited edit access.
 - Revocation or role/metadata changes before publication must invalidate output.
 - Empty advancing pages and continuation across scope/user changes must be safe.
-- Collapsed references must make no catalog requests.
+- Initially collapsed references must make no catalog requests; after first
+  expansion, collapsing must retain drafts and previously loaded panel state.
 - Invitation refresh and user changes must still discard older completions.
 
 ### Task 1: Direct customer listing
