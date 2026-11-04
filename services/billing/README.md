@@ -12,12 +12,20 @@ Billing Insight inside TTOBAK (ADR-056). Three parts:
 - `page/`: dashboard and upload pages, served at `/billing-app/` (below).
 - `worker/`: Python pipeline that turns uploaded COT/CUR exports into dashboard
   datasets, agent notes and the report. See [worker/README.md](worker/README.md).
-  The worker code and its image definition are in the repository. TTOBAK CDK
-  does not create a worker; production uses the existing companion ECS task
-  against the shared bucket. Its image rollout is separate:
-  [Billing release](../../docs/runbooks/billing-release.md).
+  `TtobakBillingStack` runs it as one Fargate task per job
+  (`infra/lib/billing-data-plane.ts`).
+- `lambda/`: the What's New collector (`whatsnew/index.mjs`) and the FSI case
+  search (`fsisearch/index.py`) that the worker invokes.
+
+See [Billing release](../../docs/runbooks/billing-release.md) for releases and
+the one-time cutover from the retiring companion stack.
 
 ## Provenance
+
+`lambda/whatsnew/index.mjs` and `lambda/fsisearch/index.py` are byte-identical
+to `dashboard-app/lambda/` at companion commit
+`dd540f51e0b5a67dff7389e401e65fc479cd77a7` and to the code deployed in the
+companion stack on 2026-11-04.
 
 `bff/` was imported from the companion Billing Insight repository, commit
 `dd540f51e0b5a67dff7389e401e65fc479cd77a7`

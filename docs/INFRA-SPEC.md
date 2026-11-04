@@ -716,8 +716,10 @@ checked in yet, so the default app has eleven stacks.
 The data bucket and platform table physical names are never committed. The
 stack reads them from SSM String parameters `/ttobak/billing/data-bucket-name`
 and `/ttobak/billing/platform-table-name`, resolved by CloudFormation at
-deploy. The operator creates both parameters before the first deploy. The
-stack never creates, imports or deletes the bucket or the table.
+deploy, and the BFF uses whichever bucket and table they name. The operator
+creates both parameters before the first deploy. Until the cutover in the
+[Billing release runbook](runbooks/billing-release.md), they name the retiring
+companion stack's bucket and table.
 
 Resources:
 
@@ -787,11 +789,40 @@ HTTP-origin release coordinator's `STACKS` list does not include this stack.
 Every workflow that synthesizes the app (`test-infra.yml` and both
 `deploy-infra.yml` jobs) builds the BFF package first.
 
-The processing worker is separate from this stack. Production's existing
-`TossBillingDashboard` companion stack runs the shared bucket's `jobs/` objects
-in Fargate. A Billing worker release changes only that existing task definition's
-image, through a reviewed CloudFormation change set; it does not add a public
-origin or modify its IAM/network settings. See [Billing release](runbooks/billing-release.md).
+### Billing data plane
+
+`BillingDataPlane` (`infra/lib/billing-data-plane.ts`) adds Billing's data and
+processing plane to `TtobakBillingStack` when `dataPlane` is passed; the app
+passes it. It replaces the separate companion stack, which is being retired.
+There is no public entry point: no service, load balancer, distribution or URL.
+
+- Data bucket: Block Public Access, SSE-S3, TLS-only, EventBridge delivery,
+  retained on delete. Lifecycle: abort incomplete multipart uploads after 1 day,
+  `jobs/` after 30 days, objects tagged `tb-lifecycle=upload` (uploaded
+  sources) after 90 days.
+- Platform table (`pk`/`sk`): on-demand, PITR, AWS-managed encryption, TTL
+  `ttl`, retained on delete.
+- Worker: one ARM64 Fargate task (4 vCPU, 16 GiB, 100 GiB ephemeral) per
+  `jobs/*.json` Object Created event (`JobCreated` rule, 2 retries, DLQ with an
+  alarm on any message). The image is built from
+  `services/billing/worker/Dockerfile.ingest`. Tasks run in the isolated subnets
+  of the shared VPC (`fsi-demo-vpc`, looked up by ID like GatewayStack) with no
+  public IP. Their security group has no inbound rule; egress is HTTPS to the
+  VPC CIDR (interface endpoints) and the S3/DynamoDB gateway prefix lists.
+- The task role reads `jobs/*`, assumes the data role, updates `ACCT#*` items
+  only, invokes the FSI search and calls only the configured agent model's
+  global profile and foundation model. The data role (`s3:GetObject`/`PutObject`
+  on `accounts/*`, `ListBucket` for `accounts/*`, the feed) is narrowed per job
+  by a session policy.
+- `WhatsNew` collector (no VPC) writes `data/whats_new_feed.json` daily at
+  00:30 KST. `FsiSearch` (no VPC, no URL) calls the web search gateway named by
+  `ttobak:billingWebSearchGateway{Arn,Url,Tool}` with an exact
+  `bedrock-agentcore:InvokeGateway` grant; without that context it is omitted.
+
+The worker relies on the shared VPC's existing STS, ECR, CloudWatch Logs,
+Lambda and Bedrock runtime interface endpoints. This stack creates no VPC,
+subnet or endpoint. Releases deploy `TtobakBillingStack` alone; the data move
+from the companion stack is a one-time cutover ([Billing release](runbooks/billing-release.md)).
 
 ### Billing behaviors on the TTOBAK distribution
 

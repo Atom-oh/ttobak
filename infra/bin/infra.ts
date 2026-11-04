@@ -12,7 +12,7 @@ import { CrawlerStack } from '../lib/crawler-stack';
 import { ResearchAgentStack } from '../lib/research-agent-stack';
 import { WhisperStack } from '../lib/whisper-stack';
 import { WebSearchGatewayStack } from '../lib/web-search-gateway-stack';
-import { addBillingStack, billingPublicUrl } from '../lib/billing-stack';
+import { addBillingStack, billingPublicUrl, billingWebSearchGateway } from '../lib/billing-stack';
 import { resolveModelConfiguration } from '../lib/model-config';
 
 const app = new cdk.App();
@@ -48,6 +48,10 @@ const webSearchGatewayStack = new WebSearchGatewayStack(app, 'TtobakWebSearchGat
   crossRegionReferences: true,
   description: 'TTOBAK AI Meeting Assistant - Web Search Gateway (AgentCore, us-east-1)',
 });
+
+// The shared pre-existing fsi-demo-vpc (looked up, never created): convert-doc,
+// document extraction and the Billing worker run in its isolated subnets.
+const sharedVpcId: string = app.node.tryGetContext('ttobak:whisperVpcId') || 'vpc-04e77172c67f19814';
 
 // Stack 1: Storage first (Auth now depends on it for Pre Sign-Up Lambda DynamoDB access)
 const storageStack = new StorageStack(app, 'TtobakStorageStack', {
@@ -155,7 +159,7 @@ const gatewayStack = new GatewayStack(app, 'TtobakGatewayStack', {
   // Same pre-existing VPC WhisperStack uses (ec2.Vpc.fromLookup) --
   // convert-doc's PRIVATE_ISOLATED placement below is a GatewayStack
   // resource, not a WhisperStack dependency.
-  vpcId: app.node.tryGetContext('ttobak:whisperVpcId') || 'vpc-04e77172c67f19814',
+  vpcId: sharedVpcId,
   webSearchGatewayUrl: webSearchGatewayStack.gatewayUrl,
 });
 gatewayStack.addDependency(authStack);
@@ -242,6 +246,13 @@ const billingStack = addBillingStack(app, () => ({
   // StorageStack export that the separate Billing deploy cannot publish.
   ttobakTableName: (storageStack.table.node.defaultChild as dynamodb.CfnTable).tableName!,
   publicUrl: billingPublicUrl(app.node.tryGetContext('ttobak:domainName')),
+  dataPlane: {
+    vpcId: sharedVpcId,
+    agentModel: 'global.anthropic.claude-sonnet-5-5',
+    // Literal strings, not WebSearchGatewayStack tokens: the separate Billing deploy cannot publish a
+    // cross-Region export (same reason as ttobakTableName above).
+    webSearchGateway: billingWebSearchGateway(app),
+  },
 }));
 billingStack?.addDependency(authStack);
 

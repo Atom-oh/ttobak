@@ -104,6 +104,16 @@ runs on ECS Fargate behind its own distribution until cutover.
   `/ttobak/billing/platform-table-name`, resolved by CloudFormation at deploy and
   used only when `ttobak:billingEnabled` is `"true"`.
 
+### Amendment 2026-11-04: data and worker ownership
+
+The user decided that Billing is one TTOBAK service holding multiple customer
+accounts, with no separate per-customer stack. `TtobakBillingStack` therefore
+owns the data bucket, platform table, worker, What's New collector and FSI
+search (`infra/lib/billing-data-plane.ts`); the companion stack is retired after
+its data is copied. The SSM parameters stay the BFF's and upload origin's single
+source of the bucket and table names, so the cutover repoints them instead of
+editing the BFF. The origin, identity and access decisions above are unchanged.
+
 ## Alternatives and consequences
 
 - Rejected: keeping the BFF on ECS behind an internal ALB through a CloudFront

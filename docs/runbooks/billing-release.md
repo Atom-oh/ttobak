@@ -1,10 +1,11 @@
 # Billing release
 
 The BFF, static pages and processing worker are separate delivery units.
-TTOBAK CDK owns `TtobakBillingStack`; the existing `TossBillingDashboard`
-companion stack owns the worker. Both use the data bucket and platform table
-resolved by the Billing SSM parameters. Changing Python source alone does not
-update production processing.
+TTOBAK CDK owns `TtobakBillingStack`, including the data plane (data bucket,
+platform table, worker, collector and FSI search; INFRA-SPEC "Billing data
+plane"). The retiring `TossBillingDashboard` companion stack still holds the
+data the SSM parameters name until the one-time cutover below. Changing Python
+source alone does not update production processing.
 
 ## Gates and artifacts
 
@@ -20,35 +21,46 @@ The COT core consists of `Current_State_Template.xlsx`, `COH_Template.xlsx` and
 `Template.xlsx` and `PPT_Companion.pptx`. When present, the combined Template
 supplies the dataset sheets; otherwise both core workbooks supply them.
 
-## Existing companion worker: deploy first
+## Worker
 
-Complete and verify step 4 before publishing BFF/frontend three-file support.
+The worker image is a `TtobakBillingStack` asset built from
+`services/billing/worker/Dockerfile.ingest`, so a worker release is a reviewed
+`TtobakBillingStack` deployment (below). Before the cutover the new worker only
+watches the new data bucket, so the companion worker and the new worker never
+consume the same `jobs/` objects.
 
-1. Capture the original `TossBillingDashboard` template, current task definition,
-   EventBridge target, image digest and stack parameters in a private release
-   receipt. Compare the deployed image's `/app` sources with the proposed image;
-   include any previously undelivered main changes in operational review.
-2. Build the ARM64 image from `services/billing/worker/Dockerfile.ingest`.
-   Verify the image's code hashes, non-root user, entry point and pipeline
-   smoke test without credentials or networking. Publish it under a new revision
-   tag in the existing asset repository; resolve and pin its ECR digest.
-3. Produce a copy of the captured template changing **only**
-   `Resources.WorkerTaskCBB1FEE3.Properties.ContainerDefinitions[0].Image`.
-   Assert exact equality after restoring that single property. Validate schema
-   and review the security boundary, then create an UPDATE change set with every
-   existing parameter set to `UsePreviousValue: true`. Inspect pre-deployment
-   validation results. Reject changes outside the worker task definition, its
-   referencing EventBridge target and the existing EventBridge invoke policy's
-   task-ARN reference update. The policy statement itself must remain unchanged.
-4. Execute the reviewed change set. Wait for `UPDATE_COMPLETE`, then verify the
-   live task definition's image digest and the `JobCreated` rule's target refer
-   to the new task revision. Preserve the prior image and template for rollback.
-   New jobs use the updated target; existing tasks keep their current image.
+## One-time cutover from the companion stack
 
-No new origin, service, role, network rule or data migration is part of this
-procedure. A later companion CDK deployment must retain the released image
-digest, or it can revert this image-only update. Move worker ownership into
-TTOBAK CDK separately rather than creating two consumers for the same jobs.
+Run these in order with the reviewed revision; record the outputs in a private
+receipt. Customer data stays in the old bucket and table until step 5 passes.
+
+1. Deploy `TtobakBillingStack` with `--exclusively` and record its
+   `DataBucketName` and `PlatformTableName` outputs. The BFF still reads the old
+   resources, so user behavior does not change.
+2. Copy the data: server-side copy every object of the old bucket to the new
+   one (keys and object tags unchanged), then copy every platform table item.
+   Compare object counts, sizes and item counts.
+3. Point `/ttobak/billing/data-bucket-name` and
+   `/ttobak/billing/platform-table-name` at the new resources. Deploy
+   `TtobakBillingStack`, then `TtobakFrontendStack` (its `/billing-upload/*`
+   origin resolves the bucket parameter), each with `--exclusively`.
+4. Copy any object or item the old resources received between steps 2 and 3,
+   repeating the comparison.
+5. Accept: the dashboard lists every account and its current versions; a new
+   COT upload runs on the new worker (its job lands in the new bucket, its task
+   in the new cluster) and publishes; the old bucket receives no new object.
+6. Before deleting the companion stack, set `DeletionPolicy: Retain` on its
+   three `AWS::EC2::VPCEndpoint` resources (CloudWatch Logs, Lambda, Secrets
+   Manager) with an update that changes nothing else. They are the shared VPC's
+   only endpoints for those services, and other workloads use them. Notify the
+   VPC owner that they are no longer managed by a stack.
+7. Delete `TossBillingDashboard`. Its old dashboard, distribution, ALB, ECS
+   service, OAuth function and alias records are removed; its retained bucket and
+   table remain. Delete those only after a separately recorded backup or explicit
+   user approval.
+
+Rollback before step 7: point the SSM parameters back at the old resources and
+redeploy `TtobakBillingStack` and `TtobakFrontendStack`.
 
 ## BFF and frontend
 
@@ -71,6 +83,7 @@ checks and final processing state. Local staging/dataset success and a matching
 deployed image do not prove an authenticated production upload completed.
 
 Before reverting the worker, restore the prior frontend and drain queued/active
-three-file COT jobs. Then restore the captured image with an image-only change
-set. Re-enable three-file support only after verifying a compatible worker target.
+three-file COT jobs. Then redeploy `TtobakBillingStack` from the prior reviewed
+revision (its worker image asset). Re-enable three-file support only after
+verifying a compatible worker task.
 Restore the prior BFF for faults in that unit. Retain customer data and versions.
