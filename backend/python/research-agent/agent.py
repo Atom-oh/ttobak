@@ -168,7 +168,11 @@ You have access to the parent report context if available.
 app = FastAPI(title="Ttobak Research Agent", version="1.0.0")
 
 _agents: dict = {}
-_last_activity = time.time()
+# Set by the first activity or the first /ping, never at import. On AgentCore
+# Runtime V2 the process is restored from a snapshot taken after import, so an
+# import-time timestamp would report the snapshot's time from every restored
+# instance (see AgentCore "Optimize your agent for Runtime V2").
+_last_activity: Optional[float] = None
 
 # Lazy-init DynamoDB table
 _table = None
@@ -578,6 +582,9 @@ async def invoke(request: InvocationRequest):
 
 @app.get("/ping")
 async def ping():
+    global _last_activity
+    if _last_activity is None:
+        _last_activity = time.time()
     return {
         "status": "HealthyBusy" if threading.active_count() > 2 else "Healthy",
         "time_of_last_update": int(_last_activity),
