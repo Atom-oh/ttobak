@@ -56,6 +56,9 @@ describe('model deployment wiring', () => {
     expect(api.Properties.Environment.Variables.BEDROCK_TRANSLATE_MODEL_ID).toBe('global.openai.gpt-6-luna');
     expect(summary.Properties.Environment.Variables.BEDROCK_MODEL_ID).toBe('global.anthropic.claude-opus-5');
     expect(summary.Properties.Environment.Variables.BEDROCK_SONNET_MODEL_ID).toBe('global.anthropic.claude-sonnet-5-5');
+    // Live question detection: a Claude profile the QA role's claude-* grant covers (qwen3-32b was an invalid id here).
+    const qa = functions.find(fn => fn.Properties.FunctionName === 'ttobak-qa')!;
+    expect(qa.Properties.Environment.Variables.DETECT_MODEL_ID).toBe('global.anthropic.claude-haiku-5-5');
 
     const policies = Object.values(ai.findResources('AWS::IAM::Policy'));
     const grants = policies.flatMap(policy =>
