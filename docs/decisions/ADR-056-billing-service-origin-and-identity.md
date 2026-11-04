@@ -91,8 +91,8 @@ weeks; then the old distribution and DNS record are deleted.
 
 ## Current implementation
 
-Implemented on the Billing phase 1 branch, not yet deployed. The companion still
-runs on ECS Fargate behind its own distribution until cutover.
+Deployed. The companion stack, its distribution and `insight.atomai.click` were
+deleted on 2026-11-04 after the data cutover (amendment below).
 
 - The BFF is `services/billing/bff`, packaged by `npm run package` and run as a
   Lambda Web Function by `TtobakBillingStack` (`infra/lib/billing-stack.ts`).
@@ -113,6 +113,8 @@ search (`infra/lib/billing-data-plane.ts`); the companion stack is retired after
 its data is copied. The SSM parameters stay the BFF's and upload origin's single
 source of the bucket and table names, so the cutover repoints them instead of
 editing the BFF. The origin, identity and access decisions above are unchanged.
+D5 was shortened by the same decision: the old domain was deleted at cutover
+instead of redirecting for two weeks, and the hand-off context was removed.
 The worker's FSI search keeps the companion's external egress: it sends
 model-composed generic queries that pass `safe_query` (no digits, vocabulary
 allowlist, no private term) to the web search provider through the TTOBAK

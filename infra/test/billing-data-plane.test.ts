@@ -139,6 +139,14 @@ describe('Billing data plane', () => {
     expect(JSON.stringify(data[2].Resource)).toContain('/data/whats_new_feed.json');
   });
 
+  test('the execution role can pull the GuardDuty agent sidecar from its repository only', () => {
+    const exec = statementsOf('DataPlaneWorkerTaskExecutionRole');
+    const gd = exec.filter((s: any) => JSON.stringify(s.Resource).includes('aws-guardduty-agent-fargate'));
+    expect(gd).toHaveLength(1);
+    expect(acts(gd[0]).sort()).toEqual(['ecr:BatchCheckLayerAvailability', 'ecr:BatchGetImage', 'ecr:GetDownloadUrlForLayer']);
+    expect(JSON.stringify(gd[0].Resource)).toContain(':914738172881:repository/aws-guardduty-agent-fargate');
+  });
+
   test('FSI search and the collector run outside the VPC with one grant each', () => {
     // the FSI search (python3.12) and the collector (nodejs24.x); CDK's own handlers use other runtimes
     const fns = resources('AWS::Lambda::Function').filter((f) => ['python3.12', 'nodejs24.x'].includes(f.Properties.Runtime));
