@@ -10,6 +10,8 @@ Markdown for English language and historical/current status.
 
 ## Current references
 
+Billing team access: [ADR-060](decisions/ADR-060-billing-shared-team-access.md) supersedes the direct-membership-only Billing policy.
+
 | Reference | Purpose | Verify against |
 |---|---|---|
 | [Project guide](../CLAUDE.md) | Canonical constraints and accepted limits | Code, tests, manifests, CDK |

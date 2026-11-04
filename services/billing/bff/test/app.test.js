@@ -58,7 +58,10 @@ async function setup({ denyMissing = false, now } = {}) {
   const base = `http://127.0.0.1:${server.address().port}`;
   const t = {
     ddb, s3,
-    acct(id, name, parent) { ddb.put(TT, { PK: S(`ACCOUNT#${id}`), SK: S('META'), name: S(name), ...(parent ? { parentAccountId: S(parent) } : {}) }); },
+    acct(id, name, parent) {
+      ddb.put(TT, { PK: S(`ACCOUNT#${id}`), SK: S('META'), name: S(name), ...(parent ? { parentAccountId: S(parent) } : {}) });
+      if (parent) ddb.put(TT, { PK: S(`ACCOUNT#${parent}`), SK: S(`CHILDREF#${id}`) });
+    },
     member(sub, id) { ddb.put(TT, { PK: S(`ACCOUNT#${id}`), SK: S(`MEMBER#${sub}`), accountId: S(id), GSI1PK: S(`USER#${sub}`), GSI1SK: S(`ACCOUNT#${id}`) }); },
     index(id, name, parentId = '') { ddb.put(PT, { pk: S('INDEX'), sk: S(`ACCT#${id}`), name: S(name), parentId: S(parentId) }); },
     meta(id, fields) {
@@ -122,7 +125,7 @@ test('?acct&v of needs_review version → 404', async () => {
   assert.equal((await t.get('/api/billing/data/kpis.json?acct=acct-a&v=v20261020000009ffffff')).status, 404, 'no upload record');
 });
 
-test('/api/billing/accounts lists direct memberships only, with sources', async () => {
+test('/api/billing/accounts lists authorized team memberships with sources', async () => {
   const t = await setup();
   t.acct('acct-p', '지주'); t.acct('acct-a', '한빛금융', 'acct-p'); t.acct('acct-c', '한빛증권', 'acct-a'); t.acct('acct-x', '누리증권');
   t.member('u1', 'acct-a'); t.member('u1', 'acct-c');
@@ -405,21 +408,18 @@ test('a user with no membership gets an empty list, not 401', async () => {
   assert.deepEqual(await t.json('/api/billing/accounts', 'stranger'), []);
 });
 
-test('a parent-account member cannot read or upload to a child account', async () => {
+test('a parent-account member sees an upload-enabled child and its Billing data', async () => {
   const t = await setup();
   t.acct('acct-p', '지주'); t.acct('acct-c', '한빛증권', 'acct-p'); t.member('u1', 'acct-p');
   t.meta('acct-c', { current_cot: V1 });
   t.upload('acct-c', V1, 'done');
   t.version('acct-c', V1, 'kpis', [{ entity: 'acct-c', x: 1 }]);
   t.s3.put(`accounts/acct-c/versions/${V1}/report.md`, '# child\n');
-  assert.equal((await t.get(`/api/billing/data/kpis.json?acct=acct-c&v=${V1}`)).status, 404);
-  assert.equal((await t.get('/api/billing/accounts/acct-c/report?source=cot')).status, 404);
-  const up = await t.get('/api/billing/accounts/acct-c/uploads', 'u1', {
-    method: 'POST', headers: { 'x-test-sub': 'u1', 'content-type': 'application/json', 'x-tb': '1', origin: 'https://dash.example.test' },
-    body: JSON.stringify({ source: 'cot', fileName: 'a.zip', size: 10 }),
-  });
-  assert.equal(up.status, 403, 'upload denied by membership, not by the CSRF gate');
-  assert.deepEqual(await t.json('/api/billing/data/kpis.json'), [], 'child data not in the merged read either');
+  assert.equal((await t.get(`/api/billing/data/kpis.json?acct=acct-c&v=${V1}`)).status, 200);
+  assert.equal((await t.get('/api/billing/accounts/acct-c/report?source=cot')).status, 200);
+  assert.deepEqual(await t.json('/api/billing/data/kpis.json'), [{ entity: 'acct-c', x: 1 }]);
+  const child = (await t.json('/api/billing/accounts')).find((a) => a.id === 'acct-c');
+  assert.equal(child.canUpload, true);
 });
 
 test('errors are JSON {error: string} with the same status and no-store: 503, 500, 404', async () => {

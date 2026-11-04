@@ -1,5 +1,7 @@
 # ADR-056: Billing service origin, identity and Account access
 
+Account access is superseded by [ADR-060](ADR-060-billing-shared-team-access.md): Billing also accepts validated ancestor membership. Origin and identity requirements remain.
+
 - Status: Accepted; implemented on the Billing phase 1 branch, not yet deployed.
 - Decision date: 2026-10-27 (owner decisions D1 on 2026-10-26, D3–D5 and the
   membership rule on 2026-10-27).

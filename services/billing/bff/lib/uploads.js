@@ -92,8 +92,8 @@ function createUploadRoutes({ s3, store, access, bucket, publicUrl, uploadPrefix
 
   const forbidden = (res) => res.status(403).json({ error: 'forbidden' });
   const notFound = (res) => res.status(404).json({ error: 'not found' });
-  // fresh membership for every mutation; reads accept the cached answer (status polling)
-  const allowed = (req, acct, fresh) => typeof acct === 'string' && ACCT_ID.test(acct) && access.canAct(req.sub, acct, { fresh });
+  // Fresh canonical Billing grant for every request, including status polling.
+  const allowed = (req, acct) => typeof acct === 'string' && ACCT_ID.test(acct) && access.canAct(req.sub, acct);
 
   async function abort(key, mpuId) {
     if (!mpuId) return;

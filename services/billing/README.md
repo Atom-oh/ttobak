@@ -1,5 +1,9 @@
 # Billing service
 
+Billing uses current direct or ancestor Account membership for read and upload access
+([ADR-060](../../docs/decisions/ADR-060-billing-shared-team-access.md)).
+Child references discover candidates only; canonical membership and complete parent chains authorize requests.
+
 Billing Insight BFF, served under `/api/billing` and run as a Lambda Web Function
 (entry point and auth arrive in later tasks of the Phase 1 plan).
 

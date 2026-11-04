@@ -204,8 +204,8 @@ test('role_has_no_resource_star', () => {
 test('ttobak_main_reads_are_bound_to_keys_and_attributes', () => {
   const statements = executionRolePolicies().flatMap((d: any) => d.Statement);
   const onMain = statements.filter((s: any) => JSON.stringify(s.Resource).includes('table/ttobak-main'));
-  expect(onMain).toHaveLength(2);
-  const query = onMain.find((s: any) => s.Action === 'dynamodb:Query');
+  expect(onMain).toHaveLength(3);
+  const query = onMain.find((s: any) => s.Action === 'dynamodb:Query' && JSON.stringify(s.Resource).includes('/index/GSI1'));
   expect(JSON.stringify(query.Resource)).toContain('table/ttobak-main/index/GSI1');
   expect(query.Condition).toEqual({
     'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['USER#*'] },
@@ -219,6 +219,13 @@ test('ttobak_main_reads_are_bound_to_keys_and_attributes', () => {
     'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['ACCOUNT#*'] },
     'ForAllValues:StringEquals': { 'dynamodb:Attributes': ['PK', 'SK', 'name', 'parentAccountId'] },
     Null: { 'dynamodb:Attributes': 'false' },
+  });
+  const children = onMain.find((s: any) => s.Action === 'dynamodb:Query' && !JSON.stringify(s.Resource).includes('/index/'));
+  expect(children.Condition).toEqual({
+    'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['ACCOUNT#*'] },
+    'ForAllValues:StringEquals': { 'dynamodb:Attributes': ['PK', 'SK'] },
+    StringEquals: { 'dynamodb:Select': 'SPECIFIC_ATTRIBUTES' },
+    Null: { 'dynamodb:LeadingKeys': 'false', 'dynamodb:Attributes': 'false' },
   });
 });
 

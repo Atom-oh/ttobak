@@ -153,6 +153,18 @@ export class BillingStack extends cdk.Stack {
         'Null': { 'dynamodb:Attributes': 'false' },
       },
     }));
+    // Descendant discovery reads only projected child-reference keys.
+    // Canonical META and membership GetItems independently authorize each result.
+    role.addToPolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:Query'],
+      resources: [table(props.ttobakTableName)],
+      conditions: {
+        'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['ACCOUNT#*'] },
+        'ForAllValues:StringEquals': { 'dynamodb:Attributes': ['PK', 'SK'] },
+        StringEquals: { 'dynamodb:Select': 'SPECIFIC_ATTRIBUTES' },
+        Null: { 'dynamodb:LeadingKeys': 'false', 'dynamodb:Attributes': 'false' },
+      },
+    }));
 
     const webFunction = new lambda.CfnWebFunction(this, 'WebFunction', { functionName: FUNCTION_NAME });
 

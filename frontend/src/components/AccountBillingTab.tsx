@@ -27,7 +27,7 @@ function UploadButton({ accountId }: { accountId: string }) {
 }
 
 function Footnote() {
-  return <p className="text-xs text-slate-500 dark:text-text-muted">이 계정의 멤버에게만 보이는 탭입니다.</p>;
+  return <p className="text-xs text-slate-500 dark:text-text-muted">이 계정과 상위 계정의 팀 멤버가 조회하고 업로드할 수 있습니다.</p>;
 }
 
 function KpiTile({ label, children }: { label: string; children: React.ReactNode }) {

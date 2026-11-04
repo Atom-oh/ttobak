@@ -26,7 +26,7 @@ export default function AccountDetailClient() {
   const { user, isLoading, isAuthenticated, membershipRevision } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [account, setAccount] = useState<Account | null>(null);
-  const { canEdit, isOwner, directMember } = accountCapabilities(account?.accountId === accountId ? account : null, user?.userId);
+  const { canEdit, isOwner } = accountCapabilities(account?.accountId === accountId ? account : null, user?.userId);
   const searchParams = useSearchParams();
   // Billing tab: runtime config billingService and Billing membership of this Account.
   // Read once per Account lookup; an entry for a previous Account never counts, and
@@ -49,7 +49,8 @@ export default function AccountDetailClient() {
     };
   }, [isAuthenticated, accountId]);
   const billingEntry = billing?.accountId === accountId ? billing.entry : null;
-  const billingVisible = directMember && billingEntry !== null;
+  // The BFF validates Billing-only direct/ancestor grants independently of Account edit rights.
+  const billingVisible = billingEntry !== null;
   const tabs = visibleAccountTabs(billingVisible);
   const tab = parseAccountTab(searchParams.get('tab'), billingVisible);
   const selectTab = (next: AccountTab) => {
