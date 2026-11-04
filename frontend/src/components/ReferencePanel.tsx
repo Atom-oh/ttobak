@@ -19,38 +19,47 @@ interface Props {
 }
 
 function AccountPicker({ value, onChange }: { value: string; onChange: (id: string) => void }) {
+  const { user, membershipRevision } = useAuth();
+  const userId = user?.userId;
   const [accounts, setAccounts] = useState<AccountSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0);
+  const requestKey = `${userId || ''}:${membershipRevision}:${attempt}`;
+  const [resolvedRequestKey, setResolvedRequestKey] = useState(requestKey);
   useEffect(() => {
     let active = true;
+    if (!userId) return;
     accountApi.list().then(response => {
       if (!active) return;
       if (!Array.isArray(response?.accounts)) throw new Error('고객 목록 응답을 확인할 수 없습니다.');
       setAccounts(response.accounts);
-      setLoading(false);
+      setLoading(false); setError(''); setResolvedRequestKey(requestKey);
     }).catch(error => {
       if (!active) return;
+      setAccounts([]);
       setError(error instanceof Error ? error.message : '고객 목록을 불러오지 못했습니다.');
-      setLoading(false);
+      setLoading(false); setResolvedRequestKey(requestKey);
     });
     return () => { active = false; };
-  }, [attempt]);
+  }, [userId, requestKey]);
+  const currentAccounts = userId && resolvedRequestKey === requestKey ? accounts : [];
+  const currentError = userId && resolvedRequestKey === requestKey ? error : '';
+  const currentLoading = !!userId && (loading || resolvedRequestKey !== requestKey);
   return (
     <div>
       <label className="text-xs text-slate-500 dark:text-text-muted">
         고객 범위
-        <select value={value} disabled={loading} onChange={event => onChange(event.target.value)}
+        <select value={value} disabled={currentLoading} onChange={event => onChange(event.target.value)}
           className="mt-1 w-full rounded-lg border border-slate-200 bg-white p-2 text-sm dark:border-white/10 dark:bg-surface-lowest">
-          <option value="">{loading ? '고객 불러오는 중…' : '고객 미선택 · 내 자료'}</option>
-          {value && !accounts.some(account => account.accountId === value) && <option value={value}>선택한 고객</option>}
-          {accounts.map(account => <option key={account.accountId} value={account.accountId}>{account.name}</option>)}
+          <option value="">{currentLoading ? '고객 불러오는 중…' : '고객 미선택 · 내 자료'}</option>
+          {value && !currentAccounts.some(account => account.accountId === value) && <option value={value}>선택한 고객</option>}
+          {currentAccounts.map(account => <option key={account.accountId} value={account.accountId}>{account.name}</option>)}
         </select>
       </label>
-      {error && <p role="alert" className="mt-1 text-xs text-red-600 dark:text-red-400">
-        {error}
-        <button type="button" className="ml-2 underline" disabled={loading} onClick={() => {
+      {currentError && <p role="alert" className="mt-1 text-xs text-red-600 dark:text-red-400">
+        {currentError}
+        <button type="button" className="ml-2 underline" disabled={currentLoading} onClick={() => {
           setError(''); setLoading(true); setAttempt(current => current + 1);
         }}>고객 목록 재시도</button>
       </p>}
