@@ -1,7 +1,7 @@
 'use strict';
 // Billing-only sharing (ADR-060): direct or ancestor membership, with fresh canonical reads.
 // GSI1 and CHILDREF rows propose candidates; neither grants access. Display caches grant nothing.
-const { QueryCommand, GetItemCommand } = require('@aws-sdk/client-dynamodb');
+const { QueryCommand, GetItemCommand, TransactGetItemsCommand } = require('@aws-sdk/client-dynamodb');
 const { ACCT_ID } = require('./store.js');
 
 const META_TTL_MS = 60e3;
@@ -37,8 +37,8 @@ function createAccess({ ddb, ttobakTable, now = Date.now }) {
   async function canAct(sub, acct, send = (cmd) => ddb.send(cmd)) {
     if (typeof sub !== 'string' || !sub || !valid(acct)) return false;
     if (await member(sub, acct, send)) return true;
-    const seen = new Set();
-    let id = acct, granted = false;
+    const seen = new Set(), chain = [];
+    let id = acct, grantAccount = '';
     while (id) {
       if (!valid(id) || seen.has(id) || seen.size > MAX_ANCESTORS) return false;
       seen.add(id);
@@ -47,12 +47,34 @@ function createAccess({ ddb, ttobakTable, now = Date.now }) {
         ProjectionExpression: 'PK, SK, parentAccountId', ConsistentRead: true,
       }));
       if (!r.Item || r.Item.PK?.S !== `ACCOUNT#${id}` || r.Item.SK?.S !== 'META') return false;
-      if (id !== acct && !granted) granted = await member(sub, id, send);
+      if (id !== acct && !grantAccount && await member(sub, id, send)) grantAccount = id;
       const parent = r.Item.parentAccountId;
       if (parent !== undefined && typeof parent.S !== 'string') return false;
+      chain.push({ id, parent });
       id = parent?.S || '';
     }
-    return granted;
+    if (!grantAccount) return false;
+    // One atomic snapshot prevents combining an old parent link with a newly added grant.
+    // At most 65 META rows plus one MEMBER row; all projections use existing GetItem permissions.
+    const snapshot = await send(new TransactGetItemsCommand({
+      TransactItems: [
+        ...chain.map(({ id: account }) => ({ Get: {
+          TableName: ttobakTable, Key: { PK: { S: `ACCOUNT#${account}` }, SK: { S: 'META' } },
+          ProjectionExpression: 'PK, SK, parentAccountId',
+        } })),
+        { Get: {
+          TableName: ttobakTable, Key: { PK: { S: `ACCOUNT#${grantAccount}` }, SK: { S: `MEMBER#${sub}` } },
+          ProjectionExpression: 'PK',
+        } },
+      ],
+    }));
+    if (!Array.isArray(snapshot.Responses) || snapshot.Responses.length !== chain.length + 1) return false;
+    for (let i = 0; i < chain.length; i++) {
+      const item = snapshot.Responses[i]?.Item, observed = chain[i];
+      if (item?.PK?.S !== `ACCOUNT#${observed.id}` || item?.SK?.S !== 'META' ||
+          JSON.stringify(item.parentAccountId) !== JSON.stringify(observed.parent)) return false;
+    }
+    return snapshot.Responses[chain.length]?.Item?.PK?.S === `ACCOUNT#${grantAccount}`;
   }
 
   // Display data only ({name, parentId}); grants nothing, so callers check canAct first.

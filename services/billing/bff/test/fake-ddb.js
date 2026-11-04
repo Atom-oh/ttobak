@@ -62,6 +62,13 @@ function createFakeDdb({ tables, pageSize = 100 }) {
       const t = cmd.input.TableName; const k = keyOf(t, cmd.input.Key);
       return { Item: project(cmd, data[t].get(k)) };
     },
+    TransactGetItemsCommand(cmd) {
+      // Synchronous projection of every item from the same current state.
+      return { Responses: cmd.input.TransactItems.map(({ Get }) => {
+        const item = project({ input: Get }, data[Get.TableName].get(keyOf(Get.TableName, Get.Key)));
+        return item ? { Item: item } : {};
+      }) };
+    },
     DeleteItemCommand(cmd) {
       const t = cmd.input.TableName; const k = keyOf(t, cmd.input.Key); const cur = data[t].get(k);
       if (!holds(cmd, cur)) throw new ConditionalCheckFailedException();

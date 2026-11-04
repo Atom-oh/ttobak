@@ -66,11 +66,70 @@ test('inherited_access_validates_the_complete_chain_even_above_a_grant', async (
   }
 });
 
+test('inherited_access_denies_interleaved_reparent_and_membership_add', async () => {
+  const t = setup();
+  t.acct('acct-p', 'Parent'); t.acct('acct-c', 'Child', 'acct-p'); t.acct('acct-x', 'Other');
+  let changed = false;
+  const send = async (cmd) => {
+    const result = await t.ddb.send(cmd);
+    if (!changed && cmd.constructor.name === 'GetItemCommand' &&
+        cmd.input.Key.PK.S === 'ACCOUNT#acct-c' && cmd.input.Key.SK.S === 'META') {
+      changed = true;
+      t.acct('acct-c', 'Child', 'acct-x');
+      t.member('u1', 'acct-p'); // no instant has both the old parent and this grant
+    }
+    return result;
+  };
+  assert.equal(await t.access.canAct('u1', 'acct-c', send), false);
+  assert.equal(changed, true);
+});
+
+test('inherited_access_denies_grant_removed_before_snapshot_confirmation', async () => {
+  const t = setup();
+  t.acct('acct-r', 'Root'); t.acct('acct-p', 'Parent', 'acct-r');
+  t.acct('acct-c', 'Child', 'acct-p'); t.member('u1', 'acct-p');
+  const send = async (cmd) => {
+    const result = await t.ddb.send(cmd);
+    if (cmd.constructor.name === 'GetItemCommand' &&
+        cmd.input.Key.PK.S === 'ACCOUNT#acct-r' && cmd.input.Key.SK.S === 'META') {
+      t.unmember('u1', 'acct-p');
+    }
+    return result;
+  };
+  assert.equal(await t.access.canAct('u1', 'acct-c', send), false);
+});
+
+test('inherited_snapshot_missing_items_and_storage_errors_never_grant', async () => {
+  for (const response of [{}, { Responses: [] }, { Responses: [{}, {}, {}] }]) {
+    const t = setup();
+    t.acct('acct-p', 'Parent'); t.acct('acct-c', 'Child', 'acct-p'); t.member('u1', 'acct-p');
+    const send = (cmd) => cmd.constructor.name === 'TransactGetItemsCommand' ? response : t.ddb.send(cmd);
+    assert.equal(await t.access.canAct('u1', 'acct-c', send), false);
+  }
+  const t = setup();
+  t.acct('acct-p', 'Parent'); t.acct('acct-c', 'Child', 'acct-p'); t.member('u1', 'acct-p');
+  const send = (cmd) => {
+    if (cmd.constructor.name === 'TransactGetItemsCommand') throw new Error('transaction unavailable');
+    return t.ddb.send(cmd);
+  };
+  await assert.rejects(t.access.canAct('u1', 'acct-c', send), /transaction unavailable/);
+});
+
 test('inherited_access_accepts_64_ancestors_and_denies_65', async () => {
   const t = setup();
   for (let i = 0; i <= 65; i++) t.acct(`a${i}`, `Account ${i}`, i < 65 ? `a${i + 1}` : undefined);
   t.member('u1', 'a65');
   assert.equal(await t.access.canAct('u1', 'a1'), true);
+  const snapshots = t.ddb.inputs.filter((c) => c.name === 'TransactGetItemsCommand');
+  assert.equal(snapshots.length, 1);
+  assert.equal(snapshots[0].input.TransactItems.length, 66);
+  for (const { Get } of snapshots[0].input.TransactItems) {
+    assert.equal(Get.TableName, TT);
+    assert.ok(Get.Key.PK.S.startsWith('ACCOUNT#'));
+    assert.equal(Get.ConsistentRead, undefined, 'the transaction supplies atomic read isolation');
+    const allowed = Get.Key.SK.S === 'META' ? 'PK, SK, parentAccountId' : 'PK';
+    assert.equal(Get.ProjectionExpression, allowed);
+  }
   assert.equal(await t.access.canAct('u1', 'a0'), false);
 });
 
