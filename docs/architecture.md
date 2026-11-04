@@ -123,7 +123,8 @@ TTOBAK account membership itself; TTOBAK grants it no table access (API-SPEC).
 The Billing service (ADR-056, `services/billing/`) is part of TTOBAK, distinct
 from that companion. CloudFront routes `/api/billing/*` to the Billing BFF, an
 IAM-authenticated Lambda Web Function behind OAC, which verifies the forwarded
-TTOBAK JWT and allows an account only to its direct members. `/billing` frames the
+TTOBAK JWT and grants Billing access through current direct or ancestor Account
+membership (ADR-060). `/billing` frames the
 static `/billing-app/` pages. Uploads go by presigned URL through
 `/billing-upload/*`, rewritten to the Billing data bucket. The Python worker
 (`services/billing/worker`, `run_account.sh`: validate, extract, datasets, check;
