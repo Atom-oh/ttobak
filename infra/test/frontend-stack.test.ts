@@ -24,7 +24,7 @@ describe('FrontendStack', () => {
 
     const mockStack = new cdk.Stack(app, 'MockStack');
     const edgeFn = new lambda.Function(mockStack, 'EdgeFn', {
-      runtime: lambda.Runtime.NODEJS_20_X,
+      runtime: lambda.Runtime.NODEJS_24_X,
       handler: 'index.handler',
       code: lambda.Code.fromInline('exports.handler = async () => {};'),
     });

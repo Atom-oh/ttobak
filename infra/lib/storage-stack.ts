@@ -227,7 +227,7 @@ export class StorageStack extends cdk.Stack {
     // exactly the "parameter doesn't exist yet" case this needs to tolerate.
     // A small purpose-built Lambda handles the fallback/ratchet itself instead.
     const distributionIdLookupFn = new lambda.Function(this, 'MediaDistributionIdLookupFn', {
-      runtime: lambda.Runtime.NODEJS_20_X,
+      runtime: lambda.Runtime.NODEJS_24_X,
       architecture: lambda.Architecture.ARM_64,
       handler: 'index.handler',
       timeout: cdk.Duration.seconds(30),
