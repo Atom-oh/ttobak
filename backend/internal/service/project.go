@@ -240,11 +240,24 @@ func (s *ProjectService) ListMyProjects(ctx context.Context, userID string, join
 	// candidateAccountIDs tracks which account(s) surfaced each candidate so
 	// the fail-closed check below can accept it if ANY of them is still a
 	// canonical link, not just the first one found.
-	accountRefs := make([][]model.ProjectRef, len(readableAccounts))
+	// Each slot keeps only the referenced project IDs: the full reverse-index
+	// rows (project names included) are dropped inside the fan-out call, so
+	// retained memory stays bounded by the in-flight limit as in the sequential
+	// loop, which held one account's rows at a time.
+	accountRefs := make([][]string, len(readableAccounts))
 	refErrs := make([]error, len(readableAccounts))
 	stop := fanout.Ordered(ctx, len(readableAccounts), listReadConcurrency, func(ctx context.Context, k int) error {
-		accountRefs[k], refErrs[k] = s.repo.ListProjectRefsForAccount(ctx, readableAccounts[k])
-		return refErrs[k]
+		refs, err := s.repo.ListProjectRefsForAccount(ctx, readableAccounts[k])
+		if err != nil {
+			refErrs[k] = err
+			return err
+		}
+		ids := make([]string, len(refs))
+		for i, ref := range refs {
+			ids[i] = ref.ProjectID
+		}
+		accountRefs[k] = ids
+		return nil
 	})
 	if stop < len(readableAccounts) {
 		return nil, refErrs[stop]
@@ -252,14 +265,14 @@ func (s *ProjectService) ListMyProjects(ctx context.Context, userID string, join
 	candidateAccountIDs := make(map[string][]string)
 	candidateOrder := []string{}
 	for k, accountID := range readableAccounts {
-		for _, ref := range accountRefs[k] {
-			if seen[ref.ProjectID] {
+		for _, projectID := range accountRefs[k] {
+			if seen[projectID] {
 				continue
 			}
-			if _, ok := candidateAccountIDs[ref.ProjectID]; !ok {
-				candidateOrder = append(candidateOrder, ref.ProjectID)
+			if _, ok := candidateAccountIDs[projectID]; !ok {
+				candidateOrder = append(candidateOrder, projectID)
 			}
-			candidateAccountIDs[ref.ProjectID] = append(candidateAccountIDs[ref.ProjectID], accountID)
+			candidateAccountIDs[projectID] = append(candidateAccountIDs[projectID], accountID)
 		}
 	}
 	// Each candidate is verified independently (canonical project read,

@@ -261,9 +261,14 @@ func readCandidate(ctx context.Context, repo accountReadMembershipRepo, id, user
 	}
 	out := readableCandidate{grant: g}
 	if hierarchy, ok := repo.(accountReadHierarchyRepo); ok {
-		out.account, out.err = hierarchy.GetAccount(ctx, id)
-		if out.err != nil {
-			out.grant, out.account = nil, nil
+		account, err := hierarchy.GetAccount(ctx, id)
+		if err != nil {
+			return readableCandidate{err: err}
+		}
+		// add() only checks presence and AccountID; keep just that so a
+		// prefetched candidate never retains the full account item.
+		if account != nil {
+			out.account = &model.Account{AccountID: account.AccountID}
 		}
 	}
 	return out
