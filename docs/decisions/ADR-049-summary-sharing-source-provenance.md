@@ -3,6 +3,10 @@
 Status: Accepted (implementation; deployment acceptance remains separate)
 Date: 2026-10-13
 
+Partially superseded by [ADR-059](ADR-059-owner-approved-account-sharing.md):
+explicit owner Account disclosure may share current output without regeneration.
+Source provenance and direct-email/pending grant policy remain unchanged.
+
 ## Context
 
 Owner-private summaries can consume linked predecessor meetings. The resulting

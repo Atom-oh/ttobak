@@ -18,11 +18,12 @@ const { shareFailureMessage, SHARE_UNSAFE_MESSAGE, SHARE_FALLBACK_MESSAGE } = lo
 
 const apiError = (status, code, message = code) => Object.assign(new Error(message), { status, code });
 
-test('unsafe summary rejection points the owner to sharing-safe regeneration', () => {
+test('team share failure does not require replacing completed notes', () => {
   const message = shareFailureMessage(apiError(409, 'SUMMARY_SHARING_UNSAFE',
     'The generated meeting notes are not cleared for sharing; the owner must regenerate sharing-safe notes first'));
   assert.equal(message, SHARE_UNSAFE_MESSAGE);
-  assert.match(message, /공유용 회의록 재생성/);
+  assert.doesNotMatch(message, /재생성.*완료/);
+  assert.match(message, /다시 시도/);
 });
 
 test('other API failures keep their server message', () => {

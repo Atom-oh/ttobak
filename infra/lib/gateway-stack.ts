@@ -228,6 +228,19 @@ export class GatewayStack extends cdk.Stack {
       type: 'String', default: '0', allowedValues: ['0', '1'],
       description: 'Enable after all privacy readers and canonical indexing pass deployed acceptance.',
     });
+    const summaryOwnerAccountShare = new cdk.CfnParameter(this, 'SummaryOwnerAccountShareEnabled', {
+      type: 'String', default: '0', allowedValues: ['0', '1'],
+      description: 'Enable explicit owner disclosure to an Account only after Go and QA approval readers are verified.',
+    });
+    new cdk.CfnRule(this, 'SummaryOwnerAccountShareRequiresWriter', {
+      assertions: [{
+        assert: cdk.Fn.conditionOr(
+          cdk.Fn.conditionEquals(summaryOwnerAccountShare.valueAsString, '0'),
+          cdk.Fn.conditionEquals(summaryPrivacyWriter.valueAsString, '1'),
+        ),
+        assertDescription: 'Owner Account disclosure requires the source and authorization-fenced privacy writer.',
+      }],
+    });
     const summaryPrivacyReader = new cdk.CfnParameter(this, 'SummaryPrivacyReaderEnabled', {
       type: 'String', default: '0', allowedValues: ['0', '1'],
       description: 'Enforce unmarked memberships only after the recorded old-writer and delivery drain.',
@@ -299,6 +312,7 @@ export class GatewayStack extends cdk.Stack {
         description: cdk.Fn.join('', ['project-invitations=', projectInvitationsEnabled.valueAsString,
           ';http-origin-version=', this.httpOrigin.versionId,
           ';summary-privacy-writer=', summaryPrivacyWriter.valueAsString,
+          ';owner-account-share=', summaryOwnerAccountShare.valueAsString,
           ';reader=', summaryPrivacyReader.valueAsString,
           ';cutoff=', summaryPrivacyCutoff.valueAsString,
           ';account-descendant-reads=', accountDescendantReads.valueAsString]),
@@ -312,6 +326,7 @@ export class GatewayStack extends cdk.Stack {
         ACCOUNT_DESCENDANT_READS_ENABLED: accountDescendantReads.valueAsString,
         PROJECT_INVITATIONS_ENABLED: projectInvitationsEnabled.valueAsString,
         SUMMARY_PRIVACY_WRITER_ENABLED: summaryPrivacyWriter.valueAsString,
+        SUMMARY_OWNER_ACCOUNT_SHARE_ENABLED: summaryOwnerAccountShare.valueAsString,
         ...summaryPrivacyReaderEnvironment,
         TABLE_NAME: props.table.tableName,
         BUCKET_NAME: props.bucket.bucketName,

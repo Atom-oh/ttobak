@@ -676,6 +676,13 @@ enter the API version description so parameter changes replace the immutable
 version before the live alias uses the configuration. Defaults retain installation
 behavior; configuration wiring does not establish deployed activation.
 
+`SummaryOwnerAccountShareEnabled` (`0` or `1`, default `0`) supplies
+`SUMMARY_OWNER_ACCOUNT_SHARE_ENABLED` only to API. Its rule requires privacy
+writer `1`, and its value also binds the immutable API version. Deploy compatible
+Go/Python approval readers with this flag disabled before enabling owner
+disclosure of current completed notes to one Account (ADR-059). Preserve existing
+writer/reader/cutoff parameters; the new flag does not change email/pending gates.
+
 Grant fences, pending/publication guards, owner sharing-safe regeneration and its
 UI are installed. `ErrSummarySharingUnsafe` maps to 409 `SUMMARY_SHARING_UNSAFE`.
 Activation still requires verified readers, canonical indexing, old-writer and

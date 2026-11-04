@@ -33,6 +33,49 @@ type SummaryPrivacyDependency struct {
 	TitleSHA256       string `dynamodbav:"titleSha256"`
 }
 
+// SummaryAccountApproval records an owner's disclosure to one Account without
+// changing source provenance or the identities of existing analyses.
+type SummaryAccountApproval struct {
+	Version           int    `dynamodbav:"version"`
+	OwnerUserID       string `dynamodbav:"ownerUserId"`
+	AccountID         string `dynamodbav:"accountId"`
+	SummaryGeneration string `dynamodbav:"summaryGeneration"`
+	ContentSHA256     string `dynamodbav:"contentSha256"`
+	ApprovedAt        string `dynamodbav:"approvedAt"`
+}
+
+func (meeting *Meeting) AccountSummaryMetadataShareable() bool {
+	if meeting == nil || meeting.SummaryReadRestricted {
+		return false
+	}
+	if meeting.SummaryPrivacy.SafeMetadata() {
+		return true
+	}
+	approval := meeting.SummaryAccountApproval
+	if approval == nil || approval.Version != 1 || !meeting.SharedToAccount ||
+		meeting.UserID == "" || meeting.AccountID == "" || approval.OwnerUserID != meeting.UserID ||
+		approval.AccountID != meeting.AccountID || approval.SummaryGeneration != meeting.SummaryGeneration() ||
+		!strings.HasSuffix(approval.ApprovedAt, "Z") {
+		return false
+	}
+	if _, err := time.Parse(time.RFC3339Nano, approval.ApprovedAt); err != nil {
+		return false
+	}
+	hash, err := hex.DecodeString(approval.ContentSHA256)
+	return err == nil && len(hash) == sha256.Size && hex.EncodeToString(hash) == approval.ContentSHA256
+}
+
+func (meeting *Meeting) AccountSummaryShareable() bool {
+	if meeting == nil || meeting.SummaryReadRestricted {
+		return false
+	}
+	if meeting.SummaryPrivacyState() == SummaryPrivacySafe {
+		return true
+	}
+	return meeting.AccountSummaryMetadataShareable() && meeting.SummaryAccountApproval != nil &&
+		meeting.SummaryAccountApproval.ContentSHA256 == SummaryPrivacyHash(meeting.Content)
+}
+
 // LinkedSummarySource exists only in an authorized generation snapshot.
 type LinkedSummarySource struct {
 	MeetingID, Title, Content, ActionItems string
@@ -97,6 +140,7 @@ func (meeting *Meeting) CanCreateSummaryGrant() bool {
 
 type SummarySharingStatus struct {
 	CanCreateGrant        bool `json:"canCreateGrant"`
+	CanShareToAccount     bool `json:"canShareToAccount"`
 	DerivedReadRestricted bool `json:"derivedReadRestricted"`
 	RequiresRegeneration  bool `json:"requiresRegeneration"`
 	CanRegenerate         bool `json:"canRegenerate"`

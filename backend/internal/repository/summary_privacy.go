@@ -29,6 +29,18 @@ func SummaryPrivacyWritesEnabled() bool {
 	return value == "1"
 }
 
+func OwnerAccountShareEnabled() bool {
+	return SummaryPrivacyWritesEnabled() && os.Getenv("SUMMARY_OWNER_ACCOUNT_SHARE_ENABLED") == "1"
+}
+
+// PublishMeetingToAccount is invoked only by the verified owner share operation.
+// Generic patches cannot provide an approval or opt into this writer.
+func (r *DynamoDBRepository) PublishMeetingToAccount(ctx context.Context, ownerID, meetingID, accountID string) error {
+	return r.updateMeetingFieldsWithCondition(ctx, ownerID, meetingID,
+		expression.AttributeExists(expression.Name("PK")),
+		map[string]interface{}{"accountId": accountID, "sharedToAccount": true}, false, nil, OwnerAccountShareEnabled())
+}
+
 func summaryGenerationCondition(generation string) expression.ConditionBuilder {
 	if generation == "" {
 		return expression.AttributeNotExists(expression.Name("summaryPrivacy"))
@@ -54,7 +66,7 @@ func stampSummaryMembership(member *model.AccountMember) *model.AccountMember {
 }
 
 var summaryPrivacyFields = []string{
-	"authorizationRevision", "summaryPrivacy", "linkedMeetingIds", "accountId", "sharedToAccount",
+	"authorizationRevision", "summaryPrivacy", "summaryAccountApproval", "linkedMeetingIds", "accountId", "sharedToAccount",
 	"actionItems", "tags", "sentiment", "insights", "insightsRevision", "actionItemContinuity",
 }
 
@@ -88,7 +100,7 @@ func withSummaryPrivacyFields(fields []string) []string {
 // remain outside its source fence. Fresh provenance publishers bind the full
 // privacy snapshot separately.
 func withSummaryClearanceFields(fields []string) []string {
-	return append(append([]string(nil), fields...), "authorizationRevision", "summaryPrivacy", "insightsRevision")
+	return append(append([]string(nil), fields...), "authorizationRevision", "summaryPrivacy", "summaryAccountApproval", "insightsRevision")
 }
 
 func (r *DynamoDBRepository) CaptureSummaryPrivacy(ctx context.Context, ownerID, meetingID string) (*model.SummarySnapshot, error) {
@@ -233,6 +245,7 @@ func invalidateSummaryClearance(update expression.UpdateBuilder) expression.Upda
 // Fenced stamps preserve provenance/reset identity and clear old derivative identity.
 // Generic writes reject server fields; no stamp invalidates in every mode.
 func summaryContentRevisionUpdate(update expression.UpdateBuilder, fields map[string]interface{}) expression.UpdateBuilder {
+	update = update.Remove(expression.Name("summaryAccountApproval"))
 	if _, fresh := fields["summaryPrivacy"]; !fresh {
 		return invalidateSummaryClearance(update)
 	}

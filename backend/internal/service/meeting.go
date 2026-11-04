@@ -102,6 +102,7 @@ type meetingRepo interface {
 	GetMeeting(ctx context.Context, userID, meetingID string) (*model.Meeting, error)
 	GetMeetingByID(ctx context.Context, meetingID string) (*model.Meeting, error)
 	UpdateMeetingFields(ctx context.Context, userID, meetingID string, fields map[string]interface{}) error
+	PublishMeetingToAccount(ctx context.Context, ownerID, meetingID, accountID string) error
 	UpdateMeetingFieldsIfMatch(ctx context.Context, userID, meetingID string, expected, fields map[string]interface{}) error
 	UpdateMeetingNotesIfMatch(ctx context.Context, userID, meetingID, expectedNotes, notes string) error
 	UpdateMeetingNotesWithRevision(ctx context.Context, userID, meetingID, expectedNotes, notes string, expectedRevision *string) (string, error)
@@ -1702,8 +1703,18 @@ func (s *MeetingService) ShareMeetingToAccount(ctx context.Context, ownerID, own
 	// leaving ListAccountMeetings permanently unable to surface it.
 	meeting.AccountID = accountID
 	meeting.SharedToAccount = true
-	if err := s.repo.UpdateMeetingFields(ctx, ownerID, meetingID, map[string]interface{}{"accountId": accountID, "sharedToAccount": true}); err != nil {
+	if err := s.repo.PublishMeetingToAccount(ctx, ownerID, meetingID, accountID); err != nil {
 		return nil, err
+	}
+	// Publication may mint an Insight identity for legacy output. Fan out only
+	// the current canonical bytes/identity; stale copies must remain invisible
+	// if refresh fails after the canonical share commits.
+	meeting, err = s.repo.GetMeeting(ctx, ownerID, meetingID)
+	if err != nil {
+		return nil, err
+	}
+	if meeting == nil || !meeting.SharedToAccount || meeting.AccountID != accountID {
+		return nil, repository.ErrConditionFailed
 	}
 
 	ref := &model.MeetingRef{

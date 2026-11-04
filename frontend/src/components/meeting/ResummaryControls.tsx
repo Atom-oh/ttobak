@@ -68,10 +68,10 @@ export function ResummaryControls({ status, canRequest, dirty, busy, error, onRe
       </div>
       <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">저장된 메모, 선택한 녹취, 추출된 첨부 자료로 요약합니다. 기존 요약은 완료 후 변경됩니다.</p>
       {sharing?.derivedReadRestricted && <p role="status" className="mt-2 text-xs text-amber-800 dark:text-amber-200">
-        기존 회의록과 분석 결과는 소유자의 공유용 재생성이 필요합니다. 저장 메모와 녹취는 계속 확인할 수 있습니다.
+        기존 회의록과 분석 결과를 보려면 소유자가 팀 공유를 갱신해야 합니다. 저장 메모와 녹취는 계속 확인할 수 있습니다.
       </p>}
       {sharing?.requiresRegeneration && !sharing.derivedReadRestricted && <p className="mt-2 text-xs text-amber-800 dark:text-amber-200">
-        새 공유에는 공유용 회의록이 필요합니다. 일반 다시 요약과 편집은 기존 비공개 자료의 사용 이력을 유지합니다.
+        {sharing.canShareToAccount ? '현재 회의록은 고객 맥락 연결에서 바로 팀에 공유할 수 있습니다. 아래 재생성은 선택 사항입니다.' : '개별 초대에 공유하려면 공유용 회의록이 필요합니다. 일반 다시 요약과 편집은 기존 자료의 사용 이력을 유지합니다.'}
       </p>}
       {sharing?.canRegenerate && onSharingSafe && <div className="mt-3">
         {!confirming ? <button type="button" disabled={dirty || busy || pending} onClick={() => setConfirming(true)}

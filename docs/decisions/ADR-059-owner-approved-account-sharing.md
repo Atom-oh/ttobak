@@ -1,19 +1,10 @@
 # ADR-059: Owner-approved Account sharing of current meeting output
 
-Status: Proposed (Python reader foundation implemented; companion implementation and deployment acceptance pending)
+Status: Accepted (implementation; deployment acceptance remains separate)
 Date: 2026-11-04
 Supersedes: ADR-049's mandatory regeneration before an owner Account publication
 of private/unknown generated output. Its provenance, direct-email/pending grants,
 protected membership and conditional source publication rules remain in force.
-
-## Implementation scope
-
-The reader foundation PR delivers only Python QA approval validation, source
-fingerprints and Insight availability handling. The Go writer/readers, API status,
-frontend behavior, CDK prerequisite and ADR-049 supersession are companion
-implementation in PR #573. The decision below specifies the complete intended
-contract; it does not claim those companion changes exist in this reader revision.
-ADR-049 remains the active writer policy until the companion is merged and deployed.
 
 ## Context
 

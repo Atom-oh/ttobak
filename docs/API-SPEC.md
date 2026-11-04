@@ -676,14 +676,25 @@ one transaction. See account/project handlers and services for each mutation gat
 
 ### Staged summary-sharing privacy
 
-Meeting detail adds `summarySharing`: `canCreateGrant`,
+Meeting detail adds `summarySharing`: `canCreateGrant`, `canShareToAccount`,
 `derivedReadRestricted`, `requiresRegeneration` and `canRegenerate`. These
 describe the current source view. Grant/publication and provenance writers are
 installed behind `SUMMARY_PRIVACY_WRITER_ENABLED=1`; any other value disables
 writer activation. `canRegenerate` requires activated writers, ownership and a
 terminal meeting state. Source wiring does not establish deployed acceptance.
 
-For a protected account membership, unknown/private meeting derivation withholds
+With `SUMMARY_OWNER_ACCOUNT_SHARE_ENABLED=1` and privacy writers enabled,
+owner-only `POST /api/meetings/{meetingId}/share-account` can disclose current
+completed private/unknown notes without regeneration. The canonical publication
+and server-managed `summaryAccountApproval` are atomic with the current source
+and direct owner-membership fence. Existing output and summary/action identities
+are preserved; absent legacy Insight revisions are minted to reject stale copies.
+Generic requests cannot assign approval. Protected Account readers accept only a
+current owner/audience/generation/hash-bound approval. Content/live writes, summary
+publication and audience changes invalidate it even during writer rollback.
+`canCreateGrant` retains direct-email/pending safe-source semantics; see ADR-059.
+
+For a protected account membership, unapproved unknown/private meeting derivation withholds
 summary, tasks, insights, tags, sentiment and live draft context. Parent-owned
 notes and transcript remain available through their authorized bounded reads.
 Existing independent direct grants and owner access retain their scope.

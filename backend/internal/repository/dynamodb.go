@@ -636,6 +636,7 @@ func (r *DynamoDBRepository) UpdateMeeting(ctx context.Context, meeting *model.M
 	// A legacy whole-item replacement cannot attest to the content it saves.
 	// Never copy stored clearance from the caller, including after rollback.
 	stored.SummaryPrivacy = nil
+	stored.SummaryAccountApproval = nil
 	stored.InsightsRevision = ""
 	if stored.TranscriptA != "" {
 		stored.TranscriptRevisionA = uuid.NewString()
@@ -957,11 +958,11 @@ func (r *DynamoDBRepository) UpdateMeetingFieldsIfMatch(ctx context.Context, use
 	return r.updateMeetingFieldsWithCondition(ctx, userID, meetingID, condition, fields, true, nil)
 }
 
-func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Context, userID, meetingID string, condition expression.ConditionBuilder, fields map[string]interface{}, immutableSpills bool, revisionOut *string) (resultErr error) {
+func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Context, userID, meetingID string, condition expression.ConditionBuilder, fields map[string]interface{}, immutableSpills bool, revisionOut *string, approveAccountOutput ...bool) (resultErr error) {
 	if _, assigned := fields["notesRevision"]; assigned {
 		return fmt.Errorf("notesRevision is server-managed")
 	}
-	for _, name := range []string{"transcriptRevisionA", "transcriptRevisionB", "summaryPrivacy", "insightsRevision", "authorizationRevision"} {
+	for _, name := range []string{"transcriptRevisionA", "transcriptRevisionB", "summaryPrivacy", "summaryAccountApproval", "insightsRevision", "authorizationRevision"} {
 		if _, assigned := fields[name]; assigned {
 			return fmt.Errorf("%s is server-managed", name)
 		}
@@ -1031,7 +1032,23 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 				if account == "" {
 					account = parent.AccountID
 				}
-				if (!parent.SharedToAccount || account != parent.AccountID) && !parent.CanCreateSummaryGrant() {
+				approve := len(approveAccountOutput) > 0 && approveAccountOutput[0]
+				if approve && !parent.CanCreateSummaryGrant() {
+					if parent.Status != model.StatusDone && parent.Status != model.StatusError {
+						return ErrSummarySharingUnsafe
+					}
+					fields["summaryAccountApproval"] = &model.SummaryAccountApproval{
+						Version: 1, OwnerUserID: userID, AccountID: account,
+						SummaryGeneration: parent.SummaryGeneration(),
+						ContentSHA256:     model.SummaryPrivacyHash(parent.Content),
+						ApprovedAt:        time.Now().UTC().Format(time.RFC3339Nano),
+					}
+					// Legacy copies have no identity. Fence out old Account
+					// rows until the current Insight fanout completes.
+					if parent.InsightsRevision == "" {
+						fields["insightsRevision"] = uuid.NewString()
+					}
+				} else if (!parent.SharedToAccount || account != parent.AccountID) && !parent.CanCreateSummaryGrant() {
 					return ErrSummarySharingUnsafe
 				}
 			}
@@ -1219,6 +1236,13 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 			update = summaryContentRevisionUpdate(update, fields)
 		} else if privacyRevision {
 			update = summaryPrivacyRevisionUpdate(update)
+		}
+		_, accountChanged := fields["accountId"]
+		_, publicationChanged := fields["sharedToAccount"]
+		if _, fresh := fields["summaryAccountApproval"]; !fresh && (accountChanged || publicationChanged) {
+			// Audience clearance cannot survive unpublication/classification,
+			// including while provenance writers are disabled.
+			update = update.Remove(expression.Name("summaryAccountApproval"))
 		}
 
 		expr, err := expression.NewBuilder().WithUpdate(update).WithCondition(writeCond).Build()

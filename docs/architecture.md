@@ -467,6 +467,14 @@ stop legacy fixed-object KB exports. Reader deployment, fixed cutoff, old-writer
 queued-work drain and authorized consumer verification remain independent rollout
 gates; see the [implementation plan](superpowers/plans/2026-10-12-summary-sharing-privacy.md).
 
+[ADR-059](decisions/ADR-059-owner-approved-account-sharing.md) adds separate
+owner disclosure to the current Account audience without changing provenance,
+generation or output. Approval and publication pin current source and direct
+membership atomically. Account readers bind disclosure to current owner, audience,
+generation and content; legacy Insight projections receive a canonical revision.
+Content/publication or audience changes invalidate approval even during rollback.
+The new API-only writer defaults off until compatible Go and QA readers deploy.
+
 - [Project constraints and accepted limits](../CLAUDE.md)
 - [API contracts](API-SPEC.md)
 - [Infrastructure](INFRA-SPEC.md)

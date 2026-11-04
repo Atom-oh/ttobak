@@ -154,6 +154,25 @@ describe('GatewayStack', () => {
     }
   });
 
+  test('owner Account disclosure defaults off, targets only API, and requires privacy writer', () => {
+    const json = template.toJSON();
+    expect(json.Parameters.SummaryOwnerAccountShareEnabled).toMatchObject({ Default: '0', AllowedValues: ['0', '1'] });
+    const functions = Object.values(template.findResources('AWS::Lambda::Function'));
+    for (const fn of functions) {
+      expect(fn.Properties.Environment?.Variables?.SUMMARY_OWNER_ACCOUNT_SHARE_ENABLED).toEqual(
+        fn.Properties.FunctionName === 'ttobak-api' ? { Ref: 'SummaryOwnerAccountShareEnabled' } : undefined);
+    }
+    const version = Object.values(template.findResources('AWS::Lambda::Version'))
+      .find(value => JSON.stringify(value.Properties.FunctionName).includes('ApiFunction'))!;
+    expect(JSON.stringify(version.Properties.Description)).toContain('"Ref":"SummaryOwnerAccountShareEnabled"');
+    expect(json.Rules.SummaryOwnerAccountShareRequiresWriter.Assertions[0].Assert).toEqual({
+      'Fn::Or': [
+        { 'Fn::Equals': [{ Ref: 'SummaryOwnerAccountShareEnabled' }, '0'] },
+        { 'Fn::Equals': [{ Ref: 'SummaryPrivacyWriterEnabled' }, '1'] },
+      ],
+    });
+  });
+
   test.each([false, true])('connector consumers use exact private grants, a retained signing key and ARM64 crypto (private=%s)', (active) => {
     const t = buildTemplate(undefined, undefined, 'https://ttobak.example.com/api/mcp',
       undefined, undefined, undefined, undefined, {}, true, active);

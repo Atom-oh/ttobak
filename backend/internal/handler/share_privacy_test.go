@@ -34,6 +34,9 @@ func (r *grantFailureRepo) PutPendingShare(context.Context, *model.PendingShare)
 func (r *grantFailureRepo) UpdateMeetingFields(context.Context, string, string, map[string]interface{}) error {
 	return r.err
 }
+func (r *grantFailureRepo) PublishMeetingToAccount(context.Context, string, string, string) error {
+	return r.err
+}
 
 // invitedCognito reports an invited Cognito user with a sub, so sharing with
 // an email that has no PROFILE row takes the pending-share branch.
