@@ -2,6 +2,7 @@
 from datetime import datetime, timezone
 from decimal import Decimal
 import hashlib
+import json
 import os
 import re
 
@@ -74,6 +75,52 @@ def safe_summary(record):
         return (type(content) is str
                 and hashlib.sha256(content.encode()).hexdigest() == privacy['contentSha256'])
     return True
+
+
+def _approved_account_summary(record, verify_content=True):
+    if type(record) is not dict or record.get('sharedToAccount') is not True:
+        return False
+    owner, account = record.get('userId'), record.get('accountId')
+    stamp = record.get('summaryAccountApproval')
+    if (type(owner) is not str or not owner or type(account) is not str or not account
+            or type(stamp) is not dict or not _number(stamp.get('version'))
+            or stamp.get('version') != 1 or stamp.get('ownerUserId') != owner
+            or stamp.get('accountId') != account
+            or type(stamp.get('summaryGeneration')) is not str
+            or type(stamp.get('contentSha256')) is not str
+            or re.fullmatch(r'[0-9a-f]{64}', stamp['contentSha256']) is None
+            or _utc(stamp.get('approvedAt')) is None):
+        return False
+    privacy = record.get('summaryPrivacy')
+    if privacy is not None and type(privacy) is not dict:
+        return False
+    generation = privacy.get('generationId', '') if privacy is not None else ''
+    if type(generation) is not str or generation != stamp['summaryGeneration']:
+        return False
+    if verify_content and 'content' in record:
+        content = record['content']
+        if type(content) is not str:
+            return False
+        try:
+            return hashlib.sha256(content.encode('utf-8')).hexdigest() == stamp['contentSha256']
+        except UnicodeEncodeError:
+            return False
+    return True
+
+
+def account_summary_shareable(record):
+    """Account disclosure is independent of safe-source provenance."""
+    return safe_summary(record) or _approved_account_summary(record)
+
+
+def account_summary_approval_fingerprint(record):
+    """Bind disclosure identity across metadata/full reads without exposing it."""
+    if not _approved_account_summary(record, verify_content=False):
+        return ''
+    stamp = record['summaryAccountApproval']
+    values = ['summary-account-approval-v1', stamp['ownerUserId'], stamp['accountId'],
+              stamp['summaryGeneration'], stamp['contentSha256'], stamp['approvedAt']]
+    return hashlib.sha256(json.dumps(values, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
 
 
 def project_meeting(record, restricted):

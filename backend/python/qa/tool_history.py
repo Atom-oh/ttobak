@@ -206,12 +206,12 @@ def _public_view(name, value):
 
     if name == 'list_meetings':
         return rows(value, ('meetingId', 'title', 'date', 'tags', 'status', 'isShared', 'sharedBy',
-                            '_accountReadGrantFingerprint'))
+                            '_accountReadGrantFingerprint', '_summaryAccountApprovalFingerprint'))
     if name == 'list_accounts':
         return rows(value, ('accountId', 'name', 'role', 'accessPermission', 'inheritedFromAccountId',
                             '_accountReadGrantFingerprint'))
     result = pick(value, ('account', 'accountId', 'accessPermission', 'inheritedFromAccountId',
-                          '_accountReadGrantFingerprint'))
+                          '_accountReadGrantFingerprint', '_summaryAccountApprovalFingerprint'))
     if value.get('summaryReadRestriction') == RESTRICTION:
         result['summaryReadRestriction'] = RESTRICTION
     if name == 'get_account_insights':

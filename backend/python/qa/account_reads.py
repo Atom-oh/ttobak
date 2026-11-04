@@ -1,5 +1,7 @@
 """Fresh, complete account views for readonly tool history; no AWS client setup."""
 from datetime import datetime, timezone
+import hashlib
+import json
 import os
 import re
 
@@ -7,13 +9,15 @@ from boto3.dynamodb.conditions import Key
 
 from source_revision import IDENTIFIER
 from tool_history import CompleteRead, normalize_input
-from summary_privacy import enforce_summary_guard, safe_summary
+from summary_privacy import (
+    enforce_summary_guard, account_summary_shareable, account_summary_approval_fingerprint,
+)
 from account_read_access import AccountReadAccess, FLAG, MAX_READABLE_ACCOUNTS
 
 MEMBER_FIELDS = ('PK', 'SK', 'accountId', 'userId', 'role', 'addedAt', 'summaryPrivacyVersion')
 ACCOUNT_FIELDS = ('PK', 'SK', 'accountId', 'name', 'aliases', 'industry')
 MEETING_AUTH = ('PK', 'SK', 'meetingId', 'userId', 'entityType', 'accountId', 'sharedToAccount',
-                'summaryPrivacy', 'insightsRevision')
+                'summaryPrivacy', 'summaryAccountApproval', 'insightsRevision')
 RESEARCH_AUTH = ('PK', 'SK', 'researchId', 'userId', 'accountIds', 'trashedAt')
 INSIGHT_AUTH = ('PK', 'SK', 'accountId', 'entityType', 'sourceType',
                 'sourceId', 'sourceUserId', 'occurredAt', 'summaryGeneration', 'insightsRevision')
@@ -237,8 +241,11 @@ class StrictAccountReader:
                     restricted = True
                     continue
                 if not self._insight_allowed(parent, member, row, owner, meeting_id, account_id):
+                    if self._published(parent, owner, meeting_id, account_id):
+                        restricted = True
                     continue
-                source = (*source, self._generation(parent), _text(parent, 'insightsRevision'))
+                source = (*source, self._generation(parent), _text(parent, 'insightsRevision'),
+                          account_summary_approval_fingerprint(parent))
             current = self._get(row['PK'], row['SK'], INSIGHT_METADATA + ('text', 'entities'))
             if current is None or any(
                     (field in current) != (field in row) or current.get(field) != row.get(field)
@@ -267,6 +274,7 @@ class StrictAccountReader:
         self._recheck_member(user_id, member)
         value = {'accountId': account['accountId'], 'account': _text(account, 'name'), 'insights': insights}
         value.update(self._access_fields(member))
+        value.update(self._approval_fields(guards))
         if restricted:
             value['summaryReadRestriction'] = 'SHARING_REGEN_REQUIRED'
         return CompleteRead(value)
@@ -275,7 +283,8 @@ class StrictAccountReader:
     def _published(row, owner, meeting_id, account_id):
         if row is None:
             return False
-        fields = {field: _text(row, field) for field in MEETING_AUTH if field not in ('sharedToAccount','summaryPrivacy')}
+        fields = {field: _text(row, field) for field in MEETING_AUTH
+                  if field not in ('sharedToAccount', 'summaryPrivacy', 'summaryAccountApproval')}
         shared = row.get('sharedToAccount')
         if shared is not None and type(shared) is not bool:
             raise ValueError('Invalid meeting account publication flag')
@@ -293,6 +302,7 @@ class StrictAccountReader:
             if len(guard) > 4:
                 if (self._generation(current) != guard[4]
                         or _text(current, 'insightsRevision') != guard[5]
+                        or account_summary_approval_fingerprint(current) != guard[6]
                         or self._derived_restricted(current, member, owner)):
                     raise PermissionError('Meeting insight generation changed during aggregation')
 
@@ -308,7 +318,19 @@ class StrictAccountReader:
     @staticmethod
     def _derived_restricted(parent, member, owner):
         return ((member is None or member.get('userId') != owner)
-                and enforce_summary_guard(member) and not safe_summary(parent))
+                and enforce_summary_guard(member) and not account_summary_shareable(parent))
+
+    @staticmethod
+    def _approval_fields(guards):
+        approvals = sorted({(guard[0], guard[1], guard[6]) for guard in guards
+                            if len(guard) > 6 and guard[6]})
+        if not approvals:
+            return {}
+        digest = hashlib.sha256(b'account-summary-approvals-v1\0')
+        for scope in approvals:
+            encoded = json.dumps(scope, separators=(',', ':'), ensure_ascii=False).encode('utf-8')
+            digest.update(str(len(encoded)).encode('ascii') + b':' + encoded)
+        return {'_summaryAccountApprovalFingerprint': digest.hexdigest()}
 
     def _insight_allowed(self, parent, member, row, owner, meeting_id, account_id):
         if not self._published(parent, owner, meeting_id, account_id):
@@ -316,9 +338,10 @@ class StrictAccountReader:
         if self._derived_restricted(parent, member, owner):
             return False
         generation = self._generation(parent)
-        if generation:
-            return (_text(row, 'summaryGeneration') == generation and bool(_text(parent, 'insightsRevision'))
-                    and _text(row, 'insightsRevision') == _text(parent, 'insightsRevision'))
+        revision = _text(parent, 'insightsRevision')
+        if generation or revision:
+            return (_text(row, 'summaryGeneration') == generation and bool(revision)
+                    and _text(row, 'insightsRevision') == revision)
         return not _text(row, 'summaryGeneration') and not _text(row, 'insightsRevision')
 
     def _meetings(self, account_id):
@@ -390,6 +413,7 @@ class StrictAccountReader:
                  'industry': _text(account, 'industry'), 'insightsByType': by_type,
                  'meetings': meetings, 'research': research}
         value.update(self._access_fields(member))
+        value.update(self._approval_fields(insight_guards))
         if restricted:
             value['summaryReadRestriction'] = 'SHARING_REGEN_REQUIRED'
         return CompleteRead(value)
