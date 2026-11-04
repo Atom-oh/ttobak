@@ -165,6 +165,15 @@ export class BillingDataPlane extends Construct {
       actions: ['s3:GetObject'], resources: [this.bucket.arnForObjects(FEED_KEY)],
     }));
 
+    // The agents child's only credentials (main.py agents_creds): Bedrock and the FSI search. The task role's own
+    // credentials never reach a child, so no child can assume the data role without the per-account session policy
+    // or touch the platform table.
+    const agentsRole = new iam.Role(this, 'WorkerAgentsRole', {
+      assumedBy: new iam.ArnPrincipal(workerRole.roleArn),
+      maxSessionDuration: cdk.Duration.hours(1),
+      description: 'Billing analysis worker agents step: Bedrock and FSI search only',
+    });
+
     const workerLogs = new logs.LogGroup(this, 'WorkerLogs', {
       retention: logs.RetentionDays.ONE_MONTH, removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
@@ -176,6 +185,7 @@ export class BillingDataPlane extends Construct {
       })),
       environment: {
         BUCKET: this.bucket.bucketName, TABLE: this.table.tableName, DATA_ROLE_ARN: dataRole.roleArn,
+        AGENTS_ROLE_ARN: agentsRole.roleArn,
         PUBLIC_URL: props.publicUrl, JOB_TIMEOUT_S: '10800', AWS_REGION: region,
         AGENT_MODEL: props.agentModel,
         ...(fsiSearch ? { FSI_SEARCH_FUNCTION: fsiSearch.functionName } : {}),
@@ -184,7 +194,7 @@ export class BillingDataPlane extends Construct {
       logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'worker', logGroup: workerLogs }),
     });
     workerRole.addToPrincipalPolicy(new iam.PolicyStatement({ actions: ['s3:GetObject'], resources: [this.bucket.arnForObjects('jobs/*')] }));
-    workerRole.addToPrincipalPolicy(new iam.PolicyStatement({ actions: ['sts:AssumeRole'], resources: [dataRole.roleArn] }));
+    workerRole.addToPrincipalPolicy(new iam.PolicyStatement({ actions: ['sts:AssumeRole'], resources: [dataRole.roleArn, agentsRole.roleArn] }));
     // upload records, META publish, rerun leases: ACCT#* items only. TransactWriteItems is authorized per contained
     // action (UpdateItem/ConditionCheckItem).
     workerRole.addToPrincipalPolicy(new iam.PolicyStatement({
@@ -194,7 +204,7 @@ export class BillingDataPlane extends Construct {
     }));
     // The global cross-Region profile in this Region plus the foundation model in any Region it routes to.
     const foundation = props.agentModel.replace(/^global\./, '');
-    workerRole.addToPrincipalPolicy(new iam.PolicyStatement({
+    agentsRole.addToPrincipalPolicy(new iam.PolicyStatement({
       actions: ['bedrock:InvokeModel'], // agents.bedrock_invoke uses Converse (no streaming)
       resources: [
         `arn:${partition}:bedrock:${region}:${account}:inference-profile/${props.agentModel}`,
@@ -202,7 +212,7 @@ export class BillingDataPlane extends Construct {
         `arn:${partition}:bedrock:::foundation-model/${foundation}`,
       ],
     }));
-    fsiSearch?.grantInvoke(workerRole);
+    fsiSearch?.grantInvoke(agentsRole);
 
     const jobDlq = new sqs.Queue(this, 'JobDlq', {
       encryption: sqs.QueueEncryption.SQS_MANAGED, enforceSSL: true, retentionPeriod: cdk.Duration.days(14),

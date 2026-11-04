@@ -106,21 +106,30 @@ describe('Billing data plane', () => {
   });
 
   test('worker roles are scoped to their prefixes, ACCT# items and the exact agent model', () => {
+    // the task role (parent process only): jobs, the two role assumptions and ACCT# items; no model or function
     const task = statementsOf('DataPlaneWorkerTaskTaskRole');
-    const actions = task.map((s: any) => acts(s).sort().join(','));
-    expect(actions).toEqual(expect.arrayContaining([
-      's3:GetObject', 'sts:AssumeRole', 'bedrock:InvokeModel', 'lambda:InvokeFunction',
+    expect(task.map((s: any) => acts(s).sort().join(',')).sort()).toEqual([
       'dynamodb:ConditionCheckItem,dynamodb:DeleteItem,dynamodb:GetItem,dynamodb:UpdateItem',
-    ]));
+      's3:GetObject', 'sts:AssumeRole',
+    ]);
     const ddb = task.find((s: any) => acts(s).includes('dynamodb:GetItem'));
     expect(ddb.Condition).toEqual({ 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['ACCT#*'] } });
-    const bedrock = task.find((s: any) => s.Action === 'bedrock:InvokeModel');
+    const assume = task.find((s: any) => s.Action === 'sts:AssumeRole');
+    expect(JSON.stringify(assume.Resource)).toContain('DataPlaneWorkerDataRole');
+    expect(JSON.stringify(assume.Resource)).toContain('DataPlaneWorkerAgentsRole');
+    // the agents child's only credentials: the exact model and the FSI search
+    const agents = statementsOf('DataPlaneWorkerAgentsRole');
+    expect(agents.map((s: any) => acts(s).join(',')).sort()).toEqual(['bedrock:InvokeModel', 'lambda:InvokeFunction']);
+    const bedrock = agents.find((s: any) => s.Action === 'bedrock:InvokeModel');
     expect(JSON.stringify(bedrock.Resource)).toContain('inference-profile/global.anthropic.claude-sonnet-5-5"');
     expect(JSON.stringify(bedrock.Resource)).not.toContain('*"');
     expect(JSON.stringify(bedrock.Resource)).toContain('foundation-model/anthropic.claude-sonnet-5-5');
     const s3 = task.find((s: any) => s.Action === 's3:GetObject');
     expect(JSON.stringify(s3.Resource)).toContain('/jobs/*');
-    for (const s of task) expect(s.Resource).not.toBe('*');
+    for (const s of [...task, ...agents]) expect(s.Resource).not.toBe('*');
+    template.hasResourceProperties('AWS::ECS::TaskDefinition', {
+      ContainerDefinitions: [Match.objectLike({ Environment: Match.arrayWith([Match.objectLike({ Name: 'AGENTS_ROLE_ARN' })]) })],
+    });
 
     const data = statementsOf('DataPlaneWorkerDataRole');
     expect(data.map((s: any) => acts(s).join(','))).toEqual(['s3:GetObject,s3:PutObject', 's3:ListBucket', 's3:GetObject']);

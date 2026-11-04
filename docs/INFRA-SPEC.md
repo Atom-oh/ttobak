@@ -809,11 +809,13 @@ There is no public entry point: no service, load balancer, distribution or URL.
   of the shared VPC (`fsi-demo-vpc`, looked up by ID like GatewayStack) with no
   public IP. Their security group has no inbound rule; egress is HTTPS to the
   VPC CIDR (interface endpoints) and the S3/DynamoDB gateway prefix lists.
-- The task role reads `jobs/*`, assumes the data role, updates `ACCT#*` items
-  only, invokes the FSI search and calls only the configured agent model's
-  global profile and foundation model. The data role (`s3:GetObject`/`PutObject`
-  on `accounts/*`, `ListBucket` for `accounts/*`, the feed) is narrowed per job
-  by a session policy.
+- The task role, used by the worker's parent process only, reads `jobs/*`,
+  updates `ACCT#*` items and assumes two roles. The data role (`s3:GetObject`/
+  `PutObject` on `accounts/*`, `ListBucket` for `accounts/*`, the feed) is
+  narrowed per job by a session policy. The agents role allows only the
+  configured agent model's global profile and foundation model and the FSI
+  search; its session is the agents child's only credentials. No child receives
+  the task role's credentials.
 - `WhatsNew` collector (no VPC) writes `data/whats_new_feed.json` daily at
   00:30 KST. `FsiSearch` (no VPC, no URL) calls the web search gateway named by
   `ttobak:billingWebSearchGateway{Arn,Url,Tool}` with an exact

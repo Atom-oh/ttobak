@@ -11,6 +11,7 @@ UP = "u20261020123456abcdef"
 VID = "v20261020123456abcdef"
 BUCKET, TABLE = "data-bucket", "platform-table"
 ROLE = "arn:aws:iam::111122223333:role/data"
+AGENTS_ROLE = "arn:aws:iam::111122223333:role/agents"
 
 
 from fileutil import rd, wr, jload  # noqa: E402
@@ -452,6 +453,7 @@ class Base(unittest.TestCase):
 
     def env(self, **kw):
         e = {"JOB_KEY": "jobs/%s.json" % UP, "BUCKET": BUCKET, "TABLE": TABLE, "DATA_ROLE_ARN": ROLE,
+             "AGENTS_ROLE_ARN": AGENTS_ROLE,
              "WORK_ROOT": self.work_root, "PUBLIC_URL": "https://dash.example.test", "JOB_TIMEOUT_S": "3600"}
         e.update(kw)
         return e
