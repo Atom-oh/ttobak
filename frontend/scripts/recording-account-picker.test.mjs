@@ -300,3 +300,25 @@ test('preparation save from a previous user cannot enter the new user catalog or
   assert.match(f.html(), /User list 2/);
   assert.doesNotMatch(f.html(), /Previous user preparation|\/docs\/previous-user/);
 });
+
+test('new-user preparation save cannot reveal the previous user catalog while its own list is pending', async () => {
+  const nextList = deferred();
+  const f = fixture('preparation', {
+    accounts: async () => ({ accounts: [direct] }),
+    documents: attempt => attempt === 1
+      ? Promise.resolve({ documents: [{ docId: 'previous-user', title: 'Previous user preparation' }] })
+      : nextList.promise,
+    put: async () => ({ docId: 'new-user-saved', title: 'New user preparation' }),
+  });
+  f.props.value = 'Prepared notes';
+  await f.start();
+  assert.match(f.html(), /Previous user preparation/);
+  await f.switchUser('new-member');
+  await f.find(node => node.type === 'button' && node.props.children === '개인 준비 문서로 보관').props.onClick();
+  assert.match(f.html(), /New user preparation/);
+  assert.doesNotMatch(f.html(), /Previous user preparation|value="previous-user"/);
+  nextList.resolve({ documents: [{ docId: 'new-user-list', title: 'New user catalog' }] });
+  await f.flush();
+  assert.match(f.html(), /New user catalog/);
+  assert.doesNotMatch(f.html(), /Previous user preparation|value="previous-user"/);
+});
