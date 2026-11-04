@@ -46,3 +46,25 @@ get-role` preflight before that deploy to fail fast if it's missing. See
 `docs/runbooks/deployment.md` for current deployment constraints. The separate
 `TtobakResearchAgentStack` declares legacy Bedrock Agent resources; it does not
 make this container a CDK-managed AgentCore Runtime.
+
+## Platform version (V2 readiness)
+
+The runtime runs on AgentCore Runtime platform V1. `deploy-research-agent.yml`
+calls `update-agent-runtime` without `--platform-version`, which keeps the
+current version. Platform V2 restores each instance from a snapshot taken after
+startup. As of 2026-11-04 the AgentCore developer guide lists V2 Regions as
+us-east-1, us-east-2, us-west-2, eu-west-1 and ap-northeast-1, not
+ap-northeast-2, so the runtime stays on V1.
+
+The code is snapshot-safe for V2:
+- per-request values (message IDs via `secrets`, timestamps, SigV4
+  credentials) are created in the handler;
+- boto3 clients are created on first use and refresh their credentials;
+- `_last_activity`, reported by `/ping`, is set by the first ping or the first
+  activity, never at import.
+
+When V2 is available in ap-northeast-2, the switch is an in-place
+`update-agent-runtime --platform-version V2`. It creates a new runtime version,
+moves the `DEFAULT` endpoint and takes several minutes to reach `READY`. The
+container must report healthy within 120 seconds. Keep new startup code free of
+random values, timestamps, credentials and host/PID identifiers.

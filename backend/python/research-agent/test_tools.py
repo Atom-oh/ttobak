@@ -24,6 +24,30 @@ if 'strands' not in sys.modules:
 
 import tools
 
+# agent.py's web framework is container-only too: stub just what it touches at
+# import (FastAPI route decorators, HTTPException, pydantic BaseModel).
+if 'fastapi' not in sys.modules:
+    fastapi_mod = types.ModuleType('fastapi')
+
+    class _App:
+        def __init__(self, *a, **k):
+            pass
+
+        def _route(self, *a, **k):
+            return lambda fn: fn
+        get = post = _route
+
+    fastapi_mod.FastAPI = _App
+    fastapi_mod.HTTPException = type('HTTPException', (Exception,), {})
+    sys.modules['fastapi'] = fastapi_mod
+if 'pydantic' not in sys.modules:
+    pydantic_mod = types.ModuleType('pydantic')
+    pydantic_mod.BaseModel = type('BaseModel', (), {})
+    sys.modules['pydantic'] = pydantic_mod
+
+import asyncio
+import agent
+
 
 class TestWebSearch(unittest.TestCase):
     """The real Gateway wraps the MCP CallToolResult under a top-level
@@ -287,6 +311,29 @@ class TestExtractSseJson(unittest.TestCase):
         result = tools._extract_sse_json(sse_body)
         parsed = json.loads(result)
         self.assertEqual(parsed['result']['isError'], False)
+
+
+class TestSnapshotSafeActivity(unittest.TestCase):
+    """AgentCore Runtime V2 restores a snapshot taken after import: nothing
+    time-dependent may be fixed at import."""
+
+    def setUp(self):
+        self._saved = agent._last_activity
+        self.addCleanup(setattr, agent, '_last_activity', self._saved)
+
+    def test_activity_is_not_set_at_import(self):
+        import importlib
+        fresh = importlib.reload(agent)
+        self.assertIsNone(fresh._last_activity)
+
+    def test_first_ping_reports_the_current_time(self):
+        agent._last_activity = None
+        with mock.patch.object(agent.time, 'time', return_value=1_900_000_000.4):
+            body = asyncio.run(agent.ping())
+        self.assertEqual(body['time_of_last_update'], 1_900_000_000)
+        with mock.patch.object(agent.time, 'time', return_value=1_900_000_999.0):
+            body = asyncio.run(agent.ping())
+        self.assertEqual(body['time_of_last_update'], 1_900_000_000)  # ping alone is not activity
 
 
 if __name__ == '__main__':
