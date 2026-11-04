@@ -38,13 +38,19 @@ new unmarked memberships. Existing unmarked membership is eligible only with val
 AddedAt strictly before the cutoff. Owner and independent direct grants retain
 their separate scope.
 
-## Ordered acceptance
+## Initial privacy activation
+
+The steps below apply only to the first privacy rollout, with owner disclosure
+disabled and unapproved-output fixtures. For an already activated deployment,
+use the incremental ADR-059 sequence above and preserve its existing privacy
+flags and fixed cutoff.
 
 1. Capture current main/deployment activity, all live Lambda versions/configuration,
    stack parameters, invocation routes, queues and canonical indexing mode. Keep
    credentials and private meeting content out of receipts.
 2. Build and review the exact combined artifacts. Deploy GatewayStack exclusively
-   with both flags `0`, preserving other stack parameters. Confirm the API live
+   with writer/reader flags `0` and owner disclosure `0`, preserving other stack
+   parameters. Confirm the API live
    version, summarize and QA artifacts and settings. Keep canonical KB indexing
    and its reconciliation schedule enabled; verify actual source-current QA and
    immutable index snapshots before disabling the legacy summarizer export path.
@@ -67,7 +73,8 @@ their separate scope.
 6. Prove actual cross-user results before calling the rollout complete: protected
    team members see authorized raw parent notes/transcript and explicit
    `SHARING_REGEN_REQUIRED`, while private/unknown summaries, derived tasks,
-   insights, vectors/history and linked IDs are withheld. Owner and pre-existing
+   insights, vectors/history and linked IDs are withheld for unapproved output.
+   Owner and pre-existing
    independent direct grants retain access. Only the owner can request safe
    regeneration; real worker publication excludes private predecessor evidence,
    preserves concurrent human edits and conditionally resets derived state.
