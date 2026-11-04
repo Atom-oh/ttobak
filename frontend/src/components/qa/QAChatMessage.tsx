@@ -3,6 +3,7 @@
 import ReactMarkdown from 'react-markdown';
 import { safeMarkdownUrl } from '@/lib/markdownUrlTransform';
 import remarkGfm from 'remark-gfm';
+import { chatMarkdownComponents } from './chatMarkdown';
 import Link from 'next/link';
 import { qaSources } from '@/lib/qaSources';
 import type { QASourceDetail } from '@/types/meeting';
@@ -87,8 +88,8 @@ export function QAChatMessage({ question, answer, sources, sourceDetails, usedKB
             </div>
           ) : (
             <>
-              <div className="text-sm text-slate-700 dark:text-slate-300 prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 prose-li:my-0.5 prose-table:my-2 prose-pre:my-2 prose-hr:my-2 prose-th:border prose-th:border-slate-300 dark:prose-th:border-slate-600 prose-th:px-2 prose-th:py-1 prose-td:border prose-td:border-slate-200 dark:prose-td:border-slate-700 prose-td:px-2 prose-td:py-1">
-                <ReactMarkdown remarkPlugins={[remarkGfm]} urlTransform={safeMarkdownUrl}>{answer}</ReactMarkdown>
+              <div className="text-sm text-slate-700 dark:text-slate-300 break-words">
+                <ReactMarkdown remarkPlugins={[remarkGfm]} urlTransform={safeMarkdownUrl} components={chatMarkdownComponents}>{answer}</ReactMarkdown>
                 {isStreaming && <span className="inline-block w-0.5 h-4 ml-0.5 bg-primary animate-pulse align-middle" />}
               </div>
 
