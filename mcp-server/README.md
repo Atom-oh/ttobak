@@ -67,13 +67,46 @@ scan or filesystem failure returns an error instead of claiming completed remova
 Refresh is attempted before another login; its lifetime depends on pool policy
 and revocation. Do not copy token files into documentation or diagnostics.
 
+## Billing meeting preparation
+
+Both stdio and HTTP expose three read-only tools:
+
+| Tool | Purpose |
+|---|---|
+| `ttobak_get_billing_account` | Current CUR/COT versions, periods, AI status and supported datasets. |
+| `ttobak_get_billing_dataset` | Published customer analysis rows, scoped to that account. |
+| `ttobak_get_billing_report` | Published CUR/COT Markdown cost report. |
+
+Start with `ttobak_list_accounts`, then call the metadata tool with `accountId`.
+For example, call the dataset tool with
+`{"accountId":"customer-id","source":"cur","dataset":"cur_summary"}` or
+the report tool with `{"accountId":"customer-id","source":"cur"}`.
+Omit `versionId` for the current source; supply a published version for history.
+A supported dataset selection does not promise a published file exists.
+
+Follow `page.nextCursor` with identical arguments until `page.complete` is true.
+Concatenate same-revision `dataJson` fragments, then parse JSON, or concatenate
+`markdown` fragments. `pageSize` limits UTF-8 fragment bytes (1000–8000, default
+4000). A 409 requires restarting without a cursor; 404 means absent data or no
+current account access. API pages are limited to 14,000 encoded bytes and MCP
+results to 32,000. The server rejects oversized sources rather than truncating.
+
+Billing uses the caller's own Bearer token on the exact CloudFront
+`GET /api/billing/accounts/{accountId}/reading` route, including when Go/QA private
+transport is enabled. Billing independently verifies dedicated resource-bound
+connector tokens, canonical client grants and current direct/ancestor team access
+before and after reads. Browser stdio tokens retain their existing verification.
+No asserted identity, uploads or reruns are exposed. Refresh the client's tool
+list after a server update; local stdio installations need the updated bundle.
+
 ## Streamable HTTP
 
 The `TTOBAK_CONNECTOR_PRIVATE_BRIDGE=true` mode binds the verified HTTP
 subject, client, scopes and expiry to a short-lived KMS delegation. It supports
 the eight bounded API reads, private read-only QA and personal note creation.
-Other mutations, unknown operations and legacy QA sessions fail closed. It never forwards the
-bearer token to Lambda or falls back to HTTP after a private call fails.
+Other mutations, unknown operations and legacy QA sessions fail closed. Go/QA
+private calls never forward the bearer token to their consumers or fall back to
+HTTP after failure. Billing reads use the separate caller-token path below.
 
 This mode additionally requires `AWS_REGION`, `TABLE_NAME`,
 `CONNECTOR_SIGNING_KEY_ARN` (an exact RSA KMS key ARN),

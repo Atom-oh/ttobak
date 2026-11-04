@@ -417,6 +417,14 @@ and resource discovery require the same read scope. Deployed provider, IAM,
 consumer and rollback acceptance are separate from these source flags; see
 [ADR-053](decisions/ADR-053-connector-capability-private-delegation.md).
 
+Billing MCP reads use the caller's own JWT through the existing CloudFront
+Billing Web Function route (ADR-056), separate from Go/QA private delegation.
+The bounded reader bypasses all-account discovery, verifies canonical connector
+policy and current direct/ancestor Billing access twice, and pins published
+CUR/COT source identity. Three read-only tools expose metadata, scoped dataset
+fragments and Markdown reports. Continuation binds caller, selection and source
+revision; changed sources require a restart. No Billing writes are exposed.
+
 Attachment extraction supports bounded native text from PDF/PPTX/DOCX/Markdown.
 Canonical ATTACH#/ATTEXT# identities, run/lease and ETag checks bind immutable
 result JSON. Partial/failed attempts remain distinct from retained previous

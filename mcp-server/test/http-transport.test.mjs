@@ -142,7 +142,7 @@ test('HTTP SDK discovery, instructions and concurrent clients preserve caller is
   const f = await fixture(t);
   const [alice, bob] = await Promise.all([f.connect(jwt()), f.connect(jwt({ sub: 'bob', username: 'bob' }))]);
   const { tools } = await alice.listTools();
-  assert.equal(tools.length, 30);
+  assert.equal(tools.length, 33);
   assert.ok(alice.getInstructions().includes('Read saved notes first'));
   assert.equal(tools.some(tool => tool.name === 'ttobak_login' || tool.name === 'ttobak_logout'), false);
   assert.ok(tools.find(tool => tool.name === 'ttobak_export_vault'));
