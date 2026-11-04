@@ -131,6 +131,10 @@ func (m *mockMeetingRepo) UpdateMeeting(_ context.Context, meeting *model.Meetin
 // UpdateMeetingFields mirrors the real repo's SET-only semantics: only the
 // given field names are mutated, everything else on the stored meeting is
 // left untouched (unlike UpdateMeeting's full-item replace above).
+func (m *mockMeetingRepo) PublishMeetingToAccount(ctx context.Context, ownerID, meetingID, accountID string) error {
+	return m.UpdateMeetingFields(ctx, ownerID, meetingID, map[string]interface{}{"accountId": accountID, "sharedToAccount": true})
+}
+
 func (m *mockMeetingRepo) UpdateMeetingFields(_ context.Context, userID, meetingID string, fields map[string]interface{}) error {
 	key := meetingKey(userID, meetingID)
 	existing, ok := m.meetings[key]

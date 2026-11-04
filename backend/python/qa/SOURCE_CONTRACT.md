@@ -302,6 +302,31 @@ Permitted notes keep their normal coverage and detail continuation. A restrictio
 does not become readable by following that continuation or constitute no tasks.
 `test_handler` loads `test_summary_privacy` and the account/source regression tests.
 
+Owner-approved Account disclosure is a separate eligibility path:
+`account_summary_shareable` accepts existing safe provenance or a valid
+server-managed `summaryAccountApproval`. Approval never changes private/unknown
+provenance. Its version, canonical owner, published Account, current summary
+generation, lowercase SHA-256 and UTC approval time must match. Legacy summaries
+without privacy metadata use the existing empty generation. Metadata authorization
+checks the trusted stamp; full reads additionally check exact UTF-8 content bytes.
+Approval grants no membership or direct-email/pending share permission.
+Insight copies must match both current summary generation and canonical
+`insightsRevision`, including an empty legacy generation with a disclosure
+revision. Failed or stale refreshes cannot expose earlier Account copies.
+
+Meeting and Insight metadata projections include approval. Metadata/body reads
+and Insight publication rechecks reject a changed approval identity. Hidden
+approval fingerprints bind current-source revisions and readonly Account/meeting
+history, including an approval replacement with unchanged rendered text. The stamp
+is never source content; canonical index revisions exclude these authorization
+fingerprints. Changed content or generation withholds derived fields while
+permitted raw notes/transcripts remain usable. Restricted model-facing text asks
+the owner to update Account sharing; regeneration is optional.
+`test_summary_account_approval`
+covers private/unknown/legacy provenance, protected and inherited reads, malformed
+or stale stamps, legacy Insight refresh failures, scope races and history
+invalidation; `test_handler` loads it.
+
 Stamped memberships enforce this reader policy even in installation mode.
 Unmarked membership activation requires the same fixed UTC cutoff and rollout
 fence as Go. Go provenance, grant transactions and owner regeneration are
@@ -341,8 +366,10 @@ documents, attachments, indexed search/exact selection, async delivery and
 history replay. Meeting content requires current Account publication; private
 linked meetings remain absent. Inherited readers always enforce sharing-safe
 summary eligibility, including when the ancestor is an old member or the
-summary-reader installation flag is off. Unsafe derived summaries/tasks/insight
-copies remain withheld while permitted raw notes/transcripts remain usable.
+summary-reader installation flag is off. Current owner-approved Account disclosure
+also permits inherited derived reads. Summaries/tasks/Insight copies without
+safe provenance or current Account approval remain withheld while permitted raw
+notes/transcripts remain usable.
 
 Current-source revisions bind inherited grant fingerprints. Binary document
 hydration separately uses the canonical `indexRevision`, so grant binding does

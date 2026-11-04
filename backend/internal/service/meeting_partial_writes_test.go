@@ -49,6 +49,10 @@ func (r *meetingWriteRaceRepo) UpdateMeetingFields(ctx context.Context, owner, i
 	return r.mockMeetingRepo.UpdateMeetingFields(ctx, owner, id, fields)
 }
 
+func (r *meetingWriteRaceRepo) PublishMeetingToAccount(ctx context.Context, owner, id, account string) error {
+	return r.UpdateMeetingFields(ctx, owner, id, map[string]interface{}{"accountId": account, "sharedToAccount": true})
+}
+
 func (r *meetingWriteRaceRepo) UpdateMeetingFieldsIfMatch(ctx context.Context, owner, id string, expected, fields map[string]interface{}) error {
 	if err := r.before(owner, id); err != nil {
 		return err

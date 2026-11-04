@@ -418,7 +418,7 @@ def _summary_restriction_notice(res):
     return ("공유 요약 기반 인사이트에 읽기 제한이 있습니다 "
             f"(summaryReadRestriction: {RESTRICTION}). "
             "읽기 제한으로 생략된 인사이트를 없다고 판단하지 마세요. "
-            "작성자가 공유 요약을 다시 생성해야 합니다.")
+            "소유자에게 Account 공유 업데이트를 요청하세요.")
 
 
 def format_account_insights(res):

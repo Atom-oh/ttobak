@@ -91,6 +91,7 @@ type Meeting struct {
 	NotionPageID             string                            `dynamodbav:"notionPageId,omitempty"`    // Notion page created by a prior export; re-export updates it in place instead of creating a duplicate
 	AuthorizationRevision    int64                             `dynamodbav:"authorizationRevision,omitempty" json:"-"`
 	SummaryPrivacy           *SummaryPrivacy                   `dynamodbav:"summaryPrivacy,omitempty" json:"-"`
+	SummaryAccountApproval   *SummaryAccountApproval           `dynamodbav:"summaryAccountApproval,omitempty" json:"-"`
 	ActionItemContinuity     map[string][]ActionItemContinuity `dynamodbav:"actionItemContinuity,omitempty" json:"-"`
 	SummaryReadRestricted    bool                              `dynamodbav:"-" json:"-"`
 	AccountReadGrantRevision string                            `dynamodbav:"-" json:"-"`

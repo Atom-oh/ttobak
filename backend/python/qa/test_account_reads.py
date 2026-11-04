@@ -369,7 +369,7 @@ class TestStrictAccountReads(unittest.TestCase):
             if key == source_key:
                 self.assertEqual(fields, {'PK', 'SK', 'meetingId', 'userId', 'entityType',
                                           'accountId', 'sharedToAccount',
-                                          'summaryPrivacy', 'insightsRevision'})
+                                          'summaryPrivacy', 'summaryAccountApproval', 'insightsRevision'})
 
     def test_mismatched_canonical_primary_key_cannot_load_insight_body(self):
         for field, value in (('PK', 'USER#other'), ('SK', 'MEETING#other')):

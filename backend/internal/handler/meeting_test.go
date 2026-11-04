@@ -122,6 +122,10 @@ func (m *mockHandlerMeetingRepo) UpdateMeeting(_ context.Context, meeting *model
 	m.meetingsByID[meeting.MeetingID] = &cp
 	return nil
 }
+func (m *mockHandlerMeetingRepo) PublishMeetingToAccount(ctx context.Context, owner, meeting, account string) error {
+	return m.UpdateMeetingFields(ctx, owner, meeting, map[string]interface{}{"accountId": account, "sharedToAccount": true})
+}
+
 func (m *mockHandlerMeetingRepo) UpdateMeetingFields(_ context.Context, userID, meetingID string, fields map[string]interface{}) error {
 	key := hKey(userID, meetingID)
 	existing, ok := m.meetings[key]

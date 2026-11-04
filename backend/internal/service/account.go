@@ -744,13 +744,13 @@ func accountMeetingInsightAllowed(meeting *model.Meeting, member *model.AccountM
 	if !meetingPublishedToAccount(meeting, ins.AccountID, ins.SourceUserID, ins.SourceID) {
 		return false
 	}
-	if userID != meeting.UserID && accountMemberNeedsSummaryGuard(member) && !meeting.SummaryPrivacy.SafeMetadata() {
+	if userID != meeting.UserID && accountMemberNeedsSummaryGuard(member) && !meeting.AccountSummaryMetadataShareable() {
 		return false
 	}
-	if meeting.SummaryGeneration() != "" {
-		return ins.SummaryGeneration == meeting.SummaryGeneration() && meeting.InsightsRevision != "" && ins.InsightsRevision == meeting.InsightsRevision
+	if meeting.SummaryGeneration() != "" && meeting.InsightsRevision == "" {
+		return false
 	}
-	return ins.SummaryGeneration == "" && ins.InsightsRevision == ""
+	return ins.SummaryGeneration == meeting.SummaryGeneration() && ins.InsightsRevision == meeting.InsightsRevision
 }
 
 // ListAccountMeetings returns only still-published shared-meeting references.
@@ -843,7 +843,7 @@ func (s *AccountService) ListAccountInsights(ctx context.Context, userID, accoun
 				return nil, fmt.Errorf("check account insight source: %w", err)
 			}
 			if meetingPublishedToAccount(meeting, ins.AccountID, ins.SourceUserID, ins.SourceID) &&
-				userID != meeting.UserID && accountMemberNeedsSummaryGuard(member) && !meeting.SummaryPrivacy.SafeMetadata() {
+				userID != meeting.UserID && accountMemberNeedsSummaryGuard(member) && !meeting.AccountSummaryMetadataShareable() {
 				return nil, ErrSummaryReadRestricted
 			}
 			if !accountMeetingInsightAllowed(meeting, member, ins, userID) {

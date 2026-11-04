@@ -63,17 +63,20 @@ func TestMeetingCatalogReadsCurrentMetadataWithoutTranscriptHydration(t *testing
 		if json.NewDecoder(req.Body).Decode(&input) != nil || !input.ConsistentRead || input.Key["PK"]["S"] != "USER#owner" || input.Key["SK"]["S"] != "MEETING#m" {
 			t.Fatal("metadata lookup was not owner-bound current primary")
 		}
-		hasPrivacy := false
+		hasPrivacy, hasApproval := false, false
 		for _, name := range input.ExpressionAttributeNames {
 			if name == "summaryPrivacy" {
 				hasPrivacy = true
+			}
+			if name == "summaryAccountApproval" {
+				hasApproval = true
 			}
 			if name == "notes" || strings.HasPrefix(name, "transcript") {
 				t.Fatal("catalog requested full source text")
 			}
 		}
-		if !hasPrivacy {
-			t.Fatal("catalog metadata omitted summary privacy")
+		if !hasPrivacy || !hasApproval {
+			t.Fatal("catalog metadata omitted summary privacy or owner disclosure")
 		}
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/x-amz-json-1.0"}}, Body: io.NopCloser(strings.NewReader(`{"Item":{"meetingId":{"S":"m"},"userId":{"S":"owner"},"title":{"S":"current"}}}`))}, nil
 	})})

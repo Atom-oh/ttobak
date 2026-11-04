@@ -374,7 +374,14 @@ keep the previous value.
 
 Deploy attachment, saved-summary and index-status APIs before this UI.
 
-Protected account readers see an explicit sharing-regeneration status while
+Owners can share current completed notes and Insights from Account connection
+without replacing the output when the API reports `canShareToAccount`. The share
+action approves disclosure of that canonical result to the selected team;
+source-only regeneration remains optional. Recording Account discovery completes
+independently of preparation documents, refreshes on authenticated membership
+changes, and distinguishes loading, empty results and retryable errors.
+
+Protected account readers see an explicit owner-sharing-update status while
 retaining raw notes/transcript access. Owners can confirm sharing-safe regeneration
 when the API reports it available. The confirmation explains the current-source
 inputs, omitted predecessor/prior generated evidence, replacement of existing

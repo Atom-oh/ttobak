@@ -93,7 +93,7 @@ func (r *DynamoDBRepository) GetMeetingPublication(ctx context.Context, ownerID,
 	projection := expression.NamesList(expression.Name("PK"), expression.Name("SK"),
 		expression.Name("meetingId"), expression.Name("userId"), expression.Name("entityType"),
 		expression.Name("accountId"), expression.Name("sharedToAccount"),
-		expression.Name("summaryPrivacy"), expression.Name("insightsRevision"))
+		expression.Name("summaryPrivacy"), expression.Name("summaryAccountApproval"), expression.Name("insightsRevision"))
 	expr, err := expression.NewBuilder().WithProjection(projection).Build()
 	if err != nil {
 		return nil, fmt.Errorf("build meeting publication projection: %w", err)
@@ -458,7 +458,7 @@ func (r *DynamoDBRepository) PutAccountInsights(ctx context.Context, insights []
 	if len(insights) == 0 {
 		return nil
 	}
-	if SummaryPrivacyWritesEnabled() || insights[0].SummaryGeneration != "" {
+	if SummaryPrivacyWritesEnabled() || insights[0].SummaryGeneration != "" || insights[0].InsightsRevision != "" {
 		return r.putCurrentAccountInsights(ctx, insights)
 	}
 	pk := insights[0].PK

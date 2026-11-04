@@ -13,10 +13,19 @@ contract, not completed production acceptance.
 | `SummaryPrivacyWriterEnabled` | `0` | `SUMMARY_PRIVACY_WRITER_ENABLED` on API and summarize |
 | `SummaryPrivacyReaderEnabled` | `0` | `SUMMARY_PRIVACY_READER_ENABLED` on API and QA |
 | `SummaryPrivacyLegacyMemberCutoff` | empty | `SUMMARY_PRIVACY_LEGACY_MEMBER_CUTOFF` on API and QA |
+| `SummaryOwnerAccountShareEnabled` | `0` | `SUMMARY_OWNER_ACCOUNT_SHARE_ENABLED` on API only |
 
-Both flags accept exactly `0` or `1`. Reader `1` requires a nonempty UTC RFC3339
+ADR-059's owner disclosure flag requires privacy writer `1`. Deploy Go/Python
+approval readers with the new flag `0`, verify exact API live and QA artifacts,
+then enable it and verify the new immutable API alias/configuration. Preserve all
+existing flags, fixed cutoff, model and origin parameters. Never reset an existing
+privacy activation to installation defaults as part of this incremental rollout.
+Capture new-flag-off rollback and authenticated owner/recipient acceptance
+separately; artifact verification alone is not a cross-user browser test.
+
+All three flags accept exactly `0` or `1`. Reader `1` requires a nonempty UTC RFC3339
 cutoff ending `Z`; runtime readers validate the calendar timestamp too. The API
-version description includes all three parameters, so a parameter-only deployment
+version description includes all four parameters, so a parameter-only deployment
 must publish the matching immutable version before moving `live`. Verify the
 alias version's environment, not just `$LATEST`. QA handles both HTTP and
 WebSocket-dispatched reads; MCP forwards to the existing API/QA consumers.

@@ -73,7 +73,7 @@ func summaryPrivacyLegacyCutoff() time.Time {
 // generated context, but parent-owned raw transcript/notes remain usable.
 func projectAccountMeeting(meeting *model.Meeting, member *model.AccountMember) *model.Meeting {
 	if meeting == nil || !accountMemberNeedsSummaryGuard(member) ||
-		meeting.SummaryPrivacyState() == model.SummaryPrivacySafe {
+		meeting.AccountSummaryShareable() {
 		return meeting
 	}
 	projected := *meeting
@@ -85,7 +85,9 @@ func projectAccountMeeting(meeting *model.Meeting, member *model.AccountMember) 
 
 func summarySharingStatus(meeting *model.Meeting, permission string) *model.SummarySharingStatus {
 	allowed := meeting.CanCreateSummaryGrant()
-	return &model.SummarySharingStatus{CanCreateGrant: allowed, DerivedReadRestricted: meeting.SummaryReadRestricted,
+	canShareAccount := permission == "owner" && (allowed || repository.OwnerAccountShareEnabled() &&
+		(meeting.Status == model.StatusDone || meeting.Status == model.StatusError))
+	return &model.SummarySharingStatus{CanCreateGrant: allowed, CanShareToAccount: canShareAccount, DerivedReadRestricted: meeting.SummaryReadRestricted,
 		RequiresRegeneration: !allowed, CanRegenerate: repository.SummaryPrivacyWritesEnabled() && permission == "owner" &&
 			(meeting.Status == model.StatusDone || meeting.Status == model.StatusError)}
 }

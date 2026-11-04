@@ -158,7 +158,7 @@ def format_source_results(results):
             notice = (
                 "partial=true는 발췌 또는 읽기 제한으로 불완전한 결과입니다. "
                 "공유 요약과 작업 항목은 읽기 제한으로 생략되었습니다. available=false인 필드를 "
-                "확인한 빈 결과로 판단하지 마세요. 작성자가 공유 요약을 다시 생성해야 합니다. "
+                "확인한 빈 결과로 판단하지 마세요. 소유자에게 Account 공유 업데이트를 요청하세요. "
                 "허용된 원문 메모는 get_meeting_detail로 이어 읽을 수 있습니다. "
                 if restricted else
                 "partial=true는 일부 발췌입니다. get_meeting_detail(meetingId, offset=0)부터 이어 읽으세요. "

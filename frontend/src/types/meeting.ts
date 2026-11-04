@@ -277,6 +277,7 @@ export interface TranscriptQuality {
 export interface MeetingDetail extends Meeting {
   summarySharing?: {
     canCreateGrant: boolean;
+    canShareToAccount?: boolean;
     derivedReadRestricted: boolean;
     requiresRegeneration: boolean;
     canRegenerate: boolean;
