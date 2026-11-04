@@ -107,7 +107,7 @@ function createApp({ s3, ddb, env, authenticate, now = Date.now, presign = makeP
   const { DATA_BUCKET, PUBLIC_URL, ACCOUNT_TABLE, PLATFORM_TABLE } = env;
 
   const store = createStore({ ddb, table: PLATFORM_TABLE });
-  // TTOBAK membership: direct canonical membership only (ADR-056), no hierarchy and no INDEX involvement
+  // Billing-only ancestor sharing; INDEX rows never grant access (ADR-060).
   const access = createAccess({ ddb, ttobakTable: ACCOUNT_TABLE, now });
 
   // ---------- S3 reads ----------
@@ -196,7 +196,7 @@ function createApp({ s3, ddb, env, authenticate, now = Date.now, presign = makeP
     return typeof v === 'string' && VERSION_ID.test(v) ? v : null;
   };
 
-  // Accounts this user sees: confirmed direct memberships. Every visible account can act (canAct is true).
+  // Accounts this user sees: confirmed direct/ancestor grants. Every visible account can act.
   async function accountsFor(sub) {
     const vis = await access.visible(sub);
     return Promise.all(vis.map(async (a) => ({ ...a, platform: await platformMeta(a.id) })));
@@ -276,7 +276,7 @@ function createApp({ s3, ddb, env, authenticate, now = Date.now, presign = makeP
       if (acct !== undefined && v === undefined) {
         // the current version(s) of one account: membership checked fresh, rows scoped exactly like the all-accounts read
         if (typeof acct !== 'string' || !ACCT_ID.test(acct)) return notFound();
-        if (!(await access.canAct(req.sub, acct, { fresh: true }))) return notFound();
+        if (!(await access.canAct(req.sub, acct))) return notFound();
         const entry = req.accounts.find((a) => a.canAct && a.id === acct);
         if (!entry) return notFound();
         const rows = await currentRows(entry, id);
@@ -285,7 +285,7 @@ function createApp({ s3, ddb, env, authenticate, now = Date.now, presign = makeP
       if (acct !== undefined || v !== undefined) {
         // one published version of one account: membership checked fresh, and the version must be a done upload
         if (typeof acct !== 'string' || !ACCT_ID.test(acct) || typeof v !== 'string' || !VERSION_ID.test(v)) return notFound();
-        if (!(await access.canAct(req.sub, acct, { fresh: true }))) return notFound();
+        if (!(await access.canAct(req.sub, acct))) return notFound();
         const rec = await store.upload(acct, 'u' + v.slice(1));
         if (!rec || rec.status !== 'done' || rec.versionId !== v) return notFound();
         return res.json(HANDWRITTEN[id] ? await handRows(acct, id) : await versionRows(acct, v, id));
@@ -307,7 +307,7 @@ function createApp({ s3, ddb, env, authenticate, now = Date.now, presign = makeP
     const { source, v } = req.query;
     const notFound = () => res.status(404).json({ error: 'not found' });
     if (!ACCT_ID.test(acct) || (source !== 'cot' && source !== 'cur') || (v !== undefined && (typeof v !== 'string' || !VERSION_ID.test(v)))) return notFound();
-    if (!(await access.canAct(req.sub, acct, { fresh: true }))) return notFound();
+    if (!(await access.canAct(req.sub, acct))) return notFound();
     let vid = v;
     if (vid === undefined) {
       vid = currentOf((await store.account(acct)) || {}, source);

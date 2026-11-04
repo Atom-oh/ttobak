@@ -985,18 +985,20 @@ class Job:
         return self.key("RERUN#%s#%s" % (self.src, self.version_id))
 
     def acquire_lease(self):
-        """Conditional PutItem: free, or expired (its rerun is past its deadline plus the grace). False when held."""
+        """Conditional UpdateItem: free, or expired (past its deadline plus the grace). False when held."""
         now = int(time.time())
         exp = now + int(max(0.0, self.deadline - time.monotonic())) + 1 + LEASE_GRACE_S
-        item = dict(self.lease_key(), owner={"S": self.token}, expiresAt={"N": str(exp)}, ttl={"N": str(exp)})
         try:
-            self.ddb.put_item(TableName=self.table, Item=item,
-                              ConditionExpression="attribute_not_exists(pk) OR expiresAt < :now",
-                              ExpressionAttributeValues={":now": {"N": str(now)}})
+            self.ddb.update_item(TableName=self.table, Key=self.lease_key(),
+                                 UpdateExpression="SET #o = :o, expiresAt = :e, #t = :e",
+                                 ExpressionAttributeNames={"#o": "owner", "#t": "ttl"},
+                                 ConditionExpression="attribute_not_exists(pk) OR expiresAt < :now",
+                                 ExpressionAttributeValues={":o": {"S": self.token}, ":e": {"N": str(exp)},
+                                                            ":now": {"N": str(now)}})
         except Exception as e:
             if err_code(e) != "ConditionalCheckFailedException":
                 raise
-            # an SDK retry of a put that committed (its response lost) fails the condition: the lease carries our token
+            # an SDK retry of an update that committed (response lost) fails the condition: the lease has our token
             r = self.ddb.get_item(TableName=self.table, Key=self.lease_key(), ConsistentRead=True)
             it = r.get("Item") or {}
             if (it.get("owner") or {}).get("S") != self.token:

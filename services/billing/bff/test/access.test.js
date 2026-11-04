@@ -1,4 +1,4 @@
-// Direct canonical membership only (ADR-056). Synthetic data; fake DynamoDB paging one item at a time.
+// Canonical Billing membership and hierarchy. Synthetic data; DynamoDB pages one item at a time.
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { createFakeDdb } = require('./fake-ddb');
@@ -12,7 +12,10 @@ function setup() {
   const access = createAccess({ ddb, ttobakTable: TT });
   const t = {
     ddb, access,
-    acct(id, name, parent) { ddb.put(TT, { PK: S(`ACCOUNT#${id}`), SK: S('META'), name: S(name), ...(parent ? { parentAccountId: S(parent) } : {}) }); },
+    acct(id, name, parent) {
+      ddb.put(TT, { PK: S(`ACCOUNT#${id}`), SK: S('META'), name: S(name), ...(parent ? { parentAccountId: S(parent) } : {}) });
+      if (parent) ddb.put(TT, { PK: S(`ACCOUNT#${parent}`), SK: S(`CHILDREF#${id}`) });
+    },
     member(sub, id) { ddb.put(TT, { PK: S(`ACCOUNT#${id}`), SK: S(`MEMBER#${sub}`), accountId: S(id), GSI1PK: S(`USER#${sub}`), GSI1SK: S(`ACCOUNT#${id}`) }); },
     unmember(sub, id) { ddb.del(TT, { PK: S(`ACCOUNT#${id}`), SK: S(`MEMBER#${sub}`) }); },
   };
@@ -25,14 +28,109 @@ test('member_can_act', async () => {
   assert.equal(await t.access.canAct('u1', 'acct-a'), true);
   assert.equal(await t.access.canAct('u2', 'acct-a'), false);
   assert.equal(await t.access.canAct('u1', '../x'), false);
-  assert.equal(t.ddb.count('GetItemCommand'), 2, 'an invalid account id never reaches DynamoDB');
+  const before = t.ddb.count('GetItemCommand');
+  assert.equal(await t.access.canAct('u1', '../x'), false);
+  assert.equal(t.ddb.count('GetItemCommand'), before, 'an invalid account id never reaches DynamoDB');
 });
 
-test('parent_member_cannot_act_on_child', async () => {
+test('parent_member_can_act_on_child_and_grandchild', async () => {
   const t = setup();
   t.acct('acct-p', 'Parent'); t.acct('acct-c', 'Child', 'acct-p'); t.member('u1', 'acct-p');
+  t.acct('acct-g', 'Grandchild', 'acct-c');
+  assert.equal(await t.access.canAct('u1', 'acct-c'), true);
+  assert.equal(await t.access.canAct('u1', 'acct-g'), true);
+  assert.deepEqual((await t.access.visible('u1')).map((a) => a.id), ['acct-c', 'acct-g', 'acct-p']);
+});
+
+test('inherited_access_is_revoked_after_removal_or_reparenting_despite_display_cache', async () => {
+  const t = setup();
+  t.acct('acct-p', 'Parent'); t.acct('acct-c', 'Child', 'acct-p'); t.acct('acct-x', 'Other');
+  t.member('u1', 'acct-p');
+  await t.access.meta('acct-c');
+  assert.equal(await t.access.canAct('u1', 'acct-c'), true);
+  t.unmember('u1', 'acct-p');
+  assert.equal(await t.access.canAct('u1', 'acct-c'), false);
+  t.member('u1', 'acct-p');
+  t.acct('acct-c', 'Child', 'acct-x'); // old CHILDREF remains
   assert.equal(await t.access.canAct('u1', 'acct-c'), false);
   assert.deepEqual((await t.access.visible('u1')).map((a) => a.id), ['acct-p']);
+});
+
+test('inherited_access_validates_the_complete_chain_even_above_a_grant', async () => {
+  for (const parent of ['missing', '../invalid', 'acct-c']) {
+    const t = setup();
+    t.acct('acct-p', 'Parent', parent); t.acct('acct-c', 'Child', 'acct-p');
+    t.member('u1', 'acct-p');
+    assert.equal(await t.access.canAct('u1', 'acct-c'), false, parent);
+    assert.equal(await t.access.canAct('u1', 'acct-p'), true, 'direct membership is independent');
+  }
+});
+
+test('inherited_access_denies_interleaved_reparent_and_membership_add', async () => {
+  const t = setup();
+  t.acct('acct-p', 'Parent'); t.acct('acct-c', 'Child', 'acct-p'); t.acct('acct-x', 'Other');
+  let changed = false;
+  const send = async (cmd) => {
+    const result = await t.ddb.send(cmd);
+    if (!changed && cmd.constructor.name === 'GetItemCommand' &&
+        cmd.input.Key.PK.S === 'ACCOUNT#acct-c' && cmd.input.Key.SK.S === 'META') {
+      changed = true;
+      t.acct('acct-c', 'Child', 'acct-x');
+      t.member('u1', 'acct-p'); // no instant has both the old parent and this grant
+    }
+    return result;
+  };
+  assert.equal(await t.access.canAct('u1', 'acct-c', send), false);
+  assert.equal(changed, true);
+});
+
+test('inherited_access_denies_grant_removed_before_snapshot_confirmation', async () => {
+  const t = setup();
+  t.acct('acct-r', 'Root'); t.acct('acct-p', 'Parent', 'acct-r');
+  t.acct('acct-c', 'Child', 'acct-p'); t.member('u1', 'acct-p');
+  const send = async (cmd) => {
+    const result = await t.ddb.send(cmd);
+    if (cmd.constructor.name === 'GetItemCommand' &&
+        cmd.input.Key.PK.S === 'ACCOUNT#acct-r' && cmd.input.Key.SK.S === 'META') {
+      t.unmember('u1', 'acct-p');
+    }
+    return result;
+  };
+  assert.equal(await t.access.canAct('u1', 'acct-c', send), false);
+});
+
+test('inherited_snapshot_missing_items_and_storage_errors_never_grant', async () => {
+  for (const response of [{}, { Responses: [] }, { Responses: [{}, {}, {}] }]) {
+    const t = setup();
+    t.acct('acct-p', 'Parent'); t.acct('acct-c', 'Child', 'acct-p'); t.member('u1', 'acct-p');
+    const send = (cmd) => cmd.constructor.name === 'TransactGetItemsCommand' ? response : t.ddb.send(cmd);
+    assert.equal(await t.access.canAct('u1', 'acct-c', send), false);
+  }
+  const t = setup();
+  t.acct('acct-p', 'Parent'); t.acct('acct-c', 'Child', 'acct-p'); t.member('u1', 'acct-p');
+  const send = (cmd) => {
+    if (cmd.constructor.name === 'TransactGetItemsCommand') throw new Error('transaction unavailable');
+    return t.ddb.send(cmd);
+  };
+  await assert.rejects(t.access.canAct('u1', 'acct-c', send), /transaction unavailable/);
+});
+
+test('inherited_access_accepts_64_ancestors_and_denies_65', async () => {
+  const t = setup();
+  for (let i = 0; i <= 65; i++) t.acct(`a${i}`, `Account ${i}`, i < 65 ? `a${i + 1}` : undefined);
+  t.member('u1', 'a65');
+  assert.equal(await t.access.canAct('u1', 'a1'), true);
+  const snapshots = t.ddb.inputs.filter((c) => c.name === 'TransactGetItemsCommand');
+  assert.equal(snapshots.length, 1);
+  assert.equal(snapshots[0].input.TransactItems.length, 66);
+  for (const { Get } of snapshots[0].input.TransactItems) {
+    assert.equal(Get.TableName, TT);
+    assert.ok(Get.Key.PK.S.startsWith('ACCOUNT#'));
+    assert.equal(Get.ConsistentRead, undefined, 'the transaction supplies atomic read isolation');
+    const allowed = Get.Key.SK.S === 'META' ? 'PK, SK, parentAccountId' : 'PK';
+    assert.equal(Get.ProjectionExpression, allowed);
+  }
+  assert.equal(await t.access.canAct('u1', 'a0'), false);
 });
 
 test('child_member_cannot_act_on_parent', async () => {
@@ -70,7 +168,7 @@ test('visible_paginates', async () => {
     { id: 'acct-b', name: 'Bravo', parentId: 'acct-a', member: true, canAct: true },
     { id: 'acct-c', name: 'Charlie', parentId: '', member: true, canAct: true },
   ]);
-  assert.equal(t.ddb.count('QueryCommand'), 3, 'one query per page of one item');
+  assert.equal(t.ddb.inputs.filter((c) => c.name === 'QueryCommand' && c.input.IndexName === 'GSI1').length, 3);
 });
 
 test('no_memberships_returns_empty', async () => {
@@ -118,12 +216,19 @@ test('ttobak_reads_stay_inside_the_iam_attribute_allowlists', async () => {
     .map((a) => (c.input.ExpressionAttributeNames || {})[a] || a);
   const queries = t.ddb.inputs.filter((c) => c.name === 'QueryCommand');
   assert.ok(queries.length >= 2);
-  for (const q of queries) {
+  for (const q of queries.filter((q) => q.input.IndexName)) {
     assert.equal(q.input.IndexName, 'GSI1');
     assert.equal(q.input.Select, 'SPECIFIC_ATTRIBUTES');
     assert.equal(q.input.ProjectionExpression, 'accountId');
     assert.ok(q.input.ExpressionAttributeValues[':u'].S.startsWith('USER#'));
     for (const a of attrs(q)) assert.ok(['PK', 'SK', 'GSI1PK', 'GSI1SK', 'accountId'].includes(a), a);
+  }
+  for (const q of queries.filter((q) => !q.input.IndexName)) {
+    assert.equal(q.input.ConsistentRead, true);
+    assert.equal(q.input.Select, 'SPECIFIC_ATTRIBUTES');
+    assert.equal(q.input.ProjectionExpression, 'PK, SK');
+    assert.ok(q.input.ExpressionAttributeValues[':p'].S.startsWith('ACCOUNT#'));
+    assert.equal(q.input.ExpressionAttributeValues[':c'].S, 'CHILDREF#');
   }
   const gets = t.ddb.inputs.filter((c) => c.name === 'GetItemCommand');
   assert.ok(gets.some((g) => g.input.Key.SK.S === 'META') && gets.some((g) => g.input.Key.SK.S.startsWith('MEMBER#')));
@@ -154,4 +259,50 @@ test('visible_bounds_concurrent_reads', async () => {
   assert.equal(v.length, 30);
   assert.deepEqual(v.map((a) => a.id), [...v.map((a) => a.id)].sort());
   assert.ok(peak > 1 && peak <= 8, `peak in-flight GetItems was ${peak}`);
+});
+
+test('descendant_discovery_consumes_empty_advancing_pages_without_trusting_references', async () => {
+  const t = setup();
+  t.acct('acct-p', 'Parent'); t.acct('acct-c', 'Child', 'acct-p'); t.member('u1', 'acct-p');
+  let injected = false;
+  const access = createAccess({ ttobakTable: TT, ddb: {
+    async send(cmd) {
+      if (cmd.constructor.name === 'QueryCommand' && !cmd.input.IndexName && !injected) {
+        injected = true;
+        return { Items: [], LastEvaluatedKey: { PK: S('ACCOUNT#acct-p'), SK: S('CHILDREF#acct-b') } };
+      }
+      return t.ddb.send(cmd);
+    },
+  } });
+  assert.deepEqual((await access.visible('u1')).map((a) => a.id), ['acct-c', 'acct-p']);
+  assert.ok(injected);
+});
+
+test('descendant_discovery_rejects_a_stuck_cursor_instead_of_hanging_or_truncating', async () => {
+  const t = setup();
+  t.acct('acct-p', 'Parent'); t.member('u1', 'acct-p');
+  let reads = 0;
+  const access = createAccess({ ttobakTable: TT, ddb: {
+    async send(cmd) {
+      reads++;
+      if (cmd.constructor.name === 'QueryCommand' && !cmd.input.IndexName) {
+        return { Items: [], LastEvaluatedKey: { PK: S('ACCOUNT#acct-p'), SK: S('CHILDREF#acct-c') } };
+      }
+      return t.ddb.send(cmd);
+    },
+  } });
+  await assert.rejects(access.visible('u1'), /discovery read limit/);
+  assert.equal(reads, 4096);
+});
+
+test('descendant_authorization_surfaces_storage_failure_without_granting_access', async () => {
+  const t = setup();
+  t.acct('acct-p', 'Parent'); t.acct('acct-c', 'Child', 'acct-p'); t.member('u1', 'acct-p');
+  const access = createAccess({ ttobakTable: TT, ddb: {
+    async send(cmd) {
+      if (cmd.input.Key?.SK.S === 'META') throw new Error('unavailable');
+      return t.ddb.send(cmd);
+    },
+  } });
+  await assert.rejects(access.canAct('u1', 'acct-c'), /unavailable/);
 });

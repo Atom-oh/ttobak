@@ -619,14 +619,14 @@ test('rerun: done version only, job id matches the worker regex, one per version
   assert.equal((await t.post('/api/billing/accounts/acct-a/rerun-agents', { source: 'cot', versionId: V1 })).status, 200);
 });
 
-test('known accounts: a direct member gets {id,name,parentId} and an INDEX row; a non-member and a parent member get 403', async () => {
+test('known accounts: direct and ancestor members may register; outsiders are denied', async () => {
   const t = await member();
   t.acct('acct-c', '한빛증권', 'acct-a'); t.acct('acct-b', '누리증권'); t.member('u1', 'acct-c');
   // u1 is a member of the parent acct-a, not of its child acct-d
   t.acct('acct-d', '새벽증권', 'acct-a');
-  assert.equal((await t.post('/api/billing/accounts/known', { accountId: 'acct-d' })).status, 403);
-  assert.equal((await t.post('/api/billing/accounts/acct-d/uploads', { source: 'cot', fileName: 'x.zip', size: 10 })).status, 403);
-  assert.equal(t.ddb.get(PT, { pk: S('INDEX'), sk: S('ACCT#acct-d') }), undefined);
+  assert.equal((await t.post('/api/billing/accounts/known', { accountId: 'acct-d' })).status, 200);
+  assert.equal((await t.post('/api/billing/accounts/acct-d/uploads', { source: 'cot', fileName: 'x.zip', size: 10 })).status, 200);
+  assert.equal(t.ddb.get(PT, { pk: S('INDEX'), sk: S('ACCT#acct-d') }).name.S, '새벽증권');
   assert.equal((await t.post('/api/billing/accounts/known', { accountId: 'acct-b' })).status, 403);
   const r = await t.post('/api/billing/accounts/known', { accountId: 'acct-c' });
   assert.equal(r.status, 200);
@@ -637,6 +637,22 @@ test('known accounts: a direct member gets {id,name,parentId} and an INDEX row; 
   assert.equal((await t.post('/api/billing/accounts/known', { accountId: '../x' })).status, 403);
   assert.equal((await t.post('/api/billing/accounts/known', {})).status, 403);
   assert.equal(t.ddb.get(PT, { pk: S('INDEX'), sk: S('ACCT#acct-b') }), undefined);
+});
+
+test('shared ancestor team uploads to the child; removal revokes completion', async () => {
+  for (const revoke of [false, true]) {
+    const t = await member();
+    t.acct('acct-c', 'Child', 'acct-a');
+    const { r, j } = await create(t, { source: 'cot', fileName: 'cot.zip', size: 10 }, 'acct-c');
+    assert.equal(r.status, 200);
+    assert.equal(t.upRow('acct-c', j.uploadId).uploaderSub.S, 'u1');
+    assert.ok(t.s3.inputs('CreateMultipartUploadCommand').every((i) => i.Key.startsWith('accounts/acct-c/uploads/')));
+    const parts = sendParts(t, j.uploadId, 10, 'acct-c');
+    if (revoke) t.ddb.del(TT, { PK: S('ACCOUNT#acct-a'), SK: S('MEMBER#u1') });
+    const complete = await t.post(`/api/billing/accounts/acct-c/uploads/${j.uploadId}/complete`, { parts });
+    assert.equal(complete.status, revoke ? 403 : 200);
+    assert.equal(t.s3.count('CompleteMultipartUploadCommand'), revoke ? 0 : 1);
+  }
 });
 
 test('status and history routes need act rights on the account', async () => {

@@ -4,13 +4,18 @@ Billing Insight inside TTOBAK (ADR-056). Three parts:
 
 - `bff/`: Express BFF served under `/api/billing` as a Lambda Web Function
   (`index.js`). `lib/auth.js` verifies the TTOBAK Cognito JWT from
-  `Authorization: Bearer` only; `lib/access.js` grants an account to its direct
-  TTOBAK members only.
+  `Authorization: Bearer` only; `lib/access.js` grants read and upload access
+  through current direct or ancestor Account membership
+  ([ADR-060](../../docs/decisions/ADR-060-billing-shared-team-access.md)).
+  Child references discover candidates only; canonical membership and complete
+  parent chains authorize requests.
 - `page/`: dashboard and upload pages, served at `/billing-app/` (below).
 - `worker/`: Python pipeline that turns uploaded COT/CUR exports into dashboard
   datasets, agent notes and the report. See [worker/README.md](worker/README.md).
-  The worker code and its image definition are in the repository; no CDK resource
-  runs it yet.
+  The worker code and its image definition are in the repository. TTOBAK CDK
+  does not create a worker; production uses the existing companion ECS task
+  against the shared bucket. Its image rollout is separate:
+  [Billing release](../../docs/runbooks/billing-release.md).
 
 ## Provenance
 
@@ -21,7 +26,8 @@ Billing Insight inside TTOBAK (ADR-056). Three parts:
 Changes against the source in this import: pages, cookies, OAuth hand-off and the
 Lambda client are removed; every route moves under `/api/billing`; `createApp`
 takes an injected `authenticate` middleware. `lib/access.js` was later rewritten
-from the imported hierarchy rule to direct membership.
+from the imported hierarchy rule to canonical TTOBAK membership; ADR-060 extends
+Billing access to canonical ancestor membership.
 
 ## Tests
 

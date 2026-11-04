@@ -237,8 +237,11 @@ classification never grant access to private content (ADR-036).
 
 Activated ancestor access displays a read-only label and its granting Account
 (ADR-058). Suppress inherited-only mutation controls and keep invitation,
-publication, upload/link, dictionary and Billing selectors restricted to direct
-membership. Preserve independently granted editing controls. Account discovery
+publication, upload/link and dictionary selectors restricted to direct
+membership. Billing is the ADR-060 exception: the BFF's authorized entries allow
+direct and ancestor team members to view and upload. Its COT selector describes
+the required Current State/COH workbooks and COT360 HTML, supporting both three-
+and five-file ZIPs. Preserve independently granted editing controls. Account discovery
 consumes bounded pages with explicit cursor-loop and size errors.
 
 All current account members may add members/change assignable non-owner roles.

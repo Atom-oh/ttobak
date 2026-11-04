@@ -31,13 +31,23 @@ Python 3.12 is what CI uses.
 
 Two worker smoke tests run the real pipelines and are skipped unless `WORKER_SMOKE=1` is set.
 
+## COT uploads
+
+COT ZIPs require `Current_State_Template.xlsx`, `COH_Template.xlsx`, and `COT360.html`,
+identified by their case-insensitive filename suffixes. The combined `Template.xlsx`
+and `PPT_Companion.pptx` are optional; legacy five-file bundles remain supported.
+When the combined workbook is present, its Data sheets are used. Otherwise the two
+core workbooks' Data sheets are extracted together, sharing the existing archive,
+sheet, row, cell, and output limits. Colliding CSV sheet names are rejected before
+overwriting earlier data. Other files and duplicate file kinds remain invalid.
+
 ## Changes since the companion import
 
 - Agents child: fresh per-job HOME, and `AWS_CONFIG_FILE` / `AWS_SHARED_CREDENTIALS_FILE` set to `/dev/null`.
 - CUR publish: the META update requires `current_cur` to equal the predecessor the run read its inputs from (or be absent when there was none), not just `<=` the new version id; a mismatch fails the run with `StaleVersion` and leaves META unchanged.
 - Worker process: `AWS_CONFIG_FILE` / `AWS_SHARED_CREDENTIALS_FILE` are `/dev/null` in the image ENV and set again at startup, before any client or child, so a config planted in the shared HOME never configures its own clients.
 - `cur/datasets.py`: `cur_trend` is also capped at `MAX_TREND_BYTES` (40 MiB as written, under the BFF's 48 MiB file limit); the cut is reported in `cur_summary` `truncated` / `dropped` like the row cap.
-- Rerun lease: `ACCT#{acct}` / `RERUN#{src}#{version}` (`owner`, `expiresAt`, `ttl`) by conditional PutItem; a rerun that finds it held exits 0 without writing, checks it is still the owner before publishing, and releases it in a finally. Rerun deadline from `RERUN_TIMEOUT_S` (default 3600); the lease lasts that plus 120 s.
+- Rerun lease: `ACCT#{acct}` / `RERUN#{src}#{version}` (`owner`, `expiresAt`, `ttl`) by conditional UpdateItem; a rerun that finds it held exits 0 without writing, checks it is still the owner before publishing, and releases it in a finally. Rerun deadline from `RERUN_TIMEOUT_S` (default 3600); the lease lasts that plus 120 s.
 - Normalized CUR Parquet goes up by managed multipart transfer (`upload_fileobj`, 64 MiB parts); the session policy adds `s3:AbortMultipartUpload` on the same `accounts/{acct}/*` resource as PutObject.
 - Startup fails closed (exit 2, nothing read or written) when `PR_SET_DUMPABLE` fails; `PR_SET_CHILD_SUBREAPER` stays best effort, logged.
 - A failed, timed-out or stopped rerun sets `rerunError` (reason kind) and `rerunFailedAt` (epoch s) on the version's `UP#` row; a successful rerun removes both.

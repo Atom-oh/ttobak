@@ -1,5 +1,7 @@
 # ADR-058: Descendant Account read sharing
 
+[ADR-060](ADR-060-billing-shared-team-access.md) supersedes only the Billing exclusion: shared ancestor teams may act on descendant Billing. Other inherited mutation restrictions remain.
+
 - Status: Accepted on 2026-10-29 following explicit user authorization.
 - Supersedes ADR-036's no-inheritance policy only. Its meeting classification,
   explicit multi-filter semantics and owner-only hierarchy writes remain.

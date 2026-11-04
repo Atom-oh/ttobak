@@ -41,7 +41,13 @@ step extract running
 export COT_CSV_DIR="$CSV" COT_ENTITIES="$ACCT"
 mkdir -p "$CSV/$ACCT/html"
 # xlsx2csv: sheet stats on stderr, only an invalid-upload reason on stdout
-rc=0; python3 -I "$S/xlsx2csv.py" "$X/$ACCT/COT_${ACCT}_Template.xlsx" "$CSV/$ACCT" Data "$ACCT" || rc=$?
+rc=0
+if [ -f "$X/$ACCT/COT_${ACCT}_Template.xlsx" ]; then
+  python3 -I "$S/xlsx2csv.py" "$X/$ACCT/COT_${ACCT}_Template.xlsx" "$CSV/$ACCT" Data "$ACCT" || rc=$?
+else
+  python3 -I "$S/xlsx2csv.py" --combine "$CSV/$ACCT" Data "$ACCT" \
+    "$X/$ACCT/COT_${ACCT}_Current_State_Template.xlsx" "$X/$ACCT/COT_${ACCT}_COH_Template.xlsx" || rc=$?
+fi
 [ $rc -eq 0 ] || invalid_or_fail $rc
 # html2json: table stats on stderr, only an invalid-upload reason on stdout
 rc=0; python3 -I "$S/html2json.py" "$X/$ACCT/COT_${ACCT}_COT360.html" "$CSV/$ACCT/html" || rc=$?

@@ -18,6 +18,11 @@ def five(prefix="COT_OrigCo_"):
     return {prefix + k: b"x" * 10 for k in KINDS}
 
 
+def three(prefix="COT_OrigCo_"):
+    return {prefix + k: b"x" * 10 for k in
+            ("Current_State_Template.xlsx", "COH_Template.xlsx", "COT360.html")}
+
+
 def make_zip(path, members, compression=zipfile.ZIP_DEFLATED):
     """members: {name: bytes} or a list of (ZipInfo|name, bytes)."""
     items = members.items() if isinstance(members, dict) else members

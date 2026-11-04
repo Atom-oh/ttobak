@@ -92,7 +92,8 @@ continuations and QA history on membership or parent changes. Canonical child
 references support discovery and change transactionally with parent metadata;
 they do not authorize. API/QA share a disabled-by-default activation parameter.
 Private linked meetings require independent publication or a separate grant;
-mutations and Billing remain direct-only.
+mutations remain direct-only. Billing read/upload access also follows ancestor
+membership, with an atomic path/grant confirmation (ADR-060).
 
 Cognito identity, the app PROFILE and resource membership are separate states.
 The authenticated session bootstrap coordinates profile creation and eligible
@@ -123,12 +124,15 @@ TTOBAK account membership itself; TTOBAK grants it no table access (API-SPEC).
 The Billing service (ADR-056, `services/billing/`) is part of TTOBAK, distinct
 from that companion. CloudFront routes `/api/billing/*` to the Billing BFF, an
 IAM-authenticated Lambda Web Function behind OAC, which verifies the forwarded
-TTOBAK JWT and allows an account only to its direct members. `/billing` frames the
+TTOBAK JWT and grants Billing access through current direct or ancestor Account
+membership (ADR-060). `/billing` frames the
 static `/billing-app/` pages. Uploads go by presigned URL through
 `/billing-upload/*`, rewritten to the Billing data bucket. The Python worker
 (`services/billing/worker`, `run_account.sh`: validate, extract, datasets, check;
-then agents and report) builds the datasets the BFF serves. Its code is on main,
-but no CDK resource runs it yet (INFRA-SPEC "Billing BFF stack").
+then agents and report) builds the datasets the BFF serves. TTOBAK CDK does not
+create a worker; the existing companion stack processes the shared data bucket's
+`jobs/` objects through its ECS worker. See the
+[Billing release runbook](runbooks/billing-release.md) for that separate image rollout.
 
 ## Data paths
 

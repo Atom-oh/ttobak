@@ -147,7 +147,7 @@ function billingTab(fetcher) {
 const resolving = (byAccount) => async (id, acct) => byAccount[acct][id];
 
 // ---------- AccountDetailClient fixture (visibility) ----------
-function detailPage({ billingService = true, accounts = [], search = '', config, loadAccounts } = {}) {
+function detailPage({ billingService = true, accounts = [], search = '', config, loadAccounts, inherited = false } = {}) {
   const { react, render, unmount, lateSets } = hooksRuntime();
   const AccountBillingTab = () => null;
   const emptyComponent = () => null;
@@ -170,6 +170,7 @@ function detailPage({ billingService = true, accounts = [], search = '', config,
         get: async (accountId) => ({
           accountId, name: accountId, ownerUserId: 'owner',
           members: [{ userId: 'owner', role: 'owner' }, { userId: 'member', role: 'SSA' }],
+          ...(inherited ? { members: [{ userId: 'owner', role: 'owner' }], accessPermission: 'read', inheritedFromAccountId: 'acct-parent' } : {}),
         }),
         meetings: emptyResult, insights: emptyResult, listDocuments: emptyResult, research: emptyResult,
       },
@@ -203,6 +204,16 @@ function detailPage({ billingService = true, accounts = [], search = '', config,
     billingPanel: () => nodes(draw(), stop).find((n) => n.type === AccountBillingTab),
   };
 }
+
+test('authorized inherited Billing entry opens the tab and upload link', async () => {
+  const page = detailPage({ inherited: true, accounts: [entryOf('acct-1')], search: 'tab=billing' });
+  await page.start();
+  assert.ok(page.tabLabels().includes('Billing'));
+  assert.equal(page.billingPanel()?.props.entry.canUpload, true);
+  const denied = detailPage({ inherited: true, accounts: [], search: 'tab=billing' });
+  await denied.start();
+  assert.equal(denied.billingPanel(), undefined);
+});
 
 // ---------- tests ----------
 test('hidden_without_flag', async () => {
@@ -355,7 +366,7 @@ test('no_data_shows_upload_prompt_only_with_can_upload', async () => {
     const shown = texts(tree);
     assert.ok(shown.includes('이 계정에는 아직 빌링 데이터가 없습니다.'));
     assert.equal(shown.includes('COT·CUR 업로드'), canUpload);
-    assert.ok(shown.includes('이 계정의 멤버에게만 보이는 탭입니다.'));
+    assert.ok(shown.includes('이 계정과 상위 계정의 팀 멤버가 조회하고 업로드할 수 있습니다.'));
   }
   // with data, the upload button follows canUpload too
   for (const canUpload of [true, false]) {

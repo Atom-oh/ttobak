@@ -95,12 +95,13 @@ test('inherited Account reader sees the grant and cannot create documents', () =
   assert.match(html, /Documents/);
 });
 
-test('ancestor Owner is not treated as the child Owner or Billing member', () => {
+test('ancestor Owner keeps child management restrictions with authorized Billing access', () => {
   const { html } = render('AccountDetailClient', {
     states: accountStates(account, { accountId: 'child', entry: { accountId: 'child' } }),
     pathname: '/accounts/child',
   });
-  assert.doesNotMatch(html, /id="account-tab-billing"|Search colleague|Remove member|Owner 초대 메일|<select/);
+  assert.match(html, /id="account-tab-billing"/);
+  assert.doesNotMatch(html, /Search colleague|Remove member|Owner 초대 메일|<select/);
   assert.match(html, /member@example.invalid/);
 });
 
