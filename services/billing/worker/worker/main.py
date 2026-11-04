@@ -1,6 +1,7 @@
 """Worker entrypoint: one ECS Fargate task per job object jobs/{jobId}.json.
 
-Env: JOB_KEY, BUCKET, TABLE, DATA_ROLE_ARN (required); PUBLIC_URL, JOB_TIMEOUT_S (default 10800), RERUN_TIMEOUT_S
+Env: JOB_KEY, BUCKET, TABLE, DATA_ROLE_ARN (required); AGENTS_ROLE_ARN (the agents child's only credentials);
+PUBLIC_URL, JOB_TIMEOUT_S (default 10800), RERUN_TIMEOUT_S
 (default 3600), WORK_ROOT (default /work).
 analyze: claim the upload (claim token on UP#), download it, run the COT (run_account.sh, streamed) or CUR
 (stage_cur/datasets/check) pipeline, then agents and report, record steps.<name> on ACCT#{acct}/UP#{uploadId}, and
@@ -476,7 +477,10 @@ class Job:
             self.timeout_s = dflt
         self.deadline = time.monotonic() + self.timeout_s
         self.version_id = job.get("versionId") if self.kind == "rerun-agents" else "v" + self.upload_id[1:]
-        self.ddb, self.popen = ddb, runner
+        self.ddb, self.popen, self.sts = ddb, runner, sts
+        # the agents child gets a session of this role (Bedrock and the FSI search only), never the task role
+        self.agents_role = env.get("AGENTS_ROLE_ARN") or ""
+        self.region = env.get("AWS_REGION") or os.environ.get("AWS_REGION") or ""
         self.data = DataSession(sts, s3_factory or default_s3_factory, env["DATA_ROLE_ARN"], self.bucket, self.acct,
                                 self.upload_id, self.timeout_s)
         root = env.get("WORK_ROOT") or "/work"
@@ -496,18 +500,31 @@ class Job:
             raise JobTimeout()
         return left
 
-    def child_env(self, keep_aws):
-        """keep_aws only for the agents child (Bedrock via the task role). Every other child reads untrusted data:
-        no AWS_* variable at all (credentials, container credential URIs, region) and an empty per-job HOME."""
-        if keep_aws:
+    def agents_creds(self):
+        """A session of AGENTS_ROLE_ARN for the agents child: Bedrock and the FSI search only. The task role's own
+        credentials (container credential URIs) never reach a child: with them a child could assume the data role
+        without the per-account session policy. Role chaining caps it at 1 h; the agents step takes minutes."""
+        if not self.agents_role:
+            raise PipelineError("agents")  # fail closed: never fall back to the task role
+        c = self.sts.assume_role(RoleArn=self.agents_role, RoleSessionName="agents-" + self.upload_id,
+                                 DurationSeconds=3600)["Credentials"]
+        return {"AWS_ACCESS_KEY_ID": c["AccessKeyId"], "AWS_SECRET_ACCESS_KEY": c["SecretAccessKey"],
+                "AWS_SESSION_TOKEN": c["SessionToken"]}
+
+    def child_env(self, aws_creds=None):
+        """aws_creds only for the agents child (an AGENTS_ROLE_ARN session, see agents_creds). No child gets any
+        other AWS_* variable (task credentials, container credential URIs); every other child reads untrusted data
+        with no AWS_* variable at all and an empty per-job HOME."""
+        e = {k: v for k, v in os.environ.items() if not k.startswith("AWS_")}
+        if aws_creds:
             # the untrusted children ran as the same uid and could write the image HOME: a planted ~/.aws/config
-            # (credential_process) would outrank the container credentials, so this child gets a fresh HOME and
-            # no shared config or credentials files
-            e = dict(os.environ)
+            # (credential_process) must not be read, so this child gets a fresh HOME and no shared config files
+            e.update(aws_creds)
+            if self.region:
+                e["AWS_REGION"] = e["AWS_DEFAULT_REGION"] = self.region
             e["HOME"] = private_dir(self.path("agents_home"))
             e["AWS_CONFIG_FILE"] = e["AWS_SHARED_CREDENTIALS_FILE"] = os.devnull
         else:
-            e = {k: v for k, v in os.environ.items() if not k.startswith("AWS_")}
             e["HOME"] = self.path("home")
         e["PYTHONNOUSERSITE"] = "1"
         e.setdefault("AS_OF", datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d"))
@@ -537,7 +554,7 @@ class Job:
         if SUBREAPER[0] and CHILDREN():
             sweep_orphans()
 
-    def spawn(self, cmd, keep_aws=False, on_line=None):
+    def spawn(self, cmd, aws_creds=None, on_line=None):
         """Runs one child in its own session; stdout is read line by line (on_line sees each line as it arrives) and
         the job deadline is enforced while reading. Once the lead child has exited, new output is waited for
         EXIT_GRACE_S at most (lines already read are all handled): a descendant holding stdout open cannot hold the
@@ -549,7 +566,7 @@ class Job:
         self.remaining()
         self.no_orphans()
         p = self.popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                       env=self.child_env(keep_aws), cwd=self.wd, start_new_session=True,
+                       env=self.child_env(aws_creds), cwd=self.wd, start_new_session=True,
                        encoding="utf-8", errors="replace")
         lines, size = [], 0
         grace_end = None
@@ -693,12 +710,13 @@ class Job:
             self.set_step(name, state)
 
     def ai_steps(self, data_dir):
-        """agents (task role, for Bedrock) then report (no credentials); returns the ai flag. The cache and the feed
+        """agents (an AGENTS_ROLE_ARN session, for Bedrock) then report (no credentials); returns the ai flag. The cache and the feed
         are created only now, after every untrusted step ended."""
         self.set_step_if("agents", "running")
         cache = private_dir(self.path("agent_cache"))
         feed = self.feed(self.data.get()) if self.src == "cot" else None
-        rc, out = self.spawn(["python3", "-I", AI_STEP, "agents", data_dir, self.src, feed or "-", cache], keep_aws=True)
+        rc, out = self.spawn(["python3", "-I", AI_STEP, "agents", data_dir, self.src, feed or "-", cache],
+                             aws_creds=self.agents_creds())
         res = last_json(out, "ai")
         if rc != 0 or not res or res["ai"] not in ("ok", "none"):
             raise PipelineError("agents")

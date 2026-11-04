@@ -7,6 +7,7 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
+import { BillingDataPlane, BillingDataPlaneProps } from './billing-data-plane';
 
 const FUNCTION_NAME = 'ttobak-billing';
 const ENABLED_CONTEXT = 'ttobak:billingEnabled';
@@ -27,6 +28,9 @@ export interface BillingStackProps extends cdk.StackProps {
   webClientId: string;
   ttobakTableName: string;
   publicUrl: string;
+  /** Data bucket, platform table, worker, collector and FSI search owned by this stack. The BFF keeps reading the
+   * SSM-named bucket/table until those parameters are pointed at these resources (billing-release.md cutover). */
+  dataPlane?: Omit<BillingDataPlaneProps, 'publicUrl'>;
 }
 
 /**
@@ -166,6 +170,10 @@ export class BillingStack extends cdk.Stack {
       },
     }));
 
+    if (props.dataPlane) {
+      new BillingDataPlane(this, 'DataPlane', { ...props.dataPlane, publicUrl: props.publicUrl });
+    }
+
     const webFunction = new lambda.CfnWebFunction(this, 'WebFunction', { functionName: FUNCTION_NAME });
 
     const revision = new lambda.CfnWebFunctionRevision(this, 'Revision', {
@@ -246,4 +254,17 @@ export function billingPublicUrl(domainName: unknown): string {
 export function addBillingStack(app: Construct, props: () => BillingStackProps): BillingStack | undefined {
   if (app.node.tryGetContext(ENABLED_CONTEXT) !== 'true') return undefined;
   return new BillingStack(app, 'TtobakBillingStack', props());
+}
+
+/** FSI search gateway from context (ttobak:billingWebSearchGateway{Arn,Url,Tool}); all three or none. */
+export function billingWebSearchGateway(app: Construct): { arn: string; url: string; tool: string } | undefined {
+  const ctx = (k: string) => app.node.tryGetContext(`ttobak:billingWebSearchGateway${k}`) as unknown;
+  const [arn, url, tool] = ['Arn', 'Url', 'Tool'].map(ctx);
+  if (arn === undefined && url === undefined && tool === undefined) return undefined;
+  if (typeof arn !== 'string' || !/^arn:aws:bedrock-agentcore:[a-z0-9-]+:\d{12}:gateway\/[A-Za-z0-9-]+$/.test(arn)
+      || typeof url !== 'string' || !/^https:\/\/[^\s]+\/mcp$/.test(url)
+      || typeof tool !== 'string' || !/^[A-Za-z0-9_-]+___[A-Za-z0-9_-]+$/.test(tool)) {
+    throw new Error('ttobak:billingWebSearchGateway{Arn,Url,Tool} must all be set: gateway ARN, https MCP URL, tool name');
+  }
+  return { arn, url, tool };
 }

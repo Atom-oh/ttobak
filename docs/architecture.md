@@ -129,10 +129,11 @@ membership (ADR-060). `/billing` frames the
 static `/billing-app/` pages. Uploads go by presigned URL through
 `/billing-upload/*`, rewritten to the Billing data bucket. The Python worker
 (`services/billing/worker`, `run_account.sh`: validate, extract, datasets, check;
-then agents and report) builds the datasets the BFF serves. TTOBAK CDK does not
-create a worker; the existing companion stack processes the shared data bucket's
-`jobs/` objects through its ECS worker. See the
-[Billing release runbook](runbooks/billing-release.md) for that separate image rollout.
+then agents and report) builds the datasets the BFF serves. `TtobakBillingStack`
+owns the data bucket, platform table and one Fargate worker task per `jobs/`
+object (INFRA-SPEC "Billing data plane"); the separate companion stack is being
+retired. Its data moves in a one-time cutover
+([Billing release runbook](runbooks/billing-release.md)).
 
 ## Data paths
 

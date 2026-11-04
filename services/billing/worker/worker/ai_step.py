@@ -3,8 +3,9 @@
 Usage:
   ai_step.py agents <data_dir> <cot|cur> <feed_path|-> <cache_dir>   -> last stdout line {"ai": "ok"|"none"}
   ai_step.py report <data_dir> <out_md> <public_url>
-Runs with the task role's credentials (Bedrock, and the FsiSearch Lambda when FSI_SEARCH_FUNCTION is set); the worker's
-account-scoped S3 session is never passed here.
+agents runs with an AGENTS_ROLE_ARN session the worker assumed (Bedrock, and the FsiSearch Lambda when
+FSI_SEARCH_FUNCTION is set); report runs with no credentials. Neither gets the task role's credentials or the worker's
+account-scoped S3 session.
 """
 import json, os, sys
 

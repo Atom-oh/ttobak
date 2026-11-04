@@ -372,6 +372,7 @@ class TestWorker(Base):
 
         def agents(cmd, kw):
             seen["agents_aws"] = sorted(k for k in kw["env"] if k.startswith("AWS_"))
+            seen["agents_key"] = kw["env"].get("AWS_ACCESS_KEY_ID")
             seen["agents_home"] = kw["env"]["HOME"]
             seen["agents_home_empty"] = os.path.isdir(kw["env"]["HOME"]) and os.listdir(kw["env"]["HOME"]) == []
             seen["agents_config"] = (kw["env"]["AWS_CONFIG_FILE"], kw["env"]["AWS_SHARED_CREDENTIALS_FILE"])
@@ -381,7 +382,7 @@ class TestWorker(Base):
         def report(cmd, kw):
             seen["report_aws"] = [k for k in kw["env"] if k.startswith("AWS_")]
             seen["report_md_link"] = os.path.lexists(cmd[5])
-        fake_env = {"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI": "/v2/creds/x", "AWS_ACCESS_KEY_ID": "AK",
+        fake_env = {"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI": "/v2/creds/x", "AWS_ACCESS_KEY_ID": "TASK-AK",
                     "AWS_REGION": "ap-northeast-2", "HOME": "/home/parent"}
         with mock.patch.dict(os.environ, fake_env):
             rc = self.run_main(ddb, Runner(hooks={"run_account.sh": pipeline, "agents": agents, "report": report}))
@@ -391,7 +392,14 @@ class TestWorker(Base):
         self.assertTrue(seen["home"].startswith(self.work_root))
         self.assertTrue(seen["home_empty"])
         self.assertFalse(seen["cache_before"])
-        self.assertLessEqual({"AWS_ACCESS_KEY_ID", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_REGION"}, set(seen["agents_aws"]))
+        # the agents child gets only an AGENTS_ROLE_ARN session: no task credentials or container credential URI
+        self.assertEqual(seen["agents_aws"], ["AWS_ACCESS_KEY_ID", "AWS_CONFIG_FILE", "AWS_DEFAULT_REGION", "AWS_REGION",
+                                              "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_SHARED_CREDENTIALS_FILE"])
+        self.assertEqual(seen["agents_key"], "AK")  # FakeSTS's session, not the task's TASK-AK
+        agents_calls = [c for c in self.sts.calls if c["RoleArn"] == AGENTS_ROLE]
+        self.assertEqual(len(agents_calls), 1)
+        self.assertNotIn("Policy", agents_calls[0])
+        self.assertLessEqual(agents_calls[0]["DurationSeconds"], 3600)
         self.assertTrue(seen["cache_real"])
         self.assertNotIn(seen["agents_home"], ("/home/parent", seen["home"]))
         self.assertTrue(seen["agents_home"].startswith(self.work_root))
@@ -400,6 +408,20 @@ class TestWorker(Base):
         self.assertEqual(seen["report_aws"], [])
         self.assertFalse(seen["report_md_link"])
         self.assertEqual(os.listdir(outside), [])
+
+    def test_agents_without_their_role_fail_closed(self):
+        # no AGENTS_ROLE_ARN: the agents step fails instead of handing the child the task role
+        self.job()
+        ddb = self.ddb()
+        env = self.env()
+        del env["AGENTS_ROLE_ARN"]
+        runner = Runner()
+        with mock.patch.dict(os.environ, {"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI": "/v2/creds/x"}):
+            self.assertEqual(self.run_main(ddb, runner, env=env), 1)
+        up = self.up(ddb)
+        self.assertEqual((up["status"], up["steps"]["agents"], up["steps"]["publish"]), ("failed", "failed", "waiting"))
+        self.assertNotIn("agents", [Runner.tag(c) for c in runner.cmds])
+        self.assertFalse([k for k in self.store if "/versions/" in k])
 
     def test_cur_children_get_no_aws_env(self):
         self.job(src="cur")
