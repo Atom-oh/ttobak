@@ -20,6 +20,7 @@ import { PostRecordingBanner } from '@/components/record/PostRecordingBanner';
 import { LiveNotes, type NotesSaveStatus } from '@/components/record/LiveNotes';
 import { MeetingContextInput } from '@/components/record/MeetingContextInput';
 import { SAPreparation } from '@/components/record/SAPreparation';
+import { PreparationReferences } from '@/components/record/PreparationReferences';
 import { appendMeetingNotes, preparationNotes, qaNoteMarkdown, referenceMarkdown, type MeetingReference, type QAReferenceEvidence, type QuestionDraft, codePointLength, MAX_MEETING_NOTES } from '@/lib/meetingReferences';
 import { LeftoverRecordingsCard, formatLeftoverTime } from '@/components/record/LeftoverRecordingsCard';
 import { BrowserRecordingsCard } from '@/components/record/BrowserRecordingsCard';
@@ -1285,13 +1286,12 @@ function RecordPageInner() {
               <SAPreparation value={contextText} onChange={setContextText} title={meetingTitle} onTitleChange={setMeetingTitle}
                 accountId={referenceAccountId} onAccountChange={setReferenceAccountId}
                 initialDocumentId={searchParams.get('prepDocId') || undefined} disabled={meetingFlowBusy} />
-              <details className="mt-4 rounded-xl border border-slate-200 bg-white dark:border-white/10 dark:bg-surface-lowest">
-                <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-primary">고객 Insight·지식 자료로 준비하기</summary>
-                <div className="h-[30rem]"><ReferenceTabs activeTab={referenceTab} onTabChange={setReferenceTab}
+              <PreparationReferences>
+                <ReferenceTabs activeTab={referenceTab} onTabChange={setReferenceTab}
                   qaPanel={<LiveQAPanel transcriptContext={qaContext} questionDraft={questionDraft} onSaveToNotes={handleSaveQAToNotes} />}
                   referencePanel={<ReferencePanel accountId={referenceAccountId} onAccountChange={setReferenceAccountId} transcriptTail={contextText}
-                    onAddReference={handleAddReference} onPrepareQuestion={handlePrepareQuestion} />} /></div>
-              </details>
+                    onAddReference={handleAddReference} onPrepareQuestion={handlePrepareQuestion} />} />
+              </PreparationReferences>
             </div>
           </div>
         )}

@@ -657,6 +657,14 @@ continuation or report their page limit, never silently return a partial list.
 Account/doc/project responses may include `accessPermission: "read"` and
 `inheritedFromAccountId` for ancestor-only access; no synthetic member is created.
 
+`scope=direct` selects the bounded direct-membership listing used by recording
+preparation. It scans at most 25 index candidates in one query per page, then
+rereads canonical membership and account metadata; inherited grants never enter
+this scope. Every returned row is revalidated before publication. Empty pages
+retain continuation for stale index candidates. Its cursor binds user, scope,
+requested page size, candidate position and the last returned revision; it is
+not interchangeable with the default/`scope=all` discovery cursor.
+
 Any current account member can add members or change assignable roles; `owner`
 is never assignable. Member addition requires a verified requester email and a
 single JSON body capped at 1,024 bytes. A missing Cognito identity is invited and

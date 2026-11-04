@@ -10,7 +10,7 @@ const source = ts.transpileModule(readFileSync(new URL('../src/lib/api.ts', impo
 const parent = { accountId: 'parent', name: 'Parent', role: 'owner', accessPermission: 'edit' };
 const child = { accountId: 'child', name: 'Child', role: '', parentAccountId: 'parent', accessPermission: 'read', inheritedFromAccountId: 'parent' };
 
-function fixture(pages) {
+function fixture(pages, { unsupportedDirect = false, firstStatus, laterStatus } = {}) {
   const requests = [];
   const token = `synthetic.${Buffer.from(JSON.stringify({ sub: 'reader', exp: Date.now() / 1000 + 3600 })).toString('base64url')}.signature`;
   const dependencies = {
@@ -24,6 +24,12 @@ function fixture(pages) {
     require: name => { assert.ok(name in dependencies, name); return dependencies[name]; },
     fetch: async url => {
       requests.push(url);
+      const status = requests.length === 1 ? firstStatus
+        : laterStatus && new URL(url, 'https://example.invalid').searchParams.has('cursor') ? laterStatus : undefined;
+      if ((unsupportedDirect && new URL(url, 'https://example.invalid').searchParams.get('scope') === 'direct') || status) {
+        return { ok: false, status: status || 400, headers: { get: () => 'application/json' },
+          json: async () => ({ error: { code: status === 403 ? 'FORBIDDEN' : 'BAD_REQUEST', message: 'Request unavailable' } }) };
+      }
       const body = pages[Math.min(requests.length - 1, pages.length - 1)];
       return { ok: true, status: 200, headers: { get: () => 'application/json' }, json: async () => body };
     },
@@ -43,6 +49,36 @@ test('Account discovery accepts the legacy complete response', async () => {
   const f = fixture([{ accounts: [parent] }]);
   assert.deepEqual(JSON.parse(JSON.stringify(await f.api.list())), { accounts: [parent] });
   assert.equal(f.requests.length, 1);
+});
+
+test('direct customer selection carries its scope through every bounded page', async () => {
+  const f = fixture([{ accounts: [parent], nextCursor: 'page_2' }, { accounts: [{ ...parent, accountId: 'other' }] }]);
+  const result = await f.api.list({ scope: 'direct' });
+  assert.equal(result.accounts.length, 2);
+  assert.equal(f.requests.length, 2);
+  for (const request of f.requests) {
+    assert.equal(new URL(request, 'https://example.invalid').searchParams.get('scope'), 'direct');
+  }
+});
+
+test('direct selection can read older API deployments until the producer rollout finishes', async () => {
+  const f = fixture([{ accounts: [parent, child] }], { unsupportedDirect: true });
+  const result = await f.api.list({ scope: 'direct' });
+  assert.equal(result.accounts.length, 2);
+  assert.equal(f.requests.length, 2);
+  assert.equal(new URL(f.requests[1], 'https://example.invalid').searchParams.get('scope'), null);
+});
+
+test('direct selection never falls back on permission failure', async () => {
+  const f = fixture([{ accounts: [parent] }], { firstStatus: 403 });
+  await assert.rejects(f.api.list({ scope: 'direct' }), error => error.status === 403);
+  assert.equal(f.requests.length, 1);
+});
+
+test('direct selection never hides a later invalid continuation behind a fallback', async () => {
+  const f = fixture([{ accounts: [parent], nextCursor: 'page_2' }], { laterStatus: 400 });
+  await assert.rejects(f.api.list({ scope: 'direct' }), error => error.status === 400);
+  assert.equal(f.requests.length, 2);
 });
 
 test('Account discovery consumes an empty page with an advancing cursor', async () => {
