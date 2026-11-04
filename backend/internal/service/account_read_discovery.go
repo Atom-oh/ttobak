@@ -192,6 +192,7 @@ type accountListCursor struct {
 func (s *AccountService) ListAccountsPage(ctx context.Context, user string, q url.Values) (*AccountListPage, error) {
 	size := 50
 	rawCursor := ""
+	scope := "all"
 	for key, values := range q {
 		if len(values) != 1 {
 			return nil, ErrInvalidReadingOptions
@@ -208,9 +209,17 @@ func (s *AccountService) ListAccountsPage(ctx context.Context, user string, q ur
 			if rawCursor == "" || len(rawCursor) > 2048 {
 				return nil, ErrInvalidReadingCursor
 			}
+		case "scope":
+			if values[0] != "all" && values[0] != "direct" {
+				return nil, ErrInvalidReadingOptions
+			}
+			scope = values[0]
 		default:
 			return nil, ErrInvalidReadingOptions
 		}
+	}
+	if scope == "direct" {
+		return s.listDirectAccountsPage(ctx, user, size, rawCursor)
 	}
 	if descendantReadsEnabled() {
 		return s.listAccountsDiscoveryPage(ctx, user, size, rawCursor)

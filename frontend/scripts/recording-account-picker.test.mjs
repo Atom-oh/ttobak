@@ -65,8 +65,8 @@ function fixture(component, { accounts, documents = async () => ({ documents: []
     'next/link': { default: () => null },
     '@/components/auth/AuthProvider': { useAuth: () => ({ user: userId ? { userId } : null, membershipRevision }) },
     '@/lib/api': {
-      accountApi: { list: () => {
-        calls.accounts.push({ userId, membershipRevision });
+      accountApi: { list: options => {
+        calls.accounts.push({ userId, membershipRevision, options });
         return accounts(calls.accounts.length);
       } },
       docApi: { list: docType => {
@@ -86,7 +86,8 @@ function fixture(component, { accounts, documents = async () => ({ documents: []
       MAX_REFERENCE_ITEMS: 100, useReferenceCatalog: () => ({}),
     },
   };
-  const path = component === 'preparation' ? 'record/SAPreparation' : 'ReferencePanel';
+  const path = component === 'preparation' ? 'record/SAPreparation'
+    : component === 'disclosure' ? 'record/PreparationReferences' : 'ReferencePanel';
   let source = readFileSync(new URL(`../src/components/${path}.tsx`, import.meta.url), 'utf8');
   // Load the existing private picker directly, avoiding unrelated reference
   // catalog/editor behavior; its actual hooks and request code are preserved.
@@ -96,10 +97,12 @@ function fixture(component, { accounts, documents = async () => ({ documents: []
     exports, Error, console,
     require: name => { assert.ok(name in modules, name); return modules[name]; },
   });
-  const Component = component === 'preparation' ? exports.SAPreparation : exports.TestAccountPicker;
+  const Component = component === 'preparation' ? exports.SAPreparation
+    : component === 'disclosure' ? exports.PreparationReferences : exports.TestAccountPicker;
   const props = component === 'preparation'
     ? { value: '', title: '', accountId: '', onChange() {}, onTitleChange() {}, onAccountChange() {} }
-    : { value: '', onChange() {} };
+    : component === 'disclosure' ? { children: React.createElement('p', null, 'Reference catalog') }
+      : { value: '', onChange() {} };
   function render() {
     cursor = 0; effects = [];
     const tree = Component(props);
@@ -133,6 +136,28 @@ test('recording Accounts appear while personal preparation documents are still l
   docs.resolve({ documents: [] });
   await tick();
   assert.deepEqual(f.calls.documents, ['prep']);
+});
+
+test('recording preparation requests direct customers instead of descendant discovery', async () => {
+  const f = fixture('preparation', { accounts: async () => ({ accounts: [direct] }) });
+  await f.start();
+  assert.equal(f.calls.accounts[0].options?.scope, 'direct');
+  assert.match(f.html(), /<option value="direct">Direct Account<\/option>/);
+});
+
+test('preparation references load on first expansion and retain opened state on collapse', async () => {
+  const f = fixture('disclosure', {});
+  await f.start();
+  assert.doesNotMatch(f.html(), /Reference catalog/);
+  f.find(node => node.type === 'details').props.onToggle({ currentTarget: { open: true } });
+  await f.flush();
+  assert.match(f.html(), /Reference catalog/);
+  f.find(node => node.type === 'details').props.onToggle({ currentTarget: { open: false } });
+  await f.flush();
+  assert.match(f.html(), /Reference catalog/);
+  f.find(node => node.type === 'details').props.onToggle({ currentTarget: { open: true } });
+  await f.flush();
+  assert.match(f.html(), /Reference catalog/);
 });
 
 test('recording Accounts refresh when invitation processing adds a direct membership', async () => {

@@ -758,7 +758,7 @@ export const researchChatApi = {
 };
 
 // Account API
-async function getAccounts(): Promise<{ accounts: AccountSummary[] }> {
+async function getAccounts(options?: { scope?: 'direct' }): Promise<{ accounts: AccountSummary[] }> {
   const accounts: AccountSummary[] = [];
   const accountIds = new Map<string, number>();
   const cursors = new Set<string>();
@@ -766,8 +766,20 @@ async function getAccounts(): Promise<{ accounts: AccountSummary[] }> {
   const invalid = () => new ApiError(502, 'ACCOUNT_DISCOVERY_INVALID', '어카운트 목록을 완전히 불러오지 못했습니다. 다시 시도해 주세요.');
   for (let pageIndex = 0; pageIndex < 1000; pageIndex++) {
     const query = new URLSearchParams({ pageSize: '100' });
+    if (options?.scope) query.set('scope', options.scope);
     if (cursor) query.set('cursor', cursor);
-    const page = await api.get<{ accounts: AccountSummary[]; nextCursor?: string; overlapPossible?: boolean; unionKey?: string }>(`/api/accounts?${query}`);
+    let page: { accounts: AccountSummary[]; nextCursor?: string; overlapPossible?: boolean; unionKey?: string };
+    try {
+      page = await api.get<typeof page>(`/api/accounts?${query}`);
+    } catch (error) {
+      // API and frontend deployments have independent jobs. An older API
+      // rejects the new option; the existing picker still filters edit grants.
+      if (options?.scope === 'direct' && pageIndex === 0 &&
+        error instanceof ApiError && error.status === 400 && error.code === 'BAD_REQUEST') {
+        return getAccounts();
+      }
+      throw error;
+    }
     if (!page || !Array.isArray(page.accounts)) throw invalid();
     if (page.overlapPossible !== undefined && typeof page.overlapPossible !== 'boolean') throw invalid();
     if (page.overlapPossible && page.unionKey !== 'accountId') throw invalid();

@@ -48,7 +48,7 @@ export function SAPreparation({ value, onChange, title, onTitleChange, accountId
     let active = true;
     if (!userId) return;
     // Personal documents must not delay a healthy Account selector.
-    void accountApi.list().then(response => {
+    void accountApi.list({ scope: 'direct' }).then(response => {
       if (!active) return;
       setAccounts(response.accounts.filter(isEditableAccount));
       setAccountStatus({ key: catalogKey, loading: false, error: '' });
