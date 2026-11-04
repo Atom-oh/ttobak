@@ -24,7 +24,6 @@
     "ttobak:httpOriginReleaseCiRoleName": "mall-apne2-mgmt-ci-runner",
     "ttobak:knowledgeBaseId": "BJJLVLFTOR",
     "ttobak:dataSourceId": "3AVMMT3RF3",
-    "ttobak:billingInsightUrl": "https://insight.atomai.click",
     "ttobak:billingEnabled": "true",
     "ttobak:billingEndpointDomain": "kj5dmy0qgq0qfvk3.z48.lambda-web.ap-northeast-2.on.aws",
     "ttobak:billingFunctionArn": "arn:aws:lambda:ap-northeast-2:180294183052:web-function/ttobak-billing",

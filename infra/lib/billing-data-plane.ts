@@ -15,6 +15,9 @@ import * as sqs from 'aws-cdk-lib/aws-sqs';
 import { Construct } from 'constructs';
 
 const BILLING = path.join(__dirname, '../../services/billing');
+// GuardDuty Runtime Monitoring attaches its security agent sidecar to Fargate tasks and pulls it with the task
+// execution role from this Region's GuardDuty agent repository ("Amazon ECR repository hosting GuardDuty agent").
+const GUARDDUTY_AGENT_ACCOUNT: Record<string, string> = { 'ap-northeast-2': '914738172881' };
 // Tagged on CreateMultipartUpload by the BFF (lib/uploads.js): uploaded sources expire by tag.
 const UPLOAD_TAG = { key: 'tb-lifecycle', value: 'upload' };
 export const FEED_KEY = 'data/whats_new_feed.json';
@@ -150,6 +153,14 @@ export class BillingDataPlane extends Construct {
       runtimePlatform: { cpuArchitecture: ecs.CpuArchitecture.ARM64, operatingSystemFamily: ecs.OperatingSystemFamily.LINUX },
     });
     const workerRole = this.workerTask.taskRole;
+    const guardDutyAccount = GUARDDUTY_AGENT_ACCOUNT[region];
+    if (guardDutyAccount) {
+      // pull rights for that one repository only (GetAuthorizationToken is already granted for the worker image)
+      this.workerTask.addToExecutionRolePolicy(new iam.PolicyStatement({
+        actions: ['ecr:BatchCheckLayerAvailability', 'ecr:GetDownloadUrlForLayer', 'ecr:BatchGetImage'],
+        resources: [`arn:${partition}:ecr:${region}:${guardDutyAccount}:repository/aws-guardduty-agent-fargate`],
+      }));
+    }
     // The worker assumes this role with a session policy narrowed to accounts/{acct}/* (main.py); the task role
     // itself cannot read or write account data. No session tags, so no sts:TagSession.
     const dataRole = new iam.Role(this, 'WorkerDataRole', {

@@ -50,7 +50,7 @@ test('runtime config advertises billingInsight only when the companion origin is
     .toThrow(/ttobak:billingInsightUrl must be an https origin/);
 });
 
-test('the checked-in app context points the hand-off at an https origin', () => {
+test('the checked-in app context leaves the hand-off off: the companion dashboard is retired', () => {
   const context = JSON.parse(readFileSync(join(__dirname, '../cdk.json'), 'utf8')).context;
-  expect(context['ttobak:billingInsightUrl']).toMatch(/^https:\/\/[a-z0-9.-]+$/);
+  expect(context).not.toHaveProperty('ttobak:billingInsightUrl');
 });

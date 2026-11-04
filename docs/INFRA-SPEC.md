@@ -111,9 +111,9 @@ tokens until it is configured with the new client ID after both deploy. Bootstra
 with each app's exact callback and sign-out URLs before deploying AuthStack;
 their absence fails deployment. Companion apps authorize by reading TTOBAK
 account membership themselves; TTOBAK stacks grant them no table access. The
-AWS Billing Insight companion stack grants its own redeemer `dynamodb:GetItem`
-and `dynamodb:DeleteItem` on `ttobak-main`, limited by `dynamodb:LeadingKeys` to
-`HANDOFF#*`, to show and then consume the API's single-use hand-off rows (see API-SPEC "Billing Insight hand-off").
+retired AWS Billing Insight companion stack held its own `HANDOFF#*`-limited
+redeemer grant on `ttobak-main`; it was deleted on 2026-11-04 with that stack
+(see API-SPEC "Billing Insight hand-off").
 
 The pre-signup trigger reads the configured domain allowlist. PostAuthentication
 writes a separate USER#/LOGIN item for lastLoginAt, with a short abort timeout,
@@ -695,7 +695,9 @@ exporters first. No historical backfill or grant revocation is implied. See
 ## Billing Insight hand-off
 
 Optional context `ttobak:billingInsightUrl` (`infra/lib/billing-insight.ts`) names
-the companion dashboard origin; `infra/cdk.json` sets it. Unset or empty omits
+the companion dashboard origin. `infra/cdk.json` no longer sets it: the companion
+stack and its domain were deleted on 2026-11-04, and the Billing entry links to
+`/billing` (`billingService`). Unset or empty omits
 the API Lambda's `BILLING_INSIGHT_URL` and the `billingInsight` flag in
 `/config.json`, so the hand-off route returns 404 and no button renders. A set
 value must be an https origin (optional trailing `/`, no path, query or
@@ -822,6 +824,9 @@ There is no public entry point: no service, load balancer, distribution or URL.
   00:30 KST. `FsiSearch` (no VPC, no URL) calls the web search gateway named by
   `ttobak:billingWebSearchGateway{Arn,Url,Tool}` with an exact
   `bedrock-agentcore:InvokeGateway` grant; without that context it is omitted.
+
+The worker's execution role can also pull GuardDuty Runtime Monitoring's agent
+sidecar from that Region's `aws-guardduty-agent-fargate` repository only.
 
 The worker relies on the shared VPC's existing STS, ECR, CloudWatch Logs,
 Lambda and Bedrock runtime interface endpoints. This stack creates no VPC,

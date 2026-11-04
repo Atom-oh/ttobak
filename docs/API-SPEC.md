@@ -208,6 +208,8 @@ claims before bootstrap is retried; the app never silently sets verification.
 
 Authenticated `POST /api/billing-insight/handoff` lets a signed-in web user open
 the separate AWS Billing Insight companion dashboard without a second sign-in.
+The checked-in configuration leaves it off: the companion was retired on
+2026-11-04, so `BILLING_INSIGHT_URL` is unset and the route returns 404.
 It takes no body (bodies over 1,024 bytes return 400) and reads identity only
 from verified middleware claims. Responses always carry `Cache-Control: no-store`.
 
