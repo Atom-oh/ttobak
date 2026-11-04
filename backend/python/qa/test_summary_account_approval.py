@@ -210,6 +210,10 @@ class AccountApprovalInsightTests(unittest.TestCase):
         self.insight('old')
         result = self.reader().get_account_brief('reader', 'Account').value
         self.assertEqual(result['insightsByType'], {})
+        self.assertEqual(result['summaryReadRestriction'], 'SHARING_REGEN_REQUIRED')
+        insights = self.reader().get_account_insights('reader', 'Account').value
+        self.assertEqual(insights['insights'], [])
+        self.assertEqual(insights['summaryReadRestriction'], 'SHARING_REGEN_REQUIRED')
         self.assertFalse(any(key[1].startswith('INSIGHT#') for key, _ in self.table.reads))
 
     def test_legacy_revision_rotation_after_current_body_rejects_complete_read(self):
@@ -232,6 +236,7 @@ class AccountApprovalInsightTests(unittest.TestCase):
                 row.pop('insightsRevision')
         result = self.reader().get_account_insights('reader', 'Account').value
         self.assertEqual(result['insights'], [])
+        self.assertEqual(result['summaryReadRestriction'], 'SHARING_REGEN_REQUIRED')
         self.assertFalse(any(key[1].startswith('INSIGHT#') for key, _ in self.table.reads))
 
 

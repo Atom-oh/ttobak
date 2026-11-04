@@ -4,6 +4,10 @@ Status: Historical design; user-approved behavior, deployment acceptance pending
 Date: 2026-11-04
 Reviewed base: `4c6de607`
 
+The reader foundation PR implements only the Python QA portion. Go, API,
+frontend, infrastructure and current writer-policy changes are pending in
+companion PR #573; this historical design describes the complete target.
+
 ## Requirement
 
 The meeting owner can share the current completed meeting notes and Insights with
