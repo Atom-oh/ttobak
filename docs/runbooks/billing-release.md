@@ -37,49 +37,61 @@ definition and roles, which after the cutover leaves no consumer.
 ## One-time cutover from the companion stack
 
 Run these in order with the reviewed revision; record each output in a private
-receipt. Customer data stays in the old bucket and table until step 6 passes.
+receipt. Customer data stays in the old bucket and table until step 5 passes.
 
 1. Deploy `TtobakBillingStack` with `--exclusively` and record its
    `DataBucketName` and `PlatformTableName` outputs. The BFF still reads the old
-   resources, so user behavior does not change.
-2. Copy the data: server-side copy every object of the old bucket **except
-   `jobs/`** to the new one (keys and object tags unchanged), then copy every
-   platform table item. Compare object counts, sizes and item counts.
-3. Freeze. Announce a short window, then confirm that no platform table `UP#`
-   row is `uploading`, `queued` or `running`, that the companion cluster has no
-   running worker task, and that there is no incomplete multipart upload under
-   `accounts/` in the old bucket. Multipart upload IDs are bucket-bound, so an
-   upload in flight across the switch fails and must be uploaded again; repeat
-   this check right before step 4.
+   resources, so user behavior does not change. Prove the worker path: put one
+   `jobs/` object with `PutObject` in the new bucket for a well-formed job whose
+   upload does not exist. One task must start in the new cluster, pull its image,
+   log `skip` and exit 0; this exercises the shared VPC endpoints and logging.
+2. Freeze. Announce a short window, then confirm that no platform table `UP#`
+   row is `uploading`, `queued` or `running`; that the companion cluster has no
+   task in any non-stopped state (including `PROVISIONING` and `PENDING`); that
+   no `jobs/` object in the old bucket is newer than ten minutes (a rerun job
+   leaves its `UP#` row `done`); and that there is no incomplete multipart
+   upload under `accounts/` in the old bucket. Multipart upload IDs are
+   bucket-bound, so an upload in flight across the switch fails and must be
+   uploaded again. Keep the window until step 4 completes.
+3. Under the freeze, copy the data: server-side copy every object of the old
+   bucket **except `jobs/`** to the new one (keys and object tags unchanged),
+   then every platform table item **except `LOCK#` and `RERUN#` rows** (upload
+   locks and rerun leases belong to running work, which the freeze excluded).
+   Compare object counts and sizes and item counts, and confirm the new table
+   holds no `LOCK#` or `RERUN#` row.
 4. Point `/ttobak/billing/data-bucket-name` and
    `/ttobak/billing/platform-table-name` at the new resources. Deploy
    `TtobakBillingStack`, then `TtobakFrontendStack`, each with `--exclusively
    --force`. Both read the parameters only during a stack update, and an
    unchanged template is otherwise skipped. Verify the active Billing revision's
    `DATA_BUCKET` and `PLATFORM_TABLE` and the distribution's `/billing-upload/*`
-   origin domain name the new resources.
-5. Copy any non-`jobs/` object or item the old resources received after step 2,
-   repeating the comparison. The freeze keeps this empty unless a write slipped
-   through.
-6. Accept: the dashboard lists every account and its current versions; a new
+   origin domain name the new resources. Then end the freeze.
+5. Accept: the dashboard lists every account and its current versions; a new
    COT upload runs on the new worker (its job lands in the new bucket, its task
-   in the new cluster) and publishes; the old bucket receives no new object.
-7. Before deleting the companion stack, set `DeletionPolicy: Retain` on its
+   in the new cluster) and publishes; the old bucket and table receive nothing
+   after step 3.
+6. Before deleting the companion stack, set `DeletionPolicy: Retain` on its
    three `AWS::EC2::VPCEndpoint` resources (CloudWatch Logs, Lambda, Secrets
-   Manager) with an update that changes nothing else. They are the shared VPC's
-   only endpoints for those services, and other workloads use them. Notify the
-   VPC owner that they are no longer managed by a stack.
-8. Delete `TossBillingDashboard`. Its old dashboard, distribution, ALB, ECS
-   service, OAuth function and alias records are removed; its retained bucket and
-   table remain. Delete those only after a separately recorded backup or explicit
-   user approval.
+   Manager) **and on their security group** (`EndpointSg`), with an update that
+   changes nothing else. They are the shared VPC's only endpoints for those
+   services, other workloads use them, and the endpoints keep referencing the
+   group (a deleted group would fail the stack deletion or detach them). Notify
+   the VPC owner that they are no longer managed by a stack.
+7. Delete `TossBillingDashboard`. Its old dashboard, distribution, ALB, ECS
+   service, worker, OAuth function and alias records are removed; its retained
+   bucket, table, endpoints and endpoint security group remain. Delete the
+   bucket and table only after a separately recorded backup or explicit user
+   approval.
 
-Rollback before step 4: nothing to undo; the BFF still uses the old resources.
-After step 4, writes land only in the new resources. Freeze again, copy every
-object and item created or changed since step 4 back to the old resources, then
-point the parameters back and redeploy both stacks with `--force`. A rollback
-that only repoints the parameters loses every upload and publication accepted
-after step 4.
+Rollback before step 4: end the freeze; nothing else changed. Between steps 4
+and 7, writes land only in the new resources: freeze again, copy every object
+and item created or changed since step 4 back to the old resources (again
+except `jobs/`, `LOCK#` and `RERUN#`), point the parameters back and redeploy
+both stacks with `--force`. A rollback that only repoints the parameters loses
+every upload and publication accepted after step 4. After step 7 there is no
+worker for the old bucket: a rollback first needs a consumer for it, so do not
+delete the companion stack until step 5 has passed and the rollback window has
+closed.
 
 ## BFF and frontend
 
