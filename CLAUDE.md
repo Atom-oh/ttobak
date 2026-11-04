@@ -48,7 +48,7 @@ Opus and `BEDROCK_SONNET_MODEL_ID` for refinement. Final notes select GPT-6.1 So
 through `BEDROCK_SUMMARY_MODEL_ID`, with bounded continuation and strict completion
 before publication. Images use Opus 4.8; QA/simulator use Sonnet 5.5; lightweight Go
 uses Haiku 5.5. Verify `backend/internal/service/bedrock.go` and
-`infra/lib/gateway-stack.ts`. QA detection uses qwen3-32b; translation uses Amazon
+`infra/lib/gateway-stack.ts`. QA detection uses Haiku 5.5; translation uses Amazon
 Translate. CI reviewer aliases are separate configuration.
 
 ## Verification commands

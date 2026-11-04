@@ -51,7 +51,7 @@ logger.setLevel(logging.INFO)
 TABLE_NAME = os.environ.get('TABLE_NAME', 'ttobak-main')
 KB_ID = os.environ.get('KB_ID', 'BJJLVLFTOR')
 BEDROCK_MODEL_ID = os.environ.get('BEDROCK_MODEL_ID', 'global.anthropic.claude-sonnet-5-5')
-DETECT_MODEL_ID = os.environ.get('DETECT_MODEL_ID', 'qwen.qwen3-32b-v1:0')
+DETECT_MODEL_ID = os.environ.get('DETECT_MODEL_ID', 'global.anthropic.claude-haiku-5-5')
 
 MAX_TOOL_ROUNDS = int(os.environ.get('MAX_TOOL_ROUNDS', '3'))
 # Only old cached meeting identities are read for migration compatibility.
@@ -1541,10 +1541,8 @@ def handle_detect_questions(body):
             messages=[
                 {'role': 'user', 'content': [{'text': user_content}]}
             ],
-            inferenceConfig={
-                'maxTokens': 512,
-                'temperature': 0.2,
-            }
+            # no temperature: Claude 5.x models reject it (ValidationException)
+            inferenceConfig={'maxTokens': 512},
         )
 
         answer = ''
@@ -1569,8 +1567,13 @@ def parse_detected_questions(raw):
     flag. Duplicates are dropped (first occurrence wins, including its search
     flag). proactive is always a subset of questions.
     """
+    text = raw.strip()
+    # a model may wrap the array in a Markdown code fence (```json ... ```)
+    fence = re.fullmatch(r'```[A-Za-z]*\s*(.*?)\s*```', text, re.S)
+    if fence:
+        text = fence.group(1)
     try:
-        parsed = json.loads(raw.strip())
+        parsed = json.loads(text)
     except json.JSONDecodeError:
         return [], []
     if not isinstance(parsed, list):
