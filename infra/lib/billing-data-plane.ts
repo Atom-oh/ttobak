@@ -95,6 +95,9 @@ export class BillingDataPlane extends Construct {
         retention: logs.RetentionDays.ONE_MONTH, removalPolicy: cdk.RemovalPolicy.DESTROY,
       }),
     });
+    // Object actions on the feed key only. The grant also adds bucket-level List*/GetBucket*: without ListBucket a
+    // missing feed answers 403 instead of NoSuchKey, and the collector (unchanged companion code) treats only
+    // NoSuchKey as "no feed yet". It can list key names, not read or write any other object.
     this.bucket.grantReadWrite(collector, FEED_KEY);
     new events.Rule(this, 'Daily', {
       description: "Collect AWS What's New daily 00:30 KST",
@@ -154,8 +157,9 @@ export class BillingDataPlane extends Construct {
       maxSessionDuration: cdk.Duration.hours(1),
       description: 'Billing analysis worker: account data, narrowed per job by a session policy',
     });
+    // AbortMultipartUpload: the managed Parquet upload cleans up a failed multipart upload (main.py session_policy)
     dataRole.addToPrincipalPolicy(new iam.PolicyStatement({
-      actions: ['s3:GetObject', 's3:PutObject'], resources: [this.bucket.arnForObjects('accounts/*')],
+      actions: ['s3:GetObject', 's3:PutObject', 's3:AbortMultipartUpload'], resources: [this.bucket.arnForObjects('accounts/*')],
     }));
     dataRole.addToPrincipalPolicy(new iam.PolicyStatement({
       actions: ['s3:ListBucket'], resources: [this.bucket.bucketArn],
@@ -228,7 +232,9 @@ export class BillingDataPlane extends Construct {
       description: 'Billing jobs/*.json written by the BFF -> one analysis worker task',
       eventPattern: {
         source: ['aws.s3'], detailType: ['Object Created'],
-        detail: { bucket: { name: [this.bucket.bucketName] }, object: { key: [{ prefix: 'jobs/' }] } },
+        // the BFF writes every job with PutObject (lib/uploads.js); a copied or multipart-created object under jobs/
+        // (a data copy, a migration) never starts a task
+        detail: { bucket: { name: [this.bucket.bucketName] }, object: { key: [{ prefix: 'jobs/' }] }, reason: ['PutObject'] },
       },
       targets: [new targets.EcsTask({
         cluster, taskDefinition: this.workerTask,

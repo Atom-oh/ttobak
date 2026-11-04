@@ -803,7 +803,8 @@ There is no public entry point: no service, load balancer, distribution or URL.
 - Platform table (`pk`/`sk`): on-demand, PITR, AWS-managed encryption, TTL
   `ttl`, retained on delete.
 - Worker: one ARM64 Fargate task (4 vCPU, 16 GiB, 100 GiB ephemeral) per
-  `jobs/*.json` Object Created event (`JobCreated` rule, 2 retries, DLQ with an
+  `jobs/*.json` object the BFF writes (`JobCreated` rule on Object Created with
+  reason `PutObject`, so copied objects start nothing; 2 retries, DLQ with an
   alarm on any message). The image is built from
   `services/billing/worker/Dockerfile.ingest`. Tasks run in the isolated subnets
   of the shared VPC (`fsi-demo-vpc`, looked up by ID like GatewayStack) with no
@@ -812,7 +813,8 @@ There is no public entry point: no service, load balancer, distribution or URL.
 - The task role, used by the worker's parent process only, reads `jobs/*`,
   updates `ACCT#*` items and assumes two roles. The data role (`s3:GetObject`/
   `PutObject` on `accounts/*`, `ListBucket` for `accounts/*`, the feed) is
-  narrowed per job by a session policy. The agents role allows only the
+  narrowed per job by a session policy (it also grants `AbortMultipartUpload` on
+`accounts/*` for multipart cleanup). The agents role allows only the
   configured agent model's global profile and foundation model and the FSI
   search; its session is the agents child's only credentials. No child receives
   the task role's credentials.

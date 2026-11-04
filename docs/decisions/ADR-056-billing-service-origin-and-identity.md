@@ -113,6 +113,11 @@ search (`infra/lib/billing-data-plane.ts`); the companion stack is retired after
 its data is copied. The SSM parameters stay the BFF's and upload origin's single
 source of the bucket and table names, so the cutover repoints them instead of
 editing the BFF. The origin, identity and access decisions above are unchanged.
+The worker's FSI search keeps the companion's external egress: it sends
+model-composed generic queries that pass `safe_query` (no digits, vocabulary
+allowlist, no private term) to the web search provider through the TTOBAK
+gateway. As with manual QA search (ADR-028), those checks reduce but do not
+eliminate customer billing context leaving the account.
 
 ## Alternatives and consequences
 

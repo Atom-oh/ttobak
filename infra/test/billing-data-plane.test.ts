@@ -92,7 +92,8 @@ describe('Billing data plane', () => {
       })],
     });
     template.hasResourceProperties('AWS::Events::Rule', {
-      EventPattern: Match.objectLike({ source: ['aws.s3'], 'detail-type': ['Object Created'] }),
+      EventPattern: Match.objectLike({ source: ['aws.s3'], 'detail-type': ['Object Created'],
+        detail: Match.objectLike({ reason: ['PutObject'] }) }),
       Targets: [Match.objectLike({
         EcsParameters: Match.objectLike({
           LaunchType: 'FARGATE',
@@ -132,7 +133,7 @@ describe('Billing data plane', () => {
     });
 
     const data = statementsOf('DataPlaneWorkerDataRole');
-    expect(data.map((s: any) => acts(s).join(','))).toEqual(['s3:GetObject,s3:PutObject', 's3:ListBucket', 's3:GetObject']);
+    expect(data.map((s: any) => acts(s).join(','))).toEqual(['s3:GetObject,s3:PutObject,s3:AbortMultipartUpload', 's3:ListBucket', 's3:GetObject']);
     expect(data[1].Condition).toEqual({ StringLike: { 's3:prefix': 'accounts/*' } });
     expect(JSON.stringify(data[0].Resource)).toContain('/accounts/*');
     expect(JSON.stringify(data[2].Resource)).toContain('/data/whats_new_feed.json');
@@ -154,6 +155,12 @@ describe('Billing data plane', () => {
       .filter((s: any) => s.Action === 'bedrock-agentcore:InvokeGateway');
     expect(gw).toEqual([{ Action: 'bedrock-agentcore:InvokeGateway', Effect: 'Allow', Resource: GATEWAY.arn }]);
     template.hasResourceProperties('AWS::Events::Rule', { ScheduleExpression: 'cron(30 15 * * ? *)' });
+    // the collector's object actions target the feed key only (bucket-level List* lets a missing feed read as NoSuchKey)
+    const collector = statementsOf('DataPlaneWhatsNewServiceRole');
+    const objectResources = collector.flatMap((s: any) => ([] as any[]).concat(s.Resource))
+      .map((r: any) => JSON.stringify(r)).filter((r: string) => r.includes('/'));
+    expect(objectResources.length).toBeGreaterThan(0);
+    for (const r of objectResources) expect(r).toContain('/data/whats_new_feed.json');
   });
 
   test('without a gateway the worker has no FSI search', () => {
