@@ -30,7 +30,7 @@ class SourceReader:
         # Identity and authorization metadata only, before notes/transcripts.
         metadata = self.table.get_item(
             Key=key, ConsistentRead=True,
-            ProjectionExpression='PK, SK, entityType, meetingId, userId, accountId, sharedToAccount, summaryPrivacy',
+            ProjectionExpression='PK, SK, entityType, meetingId, userId, accountId, sharedToAccount, summaryPrivacy, summaryAccountApproval',
         ).get('Item')
         metadata = dict(metadata) if metadata else metadata
         if not self._meeting_identity(metadata, key, owner, meeting_id):
@@ -40,7 +40,7 @@ class SourceReader:
         request = {'Key': key, 'ConsistentRead': True}
         if metadata.get('_summaryReadRestricted'):
             raw_fields = ('PK', 'SK', 'entityType', 'meetingId', 'userId', 'accountId', 'sharedToAccount',
-                          'summaryPrivacy', 'title', 'date', 'status', 'notes',
+                          'summaryPrivacy', 'summaryAccountApproval', 'title', 'date', 'status', 'notes',
                           'selectedTranscript', 'transcriptA', 'transcriptB', 'updatedAt')
             request['ExpressionAttributeNames'] = {f'#raw{i}': field for i, field in enumerate(raw_fields)}
             request['ProjectionExpression'] = ', '.join(request['ExpressionAttributeNames'])
@@ -53,10 +53,15 @@ class SourceReader:
         grant_fingerprint = metadata.get('_accountReadGrantFingerprint')
         if grant_fingerprint != record.get('_accountReadGrantFingerprint'):
             return None
+        approval_fingerprint = metadata.get('_summaryAccountApprovalFingerprint')
+        if approval_fingerprint != record.get('_summaryAccountApprovalFingerprint'):
+            return None
         restricted = bool(metadata.get('_summaryReadRestricted') or record.get('_summaryReadRestricted'))
         fields = source_fields(identity, project_meeting(record,restricted))
         if grant_fingerprint:
             fields['_accountReadGrantFingerprint'] = grant_fingerprint
+        if approval_fingerprint:
+            fields['_summaryAccountApprovalFingerprint'] = approval_fingerprint
         if restricted:
             # User-scoped revision changes invalidate earlier derived history
             # even when a prior rendered field happened to be empty.
@@ -171,7 +176,8 @@ class SourceReader:
         # current hierarchy grant. Keep both identities for binary hydration.
         index_revision = source_revision(
             identity, {name: value for name, value in fields.items()
-                       if name != '_accountReadGrantFingerprint'}, objects, outcome)
+                       if name not in ('_accountReadGrantFingerprint',
+                                       '_summaryAccountApprovalFingerprint')}, objects, outcome)
         revision = source_revision(identity, fields, objects, outcome)
         return {'identity': identity, 'fields': fields, 'objects': objects, 'revision': revision,
                 'indexRevision': index_revision,
@@ -181,7 +187,7 @@ class SourceReader:
         fields, identity = snapshot['fields'], snapshot['identity']
         parts = []
         if fields.get('summaryReadRestriction'):
-            parts.append('소유자가 공유용 회의록을 재생성하기 전에는 저장된 요약과 작업 항목을 사용할 수 없습니다. 아래는 현재 회의의 원문과 사용자 메모입니다.')
+            parts.append('저장된 요약과 작업 항목은 현재 읽기 제한이 있습니다. 소유자에게 Account 공유 업데이트를 요청하세요. 아래는 현재 회의의 원문과 사용자 메모입니다.')
         if fields.get('title'):
             parts.append('제목: ' + fields['title'])
         for name, title in (('notes', '사용자 메모'), ('content', '저장된 요약'), ('actionItems', '저장된 작업 항목')):
