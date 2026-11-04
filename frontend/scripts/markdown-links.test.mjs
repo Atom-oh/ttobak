@@ -103,6 +103,7 @@ test('the actual QA answer preserves source links and displays bounded news prov
     'remark-gfm': { default: remarkGfm }, 'next/link': { default: NextLink },
     '@/lib/qaSources': load('../src/lib/qaSources.ts'),
     '@/lib/markdownUrlTransform': transform,
+    './chatMarkdown': load('../src/components/qa/chatMarkdown.tsx', { 'react/jsx-runtime': jsx }),
   });
   const output = renderToStaticMarkup(React.createElement(QAChatMessage, {
     question: '공개 뉴스 테스트',
