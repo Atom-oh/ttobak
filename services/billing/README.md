@@ -1,7 +1,16 @@
 # Billing service
 
-Billing Insight BFF, served under `/api/billing` and run as a Lambda Web Function
-(entry point and auth arrive in later tasks of the Phase 1 plan).
+Billing Insight inside TTOBAK (ADR-056). Three parts:
+
+- `bff/`: Express BFF served under `/api/billing` as a Lambda Web Function
+  (`index.js`). `lib/auth.js` verifies the TTOBAK Cognito JWT from
+  `Authorization: Bearer` only; `lib/access.js` grants an account to its direct
+  TTOBAK members only.
+- `page/`: dashboard and upload pages, served at `/billing-app/` (below).
+- `worker/`: Python pipeline that turns uploaded COT/CUR exports into dashboard
+  datasets, agent notes and the report. See [worker/README.md](worker/README.md).
+  The worker code and its image definition are in the repository; no CDK resource
+  runs it yet.
 
 ## Provenance
 
@@ -11,8 +20,8 @@ Billing Insight BFF, served under `/api/billing` and run as a Lambda Web Functio
 
 Changes against the source in this import: pages, cookies, OAuth hand-off and the
 Lambda client are removed; every route moves under `/api/billing`; `createApp`
-takes an injected `authenticate` middleware. `lib/access.js` is still the
-imported hierarchy version and is rewritten later in Phase 1.
+takes an injected `authenticate` middleware. `lib/access.js` was later rewritten
+from the imported hierarchy rule to direct membership.
 
 ## Tests
 
