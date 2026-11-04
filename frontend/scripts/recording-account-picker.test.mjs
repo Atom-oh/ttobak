@@ -25,7 +25,7 @@ function deferred() {
 
 // Execute real component code and effects with controlled transport completions.
 // The harness follows the repository's existing node:test lifecycle fixtures.
-function fixture(component, { accounts, documents = async () => ({ documents: [] }) }) {
+function fixture(component, { accounts, documents = async () => ({ documents: [] }), put }) {
   const slots = [];
   let cursor = 0, effects = [], userId = 'member', membershipRevision = 0;
   const calls = { accounts: [], documents: [] };
@@ -72,7 +72,7 @@ function fixture(component, { accounts, documents = async () => ({ documents: []
       docApi: { list: docType => {
         calls.documents.push(docType);
         return documents(calls.documents.length);
-      } },
+      }, put: payload => put(payload) },
     },
     '@/lib/accountAccess': accountAccess,
     '@/lib/meetingReferences': {
@@ -109,7 +109,7 @@ function fixture(component, { accounts, documents = async () => ({ documents: []
   const nodes = node => !node || typeof node !== 'object' ? []
     : [node, ...[node.props?.children].flat(Infinity).flatMap(nodes)];
   return {
-    calls,
+    calls, props,
     html: () => renderToStaticMarkup(render()),
     find: predicate => nodes(render()).find(predicate),
     async start() { render(); await tick(); },
@@ -253,4 +253,50 @@ test('reference old request completion cannot replace a newer authenticated user
   await tick();
   assert.match(f.html(), /<option value="direct">Direct Account<\/option>/);
   assert.doesNotMatch(f.html(), /Old Account/);
+});
+
+for (const refresh of ['membership', 'retry']) {
+  test(`preparation save completion preserves the latest catalog after ${refresh}`, async () => {
+    const saved = deferred();
+    const f = fixture('preparation', {
+      accounts: async () => ({ accounts: [direct] }),
+      documents: async attempt => {
+        if (refresh === 'retry' && attempt === 1) throw new Error('Document list unavailable');
+        return { documents: [{ docId: `list-${attempt}`, title: `Current list ${attempt}` }] };
+      },
+      put: () => saved.promise,
+    });
+    f.props.value = 'Prepared notes';
+    await f.start();
+    const saving = f.find(node => node.type === 'button' && node.props.children === '개인 준비 문서로 보관').props.onClick();
+    if (refresh === 'membership') {
+      await f.revise();
+    } else {
+      f.find(node => node.type === 'button' && node.props.children === '다시 불러오기').props.onClick();
+      await f.flush();
+    }
+    assert.match(f.html(), /Current list 2/);
+    saved.resolve({ docId: 'saved', title: 'Saved preparation' });
+    await saving;
+    assert.match(f.html(), /aria-label="저장한 준비 문서"/);
+    assert.match(f.html(), /Current list 2/);
+    assert.match(f.html(), /Saved preparation/);
+  });
+}
+
+test('preparation save from a previous user cannot enter the new user catalog or receipt', async () => {
+  const saved = deferred();
+  const f = fixture('preparation', {
+    accounts: async () => ({ accounts: [direct] }),
+    documents: async attempt => ({ documents: [{ docId: `list-${attempt}`, title: `User list ${attempt}` }] }),
+    put: () => saved.promise,
+  });
+  f.props.value = 'Prepared notes';
+  await f.start();
+  const saving = f.find(node => node.type === 'button' && node.props.children === '개인 준비 문서로 보관').props.onClick();
+  await f.switchUser('new-member');
+  saved.resolve({ docId: 'previous-user', title: 'Previous user preparation' });
+  await saving;
+  assert.match(f.html(), /User list 2/);
+  assert.doesNotMatch(f.html(), /Previous user preparation|\/docs\/previous-user/);
 });
