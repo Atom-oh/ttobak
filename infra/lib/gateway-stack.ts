@@ -668,7 +668,7 @@ export class GatewayStack extends cdk.Stack {
         KB_BUCKET_NAME: props.kbBucket?.bucketName || '',
         KB_ID: props.knowledgeBaseId || '',
         BEDROCK_MODEL_ID: 'global.anthropic.claude-sonnet-5-5',
-        DETECT_MODEL_ID: 'qwen.qwen3-32b-v1:0',
+        DETECT_MODEL_ID: 'global.anthropic.claude-haiku-5-5',
         MAX_TOOL_ROUNDS: '5',
         KB_CACHE_TTL_SECONDS: '600',
         SHARED_MEETINGS_CACHE_TTL_SECONDS: '300',

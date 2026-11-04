@@ -1241,6 +1241,26 @@ class TestParseDetectedQuestions(unittest.TestCase):
         self.assertEqual(questions, ['같은 질문', '다른 질문'])
         self.assertEqual(proactive, ['같은 질문'])  # first occurrence's flag wins
 
+    def test_code_fenced_array_parses(self):
+        items = json.dumps([{'q': 'EKS 컨트롤 플레인 비용은?', 'search': True}], ensure_ascii=False)
+        for raw in (f'```json\n{items}\n```', f'```\n{items}\n```', f'  ```json {items} ```  '):
+            self.assertEqual(handler.parse_detected_questions(raw), (['EKS 컨트롤 플레인 비용은?'], ['EKS 컨트롤 플레인 비용은?']), raw)
+        self.assertEqual(handler.parse_detected_questions('```json\nnot json\n```'), ([], []))
+
+
+class TestDetectQuestionsCall(unittest.TestCase):
+    """The detect call uses the configured Claude model without temperature (Claude 5.x rejects it)."""
+
+    @mock.patch.object(handler, 'bedrock_runtime')
+    def test_converse_request(self, mock_bedrock):
+        mock_bedrock.converse.return_value = {'output': {'message': {'content': [
+            {'text': '[{"q": "Karpenter Spot 중단 처리는?", "search": true}]'}]}}}
+        resp = handler.handle_detect_questions({'transcript': '고객: Karpenter로 Spot을 쓰고 싶어요.'})
+        kw = mock_bedrock.converse.call_args.kwargs
+        self.assertEqual(kw['modelId'], handler.DETECT_MODEL_ID)
+        self.assertNotIn('temperature', kw['inferenceConfig'])
+        self.assertEqual(json.loads(resp['body'])['questions'], ['Karpenter Spot 중단 처리는?'])
+
 
 class TestWebSearchTool(unittest.TestCase):
     """format_web_results must keep a transport/config failure distinguishable
