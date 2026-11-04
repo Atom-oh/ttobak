@@ -5,13 +5,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/ttobak/backend/internal/fanout"
 )
+
+// newsReadConcurrency bounds concurrent BatchGetItem chunks per news read.
+const newsReadConcurrency = 4
 
 // NewsReadKey identifies only canonical crawler configuration or document rows.
 // Keeping raw attributes preserves absent fields and exact numeric values for
@@ -68,53 +73,73 @@ func (r *CrawlerRepository) ReadNewsItems(ctx context.Context, keys []NewsReadKe
 		return types.KeysAndAttributes{Keys: keys, ConsistentRead: aws.Bool(true),
 			ProjectionExpression: projection.Projection(), ExpressionAttributeNames: projection.Names()}
 	}
+	// Chunks are independent reads; up to newsReadConcurrency run at once.
+	// The shared byte budget and response-identity checks hold a lock, so a
+	// duplicated or oversized response fails exactly as it did sequentially.
+	var mu sync.Mutex
 	totalBytes := 0
-	for start := 0; start < len(pending); start += 100 {
-		end := min(start+100, len(pending))
-		batch := batchFor(pending[start:end])
+	accept := func(row map[string]types.AttributeValue) error {
+		encoded, err := json.Marshal(row)
+		if err != nil {
+			return fmt.Errorf("encode current news state: %w", err)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		totalBytes += len(encoded)
+		if totalBytes > 8*1024*1024 {
+			return fmt.Errorf("current news state exceeds read budget")
+		}
+		pk, pkOK := row["PK"].(*types.AttributeValueMemberS)
+		sk, skOK := row["SK"].(*types.AttributeValueMemberS)
+		if !pkOK || !skOK || !strings.HasPrefix(pk.Value, "CRAWLER#") {
+			return fmt.Errorf("invalid news state response")
+		}
+		key := NewsReadKey{SourceID: strings.TrimPrefix(pk.Value, "CRAWLER#"), SortKey: sk.Value}
+		if !selection[key] || rows[key] != nil {
+			return fmt.Errorf("unexpected news state response")
+		}
+		rows[key] = row
+		return nil
+	}
+	readChunk := func(ctx context.Context, keys []map[string]types.AttributeValue) error {
+		batch := batchFor(keys)
 		for attempt := 0; ; attempt++ {
 			response, err := r.client.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{
 				RequestItems: map[string]types.KeysAndAttributes{r.tableName: batch},
 			})
 			if err != nil {
-				return nil, fmt.Errorf("read current news state: %w", err)
+				return fmt.Errorf("read current news state: %w", err)
 			}
 			for _, row := range response.Responses[r.tableName] {
-				encoded, err := json.Marshal(row)
-				if err != nil {
-					return nil, fmt.Errorf("encode current news state: %w", err)
+				if err := accept(row); err != nil {
+					return err
 				}
-				totalBytes += len(encoded)
-				if totalBytes > 8*1024*1024 {
-					return nil, fmt.Errorf("current news state exceeds read budget")
-				}
-				pk, pkOK := row["PK"].(*types.AttributeValueMemberS)
-				sk, skOK := row["SK"].(*types.AttributeValueMemberS)
-				if !pkOK || !skOK || !strings.HasPrefix(pk.Value, "CRAWLER#") {
-					return nil, fmt.Errorf("invalid news state response")
-				}
-				key := NewsReadKey{SourceID: strings.TrimPrefix(pk.Value, "CRAWLER#"), SortKey: sk.Value}
-				if !selection[key] || rows[key] != nil {
-					return nil, fmt.Errorf("unexpected news state response")
-				}
-				rows[key] = row
 			}
 			unprocessed := response.UnprocessedKeys[r.tableName].Keys
 			if len(unprocessed) == 0 {
-				break
+				return nil
 			}
 			if attempt >= 2 {
-				return nil, fmt.Errorf("current news state read incomplete")
+				return fmt.Errorf("current news state read incomplete")
 			}
 			batch = batchFor(unprocessed)
 			timer := time.NewTimer(time.Duration(attempt+1) * 25 * time.Millisecond)
 			select {
 			case <-ctx.Done():
 				timer.Stop()
-				return nil, ctx.Err()
+				return ctx.Err()
 			case <-timer.C:
 			}
 		}
+	}
+	chunks := (len(pending) + 99) / 100
+	errs := make([]error, chunks)
+	stop := fanout.Ordered(ctx, chunks, newsReadConcurrency, func(ctx context.Context, c int) error {
+		errs[c] = readChunk(ctx, pending[c*100:min(c*100+100, len(pending))])
+		return errs[c]
+	})
+	if stop < chunks {
+		return nil, errs[stop]
 	}
 	return rows, nil
 }

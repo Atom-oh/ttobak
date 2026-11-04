@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/ttobak/backend/internal/fanout"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 )
@@ -239,57 +240,115 @@ func (s *ProjectService) ListMyProjects(ctx context.Context, userID string, join
 	// candidateAccountIDs tracks which account(s) surfaced each candidate so
 	// the fail-closed check below can accept it if ANY of them is still a
 	// canonical link, not just the first one found.
-	candidateAccountIDs := make(map[string][]string)
-	for _, accountID := range readableAccounts {
-		refs, err := s.repo.ListProjectRefsForAccount(ctx, accountID)
+	// Each slot keeps only the referenced project IDs: the full reverse-index
+	// rows (project names included) are dropped inside the fan-out call, so
+	// retained memory stays bounded by the in-flight limit as in the sequential
+	// loop, which held one account's rows at a time.
+	accountRefs := make([][]string, len(readableAccounts))
+	refErrs := make([]error, len(readableAccounts))
+	stop := fanout.Ordered(ctx, len(readableAccounts), listReadConcurrency, func(ctx context.Context, k int) error {
+		refs, err := s.repo.ListProjectRefsForAccount(ctx, readableAccounts[k])
 		if err != nil {
-			return nil, err
+			refErrs[k] = err
+			return err
 		}
-		for _, ref := range refs {
-			if seen[ref.ProjectID] {
+		ids := make([]string, len(refs))
+		for i, ref := range refs {
+			ids[i] = ref.ProjectID
+		}
+		accountRefs[k] = ids
+		return nil
+	})
+	if stop < len(readableAccounts) {
+		return nil, refErrs[stop]
+	}
+	candidateAccountIDs := make(map[string][]string)
+	candidateOrder := []string{}
+	for k, accountID := range readableAccounts {
+		for _, projectID := range accountRefs[k] {
+			if seen[projectID] {
 				continue
 			}
-			candidateAccountIDs[ref.ProjectID] = append(candidateAccountIDs[ref.ProjectID], accountID)
+			if _, ok := candidateAccountIDs[projectID]; !ok {
+				candidateOrder = append(candidateOrder, projectID)
+			}
+			candidateAccountIDs[projectID] = append(candidateAccountIDs[projectID], accountID)
 		}
 	}
-	for projectID, accountIDs := range candidateAccountIDs {
-		project, err := s.repo.GetProject(ctx, projectID)
+	// Each candidate is verified independently (canonical project read,
+	// canonical AccountIDs link, then full read authorization), so the checks
+	// run concurrently and are replayed in discovery order. Candidates were
+	// previously visited in map order, so their relative order was never
+	// defined; the first failure in discovery order is returned.
+	// Each slot keeps only the summary: the full record (Description included)
+	// is dropped as soon as its candidate is verified, so retained memory stays
+	// bounded by the in-flight limit as in the sequential loop.
+	verified := make([]*model.ProjectSummary, len(candidateOrder))
+	candidateErrs := make([]error, len(candidateOrder))
+	stop = fanout.Ordered(ctx, len(candidateOrder), listReadConcurrency, func(ctx context.Context, k int) error {
+		project, err := s.verifyInheritedProjectCandidate(ctx, userID, candidateOrder[k], candidateAccountIDs[candidateOrder[k]])
 		if err != nil {
-			return nil, err
+			candidateErrs[k] = err
+			return err
 		}
-		if project == nil {
+		if project != nil {
+			verified[k] = &model.ProjectSummary{ProjectID: project.ProjectID, Name: project.Name, Stage: project.Stage, SfdcOpptyID: project.SfdcOpptyID}
+		}
+		return nil
+	})
+	if stop < len(candidateOrder) {
+		return nil, candidateErrs[stop]
+	}
+	for k, projectID := range candidateOrder {
+		summary := verified[k]
+		if summary == nil {
 			continue
 		}
-		// A reverse-index ref is a candidate only -- never trust one without
-		// checking the canonical AccountIDs set (same principle as
-		// ListAccountProjects). A stale ACCOUNT#/PROJECTREF# must never
-		// surface a project the user no longer actually has account-inherited
-		// access to.
-		linked := false
-		for _, accountID := range accountIDs {
-			for _, linkedID := range project.AccountIDs {
-				if linkedID == accountID {
-					linked = true
-					break
-				}
-			}
-			if linked {
+		seen[projectID] = true
+		out = append(out, *summary)
+	}
+	return out, nil
+}
+
+// verifyInheritedProjectCandidate returns the canonical project when a
+// reverse-index candidate is still linked to one of the accounts that surfaced
+// it and the caller passes requireProjectReadAccess; nil when it must be
+// skipped; an error for any other failure.
+func (s *ProjectService) verifyInheritedProjectCandidate(ctx context.Context, userID, projectID string, accountIDs []string) (*model.Project, error) {
+	project, err := s.repo.GetProject(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	if project == nil {
+		return nil, nil
+	}
+	// A reverse-index ref is a candidate only -- never trust one without
+	// checking the canonical AccountIDs set (same principle as
+	// ListAccountProjects). A stale ACCOUNT#/PROJECTREF# must never
+	// surface a project the user no longer actually has account-inherited
+	// access to.
+	linked := false
+	for _, accountID := range accountIDs {
+		for _, linkedID := range project.AccountIDs {
+			if linkedID == accountID {
+				linked = true
 				break
 			}
 		}
-		if !linked {
-			continue
+		if linked {
+			break
 		}
-		if _, _, err := s.requireProjectReadAccess(ctx, userID, projectID); err != nil {
-			if errors.Is(err, ErrForbidden) || errors.Is(err, ErrNotFound) {
-				continue
-			}
-			return nil, err
-		}
-		seen[projectID] = true
-		out = append(out, model.ProjectSummary{ProjectID: project.ProjectID, Name: project.Name, Stage: project.Stage, SfdcOpptyID: project.SfdcOpptyID})
 	}
-	return out, nil
+	if !linked {
+		return nil, nil
+	}
+	if _, _, err := s.requireProjectReadAccess(ctx, userID, projectID); err != nil {
+		if errors.Is(err, ErrForbidden) || errors.Is(err, ErrNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return project, nil
 }
 
 func (s *ProjectService) UpdateProject(ctx context.Context, userID, projectID string, req *model.UpdateProjectRequest) (*model.ProjectResponse, error) {

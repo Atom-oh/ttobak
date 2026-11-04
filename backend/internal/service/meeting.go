@@ -492,10 +492,11 @@ func (s *MeetingService) listMeetingsFilteredPage(ctx context.Context, params re
 			for _, m := range meetings {
 				meetingMap[m.MeetingID] = m
 			}
+			pre := s.prefetchAccountShareReads(ctx, result.Shares, meetingMap, userID, params.AccountIDs != nil)
 			// memberCache avoids a duplicate GetMember call per meeting when
 			// the same account appears more than once in this page's shares.
 			memberCache := make(map[string]*accountReadGrant)
-			for _, share := range result.Shares {
+			for i, share := range result.Shares {
 				meeting, ok := meetingMap[share.MeetingID]
 				if !ok {
 					continue
@@ -511,7 +512,10 @@ func (s *MeetingService) listMeetingsFilteredPage(ctx context.Context, params re
 				// its title/summary here despite checkAccess correctly blocking
 				// the detail view for the same row.
 				if share.Origin == model.ShareOriginAccount {
-					meeting, err = s.currentListMeeting(ctx, share.OwnerID, share.MeetingID)
+					// The canonical re-read for this share was issued by
+					// prefetchAccountShareReads; replaying it here in share order
+					// returns the same first error a sequential loop would.
+					meeting, err = pre.current(ctx, s, i, share)
 					if err != nil {
 						return nil, err
 					}
@@ -524,7 +528,7 @@ func (s *MeetingService) listMeetingsFilteredPage(ctx context.Context, params re
 					member, cached := memberCache[meeting.AccountID]
 					if !cached {
 						var err error
-						member, err = resolveAccountReadGrant(ctx, s.repo, meeting.AccountID, userID)
+						member, err = pre.grant(ctx, s.repo, meeting.AccountID, userID)
 						if err != nil {
 							if params.AccountIDs != nil {
 								return nil, fmt.Errorf("check shared meeting membership: %w", err)
@@ -556,17 +560,8 @@ func (s *MeetingService) listMeetingsFilteredPage(ctx context.Context, params re
 				response.Meetings = append(response.Meetings, item)
 				listed[meeting.MeetingID] = true
 			}
-			for _, before := range memberCache {
-				if before == nil {
-					continue
-				}
-				valid, err := revalidateAccountReadGrant(ctx, s.repo, before, userID)
-				if err != nil {
-					return nil, err
-				}
-				if !valid {
-					return nil, ErrForbidden
-				}
+			if err := revalidateAccountReadGrants(ctx, s.repo, memberCache, userID, ErrForbidden); err != nil {
+				return nil, err
 			}
 		} else {
 			return nil, fmt.Errorf("failed to load shared meetings: %w", err)
