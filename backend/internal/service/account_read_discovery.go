@@ -30,7 +30,7 @@ type accountReadChildrenRepo interface {
 // trees fail instead of presenting a silently incomplete collection. Hints are
 // additional candidate roots and never grant access.
 func listReadableAccountIDs(ctx context.Context, repo accountReadMembershipRepo, userID string, hints []string) ([]string, error) {
-	candidates := append([]string{}, hints...)
+	candidateIDs := append([]string{}, hints...)
 	if nav, ok := repo.(accountReadNavigationRepo); ok {
 		after := ""
 		for pages := 0; ; pages++ {
@@ -48,7 +48,7 @@ func listReadableAccountIDs(ctx context.Context, repo accountReadMembershipRepo,
 				if !readingID.MatchString(id) || id <= after {
 					return nil, ErrReadingData
 				}
-				candidates = append(candidates, id)
+				candidateIDs = append(candidateIDs, id)
 			}
 			if page.NextID == "" {
 				break
@@ -65,10 +65,11 @@ func listReadableAccountIDs(ctx context.Context, repo accountReadMembershipRepo,
 		}
 		for _, m := range members {
 			if m.UserID == userID {
-				candidates = append(candidates, m.AccountID)
+				candidateIDs = append(candidateIDs, m.AccountID)
 			}
 		}
 	}
+	candidates := prefetchReadableCandidates(ctx, repo, userID, candidateIDs)
 	seen := map[string]bool{}
 	grants := map[string]*accountReadGrant{}
 	queue := []string{}
@@ -83,18 +84,14 @@ func listReadableAccountIDs(ctx context.Context, repo accountReadMembershipRepo,
 		if len(seen) > 10000 {
 			return ErrReadingData
 		}
-		g, err := resolveAccountReadGrant(ctx, repo, id, userID)
+		g, a, err := candidates.read(ctx, id)
 		if err != nil {
 			return err
 		}
 		if g == nil {
 			return nil
 		}
-		if hierarchy, ok := repo.(accountReadHierarchyRepo); ok {
-			a, err := hierarchy.GetAccount(ctx, id)
-			if err != nil {
-				return err
-			}
+		if _, ok := repo.(accountReadHierarchyRepo); ok {
 			if a == nil {
 				return nil
 			}
@@ -109,7 +106,7 @@ func listReadableAccountIDs(ctx context.Context, repo accountReadMembershipRepo,
 		queue = append(queue, id)
 		return nil
 	}
-	for _, id := range candidates {
+	for _, id := range candidateIDs {
 		if err := add(id); err != nil {
 			return nil, err
 		}
@@ -158,15 +155,11 @@ func listReadableAccountIDs(ctx context.Context, repo accountReadMembershipRepo,
 			}
 		}
 	}
+	if err := revalidateAccountReadGrants(ctx, repo, grants, userID, ErrStaleReadingCursor); err != nil {
+		return nil, err
+	}
 	ids := make([]string, 0, len(grants))
-	for id, g := range grants {
-		valid, err := revalidateAccountReadGrant(ctx, repo, g, userID)
-		if err != nil {
-			return nil, err
-		}
-		if !valid {
-			return nil, ErrStaleReadingCursor
-		}
+	for id := range grants {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)

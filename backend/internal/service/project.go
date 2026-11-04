@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/ttobak/backend/internal/fanout"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 )
@@ -239,57 +240,92 @@ func (s *ProjectService) ListMyProjects(ctx context.Context, userID string, join
 	// candidateAccountIDs tracks which account(s) surfaced each candidate so
 	// the fail-closed check below can accept it if ANY of them is still a
 	// canonical link, not just the first one found.
+	accountRefs := make([][]model.ProjectRef, len(readableAccounts))
+	refErrs := make([]error, len(readableAccounts))
+	stop := fanout.Ordered(ctx, len(readableAccounts), listReadConcurrency, func(ctx context.Context, k int) error {
+		accountRefs[k], refErrs[k] = s.repo.ListProjectRefsForAccount(ctx, readableAccounts[k])
+		return refErrs[k]
+	})
+	if stop < len(readableAccounts) {
+		return nil, refErrs[stop]
+	}
 	candidateAccountIDs := make(map[string][]string)
-	for _, accountID := range readableAccounts {
-		refs, err := s.repo.ListProjectRefsForAccount(ctx, accountID)
-		if err != nil {
-			return nil, err
-		}
-		for _, ref := range refs {
+	candidateOrder := []string{}
+	for k, accountID := range readableAccounts {
+		for _, ref := range accountRefs[k] {
 			if seen[ref.ProjectID] {
 				continue
+			}
+			if _, ok := candidateAccountIDs[ref.ProjectID]; !ok {
+				candidateOrder = append(candidateOrder, ref.ProjectID)
 			}
 			candidateAccountIDs[ref.ProjectID] = append(candidateAccountIDs[ref.ProjectID], accountID)
 		}
 	}
-	for projectID, accountIDs := range candidateAccountIDs {
-		project, err := s.repo.GetProject(ctx, projectID)
-		if err != nil {
-			return nil, err
-		}
+	// Each candidate is verified independently (canonical project read,
+	// canonical AccountIDs link, then full read authorization), so the checks
+	// run concurrently and are replayed in discovery order. Candidates were
+	// previously visited in map order, so their relative order was never
+	// defined; the first failure in discovery order is returned.
+	verified := make([]*model.Project, len(candidateOrder))
+	candidateErrs := make([]error, len(candidateOrder))
+	stop = fanout.Ordered(ctx, len(candidateOrder), listReadConcurrency, func(ctx context.Context, k int) error {
+		verified[k], candidateErrs[k] = s.verifyInheritedProjectCandidate(ctx, userID, candidateOrder[k], candidateAccountIDs[candidateOrder[k]])
+		return candidateErrs[k]
+	})
+	if stop < len(candidateOrder) {
+		return nil, candidateErrs[stop]
+	}
+	for k, projectID := range candidateOrder {
+		project := verified[k]
 		if project == nil {
 			continue
-		}
-		// A reverse-index ref is a candidate only -- never trust one without
-		// checking the canonical AccountIDs set (same principle as
-		// ListAccountProjects). A stale ACCOUNT#/PROJECTREF# must never
-		// surface a project the user no longer actually has account-inherited
-		// access to.
-		linked := false
-		for _, accountID := range accountIDs {
-			for _, linkedID := range project.AccountIDs {
-				if linkedID == accountID {
-					linked = true
-					break
-				}
-			}
-			if linked {
-				break
-			}
-		}
-		if !linked {
-			continue
-		}
-		if _, _, err := s.requireProjectReadAccess(ctx, userID, projectID); err != nil {
-			if errors.Is(err, ErrForbidden) || errors.Is(err, ErrNotFound) {
-				continue
-			}
-			return nil, err
 		}
 		seen[projectID] = true
 		out = append(out, model.ProjectSummary{ProjectID: project.ProjectID, Name: project.Name, Stage: project.Stage, SfdcOpptyID: project.SfdcOpptyID})
 	}
 	return out, nil
+}
+
+// verifyInheritedProjectCandidate returns the canonical project when a
+// reverse-index candidate is still linked to one of the accounts that surfaced
+// it and the caller passes requireProjectReadAccess; nil when it must be
+// skipped; an error for any other failure.
+func (s *ProjectService) verifyInheritedProjectCandidate(ctx context.Context, userID, projectID string, accountIDs []string) (*model.Project, error) {
+	project, err := s.repo.GetProject(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	if project == nil {
+		return nil, nil
+	}
+	// A reverse-index ref is a candidate only -- never trust one without
+	// checking the canonical AccountIDs set (same principle as
+	// ListAccountProjects). A stale ACCOUNT#/PROJECTREF# must never
+	// surface a project the user no longer actually has account-inherited
+	// access to.
+	linked := false
+	for _, accountID := range accountIDs {
+		for _, linkedID := range project.AccountIDs {
+			if linkedID == accountID {
+				linked = true
+				break
+			}
+		}
+		if linked {
+			break
+		}
+	}
+	if !linked {
+		return nil, nil
+	}
+	if _, _, err := s.requireProjectReadAccess(ctx, userID, projectID); err != nil {
+		if errors.Is(err, ErrForbidden) || errors.Is(err, ErrNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return project, nil
 }
 
 func (s *ProjectService) UpdateProject(ctx context.Context, userID, projectID string, req *model.UpdateProjectRequest) (*model.ProjectResponse, error) {

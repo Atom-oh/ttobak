@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/ttobak/backend/internal/model"
@@ -12,6 +13,7 @@ import (
 type vaultGrantBoundsRepo struct {
 	*mockVaultRepo
 	grants         map[string]*model.AccountMember
+	memberMu       sync.Mutex // list paths read memberships concurrently
 	memberReads    int
 	documentReads  int
 	afterList      func(string)
@@ -29,9 +31,12 @@ func (r *vaultGrantBoundsRepo) ListChildAccountIDsPage(_ context.Context, parent
 }
 
 func (r *vaultGrantBoundsRepo) GetMember(_ context.Context, account, user string) (*model.AccountMember, error) {
+	r.memberMu.Lock()
 	r.memberReads++
-	if r.memberReadErr != nil {
-		return nil, r.memberReadErr
+	readErr := r.memberReadErr
+	r.memberMu.Unlock()
+	if readErr != nil {
+		return nil, readErr
 	}
 	m := r.grants[account+"/"+user]
 	if m == nil {

@@ -196,10 +196,11 @@ func (s *MeetingService) listTeamSharedMeetingsForFilter(ctx context.Context, us
 				byID[meeting.MeetingID] = meeting
 			}
 		}
-		for _, key := range keys {
+		pre := s.prefetchTeamPageReads(ctx, keys, byID, listed, userID, id)
+		for k, key := range keys {
 			meeting := byID[key.MeetingID]
 			if meeting != nil {
-				meeting, err = s.currentListMeeting(ctx, key.OwnerID, key.MeetingID)
+				meeting, err = pre.current(ctx, s, k, key)
 				if err != nil {
 					return nil, err
 				}
@@ -208,7 +209,7 @@ func (s *MeetingService) listTeamSharedMeetingsForFilter(ctx context.Context, us
 			if meeting == nil || listed[meeting.MeetingID] || meeting.UserID == userID || !meeting.SharedToAccount || meeting.AccountID != id {
 				continue
 			}
-			share, err := s.repo.GetShare(ctx, userID, meeting.MeetingID)
+			share, err := pre.share(ctx, s, k, userID, meeting.MeetingID)
 			if err != nil {
 				return nil, fmt.Errorf("resolve existing meeting share: %w", err)
 			}
