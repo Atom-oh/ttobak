@@ -48,7 +48,7 @@ function frontend(context: Record<string, unknown>, beforeSynth?: (app: cdk.App)
   const env = { account: ACCOUNT, region: 'ap-northeast-2' };
   const deps = new cdk.Stack(app, 'MockStack', { env });
   const edgeFn = new lambda.Function(deps, 'EdgeFn', {
-    runtime: lambda.Runtime.NODEJS_20_X,
+    runtime: lambda.Runtime.NODEJS_24_X,
     handler: 'index.handler',
     code: lambda.Code.fromInline('exports.handler = async () => {};'),
   });
