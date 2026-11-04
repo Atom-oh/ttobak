@@ -2,10 +2,6 @@
 
 Status: Historical implementation plan; deployment acceptance is recorded separately.
 
-Checked tasks record implementation work across the pending companion branches,
-not changes or acceptance on this Python-reader-only revision. The Go, API,
-frontend, CDK and writer-policy implementation remains in companion PR #573.
-
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Share current completed notes and Insights with an Account without regeneration.
