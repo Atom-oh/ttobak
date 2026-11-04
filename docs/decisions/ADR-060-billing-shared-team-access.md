@@ -13,4 +13,4 @@ The discovery IAM grant restricts base-table Query to `ACCOUNT#*` partitions and
 
 The Account frontend shows Billing only when the authenticated BFF returns an authorized entry. Other Account edit controls retain direct-membership restrictions. JWT verification, CSRF checks, Account-scoped multipart keys and CloudFront ingress remain.
 
-Release requires exact-head reviews, tests, the content gate and deployment of only BillingStack plus frontend. Deployment and authenticated-user acceptance require separate evidence; this decision alone proves neither.
+Release requires exact-head reviews, tests and the content gate, followed by BillingStack, frontend and the companion ECS worker delivery under the [Billing release runbook](../runbooks/billing-release.md). Deployment and authenticated-user acceptance require separate evidence.
