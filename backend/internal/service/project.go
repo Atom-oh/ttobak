@@ -267,22 +267,32 @@ func (s *ProjectService) ListMyProjects(ctx context.Context, userID string, join
 	// run concurrently and are replayed in discovery order. Candidates were
 	// previously visited in map order, so their relative order was never
 	// defined; the first failure in discovery order is returned.
-	verified := make([]*model.Project, len(candidateOrder))
+	// Each slot keeps only the summary: the full record (Description included)
+	// is dropped as soon as its candidate is verified, so retained memory stays
+	// bounded by the in-flight limit as in the sequential loop.
+	verified := make([]*model.ProjectSummary, len(candidateOrder))
 	candidateErrs := make([]error, len(candidateOrder))
 	stop = fanout.Ordered(ctx, len(candidateOrder), listReadConcurrency, func(ctx context.Context, k int) error {
-		verified[k], candidateErrs[k] = s.verifyInheritedProjectCandidate(ctx, userID, candidateOrder[k], candidateAccountIDs[candidateOrder[k]])
-		return candidateErrs[k]
+		project, err := s.verifyInheritedProjectCandidate(ctx, userID, candidateOrder[k], candidateAccountIDs[candidateOrder[k]])
+		if err != nil {
+			candidateErrs[k] = err
+			return err
+		}
+		if project != nil {
+			verified[k] = &model.ProjectSummary{ProjectID: project.ProjectID, Name: project.Name, Stage: project.Stage, SfdcOpptyID: project.SfdcOpptyID}
+		}
+		return nil
 	})
 	if stop < len(candidateOrder) {
 		return nil, candidateErrs[stop]
 	}
 	for k, projectID := range candidateOrder {
-		project := verified[k]
-		if project == nil {
+		summary := verified[k]
+		if summary == nil {
 			continue
 		}
 		seen[projectID] = true
-		out = append(out, model.ProjectSummary{ProjectID: project.ProjectID, Name: project.Name, Stage: project.Stage, SfdcOpptyID: project.SfdcOpptyID})
+		out = append(out, *summary)
 	}
 	return out, nil
 }
