@@ -90,6 +90,21 @@ describe('Dedicated connector edge boundary', () => {
     }));
     expect(accepted.uri).toBe('/api/mcp');
   });
+  test('writer client reaches only GET on the exact bounded Billing reading route', async () => {
+    const active = edgeHandler(true, true);
+    const headers = { host: 'ttobak.example.com', authorization: `Bearer ${token({
+      client_id: 'writeclient', scope: 'openid https://ttobak.example.com/api/mcp/read https://ttobak.example.com/api/mcp/write',
+    })}` };
+    const get = event('/api/billing/accounts/acct-a/reading', headers);
+    get.Records[0].cf.request.method = 'GET';
+    expect((await active(get)).uri).toBe('/api/billing/accounts/acct-a/reading');
+    for (const uri of ['/api/billing/accounts', '/api/billing/accounts/acct-a/uploads',
+      '/api/billing/accounts/acct-a/reading/extra', '/api/billing/accounts/acct-a/report']) {
+      const e = event(uri, headers); e.Records[0].cf.request.method = 'GET';
+      expect((await active(e)).status).toBe('401');
+    }
+    expect((await active(event('/api/billing/accounts/acct-a/reading', headers))).status).toBe('401');
+  });
 });
 
 describe('EdgeAuth 401 responses', () => {

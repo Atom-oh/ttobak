@@ -30,6 +30,34 @@ function billingTemplate(): Template {
 
 const template = billingTemplate();
 const json = template.toJSON();
+test('connector reads get isolated client config and only atomic projected grant permissions', () => {
+  const app = new cdk.App({ context: CONTEXT });
+  const stack = addBillingStack(app, () => ({
+    env: { account: '111111111111', region: 'ap-northeast-2' }, ...DEPS,
+    connector: { readClientId: 'readclient', writeClientId: 'writeclient',
+      audience: 'https://ttobak.example.com/api/mcp' },
+  }))!;
+  const t = Template.fromStack(stack).toJSON();
+  const revision = Object.values(t.Resources as Record<string, any>)
+    .find(r => r.Type === 'AWS::Lambda::WebFunctionRevision')!;
+  const env = revision.Properties.ServiceConfig.EnvironmentVariables;
+  expect(env.BILLING_ALLOWED_CLIENT_IDS).toBe(DEPS.webClientId);
+  expect(env.BILLING_CONNECTOR_READ_CLIENT_ID).toBe('readclient');
+  expect(env.BILLING_CONNECTOR_WRITE_CLIENT_ID).toBe('writeclient');
+  expect(env.BILLING_CONNECTOR_AUDIENCE).toBe('https://ttobak.example.com/api/mcp');
+  const statements = Object.values(t.Resources as Record<string, any>)
+    .filter(r => r.Type === 'AWS::IAM::Policy').flatMap(r => r.Properties.PolicyDocument.Statement);
+  const grant = statements.find(s => s.Condition?.['ForAnyValue:StringEquals']?.['dynamodb:EnclosingOperation']);
+  expect(grant.Action).toBe('dynamodb:GetItem');
+  expect(JSON.stringify(grant.Resource)).toContain('table/ttobak-main');
+  expect(grant.Condition['ForAnyValue:StringEquals']['dynamodb:EnclosingOperation']).toEqual(['TransactGetItems']);
+  expect(grant.Condition['ForAllValues:StringLike']['dynamodb:LeadingKeys']).toEqual(['CONNECTOR_CLIENT#*', 'USER#*']);
+  expect(grant.Condition['ForAllValues:StringEquals']['dynamodb:Attributes']).toEqual([
+    'PK', 'SK', 'userId', 'clientId', 'enabled', 'maximum', 'audience', 'issuer',
+    'generation', 'capabilities', 'expiresAt', 'revoked', 'blocked',
+  ]);
+  expect(grant.Condition.Null).toEqual({ 'dynamodb:Attributes': 'false', 'dynamodb:LeadingKeys': 'false' });
+});
 const resourcesOf = (type: string) => Object.entries(json.Resources as Record<string, any>)
   .filter(([, r]) => r.Type === type);
 function ssmParameterRef(name: string) {

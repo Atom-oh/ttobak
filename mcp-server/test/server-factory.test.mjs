@@ -31,7 +31,7 @@ test('server factory keeps each caller API and authentication context separate',
   const status = await alice.callTool({ name: 'ttobak_status', arguments: {} });
   assert.match(status.content[0].text, /alice\.example\.com/);
   assert.doesNotMatch(status.content[0].text, /bob/);
-  assert.equal((await bob.listTools()).tools.length, 32);
+  assert.equal((await bob.listTools()).tools.length, 35);
 });
 
 test('stdio startup works through file and directory symlinks for source and published bundle', async t => {
@@ -53,8 +53,8 @@ test('stdio startup works through file and directory symlinks for source and pub
         stderr: 'pipe',
       }));
       try {
-        // 32 shared tools, 5 stdio-only recording tools, 3 Mac app control tools.
-        assert.equal((await client.listTools()).tools.length, 40);
+        // 35 shared tools, 5 stdio-only recording tools, 3 Mac app control tools.
+        assert.equal((await client.listTools()).tools.length, 43);
       } finally {
         await client.close();
       }

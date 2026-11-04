@@ -12,6 +12,10 @@ on:
     branches: [main]
     paths:
       - 'services/billing/**'
+      - 'mcp-server/src/connector-policy-entry.ts'
+      - 'mcp-server/src/connector-grants.ts'
+      - 'mcp-server/src/connector-contract.ts'
+      - 'mcp-server/src/connector-operations.ts'
       - 'infra/lib/billing-stack.ts'
       - 'infra/lib/billing-data-plane.ts'
       - 'infra/bin/infra.ts'

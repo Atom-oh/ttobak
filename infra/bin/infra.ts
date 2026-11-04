@@ -246,6 +246,11 @@ const billingStack = addBillingStack(app, () => ({
   // StorageStack export that the separate Billing deploy cannot publish.
   ttobakTableName: (storageStack.table.node.defaultChild as dynamodb.CfnTable).tableName!,
   publicUrl: billingPublicUrl(app.node.tryGetContext('ttobak:domainName')),
+  ...(connectorOAuthEnabled ? { connector: {
+    readClientId: authStack.readConnectorClient.userPoolClientId,
+    writeClientId: authStack.writeConnectorClient.userPoolClientId,
+    audience: app.node.tryGetContext('ttobak:mcpResourceAudience'),
+  } } : {}),
   dataPlane: {
     vpcId: sharedVpcId,
     agentModel: 'global.anthropic.claude-sonnet-5-5',
