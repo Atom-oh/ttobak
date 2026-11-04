@@ -266,7 +266,8 @@ test('ReferencePanel retains inherited Account browsing and readable catalog ent
   const { html } = render('ReferencePanel', {
     states: {
       2: accessibleAccounts, 3: false,
-      6: { items: [{ id: 'child-document', title: 'Inherited reference', href: '/accounts/child/docs/document' }], loading: false, loaded: true, limited: false },
+      6: `${ancestorReader}:0:0`,
+      7: { items: [{ id: 'child-document', title: 'Inherited reference', href: '/accounts/child/docs/document' }], loading: false, loaded: true, limited: false },
     },
     pathname: '/record', props: { accountId: 'child', onAccountChange() {} },
   });

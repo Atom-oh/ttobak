@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useAuth } from '@/components/auth/AuthProvider';
 import { accountApi, docApi } from '@/lib/api';
 import { isEditableAccount } from '@/lib/accountAccess';
 import { appendMeetingNotes, codePointLength, preparationNotes, SA_PREPARATION_TEMPLATE } from '@/lib/meetingReferences';
@@ -18,18 +19,23 @@ interface Props {
 }
 
 export function SAPreparation({ value, onChange, title, onTitleChange, accountId, onAccountChange, initialDocumentId, disabled }: Props) {
+  const { user, membershipRevision } = useAuth();
+  const userId = user?.userId;
   const [accounts, setAccounts] = useState<AccountSummary[]>([]);
-  const [documents, setDocuments] = useState<AccountDocument[]>([]);
+  const [documents, setDocuments] = useState<{ userId: string | undefined; items: AccountDocument[] }>({ userId, items: [] });
   const [selected, setSelected] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState<{ id: string; text: string } | null>(null);
-  const [catalogError, setCatalogError] = useState('');
+  const [catalogAttempt, setCatalogAttempt] = useState(0);
+  const catalogKey = `${userId || ''}:${membershipRevision}:${catalogAttempt}`;
+  const [accountStatus, setAccountStatus] = useState({ key: catalogKey, loading: true, error: '' });
+  const [documentStatus, setDocumentStatus] = useState({ key: catalogKey, error: '' });
   const generation = useRef(0);
   const activeLoad = useRef(0);
   const loadedInitial = useRef('');
-  const callbacks = useRef({ value, title, onChange, onTitleChange });
-  useEffect(() => { callbacks.current = { value, title, onChange, onTitleChange }; }, [value, title, onChange, onTitleChange]);
+  const callbacks = useRef({ value, title, onChange, onTitleChange, userId, catalogKey });
+  useEffect(() => { callbacks.current = { value, title, onChange, onTitleChange, userId, catalogKey }; }, [value, title, onChange, onTitleChange, userId, catalogKey]);
   useEffect(() => {
     // A request epoch, not a DOM ref: cleanup invalidates pending callbacks.
     const epoch = generation;
@@ -37,13 +43,37 @@ export function SAPreparation({ value, onChange, title, onTitleChange, accountId
     return () => { epoch.current++; };
   }, [disabled]);
 
-  const loadCatalog = useCallback(async () => {
-    const results = await Promise.allSettled([accountApi.list(), docApi.list('prep')]);
-    setAccounts(results[0].status === 'fulfilled' ? (results[0].value.accounts || []).filter(isEditableAccount) : []);
-    setDocuments(results[1].status === 'fulfilled' ? results[1].value.documents || [] : []);
-    setCatalogError(results.some((result) => result.status === 'rejected') ? '고객 또는 준비 문서 목록을 불러오지 못했습니다.' : '');
-  }, []);
-  useEffect(() => { void loadCatalog(); }, [loadCatalog]);
+  const loadCatalog = useCallback(() => setCatalogAttempt(attempt => attempt + 1), []);
+  useEffect(() => {
+    let active = true;
+    if (!userId) return;
+    // Personal documents must not delay a healthy Account selector.
+    void accountApi.list().then(response => {
+      if (!active) return;
+      setAccounts(response.accounts.filter(isEditableAccount));
+      setAccountStatus({ key: catalogKey, loading: false, error: '' });
+    }).catch(() => {
+      if (!active) return;
+      setAccounts([]);
+      setAccountStatus({ key: catalogKey, loading: false, error: '고객 목록을 불러오지 못했습니다.' });
+    });
+    void docApi.list('prep').then(response => {
+      if (!active) return;
+      setDocuments({ userId, items: response.documents || [] });
+      setDocumentStatus({ key: catalogKey, error: '' });
+    }).catch(() => {
+      if (!active) return;
+      setDocuments({ userId, items: [] });
+      setDocumentStatus({ key: catalogKey, error: '준비 문서 목록을 불러오지 못했습니다.' });
+    });
+    return () => { active = false; };
+  }, [userId, catalogKey]);
+  const currentAccounts = userId && accountStatus.key === catalogKey ? accounts : [];
+  const currentDocuments = userId && documentStatus.key === catalogKey && documents.userId === userId ? documents.items : [];
+  const accountsLoading = !!userId && (accountStatus.key !== catalogKey || accountStatus.loading);
+  const accountError = userId && accountStatus.key === catalogKey ? accountStatus.error : '';
+  const documentError = userId && documentStatus.key === catalogKey ? documentStatus.error : '';
+  const catalogError = [accountError, documentError].filter(Boolean).join(' ');
 
   const loadDocument = useCallback(async (id: string) => {
     const request = ++generation.current;
@@ -77,10 +107,16 @@ export function SAPreparation({ value, onChange, title, onTitleChange, accountId
     try {
       preparationNotes(value);
       const document = await docApi.put({ title: title.trim() || 'SA 미팅 준비', docType: 'prep', markdown: value });
+      const current = callbacks.current;
+      if (current.userId !== userId) return;
       setSaved({ id: document.docId, text: value });
-      setDocuments((current) => [document, ...current.filter((item) => item.docId !== document.docId)]);
+      setDocuments((documents) => ({
+        userId,
+        items: [document, ...(documents.userId === userId ? documents.items : []).filter((item) => item.docId !== document.docId)],
+      }));
+      setDocumentStatus({ key: current.catalogKey, error: '' });
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : '준비 문서를 저장하지 못했습니다.');
+      if (callbacks.current.userId === userId) setError(failure instanceof Error ? failure.message : '준비 문서를 저장하지 못했습니다.');
     } finally {
       setBusy(false);
     }
@@ -99,12 +135,13 @@ export function SAPreparation({ value, onChange, title, onTitleChange, accountId
       </div>
       <label className="mt-4 block text-xs font-semibold text-slate-600 dark:text-text-muted">
         고객 연결 · 팀 공유는 별도
-        <select aria-label="준비할 고객" value={accounts.some(account => account.accountId === accountId && isEditableAccount(account)) ? accountId : ''} onChange={(event) => onAccountChange(event.target.value)} disabled={disabled}
+        <select aria-label="준비할 고객" value={currentAccounts.some(account => account.accountId === accountId && isEditableAccount(account)) ? accountId : ''} onChange={(event) => onAccountChange(event.target.value)} disabled={disabled || accountsLoading}
           className="mt-1.5 w-full rounded-lg border border-slate-200 bg-transparent px-3 py-2 text-sm dark:border-white/10 dark:text-text-main">
-          <option value="">고객 선택 없이 준비</option>
-          {accounts.filter(isEditableAccount).map((account) => <option key={account.accountId} value={account.accountId}>{account.name}</option>)}
+          <option value="">{accountsLoading ? '고객 불러오는 중…' : '고객 선택 없이 준비'}</option>
+          {currentAccounts.filter(isEditableAccount).map((account) => <option key={account.accountId} value={account.accountId}>{account.name}</option>)}
         </select>
       </label>
+      {!accountsLoading && !accountError && currentAccounts.length === 0 && <p role="status" className="mt-1.5 text-xs text-slate-500 dark:text-text-muted">연결할 수 있는 고객이 없습니다. 고객 선택 없이 준비할 수 있습니다.</p>}
       <textarea aria-label="SA 사전 준비 메모" value={value} onChange={(event) => onChange(event.target.value)} disabled={disabled} maxLength={30000}
         rows={7} placeholder="고객 목표, 현재 환경, 제약, 검증할 질문과 참고 자료를 적어 주세요."
         className="mt-3 w-full resize-y rounded-lg border border-slate-200 bg-transparent p-3 text-sm leading-6 dark:border-white/10 dark:text-text-main" />
@@ -114,11 +151,11 @@ export function SAPreparation({ value, onChange, title, onTitleChange, accountId
           className="rounded-lg bg-primary px-3 py-2 font-semibold text-white disabled:opacity-50">{busy ? '처리 중…' : '개인 준비 문서로 보관'}</button>
       </div>
       {saved && <p role="status" className="mt-2 text-xs text-emerald-700 dark:text-emerald-300">개인 문서로 저장했습니다. <a className="underline" href={`/docs/${encodeURIComponent(saved.id)}`}>문서 열기</a></p>}
-      {documents.length > 0 && <div className="mt-3 flex gap-2">
+      {currentDocuments.length > 0 && <div className="mt-3 flex gap-2">
         <select aria-label="저장한 준비 문서" value={selected} disabled={disabled || busy} onChange={(event) => setSelected(event.target.value)}
           className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-transparent px-2 py-2 text-xs dark:border-white/10 dark:text-text-main">
           <option value="">저장한 준비 불러오기…</option>
-          {documents.map((document) => <option key={document.docId} value={document.docId}>{document.title}</option>)}
+          {currentDocuments.map((document) => <option key={document.docId} value={document.docId}>{document.title}</option>)}
         </select>
         <button type="button" disabled={!selected || disabled || busy} onClick={() => void loadDocument(selected)} className="rounded-lg border px-3 text-xs disabled:opacity-50 dark:border-white/10">추가로 불러오기</button>
       </div>}
