@@ -114,12 +114,10 @@ Existing account/meeting queue behavior and the project deletion residual storag
 race described in ADR-025 remain: deleted projects cannot materialize grants and
 unconsumed project invitation rows expire through their existing TTL field.
 
-The AWS Billing Insight companion is a separate stack and origin. A signed-in
-user's hand-off request makes the Go API write a hashed, 60-second `HANDOFF#`
-row bound to the verified sub and email and return the companion URL with the
-plaintext code. The companion shows whose account the code is for, deletes the
-row to redeem it once the user confirms, and authorizes from
-TTOBAK account membership itself; TTOBAK grants it no table access (API-SPEC).
+The retired AWS Billing Insight companion (deleted on 2026-11-04) was a separate
+stack and origin reached through a hashed, 60-second `HANDOFF#` code. The
+hand-off code path remains in the API but is off in the checked-in configuration
+(INFRA-SPEC "Billing Insight hand-off").
 
 The Billing service (ADR-056, `services/billing/`) is part of TTOBAK, distinct
 from that companion. CloudFront routes `/api/billing/*` to the Billing BFF, an
