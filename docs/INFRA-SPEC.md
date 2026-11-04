@@ -776,15 +776,25 @@ noncurrent versions. Lambda pins each revision to an object version, and a
 revision whose pinned version disappears fails permanently.
 
 The `ttobak-main` name is passed as a literal, not a StorageStack export. The
-stack imports only the existing AuthStack exports for the user pool and SPA
-client IDs.
+stack imports the existing AuthStack user-pool and SPA client exports and, when
+connector OAuth is enabled, the dedicated connector client exports. The audience
+is configuration. Dedicated connector read/write clients and exact MCP resource
+audience are passed separately as `BILLING_CONNECTOR_*` configuration. Only the
+bounded GET reading route accepts them. The BFF packages the canonical MCP grant
+resolver and reads projected client/approval attributes via conditioned
+TransactGetItems access to `ttobak-main`; it receives no signing permission.
+The edge writer allowlist additionally permits only
+`GET /api/billing/accounts/{accountId}/reading`. Legacy Billing mutations retain
+the browser client allowlist.
 
 Outputs `FunctionArn`, `EndpointArn` and `EndpointDomain` have no export. The
 operator copies them into `infra/cdk.json` for FrontendStack.
 
 Deployment: `.github/workflows/deploy-billing.yml` runs on pushes to `main` that
 touch `services/billing/**`, the Billing stack, the infra app, `cdk.json`, the
-infra package files or the workflow, and on manual dispatch. It tests and
+infra package files, shared connector policy entry/grants/contract/operations,
+or the workflow, and on manual dispatch. Shared policy paths also trigger Billing
+tests; the BFF bundler resolves them without MCP dependencies. It tests and
 packages the BFF, then runs `cdk deploy TtobakBillingStack --exclusively` only
 when `ttobak:billingEnabled` is `"true"`; otherwise it skips the deploy. The
 HTTP-origin release coordinator's `STACKS` list does not include this stack.

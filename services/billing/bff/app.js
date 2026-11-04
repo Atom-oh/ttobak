@@ -5,6 +5,7 @@ const { GetObjectCommand } = require('@aws-sdk/client-s3');
 const { createAccess } = require('./lib/access.js');
 const { createStore, ACCT_ID } = require('./lib/store.js');
 const { createUploadRoutes, makePresigner } = require('./lib/uploads.js');
+const { createReadingRoutes } = require('./lib/reading.js');
 
 const REQUIRED_ENV = ['DATA_BUCKET', 'PUBLIC_URL', 'ACCOUNT_TABLE', 'PLATFORM_TABLE'];
 
@@ -102,7 +103,7 @@ const isMissing = (e) => e && (e.name === 'NoSuchKey' || e.name === 'NotFound');
 const isDenied = (e) => e && (e.name === 'AccessDenied' || e.name === 'Forbidden' || (e.$metadata && e.$metadata.httpStatusCode === 403));
 const DENIED_TTL_MS = 60e3;
 
-function createApp({ s3, ddb, env, authenticate, now = Date.now, presign = makePresigner({ region: env.AWS_REGION }) }) {
+function createApp({ s3, ddb, env, authenticate, authenticateReading = authenticate, now = Date.now, presign = makePresigner({ region: env.AWS_REGION }) }) {
   for (const k of REQUIRED_ENV) if (!env[k]) throw new Error(`missing env ${k}`);
   const { DATA_BUCKET, PUBLIC_URL, ACCOUNT_TABLE, PLATFORM_TABLE } = env;
 
@@ -247,6 +248,9 @@ function createApp({ s3, ddb, env, authenticate, now = Date.now, presign = makeP
     next();
   });
 
+  // Account-scoped bounded MCP reads bypass the all-account navigation walk.
+  app.use('/api/billing', createReadingRoutes({ s3, store, access,
+    bucket: DATA_BUCKET, authenticate: authenticateReading }));
   // ---------- authenticated area: everything lives under /api/billing ----------
   const api = express.Router();
   api.use(authenticate); // sets req.sub and req.user, or answers 401
