@@ -743,6 +743,7 @@ def _has_meeting_access(user_id, owner_id, meeting_id, meeting, source_account_i
         return False
     meeting['_summaryReadRestricted'] = False
     meeting.pop('_accountReadGrantFingerprint', None)
+    meeting.pop('_summaryAccountApprovalFingerprint', None)
     if user_id == owner_id:
         return True
     share = table.get_item(
@@ -765,8 +766,14 @@ def _has_meeting_access(user_id, owner_id, meeting_id, meeting, source_account_i
             or meeting.get('meetingId') != meeting_id or meeting.get('userId') != owner_id
             or meeting.get('entityType') != 'MEETING'):
         return False
-    from summary_privacy import enforce_summary_guard, safe_summary
-    meeting['_summaryReadRestricted'] = enforce_summary_guard(grant.privacy_member()) and not safe_summary(meeting)
+    from summary_privacy import (
+        enforce_summary_guard, account_summary_shareable, account_summary_approval_fingerprint,
+    )
+    meeting['_summaryReadRestricted'] = (
+        enforce_summary_guard(grant.privacy_member()) and not account_summary_shareable(meeting))
+    approval_fingerprint = account_summary_approval_fingerprint(meeting)
+    if approval_fingerprint:
+        meeting['_summaryAccountApprovalFingerprint'] = approval_fingerprint
     if grant.inherited:
         meeting['_accountReadGrantFingerprint'] = grant.fingerprint()
     return True
@@ -790,7 +797,7 @@ def _list_shared_meetings(user_id):
             continue
         meeting = table.get_item(
             Key={'PK': f'USER#{owner_id}', 'SK': f'MEETING#{meeting_id}'},
-            ProjectionExpression='PK, SK, entityType, meetingId, userId, accountId, sharedToAccount, summaryPrivacy',
+            ProjectionExpression='PK, SK, entityType, meetingId, userId, accountId, sharedToAccount, summaryPrivacy, summaryAccountApproval',
             ConsistentRead=True,
         ).get('Item')
         if _has_meeting_access(user_id, owner_id, meeting_id, meeting, entry.get('sourceAccountId')):
@@ -808,7 +815,7 @@ def list_meetings_for_user(user_id, date_from=None, date_to=None, tag=None, keyw
     limit = limit or 20
     if not user_id:
         raise ValueError('Authenticated user is required for meeting retrieval')
-    projection = 'PK, SK, entityType, userId, meetingId, title, createdAt, tags, #s, accountId, sharedToAccount, summaryPrivacy'
+    projection = 'PK, SK, entityType, userId, meetingId, title, createdAt, tags, #s, accountId, sharedToAccount, summaryPrivacy, summaryAccountApproval'
     expr_names = {'#s': 'status'}
     meetings = []
 
@@ -859,6 +866,8 @@ def list_meetings_for_user(user_id, date_from=None, date_to=None, tag=None, keyw
                         'sharedBy': s['ownerId'],
                         **({'_accountReadGrantFingerprint': item['_accountReadGrantFingerprint']}
                            if item.get('_accountReadGrantFingerprint') else {}),
+                        **({'_summaryAccountApprovalFingerprint': item['_summaryAccountApprovalFingerprint']}
+                           if item.get('_summaryAccountApprovalFingerprint') else {}),
                     })
             except Exception as e:
                 logger.warning(f"Failed to get shared meeting {s['meetingId']}: {e}")

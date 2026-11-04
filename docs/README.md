@@ -77,6 +77,7 @@ python3 scripts/docs/check_docs.py
 
 - [Cognito app client write attributes and self-service email change](decisions/ADR-057-cognito-client-write-attributes.md)
 - [Descendant Account read sharing](decisions/ADR-058-descendant-account-read-sharing.md)
+- [Owner-approved Account sharing](decisions/ADR-059-owner-approved-account-sharing.md)
 - [Browser recording recovery and retention](decisions/ADR-048-browser-recording-backups.md)
 - [Private audio crop worker](../backend/whisper/AUDIO_CROP.md)
 - [Private audio crops and activation](decisions/ADR-047-private-audio-crops.md)
