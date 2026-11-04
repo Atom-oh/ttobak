@@ -29,7 +29,7 @@ attachment and live-input qualification has its own current-run status below.
 | Neutral live-input qualification | Current-run `live-context-neutral-results.json`: current live input and saved notes remain distinct; corrected latest-only input suppresses old values while preserving label and saved-source provenance | PASS for the recorded live case |
 | Named preactivation public qualification | Completed archive plus the current-run PDF attachment and neutral live-input cases, verified against the stated deployments | Complete as of 2026-09-13 |
 | Old validation-run closeout | Closed run `317daf7a9b4ee21344e4`, archived `final-cleanup.json`: users, scoped rows, assets versions and local credentials cleaned | Complete |
-| New canonical canary preparation | Five genuine public-API fixtures prepared at 13:40 UTC while indexing remained manual-only | Prepared; not evidence of indexing |
+| New canonical canary preparation | Five genuine public-API fixtures prepared at 13:40 UTC while indexing remained manual-only | Prepared; not evidence of indexing. Fixture users deleted 2026-11-04 (below) |
 | Canonical `all` activation and CRUD/backfill | Deployment follows completed qualification and normal release checks; canonical acceptance follows activation | Pending |
 
 The current package receipt is
@@ -47,6 +47,18 @@ runtime. The old run is archived through
 `/tmp/ttobak-public-qa-validation-closed-317daf7a9b4ee21344e4.txt`.
 Its earlier cleanup-pending entry is historical; the subsequent closeout receipt
 records completed cleanup. Do not reuse its deleted fixtures for backfill.
+
+On 2026-11-04 the current run's two Cognito users (`qa-validation-b39053f454239d733c70`
+owner and outsider, disabled since 2026-09-13) were deleted the way the admin
+delete does it: global sign-out, `AdminDeleteUser`, then `deletedAt` set and the
+`GSI2` email keys removed on each `PROFILE` row. The run's local path file and
+credentials no longer existed. Their data was kept: the canary meeting and
+attachment, two personal documents, the synthetic Account with its two documents,
+seven QA sessions and the indexed `canonical/v1/` objects (three `KBINDEX#JOBS`
+rows were `INDEXED`). No one can sign in as these users, so the fixtures cannot
+serve sign-in-based acceptance. Prepare new fixtures for canonical activation,
+and remove the retained rows and objects through the API delete paths, not by
+direct table edits, so index removal also runs.
 
 Historical failures remain evidence: earlier synchronous notes REST timeout,
 missing manual follow-up provenance, an empty WS answer and the initial
