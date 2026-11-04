@@ -24,8 +24,9 @@ const BFF_DIST = path.join(__dirname, '../../services/billing/bff/dist');
 
 export interface BillingStackProps extends cdk.StackProps {
   userPoolId: string;
-  // The only client whose tokens the BFF accepts (phase 1: the SPA client).
+  // Browser route client; dedicated connectors are isolated to GET reading.
   webClientId: string;
+  connector?: { readClientId: string; writeClientId: string; audience: string };
   ttobakTableName: string;
   publicUrl: string;
   /** Data bucket, platform table, worker, collector and FSI search owned by this stack. The BFF keeps reading the
@@ -42,6 +43,11 @@ export class BillingStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: BillingStackProps) {
     super(scope, id, props);
     const { region, account, partition } = cdk.Stack.of(this);
+    if (props.connector && (!props.connector.readClientId || !props.connector.writeClientId ||
+        props.connector.readClientId === props.connector.writeClientId ||
+        props.connector.audience !== `${props.publicUrl}/api/mcp`)) {
+      throw new Error('Billing connector clients and exact application MCP audience are required');
+    }
     // Reused by name; this stack never creates, imports or deletes them.
     const dataBucketName = ssm.StringParameter.valueForStringParameter(this, DATA_BUCKET_PARAMETER);
     const platformTableName = ssm.StringParameter.valueForStringParameter(this, PLATFORM_TABLE_PARAMETER);
@@ -129,6 +135,18 @@ export class BillingStack extends cdk.Stack {
     }));
 
     const table = (name: string) => `arn:${partition}:dynamodb:${region}:${account}:table/${name}`;
+    if (props.connector) role.addToPolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:GetItem'], resources: [table(props.ttobakTableName)],
+      conditions: {
+        'ForAnyValue:StringEquals': { 'dynamodb:EnclosingOperation': ['TransactGetItems'] },
+        'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['CONNECTOR_CLIENT#*', 'USER#*'] },
+        'ForAllValues:StringEquals': { 'dynamodb:Attributes': [
+          'PK', 'SK', 'userId', 'clientId', 'enabled', 'maximum', 'audience', 'issuer',
+          'generation', 'capabilities', 'expiresAt', 'revoked', 'blocked',
+        ] },
+        Null: { 'dynamodb:Attributes': 'false', 'dynamodb:LeadingKeys': 'false' },
+      },
+    }));
     role.addToPolicy(new iam.PolicyStatement({
       actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem',
         'dynamodb:DeleteItem', 'dynamodb:Query'],
@@ -198,6 +216,11 @@ export class BillingStack extends cdk.Stack {
           PUBLIC_URL: props.publicUrl,
           USER_POOL_ID: props.userPoolId,
           BILLING_ALLOWED_CLIENT_IDS: props.webClientId,
+          ...(props.connector ? {
+            BILLING_CONNECTOR_READ_CLIENT_ID: props.connector.readClientId,
+            BILLING_CONNECTOR_WRITE_CLIENT_ID: props.connector.writeClientId,
+            BILLING_CONNECTOR_AUDIENCE: props.connector.audience,
+          } : {}),
           NODE_OPTIONS: '--max-old-space-size=1536',
         },
       },

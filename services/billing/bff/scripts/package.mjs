@@ -3,6 +3,7 @@ import { cpSync, mkdtempSync, rmSync, mkdirSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildConnector } from './build-connector.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const dist = join(root, 'dist');
@@ -16,6 +17,7 @@ try {
   mkdirSync(dist, { recursive: true });
   for (const f of ['index.js', 'app.js', 'package.json']) cpSync(join(root, f), join(dist, f));
   cpSync(join(root, 'lib'), join(dist, 'lib'), { recursive: true });
+  await buildConnector(join(dist, 'lib', 'connector-policy.cjs'));
   cpSync(join(work, 'node_modules'), join(dist, 'node_modules'), { recursive: true });
   if (!existsSync(join(dist, 'node_modules', 'express'))) throw new Error('express missing from dist');
 } finally {

@@ -8271,11 +8271,11 @@ function datetimeRegex(args) {
   regex = `${regex}(${opts.join("|")})`;
   return new RegExp(`^${regex}$`);
 }
-function isValidIP(ip, version2) {
-  if ((version2 === "v4" || !version2) && ipv4Regex.test(ip)) {
+function isValidIP(ip, version3) {
+  if ((version3 === "v4" || !version3) && ipv4Regex.test(ip)) {
     return true;
   }
-  if ((version2 === "v6" || !version2) && ipv6Regex.test(ip)) {
+  if ((version3 === "v6" || !version3) && ipv6Regex.test(ip)) {
     return true;
   }
   return false;
@@ -8302,11 +8302,11 @@ function isValidJWT(jwt2, alg) {
     return false;
   }
 }
-function isValidCidr(ip, version2) {
-  if ((version2 === "v4" || !version2) && ipv4CidrRegex.test(ip)) {
+function isValidCidr(ip, version3) {
+  if ((version3 === "v4" || !version3) && ipv4CidrRegex.test(ip)) {
     return true;
   }
-  if ((version2 === "v6" || !version2) && ipv6CidrRegex.test(ip)) {
+  if ((version3 === "v6" || !version3) && ipv6CidrRegex.test(ip)) {
     return true;
   }
   return false;
@@ -12259,10 +12259,10 @@ var nanoid = /^[a-zA-Z0-9_-]{21}$/;
 var duration = /^P(?:(\d+W)|(?!.*W)(?=\d|T\d)(\d+Y)?(\d+M)?(\d+D)?(T(?=\d)(\d+H)?(\d+M)?(\d+([.,]\d+)?S)?)?)$/;
 var extendedDuration = /^[-+]?P(?!$)(?:(?:[-+]?\d+Y)|(?:[-+]?\d+[.,]\d+Y$))?(?:(?:[-+]?\d+M)|(?:[-+]?\d+[.,]\d+M$))?(?:(?:[-+]?\d+W)|(?:[-+]?\d+[.,]\d+W$))?(?:(?:[-+]?\d+D)|(?:[-+]?\d+[.,]\d+D$))?(?:T(?=[\d+-])(?:(?:[-+]?\d+H)|(?:[-+]?\d+[.,]\d+H$))?(?:(?:[-+]?\d+M)|(?:[-+]?\d+[.,]\d+M$))?(?:[-+]?\d+(?:[.,]\d+)?S)?)??$/;
 var guid = /^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$/;
-var uuid = (version2) => {
-  if (!version2)
+var uuid = (version3) => {
+  if (!version3)
     return /^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$/;
-  return new RegExp(`^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-${version2}[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$`);
+  return new RegExp(`^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-${version3}[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$`);
 };
 var uuid4 = /* @__PURE__ */ uuid(4);
 var uuid6 = /* @__PURE__ */ uuid(6);
@@ -23145,6 +23145,68 @@ import { request as httpsRequest2 } from "node:https";
 import { basename, extname, isAbsolute, sep } from "node:path";
 import { homedir as homedir2 } from "node:os";
 import { URL as URL2 } from "node:url";
+
+// src/billing-reading.ts
+var version2 = /^v\d{14}[0-9a-f]{6}$/;
+var cur = ["cur_summary", "cur_trend", "cur_tag_coverage", "cur_resources", "cur_tag_signals", "agent_notes", "period", "checks"];
+function billingReadingOptions(args, section) {
+  const keys = ["accountId", "pageSize", "cursor", ...section === "metadata" ? [] : ["source", "versionId", ...section === "dataset" ? ["dataset"] : []]];
+  if (Object.keys(args).some((k) => !keys.includes(k)) || typeof args.accountId !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(args.accountId)) throw Error("INVALID_ARGUMENT: Billing account/options");
+  const pageSize = args.pageSize ?? 4e3;
+  if (typeof pageSize !== "number" || !Number.isInteger(pageSize) || pageSize < 1e3 || pageSize > 8e3 || args.cursor !== void 0 && (typeof args.cursor !== "string" || !/^[A-Za-z0-9_-]{1,2048}$/.test(args.cursor)) || args.versionId !== void 0 && (typeof args.versionId !== "string" || !version2.test(args.versionId)) || section !== "metadata" && !["cot", "cur"].includes(args.source)) throw Error("INVALID_ARGUMENT: Billing selection/page");
+  if (section === "dataset" && (typeof args.dataset !== "string" || !/^[a-z][a-z0-9_]{0,63}$/.test(args.dataset) || (args.source === "cur" ? !cur.includes(args.dataset) : args.dataset.startsWith("cur_")))) throw Error("INVALID_ARGUMENT: Billing dataset/source");
+  return {
+    accountId: args.accountId,
+    section,
+    pageSize,
+    source: args.source,
+    dataset: args.dataset,
+    versionId: args.versionId,
+    cursor: args.cursor
+  };
+}
+var record6 = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+function billingReadingResult(value, options) {
+  if (!record6(value) || value.kind !== "billing" || value.accountId !== options.accountId || value.section !== options.section || value.source !== (options.source ?? null) || value.dataset !== (options.dataset ?? null) || value.consistency !== "current_source" || (options.section === "metadata" ? value.versionId !== null : typeof value.versionId !== "string" || !version2.test(value.versionId) || options.versionId !== void 0 && options.versionId !== value.versionId) || typeof value.revision !== "string" || !/^[a-f0-9]{64}$/.test(value.revision) || Buffer.byteLength(JSON.stringify(value)) > 14e3) throw Error("INVALID_READING_RESPONSE: Billing source");
+  const data = value[options.section === "report" ? "markdown" : "dataJson"];
+  const f = value.fragment, p = value.page;
+  if (typeof data !== "string" || Buffer.byteLength(data) > options.pageSize || !record6(f) || !record6(p) || f.unit !== "utf8_bytes" || typeof f.complete !== "boolean" || typeof p.complete !== "boolean" || ![f.startOffset, f.endOffset, f.totalBytes].every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0) || f.startOffset > f.endOffset || f.endOffset > f.totalBytes || f.endOffset - f.startOffset !== Buffer.byteLength(data) || f.complete !== (f.endOffset === f.totalBytes) || p.complete !== f.complete || !f.complete && f.startOffset === f.endOffset || (p.complete ? p.nextCursor !== null : typeof p.nextCursor !== "string" || !/^[A-Za-z0-9_-]{1,2048}$/.test(p.nextCursor))) {
+    throw Error("INVALID_READING_RESPONSE: Billing fragment/continuation");
+  }
+  if (f.startOffset === 0 && f.complete && options.section !== "report") {
+    try {
+      const parsed = JSON.parse(data);
+      if (options.section === "metadata" ? !record6(parsed) || parsed.accountId !== options.accountId : !Array.isArray(parsed)) throw Error();
+    } catch {
+      throw Error("INVALID_READING_RESPONSE: Billing JSON group");
+    }
+  }
+  const result = { content: [{ type: "text", text: JSON.stringify(value) }] };
+  if (Buffer.byteLength(JSON.stringify(result)) > 32e3) throw Error("READING_LIMIT: Billing result");
+  return result;
+}
+var BILLING_TOOLS = ["account", "dataset", "report"].map((kind) => ({
+  name: `ttobak_get_billing_${kind}`,
+  description: (kind === "account" ? "Read customer Billing metadata: current CUR/COT version, period, AI status and supported dataset selections. Start here after ttobak_list_accounts." : kind === "dataset" ? "Read customer CUR/COT analysis data. Select a dataset advertised by ttobak_get_billing_account; a supported dataset may have no published file." : "Read the customer CUR/COT Markdown cost report for meeting preparation.") + " Reads enforce current Billing team access. Follow page.nextCursor with identical arguments until complete; concatenate same-revision dataJson (then parse) or markdown fragments. A stale cursor requires restarting. No uploads or reruns.",
+  annotations: { readOnlyHint: true, destructiveHint: false },
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      accountId: { type: "string", minLength: 1, maxLength: 64 },
+      pageSize: { type: "integer", minimum: 1e3, maximum: 8e3, default: 4e3, description: "Maximum fragment UTF-8 bytes" },
+      cursor: { type: "string", maxLength: 2048 },
+      ...kind === "account" ? {} : {
+        source: { type: "string", enum: ["cot", "cur"] },
+        versionId: { type: "string", pattern: "^v[0-9]{14}[0-9a-f]{6}$", description: "Optional published version; omit for current source" },
+        ...kind === "dataset" ? { dataset: { type: "string", minLength: 1, maxLength: 64 } } : {}
+      }
+    },
+    required: ["accountId", ...kind === "account" ? [] : ["source", ...kind === "dataset" ? ["dataset"] : []]]
+  }
+}));
+
+// src/api.ts
 var MIME_BY_EXT = {
   ".pdf": "application/pdf",
   ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -23313,6 +23375,21 @@ var TtobakApi = class {
   }
   async listAccounts() {
     return this.get("/api/accounts");
+  }
+  async readBilling(options) {
+    const { section, ...args } = options;
+    const checked = billingReadingOptions(Object.fromEntries(Object.entries(args).filter(([, v]) => v !== void 0)), section);
+    const query = new URLSearchParams({ section: checked.section, pageSize: String(checked.pageSize) });
+    for (const key of ["source", "dataset", "versionId", "cursor"]) {
+      if (checked[key] !== void 0) query.set(key, checked[key]);
+    }
+    return this.request(
+      "GET",
+      `/api/billing/accounts/${identifier(checked.accountId, "accountId")}/reading?${query}`,
+      void 0,
+      14e3,
+      true
+    );
   }
   async readNavigation(kind, options) {
     if (kind !== "accounts" && kind !== "projects") throw new Error("Invalid navigation kind");
@@ -23729,9 +23806,9 @@ var TtobakApi = class {
       req.end();
     });
   }
-  async request(method, path2, body, maxResponseBytes) {
+  async request(method, path2, body, maxResponseBytes, callerTokenTransport = false) {
     this.options.signal?.throwIfAborted();
-    if (this.options.privateTransport) {
+    if (this.options.privateTransport && !callerTokenTransport) {
       return this.options.privateTransport({
         method,
         path: path2,
@@ -23921,15 +23998,15 @@ function documentReadingOptions(args) {
     expectedRevision: args.expectedRevision
   };
 }
-function record6(value) {
+function record7(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 function documentReadingResult(value, options) {
-  if (!record6(value) || value.docId !== options.docId || value.accountId !== (options.accountId ?? "") || value.section !== options.section || typeof value.content !== "string" || typeof value.revision !== "string" || !/^[a-f0-9]{64}$/.test(value.revision) || options.expectedRevision !== void 0 && value.revision !== options.expectedRevision || !["owner", "edit", "read"].includes(value.permission) || !(options.accountId ? value.scope === "account" : ["personal", "shared"].includes(value.scope)) || !["text", "file"].includes(value.mode) || !["available", "empty", "not_available"].includes(value.textStatus) || "publicShareToken" in value || "fileKey" in value) {
+  if (!record7(value) || value.docId !== options.docId || value.accountId !== (options.accountId ?? "") || value.section !== options.section || typeof value.content !== "string" || typeof value.revision !== "string" || !/^[a-f0-9]{64}$/.test(value.revision) || options.expectedRevision !== void 0 && value.revision !== options.expectedRevision || !["owner", "edit", "read"].includes(value.permission) || !(options.accountId ? value.scope === "account" : ["personal", "shared"].includes(value.scope)) || !["text", "file"].includes(value.mode) || !["available", "empty", "not_available"].includes(value.textStatus) || "publicShareToken" in value || "fileKey" in value) {
     throw new Error("INVALID_READING_RESPONSE: document identity or source metadata is invalid");
   }
   const page = value.page;
-  if (!record6(page) || page.unit !== "unicode_code_points" || typeof page.complete !== "boolean" || ![page.startOffset, page.endOffset, page.totalCodePoints].every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0) || page.endOffset < page.startOffset || page.endOffset > page.totalCodePoints || Array.from(value.content).length !== page.endOffset - page.startOffset || (page.complete ? page.endOffset !== page.totalCodePoints : page.endOffset === page.startOffset || page.endOffset >= page.totalCodePoints) || (page.complete ? page.nextCursor !== null : typeof page.nextCursor !== "string" || !page.nextCursor.length || page.nextCursor.length > 2048)) {
+  if (!record7(page) || page.unit !== "unicode_code_points" || typeof page.complete !== "boolean" || ![page.startOffset, page.endOffset, page.totalCodePoints].every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0) || page.endOffset < page.startOffset || page.endOffset > page.totalCodePoints || Array.from(value.content).length !== page.endOffset - page.startOffset || (page.complete ? page.endOffset !== page.totalCodePoints : page.endOffset === page.startOffset || page.endOffset >= page.totalCodePoints) || (page.complete ? page.nextCursor !== null : typeof page.nextCursor !== "string" || !page.nextCursor.length || page.nextCursor.length > 2048)) {
     throw new Error("INVALID_READING_RESPONSE: document page continuation is invalid");
   }
   if (value.mode === "file" && (value.content !== "" || value.textStatus !== "not_available")) {
@@ -23967,20 +24044,20 @@ function documentCatalogOptions(args) {
     cursor: args.cursor
   };
 }
-function record7(value) {
+function record8(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 function documentCatalogResult(value, options) {
-  if (!record7(value) || value.accountId !== (options.accountId ?? "") || value.consistency !== "current_per_item" || !Array.isArray(value.documents) || value.documents.length > options.pageSize) {
+  if (!record8(value) || value.accountId !== (options.accountId ?? "") || value.consistency !== "current_per_item" || !Array.isArray(value.documents) || value.documents.length > options.pageSize) {
     throw new Error("INVALID_READING_RESPONSE: invalid document catalog identity");
   }
   for (const doc of value.documents) {
-    if (!record7(doc) || typeof doc.docId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(doc.docId) || typeof doc.title !== "string" || typeof doc.metadataRevision !== "string" || !/^[a-f0-9]{64}$/.test(doc.metadataRevision) || !["owner", "edit", "read"].includes(doc.permission) || !(options.accountId ? doc.scope === "account" : ["personal", "shared"].includes(doc.scope)) || "content" in doc || "publicShareToken" in doc || "fileKey" in doc) {
+    if (!record8(doc) || typeof doc.docId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(doc.docId) || typeof doc.title !== "string" || typeof doc.metadataRevision !== "string" || !/^[a-f0-9]{64}$/.test(doc.metadataRevision) || !["owner", "edit", "read"].includes(doc.permission) || !(options.accountId ? doc.scope === "account" : ["personal", "shared"].includes(doc.scope)) || "content" in doc || "publicShareToken" in doc || "fileKey" in doc) {
       throw new Error("INVALID_READING_RESPONSE: invalid document metadata");
     }
   }
   const page = value.page;
-  if (!record7(page) || page.unit !== "items" || page.returned !== value.documents.length || typeof page.complete !== "boolean" || (page.complete ? page.nextCursor !== null : typeof page.nextCursor !== "string" || !page.nextCursor.length || page.nextCursor.length > 2048)) {
+  if (!record8(page) || page.unit !== "items" || page.returned !== value.documents.length || typeof page.complete !== "boolean" || (page.complete ? page.nextCursor !== null : typeof page.nextCursor !== "string" || !page.nextCursor.length || page.nextCursor.length > 2048)) {
     throw new Error("INVALID_READING_RESPONSE: invalid catalog continuation");
   }
   const result = { content: [{ type: "text", text: JSON.stringify(value) }] };
@@ -24004,18 +24081,18 @@ function kbReadingOptions(args) {
   }
   return { pageSize, cursor: args.cursor };
 }
-function record8(value) {
+function record9(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 function kbReadingResult(value, options) {
-  if (!record8(value) || !Array.isArray(value.files) || value.files.length > options.pageSize || value.consistency !== "current_per_item") throw new Error("INVALID_READING_RESPONSE: invalid KB catalog");
+  if (!record9(value) || !Array.isArray(value.files) || value.files.length > options.pageSize || value.consistency !== "current_per_item") throw new Error("INVALID_READING_RESPONSE: invalid KB catalog");
   for (const file2 of value.files) {
-    if (!record8(file2) || typeof file2.fileId !== "string" || !file2.fileId || Buffer.byteLength(file2.fileId) > 1024 || /[/\\]/.test(file2.fileId) || typeof file2.fileName !== "string" || typeof file2.fileType !== "string" || typeof file2.size !== "number" || !Number.isSafeInteger(file2.size) || file2.size < 0 || typeof file2.lastModified !== "string" || typeof file2.metadataRevision !== "string" || !/^[a-f0-9]{64}$/.test(file2.metadataRevision)) {
+    if (!record9(file2) || typeof file2.fileId !== "string" || !file2.fileId || Buffer.byteLength(file2.fileId) > 1024 || /[/\\]/.test(file2.fileId) || typeof file2.fileName !== "string" || typeof file2.fileType !== "string" || typeof file2.size !== "number" || !Number.isSafeInteger(file2.size) || file2.size < 0 || typeof file2.lastModified !== "string" || typeof file2.metadataRevision !== "string" || !/^[a-f0-9]{64}$/.test(file2.metadataRevision)) {
       throw new Error("INVALID_READING_RESPONSE: invalid KB file metadata");
     }
   }
   const page = value.page;
-  if (!record8(page) || page.unit !== "items" || page.returned !== value.files.length || typeof page.complete !== "boolean" || (page.complete ? page.nextCursor !== null : typeof page.nextCursor !== "string" || !page.nextCursor.length || page.nextCursor.length > 2048)) {
+  if (!record9(page) || page.unit !== "items" || page.returned !== value.files.length || typeof page.complete !== "boolean" || (page.complete ? page.nextCursor !== null : typeof page.nextCursor !== "string" || !page.nextCursor.length || page.nextCursor.length > 2048)) {
     throw new Error("INVALID_READING_RESPONSE: invalid KB continuation");
   }
   const result = { content: [{ type: "text", text: JSON.stringify(value) }] };
@@ -24032,11 +24109,11 @@ function navigationOptions(args) {
   }
   return kbReadingOptions(args);
 }
-function record9(value) {
+function record10(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 function navigationResult(value, options, kind) {
-  if (!record9(value) || value.consistency !== "current_per_item" || !Array.isArray(value[kind]) || value[kind].length > options.pageSize) {
+  if (!record10(value) || value.consistency !== "current_per_item" || !Array.isArray(value[kind]) || value[kind].length > options.pageSize) {
     throw new Error("INVALID_READING_RESPONSE: invalid navigation catalog");
   }
   const items = value[kind];
@@ -24044,12 +24121,12 @@ function navigationResult(value, options, kind) {
     throw new Error("INVALID_READING_RESPONSE: missing project union contract");
   }
   for (const item of items) {
-    if (!record9(item) || typeof item[kind === "accounts" ? "accountId" : "projectId"] !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(item[kind === "accounts" ? "accountId" : "projectId"]) || typeof item.name !== "string" || typeof item.metadataRevision !== "string" || !/^[a-f0-9]{64}$/.test(item.metadataRevision)) {
+    if (!record10(item) || typeof item[kind === "accounts" ? "accountId" : "projectId"] !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(item[kind === "accounts" ? "accountId" : "projectId"]) || typeof item.name !== "string" || typeof item.metadataRevision !== "string" || !/^[a-f0-9]{64}$/.test(item.metadataRevision)) {
       throw new Error("INVALID_READING_RESPONSE: invalid navigation metadata");
     }
   }
   const page = value.page;
-  if (!record9(page) || page.unit !== "items" || page.returned !== items.length || typeof page.complete !== "boolean" || (page.complete ? page.nextCursor !== null : typeof page.nextCursor !== "string" || !page.nextCursor.length || page.nextCursor.length > 2048)) {
+  if (!record10(page) || page.unit !== "items" || page.returned !== items.length || typeof page.complete !== "boolean" || (page.complete ? page.nextCursor !== null : typeof page.nextCursor !== "string" || !page.nextCursor.length || page.nextCursor.length > 2048)) {
     throw new Error("INVALID_READING_RESPONSE: invalid navigation continuation");
   }
   const result = { content: [{ type: "text", text: JSON.stringify(value) }] };
@@ -24074,17 +24151,17 @@ function meetingCatalogOptions(args) {
     accountIds: args.accountIds
   };
 }
-function record10(value) {
+function record11(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 function meetingCatalogResult(value) {
-  if (!record10(value) || value.kind !== "meeting_catalog" || !record10(value.page) || typeof value.page.complete !== "boolean" || (value.page.complete ? value.page.nextCursor !== null : typeof value.page.nextCursor !== "string" || !value.page.nextCursor.length || value.page.nextCursor.length > 2048)) throw new Error("INVALID_READING_RESPONSE: invalid meeting catalog continuation");
+  if (!record11(value) || value.kind !== "meeting_catalog" || !record11(value.page) || typeof value.page.complete !== "boolean" || (value.page.complete ? value.page.nextCursor !== null : typeof value.page.nextCursor !== "string" || !value.page.nextCursor.length || value.page.nextCursor.length > 2048)) throw new Error("INVALID_READING_RESPONSE: invalid meeting catalog continuation");
   if (value.discoveryPending === true) {
     if (value.phase !== "discovery" || Object.keys(value).some((key) => !["kind", "phase", "discoveryPending", "page"].includes(key))) throw new Error("INVALID_READING_RESPONSE: discovery contains premature data");
   } else {
     if (!["owned", "direct", "team"].includes(value.phase) || value.consistency !== "current_group" || value.overlapPossible !== true || value.unionKey !== "meetingId" || typeof value.revision !== "string" || !/^[a-f0-9]{64}$/.test(value.revision) || typeof value.dataJson !== "string") throw new Error("INVALID_READING_RESPONSE: invalid meeting catalog source");
     const f = value.fragment;
-    if (!record10(f) || f.unit !== "unicode_code_points" || typeof f.complete !== "boolean" || ![f.startOffset, f.endOffset, f.totalCodePoints].every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0) || f.endOffset <= f.startOffset || f.endOffset > f.totalCodePoints || Array.from(value.dataJson).length !== f.endOffset - f.startOffset || f.complete !== (f.endOffset === f.totalCodePoints) || value.page.complete && (!f.complete || value.phase !== "team")) throw new Error("INVALID_READING_RESPONSE: invalid meeting catalog fragment");
+    if (!record11(f) || f.unit !== "unicode_code_points" || typeof f.complete !== "boolean" || ![f.startOffset, f.endOffset, f.totalCodePoints].every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0) || f.endOffset <= f.startOffset || f.endOffset > f.totalCodePoints || Array.from(value.dataJson).length !== f.endOffset - f.startOffset || f.complete !== (f.endOffset === f.totalCodePoints) || value.page.complete && (!f.complete || value.phase !== "team")) throw new Error("INVALID_READING_RESPONSE: invalid meeting catalog fragment");
     if (f.startOffset === 0 && f.complete) {
       try {
         if (!Array.isArray(JSON.parse(value.dataJson))) throw new Error("Expected array");
@@ -24106,7 +24183,7 @@ function vaultReadingOptions(args) {
   if (args.cursor !== void 0 && (typeof args.cursor !== "string" || !args.cursor.length || args.cursor.length > 2048)) throw new Error("INVALID_CURSOR: invalid vault continuation");
   return { section, fileId: args.fileId, pageSize, cursor: args.cursor };
 }
-function record11(value) {
+function record12(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 function path(value) {
@@ -24116,20 +24193,20 @@ function hash2(value) {
   return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 }
 function vaultReadingResult(value, options) {
-  if (!record11(value) || value.kind !== `vault_${options.section}` || !record11(value.page) || typeof value.page.complete !== "boolean" || (value.page.complete ? value.page.nextCursor !== null : typeof value.page.nextCursor !== "string" || !value.page.nextCursor.length || value.page.nextCursor.length > 2048)) throw new Error("INVALID_READING_RESPONSE: invalid vault continuation");
+  if (!record12(value) || value.kind !== `vault_${options.section}` || !record12(value.page) || typeof value.page.complete !== "boolean" || (value.page.complete ? value.page.nextCursor !== null : typeof value.page.nextCursor !== "string" || !value.page.nextCursor.length || value.page.nextCursor.length > 2048)) throw new Error("INVALID_READING_RESPONSE: invalid vault continuation");
   if (value.discoveryPending === true) {
     if (options.section !== "manifest" || value.phase !== "discovery" || Object.keys(value).some((key) => !["kind", "phase", "discoveryPending", "page"].includes(key))) throw new Error("INVALID_READING_RESPONSE: discovery contains file data");
   } else if (value.mode === "non_text") {
-    if (options.section !== "file" || value.fileId !== options.fileId || !path(value.path) || value.textStatus !== "not_available" || !value.page.complete || !record11(value.documentRead) || typeof value.documentRead.docId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(value.documentRead.docId) || value.markdown !== void 0) throw new Error("INVALID_READING_RESPONSE: invalid non-text document");
+    if (options.section !== "file" || value.fileId !== options.fileId || !path(value.path) || value.textStatus !== "not_available" || !value.page.complete || !record12(value.documentRead) || typeof value.documentRead.docId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(value.documentRead.docId) || value.markdown !== void 0) throw new Error("INVALID_READING_RESPONSE: invalid non-text document");
   } else {
     const manifest = options.section === "manifest";
     if (!hash2(value.revision) || (manifest ? value.consistency !== "current_group" || value.unionKey !== "path" || !["meetings", "personal_docs", "account_docs"].includes(value.phase) : value.mode !== "text" || value.fileId !== options.fileId || !path(value.path) || !hash2(value.sourceRevision) || value.consistency !== "current_source_and_group" || !["meeting", "document"].includes(value.sourceKind) || !["body", "attachments"].includes(value.phase) || value.sourceKind === "document" && value.phase === "attachments" || value.sourceKind === "meeting" && value.phase === "body" && value.page.complete)) throw new Error("INVALID_READING_RESPONSE: invalid vault source");
     const text2 = manifest ? value.dataJson : value.markdown, f = value.fragment;
-    if (typeof text2 !== "string" || !record11(f) || f.unit !== "unicode_code_points" || typeof f.complete !== "boolean" || ![f.startOffset, f.endOffset, f.totalCodePoints].every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0) || f.endOffset < f.startOffset || f.endOffset > f.totalCodePoints || Array.from(text2).length !== f.endOffset - f.startOffset || f.complete !== (f.endOffset === f.totalCodePoints) || !f.complete && f.endOffset === f.startOffset || value.page.complete && !f.complete) throw new Error("INVALID_READING_RESPONSE: invalid vault fragment");
+    if (typeof text2 !== "string" || !record12(f) || f.unit !== "unicode_code_points" || typeof f.complete !== "boolean" || ![f.startOffset, f.endOffset, f.totalCodePoints].every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0) || f.endOffset < f.startOffset || f.endOffset > f.totalCodePoints || Array.from(text2).length !== f.endOffset - f.startOffset || f.complete !== (f.endOffset === f.totalCodePoints) || !f.complete && f.endOffset === f.startOffset || value.page.complete && !f.complete) throw new Error("INVALID_READING_RESPONSE: invalid vault fragment");
     if (manifest && f.startOffset === 0 && f.complete) {
       try {
         const files = JSON.parse(text2);
-        if (!Array.isArray(files) || files.some((file2) => !record11(file2) || typeof file2.fileId !== "string" || !file2.fileId.length || file2.fileId.length > 2048 || !path(file2.path) || !hash2(file2.sourceMetadataRevision) || !["text", "non_text"].includes(file2.mode))) throw new Error("bad manifest");
+        if (!Array.isArray(files) || files.some((file2) => !record12(file2) || typeof file2.fileId !== "string" || !file2.fileId.length || file2.fileId.length > 2048 || !path(file2.path) || !hash2(file2.sourceMetadataRevision) || !["text", "non_text"].includes(file2.mode))) throw new Error("bad manifest");
       } catch {
         throw new Error("INVALID_READING_RESPONSE: invalid completed vault manifest group");
       }
@@ -24661,6 +24738,7 @@ function sendAppRequest(request2, options = {}) {
 // src/index.ts
 var registry2 = {
   tools: [
+    ...BILLING_TOOLS,
     {
       name: "ttobak_login",
       description: "Authenticate with TTOBAK. Opens browser for Cognito login. Call once per session.",
@@ -25204,6 +25282,13 @@ async function callTool(request2, options) {
   const { name, arguments: args = {} } = request2.params;
   try {
     switch (name) {
+      case "ttobak_get_billing_account":
+      case "ttobak_get_billing_dataset":
+      case "ttobak_get_billing_report": {
+        const section = name === "ttobak_get_billing_account" ? "metadata" : name === "ttobak_get_billing_dataset" ? "dataset" : "report";
+        const options2 = billingReadingOptions(args, section);
+        return billingReadingResult(await api.readBilling(options2), options2);
+      }
       case "ttobak_login": {
         await auth.getIdToken();
         return text("Authenticated successfully with TTOBAK.");

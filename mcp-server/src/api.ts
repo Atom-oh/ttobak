@@ -12,6 +12,7 @@ import type { KBReadingOptions } from './kb-catalog.js';
 import type { NavigationKind } from './navigation-catalog.js';
 import type { MeetingCatalogOptions } from './meeting-catalog.js';
 import type { VaultReadingOptions } from './vault-reading.js';
+import { billingReadingOptions, type BillingReadingOptions } from './billing-reading.js';
 
 // Extension -> MIME type, shared by both upload tools for inference only --
 // each tool advertises its own narrower format list (kb_upload: pdf/md/pptx/
@@ -267,6 +268,18 @@ export class TtobakApi {
 
   async listAccounts() {
     return this.get('/api/accounts');
+  }
+
+  async readBilling(options: BillingReadingOptions) {
+    // Validate even non-tool callers before selecting this narrowly scoped public transport.
+    const { section, ...args } = options;
+    const checked = billingReadingOptions(Object.fromEntries(Object.entries(args).filter(([, v]) => v !== undefined)), section);
+    const query = new URLSearchParams({ section: checked.section, pageSize: String(checked.pageSize) });
+    for (const key of ['source', 'dataset', 'versionId', 'cursor'] as const) {
+      if (checked[key] !== undefined) query.set(key, checked[key]);
+    }
+    return this.request('GET', `/api/billing/accounts/${identifier(checked.accountId, 'accountId')}/reading?${query}`,
+      undefined, 14000, true);
   }
 
   async readNavigation(kind: NavigationKind, options: KBReadingOptions) {
@@ -757,9 +770,9 @@ export class TtobakApi {
     });
   }
 
-  private async request(method: string, path: string, body?: unknown, maxResponseBytes?: number): Promise<unknown> {
+  private async request(method: string, path: string, body?: unknown, maxResponseBytes?: number, callerTokenTransport = false): Promise<unknown> {
     this.options.signal?.throwIfAborted();
-    if (this.options.privateTransport) {
+    if (this.options.privateTransport && !callerTokenTransport) {
       return this.options.privateTransport({
         method, path, body: body ?? null, signal: this.options.signal,
         maxResponseBytes: Math.min(32_000, maxResponseBytes ?? this.options.maxResponseBytes ?? 32_000),

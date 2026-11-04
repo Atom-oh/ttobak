@@ -68,8 +68,9 @@ function createStore({ ddb, table, now = Date.now }) {
   }
 
   return {
-    async account(acct) {
-      const r = await ddb.send(new GetItemCommand({ TableName: table, Key: key(acctPk(acct), 'META') }));
+    async account(acct, consistentRead = false) {
+      const r = await ddb.send(new GetItemCommand({ TableName: table, Key: key(acctPk(acct), 'META'),
+        ...(consistentRead ? { ConsistentRead: true } : {}) }));
       return r.Item ? unmarshalItem(r.Item) : null;
     },
     async known() {
@@ -132,8 +133,9 @@ function createStore({ ddb, table, now = Date.now }) {
         Item: { ...item, ...key(acctPk(rec.accountId), `UP#${uploadOf(rec.uploadId)}`) },
       }));
     },
-    async upload(acct, id) {
-      const r = await ddb.send(new GetItemCommand({ TableName: table, Key: key(acctPk(acct), `UP#${uploadOf(id)}`) }));
+    async upload(acct, id, consistentRead = false) {
+      const r = await ddb.send(new GetItemCommand({ TableName: table, Key: key(acctPk(acct), `UP#${uploadOf(id)}`),
+        ...(consistentRead ? { ConsistentRead: true } : {}) }));
       return r.Item ? unmarshalItem(r.Item) : null;
     },
     // uploadIds embed a UTC timestamp, so reverse sort-key order is newest first

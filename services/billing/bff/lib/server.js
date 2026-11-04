@@ -4,6 +4,7 @@ const { S3Client } = require('@aws-sdk/client-s3');
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const { createApp } = require('../app.js');
 const { createAuthenticate } = require('./auth.js');
+const { createConnectorAuthenticate } = require('./connector-auth.js');
 const { makePresigner } = require('./uploads.js');
 
 const REQUIRED = ['DATA_BUCKET', 'ACCOUNT_TABLE', 'PLATFORM_TABLE', 'PUBLIC_URL', 'USER_POOL_ID', 'BILLING_ALLOWED_CLIENT_IDS'];
@@ -16,11 +17,27 @@ const parseClientIds = (s) => String(s || '').split(',').map((x) => x.trim()).fi
 // the S3 client and the presigner share one region so presigned hosts are <bucket>.s3.<region>.amazonaws.com
 function buildDeps(env) {
   const region = env.AWS_REGION || DEFAULT_REGION;
+  const ddb = new DynamoDBClient({ region });
+  const authenticate = createAuthenticate({ userPoolId: env.USER_POOL_ID, clientIds: parseClientIds(env.BILLING_ALLOWED_CLIENT_IDS) });
+  const keys = ['BILLING_CONNECTOR_READ_CLIENT_ID', 'BILLING_CONNECTOR_WRITE_CLIENT_ID', 'BILLING_CONNECTOR_AUDIENCE'];
+  let authenticateReading = authenticate;
+  if (keys.some(k => env[k])) {
+    if (keys.some(k => !env[k])) throw new Error('INVALID_CONNECTOR_CONFIG');
+    // Package builds the canonical MCP policy without requiring MCP node_modules.
+    const { dynamoGrantResolver, effectiveCapabilities } = require('./connector-policy.cjs');
+    authenticateReading = createConnectorAuthenticate({
+      userPoolId: env.USER_POOL_ID,
+      clientIds: [env.BILLING_CONNECTOR_READ_CLIENT_ID, env.BILLING_CONNECTOR_WRITE_CLIENT_ID],
+      audience: env.BILLING_CONNECTOR_AUDIENCE, browserAuthenticate: authenticate, effectiveCapabilities,
+      resolve: dynamoGrantResolver(ddb, env.ACCOUNT_TABLE, env.BILLING_CONNECTOR_AUDIENCE,
+        `https://cognito-idp.${region}.amazonaws.com/${env.USER_POOL_ID}`),
+    });
+  }
   return {
     s3: new S3Client({ region }),
-    ddb: new DynamoDBClient({ region }),
+    ddb,
     presign: makePresigner({ region }),
-    authenticate: createAuthenticate({ userPoolId: env.USER_POOL_ID, clientIds: parseClientIds(env.BILLING_ALLOWED_CLIENT_IDS) }),
+    authenticate, authenticateReading,
   };
 }
 

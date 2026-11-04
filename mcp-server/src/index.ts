@@ -22,6 +22,7 @@ import { kbReadingOptions, kbReadingResult } from './kb-catalog.js';
 import { navigationOptions, navigationResult } from './navigation-catalog.js';
 import { meetingCatalogOptions, meetingCatalogResult } from './meeting-catalog.js';
 import { vaultReadingOptions, vaultReadingResult } from './vault-reading.js';
+import { BILLING_TOOLS, billingReadingOptions, billingReadingResult } from './billing-reading.js';
 import { Recorder, MAX_MAX_MINUTES, type UploadProgress } from './recorder.js';
 import { AppControlError, defaultAppSocketPath, sendAppRequest, type AppAction } from './app-control.js';
 
@@ -48,6 +49,7 @@ export interface ServerOptions {
 
 const registry: { tools: Tool[] } = {
   tools: [
+    ...BILLING_TOOLS,
     {
       name: 'ttobak_login',
       description:
@@ -638,6 +640,14 @@ async function callTool(request: CallToolRequest, options: ServerOptions) {
 
   try {
     switch (name) {
+      case 'ttobak_get_billing_account':
+      case 'ttobak_get_billing_dataset':
+      case 'ttobak_get_billing_report': {
+        const section = name === 'ttobak_get_billing_account' ? 'metadata' :
+          name === 'ttobak_get_billing_dataset' ? 'dataset' : 'report';
+        const options = billingReadingOptions(args, section);
+        return billingReadingResult(await api.readBilling(options), options);
+      }
       case 'ttobak_login': {
         await auth.getIdToken();
         return text('Authenticated successfully with TTOBAK.');
