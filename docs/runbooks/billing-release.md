@@ -20,20 +20,9 @@ The COT core consists of `Current_State_Template.xlsx`, `COH_Template.xlsx` and
 `Template.xlsx` and `PPT_Companion.pptx`. When present, the combined Template
 supplies the dataset sheets; otherwise both core workbooks supply them.
 
-## BFF and frontend
+## Existing companion worker: deploy first
 
-Package the BFF, synthesize and freeze the assembly. Review the
-`TtobakBillingStack` diff, preserving both data SSM parameters and CloudFront
-ingress. Deploy only that stack with `--exclusively`; do not deploy Gateway,
-Knowledge or implicit dependencies. Verify the endpoint routes 100% to an
-active `IamAuth` revision and its actual pinned S3 zip matches the reviewed code.
-
-Publish `frontend/out` with `scripts/publish-frontend.sh`, supplying `S3_BUCKET`
-and `CF_DISTRIBUTION`. Preserve runtime `config.json`, publish assets before
-HTML, and verify invalidation completion and public file hashes. An anonymous
-Billing API request must remain unauthorized.
-
-## Existing companion worker
+Complete and verify step 4 before publishing BFF/frontend three-file support.
 
 1. Capture the original `TossBillingDashboard` template, current task definition,
    EventBridge target, image digest and stack parameters in a private release
@@ -61,6 +50,19 @@ procedure. A later companion CDK deployment must retain the released image
 digest, or it can revert this image-only update. Move worker ownership into
 TTOBAK CDK separately rather than creating two consumers for the same jobs.
 
+## BFF and frontend
+
+Package the BFF, synthesize and freeze the assembly. Review the
+`TtobakBillingStack` diff, preserving both data SSM parameters and CloudFront
+ingress. Deploy only that stack with `--exclusively`; do not deploy Gateway,
+Knowledge or implicit dependencies. Verify the endpoint routes 100% to an
+active `IamAuth` revision and its actual pinned S3 zip matches the reviewed code.
+
+Publish `frontend/out` with `scripts/publish-frontend.sh`, supplying `S3_BUCKET`
+and `CF_DISTRIBUTION`. Preserve runtime `config.json`, publish assets before
+HTML, and verify invalidation completion and public file hashes. An anonymous
+Billing API request must remain unauthorized.
+
 ## Acceptance and rollback
 
 Check direct and ancestor team discovery/upload access and denied unrelated
@@ -68,6 +70,7 @@ access. Upload a three-file COT with COT selected; check extraction, dataset
 checks and final processing state. Local staging/dataset success and a matching
 deployed image do not prove an authenticated production upload completed.
 
-For rollback, create another image-only change set restoring the captured
-worker image. Restore the prior BFF revision/package and frontend release only
-for faults in those units. Retain customer data and published versions.
+Before reverting the worker, restore the prior frontend and drain queued/active
+three-file COT jobs. Then restore the captured image with an image-only change
+set. Re-enable three-file support only after verifying a compatible worker target.
+Restore the prior BFF for faults in that unit. Retain customer data and versions.
