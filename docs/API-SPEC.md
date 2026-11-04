@@ -244,14 +244,15 @@ API, so they are not part of the Go route inventory above. Identity comes only
 from `Authorization: Bearer <JWT>`, verified by the BFF (issuer, signature,
 expiry and client allowlist; see
 [ADR-056](decisions/ADR-056-billing-service-origin-and-identity.md)). Access
-is direct canonical membership of the account only; hierarchy and pending rows
-grant nothing. Billing uploads and POSTs work only on the custom domain
+uses canonical direct membership or validated ancestor membership (ADR-060);
+pending rows grant nothing. Billing uploads and POSTs work only on the custom domain
 (`PUBLIC_URL`), not on the raw CloudFront domain.
 
 | Route | Notes |
 |---|---|
 | `GET /api/billing/accounts` | Accounts the caller is a member of, with the current version of each source. |
 | `GET /api/billing/data/{id}.json` | One dataset. Optional `acct` and `v` (both required together) select one published version of one account. |
+| `GET /api/billing/accounts/{acct}/reading` | Bounded metadata, CUR/COT dataset or Markdown report for MCP; current team access is checked before and after reading. |
 | `GET /api/billing/accounts/{acct}/report` | Markdown report. `source=cot\|cur` is required, `v` is optional. |
 | `POST /api/billing/accounts/{acct}/uploads` | Create an upload. |
 | `POST /api/billing/accounts/{acct}/uploads/{id}/complete` | Complete an upload. |
@@ -265,9 +266,29 @@ grant nothing. Billing uploads and POSTs work only on the custom domain
 A missing or invalid token returns 401 with
 `{ "error": { "code": "UNAUTHORIZED", "message": "..." } }`. Every other error
 (including 404, 500 and 503) has a Billing-specific JSON body:
-`{ "error": "<string>" }`. Every response carries
+`{ "error": "<string>" }`, except the bounded reading route, which uses the
+standard `{ "error": { "code": "...", "message": "..." } }` shape. Every response carries
 `Cache-Control: private, no-store`. POST requests require a JSON content type,
 `X-TB: 1` and a same-origin `Origin`, otherwise they return 403.
+
+The reading route alone also accepts dedicated connector access tokens with the
+exact MCP resource audience and read scope. It resolves canonical client policy
+and user approval before and after reading; blocked clients cannot publish a
+result. Existing browser authentication remains supported. Connector tokens do
+not authorize Billing catalog, uploads or reruns.
+
+Use `section=metadata|dataset|report`; content requires `source=cot|cur`, and
+`dataset` is required only for dataset reads. Optional `versionId` selects a
+published upload; omission selects the current source. `pageSize` is 1000–8000
+UTF-8 bytes (default 4000), and `cursor` is at most 2048 characters. Unknown
+parameters are rejected. A supported dataset may have no published file (404).
+Metadata returns `dataJson`; dataset and report pages return `dataJson` and
+`markdown` respectively, plus source revision, byte offsets and
+`page.complete/nextCursor`. Concatenate same-revision fragments before parsing
+JSON. API JSON is capped at 14,000 encoded bytes; S3 sources at 48 MiB. Current
+pointer/upload reads are strongly consistent. Source or selection changes return
+409: restart without a cursor. Missing or unauthorized accounts return 404;
+oversized sources return 413. No presigned URLs are returned.
 
 ### Meetings and pagination
 

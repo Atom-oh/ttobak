@@ -142,7 +142,7 @@ function verifySignature(token, pem) {
 }
 
 // Validate JWT
-async function validateToken(token, uri) {
+async function validateToken(token, uri, method) {
   try {
     const parts = token.split('.');
     if (parts.length !== 3) return false;
@@ -174,9 +174,10 @@ async function validateToken(token, uri) {
       if (!scopes.includes(CONNECTOR_READ_SCOPE) ||
           scopes.some(s => !['openid', 'email', 'profile', CONNECTOR_READ_SCOPE].includes(s) &&
             !(write && s === CONNECTOR_WRITE_SCOPE))) return false;
-      // Only the dedicated reader may reach the separately constrained HTTP
-      // API. The writer always enters the signed, current-grant MCP bridge.
-      if (write && uri !== '/api/mcp') return false;
+      // Billing verifies the caller token and current connector grants itself.
+      // Allow writers only on its exact bounded GET, never Billing mutations.
+      const billingRead = method === 'GET' && /^\\/api\\/billing\\/accounts\\/[A-Za-z0-9_-]{1,64}\\/reading$/.test(uri);
+      if (write && uri !== '/api/mcp' && !billingRead) return false;
     }
 
     // Fetch JWKS and verify signature
@@ -236,7 +237,7 @@ exports.handler = async (event) => {
   const token = authValue.startsWith('Bearer ') ? authValue.slice(7) : authValue;
 
   // Validate token
-  const isValid = await validateToken(token, request.uri);
+  const isValid = await validateToken(token, request.uri, request.method);
 
   if (!isValid) {
     return unauthorized(request, 'Invalid or expired token', true);
