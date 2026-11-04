@@ -22,7 +22,7 @@ export function SAPreparation({ value, onChange, title, onTitleChange, accountId
   const { user, membershipRevision } = useAuth();
   const userId = user?.userId;
   const [accounts, setAccounts] = useState<AccountSummary[]>([]);
-  const [documents, setDocuments] = useState<AccountDocument[]>([]);
+  const [documents, setDocuments] = useState<{ userId: string | undefined; items: AccountDocument[] }>({ userId, items: [] });
   const [selected, setSelected] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -59,17 +59,17 @@ export function SAPreparation({ value, onChange, title, onTitleChange, accountId
     });
     void docApi.list('prep').then(response => {
       if (!active) return;
-      setDocuments(response.documents || []);
+      setDocuments({ userId, items: response.documents || [] });
       setDocumentStatus({ key: catalogKey, error: '' });
     }).catch(() => {
       if (!active) return;
-      setDocuments([]);
+      setDocuments({ userId, items: [] });
       setDocumentStatus({ key: catalogKey, error: '준비 문서 목록을 불러오지 못했습니다.' });
     });
     return () => { active = false; };
   }, [userId, catalogKey]);
   const currentAccounts = userId && accountStatus.key === catalogKey ? accounts : [];
-  const currentDocuments = userId && documentStatus.key === catalogKey ? documents : [];
+  const currentDocuments = userId && documentStatus.key === catalogKey && documents.userId === userId ? documents.items : [];
   const accountsLoading = !!userId && (accountStatus.key !== catalogKey || accountStatus.loading);
   const accountError = userId && accountStatus.key === catalogKey ? accountStatus.error : '';
   const documentError = userId && documentStatus.key === catalogKey ? documentStatus.error : '';
@@ -110,7 +110,10 @@ export function SAPreparation({ value, onChange, title, onTitleChange, accountId
       const current = callbacks.current;
       if (current.userId !== userId) return;
       setSaved({ id: document.docId, text: value });
-      setDocuments((documents) => [document, ...documents.filter((item) => item.docId !== document.docId)]);
+      setDocuments((documents) => ({
+        userId,
+        items: [document, ...(documents.userId === userId ? documents.items : []).filter((item) => item.docId !== document.docId)],
+      }));
       setDocumentStatus({ key: current.catalogKey, error: '' });
     } catch (failure) {
       if (callbacks.current.userId === userId) setError(failure instanceof Error ? failure.message : '준비 문서를 저장하지 못했습니다.');
