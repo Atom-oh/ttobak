@@ -275,16 +275,13 @@ Search-provided dates are identified separately from dates extracted from articl
 Renderer rejection settles known cost without uploading. An ambiguous upload or
 insufficient settlement time retains the reservation and immutable objects.
 Each invocation reserves both maximum input/output model calls before inference,
-requires positive caller-supplied rates and counts the actual prompt before each
-call. `news_model.py` signs the supported Opus 5 token-count request for the fixed
-US East (N. Virginia) Mantle endpoint, with no redirects or application retries.
-Isolated DNS resolution and every socket read share one 20-second monotonic
-deadline through the pinned-address transport;
-Converse remains on the injected regional runtime client. This is an explicit
-cross-region AWS service integration using public source material. The ordinary
-runtime CountTokens API does not support this model's inference profile; see the
-[AWS token-counting contract](https://docs.aws.amazon.com/bedrock/latest/userguide/count-tokens.html).
-Activation still requires Mantle/Converse IAM and publication-aware consumers.
+requires positive caller-supplied rates and bounds the actual prompt before each
+call. The runtime CountTokens API does not support this model's inference
+profile, so `news_model.py` bounds input locally from UTF-8 text bytes plus a
+fixed framing allowance; service-reported usage is still charged and capped
+after each call. Converse uses the injected Seoul runtime client only, with no
+Mantle or cross-region token-count call.
+Activation still requires Converse IAM and publication-aware consumers.
 `news_runtime.py` supplies private discovery, worker and finalization handlers,
 dated positive prices, no-retry SDK clients and invocation-local deadlines.
 Writers default off; canary mode accepts only the configured source. Finalization

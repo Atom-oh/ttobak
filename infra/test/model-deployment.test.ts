@@ -54,7 +54,7 @@ describe('model deployment wiring', () => {
     const api = functions.find(fn => fn.Properties.FunctionName === 'ttobak-api')!;
     expect(summary.Properties.Environment.Variables.BEDROCK_SUMMARY_MODEL_ID).toBe(summaryModel);
     expect(api.Properties.Environment.Variables.BEDROCK_TRANSLATE_MODEL_ID).toBe('global.openai.gpt-6-luna');
-    expect(summary.Properties.Environment.Variables.BEDROCK_MODEL_ID).toBe('global.anthropic.claude-opus-5');
+    expect(summary.Properties.Environment.Variables.BEDROCK_MODEL_ID).toBe('global.anthropic.claude-opus-5-5');
     expect(summary.Properties.Environment.Variables.BEDROCK_SONNET_MODEL_ID).toBe('global.anthropic.claude-sonnet-5-5');
     // Live question detection: a Claude profile the QA role's claude-* grant covers (qwen3-32b was an invalid id here).
     const qa = functions.find(fn => fn.Properties.FunctionName === 'ttobak-qa')!;

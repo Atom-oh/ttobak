@@ -200,13 +200,9 @@ describe('private news publication release', () => {
     const policies = resources.filter(r => r.Type === 'AWS::IAM::Policy');
     const all = policies.flatMap(p => p.Properties.PolicyDocument.Statement);
     const actions = (s: any): string[] => Array.isArray(s.Action) ? s.Action : [s.Action];
-    const count = all.filter(s => actions(s).includes('bedrock-mantle:CountTokens'));
-    expect(count).toHaveLength(1);
-    expect(resolved(count[0].Resource)).toBe(
-      'arn:ref-AWS::Partition:bedrock-mantle:us-east-1:ref-AWS::AccountId:project/default');
-    expect(count[0].Condition).toEqual({
-      StringEquals: { 'bedrock-mantle:Model': 'anthropic.claude-opus-5' },
-    });
+    // Input is bounded locally; publication never calls Mantle or CountTokens.
+    expect(all.filter(s => actions(s).some(a => a.startsWith('bedrock-mantle:')
+      || a === 'bedrock:CountTokens'))).toHaveLength(0);
     const uploads = all.filter(s => actions(s).includes('s3:PutObject'));
     expect(uploads).toHaveLength(1);
     expect(resolved(uploads[0].Resource)).toEqual([
@@ -247,7 +243,7 @@ describe('private news publication release', () => {
     const model = all.filter(s => actions(s).includes('bedrock:InvokeModel'));
     expect(model).toHaveLength(1);
     expect(resolved(model[0].Resource)).toHaveLength(3);
-    expect(resolved(model[0].Resource).every((r: string) => r.endsWith('anthropic.claude-opus-5'))).toBe(true);
+    expect(resolved(model[0].Resource).every((r: string) => r.endsWith('anthropic.claude-opus-5-5'))).toBe(true);
     expect(resolved(model[0].Resource).some((r: string) => r.includes('*'))).toBe(false);
   });
 

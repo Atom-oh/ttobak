@@ -188,7 +188,7 @@ def worker_handler(event, context):
         store=store,
         s3=DeadlineClient(session.client("s3", config=S3_CONFIG), remaining, 12),
         bedrock=NewsModel(session.client("bedrock-runtime", region_name="ap-northeast-2",
-                                        config=MODEL_CONFIG), session.get_credentials),
+                                        config=MODEL_CONFIG)),
         artifact_bucket=artifact_bucket, kb_bucket=kb_bucket,
         policy=policy, month_limit=month_limit, run_limit=run_limit,
         remaining=remaining, now=lambda: int(time.time()))

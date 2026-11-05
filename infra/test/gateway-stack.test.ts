@@ -433,7 +433,7 @@ for bad in ({'Ref':'OtherRole'}, {'Fn::ImportValue':'unknown'}, qa):
       FunctionName: 'ttobak-summarize',
       Environment: {
         Variables: Match.objectLike({
-          BEDROCK_MODEL_ID: 'global.anthropic.claude-opus-5',
+          BEDROCK_MODEL_ID: 'global.anthropic.claude-opus-5-5',
           BEDROCK_SUMMARY_MODEL_ID: 'global.openai.gpt-6.1-sol',
           BEDROCK_SONNET_MODEL_ID: 'global.anthropic.claude-sonnet-5-5',
         }),

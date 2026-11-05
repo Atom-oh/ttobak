@@ -68,7 +68,7 @@ responses instead of assuming absent documents.
 
 ## Token counting and staged receipt compatibility
 
-Opus 5 counting uses the fixed US East (N. Virginia) Mantle endpoint and
+Superseded by the 2026-11-05 amendment below. Opus 5 counting used the fixed US East (N. Virginia) Mantle endpoint and
 `bedrock-mantle` signing service because the ordinary Runtime CountTokens API
 does not support this model's inference profile. The adapter translates the
 complete public text, system instructions and disabled-thinking setting of the
@@ -232,6 +232,21 @@ metadata, and settlement failures retain their conservative behavior. A failed
 second write leaves the first immutable object unpublished and retained. This
 change introduces no upload/model retry, object deletion, or historical ledger
 refund. Local regression evidence does not establish deployed acceptance.
+
+## 2026-11-05 amendment: runtime-only Opus 5.5 publication
+
+News publication moves to `global.anthropic.claude-opus-5-5` on the Seoul
+runtime Converse client and no longer calls Mantle. Runtime CountTokens still
+rejects the Opus 5 and 5.5 profiles (verified in `ap-northeast-2` and
+`us-east-1`), so the pre-call check is a local upper bound: UTF-8 bytes of the
+system and message text plus a fixed framing allowance, assuming each token
+covers at least one byte. The 100,000-token input cap and reservation are
+unchanged. The bound is stricter than the exact count for dense non-Latin text,
+so oversized multi-source Korean inputs fail with `INPUT_BUDGET` before any
+billable call. Service-reported usage remains the charge and the post-call cap
+still rejects overruns. The worker role loses its `bedrock-mantle` grant and
+keeps exact Opus 5.5 profile/model resources. Mantle remains limited to the
+GPT web-search path.
 
 ## Evidence
 

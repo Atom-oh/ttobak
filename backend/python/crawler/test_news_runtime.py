@@ -279,7 +279,7 @@ class TestRuntimeTransactions(unittest.TestCase):
             discovery = runtime.discover_handler({"sourceId": "source", "runId": "run"}, context())
         self.assertEqual(len(discovery["candidates"]), 1)
         model = mock.Mock()
-        model.count_tokens.return_value = {"inputTokens": 100}
+        model.input_token_bound.return_value = {"inputTokens": 100}
         model.converse.return_value = bedrock_response()
         s3 = mock.Mock()
         session = mock.Mock()

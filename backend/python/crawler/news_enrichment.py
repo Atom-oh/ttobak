@@ -17,7 +17,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from article_fetcher import ArticleBody, MAX_BODY_CHARS, MIN_BODY_CHARS
 from news_pipeline import canonicalize_url
 
-FINAL_MODEL_ID = os.environ.get("FINAL_MODEL_ID", "global.anthropic.claude-opus-5")
+FINAL_MODEL_ID = os.environ.get("FINAL_MODEL_ID", "global.anthropic.claude-opus-5-5")
 PROMPT_VERSION = "news-v1"
 QUALITY_GATE_VERSION = "news-v1"
 MAX_TOKENS = 6000
