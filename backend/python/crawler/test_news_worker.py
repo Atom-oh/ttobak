@@ -33,7 +33,7 @@ def request():
 class TestMeteredModel(unittest.TestCase):
     def setUp(self):
         self.client = mock.Mock()
-        self.client.count_tokens.return_value = {"inputTokens": 100}
+        self.client.input_token_bound.return_value = {"inputTokens": 100}
         self.client.converse.return_value = bedrock_response()
         self.model = MeteredModel(self.client, POLICY, lambda: 900)
 
@@ -45,16 +45,16 @@ class TestMeteredModel(unittest.TestCase):
 
     def test_oversized_or_missing_count_prevents_billable_model_call(self):
         for count in (None, True, 0, MAX_INPUT_TOKENS + 1):
-            self.client.count_tokens.return_value = {"inputTokens": count}
+            self.client.input_token_bound.return_value = {"inputTokens": count}
             with self.subTest(count=count), self.assertRaisesRegex(QualityRejected, "INPUT_BUDGET"):
                 self.model.converse(**request())
         self.client.converse.assert_not_called()
         self.assertTrue(self.model.complete)
 
-    def test_count_tokens_and_converse_use_the_same_source_messages(self):
+    def test_input_bound_and_converse_use_the_same_source_messages(self):
         value = request()
         self.model.converse(**value)
-        self.assertEqual(self.client.count_tokens.call_args.kwargs["input"]["converse"]["messages"],
+        self.assertEqual(self.client.input_token_bound.call_args.kwargs["input"]["converse"]["messages"],
                          self.client.converse.call_args.kwargs["messages"])
         self.assertEqual(self.model.usage, {"inputTokens": 100, "outputTokens": 50})
 
@@ -100,7 +100,7 @@ class TestMeteredModel(unittest.TestCase):
         short = MeteredModel(self.client, POLICY, lambda: 100)
         with self.assertRaisesRegex(QualityRejected, "RUN_BUDGET"):
             short.converse(**request())
-        self.assertEqual(self.client.count_tokens.call_count, 2)
+        self.assertEqual(self.client.input_token_bound.call_count, 2)
 
 
 class TestCandidateWorker(unittest.TestCase):
@@ -112,7 +112,7 @@ class TestCandidateWorker(unittest.TestCase):
             "status": kw["status"], "reason": kw.get("reason", ""),
             "fetchWarnings": list(kw.get("warnings", []))}
         self.client = mock.Mock()
-        self.client.count_tokens.return_value = {"inputTokens": 100}
+        self.client.input_token_bound.return_value = {"inputTokens": 100}
         self.client.converse.return_value = bedrock_response()
         self.fetch = mock.Mock(return_value=valid_body())
         self.deps = WorkerDeps(

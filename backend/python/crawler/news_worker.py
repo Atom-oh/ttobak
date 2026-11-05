@@ -58,7 +58,7 @@ class ModelPolicy:
 
 
 class MeteredModel:
-    """Count input before invocation and retain usage independently of validation."""
+    """Bound input before invocation and retain usage independently of validation."""
     def __init__(self, client, policy, remaining):
         self.client, self.policy, self.remaining = client, policy, remaining
         self.calls = 0
@@ -74,7 +74,7 @@ class MeteredModel:
             raise QualityRejected("RUN_BUDGET")
         count_input = {key: request[key] for key in
                        ("messages", "system", "additionalModelRequestFields") if key in request}
-        count = self.client.count_tokens(
+        count = self.client.input_token_bound(
             modelId=self.policy.model_id, input={"converse": count_input}).get("inputTokens")
         if type(count) is not int or not 1 <= count <= MAX_INPUT_TOKENS:
             raise QualityRejected("INPUT_BUDGET")

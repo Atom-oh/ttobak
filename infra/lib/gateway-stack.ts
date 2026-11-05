@@ -492,7 +492,7 @@ export class GatewayStack extends cdk.Stack {
         SUMMARY_PRIVACY_WRITER_ENABLED: summaryPrivacyWriter.valueAsString,
         TABLE_NAME: props.table.tableName,
         BUCKET_NAME: props.bucket.bucketName,
-        BEDROCK_MODEL_ID: 'global.anthropic.claude-opus-5',
+        BEDROCK_MODEL_ID: 'global.anthropic.claude-opus-5-5',
         BEDROCK_SUMMARY_MODEL_ID: models.meetingSummary,
         BEDROCK_SUMMARY_RETAIN_MODEL_IDS: (models.retainedMeetingSummary ?? []).join(','),
         BEDROCK_SONNET_MODEL_ID: 'global.anthropic.claude-sonnet-5-5',

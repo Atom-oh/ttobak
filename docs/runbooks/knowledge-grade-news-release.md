@@ -79,9 +79,8 @@ exact-table Scan. Scheduling also has an IAM projection attribute allowlist;
 recovery bounds its projection in the request, without an IAM attribute condition.
 Only discovery can invoke the existing search gateway. Only the worker can
 write `news/v1/*` and `knowledge-artifacts/news/v1/*` objects, invoke the verified
-Opus 5 profile/model resources and count tokens on Mantle's default project.
-The Mantle grant includes the exact model condition documented in the
-[service authorization reference](https://docs.aws.amazon.com/service-authorization/latest/reference/list_bedrock-mantle.html).
+Opus 5.5 profile/model resources. Input is bounded locally before each call, so
+no token-count or Mantle permission is granted.
 There is no new application endpoint, function URL, bucket or public policy.
 
 Discovery times out after ten minutes; each worker after fourteen minutes.
@@ -107,24 +106,24 @@ for the first deployment and verify actual function environment values afterward
 
 ## Model price evidence
 
-Verified with the AWS Price List `GetProducts` API on 2026-10-21:
+Verified with the AWS Price List `GetProducts` API on 2026-11-05
+(filters `regionCode=ap-northeast-2`, `model=Claude Opus 5.5`):
 
 | Attribute | Value |
 |---|---|
 | Service code | `AmazonBedrockFoundationModels` |
-| Model / endpoint region | `global.anthropic.claude-opus-5` / `ap-northeast-2` |
+| Model / endpoint region | `global.anthropic.claude-opus-5-5` / `ap-northeast-2` |
 | Tier | Standard Global on-demand, no prompt caching |
-| Input SKU / USD per million tokens | `VJDX59EY55RJM47T` / `5` |
-| Output SKU / USD per million tokens | `XG2YFPFFRJQFPCPT` / `25` |
+| Input SKU / USD per million tokens | `CBFKBYEFMPG236F4` / `4` |
+| Output SKU / USD per million tokens | `Z3MDYMEE2BJBHTVG` / `20` |
 | Offer effective date | `2026-09-01T00:00:00Z` |
-| Retrieved catalog SHA-256 | `76d1f1b3295c9157851e6d9130daa2617bee02c5b6e3a9d19a89b2a557a1f591` |
 
 Source: [AWS Bedrock pricing](https://aws.amazon.com/bedrock/pricing/).
-The public `AmazonBedrock` service code does not contain these Opus 5 products;
+The public `AmazonBedrock` service code does not contain these Opus products;
 use the Foundation Models code above.
 
-Configure `NEWS_INPUT_USD_PER_MTOK=5`, `NEWS_OUTPUT_USD_PER_MTOK=25`,
-`NEWS_PRICE_VERIFIED_ON=2026-10-21`, `NEWS_RUN_LIMIT_USD=2` and
+Configure `NEWS_INPUT_USD_PER_MTOK=4`, `NEWS_OUTPUT_USD_PER_MTOK=20`,
+`NEWS_PRICE_VERIFIED_ON=2026-11-05`, `NEWS_RUN_LIMIT_USD=2` and
 `NEWS_MONTH_LIMIT_USD=25` only while those prices and limits remain intended.
 The configured date must be no more than 90 days old and not in the future.
 Refresh prices before that window expires; changing the date without checking
@@ -140,7 +139,7 @@ These are model-token budgets, not total AWS/search costs.
 2. Deploy current-publication readers before enabling any v1 writer. Check exact
    deployed code, configuration and source revision behavior.
 3. Deploy the private workflow and recovery schedule with writers off. Verify
-   Mantle/Converse, S3 and DynamoDB IAM from the actual function roles.
+   Converse, S3 and DynamoDB IAM from the actual function roles.
 4. Enable one synthetic public-source canary. Record a published article, immutable
    objects, charged usage, run history and successful retry/recovery behavior.
 5. Verify positive current-source QA over both HTTP and WebSocket, the actual
