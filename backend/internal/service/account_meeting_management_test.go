@@ -504,13 +504,28 @@ func (r managedProjectRepo) GetMeetingByID(_ context.Context, meetingID string) 
 	return nil, nil
 }
 
-func (r managedProjectRepo) MeetingProjectLinkInAccount(ctx context.Context, ownerID, meetingID, projectID, accountID string, ref *model.ProjectMeetingRef) error {
+func (r managedProjectRepo) MeetingProjectLinkInAccount(ctx context.Context, ownerID, actorID, meetingID, projectID, accountID string, ref *model.ProjectMeetingRef) error {
+	if r.accountMembers[projectAccountMemberKey(accountID, actorID)] == nil {
+		return repository.ErrSummaryAccess
+	}
 	meeting := r.meetings[projectMeetingKey(ownerID, meetingID)]
 	project := r.projects[projectID]
 	if meeting == nil || project == nil || meeting.AccountID != accountID || !meeting.SharedToAccount || !contains(project.AccountIDs, accountID) {
 		return repository.ErrConditionFailed
 	}
 	return r.MeetingProjectLinkTransactional(ctx, ownerID, meetingID, projectID, ref)
+}
+
+func (r managedProjectRepo) MeetingProjectUnlinkInAccount(ctx context.Context, ownerID, actorID, meetingID, projectID, accountID, refSK string) error {
+	meeting := r.meetings[projectMeetingKey(ownerID, meetingID)]
+	project := r.projects[projectID]
+	if r.accountMembers[projectAccountMemberKey(accountID, actorID)] == nil {
+		return repository.ErrSummaryAccess
+	}
+	if meeting == nil || project == nil || meeting.AccountID != accountID || !meeting.SharedToAccount || !contains(project.AccountIDs, accountID) {
+		return repository.ErrConditionFailed
+	}
+	return r.MeetingProjectUnlinkTransactional(ctx, ownerID, meetingID, projectID, refSK)
 }
 
 func TestMemberProjectLinkRequiresTheMeetingAccount(t *testing.T) {

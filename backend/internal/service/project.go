@@ -722,6 +722,15 @@ func (s *ProjectService) UnlinkMeeting(ctx context.Context, userID, projectID, m
 		if _, err := s.requireProjectAccess(ctx, userID, projectID); err != nil {
 			return err
 		}
+		// The member's unlink is fenced on the meeting's publication, the
+		// project's account link and the member's live grant.
+		unlinker, ok := s.repo.(interface {
+			MeetingProjectUnlinkInAccount(context.Context, string, string, string, string, string, string) error
+		})
+		if !ok {
+			return ErrForbidden
+		}
+		return unlinker.MeetingProjectUnlinkInAccount(ctx, ownerUserID, userID, meetingID, projectID, managed.AccountID, refSK)
 	}
 	if err := s.repo.MeetingProjectUnlinkTransactional(ctx, ownerUserID, meetingID, projectID, refSK); err != nil {
 		if errors.Is(err, repository.ErrConditionFailed) {
@@ -1138,10 +1147,10 @@ func (s *ProjectService) linkMeetingProject(ctx context.Context, actorID string,
 		return s.repo.MeetingProjectLinkTransactional(ctx, meeting.UserID, meeting.MeetingID, projectID, ref)
 	}
 	linker, ok := s.repo.(interface {
-		MeetingProjectLinkInAccount(context.Context, string, string, string, string, *model.ProjectMeetingRef) error
+		MeetingProjectLinkInAccount(context.Context, string, string, string, string, string, *model.ProjectMeetingRef) error
 	})
 	if !ok {
 		return ErrForbidden
 	}
-	return linker.MeetingProjectLinkInAccount(ctx, meeting.UserID, meeting.MeetingID, projectID, meeting.AccountID, ref)
+	return linker.MeetingProjectLinkInAccount(ctx, meeting.UserID, actorID, meeting.MeetingID, projectID, meeting.AccountID, ref)
 }

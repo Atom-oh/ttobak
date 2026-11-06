@@ -16,6 +16,7 @@ import (
 	ebtypes "github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
 	"github.com/google/uuid"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
@@ -551,7 +552,7 @@ func (s *UploadService) RecoverMeeting(ctx context.Context, userID, meetingID st
 	// to (webm on desktop/Android, m4a on iOS Safari, which has no webm
 	// encoder at all), so a fixed ".webm" here made "녹음 복구" fail with
 	// "no recoverable audio found" on every iOS recording, unconditionally.
-	progressKey, ext, modified, err := s.findProgressFile(ctx, owner, meetingID)
+	progressKey, ext, modified, etag, err := s.findProgressFile(ctx, owner, meetingID)
 	if err != nil {
 		return err
 	}
@@ -562,12 +563,14 @@ func (s *UploadService) RecoverMeeting(ctx context.Context, userID, meetingID st
 	// Copy progress file to a final filename (triggers EventBridge S3 event → transcribe Lambda),
 	// preserving whatever extension the progress file actually had.
 	finalKey := fmt.Sprintf("audio/%s/%s/recording_recovered_%s.%s", owner, meetingID, strings.ReplaceAll(uuid.NewString(), "-", ""), ext)
-	_, err = s.s3Client.CopyObject(ctx, &s3.CopyObjectInput{
-		Bucket:     aws.String(s.bucketName),
-		Key:        aws.String(finalKey),
-		CopySource: aws.String(fmt.Sprintf("%s/%s", s.bucketName, progressKey)),
-	})
+	// Copy exactly the checkpoint that passed the quiet-period check: a
+	// newer checkpoint (the creator resumed) fails the precondition.
+	_, err = s.s3Client.CopyObject(ctx, recoveryCopyInput(s.bucketName, progressKey, etag, finalKey))
 	if err != nil {
+		var apiErr smithy.APIError
+		if errors.As(err, &apiErr) && apiErr.ErrorCode() == "PreconditionFailed" {
+			return repository.ErrConditionFailed
+		}
 		return fmt.Errorf("failed to copy progress file: %w", err)
 	}
 
@@ -590,7 +593,7 @@ func (s *UploadService) RecoverMeeting(ctx context.Context, userID, meetingID st
 // (recording_progress.{ext}), overwriting the previous checkpoint each
 // time rather than accumulating one object per tick, so the first match
 // is unambiguous and MaxKeys:1 is safe.
-func (s *UploadService) findProgressFile(ctx context.Context, userID, meetingID string) (key string, ext string, modified time.Time, err error) {
+func (s *UploadService) findProgressFile(ctx context.Context, userID, meetingID string) (key string, ext string, modified time.Time, etag string, err error) {
 	prefix := fmt.Sprintf("audio/%s/%s/recording_progress.", userID, meetingID)
 	out, err := s.s3Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
 		Bucket:  aws.String(s.bucketName),
@@ -598,20 +601,33 @@ func (s *UploadService) findProgressFile(ctx context.Context, userID, meetingID 
 		MaxKeys: aws.Int32(1),
 	})
 	if err != nil {
-		return "", "", time.Time{}, fmt.Errorf("listing progress files: %w", err)
+		return "", "", time.Time{}, "", fmt.Errorf("listing progress files: %w", err)
 	}
 	if len(out.Contents) == 0 || out.Contents[0].Key == nil {
-		return "", "", time.Time{}, ErrRecordingCheckpointMissing
+		return "", "", time.Time{}, "", ErrRecordingCheckpointMissing
 	}
 	key = *out.Contents[0].Key
 	ext = strings.TrimPrefix(path.Ext(key), ".")
 	if !recordingCheckpointExtensions[ext] || key != prefix+ext {
-		return "", "", time.Time{}, fmt.Errorf("progress file %s has unrecognized extension", key)
+		return "", "", time.Time{}, "", fmt.Errorf("progress file %s has unrecognized extension", key)
 	}
 	if out.Contents[0].LastModified != nil {
 		modified = *out.Contents[0].LastModified
 	}
-	return key, ext, modified, nil
+	return key, ext, modified, aws.ToString(out.Contents[0].ETag), nil
+}
+
+// recoveryCopyInput binds the recovery copy to the listed checkpoint ETag.
+func recoveryCopyInput(bucket, progressKey, etag, finalKey string) *s3.CopyObjectInput {
+	input := &s3.CopyObjectInput{
+		Bucket:     aws.String(bucket),
+		Key:        aws.String(finalKey),
+		CopySource: aws.String(fmt.Sprintf("%s/%s", bucket, progressKey)),
+	}
+	if etag != "" {
+		input.CopySourceIfMatch = aws.String(etag)
+	}
+	return input
 }
 
 // memberRecoveryQuietPeriod: a member recovers only after the checkpoint
@@ -733,13 +749,22 @@ func (s *UploadService) RediarizeMeeting(ctx context.Context, userID, meetingID 
 	// can win this write -- the loser gets ConditionalCheckFailedException
 	// and reports "already processing" instead of proceeding, rather than
 	// two copy pipelines racing each other over the same meeting.
-	if err := s.repo.UpdateMeetingFieldsIfMatch(ctx, owner, meetingID, map[string]interface{}{
-		"status": meeting.Status,
-	}, map[string]interface{}{
+	expected := map[string]interface{}{"status": meeting.Status}
+	update := map[string]interface{}{
 		"diarizationSpeakerHint": speakerCount,
 		"speakerMap":             map[string]string{},
 		"status":                 model.StatusTranscribing,
-	}); err != nil {
+	}
+	if userID == owner {
+		err = s.repo.UpdateMeetingFieldsIfMatch(ctx, owner, meetingID, expected, update)
+	} else {
+		// A member's write is fenced on the publication and live grant.
+		err = s.repo.UpdateManagedMeetingFieldsIfMatch(ctx, owner, userID, meetingID, meeting.AccountID, expected, update)
+		if errors.Is(err, repository.ErrSummaryAccess) {
+			return ErrForbidden
+		}
+	}
+	if err != nil {
 		if errors.Is(err, repository.ErrConditionFailed) {
 			return fmt.Errorf("meeting is already being processed: %w", ErrInvalidInput)
 		}

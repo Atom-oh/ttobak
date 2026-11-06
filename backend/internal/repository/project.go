@@ -442,20 +442,20 @@ func (r *DynamoDBRepository) ProjectAccountUnlinkTransactional(ctx context.Conte
 // TransactWriteItems call (same interleaving hazard/fix as
 // ProjectAccountLinkTransactional above).
 func (r *DynamoDBRepository) MeetingProjectLinkTransactional(ctx context.Context, ownerUserID, meetingID, projectID string, ref *model.ProjectMeetingRef) error {
-	return r.meetingProjectLink(ctx, ownerUserID, meetingID, projectID, "", ref)
+	return r.meetingProjectLink(ctx, ownerUserID, meetingID, projectID, "", "", ref)
 }
 
 // MeetingProjectLinkInAccount links the creator's meeting on behalf of a
 // managing account member: the meeting must still be published to
 // accountID and the project must still be linked to that account.
-func (r *DynamoDBRepository) MeetingProjectLinkInAccount(ctx context.Context, ownerUserID, meetingID, projectID, accountID string, ref *model.ProjectMeetingRef) error {
-	if accountID == "" {
+func (r *DynamoDBRepository) MeetingProjectLinkInAccount(ctx context.Context, ownerUserID, actorID, meetingID, projectID, accountID string, ref *model.ProjectMeetingRef) error {
+	if accountID == "" || actorID == "" || actorID == ownerUserID {
 		return ErrConditionFailed
 	}
-	return r.meetingProjectLink(ctx, ownerUserID, meetingID, projectID, accountID, ref)
+	return r.meetingProjectLink(ctx, ownerUserID, meetingID, projectID, accountID, actorID, ref)
 }
 
-func (r *DynamoDBRepository) meetingProjectLink(ctx context.Context, ownerUserID, meetingID, projectID, accountID string, ref *model.ProjectMeetingRef) error {
+func (r *DynamoDBRepository) meetingProjectLink(ctx context.Context, ownerUserID, meetingID, projectID, accountID, actorID string, ref *model.ProjectMeetingRef) error {
 	refItem, err := attributevalue.MarshalMap(ref)
 	if err != nil {
 		return fmt.Errorf("marshal project meeting ref: %w", err)
@@ -480,8 +480,15 @@ func (r *DynamoDBRepository) meetingProjectLink(ctx context.Context, ownerUserID
 	if err != nil {
 		return fmt.Errorf("build project-exists condition: %w", err)
 	}
+	// A member's link also fences the member's live grant in that account.
+	var grant []types.TransactWriteItem
+	if actorID != "" {
+		if grant, err = r.memberGrantItems(ctx, accountID, actorID); err != nil {
+			return err
+		}
+	}
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
-		TransactItems: []types.TransactWriteItem{
+		TransactItems: append([]types.TransactWriteItem{
 			{Update: &types.Update{
 				TableName: aws.String(r.tableName),
 				Key: map[string]types.AttributeValue{
@@ -511,7 +518,7 @@ func (r *DynamoDBRepository) meetingProjectLink(ctx context.Context, ownerUserID
 				ExpressionAttributeNames:  projectExistsExpr.Names(),
 				ExpressionAttributeValues: projectExistsExpr.Values(),
 			}},
-		},
+		}, grant...),
 	})
 	if err != nil {
 		return mapProjectTransactionCanceledError(err, meetingID, "meeting", "link meeting project")
