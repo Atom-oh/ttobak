@@ -6,6 +6,7 @@ import { triggerAuthFailure } from '@/components/auth/AuthProvider';
 import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory, Research, ResearchDetail, ChatMessage, Account, AccountSummary, AccountMember, AccountMeetingRef, AccountInsight, AccountDocument, PutDocumentRequest, AccountResearchRef, Project, ProjectSummary, ProjectMember, ProjectMeetingRef, ProjectResearchRef, ProjectInsight, ProjectBrief } from '@/types/meeting';
 import type { CreateDictTermInput, DeletedCommonTerm, DictionaryLayer, DictionaryResponse, DictTermItem, DictTermMutationResponse, TermLogEntry, TermPatch } from '@/lib/dictionary';
 import type { AccountCreationRequest, AccountCreationResponse } from '@/types/meeting';
+import type { AccountContact, AccountSpeakerTeamMember, ContactInput } from '@/types/meeting';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 const PROJECT_HINTS_KEY = 'ttobak:project-invitation-hints';
@@ -807,6 +808,22 @@ async function getAccounts(options?: { scope?: 'direct' }): Promise<{ accounts: 
 export const accountApi = {
   list: getAccounts,
   get: (id: string, options?: FetchOptions) => api.get<Account>(`/api/accounts/${encodeURIComponent(id)}`, options),
+  contacts: (id: string, expectedUserId: string, cursor = '', signal?: AbortSignal) => {
+    const query = new URLSearchParams({ limit: '25' });
+    if (cursor) query.set('cursor', cursor);
+    return api.get<{ contacts: AccountContact[]; nextCursor?: string }>(`/api/accounts/${encodeURIComponent(id)}/contacts?${query}`, { expectedUserId, signal });
+  },
+  speakerTeam: (id: string, expectedUserId: string, cursor = '', signal?: AbortSignal) => {
+    const query = new URLSearchParams();
+    if (cursor) query.set('cursor', cursor);
+    return api.get<{ members: AccountSpeakerTeamMember[]; nextCursor?: string }>(`/api/accounts/${encodeURIComponent(id)}/speaker-team?${query}`, { expectedUserId, signal });
+  },
+  createContact: (id: string, data: ContactInput, expectedUserId: string, signal?: AbortSignal) =>
+    api.post<AccountContact>(`/api/accounts/${encodeURIComponent(id)}/contacts`, data, { expectedUserId, signal }),
+  updateContact: (id: string, contactId: string, data: ContactInput & { revision: string }, expectedUserId: string, signal?: AbortSignal) =>
+    api.put<AccountContact>(`/api/accounts/${encodeURIComponent(id)}/contacts/${encodeURIComponent(contactId)}`, data, { expectedUserId, signal }),
+  deleteContact: (id: string, contactId: string, revision: string, expectedUserId: string, signal?: AbortSignal) =>
+    api.delete<void>(`/api/accounts/${encodeURIComponent(id)}/contacts/${encodeURIComponent(contactId)}?revision=${encodeURIComponent(revision)}`, { expectedUserId, signal }),
   create: (data: AccountCreationRequest, expectedUserId: string) =>
     api.post<AccountCreationResponse>('/api/accounts', data, { expectedUserId }),
   resendOwnerInvitation: (id: string, expectedUserId: string) =>
