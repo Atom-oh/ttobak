@@ -14,7 +14,7 @@ The product primarily serves Korean conversations; project documentation is Engl
 
 ## Development
 
-Go 1.25 is required by `backend/go.mod`. Use `/usr/local/go/bin/go` locally.
+Go 1.27.3 or newer is required by `backend/go.mod`. Use `/usr/local/go/bin/go` locally.
 CI uses Node 24 for infrastructure and Python 3.12 for Lambda tests; use the
 module manifests/containers for exact dependency versions. macOS is required to
 validate ScreenCaptureKit. Install each module's locked dependencies:
