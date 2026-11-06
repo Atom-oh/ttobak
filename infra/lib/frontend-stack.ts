@@ -520,7 +520,9 @@ function handler(event) {
           ],
         },
       },
-      priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
+      // Class 200 includes the Seoul and Tokyo edges; class 100 routed Korean
+      // viewers to Europe/North America (measured ~250 ms RTT per request).
+      priceClass: cloudfront.PriceClass.PRICE_CLASS_200,
     });
 
     const billingPolicy = props.billing ? this.billingResourcePolicy(props.billing) : undefined;

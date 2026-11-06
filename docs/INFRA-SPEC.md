@@ -188,6 +188,9 @@ setting. Do not claim every PII row has enforced retention, or switch TTL names
 without a separate data-retention review. StorageStack does not declare a customer
 managed KMS key for the table; the policy requirement is not evidence it does.
 
+The site distribution uses price class 200 so viewers in Korea and Japan reach
+local edge locations; class 100 excluded Asia and served Seoul from Europe.
+
 Assets and KB buckets use S3-managed encryption, versioning, retain policies and
 Block Public Access. Media reads use an OAC allowlist for audio/, images/, files/,
 docs/ and docs-pdf/. New categories must extend that allowlist; transcript spill
