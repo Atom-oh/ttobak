@@ -44,15 +44,21 @@
     predecessors published to the same account (never one readable only through
     a private direct share), and the write is fenced on the parent's publication
     and the member's live grant.
-  - Image/file uploads, rediarize and recovery work for members (audio crop,
-    the simulator and project links stay creator-only until the follow-up
-    change); recovery requires a checkpoint quiet for 10 minutes (409
+    A member's project link or unlink requires project access and a project
+    linked to the meeting's current account (links are fenced on both rows).
+  - Image/file uploads, rediarize, simulator, crop (ADR-047 note) and recovery
+    work for members; recovery requires a checkpoint quiet for 10 minutes (409
     `RECORDING_STILL_ACTIVE`). Audio upload is creator-only (403): the S3
     trigger transcribes any object under `audio/{creator}/{meeting}/` before
     a completion or batch check, so member audio waits for a separate staging
     prefix design. Member uploads set the non-owner source marker (at presign
     time for files) and `Attachment.uploadedBy`; their presigned PUTs expire
     after 5 minutes (the creator keeps 1 hour).
+  - A member's rediarize write, project link and project unlink are fenced in
+    their transaction on the meeting's publication and the member's live grant
+    (unlink also on the project's account link). Recovery copies exactly the
+    checkpoint that passed the quiet check (`CopySourceIfMatch` on its listed
+    ETag); a rewritten checkpoint returns 409.
   - Creator-only: delete, the Notion page reference and sharing-safe
     regeneration. Strangers get 404 rather than 403 on these routes.
 

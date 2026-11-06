@@ -32,19 +32,23 @@ func (h *MeetingHandler) CropAudio(w http.ResponseWriter, r *http.Request) {
 	}
 	meeting, err := h.uploadService.CropMeeting(r.Context(), middleware.GetUserID(r.Context()), chi.URLParam(r, "meetingId"), request)
 	if err != nil {
-		switch {
-		case errors.Is(err, service.ErrNotFound):
-			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
-		case errors.Is(err, service.ErrForbidden):
-			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Only the owner can crop this recording")
-		case errors.Is(err, service.ErrInvalidInput):
-			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, err.Error())
-		case errors.Is(err, repository.ErrConditionFailed):
-			writeError(w, http.StatusConflict, "CONFLICT", "The meeting changed; refresh and retry")
-		default:
-			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Could not queue crop; retry the same request")
-		}
+		writeCropError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"meetingId": meeting.MeetingID, "status": meeting.Status})
+}
+
+func writeCropError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, service.ErrNotFound):
+		writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
+	case errors.Is(err, service.ErrForbidden), errors.Is(err, repository.ErrSummaryAccess):
+		writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Only the creator or account team members can crop this recording")
+	case errors.Is(err, service.ErrInvalidInput):
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, err.Error())
+	case errors.Is(err, repository.ErrConditionFailed):
+		writeError(w, http.StatusConflict, "CONFLICT", "The meeting changed; refresh and retry")
+	default:
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Could not queue crop; retry the same request")
+	}
 }

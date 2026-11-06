@@ -305,6 +305,59 @@ func TestActorAccountWritesPinMembershipWithPrivacyWritersOff(t *testing.T) {
 	}
 }
 
+func TestMeetingProjectLinkInAccountFencesMeetingAndProjectAccount(t *testing.T) {
+	t.Setenv(AccountDescendantReadsEnv, "")
+	var items []any
+	member := true
+	repo := summarySDKRepo(func(req *http.Request) (*http.Response, error) {
+		var body map[string]any
+		json.NewDecoder(req.Body).Decode(&body)
+		target := req.Header.Get("X-Amz-Target")
+		if strings.HasSuffix(target, ".GetItem") && member {
+			return summaryHTTPResponse(200, `{"Item":{"PK":{"S":"ACCOUNT#account"},"SK":{"S":"MEMBER#member"},"accountId":{"S":"account"},"userId":{"S":"member"}}}`, nil), nil
+		}
+		if strings.HasSuffix(target, ".TransactWriteItems") {
+			items = body["TransactItems"].([]any)
+		}
+		return summaryHTTPResponse(200, `{}`, nil), nil
+	})
+	ref := &model.ProjectMeetingRef{PK: model.PrefixProject + "project", SK: "MEETINGREF#x", ProjectID: "project", MeetingID: "meeting", OwnerUserID: "owner"}
+	if err := repo.MeetingProjectLinkInAccount(context.Background(), "owner", "member", "meeting", "project", "account", ref); err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 4 {
+		t.Fatalf("want meeting update, ref put, project check and member grant check, got %d", len(items))
+	}
+	if grant := items[3].(map[string]any)["ConditionCheck"].(map[string]any); grant["Key"].(map[string]any)["SK"].(map[string]any)["S"] != "MEMBER#member" {
+		t.Fatal("member link not fenced on the member's live grant")
+	}
+	update := items[0].(map[string]any)["Update"].(map[string]any)
+	names := update["ExpressionAttributeNames"].(map[string]any)
+	condition := update["ConditionExpression"].(string)
+	for _, field := range []string{"accountId", "sharedToAccount"} {
+		found := false
+		for token, name := range names {
+			if name == field && strings.Contains(condition, token) {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("meeting link not fenced on %s: %s", field, condition)
+		}
+	}
+	check := items[2].(map[string]any)["ConditionCheck"].(map[string]any)
+	if !strings.Contains(strings.ReplaceAll(check["ConditionExpression"].(string), " ", ""), "contains(") {
+		t.Fatalf("project account membership not fenced: %v", check["ConditionExpression"])
+	}
+	if err := repo.MeetingProjectLinkInAccount(context.Background(), "owner", "member", "meeting", "project", "", ref); !errors.Is(err, ErrConditionFailed) {
+		t.Fatalf("an empty account must not fall back to the creator path: %v", err)
+	}
+	member, items = false, nil
+	if err := repo.MeetingProjectLinkInAccount(context.Background(), "owner", "member", "meeting", "project", "account", ref); !errors.Is(err, ErrSummaryAccess) || items != nil {
+		t.Fatalf("removed member link: %v (items=%d)", err, len(items))
+	}
+}
+
 // A member's predecessor links commit with the parent's publication and the
 // member's live grant in one transaction.
 func TestMemberPredecessorLinksFenceParentPublicationAndGrant(t *testing.T) {

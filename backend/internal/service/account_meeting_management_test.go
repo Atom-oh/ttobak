@@ -424,6 +424,19 @@ func TestMemberMayRecoverOnlyStaleRecordings(t *testing.T) {
 	}
 }
 
+func TestCropTeamAccount(t *testing.T) {
+	published := &model.Meeting{UserID: "owner", AccountID: "acc", SharedToAccount: true}
+	if got := cropTeamAccount("member", published); got != "acc" {
+		t.Fatalf("member copy publishes to the source account: %q", got)
+	}
+	if got := cropTeamAccount("owner", published); got != "" {
+		t.Fatalf("creator copy stays private: %q", got)
+	}
+	if got := cropTeamAccount("member", &model.Meeting{UserID: "owner", AccountID: "acc"}); got != "" {
+		t.Fatalf("unpublished source: %q", got)
+	}
+}
+
 func TestRediarizeUsesCreatorAudioPrefix(t *testing.T) {
 	meeting := &model.Meeting{UserID: "owner", MeetingID: "m", Status: model.StatusDone, AudioKey: "audio/owner/m/a.webm"}
 	if key, err := validateRediarizeEligibility(meeting, meeting.UserID, 3); err != nil || key != "audio/owner/m/a.webm" {
@@ -470,5 +483,103 @@ func TestMemberPresignsAreShortLivedAndMarkSources(t *testing.T) {
 		if got := presignMarksSourceEdit(tc.category, tc.actor, "owner"); got != tc.want {
 			t.Fatalf("%s by %s: marks=%v want %v", tc.category, tc.actor, got, tc.want)
 		}
+	}
+}
+
+// managedProjectRepo gives the project double the share/membership reads a
+// manager check needs plus the account-fenced link write.
+type managedProjectRepo struct{ *mockProjectRepo }
+
+func (r managedProjectRepo) GetShare(context.Context, string, string) (*model.Share, error) {
+	return nil, nil
+}
+
+func (r managedProjectRepo) GetMeetingByID(_ context.Context, meetingID string) (*model.Meeting, error) {
+	for _, meeting := range r.meetings {
+		if meeting.MeetingID == meetingID {
+			copy := *meeting
+			return &copy, nil
+		}
+	}
+	return nil, nil
+}
+
+func (r managedProjectRepo) MeetingProjectLinkInAccount(ctx context.Context, ownerID, actorID, meetingID, projectID, accountID string, ref *model.ProjectMeetingRef) error {
+	if r.accountMembers[projectAccountMemberKey(accountID, actorID)] == nil {
+		return repository.ErrSummaryAccess
+	}
+	meeting := r.meetings[projectMeetingKey(ownerID, meetingID)]
+	project := r.projects[projectID]
+	if meeting == nil || project == nil || meeting.AccountID != accountID || !meeting.SharedToAccount || !contains(project.AccountIDs, accountID) {
+		return repository.ErrConditionFailed
+	}
+	return r.MeetingProjectLinkTransactional(ctx, ownerID, meetingID, projectID, ref)
+}
+
+func (r managedProjectRepo) MeetingProjectUnlinkInAccount(ctx context.Context, ownerID, actorID, meetingID, projectID, accountID, refSK string) error {
+	meeting := r.meetings[projectMeetingKey(ownerID, meetingID)]
+	project := r.projects[projectID]
+	if r.accountMembers[projectAccountMemberKey(accountID, actorID)] == nil {
+		return repository.ErrSummaryAccess
+	}
+	if meeting == nil || project == nil || meeting.AccountID != accountID || !meeting.SharedToAccount || !contains(project.AccountIDs, accountID) {
+		return repository.ErrConditionFailed
+	}
+	return r.MeetingProjectUnlinkTransactional(ctx, ownerID, meetingID, projectID, refSK)
+}
+
+func TestMemberProjectLinkRequiresTheMeetingAccount(t *testing.T) {
+	base := newMockProjectRepo()
+	base.meetings[projectMeetingKey("owner-1", "m-1")] = &model.Meeting{MeetingID: "m-1", UserID: "owner-1", AccountID: "acc", SharedToAccount: true, Date: time.Now()}
+	addProjectAccountMember(base, "acc", "member-1")
+	addProjectAccountMember(base, "elsewhere", "member-1")
+	inAccount := seedProject(base, "p-acc", "project-owner")
+	inAccount.AccountIDs = []string{"acc"}
+	other := seedProject(base, "p-other", "project-owner")
+	other.AccountIDs = []string{"elsewhere"}
+	svc := newProjectServiceWithRepo(managedProjectRepo{base})
+	if err := svc.LinkMeeting(context.Background(), "member-1", "p-other", "m-1"); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("member linked the meeting to a project outside its account: %v", err)
+	}
+	if err := svc.LinkMeeting(context.Background(), "member-1", "p-acc", "m-1"); err != nil {
+		t.Fatalf("member link within the account: %v", err)
+	}
+	refs := base.meetingRefs["p-acc"]
+	if len(refs) != 1 || refs[0].OwnerUserID != "owner-1" || !contains(base.meetings[projectMeetingKey("owner-1", "m-1")].ProjectIDs, "p-acc") {
+		t.Fatalf("link must stay the creator's: %+v", refs)
+	}
+	if err := svc.UnlinkMeeting(context.Background(), "member-1", "p-acc", "m-1"); err != nil {
+		t.Fatalf("member unlink: %v", err)
+	}
+	if err := svc.LinkMeeting(context.Background(), "stranger", "p-acc", "m-1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("stranger link: %v", err)
+	}
+}
+
+func TestMemberProjectUnlinkRequiresTheMeetingAccount(t *testing.T) {
+	base := newMockProjectRepo()
+	base.meetings[projectMeetingKey("owner-1", "m-1")] = &model.Meeting{MeetingID: "m-1", UserID: "owner-1", AccountID: "acc", SharedToAccount: true, Date: time.Now()}
+	addProjectAccountMember(base, "acc", "member-1")
+	addProjectAccountMember(base, "elsewhere", "member-1")
+	outside := seedProject(base, "p-other", "project-owner")
+	outside.AccountIDs = []string{"elsewhere"}
+	base.meetingRefs["p-other"] = []model.ProjectMeetingRef{{PK: model.PrefixProject + "p-other", SK: "MEETINGREF#m-1",
+		ProjectID: "p-other", MeetingID: "m-1", OwnerUserID: "owner-1"}}
+	base.meetings[projectMeetingKey("owner-1", "m-1")].ProjectIDs = []string{"p-other"}
+	svc := newProjectServiceWithRepo(managedProjectRepo{base})
+	if err := svc.UnlinkMeeting(context.Background(), "member-1", "p-other", "m-1"); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("member unlinked the meeting from a project outside its account: %v", err)
+	}
+	if len(base.meetingRefs["p-other"]) != 1 {
+		t.Fatal("a refused unlink removed the ref")
+	}
+	inside := seedProject(base, "p-acc", "project-owner")
+	inside.AccountIDs = []string{"acc"}
+	if err := svc.LinkMeeting(context.Background(), "member-1", "p-acc", "m-1"); err != nil {
+		t.Fatal(err)
+	}
+	delete(base.accountMembers, projectAccountMemberKey("acc", "member-1"))
+	if err := svc.UnlinkMeeting(context.Background(), "member-1", "p-acc", "m-1"); err == nil {
+		t.Fatal("a former member unlinked")
 	}
 }
