@@ -36,6 +36,17 @@ recordings through the app's local socket
 signed in; the window comes forward and a notification names each MCP-started
 recording. See [ADR-046](../docs/decisions/ADR-046-mac-core-audio-tap-and-microphone.md).
 
+## Meeting detection
+
+When Zoom, Teams, Webex, Slack, FaceTime, Chime or Discord starts using the
+microphone, or a browser does with a Google Meet, Teams or Zoom web tab open, the
+app posts a notification and the window shows a prompt to start recording. It
+never records without confirmation, and offers to stop when the meeting ends.
+Browser detection asks for Automation permission per browser; its script keeps
+only meeting URLs and discards the rest; Firefox is not detected. Turn it off in Settings. Reset browser
+permission with `tccutil reset AppleEvents click.atomai.ttobak.mac`. See
+[ADR-061](../docs/decisions/ADR-061-mac-meeting-detection-prompts.md).
+
 ## Recovery and limits
 
 Wait for upload completion before closing the lid. Idle-sleep prevention does not

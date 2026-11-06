@@ -115,7 +115,7 @@ fn valid_id(id: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
-fn bounded_text(value: &str, max_chars: usize) -> bool {
+pub fn bounded_text(value: &str, max_chars: usize) -> bool {
     let trimmed = value.trim();
     !trimmed.is_empty()
         && trimmed.chars().count() <= max_chars
