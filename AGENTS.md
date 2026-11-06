@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: d3291f0ab649 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: f53aa3037299 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
 # TTOBAK review context
 
 Shared by Codex, Kiro, and the CI review panel. Extracted from the
@@ -31,7 +31,7 @@ canonical CLAUDE.md; delivery procedures and historical records are omitted.
 | Area | Implementation | Source of truth |
 |---|---|---|
 | Web | Next.js 16, React 19, Tailwind 4, TipTap; production static export | `frontend/package.json`, `frontend/next.config.ts`, `frontend/src/` |
-| API | Go 1.25, ARM64 Lambda, chi | `backend/go.mod`, `backend/cmd/api/main.go` |
+| API | Go 1.27.3, ARM64 Lambda, chi | `backend/go.mod`, `backend/cmd/api/main.go` |
 | Go functions | Eight zip entry points: api, transcribe, summarize, process-image, kb, research-worker, websocket, ws-authorizer | `backend/cmd/`, `infra/lib/gateway-stack.ts` |
 | Document conversion | Separate Go container with LibreOffice; not a zip | `backend/cmd/convert-doc/` |
 | Python | QA, crawler, simulator and document-extraction Lambdas; separate research-agent container | `backend/python/`, each requirements/Dockerfile |

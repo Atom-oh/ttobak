@@ -6,6 +6,48 @@ const zipTargets = [
   'cmd/kb', 'cmd/research-worker', 'cmd/websocket', 'cmd/ws-authorizer',
 ].sort();
 
+test('backend Go build paths use the approved toolchain baseline', () => {
+  const root = join(__dirname, '../..');
+  const moduleFile = readFileSync(join(root, 'backend/go.mod'), 'utf8');
+  const moduleVersion = moduleFile.match(/^go (1\.(\d+))\.(\d+)$/m);
+  expect(moduleVersion).not.toBeNull();
+  const fullVersion = `${moduleVersion![1]}.${moduleVersion![3]}`;
+  expect(Number(moduleVersion![2])).toBeGreaterThanOrEqual(27);
+  if (moduleVersion![1] === '1.27') {
+    expect(Number(moduleVersion![3])).toBeGreaterThanOrEqual(3);
+  }
+
+  for (const file of [
+    '.github/workflows/deploy-infra.yml',
+    '.github/workflows/test-backend.yml',
+    '.github/workflows/evaluate-notes.yml',
+  ]) {
+    const workflow = readFileSync(join(root, file), 'utf8');
+    expect(workflow).toContain(`go-version: '${fullVersion}'`);
+    expect(workflow).toContain('check-latest: true');
+  }
+
+  const dockerfile = readFileSync(join(root, 'backend/cmd/convert-doc/Dockerfile'), 'utf8');
+  expect(dockerfile).toMatch(new RegExp(`FROM golang:${fullVersion.replaceAll('.', '\\.')}-bookworm@sha256:[a-f0-9]{64} AS build`));
+
+  const infraWorkflow = readFileSync(join(root, '.github/workflows/test-infra.yml'), 'utf8');
+  for (const file of ['backend/go.mod', 'backend/cmd/convert-doc/Dockerfile',
+    '.github/workflows/test-backend.yml', '.github/workflows/evaluate-notes.yml']) {
+    expect(infraWorkflow).toContain(`- '${file}'`);
+  }
+
+  const deployWorkflow = readFileSync(join(root, '.github/workflows/deploy-infra.yml'), 'utf8');
+  const backendTests = deployWorkflow.indexOf('go test ./... -count=1');
+  expect(backendTests).toBeGreaterThan(-1);
+  expect(deployWorkflow.indexOf('go vet ./...')).toBeGreaterThan(backendTests);
+  expect(deployWorkflow.indexOf('GOOS=linux GOARCH=arm64 go build')).toBeGreaterThan(backendTests);
+  const testStep = deployWorkflow.split('- name: Verify Go backend with deployment compiler')[1].split('- name:')[0];
+  for (const variable of ['TTOBAK_PROJECT_INVITATION_TEST_TABLE', 'TTOBAK_NOTE_EVAL_MODE',
+    'TTOBAK_NOTE_EVAL_NATIVE_SMOKE', 'TTOBAK_PDF_TEST_OUTPUT', 'CONNECTOR_SETTINGS_CONFIG_TEST']) {
+    expect(testStep).toContain(`${variable}: ''`);
+  }
+});
+
 test.each([
   '.github/workflows/deploy-infra.yml',
   '.github/workflows/test-backend.yml',

@@ -21,6 +21,10 @@ on:
       - 'scripts/operations/http_origin_release.py'
       - 'scripts/operations/test_http_origin_release.py'
       - 'scripts/operations/test_model_cutover.py'
+      - 'backend/go.mod'
+      - 'backend/cmd/convert-doc/Dockerfile'
+      - '.github/workflows/test-backend.yml'
+      - '.github/workflows/evaluate-notes.yml'
       # Re-run on workflow changes so PRs that only touch CI still trigger
       # the required check (same convention as test-backend.yml) — without
       # this, a PR editing/neutering this gate would merge unverified.
