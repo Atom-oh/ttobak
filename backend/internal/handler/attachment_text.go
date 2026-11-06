@@ -81,6 +81,8 @@ func writeAttachmentError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid attachment request")
 	case errors.Is(err, service.ErrForbidden):
 		writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
+	case errors.Is(err, service.ErrRecordingStillActive):
+		writeError(w, http.StatusConflict, "RECORDING_STILL_ACTIVE", "생성자가 아직 녹음 중일 수 있습니다. 마지막 저장 후 10분이 지나면 업로드할 수 있습니다.")
 	case errors.Is(err, service.ErrNotFound):
 		writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Attachment not found")
 	case errors.Is(err, service.ErrUnsupportedAttachment):

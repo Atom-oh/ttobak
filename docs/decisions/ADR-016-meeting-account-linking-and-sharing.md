@@ -49,9 +49,10 @@
   - Uploads, rediarize and recovery work for members (audio crop and the
     simulator stay creator-only until the follow-up change); recovery requires a checkpoint quiet for 10 minutes
     (409 `RECORDING_STILL_ACTIVE`). Members never presign or complete checkpoint
-    filenames, and their audio presigns and completions follow the same quiet
-    rule while the meeting is recording or transcribing, so a creator's live
-    recording is never overwritten. Member uploads set the non-owner source
+    filenames. Their audio presigns and completions are refused while the
+    meeting is recording with a missing or fresh (<10 min) checkpoint, or
+    transcribing with a fresh one, so a creator's live recording is never
+    overwritten while a member's own multipart batch still completes. Member uploads set the non-owner source
     marker (at presign time for audio/files) and `Attachment.uploadedBy`.
     Member presigned PUTs expire after 5 minutes (the creator keeps 1 hour).
     Accepted residual window: the transcribe trigger starts transcription for

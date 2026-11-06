@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path"
 	"testing"
 	"time"
@@ -506,8 +507,11 @@ func TestMemberAudioPresignNeverOverwritesALiveRecording(t *testing.T) {
 	}
 	transcribing := *recording
 	transcribing.Status = model.StatusTranscribing
-	if err := memberAudioWriteAllowed("member", &transcribing, "extra.webm", time.Time{}, now); !errors.Is(err, ErrRecordingStillActive) {
-		t.Fatalf("member audio while transcribing: %v", err)
+	if err := memberAudioWriteAllowed("member", &transcribing, "extra.webm", now.Add(-time.Minute), now); !errors.Is(err, ErrRecordingStillActive) {
+		t.Fatalf("member audio while transcribing right after a recording: %v", err)
+	}
+	if err := memberAudioWriteAllowed("member", &transcribing, "extra.webm", time.Time{}, now); err != nil {
+		t.Fatalf("member audio while an upload batch transcribes: %v", err)
 	}
 	if err := memberAudioWriteAllowed("member", recording, "extra.webm", now.Add(-10*time.Minute), now); err != nil {
 		t.Fatalf("stale recording allows member audio: %v", err)
@@ -586,5 +590,30 @@ func TestMemberPresignsAreShortLivedAndMarkSources(t *testing.T) {
 		if got := presignMarksSourceEdit(tc.category, tc.actor, "owner"); got != tc.want {
 			t.Fatalf("%s by %s: marks=%v want %v", tc.category, tc.actor, got, tc.want)
 		}
+	}
+}
+
+// A member's multipart batch moves the meeting to transcribing on its first
+// part (PreAllocateAudioKeys); later parts must still pass the guard, while a
+// live recording (fresh checkpoint) stays refused.
+func TestMemberMultipartBatchDoesNotDeadlock(t *testing.T) {
+	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
+	meeting := &model.Meeting{UserID: "owner", MeetingID: "m", Status: model.StatusDone}
+	for part := 0; part < 3; part++ {
+		name := fmt.Sprintf("part_%03d_take.webm", part)
+		// presign then complete; no checkpoint exists for an uploaded batch
+		for _, stage := range []string{"presign", "complete"} {
+			if err := memberAudioWriteAllowed("member", meeting, name, time.Time{}, now); err != nil {
+				t.Fatalf("part %d %s: %v", part, stage, err)
+			}
+		}
+		meeting.Status = model.StatusTranscribing // first completion pre-allocates
+	}
+	recording := &model.Meeting{UserID: "owner", MeetingID: "m", Status: model.StatusRecording}
+	if err := memberAudioWriteAllowed("member", recording, "part_000_take.webm", now.Add(-2*time.Minute), now); !errors.Is(err, ErrRecordingStillActive) {
+		t.Fatalf("creator recording with a fresh checkpoint: %v", err)
+	}
+	if err := memberAudioWriteAllowed("member", meeting, "part_000_take.webm", now.Add(-2*time.Minute), now); !errors.Is(err, ErrRecordingStillActive) {
+		t.Fatalf("transcribing with a fresh checkpoint: %v", err)
 	}
 }

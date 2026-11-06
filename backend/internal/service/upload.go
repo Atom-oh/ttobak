@@ -669,9 +669,10 @@ func (s *UploadService) checkMemberAudioWrite(ctx context.Context, actorID strin
 }
 
 // memberAudioWriteAllowed keeps a non-creator from overwriting the creator's
-// live recording: checkpoint filenames are creator-only, and audio writes
-// while the meeting is recording or transcribing need the same 10-minute
-// quiet checkpoint as recovery.
+// live recording: checkpoint filenames are creator-only; while recording, a
+// missing or fresh (<10 min) checkpoint refuses; while transcribing, only a
+// fresh checkpoint refuses, so a member's own multipart batch (which moves the
+// meeting to transcribing on its first part) completes.
 func memberAudioWriteAllowed(actorID string, meeting *model.Meeting, fileName string, checkpoint, now time.Time) error {
 	if meeting == nil || actorID == meeting.UserID {
 		return nil
@@ -679,9 +680,19 @@ func memberAudioWriteAllowed(actorID string, meeting *model.Meeting, fileName st
 	if isCheckpointFileName(fileName) {
 		return ErrForbidden
 	}
-	if (meeting.Status == model.StatusRecording || meeting.Status == model.StatusTranscribing) &&
-		!memberMayRecover(actorID, meeting.UserID, checkpoint, now) {
-		return ErrRecordingStillActive
+	fresh := !checkpoint.IsZero() && now.Sub(checkpoint) < memberRecoveryQuietPeriod
+	switch meeting.Status {
+	case model.StatusRecording:
+		// A live creator recording has a missing or fresh checkpoint.
+		if checkpoint.IsZero() || fresh {
+			return ErrRecordingStillActive
+		}
+	case model.StatusTranscribing:
+		// Uploaded and member multipart batches transcribe without a
+		// checkpoint; only a fresh checkpoint means a recording just ended.
+		if fresh {
+			return ErrRecordingStillActive
+		}
 	}
 	return nil
 }

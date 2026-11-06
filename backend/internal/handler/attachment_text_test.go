@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -176,5 +177,13 @@ func TestAttachmentHTTPRejectsUnknownDuplicateAndInvalidQueries(t *testing.T) {
 		if w.Code != test.status || strings.Contains(w.Body.String(), "secret document") {
 			t.Fatalf("%d %s", w.Code, w.Body)
 		}
+	}
+}
+
+func TestUploadCompletionMapsActiveRecordingToConflict(t *testing.T) {
+	w := httptest.NewRecorder()
+	writeAttachmentError(w, fmt.Errorf("complete: %w", service.ErrRecordingStillActive))
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "RECORDING_STILL_ACTIVE") {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
 }
