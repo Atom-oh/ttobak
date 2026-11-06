@@ -260,7 +260,8 @@ describe('GatewayStack', () => {
         }, {
           Effect: 'Allow',
           Action: ['ec2:DescribeSubnets', 'ec2:DescribeVpcAttribute', 'ec2:DescribeVpcEndpoints',
-            'ec2:DescribeSecurityGroups', 'ec2:DescribeNetworkAcls', 'ec2:DescribeRouteTables'],
+            'ec2:DescribeSecurityGroups', 'ec2:DescribeNetworkAcls', 'ec2:DescribeRouteTables',
+            'ec2:GetManagedPrefixListEntries'],
           Resource: '*',
           Condition: { StringEquals: { 'aws:RequestedRegion': { Ref: 'AWS::Region' } } },
         }],

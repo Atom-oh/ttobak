@@ -19,7 +19,8 @@ also have an observed private Secrets Manager path, verified read-only through
 EC2 before any mutation (`vpc_secret_path_verified`):
 - literal function subnets in one VPC with DNS support and hostnames;
 - an `available` Secrets Manager interface endpoint with private DNS covering
-  every function AZ, whose policy is absent or an unconditioned `Allow` of
+  every function AZ, IPv4 or dual-stack addressing and IPv4 or dual-stack DNS
+  records (an IPv6-only endpoint fails), whose policy is absent or an unconditioned `Allow` of
   `GetSecretValue` to principal and resource `*` (stricter policies fail closed);
 - endpoint security-group ingress on TCP 443 from every function subnet CIDR
   (private IPv4 ranges only; security-group references and IPv6 are not
@@ -29,10 +30,12 @@ EC2 before any mutation (`vpc_secret_path_verified`):
   evaluated first-match by rule number;
 - route tables on both sides (explicit association, else the VPC main table)
   delivering those CIDRs through an active `local` route with no more-specific
-  non-local route overlapping them.
+  non-local route overlapping them; prefix-list routes are resolved to their
+  CIDRs and fail closed when they overlap or cannot be read.
 Unknown or unresolved values fail closed with `ACTIVATION_CONSUMER_VPC_UNVERIFIED`;
 a describe failure also prints the fixed warning `VPC_SECRET_PATH_DESCRIBE_FAILED`.
-The CI policy grants the six EC2 Describe actions on `*` with an
+The CI policy grants the six EC2 Describe actions and
+`ec2:GetManagedPrefixListEntries` on `*` with an
 `aws:RequestedRegion` condition (they have no resource-level scoping). One GatewayStack deployment switches all
 consumers to ARN lookup, so a missing grant or unreachable endpoint would
 otherwise fail every origin check closed; the post-deploy consumer invocation

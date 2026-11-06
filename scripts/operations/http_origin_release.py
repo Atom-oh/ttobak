@@ -167,8 +167,11 @@ def _nacl_allows(entries, egress, target_cidr, low, high):
     return False
 
 
-def _routes_local(routes, target_cidr):
-    """The target must use an active local route, with no more-specific override."""
+def _routes_local(routes, target_cidr, prefix_entries=None):
+    """The target must use an active local route, with no more-specific override.
+
+    prefix_entries(prefix_list_id) returns that list's CIDRs, or None if unknown.
+    """
     target = _ipv4_cidr(target_cidr)
     if target is None:
         return False
@@ -183,8 +186,16 @@ def _routes_local(routes, target_cidr):
         return False
     for route in routes:
         destination = route.get("DestinationCidrBlock")
-        if route.get("GatewayId") == "local" or not isinstance(destination, str):
-            continue  # IPv6/prefix-list routes cannot target this IPv4 local range.
+        if route.get("GatewayId") == "local" or route.get("DestinationIpv6CidrBlock"):
+            continue  # IPv6 routes cannot capture this IPv4 range.
+        if not isinstance(destination, str):
+            prefix_list = route.get("DestinationPrefixListId")
+            cidrs = prefix_entries(prefix_list) if prefix_entries and isinstance(prefix_list, str) else None
+            if cidrs is None:
+                return False  # Unknown destination: cannot prove it does not override local.
+            if any(_cidr_overlaps(cidr, target_cidr) for cidr in cidrs):
+                return False  # A prefix-list route covering part of the target would capture it.
+            continue
         parsed = _ipv4_cidr(destination)
         if parsed is None or (parsed[1] > local_bits and _cidr_overlaps(destination, target_cidr)):
             return False  # A more specific non-local route would capture this traffic.
@@ -201,7 +212,8 @@ def vpc_secret_path_verified(ec2, region, vpc_config, template_resources):
     security-group ingress on TCP 443 from every function subnet CIDR (private
     ranges only); function security-group egress on TCP 443 to every endpoint
     subnet CIDR; and network ACLs on both sides allowing that TCP 443 flow and
-    its ephemeral return traffic; and route tables on both sides delivering
+    its ephemeral return traffic; IPv4 endpoint addressing and IPv4/dual-stack
+    private DNS records; and route tables on both sides delivering
     those CIDRs through the active local route with no more-specific override.
     Security-group references (UserIdGroupPairs) and IPv6 are not evaluated and
     therefore do not satisfy a check.
@@ -232,6 +244,11 @@ def vpc_secret_path_verified(ec2, region, vpc_config, template_resources):
         chosen = None
         for endpoint in endpoints:
             if endpoint.get("State") != "available" or endpoint.get("PrivateDnsEnabled") is not True:
+                continue
+            # The consumer resolves and connects over IPv4: the endpoint must
+            # carry IPv4 addresses and publish IPv4 (A) private DNS records.
+            dns_type = (endpoint.get("DnsOptions") or {}).get("DnsRecordIpType")
+            if endpoint.get("IpAddressType") not in ("ipv4", "dualstack") or dns_type not in ("ipv4", "dualstack"):
                 continue
             if not _endpoint_policy_allows_proof_read(endpoint.get("PolicyDocument")):
                 continue
@@ -298,10 +315,18 @@ def vpc_secret_path_verified(ec2, region, vpc_config, template_resources):
                 found = ec2.describe_route_tables(Filters=[
                     {"Name": "vpc-id", "Values": [vpc_id]}, {"Name": "association.main", "Values": ["true"]}])["RouteTables"]
             return found[0].get("Routes", []) if len(found) == 1 else None
+        prefix_cache = {}
+        def prefix_entries(prefix_list_id):
+            if prefix_list_id not in prefix_cache:
+                entries = []
+                for page in ec2.get_paginator("get_managed_prefix_list_entries").paginate(PrefixListId=prefix_list_id):
+                    entries.extend(item["Cidr"] for item in page.get("Entries", []))
+                prefix_cache[prefix_list_id] = entries
+            return prefix_cache[prefix_list_id]
         for local, remote in ((subnets, endpoint_cidrs), (chosen, function_cidrs)):
             for subnet in local:
                 table = routes(subnet["SubnetId"])
-                if table is None or not all(_routes_local(table, cidr) for cidr in remote):
+                if table is None or not all(_routes_local(table, cidr, prefix_entries) for cidr in remote):
                     return False
         return True
     except Exception:

@@ -590,6 +590,7 @@ class ReleaseTests(unittest.TestCase):
         class FakeEc2:
             def __init__(self):
                 self.endpoint = {"State": "available", "PrivateDnsEnabled": True, "PolicyDocument": None,
+                                 "IpAddressType": "ipv4", "DnsOptions": {"DnsRecordIpType": "ipv4"},
                                  "SubnetIds": ["e-a", "e-b"], "Groups": [{"GroupId": "sg-endpoint"}]}
                 self.endpoint_ingress = [{"IpProtocol": "tcp", "FromPort": 443, "ToPort": 443,
                                           "IpRanges": [{"CidrIp": "10.0.0.0/16"}, {"CidrIp": "10.1.0.0/16"}]}]
@@ -606,6 +607,9 @@ class ReleaseTests(unittest.TestCase):
                 local = [{"DestinationCidrBlock": "10.0.0.0/16", "GatewayId": "local", "State": "active"},
                          {"DestinationCidrBlock": "10.1.0.0/16", "GatewayId": "local", "State": "active"},
                          {"DestinationCidrBlock": "0.0.0.0/0", "NatGatewayId": "nat-1", "State": "active"}]
+                # An AWS-service prefix list (public ranges) behind a gateway endpoint.
+                local.append({"DestinationPrefixListId": "pl-s3", "GatewayId": "vpce-s3", "State": "active"})
+                self.prefix_lists = {"pl-s3": ["52.95.0.0/16"], "pl-1": ["10.0.3.0/24"]}
                 self.main_routes = copy.deepcopy(local)
                 self.routes = {"f-a": copy.deepcopy(local), "e-a": copy.deepcopy(local)}  # f-b/e-b use main
 
@@ -615,6 +619,14 @@ class ReleaseTests(unittest.TestCase):
                 zone = {"f-a": "az-a", "f-b": "az-b", "e-a": "az-a", "e-b": "az-b"}
                 return {"Subnets": [{"SubnetId": item, "VpcId": "vpc-1", "AvailabilityZone": zone[item],
                                      "CidrBlock": self.cidr[item]} for item in SubnetIds]}
+
+            def get_paginator(self, name):
+                assert name == "get_managed_prefix_list_entries"
+                lists = self.prefix_lists
+                class Pages:
+                    def paginate(self, PrefixListId):
+                        return [{"Entries": [{"Cidr": cidr} for cidr in lists[PrefixListId]]}]
+                return Pages()
 
             def describe_route_tables(self, Filters):
                 names = {item["Name"]: item["Values"][0] for item in Filters}
@@ -673,6 +685,13 @@ class ReleaseTests(unittest.TestCase):
                 {"RuleNumber": 100, "Protocol": "-1", "RuleAction": "allow", "Egress": False, "CidrBlock": "0.0.0.0/0"},
                 {"RuleNumber": 100, "Protocol": "6", "PortRange": {"From": 443, "To": 443}, "RuleAction": "allow",
                  "Egress": True, "CidrBlock": "0.0.0.0/0"}]),
+            "IPv6-only DNS records": lambda e: e.endpoint.update(DnsOptions={"DnsRecordIpType": "ipv6"}),
+            "IPv6-only endpoint addressing": lambda e: e.endpoint.update(IpAddressType="ipv6"),
+            "missing DNS record type": lambda e: e.endpoint.update(DnsOptions={}),
+            "prefix-list route covering the endpoint subnet": lambda e: e.routes["f-a"].append(
+                {"DestinationPrefixListId": "pl-1", "TransitGatewayId": "tgw-1", "State": "active"}),
+            "unreadable prefix list": lambda e: e.routes["f-a"].append(
+                {"DestinationPrefixListId": "pl-missing", "TransitGatewayId": "tgw-1", "State": "active"}),
             "specific route overrides local": lambda e: e.routes["f-a"].append(
                 {"DestinationCidrBlock": "10.0.3.0/24", "TransitGatewayId": "tgw-1", "State": "active"}),
             "blackholed more specific route on main table": lambda e: e.main_routes.append(
