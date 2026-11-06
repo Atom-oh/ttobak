@@ -187,6 +187,12 @@ limited to committed chunks, and browser data deletion/eviction can remove them.
 An expired empty recording still offers server-checkpoint recovery; a missing
 checkpoint directs the user to local recordings instead of suggesting deletion.
 
+Summary timestamp links scroll to the transcript turn and, when that turn has a
+start time inside the playing source, seek the meeting audio there and play.
+Browser-recorded WebM can lack Duration/Cues; the player then uses the meeting's
+server duration for single-file audio. Multi-part meetings play the first part,
+so merged-timeline times beyond its known length only scroll.
+
 When the API reports crop support, owners of single-file recordings can choose a start/end time, preview the range,
 and create a private cropped meeting. Cropping retains the original meeting and
 copies saved notes/participants, but not attachments, relationships, shares, human

@@ -191,9 +191,14 @@ type Share struct {
 	// the old account's removal -- the meeting.AccountID re-check that guards
 	// the read is a separate, non-atomic call and can't by itself prevent that
 	// race; only a condition on the row being deleted can.
-	AccountID  string    `dynamodbav:"accountId,omitempty"`
-	CreatedAt  time.Time `dynamodbav:"createdAt"`
-	EntityType string    `dynamodbav:"entityType"` // "SHARE"
+	AccountID string `dynamodbav:"accountId,omitempty"`
+	// SharedByUserID/Email record an account member who created a direct share
+	// on the creator's behalf (ADR-016 2026-11-06 amendment). OwnerID stays the
+	// creator; empty means the creator shared it.
+	SharedByUserID string    `dynamodbav:"sharedByUserId,omitempty"`
+	SharedByEmail  string    `dynamodbav:"sharedByEmail,omitempty"`
+	CreatedAt      time.Time `dynamodbav:"createdAt"`
+	EntityType     string    `dynamodbav:"entityType"` // "SHARE"
 }
 
 const (
@@ -475,6 +480,10 @@ type PendingShare struct {
 	Permission      string `dynamodbav:"permission,omitempty"` // set when Kind=="meeting"
 	InvitedByUserID string `dynamodbav:"invitedByUserId"`
 	InvitedByEmail  string `dynamodbav:"invitedByEmail,omitempty"`
+	// Meeting invites keep InvitedByUserID as the creator (materialization
+	// fences that owner row); SharedBy* records an account member actor.
+	SharedByUserID string `dynamodbav:"sharedByUserId,omitempty"`
+	SharedByEmail  string `dynamodbav:"sharedByEmail,omitempty"`
 	// InvitedCognitoSub is the Cognito `sub` (== Username here specifically
 	// because infra/lib/auth-stack.ts's User Pool sets
 	// signInAliases:{email:true} with no username alias, which makes

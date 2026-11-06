@@ -56,6 +56,8 @@ export interface GatewayStackProps extends cdk.StackProps {
   agentCoreRuntimeArn?: string;
   researchWorkerRole?: iam.IRole;
   convertDocRole?: iam.IRole;
+  /** ADR-062 playback-copy worker; optional so unit tests skip the Docker asset. */
+  audioRemuxRole?: iam.IRole;
   // VPC ID for convert-doc's network isolation (ADR-022 residual-risk
   // follow-up) -- same pre-existing VPC WhisperStack already uses
   // (ec2.Vpc.fromLookup, not a stack this one depends on). Optional so
@@ -1330,6 +1332,56 @@ export class GatewayStack extends cdk.Stack {
       });
       pipelineFailures.watchFunction('ConvertDoc', this.convertDocFunction, props.convertDocRole);
       pipelineFailures.addTarget('ConvertDoc', docSlideUploadRule, this.convertDocFunction);
+    }
+
+    // ADR-062: seekable playback copies of browser-recorded audio. Container
+    // image for ffmpeg; same isolated-subnet placement as convert-doc because
+    // ffmpeg parses user-supplied media. S3 goes through the existing gateway
+    // endpoint (never add a second one).
+    if (props.audioRemuxRole) {
+      let remuxVpcConfig: { vpc: ec2.IVpc; vpcSubnets: ec2.SubnetSelection; securityGroups: ec2.ISecurityGroup[] } | undefined;
+      if (props.vpcId) {
+        const vpc = ec2.Vpc.fromLookup(this, 'AudioRemuxVpc', { vpcId: props.vpcId });
+        const audioRemuxSg = new ec2.SecurityGroup(this, 'AudioRemuxSg', {
+          vpc,
+          securityGroupName: 'ttobak-audio-remux',
+          description: 'audio-remux Lambda -- isolated subnet, no internet route; outbound limited to the VPC (S3 via gateway endpoint)',
+          allowAllOutbound: true,
+        });
+        remuxVpcConfig = { vpc, vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED }, securityGroups: [audioRemuxSg] };
+      }
+      const audioRemuxFunction = new lambda.DockerImageFunction(this, 'AudioRemuxFunction', {
+        functionName: 'ttobak-audio-remux',
+        code: lambda.DockerImageCode.fromImageAsset('../backend', {
+          file: 'cmd/audio-remux/Dockerfile',
+          platform: cdk.aws_ecr_assets.Platform.LINUX_ARM64,
+        }),
+        architecture: lambda.Architecture.ARM_64,
+        role: props.audioRemuxRole as iam.Role,
+        environment: {
+          BUCKET_NAME: props.bucket.bucketName,
+        },
+        // Sources are capped at 2 GiB; source and copy both live in /tmp.
+        timeout: cdk.Duration.minutes(15),
+        memorySize: 1024,
+        ephemeralStorageSize: cdk.Size.mebibytes(5120),
+        ...remuxVpcConfig,
+      });
+      const audioRemuxRule = new events.Rule(this, 'AudioRemuxRule', {
+        ruleName: 'ttobak-audio-remux',
+        description: 'Write a seekable playback copy when WebM/Ogg meeting audio is uploaded (ADR-062)',
+        eventPattern: {
+          source: ['aws.s3'],
+          detailType: ['Object Created'],
+          detail: {
+            bucket: { name: [props.bucket.bucketName] },
+            // Checkpoints (recording_progress.*) also match; the handler skips them.
+            object: { key: [{ wildcard: 'audio/*.webm' }, { wildcard: 'audio/*.ogg' }] },
+          },
+        },
+      });
+      pipelineFailures.watchFunction('AudioRemux', audioRemuxFunction, props.audioRemuxRole);
+      pipelineFailures.addTarget('AudioRemux', audioRemuxRule, audioRemuxFunction);
     }
 
     // ==================== WebSocket API (Live QA Streaming) ====================

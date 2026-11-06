@@ -76,12 +76,15 @@ func (h *MeetingHandler) LinkToAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.meetingService.LinkMeetingToAccount(ctx, userID, meetingID, req.AccountID); err != nil {
 		switch {
-		case errors.Is(err, service.ErrForbidden):
+		case errors.Is(err, service.ErrForbidden), errors.Is(err, repository.ErrSummaryAccess):
 			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
 		case errors.Is(err, service.ErrNotFound):
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
+		case errors.Is(err, repository.ErrConditionFailed):
+			// A concurrent unpublish/move or membership change; reload and retry.
+			writeError(w, http.StatusConflict, model.ErrCodeConflict, "Meeting changed; reload before saving")
 		default:
-			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to link meeting to account")
 		}
 		return
 	}
@@ -630,7 +633,8 @@ func (h *MeetingHandler) GetAudioURL(w http.ResponseWriter, r *http.Request) {
 			if key == "" {
 				continue // skip pre-allocated empty slots
 			}
-			url, urlErr := h.uploadService.GeneratePresignedDownloadURL(ctx, key)
+			// ADR-062: a current seekable copy when one exists, else the original.
+			url, urlErr := h.uploadService.GenerateAudioPlaybackURL(ctx, key)
 			if urlErr != nil {
 				writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to generate audio URL")
 				return
@@ -651,7 +655,7 @@ func (h *MeetingHandler) GetAudioURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	audioURL, err := h.uploadService.GeneratePresignedDownloadURL(ctx, result.AudioKey)
+	audioURL, err := h.uploadService.GenerateAudioPlaybackURL(ctx, result.AudioKey)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to generate audio URL")
 		return

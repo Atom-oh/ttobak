@@ -167,6 +167,7 @@ const gatewayStack = new GatewayStack(app, 'TtobakGatewayStack', {
   agentCoreRuntimeArn,
   researchWorkerRole: aiStack.researchWorkerRole,
   convertDocRole: aiStack.convertDocRole,
+  audioRemuxRole: aiStack.audioRemuxRole,
   enableDocumentExtraction: true,
   simRole: aiStack.simRole,
   simCodeInterpreterId: aiStack.simCodeInterpreter.codeInterpreterId,
