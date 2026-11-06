@@ -1,6 +1,8 @@
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
-import { collectorConfig, COLLECTOR_REPOSITORY, COLLECTOR_TAG, ObservabilityStack } from '../lib/observability-stack';
+import * as fs from 'fs';
+import * as path from 'path';
+import { collectorConfig, COLLECTOR_ASSET_DIR, ObservabilityStack } from '../lib/observability-stack';
 
 const ENDPOINT_SERVICE = 'com.amazonaws.vpce.ap-northeast-2.vpce-svc-04e00839390fb475d';
 
@@ -49,7 +51,10 @@ describe('ObservabilityStack', () => {
     const task = Object.values(template.findResources('AWS::ECS::TaskDefinition'))[0];
     const container = task.Properties.ContainerDefinitions[0];
     expect(task.Properties.RuntimePlatform.CpuArchitecture).toBe('ARM64');
-    expect(JSON.stringify(container.Image)).toContain(`${COLLECTOR_REPOSITORY}:${COLLECTOR_TAG}`);
+    // Built as a CDK asset from a digest-pinned upstream image, not a pull-through cache.
+    expect(JSON.stringify(container.Image)).toContain('cdk-');
+    const dockerfile = fs.readFileSync(path.join(COLLECTOR_ASSET_DIR, 'Dockerfile'), 'utf8');
+    expect(dockerfile).toMatch(/^FROM ghcr\.io\/open-telemetry\/opentelemetry-collector-releases\/opentelemetry-collector-contrib:0\.118\.0@sha256:[0-9a-f]{64}$/m);
     expect(container.ReadonlyRootFilesystem).toBe(true);
     expect(container.Secrets.map((s: any) => s.Name).sort()).toEqual(['CLICKHOUSE_PASSWORD', 'CLICKHOUSE_USER']);
     const env = Object.fromEntries(container.Environment.map((e: any) => [e.Name, e.Value]));

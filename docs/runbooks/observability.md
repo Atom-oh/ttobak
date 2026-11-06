@@ -50,6 +50,16 @@ accepted and `available`); step 5 enables the collector.
    service uses a deployment circuit breaker; check that the ALB target is
    healthy and that collector logs show no ClickHouse connection errors.
 
+## Image and startup
+
+The collector image is a CDK image asset (`infra/assets/otel-collector/Dockerfile`)
+wrapping the official contrib 0.118.0 image pinned by digest. The account's
+`ghcr` ECR pull-through rule failed upstream authentication on 2026-11-06, so
+the stack does not depend on it. With `create_schema: true` the ClickHouse
+exporter connects at startup; an unreachable ClickHouse makes the collector exit
+(`create database: dial tcp ...`), and ECS restarts the task. Check collector
+logs first when the deployment circuit breaker rolls back.
+
 ## Rollback
 
 Set `ttobak:otelCollectorEnabled` to `"false"` and deploy to remove the service;
