@@ -54,6 +54,13 @@ describe('FrontendStack', () => {
     runtimeConfig = JSON.parse(fs.readFileSync(configs[0], 'utf8'));
   });
 
+  test('the distribution serves Korean viewers from Asian edge locations', () => {
+    // Price class 100 excludes Asia and routed Seoul viewers to Europe.
+    template.hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: Match.objectLike({ PriceClass: 'PriceClass_200' }),
+    });
+  });
+
   test('the HTTP origin resolves only the current field of an explicit secret version', () => {
     const dist = Object.values(template.findResources('AWS::CloudFront::Distribution'))[0];
     const origin = dist.Properties.DistributionConfig.Origins.find(
