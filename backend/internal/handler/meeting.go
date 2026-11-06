@@ -770,57 +770,19 @@ func (h *MeetingHandler) LinkMeetings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify ownership of the parent meeting FIRST. `UpdateMeetingFields` is
-	// upsert-style — without this check a user could create a phantom row at
-	// `USER#caller + MEETING#someone-elses-id` (cross-user data leak is
-	// blocked by the PK scoping, but the orphan row would pollute the
-	// caller's list view).
-	parent, err := h.repo.GetMeeting(ctx, userID, meetingID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
-		return
-	}
-	if parent == nil {
-		writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
-		return
-	}
-
-	// Verify ownership of all linked predecessors and reject cycles.
-	// `buildLinkedMeetingContext` only walks one level (max 3 predecessors),
-	// so infinite traversal isn't possible, but a 1-hop cycle (A→B + B→A)
-	// would still produce broken breadcrumb chains and waste tokens by
-	// embedding the parent's own summary back into its own prompt.
-	for _, linkedID := range req.LinkedMeetingIDs {
-		if linkedID == meetingID {
-			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Cannot link a meeting to itself")
-			return
+	// The creator or a managing account member; predecessors must be the
+	// creator's meetings that the caller can read (MeetingService.LinkPredecessors).
+	if err := h.meetingService.LinkPredecessors(ctx, userID, meetingID, req.LinkedMeetingIDs); err != nil {
+		switch {
+		case errors.Is(err, service.ErrInvalidInput):
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, err.Error())
+		case errors.Is(err, service.ErrForbidden):
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
+		case errors.Is(err, service.ErrNotFound):
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, err.Error())
+		default:
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to link meetings")
 		}
-		linked, err := h.repo.GetMeeting(ctx, userID, linkedID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
-			return
-		}
-		if linked == nil {
-			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, fmt.Sprintf("Linked meeting %s not found", linkedID))
-			return
-		}
-		// Reject 1-hop reverse references — if `linked` already lists
-		// `meetingID` as one of ITS predecessors, this link would form
-		// a cycle.
-		for _, reverseID := range linked.LinkedMeetingIDs {
-			if reverseID == meetingID {
-				writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest,
-					fmt.Sprintf("Cannot link to %s — that meeting already lists this one as a predecessor (cycle)", linkedID))
-				return
-			}
-		}
-	}
-
-	err = h.repo.UpdateMeetingFields(ctx, userID, meetingID, map[string]interface{}{
-		"linkedMeetingIds": req.LinkedMeetingIDs,
-	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
 		return
 	}
 

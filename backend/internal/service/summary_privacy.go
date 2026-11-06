@@ -75,9 +75,9 @@ func projectAccountMeeting(meeting *model.Meeting, member *model.AccountMember) 
 	return &projected
 }
 
-func summarySharingStatus(meeting *model.Meeting, permission string) *model.SummarySharingStatus {
+func summarySharingStatus(meeting *model.Meeting, permission string, canManage bool) *model.SummarySharingStatus {
 	allowed := meeting.CanCreateSummaryGrant()
-	canShareAccount := permission == "owner" && (allowed || repository.OwnerAccountShareEnabled() &&
+	canShareAccount := canManage && (allowed || repository.OwnerAccountShareEnabled() &&
 		(meeting.Status == model.StatusDone || meeting.Status == model.StatusError))
 	return &model.SummarySharingStatus{CanCreateGrant: allowed, CanShareToAccount: canShareAccount, DerivedReadRestricted: meeting.SummaryReadRestricted,
 		RequiresRegeneration: !allowed, CanRegenerate: repository.SummaryPrivacyWritesEnabled() && permission == "owner" &&

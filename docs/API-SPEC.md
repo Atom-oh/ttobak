@@ -616,8 +616,17 @@ there is no transcript fallback when the summary is missing. Conflicts return
 
 ### Accounts and projects
 
+Meeting management (ADR-016 2026-11-06 amendment): the creator or a live direct
+or inherited member of the account a meeting is published to may call the
+share, revoke, pending-revoke, account, share-account and link routes. Detail
+returns `canManage`, and managers receive `shares` (with `sharedByEmail` for
+member-created shares) and `projectIds`. Writes keep the creator's partition;
+strangers get 404. A member's account or share-account call must target the
+meeting's current account (403 otherwise). Shared list items include
+`ownerUserId` (the creator).
+
 `POST /api/meetings/{meetingId}/account` is a private classification operation:
-the meeting owner must currently belong to the target account. One partial
+the caller (creator or managing member) must directly belong to the target account. One partial
 update sets `accountId` and `sharedToAccount: false` together, including when
 relinking an already team-shared meeting to the same or a different account.
 Notes and independent direct shares are preserved. Account-origin share rows
