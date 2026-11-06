@@ -630,7 +630,8 @@ func (h *MeetingHandler) GetAudioURL(w http.ResponseWriter, r *http.Request) {
 			if key == "" {
 				continue // skip pre-allocated empty slots
 			}
-			url, urlErr := h.uploadService.GeneratePresignedDownloadURL(ctx, key)
+			// ADR-062: a current seekable copy when one exists, else the original.
+			url, urlErr := h.uploadService.GenerateAudioPlaybackURL(ctx, key)
 			if urlErr != nil {
 				writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to generate audio URL")
 				return
@@ -651,7 +652,7 @@ func (h *MeetingHandler) GetAudioURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	audioURL, err := h.uploadService.GeneratePresignedDownloadURL(ctx, result.AudioKey)
+	audioURL, err := h.uploadService.GenerateAudioPlaybackURL(ctx, result.AudioKey)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to generate audio URL")
 		return
