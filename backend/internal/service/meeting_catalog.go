@@ -181,6 +181,7 @@ func (s *MeetingCatalogService) item(ctx context.Context, user, tab, phase, acco
 		grant = member.fingerprint()
 		accountAccess = member
 		accountMember = member.privacyMember()
+		permission = accountMeetingPermission
 		// Prefer a present direct/edit share without suppressing this actual emitted
 		// path merely because another index might eventually contain the meeting.
 		share, err = s.repo.GetShare(ctx, user, m.MeetingID)
@@ -208,10 +209,23 @@ func (s *MeetingCatalogService) item(ctx context.Context, user, tab, phase, acco
 			accountMember = member.privacyMember()
 		} else {
 			grant = readingHash(share)
+			if share.Permission != model.PermissionEdit && accountAccess == nil && m.SharedToAccount && m.AccountID != "" {
+				// A direct read grant yields to live team edit access; bind the
+				// membership so its removal invalidates this continuation.
+				member, err := s.member(ctx, user, m.AccountID)
+				if err != nil {
+					return nil, "", "", err
+				}
+				if member != nil {
+					grant = readingHash([]interface{}{share, member.fingerprint()})
+					accountAccess = member
+				}
+			}
 		}
-		permission = share.Permission
-		if share.Origin == model.ShareOriginAccount && accountAccess != nil && accountAccess.inherited() {
-			permission = model.PermissionRead
+		if share.Origin == model.ShareOriginAccount || accountAccess != nil {
+			permission = accountMeetingPermission
+		} else {
+			permission = share.Permission
 		}
 		sharedBy = &share.OwnerEmail
 	}

@@ -163,8 +163,8 @@ limit instead of claiming a Mac build passed.
   checkpoints; marked-failure deletion spares user data.
 - **Accounts:** members add/change non-owner roles (ADR-034/054). Creation permits
   another Owner and optional creator AM (ADR-055). Removal/revocation/reparenting
-  are owner-only. Ancestor reads (ADR-058) permit Billing actions (ADR-060);
-  filters classify (ADR-036).
+  are owner-only. Ancestor reads permit Billing (ADR-058/060); filters classify
+  (ADR-036); members edit published meetings (ADR-016).
 - **Projects/research:** multi-account String Sets plus transactional reverse refs;
   project access is owner, direct member, or member of a linked account.
   `ProjectService.ListMyProjects` unions all three; its repository primitive only

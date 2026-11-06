@@ -264,14 +264,17 @@ func resolveSharedAccess(ctx context.Context, repo shareAccessRepo, userID, meet
 	// A direct share (Origin=="") is an independent grant the owner made
 	// explicitly -- honor it unconditionally regardless of current account
 	// membership.
+	var direct *model.Meeting
 	if share != nil && share.Origin != model.ShareOriginAccount {
 		meeting, err := repo.GetMeetingByID(ctx, meetingID)
 		if err != nil {
 			return nil, "", err
 		}
-		if meeting != nil {
+		if meeting != nil && share.Permission == model.PermissionEdit {
 			return meeting, share.Permission, nil
 		}
+		// A read-only direct grant still yields to account-team edit access.
+		direct = meeting
 	}
 
 	// Reaching here means either there's no Share row, or it's an
@@ -300,17 +303,14 @@ func resolveSharedAccess(ctx context.Context, repo shareAccessRepo, userID, meet
 			if err != nil {
 				return nil, "", err
 			}
-			if !valid {
-				return nil, "", nil
+			if valid {
+				return projectAccountReadMeeting(byID, grant), accountMeetingPermission, nil
 			}
-			permission := model.PermissionRead
-			if share != nil && !grant.inherited() {
-				permission = share.Permission
-			}
-			return projectAccountReadMeeting(byID, grant), permission, nil
 		}
 	}
-
+	if direct != nil {
+		return direct, share.Permission, nil
+	}
 	return nil, "", nil
 }
 
@@ -553,8 +553,21 @@ func (s *MeetingService) listMeetingsFilteredPage(ctx context.Context, params re
 					continue
 				}
 				perm := share.Permission
-				if grant := memberCache[meeting.AccountID]; share.Origin == model.ShareOriginAccount && grant != nil && grant.inherited() {
-					perm = model.PermissionRead
+				if share.Origin == model.ShareOriginAccount {
+					perm = accountMeetingPermission
+				} else if perm != model.PermissionEdit && meeting.SharedToAccount && meeting.AccountID != "" {
+					// A direct read grant yields to live team edit access, as in
+					// checkAccess. Display only: detail and writes recheck.
+					member, cached := memberCache[meeting.AccountID]
+					if !cached {
+						var err error
+						if member, err = resolveAccountReadGrant(ctx, s.repo, meeting.AccountID, userID); err == nil {
+							memberCache[meeting.AccountID] = member
+						}
+					}
+					if member != nil {
+						perm = accountMeetingPermission
+					}
 				}
 				item := model.ToMeetingListItem(meeting, true, &share.OwnerEmail, &perm)
 				response.Meetings = append(response.Meetings, item)
@@ -693,7 +706,7 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 
 	return &model.MeetingDetailResponse{
 		CanRecoverRecording:        permission == "owner" && CanRecoverRecording(meeting),
-		CanCorrectSpeakers:         !meeting.AccountReadInherited && (permission == "owner" || permission == model.PermissionEdit || permission == model.PermissionRead),
+		CanCorrectSpeakers:         permission == "owner" || permission == model.PermissionEdit || permission == model.PermissionRead,
 		AudioCrop:                  meeting.AudioCrop,
 		Duration:                   meeting.Duration,
 		SupportsNotesComparison:    true,
@@ -757,6 +770,11 @@ func (s *MeetingService) UpdateMeeting(ctx context.Context, userID, meetingID st
 	}
 	if permission != "owner" && permission != model.PermissionEdit {
 		return nil, ErrForbidden
+	}
+	// A restricted projection blanks derived fields; never let an editor
+	// overwrite the canonical summary from that view (resummary parity).
+	if meeting.SummaryReadRestricted && (req.Content != "" || req.LiveSummary != nil || req.Status != "") {
+		return nil, ErrSummaryReadRestricted
 	}
 
 	if meeting.AudioCrop != nil && (req.Status != "" || meeting.AudioCrop.Active() && (req.TranscriptA != "" || req.SelectedTranscript != "")) {
@@ -894,9 +912,6 @@ func (s *MeetingService) UpdateSpeakers(ctx context.Context, userID, meetingID s
 	}
 	if meeting == nil {
 		return nil, ErrNotFound
-	}
-	if meeting.AccountReadInherited {
-		return nil, ErrForbidden
 	}
 	if permission != "owner" && permission != model.PermissionEdit && permission != model.PermissionRead {
 		return nil, ErrForbidden

@@ -74,7 +74,9 @@ func TestUpdateSpeakersSharedAccess(t *testing.T) {
 			if stored.Title != "Original title" || stored.Notes != "Original notes" || stored.SharedToAccount != tc.published {
 				t.Fatal("speaker correction changed unrelated meeting fields")
 			}
-			if tc.caller != "owner" && tc.permission != model.PermissionEdit {
+			// Live team members edit like the creator; only a direct read
+			// share remains limited to speaker correction.
+			if tc.caller != "owner" && tc.permission != model.PermissionEdit && !(tc.member && tc.published) {
 				notes := "Unauthorized notes"
 				for _, req := range []*model.UpdateMeetingRequest{
 					{Title: "Unauthorized title"}, {Content: "Unauthorized summary"}, {Notes: &notes},
@@ -270,12 +272,15 @@ func TestSpeakerAttributionOnlyCorrectionPreservesSafeSummary(t *testing.T) {
 					ContentSHA256: model.SummaryPrivacyHash(content),
 				},
 			})
-			repo.addMember("account", "reader", model.RoleTAM)
-			repo.members["account|reader"].SummaryPrivacyVersion = model.SummaryPrivacyVersion
+			// A direct read share keeps the attribution-only (read) rename path;
+			// account-team members now edit like the creator.
+			repo.shares[shareKey("reader", "meeting")] = &model.Share{
+				MeetingID: "meeting", OwnerID: "owner", SharedToID: "reader", Permission: model.PermissionRead,
+			}
 			svc := newMeetingServiceWithRepo(repo)
-			before, _, err := svc.checkAccess(context.Background(), "reader", "meeting")
-			if err != nil || before.SummaryReadRestricted || before.Content != content {
-				t.Fatalf("safe account summary was not initially readable: %+v %v", before, err)
+			before, permission, err := svc.checkAccess(context.Background(), "reader", "meeting")
+			if err != nil || permission != model.PermissionRead || before.SummaryReadRestricted || before.Content != content {
+				t.Fatalf("safe summary was not initially readable: %+v %q %v", before, permission, err)
 			}
 			_, err = svc.UpdateSpeakers(context.Background(), "reader", "meeting",
 				&model.UpdateSpeakersRequest{SpeakerMap: map[string]string{label: "Lee"}})

@@ -292,12 +292,9 @@ func TestListMeetingsConcurrentSharedReadsKeepShareOrder(t *testing.T) {
 	if got := meetingIDs(resp.Meetings); strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("order changed:\n got %v\nwant %v", got, want)
 	}
-	direct := map[string]bool{"m-01": true, "m-05": true, "m-09": true, "m-13": true, "m-17": true}
+	// Direct edit shares and account-team shares both grant edit now.
 	for _, item := range resp.Meetings {
-		want := model.PermissionRead
-		if direct[item.MeetingID] {
-			want = model.PermissionEdit
-		}
+		want := model.PermissionEdit
 		if item.Permission == nil || *item.Permission != want {
 			t.Fatalf("%s permission %v, want %s", item.MeetingID, item.Permission, want)
 		}

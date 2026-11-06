@@ -438,6 +438,10 @@ func (h *MeetingHandler) UpdateMeeting(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.meetingService.UpdateMeeting(ctx, userID, meetingID, &req)
 	if err != nil {
+		if errors.Is(err, service.ErrSummaryReadRestricted) {
+			writeError(w, http.StatusConflict, "SHARING_REGEN_REQUIRED", "Summary is not shared with this account yet")
+			return
+		}
 		if errors.Is(err, service.ErrForbidden) {
 			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied - read-only permission")
 			return

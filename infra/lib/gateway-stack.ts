@@ -496,6 +496,8 @@ export class GatewayStack extends cdk.Stack {
         BEDROCK_SUMMARY_MODEL_ID: models.meetingSummary,
         BEDROCK_SUMMARY_RETAIN_MODEL_IDS: (models.retainedMeetingSummary ?? []).join(','),
         BEDROCK_SONNET_MODEL_ID: 'global.anthropic.claude-sonnet-5-5',
+        // The resummary worker re-fences inherited members; match the API flag.
+        ACCOUNT_DESCENDANT_READS_ENABLED: accountDescendantReads.valueAsString,
         ...autoTermsEnvironment(this),
         ...transcriptCorrectionEnvironment(this),
         ...sourceTermsEnvironment(this),

@@ -91,7 +91,7 @@ func TestListMeetings_ParentOnlyMemberFindsDescendantPublishedMeeting(t *testing
 	for _, tab := range []string{"shared", "all"} {
 		for _, account := range []string{"", "acc-a"} {
 			got, err := svc.ListMeetings(context.Background(), "reader", tab, "", account, 20)
-			if err != nil || len(got.Meetings) != 1 || aws.ToString(got.Meetings[0].Permission) != model.PermissionRead {
+			if err != nil || len(got.Meetings) != 1 || aws.ToString(got.Meetings[0].Permission) != model.PermissionEdit {
 				t.Fatalf("parent-only team list: %+v/%v", got, err)
 			}
 		}
@@ -111,10 +111,10 @@ func TestListMeetings_LaterTeamMemberAutomaticallySeesPublishedMeetings(t *testi
 					t.Fatal(err)
 				}
 				if len(got.Meetings) != 1 || got.Meetings[0].MeetingID != "published" ||
-					!got.Meetings[0].IsShared || aws.ToString(got.Meetings[0].Permission) != model.PermissionRead {
-					t.Fatalf("expected the existing team meeting with read access, got %+v", got.Meetings)
+					!got.Meetings[0].IsShared || aws.ToString(got.Meetings[0].Permission) != model.PermissionEdit {
+					t.Fatalf("expected the existing team meeting with edit access, got %+v", got.Meetings)
 				}
-				if _, permission, err := svc.checkAccess(context.Background(), "new-member", "published"); err != nil || permission != model.PermissionRead {
+				if _, permission, err := svc.checkAccess(context.Background(), "new-member", "published"); err != nil || permission != model.PermissionEdit {
 					t.Fatalf("list and detail access disagree: permission=%q error=%v", permission, err)
 				}
 			})
