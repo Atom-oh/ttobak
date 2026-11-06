@@ -63,6 +63,50 @@ function apiFunction(template: Template) {
     .find(([, value]) => value.Properties.FunctionName === 'ttobak-api')!;
 }
 
+function apiVersionDescription(template: Template): unknown {
+  return Object.values(template.findResources('AWS::Lambda::Version'))
+    .find(value => JSON.stringify(value.Properties.FunctionName).includes('ApiFunction'))!.Properties.Description;
+}
+
+/** Longest value each referenced parameter can take at deploy time. */
+function worstCaseValues(template: Template): Record<string, string> {
+  const values: Record<string, string> = {};
+  for (const [name, parameter] of Object.entries<Record<string, any>>(template.toJSON().Parameters ?? {})) {
+    if (parameter.AllowedValues) {
+      values[name] = parameter.AllowedValues.reduce((a: string, b: string) => (b.length > a.length ? b : a), '');
+    } else if (name === 'HttpOriginSecretVersionId') {
+      expect(parameter.AllowedPattern).toBe('^[A-Za-z0-9-]{32,64}$');
+      values[name] = 'v'.repeat(64);
+    } else if (parameter.MaxLength !== undefined) {
+      values[name] = 'x'.repeat(Number(parameter.MaxLength));
+    } else if (parameter.Type === 'AWS::SSM::Parameter::Value<String>' && parameter.Default === '/ttobak/otel/collector-endpoint') {
+      // http:// + a maximal 63-character DNS label + the regional ELB suffix.
+      values[name] = `http://${'a'.repeat(63)}.ap-northeast-2.elb.amazonaws.com`;
+    }
+  }
+  return values;
+}
+
+function resolve(value: unknown, values: Record<string, string>): string {
+  if (typeof value === 'string') return value;
+  const node = value as Record<string, any>;
+  if ('Ref' in node) {
+    if (!(node.Ref in values)) throw new Error(`no worst-case value for ${node.Ref}`);
+    return values[node.Ref];
+  }
+  if ('Fn::Join' in node) {
+    const [separator, parts] = node['Fn::Join'];
+    return parts.map((part: unknown) => resolve(part, values)).join(separator);
+  }
+  if ('Fn::Select' in node) {
+    const [index, list] = node['Fn::Select'];
+    if (!('Fn::Split' in list)) throw new Error('unsupported Fn::Select source');
+    const [delimiter, source] = list['Fn::Split'];
+    return resolve(source, values).split(delimiter)[index];
+  }
+  throw new Error(`unsupported intrinsic ${JSON.stringify(node)}`);
+}
+
 describe('GatewayStack API telemetry (O2)', () => {
   test('off by default: identical template, no VPC, no OTLP environment, function unchanged', () => {
     const unset = build(undefined);
@@ -98,11 +142,19 @@ describe('GatewayStack API telemetry (O2)', () => {
     const template = build(true);
     const [, fn] = apiFunction(template);
     const ref = fn.Properties.Environment.Variables.OTEL_EXPORTER_OTLP_ENDPOINT.Ref;
-    const version = Object.values(template.findResources('AWS::Lambda::Version'))
-      .find(value => JSON.stringify(value.Properties.FunctionName).includes('ApiFunction'))!;
-    const description = JSON.stringify(version.Properties.Description);
-    expect(description).toContain(';otel-endpoint=');
-    expect(description).toContain(JSON.stringify({ Ref: ref }));
+    const description = apiVersionDescription(template);
+    expect(JSON.stringify(description)).toContain(JSON.stringify(
+      { 'Fn::Select': [0, { 'Fn::Split': ['.', { Ref: ref }] }] }));
+    const values = worstCaseValues(template);
+    values[ref] = 'http://internal-ttobak-otel-282462607.ap-northeast-2.elb.amazonaws.com';
+    expect(resolve(description, values)).toMatch(/;otel=http:\/\/internal-ttobak-otel-282462607$/);
+  });
+
+  // Lambda rejects a version Description over 256 characters at publication.
+  test.each([false, true])('worst-case resolved API version description fits 256 characters (flag %s)', enabled => {
+    const template = build(enabled);
+    const resolved = resolve(apiVersionDescription(template), worstCaseValues(template));
+    expect(resolved.length).toBeLessThanOrEqual(256);
   });
 
   test('on: private-with-egress subnets, own group plus the collector client group', () => {

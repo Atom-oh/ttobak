@@ -324,16 +324,29 @@ export class GatewayStack extends cdk.Stack {
       currentVersionOptions: {
         // Description is create-only: parameter-only toggles must publish a
         // matching immutable version before the live alias can change behavior.
-        description: cdk.Fn.join('', ['project-invitations=', projectInvitationsEnabled.valueAsString,
-          ';http-origin-version=', this.httpOrigin.versionId,
-          ';summary-privacy-writer=', summaryPrivacyWriter.valueAsString,
-          ';owner-account-share=', summaryOwnerAccountShare.valueAsString,
-          ';reader=', summaryPrivacyReader.valueAsString,
-          ';cutoff=', summaryPrivacyCutoff.valueAsString,
-          ';account-descendant-reads=', accountDescendantReads.valueAsString,
-          // A changed collector URL (SSM, resolved at deploy) must publish a
-          // new version; the env Ref alone does not change the version hash.
-          ...(apiTelemetry ? [';otel-endpoint=', apiTelemetry.environment.OTEL_EXPORTER_OTLP_ENDPOINT] : [])]),
+        // Lambda caps Description at 256 characters; worst-case lengths are
+        // asserted in gateway-api-telemetry.test.ts. The telemetry variant uses
+        // compact keys so the collector binding fits; the flag-off text is the
+        // original one, so the flag-off version is unchanged.
+        description: apiTelemetry
+          ? cdk.Fn.join('', ['pi=', projectInvitationsEnabled.valueAsString,
+            ';hov=', this.httpOrigin.versionId,
+            ';spw=', summaryPrivacyWriter.valueAsString,
+            ';oas=', summaryOwnerAccountShare.valueAsString,
+            ';r=', summaryPrivacyReader.valueAsString,
+            ';c=', summaryPrivacyCutoff.valueAsString,
+            ';adr=', accountDescendantReads.valueAsString,
+            // First DNS label of the SSM collector URL (http://internal-<alb>-<id>):
+            // changes whenever the ALB is replaced, so the live alias moves to
+            // a version that carries the new endpoint.
+            ';otel=', cdk.Fn.select(0, cdk.Fn.split('.', apiTelemetry.environment.OTEL_EXPORTER_OTLP_ENDPOINT))])
+          : cdk.Fn.join('', ['project-invitations=', projectInvitationsEnabled.valueAsString,
+            ';http-origin-version=', this.httpOrigin.versionId,
+            ';summary-privacy-writer=', summaryPrivacyWriter.valueAsString,
+            ';owner-account-share=', summaryOwnerAccountShare.valueAsString,
+            ';reader=', summaryPrivacyReader.valueAsString,
+            ';cutoff=', summaryPrivacyCutoff.valueAsString,
+            ';account-descendant-reads=', accountDescendantReads.valueAsString]),
       },
       runtime: lambda.Runtime.PROVIDED_AL2023,
       architecture: lambda.Architecture.ARM_64,

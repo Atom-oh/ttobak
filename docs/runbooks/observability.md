@@ -59,8 +59,9 @@ function configuration unchanged). The flag VPC-attaches the function to the
 ingress, TCP 443 egress for AWS APIs through endpoints and NAT) plus the
 existing `ttobak-otel-client` group, and sets `OTEL_EXPORTER_OTLP_ENDPOINT` from
 SSM `/ttobak/otel/collector-endpoint` and `OTEL_SERVICE_NAME=ttobak-api`. The
-endpoint is also bound into the `live` version description, so a changed
-collector URL publishes a new version. GatewayStack owns the region-scoped ENI
+endpoint's first DNS label (`http://internal-<alb>-<id>`) is also bound into the
+`live` version description (compact keys keep it within Lambda's 256-character
+limit), so a replaced collector ALB publishes a new version. GatewayStack owns the region-scoped ENI
 grant (`ApiNetworkInterfaces`) on the API role and keeps it regardless of the
 flag: Lambda deletes Hyperplane ENIs asynchronously with that role after a
 rollback. The grant is the only flag-off difference from the pre-telemetry
