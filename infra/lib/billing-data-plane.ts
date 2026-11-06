@@ -17,7 +17,7 @@ import { Construct } from 'constructs';
 const BILLING = path.join(__dirname, '../../services/billing');
 // GuardDuty Runtime Monitoring attaches its security agent sidecar to Fargate tasks and pulls it with the task
 // execution role from this Region's GuardDuty agent repository ("Amazon ECR repository hosting GuardDuty agent").
-const GUARDDUTY_AGENT_ACCOUNT: Record<string, string> = { 'ap-northeast-2': '914738172881' };
+export const GUARDDUTY_AGENT_ACCOUNT: Record<string, string> = { 'ap-northeast-2': '914738172881' };
 // Tagged on CreateMultipartUpload by the BFF (lib/uploads.js): uploaded sources expire by tag.
 const UPLOAD_TAG = { key: 'tb-lifecycle', value: 'upload' };
 export const FEED_KEY = 'data/whats_new_feed.json';

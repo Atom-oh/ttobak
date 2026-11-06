@@ -22,6 +22,7 @@ do not establish that the rule is deployed.
 | TtobakKnowledgeStack | KB bucket, AOSS declarations, external KB identifiers | Storage |
 | TtobakAiStack | Service roles/policies, research/simulator permissions | Storage, Knowledge, Auth, WebSearchGateway |
 | TtobakEdgeAuthStack | CloudFront viewer JWT validation, us-east-1 | Auth |
+| TtobakObservabilityStack | OTLP collector (Fargate, internal ALB) writing to the mgmt ClickHouse PrivateLink | None |
 | TtobakGatewayStack | HTTP/WebSocket APIs, Go/Python functions, conversion/events | Auth, Storage, AI, Knowledge, WebSearchGateway |
 | TtobakCrawlerStack | Crawling/ingestion workflow and workers; separate legacy news drain switch | AI, Storage, Knowledge, WebSearchGateway |
 | TtobakResearchAgentStack | Legacy Bedrock Agent/tools and AgentCore spans log group | Storage, Knowledge |
@@ -711,12 +712,24 @@ change alters the function configuration and publishes a new version for the
 `live` alias without the create-only description workaround. The API role's
 existing table read/write grant covers the conditional put; no new IAM is added.
 
+## Observability stack
+
+`TtobakObservabilityStack` runs an OTLP/HTTP collector on ECS Fargate (ARM64) in
+`fsi-demo-vpc` isolated subnets behind the internal ALB `ttobak-otel`, which
+admits only the `ttobak-otel-client` security group. It writes traces, metrics
+and logs to the mgmt observability ClickHouse through an interface endpoint for
+its PrivateLink service (TCP 9000, collector security group only, `open: false`).
+Credentials come from Secrets Manager `/demo-platform/clickhouse/ttobak`. The
+collector service exists only when context `ttobak:otelCollectorEnabled` is
+`"true"`, after the endpoint connection is accepted. See the
+[observability runbook](runbooks/observability.md).
+
 ## Billing BFF stack
 
 `TtobakBillingStack` (`infra/lib/billing-stack.ts`) is optional. `addBillingStack`
 creates it only when context `ttobak:billingEnabled` is the string `"true"`;
 then `ttobak:domainName` must be a bare hostname or synth fails. The key is not
-checked in yet, so the default app has eleven stacks.
+checked in yet, so the default app has twelve stacks.
 
 The data bucket and platform table physical names are never committed. The
 stack reads them from SSM String parameters `/ttobak/billing/data-bucket-name`
