@@ -102,9 +102,8 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          # Match backend/go.mod's `go 1.25.0` (see test-backend.yml). With
-          # '1.24' the build fails with `go.mod requires go >= 1.25.0`.
-          go-version: '1.25'
+          go-version: '1.27.3'
+          check-latest: true
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
@@ -114,6 +113,18 @@ jobs:
           npm --prefix backend/internal/service/pdfassets ci --ignore-scripts --no-audit --no-fund
           npm --prefix backend/internal/service/pdfassets run verify
           npm --prefix backend/internal/service/pdfassets test
+
+      - name: Verify Go backend with deployment compiler
+        working-directory: backend
+        env:
+          TTOBAK_PROJECT_INVITATION_TEST_TABLE: ''
+          TTOBAK_NOTE_EVAL_MODE: ''
+          TTOBAK_NOTE_EVAL_NATIVE_SMOKE: ''
+          TTOBAK_PDF_TEST_OUTPUT: ''
+          CONNECTOR_SETTINGS_CONFIG_TEST: ''
+        run: |
+          go test ./... -count=1
+          go vet ./...
 
       - name: Install AWS CLI
         run: |

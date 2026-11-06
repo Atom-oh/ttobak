@@ -7,7 +7,7 @@ WORKDIR /pdfassets
 COPY internal/service/pdfassets/package.json internal/service/pdfassets/package-lock.json internal/service/pdfassets/verify.mjs ./
 RUN npm ci --ignore-scripts --no-audit --no-fund && npm run verify
 
-FROM golang:1.25-bookworm AS build
+FROM golang:1.27.3-bookworm@sha256:dc0963f32053e4bc451d24d87e3892d42d01021b61f093e98eb95c0352bb84b0 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
