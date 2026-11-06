@@ -299,6 +299,15 @@ export class GatewayStack extends cdk.Stack {
               service: 'lambda', resource: 'function', resourceName: name,
               arnFormat: cdk.ArnFormat.COLON_RESOURCE_NAME,
             })),
+        }), new iam.PolicyStatement({
+          // Read-only proof of a VPC-attached consumer's private Secrets
+          // Manager path (http_origin_release.vpc_secret_path_verified). EC2
+          // Describe actions have no resource-level scoping.
+          actions: ['ec2:DescribeSubnets', 'ec2:DescribeVpcAttribute', 'ec2:DescribeVpcEndpoints',
+            'ec2:DescribeSecurityGroups', 'ec2:DescribeNetworkAcls', 'ec2:DescribeRouteTables',
+            'ec2:GetManagedPrefixListEntries'],
+          resources: ['*'],
+          conditions: { StringEquals: { 'aws:RequestedRegion': cdk.Aws.REGION } },
         })],
       });
     }
