@@ -134,7 +134,7 @@ async fn handle(app: AppHandle, mut stream: UnixStream, own_uid: u32) {
                 .map_or(0, |i| i + 1);
             match proto::parse_request(&line[..end]) {
                 Err(e) => proto::error_line(e.id.as_deref(), e.code.as_str(), &e.message),
-                Ok(request) => dispatch(&app, request).await,
+                Ok(request) => dispatch(&app, request, Origin::Mcp).await,
             }
         }
     };
@@ -142,7 +142,29 @@ async fn handle(app: AppHandle, mut stream: UnixStream, own_uid: u32) {
     let _ = stream.shutdown().await;
 }
 
-async fn dispatch(app: &AppHandle, request: proto::Request) -> String {
+/// Who asked for a start/stop; only MCP starts post a "started" notification,
+/// because a detection start was confirmed in the app window itself.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Origin {
+    Mcp,
+    Detection,
+}
+
+/// Runs a start/stop confirmed from a meeting-detection prompt (ADR-061)
+/// through the same SPA path as socket requests, returning the response in
+/// control-protocol shape.
+pub async fn dispatch_local(app: &AppHandle, id: &str, action: Action) -> Value {
+    let request = proto::Request {
+        id: id.to_owned(),
+        action,
+    };
+    let line = dispatch(app, request, Origin::Detection).await;
+    serde_json::from_str(line.trim()).unwrap_or_else(|_| {
+        json!({ "ok": false, "error": { "code": Code::Internal.as_str(), "message": "invalid reply" } })
+    })
+}
+
+async fn dispatch(app: &AppHandle, request: proto::Request, origin: Origin) -> String {
     let control = app.state::<ControlState>();
     if request.action == Action::Status {
         return proto::ok_line(&request.id, status(app, &control));
@@ -199,9 +221,11 @@ async fn dispatch(app: &AppHandle, request: proto::Request) -> String {
     control.pending.lock().remove(&request_id);
     match reply {
         Ok(Ok(reply)) => {
-            if let (Action::Start { title, .. }, Some(true)) =
-                (&request.action, reply.get("ok").and_then(Value::as_bool))
-            {
+            if let (Action::Start { title, .. }, Some(true), Origin::Mcp) = (
+                &request.action,
+                reply.get("ok").and_then(Value::as_bool),
+                origin,
+            ) {
                 notify_started(app, title);
             }
             // The page only knows about recordings it controls; a capture it
