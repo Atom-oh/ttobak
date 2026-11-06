@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/components/auth/AuthProvider';
 import {
   getMeetingDetection,
@@ -13,6 +13,10 @@ import {
 
 type Prompt = { phase: 'detected' | 'ended'; detection: NativeMeetingDetection };
 
+/** After a meeting ends, the running recording stops and uploads after this
+ * many seconds unless the user keeps recording. */
+const AUTO_STOP_SECONDS = 30;
+
 function meetingTitle(label: string): string {
   const when = new Intl.DateTimeFormat('ko-KR', {
     month: 'long',
@@ -23,15 +27,35 @@ function meetingTitle(label: string): string {
   return `${label} 회의 · ${when}`;
 }
 
-/** Mac app only: offers to record when the app detects a meeting using the
- * microphone, and to stop when that meeting ends (ADR-061). Nothing records
- * until the user confirms; the start follows the normal control path to the
- * record page. Renders nothing in a browser or an older app build. */
+/** Mac app only: offers to record when the app detects a meeting, and when
+ * that meeting ends stops the running recording after a short countdown the
+ * user can cancel (ADR-061). Nothing records until the user confirms; start
+ * and stop follow the normal control path to the record page. Renders
+ * nothing in a browser or an older app build. */
 export function MeetingDetectionBanner() {
   const { isAuthenticated } = useAuth();
   const [prompt, setPrompt] = useState<Prompt | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [remaining, setRemaining] = useState<number | null>(null);
+  const confirmRef = useRef<() => Promise<void>>(async () => undefined);
+
+  // Countdown to the automatic stop of an ended meeting's recording.
+  const endedId = prompt?.phase === 'ended' ? prompt.detection.detectionId : null;
+  useEffect(() => {
+    if (!endedId) {
+      setRemaining(null);
+      return;
+    }
+    setRemaining(AUTO_STOP_SECONDS);
+    const timer = setInterval(() => {
+      setRemaining((value) => (value === null || value <= 0 ? value : value - 1));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [endedId]);
+  useEffect(() => {
+    if (remaining === 0 && !busy && !error) void confirmRef.current();
+  }, [remaining, busy, error]);
 
   useEffect(() => {
     if (!isTauri() || !isAuthenticated) return;
@@ -71,7 +95,7 @@ export function MeetingDetectionBanner() {
     setError(null);
   };
 
-  const confirm = async () => {
+  const confirm = async (): Promise<void> => {
     setBusy(true);
     setError(null);
     try {
@@ -91,12 +115,16 @@ export function MeetingDetectionBanner() {
     }
   };
 
+  confirmRef.current = confirm;
+
   const heading =
     phase === 'detected' ? `${detection.label} 회의가 감지됐어요` : `${detection.label} 회의가 끝난 것 같아요`;
   const body =
     phase === 'detected'
       ? '녹음을 시작하면 시스템 소리와 내 마이크를 함께 녹음합니다. 참석자에게 녹음 사실을 알려주세요.'
-      : '녹음을 종료하고 업로드할까요?';
+      : remaining !== null && remaining > 0
+        ? `${remaining}초 후 녹음을 종료하고 업로드합니다.`
+        : '녹음을 종료하고 업로드하는 중입니다.';
 
   return (
     <div
@@ -128,7 +156,7 @@ export function MeetingDetectionBanner() {
           disabled={busy}
           className="min-h-9 px-3 rounded-lg text-sm font-bold text-white bg-primary hover:bg-primary-hover disabled:opacity-50"
         >
-          {busy ? '처리 중…' : phase === 'detected' ? '녹음 시작' : '녹음 종료'}
+          {busy ? '처리 중…' : phase === 'detected' ? '녹음 시작' : '지금 종료'}
         </button>
       </div>
     </div>

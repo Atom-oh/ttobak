@@ -281,10 +281,14 @@ pub mod macos {
         kAudioAggregateDeviceSubDeviceListKey, kAudioAggregateDeviceTapAutoStartKey,
         kAudioAggregateDeviceTapListKey, kAudioAggregateDeviceUIDKey,
         kAudioDevicePropertyDeviceUID, kAudioDevicePropertyNominalSampleRate,
-        kAudioDevicePropertyStreamConfiguration, kAudioHardwarePropertyDefaultInputDevice,
-        kAudioHardwarePropertyDefaultOutputDevice,
+        kAudioDevicePropertyStreamConfiguration, kAudioDevicePropertyTransportType,
+        kAudioDeviceTransportTypeAggregate, kAudioDeviceTransportTypeVirtual,
+        kAudioHardwarePropertyDefaultInputDevice, kAudioHardwarePropertyDefaultOutputDevice,
+        kAudioHardwarePropertyDevices, kAudioHardwarePropertyProcessObjectList,
         kAudioHardwarePropertyTranslatePIDToProcessObject, kAudioObjectPropertyElementMain,
-        kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyScopeInput, kAudioObjectSystemObject,
+        kAudioObjectPropertyName, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyScopeInput,
+        kAudioObjectSystemObject, kAudioProcessPropertyBundleID, kAudioProcessPropertyDevices,
+        kAudioProcessPropertyIsRunningInput, kAudioProcessPropertyPID,
         kAudioSubDeviceDriftCompensationKey, kAudioSubDeviceUIDKey,
         kAudioSubTapDriftCompensationKey, kAudioSubTapUIDKey, AudioDeviceCreateIOProcID,
         AudioDeviceDestroyIOProcID, AudioDeviceIOProcID, AudioDeviceStart, AudioDeviceStop,
@@ -471,6 +475,19 @@ pub mod macos {
         stats: Arc<Stats>,
         mic_active: bool,
         start_warnings: Vec<String>,
+        input: Option<SelectedInput>,
+    }
+
+    /// The microphone a recording captures, reported in the start response.
+    #[derive(Clone, Debug, serde::Serialize)]
+    pub struct SelectedInput {
+        pub uid: String,
+        pub name: String,
+        /// `requested`, `meeting` or `default`.
+        pub reason: &'static str,
+        /// The meeting app followed, for `meeting`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub app: Option<String>,
     }
 
     impl Backend {
@@ -482,6 +499,7 @@ pub mod macos {
             app: AppHandle,
             generation: u64,
             generation_counter: Arc<AtomicU64>,
+            requested_input: Option<String>,
         ) -> Result<Self, AppError> {
             let mut res = Resources::empty();
             let mut start_warnings = Vec::new();
@@ -517,9 +535,9 @@ pub mod macos {
             res.tap = tap;
             let tap_uid = unsafe { desc.UUID().UUIDString() }.to_string();
 
-            // 2. Clock/sub-device: the default microphone when present.
-            let input = default_device(kAudioHardwarePropertyDefaultInputDevice)
-                .and_then(|id| device_uid(id).map(|uid| (id, uid)));
+            // 2. Clock/sub-device: the chosen microphone (requested, else the
+            //    meeting app's input, else the default), when present.
+            let (input, selected) = choose_input(requested_input.as_deref(), &mut start_warnings);
             let (main_uid, layout, mic_active) = match input {
                 Some((id, uid)) if input_channels(id) > 0 => (
                     uid,
@@ -711,7 +729,13 @@ pub mod macos {
                 stats,
                 mic_active,
                 start_warnings,
+                input: selected,
             })
+        }
+
+        /// The microphone this recording captures, if any.
+        pub fn input(&self) -> Option<SelectedInput> {
+            self.input.clone()
         }
 
         /// Warnings to surface in the start response (e.g. no microphone).
@@ -1128,6 +1152,208 @@ pub mod macos {
                 .map(|b| b.mNumberChannels as usize)
                 .sum()
         }
+    }
+
+    /// Reads an array of object IDs (device or process lists).
+    fn get_ids(
+        object: AudioObjectID,
+        selector: AudioObjectPropertySelector,
+        scope: AudioObjectPropertyScope,
+    ) -> Vec<AudioObjectID> {
+        let addr = address(selector, scope);
+        let mut size = 0u32;
+        let status = unsafe {
+            AudioObjectGetPropertyDataSize(
+                object,
+                NonNull::from(&addr),
+                0,
+                std::ptr::null(),
+                NonNull::from(&mut size),
+            )
+        };
+        let count = size as usize / std::mem::size_of::<AudioObjectID>();
+        if status != 0 || count == 0 {
+            return Vec::new();
+        }
+        let mut ids = vec![0 as AudioObjectID; count];
+        let mut size = (count * std::mem::size_of::<AudioObjectID>()) as u32;
+        let status = unsafe {
+            AudioObjectGetPropertyData(
+                object,
+                NonNull::from(&addr),
+                0,
+                std::ptr::null(),
+                NonNull::from(&mut size),
+                NonNull::new(ids.as_mut_ptr().cast::<c_void>()).expect("vec pointer"),
+            )
+        };
+        if status != 0 {
+            return Vec::new();
+        }
+        // The list can shrink between the two calls.
+        ids.truncate(size as usize / std::mem::size_of::<AudioObjectID>());
+        ids
+    }
+
+    /// Reads a +1 retained CFString property.
+    fn get_string(object: AudioObjectID, selector: AudioObjectPropertySelector) -> Option<String> {
+        let raw =
+            get_property::<*const c_void>(object, selector, kAudioObjectPropertyScopeGlobal, None)?;
+        if raw.is_null() {
+            return None;
+        }
+        let s = unsafe {
+            CFString::wrap_under_create_rule(raw as core_foundation::string::CFStringRef)
+        };
+        Some(s.to_string()).filter(|s| !s.is_empty())
+    }
+
+    /// This app's own capture aggregates are never offered as microphones.
+    const OWN_AGGREGATE_PREFIX: &str = "click.atomai.ttobak.mac.capture.";
+
+    /// An input-capable device.
+    #[derive(Clone, Debug, serde::Serialize)]
+    pub struct InputDevice {
+        pub uid: String,
+        pub name: String,
+        pub channels: usize,
+        pub is_default: bool,
+        /// Meeting apps capturing from this device now.
+        pub used_by: Vec<String>,
+        #[serde(skip)]
+        id: AudioObjectID,
+    }
+
+    fn input_device_list() -> Vec<InputDevice> {
+        let default = default_device(kAudioHardwarePropertyDefaultInputDevice);
+        get_ids(
+            kAudioObjectSystemObject as AudioObjectID,
+            kAudioHardwarePropertyDevices,
+            kAudioObjectPropertyScopeGlobal,
+        )
+        .into_iter()
+        .filter_map(|id| {
+            let channels = input_channels(id);
+            let uid = device_uid(id)?;
+            // Virtual loopbacks (Teams/Zoom audio devices) and aggregates are
+            // not microphones.
+            let transport = get_property::<u32>(
+                id,
+                kAudioDevicePropertyTransportType,
+                kAudioObjectPropertyScopeGlobal,
+                None,
+            );
+            let not_a_microphone = transport.is_some_and(|t| {
+                t == kAudioDeviceTransportTypeVirtual || t == kAudioDeviceTransportTypeAggregate
+            });
+            if channels == 0 || not_a_microphone || uid.starts_with(OWN_AGGREGATE_PREFIX) {
+                return None;
+            }
+            Some(InputDevice {
+                name: get_string(id, kAudioObjectPropertyName).unwrap_or_else(|| uid.clone()),
+                uid,
+                channels,
+                is_default: default == Some(id),
+                used_by: Vec::new(),
+                id,
+            })
+        })
+        .collect()
+    }
+
+    /// (app label, device ID) for each meeting app capturing input now.
+    fn meeting_inputs() -> Vec<(String, AudioObjectID)> {
+        let own_pid = std::process::id() as i32;
+        let mut out = Vec::new();
+        let processes = get_ids(
+            kAudioObjectSystemObject as AudioObjectID,
+            kAudioHardwarePropertyProcessObjectList,
+            kAudioObjectPropertyScopeGlobal,
+        );
+        for process in processes {
+            let running = get_property::<u32>(
+                process,
+                kAudioProcessPropertyIsRunningInput,
+                kAudioObjectPropertyScopeGlobal,
+                None,
+            );
+            if running != Some(1) {
+                continue;
+            }
+            let pid = get_property::<i32>(
+                process,
+                kAudioProcessPropertyPID,
+                kAudioObjectPropertyScopeGlobal,
+                None,
+            );
+            if pid == Some(own_pid) {
+                continue;
+            }
+            let Some(label) = get_string(process, kAudioProcessPropertyBundleID)
+                .and_then(|b| crate::meeting::classify_bundle(&b))
+                .map(|user| user.label().to_owned())
+            else {
+                continue;
+            };
+            for device in get_ids(
+                process,
+                kAudioProcessPropertyDevices,
+                kAudioObjectPropertyScopeInput,
+            ) {
+                out.push((label.clone(), device));
+            }
+        }
+        out
+    }
+
+    /// Input devices with the meeting apps using each (for the SPA picker).
+    pub fn input_devices() -> Vec<InputDevice> {
+        let mut devices = input_device_list();
+        for (label, id) in meeting_inputs() {
+            if let Some(d) = devices.iter_mut().find(|d| d.id == id) {
+                if !d.used_by.contains(&label) {
+                    d.used_by.push(label);
+                }
+            }
+        }
+        devices
+    }
+
+    fn choose_input(
+        requested: Option<&str>,
+        warnings: &mut Vec<String>,
+    ) -> (Option<(AudioObjectID, String)>, Option<SelectedInput>) {
+        use crate::input_select::{choose, Reason};
+        let devices = input_device_list();
+        let uid_of = |id: AudioObjectID| devices.iter().find(|d| d.id == id).map(|d| d.uid.clone());
+        let meeting: Vec<(String, String)> = meeting_inputs()
+            .into_iter()
+            .filter_map(|(label, id)| uid_of(id).map(|uid| (label, uid)))
+            .collect();
+        let default = devices.iter().find(|d| d.is_default).map(|d| d.uid.clone());
+        let available: Vec<String> = devices.iter().map(|d| d.uid.clone()).collect();
+        let choice = choose(requested, &available, &meeting, default.as_deref());
+        warnings.extend(choice.warning);
+        let Some(device) = choice
+            .uid
+            .and_then(|uid| devices.iter().find(|d| d.uid == uid))
+        else {
+            return (None, None);
+        };
+        let (reason, app) = match choice.reason {
+            Some(Reason::Requested) => ("requested", None),
+            Some(Reason::Meeting(label)) => ("meeting", Some(label)),
+            _ => ("default", None),
+        };
+        (
+            Some((device.id, device.uid.clone())),
+            Some(SelectedInput {
+                uid: device.uid.clone(),
+                name: device.name.clone(),
+                reason,
+                app,
+            }),
+        )
     }
 
     fn cf_dict(pairs: &[(&CStr, CFType)]) -> CFType {

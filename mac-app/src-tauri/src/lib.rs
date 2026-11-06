@@ -30,6 +30,7 @@ mod audio;
 mod control;
 mod control_proto;
 mod error;
+mod input_select;
 mod leftover;
 mod meeting;
 mod meeting_detect;
@@ -125,6 +126,10 @@ pub struct StartResponse {
     /// Additive field; older SPAs ignore it.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+    /// The microphone being recorded (additive; older SPAs ignore it).
+    #[cfg(target_os = "macos")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input: Option<audio::macos::SelectedInput>,
 }
 
 #[derive(Serialize)]
@@ -205,6 +210,53 @@ fn allowed_dir() -> PathBuf {
 /// `/not found|not allowed|unknown command/i` heuristic. Pinned here because
 /// that contract otherwise lives only in comments on both sides.
 #[cfg(test)]
+mod command_acl_tests {
+    /// Every registered command must be declared in build.rs and granted to the
+    /// remote origin; Tauri rejects anything else with "not allowed by ACL".
+    #[test]
+    fn registered_commands_are_declared_and_granted() {
+        let lib = include_str!("lib.rs");
+        let start =
+            lib.rfind("generate_handler![").expect("handler list") + "generate_handler![".len();
+        let end = start + lib[start..].find(']').expect("handler end");
+        let mut registered: Vec<String> = lib[start..end]
+            .split(',')
+            .map(|c| c.trim().rsplit("::").next().unwrap_or_default().to_owned())
+            .filter(|c| !c.is_empty())
+            .collect();
+        registered.sort();
+
+        let build = include_str!("../build.rs");
+        let list = &build[build.find("COMMANDS: &[&str] = &[").expect("COMMANDS")..];
+        let list = &list[..list.find("];").expect("COMMANDS end")];
+        let mut declared: Vec<String> = list
+            .split('"')
+            .skip(1)
+            .step_by(2)
+            .map(str::to_owned)
+            .collect();
+        declared.sort();
+        assert_eq!(registered, declared, "build.rs COMMANDS");
+
+        let capability: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json")).expect("json");
+        let granted: Vec<&str> = capability["permissions"]
+            .as_array()
+            .expect("permissions")
+            .iter()
+            .filter_map(|p| p.as_str())
+            .collect();
+        for command in &declared {
+            let permission = format!("allow-{}", command.replace('_', "-"));
+            assert!(
+                granted.contains(&permission.as_str()),
+                "{permission} not granted"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod preflight_contract_tests {
     use super::*;
 
@@ -249,6 +301,9 @@ pub(crate) fn validate_recording_path(
 #[tauri::command]
 async fn start_recording(
     meeting_id: String,
+    // Device UID from `list_input_devices`; absent means follow the meeting
+    // app's input, else the system default (ADR-061).
+    input_device_uid: Option<String>,
     state: State<'_, RecorderState>,
     app: AppHandle,
 ) -> Result<StartResponse, AppError> {
@@ -283,6 +338,7 @@ async fn start_recording(
                 app,
                 reservation.generation,
                 reservation.generation_counter,
+                input_device_uid,
             )
         })
         .await;
@@ -298,6 +354,7 @@ async fn start_recording(
         };
 
         let warnings = backend.start_warnings();
+        let input = backend.input();
         let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
         state.recording_power.lock().protect(canonical.clone(), || {
             power::PowerAssertion::acquire("TTOBAK recording awaiting upload")
@@ -310,6 +367,7 @@ async fn start_recording(
         return Ok(StartResponse {
             temp_path: canonical.to_string_lossy().into_owned(),
             warnings,
+            input,
         });
     }
 
@@ -320,10 +378,25 @@ async fn start_recording(
     // `unreachable_code` lint for on this platform.
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (&app, &reservation, &path, &guard);
+        let _ = (&app, &reservation, &path, &guard, &input_device_uid);
         // `guard` drops here and cancels the reservation.
         Err(AppError::Unsupported)
     }
+}
+
+/// Input-capable devices for the microphone picker, with the meeting apps
+/// using each one now. Empty off macOS.
+#[tauri::command]
+async fn list_input_devices() -> Result<serde_json::Value, AppError> {
+    #[cfg(target_os = "macos")]
+    {
+        let devices = tauri::async_runtime::spawn_blocking(audio::macos::input_devices)
+            .await
+            .map_err(|e| AppError::Backend(format!("device listing panicked: {e}")))?;
+        Ok(serde_json::to_value(devices).unwrap_or_default())
+    }
+    #[cfg(not(target_os = "macos"))]
+    Ok(serde_json::Value::Array(Vec::new()))
 }
 
 #[tauri::command]
@@ -616,6 +689,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             start_recording,
             stop_recording,
+            list_input_devices,
             recording_status,
             upload::upload_recording,
             cleanup_recording,

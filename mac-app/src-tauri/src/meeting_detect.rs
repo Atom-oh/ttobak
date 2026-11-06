@@ -2,8 +2,8 @@
 //! microphone and offers to record when a meeting app or a web-meeting tab
 //! is active.
 //!
-//! A background thread polls Core Audio (default input `IsRunningSomewhere`,
-//! then each process object's `IsRunningInput`/`BundleID`). A browser using
+//! A background thread polls Core Audio process objects' `IsRunningInput`,
+//! `IsRunningOutput`, `PID` and `BundleID`. A browser using
 //! the microphone counts only if one of its tabs is a meeting URL; an
 //! AppleScript filters tab URLs inside the browser and returns only meeting
 //! URLs, which are classified and never logged. Rules live in `meeting.rs`.
@@ -25,9 +25,9 @@ use crate::control_proto::{self as proto, Action};
 use crate::meeting::{Detection, Detector, Event};
 use crate::RecorderState;
 
-/// Poll interval while some process is using the microphone.
+/// Poll interval while some process is capturing or playing audio.
 const ACTIVE_POLL: Duration = Duration::from_secs(1);
-/// Poll interval while the microphone is idle (one cheap HAL property read).
+/// Poll interval while no process is capturing or playing audio.
 const IDLE_POLL: Duration = Duration::from_secs(2);
 const SETTINGS_FILE: &str = "meeting-detection.json";
 
@@ -37,8 +37,9 @@ pub struct MeetingState {
     /// The last announced detection, kept after it ends so its stop prompt
     /// can still be answered.
     last: Mutex<Option<Detection>>,
-    /// The recording a confirmed detection start produced (detection ID and
-    /// WAV path). A stop prompt may stop only that recording.
+    /// The recording a detection may stop (detection ID and WAV path): the one
+    /// its confirmed start produced, or the one running when it ended. A stop
+    /// prompt may stop only that recording.
     started: Mutex<Option<(String, PathBuf)>>,
     settings_path: Mutex<Option<PathBuf>>,
 }
@@ -123,7 +124,7 @@ fn watch(app: AppHandle, state: Arc<MeetingState>) {
         for event in events {
             announce(&app, &state, &event);
         }
-        std::thread::sleep(if sources.is_empty() && !probe.mic_running() {
+        std::thread::sleep(if sources.is_empty() && !probe.audio_active() {
             IDLE_POLL
         } else {
             ACTIVE_POLL
@@ -134,10 +135,17 @@ fn watch(app: AppHandle, state: Arc<MeetingState>) {
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn announce(app: &AppHandle, state: &MeetingState, event: &Event) {
     use tauri_plugin_notification::NotificationExt;
-    // For an end, only the recording this detection started is offered a stop.
+    // A meeting's end offers to stop whatever native recording is running
+    // now (started from the prompt or by hand), bound to that exact WAV so a
+    // later recording is never stopped by this prompt.
     let recording = match event {
         Event::Detected(_) => false,
-        Event::Ended(d) => owns_recording(app, state, &d.id),
+        Event::Ended(d) => {
+            let current = app.state::<RecorderState>().recorder.lock().snapshot().path;
+            let running = current.is_some();
+            *state.started.lock() = current.map(|path| (d.id.clone(), path));
+            running
+        }
     };
     let (name, detection, notice) = match event {
         Event::Detected(d) => (
@@ -158,7 +166,7 @@ fn announce(app: &AppHandle, state: &MeetingState, event: &Event) {
                 (
                     "회의가 끝난 것 같아요".to_owned(),
                     format!(
-                        "{} — TTOBAK에서 녹음을 종료할 수 있어요.",
+                        "{} — 잠시 후 TTOBAK 녹음을 자동으로 종료하고 업로드합니다.",
                         d.source.kind.label()
                     ),
                 )
@@ -184,7 +192,7 @@ pub fn meeting_detection_get(state: State<'_, Arc<MeetingState>>) -> Value {
     json!({
         "supported": cfg!(target_os = "macos"),
         "enabled": state.enabled.load(Ordering::Relaxed),
-        "active": state.detector.lock().active().map(detection_json),
+        "active": state.detector.lock().announced().map(detection_json),
     })
 }
 
@@ -273,7 +281,7 @@ pub async fn meeting_detection_respond(
 
 #[cfg(target_os = "macos")]
 mod mac {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::ffi::c_void;
     use std::io::Read;
     use std::process::{Command, Stdio};
@@ -283,12 +291,11 @@ mod mac {
     use core_foundation::base::TCFType;
     use core_foundation::string::CFString;
     use objc2_core_audio::{
-        kAudioDevicePropertyDeviceIsRunningSomewhere, kAudioHardwarePropertyDefaultInputDevice,
         kAudioHardwarePropertyProcessObjectList, kAudioObjectPropertyElementMain,
         kAudioObjectPropertyScopeGlobal, kAudioObjectSystemObject, kAudioProcessPropertyBundleID,
-        kAudioProcessPropertyIsRunningInput, kAudioProcessPropertyPID, AudioObjectGetPropertyData,
-        AudioObjectGetPropertyDataSize, AudioObjectID, AudioObjectPropertyAddress,
-        AudioObjectPropertySelector,
+        kAudioProcessPropertyIsRunningInput, kAudioProcessPropertyIsRunningOutput,
+        kAudioProcessPropertyPID, AudioObjectGetPropertyData, AudioObjectGetPropertyDataSize,
+        AudioObjectID, AudioObjectPropertyAddress, AudioObjectPropertySelector,
     };
 
     use crate::meeting::{
@@ -301,33 +308,43 @@ mod mac {
     const DENIED_BACKOFF: Duration = Duration::from_secs(300);
     /// Long enough to cover the first Automation consent dialog, which blocks
     /// the script; killing it early would dismiss the dialog and re-prompt.
+    /// Script result when the browser is not running (no URL starts with it).
+    const NOT_RUNNING: &str = "ttobak:not-running";
     const SCRIPT_TIMEOUT: Duration = Duration::from_secs(30);
 
     #[derive(Default)]
     pub struct Probe {
         tabs: HashMap<Browser, (Instant, Vec<Source>)>,
-        mic_running: bool,
+        /// Browsers whose tab script has succeeded in this run. Output-only
+        /// audio (e.g. a video) checks tabs only for these, so it never
+        /// raises the first Automation prompt; microphone use does.
+        granted: HashSet<Browser>,
+        audio_active: bool,
     }
 
     impl Probe {
-        pub fn mic_running(&self) -> bool {
-            self.mic_running
+        pub fn audio_active(&self) -> bool {
+            self.audio_active
         }
 
-        /// Meeting sources currently using the microphone.
+        /// Meeting sources currently capturing or playing audio.
+        ///
+        /// Each process's `IsRunningInput` is read directly: a meeting app can
+        /// capture from a non-default or virtual input device, which leaves
+        /// the default device's `IsRunningSomewhere` false (observed with Zoom).
+        /// Output counts too, so a listen-only participant whose app or
+        /// browser has released the microphone is still detected.
         pub fn sources(&mut self) -> Vec<Source> {
-            self.mic_running = default_input()
-                .and_then(|d| get_u32(d, kAudioDevicePropertyDeviceIsRunningSomewhere))
-                .is_some_and(|v| v != 0);
-            if !self.mic_running {
-                return Vec::new();
-            }
             let own_pid = std::process::id() as i32;
             let mut sources = Vec::new();
+            self.audio_active = false;
             for process in process_objects() {
-                if get_u32(process, kAudioProcessPropertyIsRunningInput) != Some(1) {
+                let input = get_u32(process, kAudioProcessPropertyIsRunningInput) == Some(1);
+                let output = get_u32(process, kAudioProcessPropertyIsRunningOutput) == Some(1);
+                if !input && !output {
                     continue;
                 }
+                self.audio_active = true;
                 if get_i32(process, kAudioProcessPropertyPID) == Some(own_pid) {
                     continue;
                 }
@@ -339,9 +356,10 @@ mod mac {
                         kind,
                         browser: None,
                     }),
-                    Some(MicUser::Browser(browser)) => {
+                    Some(MicUser::Browser(browser)) if input || self.granted.contains(&browser) => {
                         sources.extend(self.browser_meetings(browser))
                     }
+                    Some(MicUser::Browser(_)) => {}
                     None => {}
                 }
             }
@@ -357,16 +375,19 @@ mod mac {
                 }
             }
             let (found, backoff) = match meeting_tab_urls(browser) {
-                Ok(urls) => (
-                    urls.iter()
-                        .filter_map(|u| classify_meeting_url(u))
-                        .map(|kind| Source {
-                            kind,
-                            browser: Some(browser),
-                        })
-                        .collect(),
-                    false,
-                ),
+                Ok(urls) => {
+                    self.granted.insert(browser);
+                    (
+                        urls.iter()
+                            .filter_map(|u| classify_meeting_url(u))
+                            .map(|kind| Source {
+                                kind,
+                                browser: Some(browser),
+                            })
+                            .collect(),
+                        false,
+                    )
+                }
                 Err(denied) => (Vec::new(), denied),
             };
             // A denial is cached long enough not to re-prompt every second.
@@ -390,7 +411,7 @@ mod mac {
             .collect::<Vec<_>>()
             .join(" or ");
         let script = format!(
-            "if application id \"{id}\" is not running then return \"\"\n\
+            "if application id \"{id}\" is not running then return \"{NOT_RUNNING}\"\n\
              tell application id \"{id}\" to set urlLists to URL of every tab of every window\n\
              set out to \"\"\n\
              repeat with l in urlLists\n\
@@ -429,6 +450,10 @@ mod mac {
         }
         if let Some(mut s) = child.stderr.take() {
             let _ = s.read_to_string(&mut err);
+        }
+        // Not running proves nothing about Automation access.
+        if out.trim() == NOT_RUNNING {
+            return Err(false);
         }
         if !status.success() {
             // -1743: the user has not allowed TTOBAK to control this browser.
@@ -478,14 +503,6 @@ mod mac {
 
     fn get_i32(object: AudioObjectID, selector: AudioObjectPropertySelector) -> Option<i32> {
         get::<i32>(object, selector)
-    }
-
-    fn default_input() -> Option<AudioObjectID> {
-        get::<AudioObjectID>(
-            kAudioObjectSystemObject as AudioObjectID,
-            kAudioHardwarePropertyDefaultInputDevice,
-        )
-        .filter(|id| *id != 0)
     }
 
     fn process_objects() -> Vec<AudioObjectID> {

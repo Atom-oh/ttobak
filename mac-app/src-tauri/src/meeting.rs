@@ -120,6 +120,30 @@ pub enum MicUser {
     Browser(Browser),
 }
 
+impl Browser {
+    pub fn label(self) -> &'static str {
+        match self {
+            Browser::Chrome => "Chrome",
+            Browser::ChromeCanary => "Chrome Canary",
+            Browser::Arc => "Arc",
+            Browser::Edge => "Edge",
+            Browser::Brave => "Brave",
+            Browser::Vivaldi => "Vivaldi",
+            Browser::Safari => "Safari",
+        }
+    }
+}
+
+impl MicUser {
+    /// Display name of the app using an input device.
+    pub fn label(self) -> &'static str {
+        match self {
+            MicUser::Native(kind) => kind.label(),
+            MicUser::Browser(browser) => browser.label(),
+        }
+    }
+}
+
 fn matches_id(bundle_id: &str, id: &str) -> bool {
     bundle_id == id
         || bundle_id
@@ -209,9 +233,11 @@ pub enum Event {
 
 /// Debounces observations into detected/ended announcements.
 ///
-/// At most one meeting is announced at a time. Nothing is announced while
-/// the app is already recording. A dismissed meeting stays quiet until its
-/// microphone use has been absent for `END_GRACE_MS`.
+/// At most one meeting is tracked at a time. A meeting that starts while the
+/// app is already recording is tracked silently: it is announced only if the
+/// recording stops while the meeting continues, and its end is still reported
+/// so the running recording can be stopped. A dismissed meeting stays quiet
+/// until its audio has been absent for `END_GRACE_MS`.
 #[derive(Default)]
 pub struct Detector {
     counter: u64,
@@ -219,9 +245,12 @@ pub struct Detector {
     last_seen: HashMap<String, u64>,
     suppressed: HashSet<String>,
     active: Option<Detection>,
+    /// The active meeting has not been announced (found while recording).
+    silent: bool,
 }
 
 impl Detector {
+    #[cfg(test)]
     pub fn active(&self) -> Option<&Detection> {
         self.active.as_ref()
     }
@@ -255,10 +284,12 @@ impl Detector {
             if expired.contains(&active.source.key()) {
                 events.push(Event::Ended(active.clone()));
                 self.active = None;
+                self.silent = false;
+            } else if self.silent && !recording {
+                // The recording stopped while the meeting goes on: offer it.
+                self.silent = false;
+                events.push(Event::Detected(active.clone()));
             }
-            return events;
-        }
-        if recording {
             return events;
         }
         let ready = sources.iter().find(|s| {
@@ -276,7 +307,10 @@ impl Detector {
                 source: *source,
             };
             self.active = Some(detection.clone());
-            events.push(Event::Detected(detection));
+            self.silent = recording;
+            if !recording {
+                events.push(Event::Detected(detection));
+            }
         }
         events
     }
@@ -288,6 +322,7 @@ impl Detector {
             Some(d) if d.id == id => {
                 self.suppressed.insert(d.source.key());
                 self.active = None;
+                self.silent = false;
                 true
             }
             _ => false,
@@ -296,7 +331,12 @@ impl Detector {
 
     /// Whether `id` names the announced meeting.
     pub fn is_active(&self, id: &str) -> bool {
-        self.active.as_ref().is_some_and(|d| d.id == id)
+        !self.silent && self.active.as_ref().is_some_and(|d| d.id == id)
+    }
+
+    /// The announced meeting, if any (a silently tracked one is not offered).
+    pub fn announced(&self) -> Option<&Detection> {
+        self.active.as_ref().filter(|_| !self.silent)
     }
 
     /// Clears any announcement, e.g. when detection is turned off.
@@ -447,6 +487,18 @@ mod tests {
             &d.observe(11_000, &[ZOOM], false)[..],
             [Event::Detected(_)]
         ));
+    }
+
+    #[test]
+    fn a_meeting_during_a_manual_recording_reports_its_end() {
+        let mut d = Detector::default();
+        d.observe(0, &[ZOOM], true);
+        // Tracked silently: no prompt while recording.
+        assert!(d.observe(5_000, &[ZOOM], true).is_empty());
+        assert!(d.announced().is_none());
+        d.observe(10_000, &[], true);
+        let events = d.observe(30_000, &[], true);
+        assert!(matches!(&events[..], [Event::Ended(det)] if det.source == ZOOM));
     }
 
     #[test]
