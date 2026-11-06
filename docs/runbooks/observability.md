@@ -50,6 +50,80 @@ accepted and `available`); step 5 enables the collector.
    service uses a deployment circuit breaker; check that the ALB target is
    healthy and that collector logs show no ClickHouse connection errors.
 
+## API tracing (ttobak-api)
+
+`ttobak-api` exports OTLP traces and logs when context
+`ttobak:apiTelemetryEnabled` is `"true"` (default `"false"`; off leaves the
+function configuration unchanged). The flag VPC-attaches the function to the
+`fsi-demo-vpc` private-with-egress subnets with its own `ttobak-api` group (no
+ingress, TCP 443 egress for AWS APIs through endpoints and NAT) plus the
+existing `ttobak-otel-client` group, and sets `OTEL_EXPORTER_OTLP_ENDPOINT` from
+SSM `/ttobak/otel/collector-endpoint` and `OTEL_SERVICE_NAME=ttobak-api`.
+GatewayStack owns the region-scoped ENI grant on the API role.
+
+Recorded data (`backend/internal/telemetry`):
+
+- One server span per request named `METHOD /route/{pattern}`; attributes are
+  only `http.request.method`, `http.route`, `http.response.status_code` and
+  `error.type` (5xx). No URL, query, header, body, identity or user content.
+  Incoming W3C `traceparent`/`baggage` are honored as the parent context.
+- One client span per AWS SDK operation (`DynamoDB.GetItem`, `S3.PutObject`,
+  ...) with `rpc.*` and `aws.error_code`/`aws.error_fault` only. SDK internal
+  phases, error messages, endpoints and payloads are dropped, and no trace
+  headers are sent to AWS. Streaming Bedrock spans end when the call returns,
+  not when the stream is consumed.
+- The `request completed` log line is also emitted as an OTLP log record with
+  the same fields and the trace/span IDs.
+
+Each invocation flushes before returning, bounded by 150 ms. A failed or timed
+out flush is logged once and flushes are skipped for 30 s; queues are bounded
+(2048) and overflow is dropped, so export never fails a request. With an empty
+or invalid endpoint the providers are not installed and the middleware is a
+pass-through.
+
+Activation:
+
+1. Confirm the collector is serving (`ttobak:otelCollectorEnabled` `"true"`,
+   ALB target healthy) and the SSM parameter exists.
+2. Resolve the release-coordinator gate first: `http_origin_release.py`
+   `validate_activation_templates` rejects any `VpcConfig` on `ttobak-api`
+   (`ACTIVATION_CONSUMER_VPC_UNVERIFIED`), because the origin-proof read must
+   reach Secrets Manager. That gate needs a separately reviewed change before
+   the flag can ship through `deploy-infra`.
+3. Set `ttobak:apiTelemetryEnabled` to `"true"` in a reviewed PR and deploy
+   `TtobakObservabilityStack` (if changed), then `TtobakGatewayStack`
+   `--exclusively`. The VPC update publishes a new version for the `live` alias.
+4. Verify `/api/health` and an authenticated read still succeed, then query
+   ClickHouse.
+
+Rollback: set the flag to `"false"` and redeploy GatewayStack.
+
+Verification queries:
+
+```sql
+-- Latency by route (ms)
+SELECT SpanName, quantile(0.5)(Duration)/1e6 AS p50_ms,
+       quantile(0.9)(Duration)/1e6 AS p90_ms, count() AS n
+FROM otel.otel_traces
+WHERE ServiceName = 'ttobak-api' AND SpanKind = 'Server'
+  AND Timestamp > now() - INTERVAL 1 HOUR
+GROUP BY SpanName ORDER BY p90_ms DESC;
+
+-- Slowest AWS operations
+SELECT SpanName, quantile(0.9)(Duration)/1e6 AS p90_ms, count() AS n
+FROM otel.otel_traces
+WHERE ServiceName = 'ttobak-api' AND SpanKind = 'Client'
+  AND Timestamp > now() - INTERVAL 1 HOUR
+GROUP BY SpanName ORDER BY p90_ms DESC LIMIT 20;
+
+-- Request logs correlated with traces
+SELECT Timestamp, TraceId, LogAttributes['route'], LogAttributes['status'],
+       LogAttributes['duration_ms']
+FROM otel.otel_logs
+WHERE ServiceName = 'ttobak-api' AND Timestamp > now() - INTERVAL 15 MINUTE
+ORDER BY Timestamp DESC LIMIT 50;
+```
+
 ## Image and startup
 
 The collector image is a CDK image asset (`infra/assets/otel-collector/Dockerfile`)

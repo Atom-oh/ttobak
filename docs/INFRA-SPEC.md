@@ -735,6 +735,16 @@ collector service exists only when context `ttobak:otelCollectorEnabled` is
 `"true"`, after the endpoint connection is accepted. See the
 [observability runbook](runbooks/observability.md).
 
+Context `ttobak:apiTelemetryEnabled` (default `"false"`) makes GatewayStack
+attach `ttobak-api` to the shared VPC's `PRIVATE_WITH_EGRESS` subnets with a new
+`ttobak-api` security group (no ingress; TCP 443 egress) and the looked-up
+`ttobak-otel-client` group, set `OTEL_EXPORTER_OTLP_ENDPOINT` from SSM
+`/ttobak/otel/collector-endpoint` (resolved at deploy) and `OTEL_SERVICE_NAME`,
+and add an `ApiNetworkInterfaces` policy (Lambda ENI actions, `aws:RequestedRegion`
+condition) on the API role that the function depends on. With the flag off the
+GatewayStack template is unchanged. The release coordinator currently rejects a
+VPC-attached `ttobak-api`; see the runbook before activation.
+
 ## Billing BFF stack
 
 `TtobakBillingStack` (`infra/lib/billing-stack.ts`) is optional. `addBillingStack`

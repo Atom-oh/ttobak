@@ -7,6 +7,7 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
+import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as events from 'aws-cdk-lib/aws-events';
@@ -71,6 +72,12 @@ export interface GatewayStackProps extends cdk.StackProps {
   cognitoDomainUrl?: string;
   /** AgentCore Web Search Gateway MCP endpoint (us-east-1) for the QA Lambda's search_web tool */
   webSearchGatewayUrl?: string;
+  /**
+   * O2 API telemetry: VPC-attach ttobak-api to vpcId's PRIVATE_WITH_EGRESS
+   * subnets and export OTLP to TtobakObservabilityStack's internal collector.
+   * Off by default; when off, ttobak-api's configuration is unchanged.
+   */
+  apiTelemetryEnabled?: boolean;
   /** ADR-033 cost/sizing simulator */
   simRole?: iam.IRole;
   simCodeInterpreterId?: string;
@@ -305,6 +312,8 @@ export class GatewayStack extends cdk.Stack {
 
     const billingInsightUrl = billingInsightUrlContext(this);
 
+    const apiTelemetry = props.apiTelemetryEnabled ? this.apiTelemetryPlacement(props) : undefined;
+
     // API Lambda function (Go runtime, arm64)
     this.apiFunction = new lambda.Function(this, 'ApiFunction', {
       functionName: 'ttobak-api',
@@ -373,11 +382,18 @@ export class GatewayStack extends cdk.Stack {
         // keeps that route a 404. A context change alters the function
         // configuration, so currentVersion publishes a new version.
         ...(billingInsightUrl ? { BILLING_INSIGHT_URL: billingInsightUrl } : {}),
+        ...apiTelemetry?.environment,
       },
       timeout: cdk.Duration.seconds(30),
       memorySize: 256,
+      ...apiTelemetry?.network,
     });
     this.httpOrigin.addReader('Api', this.apiFunction, props.apiRole);
+    if (apiTelemetry) {
+      // ENI permissions must exist before Lambda validates the VPC update.
+      (this.apiFunction.node.defaultChild as lambda.CfnFunction)
+        .addDependency(apiTelemetry.networkPolicy.node.defaultChild as iam.CfnPolicy);
+    }
 
     // API Lambda alias with provisioned concurrency for zero cold-start after deploy
     const apiVersion = this.apiFunction.currentVersion;
@@ -1494,5 +1510,54 @@ export class GatewayStack extends cdk.Stack {
       description: 'Protected origin endpoint; browsers use the CloudFront /ws runtime path.',
     });
 
+  }
+
+  /**
+   * Private network placement for ttobak-api's OTLP export. The collector ALB
+   * (internal, fsi-demo-vpc) admits only the `ttobak-otel-client` group, which
+   * TtobakObservabilityStack owns; it is looked up by name, not exported.
+   * The function's own group has no ingress and HTTPS egress only.
+   */
+  private apiTelemetryPlacement(props: GatewayStackProps) {
+    if (!props.vpcId) {
+      throw new Error('ttobak:apiTelemetryEnabled requires the shared VPC (vpcId)');
+    }
+    const vpc = ec2.Vpc.fromLookup(this, 'ApiVpc', { vpcId: props.vpcId });
+    const apiSg = new ec2.SecurityGroup(this, 'ApiSg', {
+      vpc,
+      securityGroupName: 'ttobak-api',
+      description: 'ttobak-api Lambda: no ingress; HTTPS egress to AWS APIs via endpoints and NAT',
+      allowAllOutbound: false,
+    });
+    apiSg.addEgressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), 'AWS APIs via VPC endpoints and NAT');
+    const collectorClient = ec2.SecurityGroup.fromLookupByName(this, 'OtelClientSg', 'ttobak-otel-client', vpc);
+    // Own the ENI grant here (like HttpOrigin.addReader): a grant on the
+    // AiStack role would create an Ai -> Gateway -> Ai cycle. Equivalent to
+    // AWSLambdaVPCAccessExecutionRole's EC2 actions, which CDK attaches only
+    // to roles it creates; logs are already granted by AiStack.
+    const networkPolicy = new iam.Policy(this, 'ApiNetworkInterfaces', {
+      roles: [props.apiRole],
+      statements: [new iam.PolicyStatement({
+        actions: [
+          'ec2:CreateNetworkInterface', 'ec2:DescribeNetworkInterfaces', 'ec2:DescribeSubnets',
+          'ec2:DeleteNetworkInterface', 'ec2:AssignPrivateIpAddresses', 'ec2:UnassignPrivateIpAddresses',
+        ],
+        resources: ['*'],
+        conditions: { StringEquals: { 'aws:RequestedRegion': this.region } },
+      })],
+    });
+    return {
+      network: {
+        vpc,
+        vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+        securityGroups: [apiSg, collectorClient],
+      },
+      environment: {
+        // Resolved at deploy time from TtobakObservabilityStack's parameter.
+        OTEL_EXPORTER_OTLP_ENDPOINT: ssm.StringParameter.valueForStringParameter(this, '/ttobak/otel/collector-endpoint'),
+        OTEL_SERVICE_NAME: 'ttobak-api',
+      },
+      networkPolicy,
+    };
   }
 }
