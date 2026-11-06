@@ -566,8 +566,8 @@ function MeetingDetailContent() {
   const displayedSegments = meeting.transcriptionV2 ?? meeting.transcription ?? [];
   const canEdit = meeting.permission === 'edit' || (!meeting.isShared && meeting.permission !== 'read');
   const canEditNotes = canEdit && meeting.supportsNotesComparison === true && typeof meeting.notesRevision === 'string';
-  // Server capability: the creator or a live account-team member manages the
-  // meeting (shares, links, uploads, crop, recovery); delete stays creator-only.
+  // Server capability: creator or live account-team member manages shares, links,
+  // uploads and recovery; delete and crop stay isCreator-only.
   const { isCreator, canManage: canManageAssociations } = meetingCapabilities(meeting, user?.userId);
   const canUpload = canManageAssociations;
 

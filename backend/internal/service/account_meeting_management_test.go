@@ -257,34 +257,35 @@ func TestMemberLinksOnlyCreatorPredecessorsTheyCanRead(t *testing.T) {
 	// not enter the team-visible summary context.
 	repo.shares[shareKey("member-1", "p-private")] = &model.Share{MeetingID: "p-private", OwnerID: "owner-1", SharedToID: "member-1", Permission: model.PermissionEdit}
 	svc := newMeetingServiceWithRepo(repo)
+	link := func(u, m string, ids []string) error { return svc.LinkPredecessors(context.Background(), u, m, ids) }
 	for _, id := range []string{"p-private", "p-other"} {
-		if err := svc.LinkPredecessors(context.Background(), "member-1", "m-1", []string{id}); !errors.Is(err, ErrForbidden) {
+		if err := link("member-1", "m-1", []string{id}); !errors.Is(err, ErrForbidden) {
 			t.Fatalf("%s: want ErrForbidden, got %v", id, err)
 		}
 	}
-	if err := svc.LinkPredecessors(context.Background(), "member-1", "m-1", []string{"p-member"}); !errors.Is(err, ErrNotFound) {
+	if err := link("member-1", "m-1", []string{"p-member"}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("the member's own meeting is not the creator's: %v", err)
 	}
-	if err := svc.LinkPredecessors(context.Background(), "member-1", "m-1", []string{"m-1"}); !errors.Is(err, ErrInvalidInput) {
+	if err := link("member-1", "m-1", []string{"m-1"}); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("self link: %v", err)
 	}
-	if err := svc.LinkPredecessors(context.Background(), "member-1", "m-1", []string{"p-team"}); err != nil {
+	if err := link("member-1", "m-1", []string{"p-team"}); err != nil {
 		t.Fatalf("member link: %v", err)
 	}
 	if got := repo.meetings[meetingKey("owner-1", "m-1")].LinkedMeetingIDs; len(got) != 1 || got[0] != "p-team" {
 		t.Fatalf("links: %v", got)
 	}
-	if err := svc.LinkPredecessors(context.Background(), "owner-1", "m-1", []string{"p-private"}); err != nil {
+	if err := link("owner-1", "m-1", []string{"p-private"}); err != nil {
 		t.Fatalf("creator links private predecessor: %v", err)
 	}
-	if err := svc.LinkPredecessors(context.Background(), "reader-1", "m-1", []string{"p-team"}); !errors.Is(err, ErrForbidden) {
+	if err := link("reader-1", "m-1", []string{"p-team"}); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("direct share holder link: %v", err)
 	}
 	// The parent is unpublished after the manager check: the fenced write fails.
 	unpublished := *repo.meetingsByID["m-1"]
 	unpublished.SharedToAccount = false
 	repo.meetings[meetingKey("owner-1", "m-1")] = &unpublished
-	if err := svc.LinkPredecessors(context.Background(), "member-1", "m-1", []string{"p-team"}); !errors.Is(err, repository.ErrConditionFailed) {
+	if err := link("member-1", "m-1", []string{"p-team"}); !errors.Is(err, repository.ErrConditionFailed) {
 		t.Fatalf("link after concurrent unpublish: %v", err)
 	}
 }
@@ -394,8 +395,7 @@ func TestTeamSharingOfferedOnlyToCreatorOrDirectMembers(t *testing.T) {
 	}
 }
 
-// The flag is offered to managers; RecoverMeeting still enforces the
-// 10-minute quiet checkpoint for non-creators.
+// Managers see the flag; RecoverMeeting enforces the quiet checkpoint.
 func TestRecoveryFlagOfferedToManagers(t *testing.T) {
 	repo := managementRepo()
 	repo.meetingsByID["m-1"].Status = model.StatusRecording
@@ -474,8 +474,7 @@ func TestMemberAudioPresignNeverOverwritesALiveRecording(t *testing.T) {
 	}
 }
 
-// checkMemberAudioWrite is the guard both presign and CompleteUpload call;
-// completion passes the key's base name.
+// Presign and CompleteUpload share checkMemberAudioWrite (key base name).
 func TestMemberAudioCompletionUsesThePresignGuard(t *testing.T) {
 	svc := &UploadService{} // no S3 client: an unread checkpoint counts as active
 	recording := &model.Meeting{UserID: "owner", MeetingID: "m", Status: model.StatusRecording}
@@ -515,9 +514,7 @@ func TestMemberPresignsAreShortLivedAndMarkSources(t *testing.T) {
 	}
 }
 
-// A member's multipart batch moves the meeting to transcribing on its first
-// part and records the member (audioUploadBatchBy); only that member's later
-// parts pass while no checkpoint exists.
+// A member batch records its starter; only its later parts pass uncheckpointed.
 func TestMemberMultipartBatchDoesNotDeadlock(t *testing.T) {
 	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
 	meeting := &model.Meeting{UserID: "owner", MeetingID: "m", Status: model.StatusDone}
@@ -544,6 +541,19 @@ func TestMemberMultipartBatchDoesNotDeadlock(t *testing.T) {
 	}
 	if err := memberAudioWriteAllowed("member", meeting, "part_000_take.webm", 3, now.Add(-2*time.Minute), now); !errors.Is(err, ErrRecordingStillActive) {
 		t.Fatalf("transcribing with a fresh checkpoint: %v", err)
+	}
+}
+
+// Lost-response retries of a bound key skip the guard.
+func TestMemberAudioRetryOfABoundKey(t *testing.T) {
+	m := &model.Meeting{AudioKey: "k", AudioKeys: []string{"", "p"}}
+	for req, want := range map[model.UploadCompleteRequest]bool{
+		{Key: "k"}: true, {Key: "x"}: false, {Key: "p", TotalParts: 2, PartIndex: 1}: true,
+		{Key: "p", TotalParts: 3, PartIndex: 2}: false, {}: false,
+	} {
+		if got := memberAudioAlreadyBound(m, &req); got != want {
+			t.Fatalf("%+v: %v", req, got)
+		}
 	}
 }
 

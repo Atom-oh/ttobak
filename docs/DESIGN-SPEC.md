@@ -260,7 +260,8 @@ classification never grant access to private content (ADR-036).
 
 Activated ancestor access displays a read-only label and its granting Account
 (ADR-058); published meetings are the exception and show edit and management
-controls (not delete) to every member (ADR-016 2026-11-06 amendment). Suppress inherited-only mutation controls and keep invitation,
+controls (not delete, crop, simulator or project links yet) to every member (ADR-016
+2026-11-06 amendment). Otherwise suppress inherited-only mutation controls and keep invitation,
 publication, upload/link and dictionary selectors restricted to direct
 membership. Billing is the ADR-060 exception: the BFF's authorized entries allow
 direct and ancestor team members to view and upload. Its COT selector describes

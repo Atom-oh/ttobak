@@ -152,20 +152,19 @@ type Attachment struct {
 	SK                string                `dynamodbav:"SK"`
 	AttachmentID      string                `dynamodbav:"attachmentId"`
 	MeetingID         string                `dynamodbav:"meetingId"`
-	UserID            string                `dynamodbav:"userId"` // meeting owner; also the S3 key owner segment
-	// UploadedBy records an account member who uploaded on the creator's behalf.
-	UploadedBy       string    `dynamodbav:"uploadedBy,omitempty"`
-	OriginalKey      string    `dynamodbav:"originalKey"`
-	ProcessedKey     string    `dynamodbav:"processedKey,omitempty"`
-	Type             string    `dynamodbav:"type"`   // photo, screenshot, diagram, whiteboard
-	Status           string    `dynamodbav:"status"` // uploaded, processing, done
-	Description      string    `dynamodbav:"description,omitempty"`
-	ProcessedContent string    `dynamodbav:"processedContent,omitempty"` // Mermaid/markdown result
-	FileName         string    `dynamodbav:"fileName,omitempty"`
-	FileSize         int64     `dynamodbav:"fileSize,omitempty"`
-	MimeType         string    `dynamodbav:"mimeType,omitempty"`
-	CreatedAt        time.Time `dynamodbav:"createdAt"`
-	EntityType       string    `dynamodbav:"entityType"` // "ATTACHMENT"
+	UserID            string                `dynamodbav:"userId"`
+	UploadedBy        string                `dynamodbav:"uploadedBy,omitempty"` // account member uploading for the creator
+	OriginalKey       string                `dynamodbav:"originalKey"`
+	ProcessedKey      string                `dynamodbav:"processedKey,omitempty"`
+	Type              string                `dynamodbav:"type"`   // photo, screenshot, diagram, whiteboard
+	Status            string                `dynamodbav:"status"` // uploaded, processing, done
+	Description       string                `dynamodbav:"description,omitempty"`
+	ProcessedContent  string                `dynamodbav:"processedContent,omitempty"` // Mermaid/markdown result
+	FileName          string                `dynamodbav:"fileName,omitempty"`
+	FileSize          int64                 `dynamodbav:"fileSize,omitempty"`
+	MimeType          string                `dynamodbav:"mimeType,omitempty"`
+	CreatedAt         time.Time             `dynamodbav:"createdAt"`
+	EntityType        string                `dynamodbav:"entityType"` // "ATTACHMENT"
 }
 
 // Share represents a shared meeting access record

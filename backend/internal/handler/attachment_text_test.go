@@ -186,4 +186,9 @@ func TestUploadCompletionMapsActiveRecordingToConflict(t *testing.T) {
 	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "RECORDING_STILL_ACTIVE") {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
+	w = httptest.NewRecorder()
+	writeAttachmentError(w, repository.ErrAudioBatchInProgress)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "RECORDING_STILL_ACTIVE") {
+		t.Fatal(w.Code, w.Body)
+	}
 }

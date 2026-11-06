@@ -243,6 +243,10 @@ func (s *UploadService) CompleteUpload(ctx context.Context, userID string, req *
 	if (req.Category == "audio" || req.Category == "image") && !validMeetingUploadKey(req.Category, owner, req.MeetingID, req.Key) {
 		return ErrInvalidInput
 	}
+	// A member retry of a bound key succeeds before the guard.
+	if req.Category == "audio" && userID != owner && memberAudioAlreadyBound(meeting, req) {
+		return nil
+	}
 	// Same member guard as presign, before any audio key is bound.
 	if req.Category == "audio" {
 		if err := s.checkMemberAudioWrite(ctx, userID, meeting, path.Base(req.Key), req.TotalParts); err != nil {
@@ -269,7 +273,7 @@ func (s *UploadService) CompleteUpload(ctx context.Context, userID string, req *
 				return err
 			}
 			// Idempotent index-based set
-			return s.repo.SetAudioKeyAtIndex(ctx, meeting.UserID, meeting.MeetingID, req.Key, req.PartIndex)
+			return s.repo.SetAudioKeyAtIndex(ctx, meeting.UserID, meeting.MeetingID, userID, req.Key, req.PartIndex)
 		}
 		// Single-file. Idempotent for the same key: re-completing an object
 		// that is already bound never resets the meeting's progress.
@@ -619,13 +623,11 @@ func (s *UploadService) findProgressFile(ctx context.Context, userID, meetingID 
 	return key, ext, modified, nil
 }
 
-// memberRecoveryQuietPeriod: a non-creator may recover only after the
-// checkpoint has not changed for this long, so a live recording on the
-// creator's device is never hijacked.
+// memberRecoveryQuietPeriod: a member recovers only after the checkpoint
+// is this stale, so a live creator recording is never hijacked.
 const memberRecoveryQuietPeriod = 10 * time.Minute
 
-// memberMayRecover is the pure staleness rule for recovery by a non-creator.
-// An unknown checkpoint time is treated as active.
+// memberMayRecover: an unknown checkpoint time counts as active.
 func memberMayRecover(actorID, ownerID string, checkpoint, now time.Time) bool {
 	if actorID == ownerID {
 		return true
@@ -633,14 +635,11 @@ func memberMayRecover(actorID, ownerID string, checkpoint, now time.Time) bool {
 	return !checkpoint.IsZero() && now.Sub(checkpoint) >= memberRecoveryQuietPeriod
 }
 
-// memberPresignExpiry bounds how long a managing member's presigned PUT stays
-// usable after their membership ends. S3 audio events start transcription
-// without CompleteUpload's checks, so this is also the residual window for
-// a removed member (ADR-016 2026-11-06 amendment).
+// memberPresignExpiry bounds a member's presigned PUT after removal; S3
+// audio events bypass CompleteUpload (ADR-016 2026-11-06 amendment).
 const memberPresignExpiry = 5 * time.Minute
 
-// presignExpiry keeps the creator's one-hour window and shortens it for a
-// non-creator writing under the creator's prefix.
+// presignExpiry: one hour for the creator, shorter for a member.
 func presignExpiry(actorID, keyOwner string) time.Duration {
 	if actorID != keyOwner {
 		return memberPresignExpiry
@@ -654,10 +653,9 @@ func presignMarksSourceEdit(category, actorID, ownerID string) bool {
 	return actorID != ownerID && (category == "audio" || category == "file")
 }
 
-// checkMemberAudioWrite is the shared presign/complete guard for a managing
-// member's audio. It reads the creator's checkpoint only when the meeting is
-// recording or transcribing, and fails closed on any lookup error other than
-// a missing checkpoint.
+// checkMemberAudioWrite is the shared presign/complete member audio guard;
+// it reads the checkpoint only while recording/transcribing, failing closed
+// on any lookup error other than a missing checkpoint.
 func (s *UploadService) checkMemberAudioWrite(ctx context.Context, actorID string, meeting *model.Meeting, fileName string, totalParts int) error {
 	if meeting == nil || actorID == meeting.UserID {
 		return nil
@@ -676,12 +674,17 @@ func (s *UploadService) checkMemberAudioWrite(ctx context.Context, actorID strin
 	return memberAudioWriteAllowed(actorID, meeting, fileName, totalParts, checkpoint, time.Now())
 }
 
-// memberAudioWriteAllowed keeps a non-creator from overwriting the creator's
-// live recording or joining someone else's batch: checkpoint filenames are
-// creator-only; while recording, a missing or fresh (<10 min) checkpoint
-// refuses; while transcribing, a fresh checkpoint refuses, and a missing one
-// is allowed only for a later part of the multipart batch this member
-// started (audioUploadBatchBy).
+// memberAudioAlreadyBound: the unique key already fills audioKey or its slot.
+func memberAudioAlreadyBound(meeting *model.Meeting, req *model.UploadCompleteRequest) bool {
+	if req.TotalParts > 1 {
+		return req.Key != "" && req.PartIndex >= 0 && req.PartIndex < len(meeting.AudioKeys) && meeting.AudioKeys[req.PartIndex] == req.Key
+	}
+	return req.Key != "" && meeting.AudioKey == req.Key
+}
+
+// memberAudioWriteAllowed: checkpoint names are creator-only; recording
+// needs a stale (>=10 min) checkpoint; transcribing refuses a fresh one and
+// without one allows only this member's batch parts.
 func memberAudioWriteAllowed(actorID string, meeting *model.Meeting, fileName string, totalParts int, checkpoint, now time.Time) error {
 	if meeting == nil || actorID == meeting.UserID {
 		return nil
@@ -830,10 +833,8 @@ func ExtractInfoFromImageKey(key string) (userID, meetingID string) {
 	return "", ""
 }
 
-// uploadMeeting resolves the meeting an upload targets: the caller's own, or
-// one the caller manages as an account member. A meeting that does not exist
-// yet returns nil (a new recording under the caller); an existing meeting the
-// caller cannot manage is ErrNotFound/ErrForbidden.
+// uploadMeeting: the caller's own or managed meeting; nil for a new
+// recording, ErrNotFound/ErrForbidden when not manageable.
 func (s *UploadService) uploadMeeting(ctx context.Context, userID, meetingID string) (*model.Meeting, error) {
 	if s.repo == nil {
 		return nil, nil

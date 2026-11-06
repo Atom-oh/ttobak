@@ -1384,7 +1384,7 @@ func (r *DynamoDBRepository) PreAllocateAudioKeys(ctx context.Context, userID, m
 	if err != nil {
 		var condErr *types.ConditionalCheckFailedException
 		if ok := errors.As(err, &condErr); ok {
-			return nil // already pre-allocated by concurrent call
+			return r.requireAudioBatchOwner(ctx, userID, meetingID, uploaderID)
 		}
 		return fmt.Errorf("failed to pre-allocate audio keys: %w", err)
 	}
@@ -1440,6 +1440,26 @@ func (r *DynamoDBRepository) BindMeetingAudioKey(ctx context.Context, userID, me
 	return false, ErrConditionFailed
 }
 
+// ErrAudioBatchInProgress: another member owns the current multipart batch.
+var ErrAudioBatchInProgress = errors.New("another audio upload batch is in progress")
+
+// requireAudioBatchOwner: a member continues only the batch it started.
+func (r *DynamoDBRepository) requireAudioBatchOwner(ctx context.Context, userID, meetingID, uploaderID string) error {
+	if uploaderID == "" || uploaderID == userID {
+		return nil
+	}
+	row, err := r.summaryRow(ctx, model.PrefixUser+userID, model.PrefixMeeting+meetingID)
+	if err != nil {
+		return err
+	} else if len(row) == 0 {
+		return ErrConditionFailed
+	}
+	if by, _ := row["audioUploadBatchBy"].(*types.AttributeValueMemberS); by == nil || by.Value != uploaderID {
+		return ErrAudioBatchInProgress
+	}
+	return nil
+}
+
 // SetAudioKeyAtIndex sets a specific index in the audioKeys list. Idempotent — re-uploading
 // the same part overwrites the same slot. Validates index is within pre-allocated range.
 //
@@ -1450,10 +1470,11 @@ func (r *DynamoDBRepository) BindMeetingAudioKey(ctx context.Context, userID, me
 // happily accept — replaying refine + Bedrock + KB export on top of finished
 // content. ConditionalCheckFailedException on stale status is surfaced to the
 // caller as a typed error so transcribe.go can log+skip rather than retry.
-func (r *DynamoDBRepository) SetAudioKeyAtIndex(ctx context.Context, userID, meetingID, key string, partIndex int) error {
+// A member uploaderID writes only its own batch; the creator never checks it.
+func (r *DynamoDBRepository) SetAudioKeyAtIndex(ctx context.Context, userID, meetingID, uploaderID, key string, partIndex int) error {
 	indexPath := fmt.Sprintf("audioKeys[%d]", partIndex)
 
-	_, err := r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+	input := &dynamodb.UpdateItemInput{
 		TableName: aws.String(r.tableName),
 		Key: map[string]types.AttributeValue{
 			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
@@ -1474,10 +1495,20 @@ func (r *DynamoDBRepository) SetAudioKeyAtIndex(ctx context.Context, userID, mee
 			"attribute_exists(PK) AND attribute_exists(audioKeys) AND size(audioKeys) > :idx " +
 				"AND (#st = :recording OR #st = :transcribing)",
 		),
-	})
+	}
+	member := uploaderID != "" && uploaderID != userID
+	if member {
+		input.ConditionExpression = aws.String(*input.ConditionExpression + " AND audioUploadBatchBy = :batchBy")
+		input.ExpressionAttributeValues[":batchBy"] = &types.AttributeValueMemberS{Value: uploaderID}
+		input.ReturnValuesOnConditionCheckFailure = types.ReturnValuesOnConditionCheckFailureAllOld
+	}
+	_, err := r.client.UpdateItem(ctx, input)
 	if err != nil {
 		var ccfe *types.ConditionalCheckFailedException
 		if errors.As(err, &ccfe) {
+			if by, _ := ccfe.Item["audioUploadBatchBy"].(*types.AttributeValueMemberS); member && len(ccfe.Item) > 0 && (by == nil || by.Value != uploaderID) {
+				return ErrAudioBatchInProgress
+			}
 			return fmt.Errorf("set audio key at index %d rejected (meeting not in recording/transcribing state or index out of range): %w", partIndex, err)
 		}
 		return fmt.Errorf("failed to set audio key at index %d: %w", partIndex, err)
