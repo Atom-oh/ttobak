@@ -230,6 +230,7 @@ for a separate ttobak-connections table described an obsolete design.
 | sim | Python 3.12 ARM64 | 15m | 1024MB |
 | document-extract | Python 3.12 ARM64, bundled pinned dependencies | 90s | 1536MB |
 | convert-doc | Go/LibreOffice ARM64 container | 5m | 3008MB |
+| audio-remux | Go/ffmpeg ARM64 container, 5 GiB /tmp | 15m | 1024MB |
 
 Model/environment selection belongs to each function, not one repo-wide model.
 `model-config.ts` resolves `MODEL_DEPLOYMENT_MODE`, `MODEL_MEETING_SUMMARY` and
@@ -301,6 +302,7 @@ and [async contract](../backend/python/qa/ASYNC_CONTRACT.md).
 | Custom TermsRequested, ttobak.analysis | summarize, automatic term extraction only |
 | Custom DocumentUploadCompleted, ttobak.upload | document-extract, queued canonical runs only |
 | S3 Object Created, docs/ slide suffix filter | convert-doc |
+| S3 Object Created, audio/ `*.webm`/`*.ogg` | audio-remux (ADR-062; skips checkpoints) |
 | One-minute ttobak-kb-index-tick | kb; configured enabled by the checked-in CDK app, all mode |
 | Canonical DynamoDB stream records | kb; mapping/grants created only in all mode |
 | Scheduled warming event | API alias |
@@ -314,6 +316,14 @@ ETag/version metadata and conditional preview replacement bind converted bytes.
 Canonical readers validate that binding; the preview URL still checks existence.
 Cross-tenant original/preview reads and parser risk remain (ADR-022).
 
+audio-remux (ADR-062) writes `audio-playback/` copies with `ffmpeg -c copy`,
+leaving the source untouched. It reads `audio/*` and `audio-playback/*`, writes
+only `audio-playback/*`, has no DynamoDB access and runs in the same isolated
+subnets. It downloads the HEAD-observed source version, publishes only if that
+version is still current, and replaces a copy with `IfMatch`/`IfNoneMatch`.
+Sources above 2 GiB keep the original. Its rule and execution failures use the
+same pipeline failure queues as convert-doc.
+
 ActionItemsRequested delivery has three retries within five minutes and an
 SSE-SQS DLQ with seven-day retention. The exact rule ARN scopes Lambda invoke and
 queue SendMessage. The existing summarize worker processes owner/meeting/run IDs
@@ -321,10 +331,10 @@ without rerunning transcription/summary. Analysis state and five-minute leases
 live in `MEETING#{id}/ANALYSIS#actionItems`; expired work becomes retryable failure.
 The DLQ covers delivery, not downstream model failures.
 
-Core audio/crop, image, transcript, multipart and optional slide-conversion
+Core audio/crop, image, transcript, multipart, optional slide-conversion and audio-remux
 EventBridge targets retain exhausted delivery failures in the Gateway-owned
-`ttobak-pipeline-delivery-failures` queue. Transcribe, summarize, process-image and
-optional convert-doc retain exhausted asynchronous execution records in the
+`ttobak-pipeline-delivery-failures` queue. Transcribe, summarize, process-image,
+optional convert-doc and optional audio-remux retain exhausted asynchronous execution records in the
 separate `ttobak-pipeline-execution-failures` queue, preserving two Lambda retries
 and the six-hour event-age default. Both queues use SSE-SQS, require TLS, retain
 seven days and have no automatic consumer. Gateway-owned exact queue-send
