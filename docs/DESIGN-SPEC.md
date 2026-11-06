@@ -246,7 +246,8 @@ change. Empty pages with nextCursor can still have later matches. Hierarchy and
 classification never grant access to private content (ADR-036).
 
 Activated ancestor access displays a read-only label and its granting Account
-(ADR-058). Suppress inherited-only mutation controls and keep invitation,
+(ADR-058); published meetings are the exception and show edit controls to
+every member (ADR-016 2026-11-06 amendment). Suppress inherited-only mutation controls and keep invitation,
 publication, upload/link and dictionary selectors restricted to direct
 membership. Billing is the ADR-060 exception: the BFF's authorized entries allow
 direct and ancestor team members to view and upload. Its COT selector describes

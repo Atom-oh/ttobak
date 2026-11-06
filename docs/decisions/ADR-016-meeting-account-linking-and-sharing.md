@@ -9,6 +9,14 @@
 - Amendment (2026-10-20): [ADR-051](ADR-051-shared-speaker-correction-and-account-publication.md)
   supersedes the separate meeting-detail link/share controls with one explicit
   publication action. Private classification API semantics remain unchanged.
+- Amendment (2026-11-06, product decision): publication grants members **edit**,
+  not read. Every live member of the published account, including inherited
+  ancestor-account members (amending ADR-058), resolves to `edit` on the meeting:
+  notes/transcript edits, live summarize, resummary and action items, like the
+  creator. Delete remains creator-only; other creator-only management actions are
+  unchanged by this amendment. A read-only direct share yields to team edit while
+  membership lasts. Resummary capture fences the granting member row (and, for
+  inherited access, every traversed parent link) in its snapshot transaction.
 
 ## Context and original decision
 

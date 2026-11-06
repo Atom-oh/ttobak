@@ -313,8 +313,11 @@ never grants a private meeting. Direct share permissions take precedence.
 
 Clients expand selected visible account groups to accessible descendants and send
 the resulting IDs. With ADR-058 activated, canonical ancestor membership gives
-read-only access to explicitly published descendant content; account filters
-remain classification. Independent direct grants retain their permissions.
+read-only access to explicitly published descendant content, except meetings:
+every direct or inherited member gets `edit` on a published meeting (ADR-016
+2026-11-06 amendment). Account filters remain classification. Independent
+direct edit grants retain their permissions; a direct read grant yields to
+team edit.
 Accounts added after team publication can discover existing shared meetings;
 pending invitees do so only after verified materialization.
 

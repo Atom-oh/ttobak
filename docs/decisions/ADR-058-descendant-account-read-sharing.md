@@ -3,6 +3,10 @@
 [ADR-060](ADR-060-billing-shared-team-access.md) supersedes only the Billing exclusion: shared ancestor teams may act on descendant Billing. Other inherited mutation restrictions remain.
 
 - Status: Accepted on 2026-10-29 following explicit user authorization.
+- Amended 2026-11-06 by the ADR-016 amendment: inherited members of an ancestor
+  Account get `edit` on meetings published to a descendant, and may correct
+  speakers. Other inherited mutation restrictions (invitations, roles,
+  publication, linking, hierarchy, documents) are unchanged.
 - Supersedes ADR-036's no-inheritance policy only. Its meeting classification,
   explicit multi-filter semantics and owner-only hierarchy writes remain.
 - Narrows ADR-051's reader speaker-correction permission: inherited-only readers

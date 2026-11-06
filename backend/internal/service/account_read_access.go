@@ -67,6 +67,12 @@ func projectAccountReadMeeting(meeting *model.Meeting, grant *accountReadGrant) 
 	return &copy
 }
 
+// accountMeetingPermission is what account-team access grants on a meeting
+// published to the account: members, including inherited ancestor-account
+// members, edit like the creator (ADR-016 2026-11-06 amendment). Delete and
+// other creator-only management actions stay separate.
+const accountMeetingPermission = model.PermissionEdit
+
 func descendantReadsEnabled() bool { return os.Getenv(accountDescendantReadsEnv) == "1" }
 
 func canonicalReadAccount(account *model.Account, id string) bool {

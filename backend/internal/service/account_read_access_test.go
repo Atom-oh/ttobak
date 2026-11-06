@@ -75,8 +75,8 @@ func TestDescendantMeetingReadAccess(t *testing.T) {
 			r.members = map[string]*model.AccountMember{}
 			r.member(ancestor, "reader", model.RoleOwner)
 			meeting, permission, err := resolveSharedAccess(context.Background(), r, "reader", "meeting")
-			if err != nil || meeting == nil || permission != model.PermissionRead || meeting.Content != "approved" {
-				t.Fatalf("ancestor shared meeting = %v, %q, %v; want approved read", meeting != nil, permission, err)
+			if err != nil || meeting == nil || permission != model.PermissionEdit || meeting.Content != "approved" {
+				t.Fatalf("ancestor shared meeting = %v, %q, %v; want approved edit", meeting != nil, permission, err)
 			}
 			delete(r.members, ancestor+"/reader")
 			meeting, _, err = resolveSharedAccess(context.Background(), r, "reader", "meeting")
@@ -100,7 +100,7 @@ func (r *inheritedSpeakerRepo) GetMember(ctx context.Context, id, user string) (
 	return r.hierarchy.GetMember(ctx, id, user)
 }
 
-func TestInheritedReaderCannotCorrectSpeakers(t *testing.T) {
+func TestInheritedMemberCorrectsSpeakersLikeCreator(t *testing.T) {
 	t.Setenv(accountDescendantReadsEnv, "1")
 	r := &inheritedSpeakerRepo{mockMeetingRepo: newMockMeetingRepo(), hierarchy: newDescendantAccessRepo()}
 	meeting := *r.hierarchy.meeting
@@ -108,13 +108,19 @@ func TestInheritedReaderCannotCorrectSpeakers(t *testing.T) {
 	meeting.TranscriptA = "[spk_0]\nhello"
 	r.addMeeting(&meeting)
 	detail, err := newMeetingServiceWithRepo(r).GetMeetingDetail(context.Background(), "reader", "meeting")
-	if err != nil || detail == nil || detail.CanCorrectSpeakers {
+	if err != nil || detail == nil || !detail.CanCorrectSpeakers || detail.Permission != model.PermissionEdit {
 		t.Fatalf("inherited speaker capability: %+v/%v", detail, err)
 	}
 	_, err = newMeetingServiceWithRepo(r).UpdateSpeakers(context.Background(), "reader", "meeting",
 		&model.UpdateSpeakersRequest{SpeakerMap: map[string]string{"spk_0": "name"}})
-	if !errors.Is(err, ErrForbidden) || r.meetingsByID["meeting"].Content != "spk_0 summary" {
-		t.Fatalf("inherited reader changed speakers: %v", err)
+	if err != nil || r.meetingsByID["meeting"].TranscriptA != "[name]\nhello" {
+		t.Fatalf("inherited member could not correct speakers: %v", err)
+	}
+	delete(r.hierarchy.members, "parent/reader")
+	_, err = newMeetingServiceWithRepo(r).UpdateSpeakers(context.Background(), "reader", "meeting",
+		&model.UpdateSpeakersRequest{SpeakerMap: map[string]string{"name": "other"}})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("removed inherited member changed speakers: %v", err)
 	}
 }
 
@@ -138,8 +144,8 @@ func TestDescendantShareNeverEscalatesOrGrandfathers(t *testing.T) {
 	r := newDescendantAccessRepo()
 	r.share = &model.Share{Origin: model.ShareOriginAccount, Permission: model.PermissionEdit}
 	meeting, permission, err := resolveSharedAccess(context.Background(), r, "reader", "meeting")
-	if err != nil || meeting == nil || permission != model.PermissionRead {
-		t.Fatalf("inherited stale edit share = %v/%q/%v", meeting != nil, permission, err)
+	if err != nil || meeting == nil || permission != model.PermissionEdit {
+		t.Fatalf("inherited account share = %v/%q/%v", meeting != nil, permission, err)
 	}
 	r.meeting.SummaryPrivacy = nil
 	meeting, _, err = resolveSharedAccess(context.Background(), r, "reader", "meeting")

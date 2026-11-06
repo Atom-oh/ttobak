@@ -216,7 +216,7 @@ func (s *MeetingService) listTeamSharedMeetingsForFilter(ctx context.Context, us
 			if share != nil {
 				continue
 			} // covered by the owned/individual-share stream
-			permission := model.PermissionRead
+			permission := accountMeetingPermission
 			meeting = projectAccountReadMeeting(meeting, grant)
 			response.Meetings = append(response.Meetings, model.ToMeetingListItem(meeting, true, nil, &permission))
 			listed[meeting.MeetingID] = true
