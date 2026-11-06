@@ -36,7 +36,7 @@ func (h *MeetingHandler) CropAudio(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, service.ErrNotFound):
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
 		case errors.Is(err, service.ErrForbidden):
-			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Only the owner can crop this recording")
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Only the creator or account team members can crop this recording")
 		case errors.Is(err, service.ErrInvalidInput):
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, err.Error())
 		case errors.Is(err, repository.ErrConditionFailed):

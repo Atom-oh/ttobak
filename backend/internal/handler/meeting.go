@@ -371,8 +371,8 @@ func (h *MeetingHandler) GetMeeting(w http.ResponseWriter, r *http.Request) {
 			// swallow here previously gave no signal at all when this broke.
 			log.Printf("GetMeeting: failed to get sim run for meeting %s: %v", meetingID, err)
 		} else if run != nil {
-			if result.Permission != "owner" && run.SummaryGeneration != result.SummaryGeneration {
-				result.SimRun = &model.SimRunResponse{Status: model.SimStatusError, ErrorMessage: "소유자가 현재 원본에서 시뮬레이션을 다시 생성해야 합니다."}
+			if !result.CanManage && run.SummaryGeneration != result.SummaryGeneration {
+				result.SimRun = &model.SimRunResponse{Status: model.SimStatusError, ErrorMessage: "생성자 또는 계정 멤버가 현재 원본에서 시뮬레이션을 다시 생성해야 합니다."}
 				writeJSON(w, http.StatusOK, result)
 				return
 			}

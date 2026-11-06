@@ -567,8 +567,8 @@ function MeetingDetailContent() {
   const canEdit = meeting.permission === 'edit' || (!meeting.isShared && meeting.permission !== 'read');
   const canEditNotes = canEdit && meeting.supportsNotesComparison === true && typeof meeting.notesRevision === 'string';
   // Server capability: creator or live account-team member manages shares, links,
-  // file uploads and recovery; delete, crop and audio upload (and its KB
-  // promotion) stay isCreator-only.
+  // projects, file uploads, crop, the simulator and recovery; delete and audio
+  // upload (and its KB promotion) stay isCreator-only.
   const { isCreator, canManage: canManageAssociations } = meetingCapabilities(meeting, user?.userId);
   const canUpload = canManageAssociations;
 
@@ -804,7 +804,7 @@ function MeetingDetailContent() {
             />
           ) : <p className="mb-8 rounded-lg border border-dashed border-slate-200 p-4 text-sm text-slate-500 dark:border-white/10 dark:text-text-muted">표시할 필드 Insight가 없습니다. 참조 자료와 Q&A를 검토해 고객 신호·검증할 가설을 메모에 남겨 주세요.</p>}
           {meeting.fieldInsightsTruncated && <p className="mb-4 text-xs text-amber-700 dark:text-amber-300">인사이트 일부만 표시합니다.</p>}
-          <SAFollowUp key={`followup-${meeting.meetingId}`} meeting={meeting} canManage={isCreator}
+          <SAFollowUp key={`followup-${meeting.meetingId}`} meeting={meeting} canManage={canManageAssociations}
             hasUnsavedChanges={summaryDirty || titleDirty || transcriptDirty || notesDirty}
             onProjectsChanged={onProjectsChanged}
             onAddReference={canEditNotes ? onAddReference : undefined} />
@@ -927,7 +927,7 @@ function MeetingDetailContent() {
                 audioUrls={audioUrls.length > 0 ? audioUrls : undefined}
                 durationSeconds={(meeting.audioKeys?.length ?? 0) <= 1 && (meeting.audioPartCount ?? 0) <= 1 ? meeting.duration : undefined}
               />
-              {meeting.supportsAudioCrop && isCreator && (meeting.status === 'done' || meeting.status === 'error') && (meeting.audioKeys?.length ?? 0) <= 1 && (meeting.audioPartCount ?? 0) <= 1 && (
+              {meeting.supportsAudioCrop && canManageAssociations && (meeting.status === 'done' || meeting.status === 'error') && (meeting.audioKeys?.length ?? 0) <= 1 && (meeting.audioPartCount ?? 0) <= 1 && (
                 <AudioCropEditor key={`${meeting.meetingId}:${audioRevision}`} meetingId={meeting.meetingId} audioUrl={audioUrl || audioUrls[0]} duration={meeting.duration}
                   dirty={summaryDirty || titleDirty || transcriptDirty || notesDirty} onCropped={(id) => router.push(`/meeting/${id}`)} />
               )}
