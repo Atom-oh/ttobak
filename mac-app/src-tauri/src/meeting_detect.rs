@@ -37,6 +37,9 @@ pub struct MeetingState {
     /// The last announced detection, kept after it ends so its stop prompt
     /// can still be answered.
     last: Mutex<Option<Detection>>,
+    /// The recording a confirmed detection start produced (detection ID and
+    /// WAV path). A stop prompt may stop only that recording.
+    started: Mutex<Option<(String, PathBuf)>>,
     settings_path: Mutex<Option<PathBuf>>,
 }
 
@@ -46,9 +49,20 @@ impl Default for MeetingState {
             enabled: AtomicBool::new(true),
             detector: Mutex::new(Detector::default()),
             last: Mutex::new(None),
+            started: Mutex::new(None),
             settings_path: Mutex::new(None),
         }
     }
+}
+
+/// Whether `id`'s confirmed start produced the recording running now.
+fn owns_recording(app: &AppHandle, state: &MeetingState, id: &str) -> bool {
+    let current = app.state::<RecorderState>().recorder.lock().snapshot().path;
+    state
+        .started
+        .lock()
+        .as_ref()
+        .is_some_and(|(started_id, path)| started_id == id && current.as_ref() == Some(path))
 }
 
 fn detection_json(d: &Detection) -> Value {
@@ -107,7 +121,7 @@ fn watch(app: AppHandle, state: Arc<MeetingState>) {
         let now_ms = epoch.elapsed().as_millis() as u64;
         let events = state.detector.lock().observe(now_ms, &sources, recording);
         for event in events {
-            announce(&app, &state, &event, recording);
+            announce(&app, &state, &event);
         }
         std::thread::sleep(if sources.is_empty() && !probe.mic_running() {
             IDLE_POLL
@@ -118,8 +132,13 @@ fn watch(app: AppHandle, state: Arc<MeetingState>) {
 }
 
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-fn announce(app: &AppHandle, state: &MeetingState, event: &Event, recording: bool) {
+fn announce(app: &AppHandle, state: &MeetingState, event: &Event) {
     use tauri_plugin_notification::NotificationExt;
+    // For an end, only the recording this detection started is offered a stop.
+    let recording = match event {
+        Event::Detected(_) => false,
+        Event::Ended(d) => owns_recording(app, state, &d.id),
+    };
     let (name, detection, notice) = match event {
         Event::Detected(d) => (
             "native-meeting-detected",
@@ -171,14 +190,11 @@ pub fn meeting_detection_get(state: State<'_, Arc<MeetingState>>) -> Value {
 
 #[tauri::command]
 pub fn meeting_detection_set_enabled(
+    app: AppHandle,
     enabled: bool,
     state: State<'_, Arc<MeetingState>>,
 ) -> Result<(), String> {
-    state.enabled.store(enabled, Ordering::Relaxed);
-    if !enabled {
-        state.detector.lock().reset();
-        *state.last.lock() = None;
-    }
+    // Persist first, so a failed write leaves the live setting unchanged.
     let path = state.settings_path.lock().clone();
     if let Some(path) = path {
         if let Some(dir) = path.parent() {
@@ -186,6 +202,17 @@ pub fn meeting_detection_set_enabled(
         }
         std::fs::write(&path, json!({ "enabled": enabled }).to_string())
             .map_err(|e| e.to_string())?;
+    }
+    state.enabled.store(enabled, Ordering::Relaxed);
+    if !enabled {
+        state.detector.lock().reset();
+        *state.started.lock() = None;
+        // Retire any visible prompt.
+        if let Some(last) = state.last.lock().take() {
+            let mut payload = detection_json(&last);
+            payload["recording"] = json!(false);
+            let _ = app.emit_to("main", "native-meeting-ended", payload);
+        }
     }
     Ok(())
 }
@@ -227,10 +254,21 @@ pub async fn meeting_detection_respond(
                 account_id: None,
             }
         }
-        "stop" => Action::Stop { upload: true },
+        "stop" => {
+            if !owns_recording(&app, &state, &detection_id) {
+                return Err("the recording this meeting started is no longer running".into());
+            }
+            Action::Stop { upload: true }
+        }
         _ => return Err("action must be dismiss, start or stop".into()),
     };
-    Ok(control::dispatch_local(&app, &detection_id, action).await)
+    let is_start = matches!(action, Action::Start { .. });
+    let reply = control::dispatch_local(&app, &detection_id, action).await;
+    if is_start && reply.get("ok").and_then(Value::as_bool) == Some(true) {
+        let path = app.state::<RecorderState>().recorder.lock().snapshot().path;
+        *state.started.lock() = path.map(|p| (detection_id.clone(), p));
+    }
+    Ok(reply)
 }
 
 #[cfg(target_os = "macos")]
@@ -261,7 +299,9 @@ mod mac {
     const TAB_CACHE: Duration = Duration::from_secs(5);
     /// After Automation access is denied, wait this long before asking again.
     const DENIED_BACKOFF: Duration = Duration::from_secs(300);
-    const SCRIPT_TIMEOUT: Duration = Duration::from_secs(3);
+    /// Long enough to cover the first Automation consent dialog, which blocks
+    /// the script; killing it early would dismiss the dialog and re-prompt.
+    const SCRIPT_TIMEOUT: Duration = Duration::from_secs(30);
 
     #[derive(Default)]
     pub struct Probe {

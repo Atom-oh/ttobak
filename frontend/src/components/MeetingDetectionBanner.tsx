@@ -36,12 +36,6 @@ export function MeetingDetectionBanner() {
   useEffect(() => {
     if (!isTauri() || !isAuthenticated) return;
     let cancelled = false;
-    // A meeting announced before this page loaded.
-    void getMeetingDetection().then((state) => {
-      if (!cancelled && state?.enabled && state.active) {
-        setPrompt((current) => current ?? { phase: 'detected', detection: state.active! });
-      }
-    });
     const offDetected = onNativeMeetingDetected((detection) => {
       setError(null);
       setPrompt({ phase: 'detected', detection });
@@ -53,6 +47,13 @@ export function MeetingDetectionBanner() {
         // A prompt for a meeting that already ended is no longer useful.
         return current?.detection.detectionId === detection.detectionId ? null : current;
       });
+    });
+    // A meeting announced before this page loaded; read after subscribing so
+    // an announcement in between is not lost. Live events take precedence.
+    void getMeetingDetection().then((state) => {
+      if (!cancelled && state?.enabled && state.active) {
+        setPrompt((current) => current ?? { phase: 'detected', detection: state.active! });
+      }
     });
     return () => {
       cancelled = true;

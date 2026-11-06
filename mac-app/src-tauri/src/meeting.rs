@@ -247,12 +247,9 @@ impl Detector {
             self.last_seen.remove(key);
             self.suppressed.remove(key);
         }
-        // A brief absence restarts the sustain window, not the grace period.
-        for (key, first) in self.first_seen.iter_mut() {
-            if !present.contains(key) {
-                *first = now_ms;
-            }
-        }
+        // A brief absence restarts the sustain window, not the grace period:
+        // the window starts again at the next observation that sees it.
+        self.first_seen.retain(|key, _| present.contains(key));
 
         if let Some(active) = &self.active {
             if expired.contains(&active.source.key()) {
@@ -432,6 +429,8 @@ mod tests {
         d.observe(0, &[ZOOM], false);
         d.observe(2_000, &[], false);
         assert!(d.observe(4_000, &[ZOOM], false).is_empty());
+        // Sustained since 4s, not since the absent observation at 2s.
+        assert!(d.observe(6_000, &[ZOOM], false).is_empty());
         assert!(matches!(
             &d.observe(7_000, &[ZOOM], false)[..],
             [Event::Detected(_)]

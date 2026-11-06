@@ -31,16 +31,20 @@ without a user confirmation.
   FaceTime, Amazon Chime, Discord) are matched by bundle ID or helper ID.
 - A browser using the microphone counts only when one of its tabs is a meeting
   URL (`meet.google.com/<code>`, Teams web, Zoom web client). A fixed
-  AppleScript run through `osascript` filters tab URLs inside the browser and
-  returns only meeting URLs. URLs are classified and never logged. This needs
-  the macOS Automation permission per browser; a denial backs off for five
-  minutes. Safari's shared `com.apple.WebKit.GPU` process counts only with a
-  Safari meeting tab, because other WebKit hosts share it. Firefox has no tab
+  AppleScript run through `osascript` receives the browser's tab URLs, discards
+  non-meeting ones inside that child process, and returns only meeting URLs to
+  the app, which classifies and never logs them. This needs the macOS
+  Automation permission per browser; a denial backs off for five minutes, and
+  the script may wait up to 30 s for the first consent dialog. Safari's shared
+  `com.apple.WebKit.GPU` process counts only with a Safari meeting tab, because
+  other WebKit hosts share it. Firefox has no tab
   scripting and is not detected.
 - `meeting.rs` holds the pure rules: a 3 s sustain before announcing, one
   announcement at a time, no announcement while the app records, and an end
   after 20 s of absent microphone use. A dismissal silences that source until it
   ends.
+- A stop prompt can stop only the recording its own confirmed start produced
+  (bound to that WAV path); a manually started recording is never stopped by it.
 - Rust emits `native-meeting-detected`/`native-meeting-ended` to the main window
   and posts a local notification. The SPA banner's confirmation calls
   `meeting_detection_respond`, which sends the start/stop through the same
