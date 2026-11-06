@@ -2,6 +2,9 @@ import { createHash } from 'node:crypto';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { MAX_READING_BYTES } from './reading.js';
 
+// Staged rollout: this adapter is intentionally not registered as an MCP tool
+// yet. The dependent PR #607 registers its tools and adds discovery/dispatch
+// coverage; until then, existing server capabilities remain unchanged.
 const fields = ['name', 'company', 'title', 'department', 'email', 'address', 'workPhone', 'fax', 'phone', 'cardRegisteredAt', 'cardBook', 'group', 'notes'] as const;
 export type ContactInput = { name: string } & Partial<Record<typeof fields[number], string>>;
 export type ContactListOptions = { limit: number; cursor?: string };
