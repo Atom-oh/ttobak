@@ -253,6 +253,7 @@ export function TranscriptSection({ transcription, rawTranscript, onSaveRawTrans
                 key={`${group.speaker}-${group.startTime}-${gi}`}
                 id={`ts-${groupAnchor}`}
                 data-transcript-anchor={groupAnchor}
+                data-start-seconds={group.untimed ? undefined : group.startTime}
                 className="group relative flex gap-3 py-3 px-3 -mx-3 rounded-xl hover:bg-slate-50 dark:hover:bg-white/[0.03] transition-colors scroll-mt-24 transition-shadow"
               >
                 {/* Avatar */}
@@ -291,6 +292,7 @@ export function TranscriptSection({ transcription, rawTranscript, onSaveRawTrans
                           key={seg.id || `${gi}-${si}`}
                           id={isDuplicateOfGroupAnchor ? undefined : `ts-${segAnchor}`}
                           data-transcript-anchor={isDuplicateOfGroupAnchor ? undefined : segAnchor}
+                          data-start-seconds={isDuplicateOfGroupAnchor || seg.untimed ? undefined : seg.startTime}
                         >
                           {si > 0 && ' '}
                           <EditableText text={seg.text} />
