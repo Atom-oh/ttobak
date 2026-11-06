@@ -43,7 +43,6 @@ type Meeting struct {
 	AudioCrop           *AudioCrop         `dynamodbav:"audioCrop,omitempty"`
 	AudioKeys           []string           `dynamodbav:"audioKeys,omitempty"`                    // Ordered S3 keys for multi-file uploads
 	AudioPartCount      int                `dynamodbav:"audioPartCount,omitempty"`               // Total parts expected
-	AudioUploadBatchBy  string             `dynamodbav:"audioUploadBatchBy,omitempty" json:"-"`  // member who started the current multipart batch
 	AudioPartsReady     int                `dynamodbav:"audioPartsReady,omitempty"`              // Parts with completed transcription
 	AudioPartsReadySet  []int              `dynamodbav:"audioPartsReadySet,omitempty,numberset"` // Set of completed part indices (source-of-truth for idempotent counting)
 	// AllPartsEmittedAt marks the moment we first emitted the

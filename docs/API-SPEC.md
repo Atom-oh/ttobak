@@ -620,7 +620,7 @@ Meeting management (ADR-016 2026-11-06 amendment; for inherited members it
 supersedes ADR-058's invitation/linking restriction for meetings only): the
 creator or a live direct or inherited member of the account a meeting is
 published to may call the share, revoke, pending-revoke, account,
-share-account, link, upload, recover and rediarize routes; audio crop, the
+share-account, link, image/file upload, recover and rediarize routes; audio upload, audio crop, the
 simulator, project links and delete stay creator-only. Detail returns
 `canManage`, and managers receive `shares` (with `sharedByEmail` for
 member-created shares) and `projectIds`. Writes keep the creator's partition and
@@ -935,7 +935,7 @@ pendingShareExpiresAt; QA history's uppercase TTL field is not swept.
 ### Upload and recovery
 
 The server validates category, management access and traversal; meeting upload
-keys use the creator's prefix even when a managing member uploads. Checkpoint filenames
+keys use the creator's prefix even when a managing member uploads an image or file. Checkpoint filenames
 recording_progress.webm/m4a/ogg intentionally overwrite a stable audio key; other
 uploads receive unique names. Upload completion emits the appropriate custom
 event. The bounded PDF/PPTX/DOCX/Markdown extractor and its asynchronous worker
@@ -956,10 +956,9 @@ See the [worker contract](../backend/python/document-extract/LAMBDA.md) and
 [parser scope](../backend/python/document-extract/README.md).
 
 Recover uses a saved progress object; a non-creator manager may recover only after
-it has been unchanged for 10 minutes (409 `RECORDING_STILL_ACTIVE`). Managers
-cannot presign or complete checkpoint filenames (403); their audio presigns and
-completions return 409 while the creator may still be recording (missing or
-<10 min checkpoint) or another uploader's multipart batch is in progress. Manager presigned URLs expire after 5 minutes. Rediarize accepts supported single-part
+it has been unchanged for 10 minutes (409 `RECORDING_STILL_ACTIVE`). Audio presign
+and completion are creator-only (403 `FORBIDDEN`) pending a member staging-prefix
+design; managers upload images and files, with 5-minute presigned URLs. Rediarize accepts supported single-part
 Whisper meetings and a speaker-count hint. Use their handler/service contracts,
 not a raw DynamoDB status reset or a fabricated AWS S3 event.
 

@@ -8,9 +8,13 @@ import (
 	"github.com/ttobak/backend/internal/model"
 )
 
-// ErrRecordingStillActive rejects a non-creator recovery or audio write while
-// the creator's recording may still be running (its checkpoint is recent).
+// ErrRecordingStillActive rejects a non-creator recovery while the creator's
+// recording may still be running (its checkpoint is recent).
 var ErrRecordingStillActive = errors.New("recording checkpoint is still recent")
+
+// ErrMemberAudioUpload: audio upload is creator-only until member audio has a
+// staging prefix the S3 transcribe trigger does not watch (ADR-016).
+var ErrMemberAudioUpload = fmt.Errorf("%w: audio upload is limited to the meeting creator", ErrForbidden)
 
 // managerRepo is what manager resolution needs: owner lookup plus the same
 // share/membership/hierarchy reads as resolveSharedAccess.

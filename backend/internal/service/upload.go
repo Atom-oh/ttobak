@@ -142,13 +142,11 @@ func (s *UploadService) GeneratePresignedUploadURL(
 		}
 		if meeting != nil {
 			keyOwner = meeting.UserID
+			if err := memberAudioRefused(req.Category, userID, meeting.UserID); err != nil {
+				return nil, err
+			}
 			if req.Category == "audio" && meeting.AudioCrop != nil {
 				return nil, fmt.Errorf("%w: cropped audio is immutable; create another cropped copy", ErrInvalidInput)
-			}
-			if req.Category == "audio" {
-				if err := s.checkMemberAudioWrite(ctx, userID, meeting, req.FileName, req.TotalParts); err != nil {
-					return nil, err
-				}
 			}
 			// The upload may land without completion; mark it when issued.
 			if presignMarksSourceEdit(req.Category, userID, meeting.UserID) {
@@ -173,7 +171,7 @@ func (s *UploadService) GeneratePresignedUploadURL(
 			if req.PartIndex < 0 || req.PartIndex >= req.TotalParts {
 				return nil, fmt.Errorf("partIndex %d out of range [0, %d)", req.PartIndex, req.TotalParts)
 			}
-			s3Key = fmt.Sprintf("audio/%s/%s/part_%03d_%s", keyOwner, meetingID, req.PartIndex, s.sanitizeFileName(req.FileName))
+			s3Key = fmt.Sprintf("audio/%s/%s/part_%03d_%s", userID, meetingID, req.PartIndex, s.sanitizeFileName(req.FileName))
 		} else if isCheckpointFileName(req.FileName) {
 			// Mid-recording checkpoint (RecordButton's onCheckpoint via
 			// handleCheckpoint in frontend/src/app/record/page.tsx) --
@@ -186,9 +184,9 @@ func (s *UploadService) GeneratePresignedUploadURL(
 			// Safe to skip sanitization here because the filename is a
 			// fixed, code-controlled constant on the frontend, never
 			// derived from arbitrary user input.
-			s3Key = fmt.Sprintf("audio/%s/%s/%s", keyOwner, meetingID, req.FileName)
+			s3Key = fmt.Sprintf("audio/%s/%s/%s", userID, meetingID, req.FileName)
 		} else {
-			s3Key = fmt.Sprintf("audio/%s/%s/%s", keyOwner, meetingID, s.sanitizeFileName(req.FileName))
+			s3Key = fmt.Sprintf("audio/%s/%s/%s", userID, meetingID, s.sanitizeFileName(req.FileName))
 		}
 	case "image":
 		if req.MeetingID == "" {
@@ -237,23 +235,16 @@ func (s *UploadService) CompleteUpload(ctx context.Context, userID string, req *
 	}
 	owner := meeting.UserID
 
+	if err := memberAudioRefused(req.Category, userID, owner); err != nil {
+		return err
+	}
 	if req.Category == "audio" && meeting.AudioCrop != nil {
 		return fmt.Errorf("%w: cropped audio is immutable", ErrInvalidInput)
 	}
 	if (req.Category == "audio" || req.Category == "image") && !validMeetingUploadKey(req.Category, owner, req.MeetingID, req.Key) {
 		return ErrInvalidInput
 	}
-	// A member retry of a bound key succeeds before the guard.
-	if req.Category == "audio" && userID != owner && memberAudioAlreadyBound(meeting, req) {
-		return nil
-	}
-	// Same member guard as presign, before any audio key is bound.
-	if req.Category == "audio" {
-		if err := s.checkMemberAudioWrite(ctx, userID, meeting, path.Base(req.Key), req.TotalParts); err != nil {
-			return err
-		}
-	}
-	if req.Category == "audio" || req.Category == "image" || req.Category == "file" {
+	if req.Category == "image" || req.Category == "file" {
 		if err := s.markMemberUpload(ctx, userID, meeting); err != nil {
 			return err
 		}
@@ -269,11 +260,11 @@ func (s *UploadService) CompleteUpload(ctx context.Context, userID string, req *
 				return fmt.Errorf("partIndex %d out of range [0, %d)", req.PartIndex, req.TotalParts)
 			}
 			// Lazy pre-allocation: create empty audioKeys list on first multi-file call
-			if err := s.repo.PreAllocateAudioKeys(ctx, meeting.UserID, meeting.MeetingID, userID, req.TotalParts); err != nil {
+			if err := s.repo.PreAllocateAudioKeys(ctx, meeting.UserID, meeting.MeetingID, req.TotalParts); err != nil {
 				return err
 			}
 			// Idempotent index-based set
-			return s.repo.SetAudioKeyAtIndex(ctx, meeting.UserID, meeting.MeetingID, userID, req.Key, req.PartIndex)
+			return s.repo.SetAudioKeyAtIndex(ctx, meeting.UserID, meeting.MeetingID, req.Key, req.PartIndex)
 		}
 		// Single-file. Idempotent for the same key: re-completing an object
 		// that is already bound never resets the meeting's progress.
@@ -635,8 +626,8 @@ func memberMayRecover(actorID, ownerID string, checkpoint, now time.Time) bool {
 	return !checkpoint.IsZero() && now.Sub(checkpoint) >= memberRecoveryQuietPeriod
 }
 
-// memberPresignExpiry bounds a member's presigned PUT after removal; S3
-// audio events bypass CompleteUpload (ADR-016 2026-11-06 amendment).
+// memberPresignExpiry bounds a member's image/file presigned PUT after
+// removal (ADR-016 2026-11-06 amendment).
 const memberPresignExpiry = 5 * time.Minute
 
 // presignExpiry: one hour for the creator, shorter for a member.
@@ -647,63 +638,20 @@ func presignExpiry(actorID, keyOwner string) time.Duration {
 	return time.Hour
 }
 
-// presignMarksSourceEdit: a member's audio or file presign sets the sticky
-// non-owner source marker at issue time, not only at completion.
-func presignMarksSourceEdit(category, actorID, ownerID string) bool {
-	return actorID != ownerID && (category == "audio" || category == "file")
-}
-
-// checkMemberAudioWrite is the shared presign/complete member audio guard;
-// it reads the checkpoint only while recording/transcribing, failing closed
-// on any lookup error other than a missing checkpoint.
-func (s *UploadService) checkMemberAudioWrite(ctx context.Context, actorID string, meeting *model.Meeting, fileName string, totalParts int) error {
-	if meeting == nil || actorID == meeting.UserID {
-		return nil
-	}
-	var checkpoint time.Time
-	if meeting.Status == model.StatusRecording || meeting.Status == model.StatusTranscribing {
-		if s.s3Client == nil {
-			return ErrRecordingStillActive
-		}
-		var err error
-		_, _, checkpoint, err = s.findProgressFile(ctx, meeting.UserID, meeting.MeetingID)
-		if err != nil && !errors.Is(err, ErrRecordingCheckpointMissing) {
-			return ErrRecordingStillActive
-		}
-	}
-	return memberAudioWriteAllowed(actorID, meeting, fileName, totalParts, checkpoint, time.Now())
-}
-
-// memberAudioAlreadyBound: the unique key already fills audioKey or its slot.
-func memberAudioAlreadyBound(meeting *model.Meeting, req *model.UploadCompleteRequest) bool {
-	if req.TotalParts > 1 {
-		return req.Key != "" && req.PartIndex >= 0 && req.PartIndex < len(meeting.AudioKeys) && meeting.AudioKeys[req.PartIndex] == req.Key
-	}
-	return req.Key != "" && meeting.AudioKey == req.Key
-}
-
-// memberAudioWriteAllowed: checkpoint names are creator-only; recording
-// needs a stale (>=10 min) checkpoint; transcribing refuses a fresh one and
-// without one allows only this member's batch parts.
-func memberAudioWriteAllowed(actorID string, meeting *model.Meeting, fileName string, totalParts int, checkpoint, now time.Time) error {
-	if meeting == nil || actorID == meeting.UserID {
-		return nil
-	}
-	if isCheckpointFileName(fileName) {
-		return ErrForbidden
-	}
-	fresh := !checkpoint.IsZero() && now.Sub(checkpoint) < memberRecoveryQuietPeriod
-	switch meeting.Status {
-	case model.StatusRecording:
-		if checkpoint.IsZero() || fresh {
-			return ErrRecordingStillActive
-		}
-	case model.StatusTranscribing:
-		if fresh || checkpoint.IsZero() && (totalParts <= 1 || meeting.AudioUploadBatchBy != actorID) {
-			return ErrRecordingStillActive
-		}
+// memberAudioRefused: managers may upload images and files, but audio stays
+// creator-only: the S3 trigger transcribes anything under the creator's audio
+// prefix before any completion check runs.
+func memberAudioRefused(category, actorID, ownerID string) error {
+	if category == "audio" && actorID != ownerID {
+		return ErrMemberAudioUpload
 	}
 	return nil
+}
+
+// presignMarksSourceEdit: a member's file presign sets the sticky
+// non-owner source marker at issue time, not only at completion.
+func presignMarksSourceEdit(category, actorID, ownerID string) bool {
+	return actorID != ownerID && category == "file"
 }
 
 // validateRediarizeEligibility is the pure decision core of RediarizeMeeting:

@@ -49,3 +49,10 @@ test('delete controls stay creator-only in the meeting detail page and header', 
   assert.match(header, /\{isCreator && <DesktopDeleteButton/);
   assert.match(header, /\{canManage && <MeetingShareButton/);
 });
+
+test('audio upload (and its KB promotion) is creator-only; managers keep file uploads', () => {
+  const page = readFileSync(new URL('../src/app/meeting/[id]/MeetingDetailClient.tsx', import.meta.url), 'utf8');
+  const gates = [...page.matchAll(/\{?(\w+) && !meeting\.audioCrop|showAudioUploader && (\w+)/g)].map((m) => m[1] ?? m[2]);
+  assert.deepEqual(gates, ['isCreator', 'isCreator', 'isCreator']);
+  assert.match(page, /showUploader && canUpload/);
+});

@@ -263,7 +263,7 @@ classification never grant access to private content (ADR-036).
 
 Activated ancestor access displays a read-only label and its granting Account
 (ADR-058); published meetings are the exception and show edit and management
-controls (not delete, crop, simulator or project links yet) to every member (ADR-016
+controls (not delete, audio upload, crop, simulator or project links yet) to every member (ADR-016
 2026-11-06 amendment). Otherwise suppress inherited-only mutation controls and keep invitation,
 publication, upload/link and dictionary selectors restricted to direct
 membership. Billing is the ADR-060 exception: the BFF's authorized entries allow
@@ -517,7 +517,7 @@ refreshing the comparison baseline is a separate user action. Background refresh
 must not silently advance a dirty editor's baseline. Dirty notes block re-summary.
 Delayed detail responses cannot roll back acknowledged notes or association
 changes. Notes editing requires server capability flags during mixed-version
-rollout. Meeting-detail management (account, sharing, links, uploads, rediarize,
+rollout. Meeting-detail management (account, sharing, links, file uploads, rediarize,
 recovery) follows the server `canManage` flag: the creator or a
 live account-team member (ADR-016 2026-11-06 amendment). Delete stays
 creator-only on desktop and mobile; member-created shares show the sharer. Account

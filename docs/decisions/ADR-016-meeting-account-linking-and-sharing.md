@@ -44,21 +44,15 @@
     predecessors published to the same account (never one readable only through
     a private direct share), and the write is fenced on the parent's publication
     and the member's live grant.
-  - Uploads, rediarize and recovery work for members (audio crop, the
-    simulator and project links stay creator-only until the follow-up change); recovery requires a checkpoint quiet for 10 minutes
-    (409 `RECORDING_STILL_ACTIVE`). Members never presign or complete checkpoint
-    filenames. Their audio presigns and completions are refused while the
-    meeting is recording with a missing or fresh (<10 min) checkpoint, or
-    transcribing with a fresh one or none, except later parts of the multipart
-    batch that member started (`audioUploadBatchBy`); a failed checkpoint
-    lookup refuses. A creator's live recording is never overwritten. Member uploads set the non-owner source
-    marker (at presign time for audio/files) and `Attachment.uploadedBy`.
-    Member presigned PUTs expire after 5 minutes (the creator keeps 1 hour).
-    Accepted residual window: the transcribe trigger starts transcription for
-    any audio object under `audio/{creator}/{meeting}/` without a bound
-    `audioKey` (only recovered keys require one, `recoveryAudioEvent`,
-    `backend/cmd/transcribe/main.go:491`), so a member removed after receiving
-    a presign can still start a transcription for at most 5 minutes.
+  - Image/file uploads, rediarize and recovery work for members (audio crop,
+    the simulator and project links stay creator-only until the follow-up
+    change); recovery requires a checkpoint quiet for 10 minutes (409
+    `RECORDING_STILL_ACTIVE`). Audio upload is creator-only (403): the S3
+    trigger transcribes any object under `audio/{creator}/{meeting}/` before
+    a completion or batch check, so member audio waits for a separate staging
+    prefix design. Member uploads set the non-owner source marker (at presign
+    time for files) and `Attachment.uploadedBy`; their presigned PUTs expire
+    after 5 minutes (the creator keeps 1 hour).
   - Creator-only: delete, the Notion page reference and sharing-safe
     regeneration. Strangers get 404 rather than 403 on these routes.
 

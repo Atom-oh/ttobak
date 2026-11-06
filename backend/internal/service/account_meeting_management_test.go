@@ -3,16 +3,9 @@ package service
 import (
 	"context"
 	"errors"
-	"fmt"
-	"io"
-	"net/http"
-	"path"
-	"strings"
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 )
@@ -441,56 +434,22 @@ func TestRediarizeUsesCreatorAudioPrefix(t *testing.T) {
 	}
 }
 
-func TestMemberAudioPresignNeverOverwritesALiveRecording(t *testing.T) {
-	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
-	recording := &model.Meeting{UserID: "owner", MeetingID: "m", Status: model.StatusRecording}
-	done := &model.Meeting{UserID: "owner", MeetingID: "m", Status: model.StatusDone}
-	for _, name := range []string{"recording_progress.webm", "recording_progress.m4a"} {
-		if err := memberAudioWriteAllowed("member", done, name, 1, time.Time{}, now); !errors.Is(err, ErrForbidden) {
-			t.Fatalf("member checkpoint %s presign: %v", name, err)
+// Audio stays creator-only (the S3 trigger transcribes the creator prefix
+// before completion checks); managers keep image and file uploads.
+func TestMemberAudioUploadIsCreatorOnly(t *testing.T) {
+	for _, tc := range []struct {
+		category, actor string
+		want            error
+	}{
+		{"audio", "member", ErrMemberAudioUpload}, {"image", "member", nil}, {"file", "member", nil},
+		{"audio", "owner", nil}, {"image", "owner", nil},
+	} {
+		if err := memberAudioRefused(tc.category, tc.actor, "owner"); !errors.Is(err, tc.want) || (tc.want == nil && err != nil) {
+			t.Fatalf("%s by %s: %v", tc.category, tc.actor, err)
 		}
 	}
-	for _, checkpoint := range []time.Time{{}, now.Add(-9 * time.Minute)} {
-		if err := memberAudioWriteAllowed("member", recording, "extra.webm", 1, checkpoint, now); !errors.Is(err, ErrRecordingStillActive) {
-			t.Fatalf("member audio during an active recording (%v): %v", checkpoint, err)
-		}
-	}
-	transcribing := *recording
-	transcribing.Status = model.StatusTranscribing
-	if err := memberAudioWriteAllowed("member", &transcribing, "extra.webm", 1, now.Add(-time.Minute), now); !errors.Is(err, ErrRecordingStillActive) {
-		t.Fatalf("member audio while transcribing right after a recording: %v", err)
-	}
-	if err := memberAudioWriteAllowed("member", &transcribing, "extra.webm", 1, time.Time{}, now); !errors.Is(err, ErrRecordingStillActive) {
-		t.Fatalf("member single-file audio on a transcribing meeting without a batch record: %v", err)
-	}
-	if err := memberAudioWriteAllowed("member", recording, "extra.webm", 1, now.Add(-10*time.Minute), now); err != nil {
-		t.Fatalf("stale recording allows member audio: %v", err)
-	}
-	if err := memberAudioWriteAllowed("member", done, "extra.webm", 1, time.Time{}, now); err != nil {
-		t.Fatalf("member audio on a done meeting: %v", err)
-	}
-	if err := memberAudioWriteAllowed("owner", recording, "recording_progress.webm", 1, time.Time{}, now); err != nil {
-		t.Fatalf("creator checkpoint presign changed: %v", err)
-	}
-}
-
-// Presign and CompleteUpload share checkMemberAudioWrite (key base name).
-func TestMemberAudioCompletionUsesThePresignGuard(t *testing.T) {
-	svc := &UploadService{} // no S3 client: an unread checkpoint counts as active
-	recording := &model.Meeting{UserID: "owner", MeetingID: "m", Status: model.StatusRecording}
-	done := &model.Meeting{UserID: "owner", MeetingID: "m", Status: model.StatusDone}
-	checkpointKey := path.Base("audio/owner/m/recording_progress.webm")
-	if err := svc.checkMemberAudioWrite(context.Background(), "member", done, checkpointKey, 1); !errors.Is(err, ErrForbidden) {
-		t.Fatalf("member completion of a checkpoint key: %v", err)
-	}
-	if err := svc.checkMemberAudioWrite(context.Background(), "member", recording, path.Base("audio/owner/m/extra_1.webm"), 1); !errors.Is(err, ErrRecordingStillActive) {
-		t.Fatalf("member completion during an active recording: %v", err)
-	}
-	if err := svc.checkMemberAudioWrite(context.Background(), "member", done, path.Base("audio/owner/m/extra_1.webm"), 1); err != nil {
-		t.Fatalf("member completion on a done meeting: %v", err)
-	}
-	if err := svc.checkMemberAudioWrite(context.Background(), "owner", recording, checkpointKey, 1); err != nil {
-		t.Fatalf("creator completion changed: %v", err)
+	if !errors.Is(ErrMemberAudioUpload, ErrForbidden) {
+		t.Fatal("member audio must map to 403")
 	}
 }
 
@@ -505,7 +464,7 @@ func TestMemberPresignsAreShortLivedAndMarkSources(t *testing.T) {
 		category, actor string
 		want            bool
 	}{
-		{"audio", "member", true}, {"file", "member", true}, {"image", "member", false},
+		{"audio", "member", false}, {"file", "member", true}, {"image", "member", false},
 		{"audio", "owner", false}, {"file", "owner", false},
 	} {
 		if got := presignMarksSourceEdit(tc.category, tc.actor, "owner"); got != tc.want {
@@ -513,64 +472,3 @@ func TestMemberPresignsAreShortLivedAndMarkSources(t *testing.T) {
 		}
 	}
 }
-
-// A member batch records its starter; only its later parts pass uncheckpointed.
-func TestMemberMultipartBatchDoesNotDeadlock(t *testing.T) {
-	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
-	meeting := &model.Meeting{UserID: "owner", MeetingID: "m", Status: model.StatusDone}
-	for part := 0; part < 3; part++ {
-		name := fmt.Sprintf("part_%03d_take.webm", part)
-		for _, stage := range []string{"presign", "complete"} {
-			if err := memberAudioWriteAllowed("member", meeting, name, 3, time.Time{}, now); err != nil {
-				t.Fatalf("part %d %s: %v", part, stage, err)
-			}
-		}
-		// the first completion pre-allocates the batch for this member
-		meeting.Status, meeting.AudioUploadBatchBy = model.StatusTranscribing, "member"
-	}
-	if err := memberAudioWriteAllowed("other", meeting, "part_001_take.webm", 3, time.Time{}, now); !errors.Is(err, ErrRecordingStillActive) {
-		t.Fatalf("a different member joined someone else's batch: %v", err)
-	}
-	unrecorded := &model.Meeting{UserID: "owner", MeetingID: "m", Status: model.StatusTranscribing}
-	if err := memberAudioWriteAllowed("member", unrecorded, "part_001_take.webm", 3, time.Time{}, now); !errors.Is(err, ErrRecordingStillActive) {
-		t.Fatalf("transcribing meeting without a batch record: %v", err)
-	}
-	recording := &model.Meeting{UserID: "owner", MeetingID: "m", Status: model.StatusRecording}
-	if err := memberAudioWriteAllowed("member", recording, "part_000_take.webm", 3, now.Add(-2*time.Minute), now); !errors.Is(err, ErrRecordingStillActive) {
-		t.Fatalf("creator recording with a fresh checkpoint: %v", err)
-	}
-	if err := memberAudioWriteAllowed("member", meeting, "part_000_take.webm", 3, now.Add(-2*time.Minute), now); !errors.Is(err, ErrRecordingStillActive) {
-		t.Fatalf("transcribing with a fresh checkpoint: %v", err)
-	}
-}
-
-// Lost-response retries of a bound key skip the guard.
-func TestMemberAudioRetryOfABoundKey(t *testing.T) {
-	m := &model.Meeting{AudioKey: "k", AudioKeys: []string{"", "p"}}
-	for req, want := range map[model.UploadCompleteRequest]bool{
-		{Key: "k"}: true, {Key: "x"}: false, {Key: "p", TotalParts: 2, PartIndex: 1}: true,
-		{Key: "p", TotalParts: 3, PartIndex: 2}: false, {}: false,
-	} {
-		if got := memberAudioAlreadyBound(m, &req); got != want {
-			t.Fatalf("%+v: %v", req, got)
-		}
-	}
-}
-
-// Any checkpoint lookup failure other than "missing" refuses a member.
-func TestMemberAudioGuardFailsClosedOnListErrors(t *testing.T) {
-	client := s3.New(s3.Options{Region: "ap-northeast-2", Credentials: aws.AnonymousCredentials{}, UsePathStyle: true,
-		BaseEndpoint: aws.String("https://s3.test"), RetryMaxAttempts: 1,
-		HTTPClient: s3Fail(func(r *http.Request) (*http.Response, error) {
-			return &http.Response{StatusCode: 500, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("<Error><Code>InternalError</Code></Error>")), Request: r}, nil
-		})})
-	svc := &UploadService{s3Client: client, bucketName: "bucket"}
-	batch := &model.Meeting{UserID: "owner", MeetingID: "m", Status: model.StatusTranscribing, AudioUploadBatchBy: "member"}
-	if err := svc.checkMemberAudioWrite(context.Background(), "member", batch, "part_001_take.webm", 3); !errors.Is(err, ErrRecordingStillActive) {
-		t.Fatalf("S3 list error must refuse: %v", err)
-	}
-}
-
-type s3Fail func(*http.Request) (*http.Response, error)
-
-func (f s3Fail) Do(r *http.Request) (*http.Response, error) { return f(r) }

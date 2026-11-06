@@ -70,8 +70,8 @@ func (h *UploadHandler) GetPresignedURL(w http.ResponseWriter, r *http.Request) 
 	response, err := h.uploadService.GeneratePresignedUploadURL(ctx, userID, &req)
 	if err != nil {
 		switch {
-		case errors.Is(err, service.ErrRecordingStillActive):
-			writeError(w, http.StatusConflict, "RECORDING_STILL_ACTIVE", "생성자가 아직 녹음 중일 수 있습니다. 마지막 저장 후 10분이 지나면 업로드할 수 있습니다.")
+		case errors.Is(err, service.ErrMemberAudioUpload):
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "오디오 업로드는 회의 생성자만 할 수 있습니다.")
 		case errors.Is(err, service.ErrNotFound):
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
 		case errors.Is(err, service.ErrForbidden):

@@ -180,15 +180,10 @@ func TestAttachmentHTTPRejectsUnknownDuplicateAndInvalidQueries(t *testing.T) {
 	}
 }
 
-func TestUploadCompletionMapsActiveRecordingToConflict(t *testing.T) {
+func TestMemberAudioUploadIsForbidden(t *testing.T) {
 	w := httptest.NewRecorder()
-	writeAttachmentError(w, fmt.Errorf("complete: %w", service.ErrRecordingStillActive))
-	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "RECORDING_STILL_ACTIVE") {
+	writeAttachmentError(w, fmt.Errorf("complete: %w", service.ErrMemberAudioUpload))
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "생성자만") {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
-	}
-	w = httptest.NewRecorder()
-	writeAttachmentError(w, repository.ErrAudioBatchInProgress)
-	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "RECORDING_STILL_ACTIVE") {
-		t.Fatal(w.Code, w.Body)
 	}
 }

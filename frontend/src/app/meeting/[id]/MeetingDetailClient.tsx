@@ -567,7 +567,8 @@ function MeetingDetailContent() {
   const canEdit = meeting.permission === 'edit' || (!meeting.isShared && meeting.permission !== 'read');
   const canEditNotes = canEdit && meeting.supportsNotesComparison === true && typeof meeting.notesRevision === 'string';
   // Server capability: creator or live account-team member manages shares, links,
-  // uploads and recovery; delete and crop stay isCreator-only.
+  // file uploads and recovery; delete, crop and audio upload (and its KB
+  // promotion) stay isCreator-only.
   const { isCreator, canManage: canManageAssociations } = meetingCapabilities(meeting, user?.userId);
   const canUpload = canManageAssociations;
 
@@ -930,7 +931,7 @@ function MeetingDetailContent() {
                 <AudioCropEditor key={`${meeting.meetingId}:${audioRevision}`} meetingId={meeting.meetingId} audioUrl={audioUrl || audioUrls[0]} duration={meeting.duration}
                   dirty={summaryDirty || titleDirty || transcriptDirty || notesDirty} onCropped={(id) => router.push(`/meeting/${id}`)} />
               )}
-              {canUpload && !meeting.audioCrop && (meeting.status === 'done' || meeting.status === 'error') && !showAudioUploader && (
+              {isCreator && !meeting.audioCrop && (meeting.status === 'done' || meeting.status === 'error') && !showAudioUploader && (
                 <div className="flex justify-center mt-4">
                   <button
                     onClick={() => setShowAudioUploader(true)}
@@ -941,11 +942,11 @@ function MeetingDetailContent() {
                   </button>
                 </div>
               )}
-              {showAudioUploader && canUpload && (
+              {showAudioUploader && isCreator && (
                 <AudioUploader meetingId={meeting.meetingId} onUploadComplete={() => { setShowAudioUploader(false); refetchMeeting(); }} />
               )}
             </>
-          ) : canUpload && !meeting.audioCrop && (meeting.status === 'done' || meeting.status === 'error') && !hasAudio ? (
+          ) : isCreator && !meeting.audioCrop && (meeting.status === 'done' || meeting.status === 'error') && !hasAudio ? (
             <AudioUploader meetingId={meeting.meetingId} onUploadComplete={refetchMeeting} />
           ) : null}
           </div>
