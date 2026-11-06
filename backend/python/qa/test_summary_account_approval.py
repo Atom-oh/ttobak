@@ -97,14 +97,15 @@ class AccountApprovalSourceTests(_SourceFixture, unittest.TestCase):
         self.assertNotEqual(before['revision'], after['revision'])
         self.assertEqual(before['indexRevision'], after['indexRevision'])
 
-    def test_content_change_after_approval_withholds_derivation(self):
+    def test_content_change_after_approval_still_shares_current_derivation(self):
+        # Publication shares current content; approval staleness no longer withholds it.
         record = self.approved_meeting()
         record['content'] = 'replacement'
         snapshot = self.source_reader.read('reader', 'USER#owner', 'MEETING#meeting')
-        self.assertNotIn('content', snapshot['fields'])
-        self.assertNotIn('actionItems', snapshot['fields'])
+        self.assertEqual(snapshot['fields']['content'], 'replacement')
+        self.assertIn('actionItems', snapshot['fields'])
         self.assertEqual(snapshot['fields']['notes'], 'raw note')
-        self.assertEqual(snapshot['fields']['summaryReadRestriction'], 'SHARING_REGEN_REQUIRED')
+        self.assertNotIn('summaryReadRestriction', snapshot['fields'])
 
     def test_stamp_rotation_between_metadata_and_body_rejects_snapshot(self):
         self.approved_meeting()
@@ -263,7 +264,9 @@ class AccountApprovalInheritedTests(unittest.TestCase):
         self.assertFalse(access._source_is_current('reader', dependency))
         record['accountId'] = 'child'
         snapshot = handler._source_reader().read('reader', 'USER#owner', 'MEETING#m')
-        self.assertEqual(snapshot['fields']['summaryReadRestriction'], 'SHARING_REGEN_REQUIRED')
+        # A stale approval audience no longer withholds published content.
+        self.assertNotIn('summaryReadRestriction', snapshot['fields'])
+        self.assertEqual(snapshot['fields']['content'], record['content'])
 
     def test_inherited_legacy_insights_require_current_disclosure_revision(self):
         from account_reads import StrictAccountReader
@@ -277,6 +280,6 @@ class AccountApprovalInheritedTests(unittest.TestCase):
         self.assertEqual([row['text'] for row in result['insights']], ['PRIVATE current'])
         self.assertEqual(result['inheritedFromAccountId'], 'root')
         record['summaryAccountApproval']['accountId'] = 'root'
-        restricted = StrictAccountReader(self.table).get_account_insights('reader', 'grandchild').value
-        self.assertEqual(restricted['insights'], [])
-        self.assertEqual(restricted['summaryReadRestriction'], 'SHARING_REGEN_REQUIRED')
+        # Approval audience no longer gates insights; revision freshness still does.
+        current = StrictAccountReader(self.table).get_account_insights('reader', 'grandchild').value
+        self.assertEqual([row['text'] for row in current['insights']], ['PRIVATE current'])

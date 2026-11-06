@@ -122,7 +122,7 @@ func TestListMeetings_LaterTeamMemberAutomaticallySeesPublishedMeetings(t *testi
 	}
 }
 
-func TestListMeetings_LaterGuardedTeamMemberCannotReadPrivateDerivatives(t *testing.T) {
+func TestListMeetings_LaterTeamMemberReadsPublishedDerivatives(t *testing.T) {
 	for _, safe := range []bool{false, true} {
 		t.Run(fmt.Sprintf("safe=%v", safe), func(t *testing.T) {
 			repo, svc := publishedTeamMeeting(t)
@@ -144,12 +144,10 @@ func TestListMeetings_LaterGuardedTeamMemberCannotReadPrivateDerivatives(t *test
 				t.Fatalf("team list unavailable: response=%+v error=%v", got, err)
 			}
 			item := got.Meetings[0]
-			if safe {
-				if item.Summary != meeting.Content || len(item.Tags) != 1 || item.Sentiment != meeting.Sentiment {
-					t.Fatalf("safe derived view lost: %+v", item)
-				}
-			} else if item.Summary != "" || len(item.Tags) != 0 || item.Sentiment != "" {
-				t.Fatalf("inherited team stream leaked private derivatives: %+v", item)
+			// Account publication shares the current summary regardless of
+			// privacy provenance (ADR-049 2026-11-06 amendment).
+			if item.Summary != meeting.Content || len(item.Tags) != 1 || item.Sentiment != meeting.Sentiment {
+				t.Fatalf("published derived view withheld (safe=%v): %+v", safe, item)
 			}
 			if meeting.Content != "PRIVATE_PREDECESSOR" || len(meeting.Tags) != 1 || meeting.Sentiment != "PRIVATE_SENTIMENT" {
 				t.Fatal("list projection mutated canonical content")

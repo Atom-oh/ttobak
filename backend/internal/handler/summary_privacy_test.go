@@ -49,7 +49,7 @@ func (r *privacyActionHandlerRepo) CompleteActionAnalysis(context.Context, strin
 	return errors.New("unexpected action analysis write")
 }
 
-func TestSummaryPrivacyHandlersDoNotRestoreGuardedActionItems(t *testing.T) {
+func TestSummaryPrivacyHandlersShowPublishedActionItemsToMembers(t *testing.T) {
 	repo := &privacyActionHandlerRepo{mockHandlerMeetingRepo: newMockHandlerMeetingRepo()}
 	repo.addMeeting(&model.Meeting{
 		UserID: "owner", MeetingID: "meeting", Status: model.StatusDone,
@@ -64,28 +64,25 @@ func TestSummaryPrivacyHandlersDoNotRestoreGuardedActionItems(t *testing.T) {
 	actions := service.NewActionItemsAnalysisService(repo, meetings, nil, nil)
 	detail := &MeetingHandler{meetingService: meetings, actionItemsService: actions}
 	items := NewActionItemsHandler(actions)
+	// Account publication shares current derived content with members.
 	for _, endpoint := range []string{"detail", "action-items"} {
 		t.Run(endpoint, func(t *testing.T) {
 			req := withChiParam(withUserCtx(httptest.NewRequest(http.MethodGet, "/", nil), "reader"), "meetingId", "meeting")
 			w := httptest.NewRecorder()
-			expected := http.StatusOK
 			if endpoint == "detail" {
 				detail.GetMeeting(w, req)
 			} else {
-				expected = http.StatusConflict
 				items.Get(w, req)
 			}
-			if w.Code != expected || strings.Contains(w.Body.String(), "PRIVATE_ACTION_MARKER") ||
-				!strings.Contains(w.Body.String(), "SHARING_REGEN_REQUIRED") {
-				t.Fatalf("restricted endpoint=%s status=%d body=%s", endpoint, w.Code, w.Body)
+			if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "PRIVATE_ACTION_MARKER") ||
+				strings.Contains(w.Body.String(), "SHARING_REGEN_REQUIRED") {
+				t.Fatalf("published endpoint=%s status=%d body=%s", endpoint, w.Code, w.Body)
 			}
-			if endpoint == "detail" && !strings.Contains(w.Body.String(), "parent user notes") {
-				t.Fatal("restricted derived read removed the authorized raw notes")
+			if endpoint == "detail" && (!strings.Contains(w.Body.String(), "parent user notes") ||
+				!strings.Contains(w.Body.String(), "PRIVATE_PREDECESSOR")) {
+				t.Fatal("published detail lost notes or summary")
 			}
 		})
-	}
-	if repo.statusReads != 0 {
-		t.Fatal("guarded action read consulted canonical analysis state")
 	}
 	for _, user := range []string{"owner", "direct"} {
 		repo.shares["direct|meeting"] = &model.Share{
@@ -99,7 +96,7 @@ func TestSummaryPrivacyHandlersDoNotRestoreGuardedActionItems(t *testing.T) {
 	}
 }
 
-func TestSummaryPrivacyDetailRechecksLateRestrictionAndRevocation(t *testing.T) {
+func TestSummaryPrivacyDetailRechecksLateRevocation(t *testing.T) {
 	t.Setenv(service.SummaryPrivacyReaderEnv, "0")
 	for _, change := range []string{"membership", "publication", "revocation", "forbidden"} {
 		t.Run(change, func(t *testing.T) {
@@ -139,13 +136,17 @@ func TestSummaryPrivacyDetailRechecksLateRestrictionAndRevocation(t *testing.T) 
 				expected = http.StatusForbidden
 			}
 			body := w.Body.String()
-			if repo.statusReads == 0 || w.Code != expected || strings.Contains(body, "PRIVATE_CONTENT_MARKER") ||
-				strings.Contains(body, "PRIVATE_ACTION_MARKER") {
+			if repo.statusReads == 0 || w.Code != expected {
 				t.Fatalf("late %s: status=%d body=%s", change, w.Code, body)
 			}
+			if expected != http.StatusOK && (strings.Contains(body, "PRIVATE_CONTENT_MARKER") ||
+				strings.Contains(body, "PRIVATE_ACTION_MARKER")) {
+				t.Fatalf("late %s leaked content: %s", change, body)
+			}
+			// Late privacy-marker changes no longer withhold published content.
 			if expected == http.StatusOK && (!strings.Contains(body, "authorized raw notes") ||
-				!strings.Contains(body, `"derivedReadRestricted":true`) || !strings.Contains(body, "SHARING_REGEN_REQUIRED")) {
-				t.Fatalf("late %s lost current raw projection: %s", change, body)
+				!strings.Contains(body, "PRIVATE_CONTENT_MARKER") || strings.Contains(body, `"derivedReadRestricted":true`)) {
+				t.Fatalf("late %s withheld published content: %s", change, body)
 			}
 			if meeting.Content != "PRIVATE_CONTENT_MARKER" {
 				t.Fatal("read projection changed canonical content")

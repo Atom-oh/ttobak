@@ -152,7 +152,7 @@ func TestUpdateSpeakersCanCorrectExistingNameAndPreservesActionMetadata(t *testi
 	}
 }
 
-func TestSharedSpeakerRenamePreservesRestrictedDerivedContent(t *testing.T) {
+func TestSharedSpeakerRenameByAccountMemberUpdatesPublishedContent(t *testing.T) {
 	for _, cachedShare := range []bool{false, true} {
 		t.Run(fmt.Sprintf("cached-share=%t", cachedShare), func(t *testing.T) {
 			repo := newMockMeetingRepo()
@@ -174,8 +174,9 @@ func TestSharedSpeakerRenamePreservesRestrictedDerivedContent(t *testing.T) {
 			}
 			svc := newMeetingServiceWithRepo(repo)
 			view, _, err := svc.checkAccess(context.Background(), "reader", "meeting")
-			if err != nil || !view.SummaryReadRestricted || view.Content != "" || view.ActionItems != "" {
-				t.Fatalf("test did not exercise the restricted account projection: view=%+v err=%v", view, err)
+			// Published account meetings show current derived content to members.
+			if err != nil || view.SummaryReadRestricted || view.Content != original.Content || view.ActionItems != original.ActionItems {
+				t.Fatalf("account member did not read published derived content: view=%+v err=%v", view, err)
 			}
 			_, err = svc.UpdateSpeakers(context.Background(), "reader", "meeting",
 				&model.UpdateSpeakersRequest{SpeakerMap: map[string]string{"spk_0": "Kim"}})
@@ -183,14 +184,17 @@ func TestSharedSpeakerRenamePreservesRestrictedDerivedContent(t *testing.T) {
 				t.Fatal(err)
 			}
 			stored := repo.meetingsByID["meeting"]
-			if stored.Content != original.Content || stored.ActionItems != original.ActionItems ||
+			// The member now reads the canonical summary, so the ADR-051 rename
+			// applies to it; untouched derived fields stay canonical.
+			if stored.Content != "Private Kim summary" ||
+				stored.ActionItems != `[{"assignee":"Kim","id":"task","text":"Private task"}]` ||
 				stored.Insights != original.Insights || stored.Sentiment != original.Sentiment ||
 				stored.LiveSummary != original.LiveSummary || !reflect.DeepEqual(stored.Tags, original.Tags) ||
 				!reflect.DeepEqual(stored.LinkedMeetingIDs, original.LinkedMeetingIDs) {
-				t.Fatalf("projected fields were persisted over canonical derived content: %+v", stored)
+				t.Fatalf("rename changed derived content unexpectedly: %+v", stored)
 			}
 			if stored.TranscriptA != "[Kim]\nhello" || !strings.Contains(stored.TranscriptSegments, `"speaker":"Kim"`) {
-				t.Fatalf("restricted account member could not correct readable speaker attribution: %+v", stored)
+				t.Fatalf("account member could not correct readable speaker attribution: %+v", stored)
 			}
 		})
 	}

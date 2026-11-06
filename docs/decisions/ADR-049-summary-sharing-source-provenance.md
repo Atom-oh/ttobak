@@ -7,6 +7,10 @@ Partially superseded by [ADR-059](ADR-059-owner-approved-account-sharing.md):
 explicit owner Account disclosure may share current output without regeneration.
 Source provenance and direct-email/pending grant policy remain unchanged.
 
+Amended 2026-11-06 (see the amendment below): account-team publication now
+shares current derived content with every member; protected membership views
+no longer withhold it.
+
 ## Context
 
 Owner-private summaries can consume linked predecessor meetings. The resulting
@@ -83,6 +87,25 @@ It does not classify sensitive information a user placed in own notes/transcript
 or verified documents. Historical disclosure and existing grants are unchanged;
 no migration, backfill or revocation is implied. Legacy whole-item meeting writes
 are rejected after writer activation because they lack an observed source fence.
+
+## 2026-11-06 amendment: published meetings show their summary to members
+
+Product decision: a meeting published to an account team shows its current
+summary, action items, insights, tags and live summary to every member who can
+read it, including inherited (descendant-account) readers, exactly as the owner
+sees them. The Go `accountMemberNeedsSummaryGuard` and Python
+`enforce_summary_guard` predicates therefore return false for every member, so
+protected membership views and `SHARING_REGEN_REQUIRED` restrictions no longer
+apply to account readers.
+
+Unchanged: only meetings currently published to the account are readable
+(link-only classification grants nothing); live membership, publication and
+insight generation/revision freshness checks still apply; direct-email and
+pending grants keep the safe-source rule (`canCreateGrant`); provenance is
+still recorded. Accepted consequence: a summary generated from the owner's
+private linked meetings or documents becomes visible to the team when the
+meeting is published. Owners must not publish meetings whose summary should
+stay private.
 
 ## Evidence
 

@@ -283,6 +283,10 @@ visibility rule changes.
 
 ## Staged summary privacy scope
 
+Since the 2026-11-06 ADR-049 amendment, `enforce_summary_guard` returns false
+for every member, so the protected view below is dormant: account readers
+receive current derived summary/tasks. The mechanism remains for provenance.
+
 `summary_privacy.py` is wired into the handler, canonical source reader,
 indexed retrieval and strict account aggregation. Account access is checked
 before source bytes; a protected membership receives parent-owned raw notes and

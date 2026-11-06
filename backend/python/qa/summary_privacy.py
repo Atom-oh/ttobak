@@ -46,16 +46,9 @@ def needs_summary_guard(member, cutoff=None):
 
 
 def enforce_summary_guard(member):
-    if type(member) is not dict:
-        return True
-    version = member.get('summaryPrivacyVersion', 0)
-    if not _number(version) or version != 0:
-        return True
-    enabled = os.environ.get(READER_ENV, '')
-    if enabled in ('', '0'):
-        # Installation stage only, not proof that this is a legacy grant.
-        return False
-    return needs_summary_guard(member) if enabled == '1' else True
+    # Account-team publication shares current derived content with members
+    # (ADR-049 2026-11-06 amendment); mirrors the Go accountMemberNeedsSummaryGuard.
+    return False
 
 
 def safe_summary(record):

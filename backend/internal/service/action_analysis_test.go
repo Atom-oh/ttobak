@@ -321,27 +321,25 @@ func TestActionAnalysisUsesFreshSourceAfterAuthorization(t *testing.T) {
 	}
 }
 
-func TestActionAnalysisGuardedAccountReadDoesNotRestoreCanonicalItems(t *testing.T) {
+func TestActionAnalysisAccountMemberReadsPublishedItems(t *testing.T) {
 	s, repo, meeting := newAnalysisTest(t, nil)
 	meeting.AccountID, meeting.SharedToAccount = "account", true
 	repo.members["account|reader"] = &model.AccountMember{
 		AccountID: "account", UserID: "reader", SummaryPrivacyVersion: 1,
 	}
-	if got, err := s.Get(context.Background(), "reader", "meeting"); !errors.Is(err, ErrSummaryReadRestricted) || got != nil {
-		t.Fatalf("restricted account tasks restored: response=%+v error=%v", got, err)
-	}
-	for _, user := range []string{"owner", "direct"} {
+	// Account publication shares current tasks with members, like independent grants.
+	for _, user := range []string{"reader", "owner", "direct"} {
 		repo.shares[shareKey("direct", "meeting")] = &model.Share{
 			MeetingID: "meeting", OwnerID: "owner", SharedToID: "direct", Permission: model.PermissionRead,
 		}
 		got, err := s.Get(context.Background(), user, "meeting")
 		if err != nil || len(got.ActionItems) != 1 || got.ActionItems[0].ID != "old" {
-			t.Fatalf("independent %s grant lost: response=%+v error=%v", user, got, err)
+			t.Fatalf("%s grant lost published tasks: response=%+v error=%v", user, got, err)
 		}
 	}
 }
 
-func TestActionAnalysisFreshReadRevalidatesPrivacyAndAccess(t *testing.T) {
+func TestActionAnalysisFreshReadRevalidatesAccess(t *testing.T) {
 	for _, change := range []string{"private-summary", "revoked-membership"} {
 		t.Run(change, func(t *testing.T) {
 			s, repo, meeting := newAnalysisTest(t, nil)
@@ -361,12 +359,16 @@ func TestActionAnalysisFreshReadRevalidatesPrivacyAndAccess(t *testing.T) {
 					delete(repo.members, "account|reader")
 				}
 			}
-			expected := ErrSummaryReadRestricted
+			got, err := s.Get(context.Background(), "reader", "meeting")
 			if change == "revoked-membership" {
-				expected = ErrNotFound
+				if !errors.Is(err, ErrNotFound) || got != nil {
+					t.Fatalf("fresh tasks bypassed revoked membership: response=%+v error=%v", got, err)
+				}
+				return
 			}
-			if got, err := s.Get(context.Background(), "reader", "meeting"); !errors.Is(err, expected) || got != nil {
-				t.Fatalf("fresh tasks bypassed current %s: response=%+v error=%v", change, got, err)
+			// A private privacy state no longer withholds published tasks.
+			if err != nil || got == nil {
+				t.Fatalf("published tasks withheld after privacy change: response=%+v error=%v", got, err)
 			}
 		})
 	}

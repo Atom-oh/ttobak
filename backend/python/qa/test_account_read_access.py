@@ -152,17 +152,18 @@ class DescendantReadsTests(unittest.TestCase):
         self.table.after_read = move
         self.assertIsNone(read_current_document(self.table, 'reader', 'ACCOUNT#grandchild', 'doc'))
 
-    def test_inherited_insights_withhold_unsafe_derivations_and_private_meeting_titles(self):
+    def test_inherited_insights_show_published_derivations_and_hide_private_meeting_titles(self):
         self.put(PK='ACCOUNT#grandchild', SK='INSIGHT#2026-10-29T00:00:00Z#m#0',
                  accountId='grandchild', entityType='ACCOUNT_INSIGHT', sourceType='meeting',
                  sourceId='m', sourceUserId='owner', occurredAt='2026-10-29T00:00:00Z',
                  insightId='insight', type='risk', text='Unsafe copied insight')
         reader = StrictAccountReader(self.table)
+        # Account publication shares derived insights with inherited members.
         value = reader.get_account_insights('reader', 'grandchild').value
-        self.assertEqual(value['insights'], [])
-        self.assertEqual(value['summaryReadRestriction'], 'SHARING_REGEN_REQUIRED')
-        self.assertNotIn('Unsafe copied insight', json.dumps(value))
+        self.assertEqual([row['text'] for row in value['insights']], ['Unsafe copied insight'])
+        self.assertNotIn('summaryReadRestriction', value)
         self.table.items[('USER#owner', 'MEETING#m')]['sharedToAccount'] = False
+        self.assertNotIn('Unsafe copied insight', json.dumps(reader.get_account_insights('reader', 'grandchild').value))
         self.assertEqual(reader.get_account_brief('reader', 'grandchild').value['meetings'], [])
 
     def test_attachment_inventory_replay_and_continuation_bind_current_grant(self):
@@ -229,12 +230,13 @@ class DescendantReadsTests(unittest.TestCase):
         snapshot = handler._source_reader().read('reader', 'USER#owner', 'MEETING#m')
         self.assertIsNotNone(snapshot)
         self.assertEqual(snapshot['fields']['notes'], 'User note')
-        self.assertNotIn('content', snapshot['fields'])
-        self.assertEqual(snapshot['fields']['summaryReadRestriction'], 'SHARING_REGEN_REQUIRED')
+        # Published content is shared with inherited members.
+        self.assertEqual(snapshot['fields']['content'], 'Unsafe generated context')
+        self.assertNotIn('summaryReadRestriction', snapshot['fields'])
         text, error = handler._source_access().load_meeting_context('reader', 'm')
         self.assertIsNone(error)
         self.assertIn('Raw source', text)
-        self.assertNotIn('Unsafe generated context', text)
+        self.assertIn('Unsafe generated context', text)
         self.table.items[('USER#owner', 'MEETING#m')]['sharedToAccount'] = False
         self.assertEqual(handler._list_shared_meetings('reader'), [])
 

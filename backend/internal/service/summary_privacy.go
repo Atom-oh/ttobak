@@ -40,20 +40,12 @@ func bindLinkedSummarySources(ctx context.Context, repo interface {
 	return nil
 }
 
-func accountMemberNeedsSummaryGuard(member *model.AccountMember) bool {
-	if member == nil || member.SummaryPrivacyVersion != 0 {
-		return true
-	}
-	switch os.Getenv(SummaryPrivacyReaderEnv) {
-	case "", "0":
-		// Reader installation only. This is not proof of legacy eligibility;
-		// epoch enforcement is enabled only after the rollout fence is ready.
-		return false
-	case "1":
-		return member.NeedsSummaryPrivacyGuard(summaryPrivacyLegacyCutoff())
-	default:
-		return true
-	}
+// Publishing a meeting to an account team shares its current summary and
+// derived content with every member who can read it (ADR-049 2026-11-06
+// amendment). Privacy provenance is still recorded for owner tooling, but it
+// no longer hides published content from members.
+func accountMemberNeedsSummaryGuard(_ *model.AccountMember) bool {
+	return false
 }
 
 func summaryPrivacyLegacyCutoff() time.Time {

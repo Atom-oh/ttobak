@@ -44,12 +44,9 @@ func TestSummaryPrivacyAccountReadRetainsRawSourceAndExistingDirectGrant(t *test
 			view.TranscriptQuality.SpeakerProvenance != "acoustic" {
 			t.Fatal("privacy projection discarded current transcript provenance")
 		}
-		if user == "reader" {
-			if view.Content != "" || len(view.Tags) != 0 || !view.SummarySharing.DerivedReadRestricted {
-				t.Fatal("new account membership read old derived content")
-			}
-		} else if view.Content != meeting.Content || view.SummarySharing.DerivedReadRestricted {
-			t.Fatal("owner or existing direct grant lost its independent access")
+		// Account publication shares current derived content with members.
+		if view.Content != meeting.Content || len(view.Tags) != 1 || view.SummarySharing.DerivedReadRestricted {
+			t.Fatalf("%s did not read the published derived content", user)
 		}
 	}
 	if meeting.Content != "PRIVATE_PREDECESSOR" || len(meeting.Tags) != 1 {
@@ -57,25 +54,20 @@ func TestSummaryPrivacyAccountReadRetainsRawSourceAndExistingDirectGrant(t *test
 	}
 }
 
-func TestSummaryPrivacyInstallationAndFixedCutoffDoNotGrandfatherStampedMembers(t *testing.T) {
-	member := &model.AccountMember{AddedAt: time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)}
-	t.Setenv(SummaryPrivacyReaderEnv, "0")
-	if accountMemberNeedsSummaryGuard(member) {
-		t.Fatal("reader installation activated unmarked membership policy")
-	}
-	member.SummaryPrivacyVersion = 1
-	if !accountMemberNeedsSummaryGuard(member) {
-		t.Fatal("installation switch disabled a stamped membership's protection")
-	}
-	member.SummaryPrivacyVersion = 0
-	t.Setenv(SummaryPrivacyReaderEnv, "1")
-	t.Setenv(SummaryPrivacyCutoffEnv, "")
-	if !accountMemberNeedsSummaryGuard(member) {
-		t.Fatal("missing rollout cutoff established legacy eligibility")
-	}
-	t.Setenv(SummaryPrivacyCutoffEnv, "2026-10-12T12:00:00Z")
-	if accountMemberNeedsSummaryGuard(member) {
-		t.Fatal("valid pre-cutover membership was restricted")
+func TestSummaryPrivacyGuardIsOffForEveryMemberShape(t *testing.T) {
+	added := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	for _, env := range []string{"", "0", "1", "unexpected"} {
+		t.Setenv(SummaryPrivacyReaderEnv, env)
+		for _, cutoff := range []string{"", "2026-10-12T12:00:00Z", "2026-10-01T00:00:00Z"} {
+			t.Setenv(SummaryPrivacyCutoffEnv, cutoff)
+			for _, member := range []*model.AccountMember{
+				nil, {}, {AddedAt: added}, {AddedAt: added, SummaryPrivacyVersion: 1}, {SummaryPrivacyVersion: 2},
+			} {
+				if accountMemberNeedsSummaryGuard(member) {
+					t.Fatalf("env=%q cutoff=%q member=%+v kept the removed summary guard", env, cutoff, member)
+				}
+			}
+		}
 	}
 }
 
@@ -98,6 +90,7 @@ func TestSummaryPrivacyInsightCopiesRequireCurrentGenerationAndRevision(t *testi
 		t.Fatal("current safe insight copy was denied")
 	}
 	for _, field := range []string{"generation", "revision", "privacy", "hash"} {
+		stale := field == "generation" || field == "revision"
 		parent, copy := *meeting, insight
 		privacy := *meeting.SummaryPrivacy
 		parent.SummaryPrivacy = &privacy
@@ -111,13 +104,15 @@ func TestSummaryPrivacyInsightCopiesRequireCurrentGenerationAndRevision(t *testi
 		case "hash":
 			privacy.ContentSHA256 = strings.ToUpper(privacy.ContentSHA256)
 		}
-		if accountMeetingInsightAllowed(&parent, member, copy, "reader") {
-			t.Fatalf("stale or malformed %s authorized an insight body", field)
+		// Generation/revision freshness still fences copies; privacy state no
+		// longer withholds published insights from members.
+		if got := accountMeetingInsightAllowed(&parent, member, copy, "reader"); got == stale {
+			t.Fatalf("%s change: allowed=%v", field, got)
 		}
 	}
 }
 
-func TestSummaryPrivacyAccountInsightRestrictionIsNotSuccessfulEmptyEvidence(t *testing.T) {
+func TestSummaryPrivacyPublishedAccountInsightIsReadableByMembers(t *testing.T) {
 	repo := newMockAccountRepo()
 	repo.members["account|reader"] = &model.AccountMember{SummaryPrivacyVersion: 1}
 	repo.meetings["meeting"] = &model.Meeting{
@@ -130,9 +125,18 @@ func TestSummaryPrivacyAccountInsightRestrictionIsNotSuccessfulEmptyEvidence(t *
 		EntityType: model.EntityTypeInsight, AccountID: "account", SourceType: "meeting",
 		SourceID: "meeting", SourceUserID: "owner", OccurredAt: date, Text: "PRIVATE_INSIGHT",
 	}}
-	_, err := newAccountServiceWithRepo(repo).ListAccountInsights(
+	insights, err := newAccountServiceWithRepo(repo).ListAccountInsights(
 		context.Background(), "reader", "account", time.Time{}, time.Time{}, nil)
-	if !errors.Is(err, ErrSummaryReadRestricted) {
-		t.Fatal("restricted insight became an empty successful account read")
+	if errors.Is(err, ErrSummaryReadRestricted) || err != nil {
+		t.Fatalf("published insight was withheld: %v", err)
+	}
+	if len(insights) != 1 || insights[0].Text != "PRIVATE_INSIGHT" {
+		t.Fatalf("published insight missing: %+v", insights)
+	}
+	repo.meetings["meeting"].SharedToAccount = false
+	insights, err = newAccountServiceWithRepo(repo).ListAccountInsights(
+		context.Background(), "reader", "account", time.Time{}, time.Time{}, nil)
+	if err != nil || len(insights) != 0 {
+		t.Fatalf("unpublished meeting insight leaked: %+v %v", insights, err)
 	}
 }

@@ -109,8 +109,14 @@ func TestDescendantProjectReadFiltersPrivateSourcesAndDeniesMutation(t *testing.
 		}
 	}
 	insights, err := s.GetProjectInsights(ctx, "reader", "project", r.accounts["child"].CreatedAt, r.accounts["child"].CreatedAt, nil)
-	if err != nil || len(insights) != 1 || insights[0].SourceID != "published" {
-		t.Fatalf("safe independent source insights only: %+v/%v", insights, err)
+	// Every published source contributes insights; the unpublished one never does.
+	if err != nil || len(insights) != 2 {
+		t.Fatalf("published source insights: %+v/%v", insights, err)
+	}
+	for _, insight := range insights {
+		if insight.SourceID == "private" {
+			t.Fatal("unpublished source insight exposed")
+		}
 	}
 	if _, err := s.requireProjectAccess(ctx, "reader", "project"); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("ancestor owner gained existing mutation grant: %v", err)

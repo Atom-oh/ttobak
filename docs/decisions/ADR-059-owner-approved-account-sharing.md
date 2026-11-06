@@ -5,6 +5,8 @@ Date: 2026-11-04
 Supersedes: ADR-049's mandatory regeneration before an owner Account publication
 of private/unknown generated output. Its provenance, direct-email/pending grants,
 protected membership and conditional source publication rules remain in force.
+The 2026-11-06 ADR-049 amendment removes protected membership views: published
+meetings show current output to all members, so approval no longer gates reads.
 
 ## Context
 

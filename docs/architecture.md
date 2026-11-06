@@ -386,7 +386,7 @@ reads hydrate only the authorized chosen source and eligible segments. Every pag
 revalidates access/revision. The MCP adapter passes these pages through with its
 own byte ceiling; it no longer fetches full meeting detail for reading.
 Meeting discovery uses `/api/meeting-catalog` with bounded owned/direct/team
-queries, current-grant checks and summary privacy projection. It performs no
+queries and current-grant checks; account readers see current derived content. It performs no
 profile writes or invitation materialization. Vault manifest/file reads use
 `/api/vault/reading`: metadata discovery precedes authorized text hydration,
 and continuations bind current source bytes, membership and attachment groups.

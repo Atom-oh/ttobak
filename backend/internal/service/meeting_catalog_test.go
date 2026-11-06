@@ -319,21 +319,16 @@ func TestMeetingCatalogReadsNeverMaterializeInvitations(t *testing.T) {
 	}
 }
 
-func TestMeetingCatalogProtectsDerivedTeamContentAndPreservesIndependentGrants(t *testing.T) {
+func TestMeetingCatalogSharesPublishedTeamContentAndPreservesIndependentGrants(t *testing.T) {
 	s, r := catalogMeetingFixture()
 	r.members["a|reader"].SummaryPrivacyVersion = 1
 	r.shares["reader|team-01"] = &model.Share{MeetingID: "team-01", OwnerID: "author", SharedToID: "reader", Permission: "edit"}
 	r.shares["reader|team-02"] = &model.Share{MeetingID: "team-02", OwnerID: "author", SharedToID: "reader", Permission: "read", Origin: model.ShareOriginAccount}
 	rows := collectCatalogMeetings(t, s, r, MeetingCatalogIdentity{UserID: "reader"}, url.Values{})
-	for _, id := range []string{"team-00", "team-02"} {
-		if rows[id].Summary != "" || len(rows[id].Tags) != 0 || rows[id].Sentiment != "" ||
-			rows[id].SummaryReadRestriction != "SHARING_REGEN_REQUIRED" {
-			t.Fatalf("derived content leaked through %s", id)
-		}
-	}
-	for _, id := range []string{"owned-00", "direct-00", "team-01"} {
+	// Published team meetings share current derived content with members.
+	for _, id := range []string{"owned-00", "direct-00", "team-00", "team-01", "team-02"} {
 		if rows[id].Summary == "" || rows[id].SummaryReadRestriction != "" {
-			t.Fatalf("independent grant lost derived content: %s", id)
+			t.Fatalf("readable meeting lost derived content: %s", id)
 		}
 	}
 	if r.meetings["author|team-00"].Content == "" || len(r.meetings["author|team-00"].Tags) == 0 {

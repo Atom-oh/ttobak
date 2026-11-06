@@ -71,7 +71,7 @@ func TestOwnerAccountApprovalPreservesCurrentPrivateOutputForProtectedReader(t *
 	}
 }
 
-func TestOwnerAccountApprovalRejectsChangedSourceAndAudience(t *testing.T) {
+func TestAccountProjectionNoLongerDependsOnApproval(t *testing.T) {
 	for _, change := range []struct {
 		name string
 		edit func(*model.Meeting)
@@ -85,8 +85,12 @@ func TestOwnerAccountApprovalRejectsChangedSourceAndAudience(t *testing.T) {
 		t.Run(change.name, func(t *testing.T) {
 			meeting := approvedAccountMeeting(t)
 			change.edit(meeting)
-			if !projectAccountMeeting(meeting, &model.AccountMember{SummaryPrivacyVersion: 1}).SummaryReadRestricted {
-				t.Fatal("stale disclosure approval granted current derived access")
+			// Account publication shares current content; approval staleness
+			// no longer withholds it (ADR-049 2026-11-06 amendment).
+			projected := projectAccountMeeting(meeting, &model.AccountMember{SummaryPrivacyVersion: 1})
+			if projected.SummaryReadRestricted || projected.Content != meeting.Content ||
+				projected.ActionItems != meeting.ActionItems || projected.Insights != meeting.Insights {
+				t.Fatal("account projection withheld current derived content")
 			}
 		})
 	}

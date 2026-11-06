@@ -310,7 +310,7 @@ func accountReadingContinuation(t *testing.T, body []byte) string {
 	return page.Page.NextCursor
 }
 
-func TestAccountReadingPreservesPrivateAndCurrentInsightGuards(t *testing.T) {
+func TestAccountReadingBindsInsightsToCurrentSource(t *testing.T) {
 	for _, condition := range []string{"current", "stale-generation", "stale-insights", "private", "unknown"} {
 		t.Run(condition, func(t *testing.T) {
 			s, r := accountReadingMeetingInsightFixture()
@@ -325,17 +325,14 @@ func TestAccountReadingPreservesPrivateAndCurrentInsightGuards(t *testing.T) {
 				r.meetings["m-00"].SummaryPrivacy = nil
 			}
 			body, err := s.Read(context.Background(), "reader", "acct", url.Values{"section": {"insights"}})
-			if condition == "private" || condition == "unknown" {
-				if !errors.Is(err, ErrSummaryReadRestricted) || body != nil {
-					t.Fatal("restricted source became successful account evidence", err)
-				}
-				return
-			}
 			if err != nil || len(body) > 10000 || strings.Contains(string(body), "PRIVATE_EVIDENCE") {
-				t.Fatal("current insight read failed its bounds/privacy contract", err)
+				t.Fatal("insight read failed its bounds/evidence contract", err)
 			}
+			// Privacy state no longer withholds published insights; generation
+			// and revision freshness still bind them to the current source, so
+			// an absent generation ("unknown") cannot match the stored copy.
 			visible := strings.Contains(string(body), "CURRENT_INSIGHT")
-			if visible != (condition == "current") {
+			if visible != (condition == "current" || condition == "private") {
 				t.Fatal("insight freshness was not bound to the current source", condition)
 			}
 		})
@@ -363,12 +360,19 @@ func TestAccountReadingPinsInsightBytesAndSourceReadinessAcrossFragments(t *test
 			case "publication":
 				r.meetings["m-00"].SharedToAccount = false
 			case "privacy":
+				// Privacy state no longer gates published insights.
 				r.meetings["m-00"].SummaryPrivacy.State = model.SummaryPrivacyPrivate
-				want = ErrSummaryReadRestricted
+				want = nil
 			case "grant-epoch":
 				r.members["acct|reader"].SummaryPrivacyVersion++
 			}
 			body, err = s.Read(context.Background(), "reader", "acct", q)
+			if want == nil {
+				if err != nil || body == nil {
+					t.Fatal("privacy-only change interrupted a published insight read", err)
+				}
+				return
+			}
 			if !errors.Is(err, want) || body != nil {
 				t.Fatal("changed source/grant continued a previous fragment", err)
 			}
@@ -393,6 +397,13 @@ func TestAccountReadingRechecksInsightSourceBeforeReturningBytes(t *testing.T) {
 				}
 			}
 			body, err := s.Read(context.Background(), "reader", "acct", url.Values{"section": {"insights"}})
+			if change == "privacy" {
+				// A privacy-only change no longer withholds published insights.
+				if err != nil || !strings.Contains(string(body), "CURRENT_INSIGHT") {
+					t.Fatal("privacy-only change withheld a published insight", err)
+				}
+				return
+			}
 			if err == nil || body != nil {
 				t.Fatal("source changed during assembly but derived bytes escaped", change)
 			}
