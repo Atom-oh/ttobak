@@ -86,5 +86,9 @@
   "endpoint-service-availability-zones:account=180294183052:region=ap-northeast-2:serviceName=com.amazonaws.vpce.ap-northeast-2.vpce-svc-04e00839390fb475d": [
     "ap-northeast-2a",
     "ap-northeast-2c"
-  ]
+  ],
+  "security-group:account=180294183052:region=ap-northeast-2:securityGroupName=ttobak-otel-client:vpcId=vpc-04e77172c67f19814": {
+    "securityGroupId": "sg-01de26d1f226b8987",
+    "allowAllOutbound": false
+  }
 }

@@ -175,6 +175,9 @@ const gatewayStack = new GatewayStack(app, 'TtobakGatewayStack', {
   // convert-doc's PRIVATE_ISOLATED placement below is a GatewayStack
   // resource, not a WhisperStack dependency.
   vpcId: sharedVpcId,
+  // O2: VPC-attached ttobak-api exporting OTLP to TtobakObservabilityStack's
+  // collector (deploy that stack first). Default "false" leaves api unchanged.
+  apiTelemetryEnabled: app.node.tryGetContext('ttobak:apiTelemetryEnabled') === 'true',
   webSearchGatewayUrl: webSearchGatewayStack.gatewayUrl,
 });
 gatewayStack.addDependency(authStack);
