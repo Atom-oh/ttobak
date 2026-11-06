@@ -138,8 +138,15 @@ fn announce(app: &AppHandle, state: &MeetingState, event: &Event) {
     // A meeting's end offers to stop whatever native recording is running
     // now (started from the prompt or by hand), bound to that exact WAV so a
     // later recording is never stopped by this prompt.
+    if let Event::Tracking(d) = event {
+        // A meeting resumed during the recording: no stop is pending any more.
+        *state.started.lock() = None;
+        log::info!("native-meeting-resumed: {}", d.source.kind.id());
+        let _ = app.emit_to("main", "native-meeting-resumed", detection_json(d));
+        return;
+    }
     let recording = match event {
-        Event::Detected(_) => false,
+        Event::Detected(_) | Event::Tracking(_) => false,
         Event::Ended(d) => {
             let current = app.state::<RecorderState>().recorder.lock().snapshot().path;
             let running = current.is_some();
@@ -148,6 +155,7 @@ fn announce(app: &AppHandle, state: &MeetingState, event: &Event) {
         }
     };
     let (name, detection, notice) = match event {
+        Event::Tracking(_) => return,
         Event::Detected(d) => (
             "native-meeting-detected",
             d,

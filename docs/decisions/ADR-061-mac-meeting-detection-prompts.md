@@ -53,6 +53,9 @@ without a user confirmation.
   prompt or by hand), the SPA shows a 30 s countdown, then stops and uploads that
   recording unless the user keeps recording. The stop is bound to the WAV path
   running when the meeting ended, so a later recording is never stopped by it.
+  The automatic path only ever sends that one stop. If the meeting's audio
+  returns during the countdown, the app reports it as resumed and clears the
+  binding, so the pending stop is cancelled.
 - Rust emits `native-meeting-detected`/`native-meeting-ended` to the main window
   and posts a local notification. The SPA banner's confirmation calls
   `meeting_detection_respond`, which sends the start/stop through the same

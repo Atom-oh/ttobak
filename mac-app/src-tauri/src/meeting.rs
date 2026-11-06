@@ -229,6 +229,9 @@ pub struct Detection {
 pub enum Event {
     Detected(Detection),
     Ended(Detection),
+    /// A meeting found while recording, tracked without a prompt. It retires
+    /// any pending stop from an earlier end (the meeting resumed).
+    Tracking(Detection),
 }
 
 /// Debounces observations into detected/ended announcements.
@@ -308,9 +311,11 @@ impl Detector {
             };
             self.active = Some(detection.clone());
             self.silent = recording;
-            if !recording {
-                events.push(Event::Detected(detection));
-            }
+            events.push(if recording {
+                Event::Tracking(detection)
+            } else {
+                Event::Detected(detection)
+            });
         }
         events
     }
@@ -481,7 +486,11 @@ mod tests {
     fn stays_quiet_while_recording() {
         let mut d = Detector::default();
         d.observe(0, &[ZOOM], true);
-        assert!(d.observe(10_000, &[ZOOM], true).is_empty());
+        // Tracked, never prompted, while recording.
+        assert!(matches!(
+            &d.observe(10_000, &[ZOOM], true)[..],
+            [Event::Tracking(_)]
+        ));
         // Once the recording stops, the still-running meeting is offered.
         assert!(matches!(
             &d.observe(11_000, &[ZOOM], false)[..],
@@ -494,11 +503,33 @@ mod tests {
         let mut d = Detector::default();
         d.observe(0, &[ZOOM], true);
         // Tracked silently: no prompt while recording.
-        assert!(d.observe(5_000, &[ZOOM], true).is_empty());
+        assert!(matches!(
+            &d.observe(5_000, &[ZOOM], true)[..],
+            [Event::Tracking(_)]
+        ));
         assert!(d.announced().is_none());
+        assert!(d.observe(6_000, &[ZOOM], true).is_empty());
         d.observe(10_000, &[], true);
         let events = d.observe(30_000, &[], true);
         assert!(matches!(&events[..], [Event::Ended(det)] if det.source == ZOOM));
+    }
+
+    #[test]
+    fn a_meeting_resuming_after_its_end_is_tracked_again() {
+        let mut d = Detector::default();
+        d.observe(0, &[ZOOM], true);
+        d.observe(3_000, &[ZOOM], true);
+        d.observe(4_000, &[], true);
+        assert!(matches!(
+            &d.observe(24_000, &[], true)[..],
+            [Event::Ended(_)]
+        ));
+        // Audio returns during the stop countdown.
+        d.observe(25_000, &[ZOOM], true);
+        assert!(matches!(
+            &d.observe(28_000, &[ZOOM], true)[..],
+            [Event::Tracking(_)]
+        ));
     }
 
     #[test]

@@ -55,6 +55,9 @@ export function NativeMicSelector({ value, onChange, disabled }: NativeMicSelect
   }, [disabled]);
 
   if (!devices) return null;
+  // Virtual loopbacks are hidden unless something actually uses them as a
+  // microphone (the default input or a meeting app's input).
+  const shown = devices.filter((d) => !d.is_virtual || d.is_default || d.used_by.length > 0 || d.uid === value);
 
   const meetingDevice = devices.find((d) => d.used_by.length > 0);
   const defaultDevice = devices.find((d) => d.is_default);
@@ -83,7 +86,7 @@ export function NativeMicSelector({ value, onChange, disabled }: NativeMicSelect
         className="min-h-10 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-surface px-3 text-sm text-slate-900 dark:text-text-main disabled:opacity-60"
       >
         <option value="">자동 — 회의 앱 마이크 따라가기</option>
-        {devices.map((d) => {
+        {shown.map((d) => {
           const notes = [d.used_by.length ? `${d.used_by.join(', ')} 사용 중` : '', d.is_default ? '기본' : '']
             .filter(Boolean)
             .join(' · ');

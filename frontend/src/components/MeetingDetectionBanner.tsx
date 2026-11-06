@@ -7,6 +7,7 @@ import {
   isTauri,
   onNativeMeetingDetected,
   onNativeMeetingEnded,
+  onNativeMeetingResumed,
   respondMeetingDetection,
   type NativeMeetingDetection,
 } from '@/lib/tauri';
@@ -37,25 +38,40 @@ export function MeetingDetectionBanner() {
   const [prompt, setPrompt] = useState<Prompt | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [remaining, setRemaining] = useState<number | null>(null);
-  const confirmRef = useRef<() => Promise<void>>(async () => undefined);
+  // Countdown to the automatic stop, bound to one ended detection.
+  const [countdown, setCountdown] = useState<{ id: string; remaining: number } | null>(null);
+  // Detections whose automatic stop already ran: it is attempted once only.
+  const autoStopped = useRef(new Set<string>());
 
-  // Countdown to the automatic stop of an ended meeting's recording.
   const endedId = prompt?.phase === 'ended' ? prompt.detection.detectionId : null;
   useEffect(() => {
     if (!endedId) {
-      setRemaining(null);
+      setCountdown(null);
       return;
     }
-    setRemaining(AUTO_STOP_SECONDS);
+    setCountdown({ id: endedId, remaining: AUTO_STOP_SECONDS });
     const timer = setInterval(() => {
-      setRemaining((value) => (value === null || value <= 0 ? value : value - 1));
+      setCountdown((c) => (c && c.id === endedId && c.remaining > 0 ? { ...c, remaining: c.remaining - 1 } : c));
     }, 1000);
     return () => clearInterval(timer);
   }, [endedId]);
+
+  // The automatic path can only stop, and only the ended detection it counted
+  // for; it never confirms any other prompt (ADR-061: no unconfirmed start).
   useEffect(() => {
-    if (remaining === 0 && !busy && !error) void confirmRef.current();
-  }, [remaining, busy, error]);
+    if (!countdown || countdown.remaining > 0 || countdown.id !== endedId) return;
+    if (autoStopped.current.has(countdown.id)) return;
+    autoStopped.current.add(countdown.id);
+    const id = countdown.id;
+    setBusy(true);
+    void respondMeetingDetection(id, 'stop')
+      .then((reply) => {
+        if ('error' in reply && !reply.ok) setError(reply.error.message);
+        else setPrompt((current) => (current?.detection.detectionId === id ? null : current));
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : String(err)))
+      .finally(() => setBusy(false));
+  }, [countdown, endedId]);
 
   useEffect(() => {
     if (!isTauri() || !isAuthenticated) return;
@@ -63,6 +79,10 @@ export function MeetingDetectionBanner() {
     const offDetected = onNativeMeetingDetected((detection) => {
       setError(null);
       setPrompt({ phase: 'detected', detection });
+    });
+    // The meeting's audio came back during the countdown: keep recording.
+    const offResumed = onNativeMeetingResumed(() => {
+      setPrompt((current) => (current?.phase === 'ended' ? null : current));
     });
     const offEnded = onNativeMeetingEnded((detection) => {
       setError(null);
@@ -83,6 +103,7 @@ export function MeetingDetectionBanner() {
       cancelled = true;
       offDetected();
       offEnded();
+      offResumed();
     };
   }, [isAuthenticated]);
 
@@ -115,15 +136,13 @@ export function MeetingDetectionBanner() {
     }
   };
 
-  confirmRef.current = confirm;
-
   const heading =
     phase === 'detected' ? `${detection.label} 회의가 감지됐어요` : `${detection.label} 회의가 끝난 것 같아요`;
   const body =
     phase === 'detected'
       ? '녹음을 시작하면 시스템 소리와 내 마이크를 함께 녹음합니다. 참석자에게 녹음 사실을 알려주세요.'
-      : remaining !== null && remaining > 0
-        ? `${remaining}초 후 녹음을 종료하고 업로드합니다.`
+      : countdown && countdown.id === detection.detectionId && countdown.remaining > 0
+        ? `${countdown.remaining}초 후 녹음을 종료하고 업로드합니다.`
         : '녹음을 종료하고 업로드하는 중입니다.';
 
   return (

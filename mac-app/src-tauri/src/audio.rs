@@ -1218,6 +1218,8 @@ pub mod macos {
         pub name: String,
         pub channels: usize,
         pub is_default: bool,
+        /// A virtual or aggregate device (often a loopback, not a microphone).
+        pub is_virtual: bool,
         /// Meeting apps capturing from this device now.
         pub used_by: Vec<String>,
         #[serde(skip)]
@@ -1235,25 +1237,28 @@ pub mod macos {
         .filter_map(|id| {
             let channels = input_channels(id);
             let uid = device_uid(id)?;
-            // Virtual loopbacks (Teams/Zoom audio devices) and aggregates are
-            // not microphones.
+            if channels == 0 || uid.starts_with(OWN_AGGREGATE_PREFIX) {
+                return None;
+            }
+            // Virtual devices and aggregates stay selectable (a noise-
+            // suppression microphone can be the real input); the picker
+            // hides them unless they are the default or a meeting app uses
+            // them, since most are loopbacks (Teams/Zoom audio devices).
             let transport = get_property::<u32>(
                 id,
                 kAudioDevicePropertyTransportType,
                 kAudioObjectPropertyScopeGlobal,
                 None,
             );
-            let not_a_microphone = transport.is_some_and(|t| {
+            let is_virtual = transport.is_some_and(|t| {
                 t == kAudioDeviceTransportTypeVirtual || t == kAudioDeviceTransportTypeAggregate
             });
-            if channels == 0 || not_a_microphone || uid.starts_with(OWN_AGGREGATE_PREFIX) {
-                return None;
-            }
             Some(InputDevice {
                 name: get_string(id, kAudioObjectPropertyName).unwrap_or_else(|| uid.clone()),
                 uid,
                 channels,
                 is_default: default == Some(id),
+                is_virtual,
                 used_by: Vec::new(),
                 id,
             })

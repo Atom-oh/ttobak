@@ -89,8 +89,12 @@ ACL for every command called from the remote SPA: each command must be listed in
   close the queue and join the worker before finalizing the WAV.
 - Without a requested device, capture uses the input device a meeting app is
   capturing from (Core Audio process `Devices`, input scope), else the system
-  default; `input_select.rs` holds the rules. Virtual/aggregate devices are not
-  offered as microphones.
+  default; `input_select.rs` holds the rules. Virtual/aggregate devices remain
+  selectable (a virtual noise-suppression microphone can be the real input); the
+  picker hides them unless they are the default or a meeting app's input.
+- The automatic stop after a meeting ends may only stop, once, for the ended
+  detection it counted for; a resumed meeting (`native-meeting-resumed`) clears
+  the bound recording so a pending stop is rejected.
 - Meeting detection (`meeting.rs` rules, `meeting_detect.rs` probe) only offers a
   recording; confirmed starts use the control dispatch path, never
   `start_recording` directly. Core Audio polls run without recorder locks. The

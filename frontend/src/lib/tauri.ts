@@ -156,6 +156,8 @@ export interface NativeInputDevice {
   name: string;
   channels: number;
   is_default: boolean;
+  /** Virtual or aggregate device, usually a loopback; newer app builds. */
+  is_virtual?: boolean;
   /** Meeting apps capturing from this device now, e.g. ["Zoom"]. */
   used_by: string[];
 }
@@ -568,6 +570,16 @@ export function onNativeMeetingDetected(handler: (d: NativeMeetingDetection) => 
 export function onNativeMeetingEnded(handler: (d: NativeMeetingDetection) => void): () => void {
   return subscribeTauriEvent<unknown, NativeMeetingDetection | null>(
     'native-meeting-ended',
+    decodeMeetingDetection,
+    (d) => { if (d) handler(d); },
+  );
+}
+
+/** The meeting's audio resumed during a recording after its end was
+ * reported; any pending automatic stop must be cancelled. */
+export function onNativeMeetingResumed(handler: (d: NativeMeetingDetection) => void): () => void {
+  return subscribeTauriEvent<unknown, NativeMeetingDetection | null>(
+    'native-meeting-resumed',
     decodeMeetingDetection,
     (d) => { if (d) handler(d); },
   );
