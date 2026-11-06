@@ -61,29 +61,94 @@ func TestActorAccountWritesPinActorMembership(t *testing.T) {
 	}
 }
 
-func TestCreateShareByRecordsActorOnBothRows(t *testing.T) {
+// A managing member's direct share or invite is fenced on the member's live
+// grant and the meeting's publication in the same transaction.
+func TestMemberSharesFenceTheActorsLiveGrant(t *testing.T) {
 	t.Setenv("SUMMARY_PRIVACY_WRITER_ENABLED", "")
-	var items []any
-	repo := summarySDKRepo(func(req *http.Request) (*http.Response, error) {
-		var body map[string]any
-		json.NewDecoder(req.Body).Decode(&body)
-		if strings.HasSuffix(req.Header.Get("X-Amz-Target"), ".TransactWriteItems") {
-			items = body["TransactItems"].([]any)
-		}
-		return summaryHTTPResponse(200, `{}`, nil), nil
-	})
-	if _, err := repo.CreateShareBy(context.Background(), "meeting", "owner", "owner@example.com", "guest", "guest@example.com",
-		model.PermissionRead, "member", "member@example.com"); err != nil {
-		t.Fatal(err)
+	published := `{"PK":{"S":"USER#owner"},"SK":{"S":"MEETING#meeting"},"meetingId":{"S":"meeting"},"userId":{"S":"owner"},"accountId":{"S":"child"},"sharedToAccount":{"BOOL":true}}`
+	unpublished := `{"PK":{"S":"USER#owner"},"SK":{"S":"MEETING#meeting"},"meetingId":{"S":"meeting"},"userId":{"S":"owner"},"accountId":{"S":"child"}}`
+	member := func(account string) string {
+		return `{"PK":{"S":"ACCOUNT#` + account + `"},"SK":{"S":"MEMBER#member"},"accountId":{"S":"` + account + `"},"userId":{"S":"member"}}`
 	}
-	if len(items) != 2 {
-		t.Fatalf("want both share rows, got %d", len(items))
-	}
-	for _, op := range items {
-		item := op.(map[string]any)["Put"].(map[string]any)["Item"].(map[string]any)
-		if item["ownerId"].(map[string]any)["S"] != "owner" || item["sharedByUserId"].(map[string]any)["S"] != "member" ||
-			item["sharedByEmail"].(map[string]any)["S"] != "member@example.com" {
-			t.Fatalf("share row: %+v", item)
+	meta := `{"PK":{"S":"ACCOUNT#child"},"SK":{"S":"META"},"accountId":{"S":"child"},"parentAccountId":{"S":"parent"}}`
+	for _, tc := range []struct {
+		name        string
+		descendants bool
+		rows        map[string]string
+		want        []string
+		err         error
+	}{
+		{name: "direct member", rows: map[string]string{"USER#owner|MEETING#meeting": published, "ACCOUNT#child|MEMBER#member": member("child")},
+			want: []string{"USER#owner|MEETING#meeting", "ACCOUNT#child|MEMBER#member"}},
+		{name: "inherited member", descendants: true, rows: map[string]string{"USER#owner|MEETING#meeting": published,
+			"ACCOUNT#child|META": meta, "ACCOUNT#parent|MEMBER#member": member("parent")},
+			want: []string{"USER#owner|MEETING#meeting", "ACCOUNT#child|META", "ACCOUNT#parent|MEMBER#member"}},
+		{name: "former member", rows: map[string]string{"USER#owner|MEETING#meeting": published}, err: ErrSummaryAccess},
+		{name: "unpublished meeting", rows: map[string]string{"USER#owner|MEETING#meeting": unpublished,
+			"ACCOUNT#child|MEMBER#member": member("child")}, err: ErrSummaryAccess},
+	} {
+		for _, path := range []string{"direct", "pending"} {
+			t.Run(tc.name+"/"+path, func(t *testing.T) {
+				if tc.descendants {
+					t.Setenv(AccountDescendantReadsEnv, "1")
+				} else {
+					t.Setenv(AccountDescendantReadsEnv, "")
+				}
+				var items []any
+				repo := summarySDKRepo(func(req *http.Request) (*http.Response, error) {
+					var body map[string]any
+					json.NewDecoder(req.Body).Decode(&body)
+					target := req.Header.Get("X-Amz-Target")
+					if strings.HasSuffix(target, ".TransactWriteItems") {
+						items = body["TransactItems"].([]any)
+						return summaryHTTPResponse(200, `{}`, nil), nil
+					}
+					if strings.HasSuffix(target, ".GetItem") {
+						key := body["Key"].(map[string]any)
+						k := key["PK"].(map[string]any)["S"].(string) + "|" + key["SK"].(map[string]any)["S"].(string)
+						if row, ok := tc.rows[k]; ok {
+							return summaryHTTPResponse(200, `{"Item":`+row+`}`, nil), nil
+						}
+					}
+					return summaryHTTPResponse(200, `{}`, nil), nil
+				})
+				var err error
+				if path == "direct" {
+					_, err = repo.CreateShareBy(context.Background(), "meeting", "owner", "owner@example.com", "guest", "guest@example.com",
+						model.PermissionRead, "member", "member@example.com")
+				} else {
+					err = repo.PutPendingShare(context.Background(), &model.PendingShare{Kind: model.PendingShareKindMeeting, MeetingID: "meeting",
+						Email: "guest@example.com", InvitedByUserID: "owner", SharedByUserID: "member", SharedByEmail: "member@example.com"})
+				}
+				if tc.err != nil {
+					if !errors.Is(err, tc.err) || items != nil {
+						t.Fatalf("want %v without a write, got %v (items=%d)", tc.err, err, len(items))
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				checks := map[string]bool{}
+				for _, op := range items {
+					entry := op.(map[string]any)
+					if put, ok := entry["Put"].(map[string]any); ok && path == "direct" {
+						item := put["Item"].(map[string]any)
+						if item["ownerId"].(map[string]any)["S"] != "owner" || item["sharedByUserId"].(map[string]any)["S"] != "member" {
+							t.Fatalf("share row: %+v", item)
+						}
+					}
+					if check, ok := entry["ConditionCheck"].(map[string]any); ok {
+						key := check["Key"].(map[string]any)
+						checks[key["PK"].(map[string]any)["S"].(string)+"|"+key["SK"].(map[string]any)["S"].(string)] = true
+					}
+				}
+				for _, want := range tc.want {
+					if !checks[want] {
+						t.Fatalf("missing fence %s in %v", want, checks)
+					}
+				}
+			})
 		}
 	}
 }
@@ -192,5 +257,50 @@ func TestMemberPublicationCannotWidenDisclosure(t *testing.T) {
 	})
 	if err := repo.PublishMeetingToAccountAs(context.Background(), "owner", "member", "meeting", "account"); !errors.Is(err, ErrConditionFailed) || writes != 1 {
 		t.Fatalf("concurrently unpublished meeting accepted a member write: %v writes=%d", err, writes)
+	}
+}
+
+// The actor's membership pin does not depend on the privacy writer switch.
+func TestActorAccountWritesPinMembershipWithPrivacyWritersOff(t *testing.T) {
+	t.Setenv("SUMMARY_PRIVACY_WRITER_ENABLED", "")
+	memberRow := `{"PK":{"S":"ACCOUNT#account"},"SK":{"S":"MEMBER#member"},"accountId":{"S":"account"},"userId":{"S":"member"}}`
+	for _, tc := range []struct {
+		name, actor string
+		member      bool
+		wantTxn     bool
+		err         error
+	}{
+		{"member", "member", true, true, nil},
+		{"former member", "member", false, false, ErrSummaryAccess},
+		{"creator", "owner", false, false, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var targets []string
+			var check map[string]any
+			repo := summarySDKRepo(func(req *http.Request) (*http.Response, error) {
+				var body map[string]any
+				json.NewDecoder(req.Body).Decode(&body)
+				target := req.Header.Get("X-Amz-Target")
+				targets = append(targets, target[strings.LastIndex(target, ".")+1:])
+				switch {
+				case strings.HasSuffix(target, ".GetItem") && tc.member:
+					return summaryHTTPResponse(200, `{"Item":`+memberRow+`}`, nil), nil
+				case strings.HasSuffix(target, ".TransactWriteItems"):
+					check = body["TransactItems"].([]any)[0].(map[string]any)["ConditionCheck"].(map[string]any)
+				}
+				return summaryHTTPResponse(200, `{}`, nil), nil
+			})
+			err := repo.LinkMeetingToAccountAs(context.Background(), "owner", tc.actor, "meeting", "account")
+			if !errors.Is(err, tc.err) {
+				t.Fatalf("got %v, want %v (calls %v)", err, tc.err, targets)
+			}
+			if tc.wantTxn {
+				if check == nil || check["Key"].(map[string]any)["SK"].(map[string]any)["S"] != "MEMBER#member" {
+					t.Fatalf("member write was not fenced on MEMBER#member: %v", targets)
+				}
+			} else if check != nil {
+				t.Fatalf("unexpected transaction: %v", targets)
+			}
+		})
 	}
 }

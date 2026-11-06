@@ -75,14 +75,16 @@ func projectAccountMeeting(meeting *model.Meeting, member *model.AccountMember) 
 	return &projected
 }
 
-func summarySharingStatus(meeting *model.Meeting, permission string, canManage bool) *model.SummarySharingStatus {
+// directTeamMember: the caller is the creator or a direct member of the
+// meeting's account (inherited managers cannot republish).
+func summarySharingStatus(meeting *model.Meeting, permission string, directTeamMember bool) *model.SummarySharingStatus {
 	allowed := meeting.CanCreateSummaryGrant()
 	// The approval path (OwnerAccountShareEnabled) is the creator's alone
 	// (ADR-059). A managing member only republishes the meeting to the account
 	// it is already published to, which needs no approval.
 	canShareAccount := permission == "owner" && (allowed || repository.OwnerAccountShareEnabled() &&
 		(meeting.Status == model.StatusDone || meeting.Status == model.StatusError)) ||
-		permission != "owner" && canManage && meeting.SharedToAccount
+		permission != "owner" && directTeamMember && meeting.SharedToAccount
 	return &model.SummarySharingStatus{CanCreateGrant: allowed, CanShareToAccount: canShareAccount, DerivedReadRestricted: meeting.SummaryReadRestricted,
 		RequiresRegeneration: !allowed, CanRegenerate: repository.SummaryPrivacyWritesEnabled() && permission == "owner" &&
 			(meeting.Status == model.StatusDone || meeting.Status == model.StatusError)}

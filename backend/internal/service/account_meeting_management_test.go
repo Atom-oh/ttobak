@@ -309,3 +309,67 @@ func TestMemberShareRejectsUnknownPermission(t *testing.T) {
 		t.Fatalf("a member granted more than edit: %v", err)
 	}
 }
+
+// removeMemberDuringRead revokes a membership between GetMeetingDetail's
+// first and final access reads.
+type removeMemberDuringRead struct {
+	*mockMeetingRepo
+	key string
+}
+
+func (r removeMemberDuringRead) ListAttachments(ctx context.Context, meetingID string) ([]model.Attachment, error) {
+	delete(r.members, r.key)
+	return r.mockMeetingRepo.ListAttachments(ctx, meetingID)
+}
+
+func TestDetailManagerFieldsFollowTheFinalAccessRead(t *testing.T) {
+	base := managementRepo()
+	// The member keeps an independent direct read share after removal.
+	base.shares[shareKey("member-1", "m-1")] = &model.Share{MeetingID: "m-1", OwnerID: "owner-1", SharedToID: "member-1", Permission: model.PermissionRead}
+	base.shares[shareKey("guest-1", "m-1")] = &model.Share{MeetingID: "m-1", OwnerID: "owner-1", SharedToID: "guest-1", Permission: model.PermissionRead}
+	repo := removeMemberDuringRead{mockMeetingRepo: base, key: "acc|member-1"}
+	detail, err := newMeetingServiceWithRepo(repo).GetMeetingDetail(context.Background(), "member-1", "m-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.CanManage || len(detail.Shares) != 0 || detail.Permission != model.PermissionRead || detail.SummarySharing.CanShareToAccount {
+		t.Fatalf("removed member kept manager fields: canManage=%v shares=%d permission=%s", detail.CanManage, len(detail.Shares), detail.Permission)
+	}
+}
+
+func TestTeamSharingOfferedOnlyToCreatorOrDirectMembers(t *testing.T) {
+	repo := managementRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	for _, user := range []string{"owner-1", "member-1"} {
+		detail, err := svc.GetMeetingDetail(context.Background(), user, "m-1")
+		if err != nil || !detail.SummarySharing.CanShareToAccount {
+			t.Fatalf("%s: canShareToAccount=%v err=%v", user, detail != nil && detail.SummarySharing.CanShareToAccount, err)
+		}
+		if user != "owner-1" && detail.CanRecoverRecording {
+			t.Fatal("recovery stays creator-only")
+		}
+	}
+
+	t.Setenv(accountDescendantReadsEnv, "1")
+	r := &inheritedSpeakerRepo{mockMeetingRepo: newMockMeetingRepo(), hierarchy: newDescendantAccessRepo()}
+	meeting := *r.hierarchy.meeting
+	meeting.Status = model.StatusDone
+	r.addMeeting(&meeting)
+	detail, err := newMeetingServiceWithRepo(r).GetMeetingDetail(context.Background(), "reader", "meeting")
+	if err != nil || !detail.CanManage || detail.SummarySharing.CanShareToAccount {
+		t.Fatalf("inherited manager: canManage=%v canShareToAccount=%v err=%v", detail != nil && detail.CanManage,
+			detail != nil && detail.SummarySharing.CanShareToAccount, err)
+	}
+}
+
+func TestRecoveryFlagStaysCreatorOnly(t *testing.T) {
+	repo := managementRepo()
+	repo.meetingsByID["m-1"].Status = model.StatusRecording
+	repo.meetingsByID["m-1"].UpdatedAt = time.Now()
+	repo.meetings[meetingKey("owner-1", "m-1")] = repo.meetingsByID["m-1"]
+	svc := newMeetingServiceWithRepo(repo)
+	member, err := svc.GetMeetingDetail(context.Background(), "member-1", "m-1")
+	if err != nil || member.CanRecoverRecording {
+		t.Fatalf("member recovery flag: %v %v", member != nil && member.CanRecoverRecording, err)
+	}
+}

@@ -651,7 +651,16 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 		})
 	}
 
-	// Managers (creator or live account-team member) see and manage shares.
+	// The shared candidates may describe either variant or a previous edit.
+	// Only render those verified against the currently selected text.
+	meeting, permission, err = s.checkAccess(ctx, userID, meetingID)
+	if err != nil {
+		return nil, err
+	}
+	if meeting == nil {
+		return nil, ErrNotFound
+	}
+	// Manager capability and manager-only fields follow this final read.
 	canManage, err := canManageMeeting(ctx, s.repo, userID, meeting, permission)
 	if err != nil {
 		return nil, err
@@ -668,15 +677,14 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 			})
 		}
 	}
-
-	// The shared candidates may describe either variant or a previous edit.
-	// Only render those verified against the currently selected text.
-	meeting, permission, err = s.checkAccess(ctx, userID, meetingID)
-	if err != nil {
-		return nil, err
-	}
-	if meeting == nil {
-		return nil, ErrNotFound
+	// Team (re)publication requires direct membership of the meeting's account.
+	canShareTeam := permission == "owner"
+	if !canShareTeam && canManage && meeting.AccountID != "" {
+		member, err := s.repo.GetMember(ctx, meeting.AccountID, userID)
+		if err != nil {
+			return nil, err
+		}
+		canShareTeam = member != nil
 	}
 	transcript, variant := selectMeetingTranscript(meeting)
 	var transcription, transcriptionV2 json.RawMessage
@@ -712,14 +720,14 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 	fieldInsights, insightsError, insightsTruncated := meetingFieldInsights(meeting.Insights)
 
 	return &model.MeetingDetailResponse{
-		CanRecoverRecording:        canManage && CanRecoverRecording(meeting),
+		CanRecoverRecording:        permission == "owner" && CanRecoverRecording(meeting),
 		CanManage:                  canManage,
 		CanCorrectSpeakers:         permission == "owner" || permission == model.PermissionEdit || permission == model.PermissionRead,
 		AudioCrop:                  meeting.AudioCrop,
 		Duration:                   meeting.Duration,
 		SupportsNotesComparison:    true,
 		SupportsPrivateAccountLink: true,
-		SummarySharing:             summarySharingStatus(meeting, permission, canManage),
+		SummarySharing:             summarySharingStatus(meeting, permission, canShareTeam),
 		SummaryGeneration:          meeting.SummaryGeneration(),
 		MeetingID:                  meeting.MeetingID,
 		UserID:                     meeting.UserID,

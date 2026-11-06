@@ -19,7 +19,9 @@
   membership lasts. Resummary capture fences the granting member row (and, for
   inherited access, every traversed parent link) in its snapshot transaction.
 - Amendment (2026-11-06, management, same authorization): live members (direct
-  or inherited) also get every creator management action except delete.
+  or inherited) also get every creator management action except delete. For
+  inherited members this supersedes ADR-058's invitation/linking restriction for
+  meetings only (see its 2026-11-06 amendment).
   `resolveMeetingManager` returns the creator's canonical meeting; writes keep
   the creator's partition, S3 prefix (`audio|images|files/{creator}/...`) and
   ref/share owner fields, and record the member as the actor.
@@ -27,11 +29,14 @@
     `invitedByUserId` = creator) with `sharedByUserId`/`sharedByEmail`. They are
     durable like the creator's own shares and **survive the member leaving the
     account**; the creator or another member revokes them. Members see the share
-    list and pending invites. A member's grant is capped at edit and passes the
-    same repository safe-source gate as the creator's (`ErrSummarySharingUnsafe`).
+    list and pending invites. A member's grant is capped at edit, passes the
+    same repository safe-source gate as the creator's (`ErrSummarySharingUnsafe`),
+    and is fenced in its transaction on the member's live grant (direct member
+    row, or ancestor member row plus parent links) and the meeting's publication.
   - A member may republish or unpublish only while the meeting is published to
     that same account (service check plus `accountId` and `sharedToAccount = true`
-    transaction conditions, with the actor's direct `MEMBER#` row pinned); moving
+    transaction conditions, with the actor's direct `MEMBER#` row pinned whether or
+    not summary-privacy writers are enabled); moving
     to another account or publishing an unpublished meeting stays creator-only.
     Only the creator mints the ADR-059 owner approval; a member republish changes
     no audience and publishes without approval.
