@@ -622,7 +622,10 @@ share, revoke, pending-revoke, account, share-account and link routes. Detail
 returns `canManage`, and managers receive `shares` (with `sharedByEmail` for
 member-created shares) and `projectIds`. Writes keep the creator's partition;
 strangers get 404. A member's account or share-account call must target the
-meeting's current account (403 otherwise). Shared list items include
+account the meeting is currently published to (403 otherwise; 409 if it was
+unpublished concurrently) and never mints the owner approval; member email shares
+pass the same `SUMMARY_SHARING_UNSAFE` gate. `summarySharing.canShareToAccount`
+offers the approval path only to the creator. Shared list items include
 `ownerUserId` (the creator).
 
 `POST /api/meetings/{meetingId}/account` is a private classification operation:

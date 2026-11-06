@@ -27,11 +27,14 @@
     `invitedByUserId` = creator) with `sharedByUserId`/`sharedByEmail`. They are
     durable like the creator's own shares and **survive the member leaving the
     account**; the creator or another member revokes them. Members see the share
-    list and pending invites.
-  - A member may republish or unpublish only within the meeting's current
-    account (service check plus an `accountId` transaction condition, with the
-    actor's direct `MEMBER#` row pinned); moving to another account stays
-    creator-only.
+    list and pending invites. A member's grant is capped at edit and passes the
+    same repository safe-source gate as the creator's (`ErrSummarySharingUnsafe`).
+  - A member may republish or unpublish only while the meeting is published to
+    that same account (service check plus `accountId` and `sharedToAccount = true`
+    transaction conditions, with the actor's direct `MEMBER#` row pinned); moving
+    to another account or publishing an unpublished meeting stays creator-only.
+    Only the creator mints the ADR-059 owner approval; a member republish changes
+    no audience and publishes without approval.
   - Predecessor links must be the creator's meetings the member can read.
   - Creator-only: delete, the Notion page reference and sharing-safe
     regeneration. Strangers get 404 rather than 403 on these routes.

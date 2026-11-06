@@ -29,7 +29,7 @@ func (m *mockMeetingRepo) actorAccountGuard(ownerID, actorID, meetingID, account
 	if m.members[accountID+"|"+actorID] == nil {
 		return repository.ErrSummaryAccess
 	}
-	if current := m.meetings[meetingKey(ownerID, meetingID)]; actorID != ownerID && (current == nil || current.AccountID != accountID) {
+	if current := m.meetings[meetingKey(ownerID, meetingID)]; actorID != ownerID && (current == nil || current.AccountID != accountID || !current.SharedToAccount) {
 		return repository.ErrConditionFailed
 	}
 	return nil
@@ -264,5 +264,48 @@ func TestDeleteStaysCreatorOnlyForManagers(t *testing.T) {
 	}
 	if repo.meetings[meetingKey("owner-1", "m-1")] == nil {
 		t.Fatal("meeting removed")
+	}
+}
+
+func TestSharingStatusAdvertisesApprovalPathOnlyToTheCreator(t *testing.T) {
+	t.Setenv("SUMMARY_PRIVACY_WRITER_ENABLED", "1")
+	t.Setenv("SUMMARY_OWNER_ACCOUNT_SHARE_ENABLED", "1")
+	unsafe := &model.Meeting{Status: model.StatusDone, Content: "private notes", AccountID: "acc"}
+	if !summarySharingStatus(unsafe, "owner", true).CanShareToAccount {
+		t.Fatal("the creator keeps the approval path")
+	}
+	if summarySharingStatus(unsafe, model.PermissionEdit, true).CanShareToAccount {
+		t.Fatal("a member was offered the owner approval path for an unpublished meeting")
+	}
+	published := *unsafe
+	published.SharedToAccount = true
+	if !summarySharingStatus(&published, model.PermissionEdit, true).CanShareToAccount {
+		t.Fatal("a member may refresh the current publication")
+	}
+	if summarySharingStatus(&published, model.PermissionEdit, false).CanShareToAccount {
+		t.Fatal("a non-manager was offered sharing")
+	}
+}
+
+func TestMemberWritesFailAfterConcurrentUnpublish(t *testing.T) {
+	repo := managementRepo()
+	// The manager check saw the publication; the canonical row was then
+	// unpublished before the write.
+	unpublished := *repo.meetingsByID["m-1"]
+	unpublished.SharedToAccount = false
+	repo.meetings[meetingKey("owner-1", "m-1")] = &unpublished
+	svc := newMeetingServiceWithRepo(repo)
+	if _, err := svc.ShareMeetingToAccount(context.Background(), "member-1", "member@example.com", "m-1", "acc"); !errors.Is(err, repository.ErrConditionFailed) {
+		t.Fatalf("member republish after unpublish: %v", err)
+	}
+	if err := svc.LinkMeetingToAccount(context.Background(), "member-1", "m-1", "acc"); !errors.Is(err, repository.ErrConditionFailed) {
+		t.Fatalf("member classification after unpublish: %v", err)
+	}
+}
+
+func TestMemberShareRejectsUnknownPermission(t *testing.T) {
+	svc := newMeetingServiceWithRepo(managementRepo())
+	if _, _, err := svc.ShareMeetingByEmail(context.Background(), "member-1", "member@example.com", "m-1", "guest@example.com", "owner"); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("a member granted more than edit: %v", err)
 	}
 }

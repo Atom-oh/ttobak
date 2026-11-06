@@ -108,3 +108,89 @@ func TestActorAccountConditionPinsCurrentAccountForNonCreators(t *testing.T) {
 		}
 	}
 }
+
+func updateSetsField(update map[string]any, field string) bool {
+	names := update["ExpressionAttributeNames"].(map[string]any)
+	expr := update["UpdateExpression"].(string)
+	for token, name := range names {
+		if name == field && strings.Contains(expr, token+" =") {
+			return true
+		}
+	}
+	return false
+}
+
+func conditionNames(t *testing.T, update map[string]any) map[string]bool {
+	t.Helper()
+	names := update["ExpressionAttributeNames"].(map[string]any)
+	condition := update["ConditionExpression"].(string)
+	found := map[string]bool{}
+	for token, name := range names {
+		if strings.Contains(condition, token) {
+			found[name.(string)] = true
+		}
+	}
+	return found
+}
+
+// ADR-059 approval is the creator's alone. A member republish of a meeting
+// already published to the same account publishes without approval, while
+// the creator's own republish of private output still mints it.
+func TestMemberRepublishNeverMintsOwnerApproval(t *testing.T) {
+	privacyWriterEnabled(t)
+	t.Setenv("SUMMARY_OWNER_ACCOUNT_SHARE_ENABLED", "1")
+	for _, actor := range []string{"member", "owner"} {
+		t.Run(actor, func(t *testing.T) {
+			parent := privacyParent()
+			parent.Content, parent.AccountID, parent.SharedToAccount = "private notes", "account", true
+			privacyStamp(parent, model.SummaryPrivacyPrivate, "generation")
+			rows := privacyParentRows(parent)
+			rows["ACCOUNT#account/MEMBER#"+actor] = &model.AccountMember{AccountID: "account", UserID: actor, AddedAt: time.Now().UTC(), SummaryPrivacyVersion: 1}
+			var update map[string]any
+			repo := privacyWriterWire(t, rows, func(_ string, body map[string]any) (int, string) {
+				ops := body["TransactItems"].([]any)
+				update = ops[len(ops)-1].(map[string]any)["Update"].(map[string]any)
+				return 200, `{}`
+			})
+			if err := repo.PublishMeetingToAccountAs(context.Background(), "owner", actor, "meeting", "account"); err != nil {
+				t.Fatalf("%s republish: %v", actor, err)
+			}
+			if minted := updateSetsField(update, "summaryAccountApproval"); minted != (actor == "owner") {
+				t.Fatalf("%s: approval minted=%v", actor, minted)
+			}
+			fenced := conditionNames(t, update)
+			if actor == "member" && (!fenced["accountId"] || !fenced["sharedToAccount"]) {
+				t.Fatalf("member republish must stay within the current publication: %v", fenced)
+			}
+		})
+	}
+}
+
+// Without approval a member can never turn unpublished private output into
+// an account disclosure, and a concurrent unpublish rejects the member write.
+func TestMemberPublicationCannotWidenDisclosure(t *testing.T) {
+	privacyWriterEnabled(t)
+	t.Setenv("SUMMARY_OWNER_ACCOUNT_SHARE_ENABLED", "1")
+	parent := privacyParent()
+	parent.Content, parent.AccountID = "private notes", "account"
+	privacyStamp(parent, model.SummaryPrivacyPrivate, "generation")
+	rows := privacyParentRows(parent)
+	rows["ACCOUNT#account/MEMBER#member"] = &model.AccountMember{AccountID: "account", UserID: "member", AddedAt: time.Now().UTC(), SummaryPrivacyVersion: 1}
+	repo := privacyWriterWire(t, rows, func(string, map[string]any) (int, string) {
+		t.Fatal("unpublished private output reached a member write")
+		return 200, `{}`
+	})
+	if err := repo.PublishMeetingToAccountAs(context.Background(), "owner", "member", "meeting", "account"); !errors.Is(err, ErrSummarySharingUnsafe) {
+		t.Fatalf("member publish of unpublished private output: %v", err)
+	}
+
+	parent.SharedToAccount = true
+	writes := 0
+	repo = privacyWriterWire(t, rows, func(string, map[string]any) (int, string) {
+		writes++
+		return 400, projectCancellation(2, 1)
+	})
+	if err := repo.PublishMeetingToAccountAs(context.Background(), "owner", "member", "meeting", "account"); !errors.Is(err, ErrConditionFailed) || writes != 1 {
+		t.Fatalf("concurrently unpublished meeting accepted a member write: %v writes=%d", err, writes)
+	}
+}

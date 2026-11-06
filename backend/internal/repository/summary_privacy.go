@@ -41,18 +41,25 @@ func (r *DynamoDBRepository) PublishMeetingToAccount(ctx context.Context, ownerI
 
 // PublishMeetingToAccountAs publishes the owner's meeting on behalf of actorID
 // (the creator or a managing account member), pinning the actor's direct
-// membership in accountID. Approval output stays attributed to the creator.
+// membership in accountID. Only the creator may mint the owner disclosure
+// approval (ADR-059). A member can act only on a meeting currently published
+// to that same account (actorAccountCondition), so its republish never
+// widens the audience and takes the existing-publication path without an
+// approval; account readers no longer depend on approval (ADR-049 amendment).
 func (r *DynamoDBRepository) PublishMeetingToAccountAs(ctx context.Context, ownerID, actorID, meetingID, accountID string) error {
 	return r.updateMeetingFieldsAs(ctx, ownerID, actorID, meetingID, actorAccountCondition(ownerID, actorID, accountID),
-		map[string]interface{}{"accountId": accountID, "sharedToAccount": true}, false, nil, OwnerAccountShareEnabled())
+		map[string]interface{}{"accountId": accountID, "sharedToAccount": true}, false, nil,
+		actorID == ownerID && OwnerAccountShareEnabled())
 }
 
-// actorAccountCondition keeps a non-creator within the meeting's current
-// account: only the creator may move a meeting to another account.
+// actorAccountCondition keeps a non-creator within the state that grants
+// management: the meeting must still be published to the target account.
+// Only the creator may move a meeting to another account.
 func actorAccountCondition(ownerID, actorID, accountID string) expression.ConditionBuilder {
 	condition := expression.AttributeExists(expression.Name("PK"))
 	if actorID != ownerID {
-		condition = condition.And(expression.Name("accountId").Equal(expression.Value(accountID)))
+		condition = condition.And(expression.Name("accountId").Equal(expression.Value(accountID))).
+			And(expression.Name("sharedToAccount").Equal(expression.Value(true)))
 	}
 	return condition
 }

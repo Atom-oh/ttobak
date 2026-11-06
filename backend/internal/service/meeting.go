@@ -1136,6 +1136,12 @@ func (s *MeetingService) ShareMeetingByEmail(ctx context.Context, actorID, actor
 	if err != nil {
 		return nil, false, err
 	}
+	// A member's grant is capped at its own (edit) permission and passes the
+	// same repository safe-source gate as the creator's (createShare /
+	// PutPendingShare share one implementation).
+	if permission != model.PermissionRead && permission != model.PermissionEdit {
+		return nil, false, ErrInvalidInput
+	}
 	ownerID := meeting.UserID
 	ownerEmail := creatorEmail(ctx, s.repo, ownerID, actorID, actorEmail)
 	sharedByID, sharedByEmail := "", ""
