@@ -177,8 +177,6 @@ func (m *mockMeetingRepo) UpdateMeetingFields(_ context.Context, userID, meeting
 			cp.Status = v.(string)
 		case "sourceEditedByNonOwnerAt":
 			cp.SourceEditedByNonOwnerAt = v.(string)
-		case "linkedMeetingIds":
-			cp.LinkedMeetingIDs = v.([]string)
 		}
 	}
 	cp.UpdatedAt = time.Now().UTC()

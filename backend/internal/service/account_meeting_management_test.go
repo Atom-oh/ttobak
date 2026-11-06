@@ -228,35 +228,6 @@ func TestMemberAccountChangesStayWithinTheManagedAccount(t *testing.T) {
 	}
 }
 
-func TestMemberLinksOnlyCreatorPredecessorsTheyCanRead(t *testing.T) {
-	repo := managementRepo()
-	now := time.Now()
-	repo.addMeeting(&model.Meeting{MeetingID: "p-team", UserID: "owner-1", AccountID: "acc", SharedToAccount: true, Date: now})
-	repo.addMeeting(&model.Meeting{MeetingID: "p-private", UserID: "owner-1", Date: now})
-	repo.addMeeting(&model.Meeting{MeetingID: "p-member", UserID: "member-1", Date: now})
-	svc := newMeetingServiceWithRepo(repo)
-	for _, id := range []string{"p-private", "p-member"} {
-		if err := svc.LinkPredecessors(context.Background(), "member-1", "m-1", []string{id}); !errors.Is(err, ErrNotFound) {
-			t.Fatalf("%s: want ErrNotFound, got %v", id, err)
-		}
-	}
-	if err := svc.LinkPredecessors(context.Background(), "member-1", "m-1", []string{"m-1"}); !errors.Is(err, ErrInvalidInput) {
-		t.Fatalf("self link: %v", err)
-	}
-	if err := svc.LinkPredecessors(context.Background(), "member-1", "m-1", []string{"p-team"}); err != nil {
-		t.Fatalf("member link: %v", err)
-	}
-	if got := repo.meetings[meetingKey("owner-1", "m-1")].LinkedMeetingIDs; len(got) != 1 || got[0] != "p-team" {
-		t.Fatalf("links: %v", got)
-	}
-	if err := svc.LinkPredecessors(context.Background(), "owner-1", "m-1", []string{"p-private"}); err != nil {
-		t.Fatalf("creator links private predecessor: %v", err)
-	}
-	if err := svc.LinkPredecessors(context.Background(), "reader-1", "m-1", []string{"p-team"}); !errors.Is(err, ErrForbidden) {
-		t.Fatalf("direct share holder link: %v", err)
-	}
-}
-
 func TestDeleteStaysCreatorOnlyForManagers(t *testing.T) {
 	repo := managementRepo()
 	if err := newMeetingServiceWithRepo(repo).DeleteMeeting(context.Background(), "member-1", "m-1"); err == nil {

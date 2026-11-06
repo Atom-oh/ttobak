@@ -6,8 +6,8 @@
 - Amended 2026-11-06 by the ADR-016 amendments (explicit user authorization):
   inherited members of an ancestor Account get `edit` on meetings published to a
   descendant, may correct speakers, and also manage those meetings like the
-  creator except delete: email shares and invites, their revocation and
-  previous-meeting links, and with the follow-up change uploads, recovery, crop,
+  creator except delete: email shares and invites and their revocation, and
+  with the follow-up change previous-meeting links, uploads, recovery, crop,
   simulator and project links. This supersedes the invitation/linking
   restriction below **for meetings only**. Classification and publication still
   require direct membership of the target account; roles, hierarchy, documents

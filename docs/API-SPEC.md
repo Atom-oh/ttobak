@@ -620,7 +620,7 @@ Meeting management (ADR-016 2026-11-06 amendment; for inherited members it
 supersedes ADR-058's invitation/linking restriction for meetings only): the
 creator or a live direct or inherited member of the account a meeting is
 published to may call the
-share, revoke, pending-revoke, account, share-account and link routes. Detail
+share, revoke, pending-revoke, account and share-account routes. Detail
 returns `canManage`, and managers receive `shares` (with `sharedByEmail` for
 member-created shares) and `projectIds`. Writes keep the creator's partition;
 strangers get 404. A member's account or share-account call must target the
@@ -629,8 +629,7 @@ unpublished concurrently) and never mints the owner approval; member email share
 pass the same `SUMMARY_SHARING_UNSAFE` gate. `summarySharing.canShareToAccount`
 offers the approval path only to the creator and team republication only to the
 creator or direct members of the meeting's account. `canRecoverRecording` stays
-creator-only. Account-link condition failures return 409 `CONFLICT`. Shared list items include
-`ownerUserId` (the creator).
+creator-only. Account-link condition failures return 409 `CONFLICT`.
 
 `POST /api/meetings/{meetingId}/account` is a private classification operation:
 the caller (creator or managing member) must directly belong to the target account. One partial

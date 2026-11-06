@@ -40,11 +40,11 @@
     to another account or publishing an unpublished meeting stays creator-only.
     Only the creator mints the ADR-059 owner approval; a member republish changes
     no audience and publishes without approval.
-  - Predecessor links must be the creator's meetings the member can read.
   - Creator-only: delete, the Notion page reference and sharing-safe
     regeneration. Strangers get 404 rather than 403 on these routes.
-  - Uploads, recovery, rediarize, crop, simulator and project links remain
-    creator-only until the follow-up management change extends them.
+  - Previous-meeting links, uploads, recovery, rediarize, crop, simulator and
+    project links remain creator-only until the follow-up management change
+    extends them.
 
 ## Context and original decision
 

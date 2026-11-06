@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/ttobak/backend/internal/model"
 )
@@ -99,42 +98,4 @@ func requireSameManagedAccount(actorID string, meeting *model.Meeting, accountID
 		return ErrForbidden
 	}
 	return nil
-}
-
-// LinkPredecessors replaces a meeting's predecessor links. The caller must
-// manage the meeting. Every predecessor must belong to the same creator
-// (summarize keeps owner-scoped linked context) and be readable by the caller.
-func (s *MeetingService) LinkPredecessors(ctx context.Context, actorID, meetingID string, linkedIDs []string) error {
-	parent, err := resolveMeetingManager(ctx, s.repo, actorID, meetingID)
-	if err != nil {
-		return err
-	}
-	for _, linkedID := range linkedIDs {
-		if linkedID == meetingID {
-			return fmt.Errorf("%w: cannot link a meeting to itself", ErrInvalidInput)
-		}
-		linked, err := s.repo.GetMeeting(ctx, parent.UserID, linkedID)
-		if err != nil {
-			return err
-		}
-		if linked != nil && actorID != parent.UserID {
-			readable, _, err := s.checkAccess(ctx, actorID, linkedID)
-			if err != nil {
-				return err
-			}
-			if readable == nil {
-				linked = nil
-			}
-		}
-		if linked == nil {
-			return fmt.Errorf("linked meeting %s not found: %w", linkedID, ErrNotFound)
-		}
-		// A 1-hop reverse reference would form a cycle.
-		for _, reverseID := range linked.LinkedMeetingIDs {
-			if reverseID == meetingID {
-				return fmt.Errorf("%w: cannot link to %s; that meeting already lists this one as a predecessor (cycle)", ErrInvalidInput, linkedID)
-			}
-		}
-	}
-	return s.repo.UpdateMeetingFields(ctx, parent.UserID, meetingID, map[string]interface{}{"linkedMeetingIds": linkedIDs})
 }
