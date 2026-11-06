@@ -595,29 +595,21 @@ load the chosen source to validate/page it. See the
 ## Account contacts
 
 The authenticated `ttobak_list_account_contacts`, `ttobak_create_account_contact`
-and `ttobak_import_account_contacts` tools require direct account membership;
-private connector writes also require current write approval. Deploy the account
-contacts API first. List supports a `limit` of 1–25 and an opaque cursor; follow
-`nextCursor`. Oversized pages are retried with a smaller limit.
+and `ttobak_import_account_contacts` require direct membership. Private writes
+also require approval. Deploy the API first. List uses `limit` 1–25 and `nextCursor`; oversized
+pages retry with a smaller limit.
 
-Create accepts `accountId` and a `contact`; import accepts 1–25 contacts and up to
-512 KiB. Each contact requires `name` and can include `company`, `title`,
-`department`, `email`, `address`, `workPhone`, `fax`, `phone`,
-`cardRegisteredAt`, `cardBook`, `group` and `notes`. Values are strings, limited
-to 256 UTF-8 bytes each (address 1,024, notes 8,192), and 12,000 bytes per
-serialized contact. Parse CSV and spreadsheets on the client.
+Create takes `accountId` and `contact`; import takes 1–25 contacts, up to 512 KiB.
+See [contact fields and limits](../docs/API-SPEC.md#accounts-and-projects).
+Parse files client-side.
 
-Import scans at most 1,000 authorized pages before writing and skips matching
-normalized email or either phone, including shared work numbers. Concurrent
-changes can still create duplicates. Results are one-based, with `created`,
-`duplicate` or `failed` status. An unknown write outcome may have succeeded;
-matching later rows are skipped until the account is checked.
+Import scans up to 1,000 pages, skipping email or phone matches, including shared
+work numbers. Concurrent writes may duplicate. Results are one-based `created`,
+`duplicate` or `failed`; unknown writes may succeed and block matching later rows.
 
-Private OAuth create/import requires an `idempotencyKey`: retry identical input
-with the same key. Per-row receipts have no automatic expiry and cannot replay
-after the created contact is edited or deleted. Legacy bearer transport does not
-support retry keys. MCP clients and their configured AI providers may see inputs
-and results.
+Private OAuth writes require an `idempotencyKey`; retry identical input with the
+same key. Receipts never expire automatically or replay edited/deleted contacts.
+Bearer transport lacks retry keys. MCP clients and AI providers may see data.
 
 ## Public bundle provenance
 
