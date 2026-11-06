@@ -584,6 +584,34 @@ class ReleaseTests(unittest.TestCase):
                     with self.assertRaisesRegex(ReleaseError, f"^{code}$"):
                         runner.validate_activation_templates()
 
+    def test_unexpected_failure_diagnostic_reports_type_and_site_without_messages(self):
+        import http_origin_release as release
+
+        class FakeClientError(Exception):
+            def __init__(self):
+                super().__init__("SECRET-PROOF-IN-MESSAGE")
+                self.response = {"Error": {"Code": "ResourceConflictException", "Message": "SECRET-PROOF-IN-MESSAGE"}}
+                self.operation_name = "GetFunctionConfiguration"
+
+        def raise_inside_script():
+            # Raise from a frame attributed to the coordinator module itself.
+            code = compile("raise error", release.__file__, "exec")
+            exec(code, {"error": FileNotFoundError("SECRET-PROOF-IN-MESSAGE")})
+
+        try:
+            raise_inside_script()
+        except FileNotFoundError as error:
+            diagnostic = release.failure_diagnostic(error)
+        self.assertEqual(diagnostic["errorType"], "FileNotFoundError")
+        self.assertRegex(diagnostic["errorSite"], r"^<module>:\d+$")
+        try:
+            raise FakeClientError()
+        except FakeClientError as error:
+            diagnostic = release.failure_diagnostic(error, FakeClientError)
+        self.assertEqual(diagnostic, {"errorType": "FakeClientError", "awsErrorCode": "ResourceConflictException",
+                                      "awsOperation": "GetFunctionConfiguration"})
+        self.assertNotIn("SECRET-PROOF-IN-MESSAGE", json.dumps(diagnostic))
+
     def test_vpc_consumer_requires_an_observed_private_secrets_manager_path(self):
         import http_origin_release as release
 
