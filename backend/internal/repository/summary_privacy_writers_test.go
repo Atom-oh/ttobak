@@ -441,3 +441,17 @@ func TestSimulatorClaimFencesCapturedGeneration(t *testing.T) {
 		t.Fatalf("old-generation simulator claim survived reset: %v", err)
 	}
 }
+
+func TestMemberSimulatorClaimChecksTheCreatorsMeetingRow(t *testing.T) {
+	repo := privacyWriterWire(t, nil, func(_ string, body map[string]any) (int, string) {
+		check := body["TransactItems"].([]any)[0].(map[string]any)["ConditionCheck"].(map[string]any)
+		if pk := check["Key"].(map[string]any)["PK"].(map[string]any)["S"]; pk != "USER#owner" {
+			t.Fatalf("claim conditioned on %v", pk)
+		}
+		return 200, `{}`
+	})
+	run := &model.SimRun{MeetingID: "meeting", UserID: "member", OwnerUserID: "owner", SimRunID: "run", Status: model.SimStatusQueued}
+	if err := repo.PutSimRunIfNotRunning(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+}

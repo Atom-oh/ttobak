@@ -1,11 +1,13 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/ttobak/backend/internal/model"
+	"github.com/ttobak/backend/internal/repository"
 )
 
 func doneMeeting() *model.Meeting {
@@ -408,5 +410,43 @@ func TestSimAssetPrefixes(t *testing.T) {
 	viewerPrefix, _ := SimAssetPrefixes(viewer, meetingID)
 	if strings.HasPrefix(realChartKey, viewerPrefix) {
 		t.Errorf("a real chart key must NOT match a prefix built from the viewer's own userID (%q) -- that mismatch is exactly the bug being guarded against", viewerPrefix)
+	}
+}
+
+// simManagedRepo emulates PutSimRunIfNotRunning's meeting-row condition
+// (USER#{owner}/MEETING#{id}) on top of the account-management double.
+type simManagedRepo struct {
+	*mockMeetingRepo
+	runs []*model.SimRun
+}
+
+func (r *simManagedRepo) GetSimRun(context.Context, string) (*model.SimRun, error) { return nil, nil }
+func (r *simManagedRepo) UpdateSimRunFieldsIfMatch(context.Context, string, string, map[string]interface{}) error {
+	return nil
+}
+func (r *simManagedRepo) PutSimRunIfNotRunning(_ context.Context, run *model.SimRun) error {
+	if r.meetings[meetingKey(simRunOwnerForTest(run), run.MeetingID)] == nil {
+		return repository.ErrConditionFailed
+	}
+	r.runs = append(r.runs, run)
+	return nil
+}
+
+func simRunOwnerForTest(run *model.SimRun) string {
+	if run.OwnerUserID != "" {
+		return run.OwnerUserID
+	}
+	return run.UserID
+}
+
+func TestMemberSimulationClaimsTheCreatorsMeetingRow(t *testing.T) {
+	repo := &simManagedRepo{mockMeetingRepo: managementRepo()}
+	reqs := []model.SimRequirement{{Key: "monthlyActiveUsers", Value: "100000", Required: true, Label: "월간 활성 사용자"}}
+	run, err := NewSimService(repo, nil, nil, "").CreateSimulation(context.Background(), "member-1", "m-1", reqs, validOpts())
+	if err != nil {
+		t.Fatalf("member run: %v", err)
+	}
+	if run.UserID != "member-1" || run.OwnerUserID != "owner-1" || len(repo.runs) != 1 {
+		t.Fatalf("run actor/owner: %+v", run)
 	}
 }

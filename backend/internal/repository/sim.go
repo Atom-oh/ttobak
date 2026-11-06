@@ -101,7 +101,7 @@ func (r *DynamoDBRepository) PutSimRunIfNotRunning(ctx context.Context, run *mod
 				ConditionCheck: &types.ConditionCheck{
 					TableName: aws.String(r.tableName),
 					Key: map[string]types.AttributeValue{
-						"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + run.UserID},
+						"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + simRunOwner(run)},
 						"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + run.MeetingID},
 					},
 					ConditionExpression:       meetingExistsExpr.Condition(),
@@ -143,6 +143,15 @@ func (r *DynamoDBRepository) PutSimRunIfNotRunning(ctx context.Context, run *mod
 		return fmt.Errorf("failed to put sim run: %w", err)
 	}
 	return nil
+}
+
+// simRunOwner: the creator's partition holds the meeting row a member's
+// run is conditioned on.
+func simRunOwner(run *model.SimRun) string {
+	if run.OwnerUserID != "" {
+		return run.OwnerUserID
+	}
+	return run.UserID
 }
 
 // UpdateSimRunFieldsIfMatch patches the sim run item, conditioned on the

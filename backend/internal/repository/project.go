@@ -447,7 +447,8 @@ func (r *DynamoDBRepository) MeetingProjectLinkTransactional(ctx context.Context
 
 // MeetingProjectLinkInAccount links the creator's meeting on behalf of a
 // managing account member: the meeting must still be published to
-// accountID and the project must still be linked to that account.
+// accountID, the project must still be linked to that account, and the
+// member's live grant is fenced in the same transaction.
 func (r *DynamoDBRepository) MeetingProjectLinkInAccount(ctx context.Context, ownerUserID, actorID, meetingID, projectID, accountID string, ref *model.ProjectMeetingRef) error {
 	if accountID == "" || actorID == "" || actorID == ownerUserID {
 		return ErrConditionFailed

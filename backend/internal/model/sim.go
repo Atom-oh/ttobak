@@ -19,6 +19,7 @@ type SimRun struct {
 	UserID            string `dynamodbav:"userId"`
 	Status            string `dynamodbav:"status"` // extracted | queued | running | done | error
 	SummaryGeneration string `dynamodbav:"summaryGeneration,omitempty" json:"-"`
+	OwnerUserID       string `dynamodbav:"ownerUserId,omitempty" json:"-"` // meeting creator; empty means UserID
 
 	// Requirements is the JSON-encoded []SimRequirement -- the extracted
 	// draft, then the user-confirmed set once a run starts. Small (a
