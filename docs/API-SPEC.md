@@ -964,6 +964,13 @@ key is bound within the configured async retry budget, and discards copies that
 lost to a different upload. Recovery uses unique keys, deletes definitively
 rejected copies and surfaces cleanup failures. Ambiguous writes retain their copy.
 
+`GET /api/meetings/{meetingId}/audio` returns `audioUrl` (single file) or
+`audioUrls` (ordered parts, empty slots skipped) as one-hour signed URLs. For a
+WebM/Ogg key it signs the ADR-062 `audio-playback/` copy only when that copy's
+`source-etag` and `source-version-id` equal the source's current HEAD; a missing,
+stale or unreadable copy falls back to the original key. The response shape is
+unchanged and the original remains the STT/crop/recovery input.
+
 `POST /api/meetings/{meetingId}/audio/crop` accepts a bounded JSON object containing
 `requestId` (UUID), `startSeconds` and `endSeconds` (integer seconds). Owner-only,
 single-file `done`/`error` sources are eligible. The server resolves the canonical
