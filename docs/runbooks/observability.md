@@ -95,11 +95,10 @@ Activation:
 
 1. Confirm the collector is serving (`ttobak:otelCollectorEnabled` `"true"`,
    ALB target healthy) and the SSM parameter exists.
-2. Resolve the release-coordinator gate first: `http_origin_release.py`
-   `validate_activation_templates` rejects any `VpcConfig` on `ttobak-api`
-   (`ACTIVATION_CONSUMER_VPC_UNVERIFIED`), because the origin-proof read must
-   reach Secrets Manager. That gate needs a separately reviewed change before
-   the flag can ship through `deploy-infra`.
+2. The release-coordinator gate verifies the VPC consumer's private Secrets
+   Manager path before mutation (`vpc_secret_path_verified`, see
+   `scripts/operations/HTTP_ORIGIN_RELEASE.md`); it fails closed with
+   `ACTIVATION_CONSUMER_VPC_UNVERIFIED` when any condition is unobserved.
 3. Set `ttobak:apiTelemetryEnabled` to `"true"` in a reviewed PR and deploy
    `TtobakObservabilityStack` (if changed), then `TtobakGatewayStack`
    `--exclusively`. The VPC update publishes a new version for the `live` alias.
