@@ -19,6 +19,10 @@ import (
 // 100-item limit (at most 64 ancestors + child/owner/parent-member + two refs = 69).
 const AccountHierarchyMaxAncestors = 64
 
+// AccountDescendantReadsEnv enables ADR-058 ancestor-member access. Every
+// process that resolves or fences that access must receive the same value.
+const AccountDescendantReadsEnv = "ACCOUNT_DESCENDANT_READS_ENABLED"
+
 // AccountParentLink is a strongly consistent observation, checked again in the
 // same transaction as the child write. Include the root's empty parent link.
 type AccountParentLink struct {

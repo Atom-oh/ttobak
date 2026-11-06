@@ -209,6 +209,18 @@ func (s *MeetingCatalogService) item(ctx context.Context, user, tab, phase, acco
 			accountMember = member.privacyMember()
 		} else {
 			grant = readingHash(share)
+			if share.Permission != model.PermissionEdit && accountAccess == nil && m.SharedToAccount && m.AccountID != "" {
+				// A direct read grant yields to live team edit access; bind the
+				// membership so its removal invalidates this continuation.
+				member, err := s.member(ctx, user, m.AccountID)
+				if err != nil {
+					return nil, "", "", err
+				}
+				if member != nil {
+					grant = readingHash([]interface{}{share, member.fingerprint()})
+					accountAccess = member
+				}
+			}
 		}
 		if share.Origin == model.ShareOriginAccount || accountAccess != nil {
 			permission = accountMeetingPermission

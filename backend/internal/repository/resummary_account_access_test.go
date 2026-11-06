@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -110,5 +111,51 @@ func TestResummaryCaptureAccountTeamAccess(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A deep inherited chain must fail with ErrSummaryLimit before any queue or
+// completion transaction can exceed DynamoDB's 100-item limit.
+func TestResummaryCaptureRejectsOverBudgetAncestry(t *testing.T) {
+	t.Setenv(AccountDescendantReadsEnv, "1")
+	items := map[string]string{
+		"USER#owner|MEETING#meeting": `{"PK":{"S":"USER#owner"},"SK":{"S":"MEETING#meeting"},"meetingId":{"S":"meeting"},"userId":{"S":"owner"},"status":{"S":"done"},"content":{"S":"saved"},"accountId":{"S":"a0"},"sharedToAccount":{"BOOL":true}}`,
+	}
+	depth := AccountHierarchyMaxAncestors
+	for i := 0; i < depth; i++ {
+		id, parent := fmt.Sprintf("a%d", i), fmt.Sprintf("a%d", i+1)
+		items["ACCOUNT#"+id+"|META"] = `{"PK":{"S":"ACCOUNT#` + id + `"},"SK":{"S":"META"},"accountId":{"S":"` + id + `"},"parentAccountId":{"S":"` + parent + `"}}`
+	}
+	top := fmt.Sprintf("a%d", depth)
+	items["ACCOUNT#"+top+"|MEMBER#user"] = `{"PK":{"S":"ACCOUNT#` + top + `"},"SK":{"S":"MEMBER#user"},"accountId":{"S":"` + top + `"},"userId":{"S":"user"}}`
+	repo := summarySDKRepo(func(req *http.Request) (*http.Response, error) {
+		var body map[string]any
+		json.NewDecoder(req.Body).Decode(&body)
+		if strings.HasSuffix(req.Header.Get("X-Amz-Target"), ".Query") {
+			// 20 document attachments with text states: the documented
+			// worst case that pushes capture past the item budget.
+			raw, _ := json.Marshal(body)
+			var rows []string
+			for k := 0; k < 20; k++ {
+				id := fmt.Sprintf("att%02d", k)
+				if strings.Contains(string(raw), "ATTEXT#") {
+					rows = append(rows, `{"PK":{"S":"MEETING#meeting"},"SK":{"S":"ATTEXT#`+id+`"}}`)
+				} else {
+					rows = append(rows, `{"PK":{"S":"MEETING#meeting"},"SK":{"S":"ATTACH#`+id+`"},"attachmentId":{"S":"`+id+`"},"meetingId":{"S":"meeting"},"type":{"S":"document"}}`)
+				}
+			}
+			return summaryHTTPResponse(200, `{"Items":[`+strings.Join(rows, ",")+`]}`, nil), nil
+		}
+		key := body["Key"].(map[string]any)
+		pk := key["PK"].(map[string]any)["S"].(string)
+		sk := key["SK"].(map[string]any)["S"].(string)
+		if item, ok := items[pk+"|"+sk]; ok {
+			return summaryHTTPResponse(200, `{"Item":`+item+`}`, nil), nil
+		}
+		return summaryHTTPResponse(200, `{}`, nil), nil
+	})
+	_, err := repo.CaptureResummary(context.Background(), "owner", "meeting", "user")
+	if !errors.Is(err, ErrSummaryLimit) {
+		t.Fatalf("over-budget ancestry: got %v, want ErrSummaryLimit", err)
 	}
 }

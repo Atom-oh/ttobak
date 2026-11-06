@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ttobak/backend/internal/model"
+	"github.com/ttobak/backend/internal/repository"
 )
 
 // Account-team access on a published meeting is creator-equivalent edit access
@@ -138,5 +139,39 @@ func TestUpdateMeetingRejectsDerivedWritesFromRestrictedProjection(t *testing.T)
 	}
 	if _, err := svc.UpdateMeeting(context.Background(), "member-1", "m-1", &model.UpdateMeetingRequest{Title: "Edited"}); err != nil {
 		t.Fatalf("non-derived edit blocked: %v", err)
+	}
+}
+
+func TestListingsShowTeamEditForDirectReadShareMembers(t *testing.T) {
+	repo := accountPermissionRepo()
+	repo.addMember("acc", "member-1", model.RoleSA)
+	repo.shares[shareKey("member-1", "m-1")] = &model.Share{
+		MeetingID: "m-1", OwnerID: "owner-1", SharedToID: "member-1", Permission: model.PermissionRead,
+	}
+	repo.shares[shareKey("outsider", "m-1")] = &model.Share{
+		MeetingID: "m-1", OwnerID: "owner-1", SharedToID: "outsider", Permission: model.PermissionRead,
+	}
+	svc := newMeetingServiceWithRepo(repo)
+	for user, want := range map[string]string{"member-1": model.PermissionEdit, "outsider": model.PermissionRead} {
+		got, err := svc.ListMeetings(context.Background(), user, "shared", "", "", 20)
+		if err != nil || len(got.Meetings) != 1 || got.Meetings[0].Permission == nil || *got.Meetings[0].Permission != want {
+			t.Fatalf("%s list permission: %+v/%v; want %s", user, got, err, want)
+		}
+	}
+}
+
+func TestCatalogDirectReadShareYieldsToInheritedTeamEdit(t *testing.T) {
+	t.Setenv(accountDescendantReadsEnv, "1")
+	r := &descendantMeetingCatalogRepo{&catalogMeetingRepo{mockMeetingRepo: newMockMeetingRepo()}, descendantContentFixture()}
+	r.meetings["owner|meeting"] = &model.Meeting{UserID: "owner", MeetingID: "meeting", AccountID: "child", SharedToAccount: true, Title: "Published"}
+	r.shares["reader|meeting"] = &model.Share{OwnerID: "owner", SharedToID: "reader", MeetingID: "meeting", Permission: model.PermissionRead}
+	item, _, _, err := NewMeetingCatalogService(r).item(context.Background(), "reader", "all", "direct", "", repository.MeetingCatalogCandidate{OwnerID: "owner", MeetingID: "meeting"})
+	if err != nil || item == nil || item.Permission == nil || *item.Permission != model.PermissionEdit {
+		t.Fatalf("catalog direct read share for team member: %+v/%v", item, err)
+	}
+	r.meetings["owner|meeting"].SharedToAccount = false
+	item, _, _, err = NewMeetingCatalogService(r).item(context.Background(), "reader", "all", "direct", "", repository.MeetingCatalogCandidate{OwnerID: "owner", MeetingID: "meeting"})
+	if err != nil || item == nil || item.Permission == nil || *item.Permission != model.PermissionRead {
+		t.Fatalf("unpublished direct read share must stay read: %+v/%v", item, err)
 	}
 }

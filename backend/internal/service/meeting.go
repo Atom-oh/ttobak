@@ -555,6 +555,19 @@ func (s *MeetingService) listMeetingsFilteredPage(ctx context.Context, params re
 				perm := share.Permission
 				if share.Origin == model.ShareOriginAccount {
 					perm = accountMeetingPermission
+				} else if perm != model.PermissionEdit && meeting.SharedToAccount && meeting.AccountID != "" {
+					// A direct read grant yields to live team edit access, as in
+					// checkAccess. Display only: detail and writes recheck.
+					member, cached := memberCache[meeting.AccountID]
+					if !cached {
+						var err error
+						if member, err = resolveAccountReadGrant(ctx, s.repo, meeting.AccountID, userID); err == nil {
+							memberCache[meeting.AccountID] = member
+						}
+					}
+					if member != nil {
+						perm = accountMeetingPermission
+					}
 				}
 				item := model.ToMeetingListItem(meeting, true, &share.OwnerEmail, &perm)
 				response.Meetings = append(response.Meetings, item)

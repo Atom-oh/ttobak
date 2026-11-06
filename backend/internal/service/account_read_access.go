@@ -8,7 +8,7 @@ import (
 	"github.com/ttobak/backend/internal/repository"
 )
 
-const accountDescendantReadsEnv = "ACCOUNT_DESCENDANT_READS_ENABLED"
+const accountDescendantReadsEnv = repository.AccountDescendantReadsEnv
 
 type accountReadMembershipRepo interface {
 	GetMember(context.Context, string, string) (*model.AccountMember, error)

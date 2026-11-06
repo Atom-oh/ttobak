@@ -152,11 +152,15 @@ func (r *DynamoDBRepository) CaptureResummary(ctx context.Context, ownerID, meet
 	if err != nil {
 		return nil, err
 	}
-	if len(body) > 1024*1024 {
+	if len(body) > 1024*1024 || len(snapshot.Checks) > resummaryMaxCaptureChecks {
 		return nil, ErrSummaryLimit
 	}
 	return snapshot, nil
 }
+
+// resummaryMaxCaptureChecks keeps queue (checks+1) and completion (checks+3)
+// transactions within DynamoDB's 100-item limit.
+const resummaryMaxCaptureChecks = 96
 
 func (r *DynamoDBRepository) GetResummary(ctx context.Context, meetingID string) (*model.ResummaryState, error) {
 	row, err := r.summaryRow(ctx, model.PrefixMeeting+meetingID, model.ResummarySK)
@@ -429,8 +433,10 @@ func summaryCheckSK(check *types.ConditionCheck) (string, bool) {
 
 // accountTeamMemberChecks fences the membership that grants account-team
 // access: a direct member row on the meeting's account or, when descendant
-// reads are enabled, the nearest ancestor member row plus every traversed
-// parent link. It mirrors the service-side resolveAccountReadGrant walk.
+// reads are enabled, the nearest ancestor member row plus every parent link
+// from the meeting's account up to that ancestor. Unlike the service-side
+// resolveAccountReadGrant it stops at the granting ancestor instead of
+// walking to the root; those links alone decide ancestry.
 func (r *DynamoDBRepository) accountTeamMemberChecks(ctx context.Context, accountID, requester string) ([]model.SummaryCheck, error) {
 	memberFields := []string{"accountId", "userId", "addedAt", "summaryPrivacyVersion"}
 	member, err := r.summaryRow(ctx, model.PrefixAccount+accountID, model.PrefixMember+requester)
@@ -444,7 +450,7 @@ func (r *DynamoDBRepository) accountTeamMemberChecks(ctx context.Context, accoun
 		}
 		return []model.SummaryCheck{check}, nil
 	}
-	if os.Getenv("ACCOUNT_DESCENDANT_READS_ENABLED") != "1" {
+	if os.Getenv(AccountDescendantReadsEnv) != "1" {
 		return nil, ErrSummaryAccess
 	}
 	var checks []model.SummaryCheck
