@@ -651,19 +651,6 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 		})
 	}
 
-	// Get shares only for owner
-	var shareResponses []model.ShareResponse
-	if permission == "owner" {
-		shares, _ := s.repo.ListSharesForMeeting(ctx, meetingID)
-		for _, share := range shares {
-			shareResponses = append(shareResponses, model.ShareResponse{
-				UserID:     share.SharedToID,
-				Email:      share.Email,
-				Permission: share.Permission,
-			})
-		}
-	}
-
 	// The shared candidates may describe either variant or a previous edit.
 	// Only render those verified against the currently selected text.
 	meeting, permission, err = s.checkAccess(ctx, userID, meetingID)
@@ -672,6 +659,32 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 	}
 	if meeting == nil {
 		return nil, ErrNotFound
+	}
+	// Manager capability and manager-only fields follow this final read.
+	canManage, err := canManageMeeting(ctx, s.repo, userID, meeting, permission)
+	if err != nil {
+		return nil, err
+	}
+	var shareResponses []model.ShareResponse
+	if canManage {
+		shares, _ := s.repo.ListSharesForMeeting(ctx, meetingID)
+		for _, share := range shares {
+			shareResponses = append(shareResponses, model.ShareResponse{
+				UserID:        share.SharedToID,
+				Email:         share.Email,
+				Permission:    share.Permission,
+				SharedByEmail: share.SharedByEmail,
+			})
+		}
+	}
+	// Team (re)publication requires direct membership of the meeting's account.
+	canShareTeam := permission == "owner"
+	if !canShareTeam && canManage && meeting.AccountID != "" {
+		member, err := s.repo.GetMember(ctx, meeting.AccountID, userID)
+		if err != nil {
+			return nil, err
+		}
+		canShareTeam = member != nil
 	}
 	transcript, variant := selectMeetingTranscript(meeting)
 	var transcription, transcriptionV2 json.RawMessage
@@ -700,18 +713,21 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 	var projectIDs []string
 	if permission == "owner" {
 		notionPageID = meeting.NotionPageID
+	}
+	if canManage {
 		projectIDs = meeting.ProjectIDs
 	}
 	fieldInsights, insightsError, insightsTruncated := meetingFieldInsights(meeting.Insights)
 
 	return &model.MeetingDetailResponse{
 		CanRecoverRecording:        permission == "owner" && CanRecoverRecording(meeting),
+		CanManage:                  canManage,
 		CanCorrectSpeakers:         permission == "owner" || permission == model.PermissionEdit || permission == model.PermissionRead,
 		AudioCrop:                  meeting.AudioCrop,
 		Duration:                   meeting.Duration,
 		SupportsNotesComparison:    true,
 		SupportsPrivateAccountLink: true,
-		SummarySharing:             summarySharingStatus(meeting, permission),
+		SummarySharing:             summarySharingStatus(meeting, permission, canShareTeam),
 		SummaryGeneration:          meeting.SummaryGeneration(),
 		MeetingID:                  meeting.MeetingID,
 		UserID:                     meeting.UserID,
@@ -1122,14 +1138,23 @@ func markNonOwnerSourceEdit(fields map[string]interface{}, actorID string, befor
 // have an invited Cognito account -- the grant was queued as a PendingShare
 // (see its doc comment) rather than a real Share, and the returned *Share is
 // nil.
-func (s *MeetingService) ShareMeetingByEmail(ctx context.Context, ownerID, ownerEmail, meetingID, targetEmail, permission string) (*model.Share, bool, error) {
-	// Verify ownership
-	meeting, err := s.repo.GetMeeting(ctx, ownerID, meetingID)
+func (s *MeetingService) ShareMeetingByEmail(ctx context.Context, actorID, actorEmail, meetingID, targetEmail, permission string) (*model.Share, bool, error) {
+	// The creator or a managing account member; the grant stays the creator's.
+	meeting, err := resolveMeetingManager(ctx, s.repo, actorID, meetingID)
 	if err != nil {
 		return nil, false, err
 	}
-	if meeting == nil {
-		return nil, false, ErrNotFound
+	// A member's grant is capped at its own (edit) permission and passes the
+	// same repository safe-source gate as the creator's (createShare /
+	// PutPendingShare share one implementation).
+	if permission != model.PermissionRead && permission != model.PermissionEdit {
+		return nil, false, ErrInvalidInput
+	}
+	ownerID := meeting.UserID
+	ownerEmail := creatorEmail(ctx, s.repo, ownerID, actorID, actorEmail)
+	sharedByID, sharedByEmail := "", ""
+	if actorID != ownerID {
+		sharedByID, sharedByEmail = actorID, actorEmail
 	}
 
 	// Find user by email
@@ -1157,7 +1182,7 @@ func (s *MeetingService) ShareMeetingByEmail(ctx context.Context, ownerID, owner
 		// eventual materialize makes MaterializePendingAccountGrant's own
 		// ConditionCheck and Put target the same DynamoDB item -- comparing
 		// the resolved sub here closes that gap before it's ever queued.
-		if sub == ownerID {
+		if sub == ownerID || sub == actorID {
 			return nil, false, ErrSelfShare
 		}
 		if err := s.repo.PutPendingShare(ctx, &model.PendingShare{
@@ -1167,6 +1192,8 @@ func (s *MeetingService) ShareMeetingByEmail(ctx context.Context, ownerID, owner
 			Permission:        permission,
 			InvitedByUserID:   ownerID,
 			InvitedByEmail:    ownerEmail,
+			SharedByUserID:    sharedByID,
+			SharedByEmail:     sharedByEmail,
 			InvitedCognitoSub: sub,
 		}); err != nil {
 			return nil, false, err
@@ -1174,12 +1201,22 @@ func (s *MeetingService) ShareMeetingByEmail(ctx context.Context, ownerID, owner
 		return nil, true, nil
 	}
 
-	// Cannot share with self
-	if ownerID == targetUser.UserID {
+	// Cannot share with self (or back to the creator)
+	if ownerID == targetUser.UserID || actorID == targetUser.UserID {
 		return nil, false, ErrSelfShare
 	}
 
-	share, err := s.repo.CreateShare(ctx, meetingID, ownerID, ownerEmail, targetUser.UserID, targetEmail, permission, "")
+	if sharedByID == "" {
+		share, err := s.repo.CreateShare(ctx, meetingID, ownerID, ownerEmail, targetUser.UserID, targetEmail, permission, "")
+		return share, false, err
+	}
+	by, ok := s.repo.(interface {
+		CreateShareBy(ctx context.Context, meetingID, ownerID, ownerEmail, sharedToID, email, permission, sharedByID, sharedByEmail string) (*model.Share, error)
+	})
+	if !ok {
+		return nil, false, ErrForbidden
+	}
+	share, err := by.CreateShareBy(ctx, meetingID, ownerID, ownerEmail, targetUser.UserID, targetEmail, permission, sharedByID, sharedByEmail)
 	return share, false, err
 }
 
@@ -1211,20 +1248,9 @@ func (s *MeetingService) ShareMeetingByEmail(ctx context.Context, ownerID, owner
 // before this call's own read -- see GetPendingShare's doc comment),
 // reporting ErrPendingAlreadyClaimed instead of a silent no-op in that
 // case only.
-func (s *MeetingService) RevokePendingShare(ctx context.Context, ownerID, meetingID, email string) error {
-	meeting, err := s.repo.GetMeeting(ctx, ownerID, meetingID)
-	if err != nil {
+func (s *MeetingService) RevokePendingShare(ctx context.Context, actorID, meetingID, email string) error {
+	if _, err := resolveMeetingManager(ctx, s.repo, actorID, meetingID); err != nil {
 		return err
-	}
-	if meeting == nil {
-		existing, err := s.repo.GetMeetingByID(ctx, meetingID)
-		if err != nil {
-			return err
-		}
-		if existing != nil {
-			return ErrForbidden
-		}
-		return ErrNotFound
 	}
 	sk := model.PrefixPendingMeeting + meetingID
 	// Captured BEFORE the delete attempt: narrows the window in which
@@ -1475,21 +1501,11 @@ func (s *MeetingService) materializeOne(ctx context.Context, userID, email strin
 }
 
 // RevokeShare revokes a share (owner only)
-func (s *MeetingService) RevokeShare(ctx context.Context, ownerID, meetingID, sharedToID string) error {
-	// Verify ownership
-	meeting, err := s.repo.GetMeeting(ctx, ownerID, meetingID)
-	if err != nil {
+func (s *MeetingService) RevokeShare(ctx context.Context, actorID, meetingID, sharedToID string) error {
+	// The creator or a managing account member may revoke any direct grant.
+	if _, err := resolveMeetingManager(ctx, s.repo, actorID, meetingID); err != nil {
 		return err
 	}
-	if meeting == nil {
-		// Check if meeting exists
-		existing, _ := s.repo.GetMeetingByID(ctx, meetingID)
-		if existing != nil {
-			return ErrForbidden
-		}
-		return ErrNotFound
-	}
-
 	return s.repo.DeleteShare(ctx, sharedToID, meetingID)
 }
 
@@ -1657,50 +1673,63 @@ func (s *MeetingService) UpdateMeetingContent(ctx context.Context, meetingID, co
 // LinkMeetingToAccount classifies a meeting under an account (no sharing).
 // Only the meeting owner who is a member of the account may do this.
 // Clear prior team publication in the same write; direct shares are independent.
-func (s *MeetingService) LinkMeetingToAccount(ctx context.Context, ownerID, meetingID, accountID string) error {
-	meeting, err := s.repo.GetMeeting(ctx, ownerID, meetingID)
+func (s *MeetingService) LinkMeetingToAccount(ctx context.Context, actorID, meetingID, accountID string) error {
+	meeting, err := resolveMeetingManager(ctx, s.repo, actorID, meetingID)
 	if err != nil {
 		return err
 	}
-	if meeting == nil {
-		if existing, _ := s.repo.GetMeetingByID(ctx, meetingID); existing != nil {
-			return ErrForbidden
-		}
-		return ErrNotFound
+	if err := requireSameManagedAccount(actorID, meeting, accountID); err != nil {
+		return err
 	}
-	member, err := s.repo.GetMember(ctx, accountID, ownerID)
+	// The actor must directly belong to the target account; inherited access
+	// never classifies a meeting into another account.
+	member, err := s.repo.GetMember(ctx, accountID, actorID)
 	if err != nil {
 		return err
 	}
 	if member == nil {
 		return ErrForbidden
 	}
-	return s.repo.UpdateMeetingFields(ctx, ownerID, meetingID, map[string]interface{}{
-		"accountId": accountID, "sharedToAccount": false,
-	})
+	if actorID == meeting.UserID {
+		return s.repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, map[string]interface{}{
+			"accountId": accountID, "sharedToAccount": false,
+		})
+	}
+	writer, ok := s.repo.(actorAccountWriter)
+	if !ok {
+		return ErrForbidden
+	}
+	return writer.LinkMeetingToAccountAs(ctx, meeting.UserID, actorID, meetingID, accountID)
+}
+
+// actorAccountWriter classifies/publishes the creator's meeting while pinning
+// a managing member's direct account membership.
+type actorAccountWriter interface {
+	LinkMeetingToAccountAs(ctx context.Context, ownerID, actorID, meetingID, accountID string) error
+	PublishMeetingToAccountAs(ctx context.Context, ownerID, actorID, meetingID, accountID string) error
 }
 
 // ShareMeetingToAccount publishes a meeting to an account team: sets
 // accountId+sharedToAccount, grants read Share to every account member
 // (except the owner), and writes a MeetingRef into the account partition.
-func (s *MeetingService) ShareMeetingToAccount(ctx context.Context, ownerID, ownerEmail, meetingID, accountID string) (*model.ShareToAccountResult, error) {
-	meeting, err := s.repo.GetMeeting(ctx, ownerID, meetingID)
+func (s *MeetingService) ShareMeetingToAccount(ctx context.Context, actorID, actorEmail, meetingID, accountID string) (*model.ShareToAccountResult, error) {
+	meeting, err := resolveMeetingManager(ctx, s.repo, actorID, meetingID)
 	if err != nil {
 		return nil, err
 	}
-	if meeting == nil {
-		if existing, _ := s.repo.GetMeetingByID(ctx, meetingID); existing != nil {
-			return nil, ErrForbidden
-		}
-		return nil, ErrNotFound
+	if err := requireSameManagedAccount(actorID, meeting, accountID); err != nil {
+		return nil, err
 	}
-	owner, err := s.repo.GetMember(ctx, accountID, ownerID)
+	// Publication requires the actor's direct membership in the target account.
+	actor, err := s.repo.GetMember(ctx, accountID, actorID)
 	if err != nil {
 		return nil, err
 	}
-	if owner == nil {
+	if actor == nil {
 		return nil, ErrForbidden
 	}
+	ownerID := meeting.UserID
+	ownerEmail := creatorEmail(ctx, s.repo, ownerID, actorID, actorEmail)
 
 	// This sequence is non-transactional, but every write is idempotent
 	// (the meeting update and MeetingRef PutItem target fixed keys; CreateShare
@@ -1713,7 +1742,14 @@ func (s *MeetingService) ShareMeetingToAccount(ctx context.Context, ownerID, own
 	// leaving ListAccountMeetings permanently unable to surface it.
 	meeting.AccountID = accountID
 	meeting.SharedToAccount = true
-	if err := s.repo.PublishMeetingToAccount(ctx, ownerID, meetingID, accountID); err != nil {
+	if actorID == ownerID {
+		err = s.repo.PublishMeetingToAccount(ctx, ownerID, meetingID, accountID)
+	} else if writer, ok := s.repo.(actorAccountWriter); ok {
+		err = writer.PublishMeetingToAccountAs(ctx, ownerID, actorID, meetingID, accountID)
+	} else {
+		err = ErrForbidden
+	}
+	if err != nil {
 		return nil, err
 	}
 	// Publication may mint an Insight identity for legacy output. Fan out only
