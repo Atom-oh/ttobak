@@ -193,8 +193,9 @@ The site distribution uses price class 200 so viewers in Korea and Japan reach
 local edge locations; class 100 excluded Asia and served Seoul from Europe.
 
 Assets and KB buckets use S3-managed encryption, versioning, retain policies and
-Block Public Access. Media reads use an OAC allowlist for audio/, images/, files/,
-docs/ and docs-pdf/. New categories must extend that allowlist; transcript spill
+Block Public Access. Media reads use an OAC allowlist for audio/, audio-playback/,
+images/, files/, docs/ and docs-pdf/ (audio-playback/ holds ADR-062 remuxed copies,
+with its own 90-day IA transition). New categories must extend that allowlist; transcript spill
 objects are not public media. Signed GETs use CloudFront with an S3 fallback when
 signing material is unavailable; signed upload PUTs still target S3 directly.
 
