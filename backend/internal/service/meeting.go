@@ -720,7 +720,8 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 	fieldInsights, insightsError, insightsTruncated := meetingFieldInsights(meeting.Insights)
 
 	return &model.MeetingDetailResponse{
-		CanRecoverRecording:        permission == "owner" && CanRecoverRecording(meeting),
+		// Members may recover too; RecoverMeeting enforces the quiet-checkpoint rule.
+		CanRecoverRecording:        canManage && CanRecoverRecording(meeting),
 		CanManage:                  canManage,
 		CanCorrectSpeakers:         permission == "owner" || permission == model.PermissionEdit || permission == model.PermissionRead,
 		AudioCrop:                  meeting.AudioCrop,
@@ -1110,7 +1111,7 @@ func (s *MeetingService) SelectTranscript(ctx context.Context, userID, meetingID
 
 // termSourceFields are the meeting fields automatic term extraction reads,
 // directly or through the AI notes: saved notes and liveSummary are summary
-// prompt inputs. Attachments need no marker: upload completion is owner-only.
+// prompt inputs. A managing member's upload sets the same marker (UploadService).
 var termSourceFields = []string{"content", "transcriptA", "transcriptB", "selectedTranscript", "notes", "liveSummary"}
 
 // markNonOwnerSourceEdit adds the sticky SourceEditedByNonOwnerAt marker to

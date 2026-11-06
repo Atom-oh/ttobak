@@ -40,11 +40,21 @@
     to another account or publishing an unpublished meeting stays creator-only.
     Only the creator mints the ADR-059 owner approval; a member republish changes
     no audience and publishes without approval.
+  - Predecessor links must be the creator's meetings. A member may link only
+    predecessors published to the same account (never one readable only through
+    a private direct share), and the write is fenced on the parent's publication
+    and the member's live grant.
+  - Image/file uploads, rediarize and recovery work for members (audio crop,
+    the simulator and project links stay creator-only until the follow-up
+    change); recovery requires a checkpoint quiet for 10 minutes (409
+    `RECORDING_STILL_ACTIVE`). Audio upload is creator-only (403): the S3
+    trigger transcribes any object under `audio/{creator}/{meeting}/` before
+    a completion or batch check, so member audio waits for a separate staging
+    prefix design. Member uploads set the non-owner source marker (at presign
+    time for files) and `Attachment.uploadedBy`; their presigned PUTs expire
+    after 5 minutes (the creator keeps 1 hour).
   - Creator-only: delete, the Notion page reference and sharing-safe
     regeneration. Strangers get 404 rather than 403 on these routes.
-  - Previous-meeting links, uploads, recovery, rediarize, crop, simulator and
-    project links remain creator-only until the follow-up management change
-    extends them.
 
 ## Context and original decision
 
