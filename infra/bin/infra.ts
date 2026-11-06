@@ -11,6 +11,7 @@ import { billingFrontendContext, FrontendStack } from '../lib/frontend-stack';
 import { CrawlerStack } from '../lib/crawler-stack';
 import { ResearchAgentStack } from '../lib/research-agent-stack';
 import { WhisperStack } from '../lib/whisper-stack';
+import { ObservabilityStack } from '../lib/observability-stack';
 import { WebSearchGatewayStack } from '../lib/web-search-gateway-stack';
 import { addBillingStack, billingPublicUrl, billingWebSearchGateway } from '../lib/billing-stack';
 import { resolveModelConfiguration } from '../lib/model-config';
@@ -117,6 +118,19 @@ const edgeAuthStack = new EdgeAuthStack(app, 'TtobakEdgeAuthStack', {
   connectorPrivateBridgeEnabled,
 });
 edgeAuthStack.addDependency(authStack);
+
+// Stack 5b: OTLP collector writing to the mgmt observability ClickHouse via
+// its PrivateLink service. Independent of other stacks; later consumers read
+// /ttobak/otel/* SSM parameters instead of cross-stack exports.
+new ObservabilityStack(app, 'TtobakObservabilityStack', {
+  env,
+  description: 'TTOBAK AI Meeting Assistant - Observability (OTel collector -> mgmt ClickHouse)',
+  vpcId: sharedVpcId,
+  clickhouseEndpointService: app.node.tryGetContext('ttobak:clickhouseEndpointService'),
+  clickhouseSecretName: app.node.tryGetContext('ttobak:clickhouseSecretName'),
+  collectorEnabled: app.node.tryGetContext('ttobak:otelCollectorEnabled') === 'true',
+  siteOrigin: `https://${app.node.tryGetContext('ttobak:domainName')}`,
+});
 
 // Stack 6: Gateway (API Gateway + Lambda) - depends on Auth, Storage, AI, Knowledge, WebSearchGateway
 const gatewayStack = new GatewayStack(app, 'TtobakGatewayStack', {

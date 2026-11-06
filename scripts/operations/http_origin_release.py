@@ -34,7 +34,7 @@ MIN_TRANSITION_WINDOW = 3600  # Operational headroom, not a CloudFormation compl
 OVERLAP = 24 * 60 * 60
 STACKS = (
     "TtobakWebSearchGatewayStack", "TtobakStorageStack", "TtobakAuthStack",
-    "TtobakAiStack", "TtobakEdgeAuthStack", "TtobakGatewayStack",
+    "TtobakAiStack", "TtobakEdgeAuthStack", "TtobakObservabilityStack", "TtobakGatewayStack",
     "TtobakCrawlerStack", "TtobakResearchAgentStack", "TtobakWhisperStack",
     "TtobakFrontendStack",
 )
