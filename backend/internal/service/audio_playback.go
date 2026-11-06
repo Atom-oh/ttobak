@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -11,6 +12,11 @@ import (
 
 	"github.com/ttobak/backend/internal/audioplayback"
 )
+
+// playbackLookupTimeout bounds both HEADs of the optional copy lookup so a
+// stalled S3 connection falls back to the original instead of consuming the
+// API request deadline.
+var playbackLookupTimeout = 2 * time.Second
 
 // PlaybackAudioKey returns the ADR-062 seekable copy of sourceKey when it
 // exists and is bound to the source's current ETag and VersionId; otherwise
@@ -21,6 +27,8 @@ func (s *UploadService) PlaybackAudioKey(ctx context.Context, sourceKey string) 
 	if !ok || s.s3Client == nil {
 		return sourceKey
 	}
+	ctx, cancel := context.WithTimeout(ctx, playbackLookupTimeout)
+	defer cancel()
 	source, err := s.s3Client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(s.bucketName), Key: aws.String(sourceKey)})
 	if err != nil || source == nil {
 		log.Printf("warn: audio playback source HEAD failed for %s: %v", sourceKey, err)

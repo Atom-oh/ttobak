@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -113,5 +114,25 @@ func TestGenerateAudioPlaybackURLSignsTheSelectedKey(t *testing.T) {
 	url, err := svc.GenerateAudioPlaybackURL(context.Background(), playbackSource)
 	if err != nil || !strings.Contains(url, "/bucket/"+playbackCopy) {
 		t.Fatalf("url %s err %v", url, err)
+	}
+}
+
+func TestPlaybackAudioKeyFallsBackWhenTheLookupStalls(t *testing.T) {
+	original := playbackLookupTimeout
+	playbackLookupTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { playbackLookupTimeout = original })
+	client := s3.New(s3.Options{Region: "ap-northeast-2", Credentials: credentials.NewStaticCredentialsProvider("test-access-key", "test-secret", ""), RetryMaxAttempts: 1,
+		BaseEndpoint: aws.String("http://storage.example.test"), UsePathStyle: true,
+		HTTPClient: recoveryHTTPClient(func(r *http.Request) (*http.Response, error) {
+			<-r.Context().Done() // never answers
+			return nil, r.Context().Err()
+		})})
+	svc := NewUploadService(client, nil, "bucket", nil)
+	start := time.Now()
+	if got := svc.PlaybackAudioKey(context.Background(), playbackSource); got != playbackSource {
+		t.Fatalf("got %s", got)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("lookup took %s", elapsed)
 	}
 }
