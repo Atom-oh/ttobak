@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 76adfc2fe79b · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: d3f6f94b347a · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
 # TTOBAK review context
 
 Shared by Codex, Kiro, and the CI review panel. Extracted from the
@@ -31,7 +31,7 @@ canonical CLAUDE.md; delivery procedures and historical records are omitted.
 | Area | Implementation | Source of truth |
 |---|---|---|
 | Web | Next.js 16, React 19, Tailwind 4, TipTap; production static export | `frontend/package.json`, `frontend/next.config.ts`, `frontend/src/` |
-| API | Go 1.25, ARM64 Lambda, chi | `backend/go.mod`, `backend/cmd/api/main.go` |
+| API | Go 1.27.3, ARM64 Lambda, chi | `backend/go.mod`, `backend/cmd/api/main.go` |
 | Go functions | Eight zip entry points: api, transcribe, summarize, process-image, kb, research-worker, websocket, ws-authorizer | `backend/cmd/`, `infra/lib/gateway-stack.ts` |
 | Document conversion | Separate Go container with LibreOffice; not a zip | `backend/cmd/convert-doc/` |
 | Python | QA, crawler, simulator and document-extraction Lambdas; separate research-agent container | `backend/python/`, each requirements/Dockerfile |
@@ -160,8 +160,8 @@ limit instead of claiming a Mac build passed.
   checkpoints; marked-failure deletion spares user data.
 - **Accounts:** members add/change non-owner roles (ADR-034/054). Creation permits
   another Owner and optional creator AM (ADR-055). Removal/revocation/reparenting
-  are owner-only. Ancestor reads (ADR-058) permit Billing actions (ADR-060);
-  filters classify (ADR-036).
+  are owner-only. Ancestor reads permit Billing (ADR-058/060); filters classify
+  (ADR-036); members edit published meetings (ADR-016).
 - **Projects/research:** multi-account String Sets plus transactional reverse refs;
   project access is owner, direct member, or member of a linked account.
   `ProjectService.ListMyProjects` unions all three; its repository primitive only

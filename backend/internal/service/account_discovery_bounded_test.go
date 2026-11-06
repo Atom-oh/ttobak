@@ -581,7 +581,7 @@ func TestDescendantMeetingCatalogContinuesAccountDiscovery(t *testing.T) {
 	r.meetings["owner|shared"] = &model.Meeting{UserID: "owner", MeetingID: "shared", AccountID: "child", SharedToAccount: true, Title: "Shared"}
 	r.meetingRefs["child"] = []model.MeetingRef{{MeetingID: "shared", OwnerUserID: "owner"}}
 	rows := collectCatalogMeetings(t, NewMeetingCatalogService(r), r.catalogMeetingRepo, MeetingCatalogIdentity{UserID: "reader"}, url.Values{})
-	if row, ok := rows["shared"]; len(rows) != 1 || !ok || row.Permission == nil || *row.Permission != model.PermissionRead {
+	if row, ok := rows["shared"]; len(rows) != 1 || !ok || row.Permission == nil || *row.Permission != model.PermissionEdit {
 		t.Fatalf("meeting catalog lost inherited traversal: %+v", rows)
 	}
 }

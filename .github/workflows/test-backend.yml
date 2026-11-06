@@ -36,9 +36,8 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          # Match backend/go.mod's `go 1.25.0`. With '1.24' the build fails
-          # with `go.mod requires go >= 1.25.0 (running go 1.24.13)`.
-          go-version: '1.25'
+          go-version: '1.27.3'
+          check-latest: true
 
       - uses: actions/setup-node@v6
         with:

@@ -82,13 +82,13 @@ describe('GatewayStack', () => {
     template = buildTemplate();
   });
 
-  test('descendant reads remain off until bootstrap and publish matching API/QA configuration', () => {
+  test('descendant reads remain off until bootstrap and publish matching API/QA/summarize configuration', () => {
     const json = template.toJSON();
     expect(json.Parameters.AccountDescendantReadsEnabled).toMatchObject({ Default: '0', AllowedValues: ['0', '1'] });
     const functions = Object.values(template.findResources('AWS::Lambda::Function'));
     for (const fn of functions) {
       expect(fn.Properties.Environment?.Variables?.ACCOUNT_DESCENDANT_READS_ENABLED).toEqual(
-        ['ttobak-api', 'ttobak-qa'].includes(fn.Properties.FunctionName) ? { Ref: 'AccountDescendantReadsEnabled' } : undefined);
+        ['ttobak-api', 'ttobak-qa', 'ttobak-summarize'].includes(fn.Properties.FunctionName) ? { Ref: 'AccountDescendantReadsEnabled' } : undefined);
     }
     const version = Object.values(template.findResources('AWS::Lambda::Version'))
       .find(value => JSON.stringify(value.Properties.FunctionName).includes('ApiFunction'))!;

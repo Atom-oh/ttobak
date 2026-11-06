@@ -309,7 +309,7 @@ func TestDescendantMeetingCatalogNeverEscalates(t *testing.T) {
 	r.meetings["owner|meeting"] = &model.Meeting{UserID: "owner", MeetingID: "meeting", AccountID: "child", SharedToAccount: true, Title: "Published", Content: "unsafe", Insights: "unsafe"}
 	r.shares["reader|meeting"] = &model.Share{OwnerID: "owner", SharedToID: "reader", MeetingID: "meeting", Permission: model.PermissionEdit, Origin: model.ShareOriginAccount}
 	item, _, _, err := NewMeetingCatalogService(r).item(context.Background(), "reader", "all", "team", "child", repository.MeetingCatalogCandidate{OwnerID: "owner", MeetingID: "meeting"})
-	if err != nil || item == nil || item.Permission == nil || *item.Permission != "read" || item.Summary != "unsafe" {
+	if err != nil || item == nil || item.Permission == nil || *item.Permission != model.PermissionEdit || item.Summary != "unsafe" {
 		t.Fatalf("inherited catalog summary/permission: %+v/%v", item, err)
 	}
 }

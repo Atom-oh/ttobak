@@ -1,7 +1,7 @@
 # Developer onboarding
 
 Read [CLAUDE.md](../CLAUDE.md) and the [documentation map](README.md) first.
-Use Go 1.25, a supported Node runtime (CI uses Node 24 for infra), Python 3.12 for
+Use Go 1.27.3 or newer, a supported Node runtime (CI uses Node 24 for infra), Python 3.12 for
 Lambda tests, AWS CLI v2 for authorized cloud operations, and Docker for container
 builds. Mac recording needs macOS/Rust/Tauri native dependencies.
 

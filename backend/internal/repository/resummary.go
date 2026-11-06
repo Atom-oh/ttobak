@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"time"
 
@@ -76,7 +77,7 @@ func (r *DynamoDBRepository) CaptureResummary(ctx context.Context, ownerID, meet
 		if err := attributevalue.UnmarshalMap(shareRow, &share); err != nil {
 			return nil, err
 		}
-		if share.Permission != model.PermissionEdit || share.OwnerID != ownerID || share.MeetingID != meetingID {
+		if len(shareRow) > 0 && (share.OwnerID != ownerID || share.MeetingID != meetingID) {
 			return nil, ErrSummaryAccess
 		}
 		check, err := summaryCheck(model.PrefixUser+requester, model.PrefixShare+meetingID, shareRow, []string{"meetingId", "ownerId", "permission", "origin", "accountId"})
@@ -84,24 +85,24 @@ func (r *DynamoDBRepository) CaptureResummary(ctx context.Context, ownerID, meet
 			return nil, err
 		}
 		snapshot.Checks = append(snapshot.Checks, check)
-		if share.Origin == model.ShareOriginAccount {
+		if len(shareRow) > 0 && share.Origin != model.ShareOriginAccount && share.Permission == model.PermissionEdit {
+			// An explicit direct edit grant stands on its own.
+		} else {
+			// No row, an account-origin row, or a direct read grant that yields
+			// to account-team edit access.
+			// Team access grants edit (ADR-016 2026-11-06 amendment); fence the
+			// live membership that grants it.
+			// Authorize from the meeting's current account; an account-origin
+			// row left from an earlier publication is a cache, fenced above.
 			meeting := snapshot.Meeting
-			if !meeting.SharedToAccount || meeting.AccountID == "" || (share.AccountID != "" && share.AccountID != meeting.AccountID) {
+			if !meeting.SharedToAccount || meeting.AccountID == "" {
 				return nil, ErrSummaryAccess
 			}
-			member, err := r.summaryRow(ctx, model.PrefixAccount+meeting.AccountID, model.PrefixMember+requester)
+			checks, err := r.accountTeamMemberChecks(ctx, meeting.AccountID, requester)
 			if err != nil {
 				return nil, err
 			}
-			if len(member) == 0 {
-				return nil, ErrSummaryAccess
-			}
-			check, err := summaryCheck(model.PrefixAccount+meeting.AccountID, model.PrefixMember+requester, member,
-				[]string{"accountId", "userId", "addedAt", "summaryPrivacyVersion"})
-			if err != nil {
-				return nil, err
-			}
-			snapshot.Checks = append(snapshot.Checks, check)
+			snapshot.Checks = append(snapshot.Checks, checks...)
 		}
 	}
 	attachments, err := r.summaryRows(ctx, meetingID, model.PrefixAttachment, 20)
@@ -153,11 +154,15 @@ func (r *DynamoDBRepository) CaptureResummary(ctx context.Context, ownerID, meet
 	if err != nil {
 		return nil, err
 	}
-	if len(body) > 1024*1024 {
+	if len(body) > 1024*1024 || len(snapshot.Checks) > resummaryMaxCaptureChecks {
 		return nil, ErrSummaryLimit
 	}
 	return snapshot, nil
 }
+
+// resummaryMaxCaptureChecks keeps queue (checks+1) and completion (checks+3)
+// transactions within DynamoDB's 100-item limit.
+const resummaryMaxCaptureChecks = 96
 
 func (r *DynamoDBRepository) GetResummary(ctx context.Context, meetingID string) (*model.ResummaryState, error) {
 	row, err := r.summaryRow(ctx, model.PrefixMeeting+meetingID, model.ResummarySK)
@@ -426,4 +431,71 @@ func summaryCheckSK(check *types.ConditionCheck) (string, bool) {
 		return "", false
 	}
 	return sk.Value, true
+}
+
+// accountTeamMemberChecks fences the membership that grants account-team
+// access: a direct member row on the meeting's account or, when descendant
+// reads are enabled, the nearest ancestor member row plus every parent link
+// from the meeting's account up to that ancestor. Unlike the service-side
+// resolveAccountReadGrant it stops at the granting ancestor instead of
+// walking to the root; those links alone decide ancestry.
+func (r *DynamoDBRepository) accountTeamMemberChecks(ctx context.Context, accountID, requester string) ([]model.SummaryCheck, error) {
+	memberFields := []string{"accountId", "userId", "addedAt", "summaryPrivacyVersion"}
+	member, err := r.summaryRow(ctx, model.PrefixAccount+accountID, model.PrefixMember+requester)
+	if err != nil {
+		return nil, err
+	}
+	if len(member) > 0 {
+		check, err := summaryCheck(model.PrefixAccount+accountID, model.PrefixMember+requester, member, memberFields)
+		if err != nil {
+			return nil, err
+		}
+		return []model.SummaryCheck{check}, nil
+	}
+	if os.Getenv(AccountDescendantReadsEnv) != "1" {
+		return nil, ErrSummaryAccess
+	}
+	var checks []model.SummaryCheck
+	seen := map[string]bool{}
+	for id := accountID; ; {
+		if seen[id] || len(seen) > AccountHierarchyMaxAncestors {
+			return nil, ErrSummaryAccess
+		}
+		seen[id] = true
+		meta, err := r.summaryRow(ctx, model.PrefixAccount+id, model.SKAccountMeta)
+		if err != nil {
+			return nil, err
+		}
+		var account model.Account
+		if len(meta) == 0 {
+			return nil, ErrSummaryAccess
+		}
+		if err := attributevalue.UnmarshalMap(meta, &account); err != nil {
+			return nil, err
+		}
+		if account.AccountID != id {
+			return nil, ErrSummaryAccess
+		}
+		check, err := summaryCheck(model.PrefixAccount+id, model.SKAccountMeta, meta, []string{"accountId", "parentAccountId"})
+		if err != nil {
+			return nil, err
+		}
+		checks = append(checks, check)
+		parent := account.ParentAccountID
+		if parent == "" {
+			return nil, ErrSummaryAccess
+		}
+		member, err := r.summaryRow(ctx, model.PrefixAccount+parent, model.PrefixMember+requester)
+		if err != nil {
+			return nil, err
+		}
+		if len(member) > 0 {
+			check, err := summaryCheck(model.PrefixAccount+parent, model.PrefixMember+requester, member, memberFields)
+			if err != nil {
+				return nil, err
+			}
+			return append(checks, check), nil
+		}
+		id = parent
+	}
 }
