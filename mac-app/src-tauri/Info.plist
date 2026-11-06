@@ -11,6 +11,9 @@
     <key>NSAudioCaptureUsageDescription</key>
     <string>TTOBAK records system audio (other participants&apos; voices) from desktop meeting apps such as Zoom, Teams and Google Meet, mixed with your microphone. The screen is never captured.</string>
 
+    <key>NSAppleEventsUsageDescription</key>
+    <string>TTOBAK checks whether a browser tab is a meeting (Google Meet, Teams or Zoom on the web) while that browser uses the microphone, so it can offer to record. A fixed script reads the browser's tab addresses and keeps only meeting addresses; other addresses are discarded and never stored or sent.</string>
+
     <key>LSMinimumSystemVersion</key>
     <string>14.2</string>
 
