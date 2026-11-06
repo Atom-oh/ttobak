@@ -45,7 +45,7 @@ Billing team access: [ADR-060](decisions/ADR-060-billing-shared-team-access.md) 
 | [Self-service Account invitations](decisions/ADR-054-self-service-account-invitations.md) | Member-authorized email invitation and identity-bound Account grants | Account service/handler, pending transactions and frontend invitation receipts |
 | [Designated initial Account Owner](decisions/ADR-055-designated-account-owner.md) | Owner invitation, optional creator AM membership and bounded creation receipts | Atomic creation, authenticated Owner resend and creator checkbox |
 | [Billing service origin and identity](decisions/ADR-056-billing-service-origin-and-identity.md) | IamAuth Web Function behind OAC, BFF-verified TTOBAK JWT, direct/ancestor membership access (ADR-060), upload prefix | On main: BFF, `TtobakBillingStack`, CloudFront behaviors and Phase 2 worker code; production's separate companion ECS image uses the [Billing release](runbooks/billing-release.md) procedure |
-| [Seekable audio playback copies](decisions/ADR-062-seekable-audio-playback-copies.md) | Remuxed `audio-playback/` copies bound to source ETag/version; originals unchanged | Storage prefix, key mapping and cleanup on main; remux worker, API selection and backfill staged |
+| [Seekable audio playback copies](decisions/ADR-062-seekable-audio-playback-copies.md) | Remuxed `audio-playback/` copies bound to source ETag/version; originals unchanged | Storage prefix, key mapping, cleanup and `ttobak-audio-remux` worker; API selection and backfill staged |
 
 ## Feature workflows
 
