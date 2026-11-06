@@ -54,6 +54,11 @@
     prefix design. Member uploads set the non-owner source marker (at presign
     time for files) and `Attachment.uploadedBy`; their presigned PUTs expire
     after 5 minutes (the creator keeps 1 hour).
+  - A member's rediarize write, project link and project unlink are fenced in
+    their transaction on the meeting's publication and the member's live grant
+    (unlink also on the project's account link). Recovery copies exactly the
+    checkpoint that passed the quiet check (`CopySourceIfMatch` on its listed
+    ETag); a rewritten checkpoint returns 409.
   - Creator-only: delete, the Notion page reference and sharing-safe
     regeneration. Strangers get 404 rather than 403 on these routes.
 
