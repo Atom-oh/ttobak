@@ -30,6 +30,7 @@ Billing team access: [ADR-060](decisions/ADR-060-billing-shared-team-access.md) 
 | [Deployment runbook](runbooks/deployment.md) | Build/deploy/rollback constraints | Deployment workflows |
 | [Descendant Account sharing](runbooks/account-descendant-sharing.md) | Read-only inheritance, conditional relation bootstrap, activation and rollback | ADR-058, API/QA feature parameter |
 | [Model deployment](runbooks/model-deployment.md) | Environment/preset selection, exact model grants, acceptance and rollback | Model configuration, AI/Gateway stacks and infrastructure workflow |
+| [Observability](runbooks/observability.md) | OTel collector, ClickHouse PrivateLink, credentials and activation | ObservabilityStack and AWS-Demo-Platform ClickHouse |
 | [Frontend release](runbooks/frontend-release.md) | Dependency acceptance, CSP/cache, ordered publication and recovery | FrontendStack, npm lockfiles and shared publisher |
 | [Unverified account recovery](runbooks/unverified-account-recovery.md) | Identity-verified operator password recovery | Cognito and the authenticated verification flow |
 | [WebSocket runtime](runbooks/websocket-runtime.md) | CloudFront ingress, secret rotation, real acceptance | Frontend/Gateway stacks and ws-authorizer |

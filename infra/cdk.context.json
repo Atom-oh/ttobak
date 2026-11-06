@@ -82,5 +82,9 @@
     {
       "PrefixListId": "pl-48a54021"
     }
+  ],
+  "endpoint-service-availability-zones:account=180294183052:region=ap-northeast-2:serviceName=com.amazonaws.vpce.ap-northeast-2.vpce-svc-04e00839390fb475d": [
+    "ap-northeast-2a",
+    "ap-northeast-2c"
   ]
 }
