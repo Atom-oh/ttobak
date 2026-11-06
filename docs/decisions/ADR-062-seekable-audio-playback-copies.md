@@ -1,8 +1,8 @@
 # ADR-062: Seekable audio playback copies
 
-- Status: Accepted; staged across several PRs. This PR adds the storage
-  prefix, key mapping and cleanup coverage; the remux worker, API selection
-  and backfill follow.
+- Status: Accepted; staged across several PRs. Storage prefix, key mapping,
+  cleanup coverage and the `ttobak-audio-remux` worker are implemented; API
+  selection and backfill follow.
 - Decision date: 2026-11-06.
 - Related: ADR-014 (multi-part audio), ADR-031 (STT recovery), ADR-022
   (source-bound previews).
