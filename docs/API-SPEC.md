@@ -1100,7 +1100,9 @@ chunks, failedChunks, untranslatedLines, ms}` without text or user ID.
 `POST .../sim/extract` extracts requirements for a done meeting. `POST .../sim`
 validates allowed keys/ranges and two or three architecture options, then returns
 202 with a queued simRun. The frontend polls GetMeeting; there is no simulator
-WebSocket stream. Concurrent runs are conditionally rejected. Stale queued/running
+WebSocket stream. Concurrent runs are conditionally rejected (400); a member whose
+grant lapsed gets 403, an unpublished or changed meeting 409, and a sharing-restricted
+summary 409 `SHARING_REGEN_REQUIRED`. Stale queued/running
 runs are persisted to error by GetSimRun, not merely displayed as error.
 
 Only validated requirements/options enter codegen; option descriptions still

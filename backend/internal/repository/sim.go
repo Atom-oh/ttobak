@@ -87,16 +87,25 @@ func (r *DynamoDBRepository) PutSimRunIfNotRunning(ctx context.Context, run *mod
 	if err != nil {
 		return fmt.Errorf("failed to build condition: %w", err)
 	}
-	meetingExistsExpr, err := expression.NewBuilder().
-		WithCondition(expression.AttributeExists(expression.Name("PK")).
-			And(summaryGenerationCondition(run.SummaryGeneration))).
-		Build()
+	meetingCondition := expression.AttributeExists(expression.Name("PK")).And(summaryGenerationCondition(run.SummaryGeneration))
+	// A member run also fences the publication and the member's live grant.
+	var grant []types.TransactWriteItem
+	if simRunOwner(run) != run.UserID {
+		if run.AccountID == "" {
+			return ErrSummaryAccess
+		}
+		meetingCondition = meetingCondition.And(publishedTo(run.AccountID))
+		if grant, err = r.memberGrantItems(ctx, run.AccountID, run.UserID); err != nil {
+			return err
+		}
+	}
+	meetingExistsExpr, err := expression.NewBuilder().WithCondition(meetingCondition).Build()
 	if err != nil {
 		return fmt.Errorf("failed to build meeting-exists condition: %w", err)
 	}
 
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
-		TransactItems: []types.TransactWriteItem{
+		TransactItems: append([]types.TransactWriteItem{
 			{
 				ConditionCheck: &types.ConditionCheck{
 					TableName: aws.String(r.tableName),
@@ -118,13 +127,18 @@ func (r *DynamoDBRepository) PutSimRunIfNotRunning(ctx context.Context, run *mod
 					ExpressionAttributeValues: simExpr.Values(),
 				},
 			},
-		},
+		}, grant...),
 	})
 	if err != nil {
 		var tce *types.TransactionCanceledException
-		if errors.As(err, &tce) && len(tce.CancellationReasons) == 2 {
+		if errors.As(err, &tce) && len(tce.CancellationReasons) == 2+len(grant) {
 			meetingFailed := aws.ToString(tce.CancellationReasons[0].Code) == "ConditionalCheckFailed"
 			simFailed := aws.ToString(tce.CancellationReasons[1].Code) == "ConditionalCheckFailed"
+			for _, reason := range tce.CancellationReasons[2:] {
+				if aws.ToString(reason.Code) == "ConditionalCheckFailed" {
+					return ErrSummaryAccess
+				}
+			}
 			// Both branches map to the same sentinel: the repository package
 			// has no ErrNotFound of its own (that's a service-layer concept),
 			// and this is an edge case narrow enough -- the meeting would
@@ -137,13 +151,16 @@ func (r *DynamoDBRepository) PutSimRunIfNotRunning(ctx context.Context, run *mod
 				return fmt.Errorf("%w: meeting %s no longer exists", ErrConditionFailed, run.MeetingID)
 			}
 			if simFailed {
-				return fmt.Errorf("%w: meeting %s already has a simulation running", ErrConditionFailed, run.MeetingID)
+				return fmt.Errorf("%w: meeting %s", ErrSimRunActive, run.MeetingID)
 			}
 		}
 		return fmt.Errorf("failed to put sim run: %w", err)
 	}
 	return nil
 }
+
+// ErrSimRunActive: the meeting already has a queued or running simulation.
+var ErrSimRunActive = fmt.Errorf("%w: simulation already running", ErrConditionFailed)
 
 // simRunOwner: the creator's partition holds the meeting row a member's
 // run is conditioned on.

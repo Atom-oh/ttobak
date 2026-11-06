@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -418,6 +419,7 @@ func TestSimAssetPrefixes(t *testing.T) {
 type simManagedRepo struct {
 	*mockMeetingRepo
 	runs []*model.SimRun
+	err  error // a repository claim failure to map
 }
 
 func (r *simManagedRepo) GetSimRun(context.Context, string) (*model.SimRun, error) { return nil, nil }
@@ -425,6 +427,9 @@ func (r *simManagedRepo) UpdateSimRunFieldsIfMatch(context.Context, string, stri
 	return nil
 }
 func (r *simManagedRepo) PutSimRunIfNotRunning(_ context.Context, run *model.SimRun) error {
+	if r.err != nil {
+		return r.err
+	}
 	if r.meetings[meetingKey(simRunOwnerForTest(run), run.MeetingID)] == nil {
 		return repository.ErrConditionFailed
 	}
@@ -446,7 +451,22 @@ func TestMemberSimulationClaimsTheCreatorsMeetingRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("member run: %v", err)
 	}
-	if run.UserID != "member-1" || run.OwnerUserID != "owner-1" || len(repo.runs) != 1 {
+	if run.UserID != "member-1" || run.OwnerUserID != "owner-1" || run.AccountID != "acc" || len(repo.runs) != 1 {
 		t.Fatalf("run actor/owner: %+v", run)
+	}
+	for _, tc := range []struct{ repoErr, want error }{
+		{repository.ErrSummaryAccess, ErrForbidden},
+		{repository.ErrSimRunActive, ErrInvalidInput},
+		{repository.ErrConditionFailed, repository.ErrConditionFailed},
+	} {
+		repo.err = tc.repoErr
+		if _, err := NewSimService(repo, nil, nil, "").CreateSimulation(context.Background(), "member-1", "m-1", reqs, validOpts()); !errors.Is(err, tc.want) {
+			t.Fatalf("%v: %v", tc.repoErr, err)
+		}
+	}
+	repo.err = nil
+	repo.meetingsByID["m-1"].SummaryReadRestricted = true
+	if _, err := NewSimService(repo, nil, nil, "").CreateSimulation(context.Background(), "member-1", "m-1", reqs, validOpts()); !errors.Is(err, ErrSummaryReadRestricted) {
+		t.Fatalf("restricted summary: %v", err)
 	}
 }

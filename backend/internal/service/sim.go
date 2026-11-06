@@ -121,6 +121,9 @@ func validateSimRequirements(meeting *model.Meeting, userID string, reqs []model
 	if meeting.UserID != userID {
 		return ErrForbidden
 	}
+	if meeting.SummaryReadRestricted {
+		return ErrSummaryReadRestricted
+	}
 	if meeting.Status != model.StatusDone {
 		return fmt.Errorf("meeting must be done before simulating (status: %s): %w", meeting.Status, ErrInvalidInput)
 	}
@@ -432,15 +435,13 @@ func (s *SimService) ExtractRequirements(ctx context.Context, userID, meetingID 
 		MeetingID:         meetingID,
 		UserID:            userID,
 		OwnerUserID:       simOwner(meeting, userID),
+		AccountID:         meeting.AccountID,
 		Status:            model.SimStatusExtracted,
 		Requirements:      string(reqsJSON),
 		SummaryGeneration: meeting.SummaryGeneration(),
 	}
-	if err := s.repo.PutSimRunIfNotRunning(ctx, run); err != nil {
-		if errors.Is(err, repository.ErrConditionFailed) {
-			return nil, fmt.Errorf("a simulation is already running for this meeting: %w", ErrInvalidInput)
-		}
-		return nil, fmt.Errorf("failed to save extracted requirements: %w", err)
+	if err := s.claimSimRun(ctx, run); err != nil {
+		return nil, err
 	}
 	return run, nil
 }
@@ -493,16 +494,14 @@ func (s *SimService) CreateSimulation(ctx context.Context, userID, meetingID str
 		MeetingID:         meetingID,
 		UserID:            userID,
 		OwnerUserID:       simOwner(meeting, userID),
+		AccountID:         meeting.AccountID,
 		Status:            model.SimStatusQueued,
 		Requirements:      string(reqsJSON),
 		Options:           string(optsJSON),
 		SummaryGeneration: meeting.SummaryGeneration(),
 	}
-	if err := s.repo.PutSimRunIfNotRunning(ctx, run); err != nil {
-		if errors.Is(err, repository.ErrConditionFailed) {
-			return nil, fmt.Errorf("a simulation is already running for this meeting: %w", ErrInvalidInput)
-		}
-		return nil, fmt.Errorf("failed to create sim run: %w", err)
+	if err := s.claimSimRun(ctx, run); err != nil {
+		return nil, err
 	}
 
 	payload, err := json.Marshal(map[string]interface{}{
@@ -628,6 +627,23 @@ func (s *SimService) simMeeting(ctx context.Context, userID, meetingID string) (
 		return nil, ErrNotFound
 	}
 	return meeting, nil
+}
+
+// claimSimRun maps the claim's failures: a busy slot is 400, a lost member
+// grant 403, and a changed or unpublished meeting a condition failure (409).
+func (s *SimService) claimSimRun(ctx context.Context, run *model.SimRun) error {
+	err := s.repo.PutSimRunIfNotRunning(ctx, run)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, repository.ErrSimRunActive):
+		return fmt.Errorf("a simulation is already running for this meeting: %w", ErrInvalidInput)
+	case errors.Is(err, repository.ErrSummaryAccess):
+		return fmt.Errorf("%w: account membership changed", ErrForbidden)
+	case errors.Is(err, repository.ErrConditionFailed):
+		return err
+	}
+	return fmt.Errorf("failed to claim sim run: %w", err)
 }
 
 func simOwner(meeting *model.Meeting, fallback string) string {

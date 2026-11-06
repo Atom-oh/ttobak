@@ -38,4 +38,9 @@ func TestMemberRaceErrorsAreNotInternal(t *testing.T) {
 	if w.Code != 409 || !strings.Contains(w.Body.String(), "SHARING_REGEN_REQUIRED") {
 		t.Fatalf("sim restricted: %d %s", w.Code, w.Body)
 	}
+	w = httptest.NewRecorder()
+	writeSimError(w, fmt.Errorf("sim: %w", repository.ErrConditionFailed), "sim")
+	if w.Code != 409 {
+		t.Fatalf("sim unpublished meeting: %d", w.Code)
+	}
 }

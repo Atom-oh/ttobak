@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/ttobak/backend/internal/middleware"
 	"github.com/ttobak/backend/internal/model"
+	"github.com/ttobak/backend/internal/repository"
 	"github.com/ttobak/backend/internal/service"
 )
 
@@ -80,6 +81,8 @@ func writeSimError(w http.ResponseWriter, err error, op string) {
 		writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
 	case errors.Is(err, service.ErrInvalidInput):
 		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, err.Error())
+	case errors.Is(err, repository.ErrConditionFailed):
+		writeError(w, http.StatusConflict, model.ErrCodeConflict, "The meeting changed; refresh and retry")
 	default:
 		log.Printf("%s failed: %v", op, err)
 		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to process simulation request")
