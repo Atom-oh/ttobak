@@ -32,10 +32,13 @@ values or code. Never print the secret.
 
 ## First activation (one time)
 
+Status: steps 1-4 completed 2026-11-06 (endpoint `vpce-0b8c6ce5bf16f0489`
+accepted and `available`); step 5 enables the collector.
+
 1. Provider permission (done 2026-11-06):
    `aws ec2 modify-vpc-endpoint-service-permissions --service-id vpce-svc-04e00839390fb475d --add-allowed-principals arn:aws:iam::180294183052:root`.
 2. Deploy `TtobakObservabilityStack` with `ttobak:otelCollectorEnabled` `"false"`
-   (the checked-in value). This creates the endpoint, ALB, security groups and
+   (a new environment starts there). This creates the endpoint, ALB, security groups and
    SSM parameter without a collector service.
 3. Accept the pending endpoint connection as the service owner:
    `aws ec2 describe-vpc-endpoint-connections --filters Name=service-id,Values=vpce-svc-04e00839390fb475d`,

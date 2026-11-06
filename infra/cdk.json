@@ -20,7 +20,7 @@
     "ttobak:domainName": "ttobak.atomai.click",
     "ttobak:clickhouseEndpointService": "com.amazonaws.vpce.ap-northeast-2.vpce-svc-04e00839390fb475d",
     "ttobak:clickhouseSecretName": "/demo-platform/clickhouse/ttobak",
-    "ttobak:otelCollectorEnabled": "false",
+    "ttobak:otelCollectorEnabled": "true",
     "ttobak:certificateArn": "arn:aws:acm:us-east-1:180294183052:certificate/f6b6907a-5747-4039-967a-a8c7c73116a7",
     "ttobak:cloudfrontDomain": "d2olomx8td8txt.cloudfront.net",
     "ttobak:mcpResourceAudience": "https://ttobak.atomai.click/api/mcp",
