@@ -958,7 +958,14 @@ func (r *DynamoDBRepository) UpdateMeetingFieldsIfMatch(ctx context.Context, use
 	return r.updateMeetingFieldsWithCondition(ctx, userID, meetingID, condition, fields, true, nil)
 }
 
-func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Context, userID, meetingID string, condition expression.ConditionBuilder, fields map[string]interface{}, immutableSpills bool, revisionOut *string, approveAccountOutput ...bool) (resultErr error) {
+func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Context, userID, meetingID string, condition expression.ConditionBuilder, fields map[string]interface{}, immutableSpills bool, revisionOut *string, approveAccountOutput ...bool) error {
+	return r.updateMeetingFieldsAs(ctx, userID, userID, meetingID, condition, fields, immutableSpills, revisionOut, approveAccountOutput...)
+}
+
+// updateMeetingFieldsAs writes the owner's (userID) meeting; actorID is the
+// caller whose direct account membership a classification/publication pins.
+// The creator acts as itself; a managing account member differs.
+func (r *DynamoDBRepository) updateMeetingFieldsAs(ctx context.Context, userID, actorID, meetingID string, condition expression.ConditionBuilder, fields map[string]interface{}, immutableSpills bool, revisionOut *string, approveAccountOutput ...bool) (resultErr error) {
 	if _, assigned := fields["notesRevision"]; assigned {
 		return fmt.Errorf("notesRevision is server-managed")
 	}
@@ -1000,32 +1007,17 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 				return ErrConditionFailed
 			}
 			parent := snapshot.Meeting
-			// Classification/publication pins canonical owner membership, beyond preflight.
+			// Classification/publication pins the actor's direct membership, beyond preflight.
 			account, assigned := fields["accountId"].(string)
 			publish, _ := fields["sharedToAccount"].(bool)
 			if publish && account == "" {
 				account = parent.AccountID
 			}
 			if account != "" && (assigned || publish) {
-				row, err := r.summaryRow(ctx, model.PrefixAccount+account, model.PrefixMember+userID)
-				if err != nil {
+				var err error
+				if accountMembership, err = r.directMemberCheck(ctx, account, actorID); err != nil {
 					return err
 				}
-				if len(row) == 0 {
-					return ErrSummaryAccess
-				}
-				check, err := summaryCheck(model.PrefixAccount+account, model.PrefixMember+userID, row,
-					[]string{"accountId", "userId", "addedAt", "summaryPrivacyVersion"})
-				if err != nil {
-					return err
-				}
-				expr, err := expression.NewBuilder().WithCondition(summaryCondition(check)).Build()
-				if err != nil {
-					return err
-				}
-				accountMembership = &types.ConditionCheck{TableName: aws.String(r.tableName),
-					Key: summaryRowKey(check.PK, check.SK), ConditionExpression: expr.Condition(),
-					ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values()}
 			}
 			if publish, _ := fields["sharedToAccount"].(bool); publish {
 				account, _ := fields["accountId"].(string)
@@ -1070,6 +1062,19 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 					Version: model.SummaryPrivacyVersion, State: state, GenerationID: uuid.NewString(),
 					ContentSHA256: model.SummaryPrivacyHash(content), InheritedState: state,
 				}
+			}
+		}
+	}
+	// A managing member's classification/publication always pins the actor's
+	// direct membership in the target account, independent of the privacy
+	// writer switch (ADR-016 2026-11-06 amendment).
+	if accountMembership == nil && actorID != userID {
+		account, assigned := fields["accountId"].(string)
+		publish, _ := fields["sharedToAccount"].(bool)
+		if account != "" && (assigned || publish) {
+			var err error
+			if accountMembership, err = r.directMemberCheck(ctx, account, actorID); err != nil {
+				return err
 			}
 		}
 	}
@@ -2165,6 +2170,16 @@ func (r *DynamoDBRepository) GetAttachment(ctx context.Context, meetingID, attac
 
 // CreateShare creates share records (both recipient and meeting lookup)
 func (r *DynamoDBRepository) CreateShare(ctx context.Context, meetingID, ownerID, ownerEmail, sharedToID, email, permission, origin string) (*model.Share, error) {
+	return r.createShare(ctx, meetingID, ownerID, ownerEmail, sharedToID, email, permission, origin, "", "")
+}
+
+// CreateShareBy writes a direct share that an account member created on the
+// creator's behalf. OwnerID stays the creator; the actor is recorded.
+func (r *DynamoDBRepository) CreateShareBy(ctx context.Context, meetingID, ownerID, ownerEmail, sharedToID, email, permission, sharedByID, sharedByEmail string) (*model.Share, error) {
+	return r.createShare(ctx, meetingID, ownerID, ownerEmail, sharedToID, email, permission, "", sharedByID, sharedByEmail)
+}
+
+func (r *DynamoDBRepository) createShare(ctx context.Context, meetingID, ownerID, ownerEmail, sharedToID, email, permission, origin, sharedByID, sharedByEmail string) (*model.Share, error) {
 	if origin == model.ShareOriginAccount {
 		existing, err := r.GetShare(ctx, sharedToID, meetingID)
 		if err != nil {
@@ -2179,17 +2194,19 @@ func (r *DynamoDBRepository) CreateShare(ctx context.Context, meetingID, ownerID
 
 	// Share record for recipient lookup: PK=USER#{sharedToId}, SK=SHARED#{meetingId}
 	shareForRecipient := &model.Share{
-		PK:         model.PrefixUser + sharedToID,
-		SK:         model.PrefixShare + meetingID,
-		MeetingID:  meetingID,
-		OwnerID:    ownerID,
-		OwnerEmail: ownerEmail,
-		SharedToID: sharedToID,
-		Email:      email,
-		Permission: permission,
-		Origin:     origin,
-		CreatedAt:  now,
-		EntityType: "SHARE",
+		PK:             model.PrefixUser + sharedToID,
+		SK:             model.PrefixShare + meetingID,
+		MeetingID:      meetingID,
+		OwnerID:        ownerID,
+		OwnerEmail:     ownerEmail,
+		SharedToID:     sharedToID,
+		Email:          email,
+		Permission:     permission,
+		Origin:         origin,
+		SharedByUserID: sharedByID,
+		SharedByEmail:  sharedByEmail,
+		CreatedAt:      now,
+		EntityType:     "SHARE",
 	}
 
 	item1, err := attributevalue.MarshalMap(shareForRecipient)
@@ -2199,17 +2216,19 @@ func (r *DynamoDBRepository) CreateShare(ctx context.Context, meetingID, ownerID
 
 	// Share record for meeting lookup: PK=MEETING#{meetingId}, SK=SHARE_TO#{userId}
 	shareForMeeting := &model.Share{
-		PK:         model.PrefixMeeting + meetingID,
-		SK:         model.PrefixShareTo + sharedToID,
-		MeetingID:  meetingID,
-		OwnerID:    ownerID,
-		OwnerEmail: ownerEmail,
-		SharedToID: sharedToID,
-		Email:      email,
-		Permission: permission,
-		Origin:     origin,
-		CreatedAt:  now,
-		EntityType: "SHARE",
+		PK:             model.PrefixMeeting + meetingID,
+		SK:             model.PrefixShareTo + sharedToID,
+		MeetingID:      meetingID,
+		OwnerID:        ownerID,
+		OwnerEmail:     ownerEmail,
+		SharedToID:     sharedToID,
+		Email:          email,
+		Permission:     permission,
+		Origin:         origin,
+		SharedByUserID: sharedByID,
+		SharedByEmail:  sharedByEmail,
+		CreatedAt:      now,
+		EntityType:     "SHARE",
 	}
 
 	item2, err := attributevalue.MarshalMap(shareForMeeting)
@@ -2223,13 +2242,15 @@ func (r *DynamoDBRepository) CreateShare(ctx context.Context, meetingID, ownerID
 		{Put: &types.Put{TableName: aws.String(r.tableName), Item: item1}},
 		{Put: &types.Put{TableName: aws.String(r.tableName), Item: item2}},
 	}
+	var snapshot *model.SummarySnapshot
 	if SummaryPrivacyWritesEnabled() {
 		existing, err := r.GetShare(ctx, sharedToID, meetingID)
 		if err != nil {
 			return nil, err
 		}
 		retained := existing != nil && existing.OwnerID == ownerID && existing.Origin != model.ShareOriginAccount
-		fence, _, err := r.summaryAuthorizationFence(ctx, ownerID, meetingID, !retained)
+		var fence *types.Update
+		fence, snapshot, err = r.summaryAuthorizationFence(ctx, ownerID, meetingID, !retained)
 		if err != nil {
 			return nil, err
 		}
@@ -2250,11 +2271,18 @@ func (r *DynamoDBRepository) CreateShare(ctx context.Context, meetingID, ownerID
 		}
 		items = append(items, types.TransactWriteItem{Update: fence})
 	}
+	if sharedByID != "" {
+		checks, err := r.actorGrantChecks(ctx, ownerID, meetingID, sharedByID, snapshot)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, checks...)
+	}
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
 		TransactItems: items,
 	})
 	if err != nil {
-		if SummaryPrivacyWritesEnabled() && isConditionalCheckFailedTransaction(err) {
+		if (SummaryPrivacyWritesEnabled() || sharedByID != "") && isConditionalCheckFailedTransaction(err) {
 			return nil, ErrConditionFailed
 		}
 		return nil, fmt.Errorf("failed to create share: %w", err)
@@ -2930,14 +2958,26 @@ func (r *DynamoDBRepository) PutPendingShare(ctx context.Context, share *model.P
 		}})
 		return analysisWriteError(err)
 	}
-	if share.Kind == model.PendingShareKindMeeting && SummaryPrivacyWritesEnabled() {
-		fence, _, err := r.summaryGrantFence(ctx, share.InvitedByUserID, share.MeetingID)
-		if err != nil {
-			return err
+	if share.Kind == model.PendingShareKindMeeting && (SummaryPrivacyWritesEnabled() || share.SharedByUserID != "") {
+		items := []types.TransactWriteItem{{Put: &types.Put{TableName: aws.String(r.tableName), Item: item}}}
+		var snapshot *model.SummarySnapshot
+		if SummaryPrivacyWritesEnabled() {
+			fence, captured, err := r.summaryGrantFence(ctx, share.InvitedByUserID, share.MeetingID)
+			if err != nil {
+				return err
+			}
+			snapshot = captured
+			items = append([]types.TransactWriteItem{{Update: fence}}, items...)
 		}
-		_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: []types.TransactWriteItem{
-			{Update: fence}, {Put: &types.Put{TableName: aws.String(r.tableName), Item: item}},
-		}})
+		// A managing member's invite is fenced on the member's live grant.
+		if share.SharedByUserID != "" {
+			checks, err := r.actorGrantChecks(ctx, share.InvitedByUserID, share.MeetingID, share.SharedByUserID, snapshot)
+			if err != nil {
+				return err
+			}
+			items = append(items, checks...)
+		}
+		_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
 		return analysisWriteError(err)
 	}
 	_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
@@ -3210,32 +3250,36 @@ func (r *DynamoDBRepository) MaterializePendingAccountGrant(ctx context.Context,
 func (r *DynamoDBRepository) MaterializePendingMeetingGrant(ctx context.Context, p *model.PendingShare, userID, email string) (bool, error) {
 	now := time.Now().UTC()
 	shareForRecipient := &model.Share{
-		PK:         model.PrefixUser + userID,
-		SK:         model.PrefixShare + p.MeetingID,
-		MeetingID:  p.MeetingID,
-		OwnerID:    p.InvitedByUserID,
-		OwnerEmail: p.InvitedByEmail,
-		SharedToID: userID,
-		Email:      email,
-		Permission: p.Permission,
-		CreatedAt:  now,
-		EntityType: "SHARE",
+		PK:             model.PrefixUser + userID,
+		SK:             model.PrefixShare + p.MeetingID,
+		MeetingID:      p.MeetingID,
+		OwnerID:        p.InvitedByUserID,
+		OwnerEmail:     p.InvitedByEmail,
+		SharedToID:     userID,
+		Email:          email,
+		Permission:     p.Permission,
+		SharedByUserID: p.SharedByUserID,
+		SharedByEmail:  p.SharedByEmail,
+		CreatedAt:      now,
+		EntityType:     "SHARE",
 	}
 	item1, err := attributevalue.MarshalMap(shareForRecipient)
 	if err != nil {
 		return false, fmt.Errorf("marshal share (recipient): %w", err)
 	}
 	shareForMeeting := &model.Share{
-		PK:         model.PrefixMeeting + p.MeetingID,
-		SK:         model.PrefixShareTo + userID,
-		MeetingID:  p.MeetingID,
-		OwnerID:    p.InvitedByUserID,
-		OwnerEmail: p.InvitedByEmail,
-		SharedToID: userID,
-		Email:      email,
-		Permission: p.Permission,
-		CreatedAt:  now,
-		EntityType: "SHARE",
+		PK:             model.PrefixMeeting + p.MeetingID,
+		SK:             model.PrefixShareTo + userID,
+		MeetingID:      p.MeetingID,
+		OwnerID:        p.InvitedByUserID,
+		OwnerEmail:     p.InvitedByEmail,
+		SharedToID:     userID,
+		Email:          email,
+		Permission:     p.Permission,
+		SharedByUserID: p.SharedByUserID,
+		SharedByEmail:  p.SharedByEmail,
+		CreatedAt:      now,
+		EntityType:     "SHARE",
 	}
 	item2, err := attributevalue.MarshalMap(shareForMeeting)
 	if err != nil {
@@ -3734,4 +3778,33 @@ func (r *DynamoDBRepository) SaveAllowedDomains(ctx context.Context, domains []s
 		return fmt.Errorf("failed to save allowed domains: %w", err)
 	}
 	return nil
+}
+
+// directMemberCheck fences the canonical direct membership row of userID in
+// accountID; a missing row is ErrSummaryAccess.
+func (r *DynamoDBRepository) directMemberCheck(ctx context.Context, accountID, userID string) (*types.ConditionCheck, error) {
+	row, err := r.summaryRow(ctx, model.PrefixAccount+accountID, model.PrefixMember+userID)
+	if err != nil {
+		return nil, err
+	}
+	if len(row) == 0 {
+		return nil, ErrSummaryAccess
+	}
+	check, err := summaryCheck(model.PrefixAccount+accountID, model.PrefixMember+userID, row,
+		[]string{"accountId", "userId", "addedAt", "summaryPrivacyVersion"})
+	if err != nil {
+		return nil, err
+	}
+	return r.conditionCheckFor(check)
+}
+
+// conditionCheckFor turns a captured summary check into a transaction item.
+func (r *DynamoDBRepository) conditionCheckFor(check model.SummaryCheck) (*types.ConditionCheck, error) {
+	expr, err := expression.NewBuilder().WithCondition(summaryCondition(check)).Build()
+	if err != nil {
+		return nil, err
+	}
+	return &types.ConditionCheck{TableName: aws.String(r.tableName),
+		Key: summaryRowKey(check.PK, check.SK), ConditionExpression: expr.Condition(),
+		ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values()}, nil
 }

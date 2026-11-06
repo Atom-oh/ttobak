@@ -30,7 +30,7 @@ func TestTeamShareUsesOwnerPublicationAndRejectsNonOwners(t *testing.T) {
 	if repo.published != 1 {
 		t.Fatal("team share did not invoke the owner disclosure writer")
 	}
-	if _, err := svc.ShareMeetingToAccount(context.Background(), "intruder", "", "meeting", "account"); !errors.Is(err, ErrForbidden) ||
+	if _, err := svc.ShareMeetingToAccount(context.Background(), "intruder", "", "meeting", "account"); !errors.Is(err, ErrNotFound) ||
 		repo.published != 1 {
 		t.Fatal("nonowner reached disclosure approval")
 	}
@@ -117,11 +117,11 @@ func TestOwnerAccountApprovalPermitsCurrentInsightMetadataOnly(t *testing.T) {
 func TestOwnerAccountSharingStatusDoesNotRequireRegeneration(t *testing.T) {
 	t.Setenv("SUMMARY_PRIVACY_WRITER_ENABLED", "1")
 	t.Setenv("SUMMARY_OWNER_ACCOUNT_SHARE_ENABLED", "1")
-	status := summarySharingStatus(&model.Meeting{Status: model.StatusDone, Content: "current legacy notes"}, "owner")
+	status := summarySharingStatus(&model.Meeting{Status: model.StatusDone, Content: "current legacy notes"}, "owner", true)
 	if !status.CanShareToAccount {
 		t.Fatal("completed owner output still requires separate regeneration for team sharing")
 	}
-	if summarySharingStatus(&model.Meeting{Status: model.StatusDone, Content: "current"}, "edit").CanShareToAccount {
+	if summarySharingStatus(&model.Meeting{Status: model.StatusDone, Content: "current"}, "edit", false).CanShareToAccount {
 		t.Fatal("editor status advertised owner disclosure")
 	}
 }
