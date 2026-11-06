@@ -280,7 +280,7 @@ function RecoveryBanner({ meetingId, onRecovered }: { meetingId: string; onRecov
 
 function MeetingDetailContent() {
   const router = useRouter();
-  const { isAuthenticated, isLoading: authLoading, user } = useAuth();
+  const { isAuthenticated, isLoading: authLoading, user, membershipRevision } = useAuth();
   const [meeting, setMeeting] = useState<MeetingDetail | null>(null);
   const [summarySave, setSummarySave] = useState<{ revision: number; hasContent: boolean } | null>(null);
   const summaryRevisionRef = useRef(0);
@@ -630,6 +630,9 @@ function MeetingDetailContent() {
           {/* Speaker Name Mapping — show when transcript exists (done or error with partial data) */}
           {meeting.canCorrectSpeakers !== false && (meeting.status === 'done' || displayedSegments.length > 0) && (
             <SpeakerMapEditor
+              accountId={meeting.accountId}
+              userId={user?.userId}
+              membershipRevision={membershipRevision}
               transcription={displayedSegments}
               content={meeting.content}
               speakerMap={meeting.speakerMap}

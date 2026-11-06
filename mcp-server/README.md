@@ -592,6 +592,45 @@ Notes-only reads avoid transcript hydration on the server; transcript reads stil
 load the chosen source to validate/page it. See the
 [API contract](../docs/API-SPEC.md#bounded-meeting-reading) for response/error details.
 
+## Account contacts
+
+The authenticated `ttobak_list_account_contacts`, `ttobak_create_account_contact`
+and `ttobak_import_account_contacts` tools call the account contacts API. Deploy
+that API before this adapter. List accepts `accountId`, an optional `limit` (1–25,
+default 25), and an opaque `cursor`; follow `nextCursor` until it is absent or
+empty. The adapter automatically retries the same cursor with a smaller limit
+if the bridge or the 32,000-byte MCP result limit rejects a page. Each API
+request checks the caller's access.
+
+Create accepts `accountId` and a `contact` object. Import accepts `accountId`
+and 1–25 `contacts` objects, at most 512 KiB in total. Each object requires
+`name` and may include `company`, `title`, `department`, `email`, `address`,
+`workPhone`, `fax`, `phone`, `cardRegisteredAt`, `cardBook`, `group`, and
+`notes`. All fields are strings. Limits are 256 UTF-8 bytes per field, except
+address (1,024) and notes (8,192), and each serialized contact is limited to
+12,000 bytes. Parse CSV or spreadsheets on the client; these tools do not read
+server files.
+
+Import scans all authorized pages before writing, reducing page size when
+necessary. It stops without writes if the scan fails or exceeds 1,000 page
+requests. It skips rows matching a trimmed, case-insensitive email or the digits
+of either work or mobile phone, including shared work numbers. Comparisons
+include earlier successful rows in the batch. Concurrent changes can still
+produce duplicates. Results use one-based `row` values and `created`,
+`duplicate`, or `failed` status. A failed write with `outcome: "unknown"`
+may have succeeded; check the account before retrying. A matching later row
+is skipped with `reason: "previous_write_unknown"`. A transport interruption
+can prevent the caller from receiving results after some writes have completed.
+The private OAuth connector requires an `idempotencyKey` for create and import.
+Retry with the same key and identical input; a batch derives stable per-row keys.
+Its receipts are retained without automatic expiry and cannot be replayed after
+the created contact is edited or deleted. The legacy bearer transport does not
+support idempotency keys; verify uncertain writes before retrying.
+
+Contact inputs and results are visible to the MCP client and may be sent to
+the client's configured AI provider. Private connector writes require the user's
+current write approval and direct membership in the account.
+
 ## Public bundle provenance
 
 `frontend/public/mcp/ttobak-mcp.mjs` is generated from this module, never hand-edited.
