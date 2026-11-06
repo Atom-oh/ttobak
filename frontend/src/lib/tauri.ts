@@ -539,6 +539,8 @@ export interface NativeMeetingDetection {
 export interface NativeMeetingDetectionState {
   supported: boolean;
   enabled: boolean;
+  /** The app reports resumed meetings, so an ended meeting may auto-stop. */
+  autoStop?: boolean;
   active: NativeMeetingDetection | null;
 }
 

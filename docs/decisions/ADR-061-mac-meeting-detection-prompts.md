@@ -54,8 +54,13 @@ without a user confirmation.
   recording unless the user keeps recording. The stop is bound to the WAV path
   running when the meeting ended, so a later recording is never stopped by it.
   The automatic path only ever sends that one stop. If the meeting's audio
-  returns during the countdown, the app reports it as resumed and clears the
-  binding, so the pending stop is cancelled.
+  returns during the countdown, the app resumes it at the first sighting (no
+  sustain), reports it as resumed and clears the binding, and the stop command
+  also refuses while that audio is present. The SPA auto-stops only when
+  `meeting_detection_get` reports `autoStop`; older app builds keep the manual
+  stop prompt.
+- Automatic microphone choice prefers native meeting apps over browsers and
+  ignores Safari's shared WebKit process.
 - Rust emits `native-meeting-detected`/`native-meeting-ended` to the main window
   and posts a local notification. The SPA banner's confirmation calls
   `meeting_detection_respond`, which sends the start/stop through the same

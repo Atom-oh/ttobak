@@ -199,6 +199,9 @@ fn announce(app: &AppHandle, state: &MeetingState, event: &Event) {
 pub fn meeting_detection_get(state: State<'_, Arc<MeetingState>>) -> Value {
     json!({
         "supported": cfg!(target_os = "macos"),
+        // This build reports meeting ends for any running recording and
+        // resumes (`native-meeting-resumed`), so the SPA may auto-stop.
+        "autoStop": cfg!(target_os = "macos"),
         "enabled": state.enabled.load(Ordering::Relaxed),
         "active": state.detector.lock().announced().map(detection_json),
     })
@@ -271,6 +274,11 @@ pub async fn meeting_detection_respond(
             }
         }
         "stop" => {
+            // The meeting's audio is back (resumed): never stop it.
+            let source = state.last.lock().as_ref().map(|d| d.source);
+            if source.is_some_and(|s| state.detector.lock().is_present(&s)) {
+                return Err("the meeting resumed; the recording continues".into());
+            }
             if !owns_recording(&app, &state, &detection_id) {
                 return Err("the recording this meeting started is no longer running".into());
             }

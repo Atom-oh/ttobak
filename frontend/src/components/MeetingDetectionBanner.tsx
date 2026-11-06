@@ -38,12 +38,15 @@ export function MeetingDetectionBanner() {
   const [prompt, setPrompt] = useState<Prompt | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Only app builds that report resumes may auto-stop; older ones keep the
+  // manual stop prompt, since nothing could cancel a resumed meeting.
+  const [autoStop, setAutoStop] = useState(false);
   // Countdown to the automatic stop, bound to one ended detection.
   const [countdown, setCountdown] = useState<{ id: string; remaining: number } | null>(null);
   // Detections whose automatic stop already ran: it is attempted once only.
   const autoStopped = useRef(new Set<string>());
 
-  const endedId = prompt?.phase === 'ended' ? prompt.detection.detectionId : null;
+  const endedId = autoStop && prompt?.phase === 'ended' ? prompt.detection.detectionId : null;
   useEffect(() => {
     if (!endedId) {
       setCountdown(null);
@@ -95,6 +98,7 @@ export function MeetingDetectionBanner() {
     // A meeting announced before this page loaded; read after subscribing so
     // an announcement in between is not lost. Live events take precedence.
     void getMeetingDetection().then((state) => {
+      if (!cancelled) setAutoStop(state?.autoStop === true);
       if (!cancelled && state?.enabled && state.active) {
         setPrompt((current) => current ?? { phase: 'detected', detection: state.active! });
       }
@@ -141,9 +145,11 @@ export function MeetingDetectionBanner() {
   const body =
     phase === 'detected'
       ? '녹음을 시작하면 시스템 소리와 내 마이크를 함께 녹음합니다. 참석자에게 녹음 사실을 알려주세요.'
-      : countdown && countdown.id === detection.detectionId && countdown.remaining > 0
-        ? `${countdown.remaining}초 후 녹음을 종료하고 업로드합니다.`
-        : '녹음을 종료하고 업로드하는 중입니다.';
+      : !autoStop
+        ? '녹음을 종료하고 업로드할까요?'
+        : countdown && countdown.id === detection.detectionId && countdown.remaining > 0
+          ? `${countdown.remaining}초 후 녹음을 종료하고 업로드합니다.`
+          : '녹음을 종료하고 업로드하는 중입니다.';
 
   return (
     <div
@@ -175,7 +181,7 @@ export function MeetingDetectionBanner() {
           disabled={busy}
           className="min-h-9 px-3 rounded-lg text-sm font-bold text-white bg-primary hover:bg-primary-hover disabled:opacity-50"
         >
-          {busy ? '처리 중…' : phase === 'detected' ? '녹음 시작' : '지금 종료'}
+          {busy ? '처리 중…' : phase === 'detected' ? '녹음 시작' : autoStop ? '지금 종료' : '녹음 종료'}
         </button>
       </div>
     </div>

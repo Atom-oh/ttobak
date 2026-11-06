@@ -111,7 +111,7 @@ const BROWSERS: &[Browser] = &[
 /// Safari captures microphones in a shared WebKit process, not under its own
 /// bundle ID. Other WebKit hosts (including this app's WebView) share it, so
 /// it counts only when Safari itself has a meeting tab open.
-const WEBKIT_GPU: &str = "com.apple.WebKit.GPU";
+pub const WEBKIT_GPU: &str = "com.apple.WebKit.GPU";
 
 /// What a process using the microphone is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -250,6 +250,11 @@ pub struct Detector {
     active: Option<Detection>,
     /// The active meeting has not been announced (found while recording).
     silent: bool,
+    /// A meeting whose end was reported while recording; its audio returning
+    /// resumes it at once (no sustain), cancelling the pending stop.
+    ended_while_recording: Option<Detection>,
+    /// Source keys present in the latest observation.
+    present: HashSet<String>,
 }
 
 impl Detector {
@@ -282,10 +287,28 @@ impl Detector {
         // A brief absence restarts the sustain window, not the grace period:
         // the window starts again at the next observation that sees it.
         self.first_seen.retain(|key, _| present.contains(key));
+        self.present = present.clone();
+
+        if !recording {
+            self.ended_while_recording = None;
+        }
+        if let Some(ended) = self.ended_while_recording.take() {
+            if present.contains(&ended.source.key()) && self.active.is_none() {
+                // Resumed: track it again under the same ID, immediately.
+                self.active = Some(ended.clone());
+                self.silent = true;
+                events.push(Event::Tracking(ended));
+                return events;
+            }
+            self.ended_while_recording = Some(ended);
+        }
 
         if let Some(active) = &self.active {
             if expired.contains(&active.source.key()) {
                 events.push(Event::Ended(active.clone()));
+                if recording {
+                    self.ended_while_recording = Some(active.clone());
+                }
                 self.active = None;
                 self.silent = false;
             } else if self.silent && !recording {
@@ -337,6 +360,11 @@ impl Detector {
     /// Whether `id` names the announced meeting.
     pub fn is_active(&self, id: &str) -> bool {
         !self.silent && self.active.as_ref().is_some_and(|d| d.id == id)
+    }
+
+    /// Whether `source`'s audio was present in the latest observation.
+    pub fn is_present(&self, source: &Source) -> bool {
+        self.present.contains(&source.key())
     }
 
     /// The announced meeting, if any (a silently tracked one is not offered).
@@ -524,12 +552,20 @@ mod tests {
             &d.observe(24_000, &[], true)[..],
             [Event::Ended(_)]
         ));
-        // Audio returns during the stop countdown.
-        d.observe(25_000, &[ZOOM], true);
-        assert!(matches!(
-            &d.observe(28_000, &[ZOOM], true)[..],
-            [Event::Tracking(_)]
-        ));
+        // Audio returns during the stop countdown: resumed at the first
+        // sighting, under the same ID, without waiting for the sustain.
+        let events = d.observe(25_000, &[ZOOM], true);
+        assert!(matches!(&events[..], [Event::Tracking(det)] if det.id == "meeting-1"));
+        assert!(d.observe(28_000, &[ZOOM], true).is_empty());
+    }
+
+    #[test]
+    fn reports_whether_a_source_is_present_now() {
+        let mut d = Detector::default();
+        d.observe(0, &[ZOOM], true);
+        assert!(d.is_present(&ZOOM));
+        d.observe(1_000, &[], true);
+        assert!(!d.is_present(&ZOOM));
     }
 
     #[test]

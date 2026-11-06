@@ -1269,7 +1269,7 @@ pub mod macos {
     /// (app label, device ID) for each meeting app capturing input now.
     fn meeting_inputs() -> Vec<(String, AudioObjectID)> {
         let own_pid = std::process::id() as i32;
-        let mut out = Vec::new();
+        let mut out: Vec<(bool, String, AudioObjectID)> = Vec::new();
         let processes = get_ids(
             kAudioObjectSystemObject as AudioObjectID,
             kAudioHardwarePropertyProcessObjectList,
@@ -1294,21 +1294,32 @@ pub mod macos {
             if pid == Some(own_pid) {
                 continue;
             }
-            let Some(label) = get_string(process, kAudioProcessPropertyBundleID)
-                .and_then(|b| crate::meeting::classify_bundle(&b))
-                .map(|user| user.label().to_owned())
-            else {
+            let Some(bundle) = get_string(process, kAudioProcessPropertyBundleID) else {
                 continue;
             };
+            // Safari's shared WebKit process also serves other apps, so its
+            // input is not a meeting's microphone.
+            if bundle == crate::meeting::WEBKIT_GPU {
+                continue;
+            }
+            let Some(user) = crate::meeting::classify_bundle(&bundle) else {
+                continue;
+            };
+            let label = user.label().to_owned();
+            let native = matches!(user, crate::meeting::MicUser::Native(_));
             for device in get_ids(
                 process,
                 kAudioProcessPropertyDevices,
                 kAudioObjectPropertyScopeInput,
             ) {
-                out.push((label.clone(), device));
+                out.push((native, label.clone(), device));
             }
         }
-        out
+        // Native meeting apps first: a browser's input may belong to anything.
+        out.sort_by_key(|(native, _, _)| !native);
+        out.into_iter()
+            .map(|(_, label, device)| (label, device))
+            .collect()
     }
 
     /// Input devices with the meeting apps using each (for the SPA picker).
