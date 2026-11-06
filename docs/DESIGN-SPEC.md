@@ -107,11 +107,14 @@ through Rust. `usePostRecording` accepts a tagged native-path/browser-Blob paylo
 Never load a finished native recording into the WebView just to upload it.
 
 In the Mac app, `MeetingDetectionBanner` (layout level) offers start/dismiss when
-the app detects a meeting using the microphone, and stop/keep recording after that
-meeting ends while recording. Nothing records without the user's confirmation; the
+the app detects a meeting, and after that meeting ends during a native recording
+counts down 30 seconds before stopping and uploading, with keep recording and stop
+now actions. The native waveform is drawn on a -60..-10 dBFS scale. Nothing records without the user's confirmation; the
 start reuses the native control path to the record page. Settings shows the
 `MeetingDetectionSettings` toggle only in an app build that supports detection
-(ADR-061).
+(ADR-061). In System Audio mode, `NativeMicSelector` offers automatic (follow the
+meeting app's microphone) or a specific device, remembers the choice per viewer,
+and the recording status names the microphone in use.
 
 Capture/processing state and upload failures remain visible through the post-record
 banner; a failed upload must remain retryable. Progress timeouts measure 60 seconds

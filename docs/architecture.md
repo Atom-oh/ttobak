@@ -459,6 +459,12 @@ Conditional field updates and transactional relation changes protect concurrency
 Python artifacts deploy independently and repeat selected SigV4 and worker guards
 by design. Go chi payload 1.0 and Python QA payload 2.0 are intentional.
 
+Optional API telemetry (`backend/internal/telemetry`, context
+`ttobak:apiTelemetryEnabled`) sends route-pattern server spans, per-operation AWS
+SDK spans and the request-completed log from a VPC-attached `ttobak-api` to the
+internal ObservabilityStack collector; it records no request content and never
+fails a request on export errors ([runbook](runbooks/observability.md)).
+
 Eleven CDK stacks own infrastructure; the exact dependency graph is
 `infra/bin/infra.ts`. WebSearchGateway and EdgeAuth are cross-region us-east-1
 stacks. KnowledgeStack includes staged undeployed changes, so deploy only explicitly

@@ -111,13 +111,37 @@ const BROWSERS: &[Browser] = &[
 /// Safari captures microphones in a shared WebKit process, not under its own
 /// bundle ID. Other WebKit hosts (including this app's WebView) share it, so
 /// it counts only when Safari itself has a meeting tab open.
-const WEBKIT_GPU: &str = "com.apple.WebKit.GPU";
+pub const WEBKIT_GPU: &str = "com.apple.WebKit.GPU";
 
 /// What a process using the microphone is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MicUser {
     Native(MeetingKind),
     Browser(Browser),
+}
+
+impl Browser {
+    pub fn label(self) -> &'static str {
+        match self {
+            Browser::Chrome => "Chrome",
+            Browser::ChromeCanary => "Chrome Canary",
+            Browser::Arc => "Arc",
+            Browser::Edge => "Edge",
+            Browser::Brave => "Brave",
+            Browser::Vivaldi => "Vivaldi",
+            Browser::Safari => "Safari",
+        }
+    }
+}
+
+impl MicUser {
+    /// Display name of the app using an input device.
+    pub fn label(self) -> &'static str {
+        match self {
+            MicUser::Native(kind) => kind.label(),
+            MicUser::Browser(browser) => browser.label(),
+        }
+    }
 }
 
 fn matches_id(bundle_id: &str, id: &str) -> bool {
@@ -205,13 +229,18 @@ pub struct Detection {
 pub enum Event {
     Detected(Detection),
     Ended(Detection),
+    /// A meeting found while recording, tracked without a prompt. It retires
+    /// any pending stop from an earlier end (the meeting resumed).
+    Tracking(Detection),
 }
 
 /// Debounces observations into detected/ended announcements.
 ///
-/// At most one meeting is announced at a time. Nothing is announced while
-/// the app is already recording. A dismissed meeting stays quiet until its
-/// microphone use has been absent for `END_GRACE_MS`.
+/// At most one meeting is tracked at a time. A meeting that starts while the
+/// app is already recording is tracked silently: it is announced only if the
+/// recording stops while the meeting continues, and its end is still reported
+/// so the running recording can be stopped. A dismissed meeting stays quiet
+/// until its audio has been absent for `END_GRACE_MS`.
 #[derive(Default)]
 pub struct Detector {
     counter: u64,
@@ -219,9 +248,17 @@ pub struct Detector {
     last_seen: HashMap<String, u64>,
     suppressed: HashSet<String>,
     active: Option<Detection>,
+    /// The active meeting has not been announced (found while recording).
+    silent: bool,
+    /// A meeting whose end was reported while recording; its audio returning
+    /// resumes it at once (no sustain), cancelling the pending stop.
+    ended_while_recording: Option<Detection>,
+    /// Source keys present in the latest observation.
+    present: HashSet<String>,
 }
 
 impl Detector {
+    #[cfg(test)]
     pub fn active(&self) -> Option<&Detection> {
         self.active.as_ref()
     }
@@ -250,15 +287,35 @@ impl Detector {
         // A brief absence restarts the sustain window, not the grace period:
         // the window starts again at the next observation that sees it.
         self.first_seen.retain(|key, _| present.contains(key));
+        self.present = present.clone();
+
+        if !recording {
+            self.ended_while_recording = None;
+        }
+        if let Some(ended) = self.ended_while_recording.take() {
+            if present.contains(&ended.source.key()) && self.active.is_none() {
+                // Resumed: track it again under the same ID, immediately.
+                self.active = Some(ended.clone());
+                self.silent = true;
+                events.push(Event::Tracking(ended));
+                return events;
+            }
+            self.ended_while_recording = Some(ended);
+        }
 
         if let Some(active) = &self.active {
             if expired.contains(&active.source.key()) {
                 events.push(Event::Ended(active.clone()));
+                if recording {
+                    self.ended_while_recording = Some(active.clone());
+                }
                 self.active = None;
+                self.silent = false;
+            } else if self.silent && !recording {
+                // The recording stopped while the meeting goes on: offer it.
+                self.silent = false;
+                events.push(Event::Detected(active.clone()));
             }
-            return events;
-        }
-        if recording {
             return events;
         }
         let ready = sources.iter().find(|s| {
@@ -276,7 +333,12 @@ impl Detector {
                 source: *source,
             };
             self.active = Some(detection.clone());
-            events.push(Event::Detected(detection));
+            self.silent = recording;
+            events.push(if recording {
+                Event::Tracking(detection)
+            } else {
+                Event::Detected(detection)
+            });
         }
         events
     }
@@ -288,6 +350,7 @@ impl Detector {
             Some(d) if d.id == id => {
                 self.suppressed.insert(d.source.key());
                 self.active = None;
+                self.silent = false;
                 true
             }
             _ => false,
@@ -296,7 +359,17 @@ impl Detector {
 
     /// Whether `id` names the announced meeting.
     pub fn is_active(&self, id: &str) -> bool {
-        self.active.as_ref().is_some_and(|d| d.id == id)
+        !self.silent && self.active.as_ref().is_some_and(|d| d.id == id)
+    }
+
+    /// Whether `source`'s audio was present in the latest observation.
+    pub fn is_present(&self, source: &Source) -> bool {
+        self.present.contains(&source.key())
+    }
+
+    /// The announced meeting, if any (a silently tracked one is not offered).
+    pub fn announced(&self) -> Option<&Detection> {
+        self.active.as_ref().filter(|_| !self.silent)
     }
 
     /// Clears any announcement, e.g. when detection is turned off.
@@ -441,12 +514,58 @@ mod tests {
     fn stays_quiet_while_recording() {
         let mut d = Detector::default();
         d.observe(0, &[ZOOM], true);
-        assert!(d.observe(10_000, &[ZOOM], true).is_empty());
+        // Tracked, never prompted, while recording.
+        assert!(matches!(
+            &d.observe(10_000, &[ZOOM], true)[..],
+            [Event::Tracking(_)]
+        ));
         // Once the recording stops, the still-running meeting is offered.
         assert!(matches!(
             &d.observe(11_000, &[ZOOM], false)[..],
             [Event::Detected(_)]
         ));
+    }
+
+    #[test]
+    fn a_meeting_during_a_manual_recording_reports_its_end() {
+        let mut d = Detector::default();
+        d.observe(0, &[ZOOM], true);
+        // Tracked silently: no prompt while recording.
+        assert!(matches!(
+            &d.observe(5_000, &[ZOOM], true)[..],
+            [Event::Tracking(_)]
+        ));
+        assert!(d.announced().is_none());
+        assert!(d.observe(6_000, &[ZOOM], true).is_empty());
+        d.observe(10_000, &[], true);
+        let events = d.observe(30_000, &[], true);
+        assert!(matches!(&events[..], [Event::Ended(det)] if det.source == ZOOM));
+    }
+
+    #[test]
+    fn a_meeting_resuming_after_its_end_is_tracked_again() {
+        let mut d = Detector::default();
+        d.observe(0, &[ZOOM], true);
+        d.observe(3_000, &[ZOOM], true);
+        d.observe(4_000, &[], true);
+        assert!(matches!(
+            &d.observe(24_000, &[], true)[..],
+            [Event::Ended(_)]
+        ));
+        // Audio returns during the stop countdown: resumed at the first
+        // sighting, under the same ID, without waiting for the sustain.
+        let events = d.observe(25_000, &[ZOOM], true);
+        assert!(matches!(&events[..], [Event::Tracking(det)] if det.id == "meeting-1"));
+        assert!(d.observe(28_000, &[ZOOM], true).is_empty());
+    }
+
+    #[test]
+    fn reports_whether_a_source_is_present_now() {
+        let mut d = Detector::default();
+        d.observe(0, &[ZOOM], true);
+        assert!(d.is_present(&ZOOM));
+        d.observe(1_000, &[], true);
+        assert!(!d.is_present(&ZOOM));
     }
 
     #[test]

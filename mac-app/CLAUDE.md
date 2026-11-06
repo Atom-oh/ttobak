@@ -34,7 +34,8 @@ stub compiler for objc2's build script; that proves types, not runtime behavior.
 
 | Command | Contract |
 |---|---|
-| start_recording | meeting_id; returns temp_path, optional warnings (e.g. no microphone) |
+| start_recording | meeting_id, input_device_uid?; returns temp_path, optional warnings (e.g. no microphone), input {uid, name, reason requested/meeting/default, app?} |
+| list_input_devices | input-capable non-virtual devices {uid, name, channels, is_default, used_by meeting apps} (ADR-061) |
 | stop_recording | returns temp_path, duration_ms, byte_size, stop_timed_out, optional warnings (silent source, dropped buffers) |
 | recording_status | path; recording, temp_path, elapsed_ms, finalizing_for_path, optional warnings once that path finalized (covers stops that timed out) |
 | upload_recording | path, uploadUrl, contentType; returns HTTP status code |
@@ -44,7 +45,7 @@ stub compiler for objc2's build script; that proves types, not runtime behavior.
 | control_ready | info {loggedIn, mounted?}; SPA bridge readiness (mounted:false on unload clears it) |
 | control_reply | requestId, result {ok, data?/error{code,message}}; answers one native-control-request |
 | control_report_state | state object (phase, meetingId, error), at most 16 KiB; returned by socket status |
-| meeting_detection_get | returns supported, enabled, active detection (ADR-061) |
+| meeting_detection_get | returns supported, enabled, autoStop capability, active detection (ADR-061) |
 | meeting_detection_set_enabled | enabled; persisted in the app config directory, off clears the announcement |
 | meeting_detection_respond | detectionId, action dismiss/start(title)/stop; start/stop return the record page's control reply |
 
@@ -52,10 +53,13 @@ finalizing_for_path is deliberately a new per-path field, not the older global
 finalizing flag. Frontend wire compatibility checks rely on that distinction.
 Events are native-audio-level (RMS), native-upload-progress (loaded/total), and
 native-pcm-chunk (16kHz mono PCM for captions); native-control-request
-({requestId, action start|stop, params}) goes to the main window only.
+({requestId, action start|stop, params, origin mcp|detection}) goes to the main window only.
 native-meeting-detected/native-meeting-ended ({detectionId, kind, label, browser,
 recording}) also go to the main window only. Remote event capability grants must
-match the actual loaded origin; do not add speculative origins.
+match the actual loaded origin; do not add speculative origins. Tauri checks the
+ACL for every command called from the remote SPA: each command must be listed in
+`build.rs` COMMANDS and its `allow-*` permission granted in
+`capabilities/default.json` (`command_acl_tests` enforces both).
 
 ## Invariants
 
@@ -83,6 +87,14 @@ match the actual loaded origin; do not add speculative origins.
 - The IOProc is real-time: mix and enqueue only. The worker owns disk writes and
   events. Teardown order: AudioDeviceStop, destroy IOProc, aggregate, tap, then
   close the queue and join the worker before finalizing the WAV.
+- Without a requested device, capture uses the input device a meeting app is
+  capturing from (Core Audio process `Devices`, input scope), else the system
+  default; `input_select.rs` holds the rules. Virtual/aggregate devices remain
+  selectable (a virtual noise-suppression microphone can be the real input); the
+  picker hides them unless they are the default or a meeting app's input.
+- The automatic stop after a meeting ends may only stop, once, for the ended
+  detection it counted for; a resumed meeting (`native-meeting-resumed`) clears
+  the bound recording so a pending stop is rejected.
 - Meeting detection (`meeting.rs` rules, `meeting_detect.rs` probe) only offers a
   recording; confirmed starts use the control dispatch path, never
   `start_recording` directly. Core Audio polls run without recorder locks. The
