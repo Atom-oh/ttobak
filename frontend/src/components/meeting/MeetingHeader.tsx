@@ -1,5 +1,6 @@
 'use client';
 
+import { confirmDialog, alertDialog } from '@/lib/dialog';
 import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -32,14 +33,14 @@ function DesktopDeleteButton({ meetingId }: { meetingId: string }) {
   const [isDeleting, setIsDeleting] = useState(false);
 
   const handleDelete = async () => {
-    if (!confirm('이 미팅을 삭제하시겠습니까?')) return;
+    if (!await confirmDialog('이 미팅을 삭제하시겠습니까?')) return;
     setIsDeleting(true);
     try {
       await meetingsApi.delete(meetingId);
       router.push('/');
     } catch (err) {
       console.error('Failed to delete meeting:', err);
-      alert('미팅 삭제에 실패했습니다.');
+      void alertDialog('미팅 삭제에 실패했습니다.');
       setIsDeleting(false);
     }
   };

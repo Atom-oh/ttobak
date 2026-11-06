@@ -1,5 +1,6 @@
 'use client';
 
+import { confirmDialog } from '@/lib/dialog';
 import { useState, useRef, useEffect, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
@@ -249,7 +250,7 @@ function RecordPageInner() {
   // they close over `resetSessionStateForNewMeeting`, which is itself a
   // per-render function, so memoizing would only add a stale-deps hazard.
   const handleLeftoverUpload = async (item: TauriLeftoverRecording) => {
-    const ok = window.confirm(
+    const ok = await confirmDialog(
       `"${item.file_name}" (${formatFileSize(item.byte_size)}, ${formatLeftoverTime(item.modified_ms)})\n\n` +
       '이전 세션에서 남은 녹음 파일입니다. 이 Mac에서 이전에 로그인한 다른 사용자의 녹음일 수 있습니다.\n' +
       '본인의 녹음이 맞다면 내 미팅으로 업로드합니다. 계속할까요?',
@@ -271,7 +272,7 @@ function RecordPageInner() {
   };
 
   const handleLeftoverDelete = async (item: TauriLeftoverRecording) => {
-    const ok = window.confirm(
+    const ok = await confirmDialog(
       `"${item.file_name}" (${formatFileSize(item.byte_size)}, ${formatLeftoverTime(item.modified_ms)})\n\n` +
       '이전 세션에서 남은 녹음 파일입니다. 이 Mac에서 이전에 로그인한 다른 사용자의 녹음일 수 있습니다.\n' +
       '삭제하면 복구할 수 없습니다. 삭제할까요?',

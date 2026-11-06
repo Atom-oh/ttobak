@@ -1,5 +1,6 @@
 'use client';
 
+import { confirmDialog, alertDialog } from '@/lib/dialog';
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
@@ -164,14 +165,14 @@ function MobileMoreMenu({ meetingId }: { meetingId: string }) {
 
   const handleDelete = async () => {
     setOpen(false);
-    if (!confirm('이 미팅을 삭제하시겠습니까?')) return;
+    if (!await confirmDialog('이 미팅을 삭제하시겠습니까?')) return;
     setIsDeleting(true);
     try {
       await meetingsApi.delete(meetingId);
       router.push('/');
     } catch (err) {
       console.error('Failed to delete meeting:', err);
-      alert('미팅 삭제에 실패했습니다.');
+      void alertDialog('미팅 삭제에 실패했습니다.');
       setIsDeleting(false);
     }
   };
