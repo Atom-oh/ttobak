@@ -619,17 +619,21 @@ there is no transcript fallback when the summary is missing. Conflicts return
 Meeting management (ADR-016 2026-11-06 amendment; for inherited members it
 supersedes ADR-058's invitation/linking restriction for meetings only): the
 creator or a live direct or inherited member of the account a meeting is
-published to may call the
-share, revoke, pending-revoke, account and share-account routes. Detail
-returns `canManage`, and managers receive `shares` (with `sharedByEmail` for
-member-created shares) and `projectIds`. Writes keep the creator's partition;
-strangers get 404. A member's account or share-account call must target the
-account the meeting is currently published to (403 otherwise; 409 if it was
-unpublished concurrently) and never mints the owner approval; member email shares
-pass the same `SUMMARY_SHARING_UNSAFE` gate. `summarySharing.canShareToAccount`
-offers the approval path only to the creator and team republication only to the
-creator or direct members of the meeting's account. `canRecoverRecording` stays
-creator-only. Account-link condition failures return 409 `CONFLICT`.
+published to may call the share, revoke, pending-revoke, account,
+share-account, link, upload, recover, rediarize and project-link routes; audio
+crop, the simulator and delete stay creator-only. Detail returns
+`canManage`, and managers receive `shares` (with `sharedByEmail` for
+member-created shares) and `projectIds`. Writes keep the creator's partition and
+prefixes; strangers get 404. A member's account or share-account call must
+target the account the meeting is currently published to (403 otherwise; 409 if
+it was unpublished concurrently) and never mints the owner approval; member
+email shares pass the same `SUMMARY_SHARING_UNSAFE` gate.
+`summarySharing.canShareToAccount` offers the approval path only to the creator
+and team republication only to the creator or direct members of the meeting's
+account. `canRecoverRecording` is offered to managers; a member's recovery still
+requires the 10-minute quiet checkpoint. Account-link condition failures return
+409 `CONFLICT`. A member's project link or unlink requires the project to be
+linked to that account. Shared list items include `ownerUserId` (the creator).
 
 `POST /api/meetings/{meetingId}/account` is a private classification operation:
 the caller (creator or managing member) must directly belong to the target account. One partial
@@ -931,7 +935,8 @@ pendingShareExpiresAt; QA history's uppercase TTL field is not swept.
 
 ### Upload and recovery
 
-The server validates category, ownership and traversal. Checkpoint filenames
+The server validates category, management access and traversal; meeting upload
+keys use the creator's prefix even when a managing member uploads. Checkpoint filenames
 recording_progress.webm/m4a/ogg intentionally overwrite a stable audio key; other
 uploads receive unique names. Upload completion emits the appropriate custom
 event. The bounded PDF/PPTX/DOCX/Markdown extractor and its asynchronous worker
@@ -951,7 +956,11 @@ are document pages/slides/paragraphs/cells/lines, never audio timestamps.
 See the [worker contract](../backend/python/document-extract/LAMBDA.md) and
 [parser scope](../backend/python/document-extract/README.md).
 
-Recover uses a saved progress object. Rediarize accepts supported single-part
+Recover uses a saved progress object; a non-creator manager may recover only after
+it has been unchanged for 10 minutes (409 `RECORDING_STILL_ACTIVE`). Managers
+cannot presign or complete checkpoint filenames (403), and their audio presigns
+and completions while the meeting is recording or transcribing follow the same
+10-minute rule (409). Manager presigned URLs expire after 5 minutes. Rediarize accepts supported single-part
 Whisper meetings and a speaker-count hint. Use their handler/service contracts,
 not a raw DynamoDB status reset or a fabricated AWS S3 event.
 

@@ -131,13 +131,31 @@ func (s *UploadService) GeneratePresignedUploadURL(
 	userID string,
 	req *model.PresignedURLRequest,
 ) (*model.PresignedURLResponse, error) {
-	if req.Category == "audio" && req.MeetingID != "" {
-		meeting, err := s.repo.MetadataView().GetMeeting(ctx, userID, req.MeetingID)
+	// Meeting uploads live under the creator's prefix, including uploads by a
+	// managing account member; a meeting that does not exist yet (a new
+	// recording) stays under the caller.
+	keyOwner := userID
+	if req.MeetingID != "" && (req.Category == "audio" || req.Category == "image" || req.Category == "file") {
+		meeting, err := s.uploadMeeting(ctx, userID, req.MeetingID)
 		if err != nil {
 			return nil, err
 		}
-		if meeting != nil && meeting.AudioCrop != nil {
-			return nil, fmt.Errorf("%w: cropped audio is immutable; create another cropped copy", ErrInvalidInput)
+		if meeting != nil {
+			keyOwner = meeting.UserID
+			if req.Category == "audio" && meeting.AudioCrop != nil {
+				return nil, fmt.Errorf("%w: cropped audio is immutable; create another cropped copy", ErrInvalidInput)
+			}
+			if req.Category == "audio" {
+				if err := s.checkMemberAudioWrite(ctx, userID, meeting, req.FileName); err != nil {
+					return nil, err
+				}
+			}
+			// The upload may land without completion; mark it when issued.
+			if presignMarksSourceEdit(req.Category, userID, meeting.UserID) {
+				if err := s.markMemberUpload(ctx, userID, meeting); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
 	// Generate S3 key based on category
@@ -155,7 +173,7 @@ func (s *UploadService) GeneratePresignedUploadURL(
 			if req.PartIndex < 0 || req.PartIndex >= req.TotalParts {
 				return nil, fmt.Errorf("partIndex %d out of range [0, %d)", req.PartIndex, req.TotalParts)
 			}
-			s3Key = fmt.Sprintf("audio/%s/%s/part_%03d_%s", userID, meetingID, req.PartIndex, s.sanitizeFileName(req.FileName))
+			s3Key = fmt.Sprintf("audio/%s/%s/part_%03d_%s", keyOwner, meetingID, req.PartIndex, s.sanitizeFileName(req.FileName))
 		} else if isCheckpointFileName(req.FileName) {
 			// Mid-recording checkpoint (RecordButton's onCheckpoint via
 			// handleCheckpoint in frontend/src/app/record/page.tsx) --
@@ -168,20 +186,20 @@ func (s *UploadService) GeneratePresignedUploadURL(
 			// Safe to skip sanitization here because the filename is a
 			// fixed, code-controlled constant on the frontend, never
 			// derived from arbitrary user input.
-			s3Key = fmt.Sprintf("audio/%s/%s/%s", userID, meetingID, req.FileName)
+			s3Key = fmt.Sprintf("audio/%s/%s/%s", keyOwner, meetingID, req.FileName)
 		} else {
-			s3Key = fmt.Sprintf("audio/%s/%s/%s", userID, meetingID, s.sanitizeFileName(req.FileName))
+			s3Key = fmt.Sprintf("audio/%s/%s/%s", keyOwner, meetingID, s.sanitizeFileName(req.FileName))
 		}
 	case "image":
 		if req.MeetingID == "" {
 			return nil, fmt.Errorf("meetingId is required for image uploads")
 		}
-		s3Key = fmt.Sprintf("images/%s/%s/%s", userID, req.MeetingID, s.sanitizeFileName(req.FileName))
+		s3Key = fmt.Sprintf("images/%s/%s/%s", keyOwner, req.MeetingID, s.sanitizeFileName(req.FileName))
 	case "file":
 		if req.MeetingID == "" {
 			return nil, fmt.Errorf("meetingId is required for file uploads")
 		}
-		s3Key = fmt.Sprintf("files/%s/%s/%s", userID, req.MeetingID, s.sanitizeFileName(req.FileName))
+		s3Key = fmt.Sprintf("files/%s/%s/%s", keyOwner, req.MeetingID, s.sanitizeFileName(req.FileName))
 	case "doc":
 		// No meetingId -- a slide document isn't tied to a meeting. The
 		// document create call itself (accountApi/docApi put with this
@@ -193,7 +211,7 @@ func (s *UploadService) GeneratePresignedUploadURL(
 	}
 
 	// Generate presigned URL (valid for 1 hour)
-	expiresIn := 1 * time.Hour
+	expiresIn := presignExpiry(userID, keyOwner)
 	presignedURL, err := s.presignClient.PresignPutObject(ctx, &s3.PutObjectInput{
 		Bucket:      aws.String(s.bucketName),
 		Key:         aws.String(s3Key),
@@ -212,23 +230,29 @@ func (s *UploadService) GeneratePresignedUploadURL(
 
 // CompleteUpload handles upload completion notification
 func (s *UploadService) CompleteUpload(ctx context.Context, userID string, req *model.UploadCompleteRequest) error {
-	// Verify meeting ownership before completing upload
-	meeting, err := s.repo.MetadataView().GetMeeting(ctx, userID, req.MeetingID)
+	// The creator or a managing account member; keys use the creator prefix.
+	meeting, err := resolveMeetingManager(ctx, s.repo.MetadataView(), userID, req.MeetingID)
 	if err != nil {
 		return err
 	}
-	if meeting == nil {
-		return ErrNotFound
-	}
-	if meeting.UserID != userID {
-		return ErrForbidden
-	}
+	owner := meeting.UserID
 
 	if req.Category == "audio" && meeting.AudioCrop != nil {
 		return fmt.Errorf("%w: cropped audio is immutable", ErrInvalidInput)
 	}
-	if (req.Category == "audio" || req.Category == "image") && !validMeetingUploadKey(req.Category, userID, req.MeetingID, req.Key) {
+	if (req.Category == "audio" || req.Category == "image") && !validMeetingUploadKey(req.Category, owner, req.MeetingID, req.Key) {
 		return ErrInvalidInput
+	}
+	// Same member guard as presign, before any audio key is bound.
+	if req.Category == "audio" {
+		if err := s.checkMemberAudioWrite(ctx, userID, meeting, path.Base(req.Key)); err != nil {
+			return err
+		}
+	}
+	if req.Category == "audio" || req.Category == "image" || req.Category == "file" {
+		if err := s.markMemberUpload(ctx, userID, meeting); err != nil {
+			return err
+		}
 	}
 
 	switch req.Category {
@@ -260,28 +284,31 @@ func (s *UploadService) CompleteUpload(ctx context.Context, userID string, req *
 	case "image":
 		// Create attachment record
 		attachType := model.AttachTypePhoto
-		att, err := s.repo.CreateAttachment(ctx, req.MeetingID, userID, req.Key, attachType)
+		att, err := s.repo.CreateAttachment(ctx, req.MeetingID, owner, req.Key, attachType)
 		if err != nil {
 			return err
 		}
-		// Store file metadata if provided
-		if req.FileName != "" || req.FileSize > 0 || req.MimeType != "" {
+		// Store file metadata (and a member uploader) if provided
+		if req.FileName != "" || req.FileSize > 0 || req.MimeType != "" || userID != owner {
 			att.FileName = req.FileName
 			att.FileSize = req.FileSize
 			att.MimeType = req.MimeType
+			if userID != owner {
+				att.UploadedBy = userID
+			}
 			if err := s.repo.UpdateAttachment(ctx, att); err != nil {
 				return err
 			}
 		}
 		// Emit custom EventBridge event so process-image Lambda runs
 		// AFTER the attachment record exists in DynamoDB
-		return s.emitImageUploadEvent(ctx, req.MeetingID, userID, req.Key)
+		return s.emitImageUploadEvent(ctx, req.MeetingID, owner, req.Key)
 
 	case "file":
-		if !validAttachmentSource(&model.Attachment{AttachmentID: "pending", MeetingID: req.MeetingID, UserID: userID, OriginalKey: req.Key}) {
+		if !validAttachmentSource(&model.Attachment{AttachmentID: "pending", MeetingID: req.MeetingID, UserID: owner, OriginalKey: req.Key}) {
 			return ErrInvalidInput
 		}
-		att, err := s.repo.CreateFileAttachment(ctx, userID, req, inferAttachTypeFromMime(req.MimeType))
+		att, err := s.repo.CreateFileAttachment(ctx, owner, userID, req, inferAttachTypeFromMime(req.MimeType))
 		if err != nil {
 			return err
 		}
@@ -514,14 +541,12 @@ func (s *UploadService) emitImageUploadEvent(ctx context.Context, meetingID, use
 // RecoverMeeting recovers a crashed recording by copying the progress file to a final key
 // and triggering the transcription pipeline.
 func (s *UploadService) RecoverMeeting(ctx context.Context, userID, meetingID string) error {
-	// Verify meeting exists and belongs to user
-	meeting, err := s.repo.GetMeeting(ctx, userID, meetingID)
+	// The creator, or a managing account member once the recording is stale.
+	meeting, err := resolveMeetingManager(ctx, s.repo, userID, meetingID)
 	if err != nil {
-		return fmt.Errorf("failed to get meeting: %w", err)
+		return err
 	}
-	if meeting == nil {
-		return ErrNotFound
-	}
+	owner := meeting.UserID
 	if !CanRecoverRecording(meeting) {
 		return fmt.Errorf("%w: meeting has no interrupted recording to recover", ErrInvalidInput)
 	}
@@ -531,14 +556,17 @@ func (s *UploadService) RecoverMeeting(ctx context.Context, userID, meetingID st
 	// to (webm on desktop/Android, m4a on iOS Safari, which has no webm
 	// encoder at all), so a fixed ".webm" here made "녹음 복구" fail with
 	// "no recoverable audio found" on every iOS recording, unconditionally.
-	progressKey, ext, err := s.findProgressFile(ctx, userID, meetingID)
+	progressKey, ext, modified, err := s.findProgressFile(ctx, owner, meetingID)
 	if err != nil {
 		return err
+	}
+	if !memberMayRecover(userID, owner, modified, time.Now()) {
+		return ErrRecordingStillActive
 	}
 
 	// Copy progress file to a final filename (triggers EventBridge S3 event → transcribe Lambda),
 	// preserving whatever extension the progress file actually had.
-	finalKey := fmt.Sprintf("audio/%s/%s/recording_recovered_%s.%s", userID, meetingID, strings.ReplaceAll(uuid.NewString(), "-", ""), ext)
+	finalKey := fmt.Sprintf("audio/%s/%s/recording_recovered_%s.%s", owner, meetingID, strings.ReplaceAll(uuid.NewString(), "-", ""), ext)
 	_, err = s.s3Client.CopyObject(ctx, &s3.CopyObjectInput{
 		Bucket:     aws.String(s.bucketName),
 		Key:        aws.String(finalKey),
@@ -567,7 +595,7 @@ func (s *UploadService) RecoverMeeting(ctx context.Context, userID, meetingID st
 // (recording_progress.{ext}), overwriting the previous checkpoint each
 // time rather than accumulating one object per tick, so the first match
 // is unambiguous and MaxKeys:1 is safe.
-func (s *UploadService) findProgressFile(ctx context.Context, userID, meetingID string) (key string, ext string, err error) {
+func (s *UploadService) findProgressFile(ctx context.Context, userID, meetingID string) (key string, ext string, modified time.Time, err error) {
 	prefix := fmt.Sprintf("audio/%s/%s/recording_progress.", userID, meetingID)
 	out, err := s.s3Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
 		Bucket:  aws.String(s.bucketName),
@@ -575,17 +603,87 @@ func (s *UploadService) findProgressFile(ctx context.Context, userID, meetingID 
 		MaxKeys: aws.Int32(1),
 	})
 	if err != nil {
-		return "", "", fmt.Errorf("listing progress files: %w", err)
+		return "", "", time.Time{}, fmt.Errorf("listing progress files: %w", err)
 	}
 	if len(out.Contents) == 0 || out.Contents[0].Key == nil {
-		return "", "", ErrRecordingCheckpointMissing
+		return "", "", time.Time{}, ErrRecordingCheckpointMissing
 	}
 	key = *out.Contents[0].Key
 	ext = strings.TrimPrefix(path.Ext(key), ".")
 	if !recordingCheckpointExtensions[ext] || key != prefix+ext {
-		return "", "", fmt.Errorf("progress file %s has unrecognized extension", key)
+		return "", "", time.Time{}, fmt.Errorf("progress file %s has unrecognized extension", key)
 	}
-	return key, ext, nil
+	if out.Contents[0].LastModified != nil {
+		modified = *out.Contents[0].LastModified
+	}
+	return key, ext, modified, nil
+}
+
+// memberRecoveryQuietPeriod: a non-creator may recover only after the
+// checkpoint has not changed for this long, so a live recording on the
+// creator's device is never hijacked.
+const memberRecoveryQuietPeriod = 10 * time.Minute
+
+// memberMayRecover is the pure staleness rule for recovery by a non-creator.
+// An unknown checkpoint time is treated as active.
+func memberMayRecover(actorID, ownerID string, checkpoint, now time.Time) bool {
+	if actorID == ownerID {
+		return true
+	}
+	return !checkpoint.IsZero() && now.Sub(checkpoint) >= memberRecoveryQuietPeriod
+}
+
+// memberPresignExpiry bounds how long a managing member's presigned PUT stays
+// usable after their membership ends. S3 audio events start transcription
+// without CompleteUpload's checks, so this is also the residual window for
+// a removed member (ADR-016 2026-11-06 amendment).
+const memberPresignExpiry = 5 * time.Minute
+
+// presignExpiry keeps the creator's one-hour window and shortens it for a
+// non-creator writing under the creator's prefix.
+func presignExpiry(actorID, keyOwner string) time.Duration {
+	if actorID != keyOwner {
+		return memberPresignExpiry
+	}
+	return time.Hour
+}
+
+// presignMarksSourceEdit: a member's audio or file presign sets the sticky
+// non-owner source marker at issue time, not only at completion.
+func presignMarksSourceEdit(category, actorID, ownerID string) bool {
+	return actorID != ownerID && (category == "audio" || category == "file")
+}
+
+// checkMemberAudioWrite is the shared presign/complete guard for a managing
+// member's audio. It reads the creator's checkpoint only when the meeting is
+// recording or transcribing; a missing checkpoint counts as active.
+func (s *UploadService) checkMemberAudioWrite(ctx context.Context, actorID string, meeting *model.Meeting, fileName string) error {
+	if meeting == nil || actorID == meeting.UserID {
+		return nil
+	}
+	var checkpoint time.Time
+	if (meeting.Status == model.StatusRecording || meeting.Status == model.StatusTranscribing) && s.s3Client != nil {
+		_, _, checkpoint, _ = s.findProgressFile(ctx, meeting.UserID, meeting.MeetingID)
+	}
+	return memberAudioWriteAllowed(actorID, meeting, fileName, checkpoint, time.Now())
+}
+
+// memberAudioWriteAllowed keeps a non-creator from overwriting the creator's
+// live recording: checkpoint filenames are creator-only, and audio writes
+// while the meeting is recording or transcribing need the same 10-minute
+// quiet checkpoint as recovery.
+func memberAudioWriteAllowed(actorID string, meeting *model.Meeting, fileName string, checkpoint, now time.Time) error {
+	if meeting == nil || actorID == meeting.UserID {
+		return nil
+	}
+	if isCheckpointFileName(fileName) {
+		return ErrForbidden
+	}
+	if (meeting.Status == model.StatusRecording || meeting.Status == model.StatusTranscribing) &&
+		!memberMayRecover(actorID, meeting.UserID, checkpoint, now) {
+		return ErrRecordingStillActive
+	}
+	return nil
 }
 
 // validateRediarizeEligibility is the pure decision core of RediarizeMeeting:
@@ -639,12 +737,14 @@ func (s *UploadService) RediarizeMeeting(ctx context.Context, userID, meetingID 
 		return fmt.Errorf("speakerCount must be between 2 and 20: %w", ErrInvalidInput)
 	}
 
-	meeting, err := s.repo.GetMeeting(ctx, userID, meetingID)
+	// The creator or a managing account member; audio stays under the creator.
+	meeting, err := resolveMeetingManager(ctx, s.repo, userID, meetingID)
 	if err != nil {
-		return fmt.Errorf("failed to get meeting: %w", err)
+		return err
 	}
+	owner := meeting.UserID
 
-	sourceKey, err := validateRediarizeEligibility(meeting, userID, speakerCount)
+	sourceKey, err := validateRediarizeEligibility(meeting, owner, speakerCount)
 	if err != nil {
 		return err
 	}
@@ -665,7 +765,7 @@ func (s *UploadService) RediarizeMeeting(ctx context.Context, userID, meetingID 
 	// can win this write -- the loser gets ConditionalCheckFailedException
 	// and reports "already processing" instead of proceeding, rather than
 	// two copy pipelines racing each other over the same meeting.
-	if err := s.repo.UpdateMeetingFieldsIfMatch(ctx, userID, meetingID, map[string]interface{}{
+	if err := s.repo.UpdateMeetingFieldsIfMatch(ctx, owner, meetingID, map[string]interface{}{
 		"status": meeting.Status,
 	}, map[string]interface{}{
 		"diarizationSpeakerHint": speakerCount,
@@ -681,7 +781,7 @@ func (s *UploadService) RediarizeMeeting(ctx context.Context, userID, meetingID 
 	// A fresh key under the same meeting prefix, so the existing EventBridge
 	// S3 rule + ttobak-transcribe Lambda pick it up exactly as a new upload
 	// would. The original audioKey is left untouched.
-	retriggerKey := fmt.Sprintf("audio/%s/%s/rediarize_%s_%s", userID, meetingID, uuid.New().String(), path.Base(sourceKey))
+	retriggerKey := fmt.Sprintf("audio/%s/%s/rediarize_%s_%s", owner, meetingID, uuid.New().String(), path.Base(sourceKey))
 	if _, err := s.s3Client.CopyObject(ctx, &s3.CopyObjectInput{
 		Bucket:     aws.String(s.bucketName),
 		Key:        aws.String(retriggerKey),
@@ -711,4 +811,34 @@ func ExtractInfoFromImageKey(key string) (userID, meetingID string) {
 		return parts[1], parts[2]
 	}
 	return "", ""
+}
+
+// uploadMeeting resolves the meeting an upload targets: the caller's own, or
+// one the caller manages as an account member. A meeting that does not exist
+// yet returns nil (a new recording under the caller); an existing meeting the
+// caller cannot manage is ErrNotFound/ErrForbidden.
+func (s *UploadService) uploadMeeting(ctx context.Context, userID, meetingID string) (*model.Meeting, error) {
+	if s.repo == nil {
+		return nil, nil
+	}
+	repo := s.repo.MetadataView()
+	owned, err := repo.GetMeeting(ctx, userID, meetingID)
+	if err != nil || owned != nil {
+		return owned, err
+	}
+	existing, err := repo.GetMeetingByID(ctx, meetingID)
+	if err != nil || existing == nil {
+		return nil, err
+	}
+	return resolveMeetingManager(ctx, repo, userID, meetingID)
+}
+
+// markMemberUpload sets the sticky non-owner source marker before a managing
+// member's upload changes term-extraction sources (design A2.1).
+func (s *UploadService) markMemberUpload(ctx context.Context, actorID string, meeting *model.Meeting) error {
+	if actorID == meeting.UserID {
+		return nil
+	}
+	return s.repo.UpdateMeetingFields(ctx, meeting.UserID, meeting.MeetingID,
+		map[string]interface{}{"sourceEditedByNonOwnerAt": time.Now().UTC().Format(time.RFC3339)})
 }

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"path"
 	"testing"
 	"time"
 
@@ -47,6 +48,17 @@ func (m *mockMeetingRepo) PublishMeetingToAccountAs(ctx context.Context, ownerID
 		return err
 	}
 	return m.PublishMeetingToAccount(ctx, ownerID, meetingID, accountID)
+}
+
+func (m *mockMeetingRepo) LinkPredecessorsAs(ctx context.Context, ownerID, actorID, meetingID, accountID string, linkedIDs []string) error {
+	current := m.meetings[meetingKey(ownerID, meetingID)]
+	if m.members[accountID+"|"+actorID] == nil {
+		return repository.ErrSummaryAccess
+	}
+	if current == nil || current.AccountID != accountID || !current.SharedToAccount {
+		return repository.ErrConditionFailed
+	}
+	return m.UpdateMeetingFields(ctx, ownerID, meetingID, map[string]interface{}{"linkedMeetingIds": linkedIDs})
 }
 
 func (m *mockMeetingRepo) GetUserByID(_ context.Context, userID string) (*model.User, error) {
@@ -228,6 +240,49 @@ func TestMemberAccountChangesStayWithinTheManagedAccount(t *testing.T) {
 	}
 }
 
+func TestMemberLinksOnlyCreatorPredecessorsTheyCanRead(t *testing.T) {
+	repo := managementRepo()
+	now := time.Now()
+	repo.addMeeting(&model.Meeting{MeetingID: "p-team", UserID: "owner-1", AccountID: "acc", SharedToAccount: true, Date: now})
+	repo.addMeeting(&model.Meeting{MeetingID: "p-private", UserID: "owner-1", Date: now})
+	repo.addMeeting(&model.Meeting{MeetingID: "p-other", UserID: "owner-1", AccountID: "other", SharedToAccount: true, Date: now})
+	repo.addMeeting(&model.Meeting{MeetingID: "p-member", UserID: "member-1", Date: now})
+	// The member can read p-private only through a direct share; it must
+	// not enter the team-visible summary context.
+	repo.shares[shareKey("member-1", "p-private")] = &model.Share{MeetingID: "p-private", OwnerID: "owner-1", SharedToID: "member-1", Permission: model.PermissionEdit}
+	svc := newMeetingServiceWithRepo(repo)
+	for _, id := range []string{"p-private", "p-other"} {
+		if err := svc.LinkPredecessors(context.Background(), "member-1", "m-1", []string{id}); !errors.Is(err, ErrForbidden) {
+			t.Fatalf("%s: want ErrForbidden, got %v", id, err)
+		}
+	}
+	if err := svc.LinkPredecessors(context.Background(), "member-1", "m-1", []string{"p-member"}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("the member's own meeting is not the creator's: %v", err)
+	}
+	if err := svc.LinkPredecessors(context.Background(), "member-1", "m-1", []string{"m-1"}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("self link: %v", err)
+	}
+	if err := svc.LinkPredecessors(context.Background(), "member-1", "m-1", []string{"p-team"}); err != nil {
+		t.Fatalf("member link: %v", err)
+	}
+	if got := repo.meetings[meetingKey("owner-1", "m-1")].LinkedMeetingIDs; len(got) != 1 || got[0] != "p-team" {
+		t.Fatalf("links: %v", got)
+	}
+	if err := svc.LinkPredecessors(context.Background(), "owner-1", "m-1", []string{"p-private"}); err != nil {
+		t.Fatalf("creator links private predecessor: %v", err)
+	}
+	if err := svc.LinkPredecessors(context.Background(), "reader-1", "m-1", []string{"p-team"}); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("direct share holder link: %v", err)
+	}
+	// The parent is unpublished after the manager check: the fenced write fails.
+	unpublished := *repo.meetingsByID["m-1"]
+	unpublished.SharedToAccount = false
+	repo.meetings[meetingKey("owner-1", "m-1")] = &unpublished
+	if err := svc.LinkPredecessors(context.Background(), "member-1", "m-1", []string{"p-team"}); !errors.Is(err, repository.ErrConditionFailed) {
+		t.Fatalf("link after concurrent unpublish: %v", err)
+	}
+}
+
 func TestDeleteStaysCreatorOnlyForManagers(t *testing.T) {
 	repo := managementRepo()
 	if err := newMeetingServiceWithRepo(repo).DeleteMeeting(context.Background(), "member-1", "m-1"); err == nil {
@@ -333,14 +388,203 @@ func TestTeamSharingOfferedOnlyToCreatorOrDirectMembers(t *testing.T) {
 	}
 }
 
-func TestRecoveryFlagStaysCreatorOnly(t *testing.T) {
+// The flag is offered to managers; RecoverMeeting still enforces the
+// 10-minute quiet checkpoint for non-creators.
+func TestRecoveryFlagOfferedToManagers(t *testing.T) {
 	repo := managementRepo()
 	repo.meetingsByID["m-1"].Status = model.StatusRecording
 	repo.meetingsByID["m-1"].UpdatedAt = time.Now()
 	repo.meetings[meetingKey("owner-1", "m-1")] = repo.meetingsByID["m-1"]
 	svc := newMeetingServiceWithRepo(repo)
 	member, err := svc.GetMeetingDetail(context.Background(), "member-1", "m-1")
-	if err != nil || member.CanRecoverRecording {
+	if err != nil || !member.CanRecoverRecording {
 		t.Fatalf("member recovery flag: %v %v", member != nil && member.CanRecoverRecording, err)
+	}
+	reader, err := svc.GetMeetingDetail(context.Background(), "reader-1", "m-1")
+	if err != nil || reader.CanRecoverRecording {
+		t.Fatalf("direct share holder recovery flag: %v %v", reader != nil && reader.CanRecoverRecording, err)
+	}
+}
+
+func TestMemberMayRecoverOnlyStaleRecordings(t *testing.T) {
+	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		actor      string
+		checkpoint time.Time
+		want       bool
+	}{
+		{"owner", now, true},
+		{"owner", time.Time{}, true},
+		{"member", now.Add(-9 * time.Minute), false},
+		{"member", now.Add(-10 * time.Minute), true},
+		{"member", time.Time{}, false},
+	} {
+		if got := memberMayRecover(tc.actor, "owner", tc.checkpoint, now); got != tc.want {
+			t.Fatalf("%s at %v: got %v", tc.actor, tc.checkpoint, got)
+		}
+	}
+}
+
+func TestRediarizeUsesCreatorAudioPrefix(t *testing.T) {
+	meeting := &model.Meeting{UserID: "owner", MeetingID: "m", Status: model.StatusDone, AudioKey: "audio/owner/m/a.webm"}
+	if key, err := validateRediarizeEligibility(meeting, meeting.UserID, 3); err != nil || key != "audio/owner/m/a.webm" {
+		t.Fatalf("creator prefix: %q %v", key, err)
+	}
+	if _, err := validateRediarizeEligibility(meeting, "member", 3); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("a non-owner prefix never matches: %v", err)
+	}
+}
+
+// managedProjectRepo gives the project double the share/membership reads a
+// manager check needs plus the account-fenced link write.
+type managedProjectRepo struct{ *mockProjectRepo }
+
+func (r managedProjectRepo) GetShare(context.Context, string, string) (*model.Share, error) {
+	return nil, nil
+}
+
+func (r managedProjectRepo) GetMeetingByID(_ context.Context, meetingID string) (*model.Meeting, error) {
+	for _, meeting := range r.meetings {
+		if meeting.MeetingID == meetingID {
+			copy := *meeting
+			return &copy, nil
+		}
+	}
+	return nil, nil
+}
+
+func (r managedProjectRepo) MeetingProjectLinkInAccount(ctx context.Context, ownerID, meetingID, projectID, accountID string, ref *model.ProjectMeetingRef) error {
+	meeting := r.meetings[projectMeetingKey(ownerID, meetingID)]
+	project := r.projects[projectID]
+	if meeting == nil || project == nil || meeting.AccountID != accountID || !meeting.SharedToAccount || !contains(project.AccountIDs, accountID) {
+		return repository.ErrConditionFailed
+	}
+	return r.MeetingProjectLinkTransactional(ctx, ownerID, meetingID, projectID, ref)
+}
+
+func TestMemberProjectLinkRequiresTheMeetingAccount(t *testing.T) {
+	base := newMockProjectRepo()
+	base.meetings[projectMeetingKey("owner-1", "m-1")] = &model.Meeting{MeetingID: "m-1", UserID: "owner-1", AccountID: "acc", SharedToAccount: true, Date: time.Now()}
+	addProjectAccountMember(base, "acc", "member-1")
+	addProjectAccountMember(base, "elsewhere", "member-1")
+	inAccount := seedProject(base, "p-acc", "project-owner")
+	inAccount.AccountIDs = []string{"acc"}
+	other := seedProject(base, "p-other", "project-owner")
+	other.AccountIDs = []string{"elsewhere"}
+	svc := newProjectServiceWithRepo(managedProjectRepo{base})
+	if err := svc.LinkMeeting(context.Background(), "member-1", "p-other", "m-1"); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("member linked the meeting to a project outside its account: %v", err)
+	}
+	if err := svc.LinkMeeting(context.Background(), "member-1", "p-acc", "m-1"); err != nil {
+		t.Fatalf("member link within the account: %v", err)
+	}
+	refs := base.meetingRefs["p-acc"]
+	if len(refs) != 1 || refs[0].OwnerUserID != "owner-1" || !contains(base.meetings[projectMeetingKey("owner-1", "m-1")].ProjectIDs, "p-acc") {
+		t.Fatalf("link must stay the creator's: %+v", refs)
+	}
+	if err := svc.UnlinkMeeting(context.Background(), "member-1", "p-acc", "m-1"); err != nil {
+		t.Fatalf("member unlink: %v", err)
+	}
+	if err := svc.LinkMeeting(context.Background(), "stranger", "p-acc", "m-1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("stranger link: %v", err)
+	}
+}
+
+func TestMemberAudioPresignNeverOverwritesALiveRecording(t *testing.T) {
+	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
+	recording := &model.Meeting{UserID: "owner", MeetingID: "m", Status: model.StatusRecording}
+	done := &model.Meeting{UserID: "owner", MeetingID: "m", Status: model.StatusDone}
+	for _, name := range []string{"recording_progress.webm", "recording_progress.m4a"} {
+		if err := memberAudioWriteAllowed("member", done, name, time.Time{}, now); !errors.Is(err, ErrForbidden) {
+			t.Fatalf("member checkpoint %s presign: %v", name, err)
+		}
+	}
+	for _, checkpoint := range []time.Time{{}, now.Add(-9 * time.Minute)} {
+		if err := memberAudioWriteAllowed("member", recording, "extra.webm", checkpoint, now); !errors.Is(err, ErrRecordingStillActive) {
+			t.Fatalf("member audio during an active recording (%v): %v", checkpoint, err)
+		}
+	}
+	transcribing := *recording
+	transcribing.Status = model.StatusTranscribing
+	if err := memberAudioWriteAllowed("member", &transcribing, "extra.webm", time.Time{}, now); !errors.Is(err, ErrRecordingStillActive) {
+		t.Fatalf("member audio while transcribing: %v", err)
+	}
+	if err := memberAudioWriteAllowed("member", recording, "extra.webm", now.Add(-10*time.Minute), now); err != nil {
+		t.Fatalf("stale recording allows member audio: %v", err)
+	}
+	if err := memberAudioWriteAllowed("member", done, "extra.webm", time.Time{}, now); err != nil {
+		t.Fatalf("member audio on a done meeting: %v", err)
+	}
+	if err := memberAudioWriteAllowed("owner", recording, "recording_progress.webm", time.Time{}, now); err != nil {
+		t.Fatalf("creator checkpoint presign changed: %v", err)
+	}
+}
+
+func TestMemberProjectUnlinkRequiresTheMeetingAccount(t *testing.T) {
+	base := newMockProjectRepo()
+	base.meetings[projectMeetingKey("owner-1", "m-1")] = &model.Meeting{MeetingID: "m-1", UserID: "owner-1", AccountID: "acc", SharedToAccount: true, Date: time.Now()}
+	addProjectAccountMember(base, "acc", "member-1")
+	addProjectAccountMember(base, "elsewhere", "member-1")
+	outside := seedProject(base, "p-other", "project-owner")
+	outside.AccountIDs = []string{"elsewhere"}
+	base.meetingRefs["p-other"] = []model.ProjectMeetingRef{{PK: model.PrefixProject + "p-other", SK: "MEETINGREF#m-1",
+		ProjectID: "p-other", MeetingID: "m-1", OwnerUserID: "owner-1"}}
+	base.meetings[projectMeetingKey("owner-1", "m-1")].ProjectIDs = []string{"p-other"}
+	svc := newProjectServiceWithRepo(managedProjectRepo{base})
+	if err := svc.UnlinkMeeting(context.Background(), "member-1", "p-other", "m-1"); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("member unlinked the meeting from a project outside its account: %v", err)
+	}
+	if len(base.meetingRefs["p-other"]) != 1 {
+		t.Fatal("a refused unlink removed the ref")
+	}
+	inside := seedProject(base, "p-acc", "project-owner")
+	inside.AccountIDs = []string{"acc"}
+	if err := svc.LinkMeeting(context.Background(), "member-1", "p-acc", "m-1"); err != nil {
+		t.Fatal(err)
+	}
+	delete(base.accountMembers, projectAccountMemberKey("acc", "member-1"))
+	if err := svc.UnlinkMeeting(context.Background(), "member-1", "p-acc", "m-1"); err == nil {
+		t.Fatal("a former member unlinked")
+	}
+}
+
+// checkMemberAudioWrite is the guard both presign and CompleteUpload call;
+// completion passes the key's base name.
+func TestMemberAudioCompletionUsesThePresignGuard(t *testing.T) {
+	svc := &UploadService{} // no S3 client: an unread checkpoint counts as active
+	recording := &model.Meeting{UserID: "owner", MeetingID: "m", Status: model.StatusRecording}
+	done := &model.Meeting{UserID: "owner", MeetingID: "m", Status: model.StatusDone}
+	checkpointKey := path.Base("audio/owner/m/recording_progress.webm")
+	if err := svc.checkMemberAudioWrite(context.Background(), "member", done, checkpointKey); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("member completion of a checkpoint key: %v", err)
+	}
+	if err := svc.checkMemberAudioWrite(context.Background(), "member", recording, path.Base("audio/owner/m/extra_1.webm")); !errors.Is(err, ErrRecordingStillActive) {
+		t.Fatalf("member completion during an active recording: %v", err)
+	}
+	if err := svc.checkMemberAudioWrite(context.Background(), "member", done, path.Base("audio/owner/m/extra_1.webm")); err != nil {
+		t.Fatalf("member completion on a done meeting: %v", err)
+	}
+	if err := svc.checkMemberAudioWrite(context.Background(), "owner", recording, checkpointKey); err != nil {
+		t.Fatalf("creator completion changed: %v", err)
+	}
+}
+
+func TestMemberPresignsAreShortLivedAndMarkSources(t *testing.T) {
+	if got := presignExpiry("owner", "owner"); got != time.Hour {
+		t.Fatalf("creator presign expiry changed: %v", got)
+	}
+	if got := presignExpiry("member", "owner"); got != 5*time.Minute {
+		t.Fatalf("member presign expiry: %v", got)
+	}
+	for _, tc := range []struct {
+		category, actor string
+		want            bool
+	}{
+		{"audio", "member", true}, {"file", "member", true}, {"image", "member", false},
+		{"audio", "owner", false}, {"file", "owner", false},
+	} {
+		if got := presignMarksSourceEdit(tc.category, tc.actor, "owner"); got != tc.want {
+			t.Fatalf("%s by %s: marks=%v want %v", tc.category, tc.actor, got, tc.want)
+		}
 	}
 }

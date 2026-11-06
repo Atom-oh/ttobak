@@ -40,11 +40,27 @@
     to another account or publishing an unpublished meeting stays creator-only.
     Only the creator mints the ADR-059 owner approval; a member republish changes
     no audience and publishes without approval.
+  - Predecessor links must be the creator's meetings. A member may link only
+    predecessors published to the same account (never one readable only through
+    a private direct share), and the write is fenced on the parent's publication
+    and the member's live grant.
+    A member's project link or unlink requires project access and a project
+    linked to the meeting's current account (links are fenced on both rows).
+  - Uploads, rediarize and recovery work for members (audio crop and the
+    simulator stay creator-only until the follow-up change); recovery requires a checkpoint quiet for 10 minutes
+    (409 `RECORDING_STILL_ACTIVE`). Members never presign or complete checkpoint
+    filenames, and their audio presigns and completions follow the same quiet
+    rule while the meeting is recording or transcribing, so a creator's live
+    recording is never overwritten. Member uploads set the non-owner source
+    marker (at presign time for audio/files) and `Attachment.uploadedBy`.
+    Member presigned PUTs expire after 5 minutes (the creator keeps 1 hour).
+    Accepted residual window: the transcribe trigger starts transcription for
+    any audio object under `audio/{creator}/{meeting}/` without a bound
+    `audioKey` (only recovered keys require one, `recoveryAudioEvent`,
+    `backend/cmd/transcribe/main.go:491`), so a member removed after receiving
+    a presign can still start a transcription for at most 5 minutes.
   - Creator-only: delete, the Notion page reference and sharing-safe
     regeneration. Strangers get 404 rather than 403 on these routes.
-  - Previous-meeting links, uploads, recovery, rediarize, crop, simulator and
-    project links remain creator-only until the follow-up management change
-    extends them.
 
 ## Context and original decision
 

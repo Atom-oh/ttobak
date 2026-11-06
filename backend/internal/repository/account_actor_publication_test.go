@@ -304,3 +304,101 @@ func TestActorAccountWritesPinMembershipWithPrivacyWritersOff(t *testing.T) {
 		})
 	}
 }
+
+func TestMeetingProjectLinkInAccountFencesMeetingAndProjectAccount(t *testing.T) {
+	var items []any
+	repo := summarySDKRepo(func(req *http.Request) (*http.Response, error) {
+		var body map[string]any
+		json.NewDecoder(req.Body).Decode(&body)
+		if strings.HasSuffix(req.Header.Get("X-Amz-Target"), ".TransactWriteItems") {
+			items = body["TransactItems"].([]any)
+		}
+		return summaryHTTPResponse(200, `{}`, nil), nil
+	})
+	ref := &model.ProjectMeetingRef{PK: model.PrefixProject + "project", SK: "MEETINGREF#x", ProjectID: "project", MeetingID: "meeting", OwnerUserID: "owner"}
+	if err := repo.MeetingProjectLinkInAccount(context.Background(), "owner", "meeting", "project", "account", ref); err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("want meeting update, ref put and project check, got %d", len(items))
+	}
+	update := items[0].(map[string]any)["Update"].(map[string]any)
+	names := update["ExpressionAttributeNames"].(map[string]any)
+	condition := update["ConditionExpression"].(string)
+	for _, field := range []string{"accountId", "sharedToAccount"} {
+		found := false
+		for token, name := range names {
+			if name == field && strings.Contains(condition, token) {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("meeting link not fenced on %s: %s", field, condition)
+		}
+	}
+	check := items[2].(map[string]any)["ConditionCheck"].(map[string]any)
+	if !strings.Contains(strings.ReplaceAll(check["ConditionExpression"].(string), " ", ""), "contains(") {
+		t.Fatalf("project account membership not fenced: %v", check["ConditionExpression"])
+	}
+	if err := repo.MeetingProjectLinkInAccount(context.Background(), "owner", "meeting", "project", "", ref); !errors.Is(err, ErrConditionFailed) {
+		t.Fatalf("an empty account must not fall back to the creator path: %v", err)
+	}
+}
+
+// A member's predecessor links commit with the parent's publication and the
+// member's live grant in one transaction.
+func TestMemberPredecessorLinksFenceParentPublicationAndGrant(t *testing.T) {
+	t.Setenv("SUMMARY_PRIVACY_WRITER_ENABLED", "")
+	t.Setenv(AccountDescendantReadsEnv, "")
+	memberRow := `{"PK":{"S":"ACCOUNT#acc"},"SK":{"S":"MEMBER#member"},"accountId":{"S":"acc"},"userId":{"S":"member"}}`
+	for _, tc := range []struct {
+		name        string
+		member      bool
+		unpublished bool
+		err         error
+	}{{"success", true, false, nil}, {"removed member", false, false, ErrSummaryAccess}, {"parent unpublished concurrently", true, true, ErrConditionFailed}} {
+		t.Run(tc.name, func(t *testing.T) {
+			var items []any
+			repo := summarySDKRepo(func(req *http.Request) (*http.Response, error) {
+				var body map[string]any
+				json.NewDecoder(req.Body).Decode(&body)
+				target := req.Header.Get("X-Amz-Target")
+				switch {
+				case strings.HasSuffix(target, ".GetItem") && tc.member:
+					return summaryHTTPResponse(200, `{"Item":`+memberRow+`}`, nil), nil
+				case strings.HasSuffix(target, ".TransactWriteItems"):
+					items = body["TransactItems"].([]any)
+					if tc.unpublished {
+						return summaryHTTPResponse(400, `{"__type":"com.amazonaws.dynamodb.v20120810#TransactionCanceledException","message":"cancelled","CancellationReasons":[{"Code":"ConditionalCheckFailed"},{"Code":"None"}]}`, nil), nil
+					}
+				}
+				return summaryHTTPResponse(200, `{}`, nil), nil
+			})
+			err := repo.LinkPredecessorsAs(context.Background(), "owner", "member", "meeting", "acc", []string{"p-team"})
+			if !errors.Is(err, tc.err) {
+				t.Fatalf("got %v, want %v", err, tc.err)
+			}
+			if !tc.member {
+				if items != nil {
+					t.Fatal("removed member reached a write")
+				}
+				return
+			}
+			if len(items) != 2 {
+				t.Fatalf("want meeting update and member check, got %d", len(items))
+			}
+			update := items[0].(map[string]any)["Update"].(map[string]any)
+			if update["Key"].(map[string]any)["PK"].(map[string]any)["S"] != "USER#owner" {
+				t.Fatal("links must be written on the creator's meeting")
+			}
+			fenced := conditionNames(t, update)
+			if !fenced["accountId"] || !fenced["sharedToAccount"] {
+				t.Fatalf("parent publication not fenced: %v", fenced)
+			}
+			check := items[1].(map[string]any)["ConditionCheck"].(map[string]any)
+			if check["Key"].(map[string]any)["SK"].(map[string]any)["S"] != "MEMBER#member" {
+				t.Fatal("member grant not fenced")
+			}
+		})
+	}
+}
