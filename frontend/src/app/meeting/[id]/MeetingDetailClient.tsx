@@ -803,7 +803,7 @@ function MeetingDetailContent() {
             />
           ) : <p className="mb-8 rounded-lg border border-dashed border-slate-200 p-4 text-sm text-slate-500 dark:border-white/10 dark:text-text-muted">표시할 필드 Insight가 없습니다. 참조 자료와 Q&A를 검토해 고객 신호·검증할 가설을 메모에 남겨 주세요.</p>}
           {meeting.fieldInsightsTruncated && <p className="mb-4 text-xs text-amber-700 dark:text-amber-300">인사이트 일부만 표시합니다.</p>}
-          <SAFollowUp key={`followup-${meeting.meetingId}`} meeting={meeting} canManage={canManageAssociations}
+          <SAFollowUp key={`followup-${meeting.meetingId}`} meeting={meeting} canManage={isCreator}
             hasUnsavedChanges={summaryDirty || titleDirty || transcriptDirty || notesDirty}
             onProjectsChanged={onProjectsChanged}
             onAddReference={canEditNotes ? onAddReference : undefined} />

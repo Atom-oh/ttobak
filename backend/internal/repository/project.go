@@ -442,40 +442,19 @@ func (r *DynamoDBRepository) ProjectAccountUnlinkTransactional(ctx context.Conte
 // TransactWriteItems call (same interleaving hazard/fix as
 // ProjectAccountLinkTransactional above).
 func (r *DynamoDBRepository) MeetingProjectLinkTransactional(ctx context.Context, ownerUserID, meetingID, projectID string, ref *model.ProjectMeetingRef) error {
-	return r.meetingProjectLink(ctx, ownerUserID, meetingID, projectID, "", ref)
-}
-
-// MeetingProjectLinkInAccount links the creator's meeting on behalf of a
-// managing account member: the meeting must still be published to
-// accountID and the project must still be linked to that account.
-func (r *DynamoDBRepository) MeetingProjectLinkInAccount(ctx context.Context, ownerUserID, meetingID, projectID, accountID string, ref *model.ProjectMeetingRef) error {
-	if accountID == "" {
-		return ErrConditionFailed
-	}
-	return r.meetingProjectLink(ctx, ownerUserID, meetingID, projectID, accountID, ref)
-}
-
-func (r *DynamoDBRepository) meetingProjectLink(ctx context.Context, ownerUserID, meetingID, projectID, accountID string, ref *model.ProjectMeetingRef) error {
 	refItem, err := attributevalue.MarshalMap(ref)
 	if err != nil {
 		return fmt.Errorf("marshal project meeting ref: %w", err)
 	}
-	meetingCondition := expression.AttributeExists(expression.Name("PK"))
-	projectCondition := expression.AttributeExists(expression.Name("PK"))
-	if accountID != "" {
-		meetingCondition = meetingCondition.And(expression.Name("accountId").Equal(expression.Value(accountID))).
-			And(expression.Name("sharedToAccount").Equal(expression.Value(true)))
-		projectCondition = projectCondition.And(expression.Contains(expression.Name("accountIds"), accountID))
-	}
 	updateExpr, err := expression.NewBuilder().
-		WithCondition(meetingCondition).
+		WithCondition(expression.AttributeExists(expression.Name("PK"))).
 		WithUpdate(expression.Add(expression.Name("projectIds"), expression.Value(&types.AttributeValueMemberSS{Value: []string{projectID}}))).
 		Build()
 	if err != nil {
 		return fmt.Errorf("build meeting project link expression: %w", err)
 	}
 	projectExistsExpr, err := expression.NewBuilder().
-		WithCondition(projectCondition).
+		WithCondition(expression.AttributeExists(expression.Name("PK"))).
 		Build()
 	if err != nil {
 		return fmt.Errorf("build project-exists condition: %w", err)
@@ -507,9 +486,8 @@ func (r *DynamoDBRepository) meetingProjectLink(ctx context.Context, ownerUserID
 					"PK": &types.AttributeValueMemberS{Value: model.PrefixProject + projectID},
 					"SK": &types.AttributeValueMemberS{Value: model.SKProjectConfig},
 				},
-				ConditionExpression:       projectExistsExpr.Condition(),
-				ExpressionAttributeNames:  projectExistsExpr.Names(),
-				ExpressionAttributeValues: projectExistsExpr.Values(),
+				ConditionExpression:      projectExistsExpr.Condition(),
+				ExpressionAttributeNames: projectExistsExpr.Names(),
 			}},
 		},
 	})

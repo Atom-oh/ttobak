@@ -513,8 +513,8 @@ refreshing the comparison baseline is a separate user action. Background refresh
 must not silently advance a dirty editor's baseline. Dirty notes block re-summary.
 Delayed detail responses cannot roll back acknowledged notes or association
 changes. Notes editing requires server capability flags during mixed-version
-rollout. Meeting-detail management (account, sharing, links, projects, uploads,
-rediarize, recovery) follows the server `canManage` flag: the creator or a
+rollout. Meeting-detail management (account, sharing, links, uploads, rediarize,
+recovery) follows the server `canManage` flag: the creator or a
 live account-team member (ADR-016 2026-11-06 amendment). Delete stays
 creator-only on desktop and mobile; member-created shares show the sharer. Account
 management uses one explicit link-and-share button calling the existing team

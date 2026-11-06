@@ -44,10 +44,8 @@
     predecessors published to the same account (never one readable only through
     a private direct share), and the write is fenced on the parent's publication
     and the member's live grant.
-    A member's project link or unlink requires project access and a project
-    linked to the meeting's current account (links are fenced on both rows).
-  - Uploads, rediarize and recovery work for members (audio crop and the
-    simulator stay creator-only until the follow-up change); recovery requires a checkpoint quiet for 10 minutes
+  - Uploads, rediarize and recovery work for members (audio crop, the
+    simulator and project links stay creator-only until the follow-up change); recovery requires a checkpoint quiet for 10 minutes
     (409 `RECORDING_STILL_ACTIVE`). Members never presign or complete checkpoint
     filenames. Their audio presigns and completions are refused while the
     meeting is recording with a missing or fresh (<10 min) checkpoint, or

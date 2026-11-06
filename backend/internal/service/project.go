@@ -638,33 +638,28 @@ func (s *ProjectService) putProjectMeetingRef(ctx context.Context, projectID, ow
 }
 
 func (s *ProjectService) LinkMeeting(ctx context.Context, userID, projectID, meetingID string) error {
-	// The creator or a managing account member; the link stays the creator's.
-	meeting, err := s.managedMeeting(ctx, userID, meetingID)
+	meeting, err := s.repo.GetMeeting(ctx, userID, meetingID)
 	if err != nil {
 		return err
 	}
-	owner := meeting.UserID
-	project, err := s.requireProjectAccess(ctx, userID, projectID)
-	if err != nil {
-		return err
+	if meeting == nil {
+		return ErrNotFound
 	}
-	// A non-creator may link only a project that belongs to the meeting's
-	// current team account, so the title/date stays within that audience.
-	if userID != owner && (meeting.AccountID == "" || !contains(project.AccountIDs, meeting.AccountID)) {
-		return ErrForbidden
+	if _, err := s.requireProjectAccess(ctx, userID, projectID); err != nil {
+		return err
 	}
 	if contains(meeting.ProjectIDs, projectID) {
-		return s.putProjectMeetingRef(ctx, projectID, owner, meeting)
+		return s.putProjectMeetingRef(ctx, projectID, userID, meeting)
 	}
 	// Atomic ADD on meeting.projectIds + MEETINGREF# Put, in ONE
 	// TransactWriteItems call -- same interleaving hazard as
 	// LinkAccount/UnlinkAccount above.
 	ref := &model.ProjectMeetingRef{
 		PK: model.PrefixProject + projectID, SK: projectMeetingRefSK(meeting),
-		ProjectID: projectID, MeetingID: meeting.MeetingID, OwnerUserID: owner,
+		ProjectID: projectID, MeetingID: meeting.MeetingID, OwnerUserID: userID,
 		Title: meeting.Title, Date: meeting.Date, EntityType: model.EntityTypeProjectMeetingRef,
 	}
-	if err := s.linkMeetingProject(ctx, userID, meeting, projectID, ref); err != nil {
+	if err := s.repo.MeetingProjectLinkTransactional(ctx, userID, meetingID, projectID, ref); err != nil {
 		if errors.Is(err, repository.ErrConditionFailed) {
 			return ErrNotFound
 		}
@@ -709,19 +704,7 @@ func (s *ProjectService) UnlinkMeeting(ctx context.Context, userID, projectID, m
 	// direct-member/account-inherited-member allowance: an ordinary
 	// project member with no stake in this specific link cannot unlink it.
 	if ownerUserID != userID && project.OwnerUserID != userID {
-		// A managing account member may unlink the creator's meeting too.
-		managed, err := s.managedMeeting(ctx, userID, meetingID)
-		if err != nil && !errors.Is(err, ErrNotFound) && !errors.Is(err, ErrForbidden) {
-			return err
-		}
-		if managed == nil || managed.UserID != ownerUserID ||
-			managed.AccountID == "" || !contains(project.AccountIDs, managed.AccountID) {
-			return ErrForbidden
-		}
-		// Same rule as linking: the member still needs project access.
-		if _, err := s.requireProjectAccess(ctx, userID, projectID); err != nil {
-			return err
-		}
+		return ErrForbidden
 	}
 	if err := s.repo.MeetingProjectUnlinkTransactional(ctx, ownerUserID, meetingID, projectID, refSK); err != nil {
 		if errors.Is(err, repository.ErrConditionFailed) {
@@ -1112,36 +1095,4 @@ func (s *ProjectService) ListAccountProjects(ctx context.Context, userID, accoun
 		return nil, ErrForbidden
 	}
 	return out, nil
-}
-
-// managedMeeting resolves a meeting the caller may manage (creator or live
-// account-team member). Repositories without share/membership reads keep
-// the creator-only behavior.
-func (s *ProjectService) managedMeeting(ctx context.Context, userID, meetingID string) (*model.Meeting, error) {
-	if repo, ok := s.repo.(managerRepo); ok {
-		return resolveMeetingManager(ctx, repo, userID, meetingID)
-	}
-	meeting, err := s.repo.GetMeeting(ctx, userID, meetingID)
-	if err != nil {
-		return nil, err
-	}
-	if meeting == nil {
-		return nil, ErrNotFound
-	}
-	return meeting, nil
-}
-
-// linkMeetingProject writes the creator's link; a member's link is fenced on
-// the meeting's current account in both the meeting and the project row.
-func (s *ProjectService) linkMeetingProject(ctx context.Context, actorID string, meeting *model.Meeting, projectID string, ref *model.ProjectMeetingRef) error {
-	if actorID == meeting.UserID {
-		return s.repo.MeetingProjectLinkTransactional(ctx, meeting.UserID, meeting.MeetingID, projectID, ref)
-	}
-	linker, ok := s.repo.(interface {
-		MeetingProjectLinkInAccount(context.Context, string, string, string, string, *model.ProjectMeetingRef) error
-	})
-	if !ok {
-		return ErrForbidden
-	}
-	return linker.MeetingProjectLinkInAccount(ctx, meeting.UserID, meeting.MeetingID, projectID, meeting.AccountID, ref)
 }

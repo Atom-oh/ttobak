@@ -305,46 +305,6 @@ func TestActorAccountWritesPinMembershipWithPrivacyWritersOff(t *testing.T) {
 	}
 }
 
-func TestMeetingProjectLinkInAccountFencesMeetingAndProjectAccount(t *testing.T) {
-	var items []any
-	repo := summarySDKRepo(func(req *http.Request) (*http.Response, error) {
-		var body map[string]any
-		json.NewDecoder(req.Body).Decode(&body)
-		if strings.HasSuffix(req.Header.Get("X-Amz-Target"), ".TransactWriteItems") {
-			items = body["TransactItems"].([]any)
-		}
-		return summaryHTTPResponse(200, `{}`, nil), nil
-	})
-	ref := &model.ProjectMeetingRef{PK: model.PrefixProject + "project", SK: "MEETINGREF#x", ProjectID: "project", MeetingID: "meeting", OwnerUserID: "owner"}
-	if err := repo.MeetingProjectLinkInAccount(context.Background(), "owner", "meeting", "project", "account", ref); err != nil {
-		t.Fatal(err)
-	}
-	if len(items) != 3 {
-		t.Fatalf("want meeting update, ref put and project check, got %d", len(items))
-	}
-	update := items[0].(map[string]any)["Update"].(map[string]any)
-	names := update["ExpressionAttributeNames"].(map[string]any)
-	condition := update["ConditionExpression"].(string)
-	for _, field := range []string{"accountId", "sharedToAccount"} {
-		found := false
-		for token, name := range names {
-			if name == field && strings.Contains(condition, token) {
-				found = true
-			}
-		}
-		if !found {
-			t.Fatalf("meeting link not fenced on %s: %s", field, condition)
-		}
-	}
-	check := items[2].(map[string]any)["ConditionCheck"].(map[string]any)
-	if !strings.Contains(strings.ReplaceAll(check["ConditionExpression"].(string), " ", ""), "contains(") {
-		t.Fatalf("project account membership not fenced: %v", check["ConditionExpression"])
-	}
-	if err := repo.MeetingProjectLinkInAccount(context.Background(), "owner", "meeting", "project", "", ref); !errors.Is(err, ErrConditionFailed) {
-		t.Fatalf("an empty account must not fall back to the creator path: %v", err)
-	}
-}
-
 // A member's predecessor links commit with the parent's publication and the
 // member's live grant in one transaction.
 func TestMemberPredecessorLinksFenceParentPublicationAndGrant(t *testing.T) {
