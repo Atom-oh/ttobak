@@ -202,6 +202,11 @@ async fn dispatch(app: &AppHandle, request: proto::Request, origin: Origin) -> S
         "requestId": request_id,
         "action": request.action.name(),
         "params": request.action.params(),
+        // Lets the record page say who started the recording.
+        "origin": match origin {
+            Origin::Mcp => "mcp",
+            Origin::Detection => "detection",
+        },
     });
     if let Err(e) = app.emit_to("main", "native-control-request", payload) {
         control.pending.lock().remove(&request_id);
