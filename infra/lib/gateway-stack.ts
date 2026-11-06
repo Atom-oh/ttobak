@@ -312,6 +312,10 @@ export class GatewayStack extends cdk.Stack {
 
     const billingInsightUrl = billingInsightUrlContext(this);
 
+    // Always present, independent of apiTelemetryEnabled: after a rollback
+    // Lambda deletes the VPC's Hyperplane ENIs asynchronously with this role,
+    // so removing the grant with the flag would strand them on the group.
+    const apiNetworkPolicy = this.apiNetworkInterfacesPolicy(props.apiRole);
     const apiTelemetry = props.apiTelemetryEnabled ? this.apiTelemetryPlacement(props) : undefined;
 
     // API Lambda function (Go runtime, arm64)
@@ -326,7 +330,10 @@ export class GatewayStack extends cdk.Stack {
           ';owner-account-share=', summaryOwnerAccountShare.valueAsString,
           ';reader=', summaryPrivacyReader.valueAsString,
           ';cutoff=', summaryPrivacyCutoff.valueAsString,
-          ';account-descendant-reads=', accountDescendantReads.valueAsString]),
+          ';account-descendant-reads=', accountDescendantReads.valueAsString,
+          // A changed collector URL (SSM, resolved at deploy) must publish a
+          // new version; the env Ref alone does not change the version hash.
+          ...(apiTelemetry ? [';otel-endpoint=', apiTelemetry.environment.OTEL_EXPORTER_OTLP_ENDPOINT] : [])]),
       },
       runtime: lambda.Runtime.PROVIDED_AL2023,
       architecture: lambda.Architecture.ARM_64,
@@ -392,7 +399,7 @@ export class GatewayStack extends cdk.Stack {
     if (apiTelemetry) {
       // ENI permissions must exist before Lambda validates the VPC update.
       (this.apiFunction.node.defaultChild as lambda.CfnFunction)
-        .addDependency(apiTelemetry.networkPolicy.node.defaultChild as iam.CfnPolicy);
+        .addDependency(apiNetworkPolicy.node.defaultChild as iam.CfnPolicy);
     }
 
     // API Lambda alias with provisioned concurrency for zero cold-start after deploy
@@ -1531,21 +1538,6 @@ export class GatewayStack extends cdk.Stack {
     });
     apiSg.addEgressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), 'AWS APIs via VPC endpoints and NAT');
     const collectorClient = ec2.SecurityGroup.fromLookupByName(this, 'OtelClientSg', 'ttobak-otel-client', vpc);
-    // Own the ENI grant here (like HttpOrigin.addReader): a grant on the
-    // AiStack role would create an Ai -> Gateway -> Ai cycle. Equivalent to
-    // AWSLambdaVPCAccessExecutionRole's EC2 actions, which CDK attaches only
-    // to roles it creates; logs are already granted by AiStack.
-    const networkPolicy = new iam.Policy(this, 'ApiNetworkInterfaces', {
-      roles: [props.apiRole],
-      statements: [new iam.PolicyStatement({
-        actions: [
-          'ec2:CreateNetworkInterface', 'ec2:DescribeNetworkInterfaces', 'ec2:DescribeSubnets',
-          'ec2:DeleteNetworkInterface', 'ec2:AssignPrivateIpAddresses', 'ec2:UnassignPrivateIpAddresses',
-        ],
-        resources: ['*'],
-        conditions: { StringEquals: { 'aws:RequestedRegion': this.region } },
-      })],
-    });
     return {
       network: {
         vpc,
@@ -1557,7 +1549,26 @@ export class GatewayStack extends cdk.Stack {
         OTEL_EXPORTER_OTLP_ENDPOINT: ssm.StringParameter.valueForStringParameter(this, '/ttobak/otel/collector-endpoint'),
         OTEL_SERVICE_NAME: 'ttobak-api',
       },
-      networkPolicy,
     };
+  }
+
+  /**
+   * Lambda ENI actions for the API role, owned here like HttpOrigin.addReader
+   * (a grant on the AiStack role would create an Ai -> Gateway -> Ai cycle).
+   * Equivalent to AWSLambdaVPCAccessExecutionRole's EC2 actions, which CDK
+   * attaches only to roles it creates; logs are already granted by AiStack.
+   */
+  private apiNetworkInterfacesPolicy(role: iam.IRole): iam.Policy {
+    return new iam.Policy(this, 'ApiNetworkInterfaces', {
+      roles: [role],
+      statements: [new iam.PolicyStatement({
+        actions: [
+          'ec2:CreateNetworkInterface', 'ec2:DescribeNetworkInterfaces', 'ec2:DescribeSubnets',
+          'ec2:DeleteNetworkInterface', 'ec2:AssignPrivateIpAddresses', 'ec2:UnassignPrivateIpAddresses',
+        ],
+        resources: ['*'],
+        conditions: { StringEquals: { 'aws:RequestedRegion': this.region } },
+      })],
+    });
   }
 }

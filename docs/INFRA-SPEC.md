@@ -740,9 +740,12 @@ attach `ttobak-api` to the shared VPC's `PRIVATE_WITH_EGRESS` subnets with a new
 `ttobak-api` security group (no ingress; TCP 443 egress) and the looked-up
 `ttobak-otel-client` group, set `OTEL_EXPORTER_OTLP_ENDPOINT` from SSM
 `/ttobak/otel/collector-endpoint` (resolved at deploy) and `OTEL_SERVICE_NAME`,
-and add an `ApiNetworkInterfaces` policy (Lambda ENI actions, `aws:RequestedRegion`
-condition) on the API role that the function depends on. With the flag off the
-GatewayStack template is unchanged. The release coordinator currently rejects a
+and bind that endpoint into the `live` version description. The
+`ApiNetworkInterfaces` policy (Lambda ENI actions, `aws:RequestedRegion`
+condition) on the API role exists regardless of the flag, so Lambda can delete
+Hyperplane ENIs after a rollback; the function depends on it only when the flag
+is on. With the flag off, that policy is the only template difference and the
+function is unchanged. The release coordinator currently rejects a
 VPC-attached `ttobak-api`; see the runbook before activation.
 
 ## Billing BFF stack

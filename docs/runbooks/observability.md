@@ -58,8 +58,13 @@ function configuration unchanged). The flag VPC-attaches the function to the
 `fsi-demo-vpc` private-with-egress subnets with its own `ttobak-api` group (no
 ingress, TCP 443 egress for AWS APIs through endpoints and NAT) plus the
 existing `ttobak-otel-client` group, and sets `OTEL_EXPORTER_OTLP_ENDPOINT` from
-SSM `/ttobak/otel/collector-endpoint` and `OTEL_SERVICE_NAME=ttobak-api`.
-GatewayStack owns the region-scoped ENI grant on the API role.
+SSM `/ttobak/otel/collector-endpoint` and `OTEL_SERVICE_NAME=ttobak-api`. The
+endpoint is also bound into the `live` version description, so a changed
+collector URL publishes a new version. GatewayStack owns the region-scoped ENI
+grant (`ApiNetworkInterfaces`) on the API role and keeps it regardless of the
+flag: Lambda deletes Hyperplane ENIs asynchronously with that role after a
+rollback. The grant is the only flag-off difference from the pre-telemetry
+GatewayStack template; the function itself is unchanged when the flag is off.
 
 Recorded data (`backend/internal/telemetry`):
 
@@ -100,18 +105,19 @@ Activation:
 4. Verify `/api/health` and an authenticated read still succeed, then query
    ClickHouse.
 
-Rollback (two steps):
+Rollback:
 
 1. Set the flag to `"false"` and deploy `TtobakGatewayStack` `--exclusively`.
-   The function leaves the VPC and exports nothing.
-2. Remove the `ttobak-api` security group after its Hyperplane ENIs drain.
-   That deployment drops the group from the template, but CloudFormation's
-   cleanup-phase delete can fail with `DependencyViolation` while Lambda still
-   holds the ENIs (release can take tens of minutes) without rolling back the
-   function change. Wait until
+   The function leaves the VPC and exports nothing; the ENI grant stays.
+2. Wait for the Hyperplane ENIs to drain (Lambda releases them asynchronously;
+   this can take tens of minutes) until
    `aws ec2 describe-network-interfaces --filters Name=group-id,Values=<sg-id>`
-   returns nothing, then `aws ec2 delete-security-group --group-id <sg-id>` if
-   it still exists. Never detach Lambda-owned ENIs by hand.
+   returns nothing.
+3. Delete the `ttobak-api` security group if CloudFormation's cleanup could not
+   (`DependencyViolation` while ENIs remain):
+   `aws ec2 delete-security-group --group-id <sg-id>`. A leftover group with
+   that fixed name makes a later re-enable fail. Never detach Lambda-owned ENIs
+   by hand, and do not remove the ENI grant.
 
 Verification queries:
 

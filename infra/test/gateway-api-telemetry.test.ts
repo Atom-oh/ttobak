@@ -64,7 +64,7 @@ function apiFunction(template: Template) {
 }
 
 describe('GatewayStack API telemetry (O2)', () => {
-  test('off by default: identical template, no VPC, no OTLP environment, no network grant', () => {
+  test('off by default: identical template, no VPC, no OTLP environment, function unchanged', () => {
     const unset = build(undefined);
     expect(build(false).toJSON()).toEqual(unset.toJSON());
     const [, fn] = apiFunction(unset);
@@ -72,7 +72,37 @@ describe('GatewayStack API telemetry (O2)', () => {
     expect(Object.keys(fn.Properties.Environment.Variables).filter(key => key.startsWith('OTEL_'))).toEqual([]);
     expect(JSON.stringify(unset.toJSON())).not.toContain('ttobak/otel');
     expect(Object.values(unset.findResources('AWS::EC2::SecurityGroup'))).toHaveLength(0);
-    expect(Object.keys(unset.findResources('AWS::IAM::Policy')).some(id => id.startsWith('ApiNetworkInterfaces'))).toBe(false);
+    // The ENI grant exists with the flag off but the function does not depend on it.
+    const policyId = Object.keys(unset.findResources('AWS::IAM::Policy')).find(id => id.startsWith('ApiNetworkInterfaces'))!;
+    expect(fn.DependsOn ?? []).not.toContain(policyId);
+    const version = Object.values(unset.findResources('AWS::Lambda::Version'))
+      .find(value => JSON.stringify(value.Properties.FunctionName).includes('ApiFunction'))!;
+    expect(JSON.stringify(version.Properties.Description)).not.toContain('otel-endpoint');
+  });
+
+  test.each([false, true])('ENI grant on the api role is present regardless of the flag (%s)', enabled => {
+    const template = build(enabled);
+    const grants = Object.entries(template.findResources('AWS::IAM::Policy'))
+      .filter(([id]) => id.startsWith('ApiNetworkInterfaces'));
+    expect(grants).toHaveLength(1);
+    const [, policy] = grants[0];
+    expect(JSON.stringify(policy.Properties.Roles)).toContain('ApiRole');
+    expect(policy.Properties.PolicyDocument.Statement).toHaveLength(1);
+    const [statement] = policy.Properties.PolicyDocument.Statement;
+    expect([...statement.Action].sort()).toEqual(['ec2:AssignPrivateIpAddresses', 'ec2:CreateNetworkInterface',
+      'ec2:DeleteNetworkInterface', 'ec2:DescribeNetworkInterfaces', 'ec2:DescribeSubnets', 'ec2:UnassignPrivateIpAddresses']);
+    expect(statement.Condition).toEqual({ StringEquals: { 'aws:RequestedRegion': REGION } });
+  });
+
+  test('on: the collector endpoint is bound into the live version description', () => {
+    const template = build(true);
+    const [, fn] = apiFunction(template);
+    const ref = fn.Properties.Environment.Variables.OTEL_EXPORTER_OTLP_ENDPOINT.Ref;
+    const version = Object.values(template.findResources('AWS::Lambda::Version'))
+      .find(value => JSON.stringify(value.Properties.FunctionName).includes('ApiFunction'))!;
+    const description = JSON.stringify(version.Properties.Description);
+    expect(description).toContain(';otel-endpoint=');
+    expect(description).toContain(JSON.stringify({ Ref: ref }));
   });
 
   test('on: private-with-egress subnets, own group plus the collector client group', () => {
