@@ -1,18 +1,19 @@
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import * as ecr from 'aws-cdk-lib/aws-ecr';
+import * as ecrAssets from 'aws-cdk-lib/aws-ecr-assets';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
+import * as path from 'path';
 import { Construct } from 'constructs';
 import { GUARDDUTY_AGENT_ACCOUNT } from './billing-data-plane';
 
-// Same upstream build as the mall collectors, via the account's ghcr pull-through cache.
-export const COLLECTOR_REPOSITORY = 'ghcr/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib';
-export const COLLECTOR_TAG = '0.118.0';
+// Same upstream build as the mall collectors (0.118.0), pinned by digest in
+// infra/assets/otel-collector/Dockerfile and published as a CDK image asset.
+export const COLLECTOR_ASSET_DIR = path.join(__dirname, '..', 'assets', 'otel-collector');
 export const OTLP_HTTP_PORT = 4318;
 const HEALTH_PORT = 13133;
 const CLICKHOUSE_NATIVE_PORT = 9000;
@@ -104,12 +105,6 @@ export class ObservabilityStack extends cdk.Stack {
       cpu: 512, memoryLimitMiB: 1024,
       runtimePlatform: { cpuArchitecture: ecs.CpuArchitecture.ARM64, operatingSystemFamily: ecs.OperatingSystemFamily.LINUX },
     });
-    const repository = ecr.Repository.fromRepositoryName(this, 'CollectorRepository', COLLECTOR_REPOSITORY);
-    // A pull-through cache creates and imports the repository on first pull.
-    task.addToExecutionRolePolicy(new iam.PolicyStatement({
-      actions: ['ecr:CreateRepository', 'ecr:BatchImportUpstreamImage'],
-      resources: [repository.repositoryArn],
-    }));
     const guardDutyAccount = GUARDDUTY_AGENT_ACCOUNT[this.region];
     if (guardDutyAccount) {
       task.addToExecutionRolePolicy(new iam.PolicyStatement({
@@ -121,7 +116,9 @@ export class ObservabilityStack extends cdk.Stack {
       retention: logs.RetentionDays.TWO_WEEKS, removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
     task.addContainer('collector', {
-      image: ecs.ContainerImage.fromEcrRepository(repository, COLLECTOR_TAG),
+      image: ecs.ContainerImage.fromDockerImageAsset(new ecrAssets.DockerImageAsset(this, 'CollectorImage', {
+        directory: COLLECTOR_ASSET_DIR, platform: ecrAssets.Platform.LINUX_ARM64,
+      })),
       command: ['--config=env:COLLECTOR_CONFIG'],
       environment: {
         COLLECTOR_CONFIG: collectorConfig(props.siteOrigin),

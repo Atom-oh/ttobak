@@ -106,6 +106,13 @@ native recording and PCM events. Finished native WAVs remain on disk and upload
 through Rust. `usePostRecording` accepts a tagged native-path/browser-Blob payload.
 Never load a finished native recording into the WebView just to upload it.
 
+In the Mac app, `MeetingDetectionBanner` (layout level) offers start/dismiss when
+the app detects a meeting using the microphone, and stop/keep recording after that
+meeting ends while recording. Nothing records without the user's confirmation; the
+start reuses the native control path to the record page. Settings shows the
+`MeetingDetectionSettings` toggle only in an app build that supports detection
+(ADR-061).
+
 Capture/processing state and upload failures remain visible through the post-record
 banner; a failed upload must remain retryable. Progress timeouts measure 60 seconds
 without progress, not total file-transfer duration. Delete native temporary files

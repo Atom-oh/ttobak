@@ -44,12 +44,17 @@ stub compiler for objc2's build script; that proves types, not runtime behavior.
 | control_ready | info {loggedIn, mounted?}; SPA bridge readiness (mounted:false on unload clears it) |
 | control_reply | requestId, result {ok, data?/error{code,message}}; answers one native-control-request |
 | control_report_state | state object (phase, meetingId, error), at most 16 KiB; returned by socket status |
+| meeting_detection_get | returns supported, enabled, active detection (ADR-061) |
+| meeting_detection_set_enabled | enabled; persisted in the app config directory, off clears the announcement |
+| meeting_detection_respond | detectionId, action dismiss/start(title)/stop; start/stop return the record page's control reply |
 
 finalizing_for_path is deliberately a new per-path field, not the older global
 finalizing flag. Frontend wire compatibility checks rely on that distinction.
 Events are native-audio-level (RMS), native-upload-progress (loaded/total), and
 native-pcm-chunk (16kHz mono PCM for captions); native-control-request
-({requestId, action start|stop, params}) goes to the main window only. Remote event capability grants must
+({requestId, action start|stop, params}) goes to the main window only.
+native-meeting-detected/native-meeting-ended ({detectionId, kind, label, browser,
+recording}) also go to the main window only. Remote event capability grants must
 match the actual loaded origin; do not add speculative origins.
 
 ## Invariants
@@ -78,6 +83,11 @@ match the actual loaded origin; do not add speculative origins.
 - The IOProc is real-time: mix and enqueue only. The worker owns disk writes and
   events. Teardown order: AudioDeviceStop, destroy IOProc, aggregate, tap, then
   close the queue and join the worker before finalizing the WAV.
+- Meeting detection (`meeting.rs` rules, `meeting_detect.rs` probe) only offers a
+  recording; confirmed starts use the control dispatch path, never
+  `start_recording` directly. Core Audio polls run without recorder locks. The
+  browser AppleScript is a fixed string returning only meeting-URL prefixes; never
+  log tab URLs or widen the prefix list without updating `classify_meeting_url`.
 - Graceful exit finalizes capture. Force Quit/SIGKILL cannot run that callback;
   periodic WAV flush checkpoints and startup recovery limit damage instead.
 
