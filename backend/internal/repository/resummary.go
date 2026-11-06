@@ -92,8 +92,10 @@ func (r *DynamoDBRepository) CaptureResummary(ctx context.Context, ownerID, meet
 			// to account-team edit access.
 			// Team access grants edit (ADR-016 2026-11-06 amendment); fence the
 			// live membership that grants it.
+			// Authorize from the meeting's current account; an account-origin
+			// row left from an earlier publication is a cache, fenced above.
 			meeting := snapshot.Meeting
-			if !meeting.SharedToAccount || meeting.AccountID == "" || (share.AccountID != "" && share.AccountID != meeting.AccountID) {
+			if !meeting.SharedToAccount || meeting.AccountID == "" {
 				return nil, ErrSummaryAccess
 			}
 			checks, err := r.accountTeamMemberChecks(ctx, meeting.AccountID, requester)

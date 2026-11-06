@@ -309,7 +309,8 @@ streams retain their own ordering; there is no global chronological merge. A
 non-null nextCursor can accompany an empty page. Shared scanning is bounded to
 25 pages per request. Read-time checks validate current membership and canonical
 meeting account/sharedToAccount state; account classification/hierarchy alone
-never grants a private meeting. Direct share permissions take precedence.
+never grants a private meeting. A direct edit share keeps edit; a direct read
+share yields to live team edit on a published meeting (ADR-016 amendment).
 
 Clients expand selected visible account groups to accessible descendants and send
 the resulting IDs. With ADR-058 activated, canonical ancestor membership gives
@@ -364,6 +365,10 @@ Recording autosave and final notes share one serialized comparison writer.
 Audio-upload retries do not resend acknowledged notes. An uncertain write is
 read back without silently adopting another editor's value; conflicts require
 explicit comparison. Size and save errors retain the editable draft and audio.
+
+`PUT /api/meetings/{meetingId}` rejects `content`, `liveSummary` or `status`
+writes from a restricted summary projection with 409 `SHARING_REGEN_REQUIRED`;
+members of the published account no longer receive such projections.
 
 `PUT /api/meetings/{meetingId}` also accepts `noteLanguage` with owner/edit
 permission. Allowed values are exactly `""` (automatic), `"ko"` and `"en"`; any

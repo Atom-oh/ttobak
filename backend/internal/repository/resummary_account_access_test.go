@@ -55,6 +55,11 @@ func TestResummaryCaptureAccountTeamAccess(t *testing.T) {
 			"USER#owner|MEETING#meeting": published, "USER#user|SHARED#meeting": share("read", "account"),
 			"ACCOUNT#child|MEMBER#user": member("child")}, ok: true,
 			wantChecks: []string{"USER#user|SHARED#meeting", "ACCOUNT#child|MEMBER#user"}},
+		{name: "stale account-origin row from an earlier publication", requester: "user", items: map[string]string{
+			"USER#owner|MEETING#meeting": published,
+			"USER#user|SHARED#meeting":   `{"PK":{"S":"USER#user"},"SK":{"S":"SHARED#meeting"},"ownerId":{"S":"owner"},"meetingId":{"S":"meeting"},"permission":{"S":"read"},"origin":{"S":"account"},"accountId":{"S":"old"}}`,
+			"ACCOUNT#child|MEMBER#user":  member("child")}, ok: true,
+			wantChecks: []string{"USER#user|SHARED#meeting", "ACCOUNT#child|MEMBER#user"}},
 		{name: "member without share row", requester: "user", items: map[string]string{
 			"USER#owner|MEETING#meeting": published, "ACCOUNT#child|MEMBER#user": member("child")}, ok: true,
 			wantChecks: []string{"USER#user|SHARED#meeting", "ACCOUNT#child|MEMBER#user"}},
