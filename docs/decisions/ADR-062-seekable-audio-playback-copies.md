@@ -1,8 +1,8 @@
 # ADR-062: Seekable audio playback copies
 
-- Status: Accepted; staged across several PRs. Storage prefix, key mapping,
-  cleanup coverage and the `ttobak-audio-remux` worker are implemented; API
-  selection and backfill follow.
+- Status: Accepted; implemented across three PRs (storage prefix and cleanup,
+  `ttobak-audio-remux` worker, API selection and backfill script). Copies for
+  existing recordings exist only after the backfill is run.
 - Decision date: 2026-11-06.
 - Related: ADR-014 (multi-part audio), ADR-031 (STT recovery), ADR-022
   (source-bound previews).
@@ -35,7 +35,9 @@ ADR-031 recovery tick, so it must not be rewritten in place.
 - The OAC read allowlist, the 90-day IA transition and failed-recording grace
   deletion include `audio-playback/`.
 - The worker reads `audio/*` and writes `audio-playback/*` only. Existing
-  recordings are converted by a one-off backfill after deployment.
+  recordings are converted by `scripts/audio_playback_backfill.py` (dry run by
+  default) after deployment; it invokes the worker only for keys that meeting
+  rows reference.
 
 ## Consequences
 
