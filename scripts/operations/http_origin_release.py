@@ -167,6 +167,30 @@ def _nacl_allows(entries, egress, target_cidr, low, high):
     return False
 
 
+def _routes_local(routes, target_cidr):
+    """The target must use an active local route, with no more-specific override."""
+    target = _ipv4_cidr(target_cidr)
+    if target is None:
+        return False
+    local_bits = None
+    for route in routes:
+        destination = route.get("DestinationCidrBlock")
+        if (isinstance(destination, str) and route.get("GatewayId") == "local"
+                and route.get("State", "active") == "active" and _cidr_covers(destination, target_cidr)):
+            bits = _ipv4_cidr(destination)[1]
+            local_bits = bits if local_bits is None else max(local_bits, bits)
+    if local_bits is None:
+        return False
+    for route in routes:
+        destination = route.get("DestinationCidrBlock")
+        if route.get("GatewayId") == "local" or not isinstance(destination, str):
+            continue  # IPv6/prefix-list routes cannot target this IPv4 local range.
+        parsed = _ipv4_cidr(destination)
+        if parsed is None or (parsed[1] > local_bits and _cidr_overlaps(destination, target_cidr)):
+            return False  # A more specific non-local route would capture this traffic.
+    return True
+
+
 def vpc_secret_path_verified(ec2, region, vpc_config, template_resources):
     """Prove a VPC-attached consumer can reach Secrets Manager for the origin proof.
 
@@ -177,8 +201,10 @@ def vpc_secret_path_verified(ec2, region, vpc_config, template_resources):
     security-group ingress on TCP 443 from every function subnet CIDR (private
     ranges only); function security-group egress on TCP 443 to every endpoint
     subnet CIDR; and network ACLs on both sides allowing that TCP 443 flow and
-    its ephemeral return traffic. Security-group references (UserIdGroupPairs)
-    and IPv6 are not evaluated and therefore do not satisfy a check.
+    its ephemeral return traffic; and route tables on both sides delivering
+    those CIDRs through the active local route with no more-specific override.
+    Security-group references (UserIdGroupPairs) and IPv6 are not evaluated and
+    therefore do not satisfy a check.
     """
     if ec2 is None or not isinstance(vpc_config, dict):
         return False
@@ -264,6 +290,19 @@ def vpc_secret_path_verified(ec2, region, vpc_config, template_resources):
                     _nacl_allows(entries, False, cidr, 443, 443) and _nacl_allows(entries, True, cidr, 1024, 65535)
                     for cidr in function_cidrs):
                 return False
+        # Route tables: explicit subnet association, else the VPC main table.
+        def routes(subnet_id):
+            found = ec2.describe_route_tables(Filters=[
+                {"Name": "association.subnet-id", "Values": [subnet_id]}])["RouteTables"]
+            if not found:
+                found = ec2.describe_route_tables(Filters=[
+                    {"Name": "vpc-id", "Values": [vpc_id]}, {"Name": "association.main", "Values": ["true"]}])["RouteTables"]
+            return found[0].get("Routes", []) if len(found) == 1 else None
+        for local, remote in ((subnets, endpoint_cidrs), (chosen, function_cidrs)):
+            for subnet in local:
+                table = routes(subnet["SubnetId"])
+                if table is None or not all(_routes_local(table, cidr) for cidr in remote):
+                    return False
         return True
     except Exception:
         # Fixed diagnostic only: never print SDK messages or resource details.

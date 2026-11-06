@@ -304,7 +304,7 @@ export class GatewayStack extends cdk.Stack {
           // Manager path (http_origin_release.vpc_secret_path_verified). EC2
           // Describe actions have no resource-level scoping.
           actions: ['ec2:DescribeSubnets', 'ec2:DescribeVpcAttribute', 'ec2:DescribeVpcEndpoints',
-            'ec2:DescribeSecurityGroups', 'ec2:DescribeNetworkAcls'],
+            'ec2:DescribeSecurityGroups', 'ec2:DescribeNetworkAcls', 'ec2:DescribeRouteTables'],
           resources: ['*'],
           conditions: { StringEquals: { 'aws:RequestedRegion': cdk.Aws.REGION } },
         })],

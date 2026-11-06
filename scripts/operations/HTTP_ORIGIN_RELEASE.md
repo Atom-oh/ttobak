@@ -26,10 +26,13 @@ EC2 before any mutation (`vpc_secret_path_verified`):
   evaluated), and function security-group egress on TCP 443 to every endpoint
   subnet CIDR, so secondary VPC CIDRs are covered;
 - network ACLs on both sides allowing that flow and ephemeral return traffic,
-  evaluated first-match by rule number.
+  evaluated first-match by rule number;
+- route tables on both sides (explicit association, else the VPC main table)
+  delivering those CIDRs through an active `local` route with no more-specific
+  non-local route overlapping them.
 Unknown or unresolved values fail closed with `ACTIVATION_CONSUMER_VPC_UNVERIFIED`;
 a describe failure also prints the fixed warning `VPC_SECRET_PATH_DESCRIBE_FAILED`.
-The CI policy grants the five EC2 Describe actions on `*` with an
+The CI policy grants the six EC2 Describe actions on `*` with an
 `aws:RequestedRegion` condition (they have no resource-level scoping). One GatewayStack deployment switches all
 consumers to ARN lookup, so a missing grant or unreachable endpoint would
 otherwise fail every origin check closed; the post-deploy consumer invocation

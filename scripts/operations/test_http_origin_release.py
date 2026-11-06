@@ -603,6 +603,11 @@ class ReleaseTests(unittest.TestCase):
                 allow_all = [{"RuleNumber": 100, "Protocol": "-1", "RuleAction": "allow", "Egress": egress,
                               "CidrBlock": "0.0.0.0/0"} for egress in (True, False)]
                 self.acls = {name: copy.deepcopy(allow_all) for name in self.cidr}
+                local = [{"DestinationCidrBlock": "10.0.0.0/16", "GatewayId": "local", "State": "active"},
+                         {"DestinationCidrBlock": "10.1.0.0/16", "GatewayId": "local", "State": "active"},
+                         {"DestinationCidrBlock": "0.0.0.0/0", "NatGatewayId": "nat-1", "State": "active"}]
+                self.main_routes = copy.deepcopy(local)
+                self.routes = {"f-a": copy.deepcopy(local), "e-a": copy.deepcopy(local)}  # f-b/e-b use main
 
             def describe_subnets(self, SubnetIds):
                 if self.fail:
@@ -610,6 +615,13 @@ class ReleaseTests(unittest.TestCase):
                 zone = {"f-a": "az-a", "f-b": "az-b", "e-a": "az-a", "e-b": "az-b"}
                 return {"Subnets": [{"SubnetId": item, "VpcId": "vpc-1", "AvailabilityZone": zone[item],
                                      "CidrBlock": self.cidr[item]} for item in SubnetIds]}
+
+            def describe_route_tables(self, Filters):
+                names = {item["Name"]: item["Values"][0] for item in Filters}
+                if "association.subnet-id" in names:
+                    table = self.routes.get(names["association.subnet-id"])
+                    return {"RouteTables": [{"Routes": table}] if table is not None else []}
+                return {"RouteTables": [{"Routes": self.main_routes}]}
 
             def describe_network_acls(self, Filters):
                 subnet = Filters[0]["Values"][0]
@@ -661,6 +673,12 @@ class ReleaseTests(unittest.TestCase):
                 {"RuleNumber": 100, "Protocol": "-1", "RuleAction": "allow", "Egress": False, "CidrBlock": "0.0.0.0/0"},
                 {"RuleNumber": 100, "Protocol": "6", "PortRange": {"From": 443, "To": 443}, "RuleAction": "allow",
                  "Egress": True, "CidrBlock": "0.0.0.0/0"}]),
+            "specific route overrides local": lambda e: e.routes["f-a"].append(
+                {"DestinationCidrBlock": "10.0.3.0/24", "TransitGatewayId": "tgw-1", "State": "active"}),
+            "blackholed more specific route on main table": lambda e: e.main_routes.append(
+                {"DestinationCidrBlock": "10.0.1.0/24", "NetworkInterfaceId": "eni-1", "State": "blackhole"}),
+            "no local route for secondary CIDR": lambda e: e.routes.__setitem__("e-a", [
+                {"DestinationCidrBlock": "10.0.0.0/16", "GatewayId": "local", "State": "active"}]),
             "partial NACL allow": lambda e: e.acls["e-b"].insert(0, {
                 "RuleNumber": 10, "Protocol": "6", "PortRange": {"From": 443, "To": 443}, "RuleAction": "allow",
                 "Egress": False, "CidrBlock": "10.0.1.0/25"}),
