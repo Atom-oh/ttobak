@@ -1,5 +1,6 @@
 'use client';
 
+import { cachedAccountList, invalidateAccountList, peekAccountList } from './accountListCache';
 import { getIdToken, refreshSession } from './auth';
 import { getRuntimeConfig } from './runtimeConfig';
 import { triggerAuthFailure } from '@/components/auth/AuthProvider';
@@ -804,32 +805,49 @@ async function getAccounts(options?: { scope?: 'direct' }): Promise<{ accounts: 
   throw new ApiError(502, 'ACCOUNT_DISCOVERY_LIMIT', '어카운트 목록이 너무 커서 완전히 불러오지 못했습니다.');
 }
 
+type AccountList = { accounts: AccountSummary[] };
+const copyAccountList = (list: AccountList): AccountList => ({ accounts: list.accounts.map(a => ({ ...a })) });
+const accountListKey = (options?: { scope?: 'direct' }) => {
+  const userId = tokenUserId(getIdToken());
+  return userId ? `${userId}|${options?.scope ?? 'all'}` : null;
+};
+// Any Account mutation may change the caller's list (role, parent, membership).
+// Invalidate whether it succeeded or not, since a failed request may have applied.
+const invalidatingAccountList = <T>(request: Promise<T>): Promise<T> =>
+  request.finally(invalidateAccountList);
+
 export const accountApi = {
-  list: getAccounts,
+  list: (options?: { scope?: 'direct' }) =>
+    cachedAccountList(accountListKey(options), () => getAccounts(options)).then(copyAccountList),
+  /** Last loaded list for the signed-in user, possibly stale, for instant paint. */
+  peekList: (options?: { scope?: 'direct' }) => {
+    const cached = peekAccountList<AccountList>(accountListKey(options));
+    return cached ? copyAccountList(cached) : undefined;
+  },
   get: (id: string, options?: FetchOptions) => api.get<Account>(`/api/accounts/${encodeURIComponent(id)}`, options),
   create: (data: AccountCreationRequest, expectedUserId: string) =>
-    api.post<AccountCreationResponse>('/api/accounts', data, { expectedUserId }),
+    invalidatingAccountList(api.post<AccountCreationResponse>('/api/accounts', data, { expectedUserId })),
   resendOwnerInvitation: (id: string, expectedUserId: string) =>
     api.post<AccountMember>(`/api/accounts/${encodeURIComponent(id)}/owner-invitation`, {}, { expectedUserId }),
   updateParent: (id: string, data: { parentAccountId: string }) =>
-    api.put<{ accountId: string; parentAccountId?: string }>(`/api/accounts/${encodeURIComponent(id)}/parent`, data),
+    invalidatingAccountList(api.put<{ accountId: string; parentAccountId?: string }>(`/api/accounts/${encodeURIComponent(id)}/parent`, data)),
   addMember: (id: string, data: { email: string; role: string; resendInvitation?: boolean }) =>
-    api.post<AccountMember>(`/api/accounts/${encodeURIComponent(id)}/members`, data),
+    invalidatingAccountList(api.post<AccountMember>(`/api/accounts/${encodeURIComponent(id)}/members`, data)),
   // Cancels a queued PendingShare invite (see `addMember`'s `pending: true`
   // response) before the target has ever logged in -- there's no userId
   // yet, so this can't go through `removeMember`.
   revokePendingMember: (id: string, email: string) =>
     api.delete(`/api/accounts/${encodeURIComponent(id)}/members/pending?email=${encodeURIComponent(email)}`),
   updateMember: (id: string, userId: string, data: { role: string }) =>
-    api.put<AccountMember>(
-      `/api/accounts/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`, data),
+    invalidatingAccountList(api.put<AccountMember>(
+      `/api/accounts/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`, data)),
   // Returns undefined on a fully-clean removal (204 No Content). A defined result means
   // the membership was removed but Share cleanup didn't complete for every meeting, and/or
   // an ambiguous untagged share was left untouched (only possible when force=true, since
   // without it the request throws instead -- see API-SPEC.md's "Remove Member" note).
   removeMember: (id: string, userId: string, force?: boolean) =>
-    api.delete<{ removed: boolean; cleanupFailedForMeetings: string[]; ambiguousUntaggedMeetingIDs: string[] } | undefined>(
-      `/api/accounts/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}${force ? '?force=true' : ''}`),
+    invalidatingAccountList(api.delete<{ removed: boolean; cleanupFailedForMeetings: string[]; ambiguousUntaggedMeetingIDs: string[] } | undefined>(
+      `/api/accounts/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}${force ? '?force=true' : ''}`)),
   meetings: (id: string) =>
     api.get<{ meetings: AccountMeetingRef[] }>(`/api/accounts/${encodeURIComponent(id)}/meetings`),
   insights: (id: string, params?: { from?: string; to?: string; types?: string[] }) => {
