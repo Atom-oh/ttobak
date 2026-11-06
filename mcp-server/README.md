@@ -592,6 +592,33 @@ Notes-only reads avoid transcript hydration on the server; transcript reads stil
 load the chosen source to validate/page it. See the
 [API contract](../docs/API-SPEC.md#bounded-meeting-reading) for response/error details.
 
+## Account contacts
+
+The authenticated `ttobak_list_account_contacts`, `ttobak_create_account_contact`
+and `ttobak_import_account_contacts` tools require direct account membership;
+private connector writes also require current write approval. Deploy the account
+contacts API first. List supports a `limit` of 1–25 and an opaque cursor; follow
+`nextCursor`. Oversized pages are retried with a smaller limit.
+
+Create accepts `accountId` and a `contact`; import accepts 1–25 contacts and up to
+512 KiB. Each contact requires `name` and can include `company`, `title`,
+`department`, `email`, `address`, `workPhone`, `fax`, `phone`,
+`cardRegisteredAt`, `cardBook`, `group` and `notes`. Values are strings, limited
+to 256 UTF-8 bytes each (address 1,024, notes 8,192), and 12,000 bytes per
+serialized contact. Parse CSV and spreadsheets on the client.
+
+Import scans at most 1,000 authorized pages before writing and skips matching
+normalized email or either phone, including shared work numbers. Concurrent
+changes can still create duplicates. Results are one-based, with `created`,
+`duplicate` or `failed` status. An unknown write outcome may have succeeded;
+matching later rows are skipped until the account is checked.
+
+Private OAuth create/import requires an `idempotencyKey`: retry identical input
+with the same key. Per-row receipts have no automatic expiry and cannot replay
+after the created contact is edited or deleted. Legacy bearer transport does not
+support retry keys. MCP clients and their configured AI providers may see inputs
+and results.
+
 ## Public bundle provenance
 
 `frontend/public/mcp/ttobak-mcp.mjs` is generated from this module, never hand-edited.
