@@ -584,6 +584,155 @@ class ReleaseTests(unittest.TestCase):
                     with self.assertRaisesRegex(ReleaseError, f"^{code}$"):
                         runner.validate_activation_templates()
 
+    def test_vpc_consumer_requires_an_observed_private_secrets_manager_path(self):
+        import http_origin_release as release
+
+        class FakeEc2:
+            def __init__(self):
+                self.endpoint = {"State": "available", "PrivateDnsEnabled": True, "PolicyDocument": None,
+                                 "IpAddressType": "ipv4", "DnsOptions": {"DnsRecordIpType": "ipv4"},
+                                 "SubnetIds": ["e-a", "e-b"], "Groups": [{"GroupId": "sg-endpoint"}]}
+                self.endpoint_ingress = [{"IpProtocol": "tcp", "FromPort": 443, "ToPort": 443,
+                                          "IpRanges": [{"CidrIp": "10.0.0.0/16"}, {"CidrIp": "10.1.0.0/16"}]}]
+                self.dns = {"enableDnsSupport": True, "enableDnsHostnames": True}
+                self.client_egress = [{"IpProtocol": "tcp", "FromPort": 443, "ToPort": 443,
+                                       "IpRanges": [{"CidrIp": "10.0.0.0/16"}]}]
+                self.endpoint_ingress_extra = None
+                self.fail = False
+                # f-b sits in a secondary VPC CIDR outside the primary 10.0.0.0/16.
+                self.cidr = {"f-a": "10.0.1.0/24", "f-b": "10.1.2.0/24", "e-a": "10.0.3.0/24", "e-b": "10.0.4.0/24"}
+                allow_all = [{"RuleNumber": 100, "Protocol": "-1", "RuleAction": "allow", "Egress": egress,
+                              "CidrBlock": "0.0.0.0/0"} for egress in (True, False)]
+                self.acls = {name: copy.deepcopy(allow_all) for name in self.cidr}
+                local = [{"DestinationCidrBlock": "10.0.0.0/16", "GatewayId": "local", "State": "active"},
+                         {"DestinationCidrBlock": "10.1.0.0/16", "GatewayId": "local", "State": "active"},
+                         {"DestinationCidrBlock": "0.0.0.0/0", "NatGatewayId": "nat-1", "State": "active"}]
+                # An AWS-service prefix list (public ranges) behind a gateway endpoint.
+                local.append({"DestinationPrefixListId": "pl-s3", "GatewayId": "vpce-s3", "State": "active"})
+                self.prefix_lists = {"pl-s3": ["52.95.0.0/16"], "pl-1": ["10.0.3.0/24"]}
+                self.main_routes = copy.deepcopy(local)
+                self.routes = {"f-a": copy.deepcopy(local), "e-a": copy.deepcopy(local)}  # f-b/e-b use main
+
+            def describe_subnets(self, SubnetIds):
+                if self.fail:
+                    raise RuntimeError("describe failed")
+                zone = {"f-a": "az-a", "f-b": "az-b", "e-a": "az-a", "e-b": "az-b"}
+                return {"Subnets": [{"SubnetId": item, "VpcId": "vpc-1", "AvailabilityZone": zone[item],
+                                     "CidrBlock": self.cidr[item]} for item in SubnetIds]}
+
+            def get_paginator(self, name):
+                assert name == "get_managed_prefix_list_entries"
+                lists = self.prefix_lists
+                class Pages:
+                    def paginate(self, PrefixListId):
+                        return [{"Entries": [{"Cidr": cidr} for cidr in lists[PrefixListId]]}]
+                return Pages()
+
+            def describe_route_tables(self, Filters):
+                names = {item["Name"]: item["Values"][0] for item in Filters}
+                if "association.subnet-id" in names:
+                    table = self.routes.get(names["association.subnet-id"])
+                    return {"RouteTables": [{"Routes": table}] if table is not None else []}
+                return {"RouteTables": [{"Routes": self.main_routes}]}
+
+            def describe_network_acls(self, Filters):
+                subnet = Filters[0]["Values"][0]
+                return {"NetworkAcls": [{"Entries": self.acls[subnet]}]}
+
+            def describe_vpc_attribute(self, VpcId, Attribute):
+                key = "EnableDnsSupport" if Attribute == "enableDnsSupport" else "EnableDnsHostnames"
+                return {key: {"Value": self.dns[Attribute]}}
+
+            def describe_vpc_endpoints(self, Filters):
+                service = [item for item in Filters if item["Name"] == "service-name"][0]["Values"][0]
+                assert service == f"com.amazonaws.{REGION}.secretsmanager"
+                return {"VpcEndpoints": [self.endpoint] if self.endpoint else []}
+
+            def describe_security_groups(self, GroupIds):
+                groups = []
+                for item in GroupIds:
+                    if item == "sg-endpoint":
+                        groups.append({"GroupId": item, "IpPermissions": self.endpoint_ingress})
+                    else:
+                        groups.append({"GroupId": item, "IpPermissionsEgress": self.client_egress})
+                return {"SecurityGroups": groups}
+
+        config = {"SubnetIds": ["f-a", "f-b"], "SecurityGroupIds": [{"Fn::GetAtt": ["ApiSg", "GroupId"]}, "sg-client"]}
+        resources = {"ApiSg": {"Type": "AWS::EC2::SecurityGroup", "Properties": {"SecurityGroupEgress": [
+            {"CidrIp": "0.0.0.0/0", "IpProtocol": "tcp", "FromPort": 443, "ToPort": 443}]}}}
+        self.assertTrue(release.vpc_secret_path_verified(FakeEc2(), REGION, config, resources))
+        self.assertFalse(release.vpc_secret_path_verified(None, REGION, config, resources))
+        breaks = {
+            "no endpoint": lambda e: setattr(e, "endpoint", None),
+            "pending endpoint": lambda e: e.endpoint.update(State="pendingAcceptance"),
+            "no private DNS": lambda e: e.endpoint.update(PrivateDnsEnabled=False),
+            "VPC DNS off": lambda e: e.dns.update(enableDnsHostnames=False),
+            "AZ not covered": lambda e: e.endpoint.update(SubnetIds=["e-a"]),
+            "endpoint denies": lambda e: e.endpoint.update(PolicyDocument=json.dumps({"Statement": [
+                {"Effect": "Allow", "Principal": "*", "Action": "*", "Resource": "*"},
+                {"Effect": "Deny", "Principal": "*", "Action": "secretsmanager:GetSecretValue", "Resource": "*"}]})),
+            "endpoint policy conditional": lambda e: e.endpoint.update(PolicyDocument=json.dumps({"Statement": [
+                {"Effect": "Allow", "Principal": "*", "Action": "*", "Resource": "*",
+                 "Condition": {"StringEquals": {"aws:PrincipalAccount": "1"}}}]})),
+            "endpoint SG wrong port": lambda e: e.endpoint_ingress[0].update(FromPort=80, ToPort=80),
+            "endpoint SG public CIDR only": lambda e: e.endpoint_ingress[0].update(IpRanges=[{"CidrIp": "0.0.0.0/0"}]),
+            # Regression: SG scoped to the primary CIDR only, function subnet in a secondary CIDR.
+            "secondary CIDR not admitted": lambda e: e.endpoint_ingress[0].update(IpRanges=[{"CidrIp": "10.0.0.0/16"}]),
+            "function NACL denies 443 out": lambda e: e.acls["f-a"].insert(0, {
+                "RuleNumber": 50, "Protocol": "6", "PortRange": {"From": 443, "To": 443}, "RuleAction": "deny",
+                "Egress": True, "CidrBlock": "10.0.0.0/8"}),
+            "endpoint NACL lacks ephemeral return": lambda e: e.acls.__setitem__("e-a", [
+                {"RuleNumber": 100, "Protocol": "-1", "RuleAction": "allow", "Egress": False, "CidrBlock": "0.0.0.0/0"},
+                {"RuleNumber": 100, "Protocol": "6", "PortRange": {"From": 443, "To": 443}, "RuleAction": "allow",
+                 "Egress": True, "CidrBlock": "0.0.0.0/0"}]),
+            "IPv6-only DNS records": lambda e: e.endpoint.update(DnsOptions={"DnsRecordIpType": "ipv6"}),
+            "IPv6-only endpoint addressing": lambda e: e.endpoint.update(IpAddressType="ipv6"),
+            "missing DNS record type": lambda e: e.endpoint.update(DnsOptions={}),
+            "prefix-list route covering the endpoint subnet": lambda e: e.routes["f-a"].append(
+                {"DestinationPrefixListId": "pl-1", "TransitGatewayId": "tgw-1", "State": "active"}),
+            "unreadable prefix list": lambda e: e.routes["f-a"].append(
+                {"DestinationPrefixListId": "pl-missing", "TransitGatewayId": "tgw-1", "State": "active"}),
+            "specific route overrides local": lambda e: e.routes["f-a"].append(
+                {"DestinationCidrBlock": "10.0.3.0/24", "TransitGatewayId": "tgw-1", "State": "active"}),
+            "blackholed more specific route on main table": lambda e: e.main_routes.append(
+                {"DestinationCidrBlock": "10.0.1.0/24", "NetworkInterfaceId": "eni-1", "State": "blackhole"}),
+            "no local route for secondary CIDR": lambda e: e.routes.__setitem__("e-a", [
+                {"DestinationCidrBlock": "10.0.0.0/16", "GatewayId": "local", "State": "active"}]),
+            "partial NACL allow": lambda e: e.acls["e-b"].insert(0, {
+                "RuleNumber": 10, "Protocol": "6", "PortRange": {"From": 443, "To": 443}, "RuleAction": "allow",
+                "Egress": False, "CidrBlock": "10.0.1.0/25"}),
+            "describe error": lambda e: setattr(e, "fail", True),
+        }
+        for name, mutate in breaks.items():
+            with self.subTest(name):
+                fake = FakeEc2()
+                mutate(fake)
+                self.assertFalse(release.vpc_secret_path_verified(fake, REGION, config, resources))
+        for name, bad_config, bad_resources in (
+                ("unresolved subnet token", {"SubnetIds": [{"Ref": "Subnet"}], "SecurityGroupIds": ["sg-client"]}, resources),
+                ("no security groups", {"SubnetIds": ["f-a"], "SecurityGroupIds": []}, resources),
+                ("unknown SG reference", {"SubnetIds": ["f-a"], "SecurityGroupIds": [{"Ref": "Missing"}]}, resources),
+                ("no 443 egress", {"SubnetIds": ["f-a"], "SecurityGroupIds": [{"Fn::GetAtt": ["ApiSg", "GroupId"]}]},
+                 {"ApiSg": {"Type": "AWS::EC2::SecurityGroup", "Properties": {"SecurityGroupEgress": [
+                     {"CidrIp": "0.0.0.0/0", "IpProtocol": "tcp", "FromPort": 80, "ToPort": 80}]}}})):
+            with self.subTest(name):
+                self.assertFalse(release.vpc_secret_path_verified(FakeEc2(), REGION, bad_config, bad_resources))
+        # The template gate itself accepts a verified VPC consumer and rejects it without EC2 evidence.
+        for ec2, expect in ((FakeEc2(), None), (None, "ACTIVATION_CONSUMER_VPC_UNVERIFIED")):
+            gateway, frontend = self.activation_templates()
+            gateway["Resources"]["ApiSg"] = resources["ApiSg"]
+            gateway["Resources"]["ttobak-api"]["Properties"]["VpcConfig"] = config
+            runner = Cdk(REGION, ACCOUNT, ec2=ec2)
+            with tempfile.TemporaryDirectory() as directory:
+                runner.assembly = Path(directory)
+                (runner.assembly / "TtobakGatewayStack.template.json").write_text(json.dumps(gateway))
+                (runner.assembly / "TtobakFrontendStack.template.json").write_text(json.dumps(frontend))
+                if expect:
+                    with self.assertRaisesRegex(ReleaseError, f"^{expect}$"):
+                        runner.validate_activation_templates()
+                else:
+                    runner.validate_activation_templates()
+
     def test_actual_template_gate_requires_pins_and_rejects_plaintext_without_printing_it(self):
         runner = Cdk(REGION, ACCOUNT)
         gateway, frontend = self.activation_templates()
