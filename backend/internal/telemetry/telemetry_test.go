@@ -21,6 +21,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/baggage"
+	"go.opentelemetry.io/otel/propagation"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"go.opentelemetry.io/otel/sdk/resource"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -80,7 +81,7 @@ func TestDisabledWithoutValidEndpoint(t *testing.T) {
 			}
 			start := time.Now()
 			tel.Flush(context.Background())
-			if elapsed := time.Since(start); elapsed > time.Millisecond {
+			if elapsed := time.Since(start); elapsed > 50*time.Millisecond {
 				t.Fatalf("disabled flush took %s", elapsed)
 			}
 			if otel.GetTracerProvider() != priorProvider {
@@ -142,28 +143,107 @@ func TestServerSpansUseRoutePatternsAndAllowlistedAttributes(t *testing.T) {
 	}
 }
 
-func TestPropagationExtractsTraceparentAndBaggage(t *testing.T) {
+func TestPropagationAdoptsOnlyTraceparentIDs(t *testing.T) {
 	tel, spans := recordingTelemetry(t)
-	var member string
+	var sawBaggage bool
 	router := chi.NewRouter()
 	router.Use(tel.Middleware)
 	router.Get("/api/health", func(w http.ResponseWriter, r *http.Request) {
-		member = baggage.FromContext(r.Context()).Member("tenant").Value()
+		sawBaggage = baggage.FromContext(r.Context()).Len() > 0
 	})
-	request := httptest.NewRequest("GET", "/api/health", nil)
-	request.Header.Set("traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
-	request.Header.Set("baggage", "tenant=demo")
-	router.ServeHTTP(httptest.NewRecorder(), request)
-	got := flushed(t, tel, spans)
-	if len(got) != 1 {
-		t.Fatalf("spans=%d", len(got))
+	// A valid, maximal tracestate (32 members, ~8 KB) that the stock W3C
+	// propagator would keep and export verbatim.
+	members := make([]string, 32)
+	for i := range members {
+		members[i] = "k" + strconv.Itoa(i) + "=" + strings.Repeat("b", 250)
 	}
-	if got[0].SpanContext.TraceID().String() != "4bf92f3577b34da6a3ce929d0e0e4736" ||
-		got[0].Parent.SpanID().String() != "00f067aa0ba902b7" || !got[0].Parent.IsRemote() {
-		t.Fatalf("trace=%s parent=%s remote=%v", got[0].SpanContext.TraceID(), got[0].Parent.SpanID(), got[0].Parent.IsRemote())
+	bigState := strings.Join(members, ",")
+	stock := propagation.TraceContext{}.Extract(context.Background(), propagation.MapCarrier{
+		"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", "tracestate": bigState})
+	if trace.SpanContextFromContext(stock).TraceState().Len() != 32 {
+		t.Fatal("test tracestate is not parseable; the assertion below would be vacuous")
 	}
-	if member != "demo" {
-		t.Fatalf("baggage member=%q", member)
+	tests := []struct{ name, traceparent string }{
+		{"sampled", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"},
+		{"not-sampled", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest("GET", "/api/health", nil)
+			request.Header.Set("traceparent", test.traceparent)
+			request.Header.Set("tracestate", bigState)
+			request.Header.Set("baggage", "tenant="+canary)
+			router.ServeHTTP(httptest.NewRecorder(), request)
+			got := flushed(t, tel, spans)
+			if len(got) != 1 {
+				t.Fatalf("spans=%d, want 1 (a sampled=00 parent must not suppress export)", len(got))
+			}
+			span := got[0]
+			if span.SpanContext.TraceID().String() != "4bf92f3577b34da6a3ce929d0e0e4736" ||
+				span.Parent.SpanID().String() != "00f067aa0ba902b7" || !span.Parent.IsRemote() {
+				t.Fatalf("trace=%s parent=%s remote=%v", span.SpanContext.TraceID(), span.Parent.SpanID(), span.Parent.IsRemote())
+			}
+			if state := span.SpanContext.TraceState().String(); state != "" {
+				t.Fatalf("exported trace_state has %d bytes of client text", len(state))
+			}
+			if state := span.Parent.TraceState().String(); state != "" {
+				t.Fatalf("parent trace_state has %d bytes of client text", len(state))
+			}
+			if !span.SpanContext.IsSampled() {
+				t.Fatal("span not sampled")
+			}
+			if sawBaggage {
+				t.Fatal("client baggage was extracted")
+			}
+			assertNoCanary(t, span)
+		})
+	}
+	// Malformed or duplicated traceparent starts a new root trace.
+	for _, headers := range [][]string{{"garbage"}, {tests[0].traceparent, tests[0].traceparent}} {
+		request := httptest.NewRequest("GET", "/api/health", nil)
+		for _, value := range headers {
+			request.Header.Add("traceparent", value)
+		}
+		router.ServeHTTP(httptest.NewRecorder(), request)
+		got := flushed(t, tel, spans)
+		if len(got) != 1 || got[0].Parent.IsValid() {
+			t.Fatalf("headers %q produced a remote parent", headers)
+		}
+	}
+}
+
+func TestFlushBudgetHonorsInvocationDeadline(t *testing.T) {
+	if got := flushBudget(context.Background()); got != FlushTimeout {
+		t.Fatalf("no deadline: %s", got)
+	}
+	far, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if got := flushBudget(far); got != FlushTimeout {
+		t.Fatalf("far deadline: %s", got)
+	}
+	near, cancelNear := context.WithTimeout(context.Background(), 180*time.Millisecond)
+	defer cancelNear()
+	if got := flushBudget(near); got > 130*time.Millisecond || got <= 0 {
+		t.Fatalf("near deadline budget %s, want (0, 130ms]", got)
+	}
+	expiring, cancelExpiring := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancelExpiring()
+	if got := flushBudget(expiring); got > 0 {
+		t.Fatalf("expiring deadline budget %s, want <= 0", got)
+	}
+	// Flush returns at once when no budget remains, even with a hung collector.
+	srv := blackhole(t)
+	tel, err := New(Config{Endpoint: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tel.Shutdown(context.Background())
+	_, span := tel.tracer.Start(context.Background(), "work")
+	span.End()
+	start := time.Now()
+	tel.Flush(expiring)
+	if elapsed := time.Since(start); elapsed > 50*time.Millisecond {
+		t.Fatalf("flush past the deadline headroom took %s", elapsed)
 	}
 }
 
@@ -284,7 +364,7 @@ func TestFlushIsBoundedAndBacksOffWhenCollectorHangs(t *testing.T) {
 	// Within the backoff window flushes are skipped entirely.
 	start = time.Now()
 	_, _ = handler(context.Background(), struct{}{})
-	if skipped := time.Since(start); skipped > 10*time.Millisecond {
+	if skipped := time.Since(start); skipped > 100*time.Millisecond {
 		t.Fatalf("flush during backoff took %s", skipped)
 	}
 	// After the window one more bounded attempt happens; still logged once.

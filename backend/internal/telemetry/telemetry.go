@@ -25,7 +25,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
 	"go.opentelemetry.io/otel/log/global"
-	"go.opentelemetry.io/otel/propagation"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -42,6 +41,8 @@ const (
 	// FlushTimeout bounds the per-invocation flush that runs before the
 	// Lambda response is returned.
 	FlushTimeout = 150 * time.Millisecond
+	// deadlineHeadroom is left before the Lambda deadline when flushing.
+	deadlineHeadroom = 50 * time.Millisecond
 	// exportTimeout bounds every individual OTLP request, including the
 	// batch processors' background exports.
 	exportTimeout = 150 * time.Millisecond
@@ -69,11 +70,10 @@ type Config struct {
 // Telemetry owns the SDK providers for one process. A nil or disabled value
 // is safe to use: every method degrades to a no-op.
 type Telemetry struct {
-	enabled    bool
-	traces     *sdktrace.TracerProvider
-	logs       *sdklog.LoggerProvider
-	tracer     trace.Tracer
-	propagator propagation.TextMapPropagator
+	enabled bool
+	traces  *sdktrace.TracerProvider
+	logs    *sdklog.LoggerProvider
+	tracer  trace.Tracer
 
 	now       func() time.Time
 	logf      func(string, ...any)
@@ -83,7 +83,7 @@ type Telemetry struct {
 
 // Disabled returns a telemetry value that records nothing.
 func Disabled() *Telemetry {
-	return &Telemetry{tracer: noop.NewTracerProvider().Tracer(""), propagator: propagation.NewCompositeTextMapPropagator()}
+	return &Telemetry{tracer: noop.NewTracerProvider().Tracer("")}
 }
 
 // FromEnv builds telemetry from the environment and installs it as the
@@ -130,7 +130,9 @@ func New(cfg Config) (*Telemetry, error) {
 func newWithExporters(res *resource.Resource, spans sdktrace.SpanExporter, records sdklog.Exporter) *Telemetry {
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithResource(res),
-		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.AlwaysSample())),
+		// Never inherit a remote sampling decision: a public client must not
+		// be able to suppress its own traces.
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
 		sdktrace.WithBatcher(spans,
 			sdktrace.WithMaxQueueSize(maxQueueSize),
 			sdktrace.WithMaxExportBatchSize(maxExportSize),
@@ -150,10 +152,8 @@ func newWithExporters(res *resource.Resource, spans sdktrace.SpanExporter, recor
 		traces:  tp,
 		logs:    lp,
 		tracer:  tp.Tracer(instrumentationScope),
-		propagator: propagation.NewCompositeTextMapPropagator(
-			propagation.TraceContext{}, propagation.Baggage{}),
-		now:  time.Now,
-		logf: log.Printf,
+		now:     time.Now,
+		logf:    log.Printf,
 	}
 }
 
@@ -168,14 +168,13 @@ func parseEndpoint(raw string) (string, error) {
 	return raw, nil
 }
 
-// InstallGlobal registers the providers, propagator and a rate-limited
+// InstallGlobal registers the providers and a rate-limited
 // error handler as the process-wide OpenTelemetry defaults.
 func (t *Telemetry) InstallGlobal() {
 	if !t.Enabled() {
 		return
 	}
 	otel.SetTracerProvider(t.traces)
-	otel.SetTextMapPropagator(t.propagator)
 	global.SetLoggerProvider(t.logs)
 	otel.SetErrorHandler(otel.ErrorHandlerFunc(t.reportFailure))
 }
@@ -195,7 +194,11 @@ func (t *Telemetry) Flush(ctx context.Context) {
 	if now.UnixNano() < t.skipUntil.Load() {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), FlushTimeout)
+	timeout := flushBudget(ctx)
+	if timeout <= 0 {
+		return // too close to the invocation deadline to flush safely
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 	defer cancel()
 	var wg sync.WaitGroup
 	var traceErr, logErr error
@@ -211,6 +214,16 @@ func (t *Telemetry) Flush(ctx context.Context) {
 	if t.failing.CompareAndSwap(true, false) {
 		t.logf("telemetry export recovered")
 	}
+}
+
+// flushBudget is FlushTimeout capped by the invocation deadline minus
+// deadlineHeadroom, so a flush can never push a request past its timeout.
+func flushBudget(ctx context.Context) time.Duration {
+	budget := FlushTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		budget = min(budget, time.Until(deadline)-deadlineHeadroom)
+	}
+	return budget
 }
 
 // reportFailure logs the first failure of an outage only.

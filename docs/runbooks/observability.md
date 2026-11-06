@@ -66,7 +66,10 @@ Recorded data (`backend/internal/telemetry`):
 - One server span per request named `METHOD /route/{pattern}`; attributes are
   only `http.request.method`, `http.route`, `http.response.status_code` and
   `error.type` (5xx). No URL, query, header, body, identity or user content.
-  Incoming W3C `traceparent`/`baggage` are honored as the parent context.
+  Only the trace ID and parent span ID of a single valid W3C `traceparent` are
+  adopted (for future frontend propagation); the parent is rebuilt with an
+  empty `tracestate`, `baggage` is never extracted, and every request is
+  sampled regardless of the caller's sampled flag.
 - One client span per AWS SDK operation (`DynamoDB.GetItem`, `S3.PutObject`,
   ...) with `rpc.*` and `aws.error_code`/`aws.error_fault` only. SDK internal
   phases, error messages, endpoints and payloads are dropped, and no trace
@@ -75,7 +78,8 @@ Recorded data (`backend/internal/telemetry`):
 - The `request completed` log line is also emitted as an OTLP log record with
   the same fields and the trace/span IDs.
 
-Each invocation flushes before returning, bounded by 150 ms. A failed or timed
+Each invocation flushes before returning, bounded by 150 ms or the remaining
+invocation time minus 50 ms, whichever is smaller (no flush without budget). A failed or timed
 out flush is logged once and flushes are skipped for 30 s; queues are bounded
 (2048) and overflow is dropped, so export never fails a request. With an empty
 or invalid endpoint the providers are not installed and the middleware is a
@@ -96,7 +100,18 @@ Activation:
 4. Verify `/api/health` and an authenticated read still succeed, then query
    ClickHouse.
 
-Rollback: set the flag to `"false"` and redeploy GatewayStack.
+Rollback (two steps):
+
+1. Set the flag to `"false"` and deploy `TtobakGatewayStack` `--exclusively`.
+   The function leaves the VPC and exports nothing.
+2. Remove the `ttobak-api` security group after its Hyperplane ENIs drain.
+   That deployment drops the group from the template, but CloudFormation's
+   cleanup-phase delete can fail with `DependencyViolation` while Lambda still
+   holds the ENIs (release can take tens of minutes) without rolling back the
+   function change. Wait until
+   `aws ec2 describe-network-interfaces --filters Name=group-id,Values=<sg-id>`
+   returns nothing, then `aws ec2 delete-security-group --group-id <sg-id>` if
+   it still exists. Never detach Lambda-owned ENIs by hand.
 
 Verification queries:
 

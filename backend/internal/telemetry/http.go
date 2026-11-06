@@ -28,13 +28,14 @@ const (
 // router so the matched route pattern is available when the span ends. The
 // span name is "METHOD /route/{pattern}" ("METHOD" alone when unmatched),
 // never the request path, which can carry public document capabilities.
-// The incoming W3C traceparent/baggage headers are honored as the parent.
+// Only the trace and parent span IDs of an incoming W3C traceparent are used
+// (see remoteParent); tracestate, baggage and the sampled flag are ignored.
 func (t *Telemetry) Middleware(next http.Handler) http.Handler {
 	if !t.Enabled() {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := t.propagator.Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+		ctx := remoteParent(r.Context(), r.Header)
 		method := spanMethod(r.Method)
 		ctx, span := t.tracer.Start(ctx, method,
 			trace.WithSpanKind(trace.SpanKindServer),
@@ -58,6 +59,29 @@ func (t *Telemetry) Middleware(next http.Handler) http.Handler {
 		}()
 		next.ServeHTTP(wrapped, r.WithContext(ctx))
 	})
+}
+
+// remoteParent adopts only the trace ID and parent span ID of a valid
+// traceparent header. The parent is rebuilt with an empty TraceState (client
+// tracestate would otherwise be exported verbatim) and marked sampled, so a
+// public caller cannot attach text to spans or suppress tracing. Baggage is
+// never extracted.
+func remoteParent(ctx context.Context, header http.Header) context.Context {
+	values := header.Values("traceparent")
+	if len(values) != 1 {
+		return ctx
+	}
+	carrier := propagation.MapCarrier{"traceparent": values[0]}
+	parsed := trace.SpanContextFromContext(propagation.TraceContext{}.Extract(context.Background(), carrier))
+	if !parsed.IsValid() {
+		return ctx
+	}
+	return trace.ContextWithRemoteSpanContext(ctx, trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID:    parsed.TraceID(),
+		SpanID:     parsed.SpanID(),
+		TraceFlags: trace.FlagsSampled,
+		Remote:     true,
+	}))
 }
 
 // RoutePattern returns the matched chi route pattern, or "" when unmatched.
