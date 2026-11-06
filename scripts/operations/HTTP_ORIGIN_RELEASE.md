@@ -16,13 +16,21 @@ The activation gate also requires every consumer function to depend on a
 GatewayStack policy granting `secretsmanager:GetSecretValue` on
 `HttpOriginSecretArn` to that function's role. A VPC-attached consumer must
 also have an observed private Secrets Manager path, verified read-only through
-EC2 before any mutation (`vpc_secret_path_verified`): literal subnets in one VPC
-with DNS support and hostnames; an `available` Secrets Manager interface
-endpoint with private DNS covering every function AZ, whose security group
-admits TCP 443 from the VPC CIDR and whose policy allows `GetSecretValue`
-without conditions or denies; and function security-group egress on TCP 443 to
-the VPC. Unknown or unresolved values fail closed with
-`ACTIVATION_CONSUMER_VPC_UNVERIFIED`. One GatewayStack deployment switches all
+EC2 before any mutation (`vpc_secret_path_verified`):
+- literal function subnets in one VPC with DNS support and hostnames;
+- an `available` Secrets Manager interface endpoint with private DNS covering
+  every function AZ, whose policy is absent or an unconditioned `Allow` of
+  `GetSecretValue` to principal and resource `*` (stricter policies fail closed);
+- endpoint security-group ingress on TCP 443 from every function subnet CIDR
+  (private IPv4 ranges only; security-group references and IPv6 are not
+  evaluated), and function security-group egress on TCP 443 to every endpoint
+  subnet CIDR, so secondary VPC CIDRs are covered;
+- network ACLs on both sides allowing that flow and ephemeral return traffic,
+  evaluated first-match by rule number.
+Unknown or unresolved values fail closed with `ACTIVATION_CONSUMER_VPC_UNVERIFIED`;
+a describe failure also prints the fixed warning `VPC_SECRET_PATH_DESCRIBE_FAILED`.
+The CI policy grants the five EC2 Describe actions on `*` with an
+`aws:RequestedRegion` condition (they have no resource-level scoping). One GatewayStack deployment switches all
 consumers to ARN lookup, so a missing grant or unreachable endpoint would
 otherwise fail every origin check closed; the post-deploy consumer invocation
 check remains the runtime proof.

@@ -136,14 +136,49 @@ def _endpoint_policy_allows_proof_read(document):
     return False
 
 
+def _cidr_overlaps(a, b):
+    left, right = _ipv4_cidr(a), _ipv4_cidr(b)
+    if left is None or right is None:
+        return True  # Unknown overlap is treated as overlapping (fail closed).
+    bits = min(left[1], right[1])
+    mask = (0xFFFFFFFF << (32 - bits)) & 0xFFFFFFFF if bits else 0
+    return (left[0] & mask) == (right[0] & mask)
+
+
+def _nacl_allows(entries, egress, target_cidr, low, high):
+    """First-match NACL evaluation for TCP ports low..high to/from target_cidr.
+
+    An entry that overlaps the traffic but does not fully allow it fails closed.
+    """
+    for entry in sorted((item for item in entries if item.get("Egress") is egress),
+                        key=lambda item: item.get("RuleNumber", 32767)):
+        cidr = entry.get("CidrBlock")
+        if not isinstance(cidr, str) or not _cidr_overlaps(cidr, target_cidr):
+            continue  # IPv6 or unrelated range.
+        protocol = str(entry.get("Protocol"))
+        ports = entry.get("PortRange") or {}
+        if protocol not in ("-1", "6"):
+            continue
+        if protocol == "6" and (ports.get("To", -1) < low or ports.get("From", 65536) > high):
+            continue
+        covers = _cidr_covers(cidr, target_cidr) and (
+            protocol == "-1" or (ports.get("From", 65536) <= low and high <= ports.get("To", -1)))
+        return entry.get("RuleAction") == "allow" and covers
+    return False
+
+
 def vpc_secret_path_verified(ec2, region, vpc_config, template_resources):
     """Prove a VPC-attached consumer can reach Secrets Manager for the origin proof.
 
-    Every condition must be observed; anything unknown fails closed. Requires an
-    available Secrets Manager interface endpoint with private DNS in the
-    function's VPC (with VPC DNS support and hostnames), covering each function
-    AZ, whose security group admits TCP 443 from the VPC CIDR and whose policy
-    allows GetSecretValue, plus function security-group egress on 443 to the VPC.
+    Every condition must be observed; anything unknown fails closed. Requires
+    literal function subnets in one VPC with DNS support and hostnames; an
+    available Secrets Manager interface endpoint with private DNS covering each
+    function AZ, whose policy allows GetSecretValue unconditionally; endpoint
+    security-group ingress on TCP 443 from every function subnet CIDR (private
+    ranges only); function security-group egress on TCP 443 to every endpoint
+    subnet CIDR; and network ACLs on both sides allowing that TCP 443 flow and
+    its ephemeral return traffic. Security-group references (UserIdGroupPairs)
+    and IPv6 are not evaluated and therefore do not satisfy a check.
     """
     if ec2 is None or not isinstance(vpc_config, dict):
         return False
@@ -159,7 +194,7 @@ def vpc_secret_path_verified(ec2, region, vpc_config, template_resources):
             return False
         vpc_id = vpcs.pop()
         zones = {item["AvailabilityZone"] for item in subnets}
-        vpc_cidr = ec2.describe_vpcs(VpcIds=[vpc_id])["Vpcs"][0]["CidrBlock"]
+        function_cidrs = {item["CidrBlock"] for item in subnets}
         for attribute, key in (("enableDnsSupport", "EnableDnsSupport"), ("enableDnsHostnames", "EnableDnsHostnames")):
             if ec2.describe_vpc_attribute(VpcId=vpc_id, Attribute=attribute)[key]["Value"] is not True:
                 return False  # Endpoint private DNS cannot resolve without both.
@@ -168,27 +203,28 @@ def vpc_secret_path_verified(ec2, region, vpc_config, template_resources):
             {"Name": "service-name", "Values": [f"com.amazonaws.{region}.secretsmanager"]},
             {"Name": "vpc-endpoint-type", "Values": ["Interface"]},
         ])["VpcEndpoints"]
-        endpoint_ok = False
+        chosen = None
         for endpoint in endpoints:
             if endpoint.get("State") != "available" or endpoint.get("PrivateDnsEnabled") is not True:
                 continue
             if not _endpoint_policy_allows_proof_read(endpoint.get("PolicyDocument")):
                 continue
-            endpoint_subnets = endpoint.get("SubnetIds") or []
-            covered = {item["AvailabilityZone"] for item in
-                       ec2.describe_subnets(SubnetIds=endpoint_subnets)["Subnets"]} if endpoint_subnets else set()
-            if not zones <= covered:
+            endpoint_subnet_ids = endpoint.get("SubnetIds") or []
+            endpoint_subnets = ec2.describe_subnets(SubnetIds=endpoint_subnet_ids)["Subnets"] if endpoint_subnet_ids else []
+            if not zones <= {item["AvailabilityZone"] for item in endpoint_subnets}:
                 continue
             group_ids = [item["GroupId"] for item in endpoint.get("Groups", [])]
             rules = ec2.describe_security_groups(GroupIds=group_ids)["SecurityGroups"] if group_ids else []
-            if any(_allows_tcp_443(permission) and any(
-                    _private_cidr(ip.get("CidrIp", "")) and _cidr_covers(ip.get("CidrIp", ""), vpc_cidr)
-                    for ip in permission.get("IpRanges", []))
-                   for group in rules for permission in group.get("IpPermissions", [])):
-                endpoint_ok = True
+            ingress = [permission for group in rules for permission in group.get("IpPermissions", [])
+                       if _allows_tcp_443(permission)]
+            if all(any(_private_cidr(ip.get("CidrIp", "")) and _cidr_covers(ip.get("CidrIp", ""), cidr)
+                       for permission in ingress for ip in permission.get("IpRanges", []))
+                   for cidr in function_cidrs):
+                chosen = endpoint_subnets
                 break
-        if not endpoint_ok:
+        if chosen is None:
             return False
+        endpoint_cidrs = {item["CidrBlock"] for item in chosen}
         literal = [item for item in groups if isinstance(item, str)]
         egress = []
         for item in groups:
@@ -203,11 +239,35 @@ def vpc_secret_path_verified(ec2, region, vpc_config, template_resources):
         if literal:
             for group in ec2.describe_security_groups(GroupIds=literal)["SecurityGroups"]:
                 egress.extend(group.get("IpPermissionsEgress", []))
-        def egress_covers(rule):
-            ranges = [rule.get("CidrIp")] + [ip.get("CidrIp") for ip in rule.get("IpRanges", [])]
-            return _allows_tcp_443(rule) and any(isinstance(value, str) and _cidr_covers(value, vpc_cidr) for value in ranges)
-        return any(egress_covers(rule) for rule in egress)
+        def egress_covers(cidr):
+            for rule in egress:
+                ranges = [rule.get("CidrIp")] + [ip.get("CidrIp") for ip in rule.get("IpRanges", [])]
+                if _allows_tcp_443(rule) and any(isinstance(value, str) and _cidr_covers(value, cidr) for value in ranges):
+                    return True
+            return False
+        if not all(egress_covers(cidr) for cidr in endpoint_cidrs):
+            return False
+        # Network ACLs: TCP 443 out from function subnets and in to endpoint
+        # subnets, plus ephemeral return traffic in both directions.
+        def acl(subnet_id):
+            found = ec2.describe_network_acls(Filters=[{"Name": "association.subnet-id", "Values": [subnet_id]}])["NetworkAcls"]
+            return found[0].get("Entries", []) if len(found) == 1 else None
+        for subnet in subnets:
+            entries = acl(subnet["SubnetId"])
+            if entries is None or not all(
+                    _nacl_allows(entries, True, cidr, 443, 443) and _nacl_allows(entries, False, cidr, 1024, 65535)
+                    for cidr in endpoint_cidrs):
+                return False
+        for subnet in chosen:
+            entries = acl(subnet["SubnetId"])
+            if entries is None or not all(
+                    _nacl_allows(entries, False, cidr, 443, 443) and _nacl_allows(entries, True, cidr, 1024, 65535)
+                    for cidr in function_cidrs):
+                return False
+        return True
     except Exception:
+        # Fixed diagnostic only: never print SDK messages or resource details.
+        print(json.dumps({"warning": "VPC_SECRET_PATH_DESCRIBE_FAILED"}), flush=True)
         return False
 
 

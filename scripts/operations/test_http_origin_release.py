@@ -592,21 +592,28 @@ class ReleaseTests(unittest.TestCase):
                 self.endpoint = {"State": "available", "PrivateDnsEnabled": True, "PolicyDocument": None,
                                  "SubnetIds": ["e-a", "e-b"], "Groups": [{"GroupId": "sg-endpoint"}]}
                 self.endpoint_ingress = [{"IpProtocol": "tcp", "FromPort": 443, "ToPort": 443,
-                                          "IpRanges": [{"CidrIp": "10.0.0.0/16"}]}]
+                                          "IpRanges": [{"CidrIp": "10.0.0.0/16"}, {"CidrIp": "10.1.0.0/16"}]}]
                 self.dns = {"enableDnsSupport": True, "enableDnsHostnames": True}
                 self.client_egress = [{"IpProtocol": "tcp", "FromPort": 443, "ToPort": 443,
                                        "IpRanges": [{"CidrIp": "10.0.0.0/16"}]}]
+                self.endpoint_ingress_extra = None
                 self.fail = False
+                # f-b sits in a secondary VPC CIDR outside the primary 10.0.0.0/16.
+                self.cidr = {"f-a": "10.0.1.0/24", "f-b": "10.1.2.0/24", "e-a": "10.0.3.0/24", "e-b": "10.0.4.0/24"}
+                allow_all = [{"RuleNumber": 100, "Protocol": "-1", "RuleAction": "allow", "Egress": egress,
+                              "CidrBlock": "0.0.0.0/0"} for egress in (True, False)]
+                self.acls = {name: copy.deepcopy(allow_all) for name in self.cidr}
 
             def describe_subnets(self, SubnetIds):
                 if self.fail:
                     raise RuntimeError("describe failed")
                 zone = {"f-a": "az-a", "f-b": "az-b", "e-a": "az-a", "e-b": "az-b"}
-                return {"Subnets": [{"SubnetId": item, "VpcId": "vpc-1", "AvailabilityZone": zone[item]}
-                                    for item in SubnetIds]}
+                return {"Subnets": [{"SubnetId": item, "VpcId": "vpc-1", "AvailabilityZone": zone[item],
+                                     "CidrBlock": self.cidr[item]} for item in SubnetIds]}
 
-            def describe_vpcs(self, VpcIds):
-                return {"Vpcs": [{"VpcId": "vpc-1", "CidrBlock": "10.0.0.0/16"}]}
+            def describe_network_acls(self, Filters):
+                subnet = Filters[0]["Values"][0]
+                return {"NetworkAcls": [{"Entries": self.acls[subnet]}]}
 
             def describe_vpc_attribute(self, VpcId, Attribute):
                 key = "EnableDnsSupport" if Attribute == "enableDnsSupport" else "EnableDnsHostnames"
@@ -645,6 +652,18 @@ class ReleaseTests(unittest.TestCase):
                  "Condition": {"StringEquals": {"aws:PrincipalAccount": "1"}}}]})),
             "endpoint SG wrong port": lambda e: e.endpoint_ingress[0].update(FromPort=80, ToPort=80),
             "endpoint SG public CIDR only": lambda e: e.endpoint_ingress[0].update(IpRanges=[{"CidrIp": "0.0.0.0/0"}]),
+            # Regression: SG scoped to the primary CIDR only, function subnet in a secondary CIDR.
+            "secondary CIDR not admitted": lambda e: e.endpoint_ingress[0].update(IpRanges=[{"CidrIp": "10.0.0.0/16"}]),
+            "function NACL denies 443 out": lambda e: e.acls["f-a"].insert(0, {
+                "RuleNumber": 50, "Protocol": "6", "PortRange": {"From": 443, "To": 443}, "RuleAction": "deny",
+                "Egress": True, "CidrBlock": "10.0.0.0/8"}),
+            "endpoint NACL lacks ephemeral return": lambda e: e.acls.__setitem__("e-a", [
+                {"RuleNumber": 100, "Protocol": "-1", "RuleAction": "allow", "Egress": False, "CidrBlock": "0.0.0.0/0"},
+                {"RuleNumber": 100, "Protocol": "6", "PortRange": {"From": 443, "To": 443}, "RuleAction": "allow",
+                 "Egress": True, "CidrBlock": "0.0.0.0/0"}]),
+            "partial NACL allow": lambda e: e.acls["e-b"].insert(0, {
+                "RuleNumber": 10, "Protocol": "6", "PortRange": {"From": 443, "To": 443}, "RuleAction": "allow",
+                "Egress": False, "CidrBlock": "10.0.1.0/25"}),
             "describe error": lambda e: setattr(e, "fail", True),
         }
         for name, mutate in breaks.items():

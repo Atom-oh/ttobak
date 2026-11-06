@@ -224,7 +224,7 @@ describe('GatewayStack', () => {
     expect(env('ttobak-api').API_ALLOWED_CLIENT_IDS).toEqual(firstParty);
   });
 
-  test('the existing CI policy retains exact secret permissions and adds only four consumer invoke ARNs', () => {
+  test('the existing CI policy retains exact secret permissions, four consumer invoke ARNs and region-bound EC2 describes', () => {
     const ciRoleName = 'mall-apne2-mgmt-ci-runner';
     const enabled = buildTemplate(undefined, undefined, undefined, undefined, undefined, undefined, ciRoleName);
     const synthesized = enabled.toJSON();
@@ -257,6 +257,12 @@ describe('GatewayStack', () => {
             { 'Fn::Join': ['', ['arn:', { Ref: 'AWS::Partition' }, ':lambda:', { Ref: 'AWS::Region' },
               ':', { Ref: 'AWS::AccountId' }, ':function:ttobak-mcp']] },
           ],
+        }, {
+          Effect: 'Allow',
+          Action: ['ec2:DescribeSubnets', 'ec2:DescribeVpcAttribute', 'ec2:DescribeVpcEndpoints',
+            'ec2:DescribeSecurityGroups', 'ec2:DescribeNetworkAcls'],
+          Resource: '*',
+          Condition: { StringEquals: { 'aws:RequestedRegion': { Ref: 'AWS::Region' } } },
         }],
       },
     });
