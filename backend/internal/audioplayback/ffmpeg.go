@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -27,24 +28,54 @@ func (t FFmpegTool) Remux(ctx context.Context, inPath, outPath, format string) e
 }
 
 func (t FFmpegTool) Duration(ctx context.Context, filePath string) (float64, error) {
-	out, err := t.run(ctx, t.FFprobePath,
-		"-v", "error", "-protocol_whitelist", "file",
-		"-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", "file:"+filePath)
+	format, err := demuxerFor(filePath)
+	if err != nil {
+		return 0, err
+	}
+	out, err := t.run(ctx, t.FFprobePath, ProbeArgs(filePath, format)...)
 	if err != nil {
 		return 0, err
 	}
 	return ParseProbeDuration(out)
 }
 
-// RemuxArgs is exported for tests; it never lets the input select a protocol
-// other than a local file.
+// Input demuxers are pinned and whitelisted. Auto-probing would let an
+// uploaded "webm" that is really a playlist/concat/image2 file pull other
+// local files (the file protocol is allowed) into a copy served back to users.
+var inputDemuxers = map[string]string{".webm": "matroska", ".ogg": "ogg"}
+
+const formatWhitelist = "matroska,webm,ogg"
+
+func demuxerFor(filePath string) (string, error) {
+	format, ok := inputDemuxers[strings.ToLower(filepath.Ext(filePath))]
+	if !ok {
+		return "", fmt.Errorf("unsupported input %q", filepath.Ext(filePath))
+	}
+	return format, nil
+}
+
+// RemuxArgs is exported for tests. The input is a local file read only by the
+// pinned demuxer; nothing in it can select another protocol or format.
 func RemuxArgs(inPath, outPath, format string) []string {
+	demuxer := "matroska"
+	if format == "ogg" {
+		demuxer = "ogg"
+	}
 	return []string{
 		"-nostdin", "-hide_banner", "-loglevel", "error",
-		"-protocol_whitelist", "file",
-		"-i", "file:" + inPath,
+		"-protocol_whitelist", "file", "-format_whitelist", formatWhitelist,
+		"-f", demuxer, "-i", "file:" + inPath,
 		"-map", "0:a", "-c", "copy",
 		"-f", format, "-y", "file:" + outPath,
+	}
+}
+
+// ProbeArgs reads only the duration of a remuxed local file with the pinned demuxer.
+func ProbeArgs(filePath, demuxer string) []string {
+	return []string{
+		"-v", "error", "-protocol_whitelist", "file", "-format_whitelist", formatWhitelist,
+		"-f", demuxer, "-show_entries", "format=duration",
+		"-of", "default=noprint_wrappers=1:nokey=1", "file:" + filePath,
 	}
 }
 

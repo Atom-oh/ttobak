@@ -200,10 +200,22 @@ func TestRemuxReportsRaceAndFailures(t *testing.T) {
 
 func TestRemuxArgsAndProbeParsing(t *testing.T) {
 	args := strings.Join(RemuxArgs("/tmp/x/in.webm", "/tmp/x/out.webm", "webm"), " ")
-	for _, want := range []string{"-protocol_whitelist file", "-i file:/tmp/x/in.webm", "-c copy", "-f webm", "file:/tmp/x/out.webm", "-nostdin"} {
+	for _, want := range []string{"-protocol_whitelist file", "-format_whitelist matroska,webm,ogg", "-f matroska -i file:/tmp/x/in.webm", "-c copy", "-f webm -y file:/tmp/x/out.webm", "-nostdin"} {
 		if !strings.Contains(args, want) {
 			t.Errorf("args %q missing %q", args, want)
 		}
+	}
+	if ogg := strings.Join(RemuxArgs("/a/in.ogg", "/a/out.ogg", "ogg"), " "); !strings.Contains(ogg, "-f ogg -i file:/a/in.ogg") {
+		t.Errorf("ogg args %q", ogg)
+	}
+	probe := strings.Join(ProbeArgs("/a/out.webm", "matroska"), " ")
+	for _, want := range []string{"-protocol_whitelist file", "-format_whitelist matroska,webm,ogg", "-f matroska", "file:/a/out.webm"} {
+		if !strings.Contains(probe, want) {
+			t.Errorf("probe %q missing %q", probe, want)
+		}
+	}
+	if _, err := (FFmpegTool{}).Duration(context.Background(), "/a/out.mp4"); err == nil {
+		t.Error("probe of an unpinned extension accepted")
 	}
 	if got, err := ParseProbeDuration([]byte("1689.537000\n")); err != nil || got != 1689.537 {
 		t.Fatalf("parse %v %v", got, err)
@@ -219,6 +231,35 @@ func TestRemuxArgsAndProbeParsing(t *testing.T) {
 	env := sanitizedEnv([]string{"AWS_SECRET_ACCESS_KEY=x", "AWS_REGION=y", "PATH=/bin"})
 	if len(env) != 1 || env[0] != "PATH=/bin" {
 		t.Fatalf("env %v", env)
+	}
+}
+
+// TestFFmpegRejectsDisguisedLocalFileReader: a ".webm" that is really an
+// ffconcat playlist must not pull another local file into the output.
+func TestFFmpegRejectsDisguisedLocalFileReader(t *testing.T) {
+	ffmpeg, err1 := exec.LookPath("ffmpeg")
+	ffprobe, err2 := exec.LookPath("ffprobe")
+	if err1 != nil || err2 != nil {
+		t.Skip("ffmpeg/ffprobe not installed")
+	}
+	dir := t.TempDir()
+	secret := filepath.Join(dir, "secret.webm")
+	gen := exec.Command(ffmpeg, "-v", "error", "-f", "lavfi", "-i", "sine=duration=3", "-c:a", "libopus", "-f", "webm", "-y", secret)
+	if err := gen.Run(); err != nil {
+		t.Skipf("ffmpeg cannot encode opus here: %v", err)
+	}
+	disguised := filepath.Join(dir, "upload.webm")
+	if err := os.WriteFile(disguised, []byte("ffconcat version 1.0\nfile 'secret.webm'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Without a pinned demuxer ffmpeg auto-detects ffconcat and copies the
+	// relative sibling file; this guards that regression.
+	tool := FFmpegTool{FFmpegPath: ffmpeg, FFprobePath: ffprobe}
+	out := filepath.Join(dir, "out.webm")
+	if err := tool.Remux(context.Background(), disguised, out, "webm"); err == nil {
+		if seconds, probeErr := tool.Duration(context.Background(), out); probeErr == nil && seconds > 0 {
+			t.Fatalf("disguised playlist produced %.1fs of another file's audio", seconds)
+		}
 	}
 }
 
