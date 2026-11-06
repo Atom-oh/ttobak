@@ -14,6 +14,7 @@ import { MermaidBlock } from './MermaidBlock';
 import { Callout } from './Callout';
 import { remarkCallout } from './remarkCallout';
 import { safeMarkdownUrl } from '@/lib/markdownUrlTransform';
+import { parseStartSeconds, requestAudioSeek } from '@/lib/audioSeek';
 
 const customSchema = {
   ...defaultSchema,
@@ -112,6 +113,9 @@ const components: Components = {
         const el = document.getElementById(`ts-${segmentId}`);
         if (!el) return;
         el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        // Move the meeting audio to the same turn when its start time is known.
+        const seconds = parseStartSeconds(el.getAttribute('data-start-seconds'));
+        if (seconds !== null) requestAudioSeek(seconds);
         el.classList.add('ring-2', 'ring-primary/50');
         window.setTimeout(() => {
           el.classList.remove('ring-2', 'ring-primary/50');
@@ -122,7 +126,7 @@ const components: Components = {
           href={`#ts-${segmentId}`}
           onClick={onClick}
           className="text-[#3211d4] dark:text-primary underline underline-offset-2 decoration-dotted decoration-[#3211d4]/40 dark:decoration-primary/40 hover:decoration-solid hover:decoration-[#3211d4] dark:hover:decoration-primary transition-colors text-[13px] tabular-nums ml-1 align-baseline"
-          title="회의록의 해당 발언으로 이동"
+          title="회의록의 해당 발언과 음성 위치로 이동"
         >
           {children}
         </a>

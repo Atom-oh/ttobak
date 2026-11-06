@@ -106,6 +106,13 @@ native recording and PCM events. Finished native WAVs remain on disk and upload
 through Rust. `usePostRecording` accepts a tagged native-path/browser-Blob payload.
 Never load a finished native recording into the WebView just to upload it.
 
+In the Mac app, `MeetingDetectionBanner` (layout level) offers start/dismiss when
+the app detects a meeting using the microphone, and stop/keep recording after that
+meeting ends while recording. Nothing records without the user's confirmation; the
+start reuses the native control path to the record page. Settings shows the
+`MeetingDetectionSettings` toggle only in an app build that supports detection
+(ADR-061).
+
 Capture/processing state and upload failures remain visible through the post-record
 banner; a failed upload must remain retryable. Progress timeouts measure 60 seconds
 without progress, not total file-transfer duration. Delete native temporary files
@@ -176,6 +183,12 @@ Closing a lid does not guarantee a final callback or network upload: recovery is
 limited to committed chunks, and browser data deletion/eviction can remove them.
 An expired empty recording still offers server-checkpoint recovery; a missing
 checkpoint directs the user to local recordings instead of suggesting deletion.
+
+Summary timestamp links scroll to the transcript turn and, when that turn has a
+start time inside the playing source, seek the meeting audio there and play.
+Browser-recorded WebM can lack Duration/Cues; the player then uses the meeting's
+server duration for single-file audio. Multi-part meetings play the first part,
+so merged-timeline times beyond its known length only scroll.
 
 When the API reports crop support, owners of single-file recordings can choose a start/end time, preview the range,
 and create a private cropped meeting. Cropping retains the original meeting and

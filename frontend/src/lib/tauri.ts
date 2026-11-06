@@ -485,3 +485,82 @@ export function reportNativeControlState(state: {
 }): Promise<void> {
   return invoke<void>('control_report_state', { state }).catch(() => undefined);
 }
+
+/** A meeting the Mac app noticed using the microphone (ADR-061). */
+export interface NativeMeetingDetection {
+  detectionId: string;
+  kind: string;
+  label: string;
+  /** Bundle ID of the browser hosting a web meeting, if any. */
+  browser: string | null;
+  /** Whether the app was recording when the event fired. */
+  recording: boolean;
+}
+
+export interface NativeMeetingDetectionState {
+  supported: boolean;
+  enabled: boolean;
+  active: NativeMeetingDetection | null;
+}
+
+function decodeMeetingDetection(raw: unknown): NativeMeetingDetection | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.detectionId !== 'string' || typeof r.kind !== 'string' || typeof r.label !== 'string') {
+    return null;
+  }
+  return {
+    detectionId: r.detectionId,
+    kind: r.kind,
+    label: r.label,
+    browser: typeof r.browser === 'string' ? r.browser : null,
+    recording: r.recording === true,
+  };
+}
+
+/** A meeting started using the microphone; offer to record it. */
+export function onNativeMeetingDetected(handler: (d: NativeMeetingDetection) => void): () => void {
+  return subscribeTauriEvent<unknown, NativeMeetingDetection | null>(
+    'native-meeting-detected',
+    decodeMeetingDetection,
+    (d) => { if (d) handler(d); },
+  );
+}
+
+/** The detected meeting's microphone use ended; offer to stop recording. */
+export function onNativeMeetingEnded(handler: (d: NativeMeetingDetection) => void): () => void {
+  return subscribeTauriEvent<unknown, NativeMeetingDetection | null>(
+    'native-meeting-ended',
+    decodeMeetingDetection,
+    (d) => { if (d) handler(d); },
+  );
+}
+
+/** Detection preference and the meeting announced right now. `null` when
+ * the installed app predates meeting detection. */
+export async function getMeetingDetection(): Promise<NativeMeetingDetectionState | null> {
+  try {
+    const state = await invoke<NativeMeetingDetectionState>('meeting_detection_get');
+    return { ...state, active: decodeMeetingDetection(state.active) };
+  } catch {
+    return null;
+  }
+}
+
+export function setMeetingDetectionEnabled(enabled: boolean): Promise<void> {
+  return invoke<void>('meeting_detection_set_enabled', { enabled });
+}
+
+/** Answers a detection prompt. `start` and `stop` resolve with the record
+ * page's reply; a rejection means the prompt was stale or invalid. */
+export function respondMeetingDetection(
+  detectionId: string,
+  action: 'start' | 'stop' | 'dismiss',
+  title?: string,
+): Promise<NativeControlReply | { ok: true }> {
+  return invoke<NativeControlReply | { ok: true }>('meeting_detection_respond', {
+    detectionId,
+    action,
+    title,
+  });
+}

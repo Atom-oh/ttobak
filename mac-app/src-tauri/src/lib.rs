@@ -13,6 +13,8 @@
 //! - `list_leftover_recordings()` — temp WAVs adopted at startup from a
 //!   previous run (crash / force quit), so the SPA can offer to upload or
 //!   delete them; see `leftover.rs` and `RecorderState::adopted_paths`
+//! - `meeting_detection_get/set_enabled/respond` — meeting detection prompts
+//!   (ADR-061); see `meeting_detect.rs`
 //!
 //! `read_recording_bytes` (WAV bytes via IPC binary response) used to exist
 //! here and has been deliberately removed: on a real ~35-minute recording it
@@ -29,6 +31,8 @@ mod control;
 mod control_proto;
 mod error;
 mod leftover;
+mod meeting;
+mod meeting_detect;
 mod mix;
 #[cfg(any(target_os = "macos", test))]
 mod power;
@@ -599,6 +603,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .manage(control::ControlState::default())
+        .manage(Arc::new(meeting_detect::MeetingState::default()))
         .manage(RecorderState {
             recorder: Mutex::new(AudioRecorder::new()),
             recorded_paths: Mutex::new(HashSet::new()),
@@ -619,10 +624,15 @@ pub fn run() {
             control::control_ready,
             control::control_reply,
             control::control_report_state,
+            meeting_detect::meeting_detection_get,
+            meeting_detect::meeting_detection_set_enabled,
+            meeting_detect::meeting_detection_respond,
         ])
         .setup(|app| {
             // MCP control channel (ADR-046); failure only disables it.
             control::start(app.handle().clone());
+            // Meeting detection prompts (ADR-061); failure only disables them.
+            meeting_detect::start(app.handle().clone());
             // Adopt any leftover temp WAVs from a previous run (crash, force
             // quit, or a stop that never got a chance to finalize) into
             // `recorded_paths` AND `adopted_paths`, so `upload_recording`/

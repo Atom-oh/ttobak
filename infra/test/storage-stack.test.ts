@@ -56,7 +56,7 @@ describe('StorageStack', () => {
     });
   });
 
-  test('OAC bucket policy is scoped to the 5 download prefixes, excluding transcripts/*', () => {
+  test('OAC bucket policy is scoped to the 6 download prefixes, excluding transcripts/*', () => {
     template.hasResourceProperties('AWS::S3::BucketPolicy', {
       PolicyDocument: Match.objectLike({
         Statement: Match.arrayWith([
@@ -64,7 +64,7 @@ describe('StorageStack', () => {
             Sid: 'AllowCloudFrontOACRead',
             Action: 's3:GetObject',
             Resource: Match.arrayWith(
-              ['audio', 'images', 'files', 'docs', 'docs-pdf'].map((prefix) =>
+              ['audio', 'audio-playback', 'images', 'files', 'docs', 'docs-pdf'].map((prefix) =>
                 Match.objectLike({
                   'Fn::Join': Match.arrayWith([
                     Match.arrayWith([Match.stringLikeRegexp(`/${prefix}/\\*$`)]),
@@ -82,6 +82,22 @@ describe('StorageStack', () => {
     // read access to it.
     const statement = findOACStatement(template);
     expect(JSON.stringify(statement)).not.toContain('transcripts');
+  });
+
+  test('ADR-062 playback copies transition to IA like their audio sources', () => {
+    template.hasResourceProperties('AWS::S3::Bucket', {
+      LifecycleConfiguration: {
+        Rules: Match.arrayWith([
+          Match.objectLike({ Id: 'AudioToIA', Prefix: 'audio/', Status: 'Enabled' }),
+          Match.objectLike({
+            Id: 'AudioPlaybackToIA',
+            Prefix: 'audio-playback/',
+            Status: 'Enabled',
+            Transitions: [{ StorageClass: 'STANDARD_IA', TransitionInDays: 90 }],
+          }),
+        ]),
+      },
+    });
   });
 
   test('table TTL is scoped to pendingShareExpiresAt, not QA handler.py\'s TTL attribute', () => {

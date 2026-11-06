@@ -921,7 +921,11 @@ function MeetingDetailContent() {
           {/* Audio Player / Uploader */}
           {audioUrls.length > 0 || audioUrl ? (
             <>
-              <AudioPlayer audioUrl={audioUrl ?? undefined} audioUrls={audioUrls.length > 0 ? audioUrls : undefined} />
+              <AudioPlayer
+                audioUrl={audioUrl ?? undefined}
+                audioUrls={audioUrls.length > 0 ? audioUrls : undefined}
+                durationSeconds={(meeting.audioKeys?.length ?? 0) <= 1 && (meeting.audioPartCount ?? 0) <= 1 ? meeting.duration : undefined}
+              />
               {meeting.supportsAudioCrop && isCreator && (meeting.status === 'done' || meeting.status === 'error') && (meeting.audioKeys?.length ?? 0) <= 1 && (meeting.audioPartCount ?? 0) <= 1 && (
                 <AudioCropEditor key={`${meeting.meetingId}:${audioRevision}`} meetingId={meeting.meetingId} audioUrl={audioUrl || audioUrls[0]} duration={meeting.duration}
                   dirty={summaryDirty || titleDirty || transcriptDirty || notesDirty} onCropped={(id) => router.push(`/meeting/${id}`)} />
