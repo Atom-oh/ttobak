@@ -146,7 +146,7 @@ func (s *UploadService) GeneratePresignedUploadURL(
 				return nil, fmt.Errorf("%w: cropped audio is immutable; create another cropped copy", ErrInvalidInput)
 			}
 			if req.Category == "audio" {
-				if err := s.checkMemberAudioWrite(ctx, userID, meeting, req.FileName); err != nil {
+				if err := s.checkMemberAudioWrite(ctx, userID, meeting, req.FileName, req.TotalParts); err != nil {
 					return nil, err
 				}
 			}
@@ -245,7 +245,7 @@ func (s *UploadService) CompleteUpload(ctx context.Context, userID string, req *
 	}
 	// Same member guard as presign, before any audio key is bound.
 	if req.Category == "audio" {
-		if err := s.checkMemberAudioWrite(ctx, userID, meeting, path.Base(req.Key)); err != nil {
+		if err := s.checkMemberAudioWrite(ctx, userID, meeting, path.Base(req.Key), req.TotalParts); err != nil {
 			return err
 		}
 	}
@@ -265,7 +265,7 @@ func (s *UploadService) CompleteUpload(ctx context.Context, userID string, req *
 				return fmt.Errorf("partIndex %d out of range [0, %d)", req.PartIndex, req.TotalParts)
 			}
 			// Lazy pre-allocation: create empty audioKeys list on first multi-file call
-			if err := s.repo.PreAllocateAudioKeys(ctx, meeting.UserID, meeting.MeetingID, req.TotalParts); err != nil {
+			if err := s.repo.PreAllocateAudioKeys(ctx, meeting.UserID, meeting.MeetingID, userID, req.TotalParts); err != nil {
 				return err
 			}
 			// Idempotent index-based set
@@ -656,24 +656,33 @@ func presignMarksSourceEdit(category, actorID, ownerID string) bool {
 
 // checkMemberAudioWrite is the shared presign/complete guard for a managing
 // member's audio. It reads the creator's checkpoint only when the meeting is
-// recording or transcribing; a missing checkpoint counts as active.
-func (s *UploadService) checkMemberAudioWrite(ctx context.Context, actorID string, meeting *model.Meeting, fileName string) error {
+// recording or transcribing, and fails closed on any lookup error other than
+// a missing checkpoint.
+func (s *UploadService) checkMemberAudioWrite(ctx context.Context, actorID string, meeting *model.Meeting, fileName string, totalParts int) error {
 	if meeting == nil || actorID == meeting.UserID {
 		return nil
 	}
 	var checkpoint time.Time
-	if (meeting.Status == model.StatusRecording || meeting.Status == model.StatusTranscribing) && s.s3Client != nil {
-		_, _, checkpoint, _ = s.findProgressFile(ctx, meeting.UserID, meeting.MeetingID)
+	if meeting.Status == model.StatusRecording || meeting.Status == model.StatusTranscribing {
+		if s.s3Client == nil {
+			return ErrRecordingStillActive
+		}
+		var err error
+		_, _, checkpoint, err = s.findProgressFile(ctx, meeting.UserID, meeting.MeetingID)
+		if err != nil && !errors.Is(err, ErrRecordingCheckpointMissing) {
+			return ErrRecordingStillActive
+		}
 	}
-	return memberAudioWriteAllowed(actorID, meeting, fileName, checkpoint, time.Now())
+	return memberAudioWriteAllowed(actorID, meeting, fileName, totalParts, checkpoint, time.Now())
 }
 
 // memberAudioWriteAllowed keeps a non-creator from overwriting the creator's
-// live recording: checkpoint filenames are creator-only; while recording, a
-// missing or fresh (<10 min) checkpoint refuses; while transcribing, only a
-// fresh checkpoint refuses, so a member's own multipart batch (which moves the
-// meeting to transcribing on its first part) completes.
-func memberAudioWriteAllowed(actorID string, meeting *model.Meeting, fileName string, checkpoint, now time.Time) error {
+// live recording or joining someone else's batch: checkpoint filenames are
+// creator-only; while recording, a missing or fresh (<10 min) checkpoint
+// refuses; while transcribing, a fresh checkpoint refuses, and a missing one
+// is allowed only for a later part of the multipart batch this member
+// started (audioUploadBatchBy).
+func memberAudioWriteAllowed(actorID string, meeting *model.Meeting, fileName string, totalParts int, checkpoint, now time.Time) error {
 	if meeting == nil || actorID == meeting.UserID {
 		return nil
 	}
@@ -683,14 +692,11 @@ func memberAudioWriteAllowed(actorID string, meeting *model.Meeting, fileName st
 	fresh := !checkpoint.IsZero() && now.Sub(checkpoint) < memberRecoveryQuietPeriod
 	switch meeting.Status {
 	case model.StatusRecording:
-		// A live creator recording has a missing or fresh checkpoint.
 		if checkpoint.IsZero() || fresh {
 			return ErrRecordingStillActive
 		}
 	case model.StatusTranscribing:
-		// Uploaded and member multipart batches transcribe without a
-		// checkpoint; only a fresh checkpoint means a recording just ended.
-		if fresh {
+		if fresh || checkpoint.IsZero() && (totalParts <= 1 || meeting.AudioUploadBatchBy != actorID) {
 			return ErrRecordingStillActive
 		}
 	}

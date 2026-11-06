@@ -51,8 +51,9 @@
     (409 `RECORDING_STILL_ACTIVE`). Members never presign or complete checkpoint
     filenames. Their audio presigns and completions are refused while the
     meeting is recording with a missing or fresh (<10 min) checkpoint, or
-    transcribing with a fresh one, so a creator's live recording is never
-    overwritten while a member's own multipart batch still completes. Member uploads set the non-owner source
+    transcribing with a fresh one or none, except later parts of the multipart
+    batch that member started (`audioUploadBatchBy`); a failed checkpoint
+    lookup refuses. A creator's live recording is never overwritten. Member uploads set the non-owner source
     marker (at presign time for audio/files) and `Attachment.uploadedBy`.
     Member presigned PUTs expire after 5 minutes (the creator keeps 1 hour).
     Accepted residual window: the transcribe trigger starts transcription for

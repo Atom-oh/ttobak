@@ -1325,7 +1325,9 @@ func (r *DynamoDBRepository) updateMeetingFieldsChecked(ctx context.Context, use
 // PreAllocateAudioKeys initializes audioKeys as a list of empty strings for multi-file upload.
 // Called lazily on first CompleteUpload with totalParts > 1.
 // Uses ConditionExpression to be safe against concurrent calls.
-func (r *DynamoDBRepository) PreAllocateAudioKeys(ctx context.Context, userID, meetingID string, totalParts int) error {
+// uploaderID records a managing member who starts the batch, so only that
+// member's later parts pass the transcribing upload guard.
+func (r *DynamoDBRepository) PreAllocateAudioKeys(ctx context.Context, userID, meetingID, uploaderID string, totalParts int) error {
 	emptyKeys := make([]string, totalParts)
 	for i := range emptyKeys {
 		emptyKeys[i] = ""
@@ -1342,6 +1344,11 @@ func (r *DynamoDBRepository) PreAllocateAudioKeys(ctx context.Context, userID, m
 		Set(expression.Name("updatedAt"), expression.Value(time.Now().UTC().Format(time.RFC3339Nano))).
 		Remove(expression.Name("audioPartsReadySet")).
 		Remove(expression.Name("allPartsEmittedAt"))
+	if uploaderID != "" && uploaderID != userID {
+		update = update.Set(expression.Name("audioUploadBatchBy"), expression.Value(uploaderID))
+	} else {
+		update = update.Remove(expression.Name("audioUploadBatchBy"))
+	}
 
 	// Init when this is the first part of a batch (no audioKeys yet) OR when
 	// re-transcribing a finished meeting (status done/error). Subsequent parts of the

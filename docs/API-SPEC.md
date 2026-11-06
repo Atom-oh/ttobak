@@ -960,7 +960,8 @@ Recover uses a saved progress object; a non-creator manager may recover only aft
 it has been unchanged for 10 minutes (409 `RECORDING_STILL_ACTIVE`). Managers
 cannot presign or complete checkpoint filenames (403); their audio presigns and
 completions return 409 while the meeting is recording with a missing or fresh
-(<10 min) checkpoint, or transcribing with a fresh one. Manager presigned URLs expire after 5 minutes. Rediarize accepts supported single-part
+(<10 min) checkpoint, or transcribing with a fresh or missing one (except the
+member's own multipart batch). Manager presigned URLs expire after 5 minutes. Rediarize accepts supported single-part
 Whisper meetings and a speaker-count hint. Use their handler/service contracts,
 not a raw DynamoDB status reset or a fabricated AWS S3 event.
 
