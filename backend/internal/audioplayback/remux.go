@@ -134,11 +134,32 @@ func (r *Remuxer) Remux(ctx context.Context, sourceKey string) (Outcome, error) 
 	// A transport error can follow a successful PUT; never retry a stale precondition.
 	if _, err := r.S3.PutObject(ctx, input, func(o *s3.Options) { o.Retryer = aws.NopRetryer{} }); err != nil {
 		if isPreconditionFailed(err) {
-			return OutcomeRaced, nil
+			return r.afterLostPublish(ctx, sourceKey, playbackKey)
 		}
 		return "", fmt.Errorf("publish playback copy: %w", err)
 	}
 	return OutcomePublished, nil
+}
+
+// errStaleAfterRace makes the async invocation retry when a concurrent
+// worker won the publish with a copy of an older source version.
+var errStaleAfterRace = errors.New("playback copy lost a publish race to a stale source version")
+
+// afterLostPublish accepts a lost conditional PUT only when the winning copy
+// is bound to the source's current version.
+func (r *Remuxer) afterLostPublish(ctx context.Context, sourceKey, playbackKey string) (Outcome, error) {
+	latest, err := r.headSource(ctx, sourceKey)
+	if err != nil {
+		return "", err
+	}
+	_, current, err := r.headPlayback(ctx, playbackKey, latest)
+	if err != nil {
+		return "", err
+	}
+	if !current {
+		return "", errStaleAfterRace
+	}
+	return OutcomeRaced, nil
 }
 
 func (r *Remuxer) headSource(ctx context.Context, key string) (sourceVersion, error) {

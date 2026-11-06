@@ -31,6 +31,8 @@ type fakeS3 struct {
 	afterGet func(f *fakeS3)
 	puts     []*s3.PutObjectInput
 	putErr   error
+	// onPut runs before a failing PUT returns, simulating the concurrent winner.
+	onPut func(f *fakeS3)
 }
 
 func (f *fakeS3) HeadObject(_ context.Context, in *s3.HeadObjectInput, _ ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
@@ -60,6 +62,9 @@ func (f *fakeS3) GetObject(_ context.Context, in *s3.GetObjectInput, _ ...func(*
 func (f *fakeS3) PutObject(_ context.Context, in *s3.PutObjectInput, _ ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
 	f.puts = append(f.puts, in)
 	if f.putErr != nil {
+		if f.onPut != nil {
+			f.onPut(f)
+		}
 		return nil, f.putErr
 	}
 	body, _ := io.ReadAll(in.Body)
@@ -177,10 +182,25 @@ func TestRemuxDoesNotPublishWhenSourceChanges(t *testing.T) {
 
 func TestRemuxReportsRaceAndFailures(t *testing.T) {
 	r, s3fake, _ := newFixture(t)
+	// Lost the race to a copy of the current source version: accepted.
 	s3fake.putErr = &smithy.GenericAPIError{Code: "PreconditionFailed"}
+	delete(s3fake.objects, dst)
+	s3fake.onPut = func(f *fakeS3) {
+		f.objects[dst] = &fakeObject{etag: `"winner"`, meta: map[string]string{MetaSourceETag: `"e1"`, MetaSourceVersionID: "v1"}}
+	}
 	if outcome, err := r.Remux(context.Background(), src); err != nil || outcome != OutcomeRaced {
 		t.Fatalf("race outcome=%s err=%v", outcome, err)
 	}
+	// Lost the race to a copy of an older version: must error so the event retries.
+	delete(s3fake.objects, dst)
+	s3fake.onPut = func(f *fakeS3) {
+		f.objects[dst] = &fakeObject{etag: `"stale"`, meta: map[string]string{MetaSourceETag: `"e0"`, MetaSourceVersionID: "v0"}}
+	}
+	if _, err := r.Remux(context.Background(), src); !errors.Is(err, errStaleAfterRace) {
+		t.Fatalf("stale race err=%v", err)
+	}
+	s3fake.onPut = nil
+	delete(s3fake.objects, dst)
 	s3fake.putErr = errors.New("network")
 	if _, err := r.Remux(context.Background(), src); err == nil {
 		t.Fatal("publish failure must surface")
