@@ -77,14 +77,151 @@ class State:
     stages: tuple = ()
 
 
+def _ipv4_cidr(value):
+    try:
+        address, bits = value.split("/")
+        parts = [int(part) for part in address.split(".")]
+        bits = int(bits)
+    except (AttributeError, ValueError):
+        return None
+    if len(parts) != 4 or any(not 0 <= part <= 255 for part in parts) or not 0 <= bits <= 32:
+        return None
+    number = (parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]
+    mask = (0xFFFFFFFF << (32 - bits)) & 0xFFFFFFFF
+    return number & mask, bits
+
+
+def _cidr_covers(outer, inner):
+    """True when the outer IPv4 CIDR contains the inner one."""
+    a, b = _ipv4_cidr(outer), _ipv4_cidr(inner)
+    if a is None or b is None or a[1] > b[1]:
+        return False
+    mask = (0xFFFFFFFF << (32 - a[1])) & 0xFFFFFFFF
+    return (b[0] & mask) == a[0]
+
+
+def _allows_tcp_443(permission):
+    protocol = str(permission.get("IpProtocol"))
+    if protocol == "-1":
+        return True
+    return protocol in ("tcp", "6") and permission.get("FromPort", 65536) <= 443 <= permission.get("ToPort", -1)
+
+
+def _private_cidr(value):
+    return any(_cidr_covers(block, value) for block in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
+
+
+def _endpoint_policy_allows_proof_read(document):
+    if document in (None, ""):
+        return True  # No policy document means the default full-access endpoint policy.
+    try:
+        policy = json.loads(document) if isinstance(document, str) else document
+    except ValueError:
+        return False
+    statements = policy.get("Statement", []) if isinstance(policy, dict) else []
+    statements = statements if isinstance(statements, list) else [statements]
+    if any(isinstance(item, dict) and item.get("Effect") == "Deny" for item in statements):
+        return False
+    for item in statements:
+        if not isinstance(item, dict) or item.get("Effect") != "Allow" or "Condition" in item:
+            continue
+        actions = item.get("Action", [])
+        actions = actions if isinstance(actions, list) else [actions]
+        resources = item.get("Resource", [])
+        resources = resources if isinstance(resources, list) else [resources]
+        principal = item.get("Principal")
+        if (any(action in ("*", "secretsmanager:*", "secretsmanager:GetSecretValue") for action in actions)
+                and "*" in resources and (principal == "*" or principal == {"AWS": "*"})):
+            return True
+    return False
+
+
+def vpc_secret_path_verified(ec2, region, vpc_config, template_resources):
+    """Prove a VPC-attached consumer can reach Secrets Manager for the origin proof.
+
+    Every condition must be observed; anything unknown fails closed. Requires an
+    available Secrets Manager interface endpoint with private DNS in the
+    function's VPC (with VPC DNS support and hostnames), covering each function
+    AZ, whose security group admits TCP 443 from the VPC CIDR and whose policy
+    allows GetSecretValue, plus function security-group egress on 443 to the VPC.
+    """
+    if ec2 is None or not isinstance(vpc_config, dict):
+        return False
+    subnet_ids = vpc_config.get("SubnetIds")
+    groups = vpc_config.get("SecurityGroupIds")
+    if (not isinstance(subnet_ids, list) or not subnet_ids or not all(isinstance(item, str) for item in subnet_ids)
+            or not isinstance(groups, list) or not groups):
+        return False
+    try:
+        subnets = ec2.describe_subnets(SubnetIds=subnet_ids)["Subnets"]
+        vpcs = {item["VpcId"] for item in subnets}
+        if len(subnets) != len(set(subnet_ids)) or len(vpcs) != 1:
+            return False
+        vpc_id = vpcs.pop()
+        zones = {item["AvailabilityZone"] for item in subnets}
+        vpc_cidr = ec2.describe_vpcs(VpcIds=[vpc_id])["Vpcs"][0]["CidrBlock"]
+        for attribute, key in (("enableDnsSupport", "EnableDnsSupport"), ("enableDnsHostnames", "EnableDnsHostnames")):
+            if ec2.describe_vpc_attribute(VpcId=vpc_id, Attribute=attribute)[key]["Value"] is not True:
+                return False  # Endpoint private DNS cannot resolve without both.
+        endpoints = ec2.describe_vpc_endpoints(Filters=[
+            {"Name": "vpc-id", "Values": [vpc_id]},
+            {"Name": "service-name", "Values": [f"com.amazonaws.{region}.secretsmanager"]},
+            {"Name": "vpc-endpoint-type", "Values": ["Interface"]},
+        ])["VpcEndpoints"]
+        endpoint_ok = False
+        for endpoint in endpoints:
+            if endpoint.get("State") != "available" or endpoint.get("PrivateDnsEnabled") is not True:
+                continue
+            if not _endpoint_policy_allows_proof_read(endpoint.get("PolicyDocument")):
+                continue
+            endpoint_subnets = endpoint.get("SubnetIds") or []
+            covered = {item["AvailabilityZone"] for item in
+                       ec2.describe_subnets(SubnetIds=endpoint_subnets)["Subnets"]} if endpoint_subnets else set()
+            if not zones <= covered:
+                continue
+            group_ids = [item["GroupId"] for item in endpoint.get("Groups", [])]
+            rules = ec2.describe_security_groups(GroupIds=group_ids)["SecurityGroups"] if group_ids else []
+            if any(_allows_tcp_443(permission) and any(
+                    _private_cidr(ip.get("CidrIp", "")) and _cidr_covers(ip.get("CidrIp", ""), vpc_cidr)
+                    for ip in permission.get("IpRanges", []))
+                   for group in rules for permission in group.get("IpPermissions", [])):
+                endpoint_ok = True
+                break
+        if not endpoint_ok:
+            return False
+        literal = [item for item in groups if isinstance(item, str)]
+        egress = []
+        for item in groups:
+            if isinstance(item, str):
+                continue
+            reference = item.get("Fn::GetAtt", [None])[0] if isinstance(item, dict) and "Fn::GetAtt" in item else (
+                item.get("Ref") if isinstance(item, dict) else None)
+            resource = template_resources.get(reference) if isinstance(reference, str) else None
+            if not resource or resource.get("Type") != "AWS::EC2::SecurityGroup":
+                return False
+            egress.extend(resource.get("Properties", {}).get("SecurityGroupEgress", []))
+        if literal:
+            for group in ec2.describe_security_groups(GroupIds=literal)["SecurityGroups"]:
+                egress.extend(group.get("IpPermissionsEgress", []))
+        def egress_covers(rule):
+            ranges = [rule.get("CidrIp")] + [ip.get("CidrIp") for ip in rule.get("IpRanges", [])]
+            return _allows_tcp_443(rule) and any(isinstance(value, str) and _cidr_covers(value, vpc_cidr) for value in ranges)
+        return any(egress_covers(rule) for rule in egress)
+    except Exception:
+        return False
+
+
 class Cdk:
-    def __init__(self, region, account, profile=None, with_mcp=True):
+    def __init__(self, region, account, profile=None, with_mcp=True, ec2=None):
         self.env = dict(os.environ, CDK_DEFAULT_REGION=region, AWS_DEFAULT_REGION=region, AWS_REGION=region)
         if account:
             self.env["CDK_DEFAULT_ACCOUNT"] = account
         else:
             self.env.pop("CDK_DEFAULT_ACCOUNT", None)
         self.profile = profile
+        self.region = region
+        # Read-only EC2 client: proves a VPC-attached consumer's Secrets Manager path.
+        self.ec2 = ec2
         self.required_readers = {"ttobak-api", "ttobak-qa"} | ({"ttobak-mcp"} if with_mcp else set())
         self.assembly = ROOT / "build/verification/http-origin-assembly"
         self.revision = None
@@ -490,8 +627,11 @@ class Cdk:
                     and env.get("ORIGIN_VERIFY_SECRET_VERSION_ID") == {"Ref": "HttpOriginSecretVersionId"}
                     and "ORIGIN_VERIFY_SECRET" not in env, "ACTIVATION_CONSUMER_NOT_PINNED")
             # One GatewayStack deployment switches every consumer to ARN lookup. An
-            # ungranted or unreachable read would fail all origin checks closed at once.
-            require("VpcConfig" not in properties, "ACTIVATION_CONSUMER_VPC_UNVERIFIED")
+            # ungranted or unreachable read would fail all origin checks closed at once,
+            # so a VPC-attached consumer needs an observed private Secrets Manager path.
+            require("VpcConfig" not in properties or vpc_secret_path_verified(
+                self.ec2, self.region, properties["VpcConfig"], gateway.get("Resources", {})),
+                "ACTIVATION_CONSUMER_VPC_UNVERIFIED")
             role = self.role_identity(properties.get("Role"), "TtobakGatewayStack.template.json", templates, exports, arn=True)
             require(role is not None and any(
                 key in self.listed(functions[name].get("DependsOn")) and any(
@@ -1123,7 +1263,8 @@ def main():
             ("cfn", "cloudformation"), ("lambda", "lambda"), ("cloudfront", "cloudfront"),
             ("gateway", "apigatewayv2"), ("secrets", "secretsmanager"), ("iam", "iam"))}
         with_mcp = bool(context.get("ttobak:mcpResourceAudience"))
-        release = Release(clients, Cdk(args.region, account, args.profile, with_mcp=with_mcp), account=account,
+        release = Release(clients, Cdk(args.region, account, args.profile, with_mcp=with_mcp,
+                                       ec2=session.client("ec2", config=config)), account=account,
                           region=args.region, revision=revision,
                           with_mcp=with_mcp)
         if args.action == "check":

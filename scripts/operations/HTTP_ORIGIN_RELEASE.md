@@ -14,9 +14,18 @@ availability. Incomplete receipts never set it.
 
 The activation gate also requires every consumer function to depend on a
 GatewayStack policy granting `secretsmanager:GetSecretValue` on
-`HttpOriginSecretArn` to that function's role, and to stay outside a VPC. One
-GatewayStack deployment switches all consumers to ARN lookup, so a missing grant
-or unreachable endpoint would otherwise fail every origin check closed.
+`HttpOriginSecretArn` to that function's role. A VPC-attached consumer must
+also have an observed private Secrets Manager path, verified read-only through
+EC2 before any mutation (`vpc_secret_path_verified`): literal subnets in one VPC
+with DNS support and hostnames; an `available` Secrets Manager interface
+endpoint with private DNS covering every function AZ, whose security group
+admits TCP 443 from the VPC CIDR and whose policy allows `GetSecretValue`
+without conditions or denies; and function security-group egress on TCP 443 to
+the VPC. Unknown or unresolved values fail closed with
+`ACTIVATION_CONSUMER_VPC_UNVERIFIED`. One GatewayStack deployment switches all
+consumers to ARN lookup, so a missing grant or unreachable endpoint would
+otherwise fail every origin check closed; the post-deploy consumer invocation
+check remains the runtime proof.
 
 `http_origin_release.py` prepares a coordinated migration of the existing HTTP
 origin proof. The tool can be reviewed before the paired infrastructure and

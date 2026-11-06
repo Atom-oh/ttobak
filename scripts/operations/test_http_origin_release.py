@@ -584,6 +584,99 @@ class ReleaseTests(unittest.TestCase):
                     with self.assertRaisesRegex(ReleaseError, f"^{code}$"):
                         runner.validate_activation_templates()
 
+    def test_vpc_consumer_requires_an_observed_private_secrets_manager_path(self):
+        import http_origin_release as release
+
+        class FakeEc2:
+            def __init__(self):
+                self.endpoint = {"State": "available", "PrivateDnsEnabled": True, "PolicyDocument": None,
+                                 "SubnetIds": ["e-a", "e-b"], "Groups": [{"GroupId": "sg-endpoint"}]}
+                self.endpoint_ingress = [{"IpProtocol": "tcp", "FromPort": 443, "ToPort": 443,
+                                          "IpRanges": [{"CidrIp": "10.0.0.0/16"}]}]
+                self.dns = {"enableDnsSupport": True, "enableDnsHostnames": True}
+                self.client_egress = [{"IpProtocol": "tcp", "FromPort": 443, "ToPort": 443,
+                                       "IpRanges": [{"CidrIp": "10.0.0.0/16"}]}]
+                self.fail = False
+
+            def describe_subnets(self, SubnetIds):
+                if self.fail:
+                    raise RuntimeError("describe failed")
+                zone = {"f-a": "az-a", "f-b": "az-b", "e-a": "az-a", "e-b": "az-b"}
+                return {"Subnets": [{"SubnetId": item, "VpcId": "vpc-1", "AvailabilityZone": zone[item]}
+                                    for item in SubnetIds]}
+
+            def describe_vpcs(self, VpcIds):
+                return {"Vpcs": [{"VpcId": "vpc-1", "CidrBlock": "10.0.0.0/16"}]}
+
+            def describe_vpc_attribute(self, VpcId, Attribute):
+                key = "EnableDnsSupport" if Attribute == "enableDnsSupport" else "EnableDnsHostnames"
+                return {key: {"Value": self.dns[Attribute]}}
+
+            def describe_vpc_endpoints(self, Filters):
+                service = [item for item in Filters if item["Name"] == "service-name"][0]["Values"][0]
+                assert service == f"com.amazonaws.{REGION}.secretsmanager"
+                return {"VpcEndpoints": [self.endpoint] if self.endpoint else []}
+
+            def describe_security_groups(self, GroupIds):
+                groups = []
+                for item in GroupIds:
+                    if item == "sg-endpoint":
+                        groups.append({"GroupId": item, "IpPermissions": self.endpoint_ingress})
+                    else:
+                        groups.append({"GroupId": item, "IpPermissionsEgress": self.client_egress})
+                return {"SecurityGroups": groups}
+
+        config = {"SubnetIds": ["f-a", "f-b"], "SecurityGroupIds": [{"Fn::GetAtt": ["ApiSg", "GroupId"]}, "sg-client"]}
+        resources = {"ApiSg": {"Type": "AWS::EC2::SecurityGroup", "Properties": {"SecurityGroupEgress": [
+            {"CidrIp": "0.0.0.0/0", "IpProtocol": "tcp", "FromPort": 443, "ToPort": 443}]}}}
+        self.assertTrue(release.vpc_secret_path_verified(FakeEc2(), REGION, config, resources))
+        self.assertFalse(release.vpc_secret_path_verified(None, REGION, config, resources))
+        breaks = {
+            "no endpoint": lambda e: setattr(e, "endpoint", None),
+            "pending endpoint": lambda e: e.endpoint.update(State="pendingAcceptance"),
+            "no private DNS": lambda e: e.endpoint.update(PrivateDnsEnabled=False),
+            "VPC DNS off": lambda e: e.dns.update(enableDnsHostnames=False),
+            "AZ not covered": lambda e: e.endpoint.update(SubnetIds=["e-a"]),
+            "endpoint denies": lambda e: e.endpoint.update(PolicyDocument=json.dumps({"Statement": [
+                {"Effect": "Allow", "Principal": "*", "Action": "*", "Resource": "*"},
+                {"Effect": "Deny", "Principal": "*", "Action": "secretsmanager:GetSecretValue", "Resource": "*"}]})),
+            "endpoint policy conditional": lambda e: e.endpoint.update(PolicyDocument=json.dumps({"Statement": [
+                {"Effect": "Allow", "Principal": "*", "Action": "*", "Resource": "*",
+                 "Condition": {"StringEquals": {"aws:PrincipalAccount": "1"}}}]})),
+            "endpoint SG wrong port": lambda e: e.endpoint_ingress[0].update(FromPort=80, ToPort=80),
+            "endpoint SG public CIDR only": lambda e: e.endpoint_ingress[0].update(IpRanges=[{"CidrIp": "0.0.0.0/0"}]),
+            "describe error": lambda e: setattr(e, "fail", True),
+        }
+        for name, mutate in breaks.items():
+            with self.subTest(name):
+                fake = FakeEc2()
+                mutate(fake)
+                self.assertFalse(release.vpc_secret_path_verified(fake, REGION, config, resources))
+        for name, bad_config, bad_resources in (
+                ("unresolved subnet token", {"SubnetIds": [{"Ref": "Subnet"}], "SecurityGroupIds": ["sg-client"]}, resources),
+                ("no security groups", {"SubnetIds": ["f-a"], "SecurityGroupIds": []}, resources),
+                ("unknown SG reference", {"SubnetIds": ["f-a"], "SecurityGroupIds": [{"Ref": "Missing"}]}, resources),
+                ("no 443 egress", {"SubnetIds": ["f-a"], "SecurityGroupIds": [{"Fn::GetAtt": ["ApiSg", "GroupId"]}]},
+                 {"ApiSg": {"Type": "AWS::EC2::SecurityGroup", "Properties": {"SecurityGroupEgress": [
+                     {"CidrIp": "0.0.0.0/0", "IpProtocol": "tcp", "FromPort": 80, "ToPort": 80}]}}})):
+            with self.subTest(name):
+                self.assertFalse(release.vpc_secret_path_verified(FakeEc2(), REGION, bad_config, bad_resources))
+        # The template gate itself accepts a verified VPC consumer and rejects it without EC2 evidence.
+        for ec2, expect in ((FakeEc2(), None), (None, "ACTIVATION_CONSUMER_VPC_UNVERIFIED")):
+            gateway, frontend = self.activation_templates()
+            gateway["Resources"]["ApiSg"] = resources["ApiSg"]
+            gateway["Resources"]["ttobak-api"]["Properties"]["VpcConfig"] = config
+            runner = Cdk(REGION, ACCOUNT, ec2=ec2)
+            with tempfile.TemporaryDirectory() as directory:
+                runner.assembly = Path(directory)
+                (runner.assembly / "TtobakGatewayStack.template.json").write_text(json.dumps(gateway))
+                (runner.assembly / "TtobakFrontendStack.template.json").write_text(json.dumps(frontend))
+                if expect:
+                    with self.assertRaisesRegex(ReleaseError, f"^{expect}$"):
+                        runner.validate_activation_templates()
+                else:
+                    runner.validate_activation_templates()
+
     def test_actual_template_gate_requires_pins_and_rejects_plaintext_without_printing_it(self):
         runner = Cdk(REGION, ACCOUNT)
         gateway, frontend = self.activation_templates()
