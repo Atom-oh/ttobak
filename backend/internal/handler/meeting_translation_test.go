@@ -139,7 +139,7 @@ func TestMeetingTranslationAPITranscriptUsesSelectedSourceOnly(t *testing.T) {
 	}
 }
 
-func TestMeetingTranslationAPIAuthorizationAndRestrictedSummary(t *testing.T) {
+func TestMeetingTranslationAPIAuthorizationAndPublishedSummary(t *testing.T) {
 	f := newTranslationFixture(t, true)
 	f.user = "stranger"
 	if r := f.post(t, `{"part":"notes","target":"en"}`); r.StatusCode != 404 || errorCode(t, r) != "NOT_FOUND" || len(f.translator.texts) != 0 {
@@ -151,8 +151,9 @@ func TestMeetingTranslationAPIAuthorizationAndRestrictedSummary(t *testing.T) {
 	f.meeting.SharedToAccount = true
 	f.meeting.AccountID = "acct"
 	f.member = &model.AccountMember{AccountID: "acct", UserID: "viewer", SummaryPrivacyVersion: 1}
-	if r := f.post(t, `{"part":"notes","target":"en"}`); r.StatusCode != 409 || errorCode(t, r) != "SHARING_REGEN_REQUIRED" || len(f.translator.texts) != 0 {
-		t.Fatalf("restricted summary translated: %d %s", r.StatusCode, r.Body)
+	// Account members read and may translate the published summary.
+	if r := f.post(t, `{"part":"notes","target":"en"}`); r.StatusCode != 200 || len(f.translator.texts) == 0 {
+		t.Fatalf("published summary not translated for member: %d %s", r.StatusCode, r.Body)
 	}
 	f.user = ""
 	if r := f.post(t, `{"part":"notes","target":"en"}`); r.StatusCode != 401 {

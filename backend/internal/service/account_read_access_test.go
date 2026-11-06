@@ -143,8 +143,9 @@ func TestDescendantShareNeverEscalatesOrGrandfathers(t *testing.T) {
 	}
 	r.meeting.SummaryPrivacy = nil
 	meeting, _, err = resolveSharedAccess(context.Background(), r, "reader", "meeting")
-	if err != nil || meeting == nil || !meeting.SummaryReadRestricted || meeting.Content != "" {
-		t.Fatalf("new child grant read legacy private derivatives: %+v/%v", meeting, err)
+	// Published content is shared with inherited members regardless of provenance.
+	if err != nil || meeting == nil || meeting.SummaryReadRestricted || meeting.Content == "" {
+		t.Fatalf("inherited grant lost published derivatives: %+v/%v", meeting, err)
 	}
 	r.share.Origin = ""
 	meeting, permission, err = resolveSharedAccess(context.Background(), r, "reader", "meeting")

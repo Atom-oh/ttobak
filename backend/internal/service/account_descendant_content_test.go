@@ -167,15 +167,22 @@ func TestDescendantDocumentBoundedReadsAndRevoke(t *testing.T) {
 		t.Fatalf("revoked document cursor: %v", err)
 	}
 }
-func TestDescendantInsightsNeverGrandfatherLegacy(t *testing.T) {
+func TestDescendantInsightsShowPublishedMeetingsOnly(t *testing.T) {
 	t.Setenv(accountDescendantReadsEnv, "1")
 	t.Setenv(SummaryPrivacyReaderEnv, "0")
 	r := descendantContentFixture()
 	at := time.Unix(10, 0).UTC()
 	r.meetings["meeting"] = &model.Meeting{PK: "USER#owner", SK: "MEETING#meeting", UserID: "owner", MeetingID: "meeting", AccountID: "child", SharedToAccount: true, Content: "unsafe", EntityType: "MEETING"}
 	r.insightsByAccount["child"] = []model.AccountInsight{{PK: "ACCOUNT#child", SK: "INSIGHT#" + at.Format(time.RFC3339) + "#meeting#0", AccountID: "child", SourceID: "meeting", SourceUserID: "owner", SourceType: "meeting", OccurredAt: at, EntityType: model.EntityTypeInsight, Text: "copied unsafe summary"}}
-	if _, err := newAccountServiceWithRepo(r).ListAccountInsights(context.Background(), "reader", "child", time.Time{}, time.Time{}, nil); !errors.Is(err, ErrSummaryReadRestricted) {
-		t.Fatalf("legacy inherited insights: %v", err)
+	// Inherited members read published insights; publication still gates them.
+	insights, err := newAccountServiceWithRepo(r).ListAccountInsights(context.Background(), "reader", "child", time.Time{}, time.Time{}, nil)
+	if err != nil || len(insights) != 1 || insights[0].Text != "copied unsafe summary" {
+		t.Fatalf("published inherited insights: %+v/%v", insights, err)
+	}
+	r.meetings["meeting"].SharedToAccount = false
+	insights, err = newAccountServiceWithRepo(r).ListAccountInsights(context.Background(), "reader", "child", time.Time{}, time.Time{}, nil)
+	if err != nil || len(insights) != 0 {
+		t.Fatalf("unpublished inherited insights leaked: %+v/%v", insights, err)
 	}
 }
 
@@ -302,8 +309,8 @@ func TestDescendantMeetingCatalogNeverEscalates(t *testing.T) {
 	r.meetings["owner|meeting"] = &model.Meeting{UserID: "owner", MeetingID: "meeting", AccountID: "child", SharedToAccount: true, Title: "Published", Content: "unsafe", Insights: "unsafe"}
 	r.shares["reader|meeting"] = &model.Share{OwnerID: "owner", SharedToID: "reader", MeetingID: "meeting", Permission: model.PermissionEdit, Origin: model.ShareOriginAccount}
 	item, _, _, err := NewMeetingCatalogService(r).item(context.Background(), "reader", "all", "team", "child", repository.MeetingCatalogCandidate{OwnerID: "owner", MeetingID: "meeting"})
-	if err != nil || item == nil || item.Permission == nil || *item.Permission != "read" || item.Summary != "" {
-		t.Fatalf("inherited catalog privacy/permission: %+v/%v", item, err)
+	if err != nil || item == nil || item.Permission == nil || *item.Permission != "read" || item.Summary != "unsafe" {
+		t.Fatalf("inherited catalog summary/permission: %+v/%v", item, err)
 	}
 }
 

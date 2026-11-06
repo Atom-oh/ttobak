@@ -74,8 +74,8 @@ meetings through bounded candidate queries. It accepts `tab=all|shared`,
 Unicode code points and opaque `cursor` (at most 2,048 characters).
 Account filters classify accessible meetings; they never grant access.
 Reads neither materialize invitations nor create or update user profiles.
-Account-derived previews apply summary privacy restrictions, including the
-`SHARING_REGEN_REQUIRED` marker; independent owner/direct grants retain access.
+Account-team readers see published meetings' current derived previews, as
+owners do (ADR-049 2026-11-06 amendment); unpublished meetings are not listed.
 
 Each response is at most 10,000 encoded JSON bytes. Reassemble `dataJson`
 fragments for the same revision before parsing the complete group. Discovery

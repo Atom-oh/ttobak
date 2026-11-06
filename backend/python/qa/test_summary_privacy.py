@@ -2,13 +2,18 @@ import hashlib
 import json
 import unittest
 
-from summary_privacy import needs_summary_guard, project_meeting, safe_summary
+from summary_privacy import enforce_summary_guard, needs_summary_guard, project_meeting, safe_summary
 from test_source_contract import _SourceFixture
 from source_revision import resource_identity
 from indexed_retrieval import hydrate_candidates
 
 
 class SummaryPrivacyPolicyTests(unittest.TestCase):
+    def test_account_member_guard_is_off_for_every_member_shape(self):
+        for member in (None, {}, {'summaryPrivacyVersion': 1}, {'summaryPrivacyVersion': True},
+                       {'addedAt': '2026-10-11T12:00:00Z'}, {'addedAt': 'not-a-date'}):
+            self.assertFalse(enforce_summary_guard(member))
+
     def test_absence_is_not_membership_eligibility(self):
         cutoff = '2026-10-12T12:00:00Z'
         self.assertFalse(needs_summary_guard({'addedAt': '2026-10-11T12:00:00Z'}, cutoff))
@@ -57,28 +62,21 @@ class SummaryPrivacySourceTests(_SourceFixture, unittest.TestCase):
                                   'accountId': 'account', 'userId': 'reader', 'role': 'SA'})
         return self.table.items[('ACCOUNT#account', 'MEMBER#reader')]
 
-    def test_new_membership_projects_raw_source_and_invalidates_prior_revision(self):
+    def test_stamped_membership_reads_published_summary_without_revision_change(self):
+        # Account publication shares current derived content with every member
+        # (ADR-049 2026-11-06 amendment); the privacy marker no longer projects.
         member = self.account_meeting()
         before = self.source_reader.read('reader', 'USER#owner', 'MEETING#meeting')
         member['summaryPrivacyVersion'] = 1
-        self.table.reads.clear()
         after = self.source_reader.read('reader', 'USER#owner', 'MEETING#meeting')
-        self.assertNotEqual(before['revision'], after['revision'])
+        self.assertEqual(before['revision'], after['revision'])
         text = self.source_reader.meeting_text(after)
-        self.assertIn('raw note', text)
-        self.assertIn('raw transcript', text)
-        self.assertNotIn('PRIVATE_PREDECESSOR_CANARY', text)
-        self.assertNotIn('PRIVATE_TASK_CANARY', text)
-        self.assertIn('summaryReadRestriction', after['fields'])
-        for key, request in self.table.reads:
-            if key == ('USER#owner', 'MEETING#meeting'):
-                names = request.get('ExpressionAttributeNames', {})
-                fields = {names.get(v.strip(), v.strip()) for v in request.get('ProjectionExpression', '').split(',')}
-                self.assertTrue(request.get('ProjectionExpression'), 'restricted source used a whole-item read')
-                self.assertFalse({'content', 'actionItems', 'insights', 'tags'} & fields)
+        for value in ('raw note', 'raw transcript', 'PRIVATE_PREDECESSOR_CANARY', 'PRIVATE_TASK_CANARY'):
+            self.assertIn(value, text)
+        self.assertNotIn('summaryReadRestriction', after['fields'])
         self.s3.get_object.assert_not_called()
 
-    def test_vector_score_on_withheld_text_cannot_reintroduce_identity(self):
+    def test_vector_score_on_published_summary_hydrates_member_view(self):
         member = self.account_meeting()
         candidate = self.indexed(sk='MEETING#meeting', filename='meeting.md', text='PRIVATE_PREDECESSOR_CANARY')
         member['summaryPrivacyVersion'] = 1
@@ -86,14 +84,13 @@ class SummaryPrivacySourceTests(_SourceFixture, unittest.TestCase):
         identities = {('USER#owner', 'MEETING#meeting'): identity}
         candidates = [{'uri': candidate['location']['s3Location']['uri'],
                        'score': 0.9, 'metadata': candidate['metadata']}]
-        self.assertEqual(hydrate_candidates(self.source_reader, 'reader', 'PRIVATE_PREDECESSOR_CANARY',
-                                            candidates, identities, 3), [])
-        raw = hydrate_candidates(self.source_reader, 'reader', 'raw note', candidates, identities, 3)
-        self.assertEqual(len(raw), 1)
-        self.assertIn('summaryReadRestriction', raw[0]['meeting'])
-        self.assertNotIn('PRIVATE_PREDECESSOR_CANARY', str(raw))
+        results = hydrate_candidates(self.source_reader, 'reader', 'PRIVATE_PREDECESSOR_CANARY',
+                                     candidates, identities, 3)
+        self.assertEqual(len(results), 1)
+        self.assertNotIn('summaryReadRestriction', results[0]['meeting'])
+        self.assertIn('PRIVATE_PREDECESSOR_CANARY', str(results))
 
-    def test_kb_tool_retains_restriction_and_distinguishes_withheld_from_empty_fields(self):
+    def test_kb_tool_shows_published_summary_fields_to_members(self):
         import tools
         member = self.account_meeting()
         candidate = self.indexed(sk='MEETING#meeting', filename='meeting.md', text='historical text')
@@ -104,25 +101,15 @@ class SummaryPrivacySourceTests(_SourceFixture, unittest.TestCase):
         results = hydrate_candidates(self.source_reader, 'reader', 'raw note', rows,
                                      {('USER#owner', 'MEETING#meeting'): identity}, 3)
         self.assertEqual(len(results), 1)
-        # Even a malformed upstream projection must not publish withheld bytes.
-        results[0]['meeting'].update(content='PRIVATE_PREDECESSOR_CANARY',
-                                     actionItems='PRIVATE_TASK_CANARY')
         text, sources = tools.execute_tool('search_knowledge_base', {'query': 'raw note'},
                                           {'retrieve_from_kb': lambda *a, **kw: results})
         snapshot = json.loads(text.split('\n')[-1])
-        self.assertEqual(snapshot['summaryReadRestriction'], 'SHARING_REGEN_REQUIRED')
-        self.assertEqual(snapshot['provenance'], results[0]['provenance'])
+        self.assertNotIn('summaryReadRestriction', snapshot)
         self.assertEqual(sources, [results[0]['uri']])
         self.assertEqual(snapshot['notes']['text'], 'raw note')
-        self.assertFalse(snapshot['notes']['partial'])
-        self.assertIn('get_meeting_detail', text)
-        for field in ('content', 'actionItems'):
-            self.assertEqual(snapshot[field], {'available': False, 'reason': 'SHARING_REGEN_REQUIRED',
-                                               'partial': True})
-        self.assertNotIn('PRIVATE_PREDECESSOR_CANARY', text)
-        self.assertNotIn('PRIVATE_TASK_CANARY', text)
-        self.assertIn('발췌 또는 읽기 제한', text)
-        self.assertNotIn('partial=true는 일부 발췌입니다.', text)
+        self.assertIn('PRIVATE_PREDECESSOR_CANARY', snapshot['content']['text'])
+        self.assertIn('PRIVATE_TASK_CANARY', snapshot['actionItems']['text'])
+        self.assertNotIn('SHARING_REGEN_REQUIRED', text)
         self.s3.get_object.assert_not_called()
         self.runtime.retrieve.assert_not_called()
 

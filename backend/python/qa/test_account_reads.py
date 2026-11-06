@@ -383,16 +383,17 @@ class TestStrictAccountReads(unittest.TestCase):
                     self.reader().get_account_insights('reader', 'Account')
                 self.assertFalse(any(key[1].startswith('INSIGHT#') for key, _ in self.table.reads))
 
-    def test_stamped_membership_rejects_old_derived_insight_before_body_read(self):
+    def test_stamped_membership_reads_published_derived_insight(self):
+        # Account publication shares derived insights with every member shape.
         self.account()
         self.meeting()
         self.insight()
         self.table.items[('ACCOUNT#a', 'MEMBER#reader')]['summaryPrivacyVersion'] = 1
-        with mock.patch.dict('os.environ', {'SUMMARY_PRIVACY_READER_ENABLED': '0'}):
-            result = self.reader().get_account_insights('reader', 'Account')
-        self.assertEqual(result.value['insights'], [])
-        self.assertEqual(result.value['summaryReadRestriction'], 'SHARING_REGEN_REQUIRED')
-        self.assertFalse(any(key[1].startswith('INSIGHT#') for key, _ in self.table.reads))
+        for enabled in ('0', '1'):
+            with mock.patch.dict('os.environ', {'SUMMARY_PRIVACY_READER_ENABLED': enabled}):
+                result = self.reader().get_account_insights('reader', 'Account')
+            self.assertEqual(len(result.value['insights']), 1)
+            self.assertNotIn('summaryReadRestriction', result.value)
 
     def test_insight_generation_change_after_body_read_invalidates_complete_read(self):
         import hashlib
