@@ -23376,6 +23376,29 @@ var TtobakApi = class {
   async listAccounts() {
     return this.get("/api/accounts");
   }
+  async listAccountContacts(accountId, options) {
+    const query = new URLSearchParams({ limit: String(options.limit) });
+    if (options.cursor !== void 0) query.set("cursor", options.cursor);
+    return this.request("GET", `/api/accounts/${identifier(accountId, "accountId")}/contacts?${query}`, void 0, MAX_READING_BYTES);
+  }
+  get requiresContactIdempotency() {
+    return !!this.options.privateTransport;
+  }
+  async createAccountContact(accountId, contact, idempotencyKey, replayOnly = false) {
+    if (!this.options.privateTransport && idempotencyKey !== void 0) throw new Error("idempotencyKey requires private connector transport");
+    if (this.options.privateTransport && (!idempotencyKey || !/^[A-Za-z0-9_-]{1,128}$/.test(idempotencyKey))) throw new Error("INVALID_ARGUMENT: idempotencyKey required");
+    const body = this.options.privateTransport ? { contact, idempotencyKey } : contact;
+    return this.request("POST", `/api/accounts/${identifier(accountId, "accountId")}/contacts${replayOnly ? "?replay=1" : ""}`, body, MAX_READING_BYTES);
+  }
+  async replayAccountContact(accountId, contact, idempotencyKey) {
+    if (!this.options.privateTransport) return null;
+    try {
+      return await this.createAccountContact(accountId, contact, idempotencyKey, true);
+    } catch (e) {
+      if (e instanceof Error && /^HTTP 404(?:\s|:)/.test(e.message)) return null;
+      throw e;
+    }
+  }
   async readBilling(options) {
     const { section, ...args } = options;
     const checked = billingReadingOptions(Object.fromEntries(Object.entries(args).filter(([, v]) => v !== void 0)), section);

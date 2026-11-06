@@ -13,6 +13,7 @@ import type { NavigationKind } from './navigation-catalog.js';
 import type { MeetingCatalogOptions } from './meeting-catalog.js';
 import type { VaultReadingOptions } from './vault-reading.js';
 import { billingReadingOptions, type BillingReadingOptions } from './billing-reading.js';
+import type { ContactInput, ContactListOptions } from './account-contacts.js';
 
 // Extension -> MIME type, shared by both upload tools for inference only --
 // each tool advertises its own narrower format list (kb_upload: pdf/md/pptx/
@@ -268,6 +269,27 @@ export class TtobakApi {
 
   async listAccounts() {
     return this.get('/api/accounts');
+  }
+
+  async listAccountContacts(accountId: string, options: ContactListOptions) {
+    const query = new URLSearchParams({ limit: String(options.limit) });
+    if (options.cursor !== undefined) query.set('cursor', options.cursor);
+    return this.request('GET', `/api/accounts/${identifier(accountId, 'accountId')}/contacts?${query}`, undefined, MAX_READING_BYTES);
+  }
+
+  get requiresContactIdempotency() { return !!this.options.privateTransport; }
+
+  async createAccountContact(accountId: string, contact: ContactInput, idempotencyKey?: string, replayOnly = false) {
+    if (!this.options.privateTransport && idempotencyKey !== undefined) throw new Error('idempotencyKey requires private connector transport');
+    if (this.options.privateTransport && (!idempotencyKey || !/^[A-Za-z0-9_-]{1,128}$/.test(idempotencyKey))) throw new Error('INVALID_ARGUMENT: idempotencyKey required');
+    const body = this.options.privateTransport ? { contact, idempotencyKey } : contact;
+    return this.request('POST', `/api/accounts/${identifier(accountId, 'accountId')}/contacts${replayOnly ? '?replay=1' : ''}`, body, MAX_READING_BYTES);
+  }
+
+  async replayAccountContact(accountId: string, contact: ContactInput, idempotencyKey: string) {
+    if (!this.options.privateTransport) return null;
+    try { return await this.createAccountContact(accountId, contact, idempotencyKey, true); }
+    catch (e) { if (e instanceof Error && /^HTTP 404(?:\s|:)/.test(e.message)) return null; throw e; }
   }
 
   async readBilling(options: BillingReadingOptions) {

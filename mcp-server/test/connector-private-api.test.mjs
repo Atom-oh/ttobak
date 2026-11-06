@@ -290,3 +290,51 @@ test('putDocument exposes private retry receipts and rejects unsupported legacy 
   await assert.rejects(legacy.putDocument(undefined, noteRequest.body), /idempotent/i);
   assert.equal(calls.length, 1);
 });
+
+test('private contact operations use approved stable writes and bounded reads', async () => {
+  const seen = [];
+  const transport = privateApiTransport(writeIdentity, key, apiARN, qaARN, {
+    now: () => 1800000000, resolve: async () => writeGrants(), requestId: () => 'read-id',
+    kms: { send: async () => ({ KeyId: key, SigningAlgorithm: 'RSASSA_PSS_SHA_256', Signature: Buffer.alloc(256) }) },
+    lambda: { send: async cmd => {
+      const frame = JSON.parse(Buffer.from(cmd.input.Payload).toString());
+      seen.push(frame);
+      return response({ contacts: [] });
+    } },
+  });
+  await transport({ method: 'GET', path: '/api/accounts/acct/contacts?limit=25', body: null, maxResponseBytes: 32000 });
+  await transport({ method: 'POST', path: '/api/accounts/acct/contacts', body: { contact: { name: 'A' }, idempotencyKey: 'stable' }, maxResponseBytes: 32000 });
+  assert.equal(seen[0].operation, 'api.accountContacts.list');
+  assert.equal(seen[1].operation, 'api.accountContacts.create');
+  assert.equal(seen[1].requestId, 'stable');
+  const envelope = JSON.parse(Buffer.from(seen[1].delegation, 'base64url'));
+  assert.equal(JSON.parse(Buffer.from(envelope.payload, 'base64url')).approvalGeneration, 7);
+});
+
+test('private contact size failures are retryable and write approvals are rechecked', async () => {
+  let lookups = 0, calls = 0;
+  const transport = privateApiTransport(writeIdentity, key, apiARN, qaARN, {
+    now: () => 1800000000,
+    resolve: async () => { lookups++; return lookups > 3 ? { ...writeGrants(), approval: { ...writeGrants().approval, revoked: true } } : writeGrants(); },
+    kms: { send: async () => ({ KeyId: key, SigningAlgorithm: 'RSASSA_PSS_SHA_256', Signature: Buffer.alloc(256) }) },
+    lambda: { send: async () => { calls++; return { StatusCode: 200, Payload: Buffer.from(JSON.stringify({ statusCode: 413, body: '{}' })) }; } },
+  });
+  await assert.rejects(transport({ method: 'GET', path: '/api/accounts/acct/contacts?limit=25', body: null, maxResponseBytes: 32000 }), /^Error: RESULT_TOO_LARGE:/);
+  await assert.rejects(transport({ method: 'POST', path: '/api/accounts/acct/contacts', body: { contact: { name: 'A' }, idempotencyKey: 'key' }, maxResponseBytes: 32000 }), /INVALID_GRANT/);
+  assert.equal(calls, 2);
+});
+
+test('contact replay probes keep the exact create body and use a signed read-only selector', async () => {
+  const seen = [];
+  const api = new TtobakApi({ getIdToken: async () => { throw new Error('unexpected bearer'); } }, 'https://example.invalid', {
+    privateTransport: async request => {
+      seen.push(request);
+      if (request.path.endsWith('?replay=1')) throw new Error('HTTP 404: private request rejected');
+      return { contactId: 'contact' };
+    },
+  });
+  await api.createAccountContact('acct', { name: 'A' }, 'key');
+  assert.equal(await api.replayAccountContact('acct', { name: 'A' }, 'key'), null);
+  assert.equal(seen[1].path, seen[0].path + '?replay=1');
+  assert.equal(JSON.stringify(seen[0].body), JSON.stringify(seen[1].body));
+});
