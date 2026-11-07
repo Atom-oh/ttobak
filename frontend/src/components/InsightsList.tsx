@@ -1,5 +1,6 @@
 'use client';
 
+import { confirmDialog } from '@/lib/dialog';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { insightsApi, researchApi } from '@/lib/api';
@@ -227,7 +228,7 @@ export function InsightsList() {
 
   const handleDelete = async (doc: CrawledDocument) => {
     if (!doc.sourceId || !doc.docHash) return;
-    if (!window.confirm('이 인사이트를 삭제할까요? 되돌릴 수 없습니다.')) return;
+    if (!await confirmDialog('이 인사이트를 삭제할까요? 되돌릴 수 없습니다.')) return;
     const key = `${doc.sourceId}#${doc.docHash}`;
     setDeletingKeys((prev) => new Set(prev).add(key));
     setError(null);
