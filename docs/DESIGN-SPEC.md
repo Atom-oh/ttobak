@@ -107,11 +107,14 @@ through Rust. `usePostRecording` accepts a tagged native-path/browser-Blob paylo
 Never load a finished native recording into the WebView just to upload it.
 
 In the Mac app, `MeetingDetectionBanner` (layout level) offers start/dismiss when
-the app detects a meeting using the microphone, and stop/keep recording after that
-meeting ends while recording. Nothing records without the user's confirmation; the
+the app detects a meeting, and after that meeting ends during a native recording
+counts down 30 seconds before stopping and uploading, with keep recording and stop
+now actions. The native waveform is drawn on a -60..-10 dBFS scale. Nothing records without the user's confirmation; the
 start reuses the native control path to the record page. Settings shows the
 `MeetingDetectionSettings` toggle only in an app build that supports detection
-(ADR-061).
+(ADR-061). In System Audio mode, `NativeMicSelector` offers automatic (follow the
+meeting app's microphone) or a specific device, remembers the choice per viewer,
+and the recording status names the microphone in use.
 
 Capture/processing state and upload failures remain visible through the post-record
 banner; a failed upload must remain retryable. Progress timeouts measure 60 seconds
@@ -184,6 +187,12 @@ limited to committed chunks, and browser data deletion/eviction can remove them.
 An expired empty recording still offers server-checkpoint recovery; a missing
 checkpoint directs the user to local recordings instead of suggesting deletion.
 
+Summary timestamp links scroll to the transcript turn and, when that turn has a
+start time inside the playing source, seek the meeting audio there and play.
+Browser-recorded WebM can lack Duration/Cues; the player then uses the meeting's
+server duration for single-file audio. Multi-part meetings play the first part,
+so merged-timeline times beyond its known length only scroll.
+
 When the API reports crop support, owners of single-file recordings can choose a start/end time, preview the range,
 and create a private cropped meeting. Cropping retains the original meeting and
 copies saved notes/participants, but not attachments, relationships, shares, human
@@ -253,8 +262,9 @@ change. Empty pages with nextCursor can still have later matches. Hierarchy and
 classification never grant access to private content (ADR-036).
 
 Activated ancestor access displays a read-only label and its granting Account
-(ADR-058); published meetings are the exception and show edit controls to
-every member (ADR-016 2026-11-06 amendment). Suppress inherited-only mutation controls and keep invitation,
+(ADR-058); published meetings are the exception and show edit and management
+controls (not delete or audio upload) to every member (ADR-016 2026-11-06
+amendment). Otherwise suppress inherited-only mutation controls and keep invitation,
 publication, upload/link and dictionary selectors restricted to direct
 membership. Billing is the ADR-060 exception: the BFF's authorized entries allow
 direct and ancestor team members to view and upload. Its COT selector describes
@@ -507,8 +517,12 @@ refreshing the comparison baseline is a separate user action. Background refresh
 must not silently advance a dirty editor's baseline. Dirty notes block re-summary.
 Delayed detail responses cannot roll back acknowledged notes or association
 changes. Notes editing requires server capability flags during mixed-version
-rollout. Meeting-detail account management is owner-only, with one explicit
-link-and-share button calling the existing team publication endpoint. The label
+rollout. Meeting-detail management (account, sharing, links, projects, file uploads,
+crop, rediarize, recovery) follows the server `canManage` flag: the creator or a
+live account-team member (ADR-016 2026-11-06 amendment). Delete stays
+creator-only on desktop and mobile; member-created shares show the sharer. Account
+management uses one explicit link-and-share button calling the existing team
+publication endpoint. The label
 and help text explain that the selected account team receives the meeting and
 its extracted insights. An already published account offers a share refresh;
 failures remain visible and retryable. Recording preparation and existing private

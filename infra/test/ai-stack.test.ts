@@ -260,6 +260,32 @@ describe('AiStack', () => {
     }
   });
 
+  test('audio remux reads audio and writes only playback copies (ADR-062)', () => {
+    const statements = Object.values(template.findResources('AWS::IAM::Policy'))
+      .filter((policy) => JSON.stringify(policy.Properties.Roles).includes('TtobakAudioRemuxRole'))
+      .flatMap((policy) => policy.Properties.PolicyDocument.Statement);
+    const s3Statements = statements.filter((entry) =>
+      [entry.Action].flat().some((action: string) => action.startsWith('s3:')));
+    const resourcesFor = (predicate: (action: string) => boolean) => JSON.stringify(s3Statements
+      .filter((entry) => [entry.Action].flat().some(predicate))
+      .map((entry) => entry.Resource));
+    const reads = resourcesFor((action) => action.startsWith('s3:GetObject'));
+    expect(reads).toContain('/audio/*');
+    expect(reads).toContain('/audio-playback/*');
+    const writes = resourcesFor((action) => action.startsWith('s3:PutObject') || action.startsWith('s3:DeleteObject'));
+    expect(writes).toContain('/audio-playback/*');
+    expect(writes).not.toContain('"/audio/*"');
+    expect(writes).not.toMatch(/\/audio\/\*/);
+    for (const entry of s3Statements) {
+      for (const resource of [entry.Resource].flat()) {
+        expect(resource).not.toBe('*');
+        const serialized = JSON.stringify(resource);
+        if (serialized.includes('/*')) expect(serialized).toMatch(/\/audio(?:-playback)?\/\*/);
+      }
+    }
+    expect(statements.some((entry) => [entry.Action].flat().some((action: string) => action.startsWith('dynamodb:')))).toBe(false);
+  });
+
   test('qa reads current source prefixes and versions without object writes or deletes', () => {
     const policies = Object.values(template.findResources('AWS::IAM::Policy'));
     const statements = policies
