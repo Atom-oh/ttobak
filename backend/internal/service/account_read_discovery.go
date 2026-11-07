@@ -8,12 +8,61 @@ import (
 	"net/url"
 	"sort"
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 )
 
 const maxReadableAccounts = 1000
+
+// Account list pages stop after this many discovery steps or this much
+// traversal time, whichever comes first. Each step performs at most one
+// index/child query; one page still always advances by at least one step.
+const (
+	accountListDiscoveryStepBudget = 256
+	accountListDiscoveryTimeBudget = 2 * time.Second
+	accountRecheckConcurrency      = 8
+)
+
+// discoveryReads returns the request-scoped traversal reader for one page.
+func (s *AccountService) discoveryReads() interface {
+	accountReadMembershipRepo
+	accountReadHierarchyRepo
+} {
+	if cached, ok := newDiscoveryReadCache(s.repo).(*discoveryReadCache); ok {
+		return cached
+	}
+	return s.repo
+}
+
+// recheckAll runs independent fresh rechecks with bounded concurrency and
+// returns the error of the earliest failing receipt, matching sequential order.
+func recheckAll(ctx context.Context, concurrency int, receipts [][2]string, check func(id, revision string) error) error {
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	errs := make([]error, len(receipts))
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	for i, receipt := range receipts {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, id, revision string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			errs[i] = check(id, revision)
+		}(i, receipt[0], receipt[1])
+	}
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return ctx.Err()
+}
 
 type accountReadUserListRepo interface {
 	ListAccountsForUser(context.Context, string) ([]model.AccountMember, error)
@@ -311,20 +360,27 @@ func (s *AccountService) listAccountsDiscoveryPage(ctx context.Context, user str
 	page := &AccountListPage{Accounts: []model.AccountSummary{}, OverlapPossible: true, UnionKey: "accountId"}
 	observed := [][2]string{}
 	done := false
-	// A fixed four-step budget is independent of total tree width. Batching
-	// empty ascent/index pages also preserves the frontend's page-count bound.
-	for steps := 0; steps < 4 && len(page.Accounts) < size && !done; steps++ {
-		ids, complete, err := nextReadableAccountCandidate(ctx, s.repo, user, c.Discovery)
+	// Traversal reads go through a request-scoped cache; every returned row and
+	// the cursor anchor are rechecked below against the uncached repository.
+	reads := s.discoveryReads()
+	started := time.Now()
+	// The step and time budgets are fixed, so per-page work stays independent of
+	// total tree width while one page covers a typical account tree.
+	for steps := 0; steps < accountListDiscoveryStepBudget && len(page.Accounts) < size && !done; steps++ {
+		if steps > 0 && time.Since(started) >= accountListDiscoveryTimeBudget {
+			break
+		}
+		ids, complete, err := nextReadableAccountCandidate(ctx, reads, user, c.Discovery)
 		if err != nil {
 			return nil, err
 		}
 		done = complete
 		for _, id := range ids {
-			g, err := s.requireReadGrant(ctx, user, id)
+			g, err := requireReadGrantVia(ctx, reads, user, id)
 			if err != nil {
 				return nil, err
 			}
-			a, err := s.repo.GetAccount(ctx, id)
+			a, err := reads.GetAccount(ctx, id)
 			if err != nil {
 				return nil, err
 			}
@@ -343,12 +399,11 @@ func (s *AccountService) listAccountsDiscoveryPage(ctx context.Context, user str
 			observed = append(observed, [2]string{c.Anchor, c.Revision})
 		}
 	}
-	for _, receipt := range observed {
-		if err := recheckAccount(receipt[0], receipt[1]); err != nil {
-			return nil, err
-		}
+	// The anchor is the last returned row unless this page returned none.
+	if anchor := [2]string{c.Anchor, c.Revision}; len(observed) == 0 || observed[len(observed)-1] != anchor {
+		observed = append(observed, anchor)
 	}
-	if err := recheckAccount(c.Anchor, c.Revision); err != nil {
+	if err := recheckAll(ctx, s.recheckConcurrency, observed, recheckAccount); err != nil {
 		return nil, err
 	}
 	if !done {
