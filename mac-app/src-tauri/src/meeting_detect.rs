@@ -120,7 +120,22 @@ fn watch(app: AppHandle, state: Arc<MeetingState>) {
             .snapshot()
             .recording;
         let now_ms = epoch.elapsed().as_millis() as u64;
-        let events = state.detector.lock().observe(now_ms, &sources, recording);
+        // Zoom's own UI ends its meeting at once (window closed or Zoom quit)
+        // instead of waiting for its audio to stay silent for the grace period.
+        let zoom = crate::meeting::Source {
+            kind: crate::meeting::MeetingKind::Zoom,
+            browser: None,
+        };
+        let zoom_involved = sources.contains(&zoom) || state.detector.lock().tracks(&zoom);
+        let ended: Vec<String> = if zoom_involved && crate::zoom_mute::meeting_over() {
+            vec![zoom.key()]
+        } else {
+            Vec::new()
+        };
+        let events = state
+            .detector
+            .lock()
+            .observe_with_ended(now_ms, &sources, recording, &ended);
         for event in events {
             announce(&app, &state, &event);
         }

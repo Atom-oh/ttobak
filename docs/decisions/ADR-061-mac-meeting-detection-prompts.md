@@ -71,8 +71,31 @@ without a user confirmation.
 - A recording uses the microphone the user picks in System Audio mode, or by
   default the input device the meeting app is capturing from (process
   `Devices`, input scope), else the system default. This keeps multi-microphone
-  and clamshell setups aligned with what Zoom hears. Switching the microphone
-  during a recording is not yet supported.
+  and clamshell setups aligned with what Zoom hears. `switch_recording_input`
+  changes the microphone during a recording: the tap, WAV and worker continue
+  while only the aggregate is rebuilt (a sub-second gap). A device that cannot
+  run at the recording's sample rate is refused, and a failed start restores
+  the previous device.
+- The recording follows Zoom's own mute, as Notion's meeting notes do
+  (observed in Notion's shipped `mac_utils.node`: an Accessibility observer of
+  Zoom's mute menu item, toolbar and tiles). `zoom_mute.rs` polls Zoom's menu
+  bar every 300 ms for the "Mute Audio"/"Unmute Audio" item, using labels from
+  Zoom's own `Localizable.strings` in every language, and mixes the microphone
+  at zero gain while Zoom shows the user muted. Once a recording has followed
+  Zoom, a confirmed end (Zoom quit, or neither the `zm.meeting.window.main`
+  window nor an audio item remains) silences the microphone at once, and an
+  unreadable stretch over 3 s does too: Zoom no longer hears the user. A
+  recording that never saw a Zoom state records the microphone as before.
+  The same confirmed end lets detection end the Zoom meeting without the 20 s
+  audio grace. This needs Accessibility permission; without it the start
+  response warns and the microphone is always recorded. Ad-hoc re-signing
+  invalidates the grant, as it does other TCC grants.
+- When the Mac is about to sleep during a recording (e.g. the lid closes
+  without a stop), `sleep.rs` stops it through the control path with the
+  upload requested and delays sleep until the stop is answered or 20 s pass.
+  On wake the app emits `native-system-wake` and the record page retries an
+  upload left in the error state. Clamshell use on an external display does
+  not sleep and keeps recording.
 
 ## Consequences
 
@@ -85,3 +108,7 @@ without a user confirmation.
   microphone; the prompt still requires confirmation.
 - No CI covers this module; the Core Audio probe and AppleScript path need
   manual verification on macOS.
+- Push-to-talk (holding Space while muted) is not reflected in Zoom's menu, so
+  that speech is not recorded. Zoom's web client and other meeting apps keep
+  recording the microphone regardless of their mute.
+- An upload interrupted by sleep completes only after wake.

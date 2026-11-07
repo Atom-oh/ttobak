@@ -36,6 +36,7 @@ stub compiler for objc2's build script; that proves types, not runtime behavior.
 |---|---|
 | start_recording | meeting_id, input_device_uid?; returns temp_path, optional warnings (e.g. no microphone), input {uid, name, reason requested/meeting/default, app?} |
 | list_input_devices | input-capable non-virtual devices {uid, name, channels, is_default, used_by meeting apps} (ADR-061) |
+| switch_recording_input | input_device_uid?; switches the running recording's microphone and returns the new input; refuses a device that cannot run at the WAV rate (ADR-061) |
 | stop_recording | returns temp_path, duration_ms, byte_size, stop_timed_out, optional warnings (silent source, dropped buffers) |
 | recording_status | path; recording, temp_path, elapsed_ms, finalizing_for_path, optional warnings once that path finalized (covers stops that timed out) |
 | upload_recording | path, uploadUrl, contentType; returns HTTP status code |
@@ -55,7 +56,9 @@ Events are native-audio-level (RMS), native-upload-progress (loaded/total), and
 native-pcm-chunk (16kHz mono PCM for captions); native-control-request
 ({requestId, action start|stop, params, origin mcp|detection}) goes to the main window only.
 native-meeting-detected/native-meeting-ended ({detectionId, kind, label, browser,
-recording}) also go to the main window only. Remote event capability grants must
+recording}) also go to the main window only.
+native-mic-muted ({muted, app, reason muted|meeting_ended}) reports the Zoom mute
+gate; native-system-wake follows a system wake. Remote event capability grants must
 match the actual loaded origin; do not add speculative origins. Tauri checks the
 ACL for every command called from the remote SPA: each command must be listed in
 `build.rs` COMMANDS and its `allow-*` permission granted in
@@ -100,6 +103,12 @@ ACL for every command called from the remote SPA: each command must be listed in
   `start_recording` directly. Core Audio polls run without recorder locks. The
   browser AppleScript is a fixed string returning only meeting-URL prefixes; never
   log tab URLs or widen the prefix list without updating `classify_meeting_url`.
+- The Zoom mute gate (`zoom_mute.rs`) reads Zoom through Accessibility off the
+  IOProc thread and only flips an atomic the IOProc reads; never call AX or
+  log from the IOProc. A microphone switch holds the backend's resource lock
+  across its Core Audio calls, never the recorder lock.
+- `sleep.rs` must always answer IOKit's will-sleep notice (IOAllowPowerChange)
+  within its deadline, recording or not.
 - Graceful exit finalizes capture. Force Quit/SIGKILL cannot run that callback;
   periodic WAV flush checkpoints and startup recovery limit damage instead.
 

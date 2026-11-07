@@ -1,0 +1,550 @@
+//! Follow Zoom's own microphone mute while recording (ADR-061).
+//!
+//! The recording opens the microphone directly, so without this a user muted
+//! in Zoom is still recorded. Like Notion's meeting notes, the state comes
+//! from Zoom's UI through the Accessibility API: Zoom's menu bar offers
+//! "Mute Audio" while the user is unmuted and "Unmute Audio" while muted.
+//! Labels are read from Zoom's own localization files, so any Zoom language
+//! works. Only an explicit state changes the gate; a brief unreadable poll
+//! keeps the last state. Once a recording has followed Zoom, a long unknown
+//! stretch (meeting left, Zoom quit) keeps the microphone silent: Zoom no
+//! longer hears the user, so neither does the recording. A recording that
+//! never saw a Zoom state records the microphone as before. Rules are pure
+//! and unit tested.
+
+use std::collections::HashSet;
+
+/// The microphone state shown by Zoom.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MicState {
+    Muted,
+    Unmuted,
+    Unknown,
+    /// Zoom confirms there is no meeting: it quit, or its meeting window and
+    /// audio menu items are both gone.
+    NoMeeting,
+}
+
+/// After this long without an explicit state the followed meeting is over.
+pub const UNKNOWN_RESET_MS: u64 = 3_000;
+
+/// Normalized menu titles: "Mute Audio" (shown while unmuted) and
+/// "Unmute Audio" (shown while muted), in every Zoom language.
+#[derive(Clone, Debug, Default)]
+pub struct Labels {
+    mute: HashSet<String>,
+    unmute: HashSet<String>,
+}
+
+pub fn normalize(s: &str) -> String {
+    s.trim()
+        .trim_end_matches(['…', '.'])
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+impl Labels {
+    /// Builds label sets; a title in both sets is dropped as ambiguous.
+    pub fn new<'a>(
+        mute: impl IntoIterator<Item = &'a str>,
+        unmute: impl IntoIterator<Item = &'a str>,
+    ) -> Self {
+        let mut mute: HashSet<String> = mute.into_iter().map(normalize).collect();
+        let mut unmute: HashSet<String> = unmute.into_iter().map(normalize).collect();
+        mute.remove("");
+        unmute.remove("");
+        let both: Vec<String> = mute.intersection(&unmute).cloned().collect();
+        for t in both {
+            mute.remove(&t);
+            unmute.remove(&t);
+        }
+        Self { mute, unmute }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.mute.is_empty() || self.unmute.is_empty()
+    }
+}
+
+/// Classifies the titles of Zoom's menu items.
+pub fn classify<'a>(titles: impl IntoIterator<Item = &'a str>, labels: &Labels) -> MicState {
+    let (mut offers_mute, mut offers_unmute) = (false, false);
+    for title in titles {
+        let t = normalize(title);
+        offers_mute |= labels.mute.contains(&t);
+        offers_unmute |= labels.unmute.contains(&t);
+    }
+    match (offers_mute, offers_unmute) {
+        (true, false) => MicState::Unmuted,
+        (false, true) => MicState::Muted,
+        _ => MicState::Unknown,
+    }
+}
+
+/// Whether, and why, the microphone is silenced.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Silence {
+    #[default]
+    Open,
+    /// Zoom shows the user muted.
+    Muted,
+    /// The followed Zoom meeting is gone.
+    MeetingEnded,
+}
+
+/// Turns observed states into the microphone gate.
+#[derive(Debug, Default)]
+pub struct Gate {
+    silence: Silence,
+    followed: bool,
+    unknown_since: Option<u64>,
+}
+
+impl Gate {
+    pub fn observe(&mut self, now_ms: u64, state: MicState) -> Silence {
+        match state {
+            MicState::Muted | MicState::Unmuted => {
+                self.silence = if state == MicState::Muted {
+                    Silence::Muted
+                } else {
+                    Silence::Open
+                };
+                self.followed = true;
+                self.unknown_since = None;
+            }
+            MicState::NoMeeting => {
+                if self.followed {
+                    self.silence = Silence::MeetingEnded;
+                }
+            }
+            MicState::Unknown => {
+                let since = *self.unknown_since.get_or_insert(now_ms);
+                if self.followed && now_ms.saturating_sub(since) >= UNKNOWN_RESET_MS {
+                    self.silence = Silence::MeetingEnded;
+                }
+            }
+        }
+        self.silence
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub use mac::{meeting_over, watch, Watch};
+
+#[cfg(target_os = "macos")]
+mod mac {
+    use std::ffi::c_void;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Once, OnceLock};
+    use std::time::{Duration, Instant};
+
+    use core_foundation::array::{CFArray, CFArrayRef};
+    use core_foundation::base::{CFType, CFTypeRef, TCFType};
+    use core_foundation::boolean::CFBoolean;
+    use core_foundation::data::CFData;
+    use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
+    use core_foundation::propertylist::{create_with_data, CFPropertyList};
+    use core_foundation::string::{CFString, CFStringRef};
+    use tauri::{AppHandle, Emitter};
+
+    use super::{classify, Gate, Labels, MicState, Silence};
+
+    const ZOOM_BUNDLE: &str = "us.zoom.xos";
+    const POLL: Duration = Duration::from_millis(300);
+    /// Zoom's PID is re-resolved this often (it may start or quit mid-recording).
+    const PID_REFRESH: Duration = Duration::from_secs(3);
+    /// Bound on each Accessibility call so a busy Zoom never stalls the poll.
+    const AX_TIMEOUT_SECONDS: f32 = 0.25;
+    /// Menu items scanned per poll; Zoom's whole menu bar is far smaller.
+    const MAX_ITEMS: usize = 600;
+
+    type AXUIElementRef = CFTypeRef;
+
+    #[link(name = "ApplicationServices", kind = "framework")]
+    extern "C" {
+        fn AXUIElementCreateApplication(pid: i32) -> AXUIElementRef;
+        fn AXUIElementCopyAttributeValue(
+            element: AXUIElementRef,
+            attribute: CFStringRef,
+            value: *mut CFTypeRef,
+        ) -> i32;
+        fn AXUIElementSetMessagingTimeout(element: AXUIElementRef, seconds: f32) -> i32;
+        fn AXIsProcessTrusted() -> bool;
+        fn AXIsProcessTrustedWithOptions(options: CFDictionaryRef) -> bool;
+        static kAXTrustedCheckOptionPrompt: CFStringRef;
+    }
+
+    /// Asks macOS for Accessibility access once per app launch.
+    fn request_trust() -> bool {
+        static PROMPT: Once = Once::new();
+        let mut trusted = unsafe { AXIsProcessTrusted() };
+        PROMPT.call_once(|| {
+            if !trusted {
+                let key = unsafe { CFString::wrap_under_get_rule(kAXTrustedCheckOptionPrompt) };
+                let options = CFDictionary::from_CFType_pairs(&[(key, CFBoolean::true_value())]);
+                trusted = unsafe { AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef()) };
+            }
+        });
+        trusted
+    }
+
+    fn copy_attr(element: &CFType, name: &str) -> Option<CFType> {
+        let name = CFString::new(name);
+        let mut value: CFTypeRef = std::ptr::null();
+        let status = unsafe {
+            AXUIElementCopyAttributeValue(
+                element.as_CFTypeRef(),
+                name.as_concrete_TypeRef(),
+                &mut value,
+            )
+        };
+        (status == 0 && !value.is_null()).then(|| unsafe { CFType::wrap_under_create_rule(value) })
+    }
+
+    fn children(element: &CFType) -> Vec<CFType> {
+        match copy_attr(element, "AXChildren") {
+            Some(value) => as_array(value),
+            None => Vec::new(),
+        }
+    }
+
+    fn as_array(value: CFType) -> Vec<CFType> {
+        if value.type_of() != CFArray::<CFType>::type_id() {
+            return Vec::new();
+        }
+        let array: CFArray<CFType> =
+            unsafe { CFArray::wrap_under_get_rule(value.as_CFTypeRef() as CFArrayRef) };
+        array.iter().map(|c| c.clone()).collect()
+    }
+
+    /// Zoom's main meeting window identifier (the one Notion also keys on).
+    const MEETING_WINDOW_ID: &str = "zm.meeting.window.main";
+
+    /// What Zoom's UI shows, or `None` when it cannot be read.
+    fn zoom_ui(pid: i32, labels: &Labels) -> Option<MicState> {
+        let app = unsafe { AXUIElementCreateApplication(pid) };
+        if app.is_null() {
+            return None;
+        }
+        let app = unsafe { CFType::wrap_under_create_rule(app) };
+        unsafe { AXUIElementSetMessagingTimeout(app.as_CFTypeRef(), AX_TIMEOUT_SECONDS) };
+        let titles = menu_titles(&app)?;
+        let mic = classify(titles.iter().map(String::as_str), labels);
+        if mic != MicState::Unknown {
+            return Some(mic);
+        }
+        // No audio menu item: a meeting window means the meeting goes on
+        // (e.g. audio not joined); none means there is no meeting.
+        let windows = copy_attr(&app, "AXWindows")?;
+        let has_meeting_window = as_array(windows).iter().any(|w| {
+            copy_attr(w, "AXIdentifier")
+                .and_then(|v| v.downcast::<CFString>())
+                .is_some_and(|id| id == MEETING_WINDOW_ID)
+        });
+        Some(if has_meeting_window {
+            MicState::Unknown
+        } else {
+            MicState::NoMeeting
+        })
+    }
+
+    /// Titles of every item in Zoom's menus, or `None` when unreadable.
+    fn menu_titles(app: &CFType) -> Option<Vec<String>> {
+        let bar = copy_attr(app, "AXMenuBar")?;
+        let mut titles = Vec::new();
+        for top in children(&bar) {
+            for menu in children(&top) {
+                for item in children(&menu) {
+                    if titles.len() >= MAX_ITEMS {
+                        return Some(titles);
+                    }
+                    if let Some(t) =
+                        copy_attr(&item, "AXTitle").and_then(|v| v.downcast::<CFString>())
+                    {
+                        titles.push(t.to_string());
+                    }
+                }
+            }
+        }
+        Some(titles)
+    }
+
+    fn zoom_app_paths() -> Vec<PathBuf> {
+        let mut paths = vec![PathBuf::from("/Applications/zoom.us.app")];
+        if let Some(home) = std::env::var_os("HOME") {
+            paths.push(Path::new(&home).join("Applications/zoom.us.app"));
+        }
+        paths
+    }
+
+    /// "Mute Audio"/"Unmute Audio" in every language Zoom ships.
+    pub(super) fn load_labels() -> Labels {
+        let (mut mute, mut unmute) = (
+            vec!["Mute Audio".to_owned()],
+            vec!["Unmute Audio".to_owned()],
+        );
+        for app in zoom_app_paths() {
+            let Ok(dirs) = std::fs::read_dir(app.join("Contents/Resources")) else {
+                continue;
+            };
+            for dir in dirs.flatten() {
+                let path = dir.path().join("Localizable.strings");
+                let Ok(bytes) = std::fs::read(&path) else {
+                    continue;
+                };
+                let data = CFData::from_buffer(&bytes);
+                let Ok((plist, _)) = create_with_data(data, 0) else {
+                    continue;
+                };
+                let plist = unsafe { CFPropertyList::wrap_under_create_rule(plist) };
+                let Some(dict) = plist.downcast_into::<CFDictionary>() else {
+                    continue;
+                };
+                for (key, out) in [("Mute Audio", &mut mute), ("Unmute Audio", &mut unmute)] {
+                    let k = CFString::new(key);
+                    if let Some(v) = dict.find(k.as_concrete_TypeRef() as *const c_void) {
+                        let v = unsafe { CFType::wrap_under_get_rule(*v as CFTypeRef) };
+                        if let Some(s) = v.downcast::<CFString>() {
+                            out.push(s.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        Labels::new(
+            mute.iter().map(String::as_str),
+            unmute.iter().map(String::as_str),
+        )
+    }
+
+    fn labels() -> &'static Labels {
+        static LABELS: OnceLock<Labels> = OnceLock::new();
+        LABELS.get_or_init(load_labels)
+    }
+
+    /// Zoom's state now, with `pid` refreshed when it is missing or stale.
+    fn current_state(pid: &mut Option<i32>, refreshed: &mut Option<Instant>) -> MicState {
+        if !unsafe { AXIsProcessTrusted() } || labels().is_empty() {
+            return MicState::Unknown;
+        }
+        if refreshed.map_or(true, |t| t.elapsed() >= PID_REFRESH) {
+            *pid = crate::audio::macos::process_pid(ZOOM_BUNDLE);
+            *refreshed = Some(Instant::now());
+        }
+        let Some(p) = *pid else {
+            return MicState::NoMeeting;
+        };
+        match zoom_ui(p, labels()) {
+            Some(state) => state,
+            None => {
+                // Zoom may have quit: re-resolve its PID on the next poll.
+                *refreshed = None;
+                MicState::Unknown
+            }
+        }
+    }
+
+    /// True when Zoom confirms its meeting is over (Accessibility granted and
+    /// Zoom quit, or no meeting window and no audio menu item). Used by
+    /// meeting detection to end a Zoom meeting without the audio grace period.
+    pub fn meeting_over() -> bool {
+        let (mut pid, mut refreshed) = (None, None);
+        current_state(&mut pid, &mut refreshed) == MicState::NoMeeting
+    }
+
+    /// The running watcher; dropping it stops the thread.
+    pub struct Watch {
+        running: Arc<AtomicBool>,
+    }
+
+    impl Drop for Watch {
+        fn drop(&mut self) {
+            self.running.store(false, Ordering::Relaxed);
+        }
+    }
+
+    /// Payload of the `native-mic-muted` event.
+    #[derive(Clone, serde::Serialize)]
+    struct MuteEvent {
+        muted: bool,
+        app: &'static str,
+        /// `muted` or `meeting_ended` while muted.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reason: Option<&'static str>,
+    }
+
+    /// Starts following Zoom's mute into `muted` for one recording. Returns a
+    /// warning when Zoom is running but Accessibility access is missing.
+    pub fn watch(app: AppHandle, muted: Arc<AtomicBool>) -> (Watch, Option<String>) {
+        let running = Arc::new(AtomicBool::new(true));
+        let zoom_running = crate::audio::macos::process_pid(ZOOM_BUNDLE).is_some();
+        let warning = (zoom_running && !request_trust()).then(|| {
+            "Allow TTOBAK in System Settings > Privacy & Security > Accessibility so the \
+             recording follows Zoom's mute; until then the microphone is always recorded."
+                .to_owned()
+        });
+        let flag = running.clone();
+        let spawned = std::thread::Builder::new()
+            .name("zoom-mute".into())
+            .spawn(move || run(app, muted, flag));
+        if let Err(e) = spawned {
+            log::warn!("could not start the Zoom mute watcher: {e}");
+        }
+        (Watch { running }, warning)
+    }
+
+    fn run(app: AppHandle, muted: Arc<AtomicBool>, running: Arc<AtomicBool>) {
+        let started = Instant::now();
+        if labels().is_empty() {
+            log::warn!("Zoom mute labels unavailable; not following Zoom's mute");
+            return;
+        }
+        let mut gate = Gate::default();
+        let mut pid: Option<i32> = None;
+        let mut pid_checked: Option<Instant> = None;
+        let mut announced: Option<Silence> = None;
+        while running.load(Ordering::Relaxed) {
+            let state = current_state(&mut pid, &mut pid_checked);
+            let now = started.elapsed().as_millis() as u64;
+            let silence = gate.observe(now, state);
+            muted.store(silence != Silence::Open, Ordering::Relaxed);
+            if announced != Some(silence) {
+                if announced.is_some() || silence != Silence::Open {
+                    log::info!("Zoom microphone gate: {silence:?}");
+                    let reason = match silence {
+                        Silence::Open => None,
+                        Silence::Muted => Some("muted"),
+                        Silence::MeetingEnded => Some("meeting_ended"),
+                    };
+                    let _ = app.emit(
+                        "native-mic-muted",
+                        MuteEvent {
+                            muted: silence != Silence::Open,
+                            app: "Zoom",
+                            reason,
+                        },
+                    );
+                }
+                announced = Some(silence);
+            }
+            std::thread::sleep(POLL);
+        }
+        muted.store(false, Ordering::Relaxed);
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod mac_tests {
+    /// Reads the installed Zoom's localization files when Zoom is present.
+    #[test]
+    fn loads_labels_from_an_installed_zoom() {
+        if !std::path::Path::new("/Applications/zoom.us.app").exists() {
+            return;
+        }
+        let labels = super::mac::load_labels();
+        assert!(!labels.is_empty());
+        assert_eq!(
+            super::classify(["오디오 음소거 해제"], &labels),
+            super::MicState::Muted
+        );
+        assert_eq!(
+            super::classify(["Mute audio"], &labels),
+            super::MicState::Unmuted
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn labels() -> Labels {
+        Labels::new(
+            ["Mute Audio", "Mute audio", "오디오 음소거"],
+            ["Unmute Audio", "오디오 음소거 해제"],
+        )
+    }
+
+    #[test]
+    fn menu_offering_mute_means_unmuted() {
+        let l = labels();
+        assert_eq!(
+            classify(["Join Audio", "Mute Audio", "Start Video"], &l),
+            MicState::Unmuted
+        );
+        assert_eq!(classify(["오디오 음소거 해제"], &l), MicState::Muted);
+    }
+
+    #[test]
+    fn missing_or_conflicting_items_are_unknown() {
+        let l = labels();
+        assert_eq!(classify(["Join Audio"], &l), MicState::Unknown);
+        assert_eq!(
+            classify(["Mute Audio", "Unmute Audio"], &l),
+            MicState::Unknown
+        );
+        assert_eq!(classify(Vec::<&str>::new(), &l), MicState::Unknown);
+    }
+
+    #[test]
+    fn titles_are_normalized() {
+        let l = labels();
+        assert_eq!(classify(["  unmute   AUDIO… "], &l), MicState::Muted);
+        // A participant action is not the local menu item.
+        assert_eq!(classify(["Ask to unmute"], &l), MicState::Unknown);
+    }
+
+    #[test]
+    fn a_title_in_both_sets_is_ignored() {
+        let l = Labels::new(["Mute"], ["Mute", "Unmute Audio"]);
+        assert_eq!(classify(["Mute"], &l), MicState::Unknown);
+        assert!(l.is_empty());
+    }
+
+    #[test]
+    fn gate_follows_explicit_states_and_holds_through_short_gaps() {
+        let mut g = Gate::default();
+        assert_eq!(g.observe(0, MicState::Muted), Silence::Muted);
+        // A brief unreadable poll keeps the state.
+        assert_eq!(g.observe(300, MicState::Unknown), Silence::Muted);
+        assert_eq!(g.observe(600, MicState::Unmuted), Silence::Open);
+        assert_eq!(g.observe(900, MicState::Unknown), Silence::Open);
+        assert_eq!(
+            g.observe(900 + UNKNOWN_RESET_MS - 1, MicState::Unknown),
+            Silence::Open
+        );
+    }
+
+    #[test]
+    fn a_followed_meeting_that_ends_keeps_the_microphone_silent() {
+        let mut g = Gate::default();
+        assert_eq!(g.observe(0, MicState::Unmuted), Silence::Open);
+        assert_eq!(g.observe(300, MicState::Unknown), Silence::Open);
+        assert_eq!(
+            g.observe(300 + UNKNOWN_RESET_MS, MicState::Unknown),
+            Silence::MeetingEnded
+        );
+        // Rejoining restores following.
+        assert_eq!(g.observe(10_000, MicState::Unmuted), Silence::Open);
+    }
+
+    #[test]
+    fn a_confirmed_meeting_end_silences_at_once() {
+        let mut g = Gate::default();
+        assert_eq!(g.observe(0, MicState::Unmuted), Silence::Open);
+        assert_eq!(g.observe(300, MicState::NoMeeting), Silence::MeetingEnded);
+        // Without a followed meeting, no meeting means nothing to follow.
+        let mut fresh = Gate::default();
+        assert_eq!(fresh.observe(0, MicState::NoMeeting), Silence::Open);
+    }
+
+    #[test]
+    fn a_recording_without_zoom_keeps_the_microphone() {
+        let mut g = Gate::default();
+        assert_eq!(g.observe(0, MicState::Unknown), Silence::Open);
+        assert_eq!(g.observe(60_000, MicState::Unknown), Silence::Open);
+    }
+}
