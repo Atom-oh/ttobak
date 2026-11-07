@@ -77,6 +77,23 @@ class State:
     stages: tuple = ()
 
 
+# Transport failures on a pooled connection (for example a keep-alive socket
+# closed by the endpoint during a long CDK deploy). Only idempotent reads retry.
+TRANSIENT_READ_ERRORS = {"ConnectionClosedError", "EndpointConnectionError", "ReadTimeoutError",
+                         "ConnectTimeoutError"}
+
+
+def read_with_retry(call, attempts=3, pause=1.0, sleep=time.sleep, **arguments):
+    """Run an idempotent read, retrying only transient transport errors."""
+    for attempt in range(attempts):
+        try:
+            return call(**arguments)
+        except Exception as error:
+            if type(error).__name__ not in TRANSIENT_READ_ERRORS or attempt == attempts - 1:
+                raise
+            sleep(pause * (attempt + 1))
+
+
 def failure_diagnostic(error, client_error_type=None):
     """Fixed, message-free facts about an unexpected failure.
 
@@ -860,7 +877,7 @@ class Release:
         print(json.dumps({"phase": phase}), flush=True)
 
     def outputs(self, stack):
-        result = self.clients["cfn"].describe_stacks(StackName=stack)["Stacks"]
+        result = read_with_retry(self.clients["cfn"].describe_stacks, StackName=stack)["Stacks"]
         require(len(result) == 1, "STACK_IDENTITY_UNAVAILABLE")
         require(result[0].get("StackStatus") in {
             "CREATE_COMPLETE", "UPDATE_COMPLETE", "UPDATE_ROLLBACK_COMPLETE",
@@ -874,7 +891,7 @@ class Release:
             names.append("ttobak-mcp")
         result = {}
         for name in names:
-            value = self.clients["lambda"].get_function_configuration(FunctionName=name)
+            value = read_with_retry(self.clients["lambda"].get_function_configuration, FunctionName=name)
             require(value.get("State", "Active") == "Active" and
                     value.get("LastUpdateStatus", "Successful") == "Successful", "CONSUMER_UPDATE_IN_PROGRESS")
             base = name.split(":")[0]
@@ -885,7 +902,7 @@ class Release:
             require(all(isinstance(value.get(field), str) and value[field]
                         for field in ("Version", "RevisionId", "CodeSha256")), "CONSUMER_REVISION_MISSING")
             result[name] = value
-        alias = self.clients["lambda"].get_alias(FunctionName="ttobak-api", Name="live")
+        alias = read_with_retry(self.clients["lambda"].get_alias, FunctionName="ttobak-api", Name="live")
         require(not alias.get("RoutingConfig", {}).get("AdditionalVersionWeights"), "WEIGHTED_ALIAS_UNSUPPORTED")
         require(alias.get("FunctionVersion") == result["ttobak-api:live"].get("Version"), "ALIAS_VERSION_CHANGED")
         require(bool(alias.get("RevisionId")), "ALIAS_REVISION_MISSING")
@@ -906,7 +923,7 @@ class Release:
         }
 
     def summary_configuration(self):
-        value = self.clients["lambda"].get_function_configuration(FunctionName="ttobak-summarize")
+        value = read_with_retry(self.clients["lambda"].get_function_configuration, FunctionName="ttobak-summarize")
         require(value.get("State", "Active") == "Active" and
                 value.get("LastUpdateStatus", "Successful") == "Successful", "MODEL_UPDATE_IN_PROGRESS")
         require(value.get("FunctionName") == "ttobak-summarize" and
@@ -991,7 +1008,7 @@ class Release:
         self.foundation_snapshot = after
 
     def distribution_proof(self, deployed=False):
-        value = self.clients["cloudfront"].get_distribution(Id=self.distribution)["Distribution"]
+        value = read_with_retry(self.clients["cloudfront"].get_distribution, Id=self.distribution)["Distribution"]
         require(value.get("DomainName") == urllib.parse.urlsplit(self.site_url).hostname,
                 "CLOUDFRONT_DOMAIN_MISMATCH")
         if deployed:
@@ -1061,7 +1078,7 @@ class Release:
         if version:
             arguments["VersionId"] = version
         try:
-            return self.decode(self.clients["secrets"].get_secret_value(**arguments))
+            return self.decode(read_with_retry(self.clients["secrets"].get_secret_value, **arguments))
         except self.clients["secrets"].exceptions.ResourceNotFoundException:
             if optional:
                 return None
