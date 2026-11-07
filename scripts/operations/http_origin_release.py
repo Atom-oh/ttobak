@@ -77,14 +77,319 @@ class State:
     stages: tuple = ()
 
 
+# Transport failures on a pooled connection (for example a keep-alive socket
+# closed by the endpoint during a long CDK deploy). Only idempotent reads retry.
+TRANSIENT_READ_ERRORS = {"ConnectionClosedError", "EndpointConnectionError", "ReadTimeoutError",
+                         "ConnectTimeoutError"}
+
+
+def read_with_retry(call, attempts=3, pause=1.0, sleep=time.sleep, **arguments):
+    """Run an idempotent read, retrying only transient transport errors."""
+    for attempt in range(attempts):
+        try:
+            return call(**arguments)
+        except Exception as error:
+            if type(error).__name__ not in TRANSIENT_READ_ERRORS or attempt == attempts - 1:
+                raise
+            sleep(pause * (attempt + 1))
+
+
+def failure_diagnostic(error, client_error_type=None):
+    """Fixed, message-free facts about an unexpected failure.
+
+    Exception messages and SDK payloads can carry proofs or resource details,
+    so only the class name, an AWS error code/operation and the raising
+    function/line inside this script are reported.
+    """
+    result = {"errorType": type(error).__name__}
+    if client_error_type is not None and isinstance(error, client_error_type):
+        details = error.response.get("Error") if isinstance(getattr(error, "response", None), dict) else None
+        code = details.get("Code") if isinstance(details, dict) else None
+        if isinstance(code, str) and re.fullmatch(r"[A-Za-z0-9.]{1,64}", code):
+            result["awsErrorCode"] = code
+        operation = getattr(error, "operation_name", None)
+        if isinstance(operation, str) and re.fullmatch(r"[A-Za-z0-9]{1,64}", operation):
+            result["awsOperation"] = operation
+    frame = None
+    trace = error.__traceback__
+    while trace is not None:
+        if Path(trace.tb_frame.f_code.co_filename).resolve() == Path(__file__).resolve():
+            frame = trace
+        trace = trace.tb_next
+    if frame is not None:
+        result["errorSite"] = f"{frame.tb_frame.f_code.co_name}:{frame.tb_lineno}"
+    return result
+
+
+def _ipv4_cidr(value):
+    try:
+        address, bits = value.split("/")
+        parts = [int(part) for part in address.split(".")]
+        bits = int(bits)
+    except (AttributeError, ValueError):
+        return None
+    if len(parts) != 4 or any(not 0 <= part <= 255 for part in parts) or not 0 <= bits <= 32:
+        return None
+    number = (parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]
+    mask = (0xFFFFFFFF << (32 - bits)) & 0xFFFFFFFF
+    return number & mask, bits
+
+
+def _cidr_covers(outer, inner):
+    """True when the outer IPv4 CIDR contains the inner one."""
+    a, b = _ipv4_cidr(outer), _ipv4_cidr(inner)
+    if a is None or b is None or a[1] > b[1]:
+        return False
+    mask = (0xFFFFFFFF << (32 - a[1])) & 0xFFFFFFFF
+    return (b[0] & mask) == a[0]
+
+
+def _allows_tcp_443(permission):
+    protocol = str(permission.get("IpProtocol"))
+    if protocol == "-1":
+        return True
+    return protocol in ("tcp", "6") and permission.get("FromPort", 65536) <= 443 <= permission.get("ToPort", -1)
+
+
+def _private_cidr(value):
+    return any(_cidr_covers(block, value) for block in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
+
+
+def _endpoint_policy_allows_proof_read(document):
+    if document in (None, ""):
+        return True  # No policy document means the default full-access endpoint policy.
+    try:
+        policy = json.loads(document) if isinstance(document, str) else document
+    except ValueError:
+        return False
+    statements = policy.get("Statement", []) if isinstance(policy, dict) else []
+    statements = statements if isinstance(statements, list) else [statements]
+    if any(isinstance(item, dict) and item.get("Effect") == "Deny" for item in statements):
+        return False
+    for item in statements:
+        if not isinstance(item, dict) or item.get("Effect") != "Allow" or "Condition" in item:
+            continue
+        actions = item.get("Action", [])
+        actions = actions if isinstance(actions, list) else [actions]
+        resources = item.get("Resource", [])
+        resources = resources if isinstance(resources, list) else [resources]
+        principal = item.get("Principal")
+        if (any(action in ("*", "secretsmanager:*", "secretsmanager:GetSecretValue") for action in actions)
+                and "*" in resources and (principal == "*" or principal == {"AWS": "*"})):
+            return True
+    return False
+
+
+def _cidr_overlaps(a, b):
+    left, right = _ipv4_cidr(a), _ipv4_cidr(b)
+    if left is None or right is None:
+        return True  # Unknown overlap is treated as overlapping (fail closed).
+    bits = min(left[1], right[1])
+    mask = (0xFFFFFFFF << (32 - bits)) & 0xFFFFFFFF if bits else 0
+    return (left[0] & mask) == (right[0] & mask)
+
+
+def _nacl_allows(entries, egress, target_cidr, low, high):
+    """First-match NACL evaluation for TCP ports low..high to/from target_cidr.
+
+    An entry that overlaps the traffic but does not fully allow it fails closed.
+    """
+    for entry in sorted((item for item in entries if item.get("Egress") is egress),
+                        key=lambda item: item.get("RuleNumber", 32767)):
+        cidr = entry.get("CidrBlock")
+        if not isinstance(cidr, str) or not _cidr_overlaps(cidr, target_cidr):
+            continue  # IPv6 or unrelated range.
+        protocol = str(entry.get("Protocol"))
+        ports = entry.get("PortRange") or {}
+        if protocol not in ("-1", "6"):
+            continue
+        if protocol == "6" and (ports.get("To", -1) < low or ports.get("From", 65536) > high):
+            continue
+        covers = _cidr_covers(cidr, target_cidr) and (
+            protocol == "-1" or (ports.get("From", 65536) <= low and high <= ports.get("To", -1)))
+        return entry.get("RuleAction") == "allow" and covers
+    return False
+
+
+def _routes_local(routes, target_cidr, prefix_entries=None):
+    """The target must use an active local route, with no more-specific override.
+
+    prefix_entries(prefix_list_id) returns that list's CIDRs, or None if unknown.
+    """
+    target = _ipv4_cidr(target_cidr)
+    if target is None:
+        return False
+    local_bits = None
+    for route in routes:
+        destination = route.get("DestinationCidrBlock")
+        if (isinstance(destination, str) and route.get("GatewayId") == "local"
+                and route.get("State", "active") == "active" and _cidr_covers(destination, target_cidr)):
+            bits = _ipv4_cidr(destination)[1]
+            local_bits = bits if local_bits is None else max(local_bits, bits)
+    if local_bits is None:
+        return False
+    for route in routes:
+        destination = route.get("DestinationCidrBlock")
+        if route.get("GatewayId") == "local" or route.get("DestinationIpv6CidrBlock"):
+            continue  # IPv6 routes cannot capture this IPv4 range.
+        if not isinstance(destination, str):
+            prefix_list = route.get("DestinationPrefixListId")
+            cidrs = prefix_entries(prefix_list) if prefix_entries and isinstance(prefix_list, str) else None
+            if cidrs is None:
+                return False  # Unknown destination: cannot prove it does not override local.
+            if any(_cidr_overlaps(cidr, target_cidr) for cidr in cidrs):
+                return False  # A prefix-list route covering part of the target would capture it.
+            continue
+        parsed = _ipv4_cidr(destination)
+        if parsed is None or (parsed[1] > local_bits and _cidr_overlaps(destination, target_cidr)):
+            return False  # A more specific non-local route would capture this traffic.
+    return True
+
+
+def vpc_secret_path_verified(ec2, region, vpc_config, template_resources):
+    """Prove a VPC-attached consumer can reach Secrets Manager for the origin proof.
+
+    Every condition must be observed; anything unknown fails closed. Requires
+    literal function subnets in one VPC with DNS support and hostnames; an
+    available Secrets Manager interface endpoint with private DNS covering each
+    function AZ, whose policy allows GetSecretValue unconditionally; endpoint
+    security-group ingress on TCP 443 from every function subnet CIDR (private
+    ranges only); function security-group egress on TCP 443 to every endpoint
+    subnet CIDR; and network ACLs on both sides allowing that TCP 443 flow and
+    its ephemeral return traffic; IPv4 endpoint addressing and IPv4/dual-stack
+    private DNS records; and route tables on both sides delivering
+    those CIDRs through the active local route with no more-specific override.
+    Security-group references (UserIdGroupPairs) and IPv6 are not evaluated and
+    therefore do not satisfy a check.
+    """
+    if ec2 is None or not isinstance(vpc_config, dict):
+        return False
+    subnet_ids = vpc_config.get("SubnetIds")
+    groups = vpc_config.get("SecurityGroupIds")
+    if (not isinstance(subnet_ids, list) or not subnet_ids or not all(isinstance(item, str) for item in subnet_ids)
+            or not isinstance(groups, list) or not groups):
+        return False
+    try:
+        subnets = ec2.describe_subnets(SubnetIds=subnet_ids)["Subnets"]
+        vpcs = {item["VpcId"] for item in subnets}
+        if len(subnets) != len(set(subnet_ids)) or len(vpcs) != 1:
+            return False
+        vpc_id = vpcs.pop()
+        zones = {item["AvailabilityZone"] for item in subnets}
+        function_cidrs = {item["CidrBlock"] for item in subnets}
+        for attribute, key in (("enableDnsSupport", "EnableDnsSupport"), ("enableDnsHostnames", "EnableDnsHostnames")):
+            if ec2.describe_vpc_attribute(VpcId=vpc_id, Attribute=attribute)[key]["Value"] is not True:
+                return False  # Endpoint private DNS cannot resolve without both.
+        endpoints = ec2.describe_vpc_endpoints(Filters=[
+            {"Name": "vpc-id", "Values": [vpc_id]},
+            {"Name": "service-name", "Values": [f"com.amazonaws.{region}.secretsmanager"]},
+            {"Name": "vpc-endpoint-type", "Values": ["Interface"]},
+        ])["VpcEndpoints"]
+        chosen = None
+        for endpoint in endpoints:
+            if endpoint.get("State") != "available" or endpoint.get("PrivateDnsEnabled") is not True:
+                continue
+            # The consumer resolves and connects over IPv4: the endpoint must
+            # carry IPv4 addresses and publish IPv4 (A) private DNS records.
+            dns_type = (endpoint.get("DnsOptions") or {}).get("DnsRecordIpType")
+            if endpoint.get("IpAddressType") not in ("ipv4", "dualstack") or dns_type not in ("ipv4", "dualstack"):
+                continue
+            if not _endpoint_policy_allows_proof_read(endpoint.get("PolicyDocument")):
+                continue
+            endpoint_subnet_ids = endpoint.get("SubnetIds") or []
+            endpoint_subnets = ec2.describe_subnets(SubnetIds=endpoint_subnet_ids)["Subnets"] if endpoint_subnet_ids else []
+            if not zones <= {item["AvailabilityZone"] for item in endpoint_subnets}:
+                continue
+            group_ids = [item["GroupId"] for item in endpoint.get("Groups", [])]
+            rules = ec2.describe_security_groups(GroupIds=group_ids)["SecurityGroups"] if group_ids else []
+            ingress = [permission for group in rules for permission in group.get("IpPermissions", [])
+                       if _allows_tcp_443(permission)]
+            if all(any(_private_cidr(ip.get("CidrIp", "")) and _cidr_covers(ip.get("CidrIp", ""), cidr)
+                       for permission in ingress for ip in permission.get("IpRanges", []))
+                   for cidr in function_cidrs):
+                chosen = endpoint_subnets
+                break
+        if chosen is None:
+            return False
+        endpoint_cidrs = {item["CidrBlock"] for item in chosen}
+        literal = [item for item in groups if isinstance(item, str)]
+        egress = []
+        for item in groups:
+            if isinstance(item, str):
+                continue
+            reference = item.get("Fn::GetAtt", [None])[0] if isinstance(item, dict) and "Fn::GetAtt" in item else (
+                item.get("Ref") if isinstance(item, dict) else None)
+            resource = template_resources.get(reference) if isinstance(reference, str) else None
+            if not resource or resource.get("Type") != "AWS::EC2::SecurityGroup":
+                return False
+            egress.extend(resource.get("Properties", {}).get("SecurityGroupEgress", []))
+        if literal:
+            for group in ec2.describe_security_groups(GroupIds=literal)["SecurityGroups"]:
+                egress.extend(group.get("IpPermissionsEgress", []))
+        def egress_covers(cidr):
+            for rule in egress:
+                ranges = [rule.get("CidrIp")] + [ip.get("CidrIp") for ip in rule.get("IpRanges", [])]
+                if _allows_tcp_443(rule) and any(isinstance(value, str) and _cidr_covers(value, cidr) for value in ranges):
+                    return True
+            return False
+        if not all(egress_covers(cidr) for cidr in endpoint_cidrs):
+            return False
+        # Network ACLs: TCP 443 out from function subnets and in to endpoint
+        # subnets, plus ephemeral return traffic in both directions.
+        def acl(subnet_id):
+            found = ec2.describe_network_acls(Filters=[{"Name": "association.subnet-id", "Values": [subnet_id]}])["NetworkAcls"]
+            return found[0].get("Entries", []) if len(found) == 1 else None
+        for subnet in subnets:
+            entries = acl(subnet["SubnetId"])
+            if entries is None or not all(
+                    _nacl_allows(entries, True, cidr, 443, 443) and _nacl_allows(entries, False, cidr, 1024, 65535)
+                    for cidr in endpoint_cidrs):
+                return False
+        for subnet in chosen:
+            entries = acl(subnet["SubnetId"])
+            if entries is None or not all(
+                    _nacl_allows(entries, False, cidr, 443, 443) and _nacl_allows(entries, True, cidr, 1024, 65535)
+                    for cidr in function_cidrs):
+                return False
+        # Route tables: explicit subnet association, else the VPC main table.
+        def routes(subnet_id):
+            found = ec2.describe_route_tables(Filters=[
+                {"Name": "association.subnet-id", "Values": [subnet_id]}])["RouteTables"]
+            if not found:
+                found = ec2.describe_route_tables(Filters=[
+                    {"Name": "vpc-id", "Values": [vpc_id]}, {"Name": "association.main", "Values": ["true"]}])["RouteTables"]
+            return found[0].get("Routes", []) if len(found) == 1 else None
+        prefix_cache = {}
+        def prefix_entries(prefix_list_id):
+            if prefix_list_id not in prefix_cache:
+                entries = []
+                for page in ec2.get_paginator("get_managed_prefix_list_entries").paginate(PrefixListId=prefix_list_id):
+                    entries.extend(item["Cidr"] for item in page.get("Entries", []))
+                prefix_cache[prefix_list_id] = entries
+            return prefix_cache[prefix_list_id]
+        for local, remote in ((subnets, endpoint_cidrs), (chosen, function_cidrs)):
+            for subnet in local:
+                table = routes(subnet["SubnetId"])
+                if table is None or not all(_routes_local(table, cidr, prefix_entries) for cidr in remote):
+                    return False
+        return True
+    except Exception:
+        # Fixed diagnostic only: never print SDK messages or resource details.
+        print(json.dumps({"warning": "VPC_SECRET_PATH_DESCRIBE_FAILED"}), flush=True)
+        return False
+
+
 class Cdk:
-    def __init__(self, region, account, profile=None, with_mcp=True):
+    def __init__(self, region, account, profile=None, with_mcp=True, ec2=None):
         self.env = dict(os.environ, CDK_DEFAULT_REGION=region, AWS_DEFAULT_REGION=region, AWS_REGION=region)
         if account:
             self.env["CDK_DEFAULT_ACCOUNT"] = account
         else:
             self.env.pop("CDK_DEFAULT_ACCOUNT", None)
         self.profile = profile
+        self.region = region
+        # Read-only EC2 client: proves a VPC-attached consumer's Secrets Manager path.
+        self.ec2 = ec2
         self.required_readers = {"ttobak-api", "ttobak-qa"} | ({"ttobak-mcp"} if with_mcp else set())
         self.assembly = ROOT / "build/verification/http-origin-assembly"
         self.revision = None
@@ -490,8 +795,11 @@ class Cdk:
                     and env.get("ORIGIN_VERIFY_SECRET_VERSION_ID") == {"Ref": "HttpOriginSecretVersionId"}
                     and "ORIGIN_VERIFY_SECRET" not in env, "ACTIVATION_CONSUMER_NOT_PINNED")
             # One GatewayStack deployment switches every consumer to ARN lookup. An
-            # ungranted or unreachable read would fail all origin checks closed at once.
-            require("VpcConfig" not in properties, "ACTIVATION_CONSUMER_VPC_UNVERIFIED")
+            # ungranted or unreachable read would fail all origin checks closed at once,
+            # so a VPC-attached consumer needs an observed private Secrets Manager path.
+            require("VpcConfig" not in properties or vpc_secret_path_verified(
+                self.ec2, self.region, properties["VpcConfig"], gateway.get("Resources", {})),
+                "ACTIVATION_CONSUMER_VPC_UNVERIFIED")
             role = self.role_identity(properties.get("Role"), "TtobakGatewayStack.template.json", templates, exports, arn=True)
             require(role is not None and any(
                 key in self.listed(functions[name].get("DependsOn")) and any(
@@ -569,7 +877,7 @@ class Release:
         print(json.dumps({"phase": phase}), flush=True)
 
     def outputs(self, stack):
-        result = self.clients["cfn"].describe_stacks(StackName=stack)["Stacks"]
+        result = read_with_retry(self.clients["cfn"].describe_stacks, StackName=stack)["Stacks"]
         require(len(result) == 1, "STACK_IDENTITY_UNAVAILABLE")
         require(result[0].get("StackStatus") in {
             "CREATE_COMPLETE", "UPDATE_COMPLETE", "UPDATE_ROLLBACK_COMPLETE",
@@ -583,7 +891,7 @@ class Release:
             names.append("ttobak-mcp")
         result = {}
         for name in names:
-            value = self.clients["lambda"].get_function_configuration(FunctionName=name)
+            value = read_with_retry(self.clients["lambda"].get_function_configuration, FunctionName=name)
             require(value.get("State", "Active") == "Active" and
                     value.get("LastUpdateStatus", "Successful") == "Successful", "CONSUMER_UPDATE_IN_PROGRESS")
             base = name.split(":")[0]
@@ -594,7 +902,7 @@ class Release:
             require(all(isinstance(value.get(field), str) and value[field]
                         for field in ("Version", "RevisionId", "CodeSha256")), "CONSUMER_REVISION_MISSING")
             result[name] = value
-        alias = self.clients["lambda"].get_alias(FunctionName="ttobak-api", Name="live")
+        alias = read_with_retry(self.clients["lambda"].get_alias, FunctionName="ttobak-api", Name="live")
         require(not alias.get("RoutingConfig", {}).get("AdditionalVersionWeights"), "WEIGHTED_ALIAS_UNSUPPORTED")
         require(alias.get("FunctionVersion") == result["ttobak-api:live"].get("Version"), "ALIAS_VERSION_CHANGED")
         require(bool(alias.get("RevisionId")), "ALIAS_REVISION_MISSING")
@@ -615,7 +923,7 @@ class Release:
         }
 
     def summary_configuration(self):
-        value = self.clients["lambda"].get_function_configuration(FunctionName="ttobak-summarize")
+        value = read_with_retry(self.clients["lambda"].get_function_configuration, FunctionName="ttobak-summarize")
         require(value.get("State", "Active") == "Active" and
                 value.get("LastUpdateStatus", "Successful") == "Successful", "MODEL_UPDATE_IN_PROGRESS")
         require(value.get("FunctionName") == "ttobak-summarize" and
@@ -700,7 +1008,7 @@ class Release:
         self.foundation_snapshot = after
 
     def distribution_proof(self, deployed=False):
-        value = self.clients["cloudfront"].get_distribution(Id=self.distribution)["Distribution"]
+        value = read_with_retry(self.clients["cloudfront"].get_distribution, Id=self.distribution)["Distribution"]
         require(value.get("DomainName") == urllib.parse.urlsplit(self.site_url).hostname,
                 "CLOUDFRONT_DOMAIN_MISMATCH")
         if deployed:
@@ -770,7 +1078,7 @@ class Release:
         if version:
             arguments["VersionId"] = version
         try:
-            return self.decode(self.clients["secrets"].get_secret_value(**arguments))
+            return self.decode(read_with_retry(self.clients["secrets"].get_secret_value, **arguments))
         except self.clients["secrets"].exceptions.ResourceNotFoundException:
             if optional:
                 return None
@@ -1123,7 +1431,8 @@ def main():
             ("cfn", "cloudformation"), ("lambda", "lambda"), ("cloudfront", "cloudfront"),
             ("gateway", "apigatewayv2"), ("secrets", "secretsmanager"), ("iam", "iam"))}
         with_mcp = bool(context.get("ttobak:mcpResourceAudience"))
-        release = Release(clients, Cdk(args.region, account, args.profile, with_mcp=with_mcp), account=account,
+        release = Release(clients, Cdk(args.region, account, args.profile, with_mcp=with_mcp,
+                                       ec2=session.client("ec2", config=config)), account=account,
                           region=args.region, revision=revision,
                           with_mcp=with_mcp)
         if args.action == "check":
@@ -1142,6 +1451,8 @@ def main():
                 and error.response["Error"].get("Code") == "AccessDeniedException"):
             code = "CONSUMER_INVOKE_ACCESS_DENIED"
         result = release.receipt("incomplete", code) if release else {"status": "incomplete", "code": code}
+        if not isinstance(error, ReleaseError):
+            result.update(failure_diagnostic(error, client_error_type))
         try:
             save_receipt(args.receipt, result)
         except Exception:

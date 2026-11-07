@@ -121,6 +121,9 @@ func validateSimRequirements(meeting *model.Meeting, userID string, reqs []model
 	if meeting.UserID != userID {
 		return ErrForbidden
 	}
+	if meeting.SummaryReadRestricted {
+		return ErrSummaryReadRestricted
+	}
 	if meeting.Status != model.StatusDone {
 		return fmt.Errorf("meeting must be done before simulating (status: %s): %w", meeting.Status, ErrInvalidInput)
 	}
@@ -399,15 +402,12 @@ func NewSimService(repo simRepo, bedrock *BedrockService, lambdaClient *lambda.C
 // (not the unconditional PutSimRun) is reused here for exactly that guard;
 // its condition already encodes "not currently queued/running".
 func (s *SimService) ExtractRequirements(ctx context.Context, userID, meetingID string) (*model.SimRun, error) {
-	meeting, err := s.repo.GetMeeting(ctx, userID, meetingID)
+	meeting, err := s.simMeeting(ctx, userID, meetingID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get meeting: %w", err)
+		return nil, err
 	}
-	if meeting == nil {
-		return nil, ErrNotFound
-	}
-	if meeting.UserID != userID {
-		return nil, ErrForbidden
+	if meeting.SummaryReadRestricted {
+		return nil, ErrSummaryReadRestricted
 	}
 	if meeting.Status != model.StatusDone {
 		return nil, fmt.Errorf("meeting must be done before simulating (status: %s): %w", meeting.Status, ErrInvalidInput)
@@ -434,15 +434,14 @@ func (s *SimService) ExtractRequirements(ctx context.Context, userID, meetingID 
 		SimRunID:          uuid.New().String(),
 		MeetingID:         meetingID,
 		UserID:            userID,
+		OwnerUserID:       simOwner(meeting, userID),
+		AccountID:         meeting.AccountID,
 		Status:            model.SimStatusExtracted,
 		Requirements:      string(reqsJSON),
 		SummaryGeneration: meeting.SummaryGeneration(),
 	}
-	if err := s.repo.PutSimRunIfNotRunning(ctx, run); err != nil {
-		if errors.Is(err, repository.ErrConditionFailed) {
-			return nil, fmt.Errorf("a simulation is already running for this meeting: %w", ErrInvalidInput)
-		}
-		return nil, fmt.Errorf("failed to save extracted requirements: %w", err)
+	if err := s.claimSimRun(ctx, run); err != nil {
+		return nil, err
 	}
 	return run, nil
 }
@@ -454,9 +453,9 @@ func (s *SimService) ExtractRequirements(ctx context.Context, userID, meetingID 
 // GetMeeting for status, matching ResearchDetailClient's existing job-poll
 // pattern rather than adding a new WebSocket path for a minutes-long job.
 func (s *SimService) CreateSimulation(ctx context.Context, userID, meetingID string, reqs []model.SimRequirement, opts []model.SimOption) (*model.SimRun, error) {
-	meeting, err := s.repo.GetMeeting(ctx, userID, meetingID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get meeting: %w", err)
+	meeting, err := s.simMeeting(ctx, userID, meetingID)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return nil, err
 	}
 
 	// GetSimRun (the service method, not repo.GetSimRun) reconciles-and-
@@ -476,7 +475,8 @@ func (s *SimService) CreateSimulation(ctx context.Context, userID, meetingID str
 		}
 	}
 
-	if err := validateSimRequirements(meeting, userID, reqs, opts, existingStatus); err != nil {
+	// The run is the actor's (quota/audit); artifacts use the creator prefix.
+	if err := validateSimRequirements(meeting, simOwner(meeting, userID), reqs, opts, existingStatus); err != nil {
 		return nil, err
 	}
 
@@ -493,22 +493,22 @@ func (s *SimService) CreateSimulation(ctx context.Context, userID, meetingID str
 		SimRunID:          uuid.New().String(),
 		MeetingID:         meetingID,
 		UserID:            userID,
+		OwnerUserID:       simOwner(meeting, userID),
+		AccountID:         meeting.AccountID,
 		Status:            model.SimStatusQueued,
 		Requirements:      string(reqsJSON),
 		Options:           string(optsJSON),
 		SummaryGeneration: meeting.SummaryGeneration(),
 	}
-	if err := s.repo.PutSimRunIfNotRunning(ctx, run); err != nil {
-		if errors.Is(err, repository.ErrConditionFailed) {
-			return nil, fmt.Errorf("a simulation is already running for this meeting: %w", ErrInvalidInput)
-		}
-		return nil, fmt.Errorf("failed to create sim run: %w", err)
+	if err := s.claimSimRun(ctx, run); err != nil {
+		return nil, err
 	}
 
 	payload, err := json.Marshal(map[string]interface{}{
 		"simRunId":     run.SimRunID,
 		"meetingId":    meetingID,
 		"userId":       userID,
+		"ownerUserId":  meeting.UserID,
 		"requirements": reqs,
 		"options":      opts,
 	})
@@ -610,4 +610,45 @@ func ReconcileStuckSimRun(run *model.SimRun) bool {
 		return false
 	}
 	return time.Since(run.UpdatedAt) > simRunStuckThreshold
+}
+
+// simMeeting resolves the meeting for the creator or a managing account
+// member (ADR-016 2026-11-06 amendment). Repositories without share and
+// membership reads keep the creator-only behavior.
+func (s *SimService) simMeeting(ctx context.Context, userID, meetingID string) (*model.Meeting, error) {
+	if repo, ok := s.repo.(managerRepo); ok {
+		return resolveMeetingManager(ctx, repo, userID, meetingID)
+	}
+	meeting, err := s.repo.GetMeeting(ctx, userID, meetingID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get meeting: %w", err)
+	}
+	if meeting == nil {
+		return nil, ErrNotFound
+	}
+	return meeting, nil
+}
+
+// claimSimRun maps the claim's failures: a busy slot is 400, a lost member
+// grant 403, and a changed or unpublished meeting a condition failure (409).
+func (s *SimService) claimSimRun(ctx context.Context, run *model.SimRun) error {
+	err := s.repo.PutSimRunIfNotRunning(ctx, run)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, repository.ErrSimRunActive):
+		return fmt.Errorf("a simulation is already running for this meeting: %w", ErrInvalidInput)
+	case errors.Is(err, repository.ErrSummaryAccess):
+		return fmt.Errorf("%w: account membership changed", ErrForbidden)
+	case errors.Is(err, repository.ErrConditionFailed):
+		return err
+	}
+	return fmt.Errorf("failed to claim sim run: %w", err)
+}
+
+func simOwner(meeting *model.Meeting, fallback string) string {
+	if meeting == nil {
+		return fallback
+	}
+	return meeting.UserID
 }

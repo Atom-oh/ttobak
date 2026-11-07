@@ -965,7 +965,14 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 // updateMeetingFieldsAs writes the owner's (userID) meeting; actorID is the
 // caller whose direct account membership a classification/publication pins.
 // The creator acts as itself; a managing account member differs.
-func (r *DynamoDBRepository) updateMeetingFieldsAs(ctx context.Context, userID, actorID, meetingID string, condition expression.ConditionBuilder, fields map[string]interface{}, immutableSpills bool, revisionOut *string, approveAccountOutput ...bool) (resultErr error) {
+func (r *DynamoDBRepository) updateMeetingFieldsAs(ctx context.Context, userID, actorID, meetingID string, condition expression.ConditionBuilder, fields map[string]interface{}, immutableSpills bool, revisionOut *string, approveAccountOutput ...bool) error {
+	return r.updateMeetingFieldsChecked(ctx, userID, actorID, meetingID, condition, fields, immutableSpills, revisionOut, nil, approveAccountOutput...)
+}
+
+// updateMeetingFieldsChecked is updateMeetingFieldsAs plus extra condition
+// checks on other items (e.g. a managing member's live grant) committed in
+// the same transaction as the meeting update.
+func (r *DynamoDBRepository) updateMeetingFieldsChecked(ctx context.Context, userID, actorID, meetingID string, condition expression.ConditionBuilder, fields map[string]interface{}, immutableSpills bool, revisionOut *string, extra []types.TransactWriteItem, approveAccountOutput ...bool) (resultErr error) {
 	if _, assigned := fields["notesRevision"]; assigned {
 		return fmt.Errorf("notesRevision is server-managed")
 	}
@@ -1274,14 +1281,16 @@ func (r *DynamoDBRepository) updateMeetingFieldsAs(ctx context.Context, userID, 
 			ExpressionAttributeNames:  expr.Names(),
 			ExpressionAttributeValues: expr.Values(),
 		}
-		if accountMembership != nil {
+		if accountMembership != nil || len(extra) > 0 {
+			var items []types.TransactWriteItem
+			if accountMembership != nil {
+				items = append(items, types.TransactWriteItem{ConditionCheck: accountMembership})
+			}
+			items = append(items, types.TransactWriteItem{Update: &types.Update{TableName: input.TableName, Key: input.Key, UpdateExpression: input.UpdateExpression,
+				ConditionExpression: input.ConditionExpression, ExpressionAttributeNames: input.ExpressionAttributeNames,
+				ExpressionAttributeValues: input.ExpressionAttributeValues}})
 			_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
-				TransactItems: []types.TransactWriteItem{
-					{ConditionCheck: accountMembership},
-					{Update: &types.Update{TableName: input.TableName, Key: input.Key, UpdateExpression: input.UpdateExpression,
-						ConditionExpression: input.ConditionExpression, ExpressionAttributeNames: input.ExpressionAttributeNames,
-						ExpressionAttributeValues: input.ExpressionAttributeValues}},
-				},
+				TransactItems: append(items, extra...),
 			}, noSummaryRetries)
 			if isConditionalCheckFailedTransaction(err) {
 				return ErrConditionFailed

@@ -64,3 +64,30 @@ func (r *DynamoDBRepository) actorGrantChecks(ctx context.Context, ownerID, meet
 	}
 	return items, nil
 }
+
+// LinkPredecessorsAs writes a managing member's predecessor links on the
+// creator's meeting. The write requires the meeting to still be published to
+// accountID and the member's live grant (direct member row, or ancestor
+// member row plus parent links) to be unchanged, in the same transaction.
+func (r *DynamoDBRepository) LinkPredecessorsAs(ctx context.Context, ownerID, actorID, meetingID, accountID string, linkedIDs []string) error {
+	if accountID == "" || actorID == ownerID {
+		return ErrConditionFailed
+	}
+	checks, err := r.accountTeamMemberChecks(ctx, accountID, actorID)
+	if err != nil {
+		return err
+	}
+	extra := make([]types.TransactWriteItem, 0, len(checks))
+	for _, check := range checks {
+		item, err := r.conditionCheckFor(check)
+		if err != nil {
+			return err
+		}
+		extra = append(extra, types.TransactWriteItem{ConditionCheck: item})
+	}
+	condition := expression.AttributeExists(expression.Name("PK")).
+		And(expression.Name("accountId").Equal(expression.Value(accountID))).
+		And(expression.Name("sharedToAccount").Equal(expression.Value(true)))
+	return r.updateMeetingFieldsChecked(ctx, ownerID, actorID, meetingID, condition,
+		map[string]interface{}{"linkedMeetingIds": linkedIDs}, false, nil, extra)
+}

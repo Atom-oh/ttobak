@@ -14,9 +14,32 @@ availability. Incomplete receipts never set it.
 
 The activation gate also requires every consumer function to depend on a
 GatewayStack policy granting `secretsmanager:GetSecretValue` on
-`HttpOriginSecretArn` to that function's role, and to stay outside a VPC. One
-GatewayStack deployment switches all consumers to ARN lookup, so a missing grant
-or unreachable endpoint would otherwise fail every origin check closed.
+`HttpOriginSecretArn` to that function's role. A VPC-attached consumer must
+also have an observed private Secrets Manager path, verified read-only through
+EC2 before any mutation (`vpc_secret_path_verified`):
+- literal function subnets in one VPC with DNS support and hostnames;
+- an `available` Secrets Manager interface endpoint with private DNS covering
+  every function AZ, IPv4 or dual-stack addressing and IPv4 or dual-stack DNS
+  records (an IPv6-only endpoint fails), whose policy is absent or an unconditioned `Allow` of
+  `GetSecretValue` to principal and resource `*` (stricter policies fail closed);
+- endpoint security-group ingress on TCP 443 from every function subnet CIDR
+  (private IPv4 ranges only; security-group references and IPv6 are not
+  evaluated), and function security-group egress on TCP 443 to every endpoint
+  subnet CIDR, so secondary VPC CIDRs are covered;
+- network ACLs on both sides allowing that flow and ephemeral return traffic,
+  evaluated first-match by rule number;
+- route tables on both sides (explicit association, else the VPC main table)
+  delivering those CIDRs through an active `local` route with no more-specific
+  non-local route overlapping them; prefix-list routes are resolved to their
+  CIDRs and fail closed when they overlap or cannot be read.
+Unknown or unresolved values fail closed with `ACTIVATION_CONSUMER_VPC_UNVERIFIED`;
+a describe failure also prints the fixed warning `VPC_SECRET_PATH_DESCRIBE_FAILED`.
+The CI policy grants the six EC2 Describe actions and
+`ec2:GetManagedPrefixListEntries` on `*` with an
+`aws:RequestedRegion` condition (they have no resource-level scoping). One GatewayStack deployment switches all
+consumers to ARN lookup, so a missing grant or unreachable endpoint would
+otherwise fail every origin check closed; the post-deploy consumer invocation
+check remains the runtime proof.
 
 `http_origin_release.py` prepares a coordinated migration of the existing HTTP
 origin proof. The tool can be reviewed before the paired infrastructure and
@@ -106,3 +129,14 @@ consumer secret read grants, old-cache cutover, interrupted/resumed rotation, lo
 responses, expired windows and their recovery receipts,
 idempotent completion and value-free CDK diagnostics. A live completed receipt is
 still required to establish the deployed outcome.
+
+An unexpected (non-category) failure still reports
+`OPERATION_FAILED_OR_OUTCOME_UNKNOWN`, plus message-free diagnostics: the
+exception class (`errorType`), an AWS error code and operation when present,
+and the raising function and line in this script (`errorSite`). Messages and
+SDK payloads are never printed.
+
+Idempotent Lambda configuration and alias reads retry up to three times on
+transient transport errors (`read_with_retry`), because the SDK client runs
+with a single attempt and its pooled connection can be closed during a long
+CDK deploy. Mutations and canary invocations are never retried.

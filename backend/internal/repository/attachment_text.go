@@ -140,9 +140,13 @@ func (r *DynamoDBRepository) startAttachmentText(ctx context.Context, attachment
 
 // CreateFileAttachment saves all metadata together and checks that its
 // owner parent still exists. A later whole-item metadata PUT is unnecessary.
-func (r *DynamoDBRepository) CreateFileAttachment(ctx context.Context, ownerID string, req *model.UploadCompleteRequest, attachType string) (*model.Attachment, error) {
+func (r *DynamoDBRepository) CreateFileAttachment(ctx context.Context, ownerID, uploaderID string, req *model.UploadCompleteRequest, attachType string) (*model.Attachment, error) {
+	uploadedBy := ""
+	if uploaderID != ownerID {
+		uploadedBy = uploaderID
+	}
 	att := &model.Attachment{AttachmentID: uuid.NewString(), MeetingID: req.MeetingID,
-		UserID: ownerID, OriginalKey: req.Key, Type: attachType, Status: model.AttachStatusDone,
+		UserID: ownerID, UploadedBy: uploadedBy, OriginalKey: req.Key, Type: attachType, Status: model.AttachStatusDone,
 		FileName: req.FileName, FileSize: req.FileSize, MimeType: req.MimeType,
 		CreatedAt: time.Now().UTC(), EntityType: "ATTACHMENT"}
 	att.PK, att.SK = model.PrefixMeeting+req.MeetingID, model.PrefixAttachment+att.AttachmentID

@@ -2,9 +2,19 @@ package service
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	"github.com/ttobak/backend/internal/model"
 )
+
+// ErrRecordingStillActive rejects a non-creator recovery while the creator's
+// recording may still be running (its checkpoint is recent).
+var ErrRecordingStillActive = errors.New("recording checkpoint is still recent")
+
+// ErrMemberAudioUpload: audio upload is creator-only until member audio has a
+// staging prefix the S3 transcribe trigger does not watch (ADR-016).
+var ErrMemberAudioUpload = fmt.Errorf("%w: audio upload is limited to the meeting creator", ErrForbidden)
 
 // managerRepo is what manager resolution needs: owner lookup plus the same
 // share/membership/hierarchy reads as resolveSharedAccess.
@@ -98,4 +108,50 @@ func requireSameManagedAccount(actorID string, meeting *model.Meeting, accountID
 		return ErrForbidden
 	}
 	return nil
+}
+
+// LinkPredecessors replaces a meeting's predecessor links. The caller must
+// manage the meeting. Every predecessor must belong to the same creator
+// (summarize keeps owner-scoped linked context). A non-creator may link only
+// predecessors published to the same account, so a meeting readable only
+// through a private direct share never enters the team-visible summary
+// context; that write is fenced on the parent's publication and the member's
+// live grant (LinkPredecessorsAs).
+func (s *MeetingService) LinkPredecessors(ctx context.Context, actorID, meetingID string, linkedIDs []string) error {
+	parent, err := resolveMeetingManager(ctx, s.repo, actorID, meetingID)
+	if err != nil {
+		return err
+	}
+	member := actorID != parent.UserID
+	for _, linkedID := range linkedIDs {
+		if linkedID == meetingID {
+			return fmt.Errorf("%w: cannot link a meeting to itself", ErrInvalidInput)
+		}
+		linked, err := s.repo.GetMeeting(ctx, parent.UserID, linkedID)
+		if err != nil {
+			return err
+		}
+		if linked == nil {
+			return fmt.Errorf("linked meeting %s not found: %w", linkedID, ErrNotFound)
+		}
+		if member && (!linked.SharedToAccount || linked.AccountID == "" || linked.AccountID != parent.AccountID) {
+			return fmt.Errorf("linked meeting %s is not published to this account: %w", linkedID, ErrForbidden)
+		}
+		// A 1-hop reverse reference would form a cycle.
+		for _, reverseID := range linked.LinkedMeetingIDs {
+			if reverseID == meetingID {
+				return fmt.Errorf("%w: cannot link to %s; that meeting already lists this one as a predecessor (cycle)", ErrInvalidInput, linkedID)
+			}
+		}
+	}
+	if !member {
+		return s.repo.UpdateMeetingFields(ctx, parent.UserID, meetingID, map[string]interface{}{"linkedMeetingIds": linkedIDs})
+	}
+	writer, ok := s.repo.(interface {
+		LinkPredecessorsAs(ctx context.Context, ownerID, actorID, meetingID, accountID string, linkedIDs []string) error
+	})
+	if !ok {
+		return ErrForbidden
+	}
+	return writer.LinkPredecessorsAs(ctx, parent.UserID, actorID, meetingID, parent.AccountID, linkedIDs)
 }

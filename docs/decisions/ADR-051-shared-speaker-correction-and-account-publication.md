@@ -5,6 +5,8 @@
 - Supersedes: ADR-016's separate meeting-detail link/share controls only.
 - Narrowed by [ADR-058](ADR-058-descendant-account-read-sharing.md): inherited-only
   readers cannot correct speakers; direct and independent grants retain this permission.
+- Amended 2026-11-06 by the ADR-016 management amendment: account-team members
+  (not direct read recipients) may also restart diarization and change associations.
 
 ## Context
 

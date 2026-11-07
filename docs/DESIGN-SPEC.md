@@ -266,8 +266,9 @@ change. Empty pages with nextCursor can still have later matches. Hierarchy and
 classification never grant access to private content (ADR-036).
 
 Activated ancestor access displays a read-only label and its granting Account
-(ADR-058); published meetings are the exception and show edit controls to
-every member (ADR-016 2026-11-06 amendment). Suppress inherited-only mutation controls and keep invitation,
+(ADR-058); published meetings are the exception and show edit and management
+controls (not delete or audio upload) to every member (ADR-016 2026-11-06
+amendment). Otherwise suppress inherited-only mutation controls and keep invitation,
 publication, upload/link and dictionary selectors restricted to direct
 membership. Billing is the ADR-060 exception: the BFF's authorized entries allow
 direct and ancestor team members to view and upload. Its COT selector describes
@@ -520,8 +521,12 @@ refreshing the comparison baseline is a separate user action. Background refresh
 must not silently advance a dirty editor's baseline. Dirty notes block re-summary.
 Delayed detail responses cannot roll back acknowledged notes or association
 changes. Notes editing requires server capability flags during mixed-version
-rollout. Meeting-detail account management is owner-only, with one explicit
-link-and-share button calling the existing team publication endpoint. The label
+rollout. Meeting-detail management (account, sharing, links, projects, file uploads,
+crop, rediarize, recovery) follows the server `canManage` flag: the creator or a
+live account-team member (ADR-016 2026-11-06 amendment). Delete stays
+creator-only on desktop and mobile; member-created shares show the sharer. Account
+management uses one explicit link-and-share button calling the existing team
+publication endpoint. The label
 and help text explain that the selected account team receives the meeting and
 its extracted insights. An already published account offers a share refresh;
 failures remain visible and retryable. Recording preparation and existing private

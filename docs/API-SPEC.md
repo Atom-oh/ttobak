@@ -619,17 +619,21 @@ there is no transcript fallback when the summary is missing. Conflicts return
 Meeting management (ADR-016 2026-11-06 amendment; for inherited members it
 supersedes ADR-058's invitation/linking restriction for meetings only): the
 creator or a live direct or inherited member of the account a meeting is
-published to may call the
-share, revoke, pending-revoke, account and share-account routes. Detail
-returns `canManage`, and managers receive `shares` (with `sharedByEmail` for
-member-created shares) and `projectIds`. Writes keep the creator's partition;
-strangers get 404. A member's account or share-account call must target the
-account the meeting is currently published to (403 otherwise; 409 if it was
-unpublished concurrently) and never mints the owner approval; member email shares
-pass the same `SUMMARY_SHARING_UNSAFE` gate. `summarySharing.canShareToAccount`
-offers the approval path only to the creator and team republication only to the
-creator or direct members of the meeting's account. `canRecoverRecording` stays
-creator-only. Account-link condition failures return 409 `CONFLICT`.
+published to may call the share, revoke, pending-revoke, account,
+share-account, link, image/file upload, recover, rediarize, audio-crop, simulator
+and project-link routes; audio upload and delete stay creator-only. Detail returns
+`canManage`, and managers receive `shares` (with `sharedByEmail` for
+member-created shares) and `projectIds`. Writes keep the creator's partition and
+prefixes; strangers get 404. A member's account or share-account call must
+target the account the meeting is currently published to (403 otherwise; 409 if
+it was unpublished concurrently) and never mints the owner approval; member
+email shares pass the same `SUMMARY_SHARING_UNSAFE` gate.
+`summarySharing.canShareToAccount` offers the approval path only to the creator
+and team republication only to the creator or direct members of the meeting's
+account. `canRecoverRecording` is offered to managers; a member's recovery still
+requires the 10-minute quiet checkpoint. Account-link condition failures return
+409 `CONFLICT`. A member's project link or unlink requires the project to be
+linked to that account. Shared list items include `ownerUserId` (the creator).
 
 `POST /api/meetings/{meetingId}/account` is a private classification operation:
 the caller (creator or managing member) must directly belong to the target account. One partial
@@ -931,7 +935,8 @@ pendingShareExpiresAt; QA history's uppercase TTL field is not swept.
 
 ### Upload and recovery
 
-The server validates category, ownership and traversal. Checkpoint filenames
+The server validates category, management access and traversal; meeting upload
+keys use the creator's prefix even when a managing member uploads an image or file. Checkpoint filenames
 recording_progress.webm/m4a/ogg intentionally overwrite a stable audio key; other
 uploads receive unique names. Upload completion emits the appropriate custom
 event. The bounded PDF/PPTX/DOCX/Markdown extractor and its asynchronous worker
@@ -951,7 +956,10 @@ are document pages/slides/paragraphs/cells/lines, never audio timestamps.
 See the [worker contract](../backend/python/document-extract/LAMBDA.md) and
 [parser scope](../backend/python/document-extract/README.md).
 
-Recover uses a saved progress object. Rediarize accepts supported single-part
+Recover uses a saved progress object; a non-creator manager may recover only after
+it has been unchanged for 10 minutes (409 `RECORDING_STILL_ACTIVE`). Audio presign
+and completion are creator-only (403 `FORBIDDEN`) pending a member staging-prefix
+design; managers upload images and files, with 5-minute presigned URLs. Rediarize accepts supported single-part
 Whisper meetings and a speaker-count hint. Use their handler/service contracts,
 not a raw DynamoDB status reset or a fabricated AWS S3 event.
 
@@ -972,8 +980,9 @@ stale or unreadable copy falls back to the original key. The response shape is
 unchanged and the original remains the STT/crop/recovery input.
 
 `POST /api/meetings/{meetingId}/audio/crop` accepts a bounded JSON object containing
-`requestId` (UUID), `startSeconds` and `endSeconds` (integer seconds). Owner-only,
-single-file `done`/`error` sources are eligible. The server resolves the canonical
+`requestId` (UUID), `startSeconds` and `endSeconds` (integer seconds). The creator
+or a managing account member may crop single-file `done`/`error` sources; the copy
+belongs to the creator, and a member's copy is published to the same account. The server resolves the canonical
 audio key and pins its S3 ETag; clients cannot select arbitrary keys. Source size
 is at most 2 GiB, range length at most six hours, and end at most 24 hours.
 The 202 response contains the new `meetingId` and status. Reusing a request ID and
@@ -1091,7 +1100,9 @@ chunks, failedChunks, untranslatedLines, ms}` without text or user ID.
 `POST .../sim/extract` extracts requirements for a done meeting. `POST .../sim`
 validates allowed keys/ranges and two or three architecture options, then returns
 202 with a queued simRun. The frontend polls GetMeeting; there is no simulator
-WebSocket stream. Concurrent runs are conditionally rejected. Stale queued/running
+WebSocket stream. Concurrent runs are conditionally rejected (400); a member whose
+grant lapsed gets 403, an unpublished or changed meeting 409, and a sharing-restricted
+summary 409 `SHARING_REGEN_REQUIRED`. Stale queued/running
 runs are persisted to error by GetSimRun, not merely displayed as error.
 
 Only validated requirements/options enter codegen; option descriptions still
