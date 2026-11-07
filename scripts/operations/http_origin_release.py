@@ -77,6 +77,33 @@ class State:
     stages: tuple = ()
 
 
+def failure_diagnostic(error, client_error_type=None):
+    """Fixed, message-free facts about an unexpected failure.
+
+    Exception messages and SDK payloads can carry proofs or resource details,
+    so only the class name, an AWS error code/operation and the raising
+    function/line inside this script are reported.
+    """
+    result = {"errorType": type(error).__name__}
+    if client_error_type is not None and isinstance(error, client_error_type):
+        details = error.response.get("Error") if isinstance(getattr(error, "response", None), dict) else None
+        code = details.get("Code") if isinstance(details, dict) else None
+        if isinstance(code, str) and re.fullmatch(r"[A-Za-z0-9.]{1,64}", code):
+            result["awsErrorCode"] = code
+        operation = getattr(error, "operation_name", None)
+        if isinstance(operation, str) and re.fullmatch(r"[A-Za-z0-9]{1,64}", operation):
+            result["awsOperation"] = operation
+    frame = None
+    trace = error.__traceback__
+    while trace is not None:
+        if Path(trace.tb_frame.f_code.co_filename).resolve() == Path(__file__).resolve():
+            frame = trace
+        trace = trace.tb_next
+    if frame is not None:
+        result["errorSite"] = f"{frame.tb_frame.f_code.co_name}:{frame.tb_lineno}"
+    return result
+
+
 def _ipv4_cidr(value):
     try:
         address, bits = value.split("/")
@@ -1407,6 +1434,8 @@ def main():
                 and error.response["Error"].get("Code") == "AccessDeniedException"):
             code = "CONSUMER_INVOKE_ACCESS_DENIED"
         result = release.receipt("incomplete", code) if release else {"status": "incomplete", "code": code}
+        if not isinstance(error, ReleaseError):
+            result.update(failure_diagnostic(error, client_error_type))
         try:
             save_receipt(args.receipt, result)
         except Exception:
