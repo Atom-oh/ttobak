@@ -11,7 +11,17 @@ import { isTauri } from '@/lib/tauri';
 
 type Button = { label: string; value: boolean; primary: boolean };
 
+// Native dialogs are modal and serialize; in-page ones queue the same way,
+// so only the topmost dialog ever owns the keyboard.
+let queue: Promise<unknown> = Promise.resolve();
+
 function showDialog(message: string, buttons: Button[]): Promise<boolean> {
+  const run = queue.then(() => openDialog(message, buttons));
+  queue = run.catch(() => undefined);
+  return run;
+}
+
+function openDialog(message: string, buttons: Button[]): Promise<boolean> {
   return new Promise((resolve) => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const overlay = document.createElement('div');
