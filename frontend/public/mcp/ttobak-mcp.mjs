@@ -23206,6 +23206,23 @@ var BILLING_TOOLS = ["account", "dataset", "report"].map((kind) => ({
   }
 }));
 
+// src/account-contacts.ts
+var fields = ["name", "company", "title", "department", "email", "address", "workPhone", "fax", "phone", "cardRegisteredAt", "cardBook", "group", "notes"];
+function canonicalContact(contact) {
+  const source = contact;
+  const known = new Set(fields);
+  const ordered = {};
+  for (const field of fields) if (Object.hasOwn(source, field)) ordered[field] = source[field];
+  for (const key of Object.keys(source).filter((key2) => !known.has(key2)).sort()) ordered[key] = source[key];
+  return ordered;
+}
+var fieldLimit = (field) => field === "notes" ? 8192 : field === "address" ? 1024 : 256;
+var CONTACT_PROPERTIES = Object.fromEntries(fields.map((field) => [field, {
+  type: "string",
+  maxLength: fieldLimit(field),
+  description: `Maximum ${fieldLimit(field)} UTF-8 bytes`
+}]));
+
 // src/api.ts
 var MIME_BY_EXT = {
   ".pdf": "application/pdf",
@@ -23375,6 +23392,30 @@ var TtobakApi = class {
   }
   async listAccounts() {
     return this.get("/api/accounts");
+  }
+  async listAccountContacts(accountId, options) {
+    const query = new URLSearchParams({ limit: String(options.limit) });
+    if (options.cursor !== void 0) query.set("cursor", options.cursor);
+    return this.request("GET", `/api/accounts/${identifier(accountId, "accountId")}/contacts?${query}`, void 0, MAX_READING_BYTES);
+  }
+  get requiresContactIdempotency() {
+    return !!this.options.privateTransport;
+  }
+  async createAccountContact(accountId, contact, idempotencyKey, replayOnly = false) {
+    if (!this.options.privateTransport && idempotencyKey !== void 0) throw new Error("idempotencyKey requires private connector transport");
+    if (this.options.privateTransport && (!idempotencyKey || !/^[A-Za-z0-9_-]{1,128}$/.test(idempotencyKey))) throw new Error("INVALID_ARGUMENT: idempotencyKey required");
+    const ordered = canonicalContact(contact);
+    const body = this.options.privateTransport ? { contact: ordered, idempotencyKey } : ordered;
+    return this.request("POST", `/api/accounts/${identifier(accountId, "accountId")}/contacts${replayOnly ? "?replay=1" : ""}`, body, MAX_READING_BYTES);
+  }
+  async replayAccountContact(accountId, contact, idempotencyKey) {
+    if (!this.options.privateTransport) return null;
+    try {
+      return await this.createAccountContact(accountId, contact, idempotencyKey, true);
+    } catch (e) {
+      if (e instanceof Error && /^HTTP 404(?:\s|:)/.test(e.message)) return null;
+      throw e;
+    }
   }
   async readBilling(options) {
     const { section, ...args } = options;
