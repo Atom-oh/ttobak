@@ -79,6 +79,8 @@ func writeAttachmentError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, service.ErrInvalidInput):
 		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid attachment request")
+	case errors.Is(err, service.ErrMemberAudioUpload):
+		writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "오디오 업로드는 회의 생성자만 할 수 있습니다.")
 	case errors.Is(err, service.ErrForbidden):
 		writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
 	case errors.Is(err, service.ErrNotFound):

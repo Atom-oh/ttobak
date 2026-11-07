@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/ttobak/backend/internal/middleware"
@@ -68,7 +69,16 @@ func (h *UploadHandler) GetPresignedURL(w http.ResponseWriter, r *http.Request) 
 
 	response, err := h.uploadService.GeneratePresignedUploadURL(ctx, userID, &req)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		switch {
+		case errors.Is(err, service.ErrMemberAudioUpload):
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "오디오 업로드는 회의 생성자만 할 수 있습니다.")
+		case errors.Is(err, service.ErrNotFound):
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
+		case errors.Is(err, service.ErrForbidden):
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
+		default:
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		}
 		return
 	}
 

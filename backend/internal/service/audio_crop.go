@@ -56,17 +56,22 @@ func (s *UploadService) CropMeeting(ctx context.Context, userID, meetingID strin
 	if !s.audioCropEnabled || s.ebClient == nil {
 		return nil, fmt.Errorf("%w: audio cropping is not available", ErrInvalidInput)
 	}
-	source, err := s.repo.MetadataView().GetMeeting(ctx, userID, meetingID)
+	// The creator or a managing account member. The copy always belongs to
+	// the creator (the worker revalidates the source in that partition); a
+	// member's copy is published to the same account (cropTeamAccount).
+	source, err := resolveMeetingManager(ctx, s.repo.MetadataView(), userID, meetingID)
 	if err != nil {
 		return nil, err
 	}
-	key, err := validateAudioCrop(source, userID, request)
+	owner := source.UserID
+	key, err := validateAudioCrop(source, owner, request)
 	if err != nil {
 		return nil, err
 	}
+	team := cropTeamAccount(userID, source)
 	requestUUID, _ := uuid.Parse(request.RequestID)
 	croppedID := uuid.NewSHA1(uuid.NameSpaceURL, []byte(userID+"/"+meetingID+"/"+requestUUID.String())).String()
-	existing, err := s.repo.MetadataView().GetMeeting(ctx, userID, croppedID)
+	existing, err := s.repo.MetadataView().GetMeeting(ctx, owner, croppedID)
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +81,7 @@ func (s *UploadService) CropMeeting(ctx context.Context, userID, meetingID strin
 			return nil, repository.ErrConditionFailed
 		}
 		if crop.QueuedFor(existing.Status) {
-			if err := s.publishAudioCrop(ctx, userID, croppedID); err != nil {
+			if err := s.publishAudioCrop(ctx, owner, croppedID); err != nil {
 				return nil, err
 			}
 		}
@@ -94,21 +99,53 @@ func (s *UploadService) CropMeeting(ctx context.Context, userID, meetingID strin
 	}
 	now := time.Now().UTC()
 	cropped := &model.Meeting{
-		PK: model.PrefixUser + userID, SK: model.PrefixMeeting + croppedID,
-		MeetingID: croppedID, UserID: userID, Title: source.Title + " (구간 편집)", Date: source.Date,
+		PK: model.PrefixUser + owner, SK: model.PrefixMeeting + croppedID,
+		MeetingID: croppedID, UserID: owner, Title: source.Title + " (구간 편집)", Date: source.Date,
 		Notes: source.Notes, NotesRevision: uuid.NewString(), Participants: source.Participants,
 		SttProvider: "whisper", Status: model.StatusTranscribing,
-		CreatedAt: now, UpdatedAt: now, GSI1PK: model.PrefixUser + userID, GSI1SK: now.Format(time.RFC3339), EntityType: "MEETING",
+		CreatedAt: now, UpdatedAt: now, GSI1PK: model.PrefixUser + owner, GSI1SK: now.Format(time.RFC3339), EntityType: "MEETING",
 		AudioCrop: &model.AudioCrop{SourceMeetingID: meetingID, SourceKey: key, SourceETag: *head.ETag,
 			StartSeconds: request.StartSeconds, EndSeconds: request.EndSeconds, State: "queued"},
 	}
-	if err := s.repo.CreateAudioCrop(ctx, source, cropped); err != nil {
+	if team != "" {
+		// A member's copy is published with its team ref in the fenced
+		// creation transaction (CreateAudioCropForTeam).
+		cropped.AccountID, cropped.SharedToAccount = team, true
+		err = s.repo.CreateAudioCropForTeam(ctx, source, cropped, userID, cropTeamRef(cropped, team))
+	} else {
+		err = s.repo.CreateAudioCrop(ctx, source, cropped)
+	}
+	if err != nil {
 		return nil, err
 	}
-	if err := s.publishAudioCrop(ctx, userID, croppedID); err != nil {
+	if err := s.publishAudioCrop(ctx, owner, croppedID); err != nil {
 		return nil, err
 	}
 	return cropped, nil
+}
+
+// cropTeamAccount is the account a member's cropped copy is published to:
+// the source's current account. The creator's own copy stays private
+// (ADR-047); returns "" then.
+func cropTeamAccount(actorID string, source *model.Meeting) string {
+	if source == nil || actorID == source.UserID || !source.SharedToAccount {
+		return ""
+	}
+	return source.AccountID
+}
+
+// cropTeamRef lists a member's published copy in the account team stream.
+func cropTeamRef(cropped *model.Meeting, accountID string) *model.MeetingRef {
+	return &model.MeetingRef{
+		PK:          model.PrefixAccount + accountID,
+		SK:          model.PrefixMeetingRef + cropped.Date.UTC().Format(time.RFC3339) + "#" + cropped.MeetingID,
+		AccountID:   accountID,
+		MeetingID:   cropped.MeetingID,
+		OwnerUserID: cropped.UserID,
+		Title:       cropped.Title,
+		Date:        cropped.Date,
+		EntityType:  model.EntityTypeMeetingRef,
+	}
 }
 
 func (s *UploadService) publishAudioCrop(ctx context.Context, userID, meetingID string) error {

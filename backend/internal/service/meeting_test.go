@@ -177,6 +177,8 @@ func (m *mockMeetingRepo) UpdateMeetingFields(_ context.Context, userID, meeting
 			cp.Status = v.(string)
 		case "sourceEditedByNonOwnerAt":
 			cp.SourceEditedByNonOwnerAt = v.(string)
+		case "linkedMeetingIds":
+			cp.LinkedMeetingIDs = v.([]string)
 		}
 	}
 	cp.UpdatedAt = time.Now().UTC()
@@ -1376,9 +1378,10 @@ func TestRevokePendingShare_NonOwnerForbidden(t *testing.T) {
 		SK: model.PrefixPendingMeeting + "m-1",
 	})
 
+	// A stranger without any access gets ErrNotFound (existence hidden).
 	err := svc.RevokePendingShare(context.Background(), "someone-else", "m-1", "invited@test.com")
-	if !errors.Is(err, ErrForbidden) {
-		t.Errorf("expected ErrForbidden, got %v", err)
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got %v", err)
 	}
 	if len(repo.pendingShares) != 1 {
 		t.Errorf("expected the pending share to survive a non-owner's revoke attempt, got %d remaining", len(repo.pendingShares))

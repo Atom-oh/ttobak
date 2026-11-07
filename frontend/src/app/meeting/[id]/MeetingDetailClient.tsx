@@ -1,5 +1,6 @@
 'use client';
 
+import { meetingCapabilities } from '@/lib/meetingManagement';
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
@@ -565,8 +566,11 @@ function MeetingDetailContent() {
   const displayedSegments = meeting.transcriptionV2 ?? meeting.transcription ?? [];
   const canEdit = meeting.permission === 'edit' || (!meeting.isShared && meeting.permission !== 'read');
   const canEditNotes = canEdit && meeting.supportsNotesComparison === true && typeof meeting.notesRevision === 'string';
-  const canManageAssociations = meeting.userId === user?.userId;
-  const canUpload = !meeting.isShared && meeting.permission !== 'read';
+  // Server capability: creator or live account-team member manages shares, links,
+  // projects, file uploads, crop, the simulator and recovery; delete and audio
+  // upload (and its KB promotion) stay isCreator-only.
+  const { isCreator, canManage: canManageAssociations } = meetingCapabilities(meeting, user?.userId);
+  const canUpload = canManageAssociations;
 
   return (
     <AppLayout activePath="/">
@@ -576,7 +580,7 @@ function MeetingDetailContent() {
           <span className="material-symbols-outlined">arrow_back</span>
         </button>
         <h2 className="text-slate-900 dark:text-text-main text-sm font-bold dark:font-headline flex-1 text-center">Meeting Report</h2>
-        <MobileMoreMenu meetingId={meetingId} />
+        {isCreator ? <MobileMoreMenu meetingId={meetingId} /> : <span className="size-10" aria-hidden />}
       </header>
 
       {/* Content */}
@@ -587,6 +591,8 @@ function MeetingDetailContent() {
           {/* Header */}
           <MeetingHeader
             meeting={meeting}
+            isCreator={isCreator}
+            canManage={canManageAssociations}
             onShare={handleShare}
             onUnshare={handleUnshare}
             onTitleDirtyChange={onTitleDirtyChange}
@@ -919,12 +925,16 @@ function MeetingDetailContent() {
           {/* Audio Player / Uploader */}
           {audioUrls.length > 0 || audioUrl ? (
             <>
-              <AudioPlayer audioUrl={audioUrl ?? undefined} audioUrls={audioUrls.length > 0 ? audioUrls : undefined} />
-              {meeting.supportsAudioCrop && meeting.userId === user?.userId && (meeting.status === 'done' || meeting.status === 'error') && (meeting.audioKeys?.length ?? 0) <= 1 && (meeting.audioPartCount ?? 0) <= 1 && (
+              <AudioPlayer
+                audioUrl={audioUrl ?? undefined}
+                audioUrls={audioUrls.length > 0 ? audioUrls : undefined}
+                durationSeconds={(meeting.audioKeys?.length ?? 0) <= 1 && (meeting.audioPartCount ?? 0) <= 1 ? meeting.duration : undefined}
+              />
+              {meeting.supportsAudioCrop && canManageAssociations && (meeting.status === 'done' || meeting.status === 'error') && (meeting.audioKeys?.length ?? 0) <= 1 && (meeting.audioPartCount ?? 0) <= 1 && (
                 <AudioCropEditor key={`${meeting.meetingId}:${audioRevision}`} meetingId={meeting.meetingId} audioUrl={audioUrl || audioUrls[0]} duration={meeting.duration}
                   dirty={summaryDirty || titleDirty || transcriptDirty || notesDirty} onCropped={(id) => router.push(`/meeting/${id}`)} />
               )}
-              {!meeting.audioCrop && (meeting.status === 'done' || meeting.status === 'error') && !showAudioUploader && (
+              {isCreator && !meeting.audioCrop && (meeting.status === 'done' || meeting.status === 'error') && !showAudioUploader && (
                 <div className="flex justify-center mt-4">
                   <button
                     onClick={() => setShowAudioUploader(true)}
@@ -935,11 +945,11 @@ function MeetingDetailContent() {
                   </button>
                 </div>
               )}
-              {showAudioUploader && (
+              {showAudioUploader && isCreator && (
                 <AudioUploader meetingId={meeting.meetingId} onUploadComplete={() => { setShowAudioUploader(false); refetchMeeting(); }} />
               )}
             </>
-          ) : !meeting.audioCrop && (meeting.status === 'done' || meeting.status === 'error') && !hasAudio ? (
+          ) : isCreator && !meeting.audioCrop && (meeting.status === 'done' || meeting.status === 'error') && !hasAudio ? (
             <AudioUploader meetingId={meeting.meetingId} onUploadComplete={refetchMeeting} />
           ) : null}
           </div>
