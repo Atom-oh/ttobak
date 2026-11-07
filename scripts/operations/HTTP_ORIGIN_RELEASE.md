@@ -135,3 +135,8 @@ An unexpected (non-category) failure still reports
 exception class (`errorType`), an AWS error code and operation when present,
 and the raising function and line in this script (`errorSite`). Messages and
 SDK payloads are never printed.
+
+Idempotent Lambda configuration and alias reads retry up to three times on
+transient transport errors (`read_with_retry`), because the SDK client runs
+with a single attempt and its pooled connection can be closed during a long
+CDK deploy. Mutations and canary invocations are never retried.
